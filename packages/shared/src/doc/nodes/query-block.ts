@@ -4,18 +4,44 @@ import { type MarkdownToken, Node } from '@tiptap/core';
 export const QUERY_BLOCK_CLOSE = '}}';
 
 /**
- * Смарт-лист `{{query:…}}`. Атрибут `query` хранит содержимое ДОСЛОВНО — с переносами строк и
- * девятипробельными отступами continuation-строк: сидированные тела (§3.3 PRD) сверяются с
- * документом байт-в-байт живым тестом, и тримленный атрибут схлопнул бы их при первом же
- * сохранении.
+ * Смарт-лист `{{query:…}}`. Два атрибута, и они НЕ «ровно один из двух» (Р-21-2):
+ *
+ *  - `ast` — ПРАВДА о запросе: разобранное дерево канона §А5-7 либо `null`, если блок разобрать
+ *    не удалось (опечатка, пустая заготовка, имя, которого нет в реестре);
+ *  - `text` — печатная key-форма ЭТОГО ЖЕ дерева при `ast !== null`, и исходная строка блока
+ *    при `ast === null`. Одна и та же роль: «что печатать в markdown-проекцию и что показывать
+ *    человеку в отказе».
+ *
+ * Почему `text` хранится, а не печатается на месте: `renderMarkdown` ниже получает ТОЛЬКО ноду,
+ * а печать key-формы требует реестра (`printQueryAst(ast, reg, 'key')`) — передать его в
+ * Tiptap-спеку нечем. Ровно то же у `collectText` блочного диффа (`doc/diff.ts`): модуль
+ * листовой ПО ЗАКОНУ, и реестра нет ни у одного его вызывателя. Хранимая печать снимает обе
+ * зависимости разом.
+ *
+ * Кто ставит `ast` и `text` согласованными — `bindQueryBlocks` (`doc/bind-query.ts`), и ТОЛЬКО
+ * он: разбор markdown (`parseBody`) реестра не видит и всегда отдаёт `{ast: null, text}`.
+ * Инвариант «в `body_doc` блоки всегда привязаны» держат executor на записи и `readBodyDoc`
+ * на чтении.
  */
 export const QueryBlock = Node.create({
   name: 'queryBlock',
   group: 'block',
   atom: true,
-  addAttributes: () => ({ query: { default: '' } }),
+  addAttributes: () => ({ ast: { default: null }, text: { default: '' } }),
   parseHTML: () => [{ tag: 'div[data-query]' }],
-  renderHTML: ({ HTMLAttributes }) => ['div', { 'data-query': HTMLAttributes.query }],
+  // Печатаются ОБА атрибута, и `data-ast` — JSON. Единственный читатель этого HTML — буфер
+  // обмена редактора (`apps/web/.../QueryWidget.tsx`), и без второго атрибута скопированный
+  // смарт-лист вернулся бы блоком с текстом, но без дерева: виджет с тем же видом, показывающий
+  // не то (ровно тот дефект, что уже чинили на `data-query`).
+  renderHTML: ({ HTMLAttributes }) => [
+    'div',
+    {
+      'data-query': HTMLAttributes.text,
+      ...(HTMLAttributes.ast === null || HTMLAttributes.ast === undefined
+        ? {}
+        : { 'data-ast': JSON.stringify(HTMLAttributes.ast) }),
+    },
+  ],
   markdownTokenizer: {
     name: 'queryBlock',
     level: 'block',
@@ -40,13 +66,16 @@ export const QueryBlock = Node.create({
       return { type: 'queryBlock', raw: m[0], query: m[1] ?? '' } as never;
     },
   },
-  // Тип токена — MarkdownToken по той же причине, что в entity-ref.ts.
+  // Тип токена — MarkdownToken по той же причине, что в entity-ref.ts. Дерева здесь взяться
+  // неоткуда (реестра в слое разбора нет и быть не может) — блок приезжает НЕПРИВЯЗАННЫМ, и
+  // текст сохраняется ДОСЛОВНО, до байта: пока `ast` не собран, эта строка — единственная
+  // правда о запросе, и тримить её значило бы терять написанное владельцем.
   parseMarkdown: (token: MarkdownToken) => ({
     type: 'queryBlock',
-    attrs: { query: typeof token.query === 'string' ? token.query : '' },
+    attrs: { ast: null, text: typeof token.query === 'string' ? token.query : '' },
   }),
   // БЕЗ хвостовых переносов: разделитель между блоками ставит сериализатор, и свой `\n\n`
-  // давал двойной (поймано спайком).
-  renderMarkdown: (node: { attrs?: { query?: string } }) =>
-    `{{query:${node.attrs?.query ?? ''}${QUERY_BLOCK_CLOSE}`,
+  // давал двойной (поймано спайком). Печатается `text`, а не `ast`: см. докблок ноды.
+  renderMarkdown: (node: { attrs?: { text?: string } }) =>
+    `{{query:${node.attrs?.text ?? ''}${QUERY_BLOCK_CLOSE}`,
 });

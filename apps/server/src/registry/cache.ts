@@ -61,6 +61,7 @@
 // второй как свой. Поэтому транзакция, которой уже выдан xid (то есть она что-то записала),
 // кеш и не читает, и не наполняет. Читающие пути от этого не страдают: снимок реестра они
 // берут ДО первой записи (исполнитель — первым делом в транзакции, `executor.ts`).
+import { OWNER_LOCALE, type ParseRegistry, toParseRegistry } from '@orbis/shared/query';
 import type { Tx } from '../db/with-identity';
 import { applyDeltas } from './deltas';
 import { loadRegistryDeltas, loadRegistryRows, type RegistrySnapshot } from './load';
@@ -156,4 +157,17 @@ async function build(
     { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
     deltas,
   );
+}
+
+/**
+ * Снимок реестра в форме РАЗБОРА ИМЁН — для тех, у кого на руках `RegistrySnapshot`, а не
+ * контекст компиляции: исполнитель (`ctx.registry`), чтение сущности и дифф предложения.
+ *
+ * Это тот же единственный адаптер `toParseRegistry` и та же единственная локаль
+ * (`OWNER_LOCALE` живёт в `@orbis/shared/query`), что и у `query/parse-text.ts:parseRegistryOf`;
+ * различается только форма входа — снимок против `CompileCtx`. Разъехаться им нечем: решение,
+ * которого боится докблок там, — это локаль, и она одна на обе функции.
+ */
+export function parseRegistryOfSnapshot(reg: RegistrySnapshot): ParseRegistry {
+  return toParseRegistry(reg, OWNER_LOCALE);
 }

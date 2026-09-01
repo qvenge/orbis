@@ -1,3 +1,4 @@
+import type { QueryAst } from '@orbis/shared/query';
 import { SlidersHorizontal } from 'lucide-react';
 import { useMemo } from 'react';
 import { trpc } from '../../trpc';
@@ -29,6 +30,25 @@ function ConfigureButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+/**
+ * Откуда виджет берёт запрос — ДВА пути.
+ *
+ *  - СТРОКА: первый кадр записи (`EditorShell`) и бейдж закреплённой сущности живут на
+ *    `entity.body`, документа у них нет вовсе.
+ *  - БЛОК ДОКУМЕНТА: `{ast, text}` из `body_doc`.
+ *
+ * `ast !== null` значит «дерево уже собрано по реестру владельца» (`bindQueryBlocks` на
+ * сервере) — тогда оно и уходит на сервер, а разбирать текст заново было бы второй правдой о
+ * том, какой запрос верен. `ast === null` НЕ приговор: так выглядит и неразобранный блок, и
+ * любой блок, построенный разбором markdown в браузере (`MarkdownToggle`, где реестра нет
+ * структурно). Поэтому виджет в этом случае разбирает `text` сам — ровно тем же правилом, что
+ * и строковый путь.
+ */
+export type QueryBlockSource = string | { ast: QueryAst | null; text: string };
+
+/** Пустой блок НЕ значит «все сущности владельца» (Р-21-8) — он значит «блок не настроен». */
+const EMPTY_MESSAGE = 'пустой запрос: блок ничего не выбирает — настройте его';
+
 // Виджет ОДНОГО query-блока (02-core-os §3.4). На вход идёт inner блока — уже без обёртки
 // {{query:...}}; разбивку body на блоки делает queryBlocks (features/browser/query.ts).
 // Раньше проп назывался body и компонент сам брал ПЕРВОЕ совпадение регэкспа: из-за этого
@@ -39,16 +59,26 @@ export function QueryBlock({
   title,
   onConfigure,
 }: {
-  query: string;
+  query: QueryBlockSource;
   title?: string;
   onConfigure?: () => void;
 }) {
   const { registry } = useFieldCatalog();
+  const text = typeof query === 'string' ? query : query.text;
+  const boundAst = typeof query === 'string' ? null : query.ast;
+  // Разбор в браузере — ТОЛЬКО когда дерева нет. Есть дерево — реестр виджету не нужен вовсе:
+  // заголовок берётся из дерева, дерево уходит на сервер как есть, и разобранный блок
+  // рисуется ПЕРВЫМ кадром, не дожидаясь реестра по tRPC.
+  // Пустой текст не разбирается намеренно (Р-21-8): грамматика принимает его законным
+  // `{filter: null}`, то есть виджет молча показал бы ВСЕ сущности владельца.
   const parsed = useMemo(
-    () => (registry ? parseBlock(query, registry.parse) : null),
-    [registry, query],
+    () =>
+      boundAst !== null || !registry || text.trim() === ''
+        ? null
+        : parseBlock(text, registry.parse),
+    [boundAst, registry, text],
   );
-  const ok = parsed?.ok === true;
+  const ok = boundAst !== null || parsed?.ok === true;
   /**
    * Чем разрешается `this` в клаузах `children_of=`/`parents_of=` (§6.1). Ставит контекст тот,
    * кто рисует тело сущности (DetailScreen → ThisEntityProvider); вне сущности его нет.
@@ -60,11 +90,22 @@ export function QueryBlock({
   const thisEntityId = useThisEntityId();
 
   // entity.query только при валидном блоке; §6.4 — при ошибке НИКОГДА не пустой список, а плашка.
-  const list = trpc.entity.query.useQuery(thisEntityId ? { query, thisEntityId } : { query }, {
-    enabled: ok,
-  });
+  // Привязанный блок уходит ДЕРЕВОМ: печатать его в текст, чтобы сервер разобрал обратно,
+  // значило бы прогонять запрос через форму, в которую он не обязан помещаться (§А5-3д).
+  const signature = boundAst !== null ? { ast: boundAst } : { query: text };
+  const list = trpc.entity.query.useQuery(
+    thisEntityId ? { ...signature, thisEntityId } : signature,
+    { enabled: ok },
+  );
 
-  if (!parsed) {
+  // Что показать вместо списка: §6.4 — при ошибке НИКОГДА не пустой список, а плашка.
+  const failure = ((): { message: string; position?: number } | null => {
+    if (boundAst !== null) return null;
+    if (text.trim() === '') return { message: EMPTY_MESSAGE };
+    return parsed !== null && !parsed.ok ? parsed.error : null;
+  })();
+
+  if (failure === null && !ok) {
     return (
       <Card>
         <span role="status">Загрузка…</span>
@@ -72,16 +113,16 @@ export function QueryBlock({
     );
   }
 
-  if (!parsed.ok) {
+  if (failure !== null) {
     return (
       // Кнопка есть и здесь: битый блок — ровно тот случай, когда «настроить» нужнее
       // всего, а без неё чинить его пришлось бы правкой всего body руками.
       <Card role="alert" data-testid="qb-error" className="border-danger">
-        <p className="text-danger text-sm">Ошибка запроса: {parsed.error.message}</p>
+        <p className="text-danger text-sm">Ошибка запроса: {failure.message}</p>
         {/* Позиция необязательна по типу отказа канона: печатать «позиция undefined» —
             хуже, чем не печатать её вовсе. Сегодня текстовый разбор ставит её всегда. */}
-        {parsed.error.position !== undefined && (
-          <p className="text-text-muted text-xs">позиция {parsed.error.position}</p>
+        {failure.position !== undefined && (
+          <p className="text-text-muted text-xs">позиция {failure.position}</p>
         )}
         {onConfigure && (
           <div className="mt-2 flex justify-end">
@@ -94,7 +135,8 @@ export function QueryBlock({
 
   // §3.4: «заголовок (из title=; нет параметра — без заголовка)». Явный проп перекрывает
   // блок — им пользуются вызывающие, у которых заголовок задан снаружи виджета.
-  const heading = title ?? parsed.ast.title;
+  const fromTree = boundAst !== null ? boundAst.title : undefined;
+  const heading = title ?? fromTree ?? (parsed?.ok === true ? parsed.ast.title : undefined);
   const entities = list.data ?? [];
   return (
     <Card className="flex flex-col gap-2">

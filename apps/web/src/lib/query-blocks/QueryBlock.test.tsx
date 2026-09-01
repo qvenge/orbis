@@ -104,3 +104,78 @@ test('без провайдера поля thisEntityId в запросе нет
     query: 'children_of=this, aspect=orbis/task',
   });
 });
+
+// --- блок ДОКУМЕНТА: дерево вместо строки (§А11-1) --------------------------------------
+
+test('привязанный блок уходит на сервер ДЕРЕВОМ, заголовок берётся из дерева', async () => {
+  // Разобранный блок реестра не ждёт вовсе: заголовок в дереве, дерево — на сервер. Печатать
+  // его обратно в текст, чтобы сервер разобрал заново, значило бы гонять запрос через форму,
+  // в которую он не обязан помещаться (§А5-3д).
+  const ast = { filter: { tag: 'work' }, title: 'Работа' };
+  const { calls } = renderWithProviders(
+    <QueryBlock query={{ ast, text: 'tags=work, title=Работа' }} />,
+    (path) => {
+      const reg = registryReply(path);
+      if (reg !== undefined) return reg;
+      if (path === 'entity.query') return [ent('a')];
+      return {};
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
+  expect(screen.getByText('Работа')).toBeInTheDocument();
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ ast });
+});
+
+test('НЕразобранный блок документа: плашка с сообщением из его же text', async () => {
+  // `ast === null` значит «дерева нет». Сообщение берётся разбором `text` — того же самого,
+  // что лежит в блоке: иначе владелец видел бы отказ, не относящийся к его запросу.
+  const { calls } = renderWithProviders(
+    <QueryBlock query={{ ast: null, text: 'foo' }} />,
+    (path) => {
+      const reg = registryReply(path);
+      if (reg !== undefined) return reg;
+      throw new Error(`unexpected ${path}`);
+    },
+  );
+  await screen.findByTestId('qb-error');
+  expect(screen.getByTestId('qb-error')).toHaveTextContent(/ожидается конструкция/i);
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+});
+
+test('ПУСТОЙ блок — плашка «блок не настроен», а НЕ все сущности владельца (Р-21-8)', async () => {
+  // Грамматика пустой запрос принимает: `parseQueryAst('')` → `{filter: null}`, законное
+  // дерево «весь корпус». До реформы такой блок отвергал вход `min(1)` и показывал пустой
+  // список; молча превратить его во «все сущности» значило бы сменить смысл при обновлении.
+  for (const text of ['', '   ', '\n  ']) {
+    const { calls, unmount } = renderWithProviders(
+      <QueryBlock query={{ ast: null, text }} />,
+      (path) => {
+        const reg = registryReply(path);
+        if (reg !== undefined) return reg;
+        throw new Error(`unexpected ${path}`);
+      },
+    );
+    await screen.findByTestId('qb-error');
+    expect(screen.getByTestId('qb-error')).toHaveTextContent(/пустой запрос/i);
+    expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+    unmount();
+  }
+});
+
+test('блок БЕЗ дерева, но с разбираемым текстом, живёт как раньше (markdown-путь)', async () => {
+  // `ast === null` бывает не только у отказа: так выглядит любой блок, построенный разбором
+  // markdown в браузере («Применить» в MarkdownToggle) — реестра в том слое нет структурно.
+  // Показывать на нём плашку значило бы краснеть на здоровом запросе владельца.
+  const { calls } = renderWithProviders(
+    <QueryBlock query={{ ast: null, text: 'tags=work' }} />,
+    (path) => {
+      const reg = registryReply(path);
+      if (reg !== undefined) return reg;
+      if (path === 'entity.query') return [ent('a')];
+      return {};
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
+  expect(screen.queryByTestId('qb-error')).toBeNull();
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ query: 'tags=work' });
+});

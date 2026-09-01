@@ -1,4 +1,6 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
+import { parseQueryAst } from '@orbis/shared/query';
+import { FIXTURE_PARSE_REGISTRY as REG } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
@@ -526,14 +528,20 @@ test('снятие аспекта у прежде неоднозначного �
 });
 
 // `}}` закрыл бы обёртку {{query: … }} раньше времени, и рендерер body разрезал бы блок на
-// части. Разбор его принимает молча — значит запрет обязан стоять отдельно от грамматики.
-test('«}}» в значении блокирует сохранение, а не рвёт обёртку блока', async () => {
+// части. Форма больше НЕ запрещает такое значение — печать разводит `}` бэкслешем
+// (`quoteQueryValue`), а разбор снимает экран тем же правилом (Р-21-3). Проверяется ровно
+// это: значение доезжает целым, а `}}` в напечатанной строке не появляется.
+test('«}}» в значении печатается экранированным, а обёртку блока не рвёт', async () => {
   const { onSave } = await openForm('aspect=orbis/task, title=Дом');
   fireEvent.change(screen.getByLabelText('Заголовок'), { target: { value: 'Дом}}хвост' } });
-  expect(screen.getByTestId('qb-form-error')).toHaveTextContent('}}');
-  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+  expect(screen.queryByTestId('qb-form-error')).toBeNull();
   save();
-  expect(onSave).not.toHaveBeenCalled();
+  const text = saved(onSave);
+  // Строка блока `}}` не содержит — иначе она закрыла бы обёртку в markdown-проекции…
+  expect(text).not.toContain('}}');
+  // …а значение при этом цело: обратный разбор той же строки возвращает исходный заголовок.
+  const parsed = parseQueryAst(text, REG);
+  expect(parsed.ok && parsed.ast.title).toBe('Дом}}хвост');
 });
 
 // Пустая граница сравнения печатается, но обратно не разбирается: отказ обязан быть виден ДО

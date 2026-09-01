@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { manualBucket, newId, pendingMessageId, routineRunId } from '@orbis/shared';
 import { parseBody, readBodyDoc, serializeBody } from '@orbis/shared/doc';
 import { type DiffUnit, flattenBlocks } from '@orbis/shared/doc/diff';
+import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -1393,6 +1394,30 @@ describe('routine.proposal: дифф тела предложения', () => {
     expect((await caller().routine.proposal({ runId }))?.editedFrom).toBeUndefined();
   });
 
+  test('query-блок в предложении: ОБЕ стороны диффа привязаны реестром из lifecycle', async () => {
+    // Что здесь сторожится. Дифф блоков меряет по `text` (печатная key-форма) и по `ast`
+    // (`doc/diff.ts`, KEY_ATTRS). Привяжи одну сторону и не привяжи другую — и НЕТРОНУТЫЙ
+    // блок приехал бы владельцу как `changed`: одна сторона несёт старое имя `status`, другая
+    // key-форму `orbis/task_status`. Реестр обе стороны берут из одного снимка
+    // (`lifecycle.ts` → `proposalBodyRows(..., reg)`), и это ровно то, что проверяется.
+    const block = '{{query: aspect=orbis/task, status=inbox}}';
+    const { runId } = await proposedBodyChange(
+      'Список дел',
+      `Заголовок\n\n${block}`,
+      `Заголовок правленый\n\n${block}`,
+    );
+
+    const diff = (await bodyRowOf(runId)).bodyDiff;
+    if (diff === undefined || 'skipped' in diff) throw new Error('дифф не построен');
+    // Абзац правлен, БЛОК НЕ ТРОНУТ — вот и весь предмет теста.
+    expect(diff.units.map((u) => u.kind)).toEqual(['changed', 'same']);
+    // Страж вакуумности: «same» обязан быть про блок, а не про пустую единицу. Обе стороны
+    // показаны key-формой — то есть привязка на них действительно случилась.
+    const same = diff.units[1];
+    expect(same?.before).toBe('aspect=orbis/task, orbis/task_status=inbox');
+    expect(same?.after).toBe(same?.before ?? '');
+  });
+
   test('ИНВАРИАНТ 1а: канон применённого тела равен after-стороне серверного диффа — approve и сверка flattenBlocks(readBodyDoc(тела записи)) с after-склейкой units', async () => {
     const { taskId, runId, pendingId } = await proposedBodyChange(
       'Собрать чемодан',
@@ -1414,7 +1439,14 @@ describe('routine.proposal: дифф тела предложения', () => {
 
     // То, что легло в запись, — ровно то, что сервер показал «станет»: поэлементно и в
     // порядке документа (инвариант порядка after-стороны у diffBodyDocs жёсткий)
-    const stored = readBodyDoc(await bodyDocOf(taskId), (await bodyOf(taskId)) ?? '');
+    // Реестр — фикстурный: query-блоков в этом теле нет, привязке его нечего разбирать, а
+    // фикстурный снимок не зависит от состояния БД. Блоки под тем же инвариантом проверяет
+    // `bind-query.test.ts` в shared, где реестр и есть предмет проверки.
+    const stored = readBodyDoc(
+      await bodyDocOf(taskId),
+      (await bodyOf(taskId)) ?? '',
+      FIXTURE_PARSE_REGISTRY,
+    );
     expect(flattenBlocks(stored.doc).map((b) => b.text)).toEqual(afterSide);
   });
 

@@ -173,11 +173,18 @@ const INLINE_KINDS: ReadonlySet<string> = new Set(['text', 'hardBreak', 'entityR
  * Без них голый текст не различает ровно те правки, которые рутина и делает: щелчок чекбоксом
  * («План дня»), понижение заголовка, смена языка кодового блока — всё это приехало бы как
  * `same`, то есть самая вероятная правка оказалась бы невидимой.
+ *
+ * `queryBlock.ast` — тот же довод на дереве запроса: key-форма (она же текст блока, см.
+ * `collectText`) РАЗНЫЕ деревья печатает одним текстом — `{op:'eq'}` и `{op:'contains'}` на
+ * списочном свойстве неразличимы плоской грамматикой (перечень классов — в докблоке
+ * `AstFixture.keyText`). Без атрибута в ключе правка `eq → contains` в предложении рутины
+ * приезжала бы как `same`.
  */
 const KEY_ATTRS: Readonly<Record<string, readonly string[]>> = {
   heading: ['level'],
   taskItem: ['checked'],
   codeBlock: ['language'],
+  queryBlock: ['ast'],
 };
 
 /** Блок в плоском виде: тип узла, ключ сопоставления и нормализованный текст для показа. */
@@ -238,7 +245,10 @@ function collectText(node: JSONContent | undefined, out: string[], breakText: st
   if (typeof node.text === 'string') out.push(node.text);
   const attrs = node.attrs ?? {};
   if (node.type === 'rawBlock' && typeof attrs.markdown === 'string') out.push(attrs.markdown);
-  if (node.type === 'queryBlock' && typeof attrs.query === 'string') out.push(attrs.query);
+  // Печатная key-форма дерева (либо исходная строка неразобранного блока) — `text`. Печатать
+  // её ЗДЕСЬ из `ast` нечем: печать требует реестра, а этот модуль листовой по закону и ни у
+  // одного его вызывателя реестра нет.
+  if (node.type === 'queryBlock' && typeof attrs.text === 'string') out.push(attrs.text);
   if (breakText !== '' && node.type === 'hardBreak') out.push(breakText);
   for (const child of node.content ?? []) collectText(child, out, breakText);
 }
@@ -248,10 +258,29 @@ function normalizeText(text: string): string {
   return text.replace(/\s+/gu, ' ').trim();
 }
 
+/**
+ * Значение атрибута в ключе. Объект сериализуется С СОРТИРОВКОЙ КЛЮЧЕЙ, а не `String()`
+ * (`[object Object]` не различал бы ничего) и не голым `JSON.stringify`: одна сторона диффа
+ * приезжает из `body_doc` (jsonb, а PostgreSQL порядок ключей объекта НЕ сохраняет), другая —
+ * от клиента, и голая сериализация объявляла бы «изменённым» блок, которого никто не трогал.
+ * Массивы порядок сохраняют: у дерева запроса порядок детей `and`/`or` — часть дерева.
+ */
+function attrKey(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value !== 'object') return String(value);
+  return JSON.stringify(value, (_k, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)),
+        )
+      : v,
+  );
+}
+
 function keyOf(node: JSONContent, kind: string, text: string): string {
   const attrs = node.attrs ?? {};
   const significant = (KEY_ATTRS[kind] ?? [])
-    .map((name) => `${name}=${String(attrs[name] ?? '')}`)
+    .map((name) => `${name}=${attrKey(attrs[name])}`)
     .join(',');
   // Разделитель — перевод строки: нормализация схлопнула пробелы, поэтому в тексте единицы
   // его быть не может, и склейка полей не подделает чужой ключ (иначе абзац «heading 2»

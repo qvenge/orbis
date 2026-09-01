@@ -1,10 +1,12 @@
 import { getSchema, type JSONContent } from '@tiptap/core';
+import type { ParseRegistry } from '../query';
+import { bindQueryBlocks } from './bind-query';
 import { blockText } from './diff';
 import { OrbisMarkdownManager } from './manager';
 import { withCodeFences } from './nodes/code';
 import { BODY_REF_RE } from './nodes/entity-ref';
 import { DOC_EXTENSIONS } from './schema';
-import { type BodyDoc, DOC_SCHEMA_VERSION } from './types';
+import { type BodyDoc, DOC_SCHEMA_VERSION, upgradeBodyDoc } from './types';
 
 // Менеджер тяжёлый в конструировании и не хранит состояния между вызовами — создаётся один раз.
 // Проверено спайком: работает на Bun без DOM.
@@ -538,9 +540,20 @@ export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
 
 /**
  * Правило разрешения (Р1): что считать документом.
- *  1. форма верна и версия знакома → он;
- *  2. иначе (версия из будущего после отката релиза, битая форма, NULL) → пересборка из `body`.
+ *  1. форма верна и версия ТЕКУЩАЯ → он;
+ *  2. форма верна и версия ПРЕДЫДУЩАЯ → конверсия по дереву (`upgradeBodyDoc`), блочные id
+ *     и оформление целы;
+ *  3. иначе (версия из будущего после отката релиза, битая форма, NULL) → пересборка из `body`.
  * Худший исход — потеря блочных id и части оформления, но НЕ текста.
+ *
+ * ЧТЕНИЕ ШИРЕ ЗАПИСИ, и это названо вслух: гейт записи (`executor.ts`) принимает ровно текущую
+ * версию, а сюда v1 доезжает и конвертируется. Симметрия сломана намеренно — конверсия вверх
+ * проверяема, а принимать на запись документ, который пришлось бы конвертировать, значило бы
+ * сохранять форму, которую та вкладка браузера уже не понимает.
+ *
+ * РЕЕСТР — третьим аргументом, потому что чтение обязано отдавать блоки ПРИВЯЗАННЫМИ
+ * (`bindQueryBlocks`): в `body_doc` инвариант «у блока есть дерево или честный отказ», и
+ * пересборка из markdown его тоже соблюдает.
  *
  * «Форма верна» спрашивается У СХЕМЫ (`bodyDocError`), а не по наличию полей. До итогового
  * ревью (находка 5) докблок обещал пересборку «при битой форме», а код смотрел лишь на тип,
@@ -552,16 +565,66 @@ export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
  * сама проверка стоит единицы микросекунд (замерено). Чужие схеме атрибуты (блочные id
  * UniqueID) проверку проходят, и наружу отдаётся ВХОД, а не `toJSON()`, — см. bodyDocError.
  */
-export function readBodyDoc(stored: unknown, fallbackMarkdown: string): BodyDoc {
+/**
+ * Кого АДРЕСУЮТ query-блоки тела: id свойств (`prop`, `has`, `sortBy[].field`,
+ * `rel.sourceNotIn.prop`), аспектов (`aspect`), ролей (`rel.via`) и сущностей (`rel.of`).
+ * Обратный индекс колонки `entities.query_refs` — по нему слияние свойства находит тела,
+ * которые на него ссылаются, не обходя корпус (`registry/ops.ts`).
+ *
+ * Собирается ТОЛЬКО с дерева, и это не упущение, а следствие формы: у неразобранного блока
+ * дерева нет, а его текст имён реестра не содержит по построению — он и не разобрался. Второй
+ * правды (регэксп по `body`, как у `bodyRefsFromDoc` для raw-блоков) здесь быть не может.
+ *
+ * `this` в индекс не едет: это не адрес, а контекст исполнения (сущность-хозяин блока).
+ * Регистр приводится к нижнему — сравнение `text[]` в PG регистрозависимо, а uuid в дереве
+ * приходит как написан.
+ */
+export function queryRefsFromDoc(input: BodyDoc | JSONContent): string[] {
+  const refs = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value === 'string' && value !== '' && value !== 'this') {
+      refs.add(value.toLowerCase());
+    }
+  };
+  // Обход ИТЕРАТИВНЫЙ и по СЫРОМУ значению: дерево в атрибуте могло приехать от клиента, и
+  // рекурсия исчерпала бы стек ровно на том входе, ради которого её и зовут.
+  const collect = (ast: unknown): void => {
+    const stack: unknown[] = [ast];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (typeof node !== 'object' || node === null) continue;
+      if (!Array.isArray(node)) {
+        const rec = node as Record<string, unknown>;
+        for (const field of ['prop', 'has', 'field', 'aspect', 'via', 'of'] as const) {
+          add(rec[field]);
+        }
+      }
+      for (const child of Array.isArray(node) ? node : Object.values(node)) stack.push(child);
+    }
+  };
+  const walk = (node: JSONContent | undefined): void => {
+    if (!node) return;
+    if (node.type === 'queryBlock' && node.attrs?.ast != null) collect(node.attrs.ast);
+    for (const child of node.content ?? []) walk(child);
+  };
+  walk(docOf(input));
+  return [...refs];
+}
+
+export function readBodyDoc(
+  stored: unknown,
+  fallbackMarkdown: string,
+  reg: ParseRegistry,
+): BodyDoc {
   if (
     typeof stored === 'object' &&
     stored !== null &&
     'v' in stored &&
     'doc' in stored &&
-    (stored as BodyDoc).v === DOC_SCHEMA_VERSION &&
     bodyDocError(stored as BodyDoc) === undefined
   ) {
-    return stored as BodyDoc;
+    const upgraded = upgradeBodyDoc(stored as BodyDoc);
+    if (upgraded !== null) return bindQueryBlocks(upgraded, reg);
   }
-  return parseBody(fallbackMarkdown);
+  return bindQueryBlocks(parseBody(fallbackMarkdown), reg);
 }

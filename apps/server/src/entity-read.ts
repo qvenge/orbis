@@ -13,7 +13,7 @@ import { chatMessages, entities, relations } from './db/schema';
 import type { Tx } from './db/with-identity';
 import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
-import { effectiveRegistry } from './registry/cache';
+import { effectiveRegistry, parseRegistryOfSnapshot } from './registry/cache';
 import type { RegistrySnapshot } from './registry/load';
 import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
@@ -134,13 +134,24 @@ export async function readEntity(
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
 
+  // Снимок реестра — ОДНИМ обещанием на весь вызов. Читателей у него здесь двое (привязка
+  // query-блоков тела и подписи backlinks), и оба ленивы: чтение без `include=bodyDoc` и без
+  // backlinks не платит ничего, чтение с обоими платит ОДИН раз. Адрес вызова один намеренно —
+  // иначе счёт вызывателей `effectiveRegistry` в докблоке `registry/cache.ts` перестал бы
+  // сходиться грепом.
+  let regOnce: Promise<RegistrySnapshot> | undefined;
+  const registry = (): Promise<RegistrySnapshot> => (regOnce ??= effectiveRegistry(tx, ownerId));
+
   // Тело, созданное до этой работы, документа ещё не имеет — собираем на лету. Правило
   // разрешения общее с клиентом (readBodyDoc): битую форму или версию из будущего пересобираем
-  // из `body`, теряя оформление, но не текст. Обратно в БД здесь НЕ пишем: чтение обязано
+  // из `body`, теряя оформление, но не текст; ПРЕДЫДУЩУЮ версию схемы конвертируем по дереву, а
+  // блоки отдаём привязанными к реестру (Р-21-1). Обратно в БД здесь НЕ пишем: чтение обязано
   // оставаться чтением, а колонку заполнит бэкфилл или первое же сохранение. Порядок важен —
   // после создания `out` документ уехал бы в wire сырым.
   const wantsDoc = include.has('bodyDoc');
-  if (wantsDoc) row.bodyDoc = readBodyDoc(row.bodyDoc, row.body);
+  if (wantsDoc) {
+    row.bodyDoc = readBodyDoc(row.bodyDoc, row.body, parseRegistryOfSnapshot(await registry()));
+  }
 
   const out: EntityReadResult = { entity: toWireEntity(row, wantsDoc) };
 
@@ -249,8 +260,7 @@ export async function readEntity(
         shown.flatMap((r) => (typeof r.via_property === 'string' ? [r.via_property] : [])),
       ),
     ];
-    const reg =
-      needsSides || properties.length > 0 ? await effectiveRegistry(tx, ownerId) : undefined;
+    const reg = needsSides || properties.length > 0 ? await registry() : undefined;
     const sides = needsSides && reg !== undefined ? mentionSideLabels(reg) : undefined;
     const propertyLabelById =
       reg === undefined ? new Map<string, string>() : propertyLabels(reg, properties);

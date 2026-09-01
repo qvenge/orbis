@@ -1,7 +1,7 @@
 // Read-only замер корпуса тел ПЕРЕД необратимой конверсией. Базы тесту не нужно: и порционность,
 // и все девять счётчиков — свойства цикла, а не SQL (тот же приём, что у fakeQueue бэкфилла).
 import { expect, test } from 'bun:test';
-import { parseBody } from '@orbis/shared/doc';
+import { DOC_SCHEMA_VERSION, parseBody } from '@orbis/shared/doc';
 import {
   AUDIT_BATCH,
   type AuditIo,
@@ -104,7 +104,7 @@ test('пост-проверка: пара сверяется, а не додум
       parseBody(good), // пара сходится
       parseBody('совсем другое'), // проекция не равна body → пара разошлась
       null, // документа нет
-      { v: 1, doc: { type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ' }] } }, // не сериализуется
+      { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ' }] } }, // не сериализуется
     ],
   );
   const r = await auditBodies(corpus.io);
@@ -156,7 +156,7 @@ test('счётчик слов краснеет, когда слово дейст
   // счётчика, который не считает ничего.
   const corpus = fakeCorpus(['важное слово тут']);
   const r = await auditBodies(corpus.io, (body) => ({
-    doc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+    doc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
     body: body.replace('слово', ''),
   }));
   expect(r.lostWords).toBe(1);
@@ -194,7 +194,7 @@ test('аудит называет id строк, поднявших кран (р
   // человек не найдёт строку в корпусе на тысячи записей.
   const corpus = fakeCorpus(['здоровое тело', 'дрожит', 'тоже здоровое']);
   const r = await auditBodies(corpus.io, (body) => ({
-    doc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+    doc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
     body: body.startsWith('дрожит') ? `${body}!` : body,
   }));
   expect(r.unstable).toBe(1);
@@ -206,7 +206,7 @@ test('аудит называет id строк, поднявших кран (р
 test('список id ограничен сверху — больной корпус не вываливает всё', async () => {
   const corpus = fakeCorpus(Array.from({ length: FLAGGED_LIMIT + 20 }, () => 'дрожит'));
   const r = await auditBodies(corpus.io, (body) => ({
-    doc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+    doc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
     body: `${body}!`,
   }));
   expect(r.unstable).toBe(FLAGGED_LIMIT + 20); // считаны ВСЕ
@@ -312,7 +312,7 @@ test('стоп-кран ловит тело, на котором канон НЕ
   // не осталось, а счётчик без доказательства — утверждение без проверки.
   const corpus = fakeCorpus(['дрожит', 'спокойное']);
   const r = await auditBodies(corpus.io, (body) => ({
-    doc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+    doc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
     // Приписка НА КАЖДОМ проходе, а не только на первом: иначе второй проход вернул бы то же
     // самое, и «неустойчивость» была бы зелена по ложной причине (поймано прогоном).
     body: body.startsWith('дрожит') ? `${body}!` : body,
@@ -331,7 +331,7 @@ test('стоп-кран ловит тело, у которого канон ТЕ
     if (body === '`` ` ``')
       return {
         doc: {
-          v: 1,
+          v: DOC_SCHEMA_VERSION,
           doc: {
             type: 'doc',
             content: [
@@ -346,7 +346,7 @@ test('стоп-кран ловит тело, у которого канон ТЕ
       };
     return {
       doc: {
-        v: 1,
+        v: DOC_SCHEMA_VERSION,
         doc: {
           type: 'doc',
           content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }],
@@ -376,7 +376,10 @@ test('одно упавшее тело не рушит замер, а попад
   };
   const result = await auditBodies(io, (body) => {
     if (body === 'взорвётся') throw new Error('парсер не справился');
-    return { doc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } }, body };
+    return {
+      doc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+      body,
+    };
   });
   expect(result.failed).toBe(1);
   expect(result.total).toBe(2); // упавшая строка всё равно посчитана в корпусе

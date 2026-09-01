@@ -50,11 +50,13 @@ interface StoredRow {
   body: string;
   body_doc: { v: number; doc: Record<string, unknown> } | null;
   body_refs: string[];
+  /** Индекс адресов, названных query-блоками тела (§А11-1) — пишется рядом с body_refs. */
+  query_refs: string[];
 }
 
 async function rowOf(id: string): Promise<StoredRow> {
   const rows = await admin.execute(
-    sql`SELECT body, body_doc, body_refs FROM entities WHERE id = ${id}`,
+    sql`SELECT body, body_doc, body_refs, query_refs FROM entities WHERE id = ${id}`,
   );
   const row = rows[0];
   if (!row) throw new Error(`строка ${id} не найдена`);
@@ -95,7 +97,7 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
   test('bodyDoc принимается UI-схемой', () => {
     const r = entityUpdateUiInput.safeParse({
       id: UUID,
-      bodyDoc: { v: 1, doc: { type: 'doc', content: [] } },
+      bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
       expectedUpdatedAt: '2026-08-13T10:00:00.000Z',
     });
     expect(r.success).toBe(true);
@@ -106,7 +108,7 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
     const r = entityUpdateUiInput.safeParse({
       id: UUID,
       body: 'текст',
-      bodyDoc: { v: 1, doc: { type: 'doc', content: [] } },
+      bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
       expectedUpdatedAt: '2026-08-13T10:00:00.000Z',
     });
     expect(r.success).toBe(false);
@@ -127,7 +129,7 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
     // Дешёвая структурная сетка: ловит {doc:{}} и content-не-массив, не моделируя НИ ОДНОЙ
     // ноды. Именно эти формы serializeBody молча превращает в пустую строку.
     const parse = (doc: unknown) =>
-      entityUpdateUiInput.safeParse({ id: UUID, bodyDoc: { v: 1, doc } }).success;
+      entityUpdateUiInput.safeParse({ id: UUID, bodyDoc: { v: DOC_SCHEMA_VERSION, doc } }).success;
     expect(parse({})).toBe(false);
     expect(parse({ type: 'doc', content: 'oops' })).toBe(false);
     expect(parse({ type: 'НЕ_ДОКУМЕНТ', content: [] })).toBe(false);
@@ -141,7 +143,7 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
     const r = entityUpdateUiInput.safeParse({
       id: UUID,
       bodyDoc: {
-        v: 1,
+        v: DOC_SCHEMA_VERSION,
         doc: {
           type: 'doc',
           content: [{ type: 'paragraph', attrs: { blockId: 'b1' }, content: [] }],
@@ -191,7 +193,7 @@ describe('канон: body в БД — производная документа
     // Литеральное дерево, а не parseBody(...) обеими сторонами: иначе уход тела в rawBlock
     // прошёл бы тождественно и проверка не проверяла бы ничего.
     expect(row.body_doc).toEqual({
-      v: 1,
+      v: DOC_SCHEMA_VERSION,
       doc: {
         type: 'doc',
         content: [
@@ -204,12 +206,13 @@ describe('канон: body в БД — производная документа
   test('bodyDoc из UI: в БД ложатся ОБЕ формы, body = сериализация документа', async () => {
     const { entity, owner } = await createOne();
     const doc = {
-      v: 1,
+      v: DOC_SCHEMA_VERSION,
       doc: {
         type: 'doc',
         content: [
           { type: 'paragraph', content: [{ type: 'text', text: 'текст' }] },
-          { type: 'queryBlock', attrs: { query: ' aspect=orbis/task, status=inbox' } },
+          // Блок из редактора приезжает НЕПРИВЯЗАННЫМ: web реестра в документ не кладёт (Р-21-7).
+          { type: 'queryBlock', attrs: { ast: null, text: ' aspect=orbis/task, status=inbox' } },
         ],
       },
     };
@@ -223,8 +226,17 @@ describe('канон: body в БД — производная документа
     );
     okFirst(r);
     const row = await rowOf(entity.id);
-    expect(row.body_doc).toEqual(doc);
-    expect(row.body).toBe('текст\n\n{{query: aspect=orbis/task, status=inbox}}');
+    // В БД лёг ПРИВЯЗАННЫЙ документ, а не вход: `ast` собран по реестру владельца, `text` стал
+    // печатной key-формой того же дерева (`status` → `orbis/task_status`). Литеральные
+    // ожидания, а не пересчёт теми же функциями: иначе привязка сравнивалась бы сама с собой.
+    const nodes = (row.body_doc?.doc.content ?? []) as Array<{ attrs?: Record<string, unknown> }>;
+    const block = nodes[1] as { attrs?: Record<string, unknown> };
+    expect(block.attrs?.text).toBe('aspect=orbis/task, orbis/task_status=inbox');
+    expect(JSON.stringify(block.attrs?.ast)).toContain('orbis/task_status');
+    // `body` — проекция ТОГО, ЧТО ЛЕГЛО: key-форма, а не строка входа.
+    expect(row.body).toBe('текст\n\n{{query:aspect=orbis/task, orbis/task_status=inbox}}');
+    // …и индекс адресов заполнен из дерева — той же записью, что и body_refs.
+    expect([...row.query_refs].sort()).toEqual(['orbis/task', 'orbis/task_status']);
   });
 });
 
@@ -238,7 +250,11 @@ describe('структурная целость документа — вопр�
       db,
       req(
         'entity_update',
-        { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+        {
+          id: entity.id,
+          bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
+          expectedUpdatedAt: entity.updatedAt,
+        },
         owner,
       ),
     );
@@ -324,13 +340,17 @@ describe('структурная целость документа — вопр�
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+          {
+            id: entity.id,
+            bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
+            expectedUpdatedAt: entity.updatedAt,
+          },
           owner,
         ),
       ),
     );
     const row = await rowOf(entity.id);
-    expect(row.body_doc).toEqual({ v: 1, doc }); // attrs.id на месте
+    expect(row.body_doc).toEqual({ v: DOC_SCHEMA_VERSION, doc }); // attrs.id на месте
     expect(row.body).toBe('текст');
   });
 });
@@ -344,7 +364,11 @@ describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью,
         db,
         req(
           'entity_update',
-          { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+          {
+            id: entity.id,
+            bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
+            expectedUpdatedAt: entity.updatedAt,
+          },
           owner,
         ),
       ),
@@ -471,7 +495,7 @@ describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью,
       ],
     };
     const row = await writeDoc(doc);
-    expect(row.body_doc).toEqual({ v: 1, doc }); // структура цела, ничего не схлопнулось
+    expect(row.body_doc).toEqual({ v: DOC_SCHEMA_VERSION, doc }); // структура цела, ничего не схлопнулось
     expect(firstNodeType(row)).toBe('heading');
     expect(row.body).toBe('# План\n\nпервый пункт\n\n- раз\n- два\n\n');
     // Пара по-прежнему согласована — инвариант не принесён в жертву.
@@ -489,7 +513,7 @@ describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью,
       ],
     };
     const row = await writeDoc(doc);
-    expect(row.body_doc).toEqual({ v: 1, doc }); // тот же документ, блочный id на месте
+    expect(row.body_doc).toEqual({ v: DOC_SCHEMA_VERSION, doc }); // тот же документ, блочный id на месте
     expect(firstNodeType(row)).toBe('paragraph');
   });
 });
@@ -576,7 +600,7 @@ describe('страховка обратимости заполняется ВС�
           {
             id: entity.id,
             bodyDoc: {
-              v: 1,
+              v: DOC_SCHEMA_VERSION,
               doc: {
                 type: 'doc',
                 content: [{ type: 'paragraph', content: [{ type: 'text', text: 'стало' }] }],
@@ -621,7 +645,7 @@ describe('все законные формы пустоты сохраняютс
           'entity_update',
           {
             id: entity.id,
-            bodyDoc: { v: 1, doc: { type: 'doc', content } },
+            bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } },
             expectedUpdatedAt: entity.updatedAt,
           },
           owner,
@@ -632,7 +656,7 @@ describe('все законные формы пустоты сохраняютс
       expect(row.body.trim()).toBe('');
       expect(row.body_refs).toEqual([]);
       // Документ лёг дословно — пустота сохранена как форма, а не «починена» сервером.
-      expect(row.body_doc).toEqual({ v: 1, doc: { type: 'doc', content } });
+      expect(row.body_doc).toEqual({ v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } });
     });
   }
 
@@ -644,7 +668,11 @@ describe('все законные формы пустоты сохраняютс
       db,
       req(
         'entity_update',
-        { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+        {
+          id: entity.id,
+          bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
+          expectedUpdatedAt: entity.updatedAt,
+        },
         owner,
       ),
     );
@@ -653,7 +681,11 @@ describe('все законные формы пустоты сохраняютс
       db,
       req(
         'entity_update',
-        { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: afterFirst.updatedAt },
+        {
+          id: entity.id,
+          bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
+          expectedUpdatedAt: afterFirst.updatedAt,
+        },
         owner,
       ),
     );
@@ -665,8 +697,9 @@ describe('версия документа сверяется НА ЗАПИСИ (
   test('документ версии из будущего — VALIDATION, содержимое не урезается', async () => {
     // Цепочка без гейта (воспроизведена пробой): клиент новее сервера шлёт ноду, которой
     // сервер не знает → serializeBody ТИХО выбрасывает её из body ("начало\n\n" вместо текста
-    // callout'а) → body_doc с v=2 сохраняется → на первом же чтении readBodyDoc отвергает его
-    // по версии и пересобирает из УЖЕ УРЕЗАННОГО body. Содержимое исчезает из обеих форм.
+    // callout'а) → документ будущей версии сохраняется → на первом же чтении readBodyDoc
+    // отвергает его по версии и пересобирает из УЖЕ УРЕЗАННОГО body. Содержимое исчезает из
+    // обеих форм.
     // Ровно то, ради чего версия и заведена (doc/types.ts: «откат релиза съел бы содержимое»).
     const { entity, owner } = await createOne('исходное тело');
     const r = await execute(
@@ -676,7 +709,10 @@ describe('версия документа сверяется НА ЗАПИСИ (
         {
           id: entity.id,
           bodyDoc: {
-            v: 2,
+            // Версия из БУДУЩЕГО — то есть следующая за текущей, а не литерал: с бампом схемы
+            // литеральная «2» стала бы ТЕКУЩЕЙ, тест продолжил бы зеленеть и сторожил бы уже
+            // структурную проверку вместо гейта версии.
+            v: DOC_SCHEMA_VERSION + 1,
             doc: {
               type: 'doc',
               content: [
@@ -700,7 +736,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
     const row = await rowOf(entity.id);
     expect(row.body).toBe('исходное тело');
     expect(row.body_doc).toEqual({
-      v: 1,
+      v: DOC_SCHEMA_VERSION,
       doc: {
         type: 'doc',
         content: [{ type: 'paragraph', content: [{ type: 'text', text: 'исходное тело' }] }],
@@ -708,10 +744,14 @@ describe('версия документа сверяется НА ЗАПИСИ (
     });
   });
 
-  test('запись принимает ровно ту версию, которую примет чтение', async () => {
-    // Симметрия — суть правки: readBodyDoc гарантированно выбрасывает любой v !== 1, значит
-    // принимать такое на запись значило бы сохранять заведомо обречённое.
-    expect(DOC_SCHEMA_VERSION).toBe(1);
+  test('запись принимает ТОЛЬКО текущую версию, а чтение — ещё и предыдущую (конверсией)', async () => {
+    // ЧТО ЗДЕСЬ СТОРОЖИТСЯ — не число, а ГРАНИЦА между гейтами. До версии 2 они совпадали
+    // («принимаем ровно то, что примет чтение»), и пин `DOC_SCHEMA_VERSION === 1` был этим
+    // утверждением. Теперь чтение ШИРЕ записи: предыдущую версию оно конвертирует по дереву
+    // (`upgradeBodyDoc`), а запись её отвергает — принять на запись форму, которую приславшая
+    // вкладка уже не понимает, значило бы сохранять заведомо обречённое.
+    // Простая замена цифры в старом пине оставила бы страж, сторожащий ложь.
+    expect(DOC_SCHEMA_VERSION).toBeGreaterThan(1);
     const { entity, owner } = await createOne();
     const ok = await execute(
       db,
@@ -731,7 +771,202 @@ describe('версия документа сверяется НА ЗАПИСИ (
         owner,
       ),
     );
-    expect(okFirst(ok).body).toBe('ок');
+    const after = okFirst(ok);
+    expect(after.body).toBe('ок');
+
+    // Половина ПЕРВАЯ: тот же документ ПРЕДЫДУЩЕЙ версии запись отвергает.
+    const rejected = await execute(
+      db,
+      req(
+        'entity_update',
+        {
+          id: entity.id,
+          bodyDoc: {
+            v: DOC_SCHEMA_VERSION - 1,
+            doc: {
+              type: 'doc',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'старое' }] }],
+            },
+          },
+          expectedUpdatedAt: after.updatedAt,
+        },
+        owner,
+      ),
+    );
+    expect(err(rejected)).toEqual({
+      code: 'VALIDATION',
+      message: 'документ другой версии схемы: перезагрузите приложение и повторите правку',
+    });
+
+    // Половина ВТОРАЯ: чтение ту же версию ПРИНИМАЕТ и конвертирует по дереву. Строку
+    // подсаживаем админским DSN — путь записи такую форму уже не пропустит, а в базе она
+    // лежит у каждого тела, сохранённого до выкатки.
+    await admin.execute(sql`
+      UPDATE entities
+         SET body_doc = ${JSON.stringify({
+           v: DOC_SCHEMA_VERSION - 1,
+           doc: {
+             type: 'doc',
+             content: [
+               { type: 'queryBlock', attrs: { id: 'блок-1', query: ' aspect=orbis/task' } },
+             ],
+           },
+         })}::jsonb
+       WHERE id = ${entity.id}`);
+    const read = await withIdentity(db, owner, (tx) =>
+      readEntity(tx, owner, { id: entity.id, include: ['body', 'bodyDoc'] }),
+    );
+    expect(read.entity.bodyDoc?.v).toBe(DOC_SCHEMA_VERSION);
+    const nodes = ((read.entity.bodyDoc?.doc as { content?: unknown[] } | undefined)?.content ??
+      []) as Array<{ attrs?: Record<string, unknown> }>;
+    const block = nodes[0] as { attrs?: Record<string, unknown> };
+    // Блок приехал ПРИВЯЗАННЫМ по реестру владельца, а не пустым, и блочный id пережил
+    // конверсию — ради этого она и идёт по дереву, а не пересборкой из markdown.
+    expect(block.attrs?.ast).not.toBeNull();
+    expect(block.attrs?.id).toBe('блок-1');
+    expect(block.attrs?.query).toBeUndefined();
+  });
+});
+
+/**
+ * Индекс `query_refs` — обратный указатель «кого адресуют блоки этого тела» (§А11-1). Точек
+ * записи тела ПЯТЬ, и колонка обязана заполняться у каждой: пропусти хоть одну — и у записи,
+ * заведённой этим путём, индекс молча останется пустым, а слияние свойства перестанет её
+ * находить. Полнота перечня доказана грепом `patch.bodyRefs|values.bodyRefs` по executor.ts.
+ */
+describe('query_refs — во ВСЕХ пяти точках записи тела', () => {
+  /**
+   * Ожидаемые адреса заготовки проекта — ПОЛНЫМ списком, а не «содержит»: три её блока
+   * разбираются (аспект, статус, три поля сортировки и сам проект в `children_of`), четвёртый
+   * не разбирается вовсе (`project_id` §А8 удаляет — переводит Задача 21b), и его имена в
+   * индекс не попадают. Список целиком ловит и недобор, и лишнее.
+   */
+  const seedRefs = (id: string) =>
+    [
+      id,
+      'orbis/task',
+      'orbis/task_status',
+      'orbis/updated_at',
+      'orbis/priority',
+      'orbis/created_at',
+    ].sort();
+
+  test('1. create со строковым телом', async () => {
+    const { entity } = await createOne('{{query: aspect=orbis/task, status=inbox}}');
+    expect([...(await rowOf(entity.id)).query_refs].sort()).toEqual([
+      'orbis/task',
+      'orbis/task_status',
+    ]);
+  });
+
+  test('2. create с засевом заготовки проекта', async () => {
+    const owner = freshUserId();
+    const entity = okFirst(
+      await execute(
+        db,
+        req(
+          'entity_create',
+          { title: 'Проект', tags: [], aspects: { 'orbis/project': { stage: 'active' } } },
+          owner,
+        ),
+      ),
+    );
+    expect([...(await rowOf(entity.id)).query_refs].sort()).toEqual(seedRefs(entity.id));
+  });
+
+  test('3. update через bodyDoc (путь редактора)', async () => {
+    const { entity, owner } = await createOne();
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          {
+            id: entity.id,
+            bodyDoc: {
+              v: DOC_SCHEMA_VERSION,
+              doc: {
+                type: 'doc',
+                content: [{ type: 'queryBlock', attrs: { ast: null, text: ' aspect=orbis/goal' } }],
+              },
+            },
+            expectedUpdatedAt: entity.updatedAt,
+          },
+          owner,
+        ),
+      ),
+    );
+    expect((await rowOf(entity.id)).query_refs).toEqual(['orbis/goal']);
+  });
+
+  test('4. update, добавляющий orbis/project пустой записи (засев)', async () => {
+    const { entity, owner } = await createOne();
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          {
+            id: entity.id,
+            body: '',
+            expectedUpdatedAt: entity.updatedAt,
+            aspects: { 'orbis/project': { stage: 'active' } },
+          },
+          owner,
+        ),
+      ),
+    );
+    expect([...(await rowOf(entity.id)).query_refs].sort()).toEqual(seedRefs(entity.id));
+  });
+
+  test('5. attach_orbis_project (засев тем же путём, что create и update)', async () => {
+    const { entity, owner } = await createOne();
+    okFirst(
+      await execute(
+        db,
+        req(
+          'attach_orbis_project',
+          { entity_id: entity.id, data: { 'orbis/project_stage': 'active' } },
+          owner,
+        ),
+      ),
+    );
+    expect([...(await rowOf(entity.id)).query_refs].sort()).toEqual(seedRefs(entity.id));
+  });
+
+  test('тело без блоков индекс НЕ заполняет, а правка блока его ПЕРЕСЧИТЫВАЕТ', async () => {
+    // Страж вакуумности: без него «во всех пяти точках заполнено» держалось бы и на индексе,
+    // который просто копит всё подряд и никогда не чистится.
+    const { entity, owner } = await createOne('обычный текст');
+    expect((await rowOf(entity.id)).query_refs).toEqual([]);
+
+    const withBlock = okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          {
+            id: entity.id,
+            body: '{{query: aspect=orbis/goal}}',
+            expectedUpdatedAt: entity.updatedAt,
+          },
+          owner,
+        ),
+      ),
+    );
+    expect((await rowOf(entity.id)).query_refs).toEqual(['orbis/goal']);
+
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, body: 'блок убрали', expectedUpdatedAt: withBlock.updatedAt },
+          owner,
+        ),
+      ),
+    );
+    expect((await rowOf(entity.id)).query_refs).toEqual([]);
   });
 });
 
@@ -759,7 +994,7 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
   test('update через bodyDoc: ссылки берутся из дерева', async () => {
     const { entity, owner } = await createOne();
     const doc = {
-      v: 1,
+      v: DOC_SCHEMA_VERSION,
       doc: {
         type: 'doc',
         content: [
@@ -824,7 +1059,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
       db,
       req(
         'entity_update',
-        { id: entity.id, bodyDoc: { v: 1, doc: { type: 'doc', content: [] } } },
+        { id: entity.id, bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } } },
         owner,
       ),
     );
@@ -842,7 +1077,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
         'entity_update',
         {
           id: entity.id,
-          bodyDoc: { v: 1, doc: { type: 'doc', content: [] } },
+          bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
           expectedUpdatedAt: '2020-01-01T00:00:00.000Z',
         },
         owner,
@@ -887,7 +1122,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
         {
           id: entity.id,
           bodyDoc: {
-            v: 1,
+            v: DOC_SCHEMA_VERSION,
             doc: {
               type: 'doc',
               content: [{ type: 'paragraph', content: [{ type: 'text', text: 'откат-2' }] }],
@@ -919,7 +1154,7 @@ describe('откат сохранения редактора', () => {
         {
           id: entity.id,
           bodyDoc: {
-            v: 1,
+            v: DOC_SCHEMA_VERSION,
             doc: {
               type: 'doc',
               content: [{ type: 'paragraph', content: [{ type: 'text', text: 'новое тело' }] }],
@@ -965,7 +1200,7 @@ describe('bodyDoc не протекает в путь модели (dispatch/MCP
     const { entity, owner } = await createOne();
     const r = await dispatchTool(modelCtx(owner), 'entity_update', {
       id: entity.id,
-      bodyDoc: { v: 1, doc: { type: 'doc', content: [] } },
+      bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
       expectedUpdatedAt: entity.updatedAt,
     });
     expect(r.status).toBe('error');
@@ -983,7 +1218,7 @@ describe('bodyDoc не протекает в путь модели (dispatch/MCP
           tool: 'entity_update',
           input: {
             id: entity.id,
-            bodyDoc: { v: 1, doc: { type: 'doc', content: [] } },
+            bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
             expectedUpdatedAt: entity.updatedAt,
           },
         },
@@ -996,9 +1231,10 @@ describe('bodyDoc не протекает в путь модели (dispatch/MCP
 
   test('тул-контракт модели поля bodyDoc не содержит — ни на запись, ни на чтение', () => {
     expect(Object.keys(entityUpdateInput.shape)).not.toContain('bodyDoc');
-    expect(entityUpdateInput.safeParse({ id: UUID, bodyDoc: { v: 1, doc: {} } }).success).toBe(
-      false,
-    );
+    expect(
+      entityUpdateInput.safeParse({ id: UUID, bodyDoc: { v: DOC_SCHEMA_VERSION, doc: {} } })
+        .success,
+    ).toBe(false);
     // include('bodyDoc') — тоже только UI: модели документ не нужен, ей едет body.
     expect(entityGetInput.safeParse({ id: UUID, include: ['bodyDoc'] }).success).toBe(false);
     expect(entityGetUiInput.safeParse({ id: UUID, include: ['bodyDoc'] }).success).toBe(true);
@@ -1031,7 +1267,7 @@ describe('документ наружу — только по явному inclu
 
     expect('bodyDoc' in (await read(['body'])).entity).toBe(false);
     expect((await read(['body', 'bodyDoc'])).entity.bodyDoc).toEqual({
-      v: 1,
+      v: DOC_SCHEMA_VERSION,
       doc: {
         type: 'doc',
         content: [
@@ -1050,7 +1286,7 @@ describe('документ наружу — только по явному inclu
       readEntity(tx, owner, { id: entity.id, include: ['body', 'bodyDoc'] }),
     );
     expect(out.entity.bodyDoc).toEqual({
-      v: 1,
+      v: DOC_SCHEMA_VERSION,
       doc: {
         type: 'doc',
         content: [
@@ -1072,7 +1308,7 @@ describe('документ наружу — только по явному inclu
       readEntity(tx, owner, { id: entity.id, include: ['bodyDoc'] }),
     );
     // Не пустой документ из будущего, а пересборка из текста: теряется оформление, не текст.
-    expect(out.entity.bodyDoc?.v).toBe(1);
+    expect(out.entity.bodyDoc?.v).toBe(DOC_SCHEMA_VERSION);
     expect(out.entity.body).toBe('# Заголовок');
   });
 });

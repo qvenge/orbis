@@ -19,6 +19,7 @@ import {
   propertyToLegacyField,
   ROLE_DEPENDENCY,
 } from '@orbis/shared';
+import { DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
@@ -966,7 +967,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
           .update(entities)
           .set({
             body,
-            bodyDoc: { v: 1, doc: { type: 'doc', content: [] } },
+            bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
             // Отметка правки — заведомо в прошлом: по её сдвигу видно, ЗАДЕЛ ли UPDATE
             // строку, и «повтор — no-op» проверяется фактом, а не совпадением тел
             updatedAt: new Date('2026-08-01T00:00:00.000Z'),

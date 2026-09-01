@@ -3,6 +3,7 @@
 // (И17); round-trip сидов проверяет apps/server/src/seed/seed-canon.test.ts.
 import { describe, expect, test } from 'bun:test';
 import { getSchema } from '@tiptap/core';
+import { FIXTURE_PARSE_REGISTRY as REG } from '../query/ast-fixtures';
 import {
   bodyDocError,
   bodyPairFromDoc,
@@ -1249,9 +1250,9 @@ describe('bodyRefsFromDoc: дерево ∪ raw (Б2)', () => {
 describe('readBodyDoc (приёмка 11 — теперь с тестом, ревью M)', () => {
   test('знакомая версия — как есть; будущая/битая/NULL — пересборка из body', () => {
     const good = parseBody('текст');
-    expect(readBodyDoc(good, 'другое')).toEqual(good);
+    expect(readBodyDoc(good, 'другое', REG)).toEqual(good);
     for (const bad of [null, 42, { v: 999, doc: { type: 'doc' } }, { doc: {} }]) {
-      const rebuilt = readBodyDoc(bad, '# Заголовок');
+      const rebuilt = readBodyDoc(bad, '# Заголовок', REG);
       expect(JSON.stringify(rebuilt.doc)).toContain('heading');
     }
   });
@@ -1267,7 +1268,7 @@ describe('readBodyDoc (приёмка 11 — теперь с тестом, ре�
       { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ_НОДЫ' }] } },
       { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'text' }] } }, // text без text
     ]) {
-      const rebuilt = readBodyDoc(broken, '# Заголовок');
+      const rebuilt = readBodyDoc(broken, '# Заголовок', REG);
       expect(JSON.stringify(rebuilt.doc)).toContain('heading');
       // И пересобранное само по себе пригодно — иначе чинили бы одно, отдавая другое битое.
       expect(bodyDocError(rebuilt)).toBeUndefined();
@@ -1286,6 +1287,6 @@ describe('readBodyDoc (приёмка 11 — теперь с тестом, ре�
         ],
       },
     };
-    expect(readBodyDoc(withIds, 'другое')).toBe(withIds as never);
+    expect(readBodyDoc(withIds, 'другое', REG)).toBe(withIds as never);
   });
 });

@@ -4,6 +4,7 @@
 // вызывающим, выход это payload, который вызывающий положит в P2.
 import { describe, expect, test } from 'bun:test';
 import { entityUpdateExecInput } from '@orbis/shared';
+import { DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { ExecError } from '../errors';
 import {
   buildEditedOperations,
@@ -54,7 +55,7 @@ function relationOp(): Operation {
 
 /** Тело документом в форме, которую принимает `bodyDocSchema` (@orbis/shared). */
 function docOf(content: Record<string, unknown>[]) {
-  return { v: 1, doc: { type: 'doc' as const, content } };
+  return { v: DOC_SCHEMA_VERSION, doc: { type: 'doc' as const, content } };
 }
 
 const BODY_DOC = docOf([{ type: 'paragraph' }]);
@@ -415,8 +416,9 @@ describe('editsSchema и isEmptyEdits', () => {
         .success,
     ).toBe(false);
     expect(
-      editsSchema.safeParse({ body: [{ index: 0, bodyDoc: { v: 1, doc: { type: 'doc' } } }] })
-        .success,
+      editsSchema.safeParse({
+        body: [{ index: 0, bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc' } } }],
+      }).success,
     ).toBe(false);
     const many = Array.from({ length: 51 }, (_, index) => ({ index, bodyDoc: BODY_DOC }));
     expect(editsSchema.safeParse({ body: many }).success).toBe(false);

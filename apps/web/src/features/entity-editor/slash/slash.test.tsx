@@ -1,4 +1,6 @@
 import { DOC_EXTENSIONS, parseBody } from '@orbis/shared/doc';
+import { printQueryAst, type QueryAst } from '@orbis/shared/query';
+import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
@@ -11,7 +13,7 @@ import { BodyEditor } from '../BodyEditor';
 import { BODY_PLACEHOLDER } from '../body-box';
 import { EditorShell } from '../EditorShell';
 import { EDITOR_EXTENSIONS } from '../extensions';
-import { NEW_QUERY_BLOCK, SLASH_ITEMS } from './items';
+import { NEW_QUERY_AST, NEW_QUERY_BLOCK, SLASH_ITEMS } from './items';
 import { suggestionExtensions } from './suggestion';
 
 // Реестр аспектов — настоящий (как в editor.test.tsx и query-widget.test.tsx): с пустым
@@ -38,6 +40,18 @@ const NEW_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
  * `entity.query` тоже отвечает по спрошенному запросу: виджет со СТАРЫМ атрибутом иначе был
  * бы неотличим от виджета с новым (тот же приём, что в query-widget.test.tsx).
  */
+/**
+ * Ключ строгого мока `entity.query`. Виджет шлёт ЛИБО текст (`query`), ЛИБО дерево (`ast`) —
+ * привязанный блок уходит деревом (Задача 21a). Мок, ключёванный только по `query`, вернул бы
+ * на дерево `[]` и оставил ассерты зелёными на пустом списке: ложная зелень по построению.
+ * Дерево приводится к тому же ключу его key-печатью — она и есть канон (§А5-2).
+ */
+function queryKeyOf(input: unknown): string {
+  const i = input as { query?: string; ast?: QueryAst };
+  if (i.ast !== undefined) return printQueryAst(i.ast, FIXTURE_PARSE_REGISTRY, 'key');
+  return i.query ?? '';
+}
+
 const api =
   (opts: {
     byTerm?: Record<string, Suggestion[]>;
@@ -48,7 +62,7 @@ const api =
   (path: string, input: unknown): unknown => {
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    if (path === 'entity.query') return opts.byQuery?.[(input as { query: string }).query] ?? [];
+    if (path === 'entity.query') return opts.byQuery?.[queryKeyOf(input)] ?? [];
     if (path === 'entity.suggest') {
       const term = (input as { term?: unknown }).term;
       if (typeof term !== 'string') throw trpcError('BAD_REQUEST', 'ожидалось поле term');
@@ -293,7 +307,13 @@ test('«Смарт-лист» встаёт ПОСЛЕ абзаца с карет
   // разрушив документ. Сверка по дереву, а не по `getText()`: queryBlock — атом, и в
   // текстовой проекции он оборачивается разделителями блоков.
   const content = h.editor?.getJSON().content ?? [];
-  expect(content[1]?.attrs?.query).toBe(NEW_QUERY_BLOCK);
+  // Кладётся ДЕРЕВО и его печатная key-форма, а не строка: блок рождается привязанным, и
+  // реестр слэш-меню для этого не нужен (см. NEW_QUERY_AST).
+  expect(content[1]?.attrs?.ast).toEqual(NEW_QUERY_AST);
+  expect(content[1]?.attrs?.text).toBe(NEW_QUERY_BLOCK);
+  // Литерал печати не разъехался с самой печатью — иначе `text` блока перестал бы быть
+  // key-формой ЭТОГО дерева, и инвариант ноды порвался бы молча.
+  expect(printQueryAst(NEW_QUERY_AST, FIXTURE_PARSE_REGISTRY, 'key')).toBe(NEW_QUERY_BLOCK);
   expect(blockText(h.editor, 0)).toBe('первый ');
   expect(blockText(h.editor, 2)).toBe('второй');
 });

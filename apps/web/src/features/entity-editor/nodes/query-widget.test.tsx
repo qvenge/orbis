@@ -1,5 +1,7 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
+import { printQueryAst, type QueryAst } from '@orbis/shared/query';
+import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
@@ -47,6 +49,18 @@ vi.mock('../../query-builder/QueryBlockEditor', async (orig) => {
 // причине.
 
 /**
+ * Ключ строгого мока. Виджет шлёт ЛИБО текст (`query`), ЛИБО дерево (`ast`) — привязанный блок
+ * уходит деревом (Задача 21a). Мок, ключёванный только по `query`, на дерево вернул бы `[]`, и
+ * ассерты «на экране появился нужный список» остались бы зелёными на ПУСТОМ списке: ложная
+ * зелень по построению. Дерево приводится к тому же ключу его key-печатью — она и есть канон.
+ */
+function queryKeyOf(input: unknown): string {
+  const i = input as { query?: string; ast?: QueryAst };
+  if (i.ast !== undefined) return printQueryAst(i.ast, FIXTURE_PARSE_REGISTRY, 'key');
+  return i.query ?? '';
+}
+
+/**
  * СТРОГИЙ мок: `entity.query` отвечает только про ТОТ ЗАПРОС, о котором спросили. Мок,
  * отдающий один и тот же список на что угодно, делал бы виджет со СТАРЫМ атрибутом
  * неотличимым от виджета с новым — правка «сохранилась» бы на экране и без правки атрибута.
@@ -56,7 +70,7 @@ const lists =
   (path: string, input: unknown): unknown => {
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    if (path === 'entity.query') return byQuery[(input as { query: string }).query] ?? [];
+    if (path === 'entity.query') return byQuery[queryKeyOf(input)] ?? [];
     return {};
   };
 
@@ -165,11 +179,9 @@ test('сохранение блока — правка АТРИБУТА ноды
   // спрошенное, но при валидном СТАРОМ запросе «на экране появилось „Дома“» было бы правдой и
   // у виджета, который спрашивает старое, — щедрый мок сделал бы эти два случая неотличимыми.
   expect(await screen.findByTestId('qb-item')).toHaveTextContent('Дома');
-  expect(
-    r.calls
-      .filter((c) => c.path === 'entity.query')
-      .map((c) => (c.input as { query: string }).query),
-  ).toEqual(['tags=home']);
+  expect(r.calls.filter((c) => c.path === 'entity.query').map((c) => queryKeyOf(c.input))).toEqual([
+    'tags=home',
+  ]);
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 });
 
@@ -193,11 +205,13 @@ test('правится ТОТ виджет, по которому нажали, 
 
   await waitFor(() => expect(onChange).toHaveBeenCalled());
   const next = onChange.mock.calls.at(-1)?.[0] as {
-    doc: { content?: { attrs?: { query?: string } }[] };
+    doc: { content?: { attrs?: { text?: string; ast?: unknown } }[] };
   };
-  // Первый блок — дословно прежний, второй — новый. Порядок ассерта важен: сравнение целым
-  // списком ловит и «переписались оба», и «переписался не тот».
-  expect(next.doc.content?.map((n) => n.attrs?.query)).toEqual([inner, 'tags=home']);
+  // Первый блок — дословно прежний (и по-прежнему НЕразобранный), второй — новый и
+  // привязанный. Порядок ассерта важен: сравнение целым списком ловит и «переписались оба»,
+  // и «переписался не тот».
+  expect(next.doc.content?.map((n) => n.attrs?.text)).toEqual([inner, 'tags=home']);
+  expect(next.doc.content?.map((n) => n.attrs?.ast === null)).toEqual([true, false]);
 });
 
 test('правка блока не съедает обрамляющие пробелы обёртки', async () => {

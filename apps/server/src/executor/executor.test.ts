@@ -2,7 +2,14 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId, propertyToLegacyField } from '@orbis/shared';
-import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
+import {
+  bindQueryBlocks,
+  canonicalizeBody,
+  DOC_SCHEMA_VERSION,
+  parseBody,
+  serializeBody,
+} from '@orbis/shared/doc';
+import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -29,6 +36,18 @@ import { InMemoryJournalSink } from './types';
 import { undoAction } from './undo';
 
 requireEnv();
+
+/**
+ * Тело, которое сервер кладёт при засеве заготовки проекта.
+ *
+ * Сравнивать с самой заготовкой (`projectBodyTemplate`) больше нельзя: `body` — ПРОЕКЦИЯ
+ * документа, а привязка блоков к реестру (Задача 21a) печатает их key-формой — `status=`
+ * становится `orbis/task_status=`, заголовок с пробелом уходит в кавычки. Реестр здесь
+ * фикстурный, и это не поблажка: имена в заготовке встроенные, их key-форма от владельца не
+ * зависит, а сама привязка проверяется по существу в `packages/shared/.../bind-query.test.ts`.
+ */
+const seededProjectBody = (id: string): string =>
+  serializeBody(bindQueryBlocks(parseBody(projectBodyTemplate(id)), FIXTURE_PARSE_REGISTRY));
 
 const { db, client } = appDb();
 const userA = freshUserId();
@@ -759,11 +778,16 @@ describe('ADE-срез 1: инварианты назначения и засе�
     );
     expect(r.ok).toBe(true);
     const body = await bodyOf(id);
+    // Блок прогонов лежит в теле ДОСЛОВНО: `project_id` реестр не резолвит (§А8 это свойство
+    // удаляет), поэтому привязка его не трогает и печать key-формой к нему не применяется.
+    // Проверено пробой: `parseQueryAny` и `parseQueryAst` дают UNKNOWN_FIELD одинаково — то
+    // есть блок не разбирался и ДО этой задачи. Заготовку переводит Задача 21b.
     expect(body).toContain(`{{query: aspect=orbis/agent-run, project_id=${id}`);
     // Тикеты — по uuid проекта, а не по `this`: блок должен читаться и вне тела проекта
     // (закреплённый список, Browser), где контекст записи не передаётся (см. project-body.ts).
-    expect(body).toContain(`children_of=${id}, aspect=orbis/task, status=waiting`);
-    expect(body).toBe(projectBodyTemplate(id));
+    // Имя статуса — key-форма: блок ПРИВЯЗАН к реестру, и `status=` в теле больше не лежит.
+    expect(body).toContain(`children_of=${id}, aspect=orbis/task, orbis/task_status=waiting`);
+    expect(body).toBe(seededProjectBody(id));
     // канон: повторная канонизация не меняет тело
     expect(canonicalizeBody(body).body).toBe(body);
     // тело разобрано в документ, а не легло сырой строкой мимо конверсии: спрашиваем сам
@@ -809,7 +833,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       }),
     );
     expect(a.ok).toBe(true);
-    expect(await bodyOf(empty.id)).toBe(projectBodyTemplate(empty.id));
+    expect(await bodyOf(empty.id)).toBe(seededProjectBody(empty.id));
 
     // Повторный attach уже проектной сущности тело не переписывает
     const again = await execute(
@@ -820,7 +844,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       }),
     );
     expect(again.ok).toBe(true);
-    expect(await bodyOf(empty.id)).toBe(projectBodyTemplate(empty.id));
+    expect(await bodyOf(empty.id)).toBe(seededProjectBody(empty.id));
 
     // Непустое тело — не трогаем
     const filled = firstEntity(
@@ -855,7 +879,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
         )
       ).ok,
     ).toBe(true);
-    expect(await bodyOf(blank)).toBe(projectBodyTemplate(blank));
+    expect(await bodyOf(blank)).toBe(seededProjectBody(blank));
 
     const spaces = newId();
     expect(
@@ -872,7 +896,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
         )
       ).ok,
     ).toBe(true);
-    expect(await bodyOf(spaces)).toBe(projectBodyTemplate(spaces));
+    expect(await bodyOf(spaces)).toBe(seededProjectBody(spaces));
 
     // Регресс: непустое тело по-прежнему побеждает заготовку
     const own = newId();
@@ -904,7 +928,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       }),
     );
     expect(upd.ok).toBe(true);
-    expect(await bodyOf(e.id)).toBe(projectBodyTemplate(e.id));
+    expect(await bodyOf(e.id)).toBe(seededProjectBody(e.id));
   });
 
   test('26. ПУСТОЙ ДОКУМЕНТ во входе — это тело: bodyDoc побеждает заготовку (порядок веток)', async () => {
@@ -923,7 +947,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       }),
     );
     expect(r.ok).toBe(true);
-    expect(await bodyOf(e.id)).not.toBe(projectBodyTemplate(e.id));
+    expect(await bodyOf(e.id)).not.toBe(seededProjectBody(e.id));
     expect((await bodyOf(e.id)).trim()).toBe('');
   });
 
@@ -940,7 +964,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       { sink },
     );
     expect(attached.ok).toBe(true);
-    expect(await bodyOf(e.id)).toBe(projectBodyTemplate(e.id));
+    expect(await bodyOf(e.id)).toBe(seededProjectBody(e.id));
 
     const actionId = (attached as ExecuteOk).actionId;
     const undone = await undoAction(db, { actorUserId: userA, actionId });
@@ -959,7 +983,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       req('entity_update', { id: e.id, aspects: { 'orbis/project': { stage: 'active' } } }),
     );
     expect(r.ok).toBe(true);
-    expect(await bodyOf(e.id)).toBe(projectBodyTemplate(e.id));
+    expect(await bodyOf(e.id)).toBe(seededProjectBody(e.id));
 
     // Явное тело в том же патче побеждает заготовку (её вообще не засеваем)
     const e2 = firstEntity(

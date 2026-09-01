@@ -227,7 +227,13 @@ function trimPart(part: Part): Part {
   return { text: part.text.trim(), offset: part.offset + leading };
 }
 
-/** Снимает обрамляющие кавычки и разэкранирует `\"`/`\\`. */
+/**
+ * Снимает обрамляющие кавычки и разэкранирует `\"`, `\\` и `\}`.
+ *
+ * Третий экран — не грамматика, а РАЗМЕТКА ТЕЛА: печать разводит `}` бэкслешем, чтобы
+ * значение с `}}` не закрыло обёртку `{{query:…}}` смарт-листа (см. `print.ts`), и без
+ * симметричного снятия `parse(print(a)) ≡ a` перестало бы держаться на таком значении.
+ */
 function unquote(raw: string, offset: number): string {
   if (!raw.startsWith('"')) {
     const q = raw.indexOf('"');
@@ -238,7 +244,7 @@ function unquote(raw: string, offset: number): string {
   let i = 1;
   for (; i < raw.length; i++) {
     const ch = raw[i];
-    if (ch === '\\' && (raw[i + 1] === '"' || raw[i + 1] === '\\')) {
+    if (ch === '\\' && (raw[i + 1] === '"' || raw[i + 1] === '\\' || raw[i + 1] === '}')) {
       out += raw[i + 1];
       i++;
       continue;

@@ -68,7 +68,7 @@ export const NODE_ATTR_DEFAULTS: Readonly<Record<string, Readonly<Record<string,
   tableCell: { colspan: 1, rowspan: 1, colwidth: null, align: null },
   tableHeader: { colspan: 1, rowspan: 1, colwidth: null, align: null },
   entityRef: { entityId: null, label: null },
-  queryBlock: { query: '' },
+  queryBlock: { ast: null, text: '' },
   rawBlock: { markdown: '' },
 };
 

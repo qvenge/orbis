@@ -1,19 +1,34 @@
 import { QUERY_BLOCK_CLOSE, QueryBlock } from '@orbis/shared/doc';
+import { printQueryAst, type QueryAst, queryAstSchema } from '@orbis/shared/query';
 import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { useState } from 'react';
+import { parseBlock } from '../../../lib/query-blocks/parse';
 import { QueryBlock as QueryBlockWidget } from '../../../lib/query-blocks/QueryBlock';
+import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { useToast } from '../../../ui/toast-store';
 import { QueryBlockEditor } from '../../query-builder/QueryBlockEditor';
 
+/** Дерево из атрибута ноды — или null, если его там нет или оно битое (attrs — сырой JSON). */
+function astOf(raw: unknown): QueryAst | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = queryAstSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 function Widget({ node, updateAttributes }: NodeViewProps) {
   // Атрибуты ноды типизированы как Record<string, any> — сужаем на входе, а не по месту.
-  // Текст берётся ДОСЛОВНО, без trim: атрибут хранит внутренность обёртки как есть (переносы
-  // и девятипробельные отступы сидов), и тримленный текст в редакторе схлопнул бы блок при
-  // первом же сохранении — сиды сверяются с §3.3 PRD байт-в-байт.
-  const query = typeof node.attrs.query === 'string' ? node.attrs.query : '';
+  // `ast` — правда о запросе, `text` — его печатная key-форма (либо исходная строка, если
+  // блок не разобран). Текст берётся ДОСЛОВНО, без trim: у неразобранного блока это
+  // единственное, что от запроса осталось.
+  const ast = astOf(node.attrs.ast);
+  const text = typeof node.attrs.text === 'string' ? node.attrs.text : '';
   const [editing, setEditing] = useState(false);
   const { show } = useToast();
+  // Реестр нужен ровно ЗДЕСЬ и ровно на сохранение: форма отдаёт ТЕКСТ (её перевод на дерево —
+  // отдельное решение, Р-21-6), а в ноде обязано лежать дерево. Реестра может не быть (он едет
+  // tRPC) — тогда блок сохраняется неразобранным, и его разберёт сервер при записи.
+  const { registry } = useFieldCatalog();
 
   function save(next: string) {
     // Последний рубеж разметки тела — унаследован вместе с причиной от снятой замены блока
@@ -23,17 +38,37 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
     // заметки, а `{{query:` в этом хвосте завёл бы ЛИШНИЙ блок — и сдвинул бы нумерацию, на
     // первом блоке стоит бейдж pinned-сущности (§3.2).
     //
-    // Барьер здесь ВТОРОЙ и сегодня недостижим: строковый редактор гасит «Сохранить» на
-    // `}}`, а форма такого AST не печатает вовсе (serializeQuery бросает). Он и стоит ровно
-    // на случай третьего редактора: тихая запись испорченного блока хуже отказа.
+    // Барьер стоит на ВВОДЕ, а печать закрывает свою половину сама (`quoteQueryValue`
+    // экранирует `}` — см. `query/print.ts`): здесь отвергается текст, который до дерева ещё
+    // не доехал и потому защищён только этой проверкой.
     if (next.includes(QUERY_BLOCK_CLOSE)) {
       show(`В запросе нельзя использовать «${QUERY_BLOCK_CLOSE}»`, 'danger');
       return;
     }
-    // Правка блока — правка АТРИБУТА ноды. Вместе с адресацией по порядковому номеру блока в
+    // Правило Р3 «без изменений — байт-в-байт» на уровне НОДЫ. Форма отдаёт исходную строку
+    // дословно, когда владелец ничего не менял (`QueryBuilderForm`), — и превратить это в
+    // запись значило бы переписывать сидированный блок в key-форму от одного лишь открытия
+    // и закрытия окна. Пока сиды написаны старой грамматикой и сверяются с §3.3 PRD
+    // байт-в-байт (перевод — Задача 21b), такая запись была бы правкой, которой не было.
+    if (next === text) {
+      setEditing(false);
+      return;
+    }
+    // Правка блока — правка АТРИБУТОВ ноды. Вместе с адресацией по порядковому номеру блока в
     // тексте (снята Задачей 16) ушла и её оптимистичная блокировка «Блок изменился в другом
     // месте»: адрес правки — сама нода, и промахнуться мимо неё нечем.
-    updateAttributes({ query: next });
+    //
+    // Пишутся ОБА атрибута и всегда согласованно: `ast` — разбор набранного текста, `text` —
+    // его key-печать. Разобрать не удалось (или реестр ещё не приехал) — `ast: null` и текст
+    // как набран: сервер разберёт его при записи (`bindQueryBlocks`), а виджет до тех пор
+    // честно покажет отказ вместо чужого списка.
+    const reg = registry?.parse;
+    const parsed = reg === undefined ? null : parseBlock(next, reg);
+    updateAttributes(
+      parsed?.ok === true && reg !== undefined
+        ? { ast: parsed.ast, text: printQueryAst(parsed.ast, reg, 'key') }
+        : { ast: null, text: next },
+    );
     setEditing(false);
   }
 
@@ -41,20 +76,21 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
     // data-query-widget — не украшение: по этому признаку страж EditorShell отличает клик по
     // живому виджету от клика по телу (тот же признак, что у первого кадра и у DetailScreen).
     // contentEditable={false} — чтобы каретка не заходила внутрь виджета: в документе от него
-    // только атрибут `query`, набирать внутри нечего.
+    // только атрибуты запроса, набирать внутри нечего.
     <NodeViewWrapper data-query-widget="" contentEditable={false}>
-      <QueryBlockWidget query={query} onConfigure={() => setEditing(true)} />
+      <QueryBlockWidget query={{ ast, text }} onConfigure={() => setEditing(true)} />
       {editing && (
-        // initial — текущий атрибут ноды, а не снимок при открытии. У detail снимок был нужен
-        // потому, что body под модалкой мог смениться рефетчем и номер блока указал бы на
-        // ЧУЖОЙ запрос; здесь адрес — сама нода, и промахнуться мимо неё нечем.
+        // initial — текущий ТЕКСТ ноды (key-печать дерева либо неразобранная строка), а не
+        // снимок при открытии. У detail снимок был нужен потому, что body под модалкой мог
+        // смениться рефетчем и номер блока указал бы на ЧУЖОЙ запрос; здесь адрес — сама нода,
+        // и промахнуться мимо неё нечем.
         //
         // Что при этом происходит на самом деле — замерено пробой, а не выведено: приезд
         // чужой версии документа ProseMirror применяет ОБНОВЛЕНИЕМ этого же NodeView (тип
         // ноды тот же), React-экземпляр переживает подмену вместе с состоянием, и модалка
         // остаётся открытой с уже набранным текстом. Набранное не теряется; сохранение —
         // последняя запись в тот же блок, ровно как у остального текста тела.
-        <QueryBlockEditor initial={query} onSave={save} onCancel={() => setEditing(false)} />
+        <QueryBlockEditor initial={text} onSave={save} onCancel={() => setEditing(false)} />
       )}
     </NodeViewWrapper>
   );
@@ -68,9 +104,11 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
  * разбор HTML — АТРИБУТНЫЙ, то есть ни ноды, ни марки не заводит.
  *
  * Довод тот же, что у чипа (nodes/EntityChip.tsx): HTML читает единственный путь — буфер
- * обмена редактора. Общая нода печатает `data-query`, а умолчание Tiptap ищет обратно атрибут
- * `query`, поэтому скопированный смарт-лист возвращался блоком с ПУСТЫМ запросом — виджет с
- * тем же видом, но показывающий не то (замерено; итоговое ревью, находка 1).
+ * обмена редактора. Общая нода печатает `data-query`/`data-ast`, а умолчание Tiptap ищет
+ * обратно атрибуты `text`/`ast`, поэтому скопированный смарт-лист возвращался блоком с ПУСТЫМ
+ * запросом — виджет с тем же видом, но показывающий не то (замерено; итоговое ревью,
+ * находка 1). Дерево едет JSON'ом и читается обратно JSON'ом: печать объекта в атрибут дала бы
+ * `[object Object]`, и уже чинённый дефект вернулся бы молча — теперь под тестом.
  */
 export const QueryBlockWithView = QueryBlock.extend({
   addAttributes(): Attributes {
@@ -78,9 +116,23 @@ export const QueryBlockWithView = QueryBlock.extend({
     const parent: Attributes = this.parent?.() ?? {};
     return {
       ...parent,
-      query: {
-        ...parent.query,
+      text: {
+        ...parent.text,
         parseHTML: (element: HTMLElement) => element.getAttribute('data-query'),
+      },
+      ast: {
+        ...parent.ast,
+        // Битый JSON в буфере — не повод ронять вставку: блок приедет неразобранным, текст
+        // при нём, и сервер разберёт его при первой же записи.
+        parseHTML: (element: HTMLElement) => {
+          const raw = element.getAttribute('data-ast');
+          if (raw === null) return null;
+          try {
+            return astOf(JSON.parse(raw));
+          } catch {
+            return null;
+          }
+        },
       },
     };
   },

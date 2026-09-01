@@ -1,5 +1,5 @@
 import { SEED_SMART_LISTS } from '@orbis/server/src/seed/smart-lists';
-import { DOC_EXTENSIONS, parseBody, serializeBody } from '@orbis/shared/doc';
+import { DOC_EXTENSIONS, DOC_SCHEMA_VERSION, parseBody, serializeBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
@@ -410,6 +410,55 @@ async function mountBody(md: string, onChange = vi.fn()) {
   return { h, onChange, editor: h.editor as Editor };
 }
 
+test('копия ПРИВЯЗАННОГО смарт-листа возвращается с ДЕРЕВОМ, а не с «[object Object]»', async () => {
+  // Уже чинившийся дефект, вернувшийся бы молча (итоговое ревью Задачи 9, находка 1): общая
+  // нода печатает атрибуты в `data-*`, а умолчание Tiptap ищет обратно атрибут по имени. С
+  // объектом в `ast` печать дала бы `data-ast="[object Object]"`, а разбор вернул бы ЭТУ САМУЮ
+  // строку в атрибут-дерево — виджет с тем же видом, показывающий не то. Пути ровно один:
+  // буфер обмена редактора, и теста на него не было.
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  const ast = {
+    filter: { aspect: 'orbis/task' },
+    sortBy: [{ field: 'orbis/updated_at', dir: 'desc' }],
+    title: 'Задачи',
+  };
+  const h = held();
+  renderWithProviders(
+    <BodyEditor
+      doc={{
+        v: DOC_SCHEMA_VERSION,
+        doc: {
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'до' }] },
+            {
+              type: 'queryBlock',
+              attrs: { ast, text: 'aspect=orbis/task, sortBy=orbis/updated_at:desc, title=Задачи' },
+            },
+          ],
+        },
+      }}
+      onChange={vi.fn()}
+      onReady={(e) => (h.editor = e)}
+    />,
+    handler,
+  );
+  await screen.findByTestId('body-editor');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor as Editor;
+
+  editor.commands.selectAll();
+  const html = editor.view.serializeForClipboard(editor.state.selection.content()).dom.innerHTML;
+  // Страж вакуумности: дерево и правда уехало в разметку буфера, и уехало JSON'ом.
+  expect(html).toContain('data-ast=');
+  expect(html).not.toContain('[object Object]');
+
+  editor.view.pasteHTML(html);
+  const block = (editor.getJSON().content ?? []).find((n) => n.type === 'queryBlock');
+  expect(block?.attrs?.ast).toEqual(ast);
+  expect(block?.attrs?.text).toBe('aspect=orbis/task, sortBy=orbis/updated_at:desc, title=Задачи');
+});
+
 test('копия ИЗНУТРИ редактора вставляется целой: чип, смарт-лист и разметка живы', async () => {
   // Бытовой жест: выделить кусок тела, Cmd+C, Cmd+V. Санитайзер вставки стоял на ВСЯКОМ HTML,
   // включая свой собственный (`parseFromClipboard` зовёт `transformPastedHTML` ДО того, как
@@ -447,7 +496,11 @@ test('копия ИЗНУТРИ редактора вставляется цел
     'bulletList',
     'queryBlock',
   ]);
-  expect(after.content?.[3]?.attrs?.query).toBe(' aspect=orbis/task, status=inbox');
+  // `text` — тот же неразобранный текст: круг «копия → вставка» идёт через HTML буфера, и
+  // читает его атрибутный parseHTML ноды (`data-query`/`data-ast`). Дерева у блока, собранного
+  // разбором markdown, нет — реестра в этом слое не бывает (Р-21-1).
+  expect(after.content?.[3]?.attrs?.text).toBe(' aspect=orbis/task, status=inbox');
+  expect(after.content?.[3]?.attrs?.ast).toBeNull();
   // И целиком, с точностью до того, что редактор дописывает сам (блочные id, умолчания
   // атрибутов): круг копирования документ не меняет.
   expect(canonicalDoc(after)).toEqual(canonicalDoc(before));

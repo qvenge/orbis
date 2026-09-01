@@ -5,7 +5,12 @@
 // поэтому тот же страж пропускает его намеренно: якорь `$` в предикате веса, прецедент
 // `@orbis/shared/doc/diff`. Замерено сборкой: имена нод и обход состава стоят +0.16 кБ gzip.
 import type { BodyDoc } from '@orbis/shared/doc';
-import { collectNodeTypes, DOC_SCHEMA_VERSION, KNOWN_NODE_TYPES } from '@orbis/shared/doc/types';
+import {
+  collectNodeTypes,
+  DOC_SCHEMA_VERSION,
+  KNOWN_NODE_TYPES,
+  upgradeBodyDoc,
+} from '@orbis/shared/doc/types';
 import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -182,9 +187,10 @@ const offered = (draft: Draft, foreignSchema: boolean) => ({
  *    совпасть, а контент-модель и атрибуты — нет, и штамповка вниз обещала бы совместимость,
  *    которой никто не проверял. Fail-closed: текст на диске цел, решение за человеком.
  *
- * ЭТО ЕДИНСТВЕННОЕ МЕСТО, где у черновика меняется `v`. Свойство несущее: следующая правка
- * схемы, которой мало переставить число (сменившиеся АТРИБУТЫ существующей ноды — например
- * запрос смарт-листа), встраивает конверсию сюда и ровно в одно место.
+ * ЭТО ЕДИНСТВЕННОЕ МЕСТО, где у черновика меняется `v`. Свойство несущее, и оно уже
+ * отработало: версия 2 сменила АТРИБУТЫ query-блока, и конверсия встроилась сюда — ровно в
+ * одно место, как и было обещано. Сама конверсия живёт в `@orbis/shared/doc/types`
+ * (`upgradeBodyDoc`) — одна на черновик и на чтение сервера, второй копии нет.
  *
  * Функция модульная и чистая: она ничего не знает ни о диске, ни о состоянии хука.
  */
@@ -194,7 +200,14 @@ function toCurrentSchema(draft: Draft): Draft | null {
   for (const type of collectNodeTypes(draft.doc.doc)) {
     if (!KNOWN_NODE_TYPES.has(type)) return null;
   }
-  return { ...draft, doc: { v: DOC_SCHEMA_VERSION, doc: draft.doc.doc } };
+  // Перештамповка — не смена ЧИСЛА, а конверсия ДЕРЕВА: с версии 2 у query-блока сменились
+  // атрибуты, и голое `{ v: DOC_SCHEMA_VERSION, doc }` отдало бы серверу блок, схема которого
+  // старого атрибута не знает, — запрос владельца молча заменился бы пустым. Конверсия
+  // ЛИСТОВАЯ (`@orbis/shared/doc/types`) и реестра не просит: она переносит текст и объявляет
+  // блок неразобранным, а дерево соберёт сервер при записи. Рантайм-импорт `@orbis/shared/doc`
+  // отсюда запрещён стражем чанка — это 153 кБ gzip в первый кадр каждого открытия записи.
+  const upgraded = upgradeBodyDoc(draft.doc);
+  return upgraded === null ? null : { ...draft, doc: upgraded };
 }
 
 /**

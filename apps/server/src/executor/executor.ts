@@ -30,11 +30,14 @@ import {
 // на сервер и клиент; своей копии у executor'а нет и быть не должно.
 import {
   type BodyDoc,
+  bindQueryBlocks,
   bodyDocError,
   bodyPairFromDoc,
   bodyRefsFromDoc,
-  canonicalizeBody,
   DOC_SCHEMA_VERSION,
+  parseBody,
+  queryRefsFromDoc,
+  serializeBody,
 } from '@orbis/shared/doc';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -57,7 +60,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
-import { effectiveRegistry } from '../registry/cache';
+import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import {
   type CreatePropertyInput,
@@ -1244,15 +1247,30 @@ function preserveBodyBeforeDoc(patch: EntityPatch, current: EntityRow): void {
  * узкий .set() ТОЛЬКО при засеве. Хелпер, пишущий патч, пришлось бы параметризовать всеми
  * тремя различиями — то есть вернуть их обратно вызывающим, но уже неявно.
  */
-function bodyFieldsFromMarkdown(markdown: string): {
+function bodyFieldsFromMarkdown(
+  markdown: string,
+  reg: RegistrySnapshot,
+): {
   body: string;
   bodyDoc: BodyDoc;
   bodyRefs: string[];
+  queryRefs: string[];
 } {
-  // КАНОН, а не строка входа: body — производная документа (вердикт Б1).
-  const { doc, body } = canonicalizeBody(markdown);
+  // КАНОН, а не строка входа: body — производная документа (вердикт Б1). Между разбором и
+  // печатью стоит ПРИВЯЗКА (Р-21-1): реестра у `canonicalizeBody` нет и быть не должно, а без
+  // привязки в `body_doc` уехали бы блоки без дерева, и единственным, кто их когда-либо
+  // разберёт, оказалось бы чтение — которое в БД не пишет.
+  const doc = bindQueryBlocks(parseBody(markdown), parseRegistryOfSnapshot(reg));
+  // Печать — ПОСЛЕ привязки: `text` блока стал key-формой, и `body` обязан её нести, иначе
+  // проекция разошлась бы с документом на первом же смарт-листе.
+  const body = serializeBody(doc);
   // Ссылки — из ДЕРЕВА ∪ raw-блоков (Б2): backlinks не зависят от разбираемости тела.
-  return { body, bodyDoc: doc, bodyRefs: bodyRefsFromDoc(doc) };
+  return {
+    body,
+    bodyDoc: doc,
+    bodyRefs: bodyRefsFromDoc(doc),
+    queryRefs: queryRefsFromDoc(doc),
+  };
 }
 
 /**
@@ -1469,7 +1487,10 @@ async function prepareEntityCreate(
   const tags = normalizeTags(input.tags);
   // Ссылки — из дерева ∪ raw-блоков (Б2): `[[entity:…]]` в блоке кода связью не считается (Р7),
   // но тело, не разобранное целиком и уехавшее в rawBlock, backlinks не теряет.
-  let { body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(input.body ?? '');
+  let { body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(
+    input.body ?? '',
+    ctx.registry,
+  );
 
   // Слияние (§А7-1): у create «состояние до» — пустое, поэтому весь вход и есть патч.
   const before: EntityState = { props: {}, aspects: [] };
@@ -1547,7 +1568,10 @@ async function prepareEntityCreate(
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
   // что считать телом входа, решает hasBodyInInput — одно правило на все три пути).
   if (needsProjectSeed(undefined, state, body, hasBodyInInput(input))) {
-    ({ body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(projectBodyTemplate(id)));
+    ({ body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(
+      projectBodyTemplate(id),
+      ctx.registry,
+    ));
   }
   // Дуальная запись (§А1-1, до Задачи 23): старая карта — ПРОЕКЦИЯ новой правды, а не
   // второй независимый перевод входа. Она же — вход доменных проверок бюджета, которые
@@ -1577,12 +1601,16 @@ async function prepareEntityCreate(
     // тело: инвариант «есть документ ⇒ есть страховка» становится проверяемым БЕЗ отсечки по
     // времени наката миграции, а колонка всё равно снимается после переноса.
     //
-    // ЧЕСТНО ПРО ГРАНИЦУ: здесь ложится КАНОН (`canonicalizeBody` выше), а не то, что написал
+    // ЧЕСТНО ПРО ГРАНИЦУ: здесь ложится КАНОН (`bodyFieldsFromMarkdown` выше), а не то, что написал
     // автор. Для записей, созданных после выкатки, колонка ничего не восстанавливает — она
     // страхует ПЕРЕНОС корпуса, а не путь записи. В отчёте это сказано тем же словами
     // (ре-ревью раунда 8, п.4).
     bodyBeforeDoc: body,
     bodyRefs,
+    // Кого адресуют query-блоки тела (§А11-1): обратный индекс, по которому слияние свойства
+    // находит тела без обхода корпуса. Ставится РЯДОМ С `bodyRefs` во всех пяти точках записи
+    // тела — иначе у проекта, заведённого через attach, индекс молча остался бы пустым.
+    queryRefs,
     tags,
     // `meta` больше НЕ пишется (§А1-1): мешок был write-only во всех пяти зонах, свойства
     // заменили его адресуемым значением, а колонка доживает до миграции 0017 пустой. Вход
@@ -1875,9 +1903,12 @@ async function prepareEntityUpdate(
   // затрагивающем тело): иначе правка модели и правка из UI считали бы backlinks по разным
   // правилам, и `[[entity:…]]` в блоке кода то появлялся бы в графе, то исчезал.
   if (input.bodyDoc !== undefined) {
-    // Версия сверяется НА ЗАПИСИ, потому что на чтении она уже решена: readBodyDoc
-    // гарантированно выбрасывает любой v !== DOC_SCHEMA_VERSION и пересобирает документ из
-    // `body`. Принять здесь версию из будущего значило бы сохранить заведомо обречённое — и
+    // Версия сверяется НА ЗАПИСИ, и гейт УЖЕ ЧТЕНИЯ: с версии 2 `readBodyDoc` принимает
+    // предыдущую версию и конвертирует её по дереву (`upgradeBodyDoc`), а сюда она не
+    // проезжает. Асимметрия намеренная — конвертировать ВВЕРХ проверяемо, а принять на запись
+    // документ, который пришлось бы конвертировать, значило бы сохранять форму, которую сама
+    // приславшая вкладка уже не понимает; её место — перештамповка черновика на клиенте.
+    // Принять здесь версию из будущего значило бы сохранить заведомо обречённое — и
     // это потеря СОДЕРЖИМОГО, а не оформления: незнакомые ноды выпадают уже из проекции
     // (проверено пробой — v=2 с новой нодой даёт body без её текста), а чтение потом
     // пересоберёт документ из этого урезанного body. Ровно то, ради чего версия и заведена.
@@ -1927,13 +1958,18 @@ async function prepareEntityUpdate(
     // В БД едет ВХОД, а не результат валидации: nodeFromJSON().toJSON() теряет незнакомые схеме
     // атрибуты, а блочные id живут именно так (UniqueID — расширение редактора, в
     // DOC_EXTENSIONS его нет). Проверено пробой.
-    const { doc: storedDoc, body } = bodyPairFromDoc(input.bodyDoc);
+    // Привязка ДО страховки проекции: `bodyPairFromDoc` печатает документ и сверяет, что
+    // печать ничего не потеряла, — а `text` блока становится key-формой именно здесь. Сверь
+    // раньше привязки, и сравнивалась бы печать документа, который в БД не поедет.
+    const bound = bindQueryBlocks(input.bodyDoc, parseRegistryOfSnapshot(ctx.registry));
+    const { doc: storedDoc, body } = bodyPairFromDoc(bound);
     patch.bodyDoc = storedDoc;
     patch.body = body;
     preserveBodyBeforeDoc(patch, current);
     // Ссылки — из ТОГО, ЧТО ЛЁГЛО. В штатной ветке это тот же вход; в ветке страховки — raw,
     // и связи из него достаёт регэксп (Б2: backlinks не зависят от разбираемости тела).
     patch.bodyRefs = bodyRefsFromDoc(storedDoc);
+    patch.queryRefs = queryRefsFromDoc(storedDoc);
     changed.body = body;
     prior.body = current.body;
   } else if (
@@ -1945,11 +1981,12 @@ async function prepareEntityUpdate(
     // засев. Документ во входе разобран веткой выше — он телом считается всегда, даже пустой.
     // Гейт expectedUpdatedAt (§5.2) не срабатывает и срабатывать не должен: он смотрит на
     // ВХОД, а не на патч, и терять тут нечего — тело пусто.
-    const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id));
+    const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id), ctx.registry);
     patch.body = seeded.body;
     patch.bodyDoc = seeded.bodyDoc;
     preserveBodyBeforeDoc(patch, current);
     patch.bodyRefs = seeded.bodyRefs;
+    patch.queryRefs = seeded.queryRefs;
     // Засев — часть эффекта операции, поэтому едет и в журнал: undo вернёт пустое тело
     // вместе с аспектом, а не оставит заготовку на сущности, которая проектом быть перестала.
     changed.body = seeded.body;
@@ -1957,11 +1994,12 @@ async function prepareEntityUpdate(
   } else if (input.body !== undefined) {
     // КАНОН, а не input.body: body — производная документа, и сравнивать «как написала
     // модель» бессмысленно (вердикт Б1). FTS не страдает (проверено спайком), сиды каноничны.
-    const { body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(input.body);
+    const { body, bodyDoc, bodyRefs, queryRefs } = bodyFieldsFromMarkdown(input.body, ctx.registry);
     patch.body = body;
     patch.bodyDoc = bodyDoc;
     preserveBodyBeforeDoc(patch, current);
     patch.bodyRefs = bodyRefs; // дерево ∪ raw — backlinks не теряются (Б2)
+    patch.queryRefs = queryRefs;
     changed.body = body;
     prior.body = current.body;
   }
@@ -2116,7 +2154,7 @@ async function prepareAttach(
   // create и update, и тело у всех трёх обязано получаться одинаковым. Вход attach тела не
   // несёт ВООБЩЕ (в схеме его нет) — отсюда false, а не hasBodyInInput.
   const seed = needsProjectSeed(before, state, current.body, false)
-    ? bodyFieldsFromMarkdown(projectBodyTemplate(input.entity_id))
+    ? bodyFieldsFromMarkdown(projectBodyTemplate(input.entity_id), ctx.registry)
     : undefined;
 
   // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2)
@@ -2133,6 +2171,7 @@ async function prepareAttach(
     patch.bodyDoc = seed.bodyDoc;
     preserveBodyBeforeDoc(patch, current);
     patch.bodyRefs = seed.bodyRefs;
+    patch.queryRefs = seed.queryRefs;
   }
   const afterRow = { ...current, ...patch } as EntityRow;
   batch?.entities.set(input.entity_id, afterRow);

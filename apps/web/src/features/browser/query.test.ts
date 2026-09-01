@@ -137,9 +137,13 @@ test('bodySegments: обёртка посреди строки блоком НЕ
  * молча, и «правила совпадают» осталось бы зелёным.
  */
 function blocksFromSchema(body: string): string[] {
-  return (parseBody(body).doc.content ?? [])
-    .filter((n) => n.type === 'queryBlock')
-    .map((n) => String(n.attrs?.query ?? '').trim());
+  return (
+    (parseBody(body).doc.content ?? [])
+      .filter((n) => n.type === 'queryBlock')
+      // `text` — тот же неразобранный текст блока: `parseBody` реестра не видит и дерева не
+      // строит (Р-21-1), поэтому сверка со схемой осталась сверкой ТЕКСТОВ.
+      .map((n) => String(n.attrs?.text ?? '').trim())
+  );
 }
 
 test('bodySegments видит ровно те же блоки, что и схема документа', () => {

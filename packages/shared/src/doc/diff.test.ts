@@ -105,7 +105,7 @@ describe('flattenBlocks — правило развёртки', () => {
       doc(
         p(''),
         { type: 'horizontalRule' },
-        { type: 'queryBlock', attrs: { query: 'status:open' } },
+        { type: 'queryBlock', attrs: { ast: null, text: 'status:open' } },
         { type: 'rawBlock', attrs: { markdown: '| a | b |' } },
         p(''),
       ),
@@ -140,7 +140,9 @@ describe('blockText — писаный текст блока', () => {
   test('берёт текст узлов, markdown raw-блока и запрос смарт-листа; подпись ссылки — нет', () => {
     expect(blockText(p('Привет'))).toBe('Привет');
     expect(blockText({ type: 'rawBlock', attrs: { markdown: '| a |' } })).toBe('| a |');
-    expect(blockText({ type: 'queryBlock', attrs: { query: 'status:open' } })).toBe('status:open');
+    expect(blockText({ type: 'queryBlock', attrs: { ast: null, text: 'status:open' } })).toBe(
+      'status:open',
+    );
     expect(
       blockText({
         type: 'paragraph',
@@ -422,11 +424,11 @@ describe('diffBodyDocs — потолки', () => {
         p(intro),
         {
           type: 'queryBlock',
-          attrs: { query: 'aspect=orbis/task, due_date=next_7d, title=Ближайшие 7 дней' },
+          attrs: { ast: null, text: 'aspect=orbis/task, due_date=next_7d, title=Ближайшие 7 дней' },
         },
         {
           type: 'queryBlock',
-          attrs: { query: 'aspect=orbis/task, due_date=after_7d, title=Позже' },
+          attrs: { ast: null, text: 'aspect=orbis/task, due_date=after_7d, title=Позже' },
         },
       );
     const result = diffBodyDocs(
@@ -511,6 +513,50 @@ describe('сплошной пробой сопоставления', () => {
     for (const kind of ['same', 'added', 'removed', 'changed', 'crossable'] as const) {
       expect(seen[kind], kind).toBeGreaterThan(50);
     }
+  });
+});
+
+describe('query-блок в диффе: текст из `text`, ключ по `ast`', () => {
+  const qb = (ast: unknown, text: string): JSONContent => ({
+    type: 'queryBlock',
+    attrs: { ast, text },
+  });
+  const status = (op: string) => ({
+    filter: { prop: 'orbis/task_status', op, value: 'inbox' },
+  });
+
+  test('правка запроса видна: старое имя атрибута дифф больше не читает', () => {
+    // Держатель имени, ломавшийся МОЛЧА: пока `collectText` смотрел на `attrs.query`, правка
+    // запроса приезжала бы как `same` — самая вероятная правка стала бы невидимой.
+    const before = doc(qb(status('eq'), 'orbis/task_status=inbox'));
+    const after = doc(qb(status('eq'), 'orbis/task_status=planned'));
+    expect(kinds(diffBodyDocs(before, after))).toEqual(['changed']);
+  });
+
+  test('РАЗНЫЕ деревья с ОДНОЙ печатью различаются ключом (eq против contains)', () => {
+    // Плоская грамматика печатает `p=v` и для `eq`, и для `contains` — без `ast` в ключе эта
+    // правка приехала бы как `same` (класс назван в докблоке `AstFixture.keyText`).
+    const text = 'orbis/task_status=inbox';
+    expect(
+      kinds(diffBodyDocs(doc(qb(status('eq'), text)), doc(qb(status('contains'), text)))),
+    ).toEqual(['changed']);
+  });
+
+  test('порядок ключей дерева блок НЕ меняет (сторона из jsonb против стороны от клиента)', () => {
+    // PostgreSQL порядок ключей jsonb не сохраняет; голая сериализация объявляла бы такой блок
+    // изменённым при каждом показе предложения.
+    const a = doc(qb({ filter: { op: 'eq', value: 'inbox', prop: 'orbis/task_status' } }, 'x'));
+    const b = doc(qb({ filter: { prop: 'orbis/task_status', op: 'eq', value: 'inbox' } }, 'x'));
+    expect(kinds(diffBodyDocs(a, b))).toEqual(['same']);
+  });
+
+  test('переименование подписи свойства блок НЕ трогает: в key-форме лежат ключи', () => {
+    // Дифф Ш1 меряет key-печатью (§А5-2): подпись в неё не входит вовсе, поэтому переименование
+    // свойства в реестре не может показаться владельцу правкой его тела.
+    const same = doc(qb(status('eq'), 'orbis/task_status=inbox'));
+    expect(kinds(diffBodyDocs(same, doc(qb(status('eq'), 'orbis/task_status=inbox'))))).toEqual([
+      'same',
+    ]);
   });
 });
 

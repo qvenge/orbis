@@ -3,7 +3,7 @@
 // как отдать запись агенту, и откат к сохранённому. ТОЛЬКО трансляция: pin и restore идут
 // через executor (единственный путь мутаций, 00-arch §4), list читает под withIdentity
 // (RLS §4.10). Своих INSERT/DELETE здесь нет.
-import { type BodyDoc, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
+import { type BodyDoc, upgradeBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { entityVersions } from '../db/schema';
@@ -30,10 +30,16 @@ const labelInput = z.string().trim().min(1).max(200);
  * markdown-проекция того же снимка — по ней тело восстановится, потеряв оформление, но не
  * текст. Тот же порядок предпочтений, что у чтения (readBodyDoc, «правило разрешения Р1»).
  * NULL — тело «до бэкфилла»: документа в снимке нет вовсе.
+ *
+ * СНИМОК ПРЕДЫДУЩЕЙ ВЕРСИИ КОНВЕРТИРУЕТСЯ, а не отбрасывается, и это несущее решение, а не
+ * удобство: закреплённые версии живут ровно ради отката, и голая сверка с константой молча
+ * деградировала бы ВСЮ историю закреплений к markdown-строке в день выкатки новой схемы —
+ * то есть страховка владельца тихо теряла бы оформление именно тогда, когда ею пользуются.
+ * Конверсия — та же, что у чтения (`upgradeBodyDoc`), и блоки привяжет executor на записи.
  */
 function pinnedDoc(stored: unknown): BodyDoc | undefined {
   if (typeof stored !== 'object' || stored === null) return undefined;
-  return (stored as BodyDoc).v === DOC_SCHEMA_VERSION ? (stored as BodyDoc) : undefined;
+  return upgradeBodyDoc(stored as BodyDoc) ?? undefined;
 }
 
 export const versionRouter = router({

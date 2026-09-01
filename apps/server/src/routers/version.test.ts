@@ -4,7 +4,7 @@
 // 00-arch §4), list читает под RLS. Против живой БД, caller как в бою (createCallerFactory).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
-import { canonicalizeBody } from '@orbis/shared/doc';
+import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -30,6 +30,12 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
     throw e;
   }
   throw new Error('ожидался TRPCError, вызов успешен');
+}
+
+/** Узел документа в объёме, который нужен здешним ассертам (wire-форма даёт его как unknown). */
+interface Node {
+  type?: string;
+  attrs?: Record<string, unknown>;
 }
 
 const owner = freshUserId();
@@ -154,6 +160,65 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     // Тело восстановлено строкой и приведено к канону тем же конвейером, что запись редактора
     expect(restored.body).toBe(canonicalizeBody(legacy).body);
     expect(restored.body).not.toBe(legacy); // канон посчитал executor, снимок хранил сырую строку
+  });
+
+  test('снимок ПРЕДЫДУЩЕЙ версии схемы восстанавливается ДОКУМЕНТОМ, а не деградирует к markdown', async () => {
+    // Что здесь сторожится. `pinnedDoc` — своя, ПОЛОВИННАЯ проверка версии: `readBodyDoc` он
+    // не зовёт вовсе. Сверяй он версию голым равенством с константой — в день выкатки новой
+    // схемы ВСЯ история закреплений тихо перешла бы на восстановление markdown-строкой
+    // (`version.ts`: `doc === undefined ? { body } : { bodyDoc }`), то есть страховка владельца
+    // теряла бы оформление ровно тогда, когда ею пользуются. Молча: ни отказа, ни следа.
+    const id = newId();
+    await a.entity.create({
+      input: { id, title: 'История', tags: [], body: 'тело' },
+      source: 'quick_capture',
+    });
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      // Снимок ПРОШЛОЙ схемы — с блочным id и со старым атрибутом query-блока: ровно то, что
+      // лежит в `entity_versions` у всех закреплений, сделанных до выкатки.
+      await admin.execute(
+        sql`UPDATE entities SET body_doc = ${JSON.stringify({
+          v: DOC_SCHEMA_VERSION - 1,
+          doc: {
+            type: 'doc',
+            content: [
+              {
+                type: 'paragraph',
+                attrs: { id: 'блок-1' },
+                content: [{ type: 'text', text: 'снимок' }],
+              },
+              { type: 'queryBlock', attrs: { query: ' aspect=orbis/task' } },
+            ],
+          },
+        })}::jsonb WHERE id = ${id}`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+
+    const v = await a.version.pin({ entityId: id, label: 'до выкатки' });
+    expect(v.hasDoc).toBe(true);
+
+    const before = await a.entity.get({ id });
+    await a.entity.update({ id, expectedUpdatedAt: before.entity.updatedAt, body: 'затёрли' });
+    const e2 = await a.entity.get({ id });
+    const restored = await a.version.restore({
+      versionId: v.id,
+      expectedUpdatedAt: e2.entity.updatedAt,
+    });
+
+    // Восстановление пошло ДОКУМЕНТОМ: блок вернулся блоком, а не строкой из проекции…
+    const back = await a.entity.get({ id, include: ['body', 'bodyDoc'] });
+    expect(back.entity.bodyDoc?.v).toBe(DOC_SCHEMA_VERSION);
+    const nodes = ((back.entity.bodyDoc?.doc as { content?: Node[] } | undefined)?.content ??
+      []) as Node[];
+    expect(nodes.map((n) => n.type)).toEqual(['paragraph', 'queryBlock']);
+    // …блочный id пережил конверсию — ради этого она и идёт по дереву…
+    expect(nodes[0]?.attrs?.id).toBe('блок-1');
+    // …а сам блок привязан к реестру исполнителем на записи.
+    expect(nodes[1]?.attrs?.ast).not.toBeNull();
+    expect(restored.body).toContain('{{query:aspect=orbis/task}}');
   });
 
   test('«отмени последнее» после pin удаляет версию (undo как у entity_origin_*)', async () => {

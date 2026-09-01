@@ -25,7 +25,6 @@
  */
 
 import type { PropertyKind } from '@orbis/shared';
-import { BLOCK_END } from '@orbis/shared';
 import type { QueryAst, QueryBound, QueryFilterNode, QueryScalar } from '@orbis/shared/query';
 import {
   acceptsDateTokenKind,
@@ -371,18 +370,15 @@ export type Printed = {
  * Разбор здесь СТРОГИЙ (`parseQueryAst`, без моста старой формы): форма печатает канон, и
  * принимать от себя же текст, который живёт только благодаря мосту, ей незачем.
  *
- * `}}` проверяется отдельно и ДО разбора: парсер его принимает молча (`tags=a}}b`
- * разбирается), а рендерер тела закроет обёртку блока на первом вхождении — хвост запроса
- * уехал бы текстом заметки. Это про РАЗМЕТКУ, а не про грамматику, поэтому и сообщение своё.
+ * ПРО `}}` ЗДЕСЬ ПРОВЕРКИ БОЛЬШЕ НЕТ, и это не упущение. Раньше форма отказывалась печатать
+ * значение с `}}` — конец обёртки `{{query:…}}` закрыл бы блок на первом вхождении, и хвост
+ * запроса уехал бы текстом заметки. Теперь эту половину закрывает САМА ПЕЧАТЬ: `quoteQueryValue`
+ * разводит `}` бэкслешем (`query/print.ts`), разбор снимает экран тем же правилом, и `}}` в
+ * напечатанной key-форме не появляется в принципе. Барьер остался там, где он ещё нужен, — на
+ * СЫРОМ тексте, который до дерева не доехал (`QueryTextEditor`, `QueryWidget.save`).
  */
 export function printQuery(ast: QueryAst, reg: QueryRegistry): Printed {
   const text = printQueryAst(ast, reg.parse, 'key');
-  if (text.includes(BLOCK_END)) {
-    return {
-      text: null,
-      error: `Сочетание «${BLOCK_END}» закрывает блок: уберите его из значения.`,
-    };
-  }
   const back = parseQueryAst(text, reg.parse);
   return { text, error: back.ok ? null : back.error.message };
 }

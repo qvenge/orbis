@@ -19,12 +19,14 @@
 import { bodyDocSchema } from '@orbis/shared';
 import {
   type BodyDoc,
+  bindQueryBlocks,
   bodyDocError,
   canonicalizeBody,
   readBodyDoc,
   serializeBody,
 } from '@orbis/shared/doc';
 import { type BodyDiffSkipReason, type DiffUnit, diffBodyDocs } from '@orbis/shared/doc/diff';
+import type { ParseRegistry } from '@orbis/shared/query';
 import { inArray } from 'drizzle-orm';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -89,6 +91,7 @@ export async function proposalBodyRows(
   tx: Tx,
   operations: readonly OperationLike[],
   args: { withDiff: boolean },
+  reg: ParseRegistry,
 ): Promise<Map<number, ProposalBodyRow>> {
   const targets: BodyTarget[] = [];
   for (const [index, op] of operations.entries()) {
@@ -105,7 +108,9 @@ export async function proposalBodyRows(
     tx,
     targets.map((t) => t.id),
   );
-  for (const target of targets) rows.set(target.index, diffRow(target, current.get(target.id)));
+  for (const target of targets) {
+    rows.set(target.index, diffRow(target, current.get(target.id), reg));
+  }
   return rows;
 }
 
@@ -176,7 +181,11 @@ function textRow(target: BodyTarget): ProposalBodyRow {
  *  4. «стало» — сам присланный документ у правленого предложения (канонизировать его нельзя:
  *     канон снёс бы блочные id, а в запись уедет ровно вход) или канон markdown у исходного.
  */
-function diffRow(target: BodyTarget, current: CurrentBody | undefined): ProposalBodyRow {
+function diffRow(
+  target: BodyTarget,
+  current: CurrentBody | undefined,
+  reg: ParseRegistry,
+): ProposalBodyRow {
   const row = textRow(target);
   if (target.after === undefined) return row;
 
@@ -193,8 +202,14 @@ function diffRow(target: BodyTarget, current: CurrentBody | undefined): Proposal
     return { ...row, bodyDiff: { skipped: 'too_large' } };
   }
 
-  const before = readBodyDoc(current.bodyDoc, current.body);
-  const after = target.edited ?? canonicalizeBody(target.after).doc;
+  // ОБЕ стороны привязаны одним реестром (Р-21-1): у стороны «было» это делает `readBodyDoc`,
+  // у стороны «стало» — явная привязка канона. Привяжи одну и не привяжи другую, и блок
+  // приезжал бы `changed` при неизменном запросе — дифф меряет блоки по дереву и его печати.
+  const before = readBodyDoc(current.bodyDoc, current.body, reg);
+  const after =
+    target.edited === undefined
+      ? bindQueryBlocks(canonicalizeBody(target.after).doc, reg)
+      : bindQueryBlocks(target.edited, reg);
   // Своих `DiffLimits` сервер НЕ передаёт: четыре после-разборных числа (maxBlocks,
   // maxBlockWords, maxEditRatio, minEditBudget) живут умолчаниями в самом diff.ts, и вторая
   // их копия здесь разъехалась бы с первой молча — тем более что передача трёх полей из

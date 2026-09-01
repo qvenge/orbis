@@ -80,7 +80,7 @@ import {
   stalePendingQuestion,
 } from '../policy/pending';
 import { wallClockIn } from '../recurring/materialize';
-import { effectiveRegistry } from '../registry/cache';
+import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import {
   CONSECUTIVE_FAILURES_TO_PAUSE,
@@ -2678,7 +2678,9 @@ async function describeOperations(
   // Снимок реестра нужен строке СВЯЗИ: роль подписывает реестр (Ч10-С3). Строкам правки он
   // больше не нужен — адреса свойств в сохранённом payload'е уже id (`buildUpdate`).
   const reg = await effectiveRegistry(tx, ownerId);
-  const bodies = await proposalBodyRows(tx, operations, args);
+  // Тот же снимок — дифф тела: обе стороны обязаны привязывать блоки ОДНИМ реестром (Р-21-1),
+  // иначе неизменный запрос показался бы владельцу правкой.
+  const bodies = await proposalBodyRows(tx, operations, args, parseRegistryOfSnapshot(reg));
   const rows: ProposalOperationView[] = [];
   for (const [index, op] of operations.entries()) {
     if (op.tool === 'entity_create') {

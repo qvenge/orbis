@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { type BodyDoc, DOC_EXTENSIONS, parseBody } from '@orbis/shared/doc';
+import { type BodyDoc, DOC_EXTENSIONS, DOC_SCHEMA_VERSION, parseBody } from '@orbis/shared/doc';
 import { act, screen } from '@testing-library/react';
 import { getSchema } from '@tiptap/core';
 import { Node as PMNode } from '@tiptap/pm/model';
@@ -373,7 +373,7 @@ test('документ, отличающийся лишь порядком кл�
   // фантомную запись — на самом бытовом теле. Оба порядка тут выписаны руками: тесту незачем
   // поднимать редактор, чтобы проверить, что сравнение к порядку ключей нечувствительно.
   const fromParse: BodyDoc = {
-    v: 1,
+    v: DOC_SCHEMA_VERSION,
     doc: {
       type: 'doc',
       content: [
@@ -385,7 +385,7 @@ test('документ, отличающийся лишь порядком кл�
     },
   };
   const fromEditor: BodyDoc = {
-    v: 1,
+    v: DOC_SCHEMA_VERSION,
     doc: {
       type: 'doc',
       content: [
