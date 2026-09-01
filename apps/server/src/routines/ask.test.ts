@@ -47,7 +47,7 @@ interface LiveRoutine {
 async function liveRoutine(mode: 'propose' | 'act', bucket: string): Promise<LiveRoutine> {
   const routineId = await seedRoutine(owner, {
     title: `Рутина вопроса (${mode})`,
-    routine: { mode },
+    routine: { 'orbis/routine_mode': mode },
   });
   const { runId } = await seedRoutineRun(owner, { routineId, bucket });
   const ctx = routineCtx(owner, mode, [], {

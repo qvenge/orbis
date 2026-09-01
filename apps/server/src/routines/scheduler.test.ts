@@ -54,7 +54,11 @@ afterEach(async () => {
       operations: [
         {
           tool: 'entity_update',
-          input: { id: routineId, aspects: { 'orbis/routine': { stage: 'paused' } } },
+          input: {
+            id: routineId,
+            props: { 'orbis/routine_stage': 'paused' },
+            aspects: { attach: ['orbis/routine'] },
+          },
         },
       ],
       clock: () => T0,
@@ -100,7 +104,9 @@ async function newOwner(timezone = 'Europe/Moscow'): Promise<string> {
 
 /** Рутина режима act без белого списка: `end_turn` модели закрывает прогон finished. */
 async function newRoutine(owner: string, routine: Record<string, unknown> = {}): Promise<string> {
-  const routineId = await seedRoutine(owner, { routine: { mode: 'act', ...routine } });
+  const routineId = await seedRoutine(owner, {
+    routine: { 'orbis/routine_mode': 'act', ...routine },
+  });
   createdRoutines.push({ owner, routineId });
   return routineId;
 }
@@ -329,7 +335,7 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
         routineId,
         bucket,
         startedAt: minutes(offset),
-        run: { outcome: 'failed', fail_note: 'прогон прерван: процесс умер' },
+        run: { 'orbis/run_outcome': 'failed', 'orbis/fail_note': 'прогон прерван: процесс умер' },
       });
     }
     // Сегодняшний бакет: процесс умер посреди прогона (SIGKILL) — шагов нет дольше порога.
@@ -374,7 +380,7 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
 
   test('paused рутина и running прогон — тик пропускает; зависший прогон подметается ДО решения о запуске (V1.12)', async () => {
     const owner = await newOwner();
-    const paused = await newRoutine(owner, { stage: 'paused' });
+    const paused = await newRoutine(owner, { 'orbis/routine_stage': 'paused' });
     const busy = await newRoutine(owner);
     // Живой прогон бакета: шаг был минуту назад — его ведёт другой процесс
     const { runId: busyRun } = await seedRoutineRun(owner, {

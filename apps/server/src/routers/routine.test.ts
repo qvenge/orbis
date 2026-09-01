@@ -178,7 +178,8 @@ async function seedTask(title: string): Promise<string> {
   const e = await seedEntity(owner, {
     title,
     tags: [],
-    aspects: { 'orbis/task': { status: 'inbox' } },
+    props: { 'orbis/task_status': 'inbox' },
+    aspects: ['orbis/task'],
   });
   return e.id;
 }
@@ -190,7 +191,14 @@ async function ownerSets(taskId: string, status: string): Promise<void> {
     actorKind: 'owner',
     source: 'ui',
     operations: [
-      { tool: 'entity_update', input: { id: taskId, aspects: { 'orbis/task': { status } } } },
+      {
+        tool: 'entity_update',
+        input: {
+          id: taskId,
+          props: { 'orbis/task_status': status },
+          aspects: { attach: ['orbis/task'] },
+        },
+      },
     ],
   });
   if (!r.ok) throw new Error(`ownerSets: ${r.error.code} ${r.error.message}`);
@@ -215,7 +223,8 @@ async function pointRunAt(runId: string, pendingId: string, status: string): Pro
         tool: 'entity_update',
         input: {
           id: runId,
-          aspects: { 'orbis/agent-run': { proposal: { pending_id: pendingId, status } } },
+          props: { 'orbis/run_proposal': { pending_id: pendingId, status } },
+          aspects: { attach: ['orbis/agent-run'] },
         },
       },
     ],
@@ -334,7 +343,8 @@ async function proposedBodyChange(
     title,
     tags: [],
     body: current,
-    aspects: { 'orbis/task': { status: 'inbox' } },
+    props: { 'orbis/task_status': 'inbox' },
+    aspects: ['orbis/task'],
   });
   const taskId = created.id;
   const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
@@ -1343,7 +1353,11 @@ describe('routine.proposal / decideProposal', () => {
     const { runId } = await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-14T07:00',
-      run: { outcome: 'finished', finished_at: iso(T0), report: 'нечего предлагать' },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/run_report': 'нечего предлагать',
+      },
     });
     expect(await caller().routine.proposal({ runId })).toBeNull();
   });
@@ -1733,7 +1747,8 @@ describe('routine.proposalsForEntity', () => {
     const project = await seedEntity(owner, {
       title: 'Ремонт кухни',
       tags: [],
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     // Ни одной entity_update: единственная операция адресуется концами связи, и проба по
     // `id` не увидела бы это предложение вовсе
@@ -1938,9 +1953,12 @@ describe('откат рутинного прогона: decideProposal(approve) 
       routineId,
       bucket: '2026-08-10T07:00',
       run: {
-        outcome: 'checkpoint',
-        checkpoint: { question: 'Какой приоритет у почты?', asked_at: T0.toISOString() },
-        finished_at: T0.toISOString(),
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_checkpoint': {
+          question: 'Какой приоритет у почты?',
+          asked_at: T0.toISOString(),
+        },
+        'orbis/run_finished_at': T0.toISOString(),
       },
     });
     expect((await caller().routine.overview({ routineId })).waiting).toBe(1);
@@ -1969,9 +1987,9 @@ describe('откат рутинного прогона: decideProposal(approve) 
       routineId,
       bucket: '2026-08-11T07:00',
       run: {
-        outcome: 'checkpoint',
-        checkpoint: { question: 'Снять?', asked_at: T0.toISOString() },
-        finished_at: T0.toISOString(),
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_checkpoint': { question: 'Снять?', asked_at: T0.toISOString() },
+        'orbis/run_finished_at': T0.toISOString(),
       },
     });
     expect((await caller().routine.overview({ routineId })).waiting).toBe(1);
@@ -2074,16 +2092,23 @@ describe('routine.overview', () => {
       bucket: '2026-08-15T07:00',
       startedAt: new Date(T0.getTime() - 2 * 24 * 3600_000),
       run: {
-        outcome: 'checkpoint',
-        finished_at: iso(T0),
-        checkpoint: { question: 'Что с этим делать?', asked_at: iso(T0) },
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/run_checkpoint': {
+          question: 'Что с этим делать?',
+          asked_at: iso(T0),
+        },
       },
     });
     const last = await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-16T07:00',
       startedAt: new Date(T0.getTime() - 24 * 3600_000),
-      run: { outcome: 'finished', finished_at: iso(T0), report: 'всё спокойно' },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/run_report': 'всё спокойно',
+      },
     });
 
     const overview = await caller().routine.overview({ routineId });
@@ -2105,7 +2130,11 @@ describe('routine.overview', () => {
       operations: [
         {
           tool: 'entity_update',
-          input: { id: routineId, aspects: { 'orbis/routine': { stage: 'paused' } } },
+          input: {
+            id: routineId,
+            props: { 'orbis/routine_stage': 'paused' },
+            aspects: { attach: ['orbis/routine'] },
+          },
         },
       ],
     });
@@ -2118,21 +2147,33 @@ describe('routine.overview', () => {
       routineId,
       bucket: '2026-08-14T07:00',
       startedAt: new Date(T0.getTime() - 4 * 24 * 3600_000),
-      run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/undecided': true,
+      },
     });
     // Разобранная пачка несёт `undecided:false` (снятие — запись, а не удаление ключа)
     await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-15T07:00',
       startedAt: new Date(T0.getTime() - 3 * 24 * 3600_000),
-      run: { outcome: 'finished', finished_at: iso(T0), undecided: false },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/undecided': false,
+      },
     });
     // Прогон без пачки вовсе — ключа нет
     await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-16T07:00',
       startedAt: new Date(T0.getTime() - 2 * 24 * 3600_000),
-      run: { outcome: 'finished', finished_at: iso(T0), report: 'всё спокойно' },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/run_report': 'всё спокойно',
+      },
     });
     expect((await caller().routine.overview({ routineId })).undecided).toBe(1);
 
@@ -2143,7 +2184,11 @@ describe('routine.overview', () => {
       routineId,
       bucket: '2026-08-13T07:00',
       startedAt: new Date(T0.getTime() - 5 * 24 * 3600_000),
-      run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/undecided': true,
+      },
     });
     await execute(db, {
       actorUserId: owner,
@@ -2182,7 +2227,11 @@ async function batchRun(title: string): Promise<{ routineId: string; runId: stri
   const routineId = await seedRoutine(owner, { title: `Рутина: ${title}` });
   const { runId } = await seedRoutineRun(owner, {
     routineId,
-    run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+    run: {
+      'orbis/run_outcome': 'finished',
+      'orbis/run_finished_at': iso(T0),
+      'orbis/undecided': true,
+    },
   });
   return { routineId, runId };
 }

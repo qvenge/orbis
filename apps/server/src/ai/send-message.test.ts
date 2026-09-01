@@ -616,14 +616,13 @@ describe('ai.sendMessage (ж): user_query sum по decimal', () => {
       await seedEntity(user, {
         title: `Расход ${amount}`,
         tags: ['sumtest'],
-        aspects: {
-          'orbis/financial': {
-            amount,
-            direction: 'expense',
-            category_ref: CATEGORY_REF,
-            occurred_on: '2026-07-01',
-          },
+        props: {
+          'orbis/amount': amount,
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+          'orbis/occurred_on': '2026-07-01',
         },
+        aspects: ['orbis/financial'],
       });
     }
     const scripted = new ScriptedProvider([

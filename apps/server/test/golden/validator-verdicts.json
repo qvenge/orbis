@@ -1,2214 +1,2064 @@
 [
   {
     "name": "orbis/schedule: полная форма — все семь полей",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00",
-        "end_at": "2026-07-05T10:30:00+03:00",
-        "duration_min": 90,
-        "all_day": false,
-        "recurrence": {
-          "freq": "weekly",
-          "interval": 1,
-          "byweekday": ["mo"],
-          "until": "2026-12-31"
-        },
-        "location": "Офис",
-        "timezone": "Europe/Moscow"
-      }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00",
+      "orbis/end_at": "2026-07-05T10:30:00+03:00",
+      "orbis/duration_min": 90,
+      "orbis/all_day": false,
+      "orbis/recurrence": {
+        "freq": "weekly",
+        "interval": 1,
+        "byweekday": ["mo"],
+        "until": "2026-12-31"
+      },
+      "orbis/location": "Офис",
+      "orbis/timezone": "Europe/Moscow"
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/schedule: минимальная форма — только обязательный start_at",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00"
-      }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00"
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/schedule: имя зоны из трёх сегментов (America/Argentina/Buenos_Aires)",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00",
-        "timezone": "America/Argentina/Buenos_Aires"
-      }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00",
+      "orbis/timezone": "America/Argentina/Buenos_Aires"
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/schedule: нет обязательного start_at",
-    "aspects": {
-      "orbis/schedule": {}
-    },
+    "props": {},
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/schedule: start_at без зоны",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00"
-      }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00"
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/schedule: recurrence.freq вне enum (yearly)",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00",
-        "recurrence": {
-          "freq": "yearly",
-          "interval": 1
-        }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00",
+      "orbis/recurrence": {
+        "freq": "yearly",
+        "interval": 1
       }
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/schedule: recurrence без обязательного interval",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00",
-        "recurrence": {
-          "freq": "daily"
-        }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00",
+      "orbis/recurrence": {
+        "freq": "daily"
       }
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/schedule: duration_min = 0 (нижняя граница min 1)",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00",
-        "duration_min": 0
-      }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00",
+      "orbis/duration_min": 0
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/schedule: поле неизвестного имени (starts_at)",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00",
-        "starts_at": "2026-07-05T09:00:00+03:00"
-      }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00",
+      "orbis/starts_at": "2026-07-05T09:00:00+03:00"
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/schedule: timezone не IANA («Мск»)",
-    "aspects": {
-      "orbis/schedule": {
-        "start_at": "2026-07-05T09:00:00+03:00",
-        "timezone": "Мск"
-      }
+    "props": {
+      "orbis/start_at": "2026-07-05T09:00:00+03:00",
+      "orbis/timezone": "Мск"
     },
+    "aspects": ["orbis/schedule"],
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "TIMEZONE_IANA"
   },
   {
     "name": "orbis/task: минимальная форма — только status",
-    "aspects": {
-      "orbis/task": {
-        "status": "inbox"
-      }
+    "props": {
+      "orbis/task_status": "inbox"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/task: полная форма — все шесть полей",
-    "aspects": {
-      "orbis/task": {
-        "status": "done",
-        "priority": "high",
-        "due_date": "2026-07-10",
-        "completed_at": "2026-07-03T10:00:00Z",
-        "effort_min": 30,
-        "waiting_for": "ответ"
-      }
+    "props": {
+      "orbis/task_status": "done",
+      "orbis/priority": "high",
+      "orbis/due_date": "2026-07-10",
+      "orbis/completed_at": "2026-07-03T10:00:00Z",
+      "orbis/effort_min": 30,
+      "orbis/waiting_for": "ответ"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/task: нет обязательного status",
-    "aspects": {
-      "orbis/task": {}
-    },
+    "props": {},
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/task: status вне enum (todo)",
-    "aspects": {
-      "orbis/task": {
-        "status": "todo"
-      }
+    "props": {
+      "orbis/task_status": "todo"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/task: status не строка",
-    "aspects": {
-      "orbis/task": {
-        "status": 42
-      }
+    "props": {
+      "orbis/task_status": 42
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/task: priority вне enum (urgent)",
-    "aspects": {
-      "orbis/task": {
-        "status": "inbox",
-        "priority": "urgent"
-      }
+    "props": {
+      "orbis/task_status": "inbox",
+      "orbis/priority": "urgent"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/task: поле неизвестного имени (prioritty)",
-    "aspects": {
-      "orbis/task": {
-        "status": "inbox",
-        "prioritty": "high"
-      }
+    "props": {
+      "orbis/task_status": "inbox",
+      "orbis/prioritty": "high"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/task: due_date не ISO-дата",
-    "aspects": {
-      "orbis/task": {
-        "status": "inbox",
-        "due_date": "10.07.2026"
-      }
+    "props": {
+      "orbis/task_status": "inbox",
+      "orbis/due_date": "10.07.2026"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/task: completed_at датой вместо момента",
-    "aspects": {
-      "orbis/task": {
-        "status": "done",
-        "completed_at": "2026-07-03"
-      }
+    "props": {
+      "orbis/task_status": "done",
+      "orbis/completed_at": "2026-07-03"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/task: effort_min = 0",
-    "aspects": {
-      "orbis/task": {
-        "status": "inbox",
-        "effort_min": 0
-      }
+    "props": {
+      "orbis/task_status": "inbox",
+      "orbis/effort_min": 0
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: полная форма (фикстура «Обед»)",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "currency": "RUB",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "occurred_on": "2026-06-13",
-        "planned": false,
-        "payment_method": "card",
-        "counterparty": "Кафе у дома"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/currency": "RUB",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/occurred_on": "2026-06-13",
+      "orbis/planned": false,
+      "orbis/payment_method": "card",
+      "orbis/counterparty": "Кафе у дома"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/financial: минимальная форма — три обязательных поля",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/financial: bank_txn_id импорта",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "bank_txn_id": "txn-42"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/bank_txn_id": "txn-42"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/financial: amount на границе exclusiveMin («0.01»)",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "0.01",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "0.01",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/financial: нет обязательного amount",
-    "aspects": {
-      "orbis/financial": {
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: нет обязательного direction",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: нет обязательного category_ref",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: amount «0» (не строго положительный)",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "0",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "0",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: amount «-1»",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "-1",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "-1",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: amount «abc»",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "abc",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "abc",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: amount «-0» (минус-ноль при exclusiveMin)",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "-0",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "-0",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: amount числом, а не decimal-строкой",
-    "aspects": {
-      "orbis/financial": {
-        "amount": 340,
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": 340,
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: amount в экспоненте («3.4e2»)",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "3.4e2",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "3.4e2",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: direction вне enum (transfer)",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "transfer",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "transfer",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: category_ref не uuid",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "еда"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "еда"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: occurred_on не ISO-дата",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "occurred_on": "13.06.2026"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/occurred_on": "13.06.2026"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: currency из четырёх букв",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "currency": "RUBL"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/currency": "RUBL"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: bank_txn_id пустой строкой",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "bank_txn_id": ""
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/bank_txn_id": ""
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: bank_txn_id длиннее 128",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "bank_txn_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/bank_txn_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/financial: currency строчными («rub»)",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "currency": "rub"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/currency": "rub"
     },
+    "aspects": ["orbis/financial"],
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "CURRENCY_UPPER3"
   },
   {
     "name": "orbis/note: пустой объект (все поля необязательны)",
-    "aspects": {
-      "orbis/note": {}
-    },
+    "props": {},
+    "aspects": ["orbis/note"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/note: полная форма",
-    "aspects": {
-      "orbis/note": {
-        "content_type": "markdown",
-        "pinned": true
-      }
+    "props": {
+      "orbis/content_type": "markdown",
+      "orbis/pinned": true
     },
+    "aspects": ["orbis/note"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/note: content_type вне enum (html)",
-    "aspects": {
-      "orbis/note": {
-        "content_type": "html"
-      }
+    "props": {
+      "orbis/content_type": "html"
     },
+    "aspects": ["orbis/note"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/note: pinned строкой",
-    "aspects": {
-      "orbis/note": {
-        "pinned": "yes"
-      }
+    "props": {
+      "orbis/pinned": "yes"
     },
+    "aspects": ["orbis/note"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: полная форма с отрицательным переносом",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30",
-        "currency": "RUB",
-        "carryover": "-1200.00"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30",
+      "orbis/currency": "RUB",
+      "orbis/carryover": "-1200.00"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/budget: минимальная форма — четыре обязательных поля",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/budget: limit «0» на нижней границе min",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "0",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "0",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/budget: carryover «0»",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30",
-        "carryover": "0"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30",
+      "orbis/carryover": "0"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/budget: нет обязательного category_ref",
-    "aspects": {
-      "orbis/budget": {
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: нет обязательного limit",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: нет обязательного period_start",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: нет обязательного period_end",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-06-01"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: limit отрицательный",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "-1.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "-1.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: period_start без ведущего нуля",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-6-01",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-6-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: carryover не decimal-строка",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30",
-        "carryover": "много"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30",
+      "orbis/carryover": "много"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/budget: limit «-0» (минус-ноль при min 0)",
-    "aspects": {
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "-0",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30"
-      }
+    "props": {
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "-0",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/budget"],
     "legacyVerdict": "reject",
     "newVerdict": "ok",
     "expectedDiff": "DECIMAL_SIGNED_ZERO"
   },
   {
     "name": "orbis/category: пустой объект",
-    "aspects": {
-      "orbis/category": {}
-    },
+    "props": {},
+    "aspects": ["orbis/category"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/category: полная форма (сид «Еда»)",
-    "aspects": {
-      "orbis/category": {
-        "icon": "🍔",
-        "color": "#e0885a",
-        "aliases": ["еда", "food", "продукты"],
-        "spend_class": "discretionary"
-      }
+    "props": {
+      "orbis/icon": "🍔",
+      "orbis/color": "#e0885a",
+      "orbis/aliases": ["еда", "food", "продукты"],
+      "orbis/spend_class": "discretionary"
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/category: ровно 50 синонимов — верхняя граница",
-    "aspects": {
-      "orbis/category": {
-        "aliases": [
-          "синоним-1",
-          "синоним-2",
-          "синоним-3",
-          "синоним-4",
-          "синоним-5",
-          "синоним-6",
-          "синоним-7",
-          "синоним-8",
-          "синоним-9",
-          "синоним-10",
-          "синоним-11",
-          "синоним-12",
-          "синоним-13",
-          "синоним-14",
-          "синоним-15",
-          "синоним-16",
-          "синоним-17",
-          "синоним-18",
-          "синоним-19",
-          "синоним-20",
-          "синоним-21",
-          "синоним-22",
-          "синоним-23",
-          "синоним-24",
-          "синоним-25",
-          "синоним-26",
-          "синоним-27",
-          "синоним-28",
-          "синоним-29",
-          "синоним-30",
-          "синоним-31",
-          "синоним-32",
-          "синоним-33",
-          "синоним-34",
-          "синоним-35",
-          "синоним-36",
-          "синоним-37",
-          "синоним-38",
-          "синоним-39",
-          "синоним-40",
-          "синоним-41",
-          "синоним-42",
-          "синоним-43",
-          "синоним-44",
-          "синоним-45",
-          "синоним-46",
-          "синоним-47",
-          "синоним-48",
-          "синоним-49",
-          "синоним-50"
-        ]
-      }
+    "props": {
+      "orbis/aliases": [
+        "синоним-1",
+        "синоним-2",
+        "синоним-3",
+        "синоним-4",
+        "синоним-5",
+        "синоним-6",
+        "синоним-7",
+        "синоним-8",
+        "синоним-9",
+        "синоним-10",
+        "синоним-11",
+        "синоним-12",
+        "синоним-13",
+        "синоним-14",
+        "синоним-15",
+        "синоним-16",
+        "синоним-17",
+        "синоним-18",
+        "синоним-19",
+        "синоним-20",
+        "синоним-21",
+        "синоним-22",
+        "синоним-23",
+        "синоним-24",
+        "синоним-25",
+        "синоним-26",
+        "синоним-27",
+        "синоним-28",
+        "синоним-29",
+        "синоним-30",
+        "синоним-31",
+        "синоним-32",
+        "синоним-33",
+        "синоним-34",
+        "синоним-35",
+        "синоним-36",
+        "синоним-37",
+        "синоним-38",
+        "синоним-39",
+        "синоним-40",
+        "синоним-41",
+        "синоним-42",
+        "синоним-43",
+        "синоним-44",
+        "синоним-45",
+        "синоним-46",
+        "синоним-47",
+        "синоним-48",
+        "синоним-49",
+        "синоним-50"
+      ]
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/category: color не #hex",
-    "aspects": {
-      "orbis/category": {
-        "color": "#GGGGGG"
-      }
+    "props": {
+      "orbis/color": "#GGGGGG"
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/category: color словом",
-    "aspects": {
-      "orbis/category": {
-        "color": "red"
-      }
+    "props": {
+      "orbis/color": "red"
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/category: spend_class вне enum (fun)",
-    "aspects": {
-      "orbis/category": {
-        "spend_class": "fun"
-      }
+    "props": {
+      "orbis/spend_class": "fun"
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/category: aliases строкой вместо списка",
-    "aspects": {
-      "orbis/category": {
-        "aliases": "еда"
-      }
+    "props": {
+      "orbis/aliases": "еда"
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/category: число в списке синонимов",
-    "aspects": {
-      "orbis/category": {
-        "aliases": ["еда", 5]
-      }
+    "props": {
+      "orbis/aliases": ["еда", 5]
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/category: 51 синоним — выше нового капа",
-    "aspects": {
-      "orbis/category": {
-        "aliases": [
-          "синоним-1",
-          "синоним-2",
-          "синоним-3",
-          "синоним-4",
-          "синоним-5",
-          "синоним-6",
-          "синоним-7",
-          "синоним-8",
-          "синоним-9",
-          "синоним-10",
-          "синоним-11",
-          "синоним-12",
-          "синоним-13",
-          "синоним-14",
-          "синоним-15",
-          "синоним-16",
-          "синоним-17",
-          "синоним-18",
-          "синоним-19",
-          "синоним-20",
-          "синоним-21",
-          "синоним-22",
-          "синоним-23",
-          "синоним-24",
-          "синоним-25",
-          "синоним-26",
-          "синоним-27",
-          "синоним-28",
-          "синоним-29",
-          "синоним-30",
-          "синоним-31",
-          "синоним-32",
-          "синоним-33",
-          "синоним-34",
-          "синоним-35",
-          "синоним-36",
-          "синоним-37",
-          "синоним-38",
-          "синоним-39",
-          "синоним-40",
-          "синоним-41",
-          "синоним-42",
-          "синоним-43",
-          "синоним-44",
-          "синоним-45",
-          "синоним-46",
-          "синоним-47",
-          "синоним-48",
-          "синоним-49",
-          "синоним-50",
-          "синоним-51"
-        ]
-      }
+    "props": {
+      "orbis/aliases": [
+        "синоним-1",
+        "синоним-2",
+        "синоним-3",
+        "синоним-4",
+        "синоним-5",
+        "синоним-6",
+        "синоним-7",
+        "синоним-8",
+        "синоним-9",
+        "синоним-10",
+        "синоним-11",
+        "синоним-12",
+        "синоним-13",
+        "синоним-14",
+        "синоним-15",
+        "синоним-16",
+        "синоним-17",
+        "синоним-18",
+        "синоним-19",
+        "синоним-20",
+        "синоним-21",
+        "синоним-22",
+        "синоним-23",
+        "синоним-24",
+        "синоним-25",
+        "синоним-26",
+        "синоним-27",
+        "синоним-28",
+        "синоним-29",
+        "синоним-30",
+        "синоним-31",
+        "синоним-32",
+        "синоним-33",
+        "синоним-34",
+        "синоним-35",
+        "синоним-36",
+        "синоним-37",
+        "синоним-38",
+        "синоним-39",
+        "синоним-40",
+        "синоним-41",
+        "синоним-42",
+        "синоним-43",
+        "синоним-44",
+        "синоним-45",
+        "синоним-46",
+        "синоним-47",
+        "синоним-48",
+        "синоним-49",
+        "синоним-50",
+        "синоним-51"
+      ]
     },
+    "aspects": ["orbis/category"],
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "ALIASES_MAX_50"
   },
   {
     "name": "orbis/memory: правило со scope старой формы (id аспекта; пересев значений — §А12)",
-    "aspects": {
-      "orbis/memory": {
-        "kind": "rule",
-        "scope": "orbis/financial"
-      }
+    "props": {
+      "orbis/memory_kind": "rule",
+      "orbis/rule_scope": "orbis/financial"
     },
+    "aspects": ["orbis/memory"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/memory: факт без scope",
-    "aspects": {
-      "orbis/memory": {
-        "kind": "fact"
-      }
+    "props": {
+      "orbis/memory_kind": "fact"
     },
+    "aspects": ["orbis/memory"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/memory: нет обязательного kind",
-    "aspects": {
-      "orbis/memory": {}
-    },
+    "props": {},
+    "aspects": ["orbis/memory"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/memory: kind вне enum (note)",
-    "aspects": {
-      "orbis/memory": {
-        "kind": "note"
-      }
+    "props": {
+      "orbis/memory_kind": "note"
     },
+    "aspects": ["orbis/memory"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/memory: scope числом",
-    "aspects": {
-      "orbis/memory": {
-        "kind": "fact",
-        "scope": 42
-      }
+    "props": {
+      "orbis/memory_kind": "fact",
+      "orbis/rule_scope": 42
     },
+    "aspects": ["orbis/memory"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: источник count",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": "24"
-      }
+        "aggregate": "count"
+      },
+      "orbis/target_value": "24"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/goal: источник sum с полем, единицей и кэшем (фикстура перф-гейта)",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/financial, direction=expense",
-          "aggregate": "sum",
-          "field": "amount"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/financial, direction=expense"
         },
-        "target_value": "1000000.00",
-        "current_value": "0",
-        "unit": "₽"
-      }
+        "aggregate": "sum",
+        "field": "amount"
+      },
+      "orbis/target_value": "1000000.00",
+      "orbis/current_value": "0",
+      "orbis/unit": "₽"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/goal: нет обязательного progress_source",
-    "aspects": {
-      "orbis/goal": {
-        "target_value": "24"
-      }
+    "props": {
+      "orbis/target_value": "24"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: нет обязательного target_value",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count"
-        }
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
+        },
+        "aggregate": "count"
       }
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: sum без field",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/financial",
-          "aggregate": "sum"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/financial"
         },
-        "target_value": "300000.00"
-      }
+        "aggregate": "sum"
+      },
+      "orbis/target_value": "300000.00"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: latest без field",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/financial",
-          "aggregate": "latest"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/financial"
         },
-        "target_value": "80"
-      }
+        "aggregate": "latest"
+      },
+      "orbis/target_value": "80"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: count с лишним field",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count",
-          "field": "amount"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": "24"
-      }
+        "aggregate": "count",
+        "field": "amount"
+      },
+      "orbis/target_value": "24"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: aggregate вне союза (avg)",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "avg",
-          "field": "amount"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": "24"
-      }
+        "aggregate": "avg",
+        "field": "amount"
+      },
+      "orbis/target_value": "24"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: target_value «0»",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": "0"
-      }
+        "aggregate": "count"
+      },
+      "orbis/target_value": "0"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: target_value «-5»",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": "-5"
-      }
+        "aggregate": "count"
+      },
+      "orbis/target_value": "-5"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: target_value числом",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": 24
-      }
+        "aggregate": "count"
+      },
+      "orbis/target_value": 24
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: current_value отрицательный",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": "24",
-        "current_value": "-1"
-      }
+        "aggregate": "count"
+      },
+      "orbis/target_value": "24",
+      "orbis/current_value": "-1"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: unit пустой строкой",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "aspect=orbis/note",
-          "aggregate": "count"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": "aspect=orbis/note"
         },
-        "target_value": "24",
-        "unit": ""
-      }
+        "aggregate": "count"
+      },
+      "orbis/target_value": "24",
+      "orbis/unit": ""
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: query числом",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": 123,
-          "aggregate": "count"
-        },
-        "target_value": "24"
-      }
+    "props": {
+      "orbis/progress_source": {
+        "query": 123,
+        "aggregate": "count"
+      },
+      "orbis/target_value": "24"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/goal: query пустой строкой",
-    "aspects": {
-      "orbis/goal": {
-        "progress_source": {
-          "query": "",
-          "aggregate": "count"
+    "props": {
+      "orbis/progress_source": {
+        "query": {
+          "text": ""
         },
-        "target_value": "24"
-      }
+        "aggregate": "count"
+      },
+      "orbis/target_value": "24"
     },
+    "aspects": ["orbis/goal"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/project: stage active",
-    "aspects": {
-      "orbis/project": {
-        "stage": "active"
-      }
+    "props": {
+      "orbis/project_stage": "active"
     },
+    "aspects": ["orbis/project"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/project: нет обязательного stage",
-    "aspects": {
-      "orbis/project": {}
-    },
+    "props": {},
+    "aspects": ["orbis/project"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/project: stage вне enum (archived)",
-    "aspects": {
-      "orbis/project": {
-        "stage": "archived"
-      }
+    "props": {
+      "orbis/project_stage": "archived"
     },
+    "aspects": ["orbis/project"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/project: поле неизвестного имени (status)",
-    "aspects": {
-      "orbis/project": {
-        "stage": "active",
-        "status": "x"
-      }
+    "props": {
+      "orbis/project_stage": "active",
+      "orbis/status": "x"
     },
+    "aspects": ["orbis/project"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/repo: полная форма",
-    "aspects": {
-      "orbis/repo": {
-        "url": "https://github.com/qvenge/orbis",
-        "default_branch": "main"
-      }
+    "props": {
+      "orbis/repo_url": "https://github.com/qvenge/orbis",
+      "orbis/default_branch": "main"
     },
+    "aspects": ["orbis/repo"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/repo: нет обязательного url",
-    "aspects": {
-      "orbis/repo": {
-        "default_branch": "main"
-      }
+    "props": {
+      "orbis/default_branch": "main"
     },
+    "aspects": ["orbis/repo"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/repo: нет обязательного default_branch",
-    "aspects": {
-      "orbis/repo": {
-        "url": "https://github.com/qvenge/orbis"
-      }
+    "props": {
+      "orbis/repo_url": "https://github.com/qvenge/orbis"
     },
+    "aspects": ["orbis/repo"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/repo: url пустой строкой",
-    "aspects": {
-      "orbis/repo": {
-        "url": "",
-        "default_branch": "main"
-      }
+    "props": {
+      "orbis/repo_url": "",
+      "orbis/default_branch": "main"
     },
+    "aspects": ["orbis/repo"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/repo: default_branch пустой строкой",
-    "aspects": {
-      "orbis/repo": {
-        "url": "https://github.com/qvenge/orbis",
-        "default_branch": ""
-      }
+    "props": {
+      "orbis/repo_url": "https://github.com/qvenge/orbis",
+      "orbis/default_branch": ""
     },
+    "aspects": ["orbis/repo"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/repo: default_branch длиннее 128",
-    "aspects": {
-      "orbis/repo": {
-        "url": "https://github.com/qvenge/orbis",
-        "default_branch": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      }
+    "props": {
+      "orbis/repo_url": "https://github.com/qvenge/orbis",
+      "orbis/default_branch": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     },
+    "aspects": ["orbis/repo"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/repo: url без схемы («github.com/qvenge/orbis»)",
-    "aspects": {
-      "orbis/repo": {
-        "url": "github.com/qvenge/orbis",
-        "default_branch": "main"
-      }
+    "props": {
+      "orbis/repo_url": "github.com/qvenge/orbis",
+      "orbis/default_branch": "main"
     },
+    "aspects": ["orbis/repo"],
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "REPO_URL_FORMAT"
   },
   {
     "name": "orbis/assignment: агент с грантом",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "agent",
-        "grant_id": "019a0000-0000-7000-8000-000000000001"
-      }
+    "props": {
+      "orbis/executor": "agent",
+      "orbis/grant": "019a0000-0000-7000-8000-000000000001"
     },
+    "aspects": ["orbis/assignment"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/assignment: человек с именем и may_close",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "human",
-        "assignee": "Биржан",
-        "may_close": true
-      }
+    "props": {
+      "orbis/executor": "human",
+      "orbis/assignee": "Биржан",
+      "orbis/may_close": true
     },
+    "aspects": ["orbis/assignment"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/assignment: нет обязательного executor",
-    "aspects": {
-      "orbis/assignment": {}
-    },
+    "props": {},
+    "aspects": ["orbis/assignment"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/assignment: executor вне enum (robot)",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "robot"
-      }
+    "props": {
+      "orbis/executor": "robot"
     },
+    "aspects": ["orbis/assignment"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/assignment: grant_id не uuid",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "agent",
-        "grant_id": "не-uuid"
-      }
+    "props": {
+      "orbis/executor": "agent",
+      "orbis/grant": "не-uuid"
     },
+    "aspects": ["orbis/assignment"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/assignment: assignee пустой строкой",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "human",
-        "assignee": ""
-      }
+    "props": {
+      "orbis/executor": "human",
+      "orbis/assignee": ""
     },
+    "aspects": ["orbis/assignment"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/assignment: may_close строкой",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "human",
-        "may_close": "yes"
-      }
+    "props": {
+      "orbis/executor": "human",
+      "orbis/may_close": "yes"
     },
+    "aspects": ["orbis/assignment"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: тикетный прогон с грантом и одним шагом",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "grant_id": "019a0000-0000-7000-8000-000000000001"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/grant": "019a0000-0000-7000-8000-000000000001"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/agent-run: рутинный прогон целиком — все вложенные объекты",
-    "aspects": {
-      "orbis/agent-run": {
-        "routine_id": "019a0000-0000-7000-8000-000000000004",
-        "bucket": "2026-08-18T07:00",
-        "attempt": 2,
-        "fail_note": "провайдер недоступен",
-        "proposal": {
-          "pending_id": "019a0000-0000-7000-8000-000000000002",
-          "status": "stale",
-          "decided_at": "2026-08-18T07:10:00.000Z",
-          "mismatches": [
-            {
-              "aspect": "orbis/task",
-              "field": "status",
-              "note": "уже done"
-            }
-          ],
-          "edited_from": "019a0000-0000-7000-8000-000000000003"
-        },
-        "undecided": false,
-        "outcome": "failed",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "finished_at": "2026-08-18T07:20:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
+    "props": {
+      "orbis/run_routine": "019a0000-0000-7000-8000-000000000004",
+      "orbis/run_bucket": "2026-08-18T07:00",
+      "orbis/run_attempt": 2,
+      "orbis/fail_note": "провайдер недоступен",
+      "orbis/run_proposal": {
+        "pending_id": "019a0000-0000-7000-8000-000000000002",
+        "status": "stale",
+        "decided_at": "2026-08-18T07:10:00.000Z",
+        "mismatches": [
           {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "взял слот",
-            "external": false,
-            "action_id": "019a0000-0000-7000-8000-000000000006"
+            "property": "orbis/task_status",
+            "note": "уже done"
           }
         ],
-        "session_url": "https://claude.ai/code/session_1",
-        "report": "готово, проверь",
-        "checkpoint": {
-          "question": "какую ветку брать?",
-          "asked_at": "2026-08-18T07:06:00.000Z"
-        },
-        "reply": {
-          "text": "main",
-          "at": "2026-08-18T07:07:00.000Z"
-        },
-        "usage": {
-          "input_tokens": 100,
-          "output_tokens": 50,
-          "cost_usd": 0.25
-        },
-        "abandon_note": "подметание"
-      }
+        "edited_from": "019a0000-0000-7000-8000-000000000003"
+      },
+      "orbis/undecided": false,
+      "orbis/run_outcome": "failed",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/run_finished_at": "2026-08-18T07:20:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "взял слот",
+          "external": false,
+          "action_id": "019a0000-0000-7000-8000-000000000006"
+        }
+      ],
+      "orbis/session_url": "https://claude.ai/code/session_1",
+      "orbis/run_report": "готово, проверь",
+      "orbis/run_checkpoint": {
+        "question": "какую ветку брать?",
+        "asked_at": "2026-08-18T07:06:00.000Z"
+      },
+      "orbis/run_reply": {
+        "text": "main",
+        "at": "2026-08-18T07:07:00.000Z"
+      },
+      "orbis/run_usage": {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cost_usd": 0.25
+      },
+      "orbis/abandon_note": "подметание"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/agent-run: ручной запуск (bucket manual:)",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "bucket": "manual:2026-08-18T09:12:00.000Z"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/run_bucket": "manual:2026-08-18T09:12:00.000Z"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/agent-run: нет обязательного outcome",
-    "aspects": {
-      "orbis/agent-run": {
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: нет обязательного started_at",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: нет обязательного last_step_at",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: нет обязательного step_count",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: нет обязательного steps",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: outcome вне enum (ok)",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "ok",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_outcome": "ok",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: bucket не по паттерну слота",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "bucket": "07:00"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/run_bucket": "07:00"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: attempt = 0",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "attempt": 0
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/run_attempt": 0
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: step_count отрицательный",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": -1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": -1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: steps не массив",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": "нет"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": "нет"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: undecided строкой",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "undecided": "yes"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/undecided": "yes"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: proposal.status вне enum",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "proposal": {
-          "pending_id": "019a0000-0000-7000-8000-000000000002",
-          "status": "неизвестно"
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
         }
+      ],
+      "orbis/run_proposal": {
+        "pending_id": "019a0000-0000-7000-8000-000000000002",
+        "status": "неизвестно"
       }
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: proposal.edited_from не uuid",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "proposal": {
-          "pending_id": "019a0000-0000-7000-8000-000000000002",
-          "status": "approved",
-          "edited_from": "не-uuid"
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
         }
+      ],
+      "orbis/run_proposal": {
+        "pending_id": "019a0000-0000-7000-8000-000000000002",
+        "status": "approved",
+        "edited_from": "не-uuid"
       }
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: proposal.decided_at не ISO-момент (наследство гейта Задачи 1)",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "proposal": {
-          "pending_id": "019a0000-0000-7000-8000-000000000002",
-          "status": "approved",
-          "decided_at": "вчера"
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
         }
+      ],
+      "orbis/run_proposal": {
+        "pending_id": "019a0000-0000-7000-8000-000000000002",
+        "status": "approved",
+        "decided_at": "вчера"
       }
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: steps[].at не ISO-момент (наследство гейта Задачи 1)",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "вчера",
-            "summary": "шаг",
-            "external": false
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "вчера",
+          "summary": "шаг",
+          "external": false
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: checkpoint.asked_at не ISO-момент (наследство гейта Задачи 1)",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "checkpoint",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "checkpoint": {
-          "question": "что делать?",
-          "asked_at": "вчера"
+    "props": {
+      "orbis/run_outcome": "checkpoint",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
         }
+      ],
+      "orbis/run_checkpoint": {
+        "question": "что делать?",
+        "asked_at": "вчера"
       }
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: reply.at не ISO-момент (наследство гейта Задачи 1)",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "answered",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "reply": {
-          "text": "main",
-          "at": "вчера"
+    "props": {
+      "orbis/run_outcome": "answered",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
         }
+      ],
+      "orbis/run_reply": {
+        "text": "main",
+        "at": "вчера"
       }
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: steps[].summary пустой строкой",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "",
-            "external": false
-          }
-        ]
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "",
+          "external": false
+        }
+      ]
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: usage.cost_usd отрицательный",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "usage": {
-          "cost_usd": -1
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
         }
+      ],
+      "orbis/run_usage": {
+        "cost_usd": -1
       }
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: session_url не URL",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "session_url": "не url"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/session_url": "не url"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: routine_id не uuid",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "routine_id": "рутина"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/run_routine": "рутина"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/agent-run: project_id — поле, удалённое §А8",
-    "aspects": {
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "project_id": "019a0000-0000-7000-8000-000000000005"
-      }
+    "props": {
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ],
+      "orbis/project_id": "019a0000-0000-7000-8000-000000000005"
     },
+    "aspects": ["orbis/agent-run"],
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "PROJECT_ID_REMOVED"
   },
   {
     "name": "orbis/routine: минимальная форма",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "07:00",
-        "mode": "propose"
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "07:00",
+      "orbis/routine_mode": "propose"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/routine: полная форма с днями и инструментами",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "paused",
-        "at": "23:59",
-        "mode": "act",
-        "days": ["mo", "we", "su"],
-        "allowed_tools": ["entity_create"]
-      }
+    "props": {
+      "orbis/routine_stage": "paused",
+      "orbis/routine_at": "23:59",
+      "orbis/routine_mode": "act",
+      "orbis/routine_days": ["mo", "we", "su"],
+      "orbis/allowed_tools": ["entity_create"]
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "orbis/routine: нет обязательного stage",
-    "aspects": {
-      "orbis/routine": {
-        "at": "07:00",
-        "mode": "propose"
-      }
+    "props": {
+      "orbis/routine_at": "07:00",
+      "orbis/routine_mode": "propose"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: нет обязательного at",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "mode": "propose"
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_mode": "propose"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: нет обязательного mode",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "07:00"
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "07:00"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: stage вне enum (off)",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "off",
-        "at": "07:00",
-        "mode": "propose"
-      }
+    "props": {
+      "orbis/routine_stage": "off",
+      "orbis/routine_at": "07:00",
+      "orbis/routine_mode": "propose"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: mode вне enum (ask)",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "07:00",
-        "mode": "ask"
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "07:00",
+      "orbis/routine_mode": "ask"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: at без ведущего нуля («7:00»)",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "7:00",
-        "mode": "propose"
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "7:00",
+      "orbis/routine_mode": "propose"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: at «24:00»",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "24:00",
-        "mode": "propose"
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "24:00",
+      "orbis/routine_mode": "propose"
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: пустой список дней",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "07:00",
-        "mode": "propose",
-        "days": []
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "07:00",
+      "orbis/routine_mode": "propose",
+      "orbis/routine_days": []
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: день вне алфавита (xx)",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "07:00",
-        "mode": "propose",
-        "days": ["mo", "xx"]
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "07:00",
+      "orbis/routine_mode": "propose",
+      "orbis/routine_days": ["mo", "xx"]
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "orbis/routine: пустое имя инструмента",
-    "aspects": {
-      "orbis/routine": {
-        "stage": "active",
-        "at": "07:00",
-        "mode": "propose",
-        "allowed_tools": [""]
-      }
+    "props": {
+      "orbis/routine_stage": "active",
+      "orbis/routine_at": "07:00",
+      "orbis/routine_mode": "propose",
+      "orbis/allowed_tools": [""]
     },
+    "aspects": ["orbis/routine"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
     "name": "сквозной пример §2.4: задача + расписание + плановый расход на одной сущности",
-    "aspects": {
-      "orbis/task": {
-        "status": "planned",
-        "priority": "medium",
-        "due_date": "2026-07-11"
-      },
-      "orbis/schedule": {
-        "start_at": "2026-07-11T00:00:00+03:00",
-        "all_day": true,
-        "timezone": "Europe/Moscow"
-      },
-      "orbis/financial": {
-        "amount": "8000.00",
-        "currency": "RUB",
-        "direction": "expense",
-        "category_ref": "019d48ea-2e00-7a52-876a-c301529b0456",
-        "occurred_on": "2026-07-11",
-        "planned": true
-      }
+    "props": {
+      "orbis/task_status": "planned",
+      "orbis/priority": "medium",
+      "orbis/due_date": "2026-07-11",
+      "orbis/start_at": "2026-07-11T00:00:00+03:00",
+      "orbis/all_day": true,
+      "orbis/timezone": "Europe/Moscow",
+      "orbis/amount": "8000.00",
+      "orbis/currency": "RUB",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-2e00-7a52-876a-c301529b0456",
+      "orbis/occurred_on": "2026-07-11",
+      "orbis/planned": true
     },
+    "aspects": ["orbis/task", "orbis/schedule", "orbis/financial"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "слияние В1: financial + budget с ОДНОЙ категорией и валютой",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "currency": "RUB"
-      },
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30",
-        "currency": "RUB"
-      }
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/currency": "RUB",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/financial", "orbis/budget"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "слияние В1: assignment + agent-run с ОДНИМ грантом",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "agent",
-        "grant_id": "019a0000-0000-7000-8000-000000000001"
-      },
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "grant_id": "019a0000-0000-7000-8000-000000000001"
-      }
+    "props": {
+      "orbis/executor": "agent",
+      "orbis/grant": "019a0000-0000-7000-8000-000000000001",
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/assignment", "orbis/agent-run"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "проект и репозиторий на одной сущности",
-    "aspects": {
-      "orbis/project": {
-        "stage": "active"
-      },
-      "orbis/repo": {
-        "url": "https://github.com/qvenge/orbis",
-        "default_branch": "main"
-      }
+    "props": {
+      "orbis/project_stage": "active",
+      "orbis/repo_url": "https://github.com/qvenge/orbis",
+      "orbis/default_branch": "main"
     },
+    "aspects": ["orbis/project", "orbis/repo"],
     "legacyVerdict": "ok",
     "newVerdict": "ok"
   },
   {
     "name": "неизвестный аспект",
-    "aspects": {
-      "orbis/unknown": {}
-    },
+    "props": {},
+    "aspects": ["orbis/unknown"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
   },
   {
-    "name": "слияние В1: financial + budget с РАЗНЫМИ категориями",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a"
-      },
-      "orbis/budget": {
-        "category_ref": "019d48ea-2e00-7a52-876a-c301529b0456",
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30"
-      }
+    "name": "слияние В1: financial + budget делят одну категорию",
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/financial", "orbis/budget"],
     "legacyVerdict": "ok",
-    "newVerdict": "reject",
-    "expectedDiff": "MERGED_VALUE_CONFLICT"
+    "newVerdict": "ok"
   },
   {
-    "name": "слияние В1: financial + budget с РАЗНЫМИ валютами",
-    "aspects": {
-      "orbis/financial": {
-        "amount": "340.00",
-        "direction": "expense",
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "currency": "RUB"
-      },
-      "orbis/budget": {
-        "category_ref": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-        "limit": "30000.00",
-        "period_start": "2026-06-01",
-        "period_end": "2026-06-30",
-        "currency": "USD"
-      }
+    "name": "слияние В1: financial + budget делят одну валюту",
+    "props": {
+      "orbis/amount": "340.00",
+      "orbis/direction": "expense",
+      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
+      "orbis/currency": "RUB",
+      "orbis/limit": "30000.00",
+      "orbis/period_start": "2026-06-01",
+      "orbis/period_end": "2026-06-30"
     },
+    "aspects": ["orbis/financial", "orbis/budget"],
     "legacyVerdict": "ok",
-    "newVerdict": "reject",
-    "expectedDiff": "MERGED_VALUE_CONFLICT"
+    "newVerdict": "ok"
   },
   {
-    "name": "слияние В1: assignment + agent-run с РАЗНЫМИ грантами",
-    "aspects": {
-      "orbis/assignment": {
-        "executor": "agent",
-        "grant_id": "019a0000-0000-7000-8000-000000000001"
-      },
-      "orbis/agent-run": {
-        "outcome": "running",
-        "started_at": "2026-08-18T07:00:00.000Z",
-        "last_step_at": "2026-08-18T07:05:00.000Z",
-        "step_count": 1,
-        "steps": [
-          {
-            "seq": 1,
-            "at": "2026-08-18T07:05:00.000Z",
-            "summary": "создал ветку",
-            "external": true
-          }
-        ],
-        "grant_id": "019a0000-0000-7000-8000-000000000009"
-      }
+    "name": "слияние В1: assignment + agent-run делят один грант",
+    "props": {
+      "orbis/executor": "agent",
+      "orbis/grant": "019a0000-0000-7000-8000-000000000001",
+      "orbis/run_outcome": "running",
+      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
+      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
+      "orbis/step_count": 1,
+      "orbis/run_steps": [
+        {
+          "seq": 1,
+          "at": "2026-08-18T07:05:00.000Z",
+          "summary": "создал ветку",
+          "external": true
+        }
+      ]
     },
+    "aspects": ["orbis/assignment", "orbis/agent-run"],
     "legacyVerdict": "ok",
-    "newVerdict": "reject",
-    "expectedDiff": "MERGED_VALUE_CONFLICT"
+    "newVerdict": "ok"
   },
   {
     "name": "orbis/task: due_date «2026-02-30» — форма верна, дня в календаре нет",
-    "aspects": {
-      "orbis/task": {
-        "status": "planned",
-        "due_date": "2026-02-30"
-      }
+    "props": {
+      "orbis/task_status": "planned",
+      "orbis/due_date": "2026-02-30"
     },
+    "aspects": ["orbis/task"],
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "CALENDAR_DAY_EXISTS"

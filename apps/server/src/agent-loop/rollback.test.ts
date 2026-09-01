@@ -80,15 +80,14 @@ async function scene(title: string): Promise<Scene> {
   const project = await seedEntity(owner, {
     title: `Проект отката (${title})`,
     tags: [],
-    aspects: { 'orbis/project': { stage: 'active' } },
+    props: { 'orbis/project_stage': 'active' },
+    aspects: ['orbis/project'],
   });
   const ticket = await seedEntity(owner, {
     title,
     tags: [],
-    aspects: {
-      'orbis/task': { status: 'planned' },
-      'orbis/assignment': { executor: 'agent', grant_id: grantId },
-    },
+    props: { 'orbis/task_status': 'planned', 'orbis/executor': 'agent', 'orbis/grant': grantId },
+    aspects: ['orbis/task', 'orbis/assignment'],
   });
   await link(owner, project.id, ticket.id, 'ticket');
   return { owner, grantId, ticketId: ticket.id };

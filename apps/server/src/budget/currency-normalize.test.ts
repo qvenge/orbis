@@ -50,22 +50,7 @@ function invariantOf(r: ExecuteErr): unknown {
   return (r.error.details as { invariant?: unknown } | undefined)?.invariant;
 }
 
-function budgetData(
-  categoryRef: string,
-  start: string,
-  end: string,
-  over: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
-    category_ref: categoryRef,
-    limit: '10000.00',
-    period_start: start,
-    period_end: end,
-    ...over,
-  };
-}
-
-/** Тот же конверт СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+/** Конверт СВОЙСТВАМИ — она же форма `data` у `attach_*` (§А9-1). */
 function budgetProps(
   categoryRef: string,
   start: string,
@@ -113,7 +98,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Конверт без валюты',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(newId(), '2026-07-01', '2026-07-31') },
+          props: budgetProps(newId(), '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -131,7 +117,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Конверт EUR-пользователя',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(newId(), '2026-07-01', '2026-07-31') },
+          props: budgetProps(newId(), '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -149,7 +136,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Без currency (нормализуется в RUB)',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -160,9 +148,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Явная RUB — та же комбинация',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31', { currency: 'RUB' }),
-          },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31', { 'orbis/currency': 'RUB' }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -180,9 +167,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Явная RUB',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31', { currency: 'RUB' }),
-          },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31', { 'orbis/currency': 'RUB' }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -193,7 +179,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Без currency',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -210,7 +197,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Без currency → RUB',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -221,9 +209,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'EUR-вариант',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31', { currency: 'EUR' }),
-          },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31', { 'orbis/currency': 'EUR' }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -239,9 +226,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Существующий RUB-конверт',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31', { currency: 'RUB' }),
-          },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31', { 'orbis/currency': 'RUB' }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -286,9 +272,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Конверт с явной валютой',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31', { currency: 'RUB' }),
-          },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31', { 'orbis/currency': 'RUB' }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -297,7 +282,11 @@ describe('нормализация currency конверта NULL→defaultCurre
     ok(
       await execute(
         db,
-        req(user, 'entity_update', { id, aspects: { 'orbis/budget': { currency: null } } }),
+        req(user, 'entity_update', {
+          id,
+          unset: ['orbis/currency'],
+          aspects: { attach: ['orbis/budget'] },
+        }),
         { sink },
       ),
     );
@@ -313,7 +302,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Июль без currency → RUB',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -324,9 +314,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         req(user, 'entity_create', {
           title: 'Август, явная RUB',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(cat, '2026-08-01', '2026-08-31', { currency: 'RUB' }),
-          },
+          props: budgetProps(cat, '2026-08-01', '2026-08-31', { 'orbis/currency': 'RUB' }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -337,7 +326,8 @@ describe('нормализация currency конверта NULL→defaultCurre
         db,
         req(user, 'entity_update', {
           id: augId,
-          aspects: { 'orbis/budget': { period_start: '2026-07-01', period_end: '2026-07-31' } },
+          props: { 'orbis/period_start': '2026-07-01', 'orbis/period_end': '2026-07-31' },
+          aspects: { attach: ['orbis/budget'] },
         }),
         { sink },
       ),

@@ -941,8 +941,18 @@ describe('pending-запись единицы: kind и условная обяз
 
 describe('unitHash и ключи дедупа единиц (ОЧ.9, приёмка 15)', () => {
   test('unitHash: перестановка ключей объекта не меняет хеш; другой input — другой хеш; формат /^[0-9a-f]{64}$/; deferDedupeKey от переставленных ключей JSON одинаков (приёмка 15)', () => {
-    const input = { id: 'e1', archived: true, aspects: { 'orbis/task': { status: 'done' } } };
-    const shuffled = { aspects: { 'orbis/task': { status: 'done' } }, archived: true, id: 'e1' };
+    const input = {
+      id: 'e1',
+      archived: true,
+      props: { 'orbis/task_status': 'done' },
+      aspects: { attach: ['orbis/task'] },
+    };
+    const shuffled = {
+      props: { 'orbis/task_status': 'done' },
+      aspects: { attach: ['orbis/task'] },
+      archived: true,
+      id: 'e1',
+    };
 
     // jsonb не хранит порядок ключей: пришедший через БД payload обязан дать тот же хеш
     expect(unitHash({ tool: 'entity_update', input })).toBe(

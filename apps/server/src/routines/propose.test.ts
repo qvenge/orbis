@@ -293,7 +293,8 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const waiting = await seedEntity(owner, {
       title: 'Ждём ответа банка',
       tags: [],
-      aspects: { 'orbis/task': { status: 'waiting', waiting_for: 'ответа банка' } },
+      props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': 'ответа банка' },
+      aspects: ['orbis/task'],
     });
 
     const r = await dispatchTool(ctx, 'orbis_propose', {
@@ -357,13 +358,16 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       // СТАРОЙ картой намеренно: она проходит через переходный перевод, который и
       // заворачивает текст запроса в `{text}` (§А5-2) — то самое расхождение форм, которое
       // тест и проверяет. Путь `execute` обе формы принимает (exec-надмножество).
-      aspects: {
-        'orbis/goal': {
-          target_value: '100.00',
-          unit: 'км',
-          progress_source: { query: 'аспект=финансы', aggregate: 'sum', field: 'amount' },
+      props: {
+        'orbis/target_value': '100.00',
+        'orbis/unit': 'км',
+        'orbis/progress_source': {
+          query: { text: 'аспект=финансы' },
+          aggregate: 'sum',
+          field: 'amount',
         },
       },
+      aspects: ['orbis/goal'],
     });
 
     // Две формы одного значения — если они совпадут, тест перестанет что-либо ловить.

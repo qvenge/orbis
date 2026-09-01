@@ -138,15 +138,14 @@ function envelope(
   return {
     title: `Конверт ${categoryRef.slice(0, 8)} ${periodStart}`,
     tags: [],
-    aspects: {
-      'orbis/budget': {
-        category_ref: categoryRef,
-        limit,
-        period_start: periodStart,
-        period_end: periodEnd,
-        ...over,
-      },
+    props: {
+      'orbis/finance_category': categoryRef,
+      'orbis/limit': limit,
+      'orbis/period_start': periodStart,
+      'orbis/period_end': periodEnd,
+      ...over,
     },
+    aspects: ['orbis/budget'],
   };
 }
 
@@ -159,15 +158,14 @@ function txn(
   return {
     title: `Транзакция ${amount}`,
     tags: [],
-    aspects: {
-      'orbis/financial': {
-        amount,
-        direction: 'expense',
-        category_ref: categoryRef,
-        occurred_on: occurredOn,
-        ...over,
-      },
+    props: {
+      'orbis/amount': amount,
+      'orbis/direction': 'expense',
+      'orbis/finance_category': categoryRef,
+      'orbis/occurred_on': occurredOn,
+      ...over,
     },
+    aspects: ['orbis/financial'],
   };
 }
 
@@ -186,14 +184,16 @@ beforeAll(async () => {
     await exec(userA, 'entity_create', {
       title: 'Хобби',
       tags: [],
-      aspects: { 'orbis/category': { icon: '🎨', spend_class: 'discretionary' } },
+      props: { 'orbis/icon': '🎨', 'orbis/spend_class': 'discretionary' },
+      aspects: ['orbis/category'],
     })
   ).id;
   catChild = (
     await exec(userA, 'entity_create', {
       title: 'Хобби — кино',
       tags: [],
-      aspects: { 'orbis/category': { icon: '🎬', spend_class: 'discretionary' } },
+      props: { 'orbis/icon': '🎬', 'orbis/spend_class': 'discretionary' },
+      aspects: ['orbis/category'],
     })
   ).id;
   await exec(userA, 'relation_create', {
@@ -207,14 +207,14 @@ beforeAll(async () => {
     await exec(
       userA,
       'entity_create',
-      envelope(catFood, cmStart, cmEnd, '30000.00', { carryover: '1200.00' }),
+      envelope(catFood, cmStart, cmEnd, '30000.00', { 'orbis/carryover': '1200.00' }),
     )
   ).id;
   envUsd = (
     await exec(
       userA,
       'entity_create',
-      envelope(catFood, cmStart, cmEnd, '1000.00', { currency: 'USD' }),
+      envelope(catFood, cmStart, cmEnd, '1000.00', { 'orbis/currency': 'USD' }),
     )
   ).id;
   envHousing = (await exec(userA, 'entity_create', envelope(catHousing, cmStart, cmEnd, '1000.00')))
@@ -228,7 +228,7 @@ beforeAll(async () => {
     await exec(
       userA,
       'entity_create',
-      envelope(catChild, cmStart, cmEnd, '500.00', { currency: 'USD' }),
+      envelope(catChild, cmStart, cmEnd, '500.00', { 'orbis/currency': 'USD' }),
     )
   ).id;
   // Конверты здоровья прошлого/текущего месяцев — данные categoryTrend (§3.2)
@@ -265,16 +265,20 @@ beforeAll(async () => {
     await exec(
       userA,
       'entity_create',
-      txn(catFood, '8000.00', addDaysISO(today, 3), { planned: true }),
+      txn(catFood, '8000.00', addDaysISO(today, 3), { 'orbis/planned': true }),
     )
   ).id; // ручная planned-покупка §2.7
-  await exec(userA, 'entity_create', txn(catFood, '500.00', today, { currency: 'USD' })); // чужая валюта §5
-  await exec(userA, 'entity_create', txn(catSalary, '165000.00', today, { direction: 'income' })); // доход
+  await exec(userA, 'entity_create', txn(catFood, '500.00', today, { 'orbis/currency': 'USD' })); // чужая валюта §5
+  await exec(
+    userA,
+    'entity_create',
+    txn(catSalary, '165000.00', today, { 'orbis/direction': 'income' }),
+  ); // доход
   await exec(userA, 'entity_create', txn(catTransport, '3200.00', today)); // unbudgeted (конверта на месяц нет)
   await exec(userA, 'entity_create', txn(catHousing, '900.00', today)); // 90% лимита → alert
   await exec(userA, 'entity_create', txn(catEnt, '150.00', today)); // перерасход remaining<0
   await exec(userA, 'entity_create', txn(catChild, '1000.00', today)); // иерархия §2.10
-  await exec(userA, 'entity_create', txn(catChild, '100.00', today, { currency: 'USD' })); // → envChildUsd
+  await exec(userA, 'entity_create', txn(catChild, '100.00', today, { 'orbis/currency': 'USD' })); // → envChildUsd
   await exec(userA, 'entity_create', txn(catEdu, '340.00', '2026-05-31')); // приёмка §7.1: created_at=сейчас
   await exec(userA, 'entity_create', txn(catEdu, '8500.00', '2026-03-15')); // ровно 85% envBoundary
   await exec(userA, 'entity_create', txn(catHealth, '150.00', `${prevMonth}-15`)); // тренд: прошлый месяц
@@ -284,19 +288,16 @@ beforeAll(async () => {
   await exec(userA, 'entity_create', {
     title: 'Netflix',
     tags: [],
-    aspects: {
-      'orbis/schedule': {
-        start_at: `${addDaysISO(today, 1)}T12:00:00+03:00`,
-        timezone: TZ,
-        recurrence: { freq: 'weekly', interval: 1 },
-      },
-      'orbis/financial': {
-        amount: '599.00',
-        direction: 'expense',
-        category_ref: catSubs,
-        recurring: true,
-      },
+    props: {
+      'orbis/start_at': `${addDaysISO(today, 1)}T12:00:00+03:00`,
+      'orbis/timezone': TZ,
+      'orbis/recurrence': { freq: 'weekly', interval: 1 },
+      'orbis/amount': '599.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': catSubs,
+      'orbis/recurring': true,
     },
+    aspects: ['orbis/schedule', 'orbis/financial'],
   });
 });
 
@@ -352,14 +353,16 @@ describe('множество «конверт-родитель» на интер
       await exec(userC, 'entity_create', {
         title: 'Верхняя категория',
         tags: [],
-        aspects: { 'orbis/category': { spend_class: 'discretionary' } },
+        props: { 'orbis/spend_class': 'discretionary' },
+        aspects: ['orbis/category'],
       })
     ).id;
     const nested = (
       await exec(userC, 'entity_create', {
         title: 'Вложенная категория',
         tags: [],
-        aspects: { 'orbis/category': { spend_class: 'discretionary' } },
+        props: { 'orbis/spend_class': 'discretionary' },
+        aspects: ['orbis/category'],
       })
     ).id;
     await exec(userC, 'relation_create', { source_id: top, target_id: nested, role: 'subitem' });
@@ -670,19 +673,16 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
     const tpl = await exec(user, 'entity_create', {
       title: 'Шаблон с висящей связью',
       tags: [],
-      aspects: {
-        'orbis/schedule': {
-          start_at: `${today}T12:00:00+03:00`,
-          timezone: TZ,
-          recurrence: { freq: 'monthly', interval: 1, until: addDaysISO(today, -1) },
-        },
-        'orbis/financial': {
-          amount: '700.00',
-          direction: 'expense',
-          category_ref: cat,
-          occurred_on: today,
-        },
+      props: {
+        'orbis/start_at': `${today}T12:00:00+03:00`,
+        'orbis/timezone': TZ,
+        'orbis/recurrence': { freq: 'monthly', interval: 1, until: addDaysISO(today, -1) },
+        'orbis/amount': '700.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/occurred_on': today,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
     // Висящая связь (легаси-данные/ручной relation_create): бюджет-хук на relation_create
     // не срабатывает — связь остаётся, spent обязан отфильтровать шаблон сам
@@ -732,19 +732,16 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
     await exec(user, 'entity_create', {
       title: 'Подписка',
       tags: [],
-      aspects: {
-        'orbis/schedule': {
-          start_at: `${addDaysISO(today, 1)}T12:00:00+03:00`,
-          timezone: TZ,
-          recurrence: { freq: 'weekly', interval: 1 },
-        },
-        'orbis/financial': {
-          amount: '599.00',
-          direction: 'expense',
-          category_ref: newId(),
-          recurring: true,
-        },
+      props: {
+        'orbis/start_at': `${addDaysISO(today, 1)}T12:00:00+03:00`,
+        'orbis/timezone': TZ,
+        'orbis/recurrence': { freq: 'weekly', interval: 1 },
+        'orbis/amount': '599.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': newId(),
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
     const instanceCount = () =>
       withIdentity(db, user, async (tx) => {
@@ -793,19 +790,16 @@ describe('clock-шов: границы дат (Task A1)', () => {
     await exec(user, 'entity_create', {
       title: 'Подписка 5-го числа',
       tags: [],
-      aspects: {
-        'orbis/schedule': {
-          start_at: '2026-09-05T12:00:00+03:00',
-          timezone: TZ,
-          recurrence: { freq: 'monthly', interval: 1 },
-        },
-        'orbis/financial': {
-          amount: '1000.00',
-          direction: 'expense',
-          category_ref: cat,
-          recurring: true,
-        },
+      props: {
+        'orbis/start_at': '2026-09-05T12:00:00+03:00',
+        'orbis/timezone': TZ,
+        'orbis/recurrence': { freq: 'monthly', interval: 1 },
+        'orbis/amount': '1000.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
 
     // 23:00 04.09 по Москве: инстанс материализован, но ещё planned — только Coming up

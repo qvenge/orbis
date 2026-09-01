@@ -24,8 +24,8 @@ import {
   adminDb,
   appDb,
   divergentEntityRow,
+  entityColumns,
   freshUserId,
-  legacyEntityColumns,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -590,19 +590,20 @@ describe('import.review: статусы строк (§3.4.1)', () => {
         ownerId: user,
         title: 'NETFLIX',
         tags: [],
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/financial': {
-            amount: '599.00',
-            direction: 'expense',
-            category_ref: foodId,
-            occurred_on: '2026-05-06',
-            counterparty: 'NETFLIX',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/amount': '599.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': foodId,
+            'orbis/occurred_on': '2026-05-06',
+            'orbis/counterparty': 'NETFLIX',
+            'orbis/start_at': '2026-05-06T00:00:00Z',
+            'orbis/recurrence': { freq: 'monthly', interval: 1 },
           },
-          'orbis/schedule': {
-            start_at: '2026-05-06T00:00:00Z',
-            recurrence: { freq: 'monthly', interval: 1 },
-          },
-        })),
+          ['orbis/financial', 'orbis/schedule'],
+        )),
         createdAt: new Date(),
         updatedAt: new Date(),
       }),
@@ -908,15 +909,18 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
         title: 'Архивный обед',
         tags: [],
         archived: true,
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/financial': {
-            amount: '340.00',
-            direction: 'expense',
-            category_ref: foodId,
-            occurred_on: '2026-05-03',
-            counterparty: 'Обед',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/amount': '340.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': foodId,
+            'orbis/occurred_on': '2026-05-03',
+            'orbis/counterparty': 'Обед',
           },
-        })),
+          ['orbis/financial'],
+        )),
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -948,15 +952,18 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
         ownerId: user,
         title: 'Ручной обед',
         tags: [],
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/financial': {
-            amount: '340.00',
-            direction: 'expense',
-            category_ref: foodId,
-            occurred_on: '2026-05-03',
-            counterparty: 'Обед',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/amount': '340.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': foodId,
+            'orbis/occurred_on': '2026-05-03',
+            'orbis/counterparty': 'Обед',
           },
-        })),
+          ['orbis/financial'],
+        )),
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -1095,15 +1102,18 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
         ownerId: user,
         title: 'Конверт Еда',
         tags: [],
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/budget': {
-            category_ref: foodId,
-            limit: '10000.00',
-            currency: 'RUB',
-            period_start: '2026-05-01',
-            period_end: '2026-05-31',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/finance_category': foodId,
+            'orbis/limit': '10000.00',
+            'orbis/currency': 'RUB',
+            'orbis/period_start': '2026-05-01',
+            'orbis/period_end': '2026-05-31',
           },
-        })),
+          ['orbis/budget'],
+        )),
         createdAt: new Date(),
         updatedAt: new Date(),
       }),
@@ -1163,15 +1173,18 @@ describe('Undo импорта: origins удаляются физически (§
         ownerId: user,
         title: 'Ручной обед',
         tags: [],
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/financial': {
-            amount: '999.00',
-            direction: 'expense',
-            category_ref: foodId,
-            occurred_on: '2026-05-09',
-            counterparty: 'Ручной обед',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/amount': '999.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': foodId,
+            'orbis/occurred_on': '2026-05-09',
+            'orbis/counterparty': 'Ручной обед',
           },
-        })),
+          ['orbis/financial'],
+        )),
         createdAt: new Date(),
         updatedAt: new Date(),
       });

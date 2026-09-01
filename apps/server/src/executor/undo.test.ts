@@ -193,9 +193,12 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
             title: 'Старый',
             tags: [],
             body: 'v1',
-            aspects: {
-              'orbis/task': { status: 'inbox', priority: 'low', due_date: '2026-07-01' },
+            props: {
+              'orbis/task_status': 'inbox',
+              'orbis/priority': 'low',
+              'orbis/due_date': '2026-07-01',
             },
+            aspects: ['orbis/task'],
           },
           { clock: () => T },
         ),
@@ -217,7 +220,8 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
             title: 'Новый',
             body: 'v2',
             expectedUpdatedAt: e.updatedAt,
-            aspects: { 'orbis/task': { status: 'done', priority: 'high' } },
+            props: { 'orbis/task_status': 'done', 'orbis/priority': 'high' },
+            aspects: { attach: ['orbis/task'] },
           },
           { clock: () => T },
         ),
@@ -265,7 +269,8 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
         db,
         req(user, 'entity_update', {
           id: e.id,
-          aspects: { 'orbis/task': { due_date: '2026-09-09' } },
+          props: { 'orbis/due_date': '2026-09-09' },
+          aspects: { attach: ['orbis/task'] },
         }),
         { sink },
       ),
@@ -301,7 +306,8 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
         req(user, 'entity_create', {
           title: 'Заметка',
           tags: [],
-          aspects: { 'orbis/note': { pinned: true } },
+          props: { 'orbis/pinned': true },
+          aspects: ['orbis/note'],
         }),
         { sink },
       ),
@@ -361,25 +367,17 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
         req(user, 'entity_create', {
           title: 'Транзакция-конверт',
           tags: [],
-          aspects: {
-            'orbis/financial': {
-              amount: '340.00',
-              currency: 'RUB',
-              direction: 'expense',
-              category_ref: catA,
-              occurred_on: '2026-08-26',
-            },
-            // Период конверта НЕ покрывает дату транзакции намеренно: иначе бюджет-хук
-            // связал бы запись саму с собой (категория и валюта слиты по построению) и
-            // упал бы `self_relation`, маскируя проверяемое здесь
-            'orbis/budget': {
-              category_ref: catA,
-              limit: '1000.00',
-              currency: 'RUB',
-              period_start: '2026-11-01',
-              period_end: '2026-11-30',
-            },
+          props: {
+            'orbis/amount': '340.00',
+            'orbis/currency': 'RUB',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': catA,
+            'orbis/occurred_on': '2026-08-26',
+            'orbis/limit': '1000.00',
+            'orbis/period_start': '2026-11-01',
+            'orbis/period_end': '2026-11-30',
           },
+          aspects: ['orbis/financial', 'orbis/budget'],
         }),
         { sink },
       ),
@@ -391,7 +389,8 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
         db,
         req(user, 'entity_update', {
           id: e.id,
-          aspects: { 'orbis/financial': { category_ref: catB } },
+          props: { 'orbis/finance_category': catB },
+          aspects: { attach: ['orbis/financial'] },
         }),
         { sink },
       ),
@@ -432,14 +431,13 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
         req(user, 'entity_create', {
           title: 'Расход без валюты',
           tags: [],
-          aspects: {
-            'orbis/financial': {
-              amount: '340.00',
-              direction: 'expense',
-              category_ref: cat,
-              occurred_on: '2026-08-26',
-            },
+          props: {
+            'orbis/amount': '340.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': cat,
+            'orbis/occurred_on': '2026-08-26',
           },
+          aspects: ['orbis/financial'],
         }),
         { sink },
       ),
@@ -596,13 +594,12 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
         req(user, 'entity_create', {
           title: 'Шаблон с материализацией',
           tags: [],
-          aspects: {
-            'orbis/schedule': {
-              start_at: `${today}T09:00:00+03:00`,
-              timezone: 'Europe/Moscow',
-              recurrence: { freq: 'daily', interval: 1 },
-            },
+          props: {
+            'orbis/start_at': `${today}T09:00:00+03:00`,
+            'orbis/timezone': 'Europe/Moscow',
+            'orbis/recurrence': { freq: 'daily', interval: 1 },
           },
+          aspects: ['orbis/schedule'],
         }),
         { sink },
       ),

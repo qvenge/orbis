@@ -47,31 +47,31 @@ function ok(r: ExecuteResult) {
   return r;
 }
 
-function budgetData(
+function budgetProps(
   categoryRef: string,
   periodStart: string,
   periodEnd: string,
   over: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    category_ref: categoryRef,
-    limit: '30000.00',
-    period_start: periodStart,
-    period_end: periodEnd,
+    'orbis/finance_category': categoryRef,
+    'orbis/limit': '30000.00',
+    'orbis/period_start': periodStart,
+    'orbis/period_end': periodEnd,
     ...over,
   };
 }
 
-function finData(
+function finProps(
   categoryRef: string,
   occurredOn: string,
   over: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    amount: '340.00',
-    direction: 'expense',
-    category_ref: categoryRef,
-    occurred_on: occurredOn,
+    'orbis/amount': '340.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': categoryRef,
+    'orbis/occurred_on': occurredOn,
     ...over,
   };
 }
@@ -136,15 +136,18 @@ async function makeScene(): Promise<Scene> {
   const catC = newId();
   const monthly = await createEntity(user, {
     title: 'Еда — июль',
-    aspects: { 'orbis/budget': budgetData(catA, '2026-07-01', '2026-07-31') },
+    props: budgetProps(catA, '2026-07-01', '2026-07-31'),
+    aspects: ['orbis/budget'],
   });
   const narrow = await createEntity(user, {
     title: 'Еда — отпуск',
-    aspects: { 'orbis/budget': budgetData(catA, '2026-07-10', '2026-07-14') },
+    props: budgetProps(catA, '2026-07-10', '2026-07-14'),
+    aspects: ['orbis/budget'],
   });
   const eur = await createEntity(user, {
     title: 'Транспорт — июль (EUR)',
-    aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-31', { currency: 'EUR' }) },
+    props: budgetProps(catB, '2026-07-01', '2026-07-31', { 'orbis/currency': 'EUR' }),
+    aspects: ['orbis/budget'],
   });
   return { user, catA, catB, catC, monthly: monthly.id, narrow: narrow.id, eur: eur.id };
 }
@@ -152,18 +155,18 @@ async function makeScene(): Promise<Scene> {
 /** Строки импорта: разные категории, даты и валюты — включая границы отпускного окна. */
 function sceneRows(s: Scene): Array<{ fin: Record<string, unknown>; expected: string | null }> {
   return [
-    { fin: finData(s.catA, '2026-07-05'), expected: s.monthly },
-    { fin: finData(s.catA, '2026-07-09'), expected: s.monthly },
-    { fin: finData(s.catA, '2026-07-10'), expected: s.narrow }, // левая граница окна
-    { fin: finData(s.catA, '2026-07-12'), expected: s.narrow },
-    { fin: finData(s.catA, '2026-07-14'), expected: s.narrow }, // правая граница окна
-    { fin: finData(s.catA, '2026-07-15'), expected: s.monthly },
-    { fin: finData(s.catA, '2026-07-31'), expected: s.monthly },
-    { fin: finData(s.catA, '2026-06-30'), expected: null }, // до периода
-    { fin: finData(s.catA, '2026-08-01'), expected: null }, // после периода
-    { fin: finData(s.catB, '2026-07-12', { currency: 'EUR' }), expected: s.eur },
-    { fin: finData(s.catB, '2026-07-12'), expected: null }, // валюта не совпала
-    { fin: finData(s.catC, '2026-07-12'), expected: null }, // категория без конверта
+    { fin: finProps(s.catA, '2026-07-05'), expected: s.monthly },
+    { fin: finProps(s.catA, '2026-07-09'), expected: s.monthly },
+    { fin: finProps(s.catA, '2026-07-10'), expected: s.narrow }, // левая граница окна
+    { fin: finProps(s.catA, '2026-07-12'), expected: s.narrow },
+    { fin: finProps(s.catA, '2026-07-14'), expected: s.narrow }, // правая граница окна
+    { fin: finProps(s.catA, '2026-07-15'), expected: s.monthly },
+    { fin: finProps(s.catA, '2026-07-31'), expected: s.monthly },
+    { fin: finProps(s.catA, '2026-06-30'), expected: null }, // до периода
+    { fin: finProps(s.catA, '2026-08-01'), expected: null }, // после периода
+    { fin: finProps(s.catB, '2026-07-12', { 'orbis/currency': 'EUR' }), expected: s.eur },
+    { fin: finProps(s.catB, '2026-07-12'), expected: null }, // валюта не совпала
+    { fin: finProps(s.catC, '2026-07-12'), expected: null }, // категория без конверта
   ];
 }
 
@@ -172,9 +175,9 @@ describe('батч-селектор конвертов: эквивалентно
     const s = await makeScene();
     const rows = sceneRows(s).map((r, i) => ({
       key: `r${i}`,
-      categoryRef: r.fin.category_ref as string,
-      currency: (r.fin.currency as string | undefined) ?? 'RUB',
-      occurredOn: r.fin.occurred_on as string,
+      categoryRef: r.fin['orbis/finance_category'] as string,
+      currency: (r.fin['orbis/currency'] as string | undefined) ?? 'RUB',
+      occurredOn: r.fin['orbis/occurred_on'] as string,
     }));
 
     const batch = await withIdentity(db, s.user, (tx) =>
@@ -213,7 +216,8 @@ describe('батч-селектор конвертов: эквивалентно
               id: batchIds[i],
               title: `batch ${i}`,
               tags: [],
-              aspects: { 'orbis/financial': r.fin },
+              props: r.fin,
+              aspects: ['orbis/financial'],
             },
           })),
         },
@@ -226,7 +230,8 @@ describe('батч-селектор конвертов: эквивалентно
     for (const [i, r] of rows.entries()) {
       const e = await createEntity(s.user, {
         title: `single ${i}`,
-        aspects: { 'orbis/financial': r.fin },
+        props: r.fin,
+        aspects: ['orbis/financial'],
       });
       singleIds.push(e.id);
     }
@@ -247,7 +252,8 @@ describe('батч-селектор конвертов: эквивалентно
     const s = await makeScene();
     const txn = await createEntity(s.user, {
       title: 'обед в отпуске',
-      aspects: { 'orbis/financial': finData(s.catA, '2026-07-12') },
+      props: finProps(s.catA, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     expect(await boundEnvelope(txn.id)).toBe(s.narrow);
 
@@ -263,7 +269,11 @@ describe('батч-селектор конвертов: эквивалентно
             { tool: 'entity_update', input: { id: s.narrow, archived: true } },
             {
               tool: 'entity_update',
-              input: { id: txn.id, aspects: { 'orbis/financial': { amount: '999.00' } } },
+              input: {
+                id: txn.id,
+                props: { 'orbis/amount': '999.00' },
+                aspects: { attach: ['orbis/financial'] },
+              },
             },
           ],
         },
@@ -281,7 +291,8 @@ describe('батч-селектор конвертов: эквивалентно
     const s = await makeScene();
     const txn = await createEntity(s.user, {
       title: 'ужин в отпуске',
-      aspects: { 'orbis/financial': finData(s.catA, '2026-07-12') },
+      props: finProps(s.catA, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     expect(await boundEnvelope(txn.id)).toBe(s.narrow);
 
@@ -296,7 +307,11 @@ describe('батч-селектор конвертов: эквивалентно
           operations: [
             {
               tool: 'entity_update',
-              input: { id: txn.id, aspects: { 'orbis/financial': { amount: '999.00' } } },
+              input: {
+                id: txn.id,
+                props: { 'orbis/amount': '999.00' },
+                aspects: { attach: ['orbis/financial'] },
+              },
             },
             { tool: 'entity_update', input: { id: s.narrow, archived: true } },
           ],
@@ -361,7 +376,8 @@ describe('число обращений к селектору не растёт 
                 input: {
                   title: 'Еда — июль',
                   tags: [],
-                  aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+                  props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+                  aspects: ['orbis/budget'],
                 },
               },
             ],
@@ -384,7 +400,8 @@ describe('число обращений к селектору не растёт 
             id,
             title: `Импорт ${i}`,
             tags: [],
-            aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+            props: finProps(cat, '2026-07-12'),
+            aspects: ['orbis/financial'],
           },
         })),
       };

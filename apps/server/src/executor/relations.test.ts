@@ -87,12 +87,12 @@ async function createRelation(
  */
 const AS_SYSTEM: Partial<ExecuteRequest> = { mechanism: 'seed' };
 
-function finData(over: Record<string, unknown> = {}): Record<string, unknown> {
+function finProps(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    amount: '1200.00',
-    direction: 'expense',
-    category_ref: CATEGORY_REF,
-    occurred_on: '2026-07-04',
+    'orbis/amount': '1200.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': CATEGORY_REF,
+    'orbis/occurred_on': '2026-07-04',
     ...over,
   };
 }
@@ -103,16 +103,7 @@ function finData(over: Record<string, unknown> = {}): Record<string, unknown> {
  * авто-привязывает транзакции к конверту совпадающей категории/периода и энфорсит
  * уникальность комбинации (§2.1) — фикстуры не должны задевать этот контур.
  */
-function budgetData(categoryRef: string = newId()): Record<string, unknown> {
-  return {
-    category_ref: categoryRef,
-    limit: '30000.00',
-    period_start: '2026-07-01',
-    period_end: '2026-07-31',
-  };
-}
-
-/** Тот же конверт СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+/** Конверт СВОЙСТВАМИ — она же форма `data` у `attach_*` (§А9-1). */
 function budgetProps(categoryRef: string = newId()): Record<string, unknown> {
   return {
     'orbis/finance_category': categoryRef,
@@ -404,15 +395,18 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
   async function budgetFixture(): Promise<{ env1: WireEntity; env2: WireEntity; txn: WireEntity }> {
     const env1 = await createEntity({
       title: 'Конверт Еда',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const env2 = await createEntity({
       title: 'Конверт Развлечения',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const txn = await createEntity({
       title: 'Транзакция',
-      aspects: { 'orbis/financial': finData() },
+      props: finProps(),
+      aspects: ['orbis/financial'],
     });
     return { env1, env2, txn };
   }
@@ -472,7 +466,11 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
     const r = err(
       await execute(
         db,
-        req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
+        req('entity_update', {
+          id: x.id,
+          props: budgetProps(),
+          aspects: { attach: ['orbis/budget'] },
+        }),
       ),
     );
     expect(r.error.code).toBe('INVARIANT');
@@ -485,7 +483,8 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
   test('11d. entity_update.aspects с orbis/budget: детей с другим конвертом нет → разрешён; detach бюджета не проверяется', async () => {
     const txn = await createEntity({
       title: 'Транзакция без конверта (update)',
-      aspects: { 'orbis/financial': finData() },
+      props: finProps(),
+      aspects: ['orbis/financial'],
     });
     const x = await createEntity({ title: 'Единственный конверт (update)' });
     ok(await createRelation(x.id, txn.id, 'subitem'));
@@ -493,14 +492,18 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
     const attached = ok(
       await execute(
         db,
-        req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
+        req('entity_update', {
+          id: x.id,
+          props: budgetProps(),
+          aspects: { attach: ['orbis/budget'] },
+        }),
       ),
     );
     expect((attached.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(true);
 
     // detach (null) не создаёт второго budget-parent'а — инвариант не должен мешать
     const detached = ok(
-      await execute(db, req('entity_update', { id: x.id, aspects: { 'orbis/budget': null } })),
+      await execute(db, req('entity_update', { id: x.id, aspects: { detach: ['orbis/budget'] } })),
     );
     expect((detached.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(false);
   });
@@ -508,7 +511,8 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
   test('11b. attach orbis/budget: financial-дети без другого конверта → attach разрешён', async () => {
     const txn = await createEntity({
       title: 'Транзакция без конверта',
-      aspects: { 'orbis/financial': finData() },
+      props: finProps(),
+      aspects: ['orbis/financial'],
     });
     const x = await createEntity({ title: 'Единственный конверт' });
     ok(await createRelation(x.id, txn.id, 'subitem'));
@@ -602,23 +606,20 @@ describe('financial-инвариант: ветка instance-of (§3.3)', () => {
   test('15. recurring=true без recurrence: с входящей instance-of — валиден, без — INVARIANT', async () => {
     const template = await createEntity({
       title: 'Шаблон аренды',
-      aspects: {
-        // шаблон: без occurred_on (§3.3), recurring=true легитимен благодаря recurrence
-        'orbis/financial': {
-          amount: '50000.00',
-          direction: 'expense',
-          category_ref: CATEGORY_REF,
-          recurring: true,
-        },
-        'orbis/schedule': {
-          start_at: '2026-07-01T10:00:00+03:00',
-          recurrence: { freq: 'monthly', interval: 1 },
-        },
+      props: {
+        'orbis/amount': '50000.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CATEGORY_REF,
+        'orbis/recurring': true,
+        'orbis/start_at': '2026-07-01T10:00:00+03:00',
+        'orbis/recurrence': { freq: 'monthly', interval: 1 },
       },
+      aspects: ['orbis/financial', 'orbis/schedule'],
     });
     const instance = await createEntity({
       title: 'Аренда июль',
-      aspects: { 'orbis/financial': finData({ amount: '50000.00' }) },
+      props: finProps({ 'orbis/amount': '50000.00' }),
+      aspects: ['orbis/financial'],
     });
     ok(await createRelation(template.id, instance.id, 'instance-of', AS_SYSTEM));
 
@@ -627,7 +628,8 @@ describe('financial-инвариант: ветка instance-of (§3.3)', () => {
       db,
       req('entity_update', {
         id: instance.id,
-        aspects: { 'orbis/financial': { recurring: true } },
+        props: { 'orbis/recurring': true },
+        aspects: { attach: ['orbis/financial'] },
       }),
     );
     ok(upd);
@@ -635,14 +637,16 @@ describe('financial-инвариант: ветка instance-of (§3.3)', () => {
     // контроль: та же правка без instance-of → INVARIANT
     const orphan = await createEntity({
       title: 'Сирота',
-      aspects: { 'orbis/financial': finData() },
+      props: finProps(),
+      aspects: ['orbis/financial'],
     });
     const bad = err(
       await execute(
         db,
         req('entity_update', {
           id: orphan.id,
-          aspects: { 'orbis/financial': { recurring: true } },
+          props: { 'orbis/recurring': true },
+          aspects: { attach: ['orbis/financial'] },
         }),
       ),
     );
@@ -651,18 +655,20 @@ describe('financial-инвариант: ветка instance-of (§3.3)', () => {
 });
 
 describe('acyclic для category-parent — НОВОЕ поведение реформы (§А4-2, Р-6)', () => {
-  function categoryData(): Record<string, unknown> {
-    return { icon: '🍏', spend_class: 'discretionary' };
+  function categoryProps(): Record<string, unknown> {
+    return { 'orbis/icon': '🍏', 'orbis/spend_class': 'discretionary' };
   }
 
   test('16. цикл в дереве категорий отклонён: до реформы такой связи ничто не мешало', async () => {
     const top = await createEntity({
       title: 'Еда',
-      aspects: { 'orbis/category': categoryData() },
+      props: categoryProps(),
+      aspects: ['orbis/category'],
     });
     const mid = await createEntity({
       title: 'Продукты',
-      aspects: { 'orbis/category': categoryData() },
+      props: categoryProps(),
+      aspects: ['orbis/category'],
     });
     ok(await createRelation(top.id, mid.id, 'category-parent'));
     const r = err(await createRelation(mid.id, top.id, 'category-parent'));
@@ -686,11 +692,13 @@ describe('acyclic для category-parent — НОВОЕ поведение ре�
     ok(await createRelation(a.id, b.id, 'dependency'));
     const catA = await createEntity({
       title: 'Категория-A',
-      aspects: { 'orbis/category': categoryData() },
+      props: categoryProps(),
+      aspects: ['orbis/category'],
     });
     const catB = await createEntity({
       title: 'Категория-B',
-      aspects: { 'orbis/category': categoryData() },
+      props: categoryProps(),
+      aspects: ['orbis/category'],
     });
     // Те же две вершины по другой роли: обратное ребро запрещено как dependency, но у
     // категорий своё дерево и своя проверка
@@ -720,11 +728,13 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
     const category = newId();
     const envelope = await createEntity({
       title: 'Конверт хука',
-      aspects: { 'orbis/budget': budgetData(category) },
+      props: budgetProps(category),
+      aspects: ['orbis/budget'],
     });
     const txn = await createEntity({
       title: 'Транзакция хука',
-      aspects: { 'orbis/financial': finData({ category_ref: category }) },
+      props: finProps({ 'orbis/finance_category': category }),
+      aspects: ['orbis/financial'],
     });
     // Привязку никто руками не создавал — её создал хук на создании транзакции
     expect(await relCount(envelope.id, txn.id, 'envelope-binding')).toBe(1);
@@ -732,7 +742,8 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
     // …а руками ту же роль поставить нельзя: пусть даже на другой паре
     const other = await createEntity({
       title: 'Ещё транзакция',
-      aspects: { 'orbis/financial': finData({ category_ref: newId() }) },
+      props: finProps({ 'orbis/finance_category': newId() }),
+      aspects: ['orbis/financial'],
     });
     const denied = err(await createRelation(envelope.id, other.id, 'envelope-binding'));
     expect(denied.error.code).toBe('ROLE_SYSTEM_ONLY');
@@ -742,7 +753,8 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
     const category = newId();
     const envelope = await createEntity({
       title: 'Конверт отката',
-      aspects: { 'orbis/budget': budgetData(category) },
+      props: budgetProps(category),
+      aspects: ['orbis/budget'],
     });
     const sink = new InMemoryJournalSink();
     const created = ok(
@@ -751,7 +763,8 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
         req('entity_create', {
           title: 'Транзакция отката',
           tags: [],
-          aspects: { 'orbis/financial': finData({ category_ref: category }) },
+          props: finProps({ 'orbis/finance_category': category }),
+          aspects: ['orbis/financial'],
         }),
         { sink },
       ),
@@ -1002,15 +1015,18 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     // он суммирует ВСЕХ parent-детей конверта.
     const env1 = await createEntity({
       title: 'Конверт Еда',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const env2 = await createEntity({
       title: 'Конверт Развлечения',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const txn = await createEntity({
       title: 'Транзакция на 1200',
-      aspects: { 'orbis/financial': finData() },
+      props: finProps(),
+      aspects: ['orbis/financial'],
     });
     return { env1, env2, txn };
   }
@@ -1189,7 +1205,8 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     const { txn } = await twoEnvelopesAndTxn();
     const x = await createEntity({
       title: 'X — конверт, который им быть перестанет',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const y = await createEntity({ title: 'Y — будущий конверт' });
     ok(
@@ -1204,7 +1221,7 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
             tool: 'relation_create',
             input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
           },
-          { tool: 'entity_update', input: { id: x.id, aspects: { 'orbis/budget': null } } },
+          { tool: 'entity_update', input: { id: x.id, aspects: { detach: ['orbis/budget'] } } },
           {
             tool: 'relation_create',
             input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
@@ -1223,7 +1240,8 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     const { txn } = await twoEnvelopesAndTxn();
     const x = await createEntity({
       title: 'X — конверт ДО batch',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const y = await createEntity({ title: 'Y — будущий конверт' });
     const r = err(

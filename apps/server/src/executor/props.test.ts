@@ -292,18 +292,17 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
       await run('entity_create', {
         title: 'Такси',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '700.00',
-            direction: 'expense',
-            category_ref: CATEGORY_A,
-            occurred_on: '2026-08-26',
-          },
+        props: {
+          'orbis/amount': '700.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_A,
+          'orbis/occurred_on': '2026-08-26',
         },
+        aspects: ['orbis/financial'],
       }),
     );
 
-    ok(await run('entity_update', { id: e.id, aspects: { 'orbis/financial': null } }));
+    ok(await run('entity_update', { id: e.id, aspects: { detach: ['orbis/financial'] } }));
     const afterDetach = await expectProjection(e.id);
     expect(afterDetach.aspects).toEqual([]);
     // Значение суммы — факт владельца, а не собственность аспекта (Р9)
@@ -366,26 +365,30 @@ describe('инвариант дуальной записи', () => {
     const PRIORITIES = ['low', 'medium', 'high'] as const;
     const AMOUNTS = ['10.00', '340.50', '1000.00'] as const;
 
-    /** Валидный патч старой формы: у аспекта, который НАВЕШИВАЕТСЯ, обязательные всегда есть. */
-    const legacyPatch = (): Record<string, Record<string, unknown> | null> => {
+    /** Валидный патч НОВОЙ формы: у аспекта, который НАВЕШИВАЕТСЯ, обязательные всегда есть. */
+    const propsPatch = (): Record<string, unknown> => {
       switch (Math.floor(rnd() * 5)) {
         case 0:
-          return { 'orbis/task': { status: pick(STATUSES), priority: pick(PRIORITIES) } };
+          return {
+            props: { 'orbis/task_status': pick(STATUSES), 'orbis/priority': pick(PRIORITIES) },
+            aspects: { attach: ['orbis/task'] },
+          };
         case 1:
-          return { 'orbis/task': { priority: null } };
+          return { unset: ['orbis/priority'], aspects: { attach: ['orbis/task'] } };
         case 2:
-          return { 'orbis/note': { pinned: rnd() > 0.5 } };
+          return { props: { 'orbis/pinned': rnd() > 0.5 }, aspects: { attach: ['orbis/note'] } };
         case 3:
           return {
-            'orbis/financial': {
-              amount: pick(AMOUNTS),
-              direction: pick(['expense', 'income'] as const),
-              category_ref: pick([CATEGORY_A, CATEGORY_B] as const),
-              occurred_on: '2026-08-26',
+            props: {
+              'orbis/amount': pick(AMOUNTS),
+              'orbis/direction': pick(['expense', 'income'] as const),
+              'orbis/finance_category': pick([CATEGORY_A, CATEGORY_B] as const),
+              'orbis/occurred_on': '2026-08-26',
             },
+            aspects: { attach: ['orbis/financial'] },
           };
         default:
-          return { 'orbis/financial': null };
+          return { aspects: { detach: ['orbis/financial'] } };
       }
     };
 
@@ -393,7 +396,8 @@ describe('инвариант дуальной записи', () => {
       await run('entity_create', {
         title: 'Подопытная запись',
         tags: [],
-        aspects: { 'orbis/task': { status: 'inbox' } },
+        props: { 'orbis/task_status': 'inbox' },
+        aspects: ['orbis/task'],
       }),
     );
     await expectProjection(e.id);
@@ -416,7 +420,7 @@ describe('инвариант дуальной записи', () => {
         );
         lastActionId = r.actionId;
       } else {
-        const r = ok(await run('entity_update', { id: e.id, aspects: legacyPatch() }));
+        const r = ok(await run('entity_update', { id: e.id, ...propsPatch() }));
         lastActionId = r.actionId;
       }
       applied += 1;
@@ -452,7 +456,7 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
    * `aspects[]` сверяется как МНОЖЕСТВО: это список интерпретаций, и порядок в нём —
    * не факт о сущности (снятый и заново навешенный аспект встаёт в конец списка).
    */
-  const POSITIVES = 35;
+  const POSITIVES = 38;
   const PROBE_ID = '019e4466-dddd-7e07-b5d4-64be9721da54';
 
   test(`${POSITIVES} позитивных записей корпуса: inverse возвращает props/aspects/aspects_legacy дословно`, () => {
@@ -465,9 +469,7 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
       // «До» непустое намеренно: свойство-сосед, которого патч не касается, обязан
       // пережить и запись, и откат — на этом стоит вся единица отката «свойство»
       const before: EntityState = { props: { [FREE_PROPERTY_ID]: 7 }, aspects: [] };
-      const patch = fromLegacyInput(reg, {
-        aspects: record.aspects as unknown as Record<string, Record<string, unknown>>,
-      });
+      const patch = fromLegacyInput(reg, { props: record.props, aspects: record.aspects });
       const after = applyPropsPatch(before, patch);
 
       // Полезная нагрузка «как исполнено» — тоже исполнимый тул: круг проверяется в обе стороны
@@ -509,17 +511,16 @@ describe('гейты флагов свойств', () => {
   const goalInput = (over: Record<string, unknown> = {}) => ({
     title: 'Накопить',
     tags: [],
-    aspects: {
-      'orbis/goal': {
-        progress_source: { query: 'aspect=orbis/financial', aggregate: 'count' },
-        target_value: '300000.00',
-        ...over,
-      },
+    props: {
+      'orbis/progress_source': { query: { text: 'aspect=orbis/financial' }, aggregate: 'count' },
+      'orbis/target_value': '300000.00',
+      ...over,
     },
+    aspects: ['orbis/goal'],
   });
 
   test('запись orbis/current_value из тула → COMPUTED_WRITE; из mechanism rule — проходит', async () => {
-    const denied = await run('entity_create', goalInput({ current_value: '10' }));
+    const denied = await run('entity_create', goalInput({ 'orbis/current_value': '10' }));
     expect(denied.ok).toBe(false);
     if (denied.ok) return;
     expect(denied.error.code).toBe('COMPUTED_WRITE');
@@ -530,7 +531,7 @@ describe('гейты флагов свойств', () => {
     });
 
     // Кэш вычисления пишет правило каталога — и только оно (правило 3 §10)
-    const allowed = await run('entity_create', goalInput({ current_value: '10' }), {
+    const allowed = await run('entity_create', goalInput({ 'orbis/current_value': '10' }), {
       mechanism: 'rule',
     });
     const row = await expectProjection(entityOf(allowed).id);
@@ -548,16 +549,15 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Прогон рутины',
           tags: [],
-          aspects: {
-            'orbis/agent-run': {
-              routine_id: routineId,
-              outcome: 'running',
-              started_at: '2026-08-26T07:00:00.000Z',
-              last_step_at: '2026-08-26T07:00:00.000Z',
-              step_count: 0,
-              steps: [],
-            },
+          props: {
+            'orbis/run_routine': routineId,
+            'orbis/run_outcome': 'running',
+            'orbis/run_started_at': '2026-08-26T07:00:00.000Z',
+            'orbis/last_step_at': '2026-08-26T07:00:00.000Z',
+            'orbis/step_count': 0,
+            'orbis/run_steps': [],
           },
+          aspects: ['orbis/agent-run'],
         },
         { mechanism: 'verb' },
       ),
@@ -565,7 +565,8 @@ describe('гейты флагов свойств', () => {
 
     const denied = await run('entity_update', {
       id: run0.id,
-      aspects: { 'orbis/agent-run': { report: 'подделанный отчёт' } },
+      props: { 'orbis/run_report': 'подделанный отчёт' },
+      aspects: { attach: ['orbis/agent-run'] },
     });
     expect(denied.ok).toBe(false);
     if (denied.ok) return;
@@ -579,7 +580,11 @@ describe('гейты флагов свойств', () => {
     ok(
       await run(
         'entity_update',
-        { id: run0.id, aspects: { 'orbis/agent-run': { report: 'честный отчёт' } } },
+        {
+          id: run0.id,
+          props: { 'orbis/run_report': 'честный отчёт' },
+          aspects: { attach: ['orbis/agent-run'] },
+        },
         { mechanism: 'verb' },
       ),
     );
@@ -595,17 +600,16 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Прогон с отчётом',
           tags: [],
-          aspects: {
-            'orbis/agent-run': {
-              routine_id: routineId,
-              outcome: 'finished',
-              report: 'честный отчёт',
-              started_at: '2026-08-26T07:00:00.000Z',
-              last_step_at: '2026-08-26T07:00:00.000Z',
-              step_count: 0,
-              steps: [],
-            },
+          props: {
+            'orbis/run_routine': routineId,
+            'orbis/run_outcome': 'finished',
+            'orbis/run_report': 'честный отчёт',
+            'orbis/run_started_at': '2026-08-26T07:00:00.000Z',
+            'orbis/last_step_at': '2026-08-26T07:00:00.000Z',
+            'orbis/step_count': 0,
+            'orbis/run_steps': [],
           },
+          aspects: ['orbis/agent-run'],
         },
         { mechanism: 'verb' },
       ),
@@ -625,7 +629,8 @@ describe('гейты флагов свойств', () => {
     // Форма СТАРАЯ: `{поле: null}` в карте аспектов — тот же отказ, тот же reason
     const byNull = await run('entity_update', {
       id: created.id,
-      aspects: { 'orbis/agent-run': { report: null } },
+      unset: ['orbis/run_report'],
+      aspects: { attach: ['orbis/agent-run'] },
     });
     expect(byNull.ok).toBe(false);
     if (byNull.ok) return;
@@ -642,13 +647,15 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Цель с кэшем',
           tags: [],
-          aspects: {
-            'orbis/goal': {
-              progress_source: { query: 'aspect=orbis/financial', aggregate: 'count' },
-              target_value: '10',
-              current_value: '3',
+          props: {
+            'orbis/progress_source': {
+              query: { text: 'aspect=orbis/financial' },
+              aggregate: 'count',
             },
+            'orbis/target_value': '10',
+            'orbis/current_value': '3',
           },
+          aspects: ['orbis/goal'],
         },
         { mechanism: 'rule' },
       ),
@@ -691,16 +698,15 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Прогон под откат',
           tags: [],
-          aspects: {
-            'orbis/agent-run': {
-              routine_id: routineId,
-              outcome: 'running',
-              started_at: '2026-08-26T07:00:00.000Z',
-              last_step_at: '2026-08-26T07:00:00.000Z',
-              step_count: 0,
-              steps: [],
-            },
+          props: {
+            'orbis/run_routine': routineId,
+            'orbis/run_outcome': 'running',
+            'orbis/run_started_at': '2026-08-26T07:00:00.000Z',
+            'orbis/last_step_at': '2026-08-26T07:00:00.000Z',
+            'orbis/step_count': 0,
+            'orbis/run_steps': [],
           },
+          aspects: ['orbis/agent-run'],
         },
         { mechanism: 'verb' },
       ),
@@ -709,7 +715,11 @@ describe('гейты флагов свойств', () => {
     const wrote = ok(
       await run(
         'entity_update',
-        { id: run0.id, aspects: { 'orbis/agent-run': { report: 'отчёт глагола' } } },
+        {
+          id: run0.id,
+          props: { 'orbis/run_report': 'отчёт глагола' },
+          aspects: { attach: ['orbis/agent-run'] },
+        },
         { mechanism: 'verb' },
       ),
     );
@@ -734,16 +744,15 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Операция из выписки',
           tags: [],
-          aspects: {
-            'orbis/financial': {
-              amount: '1200.00',
-              direction: 'expense',
-              category_ref: CATEGORY_A,
-              occurred_on: '2026-08-20',
-              payment_method: 'карта',
-              bank_txn_id: 'BNK-42',
-            },
+          props: {
+            'orbis/amount': '1200.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': CATEGORY_A,
+            'orbis/occurred_on': '2026-08-20',
+            'orbis/payment_method': 'карта',
+            'orbis/bank_txn_id': 'BNK-42',
           },
+          aspects: ['orbis/financial'],
         },
         { mechanism: 'import' },
       ),
@@ -810,23 +819,22 @@ describe('гейты флагов свойств', () => {
       await run('entity_create', {
         title: 'Трата, ставшая конвертом',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '900.00',
-            direction: 'expense',
-            category_ref: CATEGORY_C,
-            // Валюта НЕДЕФОЛТНАЯ намеренно. У обоих аспектов она необязательна, а
-            // `normalizeEnvelopeProps` подставляет на место пропавшего значения умолчание
-            // владельца (RUB): с 'RUB' в фикстуре currency-ассерты проходили бы и с вырезанной
-            // защитой — стёртую валюту молча восстанавливала бы подстановка, и половина пина
-            // оказалась бы вакуумной (найдено УЗКОЙ мутацией: защита снята только с валюты).
-            currency: 'USD',
-            // Дата ВНЕ периода конверта ниже: иначе бюджет-хук выбрал бы конвертом саму
-            // запись (слитые категория и валюта совпадают по построению) и упал бы
-            // `self_relation` — маскируя проверяемое здесь.
-            occurred_on: '2026-08-26',
-          },
+        props: {
+          'orbis/amount': '900.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_C,
+          // Валюта НЕДЕФОЛТНАЯ намеренно. У обоих аспектов она необязательна, а
+          // `normalizeEnvelopeProps` подставляет на место пропавшего значения умолчание
+          // владельца (RUB): с 'RUB' в фикстуре currency-ассерты проходили бы и с вырезанной
+          // защитой — стёртую валюту молча восстанавливала бы подстановка, и половина пина
+          // оказалась бы вакуумной (найдено УЗКОЙ мутацией: защита снята только с валюты).
+          'orbis/currency': 'USD',
+          // Дата ВНЕ периода конверта ниже: иначе бюджет-хук выбрал бы конвертом саму
+          // запись (слитые категория и валюта совпадают по построению) и упал бы
+          // `self_relation` — маскируя проверяемое здесь.
+          'orbis/occurred_on': '2026-08-26',
         },
+        aspects: ['orbis/financial'],
       }),
     );
 
@@ -867,16 +875,15 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Конверт «Еда», июль',
           tags: [],
-          aspects: {
-            'orbis/budget': {
-              category_ref: CATEGORY_A,
-              currency: 'RUB',
-              limit: '30000.00',
-              period_start: '2026-07-01',
-              period_end: '2026-07-31',
-              carryover: '-120.00',
-            },
+          props: {
+            'orbis/finance_category': CATEGORY_A,
+            'orbis/currency': 'RUB',
+            'orbis/limit': '30000.00',
+            'orbis/period_start': '2026-07-01',
+            'orbis/period_end': '2026-07-31',
+            'orbis/carryover': '-120.00',
           },
+          aspects: ['orbis/budget'],
         },
         { mechanism: 'rule' },
       ),
@@ -915,16 +922,15 @@ describe('гейты флагов свойств', () => {
           {
             title,
             tags: [],
-            aspects: {
-              'orbis/budget': {
-                category_ref: CATEGORY_B,
-                currency: 'RUB',
-                limit: '20000.00',
-                period_start: start,
-                period_end: end,
-                carryover,
-              },
+            props: {
+              'orbis/finance_category': CATEGORY_B,
+              'orbis/currency': 'RUB',
+              'orbis/limit': '20000.00',
+              'orbis/period_start': start,
+              'orbis/period_end': end,
+              'orbis/carryover': carryover,
             },
+            aspects: ['orbis/budget'],
           },
           { mechanism: 'rule' },
         ),
@@ -937,13 +943,12 @@ describe('гейты флагов свойств', () => {
         'entity_update',
         {
           id: byUpdate.id,
-          aspects: {
-            'orbis/budget': {
-              period_start: '2027-04-01',
-              period_end: '2027-04-30',
-              carryover: '777.00',
-            },
+          props: {
+            'orbis/period_start': '2027-04-01',
+            'orbis/period_end': '2027-04-30',
+            'orbis/carryover': '777.00',
           },
+          aspects: { attach: ['orbis/budget'] },
         },
         { mechanism: 'rule' },
       ),
@@ -983,16 +988,15 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Конверт «Развлечения», август',
           tags: [],
-          aspects: {
-            'orbis/budget': {
-              category_ref: CATEGORY_B,
-              currency: 'RUB',
-              limit: '10000.00',
-              period_start: '2026-08-01',
-              period_end: '2026-08-31',
-              carryover: '500.00',
-            },
+          props: {
+            'orbis/finance_category': CATEGORY_B,
+            'orbis/currency': 'RUB',
+            'orbis/limit': '10000.00',
+            'orbis/period_start': '2026-08-01',
+            'orbis/period_end': '2026-08-31',
+            'orbis/carryover': '500.00',
           },
+          aspects: ['orbis/budget'],
         },
         { mechanism: 'rule' },
       ),
@@ -1005,7 +1009,8 @@ describe('гейты флагов свойств', () => {
     ok(
       await run('entity_update', {
         id: envelope.id,
-        aspects: { 'orbis/budget': { limit: '12000.00' } },
+        props: { 'orbis/limit': '12000.00' },
+        aspects: { attach: ['orbis/budget'] },
       }),
     );
     const patched = await expectProjection(envelope.id);
@@ -1017,7 +1022,8 @@ describe('гейты флагов свойств', () => {
     ok(
       await run('entity_update', {
         id: envelope.id,
-        aspects: { 'orbis/budget': { period_start: '2026-10-01', period_end: '2026-10-31' } },
+        props: { 'orbis/period_start': '2026-10-01', 'orbis/period_end': '2026-10-31' },
+        aspects: { attach: ['orbis/budget'] },
       }),
     );
     expect(Object.hasOwn((await expectProjection(envelope.id)).props, 'orbis/carryover')).toBe(
@@ -1033,16 +1039,15 @@ describe('гейты флагов свойств', () => {
         {
           title: 'Прогон для отката',
           tags: [],
-          aspects: {
-            'orbis/agent-run': {
-              routine_id: routineId,
-              outcome: 'running',
-              started_at: '2026-08-26T07:00:00.000Z',
-              last_step_at: '2026-08-26T07:00:00.000Z',
-              step_count: 0,
-              steps: [],
-            },
+          props: {
+            'orbis/run_routine': routineId,
+            'orbis/run_outcome': 'running',
+            'orbis/run_started_at': '2026-08-26T07:00:00.000Z',
+            'orbis/last_step_at': '2026-08-26T07:00:00.000Z',
+            'orbis/step_count': 0,
+            'orbis/run_steps': [],
           },
+          aspects: ['orbis/agent-run'],
         },
         { mechanism: 'verb' },
       ),
@@ -1052,7 +1057,8 @@ describe('гейты флагов свойств', () => {
         'entity_update',
         {
           id: created.id,
-          aspects: { 'orbis/agent-run': { outcome: 'finished', report: 'сделано' } },
+          props: { 'orbis/run_outcome': 'finished', 'orbis/run_report': 'сделано' },
+          aspects: { attach: ['orbis/agent-run'] },
         },
         { mechanism: 'verb' },
       ),
@@ -1080,16 +1086,15 @@ describe('затронутые аспекты считаются по свойс
         {
           title: 'Прогон рутины',
           tags: [],
-          aspects: {
-            'orbis/agent-run': {
-              routine_id: routineId,
-              outcome: 'running',
-              started_at: '2026-08-26T07:00:00.000Z',
-              last_step_at: '2026-08-26T07:00:00.000Z',
-              step_count: 0,
-              steps: [],
-            },
+          props: {
+            'orbis/run_routine': routineId,
+            'orbis/run_outcome': 'running',
+            'orbis/run_started_at': '2026-08-26T07:00:00.000Z',
+            'orbis/last_step_at': '2026-08-26T07:00:00.000Z',
+            'orbis/step_count': 0,
+            'orbis/run_steps': [],
           },
+          aspects: ['orbis/agent-run'],
         },
         { mechanism: 'verb' },
       ),
@@ -1118,29 +1123,23 @@ describe('затронутые аспекты считаются по свойс
       await run('entity_create', {
         title: 'Транзакция и конверт разом',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '100.00',
-            direction: 'expense',
-            category_ref: CATEGORY_A,
-            occurred_on: '2026-08-26',
-          },
-          // Период конверта НЕ накрывает дату транзакции намеренно: иначе бюджет-хук
-          // привязал бы запись к самой себе (rel_no_self), а проверяется здесь слияние
-          // свойств, а не привязка.
-          'orbis/budget': {
-            category_ref: CATEGORY_A,
-            limit: '5000.00',
-            period_start: '2026-07-01',
-            period_end: '2026-07-31',
-          },
+        props: {
+          'orbis/amount': '100.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_A,
+          'orbis/occurred_on': '2026-08-26',
+          'orbis/limit': '5000.00',
+          'orbis/period_start': '2026-07-01',
+          'orbis/period_end': '2026-07-31',
         },
+        aspects: ['orbis/financial', 'orbis/budget'],
       }),
     );
     const patched = ok(
       await run('entity_update', {
         id: e.id,
-        aspects: { 'orbis/financial': { category_ref: CATEGORY_B } },
+        props: { 'orbis/finance_category': CATEGORY_B },
+        aspects: { attach: ['orbis/financial'] },
       }),
     );
     expect((await expectProjection(e.id)).aspectsLegacy['orbis/budget']).toMatchObject({
@@ -1180,7 +1179,8 @@ describe('предикат замка бюджет-контура', () => {
     );
     expect(contour('entity_create', { title: 't', tags: [], aspects: ['orbis/task'] })).toBe(false);
 
-    // Старая карта и attach-тулы — как было
+    // Старая карта и attach-тулы — как было. ALLOWLIST старой формы (Задача 23a): предикат
+    // замка обязан узнавать её, пока союз легаси-входа жив (снос — 23b).
     expect(contour('entity_update', { id: 'x', aspects: { 'orbis/financial': null } })).toBe(true);
     expect(contour('attach_orbis_budget', { entity_id: 'x', data: {} })).toBe(true);
     expect(contour('attach_orbis_task', { entity_id: 'x', data: {} })).toBe(false);
@@ -1321,7 +1321,8 @@ describe('списочные пути несут новую форму', () => {
         title: 'Заметка со ссылкой',
         tags: [],
         body: `см. [[entity:${target.id}]]`,
-        aspects: { 'orbis/task': { status: 'planned', priority: 'high' } },
+        props: { 'orbis/task_status': 'planned', 'orbis/priority': 'high' },
+        aspects: ['orbis/task'],
       }),
     );
 

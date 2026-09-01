@@ -72,15 +72,18 @@ describe('«отмени последнее» гасит шаг агента (п
     const project = await seedEntity(owner, {
       title: 'Проект с отменяемым шагом',
       tags: [],
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     const ticket = await seedEntity(owner, {
       title: 'Тикет с отменяемым шагом',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     await link(owner, project.id, ticket.id, 'ticket');
 

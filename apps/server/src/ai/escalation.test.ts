@@ -73,7 +73,8 @@ async function createCategory(user: string, title: string): Promise<string> {
   const e = await createEntity(user, {
     title,
     tags: [],
-    aspects: { 'orbis/category': { icon: '🍔' } },
+    props: { 'orbis/icon': '🍔' },
+    aspects: ['orbis/category'],
   });
   return e.id;
 }
@@ -83,14 +84,13 @@ async function createTxn(user: string, title: string, categoryRef: string): Prom
   const e = await createEntity(user, {
     title,
     tags: [],
-    aspects: {
-      'orbis/financial': {
-        amount: '340.00',
-        direction: 'expense',
-        category_ref: categoryRef,
-        occurred_on: '2026-07-20',
-      },
+    props: {
+      'orbis/amount': '340.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': categoryRef,
+      'orbis/occurred_on': '2026-07-20',
     },
+    aspects: ['orbis/financial'],
   });
   return e.id;
 }
@@ -500,16 +500,15 @@ describe('эскалация повторных исправлений кате�
     const txnInput = (title: string) => ({
       title,
       tags: [],
-      aspects: {
-        'orbis/financial': {
-          amount: '340.00',
-          direction: 'expense',
-          // ИМЕННО та категория, которую ищет проба ниже: иначе импорт не попадал бы под
-          // неё и без гейта по `op`, и тест зеленел бы, ничего не проверяя
-          category_ref: fun,
-          occurred_on: '2026-07-20',
-        },
+      props: {
+        'orbis/amount': '340.00',
+        'orbis/direction': 'expense',
+        // ИМЕННО та категория, которую ищет проба ниже: иначе импорт не попадал бы под
+        // неё и без гейта по `op`, и тест зеленел бы, ничего не проверяя
+        'orbis/finance_category': fun,
+        'orbis/occurred_on': '2026-07-20',
       },
+      aspects: ['orbis/financial'],
     });
     // Импорт журналируется ОДНИМ action type='batch', в котором только entity_create, а
     // журнал entity_create несёт всё состояние в payload (executor.ts prepareEntityCreate)

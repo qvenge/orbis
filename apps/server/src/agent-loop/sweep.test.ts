@@ -46,28 +46,27 @@ async function seedRun(
   const ticket = await seedEntity(owner, {
     title: `Тикет прогона (${args.stepSummary})`,
     tags: [],
-    aspects: {
-      'orbis/task': {
-        status: args.ticketStatus,
-        ...(args.ticketWaitingFor !== undefined && { waiting_for: args.ticketWaitingFor }),
-      },
-      'orbis/assignment': { executor: 'agent', grant_id: args.grantId },
+    props: {
+      'orbis/task_status': args.ticketStatus,
+      ...(args.ticketWaitingFor !== undefined && { 'orbis/waiting_for': args.ticketWaitingFor }),
+      'orbis/executor': 'agent',
+      'orbis/grant': args.grantId,
     },
+    aspects: ['orbis/task', 'orbis/assignment'],
   });
   const at = minutesBefore(args.lastStepMinutesAgo);
   const run = await seedEntity(owner, {
     title: `Прогон: ${ticket.title}`,
     tags: [],
-    aspects: {
-      'orbis/agent-run': {
-        grant_id: args.grantId,
-        outcome: 'running',
-        started_at: minutesBefore(args.lastStepMinutesAgo + 10),
-        last_step_at: at,
-        step_count: 1,
-        steps: [{ seq: 1, at, summary: args.stepSummary, external: args.external }],
-      },
+    props: {
+      'orbis/grant': args.grantId,
+      'orbis/run_outcome': 'running',
+      'orbis/run_started_at': minutesBefore(args.lastStepMinutesAgo + 10),
+      'orbis/last_step_at': at,
+      'orbis/step_count': 1,
+      'orbis/run_steps': [{ seq: 1, at, summary: args.stepSummary, external: args.external }],
     },
+    aspects: ['orbis/agent-run'],
   });
   await link(owner, ticket.id, run.id, 'run');
   return { ticketId: ticket.id, runId: run.id };
@@ -230,7 +229,10 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
       actorKind: 'owner',
       source: 'ui',
       operations: [
-        { tool: 'entity_update', input: { id: ticketId, aspects: { 'orbis/task': patch } } },
+        {
+          tool: 'entity_update',
+          input: { id: ticketId, props: patch, aspects: { attach: ['orbis/task'] } },
+        },
       ],
     });
     if (!r.ok) throw new Error(`patchTask: ${r.error.code} ${r.error.message}`);
@@ -242,10 +244,12 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
     const ticket = await seedEntity(owner, {
       title: 'Тикет, сброшенный владельцем руками',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
 
     // Прогон A взят 31 минуту назад — к T0 он устарел
@@ -260,7 +264,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
 
     // Владелец руками вернул тикет в работу заново (намерение «начни сначала»): прогон A
     // остаётся running — это и есть состояние с ДВУМЯ running-прогонами одного тикета.
-    await patchTask(owner, ticket.id, { status: 'planned' });
+    await patchTask(owner, ticket.id, { 'orbis/task_status': 'planned' });
     const claimB = await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
       ticket_id: ticket.id,
     });

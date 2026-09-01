@@ -80,17 +80,7 @@ function err(r: ExecuteResult): ExecuteErr {
   return r;
 }
 
-function finData(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    amount: '340.00',
-    direction: 'expense',
-    category_ref: CATEGORY_REF,
-    occurred_on: '2026-07-04',
-    ...over,
-  };
-}
-
-/** Та же транзакция СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+/** Транзакция СВОЙСТВАМИ — она же форма `data` у `attach_*` (§А9-1). */
 function finProps(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     'orbis/amount': '340.00',
@@ -108,12 +98,12 @@ function finProps(over: Record<string, unknown> = {}): Record<string, unknown> {
  * уникальность комбинации (§2.1) — фикстуры не должны задевать этот контур.
  * Тест 3 передаёт CATEGORY_REF явно: там ручная привязка совпадает с выбором селектора.
  */
-function budgetData(categoryRef: string = newId()): Record<string, unknown> {
+function budgetProps(categoryRef: string = newId()): Record<string, unknown> {
   return {
-    category_ref: categoryRef,
-    limit: '30000.00',
-    period_start: '2026-07-01',
-    period_end: '2026-07-31',
+    'orbis/finance_category': categoryRef,
+    'orbis/limit': '30000.00',
+    'orbis/period_start': '2026-07-01',
+    'orbis/period_end': '2026-07-31',
   };
 }
 
@@ -196,7 +186,8 @@ describe('batch_execute: атомарность (§7.8, §13.4)', () => {
                 id: idB,
                 title: 'Вторая',
                 tags: [],
-                aspects: { 'orbis/financial': { amount: 340 } },
+                props: { 'orbis/amount': 340 },
+                aspects: ['orbis/financial'],
               },
             },
             {
@@ -254,7 +245,8 @@ describe('batch_execute: успех, виртуальное состояние �
           id: envId,
           title: 'Конверт Еда',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(CATEGORY_REF) },
+          props: budgetProps(CATEGORY_REF),
+          aspects: ['orbis/budget'],
         },
       },
       { tool: 'entity_create', input: { id: txnId, title: 'Кофе', tags: [] } },
@@ -318,16 +310,19 @@ describe('batch_execute: успех, виртуальное состояние �
   test('5. перенос budget-parent батчем «удалить старую + создать новую» (§4.2): ровно одна живая связь', async () => {
     const env1 = await createEntity({
       title: 'Конверт-старый',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const env2 = await createEntity({
       title: 'Конверт-новый',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const txn = await createEntity({
       title: 'Переносимая',
       // своя категория: транзакция не должна авто-привязаться к конверту теста 3 (A4 §2.3)
-      aspects: { 'orbis/financial': finData({ category_ref: newId() }) },
+      props: finProps({ 'orbis/finance_category': newId() }),
+      aspects: ['orbis/financial'],
     });
     ok(
       await execute(
@@ -367,18 +362,15 @@ describe('batch_execute: успех, виртуальное состояние �
   test('6. instance-of, создаваемая тем же batch, легитимизирует recurring=true без recurrence (§3.3)', async () => {
     const template = await createEntity({
       title: 'Шаблон подписки',
-      aspects: {
-        'orbis/financial': {
-          amount: '500.00',
-          direction: 'expense',
-          category_ref: CATEGORY_REF,
-          recurring: true,
-        },
-        'orbis/schedule': {
-          start_at: '2026-07-01T10:00:00+03:00',
-          recurrence: { freq: 'monthly', interval: 1 },
-        },
+      props: {
+        'orbis/amount': '500.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CATEGORY_REF,
+        'orbis/recurring': true,
+        'orbis/start_at': '2026-07-01T10:00:00+03:00',
+        'orbis/recurrence': { freq: 'monthly', interval: 1 },
       },
+      aspects: ['orbis/financial', 'orbis/schedule'],
     });
     const instId = newId();
     const r = ok(
@@ -393,7 +385,8 @@ describe('batch_execute: успех, виртуальное состояние �
                 title: 'Подписка июль',
                 tags: [],
                 // recurring=true без recurrence: валиден ТОЛЬКО благодаря instance-of ниже
-                aspects: { 'orbis/financial': finData({ amount: '500.00', recurring: true }) },
+                props: finProps({ 'orbis/amount': '500.00', 'orbis/recurring': true }),
+                aspects: ['orbis/financial'],
               },
             },
             {
@@ -416,7 +409,8 @@ describe('batch_execute: успех, виртуальное состояние �
         singleReq('entity_create', {
           title: 'Сирота',
           tags: [],
-          aspects: { 'orbis/financial': finData({ amount: '500.00', recurring: true }) },
+          props: finProps({ 'orbis/amount': '500.00', 'orbis/recurring': true }),
+          aspects: ['orbis/financial'],
         }),
       ),
     );
@@ -485,16 +479,19 @@ describe('batch_execute: занятый id — reject, не replay (fix round р
   test('10. [проба ревьюера] entity_create на id живого конверта не обходит один-budget-parent: CONFLICT id_conflict, полный откат, без audit', async () => {
     const envX = await createEntity({
       title: 'Конверт X',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const env1 = await createEntity({
       title: 'Конверт 1',
-      aspects: { 'orbis/budget': budgetData() },
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
     });
     const txn = await createEntity({
       title: 'Транзакция',
       // своя категория: транзакция не должна авто-привязаться к конверту теста 3 (A4 §2.3)
-      aspects: { 'orbis/financial': finData({ category_ref: newId() }) },
+      props: finProps({ 'orbis/finance_category': newId() }),
+      aspects: ['orbis/financial'],
     });
     ok(
       await execute(

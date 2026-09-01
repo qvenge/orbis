@@ -123,14 +123,13 @@ function envelope(periodStart: string, periodEnd: string): Record<string, unknow
   return {
     title: `Еда — ${periodStart.slice(0, 7)}`,
     tags: [],
-    aspects: {
-      'orbis/budget': {
-        category_ref: foodId,
-        limit: '30000.00',
-        period_start: periodStart,
-        period_end: periodEnd,
-      },
+    props: {
+      'orbis/finance_category': foodId,
+      'orbis/limit': '30000.00',
+      'orbis/period_start': periodStart,
+      'orbis/period_end': periodEnd,
     },
+    aspects: ['orbis/budget'],
   };
 }
 

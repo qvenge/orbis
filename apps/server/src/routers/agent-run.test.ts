@@ -70,7 +70,8 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     const project = await seedEntity(owner, {
       title: 'Проект с чекпойнтом',
       tags: [],
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     projectId = project.id;
   });
@@ -80,10 +81,12 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     const ticket = await seedEntity(owner, {
       title,
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     await link(owner, projectId, ticket.id, 'ticket');
     return ticket.id;
@@ -260,24 +263,25 @@ describe('agentRun.sweep (С6)', () => {
     const ticket = await seedEntity(owner, {
       title: 'Тикет брошенного прогона',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'in_progress' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'in_progress',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     const run = await seedEntity(owner, {
       title: 'Прогон: Тикет брошенного прогона',
       tags: [],
-      aspects: {
-        'orbis/agent-run': {
-          grant_id: grantId,
-          outcome: 'running',
-          started_at: new Date(Date.now() - 41 * MINUTE).toISOString(),
-          last_step_at: at,
-          step_count: 1,
-          steps: [{ seq: 1, at, summary: 'Прочитал тикет', external: false }],
-        },
+      props: {
+        'orbis/grant': grantId,
+        'orbis/run_outcome': 'running',
+        'orbis/run_started_at': new Date(Date.now() - 41 * MINUTE).toISOString(),
+        'orbis/last_step_at': at,
+        'orbis/step_count': 1,
+        'orbis/run_steps': [{ seq: 1, at, summary: 'Прочитал тикет', external: false }],
       },
+      aspects: ['orbis/agent-run'],
     });
     await link(owner, ticket.id, run.id, 'run');
     return { ticketId: ticket.id, runId: run.id };

@@ -52,7 +52,8 @@ async function createTemplate(
     title: string;
     emoji?: string;
     tags?: string[];
-    aspects: Record<string, Record<string, unknown>>;
+    props?: Record<string, unknown>;
+    aspects: string[];
   },
   // `orbis/bank_txn_id` — служебное свойство (§А2-5): его пишет только импорт, и шаблон с
   // ним иначе как этим механизмом не завести (гейт `SYSTEM_WRITABLE_MECHANISMS`).
@@ -70,11 +71,11 @@ async function createTemplate(
 }
 
 /** Ежедневное расписание с 09:00 Москвы указанной даты. */
-function dailySchedule(startDate: string): Record<string, unknown> {
+function dailyScheduleProps(startDate: string): Record<string, unknown> {
   return {
-    start_at: `${startDate}T09:00:00+03:00`,
-    timezone: 'Europe/Moscow',
-    recurrence: { freq: 'daily', interval: 1 },
+    'orbis/start_at': `${startDate}T09:00:00+03:00`,
+    'orbis/timezone': 'Europe/Moscow',
+    'orbis/recurrence': { freq: 'daily', interval: 1 },
   };
 }
 
@@ -103,7 +104,8 @@ describe('materializeInstances (01 §5.4)', () => {
       title: 'Утренняя пробежка',
       emoji: '🏃',
       tags: ['health', 'run'],
-      aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule'],
     });
 
     const r = await materializeInstances({
@@ -150,7 +152,8 @@ describe('materializeInstances (01 §5.4)', () => {
     const owner = freshUserId();
     const templateId = await createTemplate(owner, {
       title: 'Планёрка',
-      aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule'],
     });
 
     const first = await materializeInstances({
@@ -206,7 +209,8 @@ describe('materializeInstances (01 §5.4)', () => {
     const owner = freshUserId();
     const templateId = await createTemplate(owner, {
       title: 'Ежедневное',
-      aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule'],
     });
 
     const r = await materializeInstances({
@@ -228,13 +232,12 @@ describe('materializeInstances (01 §5.4)', () => {
     // материализовало бы ~78 инстансов + post-due переписал бы spent исторических месяцев
     const templateId = await createTemplate(owner, {
       title: 'Старая подписка',
-      aspects: {
-        'orbis/schedule': {
-          start_at: '2020-01-01T09:00:00+03:00',
-          timezone: 'Europe/Moscow',
-          recurrence: { freq: 'monthly', interval: 1 },
-        },
+      props: {
+        'orbis/start_at': '2020-01-01T09:00:00+03:00',
+        'orbis/timezone': 'Europe/Moscow',
+        'orbis/recurrence': { freq: 'monthly', interval: 1 },
       },
+      aspects: ['orbis/schedule'],
     });
 
     const r = await materializeInstances({
@@ -264,16 +267,15 @@ describe('materializeInstances (01 §5.4)', () => {
     const categoryRef = crypto.randomUUID();
     const templateId = await createTemplate(owner, {
       title: 'Аренда',
-      aspects: {
-        'orbis/schedule': dailySchedule('2026-07-01'),
-        'orbis/financial': {
-          amount: '340.00',
-          currency: 'RUB',
-          direction: 'expense',
-          category_ref: categoryRef,
-          recurring: true,
-        },
+      props: {
+        ...dailyScheduleProps('2026-07-01'),
+        'orbis/amount': '340.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': categoryRef,
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
 
     const r = await materializeInstances({
@@ -313,7 +315,8 @@ describe('materializeInstances (01 §5.4)', () => {
     const owner = freshUserId();
     const templateId = await createTemplate(owner, {
       title: 'Старое расписание',
-      aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule'],
     });
     const arch = await execute(db, {
       actorUserId: owner,
@@ -341,18 +344,18 @@ describe('materializeInstances (01 §5.4)', () => {
     // на неизвестном дне недели бросает RangeError — шаблон пропускаем, запрос не роняем
     const brokenId = await createTemplate(owner, {
       title: 'Битый шаблон',
-      aspects: {
-        'orbis/schedule': {
-          start_at: '2026-07-01T09:00:00+03:00',
-          timezone: 'Europe/Moscow',
-          recurrence: { freq: 'weekly', interval: 1, byweekday: ['xx'] },
-        },
+      props: {
+        'orbis/start_at': '2026-07-01T09:00:00+03:00',
+        'orbis/timezone': 'Europe/Moscow',
+        'orbis/recurrence': { freq: 'weekly', interval: 1, byweekday: ['xx'] },
       },
+      aspects: ['orbis/schedule'],
     });
     const warn = spyOn(console, 'warn').mockImplementation(() => {});
     const healthyId = await createTemplate(owner, {
       title: 'Здоровый шаблон',
-      aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule'],
     });
 
     try {
@@ -384,15 +387,14 @@ describe('materializeInstances (01 §5.4)', () => {
     const owner = freshUserId();
     await createTemplate(owner, {
       title: 'Разовая трата',
-      aspects: {
-        'orbis/schedule': { start_at: '2026-07-01T09:00:00+03:00' }, // без recurrence
-        'orbis/financial': {
-          amount: '100.00',
-          direction: 'expense',
-          category_ref: crypto.randomUUID(),
-          occurred_on: '2026-07-01',
-        },
+      props: {
+        'orbis/start_at': '2026-07-01T09:00:00+03:00',
+        'orbis/amount': '100.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': crypto.randomUUID(),
+        'orbis/occurred_on': '2026-07-01',
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
 
     const r = await materializeInstances({
@@ -412,21 +414,22 @@ describe('materializeInstances (01 §5.4)', () => {
       owner,
       {
         title: 'Аренда с полным набором полей',
-        aspects: {
-          'orbis/schedule': { ...dailySchedule('2026-07-01'), location: 'Дом', all_day: false },
-          'orbis/financial': {
-            amount: '340.00',
-            currency: 'RUB',
-            direction: 'expense',
-            category_ref: categoryRef,
-            payment_method: 'card',
-            counterparty: 'Арендодатель',
-            // Идентификатор строки ВЫПИСКИ: он про одну операцию банка, и наследовать его
-            // каждому инстансу значило бы объявить их все одной и той же операцией.
-            bank_txn_id: 'stmt-2026-07-777',
-            recurring: true,
-          },
+        props: {
+          ...dailyScheduleProps('2026-07-01'),
+          'orbis/location': 'Дом',
+          'orbis/all_day': false,
+          'orbis/amount': '340.00',
+          'orbis/currency': 'RUB',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': categoryRef,
+          'orbis/payment_method': 'card',
+          'orbis/counterparty': 'Арендодатель',
+          // Идентификатор строки ВЫПИСКИ: он про одну операцию банка, и наследовать его
+          // каждому инстансу значило бы объявить их все одной и той же операцией.
+          'orbis/bank_txn_id': 'stmt-2026-07-777',
+          'orbis/recurring': true,
         },
+        aspects: ['orbis/schedule', 'orbis/financial'],
       },
       'import',
     );
@@ -494,7 +497,8 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const templateId = await createTemplate(owner, {
       title: 'Шаблон без аспекта финансов',
-      aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule'],
     });
     // Финансовые значения кладём мимо аспекта — так же, как их оставил бы detach.
     await withIdentity(db, owner, (tx) =>
@@ -540,10 +544,13 @@ describe('materializeInstances (01 §5.4)', () => {
     const owner = freshUserId();
     const templateId = await createTemplate(owner, {
       title: 'Полить цветы',
-      aspects: {
-        'orbis/schedule': dailySchedule('2026-07-01'),
-        'orbis/task': { status: 'in_progress', priority: 'high', effort_min: 15 },
+      props: {
+        ...dailyScheduleProps('2026-07-01'),
+        'orbis/task_status': 'in_progress',
+        'orbis/priority': 'high',
+        'orbis/effort_min': 15,
       },
+      aspects: ['orbis/schedule', 'orbis/task'],
     });
 
     const r = await materializeInstances({
@@ -712,7 +719,8 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     );
     const templateId = await createTemplate(owner, {
       title: 'Ежедневный созвон',
-      aspects: { 'orbis/schedule': dailySchedule(today) },
+      props: dailyScheduleProps(today),
+      aspects: ['orbis/schedule'],
     });
 
     const results = await caller.entity.query({ query: 'orbis/start_at=next_7d' });
@@ -735,7 +743,8 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     );
     const templateId = await createTemplate(owner, {
       title: 'Без окна',
-      aspects: { 'orbis/schedule': dailySchedule(today) },
+      props: dailyScheduleProps(today),
+      aspects: ['orbis/schedule'],
     });
 
     const results = await caller.entity.query({ query: 'aspect=orbis/schedule' });
@@ -752,7 +761,8 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     );
     const templateId = await createTemplate(owner, {
       title: 'Созвон (AI-путь)',
-      aspects: { 'orbis/schedule': dailySchedule(today) },
+      props: dailyScheduleProps(today),
+      aspects: ['orbis/schedule'],
     });
 
     // §5.4 «любой запрос диапазона дат потребителем query-движка»: LLM/MCP-путь тоже
@@ -782,16 +792,15 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     const to = addDays(today, 20);
     const templateId = await createTemplate(owner, {
       title: 'Подписка (диапазон месяца)',
-      aspects: {
-        'orbis/schedule': dailySchedule(from),
-        'orbis/financial': {
-          amount: '599.00',
-          currency: 'RUB',
-          direction: 'expense',
-          category_ref: crypto.randomUUID(),
-          recurring: true,
-        },
+      props: {
+        ...dailyScheduleProps(from),
+        'orbis/amount': '599.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': crypto.randomUUID(),
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
 
     const results = await caller.entity.query({

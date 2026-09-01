@@ -189,7 +189,8 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
         req(user, 'entity_create', {
           title: 'Тикет',
           tags: [],
-          aspects: { 'orbis/task': { status: 'inbox', priority: 'low' } },
+          props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'low' },
+          aspects: ['orbis/task'],
         }),
         { sink },
       ),
@@ -201,7 +202,8 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
         db,
         req(user, 'entity_update', {
           id: e.id,
-          aspects: { 'orbis/task': { priority: 'high' }, 'orbis/note': { pinned: true } },
+          props: { 'orbis/priority': 'high', 'orbis/pinned': true },
+          aspects: { attach: ['orbis/task', 'orbis/note'] },
         }),
         { sink },
       ),

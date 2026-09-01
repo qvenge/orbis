@@ -76,6 +76,9 @@ beforeAll(async () => {
   );
   expect(fixture.entities).toBe(GRAPH_ENTITIES);
   reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => effectiveRegistry(tx, GRAPH_OWNER_ID));
+  // @ts-expect-error bun-types 1.2.7 не объявляет второй аргумент `beforeAll` — таймаут, —
+  // хотя рантайм его принимает. Убрать число нельзя: засев корпуса в 150k рёбер идёт минуты
+  // и упёрся бы в умолчание хука. Пометка снимется сама, когда типы догонят рантайм.
 }, 900_000);
 
 afterAll(async () => {

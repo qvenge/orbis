@@ -80,7 +80,8 @@ async function createCategory(user: string, title: string, icon = '🍔'): Promi
   const e = await exec(user, 'entity_create', {
     title,
     tags: [],
-    aspects: { 'orbis/category': { icon } },
+    props: { 'orbis/icon': icon },
+    aspects: ['orbis/category'],
   });
   return e.id;
 }
@@ -96,15 +97,14 @@ async function createEnvelope(
   const e = await exec(user, 'entity_create', {
     title: `Конверт ${periodStart}`,
     tags: [],
-    aspects: {
-      'orbis/budget': {
-        category_ref: categoryRef,
-        limit,
-        period_start: periodStart,
-        period_end: periodEnd,
-        ...over,
-      },
+    props: {
+      'orbis/finance_category': categoryRef,
+      'orbis/limit': limit,
+      'orbis/period_start': periodStart,
+      'orbis/period_end': periodEnd,
+      ...over,
     },
+    aspects: ['orbis/budget'],
   });
   return e.id;
 }
@@ -119,15 +119,14 @@ async function createTxn(
   const e = await exec(user, 'entity_create', {
     title: `Трата ${amount}`,
     tags: [],
-    aspects: {
-      'orbis/financial': {
-        amount,
-        direction: 'expense',
-        category_ref: categoryRef,
-        occurred_on: occurredOn,
-        ...over,
-      },
+    props: {
+      'orbis/amount': amount,
+      'orbis/direction': 'expense',
+      'orbis/finance_category': categoryRef,
+      'orbis/occurred_on': occurredOn,
+      ...over,
     },
+    aspects: ['orbis/financial'],
   });
   return e.id;
 }
@@ -187,7 +186,9 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
     await createTxn(user, catFood, '28800.00', `${prev}-05`);
     // Развлечения: limit 10000 + carryover 500 (перенос прошлых месяцев), трат 400
     // → remaining = 10000 + 500 − 400 = 10100 (§2.4: effective_limit = limit + carryover)
-    await createEnvelope(user, catFun, prevStart, prevEnd, '10000.00', { carryover: '500.00' });
+    await createEnvelope(user, catFun, prevStart, prevEnd, '10000.00', {
+      'orbis/carryover': '500.00',
+    });
     await createTxn(user, catFun, '400.00', `${prev}-10`);
 
     const p = await ownerCaller(user).budget.rolloverPreview({ month: target });
@@ -282,8 +283,8 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   test('валютная граница: конверт прошлого месяца в чужой валюте не участвует (как categoryTrend, §5)', async () => {
     const user = freshUserId();
     const cat = await createCategory(user, 'Подписки', '📺');
-    await createEnvelope(user, cat, prevStart, prevEnd, '50.00', { currency: 'USD' });
-    await createTxn(user, cat, '30.00', `${prev}-03`, { currency: 'USD' });
+    await createEnvelope(user, cat, prevStart, prevEnd, '50.00', { 'orbis/currency': 'USD' });
+    await createTxn(user, cat, '30.00', `${prev}-03`, { 'orbis/currency': 'USD' });
 
     const p = await ownerCaller(user).budget.rolloverPreview({ month: target });
     expect(p.rows).toEqual([]);
@@ -300,7 +301,9 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
     // Путешествия: единственный конверт — USD; траты прошлого месяца — RUB (дефолт).
     // USD-конверт НЕ бюджетирует RUB-траты — категория обязана попасть в превью
     // как «траты без конверта» (симметрия с валютной границей остальных запросов, §5)
-    await createEnvelope(user, catTravel, prevStart, prevEnd, '1000.00', { currency: 'USD' });
+    await createEnvelope(user, catTravel, prevStart, prevEnd, '1000.00', {
+      'orbis/currency': 'USD',
+    });
     await createTxn(user, catTravel, '4321.00', `${prev}-12`);
 
     const p = await ownerCaller(user).budget.rolloverPreview({ month: target });

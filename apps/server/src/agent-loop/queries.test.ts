@@ -116,12 +116,14 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
       title: 'Проект очереди',
       tags: [],
       body: 'Процесс проекта',
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     const ticket = await seedEntity(owner, {
       title: 'Тикет очереди',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
     await link(owner, project.id, ticket.id, 'ticket');
     // Субъект прогона — рутина (§А6-1 проверяет `orbis/run_routine` по множеству
@@ -155,13 +157,15 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
     const project = await seedEntity(owner, {
       title: 'Проект в глубину',
       tags: [],
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     const middle = await seedEntity(owner, { title: 'Промежуточная задача', tags: [] });
     const ticket = await seedEntity(owner, {
       title: 'Глубокий тикет',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
     await link(owner, project.id, middle.id, 'subitem');
     await link(owner, middle.id, ticket.id, 'subitem');
@@ -178,18 +182,21 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
       title: 'Корневой проект',
       tags: [],
       body: 'Процесс корня',
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     const sub = await seedEntity(owner, {
       title: 'Подпроект',
       tags: [],
       body: 'Процесс подпроекта',
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     const ticket = await seedEntity(owner, {
       title: 'Тикет подпроекта',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
     await link(owner, top.id, sub.id, 'subitem');
     await link(owner, sub.id, ticket.id, 'ticket');
@@ -207,7 +214,8 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
     const ticket = await seedEntity(owner, {
       title: 'Личный тикет',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
     await link(owner, parent.id, ticket.id, 'subitem');
     expect(await withIdentity(db, owner, (tx) => parentProject(tx, ticket.id))).toBeNull();
@@ -220,11 +228,16 @@ describe('activeRoutines / routineById (V1.13)', () => {
     const active = await seedRoutine(owner, {
       title: 'Утренний обзор',
       body: 'Пройди по задачам дня и предложи план.',
-      routine: { stage: 'active', at: '07:00', mode: 'act', allowed_tools: ['entity_update'] },
+      routine: {
+        'orbis/routine_stage': 'active',
+        'orbis/routine_at': '07:00',
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      },
     });
     const paused = await seedRoutine(owner, {
       title: 'Приостановленная',
-      routine: { stage: 'paused' },
+      routine: { 'orbis/routine_stage': 'paused' },
     });
     const archived = await seedRoutine(owner, { title: 'Архивная' });
     const r = await execute(db, {
@@ -238,7 +251,8 @@ describe('activeRoutines / routineById (V1.13)', () => {
     await seedEntity(owner, {
       title: 'Обычная задача',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
 
     const rows = await withIdentity(db, owner, (tx) => activeRoutines(tx));
@@ -262,12 +276,18 @@ describe('activeRoutines / routineById (V1.13)', () => {
     const routineId = await seedRoutine(owner, {
       title: 'Вечерний разбор',
       body: 'Закрой день: что сделано, что перенести.',
-      routine: { stage: 'paused', at: '21:30', mode: 'propose', days: ['mo', 'fr'] },
+      routine: {
+        'orbis/routine_stage': 'paused',
+        'orbis/routine_at': '21:30',
+        'orbis/routine_mode': 'propose',
+        'orbis/routine_days': ['mo', 'fr'],
+      },
     });
     const task = await seedEntity(owner, {
       title: 'Не рутина',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
     const alien = await seedRoutine(stranger, { title: 'Чужая рутина' });
 
@@ -460,14 +480,14 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
       bucket: '2026-08-17T07:00',
       attempt: 2,
       run: {
-        outcome: 'failed',
-        fail_note: 'предусловие разошлось — предложение снято',
-        finished_at: iso(T0),
-        proposal: {
+        'orbis/run_outcome': 'failed',
+        'orbis/fail_note': 'предусловие разошлось — предложение снято',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/run_proposal': {
           pending_id: pendingId,
           status: 'stale',
           decided_at: iso(T0),
-          mismatches: [{ aspect: 'orbis/task', field: 'status', note: 'стало done' }],
+          mismatches: [{ property: 'orbis/task_status', note: 'стало done' }],
         },
       },
     });
@@ -502,10 +522,10 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
       routineId,
       bucket: '2026-08-17T07:00',
       run: {
-        outcome: 'finished',
-        finished_at: iso(T0),
-        report: 'Перенесу три просроченные задачи на сегодня.',
-        proposal: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/run_report': 'Перенесу три просроченные задачи на сегодня.',
+        'orbis/run_proposal': {
           pending_id: pendingId,
           status: 'approved',
           decided_at: iso(T0),
@@ -534,7 +554,11 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
     const open = await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-17T07:00',
-      run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/undecided': true,
+      },
     });
     // Разобранная пачка: в АСПЕКТЕ флажок живёт значением false (снятие — запись, а не
     // удаление ключа: предиката «поля нет» у грамматики §6 нет)
@@ -543,7 +567,11 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
       bucket: '2026-08-17T07:00',
       attempt: 2,
       startedAt: new Date(T0.getTime() + 5 * MINUTE),
-      run: { outcome: 'finished', finished_at: iso(T0), undecided: false },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': iso(T0),
+        'orbis/undecided': false,
+      },
     });
 
     const rows = await withIdentity(db, owner, (tx) =>
@@ -566,23 +594,23 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
     const ticket = await seedEntity(owner, {
       title: 'Тикет сводки',
       tags: [],
-      aspects: { 'orbis/task': { status: 'in_progress' } },
+      props: { 'orbis/task_status': 'in_progress' },
+      aspects: ['orbis/task'],
     });
     const run = await seedEntity(owner, {
       title: 'Прогон тикета',
       tags: [],
-      aspects: {
-        'orbis/agent-run': {
-          grant_id: newId(),
-          outcome: 'finished',
-          started_at: iso(T0),
-          last_step_at: iso(T0),
-          finished_at: iso(T0),
-          step_count: 0,
-          steps: [],
-          report: 'Готово',
-        },
+      props: {
+        'orbis/grant': newId(),
+        'orbis/run_outcome': 'finished',
+        'orbis/run_started_at': iso(T0),
+        'orbis/last_step_at': iso(T0),
+        'orbis/run_finished_at': iso(T0),
+        'orbis/step_count': 0,
+        'orbis/run_steps': [],
+        'orbis/run_report': 'Готово',
       },
+      aspects: ['orbis/agent-run'],
     });
     await link(owner, ticket.id, run.id, 'run');
     // Роль ребра — та, что просил вызов: `link` не вправе подставить свою. До 0017

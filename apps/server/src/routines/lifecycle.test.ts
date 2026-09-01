@@ -102,7 +102,8 @@ async function seedProposal(
   const task = await seedEntity(owner, {
     title: `Задача для ${bucket}`,
     tags: [],
-    aspects: { 'orbis/task': { status: 'inbox' } },
+    props: { 'orbis/task_status': 'inbox' },
+    aspects: ['orbis/task'],
   });
   const ctx = routineCtx(owner, 'propose', [], {
     routine: { id: routineId, runId, mode: 'propose', allowedTools: new Set() },
@@ -155,7 +156,8 @@ async function deferUnit(
   const target = await seedEntity(owner, {
     title,
     tags: [],
-    aspects: { 'orbis/task': { status: 'done' } },
+    props: { 'orbis/task_status': 'done' },
+    aspects: ['orbis/task'],
   });
   const r = await dispatchTool(
     routineCtx(owner, 'act', ['entity_update'], {
@@ -300,9 +302,12 @@ describe('supersedeOpen: новый прогон гасит незакрытое
       routineId,
       bucket: '2026-08-16T07:00',
       run: {
-        outcome: 'checkpoint',
-        checkpoint: { question: 'Переносить ли встречу?', asked_at: T0.toISOString() },
-        finished_at: T0.toISOString(),
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_checkpoint': {
+          question: 'Переносить ли встречу?',
+          asked_at: T0.toISOString(),
+        },
+        'orbis/run_finished_at': T0.toISOString(),
       },
     });
     const { runId: currentId } = await seedRoutineRun(owner, {
@@ -369,9 +374,9 @@ describe('supersedeOpen: новый прогон гасит незакрытое
       bucket: '2026-08-18T07:00',
       startedAt: minutes(20),
       run: {
-        outcome: 'checkpoint',
-        checkpoint: { question: 'Вопрос?', asked_at: T0.toISOString() },
-        finished_at: T0.toISOString(),
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_checkpoint': { question: 'Вопрос?', asked_at: T0.toISOString() },
+        'orbis/run_finished_at': T0.toISOString(),
       },
     });
     const { runId: laterId } = await seedRoutineRun(owner, {
@@ -511,8 +516,8 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     // Пара, которой прежний код не знал: он выходил из функции сразу после ветки
     // предложения, и терминальный вопрос того же прогона оставался висеть на владельце
     await patchRun(runId, {
-      outcome: 'checkpoint',
-      checkpoint: {
+      'orbis/run_outcome': 'checkpoint',
+      'orbis/run_checkpoint': {
         question: 'Без решения по бюджету дальше двигаться некуда — что делаем?',
         asked_at: T0.toISOString(),
       },
@@ -639,9 +644,12 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       routineId,
       bucket: '2026-08-16T13:00',
       run: {
-        outcome: 'checkpoint',
-        checkpoint: { question: 'Переносим ли релиз на неделю?', asked_at: T0.toISOString() },
-        finished_at: T0.toISOString(),
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_checkpoint': {
+          question: 'Переносим ли релиз на неделю?',
+          asked_at: T0.toISOString(),
+        },
+        'orbis/run_finished_at': T0.toISOString(),
       },
     });
     const question = await askUnit(routineId, runId, 'Кому отдать разбор писем?');
@@ -759,7 +767,7 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
       routineId,
       bucket,
       startedAt: minutes(offsetMin),
-      run: { outcome: 'failed', fail_note: 'AI-провайдер недоступен' },
+      run: { 'orbis/run_outcome': 'failed', 'orbis/fail_note': 'AI-провайдер недоступен' },
     });
   }
 
@@ -797,7 +805,7 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
       routineId,
       bucket: 'manual:2026-08-15T12:00:00.000Z',
       startedAt: minutes(2),
-      run: { outcome: 'failed', fail_note: 'AI-провайдер недоступен' },
+      run: { 'orbis/run_outcome': 'failed', 'orbis/fail_note': 'AI-провайдер недоступен' },
     });
     await seedFailed(routineId, '2026-08-16T07:00', 3);
 
@@ -828,7 +836,11 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
       operations: [
         {
           tool: 'entity_update',
-          input: { id: routineId, aspects: { 'orbis/routine': { stage: 'active' } } },
+          input: {
+            id: routineId,
+            props: { 'orbis/routine_stage': 'active' },
+            aspects: { attach: ['orbis/routine'] },
+          },
         },
       ],
       clock: () => minutes(4),
@@ -880,7 +892,11 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
       routineId,
       bucket: '2026-08-17T07:00',
       startedAt: minutes(3),
-      run: { outcome: 'finished', report: 'Готово', finished_at: minutes(3).toISOString() },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_report': 'Готово',
+        'orbis/run_finished_at': minutes(3).toISOString(),
+      },
     });
     await seedFailed(routineId, '2026-08-18T07:00', 4);
 
@@ -914,7 +930,7 @@ describe('appendSystemNote и routineHistory', () => {
         routineId,
         bucket: `2026-08-0${i + 1}T07:00`,
         startedAt: minutes(i),
-        run: { outcome: 'failed', fail_note: `сбой ${i}` },
+        run: { 'orbis/run_outcome': 'failed', 'orbis/fail_note': `сбой ${i}` },
       });
       ids.push(runId);
     }
@@ -940,10 +956,13 @@ describe('appendSystemNote и routineHistory', () => {
       bucket: '2026-08-17T07:00',
       startedAt: minutes(5),
       run: {
-        outcome: 'answered',
-        checkpoint: { question: 'Переносить?', asked_at: T0.toISOString() },
-        reply: { text: 'Не переноси.', at: minutes(6).toISOString() },
-        finished_at: minutes(6).toISOString(),
+        'orbis/run_outcome': 'answered',
+        'orbis/run_checkpoint': {
+          question: 'Переносить?',
+          asked_at: T0.toISOString(),
+        },
+        'orbis/run_reply': { text: 'Не переноси.', at: minutes(6).toISOString() },
+        'orbis/run_finished_at': minutes(6).toISOString(),
       },
     });
     const { runId: currentId } = await seedRoutineRun(owner, {
@@ -1032,7 +1051,11 @@ describe('routineHistory: единицы пачки прошлых прогон�
     const { runId } = await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-13T07:00',
-      run: { outcome: 'finished', report: 'Готово', finished_at: T0.toISOString() },
+      run: {
+        'orbis/run_outcome': 'finished',
+        'orbis/run_report': 'Готово',
+        'orbis/run_finished_at': T0.toISOString(),
+      },
     });
     const { runId: currentId } = await seedRoutineRun(owner, {
       routineId,
@@ -1117,7 +1140,10 @@ async function patchRun(runId: string, patch: Record<string, unknown>): Promise<
     source: 'ui',
     mechanism: 'verb',
     operations: [
-      { tool: 'entity_update', input: { id: runId, aspects: { 'orbis/agent-run': patch } } },
+      {
+        tool: 'entity_update',
+        input: { id: runId, props: patch, aspects: { attach: ['orbis/agent-run'] } },
+      },
     ],
     clock: () => T0,
   });
@@ -1196,12 +1222,15 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     expect(await runsOf(routineId)).toHaveLength(1);
 
     // Прогон закрыт удачно — бакет отработан навсегда
-    await patchRun(first.runId, { outcome: 'finished', finished_at: T0.toISOString() });
+    await patchRun(first.runId, {
+      'orbis/run_outcome': 'finished',
+      'orbis/run_finished_at': T0.toISOString(),
+    });
     expect(
       await startBucketRun(deps(), { ownerId: owner, routine: routineRef(routineId), bucket }),
     ).toEqual({ started: false, reason: 'done' });
     // Вопрос (checkpoint) и ответ на него — тоже «отработан»: попытка не повторяется
-    await patchRun(first.runId, { outcome: 'checkpoint' });
+    await patchRun(first.runId, { 'orbis/run_outcome': 'checkpoint' });
     expect(
       await startBucketRun(deps(), { ownerId: owner, routine: routineRef(routineId), bucket }),
     ).toEqual({ started: false, reason: 'done' });
@@ -1260,9 +1289,9 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       bucket,
       attempt: 1,
       run: {
-        outcome: 'failed',
-        fail_note: 'AI-провайдер недоступен',
-        finished_at: T0.toISOString(),
+        'orbis/run_outcome': 'failed',
+        'orbis/fail_note': 'AI-провайдер недоступен',
+        'orbis/run_finished_at': T0.toISOString(),
       },
     });
     const firstDelay = RETRY_DELAYS_MS[0];
@@ -1287,9 +1316,9 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     // Попытка 2 провалилась спустя минуту — отсчёт следующей паузы (15 мин) от ЕЁ finished_at
     const failedAt2 = new Date(T0.getTime() + firstDelay + 60_000);
     await patchRun(routineRunId(routineId, bucket, 2), {
-      outcome: 'failed',
-      fail_note: 'снова',
-      finished_at: failedAt2.toISOString(),
+      'orbis/run_outcome': 'failed',
+      'orbis/fail_note': 'снова',
+      'orbis/run_finished_at': failedAt2.toISOString(),
     });
     expect(
       await startBucketRun(
@@ -1305,8 +1334,8 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
 
     // Третья провалилась — попыток больше нет, сколько бы времени ни прошло
     await patchRun(routineRunId(routineId, bucket, 3), {
-      outcome: 'failed',
-      finished_at: minutes(60).toISOString(),
+      'orbis/run_outcome': 'failed',
+      'orbis/run_finished_at': minutes(60).toISOString(),
     });
     expect(MAX_ATTEMPTS).toBe(3);
     expect(await startBucketRun(deps({ clock: () => minutes(24 * 60) }), args)).toEqual({
@@ -1367,7 +1396,7 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-17T06:00',
-      run: { outcome: 'finished', finished_at: T0.toISOString() },
+      run: { 'orbis/run_outcome': 'finished', 'orbis/run_finished_at': T0.toISOString() },
     });
     const limited = deps({ entitlements: runsPerDay(1) });
     expect(
@@ -1402,12 +1431,12 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-16T07:00',
-      run: { outcome: 'finished', finished_at: T0.toISOString() },
+      run: { 'orbis/run_outcome': 'finished', 'orbis/run_finished_at': T0.toISOString() },
     });
     await seedRoutineRun(owner, {
       routineId,
       bucket: 'manual:2026-08-17T10:00:00.000Z',
-      run: { outcome: 'finished', finished_at: T0.toISOString() },
+      run: { 'orbis/run_outcome': 'finished', 'orbis/run_finished_at': T0.toISOString() },
     });
     const limited = deps({ entitlements: runsPerDay(1) });
     const started = await startBucketRun(limited, {
@@ -1423,8 +1452,8 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     // Теперь сегодняшний плановый есть — ручной упирается (прогон идёт → running раньше лимита,
     // поэтому закрываем его)
     await patchRun(routineRunId(routineId, '2026-08-17T07:00', 1), {
-      outcome: 'finished',
-      finished_at: T0.toISOString(),
+      'orbis/run_outcome': 'finished',
+      'orbis/run_finished_at': T0.toISOString(),
     });
     expect(
       await startManualRun(limited, {
@@ -1477,8 +1506,8 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     ).toEqual({ started: false, reason: 'running' });
 
     await patchRun(routineRunId(routineId, bucket, 1), {
-      outcome: 'finished',
-      finished_at: T0.toISOString(),
+      'orbis/run_outcome': 'finished',
+      'orbis/run_finished_at': T0.toISOString(),
     });
     // Те же часы → тот же ключ, но batch_id свежий: это НЕ replay прошлого запуска, а занятый
     // id — прогон не заводится и модель никто не гонит
@@ -1538,7 +1567,9 @@ describe('edited_from переживает решение по предложе�
   /** Помечает живое предложение как рождённое правкой — так же, как это сделает писатель. */
   async function markEdited(runId: string): Promise<string> {
     const editedFrom = newId();
-    await patchRun(runId, { proposal: { ...(await proposalOf(runId)), edited_from: editedFrom } });
+    await patchRun(runId, {
+      'orbis/run_proposal': { ...(await proposalOf(runId)), edited_from: editedFrom },
+    });
     return editedFrom;
   }
 
@@ -1572,7 +1603,11 @@ describe('edited_from переживает решение по предложе�
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+          input: {
+            id: taskId,
+            props: { 'orbis/task_status': 'done' },
+            aspects: { attach: ['orbis/task'] },
+          },
         },
       ],
       clock: () => T0,

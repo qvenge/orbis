@@ -474,7 +474,8 @@ describe('LLM-контракты entity_create/entity_update на свойств
     const target = await seedEntity(userA, {
       title: 'Цель опечатки в unset',
       tags: [],
-      aspects: { 'orbis/task': { status: 'waiting', waiting_for: 'курьера' } },
+      props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': 'курьера' },
+      aspects: ['orbis/task'],
     });
 
     const typo = await dispatchTool(ctxFor(), 'entity_update', {
@@ -518,7 +519,8 @@ describe('LLM-контракты entity_create/entity_update на свойств
     const target = await seedEntity(userA, {
       title: 'Задача с ожиданием',
       tags: [],
-      aspects: { 'orbis/task': { status: 'waiting', waiting_for: 'ответа банка' } },
+      props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': 'ответа банка' },
+      aspects: ['orbis/task'],
     });
     expect((await propsOfRowA(target.id))['orbis/waiting_for']).toBe('ответа банка');
 
@@ -562,6 +564,10 @@ describe('LLM-контракты entity_create/entity_update на свойств
       }),
       'VALIDATION',
     );
+    // ALLOWLIST старой формы (Задача 23a): фикстура НАМЕРЕННО говорит старой картой —
+    // тест утверждает её ОТКАЗ тул-контрактом. Задача 23b снимает союз легаси-входа, и
+    // тогда вторая половина теста (приём той же карты надмножеством исполнителя) станет
+    // отказом тоже — фикстура нужна ровно до этого момента.
     expectError(
       await dispatchTool(ctxFor(), 'entity_update', {
         id: target.id,
@@ -579,6 +585,8 @@ describe('LLM-контракты entity_create/entity_update на свойств
       operations: [
         {
           tool: 'entity_update',
+          // ALLOWLIST старой формы (Задача 23a): здесь проверяется, что exec-надмножество
+          // её ещё ПРИНИМАЕТ — до сноса союза Задачей 23b.
           input: { id: target.id, aspects: { 'orbis/task': { status: 'done' } } },
         },
       ],
@@ -841,12 +849,14 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
     const inbox = await seedEntity(userA, {
       title: 'Дерево: inbox',
       tags: ['qtest-ast'],
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     });
     await seedEntity(userA, {
       title: 'Дерево: done',
       tags: ['qtest-ast'],
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
+      aspects: ['orbis/task'],
     });
 
     // `(статус inbox ИЛИ planned) И тег` — плоской строкой §А5-3 такое не пишется.
@@ -954,14 +964,16 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
     const created = await seedEntity(userA, {
       title: 'Мост',
       tags: ['qtest-bridge'],
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     });
     // Вторая сущность под тем же тегом — КОНТРОЛЬ: без неё «условие по статусу отработало»
     // и «условие молча выброшено» дают один и тот же ответ на выборке из одной строки.
     await seedEntity(userA, {
       title: 'Мост: закрытая',
       tags: ['qtest-bridge'],
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
+      aspects: ['orbis/task'],
     });
     const ids = async (query: string) => {
       const r = await dispatchTool(ctxFor(), 'entity_query', { query });
@@ -1196,14 +1208,13 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
       await seedEntity(userA, {
         title: `Расход ${amount}`,
         tags: ['uqtest'],
-        aspects: {
-          'orbis/financial': {
-            amount,
-            direction: 'expense',
-            category_ref: CATEGORY_REF,
-            occurred_on: '2026-07-01',
-          },
+        props: {
+          'orbis/amount': amount,
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+          'orbis/occurred_on': '2026-07-01',
         },
+        aspects: ['orbis/financial'],
       });
     }
   });
@@ -1305,19 +1316,16 @@ describe('dispatchTool: user_query материализует окно запр�
     await seedEntity(userC, {
       title: 'Абонемент',
       tags: [],
-      aspects: {
-        'orbis/schedule': {
-          start_at: `${tomorrow}T12:00:00+03:00`,
-          timezone: tz,
-          recurrence: { freq: 'weekly', interval: 1 },
-        },
-        'orbis/financial': {
-          amount: '150.00',
-          direction: 'expense',
-          category_ref: CATEGORY_REF_C,
-          recurring: true,
-        },
+      props: {
+        'orbis/start_at': `${tomorrow}T12:00:00+03:00`,
+        'orbis/timezone': tz,
+        'orbis/recurrence': { freq: 'weekly', interval: 1 },
+        'orbis/amount': '150.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CATEGORY_REF_C,
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
     const r = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
       query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',
@@ -1494,15 +1502,18 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     project = await seedEntity(owner, {
       title: 'Проект исполнителя',
       tags: [],
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     ticket = await seedEntity(owner, {
       title: 'Тикет исполнителя',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     note = await seedEntity(owner, { title: 'Личная заметка владельца', tags: [] });
     const r = await execute(db, {
@@ -1521,7 +1532,14 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
 
   test('worker: entity_update / attach_orbis_task / batch_execute → FORBIDDEN_LEVEL, ничего не записано', async () => {
     const calls: Array<[string, Record<string, unknown>]> = [
-      ['entity_update', { id: ticket.id, aspects: { 'orbis/task': { status: 'done' } } }],
+      [
+        'entity_update',
+        {
+          id: ticket.id,
+          props: { 'orbis/task_status': 'done' },
+          aspects: { attach: ['orbis/task'] },
+        },
+      ],
       ['attach_orbis_task', { entity_id: ticket.id, data: { 'orbis/task_status': 'done' } }],
       [
         'batch_execute',
@@ -1530,7 +1548,11 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
           operations: [
             {
               tool: 'entity_update',
-              input: { id: ticket.id, aspects: { 'orbis/task': { status: 'done' } } },
+              input: {
+                id: ticket.id,
+                props: { 'orbis/task_status': 'done' },
+                aspects: { attach: ['orbis/task'] },
+              },
             },
           ],
         },
@@ -1597,10 +1619,12 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     const archivedTicket = await seedEntity(owner, {
       title: 'Тикет, убранный в архив',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     const r = await execute(db, {
       actorUserId: owner,
@@ -1649,7 +1673,8 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     expectError(
       await dispatchTool(unknownScope, 'entity_update', {
         id: ticket.id,
-        aspects: { 'orbis/task': { status: 'done' } },
+        props: { 'orbis/task_status': 'done' },
+        aspects: { attach: ['orbis/task'] },
       }),
       'FORBIDDEN_LEVEL',
     );
@@ -1704,10 +1729,12 @@ describe('dispatchTool: глаголы исполнителя никогда н�
     const ticket = await seedEntity(owner, {
       title,
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     const r = await execute(db, {
       actorUserId: owner,
@@ -1746,7 +1773,8 @@ describe('dispatchTool: глаголы исполнителя никогда н�
         title: 'Проект круга',
         tags: [],
         body: '## Процесс\n\nВетка, тесты, отчёт.\n',
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: ['orbis/project'],
       })
     ).id;
   });
@@ -1831,12 +1859,14 @@ describe('CAS-предусловие не протекает в путь мод�
     const target = await seedEntity(userA, {
       title: 'Тикет модели',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
     const r = await dispatchTool(ctxFor(), 'entity_update', {
       id: target.id,
       precondition: PRECONDITION,
-      aspects: { 'orbis/task': { status: 'in_progress' } },
+      props: { 'orbis/task_status': 'in_progress' },
+      aspects: { attach: ['orbis/task'] },
     });
     expectError(r, 'VALIDATION');
     const rows = await withIdentity(db, userA, (tx) =>
@@ -1853,7 +1883,8 @@ describe('CAS-предусловие не протекает в путь мод�
     const target = await seedEntity(userA, {
       title: 'Тикет модели в batch',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
     const r = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
@@ -1863,7 +1894,8 @@ describe('CAS-предусловие не протекает в путь мод�
           input: {
             id: target.id,
             precondition: PRECONDITION,
-            aspects: { 'orbis/task': { status: 'in_progress' } },
+            props: { 'orbis/task_status': 'in_progress' },
+            aspects: { attach: ['orbis/task'] },
           },
         },
       ],
@@ -1912,17 +1944,9 @@ describe('Внутренние операции версий недостижи�
 
 describe('V1: выдача автономии рутине из чата → pending_confirmation (V1.10, инвариант 7)', () => {
   /** Рутина в минимальной валидной форме (V1.1). */
-  const routine = (over: Record<string, unknown> = {}) => ({
-    stage: 'active',
-    at: '07:00',
-    mode: 'propose',
-    ...over,
-  });
-
   /**
-   * Та же рутина, но СВОЙСТВАМИ (§А9-1) — форма, которой говорят тулы: `props` у
-   * create/update и `data` у `attach_*`. Старая карта выше осталась ровно у фикстур
-   * `seedEntity`: они идут через `execute`, а exec-надмножество принимает обе формы.
+   * Рутина СВОЙСТВАМИ (§А9-1) — форма, которой говорят тулы: `props` у create/update и
+   * `data` у `attach_*`; ею же фикстуры `seedEntity` идут через `execute`.
    */
   const routineProps = (over: Record<string, unknown> = {}) => ({
     'orbis/routine_stage': 'active',
@@ -1981,7 +2005,11 @@ describe('V1: выдача автономии рутине из чата → pen
       title: 'Утренний план',
       body: 'Собери план дня.',
       tags: [],
-      aspects: { 'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }) },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const byAi = await dispatchTool(ctxFor(), 'entity_update', {
       id: act.id,
@@ -2014,7 +2042,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const propose = await seedEntity(userA, {
       title: 'Вечерний разбор',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routineProps(),
+      aspects: ['orbis/routine'],
     });
     const proposeEdit = await dispatchTool(ctxFor(), 'entity_update', {
       id: propose.id,
@@ -2034,7 +2063,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const target = await seedEntity(userA, {
       title: 'Вечерний разбор',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routineProps(),
+      aspects: ['orbis/routine'],
     });
     const upd = await dispatchTool(ctxFor(), 'entity_update', {
       id: target.id,
@@ -2089,9 +2119,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Утренний обзор',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
 
     // A. Только снятие белого списка.
@@ -2152,9 +2184,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Вооружённая рутина',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_create'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_create'],
+      }),
+      aspects: ['orbis/routine'],
     });
 
     const disarm = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
@@ -2176,7 +2210,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const plain = await seedEntity(userA, {
       title: 'Безоружная рутина',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routineProps(),
+      aspects: ['orbis/routine'],
     });
     const harmless = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
       entity_id: plain.id,
@@ -2208,9 +2243,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Эхо-рутина',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_create'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_create'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const echo = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
       entity_id: armed.id,
@@ -2231,7 +2268,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const actOnly = await seedEntity(userA, {
       title: 'Только режим',
       tags: [],
-      aspects: { 'orbis/routine': routine({ mode: 'act' }) },
+      props: routineProps({ 'orbis/routine_mode': 'act' }),
+      aspects: ['orbis/routine'],
     });
     const quench = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
       entity_id: actOnly.id,
@@ -2249,7 +2287,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const same = await seedEntity(userA, {
       title: 'Ничего не меняет',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routineProps(),
+      aspects: ['orbis/routine'],
     });
     const noop = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
       entity_id: same.id,
@@ -2314,9 +2353,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Рутина под снос',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const detach = await dispatchTool(ctxFor(), 'entity_update', {
       id: armed.id,
@@ -2333,7 +2374,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const listed = await seedEntity(userA, {
       title: 'Только список',
       tags: [],
-      aspects: { 'orbis/routine': routine({ allowed_tools: ['entity_update'] }) },
+      props: routineProps({ 'orbis/allowed_tools': ['entity_update'] }),
+      aspects: ['orbis/routine'],
     });
     const detachListed = await dispatchTool(ctxFor(), 'entity_update', {
       id: listed.id,
@@ -2346,7 +2388,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const unarmed = await seedEntity(userA, {
       title: 'Безоружная под снос',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routineProps(),
+      aspects: ['orbis/routine'],
     });
     const ok = await dispatchTool(ctxFor(), 'entity_update', {
       id: unarmed.id,
@@ -2361,7 +2404,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const emptyList = await seedEntity(userA, {
       title: 'Пустой список под снос',
       tags: [],
-      aspects: { 'orbis/routine': routine({ allowed_tools: [] }) },
+      props: routineProps({ 'orbis/allowed_tools': [] }),
+      aspects: ['orbis/routine'],
     });
     // Фикстура обязана НЕСТИ проверяемое: если бы сид потерял ключ, ряд стал бы копией грубого.
     expect((await propsOfRow(emptyList.id))['orbis/allowed_tools']).toEqual([]);
@@ -2405,7 +2449,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Опустошаемая',
       tags: [],
-      aspects: { 'orbis/routine': routine({ allowed_tools: ['entity_create'] }) },
+      props: routineProps({ 'orbis/allowed_tools': ['entity_create'] }),
+      aspects: ['orbis/routine'],
     });
     const emptied = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
       entity_id: armed.id,
@@ -2600,9 +2645,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const already = await seedEntity(userA, {
       title: 'Уже рутина',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const noop = await dispatchTool(ctxFor(), 'entity_update', {
       id: already.id,
@@ -2631,9 +2678,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Архивная вооружённая',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     await archive(armed.id);
     const revive = await dispatchTool(ctxFor(), 'entity_update', {
@@ -2654,7 +2703,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const calm = await seedEntity(userA, {
       title: 'Архивная propose-рутина',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routineProps(),
+      aspects: ['orbis/routine'],
     });
     await archive(calm.id);
     const calmBack = await dispatchTool(ctxFor(), 'entity_update', {
@@ -2687,9 +2737,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const live = await seedEntity(userA, {
       title: 'Живая вооружённая',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const noop = await dispatchTool(ctxFor(), 'entity_update', {
       id: live.id,
@@ -2722,13 +2774,12 @@ describe('V1: выдача автономии рутине из чата → pen
     const paused = await seedEntity(userA, {
       title: 'Приостановленная вооружённая',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({
-          stage: 'paused',
-          mode: 'act',
-          allowed_tools: ['entity_update'],
-        }),
-      },
+      props: routineProps({
+        'orbis/routine_stage': 'paused',
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const unpause = await dispatchTool(ctxFor(), 'entity_update', {
       id: paused.id,
@@ -2748,9 +2799,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const live = await seedEntity(userA, {
       title: 'Живая вооружённая для паузы',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const pause = await dispatchTool(ctxFor(), 'entity_update', {
       id: live.id,
@@ -2764,7 +2817,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const calm = await seedEntity(userA, {
       title: 'Приостановленная propose-рутина',
       tags: [],
-      aspects: { 'orbis/routine': routine({ stage: 'paused' }) },
+      props: routineProps({ 'orbis/routine_stage': 'paused' }),
+      aspects: ['orbis/routine'],
     });
     const calmOn = await dispatchTool(ctxFor(), 'entity_update', {
       id: calm.id,
@@ -2778,9 +2832,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const already = await seedEntity(userA, {
       title: 'Уже работает',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const noop = await dispatchTool(ctxFor(), 'entity_update', {
       id: already.id,
@@ -2794,13 +2850,12 @@ describe('V1: выдача автономии рутине из чата → pen
     const both = await seedEntity(userA, {
       title: 'Архивная и на паузе',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({
-          stage: 'paused',
-          mode: 'act',
-          allowed_tools: ['entity_update'],
-        }),
-      },
+      props: routineProps({
+        'orbis/routine_stage': 'paused',
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     await withIdentity(db, userA, (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, both.id)),
@@ -2891,13 +2946,12 @@ describe('V1: выдача автономии рутине из чата → pen
     const offTwice = await seedEntity(userA, {
       title: 'Выключенная дважды',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({
-          stage: 'paused',
-          mode: 'act',
-          allowed_tools: ['entity_update'],
-        }),
-      },
+      props: routineProps({
+        'orbis/routine_stage': 'paused',
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     await withIdentity(db, userA, (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, offTwice.id)),
@@ -2925,13 +2979,12 @@ describe('V1: выдача автономии рутине из чата → pen
     const stillOff = await seedEntity(userA, {
       title: 'Так и не включена',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({
-          stage: 'paused',
-          mode: 'act',
-          allowed_tools: ['entity_update'],
-        }),
-      },
+      props: routineProps({
+        'orbis/routine_stage': 'paused',
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     await withIdentity(db, userA, (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, stillOff.id)),
@@ -2980,13 +3033,12 @@ describe('V1: выдача автономии рутине из чата → pen
     const onOff = await seedEntity(userA, {
       title: 'Включили и выключили',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({
-          stage: 'paused',
-          mode: 'act',
-          allowed_tools: ['entity_update'],
-        }),
-      },
+      props: routineProps({
+        'orbis/routine_stage': 'paused',
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const flip = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
@@ -3127,9 +3179,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const twice = await seedEntity(userA, {
       title: 'Правят дважды',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const dup = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
@@ -3149,9 +3203,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const other = await seedEntity(userA, {
       title: 'Вторая рутина',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const twoRoutines = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
@@ -3210,9 +3266,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const stripped = await seedEntity(userA, {
       title: 'Сняли и правят',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const chain = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
@@ -3274,7 +3332,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const idle = await seedEntity(userA, {
       title: 'Безоружная с пустым списком',
       tags: [],
-      aspects: { 'orbis/routine': routine({ allowed_tools: [] }) },
+      props: routineProps({ 'orbis/allowed_tools': [] }),
+      aspects: ['orbis/routine'],
     });
     expect((await propsOfRow(idle.id))['orbis/allowed_tools']).toEqual([]);
 
@@ -3294,7 +3353,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Вооружённая с непустым списком',
       tags: [],
-      aspects: { 'orbis/routine': routine({ allowed_tools: ['entity_update'] }) },
+      props: routineProps({ 'orbis/allowed_tools': ['entity_update'] }),
+      aspects: ['orbis/routine'],
     });
     const reschedArmed = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
       entity_id: armed.id,
@@ -3320,9 +3380,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const armed = await seedEntity(userA, {
       title: 'Общая цель',
       tags: [],
-      aspects: {
-        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
-      },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update'],
+      }),
+      aspects: ['orbis/routine'],
     });
     const batch = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
@@ -3343,7 +3405,8 @@ describe('V1: выдача автономии рутине из чата → pen
     const target = await seedEntity(userA, {
       title: 'Вечерний разбор',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routineProps(),
+      aspects: ['orbis/routine'],
     });
 
     const r = await dispatchTool(ctxFor(), 'entity_update', {
@@ -3387,7 +3450,8 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     const target = await seedEntity(userA, {
       title: 'Цель рутины в propose',
       tags: ['routine-gate'],
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     });
     const ctx = rt('propose');
 
@@ -3427,7 +3491,8 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     const target = await seedEntity(userA, {
       title: 'Цель рутины в act',
       tags: [],
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     });
     const ctx = rt('act', ['entity_update']);
 
@@ -3458,7 +3523,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // доходит до отложки, а не упирается в гейт режима или в гейт инварианта 5.
     const routineId = await seedRoutine(userA, {
       title: 'Рутина архивации',
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
     const target = await seedEntity(userA, { title: 'Цель архивации рутиной', tags: [] });
     const ctx = rt('act', ['entity_update'], {
@@ -3709,7 +3774,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // или закрыть прогон она не должна ни своим, ни чужим прогоном
     const { propsOf, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
     const routineId = await seedRoutine(userA, {
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
     const { runId } = await seedRoutineRun(userA, { routineId, bucket: '2026-08-20T07:00' });
     const ctx = rt('act', ['entity_update'], {
@@ -3745,7 +3810,11 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
       operations: [
         {
           tool: 'entity_update',
-          input: { id: runId, aspects: { 'orbis/agent-run': { step_count: 1 } } },
+          input: {
+            id: runId,
+            props: { 'orbis/step_count': 1 },
+            aspects: { attach: ['orbis/agent-run'] },
+          },
         },
       ],
     });
@@ -3799,10 +3868,12 @@ describe('объектный пре-чек рутинной мутации (D42 
     const assigned = await seedEntity(userA, {
       title: 'Назначенный тикет',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'inbox' },
-        'orbis/assignment': { executor: 'human', assignee: 'Пётр' },
+      props: {
+        'orbis/task_status': 'inbox',
+        'orbis/executor': 'human',
+        'orbis/assignee': 'Пётр',
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     const ctx = rt(['entity_update']);
 
@@ -3861,7 +3932,7 @@ describe('объектный пре-чек рутинной мутации (D42 
   test('правка инструкции act-рутины из фона → отказ на диспатче (пере-использован скан носителя)', async () => {
     const actRoutine = await seedRoutine(userA, {
       title: 'Утренний обзор в act',
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
     const ctx = rt(['entity_update']);
 
@@ -3905,10 +3976,12 @@ describe('объектный пре-чек рутинной мутации (D42 
     const assigned = await seedEntity(userA, {
       title: 'Назначенный тикет как конец связи',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'inbox' },
-        'orbis/assignment': { executor: 'human', assignee: 'Пётр' },
+      props: {
+        'orbis/task_status': 'inbox',
+        'orbis/executor': 'human',
+        'orbis/assignee': 'Пётр',
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     const ctx = rt(['relation_create', 'relation_delete']);
     const link = (tool: string, source: string, target: string) => [
@@ -3937,7 +4010,7 @@ describe('объектный пре-чек рутинной мутации (D42 
     const routineId = await seedRoutine(userA, { title: 'Рутина для чатового пути' });
     const acting = await seedRoutine(userA, {
       title: 'Рутина обычной цели',
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
 
     // Пре-чек касается ТОЛЬКО запретных объектов: обычная цель проходит его насквозь и
@@ -3987,7 +4060,7 @@ describe('отложка небезопасного действия рутин�
   ): Promise<{ ctx: ToolCallCtx; routineId: string; runId: string; threadId: string }> {
     const routineId = await seedRoutine(owner, {
       title: 'Рутина отложки',
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
     const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-21T07:00' });
     const ctx = routineCtx(owner, 'act', ['entity_update'], {
@@ -4027,7 +4100,8 @@ describe('отложка небезопасного действия рутин�
     const target = await seedEntity(owner, {
       title: 'Прошлогодний отчёт',
       tags: [],
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
+      aspects: ['orbis/task'],
     });
 
     const r = await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true });
@@ -4091,7 +4165,8 @@ describe('отложка небезопасного действия рутин�
     const target = await seedEntity(owner, {
       title: 'Цель, которую тронули между попытками',
       tags: [],
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     });
     const call = { id: target.id, archived: true, props: { 'orbis/task_status': 'done' } };
 
@@ -4107,7 +4182,11 @@ describe('отложка небезопасного действия рутин�
       operations: [
         {
           tool: 'entity_update',
-          input: { id: target.id, aspects: { 'orbis/task': { status: 'in_progress' } } },
+          input: {
+            id: target.id,
+            props: { 'orbis/task_status': 'in_progress' },
+            aspects: { attach: ['orbis/task'] },
+          },
         },
       ],
     });
@@ -4327,7 +4406,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   async function gardener(owner: string, allowed: string[]) {
     const routineId = await seedRoutine(owner, {
       title: 'Садовник словаря',
-      routine: { mode: 'act', allowed_tools: allowed },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': allowed },
     });
     const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-26T09:00' });
     const ctx = routineCtx(owner, 'act', allowed, {
@@ -4443,7 +4522,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const into = await ownProperty(owner, 'Уровень усилия');
     const routineId = await seedRoutine(owner, {
       title: 'Вооружённая рутина',
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
 
     const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'batch_execute', {

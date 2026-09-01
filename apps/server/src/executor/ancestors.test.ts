@@ -80,7 +80,11 @@ async function createEntity(
 }
 
 async function project(owner: string, title: string): Promise<WireEntity> {
-  return createEntity(owner, { title, aspects: { 'orbis/project': { stage: 'active' } } });
+  return createEntity(owner, {
+    title,
+    props: { 'orbis/project_stage': 'active' },
+    aspects: ['orbis/project'],
+  });
 }
 
 async function relate(
@@ -194,7 +198,8 @@ test('прогон под тикетом под проектом получае�
   const p = await project(owner, 'Проект прогонов');
   const ticket = await createEntity(owner, {
     title: 'Тикет',
-    aspects: { 'orbis/task': { status: 'planned' } },
+    props: { 'orbis/task_status': 'planned' },
+    aspects: ['orbis/task'],
   });
   // Аспект прогона несёт `system_writable`-свойства (§А2-5): в бою его пишет глагол
   // исполнителя, поэтому фикстура называет механизм вслух.
@@ -202,17 +207,16 @@ test('прогон под тикетом под проектом получае�
     owner,
     {
       title: 'Прогон',
-      aspects: {
-        'orbis/agent-run': {
-          // Ровно один субъект прогона (V1.4) — иначе инвариант не пустит фикстуру
-          routine_id: newId(),
-          outcome: 'running',
-          started_at: '2026-08-27T10:00:00.000Z',
-          last_step_at: '2026-08-27T10:00:00.000Z',
-          step_count: 0,
-          steps: [],
-        },
+      props: {
+        // Ровно один субъект прогона (V1.4) — иначе инвариант не пустит фикстуру
+        'orbis/run_routine': newId(),
+        'orbis/run_outcome': 'running',
+        'orbis/run_started_at': '2026-08-27T10:00:00.000Z',
+        'orbis/last_step_at': '2026-08-27T10:00:00.000Z',
+        'orbis/step_count': 0,
+        'orbis/run_steps': [],
       },
+      aspects: ['orbis/agent-run'],
     },
     AS_SYSTEM,
   );

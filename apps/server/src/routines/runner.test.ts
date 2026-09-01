@@ -192,7 +192,8 @@ async function seedTask(title: string): Promise<string> {
   const e = await seedEntity(owner, {
     title,
     tags: [],
-    aspects: { 'orbis/task': { status: 'inbox' } },
+    props: { 'orbis/task_status': 'inbox' },
+    aspects: ['orbis/task'],
   });
   return e.id;
 }
@@ -315,7 +316,7 @@ describe('runRoutineRun: режим propose (V1.5, V1.6)', () => {
 
 describe('runRoutineRun: режим act (V1.10)', () => {
   test('end_turn → finished, финальный текст стал отчётом', async () => {
-    const routineId = await seedRoutine(owner, { routine: { mode: 'act' } });
+    const routineId = await seedRoutine(owner, { routine: { 'orbis/routine_mode': 'act' } });
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
 
@@ -332,7 +333,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
 
   test('белый список: entity_update правит граф с source routine и run_id (rollbackRun откатывает); тул вне списка — отказ модели, а не сбой прогона', async () => {
     const routineId = await seedRoutine(owner, {
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
@@ -381,7 +382,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
   });
 
   test('лимит шагов: act → finished с пометкой в отчёте; тот же потолок ROUTINE_MAX_STEPS', async () => {
-    const routineId = await seedRoutine(owner, { routine: { mode: 'act' } });
+    const routineId = await seedRoutine(owner, { routine: { 'orbis/routine_mode': 'act' } });
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
     const provider = new ScriptedProvider(
@@ -397,7 +398,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
   });
 
   test('обрыв по потолку токенов: act → finished, отчёт с видимой пометкой (не «успешный» обрубок)', async () => {
-    const routineId = await seedRoutine(owner, { routine: { mode: 'act' } });
+    const routineId = await seedRoutine(owner, { routine: { 'orbis/routine_mode': 'act' } });
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
     const cut: LLMResponse = {
@@ -422,7 +423,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     // он и открывает прогон. Пин стоит здесь, в раннере: `ask.test.ts` ходит напрямую
     // через dispatchTool и сводки шага не видит вовсе.
     const routineId = await seedRoutine(owner, {
-      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
@@ -834,7 +835,10 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     const { runId } = await seedRoutineRun(owner, {
       routineId,
       bucket,
-      run: { outcome: 'failed', fail_note: 'прогон прерван: нет шагов дольше 30 мин' },
+      run: {
+        'orbis/run_outcome': 'failed',
+        'orbis/fail_note': 'прогон прерван: нет шагов дольше 30 мин',
+      },
     });
     const provider = new ScriptedProvider([endTurn('не должно случиться')]);
 

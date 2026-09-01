@@ -199,7 +199,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
         title: 'Проект-хаб перф-фикстуры',
         tags: ['project'],
         body: 'Узел, вокруг которого собран граф замера.',
-        aspects: {},
+        aspects: [],
       },
     },
   ]);
@@ -211,14 +211,13 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
       id: newId(),
       title: `Конверт ${slug} ${curStart}`,
       tags: [],
-      aspects: {
-        'orbis/budget': {
-          category_ref: seedCategoryId(ownerId, slug),
-          limit: '30000.00',
-          period_start: curStart,
-          period_end: curEnd,
-        },
+      props: {
+        'orbis/finance_category': seedCategoryId(ownerId, slug),
+        'orbis/limit': '30000.00',
+        'orbis/period_start': curStart,
+        'orbis/period_end': curEnd,
       },
+      aspects: ['orbis/budget'],
     },
   }));
   for (const slug of EXPENSE_SLUGS.slice(0, 2)) {
@@ -228,14 +227,13 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
         id: newId(),
         title: `Конверт ${slug} ${prevStart}`,
         tags: [],
-        aspects: {
-          'orbis/budget': {
-            category_ref: seedCategoryId(ownerId, slug),
-            limit: '28000.00',
-            period_start: prevStart,
-            period_end: prevEnd,
-          },
+        props: {
+          'orbis/finance_category': seedCategoryId(ownerId, slug),
+          'orbis/limit': '28000.00',
+          'orbis/period_start': prevStart,
+          'orbis/period_end': prevEnd,
         },
+        aspects: ['orbis/budget'],
       },
     });
   }
@@ -253,13 +251,12 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
         id,
         title: `Задача фикстуры ${i}`,
         tags: ['task'],
-        aspects: {
-          'orbis/task': {
-            status: TASK_STATUSES[i % TASK_STATUSES.length],
-            priority: PRIORITIES[i % PRIORITIES.length],
-            due_date: addDaysISO(today, (i % 121) - 60),
-          },
+        props: {
+          'orbis/task_status': TASK_STATUSES[i % TASK_STATUSES.length],
+          'orbis/priority': PRIORITIES[i % PRIORITIES.length],
+          'orbis/due_date': addDaysISO(today, (i % 121) - 60),
         },
+        aspects: ['orbis/task'],
       },
     };
   });
@@ -277,7 +274,8 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
         id: newId(),
         title: `Событие фикстуры ${i}`,
         tags: ['event'],
-        aspects: { 'orbis/schedule': { start_at: `${day}T${hour}:00:00+03:00` } },
+        props: { 'orbis/start_at': `${day}T${hour}:00:00+03:00` },
+        aspects: ['orbis/schedule'],
       },
     };
   });
@@ -292,7 +290,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
       title: `Заметка фикстуры ${i}`,
       tags: ['note'],
       body: `Разбор по [[entity:${hubId}]] — пункт ${i}.`,
-      aspects: { 'orbis/note': {} },
+      aspects: ['orbis/note'],
     },
   }));
   await runBatches(db, ownerId, mentions);
@@ -320,14 +318,13 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
           id: newId(),
           title: `${income ? 'Доход' : 'Расход'} фикстуры ${i}`,
           tags: [],
-          aspects: {
-            'orbis/financial': {
-              amount: `${100 + (i % 900)}.00`,
-              direction: income ? 'income' : 'expense',
-              category_ref: seedCategoryId(ownerId, slugs[i % slugs.length] as string),
-              occurred_on: addDaysISO(from, i % span),
-            },
+          props: {
+            'orbis/amount': `${100 + (i % 900)}.00`,
+            'orbis/direction': income ? 'income' : 'expense',
+            'orbis/finance_category': seedCategoryId(ownerId, slugs[i % slugs.length] as string),
+            'orbis/occurred_on': addDaysISO(from, i % span),
           },
+          aspects: ['orbis/financial'],
         },
       };
     });

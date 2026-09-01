@@ -10,9 +10,9 @@ import {
   adminDb,
   appDb,
   divergentEntityRow,
+  entityColumns,
   executeWithFixtureCategories as execute,
   freshUserId,
-  legacyEntityColumns,
   requireEnv,
   seedRefTargetRows,
   truncateAll,
@@ -81,26 +81,7 @@ async function createEntity(
   return { entity: r.results[0] as WireEntity, actionId: r.actionId };
 }
 
-/** Конверт (orbis/budget): произвольный период, limit фиксированный (деньги тут не считаются). */
-function budgetData(
-  categoryRef: string,
-  periodStart: string,
-  periodEnd: string,
-  over: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
-    category_ref: categoryRef,
-    limit: '30000.00',
-    period_start: periodStart,
-    period_end: periodEnd,
-    ...over,
-  };
-}
-
-/**
- * Тот же конверт СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). Старая карта выше осталась
- * у фикстур `entity_create`/`entity_update` через `execute`: exec-надмножество принимает обе.
- */
+/** Конверт (orbis/budget) СВОЙСТВАМИ: произвольный период, limit фиксированный. */
 function budgetProps(
   categoryRef: string,
   periodStart: string,
@@ -116,17 +97,17 @@ function budgetProps(
   };
 }
 
-/** Транзакция (orbis/financial). */
-function finData(
+/** Транзакция (orbis/financial) СВОЙСТВАМИ. */
+function finProps(
   categoryRef: string,
   occurredOn: string,
   over: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    amount: '340.00',
-    direction: 'expense',
-    category_ref: categoryRef,
-    occurred_on: occurredOn,
+    'orbis/amount': '340.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': categoryRef,
+    'orbis/occurred_on': occurredOn,
     ...over,
   };
 }
@@ -179,7 +160,8 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
   test('месячный конверт, период включает дату → выбран', async () => {
     const { entity: env } = await createEntity(user, {
       title: 'Еда — июль',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const picked = await selector(user, {
       categoryRef: cat,
@@ -201,7 +183,8 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
   test('два кандидата (месячный + узкий) → узкий (минимум календарных дней)', async () => {
     const { entity: narrow } = await createEntity(user, {
       title: 'Еда — отпуск',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-10', '2026-07-20') },
+      props: budgetProps(cat, '2026-07-10', '2026-07-20'),
+      aspects: ['orbis/budget'],
     });
     const picked = await selector(user, {
       categoryRef: cat,
@@ -215,11 +198,13 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     const catB = newId();
     await createEntity(user, {
       title: 'A',
-      aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-10') },
+      props: budgetProps(catB, '2026-07-01', '2026-07-10'),
+      aspects: ['orbis/budget'],
     });
     const { entity: later } = await createEntity(user, {
       title: 'B',
-      aspects: { 'orbis/budget': budgetData(catB, '2026-07-05', '2026-07-14') },
+      props: budgetProps(catB, '2026-07-05', '2026-07-14'),
+      aspects: ['orbis/budget'],
     });
     const picked = await selector(user, {
       categoryRef: catB,
@@ -241,9 +226,8 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     await createEntity(user, {
       id: idBig,
       title: 'явная RUB',
-      aspects: {
-        'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31', { currency: 'RUB' }),
-      },
+      props: budgetProps(catC, '2026-07-01', '2026-07-31', { 'orbis/currency': 'RUB' }),
+      aspects: ['orbis/budget'],
     });
     // Прямая вставка мимо исполнителя (в этом и смысл: строка «как из прошлого», без
     // currency). Через drizzle, а не сырым SQL: строка обязана лечь во ВСЕ три колонки
@@ -253,9 +237,9 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
         id: idSmall,
         ownerId: user,
         title: 'legacy без currency (дефолт RUB)',
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31'),
-        })),
+        ...(await entityColumns(tx, user, budgetProps(catC, '2026-07-01', '2026-07-31'), [
+          'orbis/budget',
+        ])),
       }),
     );
     const picked = await selector(user, {
@@ -270,9 +254,8 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     const catD = newId();
     const { entity: eur } = await createEntity(user, {
       title: 'EUR-конверт',
-      aspects: {
-        'orbis/budget': budgetData(catD, '2026-07-01', '2026-07-31', { currency: 'EUR' }),
-      },
+      props: budgetProps(catD, '2026-07-01', '2026-07-31', { 'orbis/currency': 'EUR' }),
+      aspects: ['orbis/budget'],
     });
     expect(
       await selector(user, { categoryRef: catD, currency: 'RUB', occurredOn: '2026-07-15' }),
@@ -295,7 +278,8 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     }
     const { entity: env } = await createEntity(userEur, {
       title: 'конверт без currency',
-      aspects: { 'orbis/budget': budgetData(catE, '2026-07-01', '2026-07-31') },
+      props: budgetProps(catE, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     // coalesce(NULL, 'EUR') = 'EUR' → EUR-транзакция матчится, RUB — нет
     expect(
@@ -310,7 +294,8 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     const catF = newId();
     const { entity: env } = await createEntity(user, {
       title: 'архивируемый',
-      aspects: { 'orbis/budget': budgetData(catF, '2026-07-01', '2026-07-31') },
+      props: budgetProps(catF, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     ok(await execute(db, req(user, 'entity_update', { id: env.id, archived: true }), { sink }));
     expect(
@@ -330,13 +315,15 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
   test('1. транзакция при существующем конверте: один action, operations.length === 2; Undo откатывает обе', async () => {
     const { entity: env } = await createEntity(user, {
       title: 'Еда — июль',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     envId = env.id;
 
     const { entity: txn, actionId } = await createEntity(user, {
       title: 'Обед',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-15') },
+      props: finProps(cat, '2026-07-15'),
+      aspects: ['orbis/financial'],
     });
     // relation parent (конверт → транзакция) создана тем же action
     expect(await budgetParents(txn.id)).toEqual([envId]);
@@ -354,7 +341,8 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
   test('4. транзакция без конверта — без parent (Unbudgeted), operations.length === 1', async () => {
     const { entity: txn, actionId } = await createEntity(user, {
       title: 'Без конверта',
-      aspects: { 'orbis/financial': finData(newId(), '2026-07-15') },
+      props: finProps(newId(), '2026-07-15'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([]);
     expect((await actionById(actionId)).operations.length).toBe(1);
@@ -363,7 +351,8 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
   test('5. planned=true привязывается так же (spent — забота A6)', async () => {
     const { entity: txn } = await createEntity(user, {
       title: 'Запланированная покупка',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-20', { planned: true }) },
+      props: finProps(cat, '2026-07-20', { 'orbis/planned': true }),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([envId]);
   });
@@ -371,7 +360,8 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
   test('income-транзакция привязывается тоже (§5: возврат средств)', async () => {
     const { entity: txn } = await createEntity(user, {
       title: 'Возврат',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-21', { direction: 'income' }) },
+      props: finProps(cat, '2026-07-21', { 'orbis/direction': 'income' }),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([envId]);
   });
@@ -379,18 +369,15 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
   test('recurring-шаблон (без occurred_on) НЕ привязывается', async () => {
     const { entity: tpl, actionId } = await createEntity(user, {
       title: 'Подписка',
-      aspects: {
-        'orbis/schedule': {
-          start_at: '2026-07-01T09:00:00.000Z',
-          recurrence: { freq: 'monthly', interval: 1 },
-        },
-        'orbis/financial': {
-          amount: '500.00',
-          direction: 'expense',
-          category_ref: cat,
-          recurring: true,
-        },
+      props: {
+        'orbis/start_at': '2026-07-01T09:00:00.000Z',
+        'orbis/recurrence': { freq: 'monthly', interval: 1 },
+        'orbis/amount': '500.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
     expect(await budgetParents(tpl.id)).toEqual([]);
     expect((await actionById(actionId)).operations.length).toBe(1);
@@ -399,11 +386,13 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
   test('правка даты транзакции повторно запускает выбор конверта (delete старой + create новой)', async () => {
     const { entity: envAug } = await createEntity(user, {
       title: 'Еда — август',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-08-01', '2026-08-31') },
+      props: budgetProps(cat, '2026-08-01', '2026-08-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Переносимая',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-10') },
+      props: finProps(cat, '2026-07-10'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([envId]);
 
@@ -412,7 +401,8 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
         db,
         req(user, 'entity_update', {
           id: txn.id,
-          aspects: { 'orbis/financial': { occurred_on: '2026-08-10' } },
+          props: { 'orbis/occurred_on': '2026-08-10' },
+          aspects: { attach: ['orbis/financial'] },
         }),
         { sink },
       ),
@@ -449,7 +439,8 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
                 id: envelopeId,
                 title: 'Конверт из batch',
                 tags: [],
-                aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-31') },
+                props: budgetProps(catB, '2026-07-01', '2026-07-31'),
+                aspects: ['orbis/budget'],
               },
             },
             {
@@ -458,7 +449,8 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
                 id: txnId,
                 title: 'Транзакция из batch',
                 tags: [],
-                aspects: { 'orbis/financial': finData(catB, '2026-07-10') },
+                props: finProps(catB, '2026-07-10'),
+                aspects: ['orbis/financial'],
               },
             },
           ],
@@ -492,7 +484,8 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
             id: txnId,
             title: 'Импортированная',
             tags: [],
-            aspects: { 'orbis/financial': finData(cat, '2026-07-25') },
+            props: finProps(cat, '2026-07-25'),
+            aspects: ['orbis/financial'],
           },
         },
       ],
@@ -512,18 +505,21 @@ describe('ребиндинг при создании/правке/архивац
     const cat = newId();
     const { entity: monthly } = await createEntity(user, {
       title: 'Путешествия — август',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-08-01', '2026-08-31') },
+      props: budgetProps(cat, '2026-08-01', '2026-08-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Отель',
-      aspects: { 'orbis/financial': finData(cat, '2026-08-15') },
+      props: finProps(cat, '2026-08-15'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([monthly.id]);
 
     // (2) создание узкого конверта атомарно перехватывает транзакцию
     const { entity: narrow, actionId: narrowAction } = await createEntity(user, {
       title: 'Отпуск в Грузии',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-08-10', '2026-08-24') },
+      props: budgetProps(cat, '2026-08-10', '2026-08-24'),
+      aspects: ['orbis/budget'],
     });
     expect(await budgetParents(txn.id)).toEqual([narrow.id]);
     const action = await actionById(narrowAction);
@@ -543,15 +539,18 @@ describe('ребиндинг при создании/правке/архивац
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Плавающий',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: julyTxn } = await createEntity(user, {
       title: 'Июльская',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-10') },
+      props: finProps(cat, '2026-07-10'),
+      aspects: ['orbis/financial'],
     });
     const { entity: augTxn } = await createEntity(user, {
       title: 'Августовская',
-      aspects: { 'orbis/financial': finData(cat, '2026-08-10') },
+      props: finProps(cat, '2026-08-10'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(julyTxn.id)).toEqual([env.id]);
     expect(await budgetParents(augTxn.id)).toEqual([]); // Unbudgeted
@@ -562,9 +561,8 @@ describe('ребиндинг при создании/правке/архивац
         db,
         req(user, 'entity_update', {
           id: env.id,
-          aspects: {
-            'orbis/budget': { period_start: '2026-08-01', period_end: '2026-08-31' },
-          },
+          props: { 'orbis/period_start': '2026-08-01', 'orbis/period_end': '2026-08-31' },
+          aspects: { attach: ['orbis/budget'] },
         }),
         { sink },
       ),
@@ -578,11 +576,13 @@ describe('ребиндинг при создании/правке/архивац
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Первый',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Кофе',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-05') },
+      props: finProps(cat, '2026-07-05'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([env.id]);
 
@@ -592,7 +592,8 @@ describe('ребиндинг при создании/правке/архивац
 
     const { entity: env2 } = await createEntity(user, {
       title: 'Второй',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     expect(await budgetParents(txn.id)).toEqual([env2.id]);
   });
@@ -603,15 +604,18 @@ describe('ребиндинг при создании/правке/архивац
     const catA = newId();
     const { entity: txnA } = await createEntity(userA, {
       title: 'Ужин в отпуске',
-      aspects: { 'orbis/financial': finData(catA, '2026-08-15') },
+      props: finProps(catA, '2026-08-15'),
+      aspects: ['orbis/financial'],
     });
     const { entity: monthlyA } = await createEntity(userA, {
       title: 'Месячный',
-      aspects: { 'orbis/budget': budgetData(catA, '2026-08-01', '2026-08-31') },
+      props: budgetProps(catA, '2026-08-01', '2026-08-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: narrowA } = await createEntity(userA, {
       title: 'Отпускной',
-      aspects: { 'orbis/budget': budgetData(catA, '2026-08-10', '2026-08-24') },
+      props: budgetProps(catA, '2026-08-10', '2026-08-24'),
+      aspects: ['orbis/budget'],
     });
 
     // Вариант Б: транзакция → узкий → месячный
@@ -619,15 +623,18 @@ describe('ребиндинг при создании/правке/архивац
     const catB = newId();
     const { entity: txnB } = await createEntity(userB, {
       title: 'Ужин в отпуске',
-      aspects: { 'orbis/financial': finData(catB, '2026-08-15') },
+      props: finProps(catB, '2026-08-15'),
+      aspects: ['orbis/financial'],
     });
     const { entity: narrowB } = await createEntity(userB, {
       title: 'Отпускной',
-      aspects: { 'orbis/budget': budgetData(catB, '2026-08-10', '2026-08-24') },
+      props: budgetProps(catB, '2026-08-10', '2026-08-24'),
+      aspects: ['orbis/budget'],
     });
     const { entity: monthlyB } = await createEntity(userB, {
       title: 'Месячный',
-      aspects: { 'orbis/budget': budgetData(catB, '2026-08-01', '2026-08-31') },
+      props: budgetProps(catB, '2026-08-01', '2026-08-31'),
+      aspects: ['orbis/budget'],
     });
 
     // Итог зависит только от текущего набора конвертов: узкий, ровно один parent
@@ -671,7 +678,8 @@ describe('уникальность конверта: (category_ref, currency, pe
   test('повторный create той же точной комбинации → INVARIANT duplicate_envelope', async () => {
     await createEntity(user, {
       title: 'Оригинал',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const r = err(
       await execute(
@@ -679,7 +687,8 @@ describe('уникальность конверта: (category_ref, currency, pe
         req(user, 'entity_create', {
           title: 'Дубль',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -695,7 +704,8 @@ describe('уникальность конверта: (category_ref, currency, pe
         req(user, 'entity_create', {
           title: 'Другой период',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(cat, '2026-08-01', '2026-08-31') },
+          props: budgetProps(cat, '2026-08-01', '2026-08-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -707,9 +717,10 @@ describe('уникальность конверта: (category_ref, currency, pe
         req(user, 'entity_create', {
           title: 'EUR-вариант',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31', { currency: 'EUR' }),
-          },
+          props: budgetProps(cat, '2026-07-01', '2026-07-31', {
+            'orbis/currency': 'EUR',
+          }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -734,16 +745,16 @@ describe('уникальность конверта: (category_ref, currency, pe
     // сущность с бюджетом на свободной комбинации → update в занятую отклоняется
     const { entity: sept } = await createEntity(user, {
       title: 'Сентябрь',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-09-01', '2026-09-30') },
+      props: budgetProps(cat, '2026-09-01', '2026-09-30'),
+      aspects: ['orbis/budget'],
     });
     const ru = err(
       await execute(
         db,
         req(user, 'entity_update', {
           id: sept.id,
-          aspects: {
-            'orbis/budget': { period_start: '2026-07-01', period_end: '2026-07-31' },
-          },
+          props: { 'orbis/period_start': '2026-07-01', 'orbis/period_end': '2026-07-31' },
+          aspects: { attach: ['orbis/budget'] },
         }),
         { sink },
       ),
@@ -756,7 +767,8 @@ describe('уникальность конверта: (category_ref, currency, pe
         db,
         req(user, 'entity_update', {
           id: sept.id,
-          aspects: { 'orbis/budget': { limit: '999.00' } },
+          props: { 'orbis/limit': '999.00' },
+          aspects: { attach: ['orbis/budget'] },
         }),
         { sink },
       ),
@@ -785,7 +797,8 @@ describe('уникальность конверта: (category_ref, currency, pe
               input: {
                 title: 'Первый в batch',
                 tags: [],
-                aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-31') },
+                props: budgetProps(catB, '2026-07-01', '2026-07-31'),
+                aspects: ['orbis/budget'],
               },
             },
             {
@@ -793,7 +806,8 @@ describe('уникальность конверта: (category_ref, currency, pe
               input: {
                 title: 'Дубль в batch',
                 tags: [],
-                aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-31') },
+                props: budgetProps(catB, '2026-07-01', '2026-07-31'),
+                aspects: ['orbis/budget'],
               },
             },
           ],
@@ -825,12 +839,14 @@ describe('конверсия транзакции в recurring-шаблон сн
   test('attach orbis/schedule.recurrence на привязанную факт-транзакцию → budget-parent снят тем же action', async () => {
     const { entity: env } = await createEntity(user, {
       title: 'Подписки — июль',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     envId = env.id;
     const { entity: txn } = await createEntity(user, {
       title: 'Оплата сервиса',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-05') },
+      props: finProps(cat, '2026-07-05'),
+      aspects: ['orbis/financial'],
     });
     txnId = txn.id;
     expect(await budgetParents(txnId)).toEqual([envId]);
@@ -861,7 +877,7 @@ describe('конверсия транзакции в recurring-шаблон сн
     ok(
       await execute(
         db,
-        req(user, 'entity_update', { id: txnId, aspects: { 'orbis/schedule': null } }),
+        req(user, 'entity_update', { id: txnId, aspects: { detach: ['orbis/schedule'] } }),
         { sink },
       ),
     );
@@ -882,18 +898,20 @@ describe('detach orbis/financial снимает привязку к конвер
   test('detach → budget-parent снят тем же action', async () => {
     const { entity: env } = await createEntity(user, {
       title: 'Еда — июль',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Ошибочная запись',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-06') },
+      props: finProps(cat, '2026-07-06'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([env.id]);
 
     const r = ok(
       await execute(
         db,
-        req(user, 'entity_update', { id: txn.id, aspects: { 'orbis/financial': null } }),
+        req(user, 'entity_update', { id: txn.id, aspects: { detach: ['orbis/financial'] } }),
         { sink },
       ),
     );
@@ -906,12 +924,13 @@ describe('detach orbis/financial снимает привязку к конвер
   test('detach у НЕпривязанной сущности лишних операций не порождает', async () => {
     const { entity: note } = await createEntity(user, {
       title: 'Заметка',
-      aspects: { 'orbis/note': { content_type: 'plain' } },
+      props: { 'orbis/content_type': 'plain' },
+      aspects: ['orbis/note'],
     });
     const r = ok(
       await execute(
         db,
-        req(user, 'entity_update', { id: note.id, aspects: { 'orbis/note': null } }),
+        req(user, 'entity_update', { id: note.id, aspects: { detach: ['orbis/note'] } }),
         { sink },
       ),
     );
@@ -945,7 +964,8 @@ describe('гонка «create транзакции ∥ create конверта»
             id: txnId,
             title: `Покупка ${i}`,
             tags: [],
-            aspects: { 'orbis/financial': finData(cat, day) },
+            props: finProps(cat, day),
+            aspects: ['orbis/financial'],
           }),
           { sink },
         ),
@@ -954,7 +974,8 @@ describe('гонка «create транзакции ∥ create конверта»
           req(user, 'entity_create', {
             title: `Конверт ${i}`,
             tags: [],
-            aspects: { 'orbis/budget': budgetData(cat, '2026-08-01', '2026-08-31') },
+            props: budgetProps(cat, '2026-08-01', '2026-08-31'),
+            aspects: ['orbis/budget'],
           }),
           { sink },
         ),
@@ -983,7 +1004,8 @@ describe('дедлок «правка транзакции ∥ запись ко
       const day = `2026-09-${String((i % 27) + 1).padStart(2, '0')}`;
       const { entity: txn } = await createEntity(user, {
         title: `Покупка ${i}`,
-        aspects: { 'orbis/financial': finData(cat, day) },
+        props: finProps(cat, day),
+        aspects: ['orbis/financial'],
       });
       const [upd, env] = await Promise.all([
         // правка транзакции: FOR UPDATE строки → бюджет-хук
@@ -991,7 +1013,8 @@ describe('дедлок «правка транзакции ∥ запись ко
           db,
           req(user, 'entity_update', {
             id: txn.id,
-            aspects: { 'orbis/financial': finData(cat, day, { amount: '999.00' }) },
+            props: finProps(cat, day, { 'orbis/amount': '999.00' }),
+            aspects: { attach: ['orbis/financial'] },
           }),
           { sink },
         ),
@@ -1001,7 +1024,8 @@ describe('дедлок «правка транзакции ∥ запись ко
           req(user, 'entity_create', {
             title: `Конверт ${i}`,
             tags: [],
-            aspects: { 'orbis/budget': budgetData(cat, '2026-09-01', '2026-09-30') },
+            props: budgetProps(cat, '2026-09-01', '2026-09-30'),
+            aspects: ['orbis/budget'],
           }),
           { sink },
         ),
@@ -1029,7 +1053,8 @@ describe('транзакция, ставшая конвертом: селект�
     const cat = newId();
     const { entity: txn } = await createEntity(user, {
       title: 'Транзакция, ставшая конвертом',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     // Период накрывает occurred_on самой записи; категория и валюта совпадают по построению
     const r = ok(
@@ -1053,11 +1078,13 @@ describe('транзакция, ставшая конвертом: селект�
     // Широкий конверт месяца — он и должен считать транзакцию
     const { entity: wide } = await createEntity(user, {
       title: 'Конверт месяца',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Транзакция в конверте месяца',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([wide.id]);
 
@@ -1082,7 +1109,8 @@ describe('транзакция, ставшая конвертом: селект�
     const cat = newId();
     const { entity: txn } = await createEntity(user, {
       title: 'Транзакция-конверт',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     ok(
       await execute(
@@ -1096,7 +1124,8 @@ describe('транзакция, ставшая конвертом: селект�
     );
     const { entity: other } = await createEntity(user, {
       title: 'Соседняя транзакция',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-13') },
+      props: finProps(cat, '2026-07-13'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(other.id)).toEqual([txn.id]);
   });
@@ -1133,11 +1162,13 @@ describe('хук привязки и живое parent-ребро той же п
     const catOther = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Конверт Еда',
-      aspects: { 'orbis/budget': budgetData(catEnvelope, '2026-07-01', '2026-07-31') },
+      props: budgetProps(catEnvelope, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Трата другой категории',
-      aspects: { 'orbis/financial': finData(catOther, '2026-07-12') },
+      props: finProps(catOther, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     // Ребро роли ВЛАДЕЛЬЦА от конверта к транзакции — система его разрешает
     ok(
@@ -1158,7 +1189,8 @@ describe('хук привязки и живое parent-ребро той же п
         db,
         req(user, 'entity_update', {
           id: txn.id,
-          aspects: { 'orbis/financial': { category_ref: catEnvelope } },
+          props: { 'orbis/finance_category': catEnvelope },
+          aspects: { attach: ['orbis/financial'] },
         }),
         { sink },
       ),
@@ -1172,7 +1204,8 @@ describe('хук привязки и живое parent-ребро той же п
     const cat = newId();
     const { entity: txn } = await createEntity(user, {
       title: 'Трата проекта',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     const { entity: x } = await createEntity(user, { title: 'Проект, ставший конвертом' });
     ok(
@@ -1202,11 +1235,13 @@ describe('хук привязки и живое parent-ребро той же п
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Конверт Развлечения',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Кино',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     expect(await budgetParents(txn.id)).toEqual([env.id]); // привязал хук
 
@@ -1232,14 +1267,18 @@ describe('хук привязки и живое parent-ребро той же п
 
     // …и после этого ЛЮБАЯ правка транзакции обязана проходить, а не отказывать навсегда
     for (const patch of [
-      { amount: '999.00' },
-      { occurred_on: '2026-07-13' },
-      { category_ref: cat },
+      { 'orbis/amount': '999.00' },
+      { 'orbis/occurred_on': '2026-07-13' },
+      { 'orbis/finance_category': cat },
     ]) {
       ok(
         await execute(
           db,
-          req(user, 'entity_update', { id: txn.id, aspects: { 'orbis/financial': patch } }),
+          req(user, 'entity_update', {
+            id: txn.id,
+            props: patch,
+            aspects: { attach: ['orbis/financial'] },
+          }),
           { sink },
         ),
       );
@@ -1255,11 +1294,13 @@ describe('хук привязки и живое parent-ребро той же п
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Конверт Ремонт',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Краска',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     const { entity: project } = await createEntity(user, { title: 'Проект без бюджета' });
     ok(
@@ -1281,7 +1322,8 @@ describe('хук привязки и живое parent-ребро той же п
         db,
         req(user, 'entity_update', {
           id: txn.id,
-          aspects: { 'orbis/financial': { amount: '777.00' } },
+          props: { 'orbis/amount': '777.00' },
+          aspects: { attach: ['orbis/financial'] },
         }),
         { sink },
       ),
@@ -1301,15 +1343,18 @@ describe('хук привязки и живое parent-ребро той же п
     const catB = newId();
     const { entity: envA } = await createEntity(user, {
       title: 'Конверт A',
-      aspects: { 'orbis/budget': budgetData(catA, '2026-07-01', '2026-07-31') },
+      props: budgetProps(catA, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: envB } = await createEntity(user, {
       title: 'Конверт B',
-      aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-31') },
+      props: budgetProps(catB, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Переезжающая трата',
-      aspects: { 'orbis/financial': finData(catA, '2026-07-12') },
+      props: finProps(catA, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     // Заменяем системную привязку своим ребром той же пары
     ok(
@@ -1337,7 +1382,8 @@ describe('хук привязки и живое parent-ребро той же п
         db,
         req(user, 'entity_update', {
           id: txn.id,
-          aspects: { 'orbis/financial': { category_ref: catB } },
+          props: { 'orbis/finance_category': catB },
+          aspects: { attach: ['orbis/financial'] },
         }),
         { sink },
       ),
@@ -1354,11 +1400,13 @@ describe('хук привязки и живое parent-ребро той же п
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Конверт подписок',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Подписка',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     ok(
       await execute(
@@ -1403,11 +1451,13 @@ describe('хук привязки и живое parent-ребро той же п
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Конверт Транспорт',
-      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     const { entity: txn } = await createEntity(user, {
       title: 'Такси',
-      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
     });
     ok(
       await execute(
@@ -1434,7 +1484,8 @@ describe('хук привязки и живое parent-ребро той же п
         db,
         req(user, 'entity_update', {
           id: txn.id,
-          aspects: { 'orbis/financial': { amount: '450.00' } },
+          props: { 'orbis/amount': '450.00' },
+          aspects: { attach: ['orbis/financial'] },
         }),
         { sink },
       ),
@@ -1546,7 +1597,8 @@ describe('привязка читает props/aspects[], а не старую к
     // хук создания транзакции: путь, который переводит эта задача.
     const { entity: env } = await createEntity(user, {
       title: 'Конверт июля',
-      aspects: { 'orbis/budget': budgetData(catProps, '2026-07-01', '2026-07-31') },
+      props: budgetProps(catProps, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
     });
     expect(await budgetParents(txnId)).toEqual([env.id]);
   });
@@ -1587,7 +1639,8 @@ describe('привязка читает props/aspects[], а не старую к
         req(user, 'entity_create', {
           title: 'Дубль',
           tags: [],
-          aspects: { 'orbis/budget': budgetData(catProps, '2026-07-01', '2026-07-31') },
+          props: budgetProps(catProps, '2026-07-01', '2026-07-31'),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),
@@ -1600,9 +1653,10 @@ describe('привязка читает props/aspects[], а не старую к
         req(user, 'entity_create', {
           title: 'Не дубль',
           tags: [],
-          aspects: {
-            'orbis/budget': budgetData(catLegacy, '2030-01-01', '2030-01-31', { currency: 'USD' }),
-          },
+          props: budgetProps(catLegacy, '2030-01-01', '2030-01-31', {
+            'orbis/currency': 'USD',
+          }),
+          aspects: ['orbis/budget'],
         }),
         { sink },
       ),

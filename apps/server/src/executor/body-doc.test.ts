@@ -872,7 +872,12 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
         db,
         req(
           'entity_create',
-          { title: 'Проект', tags: [], aspects: { 'orbis/project': { stage: 'active' } } },
+          {
+            title: 'Проект',
+            tags: [],
+            props: { 'orbis/project_stage': 'active' },
+            aspects: ['orbis/project'],
+          },
           owner,
         ),
       ),
@@ -916,7 +921,8 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
             id: entity.id,
             body: '',
             expectedUpdatedAt: entity.updatedAt,
-            aspects: { 'orbis/project': { stage: 'active' } },
+            props: { 'orbis/project_stage': 'active' },
+            aspects: { attach: ['orbis/project'] },
           },
           owner,
         ),

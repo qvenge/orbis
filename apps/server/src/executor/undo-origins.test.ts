@@ -22,8 +22,8 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
+  entityColumns,
   freshUserId,
-  legacyEntityColumns,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -220,15 +220,18 @@ beforeAll(async () => {
         ownerId: user,
         title: 'Ручной обед',
         tags: [],
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/financial': {
-            amount: '999.00',
-            direction: 'expense',
-            category_ref: foodId,
-            occurred_on: '2026-05-09',
-            counterparty: 'Ручной обед',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/amount': '999.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': foodId,
+            'orbis/occurred_on': '2026-05-09',
+            'orbis/counterparty': 'Ручной обед',
           },
-        })),
+          ['orbis/financial'],
+        )),
         createdAt: now,
         updatedAt: now,
       },
@@ -237,15 +240,18 @@ beforeAll(async () => {
         ownerId: user,
         title: 'Контрольная запись',
         tags: [],
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/financial': {
-            amount: '777.00',
-            direction: 'expense',
-            category_ref: foodId,
-            occurred_on: '2026-05-05',
-            counterparty: 'Контрольная запись',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/amount': '777.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': foodId,
+            'orbis/occurred_on': '2026-05-05',
+            'orbis/counterparty': 'Контрольная запись',
           },
-        })),
+          ['orbis/financial'],
+        )),
         createdAt: now,
         updatedAt: now,
       },
@@ -254,15 +260,18 @@ beforeAll(async () => {
         ownerId: user,
         title: 'Конверт Еда',
         tags: [],
-        ...(await legacyEntityColumns(tx, user, {
-          'orbis/budget': {
-            category_ref: foodId,
-            limit: '10000.00',
-            currency: 'RUB',
-            period_start: '2026-05-01',
-            period_end: '2026-05-31',
+        ...(await entityColumns(
+          tx,
+          user,
+          {
+            'orbis/finance_category': foodId,
+            'orbis/limit': '10000.00',
+            'orbis/currency': 'RUB',
+            'orbis/period_start': '2026-05-01',
+            'orbis/period_end': '2026-05-31',
           },
-        })),
+          ['orbis/budget'],
+        )),
         createdAt: now,
         updatedAt: now,
       },

@@ -241,9 +241,13 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
       title: over.title ?? 'Утренний обзор',
       body: over.body ?? 'Пройди по задачам дня и предложи, что сделать.',
       tags: [],
-      aspects: {
-        'orbis/routine': { stage: 'active', at: '07:00', mode: 'propose', ...over.routine },
+      props: {
+        'orbis/routine_stage': 'active',
+        'orbis/routine_at': '07:00',
+        'orbis/routine_mode': 'propose',
+        ...over.routine,
       },
+      aspects: ['orbis/routine'],
     });
     return e.id;
   }
@@ -282,19 +286,18 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
             id: runId,
             title: `Прогон рутины ${bucket}`,
             tags: [],
-            aspects: {
-              'orbis/agent-run': {
-                routine_id: args.routineId,
-                bucket,
-                attempt,
-                outcome: 'running',
-                started_at: iso(startedAt),
-                last_step_at: iso(args.lastStepAt ?? startedAt),
-                step_count: 0,
-                steps: [],
-                ...args.run,
-              },
+            props: {
+              'orbis/run_routine': args.routineId,
+              'orbis/run_bucket': bucket,
+              'orbis/run_attempt': attempt,
+              'orbis/run_outcome': 'running',
+              'orbis/run_started_at': iso(startedAt),
+              'orbis/last_step_at': iso(args.lastStepAt ?? startedAt),
+              'orbis/step_count': 0,
+              'orbis/run_steps': [],
+              ...args.run,
             },
+            aspects: ['orbis/agent-run'],
           },
         },
         {

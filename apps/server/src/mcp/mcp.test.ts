@@ -945,15 +945,18 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       title: 'Проект круга по проводу',
       tags: [],
       body: '## Процесс\n\nВетка, тесты, отчёт.\n',
-      aspects: { 'orbis/project': { stage: 'active' } },
+      props: { 'orbis/project_stage': 'active' },
+      aspects: ['orbis/project'],
     });
     const ticket = await seedEntity({
       title: 'Тикет круга по проводу',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grant.grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grant.grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     const linked = await execute(db, {
       actorUserId: owner,

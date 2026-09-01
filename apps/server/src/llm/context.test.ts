@@ -10,9 +10,9 @@ import { newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   appDb,
+  entityColumns,
   executeWithFixtureCategories as execute,
   freshUserId,
-  legacyEntityColumns,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -66,9 +66,15 @@ async function createMemory(
       title: opts.title,
       body: opts.body ?? '',
       archived: opts.archived ?? false,
-      ...(await legacyEntityColumns(tx, ownerId, {
-        'orbis/memory': { kind: opts.kind, ...(opts.scope ? { scope: opts.scope } : {}) },
-      })),
+      ...(await entityColumns(
+        tx,
+        ownerId,
+        {
+          'orbis/memory_kind': opts.kind,
+          ...(opts.scope ? { 'orbis/rule_scope': opts.scope } : {}),
+        },
+        ['orbis/memory'],
+      )),
       ...(opts.updatedAt ? { updatedAt: opts.updatedAt } : {}),
     }),
   );
@@ -176,7 +182,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
         ownerId: user,
         title: 'Якорь-хвост',
         body: 'тело якоря',
-        ...(await legacyEntityColumns(tx, user, { 'orbis/task': { status: 'in_progress' } })),
+        ...(await entityColumns(tx, user, { 'orbis/task_status': 'in_progress' }, ['orbis/task'])),
       }),
     );
     const ctx = await withIdentity(db, user, async (tx) => {
@@ -421,7 +427,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
         ownerId: user,
         title: 'Якорь-проект',
         tags: ['project', 'ai'],
-        ...(await legacyEntityColumns(tx, user, { 'orbis/task': { status: 'in_progress' } })),
+        ...(await entityColumns(tx, user, { 'orbis/task_status': 'in_progress' }, ['orbis/task'])),
         body: `${'я'.repeat(ANCHOR_BODY_PREVIEW)}ОБРЕЗАННЫЙ-ХВОСТ`,
       }),
     );

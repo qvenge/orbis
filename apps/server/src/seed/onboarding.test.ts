@@ -896,17 +896,23 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       routineId,
       bucket: '2026-08-18T07:00',
       run: {
-        outcome: 'checkpoint',
-        checkpoint: { question: 'Списать 340 на «Еду»?', asked_at: '2026-08-18T07:00:10.000Z' },
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_checkpoint': {
+          question: 'Списать 340 на «Еду»?',
+          asked_at: '2026-08-18T07:00:10.000Z',
+        },
       },
     });
     const answered = await helpers.seedRoutineRun(user, {
       routineId,
       bucket: '2026-08-17T07:00',
       run: {
-        outcome: 'answered',
-        checkpoint: { question: 'Уже спрашивал', asked_at: '2026-08-17T07:00:10.000Z' },
-        reply: { text: 'да', at: '2026-08-17T08:00:00.000Z' },
+        'orbis/run_outcome': 'answered',
+        'orbis/run_checkpoint': {
+          question: 'Уже спрашивал',
+          asked_at: '2026-08-17T07:00:10.000Z',
+        },
+        'orbis/run_reply': { text: 'да', at: '2026-08-17T08:00:00.000Z' },
       },
     });
 
@@ -924,7 +930,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     const active = await helpers.seedRoutine(user, { title: 'Активная' });
     const paused = await helpers.seedRoutine(user, {
       title: 'На паузе',
-      routine: { stage: 'paused' },
+      routine: { 'orbis/routine_stage': 'paused' },
     });
 
     const ids = await idsOfBlock(user, 1);
@@ -943,21 +949,24 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     const undecided = await helpers.seedRoutineRun(user, {
       routineId,
       bucket: '2026-08-18T07:00',
-      run: { outcome: 'finished', undecided: true },
+      run: { 'orbis/run_outcome': 'finished', 'orbis/undecided': true },
     });
     // Разобранная пачка несёт `undecided:false`: снятие флажка — ЗАПИСЬ, а не удаление
     // ключа (предиката «поля нет» у грамматики §6.1 не существует)
     const settled = await helpers.seedRoutineRun(user, {
       routineId,
       bucket: '2026-08-17T07:00',
-      run: { outcome: 'finished', undecided: false },
+      run: { 'orbis/run_outcome': 'finished', 'orbis/undecided': false },
     });
     const checkpoint = await helpers.seedRoutineRun(user, {
       routineId,
       bucket: '2026-08-16T07:00',
       run: {
-        outcome: 'checkpoint',
-        checkpoint: { question: 'Списать 340 на «Еду»?', asked_at: '2026-08-16T07:00:10.000Z' },
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_checkpoint': {
+          question: 'Списать 340 на «Еду»?',
+          asked_at: '2026-08-16T07:00:10.000Z',
+        },
       },
     });
 

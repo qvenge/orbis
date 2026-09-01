@@ -80,20 +80,17 @@ async function createFinTemplate(
 ): Promise<string> {
   const e = await createEntity(user, {
     title: 'Подписка',
-    aspects: {
-      'orbis/schedule': {
-        start_at: `${startDate}T09:00:00+03:00`,
-        timezone: 'Europe/Moscow',
-        recurrence: { freq: 'daily', interval: 1 },
-      },
-      'orbis/financial': {
-        amount,
-        currency: 'RUB',
-        direction: 'expense',
-        category_ref: categoryRef,
-        recurring: true,
-      },
+    props: {
+      'orbis/start_at': `${startDate}T09:00:00+03:00`,
+      'orbis/timezone': 'Europe/Moscow',
+      'orbis/recurrence': { freq: 'daily', interval: 1 },
+      'orbis/amount': amount,
+      'orbis/currency': 'RUB',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': categoryRef,
+      'orbis/recurring': true,
     },
+    aspects: ['orbis/schedule', 'orbis/financial'],
   });
   return e.id;
 }
@@ -102,15 +99,14 @@ async function createFinTemplate(
 async function createEnvelope(user: string, categoryRef: string): Promise<string> {
   const e = await createEntity(user, {
     title: 'Конверт',
-    aspects: {
-      'orbis/budget': {
-        category_ref: categoryRef,
-        limit: '30000.00',
-        currency: 'RUB',
-        period_start: '2026-07-01',
-        period_end: '2026-07-31',
-      },
+    props: {
+      'orbis/finance_category': categoryRef,
+      'orbis/limit': '30000.00',
+      'orbis/currency': 'RUB',
+      'orbis/period_start': '2026-07-01',
+      'orbis/period_end': '2026-07-31',
     },
+    aspects: ['orbis/budget'],
   });
   return e.id;
 }
@@ -243,16 +239,15 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // Ручная planned-покупка (без derived_from) — переводится ТОЛЬКО явным флоу §2.7
     const manual = await createEntity(user, {
       title: 'Купить кроссовки',
-      aspects: {
-        'orbis/financial': {
-          amount: '8000.00',
-          currency: 'RUB',
-          direction: 'expense',
-          category_ref: cat,
-          occurred_on: '2026-07-01',
-          planned: true,
-        },
+      props: {
+        'orbis/amount': '8000.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/occurred_on': '2026-07-01',
+        'orbis/planned': true,
       },
+      aspects: ['orbis/financial'],
     });
 
     const r = await postDueInstances({ db, ownerId: user, today: '2026-07-02' });
@@ -308,7 +303,8 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
         db,
         req(user, 'entity_update', {
           id: instanceId,
-          aspects: { 'orbis/financial': { planned: true } },
+          props: { 'orbis/planned': true },
+          aspects: { attach: ['orbis/financial'] },
         }),
         { sink },
       ),
@@ -451,7 +447,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // Оба — экземпляры повторяющегося: без этого ребра их отсёк бы соседний предикат,
     // и проба проверяла бы не то, что называет.
     const templateId = (
-      await createEntity(user, { title: 'Шаблон пробы', tags: [], aspects: { 'orbis/note': {} } })
+      await createEntity(user, { title: 'Шаблон пробы', tags: [], aspects: ['orbis/note'] })
     ).id;
     await withIdentity(db, user, (tx) =>
       tx.insert(relations).values(
@@ -487,15 +483,14 @@ describe('tRPC budget.postDue (заготовка роутера, наполне
     );
     const envelope = await createEntity(user, {
       title: 'Конверт (сегодня)',
-      aspects: {
-        'orbis/budget': {
-          category_ref: cat,
-          limit: '30000.00',
-          currency: 'RUB',
-          period_start: today,
-          period_end: today,
-        },
+      props: {
+        'orbis/finance_category': cat,
+        'orbis/limit': '30000.00',
+        'orbis/currency': 'RUB',
+        'orbis/period_start': today,
+        'orbis/period_end': today,
       },
+      aspects: ['orbis/budget'],
     });
     const templateId = await createFinTemplate(user, cat, today);
     const instanceId = await materializeOne(user, templateId, today);

@@ -136,7 +136,7 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
   });
 
   test('act: секция режима перечисляет ровно белый список владельца', async () => {
-    const routineId = await seedRoutine(owner, { routine: { mode: 'act' } });
+    const routineId = await seedRoutine(owner, { routine: { 'orbis/routine_mode': 'act' } });
     const { system } = await contextOf(routineId, [], 'act', ['entity_update']);
     expect(system).toContain('режим: act');
     expect(system).toContain('entity_update');

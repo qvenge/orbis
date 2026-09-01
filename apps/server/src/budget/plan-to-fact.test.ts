@@ -72,15 +72,14 @@ async function createEnvelope(
   const e = await exec(user, 'entity_create', {
     title: `Конверт ${period.start}`,
     tags: [],
-    aspects: {
-      'orbis/budget': {
-        category_ref: categoryRef,
-        limit: '30000.00',
-        currency: 'RUB',
-        period_start: period.start,
-        period_end: period.end,
-      },
+    props: {
+      'orbis/finance_category': categoryRef,
+      'orbis/limit': '30000.00',
+      'orbis/currency': 'RUB',
+      'orbis/period_start': period.start,
+      'orbis/period_end': period.end,
     },
+    aspects: ['orbis/budget'],
   });
   return e.id;
 }
@@ -95,16 +94,15 @@ async function createPlanned(
   const e = await exec(user, 'entity_create', {
     title: 'Купить кроссовки',
     tags: [],
-    aspects: {
-      'orbis/financial': {
-        amount,
-        currency: 'RUB',
-        direction: 'expense',
-        category_ref: categoryRef,
-        occurred_on: occurredOn,
-        planned: true,
-      },
+    props: {
+      'orbis/amount': amount,
+      'orbis/currency': 'RUB',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': categoryRef,
+      'orbis/occurred_on': occurredOn,
+      'orbis/planned': true,
     },
+    aspects: ['orbis/financial'],
   });
   return e.id;
 }
@@ -251,16 +249,15 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     const fact = await exec(user, 'entity_create', {
       title: 'Уже куплено',
       tags: [],
-      aspects: {
-        'orbis/financial': {
-          amount: '8000.00',
-          currency: 'RUB',
-          direction: 'expense',
-          category_ref: cat,
-          occurred_on: ACTUAL_ON,
-          planned: false,
-        },
+      props: {
+        'orbis/amount': '8000.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/occurred_on': ACTUAL_ON,
+        'orbis/planned': false,
       },
+      aspects: ['orbis/financial'],
     });
     await expect(
       ownerCaller(user).budget.confirmPurchase({
@@ -278,16 +275,15 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     const planned = await exec(user, 'entity_create', {
       title: 'Отложенная покупка',
       tags: [],
-      aspects: {
-        'orbis/financial': {
-          amount: '8000.00',
-          currency: 'RUB',
-          direction: 'expense',
-          category_ref: cat,
-          occurred_on: PLANNED_ON,
-          planned: true,
-        },
+      props: {
+        'orbis/amount': '8000.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/occurred_on': PLANNED_ON,
+        'orbis/planned': true,
       },
+      aspects: ['orbis/financial'],
     });
     await exec(user, 'entity_update', { id: planned.id, archived: true });
 
@@ -313,20 +309,17 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     const template = await exec(user, 'entity_create', {
       title: 'Подписка',
       tags: [],
-      aspects: {
-        'orbis/schedule': {
-          start_at: `${PLANNED_ON}T09:00:00+03:00`,
-          timezone: 'Europe/Moscow',
-          recurrence: { freq: 'daily', interval: 1 },
-        },
-        'orbis/financial': {
-          amount: '500.00',
-          currency: 'RUB',
-          direction: 'expense',
-          category_ref: cat,
-          recurring: true,
-        },
+      props: {
+        'orbis/start_at': `${PLANNED_ON}T09:00:00+03:00`,
+        'orbis/timezone': 'Europe/Moscow',
+        'orbis/recurrence': { freq: 'daily', interval: 1 },
+        'orbis/amount': '500.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
     await materializeInstances({
       db,
@@ -355,20 +348,17 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     const template = await exec(user, 'entity_create', {
       title: 'Аренда',
       tags: [],
-      aspects: {
-        'orbis/schedule': {
-          start_at: `${PLANNED_ON}T09:00:00+03:00`,
-          timezone: 'Europe/Moscow',
-          recurrence: { freq: 'monthly', interval: 1 },
-        },
-        'orbis/financial': {
-          amount: '40000.00',
-          currency: 'RUB',
-          direction: 'expense',
-          category_ref: cat,
-          recurring: true,
-        },
+      props: {
+        'orbis/start_at': `${PLANNED_ON}T09:00:00+03:00`,
+        'orbis/timezone': 'Europe/Moscow',
+        'orbis/recurrence': { freq: 'monthly', interval: 1 },
+        'orbis/amount': '40000.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/recurring': true,
       },
+      aspects: ['orbis/schedule', 'orbis/financial'],
     });
     await expect(
       ownerCaller(user).budget.confirmPurchase({

@@ -12,7 +12,7 @@ import { type Db, makeDb } from '../src/db/client';
 import type { entities } from '../src/db/schema';
 import type { Tx } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
-import { type LegacyRow, rowFromLegacy } from '../src/executor/legacy-form';
+import { type LegacyRow, projectLegacyAspects } from '../src/executor/legacy-form';
 import type { ExecuteRequest, ExecuteResult, ExecutorDeps } from '../src/executor/types';
 import { effectiveRegistry } from '../src/registry/cache';
 import { bumpOwnerRegistryVersion } from '../src/registry/version';
@@ -238,24 +238,26 @@ function pgTextArray(values: string[]): string {
 }
 
 /**
- * Три колонки строки `entities` из старой карты аспектов — для фикстур с ПРЯМЫМ INSERT,
- * минуя исполнителя.
+ * Три колонки строки `entities` из СВОЙСТВ — для фикстур с ПРЯМЫМ INSERT, минуя исполнителя.
  *
- * Зачем помощник, а не переименование поля: после миграции 0015 имя `aspects` занял СПИСОК
- * аспектов новой формы, и фикстура, продолжающая писать в него карту, либо падает типом,
- * либо (там, где тип `unknown`) молча кладёт карту не в ту колонку. Проекция одна на
- * репозиторий — `executor/legacy-form.ts`, и фикстуры обязаны ходить через неё же, иначе
- * они разойдутся с писателем новой правды.
+ * Фикстура говорит новой правдой (`props` по id свойства + список аспектов), а старую карту
+ * `aspects_legacy` считает та же проекция, что и у исполнителя (`projectLegacyAspects`). Так
+ * и должно быть, пока колонка жива (до Задачи 23b): строка, положившая в неё что-то своё,
+ * разошлась бы с единственным писателем — и показала бы тесту состояние, которого в проде
+ * не бывает. Намеренно РАЗОШЕДШАЯСЯ строка — это `divergentEntityRow` ниже, и она называет
+ * расхождение по имени.
  *
  * Снимок реестра читается на каждый вызов: фикстур в сьюте единицы, а кеш здесь стоил бы
  * инвалидации после `seedCustomAspect`. Файл живёт до «Пересева мира» — вместе с проекцией.
  */
-export async function legacyEntityColumns(
+export async function entityColumns(
   tx: Tx,
   ownerId: string,
-  aspectsLegacy: LegacyAspects,
+  props: Record<string, unknown>,
+  aspects: string[],
 ): Promise<LegacyRow> {
-  return rowFromLegacy(await effectiveRegistry(tx, ownerId), aspectsLegacy);
+  const reg = await effectiveRegistry(tx, ownerId);
+  return { props, aspects, aspectsLegacy: projectLegacyAspects(reg, { props, aspects }) };
 }
 
 /** Строка `entities` с РАЗОШЕДШИМИСЯ колонками — вход `divergentEntityRow`. */

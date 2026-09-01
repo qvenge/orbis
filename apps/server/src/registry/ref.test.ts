@@ -83,7 +83,7 @@ async function createCategory(user: string, title: string): Promise<string> {
     await execute(
       db,
       req(user, [
-        { tool: 'entity_create', input: { title, tags: [], aspects: { 'orbis/category': {} } } },
+        { tool: 'entity_create', input: { title, tags: [], aspects: ['orbis/category'] } },
       ]),
     ),
   );
@@ -524,7 +524,7 @@ test('ref: batch «заведи категорию и положи в неё т�
             id: categoryId,
             title: 'Транспорт',
             tags: [],
-            aspects: { 'orbis/category': {} },
+            aspects: ['orbis/category'],
           },
         },
         {
@@ -733,7 +733,12 @@ async function txnUnderProject(
       req(user, [
         {
           tool: 'entity_create',
-          input: { title: 'Проект', tags: [], aspects: { 'orbis/project': { stage: 'active' } } },
+          input: {
+            title: 'Проект',
+            tags: [],
+            props: { 'orbis/project_stage': 'active' },
+            aspects: ['orbis/project'],
+          },
         },
       ]),
     ),

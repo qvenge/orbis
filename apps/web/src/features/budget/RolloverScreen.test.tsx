@@ -4,7 +4,6 @@
 // (UUIDv7 ОДИН на открытие экрана: повтор после ошибки шлёт тот же id; CONFLICT —
 // честная ошибка + новый id, уроки B4), needsSetup-форма первого месяца (§5 edge case:
 // доход + оценки по категориям → те же rows).
-import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { installHistorySync } from '../../app/history';
@@ -20,25 +19,20 @@ import { RolloverScreen } from './RolloverScreen';
 // --- фикстуры -------------------------------------------------------------------------
 
 /**
- * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
- * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
- * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
- * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
- * двум формам негде.
+ * Строка выдачи в форме реформы: `props` по id свойства и `aspects` списком (§А1-1).
+ * Старую карту `wireEntity` больше не проецирует — её нет ни в wire-форме, ни у читателей.
  */
-const ent = (id: string, title: string, aspects: Record<string, unknown> = {}) => {
-  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
-  return wireFixture({
-    ...{ id, title },
-    props: translated.ok ? translated.props : {},
-    aspects: Object.keys(aspects),
-  });
-};
+const ent = (
+  id: string,
+  title: string,
+  props: Record<string, unknown> = {},
+  aspects: string[] = [],
+) => wireFixture({ ...{ id, title }, props, aspects });
 
 const categories = [
-  ent('cat-1', 'Еда', { 'orbis/category': { icon: '🍔' } }),
-  ent('cat-2', 'Транспорт', { 'orbis/category': { icon: '🚕' } }),
-  ent('cat-3', 'Жильё', { 'orbis/category': {} }),
+  ent('cat-1', 'Еда', { 'orbis/icon': '🍔' }, ['orbis/category']),
+  ent('cat-2', 'Транспорт', { 'orbis/icon': '🚕' }, ['orbis/category']),
+  ent('cat-3', 'Жильё', {}, ['orbis/category']),
 ];
 
 const settings = {

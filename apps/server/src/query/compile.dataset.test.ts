@@ -6,7 +6,8 @@
 // Тексты запросов переписаны в key-форму §А5-3 (`orbis/task_status` вместо `status`), а
 // значения с пробелами закавычены: новый разбор идёт по РЕЕСТРУ, и старые тексты он
 // отвергает по построению (см. докблок `parse-ast.ts`). Строки датасета при этом прежние —
-// фикстура объявлена старой картой и уезжает в БД тремя колонками (`rowFromLegacy`).
+// фикстура объявлена свойствами (`props`/`aspects[]`) и уезжает в БД тремя колонками:
+// проекцию `aspects_legacy` считает `projectLegacyAspects` — тот же писатель, что у исполнителя.
 //
 // ВЫДАЧА НЕ ИЗМЕНИЛАСЬ НИ В ОДНОМ СЦЕНАРИИ — это требование, а не совпадение: реформа не
 // имеет права менять то, что владелец видит. Отдельного внимания стоит `excludeBlocked=true`:
@@ -20,7 +21,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { rowFromLegacy } from '../executor/legacy-form';
+import { projectLegacyAspects } from '../executor/legacy-form';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { type CompileCtx, compileCountAst, compileQueryAst } from './compile-ast';
@@ -47,7 +48,7 @@ const CAT = '019d48ea-4188-765d-8e96-93a0ad9c262a';
 type DatasetRow = Omit<
   typeof entities.$inferInsert,
   'props' | 'aspects' | 'queryRefs' | 'aspectsLegacy'
-> & { aspects: Record<string, Record<string, unknown>> };
+> & { props?: Record<string, unknown>; aspects: string[] };
 
 const ID = {
   project: '019eb300-d5e1-7000-8000-000000000001',
@@ -93,7 +94,7 @@ const DATASET_A: DatasetRow[] = [
     title: 'Проект Орбис',
     body: 'Интеграция API платежей и обновление лендинга.',
     tags: ['project'],
-    aspects: {},
+    aspects: [],
     createdAt: new Date('2026-06-20T08:00:00Z'),
     updatedAt: new Date('2026-07-01T08:00:00Z'),
   },
@@ -102,7 +103,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Задача на сегодня',
     tags: ['task', 'work'],
-    aspects: { 'orbis/task': { status: 'in_progress', priority: 'high', due_date: '2026-07-03' } },
+    props: {
+      'orbis/task_status': 'in_progress',
+      'orbis/priority': 'high',
+      'orbis/due_date': '2026-07-03',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-28T09:00:00Z'),
     updatedAt: new Date('2026-07-01T09:00:00Z'),
   },
@@ -111,7 +117,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Просроченная задача',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'planned', priority: 'medium', due_date: '2026-07-01' } },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'medium',
+      'orbis/due_date': '2026-07-01',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-25T09:00:00Z'),
     updatedAt: new Date('2026-07-01T10:00:00Z'),
   },
@@ -120,7 +131,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Заблокированная задача со сроком сегодня',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'planned', priority: 'high', due_date: '2026-07-03' } },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'high',
+      'orbis/due_date': '2026-07-03',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-26T09:00:00Z'),
     updatedAt: new Date('2026-07-03T09:00:00Z'),
   },
@@ -129,7 +145,8 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Живой блокер (in_progress, без срока)',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'in_progress', priority: 'low' } },
+    props: { 'orbis/task_status': 'in_progress', 'orbis/priority': 'low' },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-26T10:00:00Z'),
     updatedAt: new Date('2026-07-03T10:00:00Z'),
   },
@@ -140,7 +157,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Задача, заблокированная заметкой без task-аспекта',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'planned', priority: 'medium', due_date: '2026-07-03' } },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'medium',
+      'orbis/due_date': '2026-07-03',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-26T11:00:00Z'),
     updatedAt: new Date('2026-07-01T10:30:00Z'),
   },
@@ -150,7 +172,8 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Заметка-блокер без task-аспекта',
     tags: ['note'],
-    aspects: { 'orbis/note': { content_type: 'plain' } },
+    props: { 'orbis/content_type': 'plain' },
+    aspects: ['orbis/note'],
     createdAt: new Date('2026-06-26T12:00:00Z'),
     updatedAt: new Date('2026-07-01T10:45:00Z'),
   },
@@ -159,7 +182,8 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Неразобранная задача без приоритета',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'inbox' } },
+    props: { 'orbis/task_status': 'inbox' },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-07-01T07:00:00Z'),
     updatedAt: new Date('2026-07-03T11:00:00Z'),
   },
@@ -168,14 +192,13 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Закрытая задача со сроком сегодня',
     tags: ['task'],
-    aspects: {
-      'orbis/task': {
-        status: 'done',
-        priority: 'low',
-        due_date: '2026-07-03',
-        completed_at: '2026-07-01T10:30:00Z',
-      },
+    props: {
+      'orbis/task_status': 'done',
+      'orbis/priority': 'low',
+      'orbis/due_date': '2026-07-03',
+      'orbis/completed_at': '2026-07-01T10:30:00Z',
     },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-27T09:00:00Z'),
     updatedAt: new Date('2026-07-01T11:00:00Z'),
   },
@@ -184,14 +207,13 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Комиссия 0.10',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '0.10',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-06-25',
-      },
+    props: {
+      'orbis/amount': '0.10',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-06-25',
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-06-25T12:00:00Z'),
     updatedAt: new Date('2026-07-01T12:00:00Z'),
   },
@@ -200,14 +222,13 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Комиссия 0.20',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '0.20',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-06-26',
-      },
+    props: {
+      'orbis/amount': '0.20',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-06-26',
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-06-26T12:00:00Z'),
     updatedAt: new Date('2026-07-01T13:00:00Z'),
   },
@@ -216,14 +237,13 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Обед 340.00',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '340.00',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-06-30',
-      },
+    props: {
+      'orbis/amount': '340.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-06-30',
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-06-30T13:00:00Z'),
     updatedAt: new Date('2026-07-03T12:00:00Z'),
   },
@@ -232,14 +252,13 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Покупка 1000.00',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '1000.00',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-07-02',
-      },
+    props: {
+      'orbis/amount': '1000.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-07-02',
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-07-02T13:00:00Z'),
     updatedAt: new Date('2026-07-03T13:00:00Z'),
   },
@@ -248,7 +267,8 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Старый черновик плана',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'cancelled', priority: 'low' } },
+    props: { 'orbis/task_status': 'cancelled', 'orbis/priority': 'low' },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-05-02T08:00:00Z'),
     updatedAt: new Date('2026-07-03T14:00:00Z'),
     archived: true,
@@ -261,7 +281,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Задача через три дня',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'planned', priority: 'medium', due_date: '2026-07-06' } },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'medium',
+      'orbis/due_date': '2026-07-06',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-29T09:00:00Z'),
     updatedAt: new Date('2026-07-01T11:30:00Z'),
   },
@@ -270,7 +295,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Задача через две недели',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'planned', priority: 'high', due_date: '2026-07-15' } },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'high',
+      'orbis/due_date': '2026-07-15',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-29T10:00:00Z'),
     updatedAt: new Date('2026-07-01T11:40:00Z'),
   },
@@ -279,7 +309,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Задача в конце месяца',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'planned', priority: 'low', due_date: '2026-07-20' } },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'low',
+      'orbis/due_date': '2026-07-20',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-29T11:00:00Z'),
     updatedAt: new Date('2026-07-01T11:50:00Z'),
   },
@@ -289,7 +324,8 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Делегированная задача (ждёт давно)',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'waiting', priority: 'medium' } },
+    props: { 'orbis/task_status': 'waiting', 'orbis/priority': 'medium' },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-20T09:00:00Z'),
     updatedAt: new Date('2026-06-29T10:00:00Z'),
   },
@@ -298,7 +334,8 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Ожидание ответа подрядчика',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'waiting' } },
+    props: { 'orbis/task_status': 'waiting' },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-30T09:00:00Z'),
     updatedAt: new Date('2026-07-01T15:00:00Z'),
   },
@@ -311,15 +348,14 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Запланированная покупка 45.00',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '45.00',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-06-24',
-        planned: true,
-      },
+    props: {
+      'orbis/amount': '45.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-06-24',
+      'orbis/planned': true,
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-06-24T12:00:00Z'),
     updatedAt: new Date('2026-07-01T16:00:00Z'),
   },
@@ -329,15 +365,14 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Совершённая покупка 55.00',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '55.00',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-06-23',
-        planned: false,
-      },
+    props: {
+      'orbis/amount': '55.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-06-23',
+      'orbis/planned': false,
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-06-23T12:00:00Z'),
     updatedAt: new Date('2026-07-01T16:30:00Z'),
   },
@@ -347,14 +382,13 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Комиссия 0.30',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '0.30',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-06-27',
-      },
+    props: {
+      'orbis/amount': '0.30',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-06-27',
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-06-27T13:00:00Z'),
     updatedAt: new Date('2026-07-01T13:30:00Z'),
   },
@@ -366,14 +400,13 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Транспорт',
     tags: ['category'],
-    aspects: {
-      'orbis/category': {
-        icon: '🚕',
-        color: '#5a9ee0',
-        aliases: ['транспорт', 'transport', 'такси', 'метро'],
-        spend_class: 'fixed',
-      },
+    props: {
+      'orbis/icon': '🚕',
+      'orbis/color': '#5a9ee0',
+      'orbis/aliases': ['транспорт', 'transport', 'такси', 'метро'],
+      'orbis/spend_class': 'fixed',
     },
+    aspects: ['orbis/category'],
     createdAt: new Date('2026-06-20T10:00:00Z'),
     updatedAt: new Date('2026-07-01T10:00:00Z'),
   },
@@ -382,24 +415,23 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Еда',
     tags: ['category'],
-    aspects: {
-      'orbis/category': {
-        icon: '🍔',
-        color: '#e0885a',
-        aliases: [
-          'еда',
-          'food',
-          'продукты',
-          'groceries',
-          'обед',
-          'lunch',
-          'ужин',
-          'завтрак',
-          'кофе',
-        ],
-        spend_class: 'discretionary',
-      },
+    props: {
+      'orbis/icon': '🍔',
+      'orbis/color': '#e0885a',
+      'orbis/aliases': [
+        'еда',
+        'food',
+        'продукты',
+        'groceries',
+        'обед',
+        'lunch',
+        'ужин',
+        'завтрак',
+        'кофе',
+      ],
+      'orbis/spend_class': 'discretionary',
     },
+    aspects: ['orbis/category'],
     createdAt: new Date('2026-06-20T10:01:00Z'),
     updatedAt: new Date('2026-07-01T10:01:00Z'),
   },
@@ -410,9 +442,12 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Зарплата',
     tags: ['category'],
-    aspects: {
-      'orbis/category': { icon: '💰', color: '#6fe05a', aliases: ['зарплата', 'salary'] },
+    props: {
+      'orbis/icon': '💰',
+      'orbis/color': '#6fe05a',
+      'orbis/aliases': ['зарплата', 'salary'],
     },
+    aspects: ['orbis/category'],
     createdAt: new Date('2026-06-20T10:02:00Z'),
     updatedAt: new Date('2026-07-01T10:02:00Z'),
   },
@@ -425,12 +460,11 @@ const DATASET_A: DatasetRow[] = [
     ownerId: USER_A,
     title: 'Еженедельная планёрка (начало вчера)',
     tags: ['event'],
-    aspects: {
-      'orbis/schedule': {
-        start_at: '2026-07-01T10:00:00+03:00',
-        recurrence: { freq: 'weekly', interval: 1 },
-      },
+    props: {
+      'orbis/start_at': '2026-07-01T10:00:00+03:00',
+      'orbis/recurrence': { freq: 'weekly', interval: 1 },
     },
+    aspects: ['orbis/schedule'],
     createdAt: new Date('2026-06-20T11:00:00Z'),
     updatedAt: new Date('2026-07-01T17:00:00Z'),
   },
@@ -448,7 +482,12 @@ const DATASET_B: DatasetRow[] = [
     ownerId: USER_B,
     title: 'Чужая задача на сегодня',
     tags: ['task'],
-    aspects: { 'orbis/task': { status: 'planned', priority: 'high', due_date: '2026-07-03' } },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'high',
+      'orbis/due_date': '2026-07-03',
+    },
+    aspects: ['orbis/task'],
     createdAt: new Date('2026-06-28T09:30:00Z'),
     updatedAt: new Date('2026-07-01T09:30:00Z'),
   },
@@ -457,14 +496,13 @@ const DATASET_B: DatasetRow[] = [
     ownerId: USER_B,
     title: 'Чужая покупка 1000.00',
     tags: ['expense'],
-    aspects: {
-      'orbis/financial': {
-        amount: '1000.00',
-        direction: 'expense',
-        category_ref: CAT,
-        occurred_on: '2026-07-01',
-      },
+    props: {
+      'orbis/amount': '1000.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CAT,
+      'orbis/occurred_on': '2026-07-01',
     },
+    aspects: ['orbis/financial'],
     createdAt: new Date('2026-07-01T14:00:00Z'),
     updatedAt: new Date('2026-07-01T14:00:00Z'),
   },
@@ -549,12 +587,22 @@ async function runCount(userId: string, query: string): Promise<number> {
 
 const ids = (rows: Record<string, unknown>[]) => rows.map((r) => r.id);
 
-/** Старая карта фикстуры → три колонки строки (одна проекция на весь репозиторий). */
+/**
+ * Свойства фикстуры → три колонки строки. Проекция `aspects_legacy` считается той же
+ * функцией, что и у исполнителя (`projectLegacyAspects`): пока колонка жива (до Задачи 23b),
+ * фикстура с ПРЯМЫМ INSERT обязана держать её согласованной с новой правдой — иначе она
+ * разойдётся с писателем и покажет тесту то, чего в проде не бывает.
+ */
 function datasetRows(
   snapshot: RegistrySnapshot,
   rows: DatasetRow[],
 ): (typeof entities.$inferInsert)[] {
-  return rows.map(({ aspects, ...rest }) => ({ ...rest, ...rowFromLegacy(snapshot, aspects) }));
+  return rows.map(({ props = {}, aspects, ...rest }) => ({
+    ...rest,
+    props,
+    aspects,
+    aspectsLegacy: projectLegacyAspects(snapshot, { props, aspects }),
+  }));
 }
 
 beforeAll(async () => {
@@ -949,7 +997,8 @@ describe('служебные аспекты: спрятаны, пока не н�
             ownerId: USER_C,
             title: 'Тикет',
             tags: ['task'],
-            aspects: { 'orbis/task': { status: 'in_progress' } },
+            props: { 'orbis/task_status': 'in_progress' },
+            aspects: ['orbis/task'],
             createdAt: new Date('2026-07-01T08:00:00Z'),
             updatedAt: new Date('2026-07-01T08:00:00Z'),
           },
@@ -958,16 +1007,15 @@ describe('служебные аспекты: спрятаны, пока не н�
             ownerId: USER_C,
             title: 'Прогон исполнителя',
             tags: [],
-            aspects: {
-              'orbis/agent-run': {
-                grant_id: '019eb300-d5e1-7000-8000-0000000000c0',
-                outcome: 'running',
-                started_at: '2026-07-03T10:00:00Z',
-                last_step_at: '2026-07-03T10:05:00Z',
-                step_count: 0,
-                steps: [],
-              },
+            props: {
+              'orbis/grant': '019eb300-d5e1-7000-8000-0000000000c0',
+              'orbis/run_outcome': 'running',
+              'orbis/run_started_at': '2026-07-03T10:00:00Z',
+              'orbis/last_step_at': '2026-07-03T10:05:00Z',
+              'orbis/step_count': 0,
+              'orbis/run_steps': [],
             },
+            aspects: ['orbis/agent-run'],
             createdAt: new Date('2026-07-03T10:00:00Z'),
             updatedAt: new Date('2026-07-03T10:05:00Z'),
           },
@@ -1030,7 +1078,8 @@ describe('children_of/parents_of: семейство иерархии из ре�
             ownerId: USER_D,
             title: 'Проект D',
             tags: [],
-            aspects: { 'orbis/project': { stage: 'active' } },
+            props: { 'orbis/project_stage': 'active' },
+            aspects: ['orbis/project'],
             createdAt: new Date('2026-07-01T08:00:00Z'),
             updatedAt: new Date('2026-07-01T08:00:00Z'),
           },
@@ -1039,7 +1088,8 @@ describe('children_of/parents_of: семейство иерархии из ре�
             ownerId: USER_D,
             title: 'Тикет D',
             tags: [],
-            aspects: { 'orbis/task': { status: 'planned' } },
+            props: { 'orbis/task_status': 'planned' },
+            aspects: ['orbis/task'],
             createdAt: new Date('2026-07-01T09:00:00Z'),
             updatedAt: new Date('2026-07-01T09:00:00Z'),
           },
@@ -1048,7 +1098,8 @@ describe('children_of/parents_of: семейство иерархии из ре�
             ownerId: USER_D,
             title: 'Подпункт D',
             tags: [],
-            aspects: { 'orbis/task': { status: 'planned' } },
+            props: { 'orbis/task_status': 'planned' },
+            aspects: ['orbis/task'],
             createdAt: new Date('2026-07-01T10:00:00Z'),
             updatedAt: new Date('2026-07-01T10:00:00Z'),
           },
@@ -1057,14 +1108,13 @@ describe('children_of/parents_of: семейство иерархии из ре�
             ownerId: USER_D,
             title: 'Конверт D',
             tags: [],
-            aspects: {
-              'orbis/budget': {
-                category_ref: '019eb300-d5e1-7000-8000-0000000000d1',
-                limit: '1000.00',
-                period_start: '2026-07-01',
-                period_end: '2026-07-31',
-              },
+            props: {
+              'orbis/finance_category': '019eb300-d5e1-7000-8000-0000000000d1',
+              'orbis/limit': '1000.00',
+              'orbis/period_start': '2026-07-01',
+              'orbis/period_end': '2026-07-31',
             },
+            aspects: ['orbis/budget'],
             createdAt: new Date('2026-07-01T11:00:00Z'),
             updatedAt: new Date('2026-07-01T11:00:00Z'),
           },
@@ -1073,14 +1123,13 @@ describe('children_of/parents_of: семейство иерархии из ре�
             ownerId: USER_D,
             title: 'Расход D',
             tags: [],
-            aspects: {
-              'orbis/financial': {
-                amount: '100.00',
-                direction: 'expense',
-                category_ref: '019eb300-d5e1-7000-8000-0000000000d1',
-                occurred_on: '2026-07-02',
-              },
+            props: {
+              'orbis/amount': '100.00',
+              'orbis/direction': 'expense',
+              'orbis/finance_category': '019eb300-d5e1-7000-8000-0000000000d1',
+              'orbis/occurred_on': '2026-07-02',
             },
+            aspects: ['orbis/financial'],
             createdAt: new Date('2026-07-01T12:00:00Z'),
             updatedAt: new Date('2026-07-01T12:00:00Z'),
           },
@@ -1151,7 +1200,7 @@ describe('descendants_of/ancestors_of: обход по одной роли и к
           ownerId: USER_E,
           title: `Узел ${i}`,
           tags: [],
-          aspects: {},
+          aspects: [],
           createdAt: new Date(`2026-07-01T00:00:00Z`),
           updatedAt: new Date(`2026-07-01T00:00:00Z`),
         });
@@ -1161,7 +1210,7 @@ describe('descendants_of/ancestors_of: обход по одной роли и к
         ownerId: USER_E,
         title: 'Ветка на глубине 2',
         tags: [],
-        aspects: {},
+        aspects: [],
         createdAt: new Date('2026-07-01T00:00:00Z'),
         updatedAt: new Date('2026-07-01T00:00:00Z'),
       });

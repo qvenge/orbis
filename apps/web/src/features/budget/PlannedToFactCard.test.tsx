@@ -5,7 +5,6 @@
 // {entityId, occurredOn, batchId} (batchId UUIDv7 один на показ карточки, уроки B4:
 // повтор после ошибки — тот же id, CONFLICT — честная ошибка + новый id);
 // [Оставить план] — без мутации.
-import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
@@ -20,37 +19,35 @@ import { DetailScreen } from '../entity-detail/DetailScreen';
 // --- фикстуры -------------------------------------------------------------------------
 
 /**
- * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
- * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
- * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
- * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
- * двум формам негде.
+ * Строка выдачи в форме реформы: `props` по id свойства и `aspects` списком (§А1-1).
+ * Старую карту `wireEntity` больше не проецирует — её нет ни в wire-форме, ни у читателей.
  */
-const ent = (id: string, title: string, aspects: Record<string, unknown> = {}) => {
-  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
-  return wireFixture({
-    ...{ id, title },
-    props: translated.ok ? translated.props : {},
-    aspects: Object.keys(aspects),
-  });
-};
+const ent = (
+  id: string,
+  title: string,
+  props: Record<string, unknown> = {},
+  aspects: string[] = [],
+) => wireFixture({ ...{ id, title }, props, aspects });
 
 /** Покупка-задача §2.7: orbis/task + orbis/financial planned=true. */
-const purchase = ent('e1', 'Купить кроссовки', {
-  'orbis/task': { status: 'inbox' },
-  'orbis/financial': {
-    amount: '8000.00',
-    direction: 'expense',
-    occurred_on: '2026-08-01',
-    planned: true,
-    category_ref: 'cat-cl',
+const purchase = ent(
+  'e1',
+  'Купить кроссовки',
+  {
+    'orbis/task_status': 'inbox',
+    'orbis/amount': '8000.00',
+    'orbis/direction': 'expense',
+    'orbis/occurred_on': '2026-08-01',
+    'orbis/planned': true,
+    'orbis/finance_category': 'cat-cl',
   },
-});
+  ['orbis/task', 'orbis/financial'],
+);
 
 /** Обычная задача без planned-financial — карточка не показывается. */
-const plainTask = ent('e2', 'Обычная задача', { 'orbis/task': { status: 'inbox' } });
+const plainTask = ent('e2', 'Обычная задача', { 'orbis/task_status': 'inbox' }, ['orbis/task']);
 
-const category = ent('cat-cl', 'Одежда', { 'orbis/category': { icon: '👟' } });
+const category = ent('cat-cl', 'Одежда', { 'orbis/icon': '👟' }, ['orbis/category']);
 
 const settings = {
   timezone: 'Europe/Moscow',

@@ -67,15 +67,14 @@ function expense(
   return {
     title: `Операция ${amount}`,
     tags: [],
-    aspects: {
-      'orbis/financial': {
-        amount,
-        direction: 'expense',
-        category_ref: categoryRef,
-        occurred_on: occurredOn,
-        ...over,
-      },
+    props: {
+      'orbis/amount': amount,
+      'orbis/direction': 'expense',
+      'orbis/finance_category': categoryRef,
+      'orbis/occurred_on': occurredOn,
+      ...over,
     },
+    aspects: ['orbis/financial'],
   };
 }
 
@@ -89,19 +88,16 @@ test('шаблон с occurred_on не попадает ни в unbudgeted, ни
   await exec(user, 'entity_create', {
     title: 'Аренда',
     tags: [],
-    aspects: {
-      'orbis/schedule': {
-        start_at: SERIES_START,
-        timezone: 'Europe/Moscow',
-        recurrence: RECURRENCE,
-      },
-      'orbis/financial': {
-        amount: '50000.00',
-        direction: 'expense',
-        category_ref: catRent,
-        occurred_on: '2026-09-05',
-      },
+    props: {
+      'orbis/start_at': SERIES_START,
+      'orbis/timezone': 'Europe/Moscow',
+      'orbis/recurrence': RECURRENCE,
+      'orbis/amount': '50000.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': catRent,
+      'orbis/occurred_on': '2026-09-05',
     },
+    aspects: ['orbis/schedule', 'orbis/financial'],
   });
   // Положительный контроль: обычный факт того же месяца обязан остаться в обоих агрегатах
   await exec(user, 'entity_create', expense(catFood, '340.00', '2026-09-05'));
@@ -124,7 +120,7 @@ test('шаблон не попадает в список planned-покупок 
   const tpl = await exec(
     user,
     'entity_create',
-    expense(catRent, '50000.00', '2026-09-20', { planned: true }),
+    expense(catRent, '50000.00', '2026-09-20', { 'orbis/planned': true }),
   );
   await exec(user, 'attach_orbis_schedule', {
     entity_id: tpl.id,
@@ -138,7 +134,7 @@ test('шаблон не попадает в список planned-покупок 
   const purchase = await exec(
     user,
     'entity_create',
-    expense(catGift, '1200.00', '2026-09-25', { planned: true }),
+    expense(catGift, '1200.00', '2026-09-25', { 'orbis/planned': true }),
   );
 
   const status = await budgetStatus(db, user, MONTH, clock);
@@ -157,33 +153,29 @@ test('шаблон не завышает suggestedLimit rollover-превью §
   await exec(user, 'entity_create', {
     title: 'Конверт «Еда», август',
     tags: [],
-    aspects: {
-      'orbis/budget': {
-        category_ref: catFood,
-        limit: '10000.00',
-        period_start: '2026-08-01',
-        period_end: '2026-08-31',
-      },
+    props: {
+      'orbis/finance_category': catFood,
+      'orbis/limit': '10000.00',
+      'orbis/period_start': '2026-08-01',
+      'orbis/period_end': '2026-08-31',
     },
+    aspects: ['orbis/budget'],
   });
   // Шаблон «Аренда» с августовским occurred_on — и настоящая трата ТОЙ ЖЕ категории
   // рядом: положительный контроль, который в превью попасть обязан
   await exec(user, 'entity_create', {
     title: 'Аренда',
     tags: [],
-    aspects: {
-      'orbis/schedule': {
-        start_at: SERIES_START,
-        timezone: 'Europe/Moscow',
-        recurrence: RECURRENCE,
-      },
-      'orbis/financial': {
-        amount: '50000.00',
-        direction: 'expense',
-        category_ref: catRent,
-        occurred_on: '2026-08-05',
-      },
+    props: {
+      'orbis/start_at': SERIES_START,
+      'orbis/timezone': 'Europe/Moscow',
+      'orbis/recurrence': RECURRENCE,
+      'orbis/amount': '50000.00',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': catRent,
+      'orbis/occurred_on': '2026-08-05',
     },
+    aspects: ['orbis/schedule', 'orbis/financial'],
   });
   await exec(user, 'entity_create', expense(catRent, '340.00', '2026-08-05'));
 

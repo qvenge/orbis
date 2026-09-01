@@ -154,6 +154,9 @@ beforeAll(async () => {
   ]);
   smallSize = Number((smallRows[0] as { count?: unknown })?.count);
   console.log(`perf: малое поддерево — ${smallSize} узлов (уровень ${SMALL_ROOT_LEVEL})`);
+  // @ts-expect-error bun-types 1.2.7 не объявляет второй аргумент `beforeAll` — таймаут, —
+  // хотя рантайм его принимает. Убрать число нельзя: засев корпуса в 150k рёбер идёт минуты
+  // и упёрся бы в умолчание хука. Пометка снимется сама, когда типы догонят рантайм.
 }, 900_000);
 
 afterAll(async () => {

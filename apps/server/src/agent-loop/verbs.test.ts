@@ -84,32 +84,40 @@ describe('orbis_my_queue: очередь исполнителя (§9.3, С7)', (
       await seedEntity(owner, {
         title: 'Проект «Орбис»',
         tags: [],
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: ['orbis/project'],
       })
     ).id;
     ticketId = (
       await seedEntity(owner, {
         title: 'Починить парсер',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'planned', priority: 'high', due_date: '2026-08-20' },
-          'orbis/assignment': { executor: 'agent', grant_id: grantId },
+        props: {
+          'orbis/task_status': 'planned',
+          'orbis/priority': 'high',
+          'orbis/due_date': '2026-08-20',
+          'orbis/executor': 'agent',
+          'orbis/grant': grantId,
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       })
     ).id;
     await link(owner, projectId, ticketId, 'ticket');
     await seedEntity(owner, {
       title: 'Тикет другого исполнителя',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: otherGrantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': otherGrantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     await seedEntity(owner, {
       title: 'Тикет без назначения',
       tags: [],
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: { 'orbis/task_status': 'planned' },
+      aspects: ['orbis/task'],
     });
   });
 
@@ -133,20 +141,25 @@ describe('orbis_my_queue: очередь исполнителя (§9.3, С7)', (
       await seedEntity(owner, {
         title: 'Ждёт ответа владельца',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'waiting', waiting_for: 'вопрос с чекпойнта' },
-          'orbis/assignment': { executor: 'agent', grant_id: grantId },
+        props: {
+          'orbis/task_status': 'waiting',
+          'orbis/waiting_for': 'вопрос с чекпойнта',
+          'orbis/executor': 'agent',
+          'orbis/grant': grantId,
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       })
     ).id;
     const done = (
       await seedEntity(owner, {
         title: 'Уже закрыт',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'done' },
-          'orbis/assignment': { executor: 'agent', grant_id: grantId },
+        props: {
+          'orbis/task_status': 'done',
+          'orbis/executor': 'agent',
+          'orbis/grant': grantId,
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       })
     ).id;
     const q = okResult<MyQueueResult>(
@@ -229,10 +242,12 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
       await seedEntity(owner, {
         title,
         tags: [],
-        aspects: {
-          'orbis/task': { status },
-          'orbis/assignment': { executor: 'agent', grant_id: grantId },
+        props: {
+          'orbis/task_status': status,
+          'orbis/executor': 'agent',
+          'orbis/grant': grantId,
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       })
     ).id;
     await link(owner, projectId, id, 'ticket');
@@ -246,7 +261,8 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
       await seedEntity(owner, {
         title: 'Проект захвата',
         tags: [],
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: ['orbis/project'],
       })
     ).id;
   });
@@ -383,27 +399,32 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
       await seedEntity(owner, {
         title: 'Назначен другому гранту',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'planned' },
-          'orbis/assignment': { executor: 'agent', grant_id: otherGrantId },
+        props: {
+          'orbis/task_status': 'planned',
+          'orbis/executor': 'agent',
+          'orbis/grant': otherGrantId,
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       })
     ).id;
     const unassigned = (
       await seedEntity(owner, {
         title: 'Без назначения',
         tags: [],
-        aspects: { 'orbis/task': { status: 'planned' } },
+        props: { 'orbis/task_status': 'planned' },
+        aspects: ['orbis/task'],
       })
     ).id;
     const human = (
       await seedEntity(owner, {
         title: 'Назначен человеку',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'planned' },
-          'orbis/assignment': { executor: 'human', assignee: 'владелец' },
+        props: {
+          'orbis/task_status': 'planned',
+          'orbis/executor': 'human',
+          'orbis/assignee': 'владелец',
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       })
     ).id;
     const waiting = await makeTicket('Ждёт владельца', 'waiting');
@@ -426,7 +447,8 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
       await seedEntity(stranger, {
         title: 'Тикет постороннего',
         tags: [],
-        aspects: { 'orbis/task': { status: 'planned' } },
+        props: { 'orbis/task_status': 'planned' },
+        aspects: ['orbis/task'],
       })
     ).id;
     expect(
@@ -572,7 +594,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
   test('под id вызова лежит не захват (чужой batch владельца) → CONFLICT, а не падение', async () => {
     const ticketId = await makeTicket('Захват поверх чужого batch');
     const callId = newId();
-    const note = await seedEntity(owner, { title: 'Заметка владельца', tags: [], aspects: {} });
+    const note = await seedEntity(owner, { title: 'Заметка владельца', tags: [], aspects: [] });
     // Тем же id владелец уже записал СВОЙ batch: сохранённый ответ — одна сущность, а не
     // пара «тикет + прогон». Глагол обязан ответить структурным отказом, а не упасть на
     // разборе чужой формы (TypeError уехал бы в 500).
@@ -604,20 +626,21 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     const past = await seedEntity(owner, {
       title: 'Прогон: Тикет с историей',
       tags: [],
-      aspects: {
-        'orbis/agent-run': {
-          grant_id: grantId,
-          // `project_id` из фикстуры снят: §А8 удаляет поле (см. соседний тест)
-          outcome: 'checkpoint',
-          started_at: iso(new Date(T0.getTime() - 4 * 3_600_000)),
-          finished_at: iso(askedAt),
-          last_step_at: iso(askedAt),
-          step_count: 1,
-          steps: [{ seq: 1, at: iso(askedAt), summary: 'Прочитал требования', external: false }],
-          checkpoint: { question: 'Какую библиотеку взять?', asked_at: iso(askedAt) },
-          reply: { text: 'Бери zod.', at: iso(new Date(T0.getTime() - 2 * 3_600_000)) },
-        },
+      props: {
+        'orbis/grant': grantId,
+        // `project_id` из фикстуры снят: §А8 удаляет поле (см. соседний тест)
+        'orbis/run_outcome': 'checkpoint',
+        'orbis/run_started_at': iso(new Date(T0.getTime() - 4 * 3_600_000)),
+        'orbis/run_finished_at': iso(askedAt),
+        'orbis/last_step_at': iso(askedAt),
+        'orbis/step_count': 1,
+        'orbis/run_steps': [
+          { seq: 1, at: iso(askedAt), summary: 'Прочитал требования', external: false },
+        ],
+        'orbis/run_checkpoint': { question: 'Какую библиотеку взять?', asked_at: iso(askedAt) },
+        'orbis/run_reply': { text: 'Бери zod.', at: iso(new Date(T0.getTime() - 2 * 3_600_000)) },
       },
+      aspects: ['orbis/agent-run'],
     });
     await link(owner, ticketId, past.id, 'run');
 
@@ -654,14 +677,13 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     const e = await seedEntity(owner, {
       title,
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': {
-          executor: 'agent',
-          grant_id: grantId,
-          ...(mayClose !== undefined && { may_close: mayClose }),
-        },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
+        ...(mayClose !== undefined && { 'orbis/may_close': mayClose }),
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     return e.id;
   }
@@ -685,7 +707,10 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       actorKind: 'owner',
       source: 'ui',
       operations: [
-        { tool: 'entity_update', input: { id: ticketId, aspects: { 'orbis/task': patch } } },
+        {
+          tool: 'entity_update',
+          input: { id: ticketId, props: patch, aspects: { attach: ['orbis/task'] } },
+        },
       ],
     });
     if (!r.ok) throw new Error(`patchTask: ${r.error.code} ${r.error.message}`);
@@ -698,7 +723,10 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       actorKind: 'owner',
       source: 'ui',
       operations: [
-        { tool: 'entity_update', input: { id: ticketId, aspects: { 'orbis/assignment': patch } } },
+        {
+          tool: 'entity_update',
+          input: { id: ticketId, props: patch, aspects: { attach: ['orbis/assignment'] } },
+        },
       ],
     });
     if (!r.ok) throw new Error(`patchAssignment: ${r.error.code} ${r.error.message}`);
@@ -927,7 +955,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     const { ticketId, runId } = await claimed('Работа с правом закрытия', true);
     // Хвост от прошлого ожидания владельца: уходя из waiting, глагол обязан его снять —
     // иначе рядом с `done` висел бы незакрытый вопрос
-    await patchTask(ticketId, { waiting_for: 'старый вопрос с чекпойнта' });
+    await patchTask(ticketId, { 'orbis/waiting_for': 'старый вопрос с чекпойнта' });
     const f = okResult<FinishResult>(
       await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
         run_id: runId,
@@ -1152,7 +1180,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
 
   test('orbis_finish по тикету не в in_progress (владелец вернул руками) → CONFLICT, прогон остался running', async () => {
     const { ticketId, runId } = await claimed('Владелец вернул тикет');
-    await patchTask(ticketId, { status: 'planned' });
+    await patchTask(ticketId, { 'orbis/task_status': 'planned' });
 
     const e = errorOf(
       await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
@@ -1175,9 +1203,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     // из ЧУЖОГО назначения — и прогон закрыл бы тикет, который владелец уже отдал другому.
     const { ticketId, runId } = await claimed('Тикет, отданный другому', true);
     await patchAssignment(ticketId, {
-      executor: 'agent',
-      grant_id: otherGrantId,
-      may_close: true,
+      'orbis/executor': 'agent',
+      'orbis/grant': otherGrantId,
+      'orbis/may_close': true,
     });
 
     const e = errorOf(
@@ -1252,16 +1280,15 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     const alien = await seedEntity(stranger, {
       title: 'Прогон постороннего',
       tags: [],
-      aspects: {
-        'orbis/agent-run': {
-          grant_id: newId(),
-          outcome: 'running',
-          started_at: iso(T0),
-          last_step_at: iso(T0),
-          step_count: 0,
-          steps: [],
-        },
+      props: {
+        'orbis/grant': newId(),
+        'orbis/run_outcome': 'running',
+        'orbis/run_started_at': iso(T0),
+        'orbis/last_step_at': iso(T0),
+        'orbis/step_count': 0,
+        'orbis/run_steps': [],
       },
+      aspects: ['orbis/agent-run'],
     });
     expect(
       errorCode(
@@ -1557,10 +1584,12 @@ describe('субъект прогона — рутина (V1.5)', () => {
     const ticket = await seedEntity(grantOwner, {
       title: 'Тикет грантового пути',
       tags: [],
-      aspects: {
-        'orbis/task': { status: 'planned' },
-        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/executor': 'agent',
+        'orbis/grant': grantId,
       },
+      aspects: ['orbis/task', 'orbis/assignment'],
     });
     const claim = okResult<ClaimTaskResult>(
       await dispatchTool(worker(grantOwner, grantId), 'orbis_claim_task', { ticket_id: ticket.id }),

@@ -135,7 +135,8 @@ describe('executor: entity_create', () => {
         title: 'Кроссовки',
         tags: ['Shopping', 'shopping', 'БЕГ'],
         body: `Модель выбрана в [[entity:${refId}|Wishlist: бег]] и ещё раз [[entity:${refId.toUpperCase()}]]`,
-        aspects: { 'orbis/task': { status: 'inbox' } },
+        props: { 'orbis/task_status': 'inbox' },
+        aspects: ['orbis/task'],
       }),
       { sink },
     );
@@ -177,14 +178,13 @@ describe('executor: entity_create', () => {
         id,
         title: 'Кофе',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: 340,
-            direction: 'expense',
-            category_ref: CATEGORY_REF,
-            occurred_on: '2026-07-04',
-          },
+        props: {
+          'orbis/amount': 340,
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+          'orbis/occurred_on': '2026-07-04',
         },
+        aspects: ['orbis/financial'],
       }),
     );
     expect(r.ok).toBe(false);
@@ -200,9 +200,12 @@ describe('executor: entity_create', () => {
         id,
         title: 'Кофе',
         tags: [],
-        aspects: {
-          'orbis/financial': { amount: '340.00', direction: 'expense', category_ref: CATEGORY_REF },
+        props: {
+          'orbis/amount': '340.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
         },
+        aspects: ['orbis/financial'],
       }),
     );
     expect(r.ok).toBe(false);
@@ -216,14 +219,13 @@ describe('executor: entity_create', () => {
       req('entity_create', {
         title: 'Аренда',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '50000.00',
-            direction: 'expense',
-            category_ref: CATEGORY_REF,
-            recurring: true,
-          },
+        props: {
+          'orbis/amount': '50000.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+          'orbis/recurring': true,
         },
+        aspects: ['orbis/financial'],
       }),
     );
     expect(bad.ok).toBe(false);
@@ -234,18 +236,15 @@ describe('executor: entity_create', () => {
       req('entity_create', {
         title: 'Аренда',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '50000.00',
-            direction: 'expense',
-            category_ref: CATEGORY_REF,
-            recurring: true,
-          },
-          'orbis/schedule': {
-            start_at: '2026-07-01T10:00:00+03:00',
-            recurrence: { freq: 'monthly', interval: 1 },
-          },
+        props: {
+          'orbis/amount': '50000.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+          'orbis/recurring': true,
+          'orbis/start_at': '2026-07-01T10:00:00+03:00',
+          'orbis/recurrence': { freq: 'monthly', interval: 1 },
         },
+        aspects: ['orbis/financial', 'orbis/schedule'],
       }),
     );
     expect(good.ok).toBe(true); // шаблон: occurred_on не нужен
@@ -296,7 +295,7 @@ describe('executor: entity_create', () => {
 
     const unknownAspect = await execute(
       db,
-      req('entity_create', { title: 'x', tags: [], aspects: { 'orbis/unknown': {} } }),
+      req('entity_create', { title: 'x', tags: [], aspects: ['orbis/unknown'] }),
     );
     expect(unknownAspect.ok).toBe(false);
     if (!unknownAspect.ok) expect(unknownAspect.error.code).toBe('VALIDATION');
@@ -320,7 +319,8 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       req('entity_create', {
         title: 'Задача',
         tags: [],
-        aspects: { 'orbis/task': { status: 'inbox', priority: 'high' } },
+        props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'high' },
+        aspects: ['orbis/task'],
       }),
     );
     return firstEntity(r);
@@ -330,7 +330,11 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
     const e = await createTask();
     const done = await execute(
       db,
-      req('entity_update', { id: e.id, aspects: { 'orbis/task': { status: 'done' } } }),
+      req('entity_update', {
+        id: e.id,
+        props: { 'orbis/task_status': 'done' },
+        aspects: { attach: ['orbis/task'] },
+      }),
     );
     const eDone = firstEntity(done);
     const task = aspectOf(eDone, 'orbis/task');
@@ -341,7 +345,11 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
     // откат из done → completed_at очищен
     const back = await execute(
       db,
-      req('entity_update', { id: e.id, aspects: { 'orbis/task': { status: 'planned' } } }),
+      req('entity_update', {
+        id: e.id,
+        props: { 'orbis/task_status': 'planned' },
+        aspects: { attach: ['orbis/task'] },
+      }),
     );
     const eBack = firstEntity(back);
     expect(aspectOf(eBack, 'orbis/task').status).toBe('planned');
@@ -352,7 +360,11 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
     const e = await createTask();
     const noPriority = await execute(
       db,
-      req('entity_update', { id: e.id, aspects: { 'orbis/task': { priority: null } } }),
+      req('entity_update', {
+        id: e.id,
+        unset: ['orbis/priority'],
+        aspects: { attach: ['orbis/task'] },
+      }),
     );
     const e1 = firstEntity(noPriority);
     expect('priority' in aspectOf(e1, 'orbis/task')).toBe(false);
@@ -360,7 +372,7 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
 
     const detached = await execute(
       db,
-      req('entity_update', { id: e.id, aspects: { 'orbis/task': null } }),
+      req('entity_update', { id: e.id, aspects: { detach: ['orbis/task'] } }),
     );
     const e2 = firstEntity(detached);
     expect(e2.aspects.includes('orbis/task')).toBe(false);
@@ -372,20 +384,23 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       req('entity_create', {
         title: 'Транзакция',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '100.00',
-            direction: 'expense',
-            category_ref: CATEGORY_REF,
-            occurred_on: '2026-07-04',
-          },
+        props: {
+          'orbis/amount': '100.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+          'orbis/occurred_on': '2026-07-04',
         },
+        aspects: ['orbis/financial'],
       }),
     );
     const e = firstEntity(created);
     const r = await execute(
       db,
-      req('entity_update', { id: e.id, aspects: { 'orbis/financial': { amount: null } } }),
+      req('entity_update', {
+        id: e.id,
+        unset: ['orbis/amount'],
+        aspects: { attach: ['orbis/financial'] },
+      }),
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('VALIDATION');
@@ -397,24 +412,21 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       req('entity_create', {
         title: 'Аренда',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '50000.00',
-            direction: 'expense',
-            category_ref: CATEGORY_REF,
-            recurring: true,
-          },
-          'orbis/schedule': {
-            start_at: '2026-07-01T10:00:00+03:00',
-            recurrence: { freq: 'monthly', interval: 1 },
-          },
+        props: {
+          'orbis/amount': '50000.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+          'orbis/recurring': true,
+          'orbis/start_at': '2026-07-01T10:00:00+03:00',
+          'orbis/recurrence': { freq: 'monthly', interval: 1 },
         },
+        aspects: ['orbis/financial', 'orbis/schedule'],
       }),
     );
     const e = firstEntity(created);
     const r = await execute(
       db,
-      req('entity_update', { id: e.id, aspects: { 'orbis/schedule': null } }),
+      req('entity_update', { id: e.id, aspects: { detach: ['orbis/schedule'] } }),
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('INVARIANT');
@@ -437,18 +449,27 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       req('entity_create', {
         title: 'Конкурентная',
         tags: [],
-        aspects: { 'orbis/task': { status: 'inbox', priority: 'low' } },
+        props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'low' },
+        aspects: ['orbis/task'],
       }),
     );
     const e = firstEntity(created);
     const [a, b] = await Promise.all([
       execute(
         db,
-        req('entity_update', { id: e.id, aspects: { 'orbis/task': { status: 'in_progress' } } }),
+        req('entity_update', {
+          id: e.id,
+          props: { 'orbis/task_status': 'in_progress' },
+          aspects: { attach: ['orbis/task'] },
+        }),
       ),
       execute(
         db,
-        req('entity_update', { id: e.id, aspects: { 'orbis/task': { due_date: '2026-07-05' } } }),
+        req('entity_update', {
+          id: e.id,
+          props: { 'orbis/due_date': '2026-07-05' },
+          aspects: { attach: ['orbis/task'] },
+        }),
       ),
     ]);
     expect(a.ok).toBe(true);
@@ -654,7 +675,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id,
         title: 'Т',
         tags: [],
-        aspects: { 'orbis/task': { status: 'inbox' }, 'orbis/assignment': { executor: 'agent' } },
+        props: { 'orbis/task_status': 'inbox', 'orbis/executor': 'agent' },
+        aspects: ['orbis/task', 'orbis/assignment'],
       }),
     );
     expect(bad.ok).toBe(false);
@@ -666,10 +688,12 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id,
         title: 'Т',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'inbox' },
-          'orbis/assignment': { executor: 'agent', grant_id: newId() },
+        props: {
+          'orbis/task_status': 'inbox',
+          'orbis/executor': 'agent',
+          'orbis/grant': newId(),
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       }),
     );
     expect(foreign.ok).toBe(false);
@@ -689,10 +713,12 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id: newId(),
         title: 'Т',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'inbox' },
-          'orbis/assignment': { executor: 'agent', grant_id: grantId },
+        props: {
+          'orbis/task_status': 'inbox',
+          'orbis/executor': 'agent',
+          'orbis/grant': grantId,
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       }),
     );
     expect(ok.ok).toBe(true);
@@ -703,10 +729,12 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id: newId(),
         title: 'Т',
         tags: [],
-        aspects: {
-          'orbis/task': { status: 'inbox' },
-          'orbis/assignment': { executor: 'human', grant_id: grantId },
+        props: {
+          'orbis/task_status': 'inbox',
+          'orbis/executor': 'human',
+          'orbis/grant': grantId,
         },
+        aspects: ['orbis/task', 'orbis/assignment'],
       }),
     );
     expect(human.ok).toBe(false);
@@ -720,7 +748,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
       db,
       req('entity_update', {
         id: plain.id,
-        aspects: { 'orbis/assignment': { executor: 'agent', grant_id: newId() } },
+        props: { 'orbis/executor': 'agent', 'orbis/grant': newId() },
+        aspects: { attach: ['orbis/assignment'] },
       }),
     );
     expect(upd.ok).toBe(false);
@@ -753,7 +782,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
       db,
       req('entity_update', {
         id: plain.id,
-        aspects: { 'orbis/assignment': { executor: 'agent', grant_id: grantId } },
+        props: { 'orbis/executor': 'agent', 'orbis/grant': grantId },
+        aspects: { attach: ['orbis/assignment'] },
       }),
     );
     expect(revoked.ok).toBe(false);
@@ -773,7 +803,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id,
         title: 'Проект',
         tags: [],
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: ['orbis/project'],
       }),
     );
     expect(r.ok).toBe(true);
@@ -808,7 +839,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
         title: 'Проект со своим телом',
         tags: [],
         body: 'Мой процесс.',
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: ['orbis/project'],
       }),
     );
     expect(r2.ok).toBe(true);
@@ -874,7 +906,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
             title: 'Проект пустой строкой',
             tags: [],
             body: '',
-            aspects: { 'orbis/project': { stage: 'active' } },
+            props: { 'orbis/project_stage': 'active' },
+            aspects: ['orbis/project'],
           }),
         )
       ).ok,
@@ -891,7 +924,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
             title: 'Проект пробелами',
             tags: [],
             body: '   \n',
-            aspects: { 'orbis/project': { stage: 'active' } },
+            props: { 'orbis/project_stage': 'active' },
+            aspects: ['orbis/project'],
           }),
         )
       ).ok,
@@ -909,7 +943,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
             title: 'Своё',
             tags: [],
             body: '# Своё',
-            aspects: { 'orbis/project': { stage: 'active' } },
+            props: { 'orbis/project_stage': 'active' },
+            aspects: ['orbis/project'],
           }),
         )
       ).ok,
@@ -924,7 +959,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id: e.id,
         body: '',
         expectedUpdatedAt: e.updatedAt,
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: { attach: ['orbis/project'] },
       }),
     );
     expect(upd.ok).toBe(true);
@@ -943,7 +979,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id: e.id,
         bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
         expectedUpdatedAt: e.updatedAt,
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: { attach: ['orbis/project'] },
       }),
     );
     expect(r.ok).toBe(true);
@@ -980,7 +1017,11 @@ describe('ADE-срез 1: инварианты назначения и засе�
     );
     const r = await execute(
       db,
-      req('entity_update', { id: e.id, aspects: { 'orbis/project': { stage: 'active' } } }),
+      req('entity_update', {
+        id: e.id,
+        props: { 'orbis/project_stage': 'active' },
+        aspects: { attach: ['orbis/project'] },
+      }),
     );
     expect(r.ok).toBe(true);
     expect(await bodyOf(e.id)).toBe(seededProjectBody(e.id));
@@ -995,7 +1036,8 @@ describe('ADE-срез 1: инварианты назначения и засе�
         id: e2.id,
         body: 'Своё.',
         expectedUpdatedAt: e2.updatedAt,
-        aspects: { 'orbis/project': { stage: 'active' } },
+        props: { 'orbis/project_stage': 'active' },
+        aspects: { attach: ['orbis/project'] },
       }),
     );
     expect(r2.ok).toBe(true);
@@ -1134,7 +1176,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     req('entity_update', {
       id,
       precondition: [{ property: 'orbis/task_status', in: ['inbox', 'planned'] }],
-      aspects: { 'orbis/task': { status: 'in_progress' } },
+      props: { 'orbis/task_status': 'in_progress' },
+      aspects: { attach: ['orbis/task'] },
     });
 
   test('предусловие выполнено → запись; не выполнено → CONFLICT с details {precondition, actual}', async () => {
@@ -1202,13 +1245,21 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
   }
 
   const capturedThen = (id: string, allowed: string[]) => [
-    { tool: 'entity_update', input: { id, aspects: { 'orbis/task': { status: 'in_progress' } } } },
+    {
+      tool: 'entity_update',
+      input: {
+        id,
+        props: { 'orbis/task_status': 'in_progress' },
+        aspects: { attach: ['orbis/task'] },
+      },
+    },
     {
       tool: 'entity_update',
       input: {
         id,
         precondition: [{ property: 'orbis/task_status', in: allowed }],
-        aspects: { 'orbis/task': { priority: 'high' } },
+        props: { 'orbis/priority': 'high' },
+        aspects: { attach: ['orbis/task'] },
       },
     },
   ];
@@ -1303,7 +1354,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       req('entity_update', {
         id,
         precondition: [{ property: 'orbis/task_status', in: [undefined] }],
-        aspects: { 'orbis/task': { status: 'in_progress' } },
+        props: { 'orbis/task_status': 'in_progress' },
+        aspects: { attach: ['orbis/task'] },
       }),
     );
     expect(r.ok).toBe(false);
@@ -1327,7 +1379,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
         req('entity_update', {
           id,
           precondition: [{ property: 'orbis/due_date', absent: true }],
-          aspects: { 'orbis/task': { due_date: '2026-08-20' } },
+          props: { 'orbis/due_date': '2026-08-20' },
+          aspects: { attach: ['orbis/task'] },
         }),
       );
 
@@ -1358,7 +1411,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       req('entity_update', {
         id: bare,
         precondition: [{ property: 'orbis/task_status', absent: true }],
-        aspects: { 'orbis/task': { status: 'planned' } },
+        props: { 'orbis/task_status': 'planned' },
+        aspects: { attach: ['orbis/task'] },
       }),
     );
     expect(attached.ok).toBe(true);
@@ -1386,7 +1440,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       req('entity_update', {
         id,
         precondition: [{ property: 'orbis/planned', absent: true }],
-        aspects: { 'orbis/financial': { planned: false } },
+        props: { 'orbis/planned': false },
+        aspects: { attach: ['orbis/financial'] },
       }),
     );
     expect(first.ok).toBe(true);
@@ -1403,7 +1458,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       req('entity_update', {
         id,
         precondition: [{ property: 'orbis/planned', absent: true }],
-        aspects: { 'orbis/financial': { planned: true } },
+        props: { 'orbis/planned': true },
+        aspects: { attach: ['orbis/financial'] },
       }),
     );
     expect(again.ok).toBe(false);
@@ -1434,7 +1490,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       req('entity_update', {
         id,
         precondition: [{ property: 'orbis/amount', in: ['10.0'] }],
-        aspects: { 'orbis/financial': { counterparty: 'Кофейня' } },
+        props: { 'orbis/counterparty': 'Кофейня' },
+        aspects: { attach: ['orbis/financial'] },
       }),
     );
     expect(ok.ok).toBe(true);
@@ -1445,7 +1502,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       req('entity_update', {
         id,
         precondition: [{ property: 'orbis/amount', in: ['10.01'] }],
-        aspects: { 'orbis/financial': { counterparty: 'Другая' } },
+        props: { 'orbis/counterparty': 'Другая' },
+        aspects: { attach: ['orbis/financial'] },
       }),
     );
     expect(other.ok).toBe(false);
@@ -1475,7 +1533,8 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
           { property: 'orbis/priority', in: ['high'] }, // выполнено
           { property: 'orbis/due_date', absent: true }, // провал
         ],
-        aspects: { 'orbis/task': { status: 'done' } },
+        props: { 'orbis/task_status': 'done' },
+        aspects: { attach: ['orbis/task'] },
       }),
     );
     expect(r.ok).toBe(false);
@@ -1761,16 +1820,7 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
   const asVerb = { mechanism: 'verb' } as const;
 
   /** Прогон в минимальной валидной форме — субъект дописывает тест. */
-  const run = (subject: Record<string, unknown>) => ({
-    outcome: 'running',
-    started_at: '2026-08-18T07:00:00.000Z',
-    last_step_at: '2026-08-18T07:00:00.000Z',
-    step_count: 0,
-    steps: [],
-    ...subject,
-  });
-
-  /** Тот же прогон СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+  /** Прогон СВОЙСТВАМИ — она же форма `data` у `attach_*` (§А9-1). */
   const runProps = (subject: Record<string, unknown> = {}) => ({
     'orbis/run_outcome': 'running',
     'orbis/run_started_at': '2026-08-18T07:00:00.000Z',
@@ -1788,7 +1838,8 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
         {
           title: 'Прогон рутины',
           tags: [],
-          aspects: { 'orbis/agent-run': run({ routine_id: newId(), bucket: '2026-08-18T07:00' }) },
+          props: runProps({ 'orbis/run_routine': newId(), 'orbis/run_bucket': '2026-08-18T07:00' }),
+          aspects: ['orbis/agent-run'],
         },
         asVerb,
       ),
@@ -1804,7 +1855,8 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
         {
           title: 'Прогон',
           tags: [],
-          aspects: { 'orbis/agent-run': run({ grant_id: newId(), routine_id: newId() }) },
+          props: runProps({ 'orbis/grant': newId(), 'orbis/run_routine': newId() }),
+          aspects: ['orbis/agent-run'],
         },
         asVerb,
       ),
@@ -1819,7 +1871,7 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
       db,
       req(
         'entity_create',
-        { title: 'Прогон', tags: [], aspects: { 'orbis/agent-run': run({}) } },
+        { title: 'Прогон', tags: [], props: runProps({}), aspects: ['orbis/agent-run'] },
         asVerb,
       ),
     );
@@ -1839,7 +1891,8 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
           {
             title: 'Прогон рутины',
             tags: [],
-            aspects: { 'orbis/agent-run': run({ routine_id: newId() }) },
+            props: runProps({ 'orbis/run_routine': newId() }),
+            aspects: ['orbis/agent-run'],
           },
           asVerb,
         ),
@@ -1851,7 +1904,11 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
       db,
       req(
         'entity_update',
-        { id: created.id, aspects: { 'orbis/agent-run': { grant_id: newId() } } },
+        {
+          id: created.id,
+          props: { 'orbis/grant': newId() },
+          aspects: { attach: ['orbis/agent-run'] },
+        },
         asVerb,
       ),
     );
@@ -1881,7 +1938,11 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
       db,
       req(
         'entity_update',
-        { id: created.id, aspects: { 'orbis/agent-run': { step_count: 1 } } },
+        {
+          id: created.id,
+          props: { 'orbis/step_count': 1 },
+          aspects: { attach: ['orbis/agent-run'] },
+        },
         asVerb,
       ),
     );
@@ -1891,14 +1952,7 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
 
 describe('V1: источник routine не трогает рутины и назначения (V1.10, инвариант 6)', () => {
   /** Рутина в минимальной валидной форме (V1.1); «что делать» живёт в теле. */
-  const routine = (over: Record<string, unknown> = {}) => ({
-    stage: 'active',
-    at: '07:00',
-    mode: 'propose',
-    ...over,
-  });
-
-  /** Та же рутина СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+  /** Рутина СВОЙСТВАМИ — она же форма `data` у `attach_*` (§А9-1). */
   const routineProps = (over: Record<string, unknown> = {}) => ({
     'orbis/routine_stage': 'active',
     'orbis/routine_at': '07:00',
@@ -1906,14 +1960,14 @@ describe('V1: источник routine не трогает рутины и на�
     ...over,
   });
 
-  /** Прогон рутины в минимальной валидной форме (V1.4) — субъектом routine_id. */
-  const run = (routineId: string) => ({
-    outcome: 'running',
-    started_at: '2026-08-18T07:00:00.000Z',
-    last_step_at: '2026-08-18T07:00:00.000Z',
-    step_count: 0,
-    steps: [],
-    routine_id: routineId,
+  /** Прогон рутины в минимальной валидной форме (V1.4) — субъектом orbis/run_routine. */
+  const runProps = (routineId: string) => ({
+    'orbis/run_outcome': 'running',
+    'orbis/run_started_at': '2026-08-18T07:00:00.000Z',
+    'orbis/last_step_at': '2026-08-18T07:00:00.000Z',
+    'orbis/step_count': 0,
+    'orbis/run_steps': [],
+    'orbis/run_routine': routineId,
   });
 
   /** Мутация от лица прогона рутины: source — единственный вход инварианта. */
@@ -1943,7 +1997,8 @@ describe('V1: источник routine не трогает рутины и на�
         req('entity_create', {
           title: 'Утренний обзор',
           tags: [],
-          aspects: { 'orbis/routine': routine() },
+          props: routineProps(),
+          aspects: ['orbis/routine'],
         }),
       ),
     );
@@ -1986,7 +2041,12 @@ describe('V1: источник routine не трогает рутины и на�
         db,
         req(
           'entity_create',
-          { title: 'Рутина от рутины', tags: [], aspects: { 'orbis/routine': routine() } },
+          {
+            title: 'Рутина от рутины',
+            tags: [],
+            props: routineProps(),
+            aspects: ['orbis/routine'],
+          },
           asRoutine,
         ),
       ),
@@ -1995,7 +2055,12 @@ describe('V1: источник routine не трогает рутины и на�
       db,
       req(
         'entity_create',
-        { title: 'Рутина от владельца', tags: [], aspects: { 'orbis/routine': routine() } },
+        {
+          title: 'Рутина от владельца',
+          tags: [],
+          props: routineProps(),
+          aspects: ['orbis/routine'],
+        },
         { source: 'chat' },
       ),
     );
@@ -2011,7 +2076,11 @@ describe('V1: источник routine не трогает рутины и на�
         db,
         req(
           'entity_update',
-          { id: ticket.id, aspects: { 'orbis/assignment': { executor: 'human', assignee: 'Я' } } },
+          {
+            id: ticket.id,
+            props: { 'orbis/executor': 'human', 'orbis/assignee': 'Я' },
+            aspects: { attach: ['orbis/assignment'] },
+          },
           asRoutine,
         ),
       ),
@@ -2020,7 +2089,11 @@ describe('V1: источник routine не трогает рутины и на�
       db,
       req(
         'entity_update',
-        { id: ticket.id, aspects: { 'orbis/assignment': { executor: 'human', assignee: 'Я' } } },
+        {
+          id: ticket.id,
+          props: { 'orbis/executor': 'human', 'orbis/assignee': 'Я' },
+          aspects: { attach: ['orbis/assignment'] },
+        },
         { source: 'system' },
       ),
     );
@@ -2034,7 +2107,12 @@ describe('V1: источник routine не трогает рутины и на�
         db,
         req(
           'entity_create',
-          { title: 'Прогон рутины', tags: [], aspects: { 'orbis/agent-run': run(target.id) } },
+          {
+            title: 'Прогон рутины',
+            tags: [],
+            props: runProps(target.id),
+            aspects: ['orbis/agent-run'],
+          },
           asAccounting,
         ),
       ),
@@ -2088,7 +2166,8 @@ describe('V1: источник routine не трогает рутины и на�
         req('entity_create', {
           title: 'Рутина под batch',
           tags: [],
-          aspects: { 'orbis/routine': routine() },
+          props: routineProps(),
+          aspects: ['orbis/routine'],
         }),
       ),
     );
@@ -2120,7 +2199,8 @@ describe('V1: источник routine не трогает рутины и на�
         req('entity_create', {
           title: 'Рутина на архивацию',
           tags: [],
-          aspects: { 'orbis/routine': routine() },
+          props: routineProps(),
+          aspects: ['orbis/routine'],
         }),
       ),
     );
@@ -2141,7 +2221,8 @@ describe('V1: источник routine не трогает рутины и на�
         req('entity_create', {
           title: 'Рутина под чужой аспект',
           tags: [],
-          aspects: { 'orbis/routine': routine() },
+          props: routineProps(),
+          aspects: ['orbis/routine'],
         }),
       ),
     );
@@ -2203,7 +2284,8 @@ describe('V1: источник routine не трогает рутины и на�
         req('entity_create', {
           title: 'Рутина-хозяйка',
           tags: [],
-          aspects: { 'orbis/routine': routine() },
+          props: routineProps(),
+          aspects: ['orbis/routine'],
         }),
       ),
     );
@@ -2215,7 +2297,8 @@ describe('V1: источник routine не трогает рутины и на�
           {
             title: 'Прогон под правку',
             tags: [],
-            aspects: { 'orbis/agent-run': run(routineEntity.id) },
+            props: runProps(routineEntity.id),
+            aspects: ['orbis/agent-run'],
           },
           asAccounting,
         ),
@@ -2230,9 +2313,8 @@ describe('V1: источник routine не трогает рутины и на�
           'entity_update',
           {
             id: runEntity.id,
-            aspects: {
-              'orbis/agent-run': { reply: { text: 'да', at: '2026-08-18T08:00:00.000Z' } },
-            },
+            props: { 'orbis/run_reply': { text: 'да', at: '2026-08-18T08:00:00.000Z' } },
+            aspects: { attach: ['orbis/agent-run'] },
           },
           asRoutine,
         ),
@@ -2254,7 +2336,8 @@ describe('V1: источник routine не трогает рутины и на�
           {
             title: 'Фальшивый прогон',
             tags: [],
-            aspects: { 'orbis/agent-run': { ...run(routineEntity.id), outcome: 'checkpoint' } },
+            props: { ...runProps(routineEntity.id), 'orbis/run_outcome': 'checkpoint' },
+            aspects: ['orbis/agent-run'],
           },
           asRoutine,
         ),
@@ -2280,7 +2363,11 @@ describe('V1: источник routine не трогает рутины и на�
       db,
       req(
         'entity_update',
-        { id: runEntity.id, aspects: { 'orbis/agent-run': { step_count: 1 } } },
+        {
+          id: runEntity.id,
+          props: { 'orbis/step_count': 1 },
+          aspects: { attach: ['orbis/agent-run'] },
+        },
         asAccounting,
       ),
     );
@@ -2296,7 +2383,8 @@ describe('V1: источник routine не трогает рутины и на�
         'entity_update',
         {
           id: runEntity.id,
-          aspects: { 'orbis/agent-run': { reply: { text: 'да', at: '2026-08-18T08:00:00.000Z' } } },
+          props: { 'orbis/run_reply': { text: 'да', at: '2026-08-18T08:00:00.000Z' } },
+          aspects: { attach: ['orbis/agent-run'] },
         },
         { source: 'ui', actorKind: 'owner', mechanism: 'verb' },
       ),
