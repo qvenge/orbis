@@ -2,10 +2,11 @@
 // корневой прогон. Реестр — фикстурный (`@orbis/shared/query/fixtures`), а не серверный: shared
 // от server не зависит (И17), а привязке хватает словарей по id.
 import { describe, expect, test } from 'bun:test';
-import { printQueryAst, type QueryAst } from '../query';
+import { type ParseRegistry, printQueryAst, type QueryAst } from '../query';
 import { FIXTURE_PARSE_REGISTRY as REG } from '../query/ast-fixtures';
 import { bindQueryBlocks } from './bind-query';
 import { parseBody, queryRefsFromDoc, readBodyDoc, serializeBody } from './convert';
+import { diffBodyDocs } from './diff';
 import { DOC_SCHEMA_VERSION } from './types';
 
 const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
@@ -114,7 +115,10 @@ describe('bindQueryBlocks — привязка блока к реестру (Р-
     expect(got.text).toBe(' старый текст');
   });
 
-  test('слишком глубокое дерево в атрибуте отвергается ДО схемы, а не роняет стек (ВХОД-ДЕРЕВА 5)', () => {
+  test('слишком глубокое дерево в атрибуте отвергается ДО схемы, а не роняет стек (пятый вход дерева)', () => {
+    // Сторож ПЯТОГО входа дерева (сам вход помечен в `doc/bind-query.ts`; пометку здесь не
+    // повторяем — счётный греп в докблоке `query/ast.ts` считает ТОЛЬКО места в коде, и
+    // пометка в названии теста ломала бы его же правило).
     // `queryAstSchema` рекурсивна через `z.lazy`: достаточно глубокий вход исчерпывает стек
     // ВНУТРИ собственного разбора, и `safeParse` этого не ловит — `RangeError` летит наружу.
     // Поэтому глубина меряется явным обходом ДО схемы, ровно как у остальных входов дерева.
@@ -173,9 +177,55 @@ describe('queryRefsFromDoc — индекс адресов, названных �
     expect(queryRefsFromDoc(parseBody('просто текст') as never)).toEqual([]);
   });
 
+  test('uuid ПРИВОДИТСЯ К НИЖНЕМУ РЕГИСТРУ: сравнение text[] в PG регистрозависимо', () => {
+    // Дерево несёт uuid ровно так, как его набрал владелец (`children_of=0F8F…` разбор не
+    // трогает — проверено пробой и закреплено стражем вакуумности ниже). Индекс же читают
+    // сравнением `query_refs @> ARRAY[<id из БД>]`, а id в БД — канонический нижний регистр:
+    // не приведи здесь — и держатель молча выпал бы из выдачи, а регрессия не покраснела бы
+    // нигде (все серверные фикстуры в нижнем регистре, различить их нечем).
+    const upper = UUID.toUpperCase();
+    const doc = bound(`{{query: children_of=${upper}}}`);
+    // Страж вакуумности: приведение делает ИНДЕКС, а не разбор — в дереве регистр исходный.
+    expect(JSON.stringify(block(doc).ast)).toContain(upper);
+    expect(queryRefsFromDoc(doc as never)).toEqual([UUID]);
+  });
+
   test('`this` в индекс не едет: это не адрес, а контекст исполнения', () => {
     const refs = queryRefsFromDoc(bound('{{query: children_of=this}}') as never);
     expect(refs).not.toContain('this');
+  });
+});
+
+describe('дифф Ш1 меряет key-формой: подпись реестра на блок не влияет', () => {
+  /** Тот же реестр, но с ДРУГОЙ подписью `orbis/task_status`. Различаются ровно подписи. */
+  function withLabel(label: string): ParseRegistry {
+    const properties = new Map(REG.properties);
+    const def = properties.get('orbis/task_status');
+    if (def === undefined) throw new Error('в фикстурном реестре нет orbis/task_status');
+    properties.set('orbis/task_status', { ...def, label: { ...def.label, ru: label } });
+    return { ...REG, properties };
+  }
+
+  test('переименование подписи свойства блок НЕ трогает — при том же документе', () => {
+    // Тавтологии здесь быть не должно: сравниваются НЕ два одинаковых дерева, а результаты
+    // привязки ОДНОГО текста ДВУМЯ реестрами, различающимися подписью. Печатай привязка
+    // label-форму — `text` разошёлся бы, и переименование свойства в реестре приезжало бы
+    // владельцу правкой его тела.
+    const md = 'Заголовок\n\n{{query: aspect=orbis/task, status=inbox}}';
+    const before = bindQueryBlocks(parseBody(md), withLabel('Статус'));
+    const after = bindQueryBlocks(parseBody(md), withLabel('Состояние задачи'));
+
+    // Страж вакуумности: реестры И ПРАВДА разные — label-печать одного и того же дерева их
+    // различает. Без него «дифф молчит» было бы правдой и на двух одинаковых реестрах.
+    const ast = block(before as unknown as BodyLike).ast;
+    if (ast === null) throw new Error('блок обязан был разобраться');
+    expect(printQueryAst(ast, withLabel('Статус'), 'label')).not.toBe(
+      printQueryAst(ast, withLabel('Состояние задачи'), 'label'),
+    );
+
+    const result = diffBodyDocs(before.doc, after.doc);
+    if ('skipped' in result) throw new Error(`дифф отказал: ${result.skipped}`);
+    expect(result.units.map((u) => u.kind)).toEqual(['same', 'same']);
   });
 });
 
