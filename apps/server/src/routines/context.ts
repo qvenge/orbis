@@ -2,7 +2,7 @@
 // Контекст LLM-вызова прогона рутины (V1.5). От чатового (llm/context.ts) отличается
 // ровно двумя вещами — и обе принципиальные:
 //
-//   1. СИСТЕМНЫЙ СЛОЙ СВОЙ (ROUTINE_SYSTEM_PROMPT + секция режима): у фонового прогона
+//   1. СИСТЕМНЫЙ СЛОЙ СВОЙ (ROUTINE_SYSTEM_PROMPT_V3 + секция режима): у фонового прогона
 //      нет собеседника, зато есть режим, белый список и терминальные глаголы. С промптом
 //      чат-ассистента модель завершала бы цикл «ответом пользователю», которого никто не
 //      прочтёт.
@@ -27,7 +27,7 @@ import {
   memoryLine,
   todaySectionFor,
 } from '../llm/context';
-import { ROUTINE_SYSTEM_PROMPT, routineModeSection } from '../llm/prompts/routine-v2';
+import { ROUTINE_SYSTEM_PROMPT_V3, routineModeSection } from '../llm/prompts/routine-v3';
 import type { LLMMessage } from '../llm/types';
 import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
 import type { RejectReason } from '../policy/pending';
@@ -282,7 +282,7 @@ export async function buildRoutineContext(
 ): Promise<BuiltRoutineContext> {
   const { routine } = input;
   const sections: string[] = [
-    ROUTINE_SYSTEM_PROMPT,
+    ROUTINE_SYSTEM_PROMPT_V3,
     // Дата — сразу за промптом, как и в чате (§Б7-6-1): рутина работает со «сроком
     // сегодня» и «просрочено», и без даты считала бы их от даты обучения модели.
     // Переставлять из-за неё нечего: блока продолжений у раннера нет.

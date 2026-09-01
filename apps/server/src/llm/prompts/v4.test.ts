@@ -7,14 +7,7 @@
 // целиком: новая версия не имеет права молча потерять нормативные куски слоя 1.
 
 import { describe, expect, test } from 'bun:test';
-import {
-  aspectJsonSchema,
-  BUILTIN_ASPECT_IDS,
-  BUILTIN_ASPECT_META,
-  buildFieldCatalog,
-  goalAspectSchema,
-  parseQuery,
-} from '@orbis/shared';
+import { BUILTIN_ASPECT_IDS, goalAspectSchema } from '@orbis/shared';
 import { extractSuggestions, SUGGESTION_MAX_LEN, SUGGESTIONS_MAX } from '../../ai/suggestions';
 import { SEED_SMART_LISTS } from '../../seed/smart-lists';
 import { SYSTEM_PROMPT_V3 } from './v3';
@@ -54,23 +47,28 @@ describe('SYSTEM_PROMPT_V4 (§7.1 слой 1)', () => {
   // --- Новое в v4 -----------------------------------------------------------
 
   // Д1 пробы 2026-08-06: модель сочиняла `tag=`, грамматика отвечала «неизвестное
-  // поле 'tag'», и цель приезжала без прогресса молча. Гард исполняемый, а не
-  // toContain: ключ из шпаргалки прогоняется через НАСТОЯЩИЙ parseQuery.
-  test('шпаргалка грамматики: ключ tags= назван и разбирается настоящей грамматикой', () => {
+  // поле 'tag'», и цель приезжала без прогресса молча.
+  //
+  // ГАРД БЫЛ ИСПОЛНЯЕМЫМ (пример прогонялся через настоящий `parseQuery`) и стал ЛИТЕРАЛЬНЫМ
+  // СНИМКОМ — осознанно, Задачей 19 (РП-18, находка 42 плана). Причина: v4 заморожен, а
+  // разбор, которому его примеры законны, умирает целиком в Задаче 21 вместе со старой
+  // грамматикой (`packages/shared/src/query/parse.ts`). Гард, висящий на умирающем модуле,
+  // пришлось бы снимать не думая; выписанный здесь снимок переживёт его и останется
+  // свидетельством о том, чему v4 учил модель. ИСПОЛНЯЕМЫЙ НАСЛЕДНИК ЖИВ и лежит в
+  // `v5.test.ts`: там примеры действующей шпаргалки идут через `parseQueryAst` по реестру.
+  test('шпаргалка грамматики: ключ tags= назван, примеры зафиксированы снимком', () => {
     expect(SYSTEM_PROMPT_V4).toContain('tags=');
     expect(SYSTEM_PROMPT_V4).toContain('excludeTags=');
     // единственное число названо как НЕсуществующее — иначе модель его и придумает
     expect(SYSTEM_PROMPT_V4).toMatch(/`tag=` грамматика не знает/);
 
-    const catalog = buildFieldCatalog(
-      BUILTIN_ASPECT_META.map((m) => ({ id: m.id, schema: aspectJsonSchema(m.id) })),
-    );
-    // Пример из самого промпта обязан разбираться — иначе промпт учит неверному
+    // Снимок примеров: правка любого из них — видимое движение в диффе этого файла, а не
+    // тихий сдвиг. Формы СТАРЫЕ (голое имя поля) намеренно: таким v4 и был.
     const example = SYSTEM_PROMPT_V4.match(/«(aspect=orbis\/financial[^»]+)»/)?.[1];
-    if (!example) throw new Error('в шпаргалке нет примера запроса с tags=');
-    expect(parseQuery(example, catalog).ok).toBe(true);
-    // и обратная сторона: единственное число действительно НЕ разбирается
-    expect(parseQuery('aspect=orbis/note, tag=book', catalog).ok).toBe(false);
+    expect(example).toBe('aspect=orbis/financial, direction=income, tags=savings');
+    expect(SYSTEM_PROMPT_V4).toContain(
+      '«aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20»',
+    );
   });
 
   // Д2 пробы: модель передаёт аспект в entity_create и следом дублирует attach-вызов.

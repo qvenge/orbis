@@ -4,7 +4,7 @@
 // §7.4), слой 3 (якорная сущность — только для треда сущности, 02 §2.2), слой 4
 // (rolling-история CONTEXT_HISTORY_LIMIT, сжатие audit-сообщений без сырого JSON), а
 // также порядок СОБРАННОГО канала: блок продолжений идёт последним (§Б7-6-2 — гард
-// переехал сюда с текста промпта, v4.test.ts). Слой 5 — Task 9.
+// переехал сюда с текста промпта, v5.test.ts). Слой 5 — Task 9.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -32,7 +32,7 @@ import {
   todaySection,
   toolResultMessage,
 } from './context';
-import { SYSTEM_PROMPT_V4 } from './prompts/v4';
+import { SYSTEM_PROMPT_V5 } from './prompts/v5';
 
 requireEnv();
 
@@ -83,7 +83,7 @@ function memoryLines(system: string): string[] {
 describe('buildContext — слой 1: тело промпта + ai_instructions аспектов', () => {
   const user = freshUserId();
 
-  // Пин был `startsWith(SYSTEM_PROMPT_V4)`. После §Б7-6-2 блок продолжений уехал в ХВОСТ
+  // Пин был `startsWith(SYSTEM_PROMPT_V5)`. После §Б7-6-2 блок продолжений уехал в ХВОСТ
   // собранного канала, поэтому промпт лежит в канале двумя кусками и целиком в его начале
   // больше не стоит ПО ПОСТРОЕНИЮ. Начало канала пиннится телом промпта, целостность
   // текста — тем, что канал несёт оба куска и заканчивается вторым (тесты §Б7-6 ниже).
@@ -109,13 +109,13 @@ describe('buildContext — слой 1: тело промпта + ai_instructions
 });
 
 describe('buildContext — §Б7-6: дата владельца и блок продолжений последним', () => {
-  test('CONTINUATIONS_HEADING встречается в SYSTEM_PROMPT_V4 ровно один раз; PROMPT_BODY + CONTINUATIONS_BLOCK === SYSTEM_PROMPT_V4', () => {
+  test('CONTINUATIONS_HEADING встречается в SYSTEM_PROMPT_V5 ровно один раз; PROMPT_BODY + CONTINUATIONS_BLOCK === SYSTEM_PROMPT_V5', () => {
     // Ровно один: split даёт две части только при единственном вхождении — иначе
     // PROMPT_BODY отрезался бы по ПЕРВОМУ, и часть текста уехала бы в хвост канала
-    expect(SYSTEM_PROMPT_V4.split(CONTINUATIONS_HEADING)).toHaveLength(2);
-    // Части ВЫЧИСЛЯЮТСЯ из константы, а не копируются текстом (РП-18: v4.ts не правится
-    // ни байтом) — конкатенация обязана давать исходный промпт побайтно
-    expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V4);
+    expect(SYSTEM_PROMPT_V5.split(CONTINUATIONS_HEADING)).toHaveLength(2);
+    // Части ВЫЧИСЛЯЮТСЯ из константы, а не копируются текстом (РП-18: v5.ts правится только
+    // новой версией) — конкатенация обязана давать исходный промпт побайтно
+    expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V5);
     expect(CONTINUATIONS_BLOCK.startsWith(CONTINUATIONS_HEADING)).toBe(true);
     expect(PROMPT_BODY).not.toContain(CONTINUATIONS_HEADING);
   });

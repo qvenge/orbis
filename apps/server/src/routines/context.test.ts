@@ -6,8 +6,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { RunSummary } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
-import { ROUTINE_SYSTEM_PROMPT } from '../llm/prompts/routine-v2';
-import { SYSTEM_PROMPT_V4 } from '../llm/prompts/v4';
+import { ROUTINE_SYSTEM_PROMPT_V3 } from '../llm/prompts/routine-v3';
+import { SYSTEM_PROMPT_V5 } from '../llm/prompts/v5';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { buildRoutineContext, type RoutineHistoryItem, type RoutineHistoryUnit } from './context';
 
@@ -91,10 +91,10 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
 
     const { system } = await contextOf(routineId);
 
-    expect(system.startsWith(ROUTINE_SYSTEM_PROMPT)).toBe(true);
+    expect(system.startsWith(ROUTINE_SYSTEM_PROMPT_V3)).toBe(true);
     // Промпт чат-ассистента в фоновом прогоне не участвует (V1.5): он завершал бы цикл
     // «ответом пользователю», которого никто не прочтёт
-    expect(system).not.toContain(SYSTEM_PROMPT_V4);
+    expect(system).not.toContain(SYSTEM_PROMPT_V5);
     expect(system).toContain('режим: propose');
     expect(system).toContain(`run_id этого прогона: ${RUN_ID}`);
     expect(system).toContain('2026-08-17T07:00');
@@ -106,8 +106,8 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
 
   // §Б7-6-1: фоновый прогон обязан знать дату не хуже чата — иначе «сегодняшние» задачи
   // рутина считает от даты обучения модели. Блока продолжений у раннера нет (гард
-  // routine-v2.test.ts) — переставлять в его канале нечего, дата просто идёт за промптом.
-  test('routine-канал: дата владельца стоит сразу после ROUTINE_SYSTEM_PROMPT; блока продолжений нет', async () => {
+  // routine-v3.test.ts) — переставлять в его канале нечего, дата просто идёт за промптом.
+  test('routine-канал: дата владельца стоит сразу после ROUTINE_SYSTEM_PROMPT_V3; блока продолжений нет', async () => {
     const routineId = await seedRoutine(owner, { body: INSTRUCTION });
     const { system } = await contextOf(
       routineId,
@@ -119,7 +119,7 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
     );
     const dateLine = 'Сегодня: 2026-08-27 (четверг), таймзона владельца: Europe/Moscow.';
     expect(system).toContain(dateLine);
-    expect(system.indexOf(dateLine)).toBe(`${ROUTINE_SYSTEM_PROMPT}\n\n`.length);
+    expect(system.indexOf(dateLine)).toBe(`${ROUTINE_SYSTEM_PROMPT_V3}\n\n`.length);
     expect(system.indexOf(dateLine)).toBeLessThan(system.indexOf('режим: propose'));
     expect(system).not.toContain('Продолжения разговора:');
   });
