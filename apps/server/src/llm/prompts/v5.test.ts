@@ -150,7 +150,12 @@ describe('SYSTEM_PROMPT_V5 (§7.1 слой 1, реформа свойств РП
   // v4 со `status=`, оставленная рядом с новой, прошла бы все проверки выше.
   test('голого имени поля в промпте нет, и грамматика его действительно не знает', () => {
     expect(SYSTEM_PROMPT_V5).toContain('голого имени поля грамматика не знает');
-    expect(SYSTEM_PROMPT_V5).not.toContain('status=!done&!cancelled\n');
+    // Проверяем ГОЛУЮ форму по её разделителю, а не по хвосту строки: `status=!done&!cancelled`
+    // входит подстрокой в namespaced `orbis/task_status=!done&!cancelled`, который в v5 законен,
+    // а прежняя редакция искала эту же подстроку с `\n` на конце — такой формы не было и в v4
+    // (за ней всегда шло `, sortBy=` или `)`), то есть под-ассерт не мог покраснеть никогда.
+    // `, status=` встречается в v4 ровно раз (`:58`) и в v5 ноль раз — гард стал несущим.
+    expect(SYSTEM_PROMPT_V5).not.toContain(', status=');
     expect(SYSTEM_PROMPT_V5).not.toContain('(status=planned|in_progress)');
     expect(SYSTEM_PROMPT_V5).not.toContain('sortBy=updated_at:');
     for (const bare of ['aspect=orbis/task, status=done', 'aspect=orbis/note, tag=book']) {
