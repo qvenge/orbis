@@ -1912,64 +1912,132 @@ test('web MemoryScreen/NativeRow/MemoryRuleCard: строка правила и�
 
 ---
 
-### Задача 21: `DOC_SCHEMA_VERSION` +1; query-блок хранит `ast`; `query_refs`; дифф по key-форме; редактор и сиды на AST; старая грамматика удалена (приёмка §С8-9)
+### Задача 21a: `DOC_SCHEMA_VERSION` = 2; query-блок хранит `ast` рядом с печатной key-формой; привязка блоков к реестру; `query_refs`; дифф по `ast`; редактор на AST (приёмка §С8-9, часть 1)
+
+**Задача 21 разрезана на 21a/21b по итогам разведки** (три читателя, конспекты
+`recon-21-{a-shared,b-server,c-web}.md`; рулинги Р-21-1…Р-21-9 в `facts-21a.md`). Прежняя
+редакция была внутренне противоречива в трёх местах и по объёму превосходила любую задачу ветки.
+21a — форма и путь данных; 21b — сиды, каноны и снос старой грамматики.
+
+**Три рулинга, переписывающие конструкцию (обоснование — в `facts-21a.md`):**
+- **Р-21-1. Синтаксис и привязка разделены.** `parseBody`/`canonicalizeBody` реестра НЕ получают
+  (иначе он протёк бы в 6 несущих вызывателей и 238 вызовов в 24 тест-файлах, а в web —
+  `MarkdownToggle.tsx:92` — реестра нет структурно). Появляется отдельный шаг привязки
+  `bindQueryBlocks(doc, reg)`: он и только он превращает текст блока в `ast`. Зовут его те, у кого
+  реестр есть, — executor перед записью и `readBodyDoc`. Инвариант: в `body_doc` блоки всегда с
+  `ast`; сразу после `parseBody` — ещё без.
+- **Р-21-2. Блок хранит ОБА поля, а не «ровно одно из двух».** `ast` — истина, `text` — печатная
+  key-форма этого же `ast`. `ast === null` ⟺ блок не разобран, и тогда `text` — исходная строка.
+  Причина: `renderMarkdown(node)` (`query-block.ts:50`) получает только ноду, реестра туда передать
+  нечем, а `collectText` диффа чист — печать key-формы из `ast` потребовала бы реестра в
+  `blockText`/`flattenBlocks`/`diffBodyDocs`, у которых его нет ни у одного вызывателя
+  (`DetailScreen.tsx:973` — ветка спасения черновика Задачи 20, `ProposalOverlay.tsx:394`).
+  Побочный выигрыш: ребро `diff → query/print` НЕ нужно вовсе, и `diff.test.ts:529` («листовость»,
+  жёсткий `toEqual([])`) остаётся зелёным.
+- **Р-21-6. «OR между полями» в этой задаче НЕ разблокируется.** Печать скобок (`print.ts:179, :187`)
+  строгий разбор отвергает, а первый кадр читает `entity.body` (`EditorShell.tsx:135, :157`,
+  `PinnedList.tsx:22`) — человек увидел бы красную плашку, которую через миг подменяет живой виджет.
 
 **Файлы:**
-- Изменить: `packages/shared/src/doc/types.ts:8` (`DOC_SCHEMA_VERSION = 2`), `doc/nodes/query-block.ts:6-16, :33-51`
-  (атрибуты: `ast: QueryAst | null`, `text: string | null` — `text` только у неразобранного;
-  markdown-проекция печатает `{{query: <key-форма>}}` из `ast`), `doc/convert.ts:45-77, :492-508, :555-567`
-  (`readBodyDoc(stored, body, reg)` — v1 → v2: текст блока парсится по реестру → `ast`;
-  `queryRefsFromDoc(doc)` — по образцу `bodyRefsFromDoc`), **все вызыватели `readBodyDoc`**
-  (находки 10/44): `apps/server/src/entity-read.ts:67`, `routers/version.ts:34-37`,
-  `routines/proposal-diff.ts:196` (реестр передаётся параметром из lifecycle — `effectiveRegistry(tx,
-  ownerId)` Задачи 14, не второй загрузкой), `routers/routine.test.ts:1374`, `packages/shared/src/doc/convert.test.ts:1252,1254,1270`
-  (+1) — фикстурный `ParseRegistry` из `query/ast-fixtures.ts`; `doc/diff.ts:177-181, :241`
-  (`KEY_ATTRS` += `queryBlock:ast`; `collectText` печатает key-форму через `printQueryAst(ast, reg,
-  'key')` — ребро `diff → query/print` НАЗВАНО в докблоке; страж чанка `save.test.tsx:1363`
-  проверяется), `apps/server/src/executor/executor.ts:1374-1378, :1386-1392` (`query_refs` в обеих
-  ветках записи; гейт версии — v2), `executor/body-doc.test.ts:714` (`toBe(2)` — осознанно, с
-  правкой докблока), `apps/web/src/features/entity-editor/nodes/QueryWidget.tsx:14-38` (атрибут
-  `ast`; барьер `}}` исчезает), `lib/query-blocks/QueryBlock.tsx:46-86` (ошибка — из `text`),
-  `query-builder/{QueryBlockEditor.tsx:50-59, QueryBuilderForm.tsx:134-138, model.ts:198-218}`
-  (развилка «печатается ли обратно» исчезает; OR между полями — разблокирован),
-  `features/entity-editor/slash/items.ts:29, :81-90` (вставка блока = AST), `browser/query.ts:42,
-  :52-86` и `lib/query-blocks/parse.ts:7` (разбор `{{query:}}` из body — только для markdown-проекции;
-  истина — `ast` в `body_doc`), `seed/smart-lists.ts`, `seed/project-body.ts` (тела — markdown в
-  key-форме; `project-body.ts:43`: `project_id=${projectId}` → `orbis/parent_project=${projectId}`
-  — находка 29; при засеве парсятся в `ast`), `seed/onboarding.ts:226-243, :275-285` (бэкфилл D42 —
-  по признаку «блок пачки присутствует в body_doc»; `ROUTINES_LIST_BODY_BEFORE_BATCH` удаляется вместе
-  с докблоком «править нельзя» — предпосылка отменена §А12-3), `seed-canon.test.ts`, `project-body.test.ts:9,39`,
-  `onboarding.test.ts:15,197-238` (пин тел — против PRD 02 §3.3 в новой форме: сравнение AST обеих
-  сторон; PRD §3.3 правится в Задаче 23 тем же коммитом с сидами — до него тест сравнивает
-  key-форму с константой сида), **старая грамматика УДАЛЯЕТСЯ** (потребителей больше нет — находка 4):
-  `packages/shared/src/query/{grammar,parse,serialize,legacy-bridge}.ts`, `catalog.ts` (`buildFieldCatalog`,
-  `propType`), `fixtures.ts` старой формы, их тесты; `apps/server/src/query/parse-text.ts`
-  (`parseQueryAny` → `parseQueryAst`), `llm/prompts/v4.test.ts:16,71,73` (уже литеральный снимок с
-  Задачи 19), `apps/server/src/registry/ops.ts` (`mergeProperty` — переписывание AST по `query_refs`).
+- Изменить: `packages/shared/src/doc/types.ts` (`DOC_SCHEMA_VERSION = 2`),
+  `doc/nodes/query-block.ts` (атрибуты `ast: QueryAst | null` + `text: string`; сегодня атрибут
+  зовётся `query` — **держатели этого имени ломаются МОЛЧА**: `registry/ops.ts:1371`
+  (`if (typeof attrs.query === 'string')`, иначе `return doc` без правки) и `diff.ts:241`),
+  `doc/convert.ts:555` (`readBodyDoc` УЖЕ ЕСТЬ, но чужую версию пересобирает из markdown —
+  конверсия v1→v2 по дереву это НОВАЯ ветка, а не правка; + `bindQueryBlocks`, `queryRefsFromDoc`
+  по образцу `bodyRefsFromDoc`), `doc/diff.ts:177-181` (`KEY_ATTRS` += `queryBlock:ast`; печать —
+  из `text`, реестр не нужен), `apps/server/src/executor/executor.ts` (**точек записи `body_refs`
+  ПЯТЬ, не две** — `:1585, :1936, :1952, :1964, :2135`; рядом с каждой — `query_refs`; гейт версии
+  `:1878-1893` — v2), `entity-read.ts:143`, `routines/proposal-diff.ts:196` (реестр параметром из
+  lifecycle — `effectiveRegistry(tx, ownerId)` Задачи 14), `routers/version.ts:34-37`
+  (**`readBodyDoc` НЕ зовёт**, у него свой `pinnedDoc` — иначе вся история закреплений тихо
+  деградирует к markdown, `:144`), `apps/web/src/features/entity-editor/nodes/QueryWidget.tsx`
+  (атрибут `ast`; `parseHTML` буфера `:75-87` — уже чинившийся дефект, теста нет),
+  `lib/query-blocks/QueryBlock.tsx:46-86` (ошибка — из `text`), `slash/items.ts:29, :81-90`,
+  `entity-editor/strip-ids.ts:71` (`NODE_ATTR_DEFAULTS.queryBlock`, двусторонний страж
+  `editor.test.tsx:110`), `features/entity-editor/useBodySave.ts:190-198` (**долг Задачи 20**:
+  перештамповка v1→v2; конверсия обязана быть листовой — рантайм-импорт `@orbis/shared/doc` из
+  этого файла запрещён стражем, а это 153.4 кБ gzip в первый кадр),
+  `executor/body-doc.test.ts:714` (сторожит не число, а **симметрию гейтов** чтения и записи —
+  замена `toBe(1)` → `toBe(2)` оставила бы мёртвый пин), литералы `v: 1` (~50 мест, гуще всего
+  `body-doc.test.ts`, плюс `onboarding.test.ts:969`) — разделить «должно остаться 1» и «должно
+  стать 2» руками.
+- **Дыры, закрываемые здесь же:** печать не квотирует `}` (`print.ts:39`) — значение с `}}` рвёт
+  тело (Р-21-3); пустой блок молча меняет смысл (сегодня 400 по `min(1)`, после реформы
+  `ast {filter:null}` = все сущности владельца) — Р-21-8; моки `entity.query` ключёваны
+  `input.query` (`query-widget.test.tsx:59`, `slash.test.tsx:51`) — с `{ast}` вернут `[]`, а
+  ассерты останутся зелёными (ложная зелень, Р-21-9).
 
-**Интерфейсы (produces):**
-```ts
-// doc/nodes/query-block.ts — attrs: { ast: QueryAst | null; text: string | null }   // ровно одно из двух не null
-// doc/convert.ts
-export function readBodyDoc(stored: unknown, body: string, reg: ParseRegistry): BodyDoc;   // v1-документ/markdown → v2: блоки парсятся; не разобранный → {ast:null, text}
-export function queryRefsFromDoc(doc: BodyDoc): string[];   // уникальные id свойств/аспектов/ролей + uuid сущностей из rel.of
-// entities.query_refs — заполняется executor'ом при каждой записи тела (как body_refs)
-```
 - [ ] **Шаг 1: падающие тесты:**
 ```ts
 test('тело без query-блоков: v1 → чтение даёт v2 байт-в-байт по содержанию (Т8-в: ничего не потеряно)', …)   // приёмка §С8-9
-test('query-блок v1 с текстом старой формы → ast (по реестру через мост до удаления); с опечаткой → {ast:null, text} и ошибка в UI', …)
+test('query-блок v1 → ast по реестру; с опечаткой → {ast:null, text} и ошибка в UI', …)
+test('инвариант формы: ast !== null ⟹ text это key-форма ЭТОГО ast; ast === null ⟹ text исходный', …)
 test('печать блока в markdown — key-форма; дифф Ш1 различает блоки по ast, переименование label ничего не меняет', …)
-test('query_refs: блок с orbis/task_status и children_of=<uuid> → refs содержат оба; merge свойства переписывает ast блока и refs', …)
-test('черновик Т8-в: перештамповка v1→v2 прогоняет документ через ту же конверсию, что и readBodyDoc — блок приезжает с ast, а не пустым (долг Задачи 20, рулинг Р-20-10)', …)
-test('бэкфилл D42: тело владельца с блоком пачки — no-op; без блока — блок добавлен; текст владельца не затёрт', …)
-test('сиды: шесть тел смарт-листов и тело проекта парсятся без rawBlock (seed-canon на AST); блок «Последние прогоны» — orbis/parent_project', …)
+test('значение с }} не рвёт тело: либо квотируется, либо блок остаётся неразобранным', …)
+test('query_refs: блок с orbis/task_status и children_of=<uuid> → refs содержат оба; заполняются во ВСЕХ пяти точках записи тела', …)
+test('черновик Т8-в: перештамповка v1→v2 прогоняет документ через конверсию — блок приезжает с ast, а не пустым (долг Задачи 20, Р-20-10)', …)
 test('proposal-diff: дифф предложения с query-блоком читается через реестр из lifecycle', …)
-test('web: QueryWidget правит ast; вставка блока слэшем — ast; QueryBlock показывает ошибку из text', …)
-test('старая грамматика удалена: импорты grammar/parse/serialize/legacy-bridge отсутствуют (греп-тест)', …)
+test('history: закреплённая версия тела с блоком не деградирует к markdown (version.ts)', …)
+test('пустой блок не превращается в «все сущности владельца»', …)
+test('web: QueryWidget правит ast; вставка блока слэшем — ast; QueryBlock показывает ошибку из text; strip-ids знает новые умолчания', …)
 ```
 - [ ] **Шаг 2:** реализация. — [ ] **Шаг 3:** PASS всех сьютов, web build, `check-lazy-chunks`;
-  коммит `feat(doc): DOC_SCHEMA_VERSION 2 — query-блок хранит Q-AST, text только у неразобранного; query_refs; дифф по key-форме; редактор и сиды на AST; бэкфилл D42 по признаку блока; старая грамматика удалена (§А11-1, §А5-2, §А12-3, приёмка §С8-9)`.
+  коммит `feat(doc): DOC_SCHEMA_VERSION 2 — query-блок хранит Q-AST и печатную key-форму; привязка блоков к реестру; query_refs во всех точках записи; дифф по ast; редактор на AST (§А11-1, §А5-2, приёмка §С8-9)`.
+
+---
+
+### Задача 21b: сиды и каноны на key-форму, бэкфилл D42 по признаку блока, `mergeProperty` переписывает `ast`, старая грамматика удалена (приёмка §С8-9, часть 2)
+
+**Файлы:**
+- Изменить: `seed/smart-lists.ts`, `seed/project-body.ts` (`:43`: `project_id=${projectId}` →
+  `orbis/parent_project=${projectId}` — находка 29; **`printQueryAst` печатает ОДНУ строку**
+  (`print.ts:286`), а тела сидов многострочные с 9-пробельными отступами и пином
+  `canonicalizeBody(body).body === body` (`seed-canon.test.ts:29`) — литералы переписываются под
+  точный вывод печати, включая решение `quoteQueryValue`), `seed/onboarding.ts:226-243, :275-285`
+  (бэкфилл D42 по признаку «блок пачки в `body_doc`»; `ROUTINES_LIST_BODY_BEFORE_BATCH` удаляется
+  вместе с докблоком «править нельзя» — предпосылка отменена §А12-3). **Осторожно:** сиды сегодня
+  пишут МИМО executor'а и без `body_doc`/`body_refs` (`onboarding.ts:204-215, :169, :243, :264`),
+  поэтому предикат «блок в `body_doc`» у сидированного владельца ложен ВСЕГДА, а переход
+  `collectPropertyHolders` на `query_refs` (обещан `ops.ts:722-726`) потерял бы шесть смарт-листов;
+  сиды переезжают на executor только в Задаче 23 — здесь предикат обязан работать на том, что есть.
+- `apps/server/src/registry/ops.ts` (`mergeProperty` переписывает `ast` и `text` блоков по
+  `query_refs`; **сегодня он не пишет ни `body_refs`, ни `query_refs` ни в прямой ветке
+  `:1300-1306`, ни в откате `:1440-1447`** — унаследованная дыра, задокументированная в
+  `backfill-body-doc.test.ts:187-192`; забыть откат = расхождение переживёт транзакцию).
+- **Старая грамматика удаляется**: `packages/shared/src/query/{grammar,parse,serialize,legacy-bridge}.ts`,
+  `catalog.ts` (`buildFieldCatalog`, `propType`), их тесты; `apps/server/src/query/parse-text.ts`
+  (`parseQueryAny` → `parseQueryAst`). **«Потребителей больше нет» (находка 4) ОПРОВЕРГНУТО
+  разведкой:** живых 7 в коде + 4 в тестах, и корневой баррель `shared/src/index.ts:35-37` отдаёт
+  `grammar/parse/serialize` наружу. Не названные планом: `goals/progress.ts:404`,
+  `tools/dispatch.ts:775` (`resolveLegacyFieldId`/`aspectsNamedInQueryAst`),
+  `apps/web/.../QueryTextEditor.tsx:81`, `recurring/materialize.test.ts:585`, реэкспорт типа
+  `FieldCatalog` (нужен `web/lib/query-blocks/catalog.ts:15`). **`packages/shared/src/query/fixtures.ts`
+  НЕ трогать** — это `queryFixtures` новой формы §А1-1, а не старая (сабпат
+  `@orbis/shared/query/fixtures` ведёт на `ast-fixtures.ts`).
+- Пины и каноны, падающие от key-формы: `seed-canon.test.ts`, `onboarding.test.ts:15, :197-238`,
+  `project-body.test.ts:9, :39` (целиком — импортирует умирающие `buildFieldCatalog`/`parseQuery`),
+  `routers/agenda-acceptance.test.ts:49-65` (боевые запросы приёмки вытаскиваются регэкспом из тел
+  сидов), `production-queries.test.ts:208` (пинит 15 адресов, внутри — `NEW_QUERY_BLOCK`),
+  `query-form.test.tsx:47, :59, :69, :80` («блок сида переживает форму байт-в-байт» — умирает
+  вместе с правилом Р3), `browser/query.ts:42, :52-86` и `lib/query-blocks/parse.ts:7` (разбор
+  `{{query:}}` — только для markdown-проекции), `query-builder/{QueryBlockEditor,QueryBuilderForm,model}`.
+- **`features/browser/SmartListSave.tsx:18`** пишет `{{query:…}}` и **не имеет ни одного
+  вызывателя** (мёртвый механизм) — снести или оживить, решение с обоснованием в докблоке.
+- **Вне `bun run test`, сломается молча (класс 12):** `perf/explain.test.ts:249`
+  (`expect(filled).toBe(0)`) станет ложным от 21a и не покраснеет ни в одном прогоне до Задачи 23.
+
+- [ ] **Шаг 1: падающие тесты:**
+```ts
+test('бэкфилл D42: тело владельца с блоком пачки — no-op; без блока — блок добавлен; текст владельца не затёрт', …)
+test('сиды: шесть тел смарт-листов и тело проекта парсятся без rawBlock (seed-canon на AST); блок «Последние прогоны» — orbis/parent_project', …)
+test('merge свойства переписывает ast и text блока и обновляет query_refs — и в прямой ветке, и в откате', …)
+test('collectPropertyHolders на query_refs не теряет ни одного смарт-листа', …)
+test('старая грамматика удалена: импорты grammar/parse/serialize/legacy-bridge отсутствуют (греп-тест)', …)
+```
+- [ ] **Шаг 2:** реализация. — [ ] **Шаг 3:** PASS всех сьютов, web build, `check-lazy-chunks`,
+  `bun run test:perf:explain`; коммит
+  `feat(seed): тела сидов и каноны на key-форму, бэкфилл D42 по признаку блока, mergeProperty переписывает ast, старая грамматика удалена (§А12-3, приёмка §С8-9)`.
 
 ---
 
