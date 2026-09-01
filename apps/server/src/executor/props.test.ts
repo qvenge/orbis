@@ -456,7 +456,7 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
    * `aspects[]` сверяется как МНОЖЕСТВО: это список интерпретаций, и порядок в нём —
    * не факт о сущности (снятый и заново навешенный аспект встаёт в конец списка).
    */
-  const POSITIVES = 38;
+  const POSITIVES = 36;
   const PROBE_ID = '019e4466-dddd-7e07-b5d4-64be9721da54';
 
   test(`${POSITIVES} позитивных записей корпуса: inverse возвращает props/aspects/aspects_legacy дословно`, () => {

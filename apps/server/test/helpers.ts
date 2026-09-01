@@ -13,8 +13,10 @@ import type { entities } from '../src/db/schema';
 import type { Tx } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { type LegacyRow, projectLegacyAspects } from '../src/executor/legacy-form';
+import { resolvePropertyRef } from '../src/executor/props';
 import type { ExecuteRequest, ExecuteResult, ExecutorDeps } from '../src/executor/types';
 import { effectiveRegistry } from '../src/registry/cache';
+import type { RegistrySnapshot } from '../src/registry/load';
 import { bumpOwnerRegistryVersion } from '../src/registry/version';
 
 export function requireEnv(): void {
@@ -238,7 +240,10 @@ function pgTextArray(values: string[]): string {
 }
 
 /**
- * Три колонки строки `entities` из СВОЙСТВ — для фикстур с ПРЯМЫМ INSERT, минуя исполнителя.
+ * Три колонки строки `entities` из СВОЙСТВ по ГОТОВОМУ снимку реестра — ядро фикстуры с
+ * прямым INSERT. Отдельно от `entityColumns` ниже ровно затем, чтобы сьюты, у которых снимок
+ * уже прочитан (перф-датасет `compile.dataset.test.ts`), шли через ТУ ЖЕ проверку, а не
+ * заводили вторую проекцию рядом.
  *
  * Фикстура говорит новой правдой (`props` по id свойства + список аспектов), а старую карту
  * `aspects_legacy` считает та же проекция, что и у исполнителя (`projectLegacyAspects`). Так
@@ -247,7 +252,38 @@ function pgTextArray(values: string[]): string {
  * не бывает. Намеренно РАЗОШЕДШАЯСЯ строка — это `divergentEntityRow` ниже, и она называет
  * расхождение по имени.
  *
- * Снимок реестра читается на каждый вызов: фикстур в сьюте единицы, а кеш здесь стоил бы
+ * ГРОМКИЙ ОТКАЗ НА ЧУЖОЙ АДРЕС. Прямой INSERT минует валидатор исполнителя, поэтому опечатка
+ * в id свойства (`orbis/finance_cateogry`) уехала бы в базу молча: `props` несёт ключ,
+ * проекция его не знает и в `aspects_legacy` не кладёт, и читатель старой колонки (компилятор
+ * запросов, web) значения не видит — тест падает не там, где ошибка, либо не падает вовсе.
+ * В проде такой строки не бывает: исполнитель отвечает `UNKNOWN_PROPERTY`. Этот же отказ
+ * делал прежний `rowFromLegacy` круговым переводом; здесь он назван по имени.
+ *
+ * Проверка идёт по РЕЕСТРУ, а не по перечисленным аспектам, и это не послабление. Свойство
+ * без аспекта законно (§А1-2, свободное свойство), и значение аспекта, который сняли,
+ * законно тоже (Р9: снятие аспекта значений не трогает) — обе формы обязаны заводиться
+ * фикстурой. Незаконно ровно одно: адрес, которого в реестре владельца НЕТ.
+ */
+export function entityColumnsFrom(
+  reg: RegistrySnapshot,
+  props: Record<string, unknown>,
+  aspects: string[],
+): LegacyRow {
+  for (const keyOrId of Object.keys(props)) {
+    if (resolvePropertyRef(reg, keyOrId) !== undefined) continue;
+    throw new Error(
+      `entityColumns: неизвестное свойство «${keyOrId}» — в реестре владельца такого адреса ` +
+        'нет, и проекция aspects_legacy его молча потеряет (исполнитель ответил бы ' +
+        'UNKNOWN_PROPERTY). Опечатка в id либо аспект не засеян.',
+    );
+  }
+  return { props, aspects, aspectsLegacy: projectLegacyAspects(reg, { props, aspects }) };
+}
+
+/**
+ * То же самое, но снимок реестра читается сам — обычная форма для сьютов.
+ *
+ * Снимок читается на каждый вызов: фикстур в сьюте единицы, а кеш здесь стоил бы
  * инвалидации после `seedCustomAspect`. Файл живёт до «Пересева мира» — вместе с проекцией.
  */
 export async function entityColumns(
@@ -256,8 +292,7 @@ export async function entityColumns(
   props: Record<string, unknown>,
   aspects: string[],
 ): Promise<LegacyRow> {
-  const reg = await effectiveRegistry(tx, ownerId);
-  return { props, aspects, aspectsLegacy: projectLegacyAspects(reg, { props, aspects }) };
+  return entityColumnsFrom(await effectiveRegistry(tx, ownerId), props, aspects);
 }
 
 /** Строка `entities` с РАЗОШЕДШИМИСЯ колонками — вход `divergentEntityRow`. */
@@ -285,7 +320,7 @@ export interface DivergentRowSpec {
  * вопрос «какую колонку ты читаешь», заданный так, что ответ виден; ничего другого этот
  * помощник не проверяет и проверять не может.
  *
- * Почему он живёт здесь, а не в сьюте: `legacyEntityColumns` (выше) — фикстура СОГЛАСОВАННОЙ
+ * Почему он живёт здесь, а не в сьюте: `entityColumns` (выше) — фикстура СОГЛАСОВАННОЙ
  * строки, и обе формы обязаны стоять рядом, чтобы «согласованная или разошедшаяся» был
  * выбор, а не случайность соседнего файла.
  */

@@ -41,8 +41,124 @@ const SELF = relative(ROOT, import.meta.path)
  * (id аспекта). Новая форма так выглядеть не может: у создания это список
  * (`aspects: ['orbis/task']`), у правки — объект с ключами-идентификаторами
  * (`aspects: { attach: […] }`), и оба под этот образец не подходят.
+ *
+ * Между `{` и первым ключом может стоять что угодно из пробелов и переводов строк —
+ * комментарии сюда не попадают, потому что образец прикладывается к тексту, из которого они
+ * уже вычеркнуты (`maskComments`). Без этого пояснительная строка первой внутри карты
+ * (`aspects: {\n // старая карта\n 'orbis/task': {…} }`) оставляла стража зелёным —
+ * а комментарии внутри карт в корпусе были нормой (гейт-ревью 23a, находка 1).
  */
 const LEGACY_MAP = /aspects:\s*\{\s*(['"])[^'"\n]+\1\s*:/g;
+
+/**
+ * Тот же текст, где комментарии заменены пробелами (переводы строк сохранены — номера строк
+ * и смещения не съезжают).
+ *
+ * Зачем вычёркивать, а не отсеивать совпадения по «строка начинается с `//` или `*`», как
+ * было до фикс-раунда: отсев смотрел только на строку САМОГО совпадения и потому (а) пропускал
+ * карту, у которой комментарий стоит между `{` и первым ключом, (б) не увидел бы карту,
+ * дописанную после кода на одной строке с `//`. Вычёркивание отвечает на вопрос один раз и
+ * для обоих случаев.
+ *
+ * Разбор строковых литералов обязателен: `'https://…'` внутри кода не начинает комментария,
+ * и наивная замена по `//` съела бы половину файла.
+ */
+function maskComments(src: string): string {
+  const out = src.split('');
+  const blank = (from: number, to: number): void => {
+    for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' ';
+  };
+  /** Индекс ЗА закрывающей кавычкой строкового литерала, открытого на `i`. */
+  const skipQuoted = (i: number, quote: string): number => {
+    let j = i + 1;
+    while (j < src.length) {
+      if (src[j] === '\\') {
+        j += 2;
+        continue;
+      }
+      if (src[j] === quote) return j + 1;
+      j += 1;
+    }
+    return src.length;
+  };
+  /**
+   * Индекс ЗА закрывающей `}` подстановки `${…}`, открытой на `i` (это `{`).
+   *
+   * Подстановки разбираются рекурсивно, а не «до первой `}`»: внутри них живут свои строки и
+   * свои шаблоны (`` `[${ids.map((x) => `"${x}"`).join(',')}]` `` — реальная строка
+   * `test/helpers.ts`), и наивный проход обрывал шаблон на вложенном апострофе. Дальше по
+   * файлу маскер считал кодом комментарии и строками — код; ровно это и делало стража то
+   * слепым, то красным на пустом месте.
+   */
+  const skipInterp = (i: number): number => {
+    let depth = 0;
+    let j = i;
+    while (j < src.length) {
+      const c = src.charAt(j);
+      if (c === "'" || c === '"') {
+        j = skipQuoted(j, c);
+        continue;
+      }
+      if (c === '`') {
+        j = skipTemplate(j);
+        continue;
+      }
+      if (c === '{') depth += 1;
+      if (c === '}') {
+        depth -= 1;
+        if (depth === 0) return j + 1;
+      }
+      j += 1;
+    }
+    return src.length;
+  };
+  /** Индекс ЗА закрывающим бэктиком шаблона, открытого на `i`. */
+  function skipTemplate(i: number): number {
+    let j = i + 1;
+    while (j < src.length) {
+      if (src[j] === '\\') {
+        j += 2;
+        continue;
+      }
+      if (src[j] === '`') return j + 1;
+      if (src[j] === '$' && src[j + 1] === '{') {
+        j = skipInterp(j + 1);
+        continue;
+      }
+      j += 1;
+    }
+    return src.length;
+  }
+
+  let i = 0;
+  while (i < src.length) {
+    const c = src.charAt(i);
+    if (c === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i);
+      const end = nl === -1 ? src.length : nl;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      const close = src.indexOf('*/', i + 2);
+      const end = close === -1 ? src.length : close + 2;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      i = skipQuoted(i, c);
+      continue;
+    }
+    if (c === '`') {
+      i = skipTemplate(i);
+      continue;
+    }
+    i += 1;
+  }
+  return out.join('');
+}
 
 /** Файлы, где старая карта стоит НАМЕРЕННО: путь → [сколько, почему]. */
 const ALLOWLIST: Record<string, { readonly count: number; readonly reason: string }> = {
@@ -99,21 +215,18 @@ function walk(dir: string, out: string[]): void {
 const files: string[] = [];
 for (const r of ROOTS) walk(join(ROOT, r), files);
 
-/** `путь → номера строк со старой картой`. */
+/**
+ * `путь → номера строк со старой картой`. Комментарии вычеркнуты ДО поиска: докблоки называют
+ * старую форму по имени именно затем, чтобы объяснить, чем она была и когда умрёт.
+ */
 function hits(): Map<string, number[]> {
   const found = new Map<string, number[]>();
   for (const rel of files) {
-    const src = readFileSync(join(ROOT, rel), 'utf8');
+    const src = maskComments(readFileSync(join(ROOT, rel), 'utf8'));
     const lines: number[] = [];
     LEGACY_MAP.lastIndex = 0;
-    const text = src.split('\n');
     for (const m of src.matchAll(LEGACY_MAP)) {
-      const line = src.slice(0, m.index).split('\n').length;
-      // Строка комментария — не фикстура: докблоки называют старую форму по имени именно
-      // затем, чтобы объяснить, чем она была и когда умрёт.
-      const trimmed = (text[line - 1] ?? '').trimStart();
-      if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
-      lines.push(line);
+      lines.push(src.slice(0, m.index).split('\n').length);
     }
     if (lines.length > 0) found.set(rel, lines);
   }
@@ -143,6 +256,62 @@ describe('старой карты аспектов в тестовых фикс�
     const expected: Record<string, number> = {};
     for (const [rel, entry] of Object.entries(ALLOWLIST)) expected[rel] = entry.count;
     expect(actual).toEqual(expected);
+  });
+
+  test('маскер комментариев: докблок вычеркнут, код и строковые литералы целы, шаблон с подстановкой не рвёт разбор', () => {
+    // Пин самого маскера: от него зависят ОБА утверждения выше, и его ошибка проявляется
+    // молча — либо слепотой (код принят за строку), либо ложной тревогой (комментарий принят
+    // за код). Образец собран из тех форм, на которых он уже ломался.
+    const sample = [
+      "const url = 'https://example.com/a'; // хвостовой комментарий",
+      '/**',
+      " * докблок: `aspects: {'orbis/financial': {category_ref}}` — про мёртвую форму",
+      ' */',
+      // Образец исходника, а не строка с подстановкой: подстановка здесь и есть предмет проверки.
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: образец разбираемого исходника
+      "const sql = `[${ids.map((x) => `'${x}'`).join(',')}]`;",
+      "const fixture = { aspects: { 'orbis/task': { status: 'inbox' } } };",
+    ].join('\n');
+    const masked = maskComments(sample);
+
+    // Длина и разбиение на строки не меняются — номера строк в отчёте остаются верными.
+    expect(masked.length).toBe(sample.length);
+    expect(masked.split('\n')).toHaveLength(sample.split('\n').length);
+    // Комментарии вычеркнуты: и хвостовой, и докблок со старой картой внутри.
+    expect(masked).not.toContain('хвостовой');
+    expect(masked).not.toContain('мёртвую форму');
+    // Код цел: и адрес внутри строкового литерала, и шаблон с вложенной подстановкой, и
+    // фикстура ПОСЛЕ шаблона — именно её терял разбор, обрывавший шаблон на апострофе.
+    expect(masked).toContain("'https://example.com/a'");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: тот же образец исходника
+    expect(masked).toContain("const sql = `[${ids.map((x) => `'${x}'`).join(',')}]`;");
+    expect(masked).toContain("aspects: { 'orbis/task': {");
+
+    // И итог, ради которого маскер существует: карта ловится, докблок — нет.
+    LEGACY_MAP.lastIndex = 0;
+    expect([...masked.matchAll(LEGACY_MAP)]).toHaveLength(1);
+  });
+
+  test('образец ловит карту с комментарием и пустой строкой между `{` и первым ключом', () => {
+    // Находка 1 гейт-ревью 23a: `\s*` не пропускает `// …`, и вернувшаяся фикстура с
+    // пояснением первой строкой внутри карты оставляла стража зелёным. Пояснения внутри карт
+    // в корпусе были нормой, так что случай не гипотетический.
+    const withComment = maskComments(
+      ['aspects: {', '  // старая карта', '', "  'orbis/task': { status: 'planned' },", '},'].join(
+        '\n',
+      ),
+    );
+    LEGACY_MAP.lastIndex = 0;
+    expect([...withComment.matchAll(LEGACY_MAP)]).toHaveLength(1);
+
+    // Новая форма под образец не подходит ни у создания, ни у правки — иначе страж краснел бы
+    // на переведённом корпусе.
+    for (const modern of ["aspects: ['orbis/task'],", "aspects: { attach: ['orbis/task'] },"]) {
+      LEGACY_MAP.lastIndex = 0;
+      expect(`${modern}: ${[...maskComments(modern).matchAll(LEGACY_MAP)].length}`).toBe(
+        `${modern}: 0`,
+      );
+    }
   });
 
   test('у каждой записи аллоулиста есть причина, и она называет тесты', () => {

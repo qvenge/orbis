@@ -7,7 +7,8 @@
 // значения с пробелами закавычены: новый разбор идёт по РЕЕСТРУ, и старые тексты он
 // отвергает по построению (см. докблок `parse-ast.ts`). Строки датасета при этом прежние —
 // фикстура объявлена свойствами (`props`/`aspects[]`) и уезжает в БД тремя колонками:
-// проекцию `aspects_legacy` считает `projectLegacyAspects` — тот же писатель, что у исполнителя.
+// проекцию `aspects_legacy` считает `entityColumnsFrom` (`test/helpers.ts`) — тот же писатель,
+// что у исполнителя, плюс громкий отказ на адрес свойства, которого нет в реестре.
 //
 // ВЫДАЧА НЕ ИЗМЕНИЛАСЬ НИ В ОДНОМ СЦЕНАРИИ — это требование, а не совпадение: реформа не
 // имеет права менять то, что владелец видит. Отдельного внимания стоит `excludeBlocked=true`:
@@ -18,10 +19,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, entityColumnsFrom, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { projectLegacyAspects } from '../executor/legacy-form';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { type CompileCtx, compileCountAst, compileQueryAst } from './compile-ast';
@@ -588,10 +588,13 @@ async function runCount(userId: string, query: string): Promise<number> {
 const ids = (rows: Record<string, unknown>[]) => rows.map((r) => r.id);
 
 /**
- * Свойства фикстуры → три колонки строки. Проекция `aspects_legacy` считается той же
- * функцией, что и у исполнителя (`projectLegacyAspects`): пока колонка жива (до Задачи 23b),
- * фикстура с ПРЯМЫМ INSERT обязана держать её согласованной с новой правдой — иначе она
- * разойдётся с писателем и покажет тесту то, чего в проде не бывает.
+ * Свойства фикстуры → три колонки строки — через общий помощник `entityColumnsFrom`
+ * (`test/helpers.ts`), а не своей проекцией.
+ *
+ * Общий он не ради экономии строк, а ради ОТКАЗА: помощник сверяет каждый ключ `props` с
+ * реестром и бросает на неизвестном адресе. Прямой INSERT минует валидатор исполнителя, и
+ * опечатка в id свойства иначе уехала бы в базу молча — `props` с ключом, `aspects_legacy`
+ * без него, и запрос по этому полю не нашёл бы ничего, не сказав почему.
  */
 function datasetRows(
   snapshot: RegistrySnapshot,
@@ -599,9 +602,7 @@ function datasetRows(
 ): (typeof entities.$inferInsert)[] {
   return rows.map(({ props = {}, aspects, ...rest }) => ({
     ...rest,
-    props,
-    aspects,
-    aspectsLegacy: projectLegacyAspects(snapshot, { props, aspects }),
+    ...entityColumnsFrom(snapshot, props, aspects),
   }));
 }
 
@@ -1294,5 +1295,61 @@ describe('§13.6: decimal-точность в новой форме хранен
       expect(rows).toHaveLength(expected);
       expect(rows.every((r) => r.t === 'string')).toBe(true);
     }
+  });
+});
+
+describe('фикстура прямого INSERT не проходит молча с чужим адресом свойства', () => {
+  test('22. опечатка в id свойства → громкий отказ, а не строка с потерянным значением', () => {
+    // Прямой INSERT минует валидатор исполнителя (в проде он ответил бы UNKNOWN_PROPERTY),
+    // поэтому отказ обязан родиться в самой фикстуре. Иначе `props` унесёт в базу ключ,
+    // которого не знает проекция: `aspects_legacy` его не получит, запрос по этому полю не
+    // найдёт ничего — и красным станет чужой тест, а не тот, где ошибка.
+    expect(() =>
+      datasetRows(reg, [
+        {
+          id: ID.taskToday,
+          ownerId: USER_A,
+          title: 'Опечатка в адресе',
+          tags: [],
+          props: { 'orbis/finance_cateogry': ID.project },
+          aspects: ['orbis/financial'],
+          createdAt: new Date('2026-06-20T08:00:00Z'),
+          updatedAt: new Date('2026-06-20T08:00:00Z'),
+        },
+      ]),
+    ).toThrow(/неизвестное свойство «orbis\/finance_cateogry»/);
+
+    // Не вырожденно: тот же вход с ВЕРНЫМ адресом проходит, и значение доезжает до старой
+    // карты — иначе отказ выше мог бы означать «помощник ломается на чём угодно».
+    const [row] = datasetRows(reg, [
+      {
+        id: ID.taskToday,
+        ownerId: USER_A,
+        title: 'Верный адрес',
+        tags: [],
+        props: { 'orbis/finance_category': ID.project },
+        aspects: ['orbis/financial'],
+        createdAt: new Date('2026-06-20T08:00:00Z'),
+        updatedAt: new Date('2026-06-20T08:00:00Z'),
+      },
+    ]);
+    expect(row?.aspectsLegacy).toEqual({ 'orbis/financial': { category_ref: ID.project } });
+
+    // Свободное свойство (§А1-2) и значение снятого аспекта (Р9) — законны: проверка идёт по
+    // РЕЕСТРУ, а не по перечисленным аспектам.
+    expect(() =>
+      datasetRows(reg, [
+        {
+          id: ID.taskToday,
+          ownerId: USER_A,
+          title: 'Значение без носителя',
+          tags: [],
+          props: { 'orbis/amount': '1.00' },
+          aspects: [],
+          createdAt: new Date('2026-06-20T08:00:00Z'),
+          updatedAt: new Date('2026-06-20T08:00:00Z'),
+        },
+      ]),
+    ).not.toThrow();
   });
 });

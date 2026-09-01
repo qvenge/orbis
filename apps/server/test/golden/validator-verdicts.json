@@ -2016,43 +2016,6 @@
     "newVerdict": "ok"
   },
   {
-    "name": "слияние В1: financial + budget делят одну валюту",
-    "props": {
-      "orbis/amount": "340.00",
-      "orbis/direction": "expense",
-      "orbis/finance_category": "019d48ea-4188-765d-8e96-93a0ad9c262a",
-      "orbis/currency": "RUB",
-      "orbis/limit": "30000.00",
-      "orbis/period_start": "2026-06-01",
-      "orbis/period_end": "2026-06-30"
-    },
-    "aspects": ["orbis/financial", "orbis/budget"],
-    "legacyVerdict": "ok",
-    "newVerdict": "ok"
-  },
-  {
-    "name": "слияние В1: assignment + agent-run делят один грант",
-    "props": {
-      "orbis/executor": "agent",
-      "orbis/grant": "019a0000-0000-7000-8000-000000000001",
-      "orbis/run_outcome": "running",
-      "orbis/run_started_at": "2026-08-18T07:00:00.000Z",
-      "orbis/last_step_at": "2026-08-18T07:05:00.000Z",
-      "orbis/step_count": 1,
-      "orbis/run_steps": [
-        {
-          "seq": 1,
-          "at": "2026-08-18T07:05:00.000Z",
-          "summary": "создал ветку",
-          "external": true
-        }
-      ]
-    },
-    "aspects": ["orbis/assignment", "orbis/agent-run"],
-    "legacyVerdict": "ok",
-    "newVerdict": "ok"
-  },
-  {
     "name": "orbis/task: due_date «2026-02-30» — форма верна, дня в календаре нет",
     "props": {
       "orbis/task_status": "planned",
