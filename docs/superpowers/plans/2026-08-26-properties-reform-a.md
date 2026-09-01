@@ -2085,79 +2085,176 @@ test('старая грамматика удалена: импорты grammar/p
 
 ---
 
-### Задача 23: «Пересев мира» — миграция 0017 (contract), снятие старой формы, сиды через исполнителя, греп-гейт падающий, EXPLAIN-приёмка, `reset-world`, тела сидов и PRD одним коммитом (приёмка §С8-10)
+### Задача 23: «Пересев мира» — РАЗРЕЗАНА на 23a / 23b / 23c (рулинг Р-23-1 по итогам разведки 2026-09-02)
 
-**Строго последняя кодовая задача; не разрезается** (тела сидов, PRD, seed-canon, перф-фикстура,
-greps и EXPLAIN держат друг друга).
+**Почему разрез, хотя план писал «не разрезается».** Довод «тела сидов, PRD, seed-canon,
+перф-фикстура, greps и EXPLAIN держат друг друга» опровергнут разведкой: тела шести сидов УЖЕ в
+key-форме и байт-в-байт совпадают с PRD-диффом Задачи 22 (`seed/smart-lists.ts` ↔ `docs/prd/02-core-os.md`
+§3.3 ветки `prd-reform-draft`, сверено программно); PRD-дифф готов и применяется чисто (`git
+merge-tree` ветки и черновика без конфликтов); «держат друг друга» на деле — цепочка зависимостей
+сноса, проходимая тремя зелёными шагами. Один big-bang (495 фикстур старой формы в 47 файлах +
+миграция + снос + сиды + ops + документы) даёт дифф > 10k строк — по РП-2 «не ревьюируемо гейтом».
+Цена разреза — три гейта вместо одного; цена отказа — неревьюируемый дифф и исчерпанный контекст
+имплементера (прецедент Задачи 12 — девять раундов). Упоминания «23» в маппингах ниже читать как
+23a–23c. **Опровергнутые факты брифа (адреса брать из кода, не отсюда):** `convertLegacyRules`
+в дереве нет (снят Задачей 18); `WireAspectDefinition`/`wire.ts:207-238`/`export.ts` — не существует,
+`aspectDefinitionSchema` поля `schema` уже не несёт; «493 фикстуры в 49 сьютах» → 495 строк в 47
+файлах (489 тестовых в 42; `tools/registry.ts:490,:521` — JSON Schema НОВОЙ формы, не старой);
+`onboarding.ts:99-150` → `:179-205`; `onboarding.test.ts:197-238` → `:271-316`; `project-body.ts`
+— 53 строки, уже в key-форме; `perf.test.ts` сторож `:204-253`, уже на `role`/`aspects[]`;
+`render.yaml` ключа `autoDeploy` не содержит вовсе (Шаг 6 п.(0) ДОБАВЛЯЕТ строку, п.(8) её удаляет).
+
+### Задача 23a: фикстуры и тесты на новую форму — механика, зелёная сама по себе
+
+Пока union легаси-входа (`fromLegacyInput`, `contracts/tools.ts`) жив, все ТЕСТОВЫЕ держатели
+старой карты `aspects: {id: {field: value}}` переводятся на `props`/`aspects[]`. Боевой код,
+миграции, `legacy-form.ts`, промпты — НЕ трогать.
 
 **Файлы:**
-- Создать: `apps/server/src/db/migrations/0017_reform_contract.sql` (+snapshot), `apps/server/src/seed/world.ts`
-  (+test) — единая точка засева графа владельца через `execute()`
-- Изменить/удалить: `apps/server/src/executor/legacy-form.ts` (УДАЛИТЬ + **union легаси-входа и
-  `fromLegacyInput` в exec-надмножествах `contracts/tools.ts` — перенос из Задачи 18 по Р-18-1:
-  правятся 493 фикстуры в 49 сьютах плюс приёмочный тест «старая карта aspects → VALIDATION;
-  `fromLegacyInput` не экспортируется»** + `packages/shared/src/registry/legacy-field-map.ts`,
-  `legacyAspectJsonSchema`; `schemas/aspects.ts` zod-схемы аспектов УДАЛИТЬ — golden `validator-verdicts`
-  замораживается: `legacyVerdict` становится литералом в JSON, тест сверяет только `newVerdict`),
-  `db/schema.ts` (`aspectsLegacy`, `meta`, `relationType` — снять; `aspect_definitions.schema` — снять),
-  `apps/server/src/wire.ts:207-238` + `export.ts` (`WireAspectDefinition.schema` снимается — находка 54),
-  `scripts/seed-registries.ts` (без `schema`), `scripts/ops.ts` (`reset-world` — РП-7; `check`/
-  `seed-registries`/`migrate` — сверить), `scripts/check-legacy-form.ts` (allowlist → тесты грамматики
-  на отказ старой формы + перечисленные с причиной места `relations.meta`; `--gate` в CI: шаг после
-  `bun run test`), `.github/workflows/ci.yml` (+ `bun scripts/check-legacy-form.ts --gate`),
-  `seed/onboarding.ts:99-150` (категории, смарт-листы, садовник — через `world.ts` → `execute()`
-  с `mechanism: 'seed'`, детерминированные id; порядок: категории → смарт-листы → садовник;
-  бюджет-хук и инварианты работают на засеве), `seed/smart-lists.ts`, `seed/project-body.ts` (имена
-  аспектов в прозе тел `:48, :50` и докблоках `:86-89` — по label), `seed-canon.test.ts`,
-  `onboarding.test.ts:197-238` (пин тел — против PRD 02 §3.3 в новой форме), `docs/prd/**` и
-  `docs/implementation/02-ops-runbook.md` — **применение `ledger/prd-reform.diff` Задачи 22 тем же
-  коммитом** (§А12-7), `docs/prd/04-decision-log.md` (D43: статус), `src/test/perf.ts` и
-  `perf/perf.test.ts` (фикстура и входы — новая форма; сторож `:202-251` на `props`/`role`;
-  бюджеты — перезамер: при отклонении > 20 % — запись в `progress.md` и решение владельцу),
-  `test/helpers.ts` (`truncateAll` — финальный список), `memory/rules.ts` (`convertLegacyRules` —
-  удалить вместе с вызовом), `apps/web/src/test/harness.tsx` и фикстуры (`--gate` покрывает web),
-  `render.yaml` (`autoDeploy` — обратно, отдельным docs-коммитом в `main` ПОСЛЕ прод-процедуры —
-  Шаг 6).
-- **Обязательства из реестра обещаний PRD (`ledger/prd-promises-23.md`, Р-22-3):**
-  `apps/server/src/executor/relations.ts:81-83, :117-120` (`LEGACY_PARENT_ROLES` /
-  `legacyParentRolesSql()` — снять вместе с `relation_type`; пять call-сайтов — инвариант «один
-  budget-parent», хук привязки, `spentByEnvelope` в `budget/aggregates.ts`, unbudgeted, импорт —
-  сужаются до роли `envelope-binding` по спеке §А4/§С7 п.7; Р-22-18), корневой `package.json`
-  (`db:prepare`: `DATABASE_URL=$DATABASE_URL_ADMIN` подставляется шеллом до чтения `.env` — долг 2
-  ветки; Р-22-19), `scripts/llm-smoke.ts` (гейт живой модели сломан — долг 1 ветки; Р-22-19).
-  Runbook из диффа Задачи 22 называет оба долга «чинятся вместе с этой поставкой» — либо чинить,
-  либо снимать фразу тем же коммитом.
+- Изменить: 489 строк в 42 тестовых файлах (`grep -rn "aspects: {" apps/ packages/ scripts/ | grep -v
+  "attach\|detach"` минус боевые); `apps/server/src/test/perf.ts` (восемь легаси-карт, образец новой
+  формы в том же файле `:360-375`); `apps/server/perf/graph-fixture.ts:194-220` (`relationType`
+  литералы и комментарий про `rel_uniq`); `apps/web/src/test/harness.tsx` и web-фикстуры старой
+  формы; golden-корпус `validator-verdicts` (`apps/server/src/registry/validator-golden.test.ts`:
+  корпус — в форму `props`/`aspects[]`, `legacyVerdict` ЗАМОРАЖИВАЕТСЯ литералом в JSON, тест
+  сверяет только `newVerdict`; сегодня `newVerdict()` `:129` и мутационный тест `:229` сами зовут
+  `legacyAspectsToProps`/`propertyToLegacyField` из `legacy-field-map.ts` — после перевода не зовут);
+  `apps/server/tsconfig.json` `include` — добавить `test/` и `perf/` (долг «typecheck не видит»);
+  если ошибок типов в тестах > 50 — остаток с числом в `progress.md`, не чинить вслепую.
+- Инструмент: codemod через `legacyAspectsToProps` (пока функция есть) — законен, но результат
+  проверяется прогоном каждого тронутого сьюта, не доверием.
+
+- [ ] **Шаг 1:** снять число держателей грепом ДО и ПОСЛЕ (в отчёт); тест-страж: «в тестовых
+  файлах старой карты `aspects: {…: {…}}` нет» (греп-тест по тому же паттерну, allowlist —
+  тесты отказа старой формы, поимённо). **Шаг 2:** перевод. **Шаг 3:** PASS всех сьютов, `lint`,
+  `typecheck`; коммит `test: фикстуры и тесты на новую форму props/aspects[] — 489 строк в 42
+  файлах, perf-фикстура, golden validator-verdicts заморожен литералом legacyVerdict (§А12, подготовка сноса)`.
+
+### Задача 23b: снос старой формы, миграция 0017, сиды через исполнитель, греп-гейт в CI, EXPLAIN-приёмка
+
+**Порядок сноса — по зависимостям, нарушать нельзя:**
+1. Бюджет-хук `apps/server/src/executor/executor.ts:1061-1100` (`hookAspectChanged`,
+   `budgetHookBranches`) — ЖИВОЙ боевой читатель `aspectsLegacy`, решает по СТАРОЙ карте, какие
+   ветки bind/rebind/unbind сработают → переписать на `props`/`aspects[]` ДО снятия колонки.
+2. `LEGACY_PARENT_ROLES`/`legacyParentRolesSql()` (`executor/relations.ts:81-83, :117-120`) — **восемь**
+   потребителей: пять `legacyParentRolesSql` (инвариант «один budget-parent», хук привязки,
+   `spentByEnvelope` в `budget/aggregates.ts`, unbudgeted, импорт) + `relations.ts:438`,
+   `executor.ts:2231` (`assertBudgetAttachKeepsSingleParent`), `executor.ts:2392` → роль
+   `envelope-binding` там, где речь о конверте (§А4, §С7 п.7); семантика остальных четырёх ролей
+   — по сиду ролей, иерархию категорий не ломать.
+3. `executor/legacy-form.ts` — УДАЛИТЬ; держатели: боевые `executor.ts:107-111`, `relations.ts:29`,
+   `registry/ref.ts:37`, `seed/onboarding.ts:30` (`rowFromLegacy` `:184` — единственный вызов,
+   пишет 12 категорий прямым INSERT) и тестовые `test/helpers.ts:15`, `legacy-form.test.ts`,
+   `props.test.ts:47`, `query/compile.dataset.test.ts:23`. Сид категорий и смарт-листов
+   (`onboarding.ts:179-205`) переезжает на `seed/world.ts` → `execute({ mechanism: 'seed',
+   source: 'system' })` (образец — `seed/gardener.ts:158-199`; отдельная транзакция вне `FOR
+   UPDATE` объемлющей — Р-17-1; `operations.length > 1` требует `batchId` — `executor.ts:531-542`;
+   детерминированные id сохраняются; бюджет-хук и инварианты работают на засеве). Порядок:
+   категории → смарт-листы → садовник (уже через `execute`). `seedOwnerWorld` — интерфейс брифа.
+4. `packages/shared/src/schemas/aspects.ts` (zod-схемы аспектов) — УДАЛИТЬ; но
+   `apps/server/src/contracts/agent-loop.ts:11-18,141` берёт оттуда ТИПЫ (`TaskAspect`,
+   `AgentRunAspect`, `AgentRunStep`) и вниз `agent-loop/queries.ts:23-50`, `routines/lifecycle.ts:1084`
+   — типы переезжают в реестровую форму; компайл-потребители `goalAspectSchema` — `llm/prompts/v4.test.ts`
+   И `v3.test.ts` (текст `v*.ts` не правится ни байтом; тесты — можно); `legacyAspectJsonSchema`.
+5. `packages/shared/src/registry/legacy-field-map.ts` — УДАЛИТЬ; боевой импортёр
+   `packages/shared/src/query/field-ref.ts:17,41` (`propertyToLegacyField` — резолв
+   `user_query.field`/`progress_source.field`) и два web-читателя `legacyFieldToProperty`
+   (`apps/web/src/.../labels.ts:29,178`, `proposal-text.ts:14,149`) — на реестр.
+6. Второй реестр старой формы `packages/shared/src/aspect-registry.ts:39` `BUILTIN_ASPECT_META`
+   (13 записей) — УДАЛИТЬ; читатели `scripts/llm-smoke.ts:15,64` (чинится в 23c — здесь только
+   компилируемость), `aspect-registry.test.ts`, `registry/builtin.test.ts:10,139,406,408`.
+7. Колонка `aspect_definitions.schema` — живые места: `db/seed-registries.ts:124-144`,
+   `db/registry-drift.ts:67`, `shared/aspect-registry.ts:345` + тест `:164`, `tools/registry.ts:1174-1210`,
+   `test/helpers.ts:131-155`, `test/seed-registries.test.ts:74-81`, `scripts/seed-registries.ts`.
+8. `relations.relation_type` — `wire.ts:145` + `schemas/relation.ts` (поле едет наружу), 26
+   тестовых чтений `relationType`; `entity-read.ts:196-208` — `ref_side` опирается на `rel_uniq`
+   по старой тройке → с `rel_uniq` по роли нужен `GROUP BY source_id` (код сам помечен «ключ
+   поиска — 0017»); `relations.test.ts:190-201, :904, :927, :939` — тесты `reform_role_heuristic`
+   снести вместе с `DROP FUNCTION`.
+9. `executor.ts:1577` `meta: {}` — единственный настоящий писатель `entities.meta`;
+   `packages/shared/src/constants.ts:165` `SERVICE_ASPECT_IDS` — снять (служебность — колонка
+   реестра); `agent-loop/queries.ts:234` — ложный докблок про GIN под ролью приложения — привести
+   к правде (замер 27.08: `chosen=false` под `authenticated`).
+10. **Миграция `0017_reform_contract.sql`** (+snapshot, `_journal.json` `idx: 17`) — по интерфейсу
+    ниже. DROP-список GIN — по вердикту `test:perf:explain`, который СНАЧАЛА чинится (из семи
+    проверок три могут падать молча — «7 pass» ≠ семь работающих) и затем ПИНИТСЯ против 0017;
+    `entities_query_refs_gin` изъят из правила «нет подтверждения → снять» (Р-П-1).
+11. `bun run db:prepare` чинится ЗДЕСЬ (корневой `package.json:16`: `DATABASE_URL=$DATABASE_URL_ADMIN`
+    подставляет шелл до чтения `.env`; в CI работает, потому что переменная задана job'ом) — без
+    этого шаг «локальная база с нуля» не выполним честно.
+12. Греп-гейт `scripts/check-legacy-form.ts`: маркер `bare-field` чинится ДО снятия списка
+    (`/` — граница слова в PCRE: `\bdue_date=` ловит `orbis/due_date=`; `(?<![/\w])` вместо `\b`
+    даёт 65 честных вместо 130); 23 честных — в ЗАМОРОЖЕННЫХ промптах `v1…v4`, `routine-v1/v2` и
+    их `.fixture.txt` → ALLOWLIST с причиной; `v5.test.ts:161`, `routine-v3.test.ts:235` — тесты
+    отказа старой формы → ALLOWLIST; маркер `entity-meta` — 12 из 13 ложные (фикстуры
+    `relations.meta`: `wire.ts:146`, `relations.test.ts:565`, web `detail.test.tsx` ×6 и др.) →
+    сузить маркер или ALLOWLIST с причиной; `.github/workflows/ci.yml` — шаг `bun scripts/check-legacy-form.ts --gate`
+    сразу после `- run: bun run test` (`:37`).
+13. Приёмочный тест «старая карта `aspects` на входе → `VALIDATION`; `fromLegacyInput` не экспортируется».
 
 **Интерфейсы (produces):**
 ```sql
--- 0017_reform_contract.sql — пишется ОДИН раз, по готовому вердикту EXPLAIN Задачи 9a (находки 20/45)
+-- 0017_reform_contract.sql — пишется ОДИН раз, по вердикту EXPLAIN (пункт 10)
 ALTER TABLE entities DROP COLUMN aspects_legacy;      -- entities_aspects_legacy_gin уходит с колонкой
 ALTER TABLE entities DROP COLUMN meta;                -- entities_meta_gin — с колонкой (0001:104)
--- DROP INDEX <каждый GIN из entities_props_gin / entities_aspects_gin / entities_query_refs_gin, НЕ подтверждённый EXPLAIN-вердиктом 9a>;
+-- DROP INDEX <каждый GIN из entities_props_gin / entities_aspects_gin, НЕ подтверждённый вердиктом>; entities_query_refs_gin — Р-П-1
 ALTER TABLE relations DROP CONSTRAINT rel_uniq;
 ALTER TABLE relations ADD CONSTRAINT rel_uniq UNIQUE (source_id, target_id, role);
-DROP INDEX IF EXISTS relations_source_type; DROP INDEX IF EXISTS relations_target_type;   -- имена — 0001:114-116
+DROP INDEX IF EXISTS relations_source_type; DROP INDEX IF EXISTS relations_target_type;   -- имена сверить по 0001
 ALTER TABLE relations DROP COLUMN relation_type;
-DROP FUNCTION reform_role_heuristic(text, jsonb, jsonb);
+DROP FUNCTION reform_role_heuristic(text, jsonb, jsonb);   -- определена в 0016:46
 ALTER TABLE aspect_definitions DROP COLUMN schema;    -- JSON Schema — генерируемая производная (§А3-1)
 ```
 ```ts
-// scripts/ops.ts — новая операция (белый список; РП-7)
-'reset-world': { help: 'РАЗРУШАЮЩАЯ: снести граф и журнал владельцев, пользовательские строки реестров и дельты; пересеять три реестра. Требует --confirm <PROD_REF> и повторного ввода слова RESET' }
 // seed/world.ts
-export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: number; skipped: number }>;   // категории (12), смарт-листы (6), садовник (1) = 19; всё через execute({ mechanism: 'seed', source: 'system' }); идемпотентно по детерминированным id
-// perf/explain.test.ts — повторный прогон как ПРИЁМКА: вердикты обязаны совпасть с DROP-списком 0017 (пин)
+export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: number; skipped: number }>;   // категории (12), смарт-листы (6) через execute({ mechanism: 'seed', source: 'system' }); садовник (1) — как сегодня; итого 19; идемпотентно по детерминированным id
 ```
-- [ ] **Шаг 1: греп-гейт в режиме `--gate` на ветке** — список совпадений = план работ задачи;
-  все — устранить (кроме allowlist). **Шаг 2:** миграция 0017 (DROP-список — из вердикта 9a) +
-  удаление `legacy-form`/zod-схем/парсера правил; локальная база с нуля: `bunx supabase db reset &&
-  bun run db:prepare` (0014–0017 накатываются последовательно на пустую базу — это и есть проверка
-  комплекта); полный сьют зелёный. **Шаг 3:** `bun run test:perf:explain` — вердикты совпадают с
-  0017 (пин). **Шаг 4:** сиды через исполнителя + тела в key-форме + применение `prd-reform.diff`
-  тем же коммитом; `seed-canon`, `onboarding.test`, `e2e.slice1a` (онбординг 19 сущностей — число
-  из Задачи 17) зелёные; `reset-world` с тестом на локальной базе (после — `check` ok, граф пуст,
-  гранты целы). **Шаг 5:** `test:perf` (перезамер), `check-lazy-chunks`, `lint`, `typecheck`;
-  коммит `feat: «Пересев мира» — миграция 0017 (contract), старая форма снята, сиды через исполнителя, греп-гейт §А12-2 падающий в CI, EXPLAIN-приёмка, ops reset-world, тела сидов и PRD §С10 одним коммитом (§А12, приёмка §С8-10)`.
+- [ ] **Шаг 1:** починка маркера `bare-field` и `entity-meta`, затем `bun scripts/check-legacy-form.ts --gate`
+  — список совпадений вне allowlist = план работ (в отчёт, с числом). **Шаг 2:** пункты 1–9 в
+  порядке выше; после каждого — точечные сьюты. **Шаг 3:** починка `explain.test.ts`,
+  `test:perf:explain` → вердикт → 0017; починка `db:prepare`; `bunx supabase db reset && bun run
+  db:prepare` (0014–0017 на пустую базу — проверка комплекта); полный сьют зелёный. **Шаг 4:**
+  пин `explain.test.ts` против DROP-списка 0017; `--gate` = 0 в CI; приёмочный тест п.13;
+  `seed-canon`, `onboarding.test`, `e2e.slice1a` (19) зелёные. **Шаг 5:** `lint`, `typecheck`,
+  `check-lazy-chunks`; коммит `feat: снос старой формы — миграция 0017 (contract), legacy-form и
+  zod-схемы аспектов сняты, бюджет-хук и роли конверта на props/role, сиды через исполнитель,
+  греп-гейт §А12-2 падающий в CI, EXPLAIN-приёмка (§А12, приёмка §С8-10)`.
+
+### Задача 23c: операции и документы — `reset-world`, живой смоук, байтовый пин тел, перезамер перф, PRD одним коммитом
+
+**Файлы:**
+- Изменить: `scripts/ops.ts` — операция `'reset-world'` (белый список; РП-7). **Прецедента
+  подтверждения в файле нет** — `--confirm <PROD_REF>` + повторный ввод слова `RESET` со stdin
+  пишутся с нуля. Состав: `TRUNCATE entities, relations, chat_threads, chat_messages, entity_origins,
+  entity_versions RESTART IDENTITY` (FK-граф из семи связей замкнут внутри шестёрки; CASCADE не
+  нужен); `DELETE FROM {property,aspect,relation_role,contract,subscription,action}_definitions WHERE
+  owner_id IS NOT NULL`; `TRUNCATE registry_deltas` — ДО пересева (иначе `mergeRegistryDeltas`,
+  `db/seed-registries.ts:161`, попытается слить удаляемые дельты и положить заметку в тред, которого
+  уже нет); `UPDATE user_settings SET registry_version = 0` (версия ВЛАДЕЛЬЦА — пользовательских
+  определений больше нет; кеш ключуется `(owner, ownerVersion, systemVersion)`, `registry/cache.ts:114`);
+  пересев трёх реестров — `seedRegistries` сам бампает `registry_system.version` (`:152-159`;
+  руками не трогать — §С7 п.18). Сохраняются целиком: `user_settings` (кроме версии),
+  `agent_grants`, `oauth_clients`, `ai_usage`, `registry_system`. Тест на локальной базе: после —
+  `check` ok, граф пуст, гранты и настройки целы, версия владельца 0, системная +1.
+- `scripts/llm-smoke.ts` — чинится с базой: `withIdentity(db, ownerId, tx => effectiveRegistry(tx,
+  ownerId))` → `buildToolDefs(reg)` (`tools/registry.ts:1263`); импорт `aspectJsonSchema` из
+  `@orbis/shared` не существует; шапка «запускается без `DATABASE_URL`» переписывается честно.
+  Проверка компилируемости всех точек входа: `bun build --target=bun --outfile=/dev/null`.
+- `apps/server/src/seed/onboarding.test.ts:271-316` — снять маску `{{query:#N}}`, вернуть байтовое
+  сравнение тел с PRD 02 §3.3 (данные уже совпадают).
+- `apps/server/perf/perf.test.ts` — перезамер бюджетов на ПРОГРЕТОМ корпусе (П6: холодный 134 мс
+  против порога 100, прогретый 82); отклонение > 20 % — запись в `progress.md` и решение владельцу.
+- `docs/prd/**`, `docs/implementation/00-architecture.md`, `docs/implementation/02-ops-runbook.md`
+  — `git cherry-pick -n a9a2c4c..prd-reform-draft` (ветка-черновик Задачи 22; `merge-tree` чист);
+  `docs/prd/04-decision-log.md` — статус D43 одной строкой; если EXPLAIN-вердикт 23b снял какой-то
+  GIN — таблица PRD 01 §4.9 правится ТЕМ ЖЕ коммитом; если состав тулов изменился — §9.2 тоже.
+- [ ] **Шаг 1:** тесты `reset-world` (локальная база), `llm-smoke` компилируется и ходит в echo-провайдер,
+  байтовый пин тел красный на маске → зелёный. **Шаг 2:** реализация. **Шаг 3:** `test:perf`
+  (перезамер), полный сьют, `lint`, `typecheck`; **Шаг 4:** документы cherry-pick'ом + статус D43;
+  коммит `feat: «Пересев мира» — ops reset-world (--confirm + RESET), живой смоук на реестре,
+  байтовый пин тел сидов, перезамер перф, PRD §С10 и runbook одним коммитом (§А12-7, приёмка §С8-10)`.
+- [ ] **Шаг 5 (веха I):** `bunx supabase db reset && bun run db:prepare` (0014–0017 с нуля), полный
+  сьют, `test:perf`, `check-legacy-form --gate` = 0, `test:perf:explain` = 0017, `check-lazy-chunks`.
 - [ ] **Шаг 6 — прод (по чек-листу runbook §1; выполняет оркестратор с владельцем):**
   (0) **сначала выключить автодеплой** (Р-23-0: РП-1 Задачей 0 НЕ исполнялся — при АФК-прогоне в
   `main` ничего не мержилось, `render.yaml` не менялся; Render MCP 2026-09-02 показал `autoDeploy:
@@ -2174,8 +2271,6 @@ export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: numb
   `registryDrift`; (8) `render.yaml`: `autoDeploy` обратно — docs-коммит в `main` (Blueprint-sync;
   проверка `get_service`); (9) заход владельца — онбординг сеет граф через исполнителя; (10)
   прод-смоук Задачи 24.
-
----
 
 ### Задача 24: Приёмка среза А живьём (§С8 пп. 1–13, включая 11), финальное ревью ветки, итог
 
