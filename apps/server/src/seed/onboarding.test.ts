@@ -985,6 +985,34 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
      * какой правке литерала. Признак теперь спрашивает документ, и образец «до» честно
      * получается из «после» снятием ровно того блока, который бэкфилл и дописывает.
      */
+    /**
+     * ТЕЛО «РУТИН», КАКОЕ ЛЕЖИТ У ВЛАДЕЛЬЦА В ПРОДЕ СЕЙЧАС — дословно из `696dda3`
+     * (`git show 696dda3:apps/server/src/seed/smart-lists.ts`), старой грамматикой §6.1.
+     *
+     * Это ЕДИНСТВЕННОЕ состояние, ради которого бэкфилл D42 существует, и именно его
+     * первая редакция этой задачи не покрыла: тест ставил `body_doc = NULL`, но подсовывал
+     * тело НОВОЙ key-формы — то есть владельца, которого не бывает. Строгий разбор старую
+     * форму отвергает, дерева у блоков нет, и признак «пачка уже показана», спрашивающий
+     * ТОЛЬКО дерево, отвечал «нет» — бэкфилл дописывал ВТОРОЙ блок пачки рядом с живым.
+     *
+     * Литерал заморожен как ВХОД, а не как образец сверки: подогнать его под сегодняшний
+     * сид нельзя (у владельца в базе лежит именно эта строка), но и выключить он ничего не
+     * может — сравнения с ним в коде нет.
+     */
+    const PROD_ROUTINES_BODY_D42 = `Рутины — то, что Orbis делает сам по расписанию, и то, что ждёт вашего ответа.
+
+{{query: aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа}}
+
+{{query: aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины}}
+
+{{query: aspect=orbis/agent-run, undecided=true, sortBy=started_at:asc, display=list, title=Пачка решений}}`;
+
+    /** То же тело ДО D42 — двухблочное: у владельца V1 третьего блока нет вовсе. */
+    const PROD_ROUTINES_BODY_BEFORE_D42 = PROD_ROUTINES_BODY_D42.slice(
+      0,
+      PROD_ROUTINES_BODY_D42.indexOf('\n\n{{query: aspect=orbis/agent-run, undecided=true'),
+    );
+
     const BATCH_BLOCK = `\n\n{{query:${ROUTINES_BATCH_QUERY}}}`;
     const ROUTINES_BODY_WITHOUT_BATCH = (() => {
       const at = ROUTINES_LIST_BODY.indexOf(BATCH_BLOCK);
@@ -1118,6 +1146,71 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       expect(queryBlocksOf(after.body).length).toBe(3);
       expect(after.body).not.toContain('Пачка решений');
       expect(after.updatedAt.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+    });
+
+    test('ПРОД-ТЕЛО старой грамматики: блок пачки виден и БЕЗ дерева — второго не дописывается', async () => {
+      // Признак обязан пережить ровно ту смену формы, ради которой он и заведён. У
+      // прод-тела дерева нет ни у одного блока: строгий разбор старую грамматику отвергает
+      // (проба на HEAD: `query_refs` = []). Спрашивать только дерево значило бы ответить
+      // «пачки нет» там, где она есть третьим блоком, и дописать её второй раз.
+      const user = freshUserId();
+      const caller = callerFor(user);
+      await caller.user.seedOnboarding();
+      await setRoutinesBody(user, PROD_ROUTINES_BODY_D42);
+
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const after = await routinesBody(user);
+      expect(after.body).toBe(PROD_ROUTINES_BODY_D42);
+      expect(queryBlocksOf(after.body).length).toBe(3);
+      // Строку никто не тронул — ни телом, ни отметкой правки.
+      expect(after.updatedAt.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+      // Контроль осмысленности: блоки этого тела и правда НЕ разбираются — иначе тест
+      // проверял бы ветку дерева, а не текстовую.
+      expect(after.bodyDoc).toBeNull();
+      expect(after.queryRefs).toEqual([]);
+    });
+
+    test('ПРОД-ТЕЛО до D42 (два блока старой грамматики): блок пачки ДОПИСАН один раз', async () => {
+      // Обратная сторона: у владельца V1 пачки нет, и текстовый признак обязан это увидеть
+      // — иначе фикс первого теста превратился бы в «никогда не досеваем».
+      const user = freshUserId();
+      const caller = callerFor(user);
+      await caller.user.seedOnboarding();
+      await setRoutinesBody(user, PROD_ROUTINES_BODY_BEFORE_D42);
+
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const after = await routinesBody(user);
+      expect(queryBlocksOf(after.body).length).toBe(3);
+      expect(after.body).toContain(`{{query:${ROUTINES_BATCH_QUERY}}}`);
+      // Старые блоки владельца целы — их формат не наше дело, наше дело не потерять текст.
+      expect(after.body).toContain('{{query: aspect=orbis/routine, stage=active,');
+
+      // И ПОВТОР — no-op: тело теперь смешанное (два неразобранных блока и один
+      // разобранный), и признак обязан работать на такой смеси.
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const repeated = await routinesBody(user);
+      expect(queryBlocksOf(repeated.body).length).toBe(3);
+      expect(repeated.updatedAt.toISOString()).toBe(after.updatedAt.toISOString());
+    });
+
+    test('имя пачки в ЗАКАВЫЧЕННОМ значении неразобранного блока — не адрес: блок дописан', async () => {
+      // Текстовый путь признака читает ИМЯ ПОЛЯ, а не подстроку: подпись, которую владелец
+      // написал сам, адресом не является. Без снятия кавычек признак ответил бы «пачка уже
+      // есть» на блоке, где её нет, и владелец не получил бы её никогда.
+      const user = freshUserId();
+      const caller = callerFor(user);
+      await caller.user.seedOnboarding();
+      await setRoutinesBody(
+        user,
+        `${PROD_ROUTINES_BODY_BEFORE_D42}\n\n{{query: aspect=orbis/routine, stage=active, title="про undecided=да"}}`,
+      );
+
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const after = await routinesBody(user);
+      expect(queryBlocksOf(after.body).length).toBe(4);
+      expect(after.body).toContain(`{{query:${ROUTINES_BATCH_QUERY}}}`);
+      // Подпись владельца цела — её никто не трогал.
+      expect(after.body).toContain('title="про undecided=да"');
     });
 
     test('владелец, засиденный ДО «Рутин» вовсе: досев вставляет список сразу с тремя блоками', async () => {

@@ -48,6 +48,7 @@ import {
 } from '@orbis/shared/doc';
 import {
   assertStaticQuery,
+  maskQuotedValues,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   type QueryFilterNode,
@@ -789,6 +790,31 @@ function propertyNamesInAst(value: unknown, out: Set<string>): void {
  */
 const KEY_TOKEN_RE = /[a-z][a-z0-9-]*\/[a-z][a-z0-9_-]*/g;
 
+/**
+ * Перенос имени свойства в ТЕКСТЕ неразобранного блока — ВНЕ КАВЫЧЕК.
+ *
+ * Тот же принцип, что у перечня держателей: имя внутри ЗНАЧЕНИЯ — не адрес, а слово, которое
+ * написал владелец (`title="про user/effort"`). У разобранного блока это решает дерево; у
+ * неразобранного дерева нет, и единственное доступное различение — кавычки. Поиск идёт по
+ * МАСКЕ (`maskQuotedValues` сохраняет длину), правка — по тем же индексам в оригинале.
+ *
+ * Предел назван: значение, которому кавычки не понадобились, от имени поля неотличимо. Цена
+ * ошибки здесь мала — блок и так не разбирается, — а альтернатива (не переписывать текст
+ * вовсе) оставляла бы висячее имя поглощённого свойства.
+ */
+function rewriteQueryTextKeys(text: string, from: ReadonlySet<string>, to: string): string {
+  const masked = maskQuotedValues(text);
+  let out = '';
+  let cut = 0;
+  for (const m of masked.matchAll(KEY_TOKEN_RE)) {
+    const at = m.index as number;
+    if (!from.has(m[0])) continue;
+    out += text.slice(cut, at) + to;
+    cut = at + m[0].length;
+  }
+  return out + text.slice(cut);
+}
+
 /** Имена свойств, названные ДЕЛЬТОЙ аспекта: пять полей, перечисленных у `PropertyHolder`. */
 function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
   if (typeof delta !== 'object' || delta === null) return;
@@ -1358,6 +1384,13 @@ export async function mergeProperty(
     // которые документ и держит, не может оставить «ещё не сконвертировано» — иначе
     // следующее чтение собрало бы документ из УЖЕ переписанного текста, а первое
     // сохранение вернуло бы его в базу как правду, минуя проверку слияния.
+    //
+    // ЖИВЫМИ ПИСАТЕЛЯМИ ЭТО СОСТОЯНИЕ НЕДОСТИЖИМО: держатель ищется по `query_refs`, а её
+    // заполняют только те, кто тем же UPDATE пишет и `body_doc`. Ветка оставлена как
+    // страховка и ПОКРЫТА тестом с искусственным состоянием (`ops.test.ts`, «строка с
+    // индексом, но БЕЗ документа») — иначе цена выше проверялась бы чтением кода. Писатель,
+    // заполняющий индекс без документа, появится в тот день, когда `db/backfill-body-doc.ts`
+    // получит реестр.
     const nextDoc = bindQueryBlocks(
       rewriteBodyDoc(
         readBodyDoc(row.body_doc ?? null, body, parseReg),
@@ -1465,7 +1498,7 @@ function rewriteBodyDoc(
           ...attrs,
           ast: attrs.ast == null ? attrs.ast : rewriteAst(attrs.ast, from, astTo),
           ...(typeof attrs.text === 'string' && {
-            text: attrs.text.replace(KEY_TOKEN_RE, (t) => (from.has(t) ? textTo : t)),
+            text: rewriteQueryTextKeys(attrs.text, from, textTo),
           }),
         },
       };

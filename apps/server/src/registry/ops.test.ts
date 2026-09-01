@@ -758,7 +758,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
                 body:
                   `Заметка [[entity:${mentioned}]]\n\n` +
                   '{{query:aspect=orbis/task, user/weight=5}}\n\n' +
-                  '{{query:user/weight=5, display=мозаика}}',
+                  '{{query:user/weight=5, title="про user/weight", display=мозаика}}',
               },
             },
           ],
@@ -786,11 +786,16 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     // `text` блока — печать ЭТОГО дерева: цель у дерева id, у печати key (§А5-3а).
     expect(block.text).toBe(`aspect=orbis/task, ${intoKey}=5`);
     // Неразобранный блок: дерева нет, имя переписано ПО ТЕКСТУ — иначе после «успешного»
-    // слияния в теле осталось бы висячее имя поглощённого свойства.
+    // слияния в теле осталось бы висячее имя поглощённого свойства. Но переписано ТОЛЬКО
+    // имя поля: то же имя в ЗАКАВЫЧЕННОМ значении — подпись, которую написал владелец, и
+    // слияние её не трогает (тот же принцип, что у держателей: имя внутри значения — не
+    // адрес; здесь он держится маской кавычек, потому что дерева нет).
     expect(unparsed.ast).toBeNull();
-    expect(unparsed.text).toBe(`${intoKey}=5, display=мозаика`);
+    expect(unparsed.text).toBe(`${intoKey}=5, title="про user/weight", display=мозаика`);
     expect(String(after.body)).toContain(`{{query:aspect=orbis/task, ${intoKey}=5}}`);
-    expect(String(after.body)).toContain(`{{query:${intoKey}=5, display=мозаика}}`);
+    expect(String(after.body)).toContain(
+      `{{query:${intoKey}=5, title="про user/weight", display=мозаика}}`,
+    );
     expect(after.query_refs).toContain(intoId);
     expect(after.query_refs).not.toContain(sourceId);
     // Упоминание тем же UPDATE не потеряно.
@@ -883,6 +888,66 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     const bystanderAfter = await ownEntityRefs(bystander);
     expect(bystanderAfter.body).toBe(bystanderBefore.body);
     expect((await ownEntityRefs(holder)).query_refs).toContain(intoId);
+  });
+
+  test('строка с индексом, но БЕЗ документа: слияние собирает документ из body и не теряет тело', async () => {
+    // СТРАХОВКА, А НЕ МЁРТВАЯ ВЕТКА, и решение записано здесь потому, что живыми писателями
+    // это состояние (`query_refs` непусты при `body_doc IS NULL`) недостижимо: колонку
+    // заполняют только те, кто тем же UPDATE пишет и документ. Оставлено оно по двум
+    // причинам. Первая: `readBodyDoc` — общий вход чтения тела, и ветка «документа нет,
+    // собери из markdown» — его штатное правило разрешения Р1, а не наша добавка; убрать её
+    // можно было бы, только заменив общий вход на своё чтение. Вторая: писатель, который
+    // заполнит индекс без документа, появится — `db/backfill-body-doc.ts` станет таким в тот
+    // день, когда получит реестр, — и слияние обязано пережить его без потери тела.
+    //
+    // Состояние подсаживается АДМИН-DSN намеренно: воспроизвести его штатным путём нельзя,
+    // а «названная цена» без проверки — это чтение кода вместо теста.
+    const source = ok(
+      await runMerge('property_create', {
+        key: 'user/no-doc-src',
+        label: { ru: 'Без документа' },
+        description: { ru: 'Поглощаемое' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const into = ok(
+      await runMerge('property_create', {
+        key: 'user/no-doc-dst',
+        label: { ru: 'Цель' },
+        description: { ru: 'Цель слияния' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const sourceId = (source.results[0] as { property: string }).property;
+    const intoId = (into.results[0] as { property: string }).property;
+    const intoKey = (into.results[0] as { key: string }).key;
+
+    const noDoc = newId();
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(sql`
+        INSERT INTO entities (id, owner_id, title, body, query_refs)
+        VALUES (${noDoc}::uuid, ${mergeOwner}::uuid, 'Индекс без документа',
+                ${`Проза\n\n{{query:aspect=orbis/task, user/no-doc-src=5}}`},
+                ARRAY[${sourceId}]::text[])`);
+    } finally {
+      await adminClient.end();
+    }
+    // Предусловие: документа НЕТ, а индекс есть — то самое искусственное состояние.
+    expect((await ownEntityRefs(noDoc)).body_doc).toBeNull();
+
+    ok(await runMerge('property_merge', { source: sourceId, into: intoId }));
+
+    const after = await ownEntityRefs(noDoc);
+    // Тело переписано и НЕ потеряно: проза цела, блок адресует цель.
+    expect(after.body).toBe(`Проза\n\n{{query:aspect=orbis/task, ${intoKey}=5}}`);
+    // Документ МАТЕРИАЛИЗОВАН — та самая названная цена: операция, переписывающая имена,
+    // которые документ и держит, не может оставить «ещё не сконвертировано».
+    expect(after.body_doc).not.toBeNull();
+    expect(after.query_refs).toContain(intoId);
+    expect(after.query_refs).not.toContain(sourceId);
   });
 
   test('типы не совпадают — VALIDATION MERGE_TYPE, ничего не тронуто', async () => {
