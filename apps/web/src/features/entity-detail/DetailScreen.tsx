@@ -1,4 +1,11 @@
 import { buildAppPath } from '@orbis/shared';
+// Сабпат `/diff` ЛИСТОВОЙ, и страж чанка detail пропускает его намеренно — якорь `$` в предикате
+// веса (save.test.tsx). Новым весом в чанк записи он не приезжает: этот же модуль уже тянет туда
+// слой предложения (`ProposalOverlay.tsx:39`), который эагерно достижим отсюда. Замерено на двух
+// сборках, до и после: чанк листовых модулей пакета вырос с 2.05 до 2.21 кБ gzip (рост дал
+// сложенный в него `doc/types` — его зовёт useBodySave), а схема документа осталась своим
+// отдельным чанком на 153 кБ gzip.
+import { flattenBlocks } from '@orbis/shared/doc/diff';
 import { Archive, ArchiveRestore, Code, EllipsisVertical, History, Link2, Pin } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -559,6 +566,29 @@ function EntityBody({
   onRefresh: () => void;
 }) {
   const save = useBodySave(entity.id, entity);
+  const utils = trpc.useUtils();
+  /**
+   * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.
+   *
+   * Тост живёт четыре секунды и уезжает, а решение о судьбе текста в этот момент ещё не принято:
+   * человек смотрит на баннер и вправе увидеть там, что попытка не удалась и черновик цел.
+   */
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const createNote = trpc.entity.create.useMutation({
+    onSuccess: () => {
+      // Заметка обязана появиться в списках без ручного обновления (тот же приём, что у
+      // QuickCapture), а черновик — сойти с диска. Оба действия НА УРОВНЕ МУТАЦИИ, а не в
+      // поштучных колбэках: уйди человек с записи, пока запрос в полёте, поштучные не позвались
+      // бы вовсе — заметка бы создалась, а черновик остался, и следующее открытие предложило бы
+      // сохранить его вторым разом.
+      invalidateGraph(utils);
+      // Черновик снимается ТОЛЬКО ПО УСПЕХУ: сними его раньше ответа — отказ мутации оставил бы
+      // человека без текста вообще, то есть нарушил бы единственное жёсткое требование §А11-2.
+      // Стирается при этом ровно ПОКАЗАННЫЙ черновик (сверка по savedAt/baseUpdatedAt внутри).
+      save.discardPendingDraft();
+    },
+    onError: (e) => setNoteError(e.message),
+  });
   /**
    * Документ, который редактор обязан показать ПРЯМО СЕЙЧАС, хотя в кэше его ещё нет.
    *
@@ -721,7 +751,31 @@ function EntityBody({
           </Button>
         </div>
       )}
-      {draft !== null && (
+      {/* Развилка баннера — по `foreignSchema`, а не по вкусу: черновик чужой версии схемы
+          предлагает ДРУГОЕ (§А11-2), потому что пути на сервер у него нет вовсе. */}
+      {draft?.foreignSchema === true && (
+        <ForeignDraftBanner
+          busy={createNote.isPending}
+          error={noteError}
+          onKeepAsNote={() => {
+            setNoteError(null);
+            createNote.mutate({
+              // Плоским ТЕКСТОМ, а не документом: `bodyDoc` чужой версии отвергает тот же
+              // серверный гейт, из-за которого черновик сюда и попал (executor, §5.2), — то есть
+              // заметка не сохранилась бы вовсе. `body` и `bodyDoc` в контракте взаимно
+              // исключены, так что выбор здесь ровно один.
+              input: {
+                title: `Черновик тела: ${entity.title}`,
+                body: draftAsText(draft.doc),
+                tags: [],
+              },
+              source: 'ui',
+            });
+          }}
+          onOpenServer={save.dismissPendingDraft}
+        />
+      )}
+      {draft !== null && !draft.foreignSchema && (
         <DraftBanner
           draft={draft}
           onKeep={() => {
@@ -836,6 +890,77 @@ function DraftBanner({
       </div>
     </div>
   );
+}
+
+/**
+ * Черновик, набранный ЧУЖОЙ версией схемы документа (§А11-2).
+ *
+ * Отдельный компонент, а не третья ветка внутри `DraftBanner`, потому что предлагает он ДРУГОЕ:
+ * у обычного черновика есть путь на сервер («оставить моё»), а у этого его нет вовсе —
+ * серверный гейт версии отвергает такой документ терминально. Обе кнопки соседа здесь врали бы.
+ *
+ * `data-testid` тот же, что у соседа, и это не небрежность: для человека это одна и та же
+ * плашка неотправленного черновика в одном и том же месте полосы, и рисуются они взаимно
+ * исключающими ветками — двух сразу на экране не бывает.
+ */
+function ForeignDraftBanner({
+  busy,
+  error,
+  onKeepAsNote,
+  onOpenServer,
+}: {
+  busy: boolean;
+  error: string | null;
+  onKeepAsNote: () => void;
+  onOpenServer: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      data-testid="draft-banner"
+      className="flex flex-col gap-2 rounded-control border border-alert/40 bg-alert/10 px-3 py-2"
+    >
+      <p className="text-sm text-text">
+        Есть неотправленная правка тела, набранная другой версией приложения — отправить её как есть
+        нельзя.
+      </p>
+      <p className="text-sm text-text-secondary">
+        «Сохранить в заметку» создаст отдельную запись с этим текстом (без оформления) и уберёт
+        черновик. «Открыть серверное тело» ничего не отправит и черновик не удалит — его предложат
+        снова.
+      </p>
+      {error !== null && (
+        <p className="text-sm text-danger">Не удалось сохранить заметку: {error}</p>
+      )}
+      <div className="flex gap-2">
+        <Button size="sm" disabled={busy} onClick={onKeepAsNote}>
+          Сохранить в заметку
+        </Button>
+        <Button variant="outline" size="sm" disabled={busy} onClick={onOpenServer}>
+          Открыть серверное тело
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Плоская выжимка черновика: по абзацу на блок документа.
+ *
+ * Развёртка берётся из `@orbis/shared/doc/diff`, а не пишется здесь заново: она уже разбирает
+ * дерево на блоки, поднимает дословную разметку raw-блоков и запрос смарт-листа и разводит
+ * соседние блоки — без разделителя «Привет» и «Мир» склеились бы в «ПриветМир». Незнакомая нода
+ * ей не помеха: список прозрачных контейнеров закрытым не сделан, и нода-новичок приезжает
+ * единицей сама собой — то есть её текст сохраняется, а он тут единственная ценность.
+ *
+ * Сериализатора схемы (`serializeBody`) здесь нет и быть не может: он запрещён стражем чанка и
+ * всё равно потерял бы незнакомые ноды — ровно то содержимое, ради которого заметка и делается.
+ */
+function draftAsText(doc: BodyDoc): string {
+  return flattenBlocks(doc.doc)
+    .map((block) => block.text)
+    .filter((text) => text !== '')
+    .join('\n\n');
 }
 
 /**

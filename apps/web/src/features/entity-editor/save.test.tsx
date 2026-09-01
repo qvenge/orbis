@@ -1526,6 +1526,19 @@ test('модули первого кадра не тянут схему реда
   // `^@orbis\/shared\/doc` прошла бы незамеченной и покрасила бы слой предложения.
   expect(EDITOR_WEIGHT.test('@orbis/shared/doc/diff')).toBe(false);
   expect(EDITOR_WEIGHT.test('@orbis/shared/doc')).toBe(true);
+  // Второй листовой сабпат — `/types` (Задача 20): в нём живут `DOC_SCHEMA_VERSION`,
+  // `KNOWN_NODE_TYPES` и обход состава нод, и хук сохранения зовёт их ЗНАЧЕНИЯМИ.
+  expect(EDITOR_WEIGHT.test('@orbis/shared/doc/types')).toBe(false);
+});
+
+test('хук сохранения берёт версию схемы из ЛИСТОВОГО сабпата, а не из барреля', () => {
+  // Страж вакуумности к списку выше: пустой список тяжёлых импортов у `useBodySave.ts` был бы
+  // зелен и в мире, где контракт офлайн-черновиков просто не написан. Здесь проверяется, что
+  // рантайм-импорт ЕСТЬ и что он ведёт в листовой модуль: перепиши кто-нибудь его на голый
+  // `@orbis/shared/doc` — тест выше покраснеет, а этот скажет, чего именно не хватает.
+  const imports = runtimeImports('./useBodySave.ts');
+  expect(imports).toContain('@orbis/shared/doc/types');
+  expect(imports).not.toContain('@orbis/shared/doc');
 });
 
 test('страж видит тяжёлый импорт, даже когда на строке есть хвостовой комментарий', () => {

@@ -8,7 +8,8 @@
     "./query": "./src/query/index.ts",
     "./query/fixtures": "./src/query/ast-fixtures.ts",
     "./doc": "./src/doc/index.ts",
-    "./doc/diff": "./src/doc/diff.ts"
+    "./doc/diff": "./src/doc/diff.ts",
+    "./doc/types": "./src/doc/types.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

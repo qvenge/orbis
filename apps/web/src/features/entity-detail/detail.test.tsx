@@ -2687,6 +2687,83 @@ test('«отбросить» стирает черновик и НЕ трога�
   expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
 });
 
+// --- баннер черновика ЧУЖОЙ версии схемы (§А11-2) --------------------------------------------
+//
+// Версию подделывает сам черновик (`v: 999` — набран приложением новее этого, откат релиза):
+// отправить его нельзя вовсе, серверный гейт версии отвергает такой документ терминально.
+// Значит и две прежние кнопки здесь врали бы: «оставить моё» не оставило бы ничего.
+
+/** Черновик, набранный ЧУЖОЙ версией схемы: тот же текст, версия из будущего. */
+const foreignDraft = (text: string): BodyDoc => ({ v: 999, doc: parseBody(text).doc });
+
+test('черновик чужой версии предлагают ДРУГИМИ кнопками — отправить его нельзя', async () => {
+  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+
+  const banner = await screen.findByTestId('draft-banner');
+  expect(banner).toHaveTextContent(/другой версией приложения/i);
+  expect(within(banner).getByRole('button', { name: 'Сохранить в заметку' })).toBeInTheDocument();
+  expect(
+    within(banner).getByRole('button', { name: 'Открыть серверное тело' }),
+  ).toBeInTheDocument();
+  // Кнопок, которые обещали бы отправку, здесь нет: сервер отверг бы документ терминально.
+  expect(within(banner).queryByRole('button', { name: 'Оставить моё' })).toBeNull();
+  expect(within(banner).queryByRole('button', { name: 'Отбросить' })).toBeNull();
+});
+
+test('«сохранить в заметку» уносит текст плоским body и снимает черновик с диска', async () => {
+  seedDraft(foreignDraft('## Итоги\n\nчерновик из будущего'), 'СТАРАЯ-МЕТКА');
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Сохранить в заметку' }));
+
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+  const sent = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { title: string; body?: string; bodyDoc?: unknown };
+    source: string;
+  };
+  // Текст — ПЛОСКИЙ (`body`), а не документ: `bodyDoc` чужой версии сервер отвергает тем же
+  // гейтом, из-за которого черновик сюда и попал, то есть заметка не сохранилась бы вовсе.
+  expect(sent.input.body).toBe('Итоги\n\nчерновик из будущего');
+  expect(sent.input.bodyDoc).toBeUndefined();
+  expect(sent.source).toBe('ui');
+  // Черновик снят с диска — но только теперь, после успеха мутации.
+  await waitFor(() => expect(localStorage.getItem(DRAFT_KEY)).toBeNull());
+  expect(screen.queryByTestId('draft-banner')).toBeNull();
+});
+
+test('заметка не сохранилась — черновик остаётся на диске, и человек видит отказ', async () => {
+  // Единственное жёсткое требование спеки: текст не теряется ни в одной ветке. Сними черновик
+  // до ответа сервера — и отказ мутации оставил бы человека без текста вообще.
+  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.create') throw trpcError('INTERNAL_SERVER_ERROR', 'сервер не смог');
+    return bodyHandler('тело')(path, undefined);
+  });
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Сохранить в заметку' }));
+
+  const banner = await screen.findByTestId('draft-banner');
+  await waitFor(() => expect(banner).toHaveTextContent(/не удалось сохранить заметку/i));
+  expect(localStorage.getItem(DRAFT_KEY)).not.toBeNull();
+  expect(within(banner).getByRole('button', { name: 'Сохранить в заметку' })).toBeInTheDocument();
+});
+
+test('«открыть серверное тело» убирает баннер, но черновик с диска НЕ стирает', async () => {
+  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Открыть серверное тело' }));
+
+  expect(screen.queryByTestId('draft-banner')).toBeNull();
+  // Решение отложено, а не принято: черновик ждёт на диске и будет предложен снова.
+  expect(localStorage.getItem(DRAFT_KEY)).not.toBeNull();
+  await openEditor();
+  await expectEditorText('тело');
+  expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
+  expect(calls.some((c) => c.path === 'entity.create')).toBe(false);
+});
+
 // --- смена записи: размонтирование по key + досыл (И2) --------------------------------------
 
 /** Роутер монтирует DetailScreen БЕЗ key: переход entity→entity меняет только проп. */
