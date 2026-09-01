@@ -83,8 +83,8 @@ export function resolveLegacyFieldId(
   reg: ParseRegistry,
   aspectsInQuery: ReadonlySet<string> = new Set(),
 ): string | undefined {
-  // Имя может быть уже каноническим — id или key свойства: так его пишут переведённые
-  // потребители, и заставлять их говорить по-старому ради моста было бы шагом назад.
+  // Имя может быть уже каноническим — id или key свойства: так его пишут все переведённые
+  // потребители, и отвергать канон в пользу старого имени было бы шагом назад.
   if (reg.properties.has(field)) return field;
   for (const prop of reg.properties.values()) {
     if (prop.key === field) return prop.id;

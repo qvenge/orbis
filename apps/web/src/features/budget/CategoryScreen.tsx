@@ -92,8 +92,9 @@ function txTitle(start: string | null, end: string | null): string {
  * Транзакции конверта: дети конверта с финансовым аспектом, свежие первыми, окно `limit`.
  *
  * Именованной функцией, а не литералом внутри компонента: текст боевой, и его разбор каноном
- * (§А5-3) пиннится отдельным тестом — иначе непереведённое имя свойства уехало бы в мост
- * старой формы молча, и «экран открылся» доказывало бы ровно ничего.
+ * (§А5-3) пиннится отдельным тестом (`production-queries.test.ts` берёт его отсюда). Без пина
+ * «экран открылся» доказывало бы ровно ничего: неверное имя свойства видно только в ответе
+ * сервера, а его в юнит-тесте экрана отдаёт мок.
  */
 export function envelopeTransactionsQuery(envelopeId: string, limit: number): string {
   return `children_of=${envelopeId}, aspect=orbis/financial, sortBy=orbis/occurred_on:desc, limit=${limit}`;

@@ -46,7 +46,8 @@ import {
   type PropertyType,
 } from '@orbis/shared';
 // Канон Q-AST — отдельным входом: в корневом барреле имена `QueryAst`/`QuerySortField`
-// заняты СТАРОЙ грамматикой до Задачи 21 (см. докблок `packages/shared/src/index.ts`).
+// были заняты СТАРОЙ грамматикой до Задачи 21b; с её сносом канон въехал и в корневой
+// баррель `@orbis/shared` (см. его докблок), и оба входа отдают одни и те же имена.
 import {
   QUERY_DEPTH_CAP,
   type QueryAst,

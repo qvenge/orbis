@@ -216,7 +216,8 @@ test('чекбокс task → entity.update status=done + completed_at', async (
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.update');
     // Адрес значения — id СВОЙСТВА (§А1-1), а не пара «аспект + поле»: ровно этот адрес
-    // сервер и принимает, и старая пара уехала бы в переходный мост вместо прямого пути.
+    // сервер и принимает; пока мост старой формы был жив (снят Задачей 21b), старая пара
+    // уехала бы в него вместо прямого пути.
     const input = c?.input as {
       id: string;
       props: Record<string, unknown>;

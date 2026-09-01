@@ -16,7 +16,7 @@ import {
   PRODUCTION_QUERY_TEXTS,
 } from './ast-fixtures';
 import { buildCatalogFromRegistry } from './catalog';
-import { parseQueryAst, QUERY_PARSE_CODES } from './parse-ast';
+import { maskQuotedValues, parseQueryAst, QUERY_PARSE_CODES } from './parse-ast';
 import { printQueryAst } from './print';
 
 const REG = FIXTURE_PARSE_REGISTRY;
@@ -435,4 +435,51 @@ test('excludeBlocked резолвит роль и свойство по реес
   const noStatus = parseQueryAst('excludeBlocked=true', { ...REG, properties });
   expect(noStatus.ok).toBe(false);
   if (!noStatus.ok) expect(noStatus.error.code).toBe('UNKNOWN_FIELD');
+});
+
+// ─────────────────── maskQuotedValues: примитив для НЕразобранного текста ───────────────────
+
+/**
+ * Прямой тест примитива в СВОЁМ пакете. До него `maskQuotedValues` был покрыт только через
+ * двух серверных потребителей (признак бэкфилла D42 и перенос имени при слиянии) — то есть
+ * сторожа экспорта пакета жили в чужом воркспейсе и уехали бы вместе с потребителем.
+ *
+ * Контракт целиком: длина сохраняется, содержимое кавычек глушится, всё остальное — включая
+ * сами кавычки, `=` и разделители — видно как было.
+ */
+test('maskQuotedValues: длина сохраняется, содержимое кавычек глушится, разделители видны', () => {
+  const M = '\u0001';
+  // 1. Длина — построчно на каждом входе: по маске ИЩУТ, а правят оригинал по тем же
+  //    индексам, и сдвиг на один символ испортил бы чужой текст молча.
+  for (const t of [
+    'aspect=orbis/task, title="Ждут ответа"',
+    'title="a\\"b", tags=x',
+    'search="незакрытая',
+    '',
+    'без кавычек вовсе',
+  ]) {
+    expect([t, maskQuotedValues(t).length]).toEqual([t, t.length]);
+  }
+
+  // 2. Глушится СОДЕРЖИМОЕ, а сами кавычки остаются видимыми — по ним читатель понимает,
+  //    что тут было значение.
+  expect(maskQuotedValues('title="Ждут ответа", tags=x')).toBe(
+    `title=${M.repeat('"Ждут ответа"'.length)}, tags=x`,
+  );
+
+  // 3. Разделители и оператор ВНЕ кавычек не тронуты — на них стоит весь поиск имён поля.
+  expect(maskQuotedValues('a=1, b=2|3 c>4')).toBe('a=1, b=2|3 c>4');
+
+  // 4. `=` ВНУТРИ кавычек заглушен — ровно то, ради чего примитив и заведён: имя в подписи
+  //    не должно выглядеть адресом (`title="про undecided=да"`).
+  expect(maskQuotedValues('title="про undecided=да"')).not.toContain('=да');
+  expect(maskQuotedValues('title="про undecided=да"').startsWith('title=')).toBe(true);
+
+  // 5. Экранированная кавычка кавычку НЕ закрывает: иначе хвост значения снова стал бы
+  //    «видимым», и имя внутри него — адресом.
+  expect(maskQuotedValues('t="a\\"b=c", d=1')).toBe(`t=${M.repeat('"a\\"b=c"'.length)}, d=1`);
+
+  // 6. Незакрытая кавычка — не отказ: у НЕразобранного текста она вероятна, и «всё после неё
+  //    значение» безопаснее исключения (глушить лишнее — значит не переписать, а не испортить).
+  expect(maskQuotedValues('a=1, b="хвост')).toBe(`a=1, b=${M.repeat('"хвост'.length)}`);
 });

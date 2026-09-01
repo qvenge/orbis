@@ -146,7 +146,7 @@ const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
   ],
 ];
 
-test.each(PRODUCTION_TEXTS)('%s разбирается каноном §А5-3 без моста', (_where, text) => {
+test.each(PRODUCTION_TEXTS)('%s разбирается каноном §А5-3', (_where, text) => {
   const r = parseQueryAst(text, registry);
   expect(r.ok ? null : `${r.error.code}: ${r.error.message}`).toBeNull();
 });
