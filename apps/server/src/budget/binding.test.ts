@@ -920,6 +920,39 @@ describe('detach orbis/financial снимает привязку к конвер
     expect(action.operations.map((o) => o.op)).toEqual(['entity_update', 'relation_delete']);
   });
 
+  test('undo detach ВОЗВРАЩАЕТ системное ребро: откат не упирается в ROLE_SYSTEM_ONLY', async () => {
+    // Пин исключения `!ctx.undoReplay` у гейта `created_by: 'system'` (`executor/relations.ts`).
+    // `envelope-binding` ставит хук, а откат проигрывает свой же inverse ЧЕРЕЗ `execute` БЕЗ
+    // `mechanism` (`executor/undo.ts` → механизм `user`): без исключения восстановление
+    // системного ребра падало бы `ROLE_SYSTEM_ONLY`, и законную запись владельца нельзя было
+    // бы отменить. До этой пробы исключение не держал ни один из 88 тестов области.
+    const { entity: env } = await createEntity(user, {
+      title: 'Транспорт — август',
+      props: budgetProps(cat, '2026-08-01', '2026-08-31'),
+      aspects: ['orbis/budget'],
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Такси',
+      props: finProps(cat, '2026-08-07'),
+      aspects: ['orbis/financial'],
+    });
+    expect(await budgetParents(txn.id)).toEqual([env.id]);
+
+    const detached = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', { id: txn.id, aspects: { detach: ['orbis/financial'] } }),
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txn.id)).toEqual([]);
+
+    const undone = await undoAction(db, { actorUserId: user, actionId: detached.actionId });
+    // Отказ был бы ROLE_SYSTEM_ONLY — называем его, чтобы красный говорил, что именно сломано.
+    expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
+    expect(await budgetParents(txn.id)).toEqual([env.id]);
+  });
+
   test('detach у НЕпривязанной сущности лишних операций не порождает', async () => {
     const { entity: note } = await createEntity(user, {
       title: 'Заметка',

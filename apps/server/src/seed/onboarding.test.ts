@@ -23,6 +23,7 @@ import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { assertEntityProps } from '../executor/aspects-validate';
+import { execute } from '../executor/executor';
 import { effectiveRegistry } from '../registry/cache';
 import { validateEntityProps } from '../registry/validate-props';
 import { appRouter } from '../router';
@@ -40,7 +41,7 @@ import {
   type SeedSmartList,
   UPCOMING_BODY,
 } from '../seed/smart-lists';
-import { SEED_WORLD_SIZE } from '../seed/world';
+import { SEED_WORLD_SIZE, WORLD_SEED_MECHANISM } from '../seed/world';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { createCallerFactory } from '../trpc';
 
@@ -1261,5 +1262,50 @@ describe('registry.effective (§А9-2): эффективный реестр вл
     );
     const parsed = parseQueryAst(AGENDA_QUERY_TEXTS.overdueDue, reg);
     expect(parsed.ok).toBe(true);
+  });
+});
+
+describe('механизм сева мира (§А2-5)', () => {
+  // ПОЧЕМУ ПИН ПОВЕДЕНЧЕСКИЙ, А НЕ «сев записал mechanism». Механизм нигде не хранится:
+  // журнала у сева нет (синк не передаётся), а ни одно из четырёх сеемых свойств категории
+  // не помечено `system_writable` — значит подмена механизма в самом вызове сегодня не
+  // наблюдаема ничем. Пиннится ПРАВИЛО, на которое сев опирается: механизм сева вправе
+  // писать системное свойство, а механизм по умолчанию — нет. Первое же системное свойство
+  // в `SEED_CATEGORIES` упрётся в `writeDenial` ровно там, где никто не смотрит.
+  const CARRYOVER = 'orbis/carryover';
+
+  test('механизм сева ВПРАВЕ писать system_writable-свойство', async () => {
+    const user = freshUserId();
+    const r = await execute(db, {
+      actorUserId: user,
+      actorKind: 'owner',
+      source: 'system',
+      mechanism: WORLD_SEED_MECHANISM,
+      operations: [
+        {
+          tool: 'entity_create',
+          input: { title: 'Проба сева', tags: [], props: { [CARRYOVER]: '10.00' } },
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  test('тот же вызов БЕЗ механизма сева — отказ по системному свойству (§А2-5)', async () => {
+    const user = freshUserId();
+    const r = await execute(db, {
+      actorUserId: user,
+      actorKind: 'owner',
+      source: 'system',
+      operations: [
+        {
+          tool: 'entity_create',
+          input: { title: 'Проба сева', tags: [], props: { [CARRYOVER]: '10.00' } },
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect((r.error.details as { reason?: string }).reason).toBe('system_writable');
   });
 });

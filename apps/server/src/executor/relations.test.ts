@@ -396,6 +396,20 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
     expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1);
   });
 
+  test('9б. повтор ТОГО ЖЕ ребра → duplicate_relation, а не target_max_incoming', async () => {
+    // Пин фильтра собственного источника в `assertTargetMaxIncoming` (`relations.ts`). Без
+    // него повтор той же тройки отвечал бы «у записи уже есть входящая связь этой роли» —
+    // оба отказа `INVARIANT`, но `details.invariant` читают глаголы и UI, и подмена причины
+    // отправила бы вызывающего чинить не то. Тест 22 держит `duplicate_relation` только для
+    // роли БЕЗ максимума, то есть мимо этой ветки.
+    const { env1, txn } = await budgetFixture();
+    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
+    const r = err(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('duplicate_relation');
+    expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1);
+  });
+
   test('10. ограничение считает ТОЛЬКО свою роль: subitem проекта и конверт сосуществуют', async () => {
     const { env1, txn } = await budgetFixture();
     const project = await createEntity({ title: 'Проект-родитель' });

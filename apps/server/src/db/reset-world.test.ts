@@ -354,6 +354,37 @@ describe('reset-world — состав пересева на живой базе
     expect(await count('ai_usage')).toBe(1);
   });
 
+  test('шов: тот же владелец после пересева получает мир ЦЕЛИКОМ, а пины — живые id (Р-24-6)', async () => {
+    // Тот самый шаг (9) runbook: владелец заходит в приложение после операции. Строку
+    // `user_settings` пересев СОХРАНЯЕТ (в ней пины и дефолты), и пока «свежесть» владельца
+    // определялась по ней, заход досевал четыре сущности из девятнадцати, а три пина
+    // сайдбара указывали на снесённые id. Проба идёт ПОСЛЕ пересева в этом же describe —
+    // именно в том состоянии базы, которое оставляет операция.
+    expect(await count('entities', `owner_id = '${owner}'`)).toBe(0);
+
+    const again = await seedOwner(app, owner);
+    // `seeded: false` — строка настроек на месте, онбординг «уже был». Мир при этом посеян:
+    // ответ про фазу настроек, а не про граф (см. докблок `seedOwner`).
+    expect(again.seeded).toBe(false);
+    expect(await count('entities', `owner_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+
+    // Пины сходятся сами: id мира детерминированы от owner + слаг, и после пересева
+    // возвращаются те же. Проверяется НЕ формула, а то, что каждая закреплённая сущность
+    // существует, — иначе сайдбар покажет сырые uuid.
+    const settings = (await admin.execute(
+      sql`SELECT "pinnedEntities" AS pinned FROM user_settings WHERE owner_id = ${owner}::uuid`,
+    )) as unknown as Array<{ pinned: Array<{ id: string }> }>;
+    const pinned = settings[0]?.pinned ?? [];
+    expect(pinned.length).toBeGreaterThan(0);
+    for (const pin of pinned) {
+      expect([pin.id, await count('entities', `id = '${pin.id}'`)]).toEqual([pin.id, 1]);
+    }
+
+    // Повторный заход ничего не удваивает — идемпотентность держит проба по PK, а не guard.
+    await seedOwner(app, owner);
+    expect(await count('entities', `owner_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+  });
+
   test('после пересева `check` чист: дрейфа реестров нет, конфликтов слияния нет', async () => {
     // Ровно то, что печатает `bun scripts/ops.ts check`, — теми же запросами и тем же
     // сравнением. Секрет Ключницы для этого не нужен, а вторая формулировка «что такое
