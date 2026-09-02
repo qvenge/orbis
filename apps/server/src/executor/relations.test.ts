@@ -142,13 +142,15 @@ async function incomingCount(targetId: string, role: string): Promise<number> {
 }
 
 /**
- * Источники, которых АГРЕГАТЫ БЮДЖЕТА считают родителями-конвертами транзакции. Запрос
- * повторяет условие `spentByEnvelope` (`budget/aggregates.ts`) дословно: связь по
- * ПЕРЕХОДНОЙ колонке `relation_type='parent'`, источник несёт `orbis/budget`. Роль в этом
- * счёте не участвует — до 0017 агрегаты о ней не знают, и потому именно этот счёт, а не
- * счёт по роли, решает, увидит ли владелец свою тысячу дважды.
+ * Источники, которых АГРЕГАТЫ БЮДЖЕТА считают конвертами-родителями транзакции. Запрос
+ * повторяет условие `spentByEnvelope` (`budget/aggregates.ts`) дословно: связь роли
+ * `envelope-binding`, источник несёт `orbis/budget`.
+ *
+ * Считать надо ИМЕННО ТЕМ ЖЕ предикатом, что агрегаты: инвариант «один budget-parent»
+ * (`target_max_incoming`) и счёт денег обязаны говорить об одном множестве — расхождение
+ * этих двух счётов один раз уже стоило владельцу двойной траты (урок C1 Задачи 7a).
  */
-async function _legacyBudgetParents(targetId: string): Promise<string[]> {
+async function budgetParentsOf(targetId: string): Promise<string[]> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = await admin.execute(
@@ -159,19 +161,6 @@ async function _legacyBudgetParents(targetId: string): Promise<string[]> {
           ORDER BY r.source_id`,
     );
     return [...rows].map((r) => (r as { source_id: string }).source_id);
-  } finally {
-    await adminClient.end();
-  }
-}
-
-/** Прямой вызов эвристики миграции 0016 на временных jsonb-значениях (перепрогон не нужен). */
-async function _heuristic(rt: string, src: string, tgt: string): Promise<string> {
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    const rows = await admin.execute(
-      sql`SELECT reform_role_heuristic(${rt}, ${src}::jsonb, ${tgt}::jsonb) AS role`,
-    );
-    return rows[0]?.role as string;
   } finally {
     await adminClient.end();
   }
@@ -758,6 +747,34 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
   });
 });
 
+describe('роль ребра резолвится реестром (§А4-3)', () => {
+  /**
+   * ЖИВАЯ ВЕТКА `assertRoleConstraints` (`relations.ts`): роли нет в реестре → `VALIDATION`.
+   *
+   * Тест вернулся сюда после «Пересева мира»: он жил в describe про переходную колонку и
+   * ушёл вместе с ним, хотя к интервалу относилась только ПОЛОВИНА его утверждения (второй
+   * отказ, `legacyInterval`, снят с колонкой). Первая половина — про реестр — жива и без
+   * покрытия осталась бы единственной веткой стадии 4, за которой никто не следит.
+   *
+   * Почему это важно: без отказа роль поехала бы на стадию 5, где строка пишется в БД как
+   * есть, и граф получил бы ребро, о смысле которого не знает ни один читатель, — либо
+   * стадия 5 упала бы голым Error, то есть 500 вместо ответа.
+   */
+  test('26. неизвестная роль → VALIDATION «неизвестная роль связи», строка не пишется', async () => {
+    const a = await createEntity({ title: 'Незнакомая-A' });
+    const b = await createEntity({ title: 'Незнакомая-B' });
+    const r = err(await createRelation(a.id, b.id, 'нет-такой-роли'));
+    expect(r.error.code).toBe('VALIDATION');
+    expect(r.error.message).toContain('неизвестная роль');
+    expect((r.error.details as { role?: string }).role).toBe('нет-такой-роли');
+    // Отказ идёт от РЕЕСТРА. Пометки интервала на нём нет и быть не может: отказ интервала
+    // («собственные роли станут доступны после 0017») снят вместе с переходной колонкой, и
+    // спутать два разных «нельзя» читателю больше нечем.
+    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBeUndefined();
+    expect(await relCount(a.id, b.id, 'нет-такой-роли')).toBe(0);
+  });
+});
+
 describe('уникальность связи — по РОЛИ (contract-миграция 0017)', () => {
   /**
    * Что изменила 0017 и почему это отдельные тесты, а не правка старых.
@@ -815,9 +832,23 @@ describe('конверт-родитель = роль envelope-binding (§4.2/§1
     env2: WireEntity;
     txn: WireEntity;
   }> {
-    const env1 = await createEntity({ title: 'Конверт 1', props: budgetProps() });
-    const env2 = await createEntity({ title: 'Конверт 2', props: budgetProps() });
-    const txn = await createEntity({ title: 'Транзакция', props: finProps() });
+    // Аспекты навешиваются ЯВНО: счёт агрегатов (`budgetParentsOf`) спрашивает
+    // `'orbis/budget' = ANY(aspects)` у источника — без аспекта проба была бы вакуумной.
+    const env1 = await createEntity({
+      title: 'Конверт 1',
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
+    });
+    const env2 = await createEntity({
+      title: 'Конверт 2',
+      props: budgetProps(),
+      aspects: ['orbis/budget'],
+    });
+    const txn = await createEntity({
+      title: 'Транзакция',
+      props: finProps(),
+      aspects: ['orbis/financial'],
+    });
     return { env1, env2, txn };
   }
 
@@ -836,5 +867,10 @@ describe('конверт-родитель = роль envelope-binding (§4.2/§1
     ok(await createRelation(env1.id, txn.id, 'subitem'));
     ok(await createRelation(env2.id, txn.id, 'envelope-binding', AS_SYSTEM));
     expect(await relCount(env2.id, txn.id, 'envelope-binding')).toBe(1);
+    // …и СЧЁТ АГРЕГАТОВ говорит о том же множестве, что инвариант: конверт-родитель ровно
+    // один, и это тот, что поставил системную привязку, — а не тот, что связан `subitem`.
+    // Без этой строки «инвариант считает одно, деньги другое» осталось бы непроверенным
+    // (урок C1 Задачи 7a).
+    expect(await budgetParentsOf(txn.id)).toEqual([env2.id]);
   });
 });

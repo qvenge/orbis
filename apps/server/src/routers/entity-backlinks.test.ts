@@ -341,3 +341,64 @@ test('backlinks категории: транзакции и правила па�
   // Соседняя подпись, которой дельта не касалась, осталась системной.
   expect(afterLabels.get(rule)).toBe('Назначаемая категория');
 });
+
+/**
+ * Р-23b-15: `ref_side` без `GROUP BY` — проверяемое утверждение, а не рассуждение.
+ *
+ * Разведка среза предполагала, что с новым `rel_uniq (source_id, target_id, role)` в
+ * `entity-read.ts` понадобится `GROUP BY source_id`: иначе LEFT JOIN раздвоит строку
+ * источника. Это неверно, и вот почему: у роли `ref` проекция в снятую колонку была
+ * ТОЖДЕСТВЕННОЙ (`ref` → `ref`), поэтому и старый, и новый ключ запрещают ровно одно и то
+ * же — второе ребро роли `ref` на паре концов. А ребро ДРУГОЙ роли от того же источника
+ * попадает в другой CTE (`rel_side`, свёрнутый `GROUP BY id`), и два LEFT JOIN по разным
+ * CTE строку не множат.
+ *
+ * Рассуждение проверяется здесь худшим случаем: ОДИН источник держит к цели и `ref`-ребро
+ * (зеркало ссылочного свойства), и `mention` — то есть попадает в оба CTE сразу. Появись
+ * дубль — в списке будет две строки, и владелец увидит одну запись дважды.
+ */
+test('backlinks: `ref` и `mention` от ОДНОГО источника к одной цели → одна строка (Р-23b-15)', async () => {
+  const user = freshUserId();
+  const caller = callerFor(user);
+  const category = await caller.entity.create({
+    input: { title: 'Категория-цель', tags: [], aspects: ['orbis/category'] },
+    source: 'fast_path',
+  });
+
+  // Источник ссылается на категорию свойством — исполнитель ставит зеркало роли `ref`…
+  const r = await execute(db, {
+    actorUserId: user,
+    actorKind: 'owner',
+    source: 'fast_path',
+    operations: [
+      {
+        tool: 'entity_create',
+        input: {
+          title: 'Обед со ссылкой и упоминанием',
+          tags: [],
+          aspects: ['orbis/financial'],
+          props: {
+            'orbis/amount': '340.00',
+            'orbis/direction': 'expense',
+            'orbis/occurred_on': '2026-08-20',
+            'orbis/finance_category': category.id,
+          },
+        },
+      },
+    ],
+  });
+  if (!r.ok) throw new Error(JSON.stringify(r.error));
+  const source = (r.results[0] as { id: string }).id;
+
+  // …и он же упоминает её руками владельца — второе ребро другой роли на той же паре.
+  await caller.relation.create({ source_id: source, target_id: category.id, role: 'mention' });
+
+  const got = await caller.entity.get({ id: category.id, include: ['backlinks'] });
+  // ОДНА строка, не две: `ref_side` даёт ≤ 1 строку на источник и без `GROUP BY`.
+  expect(got.backlinks?.map((b) => b.entity.id)).toEqual([source]);
+  // У строки ОДНО объяснение, и выбирает его порядок веток `entity-read.ts:275-284`:
+  // ссылка сильнее упоминания, потому что она называет ЧЕМ сослались (подпись свойства),
+  // а упоминание — только факт соседства.
+  expect(got.backlinks?.[0]?.via).toBe('ref');
+  expect(got.backlinks?.[0]?.viaLabel).toBe('Категория');
+});

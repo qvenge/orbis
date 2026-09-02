@@ -40,6 +40,7 @@ import {
   type SeedSmartList,
   UPCOMING_BODY,
 } from '../seed/smart-lists';
+import { SEED_WORLD_SIZE } from '../seed/world';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { createCallerFactory } from '../trpc';
 
@@ -98,6 +99,10 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     const first = await caller.user.seedOnboarding();
     expect(first).toEqual({ seeded: true });
     expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
+    // …и число 19 — не литерал из воздуха: мир владельца (`seed/world.ts`, 12 категорий +
+    // 6 смарт-листов) плюс садовник, которого сеет отдельная транзакция. Сложи кто-нибудь
+    // в набор седьмой список — литерал выше покраснеет, и вот эта строка скажет, почему.
+    expect(SEED_WORLD_SIZE + 1).toBe(19);
 
     // Глобальный тред — с NULL entity_id (§4.5)
     const { db: admin, client: adminClient } = adminDb();

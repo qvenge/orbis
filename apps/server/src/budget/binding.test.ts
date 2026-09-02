@@ -945,6 +945,69 @@ describe('detach orbis/financial снимает привязку к конвер
 // хотя конверт «уже есть». Замок владельца общий с проверкой уникальности конвертов:
 // оба инварианта про один и тот же набор строк.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Хук трогает ТОЛЬКО СВОЮ роль (§2.3)
+// ---------------------------------------------------------------------------
+describe('хук привязки трогает только роль envelope-binding', () => {
+  test('ребро `subitem` от проекта переживает привязку и ребиндинг транзакции', async () => {
+    /**
+     * ГРАНИЦА МНОЖЕСТВА С ДРУГОЙ СТОРОНЫ, и она пост-реформенная.
+     *
+     * До 0017 этот сценарий проверялся внутри describe про интервал: там «конверт-родитель»
+     * был расширенным множеством ролей, и вопрос звучал «не спутает ли хук чужое ребро со
+     * своим». Интервал кончился, множество схлопнулось до `envelope-binding` — но вопрос
+     * остался, и ответ на него по-прежнему наблюдаем: расширь кто-нибудь
+     * `budgetParentsOfMany` обратно до `role IN (…)`, хук снял бы ребро «проект → задача»
+     * при следующей же правке суммы. Это тихая потеря данных владельца, и сьют обязан её
+     * ловить, а не полагаться на то, что предикат «сейчас правильный».
+     */
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: env } = await createEntity(user, {
+      title: 'Конверт Ремонт',
+      props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Краска',
+      props: finProps(cat, '2026-07-12'),
+      aspects: ['orbis/financial'],
+    });
+    const { entity: project } = await createEntity(user, { title: 'Проект без бюджета' });
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', {
+          source_id: project.id,
+          target_id: txn.id,
+          role: 'subitem',
+        }),
+        { sink },
+      ),
+    );
+    // Привязку поставил хук при создании транзакции; ребро проекта — рядом и своей ролью.
+    expect(await budgetParents(txn.id)).toEqual([env.id]);
+
+    // Правка суммы гоняет хук: он обязан выйти в no-op и ничьих рёбер не тронуть.
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: txn.id,
+          props: { 'orbis/amount': '777.00' },
+          aspects: { attach: ['orbis/financial'] },
+        }),
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txn.id)).toEqual([env.id]);
+    const own = await adminRows(
+      sql`SELECT role FROM relations WHERE source_id = ${project.id} AND target_id = ${txn.id}`,
+    );
+    expect(own.map((r) => r.role as string)).toEqual(['subitem']);
+  });
+});
+
 describe('гонка «create транзакции ∥ create конверта» (§2.3)', () => {
   test('после обеих операций транзакция привязана к конверту, а не Unbudgeted', async () => {
     const user = freshUserId();

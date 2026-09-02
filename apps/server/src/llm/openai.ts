@@ -37,10 +37,14 @@ export class OpenAIProvider extends AiSdkProvider {
       // ПОЧЕМУ strict: false. Дефолт строгости у эндпоинтов разный: /v1/chat/completions
       // нестрогий, /v1/responses — строгий, а строгий режим не принимает regex
       // lookaround: «Invalid JSON schema: regex lookaround is not supported. Found at
-      // $.properties.data.properties.amount.pattern.» Лукахед стоит в positiveDecimal
-      // (packages/shared/src/schemas/aspects.ts) ровно у двух полей —
-      // orbis/financial.amount и orbis/goal.target_value, — то есть без strict: false
-      // отваливаются два тула из девятнадцати: все финансы и все цели.
+      // $.properties.data.properties.amount.pattern.»
+      //
+      // ГДЕ ЛУКАХЕД СЕГОДНЯ. У свойств реестра его больше НЕТ: `orbis/amount` и
+      // `orbis/target_value` выражают «строго > 0» границей ТИПА (`exclusiveMin`), и
+      // генератор схем значений печатает `exclusiveMinimum` (`registry/value-schema.ts`,
+      // пин — `property-type.test.ts`). Единственный оставшийся лукахед — `positiveDecimal`
+      // контракта импорта (`packages/shared/src/contracts/import.ts`), и на нём этот довод
+      // теперь и держится: тул `import_csv_analyze` без strict: false не проехал бы.
       //
       // ПОЧЕМУ НЕ strictJsonSchema. Этот переключатель SDK кормит только response_format
       // (@ai-sdk/openai/dist/index.js:1005, 1025, 6543, 6583) и к тулам не относится

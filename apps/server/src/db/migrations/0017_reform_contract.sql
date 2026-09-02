@@ -62,7 +62,12 @@ ALTER TABLE relations ADD CONSTRAINT rel_uniq UNIQUE (source_id, target_id, role
 -- момента не вызывается ниоткуда: тесты, звавшие её напрямую, сняты вместе с ней. Оставлять
 -- в базе функцию, читающую колонку, которой больше нет, — значит держать код, который
 -- упадёт при первом же вызове.
-DROP FUNCTION IF EXISTS reform_role_heuristic(text, jsonb, jsonb);--> statement-breakpoint
+--
+-- БЕЗ `IF EXISTS`, и это не педантизм. Комплект миграций среза (0014–0017) накатывается
+-- подряд, и 0016 гарантированно создала эту функцию с ТОЙ ЖЕ сигнатурой. `IF EXISTS`
+-- проглотил бы ровно один случай — «0016 не накачена» или «сигнатура разошлась», — то есть
+-- рассыпанный комплект, о котором надо узнать здесь и громко, а не на первом вызове.
+DROP FUNCTION reform_role_heuristic(text, jsonb, jsonb);--> statement-breakpoint
 
 -- ─── aspect_definitions: JSON Schema аспекта — производная, а не хранимое ────────────────
 --

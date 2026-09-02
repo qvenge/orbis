@@ -2,11 +2,12 @@
 // «Реформа свойств» (строки 216–369), §А4-3 (роли) и §Б1-2 (контракты).
 //
 // Снимок §А8 ниже переписан из спеки РУКАМИ и не выведен из реализации: реализация,
-// разошедшаяся с ним, красит тест. Второй слой проверки — сегодняшние zod-схемы
-// (`schemas/aspects.ts`): из них берутся порядок полей, обязательность и порядок enum,
-// поэтому «перевод» доказывается против живого кода, а не против самого себя.
+// разошедшаяся с ним, красит тест. ВТОРОГО слоя проверки (zod-схем аспектов, из которых
+// брались порядок полей, обязательность и порядок enum) больше нет — их снял «Пересев
+// мира». Поэтому снимок остался ЕДИНСТВЕННЫМ описанием таблицы перевода, и проверяет он
+// то, что от себя не зависит: каждое имя ведёт на существующее свойство реестра, а состав,
+// порядок и обязательность реализации совпадают с его строками.
 import { expect, test } from 'bun:test';
-import type { z } from 'zod';
 import {
   type AspectId,
   BUILTIN_ASPECT_IDS,
@@ -129,34 +130,11 @@ const A8: Record<AspectId, readonly Row[]> = {
   ],
 };
 
-/** Поля, которые §А8 УДАЛЯЕТ, а не переводит: свойства у них нет по решению спеки. */
-const _DROPPED: Partial<Record<AspectId, readonly string[]>> = {
-  'orbis/agent-run': ['project_id'], // денормализация, заменённая parent_project/root_project
-};
-
 /** Свойства §А8, у которых нет аспекта-носителя: вычисляемые «Новые свойства реформы». */
 const FREE_DOMAIN_IDS = ['orbis/parent_project', 'orbis/root_project'] as const;
 
 const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
 const defsById = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
-
-/** Распаковка enum сквозь optional/array: порядок вариантов — норматив сортировки (`compile-ast.ts`). */
-function _enumValues(schema: z.ZodTypeAny): readonly string[] {
-  let node = schema;
-  for (let i = 0; i < 8; i += 1) {
-    const def = node._def as {
-      typeName: string;
-      innerType?: z.ZodTypeAny;
-      type?: z.ZodTypeAny;
-      values?: readonly string[];
-    };
-    if (def.values !== undefined) return def.values;
-    const inner = def.innerType ?? def.type;
-    if (inner === undefined) break;
-    node = inner;
-  }
-  throw new Error('поле не enum — снимок SELECTS разошёлся со схемой');
-}
 
 test('73 доменных свойства + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
   const domain = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'props');

@@ -117,6 +117,53 @@ test('entity-meta не считает import.meta, relations.meta и metadata', 
   expect(r.hits).toEqual([]);
 });
 
+test('COMMENT_ONLY_LINE: строка-комментарий снимается, а КОД с хвостовым комментарием — нет', () => {
+  /**
+   * Маска заведена Задачей 23b для трёх маркеров снятых носителей (`aspects-legacy`,
+   * `relation-type`, `entity-meta`) и по Р-23b-13 обязана глушить ПРОЗУ, а не КОД.
+   *
+   * Проверяются обе половины сразу, потому что дефект бывает в обе стороны: слишком широкая
+   * маска ослепила бы гейт на строке кода с хвостовым `// …`, слишком узкая — заставила бы
+   * переписывать докблоки, объясняющие снятое, и делала бы их лживыми.
+   *
+   * Четыре формы начала комментария — те, что встречаются в дереве: `//` и `/*` у TS, `*`
+   * у продолжения докблока, `--` у SQL внутри шаблонных литералов.
+   */
+  const dir = repo({
+    'apps/server/src/prose.ts': [
+      '// целиком комментарий: aspects_legacy и relation_type и entities.meta',
+      ' * продолжение докблока: aspectsLegacy, relationType',
+      '/* открывающий: legacy-form и entity.meta */',
+      '        -- SQL внутри литерала: relation_type',
+      '',
+    ].join('\n'),
+    'apps/server/src/code.ts': [
+      'const a = row.aspectsLegacy; // хвост про aspects_legacy',
+      "const b = 'relation_type'; // хвост",
+      'const c = entities.meta; // хвост',
+      '',
+    ].join('\n'),
+  });
+  const reports = scan(dir);
+  // Проза не считается ни одним из трёх маркеров…
+  for (const id of ['aspects-legacy', 'relation-type', 'entity-meta']) {
+    expect(`${id}: ${byId(reports, id).files.join(',')}`).toBe(`${id}: apps/server/src/code.ts`);
+  }
+  // …а код считается ПОСТРОЧНО: три строки, каждая своим маркером.
+  expect(byId(reports, 'aspects-legacy').hits.map((h) => h.line)).toEqual([1]);
+  expect(byId(reports, 'relation-type').hits.map((h) => h.line)).toEqual([2]);
+  expect(byId(reports, 'entity-meta').hits.map((h) => h.line)).toEqual([3]);
+});
+
+test('COMMENT_ONLY_LINE не снимает строку у маркеров, которым её не давали', () => {
+  // Маска стоит у ТРЁХ маркеров, а не у всех: `bare-field` и соседи ловят форму, которая
+  // жива и в прозе (пример запроса в докблоке — тоже пример запроса).
+  const dir = repo({
+    'apps/server/src/prose-query.ts': '// пример: {{query: aspect=orbis/task, status=inbox}}\n',
+  });
+  expect(byId(scan(dir), 'bare-field').hits.map((h) => h.line)).toEqual([1]);
+});
+
 test('exclude вырезает форму, а не всю строку: соседнее нарушение остаётся видимым', () => {
   // Правило «строка со словом import.meta целиком не считается» ослепило бы гейт ровно там,
   // где законная и незаконная формы стоят рядом.

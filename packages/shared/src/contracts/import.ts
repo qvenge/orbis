@@ -56,7 +56,14 @@ const dateString = z
     },
     { message: 'несуществующая календарная дата' },
   );
-/** Тот же паттерн, что positiveDecimal в schemas/aspects.ts: > 0, без экспоненты и минуса. */
+/**
+ * Строго положительная decimal-строка: > 0, без экспоненты и минуса.
+ *
+ * ЕДИНСТВЕННЫЙ негативный lookahead, доезжающий до JSON Schema тула, и на нём держится
+ * довод `strict: false` транспорта OpenAI (D29, `llm/openai.ts`): строгий режим Responses
+ * API lookaround не принимает. У свойств РЕЕСТРА его больше нет — там «> 0» выражено
+ * границей типа (`exclusiveMin` → `exclusiveMinimum`).
+ */
 const positiveDecimal = z
   .string()
   .regex(/^(?!0+(\.0+)?$)\d+(\.\d+)?$/, 'строго положительная decimal-строка');
@@ -180,8 +187,8 @@ export const llmMappingResponseSchema = z
 
 /**
  * JSON Schema того же контракта — определение единственного тула LLM-вызова analyze.
- * Генерируется из zod (единый источник, как aspectJsonSchema): рукописная копия
- * разъезжалась бы с валидацией ответа модели.
+ * Генерируется из zod (единый источник): рукописная копия разъезжалась бы с валидацией
+ * ответа модели.
  */
 export function csvMappingToolJsonSchema(): Record<string, unknown> {
   return zodToJsonSchema(

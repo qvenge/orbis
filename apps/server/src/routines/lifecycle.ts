@@ -1278,7 +1278,7 @@ export type DecideProposalResult =
       reason: RejectReason;
     };
 
-/** Максимум строк разбора в аспекте прогона и потолок одной строки (schemas/aspects.ts). */
+/** Максимум строк разбора предложения и потолок одной строки (`contracts/agent-loop.ts`). */
 const MAX_MISMATCH_NOTES = 50;
 const MISMATCH_NOTE_MAX = 500;
 

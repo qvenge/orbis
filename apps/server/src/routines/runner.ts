@@ -54,7 +54,8 @@ const defaultSink = makeChatJournalSink();
 const TERMINAL_TOOLS: ReadonlySet<string> = new Set(['orbis_propose', 'orbis_checkpoint']);
 
 /**
- * Потолки текстовых полей аспекта прогона (schemas/aspects.ts) — обрезаем ДО записи.
+ * Потолки текстовых полей прогона (json-схемы свойств `orbis/run_*` в реестре) — обрезаем
+ * ДО записи.
  *
  * `REPORT_CAP` ЭКСПОРТИРОВАН, и у экспорта один читатель с конкретной нуждой: проба П4
  * (`scripts/probe-p4.ts`) обязана отличить полный отчёт от обрезанного. Пометки обрыва
