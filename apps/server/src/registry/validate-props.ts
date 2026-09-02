@@ -173,6 +173,7 @@ function calendarViolation(type: PropertyType, value: unknown): string | undefin
 export function validateEntityProps(
   reg: PropsRegistry,
   entity: { props: Record<string, unknown>; aspects: string[] },
+  touched?: ReadonlySet<string>,
 ): PropsViolation[] {
   const violations: PropsViolation[] = [];
 
@@ -254,9 +255,21 @@ export function validateEntityProps(
       violations.push({ code: 'CORE_IN_PROPS', propertyId, storage: def.storage });
       continue;
     }
-    if (def.status === 'deprecated') {
+    if (def.status === 'deprecated' && (touched === undefined || touched.has(propertyId))) {
       // §А10-3: строка реестра не удаляется никогда — старые значения ЧИТАЮТСЯ, запись
       // нового отвергается. Тип при этом не проверяется: причина отказа не в нём.
+      //
+      // ЕДИНСТВЕННОЕ из семи нарушений, которое говорит про АКТ ЗАПИСИ, а не про свойство
+      // итогового состояния, — потому и единственное, суженное до ЗАТРОНУТЫХ патчем
+      // (§А2-7: «при отклонении значения на сущностях остаются»). Считай мы его по всему
+      // состоянию — одно deprecated-значение запирало бы запись целиком: правку любого
+      // ДРУГОГО свойства, `attach_*` и захват тикета исполнителем. Ровно этот исход спека
+      // отвергла для ссылок (§А6-3, `registry/ref.ts`: «отказ получает только тот, кто
+      // пишет ссылку ЗАНОВО»), и это тот же вопрос, заданный про статус вместо цели.
+      //
+      // Мерка — `touchedProperties(patch)`: в неё входит и `unset`, но снятое свойство до
+      // валидатора не доезжает вовсе (`applyPropsPatch` удаляет ключ), поэтому выход-дверь
+      // «снять значение» остаётся открытой сама, без отдельного исключения.
       violations.push({ code: 'DEPRECATED', propertyId });
       continue;
     }

@@ -28,16 +28,26 @@ import type { EntityState } from './props';
  * поэтому правка через один аспект меняет обязательность у другого, а патч, снявший
  * `orbis/amount`, ломает не тот аспект, через который пришёл.
  *
+ * ИСКЛЮЧЕНИЕ ровно одно и названо здесь, а не спрятано в валидаторе: `touched` — свойства,
+ * ЗАТРОНУТЫЕ патчем, и по ним считается только `DEPRECATED`. Это единственный код, который
+ * высказывается об АКТЕ ЗАПИСИ («заново не пиши»), а не о свойстве итогового состояния;
+ * шесть остальных композиционны и обязаны идти по всему состоянию. Не передать `touched`
+ * — законно (значит «затронуто всё»), и путь сида/тестов так и делает.
+ *
  * `details.violations` — весь список; `details.aspect`/`details.property` не заводятся:
  * потребители кодов (карточка отказа, глаголы) читают структуру, а не разбирают текст.
  */
-export function assertEntityProps(reg: RegistrySnapshot, state: EntityState): void {
+export function assertEntityProps(
+  reg: RegistrySnapshot,
+  state: EntityState,
+  touched?: ReadonlySet<string>,
+): void {
   // Форма правила памяти (§А8 «fail-closed», В7) проверяется ВТОРЫМ списком, а не внутри
   // валидатора реестра: обязательность там безусловная (пара «аспект → свойство»), а здесь
   // она условная — «если род записи правило». Граница названа в `memory/rules.ts`
   // (`ruleViolations`): условные ограничения выражает `requires_when` части Б.
   const violations: Array<PropsViolation | MemoryRuleViolation> = [
-    ...validateEntityProps(reg, state),
+    ...validateEntityProps(reg, state, touched),
     ...ruleViolations(state),
   ];
   if (violations.length === 0) return;

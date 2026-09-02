@@ -1496,8 +1496,11 @@ async function prepareEntityCreate(
   // Гейт флагов (§А2-5/Б6) — ДО валидации значений: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы», когда запись запрещена независимо от значения.
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
-  // Стадия 2: реестр свойств (§А7-1) — по итоговому состоянию, а не по патчу
-  assertEntityProps(ctx.registry, state);
+  // Стадия 2: реестр свойств (§А7-1) — по итоговому состоянию, а не по патчу. Список
+  // затронутых свойств нужен ровно одному коду — `DEPRECATED` (см. `assertEntityProps`);
+  // здесь он тождественен всему состоянию (`before` пуст), и передаётся ради одной мерки
+  // на все три точки записи, а не ради поведения.
+  assertEntityProps(ctx.registry, state, touchedProperties(propsPatch));
   // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
   const refWrite = refWriteOf(ctx, id, before, state, propsPatch);
 
@@ -1802,7 +1805,15 @@ async function prepareEntityUpdate(
       // означал бы, что законную запись нельзя отменить.
       assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
     }
-    assertEntityProps(ctx.registry, state);
+    // `DEPRECATED` — по ЗАТРОНУТЫМ свойствам (§А2-7: «значения остаются»), остальные шесть
+    // кодов — по всему состоянию. Внутренний undo не считает затронутым НИЧЕГО по тому же
+    // доводу, что и семь проверок выше: он восстанавливает своё же законно записанное
+    // состояние, и отказ по статусу означал бы, что законную запись нельзя отменить.
+    assertEntityProps(
+      ctx.registry,
+      state,
+      ctx.internalUndo === undefined ? touchedProperties(propsPatch) : new Set<string>(),
+    );
     // Стадия 4: инвариант §3.3 над финальным состоянием (ловит и detach orbis/schedule)
     await assertFinancial(ctx, input.id, state, batch);
     // Живой грант в назначении (С4/С7) — только когда назначение ЗАТРОНУТО патчем.
@@ -2079,9 +2090,10 @@ async function prepareAttach(
     touched,
   });
 
-  // Гейт флагов (§А2-5/Б6) и стадия 2 — по итоговому состоянию
+  // Гейт флагов (§А2-5/Б6) и стадия 2 — по итоговому состоянию; `DEPRECATED` — по
+  // затронутым (свободное deprecated-значение не обязано запирать навешивание аспекта).
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
-  assertEntityProps(ctx.registry, state);
+  assertEntityProps(ctx.registry, state, touchedProperties(propsPatch));
 
   await assertFinancial(ctx, input.entity_id, state, batch);
   // Живой грант в назначении (С4/С7): attach — третий путь появления аспекта, и обходить

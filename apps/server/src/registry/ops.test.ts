@@ -187,6 +187,89 @@ describe('property_create / property_update: жизненный цикл propose
     expect((await entityRow(entityId))?.props).toMatchObject({ [id]: 'что-то' });
   });
 
+  test('deprecate при живых значениях НЕ запирает правку ДРУГИХ свойств записи (§А2-7/§А10-3)', async () => {
+    // Канонический жест §А2-7: модель предложила свойство, записала значение, владелец
+    // отклонил. «Значения остаются» (Р9) обязано значить, что запись живёт дальше, — иначе
+    // они остаются ровно до первой правки: захват тикета исполнителем, `attach_*` и правка
+    // любого другого поля упирались бы в `DEPRECATED` по свойству, которого патч не касался.
+    const created = ok(
+      await run('property_create', {
+        key: 'user/guess-lock',
+        label: { ru: 'Догадка-замок' },
+        description: { ru: 'Предложено моделью' },
+        type: { kind: 'text' },
+        status: 'proposed',
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+    const entityId = newId();
+    ok(
+      await run('entity_create', {
+        id: entityId,
+        title: 'Тикет с догадкой',
+        tags: [],
+        aspects: ['orbis/task'],
+        props: { [id]: 'что-то', 'orbis/task_status': 'planned' },
+      }),
+    );
+    ok(await run('property_update', { id, status: 'deprecated' }));
+
+    // 1. Правка ДРУГОГО свойства — тот самый шаг, которым исполнитель захватывает тикет.
+    ok(await run('entity_update', { id: entityId, props: { 'orbis/task_status': 'in_progress' } }));
+    expect((await entityRow(entityId))?.props).toMatchObject({
+      [id]: 'что-то',
+      'orbis/task_status': 'in_progress',
+    });
+
+    // 2. `attach_*` по ДРУГОМУ аспекту — свободное deprecated-значение ему не помеха.
+    ok(
+      await run('attach_orbis_note', {
+        entity_id: entityId,
+        data: { 'orbis/pinned': true },
+      }),
+    );
+
+    // 3. Вторая половина правила в силе: НОВОЕ значение самого deprecated-свойства — отказ.
+    const denied = err(await run('entity_update', { id: entityId, props: { [id]: 'ещё' } }));
+    expect(denied.code).toBe('VALIDATION');
+    expect(
+      (denied.details as { violations: Array<{ code: string; propertyId?: string }> }).violations,
+    ).toContainEqual({ code: 'DEPRECATED', propertyId: id });
+
+    // 4. Выход-дверь открыта: снять значение можно.
+    ok(await run('entity_update', { id: entityId, unset: [id] }));
+  });
+
+  test('слияние В deprecated-цель отвергается: живые значения не прячутся под скрытую строку', async () => {
+    const src = ok(
+      await run('property_create', {
+        key: 'user/merge-src',
+        label: { ru: 'Источник слияния' },
+        description: { ru: 'Живая строка' },
+        type: { kind: 'text' },
+        status: 'active',
+      }),
+    );
+    const dst = ok(
+      await run('property_create', {
+        key: 'user/merge-hidden',
+        label: { ru: 'Скрытая цель' },
+        description: { ru: 'Выведена из обращения' },
+        type: { kind: 'text' },
+        status: 'active',
+      }),
+    );
+    const srcId = (src.results[0] as { property: string }).property;
+    const dstId = (dst.results[0] as { property: string }).property;
+    ok(await run('property_update', { id: dstId, status: 'deprecated' }));
+
+    const e = err(await run('property_merge', { source: srcId, into: dstId }));
+    expect(e.code).toBe('VALIDATION');
+    expect((e.details as { reason?: string }).reason).toBe('MERGE_DEPRECATED_TARGET');
+    // Обратное направление законно: спрятать строку и потом слить её — штатный жест.
+    ok(await run('property_merge', { source: dstId, into: srcId }));
+  });
+
   test('key: транслит подписи, коллизия среди ВИДИМОГО разводится суффиксом', async () => {
     const first = ok(
       await run('property_create', {
