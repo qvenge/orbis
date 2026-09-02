@@ -15,7 +15,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { approvePending } from '../policy/pending';
-import { seedOnboarding, seedSmartListId } from '../seed/onboarding';
+import { seedOwnerGraph, seedSmartListId } from '../seed/onboarding';
 import { SEED_SMART_LISTS } from '../seed/smart-lists';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { effectiveRegistry } from './cache';
@@ -2037,7 +2037,7 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     // «переписано запросов: 0», а проба §А10-3 разрешила бы удалить строку из-под живого
     // списка.
     const seedUser = freshUserId();
-    await withIdentity(db, seedUser, (tx) => seedOnboarding(tx, seedUser));
+    await seedOwnerGraph(db, seedUser);
 
     const holders = await withIdentity(db, seedUser, (tx) => collectPropertyHolders(tx, seedUser));
     const bodies = new Map(

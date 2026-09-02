@@ -84,22 +84,22 @@ test('файл с NUL-байтом сопоставляется — и когд�
   ]);
 });
 
-test('entity-meta ловит формы колонки сущности', () => {
+test('entity-meta ловит АДРЕСУЕМЫЕ формы снятой колонки — и только их', () => {
   // Позитивный контроль к следующему тесту: без него «ничего не нашлось» нельзя отличить
   // от «маркер сломан и не находит ничего никогда».
+  //
+  // Формы-эвристики (`meta: {}`, `meta: row.meta`) маркер БОЛЬШЕ НЕ ЛОВИТ, и это не
+  // послабление, а замер: они промахивались двенадцать раз из тринадцати на мешке СВЯЗИ,
+  // который жив и после реформы (см. докблок маркера). Два файла ниже — контроль ровно
+  // этого: форма связи проходит, адресация снятой колонки — нет.
   const dir = repo({
     'apps/server/src/a.ts': 'const v = entities.meta;\n',
-    'apps/server/src/b.ts': 'const p = { meta: input.meta };\n',
-    'apps/server/src/c.ts': 'const q = "entity_meta_gin";\n',
-    'apps/server/src/d.ts': 'const e = { meta: {} };\n',
+    'apps/server/src/b.ts': 'const q = "entities_meta_gin";\n',
+    'apps/server/src/c.ts': 'const rel = { sourceId: x, meta: {} };\n',
+    'apps/server/src/d.ts': 'const p = { meta: row.meta };\n',
   });
   const r = byId(scan(dir), 'entity-meta');
-  expect(r.files.slice().sort()).toEqual([
-    'apps/server/src/a.ts',
-    'apps/server/src/b.ts',
-    'apps/server/src/c.ts',
-    'apps/server/src/d.ts',
-  ]);
+  expect(r.files.slice().sort()).toEqual(['apps/server/src/a.ts', 'apps/server/src/b.ts']);
 });
 
 test('entity-meta не считает import.meta, relations.meta и metadata', () => {
@@ -231,15 +231,7 @@ const SAMPLES: ReadonlyArray<{
   },
   {
     id: 'entity-meta',
-    lines: [
-      'const a = entities.meta;',
-      `const b = 'entity_meta_gin';`,
-      'const c = { meta: row.meta };',
-      'const d = { meta: input.meta };',
-      'const e = { meta: values.meta };',
-      'const f = input.meta;',
-      'const g = { meta: {} };',
-    ],
+    lines: ['const a = entities.meta;', 'const b = entity.meta;', `const c = 'entities_meta_gin';`],
   },
   { id: 'due-alias', lines: [`const a = "due=today";`] },
   {

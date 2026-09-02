@@ -12,10 +12,9 @@ import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
 import { adminDb } from '../../test/helpers';
 import type { Db } from '../db/client';
-import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { SEED_CATEGORIES } from '../seed/categories';
-import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
+import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 
 /**
  * Измеритель: медиана `runs` замеров `fn` в миллисекундах.
@@ -181,7 +180,7 @@ const PRIORITIES = ['low', 'medium', 'high'] as const;
  * протухающей.
  */
 export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
-  await withIdentity(db, ownerId, (tx) => seedOnboarding(tx, ownerId));
+  await seedOwnerGraph(db, ownerId);
 
   const today = todayInSeedTz();
   const curStart = monthStart(today);
@@ -365,7 +364,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
               },
             },
             aggregate: 'sum',
-            field: 'amount',
+            field: 'orbis/amount',
           },
           'orbis/target_value': '1000000.00',
         },

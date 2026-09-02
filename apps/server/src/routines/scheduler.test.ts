@@ -464,7 +464,7 @@ describe('startRoutineScheduler: интервал, наложение, оста�
       async chat() {
         calls += 1;
         await gate;
-        return toolUse('entity_query', { query: 'aspect=orbis/task, status=inbox' });
+        return toolUse('entity_query', { query: 'aspect=orbis/task, orbis/task_status=inbox' });
       },
     };
     const scheduler = startRoutineScheduler(deps(provider), { intervalMs: 20 });

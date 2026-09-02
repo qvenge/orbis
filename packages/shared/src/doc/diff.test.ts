@@ -424,11 +424,14 @@ describe('diffBodyDocs — потолки', () => {
         p(intro),
         {
           type: 'queryBlock',
-          attrs: { ast: null, text: 'aspect=orbis/task, due_date=next_7d, title=Ближайшие 7 дней' },
+          attrs: {
+            ast: null,
+            text: 'aspect=orbis/task, orbis/due_date=next_7d, title=Ближайшие 7 дней',
+          },
         },
         {
           type: 'queryBlock',
-          attrs: { ast: null, text: 'aspect=orbis/task, due_date=after_7d, title=Позже' },
+          attrs: { ast: null, text: 'aspect=orbis/task, orbis/due_date=after_7d, title=Позже' },
         },
       );
     const result = diffBodyDocs(

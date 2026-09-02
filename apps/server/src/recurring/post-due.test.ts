@@ -132,7 +132,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
   const rows = await adminRows(
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
-        WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
+        WHERE r.target_id = ${txnId} AND r.role = 'envelope-binding'
           AND 'orbis/budget' = ANY(e.aspects)
         ORDER BY r.source_id`,
   );
@@ -148,7 +148,7 @@ async function spentOf(envelopeId: string): Promise<string> {
     sql`SELECT COALESCE(SUM((e.props->>'orbis/amount')::numeric), 0)::text AS spent
         FROM relations r
         JOIN entities e ON e.id = r.target_id
-        WHERE r.source_id = ${envelopeId} AND r.relation_type = 'parent'
+        WHERE r.source_id = ${envelopeId} AND r.role = 'envelope-binding'
           AND NOT e.archived
           AND 'orbis/financial' = ANY(e.aspects)
           AND e.props->>'orbis/direction' = 'expense'
@@ -456,7 +456,6 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
           sourceId: templateId,
           targetId: target,
           role: ROLE_INSTANCE_OF,
-          relationType: 'derived_from',
         })),
       ),
     );

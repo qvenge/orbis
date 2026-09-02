@@ -610,7 +610,7 @@ describe('горизонты показывают обещанное (§3.3, E4)
             // (`translateLegacyValue`); прямая запись `props` через него не идёт, и строкой
             // здесь значение не прошло бы схему свойства.
             'orbis/progress_source': {
-              query: { text: 'aspect=orbis/task, status=done' },
+              query: { text: 'aspect=orbis/task, orbis/task_status=done' },
               aggregate: 'count',
             },
             'orbis/target_value': '100',

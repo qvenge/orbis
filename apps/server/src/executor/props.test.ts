@@ -197,41 +197,7 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
     expect('meta' in e).toBe(false);
   });
 
-  test('entity_create с новой формой {props, aspects:[…]} (exec-вход) → та же строка; key и id принимаются', async () => {
-    const legacy = entityOf(
-      await run('entity_create', {
-        title: 'Обед',
-        tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '500.00',
-            direction: 'expense',
-            category_ref: CATEGORY_A,
-            occurred_on: '2026-08-26',
-          },
-        },
-      }),
-    );
-    const fresh = entityOf(
-      await run('entity_create', {
-        title: 'Обед',
-        tags: [],
-        props: {
-          'orbis/amount': '500.00',
-          'orbis/direction': 'expense',
-          'orbis/finance_category': CATEGORY_A,
-          'orbis/occurred_on': '2026-08-26',
-        },
-        aspects: ['orbis/financial'],
-      }),
-    );
-
-    const a = await rowOf(legacy.id);
-    const b = await rowOf(fresh.id);
-    // Валюта подставлена умолчанием у конверта, а не у транзакции — обе строки совпадают
-    expect(b.props).toEqual(a.props);
-    expect(b.aspects).toEqual(a.aspects);
-
+  test('адрес свойства во входе — id ИЛИ key, и оба дают одну строку', async () => {
     // Тот же адрес — двумя именами: id свойства и его key (у своего свойства они разные)
     const byId = entityOf(
       await run('entity_create', {
@@ -280,30 +246,36 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
     expect(afterUnset.props['orbis/direction']).toBe('expense');
   });
 
-  test('financial+budget с разной category_ref в одном create → VALIDATION (В1)', async () => {
-    const r = await run('entity_create', {
-      title: 'Конверт и трата разом',
-      tags: [],
-      aspects: {
-        'orbis/financial': {
-          amount: '100.00',
-          direction: 'expense',
-          category_ref: CATEGORY_A,
-          occurred_on: '2026-08-26',
+  test('financial+budget на одной записи: слитое свойство ОДНО, конфликту взяться неоткуда (В1)', async () => {
+    // КЛАСС ОТКАЗА СНЯТ РЕФОРМОЙ, и это не послабление, а следствие формы.
+    //
+    // `merged_property_conflict` рождался ровно на границе старой карты: две ячейки
+    // (`financial.category_ref` и `budget.category_ref`) адресовали ОДНО свойство
+    // `orbis/finance_category` (§А8/В1), и патч мог назвать им два разных значения. Плоский
+    // `props` двух значений одного свойства не несёт — противоречие невыразимо во входе, и
+    // отказывать не в чем. Проверяется положительно: запись с обоими аспектами берёт одно
+    // значение, и оба носителя видят его.
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'Конверт и трата разом',
+        tags: [],
+        props: {
+          'orbis/amount': '100.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_A,
+          'orbis/occurred_on': '2026-08-26',
+          'orbis/limit': '5000.00',
+          'orbis/period_start': '2026-08-01',
+          'orbis/period_end': '2026-08-31',
         },
-        'orbis/budget': {
-          category_ref: CATEGORY_B,
-          limit: '5000.00',
-          period_start: '2026-08-01',
-          period_end: '2026-08-31',
-        },
-      },
-    });
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error.code).toBe('VALIDATION');
-    expect((r.error.details as { reason?: string }).reason).toBe('merged_property_conflict');
-    expect((r.error.details as { property?: string }).property).toBe('orbis/finance_category');
+        aspects: ['orbis/financial', 'orbis/budget'],
+      }),
+    );
+    const row = await rowOf(e.id);
+    expect(row.props['orbis/finance_category']).toBe(CATEGORY_A);
+    expect(row.aspects.sort()).toEqual(['orbis/budget', 'orbis/financial']);
+    // Второе значение того же свойства выразить нечем: ключ в объекте один.
+    expect(Object.keys(row.props).filter((k) => k === 'orbis/finance_category')).toHaveLength(1);
   });
 });
 

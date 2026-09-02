@@ -83,10 +83,11 @@ describe('SYSTEM_PROMPT_V3 (§7.1 слой 1)', () => {
       // `orbis/goal`, и его json-схема — единственное описание этой формы (§А3-1).
       // Прежде здесь стояла zod-схема аспекта старой формы — второе описание тех же полей,
       // снятое «Пересевом мира».
+      // Значение канона (§А5-2): запрос лежит Q-AST-обёрткой, поле — id свойства.
       const progress_source =
         aggregate === 'count'
-          ? { query: 'aspect=orbis/task, orbis/task_status=done', aggregate }
-          : { query: 'aspect=orbis/financial', aggregate, field: 'orbis/amount' };
+          ? { query: { text: 'aspect=orbis/task, orbis/task_status=done' }, aggregate }
+          : { query: { text: 'aspect=orbis/financial' }, aggregate, field: 'orbis/amount' };
       expect(() =>
         assertEntityProps(GOAL_REG, {
           props: { 'orbis/progress_source': progress_source, 'orbis/target_value': '24' },

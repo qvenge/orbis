@@ -27,7 +27,7 @@ import {
   seedGardener,
   seedRoutineId,
 } from './gardener';
-import { seedOnboarding } from './onboarding';
+import { seedOwnerGraph } from './onboarding';
 
 requireEnv();
 
@@ -190,7 +190,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
     // отказ валидатора — что угодно). Guard настроек на следующем заходе ответил бы
     // «онбординг уже был» и не досеял бы садовника НИКОГДА.
     const owner = freshUserId();
-    await withIdentity(db, owner, (tx) => seedOnboarding(tx, owner));
+    await seedOwnerGraph(db, owner);
     expect(await routineRows(owner)).toHaveLength(0);
 
     const caller = callerFor(owner);

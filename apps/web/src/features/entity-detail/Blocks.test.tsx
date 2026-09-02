@@ -107,7 +107,7 @@ function handler(fx: Fixture) {
 
 // Список-сосед (Browser/Повестка/списки с excludeBlocked) на том же ключе entity.query:
 // его перечитывание — единственный наблюдаемый признак инвалидации.
-const PROBE_QUERY = { query: 'aspect=orbis/task, status=!done, limit=10' };
+const PROBE_QUERY = { query: 'aspect=orbis/task, orbis/task_status=!done, limit=10' };
 
 function ListProbe() {
   const q = trpc.entity.query.useQuery(PROBE_QUERY);

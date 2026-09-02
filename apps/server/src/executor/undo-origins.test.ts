@@ -30,7 +30,7 @@ import {
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
-import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
+import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { createCallerFactory } from '../trpc';
 import type { ExecuteErr, ExecuteOk, ExecuteResult } from './types';
 import { undoAction, undoLast } from './undo';
@@ -148,7 +148,7 @@ async function originKeysPresent(): Promise<string[]> {
 async function envelopeParentTargets(): Promise<string[]> {
   const rows = await adminRows(
     sql`SELECT target_id FROM relations
-        WHERE source_id = ${envelopeId} AND relation_type = 'parent'
+        WHERE source_id = ${envelopeId} AND role = 'envelope-binding'
         ORDER BY target_id`,
   );
   return rows.map((r) => r.target_id as string);
@@ -203,7 +203,7 @@ async function assertUndoneState(): Promise<void> {
 
 beforeAll(async () => {
   await truncateAll();
-  await withIdentity(db, user, (tx) => seedOnboarding(tx, user));
+  await seedOwnerGraph(db, user);
 
   // Подготовка МИМО executor и журнала (raw-вставки, как seedOnboarding): журнал
   // владельца должен содержать РОВНО ОДИН action — импорт, иначе второй undoLast

@@ -64,13 +64,13 @@ function editorField(dialog: HTMLElement): HTMLTextAreaElement {
 }
 
 test('«Настроить» у невалидного блока открывает редактор с текстом блока и позицией ошибки', async () => {
-  mountBody('{{query: aspect=orbis/task, status=}}');
+  mountBody('{{query: aspect=orbis/task, orbis/task_status=}}');
   // §6.4: битый блок — плашка, а не пустой список; настроить его надо уметь именно оттуда,
   // иначе единственный путь починки — редактировать весь текст руками.
   await screen.findByTestId('qb-error');
 
   const dialog = await openBlockEditor();
-  expect(editorField(dialog)).toHaveValue(' aspect=orbis/task, status=');
+  expect(editorField(dialog)).toHaveValue(' aspect=orbis/task, orbis/task_status=');
   expect(within(dialog).getByTestId('query-text-error')).toHaveTextContent(/позиция \d+/);
 });
 
@@ -84,7 +84,7 @@ test('сохранение изменённого текста заменяет 
   // Соседний блок цел ДОСЛОВНО, вместе с текстом вокруг: «правка блока» обязана остаться
   // правкой одного блока, а не пересборкой тела.
   expect(s.saved()).toBe(
-    'Утренний обзор\n\n{{query: status=, tags=work, title=Работа}}\n\nмежду\n\n{{query:tags=home, limit=5, title=Дом}}\n\nхвост',
+    'Утренний обзор\n\n{{query: orbis/task_status=, tags=work, title=Работа}}\n\nмежду\n\n{{query:tags=home, limit=5, title=Дом}}\n\nхвост',
   );
 });
 

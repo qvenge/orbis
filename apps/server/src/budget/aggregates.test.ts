@@ -18,7 +18,7 @@ import {
 import { withIdentity } from '../db/with-identity';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
-import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
+import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 import {
@@ -175,7 +175,7 @@ function envById(ov: BudgetOverview, id: string) {
 
 beforeAll(async () => {
   await truncateAll();
-  await withIdentity(db, userA, (tx) => seedOnboarding(tx, userA));
+  await seedOwnerGraph(db, userA);
 
   // Иерархия §2.10: родительская категория → дочерняя (relation parent)
   catParent = (
@@ -304,16 +304,22 @@ afterAll(async () => {
 });
 
 /**
- * ИНТЕРВАЛ 7a→0017 (урок C1 Задачи 7a). Конвертом-родителем транзакции до contract-миграции
- * считается ЛЮБАЯ связь от конверта, проецирующаяся в старый `parent`, — так её видят и хук
- * привязки (`budgetParentsOfMany`), и инвариант «один budget-parent»
- * (`assertSingleLegacyBudgetParent`). Агрегаты обязаны считать ТО ЖЕ множество: сузив их до
- * одной роли `envelope-binding`, мы получили бы расход, которого владелец в конверте не
- * видит, и «свободно» больше реального.
+ * «Конверт-родитель» — РОВНО роль `envelope-binding`, одна и та же у всех троих читателей:
+ * агрегатов (`spentByEnvelope`, unbudgeted), хука привязки (`budgetParentsOfMany`) и
+ * карточки импорта. Урок C1 Задачи 7a остаётся в силе — расхождение множества у двух
+ * читателей стоило владельцу двойного счёта денег, — но само множество схлопнулось.
  *
- * Проба идёт ролью `subitem` — той самой, которой владелец связывает записи руками.
+ * ДО 0017 оно было ШИРЕ, и не по вкусу: уникальность стояла на ПРОЕКЦИИ роли в снятую
+ * колонку `relation_type`, поэтому рядом с ребром роли ВЛАДЕЛЬЦА (`subitem` от конверта к
+ * транзакции) хук не мог поставить своё `envelope-binding`. Не считай агрегат такое ребро
+ * расходом — владелец увидел бы трату в списке, но не в карточке конверта. С уникальностью
+ * по `(source, target, role)` запрета нет: привязка ставится своей ролью всегда.
+ *
+ * СМЕНА НАБЛЮДАЕМОГО ПОВЕДЕНИЯ, названная вслух (обещание PRD 10): ручная связь `subitem`
+ * от конверта к транзакции расходом БОЛЬШЕ НЕ СЧИТАЕТСЯ. На проде таких рёбер после
+ * пересева не будет; здесь они проверяются прямо, чтобы правило было видно.
  */
-describe('множество «конверт-родитель» на интервале до 0017 (§13.7)', () => {
+describe('«конверт-родитель» — одна роль envelope-binding (§13.7 после 0017)', () => {
   const userC = freshUserId();
   const catC = seedCategoryId(userC, 'food');
   const catOther = seedCategoryId(userC, 'entertainment');
@@ -321,7 +327,7 @@ describe('множество «конверт-родитель» на интер
   let txnManual = '';
 
   beforeAll(async () => {
-    await withIdentity(db, userC, (tx) => seedOnboarding(tx, userC));
+    await seedOwnerGraph(db, userC);
     envC = (await exec(userC, 'entity_create', envelope(catC, cmStart, cmEnd, '10000.00'))).id;
     // Транзакция ЧУЖОЙ категории — авто-привязка (A4) её к этому конверту не ставит…
     txnManual = (await exec(userC, 'entity_create', txn(catOther, '700.00', today))).id;
@@ -333,14 +339,23 @@ describe('множество «конверт-родитель» на интер
     });
   });
 
-  test('связь роли владельца от конверта к транзакции входит в spent конверта', async () => {
+  test('связь роли ВЛАДЕЛЬЦА от конверта к транзакции в spent конверта НЕ входит', async () => {
     const ov = await budgetOverview(db, userC, curMonth);
-    expect(envById(ov, envC).spent).toBe('700.00');
+    expect(envById(ov, envC).spent).toBe('0.00');
   });
 
-  test('та же связь выводит транзакцию из unbudgeted: у обоих читателей одно множество', async () => {
+  test('та же связь транзакцию из unbudgeted НЕ выводит: у обоих читателей одно множество', async () => {
     const ov = await budgetOverview(db, userC, curMonth);
-    expect(ov.unbudgeted.map((u) => u.category.id)).not.toContain(catOther);
+    expect(ov.unbudgeted.map((u) => u.category.id)).toContain(catOther);
+  });
+
+  test('привязка роли `envelope-binding` в spent входит — множество не пустое', async () => {
+    // Контроль правила: без него оба утверждения выше зеленели бы и на сломанном запросе,
+    // который не считает ВООБЩЕ ничего.
+    const txnBound = (await exec(userC, 'entity_create', txn(catC, '250.00', today))).id;
+    const ov = await budgetOverview(db, userC, curMonth);
+    expect(envById(ov, envC).spent).toBe('250.00');
+    expect(txnBound).not.toBe('');
   });
 
   // НАЗВАННАЯ ПЕРЕМЕНА реформы (§А4-3): дерево категорий §2.10 собирает роль
@@ -383,7 +398,7 @@ describe('множество «конверт-родитель» на интер
     const free = (await exec(userC, 'entity_create', txn(catOther, '900.00', today))).id;
     await exec(userC, 'relation_create', { source_id: plain, target_id: free, role: 'subitem' });
     const ov = await budgetOverview(db, userC, curMonth);
-    expect(envById(ov, envC).spent).toBe('700.00');
+    expect(envById(ov, envC).spent).toBe('250.00');
     // …и она осталась unbudgeted — родителя-конверта у неё нет
     expect(ov.unbudgeted.map((u) => u.category.id)).toContain(catOther);
   });
@@ -747,7 +762,7 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
           SELECT count(*)::int AS n FROM entities e
           WHERE e.owner_id = ${user}
             AND EXISTS (SELECT 1 FROM relations r
-                        WHERE r.target_id = e.id AND r.relation_type = 'derived_from')
+                        WHERE r.target_id = e.id AND r.role = 'instance-of')
         `)) as unknown as Array<{ n: number }>;
         return rows[0]?.n ?? 0;
       });

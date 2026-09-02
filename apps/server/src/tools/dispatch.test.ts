@@ -490,7 +490,7 @@ describe('LLM-контракты entity_create/entity_update на свойств
     expect((await propsOfRowA(target.id))['orbis/task_status']).toBe('waiting');
   });
 
-  test('meta и старая карта аспектов в LLM-туле → VALIDATION; UI-роутер старую карту ПРИНИМАЕТ (до 13c)', async () => {
+  test('meta и старая карта аспектов → VALIDATION на ОБОИХ входах: тул и надмножество исполнителя', async () => {
     const target = await seedEntity(userA, { title: 'Цель старой формы', tags: [] });
     // `additionalProperties: false` контракта тула: мешка `meta` больше нет вовсе (§А1-3).
     expectError(
@@ -501,10 +501,7 @@ describe('LLM-контракты entity_create/entity_update на свойств
       }),
       'VALIDATION',
     );
-    // ALLOWLIST старой формы (Задача 23a): фикстура НАМЕРЕННО говорит старой картой —
-    // тест утверждает её ОТКАЗ тул-контрактом. Задача 23b снимает союз легаси-входа, и
-    // тогда вторая половина теста (приём той же карты надмножеством исполнителя) станет
-    // отказом тоже — фикстура нужна ровно до этого момента.
+    // Фикстура НАМЕРЕННО говорит старой картой — тест утверждает её ОТКАЗ.
     expectError(
       await dispatchTool(ctxFor(), 'entity_update', {
         id: target.id,
@@ -513,8 +510,9 @@ describe('LLM-контракты entity_create/entity_update на свойств
       'VALIDATION',
     );
 
-    // …а надмножество tRPC-роутера старую карту принимает: web переводится Задачей 13c,
-    // и до неё владелец обязан править свои записи из UI.
+    // …и НАДМНОЖЕСТВО ИСПОЛНИТЕЛЯ — тоже отказ, с «Пересева мира». Оно было последним
+    // входом старой карты во всём сервере; пока союз стоял, эта половина теста проверяла
+    // ПРИЁМ той же формы.
     const viaUi = await execute(db, {
       actorUserId: userA,
       actorKind: 'owner',
@@ -522,14 +520,15 @@ describe('LLM-контракты entity_create/entity_update на свойств
       operations: [
         {
           tool: 'entity_update',
-          // ALLOWLIST старой формы (Задача 23a): здесь проверяется, что exec-надмножество
-          // её ещё ПРИНИМАЕТ — до сноса союза Задачей 23b.
           input: { id: target.id, aspects: { 'orbis/task': { status: 'done' } } },
         },
       ],
     });
-    expect(viaUi.ok).toBe(true);
-    expect((await propsOfRowA(target.id))['orbis/task_status']).toBe('done');
+    expect(viaUi.ok).toBe(false);
+    if (viaUi.ok) return;
+    expect(viaUi.error.code).toBe('VALIDATION');
+    // Отказ ДО записи: статус не изменился.
+    expect((await propsOfRowA(target.id))['orbis/task_status']).toBeUndefined();
   });
 
   test('entity_query печатает props по KEY, без meta и без карты аспектов (§А9-2)', async () => {
@@ -1160,7 +1159,7 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
     const r = await dispatchTool(ctxFor(), 'user_query', {
       query: 'aspect=orbis/financial, tags=uqtest',
       aggregate: 'sum',
-      field: 'amount',
+      field: 'orbis/amount',
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
@@ -1177,7 +1176,7 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
     const r = await dispatchTool(ctxFor(), 'user_query', {
       query: 'aspect=orbis/financial, tags=uqtest, limit=1',
       aggregate: 'sum',
-      field: 'amount',
+      field: 'orbis/amount',
     });
     expect(r.status).toBe('ok');
     if (r.status === 'ok') expect(r.result).toBe('300.75');
@@ -1267,7 +1266,7 @@ describe('dispatchTool: user_query материализует окно запр�
     const r = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
       query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',
       aggregate: 'sum',
-      field: 'amount',
+      field: 'orbis/amount',
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;

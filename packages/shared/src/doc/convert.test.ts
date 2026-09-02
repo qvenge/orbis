@@ -133,7 +133,7 @@ describe('канонизация вместо строгой сверки (ре�
 
 describe('поблочный raw по токенам (решение по Б1, мера 3)', () => {
   test('HTML-блок уезжает в raw ОДИН, соседний смарт-лист остаётся виджетом', () => {
-    const md = '<div>x</div>\n\n{{query: aspect=orbis/task, status=inbox}}';
+    const md = '<div>x</div>\n\n{{query: aspect=orbis/task, orbis/task_status=inbox}}';
     expect(types(md)).toEqual(['rawBlock', 'queryBlock']);
     expect(serializeBody(parseBody(md))).toBe(md); // raw отдаёт дословно, канон остального совпал
   });
@@ -227,7 +227,7 @@ describe('свои конструкции', () => {
   });
 
   test('многострочный query дословен; }} внутри запроса блоком не считается', () => {
-    const multi = '{{query: aspect=orbis/task,\n         status=inbox}}';
+    const multi = '{{query: aspect=orbis/task,\n         orbis/task_status=inbox}}';
     expect(serializeBody(parseBody(multi))).toBe(multi);
     expect(raws(multi)).toEqual([]);
     // Хвост после `}}` — обычный текст, блок закрылся на первом `}}`; в raw ничто не уезжает.
@@ -929,7 +929,7 @@ describe('разбор обязан воспроизвести свой текс
       'ссылка [сюда](https://example.com/путь)',
       'автоссылка <https://example.com/путь>',
       `см. [[entity:${UUID}|Кроссовки]]`,
-      '{{query: aspect=orbis/task, status=inbox}}',
+      '{{query: aspect=orbis/task, orbis/task_status=inbox}}',
       'эмодзи 🎉 и семья 👨‍👩‍👧‍👦',
       '\\_курсив\\_ и \\> не цитата',
       '&copy; знак и &lt;тег&gt; и &amp; амперсанд',

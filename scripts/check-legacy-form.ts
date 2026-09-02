@@ -89,21 +89,44 @@ export type LegacyMarker = {
   readonly exclude?: readonly RegExp[];
 };
 
+/**
+ * СТРОКА, КОТОРАЯ ЦЕЛИКОМ КОММЕНТАРИЙ, — не использование формы, а объяснение того, чего
+ * больше нет, и маркеры снятых носителей её не считают.
+ *
+ * Почему это не поблажка. Три маркера ниже (`aspects-legacy`, `relation-type`,
+ * `entity-meta`) описывают то, чего в базе НЕТ с contract-миграции 0017: колонки сняты, и
+ * вернуть их можно только новой миграцией. А объяснять удалённое надо ТАМ, ГДЕ ЕГО БОЛЬШЕ
+ * НЕТ, — иначе следующий читатель не узнает, почему `rel_uniq` стоит на роли, почему у
+ * связи мешок `meta` есть, а у сущности нет, и почему бюджет считает одну роль. Запрет
+ * называть снятое по имени сделал бы докблоки лживыми — самая дорогая цена из возможных.
+ *
+ * Маркер при этом ловит ИМЯ, ВЕРНУВШЕЕСЯ В КОД: импорт, вызов, поле, SQL-строку, хвостовой
+ * комментарий рядом с кодом. Снимается только строка, которая КОММЕНТАРИЙ ЦЕЛИКОМ —
+ * `//`, `*`, `/*` либо SQL-ное `--` в начале (внутри шаблонных литералов SQL комментарии
+ * пишутся так). Тот же приём и тот же довод, что у маркера `legacy-grammar`, где он
+ * заведён Задачей 21b.
+ */
+const COMMENT_ONLY_LINE = /^\s*(?:\/\/|\*|\/\*|--).*$/;
+
 export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
   { id: 'aspects-path', pattern: String.raw`aspects(_legacy)?\s*->` },
-  // `aspectsMap` — имя старой карты в WIRE-форме — жил с Задачи 4a до 13c и снят ею: в
-  // продуктовом коде его больше нет ни одного (остались утверждения об его ОТСУТСТВИИ в
-  // тестах и образцы в самом гейте). `aspects_legacy`/`aspectsLegacy` — имя КОЛОНКИ, и она
-  // живёт до «Пересева мира» (РП-2): её пишет дуальная запись исполнителя, читает слой
-  // памяти чата, и снимает её миграция 0017 (Задача 23) — до тех пор совпадения по ней
-  // законны и считаются отчётом, а не нарушением. Маркер `->>'` из §А12-2 НЕ заводится:
-  // после перевода `props->>'orbis/…'` — законная форма доступа, а старую форму целиком
-  // покрывает `aspects(_legacy)?\s*->`.
+  // `aspectsMap` — имя старой карты в WIRE-форме, снято Задачей 13c;
+  // `aspects_legacy`/`aspectsLegacy` — имя КОЛОНКИ, снятой contract-миграцией 0017;
+  // `legacy-form` — модуль проекции, удалённый там же. Ни одного из трёх в коде больше нет,
+  // и маркер обязан давать НОЛЬ вне allowlist навсегда: имя, вернувшееся в код, означает
+  // воскресшую вторую запись тех же значений. Маркер `->>'` из §А12-2 НЕ заводится: после
+  // перевода `props->>'orbis/…'` — законная форма доступа, а старую форму целиком покрывает
+  // `aspects(_legacy)?\s*->`.
   {
     id: 'aspects-legacy',
     pattern: String.raw`aspects_legacy|aspectsLegacy|aspectsMap|legacy-form`,
+    exclude: [COMMENT_ONLY_LINE],
   },
-  { id: 'relation-type', pattern: String.raw`relation_type|relationType|RELATION_TYPES` },
+  {
+    id: 'relation-type',
+    pattern: String.raw`relation_type|relationType|RELATION_TYPES`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
   // entity-meta — АДРЕСУЕМОЕ имя снятой колонки, и только оно. Голое `\bmeta\b` по этим же
   // путям давало 281 совпадение — гейт на 281 строке неисполним.
   //
@@ -124,12 +147,14 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
   //    поэтому `meta:` во вставке сущности не компилируется, а не «ускользает от маркера».
   // Маркеру остаётся то, что однозначно: адресация колонки и имя её индекса.
   //
-  // `entities_meta_gin` — имя из `0001:104`. Прежний маркер писал `entity_meta_gin`
-  // (единственное число) и не совпал бы с индексом, если бы тот вернулся.
+  // ДВЕ ФОРМЫ ИМЕНИ, а не `entities?`: прежняя запись `entities?\.meta` раскрывалась как
+  // «entitie» плюс необязательная «s» и не совпадала с `entity.meta` — то есть с самой
+  // естественной формой обращения в JS. Индекс тоже назван обеими: в `0001:104` он
+  // `entities_meta_gin`, а прежний маркер искал `entity_meta_gin` и не нашёл бы его.
   {
     id: 'entity-meta',
-    pattern: String.raw`entities?\.meta\b|entities?_meta_gin`,
-    exclude: [/import\.meta/, /relations?\.meta/, /\bmetadata\b/],
+    pattern: String.raw`entit(?:y|ies)\.meta\b|entit(?:y|ies)_meta_gin`,
+    exclude: [COMMENT_ONLY_LINE, /import\.meta/, /relations?\.meta/, /\bmetadata\b/],
   },
   { id: 'due-alias', pattern: String.raw`\bdue=` },
   // Голое имя поля в тексте запроса — и в `{{query:}}`, и в строковых литералах web
@@ -184,6 +209,16 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
 export type AllowEntry = {
   /** Путь от корня репозитория, ровно как его печатает `git grep`. */
   readonly path: string;
+  /**
+   * Маркеры, по которым файл снят. Не указан — снят по ВСЕМ (так заведены две записи самого
+   * гейта: в них дословно перечислены все маркеры сразу).
+   *
+   * Список нужен, чтобы поблажка была РОВНО по размеру повода. Сьют на четыре тысячи строк,
+   * снятый целиком ради одного утверждения «этого ключа в карточке нет», перестал бы
+   * проверяться по остальным десяти маркерам — и первая же вернувшаяся туда старая форма
+   * прошла бы молча.
+   */
+  readonly markers?: readonly string[];
   /** Почему совпадения в этом файле законны. Без причины запись не заводится. */
   readonly reason: string;
 };
@@ -191,13 +226,36 @@ export type AllowEntry = {
 /**
  * Файлы, совпадения в которых не считаются нарушением.
  *
- * Запись снимает файл целиком по ВСЕМ маркерам — поэтому отчёт печатает, сколько строк
- * сняла каждая запись: растущее число видно глазом и требует объяснения.
+ * Запись снимает файл по перечисленным маркерам (без списка — по всем), поэтому отчёт
+ * печатает, сколько строк сняла каждая: растущее число видно глазом и требует объяснения.
  *
- * Наполняет список Задача 23 (тесты грамматики, проверяющие ОТКАЗ старой формы, и
- * перечисленные места `relations.meta`). Сейчас в нём только два неустранимых случая —
- * сам гейт и его тест: оба обязаны содержать образцы старой формы дословно.
+ * ЧТО СЮДА ПОПАДАЕТ — ровно три класса, и у каждого своё основание:
+ *  1. ЗАМОРОЖЕННЫЙ АРТЕФАКТ. Промпты `v1…v4`, `routine-v1/v2` и их `.fixture.txt` — снимки
+ *     того, что модель ВИДЕЛА; их текст не правится ни байтом (РП-18), иначе снимок
+ *     перестаёт быть снимком. Туда же — прод-тела владельца в `onboarding.test.ts` и
+ *     golden-корпус вердиктов: оба заморожены как ВХОД, а не как образец сверки.
+ *  2. УТВЕРЖДЕНИЕ ОБ ОТКАЗЕ. Тест, который пишет старую форму и требует на неё ошибку,
+ *     обязан содержать её дословно — иначе он проверяет не то, что называет.
+ *  3. САМ ГЕЙТ И ЕГО ТЕСТ: маркеры перечислены в них дословно.
+ *
+ * Чего здесь НЕТ и быть не должно: боевого кода. Ни одной записи на продуктовые каталоги,
+ * кроме замороженных промптов, — поблажка продукту означала бы, что форма жива.
  */
+const FROZEN_PROMPTS = [
+  'v1',
+  'v1.fixture',
+  'v2',
+  'v2.fixture',
+  'v3',
+  'v3.fixture',
+  'v4',
+  'v4.fixture',
+  'routine-v1',
+  'routine-v1.fixture',
+  'routine-v2',
+  'routine-v2.fixture',
+] as const;
+
 export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
   {
     path: 'scripts/check-legacy-form.ts',
@@ -206,6 +264,120 @@ export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
   {
     path: 'scripts/check-legacy-form.test.ts',
     reason: 'тест гейта: образцы старой формы в нём — предмет проверки, а не нарушение',
+  },
+  {
+    path: 'scripts/legacy-aspects-map.test.ts',
+    reason:
+      'страж старой карты в фикстурах: образец формы и его allowlist перечислены дословно — ' +
+      'иначе он находит сам себя (тот же случай, что у гейта выше)',
+  },
+
+  // --- 1. Замороженные артефакты ---------------------------------------------------------
+  ...FROZEN_PROMPTS.map((name) => ({
+    path: `apps/server/src/llm/prompts/${name}.${name.endsWith('.fixture') ? 'txt' : 'ts'}`,
+    markers: ['bare-field'] as const,
+    reason:
+      'замороженный снимок промпта (РП-18): его текст — то, что модель ВИДЕЛА, и правка ' +
+      'любого байта делает снимок не снимком; шпаргалка грамматики в нём голая по построению',
+  })),
+  {
+    path: 'apps/server/src/llm/prompts/v4.test.ts',
+    markers: ['bare-field'],
+    reason:
+      'снимок примеров v4 ДОСЛОВНО (`expect(...).toContain`): формы старые намеренно — ' +
+      'таким v4 и был, и правка примера обязана быть видимым движением в диффе',
+  },
+  {
+    path: 'apps/server/src/llm/prompts/v5.test.ts',
+    markers: ['bare-field'],
+    reason:
+      'гард смены линейки: цитирует строки v4 (их в v5 быть не должно) и утверждает ОТКАЗ ' +
+      'разбора голых имён — обе половины требуют старой формы дословно',
+  },
+  {
+    path: 'apps/server/src/llm/prompts/routine-v3.test.ts',
+    markers: ['bare-field'],
+    reason: 'то же, что у v5.test.ts, для линейки рутин: цитата routine-v2 плюс отказ разбора',
+  },
+  {
+    path: 'apps/server/src/seed/onboarding.test.ts',
+    markers: ['bare-field'],
+    reason:
+      'прод-тела владельца, замороженные как ВХОД бэкфилла D42 (дословно из `696dda3`): ' +
+      'подогнать их под сегодняшний сид нельзя — в базе лежит именно эта строка, и именно ' +
+      'на ней бэкфилл обязан сработать один раз',
+  },
+  {
+    path: 'apps/server/perf/explain.test.ts',
+    markers: ['aspects-legacy', 'entity-meta'],
+    reason:
+      'приёмка «EXPLAIN против 0017»: `DROPPED_BY_0017` перечисляет СНЯТЫЕ индексы дословно ' +
+      '— иначе утверждение «вердиктные индексы в DROP-список не входят» проверять не с чем',
+  },
+  {
+    path: 'apps/server/test/golden/validator-verdicts.json',
+    markers: ['bare-field'],
+    reason:
+      'golden-корпус вердиктов, замороженный Задачей 23a: он собран ДО перевода и по другим ' +
+      'источникам, поэтому правка входа обессмысливает сверку',
+  },
+
+  // --- 2. Утверждения об отказе -----------------------------------------------------------
+  {
+    path: 'packages/shared/src/query/ast-fixtures.ts',
+    markers: ['bare-field'],
+    reason:
+      'опись боевых текстов ДО реформы: у каждой записи `verdict: UNKNOWN_FIELD` — это ' +
+      'фикстуры ОТКАЗА разбора, и старая форма в них предмет проверки',
+  },
+  {
+    path: 'apps/web/src/lib/query-blocks/parse.test.ts',
+    markers: ['bare-field'],
+    reason: 'проба «голое имя поля → UNKNOWN_FIELD»: форма отказа пишется дословно',
+  },
+  {
+    path: 'apps/server/src/tools/dispatch.test.ts',
+    markers: ['bare-field', 'aspects-legacy'],
+    reason:
+      'entity_query со старым именем поля → ошибка с именем в тексте; список ключей, которых ' +
+      'в карточке НЕТ, называет `aspectsMap` дословно',
+  },
+  {
+    path: 'apps/server/src/executor/legacy-input-rejected.test.ts',
+    markers: ['aspects-legacy'],
+    reason:
+      'приёмка §С8-10 п.13: старая карта на входе → VALIDATION, и вторая половина — греп ' +
+      'по дереву на отсутствие снятого модуля; оба имени пишутся дословно',
+  },
+  {
+    path: 'apps/server/src/wire.test.ts',
+    markers: ['aspects-legacy'],
+    reason: 'утверждение «`aspectsMap` в wire-форме НЕТ» — имя ключа называется дословно',
+  },
+  {
+    path: 'apps/server/src/export.test.ts',
+    markers: ['aspects-legacy'],
+    reason: 'то же утверждение для формы экспорта',
+  },
+  {
+    path: 'apps/server/src/agent-loop/verbs.test.ts',
+    markers: ['aspects-legacy'],
+    reason: 'то же утверждение для замороженного снимка wire-формы прогона (§7.8)',
+  },
+  {
+    path: 'apps/web/src/test/fixtures.test.ts',
+    markers: ['aspects-legacy'],
+    reason: 'страж web «старой карты в фикстурах нет»: искомая подстрока — само имя',
+  },
+  {
+    path: 'apps/server/test/e2e.slice1a.test.ts',
+    markers: ['relation-type'],
+    reason: 'утверждение «`relationType` в wire-форме связи НЕТ» — имя поля называется дословно',
+  },
+  {
+    path: 'packages/shared/src/contracts/tools.test.ts',
+    markers: ['relation-type'],
+    reason: 'контракт ребра принимает `role` и ОТВЕРГАЕТ `relation_type` — имя в предмете проверки',
   },
 ];
 
@@ -228,7 +400,12 @@ export type MarkerReport = {
   readonly allowed: ReadonlyMap<string, number>;
 };
 
-const ALLOWED_PATHS = new Set(ALLOWLIST.map((e) => e.path));
+/** Снят ли файл по ЭТОМУ маркеру (запись без списка маркеров снимает по всем). */
+function allowedFor(path: string, marker: string): boolean {
+  return ALLOWLIST.some(
+    (e) => e.path === path && (e.markers === undefined || e.markers.includes(marker)),
+  );
+}
 
 /** Метка-заглушка вместо вырезанной `exclude`-формы: не буква и не цифра, границы слов не рвёт. */
 const MASK_CHAR = '\u0001';
@@ -281,7 +458,7 @@ export function scanMarker(marker: LegacyMarker, cwd: string): MarkerReport {
       excluded += 1;
       continue;
     }
-    if (ALLOWED_PATHS.has(path)) {
+    if (allowedFor(path, marker.id)) {
       allowed.set(path, (allowed.get(path) ?? 0) + 1);
       continue;
     }

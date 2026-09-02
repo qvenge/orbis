@@ -146,7 +146,7 @@ test('монтирование документа с сервера НЕ зов�
   // UniqueID проставляет id транзакцией после монтирования (гасится canonicalDoc-сравнением).
   const onChange = vi.fn();
   const h = held();
-  const md = 'текст\n\n{{query: aspect=orbis/task, status=inbox}}'; // кончается блоком — худший случай
+  const md = 'текст\n\n{{query: aspect=orbis/task, orbis/task_status=inbox}}'; // кончается блоком — худший случай
   renderWithProviders(
     <BodyEditor doc={parseBody(md)} onChange={onChange} onReady={(e) => (h.editor = e)} />,
     handler,
@@ -267,7 +267,7 @@ test('смарт-лист переживает набор рядом с ним �
   // Главное обещание работы: во время правки блок остаётся блоком, а не фигурными скобками.
   const onChange = vi.fn();
   const h = held();
-  const md = 'привет\n\n{{query: aspect=orbis/task, status=inbox}}';
+  const md = 'привет\n\n{{query: aspect=orbis/task, orbis/task_status=inbox}}';
   renderWithProviders(
     <BodyEditor doc={parseBody(md)} onChange={onChange} onReady={(e) => (h.editor = e)} />,
     handler,
@@ -296,7 +296,7 @@ test('смарт-лист переживает набор рядом с ним �
   // `toContain('{{query: …}}')` оставался бы зелёным и при схлопывании блока в текст.
   const next = onChange.mock.calls.at(-1)?.[0] as { doc: { content?: { type: string }[] } };
   expect(next.doc.content?.map((n) => n.type)).toEqual(['paragraph', 'queryBlock']);
-  expect(serializeBody(next)).toContain('{{query: aspect=orbis/task, status=inbox}}');
+  expect(serializeBody(next)).toContain('{{query: aspect=orbis/task, orbis/task_status=inbox}}');
 });
 
 // --- Б5: белый список протоколов --------------------------------------------------------
@@ -394,7 +394,7 @@ const RICH_BODY = [
   '- один',
   '- два',
   '',
-  '{{query: aspect=orbis/task, status=inbox}}',
+  '{{query: aspect=orbis/task, orbis/task_status=inbox}}',
 ].join('\n');
 
 /** Редактор с телом `md` и проставленными блочными id. */
@@ -478,7 +478,7 @@ test('копия ИЗНУТРИ редактора вставляется цел
   expect(html).toContain('data-pm-slice');
   expect(html).toContain(`data-entity-id="${KUPIT}"`);
   expect(html).toContain('data-label="Купить"></span>');
-  expect(html).toContain('data-query=" aspect=orbis/task, status=inbox"></div>');
+  expect(html).toContain('data-query=" aspect=orbis/task, orbis/task_status=inbox"></div>');
 
   // Cmd+V поверх того же выделения: документ обязан остаться ТЕМ ЖЕ.
   editor.view.pasteHTML(html);
@@ -499,7 +499,7 @@ test('копия ИЗНУТРИ редактора вставляется цел
   // `text` — тот же неразобранный текст: круг «копия → вставка» идёт через HTML буфера, и
   // читает его атрибутный parseHTML ноды (`data-query`/`data-ast`). Дерева у блока, собранного
   // разбором markdown, нет — реестра в этом слое не бывает (Р-21-1).
-  expect(after.content?.[3]?.attrs?.text).toBe(' aspect=orbis/task, status=inbox');
+  expect(after.content?.[3]?.attrs?.text).toBe(' aspect=orbis/task, orbis/task_status=inbox');
   expect(after.content?.[3]?.attrs?.ast).toBeNull();
   // И целиком, с точностью до того, что редактор дописывает сам (блочные id, умолчания
   // атрибутов): круг копирования документ не меняет.

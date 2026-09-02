@@ -154,7 +154,7 @@ async function _legacyBudgetParents(targetId: string): Promise<string[]> {
     const rows = await admin.execute(
       sql`SELECT r.source_id FROM relations r
           JOIN entities e ON e.id = r.source_id
-          WHERE r.target_id = ${targetId} AND r.relation_type = 'parent'
+          WHERE r.target_id = ${targetId} AND r.role = 'envelope-binding'
             AND 'orbis/budget' = ANY(e.aspects)
           ORDER BY r.source_id`,
     );

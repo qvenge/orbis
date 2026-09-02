@@ -160,7 +160,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
   const rows = await adminRows(
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
-        WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
+        WHERE r.target_id = ${txnId} AND r.role = 'envelope-binding'
           AND 'orbis/budget' = ANY(e.aspects)
         ORDER BY r.source_id`,
   );

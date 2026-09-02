@@ -1516,7 +1516,7 @@ test('перештамповка ПРОГОНЯЕТ документ через 
       type: 'doc',
       content: [
         { type: 'paragraph', content: [{ type: 'text', text: 'тело и правка' }] },
-        { type: 'queryBlock', attrs: { query: ' aspect=orbis/task, status=inbox' } },
+        { type: 'queryBlock', attrs: { query: ' aspect=orbis/task, orbis/task_status=inbox' } },
       ],
     },
   });
@@ -1529,7 +1529,7 @@ test('перештамповка ПРОГОНЯЕТ документ через 
   const sent = (s.input(0) as { bodyDoc: BodyDoc }).bodyDoc;
   expect(sent.v).toBe(DOC_SCHEMA_VERSION);
   const block = (sent.doc.content ?? [])[1];
-  expect(block?.attrs?.text).toBe(' aspect=orbis/task, status=inbox');
+  expect(block?.attrs?.text).toBe(' aspect=orbis/task, orbis/task_status=inbox');
   expect(block?.attrs?.ast).toBeNull();
   // Старого имени не осталось: иначе на сервере лежали бы ДВЕ правды об одном блоке.
   expect(block?.attrs?.query).toBeUndefined();

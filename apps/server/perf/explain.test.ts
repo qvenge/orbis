@@ -131,6 +131,39 @@ async function verdictFor(index: string, query: SQL, note: string): Promise<Verd
   return v;
 }
 
+/**
+ * Индексы, которые contract-миграция 0017 СНИМАЕТ, — дословно из её текста.
+ *
+ * Два первых уходят вместе с колонками (`entities.aspects_legacy`, `entities.meta`), два
+ * последних — явным `DROP INDEX` вместе с колонкой `relations.relation_type`. Список нужен
+ * здесь ради одного утверждения: НИ ОДИН из индексов, по которым этот файл снимает вердикт,
+ * в него не входит — то есть решение «оставить» принято по замеру, а не по забывчивости.
+ */
+const DROPPED_BY_0017: readonly string[] = [
+  'entities_aspects_legacy_gin',
+  'entities_meta_gin',
+  'relations_source_type',
+  'relations_target_type',
+];
+
+/**
+ * ПИН ВЕРДИКТА — строкой целиком, а не тремя `typeof … === 'boolean'`.
+ *
+ * До этой задачи три из семи проверок файла были ТАВТОЛОГИЯМИ: `expect(typeof v.chosen)
+ * .toBe('boolean')` истинно при любом замере, то есть «7 pass» означало «семь тестов
+ * отработали», а не «семь проверок что-то проверили» (долг 4 ветки). Файл вне `bun run
+ * test`, и покраснеть этому было негде.
+ *
+ * Теперь вердикт пинится целиком: сменится любой из трёх флагов — тест покраснеет и
+ * заставит перечитать DROP-список 0017. Именно это и есть приёмка «EXPLAIN против 0017».
+ */
+function expectVerdict(v: Verdict, expected: string): void {
+  expect(DROPPED_BY_0017).not.toContain(v.index);
+  expect(`${v.index}: chosen=${v.chosen} usable=${v.usable} admin=${v.usableWithoutRls}`).toBe(
+    `${v.index}: ${expected}`,
+  );
+}
+
 const ctx = () => ({
   ownerId: GRAPH_OWNER_ID,
   today: '2026-07-03',
@@ -151,10 +184,11 @@ test('вердикт по entities_props_gin: горячий запрос — co
     query,
     `props @> {"${RARE_PROPERTY}":["${RARE_VALUE}"]} на ${GRAPH_ENTITIES} строках, ~50 совпадений`,
   );
-  // Тест не утверждает, что индекс ДОЛЖЕН быть выбран, — он утверждает, что вердикт снят
-  // и однозначен. Решение о снятии индекса принимает Задача 23 по этим двум флагам.
-  expect(typeof v.chosen).toBe('boolean');
-  expect(typeof v.usable).toBe('boolean');
+  // ВЕРДИКТ 0017: приложением НЕ используется, под админ-DSN — используется. Причина одна
+  // на все три GIN и не в индексе: политика `owner_owns_row` приходит security qual'ом, а
+  // `jsonb_contains` не leakproof (пиннится отдельным тестом ниже). Поэтому 0017 индекс
+  // ОСТАВЛЯЕТ: под админским подключением ходят сиды, скрипты и `ops.ts`.
+  expectVerdict(v, 'chosen=false usable=false admin=true');
 }, 300_000);
 
 test('вердикт по entities_aspects_gin: горячий запрос — членство в аспекте', async () => {
@@ -164,8 +198,7 @@ test('вердикт по entities_aspects_gin: горячий запрос — 
     query,
     `aspects @> ARRAY['${RARE_ASPECT}'] на ${GRAPH_ENTITIES} строках, ~50 совпадений`,
   );
-  expect(typeof v.chosen).toBe('boolean');
-  expect(typeof v.usable).toBe('boolean');
+  expectVerdict(v, 'chosen=false usable=false admin=true');
 }, 300_000);
 
 /**
@@ -304,15 +337,34 @@ test('вердикт по entities_query_refs_gin: колонка заполне
     query,
     `query_refs заполнены у ${filled} строк из ${GRAPH_ENTITIES}; ищется ${RARE_PROPERTY}`,
   );
-  // Как и у остальных вердиктов: тест не решает, снимать ли индекс, — он утверждает, что
-  // вердикт снят по НЕПУСТОЙ колонке и однозначен. Решение — Задача 23.
-  expect(typeof v.chosen).toBe('boolean');
-  expect(typeof v.usable).toBe('boolean');
+  // Вердикт снят по НЕПУСТОЙ колонке (см. выше) и пинится целиком. Р-П-1: этот индекс изъят
+  // из правила «нет подтверждения → снять» — 0017 его оставляет по тому же доводу, что и
+  // два соседних.
+  expectVerdict(v, 'chosen=false usable=false admin=true');
 }, 300_000);
 
-test('вердикт по (source_id, role): несущий индекс рекурсивного обхода', async () => {
-  // Не GIN и не кандидат на снятие — но именно на нём стоит П6, и если обход перестанет
-  // его брать, порог поедет молча вместе с планом.
+test('несущий индекс рекурсивного обхода: (source_id, …, role) — обход идёт ПО ИНДЕКСУ', async () => {
+  /**
+   * НАХОДКА ПЕРЕЗАМЕРА 0017, названная вслух: обход берёт `rel_uniq`, а не
+   * `relations_source_role`, и это не регресс.
+   *
+   * До 0017 `rel_uniq` стоял на тройке `(source_id, target_id, relation_type)` и рекурсии не
+   * годился — третья колонка не та, по которой она фильтрует. С 0017 ключ стал
+   * `(source_id, target_id, role)`: тот же префикс `source_id`, то же условие по `role`, и
+   * вдобавок `target_id` ЛЕЖИТ В ИНДЕКСЕ — обход получает Index Only Scan вместо
+   * «индекс + поход в кучу за target_id». Планировщик выбирает его по цене, и правильно.
+   *
+   * Что отсюда следует для `relations_source_role` (0016:84): на ЭТОМ запросе он стал
+   * избыточен. Решение о его снятии — не этой задачи: DROP-список 0017 закрыт вердиктом
+   * координатора (Р-23b-1), а у индекса есть и другие читатели (обратный обход, `ref_side`).
+   * Находка записана в отчёт; снимать его — отдельным замером и отдельной миграцией.
+   *
+   * ПРОВЕРЯЕТСЯ ТО ЖЕ, ЧТО И РАНЬШЕ: П6 стоит на том, что обход идёт ПО ИНДЕКСУ по
+   * `(source_id, …, role)`. Уйди он в seqscan по `relations` — порог поехал бы молча вместе
+   * с планом. Поэтому утверждение про МНОЖЕСТВО из двух допустимых индексов, а не про имя
+   * одного: имя — деталь плана, индексность обхода — инвариант.
+   */
+  const WALK_INDEXES = ['relations_source_role', 'rel_uniq'] as const;
   const query = compileCountAst(
     {
       filter: {
@@ -328,9 +380,14 @@ test('вердикт по (source_id, role): несущий индекс рек�
   const v = await verdictFor(
     'relations_source_role',
     query,
-    'рекурсивный обход вниз по (source_id, role)',
+    'рекурсивный обход вниз по (source_id, role) — с 0017 его обслуживает rel_uniq',
   );
-  expect(v.usable).toBe(true);
+  // Вердикт по ИМЕНИ снят и напечатан (сводка ниже), а несущее утверждение — про план: под
+  // ролью приложения обход обязан идти по одному из двух индексов префикса `source_id`.
+  const plan = await planOf(query, false);
+  const used = WALK_INDEXES.filter((i) => plan.includes(i));
+  expect(`обход по индексу: ${used.join(',') || 'НИ ОДНОГО'}`).toBe('обход по индексу: rel_uniq');
+  expect(v.chosen).toBe(false); // именно `relations_source_role` планировщик не берёт
 }, 300_000);
 
 test('ПРИЧИНА, а не только симптом: операторы containment не leakproof', async () => {
@@ -351,7 +408,7 @@ test('ПРИЧИНА, а не только симптом: операторы co
   for (const r of rows) expect((r as { proleakproof: boolean }).proleakproof).toBe(false);
 }, 300_000);
 
-test('сводка вердиктов напечатана по всем четырём индексам', () => {
+test('сводка вердиктов напечатана по всем четырём индексам; DROP-список 0017 им не пересекается', () => {
   expect(verdicts.map((v) => v.index).sort()).toEqual(
     [
       'entities_aspects_gin',
@@ -360,6 +417,11 @@ test('сводка вердиктов напечатана по всем чет�
       'relations_source_role',
     ].sort(),
   );
+  // ПРИЁМКА «EXPLAIN против 0017»: миграция снимает ровно четыре индекса, и ни один из них
+  // не тот, по которому здесь снят вердикт. Пересечение означало бы, что индекс сняли, не
+  // спросив замер, — ровно та ошибка, ради которой этот файл и написан.
+  expect(verdicts.map((v) => v.index).filter((i) => DROPPED_BY_0017.includes(i))).toEqual([]);
+  expect(DROPPED_BY_0017).toHaveLength(4);
   console.log('explain: СВОДКА ДЛЯ МИГРАЦИИ 0017');
   for (const v of verdicts) {
     const verdict = v.chosen

@@ -359,7 +359,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
         'orbis/progress_source': {
           query: { text: 'аспект=финансы' },
           aggregate: 'sum',
-          field: 'amount',
+          field: 'orbis/amount',
         },
       },
       aspects: ['orbis/goal'],
@@ -375,7 +375,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     expect(inProps).toEqual({
       query: { text: 'аспект=финансы' },
       aggregate: 'sum',
-      field: 'amount',
+      field: 'orbis/amount',
     });
 
     const proposed = await dispatchTool(ctx, 'orbis_propose', {

@@ -40,15 +40,14 @@ const TIMEZONE = 'Europe/Moscow';
 const CAT = '019d48ea-4188-765d-8e96-93a0ad9c262a';
 
 /**
- * Строка датасета объявлена СТАРОЙ картой аспектов: этот сьют — эталон компилятора §6,
- * а компилятор до «Пересева мира» читает именно её. В БД строка при этом уезжает в ТРЁХ
- * колонках (`datasetRows`): фикстура, положившая только карту, разошлась бы с писателем
- * новой правды молча.
+ * Строка датасета говорит правдой сущности: `props` по id свойства и список `aspects[]`.
+ * Колонки собирает `datasetRows` — через тот же помощник, что и остальные сьюты, ради
+ * громкого отказа на неизвестный адрес свойства (`entityColumnsFrom`, `test/helpers.ts`).
  */
-type DatasetRow = Omit<
-  typeof entities.$inferInsert,
-  'props' | 'aspects' | 'queryRefs' | 'aspectsLegacy'
-> & { props?: Record<string, unknown>; aspects: string[] };
+type DatasetRow = Omit<typeof entities.$inferInsert, 'props' | 'aspects' | 'queryRefs'> & {
+  props?: Record<string, unknown>;
+  aspects: string[];
+};
 
 const ID = {
   project: '019eb300-d5e1-7000-8000-000000000001',
@@ -1215,7 +1214,6 @@ describe('descendants_of/ancestors_of: обход по одной роли и к
           sourceId: chainId(i),
           targetId: chainId(i + 1),
           role: 'subitem',
-          relationType: 'parent' as const,
         });
       }
       edges.push({
@@ -1223,7 +1221,6 @@ describe('descendants_of/ancestors_of: обход по одной роли и к
         sourceId: chainId(1),
         targetId: BRANCH_ID,
         role: 'subitem',
-        relationType: 'parent' as const,
       });
       await tx.insert(relations).values(edges);
     });

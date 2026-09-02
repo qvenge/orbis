@@ -632,7 +632,7 @@ describe('ai.sendMessage (ж): user_query sum по decimal', () => {
           input: {
             query: 'aspect=orbis/financial, tags=sumtest',
             aggregate: 'sum',
-            field: 'amount',
+            field: 'orbis/amount',
           },
         },
       ]),

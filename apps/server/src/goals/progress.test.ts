@@ -232,7 +232,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
       progress_source: {
         query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
-        field: 'amount',
+        field: 'orbis/amount',
       },
       target_value: '300000.00',
     });
@@ -282,7 +282,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
       progress_source: {
         query: 'aspect=orbis/financial, tags=loan',
         aggregate: 'latest',
-        field: 'amount',
+        field: 'orbis/amount',
       },
       target_value: '100',
     };
@@ -306,7 +306,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
       progress_source: {
         query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
-        field: 'amount',
+        field: 'orbis/amount',
       },
       target_value: '300000.00',
     });
@@ -325,7 +325,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
       progress_source: {
         query: 'aspect=orbis/financial, tags=savings',
         aggregate: 'sum',
-        field: 'amount',
+        field: 'orbis/amount',
       },
       target_value: '100000.00',
     });
@@ -353,7 +353,7 @@ describe('computeGoalProgress: источник хранится ДЕРЕВОМ 
     };
     const byAst = await withIdentity(db, user, async (tx) =>
       computeGoalProgress(tx, await queryContext(tx, user, null), {
-        progressSource: { query: ast, aggregate: 'sum', field: 'amount' },
+        progressSource: { query: ast, aggregate: 'sum', field: 'orbis/amount' },
         targetValue: '1000.00',
       }),
     );
@@ -368,7 +368,7 @@ describe('computeGoalProgress: источник хранится ДЕРЕВОМ 
         progressSource: {
           query: { text: 'aspect=orbis/financial, tags=savings' },
           aggregate: 'sum',
-          field: 'amount',
+          field: 'orbis/amount',
         },
         targetValue: '1000.00',
       }),
@@ -401,7 +401,7 @@ describe('computeGoalProgress: изоляция владельца', () => {
 
     const source = { query: 'aspect=orbis/financial, tags=savings' } as const;
     const sum = await progressOf(me, {
-      progress_source: { ...source, aggregate: 'sum', field: 'amount' },
+      progress_source: { ...source, aggregate: 'sum', field: 'orbis/amount' },
       target_value: '1000.00',
     });
     expect(sum.current).toBe('100.00');
@@ -413,7 +413,7 @@ describe('computeGoalProgress: изоляция владельца', () => {
     expect(count.current).toBe('1');
 
     const latest = await progressOf(me, {
-      progress_source: { ...source, aggregate: 'latest', field: 'amount' },
+      progress_source: { ...source, aggregate: 'latest', field: 'orbis/amount' },
       target_value: '1000.00',
     });
     expect(latest.current).toBe('100.00');
@@ -421,7 +421,7 @@ describe('computeGoalProgress: изоляция владельца', () => {
     // Тот же путь, но через боевое чтение целиком
     const goal = await createGoal(me, {
       title: 'Накопить',
-      progress_source: { ...source, aggregate: 'sum', field: 'amount' },
+      progress_source: { ...source, aggregate: 'sum', field: 'orbis/amount' },
       target_value: '1000.00',
     });
     const got = await callerFor(me).entity.get({ id: goal.id });
@@ -547,7 +547,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
       progress_source: {
         query: 'aspect=orbis/financial, tags=drift',
         aggregate: 'sum',
-        field: 'amount',
+        field: 'orbis/amount',
       },
       target_value: '100',
     };
@@ -599,7 +599,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
           progress_source: {
             query: 'aspect=orbis/financial, tags=nan',
             aggregate: 'sum',
-            field: 'amount',
+            field: 'orbis/amount',
           },
           target_value: '100',
         },
@@ -624,7 +624,7 @@ describe('entity.get: прогресс приезжает с целью и то�
       progress_source: {
         query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
-        field: 'amount',
+        field: 'orbis/amount',
       },
       target_value: '300000.00',
     });
@@ -662,7 +662,7 @@ describe('entity.get: прогресс приезжает с целью и то�
       progress_source: {
         query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
-        field: 'amount',
+        field: 'orbis/amount',
       },
       target_value: '300000.00',
       unit: '₽',

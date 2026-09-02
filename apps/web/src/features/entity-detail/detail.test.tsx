@@ -438,7 +438,7 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
 
 // DF п.5: секция не инвалидировала entity.query вовсе (долг D5d). С Повесткой
 // (staleTime ≥ 60 с, K16) новая подзадача до минуты не видна ни в Browser, ни в Повестке.
-const SUBTASK_PROBE = { query: 'aspect=orbis/task, status=!done, limit=10' };
+const SUBTASK_PROBE = { query: 'aspect=orbis/task, orbis/task_status=!done, limit=10' };
 
 function ListProbe() {
   const q = trpc.entity.query.useQuery(SUBTASK_PROBE);

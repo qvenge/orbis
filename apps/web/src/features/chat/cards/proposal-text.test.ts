@@ -20,19 +20,24 @@ const reg = lookupOf(BUILTIN_REGISTRY);
 const empty = lookupOf(undefined);
 
 describe('noteText: обе формы расхождения на прогоне', () => {
-  test('новая форма (свойство) читается теми же словами, что и прежняя пара', () => {
+  test('новая форма (свойство) подписана реестром; прежняя пара деградирует честно', () => {
     const byProperty = noteText(reg, {
       property: 'orbis/task_status',
       note: 'ожидали inbox, сейчас done',
     });
+    expect(byProperty).toBe('Задача · Состояние задачи: ожидали inbox, сейчас done');
+
+    // ПАРА «АСПЕКТ + ПОЛЕ» ОСТАЛАСЬ В СХЕМЕ, НО ПЕРЕВОДИТЬ ЕЁ БОЛЬШЕ НЕЧЕМ: таблицу старых
+    // имён снял «Пересев мира» вместе с формой данных, которая их порождала. Такие ноты
+    // лежат только в прогонах, записанных ДО реформы, и после пересева графа их не будет
+    // вовсе. Догадка `orbis/<поле>` — последняя ветка прежнего перевода: подпись выходит
+    // сырой, но строка на месте, а не исчезает.
     const byPair = noteText(reg, {
       aspect: 'orbis/task',
       field: 'status',
       note: 'ожидали inbox, сейчас done',
     });
-    expect(byProperty).toBe('Задача · Состояние задачи: ожидали inbox, сейчас done');
-    // Формы две, строка одна: владелец не должен видеть разницы между прогонами до и после
-    expect(byProperty).toBe(byPair);
+    expect(byPair).toBe('status: ожидали inbox, сейчас done');
   });
 
   test('расхождение ТЕЛА сохраняет свой текст в обеих формах', () => {
@@ -80,9 +85,11 @@ describe('noteText: обе формы расхождения на прогоне
     );
   });
 
-  test('ключ строки списка — свойство: обе формы дают ОДИН ключ', () => {
+  test('ключ строки списка — свойство: обе формы дают адрес свойства', () => {
     expect(noteKey({ property: 'orbis/task_status', note: '' })).toBe('orbis/task_status');
-    expect(noteKey({ aspect: 'orbis/task', field: 'status', note: '' })).toBe('orbis/task_status');
+    // Прежняя пара переводится догадкой `orbis/<поле>` (см. выше): ключ стабильный и
+    // различающий, хотя свойства с таким адресом в реестре и нет.
+    expect(noteKey({ aspect: 'orbis/task', field: 'status', note: '' })).toBe('orbis/status');
   });
 });
 

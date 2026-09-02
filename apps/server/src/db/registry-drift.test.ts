@@ -139,14 +139,17 @@ test('label свойства в БД разошёлся с кодом — drifte
   expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
 });
 
-test('колонка schema аспекта устарела — drifted (носитель СТАРОЙ формы, Р-24)', async () => {
+test('набор properties аспекта устарел — drifted (релиз добавил свойство без пересева)', async () => {
+  // Колонки `schema` у аспекта больше нет (0017): JSON Schema — производная реестра свойств
+  // (§А3-1). Ту же роль главной ловушки релиза играет теперь сам набор ссылок на свойства:
+  // разъехавшись с кодом, он молча оставит новое свойство невалидируемым и невидимым туду.
   try {
     await admin.db.execute(
-      sql`UPDATE aspect_definitions SET schema = '{"type":"object"}'::jsonb
+      sql`UPDATE aspect_definitions SET properties = '[]'::jsonb
           WHERE id = 'orbis/financial' AND owner_id IS NULL`,
     );
     const drift = await checkRegistryDrift(db);
-    expect(drift.aspects.drifted).toEqual([{ id: 'orbis/financial', what: ['schema'] }]);
+    expect(drift.aspects.drifted).toEqual([{ id: 'orbis/financial', what: ['properties'] }]);
   } finally {
     await restoreRegistries();
   }

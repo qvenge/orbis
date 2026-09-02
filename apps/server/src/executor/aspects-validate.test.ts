@@ -41,38 +41,47 @@ const NIL_ROUTINE = '019a0000-0000-7000-8000-000000000001';
  *
  * Общая таблица переходных имён (`registry/legacy-field-map.ts`) снята «Пересевом мира»
  * вместе со старой формой, и воскрешать её в продуктовом коде было бы шагом назад. Здесь
- * она нужна ровно для того, чтобы фикстуры читались как «аспект с такими полями»: правило
- * простое и полное — имя ищется среди свойств, ОБЪЯВЛЕННЫХ аспектом, по локальной части
- * ключа либо по паре §А8 из `RENAMED`. Неизвестное имя уезжает как `orbis/<имя>` — то есть
- * заведомо неизвестный адрес, на который валидатор и обязан ответить `UNKNOWN_PROPERTY`.
+ * она нужна ровно для того, чтобы фикстуры читались как «аспект с такими полями»: имя
+ * ищется по локальной части ключа свойства, а неочевидные переименования §А8 названы
+ * поимённо — ПО АСПЕКТУ, потому что одно и то же имя у разных аспектов вело на разные
+ * свойства (`stage` — это `project_stage` у проекта и `routine_stage` у рутины; ровно
+ * поэтому реформа их и развела). Неизвестное имя уезжает как `orbis/<имя>` — заведомо
+ * неизвестный адрес, на который валидатор и обязан ответить `UNKNOWN_PROPERTY`.
  */
-const RENAMED: Readonly<Record<string, string>> = {
-  status: 'orbis/task_status',
-  stage: 'orbis/project_stage',
-  kind: 'orbis/memory_kind',
-  category_ref: 'orbis/finance_category',
-  outcome: 'orbis/run_outcome',
-  started_at: 'orbis/run_started_at',
-  finished_at: 'orbis/run_finished_at',
-  steps: 'orbis/run_steps',
-  report: 'orbis/run_report',
-  checkpoint: 'orbis/run_checkpoint',
-  reply: 'orbis/run_reply',
-  usage: 'orbis/run_usage',
-  proposal: 'orbis/run_proposal',
-  routine_id: 'orbis/run_routine',
-  bucket: 'orbis/run_bucket',
-  attempt: 'orbis/run_attempt',
-  grant_id: 'orbis/grant',
-  at: 'orbis/routine_at',
-  days: 'orbis/routine_days',
-  mode: 'orbis/routine_mode',
+const RENAMED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  'orbis/task': { status: 'orbis/task_status' },
+  'orbis/project': { stage: 'orbis/project_stage' },
+  'orbis/memory': { kind: 'orbis/memory_kind' },
+  'orbis/financial': { category_ref: 'orbis/finance_category' },
+  'orbis/budget': { category_ref: 'orbis/finance_category' },
+  'orbis/assignment': { grant_id: 'orbis/grant' },
+  'orbis/agent-run': {
+    outcome: 'orbis/run_outcome',
+    started_at: 'orbis/run_started_at',
+    finished_at: 'orbis/run_finished_at',
+    steps: 'orbis/run_steps',
+    report: 'orbis/run_report',
+    checkpoint: 'orbis/run_checkpoint',
+    reply: 'orbis/run_reply',
+    usage: 'orbis/run_usage',
+    proposal: 'orbis/run_proposal',
+    routine_id: 'orbis/run_routine',
+    bucket: 'orbis/run_bucket',
+    attempt: 'orbis/run_attempt',
+    grant_id: 'orbis/grant',
+  },
+  'orbis/routine': {
+    stage: 'orbis/routine_stage',
+    at: 'orbis/routine_at',
+    days: 'orbis/routine_days',
+    mode: 'orbis/routine_mode',
+  },
 };
 
 function propertyOfField(aspectId: string, field: string): string {
   const declared = BUILTIN_ASPECT_DEFS.find((a) => a.id === aspectId)?.properties ?? [];
-  const renamed = RENAMED[field];
-  if (renamed !== undefined && declared.some((r) => r.propertyId === renamed)) return renamed;
+  const renamed = RENAMED[aspectId]?.[field];
+  if (renamed !== undefined) return renamed;
   const byLocal = declared.find((r) => r.propertyId.split('/').at(-1) === field);
   return byLocal?.propertyId ?? `orbis/${field}`;
 }
@@ -110,26 +119,30 @@ describe('валидация записи по реестру свойств (§
     // с refine валидатор принял бы эту цель, и E2 делил бы на несуществующее поле.
     expect(
       accepts('orbis/goal', {
-        progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum' },
+        progress_source: { query: { text: 'aspect=orbis/financial' }, aggregate: 'sum' },
         target_value: '300000.00',
       }),
     ).toBe(false);
     expect(
       accepts('orbis/goal', {
-        progress_source: { query: 'aspect=orbis/financial', aggregate: 'latest' },
+        progress_source: { query: { text: 'aspect=orbis/financial' }, aggregate: 'latest' },
         target_value: '80',
       }),
     ).toBe(false);
     // Обратное направление: count без field — законная цель, отклонять её нельзя
     expect(
       accepts('orbis/goal', {
-        progress_source: { query: 'aspect=orbis/note', aggregate: 'count' },
+        progress_source: { query: { text: 'aspect=orbis/note' }, aggregate: 'count' },
         target_value: '24',
       }),
     ).toBe(true);
     expect(
       accepts('orbis/goal', {
-        progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum', field: 'amount' },
+        progress_source: {
+          query: { text: 'aspect=orbis/financial' },
+          aggregate: 'sum',
+          field: 'orbis/amount',
+        },
         target_value: '300000.00',
         unit: '₽',
       }),
@@ -137,7 +150,7 @@ describe('валидация записи по реестру свойств (§
   });
 
   test('orbis/goal: знаковость сумм тоже в реестре (границы decimal), не в refine', () => {
-    const src = { query: 'q', aggregate: 'count' };
+    const src = { query: { text: 'q' }, aggregate: 'count' };
     expect(accepts('orbis/goal', { progress_source: src, target_value: '0' })).toBe(false);
     expect(accepts('orbis/goal', { progress_source: src, target_value: '-5' })).toBe(false);
     expect(accepts('orbis/goal', { progress_source: src, target_value: 24 })).toBe(false);
@@ -258,7 +271,7 @@ describe('валидация записи по реестру свойств (§
     expect((typed[0] as { propertyId: string }).propertyId).toBe('orbis/task_status');
 
     // Список ПОЛНЫЙ, а не «первое найденное»: владелец правит форму целиком.
-    const both = violationsOf({ 'orbis/repo': { url: 'не-урл' } });
+    const both = violationsOf({ 'orbis/repo': { repo_url: 'не-урл' } });
     expect(both.map((v) => v.code).sort()).toEqual(['REQUIRED', 'TYPE']);
 
     // Всё это — один код ExecError, а не пять разных: потребители различают причину полем.

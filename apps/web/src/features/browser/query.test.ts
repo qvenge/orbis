@@ -57,8 +57,9 @@ test('firstQueryBlock извлекает первый {{query:...}} из body', 
 // достаточно только бейджу pinned (§3.2) — detail-экрану нужны все, иначе секции «Сегодня»
 // и «Ожидание» сидированного Daily Planning (§3.3) недостижимы.
 test('queryBlocks возвращает ВСЕ блоки body в порядке появления, обёртка снята', () => {
-  const body = 'текст\n{{query: aspect=orbis/task, status=inbox}}\n\n{{query:\ntags=x\n}}\nхвост';
-  expect(queryBlocks(body)).toEqual(['aspect=orbis/task, status=inbox', 'tags=x']);
+  const body =
+    'текст\n{{query: aspect=orbis/task, orbis/task_status=inbox}}\n\n{{query:\ntags=x\n}}\nхвост';
+  expect(queryBlocks(body)).toEqual(['aspect=orbis/task, orbis/task_status=inbox', 'tags=x']);
   expect(queryBlocks('без блоков')).toEqual([]);
   // firstQueryBlock — тот же разбор, взятый по первому элементу (§3.2)
   expect(firstQueryBlock(body)).toBe(queryBlocks(body)[0]);

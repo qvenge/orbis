@@ -25,11 +25,10 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
-import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
-import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
+import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { createCallerFactory } from '../trpc';
 
 requireEnv();
@@ -163,7 +162,7 @@ async function rawBudgetParents(ids: string[]): Promise<Map<string, string[]>> {
       SELECT r.target_id AS entity_id, r.source_id AS envelope_id
       FROM relations r
       JOIN entities p ON p.id = r.source_id
-      WHERE r.target_id IN (${list}) AND r.relation_type = 'parent'
+      WHERE r.target_id IN (${list}) AND r.role = 'envelope-binding'
         AND 'orbis/budget' = ANY(p.aspects)
       ORDER BY r.target_id, r.source_id
     `)) as unknown as Array<{ entity_id: string; envelope_id: string }>;
@@ -244,7 +243,7 @@ function entityOfRow(rowIndex: number): string {
 
 beforeAll(async () => {
   await truncateAll();
-  await withIdentity(db, user, (tx) => seedOnboarding(tx, user));
+  await seedOwnerGraph(db, user);
 
   // Два конверта ОДНОЙ категории — соседние месяцы (§7.1: майский и июньский)
   envMay = (await exec('entity_create', envelope('2026-05-01', '2026-05-31'))).id;

@@ -37,7 +37,7 @@ import { ExecError } from '../errors';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
-import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
+import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 import { reviewImport } from './review';
@@ -82,7 +82,7 @@ function ownerCaller(user: string, provider?: LLMProvider, entitlements?: Entitl
 /** Свежий владелец с онбординг-категориями (aliases нужны suggestedCategoryRef). */
 async function freshOwner(): Promise<{ user: string; foodId: string; transportId: string }> {
   const user = freshUserId();
-  await withIdentity(db, user, (tx) => seedOnboarding(tx, user));
+  await seedOwnerGraph(db, user);
   return {
     user,
     foodId: seedCategoryId(user, 'food'),
