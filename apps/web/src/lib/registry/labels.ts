@@ -26,7 +26,6 @@ import {
   type AspectDefinition,
   CORE_PROPERTY_IDS,
   effectiveLabel,
-  legacyFieldToProperty,
   OWNER_LOCALE,
   type PropertyDefinition,
   type RelationRoleDefinition,
@@ -144,20 +143,16 @@ function corePropertyOf(field: string): string | undefined {
 /**
  * Адрес поля на экране → id свойства реестра; `undefined` — реестр такого свойства не знает.
  *
- * Адрес приходит в трёх формах, и все три законны прямо сейчас:
- *  - id/key свойства (`orbis/task_status`) — новая правда (§А1-1): так адресуют значения
- *    `props`, так их называют карточки чата, строки предложения и отложенного действия;
- *  - имя поля старой схемы (`status`) ВМЕСТЕ с аспектом-носителем — так лежит карта
- *    `aspects_legacy`, которую до миграции 0017 читают карточки аспектов и шапка записи.
- *    Перевод идёт по ТОЙ ЖЕ таблице `@orbis/shared`, которой его делает сервер
- *    (`legacyAspectsToProps`): второй таблицы здесь нет и не заводится;
+ * Адрес приходит в ДВУХ формах, и обе законны:
+ *  - id/key свойства (`orbis/task_status`) — правда §А1-1: так адресуют значения `props`,
+ *    так их называют карточки чата, строки предложения и отложенного действия;
  *  - имя колонки записи (`archived`) — core-проекция §А1-3 (см. `corePropertyOf`).
  *
- * ПОРЯДОК форм — не вкус, а закрытие дыры (Important-1 гейт-ревью 13a). Аспект-подсказка
- * ПРОБУЕТСЯ, но не обрывает резолв: у поля записи носителя нет вовсе, и вызывающий, который
- * подставил вместо «аспекта нет» пустую строку или чужой аспект, до этой правки уводил
- * `archived` в сырой ключ — притом что прежний словарь показывал ему «архив». Промах по
- * аспекту означает ровно «носителя не нашли», а не «искать больше негде».
+ * ТРЕТЬЕЙ ФОРМЫ БОЛЬШЕ НЕТ. Имя поля старой схемы (`status`) ВМЕСТЕ с аспектом-носителем
+ * приезжало из карты `aspects_legacy`, и переводила его общая с сервером таблица
+ * `@orbis/shared`. Карту сняла contract-миграция 0017, таблицу — «Пересев мира»; параметр
+ * `aspectId` остался у сигнатуры (его передаёт карточка аспекта), но на резолв больше не
+ * влияет — и это лучше, чем принимать подсказку, которой нечем воспользоваться.
  *
  * Единственная цена — свойство КАСТОМНОГО аспекта, названное ровно как колонка записи
  * (`title`): оно получит подпись core-проекции «Заголовок». Плата принята сознательно:
@@ -168,24 +163,19 @@ function corePropertyOf(field: string): string | undefined {
  * есть ЗАПАСНОЙ текст сервера (`summary`), и «реестр не знает» для неё не то же самое, что
  * «покажи сырой адрес».
  */
-export function propertyIdOf(
-  reg: RegistryLookup,
-  field: string,
-  aspectId?: string,
-): string | undefined {
+export function propertyIdOf(reg: RegistryLookup, field: string): string | undefined {
   const direct = reg.property(field);
   if (direct !== undefined) return direct.id;
-  const carried = aspectId === undefined ? undefined : legacyFieldToProperty(aspectId, field);
-  return carried ?? corePropertyOf(field);
+  return corePropertyOf(field);
 }
 
 /**
- * Подпись ПОЛЯ на экране. Промах всех трёх форм адреса — сырое имя поля: честная деградация
+ * Подпись ПОЛЯ на экране. Промах обеих форм адреса — сырое имя поля: честная деградация
  * для свойства, которого в снимке нет (снято, ещё не приехало, кастомный аспект чужого
  * модуля), и ровно то, что показывал прежний словарь на неизвестном ключе.
  */
-export function fieldLabel(reg: RegistryLookup, field: string, aspectId?: string): string {
-  const id = propertyIdOf(reg, field, aspectId);
+export function fieldLabel(reg: RegistryLookup, field: string): string {
+  const id = propertyIdOf(reg, field);
   return id === undefined ? field : reg.label(id);
 }
 

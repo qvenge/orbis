@@ -34,7 +34,7 @@ import {
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   queryTreeExceedsDepth,
-  resolveLegacyFieldId,
+  resolvePropertyFieldId,
 } from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
@@ -718,9 +718,9 @@ async function runBudgetStatus(ctx: ToolCallCtx, input: unknown): Promise<ToolDi
  *
  * `field` — АДРЕС СВОЙСТВА, а не имя поля аспекта: компилятор канона адресует значение в
  * `props` по id (§А5-2). Резолвится он тем же правилом, что имена в тексте запроса
- * (`resolveLegacyFieldId`): id, key или старое имя поля — до Задачи 21 модель видит в
- * примерах и промптах именно старые (`amount`), и отвергать их значило бы сломать вопрос
- * «сколько потрачено» на ровном месте.
+ * (`resolvePropertyFieldId`): id либо key. Старых имён полей аспекта (`amount`) он больше
+ * не принимает — их карта снята «Пересевом мира» вместе с формой данных, а промпты линейки
+ * v5 показывают модели канон.
  */
 async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   const parsed = parseEnvelope(userQueryInput, input, 'user_query');
@@ -748,7 +748,7 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
       }
       // aggregate === 'sum'; field проверен выше
       const field = parsed.field as string;
-      const compiled = compileSumAst(ast, sumProperty(field, ast, cctx), cctx);
+      const compiled = compileSumAst(ast, sumProperty(field, cctx), cctx);
       const rows = await tx.execute(compiled);
       const count = Number(rows[0]?.count);
       const value = (rows[0]?.sum as string | null) ?? '0'; // пустая выборка: sum NULL → '0'
@@ -766,13 +766,12 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
  * прислала модель: у `compileSumAst` на руках был бы только несуществующий id, и отказ
  * назвал бы его вместо того, что написал вызывающий.
  *
- * Аспекты САМОГО ЗАПРОСА участвуют в резолве, как и у старого компилятора
- * (`aspectsInQuery`): старое имя может носить несколько аспектов, и `aspect=` в запросе —
- * единственное, чем автор их разводит. Без этого `sum` по неоднозначному имени отказывал
- * бы там, где текст запроса всё уже сказал, — сужение молчаливое и не названное нигде.
+ * Аспекты САМОГО ЗАПРОСА в резолве больше не участвуют, и это следствие сноса старой формы:
+ * разводить ими приходилось СТАРОЕ имя поля (`amount` носили и `orbis/financial`, и
+ * `orbis/budget`). Канон однозначен — `orbis/amount` называет одно свойство.
  */
-function sumProperty(field: string, ast: QueryAst, cctx: CompileCtx): string {
-  const id = resolveLegacyFieldId(field, parseRegistryOf(cctx), aspectsNamedInQueryAst(ast));
+function sumProperty(field: string, cctx: CompileCtx): string {
+  const id = resolvePropertyFieldId(field, parseRegistryOf(cctx));
   if (id === undefined) {
     throw new ExecError('VALIDATION', `user_query: свойства '${field}' нет в реестре`, {
       tool: 'user_query',

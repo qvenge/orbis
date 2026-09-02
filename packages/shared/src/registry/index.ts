@@ -5,9 +5,6 @@ export * from './builtin-aspects';
 export * from './builtin-properties';
 export * from './builtin-roles';
 export * from './contract-ids';
-// Переходная карта старой формы (РП-3): экспортируется наравне с остальным, потому что её
-// зовёт серверный golden приёмки §С8-1; удаляется целиком Задачей 23.
-export * from './legacy-field-map';
 export * from './property-type';
 // Модель-обращённая поверхность реестра (§А9-1): имя attach_*-тула и схема его data.
 export * from './tool-schema';

@@ -8,14 +8,123 @@
 // (server/agent-loop/verbs.ts) и отдаёт агенту по MCP. Тип здесь нужен обеим сторонам —
 // серверу как контракт сборки, web-клиенту среза (экран прогонов) как форма чтения.
 import { z } from 'zod';
-import type { AgentRunAspect, AgentRunStep, TaskAspect } from '../schemas/aspects';
 
-/** Статус тикета (`orbis/task.status`) — источник один, дублирующего enum здесь нет. */
-export type TaskStatus = TaskAspect['status'];
-/** Исход прогона (`orbis/agent-run.outcome`). */
-export type RunOutcome = AgentRunAspect['outcome'];
-/** Статус предложения рутины (`orbis/agent-run.proposal.status`, V1.1). */
-export type ProposalStatus = NonNullable<AgentRunAspect['proposal']>['status'];
+// ---------------------------------------------------------------------------
+// Словари значений круга исполнителя.
+//
+// ЗДЕСЬ, А НЕ В ZOD-СХЕМЕ АСПЕКТА. До реформы эти союзы выводились из
+// `schemas/aspects.ts` (`TaskAspect['status']` и соседи) — файла, который был вторым,
+// независимым описанием тех же полей рядом с реестром свойств. Реформа оставила ОДНО
+// описание — строку реестра (`registry/builtin-properties.ts`, `type.kind: 'select'`), но
+// её `options` — данные времени исполнения, союза типов из них не вывести. Поэтому союз
+// объявлен здесь, где живёт контракт, и СВЕРЕН с реестром прогоном
+// (`registry/builtin.test.ts`, «select-варианты»): разъехавшийся список валит сверку, а не
+// уезжает молча в MCP-контракт.
+//
+// Порядок вариантов значим — он же порядок `rank` в реестре и норматив сортировки
+// (`compile-ast.ts`).
+// ---------------------------------------------------------------------------
+
+/** Статус тикета (`orbis/task_status`). */
+export const TASK_STATUSES = [
+  'inbox',
+  'planned',
+  'in_progress',
+  'waiting',
+  'done',
+  'cancelled',
+] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * Исход прогона (`orbis/run_outcome`): `running` — идёт, `checkpoint` — задан вопрос
+ * владельцу, `finished` — отчёт сдан, `abandoned` — подметён как мёртвый, `failed` —
+ * сорвался, `answered` — владелец ответил на чекпойнт, `stale` — неотвеченный вопрос снят
+ * новым прогоном рутины. Судьба ПРЕДЛОЖЕНИЯ живёт не здесь, а в `RunProposal.status`.
+ */
+export const RUN_OUTCOMES = [
+  'running',
+  'checkpoint',
+  'finished',
+  'abandoned',
+  'failed',
+  'answered',
+  'stale',
+] as const;
+export type RunOutcome = (typeof RUN_OUTCOMES)[number];
+
+/** Статусы предложения рутины (V1.1): решение владельца и две причины снятия. */
+export const PROPOSAL_STATUSES = [
+  'pending',
+  'approved',
+  'rejected',
+  'superseded',
+  'stale',
+] as const;
+export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+
+/** Стадия рутины (`orbis/routine_stage`) и её режим (`orbis/routine_mode`). */
+export const ROUTINE_STAGES = ['active', 'paused'] as const;
+export type RoutineStage = (typeof ROUTINE_STAGES)[number];
+export const ROUTINE_MODES = ['propose', 'act'] as const;
+export type RoutineMode = (typeof ROUTINE_MODES)[number];
+
+/** Шаг прогона (`orbis/run_steps`): хвост истории, который видит владелец. */
+export interface AgentRunStep {
+  seq: number;
+  at: string;
+  summary: string;
+  /** «Тронул внешнее»: ветка, файлы, сеть — вне Orbis (С5, С6). */
+  external: boolean;
+  /** action §7.8 этого шага (= batchId вызова). */
+  action_id?: string;
+}
+
+/** Расход прогона (`orbis/run_usage`) — агент сообщает его сам, сервер не проверяет. */
+export interface RunUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+}
+
+/**
+ * Расхождение предусловия, из-за которого предложение снято (V1.4).
+ *
+ * ДВЕ формы, и обе законны. Единицей расхождения стало СВОЙСТВО (§А7-3/§А7-4), и новый
+ * писатель обязан говорить `{property, note}`. Пара «аспект + поле» остаётся, потому что
+ * лежит в уже записанных прогонах: сузить форму значило бы объявить существующие данные
+ * невалидными, а обратной функции у перевода нет (у слитых свойств и псевдо-аспекта
+ * `orbis/entity` несколько прообразов).
+ */
+export type ProposalMismatch =
+  | { property: string; note: string }
+  | { aspect: string; field: string; note: string };
+
+/** Предложение режима propose (`orbis/run_proposal`): карточка на подтверждение и её судьба. */
+export interface RunProposal {
+  pending_id: string;
+  status: ProposalStatus;
+  decided_at?: string;
+  mismatches?: ProposalMismatch[];
+  /**
+   * Ш1.8: предложение рождено правкой владельца — здесь id ИСХОДНОГО pending'а, который
+   * эта правка погасила. Отдельного статуса «правлено» нет намеренно: статус описывает
+   * судьбу ЖИВОГО предложения, а правка — его происхождение.
+   */
+  edited_from?: string;
+}
+
+/** Вопрос прогона владельцу (`orbis/run_checkpoint`). */
+export interface RunCheckpoint {
+  question: string;
+  asked_at: string;
+}
+
+/** Ответ владельца на вопрос прогона (`orbis/run_reply`). */
+export interface RunReply {
+  text: string;
+  at: string;
+}
 
 /**
  * Расход прогона (§9.3, С2): агент сообщает его сам — проверить его сервер не может,

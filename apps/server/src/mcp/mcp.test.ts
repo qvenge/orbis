@@ -468,7 +468,7 @@ describe('/mcp tools/list (§9.2)', () => {
         expect(names).toContain(name);
       }
       // orbis/agent-run в списке нет намеренно: служебный аспект attach_*-тула не получает
-      // (SERVICE_ASPECT_IDS) — прогон правит только сервер своими глаголами.
+      // (колонка `service` реестра) — прогон правит только сервер своими глаголами.
       for (const aspect of [
         'schedule',
         'task',

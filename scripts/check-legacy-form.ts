@@ -104,13 +104,31 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
     pattern: String.raw`aspects_legacy|aspectsLegacy|aspectsMap|legacy-form`,
   },
   { id: 'relation-type', pattern: String.raw`relation_type|relationType|RELATION_TYPES` },
-  // entity-meta — адресуемые формы КОЛОНКИ сущности, не голое слово: `\bmeta\b` по этим же
-  // путям давало 281 совпадение (41 в миграциях и живые `relations.meta` в executor.ts) —
-  // гейт на 281 строке неисполним. Места `relations.meta`, которые останутся законными,
-  // перечисляет allowlist Задачи 23.
+  // entity-meta — АДРЕСУЕМОЕ имя снятой колонки, и только оно. Голое `\bmeta\b` по этим же
+  // путям давало 281 совпадение — гейт на 281 строке неисполним.
+  //
+  // Задача 23b сузила маркер, и вот замер, по которому: три ветки-эвристики
+  // (`meta: {}`, `meta: (row|input|values).meta`, `input.meta`) на рабочем дереве давали
+  // 13 совпадений, из которых НАСТОЯЩИМ было ОДНО (`executor.ts:1577`, писатель
+  // `entities.meta`, снят этой же задачей). Остальные 12 — мешок СВЯЗИ: `toWireRelation`
+  // (`wire.ts`), фикстуры связей web (`detail.test.tsx` ×6, `Blocks.test.tsx`), payload
+  // связи (`relations.test.ts`) и два положительных контроля стража web. Различить связь и
+  // сущность построчно нельзя — ключ один и тот же, а признак (`sourceId`) стоит соседней
+  // строкой; ветки ловили форму, а не смысл, и промахивались двенадцать раз из тринадцати.
+  //
+  // Чем закрыт класс, который они пытались ловить, после сноса колонки:
+  //  • `apps/web/src/test/fixtures.test.ts` — страж «мешок `meta` только у СВЯЗЕЙ», разбор по
+  //    соседству (окно ±8 строк, признак `sourceId`) с положительными контролями правила:
+  //    он решает ровно ту задачу, которая построчному грепу не по силам;
+  //  • на сервере — типы: после 0017 в `db/schema.ts` у `entities` колонки `meta` нет,
+  //    поэтому `meta:` во вставке сущности не компилируется, а не «ускользает от маркера».
+  // Маркеру остаётся то, что однозначно: адресация колонки и имя её индекса.
+  //
+  // `entities_meta_gin` — имя из `0001:104`. Прежний маркер писал `entity_meta_gin`
+  // (единственное число) и не совпал бы с индексом, если бы тот вернулся.
   {
     id: 'entity-meta',
-    pattern: String.raw`entities?\.meta\b|entity_meta_gin|\bmeta:\s*(row|input|values)\.meta\b|input\.meta\b|meta: \{\}`,
+    pattern: String.raw`entities?\.meta\b|entities?_meta_gin`,
     exclude: [/import\.meta/, /relations?\.meta/, /\bmetadata\b/],
   },
   { id: 'due-alias', pattern: String.raw`\bdue=` },
@@ -118,9 +136,18 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
   // (useAgenda/txQuery/browser/query). Сам по себе `aspect=` маркером НЕ является:
   // `aspect=orbis/…` — законная конструкция канона (§А5-3в, §А5-7); ловится только
   // неквалифицированное имя поля ПОСЛЕ него.
+  //
+  // `(?<![/\w])`, а НЕ `\b` перед именем поля, и это замер, а не вкус (долг 12 ветки).
+  // В PCRE и в JS `/` — граница слова, поэтому `\bstatus=` совпадал ВНУТРИ
+  // `orbis/task_status=`, `\bdirection=` — внутри `orbis/direction=`, то есть маркер
+  // считал нарушением ровно ту key-форму, ради которой он написан. Замер на рабочем
+  // дереве: `\b` — 130 строк, из них 127 содержат `orbis/`; `(?<![/\w])` — 65. Разница
+  // не в строгости, а в правде: 65 — это места, где имя поля стоит БЕЗ неймспейса.
+  // Отрицательный lookbehind запрещает перед именем и `/` (квалификатор канона), и любой
+  // словесный символ (хвост `task_status=`, `planned_amount=`).
   {
     id: 'bare-field',
-    pattern: String.raw`(\{\{query:|aspect=|sortBy=)[^}'"\n]*\b(status|stage|priority|kind|scope|outcome|undecided|due_date|start_at|occurred_on|planned|amount|direction|category_ref)=`,
+    pattern: String.raw`(\{\{query:|aspect=|sortBy=)[^}'"\n]*(?<![/\w])(status|stage|priority|kind|scope|outcome|undecided|due_date|start_at|occurred_on|planned|amount|direction|category_ref)=`,
   },
   // Парсер заголовка правила УДАЛЁН (Задача 18, В7): образец и цель уехали в свойства
   // (`orbis/rule_pattern`, `orbis/rule_target`), заголовок стал генерируемой подписью.

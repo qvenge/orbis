@@ -2,7 +2,19 @@
 // Запросы круга исполнителя (§4.14, С7): читающие проверки и выборки, которыми
 // пользуются гейты и глаголы. Все — под уже открытым `withIdentity`-tx вызывающего
 // (RLS владельца), собственных мутаций здесь нет.
-import type { AgentRunAspect, AgentRunStep, RoutineAspect, RunSummary } from '@orbis/shared';
+import type {
+  AgentRunStep,
+  ProposalStatus,
+  RoutineMode,
+  RoutineStage,
+  RunCheckpoint,
+  RunOutcome,
+  RunProposal,
+  RunReply,
+  RunSummary,
+  RunUsage,
+  Weekday,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
@@ -10,44 +22,45 @@ import { hierarchicalRolesSql } from '../registry/roles';
 
 /**
  * Значения ПРОГОНА по id свойств (§А1-1/§А8) — то, чем после реформы говорит вся зона
- * исполнителя вместо аспект-объекта `AgentRunAspect`.
+ * исполнителя.
  *
- * Типы взяты у полей прежнего аспекта дословно: реформа переименовала АДРЕС, а не смысл,
- * и второй набор типов рядом с первым разъехался бы с ним на первой же правке словаря.
- * Поэтому здесь `AgentRunAspect['<поле>']`, а не переписанные руками формы.
+ * Формы значений берутся из КОНТРАКТА круга исполнителя (`contracts/agent-loop.ts`) — там
+ * же, где их видит агент по MCP. Прежде они выводились из zod-схемы аспекта
+ * (`AgentRunAspect['<поле>']`), но аспект-объекта больше нет: реформа оставила словарь
+ * свойств и контракт, а второй набор типов рядом с ними разъехался бы на первой же правке.
  *
  * `project_id` не переехал: §А8 его удаляет (замена — вычисляемые `orbis/parent_project`
  * и `orbis/root_project`).
  */
 export interface RunProps {
-  'orbis/grant'?: AgentRunAspect['grant_id'];
-  'orbis/run_routine'?: AgentRunAspect['routine_id'];
-  'orbis/run_bucket'?: AgentRunAspect['bucket'];
-  'orbis/run_attempt'?: AgentRunAspect['attempt'];
-  'orbis/fail_note'?: AgentRunAspect['fail_note'];
-  'orbis/run_proposal'?: AgentRunAspect['proposal'];
-  'orbis/undecided'?: AgentRunAspect['undecided'];
-  'orbis/run_outcome': AgentRunAspect['outcome'];
-  'orbis/run_started_at': AgentRunAspect['started_at'];
-  'orbis/run_finished_at'?: AgentRunAspect['finished_at'];
-  'orbis/last_step_at': AgentRunAspect['last_step_at'];
-  'orbis/step_count': AgentRunAspect['step_count'];
+  'orbis/grant'?: string;
+  'orbis/run_routine'?: string;
+  'orbis/run_bucket'?: string;
+  'orbis/run_attempt'?: number;
+  'orbis/fail_note'?: string;
+  'orbis/run_proposal'?: RunProposal;
+  'orbis/undecided'?: boolean;
+  'orbis/run_outcome': RunOutcome;
+  'orbis/run_started_at': string;
+  'orbis/run_finished_at'?: string;
+  'orbis/last_step_at': string;
+  'orbis/step_count': number;
   'orbis/run_steps': AgentRunStep[];
-  'orbis/session_url'?: AgentRunAspect['session_url'];
-  'orbis/run_report'?: AgentRunAspect['report'];
-  'orbis/run_checkpoint'?: AgentRunAspect['checkpoint'];
-  'orbis/run_reply'?: AgentRunAspect['reply'];
-  'orbis/run_usage'?: AgentRunAspect['usage'];
-  'orbis/abandon_note'?: AgentRunAspect['abandon_note'];
+  'orbis/session_url'?: string;
+  'orbis/run_report'?: string;
+  'orbis/run_checkpoint'?: RunCheckpoint;
+  'orbis/run_reply'?: RunReply;
+  'orbis/run_usage'?: RunUsage;
+  'orbis/abandon_note'?: string;
 }
 
 /** Значения РУТИНЫ по id свойств (§А8) — та же подмена адреса, что у прогона. */
 export interface RoutineProps {
-  'orbis/routine_stage': RoutineAspect['stage'];
-  'orbis/routine_at': RoutineAspect['at'];
-  'orbis/routine_days'?: RoutineAspect['days'];
-  'orbis/routine_mode': RoutineAspect['mode'];
-  'orbis/allowed_tools'?: RoutineAspect['allowed_tools'];
+  'orbis/routine_stage': RoutineStage;
+  'orbis/routine_at': string;
+  'orbis/routine_days'?: readonly Weekday[];
+  'orbis/routine_mode': RoutineMode;
+  'orbis/allowed_tools'?: string[];
 }
 
 /** Значения ТИКЕТА, которые читает круг исполнителя: задача плюс назначение (§А8). */
@@ -230,10 +243,18 @@ function toRoutineRow(row: RawRow): RoutineRow {
 }
 
 /**
- * Тикеты, назначенные гранту (очередь исполнителя). Containment по КОЛОНКЕ `props` (`@>`) —
- * покрыт GIN-индексом entities_props_gin; разбор `->>`-полей сделал бы условие
- * неиндексируемым. `executor: 'agent'` в пробе обязателен: назначение человеку не даёт прав
- * никакому гранту (та же логика, что в isWorkerThreadTarget).
+ * Тикеты, назначенные гранту (очередь исполнителя). Отбор — containment по КОЛОНКЕ `props`
+ * (`@>`), а не разбор `->>`-полей: форма запроса одна на все чтения свойств.
+ *
+ * ПРО ИНДЕКС — ЧЕСТНО (замер 2026-08-27, `perf/explain.test.ts`). GIN `entities_props_gin`
+ * это условие ПОД РОЛЬЮ ПРИЛОЖЕНИЯ НЕ БЕРЁТ: политика RLS `owner_owns_row` — security qual,
+ * а `jsonb_contains` не leakproof, поэтому планировщик обязан применить политику раньше и
+ * уходит в Bitmap Heap Scan по `entities_owner_updated` с фильтром по куче. Под админским
+ * подключением (сиды, скрипты, `ops.ts`) тот же запрос индекс берёт. Прежняя формулировка
+ * «покрыт GIN-индексом» была неправдой ровно на боевом пути (долг 5 ветки).
+ *
+ * `executor: 'agent'` в пробе обязателен: назначение человеку не даёт прав никакому гранту
+ * (та же логика, что в isWorkerThreadTarget).
  *
  * Признаков носителя ДВА, и оба переводят по одному предикату старой формы: containment по
  * старой карте требовал КЛЮЧА `orbis/assignment`, а `aspects_legacy ? 'orbis/task'` —

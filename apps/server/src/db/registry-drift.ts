@@ -64,7 +64,7 @@ export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
                       merged_into, module, rank, flags
                FROM property_definitions WHERE owner_id IS NULL`,
   aspects: `SELECT id, key, label, description, properties, ai_instructions, tag_mappings,
-                   implements, view_config, module, service, rank, schema
+                   implements, view_config, module, service, rank
             FROM aspect_definitions WHERE owner_id IS NULL`,
   roles: `SELECT id, key, label, description, source_label, target_label, hierarchical,
                  constraints, "symmetric", module, rank

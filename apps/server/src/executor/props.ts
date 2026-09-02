@@ -27,8 +27,8 @@ export interface EntityState {
 
 /**
  * Патч состояния — уже РАЗРЕШЁННЫЙ: ключи `set`/`unset` это id свойств, элементы
- * `attach`/`detach` — id аспектов. Резолв имён (key ↔ id, старая карта → свойства) делает
- * граница входа (`legacy-form.ts`), чтобы внутрь конвейера попадала одна форма.
+ * `attach`/`detach` — id аспектов. Резолв имён (key → id) делает граница входа
+ * (`propsPatchFromInput` ниже), чтобы внутрь конвейера попадала одна форма.
  */
 export type PropsPatch = {
   set?: Record<string, unknown>;
@@ -268,6 +268,69 @@ export function replaceAspectProps(
     replaced.push(ref.propertyId);
   }
   return { set, unset: [], replaced, attach: [aspectId], detach: [] };
+}
+
+/** Вход исполнителя — то, что разбирают exec-надмножества контрактов (§А1-1). */
+export interface ExecPropsInput {
+  props?: Record<string, unknown>;
+  unset?: string[];
+  aspects?: { attach?: string[]; detach?: string[] } | string[];
+}
+
+/** true, если вход вообще несёт правку свойств (иначе стадии слияния не запускаются). */
+export function hasPropsInput(input: ExecPropsInput): boolean {
+  return input.props !== undefined || input.unset !== undefined || input.aspects !== undefined;
+}
+
+/**
+ * Вход исполнителя → патч свойств: единственная граница, где адрес свойства из входа
+ * (`key` либо id) превращается в id, а `aspects` — в списки attach/detach.
+ *
+ * ФОРМА ОДНА. Разбор СТАРОЙ карты `{аспект: {поле: значение|null}}` жил здесь до Задачи 23
+ * («Пересев мира») и снят вместе с ней: карту больше не шлёт ни один путь, а её приём
+ * контрактом делал бы форму, за которой не следит ни один тест. Сегодня карта объектов
+ * во входе — не вторая форма, а нераспознанное значение: `entityCreateExecInput` /
+ * `entityUpdateExecInput` отвечают на неё `VALIDATION` (приёмка §С8-10).
+ *
+ * `aspects` списком строк — это создание («с чем сущность рождается»); `{attach, detach}` —
+ * правка. Обе формы объявлены контрактом, различаются по типу значения, и разбор здесь
+ * однозначен.
+ *
+ * СЕМАНТИКИ ЗАМЕНЫ КЛЮЧА ЗДЕСЬ НЕТ, и это не пробел. У неё ровно один вызывающий — тул
+ * `attach_<аспект>`, для которого подмена носителя и есть смысл операции; он зовёт
+ * `replaceAspectProps` НАПРЯМУЮ (из `prepareAttach`), и говорит она уже свойствами. Флаг на
+ * две семантики жил бы дальше незапиненным (мутация M15 отчёта Задачи 6), и первый же
+ * путь, доверившийся ему, попал бы в непроверенную ветку.
+ *
+ * По той же причине здесь нет `replaced` в результате: его порождает ТОЛЬКО замена
+ * носителя. Потребители читают его через `?? []`, поэтому отсутствие ключа и пустой список
+ * для них — одно и то же.
+ */
+export function propsPatchFromInput(reg: RegistrySnapshot, input: ExecPropsInput): PropsPatch {
+  const set: Record<string, unknown> = {};
+  const unset: string[] = [];
+  const attach: string[] = [];
+  const detach: string[] = [];
+
+  const aspects = input.aspects;
+  if (Array.isArray(aspects)) {
+    attach.push(...aspects);
+  } else if (aspects !== undefined) {
+    attach.push(...(aspects.attach ?? []));
+    detach.push(...(aspects.detach ?? []));
+  }
+
+  for (const [keyOrId, value] of Object.entries(input.props ?? {})) {
+    const def = resolvePropertyRef(reg, keyOrId);
+    // Неизвестный адрес уезжает В ТОМ ЖЕ ВИДЕ, что пришёл: отказ по свойству называет
+    // валидатор (`UNKNOWN_PROPERTY`), и подменять здесь имя значило бы прятать опечатку.
+    set[def?.id ?? keyOrId] = value;
+  }
+  for (const keyOrId of input.unset ?? []) {
+    unset.push(resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId);
+  }
+
+  return { set, unset, attach, detach };
 }
 
 /**

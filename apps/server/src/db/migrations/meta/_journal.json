@@ -106,6 +106,13 @@
       "when": 1787773459922,
       "tag": "0016_relations_role",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788310269557,
+      "tag": "0017_reform_contract",
+      "breakpoints": true
     }
   ]
 }

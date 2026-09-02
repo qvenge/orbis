@@ -11,7 +11,7 @@
 // чистый перенос, после второго потребителя он дорожает. Здесь только ТЕКСТ — без JSX и без
 // политики показа: что резать, что прятать и в каком порядке рисовать, каждое место решает
 // само (лента режет дифф до трёх блоков, запись показывает весь).
-import { BODY_NOTE_PROPERTY, legacyFieldToProperty } from '@orbis/shared';
+import { BODY_NOTE_PROPERTY } from '@orbis/shared';
 import { propertyIdOf, type RegistryLookup } from '../../../lib/registry/labels';
 import type { RouterOutputs } from '../../../trpc';
 
@@ -140,13 +140,15 @@ export function propertyLabel(reg: RegistryLookup, propertyId: string): string {
 }
 
 /**
- * Свойство ноты — из ОБЕИХ форм. Прогоны, записанные до реформы, несут пару «аспект + поле»,
- * и переводится она здесь той же таблицей, которой её переводит сервер (`mismatchNotes`):
- * два разных правила на одну и ту же ноту разошлись бы на первом же слитом свойстве.
+ * Свойство ноты — из ОБЕИХ форм. Новая — сразу id свойства (§А7-4). Прежняя пара
+ * «аспект + поле» осталась в СХЕМЕ (её несут прогоны, записанные до реформы), но переводить
+ * её больше нечем: таблица старых имён снята «Пересевом мира» вместе с формой данных.
+ * Остаётся честная догадка `orbis/<поле>` — она и была последней веткой прежнего перевода,
+ * и на слитых свойствах (`category_ref`) даёт тот же ответ, что таблица.
  */
 function notePropertyOf(m: ProposalNote): string {
   if ('property' in m) return m.property;
-  return legacyFieldToProperty(m.aspect, m.field) ?? `orbis/${m.field}`;
+  return `orbis/${m.field}`;
 }
 
 /**

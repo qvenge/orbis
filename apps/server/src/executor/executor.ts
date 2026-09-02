@@ -104,12 +104,6 @@ import {
   resolveEntityTitles,
 } from './invariants';
 import {
-  fromLegacyInput,
-  hasPropsInput,
-  projectLegacyAspects,
-  projectLegacyRelationType,
-} from './legacy-form';
-import {
   type AspectsMap,
   applyTaskCompletion,
   assertFinancialInvariant,
@@ -125,7 +119,9 @@ import {
   assertPropsWritable,
   comparePropertyValue,
   type EntityState,
+  hasPropsInput,
   type PropsPatch,
+  propsPatchFromInput,
   replaceAspectProps,
   resolvePropertyRef,
   stateDelta,
@@ -136,9 +132,7 @@ import {
 import {
   assertNoDuplicateRelation,
   assertRoleConstraints,
-  assertSingleLegacyBudgetParent,
   duplicateRelationError,
-  LEGACY_PARENT_ROLES,
   type RelationKey,
   sameRelationKey,
   type VirtualGraphEffects,
@@ -311,11 +305,6 @@ class BatchState {
       created: this.createdRelations,
       deleted: this.deletedRelations,
       titleOf: (id) => this.entities.get(id)?.title,
-      // Строки, ТРОНУТЫЕ batch'ем, лежат здесь уже в состоянии ПОСЛЕ операции (create /
-      // update / attach кладут afterRow) — значит проверка видит аспекты такими, какими они
-      // будут, а не какими были на момент создания ребра. `loadEntityForUpdate` сюда ничего
-      // не кладёт: нетронутый источник остаётся `undefined`, и у него в силе фолбэк.
-      aspectsOf: (id) => this.entities.get(id)?.aspects,
     };
   }
 }
@@ -1058,10 +1047,38 @@ async function applyRefEffects(
   return ops;
 }
 
+/**
+ * Срез аспекта из НОВОЙ пары колонок: значения свойств, объявленных аспектом, либо
+ * `undefined`, если аспект на сущности не висит.
+ *
+ * Ровно та же величина, которую до реформы несла ячейка старой карты
+ * (`aspects_legacy[aspectId]`), и различает она ровно то же самое: «аспекта нет» ≠
+ * «аспект есть, значений нет» (`undefined` против `{}`). Разница только в том, что
+ * ключи — id свойств, а не старые имена полей, и значения не проходят через
+ * обратный перевод: обе стороны сравнения строятся одинаково, а перевод был лишь
+ * потерей точности (два разных значения свойства могли дать одно старое).
+ *
+ * Порядок ключей берётся из объявления аспекта в реестре — он стабилен между
+ * `before` и `after`, поэтому сравнение через `JSON.stringify` остаётся законным.
+ */
+function aspectSlice(
+  reg: RegistrySnapshot,
+  row: EntityRow | null,
+  aspectId: string,
+): Record<string, unknown> | undefined {
+  if (row === null || !row.aspects.includes(aspectId)) return undefined;
+  const props = row.props as Record<string, unknown>;
+  const slice: Record<string, unknown> = {};
+  for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
+    if (Object.hasOwn(props, ref.propertyId)) slice[ref.propertyId] = props[ref.propertyId];
+  }
+  return slice;
+}
+
 /** Данные аспект-ключа изменились операцией (стабильно для одинаковых объектов). */
-function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
-  const before = (hook.before?.aspectsLegacy as AspectsMap | undefined)?.[aspectId];
-  const after = (hook.after.aspectsLegacy as AspectsMap)[aspectId];
+function hookAspectChanged(reg: RegistrySnapshot, hook: BudgetHook, aspectId: string): boolean {
+  const before = aspectSlice(reg, hook.before, aspectId);
+  const after = aspectSlice(reg, hook.after, aspectId);
   return JSON.stringify(before) !== JSON.stringify(after);
 }
 
@@ -1074,14 +1091,23 @@ function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
  *     → rebindForEnvelope по окну «старый ИЛИ новый период»;
  * (в) сущность ПЕРЕСТАЛА нести orbis/financial (detach) → unbindOps снимает привязку.
  */
-function budgetHookBranches(hook: BudgetHook): {
+function budgetHookBranches(
+  reg: RegistrySnapshot,
+  hook: BudgetHook,
+): {
   rebind: boolean;
   bind: boolean;
   unbind: boolean;
 } {
   const { before, after } = hook;
-  const beforeAspects = before?.aspectsLegacy as AspectsMap | undefined;
-  const afterAspects = after.aspectsLegacy as AspectsMap;
+  // «Аспект висит на сущности» — это ровно `aspects[]`, без обхода значений: наличие
+  // ключа в старой карте выражало тот же факт (`legacy-form.ts:projectLegacyAspects`
+  // клал пустой объект даже аспекту без единого значения).
+  const hadFinancial = before !== null && before.aspects.includes('orbis/financial');
+  const hasFinancial = after.aspects.includes('orbis/financial');
+  const touchesBudget =
+    (before !== null && before.aspects.includes('orbis/budget')) ||
+    after.aspects.includes('orbis/budget');
   const archivedChanged = before !== null && before.archived !== after.archived;
   return {
     // (в) сущность ПЕРЕСТАЛА быть транзакцией: detach orbis/financial. Ветка (а) сюда не
@@ -1089,22 +1115,19 @@ function budgetHookBranches(hook: BudgetHook): {
     // возвращает [] — снять устаревшую привязку было некому, и конверт оставался
     // родителем не-financial сущности. Зеркальный кейс «стал шаблоном recurring»
     // закрывает ветка (а) через bindingTargetOf → fin:null.
-    unbind:
-      beforeAspects?.['orbis/financial'] !== undefined &&
-      afterAspects['orbis/financial'] === undefined,
+    unbind: hadFinancial && !hasFinancial,
     rebind:
-      (beforeAspects?.['orbis/budget'] !== undefined ||
-        afterAspects['orbis/budget'] !== undefined) &&
-      (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/budget')),
+      touchesBudget &&
+      (before === null || archivedChanged || hookAspectChanged(reg, hook, 'orbis/budget')),
     // orbis/schedule в условии — сценарий «пометить повторяющейся» (§3.1): attach/detach
     // recurrence меняет шаблонность при неизменном financial, привязку надо пересчитать
     // (шаблон отвязывается, экс-шаблон привязывается заново)
     bind:
-      afterAspects['orbis/financial'] !== undefined &&
+      hasFinancial &&
       (before === null ||
         archivedChanged ||
-        hookAspectChanged(hook, 'orbis/financial') ||
-        hookAspectChanged(hook, 'orbis/schedule')),
+        hookAspectChanged(reg, hook, 'orbis/financial') ||
+        hookAspectChanged(reg, hook, 'orbis/schedule')),
   };
 }
 
@@ -1124,7 +1147,7 @@ async function budgetFollowUpDescs(
 ): Promise<BudgetOpDesc[]> {
   const { before, after } = hook;
   const ownerId = ctx.req.actorUserId;
-  const branches = precomputed ?? budgetHookBranches(hook);
+  const branches = precomputed ?? budgetHookBranches(ctx.registry, hook);
   const descs: BudgetOpDesc[] = [];
 
   // (б) конверт: до или после операции сущность несёт orbis/budget
@@ -1182,7 +1205,7 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
   //
   // Ветки считаются ОДИН раз на хук: внутри budgetHookBranches живёт JSON.stringify по
   // значениям аспектов, а на импорте в 300 строк хуков ровно столько же.
-  const branches = hooks.map(budgetHookBranches);
+  const branches = hooks.map((hook) => budgetHookBranches(ctx.registry, hook));
   const targets: BindingTarget[] = [];
   for (const [i, hook] of hooks.entries()) {
     if (!branches[i]?.bind) continue;
@@ -1453,7 +1476,7 @@ async function prepareEntityCreate(
 
   // Слияние (§А7-1): у create «состояние до» — пустое, поэтому весь вход и есть патч.
   const before: EntityState = { props: {}, aspects: [] };
-  const propsPatch = fromLegacyInput(ctx.registry, input);
+  const propsPatch = propsPatchFromInput(ctx.registry, input);
   const state = applyPropsPatch(before, propsPatch);
   // §3.2: create сразу в done без completed_at → проставить clock() (до стадии 2,
   // чтобы валидировалось финальное сохраняемое значение)
@@ -1532,10 +1555,6 @@ async function prepareEntityCreate(
       ctx.registry,
     ));
   }
-  // Дуальная запись (§А1-1, до Задачи 23): старая карта — ПРОЕКЦИЯ новой правды, а не
-  // второй независимый перевод входа. Она же — вход доменных проверок бюджета, которые
-  // переводятся своей задачей (7a).
-  const aspectsLegacy = projectLegacyAspects(ctx.registry, state);
   // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
   if (state.aspects.includes('orbis/budget')) {
     await assertEnvelopeUnique(ctx.tx, {
@@ -1571,13 +1590,8 @@ async function prepareEntityCreate(
     // тела — иначе у проекта, заведённого через attach, индекс молча остался бы пустым.
     queryRefs,
     tags,
-    // `meta` больше НЕ пишется (§А1-1): мешок был write-only во всех пяти зонах, свойства
-    // заменили его адресуемым значением, а колонка доживает до миграции 0017 пустой. Вход
-    // тула поле ещё принимает (контракт §9.2 не двигается до Задачи 12) — и молча роняет.
-    meta: {},
     props: state.props,
     aspects: state.aspects,
-    aspectsLegacy,
     createdAt: now,
     updatedAt: now,
     archived: false,
@@ -1741,7 +1755,7 @@ async function prepareEntityUpdate(
     // она до конца среза без единого потребителя. Окно риска ровно одно — деплой БЕЗ
     // пересева мира; пересев (РП-7, Задача 23) сносит и граф, и журнал, и окно закрывает.
     // Требование «пересев ДО деплоя» занесено в чек-лист Задачи 23 и в реестр швов леджера.
-    propsPatch = fromLegacyInput(ctx.registry, input);
+    propsPatch = propsPatchFromInput(ctx.registry, input);
     state = applyPropsPatch(before, propsPatch);
     touched = touchedAspects(ctx.registry, before, state, propsPatch);
   }
@@ -1807,22 +1821,14 @@ async function prepareEntityUpdate(
     if (ctx.internalUndo === undefined && touched.includes('orbis/agent-run')) {
       assertRunSubject(state);
     }
-    // «Один budget-parent» (§4.2/§13.7) и для патча свойств: аспект конверта может
-    // появиться и так — второй путь ретроспективного второго конверта помимо attach
-    // (fix round ревью A1.1). Detach второго budget-parent'а не создаёт.
-    // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
-    if (
-      ctx.internalUndo === undefined &&
-      touched.includes('orbis/budget') &&
-      state.aspects.includes('orbis/budget')
-    ) {
-      await assertBudgetAttachKeepsSingleParent(ctx, input.id, batch);
-    }
+    // РЕТРОСПЕКТИВНОЙ проверки «одного budget-parent» здесь БОЛЬШЕ НЕТ. Она ловила класс,
+    // который создавала снятая колонка: «X стал конвертом» задним числом превращало все его
+    // исходящие рёбра с проекцией `parent` (в том числе роли ВЛАДЕЛЬЦА — `subitem`,
+    // `ticket`) в привязки, и у financial-ребёнка их оказывалось два. С 0017 привязка — это
+    // роль `envelope-binding` и только она, навешивание аспекта рёбер не создаёт, а каждое
+    // ребро этой роли уже посчитано `target_max_incoming` в момент своего создания. Класс
+    // исчез вместе с причиной — проверять здесь нечего.
   }
-
-  // Дуальная запись (§А1-1): старая карта — проекция новой правды. Считается ОДИН раз и
-  // отсюда же уезжает в проверки бюджета (их перевод — Задача 7a) и в журнал.
-  const nextLegacy = projectLegacyAspects(ctx.registry, state);
 
   // Уникальность конверта (03-budget §2.1) над ФИНАЛЬНЫМ состоянием: и правка
   // комбинации, и разархивация (archived=false возвращает конверт в множество
@@ -1975,7 +1981,6 @@ async function prepareEntityUpdate(
   if (hasPropsInput(input)) {
     patch.props = state.props;
     patch.aspects = state.aspects;
-    patch.aspectsLegacy = nextLegacy;
   }
   // Единица журнала и отката — СВОЙСТВО (§А7-4). Обе половины записи — дельты состояний,
   // зеркальные друг другу, и отсюда обратимость «байт-в-байт» (§С7-13) по построению.
@@ -2091,14 +2096,9 @@ async function prepareAttach(
   // и потерять субъект, и добавить второй. Гейта по aspectId нет — проверка сама молчит,
   // когда прогона в итоговой карте не оказалось.
   assertRunSubject(state);
-  // «Один budget-parent» (§4.2/§13.7) и для attach: аспект orbis/budget ретроспективно
-  // делает сущность budget-parent'ом её financial-детей — инвариант проверяется не
-  // только в relation_create, иначе attach обходит его (ревью 2026-07-09)
-  // Дуальная запись (§А1-1): старая карта — проекция новой правды; она же вход проверок
-  // бюджета (их перевод — Задача 7a) и полезной нагрузки журнала.
-  const nextLegacy = projectLegacyAspects(ctx.registry, state);
+  // Ретроспективной проверки «одного budget-parent» на attach-пути больше нет — см. довод
+  // на пути entity_update: с 0017 привязка выражена ролью, и attach рёбер не создаёт.
   if (aspectId === 'orbis/budget') {
-    await assertBudgetAttachKeepsSingleParent(ctx, input.entity_id, batch);
     // Уникальность конверта (03-budget §2.1) — attach-путь той же комбинации
     await assertEnvelopeUnique(ctx.tx, {
       ownerId: ctx.req.actorUserId,
@@ -2122,7 +2122,6 @@ async function prepareAttach(
   const patch: EntityPatch = {
     props: state.props,
     aspects: state.aspects,
-    aspectsLegacy: nextLegacy,
     updatedAt,
   };
   if (seed !== undefined) {
@@ -2199,65 +2198,6 @@ function ancestorRootsOnProjectChange(
   const was = before.aspects.includes(PROJECT_ASPECT);
   const is = after.aspects.includes(PROJECT_ASPECT);
   return was === is ? {} : { ancestorRoots: [entityId] };
-}
-
-/**
- * Стадия 4 attach orbis/budget (§4.2/§13.7) — ВТОРОЙ ВХОД в ограничение роли, и он остаётся
- * кодом до части Б (правило Б-2).
- *
- * Почему он не выражается ролью. `target_max_incoming` роли `envelope-binding` смотрит на
- * рёбра ЦЕЛИ и срабатывает на создании ребра. Здесь ребра не создаются вовсе: меняется
- * АСПЕКТ ИСТОЧНИКА. Пока жива переходная колонка, «X стал конвертом» ретроспективно делает
- * budget-parent'ами все его исходящие рёбра, проецирующиеся в `parent` (`budgetParentsOfMany`
- * и агрегаты §2.10 читают именно её), — и у financial-ребёнка их оказывается два.
- *
- * Отсюда фильтр по `LEGACY_PARENT_ROLES` — и в перечислении детей, и в счёте их входящих:
- * ретроспектива живёт ровно на том множестве, которое видит старая колонка. Сама проверка —
- * `assertSingleLegacyBudgetParent`, то есть та же половина правила, что и на пути создания
- * ребра; разъехавшись, эти два входа открыли бы дыру каждый со своей стороны.
- */
-async function assertBudgetAttachKeepsSingleParent(
-  ctx: ExecCtx,
-  entityId: string,
-  batch?: BatchState,
-): Promise<void> {
-  // Порог берётся из реестра, а не пишется здесь числом: ослабив ограничение роли,
-  // владелец обязан ослабить и ретроспективу — иначе она запрещала бы разрешённое.
-  if (
-    ctx.registry.roles.get(ROLE_ENVELOPE_BINDING)?.constraints.target_max_incoming === undefined
-  ) {
-    return;
-  }
-  const parentRoles = LEGACY_PARENT_ROLES as readonly string[];
-  const rows = await ctx.tx
-    .select({ targetId: relations.targetId, role: relations.role })
-    .from(relations)
-    .where(and(eq(relations.sourceId, entityId), inArray(relations.role, [...parentRoles])));
-  const deleted = batch?.deletedRelations ?? [];
-  const childIds = new Set(
-    rows
-      .filter(
-        (r) =>
-          !deleted.some(
-            (d) => d.sourceId === entityId && d.targetId === r.targetId && d.role === r.role,
-          ),
-      )
-      .map((r) => r.targetId),
-  );
-  for (const c of batch?.createdRelations ?? []) {
-    if (parentRoles.includes(c.role) && c.sourceId === entityId) childIds.add(c.targetId);
-  }
-  // FOR UPDATE в детерминированном порядке id — меньше дедлоков при перекрёстных
-  // операциях над теми же детьми (как loadBothEndsForUpdate)
-  for (const childId of [...childIds].sort()) {
-    const child = await loadEntityForUpdate(ctx, childId, batch);
-    if (!child || !hasAspect(child, 'orbis/financial')) continue;
-    // Считаем ПО ТОМУ ЖЕ множеству, по которому перечислили детей, — иначе половина правила
-    // терялась бы ровно там, где ретроспектива и нужна: у ребёнка, чей другой конверт держит
-    // ребро роли владельца (`subitem`), а не системной `envelope-binding`.
-    const key: RelationKey = { sourceId: entityId, targetId: childId, role: ROLE_ENVELOPE_BINDING };
-    await assertSingleLegacyBudgetParent(ctx.tx, ctx.registry, key, batch?.graph());
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2380,26 +2320,21 @@ async function prepareRelationCreate(
   // Дубль ловим ДО записи на ОБОИХ путях (не только в batch): под `rel_uniq` до 0017
   // попадают две разные роли, и различить их случаи можно только пока транзакция жива.
   await assertNoDuplicateRelation(ctx.tx, ctx.registry, key, batch?.graph());
-  // ВТОРАЯ ПОЛОВИНА «одного budget-parent» — та, которой ограничение роли не покрывает
-  // (§4.2/§13.7, интервал до 0017). Условие применимости — дословно прежнее: ребро от
-  // конверта к транзакции, проецирующееся в старый `parent`. Одной ролью здесь ничего не
-  // решается потому, что то же множество считают агрегаты (`spentByEnvelope`) и хук
-  // привязки: сузь его здесь — и владелец увидит одну трату в двух конвертах.
-  const sourceHasBudget = hasAspect(source, 'orbis/budget');
-  if (
-    sourceHasBudget &&
-    hasAspect(target, 'orbis/financial') &&
-    (LEGACY_PARENT_ROLES as readonly string[]).includes(key.role)
-  ) {
-    await assertSingleLegacyBudgetParent(ctx.tx, ctx.registry, key, batch?.graph());
-  }
+  // ВТОРОЙ проверки «одного budget-parent» здесь БОЛЬШЕ НЕТ, и это следствие 0017, а не
+  // послабление. До неё «конверт-родитель» выражался не ролью, а расширенным множеством
+  // (`LEGACY_PARENT_ROLES` с источником-конвертом), и ограничение реестра
+  // `target_max_incoming` роли `envelope-binding` половину случаев не видело. С 0017
+  // множество схлопнулось до самой роли — то есть ровно до того, что уже посчитал
+  // `assertRoleConstraints` строкой выше, тем же FOR UPDATE и с теми же виртуальными
+  // эффектами batch. Оставленный рядом второй счёт того же множества никогда бы не
+  // сработал (первый отказывает раньше) и врал бы читателю про существование правила.
   gateEntitlements(ctx, 'relation_create');
 
   const id = newId();
   const now = ctx.clock();
 
   // Эффект batch: связь видна проверкам следующих операций
-  batch?.createdRelations.push({ ...key, sourceHasBudget });
+  batch?.createdRelations.push({ ...key });
 
   const journal: JournalPlan = {
     type: 'relation_created',
@@ -2440,9 +2375,6 @@ async function prepareRelationCreate(
             sourceId: key.sourceId,
             targetId: key.targetId,
             role: key.role,
-            // ПЕРЕХОДНОЕ (до 0017): старая колонка пишется ПРОЕКЦИЕЙ роли и только здесь —
-            // другого писателя у неё нет, поэтому разъехаться с ролью она не может
-            relationType: projectLegacyRelationType(key.role),
             meta,
             createdAt: now,
             updatedAt: now,

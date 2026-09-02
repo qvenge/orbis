@@ -9,44 +9,15 @@
  * (`amount`, `category_ref`), и второй резолв рядом разошёлся бы с этим на первом же слитом
  * свойстве.
  *
- * ДАТА СМЕРТИ ПОЛОВИНЫ ЭТОГО ФАЙЛА — Задача 23, и это проверяемое утверждение: старые имена
- * резолвит `propertyToLegacyField` (`registry/legacy-field-map.ts`), а РП-3 удаляет её
- * целиком. Останется резолв «id либо key», который в комментарии не нуждается.
- * `aspectsNamedInQueryAst` переживает обе даты — он про КАНОН, а не про старую форму.
+ * ПОЛОВИНА ЭТОГО ФАЙЛА УМЕРЛА В ЗАДАЧЕ 23, как и было объявлено. Старые имена полей
+ * (`amount`, `category_ref`, `status`) резолвила переходная карта
+ * `registry/legacy-field-map.ts`; «Пересев мира» снёс её целиком вместе с формой данных,
+ * которая эти имена и порождала. Осталcя резолв «id либо key» — то есть КАНОН §А5-3а, и
+ * второго способа назвать свойство больше нет ни у текста запроса, ни у поля агрегата.
+ * `aspectsNamedInQueryAst` пережил обе даты — он про канон, а не про старую форму.
  */
-import { propertyToLegacyField } from '../registry/legacy-field-map';
 import type { QueryAst, QueryFilterNode } from './ast';
 import type { ParseRegistry } from './parse-ast';
-
-/**
- * Core-свойства (§А1-3) под их СТАРЫМИ именами: носителя-аспекта у них нет, поэтому через
- * `propertyToLegacyField` они не находятся вовсе. `title` попадает сюда только из `sortBy`:
- * в позиции фильтра его имя занято параметром заголовка выдачи.
- */
-const CORE_LEGACY_PROPERTY: Readonly<Record<string, string>> = {
-  created_at: 'orbis/created_at',
-  updated_at: 'orbis/updated_at',
-  title: 'orbis/title',
-};
-
-interface LegacyFieldOwner {
-  aspect: string;
-  propertyId: string;
-}
-
-function legacyFieldIndex(reg: ParseRegistry): Map<string, LegacyFieldOwner[]> {
-  const index = new Map<string, LegacyFieldOwner[]>();
-  for (const aspect of reg.aspects.values()) {
-    for (const ref of aspect.properties) {
-      const name = propertyToLegacyField(ref.propertyId, aspect.id);
-      if (name === undefined) continue;
-      const list = index.get(name);
-      if (list) list.push({ aspect: aspect.id, propertyId: ref.propertyId });
-      else index.set(name, [{ aspect: aspect.id, propertyId: ref.propertyId }]);
-    }
-  }
-  return index;
-}
 
 /**
  * Аспекты, НАЗВАННЫЕ запросом, — для резолва неоднозначного имени поля (§А5-3ж, `aspect=`
@@ -71,33 +42,21 @@ export function aspectsNamedInQueryAst(ast: QueryAst): Set<string> {
 }
 
 /**
- * Имя поля → id свойства канона (§А5-2: в дереве лежат id, не подписи).
+ * Адрес поля → id свойства канона (§А5-2: в дереве лежат id, не подписи).
  *
- * Порядок резолва: id → key → core-имя старой формы → карта полей аспектов;
- * неоднозначность разводится аспектами, названными САМИМ запросом (`aspect=` — единственное,
- * чем автор разводит имя, которое носят несколько аспектов). Два последних шага уедут
- * вместе с `legacy-field-map.ts` в Задаче 23.
+ * Порядок резолва: id, затем `key`. Третьего шага — «старое имя поля аспекта» — больше нет:
+ * его карту снял «Пересев мира» вместе со старой формой данных, и вместе с ним ушла вся
+ * машинерия разведения неоднозначности (`amount` носили и `orbis/financial`, и
+ * `orbis/budget`, поэтому имя приходилось уточнять аспектами, названными самим запросом).
+ * Канон однозначен по построению: `orbis/amount` — один адрес и одно свойство.
+ *
+ * Неизвестный адрес возвращает `undefined` — отказ называет вызывающий, у каждого из двух
+ * входов он свой (`UNKNOWN_FIELD` у агрегата, `invalid_query` у прогресса цели).
  */
-export function resolveLegacyFieldId(
-  field: string,
-  reg: ParseRegistry,
-  aspectsInQuery: ReadonlySet<string> = new Set(),
-): string | undefined {
-  // Имя может быть уже каноническим — id или key свойства: так его пишут все переведённые
-  // потребители, и отвергать канон в пользу старого имени было бы шагом назад.
+export function resolvePropertyFieldId(field: string, reg: ParseRegistry): string | undefined {
   if (reg.properties.has(field)) return field;
   for (const prop of reg.properties.values()) {
     if (prop.key === field) return prop.id;
   }
-  const core = CORE_LEGACY_PROPERTY[field];
-  if (core !== undefined) return reg.properties.has(core) ? core : undefined;
-  const owners = legacyFieldIndex(reg).get(field) ?? [];
-  if (owners.length === 1) return (owners[0] as LegacyFieldOwner).propertyId;
-  if (owners.length === 0) return undefined;
-  const narrowed = owners.filter((o) => aspectsInQuery.has(o.aspect));
-  if (narrowed.length === 1) return (narrowed[0] as LegacyFieldOwner).propertyId;
-  // Слитые свойства (§А8/В1): у `category_ref` и `currency` носителей два, но свойство
-  // одно — такое имя однозначно, хотя аспектов и несколько.
-  const ids = new Set(owners.map((o) => o.propertyId));
-  return ids.size === 1 ? (owners[0] as LegacyFieldOwner).propertyId : undefined;
+  return undefined;
 }

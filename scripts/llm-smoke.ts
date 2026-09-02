@@ -7,15 +7,26 @@
 // Провайдер выбирается той же фабрикой, что и в проде (llm/provider.ts), — иначе
 // гейт «в прод только после живого смоука» закрывался бы не тем кодом, что поедет.
 //
-// Запуск: ORBIS_LLM_PROVIDER=openai    OPENAI_API_KEY=sk-...     bun scripts/llm-smoke.ts
-//     или ORBIS_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... bun scripts/llm-smoke.ts
+// БАЗА НУЖНА. Прежняя шапка обещала «запускается где угодно и без DATABASE_URL» — обещание
+// держалось на том, что набор тулов собирался из литералов старой формы
+// (`BUILTIN_ASPECT_META` + `legacyAspectJsonSchema`). Обе умерли вместе со старой формой, а
+// `buildToolDefs` с Задачи 12 принимает СНИМОК РЕЕСТРА — тот самый, по которому валидируется
+// запись. Собирать снимок «из кода» значило бы завести второй путь сборки ради обещания
+// шапки, и гейт проверял бы набор, которого в проде нет. Живой смоук и так требует ключа
+// провайдера и прод-подобного контура — база к этому списку добавляется честно (Р-23-5а).
+//
+// Запуск: DATABASE_URL=postgres://… ORBIS_SMOKE_OWNER_ID=<uuid владельца>
+//         ORBIS_LLM_PROVIDER=openai OPENAI_API_KEY=sk-... bun scripts/llm-smoke.ts
+//     или ORBIS_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... …
 // Модель: env ORBIS_LLM_MODEL, иначе дефолт выбранного провайдера
 // (claude-sonnet-5 — DEFAULT_ANTHROPIC_MODEL, gpt-5.5 — DEFAULT_OPENAI_MODEL).
 
-import { aspectJsonSchema, BUILTIN_ASPECT_META } from '@orbis/shared';
+import { makeDb } from '../apps/server/src/db/client';
+import { withIdentity } from '../apps/server/src/db/with-identity';
 import { makeLLMProvider } from '../apps/server/src/llm/provider';
 import type { LLMToolDef } from '../apps/server/src/llm/types';
-import { type AspectToolRow, buildToolDefs } from '../apps/server/src/tools/registry';
+import { effectiveRegistry } from '../apps/server/src/registry/cache';
+import { buildToolDefs } from '../apps/server/src/tools/registry';
 
 // Правила ВЫБОРА провайдера скрипт не дублирует: неизвестное значение
 // ORBIS_LLM_PROVIDER, отсутствие ключа выбранного провайдера, оба ключа сразу без
@@ -50,27 +61,23 @@ if (provider.modelId === 'echo') {
  * Про союз anyOf у orbis/goal.progress_source доказано лишь то, что он ПРИНЯТ, — причиной
  * отказа он не был ни разу; в наборе он важен как единственный в реестре, а не как риск.
  *
- * Сборка статическая, без БД: реестр в базе сидируется из тех же источников —
- * apps/server/src/db/seed-registries.ts кладёт в колонку `schema`
- * legacyAspectJsonSchema(id) (тот же генератор, что здесь под прежним именем
- * aspectJsonSchema) и пишет aiInstructions аспекта, — поэтому набор совпадает с тем, что
- * читает прод, а гейт остаётся запускаемым где угодно и без DATABASE_URL.
- *
- * Расхождения формы здесь нет, хотя источники разные: сид берёт BUILTIN_ASPECT_DEFS (новая
- * форма реестра), а строки ниже — BUILTIN_ASPECT_META (старая). Проверено пробоем на всех
- * 13 аспектах: description.ru новой формы совпадает с description старой, aiInstructions
- * совпадают полностью. Оба источника умирают вместе со старой формой (Задача 23 реформы).
+ * Источник — ЭФФЕКТИВНЫЙ СНИМОК РЕЕСТРА владельца, то есть ровно то, из чего собирает свой
+ * набор бой (`ai/send-message.ts`): системные строки плюс собственные аспекты и свойства
+ * владельца. Набор с кастомными аспектами и есть интересный случай гейта — рукописный
+ * набор его не воспроизводит.
  */
-const rows: AspectToolRow[] = BUILTIN_ASPECT_META.map((m) => ({
-  id: m.id,
-  description: m.description,
-  aiInstructions: m.aiInstructions,
-  schema: aspectJsonSchema(m.id),
-  viewConfig: m.viewConfig,
-}));
+const ownerId = process.env.ORBIS_SMOKE_OWNER_ID;
+if (!ownerId) {
+  console.error('llm-smoke: задайте ORBIS_SMOKE_OWNER_ID — от него зависит эффективный реестр.');
+  process.exit(1);
+}
+const { db, client } = makeDb({ max: 1 });
+const registry = await withIdentity(db, ownerId, (tx) => effectiveRegistry(tx, ownerId));
+await client.end();
 // Та же конвертация OrbisToolDef → LLMToolDef, что в бою (ai/send-message.ts):
 // расхождение здесь означало бы, что гейт проверяет не ту форму запроса.
-const tools: LLMToolDef[] = buildToolDefs(rows).map((d) => ({
+const defs = buildToolDefs(registry);
+const tools: LLMToolDef[] = defs.map((d) => ({
   name: d.name,
   description: d.description,
   inputSchema: d.inputJsonSchema,
@@ -91,7 +98,7 @@ const response = await provider.chat({
 // Первыми строками — что именно проверено: без них зелёный смоук не отличить
 // от зелёного смоука другого провайдера, другой модели или урезанного набора тулов.
 console.log('model     :', provider.modelId);
-console.log('tools     :', tools.length, `(из них attach_*: ${rows.length})`);
+console.log('tools     :', tools.length, `(из них attach_*: ${defs.filter((d) => d.name.startsWith('attach_')).length})`);
 console.log('content   :', JSON.stringify(response.content));
 console.log('toolCalls :', JSON.stringify(response.toolCalls, null, 2));
 console.log('stopReason:', response.stopReason);

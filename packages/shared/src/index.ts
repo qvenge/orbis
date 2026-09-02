@@ -33,6 +33,5 @@ export * from './nav/links';
 export * from './query';
 export * from './recurrence';
 export * from './registry';
-export * from './schemas/aspects';
 export * from './schemas/entity';
 export * from './schemas/relation';

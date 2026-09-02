@@ -53,8 +53,9 @@ export function effectiveRolesSql(): SQL {
  * (находка 15 ревью плана).
  *
  * `envelope-binding` сюда не входит — конверт не родитель транзакции, он её счётчик
- * (Ч10-С1). Читателям, которым нужно прежнее множество старой колонки `relation_type`
- * (агрегаты бюджета), нужен `LEGACY_PARENT_ROLES`, а не этот список.
+ * (Ч10-С1). Читателям бюджета нужна ровно эта роль и только она (с 0017 «конверт-родитель»
+ * выражается ролью ребра, а не расширенным множеством снятой колонки `relation_type`), —
+ * поэтому они спрашивают `envelope-binding` по имени, а не этот подзапрос.
  */
 export function hierarchicalRolesSql(): SQL {
   return sql`SELECT id FROM ${effectiveRolesSql()} d WHERE d.hierarchical`;

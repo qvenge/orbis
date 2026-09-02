@@ -131,7 +131,6 @@ function entityRow(level: number, index: number): typeof entities.$inferInsert {
     props,
     aspects,
     queryRefs: [],
-    aspectsLegacy: {},
     createdAt: new Date('2026-07-01T00:00:00Z'),
     updatedAt: new Date('2026-07-01T00:00:00Z'),
   };
@@ -200,14 +199,14 @@ export async function ensureGraphFixture(): Promise<{
             sourceId: graphNodeId(level - 1, parent),
             targetId: graphNodeId(level, index),
             role: 'subitem',
-            relationType: 'parent',
           });
         }
       }
     }
     // Упоминания: объём таблицы связей и селективность по роли. Смещения взаимно различны и
-    // не кратны размеру корпуса, поэтому ни петли, ни повтора пары (source, target, type)
-    // не возникает — а `rel_uniq` стоит именно на этой тройке.
+    // не кратны размеру корпуса, поэтому ни петли, ни повтора тройки (source, target, role)
+    // не возникает — а `rel_uniq` стоит именно на ней (0017 переставила уникальность с
+    // производной `relation_type` на саму роль).
     const flat = rows.map((r) => r.id as string);
     for (const [i, sourceId] of flat.entries()) {
       for (const offset of MENTION_OFFSETS) {
@@ -216,7 +215,6 @@ export async function ensureGraphFixture(): Promise<{
           sourceId,
           targetId: flat[(i + offset) % flat.length] as string,
           role: 'mention',
-          relationType: 'related_to',
         });
       }
     }

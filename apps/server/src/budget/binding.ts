@@ -10,7 +10,6 @@ import { eq, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
-import { legacyParentRolesSql } from '../executor/relations';
 import type { WireEntity } from '../executor/types';
 
 /**
@@ -198,18 +197,21 @@ function hasScheduleRecurrence(entity: WireEntity): boolean {
  * транзакции — тот же ORDER BY, что и у одиночного чтения; транзакция без родителей получает
  * пустой массив.
  *
- * ИНТЕРВАЛ 7a→0017: отбор идёт по `LEGACY_PARENT_ROLES` с источником-конвертом — ровно по
- * тому множеству, которое считают агрегаты (`spentByEnvelope`) и стерегёт инвариант
- * (`assertSingleLegacyBudgetParent`). Сузить его до одной роли `envelope-binding` нельзя, и
- * это не вкусовщина: ребро роли ВЛАДЕЛЬЦА (`subitem`, `ticket`) от конверта к транзакции
- * система создать разрешает, а `rel_uniq` до 0017 стоит на ПРОЕКЦИИ роли — значит рядом с
- * ним своё `envelope-binding` уже не встанет. Не считай хук такое ребро привязкой, он бился
- * бы об уникальность на КАЖДОЙ правке транзакции и валил бы операцию владельца навсегда.
+ * Отбор — по ОДНОЙ роли `envelope-binding`, ровно по тому множеству, которое считают
+ * агрегаты (`spentByEnvelope`, unbudgeted) и карточка импорта. До 0017 множество было шире
+ * (`LEGACY_PARENT_ROLES`) не по вкусу, а по механике: `rel_uniq` стоял на ПРОЕКЦИИ роли в
+ * снятую колонку `relation_type`, и рядом с ребром роли ВЛАДЕЛЬЦА (`subitem`, `ticket`) от
+ * конверта к транзакции своё `envelope-binding` уже не вставало — не считай хук такое ребро
+ * привязкой, он бился бы об уникальность на КАЖДОЙ правке транзакции. С уникальностью по
+ * `(source_id, target_id, role)` запрета нет: привязка ставится своей ролью всегда.
  *
  * Возвращается и РОЛЬ: удалять устаревшую привязку надо ровно той строкой, что есть.
  *
- * С 0017 множество схлопнется до одной роли, join к аспектам источника станет лишним, и эта
- * функция сойдётся с тем, чем была бы без интервала (перевод — правило Б-2).
+ * Join к аспектам источника (`'orbis/budget' = ANY(e.aspects)`) ОСТАЁТСЯ, хотя роль и так
+ * системная. Он отсеивает состояние «конверт перестал быть конвертом (detach orbis/budget),
+ * а его строки-привязки ещё живы»: ветка ребиндинга их снимает, но между операциями такое
+ * состояние наблюдаемо, и без предиката хук считал бы родителем не-конверт. Снятие
+ * предиката — отдельное решение о поведении, а не следствие contract-миграции.
  */
 async function budgetParentsOfMany(
   tx: Tx,
@@ -224,7 +226,7 @@ async function budgetParentsOfMany(
     WHERE r.target_id IN (${sql.join(
       unique.map((id) => sql`${id}`),
       sql`, `,
-    )}) AND r.role IN (${legacyParentRolesSql()})
+    )}) AND r.role = ${ROLE_ENVELOPE_BINDING}
       AND 'orbis/budget' = ANY(e.aspects)
     ORDER BY r.target_id, r.source_id
   `)) as unknown as Array<{ target_id: string; source_id: string; role: string }>;

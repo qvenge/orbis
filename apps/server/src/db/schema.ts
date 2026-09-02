@@ -72,16 +72,6 @@ export const entities = pgTable('entities', {
    */
   bodyBeforeDoc: text('body_before_doc'),
   tags: text('tags').array().notNull().default(sql`'{}'`),
-  meta: jsonb('meta').notNull().default({}),
-  /**
-   * СТАРАЯ карта аспектов `{id аспекта: {поле: значение}}` — носитель, который реформа
-   * снимает (§А1-1). Переименована из `aspects` миграцией 0015 и до миграции 0017 живёт
-   * рядом с новой правдой: её пишет проекция `executor/legacy-form.ts`, а читают ещё не
-   * переведённые серверные пути (слой памяти чата, `llm/context.ts`). Наружу колонка НЕ
-   * едет с Задачи 13c: из wire-формы старая карта снята вместе с последним читателем в web
-   * (§А1-1). Новый код в неё не смотрит — он читает `props`/`aspects`.
-   */
-  aspectsLegacy: jsonb('aspects_legacy').notNull().default({}),
   /**
    * НОВАЯ правда значений (§А1-1): плоская карта `{id свойства: значение}` — один
    * идентификатор на свойство независимо от того, сколько аспектов его носят (§А8/В1
@@ -127,24 +117,20 @@ export const relations = pgTable(
      */
     role: text('role').notNull(),
     /**
-     * ПРОИЗВОДНОЕ от роли (`projectLegacyRelationType`) и переходная колонка: её ещё
-     * читают компилятор запросов, бюджет, agent-loop и импорт. Писать её напрямую
-     * нельзя — она пересчитывается из роли на каждой вставке. Снимает contract-миграция
-     * 0017 вместе с `rel_uniq` по этой тройке.
-     *
-     * Списка значений здесь НЕТ намеренно. Прежний хвостовой комментарий перечислял четыре
-     * типа, а проекция одиннадцати ролей даёт ПЯТЬ: `ref` (роль `ref`, зеркало ссылочного
-     * свойства) в старый список не входил. Читатель, заложившийся на четыре, написал бы в
-     * 0017 CHECK, который строки `ref` не вместит; единственный источник значений —
-     * `LegacyRelationType` в `executor/legacy-form.ts`.
+     * Мешок ребра. У СУЩНОСТИ такой колонки нет (§А1-3 снял её вместе с write-only мешком),
+     * а у связи он живой и адресуемый: зеркало ссылочного свойства подписывает себя
+     * `meta->>'property'` (§А6-2), и по этой подписи идут и починка зеркал, и обратный
+     * обход импорта.
      */
-    relationType: text('relation_type').notNull(),
     meta: jsonb('meta').notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    unique('rel_uniq').on(t.sourceId, t.targetId, t.relationType),
+    // Уникальность — по РОЛИ (contract-миграция 0017). До неё третьей колонкой ключа стояла
+    // производная `relation_type`, и две роли с одной проекцией (`subitem`+`ticket`,
+    // `subitem`+`envelope-binding`) на одной паре сущностей были невыразимы.
+    unique('rel_uniq').on(t.sourceId, t.targetId, t.role),
     check('rel_no_self', sql`${t.sourceId} <> ${t.targetId}`),
   ],
 );
@@ -170,13 +156,6 @@ export const aspectDefinitions = pgTable(
     // §Б2 (bind + value_map) — часть Б; в срезе А пустует, но колонка заведена сразу:
     // форма строки реестра не должна меняться миграцией между срезами.
     implements: jsonb('implements').notNull().default([]),
-    /**
-     * JSON Schema СТАРОЙ формы (Р-24): по ней валидирует стадия 2 исполнителя и из неё
-     * собирается вход `attach_*`-тула. Носитель переезжает на генерацию из реестра свойств
-     * миграцией 0017, до тех пор сидер продолжает писать сюда `legacyAspectJsonSchema(id)`.
-     * NOT NULL снят: строке реестра, заведённой уже по-новому, старая схема не нужна.
-     */
-    schema: jsonb('schema'),
     aiInstructions: text('ai_instructions'),
     tagMappings: text('tag_mappings').array().notNull().default(sql`'{}'`),
     aggregations: jsonb('aggregations').default({}),

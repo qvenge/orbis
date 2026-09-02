@@ -26,7 +26,7 @@
 // решение владельца воплощено батчем принятого предложения (source `routine`), и именно
 // его снимает «отмени последнее» (приёмка 3) и откат прогона (приёмка 11, rollback.ts).
 import {
-  type AgentRunAspect,
+  type RunProposal as ContractRunProposal,
   BODY_NOTE_PROPERTY,
   entityThreadId,
   isManualBucket,
@@ -1081,7 +1081,7 @@ export async function routineHistory(
 // ---------------------------------------------------------------------------
 
 /** Предложение в аспекте прогона — форма, которую пишет и читает весь этот раздел. */
-type RunProposal = NonNullable<AgentRunAspect['proposal']>;
+type RunProposal = ContractRunProposal;
 
 /**
  * Ответ владельца на вопрос прогона рутины (V1.9, приёмка 10): вопрос закрыт, исход

@@ -334,7 +334,7 @@ export function AspectField({
   // начинаются с одной вертикали независимо от длины лейбла (лейблы выровнены вправо).
   return (
     <>
-      <dt className="text-text-muted">{fieldLabel(registry, field, aspectId)}</dt>
+      <dt className="text-text-muted">{fieldLabel(registry, field)}</dt>
       <dd>
         <input
           aria-label={aspectId === undefined ? field : `${aspectId} ${field}`}

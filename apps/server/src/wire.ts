@@ -142,7 +142,6 @@ export function toWireRelation(row: RelationRow): WireRelation {
     sourceId: row.sourceId,
     targetId: row.targetId,
     role: row.role,
-    relationType: row.relationType,
     meta: row.meta as Record<string, unknown>,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

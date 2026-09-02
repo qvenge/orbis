@@ -1175,7 +1175,6 @@ export interface AspectToolRow {
   id: string;
   description: string | null;
   aiInstructions: string | null;
-  schema: Record<string, unknown>;
   viewConfig: Record<string, unknown> | null;
 }
 
@@ -1190,7 +1189,6 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
       id: aspectDefinitions.id,
       description: aspectDefinitions.description,
       aiInstructions: aspectDefinitions.aiInstructions,
-      schema: aspectDefinitions.schema,
       viewConfig: aspectDefinitions.viewConfig,
     })
     .from(aspectDefinitions)
@@ -1205,9 +1203,6 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
       // у тула сегодня нет ни локали актора, ни места, где её спросить.
       description: (row.description as Record<string, string> | null)?.ru ?? null,
       aiInstructions: row.aiInstructions,
-      // Колонка старой формы (Р-24). NULL быть не должно — её пишут и сид, и хелпер
-      // кастомных аспектов; пустой объект здесь безопаснее падения реестра тулов целиком.
-      schema: (row.schema as Record<string, unknown> | null) ?? {},
       viewConfig: row.viewConfig as Record<string, unknown> | null,
     });
   }
@@ -1220,7 +1215,9 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
  * Что изменилось против прежней сборки и почему это важно: `data` больше не колонка
  * `aspect_definitions.schema` (старая форма, Р-24), а склейка схем значений тех свойств,
  * на которые аспект ссылается. Колонка была вторым, независимым описанием тех же полей —
- * и разъезжалась с реестром ровно там, где реестр и правят.
+ * и разъезжалась с реестром ровно там, где реестр и правят; contract-миграция 0017 сняла её
+ * из базы вместе с последним SELECT'ом (JSON Schema аспекта — генерируемая производная,
+ * §А3-1).
  *
  * Имя — по КЛЮЧУ аспекта через общую `attachToolName`: та же функция называет тул реестру,
  * диспатчу и исполнителю (см. её докблок в shared).

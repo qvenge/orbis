@@ -28,7 +28,7 @@ import {
   type QueryAst,
   queryAstSchema,
   queryTreeExceedsDepth,
-  resolveLegacyFieldId,
+  resolvePropertyFieldId,
 } from '@orbis/shared/query';
 import type { SQL } from 'drizzle-orm';
 import { z } from 'zod';
@@ -396,18 +396,12 @@ export async function computeGoalProgress(
 
   // Имя поля агрегата резолвится ДО компиляции и своим ярлыком: у компилятора канона на
   // руках был бы только id, и «нет такого свойства» стало бы неотличимо от неизвестного id
-  // внутри самого запроса — то есть `invalid_field` и `invalid_query` слились бы. Аспекты
-  // самого запроса участвуют в резолве (как `aspectsInQuery` у старого компилятора): ими
-  // автор цели разводит имя, которое носят несколько аспектов.
+  // внутри самого запроса — то есть `invalid_field` и `invalid_query` слились бы.
   let property = '';
   if (src.aggregate !== 'count') {
-    const resolved = resolveLegacyFieldId(
-      src.field,
-      parseRegistryOf(ctx),
-      aspectsNamedInQueryAst(ast),
-    );
+    const resolved = resolvePropertyFieldId(src.field, parseRegistryOf(ctx));
     if (resolved === undefined) {
-      const message = `поле '${src.field}' не разрешилось реестром: нет такого свойства или оно неоднозначно`;
+      const message = `поле '${src.field}' не разрешилось реестром: нет такого свойства`;
       logFailure('compile_field', message, goalId, `отказ invalid_field: ${message}`);
       return failed('invalid_field');
     }

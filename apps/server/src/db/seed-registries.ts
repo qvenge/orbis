@@ -24,12 +24,10 @@
 // строки поимённо.
 import {
   type AspectDefinition,
-  type AspectId,
   aspectDefinitionSchema,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
-  legacyAspectJsonSchema,
   type PropertyDefinition,
   propertyDefinitionSchema,
   registryMergeNoteId,
@@ -121,25 +119,17 @@ export async function seedRegistries(sql: Sql, adminDsn: string): Promise<SeedRe
   for (const a of BUILTIN_ASPECT_DEFS) {
     await sql`
       INSERT INTO aspect_definitions
-        (id, owner_id, key, label, description, properties, implements, schema,
+        (id, owner_id, key, label, description, properties, implements,
          ai_instructions, tag_mappings, view_config, module, service, rank)
       VALUES
         (${a.id}, NULL, ${a.key}, ${sql.json(j(a.label))}, ${sql.json(j(a.description))},
          ${sql.json(j(a.properties))}, ${sql.json(j(a.implements))},
-         -- Колонка schema — носитель СТАРОЙ формы до миграции 0017 (Р-24). ЖИВЫХ читателей
-         -- ЗНАЧЕНИЯ у неё НОЛЬ: стадия 2 исполнителя валидирует по эффективному снимку
-         -- (assertEntityProps, Задача 12), вход attach_*-тула собирает aspectToolJsonSchema
-         -- (tools/registry.ts) — тоже из снимка, ручка aspect.list снята гейт-ревью Задачи
-         -- 14, а loadAspectToolRows колонку SELECT-ит, но её значение не читает никто.
-         -- Пишется она здесь потому, что колонка NOT NULL и живёт до 0017; снимает её
-         -- Задача 23 вместе со старым путём валидации.
-         ${sql.json(j(legacyAspectJsonSchema(a.id as AspectId)))},
          ${a.aiInstructions}, ${a.tagMappings}, ${sql.json(j(a.viewConfig))},
          ${a.module}, ${a.service}, ${a.rank})
       ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, implements = EXCLUDED.implements,
-        schema = EXCLUDED.schema, ai_instructions = EXCLUDED.ai_instructions,
+        ai_instructions = EXCLUDED.ai_instructions,
         tag_mappings = EXCLUDED.tag_mappings, view_config = EXCLUDED.view_config,
         module = EXCLUDED.module, service = EXCLUDED.service, rank = EXCLUDED.rank`;
   }

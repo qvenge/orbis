@@ -19,7 +19,6 @@ import {
   batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
-  externalRowId,
   type FastPathCategory,
   type FastPathRule,
   findCategory,
@@ -36,8 +35,10 @@ import {
   MAX_IMPORT_ROWS,
   newId,
   normalizeCounterparty,
-  ROLE_REF,
   resolveCategoryInOrder,
+  ROLE_ENVELOPE_BINDING,
+  ROLE_REF,
+  externalRowId,
 } from '@orbis/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { recordUsage } from '../ai/metering';
@@ -51,7 +52,6 @@ import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '..
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { legacyParentRolesSql } from '../executor/relations';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { LLMRequest, LLMResponse } from '../llm/types';
 import { CONTRACT_MONEY_MOVEMENT, RULE_PATTERN, RULE_TARGET } from '../memory/rules';
@@ -501,12 +501,11 @@ function isWireEntity(result: unknown): result is WireEntity {
  * вне его транзакции: привязку дописывает бюджет-хук, и её результат виден только
  * после коммита.
  *
- * «Конверт-родитель» — то же множество, что у хука, инварианта и агрегатов
- * (`LEGACY_PARENT_ROLES` с источником-конвертом, интервал 7a→0017, §13.7): карточка импорта
- * обязана считать «без конверта» так же, как считает его экран бюджета, иначе владелец
- * увидит в итоге импорта одно число, а во вкладке Budget — другое. С Задачи 10b признак
- * «источник — конверт» здесь тот же, что у остальных четырёх читателей
- * (`'orbis/budget' = ANY(p.aspects)`) — перечень расхождений держит `legacyParentRolesSql`.
+ * «Конверт-родитель» — то же, что у хука и агрегатов: роль `envelope-binding` с
+ * источником-конвертом. Карточка импорта обязана считать «без конверта» так же, как считает
+ * его экран бюджета, иначе владелец увидит в итоге импорта одно число, а во вкладке Budget —
+ * другое; до 0017 общим у пятерых читателей было расширенное множество ролей
+ * (`legacyParentRolesSql`), с 0017 — одна роль.
  *
  * Признак `'orbis/financial' = ANY(e.aspects)` на ЦЕЛИ — не перестраховка: `orbis/budget`
  * делит с `orbis/financial` свойство `orbis/finance_category` (В1 §А8), и без него в
@@ -544,7 +543,7 @@ async function unbudgetedOf(
         AND NOT EXISTS (
           SELECT 1 FROM relations r
           JOIN entities p ON p.id = r.source_id
-          WHERE r.target_id = e.id AND r.role IN (${legacyParentRolesSql()})
+          WHERE r.target_id = e.id AND r.role = ${ROLE_ENVELOPE_BINDING}
             AND 'orbis/budget' = ANY(p.aspects) AND NOT p.archived
         )
       GROUP BY 1

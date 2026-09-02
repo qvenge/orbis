@@ -13,12 +13,13 @@
 
 import {
   addDays,
+  batchAuditMessageId,
   type BudgetOverview,
   type BudgetStatusResult,
-  batchAuditMessageId,
   type CategoryTrendPoint,
   type EnvelopeStatus,
   ROLE_CATEGORY_PARENT,
+  ROLE_ENVELOPE_BINDING,
   ROLE_INSTANCE_OF,
   type RolloverInput,
   type RolloverPreview,
@@ -31,7 +32,6 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { legacyParentRolesSql } from '../executor/relations';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { materializeInstances } from '../recurring/materialize';
@@ -40,16 +40,23 @@ import { toWireEntity } from '../wire';
 import { defaultCurrencyOf, selectEnvelope } from './binding';
 import { decAdd, decCmp, decDivBy, decMulInt, decSub } from './decimal';
 
-// ИНТЕРВАЛ 7a→0017 (§13.7, урок C1 Задачи 7a). «Конверт-родитель» в агрегатах — то же
-// множество, что у хука привязки (`budgetParentsOfMany`) и у инварианта «один budget-parent»
-// (`assertSingleLegacyBudgetParent`): ЛЮБАЯ связь от конверта, проецирующаяся в старый
-// `parent`. Сузить агрегат до одной роли `envelope-binding` нельзя, пока `rel_uniq` стоит на
-// проекции роли: связь роли владельца от конверта к транзакции хук считает привязкой и
-// второй, «правильной» рядом с ней не ставит — значит расход по ней есть, а в карточке
-// конверта его бы не стало. Перечисление ролей даёт `legacyParentRolesSql()` — один хелпер
-// на все ПЯТЬ его call-сайтов, два из которых здесь (`spentByEnvelope` и unbudgeted). Что
-// именно у них общее, а что нет, перечисляет его докблок в `executor/relations.ts`: роль
-// одна на всех, а признак «источник — конверт» и фильтр архива у пятерых разные.
+// «Конверт-родитель» в агрегатах — РОВНО роль `envelope-binding`, и с 0017 это относится ко
+// всем её читателям сразу: к хуку привязки (`budgetParentsOfMany`), к обоим агрегатам здесь
+// (`spentByEnvelope` и unbudgeted) и к карточке импорта (`unbudgetedOf`).
+//
+// До 0017 множество было ШИРЕ одной роли (`legacyParentRolesSql()`, интервал 7a→0017, §13.7):
+// уникальность `rel_uniq` стояла на ПРОЕКЦИИ роли в снятую колонку `relation_type`, поэтому
+// рядом со связью роли владельца (`subitem` от конверта к транзакции) хук не мог поставить
+// свою `envelope-binding` — и, не считай агрегат такую связь расходом, владелец увидел бы
+// трату в списке, но не в карточке конверта. С уникальностью по `(source, target, role)`
+// такого запрета больше нет: привязка ставится своей ролью всегда, и расширенное множество
+// стало бы вторым мнением о том, что уже сказано ролью (урок C1 Задачи 7a — расхождение
+// множества у двух читателей стоило владельцу двойного счёта денег).
+//
+// Фильтр архива у читателей по-прежнему РАЗНЫЙ (здесь `NOT e.archived` на цели у
+// `spentByEnvelope` и `NOT p.archived` на конверте у unbudgeted, у хука — никакого): это
+// до-реформенное расхождение, запаркованное осознанно (отчёт Задачи 7b §6), и сужение
+// множества ролей его не трогает.
 
 type EntityRow = typeof entities.$inferSelect;
 
@@ -167,7 +174,9 @@ function daysInclusive(from: string, to: string): number {
  *
  * У источника (`env`) признак «это конверт» НЕ проверяется — как и до перевода: набор
  * `envelopeIds` вызывающий уже отобрал по аспекту бюджета, и вторая проверка была бы
- * тавтологией (перечень расхождений пятерых читателей — в докблоке `legacyParentRolesSql`).
+ * тавтологией. С 0017 она стала тавтологией и по второму основанию: роль
+ * `envelope-binding` системная (`created_by: 'system'`), и ставит её только бюджет-хук —
+ * от конверта.
  */
 async function spentByEnvelope(
   tx: Tx,
@@ -187,7 +196,7 @@ async function spentByEnvelope(
     FROM relations r
     JOIN entities env ON env.id = r.source_id
     JOIN entities e   ON e.id = r.target_id
-    WHERE r.role IN (${legacyParentRolesSql()})
+    WHERE r.role = ${ROLE_ENVELOPE_BINDING}
       AND r.source_id IN (${ids})
       AND e.owner_id = ${ownerId} AND NOT e.archived
       AND 'orbis/financial' = ANY(e.aspects)
@@ -484,7 +493,7 @@ async function computeOverview(
       AND NOT EXISTS (
         SELECT 1 FROM relations r
         JOIN entities p ON p.id = r.source_id
-        WHERE r.target_id = e.id AND r.role IN (${legacyParentRolesSql()})
+        WHERE r.target_id = e.id AND r.role = ${ROLE_ENVELOPE_BINDING}
           AND 'orbis/budget' = ANY(p.aspects) AND NOT p.archived
       )
     GROUP BY 1

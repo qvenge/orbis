@@ -26,7 +26,6 @@ import type { Tx } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
 import { ExecError } from './errors';
 import { resolveEntityTitles } from './invariants';
-import { projectLegacyRelationType } from './legacy-form';
 import type { MutationMechanism } from './types';
 
 /**
@@ -40,21 +39,12 @@ export interface RelationKey {
 }
 
 /**
- * Создаваемая batch'ем связь плюс признак «источник — конверт» НА МОМЕНТ СОЗДАНИЯ РЕБРА.
- *
- * Признак ЖИВЁТ до 0017 и только ради `assertSingleLegacyBudgetParent`: старая колонка
- * различает конверт-родителя по аспекту ИСТОЧНИКА, а у виртуального ребра источник — строка,
- * которой ещё нет в БД. Роль этого признака не заменяет: `subitem` от конверта и `subitem` от
- * проекта — одна роль и разный смысл для агрегатов.
- *
- * Это ФОЛБЭК, а не истина: аспекты источника мог поменять тот же batch уже ПОСЛЕ создания
- * ребра (`attach_orbis_budget` следующей операцией) — тогда правду знает только виртуальная
- * карта сущностей, см. `VirtualGraphEffects.aspectsOf`. Фолбэк нужен для источника, которого
- * batch не трогал: в карте его нет, а строка в БД на момент создания ребра уже прочитана.
+ * Создаваемая batch'ем связь. Признака «источник — конверт» здесь БОЛЬШЕ НЕТ: он жил ровно до
+ * 0017 и ровно ради снятого инварианта «один budget-parent по старой колонке», которому
+ * приходилось выводить смысл ребра из аспектов концов. С contract-миграции смысл ребра
+ * написан его РОЛЬЮ, и виртуальному ребру не нужно знать об источнике ничего сверх id.
  */
-export interface VirtualRelationCreate extends RelationKey {
-  sourceHasBudget: boolean;
-}
+export type VirtualRelationCreate = RelationKey;
 
 /** Виртуальные эффекты batch над графом связей (операции 1..N−1 для проверки операции N). */
 export interface VirtualGraphEffects {
@@ -63,62 +53,6 @@ export interface VirtualGraphEffects {
   deleted: ReadonlyArray<RelationKey>;
   /** Титул виртуальной сущности, созданной тем же batch (для сообщений об ошибках). */
   titleOf?: (id: string) => string | undefined;
-  /**
-   * Аспекты сущности ПОСЛЕ эффектов предыдущих операций batch; `undefined` — batch её не
-   * трогал, и правда о ней в БД. Без этого признак «источник — конверт» у виртуального ребра
-   * оставался бы замороженным на момент его создания, и порядок «сначала связь, потом
-   * бюджет» проносил бы мимо инварианта два конверта на одну транзакцию.
-   */
-  aspectsOf?: (id: string) => readonly string[] | undefined;
-}
-
-/**
- * Роли, которые ПЕРЕХОДНАЯ колонка `relation_type` видит как `parent`. Список ВЫВЕДЕН из
- * проекции, а не написан второй раз: разъехавшись с ней, он открыл бы дыру ровно там, где
- * закрывает её — на непереведённых читателях старой колонки (бюджет, компилятор запросов,
- * agent-loop, импорт). Уходит вместе с колонкой в 0017.
- */
-export const LEGACY_PARENT_ROLES: readonly RelationRoleId[] = RELATION_ROLE_IDS.filter(
-  (role) => projectLegacyRelationType(role) === 'parent',
-);
-
-/**
- * Тот же список как SQL-перечисление для `role IN (…)`. Пять call-сайтов, и это ПОЛНЫЙ их
- * список (проверяется грепом по имени функции):
- *   1. `assertSingleLegacyBudgetParent` ниже — инвариант «один budget-parent»;
- *   2. `budgetParentsOfMany` (`budget/binding.ts`) — хук привязки;
- *   3. `spentByEnvelope` (`budget/aggregates.ts`) — расход конверта;
- *   4. unbudgeted (`budget/aggregates.ts`) — «без конверта» на экране Budget;
- *   5. `unbudgetedOf` (`import/review.ts`) — «без конверта» в карточке импорта.
- *
- * Почему хелпер, а не пять одинаковых `sql.join` по месту: именно расхождение этого
- * множества у двух его читателей стоило владельцу двойного счёта денег (C1 Задачи 7a).
- * Пока копия одна, «сузить на всякий случай» можно только здесь — и это видно всем пятерым
- * сразу.
- *
- * ЧТО ИМЕННО УНИФИЦИРОВАНО — только РОЛЬ ребра, и обещать больше нельзя. Полный предикат
- * «конверт-родитель» состоит из трёх частей, и остальные две написаны ДВУМЯ разными
- * способами на пяти местах:
- *   • признак «источник — конверт»: `'orbis/budget' = ANY(<алиас>.aspects)` у (1), (2), (4)
- *     и (5) — с Задачи 10b форма ОДНА, старой карты в этом предикате не осталось нигде
- *     (проверяется грепом `aspects_legacy ? 'orbis/budget'` по дереву: единственное
- *     совпадение — эта строка докблока).
- *     НЕ ПРОВЕРЯЕТСЯ ВОВСЕ у (3) — там источник ограничен списком id, который вызывающий
- *     уже отобрал по аспекту бюджета, и вторая проверка была бы тавтологией;
- *   • `NOT archived`: у (4) и (5) стоит на КОНВЕРТЕ (`NOT p.archived`), у (3) — на ЦЕЛИ
- *     (`NOT e.archived`, то есть про транзакцию, а не про конверт), у (1) и (2) не стоит.
- * Расхождение по архиву — ДО-реформенное и ЗАПАРКОВАНО осознанно (см. отчёт Задачи 7b, §6):
- * трогать поведение денег переводом читателей на роли не входило в задачу. Приводить его к
- * одному виду — отдельное решение владельца, а не побочный эффект уборки.
- *
- * Умирает вместе с колонкой в 0017: с ней множество схлопывается до одной роли
- * `envelope-binding`, и перечисление становится не нужно.
- */
-export function legacyParentRolesSql(): SQL {
-  return sql.join(
-    LEGACY_PARENT_ROLES.map((role) => sql`${role}`),
-    sql`, `,
-  );
 }
 
 export function sameRelationKey(a: RelationKey, b: RelationKey): boolean {
@@ -168,18 +102,6 @@ export async function assertRoleConstraints(
       role: key.role,
     });
   }
-  // ИНТЕРВАЛ 7a→0017. Колонка `relation_type` ещё NOT NULL, и записать её можно только
-  // проекцией встроенной роли — у собственной роли владельца проекции нет по построению.
-  // Отказ ЯВНЫЙ: без него `projectLegacyRelationType` уронил бы стадию 5 голым Error, то
-  // есть 500 вместо ответа. Снимает 0017 вместе с колонкой (роли владельца — Задача 15).
-  if (!(RELATION_ROLE_IDS as readonly string[]).includes(key.role)) {
-    throw new ExecError(
-      'VALIDATION',
-      `собственные роли рёбер станут доступны после contract-миграции 0017: у роли «${key.role}» нет проекции в переходную колонку типа`,
-      { role: key.role, legacyInterval: true },
-    );
-  }
-
   if (def.constraints.created_by === 'system' && ctx.mechanism === 'user' && !ctx.undoReplay) {
     throw new ExecError(
       'ROLE_SYSTEM_ONLY',
@@ -400,89 +322,6 @@ export async function assertTargetMaxIncoming(
   );
 }
 
-/**
- * ИНТЕРВАЛ 7a→0017: «транзакция списывается максимум из одного конверта» (§4.2/§13.7) на
- * множестве СТАРОЙ колонки.
- *
- * Почему этого мало — `target_max_incoming` роли `envelope-binding`. Ограничение роли считает
- * рёбра СВОЕЙ роли, а роль эта системная: владелец её не ставит вовсе. Зато агрегаты бюджета
- * до contract-миграции считают детей конверта по ВСЕМУ множеству `LEGACY_PARENT_ROLES`
- * (`spentByEnvelope`) — то есть считают и `subitem`, и `ticket`, и любую другую роль владельца
- * с той же проекцией. Ребро `subitem` от второго конверта проходило бы все ролевые проверки,
- * а владелец увидел бы ОДНУ трату в ДВУХ конвертах.
- *
- * Поэтому счёт входящих идёт ровно по тому множеству, по которому считают агрегаты:
- * `LEGACY_PARENT_ROLES` с источником, несущим `orbis/budget`. Порог берётся из строки реестра
- * (`target_max_incoming` роли конверта) — правило одно, и ослабив роль, владелец ослабляет обе
- * его половины.
- *
- * Применимость (аспекты концов) проверяет ВЫЗЫВАЮЩАЯ сторона — как и у прежнего
- * `assertSingleBudgetParent`: у пути создания это аспекты нового ребра, у ретроспективного
- * пути — сущность, которая конвертом становится.
- *
- * Рёбра ОТ ТОГО ЖЕ источника не считаются: повтор той же пары — территория `rel_uniq`, а
- * второй конверт по определению другой.
- *
- * Умирает вместе с колонкой: с 0017 «конверт-родитель» выражается ровно ролью, и остаётся
- * одно ограничение реестра (перевод — правило Б-2).
- */
-export async function assertSingleLegacyBudgetParent(
-  tx: Tx,
-  reg: RegistrySnapshot,
-  key: RelationKey,
-  virtual?: VirtualGraphEffects,
-): Promise<void> {
-  const def = reg.roles.get(ROLE_ENVELOPE_BINDING);
-  const max = def?.constraints.target_max_incoming;
-  if (max === undefined) return;
-  const parentRoles = LEGACY_PARENT_ROLES as readonly string[];
-
-  // Row-lock строки цели сериализует конкурентов: проигравший увидит зафиксированную связь
-  // победителя и получит INVARIANT (тот же приём, что у `assertTargetMaxIncoming`).
-  await tx.execute(sql`SELECT id FROM entities WHERE id = ${key.targetId} FOR UPDATE`);
-
-  const rows = (await tx.execute(sql`
-    SELECT r.source_id, r.role FROM relations r
-    JOIN entities e ON e.id = r.source_id
-    WHERE r.target_id = ${key.targetId}
-      AND r.role IN (${legacyParentRolesSql()})
-      AND 'orbis/budget' = ANY(e.aspects)
-  `)) as unknown as Array<{ source_id: string; role: string }>;
-
-  const deleted = virtual?.deleted ?? [];
-  const liveDb = rows
-    .filter(
-      (r) =>
-        !deleted.some(
-          (d) => d.sourceId === r.source_id && d.targetId === key.targetId && d.role === r.role,
-        ),
-    )
-    .map((r) => r.source_id);
-  const liveVirtual = (virtual?.created ?? [])
-    .filter((c) => {
-      if (c.targetId !== key.targetId || !parentRoles.includes(c.role)) return false;
-      // Признак читается на момент ПРОВЕРКИ: аспекты источника мог поменять тот же batch
-      // (в обе стороны — и приложить бюджет, и снять). Замороженный признак остаётся
-      // фолбэком для источника, которого batch не трогал: в карте его нет.
-      const aspects = virtual?.aspectsOf?.(c.sourceId);
-      return aspects === undefined ? c.sourceHasBudget : aspects.includes('orbis/budget');
-    })
-    .map((c) => c.sourceId);
-
-  const others = [...new Set([...liveDb, ...liveVirtual])].filter((src) => src !== key.sourceId);
-  if (others.length < max) return;
-  throw new ExecError(
-    'INVARIANT',
-    `у записи уже есть конверт-родитель: транзакция списывается максимум из одного конверта (§4.2); до contract-миграции 0017 конвертом её считает ЛЮБАЯ связь от конверта, а не только роль «${roleName(def, ROLE_ENVELOPE_BINDING)}»; перенос — batch «удалить старую + создать новую»`,
-    {
-      invariant: 'single_budget_parent',
-      legacyInterval: true,
-      targetId: key.targetId,
-      existingSourceId: others[0],
-    },
-  );
-}
-
 /** Структурированный отказ повтора связи (rel_uniq, §4.2) — общий для 23505 и пре-чека. */
 export function duplicateRelationError(
   key: RelationKey,
@@ -496,47 +335,21 @@ export function duplicateRelationError(
 }
 
 /**
- * ИНТЕРВАЛ 7a→0017 (находка 55). До contract-миграции `rel_uniq` стоит на тройке со СТАРЫМ
- * типом, а не с ролью, — значит две роли, проецирующиеся в один тип (`subitem`+`ticket`,
- * `subitem`+`envelope-binding`, `mention`+`supersedes`…), на одной паре сущностей
- * невыразимы. Это ограничение интервала, а не правило графа: 0017 переставляет уникальность
- * на роль, и обе связи станут законны.
+ * Пре-чек уникальности связи — на ВСЕХ путях, а не только в batch. Одиночный
+ * `relation_create` мог бы положиться на 23505, но batch — нет: дубль внутри одной
+ * транзакции существует только в виртуальном графе, строки в БД для него ещё нет.
+ * Ловля 23505 остаётся второй линией под гонкой.
  *
- * Отдельный отказ, а не общий `duplicate_relation`, ровно потому, что владельцу нужно
- * различить «такая связь уже есть» и «пока нельзя — реформа не доехала». Полагаться на
- * 23505 здесь нельзя: после нарушения ограничения транзакция ABORTED, и назвать роль
- * помешавшей связи уже нечем — запрос из catch не выполнится.
- */
-function legacyIntervalError(
-  key: RelationKey,
-  existingRole: string,
-  existingDef: RelationRoleDefinition | undefined,
-): ExecError {
-  const legacy = projectLegacyRelationType(key.role);
-  return new ExecError(
-    'INVARIANT',
-    `на этой паре сущностей уже есть связь роли «${roleName(existingDef, existingRole)}», и до contract-миграции 0017 уникальность стоит на старом типе «${legacy}», общем у обеих ролей — вторая связь пока невыразима (интервал реформы)`,
-    {
-      invariant: 'duplicate_relation',
-      legacyInterval: true,
-      legacyRelationType: legacy,
-      // ID роли, а не её подпись: `details` читает КОД, и рядом лежащий `role` — тоже id.
-      // Подпись из реестра уехала бы сюда локализованной и сменилась бы вместе с label.
-      existingRole,
-      ...key,
-    },
-  );
-}
-
-/**
- * Пре-чек уникальности связи — на ВСЕХ путях, а не только в batch. Раньше одиночный
- * `relation_create` полагался на 23505: связь одна, ловить её после вставки было дёшево.
- * С реформой этого мало — под `rel_uniq` теперь попадают ДВЕ РАЗНЫЕ роли (см.
- * `legacyIntervalError`), и различить их случаи можно только ДО вставки, пока транзакция
- * жива. Ловля 23505 остаётся второй линией под гонкой.
+ * ОТКАЗА ИНТЕРВАЛА здесь больше нет. До 0017 `rel_uniq` стоял на тройке со снятой колонкой
+ * `relation_type`, и две роли с одной проекцией (`subitem`+`ticket`,
+ * `subitem`+`envelope-binding`, `mention`+`supersedes`…) на одной паре сущностей были
+ * невыразимы — приходилось различать «такая связь уже есть» и «пока нельзя, реформа не
+ * доехала». С уникальностью по `(source_id, target_id, role)` вторая ветка исчезла вместе с
+ * причиной: обе связи законны, и дублем считается только совпадение РОЛИ.
  *
- * Один запрос по паре концов вместо двух по разным ключам: префикс (source_id, target_id)
- * уникального индекса `rel_uniq` обслуживает его целиком.
+ * Один запрос по паре концов вместо запроса по тройке: префикс (source_id, target_id)
+ * уникального индекса `rel_uniq` обслуживает его целиком, а роли пары нужны и виртуальному
+ * графу.
  */
 export async function assertNoDuplicateRelation(
   tx: Tx,
@@ -545,7 +358,6 @@ export async function assertNoDuplicateRelation(
   virtual?: VirtualGraphEffects,
 ): Promise<void> {
   const def = reg.roles.get(key.role);
-  const legacy = projectLegacyRelationType(key.role);
   const onPair: string[] = [];
 
   const rows = (await tx.execute(sql`
@@ -564,8 +376,4 @@ export async function assertNoDuplicateRelation(
   }
 
   if (onPair.includes(key.role)) throw duplicateRelationError(key, def);
-  const collision = onPair.find((role) => projectLegacyRelationType(role) === legacy);
-  if (collision !== undefined) {
-    throw legacyIntervalError(key, collision, reg.roles.get(collision));
-  }
 }

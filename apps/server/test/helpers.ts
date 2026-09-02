@@ -1,6 +1,5 @@
 // apps/server/test/helpers.ts
 import {
-  type LegacyAspects,
   type LocalizedText,
   type PropertyType,
   propertyValueJsonSchema,
@@ -12,7 +11,6 @@ import { type Db, makeDb } from '../src/db/client';
 import type { entities } from '../src/db/schema';
 import type { Tx } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
-import { type LegacyRow, projectLegacyAspects } from '../src/executor/legacy-form';
 import { resolvePropertyRef } from '../src/executor/props';
 import type { ExecuteRequest, ExecuteResult, ExecutorDeps } from '../src/executor/types';
 import { effectiveRegistry } from '../src/registry/cache';
@@ -111,8 +109,7 @@ export interface CustomAspectProperty {
   /**
    * Локальное имя поля БЕЗ namespace: id и `key` свойства собираются из него и namespace'а
    * аспекта (`user/hours`). В `data` тула `attach_*` уезжает ИМЕННО ПОЛНЫЙ key (§А9-1,
-   * Задача 12), а локальное имя остаётся только в колонке старой формы `schema`, которую
-   * тул больше не читает.
+   * Задача 12).
    */
   key: string;
   type: PropertyType;
@@ -130,31 +127,13 @@ export interface CustomAspectSpec {
 }
 
 /**
- * Аннотации реформы (`x-orbis-*`) снимаются перед записью в колонку `schema`: её читает
- * СТАРЫЙ путь валидации (`executor/aspects-validate.ts`), а его ajv собран без
- * `addKeyword` и в strict-режиме бросает на любом незнакомом ключе схемы. Встроенные
- * legacy-схемы (`legacyAspectJsonSchema`) этих ключей тоже не несут — фикстура остаётся с
- * ними в одной форме. Колонка уходит вместе со старым путём в миграции 0017 (Р-24).
- */
-function legacyValueSchema(type: PropertyType): Record<string, unknown> {
-  const schema = { ...propertyValueJsonSchema(type) };
-  delete schema[X_ORBIS_TYPE];
-  delete schema[X_ORBIS_DECIMAL];
-  return schema;
-}
-
-/**
  * Кастомный аспект владельца В НОВОЙ ФОРМЕ: строки-свойства в `property_definitions` плюс
  * строка аспекта, которая на них ссылается.
  *
  * Зачем хелпер, а не `insert().values()` на месте: с реформой «завести кастомный аспект»
- * перестало быть одной вставкой — это N+1 строка в двух таблицах плюс производная старая
- * схема. Три сьюта, которым нужна такая фикстура, повторяли бы это трижды, и первый же
- * забытый `property_definitions` дал бы аспект, чьи свойства не резолвятся, — молча, потому
- * что старый путь валидации читает только колонку `schema`.
- *
- * `schema` заполняется ПОТОМУ ЖЕ, почему её заполняет сид встроенных: до миграции 0017 по
- * ней валидирует стадия 2 исполнителя и из неё собирается вход тула `attach_*` (Р-24).
+ * перестало быть одной вставкой — это N+1 строка в двух таблицах. Три сьюта, которым нужна
+ * такая фикстура, повторяли бы это трижды, и первый же забытый `property_definitions` дал
+ * бы аспект, чьи свойства не резолвятся.
  *
  * id свойства — `<namespace аспекта>/<имя поля>`: `user/sleep-log` + `hours` → `user/hours`.
  * Два кастомных аспекта одного владельца с одноимённым полем при этом ДЕЛЯТ одно свойство,
@@ -182,14 +161,6 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
           type = EXCLUDED.type, rank = EXCLUDED.rank`);
     }
 
-    const legacySchema = {
-      type: 'object',
-      properties: Object.fromEntries(
-        spec.properties.map((p) => [p.key, legacyValueSchema(p.type)]),
-      ),
-      required: spec.properties.filter((p) => p.required).map((p) => p.key),
-      additionalProperties: false,
-    };
     const refs = spec.properties.map((p, index) => ({
       propertyId: propertyId(p.key),
       required: p.required ?? false,
@@ -198,20 +169,19 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
 
     await db.execute(sql`
       INSERT INTO aspect_definitions
-        (id, owner_id, key, label, description, properties, implements, schema,
+        (id, owner_id, key, label, description, properties, implements,
          ai_instructions, tag_mappings, view_config, module, service, rank)
       VALUES (${spec.key}, ${ownerId}, ${spec.key},
               ${JSON.stringify(spec.label)}::jsonb,
               ${JSON.stringify(spec.description ?? spec.label)}::jsonb,
               ${JSON.stringify(refs)}::jsonb, '[]'::jsonb,
-              ${JSON.stringify(legacySchema)}::jsonb,
               ${spec.aiInstructions ?? null},
               ${sql.raw(pgTextArray(spec.tagMappings ?? []))},
               ${JSON.stringify({ keyFields: refs.map((r) => r.propertyId) })}::jsonb,
               NULL, false, 0)
       ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
-        properties = EXCLUDED.properties, schema = EXCLUDED.schema,
+        properties = EXCLUDED.properties,
         ai_instructions = EXCLUDED.ai_instructions, view_config = EXCLUDED.view_config`);
 
     // Реестр владельца изменился — версия обязана сдвинуться (§А10-1), иначе снимок в
@@ -239,25 +209,23 @@ function pgTextArray(values: string[]): string {
   return `ARRAY[${values.map((v) => `'${v.replaceAll("'", "''")}'`).join(',')}]::text[]`;
 }
 
+/** Колонки значений строки `entities` — то, чем фикстура с прямым INSERT говорит о свойствах. */
+export interface EntityValueColumns {
+  props: Record<string, unknown>;
+  aspects: string[];
+}
+
 /**
- * Три колонки строки `entities` из СВОЙСТВ по ГОТОВОМУ снимку реестра — ядро фикстуры с
- * прямым INSERT. Отдельно от `entityColumns` ниже ровно затем, чтобы сьюты, у которых снимок
- * уже прочитан (перф-датасет `compile.dataset.test.ts`), шли через ТУ ЖЕ проверку, а не
- * заводили вторую проекцию рядом.
+ * Колонки значений из СВОЙСТВ по ГОТОВОМУ снимку реестра — ядро фикстуры с прямым INSERT.
+ * Отдельно от `entityColumns` ниже ровно затем, чтобы сьюты, у которых снимок уже прочитан
+ * (перф-датасет `compile.dataset.test.ts`), шли через ТУ ЖЕ проверку, а не собирали строку
+ * литералом рядом.
  *
- * Фикстура говорит новой правдой (`props` по id свойства + список аспектов), а старую карту
- * `aspects_legacy` считает та же проекция, что и у исполнителя (`projectLegacyAspects`). Так
- * и должно быть, пока колонка жива (до Задачи 23b): строка, положившая в неё что-то своё,
- * разошлась бы с единственным писателем — и показала бы тесту состояние, которого в проде
- * не бывает. Намеренно РАЗОШЕДШАЯСЯ строка — это `divergentEntityRow` ниже, и она называет
- * расхождение по имени.
- *
- * ГРОМКИЙ ОТКАЗ НА ЧУЖОЙ АДРЕС. Прямой INSERT минует валидатор исполнителя, поэтому опечатка
- * в id свойства (`orbis/finance_cateogry`) уехала бы в базу молча: `props` несёт ключ,
- * проекция его не знает и в `aspects_legacy` не кладёт, и читатель старой колонки (компилятор
- * запросов, web) значения не видит — тест падает не там, где ошибка, либо не падает вовсе.
- * В проде такой строки не бывает: исполнитель отвечает `UNKNOWN_PROPERTY`. Этот же отказ
- * делал прежний `rowFromLegacy` круговым переводом; здесь он назван по имени.
+ * ЗАЧЕМ ХЕЛПЕР, ЕСЛИ КОЛОНОК ДВЕ И ОБЕ ЛОЖАТСЯ КАК ЕСТЬ. Ради ГРОМКОГО ОТКАЗА НА ЧУЖОЙ
+ * АДРЕС. Прямой INSERT минует валидатор исполнителя, поэтому опечатка в id свойства
+ * (`orbis/finance_cateogry`) уехала бы в базу молча: строка есть, значение под неизвестным
+ * ключом лежит, а ни один читатель его не находит — тест падает не там, где ошибка, либо
+ * не падает вовсе. В проде такой строки не бывает: исполнитель отвечает `UNKNOWN_PROPERTY`.
  *
  * Проверка идёт по РЕЕСТРУ, а не по перечисленным аспектам, и это не послабление. Свойство
  * без аспекта законно (§А1-2, свободное свойство), и значение аспекта, который сняли,
@@ -268,72 +236,31 @@ export function entityColumnsFrom(
   reg: RegistrySnapshot,
   props: Record<string, unknown>,
   aspects: string[],
-): LegacyRow {
+): EntityValueColumns {
   for (const keyOrId of Object.keys(props)) {
     if (resolvePropertyRef(reg, keyOrId) !== undefined) continue;
     throw new Error(
       `entityColumns: неизвестное свойство «${keyOrId}» — в реестре владельца такого адреса ` +
-        'нет, и проекция aspects_legacy его молча потеряет (исполнитель ответил бы ' +
+        'нет, и ни один читатель значения не найдёт (исполнитель ответил бы ' +
         'UNKNOWN_PROPERTY). Опечатка в id либо аспект не засеян.',
     );
   }
-  return { props, aspects, aspectsLegacy: projectLegacyAspects(reg, { props, aspects }) };
+  return { props, aspects };
 }
 
 /**
  * То же самое, но снимок реестра читается сам — обычная форма для сьютов.
  *
  * Снимок читается на каждый вызов: фикстур в сьюте единицы, а кеш здесь стоил бы
- * инвалидации после `seedCustomAspect`. Файл живёт до «Пересева мира» — вместе с проекцией.
+ * инвалидации после `seedCustomAspect`.
  */
 export async function entityColumns(
   tx: Tx,
   ownerId: string,
   props: Record<string, unknown>,
   aspects: string[],
-): Promise<LegacyRow> {
+): Promise<EntityValueColumns> {
   return entityColumnsFrom(await effectiveRegistry(tx, ownerId), props, aspects);
-}
-
-/** Строка `entities` с РАЗОШЕДШИМИСЯ колонками — вход `divergentEntityRow`. */
-export interface DivergentRowSpec {
-  ownerId: string;
-  id: string;
-  title: string;
-  /** НОВАЯ правда (§А1-1): значения по id свойства. */
-  props: Record<string, unknown>;
-  /** НОВАЯ правда: список интерпретаций. */
-  aspects: string[];
-  /** СТАРАЯ карта — вторая, НАМЕРЕННО расходящаяся сторона пробы; по умолчанию пустая. */
-  legacy?: LegacyAspects;
-  archived?: boolean;
-}
-
-/**
- * Строка `entities`, у которой новая правда (`props`/`aspects[]`) и старая карта
- * (`aspects_legacy`) говорят РАЗНОЕ, — прямой INSERT мимо исполнителя.
- *
- * ЗАЧЕМ ТАКАЯ ФИКСТУРА ВООБЩЕ. На интервале дуальной записи (§А1-1) обе колонки пишет один
- * писатель (`projectLegacyAspects`), поэтому в проде они равны по построению. Пока они
- * равны, перевод читателя с одной колонки на другую НЕ НАБЛЮДАЕМ поведением: и старый, и
- * новый код дают одинаковый ответ, любой тест зелёный в обе стороны. Расхождение — это
- * вопрос «какую колонку ты читаешь», заданный так, что ответ виден; ничего другого этот
- * помощник не проверяет и проверять не может.
- *
- * Почему он живёт здесь, а не в сьюте: `entityColumns` (выше) — фикстура СОГЛАСОВАННОЙ
- * строки, и обе формы обязаны стоять рядом, чтобы «согласованная или разошедшаяся» был
- * выбор, а не случайность соседнего файла.
- */
-export function divergentEntityRow(spec: DivergentRowSpec): typeof entities.$inferInsert {
-  return {
-    id: spec.id,
-    ownerId: spec.ownerId,
-    title: spec.title,
-    props: spec.props,
-    aspects: spec.aspects,
-    aspectsLegacy: spec.legacy ?? {},
-    ...(spec.archived === undefined ? {} : { archived: spec.archived }),
-  };
 }
 
 /**

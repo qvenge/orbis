@@ -13,8 +13,8 @@ INSERT INTO chat_threads (id, owner_id) VALUES
   ('00000000-0000-7000-8000-0000000000a2', '00000000-0000-4000-8000-00000000000a');
 INSERT INTO chat_messages (id, thread_id, role, content) VALUES
   ('00000000-0000-7000-8000-0000000000a3', '00000000-0000-7000-8000-0000000000a2', 'user', 'привет');
-INSERT INTO aspect_definitions (id, owner_id, key, label, description, schema)
-  VALUES ('orbis/pgtap-probe', NULL, 'orbis/pgtap-probe', '{"ru":"Проба"}', '{"ru":"Проба"}', '{}');
+INSERT INTO aspect_definitions (id, owner_id, key, label, description)
+  VALUES ('orbis/pgtap-probe', NULL, 'orbis/pgtap-probe', '{"ru":"Проба"}', '{"ru":"Проба"}');
 -- Фикстуры для обеих сторон (A и B): без строки B проверки «видит только свою»
 -- были бы ложно-зелёными даже при сломанном RLS.
 INSERT INTO user_settings (owner_id) VALUES
@@ -135,16 +135,16 @@ SELECT lives_ok(
             'своя')$$,
   'INSERT со своим owner_id проходит');
 SELECT throws_ok(
-  $$INSERT INTO relations (id, source_id, target_id, role, relation_type)
+  $$INSERT INTO relations (id, source_id, target_id, role)
     VALUES ('00000000-0000-7000-8000-0000000000c2',
             '00000000-0000-7000-8000-0000000000a1',
-            '00000000-0000-7000-8000-0000000000b1', 'mention', 'related_to')$$,
+            '00000000-0000-7000-8000-0000000000b1', 'mention')$$,
   '42501', NULL, 'межпользовательская relation запрещена (§4.10)');
 SELECT lives_ok(
-  $$INSERT INTO relations (id, source_id, target_id, role, relation_type)
+  $$INSERT INTO relations (id, source_id, target_id, role)
     VALUES ('00000000-0000-7000-8000-0000000000a5',
             '00000000-0000-7000-8000-0000000000a1',
-            '00000000-0000-7000-8000-0000000000a4', 'mention', 'related_to')$$,
+            '00000000-0000-7000-8000-0000000000a4', 'mention')$$,
   'relation между двумя своими сущностями проходит');
 SELECT results_eq('SELECT count(*)::int FROM chat_messages', ARRAY[1],
   'сообщения видимы через владение тредом');
@@ -227,9 +227,9 @@ SELECT results_eq(
 
 -- Группа 6: builtin-аспекты (owner_id NULL) закрыты на запись под authenticated
 SELECT throws_ok(
-  $$INSERT INTO aspect_definitions (id, owner_id, key, label, description, schema)
+  $$INSERT INTO aspect_definitions (id, owner_id, key, label, description)
     VALUES ('orbis/pgtap-fake-builtin', NULL, 'orbis/pgtap-fake-builtin',
-            '{"ru":"Подлог"}', '{"ru":"Подлог"}', '{}')$$,
+            '{"ru":"Подлог"}', '{"ru":"Подлог"}')$$,
   '42501', NULL, 'aspect_definitions: INSERT builtin (owner_id NULL) отклоняется WITH CHECK');
 -- DELETE строки, отфильтрованной USING, — молчаливый «DELETE 0» (не ошибка),
 -- поэтому проверяем сохранность строки, а не исключение.

@@ -3,11 +3,14 @@
 // верхних горизонта планирования (E4) и «Рутины» (V1.9)) + настройки §7.3 + глобальный тред
 // §7.3. Один раз на пользователя; повтор дублей не создаёт (§7).
 //
-// РЕШЕНИЕ 6 ПЛАНА: сид пишет НАПРЯМУЮ в tx под withIdentity, МИМО executor и журнала
-// действий (§7.8). Обоснование: 15 audit-сообщений при регистрации — это шум в ленте
-// чата, а не значимые для пользователя действия; сид — системная инициализация, не
-// пользовательская правка. Данные при этом обязаны быть валидны по схемам реестра
-// (тест сверяет каждую категорию с categoryAspectSchema).
+// ГРАФ МИРА СЮДА БОЛЬШЕ НЕ ПИШЕТСЯ. 12 категорий и 6 смарт-листов первого сева уехали в
+// `seed/world.ts` и идут ЧЕРЕЗ ИСПОЛНИТЕЛЯ (обещание PRD «19 сущностей через исполнителя»);
+// здесь остались настройки, глобальный тред и АДРЕСНЫЕ досевы (горизонты E4, «Рутины» V1.9,
+// тело «Рутин» D42), у каждого из которых свой набор и свой довод — см. их докблоки.
+//
+// РЕШЕНИЕ 6 ПЛАНА в силе и после переезда: журнала у сева нет (`execute` зовётся без синка).
+// Обоснование то же — 15 audit-сообщений при регистрации это шум в ленте чата, а не
+// значимые для владельца действия; сид — системная инициализация, не правка.
 //
 // ИДЕМПОТЕНТНОСТЬ — два слоя:
 //   1. Guard по существованию user_settings (SELECT … FOR UPDATE): повторный вызов
@@ -16,18 +19,15 @@
 //      вставках — страховка от гонки двух устройств/вкладок поверх guard'а: конкурентная
 //      вставка тем же PK блокируется на неподтверждённой строке и гасится конфликтом
 //      (§5.4), дубль невозможен по построению.
-import { ORBIS_NAMESPACE } from '@orbis/shared';
 import { type BodyDoc, queryRefsFromDoc, readBodyDoc } from '@orbis/shared/doc';
 import { maskQuotedValues } from '@orbis/shared/query';
 import type { JSONContent } from '@tiptap/core';
 import { type SQL, sql } from 'drizzle-orm';
-import { v5 as uuidv5 } from 'uuid';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { bodyFieldsFromMarkdown } from '../executor/body-fields';
-import { rowFromLegacy } from '../executor/legacy-form';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { SEED_CATEGORIES } from './categories';
@@ -39,17 +39,11 @@ import {
   SEED_SMART_LISTS,
   type SeedSmartList,
 } from './smart-lists';
+import { seedCategoryId, seedOwnerWorld, seedSmartListId } from './world';
 
-// Формулы seed-слагов — серверная деталь (НЕ в shared): id порождается от owner_id
-// (workspace-scoped при введении workspace'ов, D11) и стабильного слага. uuid-библиотека
-// принимает (name, namespace) — обратный порядок к нотации PRD uuidv5(NS, name).
-export function seedCategoryId(ownerId: string, slug: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:seed-category:${slug}`, ORBIS_NAMESPACE);
-}
-
-export function seedSmartListId(ownerId: string, slug: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:seed-smartlist:${slug}`, ORBIS_NAMESPACE);
-}
+// Формулы seed-слагов живут в `seed/world.ts` — там же, где мир, который они адресуют.
+// Реэкспорт сохранён: по этим именам их зовут ручка, бэкфиллы и сьюты.
+export { seedCategoryId, seedSmartListId } from './world';
 
 // Первый устанавливаемый view (01-arch §4.4, 03-budget §1): вкладка Budget в web
 // включается по наличию этого id в installedViews. Серверная деталь — не в shared.
@@ -116,9 +110,33 @@ export async function seedOwner(
   ownerId: string,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
+  // ПОРЯДОК: мир → настройки → садовник, и первая стрелка существенна.
+  //
+  // Строка `user_settings` — маркер «онбординг прошёл»: по ней стоит guard `seedOnboarding`.
+  // Мир владельца сеется ОТДЕЛЬНОЙ транзакцией (`execute` открывает свою — Р-17-1), поэтому
+  // маркер обязан появиться ПОСЛЕ него: упади сев мира, маркера нет, и следующий заход
+  // досеет недостающее пробой по PK. В обратном порядке владелец остался бы с маркером и
+  // без мира навсегда — guard больше никогда бы не пропустил сев.
+  //
+  // Вопрос «свежий ли владелец» задаётся ДО транзакции онбординга, потому что она сама на
+  // него и отвечает созданием строки. Сев мира ТОЛЬКО свежему — не оптимизация: сид не
+  // отличает «никогда не было» от «владелец удалил», и общий досев вернул бы выброшенное
+  // (тот же довод, что у адресных бэкфиллов ниже).
+  const fresh = !(await ownerHasSettings(db, ownerId));
+  if (fresh) await seedOwnerWorld(db, ownerId, { clock });
   const result = await withIdentity(db, ownerId, (tx) => seedOnboarding(tx, ownerId, clock));
+  // Садовник — 19-я сущность мира и ЕДИНСТВЕННАЯ, которую сеют всегда: у неё своя проба по
+  // PK и своя роль досева для владельцев, засиденных до V1 (см. `seed/gardener.ts`).
   await seedGardener(db, ownerId, clock);
   return result;
+}
+
+/** Есть ли у владельца строка настроек — маркер пройденного онбординга (см. `seedOwner`). */
+async function ownerHasSettings(db: Db, ownerId: string): Promise<boolean> {
+  const rows = await withIdentity(db, ownerId, (tx) =>
+    tx.execute(sql`SELECT 1 FROM user_settings WHERE owner_id = ${ownerId}`),
+  );
+  return rows.length > 0;
 }
 
 /**
@@ -170,39 +188,9 @@ export async function seedOnboarding(
     return { seeded: false };
   }
 
-  // 12 категорий §7.1 — сущности с аспектом orbis/category; spend_class у доходных
-  // ОТСУТСТВУЕТ (не null — иначе ajv-валидация упала бы при будущих правках, §3.6).
-  // Строка пишется в ТРЁХ колонках (§А1-1): новая правда (`props` по id свойства и список
-  // `aspects`) и старая карта, которую пока читают доменные модули и web. Через одну
-  // проекцию, а не двумя литералами: разъехавшиеся формы одной и той же категории —
-  // это молчаливое расхождение, которое нашлось бы уже на чужом красном тесте.
-  const categoryRows = SEED_CATEGORIES.map((c) => ({
-    id: seedCategoryId(ownerId, c.slug),
-    ownerId,
-    title: c.title,
-    tags: ['category'],
-    ...rowFromLegacy(reg, {
-      'orbis/category': {
-        icon: c.icon,
-        color: c.color,
-        aliases: [...c.aliases],
-        ...(c.spendClass ? { spend_class: c.spendClass } : {}),
-      },
-    }),
-    createdAt: now,
-    updatedAt: now,
-  }));
-
-  // 6 smart lists §7.2 — сущности с тегом smart-list и body-query-блоками (§3.3): три
-  // исходных, два верхних горизонта планирования, «Год» и «Жизнь» (E4), и «Рутины» (V1.9).
-  const smartListRows = SEED_SMART_LISTS.map((s) => smartListRow(ownerId, s, reg, now));
-
-  // Одна вставка на все 18 сущностей: детерминированный порядок id снимает риск взаимной
-  // блокировки конкурентных сидов (обе транзакции блокируются на первой общей строке).
-  await tx
-    .insert(entities)
-    .values([...categoryRows, ...smartListRows])
-    .onConflictDoNothing();
+  // Графа здесь НЕТ: 12 категорий и 6 смарт-листов первого сева сеет `seedOwnerWorld` через
+  // исполнитель, ДО этой транзакции (см. докблок `seedOwner`). Ниже — только настройки и
+  // тред, то есть то, чего у исполнителя нет и не будет: это не сущности графа.
 
   // Настройки §7.3 — дефолты; pinnedEntities в порядке daily/upcoming/allTasks/«Год»/
   // «Рутины» (§7.2, §4.4). Из двух горизонтов закреплён ТОЛЬКО «Год»: закреплённая сущность
