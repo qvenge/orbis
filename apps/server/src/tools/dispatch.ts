@@ -1069,7 +1069,23 @@ async function runMutation(
           runId: ctx.runId,
         },
         tool,
-        input: payload,
+        // АДРЕС — В id, ровно как у отложенной единицы прогона (`registryAddressesToId`).
+        // Карточка-запрос ждёт решения владельца дольше всего, и key за это время может
+        // сменить хозяина: отклонённое неиспользованное `proposed` удаляется физически, ключ
+        // освобождается, и «Принять» применилось бы к однофамильцу. Батч разбирается
+        // пооперационно — конверт пачки едет в pending целиком, и `approvePending` раскрывает
+        // его обратно в операции.
+        input:
+          batchPayload === undefined
+            ? registryAddressesToId(reg, tool, payload as Record<string, unknown>)
+            : {
+                ...batchPayload,
+                operations: batchPayload.operations.map((op) =>
+                  REGISTRY_TOOL_NAMES.has(op.tool) && isRecord(op.input)
+                    ? { ...op, input: registryAddressesToId(reg, op.tool, op.input) }
+                    : op,
+                ),
+              },
         level,
         // batch: дедуп pending по исходному batch_id модели — ретрай того же batch
         // не плодит вторую карточку (одиночная мутация без batch_id → без дедупа)
@@ -1588,6 +1604,32 @@ async function snapshotDeferredUnit(
  * не адреса: пачку читает владелец, и «019e4466-…» в карточке не отвечает на вопрос, что
  * ему предлагают. Адрес при этом не теряется — он остаётся в `input`, который и исполнится.
  */
+/**
+ * АДРЕС строки реестра в конверте — в id (§А5-2 к реестру отношения не имеет, это про
+ * ТОЖДЕСТВО адресата).
+ *
+ * `readOwnProperty`/`resolveMergePair` резолвят «id ИЛИ key», а key освобождается при
+ * физическом удалении отклонённого неиспользованного `proposed` (`freeKey`). Единица или
+ * карточка, поставленная по key, за время ожидания может указать на ДРУГУЮ строку, о которой
+ * владельцу ничего не показывали. Нормализованный адрес честно даёт `NOT_FOUND` на «Принять».
+ *
+ * Функция одна на ОБА пути постановки — отложенную единицу прогона и карточку-запрос из
+ * чата/MCP: разойтись им нельзя, вопрос у них один и тот же.
+ */
+function registryAddressesToId(
+  reg: RegistrySnapshot,
+  tool: string,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const id = (address: unknown): unknown =>
+    typeof address === 'string' ? (resolvePropertyRef(reg, address)?.id ?? address) : address;
+  if (tool === 'property_update') return { ...payload, id: id(payload.id) };
+  if (tool === 'property_merge') {
+    return { ...payload, source: id(payload.source), into: id(payload.into) };
+  }
+  return payload;
+}
+
 async function snapshotRegistryUnit(
   tx: Tx,
   ownerId: string,
@@ -1601,10 +1643,6 @@ async function snapshotRegistryUnit(
     const def = resolvePropertyRef(reg, address);
     return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
   };
-  /** Адрес строки реестра → id (см. докблок): key за время ожидания может сменить хозяина. */
-  const addressId = (address: unknown): unknown =>
-    typeof address === 'string' ? (resolvePropertyRef(reg, address)?.id ?? address) : address;
-
   switch (tool) {
     case 'property_create':
       return {
@@ -1619,7 +1657,7 @@ async function snapshotRegistryUnit(
       };
     case 'property_merge':
       return {
-        input: { ...payload, source: addressId(payload.source), into: addressId(payload.into) },
+        input: registryAddressesToId(reg, tool, payload),
         summary,
         // Одна строка, а не две: у слияния меняется ОДНО — то, каким свойством описаны
         // значения; «было» и «станет» тут буквальны.
@@ -1633,7 +1671,7 @@ async function snapshotRegistryUnit(
       };
     case 'property_update': {
       const current = resolvePropertyRef(reg, String(payload.id));
-      const input = { ...payload, id: addressId(payload.id) };
+      const input = registryAddressesToId(reg, tool, payload);
       const rows: DeferredRow[] = [];
       // Поля патча — ровно те, что объявляет `propertyUpdateInput` (`tools/registry-tools.ts`);
       // `id` — адрес, а не правка, и в строки не идёт (тот же приём, что в preview-диффе).

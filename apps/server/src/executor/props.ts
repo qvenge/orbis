@@ -14,7 +14,12 @@
 // источник его записать». Смешать их значило бы поселить право в двух домах (см. докблок
 // `validateEntityProps`).
 import { canonicalJson, type PropertyDefinition, type PropertyType } from '@orbis/shared';
-import { normalizeQueryAst, type QueryAst } from '@orbis/shared/query';
+import {
+  normalizeQueryAst,
+  QUERY_TREE_DEPTH_CAP,
+  queryAstSchema,
+  queryTreeExceedsDepth,
+} from '@orbis/shared/query';
 import { decCmp } from '../budget/decimal';
 import { parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
@@ -198,8 +203,18 @@ const QUERY_AST_VALUE_PATH: Readonly<Record<string, string>> = {
  * с самого начала (`resolvePropertyFieldId`).
  *
  * Неизвестное имя остаётся как есть: отказ по нему — дело компилятора, а не этой функции.
- * Значение не той формы (не объект, дерева внутри нет) не трогается вовсе — про форму
- * говорит валидатор следующей стадией.
+ *
+ * НОРМАЛИЗУЕТСЯ ТОЛЬКО КАНОНИЧЕСКАЯ ФОРМА, и это не перестраховка, а условие безопасности
+ * места. Функция стоит РАНЬШЕ стадии 2: значение свойства здесь ещё сырое — ajv его не
+ * видел, а `orbis/progress_source` пишет модель, и «`filter` строкой запроса вместо узла» —
+ * обычная её ошибка во вложенном JSON. `normalizeQueryAst` предполагает канон (`'and' in
+ * node`, `node.and.map`, `ast.sortBy?.map`) и на такой форме бросил бы `TypeError`, а
+ * исполнитель не-`ExecError` НЕ маскирует (`executor.ts`, `dispatch.ts`) — модель получила
+ * бы внутреннюю ошибку вместо структурного `VALIDATION/TYPE`, из которого она умеет
+ * выправиться (§9.9). Поэтому: глубина ПЕРВОЙ (`queryAstSchema` рекурсивна через `z.lazy`
+ * и на глубоком входе переполняет стек внутри собственного разбора), затем схема канона, и
+ * только валидное дерево переписывается. Неканоническое уходит дальше НЕТРОНУТЫМ — и его
+ * отвергает ajv стадией 2 ровно тем же кодом, что и до появления нормализации.
  */
 export function normalizeQueryAstValues(reg: RegistrySnapshot, patch: PropsPatch): void {
   if (patch.set === undefined) return;
@@ -208,9 +223,11 @@ export function normalizeQueryAstValues(reg: RegistrySnapshot, patch: PropsPatch
     const path = QUERY_AST_VALUE_PATH[propertyId];
     if (path === undefined || typeof value !== 'object' || value === null) continue;
     const holder = value as Record<string, unknown>;
-    const ast = holder[path];
-    if (typeof ast !== 'object' || ast === null || !('filter' in ast)) continue;
-    patch.set[propertyId] = { ...holder, [path]: normalizeQueryAst(ast as QueryAst, parseReg) };
+    const raw = holder[path];
+    if (queryTreeExceedsDepth(raw, QUERY_TREE_DEPTH_CAP)) continue;
+    const parsed = queryAstSchema.safeParse(raw);
+    if (!parsed.success) continue;
+    patch.set[propertyId] = { ...holder, [path]: normalizeQueryAst(parsed.data, parseReg) };
   }
 }
 

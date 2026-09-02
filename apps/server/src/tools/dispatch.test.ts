@@ -4662,6 +4662,74 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect((await registryRow(owner, secondId))?.label).toEqual({ ru: 'Однофамилец' });
   });
 
+  test('ЧАТОВАЯ карточка-запрос тоже хранит адрес id: освободившийся key не уводит «Принять»', async () => {
+    // Тот же «однофамилец», что у отложенной единицы (тест выше), но по чатовому пути:
+    // `property_update{status}` от AI даёт `explicit-confirmation` → карточка в треде, и она
+    // ждёт решения владельца дольше всего. Первоисточник (A5-Minor-1) называл ОБЕ точки.
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const first = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'property_create',
+          input: {
+            key: 'user/effort',
+            label: { ru: 'Усилие' },
+            description: { ru: 'Первое значение ключа' },
+            type: { kind: 'number' as const },
+            status: 'proposed' as const,
+          },
+        },
+      ],
+    });
+    if (!first.ok) throw new Error(`фикстура: ${first.error.message}`);
+    const firstId = (first.results[0] as { property: string }).property;
+
+    // Модель просит смену статуса ПО KEY — карточка-запрос владельцу.
+    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'property_update', {
+      id: 'user/effort',
+      status: 'deprecated',
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+
+    // Владелец отклоняет неиспользованное предложение — строка удаляется, key свободен…
+    const dropped = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'property_update', input: { id: firstId, status: 'deprecated' } }],
+    });
+    if (!dropped.ok) throw new Error(`отклонение: ${dropped.error.message}`);
+    // …и тот же key занимает ДРУГОЕ свойство.
+    const second = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'property_create',
+          input: {
+            key: 'user/effort',
+            label: { ru: 'Однофамилец' },
+            description: { ru: 'Другое свойство под тем же ключом' },
+            type: { kind: 'number' as const },
+            status: 'active' as const,
+          },
+        },
+      ],
+    });
+    if (!second.ok) throw new Error(`однофамилец: ${second.error.message}`);
+    const secondId = (second.results[0] as { property: string }).property;
+
+    const applied = await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect(applied.ok ? 'ok' : applied.error.code).toBe('NOT_FOUND');
+    expect((await registryRow(owner, secondId))?.status).toBe('active');
+  });
+
   test('aspect_delta_set по ВСТРОЕННОМУ аспекту от рутины → отказ по объекту, единица НЕ рождается', async () => {
     // §С2-1 ряд 3 («`implements` встроенных аспектов, роли created_by: system, определения
     // чужих модулей»): в срезе А из перечисленного достижимы встроенные строки реестра —

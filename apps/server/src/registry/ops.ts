@@ -54,6 +54,7 @@ import {
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   type QueryFilterNode,
+  queryAstSchema,
   queryTreeExceedsDepth,
   ScopeNotStaticError,
 } from '@orbis/shared/query';
@@ -116,8 +117,23 @@ function assertRegistryQuery(where: string, ast: unknown): void {
       { reason: 'QUERY_TOO_DEEP', where, cap: QUERY_TREE_DEPTH_CAP },
     );
   }
+  // ФОРМА ПРОВЕРЯЕТСЯ ЗДЕСЬ, а не «схемой конверта»: у `property_create`/`property_update`
+  // поле `scope` объявлено `z.unknown()`, а `type` — `z.record(z.unknown())`, то есть до
+  // этой строки дерево ни разу не встречалось со схемой канона. Без проверки обход
+  // (`assertStaticQuery` ниже, а с реформой ещё и `normalizeDeclaration`) шёл бы по
+  // произвольному JSON и на `{"filter":"aspect=orbis/task"}` бросал бы `TypeError` — то есть
+  // внутреннюю ошибку вместо структурного отказа, из которого модель умеет выправиться.
+  // Замерено: до этой строки такой вход давал `TypeError: node is not an Object`.
+  const parsed = queryAstSchema.safeParse(ast);
+  if (!parsed.success) {
+    throw new ExecError('VALIDATION', `${where}: значение не является запросом канона §А5-7`, {
+      reason: 'QUERY_SHAPE',
+      where,
+      issues: parsed.error.issues.slice(0, 5),
+    });
+  }
   try {
-    assertStaticQuery(ast as QueryAst);
+    assertStaticQuery(parsed.data);
   } catch (e) {
     if (e instanceof ScopeNotStaticError) {
       throw new ExecError('SCOPE_NOT_STATIC', `${where}: ${e.message}`, {

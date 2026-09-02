@@ -240,6 +240,44 @@ describe('property_create / property_update: жизненный цикл propose
     ok(await run('entity_update', { id: entityId, unset: [id] }));
   });
 
+  test('undo СИЛЬНЕЕ статуса: откат правки проходит и после вывода свойства из обращения (Р-24-10)', async () => {
+    // Внутренний undo не считает затронутым НИЧЕГО (`executor.ts`, гейт `ctx.internalUndo`),
+    // и это рулинг, а не деталь: откат восстанавливает СВОЁ ЖЕ законно записанное значение,
+    // и отказ по статусу означал бы, что законную запись нельзя отменить. Правило держалось
+    // одним комментарием — мутация «считать затронутые и при откате» оставляла все сьюты
+    // зелёными.
+    const created = ok(
+      await run('property_create', {
+        key: 'user/undo-lock',
+        label: { ru: 'Догадка под откат' },
+        description: { ru: 'Предложено моделью' },
+        type: { kind: 'text' },
+        status: 'active',
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+
+    const entityId = newId();
+    ok(
+      await run('entity_create', {
+        id: entityId,
+        title: 'Запись с догадкой',
+        tags: [],
+        props: { [id]: 'было' },
+      }),
+    );
+    const edited = ok(await run('entity_update', { id: entityId, props: { [id]: 'стало' } }));
+    expect((await entityRow(entityId))?.props).toMatchObject({ [id]: 'стало' });
+
+    // Владелец выводит свойство из обращения УЖЕ ПОСЛЕ правки…
+    ok(await run('property_update', { id, status: 'deprecated' }));
+    // …и «отменить последнее» обязано пройти: inverse пишет ЗАТРОНУТОЕ свойство, то есть
+    // ровно то, запись которого теперь отвергается.
+    const undone = await undoAction(db, { actorUserId: owner, actionId: edited.actionId });
+    expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
+    expect((await entityRow(entityId))?.props).toMatchObject({ [id]: 'было' });
+  });
+
   test('слияние В deprecated-цель отвергается: живые значения не прячутся под скрытую строку', async () => {
     const src = ok(
       await run('property_create', {
@@ -2285,5 +2323,73 @@ describe('нормализация имён в дереве Q-AST (§А5-2)', ()
     )) as unknown as Array<{ type: { target: { filter: { and: Array<{ prop?: string }> } } } }>;
     const named = rows[0]?.type.target.filter.and.find((n) => n.prop !== undefined);
     expect(named?.prop).toBe(baseId);
+  });
+});
+
+describe('форма дерева объявления проверяется ДО обхода (N-1)', () => {
+  const shapeOwner = freshUserId();
+
+  function runShape(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      { actorUserId: shapeOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  }
+
+  test('неканонические scope и ref.target → VALIDATION/QUERY_SHAPE, а не TypeError', async () => {
+    // `scope` в конверте объявлен `z.unknown()`, `type` — `z.record(z.unknown())`: до
+    // `assertRegistryQuery` дерево ни разу не встречалось со схемой канона. И обход
+    // статичности, и нормализация имён (§А5-2) предполагают канон — на «`filter` строкой»
+    // оба бросали бы `TypeError`, то есть внутреннюю ошибку вместо структурного отказа.
+    const cases: Array<[string, unknown]> = [
+      [
+        'scope: filter — текст запроса',
+        {
+          key: 'user/shape-a',
+          label: { ru: 'A' },
+          description: { ru: 'A' },
+          type: { kind: 'number' },
+          status: 'active',
+          scope: { filter: 'aspect=orbis/task' },
+        },
+      ],
+      [
+        'ref.target: filter — текст запроса',
+        {
+          key: 'user/shape-b',
+          label: { ru: 'B' },
+          description: { ru: 'B' },
+          type: { kind: 'ref', target: { filter: 'aspect=orbis/category' } },
+          status: 'active',
+        },
+      ],
+      [
+        'ref.target: and — строка вместо массива',
+        {
+          key: 'user/shape-c',
+          label: { ru: 'C' },
+          description: { ru: 'C' },
+          type: { kind: 'ref', target: { filter: { and: 'x' } } },
+          status: 'active',
+        },
+      ],
+    ];
+    for (const [name, input] of cases) {
+      const e = err(await runShape('property_create', input));
+      expect([name, e.code]).toEqual([name, 'VALIDATION']);
+      expect([name, (e.details as { reason?: string }).reason]).toEqual([name, 'QUERY_SHAPE']);
+    }
+    // Канонический scope по-прежнему принимается — отказ адресный, а не «на всякий случай».
+    ok(
+      await runShape('property_create', {
+        key: 'user/shape-ok',
+        label: { ru: 'Ок' },
+        description: { ru: 'Ок' },
+        type: { kind: 'number' },
+        status: 'active',
+        scope: { filter: { aspect: 'orbis/task' } },
+      }),
+    );
   });
 });

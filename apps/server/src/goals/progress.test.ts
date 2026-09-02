@@ -1085,3 +1085,79 @@ describe('имена в хранимом дереве источника — id,
     expect(progress.current).toBe('2');
   });
 });
+
+describe('неканоническая форма дерева источника — VALIDATION, а не исключение (N-1)', () => {
+  // Нормализация имён (§А5-2) стоит РАНЬШЕ стадии 2, то есть на СЫРОМ значении: ajv его ещё
+  // не видел. `normalizeQueryAst` предполагает канон, и на «`filter` строкой запроса вместо
+  // узла» — обычной ошибке модели во вложенном JSON — обход бросал бы `TypeError`, а
+  // исполнитель не-`ExecError` не маскирует: наружу уходила бы внутренняя ошибка вместо
+  // структурного отказа, из которого модель умеет выправиться (§9.9). Проба сквозная —
+  // через `execute`, а не по функции: предмет проверки — что отказ ДОЕЗЖАЕТ, а не бросается.
+  const BAD: Array<[string, unknown]> = [
+    ['filter — текст запроса вместо узла', { filter: 'aspect=orbis/task' }],
+    ['sortBy — строка вместо списка', { filter: { aspect: 'orbis/task' }, sortBy: 'x' }],
+    ['and — строка вместо массива узлов', { filter: { and: 'x' } }],
+  ];
+
+  function goalProps(query: unknown): Record<string, unknown> {
+    return {
+      'orbis/progress_source': { query, aggregate: 'count' },
+      'orbis/target_value': '24',
+    };
+  }
+
+  function violationsOf(r: Awaited<ReturnType<typeof execute>>): Array<{ code: string }> {
+    if (r.ok) throw new Error('ожидался отказ, пришёл успех');
+    return (r.error.details as { violations?: Array<{ code: string }> }).violations ?? [];
+  }
+
+  for (const [name, query] of BAD) {
+    test(`entity_create: ${name} → VALIDATION/TYPE`, async () => {
+      const user = freshUserId();
+      const r = await execute(db, {
+        actorUserId: user,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          {
+            tool: 'entity_create',
+            input: { title: 'Цель', tags: [], aspects: ['orbis/goal'], props: goalProps(query) },
+          },
+        ],
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('VALIDATION');
+      expect(violationsOf(r)).toContainEqual(
+        expect.objectContaining({ code: 'TYPE', propertyId: 'orbis/progress_source' }),
+      );
+    });
+
+    test(`attach_orbis_goal: ${name} → VALIDATION/TYPE`, async () => {
+      // Второй строитель патча (`replaceAspectProps`) — тот же гард закрывает оба.
+      const user = freshUserId();
+      const created = await execute(db, {
+        actorUserId: user,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_create', input: { title: 'Цель', tags: [] } }],
+      });
+      if (!created.ok) throw new Error(`фикстура: ${created.error.message}`);
+      const id = (created.results[0] as { id: string }).id;
+      const r = await execute(db, {
+        actorUserId: user,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          { tool: 'attach_orbis_goal', input: { entity_id: id, data: goalProps(query) } },
+        ],
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('VALIDATION');
+      expect(violationsOf(r)).toContainEqual(
+        expect.objectContaining({ code: 'TYPE', propertyId: 'orbis/progress_source' }),
+      );
+    });
+  }
+});
