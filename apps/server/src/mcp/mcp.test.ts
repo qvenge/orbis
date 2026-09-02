@@ -105,11 +105,9 @@ async function connectAgent(url: string, token: string = TOKEN): Promise<Client>
 /** Статус тикета в БД — правда графа, а не ответ тула (приёмка 5 по проводу). */
 async function taskStatus(id: string): Promise<unknown> {
   const rows = await withIdentity(db, owner, (tx) =>
-    tx.select({ aspectsLegacy: entities.aspectsLegacy }).from(entities).where(eq(entities.id, id)),
+    tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
   );
-  return (rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>> | undefined)?.[
-    'orbis/task'
-  ]?.status;
+  return (rows[0]?.props as Record<string, unknown> | undefined)?.['orbis/task_status'];
 }
 
 /** tools/call + разбор единственного text-контента как JSON (контракт адаптера). */
@@ -1014,18 +1012,16 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     // Состояние графа после круга: тикет ждёт владельца, прогон завершён с отчётом
     const rows = await withIdentity(db, owner, (tx) =>
       tx
-        .select({ id: entities.id, aspectsLegacy: entities.aspectsLegacy })
+        .select({ id: entities.id, props: entities.props })
         .from(entities)
         .where(inArray(entities.id, [ticket.id, runId])),
     );
-    const byId = new Map(
-      rows.map((r) => [r.id, r.aspectsLegacy as Record<string, Record<string, unknown>>]),
-    );
-    expect(byId.get(ticket.id)?.['orbis/task']?.status).toBe('waiting');
-    const run = byId.get(runId)?.['orbis/agent-run'];
-    expect(run?.outcome).toBe('finished');
-    expect(run?.step_count).toBe(1);
-    expect(run?.report).toBe('Готово: парсер починен, тесты зелёные.');
+    const byId = new Map(rows.map((r) => [r.id, r.props as Record<string, unknown>]));
+    expect(byId.get(ticket.id)?.['orbis/task_status']).toBe('waiting');
+    const run = byId.get(runId);
+    expect(run?.['orbis/run_outcome']).toBe('finished');
+    expect(run?.['orbis/step_count']).toBe(1);
+    expect(run?.['orbis/run_report']).toBe('Готово: парсер починен, тесты зелёные.');
 
     // Журнал §7.8: действия круга атрибутированы гранту исполнителя и его прогону (С2)
     const runActions = (await globalAuditActions()).filter((a) => a.run_id === runId);

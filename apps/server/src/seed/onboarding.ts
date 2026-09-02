@@ -30,16 +30,14 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { bodyFieldsFromMarkdown } from '../executor/body-fields';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
-import { SEED_CATEGORIES } from './categories';
 import { seedGardener } from './gardener';
 import {
   ROUTINES_BATCH_QUERY,
   SEED_HORIZON_LISTS,
   SEED_ROUTINES_LIST,
-  SEED_SMART_LISTS,
   type SeedSmartList,
 } from './smart-lists';
-import { seedCategoryId, seedOwnerWorld, seedSmartListId } from './world';
+import { seedOwnerWorld, seedSmartListId } from './world';
 
 // Формулы seed-слагов живут в `seed/world.ts` — там же, где мир, который они адресуют.
 // Реэкспорт сохранён: по этим именам их зовут ручка, бэкфиллы и сьюты.

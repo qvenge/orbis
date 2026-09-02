@@ -7,14 +7,18 @@
 // поэтому «перевод» доказывается против живого кода, а не против самого себя.
 import { expect, test } from 'bun:test';
 import type { z } from 'zod';
-import { BUILTIN_ASPECT_META } from '../aspect-registry';
 import {
   type AspectId,
   BUILTIN_ASPECT_IDS,
   HIERARCHICAL_ROLE_IDS,
   RELATION_ROLE_IDS,
 } from '../constants';
-import { ASPECT_SCHEMAS } from '../schemas/aspects';
+import {
+  ROUTINE_MODES,
+  ROUTINE_STAGES,
+  RUN_OUTCOMES,
+  TASK_STATUSES,
+} from '../contracts/agent-loop';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
@@ -126,20 +130,18 @@ const A8: Record<AspectId, readonly Row[]> = {
 };
 
 /** Поля, которые §А8 УДАЛЯЕТ, а не переводит: свойства у них нет по решению спеки. */
-const DROPPED: Partial<Record<AspectId, readonly string[]>> = {
+const _DROPPED: Partial<Record<AspectId, readonly string[]>> = {
   'orbis/agent-run': ['project_id'], // денормализация, заменённая parent_project/root_project
 };
 
 /** Свойства §А8, у которых нет аспекта-носителя: вычисляемые «Новые свойства реформы». */
 const FREE_DOMAIN_IDS = ['orbis/parent_project', 'orbis/root_project'] as const;
 
-const SHAPES = ASPECT_SCHEMAS as unknown as Record<AspectId, z.ZodObject<z.ZodRawShape>>;
 const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
 const defsById = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
-const metaById = new Map(BUILTIN_ASPECT_META.map((m) => [m.id, m]));
 
 /** Распаковка enum сквозь optional/array: порядок вариантов — норматив сортировки (`compile-ast.ts`). */
-function enumValues(schema: z.ZodTypeAny): readonly string[] {
+function _enumValues(schema: z.ZodTypeAny): readonly string[] {
   let node = schema;
   for (let i = 0; i < 8; i += 1) {
     const def = node._def as {
@@ -232,18 +234,13 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
     expect(def).toBeDefined();
     if (def === undefined) continue;
 
-    // Снимок §А8 сверен с ЖИВОЙ zod-схемой: порядок полей и обязательность — оттуда.
-    const shape = SHAPES[aspectId].shape;
-    const dropped = DROPPED[aspectId] ?? [];
-    expect(Object.keys(shape).filter((k) => !dropped.includes(k))).toEqual(
-      rows.filter(([field]) => field !== null).map(([field]) => field as string),
-    );
-    for (const [field, propertyId, required] of rows) {
-      if (field === null) continue;
-      const zodField = shape[field];
-      expect(
-        `${aspectId}.${field}: required=${zodField !== undefined && !zodField.isOptional()}`,
-      ).toBe(`${aspectId}.${field}: required=${required}`);
+    // ВТОРОЙ СТОРОНЫ У СВЕРКИ БОЛЬШЕ НЕТ. Прежде снимок §А8 сверялся с живой zod-схемой
+    // аспекта (`ASPECT_SCHEMAS`) — порядок полей и обязательность брались оттуда. Схемы
+    // снял «Пересев мира» вместе со старой формой; снимок §А8 остаётся здесь ЕДИНСТВЕННЫМ
+    // описанием таблицы перевода и проверяет то, что от него не зависит: каждое имя из него
+    // ведёт на существующее свойство реестра, а состав/порядок/обязательность реализации
+    // совпадают со строками ниже.
+    for (const [, propertyId] of rows) {
       expect(byId.has(propertyId)).toBe(true);
     }
 
@@ -301,37 +298,55 @@ test('слияния: finance_category и currency у financial И budget; grant
   });
 });
 
-test('select-варианты: ASCII key, порядок rank = порядок enum в schemas/aspects.ts', () => {
-  const selects: readonly (readonly [AspectId, string, string])[] = [
-    ['orbis/task', 'status', 'orbis/task_status'],
-    ['orbis/task', 'priority', 'orbis/priority'],
-    ['orbis/financial', 'direction', 'orbis/direction'],
-    ['orbis/note', 'content_type', 'orbis/content_type'],
-    ['orbis/category', 'spend_class', 'orbis/spend_class'],
-    ['orbis/memory', 'kind', 'orbis/memory_kind'],
-    ['orbis/project', 'stage', 'orbis/project_stage'],
-    ['orbis/assignment', 'executor', 'orbis/executor'],
-    ['orbis/agent-run', 'outcome', 'orbis/run_outcome'],
-    ['orbis/routine', 'stage', 'orbis/routine_stage'],
-    ['orbis/routine', 'days', 'orbis/routine_days'],
-    ['orbis/routine', 'mode', 'orbis/routine_mode'],
-  ];
+test('select-варианты: ASCII key, порядок rank — снимок, сверенный с контрактом', () => {
+  /**
+   * СНИМОК, А НЕ СВЕРКА С ВТОРЫМ РЕЕСТРОМ. До «Пересева мира» варианты сверялись с
+   * `z.enum` схемы аспекта (`schemas/aspects.ts`) — вторым описанием тех же полей, которое
+   * реформа и снимает. Теперь описание ОДНО, реестровое, и утверждать про него можно только
+   * то, чего в нём самом нет: точный состав и точный порядок.
+   *
+   * Порядок вариантов — норматив: по нему сортируются смарт-листы (`compile-ast.ts`,
+   * sortItem), и перестановка молча меняет вид списка у владельца.
+   *
+   * Четыре из двенадцати дополнительно СВЕРЯЮТСЯ с контрактом круга исполнителя
+   * (`contracts/agent-loop.ts`): там те же союзы объявлены типами, и разъехавшийся список
+   * уехал бы в MCP-контракт молча. Это и есть обещанная пара источников — но пара честная:
+   * второй источник не описывает поле, он его ЦИТИРУЕТ.
+   */
+  const SELECT_OPTIONS: Readonly<Record<string, readonly string[]>> = {
+    'orbis/task_status': ['inbox', 'planned', 'in_progress', 'waiting', 'done', 'cancelled'],
+    'orbis/priority': ['low', 'medium', 'high'],
+    'orbis/direction': ['income', 'expense'],
+    'orbis/content_type': ['markdown', 'plain', 'checklist'],
+    'orbis/spend_class': ['fixed', 'discretionary'],
+    'orbis/memory_kind': ['fact', 'rule'],
+    'orbis/project_stage': ['active', 'paused', 'done'],
+    'orbis/executor': ['human', 'agent'],
+    'orbis/run_outcome': [
+      'running',
+      'checkpoint',
+      'finished',
+      'abandoned',
+      'failed',
+      'answered',
+      'stale',
+    ],
+    'orbis/routine_stage': ['active', 'paused'],
+    'orbis/routine_days': ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'],
+    'orbis/routine_mode': ['propose', 'act'],
+  };
+
   // Все select-свойства реестра названы здесь — новый select без сверки не проедет.
   expect(
     BUILTIN_PROPERTY_META.filter((p) => p.type.kind === 'select')
       .map((p) => p.id)
       .sort(),
-  ).toEqual([...new Set(selects.map(([, , id]) => id))].sort());
+  ).toEqual(Object.keys(SELECT_OPTIONS).sort());
 
-  for (const [aspectId, field, propertyId] of selects) {
+  for (const [propertyId, expected] of Object.entries(SELECT_OPTIONS)) {
     const type = byId.get(propertyId)?.type;
     expect(type?.kind).toBe('select');
     if (type?.kind !== 'select') continue;
-    const zodField = SHAPES[aspectId].shape[field];
-    expect(zodField).toBeDefined();
-    if (zodField === undefined) continue;
-    const expected = enumValues(zodField);
-    // Порядок вариантов — норматив: по нему сортируются смарт-листы (`compile-ast.ts`, sortItem).
     expect(`${propertyId}: ${type.options.map((o) => o.key).join(',')}`).toBe(
       `${propertyId}: ${expected.join(',')}`,
     );
@@ -342,6 +357,15 @@ test('select-варианты: ASCII key, порядок rank = порядок e
       expect((option.label.en ?? '').length).toBeGreaterThan(0);
     }
   }
+
+  // Контракт круга исполнителя цитирует те же четыре списка — расхождение валит здесь.
+  expect([...TASK_STATUSES].join(',')).toBe((SELECT_OPTIONS['orbis/task_status'] ?? []).join(','));
+  expect([...RUN_OUTCOMES].join(',')).toBe((SELECT_OPTIONS['orbis/run_outcome'] ?? []).join(','));
+  expect([...ROUTINE_STAGES].join(',')).toBe(
+    (SELECT_OPTIONS['orbis/routine_stage'] ?? []).join(','),
+  );
+  expect([...ROUTINE_MODES].join(',')).toBe((SELECT_OPTIONS['orbis/routine_mode'] ?? []).join(','));
+
   // Разные enum — разные факты (Р11): три жизненных цикла не сливаются в один select.
   expect(byId.get('orbis/task_status')?.id).not.toBe(byId.get('orbis/project_stage')?.id);
   expect(byId.get('orbis/routine_days')?.type).toMatchObject({ cardinality: 'many', minItems: 1 });
@@ -402,48 +426,111 @@ test('роли: 11 id, иерархия, target_max_incoming конверта, a
   expect(roleById.get('envelope-binding')?.targetLabel.ru).toBe('Транзакция');
 });
 
-test('все 13 keyFields и tagMappings перенесены и равны aspect-registry.ts', () => {
-  expect(BUILTIN_ASPECT_META.length).toBe(13);
-  // Р-16: списков keyFields ровно 13 — orbis/note (aspect-registry.ts:61) в их числе.
-  expect(BUILTIN_ASPECT_META.filter((m) => m.viewConfig.keyFields.length > 0).length).toBe(13);
-  expect(metaById.get('orbis/note')?.viewConfig.keyFields).toEqual(['content_type', 'pinned']);
+test('все 13 аспектов: keyFields, иконка, теги и подписи — точный снимок реестра', () => {
+  /**
+   * СНИМОК, А НЕ ПЕРЕНОС. До «Пересева мира» этот тест сверял реестр со ВТОРЫМ реестром
+   * старой формы (`BUILTIN_ASPECT_META`): та запись адресовала поля ИМЕНАМИ, эта — id
+   * свойств, и сверка ловила промах перевода §А8. Второй записи больше нет — сверять не с
+   * чем, и утверждение стало прямым: вот состав, и он меняется только осознанно.
+   */
+  const ASPECTS: Readonly<
+    Record<string, { keyFields: readonly string[]; icon: string; tags: readonly string[] }>
+  > = {
+    'orbis/schedule': {
+      keyFields: ['orbis/start_at', 'orbis/end_at', 'orbis/all_day'],
+      icon: '📅',
+      tags: ['schedule', 'event', 'meeting', 'appointment'],
+    },
+    'orbis/task': {
+      keyFields: ['orbis/task_status', 'orbis/due_date', 'orbis/priority'],
+      icon: '✅',
+      tags: ['task', 'todo', 'action', 'deadline'],
+    },
+    'orbis/financial': {
+      keyFields: ['orbis/amount', 'orbis/direction', 'orbis/finance_category'],
+      icon: '💸',
+      tags: ['expense', 'income', 'payment', 'cost'],
+    },
+    'orbis/note': {
+      keyFields: ['orbis/content_type', 'orbis/pinned'],
+      icon: '📝',
+      tags: ['note', 'thought', 'idea', 'journal'],
+    },
+    'orbis/budget': {
+      keyFields: ['orbis/limit', 'orbis/period_start', 'orbis/period_end'],
+      icon: '✉️',
+      tags: ['budget', 'envelope', 'limit'],
+    },
+    'orbis/category': {
+      keyFields: ['orbis/icon', 'orbis/color', 'orbis/spend_class'],
+      icon: '🏷️',
+      tags: ['category'],
+    },
+    // В7: у правила есть образец и цель — то, ради чего владелец открывает список; область
+    // (`scope`) в ряд не помещается и в него не входит.
+    'orbis/memory': {
+      keyFields: ['orbis/memory_kind', 'orbis/rule_pattern', 'orbis/rule_target'],
+      icon: '🧠',
+      tags: ['memory', 'preference', 'rule'],
+    },
+    'orbis/goal': {
+      keyFields: ['orbis/target_value', 'orbis/current_value', 'orbis/unit'],
+      icon: '🎯',
+      tags: ['goal'],
+    },
+    'orbis/project': {
+      keyFields: ['orbis/project_stage'],
+      icon: '📁',
+      tags: ['project', 'проект'],
+    },
+    'orbis/repo': {
+      keyFields: ['orbis/repo_url', 'orbis/default_branch'],
+      icon: '🗂️',
+      tags: ['repo', 'репозиторий'],
+    },
+    'orbis/assignment': {
+      keyFields: ['orbis/executor', 'orbis/may_close'],
+      icon: '🎯',
+      tags: ['assignee', 'исполнитель'],
+    },
+    'orbis/agent-run': {
+      keyFields: ['orbis/run_outcome', 'orbis/step_count'],
+      icon: '🤖',
+      tags: [],
+    },
+    'orbis/routine': {
+      keyFields: ['orbis/routine_stage', 'orbis/routine_at', 'orbis/routine_mode'],
+      icon: '⏰',
+      tags: ['routine', 'рутина'],
+    },
+  };
+
+  expect(Object.keys(ASPECTS).sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
+  // Р-16: списков keyFields ровно 13 — `orbis/note` в их числе.
+  expect(Object.values(ASPECTS).filter((a) => a.keyFields.length > 0).length).toBe(13);
 
   for (const aspectId of BUILTIN_ASPECT_IDS) {
-    const meta = metaById.get(aspectId);
     const def = defsById.get(aspectId);
-    expect(meta).toBeDefined();
+    const snap = ASPECTS[aspectId];
     expect(def).toBeDefined();
-    if (meta === undefined || def === undefined) continue;
+    if (def === undefined || snap === undefined) continue;
 
-    // Старое имя поля → id свойства по снимку §А8.
-    const toId = new Map((A8[aspectId] ?? []).map(([field, id]) => [field, id]));
-    const expectedKeyFields = meta.viewConfig.keyFields.map((f) => {
-      const id = toId.get(f);
-      if (id === undefined) throw new Error(`${aspectId}: keyField ${f} не переведён`);
-      return id;
-    });
-    // ОДНО ИМЕНОВАННОЕ ИСКЛЮЧЕНИЕ — `orbis/memory`, и оно того же рода, что снятые отсюда
-    // `aiInstructions` (рулинг Р-1-1): перенесённое значение описывало СНЯТУЮ форму, и
-    // равенство со старым реестром закрепляло бы именно её. Прежний ряд `[kind, scope]` был
-    // осмыслен, пока правая часть правила жила в заголовке: показывать было нечего, кроме
-    // рода и области. После В7 у правила есть образец и цель — то, ради чего владелец
-    // открывает список; область в ряд не помещается и уходит. Замена пину — ниже по файлу,
-    // отдельным утверждением с точным составом.
-    if (aspectId !== 'orbis/memory') {
-      expect(`${aspectId}: ${def.viewConfig.keyFields.join(',')}`).toBe(
-        `${aspectId}: ${expectedKeyFields.join(',')}`,
-      );
+    expect(`${aspectId}: ${def.viewConfig.keyFields.join(',')}`).toBe(
+      `${aspectId}: ${snap.keyFields.join(',')}`,
+    );
+    // Каждый keyField обязан быть свойством, ОБЪЯВЛЕННЫМ этим аспектом: ряд, показывающий
+    // чужое свойство, владелец увидел бы пустым.
+    for (const field of def.viewConfig.keyFields) {
+      expect(def.properties.some((r) => r.propertyId === field)).toBe(true);
     }
-    expect(def.viewConfig.icon).toBe(meta.icon);
-    expect(def.tagMappings).toEqual(meta.tagMappings);
-    // `aiInstructions` СЮДА БОЛЬШЕ НЕ ВХОДЯТ (рулинг Р-1-1, Задача 12): перенесённые
-    // дословно тексты описывали снятую форму, и равенство со старым реестром закрепляло бы
-    // именно её. Что пришло на смену пину — грепом ниже.
+    expect(def.viewConfig.icon).toBe(snap.icon);
+    expect(def.tagMappings).toEqual([...snap.tags]);
+    // `aiInstructions` СЮДА НЕ ВХОДЯТ (рулинг Р-1-1): их содержание стережёт греп ниже.
     expect(def.key).toBe(def.id); // у встроенных key = id; имя тула attach_* — из key
     expect(def.ownerId).toBeNull();
-    expect(def.label.en).toBe(meta.name);
-    expect(def.description.ru).toBe(meta.description);
     expect((def.label.ru ?? '').length).toBeGreaterThan(0);
+    expect((def.label.en ?? '').length).toBeGreaterThan(0);
+    expect((def.description.ru ?? '').length).toBeGreaterThan(0);
     expect((def.description.en ?? '').length).toBeGreaterThan(0);
   }
 });

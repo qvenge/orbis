@@ -3,7 +3,6 @@
 // живёт в apps/server/src/db/registry-drift.test.ts.
 import { expect, test } from 'bun:test';
 import {
-  BUILTIN_ASPECT_META,
   canonicalJson,
   diffBuiltinRegistries,
   hasRegistryDrift,
@@ -13,7 +12,6 @@ import {
 } from './aspect-registry';
 import { BUILTIN_ASPECT_IDS } from './constants';
 import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, BUILTIN_RELATION_ROLE_META } from './registry';
-import { legacyAspectJsonSchema } from './schemas/aspects';
 
 /**
  * Реестры «как после свежего пересева» — эталон, от которого отходит каждый тест.
@@ -48,7 +46,6 @@ function seeded(): RegistryDbRows {
       module: a.module,
       service: a.service,
       rank: a.rank,
-      schema: legacyAspectJsonSchema(a.id as (typeof BUILTIN_ASPECT_IDS)[number]),
     })),
     roles: BUILTIN_RELATION_ROLE_META.map((r) => ({
       id: r.id,
@@ -72,15 +69,15 @@ function seeded(): RegistryDbRows {
 const EMPTY = { missing: [], drifted: [], extra: [] };
 
 /**
- * BUILTIN_ASPECT_META — МАССИВ, а не Record<AspectId, …>, поэтому забытая запись не ловится
- * ни typecheck'ом (в отличие от ASPECT_SCHEMAS с его `satisfies Record<AspectId, …>`), ни
- * остальными тестами shared: аспект без meta не попадает в attach_*-тулы и в реестр UI —
- * то есть приезжает полумёртвым молча.
+ * `BUILTIN_ASPECT_DEFS` — МАССИВ, а не `Record<AspectId, …>`, поэтому забытая запись не
+ * ловится typecheck'ом: аспект без строки не попадает ни в сид реестра, ни в attach_*-тулы,
+ * ни в реестр UI — то есть приезжает полумёртвым молча. Прежде эту дыру закрывала сверка со
+ * ВТОРЫМ реестром (`BUILTIN_ASPECT_META`), снятым «Пересевом мира»; теперь — прямой счёт.
  */
-test('каждому BUILTIN_ASPECT_IDS соответствует ровно одна запись BUILTIN_ASPECT_META', () => {
-  const metaIds = BUILTIN_ASPECT_META.map((m) => m.id);
-  expect([...metaIds].sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
-  expect(new Set(metaIds).size).toBe(metaIds.length); // дублей нет
+test('каждому BUILTIN_ASPECT_IDS соответствует ровно одна строка BUILTIN_ASPECT_DEFS', () => {
+  const ids = BUILTIN_ASPECT_DEFS.map((a) => a.id);
+  expect([...ids].sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
+  expect(new Set(ids).size).toBe(ids.length); // дублей нет
 });
 
 test('canonicalJson: порядок КЛЮЧЕЙ не значим (jsonb его не хранит)', () => {
@@ -112,8 +109,8 @@ test('строка прошла через jsonb (ключи переставл�
   const rows = seeded();
   rows.aspects = rows.aspects.map((r) => ({
     ...r,
-    schema: Object.fromEntries(
-      Object.entries(r.schema as Record<string, unknown>).reverse(),
+    view_config: Object.fromEntries(
+      Object.entries(r.view_config as Record<string, unknown>).reverse(),
     ) as unknown,
   }));
   expect(hasRegistryDrift(diffBuiltinRegistries(rows))).toBe(false);
@@ -161,18 +158,21 @@ test('ЛИШНЯЯ system-строка — тоже дрейф (двусторо
   );
 });
 
-test('аспекты: устарела колонка schema — дрейф (носитель СТАРОЙ формы до 0017, Р-24)', () => {
+test('аспекты: устарел набор properties — дрейф по имени столбца', () => {
+  // Колонки `schema` у аспекта больше НЕТ (contract-миграция 0017): JSON Schema —
+  // генерируемая производная реестра свойств (§А3-1). Прежде расхождение по ней и было
+  // главной ловушкой релиза; теперь ту же роль играет сам набор ссылок на свойства.
   const rows = seeded();
   rows.aspects = rows.aspects.map((r) =>
-    r.id === 'orbis/financial' ? { ...r, schema: { type: 'object' } } : r,
+    r.id === 'orbis/financial' ? { ...r, properties: [] } : r,
   );
   const drift = diffBuiltinRegistries(rows);
-  expect(drift.aspects.drifted).toEqual([{ id: 'orbis/financial', what: ['schema'] }]);
+  expect(drift.aspects.drifted).toEqual([{ id: 'orbis/financial', what: ['properties'] }]);
   // Сводка обязана поднять расхождение ИМЕННО ЭТОГО реестра: без этих двух строк реестр,
   // выпавший из обхода `hasRegistryDrift`/`registryDriftIds`, дал бы зелёный /health при
   // красном поле в структуре — то есть ловушку, снятую молча.
   expect(hasRegistryDrift(drift)).toBe(true);
-  expect(registryDriftIds(drift)).toEqual(['aspects:orbis/financial schema']);
+  expect(registryDriftIds(drift)).toEqual(['aspects:orbis/financial properties']);
 });
 
 test('аспекты: устарели ai_instructions — дрейф (они уезжают в описания attach_*-тулов)', () => {
@@ -226,7 +226,7 @@ test('registryDriftIds: плоский список для /health называ�
 test('orbis/routine: ai_instructions называют умолчание автономии — без явной просьбы владельца mode: propose (V1, PRD 02 §3.4)', () => {
   // Умолчания в схеме нет намеренно (mode обязателен): предохранитель — указание модели
   // здесь плюс гейт explicit-confirmation на выдачу act (policy/confirmation.ts).
-  const routine = BUILTIN_ASPECT_META.find((m) => m.id === 'orbis/routine');
+  const routine = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/routine');
   expect(routine?.aiInstructions).toContain('mode: propose');
   expect(routine?.aiInstructions).toContain('Без явной просьбы владельца');
 });

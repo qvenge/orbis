@@ -75,8 +75,7 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
 
 async function entityRow(id: string): Promise<Record<string, unknown>> {
   const rows = await adminRows(
-    sql`SELECT title, body, props, aspects, aspects_legacy, tags, archived
-        FROM entities WHERE id = ${id}`,
+    sql`SELECT title, body, props, aspects, tags, archived FROM entities WHERE id = ${id}`,
   );
   const row = rows[0];
   if (!row) throw new Error(`сущность ${id} не найдена`);
@@ -289,11 +288,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
     expect(Object.hasOwn(props, 'orbis/completed_at')).toBe(false);
     // ДЕЛИВЕРЕБЛ §А7-4: чужая правка третьего свойства ПЕРЕЖИЛА откат
     expect(props['orbis/due_date']).toBe('2026-09-09');
-    expect((row.aspects_legacy as Record<string, unknown>)['orbis/task']).toEqual({
-      status: 'inbox',
-      priority: 'low',
-      due_date: '2026-09-09',
-    });
+    expect(row.aspects).toEqual(['orbis/task']);
     // поле вне свойств, не затронутое отменяемым действием, тоже не откатывается
     expect(row.tags).toEqual([]);
   });
@@ -354,10 +349,9 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
     expect(row.aspects).toEqual(['orbis/note']);
     // Значение, существовавшее ДО attach, откат не трогает
     expect(row.props).toEqual({ 'orbis/pinned': true });
-    expect(row.aspects_legacy).toEqual({ 'orbis/note': { pinned: true } });
   });
 
-  test('слитое свойство orbis/finance_category: одна правка — две половины старой карты, откат возвращает обе', async () => {
+  test('слитое свойство orbis/finance_category: одна правка — оба носителя, откат возвращает значение', async () => {
     const user = freshUserId();
     const catA = newId();
     const catB = newId();
@@ -405,20 +399,15 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
       id: e.id,
       props: { 'orbis/finance_category': catA },
     });
-    const afterUpdate = (await entityRow(e.id)).aspects_legacy as Record<
-      string,
-      Record<string, unknown>
-    >;
-    expect(afterUpdate['orbis/financial']?.category_ref).toBe(catB);
-    expect(afterUpdate['orbis/budget']?.category_ref).toBe(catB);
+    // Свойство ОДНО на двух носителей (§А8/В1): и правка, и откат двигают одно значение,
+    // а не две половины, которые могли бы разъехаться.
+    const afterUpdate = (await entityRow(e.id)).props as Record<string, unknown>;
+    expect(afterUpdate['orbis/finance_category']).toBe(catB);
+    expect((await entityRow(e.id)).aspects).toEqual(['orbis/financial', 'orbis/budget']);
 
     ok(await undoAction(db, { actorUserId: user, actionId: updated.actionId }));
-    const legacy = (await entityRow(e.id)).aspects_legacy as Record<
-      string,
-      Record<string, unknown>
-    >;
-    expect(legacy['orbis/financial']?.category_ref).toBe(catA);
-    expect(legacy['orbis/budget']?.category_ref).toBe(catA);
+    const back = (await entityRow(e.id)).props as Record<string, unknown>;
+    expect(back['orbis/finance_category']).toBe(catA);
   });
 
   test('материализованное умолчание валюты снимается откатом: шов слитого orbis/currency закрыт', async () => {
@@ -552,7 +541,9 @@ describe('undoAction: связи и batch (§7.8)', () => {
     );
     ok(await undoAction(db, { actorUserId: user, actionId: attach.actionId }));
     const row = await entityRow(e.id);
-    expect(row.aspects_legacy).toEqual({}); // аспекта не было — ключ снят целиком
+    // Аспекта до attach не было — откат снимает его целиком, значений не остаётся.
+    expect(row.aspects).toEqual([]);
+    expect(row.props).toEqual({});
   });
 });
 

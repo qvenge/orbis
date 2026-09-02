@@ -123,18 +123,13 @@ async function refEdges(
 ): Promise<Array<{ target: string; property: unknown }>> {
   return await withIdentity(db, user, async (tx) => {
     const rows = (await tx.execute(sql`
-      SELECT target_id, meta->>'property' AS property, relation_type
+      SELECT target_id, meta->>'property' AS property
         FROM relations
        WHERE source_id = ${entityId}::uuid AND role = 'ref'
        ORDER BY target_id`)) as unknown as Array<{
       target_id: string;
       property: string | null;
-      relation_type: string;
     }>;
-    for (const r of rows) {
-      // Переходная колонка — проекция роли, и писать её мимо проекции нельзя (§А4-3).
-      expect(r.relation_type).toBe('ref');
-    }
     return rows.map((r) => ({ target: r.target_id, property: r.property }));
   });
 }

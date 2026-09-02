@@ -335,9 +335,10 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
       target_id: sneakersId,
       role: 'dependency',
     });
+    // Правда ребра — РОЛЬ и только она: производной колонки типа нет ни в базе, ни в
+    // wire-форме (contract-миграция 0017).
     expect(rel.role).toBe('dependency');
-    // Переходная колонка — производная от роли и до 0017 едет рядом
-    expect(rel.relationType).toBe('blocks');
+    expect('relationType' in rel).toBe(false);
 
     const openTasks = 'aspect=orbis/task, orbis/task_status=!done&!cancelled';
     // Без excludeBlocked видны все открытые задачи (после undo шага 5 их три: кроссовки,

@@ -12,9 +12,9 @@ import { newId, ruleAppliesTo } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   appDb,
-  divergentEntityRow,
   executeWithFixtureCategories as execute,
   freshUserId,
+  rawEntityRow,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -160,7 +160,7 @@ test('SQL-предикат области и клиентский ruleAppliesTo 
   // но прямой SQL это может, и стороны обязаны совпасть и здесь: `NOT props ? key` ложно.
   await withIdentity(db, user, async (tx) =>
     tx.insert(entities).values(
-      divergentEntityRow({
+      rawEntityRow({
         ownerId: user,
         id: newId(),
         title: 'КЛЮЧ-NULL',

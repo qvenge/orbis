@@ -29,7 +29,6 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import {
-  aspectsNamedInQueryAst,
   OWNER_LOCALE,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,

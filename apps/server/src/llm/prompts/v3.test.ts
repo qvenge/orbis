@@ -6,7 +6,24 @@
 // имеет права молча потерять нормативные куски слоя 1.
 
 import { describe, expect, test } from 'bun:test';
-import { BUILTIN_ASPECT_IDS, goalAspectSchema } from '@orbis/shared';
+import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_ASPECT_IDS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
+} from '@orbis/shared';
+import { assertEntityProps } from '../../executor/aspects-validate';
+import type { RegistrySnapshot } from '../../registry/load';
+
+/** Снимок «как после свежего пересева»: только встроенные строки реестра. */
+const GOAL_REG: RegistrySnapshot = {
+  properties: new Map(BUILTIN_PROPERTY_META.map((x) => [x.id, x])),
+  aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+  roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+  ownerVersion: 0,
+  systemVersion: 1,
+};
+
 import { extractSuggestions, SUGGESTION_MAX_LEN, SUGGESTIONS_MAX } from '../../ai/suggestions';
 import { SEED_SMART_LISTS } from '../../seed/smart-lists';
 import { SYSTEM_PROMPT_V2 } from './v2';
@@ -62,22 +79,36 @@ describe('SYSTEM_PROMPT_V3 (§7.1 слой 1)', () => {
     const named = [...block.matchAll(/\b(sum|count|latest)\b/g)].map((m) => m[1]);
     expect(new Set(named)).toEqual(new Set(['sum', 'count', 'latest']));
     for (const aggregate of new Set(named)) {
+      // Форму значения даёт РЕЕСТР свойств: `orbis/progress_source` объявлен аспектом
+      // `orbis/goal`, и его json-схема — единственное описание этой формы (§А3-1).
+      // Прежде здесь стояла zod-схема аспекта старой формы — второе описание тех же полей,
+      // снятое «Пересевом мира».
       const progress_source =
         aggregate === 'count'
-          ? { query: 'aspect=orbis/task, status=done', aggregate }
-          : { query: 'aspect=orbis/financial', aggregate, field: 'amount' };
-      const parsed = goalAspectSchema.safeParse({ progress_source, target_value: '24' });
-      expect(parsed.success).toBe(true);
+          ? { query: 'aspect=orbis/task, orbis/task_status=done', aggregate }
+          : { query: 'aspect=orbis/financial', aggregate, field: 'orbis/amount' };
+      expect(() =>
+        assertEntityProps(GOAL_REG, {
+          props: { 'orbis/progress_source': progress_source, 'orbis/target_value': '24' },
+          aspects: ['orbis/goal'],
+        }),
+      ).not.toThrow();
     }
   });
 
   // Поля, названные в промпте, — настоящие ключи схемы. Гард ловит переименование
   // поля аспекта, сделанное без правки промпта.
   test('блок целей: названные поля есть в схеме аспекта', () => {
-    const shape = Object.keys(goalAspectSchema.shape);
+    // Свойства аспекта — по РЕЕСТРУ: локальная часть key совпадает с именем, которое
+    // называет промпт. Гард ловит переименование свойства, сделанное без правки промпта.
+    const declared = new Set(
+      (BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/goal')?.properties ?? []).map((r) =>
+        r.propertyId.split('/').at(-1),
+      ),
+    );
     for (const field of ['target_value', 'progress_source', 'current_value']) {
       expect(SYSTEM_PROMPT_V3).toContain(field);
-      expect(shape).toContain(field);
+      expect(declared).toContain(field);
     }
   });
 

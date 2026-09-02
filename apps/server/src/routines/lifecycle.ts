@@ -26,8 +26,8 @@
 // решение владельца воплощено батчем принятого предложения (source `routine`), и именно
 // его снимает «отмени последнее» (приёмка 3) и откат прогона (приёмка 11, rollback.ts).
 import {
-  type RunProposal as ContractRunProposal,
   BODY_NOTE_PROPERTY,
+  type RunProposal as ContractRunProposal,
   entityThreadId,
   isManualBucket,
   manualBucket,

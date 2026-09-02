@@ -23,7 +23,6 @@
 //    процент клиент выводит из тех же строк точным BigInt (§3.3). Числа с плавающей
 //    точкой контракт этой функции не пересекают вовсе.
 import {
-  aspectsNamedInQueryAst,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   queryAstSchema,

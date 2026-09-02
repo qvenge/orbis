@@ -15,13 +15,8 @@
 // executor'а (`ExecCtx`, `PreparedOp`, `BatchState`, `loadEntityForUpdate`, `parseEnvelope`,
 // `gateEntitlements`…), и вынос стадий превратил бы одностороннюю зависимость в цикл
 // `executor ⇄ relations`. Переехало то, что действительно самостоятельно — язык ролей.
-import {
-  RELATION_ROLE_IDS,
-  type RelationRoleDefinition,
-  type RelationRoleId,
-  ROLE_ENVELOPE_BINDING,
-} from '@orbis/shared';
-import { type SQL, sql } from 'drizzle-orm';
+import type { RelationRoleDefinition } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
 import { ExecError } from './errors';

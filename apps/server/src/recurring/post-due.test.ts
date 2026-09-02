@@ -9,9 +9,9 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
-  divergentEntityRow,
   executeWithFixtureCategories as execute,
   freshUserId,
+  rawEntityRow,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -415,7 +415,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
 
     await withIdentity(db, user, (tx) =>
       tx.insert(entities).values([
-        divergentEntityRow({
+        rawEntityRow({
           ownerId: user,
           id: detached,
           title: 'Инстанс без аспекта финансов',
@@ -429,7 +429,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
           },
           aspects: [],
         }),
-        divergentEntityRow({
+        rawEntityRow({
           ownerId: user,
           id: notPlanned,
           title: 'Инстанс уже факт',

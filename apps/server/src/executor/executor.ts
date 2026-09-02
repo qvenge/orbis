@@ -20,7 +20,6 @@ import {
   entityUpdateExecInput,
   newId,
   type PreconditionMismatch,
-  ROLE_ENVELOPE_BINDING,
   ROLE_INSTANCE_OF,
   RULE_NEAREST_ANCESTOR,
   relationCreateInput,
@@ -37,7 +36,7 @@ import {
   queryRefsFromDoc,
 } from '@orbis/shared/doc';
 import { OWNER_LOCALE } from '@orbis/shared/query';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   assertEnvelopeUnique,
@@ -104,7 +103,6 @@ import {
   resolveEntityTitles,
 } from './invariants';
 import {
-  type AspectsMap,
   applyTaskCompletion,
   assertFinancialInvariant,
   dropStaleCarryover,
@@ -770,7 +768,7 @@ export function touchesBudgetContour(
   return named.some((a) => (BUDGET_CONTOUR_ASPECTS as readonly string[]).includes(a));
 }
 
-/** Новая форма `aspects` во ВХОДЕ: у неё нет ключей, кроме attach/detach (см. fromLegacyInput). */
+/** Форма `aspects` во ВХОДЕ-ПАТЧЕ: у неё нет ключей, кроме attach/detach. */
 function isAspectsPatchInput(value: object): value is { attach?: string[]; detach?: string[] } {
   return Object.keys(value).every((k) => k === 'attach' || k === 'detach');
 }
@@ -1100,14 +1098,13 @@ function budgetHookBranches(
   unbind: boolean;
 } {
   const { before, after } = hook;
-  // «Аспект висит на сущности» — это ровно `aspects[]`, без обхода значений: наличие
-  // ключа в старой карте выражало тот же факт (`legacy-form.ts:projectLegacyAspects`
-  // клал пустой объект даже аспекту без единого значения).
-  const hadFinancial = before !== null && before.aspects.includes('orbis/financial');
+  // «Аспект висит на сущности» — это ровно `aspects[]`, без обхода значений: наличие ключа
+  // в снятой карте выражало тот же факт (её проекция клала пустой объект даже аспекту без
+  // единого значения).
+  const hadFinancial = before?.aspects.includes('orbis/financial') === true;
   const hasFinancial = after.aspects.includes('orbis/financial');
   const touchesBudget =
-    (before !== null && before.aspects.includes('orbis/budget')) ||
-    after.aspects.includes('orbis/budget');
+    before?.aspects.includes('orbis/budget') === true || after.aspects.includes('orbis/budget');
   const archivedChanged = before !== null && before.archived !== after.archived;
   return {
     // (в) сущность ПЕРЕСТАЛА быть транзакцией: detach orbis/financial. Ветка (а) сюда не
@@ -2228,7 +2225,7 @@ async function loadBothEndsForUpdate(
   return { source, target };
 }
 
-function hasAspect(row: EntityRow, aspectId: string): boolean {
+function _hasAspect(row: EntityRow, aspectId: string): boolean {
   return row.aspects.includes(aspectId);
 }
 

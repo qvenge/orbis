@@ -17,15 +17,16 @@ import {
   MAX_ANALYZE_ROW_CHARS,
   MAX_IMPORT_ROWS,
   newId,
+  ROLE_ENVELOPE_BINDING,
 } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
-  divergentEntityRow,
   entityColumns,
   freshUserId,
+  rawEntityRow,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -314,7 +315,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     });
     await withIdentity(db, user, (tx) =>
       tx.insert(entities).values(
-        divergentEntityRow({
+        rawEntityRow({
           ownerId: user,
           id: newId(),
           title: 'пятерочка → Еда',
@@ -728,16 +729,14 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       fileHash: FILE_A,
       items: [{ row: blank, action: 'create', categoryRef: foodId }],
     });
-    const aspects = await withIdentity(db, user, (tx) =>
+    const created = await withIdentity(db, user, (tx) =>
       tx
-        .select({ aspectsLegacy: entities.aspectsLegacy })
+        .select({ props: entities.props })
         .from(entities)
         .where(eq(entities.id, r.entityIds[0] as string)),
     );
-    const financial = (aspects[0]?.aspectsLegacy as Record<string, Record<string, unknown>>)[
-      'orbis/financial'
-    ];
-    expect(financial).not.toHaveProperty('bank_txn_id'); // ключа нет вовсе, не пустая строка
+    // Ключа нет ВОВСЕ, а не пустая строка: пустое тождество импорта не заводится.
+    expect(created[0]?.props).not.toHaveProperty('orbis/bank_txn_id');
 
     // (2) ID длиннее аспектных 128 символов отклоняется НА ГРАНИЦЕ (review), а не
     // неспецифичной ошибкой схемы аспекта посреди confirm
@@ -1050,7 +1049,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     const envelopeId = newId();
     await withIdentity(db, user, (tx) =>
       tx.insert(entities).values(
-        divergentEntityRow({
+        rawEntityRow({
           ownerId: user,
           id: envelopeId,
           title: 'Конверт Еда (только props)',
@@ -1087,7 +1086,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       tx
         .select({ sourceId: relations.sourceId })
         .from(relations)
-        .where(eq(relations.relationType, 'parent')),
+        .where(eq(relations.role, ROLE_ENVELOPE_BINDING)),
     );
     expect(parents.map((x) => x.sourceId)).toEqual([envelopeId]);
   });
@@ -1150,7 +1149,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       tx
         .select({ targetId: relations.targetId })
         .from(relations)
-        .where(eq(relations.relationType, 'parent')),
+        .where(eq(relations.role, ROLE_ENVELOPE_BINDING)),
     );
     expect(parents).toHaveLength(1);
   });

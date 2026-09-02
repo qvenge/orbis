@@ -1,17 +1,11 @@
 // packages/shared/src/registry/value-schema.test.ts
-// Генератор схем значений (§А7-1) и переходная карта «поле старого аспекта → свойство».
-// Карта проверяется здесь же, а не отдельным файлом: она умирает Задачей 23 вместе с
-// zod-схемами, и второй тест-файл пришлось бы удалять тем же движением.
+// Генератор схем значений (§А7-1).
+//
+// Переходная карта «поле старого аспекта → свойство» проверялась здесь же и снята вместе с
+// собой: «Пересев мира» удалил `registry/legacy-field-map.ts` целиком, а с ним — и класс
+// вопросов «как старое имя переводится в адрес». Адрес теперь один (§А5-3а).
 import { describe, expect, test } from 'bun:test';
-import { BUILTIN_ASPECT_IDS } from '../constants';
-import { ASPECT_SCHEMAS, legacyAspectJsonSchema } from '../schemas/aspects';
-import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
-import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
-import {
-  legacyAspectsToProps,
-  legacyFieldToProperty,
-  propertyToLegacyField,
-} from './legacy-field-map';
+import { BUILTIN_PROPERTY_META } from './builtin-properties';
 import { assertPatternRegular } from './property-type';
 import type { PropertyType } from './types';
 import { propertyValueJsonSchema, X_ORBIS_DECIMAL, X_ORBIS_TYPE } from './value-schema';
@@ -23,6 +17,17 @@ const typeOf = (id: string): PropertyType => {
   return def.type;
 };
 const schemaOf = (id: string) => propertyValueJsonSchema(typeOf(id));
+
+/**
+ * Точные тексты паттернов трёх временных форм — пин, а не «какой-нибудь regexp».
+ *
+ * Вторая копия у них УЖЕ БЫЛА и с ней здесь и сверялись: до «Пересева мира» те же тексты
+ * жили в zod-схемах аспектов. Копия осталась одна — генератор; чтобы её правка не прошла
+ * молча, текст назван литералом.
+ */
+const DATE_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
+const ISO_PATTERN = '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$';
+const HHMM_PATTERN = '^([01]\\d|2[0-3]):[0-5]\\d$';
 
 describe('propertyValueJsonSchema: словарь типов §А2-2 → JSON Schema значения', () => {
   test('text: голый текст, границы длины, pattern и все четыре format', () => {
@@ -93,22 +98,14 @@ describe('propertyValueJsonSchema: словарь типов §А2-2 → JSON Sc
     });
   });
 
-  test('date/timestamp/time: паттерны — те же тексты, что у старых zod-схем', () => {
-    const legacyTask = legacyAspectJsonSchema('orbis/task') as {
-      properties: { due_date: { pattern: string }; completed_at: { pattern: string } };
-    };
-    expect(schemaOf('orbis/due_date')).toMatchObject({
-      pattern: legacyTask.properties.due_date.pattern,
-    });
-    expect(schemaOf('orbis/completed_at')).toMatchObject({
-      pattern: legacyTask.properties.completed_at.pattern,
-    });
-    const legacyRoutine = legacyAspectJsonSchema('orbis/routine') as {
-      properties: { at: { pattern: string } };
-    };
-    expect(schemaOf('orbis/routine_at')).toMatchObject({
-      pattern: legacyRoutine.properties.at.pattern,
-    });
+  test('date/timestamp/time: паттерны — точные тексты, а не «какой-нибудь» regexp', () => {
+    // Тексты ПИНЯТСЯ литералом. Прежде они сверялись со старыми zod-схемами — вторым
+    // описанием тех же полей, снятым «Пересевом мира»; сверять стало не с чем, а ослабить
+    // проверку до «pattern определён» нельзя: именно эти формы едут в JSON Schema тула и в
+    // ajv записи, и молча расширенный паттерн пропустил бы в граф мусор.
+    expect(schemaOf('orbis/due_date')).toMatchObject({ pattern: DATE_PATTERN });
+    expect(schemaOf('orbis/completed_at')).toMatchObject({ pattern: ISO_PATTERN });
+    expect(schemaOf('orbis/routine_at')).toMatchObject({ pattern: HHMM_PATTERN });
   });
 
   test('select: enum ключей в порядке rank', () => {
@@ -193,9 +190,7 @@ describe('propertyValueJsonSchema: словарь типов §А2-2 → JSON Sc
   });
 
   test('вложенные ISO-моменты прогона несут паттерн, а не голую строку (наследство гейта Задачи 1)', () => {
-    const iso = (
-      legacyAspectJsonSchema('orbis/task') as { properties: { completed_at: { pattern: string } } }
-    ).properties.completed_at.pattern;
+    const iso = ISO_PATTERN;
     const proposal = schemaOf('orbis/run_proposal') as {
       properties: { decided_at: { pattern?: string } };
     };
@@ -210,132 +205,5 @@ describe('propertyValueJsonSchema: словарь типов §А2-2 → JSON Sc
     expect(checkpoint.properties.asked_at.pattern).toBe(iso);
     const reply = schemaOf('orbis/run_reply') as { properties: { at: { pattern?: string } } };
     expect(reply.properties.at.pattern).toBe(iso);
-  });
-});
-
-describe('legacy-field-map: переходная карта «поле аспекта → свойство» (РП-3, умирает Задачей 23)', () => {
-  const legacyFields = (aspectId: string): string[] =>
-    Object.keys(
-      (
-        ASPECT_SCHEMAS[aspectId as keyof typeof ASPECT_SCHEMAS] as {
-          shape: Record<string, unknown>;
-        }
-      ).shape,
-    );
-
-  test('карта покрывает КАЖДОЕ поле всех тринадцати аспектов, кроме удалённого project_id', () => {
-    for (const aspectId of BUILTIN_ASPECT_IDS) {
-      const aspect = BUILTIN_ASPECT_DEFS.find((a) => a.id === aspectId);
-      if (!aspect) throw new Error(`нет аспекта ${aspectId}`);
-      for (const field of legacyFields(aspectId)) {
-        const propertyId = legacyFieldToProperty(aspectId, field);
-        if (aspectId === 'orbis/agent-run' && field === 'project_id') {
-          expect(propertyId).toBeUndefined(); // §А8 удаляет ручную денормализацию
-          continue;
-        }
-        expect(propertyId).toBeString();
-        expect(byId.has(propertyId as string)).toBe(true);
-        // Свойство обязано быть в СВОЁМ аспекте: иначе required проверялся бы не там.
-        expect(aspect.properties.map((p) => p.propertyId)).toContain(propertyId);
-      }
-    }
-  });
-
-  test('поле без карты уезжает под orbis/<имя> и ни разу не совпадает с core-свойством', () => {
-    // Запасное имя выбрано ради читаемого отказа («неизвестное свойство orbis/project_id»).
-    // Оно было бы ловушкой, совпади оно с настоящим id, — этого не случается.
-    for (const aspectId of BUILTIN_ASPECT_IDS) {
-      for (const field of legacyFields(aspectId)) {
-        expect(CORE_PROPERTY_IDS as readonly string[]).not.toContain(`orbis/${field}`);
-      }
-    }
-  });
-
-  test('обратная карта: свойство + аспект → поле; слитые свойства разводятся аспектом', () => {
-    expect(propertyToLegacyField('orbis/task_status', 'orbis/task')).toBe('status');
-    expect(propertyToLegacyField('orbis/finance_category', 'orbis/financial')).toBe('category_ref');
-    expect(propertyToLegacyField('orbis/finance_category', 'orbis/budget')).toBe('category_ref');
-    expect(propertyToLegacyField('orbis/grant', 'orbis/agent-run')).toBe('grant_id');
-    expect(propertyToLegacyField('orbis/task_status', 'orbis/budget')).toBeUndefined();
-  });
-
-  test('legacyAspectsToProps: financial+budget с разной finance_category → conflict; с одинаковой → одно свойство', () => {
-    const same = legacyAspectsToProps({
-      'orbis/financial': { amount: '340.00', direction: 'expense', category_ref: 'cat-1' },
-      'orbis/budget': {
-        category_ref: 'cat-1',
-        limit: '30000.00',
-        period_start: '2026-06-01',
-        period_end: '2026-06-30',
-      },
-    });
-    expect(same.ok).toBe(true);
-    if (!same.ok) throw new Error('недостижимо');
-    expect(same.props['orbis/finance_category']).toBe('cat-1');
-    expect(same.aspects).toEqual(['orbis/financial', 'orbis/budget']);
-
-    const clash = legacyAspectsToProps({
-      'orbis/financial': { amount: '340.00', direction: 'expense', category_ref: 'cat-1' },
-      'orbis/budget': {
-        category_ref: 'cat-2',
-        limit: '30000.00',
-        period_start: '2026-06-01',
-        period_end: '2026-06-30',
-      },
-    });
-    expect(clash.ok).toBe(false);
-    if (clash.ok) throw new Error('недостижимо');
-    expect(clash.conflict.propertyId).toBe('orbis/finance_category');
-    expect(clash.conflict.values).toEqual(['cat-1', 'cat-2']);
-  });
-
-  test('legacyAspectsToProps: currency и grant — те же два слияния В1', () => {
-    const currency = legacyAspectsToProps({
-      'orbis/financial': { currency: 'RUB' },
-      'orbis/budget': { currency: 'USD' },
-    });
-    expect(currency.ok).toBe(false);
-    const grant = legacyAspectsToProps({
-      'orbis/assignment': { grant_id: 'g-1' },
-      'orbis/agent-run': { grant_id: 'g-2' },
-    });
-    expect(grant.ok).toBe(false);
-    if (grant.ok) throw new Error('недостижимо');
-    expect(grant.conflict.propertyId).toBe('orbis/grant');
-  });
-
-  test('перевод форм: progress_source.query строка → Q-AST-объект; mismatches аспект+поле → свойство', () => {
-    const goal = legacyAspectsToProps({
-      'orbis/goal': { progress_source: { query: 'aspect=orbis/note', aggregate: 'count' } },
-    });
-    if (!goal.ok) throw new Error('недостижимо');
-    expect(goal.props['orbis/progress_source']).toEqual({
-      query: { text: 'aspect=orbis/note' },
-      aggregate: 'count',
-    });
-    const run = legacyAspectsToProps({
-      'orbis/agent-run': {
-        proposal: {
-          pending_id: 'p-1',
-          status: 'stale',
-          mismatches: [{ aspect: 'orbis/task', field: 'status', note: 'уже done' }],
-        },
-      },
-    });
-    if (!run.ok) throw new Error('недостижимо');
-    expect(run.props['orbis/run_proposal']).toEqual({
-      pending_id: 'p-1',
-      status: 'stale',
-      mismatches: [{ property: 'orbis/task_status', note: 'уже done' }],
-    });
-  });
-
-  test('нераспознанные формы не переписываются: их обязана отвергнуть схема, а не карта', () => {
-    const goal = legacyAspectsToProps({ 'orbis/goal': { progress_source: { query: 123 } } });
-    if (!goal.ok) throw new Error('недостижимо');
-    expect(goal.props['orbis/progress_source']).toEqual({ query: 123 });
-    const run = legacyAspectsToProps({ 'orbis/agent-run': { proposal: { mismatches: 'нет' } } });
-    if (!run.ok) throw new Error('недостижимо');
-    expect(run.props['orbis/run_proposal']).toEqual({ mismatches: 'нет' });
   });
 });

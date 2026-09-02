@@ -398,29 +398,6 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect((status?.[X_ORBIS_TYPE] as { kind?: string } | undefined)?.kind).toBe('select');
   });
 
-  test('колонка aspect_definitions.schema тулу БОЛЬШЕ НЕ ИСТОЧНИК: она в БД есть, а схема тула другая', async () => {
-    // Пин перевода: пока обе формы совпадали бы, «читаем реестр» было бы недоказуемо.
-    // Колонка старой формы адресует поле локальным именем (`status`), реестр — key.
-    const defs = await registryFor(userB);
-    const rows = await withIdentity(db, userB, (tx) =>
-      tx
-        .select({ schema: aspectDefinitions.schema })
-        .from(aspectDefinitions)
-        .where(
-          sql`${aspectDefinitions.id} = 'orbis/task' AND ${isNull(aspectDefinitions.ownerId)}`,
-        ),
-    );
-    const column = rows[0]?.schema as { properties?: Record<string, unknown> } | null;
-    expect(Object.keys(column?.properties ?? {})).toContain('status');
-    const data = (
-      defOf(defs, 'attach_orbis_task').inputJsonSchema.properties as Record<
-        string,
-        Record<string, unknown>
-      >
-    ).data;
-    expect(Object.keys(data?.properties ?? {})).not.toContain('status');
-  });
-
   test('служебный аспект (колонка service) тула не получает — и это ЕДИНСТВЕННЫЙ такой', async () => {
     const names = (await registryFor(userB)).map((d) => d.name);
     const service = BUILTIN_ASPECT_DEFS.filter((a) => a.service);

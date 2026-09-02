@@ -3,7 +3,6 @@
 // словаря kind, строгость форм и паспорт RE2 у паттернов (без него сгенерированная схема
 // не компилируется у внешнего потребителя — причина `strict:false` D29, §А2-2).
 import { expect, test } from 'bun:test';
-import { financialAspectSchema } from '../schemas/aspects';
 import { BUILTIN_PROPERTY_META } from './builtin-properties';
 import {
   aspectDefinitionSchema,
@@ -78,15 +77,10 @@ test('словарь закрыт: неизвестный kind отвергае�
 });
 
 test('decimal: exclusiveMin вместо lookahead; assertPatternRegular отвергает (?= и \\1', () => {
-  // Сегодняшняя форма «строго > 0» — паттерн с negative lookahead (aspects.ts:27-29):
-  // именно он лежит вне RE2 и вынудил `strict:false` D29.
-  const checks = financialAspectSchema.shape.amount._def.checks;
-  const regexCheck = checks.find(
-    (c): c is Extract<(typeof checks)[number], { kind: 'regex' }> => c.kind === 'regex',
-  );
-  expect(regexCheck).toBeDefined();
-  expect(regexCheck?.regex.source).toContain('(?!');
-
+  // ПРЕЖНЯЯ форма «строго > 0» была паттерном с negative lookahead — тем самым, что лежит
+  // вне RE2 и вынудил `strict:false` D29. Её носитель (zod-схема аспекта) снят «Пересевом
+  // мира» вместе со старой формой, поэтому сравнивать здесь больше не с чем: остаётся
+  // утверждение про НОВУЮ форму и про то, что генератор такой паттерн отвергает (ниже).
   // Новая форма — граница ТИПА, а не паттерн (§А8, строки amount/target_value).
   const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
   expect(byId.get('orbis/amount')?.type).toEqual({ kind: 'decimal', exclusiveMin: '0' });

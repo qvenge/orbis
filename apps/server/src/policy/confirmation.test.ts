@@ -6,12 +6,7 @@
 // Вместе они закрывают контракт-заглушку shared/contracts/confirmation-policy.test.ts
 // (describe.skip удалён этой задачей).
 import { describe, expect, test } from 'bun:test';
-import {
-  BUILTIN_ASPECT_DEFS,
-  BUILTIN_PROPERTY_META,
-  legacyFieldToProperty,
-  newId,
-} from '@orbis/shared';
+import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, newId } from '@orbis/shared';
 import { ROUTINE_UNTOUCHABLE_OBJECTS } from '../executor/invariants';
 import type { ActorKind } from '../executor/types';
 import type { RegistrySnapshot } from '../registry/load';
@@ -903,11 +898,6 @@ describe('адреса доверенности ≡ реестр (Minor-4)', () 
     // Обязательность — не мелочь: на ней стоит довод, почему «назвать белый список = выдача»
     // не шумит (`autonomyArmed`), и почему консервативный вариант пробы был отклонён.
     expect([...AUTONOMY_PROPERTIES]).toEqual([ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY]);
-  });
-
-  test('переходная карта @orbis/shared ведёт на те же два адреса', () => {
-    expect(legacyFieldToProperty('orbis/routine', 'mode')).toBe(ROUTINE_MODE_PROPERTY);
-    expect(legacyFieldToProperty('orbis/routine', 'allowed_tools')).toBe(ROUTINE_TOOLS_PROPERTY);
   });
 
   test('вооружённость считает ОДНА функция: набор и состояние отвечают одинаково', () => {

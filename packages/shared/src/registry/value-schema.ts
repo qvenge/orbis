@@ -39,7 +39,7 @@ export interface DecimalBounds {
 
 /** ISO-дата `YYYY-MM-DD` — тот же текст, что у `dateString` старых схем (`aspects.ts:9`). */
 const DATE_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
-/** ISO 8601 с зоной — тот же текст, что у `timestampString` (`aspects.ts:10-12`). */
+/** ISO 8601 с зоной: единственный текст этой формы в системе (Пересев мира снял второй). */
 const TIMESTAMP_PATTERN =
   '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$';
 /** decimal-строка base-10 без экспоненты; знак разрешён, границу ставит `x-orbis-decimal`. */

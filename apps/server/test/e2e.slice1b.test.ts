@@ -138,9 +138,10 @@ async function entityRow(id: string) {
   return rows[0];
 }
 
-function taskStatus(row: { aspectsLegacy: unknown } | undefined): string | undefined {
-  const aspects = row?.aspectsLegacy as Record<string, Record<string, unknown>> | undefined;
-  return aspects?.['orbis/task']?.status as string | undefined;
+function taskStatus(row: { props: unknown } | undefined): string | undefined {
+  return (row?.props as Record<string, unknown> | undefined)?.['orbis/task_status'] as
+    | string
+    | undefined;
 }
 
 function cardsOf(msg: { metadata: Record<string, unknown> }): Card[] {
@@ -390,10 +391,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     // Статус откатился к in_progress (inverse восстановил ключ; completed_at снят)
     const reverted = await entityRow(task1Id);
     expect(taskStatus(reverted)).toBe('in_progress');
-    expect(
-      (reverted?.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/task']
-        ?.completed_at,
-    ).toBeUndefined();
+    expect((reverted?.props as Record<string, unknown>)['orbis/completed_at']).toBeUndefined();
 
     // Владелец повторным update возвращает статус в done
     await ownerCaller.entity.update({

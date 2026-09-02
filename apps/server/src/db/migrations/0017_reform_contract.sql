@@ -9,8 +9,7 @@
 -- намеренно и держал ровно до перевода всех читателей (expand → migrate → contract).
 -- Каждый DROP ниже — снятие ВТОРОГО экземпляра факта, а не потеря факта.
 --
--- ДАННЫЕ. Значения `entities.aspects_legacy` — проекция `props`/`aspects[]` (её писал
--- `executor/legacy-form.ts`), `relations.relation_type` — проекция `role`
+-- ДАННЫЕ. Значения `entities.aspects_legacy` — проекция `props`/`aspects[]` (её писал снятый этой же задачей модуль проекции), `relations.relation_type` — проекция `role`
 -- (`projectLegacyRelationType`), `aspect_definitions.schema` — производная реестра свойств
 -- (`legacyAspectJsonSchema`). Ни одного независимого факта в трёх колонках нет, поэтому
 -- конверсии перед сносом не требуется, а бэкапом закрыт риск ошибки в самом этом

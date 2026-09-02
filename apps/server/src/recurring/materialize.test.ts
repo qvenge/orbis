@@ -8,15 +8,16 @@ import {
   BUILTIN_ASPECT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  ROLE_INSTANCE_OF,
   recurringInstanceId,
 } from '@orbis/shared';
 import { parseQueryAst, type QueryFilterNode, toParseRegistry } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   appDb,
-  divergentEntityRow,
   executeWithFixtureCategories as execute,
   freshUserId,
+  rawEntityRow,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -90,7 +91,7 @@ async function derivedFrom(owner: string, templateId: string) {
     tx
       .select()
       .from(relations)
-      .where(and(eq(relations.sourceId, templateId), eq(relations.relationType, 'derived_from'))),
+      .where(and(eq(relations.sourceId, templateId), eq(relations.role, ROLE_INSTANCE_OF))),
   );
 }
 
@@ -131,17 +132,14 @@ describe('materializeInstances (01 §5.4)', () => {
     expect(first?.title).toBe('Утренняя пробежка');
     expect(first?.emoji).toBe('🏃');
     expect(first?.tags).toEqual(['health', 'run']);
-    const schedule = (first?.aspectsLegacy as Record<string, Record<string, unknown>>)[
-      'orbis/schedule'
-    ];
-    expect(schedule?.recurrence).toBeUndefined();
+    const firstProps = first?.props as Record<string, unknown>;
+    expect(firstProps['orbis/recurrence']).toBeUndefined();
     // 09:00 Москвы (UTC+3) даты инстанса — время из start_at шаблона
-    expect(schedule?.start_at).toBe('2026-07-01T06:00:00.000Z');
+    expect(firstProps['orbis/start_at']).toBe('2026-07-01T06:00:00.000Z');
     const second = rows.find((row) => row.id === recurringInstanceId(templateId, '2026-07-02'));
-    const secondSchedule = (second?.aspectsLegacy as Record<string, Record<string, unknown>>)[
-      'orbis/schedule'
-    ];
-    expect(secondSchedule?.start_at).toBe('2026-07-02T06:00:00.000Z');
+    expect((second?.props as Record<string, unknown>)['orbis/start_at']).toBe(
+      '2026-07-02T06:00:00.000Z',
+    );
 
     // relation derived_from шаблон→инстанс на каждый инстанс
     const rels = await derivedFrom(owner, templateId);
@@ -293,20 +291,15 @@ describe('materializeInstances (01 §5.4)', () => {
     );
     expect(rows.length).toBe(2);
     for (const row of rows) {
-      const aspects = row.aspectsLegacy as Record<string, Record<string, unknown>>;
-      const fin = aspects['orbis/financial'];
-      expect(fin?.planned).toBe(true);
-      expect(fin?.recurring).toBe(true);
-      expect(fin?.amount).toBe('340.00');
-      expect(fin?.category_ref).toBe(categoryRef);
-      expect(aspects['orbis/schedule']?.recurrence).toBeUndefined();
+      const props = row.props as Record<string, unknown>;
+      expect(props['orbis/planned']).toBe(true);
+      expect(props['orbis/recurring']).toBe(true);
+      expect(props['orbis/amount']).toBe('340.00');
+      expect(props['orbis/finance_category']).toBe(categoryRef);
+      expect(props['orbis/recurrence']).toBeUndefined();
     }
     const dates = rows
-      .map(
-        (row) =>
-          (row.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/financial']
-            ?.occurred_on,
-      )
+      .map((row) => (row.props as Record<string, unknown>)['orbis/occurred_on'])
       .sort();
     expect(dates).toEqual(['2026-07-01', '2026-07-02']);
   });
@@ -481,7 +474,7 @@ describe('materializeInstances (01 §5.4)', () => {
     const ghost = crypto.randomUUID();
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values(
-        divergentEntityRow({
+        rawEntityRow({
           ownerId: owner,
           id: ghost,
           title: 'Расписание снято, правило осталось',

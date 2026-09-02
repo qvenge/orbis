@@ -4,7 +4,6 @@
 // (RLS владельца), собственных мутаций здесь нет.
 import type {
   AgentRunStep,
-  ProposalStatus,
   RoutineMode,
   RoutineStage,
   RunCheckpoint,

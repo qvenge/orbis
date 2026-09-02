@@ -98,7 +98,11 @@ const response = await provider.chat({
 // Первыми строками — что именно проверено: без них зелёный смоук не отличить
 // от зелёного смоука другого провайдера, другой модели или урезанного набора тулов.
 console.log('model     :', provider.modelId);
-console.log('tools     :', tools.length, `(из них attach_*: ${defs.filter((d) => d.name.startsWith('attach_')).length})`);
+console.log(
+  'tools     :',
+  tools.length,
+  `(из них attach_*: ${defs.filter((d) => d.name.startsWith('attach_')).length})`,
+);
 console.log('content   :', JSON.stringify(response.content));
 console.log('toolCalls :', JSON.stringify(response.toolCalls, null, 2));
 console.log('stopReason:', response.stopReason);

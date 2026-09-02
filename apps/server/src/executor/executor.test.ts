@@ -1,7 +1,7 @@
 // Интеграционные тесты executor'а (Task 9): реальная БД под withIdentity, без моков.
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId, propertyToLegacyField } from '@orbis/shared';
+import { BUILTIN_ASPECT_DEFS, newId } from '@orbis/shared';
 import {
   bindQueryBlocks,
   canonicalizeBody,
@@ -81,21 +81,27 @@ function first<T>(items: readonly T[]): T {
 }
 
 /**
- * Данные аспекта в СТАРЫХ именах полей — из новой правды (§А1-1), с внятным падением, если
- * аспект не навешен.
+ * Значения аспекта из wire-формы: срез `props` по свойствам, которые аспект объявляет.
  *
- * Проекция, а не чтение готовой карты: `aspectsMap` ушла из wire-формы вместе с последним
- * читателем (Задача 13c). Имена берёт ТА ЖЕ таблица §А8, которой перевод делает сервер
- * (`propertyToLegacyField`), — второй таблицы соответствий в репозитории нет, и разъехаться
- * проекции теста с проекцией продукта негде. Сам сьют остаётся на СТАРОМ входе исполнителя
- * намеренно: он проверяет именно его (union формы живёт до «Пересева мира», РП-2).
+ * Именно СРЕЗ, а не вся карта свойств: тест спрашивает «что видно ЧЕРЕЗ этот аспект», и
+ * значение свободного свойства (§А1-2) в ответ попадать не должно. Бросок при отсутствии
+ * аспекта — не строгость ради строгости: иначе `.status` вернул бы `undefined` и тест
+ * «поле снялось» зеленел бы на сущности, у которой аспекта и не было.
+ *
+ * Ключи — id СВОЙСТВ, и второго имени у значения нет: старые имена полей аспекта
+ * (`status`, `amount`) снял «Пересев мира» вместе с их картой.
  */
-function aspectOf(source: { props: Record<string, unknown>; aspects: string[] }, id: string) {
+function propsOfAspect(
+  source: { props: Record<string, unknown>; aspects: string[] },
+  id: string,
+): Record<string, unknown> {
   if (!source.aspects.includes(id)) throw new Error(`ожидался аспект ${id}`);
+  const declared = new Set(
+    (BUILTIN_ASPECT_DEFS.find((a) => a.id === id)?.properties ?? []).map((r) => r.propertyId),
+  );
   const out: Record<string, unknown> = {};
   for (const [propertyId, value] of Object.entries(source.props)) {
-    const field = propertyToLegacyField(propertyId, id);
-    if (field !== undefined) out[field] = value;
+    if (declared.has(propertyId)) out[propertyId] = value;
   }
   return out;
 }
@@ -337,10 +343,10 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       }),
     );
     const eDone = firstEntity(done);
-    const task = aspectOf(eDone, 'orbis/task');
-    expect(task.status).toBe('done');
-    expect(task.priority).toBe('high'); // сохранился
-    expect(task.completed_at).toBe(T0.toISOString()); // проставлен clock() (§3.2)
+    const task = propsOfAspect(eDone, 'orbis/task');
+    expect(task['orbis/task_status']).toBe('done');
+    expect(task['orbis/priority']).toBe('high'); // сохранился
+    expect(task['orbis/completed_at']).toBe(T0.toISOString()); // проставлен clock() (§3.2)
 
     // откат из done → completed_at очищен
     const back = await execute(
@@ -352,8 +358,8 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       }),
     );
     const eBack = firstEntity(back);
-    expect(aspectOf(eBack, 'orbis/task').status).toBe('planned');
-    expect('completed_at' in aspectOf(eBack, 'orbis/task')).toBe(false);
+    expect(propsOfAspect(eBack, 'orbis/task')['orbis/task_status']).toBe('planned');
+    expect('orbis/completed_at' in propsOfAspect(eBack, 'orbis/task')).toBe(false);
   });
 
   test('5b. поле null внутри аспекта → удалено; аспект null → detach', async () => {
@@ -367,8 +373,8 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       }),
     );
     const e1 = firstEntity(noPriority);
-    expect('priority' in aspectOf(e1, 'orbis/task')).toBe(false);
-    expect(aspectOf(e1, 'orbis/task').status).toBe('inbox'); // остальное не тронуто
+    expect('orbis/priority' in propsOfAspect(e1, 'orbis/task')).toBe(false);
+    expect(propsOfAspect(e1, 'orbis/task')['orbis/task_status']).toBe('inbox'); // остальное не тронуто
 
     const detached = await execute(
       db,
@@ -478,10 +484,10 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       tx.execute(sql`SELECT props, aspects FROM entities WHERE id = ${e.id}`),
     );
     const stored = rows[0] as { props: Record<string, unknown>; aspects: string[] };
-    const task = aspectOf(stored, 'orbis/task');
-    expect(task.status).toBe('in_progress'); // правка A не потеряна
-    expect(task.due_date).toBe('2026-07-05'); // правка B не потеряна
-    expect(task.priority).toBe('low'); // исходное поле цело
+    const task = propsOfAspect(stored, 'orbis/task');
+    expect(task['orbis/task_status']).toBe('in_progress'); // правка A не потеряна
+    expect(task['orbis/due_date']).toBe('2026-07-05'); // правка B не потеряна
+    expect(task['orbis/priority']).toBe('low'); // исходное поле цело
   });
 });
 
@@ -613,8 +619,8 @@ describe('executor: RLS и attach', () => {
       { sink },
     );
     const e1 = firstEntity(good);
-    expect(aspectOf(e1, 'orbis/task').status).toBe('done');
-    expect(aspectOf(e1, 'orbis/task').completed_at).toBe(T0.toISOString()); // done при attach
+    expect(propsOfAspect(e1, 'orbis/task')['orbis/task_status']).toBe('done');
+    expect(propsOfAspect(e1, 'orbis/task')['orbis/completed_at']).toBe(T0.toISOString()); // done при attach
     // inverse — дельта состояний (§А7-4): снятие ровно тех свойств, что attach добавил,
     // плюс detach аспекта, которого не было. `completed_at` проставила нормализация §3.2,
     // мимо входа тула, — и она обязана быть в откате наравне со статусом
@@ -1165,9 +1171,13 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
   /** Сид под предусловие: id задаётся явно — гонка обязана ссылаться на ОДНУ строку. */
   async function create(
     id: string,
-    aspects: Record<string, Record<string, unknown>>,
+    props: Record<string, unknown>,
+    aspects: string[] = ['orbis/task'],
   ): Promise<void> {
-    const r = await execute(db, req('entity_create', { id, title: 'Тикет', tags: [], aspects }));
+    const r = await execute(
+      db,
+      req('entity_create', { id, title: 'Тикет', tags: [], props, aspects }),
+    );
     expect(r.ok).toBe(true);
   }
 
@@ -1182,13 +1192,13 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
 
   test('предусловие выполнено → запись; не выполнено → CONFLICT с details {precondition, actual}', async () => {
     const id = newId();
-    await create(id, { 'orbis/task': { status: 'planned', priority: 'high' } });
+    await create(id, { 'orbis/task_status': 'planned', 'orbis/priority': 'high' });
 
     const ok = await execute(db, capture(id));
     expect(ok.ok).toBe(true);
-    const task = aspectOf(firstEntity(ok), 'orbis/task');
-    expect(task.status).toBe('in_progress');
-    expect(task.priority).toBe('high'); // предусловие не подменяет merge §9.2
+    const task = propsOfAspect(firstEntity(ok), 'orbis/task');
+    expect(task['orbis/task_status']).toBe('in_progress');
+    expect(task['orbis/priority']).toBe('high'); // предусловие не подменяет merge §9.2
 
     // Повтор: тикет уже захвачен — честный CONFLICT, а не STALE_VERSION и не молчаливая запись.
     const again = await execute(db, capture(id));
@@ -1214,7 +1224,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // Пять раундов подряд: одиночный зелёный раунд ничего не доказывает про CAS.
     for (let round = 0; round < 5; round++) {
       const id = newId();
-      await create(id, { 'orbis/task': { status: 'planned' } });
+      await create(id, { 'orbis/task_status': 'planned' });
       const op = () => execute(db, capture(id));
       const [a, b] = await Promise.all([op(), op()]);
       expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
@@ -1269,17 +1279,17 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // поэтому эти два случая различают ровно одно: читает ли предусловие ту же строку,
     // что и merge, или делает свой SELECT мимо виртуального состояния.
     const seen = newId();
-    await create(seen, { 'orbis/task': { status: 'planned' } });
+    await create(seen, { 'orbis/task_status': 'planned' });
     const applied = await execute(db, batchReq(capturedThen(seen, ['in_progress'])));
     expect(applied.ok).toBe(true);
     const second = (applied as ExecuteOk).results[1] as WireEntity;
-    const after = aspectOf(second, 'orbis/task');
-    expect(after.status).toBe('in_progress');
-    expect(after.priority).toBe('high');
+    const after = propsOfAspect(second, 'orbis/task');
+    expect(after['orbis/task_status']).toBe('in_progress');
+    expect(after['orbis/priority']).toBe('high');
 
     // Зеркало: предусловие на ДОБАТЧЕВОЕ значение не выполняется, и batch атомарно откатан.
     const stale = newId();
-    await create(stale, { 'orbis/task': { status: 'planned' } });
+    await create(stale, { 'orbis/task_status': 'planned' });
     const r = await execute(db, batchReq(capturedThen(stale, ['planned'])));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('CONFLICT');
@@ -1291,7 +1301,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
 
   test('предусловие по свойству, которого у записи НЕТ → CONFLICT (actual undefined)', async () => {
     const id = newId();
-    await create(id, { 'orbis/note': {} });
+    await create(id, {}, ['orbis/note']);
 
     const r = await execute(db, capture(id));
     expect(r.ok).toBe(false);
@@ -1317,7 +1327,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // «проигранной гонкой», заставляла бы её перезапускать заведомо невыполнимое условие —
     // до самого капа попыток, каждый раз с тем же исходом.
     const id = newId();
-    await create(id, { 'orbis/task': { status: 'planned' } });
+    await create(id, { 'orbis/task_status': 'planned' });
     const r = await execute(
       db,
       req('entity_update', {
@@ -1348,7 +1358,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // Захват «тикета», у которого нужного свойства нет вовсе, проходил бы по одной опечатке
     // в предусловии — молча и ровно там, где вся конструкция и нужна.
     const id = newId();
-    await create(id, { 'orbis/note': {} });
+    await create(id, {}, ['orbis/note']);
     const r = await execute(
       db,
       req('entity_update', {
@@ -1370,7 +1380,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
 
   test('форма absent (V1.7): значения нет → запись; появилось → CONFLICT с expected "absent"', async () => {
     const id = newId();
-    await create(id, { 'orbis/task': { status: 'planned' } });
+    await create(id, { 'orbis/task_status': 'planned' });
 
     /** «Проставить срок, пока его не проставили» — ровно та правка, что не должна затирать чужую. */
     const setDue = () =>
@@ -1386,7 +1396,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
 
     const ok = await setDue();
     expect(ok.ok).toBe(true);
-    expect(aspectOf(firstEntity(ok), 'orbis/task').due_date).toBe('2026-08-20');
+    expect(propsOfAspect(firstEntity(ok), 'orbis/task')['orbis/due_date']).toBe('2026-08-20');
 
     // Повтор: значение уже есть — предусловие «пока его НЕТ» больше не выполнено.
     const again = await setDue();
@@ -1405,7 +1415,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // Запись без аспекта-носителя — тоже «значения нет»: иначе первую же запись свойства под
     // absent (её главный случай) нельзя было бы защитить от гонки.
     const bare = newId();
-    await create(bare, { 'orbis/note': {} });
+    await create(bare, {}, ['orbis/note']);
     const attached = await execute(
       db,
       req('entity_update', {
@@ -1416,7 +1426,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       }),
     );
     expect(attached.ok).toBe(true);
-    expect(aspectOf(firstEntity(attached), 'orbis/task').status).toBe('planned');
+    expect(propsOfAspect(firstEntity(attached), 'orbis/task')['orbis/task_status']).toBe('planned');
   });
 
   test('absent при заданном `default` остаётся absent: «поля нет» ≠ «поле равно умолчанию» (РП-9)', async () => {
@@ -1425,14 +1435,16 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // предусловие «этого поля ещё не касались» перестало бы отличать нетронутую транзакцию
     // от той, где владелец руками поставил `false`.
     const id = newId();
-    await create(id, {
-      'orbis/financial': {
-        amount: '10.00',
-        direction: 'expense',
-        category_ref: CATEGORY_REF,
-        occurred_on: '2026-07-04',
+    await create(
+      id,
+      {
+        'orbis/amount': '10.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CATEGORY_REF,
+        'orbis/occurred_on': '2026-07-04',
       },
-    });
+      ['orbis/financial'],
+    );
 
     // Поля нет — absent ВЫПОЛНЕНО (хотя читатель увидел бы у него false по умолчанию).
     const first = await execute(
@@ -1476,14 +1488,16 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // `JSON.stringify`, предусловие по сумме давало ЛОЖНЫЙ CONFLICT — «кто-то опередил» там,
     // где не опередил никто, — и отложенная правка транзакции протухала на ровном месте.
     const id = newId();
-    await create(id, {
-      'orbis/financial': {
-        amount: '10.00',
-        direction: 'expense',
-        category_ref: CATEGORY_REF,
-        occurred_on: '2026-07-04',
+    await create(
+      id,
+      {
+        'orbis/amount': '10.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CATEGORY_REF,
+        'orbis/occurred_on': '2026-07-04',
       },
-    });
+      ['orbis/financial'],
+    );
 
     const ok = await execute(
       db,
@@ -1495,7 +1509,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       }),
     );
     expect(ok.ok).toBe(true);
-    expect(aspectOf(firstEntity(ok), 'orbis/financial').counterparty).toBe('Кофейня');
+    expect(propsOfAspect(firstEntity(ok), 'orbis/financial')['orbis/counterparty']).toBe('Кофейня');
 
     const other = await execute(
       db,
@@ -1521,7 +1535,9 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     // превращается в угадайку. Бросок при этом один — предусловие не выполнено целиком.
     const id = newId();
     await create(id, {
-      'orbis/task': { status: 'in_progress', priority: 'high', due_date: '2026-08-20' },
+      'orbis/task_status': 'in_progress',
+      'orbis/priority': 'high',
+      'orbis/due_date': '2026-08-20',
     });
 
     const r = await execute(
@@ -1568,11 +1584,12 @@ describe('§А1-3: core-свойства в предусловии — коло�
   /** Сид с явным id: предусловие обязано ссылаться на ОДНУ конкретную строку. */
   async function create(
     id: string,
-    aspects: Record<string, Record<string, unknown>> = { 'orbis/note': {} },
+    props: Record<string, unknown> = {},
+    aspects: string[] = ['orbis/note'],
   ): Promise<void> {
     const r = await execute(
       db,
-      req('entity_create', { id, title: 'Цель отложки', tags: [], aspects }),
+      req('entity_create', { id, title: 'Цель отложки', tags: [], props, aspects }),
     );
     expect(r.ok).toBe(true);
   }
@@ -1788,7 +1805,7 @@ describe('§А1-3: core-свойства в предусловии — коло�
     // Порядок и полнота списка расхождений — прежние: core-свойство встраивается в тот же
     // цикл, а не обрабатывается отдельным проходом.
     const id = newId();
-    await create(id, { 'orbis/task': { status: 'in_progress' } });
+    await create(id, { 'orbis/task_status': 'in_progress' });
     const r = await execute(
       db,
       req('entity_update', {

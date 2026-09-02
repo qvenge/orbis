@@ -16,9 +16,9 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
-  divergentEntityRow,
   executeWithFixtureCategories as execute,
   freshUserId,
+  rawEntityRow,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -190,69 +190,6 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(action?.source).toBe('chat');
     expect(action?.actor_user_id).toBe(userA);
     if (r.card?.kind === 'entity_card') expect(action?.id).toBe(r.card.undoActionId as string);
-  });
-
-  // Проба расхождением колонок (§А1-1) для КАРТОЧКИ. До Задачи 12 её половины читались из
-  // РАЗНЫХ колонок: список аспектов — из новой правды, значения `keyFields` — из старой
-  // проекции. Теперь обе читаются из новой (`aspects[]` и `props`), и проба проверяет
-  // именно это: опустевшая проекция карточку НЕ трогает вовсе. Разводит колонки админ-DSN
-  // мимо исполнителя; единственный путь, читающий такую строку и НИЧЕГО в ней не
-  // переписывающий, — идемпотентный replay одиночного `entity_create` (стадия 3 отдаёт
-  // `toWire` прочитанной строки).
-  test('карточка читает ТОЛЬКО новую правду: опустевшая проекция не меняет ни аспектов, ни keyFields', async () => {
-    const id = newId();
-    const input = {
-      id,
-      title: 'Задача с расхождением колонок',
-      tags: [],
-      props: { 'orbis/task_status': 'inbox' },
-      aspects: ['orbis/task'],
-    };
-    const first = await dispatchTool(ctxFor(), 'entity_create', input);
-    expect(first.status).toBe('ok');
-    if (first.status !== 'ok' || first.card?.kind !== 'entity_card') {
-      throw new Error('ожидалась карточка сущности');
-    }
-    expect(first.card.aspects).toEqual(['orbis/task']);
-    expect(first.card.keyFields).toEqual({ 'orbis/task_status': 'inbox' });
-
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      const before = await admin
-        .select({ aspectsLegacy: entities.aspectsLegacy, aspects: entities.aspects })
-        .from(entities)
-        .where(eq(entities.id, id));
-      // Подтверждение подстановки: до правки проекция ключ НЕСЛА, иначе проба была бы
-      // вакуумной — «удалили то, чего и не было».
-      expect(Object.keys((before[0]?.aspectsLegacy ?? {}) as object)).toEqual(['orbis/task']);
-      expect(before[0]?.aspects).toEqual(['orbis/task']);
-      await admin.update(entities).set({ aspectsLegacy: {} }).where(eq(entities.id, id));
-    } finally {
-      await adminClient.end();
-    }
-
-    const replay = await dispatchTool(ctxFor(), 'entity_create', input);
-    expect(replay.status).toBe('ok');
-    if (replay.status !== 'ok' || replay.card?.kind !== 'entity_card') {
-      throw new Error('ожидалась карточка сущности');
-    }
-    // Обе половины пережили опустевшую проекцию: список — из `aspects[]`, значения — из
-    // `props`. Именно вторая строка и есть перевод Задачи 12: до неё она была бы `{}`.
-    expect(replay.card.aspects).toEqual(['orbis/task']);
-    expect(replay.card.keyFields).toEqual({ 'orbis/task_status': 'inbox' });
-
-    // Подтверждение, что правка колонок ДЕЙСТВИТЕЛЬНО состоялась и проба не вакуумна:
-    // проекция на строке пуста, а карточка выше её содержимое всё равно назвала.
-    const { db: check, client: checkClient } = adminDb();
-    try {
-      const after = await check
-        .select({ aspectsLegacy: entities.aspectsLegacy })
-        .from(entities)
-        .where(eq(entities.id, id));
-      expect(after[0]?.aspectsLegacy).toEqual({});
-    } finally {
-      await checkClient.end();
-    }
   });
 
   // V1.5: прогон — вторая половина атрибуции. Без него правка модели неотличима от
@@ -1565,13 +1502,9 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     }
     // Гейт стоит ДО записи: статус тикета не изменился, связь проект→тикет на месте
     const rows = await withIdentity(db, owner, (tx) =>
-      tx
-        .select({ aspectsLegacy: entities.aspectsLegacy })
-        .from(entities)
-        .where(eq(entities.id, ticket.id)),
+      tx.select({ props: entities.props }).from(entities).where(eq(entities.id, ticket.id)),
     );
-    const task = (rows[0]?.aspectsLegacy as { 'orbis/task'?: { status?: string } })['orbis/task'];
-    expect(task?.status).toBe('planned');
+    expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('planned');
   });
 
   test('worker: entity_get / entity_query / budget_status исполняются', async () => {
@@ -1872,11 +1805,7 @@ describe('CAS-предусловие не протекает в путь мод�
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select().from(entities).where(eq(entities.id, target.id)),
     );
-    expect(
-      (rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/task'],
-    ).toEqual({
-      status: 'planned',
-    });
+    expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('planned');
   });
 
   test('precondition внутри операции batch_execute — VALIDATION с индексом операции', async () => {
@@ -1908,11 +1837,7 @@ describe('CAS-предусловие не протекает в путь мод�
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select().from(entities).where(eq(entities.id, target.id)),
     );
-    expect(
-      (rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/task'],
-    ).toEqual({
-      status: 'planned',
-    });
+    expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('planned');
   });
 });
 
@@ -3678,7 +3603,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     const ghostRoutine = newId();
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values(
-        divergentEntityRow({
+        rawEntityRow({
           ownerId: owner,
           id: ghostRoutine,
           title: 'Рутина только в props',

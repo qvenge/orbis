@@ -9,9 +9,9 @@ import { newId, type RunSummary } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   appDb,
-  divergentEntityRow,
   executeWithFixtureCategories as execute,
   freshUserId,
+  rawEntityRow,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -311,11 +311,10 @@ describe('activeRoutines / routineById (V1.13)', () => {
 });
 
 describe('assignedTickets: очередь исполнителя читает НОВУЮ правду (§А1-1)', () => {
-  // Проба расхождением: на интервале дуальной записи обе колонки заполняет один писатель,
-  // поэтому перевод читателя с одной на другую поведением НЕ наблюдаем, пока они равны.
-  // Здесь они говорят РАЗНОЕ — и обе стороны границы обязаны краснеть по отдельности:
-  // «вернуть всё» ловит строка со снятым аспектом, «вернуть ничего» — строка, назначение
-  // которой записано только в новой форме.
+  // Обе стороны границы краснеют по отдельности: «вернуть всё» ловит строка со СНЯТЫМ
+  // аспектом (значения остались — Р9), «вернуть ничего» — строка, у которой назначение
+  // записано как положено. Прямой INSERT нужен ровно ради первой: исполнитель такой строки
+  // не создаёт, а читатель обязан на ней отличать «аспект есть» от «значение есть».
   const owner = freshUserId();
   const grantId = newId();
   const otherGrantId = newId();
@@ -326,13 +325,8 @@ describe('assignedTickets: очередь исполнителя читает Н
   const otherGrant = newId();
 
   beforeAll(async () => {
-    const row = (
-      id: string,
-      title: string,
-      props: Record<string, unknown>,
-      aspects: string[],
-      legacy: Record<string, Record<string, unknown>> = {},
-    ) => divergentEntityRow({ ownerId: owner, id, title, props, aspects, legacy });
+    const row = (id: string, title: string, props: Record<string, unknown>, aspects: string[]) =>
+      rawEntityRow({ ownerId: owner, id, title, props, aspects });
 
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values([
@@ -349,12 +343,9 @@ describe('assignedTickets: очередь исполнителя читает Н
           },
           ['orbis/task', 'orbis/assignment'],
         ),
-        // Зеркальная строка: назначение записано ТОЛЬКО старой картой. Читатель новой
-        // правды её видеть не должен — иначе он читает не ту колонку.
-        row(byLegacyOnly, 'Тикет только старой карты', {}, [], {
-          'orbis/task': { status: 'planned' },
-          'orbis/assignment': { executor: 'agent', grant_id: grantId },
-        }),
+        // Зеркальная строка: ни свойств, ни аспектов. В очередь она попасть не может ни по
+        // какому признаку — контроль того, что выборка вообще фильтрует.
+        row(byLegacyOnly, 'Пустая строка', {}, []),
         // Аспект назначения СНЯТ, значения остались (Р9). Без признака носителя эта
         // строка попала бы в очередь — то есть агент получил бы работу, которую с него
         // сняли.

@@ -344,20 +344,15 @@ describe('orbis_propose: предложение и предусловия (V1.6,
   });
 
   test('предусловие снимается по `props`, а не по проекции: форма значения у них РАЗНАЯ (orbis/progress_source)', async () => {
-    // Ловушка перевода. Снять текущее значение можно двумя способами: из `aspects_legacy`
-    // (проекция старой формы) или из `props` (то, с чем сверяется executor). У большинства
-    // свойств это одно и то же —
-    // и именно поэтому подмена прошла бы незаметно. У `orbis/progress_source` формы
-    // РАЗНЫЕ: в `props` запрос лежит Q-AST-обёрткой `{text}` (§А5-2), а проекция
-    // разворачивает её обратно в строку. Сняв предусловие с проекции, предложение
-    // получило бы вечный CONFLICT на «Принять» — у владельца, ни в чём не виноватого.
+    // Ловушка перевода. Значение `orbis/progress_source` — вложенный объект, в котором
+    // запрос лежит Q-AST-обёрткой `{text}` (§А5-2). Предусловие обязано сниматься С НЕГО
+    // ЦЕЛИКОМ и сравниваться с ним же: разверни кто-нибудь обёртку по дороге (как это
+    // делала снятая проекция старой формы), предложение получило бы вечный CONFLICT на
+    // «Принять» — у владельца, ни в чём не виноватого.
     const { runId, ctx } = await liveRoutine();
     const goal = await seedEntity(owner, {
       title: 'Пробежать 100 км',
       tags: [],
-      // СТАРОЙ картой намеренно: она проходит через переходный перевод, который и
-      // заворачивает текст запроса в `{text}` (§А5-2) — то самое расхождение форм, которое
-      // тест и проверяет. Путь `execute` обе формы принимает (exec-надмножество).
       props: {
         'orbis/target_value': '100.00',
         'orbis/unit': 'км',
@@ -370,16 +365,18 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       aspects: ['orbis/goal'],
     });
 
-    // Две формы одного значения — если они совпадут, тест перестанет что-либо ловить.
+    // Значение в базе — ровно вложенный объект с обёрткой: если бы его кто-то разворачивал
+    // по дороге, тест перестал бы что-либо ловить.
     const row = await withIdentity(db, owner, (tx) =>
-      tx.execute(sql`SELECT props, aspects_legacy FROM entities WHERE id = ${goal.id}`),
+      tx.execute(sql`SELECT props FROM entities WHERE id = ${goal.id}`),
     );
     const stored = (row as unknown as Array<Record<string, unknown>>)[0];
     const inProps = (stored?.props as Record<string, unknown>)['orbis/progress_source'];
-    const inLegacy = (stored?.aspects_legacy as Record<string, Record<string, unknown>>)[
-      'orbis/goal'
-    ]?.progress_source;
-    expect(inProps).not.toEqual(inLegacy);
+    expect(inProps).toEqual({
+      query: { text: 'аспект=финансы' },
+      aggregate: 'sum',
+      field: 'amount',
+    });
 
     const proposed = await dispatchTool(ctx, 'orbis_propose', {
       run_id: runId,

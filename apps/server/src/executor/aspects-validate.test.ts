@@ -9,16 +9,15 @@
 // в базу сид (`scripts/seed-registries.ts`); расхождение снимка с базой стережёт отдельная
 // проверка дрейфа (`db/registry-drift.test.ts`).
 //
-// Фикстуры записаны СТАРОЙ картой и переводятся `legacyAspectsToProps` — тем же переходом,
-// которым пользуется путь записи. Так тест продолжает читаться как «аспект с такими
-// данными», а проверяется при этом новый валидатор.
+// Фикстуры записаны формой АСПЕКТА («вот такой аспект с такими полями») и переводятся в
+// свойства локальной таблицей `A8_FIELDS` ниже. Так тест продолжает читаться как «аспект с
+// такими данными», а проверяется при этом валидатор свойств — тот же, что на записи.
 
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ASPECT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
-  legacyAspectsToProps,
 } from '@orbis/shared';
 import type { RegistrySnapshot } from '../registry/load';
 import type { PropsViolation } from '../registry/validate-props';
@@ -37,17 +36,57 @@ const REG: RegistrySnapshot = {
 /** Произвольный валидный uuid — в этих тестах важна только ФОРМА поля, не адресат. */
 const NIL_ROUTINE = '019a0000-0000-7000-8000-000000000001';
 
-/** Отказ валидации по старой карте: перевод в свойства + стадия 2 исполнителя. */
+/**
+ * Имя поля аспекта → id свойства (§А8), ЛОКАЛЬНО и только для чтения фикстур.
+ *
+ * Общая таблица переходных имён (`registry/legacy-field-map.ts`) снята «Пересевом мира»
+ * вместе со старой формой, и воскрешать её в продуктовом коде было бы шагом назад. Здесь
+ * она нужна ровно для того, чтобы фикстуры читались как «аспект с такими полями»: правило
+ * простое и полное — имя ищется среди свойств, ОБЪЯВЛЕННЫХ аспектом, по локальной части
+ * ключа либо по паре §А8 из `RENAMED`. Неизвестное имя уезжает как `orbis/<имя>` — то есть
+ * заведомо неизвестный адрес, на который валидатор и обязан ответить `UNKNOWN_PROPERTY`.
+ */
+const RENAMED: Readonly<Record<string, string>> = {
+  status: 'orbis/task_status',
+  stage: 'orbis/project_stage',
+  kind: 'orbis/memory_kind',
+  category_ref: 'orbis/finance_category',
+  outcome: 'orbis/run_outcome',
+  started_at: 'orbis/run_started_at',
+  finished_at: 'orbis/run_finished_at',
+  steps: 'orbis/run_steps',
+  report: 'orbis/run_report',
+  checkpoint: 'orbis/run_checkpoint',
+  reply: 'orbis/run_reply',
+  usage: 'orbis/run_usage',
+  proposal: 'orbis/run_proposal',
+  routine_id: 'orbis/run_routine',
+  bucket: 'orbis/run_bucket',
+  attempt: 'orbis/run_attempt',
+  grant_id: 'orbis/grant',
+  at: 'orbis/routine_at',
+  days: 'orbis/routine_days',
+  mode: 'orbis/routine_mode',
+};
+
+function propertyOfField(aspectId: string, field: string): string {
+  const declared = BUILTIN_ASPECT_DEFS.find((a) => a.id === aspectId)?.properties ?? [];
+  const renamed = RENAMED[field];
+  if (renamed !== undefined && declared.some((r) => r.propertyId === renamed)) return renamed;
+  const byLocal = declared.find((r) => r.propertyId.split('/').at(-1) === field);
+  return byLocal?.propertyId ?? `orbis/${field}`;
+}
+
+/** Отказ валидации по форме аспекта: перевод в свойства + стадия 2 исполнителя. */
 function verdict(aspects: Record<string, Record<string, unknown>>): ExecError | undefined {
-  const translated = legacyAspectsToProps(aspects);
-  if (!translated.ok) {
-    // Конфликт слитого свойства (В1) до валидатора не доезжает — его ловит граница входа
-    return new ExecError('VALIDATION', 'слитое свойство получило разные значения', {
-      violations: [],
-    });
+  const props: Record<string, unknown> = {};
+  for (const [aspectId, fields] of Object.entries(aspects)) {
+    for (const [field, value] of Object.entries(fields ?? {})) {
+      props[propertyOfField(aspectId, field)] = value;
+    }
   }
   try {
-    assertEntityProps(REG, { props: translated.props, aspects: translated.aspects });
+    assertEntityProps(REG, { props, aspects: Object.keys(aspects) });
     return undefined;
   } catch (e) {
     if (e instanceof ExecError) return e;

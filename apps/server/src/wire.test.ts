@@ -31,20 +31,23 @@ describe('wire-сериализация (решение 12 плана)', () => {
     }
   });
 
-  test('wire-форма несёт ТОЛЬКО новую правду: props/aspects/queryRefs; ни meta, ни старой карты', async () => {
+  test('wire-форма несёт ТОЛЬКО новую правду: props/aspects/queryRefs, и старых носителей нет', async () => {
     const { db, client } = appDb();
     const owner = freshUserId();
     const id = crypto.randomUUID();
     try {
       const row = await withIdentity(db, owner, async (tx) => {
-        // Прямой INSERT, а не исполнитель: строка нарочно несёт СТАРЫЕ носители
-        // заполненными (`meta`, `aspects_legacy`) рядом с новыми — иначе «наружу не едет»
-        // было бы истинно просто потому, что и внутри пусто.
+        // Прямой INSERT, а не исполнитель: форма строки здесь и есть предмет проверки.
+        //
+        // ПРЕЖДЕ строка нарочно несла заполненными старые носители (`meta`,
+        // `aspects_legacy`) рядом с новыми — иначе «наружу не едет» было бы истинно просто
+        // потому, что и внутри пусто. Теперь этих колонок нет в базе вовсе
+        // (contract-миграция 0017), и утверждение стало сильнее: не «есть, но не едет», а
+        // «негде взять». Проверка формы наружу при этом остаётся — за ней следят и разбор
+        // схемы ниже, и wire-контракт.
         await tx.execute(
-          sql`INSERT INTO entities (id, owner_id, title, meta, aspects_legacy, props, aspects, query_refs)
+          sql`INSERT INTO entities (id, owner_id, title, props, aspects, query_refs)
               VALUES (${id}, ${owner}, 'носитель',
-                      ${JSON.stringify({ source: 'проба' })}::jsonb,
-                      ${JSON.stringify({ 'orbis/task': { status: 'todo' } })}::jsonb,
                       ${JSON.stringify({ 'orbis/task_status': 'todo' })}::jsonb,
                       ARRAY['orbis/task']::text[], '{}'::text[])`,
         );
@@ -53,10 +56,6 @@ describe('wire-сериализация (решение 12 плана)', () => {
       });
       if (!row) throw new Error('строка не прочитана после INSERT');
       const wire = toWireEntity(row);
-      // Обе колонки в строке ЗАПОЛНЕНЫ (см. INSERT выше) — и наружу не едет ни одна: это и
-      // есть проверяемое утверждение, а не следствие пустых данных (§А1-1, §А1-3).
-      expect(row.aspectsLegacy).toEqual({ 'orbis/task': { status: 'todo' } });
-      expect(row.meta).toEqual({ source: 'проба' });
       expect('aspectsMap' in wire).toBe(false);
       expect('meta' in wire).toBe(false);
       expect(wire.props).toEqual({ 'orbis/task_status': 'todo' });

@@ -49,7 +49,7 @@ export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
  * них не «второй дом»:
  *   • ОПРЕДЕЛЕНИЯ ролей — `registry/builtin-roles.ts`: там роль заводится, а не называется;
  *   • ТОТАЛЬНЫЕ таблицы ПО ВСЕМ ролям — `RELATION_ROLE_IDS` ниже и `RELATION_TYPE_BY_ROLE`
- *     (`executor/legacy-form.ts`, `satisfies Record<RelationRoleId, …>`). Они перечисляют
+ *     (проекция роли в снятую колонку типа). Они перечисляли
  *     одиннадцать имён по построению, и переименование обязано валить сборку именно там;
  *   • ТЕСТОВАЯ ОБВЯЗКА, где литерал — предмет проверки: `*.test.ts`, `src/test/*`
  *     (`agent-loop-helpers.ts`, `perf.ts`) и `query/ast-fixtures.ts`. Там литерал обязан

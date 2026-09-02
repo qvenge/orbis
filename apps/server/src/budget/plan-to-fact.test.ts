@@ -11,14 +11,11 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
-  divergentEntityRow,
   executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { entities } from '../db/schema';
-import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
@@ -415,86 +412,5 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
         batchId: newId(),
       }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Задача 10a: пречек §2.7 читает НОВУЮ правду строки (§А1-1)
-// ---------------------------------------------------------------------------
-/**
- * ПРОБА РАСХОЖДЕНИЕМ КОЛОНОК (тот же приём, что в `aggregates.test.ts`/`binding.test.ts`):
- * строка кладётся прямым INSERT'ом так, что `props` и старая карта говорят про `planned`
- * ПРОТИВОПОЛОЖНОЕ, и тест спрашивает, чей ответ даёт пречек. Обе стороны границы: план по
- * props переводится, факт по props — отвергается.
- */
-describe('пречек §2.7 читает planned из props (§А1-1, РП-9, Задача 10a)', () => {
-  function divergentRow(
-    user: string,
-    id: string,
-    props: Record<string, unknown>,
-    legacyFin: Record<string, unknown>,
-  ): typeof entities.$inferInsert {
-    return divergentEntityRow({
-      ownerId: user,
-      id,
-      title: 'Покупка расхождения',
-      props,
-      aspects: ['orbis/financial'],
-      legacy: { 'orbis/financial': legacyFin },
-    });
-  }
-
-  const finProps = (over: Record<string, unknown>) => ({
-    'orbis/amount': '1000.00',
-    'orbis/direction': 'expense',
-    'orbis/finance_category': newId(),
-    'orbis/occurred_on': PLANNED_ON,
-    ...over,
-  });
-
-  test('план по props переводится в факт, хотя старая карта зовёт его фактом', async () => {
-    const user = freshUserId();
-    const id = newId();
-    await withIdentity(db, user, (tx) =>
-      tx.insert(entities).values(
-        divergentRow(user, id, finProps({ 'orbis/planned': true }), {
-          amount: '1000.00',
-          direction: 'expense',
-          occurred_on: PLANNED_ON,
-          planned: false,
-        }),
-      ),
-    );
-
-    await ownerCaller(user).budget.confirmPurchase({
-      entityId: id,
-      occurredOn: ACTUAL_ON,
-      batchId: newId(),
-    });
-    expect((await propsOf(id))['orbis/planned']).toBe(false);
-    expect((await propsOf(id))['orbis/occurred_on']).toBe(ACTUAL_ON);
-  });
-
-  test('факт по props (свойства нет — РП-9) отвергается, хотя старая карта зовёт его планом', async () => {
-    const user = freshUserId();
-    const id = newId();
-    await withIdentity(db, user, (tx) =>
-      tx.insert(entities).values(
-        divergentRow(user, id, finProps({}), {
-          amount: '1000.00',
-          direction: 'expense',
-          occurred_on: PLANNED_ON,
-          planned: true,
-        }),
-      ),
-    );
-
-    await expect(
-      ownerCaller(user).budget.confirmPurchase({
-        entityId: id,
-        occurredOn: ACTUAL_ON,
-        batchId: newId(),
-      }),
-    ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' });
   });
 });

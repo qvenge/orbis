@@ -1,6 +1,7 @@
 // apps/server/src/seed/onboarding.test.ts
 // Интеграционные тесты Task 13: онбординг-сидирование (02 §7) через createCallerFactory
-// против живой БД. Сид пишет НАПРЯМУЮ в tx под withIdentity, МИМО executor/журнала
+// против живой БД. Граф мира сеет `seed/world.ts` ЧЕРЕЗ исполнитель; настройки и тред —
+// напрямую в tx под withIdentity, мимо журнала
 // (решение 6 плана): 12 категорий §7.1 + 6 smart lists §7.2 (три исходных, два верхних
 // горизонта планирования (E4) и «Рутины» (V1.9)) + настройки §7.3 + глобальный тред.
 
@@ -12,8 +13,6 @@ import {
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   CORE_PROPERTY_IDS,
-  categoryAspectSchema,
-  propertyToLegacyField,
   ROLE_DEPENDENCY,
 } from '@orbis/shared';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
@@ -23,6 +22,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { assertEntityProps } from '../executor/aspects-validate';
 import { effectiveRegistry } from '../registry/cache';
 import { validateEntityProps } from '../registry/validate-props';
 import { appRouter } from '../router';
@@ -90,23 +90,6 @@ afterAll(async () => {
   await client.end();
 });
 
-/**
- * Свойства записи под СТАРЫМИ именами полей аспекта — из новой правды (§А1-1). Нужна ровно
- * там, где проверка идёт схемой аспекта старой формы (`categoryAspectSchema`, Р-24): второй
- * таблицы соответствий здесь не заводится — имена даёт та же §А8, что и серверу.
- */
-function legacyFields(
-  row: { props: Record<string, unknown> },
-  aspectId: string,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [propertyId, value] of Object.entries(row.props)) {
-    const field = propertyToLegacyField(propertyId, aspectId);
-    if (field !== undefined) out[field] = value;
-  }
-  return out;
-}
-
 describe('user.seedOnboarding (02 §7): состав и одноразовость', () => {
   test('создаёт ровно 12+6+садовник сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
     const user = freshUserId();
@@ -160,17 +143,23 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
 });
 
 describe('категории §7.1', () => {
-  test('12 категорий; каждая из БД проходит categoryAspectSchema; spend_class отсутствует у доходных', async () => {
+  test('12 категорий; каждая из БД проходит валидатор реестра; spend_class отсутствует у доходных', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
     const rows = await caller.entity.query({ query: 'tags=category, sortBy=orbis/created_at:asc' });
     expect(rows.length).toBe(12);
+    // Проверка формы — ТЕМ ЖЕ валидатором, которым её проверяет запись (стадия 2
+    // исполнителя, `assertEntityProps` по эффективному снимку реестра). Прежде здесь стояла
+    // zod-схема аспекта старой формы: она была ВТОРЫМ описанием тех же полей и могла
+    // разойтись с реестром — с «Пересевом мира» второго описания больше нет.
+    const reg = await withIdentity(db, user, (tx) => effectiveRegistry(tx, user));
     for (const r of rows) {
-      // Схема аспекта старой формы (Р-24) говорит СТАРЫМИ именами полей, а строка приезжает
-      // новой правдой (§А1-1): проекция — той же таблицей §А8, которой её делает сервер.
-      expect(() => categoryAspectSchema.parse(legacyFields(r, 'orbis/category'))).not.toThrow();
+      expect(() =>
+        assertEntityProps(reg, { props: r.props, aspects: [...r.aspects] }),
+      ).not.toThrow();
+      expect(r.aspects).toEqual(['orbis/category']);
     }
 
     // Доходные (Зарплата/Фриланс): ключа spend_class нет (не null — иначе ajv упадёт)

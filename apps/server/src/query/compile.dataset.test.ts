@@ -515,21 +515,18 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
     sourceId: ID.project,
     targetId: ID.taskToday,
     role: 'subitem',
-    relationType: 'parent',
   },
   {
     id: crypto.randomUUID(),
     sourceId: ID.project,
     targetId: ID.taskOverdue,
     role: 'subitem',
-    relationType: 'parent',
   },
   {
     id: crypto.randomUUID(),
     sourceId: ID.taskBlocker,
     targetId: ID.taskBlocked,
     role: 'dependency',
-    relationType: 'blocks',
   },
   {
     // Блокер без orbis/task-аспекта — жив по COALESCE-семантике (§6.1).
@@ -537,7 +534,6 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
     sourceId: ID.noteBlocker,
     targetId: ID.taskBlocked2,
     role: 'dependency',
-    relationType: 'blocks',
   },
   {
     // «Отпущенный» блокер: status=done НЕ блокирует — taskToday остаётся в «Сегодня».
@@ -545,7 +541,6 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
     sourceId: ID.taskDone,
     targetId: ID.taskToday,
     role: 'dependency',
-    relationType: 'blocks',
   },
 ];
 
@@ -1142,21 +1137,18 @@ describe('children_of/parents_of: семейство иерархии из ре�
           sourceId: ID_D.project,
           targetId: ID_D.ticket,
           role: 'ticket',
-          relationType: 'parent',
         },
         {
           id: crypto.randomUUID(),
           sourceId: ID_D.project,
           targetId: ID_D.subtask,
           role: 'subitem',
-          relationType: 'parent',
         },
         {
           id: crypto.randomUUID(),
           sourceId: ID_D.envelope,
           targetId: ID_D.txn,
           role: 'envelope-binding',
-          relationType: 'parent',
         },
       ]);
     });
@@ -1333,7 +1325,8 @@ describe('фикстура прямого INSERT не проходит молч�
         updatedAt: new Date('2026-06-20T08:00:00Z'),
       },
     ]);
-    expect(row?.aspectsLegacy).toEqual({ 'orbis/financial': { category_ref: ID.project } });
+    expect(row?.props).toEqual({ 'orbis/finance_category': ID.project });
+    expect(row?.aspects).toEqual(['orbis/financial']);
 
     // Свободное свойство (§А1-2) и значение снятого аспекта (Р9) — законны: проверка идёт по
     // РЕЕСТРУ, а не по перечисленным аспектам.

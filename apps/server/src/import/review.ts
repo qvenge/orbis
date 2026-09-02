@@ -19,6 +19,7 @@ import {
   batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
+  externalRowId,
   type FastPathCategory,
   type FastPathRule,
   findCategory,
@@ -35,10 +36,9 @@ import {
   MAX_IMPORT_ROWS,
   newId,
   normalizeCounterparty,
-  resolveCategoryInOrder,
   ROLE_ENVELOPE_BINDING,
   ROLE_REF,
-  externalRowId,
+  resolveCategoryInOrder,
 } from '@orbis/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { recordUsage } from '../ai/metering';

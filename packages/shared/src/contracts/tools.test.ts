@@ -57,9 +57,12 @@ describe('entityCreateInput', () => {
     const modern = { title: 'x', tags: [], props: { 'orbis/task_status': 'inbox' } };
     expect(entityCreateInput.safeParse(modern).success).toBe(true);
     expect(entityCreateUiInput.safeParse(modern).success).toBe(true);
-    // …и старую карту по-прежнему принимает ВНУТРЕННЕЕ надмножество исполнителя: серверные
-    // пути мимо тулов переводятся до «Пересева мира» (РП-2), и вход у них свой.
-    expect(entityCreateExecInput.safeParse(legacy).success).toBe(true);
+    // …И НАДМНОЖЕСТВО ИСПОЛНИТЕЛЯ ТОЖЕ НЕТ — с «Пересева мира». Оно было последним входом
+    // старой карты во всём сервере и жило ровно до перевода серверных путей мимо тулов
+    // (РП-2). Формы больше нет ни у одного отправителя, а вход, который никто не использует,
+    // — это форма, за которой не следит ни один тест.
+    expect(entityCreateExecInput.safeParse(legacy).success).toBe(false);
+    expect(entityCreateExecInput.safeParse(modern).success).toBe(true);
   });
 
   test('tags обязателен (§9.2: string[]*)', () => {
@@ -92,14 +95,14 @@ describe('entityUpdateInput', () => {
     expect(r.success).toBe(true);
   });
 
-  test('старую карту аспектов не принимают НИ тул, НИ роутер владельца — только исполнитель', () => {
+  test('старую карту аспектов не принимает НИ ОДНА схема, включая надмножество исполнителя', () => {
     const legacy = { id: UUID, aspects: { 'orbis/task': { status: 'done' }, 'orbis/note': null } };
     expect(entityUpdateInput.safeParse(legacy).success).toBe(false);
     // 13c: формы правки web говорят `props`/`unset`/`aspects.{attach,detach}` — карту роутер
     // владельца отвергает разбором, а не раскладывает по свойствам молча.
     expect(entityUpdateUiInput.safeParse(legacy).success).toBe(false);
-    // Внутреннее надмножество исполнителя её ещё принимает (РП-2, до «Пересева мира»).
-    expect(entityUpdateExecInput.safeParse(legacy).success).toBe(true);
+    // Надмножество исполнителя — тоже нет: «Пересев мира» снял последний вход старой формы.
+    expect(entityUpdateExecInput.safeParse(legacy).success).toBe(false);
     // Новая форма проходит ВСЕ три схемы: перевод потребителя не ломает соседа.
     const modern = { id: UUID, props: { 'orbis/task_status': 'done' } };
     expect(entityUpdateInput.safeParse(modern).success).toBe(true);
@@ -206,14 +209,21 @@ describe('entityUpdatePrecondition (CAS по свойству, §А7-3 + V1.7)',
     );
   });
 
-  test('exec-схема принимает обе формы; тул-контракт модели не принимает ни одной', () => {
-    const input = {
+  test('exec-схема несёт precondition, тул-контракт модели — нет; старой карты нет ни у той, ни у другого', () => {
+    const modern = {
       id: UUID,
       precondition: [ABSENT],
-      aspects: { 'orbis/task': { due_date: '2026-08-20' } },
+      aspects: { attach: ['orbis/task'] },
+      props: { 'orbis/due_date': '2026-08-20' },
     };
-    expect(entityUpdateExecInput.safeParse(input).success).toBe(true);
-    expect(entityUpdateInput.safeParse(input).success).toBe(false);
+    expect(entityUpdateExecInput.safeParse(modern).success).toBe(true);
+    // `precondition` — рычаг серверных путей, и модель его не подставляет (§А7-3).
+    expect(entityUpdateInput.safeParse(modern).success).toBe(false);
+
+    // Старая карта отвергается ОБЕИМИ — форма снята «Пересевом мира».
+    const legacy = { ...modern, aspects: { 'orbis/task': { due_date: '2026-08-20' } } };
+    expect(entityUpdateExecInput.safeParse(legacy).success).toBe(false);
+    expect(entityUpdateInput.safeParse(legacy).success).toBe(false);
   });
 });
 

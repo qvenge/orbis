@@ -101,7 +101,7 @@ let createdIds: string[] = [];
 interface EntitySnapshot {
   archived: boolean;
   updated_at: string;
-  aspects: string;
+  props: string;
 }
 
 let targetBefore: EntitySnapshot;
@@ -157,7 +157,7 @@ async function envelopeParentTargets(): Promise<string[]> {
 /** Снимок строки сущности: ::text-касты дают стабильное байт-сравнение снимков. */
 async function entitySnapshot(id: string): Promise<EntitySnapshot> {
   const rows = await adminRows(
-    sql`SELECT archived, updated_at::text AS updated_at, aspects_legacy::text AS aspects
+    sql`SELECT archived, updated_at::text AS updated_at, props::text AS props
         FROM entities WHERE id = ${id}`,
   );
   const row = rows[0];

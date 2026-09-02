@@ -141,20 +141,6 @@ async function incomingCount(targetId: string, role: string): Promise<number> {
   }
 }
 
-/** Значение колонки-проекции у единственной связи пары — пин переходной колонки до 0017. */
-async function legacyTypeOf(sourceId: string, targetId: string, role: string): Promise<string> {
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    const rows = await admin.execute(
-      sql`SELECT relation_type FROM relations
-          WHERE source_id = ${sourceId} AND target_id = ${targetId} AND role = ${role}`,
-    );
-    return rows[0]?.relation_type as string;
-  } finally {
-    await adminClient.end();
-  }
-}
-
 /**
  * Источники, которых АГРЕГАТЫ БЮДЖЕТА считают родителями-конвертами транзакции. Запрос
  * повторяет условие `spentByEnvelope` (`budget/aggregates.ts`) дословно: связь по
@@ -162,7 +148,7 @@ async function legacyTypeOf(sourceId: string, targetId: string, role: string): P
  * счёте не участвует — до 0017 агрегаты о ней не знают, и потому именно этот счёт, а не
  * счёт по роли, решает, увидит ли владелец свою тысячу дважды.
  */
-async function legacyBudgetParents(targetId: string): Promise<string[]> {
+async function _legacyBudgetParents(targetId: string): Promise<string[]> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = await admin.execute(
@@ -179,7 +165,7 @@ async function legacyBudgetParents(targetId: string): Promise<string[]> {
 }
 
 /** Прямой вызов эвристики миграции 0016 на временных jsonb-значениях (перепрогон не нужен). */
-async function heuristic(rt: string, src: string, tgt: string): Promise<string> {
+async function _heuristic(rt: string, src: string, tgt: string): Promise<string> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = await admin.execute(
@@ -430,40 +416,37 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
     expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1);
   });
 
-  test('11a. РЕТРОСПЕКТИВНЫЙ путь: attach orbis/budget на источника subitem-ребра к чужому конверту → INVARIANT single_budget_parent (второй вход, §Б-2)', async () => {
-    // Ограничение роли смотрит на рёбра ЦЕЛИ и срабатывает на создании ребра. Здесь ребро
-    // не создаётся — меняется АСПЕКТ ИСТОЧНИКА, а старую колонку (её ещё читают агрегаты
-    // бюджета до 0017) это ретроспективно делает вторым budget-parent'ом. attach обязан
-    // быть отклонён — и отказ идёт ИНТЕРВАЛЬНОЙ половиной правила (`legacyInterval`),
-    // потому что считает она по множеству старой колонки, а не по одной роли.
+  test('11a. attach orbis/budget на источника subitem-ребра — РАЗРЕШЁН (ретроспективы больше нет)', async () => {
+    // СМЕНА НАБЛЮДАЕМОГО ПОВЕДЕНИЯ, и она названа вслух (обещание PRD 10).
+    //
+    // До 0017 «конверт-родитель» выражался не ролью, а расширенным множеством ролей с
+    // источником-конвертом: навешивание `orbis/budget` ретроспективно превращало ЛЮБОЕ
+    // исходящее ребро X (в том числе `subitem`) в привязку, и у транзакции их оказывалось
+    // две. Отсюда и был второй, ретроспективный вход в инвариант.
+    //
+    // Теперь привязка — это роль `envelope-binding` и только она. Навешивание аспекта рёбер
+    // не создаёт, а каждое ребро этой роли уже посчитано `target_max_incoming` в момент
+    // своего создания: класс исчез вместе с причиной, и проверять на attach нечего.
     const { env1, txn } = await budgetFixture();
     ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
     const x = await createEntity({ title: 'Будущий конверт' });
     ok(await createRelation(x.id, txn.id, 'subitem')); // роль владельца — легальна (тест 10)
 
-    const r = err(
+    const r = ok(
       await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
     );
-    expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
-    // Аспект не приклеился
-    const rows = ok(
-      await execute(db, req('entity_update', { id: x.id, title: 'Будущий конверт' })),
-    );
-    const entity = rows.results[0] as WireEntity;
-    expect(entity.aspects.includes('orbis/budget')).toBe(false);
+    expect((r.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(true);
+    // Привязка у транзакции по-прежнему ОДНА: `subitem` от нового конверта ею не является.
+    expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1);
   });
 
-  test('11c. entity_update.aspects с orbis/budget — тот же второй вход, что 11a: INVARIANT single_budget_parent', async () => {
-    // Wire-контракт entity_update принимает aspects-патч: mergeAspects добавляет НОВЫЙ
-    // ключ — второй путь ретроспективы помимо attach (fix round).
+  test('11c. entity_update.aspects с orbis/budget — тем же доводом разрешён', async () => {
     const { env1, txn } = await budgetFixture();
     ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
     const x = await createEntity({ title: 'Будущий конверт (update)' });
     ok(await createRelation(x.id, txn.id, 'subitem'));
 
-    const r = err(
+    const r = ok(
       await execute(
         db,
         req('entity_update', {
@@ -473,11 +456,8 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
         }),
       ),
     );
-    expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    // Аспект не приклеился
-    const rows = ok(await execute(db, req('entity_update', { id: x.id, title: 'X (update)' })));
-    expect((rows.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(false);
+    expect((r.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(true);
+    expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1);
   });
 
   test('11d. entity_update.aspects с orbis/budget: детей с другим конвертом нет → разрешён; detach бюджета не проверяется', async () => {
@@ -778,509 +758,83 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
   });
 });
 
-describe('интервал 7a→0017: rel_uniq ещё стоит на проекции роли (находка 55)', () => {
-  test('21. subitem + ticket на одной паре → отказ уникальности (ОЖИДАЕМО: обе проецируются в parent)', async () => {
-    const project = await createEntity({ title: 'Проект интервала' });
-    const child = await createEntity({ title: 'Ребёнок интервала' });
+describe('уникальность связи — по РОЛИ (contract-миграция 0017)', () => {
+  /**
+   * Что изменила 0017 и почему это отдельные тесты, а не правка старых.
+   *
+   * До неё `rel_uniq` стоял на тройке (source, target, ПРОЕКЦИЯ роли в `relation_type`), и
+   * две роли с одной проекцией — `subitem`+`ticket`, `subitem`+`envelope-binding`,
+   * `mention`+`supersedes` — на одной паре сущностей были НЕВЫРАЗИМЫ. Отказ приходил с
+   * пометкой интервала: «пока нельзя, реформа не доехала». Теперь ключ — сама роль, и обе
+   * связи законны; дублем считается только повтор ТОЙ ЖЕ роли.
+   */
+  test('21. subitem + ticket на одной паре — ОБЕ законны (ключ уникальности — роль)', async () => {
+    const project = await createEntity({ title: 'Проект' });
+    const child = await createEntity({ title: 'Ребёнок' });
     ok(await createRelation(project.id, child.id, 'subitem'));
-    const r = err(await createRelation(project.id, child.id, 'ticket'));
+    ok(await createRelation(project.id, child.id, 'ticket'));
+    expect(await relCount(project.id, child.id, 'subitem')).toBe(1);
+    expect(await relCount(project.id, child.id, 'ticket')).toBe(1);
+  });
+
+  test('22. повтор ТОЙ ЖЕ роли — duplicate_relation без пометки интервала', async () => {
+    const a = await createEntity({ title: 'A' });
+    const b = await createEntity({ title: 'B' });
+    ok(await createRelation(a.id, b.id, 'mention'));
+    const r = err(await createRelation(a.id, b.id, 'mention'));
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('duplicate_relation');
-    // Отказ ЧЕСТНО называет причину интервалом, а не выдаёт «такая связь уже есть»
-    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
-    expect((r.error.details as { legacyRelationType?: string }).legacyRelationType).toBe('parent');
-    // `details` читает КОД: помешавшая роль — ID, как и соседнее `role`, а не подпись из
-    // реестра (та локализована и меняется вместе с label)
-    expect((r.error.details as { existingRole?: string }).existingRole).toBe('subitem');
-    expect((r.error.details as { role?: string }).role).toBe('ticket');
-    // …а человеку подпись достаётся из ТЕКСТА отказа
-    expect(r.error.message).toContain('Подпункт');
-    expect(await relCount(project.id, child.id, 'ticket')).toBe(0);
-  });
-
-  test('22. subitem + mention на одной паре — обе живут: проекции разные', async () => {
-    const a = await createEntity({ title: 'Пара-A' });
-    const b = await createEntity({ title: 'Пара-B' });
-    ok(await createRelation(a.id, b.id, 'subitem'));
-    ok(await createRelation(a.id, b.id, 'mention'));
-    expect(await relCount(a.id, b.id, 'subitem')).toBe(1);
-    expect(await relCount(a.id, b.id, 'mention')).toBe(1);
-  });
-
-  test('22a. СМЕНА РОЛИ ребра в интервале — только batch «удалить + создать»', async () => {
-    // Единственный способ переименовать роль до 0017: пока `rel_uniq` стоит на проекции,
-    // `subitem` и `ticket` на одной паре несовместимы, и создание обязано видеть удаление,
-    // сделанное ПРЕДЫДУЩЕЙ операцией того же batch. Без этого пре-чек считал бы дублем
-    // строку, которой к моменту вставки уже не будет.
-    const a = await createEntity({ title: 'Смена роли — источник' });
-    const b = await createEntity({ title: 'Смена роли — цель' });
-    ok(await createRelation(a.id, b.id, 'subitem'));
-
-    ok(
-      await execute(db, {
-        actorUserId: userA,
-        actorKind: 'owner',
-        source: 'chat',
-        batchId: newId(),
-        clock: () => T0,
-        operations: [
-          {
-            tool: 'relation_delete',
-            input: { source_id: a.id, target_id: b.id, role: 'subitem' },
-          },
-          {
-            tool: 'relation_create',
-            input: { source_id: a.id, target_id: b.id, role: 'ticket' },
-          },
-        ],
-      }),
-    );
-    expect(await relCount(a.id, b.id, 'subitem')).toBe(0);
-    expect(await relCount(a.id, b.id, 'ticket')).toBe(1);
-
-    // Контроль: ОБРАТНЫЙ порядок в том же batch — отказ, и это не придирка. Создание идёт
-    // до удаления, обе роли живы одновременно, и `rel_uniq` интервала их не вмещает.
-    const c = await createEntity({ title: 'Обратный порядок — источник' });
-    const d = await createEntity({ title: 'Обратный порядок — цель' });
-    ok(await createRelation(c.id, d.id, 'subitem'));
-    const r = err(
-      await execute(db, {
-        actorUserId: userA,
-        actorKind: 'owner',
-        source: 'chat',
-        batchId: newId(),
-        clock: () => T0,
-        operations: [
-          {
-            tool: 'relation_create',
-            input: { source_id: c.id, target_id: d.id, role: 'ticket' },
-          },
-          {
-            tool: 'relation_delete',
-            input: { source_id: c.id, target_id: d.id, role: 'subitem' },
-          },
-        ],
-      }),
-    );
-    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
-    expect(await relCount(c.id, d.id, 'subitem')).toBe(1); // batch откатен целиком
-  });
-
-  test('23. повтор ТОЙ ЖЕ роли — обычный duplicate_relation, без пометки интервала', async () => {
-    const a = await createEntity({ title: 'Повтор-A' });
-    const b = await createEntity({ title: 'Повтор-B' });
-    ok(await createRelation(a.id, b.id, 'subitem'));
-    const r = err(await createRelation(a.id, b.id, 'subitem'));
-    expect(invariantOf(r)).toBe('duplicate_relation');
+    // Пометки интервала больше нет ни у одного отказа: интервал кончился вместе с колонкой.
     expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBeUndefined();
+  });
+
+  test('23. системная привязка встаёт РЯДОМ с ребром роли владельца на той же паре', async () => {
+    // Ровно тот случай, ради которого агрегаты бюджета держали расширенное множество ролей:
+    // раньше `envelope-binding` не вставал рядом с `subitem`, и хук был обязан считать чужое
+    // ребро привязкой. Теперь встаёт — и «конверт-родитель» выражается одной ролью.
+    const envelope = await createEntity({ title: 'Конверт', props: budgetProps() });
+    const txn = await createEntity({ title: 'Трата' });
+    ok(await createRelation(envelope.id, txn.id, 'subitem'));
+    ok(await createRelation(envelope.id, txn.id, 'envelope-binding', AS_SYSTEM));
+    expect(await relCount(envelope.id, txn.id, 'subitem')).toBe(1);
+    expect(await relCount(envelope.id, txn.id, 'envelope-binding')).toBe(1);
   });
 });
 
-describe('переходная колонка и эвристика миграции 0016', () => {
-  test('24. relation_type производится из role ТОТАЛЬНО (все 11 ролей) и даёт ПЯТЬ значений', async () => {
-    // Проекция считается ОДНОЙ функцией (`projectLegacyRelationType`), и записывает колонку
-    // единственный писатель — INSERT стадии 5. Каждая роль — на своей паре сущностей, иначе
-    // роли одной проекции столкнулись бы на `rel_uniq` интервала.
-    const cases: Array<[string, string]> = [
-      ['subitem', 'parent'],
-      ['ticket', 'parent'],
-      ['run', 'parent'],
-      ['envelope-binding', 'parent'],
-      ['category-parent', 'parent'],
-      ['dependency', 'blocks'],
-      ['mention', 'related_to'],
-      ['alternative-of', 'related_to'],
-      ['supersedes', 'related_to'],
-      ['instance-of', 'derived_from'],
-      // `ref` — ОДИННАДЦАТАЯ роль, и её проекция даёт ПЯТОЕ значение колонки, которого в
-      // старом закрытом списке из четырёх не было. Строка пишется живьём именно поэтому:
-      // 0017 будет решать судьбу колонки по тому, что в ней РЕАЛЬНО лежит, и CHECK на
-      // четыре значения такую строку не вместил бы.
-      ['ref', 'ref'],
-    ];
-    for (const [role, legacy] of cases) {
-      const a = await createEntity({ title: `Проекция-${role}-A` });
-      const b = await createEntity({ title: `Проекция-${role}-B` });
-      ok(await createRelation(a.id, b.id, role, AS_SYSTEM));
-      expect(await legacyTypeOf(a.id, b.id, role)).toBe(legacy);
-    }
-    expect(cases.length).toBe(11); // тотальность: ни одна роль не пропущена
-    expect([...new Set(cases.map(([, legacy]) => legacy))].sort()).toEqual([
-      'blocks',
-      'derived_from',
-      'parent',
-      'ref',
-      'related_to',
-    ]);
-  });
-
-  test('25. reform_role_heuristic: роль из схлопнутого типа — по ОБОИМ концам', async () => {
-    // Типы вне `parent` роль определяют целиком, аспекты не спрашиваются
-    expect(await heuristic('blocks', '{}', '{}')).toBe('dependency');
-    expect(await heuristic('related_to', '{}', '{}')).toBe('mention');
-    expect(await heuristic('derived_from', '{}', '{}')).toBe('instance-of');
-    // `ref` колонка v1 не знает, но проекция роли `ref` даёт именно его — эвристика с
-    // `projectLegacyRelationType` расходиться не вправе
-    expect(await heuristic('ref', '{}', '{}')).toBe('ref');
-
-    // Пять смыслов `parent`: КАЖДЫЙ опознаётся обоими концами
-    expect(await heuristic('parent', '{}', '{}')).toBe('subitem');
-    expect(await heuristic('parent', '{"orbis/budget":{}}', '{"orbis/financial":{}}')).toBe(
-      'envelope-binding',
-    );
-    expect(await heuristic('parent', '{"orbis/category":{}}', '{"orbis/category":{}}')).toBe(
-      'category-parent',
-    );
-    expect(await heuristic('parent', '{}', '{"orbis/agent-run":{}}')).toBe('run');
-    expect(await heuristic('parent', '{"orbis/project":{}}', '{"orbis/assignment":{}}')).toBe(
-      'ticket',
-    );
-  });
-
-  test('25a. догадка по ОДНОМУ концу отвергнута: обычный ребёнок конверта остаётся подпунктом', async () => {
-    // Ошибка в пользу СИСТЕМНОЙ роли невосстановима: `envelope-binding` владелец обратно
-    // не поставит (`ROLE_SYSTEM_ONLY`), а из «Подзадач» такая запись пропадёт.
-    expect(await heuristic('parent', '{"orbis/budget":{}}', '{"orbis/note":{}}')).toBe('subitem');
-    expect(await heuristic('parent', '{"orbis/budget":{}}', '{"orbis/task":{}}')).toBe('subitem');
-    // Дерево категорий требует категорию с ОБЕИХ сторон (как `categoryEdges` агрегатов):
-    // задача внутри категории — подпункт, а не ребро дерева
-    expect(await heuristic('parent', '{"orbis/task":{}}', '{"orbis/category":{}}')).toBe('subitem');
-    // …и симметрично: категория как источник без категории-цели тоже не дерево
-    expect(await heuristic('parent', '{"orbis/category":{}}', '{"orbis/note":{}}')).toBe('subitem');
-  });
-
-  test('25b. порядок веток значим: запись «и конверт, и категория» — прежде всего конверт', async () => {
-    // Единственный образец, где ветки `envelope-binding` и `category-parent` конкурируют:
-    // без порядка он вернул бы `category-parent`, и транзакция ушла бы в дерево категорий
-    expect(
-      await heuristic(
-        'parent',
-        '{"orbis/budget":{},"orbis/category":{}}',
-        '{"orbis/financial":{},"orbis/category":{}}',
-      ),
-    ).toBe('envelope-binding');
-  });
-
-  test('25c. неизвестный relation_type РОНЯЕТ миграцию с именем типа в тексте, а не молчит', async () => {
-    // Прежний `ELSE 'subitem'` глотал бы и опечатку, и значение, которого код не знает:
-    // граф получил бы «подпункт» там, где смысл был другой, и разобрать это стало бы нечем
-    // Drizzle заворачивает ошибку PG, поэтому текст ищется по всей цепочке `cause`:
-    // проверять надо СООБЩЕНИЕ БАЗЫ, а не обёртку — обёртка одинакова у любого сбоя
-    let chain = '';
-    try {
-      await heuristic('невиданный', '{}', '{}');
-    } catch (e) {
-      for (let cur: unknown = e; cur instanceof Error; cur = cur.cause) {
-        chain += `${cur.message}\n`;
-      }
-    }
-    expect(chain).toContain('неизвестный relation_type');
-    expect(chain).toContain('невиданный');
-  });
-
-  test('26. неизвестная роль → VALIDATION «нет такой роли», а не молчаливый parent и не отказ интервала', async () => {
-    const a = await createEntity({ title: 'Незнакомая-A' });
-    const b = await createEntity({ title: 'Незнакомая-B' });
-    const r = err(await createRelation(a.id, b.id, 'нет-такой-роли'));
-    expect(r.error.code).toBe('VALIDATION');
-    expect(r.error.message).toContain('неизвестная роль');
-    expect((r.error.details as { role?: string }).role).toBe('нет-такой-роли');
-    // Отказ идёт от РЕЕСТРА, а не от ограничения интервала 0017: у них разные причины и
-    // разная судьба (интервальный уходит с contract-миграцией, реестровый остаётся)
-    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBeUndefined();
-    expect(await relCount(a.id, b.id, 'нет-такой-роли')).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ИНТЕРВАЛ 7a→0017: «один budget-parent» на множестве СТАРОЙ колонки
-// ---------------------------------------------------------------------------
-//
-// Роль `envelope-binding` системная — владелец её не ставит вовсе. Но агрегаты бюджета до
-// contract-миграции считают детей конверта по ПЕРЕХОДНОЙ колонке (`relation_type='parent'`,
-// `spentByEnvelope`), то есть считают и `subitem`, и `ticket`, и любую другую роль владельца,
-// проецирующуюся в `parent`. Значит ограничение роли, считающее только свои рёбра, на
-// интервале ЗАКРЫВАЕТ НЕ ВСЁ, и владелец видит одну трату в двух конвертах.
-//
-// Эти тесты держат инвариант на том же множестве, на котором работают агрегаты. Их срок
-// жизни — до 0017: когда старая колонка уйдёт, уйдут и они (вместе с правилом Б-2).
-describe('интервал 7a→0017: конверт-родитель по СТАРОЙ колонке (§4.2/§13.7)', () => {
+describe('конверт-родитель = роль envelope-binding (§4.2/§13.7 после 0017)', () => {
+  /**
+   * «Один budget-parent» держит ОДНО правило — `target_max_incoming: 1` роли
+   * `envelope-binding` в реестре (`assertTargetMaxIncoming`). До 0017 этого было мало:
+   * агрегаты считали детей конверта по расширенному множеству ролей, и ребро `subitem` от
+   * второго конверта проходило все ролевые проверки, а владелец видел ОДНУ трату в ДВУХ
+   * конвертах. Теперь и агрегаты, и хук, и инвариант говорят одной ролью — второго входа в
+   * ограничение больше нет, и ретроспективной проверки на attach тоже.
+   */
   async function twoEnvelopesAndTxn(): Promise<{
     env1: WireEntity;
     env2: WireEntity;
     txn: WireEntity;
   }> {
-    // Категории у конвертов РАЗНЫЕ (уникальность §2.1 запрещает две одинаковых комбинации),
-    // и это не смягчает задачу: `spentByEnvelope` категорию ребёнка не спрашивает вовсе —
-    // он суммирует ВСЕХ parent-детей конверта.
-    const env1 = await createEntity({
-      title: 'Конверт Еда',
-      props: budgetProps(),
-      aspects: ['orbis/budget'],
-    });
-    const env2 = await createEntity({
-      title: 'Конверт Развлечения',
-      props: budgetProps(),
-      aspects: ['orbis/budget'],
-    });
-    const txn = await createEntity({
-      title: 'Транзакция на 1200',
-      props: finProps(),
-      aspects: ['orbis/financial'],
-    });
+    const env1 = await createEntity({ title: 'Конверт 1', props: budgetProps() });
+    const env2 = await createEntity({ title: 'Конверт 2', props: budgetProps() });
+    const txn = await createEntity({ title: 'Транзакция', props: finProps() });
     return { env1, env2, txn };
   }
 
-  test('27. роль ВЛАДЕЛЬЦА от второго конверта к привязанной транзакции → INVARIANT: двойного счёта не будет', async () => {
+  test('второй envelope-binding к той же транзакции → INVARIANT target_max_incoming', async () => {
     const { env1, env2, txn } = await twoEnvelopesAndTxn();
     ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
-    // `subitem` — роль, которую владелец ставит своими руками, и она проецируется в `parent`
-    const r = err(await createRelation(env2.id, txn.id, 'subitem'));
-    expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
-    // Главное следствие: агрегаты видят РОВНО ОДИН конверт-родитель
-    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
-  });
-
-  /**
-   * СЕТЬ ПОД SQL-ПОЛОВИНОЙ ИНВАРИАНТА (ре-ревью 7b). Тесты 27/28 ставят первым ребром
-   * `envelope-binding`, а 31/31a-d идут по ВИРТУАЛЬНОЙ половине (JS-массив batch) — то есть
-   * сужение множества в SQL-запросе `assertSingleLegacyBudgetParent` переживали все они, и
-   * краснел ровно один тест на весь инвариант (32, через attach).
-   *
-   * Здесь существующее ребро — роль ВЛАДЕЛЬЦА и лежит СТРОКОЙ В БД (отдельный вызов, не
-   * batch), поэтому найти его может только SELECT инварианта. Сузь его до `envelope-binding`
-   * — и второй конверт встанет рядом с первым, а владелец увидит одну трату в двух конвертах.
-   */
-  test('28a. существующее ребро роли ВЛАДЕЛЬЦА лежит в БД: второй конверт отбивает SQL-половина инварианта', async () => {
-    const { env1, env2, txn } = await twoEnvelopesAndTxn();
-    // Первое ребро — `subitem`, руками владельца и ОТДЕЛЬНЫМ действием: к моменту второго
-    // вызова оно уже закоммичено, виртуального графа batch у проверки нет.
-    ok(await createRelation(env1.id, txn.id, 'subitem'));
-    // Второе — системная привязка, какую поставил бы хук бюджета
     const r = err(await createRelation(env2.id, txn.id, 'envelope-binding', AS_SYSTEM));
     expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
-    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
+    expect(invariantOf(r)).toBe('target_max_incoming');
   });
 
-  test('28. та же дыра ролью ticket (любая роль владельца, проецирующаяся в parent)', async () => {
+  test('ребро роли ВЛАДЕЛЬЦА от конверта привязкой НЕ считается и привязке не мешает', async () => {
+    // Смена наблюдаемого поведения, названная вслух (обещание PRD 10): до 0017 такое ребро
+    // было budget-parent'ом для агрегатов, теперь — обычная иерархия.
     const { env1, env2, txn } = await twoEnvelopesAndTxn();
-    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
-    const r = err(await createRelation(env2.id, txn.id, 'ticket'));
-    expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
-  });
-
-  test('29. роль, НЕ проецирующаяся в parent, не ограничена: mention от второго конверта — ок', async () => {
-    const { env1, env2, txn } = await twoEnvelopesAndTxn();
-    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
-    ok(await createRelation(env2.id, txn.id, 'mention'));
-    // `mention` проецируется в `related_to` — агрегаты её не видят, считать нечего
-    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
-  });
-
-  test('30. источник БЕЗ бюджета не ограничен: subitem проекта к привязанной транзакции — ок', async () => {
-    const { env1, txn } = await twoEnvelopesAndTxn();
-    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
-    const project = await createEntity({ title: 'Проект-родитель' });
-    ok(await createRelation(project.id, txn.id, 'subitem'));
-    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
-  });
-
-  test('30a. mention-ребёнок конверта НЕ мешает attach: граница множества и сверху тоже', async () => {
-    // Расширь кто-нибудь `LEGACY_PARENT_ROLES` — и `attach_orbis_budget` начал бы отказывать
-    // владельцу из-за связи, которой агрегаты бюджета не считают вовсе.
-    const { env1, txn } = await twoEnvelopesAndTxn();
-    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
-    const x = await createEntity({ title: 'Будущий конверт с упоминанием' });
-    ok(await createRelation(x.id, txn.id, 'mention'));
-
-    const r = ok(
-      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
-    );
-    expect((r.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(true);
-    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
-  });
-
-  test('31. batch: два subitem от РАЗНЫХ конвертов к одной транзакции → отказ на второй (виртуальный эффект)', async () => {
-    const { env1, env2, txn } = await twoEnvelopesAndTxn();
-    const r = err(
-      await execute(db, {
-        actorUserId: userA,
-        actorKind: 'owner',
-        source: 'chat',
-        batchId: newId(),
-        clock: () => T0,
-        operations: [
-          {
-            tool: 'relation_create',
-            input: { source_id: env1.id, target_id: txn.id, role: 'subitem' },
-          },
-          {
-            tool: 'relation_create',
-            input: { source_id: env2.id, target_id: txn.id, role: 'subitem' },
-          },
-        ],
-      }),
-    );
-    expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    // batch атомарен: не записано НИ ОДНО ребро
-    expect(await legacyBudgetParents(txn.id)).toEqual([]);
-  });
-
-  // Признак «источник — конверт» у ВИРТУАЛЬНОГО ребра batch: он обязан читаться на момент
-  // ПРОВЕРКИ, а не на момент создания ребра. Заморозь его — и порядок «сначала связь, потом
-  // бюджет» проносит мимо инварианта два конверта на одну транзакцию (тот же двойной счёт,
-  // что и в остальных тестах этого describe, только через batch).
-  test('31a. batch «сначала рёбра, потом бюджеты»: X и Y становятся конвертами ПОСЛЕ своих subitem → отказ', async () => {
-    const { txn } = await twoEnvelopesAndTxn();
-    const x = await createEntity({ title: 'X — будущий конверт' });
-    const y = await createEntity({ title: 'Y — будущий конверт' });
-    const r = err(
-      await execute(db, {
-        actorUserId: userA,
-        actorKind: 'owner',
-        source: 'chat',
-        batchId: newId(),
-        clock: () => T0,
-        operations: [
-          {
-            tool: 'relation_create',
-            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
-          },
-          {
-            tool: 'relation_create',
-            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
-          },
-          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetProps() } },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
-        ],
-      }),
-    );
-    // Отказ идёт ИМЕННО от интервальной половины правила, а не от дубля или самосвязи
-    expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
-    // batch атомарен: ни рёбер, ни аспектов
-    expect(await legacyBudgetParents(txn.id)).toEqual([]);
-  });
-
-  test('31b. обратный порядок «сначала бюджеты, потом рёбра» — тот же отказ (контроль-регресс)', async () => {
-    const { txn } = await twoEnvelopesAndTxn();
-    const x = await createEntity({ title: 'X — конверт сразу' });
-    const y = await createEntity({ title: 'Y — конверт сразу' });
-    const r = err(
-      await execute(db, {
-        actorUserId: userA,
-        actorKind: 'owner',
-        source: 'chat',
-        batchId: newId(),
-        clock: () => T0,
-        operations: [
-          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetProps() } },
-          {
-            tool: 'relation_create',
-            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
-          },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
-          {
-            tool: 'relation_create',
-            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
-          },
-        ],
-      }),
-    );
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect(await legacyBudgetParents(txn.id)).toEqual([]);
-  });
-
-  test('31c. ЗЕРКАЛЬНЫЙ случай: источник перестал быть конвертом тем же batch → его ребро не считается', async () => {
-    // Признак читается на момент проверки в ОБЕ стороны. Замороженный он запрещал бы здесь
-    // законное: у транзакции остаётся ровно один конверт-родитель — Y.
-    const { txn } = await twoEnvelopesAndTxn();
-    const x = await createEntity({
-      title: 'X — конверт, который им быть перестанет',
-      props: budgetProps(),
-      aspects: ['orbis/budget'],
-    });
-    const y = await createEntity({ title: 'Y — будущий конверт' });
-    ok(
-      await execute(db, {
-        actorUserId: userA,
-        actorKind: 'owner',
-        source: 'chat',
-        batchId: newId(),
-        clock: () => T0,
-        operations: [
-          {
-            tool: 'relation_create',
-            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
-          },
-          { tool: 'entity_update', input: { id: x.id, aspects: { detach: ['orbis/budget'] } } },
-          {
-            tool: 'relation_create',
-            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
-          },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
-        ],
-      }),
-    );
-    expect(await legacyBudgetParents(txn.id)).toEqual([y.id]);
-  });
-
-  test('31d. источник, которого batch НЕ трогал, считается по строке БД (фолбэк замороженного признака)', async () => {
-    // У такого источника резолвить нечего: его нет в виртуальной карте сущностей batch, и
-    // единственная правда о нём — признак, снятый при создании ребра с уже загруженной
-    // строки. Снятие фолбэка открыло бы дыру ровно на этом пути.
-    const { txn } = await twoEnvelopesAndTxn();
-    const x = await createEntity({
-      title: 'X — конверт ДО batch',
-      props: budgetProps(),
-      aspects: ['orbis/budget'],
-    });
-    const y = await createEntity({ title: 'Y — будущий конверт' });
-    const r = err(
-      await execute(db, {
-        actorUserId: userA,
-        actorKind: 'owner',
-        source: 'chat',
-        batchId: newId(),
-        clock: () => T0,
-        operations: [
-          {
-            tool: 'relation_create',
-            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
-          },
-          {
-            tool: 'relation_create',
-            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
-          },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
-        ],
-      }),
-    );
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect(await legacyBudgetParents(txn.id)).toEqual([]);
-  });
-
-  test('32. ВТОРОЙ ВХОД: attach orbis/budget на источника subitem-ребра, когда у транзакции уже есть subitem от конверта', async () => {
-    // Ни одного ребра роли `envelope-binding` в сценарии нет вовсе — ограничение роли здесь
-    // молчит по построению, а агрегаты посчитали бы транзакцию дважды.
-    const { env1, txn } = await twoEnvelopesAndTxn();
     ok(await createRelation(env1.id, txn.id, 'subitem'));
-    const x = await createEntity({ title: 'Будущий конверт (второй вход)' });
-    ok(await createRelation(x.id, txn.id, 'subitem'));
-
-    const r = err(
-      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
-    );
-    expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
+    ok(await createRelation(env2.id, txn.id, 'envelope-binding', AS_SYSTEM));
+    expect(await relCount(env2.id, txn.id, 'envelope-binding')).toBe(1);
   });
 });

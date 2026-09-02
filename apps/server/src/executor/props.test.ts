@@ -1,12 +1,15 @@
 // apps/server/src/executor/props.test.ts
-// Веха B реформы: исполнитель пишет НОВУЮ правду сущности — `props` по id свойства и список
-// `aspects[]` (§А1-1), а старая карта `aspects_legacy` становится её ПРОЕКЦИЕЙ. Здесь же
-// стоят гейты флагов (§А2-5), ось `mechanism` (§А4-4) и вторая форма входа (РП-3).
+// Веха B реформы: исполнитель пишет правду сущности — `props` по id свойства и список
+// `aspects[]` (§А1-1). Здесь же стоят гейты флагов (§А2-5) и ось `mechanism` (§А4-4).
+//
+// СТАРОЙ КАРТЫ И ЕЁ ИНВАРИАНТА ЗДЕСЬ БОЛЬШЕ НЕТ. Пока колонка `aspects_legacy` жила, эти
+// тесты сверяли её с проекцией после каждой мутации — дуальная запись держалась только
+// инвариантом. «Пересев мира» снял колонку, и вопрос «сошлись ли две записи одного факта»
+// исчез вместе со второй записью.
 //
 // Тесты интеграционные: реальная БД под withIdentity, без моков — ровно потому, что
 // проверяется СТРОКА, а не возвращённая wire-форма. Расхождение между тем, что уехало
-// клиенту, и тем, что легло в колонки, — как раз тот класс дефекта, ради которого дуальная
-// запись и держится под инвариантом.
+// клиенту, и тем, что легло в колонки, — тот класс дефекта, который иначе не виден.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -44,12 +47,12 @@ import { bumpOwnerRegistryVersion } from '../registry/version';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { touchesBudgetContour } from './executor';
 import { makeChatJournalSink } from './journal';
-import { fromLegacyInput, projectLegacyAspects } from './legacy-form';
 import {
   applyPropsPatch,
   comparePropertyValue,
   type EntityState,
   nearestPropertyKey,
+  propsPatchFromInput,
   resolvePropertyRef,
   stateDelta,
   touchedProperties,
@@ -107,45 +110,19 @@ function entityOf(r: ExecuteResult): WireEntity {
 interface Row {
   props: Record<string, unknown>;
   aspects: string[];
-  aspectsLegacy: Record<string, Record<string, unknown>>;
 }
 
-/** Три колонки строки как они легли в БД (не wire-форма — именно колонки). */
+/** Колонки значений строки как они легли в БД (не wire-форма — именно колонки). */
 async function rowOf(id: string): Promise<Row> {
   const rows = await withIdentity(db, owner, (tx) =>
     tx
-      .select({
-        props: entities.props,
-        aspects: entities.aspects,
-        aspectsLegacy: entities.aspectsLegacy,
-      })
+      .select({ props: entities.props, aspects: entities.aspects })
       .from(entities)
       .where(eq(entities.id, id)),
   );
   const row = rows[0];
   if (row === undefined) throw new Error(`строка ${id} не найдена`);
-  return {
-    props: row.props as Record<string, unknown>,
-    aspects: row.aspects,
-    aspectsLegacy: row.aspectsLegacy as Record<string, Record<string, unknown>>,
-  };
-}
-
-/**
- * Инвариант дуальной записи: старая карта — ровно проекция новой правды (§А1-1).
- *
- * Две половины, и вторая не украшение. Первая сверяет колонку с `projectLegacyAspects` —
- * той же функцией, которой пишет исполнитель, поэтому одна она поймала бы расхождение
- * ЗАПИСИ, но не порчу самой проекции (обе стороны сдвинулись бы вместе). Вторая проверяет
- * то, что от проекции НЕ зависит: ключи старой карты — ровно список аспектов строки.
- */
-async function expectProjection(id: string): Promise<Row> {
-  const row = await rowOf(id);
-  expect(row.aspectsLegacy).toEqual(
-    projectLegacyAspects(reg, { props: row.props, aspects: row.aspects }),
-  );
-  expect(Object.keys(row.aspectsLegacy).sort()).toEqual([...row.aspects].sort());
-  return row;
+  return { props: row.props as Record<string, unknown>, aspects: row.aspects };
 }
 
 function violationsOf(r: ExecuteResult): PropsViolation[] {
@@ -190,24 +167,23 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
-  test('entity_create со старым патчем aspects → props по id, aspects[] и aspects_legacy = projectLegacyAspects(props, aspects)', async () => {
+  test('entity_create кладёт значения в props по id свойства, а список — в aspects[]', async () => {
     const e = entityOf(
       await run('entity_create', {
         title: 'Покупка кофе',
         tags: [],
-        aspects: {
-          'orbis/financial': {
-            amount: '340.00',
-            currency: 'RUB',
-            direction: 'expense',
-            category_ref: CATEGORY_A,
-            occurred_on: '2026-08-26',
-          },
+        props: {
+          'orbis/amount': '340.00',
+          'orbis/currency': 'RUB',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_A,
+          'orbis/occurred_on': '2026-08-26',
         },
+        aspects: ['orbis/financial'],
       }),
     );
 
-    const row = await expectProjection(e.id);
+    const row = await rowOf(e.id);
     // Значения адресуются id СВОЙСТВА, а не парой «аспект + поле»
     expect(row.props).toEqual({
       'orbis/amount': '340.00',
@@ -217,16 +193,7 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
       'orbis/occurred_on': '2026-08-26',
     });
     expect(row.aspects).toEqual(['orbis/financial']);
-    // Старая карта не исчезла и не разъехалась: её пишет проекция (дуальная запись до 23)
-    expect(row.aspectsLegacy['orbis/financial']).toEqual({
-      amount: '340.00',
-      currency: 'RUB',
-      direction: 'expense',
-      category_ref: CATEGORY_A,
-      occurred_on: '2026-08-26',
-    });
-    // Мешка `meta` в wire-форме больше нет вовсе (§А1-3, Задача 13c): колонка доживает до
-    // 0017 пустой, но наружу не едет — и убедиться в этом можно только по самой форме.
+    // Мешка `meta` нет ни в wire-форме (§А1-3, Задача 13c), ни в базе: колонку сняла 0017.
     expect('meta' in e).toBe(false);
   });
 
@@ -259,12 +226,11 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
       }),
     );
 
-    const a = await expectProjection(legacy.id);
-    const b = await expectProjection(fresh.id);
+    const a = await rowOf(legacy.id);
+    const b = await rowOf(fresh.id);
     // Валюта подставлена умолчанием у конверта, а не у транзакции — обе строки совпадают
     expect(b.props).toEqual(a.props);
     expect(b.aspects).toEqual(a.aspects);
-    expect(b.aspectsLegacy).toEqual(a.aspectsLegacy);
 
     // Тот же адрес — двумя именами: id свойства и его key (у своего свойства они разные)
     const byId = entityOf(
@@ -283,8 +249,8 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
     );
     expect((await rowOf(byId.id)).props).toEqual({ [FREE_PROPERTY_ID]: 7 });
     expect((await rowOf(byKey.id)).props).toEqual({ [FREE_PROPERTY_ID]: 7 });
-    // Свободное свойство (§А1-2) живёт без аспекта — и в старую карту не течёт
-    expect((await rowOf(byKey.id)).aspectsLegacy).toEqual({});
+    // Свободное свойство (§А1-2) живёт без аспекта — список интерпретаций пуст
+    expect((await rowOf(byKey.id)).aspects).toEqual([]);
   });
 
   test('detach аспекта оставляет значения свойств (Р9); explicit unset снимает свойство', async () => {
@@ -303,15 +269,13 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
     );
 
     ok(await run('entity_update', { id: e.id, aspects: { detach: ['orbis/financial'] } }));
-    const afterDetach = await expectProjection(e.id);
+    const afterDetach = await rowOf(e.id);
     expect(afterDetach.aspects).toEqual([]);
     // Значение суммы — факт владельца, а не собственность аспекта (Р9)
     expect(afterDetach.props['orbis/amount']).toBe('700.00');
-    // В старой карте его больше нет: носителя не осталось
-    expect(afterDetach.aspectsLegacy).toEqual({});
 
     ok(await run('entity_update', { id: e.id, unset: ['orbis/amount'] }));
-    const afterUnset = await expectProjection(e.id);
+    const afterUnset = await rowOf(e.id);
     expect(Object.hasOwn(afterUnset.props, 'orbis/amount')).toBe(false);
     expect(afterUnset.props['orbis/direction']).toBe('expense');
   });
@@ -344,93 +308,6 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Инвариант проекции под случайными патчами
-// ---------------------------------------------------------------------------
-
-describe('инвариант дуальной записи', () => {
-  test('после КАЖДОЙ мутации (create/update/attach/detach/undo) aspects_legacy === projectLegacyAspects(props, aspects) — 50 случайных патчей', async () => {
-    // Генератор детерминированный: упавший прогон обязан воспроизводиться, а не «иногда».
-    let seed = 20260826;
-    const rnd = (): number => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
-      return seed / 2147483648;
-    };
-    const pick = <T>(items: readonly T[]): T => {
-      const v = items[Math.floor(rnd() * items.length)];
-      if (v === undefined) throw new Error('пустой список выбора');
-      return v;
-    };
-
-    const STATUSES = ['inbox', 'planned', 'in_progress', 'waiting', 'done', 'cancelled'] as const;
-    const PRIORITIES = ['low', 'medium', 'high'] as const;
-    const AMOUNTS = ['10.00', '340.50', '1000.00'] as const;
-
-    /** Валидный патч НОВОЙ формы: у аспекта, который НАВЕШИВАЕТСЯ, обязательные всегда есть. */
-    const propsPatch = (): Record<string, unknown> => {
-      switch (Math.floor(rnd() * 5)) {
-        case 0:
-          return {
-            props: { 'orbis/task_status': pick(STATUSES), 'orbis/priority': pick(PRIORITIES) },
-            aspects: { attach: ['orbis/task'] },
-          };
-        case 1:
-          return { unset: ['orbis/priority'], aspects: { attach: ['orbis/task'] } };
-        case 2:
-          return { props: { 'orbis/pinned': rnd() > 0.5 }, aspects: { attach: ['orbis/note'] } };
-        case 3:
-          return {
-            props: {
-              'orbis/amount': pick(AMOUNTS),
-              'orbis/direction': pick(['expense', 'income'] as const),
-              'orbis/finance_category': pick([CATEGORY_A, CATEGORY_B] as const),
-              'orbis/occurred_on': '2026-08-26',
-            },
-            aspects: { attach: ['orbis/financial'] },
-          };
-        default:
-          return { aspects: { detach: ['orbis/financial'] } };
-      }
-    };
-
-    const e = entityOf(
-      await run('entity_create', {
-        title: 'Подопытная запись',
-        tags: [],
-        props: { 'orbis/task_status': 'inbox' },
-        aspects: ['orbis/task'],
-      }),
-    );
-    await expectProjection(e.id);
-
-    let applied = 0;
-    let lastActionId: string | undefined;
-    for (let i = 0; i < 50; i++) {
-      const roll = rnd();
-      if (roll < 0.15 && lastActionId !== undefined) {
-        // Откат последнего действия — тоже мутация, и инвариант обязан пережить её
-        const undone = await undoAction(db, { actorUserId: owner, actionId: lastActionId });
-        expect(undone.ok).toBe(true);
-        lastActionId = undefined;
-      } else if (roll < 0.3) {
-        const r = ok(
-          await run('attach_orbis_note', {
-            entity_id: e.id,
-            data: { 'orbis/pinned': rnd() > 0.5 },
-          }),
-        );
-        lastActionId = r.actionId;
-      } else {
-        const r = ok(await run('entity_update', { id: e.id, ...propsPatch() }));
-        lastActionId = r.actionId;
-      }
-      applied += 1;
-      await expectProjection(e.id);
-    }
-    expect(applied).toBe(50);
-  }, 120_000);
-});
-
-// ---------------------------------------------------------------------------
 // Гейты флагов (§А2-5) и ось mechanism (§А4-4)
 // ---------------------------------------------------------------------------
 
@@ -442,8 +319,8 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
   /**
    * Обещание §С7-13 в самой сильной форме, какая проверяется без базы: полезная нагрузка
    * журнала и его inverse — это ДИФФЫ СОСТОЯНИЙ в обе стороны, поэтому применение inverse
-   * к состоянию «после» обязано давать состояние «до» дословно — по всем трём формам
-   * (`props`, `aspects[]`, проекция `aspects_legacy`).
+   * к состоянию «после» обязано давать состояние «до» дословно — по обеим формам
+   * (`props` и `aspects[]`).
    *
    * Корпус берётся чужой (`test/golden/validator-verdicts.json`, приёмка §С8-1): он собран
    * до этой задачи и по другим источникам, поэтому подтвердить сам себя не может.
@@ -459,7 +336,7 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
   const POSITIVES = 36;
   const PROBE_ID = '019e4466-dddd-7e07-b5d4-64be9721da54';
 
-  test(`${POSITIVES} позитивных записей корпуса: inverse возвращает props/aspects/aspects_legacy дословно`, () => {
+  test(`${POSITIVES} позитивных записей корпуса: inverse возвращает props/aspects дословно`, () => {
     const positives = corpus.filter((r) => r.legacyVerdict === 'ok' && r.newVerdict === 'ok');
     // Число точное, а не «хотя бы»: с порогом «не меньше» неудобную запись можно было бы
     // молча выкинуть из корпуса, и красным это не стало бы (урок гейт-ревью 2)
@@ -469,22 +346,19 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
       // «До» непустое намеренно: свойство-сосед, которого патч не касается, обязан
       // пережить и запись, и откат — на этом стоит вся единица отката «свойство»
       const before: EntityState = { props: { [FREE_PROPERTY_ID]: 7 }, aspects: [] };
-      const patch = fromLegacyInput(reg, { props: record.props, aspects: record.aspects });
+      const patch = propsPatchFromInput(reg, { props: record.props, aspects: record.aspects });
       const after = applyPropsPatch(before, patch);
 
       // Полезная нагрузка «как исполнено» — тоже исполнимый тул: круг проверяется в обе стороны
       const forward = entityUpdateExecInput.parse({ id: PROBE_ID, ...stateDelta(before, after) });
-      const applied = applyPropsPatch(before, fromLegacyInput(reg, forward));
+      const applied = applyPropsPatch(before, propsPatchFromInput(reg, forward));
       expect(canonicalJson(applied.props)).toBe(canonicalJson(after.props));
 
       const inverse = entityUpdateExecInput.parse({ id: PROBE_ID, ...stateDelta(after, before) });
-      const restored = applyPropsPatch(after, fromLegacyInput(reg, inverse));
+      const restored = applyPropsPatch(after, propsPatchFromInput(reg, inverse));
 
       expect(canonicalJson(restored.props)).toBe(canonicalJson(before.props));
       expect([...restored.aspects].sort()).toEqual([...before.aspects].sort());
-      expect(canonicalJson(projectLegacyAspects(reg, restored))).toBe(
-        canonicalJson(projectLegacyAspects(reg, before)),
-      );
     }
   });
 });
@@ -534,7 +408,7 @@ describe('гейты флагов свойств', () => {
     const allowed = await run('entity_create', goalInput({ 'orbis/current_value': '10' }), {
       mechanism: 'rule',
     });
-    const row = await expectProjection(entityOf(allowed).id);
+    const row = await rowOf(entityOf(allowed).id);
     expect(row.props['orbis/current_value']).toBe('10');
 
     // Цель БЕЗ кэша заводится обычным путём: гейт смотрит на свойство, а не на аспект
@@ -588,7 +462,7 @@ describe('гейты флагов свойств', () => {
         { mechanism: 'verb' },
       ),
     );
-    const row = await expectProjection(run0.id);
+    const row = await rowOf(run0.id);
     expect(row.props['orbis/run_report']).toBe('честный отчёт');
   });
 
@@ -669,8 +543,8 @@ describe('гейты флагов свойств', () => {
     expect(byComputed.error.details).toMatchObject({ reason: 'model_writable' });
 
     // Значение на месте — ни одна из трёх проб ничего не стёрла
-    expect((await expectProjection(created.id)).props['orbis/run_report']).toBe('честный отчёт');
-    expect((await expectProjection(goal.id)).props['orbis/current_value']).toBe('3');
+    expect((await rowOf(created.id)).props['orbis/run_report']).toBe('честный отчёт');
+    expect((await rowOf(goal.id)).props['orbis/current_value']).toBe('3');
 
     // Тот же глагол, которому свойство принадлежит, снимает его без препятствий
     ok(
@@ -680,9 +554,7 @@ describe('гейты флагов свойств', () => {
         { mechanism: 'verb' },
       ),
     );
-    expect(Object.hasOwn((await expectProjection(created.id)).props, 'orbis/run_report')).toBe(
-      false,
-    );
+    expect(Object.hasOwn((await rowOf(created.id)).props, 'orbis/run_report')).toBe(false);
   });
 
   test('откат ЯВНО снимает служебное свойство и гейт флагов его пропускает (§7.8 поверх §А2-5)', async () => {
@@ -723,7 +595,7 @@ describe('гейты флагов свойств', () => {
         { mechanism: 'verb' },
       ),
     );
-    expect((await expectProjection(run0.id)).props['orbis/run_report']).toBe('отчёт глагола');
+    expect((await rowOf(run0.id)).props['orbis/run_report']).toBe('отчёт глагола');
 
     // Тот же `unset` от лица тула — COMPUTED_WRITE (контрольная половина: гейт жив)
     const denied = await run('entity_update', { id: run0.id, unset: ['orbis/run_report'] });
@@ -734,7 +606,7 @@ describe('гейты флагов свойств', () => {
     // А откат той же законной записи — проходит, и свойство снимается
     const undone = await undoAction(db, { actorUserId: owner, actionId: wrote.actionId });
     expect(undone.ok).toBe(true);
-    expect(Object.hasOwn((await expectProjection(run0.id)).props, 'orbis/run_report')).toBe(false);
+    expect(Object.hasOwn((await rowOf(run0.id)).props, 'orbis/run_report')).toBe(false);
   });
 
   test('замена носителя (attach) не стирает служебное значение, но снимает свои: bank_txn_id переживает attach_orbis_financial', async () => {
@@ -772,14 +644,12 @@ describe('гейты флагов свойств', () => {
       }),
     );
 
-    const row = await expectProjection(imported.id);
+    const row = await rowOf(imported.id);
     expect(row.props['orbis/amount']).toBe('1500.00');
     // Импортное тождество переживает навешивание аспекта…
     expect(row.props['orbis/bank_txn_id']).toBe('BNK-42');
     // …а СВОЁ поле, которого в `data` не было, замена честно снимает
     expect(Object.hasOwn(row.props, 'orbis/payment_method')).toBe(false);
-    // …и его больше нет в старой карте: проекция и колонка сходятся (проверено выше)
-    expect(row.aspectsLegacy['orbis/financial']).toMatchObject({ bank_txn_id: 'BNK-42' });
 
     // Фильтр — ТОЛЬКО про неназванное поле. Назвал явно — дошёл до гейта прав.
     //
@@ -849,20 +719,13 @@ describe('гейты флагов свойств', () => {
       }),
     );
 
-    const row = await expectProjection(e.id);
+    const row = await rowOf(e.id);
     expect(row.props['orbis/finance_category']).toBe(CATEGORY_C);
     expect(row.props['orbis/currency']).toBe('USD');
+    // Одно значение — ДВА НОСИТЕЛЯ, и в этом весь смысл слияния §А8/В1: свойство одно
+    // (`orbis/finance_category`, `orbis/currency`), а объявляют его оба аспекта.
     expect(row.aspects.sort()).toEqual(['orbis/budget', 'orbis/financial']);
-    // Одно значение — два носителя: старая карта показывает его у обоих аспектов
-    expect(row.aspectsLegacy['orbis/financial']).toMatchObject({
-      category_ref: CATEGORY_C,
-      currency: 'USD',
-    });
-    expect(row.aspectsLegacy['orbis/budget']).toMatchObject({
-      category_ref: CATEGORY_C,
-      currency: 'USD',
-      period_start: '2026-11-01',
-    });
+    expect(row.props['orbis/period_start']).toBe('2026-11-01');
     // …а СВОЁ поле транзакции, которого у конверта нет вовсе, замена не трогает тем более
     expect(row.props['orbis/occurred_on']).toBe('2026-08-26');
   });
@@ -905,10 +768,9 @@ describe('гейты флагов свойств', () => {
         },
       }),
     );
-    const moved = await expectProjection(envelope.id);
+    const moved = await rowOf(envelope.id);
     expect(moved.props['orbis/period_start']).toBe('2026-09-01');
     expect(Object.hasOwn(moved.props, 'orbis/carryover')).toBe(false);
-    expect(moved.aspectsLegacy['orbis/budget']).not.toHaveProperty('carryover');
   });
 
   test('перенос, записанный ТЕМ ЖЕ патчем при смене периода, не считается устаревшим (продление конверта, §3.5)', async () => {
@@ -953,7 +815,7 @@ describe('гейты флагов свойств', () => {
         { mechanism: 'rule' },
       ),
     );
-    const updated = await expectProjection(byUpdate.id);
+    const updated = await rowOf(byUpdate.id);
     expect(updated.props['orbis/period_start']).toBe('2027-04-01');
     expect(updated.props['orbis/carryover']).toBe('777.00');
 
@@ -976,7 +838,7 @@ describe('гейты флагов свойств', () => {
         { mechanism: 'rule' },
       ),
     );
-    const attached = await expectProjection(byAttach.id);
+    const attached = await rowOf(byAttach.id);
     expect(attached.props['orbis/period_start']).toBe('2027-05-01');
     expect(attached.props['orbis/carryover']).toBe('888.00');
   });
@@ -1013,7 +875,7 @@ describe('гейты флагов свойств', () => {
         aspects: { attach: ['orbis/budget'] },
       }),
     );
-    const patched = await expectProjection(envelope.id);
+    const patched = await rowOf(envelope.id);
     expect(patched.props['orbis/limit']).toBe('12000.00');
     expect(patched.props['orbis/carryover']).toBe('500.00');
 
@@ -1026,9 +888,7 @@ describe('гейты флагов свойств', () => {
         aspects: { attach: ['orbis/budget'] },
       }),
     );
-    expect(Object.hasOwn((await expectProjection(envelope.id)).props, 'orbis/carryover')).toBe(
-      false,
-    );
+    expect(Object.hasOwn((await rowOf(envelope.id)).props, 'orbis/carryover')).toBe(false);
   });
 
   test('internalUndo восстанавливает состояние с system_writable-свойствами без гейта', async () => {
@@ -1068,7 +928,7 @@ describe('гейты флагов свойств', () => {
     // COMPUTED_WRITE, то есть законно записанное состояние стало бы неотменяемым.
     const undone = await undoAction(db, { actorUserId: owner, actionId: patched.actionId });
     expect(undone.ok).toBe(true);
-    const row = await expectProjection(created.id);
+    const row = await rowOf(created.id);
     expect(row.props['orbis/run_outcome']).toBe('running');
     expect(Object.hasOwn(row.props, 'orbis/run_report')).toBe(false);
   });
@@ -1111,7 +971,7 @@ describe('затронутые аспекты считаются по свойс
     expect((r.error.details as { reason?: string }).reason).toBe('run_subject');
 
     // Ничего не записано: субъект по-прежнему один
-    const row = await expectProjection(created.id);
+    const row = await rowOf(created.id);
     expect(row.props['orbis/run_routine']).toBe(routineId);
     expect(Object.hasOwn(row.props, 'orbis/grant')).toBe(false);
   });
@@ -1142,15 +1002,12 @@ describe('затронутые аспекты считаются по свойс
         aspects: { attach: ['orbis/financial'] },
       }),
     );
-    expect((await expectProjection(e.id)).aspectsLegacy['orbis/budget']).toMatchObject({
-      category_ref: CATEGORY_B,
-    });
+    expect((await rowOf(e.id)).props['orbis/finance_category']).toBe(CATEGORY_B);
 
     const undone = await undoAction(db, { actorUserId: owner, actionId: patched.actionId });
     expect(undone.ok).toBe(true);
-    const back = await expectProjection(e.id);
+    const back = await rowOf(e.id);
     expect(back.props['orbis/finance_category']).toBe(CATEGORY_A);
-    expect(back.aspectsLegacy['orbis/budget']).toMatchObject({ category_ref: CATEGORY_A });
   });
 });
 
@@ -1209,12 +1066,11 @@ describe('валидация по реестру (§А7-1)', () => {
     // Имя тула — общее (§А9-1, `attachToolName`): «/» и «-» ключа аспекта → «_».
     ok(await run('attach_user_sleep_log', { entity_id: e.id, data: { 'user/hours': 7 } }));
 
-    const row = await expectProjection(e.id);
-    // Своё свойство владельца адресуется своим key — и попадает в старую карту под тем
-    // именем поля, которое старая форма и знала (локальная часть ключа)
+    const row = await rowOf(e.id);
+    // Своё свойство владельца адресуется СВОИМ key — и никаким другим именем: локальной
+    // части (`hours`) не знает ни вход тула, ни строка.
     expect(row.props).toEqual({ 'user/hours': 7 });
     expect(row.aspects).toEqual(['user/sleep-log']);
-    expect(row.aspectsLegacy).toEqual({ 'user/sleep-log': { hours: 7 } });
 
     const denied = await run('attach_user_sleep_log', {
       entity_id: e.id,

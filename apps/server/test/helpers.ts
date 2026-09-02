@@ -1,11 +1,5 @@
 // apps/server/test/helpers.ts
-import {
-  type LocalizedText,
-  type PropertyType,
-  propertyValueJsonSchema,
-  X_ORBIS_DECIMAL,
-  X_ORBIS_TYPE,
-} from '@orbis/shared';
+import type { LocalizedText, PropertyType } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { type Db, makeDb } from '../src/db/client';
 import type { entities } from '../src/db/schema';
@@ -263,6 +257,43 @@ export async function entityColumns(
   return entityColumnsFrom(await effectiveRegistry(tx, ownerId), props, aspects);
 }
 
+/** Строка `entities`, записанная ПРЯМЫМ INSERT'ом мимо исполнителя, — вход `rawEntityRow`. */
+export interface RawRowSpec {
+  ownerId: string;
+  id: string;
+  title: string;
+  /** Значения по id свойства (§А1-1). */
+  props: Record<string, unknown>;
+  /** Список интерпретаций. */
+  aspects: string[];
+  archived?: boolean;
+}
+
+/**
+ * Строка `entities` прямым INSERT'ом мимо исполнителя.
+ *
+ * ЗАЧЕМ ОНА НУЖНА ПОСЛЕ РЕФОРМЫ. До «Пересева мира» этот помощник звался
+ * `divergentEntityRow` и служил ровно одному: развести НОВУЮ правду (`props`/`aspects[]`) и
+ * СТАРУЮ карту (`aspects_legacy`), чтобы вопрос «какую колонку ты читаешь» имел наблюдаемый
+ * ответ. Второй колонки больше нет — разводить нечего, и этот класс проверок закрыт схемой,
+ * а не тестом.
+ *
+ * Прямая запись всё же осталась нужной, и по другой причине: положить в граф значение,
+ * которого исполнитель бы НЕ ПРОПУСТИЛ (null у свойства, состояние «до бэкфилла»,
+ * сломанная форма) — иначе отказ читателя на таком значении нечем воспроизвести. Валидатор
+ * здесь намеренно обойдён, поэтому и имя честное: не «строка», а «сырая строка».
+ */
+export function rawEntityRow(spec: RawRowSpec): typeof entities.$inferInsert {
+  return {
+    id: spec.id,
+    ownerId: spec.ownerId,
+    title: spec.title,
+    props: spec.props,
+    aspects: spec.aspects,
+    ...(spec.archived === undefined ? {} : { archived: spec.archived }),
+  };
+}
+
 /**
  * Цели ссылок с ЗАДАННЫМИ id — фикстура ссылочных свойств (§А6-1).
  *
@@ -289,10 +320,9 @@ export async function seedRefTargetRows(
       if (seen.has(target.id)) continue;
       seen.add(target.id);
       await db.execute(sql`
-        INSERT INTO entities (id, owner_id, title, tags, props, aspects, aspects_legacy)
+        INSERT INTO entities (id, owner_id, title, tags, props, aspects)
         VALUES (${target.id}::uuid, ${ownerId}::uuid, ${`Цель ссылки (${target.aspect})`},
-                '{}'::text[], '{}'::jsonb, ARRAY[${target.aspect}]::text[],
-                jsonb_build_object(${target.aspect}::text, '{}'::jsonb))
+                '{}'::text[], '{}'::jsonb, ARRAY[${target.aspect}]::text[])
         ON CONFLICT (id) DO NOTHING`);
     }
   } finally {

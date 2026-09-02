@@ -4,11 +4,9 @@
 // packages/shared/src/registry/builtin.test.ts — здесь только то, что видно лишь в БД.
 import { describe, expect, test } from 'bun:test';
 import {
-  type AspectId,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
-  legacyAspectJsonSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
@@ -71,15 +69,19 @@ describe('сид трёх реестров', () => {
     }
   });
 
-  test('колонка schema аспекта байт-в-байт равна legacyAspectJsonSchema (носитель старой формы, Р-24)', async () => {
+  // Колонки `aspect_definitions.schema` больше НЕТ (contract-миграция 0017): JSON Schema
+  // аспекта — генерируемая производная реестра свойств (§А3-1), а не хранимое значение.
+  // Прежний тест сверял колонку с генератором байт-в-байт; сверять стало нечего, и это
+  // проверяется каталогом — колонка обязана отсутствовать.
+  test('колонки schema у aspect_definitions нет — JSON Schema аспекта производная (§А3-1)', async () => {
     const { db, client } = adminDb();
     try {
       const rows = (await db.execute(
-        sql`SELECT id, schema FROM aspect_definitions WHERE owner_id IS NULL ORDER BY id`,
-      )) as unknown as { id: string; schema: unknown }[];
-      for (const row of rows) {
-        expect(row.schema).toEqual(legacyAspectJsonSchema(row.id as AspectId));
-      }
+        sql`SELECT column_name FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'aspect_definitions'
+               AND column_name = 'schema'`,
+      )) as unknown as { column_name: string }[];
+      expect(rows).toEqual([]);
     } finally {
       await client.end();
     }
