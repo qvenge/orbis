@@ -14,7 +14,9 @@
 // источник его записать». Смешать их значило бы поселить право в двух домах (см. докблок
 // `validateEntityProps`).
 import { canonicalJson, type PropertyDefinition, type PropertyType } from '@orbis/shared';
+import { normalizeQueryAst, type QueryAst } from '@orbis/shared/query';
 import { decCmp } from '../budget/decimal';
+import { parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { ExecError } from './errors';
 import type { MutationMechanism } from './types';
@@ -172,6 +174,46 @@ export function stateDelta(from: EntityState, to: EntityState): StateDelta {
  * Снятие считается наравне с записью: патч, стирающий поле, трогает аспект ровно так же,
  * как патч, его пишущий.
  */
+/**
+ * Свойства, ЗНАЧЕНИЕ которых несёт дерево Q-AST, и путь до дерева внутри значения (§А5-2).
+ *
+ * Сегодня оно ровно одно — `orbis/progress_source` (`{kind:'json'}` с каноном внутри,
+ * `builtin-properties.ts`). Карта, а не `if`, потому что признак «значение с деревом» реестр
+ * отдельным флагом не помечает: следующее такое свойство (подписка, правило части Б)
+ * добавляется сюда строкой, и промах виден одним грепом.
+ */
+const QUERY_AST_VALUE_PATH: Readonly<Record<string, string>> = {
+  'orbis/progress_source': 'query',
+};
+
+/**
+ * Привести имена внутри ЗАПИСЫВАЕМОГО дерева к id — ДО валидации и записи (§А5-2).
+ *
+ * Почему при записи, а не при чтении: значение ХРАНИТСЯ, и key в нём — это тихий отказ
+ * навсегда. Цель, у которой `progress_source.query` назвал своё свойство ключом, пишется
+ * успешно (ajv канона имя не сужает — `{type:"string", minLength:1}`), а каждое чтение
+ * прогресса отвечает `invalid_query` и рисует пустую полосу: ни владелец, ни модель отказа
+ * не видят. Нормализация делает хранимую форму той, которую обещает §А5-2, и заодно
+ * согласует этот вход с соседним полем того же значения — `field` резолвился «id либо key»
+ * с самого начала (`resolvePropertyFieldId`).
+ *
+ * Неизвестное имя остаётся как есть: отказ по нему — дело компилятора, а не этой функции.
+ * Значение не той формы (не объект, дерева внутри нет) не трогается вовсе — про форму
+ * говорит валидатор следующей стадией.
+ */
+export function normalizeQueryAstValues(reg: RegistrySnapshot, patch: PropsPatch): void {
+  if (patch.set === undefined) return;
+  const parseReg = parseRegistryOfSnapshot(reg);
+  for (const [propertyId, value] of Object.entries(patch.set)) {
+    const path = QUERY_AST_VALUE_PATH[propertyId];
+    if (path === undefined || typeof value !== 'object' || value === null) continue;
+    const holder = value as Record<string, unknown>;
+    const ast = holder[path];
+    if (typeof ast !== 'object' || ast === null || !('filter' in ast)) continue;
+    patch.set[propertyId] = { ...holder, [path]: normalizeQueryAst(ast as QueryAst, parseReg) };
+  }
+}
+
 export function touchedProperties(patch: PropsPatch): Set<string> {
   const touched = new Set<string>(Object.keys(patch.set ?? {}));
   for (const propertyId of [...(patch.unset ?? []), ...(patch.replaced ?? [])]) {
@@ -268,7 +310,9 @@ export function replaceAspectProps(
     if (sharedWithOther) continue;
     replaced.push(ref.propertyId);
   }
-  return { set, unset: [], replaced, attach: [aspectId], detach: [] };
+  const patch: PropsPatch = { set, unset: [], replaced, attach: [aspectId], detach: [] };
+  normalizeQueryAstValues(reg, patch);
+  return patch;
 }
 
 /** Вход исполнителя — то, что разбирают exec-надмножества контрактов (§А1-1). */
@@ -331,7 +375,11 @@ export function propsPatchFromInput(reg: RegistrySnapshot, input: ExecPropsInput
     unset.push(resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId);
   }
 
-  return { set, unset, attach, detach };
+  const patch: PropsPatch = { set, unset, attach, detach };
+  // Имена ВНУТРИ значения-дерева приводятся к id той же меркой, что и адрес самого свойства
+  // строкой выше (§А5-2) — иначе `progress_source`, названный ключом, лёг бы молча.
+  normalizeQueryAstValues(reg, patch);
+  return patch;
 }
 
 /**

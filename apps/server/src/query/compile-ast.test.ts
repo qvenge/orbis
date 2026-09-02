@@ -395,6 +395,28 @@ describe('списки берутся ИЗ СНИМКА РЕЕСТРА, а не 
     ).toContain('NOT (aspects &&');
   });
 
+  test('has по свойству служебного аспекта — такое же упоминание, как prop', () => {
+    // Правило 2 §А5-6 сформулировано про ПРЕДИКАТ ПО СВОЙСТВУ, а `has` — тот же предикат,
+    // только про наличие значения. Считай сигналом один `prop`, и `has=orbis/run_outcome`
+    // компилировался бы в противоречие «исключить прогоны И взять с полем прогона» —
+    // молчаливый ноль строк, худший из отказов (§6.4). Для `prop` пин стоял выше, для
+    // `has` — не стоял ни один.
+    expect(sqlOf({ has: 'orbis/run_outcome' })).not.toContain('NOT (aspects &&');
+    // Общее свойство сигналом не становится и здесь — правило одно на обе формы.
+    expect(sqlOf({ has: 'orbis/grant' })).toContain('NOT (aspects &&');
+    // `sortBy` по тому же свойству упоминанием НЕ считается (порядок выдачи не описывает
+    // её цель) — граница правила пиннится рядом, иначе её снимут заодно.
+    const sorted = dialect
+      .sqlToQuery(
+        compileQueryAst(
+          { filter: { tag: 'дом' }, sortBy: [{ field: 'orbis/run_outcome', dir: 'desc' }] },
+          CTX,
+        ),
+      )
+      .sql.replaceAll(/\s+/g, ' ');
+    expect(sorted).toContain('NOT (aspects &&');
+  });
+
   test('семейство иерархии — признак hierarchical реестра, а не HIERARCHICAL_ROLE_IDS', () => {
     const roles = new Map<string, RelationRoleDefinition>();
     for (const r of BUILTIN_RELATION_ROLE_META) {

@@ -50,6 +50,7 @@ import {
 import {
   assertStaticQuery,
   maskQuotedValues,
+  normalizeQueryAst,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   type QueryFilterNode,
@@ -154,6 +155,29 @@ function assertScopeShape(node: QueryFilterNode | null): void {
       );
     }
   }
+}
+
+/**
+ * Имена в деревьях ОБЪЯВЛЕНИЯ (`scope` и `ref.target`) — к id (§А5-2), тем же резолвом, что
+ * у входа `ast` тула и у значения `progress_source`.
+ *
+ * Оба дерева ХРАНЯТСЯ, поэтому key внутри них — тихий отказ навсегда: колонка своего
+ * свойства не показывается, а пикер ссылочного свойства пуст, и ни одна из двух поверхностей
+ * не говорит почему. Нормализуется ДО записи, а не при чтении: §А5-2 обещает, что в
+ * хранимом дереве лежат id, и второй формы у него быть не должно.
+ */
+function normalizeDeclaration(
+  reg: RegistrySnapshot,
+  type: PropertyType,
+  scope: QueryAst | null,
+): { type: PropertyType; scope: QueryAst | null } {
+  const parseReg = parseRegistryOfSnapshot(reg);
+  const nextScope = scope === null ? null : normalizeQueryAst(scope, parseReg);
+  if (type.kind !== 'ref' || type.target === undefined) return { type, scope: nextScope };
+  const target = Array.isArray(type.target)
+    ? type.target.map((t) => normalizeQueryAst(t, parseReg))
+    : normalizeQueryAst(type.target, parseReg);
+  return { type: { ...type, target }, scope: nextScope };
 }
 
 /** Q-AST'ы, которые несёт тип свойства: у `ref` цель бывает одна либо список (§А6-1). */
@@ -528,10 +552,12 @@ export async function createProperty(
   ownerId: string,
   input: CreatePropertyInput,
 ): Promise<{ id: string; key: string }> {
-  const scope = input.scope ?? null;
-  assertDeclaration(input.type, scope);
+  assertDeclaration(input.type, input.scope ?? null);
 
   const reg = await currentRegistry(tx, ownerId);
+  // Имена в `scope`/`ref.target` — к id: снимок реестра появляется только здесь, а форму
+  // деревьев `assertDeclaration` проверил выше (она от имён не зависит).
+  const { type, scope } = normalizeDeclaration(reg, input.type, input.scope ?? null);
 
   if (input.status === 'proposed') {
     const proposed = [...reg.properties.values()].filter(
@@ -582,7 +608,7 @@ export async function createProperty(
     key,
     label: input.label,
     description: input.description,
-    type: input.type,
+    type,
     status: input.status,
     storage: 'props',
     scope,
@@ -687,8 +713,11 @@ export async function updateProperty(
     );
   }
 
-  const scope = patch.scope === undefined ? row.scope : patch.scope;
-  assertDeclaration(row.type, scope);
+  const scopeInput = patch.scope === undefined ? row.scope : patch.scope;
+  assertDeclaration(row.type, scopeInput);
+  // Имена в `scope` — к id (§А5-2), той же меркой, что у `createProperty`. `type` правка не
+  // меняет вовсе, поэтому `ref.target` здесь нормализовать нечего.
+  const { scope } = normalizeDeclaration(await currentRegistry(tx, ownerId), row.type, scopeInput);
 
   if (patch.status === 'deprecated' && row.status === 'proposed') {
     const used = await propertyUsage(tx, ownerId, row.id, row.key);

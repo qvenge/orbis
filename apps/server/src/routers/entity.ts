@@ -10,6 +10,7 @@ import {
   entityUpdateUiInput,
 } from '@orbis/shared';
 import {
+  normalizeQueryAst,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   queryAstSchema,
@@ -29,7 +30,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
-import { parseQueryText } from '../query/parse-text';
+import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { readRegistryVersions } from '../registry/version';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
@@ -96,8 +97,14 @@ function runQueryWithMaterialization<T>(
     actorUserId,
     thisEntityId: input.thisEntityId ?? null,
     // Дерево со входа `ast` идёт мимо разбора — как у тула (§А5-4, «два входа, один путь»):
-    // дальше окно материализации, компиляция и выдача у обеих форм одни.
-    parse: (cctx) => input.ast ?? parseOrThrow(input.query as string, cctx),
+    // дальше окно материализации, компиляция и выдача у обеих форм одни. Имена в нём
+    // приводятся к id тем же `normalizeQueryAst`, что и у тула: конструктор запросов web
+    // кладёт id, но ручка публична, и вход, назвавший СВОЁ свойство ключом, обязан
+    // отвечать так же, как текст (§А5-2).
+    parse: (cctx) =>
+      input.ast === undefined
+        ? parseOrThrow(input.query as string, cctx)
+        : normalizeQueryAst(input.ast, parseRegistryOf(cctx)),
     run,
   });
 }

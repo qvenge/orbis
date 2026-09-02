@@ -2166,3 +2166,109 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     expect(holders.filter((h) => h.kind === 'body').map((h) => h.id)).not.toContain(hidden);
   });
 });
+
+// ---------------------------------------------------------------------------
+// §А5-2: имена в дереве — id. Нормализация key → id на входе и перед записью
+// ---------------------------------------------------------------------------
+
+describe('нормализация имён в дереве Q-AST (§А5-2)', () => {
+  const astOwner = freshUserId();
+
+  function runAst(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      { actorUserId: astOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  }
+
+  function call(name: string, input: unknown): Promise<ToolDispatchResult> {
+    return dispatchTool(
+      { db, actorUserId: astOwner, actorKind: 'owner', source: 'chat', explicitCommand: false },
+      name,
+      input,
+    );
+  }
+
+  test('entity_query.ast по KEY своего свойства даёт то же, что тот же key ТЕКСТОМ', async () => {
+    // Обещание промпта v5 («в дереве стоят те же key свойств и аспектов») против
+    // компилятора, который резолвит строго по id. У встроенных `id == key`, поэтому
+    // расхождение появляется на ПЕРВОЙ ЖЕ своей строке — и это головная фича среза.
+    const created = ok(
+      await runAst('property_create', {
+        key: 'user/effort_points',
+        label: { ru: 'Баллы усилия' },
+        description: { ru: 'Своя оценка усилия' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const propId = (created.results[0] as { property: string }).property;
+    ok(
+      await runAst('entity_create', {
+        title: 'Тяжёлое дело',
+        tags: [],
+        props: { [propId]: 5 },
+      }),
+    );
+    ok(await runAst('entity_create', { title: 'Лёгкое дело', tags: [], props: { [propId]: 1 } }));
+
+    const byText = await call('entity_query', { query: 'user/effort_points>3' });
+    const byTree = await call('entity_query', {
+      ast: { filter: { prop: 'user/effort_points', op: 'gt', value: 3 } },
+    });
+    expect(byText.status).toBe('ok');
+    // СЕГОДНЯ БЕЗ ФИКСА: VALIDATION/UNKNOWN_FIELD «такого id нет в реестре владельца».
+    expect(byTree.status).toBe('ok');
+    expect(JSON.stringify((byTree as { result?: unknown }).result)).toBe(
+      JSON.stringify((byText as { result?: unknown }).result),
+    );
+
+    // Неизвестное имя по-прежнему отвергает КОМПИЛЯТОР, а не нормализация: второго мнения
+    // о том, что есть в реестре, не заводится.
+    const unknown = await call('entity_query', {
+      ast: { filter: { prop: 'user/нет-такого', op: 'eq', value: 1 } },
+    });
+    expect(unknown.status).toBe('error');
+  });
+
+  test('ref.target по KEY своего свойства ложится в строку реестра идентификатором', async () => {
+    // Дерево цели ХРАНИТСЯ, и key в нём — тихий отказ: пикер ссылочного свойства пуст,
+    // а слияние ищет держателей по обоим именам, но переписывает в id.
+    const base = ok(
+      await runAst('property_create', {
+        key: 'user/weight',
+        label: { ru: 'Вес' },
+        description: { ru: 'Числовое свойство-цель ссылки' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const baseId = (base.results[0] as { property: string }).property;
+
+    const ref = ok(
+      await runAst('property_create', {
+        key: 'user/heavy-ref',
+        label: { ru: 'Тяжёлая запись' },
+        description: { ru: 'Ссылка на запись с большим весом' },
+        type: {
+          kind: 'ref',
+          target: {
+            filter: {
+              and: [{ aspect: 'orbis/task' }, { prop: 'user/weight', op: 'gt', value: 3 }],
+            },
+          },
+        },
+        status: 'active',
+      }),
+    );
+    const refId = (ref.results[0] as { property: string }).property;
+
+    const rows = (await withIdentity(db, astOwner, (tx) =>
+      tx.execute(sql`SELECT type FROM property_definitions
+                     WHERE owner_id = ${astOwner}::uuid AND id = ${refId}`),
+    )) as unknown as Array<{ type: { target: { filter: { and: Array<{ prop?: string }> } } } }>;
+    const named = rows[0]?.type.target.filter.and.find((n) => n.prop !== undefined);
+    expect(named?.prop).toBe(baseId);
+  });
+});

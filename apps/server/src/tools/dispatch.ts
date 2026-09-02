@@ -29,6 +29,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import {
+  normalizeQueryAst,
   OWNER_LOCALE,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
@@ -666,9 +667,16 @@ async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispat
  * дальше они неразличимы — окно, компиляция и карточка одни на оба. Дерево со входа `ast`
  * уже прошло схему канона в envelope (`entityQueryInput`), а по РЕЕСТРУ его проверяет
  * компилятор — неизвестный id свойства, аспекта или роли он отвергает `VALIDATION` с
- * причиной `UNKNOWN_FIELD`/`UNKNOWN_ASPECT`/`UNKNOWN_ROLE`. Второй сверки по реестру здесь
+ * причиной `UNKNOWN_FIELD`/`UNKNOWN_ASPECT`/`UNKNOWN_ROLE`. Второй СВЕРКИ по реестру здесь
  * нет намеренно: она была бы вторым мнением о том, что в реестре есть, и первым же
  * расхождением дала бы «схема пропустила, компилятор упал».
+ *
+ * А вот РЕЗОЛВ ИМЕНИ — не сверка, и он здесь есть: `normalizeQueryAst` приводит `key` к
+ * `id` ровно так же, как это делает разбор ТЕКСТА на соседней строке. Без него два входа
+ * «одного пути» расходились бы на первом же своём свойстве: `user/effort` текстом работает,
+ * тот же key деревом — `UNKNOWN_FIELD` (у встроенных `id == key`, поэтому расхождение
+ * невидимо до первой своей строки). Неизвестное имя нормализация оставляет как есть —
+ * отказ по-прежнему называет компилятор.
  */
 async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   assertQueryTreeDepth(input);
@@ -677,7 +685,10 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
     db: ctx.db,
     actorUserId: ctx.actorUserId,
     thisEntityId: null, // `this` вне контекста сущности
-    parse: (cctx) => parsed.ast ?? parseQueryText(parsed.query as string, cctx),
+    parse: (cctx) =>
+      parsed.ast === undefined
+        ? parseQueryText(parsed.query as string, cctx)
+        : normalizeQueryAst(parsed.ast, parseRegistryOf(cctx)),
     run: async (tx, ast, cctx) => {
       const compiled = compileQueryAst(ast, cctx);
       const rows = await tx.execute(compiled);

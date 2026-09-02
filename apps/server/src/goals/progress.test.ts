@@ -989,3 +989,99 @@ describe('логи отказа: конфигурационный отказ н�
     expect(mine[0]).toContain(String(QUERY_TREE_DEPTH_CAP));
   });
 });
+
+describe('имена в хранимом дереве источника — id, а не key (§А5-2)', () => {
+  test('progress_source по KEY СВОЕГО свойства нормализуется при записи и считается', async () => {
+    // Тихий сценарий, который эта нормализация закрывает: ajv канона имя не сужает
+    // (`{type:"string", minLength:1}`), поэтому цель с key записывалась УСПЕШНО, а каждое
+    // чтение отвечало `invalid_query` — пустая полоса прогресса навсегда, без единого
+    // отказа ни владельцу, ни модели. У встроенного свойства `id == key`, поэтому
+    // расхождение видно только на СВОЕЙ строке.
+    const user = freshUserId();
+    const created = await execute(db, {
+      actorUserId: user,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'property_create',
+          input: {
+            key: 'user/book_done',
+            label: { ru: 'Книга дочитана' },
+            description: { ru: 'Своё свойство владельца' },
+            type: { kind: 'boolean' },
+            status: 'active',
+          },
+        },
+      ],
+    });
+    if (!created.ok) throw new Error(`свойство не заведено: ${created.error.message}`);
+    const propId = (created.results[0] as { property: string }).property;
+    expect(propId).not.toBe('user/book_done'); // id — uuid, key — слаг (Р3)
+
+    const books = await execute(db, {
+      actorUserId: user,
+      actorKind: 'owner',
+      source: 'ui',
+      batchId: '019e4466-cccc-7e07-b5d4-64be9721da51',
+      operations: [
+        { tool: 'entity_create', input: { title: 'Книга 1', tags: [], props: { [propId]: true } } },
+        { tool: 'entity_create', input: { title: 'Книга 2', tags: [], props: { [propId]: true } } },
+        {
+          tool: 'entity_create',
+          input: { title: 'Книга 3', tags: [], props: { [propId]: false } },
+        },
+      ],
+    });
+    if (!books.ok) throw new Error(`книги не созданы: ${books.error.message}`);
+
+    // Цель заводится ровно так, как её напишет модель по промпту v5: имя в дереве — KEY.
+    const goal = await execute(db, {
+      actorUserId: user,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Прочитать 24 книги',
+            tags: [],
+            aspects: ['orbis/goal'],
+            props: {
+              'orbis/progress_source': {
+                query: { filter: { prop: 'user/book_done', op: 'eq', value: true } },
+                aggregate: 'count',
+              },
+              'orbis/target_value': '24',
+            },
+          },
+        },
+      ],
+    });
+    if (!goal.ok) throw new Error(`цель не создана: ${goal.error.message}`);
+    const goalId = (goal.results[0] as { id: string }).id;
+
+    // ХРАНИМАЯ форма — id: §А5-2 обещает именно это, и от неё зависит слияние свойств
+    // (`collectPropertyHolders` ищет держателей по обоим именам, но переписывает в id).
+    const stored = await withIdentity(db, user, async (tx) => {
+      const rows = (await tx.execute(
+        sql`SELECT props FROM entities WHERE id = ${goalId}::uuid`,
+      )) as unknown as Array<{ props: Record<string, unknown> }>;
+      return rows[0]?.props['orbis/progress_source'] as {
+        query: { filter: { prop: string } };
+      };
+    });
+    expect(stored.query.filter.prop).toBe(propId);
+
+    // И полоса считается, а не молчит `invalid_query`.
+    const progress = await withIdentity(db, user, async (tx) => {
+      const cctx = await queryContext(tx, user, goalId);
+      return computeGoalProgress(tx, cctx, {
+        progressSource: stored as unknown as GoalSource['progressSource'],
+        targetValue: '24',
+      });
+    });
+    expect((progress as { unsupported?: string }).unsupported).toBeUndefined();
+    expect(progress.current).toBe('2');
+  });
+});
