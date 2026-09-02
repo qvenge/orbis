@@ -105,6 +105,24 @@ export function QueryBlock({
     return parsed !== null && !parsed.ok ? parsed.error : null;
   })();
 
+  // §А5-3ж/§6.4: СЕРВЕРНЫЙ отказ компиляции — тоже плашка, а не «Совпадений: 0». Клиентская
+  // предпроверка ловит не всё: привязанный блок с деревом проверяется только схемой и
+  // глубиной (`bindAttrs`), а по РЕЕСТРУ его читает компилятор — нерезолвенный id свойства,
+  // аспекта или роли виден только по ответу сервера. Молчаливый ноль строк здесь — тот самый
+  // худший из отказов: владелец видит пустой список там, где запрос вообще не исполнился.
+  if (failure === null && list.isError) {
+    return (
+      <Card role="alert" data-testid="qb-error" className="border-danger">
+        <p className="text-danger text-sm">Ошибка запроса: {list.error.message}</p>
+        {onConfigure && (
+          <div className="mt-2 flex justify-end">
+            <ConfigureButton onClick={onConfigure} />
+          </div>
+        )}
+      </Card>
+    );
+  }
+
   if (failure === null && !ok) {
     return (
       <Card>

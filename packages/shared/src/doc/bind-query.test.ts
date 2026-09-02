@@ -79,6 +79,43 @@ describe('bindQueryBlocks — привязка блока к реестру (Р-
     expect(block(bound('{{query:  aspect=orbis/task  }}')).ast).not.toBeNull();
   });
 
+  test('ВХОД-ДЕРЕВА тот же гард: {filter:null} в атрибуте — не «все сущности» (Р-21-8)', () => {
+    // Текстовый вход гард уже держал, а вход-дерева его обходил: стереть текст в редакторе
+    // или снять последний аспект в форме давало `{ast:{filter:null}, text:''}`, и виджет
+    // рисовал «Совпадений: N», а сервер сохранял безусловное дерево в `body_doc` НАВСЕГДА.
+    const withTree = bindQueryBlocks(
+      {
+        v: DOC_SCHEMA_VERSION,
+        doc: {
+          type: 'doc',
+          content: [{ type: 'queryBlock', attrs: { id: 'x', ast: { filter: null }, text: '' } }],
+        },
+      },
+      REG,
+    ) as unknown as BodyLike;
+    expect(block(withTree).ast).toBeNull();
+    expect(block(withTree).text).toBe('');
+
+    // КОНТРОЛЬ, без которого фикс убил бы законную заготовку `/`-меню: предикат — «печать
+    // пуста», а не «filter === null». У заготовки есть sortBy/limit/title, и печатается она
+    // непустой строкой, поэтому дерево обязано пережить привязку.
+    const draft: QueryAst = {
+      filter: null,
+      sortBy: [{ field: 'orbis/updated_at', dir: 'desc' }],
+      limit: 10,
+      title: 'Новый запрос',
+    };
+    const kept = bindQueryBlocks(
+      {
+        v: DOC_SCHEMA_VERSION,
+        doc: { type: 'doc', content: [{ type: 'queryBlock', attrs: { ast: draft, text: '' } }] },
+      },
+      REG,
+    ) as unknown as BodyLike;
+    expect(block(kept).ast).toEqual(draft);
+    expect(block(kept).text).not.toBe('');
+  });
+
   test('значение с `}}` квотируется печатью и не рвёт тело (Р-21-3)', () => {
     // Барьер `}}` — конец ОБЁРТКИ разметки, а не правило грамматики. С деревом в атрибуте
     // барьер остался бы без держателя: печать вернула бы `title=a}}b`, токенайзер закрыл бы

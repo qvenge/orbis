@@ -334,3 +334,38 @@ test('onSave получает текст поля, onCancel — по Esc', async
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
   await waitFor(() => expect(onCancel).toHaveBeenCalled());
 });
+
+// ---------------------------------------------------------------------------
+// Р-21-8, ВХОД-ДЕРЕВА: блок, оставшийся без условий, — «не настроен», а не весь корпус
+// ---------------------------------------------------------------------------
+
+test('очистка текста блока даёт ПУСТОЙ блок, а не «все сущности владельца» (Р-21-8)', async () => {
+  // Гард Р-21-8 смотрел только на текст, и вход-дерева его обходил: своя сборка пары в
+  // `QueryWidget.save` клала `{ast:{filter:null}, text:''}`, виджет рисовал «Совпадений: N»,
+  // а `body_doc` хранил безусловное дерево навсегда.
+  const s = mountBody('{{query: aspect=orbis/task, orbis/task_status=}}');
+  const dialog = await openBlockEditor();
+  fireEvent.change(editorField(dialog), { target: { value: '' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+  await waitFor(() => expect(s.onChange).toHaveBeenCalled());
+  expect(s.saved()).toBe('{{query:}}');
+  const attrs = JSON.stringify(s.onChange.mock.calls.at(-1)?.[0]);
+  expect(attrs).toContain('"ast":null');
+  // И виджет говорит то же самое: плашка вместо счётчика.
+  await waitFor(() => expect(screen.getByTestId('qb-error')).toHaveTextContent(/пустой запрос/i));
+});
+
+test('снятие последнего аспекта в форме даёт ПУСТОЙ блок, а не «все сущности» (Р-21-8)', async () => {
+  // Второй вход в то же состояние, и он — обычный жест в два клика: у блока было одно
+  // условие, владелец снял галочку.
+  const s = mountBody('{{query:aspect=orbis/task}}');
+  const dialog = await openBlockEditor();
+  fireEvent.click(await within(dialog).findByLabelText('Задача'));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+  await waitFor(() => expect(s.onChange).toHaveBeenCalled());
+  expect(s.saved()).toBe('{{query:}}');
+  expect(JSON.stringify(s.onChange.mock.calls.at(-1)?.[0])).toContain('"ast":null');
+  await waitFor(() => expect(screen.getByTestId('qb-error')).toHaveTextContent(/пустой запрос/i));
+});

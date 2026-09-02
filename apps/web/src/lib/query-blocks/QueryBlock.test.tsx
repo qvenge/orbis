@@ -1,6 +1,6 @@
 import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
-import { renderWithProviders, wireEntity } from '../../test/harness';
+import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { QueryBlock } from './QueryBlock';
 import { ThisEntityProvider } from './this-entity';
@@ -178,4 +178,31 @@ test('блок БЕЗ дерева, но с разбираемым тексто�
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
   expect(screen.queryByTestId('qb-error')).toBeNull();
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ query: 'tags=work' });
+});
+
+test('серверный отказ компиляции — ПЛАШКА, а не «Совпадений: 0» (§А5-3ж/§6.4)', async () => {
+  // Блок с ДЕРЕВОМ клиентской предпроверки не имеет вовсе: привязка сверяет его схемой и
+  // глубиной, а по реестру читает компилятор на сервере. Нерезолвенный id прилетал сюда
+  // ответом-ошибкой, `list.isError` никто не смотрел, `entities = list.data ?? []` давал
+  // пустой список — молчаливый ноль строк, худший из отказов.
+  const { calls } = renderWithProviders(
+    <QueryBlock
+      query={{
+        ast: { filter: { prop: 'user/нет-такого', op: 'eq', value: 1 } },
+        text: 'user/нет-такого=1',
+      }}
+    />,
+    (path) => {
+      const reg = registryReply(path);
+      if (reg !== undefined) return reg;
+      if (path === 'entity.query') {
+        throw trpcError('BAD_REQUEST', "неизвестное свойство 'user/нет-такого'");
+      }
+      return {};
+    },
+  );
+  await screen.findByTestId('qb-error');
+  expect(screen.getByTestId('qb-error')).toHaveTextContent(/нет-такого/);
+  expect(screen.queryByTestId('qb-count')).toBeNull();
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(true);
 });

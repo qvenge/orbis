@@ -1,9 +1,8 @@
-import { QUERY_BLOCK_CLOSE, QueryBlock } from '@orbis/shared/doc';
-import { printQueryAst, type QueryAst, queryAstSchema } from '@orbis/shared/query';
+import { bindQueryBlockAttrs, QUERY_BLOCK_CLOSE, QueryBlock } from '@orbis/shared/doc';
+import { type QueryAst, queryAstSchema } from '@orbis/shared/query';
 import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { useState } from 'react';
-import { parseBlock } from '../../../lib/query-blocks/parse';
 import { QueryBlock as QueryBlockWidget } from '../../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { useToast } from '../../../ui/toast-store';
@@ -63,16 +62,16 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
     // тексте (снята Задачей 16) ушла и её оптимистичная блокировка «Блок изменился в другом
     // месте»: адрес правки — сама нода, и промахнуться мимо неё нечем.
     //
-    // Пишутся ОБА атрибута и всегда согласованно: `ast` — разбор набранного текста, `text` —
-    // его key-печать. Разобрать не удалось (или реестр ещё не приехал) — `ast: null` и текст
-    // как набран: сервер разберёт его при записи (`bindQueryBlocks`), а виджет до тех пор
+    // Пишутся ОБА атрибута и всегда согласованно — ТОЙ ЖЕ функцией, что привязывает блоки на
+    // сервере (`bindQueryBlockAttrs` = `bindAttrs` из `@orbis/shared/doc`). Своя сборка пары
+    // здесь была вторым мнением о том, что кладётся в атрибуты, и ровно через неё обходился
+    // гард Р-21-8: очистка поля давала `{ast:{filter:null}, text:''}` — «все сущности
+    // владельца» под видом пустого блока. Разобрать не удалось (или реестр ещё не приехал) —
+    // `ast: null` и текст как набран: сервер разберёт его при записи, а виджет до тех пор
     // честно покажет отказ вместо чужого списка.
     const reg = registry?.parse;
-    const parsed = reg === undefined ? null : parseBlock(next, reg);
     updateAttributes(
-      parsed?.ok === true && reg !== undefined
-        ? { ast: parsed.ast, text: printQueryAst(parsed.ast, reg, 'key') }
-        : { ast: null, text: next },
+      reg === undefined ? { ast: null, text: next } : bindQueryBlockAttrs({ text: next }, reg),
     );
     setEditing(false);
   }
