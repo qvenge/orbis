@@ -116,11 +116,10 @@ export type ProgressSource = z.infer<typeof progressSourceSchema>;
  * (рулинг 23.08).
  *
  * ДАТА СМЕРТИ у ветки та же, что у её половины в реестре, и живёт она одним абзацем —
- * докблок `PROGRESS_QUERY_SCHEMA` (`packages/shared/src/registry/builtin-properties.ts`):
- * обе снимаются, когда `git grep translateProgressSource` и `git grep legacyAspectsPatch`
- * дают ноль ВЫЗЫВАЮЩИХ вне двух абзацев, формулирующих условие (там же названо, каких
- * именно, и почему считать надо «вне»). Второго списка условий здесь нет намеренно — он
- * разъехался бы с первым.
+ * докблок `PROGRESS_QUERY_SCHEMA` (`packages/shared/src/registry/builtin-properties.ts`).
+ * Оба грепа, которыми условие формулировалось, «Пересев мира» обнулил; почему ветка всё же
+ * стоит — там же, одним абзацем. Второго списка условий здесь нет намеренно: он разъехался
+ * бы с первым.
  */
 const progressQuerySchema = z.union([
   queryAstSchema,
