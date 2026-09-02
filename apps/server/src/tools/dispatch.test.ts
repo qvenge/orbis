@@ -4317,6 +4317,16 @@ describe('§С2-1: мутации реестра — уровень подтве
     return rows[0];
   }
 
+  /** Сколько СВОИХ строк свойств у владельца — проба «мутация ещё не применилась». */
+  async function ownPropertyCount(owner: string): Promise<number> {
+    const rows = (await withIdentity(db, owner, (tx) =>
+      tx.execute(
+        sql`SELECT count(*)::int AS n FROM property_definitions WHERE owner_id = ${owner}::uuid`,
+      ),
+    )) as unknown as Array<{ n: number }>;
+    return Number(rows[0]?.n ?? 0);
+  }
+
   async function deltaRowsOf(owner: string): Promise<number> {
     const rows = (await withIdentity(db, owner, (tx) =>
       tx.execute(
@@ -4532,6 +4542,124 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(r.card.rows).toEqual([{ before: 'active', field: 'status', after: 'deprecated' }]);
     expect(await pendingsOf(owner, threadId)).toHaveLength(1);
     expect((await registryRow(owner, target.id))?.status).toBe('active');
+  });
+
+  test('property_create от рутины по белому списку → отложенная единица, а не FORBIDDEN_LEVEL (Р-24-7)', async () => {
+    // «Показанное исполнимо» (тот же довод, по которому `batch_execute` закрыт рутине): тул
+    // виден модели по белому списку, промпт `routine-v3` прямо велит им пользоваться, а PRD
+    // §7.10 обещает «свои строки владельца откладываются» — до этой правки все трое
+    // обещали путь, которому был гарантирован отказ по уровню.
+    const owner = freshUserId();
+    const { ctx, threadId } = await gardener(owner, ['property_create']);
+
+    const r = await dispatchTool(ctx, 'property_create', {
+      label: { ru: 'Усилие' },
+      description: { ru: 'Сколько сил отнимет дело' },
+      type: { kind: 'number' as const },
+      status: 'proposed' as const,
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица');
+    }
+    expect(r.card.summary).toBe('Заведение свойства «Усилие» (предложение)');
+    // Строки называют, ЧТО заведут, а не дампят конверт родовой строкой fail-closed-хвоста.
+    expect(r.card.rows.map((x) => x.field)).toEqual(['label', 'description', 'type', 'status']);
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+    // До решения владельца строки в реестре нет.
+    expect(await ownPropertyCount(owner)).toBe(0);
+
+    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect(await ownPropertyCount(owner)).toBe(1);
+  });
+
+  test('property_update{label} (без status) от рутины — тоже отложенная единица, а не отказ', async () => {
+    // Сосед зелёного теста про `status` выше: тот же тул, тот же белый список, разница
+    // только в поле патча — и она меняла исход с отложки на `FORBIDDEN_LEVEL`.
+    const owner = freshUserId();
+    const target = await ownProperty(owner, 'Усилие');
+    const { ctx, threadId } = await gardener(owner, ['property_update']);
+
+    const r = await dispatchTool(ctx, 'property_update', {
+      id: target.id,
+      label: { ru: 'Уровень усилия' },
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица');
+    }
+    expect(r.card.rows.map((x) => x.field)).toEqual(['label']);
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+  });
+
+  test('единица реестра хранит адрес ИДЕНТИФИКАТОРОМ: освободившийся key не уводит «Принять» на чужую строку', async () => {
+    // A5-Minor-1. `readOwnProperty`/`resolveMergePair` резолвят `id ИЛИ key`, а key
+    // отклонённого неиспользованного `proposed` освобождается физическим удалением строки
+    // (`freeKey`). Единица, поставленная по key, применилась бы к ОДНОФАМИЛЬЦУ, о котором на
+    // карточке не было ни слова, — молча и необратимо.
+    const owner = freshUserId();
+    const { ctx } = await gardener(owner, ['property_update']);
+    const first = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'property_create',
+          input: {
+            key: 'user/effort',
+            label: { ru: 'Усилие' },
+            description: { ru: 'Первое значение ключа' },
+            type: { kind: 'number' as const },
+            status: 'proposed' as const,
+          },
+        },
+      ],
+    });
+    if (!first.ok) throw new Error(`фикстура: ${first.error.message}`);
+    const firstId = (first.results[0] as { property: string }).property;
+
+    // Единица ставится ПО KEY — так её и напишет модель.
+    const r = await dispatchTool(ctx, 'property_update', {
+      id: 'user/effort',
+      label: { ru: 'Уровень усилия' },
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+
+    // Владелец отклоняет неиспользованное предложение — строка удаляется, key свободен…
+    const dropped = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'property_update', input: { id: firstId, status: 'deprecated' } }],
+    });
+    if (!dropped.ok) throw new Error(`отклонение: ${dropped.error.message}`);
+    // …и тот же key занимает ДРУГОЕ свойство другого смысла.
+    const second = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'property_create',
+          input: {
+            key: 'user/effort',
+            label: { ru: 'Однофамилец' },
+            description: { ru: 'Другое свойство под тем же ключом' },
+            type: { kind: 'number' as const },
+            status: 'active' as const,
+          },
+        },
+      ],
+    });
+    if (!second.ok) throw new Error(`однофамилец: ${second.error.message}`);
+    const secondId = (second.results[0] as { property: string }).property;
+
+    // «Принять» честно упирается в исчезнувшую строку, а не правит однофамильца.
+    const applied = await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect(applied.ok ? 'ok' : applied.error.code).toBe('NOT_FOUND');
+    expect((await registryRow(owner, secondId))?.label).toEqual({ ru: 'Однофамилец' });
   });
 
   test('aspect_delta_set по ВСТРОЕННОМУ аспекту от рутины → отказ по объекту, единица НЕ рождается', async () => {

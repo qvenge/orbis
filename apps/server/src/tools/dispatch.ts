@@ -932,8 +932,20 @@ async function runMutation(
   // групповой вызов рутине закрыт гейтом режима всегда (ROUTINE_CLOSED_TOOLS, registry.ts),
   // и карточку группы, которую сегодня нечем ни собрать, ни показать, рождать не за что:
   // условие fail-closed — batch на explicit-уровне упрётся в гейт инварианта 5 строкой ниже.
+  //
+  // ВТОРОЙ ОТКЛАДЫВАЕМЫЙ УРОВЕНЬ — `preview` СВОЕЙ строки реестра (рулинг Р-24-7). PRD §7.10
+  // обещает прямым текстом: «свои строки владельца сюда не попадают: их правка фоном
+  // откладывается штатной единицей пачки», — а код до этой правки отвечал им
+  // `FORBIDDEN_LEVEL`, то есть промпт рутины (`property_create` по белому списку) обещал
+  // путь, которому гарантирован отказ. Это ровно тот класс, ради которого `batch_execute`
+  // закрыт рутине совсем («показанное исполнимо»), и лечение здесь обратное: не прятать
+  // тул, а довести его до карточки. `system-object` при этом остаётся запретом — его снял
+  // пре-чек выше, до этой строки.
   const defersUnit =
-    ctx.source === 'routine' && level === 'explicit-confirmation' && batchPayload === undefined;
+    ctx.source === 'routine' &&
+    batchPayload === undefined &&
+    (level === 'explicit-confirmation' ||
+      (level === 'preview' && facts.reconfigures === 'own-property'));
 
   // Инвариант 5 (V1.10) в формулировке D42 (§9.1): «В фоне небезопасное откладывается с
   // продолжением работы; запрещённое — по уровню или по объекту — отклоняется и не
@@ -945,9 +957,10 @@ async function runMutation(
   // действию затереть правку владельца.
   //
   // Что осталось гейту: всё, что рутине и не откладывается, и не исполняется. Сегодня это
-  // `preview` (батч — но он рутине закрыт гейтом режима) и любой будущий уровень таблицы
-  // §7.10; `forbidden` сюда не доходит — его снял levelGate выше, а запрет ПО ОБЪЕКТУ —
-  // пре-чек строкой выше.
+  // `preview` НЕ по своей строке реестра (сегодня такого не бывает: `preview` даёт либо
+  // ряд 4b, либо пачка — а пачка рутине закрыта гейтом режима) и любой будущий уровень
+  // таблицы §7.10; `forbidden` сюда не доходит — его снял levelGate выше, а запрет ПО
+  // ОБЪЕКТУ — пре-чек строкой выше.
   if (ctx.source === 'routine' && level !== 'execute' && !defersUnit) {
     return errorResult(
       'FORBIDDEN_LEVEL',
@@ -1561,7 +1574,14 @@ async function snapshotDeferredUnit(
  * `PROPOSED_CAP` по СВЕЖЕМУ состоянию. Снимать предусловия поверх этого значило бы завести
  * второе мнение о том, что считается «состояние изменилось», — и первое же расхождение
  * двух мнений владелец увидел бы как отказ на кнопке там, где операция была законна.
- * Поэтому `input` уезжает в pending-запись БАЙТ-В-БАЙТ таким, каким его прислала модель.
+ * Поэтому `input` уезжает в pending-запись почти БАЙТ-В-БАЙТ таким, каким его прислала
+ * модель. Единственное исключение — АДРЕС строки реестра: он нормализуется в id (то же, что
+ * делает постановка `entity_update`). Причина не в согласованности, а в ТОЖДЕСТВЕ адресата:
+ * `readOwnProperty`/`resolveMergePair` резолвят `id ИЛИ key`, а key после физического
+ * удаления отклонённого `proposed` освобождается (`freeKey`) — и единица, поставленная в
+ * пятницу по `user/effort`, в понедельник применилась бы к ДРУГОЙ строке, заведённой под тем
+ * же ключом, о которой на карточке не было ни слова. Удалённая строка теперь честно даёт
+ * `NOT_FOUND` на «Принять».
  *
  * «БЫЛО → СТАНЕТ» ЧИТАЕТСЯ ИЗ ЭФФЕКТИВНОГО РЕЕСТРА — того же снимка, по которому владелец
  * видит свои свойства (§А3-2, система ⊕ его строки ⊕ дельты). Имена в строках — ПОДПИСИ, а
@@ -1581,11 +1601,25 @@ async function snapshotRegistryUnit(
     const def = resolvePropertyRef(reg, address);
     return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
   };
+  /** Адрес строки реестра → id (см. докблок): key за время ожидания может сменить хозяина. */
+  const addressId = (address: unknown): unknown =>
+    typeof address === 'string' ? (resolvePropertyRef(reg, address)?.id ?? address) : address;
 
   switch (tool) {
+    case 'property_create':
+      return {
+        // Строки ещё нет — «было» не бывает, и адресовать нечего: единица несёт сам конверт.
+        // Ветка появилась вместе с отложкой `preview`-own-property от рутины (Р-24-7): до неё
+        // `property_create` от фона отвечал `FORBIDDEN_LEVEL` и сюда не доходил вовсе.
+        input: payload,
+        summary,
+        rows: (['label', 'description', 'type', 'status', 'scope'] as const)
+          .filter((field) => field in payload)
+          .map((field) => ({ field, after: rowValue(payload[field]) })),
+      };
     case 'property_merge':
       return {
-        input: payload,
+        input: { ...payload, source: addressId(payload.source), into: addressId(payload.into) },
         summary,
         // Одна строка, а не две: у слияния меняется ОДНО — то, каким свойством описаны
         // значения; «было» и «станет» тут буквальны.
@@ -1599,6 +1633,7 @@ async function snapshotRegistryUnit(
       };
     case 'property_update': {
       const current = resolvePropertyRef(reg, String(payload.id));
+      const input = { ...payload, id: addressId(payload.id) };
       const rows: DeferredRow[] = [];
       // Поля патча — ровно те, что объявляет `propertyUpdateInput` (`tools/registry-tools.ts`);
       // `id` — адрес, а не правка, и в строки не идёт (тот же приём, что в preview-диффе).
@@ -1611,7 +1646,7 @@ async function snapshotRegistryUnit(
           after: rowValue(payload[field]),
         });
       }
-      return { input: payload, summary, rows };
+      return { input, summary, rows };
     }
     case 'aspect_delta_set':
     case 'aspect_delta_remove': {
@@ -1629,11 +1664,10 @@ async function snapshotRegistryUnit(
       };
     }
   }
-  // `property_create` — ЕДИНСТВЕННЫЙ из пяти, который сюда не доходит, и не потому, что
-  // забыт: он даёт `own-property` → `preview` (§С2-1 ряд 1 адресован владельцу через чат), а
-  // `preview` фон не откладывает и не исполняет — его снимает инвариант 5 в `runMutation`.
-  // Ветка оставлена fail-closed, а не собрана «на всякий случай»: карточка, которую нечем
-  // показать владельцу, хуже честного отказа (блокер Б3 ревью спеки).
+  // Сюда доходят все пять реестровых тулов — с Р-24-7 в том числе `property_create`
+  // (`preview` своей строки от рутины теперь откладывается, а не отклоняется). Ветка
+  // осталась fail-closed на случай ШЕСТОГО тула реестра (подписка, правило — часть Б):
+  // родовая строка «тул → конверт» хуже адресной, но лучше молчания.
   return { input: payload, summary, rows: [{ field: tool, after: rowValue(payload) }] };
 }
 

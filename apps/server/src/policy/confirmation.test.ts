@@ -612,7 +612,15 @@ describe('§С2-1: перенастраивает поверхность или 
     // ПЕРЕХОДЫ, а не формы вызова (вывод десяти фикс-раундов Задачи 12): каждая строка —
     // один переход защищаемого состояния «что владелец видит и что система делает».
     const cases: Array<[string, string, unknown, Reconfigures]> = [
-      ['1. родилась своя строка', 'property_create', CREATE_INPUT, 'own-property'],
+      ['1. родилась своя строка ПРЕДЛОЖЕНИЕМ', 'property_create', CREATE_INPUT, 'own-property'],
+      [
+        // Р-24-8: тот же итог, что у перехода 3, — значит и тот же замок. Без этой строки
+        // ЛЮБОЕ из двух решений владельца легло бы без красного (мутационная проба M1).
+        '1б. родилась своя строка СРАЗУ АКТИВНОЙ',
+        'property_create',
+        { ...CREATE_INPUT, status: 'active' as const },
+        'behavior-delta',
+      ],
       [
         '2. сменилась подпись своей строки',
         'property_update',
@@ -760,6 +768,20 @@ describe('§С2-1: перенастраивает поверхность или 
       // Живьём владелец сюда и не доходит: `routers/registry.ts` зовёт `execute` напрямую.
       expect([tool, levelFor(tool, input, 'owner')]).toEqual([tool, 'execute']);
     }
+  });
+
+  test('property_create со status=active → explicit-confirmation: итог тот же, что у перехода 3 (Р-24-8)', () => {
+    // Два пути в ОДНО состояние («активная своя строка существует») обязаны иметь один
+    // замок: `property_update {status:'active'}` его уже имеет, а `property_create` сразу
+    // активной обходил и его, и кап §А2-7 разом.
+    for (const actorKind of ['ai', 'agent'] as const) {
+      expect(levelFor('property_create', { ...CREATE_INPUT, status: 'active' }, actorKind)).toBe(
+        'explicit-confirmation',
+      );
+    }
+    // Ветка предложения не тронута — иначе разбор пачки §А2-7 стал бы разговором на каждую
+    // догадку модели.
+    expect(levelFor('property_create', CREATE_INPUT)).toBe('preview');
   });
 
   test('ряд 4a стоит ВЫШЕ 4b: пачка «своё свойство + слияние» подтверждается целиком', () => {
