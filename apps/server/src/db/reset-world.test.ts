@@ -28,6 +28,9 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { appendMessageIdempotent } from '../chat/messages';
+import { ensureGlobalThread } from '../chat/threads';
+import { execute } from '../executor/executor';
 import { previewMergeConflicts, type RegistryDeltaRow } from '../registry/deltas';
 import { seedOwner } from '../seed/onboarding';
 import { SEED_WORLD_SIZE } from '../seed/world';
@@ -40,6 +43,7 @@ import {
   runResetWorld,
 } from './reset-world';
 import { codeSystemDefinitions, readSystemDefinitions } from './seed-registries';
+import { withIdentity } from './with-identity';
 
 requireEnv();
 
@@ -49,6 +53,18 @@ const ADMIN_DSN = process.env.DATABASE_URL_ADMIN as string;
 // взят из runbook §1 как форма, а не как доступ.
 const PROD_REF = 'ceovqtdibalxnqkgedrl';
 const PROD_DSN = `postgresql://postgres.${PROD_REF}:pa%40ss:word@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`;
+// Форма локального стенда: имени проекта в ней нет ни в пользователе, ни в хосте.
+const LOCAL_DSN_SHAPE = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
+
+/** Шесть таблиц графа и журнала — тот же список, что сносит операция (порядок отчёта). */
+const GRAPH_TABLES_UNDER_TEST = [
+  'entities',
+  'relations',
+  'chat_threads',
+  'chat_messages',
+  'entity_origins',
+  'entity_versions',
+] as const;
 
 const { db: admin, client: adminClient } = adminDb();
 const { db: app, client: appClient } = appDb();
@@ -82,7 +98,7 @@ describe('reset-world — подтверждение двумя флагами',
       prodRefFromDsn(`postgresql://postgres:pwd@db.${PROD_REF}.supabase.co:5432/postgres`),
     ).toBe(PROD_REF);
     // Локальный стенд ref не несёт — и это отказ, а не послабление: подтверждать нечем.
-    expect(prodRefFromDsn('postgres://postgres:postgres@127.0.0.1:54322/postgres')).toBeNull();
+    expect(prodRefFromDsn(LOCAL_DSN_SHAPE)).toBeNull();
   });
 
   test('без --confirm: печатает ожидаемый ref, код 2, соединение НЕ открывает', async () => {
@@ -103,24 +119,54 @@ describe('reset-world — подтверждение двумя флагами',
     expect(said.join('\n')).not.toContain('word');
   });
 
-  const refusals: [string, string[]][] = [
-    ['чужой ref', ['--confirm', 'not-our-project', '--i-understand', 'RESET']],
-    ['без второго флага', ['--confirm', PROD_REF]],
-    ['другое слово во втором флаге', ['--confirm', PROD_REF, '--i-understand', 'reset']],
-    ['незнакомый флаг', ['--confirm', PROD_REF, '--i-understand', 'RESET', '--force']],
+  // Каждый отказ проверяется ПРИЧИНОЙ, а не только кодом 2: код 2 у всех один, и по нему
+  // ветки гейта неразличимы — снятая ветка деградировала бы в соседнюю молча (например,
+  // «ref не выводится» превратился бы в «--confirm не совпал с null»).
+  const refusals: [string, string, string[], string][] = [
+    [
+      'чужой ref',
+      PROD_DSN,
+      ['--confirm', 'not-our-project', '--i-understand', 'RESET'],
+      'не совпадает с проектом подключения',
+    ],
+    ['без второго флага', PROD_DSN, ['--confirm', PROD_REF], 'нет второго подтверждения'],
+    [
+      'другое слово во втором флаге',
+      PROD_DSN,
+      ['--confirm', PROD_REF, '--i-understand', 'reset'],
+      'ожидает точное слово',
+    ],
+    [
+      'незнакомый флаг',
+      PROD_DSN,
+      ['--confirm', PROD_REF, '--i-understand', 'RESET', '--force'],
+      'неизвестный аргумент',
+    ],
+    // Локальный DSN ref не несёт — подтверждать нечем. Без этой строки ветку можно удалить
+    // целиком, и все прочие тесты останутся зелёными: без `--confirm` печаталось бы
+    // «проект: null», с `--confirm null` — отказ по несовпадению; отказ бы уцелел, а текст
+    // деградировал незаметно.
+    [
+      'ref из DSN не выводится',
+      LOCAL_DSN_SHAPE,
+      ['--confirm', PROD_REF, '--i-understand', 'RESET'],
+      'подтверждать нечем',
+    ],
+    ['ref не выводится и флагов нет', LOCAL_DSN_SHAPE, [], 'подтверждать нечем'],
   ];
-  for (const [name, args] of refusals) {
+  for (const [name, dsn, args, reason] of refusals) {
     test(`отказ до любой записи: ${name}`, async () => {
       const said: string[] = [];
       const code = await runResetWorld(args, {
-        readDsn: () => PROD_DSN,
+        readDsn: () => dsn,
         openSql: () => {
           throw new Error('соединение открыто ДО подтверждения');
         },
         log: (l) => said.push(l),
         error: (l) => said.push(l),
       });
-      expect(code).toBe(2);
+      expect([name, code]).toEqual([name, 2]);
+      expect(said.join('\n')).toContain(reason);
     });
   }
 
@@ -194,10 +240,39 @@ describe('reset-world — состав пересева на живой базе
     );
     // Журнальные таблицы наполняем прямо: боевой путь их пишет в других сценариях, а пересеву
     // важно, что они попадают под снос вместе с графом.
-    const [entity] = (await admin.execute(
-      sql`SELECT id FROM entities WHERE owner_id = ${owner}::uuid LIMIT 1`,
+    const seeded = (await admin.execute(
+      sql`SELECT id FROM entities WHERE owner_id = ${owner}::uuid ORDER BY id LIMIT 2`,
     )) as unknown as { id: string }[];
-    if (entity === undefined) throw new Error('онбординг не посеял ни одной сущности');
+    const entity = seeded[0];
+    const second = seeded[1];
+    if (entity === undefined || second === undefined) {
+      throw new Error('онбординг не посеял двух сущностей');
+    }
+    // Ребро и сообщение треда — БОЕВЫМ путём, и они здесь не для полноты картины: онбординг
+    // не пишет ни того, ни другого, поэтому без них «relations и chat_messages снесены»
+    // доказывалось бы не данными, а только тем, что TRUNCATE без CASCADE упал бы на FK. Для
+    // таблицы, которая однажды выйдет из-под FK, этого пина не будет вовсе.
+    const edge = await execute(app, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'fast_path',
+      operations: [
+        {
+          tool: 'relation_create',
+          input: { source_id: entity.id, target_id: second.id, role: 'mention' },
+        },
+      ],
+    });
+    if (!edge.ok) throw new Error(`ребро фикстуры не создано: ${JSON.stringify(edge.error)}`);
+    await withIdentity(app, owner, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, owner);
+      await appendMessageIdempotent(tx, {
+        id: newId(),
+        threadId,
+        role: 'user',
+        content: 'сообщение фикстуры пересева',
+      });
+    });
     await admin.execute(
       sql`INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id)
           VALUES (${newId()}::uuid, ${owner}::uuid, ${entity.id}::uuid, 'csv:проба', '1')`,
@@ -217,7 +292,12 @@ describe('reset-world — состав пересева на живой базе
     expect(await count('registry_deltas')).toBe(1);
     expect(await count('property_definitions', 'owner_id IS NOT NULL')).toBe(1);
     expect(await count('aspect_definitions', 'owner_id IS NOT NULL')).toBe(1);
-    expect(await count('chat_threads')).toBeGreaterThan(0);
+    // Все ШЕСТЬ таблиц сноса непусты ДО операции — иначе «снесено» ниже проверяло бы пустоту,
+    // которая и так была.
+    for (const table of GRAPH_TABLES_UNDER_TEST) {
+      const n = await count(table);
+      expect([table, n > 0]).toEqual([table, true]);
+    }
 
     const raw = postgres(ADMIN_DSN, { max: 1 });
     let report: Awaited<ReturnType<typeof resetWorld>>;
@@ -229,6 +309,8 @@ describe('reset-world — состав пересева на живой базе
 
     // Отчёт называет снесённое поимённо — по нему оператор сверяет масштаб.
     expect(report.graph.entities).toBe(SEED_WORLD_SIZE + 1);
+    expect(report.graph.relations).toBe(1);
+    expect(report.graph.chat_messages).toBe(1);
     expect(report.graph.entity_origins).toBe(1);
     expect(report.graph.entity_versions).toBe(1);
     expect(report.deltas).toBe(1);
@@ -237,17 +319,15 @@ describe('reset-world — состав пересева на живой базе
     expect(report.settingsReset).toBe(2);
 
     // Граф и журнал — начисто.
-    for (const table of [
-      'entities',
-      'relations',
-      'chat_threads',
-      'chat_messages',
-      'entity_origins',
-      'entity_versions',
-      'registry_deltas',
-    ]) {
+    for (const table of [...GRAPH_TABLES_UNDER_TEST, 'registry_deltas']) {
       expect([table, await count(table)]).toEqual([table, 0]);
     }
+    // Снимок «после» самой операции говорит то же самое — им оператор Шага 6 и сверяется.
+    expect(Object.values(report.after.graph)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(report.after.deltas).toBe(0);
+    expect(report.after.ownerDefinitions).toBe(0);
+    expect(report.after.ownerVersionMax).toBe(0);
+    expect(report.after.systemVersion).toBe(report.before.systemVersion + 1);
 
     // Реестры — только системные строки, и ровно те, что в коде.
     for (const table of DEFINITION_TABLES) {

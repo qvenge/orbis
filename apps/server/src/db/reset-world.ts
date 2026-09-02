@@ -16,7 +16,7 @@
 // прода и зачисткой между сьютами (`test/helpers.ts:truncateAll`, которая сносит и настройки,
 // и гранты): владелец после пересева заходит в то же приложение теми же ключами, просто в
 // пустой мир.
-import type { Sql } from 'postgres';
+import type { ISql, Sql } from 'postgres';
 import { type SeedRegistriesResult, seedRegistries, seedRegistriesReport } from './seed-registries';
 
 /**
@@ -57,6 +57,26 @@ const GRAPH_TABLES = [
   'entity_versions',
 ] as const;
 
+/**
+ * Состояние базы одним снимком — снимается ДО сноса и ПОСЛЕ пересева, в той же транзакции.
+ *
+ * Второй снимок не роскошь: «снесено N» отвечает на вопрос «сколько было», а оператору Шага 6
+ * нужен ответ на другой — «что теперь». Шаг `check` его не даёт: он проверяет реестры, а не
+ * граф, и на непустом графе с чистыми реестрами был бы зелёным.
+ */
+export interface ResetWorldState {
+  /** Строк в каждой таблице графа и журнала. */
+  graph: Record<(typeof GRAPH_TABLES)[number], number>;
+  /** Строк в `registry_deltas`. */
+  deltas: number;
+  /** Пользовательских строк во всех шести реестрах суммой. */
+  ownerDefinitions: number;
+  /** Наибольшая версия реестра владельца по всем строкам настроек. */
+  ownerVersionMax: number;
+  /** Версия system-реестров (`registry_system.version`). */
+  systemVersion: number;
+}
+
 export interface ResetWorldReport {
   /** Сколько строк было в каждой таблице графа и журнала ДО сноса. */
   graph: Record<(typeof GRAPH_TABLES)[number], number>;
@@ -68,6 +88,37 @@ export interface ResetWorldReport {
   settingsReset: number;
   /** Отчёт пересева трёх системных реестров — он же двигает системную версию. */
   seed: SeedRegistriesResult;
+  /** Состояние ДО операции — из него же считаны числа «снесено». */
+  before: ResetWorldState;
+  /** Состояние ПОСЛЕ пересева, снятое ТОЙ ЖЕ транзакцией, что его создала. */
+  after: ResetWorldState;
+}
+
+/**
+ * Снимок состояния. Запрос собирается ИЗ ТЕХ ЖЕ двух списков, что и сама операция: таблица,
+ * добавленная в снос, обязана попасть и в отчёт — иначе однажды снесётся то, о чём отчёт
+ * промолчит.
+ */
+async function readState(tx: ISql): Promise<ResetWorldState> {
+  const [row] = (await tx.unsafe(
+    `SELECT ${GRAPH_TABLES.map((t) => `(SELECT count(*) FROM ${t})::int AS ${t}`).join(', ')},
+            (SELECT count(*) FROM registry_deltas)::int AS deltas,
+            ${DEFINITION_TABLES.map(
+              (t) => `(SELECT count(*) FROM ${t} WHERE owner_id IS NOT NULL)::int`,
+            ).join(' + ')} AS owner_definitions,
+            (SELECT coalesce(max(registry_version), 0) FROM user_settings)::int AS owner_version_max,
+            (SELECT version FROM registry_system WHERE id = 1)::int AS system_version`,
+  )) as unknown as Record<string, number>[];
+  if (row === undefined) throw new Error('reset-world: снимок состояния не вернул ни одной строки');
+  const graph = {} as ResetWorldState['graph'];
+  for (const t of GRAPH_TABLES) graph[t] = row[t] ?? 0;
+  return {
+    graph,
+    deltas: row.deltas ?? 0,
+    ownerDefinitions: row.owner_definitions ?? 0,
+    ownerVersionMax: row.owner_version_max ?? 0,
+    systemVersion: row.system_version ?? 0,
+  };
 }
 
 /**
@@ -96,17 +147,9 @@ export interface ResetWorldReport {
  */
 export async function resetWorld(sql: Sql, adminDsn: string): Promise<ResetWorldReport> {
   return sql.begin(async (tx) => {
-    // Счёт ДО сноса: после `TRUNCATE` сказать, что именно снесено, будет нечем, а отчёт
+    // Снимок ДО сноса: после `TRUNCATE` сказать, что именно снесено, будет нечем, а отчёт
     // разрушающей операции — единственное, по чему оператор сверяет «снесли то, что думали».
-    const [before] = await tx<Record<string, number>[]>`
-      SELECT (SELECT count(*) FROM entities)::int         AS entities,
-             (SELECT count(*) FROM relations)::int        AS relations,
-             (SELECT count(*) FROM chat_threads)::int     AS chat_threads,
-             (SELECT count(*) FROM chat_messages)::int    AS chat_messages,
-             (SELECT count(*) FROM entity_origins)::int   AS entity_origins,
-             (SELECT count(*) FROM entity_versions)::int  AS entity_versions,
-             (SELECT count(*) FROM registry_deltas)::int  AS registry_deltas`;
-    if (before === undefined) throw new Error('reset-world: счёт строк не вернул ни одной строки');
+    const before = await readState(tx);
 
     // (1) Дельты — первыми.
     await tx.unsafe('TRUNCATE registry_deltas');
@@ -130,19 +173,18 @@ export async function resetWorld(sql: Sql, adminDsn: string): Promise<ResetWorld
     // системный реестр» быть не должно.
     const seed = await seedRegistries(tx, adminDsn);
 
+    // Снимок ПОСЛЕ — той же транзакцией, что всё это сделала: спрашивать состояние отдельным
+    // подключением значило бы читать чужой снапшот и отвечать про мир, которого ещё нет.
+    const after = await readState(tx);
+
     return {
-      graph: {
-        entities: before.entities ?? 0,
-        relations: before.relations ?? 0,
-        chat_threads: before.chat_threads ?? 0,
-        chat_messages: before.chat_messages ?? 0,
-        entity_origins: before.entity_origins ?? 0,
-        entity_versions: before.entity_versions ?? 0,
-      },
-      deltas: before.registry_deltas ?? 0,
+      graph: before.graph,
+      deltas: before.deltas,
       definitions,
       settingsReset: settingsReset.count,
       seed,
+      before,
+      after,
     };
   });
 }
@@ -160,6 +202,14 @@ export function resetWorldReport(r: ResetWorldReport): string[] {
       .join(', ')}`,
     `  версия реестра владельца обнулена у строк настроек: ${r.settingsReset}`,
     ...seedRegistriesReport(r.seed),
+    'reset-world: после —',
+    `  граф и журнал: ${Object.entries(r.after.graph)
+      .map(([t, n]) => `${t} ${n}`)
+      .join(', ')}`,
+    `  дельты реестров: ${r.after.deltas}`,
+    `  пользовательских строк реестров: ${r.after.ownerDefinitions}`,
+    `  версия реестра владельца (максимум по настройкам): ${r.after.ownerVersionMax}`,
+    `  версия system-реестров: ${r.after.systemVersion} (была ${r.before.systemVersion})`,
   ];
 }
 
