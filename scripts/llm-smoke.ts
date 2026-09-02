@@ -20,6 +20,14 @@
 //     или ORBIS_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... …
 // Модель: env ORBIS_LLM_MODEL, иначе дефолт выбранного провайдера
 // (claude-sonnet-5 — DEFAULT_ANTHROPIC_MODEL, gpt-5.5 — DEFAULT_OPENAI_MODEL).
+//
+// `--dry-run` — та же сборка набора тулов из реестра, но БЕЗ похода к модели и без ключа
+// провайдера. Зачем режим нужен: сам гейт по определению тратит живой вызов и кредиты, а
+// сломать его умеет и то, что до вызова не доходит вовсе, — отъехавшая сигнатура
+// `buildToolDefs`, исчезнувший экспорт, пустой реестр (ровно так он и сломался в реформе:
+// `bun build` ловил `No matching export`, но набор тулов никто не собирал месяцами).
+// Прогоняется на любом стенде с базой; провайдер здесь не выбирается, потому что режим
+// ничего о нём и не утверждает.
 
 import { makeDb } from '../apps/server/src/db/client';
 import { withIdentity } from '../apps/server/src/db/with-identity';
@@ -28,11 +36,23 @@ import type { LLMToolDef } from '../apps/server/src/llm/types';
 import { effectiveRegistry } from '../apps/server/src/registry/cache';
 import { buildToolDefs } from '../apps/server/src/tools/registry';
 
+const dryRun = process.argv.includes('--dry-run');
+const unknown = process.argv.slice(2).filter((a) => a !== '--dry-run');
+if (unknown.length > 0) {
+  // Опечатка во флаге не должна тихо превращаться в ЖИВОЙ вызов модели: единственный
+  // аргумент скрипта — тот, что вызов отменяет.
+  console.error(`llm-smoke: неизвестный аргумент «${unknown[0]}» (есть только --dry-run).`);
+  process.exit(2);
+}
+
 // Правила ВЫБОРА провайдера скрипт не дублирует: неизвестное значение
 // ORBIS_LLM_PROVIDER, отсутствие ключа выбранного провайдера, оба ключа сразу без
 // явного выбора — на всё это фабрика уже отвечает внятной ошибкой, и вторая копия
 // этих правил со временем разошлась бы с первой.
-const provider = makeLLMProvider(process.env);
+//
+// В `--dry-run` фабрика не зовётся вовсе: режим не утверждает ничего о провайдере, а её
+// вызов требовал бы ключа ради проверки, которая до сети не доходит.
+const provider = dryRun ? null : makeLLMProvider(process.env);
 
 // А вот СОБСТВЕННОЕ предусловие гейта проверить обязан он сам. Без ключей и вне
 // production фабрика ошибку не бросает — она отдаёт EchoProvider (fail-safe для dev,
@@ -40,7 +60,7 @@ const provider = makeLLMProvider(process.env);
 // экспортировать ключ, увидел бы «echo: Сколько у меня…», stopReason end_turn и exit 0 —
 // то есть смоук закрылся бы, ни разу не сходив в сеть, и в прод уехал бы непроверенный
 // провайдер. Гейт по определению требует настоящего провайдера, поэтому здесь — отказ.
-if (provider.modelId === 'echo') {
+if (provider !== null && provider.modelId === 'echo') {
   console.error(
     'llm-smoke: выбран EchoProvider — гейт требует настоящего провайдера, заглушка ничего не доказывает.',
   );
@@ -82,6 +102,19 @@ const tools: LLMToolDef[] = defs.map((d) => ({
   description: d.description,
   inputSchema: d.inputJsonSchema,
 }));
+
+if (provider === null) {
+  // Печатается СОСТАВ, а не только число: гейт живой модели ломается и «тихо» — набором,
+  // который собрался, но потерял половину тулов вместе со снятым реестром.
+  console.log('dry-run   : живого вызова модели НЕ было');
+  console.log(
+    'tools     :',
+    tools.length,
+    `(attach_*: ${defs.filter((d) => d.name.startsWith('attach_')).length})`,
+  );
+  console.log('names     :', defs.map((d) => d.name).join(', '));
+  process.exit(0);
+}
 
 const response = await provider.chat({
   system:

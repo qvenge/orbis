@@ -34,7 +34,7 @@ import {
 } from '@orbis/shared';
 import { sql as drizzleSql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres, { type Sql } from 'postgres';
+import postgres, { type ISql, type Sql } from 'postgres';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import {
@@ -76,8 +76,14 @@ export interface SeedRegistriesResult {
  *
  * `sql` — админское подключение: RLS запрещает запись строк с `owner_id IS NULL` любой
  * роли, кроме обходящей политики.
+ *
+ * Тип `ISql`, а не `Sql`, — то общее, что есть у пула и у ОТКРЫТОЙ ТРАНЗАКЦИИ (postgres.js
+ * разводит их двумя интерфейсами: у транзакции нет `end`/`begin`/`listen`). Сид зовётся
+ * обоими способами: `db:prepare` и `ops.ts seed-registries` дают пул, «Пересев мира»
+ * (`reset-world.ts`) — свою транзакцию, потому что пересев обязан быть атомарен вместе со
+ * сносом. Ничего сверх запросов сид от подключения и не требует.
  */
-export async function seedRegistries(sql: Sql, adminDsn: string): Promise<SeedRegistriesResult> {
+export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedRegistriesResult> {
   // Системное определение ДО пересева — первая из трёх сторон слияния (§А3-3). Снимается
   // ДО upsert'ов и только оно: `nextSystem` берётся из кода (`BUILTIN_*`), а дельты живут
   // в своей таблице и пересевом не трогаются.
@@ -160,7 +166,7 @@ export async function seedRegistries(sql: Sql, adminDsn: string): Promise<SeedRe
 }
 
 /** Системные определения из БД (`owner_id IS NULL`) — сторона «до» трёхстороннего слияния. */
-export async function readSystemDefinitions(sql: Sql): Promise<SystemDefinitions> {
+export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinitions> {
   const propertyRows = await sql<Record<string, unknown>[]>`
     SELECT id, owner_id, key, label, description, type, status, storage, scope,
            merged_into, module, rank, flags
@@ -251,7 +257,7 @@ export function codeSystemDefinitions(): SystemDefinitions {
  * владельцу молча.
  */
 export async function mergeRegistryDeltas(
-  sql: Sql,
+  sql: ISql,
   adminDsn: string,
   prevSystem: SystemDefinitions,
   systemVersion: number,

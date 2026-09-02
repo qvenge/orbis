@@ -264,18 +264,16 @@ describe('сид против запрета core-проекций в props (§�
 
 describe('smart lists §7.2 / §3.3', () => {
   test('проза шести списков — байт-в-байт равна блокам 02 §3.3, в порядке документа', () => {
-    // ЧТО ЗДЕСЬ СРАВНИВАЕТСЯ И ЧЕГО НЕ ХВАТАЕТ — вслух, потому что пин ослаблен НАМЕРЕННО.
+    // ПИН БАЙТОВЫЙ — сравниваются ЦЕЛЫЕ тела, вместе с записью запросов внутри
+    // `{{query:…}}`. Маска `{{query:#N}}`, стоявшая здесь на время реформы, снята: она была
+    // законна ровно тот интервал, пока тела сидов уже переехали в key-форму канона (§А5-3),
+    // а §3.3 PRD ещё держал прежнюю запись, — а этот коммит везёт тела и документ ВМЕСТЕ
+    // (§А12-7), и разъехаться им больше не на чем.
     //
-    // Тела сидов переведены в key-форму канона (§А5-3), а §3.3 PRD до пересева (Задача 23,
-    // где `docs/prd/**` едет одним коммитом с сидами) держит прежнюю запись запросов.
-    // Байтовое сравнение целых тел с этого момента невыполнимо, а сравнить две ФОРМЫ
-    // запроса семантически больше нечем: мост старой грамматики удалён этой же задачей —
-    // он и был единственным, кто умел прочитать обе.
-    //
-    // Поэтому сравнивается ВСЁ, КРОМЕ содержимого query-блоков: проза, заголовки, порядок
-    // абзацев, число блоков и их места в тексте. Это ловит ровно тот дрейф, ради которого
-    // пин заводили (тело сида и §3.3 разъехались), и не ловит только запись запроса —
-    // которую в Задаче 23 обязан вернуть байтовый пин целых тел.
+    // Почему пин байтовый, а не «по смыслу»: §3.3 — это ОБЕЩАНИЕ пользователю про то, что
+    // он увидит в смарт-листе, и единственный способ поймать расхождение обещания с кодом —
+    // сравнить символы. Семантического сравнения двух форм запроса в дереве больше нет
+    // вовсе: мост старой грамматики снесён вместе со старой формой.
     const prdPath = join(import.meta.dir, '../../../../docs/prd/02-core-os.md');
     const prd = readFileSync(prdPath, 'utf8');
     const blocks = [...prd.matchAll(/```markdown\n([\s\S]*?)\n```/g)].map((m) => {
@@ -283,30 +281,21 @@ describe('smart lists §7.2 / §3.3', () => {
       if (block === undefined) throw new Error('markdown-блок без группы захвата');
       return block;
     });
-    /** Тело с содержимым запросов, заменённым на порядковый номер блока. */
-    const masked = (body: string): string => {
-      let n = 0;
-      return body.replace(/\{\{query:[\s\S]*?\}\}/g, () => {
-        n += 1;
-        return `{{query:#${n}}}`;
-      });
-    };
     // Первые шесть markdown-блоков документа — §3.3, ровно в порядке SEED_SMART_LISTS:
     // три исходных списка, два верхних горизонта планирования (E4), «Рутины» (V1.9).
-    expect(blocks.slice(0, SEED_SMART_LISTS.length).map(masked)).toEqual(
-      SEED_SMART_LISTS.map((s) => masked(s.body)),
-    );
+    expect(blocks.slice(0, SEED_SMART_LISTS.length)).toEqual(SEED_SMART_LISTS.map((s) => s.body));
     // Поимённо — чтобы падение называло виновника, а не «массивы не равны»
-    expect(masked(blocks[0] as string)).toBe(masked(DAILY_PLANNING_BODY));
-    expect(masked(blocks[1] as string)).toBe(masked(UPCOMING_BODY));
-    expect(masked(blocks[2] as string)).toBe(masked(ALL_TASKS_BODY));
-    expect(masked(blocks[3] as string)).toBe(masked(HORIZON_YEAR_BODY));
-    expect(masked(blocks[4] as string)).toBe(masked(HORIZON_LIFE_BODY));
-    expect(masked(blocks[5] as string)).toBe(masked(ROUTINES_LIST_BODY));
-    // Контроль осмысленности маски: она обязана что-то прятать, иначе сравнение выше
-    // зеленело бы, вообще ничего не проверив про блоки.
-    expect(masked(ROUTINES_LIST_BODY)).toContain('{{query:#3}}');
-    expect(masked(ROUTINES_LIST_BODY)).not.toContain('orbis/undecided');
+    expect(blocks[0]).toBe(DAILY_PLANNING_BODY);
+    expect(blocks[1]).toBe(UPCOMING_BODY);
+    expect(blocks[2]).toBe(ALL_TASKS_BODY);
+    expect(blocks[3]).toBe(HORIZON_YEAR_BODY);
+    expect(blocks[4]).toBe(HORIZON_LIFE_BODY);
+    expect(blocks[5]).toBe(ROUTINES_LIST_BODY);
+    // Контроль осмысленности: блоков в §3.3 ровно шесть, и запись запросов внутрь сравнения
+    // ВХОДИТ. Без этих двух строк пин зеленел бы и на документе, где §3.3 обрезали до трёх
+    // списков, и на теле, где запрос подменили целиком.
+    expect(blocks).toHaveLength(SEED_SMART_LISTS.length);
+    expect(ROUTINES_LIST_BODY).toContain(`{{query:${ROUTINES_BATCH_QUERY}}}`);
   });
 
   test('все {{query:}}-блоки шести списков разбираются СТРОГИМ каноном против ЖИВОГО реестра', async () => {

@@ -18,6 +18,7 @@
 //   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
 //   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
+//   bun scripts/ops.ts reset-world --confirm <PROD_REF> --i-understand RESET  # РАЗРУШАЮЩАЯ (РП-7)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <owner-uuid> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
@@ -49,6 +50,7 @@ import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
 } from '../apps/server/src/db/registry-drift';
+import { runResetWorld } from '../apps/server/src/db/reset-world';
 import * as schema from '../apps/server/src/db/schema';
 import {
   codeSystemDefinitions,
@@ -501,6 +503,26 @@ async function censusBodies(): Promise<number> {
   });
 }
 
+/**
+ * «Пересев мира» (РП-7) — единственная РАЗРУШАЮЩАЯ операция белого списка.
+ *
+ * Состав, порядок и подтверждение живут в `db/reset-world.ts` и покрыты тестами: этот файл
+ * исполняется при импорте (диспетчер + `process.exit`), поэтому проверить тестом его самого
+ * нельзя, а разрушающая операция без проверки — это регламент вместо гарантии. Здесь остаётся
+ * ровно обвязка: секрет из Ключницы, пул, печать.
+ *
+ * Прод-DSN в `readDsn` не логируется; отказ подтверждения печатает только reference проекта —
+ * его runbook §1 называет фактом, а не секретом.
+ */
+async function resetWorldOp(args: string[]): Promise<number> {
+  return runResetWorld(args, {
+    readDsn,
+    openSql: (dsn) => postgres(dsn, { max: 1 }),
+    log: (line) => console.log(line),
+    error: (line) => console.error(line),
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -592,6 +614,12 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   'backfill-body-doc': {
     run: backfillBodyDocOp,
     help: 'конверсия тел в body_doc + выравнивание body до канона; ТОЛЬКО после audit-bodies',
+  },
+  'reset-world': {
+    run: resetWorldOp,
+    help:
+      'РАЗРУШАЮЩАЯ: снести граф и журнал владельцев, пользовательские строки реестров и дельты; ' +
+      'пересеять три реестра. Требует --confirm <PROD_REF> и --i-understand RESET',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   'issue-pat': {

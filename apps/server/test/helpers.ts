@@ -2,6 +2,7 @@
 import type { LocalizedText, PropertyType } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { type Db, makeDb } from '../src/db/client';
+import { DEFINITION_TABLES } from '../src/db/reset-world';
 import type { entities } from '../src/db/schema';
 import type { Tx } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
@@ -40,19 +41,10 @@ export function freshUserId(): string {
   return crypto.randomUUID();
 }
 
-/**
- * Шесть definition-таблиц реформы: у каждой встроенные строки (`owner_id IS NULL`)
- * переживают зачистку, пользовательские — нет. Список литералом, а не обходом схемы:
- * забытая таблица должна ловиться чтением этого файла, а не «почему-то течёт состояние».
- */
-const DEFINITION_TABLES = [
-  'property_definitions',
-  'aspect_definitions',
-  'relation_role_definitions',
-  'contract_definitions',
-  'subscription_definitions',
-  'action_definitions',
-] as const;
+// Шесть definition-таблиц реформы берутся ИЗ ПРОД-ОПЕРАЦИИ пересева (`db/reset-world.ts`), а
+// не переписываются здесь: правило у обеих одно — «строки владельца вон, встроенные
+// остаются», и седьмой реестр части Б, попавший только в один из двух списков, дал бы либо
+// течь состояния между сьютами, либо переживший пересев мусор в проде.
 
 /** Полная зачистка данных между сьютами (админ-DSN, обходит RLS). */
 export async function truncateAll(): Promise<void> {
