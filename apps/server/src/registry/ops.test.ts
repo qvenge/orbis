@@ -1322,16 +1322,31 @@ describe('property_merge при конфликте значений (§А10-2)',
   }
 
   test('REGISTRY_CONFLICT, ничего не применено, единица пачки в глобальном треде', async () => {
+    // Фикстура идёт ПРЯМЫМ `execute`, а не тулом: с Р-24-8 заведение строки СРАЗУ АКТИВНОЙ —
+    // `behavior-delta`, то есть карточка подтверждения для любого актора, включая владельца.
+    // Предмет этого теста — конфликт значений при СЛИЯНИИ, и он по-прежнему идёт границей
+    // вызова (`call` ниже); гонять через подтверждение ещё и обстановку значило бы проверять
+    // здесь чужое правило.
     const mk = async (key: string): Promise<string> => {
-      const r = await call('property_create', {
-        key,
-        label: { ru: key },
-        description: { ru: key },
-        type: { kind: 'number' },
-        status: 'active',
+      const r = await execute(db, {
+        actorUserId: conflictOwner,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [
+          {
+            tool: 'property_create',
+            input: {
+              key,
+              label: { ru: key },
+              description: { ru: key },
+              type: { kind: 'number' },
+              status: 'active',
+            },
+          },
+        ],
       });
-      if (r.status !== 'ok') throw new Error(`создание ${key} не прошло: ${JSON.stringify(r)}`);
-      return (r.result as { property: string }).property;
+      if (!r.ok) throw new Error(`создание ${key} не прошло: ${JSON.stringify(r.error)}`);
+      return (r.results[0] as { property: string }).property;
     };
     const source = await mk('user/conflict-a');
     const into = await mk('user/conflict-b');
