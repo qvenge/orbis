@@ -818,3 +818,113 @@ test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисля�
     { target: category, property: 'orbis/finance_category' },
   ]);
 });
+
+// ---------------------------------------------------------------------------
+// §А6-2 × §А10-2: слияние ссылочных свойств и подпись зеркала
+// ---------------------------------------------------------------------------
+
+/** Своё ссылочное свойство с множеством цели «любая категория» — обе стороны слияния. */
+async function ownRefProperty(user: string, key: string, label: string): Promise<string> {
+  const r = await execute(
+    db,
+    req(
+      user,
+      [
+        {
+          tool: 'property_create',
+          input: {
+            key,
+            label: { ru: label },
+            description: { ru: `Своя ссылка «${label}»` },
+            type: { kind: 'ref', target: { filter: { aspect: 'orbis/category' } } },
+            status: 'active',
+          },
+        },
+      ],
+      { source: 'ui' },
+    ),
+  );
+  if (!r.ok) throw new Error(`ожидался успех, получено ${JSON.stringify(r.error)}`);
+  return (r.results[0] as { property: string }).property;
+}
+
+test('ref × merge: слияние переписывает подпись зеркала, висячего ребра не остаётся (§А6-2)', async () => {
+  // Подпись зеркала — ПЯТЫЙ держатель свойства: она хранит id, переживает слияние и в
+  // `collectPropertyHolders` не входит. Не переписать её значит вывести ребро из
+  // самопочинки навсегда — `syncRefMirror` снимает устаревшие только по подписям из
+  // `changed`, а поглощённого id в `props` больше нет.
+  const user = freshUserId();
+  const sink = makeChatJournalSink();
+  const c1 = await createCategory(user, 'Еда');
+  const c2 = await createCategory(user, 'Развлечения');
+  const a = await ownRefProperty(user, 'user/client', 'Клиент');
+  const b = await ownRefProperty(user, 'user/customer', 'Покупатель');
+
+  const x = okEntity(
+    await execute(
+      db,
+      req(user, [
+        { tool: 'entity_create', input: { title: 'Запись', tags: [], props: { [a]: c1 } } },
+      ]),
+    ),
+  );
+  expect(await refEdges(user, x.id)).toEqual([{ target: c1, property: a }]);
+
+  const merged = await execute(
+    db,
+    req(user, [{ tool: 'property_merge', input: { source: a, into: b } }], { source: 'ui' }),
+    { sink },
+  );
+  if (!merged.ok) throw new Error(JSON.stringify(merged.error));
+  // Подпись переехала на цель ВМЕСТЕ со значением: расхождения нет ни на миг.
+  expect(await refEdges(user, x.id)).toEqual([{ target: c1, property: b }]);
+
+  // Смена значения: фаза 1 находит старое ребро по НОВОЙ подписи и снимает его. Без фикса
+  // здесь было бы ДВА ребра — живое на «Развлечения» и висячее на «Еду».
+  const moved = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: x.id, props: { [b]: c2 } } }]),
+    { sink },
+  );
+  if (!moved.ok) throw new Error(JSON.stringify(moved.error));
+  expect(await refEdges(user, x.id)).toEqual([{ target: c2, property: b }]);
+
+  // Следствие висячего ребра, которого больше нет: архивация ПРЕЖНЕЙ цели не метит запись.
+  const archived = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: c1, archived: true } }]),
+    { sink },
+  );
+  if (!archived.ok) throw new Error(JSON.stringify(archived.error));
+  expect(await tagsOf(user, x.id)).toEqual([]);
+});
+
+test('ref × merge: undo слияния возвращает подпись зеркала поглощённому свойству', async () => {
+  const user = freshUserId();
+  const sink = makeChatJournalSink();
+  const c = await createCategory(user, 'Еда');
+  const a = await ownRefProperty(user, 'user/client', 'Клиент');
+  const b = await ownRefProperty(user, 'user/customer', 'Покупатель');
+  const y = okEntity(
+    await execute(
+      db,
+      req(user, [
+        { tool: 'entity_create', input: { title: 'Запись', tags: [], props: { [a]: c } } },
+      ]),
+    ),
+  );
+
+  const merged = await execute(
+    db,
+    req(user, [{ tool: 'property_merge', input: { source: a, into: b } }], { source: 'ui' }),
+    { sink },
+  );
+  if (!merged.ok) throw new Error(JSON.stringify(merged.error));
+  expect(await refEdges(user, y.id)).toEqual([{ target: c, property: b }]);
+
+  const undone = await undoAction(db, { actorUserId: user, actionId: merged.actionId });
+  expect(undone.ok).toBe(true);
+  // «Байт-в-байт» (§7.8) — и для значения, и для подписи производного ребра.
+  expect(await propsOf(user, y.id)).toMatchObject({ [a]: c });
+  expect(await refEdges(user, y.id)).toEqual([{ target: c, property: a }]);
+});

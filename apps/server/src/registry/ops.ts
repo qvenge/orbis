@@ -36,6 +36,7 @@ import {
   type PropertyDefinition,
   type PropertyType,
   propertyDefinitionSchema,
+  ROLE_REF,
 } from '@orbis/shared';
 import {
   type BodyDoc,
@@ -750,9 +751,17 @@ export async function updateProperty(
  *    свойства пятью полями: `properties.add[].propertyId`, `properties.hide[]`,
  *    `properties.relaxRequired[]`, КЛЮЧИ `properties.rank{}` и КЛЮЧИ `selectOptions{}`.
  *
+ * ПЯТЫЙ ДЕРЖАТЕЛЬ СУЩЕСТВУЕТ И ЖИВЁТ ВНЕ ЭТОГО ПЕРЕЧНЯ — зеркало-ребро роли `ref`,
+ * подписанное `relations.meta.property` (§А6-2). Слияние переписывает его подпись само
+ * (`mergeProperty`, блок «ПЯТЫЙ РОД ДЕРЖАТЕЛЯ»), а сюда оно не заведено НАМЕРЕННО: этот же
+ * список кормит `propertyUsage` («на строке ничего не держится») и граф зависимостей, и
+ * ребро в нём поменяло бы семантику удаления и восстановления строки — производная реестра
+ * стала бы поводом запретить операцию над самим реестром. Читателю, сверяющему перечень:
+ * четыре рода — это ДЕРЖАТЕЛИ, которых надо ИСКАТЬ; зеркало ищется одним UPDATE по подписи.
+ *
  * ПРИЗНАК, ПО КОТОРОМУ СЛЕДУЮЩИЙ ЧИТАТЕЛЬ ПОЙМЁТ, ЧТО ПЕРЕЧЕНЬ УСТАРЕЛ: появилось место,
  * хранящее идентификатор свойства (в колонке, в jsonb, в тексте) и переживающее операции
- * над реестром. Подписка и правило части Б — ровно такие; они и будут пятым и шестым.
+ * над реестром. Подписка и правило части Б — ровно такие; они и будут шестым и седьмым.
  * Проверяется это не памятью, а согласием двух половин: `registry/deps-graph.ts` строит
  * рёбра по ТОМУ ЖЕ множеству мест, и разойтись им нельзя.
  */
@@ -1053,6 +1062,16 @@ export interface MergeInverse {
   }>;
   /** Строки `registry_deltas` с переписанными адресами: прежняя дельта целиком. */
   deltas: Array<{ id: string; delta: unknown }>;
+  /**
+   * Зеркала-рёбра (§А6-2), чью подпись `meta.property` слияние перевело на цель.
+   *
+   * Поле НЕОБЯЗАТЕЛЬНОЕ по той же причине, по которой защитно разбирается `deltas`: журнал
+   * append-only, и у слияний, записанных до появления пятого рода держателей, ключа нет.
+   * Хранится СПИСОК id, а не «все рёбра с подписью цели»: откат обязан вернуть подпись
+   * ровно тем рёбрам, которые её потеряли, и не отобрать её у зеркал, законно
+   * принадлежавших цели ещё до слияния.
+   */
+  mirrors?: string[];
 }
 
 export interface MergeResult {
@@ -1215,6 +1234,15 @@ function textArray(values: readonly string[]): SQL {
   )}]::text[]`;
 }
 
+/** `ARRAY[$1,…]::uuid[]`; пустой список — пустой массив того же типа (id рёбер — uuid). */
+function uuidArray(ids: readonly string[]): SQL {
+  if (ids.length === 0) return sql`ARRAY[]::uuid[]`;
+  return sql`ARRAY[${sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  )}]::uuid[]`;
+}
+
 /** Переписать имена свойств внутри произвольного JSON-дерева (`prop`/`has`/`field`). */
 function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unknown {
   if (Array.isArray(value)) return value.map((v) => rewriteAst(v, from, to));
@@ -1281,6 +1309,30 @@ export async function mergeProperty(
     hadInto: r.had_into === true,
     into: r.had_into === true ? r.old_into : null,
   }));
+
+  // ПЯТЫЙ РОД ДЕРЖАТЕЛЯ (§А6-2): зеркало-ребро роли `ref` подписывает себя `meta.property`
+  // = ИДЕНТИФИКАТОРОМ свойства (`registry/ref.ts`, фаза 2), и подпись переживает слияние
+  // ровно так же, как переживал бы её ключ в `props`. Не переписать её — значит вывести
+  // ребро из самопочинки НАВСЕГДА: `syncRefMirror` снимает устаревшие зеркала только по
+  // подписям из `changed`, а `changed` строится обходом ключей `props`, откуда id источника
+  // слияние только что убрало. Дальше — либо вечно чужая подпись в «Связанном», либо (после
+  // первой же смены значения) висячее ребро на прежнюю цель: неснимаемый `needs-review` при
+  // её архивации и «Связанное», показывающее источник, которого там нет.
+  //
+  // Конфликта уникальности переподпись дать не может: `rel_uniq` стоит на
+  // (source_id, target_id, role), `meta` в ключ не входит; а единственный случай, где у
+  // записи было бы ДВА разных зеркала, отбит выше конфликтом значений.
+  //
+  // `updated_at` ребра не двигаем — по тому же доводу, что у `markRefSourcesNeedsReview`:
+  // это производная реестра, а не правка владельца.
+  const mirrorRows = (await tx.execute(sql`
+    UPDATE relations r
+       SET meta = jsonb_set(r.meta, '{property}', to_jsonb(${into.id}::text))
+     WHERE r.role = ${ROLE_REF} AND r.meta->>'property' = ${source.id}
+       AND EXISTS (SELECT 1 FROM entities e
+                    WHERE e.id = r.source_id AND e.owner_id = ${ownerId}::uuid)
+    RETURNING r.id`)) as unknown as RawRow[];
+  const mirrors = mirrorRows.map((r) => r.id as string);
 
   // Ссылки. Множество ИМЁН ИСТОЧНИКА — id и key: в дереве §А5-7 лежат id, но `entity_query`
   // принимает и key, а текст запроса в теле — ТОЛЬКО key. Искать одно из двух значило бы
@@ -1462,6 +1514,7 @@ export async function mergeProperty(
       progress,
       bodies,
       deltas,
+      mirrors,
     },
   };
 }
@@ -1595,6 +1648,16 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
     await tx.execute(sql`
       UPDATE registry_deltas SET delta = ${JSON.stringify(d.delta)}::jsonb
        WHERE owner_id = ${ownerId}::uuid AND id = ${d.id}::uuid`);
+  }
+  // Зеркала (§А6-2) — обратная переподпись ровно по списку из inverse (см. `MergeInverse.mirrors`).
+  const mirrorIds = Array.isArray(iv.mirrors) ? iv.mirrors : [];
+  if (mirrorIds.length > 0) {
+    await tx.execute(sql`
+      UPDATE relations r
+         SET meta = jsonb_set(r.meta, '{property}', to_jsonb(${iv.source}::text))
+       WHERE r.id = ANY(${uuidArray(mirrorIds)})
+         AND EXISTS (SELECT 1 FROM entities e
+                      WHERE e.id = r.source_id AND e.owner_id = ${ownerId}::uuid)`);
   }
   for (const id of iv.compacted) {
     await tx.execute(sql`
