@@ -2224,8 +2224,12 @@ export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: numb
 
 **Файлы:**
 - Изменить: `scripts/ops.ts` — операция `'reset-world'` (белый список; РП-7). **Прецедента
-  подтверждения в файле нет** — `--confirm <PROD_REF>` + повторный ввод слова `RESET` со stdin
-  пишутся с нуля. Состав: `TRUNCATE entities, relations, chat_threads, chat_messages, entity_origins,
+  подтверждения в файле нет** — пишется с нуля; форма — ДВА независимых флага, оба обязательны,
+  stdin не используется (Р-23c-1: координатор выполняет Шаг 6 из среды без TTY, а пайп
+  `printf RESET | …` делает команду составной и уводит её в классификатор разрешений):
+  `--confirm <PROD_REF>` (сверяется с ref базы из DSN; вызов без него печатает ожидаемый ref без
+  секретов и выходит с кодом 2) и `--i-understand RESET` (точное слово); без любого из двух — отказ
+  ДО открытия транзакции. Состав: `TRUNCATE entities, relations, chat_threads, chat_messages, entity_origins,
   entity_versions RESTART IDENTITY` (FK-граф из семи связей замкнут внутри шестёрки; CASCADE не
   нужен); `DELETE FROM {property,aspect,relation_role,contract,subscription,action}_definitions WHERE
   owner_id IS NOT NULL`; `TRUNCATE registry_deltas` — ДО пересева (иначе `mergeRegistryDeltas`,
@@ -2266,7 +2270,7 @@ export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: numb
   (1) `bun scripts/ops.ts ping`;
   (2) `ops.ts check` (ожидаемо: drift — реестры новой формы ещё не засеяны — это не отказ);
   (3) `ops.ts migrate` — 0014…0017 (Supabase pooler, prepared statements: после миграции —
-  Restart сервиса неизбежен); (4) `ops.ts reset-world --confirm <PROD_REF>`; (5) `ops.ts check` → ok;
+  Restart сервиса неизбежен); (4) `ops.ts reset-world` (без флагов → печатает ожидаемый ref, код 2) → `ops.ts reset-world --confirm <PROD_REF> --i-understand RESET`; (5) `ops.ts check` → ok;
   (6) ручной deploy `main` в Render (Manual Deploy → latest commit) и Restart; (7) `/health` без
   `registryDrift`; (8) `render.yaml`: `autoDeploy` обратно — docs-коммит в `main` (Blueprint-sync;
   проверка `get_service`); (9) заход владельца — онбординг сеет граф через исполнителя; (10)
