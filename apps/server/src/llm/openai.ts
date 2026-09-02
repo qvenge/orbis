@@ -35,16 +35,30 @@ export class OpenAIProvider extends AiSdkProvider {
       modelId,
       timeoutMs: opts.timeoutMs,
       // ПОЧЕМУ strict: false. Дефолт строгости у эндпоинтов разный: /v1/chat/completions
-      // нестрогий, /v1/responses — строгий, а строгий режим не принимает regex
-      // lookaround: «Invalid JSON schema: regex lookaround is not supported. Found at
-      // $.properties.data.properties.amount.pattern.»
+      // нестрогий, /v1/responses — строгий. Решение D29 принято по ЖИВОМУ отказу строгого
+      // режима на regex lookaround: «Invalid JSON schema: regex lookaround is not supported.
+      // Found at $.properties.data.properties.amount.pattern.»
       //
-      // ГДЕ ЛУКАХЕД СЕГОДНЯ. У свойств реестра его больше НЕТ: `orbis/amount` и
-      // `orbis/target_value` выражают «строго > 0» границей ТИПА (`exclusiveMin`), и
-      // генератор схем значений печатает `exclusiveMinimum` (`registry/value-schema.ts`,
-      // пин — `property-type.test.ts`). Единственный оставшийся лукахед — `positiveDecimal`
-      // контракта импорта (`packages/shared/src/contracts/import.ts`), и на нём этот довод
-      // теперь и держится: тул `import_csv_analyze` без strict: false не проехал бы.
+      // ТОЙ КОНКРЕТНОЙ ПРИЧИНЫ БОЛЬШЕ НЕТ, и это надо было сказать вслух. Лукахед стоял в
+      // паттерне суммы старой zod-схемы аспекта; реформа выразила «строго > 0» границей ТИПА
+      // (`orbis/amount`/`orbis/target_value`: `exclusiveMin` → `exclusiveMinimum`,
+      // `registry/value-schema.ts`, пин — `property-type.test.ts`), а сам словарь типов
+      // lookaround запрещает (`registry/property-type.ts`, `assertPatternRegular`). Замер по
+      // отгружаемому реестру: `grep -c '(?!' apps/server/test/golden/tool-registry.json` → 0
+      // на 37 тулах. Лукахед в дереве ещё есть (`positiveDecimal`,
+      // `packages/shared/src/contracts/import.ts`), но он живёт в tRPC-входе и НИ В ОДНУ
+      // схему тула не попадает — единственный LLM-тул импорта зовётся `csv_mapping`, и его
+      // схему строит `csvMappingToolJsonSchema()` без единого lookaround.
+      //
+      // ПОЧЕМУ ПЕРЕКЛЮЧАТЕЛЬ ВСЁ ЖЕ СТОИТ. «Причина ушла» и «строгий режим теперь примет наши
+      // схемы» — РАЗНЫЕ утверждения, и второе без живого прогона недоказуемо: D29 и родилось
+      // из того, что схему разобрали глазами, а отказ пришёл от провайдера. Что в реестре
+      // тулов есть сегодня (замерено обходом того же golden): рекурсия через `$defs`
+      // (`$ref: '#/$defs/node'` — 22 вхождения, схема Q-AST §А5-4), 60 объектов, у которых
+      // `required` перечисляет НЕ ВСЕ свойства, и 2 объекта без `additionalProperties: false`.
+      // Годится ли это строгому режиму — вопрос к провайдеру, и отвечает на него живая проба
+      // `scripts/probe-openai-schema.ts` (приёмка §С8-4), а не чтение. До такого прогона
+      // `strict: false` остаётся страховкой D29.
       //
       // ПОЧЕМУ НЕ strictJsonSchema. Этот переключатель SDK кормит только response_format
       // (@ai-sdk/openai/dist/index.js:1005, 1025, 6543, 6583) и к тулам не относится

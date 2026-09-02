@@ -59,10 +59,11 @@ const dateString = z
 /**
  * Строго положительная decimal-строка: > 0, без экспоненты и минуса.
  *
- * ЕДИНСТВЕННЫЙ негативный lookahead, доезжающий до JSON Schema тула, и на нём держится
- * довод `strict: false` транспорта OpenAI (D29, `llm/openai.ts`): строгий режим Responses
- * API lookaround не принимает. У свойств РЕЕСТРА его больше нет — там «> 0» выражено
- * границей типа (`exclusiveMin` → `exclusiveMinimum`).
+ * Негативный lookahead здесь ЗАКОННЕН и наружу не едет: схема живёт в `canonicalRowSchema`,
+ * то есть в tRPC-входе импорта, а не в JSON Schema тула. Единственный LLM-тул импорта —
+ * `csv_mapping`, и его схему строит `csvMappingToolJsonSchema()` ниже, где lookaround нет.
+ * У СВОЙСТВ РЕЕСТРА lookaround запрещён вовсе (`registry/property-type.ts`,
+ * `assertPatternRegular`) — «> 0» там выражено границей типа (`exclusiveMin`).
  */
 const positiveDecimal = z
   .string()

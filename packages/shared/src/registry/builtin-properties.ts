@@ -91,8 +91,10 @@ const { $schema: _AST_DIALECT, $defs: QUERY_AST_DEFS, ...QUERY_AST_BODY } = quer
  *     (`registry/legacy-field-map.ts`) удалена целиком, заворачивать текст в обёртку
  *     стало нечему;
  *  2. `git grep legacyAspectsPatch` — ноль вызывающих. ВЫПОЛНЕНО: союз старой карты снят
- *     из `entityCreateExecInput`/`entityUpdateExecInput`, прислать текстовый запрос стало
- *     нечем ни тулу, ни web.
+ *     из `entityCreateExecInput`/`entityUpdateExecInput`. Условие было про КАНАЛ старой
+ *     формы, а не про возможность прислать текст: текст запроса приезжает и сейчас —
+ *     значением свойства через тул и роутер владельца (живой пример —
+ *     `seed/onboarding.test.ts`, цель заводится с `{query: {text: …}}`).
  *
  * ПОЧЕМУ ВЕТКА ВСЁ ЖЕ СТОИТ. Сужение схемы до голого `QUERY_AST_BODY` — не уборка, а СМЕНА
  * ТОГО, ЧТО ПРИНИМАЕТСЯ НА ЗАПИСИ: `{text}` останется законной формой значения ровно до

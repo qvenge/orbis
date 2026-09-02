@@ -1278,7 +1278,15 @@ export type DecideProposalResult =
       reason: RejectReason;
     };
 
-/** Максимум строк разбора предложения и потолок одной строки (`contracts/agent-loop.ts`). */
+/**
+ * Максимум строк разбора предложения и потолок одной строки.
+ *
+ * ВТОРОЙ ДОМ ЭТИХ ЧИСЕЛ — json-схема свойства `orbis/run_proposal`
+ * (`packages/shared/src/registry/builtin-properties.ts`: `mismatches.maxItems: 50`,
+ * `items.…note.maxLength: 500`). Именно с ней расхождение констант даёт `VALIDATION` на
+ * записи, поэтому сверять надо с реестром, а не с типом контракта: `ProposalMismatch`
+ * (`contracts/agent-loop.ts`) границ не несёт вовсе.
+ */
 const MAX_MISMATCH_NOTES = 50;
 const MISMATCH_NOTE_MAX = 500;
 

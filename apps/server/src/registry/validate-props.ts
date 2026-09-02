@@ -246,8 +246,9 @@ export function validateEntityProps(
      * `seed/world.ts` через исполнитель, то есть через стадию 2 и этот самый валидатор.
      * Core-значения (`title`, `created_at`) он передаёт полями входа `entity_create`, а не
      * `props`, поэтому `CORE_IN_PROPS` на нём не срабатывает — и это проверяется, а не
-     * подразумевается: `seed/onboarding.test.ts` гоняет `assertEntityProps` по каждой из
-     * 19 посеянных строк.
+     * подразумевается: `seed/onboarding.test.ts` гоняет `assertEntityProps` по всем 12
+     * категориям (остальные семь строк мира свойств не несут вовсе — смарт-листы и садовник
+     * заводятся телом и тегами).
      */
     if (def.storage !== 'props') {
       violations.push({ code: 'CORE_IN_PROPS', propertyId, storage: def.storage });
