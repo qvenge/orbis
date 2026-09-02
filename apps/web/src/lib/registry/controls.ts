@@ -138,8 +138,13 @@ export function parseControlValue(def: PropertyDefinition, raw: string): Control
       return Number.isFinite(n) ? { kind: 'value', value: n } : { kind: 'invalid' };
     }
     case 'decimal': {
+      // Паттерн — ТОТ ЖЕ, что у серверной схемы значения (`registry/value-schema.ts`,
+      // `DECIMAL_PATTERN`): ведущий «+» она не принимает, и пока контрол его принимал,
+      // владелец вводил «+500», видел успешное сохранение формы и получал `VALIDATION` —
+      // поле выглядело «не сохранилось» без единого объяснения. Запятая заменяется на точку
+      // ДО проверки: это раскладка ввода, а не иная форма числа.
       const text = trimmed.replace(',', '.');
-      return /^[-+]?\d+(\.\d+)?$/.test(text) ? { kind: 'value', value: text } : { kind: 'invalid' };
+      return /^-?\d+(\.\d+)?$/.test(text) ? { kind: 'value', value: text } : { kind: 'invalid' };
     }
     default:
       return { kind: 'value', value: trimmed };

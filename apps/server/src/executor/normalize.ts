@@ -9,14 +9,6 @@
 import { ExecError } from './errors';
 import type { EntityState } from './props';
 
-/**
- * Старая карта аспектов. Живёт до «Пересева мира»: её всё ещё читают CAS-предусловия
- * (старая форма над проекцией — Задача 5), бюджет-хук и карточки. Единица слияния — уже
- * свойство, поэтому здесь это тип ЧТЕНИЯ проекции, а не рабочая форма исполнителя.
- */
-export type AspectData = Record<string, unknown>;
-export type AspectsMap = Record<string, AspectData>;
-
 /** Теги нормализуются в нижний регистр и дедуплицируются (порядок первого вхождения). */
 export function normalizeTags(tags: string[]): string[] {
   return [...new Set(tags.map((t) => t.toLowerCase()))];

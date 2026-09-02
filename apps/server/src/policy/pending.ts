@@ -104,7 +104,10 @@ const pendingRecord = z
      * pending'ов и предложений, а не «умолчание для новых записей».
      */
     kind: z.enum(['question', 'action']).optional(),
-    tool: z.string().min(1).optional(), // executor-форма (attach_<aspect_id с заменой «/»>)
+    // Имя тула — РОВНО то, которым его зовут: перевода имён между реестром и исполнителем
+    // больше нет (Задача 12). У attach-тулов оно собрано `attachToolName` из id аспекта с
+    // заменой И «/», И «-» (`shared/registry/tool-schema.ts`).
+    tool: z.string().min(1).optional(),
     input: z.record(z.unknown()).optional(), // immutable payload — envelope-валидирован при создании
     /** Текст вопроса владельцу (kind:'question'); границы — те же, что у `askInput`. */
     question: questionText.optional(),

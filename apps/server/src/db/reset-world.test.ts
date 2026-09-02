@@ -101,6 +101,29 @@ describe('reset-world — подтверждение двумя флагами',
     expect(prodRefFromDsn(LOCAL_DSN_SHAPE)).toBeNull();
   });
 
+  test('DSN роли ПРИЛОЖЕНИЯ отвергается ДО соединения, а не падает permission denied', async () => {
+    // `orbis_app.<REF>` даёт тот же ref, что и админский DSN, — подтверждение сошлось бы, и
+    // операция пошла бы к базе, где упала бы на первом TRUNCATE. Диагностика была бы
+    // «permission denied» вместо честного «не тот DSN».
+    const appDsn = PROD_DSN.replace('postgres.', 'orbis_app.');
+    expect(prodRefFromDsn(appDsn)).toBe(PROD_REF); // ref выводится — проба не вакуумна
+    const said: string[] = [];
+    const code = await runResetWorld(['--confirm', PROD_REF, '--i-understand', 'RESET'], {
+      readDsn: () => appDsn,
+      openSql: () => {
+        throw new Error('соединение открыто ДО отказа по роли');
+      },
+      log: (l) => said.push(l),
+      error: (l) => said.push(l),
+    });
+    expect(code).toBe(2);
+    expect(said.join('\n')).toContain('orbis_app');
+    // Админский DSN с теми же флагами гейт пропускает — отказ адресный, а не «на всякий случай».
+    expect(resetWorldGate(PROD_DSN, ['--confirm', PROD_REF, '--i-understand', 'RESET'])).toEqual({
+      proceed: true,
+    });
+  });
+
   test('без --confirm: печатает ожидаемый ref, код 2, соединение НЕ открывает', async () => {
     const said: string[] = [];
     const code = await runResetWorld([], {

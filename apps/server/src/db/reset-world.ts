@@ -237,6 +237,24 @@ export function prodRefFromDsn(dsn: string): string | null {
   return /^db\.([a-z0-9]+)\.supabase\.co(?::|\/|$)/.exec(host)?.[1] ?? null;
 }
 
+/**
+ * РОЛЬ из DSN — имя пользователя до первой точки (`postgres.<REF>` → `postgres`).
+ *
+ * Нужна ровно затем, чтобы гейт отказал ДО соединения на DSN роли приложения. Ref из него
+ * выводится ровно так же (`orbis_app.<REF>` → `<REF>`), подтверждение сходится, и операция
+ * шла бы к базе — где падала бы на первом `TRUNCATE` с «permission denied». Отказ до
+ * соединения называет НАСТОЯЩУЮ причину («не тот DSN»), а не следствие.
+ */
+export function dsnRole(dsn: string): string | null {
+  const user = /^postgres(?:ql)?:\/\/([^:@/?#]+)[:@]/.exec(dsn)?.[1];
+  if (user === undefined) return null;
+  const dot = user.indexOf('.');
+  return dot > 0 ? user.slice(0, dot) : user;
+}
+
+/** Единственная роль, которой пересев по силам: у `orbis_app` нет прав на TRUNCATE реестров. */
+const ADMIN_ROLE = 'postgres';
+
 /** Точное слово второго флага. Оно одно и пишется здесь, а не в двух местах. */
 const UNDERSTAND_WORD = 'RESET';
 
@@ -288,6 +306,18 @@ export function resetWorldGate(dsn: string, args: string[]): ResetWorldGate {
         'reset-world: из DSN не выводится reference проекта — подтверждать нечем.',
         'Ожидался пулерный DSN вида postgresql://postgres.<PROD_REF>:…@<POOLER_HOST>:5432/postgres',
         '(runbook §1). Операция не выполнена.',
+      ],
+    };
+  }
+  const role = dsnRole(dsn);
+  if (role !== null && role !== ADMIN_ROLE) {
+    return {
+      proceed: false,
+      code: 2,
+      lines: [
+        `reset-world: DSN ведёт ролью «${role}», а операции нужна «${ADMIN_ROLE}».`,
+        'У роли приложения нет прав ни на TRUNCATE реестров, ни на запись системных строк —',
+        'операция упала бы на первом же запросе. Возьмите админский DSN (runbook §1).',
       ],
     };
   }

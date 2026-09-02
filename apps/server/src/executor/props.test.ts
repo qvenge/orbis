@@ -1008,9 +1008,10 @@ describe('предикат замка бюджет-контура', () => {
     );
     expect(contour('entity_create', { title: 't', tags: [], aspects: ['orbis/task'] })).toBe(false);
 
-    // Старая карта и attach-тулы — как было. ALLOWLIST старой формы (Задача 23a): предикат
-    // замка обязан узнавать её, пока союз легаси-входа жив (снос — 23b).
-    expect(contour('entity_update', { id: 'x', aspects: { 'orbis/financial': null } })).toBe(true);
+    // Старой карты аспектов предикат больше НЕ узнаёт, и это правильный ответ: контракт
+    // отвергает её раньше (снос 23b), а «узнавать» несуществующую форму значило бы брать
+    // замок по мусору произвольной формы — любой объект с ключом-аспектом.
+    expect(contour('entity_update', { id: 'x', aspects: { 'orbis/financial': null } })).toBe(false);
     expect(contour('attach_orbis_budget', { entity_id: 'x', data: {} })).toBe(true);
     expect(contour('attach_orbis_task', { entity_id: 'x', data: {} })).toBe(false);
     expect(contour('entity_update', { id: 'x', archived: true })).toBe(true);

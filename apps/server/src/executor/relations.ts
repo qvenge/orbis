@@ -123,7 +123,8 @@ export async function assertRoleConstraints(
  *
  * Обобщение прежней `assertAcyclicBlocks`: правило то же, зашитый `blocks` заменён ролью из
  * реестра. Ролей с этим ограничением в v1 две — `dependency` (бывший `blocks`) и
- * `category-parent` (НОВОЕ поведение: сегодня циклы в дереве категорий не запрещены).
+ * `category-parent`; у второй это НОВОЕ поведение — ДО реформы циклы в дереве категорий не
+ * запрещались ничем (пиннит relations.test, тест 16).
  *
  * ownerId сериализует записи владельца ПО ЭТОЙ РОЛИ advisory-lock'ом (как approve/reject в
  * policy/pending). Без него проверка страдает write-skew: FOR UPDATE берётся лишь на два
