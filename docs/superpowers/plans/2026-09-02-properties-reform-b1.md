@@ -5318,7 +5318,7 @@ function slotSql(slot: string, scope: Required<Pick<ExprCompileScope, 'cctx' | '
 (`test.failing` → `test`, РП-7/Р-К-9).
 
 **Зависимости:** задача 1 (контракты в снимке и в `ParseRegistry`-источниках, `BUILTIN_CONTRACT_DEFS`,
-`contractSetKind`, `EffectiveRegistry.contracts`, одиннадцать литеральных фикстур снимка), задача 2
+`contractSetKind`, `EffectiveRegistry.contracts`, десять литеральных фикстур снимка — ревью задачи 1), задача 2
 (`bindingIndexOf`, привязки 13 аспектов), задача 3 (`exprNodeSchema`, `compileClassMembership`).
 Адреса сняты на `3abd3f7` и **опровергаемы**: перед правкой `git rev-parse HEAD` и греп по имени.
 
