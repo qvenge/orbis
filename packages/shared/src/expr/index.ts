@@ -13,3 +13,4 @@
  */
 export * from './ast';
 export * from './codes';
+export * from './json-schema';

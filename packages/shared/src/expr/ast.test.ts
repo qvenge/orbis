@@ -4,6 +4,7 @@
 // Проверяется не «схема что-то принимает», а ГРАНИЦА канона: лишний оператор, лишняя ветвь
 // или лишний аргумент обязаны отвергаться ФОРМОЙ — вход тула §С8-3 идёт мимо тайп-чекера.
 import { describe, expect, test } from 'bun:test';
+import Ajv from 'ajv';
 import { QUERY_TREE_DEPTH_CAP } from '../query/ast';
 import { assertPatternRegular } from '../registry/property-type';
 import {
@@ -19,6 +20,7 @@ import {
   exprNodeSchema,
   exprTreeExceedsDepth,
 } from './ast';
+import { exprJsonSchema } from './json-schema';
 
 /**
  * По одной законной пробе на каждую из 17 форм. Карта переиспользуется тестом JSON Schema:
@@ -99,5 +101,43 @@ describe('схема узла', () => {
       exprNodeSchema.safeParse({ op: '+', args: [{ const: 1 }, { const: 2 }, { const: 3 }] })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('JSON Schema языка E', () => {
+  // strict:false — та же настройка, под которой схема поедет в Responses API (D29):
+  // `$defs` в draft-07 формально не ключевое слово, а `$ref: '#/$defs/node'` — обычный
+  // JSON-указатель, и резолвится он у любого потребителя.
+  const validate = new Ajv({ strict: false, allErrors: true }).compile(exprJsonSchema);
+
+  test('exprJsonSchema валидирует пробы всех форм и отвергает узлы вне канона', () => {
+    for (const f of EXPR_FORMS) {
+      expect(validate(FORM_PROBE[f]), `${f}: ${JSON.stringify(validate.errors)}`).toBe(true);
+    }
+    expect(validate({ op: 'coalesce', args: [{ const: 1 }, { const: 2 }] })).toBe(false);
+    expect(validate({ phase: true })).toBe(false);
+  });
+
+  test('zod-схема E совпадает с JSON Schema по вердикту на тех же входах', () => {
+    const probes: unknown[] = [
+      { const: null },
+      { const: [] },
+      { const: ['done', 'cancelled'] },
+      { duration: 'P' },
+      { ctx: '$нет' },
+      { op: 'if', args: [{ const: true }, { const: 1 }] },
+      { op: 'and', args: [{ const: true }, { const: false }, { const: true }] },
+      { deref: { prop: 'orbis/finance_category', slot: 'category', read: 'orbis/title' } },
+      {
+        has_relation: {
+          role: 'dependency',
+          in_set: { contract: 'orbis/completable', set: 'closed' },
+        },
+      },
+      { date_add: [{ ctx: '$today' }] },
+    ];
+    for (const p of probes) {
+      expect(exprNodeSchema.safeParse(p).success, JSON.stringify(p)).toBe(validate(p) as boolean);
+    }
   });
 });
