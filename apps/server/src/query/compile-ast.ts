@@ -112,8 +112,12 @@ function fail(reason: string, message: string, extra?: Record<string, unknown>):
  * SQL-литерал ТОЛЬКО для значений из реестра (id свойства, id аспекта, key варианта
  * select). Экранирование одинарных кавычек — защита в глубину: все три источника уже
  * прошли схему реестра, но литерал в тексте запроса не должен зависеть от неё.
+ *
+ * Экспортирована для SQL-бэкенда E (`expr/compile.ts`): каст по `kind` реестра,
+ * экранирование литерала реестра и тотальное отрицание обязаны быть ОДНИ на два
+ * компилятора — второй экземпляр разошёлся бы с Q на первой правке §6.1.
  */
-function lit(value: string): SQL {
+export function lit(value: string): SQL {
   return sql.raw(`'${value.replaceAll("'", "''")}'`);
 }
 
@@ -146,7 +150,10 @@ interface PropRef {
  */
 const ARCHIVED_COLUMN = 'archived';
 
-const CORE_COLUMN: Readonly<Record<string, string>> = {
+// Экспортирован для SQL-бэкенда E (`expr/compile.ts`): каст по `kind` реестра,
+// экранирование литерала реестра и тотальное отрицание обязаны быть ОДНИ на два
+// компилятора — второй экземпляр разошёлся бы с Q на первой правке §6.1.
+export const CORE_COLUMN: Readonly<Record<string, string>> = {
   'orbis/archived': ARCHIVED_COLUMN,
   'orbis/title': 'title',
   'orbis/created_at': 'created_at',
@@ -224,7 +231,10 @@ function comparable(ref: PropRef): SQL {
  * («текстом читаются ровно те типы, которым каст не нужен») — иначе он был бы вторым
  * мнением о том, что такое значение свойства.
  */
-const TEXT_PROJECTED_KINDS: ReadonlySet<PropertyType['kind']> = new Set([
+// Экспортирован для SQL-бэкенда E (`expr/compile.ts`): каст по `kind` реестра,
+// экранирование литерала реестра и тотальное отрицание обязаны быть ОДНИ на два
+// компилятора — второй экземпляр разошёлся бы с Q на первой правке §6.1.
+export const TEXT_PROJECTED_KINDS: ReadonlySet<PropertyType['kind']> = new Set([
   'text',
   'time',
   'select',
@@ -233,8 +243,14 @@ const TEXT_PROJECTED_KINDS: ReadonlySet<PropertyType['kind']> = new Set([
   'registry_ref',
 ]);
 
-/** Каст текстовой проекции `props->>` к типу свойства (§А2-2). */
-function castedExpr(text: SQL, type: PropertyType): SQL {
+/**
+ * Каст текстовой проекции `props->>` к типу свойства (§А2-2).
+ *
+ * Экспортирована для SQL-бэкенда E (`expr/compile.ts`): каст по `kind` реестра,
+ * экранирование литерала реестра и тотальное отрицание обязаны быть ОДНИ на два
+ * компилятора — второй экземпляр разошёлся бы с Q на первой правке §6.1.
+ */
+export function castedExpr(text: SQL, type: PropertyType): SQL {
   switch (type.kind) {
     case 'number':
     case 'decimal':
@@ -454,8 +470,14 @@ function listContains(ref: PropRef, value: QueryScalar): SQL {
   return sql`props @> ${JSON.stringify({ [ref.def.id]: [value] })}::jsonb`;
 }
 
-/** `NOT COALESCE(x, false)` — тотальное отрицание, «не выполнено или неизвестно». */
-function negated(cond: SQL): SQL {
+/**
+ * `NOT COALESCE(x, false)` — тотальное отрицание, «не выполнено или неизвестно».
+ *
+ * Экспортирована для SQL-бэкенда E (`expr/compile.ts`): каст по `kind` реестра,
+ * экранирование литерала реестра и тотальное отрицание обязаны быть ОДНИ на два
+ * компилятора — второй экземпляр разошёлся бы с Q на первой правке §6.1.
+ */
+export function negated(cond: SQL): SQL {
   return sql`NOT COALESCE(${cond}, false)`;
 }
 
