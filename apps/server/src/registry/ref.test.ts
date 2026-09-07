@@ -1,7 +1,7 @@
 // apps/server/src/registry/ref.test.ts
 // Ссылочные kind'ы §А6 на живой базе: `ref` (проверка цели компиляцией множества
 // `target`, зеркало-ребро роли `ref`, архивация цели), `registry_ref` (по таблице
-// целевого реестра ∪ `CONTRACT_IDS_V1`) и `grant` (существующий инвариант назначения).
+// целевого реестра) и `grant` (существующий инвариант назначения).
 //
 // Через `execute()`, а не вызовом `assertRefValue` напрямую: проверяется не функция, а
 // РУБЕЖ — что путь записи в неё заходит на всех трёх точках (create, update, attach).
@@ -432,7 +432,7 @@ test('ref: архивация цели помечает источники needs
   expect((await propsOf(user, two))['orbis/finance_category']).toBe(spare);
 });
 
-test('ref/registry_ref: run_routine принимает только рутину; rule_scope — контракт из CONTRACT_IDS_V1', async () => {
+test('ref/registry_ref: run_routine принимает только рутину; rule_scope — контракт из таблицы', async () => {
   const user = freshUserId();
   const note = okEntity(
     await execute(
@@ -460,7 +460,7 @@ test('ref/registry_ref: run_routine принимает только рутину
   expect(reasonOf(run)).toBe('REF_TARGET');
   expect(err(run).message).toContain('цель не в множестве target');
 
-  // registry_ref{target: contract}: шим интервала А→Б-1 (РП-6)
+  // registry_ref{target: contract}: с Б-1 множество — строки contract_definitions (шим снят)
   const category = await createCategory(user, 'Продукты');
   const okScope = await execute(
     db,

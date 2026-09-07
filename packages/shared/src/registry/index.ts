@@ -5,7 +5,6 @@ export * from './builtin-aspects';
 export * from './builtin-contracts';
 export * from './builtin-properties';
 export * from './builtin-roles';
-export * from './contract-ids';
 export * from './contract-type';
 export * from './property-type';
 // Модель-обращённая поверхность реестра (§А9-1): имя attach_*-тула и схема его data.

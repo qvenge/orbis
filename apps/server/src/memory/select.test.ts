@@ -82,7 +82,9 @@ test('memoryRulesWhere отбирает правила своей области
   await create(user, {
     title: 'ЧУЖАЯ-ОБЛАСТЬ',
     tags: [],
-    props: { ...base, 'orbis/rule_scope': 'orbis/progress' },
+    // Любой контракт, кроме денежного: с Б-1 `orbis/rule_scope` валидируется ПО ТАБЛИЦЕ, и
+    // прежний `orbis/progress` в ней не лежит — он не сеется (В-2 §8).
+    props: { ...base, 'orbis/rule_scope': 'orbis/completable' },
     aspects: ['orbis/memory'],
   });
   await create(user, {
@@ -140,7 +142,7 @@ test('SQL-предикат области и клиентский ruleAppliesTo 
   });
   const scopes: Array<[string, unknown]> = [
     ['СВОЯ', CONTRACT_MONEY_MOVEMENT],
-    ['ЧУЖАЯ', 'orbis/progress'],
+    ['ЧУЖАЯ', 'orbis/completable'],
     ['НЕТ-КЛЮЧА', undefined],
   ];
   for (const [title, scope] of scopes) {

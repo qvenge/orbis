@@ -29,7 +29,7 @@
 // зависят от порядка и гасят друг друга. Поэтому inverse у зеркала нет вовсе, а сходится оно
 // само: `syncRefMirror` зовётся и во внутреннем режиме undo. Проверяется это тестом
 // «undo правки категории возвращает и свойство, и зеркало-ребро» (`ref.test.ts`).
-import { CONTRACT_IDS_V1, newId, type PropertyType, ROLE_REF } from '@orbis/shared';
+import { newId, type PropertyType, ROLE_REF } from '@orbis/shared';
 import type { QueryAst } from '@orbis/shared/query';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
@@ -181,10 +181,8 @@ const REGISTRY_TABLE: Readonly<Record<RegistryRefType['target'], string>> = {
 /**
  * Значение kind `registry_ref` указывает на существующую запись целевого реестра (§А2-2).
  *
- * Для `contract` множество — строки таблицы ∪ `CONTRACT_IDS_V1` (РП-6). Шим нужен ровно на
- * интервале А→Б-1: таблица контрактов в срезе А создаётся ПУСТОЙ (§А12-1), а
- * `orbis/rule_scope` обязан принимать `orbis/money-movement` уже здесь (§А8, В7). Снимается
- * первым актом Б-1 вместе с самой константой.
+ * Множество для `contract` — строки `contract_definitions` (сид §Б1-2). Шим интервала А→Б-1 снят
+ * вместе с сидом: список id в коде был нужен ровно потому, что таблица создавалась пустой.
  *
  * Чтение идёт под RLS (`read_builtin_or_own`): своя строка владельца — такая же законная
  * цель, как встроенная.
@@ -196,7 +194,6 @@ export async function assertRegistryRefValue(
   value: unknown,
 ): Promise<void> {
   if (typeof value !== 'string') return; // форму проверил ajv
-  if (type.target === 'contract' && (CONTRACT_IDS_V1 as readonly string[]).includes(value)) return;
   const rows = (await tx.execute(sql`
     SELECT 1 AS hit FROM ${sql.raw(REGISTRY_TABLE[type.target])}
      WHERE id = ${value} LIMIT 1`)) as unknown as Array<{ hit: number }>;

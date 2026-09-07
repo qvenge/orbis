@@ -17,7 +17,7 @@
 // второй формат, а формат подписи после реформы ни на что не влияет — его никто не читает
 // обратно. Web показывает правило СТРУКТУРНО (образец + бейдж категории), поэтому копии
 // формата у него нет вовсе.
-import { type ContractIdV1, normalizeCounterparty } from '@orbis/shared';
+import { type ContractId, normalizeCounterparty } from '@orbis/shared';
 
 /** Аспект-носитель памяти. */
 export const MEMORY_ASPECT = 'orbis/memory';
@@ -37,7 +37,7 @@ export const RULE_SCOPE = 'orbis/rule_scope';
  * называть одну и ту же область — разъехавшись, они дали бы правило, которое подавляет
  * предложение, но не применяется.
  */
-export const CONTRACT_MONEY_MOVEMENT = 'orbis/money-movement' satisfies ContractIdV1;
+export const CONTRACT_MONEY_MOVEMENT = 'orbis/money-movement' satisfies ContractId;
 
 /** Стрелка подписи — U+2192 RIGHTWARDS ARROW, с пробелами вокруг. */
 const LABEL_ARROW = '→';
