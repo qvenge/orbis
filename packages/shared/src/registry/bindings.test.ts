@@ -164,3 +164,111 @@ test('checkImplements: неизвестный контракт, форма фа�
       .sort(),
   ).toEqual(['category', 'period_end', 'period_start']);
 });
+
+const TASK_MAP = [
+  { slot: 'status', variant: 'inbox', class: 'active' },
+  { slot: 'status', variant: 'planned', class: 'active' },
+  { slot: 'status', variant: 'in_progress', class: 'active' },
+  { slot: 'status', variant: 'waiting', class: 'active' },
+  { slot: 'status', variant: 'done', class: 'done' },
+  { slot: 'status', variant: 'cancelled', class: 'cancelled' },
+];
+
+test('VARIANT_UNMAPPED: у слота-статуса отнесён КАЖДЫЙ вариант свойства (§Б2-2)', () => {
+  const bound = (value_map: unknown[]) =>
+    probe(
+      ['orbis/task_status'],
+      [{ contract: 'orbis/completable', bind: { status: 'orbis/task_status' }, value_map }],
+    );
+  expect(checkImplements(bound(TASK_MAP), reg)).toEqual([]);
+  expect(checkImplements(bound(TASK_MAP.filter((m) => m.variant !== 'waiting')), reg)).toEqual([
+    {
+      code: 'VARIANT_UNMAPPED',
+      details: {
+        aspect: 'user/probe',
+        contract: 'orbis/completable',
+        slot: 'status',
+        propertyId: 'orbis/task_status',
+        variant: 'waiting',
+        reason: 'unmapped',
+      },
+    },
+  ]);
+  // Класс не из контракта — отнесение в никуда: набор `closed` его не увидит.
+  expect(
+    checkImplements(
+      bound([...TASK_MAP.slice(0, 5), { slot: 'status', variant: 'cancelled', class: 'dropped' }]),
+      reg,
+    ).map((i) => i.details.reason),
+  ).toEqual(['unknown_class', 'unmapped']);
+});
+
+test('VARIANT_UNMAPPED: boolean — литералы, json — present/absent (Р-К-3)', () => {
+  const marker = (propertyId: string, value_map: unknown[]) =>
+    probe(
+      [propertyId],
+      [
+        {
+          contract: 'orbis/recurrence',
+          bind: { template_marker: propertyId },
+          value_map,
+          fixed: { origin_role: 'instance-of' },
+        },
+      ],
+    );
+  const LITERALS = [
+    { slot: 'template_marker', variant: true, class: 'template' },
+    { slot: 'template_marker', variant: false, class: 'instance' },
+  ];
+  const MARKERS = [
+    { slot: 'template_marker', variant: 'present', class: 'template' },
+    { slot: 'template_marker', variant: 'absent', class: 'instance' },
+  ];
+  expect(checkImplements(marker('orbis/recurring', LITERALS), reg)).toEqual([]); // boolean
+  expect(checkImplements(marker('orbis/recurrence', MARKERS), reg)).toEqual([]); // json
+  // Перепутать нельзя: маркер наличия у boolean-свойства оставил бы `true` без класса, а сам в
+  // данных не встретился бы никогда.
+  expect(
+    checkImplements(marker('orbis/recurring', MARKERS), reg).map((i) => [
+      i.details.variant,
+      i.details.reason,
+    ]),
+  ).toEqual([
+    [true, 'unmapped'],
+    [false, 'unmapped'],
+    ['present', 'unknown_variant'],
+    ['absent', 'unknown_variant'],
+  ]);
+  expect(
+    checkImplements(marker('orbis/recurrence', LITERALS), reg).map((i) => i.details.reason),
+  ).toEqual(['unmapped', 'unmapped', 'unknown_variant', 'unknown_variant']);
+});
+
+test('VARIANT_UNMAPPED: слот-статус, закрытый константой, тоже требует отнесения; не-статус — нет', () => {
+  // П1 №3 «хотелка»: `direction: expense` константой — класс постоянного значения обязан быть
+  // назван, иначе сущность не попадёт ни в `outflow`, ни в `inflow`.
+  const wish = (value_map: unknown[]) =>
+    probe(
+      ['orbis/amount', 'orbis/finance_category', 'orbis/occurred_on'],
+      [
+        {
+          contract: 'orbis/money-movement',
+          fixed: { direction: 'expense' },
+          value_map,
+          bind: {
+            amount: 'orbis/amount',
+            category: 'orbis/finance_category',
+            date: 'orbis/occurred_on',
+          },
+        },
+      ],
+    );
+  expect(codes(wish([]))).toEqual(['VARIANT_UNMAPPED']);
+  expect(codes(wish([{ slot: 'direction', variant: 'expense', class: 'outflow' }]))).toEqual([]);
+  // У `orbis/when` слотов-статусов нет — карта не требуется вовсе (§Б2-2, ревизия 3).
+  expect(
+    codes(
+      probe(['orbis/due_date'], [{ contract: 'orbis/when', bind: { deadline: 'orbis/due_date' } }]),
+    ),
+  ).toEqual([]);
+});

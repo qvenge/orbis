@@ -152,12 +152,87 @@ export function checkImplements(
   return issues;
 }
 
+/**
+ * Варианты слота-статуса (§Б2-2): отнесены ВСЕ, и только существующие. Р-К-3: у json-свойства
+ * вариантов в значении нет — статус даёт САМО НАЛИЧИЕ (`orbis/recurrence` есть → шаблон), и
+ * отнесение пишется маркерами `present`/`absent`; у boolean — литералы; у select — ключи.
+ */
+function variantsOf(prop: PropertyDefinition): readonly (string | boolean)[] | null {
+  const t = prop.type;
+  if (t.kind === 'select') return t.options.map((o) => o.key);
+  if (t.kind === 'boolean') return [true, false];
+  if (t.kind === 'json') return ['present', 'absent'];
+  return null; // тип без вариантов на слоте-статусе — это BIND_TYPE, названный выше
+}
+
 function checkVariants(
-  _binding: AspectImplements,
-  _contract: SlotsContract,
-  _slots: ReadonlyMap<string, ContractSlot>,
-  _reg: { properties: ReadonlyMap<string, PropertyDefinition> },
-  _base: { aspect: string; contract: string },
+  binding: AspectImplements,
+  contract: SlotsContract,
+  slots: ReadonlyMap<string, ContractSlot>,
+  reg: { properties: ReadonlyMap<string, PropertyDefinition> },
+  base: { aspect: string; contract: string },
 ): ImplementsIssue[] {
-  return [];
+  const out: ImplementsIssue[] = [];
+  const classKeys = new Set(contract.classes.map((c) => c.key));
+  const mapped = new Map<string, Map<string, string>>();
+  for (const vm of binding.value_map) {
+    if (!slots.has(vm.slot)) continue; // уже названо UNKNOWN_SLOT
+    if (!classKeys.has(vm.class)) {
+      out.push({
+        code: 'VARIANT_UNMAPPED',
+        details: {
+          ...base,
+          slot: vm.slot,
+          variant: vm.variant,
+          class: vm.class,
+          reason: 'unknown_class',
+        },
+      });
+      // Отнесение в несуществующий класс НЕ считается отнесением: набор контракта такого
+      // класса не увидит, и вариант останется вне всех классов — второе замечание
+      // (`unmapped`) на том же варианте не дублирует первое, а называет последствие.
+      continue;
+    }
+    // Ключ карты — ТЕКСТ варианта: из props значение читается строкой (`props->>`) и у boolean
+    // тоже, и второй карты для этого заводить нельзя.
+    const perSlot = mapped.get(vm.slot) ?? new Map<string, string>();
+    perSlot.set(String(vm.variant), vm.class);
+    mapped.set(vm.slot, perSlot);
+  }
+  for (const decl of contract.slots) {
+    if (!decl.status) continue;
+    const known = mapped.get(decl.name) ?? new Map<string, string>();
+    const propertyId = binding.bind[decl.name];
+    if (propertyId === undefined) {
+      const fixed = binding.fixed[decl.name];
+      if (fixed !== undefined && !known.has(String(fixed))) {
+        out.push({
+          code: 'VARIANT_UNMAPPED',
+          details: { ...base, slot: decl.name, variant: fixed, reason: 'unmapped' },
+        });
+      }
+      continue;
+    }
+    const prop = reg.properties.get(propertyId);
+    const variants = prop === undefined ? null : variantsOf(prop);
+    if (variants === null) continue;
+    const domain = new Set(variants.map(String));
+    for (const variant of variants) {
+      if (!known.has(String(variant))) {
+        out.push({
+          code: 'VARIANT_UNMAPPED',
+          details: { ...base, slot: decl.name, propertyId, variant, reason: 'unmapped' },
+        });
+      }
+    }
+    for (const variant of known.keys()) {
+      if (!domain.has(variant)) {
+        out.push({
+          code: 'VARIANT_UNMAPPED',
+          details: { ...base, slot: decl.name, propertyId, variant, reason: 'unknown_variant' },
+        });
+      }
+    }
+  }
+  return out;
 }
