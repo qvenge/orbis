@@ -68,6 +68,19 @@ export const NAMESPACED_KEY_RE = /^(orbis|user|[a-z][a-z0-9-]*)\/[a-z][a-z0-9_-]
  */
 export const RELATION_ROLE_KEY_RE = /^([a-z][a-z0-9-]*\/)?[a-z][a-z0-9_-]*$/;
 
+/**
+ * Имя слота, класса и набора КОНТРАКТА (§Б1-1) — БЕЗ namespace и БЕЗ дефисов, в отличие от key:
+ * это не адрес строки реестра, а идентификатор ВНУТРИ контракта, и он уезжает в текст запроса
+ * (`class=orbis/completable:closed`) и в ключи `bind`/`value_map` привязки (§Б2-1).
+ *
+ * Живёт ЗДЕСЬ, а не среди прочих форм контракта (`registry/contract-type.ts`), потому что читают её
+ * ОБЕ стороны договора: сам контракт и привязка аспекта (`aspectImplementsSchema`, задача 2, — она
+ * встаёт ниже, рядом с `aspectDefinitionSchema`). Обратного импорта у этого файла быть не может:
+ * `property-type.ts` → `contract-type.ts` замкнуло бы цикл модулей, оба конца которого читают чужое
+ * связывание на верхнем уровне, и `@orbis/shared` перестал бы импортироваться вовсе (Р-К-51).
+ */
+export const SLOT_KEY_RE = /^[a-z][a-z0-9_]*$/;
+
 export const propertyDefinitionSchema = z
   .object({
     id: z.string().min(1),
