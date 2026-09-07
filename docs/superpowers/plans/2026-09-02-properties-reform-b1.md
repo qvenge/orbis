@@ -1043,10 +1043,13 @@ export function snapshotRowProjection(
     const rowsById: Record<string, SnapshotRowProjection> = {};
     for (const e of all) rowsById[e.id] = snapshotRowProjection(e, cctx.reg);
     const visible = await queryEntities(tx, cctx, 'excludeBlocked=true, sortBy=orbis/title:asc, limit=200');
-    // …'core/row': rowsById, 'core/exclude-blocked': visible.map((e) => e.id).sort()
-    // Порядок списка — по СЛАГУ (после стабилизации), а не по коллации БД: `sortBy=orbis/title`
-    // на кириллице зависит от локали кластера, и эталон разъезжался бы между машинами. Состав
-    // — предмет §С8-20; порядок, значимый владельцу, живёт в Agenda и держится датами.
+    // …'core/row': rowsById, 'core/exclude-blocked': visible.map((e) => e.id)
+    // Порядок списка — по СЛАГУ, то есть `.sort()` ставится ПОСЛЕ `stabilize` (шаг 11:
+    // `surfaces['core/exclude-blocked'].sort()`), а не по сырым uuid внутри tx и не по коллации БД:
+    // `sortBy=orbis/title` на кириллице зависит от локали кластера, а uuid = uuidv5(owner + slug) —
+    // у владельцев состояний задачи 18 тот же состав лёг бы в другом порядке, и Р-К-28 («relabeled
+    // байт-в-байт равен baseline») был бы невыполним (эррата по исполнению 0b: Р-И-0b-1 → Ф-Б1-8).
+    // Состав — предмет §С8-20; порядок, значимый владельцу, живёт в Agenda и держится датами.
 ```
 
   Команда: та же → PASS (кроме сырых uuid вместо `@slug`).

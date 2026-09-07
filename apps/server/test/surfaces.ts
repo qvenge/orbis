@@ -5,8 +5,8 @@
 // прогона; мир относительно реального «сегодня» давал бы каждый день другой `dailyPace` и
 // другой `period_balance` на границе месяца.
 //
-// Снимок идёт МИМО tRPC-ручек: `budgetOverview` (`aggregates.ts:642`) гоняет `preparePeriod`
-// (`:628` — postDue + материализация), `entity.query` (`routers/entity.ts:317`) —
+// Снимок идёт МИМО tRPC-ручек: `budgetOverview` (`aggregates.ts:648`) гоняет `preparePeriod`
+// (`:634` — postDue + материализация), `entity.query` (`routers/entity.ts:317`) —
 // `queryWithMaterialization`; оба ПИШУТ в граф, а материализованные инстансы приезжали бы со
 // случайными uuid. Здесь четыре поверхности считаются на ОДНОЙ `withIdentity`-tx тем же
 // компилятором и тем же `computeOverview`, что и ручки, — с прибитым `today` и без записи.
@@ -345,7 +345,7 @@ const COMPLETABLE_CLOSED: readonly string[] = ['done', 'cancelled'];
  * снимается задачей 7»: там её тело станет `rowProjectionOf(entity, reg)`, сигнатура и форма
  * результата не меняются. Копия ручная, потому что контрактов и
  * привязок в дереве ещё нет: она повторяет сегодняшние ветки двух строк web
- * (`browser/EntityRow.tsx:43-44/:100-118/:129-136`, `entity-detail/NativeRow.tsx:209-211`,
+ * (`browser/EntityRow.tsx:43-44/:101-118/:130-137`, `entity-detail/NativeRow.tsx:209-211`,
  * `FinancialRow` `:146-183`), но записывает их СЛОВАРЁМ M14, а не разметкой.
  *
  * ЧЕМ ЭТО НЕ РАВНО СЕГОДНЯШНЕЙ РАЗМЕТКЕ — названо вслух, потому что именно это задача 7 обязана
@@ -358,7 +358,11 @@ const COMPLETABLE_CLOSED: readonly string[] = ['done', 'cancelled'];
  *    мире расхождение недостижимо — все шесть движений несут строку суммы, — и обе формулировки
  *    дают один эталон;
  *  • `orbis/all_day` в M14 не выражается (контракта «признак суток» в v1 нет) — «весь день» из
- *    снимка выпадает; в мире таких записей нет.
+ *    снимка выпадает; в мире таких записей нет;
+ *  • бейдж важности: разметка рисует точку при `!done` (`EntityRow.tsx:130`) и только у `orbis/task`,
+ *    копия — при «не закрыто» (`!closed`, то есть и не `cancelled`) без проверки аспекта-носителя:
+ *    у отменённой задачи с `priority=high` web точку рисует, M14 — нет. На этом мире недостижимо
+ *    (отменённых задач нет), эталон не затронут; задача 7 обязана назвать это изменение вслух.
  */
 export function snapshotRowProjection(
   entity: WireEntity,
@@ -382,7 +386,7 @@ export function snapshotRowProjection(
   }
 
   // Дата. Приоритет `deadline` над `moment` — тот же порядок, что M14 задаёт списком `slots`
-  // правила даты; сегодня он выражен порядком веток `EntityRow.tsx:113` → `:115`.
+  // правила даты; сегодня он выражен порядком веток `EntityRow.tsx:114` → `:116`.
   const deadline = on.has('orbis/task') ? str('orbis/due_date') : null;
   const moment = on.has('orbis/schedule') ? str('orbis/start_at') : null;
   const date: SnapshotRowProjection['date'] =
