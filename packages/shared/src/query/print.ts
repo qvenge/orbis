@@ -104,6 +104,7 @@ interface Names {
   prop(id: string): string;
   aspect(id: string): string;
   role(id: string): string;
+  contract(id: string): string;
   /** Совпадает ли реляционный предикат с сахаром `excludeBlocked=true` (см. его докблок). */
   isBlockedSugar(pred: QueryRelPredicate): boolean;
 }
@@ -129,6 +130,7 @@ function names(reg: ParseRegistry, form: QueryPrintForm): Names {
     prop: (id) => pick(reg.properties.get(id), id),
     aspect: (id) => pick(reg.aspects.get(id), id),
     role: (id) => pick(reg.roles.get(id), id),
+    contract: (id) => pick(reg.contracts.get(id), id),
     // Реестр нужен и здесь: сахар — это КОНКРЕТНЫЕ id роли и свойства, а в дереве лежат id,
     // не ключи. Через `Names` (а не пятым параметром `printNode`), потому что это ровно тот
     // же класс знания — «как назвать/опознать запись реестра».
@@ -218,7 +220,7 @@ function printNode(node: QueryFilterNode, n: Names): string {
     // каждого смарт-листа с этой конструкцией. Сверяется СОДЕРЖИМОЕ узла, а не наличие поля,
     // и сверяется чужой функцией (`isExcludeBlockedSugar`, `parse-ast.ts`) — тем же местом,
     // из которого сахар собран: свои литералы здесь были бы второй правдой о «закрытой
-    // работе». Узел с другими `via`/`prop`/`values` этого текста не получает — он уходит в
+    // работе». Узел с другими `via`/`contract`/`set` этого текста не получает — он уходит в
     // скобочную форму ниже, потому что иначе два РАЗНЫХ дерева печатались бы одним текстом.
     if ('rel' in inner && n.isBlockedSugar(inner.rel)) return 'excludeBlocked=true';
     if ('or' in inner) {
@@ -271,23 +273,23 @@ function printNode(node: QueryFilterNode, n: Names): string {
   if ('tag' in node) return `tags=${quoteQueryValue(node.tag)}`;
   if ('search' in node) return `search=${quoteQueryValue(node.search)}`;
   if ('archived' in node) return `archived=${node.archived}`;
-  if ('class' in node) return `class=${node.class.contract}:${node.class.set}`;
+  if ('class' in node) return `class=${n.contract(node.class.contract)}:${node.class.set}`;
   const rel = node.rel;
   const target = rel.of === undefined ? '' : `=${quoteQueryValue(rel.of)}`;
   const via = rel.via === undefined ? '' : ` via=${n.role(rel.via)}`;
   // Ребро с условием на дальний конец плоским текстом НЕ выражается — ни в положительной
   // форме («покажи заблокированные живой работой» грамматика v1 сказать не умеет), ни в
-  // отрицательной с НЕканоническим условием (сахар — ровно одна тройка `via`/`prop`/`values`,
+  // отрицательной с НЕканоническим условием (сахар — ровно одна тройка `via`/`contract`/`set`,
   // см. ветку `not` выше). Печатаем скобками, как любое невыразимое дерево (§А5-3д): разбор
   // честно откажет про скобки, и это лучше текста, который вернулся бы ДРУГИМ деревом.
   //
   // СОДЕРЖИМОЕ условия печатается ЦЕЛИКОМ, а не сворачивается в `(has_relation via=…)`.
-  // Иначе два узла, различающиеся только `prop` или набором значений, снова дали бы один
+  // Иначе два узла, различающиеся только контрактом или именем набора, снова дали бы один
   // текст — тот же дефект, только переехавший из сахара в скобочную форму, а дифф Ш1 меряет
   // правки именно печатью (§А5-2). Скобки делают текст неразбираемым, но РАЗЛИЧИМЫМ.
   if (rel.kind === 'has_relation' && rel.sourceNotIn) {
-    const { prop, values } = rel.sourceNotIn;
-    return `(${rel.kind}${via} sourceNotIn=${n.prop(prop)}:${values.map(printScalar).join('|')})`;
+    const { contract, set } = rel.sourceNotIn;
+    return `(${rel.kind}${via} sourceNotIn=${n.contract(contract)}:${set})`;
   }
   return `${rel.kind}${target}${via}`;
 }

@@ -52,13 +52,15 @@ function normalizeProperty(name: string, reg: ParseRegistry): string {
 function normalizeRel(rel: QueryRelPredicate, reg: ParseRegistry): QueryRelPredicate {
   const out = { ...rel } as QueryRelPredicate & {
     via?: string;
-    sourceNotIn?: { prop: string; values: unknown[] };
+    sourceNotIn?: { contract: string; set: string };
   };
   if (typeof out.via === 'string') out.via = resolveByKeyOrId(out.via, reg.roles);
   if (out.sourceNotIn !== undefined) {
+    // Резолвится ТОЛЬКО контракт: имя набора живёт внутри его декларации и второй оси
+    // адресации не имеет — отказ на неизвестном наборе принадлежит парсеру и компилятору.
     out.sourceNotIn = {
       ...out.sourceNotIn,
-      prop: normalizeProperty(out.sourceNotIn.prop, reg),
+      contract: resolveByKeyOrId(out.sourceNotIn.contract, reg.contracts),
     };
   }
   return out as QueryRelPredicate;
@@ -72,6 +74,11 @@ function normalizeNode(node: QueryFilterNode, reg: ParseRegistry): QueryFilterNo
   if ('has' in node) return { has: normalizeProperty(node.has, reg) };
   if ('aspect' in node) return { aspect: resolveByKeyOrId(node.aspect, reg.aspects) };
   if ('rel' in node) return { rel: normalizeRel(node.rel, reg) };
+  if ('class' in node) {
+    return {
+      class: { ...node.class, contract: resolveByKeyOrId(node.class.contract, reg.contracts) },
+    };
+  }
   return node;
 }
 

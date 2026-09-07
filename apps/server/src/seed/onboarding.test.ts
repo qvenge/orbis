@@ -304,12 +304,13 @@ describe('smart lists §7.2 / §3.3', () => {
     // столько, сколько стоит её словарь, а сидированный блок увидит именно тот реестр,
     // который отдаёт сервер.
     const caller = callerFor(freshUserId());
-    const { properties, roles, aspects } = await caller.registry.effective();
+    const { properties, roles, aspects, contracts } = await caller.registry.effective();
     const reg = toParseRegistry(
       {
         properties: new Map(properties.map((p) => [p.id, p])),
         aspects: new Map(aspects.map((a) => [a.id, a])),
         roles: new Map(roles.map((r) => [r.id, r])),
+        contracts: new Map(contracts.map((c) => [c.id, c])),
       },
       OWNER_LOCALE,
     );
@@ -1251,12 +1252,13 @@ describe('registry.effective (§А9-2): эффективный реестр вл
     // достаточно, чтобы разобрать боевой текст без единого обращения к БД. До Задачи 13a
     // ручек было две (`aspect.list` + `aspect.properties`), и аспект приходилось собирать
     // обратно в декларацию разбором wire-строки — здесь он уже декларация.
-    const { properties, roles, aspects } = await caller.registry.effective();
+    const { properties, roles, aspects, contracts } = await caller.registry.effective();
     const reg = toParseRegistry(
       {
         properties: new Map(properties.map((p) => [p.id, p])),
         aspects: new Map(aspects.map((a) => [a.id, a])),
         roles: new Map(roles.map((r) => [r.id, r])),
+        contracts: new Map(contracts.map((c) => [c.id, c])),
       },
       OWNER_LOCALE,
     );

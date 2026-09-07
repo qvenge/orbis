@@ -5,6 +5,7 @@
 import { expect, test } from 'bun:test';
 import type { QueryAst } from './ast';
 import {
+  FIXTURE_USER_CONTRACT_ID,
   FIXTURE_USER_LIST_ID,
   FIXTURE_USER_PROPERTY_ID,
   FIXTURE_PARSE_REGISTRY as REG,
@@ -21,19 +22,12 @@ test('key своего свойства в `prop` становится id — т
   });
 });
 
-test('`has`, `sortBy.field` и `rel.sourceNotIn.prop` — те же три точки записи имени в дерево', () => {
+test('`has` и `sortBy.field` — две точки записи имени СВОЙСТВА', () => {
   const ast: QueryAst = {
     filter: {
       and: [
         { has: 'user/effort_points' },
         { not: { prop: 'user/labels', op: 'contains', value: 'дом' } },
-        {
-          rel: {
-            kind: 'has_relation',
-            via: 'dependency',
-            sourceNotIn: { prop: 'user/effort_points', values: [1] },
-          },
-        },
       ],
     },
     sortBy: [{ field: 'user/labels', dir: 'desc' }],
@@ -43,17 +37,53 @@ test('`has`, `sortBy.field` и `rel.sourceNotIn.prop` — те же три то�
       and: [
         { has: FIXTURE_USER_PROPERTY_ID },
         { not: { prop: FIXTURE_USER_LIST_ID, op: 'contains', value: 'дом' } },
-        {
-          rel: {
-            kind: 'has_relation',
-            via: 'dependency',
-            sourceNotIn: { prop: FIXTURE_USER_PROPERTY_ID, values: [1] },
-          },
-        },
       ],
     },
     sortBy: [{ field: FIXTURE_USER_LIST_ID, dir: 'desc' }],
   });
+});
+
+test('`class.contract` и `rel.sourceNotIn.contract` — две точки записи имени КОНТРАКТА', () => {
+  // Обе приезжают МИМО разбора текста (вход `ast:` тула, атрибут query-блока), и без резолва
+  // компилятор ответил бы UNKNOWN_CONTRACT на key своего контракта — тот самый тихий отказ,
+  // ради которого нормализация и заведена.
+  const ast: QueryAst = {
+    filter: {
+      and: [
+        { class: { contract: 'user/reviewable', set: 'live' } },
+        {
+          rel: {
+            kind: 'has_relation',
+            via: 'dependency',
+            sourceNotIn: { contract: 'user/reviewable', set: 'live' },
+          },
+        },
+      ],
+    },
+  };
+  expect(normalizeQueryAst(ast, REG)).toEqual({
+    filter: {
+      and: [
+        { class: { contract: FIXTURE_USER_CONTRACT_ID, set: 'live' } },
+        {
+          rel: {
+            kind: 'has_relation',
+            via: 'dependency',
+            sourceNotIn: { contract: FIXTURE_USER_CONTRACT_ID, set: 'live' },
+          },
+        },
+      ],
+    },
+  });
+
+  // Имя НАБОРА не резолвится: второй оси адресации у него нет — отказ на неизвестном наборе
+  // принадлежит парсеру и компилятору, а не второму мнению здесь.
+  expect(
+    normalizeQueryAst(
+      { filter: { class: { contract: 'user/reviewable', set: 'нет-такого' } } },
+      REG,
+    ),
+  ).toEqual({ filter: { class: { contract: FIXTURE_USER_CONTRACT_ID, set: 'нет-такого' } } });
 });
 
 test('дерево по id остаётся собой — расширение, а не подмена', () => {

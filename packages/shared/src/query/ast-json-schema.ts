@@ -119,15 +119,9 @@ export const queryAstJsonSchema: Record<string, unknown> = {
                   {
                     kind: { const: 'has_relation' },
                     via: PROP_ID,
-                    // Состояние дальнего конца ребра (см. `QueryRelSourceNotIn`): в срезе А
-                    // им выражен `excludeBlocked`, в Б-1 его заменяет `class`.
-                    sourceNotIn: node(
-                      {
-                        prop: PROP_ID,
-                        values: { type: 'array', minItems: 1, items: SCALAR },
-                      },
-                      ['prop', 'values'],
-                    ),
+                    // Набор завершаемости дальнего конца ребра (см. `QueryRelSourceNotIn`):
+                    // адрес набора — пара «контракт, имя набора», а не свойство и значения.
+                    sourceNotIn: node({ contract: PROP_ID, set: PROP_ID }, ['contract', 'set']),
                   },
                   ['kind', 'via'],
                 ),

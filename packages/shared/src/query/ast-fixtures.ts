@@ -26,8 +26,10 @@
  * только здесь.
  */
 import { BUILTIN_ASPECT_DEFS } from '../registry/builtin-aspects';
+import { BUILTIN_CONTRACT_DEFS } from '../registry/builtin-contracts';
 import { BUILTIN_PROPERTY_META } from '../registry/builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from '../registry/builtin-roles';
+import { type ContractDefinition, contractDefinitionSchema } from '../registry/contract-type';
 import {
   type AspectDefinition,
   aspectDefinitionSchema,
@@ -46,6 +48,38 @@ export const FIXTURE_PARENT_ID = '019d48ea-4188-765d-8e96-93a0ad9c262a';
 export const FIXTURE_USER_PROPERTY_ID = '019d48ea-4188-7c02-8e96-1f0000000001';
 /** То же для СПИСОЧНОГО свойства: ветка `contains` — отдельная точка записи id в дерево. */
 export const FIXTURE_USER_LIST_ID = '019d48ea-4188-7c02-8e96-1f0000000002';
+/** id пользовательского КОНТРАКТА фикстур — uuid: у своего key ≠ id, как у свойства. */
+export const FIXTURE_USER_CONTRACT_ID = '019d48ea-4188-7c02-8e96-1f0000000003';
+
+/**
+ * Контракт владельца: без него резолв `class=` держался бы на совпадении key = id у
+ * встроенных, и подмена `.id` → `.key` в парсере прошла бы зелёной (тот же довод, что у
+ * `FIXTURE_USER_PROPERTY_ID`).
+ */
+const EXTRA_CONTRACT: ContractDefinition = contractDefinitionSchema.parse({
+  kind: 'slots',
+  id: FIXTURE_USER_CONTRACT_ID,
+  ownerId: null,
+  key: 'user/reviewable',
+  label: { ru: 'Проверяемость', en: 'Reviewable' },
+  description: { ru: 'Контракт фикстур: черновик и опубликованное.', en: 'A fixture contract.' },
+  slots: [
+    {
+      name: 'state',
+      type: { kind: 'select' },
+      required: true,
+      label: { ru: 'Состояние', en: 'State' },
+      status: true,
+    },
+  ],
+  classes: [
+    { key: 'draft', label: { ru: 'Черновик', en: 'Draft' } },
+    { key: 'published', label: { ru: 'Опубликовано', en: 'Published' } },
+  ],
+  sets: { live: ['published'] },
+  module: null,
+  rank: 101,
+});
 
 const EXTRA_PROPERTIES: readonly PropertyDefinition[] = [
   // Две подписи «Статус» на разных аспектах — единственный способ проверить §А5-3б
@@ -182,6 +216,7 @@ export const FIXTURE_PARSE_REGISTRY: ParseRegistry = toParseRegistry(
     ),
     aspects: new Map([...FIXTURE_ASPECTS, EXTRA_ASPECT].map((aspect) => [aspect.id, aspect])),
     roles: new Map([...BUILTIN_RELATION_ROLE_META, EXTRA_ROLE].map((role) => [role.id, role])),
+    contracts: new Map([...BUILTIN_CONTRACT_DEFS, EXTRA_CONTRACT].map((c) => [c.id, c])),
   },
   'ru',
 );
@@ -330,18 +365,18 @@ export const AST_FIXTURES: readonly AstFixture[] = [
     static: true,
   },
   {
-    // А это — САХАР `excludeBlocked=true`, и дерево у него ДРУГОЕ: ребро плюс состояние
-    // дальнего конца (`sourceNotIn`). Две записи рядом именно для того, чтобы разницу было
-    // видно глазами: слить их значило бы либо потерять условие состояния у смарт-листов,
-    // либо навязать его пользовательскому запросу.
-    name: 'excludeBlocked=true — ребро dependency ПЛЮС состояние блокирующей работы',
+    // А это — САХАР `excludeBlocked=true`, и дерево у него ДРУГОЕ: ребро плюс набор
+    // завершаемости дальнего конца (`sourceNotIn`). Две записи рядом именно для того, чтобы
+    // разницу было видно глазами: слить их значило бы либо потерять условие состояния у
+    // смарт-листов, либо навязать его пользовательскому запросу.
+    name: 'excludeBlocked=true — ребро dependency ПЛЮС набор завершаемости блокирующей работы',
     ast: {
       filter: {
         not: {
           rel: {
             kind: 'has_relation',
             via: 'dependency',
-            sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+            sourceNotIn: { contract: 'orbis/completable', set: 'closed' },
           },
         },
       },
@@ -548,10 +583,26 @@ export const AST_FIXTURES: readonly AstFixture[] = [
     static: true,
   },
   {
-    name: 'class — узел части Б: в схеме есть, парсер среза А отвергает',
-    ast: { filter: { class: { contract: 'orbis/completable', set: 'done' } } },
+    name: 'class — членство в наборе контракта (Б-1: узел живой)',
+    ast: { filter: { class: { contract: 'orbis/completable', set: 'closed' } } },
+    keyText: 'class=orbis/completable:closed',
+    static: true,
+  },
+  {
+    name: 'ребро с НЕканоническим набором дальнего конца — только скобочная форма',
+    ast: {
+      filter: {
+        not: {
+          rel: {
+            kind: 'has_relation',
+            via: 'subitem',
+            sourceNotIn: { contract: 'orbis/completable', set: 'open' },
+          },
+        },
+      },
+    },
     keyText: null,
-    printRejects: 'CLASS_NOT_AVAILABLE',
+    printRejects: 'SYNTAX',
     static: true,
   },
 ];
@@ -569,7 +620,8 @@ export const INEXPRESSIBLE_QUERY_TEXTS: readonly { text: string; code: QueryPars
   { text: '"статус"=done', code: 'AMBIGUOUS_LABEL' },
   { text: 'orbis/task_status=готово', code: 'TYPE' },
   { text: 'orbis/recurrence=x', code: 'TYPE' },
-  { text: 'class=orbis/completable:done', code: 'CLASS_NOT_AVAILABLE' },
+  { text: 'class=orbis/completable:done', code: 'UNKNOWN_SET' },
+  { text: 'class=orbis/completeable:closed', code: 'UNKNOWN_CONTRACT' },
   { text: 'archived>1', code: 'RESERVED' },
   // Слово грамматики в позиции ИМЕНИ СВОЙСТВА — второй путь к тому же коду (§А5-3а/В11).
   { text: 'sortBy=limit:asc', code: 'RESERVED' },

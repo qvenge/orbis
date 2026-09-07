@@ -11,6 +11,7 @@ import { queryAstSchema } from './ast';
 import {
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
+  FIXTURE_USER_CONTRACT_ID,
   INEXPRESSIBLE_QUERY_TEXTS,
   PRODUCTION_QUERY_STATS,
   PRODUCTION_QUERY_TEXTS,
@@ -115,14 +116,15 @@ test('has= и отрицание реляционного предиката с 
   });
   expect(ok('has_children').filter).toEqual({ rel: { kind: 'has_children' } });
   // `excludeBlocked` — сахар ПОЛНОЙ сегодняшней формы: ребро роли `dependency` ПЛЮС
-  // состояние блокирующей работы. Без второго условия «отпущенный» блокер (задача в done)
-  // начал бы прятать работу, то есть реформа поменяла бы наблюдаемое поведение.
+  // набор завершаемости блокирующей работы. Без второго условия «отпущенный» блокер
+  // (задача в done) начал бы прятать работу, то есть реформа поменяла бы наблюдаемое
+  // поведение.
   expect(ok('excludeBlocked=true').filter).toEqual({
     not: {
       rel: {
         kind: 'has_relation',
         via: 'dependency',
-        sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+        sourceNotIn: { contract: 'orbis/completable', set: 'closed' },
       },
     },
   });
@@ -140,8 +142,43 @@ test('невыразимое — отказ с кодом, опечатка ас
   expect(err('orbis/task_statuz=done').code).toBe('UNKNOWN_FIELD');
   expect(err('!has_children via=subitm').code).toBe('UNKNOWN_ROLE');
   expect(err('orbis/task_status=готово').code).toBe('TYPE');
-  expect(err('class=orbis/completable:done').code).toBe('CLASS_NOT_AVAILABLE');
+  expect(err('class=orbis/completable:done').code).toBe('UNKNOWN_SET');
   expect(err('archived>1').code).toBe('RESERVED');
+});
+
+test('class=<контракт>:<набор> — предикат членства, а не отказ части Б', () => {
+  expect(ok('class=orbis/completable:closed').filter).toEqual({
+    class: { contract: 'orbis/completable', set: 'closed' },
+  });
+  // Отрицание — общей механикой ведущего `!`, своей ветки у него нет.
+  expect(ok('!class=orbis/completable:closed').filter).toEqual({
+    not: { class: { contract: 'orbis/completable', set: 'closed' } },
+  });
+  // key СВОЕГО контракта резолвится в uuid — §А5-2 «в дереве лежат id».
+  expect(ok('class=user/reviewable:live').filter).toEqual({
+    class: { contract: FIXTURE_USER_CONTRACT_ID, set: 'live' },
+  });
+  // §С8-3: обе половины адреса проверяются реестром, а не грамматикой.
+  expect(err('class=orbis/completeable:closed').code).toBe('UNKNOWN_CONTRACT');
+  expect(err('class=orbis/completable:done').code).toBe('UNKNOWN_SET'); // `done` — КЛАСС, не набор
+  expect(err('class=orbis/completable').code).toBe('SYNTAX');
+  expect(err('class=orbis/sensitivity:touches_money').code).toBe('UNKNOWN_SET'); // facts-контракт наборов не имеет
+});
+
+test('excludeBlocked=true — ребро dependency плюс НЕчленство источника в наборе closed', () => {
+  expect(ok('excludeBlocked=true').filter).toEqual({
+    not: {
+      rel: {
+        kind: 'has_relation',
+        via: 'dependency',
+        sourceNotIn: { contract: 'orbis/completable', set: 'closed' },
+      },
+    },
+  });
+  // Пользовательская запись о состоянии не спрашивает — деревья РАЗНЫЕ (два намерения).
+  expect(ok('!has_relation=dependency').filter).toEqual({
+    not: { rel: { kind: 'has_relation', via: 'dependency' } },
+  });
 });
 
 test('buildCatalogFromRegistry: тип поля из PropertyType, эвристики propType нет', () => {
@@ -396,18 +433,18 @@ test('отрицаемый aspect= не разводит неоднозначн�
  * реестру вообще. Литерал в дереве прошёл бы и через реестр без этой роли — и запрос
  * сослался бы на несуществующую роль молча, ровно против §А5-3ж.
  */
-test('excludeBlocked резолвит роль и свойство по реестру, а не подставляет литералы', () => {
+test('excludeBlocked резолвит роль и контракт по реестру, а не подставляет литералы', () => {
   const sugar = ok('excludeBlocked=true');
   const explicit = ok('!has_relation via=dependency');
   const role = REG.roles.get('dependency');
-  const status = REG.properties.get('orbis/task_status');
-  if (!role || !status) throw new Error('роль и свойство обязаны быть в фикстурном реестре');
+  const completable = REG.contracts.get('orbis/completable');
+  if (!role || !completable) throw new Error('роль и контракт обязаны быть в фикстурном реестре');
   expect(sugar.filter).toEqual({
     not: {
       rel: {
         kind: 'has_relation',
         via: role.id,
-        sourceNotIn: { prop: status.id, values: ['done', 'cancelled'] },
+        sourceNotIn: { contract: completable.id, set: 'closed' },
       },
     },
   });
@@ -428,13 +465,21 @@ test('excludeBlocked резолвит роль и свойство по реес
     if (!r.ok) expect(r.error.code, text).toBe('UNKNOWN_ROLE');
   }
 
-  // Реестр без СВОЙСТВА статуса: сахару неоткуда взять набор «closed» — отказ, а не
-  // молчаливая ссылка на несуществующее свойство (§А5-3ж).
-  const properties = new Map(REG.properties);
-  properties.delete('orbis/task_status');
-  const noStatus = parseQueryAst('excludeBlocked=true', { ...REG, properties });
-  expect(noStatus.ok).toBe(false);
-  if (!noStatus.ok) expect(noStatus.error.code).toBe('UNKNOWN_FIELD');
+  // Реестр без КОНТРАКТА: сахару неоткуда взять набор «closed» — отказ, а не молчаливая
+  // ссылка на несуществующий контракт (§А5-3ж).
+  const contracts = new Map(REG.contracts);
+  contracts.delete('orbis/completable');
+  const noContract = parseQueryAst('excludeBlocked=true', { ...REG, contracts });
+  expect(noContract.ok).toBe(false);
+  if (!noContract.ok) expect(noContract.error.code).toBe('UNKNOWN_CONTRACT');
+
+  // Контракт есть, а набора `closed` у него нет: отказ обязан назвать ВТОРУЮ причину, а не
+  // ту же — иначе «набор переименовали» читалось бы как «контракт удалили».
+  const noSet = new Map(REG.contracts);
+  noSet.set('orbis/completable', { ...completable, sets: { open: ['active'] } });
+  const r = parseQueryAst('excludeBlocked=true', { ...REG, contracts: noSet });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error.code).toBe('UNKNOWN_SET');
 });
 
 // ─────────────────── maskQuotedValues: примитив для НЕразобранного текста ───────────────────

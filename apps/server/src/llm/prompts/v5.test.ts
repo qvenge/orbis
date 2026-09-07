@@ -22,6 +22,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ASPECT_DEFS,
   BUILTIN_ASPECT_IDS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
 } from '@orbis/shared';
@@ -68,6 +69,7 @@ const PARSE_REG = toParseRegistry(
     properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
   },
   'ru',
 );

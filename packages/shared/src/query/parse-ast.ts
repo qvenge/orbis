@@ -45,6 +45,7 @@
  */
 import { ROLE_DEPENDENCY } from '../constants';
 import { HHMM_RE, hasValidCalendar } from '../date';
+import { type ContractDefinition, contractSetKind } from '../registry/contract-type';
 import type {
   AspectDefinition,
   PropertyDefinition,
@@ -68,11 +69,14 @@ import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
  * Срез реестров, которого хватает разбору: словари по id + локаль читателя. Больше
  * парсеру не нужно ничего — ни БД, ни сети, поэтому он одинаково работает в сиде, в
  * транзакции сервера и в браузере.
+ *
+ * Контракты нужны узлу `class`: имя набора проверяется реестром, а не грамматикой.
  */
 export interface ParseRegistry {
   properties: ReadonlyMap<string, PropertyDefinition>;
   aspects: ReadonlyMap<string, AspectDefinition>;
   roles: ReadonlyMap<string, RelationRoleDefinition>;
+  contracts: ReadonlyMap<string, ContractDefinition>;
   locale: string;
 }
 
@@ -86,6 +90,7 @@ export function toParseRegistry(
     properties: ReadonlyMap<string, PropertyDefinition>;
     aspects: ReadonlyMap<string, AspectDefinition>;
     roles: ReadonlyMap<string, RelationRoleDefinition>;
+    contracts: ReadonlyMap<string, ContractDefinition>;
   },
   locale: string,
 ): ParseRegistry {
@@ -93,6 +98,7 @@ export function toParseRegistry(
     properties: snapshot.properties,
     aspects: snapshot.aspects,
     roles: snapshot.roles,
+    contracts: snapshot.contracts,
     locale,
   };
 }
@@ -130,7 +136,8 @@ export const QUERY_PARSE_CODES = [
   'QUERY_MULTI_ROLE',
   'QUERY_JOIN',
   'RESERVED',
-  'CLASS_NOT_AVAILABLE',
+  'UNKNOWN_CONTRACT',
+  'UNKNOWN_SET',
 ] as const;
 export type QueryParseCode = (typeof QUERY_PARSE_CODES)[number];
 
@@ -388,6 +395,7 @@ interface Ctx {
   byAspectLabel: Map<string, AspectDefinition[]>;
   byRoleKey: Map<string, RelationRoleDefinition>;
   byRoleLabel: Map<string, RelationRoleDefinition[]>;
+  byContractKey: Map<string, ContractDefinition>;
   /** Аспекты, названные `aspect=` где угодно в запросе — разводка неоднозначных подписей. */
   aspectsInQuery: Set<string>;
   /** Свойства аспекта: propertyId → множество id аспектов-носителей. */
@@ -414,6 +422,7 @@ function buildCtx(reg: ParseRegistry): Ctx {
     byAspectLabel: new Map(),
     byRoleKey: new Map(),
     byRoleLabel: new Map(),
+    byContractKey: new Map(),
     aspectsInQuery: new Set(),
     carriers: new Map(),
   };
@@ -434,6 +443,7 @@ function buildCtx(reg: ParseRegistry): Ctx {
     ctx.byRoleKey.set(role.key, role);
     pushLabel(ctx.byRoleLabel, effectiveLabel(role.label, reg.locale), role);
   }
+  for (const c of reg.contracts.values()) ctx.byContractKey.set(c.key, c);
   return ctx;
 }
 
@@ -508,6 +518,17 @@ function resolveRole(raw: string, offset: number, ctx: Ctx): RelationRoleDefinit
   const byKey = ctx.byRoleKey.get(raw);
   if (byKey) return byKey;
   return fail('UNKNOWN_ROLE', `неизвестная роль ребра '${raw}'`, offset);
+}
+
+/**
+ * Контракт по КЛЮЧУ. Закавыченной label-формы у контракта нет намеренно: подписи §А5-3б
+ * резолвятся у полей, аспектов и ролей — того, что владелец называет вслух; контракт
+ * адресуется только ключом, и печать печатает ключ. Второй формы имени тут не заводится.
+ */
+function resolveContract(raw: string, offset: number, ctx: Ctx): ContractDefinition {
+  const byKey = ctx.byContractKey.get(raw);
+  if (byKey) return byKey;
+  return fail('UNKNOWN_CONTRACT', `неизвестный контракт '${raw}'`, offset);
 }
 
 // ─────────────────────────── Значения по типу свойства ───────────────────────────
@@ -644,8 +665,8 @@ interface RelDraft {
   kind: QueryRelKind;
   via?: string;
   of?: string;
-  /** Состояние дальнего конца — заполняет только сахар `excludeBlocked` (см. ниже). */
-  sourceNotIn?: { prop: string; values: string[] };
+  /** Набор завершаемости дальнего конца — заполняет только сахар `excludeBlocked` (ниже). */
+  sourceNotIn?: { contract: string; set: string };
 }
 
 interface RelSlot {
@@ -890,19 +911,16 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
 const EXCLUDE_BLOCKED_ROLE_KEY: string = ROLE_DEPENDENCY;
 
 /**
- * Свойство и набор значений, которыми интервал А выражает «блокирующая работа ЗАКРЫТА».
+ * Контракт и набор, которыми выражена «блокирующая работа ЗАКРЫТА». До Б-1 здесь стояли
+ * `EXCLUDE_BLOCKED_STATUS_KEY`/`EXCLUDE_BLOCKED_CLOSED` — свойство и два ключа варианта,
+ * дословно как в тогдашнем SQL; докблок обещал заменить их на `class` ЦЕЛИКОМ, а не
+ * дополнить. Здесь это и сделано: набор «закрытая работа» один на продукт и живёт в реестре.
  *
- * Спека даёт для этого `class(completable) ∉ closed` (§таблица), но контрактов в срезе А
- * нет, а выбросить условие нельзя: его проверял старый компилятор (`compile.ts:272`,
- * `COALESCE(...,'') NOT IN ('done','cancelled')`), и без него «отпущенный» блокер начал бы
- * прятать работу. Поэтому набор назван здесь ДОСЛОВНО тем же, что стоит в сегодняшнем SQL,
- * и заменяется на `class` вместе с контрактами — целиком, а не дополняется.
- *
- * Ключ свойства резолвится РЕЕСТРОМ (как и роль рядом): реестр без `orbis/task_status`
- * обязан дать `UNKNOWN_FIELD`, а не дерево, ссылающееся на несуществующее свойство.
+ * Ключ контракта резолвится РЕЕСТРОМ (как и роль рядом): реестр без `orbis/completable`
+ * обязан дать `UNKNOWN_CONTRACT`, а не дерево, ссылающееся на несуществующий контракт.
  */
-const EXCLUDE_BLOCKED_STATUS_KEY = 'orbis/task_status';
-const EXCLUDE_BLOCKED_CLOSED: readonly string[] = ['done', 'cancelled'];
+export const EXCLUDE_BLOCKED_CONTRACT = 'orbis/completable';
+export const EXCLUDE_BLOCKED_SET = 'closed';
 
 /**
  * Совпадает ли предикат С САХАРОМ `excludeBlocked=true` — ровно, а не «похоже».
@@ -912,7 +930,7 @@ const EXCLUDE_BLOCKED_CLOSED: readonly string[] = ['done', 'cancelled'];
  * завести вторую правду о том, что такое «закрытая работа», и разъехаться с разбором молча.
  *
  * Почему сравнивается СОДЕРЖИМОЕ, а не наличие поля: `sourceNotIn` уехал в JSON Schema
- * провайдеру, то есть вход `ast:` тула (§А5-4) вернёт узлы с ЛЮБЫМИ `via`/`prop`/`values`.
+ * провайдеру, то есть вход `ast:` тула (§А5-4) вернёт узлы с ЛЮБЫМИ `via`/`contract`/`set`.
  * Печать «по наличию» отдала бы им всем текст `excludeBlocked=true`, и обратный разбор вернул
  * бы другое дерево — то есть `parse(print(a)) ≠ a`, а правка внутри такого узла стала бы в
  * key-печати невидимой. Это дословно тот дефект, из-за которого `eq` на списочном свойстве
@@ -921,14 +939,12 @@ const EXCLUDE_BLOCKED_CLOSED: readonly string[] = ['done', 'cancelled'];
 export function isExcludeBlockedSugar(pred: QueryRelPredicate, reg: ParseRegistry): boolean {
   if (pred.kind !== 'has_relation' || pred.sourceNotIn === undefined) return false;
   const role = [...reg.roles.values()].find((r) => r.key === EXCLUDE_BLOCKED_ROLE_KEY);
-  const prop = [...reg.properties.values()].find((p) => p.key === EXCLUDE_BLOCKED_STATUS_KEY);
-  if (!role || !prop) return false;
-  const { prop: propId, values } = pred.sourceNotIn;
+  const contract = [...reg.contracts.values()].find((c) => c.key === EXCLUDE_BLOCKED_CONTRACT);
+  if (!role || !contract) return false;
   return (
     pred.via === role.id &&
-    propId === prop.id &&
-    values.length === EXCLUDE_BLOCKED_CLOSED.length &&
-    values.every((v, i) => v === EXCLUDE_BLOCKED_CLOSED[i])
+    pred.sourceNotIn.contract === contract.id &&
+    pred.sourceNotIn.set === EXCLUDE_BLOCKED_SET
   );
 }
 
@@ -1017,28 +1033,32 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
       if (unquote(requireOp(t, '='), t.valueOffset) !== 'true') {
         fail('SYNTAX', `единственная форма — excludeBlocked=true`, t.valueOffset);
       }
-      // Дословно как у старого компилятора (`compile.ts:272`): «на сущность есть ВХОДЯЩЕЕ
-      // dependency ОТ НЕЗАКРЫТОЙ работы». Оба условия обязательны: без второго «отпущенный»
-      // блокер (задача в done) начал бы прятать работу, и блок «Сегодня» показал бы владельцу
-      // меньше, чем показывает сейчас, — то есть реформа поменяла бы наблюдаемое поведение.
-      // Набор «closed» выражен статусом напрямую и заменяется на `class(completable)` вместе
-      // с контрактами (Б-1). Направление — рулинг координатора, см. `QUERY_REL_ANCHOR`.
+      // «На сущность есть ВХОДЯЩЕЕ dependency ОТ работы, НЕ принадлежащей набору closed».
+      // Оба условия обязательны: без второго «отпущенный» блокер (задача в done) начал бы
+      // прятать работу, и блок «Сегодня» показал бы владельцу меньше, чем показывает
+      // сейчас, — то есть реформа поменяла бы наблюдаемое поведение. Направление — рулинг
+      // координатора, см. `QUERY_REL_ANCHOR`.
       //
       // Именно поэтому сахар и явная запись `!has_relation via=dependency` дают РАЗНЫЕ
       // деревья: у них разные намерения, и различить их можно только в самом дереве.
       //
-      // Роль РЕЗОЛВИТСЯ реестром, а не подставляется литералом: это шестнадцатая точка
-      // записи id в дерево, и на литерале она была единственной, где инвариант §А5-2 «в
-      // дереве лежат id» держался на совпадении `key === id` у встроенных ролей
-      // (`builtin-roles.ts:174`). У пользовательской роли (v1.5, Ч7) совпадения не будет.
+      // Роль И КОНТРАКТ РЕЗОЛВЯТСЯ реестром, а не подставляются литералами: инвариант §А5-2
+      // «в дереве лежат id» на литерале держался бы на совпадении `key === id` у встроенных
+      // (`builtin-roles.ts:174`), а у своей роли (v1.5, Ч7) совпадения не будет. Реестр без
+      // контракта или без набора обязан дать честный отказ, а не дерево со ссылкой в никуда.
+      const contract = resolveContract(EXCLUDE_BLOCKED_CONTRACT, t.keyOffset, ctx);
+      if (contractSetKind(contract, EXCLUDE_BLOCKED_SET) === 'unknown') {
+        fail(
+          'UNKNOWN_SET',
+          `у контракта '${contract.key}' нет набора '${EXCLUDE_BLOCKED_SET}'`,
+          t.keyOffset,
+        );
+      }
       const slot: RelSlot = {
         pred: {
           kind: 'has_relation',
           via: resolveRole(EXCLUDE_BLOCKED_ROLE_KEY, t.keyOffset, ctx).id,
-          sourceNotIn: {
-            prop: resolveProperty(EXCLUDE_BLOCKED_STATUS_KEY, t.keyOffset, ctx).id,
-            values: [...EXCLUDE_BLOCKED_CLOSED],
-          },
+          sourceNotIn: { contract: contract.id, set: EXCLUDE_BLOCKED_SET },
         },
         offset: t.keyOffset,
       };
@@ -1059,15 +1079,30 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
         search: nonEmpty(unquote(requireOp(t, '='), t.valueOffset), 'поиска', t.valueOffset),
       });
       return;
-    case 'class':
-      // Часть Б: контрактов ещё нет, а молчаливое игнорирование дало бы запрос, который
-      // «работает» и отбирает не то.
-      fail(
-        'CLASS_NOT_AVAILABLE',
-        `предикат class появится с контрактами (часть Б реформы)`,
-        t.keyOffset,
-      );
+    case 'class': {
+      const raw = unquote(requireOp(t, '='), t.valueOffset);
+      const sep = raw.lastIndexOf(':');
+      if (sep <= 0 || sep === raw.length - 1) {
+        fail('SYNTAX', `class: ожидается '<контракт>:<набор>', получено '${raw}'`, t.valueOffset);
+      }
+      const contract = resolveContract(raw.slice(0, sep), t.valueOffset, ctx);
+      const set = raw.slice(sep + 1);
+      // Набор проверяется РЕЕСТРОМ: `class=orbis/completable:done` называет КЛАСС в позиции
+      // набора — молча пропущенный, он дал бы пустой отбор (§С8-3).
+      if (contractSetKind(contract, set) === 'unknown') {
+        const known =
+          Object.keys(contract.sets ?? {})
+            .sort()
+            .join(', ') || 'ни одного';
+        fail(
+          'UNKNOWN_SET',
+          `у контракта '${contract.key}' нет набора '${set}'; есть: ${known}`,
+          t.valueOffset,
+        );
+      }
+      push({ class: { contract: contract.id, set } });
       return;
+    }
     case 'sortBy':
       assignOnce(acc, 'sortBy', t, parseSortBy(t, ctx));
       return;

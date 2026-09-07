@@ -133,10 +133,24 @@ test('QUERY_REL_ANCHOR: направление каждого предиката
       rel: {
         kind: 'has_relation',
         via: 'dependency',
-        sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+        sourceNotIn: { contract: 'orbis/completable', set: 'closed' },
       },
     },
   });
+});
+
+test('sourceNotIn — набор контракта, а не свойство: старая форма отвергается обеими схемами', () => {
+  const validate = validator();
+  const both = (sourceNotIn: unknown): [boolean, boolean] => {
+    const filter = { rel: { kind: 'has_relation', via: 'dependency', sourceNotIn } };
+    return [queryAstSchema.safeParse({ filter }).success, validate({ filter }) as boolean];
+  };
+  expect(both({ contract: 'orbis/completable', set: 'closed' })).toEqual([true, true]);
+  // Старая форма уехала в JSON Schema провайдеру: молча принятая, она вернула бы предикат
+  // по свойству там, где спека требует набор (§Е-1).
+  expect(both({ prop: 'orbis/task_status', values: ['done'] })).toEqual([false, false]);
+  expect(both({ contract: 'orbis/completable' })).toEqual([false, false]);
+  expect(both({ contract: 'orbis/completable', set: 'closed', extra: 1 })).toEqual([false, false]);
 });
 
 test('рекурсивный $ref работает НА ГЛУБИНЕ: мусор внутри and/or/not отвергают обе схемы', () => {

@@ -71,6 +71,8 @@ export function buildQueryRegistry(data: EffectiveRegistry): QueryRegistry {
     properties: byId(properties),
     aspects: byId(aspects),
     roles: byId(roles),
+    // Четвёртый словарь — узлу `class` (Б-1): имя набора проверяет реестр, а не грамматика.
+    contracts: byId(data.contracts),
   };
   return {
     catalog: buildCatalogFromRegistry(snapshot),

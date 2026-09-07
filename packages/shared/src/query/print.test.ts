@@ -10,6 +10,7 @@ import {
   AGENDA_QUERY_TEXTS,
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
+  FIXTURE_USER_CONTRACT_ID,
   FIXTURE_USER_LIST_ID,
   FIXTURE_USER_PROPERTY_ID,
   INEXPRESSIBLE_QUERY_TEXTS,
@@ -171,29 +172,27 @@ test('дерево, невыразимое плоской грамматикой
 
 test('sourceNotIn: сахар печатается сахаром, а скобочная форма различает КАЖДОЕ поле', () => {
   // Негатив к находке предфильтра: печать «по наличию поля» отдавала текст `excludeBlocked=true`
-  // ЛЮБОМУ узлу с `sourceNotIn`, и обратный разбор возвращал каноническую тройку — то есть два
+  // ЛЮБОМУ узлу с `sourceNotIn`, и обратный разбор возвращал канонический набор — то есть два
   // РАЗНЫХ дерева печатались одним текстом, а правка внутри узла в key-печати исчезала.
   // Достижимо не гипотетически: `sourceNotIn` уехал в JSON Schema провайдеру.
-  const node = (via: string, prop: string, values: string[]) => ({
+  const node = (via: string, contract: string, set: string) => ({
     filter: {
-      not: { rel: { kind: 'has_relation' as const, via, sourceNotIn: { prop, values } } },
+      not: { rel: { kind: 'has_relation' as const, via, sourceNotIn: { contract, set } } },
     },
   });
   const print = (ast: ReturnType<typeof node>) => printQueryAst(ast, REG, 'key');
 
-  expect(print(node('dependency', 'orbis/task_status', ['done', 'cancelled']))).toBe(
-    'excludeBlocked=true',
-  );
+  expect(print(node('dependency', 'orbis/completable', 'closed'))).toBe('excludeBlocked=true');
 
   // ПОФИЛДОВЫЕ ПАРЫ, а не «три разных узла»: набор, где варианты отличаются двумя полями
   // сразу, переживает выброс одного поля из печати (проверено живым мутантом на гейте —
   // «скобочная форма без values» прошла весь сьют). Поэтому здесь на КАЖДОЕ поле стоит пара,
   // различающаяся ровно ИМ: выброси печать это поле — и пара схлопнется в один текст.
-  const base = node('subitem', 'orbis/task_status', ['done']);
+  const base = node('subitem', 'orbis/completable', 'closed');
   const pairs: ReadonlyArray<readonly [string, ReturnType<typeof node>]> = [
-    ['via', node('mention', 'orbis/task_status', ['done'])],
-    ['prop', node('subitem', 'orbis/priority', ['done'])],
-    ['values', node('subitem', 'orbis/task_status', ['cancelled'])],
+    ['via', node('mention', 'orbis/completable', 'closed')],
+    ['contract', node('subitem', 'user/reviewable', 'closed')],
+    ['set', node('subitem', 'orbis/completable', 'open')],
   ];
   const printedBase = print(base);
   for (const [field, other] of pairs) {
@@ -202,6 +201,12 @@ test('sourceNotIn: сахар печатается сахаром, а скобо
     expect(print(other)).not.toBe('excludeBlocked=true');
   }
   expect(printedBase).not.toBe('excludeBlocked=true');
+
+  // Контракт печатается КЛЮЧОМ, а не id: у своего они разные, и key-форма обязана
+  // разбираться обратно (§А5-2).
+  expect(print(node('subitem', FIXTURE_USER_CONTRACT_ID, 'live'))).toContain(
+    'user/reviewable:live',
+  );
 
   // Скобочная форма невыразима плоской грамматикой — разбор обязан отказать, а не вернуть
   // другое дерево (§А5-3д).

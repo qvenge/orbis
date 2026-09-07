@@ -6,6 +6,7 @@ import {
   attachAspectInput,
   attachToolName,
   BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   batchExecuteInput,
@@ -332,6 +333,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
         properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
         aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
         roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+        contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
       },
       'ru',
     );
