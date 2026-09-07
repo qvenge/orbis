@@ -21,9 +21,10 @@ import {
   TASK_STATUSES,
 } from '../contracts/agent-loop';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
+import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builtin-contracts';
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
-import { CONTRACT_IDS_V1 } from './contract-ids';
+import { contractSetKind } from './contract-type';
 
 /** Строка таблицы §А8: [поле аспекта сегодня (null — свойство заведено реформой), id свойства, Req]. */
 type Row = readonly [string | null, string, boolean];
@@ -564,22 +565,103 @@ test('aiInstructions не поминают снятые формы (Р-1-1): cat
   expect(byId.get('orbis/project')).toContain('роли ticket');
 });
 
-test('CONTRACT_IDS_V1 — ровно 8 id §Б1-2', () => {
-  expect([...CONTRACT_IDS_V1]).toEqual([
+/** Слоты одной строкой `имя:kind:req[:status]` — список сравнивать читаемее, чем объекты. */
+function slotSig(id: string): string[] {
+  const def = BUILTIN_CONTRACT_DEFS.find((c) => c.id === id);
+  return (def?.slots ?? []).map((s) => {
+    const k = s.type.kind === 'any_of' ? `any_of(${s.type.kinds.join('|')})` : s.type.kind;
+    return `${s.name}:${k}:${s.required ? 'req' : 'opt'}${s.status ? ':status' : ''}`;
+  });
+}
+const cById = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c]));
+
+test('BUILTIN_CONTRACT_DEFS — шесть контрактов §Б1-2 в нормативном порядке', () => {
+  // progress и categorizable в Б-1 НЕ сеются (В-2 §8): контракт без потребителя нечем проверить.
+  expect([...CONTRACT_IDS]).toEqual([
     'orbis/completable',
     'orbis/when',
     'orbis/recurrence',
     'orbis/sensitivity',
     'orbis/money-movement',
     'orbis/envelope',
-    'orbis/progress',
-    'orbis/categorizable',
   ]);
-  expect(new Set(CONTRACT_IDS_V1).size).toBe(8);
-  // `orbis/rule_scope` обязан принимать контракт уже в срезе А (§А8, РП-6) — отсюда шим.
-  const scope = byId.get('orbis/rule_scope');
-  expect(scope?.type).toEqual({ kind: 'registry_ref', target: 'contract' });
-  expect(CONTRACT_IDS_V1).toContain('orbis/money-movement');
+  expect(BUILTIN_CONTRACT_DEFS.map((c) => c.id)).toEqual([...CONTRACT_IDS]);
+  expect(BUILTIN_CONTRACT_DEFS.map((c) => c.rank)).toEqual([1, 2, 3, 4, 5, 6]);
+  expect(BUILTIN_CONTRACT_DEFS.every((c) => c.ownerId === null && c.key === c.id)).toBe(true);
+  // module NULL = ядро (§Б8-2): выключение Финансов не вправе унести грамматику.
+  expect(Object.fromEntries(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c.module]))).toEqual({
+    'orbis/completable': null,
+    'orbis/when': null,
+    'orbis/recurrence': null,
+    'orbis/sensitivity': null,
+    'orbis/money-movement': 'finance',
+    'orbis/envelope': 'finance',
+  });
+});
+
+test('слоты, классы и наборы — дословно §Б1-2', () => {
+  expect(slotSig('orbis/completable')).toEqual(['status:select:req:status']);
+  expect(slotSig('orbis/when')).toEqual(['moment:any_of(timestamp|date):opt', 'deadline:date:opt']);
+  expect(slotSig('orbis/recurrence')).toEqual([
+    'template_marker:any_of(boolean|json):opt:status',
+    'origin_role:relation_role:opt',
+  ]);
+  expect(slotSig('orbis/money-movement')).toEqual([
+    'amount:decimal:req',
+    'direction:select:req:status',
+    'category:ref:req',
+    'date:date:req',
+    'currency:text:opt',
+    'planned:boolean:opt',
+    'recurring:boolean:opt',
+    'counterparty:text:opt',
+    'bank_txn_id:text:opt',
+  ]);
+  expect(slotSig('orbis/envelope')).toEqual([
+    'category:ref:req',
+    'limit:decimal:req',
+    'currency:text:opt',
+    'period_start:date:req',
+    'period_end:date:req',
+    'carryover:decimal:opt',
+  ]);
+  expect(cById.get('orbis/completable')?.classes?.map((c) => c.key)).toEqual([
+    'done',
+    'cancelled',
+    'active',
+  ]);
+  expect(cById.get('orbis/completable')?.sets).toEqual({
+    closed: ['done', 'cancelled'],
+    open: ['active'],
+  });
+  expect(cById.get('orbis/recurrence')?.sets).toEqual({
+    templates: ['template'],
+    instances: ['instance'],
+  });
+  expect(cById.get('orbis/money-movement')?.sets).toEqual({
+    outflow: ['outflow'],
+    inflow: ['inflow'],
+  });
+  // Наборы Б-1 — ТОЛЬКО списочные; предикат `money-movement.facts` досевает задача 4.
+  for (const def of BUILTIN_CONTRACT_DEFS)
+    for (const set of Object.keys(def.sets ?? {}))
+      expect([def.id, set, contractSetKind(def, set)]).toEqual([def.id, set, 'list']);
+});
+
+test('orbis/sensitivity — форма {kind:"facts"}: пять фактов, ни одного слота', () => {
+  const s = cById.get('orbis/sensitivity');
+  expect([s?.kind, s?.slots]).toEqual(['facts', null]);
+  expect(s?.facts?.map((f) => f.key)).toEqual([...SENSITIVITY_FACTS]);
+  expect([...SENSITIVITY_FACTS]).toEqual([
+    'touches_money',
+    'external',
+    'irreversible',
+    'changes_registry',
+    'grants_autonomy',
+  ]);
+  // `orbis/rule_scope` обязан принимать контракт (§А8, В7) — с этой задачи по ТАБЛИЦЕ, а не по шиму.
+  expect(byId.get('orbis/rule_scope')?.type).toEqual({ kind: 'registry_ref', target: 'contract' });
+  expect(CONTRACT_IDS).toContain('orbis/money-movement');
 });
 
 /** Паттерн слота расписания рутины — сегодня `aspects.ts:229`, в реестре конфиг `text`. */

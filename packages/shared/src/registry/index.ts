@@ -2,9 +2,11 @@
 // и встроенное содержимое. `RELATION_ROLE_IDS`/`HIERARCHICAL_ROLE_IDS` живут в `constants.ts`
 // рядом с `BUILTIN_ASPECT_IDS` — у имени должен быть один дом.
 export * from './builtin-aspects';
+export * from './builtin-contracts';
 export * from './builtin-properties';
 export * from './builtin-roles';
 export * from './contract-ids';
+export * from './contract-type';
 export * from './property-type';
 // Модель-обращённая поверхность реестра (§А9-1): имя attach_*-тула и схема его data.
 export * from './tool-schema';
