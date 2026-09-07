@@ -203,7 +203,7 @@ describe('fast-path: memory-правила перед алиасами (§7.5, �
 describe('ruleAppliesTo: область правила', () => {
   test('та же область — применимо; чужая — нет; области нет вовсе — применимо', () => {
     expect(ruleAppliesTo('orbis/money-movement', 'orbis/money-movement')).toBe(true);
-    expect(ruleAppliesTo('orbis/progress', 'orbis/money-movement')).toBe(false);
+    expect(ruleAppliesTo('orbis/completable', 'orbis/money-movement')).toBe(false);
     expect(ruleAppliesTo(undefined, 'orbis/money-movement')).toBe(true);
   });
 

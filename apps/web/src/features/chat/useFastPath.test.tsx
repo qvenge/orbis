@@ -88,7 +88,7 @@ const rules = [
     updatedAt: '2026-07-21T10:00:00.000Z',
     props: {
       'orbis/memory_kind': 'rule',
-      'orbis/rule_scope': 'orbis/progress',
+      'orbis/rule_scope': 'orbis/completable',
       'orbis/rule_pattern': 'кофе',
       'orbis/rule_target': 'cat-food',
     },

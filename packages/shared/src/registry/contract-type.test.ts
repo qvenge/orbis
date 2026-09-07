@@ -83,3 +83,13 @@ test('contractSetKind: списочный набор — list, отсутств�
     'unknown',
   ]);
 });
+
+test('contractSetKind: имя из цепочки прототипа набором НЕ считается', () => {
+  // Имя набора приезжает из текста запроса, а не из кода: `class=orbis/completable:constructor`
+  // обязан отвергаться как неизвестный набор, а не разбираться предикатом.
+  const def = contractDefinitionSchema.parse(ROW);
+  expect([contractSetKind(def, 'constructor'), contractSetKind(def, 'toString')]).toEqual([
+    'unknown',
+    'unknown',
+  ]);
+});

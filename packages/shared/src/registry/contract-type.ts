@@ -94,7 +94,10 @@ export function contractSetKind(
   def: ContractDefinition,
   set: string,
 ): 'list' | 'predicate' | 'unknown' {
-  const value = def.sets === null ? undefined : def.sets[set];
+  // `Object.hasOwn`, а не индексация: имя набора приезжает из ТЕКСТА запроса
+  // (`class=orbis/completable:constructor`), и цепочка прототипа объявила бы предикатом
+  // `constructor`, `toString` и прочие имена, которых в декларации нет.
+  const value = def.sets !== null && Object.hasOwn(def.sets, set) ? def.sets[set] : undefined;
   if (value === undefined) return 'unknown';
   return Array.isArray(value) ? 'list' : 'predicate';
 }

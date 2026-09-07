@@ -174,7 +174,14 @@ test('AspectsList: подпись, иконка и СОСТАВ свойств �
   };
   renderWithProviders(<AspectsList />, (path) =>
     path === 'registry.effective'
-      ? { version: '1.0', properties: BUILTIN_REGISTRY.properties, aspects: [aspect], roles: [] }
+      ? {
+          version: '1.0',
+          properties: BUILTIN_REGISTRY.properties,
+          aspects: [aspect],
+          roles: [],
+          // Проба ЭКРАНА АСПЕКТОВ: контракты здесь ни при чём, и пустой словарь честнее встроенного.
+          contracts: [],
+        }
       : {},
   );
   expect(await screen.findByText('Задача')).toBeInTheDocument();
