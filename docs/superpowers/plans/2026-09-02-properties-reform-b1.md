@@ -4005,7 +4005,15 @@ function checkVariants(
     if (!classKeys.has(vm.class)) {
       out.push({ code: 'VARIANT_UNMAPPED', details: { ...base, slot: vm.slot, variant: vm.variant,
         class: vm.class, reason: 'unknown_class' } });
+      continue; // эррата по исполнению 2: отнесение в несуществующий класс не считается отнесением —
+                // тест шага 7 ждёт на этом варианте ДВА замечания (`unknown_class` + `unmapped`)
     }
+    // ЭРРАТА по гейт-ревью 2 (I-1, M-1, M-3; исполненная форма — в `bindings.ts` ветки): гейт обязан ловить ещё
+    // три формы противоречивой карты, о которых код ниже молчал: (а) вариант отнесён к двум классам —
+    // `VARIANT_UNMAPPED` `reason: 'duplicate'`; (б) `value_map` на слоте без `status` — `reason: 'not_status'`;
+    // (в) две привязки одного контракта у одного аспекта — `UNKNOWN_CONTRACT` `reason: 'duplicate'` (в `checkImplements`);
+    // плюс лишние варианты у fixed-слота-статуса — `reason: 'fixed_slot'`. Без этого задачи 4 (`compileClassListMembership`)
+    // и 7 (`classOf` строки) прочли бы одну карту по-разному.
     // Ключ карты — ТЕКСТ варианта: из props значение читается строкой (`props->>`) и у boolean
     // тоже, и второй карты для этого заводить нельзя.
     const perSlot = mapped.get(vm.slot) ?? new Map<string, string>();
@@ -4126,7 +4134,9 @@ function resolveBinding(aspectId: string, binding: AspectImplements, contract: S
     else list.push(vm.variant);
     variantsOfClass.set(vm.slot, perClass);
   }
-  const requiredSlots = contract.slots.filter((s) => s.required && binding.bind[s.name] !== undefined).map((s) => s.name);
+  // ЭРРАТА (ревью 2, M-1 → Ф-Б1-17): исключаются только слоты с константой `fixed`; обязательный слот без `bind` И без
+  // `fixed` ОСТАЁТСЯ в `requiredSlots` — иначе ветка задачи 3 «слот без привязки → false» недостижима. Оба пина шага 9 не меняются.
+  const requiredSlots = contract.slots.filter((s) => s.required && binding.fixed[s.name] === undefined).map((s) => s.name);
   return { aspectId, contract: contract.id, bind: binding.bind, fixed: binding.fixed,
            classOfVariant, variantsOfClass, requiredSlots };
 }
@@ -4222,7 +4232,9 @@ const B2: Partial<Record<AspectId, readonly unknown[]>> = {
 в цикле по `BUILTIN_ASPECT_IDS` вместо `:231` (`expect(def.implements).toEqual([]);`):
 ```ts
     // §Б2-1: привязки — снимок B2; у девяти аспектов их нет (контракта-потребителя в Б-1 нет).
-    expect([aspectId, def.implements]).toEqual([aspectId, B2[aspectId] ?? []]);
+    // `as readonly unknown[]` — расширяющее приведение только на фактической стороне: без него `tsc` даёт TS2322
+    // (`readonly unknown[]` против `AspectImplements[]` в выведенном типе кортежа); сравнение остаётся глубоким (эррата 2).
+    expect([aspectId, def.implements as readonly unknown[]]).toEqual([aspectId, B2[aspectId] ?? []]);
 ```
 и новым тестом файла:
 ```ts
@@ -4279,7 +4291,8 @@ test('привязки §Б2: четыре носителя, и каждая п�
 ```
 Прогон: `cd packages/shared && bun test src/registry/` → **PASS** (`builtin.test.ts`, `bindings.test.ts`
 целиком, `property-type.test.ts`, `aspect-registry.test.ts`); `bunx tsc --noEmit`.
-Коммит: `feat(registry): привязки четырёх встроенных аспектов к контрактам §Б2-1 (шесть привязок)`.
+Коммит: `feat(registry): привязки четырёх встроенных аспектов к контрактам §Б2-1 (семь привязок)` (эррата 2: объектов
+привязки семь — schedule 2, task 2, financial 2, budget 1; «шесть» было опиской; коммит `581e55f` ветки несёт старую тему).
 
 - [ ] **Шаг 13: tripwire §С2-1 → настоящий тест.** `apps/server/src/policy/confirmation.test.ts:727-734`
   (`BUILTIN_ASPECT_DEFS.every((a) => a.implements.length === 0)`) красен намеренно:
@@ -4317,7 +4330,7 @@ test('привязки §Б2: четыре носителя, и каждая п�
       const [count] = (await db.execute(
         sql`SELECT count(*)::int AS n FROM aspect_definitions a, jsonb_array_elements(a.implements) b
             WHERE a.owner_id IS NULL`)) as unknown as { n: number }[];
-      expect(count?.n).toBe(6);
+      expect(count?.n).toBe(7); // семь объектов привязки: schedule 2 + task 2 + financial 2 + budget 1 (эррата 2: «6» — описка)
       // FK на jsonb не поставить, а `checkImplements` живёт в shared и базы не видит.
       const dangling = (await db.execute(
         sql`SELECT a.id AS aspect_id, b.value->>'contract' AS contract_id

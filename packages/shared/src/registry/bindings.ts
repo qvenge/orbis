@@ -312,7 +312,11 @@ export interface ResolvedBinding {
   classOfVariant: ReadonlyMap<string, ReadonlyMap<string, string>>;
   /** слот → класс → варианты ЛИТЕРАЛАМИ (компилятору набора нужен литерал, не текст). */
   variantsOfClass: ReadonlyMap<string, ReadonlyMap<string, readonly (string | boolean)[]>>;
-  /** Обязательные слоты, значение которых берётся у сущности (§Б2-3). */
+  /**
+   * Обязательные слоты БЕЗ константы `fixed` (§Б2-3): и связанные `bind` (значение берётся у сущности), и
+   * несвязанные вовсе — у последних `bind[slot]` даст `undefined`, и потребитель обязан считать слот пустым
+   * (задача 3: «слот без привязки → false»). Исключаются только слоты, закрытые `fixed` (Ф-Б1-17).
+   */
   requiredSlots: readonly string[];
 }
 export interface BindingIndex {
