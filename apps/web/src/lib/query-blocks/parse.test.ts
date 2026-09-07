@@ -38,7 +38,11 @@ test('registryOf: без ответа — null, с ответом — реест
 // не нужно. Проба — на поле, которого в прежнем ответе (`aspect.list`) не было вовсе.
 test('аспекты каталога — декларации реестра, а не строки таблицы', () => {
   const task = registry.parse.aspects.get('orbis/task');
-  expect(task?.implements).toEqual([]);
+  // §Б2-1: привязки приезжают клиенту в составе декларации. Проба именно здесь, а не в типах:
+  // `registryReply` отдаёт `unknown` (`test/registry.ts:40`), и разъехавшаяся фикстура
+  // typecheck'ом НЕ ловится — дыра была бы молчаливой.
+  expect(task?.implements.map((b) => b.contract)).toEqual(['orbis/completable', 'orbis/when']);
+  expect(task?.implements[0]?.value_map.find((m) => m.variant === 'done')?.class).toBe('done');
   expect(task?.viewConfig.keyFields).toContain('orbis/task_status');
   expect(task).not.toHaveProperty('schema');
 });
