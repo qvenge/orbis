@@ -82,3 +82,75 @@ test('корпус наполнен: гейт меряет данные, а не
   expect(overview.unbudgeted.length).toBeGreaterThan(0);
   expect(Number(overview.balance.expense)).toBeGreaterThan(0);
 }, 900_000);
+
+test('Р-К-2: сто движений через исполнитель дают те же привязки, что проход селектора', async () => {
+  const probes = volumeProbes();
+  // 1. Что говорит проход фикстуры — тем же селектором и по тому же `volumeCombination`,
+  //    которым сеялись 16 000+ привязок корпуса.
+  const expected = await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+    selectEnvelopes(tx, {
+      ownerId: VOLUME_OWNER_ID,
+      defaultCurrency: VOLUME_DEFAULT_CURRENCY,
+      rows: probes.map((p) => {
+        const c = volumeCombination(volumeProbeProps(p), ['orbis/financial']);
+        if (c === null) throw new Error(`проба ${p.id} без комбинации — фикстура сломана`);
+        return { key: p.id, ...c };
+      }),
+    }),
+  );
+  // 2. Что делает бюджет-хук на настоящем пути записи — своим `combinationOf`.
+  const result = await execute(db, {
+    actorUserId: VOLUME_OWNER_ID,
+    actorKind: 'owner',
+    source: 'ui',
+    batchId: newId(),
+    operations: probes.map((p) => ({
+      tool: 'entity_create',
+      input: {
+        id: p.id,
+        title: p.title,
+        tags: [],
+        props: volumeProbeProps(p),
+        aspects: ['orbis/financial'],
+      },
+    })),
+  });
+  expect(result.ok).toBe(true);
+
+  const rows = (await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+    tx.execute(sql`
+      SELECT r.target_id, r.source_id FROM relations r
+      WHERE r.role = ${ROLE_ENVELOPE_BINDING}
+        AND r.target_id IN (${sql.join(
+          probes.map((p) => sql`${p.id}::uuid`),
+          sql`, `,
+        )})`),
+  )) as unknown as Array<{ target_id: string; source_id: string }>;
+  const actual = new Map<string, string | null>(probes.map((p) => [p.id, null]));
+  for (const row of rows) actual.set(row.target_id, row.source_id);
+
+  // Сверка ПОИМЁННАЯ, а не по числу: совпадение счётчиков при переставленных конвертах — ровно
+  // тот дефект, ради которого сторож заведён.
+  expect([...actual.entries()].sort()).toEqual([...expected.entries()].sort());
+  // И сторож не выродился: у большинства проб конверт есть, у части — законно нет.
+  const bound = [...actual.values()].filter((v) => v !== null).length;
+  expect(bound).toBeGreaterThan(50);
+  expect(bound).toBeLessThan(probes.length);
+}, 300_000);
+
+test('базовая линия: p95 computeOverview под ролью приложения (порога нет — он в задаче 12)', async () => {
+  // Под ролью, а не под админ-DSN: под админом план другой (Р-9a-3, `perf/explain.test.ts`), и
+  // число было бы честным, но не про тот путь, каким ходит владелец.
+  const run = () =>
+    withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+      computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY),
+    );
+  const t0 = performance.now();
+  await run(); // холодный прогон печатается отдельным числом (Р8), в p95 не входит
+  console.log(`perf: volume:overview:cold ${(performance.now() - t0).toFixed(1)}ms`);
+  const p95 = await measureP95('volume:overview', P95_RUNS, run);
+  console.log(
+    `perf: базовая линия Overview на 20k — p95 ${p95.toFixed(0)} мс (порог ставит задача 12)`,
+  );
+  expect(p95).toBeGreaterThan(0);
+}, 900_000);
