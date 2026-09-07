@@ -595,12 +595,12 @@ async function issuePat(args: string[]): Promise<number> {
 const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: string }> = {
   check: {
     run: check,
-    help: 'только чтение: расхождение реестров прода с кодом (пять + действия)',
+    help: 'только чтение: расхождение реестров прода с кодом (шесть родов; контракты — по колонкам)',
   },
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-registries': {
     run: seedRegistriesOp,
-    help: 'upsert встроенных свойств, ролей и аспектов (идемпотентно)',
+    help: 'upsert встроенных свойств, ролей, аспектов и контрактов (идемпотентно)',
   },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
   census: {
@@ -619,7 +619,7 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
     run: resetWorldOp,
     help:
       'РАЗРУШАЮЩАЯ: снести граф и журнал владельцев, пользовательские строки реестров и дельты; ' +
-      'пересеять три реестра. Требует --confirm <PROD_REF> и --i-understand RESET',
+      'пересеять четыре реестра. Требует --confirm <PROD_REF> и --i-understand RESET',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   'issue-pat': {
