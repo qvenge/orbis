@@ -110,6 +110,51 @@ describe('сид четырёх реестров', () => {
     }
   });
 
+  test('привязки аспектов резолвятся в контракты, их слоты и свойства реестра', async () => {
+    const { db, client } = adminDb();
+    try {
+      // Счёт отдельно от состава: без него проверки «битых ссылок нет» проходят ВАКУУМНО на
+      // непересеянной базе, где `implements` пуст у всех (довод счётчиков 77/11/13 на :51-53).
+      const [count] = (await db.execute(
+        sql`SELECT count(*)::int AS n FROM aspect_definitions a, jsonb_array_elements(a.implements) b
+            WHERE a.owner_id IS NULL`,
+      )) as unknown as { n: number }[];
+      // Семь привязок §Б2-1: две у orbis/schedule, две у orbis/task, две у orbis/financial и
+      // одна у orbis/budget. Число названо отдельно от состава (состав пинит снимок B2 в shared).
+      expect(count?.n).toBe(7);
+      // FK на jsonb не поставить, а `checkImplements` живёт в shared и базы не видит.
+      const dangling = (await db.execute(
+        sql`SELECT a.id AS aspect_id, b.value->>'contract' AS contract_id
+            FROM aspect_definitions a, jsonb_array_elements(a.implements) b
+            WHERE a.owner_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM contract_definitions c
+                              WHERE c.owner_id IS NULL AND c.id = b.value->>'contract')`,
+      )) as unknown as unknown[];
+      expect(dangling).toEqual([]);
+      const badSlots = (await db.execute(
+        sql`SELECT a.id AS aspect_id, kv.slot_name
+            FROM aspect_definitions a, jsonb_array_elements(a.implements) b,
+                 jsonb_each_text(b.value->'bind') AS kv(slot_name, property_id)
+            WHERE a.owner_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM contract_definitions c, jsonb_array_elements(c.slots) sl
+                              WHERE c.owner_id IS NULL AND c.id = b.value->>'contract'
+                                AND sl.value->>'name' = kv.slot_name)`,
+      )) as unknown as unknown[];
+      expect(badSlots).toEqual([]);
+      const badProps = (await db.execute(
+        sql`SELECT a.id AS aspect_id, kv.property_id
+            FROM aspect_definitions a, jsonb_array_elements(a.implements) b,
+                 jsonb_each_text(b.value->'bind') AS kv(slot_name, property_id)
+            WHERE a.owner_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM property_definitions p
+                              WHERE p.owner_id IS NULL AND p.id = kv.property_id)`,
+      )) as unknown as unknown[];
+      expect(badProps).toEqual([]);
+    } finally {
+      await client.end();
+    }
+  });
+
   /**
    * ТРЁХСТОРОННЕЕ СЛИЯНИЕ НА ПЕРЕСЕВЕ (§А3-3) — против живой базы, целиком боевым путём.
    *
