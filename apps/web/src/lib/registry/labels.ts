@@ -33,7 +33,7 @@ import {
 import type { RouterOutputs } from '../../trpc';
 
 /**
- * Ответ `registry.effective` (§А9-2): три словаря и версия снимка, ослабленные до `readonly`.
+ * Ответ `registry.effective` (§А9-2): четыре словаря и версия снимка, ослабленные до `readonly`.
  *
  * Ослабление, а не сам вывод tRPC, ровно по одной причине: этой же формой пользуется тестовая
  * обвязка, подставляя встроенные словари `@orbis/shared` (они `readonly` по построению), и
@@ -46,6 +46,12 @@ export interface EffectiveRegistry {
   properties: readonly WireRegistry['properties'][number][];
   aspects: readonly WireRegistry['aspects'][number][];
   roles: readonly WireRegistry['roles'][number][];
+  /**
+   * §Б1-3: контракты доезжают до клиента вместе с тремя словарями. Читателей у поля два, и оба
+   * косвенные: фикстура ответа (`test/registry.ts`) и `buildQueryRegistry` (задача 4). ПОДПИСИ
+   * классов (`RegistryLookup.contract()`, `classLabel`) заводит задача 7 вместе со строкой M14.
+   */
+  contracts: readonly WireRegistry['contracts'][number][];
 }
 
 /**

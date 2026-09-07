@@ -30,13 +30,23 @@ afterAll(async () => {
 });
 
 describe('registry.effective (§А9-2)', () => {
-  test('владельцу без единой своей строки едут ВСЕ встроенные: 77 свойств, 13 аспектов, 11 ролей', async () => {
+  test('владельцу без единой своей строки едут ВСЕ встроенные: 77 свойств, 13 аспектов, 11 ролей, 6 контрактов', async () => {
     const reg = await a.registry.effective();
     // Счёт литералами, а не длиной встроенных массивов: снимок §А8 нормативен, и «сколько
     // сид положил» здесь должно совпасть со «сколько спека назвала», а не с самим собой.
     expect(reg.properties.length).toBe(77);
     expect(reg.aspects.length).toBe(13);
     expect(reg.roles.length).toBe(11);
+    expect(reg.contracts.length).toBe(6);
+    // Порядок наблюдаем: по `rank` контракта клиент рисует список классов в конструкторе.
+    expect(reg.contracts.map((c) => c.id)).toEqual([
+      'orbis/completable',
+      'orbis/when',
+      'orbis/recurrence',
+      'orbis/sensitivity',
+      'orbis/money-movement',
+      'orbis/envelope',
+    ]);
   });
 
   test('label и description едут ПОЛНЫМИ per-locale картами — локаль выбирает клиент', async () => {

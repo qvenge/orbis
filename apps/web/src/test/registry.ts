@@ -14,12 +14,13 @@
 
 import {
   BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
 } from '@orbis/shared';
 
 /**
- * Ответ `registry.effective`: три словаря владельца и версия снимка.
+ * Ответ `registry.effective`: четыре словаря владельца и версия снимка.
  *
  * Версия — литерал, и именно поэтому она наблюдаема: тест инвалидации подменяет её своей
  * и проверяет, что подписи перерисовались. Форма строки — ровно `PropertyDefinition` и
@@ -30,6 +31,10 @@ export const BUILTIN_REGISTRY = {
   properties: BUILTIN_PROPERTY_META,
   aspects: BUILTIN_ASPECT_DEFS,
   roles: BUILTIN_RELATION_ROLE_META,
+  contracts: BUILTIN_CONTRACT_DEFS,
+  // Четвёртый словарь ответа (§Б1-3). Фикстура обязана отдавать РОВНО то, что отдаёт сервер: без
+  // него первый web-читатель контрактов (строка M14, задача 7) зеленел бы на фикстуре, которая
+  // молчит там, где продукт говорит.
 };
 
 /**

@@ -21,6 +21,8 @@ test('адрес свойства: id и key ведут к одной запис
     properties: [{ ...first, id: 'uuid-1', key: 'user/часы' }],
     aspects: [],
     roles: [],
+    // Проба ФОРМЫ АДРЕСА: контракты здесь ни при чём, и пустой словарь честнее встроенного.
+    contracts: [],
   });
   expect(custom.property('uuid-1')?.id).toBe('uuid-1');
   expect(custom.property('user/часы')?.id).toBe('uuid-1');

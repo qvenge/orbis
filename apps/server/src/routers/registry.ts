@@ -11,7 +11,12 @@
 // полснимка не бывает по построению. `aspect.list` со своей колонкой `schema` старой формы
 // (Р-24) прожил после этого ещё один срез мёртвым — экран настроек (`AspectsList`) переехал
 // сюда той же Задачей 13a — и снят гейт-ревью Задачи 14.
-import type { AspectDefinition, PropertyDefinition, RelationRoleDefinition } from '@orbis/shared';
+import type {
+  AspectDefinition,
+  ContractDefinition,
+  PropertyDefinition,
+  RelationRoleDefinition,
+} from '@orbis/shared';
 import { z } from 'zod';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
@@ -89,6 +94,12 @@ export interface WireRegistry {
   properties: PropertyDefinition[];
   aspects: AspectDefinition[];
   roles: RelationRoleDefinition[];
+  /**
+   * §Б1-3: контракты клиенту НУЖНЫ — по ним web подписывает классы (чекбокс, бейджи строки M14) и
+   * разбирает `class(...)` в тексте запроса. ПОДПИСКИ не отдаются (Р3): их потребитель — сервер,
+   * клиенту едет результат.
+   */
+  contracts: ContractDefinition[];
 }
 
 /**
@@ -172,6 +183,7 @@ export const registryRouter = router({
           properties: byRank(reg.properties),
           aspects: byRank(reg.aspects),
           roles: byRank(reg.roles),
+          contracts: byRank(reg.contracts),
         };
       }),
   ),
