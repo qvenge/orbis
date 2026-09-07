@@ -4888,6 +4888,13 @@ describe('тайп-чекер §С8-28: область, $sensitivity и реку
 ```
   → **FAIL**: узлы области не разобраны; цикл ловится сейчас гейтом глубины как `EXPR_TYPE`.
 
+> **Эррата по исполнению 3 (08.09).** Порядок проверок в `checkExpr` из этого шага не работает на циклическом объекте:
+> гейт глубины (`exprTreeExceedsDepth`) на цикле возвращает `true` и давал бы `EXPR_TYPE` вместо `EXPR_RECURSION`, а до `typeOf`
+> значение не доезжало бы — `exprNodeSchema.safeParse` исчерпывает стек (`RangeError`, `safeParse` его не ловит). Исполненная
+> форма: одна итеративная проверка `hasSelfReference` ПЕРВОЙ (раньше гейта глубины и раньше схемы); множества `seen` внутри
+> `typeOf` НЕТ — оно недостижимо. `exprFormsOf` обходит с множеством посещённых объектов (иначе зависает на фикстуре
+> «самоссылка невыразима» из корпуса шага 18). Корпус и тесты не менялись.
+
 - [ ] **Шаг 16: реализация — узлы области и `EXPR_RECURSION`.**
   - `{agg: name}` → `scope.aggs?.[name]`, иначе `EXPR_TYPE`. Докблок: «величина, которой в области нет, — „нет
     такой“ (`EXPR_TYPE`), а не рекурсия: ведомость строится по порядку и кладёт в `aggs` только уже вычисленные
@@ -5024,7 +5031,8 @@ test('printExpr: читаемый текст для диффа Ш1; разные
   тем же резолвом свойства, кроме литерала `'tags'`; вход не мутируется. `printExpr` — тотальная печать без
   обратимости (докблок: «текст — сахар Р18, парсера текста в Б-1 нет; обратимость НЕ обещана и не проверяется — в
   отличие от `query/print.ts:1-19`»): бинарные `{op}` инфиксом в скобках, `not (…)`, `if(c, a, b)`, `has(x)`,
-  `class(<key>)`, `has_relation(role[, in_set=c:s][, alive])`, `date_add(a, b)`/`date_diff`/`days_inclusive`,
+  `class(<key>)`, `has_relation(role[, in_set=c:s][, alive=true|alive=false])` (эррата 3: `alive: false` печатается явно —
+  иначе неотличим от `alive: undefined`), `date_add(a, b)`/`date_diff`/`days_inclusive`,
   `slot:<имя>`, `agg:<имя>`, `phase=<ключ>`, `@<param>`, `$today`, `deref(<база>).<read>`, литералы — JSON. Оба
   модуля — в `index.ts`. → **PASS**. Коммит:
   `feat(expr): нормализация имён и печать E — текст для диффа Ш1, обратимость не обещана (§А5-2, Р18)`.
@@ -5095,6 +5103,8 @@ const FACTS_EXPR: ExprNode = { op:'and', args:[
   { op:'not', args:[{ op:'in', args:[{ class:{ contract:'orbis/recurrence' } }, { const:'templates' }] }] } ] };
 /** Тот же контракт, но с предикатным набором: подмена СНИМКОМ — тот же приём, каким
  *  `compile-ast.test.ts` подменяет списки служебных аспектов (докблок `:1-9`). */
+// Эррата 3: до второй ветки `contractSetSchema` (E-предикат — задача 4, шаг 16) хелпер и `compileClassMembership`
+// держат предикат-набор кастом (`spec as unknown as ExprNode`), названным в докблоках; задача 4 снимает каст своей веткой.
 function withFactsSet(): Map<string, ContractDefinition> {
   const map = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c] as [string, ContractDefinition]));
   const mm = map.get('orbis/money-movement') as Extract<ContractDefinition, { kind: 'slots' }>;
