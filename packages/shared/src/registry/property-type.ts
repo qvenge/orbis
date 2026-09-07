@@ -186,9 +186,15 @@ export const aspectDefinitionSchema = z
     properties: z.array(aspectPropertyRefSchema),
     aiInstructions: z.string().nullable(),
     tagMappings: z.array(z.string()),
-    // §Б2 (bind + value_map) — часть Б; в срезе А поле объявлено и пустует, чтобы форма
-    // строки реестра не менялась миграцией между срезами.
-    implements: z.array(z.unknown()).default([]),
+    // §Б2-1: привязки аспекта к контрактам. В срезе А поле стояло `z.array(z.unknown())` —
+    // объявлено и пусто, чтобы форма строки реестра не менялась миграцией между срезами;
+    // срез Б-1 наполняет его и закрывает форму. Проверки, которым нужен ВТОРОЙ реестр (тип
+    // слота ↔ тип свойства, полнота отнесения вариантов), схемой невыразимы и живут на
+    // записи — `registry/bindings.ts`. Обязательность `value_map` у слота-статуса (§Б2-2) схемой
+    // строки тоже не выражается: она условна (есть ли у контракта слот-статус) и живёт в
+    // `checkImplements` (`VARIANT_UNMAPPED`) и в конвертах тулов (задача 15,
+    // `aspectImplementsToolSchema`); здесь `.default([])` держит форму строки реестра (замер П1).
+    implements: z.array(aspectImplementsSchema).default([]),
     viewConfig: z.object({ keyFields: z.array(z.string()), icon: z.string().optional() }).strict(),
     module: z.string().nullable(),
     /**

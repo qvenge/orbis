@@ -162,8 +162,27 @@ test('формы деклараций строги: description обязател
     rank: 1,
   };
   expect(aspectDefinitionSchema.safeParse(aspect).success).toBe(true);
-  // §Б2 «implements» в части А пустует, но поле объявлено — умолчание пустой список.
+  // §Б2-1: поле разбирается формой привязки; аспект без привязок законен (девять из тринадцати
+  // встроенных таковы), умолчание — пустой список.
   expect(aspectDefinitionSchema.parse(aspect).implements).toEqual([]);
+  const bound = aspectDefinitionSchema.parse({
+    ...aspect,
+    implements: [{ contract: 'orbis/completable', bind: { status: 'user/effort' } }],
+  });
+  expect(bound.implements[0]).toEqual({
+    contract: 'orbis/completable',
+    bind: { status: 'user/effort' },
+    value_map: [],
+    fixed: {},
+  });
+  // Форма закрыта: до §Б2 стояло `z.array(z.unknown())` — строка реестра принимала что угодно.
+  expect(
+    aspectDefinitionSchema.safeParse({ ...aspect, implements: [{ contract: 'c', bnid: {} }] })
+      .success,
+  ).toBe(false);
+  expect(
+    aspectDefinitionSchema.safeParse({ ...aspect, implements: ['orbis/completable'] }).success,
+  ).toBe(false);
   expect(aspectDefinitionSchema.safeParse({ ...aspect, service: undefined }).success).toBe(false);
   expect(
     aspectDefinitionSchema.safeParse({ ...aspect, viewConfig: { keyFields: ['x'], color: 'red' } })
