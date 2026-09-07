@@ -476,6 +476,7 @@ test('excludeBlocked резолвит роль и контракт по реес
   // Контракт есть, а набора `closed` у него нет: отказ обязан назвать ВТОРУЮ причину, а не
   // ту же — иначе «набор переименовали» читалось бы как «контракт удалили».
   const noSet = new Map(REG.contracts);
+  if (completable.kind !== 'slots') throw new Error('completable обязан быть контрактом слотов');
   noSet.set('orbis/completable', { ...completable, sets: { open: ['active'] } });
   const r = parseQueryAst('excludeBlocked=true', { ...REG, contracts: noSet });
   expect(r.ok).toBe(false);

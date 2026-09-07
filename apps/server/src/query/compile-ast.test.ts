@@ -79,10 +79,27 @@ function refusal(fn: () => unknown): { code: string; reason: string; message: st
 }
 
 describe('отказы вместо тихой пустоты (§С8-3, §6.4)', () => {
-  test('class — часть Б: CLASS_NOT_AVAILABLE, а не отбор «не того»', () => {
-    const r = refusal(() => sqlOf({ class: { contract: 'orbis/completable', set: 'closed' } }));
-    expect(r.code).toBe('VALIDATION');
-    expect(r.reason).toBe('CLASS_NOT_AVAILABLE');
+  test('class — предикат членства по привязкам, а не отказ части Б', () => {
+    const sql = sqlOf({ class: { contract: 'orbis/completable', set: 'open' } });
+    // Норма §Б2-2: набор → классы → варианты привязки. Единственная привязка completable —
+    // orbis/task; open = [active] = четыре варианта в порядке value_map.
+    expect(sql).toContain(
+      `(e.aspects @> ARRAY['orbis/task'] AND e.props->>'orbis/task_status' IN ('inbox', 'planned', 'in_progress', 'waiting'))`,
+    );
+    // Варианты — ЛИТЕРАЛЫ реестра, а не параметры: их источник — value_map, а не вызывающий.
+    const q = dialect.sqlToQuery(
+      compileQueryAst({ filter: { class: { contract: 'orbis/completable', set: 'open' } } }, CTX),
+    );
+    expect(q.params).toEqual(['orbis/agent-run', 500]);
+  });
+
+  test('неизвестный контракт и неизвестный набор — две разные причины, а не пустота', () => {
+    expect(
+      refusal(() => sqlOf({ class: { contract: 'orbis/нетtакого', set: 'closed' } })).reason,
+    ).toBe('UNKNOWN_CONTRACT');
+    expect(
+      refusal(() => sqlOf({ class: { contract: 'orbis/completable', set: 'нетtакого' } })).reason,
+    ).toBe('UNKNOWN_SET');
   });
 
   test('of не UUID — отказ ДО SQL (иначе Postgres ответил бы 22P02, а не полем)', () => {
@@ -254,115 +271,40 @@ describe('долг гейта Задачи 8: eq/ne на списке и contain
   });
 });
 
-describe('состояние дальнего конца (sourceNotIn): что оно умеет и где отказывает', () => {
-  const rel = (prop: string) =>
+describe('состояние дальнего конца (sourceNotIn): набор контракта, а не свойство', () => {
+  const rel = (set: string) =>
     ({
       rel: {
         kind: 'has_relation' as const,
         via: 'dependency',
-        sourceNotIn: { prop, values: ['done'] },
+        sourceNotIn: { contract: 'orbis/completable', set },
       },
     }) satisfies QueryFilterNode;
 
-  test('скалярное свойство — соединение с источником и COALESCE(…, "")', () => {
-    const sql = sqlOf(rel('orbis/task_status'));
+  test('соединение с источником и тотальное отрицание членства', () => {
+    const sql = sqlOf(rel('closed'));
     expect(sql).toContain('JOIN entities b ON b.id = r.source_id');
-    // COALESCE — смысл, а не украшение: источник без значения обязан считаться НЕ закрытым,
-    // иначе `NULL NOT IN (…)` выбросил бы ребро и заметка-блокер перестала бы блокировать.
-    expect(sql).toContain(`COALESCE(b.props->>'orbis/task_status', '') NOT IN ($3)`);
+    expect(sql).toContain(
+      `NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)`,
+    );
   });
 
-  test('список, вложенный объект и core-проекция — три отказа, а не тихая пустота', () => {
-    // Списочное свойство: скалярного значения у него нет, сравнивать нечего.
-    const list = refusal(() => sqlOf(rel('orbis/aliases')));
-    expect(list.reason).toBe('TYPE');
-    expect(list.message).toContain('orbis/aliases');
-    // json: `->>` отдал бы текст сериализации — то самое сравнение «текста всего значения».
-    expect(refusal(() => sqlOf(rel('orbis/recurrence'))).reason).toBe('TYPE');
-    // core-проекция: значение лежит колонкой, а не в `props` дальнего конца.
-    const core = refusal(() => sqlOf(rel('orbis/archived')));
-    expect(core.reason).toBe('TYPE');
-    expect(core.message).toContain('orbis/archived');
-    // И неизвестный id — своей причиной, а не общей.
-    expect(refusal(() => sqlOf(rel('orbis/нетtакого'))).reason).toBe('UNKNOWN_FIELD');
+  test('неизвестный контракт и набор дальнего конца — отказ с именем, а не тихая пустота', () => {
+    const bad = {
+      rel: {
+        kind: 'has_relation' as const,
+        via: 'dependency',
+        sourceNotIn: { contract: 'orbis/нетtакого', set: 'closed' },
+      },
+    };
+    expect(refusal(() => sqlOf(bad)).reason).toBe('UNKNOWN_CONTRACT');
+    expect(refusal(() => sqlOf(rel('нетtакого'))).reason).toBe('UNKNOWN_SET');
   });
 
   test('без sourceNotIn узел компилируется ровно как раньше — без соединения', () => {
     const plain = sqlOf({ rel: { kind: 'has_relation', via: 'dependency' } });
     expect(plain).toContain('EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id');
     expect(plain).not.toContain('JOIN entities b');
-  });
-
-  // С Задачи 9b вход `ast:` боевой, и узел приезжает с ЛЮБЫМИ prop/values: докблок
-  // `sourceNotInCond` больше не вправе обосновывать отсутствие каста тем, что «значения
-  // приходят из сахара». Условие, которым он обоснован теперь, проверяемо — вот оно.
-  test('текстом читаются РОВНО те типы, которым castedExpr не нужен каст', () => {
-    const uuid = '019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10';
-    // По свойству на каждый скалярный тип словаря, значение — заведомо правильной ФОРМЫ:
-    // иначе отказ пришёл бы от гейта формы, а не от того правила, которое здесь проверяется.
-    const textual: Array<[string, string]> = [
-      ['orbis/location', 'дом'],
-      ['orbis/routine_at', '07:00'],
-      ['orbis/task_status', 'done'],
-      ['orbis/rule_target', uuid],
-      ['orbis/grant', uuid],
-      ['orbis/rule_scope', 'orbis/money-movement'],
-    ];
-    const casted: Array<[string, string | number | boolean]> = [
-      ['orbis/duration_min', 30],
-      ['orbis/amount', '100.00'],
-      ['orbis/due_date', '2026-07-03'],
-      ['orbis/start_at', '2026-07-03T09:00:00Z'],
-      ['orbis/planned', true],
-    ];
-    for (const [prop, value] of textual) {
-      const node = {
-        rel: {
-          kind: 'has_relation' as const,
-          via: 'dependency',
-          sourceNotIn: { prop, values: [value] },
-        },
-      };
-      expect(`${prop}: ${sqlOf(node).includes('JOIN entities b')}`).toBe(`${prop}: true`);
-    }
-    for (const [prop, value] of casted) {
-      const node = {
-        rel: {
-          kind: 'has_relation' as const,
-          via: 'dependency',
-          sourceNotIn: { prop, values: [value] },
-        },
-      };
-      const r = refusal(() => sqlOf(node));
-      expect(`${prop}: ${r.reason}`).toBe(`${prop}: TYPE`);
-      expect(r.message).toContain('форма хранения');
-    }
-    // Перечисленные типы обязаны покрывать ВЕСЬ скалярный словарь: новый тип, добавленный в
-    // §А2-2 и забытый здесь, роняет этот тест, а не проезжает молча.
-    const covered = new Set(
-      [...textual, ...casted].map(([prop]) => {
-        const def = BUILTIN_PROPERTY_META.find((p) => p.id === prop);
-        if (def === undefined) throw new Error(`нет свойства ${prop}`);
-        return def.type.kind;
-      }),
-    );
-    for (const p of BUILTIN_PROPERTY_META) {
-      const type = p.type;
-      const listy = 'cardinality' in type && type.cardinality === 'many';
-      if (p.storage === 'core' || listy || type.kind === 'json') continue;
-      expect(`${type.kind} покрыт: ${covered.has(type.kind)}`).toBe(`${type.kind} покрыт: true`);
-    }
-  });
-
-  test('значения sourceNotIn проверяются формой: не тот вариант select — отказ, а не ложь', () => {
-    const node = {
-      rel: {
-        kind: 'has_relation' as const,
-        via: 'dependency',
-        sourceNotIn: { prop: 'orbis/task_status', values: ['готово'] },
-      },
-    } satisfies QueryFilterNode;
-    expect(refusal(() => sqlOf(node)).reason).toBe('TYPE');
   });
 });
 

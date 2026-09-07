@@ -62,6 +62,12 @@ import {
 } from '@orbis/shared/query';
 import { type SQL, sql } from 'drizzle-orm';
 import { ExecError } from '../errors';
+// Членство в наборе контракта — ОДНО на два компилятора (`expr/compile.ts`, задача 3):
+// разворот набора в предикат по привязкам аспектов живёт там, где живёт язык E, и второй
+// экземпляр разошёлся бы с ним на первой правке §Б2-2. Импорт взаимный (тот файл берёт
+// отсюда `lit`/`negated`/`castedExpr`/`CORE_COLUMN`) и безопасен: обе стороны читают
+// импортированное только внутри функций, на старте модуля — ничего.
+import { compileClassMembership } from '../expr/compile';
 import type { RegistrySnapshot } from '../registry/load';
 import { literalFormViolation } from '../registry/validate-props';
 
@@ -224,24 +230,6 @@ function comparable(ref: PropRef): SQL {
   }
   return castedExpr(ref.text, ref.def.type);
 }
-
-/**
- * Типы, чья текстовая проекция `->>` И ЕСТЬ значение: ветка `default` у `castedExpr` ниже
- * возвращает её нетронутой. Список стоит рядом с самим кастом и согласован с ним тестом
- * («текстом читаются ровно те типы, которым каст не нужен») — иначе он был бы вторым
- * мнением о том, что такое значение свойства.
- */
-// Экспортирован для SQL-бэкенда E (`expr/compile.ts`): каст по `kind` реестра,
-// экранирование литерала реестра и тотальное отрицание обязаны быть ОДНИ на два
-// компилятора — второй экземпляр разошёлся бы с Q на первой правке §6.1.
-export const TEXT_PROJECTED_KINDS: ReadonlySet<PropertyType['kind']> = new Set([
-  'text',
-  'time',
-  'select',
-  'ref',
-  'grant',
-  'registry_ref',
-]);
 
 /**
  * Каст текстовой проекции `props->>` к типу свойства (§А2-2).
@@ -670,63 +658,6 @@ function walkCond(
 }
 
 /**
- * Состояние ВТОРОГО конца ребра (`QueryRelSourceNotIn`): ребро считается, только если у
- * ИСТОЧНИКА свойство не имеет ни одного из перечисленных значений.
- *
- * `COALESCE(…, '')` — не украшение, а СМЫСЛ: у источника значения может не быть вовсе
- * (блокер без аспекта задачи), и такой источник обязан считаться НЕ закрытым, иначе
- * `NULL NOT IN (…)` дал бы NULL, ребро выпало бы из EXISTS, и заметка-блокер перестала бы
- * блокировать. Форма дословно та же, что была у старого компилятора (`compile.ts:272`),
- * только по `props` вместо старой карты, — потому что менять наблюдаемое поведение реформа
- * не имеет права.
- *
- * СРАВНЕНИЕ ТЕКСТОВОЕ И БЕЗ КАСТА, и это накладывает на узел проверяемое условие: слева
- * стоит проекция `->>`, справа — строковый параметр, значит свойство обязано быть таким,
- * чья текстовая проекция И ЕСТЬ значение (`TEXT_PROJECTED_KINDS`), а значения — строками.
- * У сахара `excludeBlocked` так и есть: набор «закрытых» задаёт разбор ключами вариантов
- * select (`done`, `cancelled`), а `->>` отдаёт ровно их.
- *
- * ПОЧЕМУ ЭТО ПРОВЕРЯЕТСЯ, А НЕ ПОДРАЗУМЕВАЕТСЯ. Здесь стояла фраза «значения приходят не от
- * пользователя, а из сахара» — с Задачи 9b она ложь: `sourceNotIn` уехал в JSON Schema
- * провайдеру, вход `ast:` тула боевой, и узел приезжает с ЛЮБЫМИ `prop`/`values`.
- * `{prop:'orbis/start_at', values:['5']}` сравнил бы текст ХРАНЕНИЯ ISO-момента со строкой
- * '5' — предикат, ложный всегда и молча.
- */
-function sourceNotInCond(
-  spec: { prop: string; values: readonly QueryScalar[] },
-  ctx: CompileCtx,
-): SQL {
-  const def = propertyOrFail(spec.prop, ctx);
-  if (isListType(def.type) || def.type.kind === 'json') {
-    return fail(
-      'TYPE',
-      `состояние дальнего конца по свойству '${def.id}' невыразимо: у списка и вложенного объекта нет скалярного значения`,
-      { property: def.id },
-    );
-  }
-  if (def.storage === 'core') {
-    return fail(
-      'TYPE',
-      `состояние дальнего конца по core-проекции '${def.id}' не поддержано: значение лежит колонкой`,
-      { property: def.id },
-    );
-  }
-  if (!TEXT_PROJECTED_KINDS.has(def.type.kind)) {
-    return fail(
-      'TYPE',
-      `состояние дальнего конца по свойству '${def.id}' (${def.type.kind}) не поддержано: ` +
-        `сравнение идёт текстом, а у этого типа текстовая проекция — форма хранения, а не значение`,
-      { property: def.id, kind: def.type.kind },
-    );
-  }
-  for (const value of spec.values) assertScalarType(def, value);
-  return sql`COALESCE(b.props->>${lit(def.id)}, '') NOT IN (${sql.join(
-    spec.values.map((v) => sql`${v}`),
-    sql`, `,
-  )})`;
-}
-
-/**
  * Реляционный предикат §А5-7. Каким КОНЦОМ ребра стоит сама сущность — норматив
  * `QUERY_REL_ANCHOR` (`@orbis/shared`, `query/ast.ts`); здесь он исполняется.
  *
@@ -742,9 +673,19 @@ function relCond(pred: QueryRelPredicate, ctx: CompileCtx): SQL {
     case 'parents_of':
       return sql`EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.target_id = ${relTarget(pred.of, ctx)} AND ${roleCond(pred.via, ctx)})`;
     case 'has_relation':
+      // `negated` здесь несёт тот же смысл, что раньше нёс `COALESCE(b.props->>…, '')`:
+      // источник БЕЗ класса (заметка-блокер) обязан считаться НЕ закрытым, иначе `NOT NULL`
+      // выбросил бы ребро из EXISTS и заметка перестала бы блокировать.
       return pred.sourceNotIn === undefined
         ? sql`EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND ${roleCond(pred.via, ctx)})`
-        : sql`EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND ${roleCond(pred.via, ctx)} AND ${sourceNotInCond(pred.sourceNotIn, ctx)})`;
+        : sql`EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND ${roleCond(pred.via, ctx)} AND ${negated(
+            compileClassMembership(
+              pred.sourceNotIn.contract,
+              pred.sourceNotIn.set,
+              ctx,
+              sql.raw('b'),
+            ),
+          )})`;
     case 'has_children':
       return sql`EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND ${roleCond(pred.via, ctx)})`;
     case 'descendants_of':
@@ -780,12 +721,9 @@ function compileNode(node: QueryFilterNode, ctx: CompileCtx): SQL {
     // выражение, а высказывание запроса об архивности (см. `decidesArchived`).
     return node.archived === 'any' ? sql`true` : sql`archived`;
   }
-  // Часть Б: контрактов в срезе А нет, и молчаливое игнорирование дало бы запрос, который
-  // «работает» и отбирает не то.
-  return fail('CLASS_NOT_AVAILABLE', 'предикат class появится с контрактами (часть Б реформы)', {
-    contract: node.class.contract,
-    set: node.class.set,
-  });
+  // Контракты приехали (Б-1): членство в наборе — предикат по привязкам аспектов владельца,
+  // и пользовательский аспект попадает в него без строки кода (§С8-18).
+  return compileClassMembership(node.class.contract, node.class.set, ctx, sql.raw('e'));
 }
 
 function joinNodes(nodes: QueryFilterNode[], op: 'AND' | 'OR', ctx: CompileCtx): SQL {
