@@ -13,6 +13,7 @@
  * `exprTreeExceedsDepth`): два обхода одной и той же вложенности — это два ответа на один
  * вопрос.
  */
+import { z } from 'zod';
 import { queryTreeExceedsDepth } from '../query/ast';
 
 /**
@@ -148,3 +149,103 @@ export type ExprNode =
   | { date_diff: readonly [ExprNode, ExprNode] }
   /** (date, date) → число дней ≥ 0, границы включены. */
   | { days_inclusive: readonly [ExprNode, ExprNode] };
+
+// ─────────────────────────── zod-схема канона ───────────────────────────
+
+const N = z.string().min(1);
+const constValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string()).min(1),
+]);
+
+/**
+ * Рекурсия через `z.lazy`, вход помечен `unknown`: схема — гейт НЕДОВЕРЕННОГО входа (jsonb
+ * реестра, аргумент тула владельца), и обещать типизированный вход было бы ложью.
+ *
+ * ЧЕГО ЭТОТ ГЕЙТ НЕ ДЕЛАЕТ — он про форму, а не про глубину: `z.lazy` спускается рекурсивно
+ * и исчерпывает стек раньше любого условия внутри схемы. Глубину стережёт
+ * `exprTreeExceedsDepth` — явным обходом и ДО zod (см. `checkExpr` и `assertExprChecked`).
+ *
+ * АРНОСТЬ — ЧАСТЬ ФОРМЫ, и потому `{op}` разложен на четыре ветки: `not` — один аргумент,
+ * `if` — ровно три, `and`/`or` — два и больше, прочие одиннадцать — ровно два. Приём тот же,
+ * каким форма `rel` в Q связана с `kind` (докблок `query/ast-json-schema.ts`): необязательные
+ * поля вместо веток пропустили бы `{op:'not', args:[a,b]}` мимо разбора прямо в компилятор.
+ */
+export const exprNodeSchema: z.ZodType<ExprNode, z.ZodTypeDef, unknown> = z.lazy(
+  () =>
+    z.union([
+      z.object({ const: constValueSchema }).strict(),
+      z.object({ duration: z.string().regex(EXPR_DURATION_RE, 'длительность ISO 8601') }).strict(),
+      z.object({ prop: N }).strict(),
+      z.object({ slot: N }).strict(),
+      z.object({ param: N }).strict(),
+      z.object({ ctx: z.enum(EXPR_CTX) }).strict(),
+      z.object({ agg: N }).strict(),
+      z.object({ phase: N }).strict(),
+      z.object({ agg_via: z.object({ role: N, name: N }).strict() }).strict(),
+      z
+        .object({
+          deref: z.union([
+            z.object({ prop: N, read: N }).strict(),
+            z.object({ slot: N, read: N }).strict(),
+          ]),
+        })
+        .strict(),
+      z
+        .object({
+          op: z.enum(['=', '!=', '>', '<', '>=', '<=', '+', '-', '*', '/', 'in']),
+          args: z.tuple([exprNodeSchema, exprNodeSchema]),
+        })
+        .strict(),
+      z.object({ op: z.literal('not'), args: z.tuple([exprNodeSchema]) }).strict(),
+      z
+        .object({
+          op: z.literal('if'),
+          args: z.tuple([exprNodeSchema, exprNodeSchema, exprNodeSchema]),
+        })
+        .strict(),
+      z.object({ op: z.enum(['and', 'or']), args: z.array(exprNodeSchema).min(2) }).strict(),
+      z.object({ has: N }).strict(),
+      z
+        .object({
+          has_relation: z
+            .object({
+              role: N,
+              in_set: z.object({ contract: N, set: N }).strict().optional(),
+              alive: z.boolean().optional(),
+            })
+            .strict(),
+        })
+        .strict(),
+      z.object({ class: z.object({ contract: N }).strict() }).strict(),
+      z.object({ date_add: z.tuple([exprNodeSchema, exprNodeSchema]) }).strict(),
+      z.object({ date_diff: z.tuple([exprNodeSchema, exprNodeSchema]) }).strict(),
+      z.object({ days_inclusive: z.tuple([exprNodeSchema, exprNodeSchema]) }).strict(),
+    ]) as unknown as z.ZodType<ExprNode, z.ZodTypeDef, unknown>,
+);
+
+/**
+ * Формы, встреченные в дереве, — мерка полноты `EXPR_FIXTURES` (§С8-28).
+ *
+ * Обход ИТЕРАТИВНЫЙ: вход недоверенный, а рекурсия исчерпала бы стек ровно на том дереве,
+ * ради которого её и зовут. Множество — ПОСЕЩЁННЫЕ объекты, а не путь: вопрос «какие формы
+ * встретились», и второй проход по тому же подобъекту ответа не меняет; заодно фикстура
+ * «самоссылка невыразима» (циклический объект корпуса) не подвешивает обход.
+ */
+export function exprFormsOf(expr: ExprNode): Set<ExprForm> {
+  const found = new Set<ExprForm>();
+  const seen = new Set<object>();
+  const stack: unknown[] = [expr];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (typeof node !== 'object' || node === null) continue;
+    if (seen.has(node)) continue;
+    seen.add(node);
+    for (const form of EXPR_FORMS) if (form in node) found.add(form);
+    for (const child of Array.isArray(node) ? node : Object.values(node)) stack.push(child);
+  }
+  return found;
+}

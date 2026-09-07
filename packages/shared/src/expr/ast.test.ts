@@ -13,8 +13,37 @@ import {
   EXPR_FORMS,
   EXPR_OPS,
   EXPR_TREE_DEPTH_CAP,
+  type ExprForm,
+  type ExprNode,
+  exprFormsOf,
+  exprNodeSchema,
   exprTreeExceedsDepth,
 } from './ast';
+
+/**
+ * По одной законной пробе на каждую из 17 форм. Карта переиспользуется тестом JSON Schema:
+ * два валидатора обязаны отвечать одно и то же на ОДНИХ И ТЕХ ЖЕ входах, иначе схема,
+ * уехавшая чужому потребителю, разойдётся с той, по которой сохраняется декларация.
+ */
+const FORM_PROBE: Record<ExprForm, unknown> = {
+  const: { const: '0.85' },
+  duration: { duration: 'P1D' },
+  prop: { prop: 'orbis/amount' },
+  slot: { slot: 'amount' },
+  param: { param: 'period_start' },
+  ctx: { ctx: '$today' },
+  agg: { agg: 'spent' },
+  phase: { phase: 'active' },
+  agg_via: { agg_via: { role: 'envelope-binding', name: 'remaining' } },
+  deref: { deref: { slot: 'category', read: 'orbis/title' } },
+  op: { op: 'and', args: [{ const: true }, { const: false }] },
+  has: { has: 'orbis/carryover' },
+  has_relation: { has_relation: { role: 'instance-of', alive: true } },
+  class: { class: { contract: 'orbis/completable' } },
+  date_add: { date_add: [{ ctx: '$today' }, { duration: 'P7D' }] },
+  date_diff: { date_diff: [{ ctx: '$today' }, { slot: 'date' }] },
+  days_inclusive: { days_inclusive: [{ ctx: '$today' }, { slot: 'period_end' }] },
+};
 
 describe('канон §Б3-5', () => {
   test('канон §Б3-5: 15 операторов и 17 ветвей узла = 16 форм канона + {slot}', () => {
@@ -44,5 +73,31 @@ describe('канон §Б3-5', () => {
     for (const bad of ['P', 'PT', '1D', 'P1H', 'P-1D']) {
       expect(EXPR_DURATION_RE.test(bad), bad).toBe(false);
     }
+  });
+});
+
+describe('схема узла', () => {
+  test('exprNodeSchema принимает пробу каждой ветви и отвергает выдумку', () => {
+    for (const f of EXPR_FORMS) {
+      expect(exprNodeSchema.safeParse(FORM_PROBE[f]).success, f).toBe(true);
+      expect(exprFormsOf(FORM_PROBE[f] as ExprNode).has(f), f).toBe(true);
+    }
+    expect(exprNodeSchema.safeParse({ lit: 0.85 }).success).toBe(false); // форма эталона П2
+    expect(exprNodeSchema.safeParse({ op: 'mul', args: [] }).success).toBe(false);
+    expect(exprNodeSchema.safeParse({ prop: 'orbis/amount', op: 'eq' }).success).toBe(false);
+  });
+
+  test('арность операторов — в СХЕМЕ: вход тула идёт мимо чекера (§С8-3)', () => {
+    expect(
+      exprNodeSchema.safeParse({ op: 'not', args: [{ const: true }, { const: true }] }).success,
+    ).toBe(false);
+    expect(
+      exprNodeSchema.safeParse({ op: 'if', args: [{ const: true }, { const: 1 }] }).success,
+    ).toBe(false);
+    expect(exprNodeSchema.safeParse({ op: 'and', args: [{ const: true }] }).success).toBe(false);
+    expect(
+      exprNodeSchema.safeParse({ op: '+', args: [{ const: 1 }, { const: 2 }, { const: 3 }] })
+        .success,
+    ).toBe(false);
   });
 });
