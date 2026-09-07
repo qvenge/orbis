@@ -11,7 +11,12 @@ import {
   registryDriftReport,
 } from './aspect-registry';
 import { BUILTIN_ASPECT_IDS } from './constants';
-import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, BUILTIN_RELATION_ROLE_META } from './registry';
+import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
+} from './registry';
 
 /**
  * Реестры «как после свежего пересева» — эталон, от которого отходит каждый тест.
@@ -60,7 +65,19 @@ function seeded(): RegistryDbRows {
       module: r.module,
       rank: r.rank,
     })),
-    contracts: [],
+    contracts: BUILTIN_CONTRACT_DEFS.map((c) => ({
+      id: c.id,
+      key: c.key,
+      label: c.label,
+      description: c.description,
+      kind: c.kind,
+      slots: c.slots,
+      classes: c.classes,
+      sets: c.sets,
+      facts: c.facts,
+      module: c.module,
+      rank: c.rank, // ключи — имена КОЛОНОК, как их отдаёт SELECT дрейфа
+    })),
     subscriptions: [],
     actions: [],
   };
@@ -90,7 +107,7 @@ test('canonicalJson: порядок МАССИВА значим (enum/required �
   expect(canonicalJson({ required: ['a', 'b'] })).not.toBe(canonicalJson({ required: ['b', 'a'] }));
 });
 
-test('свежий пересев трёх реестров — расхождений нет, три пустых реестра тоже чисты', () => {
+test('свежий пересев ЧЕТЫРЁХ реестров — расхождений нет; подписки и действия пусты', () => {
   const drift = diffBuiltinRegistries(seeded());
   expect(drift).toEqual({
     properties: EMPTY,
@@ -196,20 +213,30 @@ test('роли: разошёлся source_label — дрейф с именем �
   expect(registryDriftIds(drift)).toEqual(['roles:envelope-binding source_label']);
 });
 
-// §А12-1: контракты и подписки создаются срезом А ПУСТЫМИ, их сиды — первый акт Б-1.
-// Строка, положенная раньше гейта П5, обязана быть видна как дрейф, а не как «уже готово».
-test('контракты/подписки/действия: любая system-строка — extra (в срезе А они пусты)', () => {
+// §Б1-1: контракты сеются с Б-1 и сверяются ПО КОЛОНКАМ; подписки и действия ещё пусты —
+// там любая system-строка по-прежнему лишняя.
+test('контракты: незнакомая строка — extra, пропавшая — missing; действия пусты', () => {
   const rows = seeded();
-  rows.contracts = [{ id: 'orbis/completable' }];
+  rows.contracts = [...rows.contracts.filter((c) => c.id !== 'orbis/when'), { id: 'orbis/zzz' }];
   rows.actions = [{ id: 'orbis/close' }];
   const drift = diffBuiltinRegistries(rows);
-  expect(drift.contracts).toEqual({ missing: [], drifted: [], extra: ['orbis/completable'] });
+  expect(drift.contracts).toEqual({ missing: ['orbis/when'], drifted: [], extra: ['orbis/zzz'] });
   expect(drift.actions).toEqual({ missing: [], drifted: [], extra: ['orbis/close'] });
   expect(drift.subscriptions).toEqual(EMPTY);
-  expect(hasRegistryDrift(drift)).toBe(true);
   expect(registryDriftIds(drift)).toEqual([
-    'contracts:orbis/completable лишний',
+    'contracts:orbis/when нет',
+    'contracts:orbis/zzz лишний',
     'actions:orbis/close лишний',
+  ]);
+});
+
+test('контракт с подменённым набором — drifted по столбцу sets', () => {
+  const rows = seeded();
+  rows.contracts = rows.contracts.map((c) =>
+    c.id === 'orbis/completable' ? { ...c, sets: { closed: ['done'] } } : c,
+  );
+  expect(diffBuiltinRegistries(rows).contracts.drifted).toEqual([
+    { id: 'orbis/completable', what: ['sets'] },
   ]);
 });
 

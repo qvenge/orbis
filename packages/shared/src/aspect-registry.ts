@@ -12,6 +12,7 @@
 // (`registry/builtin-aspects.ts`). Перекрёстная сверка двух записей (`registry/builtin.test.ts`)
 // ушла вместе со второй записью — сверять стало не с чем, и это цель, а не потеря.
 import { BUILTIN_ASPECT_DEFS } from './registry/builtin-aspects';
+import { BUILTIN_CONTRACT_DEFS } from './registry/builtin-contracts';
 import { BUILTIN_PROPERTY_META } from './registry/builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './registry/builtin-roles';
 
@@ -176,9 +177,33 @@ function expectedRoles(): Map<string, Record<string, unknown>> {
 }
 
 /**
- * Ожидание для реестров, которые срез А создаёт ПУСТЫМИ (§А12-1): контракты, подписки,
- * действия. Их сиды — первый акт среза Б-1 после гейта П5, и до него любая system-строка
- * здесь означает, что сид положили раньше времени, — это дрейф, а не «ещё не сеяли».
+ * Ожидание для контрактов (§Б1-1). Столбцы `slots`/`classes`/`sets`/`facts` частично NULL у формы
+ * `{kind:"facts"}` — это выдерживает выравнивание `?? null` с обеих сторон (`diffOne`): без
+ * него «не задано» прочлось бы расхождением.
+ */
+function expectedContracts(): Map<string, Record<string, unknown>> {
+  return new Map(
+    BUILTIN_CONTRACT_DEFS.map((c) => [
+      c.id,
+      {
+        key: c.key,
+        label: c.label,
+        description: c.description,
+        kind: c.kind,
+        slots: c.slots,
+        classes: c.classes,
+        sets: c.sets,
+        facts: c.facts,
+        module: c.module,
+        rank: c.rank,
+      },
+    ]),
+  );
+}
+
+/**
+ * Ожидание для реестров, которые ещё пусты: подписки (первый сид — задачи 6 и 9) и действия
+ * (§Б6, не в Б-1). Любая system-строка здесь означает, что сид положили раньше времени.
  */
 const EMPTY_EXPECTATION = (): Map<string, Record<string, unknown>> => new Map();
 
@@ -186,7 +211,7 @@ const EXPECTATIONS: Record<RegistryKind, () => Map<string, Record<string, unknow
   properties: expectedProperties,
   aspects: expectedAspects,
   roles: expectedRoles,
-  contracts: EMPTY_EXPECTATION,
+  contracts: expectedContracts,
   subscriptions: EMPTY_EXPECTATION,
   actions: EMPTY_EXPECTATION,
 };
