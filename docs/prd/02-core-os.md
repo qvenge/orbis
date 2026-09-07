@@ -270,7 +270,7 @@ push-стек         detail            detail             detail             de
 
 {{query:aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox}}
 
-{{query:aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня}}
+{{query:aspect=orbis/task, orbis/due_date=today|overdue, class=orbis/completable:open, orbis/task_status=!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня}}
 
 {{query:aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание}}
 ```
@@ -282,9 +282,9 @@ push-стек         detail            detail             detail             de
 ```markdown
 Горизонт планирования: неделя и дальше.
 
-{{query:aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
+{{query:aspect=orbis/task, orbis/due_date=next_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
 
-{{query:aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}
+{{query:aspect=orbis/task, orbis/due_date=after_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}
 ```
 
 В обоих блоках **намеренно нет** `excludeBlocked=true`: Upcoming — горизонт планирования, заблокированные задачи здесь остаются видимыми с lock-иконкой (§3.6), чтобы не выпасть из поля зрения. Фокус-фильтрация — задача списка «Сегодня», а не горизонта (см. §6, случай 3).
@@ -292,7 +292,7 @@ push-стек         detail            detail             detail             de
 **All Tasks** — title `All Tasks`, emoji `📋`, tags `["smart-list"]`. Body:
 
 ```markdown
-{{query:aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}
+{{query:aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}
 ```
 
 Страховочный список: всё незакрытое, недавно тронутое сверху. Задача, не попавшая ни в один smart list, всегда находится здесь.

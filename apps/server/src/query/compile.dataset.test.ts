@@ -549,6 +549,12 @@ const DAILY_TODAY =
   '         excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc,\n' +
   '         display=list, title=Сегодня';
 
+/** Тот же блок «Сегодня» в class-форме — ровно то, что после задачи 4 лежит в теле сида. */
+const DAILY_TODAY_CLASS =
+  'aspect=orbis/task, orbis/due_date=today|overdue, class=orbis/completable:open,\n' +
+  '         orbis/task_status=!waiting, excludeBlocked=true,\n' +
+  '         sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня';
+
 let reg: RegistrySnapshot;
 
 function ctx(): CompileCtx {
@@ -636,6 +642,10 @@ describe('датасет §6.2 на новом компиляторе: сост�
     // блокером-заметкой БЕЗ статуса (по COALESCE он живой), taskDone — по своему статусу,
     // taskB — по RLS. taskToday ОСТАЁТСЯ: его блокер taskDone уже завершён.
     expect(ids(await run(USER_A, DAILY_TODAY))).toEqual([ID.taskToday, ID.taskOverdue]);
+
+    // Перевод «закрытости» на контракт обязан быть ТОЖДЕСТВЕННЫМ на живых данных, а не
+    // «примерно тем же»: две формы одного запроса дают одну выдачу, элемент в элемент.
+    expect(ids(await run(USER_A, DAILY_TODAY_CLASS))).toEqual(ids(await run(USER_A, DAILY_TODAY)));
 
     // Три половинки того же утверждения — порознь, чтобы «видна/скрыта» не держалось на
     // одном списке. Все три задачи имеют входящее ребро роли dependency и различаются

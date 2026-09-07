@@ -18,22 +18,28 @@
 // Имена свойств — namespaced key реестра (`orbis/task_status`, а не `status`): текст запроса
 // адресует свойство только ключом или закавыченной подписью (§А5-3а), и старых имён полей
 // аспектов разбор больше не знает вовсе.
+//
+// ЗАКРЫТОСТЬ ВЫРАЖЕНА НАБОРОМ КОНТРАКТА, а не перечислением статусов: набор один на продукт
+// и живёт в реестре — свой аспект владельца попадает под эти списки без правки тел (§Б1-2,
+// §С8-18). В «Сегодня» рядом с `class=orbis/completable:open` ОСТАЁТСЯ `orbis/task_status=
+// !waiting`: `open` включает и ожидающие, и свёртка трёх отрицаний в набор вернула бы их в
+// блок, то есть поменяла бы наблюдаемое поведение.
 
 export const DAILY_PLANNING_BODY = `Утренний обзор: разобрать Inbox, пройтись по списку «Сегодня».
 
 {{query:aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox}}
 
-{{query:aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня}}
+{{query:aspect=orbis/task, orbis/due_date=today|overdue, class=orbis/completable:open, orbis/task_status=!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня}}
 
 {{query:aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание}}`;
 
 export const UPCOMING_BODY = `Горизонт планирования: неделя и дальше.
 
-{{query:aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
+{{query:aspect=orbis/task, orbis/due_date=next_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
 
-{{query:aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}`;
+{{query:aspect=orbis/task, orbis/due_date=after_7d, class=orbis/completable:open, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}`;
 
-export const ALL_TASKS_BODY = `{{query:aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}`;
+export const ALL_TASKS_BODY = `{{query:aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}`;
 
 // ─────────────── Горизонты планирования (E4, слайс 3, 02 §3.3/§7.2) ───────────────
 // Лестница горизонтов «день → неделя → месяц → год → жизнь» доставляется тем, чего в ней

@@ -654,7 +654,9 @@ export const INEXPRESSIBLE_QUERY_TEXTS: readonly { text: string; code: QueryPars
  * живая правда о них — `apps/web/src/lib/query-blocks/production-queries.test.ts`. Тот тест
  * берёт тексты ИЗ САМИХ МОДУЛЕЙ и гоняет каждый через `parseQueryAst`, то есть
  * краснеет ровно тогда, когда перевод отъезжает; здесь такой проверки нет и быть не может —
- * `packages/shared` про `apps/web` не знает.
+ * `packages/shared` про `apps/web` не знает. Тела сидов переведены на
+ * `class=orbis/completable:open` задачей 4 среза Б-1; опись остаётся СНИМКОМ момента Задачи 8
+ * и не переписывается.
  *
  * Собрано ГРЕПОМ по всем формам (`{{query:`, `aspect=`, `sortBy=`, `children_of=`, `tags=`,
  * потребители `entity.query`/`entity.count`, сиды, шпаргалки промптов и описание тула), а не
