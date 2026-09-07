@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_CONTRACT_DEFS } from '../registry/builtin-contracts';
 import { BUILTIN_PROPERTY_META } from '../registry/builtin-properties';
+import { EXPR_FORMS, EXPR_TREE_DEPTH_CAP, type ExprNode, exprFormsOf } from './ast';
 import { checkExpr, type ExprScope, exprTypeOfKind } from './check';
 import {
   EXPR_NOT_TOTAL,
@@ -12,6 +13,7 @@ import {
   ExprCheckError,
   SECOND_LANGUAGE,
 } from './codes';
+import { EXPR_FIXTURES } from './fixtures';
 
 const REG = {
   properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
@@ -282,5 +284,48 @@ describe('тайп-чекер §С8-28: область, $sensitivity и реку
     const cyclic: Record<string, unknown> = { op: 'not', args: [] };
     (cyclic.args as unknown[]).push(cyclic);
     expect(refusal(() => checkExpr(cyclic, scope())).code).toBe(EXPR_RECURSION);
+  });
+});
+
+describe('EXPR_FIXTURES — корпус приёмки §С8-28', () => {
+  test('каждая фикстура даёт объявленный вердикт', () => {
+    for (const f of EXPR_FIXTURES) {
+      const s = { reg: REG, ...f.scope } as ExprScope;
+      if (f.verdict.ok) expect(checkExpr(f.expr, s), f.name).toEqual(f.verdict.type);
+      else expect(refusal(() => checkExpr(f.expr, s)).code, f.name).toBe(f.verdict.code);
+    }
+  });
+
+  test('полнота: у каждой из 17 форм есть позитив и негатив, у каждого из 4 кодов — фикстура', () => {
+    for (const form of EXPR_FORMS) {
+      const w = EXPR_FIXTURES.filter(
+        (f) =>
+          typeof f.expr === 'object' &&
+          f.expr !== null &&
+          exprFormsOf(f.expr as ExprNode).has(form),
+      );
+      expect(
+        w.some((f) => f.verdict.ok),
+        `позитив для ${form}`,
+      ).toBe(true);
+      expect(
+        w.some((f) => !f.verdict.ok),
+        `негатив для ${form}`,
+      ).toBe(true);
+    }
+    for (const code of [EXPR_TYPE, EXPR_NOT_TOTAL, EXPR_RECURSION, SECOND_LANGUAGE]) {
+      expect(
+        EXPR_FIXTURES.some((f) => !f.verdict.ok && f.verdict.code === code),
+        code,
+      ).toBe(true);
+    }
+  });
+
+  test('«бюджет»: самое глубокое выражение §Б5-4 — 7 уровней, кап даёт девятикратный запас', () => {
+    const b = EXPR_FIXTURES.find((f) => f.name === 'бюджет: daily_pace целиком');
+    const depth = (v: unknown): number =>
+      typeof v !== 'object' || v === null ? 0 : 1 + Math.max(0, ...Object.values(v).map(depth));
+    expect(depth(b?.expr)).toBe(7);
+    expect(depth(b?.expr)).toBeLessThan(EXPR_TREE_DEPTH_CAP);
   });
 });

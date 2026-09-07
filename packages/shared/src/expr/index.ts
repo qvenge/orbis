@@ -14,4 +14,5 @@
 export * from './ast';
 export * from './check';
 export * from './codes';
+export * from './fixtures';
 export * from './json-schema';
