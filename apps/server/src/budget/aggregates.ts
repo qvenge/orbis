@@ -443,7 +443,13 @@ async function rawEnvelopesOfMonth(
 // Overview (§3.1) — агрегаты одного withIdentity-tx
 // ---------------------------------------------------------------------------
 
-async function computeOverview(
+/**
+ * Overview месяца НА ГОТОВОЙ tx — оракул сверки среза Б-1 (Р-К-5, РП-4). Экспортируется ради
+ * двух потребителей вне роутера: снимка поверхностей (`test/surfaces.ts`) и перф-сверки
+ * движка (задачи 9/12) — обеим нужны две реализации на ОДНОЙ транзакции, иначе сравнивались
+ * бы два состояния графа. `budgetOverview` (:642) остаётся путём с конвейером `preparePeriod`.
+ */
+export async function computeOverview(
   tx: Tx,
   ownerId: string,
   month: string,
