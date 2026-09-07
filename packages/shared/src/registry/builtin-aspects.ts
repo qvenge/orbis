@@ -21,6 +21,11 @@
  * `aiInstructions` снят вместе с этим (`builtin.test.ts`), а запрет снятых имён закреплён
  * грепом там же — иначе следующая правка вернула бы их молча.
  *
+ * Привязки `implements` (§Б2-1) несут четыре записи из тринадцати: контракта-потребителя для
+ * остальных в Б-1 нет (`orbis/progress`, `orbis/categorizable` не сеются, В-2). Отсутствие
+ * привязки — не забывчивость: аспект без неё живёт на своих свойствах и в множества контрактов
+ * не входит.
+ *
  * Порядок `properties[]` и их `rank` — порядок строк таблицы §А8, он же порядок полей в
  * сегодняшних zod-схемах; `rank` аспекта — позиция в `BUILTIN_ASPECT_IDS`.
  */
@@ -31,7 +36,7 @@ import { type AspectDefinition, aspectDefinitionSchema } from './property-type';
 
 type AspectEntry = Omit<
   z.input<typeof aspectDefinitionSchema>,
-  'id' | 'ownerId' | 'key' | 'rank' | 'properties' | 'implements'
+  'id' | 'ownerId' | 'key' | 'rank' | 'properties'
 > & {
   id: AspectId;
   /** [id свойства, обязательность в этом аспекте] в порядке строк таблицы §А8. */
@@ -58,6 +63,21 @@ const ENTRIES: readonly AspectEntry[] = [
     aiInstructions:
       'Применяй, когда во вводе есть дата или время события. orbis/start_at обязателен (ISO 8601 с таймзоной пользователя). orbis/recurrence задаётся только на шаблоне повторения; инстансы порождает сервер.',
     tagMappings: ['schedule', 'event', 'meeting', 'appointment'],
+    // §Б2-1 (schedule): событие даёт `moment` контракта «когда» (Agenda берёт дни по нему), а
+    // `orbis/recurrence` (json) — маркер шаблона: класс задаёт САМО НАЛИЧИЕ значения (Р-К-3).
+    // Роль порождения — константа: свойства под неё нет и быть не должно.
+    implements: [
+      { contract: 'orbis/when', bind: { moment: 'orbis/start_at' } },
+      {
+        contract: 'orbis/recurrence',
+        bind: { template_marker: 'orbis/recurrence' },
+        value_map: [
+          { slot: 'template_marker', variant: 'present', class: 'template' },
+          { slot: 'template_marker', variant: 'absent', class: 'instance' },
+        ],
+        fixed: { origin_role: 'instance-of' },
+      },
+    ],
     viewConfig: {
       keyFields: ['orbis/start_at', 'orbis/end_at', 'orbis/all_day'],
       icon: '📅',
@@ -83,6 +103,24 @@ const ENTRIES: readonly AspectEntry[] = [
     aiInstructions:
       'Применяй к действиям. orbis/task_status по умолчанию inbox; явный срок → orbis/due_date (дата, не момент). orbis/completed_at проставляет сервер при переходе в done — не передавай его сам.',
     tagMappings: ['task', 'todo', 'action', 'deadline'],
+    // §Б2-1 (task): шесть вариантов `orbis/task_status` ложатся на три класса завершаемости — это
+    // и есть тот один набор `closed`, в который сходятся семь мест `!done&!cancelled` (§Б1-2).
+    // Срок задачи — `deadline`, не `moment`: срок ≠ начало (§А8/Р11).
+    implements: [
+      {
+        contract: 'orbis/completable',
+        bind: { status: 'orbis/task_status' },
+        value_map: [
+          { slot: 'status', variant: 'inbox', class: 'active' },
+          { slot: 'status', variant: 'planned', class: 'active' },
+          { slot: 'status', variant: 'in_progress', class: 'active' },
+          { slot: 'status', variant: 'waiting', class: 'active' },
+          { slot: 'status', variant: 'done', class: 'done' },
+          { slot: 'status', variant: 'cancelled', class: 'cancelled' },
+        ],
+      },
+      { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' } },
+    ],
     viewConfig: {
       keyFields: ['orbis/task_status', 'orbis/due_date', 'orbis/priority'],
       icon: '✅',
@@ -114,6 +152,32 @@ const ENTRIES: readonly AspectEntry[] = [
     aiInstructions:
       'orbis/amount — строка decimal (например "340.00"), всегда положительная; знак задаёт orbis/direction. orbis/finance_category — ссылка на сущность-категорию: резолви её через entity_query по синонимам («aspect=orbis/category, orbis/aliases=такси»). orbis/occurred_on — дата операции в таймзоне пользователя. Тождество операции банка (orbis/bank_txn_id) в этом туле не показано намеренно: его заполняет только импорт выписки.',
     tagMappings: ['expense', 'income', 'payment', 'cost'],
+    // §Б2-1 (financial): все девять слотов money-movement (без последних двух не работает импорт,
+    // inv §3). Имена вариантов `orbis/direction` и имена классов НЕ совпадают — отображение живёт
+    // в декларации, а не в коде движка. Вторая привязка — только `fixed.origin_role` (Р-К-30:
+    // маркера шаблона у финансов нет — `orbis/recurring = true` стоит и на каждом материализованном
+    // инстансе, `materialize.ts:503`, и класс `template` выбросил бы инстансы из набора `facts`).
+    implements: [
+      {
+        contract: 'orbis/money-movement',
+        bind: {
+          amount: 'orbis/amount',
+          direction: 'orbis/direction',
+          category: 'orbis/finance_category',
+          date: 'orbis/occurred_on',
+          currency: 'orbis/currency',
+          planned: 'orbis/planned',
+          recurring: 'orbis/recurring',
+          counterparty: 'orbis/counterparty',
+          bank_txn_id: 'orbis/bank_txn_id',
+        },
+        value_map: [
+          { slot: 'direction', variant: 'expense', class: 'outflow' },
+          { slot: 'direction', variant: 'income', class: 'inflow' },
+        ],
+      },
+      { contract: 'orbis/recurrence', fixed: { origin_role: 'instance-of' } },
+    ],
     viewConfig: {
       keyFields: ['orbis/amount', 'orbis/direction', 'orbis/finance_category'],
       icon: '💸',
@@ -157,6 +221,21 @@ const ENTRIES: readonly AspectEntry[] = [
     aiInstructions:
       'Конверт на период: orbis/finance_category, orbis/limit (decimal-строка), orbis/period_start и orbis/period_end включительно. Потраченное не хранится — сервер считает его по транзакциям конверта.',
     tagMappings: ['budget', 'envelope', 'limit'],
+    // §Б2-1 (budget): шесть слотов конверта. Слота-статуса у `orbis/envelope` нет — фазы ведомости
+    // считает подписка Budget (§Б5-4), а не класс контракта, потому и отнесений нет.
+    implements: [
+      {
+        contract: 'orbis/envelope',
+        bind: {
+          category: 'orbis/finance_category',
+          limit: 'orbis/limit',
+          currency: 'orbis/currency',
+          period_start: 'orbis/period_start',
+          period_end: 'orbis/period_end',
+          carryover: 'orbis/carryover',
+        },
+      },
+    ],
     viewConfig: {
       keyFields: ['orbis/limit', 'orbis/period_start', 'orbis/period_end'],
       icon: '✉️',
@@ -403,7 +482,6 @@ export const BUILTIN_ASPECT_DEFS: readonly AspectDefinition[] = ENTRIES.map((ent
       required,
       rank: order + 1,
     })),
-    implements: [], // §Б2 — часть Б
     rank: index + 1,
   }),
 );

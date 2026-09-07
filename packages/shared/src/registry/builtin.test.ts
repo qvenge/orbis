@@ -20,6 +20,7 @@ import {
   RUN_OUTCOMES,
   TASK_STATUSES,
 } from '../contracts/agent-loop';
+import { checkImplements } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builtin-contracts';
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
@@ -131,6 +132,89 @@ const A8: Record<AspectId, readonly Row[]> = {
   ],
 };
 
+/**
+ * Снимок привязок §Б2-1 — переписан из спеки РУКАМИ, как и `A8`. Умолчания схемы выписаны
+ * ЯВНО (`value_map: []`, `fixed: {}`): сравнение точное, и «поле не задано» обязано быть видно
+ * в снимке, а не подставляться из той же схемы, которую снимок и сторожит.
+ */
+const B2: Partial<Record<AspectId, readonly unknown[]>> = {
+  'orbis/schedule': [
+    { contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [], fixed: {} },
+    {
+      contract: 'orbis/recurrence',
+      bind: { template_marker: 'orbis/recurrence' },
+      value_map: [
+        { slot: 'template_marker', variant: 'present', class: 'template' },
+        { slot: 'template_marker', variant: 'absent', class: 'instance' },
+      ],
+      fixed: { origin_role: 'instance-of' },
+    },
+  ],
+  'orbis/task': [
+    {
+      contract: 'orbis/completable',
+      bind: { status: 'orbis/task_status' },
+      fixed: {},
+      value_map: [
+        { slot: 'status', variant: 'inbox', class: 'active' },
+        { slot: 'status', variant: 'planned', class: 'active' },
+        { slot: 'status', variant: 'in_progress', class: 'active' },
+        { slot: 'status', variant: 'waiting', class: 'active' },
+        { slot: 'status', variant: 'done', class: 'done' },
+        { slot: 'status', variant: 'cancelled', class: 'cancelled' },
+      ],
+    },
+    { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [], fixed: {} },
+  ],
+  'orbis/financial': [
+    {
+      contract: 'orbis/money-movement',
+      fixed: {},
+      bind: {
+        amount: 'orbis/amount',
+        direction: 'orbis/direction',
+        category: 'orbis/finance_category',
+        date: 'orbis/occurred_on',
+        currency: 'orbis/currency',
+        planned: 'orbis/planned',
+        recurring: 'orbis/recurring',
+        counterparty: 'orbis/counterparty',
+        bank_txn_id: 'orbis/bank_txn_id',
+      },
+      value_map: [
+        { slot: 'direction', variant: 'expense', class: 'outflow' },
+        { slot: 'direction', variant: 'income', class: 'inflow' },
+      ],
+    },
+    // Р-К-30: маркера шаблона у финансов НЕТ — `orbis/recurring = true` стоит и на каждом инстансе
+    // (materialize.ts:503, normalize.ts:152-160); класс `template` финансовой сущности не присваивается,
+    // `instance-of` закрыт константой. Иначе набор `facts` выбросил бы из spent все проведённые инстансы.
+    // Отступление от текста ревизии 3 §Б1-2 (`orbis/recurring` как маркер шаблона) по коду — вопрос
+    // владельцу В-П-6; план исполняется по умолчанию (Р-К-30).
+    {
+      contract: 'orbis/recurrence',
+      bind: {},
+      value_map: [],
+      fixed: { origin_role: 'instance-of' },
+    },
+  ],
+  'orbis/budget': [
+    {
+      contract: 'orbis/envelope',
+      value_map: [],
+      fixed: {},
+      bind: {
+        category: 'orbis/finance_category',
+        limit: 'orbis/limit',
+        currency: 'orbis/currency',
+        period_start: 'orbis/period_start',
+        period_end: 'orbis/period_end',
+        carryover: 'orbis/carryover',
+      },
+    },
+  ],
+};
+
 /** Свойства §А8, у которых нет аспекта-носителя: вычисляемые «Новые свойства реформы». */
 const FREE_DOMAIN_IDS = ['orbis/parent_project', 'orbis/root_project'] as const;
 
@@ -228,8 +312,13 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
     expect(def.properties.map((p) => p.required)).toEqual(rows.map(([, , req]) => req));
     expect(def.properties.map((p) => p.rank)).toEqual(rows.map((_, i) => i + 1));
     for (const ref of def.properties) expect(byId.has(ref.propertyId)).toBe(true);
-    // §Б2: привязки — часть Б, в срезе А поле пустует.
-    expect(def.implements).toEqual([]);
+    // §Б2-1: привязки — снимок B2; у девяти аспектов их нет (контракта-потребителя в Б-1 нет).
+    // Приведение — только для типов: обе стороны сравниваются глубоким равенством, а снимок
+    // намеренно объявлен `unknown[]` (он нормативный текст, а не производная схемы).
+    expect([aspectId, def.implements as readonly unknown[]]).toEqual([
+      aspectId,
+      B2[aspectId] ?? [],
+    ]);
   }
 
   // Служебность §А3-1/Р-П-5: колонка реестра, а не список в коде.
@@ -252,6 +341,23 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
     'orbis/agent-run': null,
     'orbis/routine': null,
   });
+});
+
+test('привязки §Б2: четыре носителя, и каждая проходит гейт записи checkImplements', () => {
+  expect(BUILTIN_ASPECT_DEFS.filter((a) => a.implements.length > 0).map((a) => a.id)).toEqual([
+    'orbis/schedule',
+    'orbis/task',
+    'orbis/financial',
+    'orbis/budget',
+  ]);
+  // Сид — такой же писатель привязок, как тул владельца (задача 15), и проходит ТОТ ЖЕ гейт:
+  // разъехавшись, сид положил бы в базу то, что тул запрещает.
+  const reg = {
+    properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+  };
+  for (const def of BUILTIN_ASPECT_DEFS)
+    expect([def.id, checkImplements(def, reg)]).toEqual([def.id, []]);
 });
 
 test('слияния: finance_category и currency у financial И budget; grant у assignment и agent-run', () => {
