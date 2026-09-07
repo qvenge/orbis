@@ -18,9 +18,19 @@
 //
 // КОРПУС КЕШИРУЕТСЯ по детерминированному владельцу: повторный вызов считает строки и пропускает
 // сев. `truncateAll` соседнего сьюта его сносит — норма: perf-сьюты вне CI и вне `bun run test`.
-import { addDays, ORBIS_NAMESPACE, ROLE_CATEGORY_PARENT, ROLE_INSTANCE_OF } from '@orbis/shared';
+import {
+  addDays,
+  ORBIS_NAMESPACE,
+  ROLE_CATEGORY_PARENT,
+  ROLE_ENVELOPE_BINDING,
+  ROLE_INSTANCE_OF,
+} from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
-import type { entities, relations } from '../db/schema';
+import { adminDb } from '../../test/helpers';
+import { type EnvelopeCombination, type EnvelopeQuery, selectEnvelopes } from '../budget/binding';
+import type { Db } from '../db/client';
+import { entities, relations, userSettings } from '../db/schema';
 
 export const VOLUME_OWNER_ID = uuidv5('volume-perf-fixture:owner', ORBIS_NAMESPACE);
 /** Тот же seed, что у пробы П2 (`.superpowers/probe/p2/lib/world.ts:11`) — числа сравнимы. */
@@ -313,4 +323,205 @@ export function buildVolumeWorld(): VolumeWorld {
   Object.assign(stats, { tasks: VOLUME_TASKS, events: VOLUME_EVENTS });
 
   return { entities: ents, relations: rels, months, stats };
+}
+
+/**
+ * Сто движений сторожа Р-К-2 — НЕ часть корпуса: их создаёт через `execute()` сам тест и сносит
+ * после. Раскладка выбрана по веткам селектора: категории по кругу (30 и 31 конверта не имеют —
+ * ветка «null»), валюта во всех трёх формах, даты — по всем двенадцати периодам.
+ */
+export interface VolumeProbe {
+  id: string;
+  title: string;
+  categoryRef: string;
+  currency: string | null;
+  occurredOn: string;
+  amount: string;
+}
+export function volumeProbes(): readonly VolumeProbe[] {
+  return Array.from({ length: VOLUME_PROBE_COUNT }, (_, i) => ({
+    id: volumeId(`probe:${i}`),
+    title: `Проба сторожа ${i}`,
+    categoryRef: volumeCategoryId(i % VOLUME_CATEGORIES),
+    currency: i % 10 === 0 ? 'USD' : i % 3 === 0 ? null : VOLUME_DEFAULT_CURRENCY,
+    occurredOn: `${volumeMonth(i % VOLUME_MONTHS)}-${String(1 + ((i * 7) % 28)).padStart(2, '0')}`,
+    amount: (100 + i).toFixed(2),
+  }));
+}
+export const VOLUME_PROBE_IDS: readonly string[] = volumeProbes().map((p) => p.id);
+
+/** Свойства пробы (§А1-1) — одна форма и для `entity_create`, и для сверки. */
+export function volumeProbeProps(p: VolumeProbe): Record<string, unknown> {
+  return {
+    'orbis/amount': p.amount,
+    'orbis/direction': 'expense',
+    'orbis/finance_category': p.categoryRef,
+    'orbis/occurred_on': p.occurredOn,
+    'orbis/planned': false,
+    ...(p.currency === null ? {} : { 'orbis/currency': p.currency }),
+  };
+}
+
+/**
+ * Комбинация селектора по свойствам движения — ЕДИНСТВЕННАЯ копия правила `combinationOf`
+ * (`binding.ts:258-271`) на стороне фикстуры, и зовут её ОБА потребителя: сев привязок и сторож
+ * Р-К-2. Одна копия здесь не аккуратность, а условие проверяемости: разойдись это правило с
+ * хуковым — сторож покраснеет, потому что его ожидание считается ИМЕННО отсюда, а фактические
+ * рёбра ставит настоящий хук.
+ */
+export function volumeCombination(
+  props: Record<string, unknown>,
+  aspects: readonly string[],
+): EnvelopeCombination | null {
+  if (!aspects.includes('orbis/financial')) return null;
+  // Шаблон повторения хук отвязывает, а не привязывает (`binding.ts:253`).
+  if (aspects.includes('orbis/schedule') && props['orbis/recurrence'] !== undefined) return null;
+  const categoryRef = props['orbis/finance_category'];
+  const occurredOn = props['orbis/occurred_on'];
+  if (typeof categoryRef !== 'string' || typeof occurredOn !== 'string') return null;
+  const currency = props['orbis/currency'];
+  return {
+    categoryRef,
+    currency: typeof currency === 'string' ? currency : VOLUME_DEFAULT_CURRENCY,
+    occurredOn,
+  };
+}
+
+/** Строк в одном INSERT — как в graph-fixture: мало round-trip'ов, пакет не разрастается. */
+const BATCH = 2000;
+/** Комбинаций в одном вызове селектора: 500 × 5 параметров — далеко от предела PG. */
+const SELECTOR_BATCH = 500;
+const probeIdList = () =>
+  sql.join(
+    VOLUME_PROBE_IDS.map((id) => sql`${id}::uuid`),
+    sql`, `,
+  );
+
+async function countRows(
+  db: Db,
+): Promise<{ entities: number; envelopes: number; bindings: number }> {
+  const rows = (await db.execute(sql`
+    SELECT (SELECT count(*) FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid) AS e,
+           (SELECT count(*) FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid
+                             AND 'orbis/budget' = ANY(aspects)) AS env,
+           (SELECT count(*) FROM relations r JOIN entities s ON s.id = r.source_id
+             WHERE s.owner_id = ${VOLUME_OWNER_ID}::uuid AND r.role = ${ROLE_ENVELOPE_BINDING}) AS b
+  `)) as unknown as Array<{ e: string; env: string; b: string }>;
+  const row = rows[0];
+  return {
+    entities: Number(row?.e ?? 0),
+    envelopes: Number(row?.env ?? 0),
+    bindings: Number(row?.b ?? 0),
+  };
+}
+
+/**
+ * Привязки конверт→движение — одним проходом ТОГО ЖЕ селектора, что зовёт бюджет-хук
+ * (`binding.ts:451` → `selectEnvelopes`), и по тому же правилу комбинации. Проход идёт под
+ * админ-DSN: RLS здесь ничего не меняет — селектор и так фильтрует `owner_id = $1`, а вторая
+ * приложенческая коннекция ради этого не нужна.
+ */
+async function seedBindings(db: Db, world: VolumeWorld): Promise<number> {
+  const targets: Array<{ txnId: string; key: string } & EnvelopeCombination> = [];
+  for (const e of world.entities) {
+    const c = volumeCombination(e.props as Record<string, unknown>, e.aspects as string[]);
+    if (c === null) continue;
+    targets.push({
+      txnId: e.id as string,
+      key: `${c.categoryRef}|${c.currency}|${c.occurredOn}`,
+      ...c,
+    });
+  }
+  const unique: EnvelopeQuery[] = [];
+  const seen = new Set<string>();
+  for (const t of targets) {
+    if (seen.has(t.key)) continue;
+    seen.add(t.key);
+    unique.push({
+      key: t.key,
+      categoryRef: t.categoryRef,
+      currency: t.currency,
+      occurredOn: t.occurredOn,
+    });
+  }
+  const picked = new Map<string, string | null>();
+  for (let i = 0; i < unique.length; i += SELECTOR_BATCH) {
+    const won = await db.transaction(async (tx) =>
+      selectEnvelopes(tx, {
+        ownerId: VOLUME_OWNER_ID,
+        defaultCurrency: VOLUME_DEFAULT_CURRENCY,
+        rows: unique.slice(i, i + SELECTOR_BATCH),
+      }),
+    );
+    for (const [k, v] of won) picked.set(k, v);
+  }
+  const edges = targets.flatMap((t) => {
+    const envelopeId = picked.get(t.key) ?? null;
+    return envelopeId === null
+      ? []
+      : [
+          {
+            id: volumeId(`bind:${t.txnId}`),
+            sourceId: envelopeId,
+            targetId: t.txnId,
+            role: ROLE_ENVELOPE_BINDING,
+          },
+        ];
+  });
+  for (let i = 0; i < edges.length; i += BATCH) {
+    await db.insert(relations).values(edges.slice(i, i + BATCH));
+  }
+  return edges.length;
+}
+
+export async function ensureVolumeFixture(): Promise<{
+  entities: number;
+  envelopes: number;
+  bindings: number;
+  seeded: boolean;
+}> {
+  const { db, client } = adminDb();
+  try {
+    // Хвост оборванного сторожа сносится ДО пересчёта: иначе сотня лишних строк читалась бы как
+    // «корпус не тот» и гнала бы полный пересев на каждом прогоне.
+    await db.execute(sql`DELETE FROM entities WHERE id IN (${probeIdList()})`);
+    const before = await countRows(db);
+    if (
+      before.entities === VOLUME_ENTITIES &&
+      before.envelopes === VOLUME_ENVELOPES &&
+      before.bindings >= VOLUME_MIN_BINDINGS
+    ) {
+      return { ...before, seeded: false };
+    }
+    // Неполный корпус не досевается, а пересевается: досев обязан знать, какие строки уже есть, а
+    // знать этого он не может — прошлый прогон могли оборвать (`graph-fixture.ts:180-182`).
+    await db.execute(sql`DELETE FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`);
+    // Часы владельца — UTC: «сегодня» корпуса обязано быть воспроизводимым, а не зависеть от
+    // зоны машины (`localToday` читает user_settings.timezone).
+    await db
+      .insert(userSettings)
+      .values({
+        ownerId: VOLUME_OWNER_ID,
+        timezone: 'UTC',
+        defaultCurrency: VOLUME_DEFAULT_CURRENCY,
+      })
+      .onConflictDoNothing();
+
+    const world = buildVolumeWorld();
+    for (let i = 0; i < world.entities.length; i += BATCH) {
+      await db.insert(entities).values(world.entities.slice(i, i + BATCH));
+    }
+    // ANALYZE ДО прохода селектора, а не только в конце: LATERAL по 480 конвертам на свежезалитой
+    // таблице планировщик считает по умолчаниям статистики, и сев упирался бы в его неведение
+    // (урок `src/test/perf.ts:376-388`: 64 против 464 мс).
+    await db.execute(sql`ANALYZE entities`);
+    for (let i = 0; i < world.relations.length; i += BATCH) {
+      await db.insert(relations).values(world.relations.slice(i, i + BATCH));
+    }
+    await seedBindings(db, world);
+    await db.execute(sql`ANALYZE entities, relations`);
+    return { ...(await countRows(db)), seeded: true };
+  } finally {
+    await client.end();
+  }
 }

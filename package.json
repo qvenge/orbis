@@ -16,7 +16,8 @@
     "db:prepare": "bun scripts/setup-db.ts && bun run --filter @orbis/server db:migrate && bun scripts/seed-registries.ts && bun run test:rls",
     "test:perf": "bun run --filter @orbis/server test:perf",
     "test:perf:graph": "bun run --filter @orbis/server test:perf:graph",
-    "test:perf:explain": "bun run --filter @orbis/server test:perf:explain"
+    "test:perf:explain": "bun run --filter @orbis/server test:perf:explain",
+    "test:perf:volume": "bun run --filter @orbis/server test:perf:volume"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",

@@ -9,13 +9,19 @@ import {
   VOLUME_LAST_MONTH,
   VOLUME_MONTHS,
   VOLUME_OWNER_ID,
+  VOLUME_PROBE_COUNT,
+  VOLUME_PROBE_IDS,
   VOLUME_TASKS,
   VOLUME_TEMPLATES,
   VOLUME_TODAY,
   VOLUME_TXNS,
+  type VolumeProbe,
   type VolumeWorld,
   volumeCategoryId,
+  volumeCombination,
   volumeMonth,
+  volumeProbeProps,
+  volumeProbes,
 } from './volume-fixture';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -142,5 +148,34 @@ describe('мир корпуса: слой Agenda и итог', () => {
     const lastOf = (w: VolumeWorld) =>
       w.entities[VOLUME_ENTITIES - 1] as VolumeWorld['entities'][number];
     expect(lastOf(again)).toEqual(lastOf(world));
+  });
+});
+
+describe('пробы сторожа Р-К-2', () => {
+  const probes = volumeProbes();
+  test('сто детерминированных движений; id совпадают с VOLUME_PROBE_IDS и не пересекают корпус', () => {
+    expect(probes).toHaveLength(VOLUME_PROBE_COUNT);
+    expect(probes.map((p) => p.id)).toEqual([...VOLUME_PROBE_IDS]);
+    const corpus = new Set(buildVolumeWorld().entities.map((e) => e.id as string));
+    expect(VOLUME_PROBE_IDS.some((id) => corpus.has(id))).toBe(false);
+  });
+  test('пробы покрывают обе ветки селектора и все три формы валюты', () => {
+    expect(
+      probes.some((p) => [volumeCategoryId(30), volumeCategoryId(31)].includes(p.categoryRef)),
+    ).toBe(true);
+    expect(probes.some((p) => p.currency === null)).toBe(true);
+    expect(probes.some((p) => p.currency === 'USD')).toBe(true);
+    expect(new Set(probes.map((p) => p.occurredOn.slice(0, 7))).size).toBe(VOLUME_MONTHS);
+  });
+  test('volumeCombination повторяет combinationOf: валюта по умолчанию, шаблон — null', () => {
+    const p = probes.find((x) => x.currency === null) as VolumeProbe;
+    expect(volumeCombination(volumeProbeProps(p), ['orbis/financial'])?.currency).toBe('RUB');
+    expect(
+      volumeCombination({ 'orbis/recurrence': { freq: 'monthly', interval: 1 } }, [
+        'orbis/financial',
+        'orbis/schedule',
+      ]),
+    ).toBeNull();
+    expect(volumeCombination({}, ['orbis/task'])).toBeNull();
   });
 });
