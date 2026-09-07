@@ -141,6 +141,41 @@ export const aspectPropertyRefSchema = z
   .strict();
 export type AspectPropertyRef = z.infer<typeof aspectPropertyRefSchema>;
 
+/**
+ * Привязка аспекта к контракту (§Б2-1) — jsonb-поле строки аспекта, не таблица: привязка
+ * умирает вместе с аспектом (Ч7). Форма дословно повторяет П1 (`p1-schemas.json:92-136`) —
+ * именно её модель заполнила 20/20.
+ *
+ * `value_map` — МАССИВ, а не объект «вариант → класс» (ревизия 3): у аспекта с двумя
+ * select-слотами объект невыразим — ключи вариантов двух слотов слились бы в один словарь.
+ * `variant` — `string | boolean`, а не `unknown` (в П1 стояло `{}`): союз двух типов — это
+ * решение, `unknown` — его отсутствие. Обязательность `value_map` при слоте-статусе (§Б2-2)
+ * схемой невыразима (слоты в другой строке реестра) — это проверка записи, `bindings.ts`.
+ */
+export const aspectImplementsSchema = z
+  .object({
+    contract: z.string().min(1),
+    /** Слот → id свойства аспекта (после `normalize`; до него допустим `key`). */
+    bind: z.record(z.string().regex(SLOT_KEY_RE), z.string().min(1)).default({}),
+    value_map: z
+      .array(
+        z
+          .object({
+            slot: z.string().regex(SLOT_KEY_RE),
+            variant: z.union([z.string(), z.boolean()]),
+            class: z.string().regex(SLOT_KEY_RE),
+          })
+          .strict(),
+      )
+      .default([]),
+    /** Слот с постоянным значением: `direction: expense` хотелки, роль `instance-of`. */
+    fixed: z
+      .record(z.string().regex(SLOT_KEY_RE), z.union([z.string(), z.number(), z.boolean()]))
+      .default({}),
+  })
+  .strict();
+export type AspectImplements = z.infer<typeof aspectImplementsSchema>;
+
 export const aspectDefinitionSchema = z
   .object({
     id: z.string().min(1),
