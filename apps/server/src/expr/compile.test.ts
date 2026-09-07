@@ -100,17 +100,15 @@ const FACTS_EXPR: ExprNode = {
 
 /**
  * Тот же контракт, но с ПРЕДИКАТНЫМ набором: подмена СНИМКОМ — тот же приём, каким
- * `compile-ast.test.ts` подменяет списки служебных аспектов. Каст неизбежен и назван: вторую
- * ветку `contractSetSchema` (E-предикат вместо списка классов) добавляет задача 4, а
- * компилятор её читает уже сейчас — иначе сеять было бы нечем проверенным.
+ * `compile-ast.test.ts` подменяет списки служебных аспектов. Каста здесь БОЛЬШЕ НЕТ: со
+ * второй веткой `contractSetSchema` (задача 4) E-предикат — законное значение набора, и
+ * подмена проходит типом. Своя копия `FACTS_EXPR` рядом остаётся намеренно: тест меряет
+ * компилятор, а не сид, и разойдясь с севом — краснеет.
  */
 function withFactsSet(): Map<string, ContractDefinition> {
   const map = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c] as [string, ContractDefinition]));
   const mm = map.get('orbis/money-movement') as Extract<ContractDefinition, { kind: 'slots' }>;
-  map.set(mm.id, {
-    ...mm,
-    sets: { ...mm.sets, facts: FACTS_EXPR },
-  } as unknown as ContractDefinition);
+  map.set(mm.id, { ...mm, sets: { ...mm.sets, facts: FACTS_EXPR } });
   return map;
 }
 

@@ -10,6 +10,9 @@
  * `SLOT_KEY_RE`.
  */
 import { z } from 'zod';
+// Из `../expr/ast`, а не из барреля `../expr`: баррель тянет `check.ts`, который типы
+// контракта импортирует обратно, и цикл модулей на старте пакета не нужен.
+import { type ExprNode, exprNodeSchema } from '../expr/ast';
 import { NAMESPACED_KEY_RE, SLOT_KEY_RE } from './property-type';
 import { localizedTextSchema, PROPERTY_KINDS } from './types';
 
@@ -44,11 +47,14 @@ export const contractClassSchema = z
   .strict();
 
 /**
- * Набор (§Б1-1): список классов ЛИБО тотальный E-предикат по слотам. Вторую ветку добавляет
- * задача 4 вместе с `exprNodeSchema`: порядок «сид (1) → язык E (3) → узел class (4)» задан
- * рамкой §6, и сид не вправе ждать схемы выражений.
+ * Набор — ЛИБО список классов, ЛИБО E-предикат по слотам контракта (§Б1-1). Списком
+ * выражается «эти классы»; предикатом — то, что классами не выражается вовсе: `facts` у
+ * money-movement отбирает по значениям слотов и по классу ЧУЖОГО контракта.
  */
-export const contractSetSchema = z.array(z.string().regex(SLOT_KEY_RE, 'имя класса')).min(1);
+export const contractSetSchema = z.union([
+  z.array(z.string().regex(SLOT_KEY_RE, 'имя класса')).min(1),
+  exprNodeSchema,
+]);
 
 const HEAD = {
   id: z.string().min(1),
@@ -100,4 +106,15 @@ export function contractSetKind(
   const value = def.sets !== null && Object.hasOwn(def.sets, set) ? def.sets[set] : undefined;
   if (value === undefined) return 'unknown';
   return Array.isArray(value) ? 'list' : 'predicate';
+}
+
+/**
+ * Тот же вердикт по одному ЗНАЧЕНИЮ набора — без пары (определение, имя). Нужен там, где
+ * значение уже на руках: дифф Ш1 помечает предикат-набор отдельной строкой (§Б1-1), а
+ * читатель подписки задачи 9 отличает `plans` от `outflow`, имея `def.sets?.[name]`.
+ * Разбор СТРУКТУРНЫЙ, а не `exprNodeSchema.safeParse`: сузить тип обязан и невалидный
+ * объект — иначе сломанный предикат молча уехал бы в ветку списочных наборов.
+ */
+export function isPredicateSet(v: unknown): v is ExprNode {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
 }

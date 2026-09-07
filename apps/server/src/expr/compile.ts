@@ -468,12 +468,12 @@ function classMembershipAt(
   if (spec === undefined) {
     return fail('UNKNOWN_SET', `у контракта '${contract}' нет набора '${set}'`, { contract, set });
   }
-  // Предикат-набор (задача 4 сеет `money-movement.sets.facts`) — то же выражение по слотам,
-  // но ОБЁРНУТОЕ COALESCE: слот, объявленный контрактом и не связанный в конкретной привязке,
-  // даёт NULL (§Б2-3, `slotSql`), а `NULL = false` — это NULL, а не «не член». Без обёртки
-  // строка молча выпадала бы и из набора, и из `NOT (…)` над ним.
+  // Предикат-набор (`money-movement.sets.facts`) — то же выражение по слотам, но ОБЁРНУТОЕ
+  // COALESCE: слот, объявленный контрактом и не связанный в конкретной привязке, даёт NULL
+  // (§Б2-3, `slotSql`), а `NULL = false` — это NULL, а не «не член». Без обёртки строка
+  // молча выпадала бы и из набора, и из `NOT (…)` над ним.
   if (!Array.isArray(spec)) {
-    return sql`COALESCE((${contractPredicateAt(contract, spec as unknown as ExprNode, cctx, row, depth)}), false)`;
+    return sql`COALESCE((${contractPredicateAt(contract, spec, cctx, row, depth)}), false)`;
   }
   // Списочный набор — перечисление классов контракта: та же ветка, что у `{const:[…]}` в `in`.
   return compileClassListMembership(contract, spec, cctx, row);

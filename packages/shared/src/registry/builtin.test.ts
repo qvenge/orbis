@@ -20,12 +20,13 @@ import {
   RUN_OUTCOMES,
   TASK_STATUSES,
 } from '../contracts/agent-loop';
+import { exprNodeSchema } from '../expr/ast';
 import { checkImplements } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builtin-contracts';
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
-import { contractSetKind } from './contract-type';
+import { contractSetKind, isPredicateSet } from './contract-type';
 
 /** Строка таблицы §А8: [поле аспекта сегодня (null — свойство заведено реформой), id свойства, Req]. */
 type Row = readonly [string | null, string, boolean];
@@ -744,14 +745,44 @@ test('слоты, классы и наборы — дословно §Б1-2', ()
     templates: ['template'],
     instances: ['instance'],
   });
-  expect(cById.get('orbis/money-movement')?.sets).toEqual({
-    outflow: ['outflow'],
-    inflow: ['inflow'],
-  });
-  // Наборы Б-1 — ТОЛЬКО списочные; предикат `money-movement.facts` досевает задача 4.
+  expect(Object.keys(cById.get('orbis/money-movement')?.sets ?? {})).toEqual([
+    'outflow',
+    'inflow',
+    'facts',
+  ]);
+  // Списочные наборы остаются списками: предикат заведён РОВНО один, и «предикатом стало
+  // всё подряд» краснеет здесь, а не на первом запросе владельца.
   for (const def of BUILTIN_CONTRACT_DEFS)
-    for (const set of Object.keys(def.sets ?? {}))
-      expect([def.id, set, contractSetKind(def, set)]).toEqual([def.id, set, 'list']);
+    for (const set of Object.keys(def.sets ?? {})) {
+      const expected = def.id === 'orbis/money-movement' && set === 'facts' ? 'predicate' : 'list';
+      expect([def.id, set, contractSetKind(def, set)]).toEqual([def.id, set, expected]);
+    }
+});
+
+test('money-movement.facts — предикатный набор, а не список классов', () => {
+  const mm = BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/money-movement');
+  if (!mm) throw new Error('нет контракта money-movement');
+  expect(contractSetKind(mm, 'outflow')).toBe('list');
+  expect(contractSetKind(mm, 'facts')).toBe('predicate');
+  // Предикат обязан быть валидным E-деревом — иначе он доедет до сида и упадёт на чтении.
+  expect(exprNodeSchema.safeParse(mm.sets?.facts).success).toBe(true);
+  // Тот же вердикт по одному значению набора — форма, которой пользуются дифф Ш1 и
+  // читатель подписки задачи 9 (`isPredicateSet(mm.sets.plans)`).
+  expect([isPredicateSet(mm.sets?.facts), isPredicateSet(mm.sets?.outflow)]).toEqual([true, false]);
+});
+
+test('facts: «не запланировано» записано как not(planned = true) — движение без слота остаётся тратой', () => {
+  const mm = BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/money-movement');
+  const facts = mm?.sets?.facts as { op: string; args: readonly unknown[] } | undefined;
+  // Пин формы, а не вкуса: `{op:'=', args:[{slot:'planned'},{const:false}]}` по §Б3-4 даёт
+  // false на движении БЕЗ `orbis/planned` (умолчание не материализуется —
+  // `executor.test.ts:1433`), и `spent` разошёлся бы с оракулом
+  // `coalesce(planned,false) = false` (`aggregates.ts:205`), а трата гейта `user/gate-fin`
+  // (слота `planned` у привязки нет) не попала бы в spent ни в одном бэкенде.
+  expect(facts?.args[0]).toEqual({
+    op: 'not',
+    args: [{ op: '=', args: [{ slot: 'planned' }, { const: true }] }],
+  });
 });
 
 test('orbis/sensitivity — форма {kind:"facts"}: пять фактов, ни одного слота', () => {
