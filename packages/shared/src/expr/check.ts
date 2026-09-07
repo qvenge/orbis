@@ -83,6 +83,21 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const BOOL: Typed = { type: { kind: 'boolean' }, optional: false };
 /** Типы с линейным порядком: только у них осмысленны `>`, `<`, `>=`, `<=`. */
 const ORDERED: ReadonlySet<ExprType['kind']> = new Set(['number', 'decimal', 'date', 'timestamp']);
+/**
+ * Типы, у которых равенство ЕСТЬ. Список закрытый и короче, чем «всё, что сошлось по типу»:
+ * у класса контракта равенство подменяло бы членство (`in`), у списка и у `null` его нет вовсе,
+ * а у длительности нет представления в операнде ни одного бэкенда. Без этой строки
+ * `class(a) = class(b)` типизировался бы `boolean` и доезжал до SQL-бэкенда, где отказ приходит
+ * уже НА ЧТЕНИИ подписки — то есть ровно тогда, когда §Б3-4 обещал отказ при СОХРАНЕНИИ.
+ */
+const EQUATABLE: ReadonlySet<ExprType['kind']> = new Set([
+  'boolean',
+  'text',
+  'number',
+  'decimal',
+  'date',
+  'timestamp',
+]);
 const COMPARISONS: ReadonlySet<ExprOp> = new Set(['=', '!=', '>', '<', '>=', '<=']);
 const ARITHMETIC: ReadonlySet<ExprOp> = new Set(['+', '-', '*', '/']);
 /**
@@ -211,6 +226,9 @@ function compare(op: ExprOp, l: Typed, r: Typed, path: readonly string[]): Typed
   const common = unify(l, r);
   if (common === undefined) {
     return bad(EXPR_TYPE, path, 'операнды одного типа', `${label(l.type)} и ${label(r.type)}`);
+  }
+  if (!EQUATABLE.has(common.kind)) {
+    return bad(EXPR_TYPE, path, 'скалярный тип, у которого есть равенство', label(common));
   }
   if (op !== '=' && op !== '!=' && !ORDERED.has(common.kind)) {
     return bad(EXPR_TYPE, path, 'тип с линейным порядком', label(common));

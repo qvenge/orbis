@@ -53,6 +53,14 @@ export interface ExprCompileScope {
   /** Алиас строки `entities`, к которой пишется предикат (`sql.raw('e')`, `'b'`, `'far'`). */
   row: SQL;
   params?: Readonly<Record<string, ExprScalar>>;
+  /**
+   * Уровень вложенности EXISTS'ов `has_relation` — от него зависят алиасы подзапроса
+   * (см. `relationPredicate`). Поле области, а не параметр функций §1.2: сигнатуры
+   * `compileContractPredicate`/`compileClassMembership` — закон реестра, поэтому глубину
+   * протаскивают внутренние `contractPredicateAt`/`classMembershipAt`, а экспортируемые
+   * обёртки начинают с нуля.
+   */
+  relationDepth?: number;
 }
 
 /** Область слотов: контракт и привязка известны оба или ни один. */
@@ -246,7 +254,9 @@ function valueSql(node: ExprNode, scope: ExprCompileScope): SQL {
         form: 'date_add',
       });
     }
-    return sql`(${valueSql(node.date_add[0], scope)}) + ${sql.raw(`interval '${shift.duration}'`)}`;
+    // Литерал в тексте запроса не зависит от схемы (докблок `lit`): regex формы —
+    // защита ВХОДА, а не экранирование вывода.
+    return sql`(${valueSql(node.date_add[0], scope)}) + interval ${lit(shift.duration)}`;
   }
   return unsupported(formOf(node));
 }
@@ -288,22 +298,42 @@ function hasPredicate(name: string, scope: ExprCompileScope): SQL {
 
 /**
  * Входящее ребро роли (Е-1). Якорь тот же, что у Q (`QUERY_REL_ANCHOR.has_relation = 'target'`):
- * сущность стоит ЦЕЛЬЮ ребра, дальний конец `far` — источник. `alive: true` — «дальний конец
- * не архивен», дословно как у оракула агрегатов.
+ * сущность стоит ЦЕЛЬЮ ребра, дальний конец — источник. `alive: true` — «дальний конец не
+ * архивен», дословно как у оракула агрегатов.
+ *
+ * АЛИАСЫ СВОИ НА КАЖДЫЙ УРОВЕНЬ (`r`/`far`, `r2`/`far2`, …), и это не косметика. Предикат
+ * набора сам может быть `has_relation` (набор `blocked` контракта завершаемости), и тогда
+ * внутренний EXISTS встаёт ВНУТРЬ внешнего. С одним именем на оба уровня `far` внутреннего
+ * подзапроса затеняет внешний, условие `<rel>.target_id = far.id` начинает читать СВОЙ же
+ * источник — предикат молча вырождается в «ребро-петлю» и не находит ничего. Отказом такое
+ * не проявляется вовсе: SQL законен, ответ пуст.
+ *
+ * РОЛЬ СВЕРЯЕТСЯ С РЕЕСТРОМ — как `roleOrFail` у компилятора Q: опечатка в имени роли иначе
+ * компилируется в условие, ложное всегда, то есть «не выполнено» вместо «такого имени нет»
+ * (§С8-3). Причина отказа — `EXPR_SHAPE`, а не шестая своя: `EXPR_COMPILE_REASONS` объявлен
+ * реестром §1.2 пятёркой, а `details.role` адресует место не хуже отдельного кода.
  */
 function relationPredicate(
   spec: { role: string; in_set?: { contract: string; set: string }; alive?: boolean },
   scope: ExprCompileScope,
 ): SQL {
-  const far = sql.raw('far');
-  const conds: SQL[] = [sql`r.target_id = ${scope.row}.id`, sql`r.role = ${spec.role}`];
+  if (!scope.cctx.reg.roles.has(spec.role)) {
+    return fail('EXPR_SHAPE', `роли '${spec.role}' нет в реестре владельца`, { role: spec.role });
+  }
+  const depth = scope.relationDepth ?? 0;
+  const suffix = depth === 0 ? '' : String(depth + 1);
+  const rel = sql.raw(`r${suffix}`);
+  const far = sql.raw(`far${suffix}`);
+  const conds: SQL[] = [sql`${rel}.target_id = ${scope.row}.id`, sql`${rel}.role = ${spec.role}`];
   if (spec.alive !== undefined) {
-    conds.push(spec.alive ? sql`NOT far.archived` : sql`far.archived`);
+    conds.push(spec.alive ? sql`NOT ${far}.archived` : sql`${far}.archived`);
   }
   if (spec.in_set !== undefined) {
-    conds.push(compileClassMembership(spec.in_set.contract, spec.in_set.set, scope.cctx, far));
+    conds.push(
+      classMembershipAt(spec.in_set.contract, spec.in_set.set, scope.cctx, far, depth + 1),
+    );
   }
-  return sql`EXISTS (SELECT 1 FROM relations r JOIN entities far ON far.id = r.source_id WHERE ${sql.join(conds, sql.raw(' AND '))})`;
+  return sql`EXISTS (SELECT 1 FROM relations ${rel} JOIN entities ${far} ON ${far}.id = ${rel}.source_id WHERE ${sql.join(conds, sql.raw(' AND '))})`;
 }
 
 function inPredicate(args: readonly ExprNode[], scope: ExprCompileScope): SQL {
@@ -321,7 +351,13 @@ function inPredicate(args: readonly ExprNode[], scope: ExprCompileScope): SQL {
   }
   const value = right.const;
   if (typeof value === 'string') {
-    return compileClassMembership(left.class.contract, value, scope.cctx, scope.row);
+    return classMembershipAt(
+      left.class.contract,
+      value,
+      scope.cctx,
+      scope.row,
+      scope.relationDepth ?? 0,
+    );
   }
   if (Array.isArray(value)) {
     return compileClassListMembership(left.class.contract, value, scope.cctx, scope.row);
@@ -364,6 +400,17 @@ export function compileContractPredicate(
   cctx: CompileCtx,
   row: SQL,
 ): SQL {
+  return contractPredicateAt(contract, expr, cctx, row, 0);
+}
+
+/** То же, но с уровнем вложенности EXISTS'ов: см. `ExprCompileScope.relationDepth`. */
+function contractPredicateAt(
+  contract: string,
+  expr: ExprNode,
+  cctx: CompileCtx,
+  row: SQL,
+  depth: number,
+): SQL {
   if (!cctx.reg.contracts.get(contract)) {
     return fail('UNKNOWN_CONTRACT', `контракта '${contract}' нет в реестре владельца`, {
       contract,
@@ -379,7 +426,13 @@ export function compileContractPredicate(
     const required = binding.requiredSlots.map((s) =>
       presenceSql(s, { cctx, contract, binding, row }),
     );
-    const body = compileExprPredicate(expr, { cctx, contract, binding, row });
+    const body = compileExprPredicate(expr, {
+      cctx,
+      contract,
+      binding,
+      row,
+      relationDepth: depth,
+    });
     return sql`(${sql.join([aspect, ...required, body], sql.raw(' AND '))})`;
   });
   return parts.length === 1 ? (parts[0] as SQL) : sql`(${sql.join(parts, sql.raw(' OR '))})`;
@@ -390,6 +443,17 @@ export function compileClassMembership(
   set: string,
   cctx: CompileCtx,
   row: SQL,
+): SQL {
+  return classMembershipAt(contract, set, cctx, row, 0);
+}
+
+/** То же, но с уровнем вложенности EXISTS'ов: см. `ExprCompileScope.relationDepth`. */
+function classMembershipAt(
+  contract: string,
+  set: string,
+  cctx: CompileCtx,
+  row: SQL,
+  depth: number,
 ): SQL {
   const def = cctx.reg.contracts.get(contract);
   if (!def) {
@@ -409,7 +473,7 @@ export function compileClassMembership(
   // даёт NULL (§Б2-3, `slotSql`), а `NULL = false` — это NULL, а не «не член». Без обёртки
   // строка молча выпадала бы и из набора, и из `NOT (…)` над ним.
   if (!Array.isArray(spec)) {
-    return sql`COALESCE((${compileContractPredicate(contract, spec as unknown as ExprNode, cctx, row)}), false)`;
+    return sql`COALESCE((${contractPredicateAt(contract, spec as unknown as ExprNode, cctx, row, depth)}), false)`;
   }
   // Списочный набор — перечисление классов контракта: та же ветка, что у `{const:[…]}` в `in`.
   return compileClassListMembership(contract, spec, cctx, row);

@@ -228,6 +228,35 @@ export const EXPR_FIXTURES: readonly ExprFixture[] = [
     scope: {},
     verdict: no(EXPR_TYPE),
   },
+  {
+    // Правило сравнения — часть корпуса, а не только теста: `unify` правят и задача 8
+    // (паритет с `evalExpr`), и Б-2 (расширение чекера), а разнотипное равенство доезжает
+    // до SQL целиком — `e.title = 1` роняет Postgres на КАЖДОМ чтении подписки.
+    name: 'op: сравнение текста с числом',
+    expr: { op: '=', args: [{ prop: 'orbis/title' }, { const: 1 }] },
+    scope: {},
+    verdict: no(EXPR_TYPE),
+  },
+  {
+    // Спека-именованная фикстура §С8-28: сложение денег с текстом.
+    name: 'op: amount + "text"',
+    expr: { op: '+', args: [{ slot: 'amount' }, { const: 'text' }] },
+    scope: MONEY,
+    verdict: no(EXPR_TYPE),
+  },
+  {
+    // Равенство классов подменяло бы членство (`in`): у `class<C>` равенства нет.
+    name: 'op: равенство классов вместо членства',
+    expr: {
+      op: '=',
+      args: [
+        { class: { contract: 'orbis/completable' } },
+        { class: { contract: 'orbis/completable' } },
+      ],
+    },
+    scope: {},
+    verdict: no(EXPR_TYPE),
+  },
   // has
   {
     name: 'has: наличие значения у необязательного слота',

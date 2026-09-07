@@ -15,6 +15,8 @@ import {
   type ContractDefinition,
   type PropertyDefinition,
   propertyDefinitionSchema,
+  ROLE_DEPENDENCY,
+  ROLE_SUBITEM,
 } from '@orbis/shared';
 import type { ExprNode } from '@orbis/shared/expr';
 import { type SQL, sql } from 'drizzle-orm';
@@ -166,6 +168,21 @@ function gateRegistry(): Pick<RegistrySnapshot, 'properties' | 'aspects'> {
   return { properties, aspects };
 }
 
+/**
+ * Контракт завершаемости с ПРЕДИКАТНЫМ набором «заблокировано»: сам предикат — `has_relation`.
+ * Ради него и заведён: набор, вызванный ИЗ `has_relation`, ставит второй EXISTS внутрь первого,
+ * и это единственная форма, на которой видно затенение алиасов.
+ */
+function withBlockedSet(): Map<string, ContractDefinition> {
+  const map = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c] as [string, ContractDefinition]));
+  const done = map.get('orbis/completable') as Extract<ContractDefinition, { kind: 'slots' }>;
+  map.set(done.id, {
+    ...done,
+    sets: { ...done.sets, blocked: { has_relation: { role: ROLE_DEPENDENCY, alive: true } } },
+  } as unknown as ContractDefinition);
+  return map;
+}
+
 const GATE = gateRegistry();
 
 describe('SQL-бэкенд E: предикат по слотам — OR по привязкам', () => {
@@ -280,5 +297,46 @@ describe('SQL-бэкенд E: членство в наборе', () => {
       refusal(() => compileExprPredicate({ agg: 'spent' } as never, { cctx: CTX, row: ROW }))
         .reason,
     ).toBe('EXPR_BACKEND_UNSUPPORTED');
+  });
+
+  test('вложенный has_relation: у каждого уровня СВОИ алиасы, внутренний читает внешний far', () => {
+    const ctx = ctxOf({ reg: snapshot({ contracts: withBlockedSet() }) });
+    const s = sqlOf(
+      compileExprPredicate(
+        {
+          has_relation: {
+            role: ROLE_SUBITEM,
+            in_set: { contract: 'orbis/completable', set: 'blocked' },
+          },
+        } as never,
+        { cctx: ctx, row: ROW },
+      ),
+    );
+    expect(s).toContain('FROM relations r JOIN entities far ON far.id = r.source_id');
+    expect(s).toContain('FROM relations r2 JOIN entities far2 ON far2.id = r2.source_id');
+    // Внутренний EXISTS спрашивает про ВНЕШНИЙ дальний конец. С одним именем на два уровня
+    // здесь стояло бы `r2.target_id = far2.id` — законный SQL, всегда пустой ответ.
+    expect(s).toContain('r2.target_id = far.id');
+    expect(s).not.toContain('r2.target_id = far2.id');
+  });
+
+  test('роль сверяется с реестром: опечатка — отказ, а не «не выполнено» (§С8-3)', () => {
+    expect(
+      refusal(() =>
+        compileExprPredicate({ has_relation: { role: 'нет-роли' } } as never, {
+          cctx: CTX,
+          row: ROW,
+        }),
+      ).reason,
+    ).toBe('EXPR_SHAPE');
+    // Контроль: роль реестра компилируется молча и даёт входящее ребро.
+    expect(
+      sqlOf(
+        compileExprPredicate({ has_relation: { role: ROLE_SUBITEM } } as never, {
+          cctx: CTX,
+          row: ROW,
+        }),
+      ),
+    ).toContain('r.target_id = e.id');
   });
 });
