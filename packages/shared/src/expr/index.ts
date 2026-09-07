@@ -12,5 +12,6 @@
  * читает их не только тест пакета, но и валидатор подписок сервера (§С8-28).
  */
 export * from './ast';
+export * from './check';
 export * from './codes';
 export * from './json-schema';
