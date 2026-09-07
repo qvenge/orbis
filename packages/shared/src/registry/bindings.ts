@@ -68,6 +68,7 @@ export function checkImplements(
 ): ImplementsIssue[] {
   const issues: ImplementsIssue[] = [];
   const carried = new Set(aspect.properties.map((p) => p.propertyId));
+  const seen = new Set<string>();
   for (const binding of aspect.implements) {
     const contract = reg.contracts.get(binding.contract);
     if (contract === undefined || contract.kind === 'facts') {
@@ -84,6 +85,23 @@ export function checkImplements(
       });
       continue;
     }
+    if (seen.has(contract.id)) {
+      // ДВЕ привязки одного аспекта к одному контракту — противоречие, а не сложение: индекс
+      // отвечает на них по-разному (`slotOf` берёт последнюю пару, `byContract` — обе), и
+      // потребитель, спросивший «какое свойство стоит в слоте», получил бы два ответа.
+      // Форма выразима и схемой строки (`superRefine` на `implements`), но дом проверки —
+      // ЗДЕСЬ, на записи: `aspectDefinitionSchema` разбирается ещё и на ЧТЕНИИ снимка
+      // (`load.ts`, fail-closed), и одна такая строка, попавшая в базу дельтой задачи 13,
+      // заперла бы владельца снаружи собственного реестра целиком (Р-И-7) — вместо того чтобы
+      // отказать в одной записи. Кода седьмого не заводим (Р-К-34): тот же `UNKNOWN_CONTRACT`
+      // с различающим `reason`, что у снятого контракта и у формы фактов.
+      issues.push({
+        code: 'UNKNOWN_CONTRACT',
+        details: { aspect: aspect.id, contract: contract.id, reason: 'duplicate' },
+      });
+      continue;
+    }
+    seen.add(contract.id);
     const base = { aspect: aspect.id, contract: contract.id };
     const slots = new Map(contract.slots.map((s) => [s.name, s]));
     for (const [slot, where] of namedSlots(binding)) {
@@ -175,8 +193,24 @@ function checkVariants(
   const out: ImplementsIssue[] = [];
   const classKeys = new Set(contract.classes.map((c) => c.key));
   const mapped = new Map<string, Map<string, string>>();
+  const notStatus = new Set<string>();
   for (const vm of binding.value_map) {
-    if (!slots.has(vm.slot)) continue; // уже названо UNKNOWN_SLOT
+    const decl = slots.get(vm.slot);
+    if (decl === undefined) continue; // уже названо UNKNOWN_SLOT
+    if (!decl.status) {
+      // Классы контракта считаются ПО СЛОТУ-СТАТУСУ (§Б2-2). Карта на прочем слоте не просто
+      // бесполезна: она уезжает в `variantsOfClass`, и компилятор набора (задача 4) сложил бы
+      // из неё предикат по сумме или дате. Замечание — одно на слот, как у `UNKNOWN_SLOT`:
+      // виноват слот, а не каждая строка карты.
+      if (!notStatus.has(vm.slot)) {
+        notStatus.add(vm.slot);
+        out.push({
+          code: 'VARIANT_UNMAPPED',
+          details: { ...base, slot: vm.slot, reason: 'not_status' },
+        });
+      }
+      continue;
+    }
     if (!classKeys.has(vm.class)) {
       out.push({
         code: 'VARIANT_UNMAPPED',
@@ -196,6 +230,26 @@ function checkVariants(
     // Ключ карты — ТЕКСТ варианта: из props значение читается строкой (`props->>`) и у boolean
     // тоже, и второй карты для этого заводить нельзя.
     const perSlot = mapped.get(vm.slot) ?? new Map<string, string>();
+    const already = perSlot.get(String(vm.variant));
+    if (already !== undefined) {
+      // Один вариант в двух классах — противоречие, которое индекс молча разрешает по-разному:
+      // `classOfVariant` оставит последний класс, а `variantsOfClass` положит вариант в ОБА, и
+      // сущность окажется членом двух взаимоисключающих наборов сразу. Повтор ОДНОГО И ТОГО ЖЕ
+      // отнесения карту не меняет и замечанием не считается.
+      if (already !== vm.class) {
+        out.push({
+          code: 'VARIANT_UNMAPPED',
+          details: {
+            ...base,
+            slot: vm.slot,
+            variant: vm.variant,
+            class: vm.class,
+            reason: 'duplicate',
+          },
+        });
+      }
+      continue;
+    }
     perSlot.set(String(vm.variant), vm.class);
     mapped.set(vm.slot, perSlot);
   }
@@ -205,11 +259,23 @@ function checkVariants(
     const propertyId = binding.bind[decl.name];
     if (propertyId === undefined) {
       const fixed = binding.fixed[decl.name];
-      if (fixed !== undefined && !known.has(String(fixed))) {
-        out.push({
-          code: 'VARIANT_UNMAPPED',
-          details: { ...base, slot: decl.name, variant: fixed, reason: 'unmapped' },
-        });
+      if (fixed !== undefined) {
+        if (!known.has(String(fixed))) {
+          out.push({
+            code: 'VARIANT_UNMAPPED',
+            details: { ...base, slot: decl.name, variant: fixed, reason: 'unmapped' },
+          });
+        }
+        // У постоянного значения вариант РОВНО один: всё прочее в карте в данных не встретится
+        // никогда, а класс из-за такой строки выглядел бы достижимым.
+        for (const variant of known.keys()) {
+          if (variant !== String(fixed)) {
+            out.push({
+              code: 'VARIANT_UNMAPPED',
+              details: { ...base, slot: decl.name, variant, reason: 'fixed_slot' },
+            });
+          }
+        }
       }
       continue;
     }
@@ -284,8 +350,13 @@ function resolveBinding(
     else list.push(vm.variant);
     variantsOfClass.set(vm.slot, perClass);
   }
+  // Обязательные слоты, значение которых берётся У СУЩНОСТИ (§Б2-3): из списка выпадает только
+  // слот, закрытый КОНСТАНТОЙ (проверять на сущности нечего). Несвязанный обязательный слот —
+  // случай пересева, добавившего контракту слот поверх старой привязки, — обязан остаться в
+  // списке: иначе ветка потребителя «слот без привязки → не член» недостижима, и сущность
+  // считалась бы членом контракта с NULL в обязательном слоте.
   const requiredSlots = contract.slots
-    .filter((s) => s.required && binding.bind[s.name] !== undefined)
+    .filter((s) => s.required && binding.fixed[s.name] === undefined)
     .map((s) => s.name);
   return {
     aspectId,
@@ -304,9 +375,10 @@ function resolveBinding(
  * «первая» обязана быть одной и той же в каждом процессе — потому порядок задаётся здесь, а не
  * полагается на порядок словаря.
  *
- * Битая привязка (контракт снят, форма фактов) в индекс НЕ идёт молча: её ловит гейт записи
- * `checkImplements`, а движок обязан работать на том, что понимает, — иначе один
- * несогласованный пересев уронил бы Agenda и Budget целиком.
+ * Битую привязку (контракт снят, форма фактов) индекс ПРОПУСКАЕТ — и это не умолчание, а
+ * разделение постов: называет её гейт записи `checkImplements`, а движок обязан работать на
+ * том, что понимает, иначе один несогласованный пересев уронил бы Agenda и Budget целиком.
+ * Следа в индексе такая привязка не оставляет намеренно: потребителю нечего с ней делать.
  */
 export function bindingIndexOf(reg: {
   aspects: ReadonlyMap<string, AspectDefinition>;

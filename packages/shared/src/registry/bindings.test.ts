@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { bindingIndexOf, checkImplements } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from './index';
-import { aspectImplementsSchema } from './property-type';
+import { aspectDefinitionSchema, aspectImplementsSchema } from './property-type';
 
 test('форма привязки §Б2-1: полный разбор, умолчания трёх полей, .strict()', () => {
   const full = aspectImplementsSchema.parse({
@@ -345,4 +345,196 @@ test('bindingIndexOf: карта классов в обе стороны и об
     'date',
   ]);
   expect(rec?.requiredSlots).toEqual([]);
+});
+
+/** Аспект-проба целиком (для индекса нужен `rank`): та же проба, но разобранная схемой строки. */
+function probeAspect(props: readonly string[], impl: readonly unknown[]) {
+  const p = probe(props, impl);
+  return aspectDefinitionSchema.parse({
+    ...p,
+    ownerId: null,
+    key: p.id,
+    label: { ru: 'Проба', en: 'Probe' },
+    description: { ru: 'Проба', en: 'Probe' },
+    aiInstructions: null,
+    tagMappings: [],
+    viewConfig: { keyFields: [] },
+    module: null,
+    service: false,
+    rank: 1,
+  });
+}
+const probeIndex = (props: readonly string[], impl: readonly unknown[]) => {
+  const aspect = probeAspect(props, impl);
+  return bindingIndexOf({ aspects: new Map([[aspect.id, aspect]]), contracts: reg.contracts });
+};
+
+test('гейт ловит противоречивую карту: один вариант в двух классах (reason duplicate)', () => {
+  // Без этого замечания индекс отвечает двумя разными правдами на один вопрос: `classOfVariant`
+  // берёт ПОСЛЕДНЕЕ отнесение, а `variantsOfClass` кладёт вариант в ОБА класса — сущность
+  // оказалась бы членом и `closed`, и `open` сразу.
+  const two = [...TASK_MAP, { slot: 'status', variant: 'done', class: 'active' }];
+  const bound = probe(
+    ['orbis/task_status'],
+    [{ contract: 'orbis/completable', bind: { status: 'orbis/task_status' }, value_map: two }],
+  );
+  expect(checkImplements(bound, reg)).toEqual([
+    {
+      code: 'VARIANT_UNMAPPED',
+      details: {
+        aspect: 'user/probe',
+        contract: 'orbis/completable',
+        slot: 'status',
+        variant: 'done',
+        class: 'active',
+        reason: 'duplicate',
+      },
+    },
+  ]);
+  // Повтор ОДНОГО И ТОГО ЖЕ отнесения противоречием не является: карта от него не меняется.
+  expect(
+    checkImplements(
+      probe(
+        ['orbis/task_status'],
+        [
+          {
+            contract: 'orbis/completable',
+            bind: { status: 'orbis/task_status' },
+            value_map: [...TASK_MAP, { slot: 'status', variant: 'done', class: 'done' }],
+          },
+        ],
+      ),
+      reg,
+    ),
+  ).toEqual([]);
+});
+
+test('гейт ловит карту на слоте БЕЗ статуса (reason not_status) — одно замечание на слот', () => {
+  // Классы контракта считаются по слоту-статусу (§Б2-2); карта на `amount` попала бы в
+  // `variantsOfClass`, и компилятор набора (задача 4) сгенерировал бы `amount IN ('100')`.
+  const wish = (value_map: unknown[]) =>
+    probe(
+      ['orbis/amount', 'orbis/finance_category', 'orbis/occurred_on'],
+      [
+        {
+          contract: 'orbis/money-movement',
+          fixed: { direction: 'expense' },
+          value_map: [{ slot: 'direction', variant: 'expense', class: 'outflow' }, ...value_map],
+          bind: {
+            amount: 'orbis/amount',
+            category: 'orbis/finance_category',
+            date: 'orbis/occurred_on',
+          },
+        },
+      ],
+    );
+  expect(
+    checkImplements(wish([{ slot: 'amount', variant: '100', class: 'outflow' }]), reg),
+  ).toEqual([
+    {
+      code: 'VARIANT_UNMAPPED',
+      details: {
+        aspect: 'user/probe',
+        contract: 'orbis/money-movement',
+        slot: 'amount',
+        reason: 'not_status',
+      },
+    },
+  ]);
+  // Два отнесения на один и тот же не-статус дают ОДНО замечание: виноват слот, а не строка.
+  expect(
+    codes(
+      wish([
+        { slot: 'amount', variant: '100', class: 'outflow' },
+        { slot: 'amount', variant: '200', class: 'inflow' },
+      ]),
+    ),
+  ).toEqual(['VARIANT_UNMAPPED']);
+});
+
+test('гейт ловит ДВЕ привязки одного контракта у одного аспекта (reason duplicate)', () => {
+  // Индекс на такой паре отвечает противоречиво: `slotOf` берёт последнюю привязку (у неё
+  // `deadline` не связан), а `byContract[0]` — первую.
+  const twice = probe(
+    ['orbis/due_date', 'orbis/start_at'],
+    [
+      { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' } },
+      { contract: 'orbis/when', bind: { moment: 'orbis/start_at' } },
+    ],
+  );
+  expect(checkImplements(twice, reg)).toEqual([
+    {
+      code: 'UNKNOWN_CONTRACT',
+      details: { aspect: 'user/probe', contract: 'orbis/when', reason: 'duplicate' },
+    },
+  ]);
+  // Наблюдаемое последствие, ради которого замечание и заведено.
+  expect(
+    probeIndex(['orbis/due_date', 'orbis/start_at'], twice.implements).slotOf(
+      'user/probe',
+      'orbis/when',
+      'deadline',
+    ),
+  ).toBeUndefined();
+});
+
+test('requiredSlots: обязательный слот без bind и без fixed остаётся в списке (§Б2-3)', () => {
+  // Пересев добавил контракту обязательный слот — старая привязка владельца проходит индекс.
+  // Проверять на сущности нечего только у слота, закрытого КОНСТАНТОЙ; несвязанный слот обязан
+  // остаться в списке, иначе ветка «слот без привязки → false» недостижима.
+  const envelope = probeIndex(
+    ['orbis/limit'],
+    [{ contract: 'orbis/envelope', bind: { limit: 'orbis/limit' } }],
+  ).byAspect('user/probe')[0];
+  expect(envelope?.requiredSlots).toEqual(['category', 'limit', 'period_start', 'period_end']);
+  const money = probeIndex(
+    ['orbis/amount'],
+    [
+      {
+        contract: 'orbis/money-movement',
+        bind: { amount: 'orbis/amount' },
+        fixed: { direction: 'expense' },
+      },
+    ],
+  ).byAspect('user/probe')[0];
+  expect(money?.requiredSlots).toEqual(['amount', 'category', 'date']);
+});
+
+test('слот-статус, закрытый константой: лишний вариант в карте — reason fixed_slot', () => {
+  // У постоянного значения вариант ровно один. Отнесение `income` при `fixed: expense` в данных
+  // не встретится никогда, а класс `inflow` из-за него выглядел бы достижимым.
+  expect(
+    checkImplements(
+      probe(
+        ['orbis/amount', 'orbis/finance_category', 'orbis/occurred_on'],
+        [
+          {
+            contract: 'orbis/money-movement',
+            fixed: { direction: 'expense' },
+            value_map: [
+              { slot: 'direction', variant: 'expense', class: 'outflow' },
+              { slot: 'direction', variant: 'income', class: 'inflow' },
+            ],
+            bind: {
+              amount: 'orbis/amount',
+              category: 'orbis/finance_category',
+              date: 'orbis/occurred_on',
+            },
+          },
+        ],
+      ),
+      reg,
+    ),
+  ).toEqual([
+    {
+      code: 'VARIANT_UNMAPPED',
+      details: {
+        aspect: 'user/probe',
+        contract: 'orbis/money-movement',
+        slot: 'direction',
+        variant: 'income',
+        reason: 'fixed_slot',
+      },
+    },
+  ]);
 });
