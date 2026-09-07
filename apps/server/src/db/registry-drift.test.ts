@@ -18,6 +18,7 @@ import {
   REGISTRY_DELTAS_QUERY,
   reportRegistryDriftOnStartup,
 } from './registry-drift';
+import { DEFINITION_TABLES } from './reset-world';
 import { codeSystemDefinitions } from './seed-registries';
 
 requireEnv();
@@ -35,19 +36,10 @@ const admin = adminDb();
  * сидера: список колонок не дублируется, и следующая миграция реестров не забудет про этот
  * файл.
  */
-const SNAPSHOT_TABLES = [
-  'property_definitions',
-  'aspect_definitions',
-  'relation_role_definitions',
-  'contract_definitions',
-  'subscription_definitions',
-  'action_definitions',
-] as const;
-
 const snapshots = new Map<string, string>();
 
 async function saveRegistries(): Promise<void> {
-  for (const table of SNAPSHOT_TABLES) {
+  for (const table of DEFINITION_TABLES) {
     const rows = (await admin.db.execute(
       sql`SELECT coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) AS rows
           FROM ${sql.raw(table)} t WHERE owner_id IS NULL`,
@@ -57,7 +49,7 @@ async function saveRegistries(): Promise<void> {
 }
 
 async function restoreRegistries(): Promise<void> {
-  for (const table of SNAPSHOT_TABLES) {
+  for (const table of DEFINITION_TABLES) {
     await admin.db.execute(sql`DELETE FROM ${sql.raw(table)} WHERE owner_id IS NULL`);
     await admin.db.execute(
       sql`INSERT INTO ${sql.raw(table)}
@@ -185,21 +177,23 @@ test('лишняя system-строка свойства — extra, а не ти�
   }
 });
 
-// §А12-1: контракты, подписки и действия срез А создаёт ПУСТЫМИ; их сиды — первый акт
-// среза Б-1 после гейта П5. Строка, положенная раньше, обязана быть видна.
-test('system-строка в contract_definitions и action_definitions — extra (в срезе А они пусты)', async () => {
+// §Б1-1: контракты сеются с Б-1 и сверяются по колонкам; подписки и действия ещё пусты.
+test('контракты: незнакомая system-строка — extra, испорченная — drifted; действия пусты', async () => {
   try {
     await admin.db.execute(
       sql`INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
-          VALUES ('orbis/completable', NULL, 'orbis/completable', '{"ru":"З"}'::jsonb,
-                  '{"ru":"З"}'::jsonb, 'slots', 1)`,
+          VALUES ('orbis/zzz', NULL, 'orbis/zzz', '{"ru":"З"}'::jsonb, '{"ru":"З"}'::jsonb, 'slots', 900)`,
+    );
+    await admin.db.execute(
+      sql`UPDATE contract_definitions SET module = 'взлом' WHERE id = 'orbis/when'`,
     );
     await admin.db.execute(
       sql`INSERT INTO action_definitions (id, owner_id, key, label, description)
           VALUES ('orbis/close', NULL, 'orbis/close', '{"ru":"З"}'::jsonb, '{"ru":"З"}'::jsonb)`,
     );
     const drift = await checkRegistryDrift(db);
-    expect(drift.contracts.extra).toEqual(['orbis/completable']);
+    expect(drift.contracts.extra).toEqual(['orbis/zzz']);
+    expect(drift.contracts.drifted).toEqual([{ id: 'orbis/when', what: ['module'] }]);
     expect(drift.actions.extra).toEqual(['orbis/close']);
   } finally {
     await restoreRegistries();

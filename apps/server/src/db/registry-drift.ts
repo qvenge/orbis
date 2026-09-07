@@ -56,8 +56,10 @@ import type { Db } from './client';
  *
  * `"symmetric"` в кавычках: SYMMETRIC — зарезервированное слово SQL.
  *
- * У контрактов, подписок и действий выбирается ТОЛЬКО id: в срезе А ожидание для них —
- * пусто (§А12-1), сравнивать не с чем, и любая system-строка попадёт в `extra`.
+ * У КОНТРАКТОВ столбцы перечислены поимённо, как у трёх реестров среза А: с Б-1 они сеются, и «строка
+ * есть» перестало быть достаточным ответом — испорченный набор классов валидировал бы данные молча.
+ * У ПОДПИСОК столбцы названы заранее: их первый сид кладут задачи 6 и 9, ожидание до тех пор пусто, и
+ * любая system-строка попадает в `extra`. У ДЕЙСТВИЙ (§Б6, не в Б-1) по-прежнему только id.
  */
 export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
   properties: `SELECT id, key, label, description, type, status, storage, scope,
@@ -69,8 +71,10 @@ export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
   roles: `SELECT id, key, label, description, source_label, target_label, hierarchical,
                  constraints, "symmetric", module, rank
           FROM relation_role_definitions WHERE owner_id IS NULL`,
-  contracts: `SELECT id FROM contract_definitions WHERE owner_id IS NULL`,
-  subscriptions: `SELECT id FROM subscription_definitions WHERE owner_id IS NULL`,
+  contracts: `SELECT id, key, label, description, kind, slots, classes, sets, facts, module, rank
+              FROM contract_definitions WHERE owner_id IS NULL`,
+  subscriptions: `SELECT id, surface, definition, module, rank
+                  FROM subscription_definitions WHERE owner_id IS NULL`,
   actions: `SELECT id FROM action_definitions WHERE owner_id IS NULL`,
 };
 
