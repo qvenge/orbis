@@ -21,6 +21,9 @@ export {
   type Weekday,
   weekdayOfDate,
 } from './date';
+// Коды отказов чекера языка E (§Б3): корню нужны только они — сабпат `@orbis/shared/expr`
+// с остальным `expr/` заводит задача 3.
+export * from './expr/codes';
 export * from './fast-path';
 export * from './ids';
 export * from './import/normalize';

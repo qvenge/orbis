@@ -17,11 +17,20 @@
 // а код, добавленный вместе со строкой, но позже, — это ещё одна правка двух файлов в
 // каждой из десяти задач среза. Таблица кодов реформы ОДНА, и она здесь.
 //
-// Два кода приходят из `@orbis/shared`, а не объявляются здесь литералом: их бросает код,
-// который живёт в shared и про сервер не знает (`assertPatternRegular` — §А2-2), а имя кода
-// обязано быть одно на оба пакета. Импортируется КОНСТАНТА, `typeof` которой и есть
-// строковый литеральный тип, — так исчерпывающая проверка `Record` продолжает работать.
-import { PATTERN_NOT_REGULAR } from '@orbis/shared';
+// Тем же правилом срез Б-1 заводит свои десять одним коммитом (Р-И-1, задача 1): бросающие
+// места приезжают задачами 2–18, а таблица кодов остаётся одна.
+//
+// Часть кодов приходит из `@orbis/shared`, а не объявляется здесь литералом: их бросает код,
+// который живёт в shared и про сервер не знает (`assertPatternRegular` — §А2-2, `ExprCheckError`
+// — §Б3), а имя кода обязано быть одно на оба пакета. Импортируется КОНСТАНТА, `typeof` которой
+// и есть строковый литеральный тип, — так исчерпывающая проверка `Record` продолжает работать.
+import {
+  EXPR_NOT_TOTAL,
+  EXPR_RECURSION,
+  EXPR_TYPE,
+  PATTERN_NOT_REGULAR,
+  SECOND_LANGUAGE,
+} from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 
 export type ExecErrorCode =
@@ -57,7 +66,25 @@ export type ExecErrorCode =
   | 'REGISTRY_CYCLE'
   /** §А2-2: паттерн текстового свойства вне класса RE2 (lookahead, обратная ссылка) —
    *  такую схему не скомпилирует не-ECMA потребитель, и это причина `strict:false` D29. */
-  | typeof PATTERN_NOT_REGULAR;
+  | typeof PATTERN_NOT_REGULAR
+  // --- Срез Б-1: контракты, привязки, подписки, язык E, модули ---
+  /** §Б2-1: kind свойства не подходит типу слота контракта. Проверка на ЗАПИСИ привязки. */
+  | 'BIND_TYPE'
+  /** §Б2-2: вариант select/boolean-свойства не отнесён к классу контракта. */
+  | 'VARIANT_UNMAPPED'
+  /** §Б1-2/№16: слот у сущности реализуют две привязки, а `prefer` подписки молчит. */
+  | 'SLOT_AMBIGUOUS'
+  /** §Б5-1: подписка объявлена на поверхность вне словаря. */
+  | 'SURFACE_UNKNOWN'
+  /** §Б5-2: системная подписка адресует свойство напрямую, минуя слоты контракта. */
+  | 'SUBSCRIPTION_RAW_REF'
+  /** §Б8-3: тул, аспект или поверхность выключенного модуля. */
+  | 'MODULE_DISABLED'
+  /** §Б3: отказы тайп-чекера E — имена приходят из shared (см. докблок выше). */
+  | typeof EXPR_TYPE
+  | typeof EXPR_NOT_TOTAL
+  | typeof EXPR_RECURSION
+  | typeof SECOND_LANGUAGE;
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -112,6 +139,21 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   // опиралась операция, и разрешает это человек.
   REGISTRY_CONFLICT: 'CONFLICT',
   REGISTRY_CYCLE: 'CONFLICT',
+  // --- Срез Б-1 ---
+  // 400: декларация написана так, что система её не принимает, — привязку, подписку или
+  // выражение придётся переписать, другими данными отказ не снимается.
+  BIND_TYPE: 'BAD_REQUEST',
+  VARIANT_UNMAPPED: 'BAD_REQUEST',
+  SLOT_AMBIGUOUS: 'BAD_REQUEST',
+  SURFACE_UNKNOWN: 'BAD_REQUEST',
+  SUBSCRIPTION_RAW_REF: 'BAD_REQUEST',
+  [EXPR_TYPE]: 'BAD_REQUEST',
+  [EXPR_NOT_TOTAL]: 'BAD_REQUEST',
+  [EXPR_RECURSION]: 'BAD_REQUEST',
+  [SECOND_LANGUAGE]: 'BAD_REQUEST',
+  // 403 — запрет по ОБЪЕКТУ, а не по форме запроса: модуль выключен, и повторять вызов с
+  // другим текстом бессмысленно (§Б8-3; тот же довод, что у COMPUTED_WRITE).
+  MODULE_DISABLED: 'FORBIDDEN',
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {

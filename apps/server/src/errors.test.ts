@@ -5,7 +5,13 @@
 // не «работает», а переводит В ТО ЖЕ, что обещано спекой: молча заменённый 409 на 400
 // typecheck прошёл бы.
 import { expect, test } from 'bun:test';
-import { PATTERN_NOT_REGULAR } from '@orbis/shared';
+import {
+  EXPR_NOT_TOTAL,
+  EXPR_RECURSION,
+  EXPR_TYPE,
+  PATTERN_NOT_REGULAR,
+  SECOND_LANGUAGE,
+} from '@orbis/shared';
 import type { TRPCError } from '@trpc/server';
 import { ExecError, type ExecErrorCode, execErrorToTRPC } from './errors';
 
@@ -28,6 +34,17 @@ const EXPECTED: Record<ExecErrorCode, TRPCError['code']> = {
   REGISTRY_CONFLICT: 'CONFLICT',
   REGISTRY_CYCLE: 'CONFLICT',
   PATTERN_NOT_REGULAR: 'BAD_REQUEST',
+  // --- Б-1: контракты, привязки, подписки, язык E, модули ---
+  BIND_TYPE: 'BAD_REQUEST',
+  VARIANT_UNMAPPED: 'BAD_REQUEST',
+  SLOT_AMBIGUOUS: 'BAD_REQUEST',
+  SURFACE_UNKNOWN: 'BAD_REQUEST',
+  SUBSCRIPTION_RAW_REF: 'BAD_REQUEST',
+  MODULE_DISABLED: 'FORBIDDEN',
+  [EXPR_TYPE]: 'BAD_REQUEST',
+  [EXPR_NOT_TOTAL]: 'BAD_REQUEST',
+  [EXPR_RECURSION]: 'BAD_REQUEST',
+  [SECOND_LANGUAGE]: 'BAD_REQUEST',
 };
 
 test('каждый код ExecError переводится в обещанный код tRPC', () => {
@@ -37,10 +54,10 @@ test('каждый код ExecError переводится в обещанный
   }
 });
 
-// Девять кодов реформы (§С8, рулинг Р-П-6). Перечислены здесь ЯВНО, а не выведены из
-// EXPECTED: без явного списка забытый в union'е код так же молча отсутствовал бы и в
-// ожидании — тест проверял бы сам себя.
-test('коды реформы свойств заведены все девять', () => {
+// Девятнадцать кодов реформы (§С8, рулинг Р-П-6; десять из них — срез Б-1). Перечислены
+// здесь ЯВНО, а не выведены из EXPECTED: без явного списка забытый в union'е код так же
+// молча отсутствовал бы и в ожидании — тест проверял бы сам себя.
+test('коды реформы свойств заведены все девятнадцать', () => {
   const reform = [
     'COMPUTED_WRITE',
     'ROLE_SYSTEM_ONLY',
@@ -51,8 +68,38 @@ test('коды реформы свойств заведены все девят�
     'REGISTRY_CONFLICT',
     'REGISTRY_CYCLE',
     PATTERN_NOT_REGULAR,
+    'BIND_TYPE',
+    'VARIANT_UNMAPPED',
+    'SLOT_AMBIGUOUS',
+    'SURFACE_UNKNOWN',
+    'SUBSCRIPTION_RAW_REF',
+    'MODULE_DISABLED',
+    EXPR_TYPE,
+    EXPR_NOT_TOTAL,
+    EXPR_RECURSION,
+    SECOND_LANGUAGE,
   ];
+  expect(reform.length).toBe(19);
   for (const code of reform) expect(Object.keys(EXPECTED)).toContain(code);
+  expect(Object.keys(EXPECTED).length).toBe(27);
+});
+
+// Р-И-1: имена кодов чекера E живут в shared константами (их бросает `ExprCheckError`, до
+// сервера не знающий) — как `PATTERN_NOT_REGULAR`. Второго определения быть не должно.
+test('коды E берутся из shared и переводятся в 400', () => {
+  expect([EXPR_TYPE, EXPR_NOT_TOTAL, EXPR_RECURSION, SECOND_LANGUAGE]).toEqual([
+    'EXPR_TYPE',
+    'EXPR_NOT_TOTAL',
+    'EXPR_RECURSION',
+    'SECOND_LANGUAGE',
+  ]);
+  expect(execErrorToTRPC(new ExecError(EXPR_TYPE, 'тип')).code).toBe('BAD_REQUEST');
+});
+
+// MODULE_DISABLED — 403, а не 400: отказ по ОБЪЕКТУ («модуль выключен»), и повторять запрос
+// с другим текстом бессмысленно (§Б8-3; тот же довод, что у COMPUTED_WRITE).
+test('MODULE_DISABLED — 403', () => {
+  expect(execErrorToTRPC(new ExecError('MODULE_DISABLED', 'выключен')).code).toBe('FORBIDDEN');
 });
 
 // Р-П-6: имя кода `PATTERN_NOT_REGULAR` живёт в shared строковой константой (её бросает
