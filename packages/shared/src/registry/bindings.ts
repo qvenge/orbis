@@ -236,3 +236,108 @@ function checkVariants(
   }
   return out;
 }
+
+export interface ResolvedBinding {
+  aspectId: string;
+  contract: string;
+  bind: Readonly<Record<string, string>>;
+  fixed: Readonly<Record<string, string | number | boolean>>;
+  /** слот → ТЕКСТ варианта → класс (`props->>` отдаёт текст и у boolean). */
+  classOfVariant: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** слот → класс → варианты ЛИТЕРАЛАМИ (компилятору набора нужен литерал, не текст). */
+  variantsOfClass: ReadonlyMap<string, ReadonlyMap<string, readonly (string | boolean)[]>>;
+  /** Обязательные слоты, значение которых берётся у сущности (§Б2-3). */
+  requiredSlots: readonly string[];
+}
+export interface BindingIndex {
+  byContract(contract: string): readonly ResolvedBinding[];
+  byAspect(aspectId: string): readonly ResolvedBinding[];
+  slotOf(
+    aspectId: string,
+    contract: string,
+    slot: string,
+  ): { prop: string } | { fixed: string | number | boolean } | undefined;
+}
+
+const NO_BINDINGS: readonly ResolvedBinding[] = [];
+const pairKey = (aspectId: string, contract: string): string => `${aspectId} ${contract}`;
+function push(into: Map<string, ResolvedBinding[]>, key: string, value: ResolvedBinding): void {
+  const list = into.get(key);
+  if (list === undefined) into.set(key, [value]);
+  else list.push(value);
+}
+
+function resolveBinding(
+  aspectId: string,
+  binding: AspectImplements,
+  contract: SlotsContract,
+): ResolvedBinding {
+  const classOfVariant = new Map<string, Map<string, string>>();
+  const variantsOfClass = new Map<string, Map<string, (string | boolean)[]>>();
+  for (const vm of binding.value_map) {
+    const perVariant = classOfVariant.get(vm.slot) ?? new Map<string, string>();
+    perVariant.set(String(vm.variant), vm.class);
+    classOfVariant.set(vm.slot, perVariant);
+    const perClass = variantsOfClass.get(vm.slot) ?? new Map<string, (string | boolean)[]>();
+    const list = perClass.get(vm.class);
+    if (list === undefined) perClass.set(vm.class, [vm.variant]);
+    else list.push(vm.variant);
+    variantsOfClass.set(vm.slot, perClass);
+  }
+  const requiredSlots = contract.slots
+    .filter((s) => s.required && binding.bind[s.name] !== undefined)
+    .map((s) => s.name);
+  return {
+    aspectId,
+    contract: contract.id,
+    bind: binding.bind,
+    fixed: binding.fixed,
+    classOfVariant,
+    variantsOfClass,
+    requiredSlots,
+  };
+}
+
+/**
+ * Индекс привязок снимка реестра. Порядок внутри контракта — РАНГ аспекта: потребители,
+ * которым нужен один ответ на слот (`rowProjectionOf`, §Б5-1), берут первую привязку, и
+ * «первая» обязана быть одной и той же в каждом процессе — потому порядок задаётся здесь, а не
+ * полагается на порядок словаря.
+ *
+ * Битая привязка (контракт снят, форма фактов) в индекс НЕ идёт молча: её ловит гейт записи
+ * `checkImplements`, а движок обязан работать на том, что понимает, — иначе один
+ * несогласованный пересев уронил бы Agenda и Budget целиком.
+ */
+export function bindingIndexOf(reg: {
+  aspects: ReadonlyMap<string, AspectDefinition>;
+  contracts: ReadonlyMap<string, ContractDefinition>;
+}): BindingIndex {
+  const byContract = new Map<string, ResolvedBinding[]>();
+  const byAspect = new Map<string, ResolvedBinding[]>();
+  const byPair = new Map<string, ResolvedBinding>();
+  const ordered = [...reg.aspects.values()].sort(
+    (a, b) => a.rank - b.rank || (a.id < b.id ? -1 : 1),
+  );
+  for (const aspect of ordered) {
+    for (const binding of aspect.implements) {
+      const contract = reg.contracts.get(binding.contract);
+      if (contract === undefined || contract.kind === 'facts') continue;
+      const resolved = resolveBinding(aspect.id, binding, contract);
+      push(byContract, contract.id, resolved);
+      push(byAspect, aspect.id, resolved);
+      byPair.set(pairKey(aspect.id, contract.id), resolved);
+    }
+  }
+  return {
+    byContract: (contract) => byContract.get(contract) ?? NO_BINDINGS,
+    byAspect: (aspectId) => byAspect.get(aspectId) ?? NO_BINDINGS,
+    slotOf: (aspectId, contract, slot) => {
+      const b = byPair.get(pairKey(aspectId, contract));
+      if (b === undefined) return undefined;
+      const prop = b.bind[slot];
+      if (prop !== undefined) return { prop };
+      const fixed = b.fixed[slot];
+      return fixed === undefined ? undefined : { fixed };
+    },
+  };
+}

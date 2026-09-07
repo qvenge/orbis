@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { checkImplements } from './bindings';
+import { bindingIndexOf, checkImplements } from './bindings';
+import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from './index';
 import { aspectImplementsSchema } from './property-type';
 
@@ -271,4 +272,77 @@ test('VARIANT_UNMAPPED: слот-статус, закрытый констант
       probe(['orbis/due_date'], [{ contract: 'orbis/when', bind: { deadline: 'orbis/due_date' } }]),
     ),
   ).toEqual([]);
+});
+
+const idx = () =>
+  bindingIndexOf({
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    contracts: reg.contracts,
+  });
+
+test('bindingIndexOf: обход по контракту и по аспекту, порядок — ранг аспекта', () => {
+  // Порядок наблюдаем и значим: `rowProjectionOf` (задача 7) берёт ПЕРВУЮ привязку слота, и
+  // «первая» обязана быть одной и той же в каждом процессе.
+  expect(
+    idx()
+      .byContract('orbis/when')
+      .map((b) => b.aspectId),
+  ).toEqual(['orbis/schedule', 'orbis/task']);
+  expect(
+    idx()
+      .byContract('orbis/envelope')
+      .map((b) => b.aspectId),
+  ).toEqual(['orbis/budget']);
+  expect(idx().byContract('orbis/sensitivity')).toEqual([]); // форма фактов в индекс не идёт
+  expect(
+    idx()
+      .byAspect('orbis/financial')
+      .map((b) => b.contract),
+  ).toEqual(['orbis/money-movement', 'orbis/recurrence']);
+  expect(idx().byAspect('orbis/note')).toEqual([]);
+  expect(idx().slotOf('orbis/task', 'orbis/completable', 'status')).toEqual({
+    prop: 'orbis/task_status',
+  });
+  expect(idx().slotOf('orbis/schedule', 'orbis/recurrence', 'origin_role')).toEqual({
+    fixed: 'instance-of',
+  });
+  expect(idx().slotOf('orbis/task', 'orbis/completable', 'nope')).toBeUndefined();
+  expect(idx().slotOf('orbis/note', 'orbis/when', 'moment')).toBeUndefined();
+});
+
+test('bindingIndexOf: карта классов в обе стороны и обязательные слоты §Б2-3', () => {
+  const task = idx().byAspect('orbis/task')[0];
+  expect(task?.classOfVariant.get('status')?.get('cancelled')).toBe('cancelled');
+  expect([...(task?.variantsOfClass.get('status')?.get('active') ?? [])]).toEqual([
+    'inbox',
+    'planned',
+    'in_progress',
+    'waiting',
+  ]);
+  // Json-слот (Р-К-3): вариант — наличие ключа, носитель среди встроенных — только orbis/schedule.
+  // Boolean-литерал в обратной карте покрыт синтетической привязкой теста шага 7 (Р-К-30: у
+  // orbis/financial маркера шаблона нет — `orbis/recurring = true` стоит и на инстансах, materialize.ts:503).
+  const rec = idx()
+    .byAspect('orbis/schedule')
+    .find((b) => b.contract === 'orbis/recurrence');
+  expect(rec?.classOfVariant.get('template_marker')?.get('present')).toBe('template');
+  expect([...(rec?.variantsOfClass.get('template_marker')?.get('template') ?? [])]).toEqual([
+    'present',
+  ]);
+  const fin = idx()
+    .byAspect('orbis/financial')
+    .find((b) => b.contract === 'orbis/recurrence');
+  expect(fin?.classOfVariant.size).toBe(0); // только fixed, ни одного связанного слота
+  expect(idx().slotOf('orbis/financial', 'orbis/recurrence', 'origin_role')).toEqual({
+    fixed: 'instance-of',
+  });
+  // Обязательные слоты — те, чьё значение берётся У СУЩНОСТИ: `origin_role` закрыт константой и
+  // в список не идёт, проверять на сущности нечего.
+  expect(idx().byAspect('orbis/financial')[0]?.requiredSlots).toEqual([
+    'amount',
+    'direction',
+    'category',
+    'date',
+  ]);
+  expect(rec?.requiredSlots).toEqual([]);
 });
