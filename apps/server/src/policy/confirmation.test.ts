@@ -726,14 +726,31 @@ describe('§С2-1: перенастраивает поверхность или 
     }
   });
 
-  test('`implements` встроенных аспектов сегодня ПУСТ (§Б2) — правило накрывает их адресом', () => {
-    // Tripwire к §С2-1: спека называет «`implements` встроенных аспектов» отдельным
-    // объектом запрета. В срезе А поле объявлено и пустует (часть Б), поэтому ветки по нему
-    // здесь НЕТ — её нечем было бы достичь, а пин на недостижимом пути ничего не сторожит.
-    // Наполнится `implements` — упадёт эта строка, и правило придётся перечитать: сегодня
-    // все тринадцать носителей будущих привязок и так `system-object` (тест выше), а
-    // аспекты владельца (`user/…`) привязки получат вместе с частью Б.
-    expect(BUILTIN_ASPECT_DEFS.every((a) => a.implements.length === 0)).toBe(true);
+  test('привязки встроенных аспектов (§С2-1 ряд 3) — правило накрывает их АДРЕСОМ', () => {
+    // Прежде здесь стоял tripwire «`implements` встроенных пуст»: ветки по привязкам в правиле
+    // не было, и пин на недостижимом пути ничего не сторожил. Срез Б-1 наполнил поле — путь
+    // достижим, и проверять надо не пустоту, а то, что ветки по-прежнему НЕ НУЖНО:
+    // перенастройка чужой привязки закрыта адресом объекта, а своей — открыта.
+    expect(BUILTIN_ASPECT_DEFS.filter((a) => a.implements.length > 0).map((a) => a.id)).toEqual([
+      'orbis/schedule',
+      'orbis/task',
+      'orbis/financial',
+      'orbis/budget',
+    ]);
+    for (const aspect of BUILTIN_ASPECT_DEFS) {
+      for (const tool of ['aspect_delta_set', 'aspect_delta_remove'] as const) {
+        expect([aspect.id, tool, reconfiguresOf(tool, { aspect: aspect.id, delta: {} })]).toEqual([
+          aspect.id,
+          tool,
+          'system-object',
+        ]);
+      }
+    }
+    // Обратная сторона границы: СВОЙ аспект владельца привязки тоже несёт (§Б2-4 — «главный
+    // пользовательский жест»), и правка его дельты остаётся `behavior-delta`.
+    expect(reconfiguresOf('aspect_delta_set', { aspect: 'user/workout', delta: {} })).toBe(
+      'behavior-delta',
+    );
   });
 
   test('ряд 4a: behavior-delta и system-object → explicit-confirmation ДЛЯ ЛЮБОГО актора', () => {
