@@ -266,8 +266,11 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // category_ref (инструкция промпта v1) гарантированно бился бы о парсер
     const def = defOf(await registryFor(userB), 'entity_query');
     expect(def.description).toContain('aspect=orbis/category, search=Еда');
+    // Второй пример — на НАБОР КОНТРАКТА, а не на перечисление статусов: он работает для
+    // любого аспекта, объявившего реализацию `orbis/completable`, и его же теперь несут
+    // тела сидов (§Б1-2).
     expect(def.description).toContain(
-      'aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, limit=20',
+      'aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20',
     );
     // Синтаксис фильтра по списочному свойству неотличим от равенства: без образца модель
     // не догадается искать «такси» среди синонимов категории, а не в её названии.

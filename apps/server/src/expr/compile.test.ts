@@ -85,7 +85,7 @@ const FACTS_EXPR: ExprNode = {
   op: 'and',
   args: [
     // Р-К-29: `not(planned = true)` тотален в обоих бэкендах одинаково и не требует у
-    // аспекта слота `planned` (у `user/gate-fin` его нет): отсутствующее → `=` false →
+    // аспекта слота `planned` (у аспекта гейта §С8-18 его нет): отсутствующее → `=` false →
     // `not` true — как оракул `coalesce(planned, false) = false`.
     { op: 'not', args: [{ op: '=', args: [{ slot: 'planned' }, { const: true }] }] },
     { op: '<=', args: [{ slot: 'date' }, { ctx: '$today' }] },

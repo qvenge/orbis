@@ -267,10 +267,12 @@ describe('гейт §С8-18: аспект только декларацией', 
     expect(rowProjectionOf(closed, reg).checkbox).toEqual({ closed: true, cls: 'done' });
   });
 
-  // Зеленит задача 4. Сегодня сахар разворачивается в `sourceNotIn` по `orbis/task_status`
-  // (`parse-ast.ts`), а `COALESCE(b.props->>'orbis/task_status','')` у блокера-gate-plain
-  // пусто (`compile-ast.ts`) — то есть ЗАКРЫТЫЙ блокер считается незакрытым и прячет цель.
-  test.failing('закрытый блокер-gate-plain перестаёт прятать цель (§С8-18, потребитель 4)', () => {
+  // ЗЕЛЁН С ЗАДАЧИ 4. Сахар разворачивается в `sourceNotIn: {contract, set}`, а компилятор
+  // спрашивает членство в наборе `closed` по ПРИВЯЗКАМ (`expr/compile.ts`) — и привязка
+  // `GATE_PLAIN_ASPECT` к `orbis/completable` попадает в него без единой строки кода под
+  // этот аспект. До задачи 4 здесь стояла прямая проверка `orbis/task_status`, которого у
+  // аспекта гейта нет, и ЗАКРЫТЫЙ блокер считался незакрытым и прятал цель.
+  test('закрытый блокер-gate-plain перестаёт прятать цель (§С8-18, потребитель 4)', () => {
     expect(taken(excluded, 'excludeBlocked').has(world.blockedId)).toBe(true);
   });
 

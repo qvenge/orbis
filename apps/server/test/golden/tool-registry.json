@@ -1,7 +1,7 @@
 [
   {
     "name": "entity_query",
-    "description": "Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, limit=20»; «aspect=orbis/category, orbis/aliases=такси» (резолв категории по синониму: aliases — список, фильтр ищет точное вхождение — регистр важен, синонимы строчные).",
+    "description": "Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20» (class=<контракт>:<набор> — членство по контракту: работает для любого аспекта, объявившего его реализацию); «aspect=orbis/category, orbis/aliases=такси» (резолв категории по синониму: aliases — список, фильтр ищет точное вхождение — регистр важен, синонимы строчные).",
     "inputJsonSchema": {
       "type": "object",
       "properties": {
@@ -321,19 +321,16 @@
                         "sourceNotIn": {
                           "type": "object",
                           "properties": {
-                            "prop": {
+                            "contract": {
                               "type": "string",
                               "minLength": 1
                             },
-                            "values": {
-                              "type": "array",
-                              "minItems": 1,
-                              "items": {
-                                "type": ["string", "number", "boolean"]
-                              }
+                            "set": {
+                              "type": "string",
+                              "minLength": 1
                             }
                           },
-                          "required": ["prop", "values"],
+                          "required": ["contract", "set"],
                           "additionalProperties": false
                         }
                       },
@@ -1131,19 +1128,16 @@
                             "sourceNotIn": {
                               "type": "object",
                               "properties": {
-                                "prop": {
+                                "contract": {
                                   "type": "string",
                                   "minLength": 1
                                 },
-                                "values": {
-                                  "type": "array",
-                                  "minItems": 1,
-                                  "items": {
-                                    "type": ["string", "number", "boolean"]
-                                  }
+                                "set": {
+                                  "type": "string",
+                                  "minLength": 1
                                 }
                               },
-                              "required": ["prop", "values"],
+                              "required": ["contract", "set"],
                               "additionalProperties": false
                             }
                           },
@@ -1546,19 +1540,16 @@
                             "sourceNotIn": {
                               "type": "object",
                               "properties": {
-                                "prop": {
+                                "contract": {
                                   "type": "string",
                                   "minLength": 1
                                 },
-                                "values": {
-                                  "type": "array",
-                                  "minItems": 1,
-                                  "items": {
-                                    "type": ["string", "number", "boolean"]
-                                  }
+                                "set": {
+                                  "type": "string",
+                                  "minLength": 1
                                 }
                               },
-                              "required": ["prop", "values"],
+                              "required": ["contract", "set"],
                               "additionalProperties": false
                             }
                           },
@@ -2953,18 +2944,15 @@
                                 },
                                 "sourceNotIn": {
                                   "type": "object",
-                                  "required": ["prop", "values"],
+                                  "required": ["contract", "set"],
                                   "properties": {
-                                    "prop": {
+                                    "contract": {
                                       "type": "string",
                                       "minLength": 1
                                     },
-                                    "values": {
-                                      "type": "array",
-                                      "items": {
-                                        "type": ["string", "number", "boolean"]
-                                      },
-                                      "minItems": 1
+                                    "set": {
+                                      "type": "string",
+                                      "minLength": 1
                                     }
                                   },
                                   "additionalProperties": false
@@ -3446,18 +3434,15 @@
                                     },
                                     "sourceNotIn": {
                                       "type": "object",
-                                      "required": ["prop", "values"],
+                                      "required": ["contract", "set"],
                                       "properties": {
-                                        "prop": {
+                                        "contract": {
                                           "type": "string",
                                           "minLength": 1
                                         },
-                                        "values": {
-                                          "type": "array",
-                                          "items": {
-                                            "type": ["string", "number", "boolean"]
-                                          },
-                                          "minItems": 1
+                                        "set": {
+                                          "type": "string",
+                                          "minLength": 1
                                         }
                                       },
                                       "additionalProperties": false

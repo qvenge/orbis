@@ -777,8 +777,8 @@ test('facts: «не запланировано» записано как not(pla
   // Пин формы, а не вкуса: `{op:'=', args:[{slot:'planned'},{const:false}]}` по §Б3-4 даёт
   // false на движении БЕЗ `orbis/planned` (умолчание не материализуется —
   // `executor.test.ts:1433`), и `spent` разошёлся бы с оракулом
-  // `coalesce(planned,false) = false` (`aggregates.ts:205`), а трата гейта `user/gate-fin`
-  // (слота `planned` у привязки нет) не попала бы в spent ни в одном бэкенде.
+  // `coalesce(planned,false) = false` (`aggregates.ts:205`), а трата аспекта гейта §С8-18
+  // (слота `planned` у его привязки нет) не попала бы в spent ни в одном бэкенде.
   expect(facts?.args[0]).toEqual({
     op: 'not',
     args: [{ op: '=', args: [{ slot: 'planned' }, { const: true }] }],

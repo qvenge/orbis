@@ -11,8 +11,10 @@ type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number]
 /** Куда смотрит создаваемая связь: текущая блокирует выбранную (out) или наоборот (in). */
 type Direction = 'out' | 'in';
 
-// «Незакрытая» — ровно семантика excludeBlocked (§6.1): блокер БЕЗ task-аспекта живой,
-// COALESCE(status,'') NOT IN ('done','cancelled'). Разъезд с ней ломает lock-иконку §3.6.
+// «Незакрытая» — ровно семантика excludeBlocked (§6.1): блокер, НЕ принадлежащий набору
+// `closed` контракта `orbis/completable`, — живой (блокер без реализации контракта тоже
+// живой). Разъезд с ней ломает lock-иконку §3.6. Вторая копия набора здесь СНИМАЕТСЯ
+// задачей 7 среза Б-1 — подписи классов приедут читателю реестра.
 const CLOSED = new Set(['done', 'cancelled']);
 const SECTION_LABEL = 'text-2xs font-medium uppercase tracking-wide text-text-muted';
 const ROW =

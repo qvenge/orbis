@@ -821,7 +821,11 @@ export interface PropertyHolder {
 
 const PROGRESS_SOURCE = 'orbis/progress_source';
 
-/** Все имена свойств, названные деревом: `prop`, `has`, `sortBy`, `rel.sourceNotIn.prop`. */
+/**
+ * Все имена свойств, названные деревом: `prop`, `has`, `sortBy`. Контракты и наборы (`class`,
+ * `rel.sourceNotIn`, Б-1) сюда не входят: слияние переписывает СВОЙСТВА, а контракт слиянию
+ * не подлежит.
+ */
 function propertyNamesInAst(value: unknown, out: Set<string>): void {
   const stack: unknown[] = [value];
   while (stack.length > 0) {

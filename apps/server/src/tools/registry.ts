@@ -1040,7 +1040,7 @@ const CORE_TOOLS: OrbisToolDef[] = [
     // Нормализация регистра в самом предикате требует функционального
     // GIN-индекса, то есть новой миграции, и вынесена в бэклог.
     description:
-      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, limit=20»; «aspect=orbis/category, orbis/aliases=такси» (резолв категории по синониму: aliases — список, фильтр ищет точное вхождение — регистр важен, синонимы строчные).',
+      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20» (class=<контракт>:<набор> — членство по контракту: работает для любого аспекта, объявившего его реализацию); «aspect=orbis/category, orbis/aliases=такси» (резолв категории по синониму: aliases — список, фильтр ищет точное вхождение — регистр важен, синонимы строчные).',
     inputJsonSchema: entityQueryJsonSchema,
     kind: 'read',
   },
