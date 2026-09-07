@@ -2054,7 +2054,7 @@ bun run test:perf:volume
 **Файлы:**
 - Создать: `apps/server/test/fixtures/gate-aspects.ts` (два `CustomAspectSpec`, ключи, токены грепа,
   `seedGateWorld`), `apps/server/test/gate-c8-18.test.ts` (сквозной тест, четыре `test.failing` +
-  два обычных).
+  четыре обычных — проба сева, мир, §С8-21, контроль excludeBlocked (ревью 0d)).
 - Изменить: `apps/server/test/helpers.ts` — `CustomAspectSpec` (`:105-113`, +`implements`, +`module`),
   `seedCustomAspect` — **оба места записи**: список `VALUES` (`:163`, литерал `'[]'::jsonb`) и
   `ON CONFLICT … DO UPDATE SET` (`:168-171`, где `implements`/`tag_mappings`/`module` сегодня нет —
@@ -5982,8 +5982,8 @@ limit=20» (class=<контракт>:<набор> — членство по ко
 `bun run lint` → чисто.
 
 - [ ] **Шаг 22: гейт §С8-18 зеленеет четвёртым тестом.** В `apps/server/test/gate-c8-18.test.ts` (заведён
-задачей 0d) перевести `test.failing` → `test` РОВНО у теста «под excludeBlocked блокер-`gate-plain` прячет
-цель»; три остальных остаются `test.failing` (их зеленят задачи 6, 7, 9 — Р-К-9). Зелень обязана прийти от
+задачей 0d) перевести `test.failing` → `test` РОВНО у теста «закрытый блокер-`gate-plain` перестаёт прятать цель (§С8-18, потребитель 4)»
+(заголовок-закон 0d; ревью 0d, Minor-2); три остальных остаются `test.failing` (их зеленят задачи 6, 7, 9 — Р-К-9). Зелень обязана прийти от
 привязки `GATE_PLAIN_ASPECT` к `orbis/completable` (`open→active`, `closed→done`), а не от строки кода:
 `cd apps/server && bun test test/gate-c8-18.test.ts` → один зелёный, три `test.failing` красные;
 `git grep -n -a -P -e 'gate-fin|gate-plain|gf_|gp_' -- apps/server/src packages/shared/src apps/web/src` → **ноль**.
@@ -8698,7 +8698,7 @@ function toSuggestion(row: SuggestionRow, reg: RowRegistry): EntitySuggestion {
 - [ ] **Шаг 20: снимок `core/row` — с временной копии на правило.** В `apps/server/test/surfaces.ts` найти грепом временную функцию правила строки (докблок задачи 0b «временная копия правила M14 — снимается задачей 7») и заменить её тело на `rowProjectionOf(entity, reg)` (снимок берётся тем же `effectiveRegistry` на той же `withIdentity`-транзакции, что и прочие поверхности); докблок переписать: «правило — общее (`@orbis/shared`), своей копии у снимка больше нет».
   `cd apps/server && bun test src/registry/surfaces-golden.test.ts` → **PASS**, причём `states.baseline` в `test/golden/surfaces.json` НЕ пересдаётся: на встроенных аспектах декларация даёт ровно то, что давало правило кодом, — это и есть проверка §С8-18. Разошлись байты — не «пересдать golden», а найти расхождение и доложить координатору (иначе рушится инвариант задачи 10 «baseline после вехи I байт-в-байт равен baseline до»).
 
-- [ ] **Шаг 21: гейт §С8-18 — тест M14 зеленеет (Р-К-9).** В `apps/server/test/gate-c8-18.test.ts` найти грепом `test.failing` с «M14» в имени и снять `.failing`.
+- [ ] **Шаг 21: гейт §С8-18 — тест M14 зеленеет (Р-К-9).** В `apps/server/test/gate-c8-18.test.ts` найти грепом `test.failing` с «M14» в имени и снять `.failing`. Тем же шагом снять локальный слепок формы `GateRowProjection`/`RowProjectionFn` и ленивый загрузчик `rowProjectionOrFail` в этом тесте: импортировать `rowProjectionOf` и `RowProjection` из `@orbis/shared` напрямую (докблок теста 0d это обещает — ревью 0d, Minor-4).
   `cd apps/server && bun test test/gate-c8-18.test.ts` → тест M14 **PASS**; три остальных остаются `test.failing` (их зеленят задачи 4, 6, 9).
 
 - [ ] **Шаг 22: полный прогон и коммит.** `bun run lint` → **PASS**; `bun run typecheck` → **PASS**; `bun run test` → **PASS**; `bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts` → **PASS** (правило уехало в общий баррель — проверяем, что чанки не разъехались). Греп-доказательство: `git grep -n "CLOSED = new Set" -- apps/web/src` → пусто; `git grep -n "found?.status\|\.status ??" -- apps/web/src/features/entity-detail/Blocks.tsx apps/web/src/features/entity-editor/nodes/EntityChip.tsx` → пусто.
@@ -11825,9 +11825,11 @@ describe('гейт §С8-18: доказательства вехи I', () => {
   + сторож). Если сторож красный — веха I не закрыта: назвать задачу-зеленитель по Р-К-9 и **остановиться**.
 
 - [ ] **Шаг 3: мутационная проверка сторожа (без неё он — зелёный кирпич).**
-  `perl -0pi -e 's/^  test\(/  test.failing(/m' apps/server/test/gate-c8-18.test.ts` (вернуть метку
-  первому тесту: `-0` читает файл одной записью, `/m` держит `^` на начале строки, без `/g` — только
-  первое вхождение). `sed -i '' '0,/^  test(/s//…/'` здесь НЕ годится: адрес `0,/re/` есть только у
+  `perl -0pi -e 's/^  test\((\x27трата gate-fin попадает)/  test.failing($1/m' apps/server/test/gate-c8-18.test.ts`
+  (вернуть метку ИМЕННО тесту «трата gate-fin попадает в spent…», а не «первому `test(` файла»: если сторож
+  стоит первым describe, мутация «первого `test(`» попала бы в сам сторож — у него синхронное тело, `.failing`
+  соблюдается, и провал был бы поглощён, мутация показала бы PASS — ревью 0d, Minor-1; `-0` читает файл одной
+  записью, `/m` держит `^` на начале строки, без `/g` — только первое вхождение). `sed -i '' '0,/^  test(/s//…/'` здесь НЕ годится: адрес `0,/re/` есть только у
   GNU sed, BSD sed на macOS падает `invalid usage of line address 0` — и мутация «прошла бы» молча.
   Затем `cd apps/server && bun test test/gate-c8-18.test.ts` → сторож **КРАСНЫЙ**, и в его сообщении
   виден путь `apps/server/test/gate-c8-18.test.ts` (а не пустой массив против пустого). Откат:
