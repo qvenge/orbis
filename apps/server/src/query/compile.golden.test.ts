@@ -31,6 +31,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
 } from '@orbis/shared';
@@ -49,13 +50,15 @@ const dialect = new PgDialect();
 
 /**
  * Снимок реестра из ВСТРОЕННЫХ словарей — без БД. Того же состава, что кладёт сид
- * (`scripts/seed-registries.ts` берёт те же три массива), поэтому эталон здесь и выдача на
+ * (`scripts/seed-registries.ts` берёт те же четыре массива), поэтому эталон здесь и выдача на
  * живой базе (`compile.dataset.test.ts`) считаются по одному и тому же реестру.
  */
 const REG: RegistrySnapshot = {
   properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
   aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
   roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+  contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+  subscriptions: new Map(),
   ownerVersion: 0,
   systemVersion: 1,
 };

@@ -22,7 +22,15 @@ function snapshot(
   const aspects = new Map(BUILTIN_ASPECT_DEFS.map((d) => [d.id, { ...d, ownerId: null } as never]));
   for (const p of extra.properties ?? []) properties.set(p.id as string, p as never);
   for (const a of extra.aspects ?? []) aspects.set(a.id as string, a as never);
-  return { properties, aspects, roles: new Map(), ownerVersion: 1, systemVersion: 1 };
+  return {
+    properties,
+    aspects,
+    roles: new Map(),
+    contracts: new Map(),
+    subscriptions: new Map(),
+    ownerVersion: 1,
+    systemVersion: 1,
+  };
 }
 
 describe('dependencyGraph / dependantsOf (§А3-5)', () => {

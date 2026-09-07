@@ -4838,6 +4838,8 @@ describe('сводка мутации реестра: правила, а не с
     ]),
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     roles: new Map(),
+    contracts: new Map(),
+    subscriptions: new Map(),
     ownerVersion: 1,
     systemVersion: 1,
   };

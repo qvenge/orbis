@@ -46,6 +46,8 @@
 import {
   type AspectDefinition,
   aspectDefinitionSchema,
+  type ContractDefinition,
+  contractDefinitionSchema,
   type PropertyDefinition,
   propertyDefinitionSchema,
   type RelationRoleDefinition,
@@ -55,11 +57,27 @@ import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistryDeltaRow, RegistryDeltaTargetKind } from './deltas';
 
-/** Три словаря реестра без версии — то, что даёт сырое чтение строк. */
+/**
+ * Строка реестра подписок КАК ОНА ЛЕЖИТ: `definition` здесь `unknown`, и это не лень. Разбор
+ * декларации (`subscriptionDefinitionSchema`) приезжает вместе с валидатором на записи, а словарь
+ * нужен снимку уже сейчас — иначе десять литеральных фикстур переписывались бы дважды.
+ */
+export interface SubscriptionRow {
+  id: string;
+  ownerId: string | null;
+  surface: string;
+  definition: unknown;
+  module: string | null;
+  rank: number;
+}
+
+/** Пять словарей реестра без версии — то, что даёт сырое чтение строк. */
 export interface RegistryDictionaries {
   properties: Map<string, PropertyDefinition>;
   aspects: Map<string, AspectDefinition>;
   roles: Map<string, RelationRoleDefinition>;
+  contracts: Map<string, ContractDefinition>;
+  subscriptions: Map<string, SubscriptionRow>;
 }
 
 export interface RegistrySnapshot extends RegistryDictionaries {
@@ -99,7 +117,7 @@ interface Row {
 export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<RegistryDictionaries> {
   // Запросы идут ПОСЛЕДОВАТЕЛЬНО, а не Promise.all: транзакция живёт на одном соединении,
   // и параллельные запросы по нему сериализуются в лучшем случае, а в худшем — путают
-  // порядок с `SET LOCAL`. Реестров три, каждый — один индексный проход.
+  // порядок с `SET LOCAL`. Реестров пять, каждый — один индексный проход.
   const propertyRows = (await tx.execute(sql`
     SELECT id, owner_id, key, label, description, type, status, storage,
            scope, merged_into, module, rank, flags
@@ -116,6 +134,16 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
     SELECT id, owner_id, key, label, description, source_label, target_label,
            hierarchical, constraints, "symmetric", module, rank
     FROM relation_role_definitions
+    WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
+    ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
+  const contractRows = (await tx.execute(sql`
+    SELECT id, owner_id, key, label, description, kind, slots, classes, sets, facts, module, rank
+    FROM contract_definitions
+    WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
+    ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
+  const subscriptionRows = (await tx.execute(sql`
+    SELECT id, owner_id, surface, definition, module, rank
+    FROM subscription_definitions
     WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
     ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
 
@@ -184,7 +212,40 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
     );
   }
 
-  return { properties, aspects, roles };
+  const contracts = new Map<string, ContractDefinition>();
+  for (const r of contractRows) {
+    contracts.set(
+      r.id as string,
+      contractDefinitionSchema.parse({
+        id: r.id,
+        ownerId: r.owner_id,
+        key: r.key,
+        label: r.label,
+        description: r.description,
+        kind: r.kind,
+        slots: r.slots,
+        classes: r.classes,
+        sets: r.sets,
+        facts: r.facts,
+        module: r.module,
+        rank: r.rank,
+      }),
+    );
+  }
+
+  const subscriptions = new Map<string, SubscriptionRow>();
+  for (const r of subscriptionRows) {
+    subscriptions.set(r.id as string, {
+      id: r.id as string,
+      ownerId: r.owner_id as string | null,
+      surface: r.surface as string,
+      definition: r.definition,
+      module: r.module as string | null,
+      rank: r.rank as number,
+    });
+  }
+
+  return { properties, aspects, roles, contracts, subscriptions };
 }
 
 /**

@@ -28,6 +28,8 @@ function snapshotWith(overrides: PropertyDefinition[] = []): RegistrySnapshot {
     properties,
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     roles: new Map(),
+    contracts: new Map(),
+    subscriptions: new Map(),
     ownerVersion: 1,
     systemVersion: 1,
   };

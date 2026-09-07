@@ -2,7 +2,12 @@
 // Снимок эффективных реестров владельца против живой БД: система ⊕ свои, перекрытие по id,
 // обе версии. Дельты — Задача 14.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { BUILTIN_ASPECT_IDS, BUILTIN_PROPERTY_META, RELATION_ROLE_IDS } from '@orbis/shared';
+import {
+  BUILTIN_ASPECT_IDS,
+  BUILTIN_PROPERTY_META,
+  CONTRACT_IDS,
+  RELATION_ROLE_IDS,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -152,4 +157,20 @@ test('версии: системная — из registry_system, владель�
   const withSettings = await withIdentity(db, virgin, (tx) => effectiveRegistry(tx, virgin));
   expect(withSettings.ownerVersion).toBe(7);
   expect(withSettings.systemVersion).toBe(noSettings.systemVersion);
+});
+
+test('снимок несёт словарь контрактов: шесть встроенных, форма разобрана схемой', async () => {
+  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  expect([...reg.contracts.keys()].sort()).toEqual([...CONTRACT_IDS].sort());
+  expect(reg.contracts.get('orbis/completable')?.sets).toEqual({
+    closed: ['done', 'cancelled'],
+    open: ['active'],
+  });
+  // Форма `{kind:"facts"}` доезжает разобранной, а не «как лежит в jsonb».
+  expect(reg.contracts.get('orbis/sensitivity')?.facts?.length).toBe(5);
+});
+
+test('словарь подписок в снимке есть и пуст: первый сид — задачи Agenda и Budget', async () => {
+  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  expect(reg.subscriptions.size).toBe(0);
 });

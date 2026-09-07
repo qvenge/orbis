@@ -149,6 +149,8 @@ const EMPTY_REGISTRY: RegistrySnapshot = {
   properties: new Map(),
   aspects: new Map(),
   roles: new Map(),
+  contracts: new Map(),
+  subscriptions: new Map(),
   ownerVersion: 0,
   systemVersion: 0,
 };

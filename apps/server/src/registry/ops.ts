@@ -417,9 +417,10 @@ async function assertRegistryStaysReadable(
   else properties.set(next.id, definitionOf(next, ownerId));
   applyDeltas(
     {
+      // Спредом, а не перечислением словарей: складывается РОВНО то, что сложит читатель
+      // (докблок выше), и шестой словарь снимка не должен требовать правки этого места.
+      ...rows,
       properties,
-      aspects: rows.aspects,
-      roles: rows.roles,
       ownerVersion: versions.ownerVersion,
       systemVersion: versions.systemVersion,
     },
