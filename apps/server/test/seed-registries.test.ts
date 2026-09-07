@@ -1,10 +1,11 @@
 // apps/server/test/seed-registries.test.ts
-// Приёмка сида трёх реестров (§А12-1 п.1) против ЖИВОЙ базы: состав system-строк, пустота
-// трёх реестров части Б и монотонность версии. Чистые проверки формы деклараций живут в
+// Приёмка сида ЧЕТЫРЁХ реестров (§А12-1 п.1, §Б1-1) против ЖИВОЙ базы: состав system-строк,
+// пустота подписок и действий и монотонность версии. Чистые проверки формы деклараций живут в
 // packages/shared/src/registry/builtin.test.ts — здесь только то, что видно лишь в БД.
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
 } from '@orbis/shared';
@@ -33,8 +34,8 @@ async function systemVersion(db: ReturnType<typeof adminDb>['db']): Promise<numb
   return row.version;
 }
 
-describe('сид трёх реестров', () => {
-  test('состав system-строк = ровно BUILTIN_* (77 свойств, 11 ролей, 13 аспектов)', async () => {
+describe('сид четырёх реестров', () => {
+  test('состав system-строк = ровно BUILTIN_* (77 свойств, 11 ролей, 13 аспектов, 6 контрактов)', async () => {
     const { db, client } = adminDb();
     try {
       expect(await ids(db, 'property_definitions')).toEqual(
@@ -46,22 +47,25 @@ describe('сид трёх реестров', () => {
       expect(await ids(db, 'aspect_definitions')).toEqual(
         [...BUILTIN_ASPECT_DEFS.map((a) => a.id)].sort(),
       );
+      expect(await ids(db, 'contract_definitions')).toEqual(
+        [...BUILTIN_CONTRACT_DEFS.map((c) => c.id)].sort(),
+      );
       // Счётчики названы числом отдельно от состава: подмена набора равной мощности
       // (переименовали свойство и забыли пересеять) прошла бы первую проверку молча.
       expect(BUILTIN_PROPERTY_META.length).toBe(77);
       expect(BUILTIN_RELATION_ROLE_META.length).toBe(11);
       expect(BUILTIN_ASPECT_DEFS.length).toBe(13);
+      expect(BUILTIN_CONTRACT_DEFS.length).toBe(6);
     } finally {
       await client.end();
     }
   });
 
-  // §А12-1: их сиды — первый акт среза Б-1, после гейта П5. До него любая system-строка
-  // здесь означает, что сид положили раньше времени.
-  test('контракты, подписки и действия — БЕЗ system-строк (пусты в срезе А)', async () => {
+  // Подписки сеются задачами 6 и 9 (Agenda, Budget), действия — §Б6, не в Б-1. До них любая
+  // system-строка здесь означает, что сид положили раньше времени.
+  test('подписки и действия — БЕЗ system-строк', async () => {
     const { db, client } = adminDb();
     try {
-      expect(await ids(db, 'contract_definitions')).toEqual([]);
       expect(await ids(db, 'subscription_definitions')).toEqual([]);
       expect(await ids(db, 'action_definitions')).toEqual([]);
     } finally {
@@ -349,6 +353,7 @@ describe('сид трёх реестров', () => {
         properties: 77,
         roles: 11,
         aspects: 13,
+        contracts: 6,
         version: before + 1,
         mergedDeltas: 0,
         conflicts: [],

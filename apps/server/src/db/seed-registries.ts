@@ -1,8 +1,8 @@
 // apps/server/src/db/seed-registries.ts
 //
-// Сид ТРЁХ реестров: свойства (§А2-1), роли рёбер (§А4-2), аспекты (§А3-1). Контракты,
-// подписки и действия срез А создаёт ПУСТЫМИ таблицами — их сид первый акт среза Б-1,
-// после гейта П5 (§А12-1).
+// Сид ЧЕТЫРЁХ реестров: свойства (§А2-1), роли рёбер (§А4-2), аспекты (§А3-1) и контракты
+// (§Б1-1, первый акт среза Б-1). Подписки и действия остаются ПУСТЫМИ таблицами: их сид —
+// задачи 6 и 9 (Agenda, Budget) и §Б6 соответственно.
 //
 // Почему модуль, а не два скрипта: сид запускается двумя путями — `bun run db:prepare`
 // (локально и в CI, через `scripts/seed-registries.ts`) и `bun scripts/ops.ts
@@ -26,6 +26,7 @@ import {
   type AspectDefinition,
   aspectDefinitionSchema,
   BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   type PropertyDefinition,
@@ -63,6 +64,8 @@ export interface SeedRegistriesResult {
   properties: number;
   roles: number;
   aspects: number;
+  /** §Б1-1: контракты сеются с Б-1; подписки (задачи 6/9) и действия (§Б6) — ещё нет. */
+  contracts: number;
   /** Версия system-реестров ПОСЛЕ сида — она же ключ инвалидации кешей (§А10-1). */
   version: number;
   /** Дельт, пересчитанных трёхсторонним слиянием под новую системную версию (§А3-3). */
@@ -72,7 +75,7 @@ export interface SeedRegistriesResult {
 }
 
 /**
- * Пишет встроенные строки трёх реестров и двигает глобальную версию.
+ * Пишет встроенные строки четырёх реестров и двигает глобальную версию.
  *
  * `sql` — админское подключение: RLS запрещает запись строк с `owner_id IS NULL` любой
  * роли, кроме обходящей политики.
@@ -140,6 +143,26 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
         module = EXCLUDED.module, service = EXCLUDED.service, rank = EXCLUDED.rank`;
   }
 
+  for (const c of BUILTIN_CONTRACT_DEFS) {
+    // SQL NULL, а не `sql.json(null)`: колонки nullable, форму различает `kind` (CHECK schema.ts),
+    // и jsonb-значение `null` сделало бы «слотов нет» неотличимым от «слоты — литеральный null».
+    // Тот же приём, что у `scope` свойства выше.
+    await sql`
+      INSERT INTO contract_definitions
+        (id, owner_id, key, label, description, kind, slots, classes, sets, facts, module, rank)
+      VALUES
+        (${c.id}, NULL, ${c.key}, ${sql.json(j(c.label))}, ${sql.json(j(c.description))}, ${c.kind},
+         ${c.slots === null ? null : sql.json(j(c.slots))},
+         ${c.classes === null ? null : sql.json(j(c.classes))},
+         ${c.sets === null ? null : sql.json(j(c.sets))},
+         ${c.facts === null ? null : sql.json(j(c.facts))},
+         ${c.module}, ${c.rank})
+      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
+        key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
+        kind = EXCLUDED.kind, slots = EXCLUDED.slots, classes = EXCLUDED.classes,
+        sets = EXCLUDED.sets, facts = EXCLUDED.facts, module = EXCLUDED.module, rank = EXCLUDED.rank`;
+  }
+
   // Версия двигается ПОСЛЕ строк и всегда — даже когда ни одна строка фактически не
   // изменилась. Так «сид был» отличимо от «сида не было» одним числом, а кеши, ключуемые
   // версией, гарантированно переживают пересев (§А10-1); угадывать «а изменилось ли
@@ -159,6 +182,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
     properties: BUILTIN_PROPERTY_META.length,
     roles: BUILTIN_RELATION_ROLE_META.length,
     aspects: BUILTIN_ASPECT_DEFS.length,
+    contracts: BUILTIN_CONTRACT_DEFS.length,
     version: row.version,
     mergedDeltas: merge.merged,
     conflicts: merge.conflicts,
@@ -340,8 +364,8 @@ export async function mergeRegistryDeltas(
 /** Одна строка отчёта — одинаковая у `db:prepare` и у `ops.ts seed-registries`. */
 export function seedRegistriesReport(r: SeedRegistriesResult): string[] {
   return [
-    `seed-registries: свойств ${r.properties}, ролей ${r.roles}, аспектов ${r.aspects}; ` +
-      `версия system-реестров ${r.version}; дельт слито ${r.mergedDeltas}`,
+    `seed-registries: свойств ${r.properties}, ролей ${r.roles}, аспектов ${r.aspects}, ` +
+      `контрактов ${r.contracts}; версия system-реестров ${r.version}; дельт слито ${r.mergedDeltas}`,
     ...(r.conflicts.length === 0
       ? []
       : [
