@@ -8434,6 +8434,7 @@ export function classLabel(reg: RegistryLookup, contract: string, cls: string): 
   return reg.classLabel(contract, cls);
 }
 ```
+  (Эррата 7: литерал `labels.test.ts` уже несёт `contracts: []` с задачи 1/4 — дописывать нечего; шаг сводится к проверке.)
   Поле `contracts` ОБЯЗАТЕЛЬНОЕ, поэтому краснеет единственный литерал этой формы в web — `labels.test.ts:19-24` (`lookupOf({ version: '2.0', properties: […], aspects: [], roles: [] })`): дописать `contracts: []` (греп-проверка, что литерал один: `git grep -n "roles: \[\]" -- apps/web/src` — второе совпадение, `settings.test.tsx:177`, это ответ мок-линка типа `unknown`, компилятор его не проверяет).
   `cd apps/web && bunx vitest run src/lib/registry/labels.test.ts` → **PASS** (9 тестов); `bunx tsc --noEmit` → **PASS**.
   Коммит: `feat(web): читатель реестра знает контракты — подпись класса из словаря`
@@ -8458,8 +8459,10 @@ export function rowRegistryOf(data: EffectiveRegistry | undefined): RowRegistry 
   const hit = BY_SNAPSHOT.get(data);
   if (hit !== undefined) return hit;
   const built: RowRegistry = {
-    aspects: new Map(data.aspects.map((a) => [a.id, a])),
-    contracts: new Map(data.contracts.map((c) => [c.id, c])),
+    // эррата 7: словари читаются терпимо (`dictOf(rows) = rows ?? []`, как `lookupOf`): моки сьютов отвечают на
+    // `registry.effective` пустым `{}` («сьют этот путь не роутил»), и `.map` на undefined ронял бы экран
+    aspects: new Map(dictOf(data.aspects).map((a) => [a.id, a])),
+    contracts: new Map(dictOf(data.contracts).map((c) => [c.id, c])),
   };
   BY_SNAPSHOT.set(data, built);
   return built;
@@ -8732,6 +8735,13 @@ function toSuggestion(row: SuggestionRow, reg: RowRegistry): EntitySuggestion {
 
 - [ ] **Шаг 21: гейт §С8-18 — тест M14 зеленеет (Р-К-9).** В `apps/server/test/gate-c8-18.test.ts` найти грепом `test.failing` с «M14» в имени и снять `.failing`. Тем же шагом снять локальный слепок формы `GateRowProjection`/`RowProjectionFn` и ленивый загрузчик `rowProjectionOrFail` в этом тесте: импортировать `rowProjectionOf` и `RowProjection` из `@orbis/shared` напрямую (докблок теста 0d это обещает — ревью 0d, Minor-4).
   `cd apps/server && bun test test/gate-c8-18.test.ts` → тест M14 **PASS**; три остальных остаются `test.failing` (их зеленят задачи 4, 6, 9).
+
+> **Эррата по исполнению 7 (08.09).** Элементы строки приезжают привязками снимка, поэтому реестр стал обязателен тестам ШИРЕ
+> списка «Файлов»: `budget/PlannedToFactCard.test.tsx` и `overdueRoundTripHandler` в `AgendaScreen.test.tsx` роутят
+> `registry.effective` настоящей фикстурой; в `NativeRow.test.tsx` (×4) и `CategoryScreen.test.tsx` (×1) синхронные утверждения
+> стали ожиданиями (`findBy*`/`waitFor`) — пины не ослаблены. `dueDate` снят из `useAgenda.ts` вместе с `isFinancial`
+> (после `showRowDate` читателей нет). `entity-suggest.test.ts` — 25 тестов, не 26. Докблок `EffectiveRegistry.contracts`
+> в `labels.ts` переписан (обещал «подписи заводит задача 7» — исполнено); интерфейс не тронут.
 
 - [ ] **Шаг 22: полный прогон и коммит.** `bun run lint` → **PASS**; `bun run typecheck` → **PASS**; `bun run test` → **PASS**; `bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts` → **PASS** (правило уехало в общий баррель — проверяем, что чанки не разъехались). Греп-доказательство: `git grep -n "CLOSED = new Set" -- apps/web/src` → пусто; `git grep -n "found?.status\|\.status ??" -- apps/web/src/features/entity-detail/Blocks.tsx apps/web/src/features/entity-editor/nodes/EntityChip.tsx` → пусто.
   Коммит: `feat(web,server,shared): строка M14 из контрактов — гейт §С8-18 по строке списка зелёный`
