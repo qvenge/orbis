@@ -232,6 +232,73 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
       ['2026-07-11', '680.00'],
     ]);
   });
+
+  test('ДЕЛЬТА КЛАССОВ — тот же четвёртый путь: карта классов двигает версию, кэш промахивается', async () => {
+    // §Б2-2 × §Б5-5. Дельта с `classMap` меняет ЧЛЕНСТВО в классах, то есть множество, по
+    // которому считается `spent`. Своего сноса кэша у неё нет и не нужно: `setAspectDelta`
+    // двигает `registry_version` владельца, а ключ кэша несёт `owner_version` — строка
+    // прежней версии перестаёт отвечать сама. Проба идёт ЖЕСТОМ ВЛАДЕЛЬЦА через исполнителя,
+    // а не `bumpRegistryVersion`: сторожить надо путь, а не хелпер теста.
+    const cat5 = newId();
+    const clock = () => new Date('2026-07-12T09:00:00.000Z');
+    const env = await createEntity(user, {
+      title: 'Дельта классов',
+      props: budgetProps(cat5),
+      aspects: ['orbis/budget'],
+    });
+    await createEntity(user, {
+      title: 'Трата',
+      props: finProps(cat5, '2026-07-05'),
+      aspects: ['orbis/financial'],
+    });
+    const spentOf = async (): Promise<string | undefined> =>
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+        (e) => e.envelope.id === env.id,
+      )?.spent;
+    expect(await spentOf()).toBe('340.00');
+
+    // Заведомо неверное число в кэше: без него «пересчитал» и «взял из кэша» не различить.
+    const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
+    await withIdentity(db, user, (tx) =>
+      writeSpentCache(
+        tx,
+        user,
+        [{ envelopeId: env.id, asOf: '2026-07-12', spent: '999.00' }],
+        versions,
+      ),
+    );
+    expect(await spentOf()).toBe('999.00');
+
+    ok(
+      await execute(
+        db,
+        req(user, 'aspect_delta_set', {
+          aspect: 'orbis/task',
+          delta: {
+            selectOptions: {
+              'orbis/task_status': {
+                add: [{ key: 'in_review', label: { ru: 'На ревью' }, rank: 45 }],
+              },
+            },
+            classMap: {
+              'orbis/task_status': [
+                {
+                  contract: 'orbis/completable',
+                  slot: 'status',
+                  variant: 'in_review',
+                  class: 'active',
+                },
+              ],
+            },
+          },
+        }),
+      ),
+    );
+    expect(
+      (await withIdentity(db, user, (tx) => readRegistryVersions(tx, user))).ownerVersion,
+    ).toBe(versions.ownerVersion + 1);
+    expect(await spentOf()).toBe('340.00');
+  });
 });
 
 describe('врезка в бюджет-хук: инкремент нового движения, снос — всё остальное (§Б5-5, Р-К-16)', () => {

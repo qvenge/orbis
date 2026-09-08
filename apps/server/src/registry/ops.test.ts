@@ -3,7 +3,7 @@
 // базы: это первые писатели реестра снаружи сида, и всё, что здесь проверяется, — про то,
 // как они ведут себя с ДАННЫМИ ВЛАДЕЛЬЦА, а не про форму входа.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { AGENDA_DEF, newId } from '@orbis/shared';
+import { AGENDA_DEF, addDays, newId, rowProjectionOf } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -18,6 +18,7 @@ import { undoAction } from '../executor/undo';
 import { approvePending } from '../policy/pending';
 import { seedOwnerGraph, seedSmartListId } from '../seed/onboarding';
 import { SEED_SMART_LISTS } from '../seed/smart-lists';
+import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { effectiveRegistry } from './cache';
 import {
@@ -2510,9 +2511,19 @@ describe('карта классов и пользовательский набо
   // Шаги ОТЛОЖЕННЫЕ (`() =>`), а не готовые промисы: `runS` стартует запрос уже при сборке
   // массива, и `attach_orbis_task` уходил бы в базу одновременно с `entity_create` той же
   // сущности — гонка, дающая `NOT_FOUND` на ровном месте. Порядок здесь — часть сценария.
+  // Срок ВЧЕРАШНИЙ у обеих задач: секция «просроченное» у Agenda отбирается предикатом
+  // `class(orbis/completable) in 'open'` — вторым, ВЫРАЖЕНЧЕСКИМ бэкендом классов, и без даты
+  // в прошлом он остался бы недостижим (§Б5-6).
+  const AGENDA_TZ = 'Europe/Moscow';
+  const agendaToday = new Intl.DateTimeFormat('en-CA', { timeZone: AGENDA_TZ }).format(new Date());
+  const yesterday = addDays(agendaToday, -1);
   const task = (id: string, title: string, status: string) => [
     () => runS('entity_create', { id, title, tags: [] }),
-    () => runS('attach_orbis_task', { entity_id: id, data: { 'orbis/task_status': status } }),
+    () =>
+      runS('attach_orbis_task', {
+        entity_id: id,
+        data: { 'orbis/task_status': status, 'orbis/due_date': yesterday },
+      }),
   ];
 
   test('вариант с отнесением попадает в open, свой набор — в свой фильтр', async () => {
@@ -2555,6 +2566,34 @@ describe('карта классов и пользовательский набо
     expect(idsOf(await q('class=orbis/completable:open'))).toEqual([inReview]);
     expect(idsOf(await q('class=orbis/completable:closed'))).toEqual([dropped]);
     expect(idsOf(await q('class=orbis/completable:dropped'))).toEqual([dropped]);
+  });
+
+  test('тот же класс видят чекбокс строки и Agenda — два ОСТАЛЬНЫХ читателя членства', async () => {
+    // Приёмка §С8-19 закрывается не одним фильтром: `class=` — это SQL-бэкенд компилятора,
+    // чекбокс строки читает членство ИНДЕКСОМ привязок (`rowProjectionOf`, §Б5-6), а Agenda —
+    // ВЫРАЖЕНЧЕСКИМ бэкендом (`compileExprPredicate` над `class(...) in 'open'`). Вариант,
+    // доехавший в один из трёх, но не в остальные, и есть «запись, которую находят через
+    // один аспект и теряют через другой».
+    const reg = await withIdentity(db, setOwner, (tx) => effectiveRegistry(tx, setOwner));
+    const projectionOf = (status: string) =>
+      rowProjectionOf({ aspects: ['orbis/task'], props: { 'orbis/task_status': status } }, reg)
+        .checkbox;
+    expect(projectionOf('in_review')).toEqual({ cls: 'active', closed: false });
+    expect(projectionOf('cancelled')).toEqual({ cls: 'cancelled', closed: true });
+
+    const agenda = await withIdentity(db, setOwner, (tx) =>
+      agendaListOf(tx, setOwner, agendaSubscriptionOf(reg), {
+        today: agendaToday,
+        timeZone: AGENDA_TZ,
+        days: 8,
+      }),
+    );
+    const overdue = agenda.rows
+      .filter((r) => r.section === 'overdue')
+      .map((r) => r.entity.id)
+      .sort();
+    // `in_review` просрочен и НЕЗАКРЫТ — он в секции; `cancelled` закрыт и в неё не идёт.
+    expect(overdue).toEqual([inReview]);
   });
 
   test('вариант без отнесения — VARIANT_UNMAPPED ДО записи, реестр цел', async () => {
