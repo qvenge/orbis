@@ -151,7 +151,7 @@ describe('движок Agenda: потолок секций, наборы кон�
     const r = await listFor(u);
     expect(r.rows.filter((x) => x.section === 'overdue')).toHaveLength(200);
     expect(r.truncated).toEqual({ window: false, overdue: true });
-  });
+  }, 30_000); // явный таймаут: десятки операций через исполнитель не влезают в 5 с при server ∥ web (Ф-Б1-41)
 
   test('шаблон повторения скрыт набором templates, инстанс виден; окно материализации из декларации (Р-К-12)', async () => {
     const u = freshUserId();
@@ -193,7 +193,7 @@ describe('движок Agenda: потолок секций, наборы кон�
     // …и своей ЗАКОННОЙ секции она при этом не теряет: потолок окна не задет
     expect(idsOf(r, 'window').has(both)).toBe(true);
     expect(idsOf(r, 'overdue').has(both)).toBe(false);
-  });
+  }, 30_000); // явный таймаут: десятки операций через исполнитель не влезают в 5 с при server ∥ web (Ф-Б1-41)
 
   test('направление окна — из декларации: sortBy desc переворачивает порядок (M-3)', async () => {
     const u = freshUserId();

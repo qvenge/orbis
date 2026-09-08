@@ -1678,7 +1678,7 @@ describe('routine.proposalsForEntity', () => {
 
     const open = await caller().routine.proposalsForEntity({ entityId: taskId });
     expect(open.map((v) => v.pendingId)).toEqual([live.pendingId]);
-  });
+  }, 30_000); // явный таймаут: десятки операций через исполнитель не влезают в 5 с при server ∥ web (Ф-Б1-41)
 
   test('после правки владельца: мёртвый P1 не попадает, живой P2 попадает (условие pending_id = id сообщения)', async () => {
     const taskId = await seedTask('Разобрать кладовку');

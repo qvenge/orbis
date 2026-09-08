@@ -220,7 +220,7 @@ describe('routineTick: бакет в таймзоне владельца, «со
       expect((await runsOf(owner, routineId)).map((r) => r.id)).toEqual([runId]);
       expect((await runAspect(owner, runId))['orbis/run_outcome']).toBe('finished');
     }
-  });
+  }, 30_000); // явный таймаут: десятки операций через исполнитель не влезают в 5 с при server ∥ web (Ф-Б1-41)
 
   test('догон: now = бакет+5ч → создаётся; now = бакет+7ч → молча пропущен; позавчерашний бакет не создаётся (приёмка 14)', async () => {
     // Сервер лежал ночь и проснулся в 12:00 мск — утренний бакет ещё в окне 6 ч

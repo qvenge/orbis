@@ -133,7 +133,7 @@ describe('property_create / property_update: жизненный цикл propose
       status: 'active',
     });
     expect(active.ok).toBe(true);
-  });
+  }, 30_000); // явный таймаут: десятки операций через исполнитель не влезают в 5 с при server ∥ web (Ф-Б1-41)
 
   test('активация proposed → active; отклонение неиспользованного — строка удалена', async () => {
     const created = ok(
