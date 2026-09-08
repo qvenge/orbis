@@ -27,6 +27,7 @@ import {
   proposeInput,
   relationCreateInput,
   relationDeleteInput,
+  type SurfaceName,
 } from '@orbis/shared';
 import {
   normalizeQueryAst,
@@ -1237,6 +1238,17 @@ async function runMutation(
 }
 
 /**
+ * Как назвать владельцу ПОВЕРХНОСТЬ. Своей подписи у поверхности в реестре нет — это машинное
+ * имя договора между подпиской и движком (§Б5-1), а карточку читает человек. Ключи — те же,
+ * что у `SURFACES` (`@orbis/shared`), и `satisfies` не даёт перечню разойтись с ним: второго
+ * письменного списка поверхностей здесь нет.
+ */
+const SURFACE_LABEL: Record<string, string> = {
+  'planner/agenda': 'Повестка',
+  'finance/budget-overview': 'Бюджет',
+} satisfies Record<SurfaceName, string>;
+
+/**
  * КАК НАЗВАТЬ ВЛАДЕЛЬЦУ МУТАЦИЮ РЕЕСТРА — одной фразой на все карточки, которые её несут.
  *
  * МЕСТ СБОРКИ КАРТОЧКИ, СПОСОБНОЙ НЕСТИ МУТАЦИЮ РЕЕСТРА, ЧЕТЫРЕ, и три из них зовут эту
@@ -1286,7 +1298,7 @@ async function runMutation(
  * двух других сообщает владельцу «расслабься, уже случилось» там, где у него СПРАШИВАЮТ
  * разрешение, — замок, рассказывающий о несделанном в прошедшем времени, хуже замка без
  * сводки вовсе. Поэтому голова каждой фразы — ОТГЛАГОЛЬНОЕ СУЩЕСТВИТЕЛЬНОЕ («Заведение»,
- * «Правка», «Слияние», «Настройка», «Сброс»), а не форма глагола. Ре-ревью фикс-раунда 1
+ * «Правка», «Слияние», «Настройка», «Сброс», «Привязка», «Снятие»), а не форма глагола. Ре-ревью фикс-раунда 1
  * поймало здесь «Заведено свойство «X»» на карточке-ЗАПРОСЕ при нуле строк в
  * `property_definitions`. Правило пиннится тестом, который проверяет ВСЕ пять фраз и падает
  * на шестой, написанной иначе.
@@ -1327,6 +1339,20 @@ export function registryOperationSummary(
     const def = reg.aspects.get(address);
     return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
   };
+  const contractName = (address: unknown): string => {
+    if (typeof address !== 'string') return String(address);
+    const def = reg.contracts.get(address);
+    return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
+  };
+  // Поверхность у `subscription_remove` в конверте не приезжает — её знает сама подписка;
+  // фолбэк на id держит фразу читаемой на подписке, которой в снимке ещё нет.
+  const surfaceName = (payload: Record<string, unknown>): string => {
+    const surface =
+      typeof payload.surface === 'string'
+        ? payload.surface
+        : reg.subscriptions.get(String(payload.id))?.surface;
+    return surface === undefined ? String(payload.id) : (SURFACE_LABEL[surface] ?? surface);
+  };
   switch (tool) {
     case 'property_create': {
       const proposed = payload.status === 'proposed' ? ' (предложение)' : '';
@@ -1340,8 +1366,35 @@ export function registryOperationSummary(
       return `Настройка аспекта «${aspectName(payload.aspect)}»`;
     case 'aspect_delta_remove':
       return `Сброс настройки аспекта «${aspectName(payload.aspect)}»`;
+    case 'aspect_create':
+      // Строки ещё нет — подпись берётся из ВЫЗОВА, как у `property_create`; ключ на подхвате,
+      // если подписи в конверте не оказалось.
+      return `Заведение аспекта «${named(payload.label, payload.key)}»`;
+    case 'aspect_implements_set': {
+      const contracts = (Array.isArray(payload.implements) ? payload.implements : []).map((b) =>
+        contractName(isRecord(b) ? b.contract : b),
+      );
+      return contracts.length === 0
+        ? `Привязка аспекта «${aspectName(payload.aspect)}»`
+        : `Привязка аспекта «${aspectName(payload.aspect)}» к контрактам: «${contracts.join('», «')}»`;
+    }
+    case 'aspect_implements_remove':
+      return `Снятие привязки аспекта «${aspectName(payload.aspect)}» к контракту «${contractName(payload.contract)}»`;
+    case 'subscription_set':
+      // У подписки подписи нет вовсе (`subscription_definitions` — id, surface, definition), и
+      // называется она ПОВЕРХНОСТЬЮ: владелец узнаёт «Повестку», а не `orbis/agenda`. Ответ на
+      // «где я это увижу» и есть то, что ему нужно перед нажатием «Принять».
+      return `Настройка подписки «${surfaceName(payload)}»`;
+    case 'subscription_remove':
+      return `Сброс подписки «${surfaceName(payload)}»`;
+    case 'contract_sets_delta_set':
+      return `Настройка наборов контракта «${contractName(payload.contract)}»`;
+    case 'contract_sets_delta_remove':
+      return `Сброс наборов контракта «${contractName(payload.contract)}»`;
   }
-  // Недостижимо: зовётся только под `REGISTRY_TOOL_NAMES`, и switch перечисляет все пять.
+  // Недостижимо: зовётся под `REGISTRY_TOOL_NAMES` (`:1019`, `:1198`, `:1640`), и switch
+  // перечисляет все двенадцать имён Б-1 — семь из них войдут в реестр тулов задачами 15/16, а
+  // фраза стоит раньше тула намеренно (без неё `pendingSummary` показал бы владельцу голое имя).
   return tool;
 }
 
@@ -1627,6 +1680,12 @@ async function snapshotDeferredUnit(
  *
  * Функция одна на ОБА пути постановки — отложенную единицу прогона и карточку-запрос из
  * чата/MCP: разойтись им нельзя, вопрос у них один и тот же.
+ *
+ * СЕМЬ ТУЛОВ Б-1 НОРМАЛИЗАЦИИ НЕ ТРЕБУЮТ, и это не пропуск: нормализация чинит ОДИН дефект —
+ * `key` освобождается физическим удалением отклонённого `proposed` (`freeKey`, `registry/ops.ts`),
+ * и единица, стоявшая по ключу, применилась бы к другой строке. У аспектов, контрактов и
+ * подписок физического удаления с освобождением ключа нет (§А10-3: «удалить» = deprecate), а
+ * адресуются они id; появится у них `freeKey` — сюда добавится ветка.
  */
 function registryAddressesToId(
   reg: RegistrySnapshot,
@@ -1714,10 +1773,14 @@ async function snapshotRegistryUnit(
       };
     }
   }
-  // Сюда доходят все пять реестровых тулов — с Р-24-7 в том числе `property_create`
-  // (`preview` своей строки от рутины теперь откладывается, а не отклоняется). Ветка
-  // осталась fail-closed на случай ШЕСТОГО тула реестра (подписка, правило — часть Б):
-  // родовая строка «тул → конверт» хуже адресной, но лучше молчания.
+  // Сюда доходят все ПЯТЬ тулов реестра среза А — с Р-24-7 в том числе `property_create`
+  // (`preview` своей строки от рутины теперь откладывается, а не отклоняется). Семь тулов Б-1
+  // родовую строку получают ОСОЗНАННО: адресные строки «было → станет» им кладут задачи 15/16
+  // вместе со своими чтениями прежнего состояния (`readContractDelta`/`readSubscriptionDelta`,
+  // `implements` из снимка) — ветка, написанная раньше своей операции чтения, была бы кодом,
+  // который нечем прогнать (тот же довод, что у тришки `implements` в `confirmation.test.ts`).
+  // Фраза сводки при этом у них уже есть — `registryOperationSummary` выше, — то есть родовой
+  // остаётся только строка, а не карточка.
   return { input: payload, summary, rows: [{ field: tool, after: rowValue(payload) }] };
 }
 

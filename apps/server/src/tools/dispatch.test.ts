@@ -7,7 +7,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
+  BUILTIN_SUBSCRIPTION_DEFS,
   entityThreadId,
   newId,
   type PropertyDefinition,
@@ -4943,8 +4945,23 @@ describe('сводка мутации реестра: правила, а не с
     ]),
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     roles: new Map(),
-    contracts: new Map(),
-    subscriptions: new Map(),
+    // Контракты и подписки — НАПОЛНЕННЫМИ, а не пустыми картами: подпись контракта фраза берёт
+    // из снимка, а поверхность подписки у `subscription_remove` в конверте не приезжает вовсе
+    // (там одна `id`) — на пустом словаре тест зеленел бы на фолбэке, а не на правиле.
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((d) => [d.id, d])),
+    subscriptions: new Map(
+      BUILTIN_SUBSCRIPTION_DEFS.map((s) => [
+        s.id,
+        {
+          id: s.id,
+          ownerId: null,
+          surface: s.surface,
+          definition: s.definition,
+          module: s.module,
+          rank: s.rank,
+        },
+      ]),
+    ),
     ownerVersion: 1,
     systemVersion: 1,
   };
@@ -4966,6 +4983,8 @@ describe('сводка мутации реестра: правила, а не с
     'Слияние',
     'Настройка',
     'Сброс',
+    'Привязка',
+    'Снятие',
   ]);
   const headOf = (phrase: string): string => phrase.split(' ')[0] ?? '';
 
@@ -5011,6 +5030,58 @@ describe('сводка мутации реестра: правила, а не с
       'Создано свойство «Усилие»',
     ]) {
       expect([past, NEUTRAL_HEADS.has(headOf(past))]).toEqual([past, false]);
+    }
+  });
+
+  test('фразы семи тулов вехи II написаны РАНЬШЕ тулов и по тому же правилу', () => {
+    // Фраза кладётся раньше тула намеренно: без неё владелец увидел бы в карточке голое имя
+    // (`pendingSummary` фолбэчит именем тула, `policy/pending.ts`) и нажал бы вслепую — ровно
+    // тот дефект, что чинил фикс-раунд Задачи 16 среза А. Задачам 15/16 остаётся только тул.
+    const contract = (id: string) => ({ contract: id });
+    const phrases: Record<string, string> = {
+      aspect_create: registryOperationSummary(REG, 'aspect_create', {
+        key: 'user/sleep-log',
+        label: { ru: 'Сон' },
+      }),
+      aspect_implements_set: registryOperationSummary(REG, 'aspect_implements_set', {
+        aspect: 'orbis/task',
+        implements: [contract('orbis/completable'), contract('orbis/when')],
+      }),
+      aspect_implements_remove: registryOperationSummary(REG, 'aspect_implements_remove', {
+        aspect: 'orbis/task',
+        contract: 'orbis/when',
+      }),
+      subscription_set: registryOperationSummary(REG, 'subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: {},
+      }),
+      subscription_remove: registryOperationSummary(REG, 'subscription_remove', {
+        id: 'orbis/agenda',
+      }),
+      contract_sets_delta_set: registryOperationSummary(REG, 'contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { mine: ['active'] },
+      }),
+      contract_sets_delta_remove: registryOperationSummary(REG, 'contract_sets_delta_remove', {
+        contract: 'orbis/completable',
+      }),
+    };
+    expect(phrases).toEqual({
+      aspect_create: 'Заведение аспекта «Сон»',
+      aspect_implements_set: 'Привязка аспекта «Задача» к контрактам: «Завершаемость», «Когда»',
+      aspect_implements_remove: 'Снятие привязки аспекта «Задача» к контракту «Когда»',
+      // ПОДПИСКУ НАЗЫВАЕТ ПОВЕРХНОСТЬ, А НЕ ЕЁ ID. `orbis/agenda` — машинный адрес договора
+      // между подпиской и движком (§Б5-1), и в карточке он ничего владельцу не сообщает.
+      // Форма — общая с задачей 16 (`SURFACE_LABEL`/`surfaceName`): владелец формулировки
+      // один, второго golden'а на ту же фразу не заводится.
+      subscription_set: 'Настройка подписки «Повестка»',
+      subscription_remove: 'Сброс подписки «Повестка»',
+      contract_sets_delta_set: 'Настройка наборов контракта «Завершаемость»',
+      contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
+    });
+    for (const [tool, phrase] of Object.entries(phrases)) {
+      expect([tool, phrase, NEUTRAL_HEADS.has(headOf(phrase))]).toEqual([tool, phrase, true]);
     }
   });
 
