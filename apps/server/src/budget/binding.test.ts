@@ -4,7 +4,7 @@
 // создании/правке/архивации конверта, уникальность конверта. Реальная БД под
 // withIdentity (RLS enforced), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import { newId, ROLE_ENVELOPE_BINDING } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -13,9 +13,11 @@ import {
   executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
+  seedCustomAspect,
   seedRefTargetRows,
   truncateAll,
 } from '../../test/helpers';
+import { GATE_FIN_ASPECT, GATE_FIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
@@ -28,7 +30,10 @@ import type {
   WireEntity,
 } from '../executor/types';
 import { undoAction } from '../executor/undo';
+import { effectiveRegistry } from '../registry/cache';
+import { budgetContourFor } from '../subscriptions/budget';
 import { selectEnvelope } from './binding';
+import { propOfSlot, SLOT_CATEGORY, SLOT_CURRENCY, SLOT_DATE } from './contour';
 
 requireEnv();
 
@@ -1291,3 +1296,39 @@ describe('транзакция, ставшая конвертом: селект�
 // ---------------------------------------------------------------------------
 // Задача 10a: привязка и уникальность читают НОВУЮ правду строки (§А1-1)
 // ---------------------------------------------------------------------------
+
+describe('контур бюджет-хука собран из ДЕКЛАРАЦИИ (§С8-18, Р-К-39)', () => {
+  test('встроенный владелец даёт ровно встроенную пару; аспект владельца входит наравне', async () => {
+    const plain = freshUserId();
+    const builtin = budgetContourFor(
+      await withIdentity(db, plain, (tx) => effectiveRegistry(tx, plain)),
+    );
+    expect([...builtin.movement.aspects]).toEqual(['orbis/financial']);
+    expect([...builtin.envelope.aspects]).toEqual(['orbis/budget']);
+    expect(builtin.bindingRole).toBe(ROLE_ENVELOPE_BINDING);
+    expect(propOfSlot(builtin.movement, 'orbis/financial', SLOT_DATE)).toBe('orbis/occurred_on');
+    // Шаблонность (§3.1) — по контракту `orbis/recurrence`, и ТОЛЬКО та привязка, что объявила
+    // слот `template_marker`: `orbis/financial` объявляет тот же контракт одним
+    // `fixed.origin_role` (Р-К-30), и посчитай контур её шаблонной — не привязалась бы ни
+    // одна трата вообще.
+    expect(builtin.templates.map((b) => b.aspectId)).toEqual(['orbis/schedule']);
+
+    const owner = freshUserId();
+    await seedCustomAspect(owner, GATE_FIN_ASPECT);
+    const contour = budgetContourFor(
+      await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)),
+    );
+    expect([...contour.movement.aspects].sort()).toEqual(
+      ['orbis/financial', GATE_FIN_KEY].sort(),
+    );
+    expect(propOfSlot(contour.movement, GATE_FIN_KEY, SLOT_DATE)).toBe(GATE_PROPS.finDate);
+    expect(propOfSlot(contour.movement, GATE_FIN_KEY, SLOT_CATEGORY)).toBe(GATE_PROPS.finCategory);
+    // Слот `currency` аспект гейта не привязывает — и это законно: комбинация возьмёт
+    // дефолтную валюту владельца, ровно как у транзакции без `orbis/currency`.
+    expect(propOfSlot(contour.movement, GATE_FIN_KEY, SLOT_CURRENCY)).toBeUndefined();
+    // Аспект владельца объявил ТОЛЬКО money-movement: в сторону конверта он не протекает.
+    expect(contour.envelope.aspects.has(GATE_FIN_KEY)).toBe(false);
+    // И контур одного владельца не протёк в другого (мемо ключуется СНИМКОМ, не процессом).
+    expect([...builtin.movement.aspects]).toEqual(['orbis/financial']);
+  });
+});

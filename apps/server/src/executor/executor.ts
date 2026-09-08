@@ -50,6 +50,7 @@ import {
   rebindForEnvelope,
   unbindOps,
 } from '../budget/binding';
+import { type BudgetContour, carriesSide, type ContourSide } from '../budget/contour';
 import {
   bumpSpentCache,
   invalidateSpentCache,
@@ -96,6 +97,7 @@ import {
 } from '../tools/registry-tools';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import {
+  budgetContourFor,
   type SpentCacheContour,
   spentCacheContourOf,
   spentContributionOf,
@@ -192,11 +194,22 @@ interface ExecCtx {
    * на каждую строку стоил бы больше, чем сам кэш экономит.
    */
   spentContour?: SpentCacheContour;
+  /**
+   * Контур бюджет-хука (§Б5-4, Р-К-39) — ЛЕНИВЫЙ и на транзакцию, как `compileCtx` выше:
+   * сборка читает декларацию подписки и строит индекс привязок ВСЕГО реестра, и пересчёт на
+   * каждую операцию импорта стоил бы дороже самого хука.
+   */
+  budgetContour?: BudgetContour;
 }
 
 function spentContourOf(ctx: ExecCtx): SpentCacheContour {
   ctx.spentContour ??= spentCacheContourOf(ctx.registry);
   return ctx.spentContour;
+}
+
+function contourOf(ctx: ExecCtx): BudgetContour {
+  ctx.budgetContour ??= budgetContourFor(ctx.registry);
+  return ctx.budgetContour;
 }
 
 /**
@@ -698,17 +711,19 @@ function collectDeclaredDerivedFrom(ops: Array<{ tool: string; input: unknown }>
   return targets;
 }
 
-/** Аспекты, из которых состоит бюджет-контур владельца (§2.3): транзакция и конверт. */
-const BUDGET_CONTOUR_ASPECTS = ['orbis/financial', 'orbis/budget'] as const;
-
 /**
- * Свойства бюджет-контура — объединение свойств `orbis/financial` и `orbis/budget` ПО
- * РЕЕСТРУ. Считается на каждый вызов и не кешируется: снимок реестра живёт одну транзакцию,
- * а аспектов здесь два и свойств в них полтора десятка.
+ * Свойства бюджет-контура — объединение свойств ВСЕХ аспектов контура ПО РЕЕСТРУ: и встроенной
+ * пары, и аспектов владельца, объявивших те же контракты. Раньше пара была литералом, и патч
+ * по свойству аспекта владельца замка контура не брал вовсе — то есть возвращал ровно тот
+ * порядок захвата, ради которого предикат и переписывали на реестр (Р-27).
+ *
+ * Считается на каждый вызов и не кешируется: снимок живёт одну транзакцию, а сам КОНТУР уже
+ * мемоизирован по снимку (`budgetContourFor`), и второй кэш здесь экономил бы обход десятка
+ * ссылок ценой третьего места, где живёт истина.
  */
-function budgetContourProperties(reg: RegistrySnapshot): Set<string> {
+function budgetContourProperties(reg: RegistrySnapshot, contour: BudgetContour): Set<string> {
   const ids = new Set<string>();
-  for (const aspectId of BUDGET_CONTOUR_ASPECTS) {
+  for (const aspectId of contour.aspects) {
     for (const ref of reg.aspects.get(aspectId)?.properties ?? []) ids.add(ref.propertyId);
   }
   return ids;
@@ -741,12 +756,12 @@ export function touchesBudgetContour(
   reg: RegistrySnapshot,
   op: { tool: string; input: unknown },
 ): boolean {
+  // Контур мемоизирован по снимку (`budgetContourFor`), поэтому рекурсия в `batch_execute`
+  // ниже — и импорт в сотни операций — платят за его сборку ровно один раз на транзакцию.
+  const contour = budgetContourFor(reg);
   if (op.tool.startsWith('attach_')) {
     const aspectId = resolveAttachAspect(reg, op.tool);
-    if (
-      aspectId !== undefined &&
-      (BUDGET_CONTOUR_ASPECTS as readonly string[]).includes(aspectId)
-    ) {
+    if (aspectId !== undefined && contour.aspects.has(aspectId)) {
       return true;
     }
   }
@@ -763,7 +778,7 @@ export function touchesBudgetContour(
   if (input === null || typeof input !== 'object') return false;
   if (op.tool === 'entity_update' && input.archived !== undefined) return true;
 
-  const contourProps = budgetContourProperties(reg);
+  const contourProps = budgetContourProperties(reg, contour);
   const touchesProperty = (keyOrId: string): boolean => {
     const def = resolvePropertyRef(reg, keyOrId);
     return contourProps.has(def?.id ?? keyOrId);
@@ -788,7 +803,7 @@ export function touchesBudgetContour(
     : isAspectsPatchInput(aspects)
       ? [...(aspects.attach ?? []), ...(aspects.detach ?? [])]
       : [];
-  return named.some((a) => (BUDGET_CONTOUR_ASPECTS as readonly string[]).includes(a));
+  return named.some((a) => contour.aspects.has(a));
 }
 
 /** Форма `aspects` во ВХОДЕ-ПАТЧЕ: у неё нет ключей, кроме attach/detach. */
@@ -1106,14 +1121,15 @@ function hookAspectChanged(reg: RegistrySnapshot, hook: BudgetHook, aspectId: st
 /**
  * Какие ветки бюджет-хука сработают (§2.3). Отдельно от расчёта операций: те же
  * условия нужны прогреву кэша чтений ДО первого хука (иначе набор целей неизвестен).
- * (а) итоговая сущность несёт orbis/financial и financial-данные/архивность/шаблонность
- *     (orbis/schedule) изменились → bindingOps (шаблон recurring отвязывается);
- * (б) операция затронула orbis/budget (create/update периода-категории/архивация/detach)
- *     → rebindForEnvelope по окну «старый ИЛИ новый период»;
- * (в) сущность ПЕРЕСТАЛА нести orbis/financial (detach) → unbindOps снимает привязку.
+ * (а) итоговая сущность несёт аспект контракта денег и его данные/архивность/шаблонность
+ *     изменились → bindingOps (шаблон повторения отвязывается);
+ * (б) операция затронула аспект контракта конверта (create/update периода-категории/
+ *     архивация/detach) → rebindForEnvelope по окну «старый ИЛИ новый период»;
+ * (в) сущность ПЕРЕСТАЛА нести аспект контракта денег (detach) → unbindOps снимает привязку.
  */
 function budgetHookBranches(
   reg: RegistrySnapshot,
+  contour: BudgetContour,
   hook: BudgetHook,
 ): {
   rebind: boolean;
@@ -1121,33 +1137,35 @@ function budgetHookBranches(
   unbind: boolean;
 } {
   const { before, after } = hook;
-  // «Аспект висит на сущности» — это ровно `aspects[]`, без обхода значений: наличие ключа
-  // в снятой карте выражало тот же факт (её проекция клала пустой объект даже аспекту без
-  // единого значения).
-  const hadFinancial = before?.aspects.includes('orbis/financial') === true;
-  const hasFinancial = after.aspects.includes('orbis/financial');
-  const touchesBudget =
-    before?.aspects.includes('orbis/budget') === true || after.aspects.includes('orbis/budget');
+  // «Аспект висит на сущности» — это по-прежнему ровно `aspects[]`; ЧЕЙ аспект, решает
+  // контур: встроенный аспект денег и аспект владельца объявляют один контракт и обязаны
+  // поднимать одну и ту же ветку (§С8-18) — иначе привязку аспекту владельца ставить некому.
+  const side = (s: ContourSide, row: EntityRow | null): boolean =>
+    row !== null && carriesSide(s, row.aspects);
+  const hadMovement = side(contour.movement, before);
+  const hasMovement = side(contour.movement, after);
+  const touchesEnvelope = side(contour.envelope, before) || side(contour.envelope, after);
   const archivedChanged = before !== null && before.archived !== after.archived;
+  const changed = (aspects: Iterable<string>): boolean =>
+    [...aspects].some((id) => hookAspectChanged(reg, hook, id));
   return {
-    // (в) сущность ПЕРЕСТАЛА быть транзакцией: detach orbis/financial. Ветка (а) сюда не
-    // достаёт (она требует financial в ИТОГОВЫХ аспектах), и bindingOps на такой сущности
-    // возвращает [] — снять устаревшую привязку было некому, и конверт оставался
-    // родителем не-financial сущности. Зеркальный кейс «стал шаблоном recurring»
-    // закрывает ветка (а) через bindingTargetOf → fin:null.
-    unbind: hadFinancial && !hasFinancial,
+    // (в) сущность ПЕРЕСТАЛА быть движением: detach аспекта контракта денег. Ветка (а) сюда
+    // не достаёт (она требует движение в ИТОГОВЫХ аспектах), и bindingOps на такой сущности
+    // возвращает [] — снять устаревшую привязку было бы некому. Зеркальный кейс «стал
+    // шаблоном» закрывает ветка (а) через bindingTargetOf → props:null.
+    unbind: hadMovement && !hasMovement,
     rebind:
-      touchesBudget &&
-      (before === null || archivedChanged || hookAspectChanged(reg, hook, 'orbis/budget')),
-    // orbis/schedule в условии — сценарий «пометить повторяющейся» (§3.1): attach/detach
-    // recurrence меняет шаблонность при неизменном financial, привязку надо пересчитать
-    // (шаблон отвязывается, экс-шаблон привязывается заново)
+      touchesEnvelope &&
+      (before === null || archivedChanged || changed(contour.envelope.aspects)),
+    // Аспекты контракта `orbis/recurrence` в условии — сценарий «пометить повторяющейся»
+    // (§3.1): attach/detach маркера меняет шаблонность при неизменных данных движения, и
+    // привязку надо пересчитать (шаблон отвязывается, экс-шаблон привязывается заново).
     bind:
-      hasFinancial &&
+      hasMovement &&
       (before === null ||
         archivedChanged ||
-        hookAspectChanged(reg, hook, 'orbis/financial') ||
-        hookAspectChanged(reg, hook, 'orbis/schedule')),
+        changed(contour.movement.aspects) ||
+        changed(contour.templates.map((b) => b.aspectId))),
   };
 }
 
@@ -1167,7 +1185,8 @@ async function budgetFollowUpDescs(
 ): Promise<BudgetOpDesc[]> {
   const { before, after } = hook;
   const ownerId = ctx.req.actorUserId;
-  const branches = precomputed ?? budgetHookBranches(ctx.registry, hook);
+  const contour = contourOf(ctx);
+  const branches = precomputed ?? budgetHookBranches(ctx.registry, contour, hook);
   const descs: BudgetOpDesc[] = [];
 
   // (б) конверт: до или после операции сущность несёт orbis/budget
@@ -1177,6 +1196,7 @@ async function budgetFollowUpDescs(
         ownerId,
         envelope: toWire(after),
         before: before === null ? null : toWire(before),
+        contour,
         reads,
       })),
     );
@@ -1184,12 +1204,12 @@ async function budgetFollowUpDescs(
 
   // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности
   if (branches.bind) {
-    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after), reads })));
+    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after), contour, reads })));
   }
 
   // (в) сущность перестала быть транзакцией: снимаем привязку к конверту
   if (branches.unbind) {
-    descs.push(...(await unbindOps(ctx.tx, { ownerId, entityId: after.id, reads })));
+    descs.push(...(await unbindOps(ctx.tx, { ownerId, entityId: after.id, contour, reads })));
   }
 
   // Дедуп в рамках хука: сущность с обоими аспектами могла бы породить одинаковые ops
@@ -1218,20 +1238,21 @@ async function budgetFollowUpDescs(
  */
 async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
   const ownerId = ctx.req.actorUserId;
-  const reads = new BindingReads();
+  const contour = contourOf(ctx);
+  const reads = new BindingReads(contour);
   // Замок владельца (E9) здесь НЕ берётся: он уже взят первым statement'ом транзакции
   // (lockBudgetContour) — иначе получился бы второй, обратный порядок захвата
   // относительно строковых блокировок и цикл ожидания с путём конверта.
   //
   // Ветки считаются ОДИН раз на хук: внутри budgetHookBranches живёт JSON.stringify по
   // значениям аспектов, а на импорте в 300 строк хуков ровно столько же.
-  const branches = hooks.map((hook) => budgetHookBranches(ctx.registry, hook));
+  const branches = hooks.map((hook) => budgetHookBranches(ctx.registry, contour, hook));
   const targets: BindingTarget[] = [];
   for (const [i, hook] of hooks.entries()) {
     if (!branches[i]?.bind) continue;
     // Окно ребиндинга (ветка «б») прогревается внутри rebindForEnvelope — его строки
     // известны только после запроса затронутых транзакций
-    const target = bindingTargetOf(toWire(hook.after));
+    const target = bindingTargetOf(toWire(hook.after), contour);
     if (target !== null) targets.push(target);
   }
   if (targets.length > 0) await reads.prefetch(ctx.tx, { ownerId, targets });
@@ -1300,15 +1321,11 @@ async function spentCacheParentsOf(
  * литералам аспектов: аспект владельца, объявивший контракт `orbis/money-movement`, обязан
  * двигать тот же кэш, что и встроенный (§С8-18).
  *
- * ГРАНИЦА НА ЭТОМ ШАГЕ, И ЕЁ СНИМАЕТ ОБОБЩЕНИЕ ХУКА. Пока сам хук поднимается только на
- * встроенной паре аспектов (`BUDGET_CONTOUR_ASPECTS`, и `budgetParentsOfMany` в
- * `budget/binding.ts` тоже читает конверт жёстко), у движения с аспектом владельца
- * инкремента не будет: контур КЭША уже собран из декларации, а контур ХУКА — ещё нет, и
- * вторая половина догоняет первую следующим шагом (Р-К-39). Кэш и до него не врёт: ребро
- * привязки таким движениям ставит не хук, а любой его записи/снятию отвечает инвалидация
- * обоих концов; цена — лишний пересчёт и одна щель, «правка суммы такого движения БЕЗ
- * касания рёбер строку не сносит». Этот абзац переписывается обобщением — он обязан
- * перестать быть правдой.
+ * КОНТУР ХУКА И КОНТУР КЭША — ОДИН И ТОТ ЖЕ ИНДЕКС. Хук поднимается на любом аспекте,
+ * объявившем контракт денег, а `spentCacheContourOf` берёт свои множества из
+ * `budgetContourFor` — то есть «движение» у писателя кэша и у писателя рёбер по построению
+ * одно множество. Щель «правка суммы движения владельца строку не сносит», названная до
+ * обобщения, закрыта вместе с ним: инкремент и снос идут теперь и на аспектах владельца.
  *
  * Задетые конверты собираются из ТРЁХ источников, и ни один не лишний: источники дописанных
  * операций (ребиндинг увёл деньги из старого конверта в новый), сама сущность, если она

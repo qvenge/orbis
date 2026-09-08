@@ -56,6 +56,11 @@ import { inArray, SQL, sql } from 'drizzle-orm';
 import { defaultCurrencyOf, lockOwnerBudget, selectEnvelope } from '../budget/binding';
 import { type CategoryInfo, categoriesById, ownerCategories } from '../budget/categories';
 import { decAdd, decCmp, decMul, decSub } from '../budget/decimal';
+import {
+  type BudgetContour,
+  budgetContourOf,
+  EMPTY_CONTOUR,
+} from '../budget/contour';
 import { readSpentCache, spentCacheKey, writeSpentCache } from '../budget/spent-cache';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -405,7 +410,7 @@ export function materializedAggregatesOf(
   reg: RegistrySnapshot,
 ): ReadonlySet<string> {
   const published = new Set<string>();
-  for (const binding of bindingsOf(reg).byContract(def.sources.envelope.contract)) {
+  for (const binding of budgetContourFor(reg).envelope.bindings) {
     const aspect = reg.aspects.get(binding.aspectId);
     for (const [name, decl] of Object.entries(aspect?.aggregations ?? {})) {
       if (decl.published) published.add(name);
@@ -493,11 +498,11 @@ async function runSumCached(
  * Контур кэша `spent`, СОБРАННЫЙ ИЗ ДЕКЛАРАЦИИ (§Б5-5): какие аспекты дают движение, какие —
  * конверт, каким ребром они связаны и включён ли кэш вообще.
  *
- * Ни одного литерала `'orbis/financial'`/`'orbis/budget'` здесь нет намеренно. Аспект гейта
- * `user/gate-fin` объявляет ТОТ ЖЕ контракт `orbis/money-movement`, и жёсткий id выкинул бы
- * его из кэша, оставив ведомость и кэш с разными множествами — ровно тот разъезд, которым
- * §С8-18 и меряется. Пин — греп: в этом файле и в `spent-cache.ts` нет ни одного id
- * встроенного аспекта.
+ * Ни одного литерала `'orbis/financial'`/`'orbis/budget'` здесь нет намеренно. Аспект
+ * ВЛАДЕЛЬЦА объявляет ТОТ ЖЕ контракт `orbis/money-movement`, и жёсткий id выкинул бы его из
+ * кэша, оставив ведомость и кэш с разными множествами — ровно тот разъезд, которым §С8-18 и
+ * меряется. Пин — греп: в этом файле и в `spent-cache.ts` нет ни одного id встроенного
+ * аспекта.
  *
  * Нет строки подписки — контур ВЫКЛЮЧЕН, а не исключение: кэш обязан молчать там, где
  * декларации нет (литеральные снимки фикстур, владелец без модуля Финансы), и падать
@@ -512,6 +517,32 @@ export interface SpentCacheContour {
   bindingRole: string;
 }
 
+/**
+ * Контур бюджет-хука по снимку — ЕДИНСТВЕННАЯ точка его сборки на весь сервер.
+ *
+ * Мемо по СНИМКУ (WeakMap), а не по вызову: `touchesBudgetContour` спрашивает контур на
+ * КАЖДУЮ операцию батча (импорт — сотни, и он рекурсивно заходит внутрь `batch_execute`), а
+ * сборка строит индекс привязок всего реестра. Снимок живёт одну транзакцию и неизменен,
+ * поэтому ключ безопасен, а память освобождается вместе с ним — процессного кэша здесь нет.
+ */
+const CONTOUR_BY_SNAPSHOT = new WeakMap<RegistrySnapshot, BudgetContour>();
+
+export function budgetContourFor(reg: RegistrySnapshot): BudgetContour {
+  const cached = CONTOUR_BY_SNAPSHOT.get(reg);
+  if (cached !== undefined) return cached;
+  // Строки подписки в снимке нет — контур пуст: `builtinSubscription` бросил бы здесь
+  // NOT_FOUND, а исполнитель обязан писать и там, где Бюджета у владельца не заведено.
+  const contour =
+    reg.subscriptions.get(BUDGET_SUBSCRIPTION_ID) === undefined
+      ? EMPTY_CONTOUR
+      : budgetContourOf(
+          builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription,
+          reg,
+        );
+  CONTOUR_BY_SNAPSHOT.set(reg, contour);
+  return contour;
+}
+
 const CONTOUR_OFF: SpentCacheContour = {
   enabled: false,
   aggregate: null,
@@ -521,20 +552,21 @@ const CONTOUR_OFF: SpentCacheContour = {
 };
 
 export function spentCacheContourOf(reg: RegistrySnapshot): SpentCacheContour {
-  if (reg.subscriptions.get(BUDGET_SUBSCRIPTION_ID) === undefined) return CONTOUR_OFF;
+  const contour = budgetContourFor(reg);
+  // Сравнение ПО ССЫЛКЕ и это законно: пустой контур `budgetContourFor` отдаёт ровно эту
+  // константу, а не свежий объект.
+  if (contour === EMPTY_CONTOUR) return CONTOUR_OFF; // декларации нет — кэша тоже
   const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
   const names = [...materializedAggregatesOf(def, reg)];
-  const idx = bindingsOf(reg);
   return {
     enabled: names.length > 0,
     aggregate: names[0] ?? null,
-    movementAspects: new Set(
-      idx.byContract(def.sources.movement.contract).map((b) => b.aspectId),
-    ),
-    envelopeAspects: new Set(
-      idx.byContract(def.sources.envelope.contract).map((b) => b.aspectId),
-    ),
-    bindingRole: def.sources.envelope.binding_role,
+    // Аспекты — ИЗ ТОГО ЖЕ контура, что у хука. Второй индекс привязок означал бы, что кэш и
+    // хук считают «движением» разные множества, а разъехаться им нельзя по построению: тогда
+    // ведомость видела бы трату, которой писатель кэша не заметил.
+    movementAspects: contour.movement.aspects,
+    envelopeAspects: contour.envelope.aspects,
+    bindingRole: contour.bindingRole,
   };
 }
 

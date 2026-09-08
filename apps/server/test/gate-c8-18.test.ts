@@ -20,7 +20,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { type RowProjection, rowProjectionOf } from '@orbis/shared';
+import { ROLE_ENVELOPE_BINDING, type RowProjection, rowProjectionOf } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
@@ -30,9 +30,11 @@ import {
   GATE_AMOUNT,
   GATE_ASPECT_KEYS,
   GATE_FIN_ASPECT,
+  GATE_FIN_KEY,
   GATE_GREP_ALLOWED,
   GATE_GREP_PATHSPEC,
   GATE_GREP_TOKENS,
+  GATE_LIMIT,
   GATE_PLAIN_ASPECT,
   GATE_PROPS,
   type GateWorld,
@@ -258,9 +260,14 @@ describe('гейт §С8-18: аспект только декларацией', 
   // `'orbis/financial' = ANY(e.aspects)` и по свойствам `orbis/amount`/`orbis/direction`/
   // `orbis/occurred_on` — аспекта гейта он не видел вовсе. Теперь ведомость строит движок
   // подписки по КОНТРАКТУ `orbis/money-movement`, и привязка аспекта владельца попадает в тот же
-  // COALESCE по привязкам без единой строки кода под неё. Ребро `envelope-binding` при этом
-  // кладёт ФИКСТУРА: пишущая половина (бюджет-хук) ещё смотрит на жёсткие id `orbis/financial` —
-  // её обобщает задача 11 и тем же коммитом снимает ручное ребро (Р-К-39).
+  // COALESCE по привязкам без единой строки кода под неё.
+  //
+  // Ребро `envelope-binding` ставит БЮДЖЕТ-ХУК, а не фикстура. Его контур собран из контракта
+  // `orbis/money-movement` декларации подписки, и аспект владельца поднимает те же ветки, что и
+  // встроенный. До этого ребро клала рука `seedGateWorld` (`mechanism: 'seed'`), и §С8-18
+  // доказывал только ЧИТАЮЩУЮ половину; ограничение «пишущая половина — хук по
+  // `orbis/financial`», записанное в отчёт вехи I, снято этим коммитом. Верни литерал в
+  // контур — и этот тест покраснеет: рука его больше не подстрахует.
   test('трата gate-fin попадает в spent своего конверта (§С8-18, потребитель 1)', () => {
     const env = taken(overview, 'budget.overview').envelopes.find(
       (e) => e.envelope.id === world.envelopeId,
@@ -308,5 +315,85 @@ describe('гейт §С8-18: аспект только декларацией', 
     const ids = taken(excluded, 'excludeBlocked');
     expect(ids.has(world.blockedOpenId)).toBe(false);
     expect(ids.has(world.finId)).toBe(true);
+  });
+});
+
+describe('§С8-18, пишущая половина: ребро envelope-binding ставит ХУК', () => {
+  const writer = freshUserId();
+  let ids: { category: string; envelope: string; movement: string };
+
+  /** Источники живых рёбер привязки к сущности — истина в БД (админ-DSN, мимо RLS). */
+  async function boundBy(targetId: string): Promise<string[]> {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = (await admin.execute(sql`
+        SELECT source_id FROM relations
+        WHERE target_id = ${targetId} AND role = ${ROLE_ENVELOPE_BINDING}
+        ORDER BY source_id`)) as unknown as Array<{ source_id: string }>;
+      return rows.map((r) => r.source_id);
+    } finally {
+      await adminClient.end();
+    }
+  }
+
+  beforeAll(async () => {
+    await seedCustomAspect(writer, GATE_FIN_ASPECT);
+    const caller = callerFor(writer);
+    const mk = async (title: string, form: { props?: Record<string, unknown>; aspects?: string[] }) =>
+      (await caller.entity.create({ input: { title, tags: [], ...form }, source: 'ui' })).id;
+    const category = await mk('Категория пишущей половины', { aspects: ['orbis/category'] });
+    const envelope = await mk('Конверт пишущей половины', {
+      aspects: ['orbis/budget'],
+      props: {
+        'orbis/finance_category': category,
+        'orbis/limit': GATE_LIMIT,
+        'orbis/period_start': '2026-07-01',
+        'orbis/period_end': '2026-07-31',
+      },
+    });
+    // Конверт создаётся РАНЬШЕ движения намеренно: тогда ребро может поставить только ветка
+    // (а) хука (`bindingOps` на самом движении), а не ребиндинг конверта, — проверяется
+    // именно она. Валюты у движения нет: аспект гейта слот `currency` не привязывает, и
+    // комбинация обязана взять дефолтную валюту владельца, как у транзакции без
+    // `orbis/currency` (конверту её подставит `normalizeEnvelopeCurrency`).
+    const movement = await mk('Трата пишущей половины', {
+      aspects: [GATE_FIN_KEY],
+      props: {
+        [GATE_PROPS.finAmount]: GATE_AMOUNT,
+        [GATE_PROPS.finDirection]: 'out',
+        [GATE_PROPS.finCategory]: category,
+        [GATE_PROPS.finDate]: '2026-07-05',
+      },
+    });
+    ids = { category, envelope, movement };
+  });
+
+  test('движение аспекта владельца получает привязку ОТ ХУКА (ветка bind)', async () => {
+    expect(await boundBy(ids.movement)).toEqual([ids.envelope]);
+  });
+
+  test('правка периода конверта переприкрепляет движение владельца (ветка rebind)', async () => {
+    // Окно ребиндинга (`rebindForEnvelope`) отбирает затронутые движения СВОИМ SQL, и до
+    // обобщения он ищет по `props->>'orbis/occurred_on'`: движение владельца в окно не
+    // попадает, конверт уезжает, а ребро остаётся висеть на чужом периоде.
+    const caller = callerFor(writer);
+    await caller.entity.update({
+      id: ids.envelope,
+      props: { 'orbis/period_start': '2026-08-01', 'orbis/period_end': '2026-08-31' },
+    });
+    expect(await boundBy(ids.movement)).toEqual([]);
+    await caller.entity.update({
+      id: ids.envelope,
+      props: { 'orbis/period_start': '2026-07-01', 'orbis/period_end': '2026-07-31' },
+    });
+    expect(await boundBy(ids.movement)).toEqual([ids.envelope]);
+  });
+
+  test('снятие аспекта владельца снимает и привязку (ветка unbind)', async () => {
+    // Идёт ПОСЛЕДНИМ: сущность после него движением быть перестаёт. `unbindOps` строит цель
+    // принудительной отвязкой (`props: null`) именно потому, что у detach'нутой сущности
+    // аспекта уже нет и `bindingTargetOf` вернул бы null — снять связь было бы некому.
+    await callerFor(writer).entity.update({ id: ids.movement, aspects: { detach: [GATE_FIN_KEY] } });
+    expect(await boundBy(ids.movement)).toEqual([]);
   });
 });

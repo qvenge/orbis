@@ -5,12 +5,25 @@
 // period_start, (3) меньший UUID. Вызывается executor'ом ПОСЛЕ применения породившей
 // операции тем же tx: SQL видит фактическое состояние (включая операции того же batch),
 // а дописанные операции входят в тот же action журнала → Undo откатывает целиком.
-import { ROLE_ENVELOPE_BINDING } from '@orbis/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq, type SQL, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import type { WireEntity } from '../executor/types';
+import {
+  bindingFor,
+  type BudgetContour,
+  carriesSide,
+  isTemplate,
+  propOfSlot,
+  sideAspectsSql,
+  SLOT_CATEGORY,
+  SLOT_CURRENCY,
+  SLOT_DATE,
+  SLOT_PERIOD_END,
+  SLOT_PERIOD_START,
+  templateSql,
+} from './contour';
 
 /**
  * Id свойств, которые этот модуль читает в JS (§А1-1, таблица §А8).
@@ -21,10 +34,8 @@ import type { WireEntity } from '../executor/types';
  */
 const PROP_CURRENCY = 'orbis/currency';
 const PROP_FINANCE_CATEGORY = 'orbis/finance_category';
-const PROP_OCCURRED_ON = 'orbis/occurred_on';
 const PROP_PERIOD_START = 'orbis/period_start';
 const PROP_PERIOD_END = 'orbis/period_end';
-const PROP_RECURRENCE = 'orbis/recurrence';
 
 /** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */
 const FALLBACK_CURRENCY = 'RUB';
@@ -188,11 +199,6 @@ interface BudgetParentEdge {
   role: string;
 }
 
-/** `orbis/recurrence` под приложенным `orbis/schedule` — признак шаблона повторения (§3.1). */
-function hasScheduleRecurrence(entity: WireEntity): boolean {
-  return entity.aspects.includes('orbis/schedule') && entity.props[PROP_RECURRENCE] !== undefined;
-}
-
 /**
  * Живые конверты-родители НАБОРА транзакций одним запросом (§2.3). Порядок source_id внутри
  * транзакции — тот же ORDER BY, что и у одиночного чтения; транзакция без родителей получает
@@ -208,27 +214,31 @@ function hasScheduleRecurrence(entity: WireEntity): boolean {
  *
  * Возвращается и РОЛЬ: удалять устаревшую привязку надо ровно той строкой, что есть.
  *
- * Join к аспектам источника (`'orbis/budget' = ANY(e.aspects)`) ОСТАЁТСЯ, хотя роль и так
- * системная. Он отсеивает состояние «конверт перестал быть конвертом (detach orbis/budget),
- * а его строки-привязки ещё живы»: ветка ребиндинга их снимает, но между операциями такое
- * состояние наблюдаемо, и без предиката хук считал бы родителем не-конверт. Снятие
- * предиката — отдельное решение о поведении, а не следствие contract-миграции.
+ * Join к аспектам источника (`sideAspectsSql(contour.envelope, e)`) ОСТАЁТСЯ, хотя роль и так
+ * системная. Он отсеивает состояние «конверт перестал быть конвертом (снят аспект контракта
+ * конверта), а его строки-привязки ещё живы»: ветка ребиндинга их снимает, но между
+ * операциями такое состояние наблюдаемо, и без предиката хук считал бы родителем не-конверт.
+ * Аспект здесь ЛЮБОЙ из объявивших контракт конверта, а не встроенный: множество решает
+ * декларация. Снятие предиката — отдельное решение о поведении, а не следствие
+ * contract-миграции.
  */
 async function budgetParentsOfMany(
   tx: Tx,
   txnIds: readonly string[],
+  contour: BudgetContour,
 ): Promise<Map<string, BudgetParentEdge[]>> {
   const parents = new Map<string, BudgetParentEdge[]>(txnIds.map((id) => [id, []]));
   const unique = [...parents.keys()];
   if (unique.length === 0) return parents;
+  const e = sql.raw('e');
   const rows = (await tx.execute(sql`
     SELECT r.target_id, r.source_id, r.role FROM relations r
     JOIN entities e ON e.id = r.source_id
     WHERE r.target_id IN (${sql.join(
       unique.map((id) => sql`${id}`),
       sql`, `,
-    )}) AND r.role = ${ROLE_ENVELOPE_BINDING}
-      AND 'orbis/budget' = ANY(e.aspects)
+    )}) AND r.role = ${contour.bindingRole}
+      AND ${sideAspectsSql(contour.envelope, e)}
     ORDER BY r.target_id, r.source_id
   `)) as unknown as Array<{ target_id: string; source_id: string; role: string }>;
   for (const row of rows) {
@@ -244,25 +254,51 @@ async function budgetParentsOfMany(
  */
 export interface BindingTarget {
   txnId: string;
+  /**
+   * Аспекты строки: по ним контур решает, КАКОЙ привязкой читать слоты. Без них цель,
+   * приехавшая из окна ребиндинга (SELECT, а не WireEntity), интерпретации не имела бы —
+   * и `combinationOf` пришлось бы вернуть к литеральным id свойств.
+   */
+  aspects: readonly string[];
   props: Record<string, unknown> | null;
 }
 
-/** Цель привязки для сущности (§2.3); null — привязка не применяется (не транзакция/архив). */
-export function bindingTargetOf(entity: WireEntity): BindingTarget | null {
-  if (!entity.aspects.includes('orbis/financial') || entity.archived) return null;
-  if (hasScheduleRecurrence(entity)) return { txnId: entity.id, props: null };
-  return { txnId: entity.id, props: entity.props };
+/** Цель привязки для сущности (§2.3); null — привязка не применяется (не движение/архив). */
+export function bindingTargetOf(
+  entity: WireEntity,
+  contour: BudgetContour,
+): BindingTarget | null {
+  if (!carriesSide(contour.movement, entity.aspects) || entity.archived) return null;
+  if (isTemplate(contour, entity)) return { txnId: entity.id, aspects: entity.aspects, props: null };
+  return { txnId: entity.id, aspects: entity.aspects, props: entity.props };
 }
 
-/** Комбинация селектора из свойств транзакции; null — данных для выбора конверта нет. */
+/**
+ * Комбинация селектора из значений движения; null — данных для выбора конверта нет.
+ *
+ * Свойства берутся ПО СЛОТАМ контракта, а не по id: у `orbis/financial` слот `category` — это
+ * `orbis/finance_category`, у аспекта владельца — его собственное свойство, и жёсткий id
+ * просто не нашёл бы значения (Unbudgeted вместо привязки). Слот `currency` может быть не
+ * привязан вовсе — тогда берётся дефолтная валюта владельца, ровно как у транзакции без
+ * `orbis/currency`.
+ */
 function combinationOf(
-  props: Record<string, unknown>,
+  contour: BudgetContour,
+  target: BindingTarget,
   defaultCurrency: string,
 ): EnvelopeCombination | null {
-  const categoryRef = props[PROP_FINANCE_CATEGORY];
-  const occurredOn = props[PROP_OCCURRED_ON];
+  const props = target.props;
+  if (props === null) return null;
+  const binding = bindingFor(contour.movement, target.aspects);
+  if (binding === undefined) return null;
+  const categoryProp = binding.bind[SLOT_CATEGORY];
+  const dateProp = binding.bind[SLOT_DATE];
+  if (categoryProp === undefined || dateProp === undefined) return null;
+  const categoryRef = props[categoryProp];
+  const occurredOn = props[dateProp];
   if (typeof categoryRef !== 'string' || typeof occurredOn !== 'string') return null;
-  const currency = props[PROP_CURRENCY];
+  const currencyProp = binding.bind[SLOT_CURRENCY];
+  const currency = currencyProp === undefined ? undefined : props[currencyProp];
   return {
     categoryRef,
     currency: typeof currency === 'string' ? currency : defaultCurrency,
@@ -291,6 +327,13 @@ export class BindingReads {
   private readonly currencies = new Map<string, string>();
   private readonly envelopes = new Map<string, string | null>();
   private readonly parents = new Map<string, BudgetParentEdge[]>();
+
+  /**
+   * Контур хранится В КЭШЕ ЧТЕНИЙ, а не передаётся в каждый метод: кэш и контур живут ровно
+   * одно исполнение, и разъехаться они не имеют права — строки, прогретые по одному контуру
+   * и прочитанные по другому, были бы ответом не на тот вопрос.
+   */
+  constructor(readonly contour: BudgetContour) {}
 
   /** user_settings.defaultCurrency владельца — один раз за исполнение. */
   async defaultCurrency(tx: Tx, ownerId: string): Promise<string> {
@@ -330,7 +373,7 @@ export class BindingReads {
         continue;
       }
       defCur ??= await this.defaultCurrency(tx, args.ownerId);
-      const combination = combinationOf(target.props, defCur);
+      const combination = combinationOf(this.contour, target, defCur);
       if (combination === null) continue; // привязка этой строки не считается — читать нечего
       combinations.push(combination);
       txnIds.push(target.txnId);
@@ -364,7 +407,7 @@ export class BindingReads {
   private async loadParents(tx: Tx, txnIds: readonly string[]): Promise<void> {
     const missing = [...new Set(txnIds)].filter((id) => !this.parents.has(id));
     if (missing.length === 0) return;
-    for (const [id, sources] of await budgetParentsOfMany(tx, missing)) {
+    for (const [id, sources] of await budgetParentsOfMany(tx, missing, this.contour)) {
       this.parents.set(id, sources);
     }
   }
@@ -393,7 +436,7 @@ async function targetBindingOps(
     }));
   }
   const defCur = defaultCurrency ?? (await reads.defaultCurrency(tx, ownerId));
-  const combination = combinationOf(target.props, defCur);
+  const combination = combinationOf(reads.contour, target, defCur);
   if (combination === null) return [];
   let desired = await reads.envelopeOf(tx, { ownerId, defaultCurrency: defCur, combination });
   if (desired === txnId) {
@@ -431,48 +474,48 @@ async function targetBindingOps(
   if (desired !== null && !current.some((edge) => edge.sourceId === desired)) {
     ops.push({
       tool: 'relation_create',
-      input: { source_id: desired, target_id: txnId, role: ROLE_ENVELOPE_BINDING },
+      input: { source_id: desired, target_id: txnId, role: reads.contour.bindingRole },
     });
   }
   return ops;
 }
 
 /**
- * Операции привязки для транзакции: удалить прежний budget-parent (если сменился),
+ * Операции привязки для движения: удалить прежний конверт-родитель (если сменился),
  * создать новый. Пустой массив — привязка актуальна. Вызывается executor'ом внутри
  * того же batch, что породившая мутация (§2.3: «одним batch_execute»).
- * Шаблоны recurring (свойство `orbis/recurrence` под аспектом `orbis/schedule`) и архивные
- * сущности не привязываются; шаблон, ставший таковым конверсией привязанной транзакции
- * («пометить повторяющейся» — attach `orbis/schedule` со свойством `orbis/recurrence`),
- * ОТВЯЗЫВАЕТСЯ: иначе spent считал бы шаблон вместе с его инстансами (двойной счёт,
- * финальное ревью фазы A).
+ * Шаблоны повторения (маркер контракта `orbis/recurrence`, §3.1) и архивные сущности не
+ * привязываются; шаблон, ставший таковым конверсией привязанного движения («пометить
+ * повторяющейся»), ОТВЯЗЫВАЕТСЯ: иначе spent считал бы шаблон вместе с его инстансами
+ * (двойной счёт, финальное ревью фазы A).
  * reads — общий кэш чтений исполнения (executor прогревает его на все хуки batch).
  */
 export async function bindingOps(
   tx: Tx,
-  args: { ownerId: string; entity: WireEntity; reads?: BindingReads },
+  args: { ownerId: string; entity: WireEntity; contour: BudgetContour; reads?: BindingReads },
 ): Promise<BudgetOpDesc[]> {
-  const target = bindingTargetOf(args.entity);
+  const target = bindingTargetOf(args.entity, args.contour);
   if (target === null) return [];
-  return targetBindingOps(tx, args.reads ?? new BindingReads(), args.ownerId, target);
+  return targetBindingOps(tx, args.reads ?? new BindingReads(args.contour), args.ownerId, target);
 }
 
 /**
- * Снятие привязки: сущность перестала быть транзакцией (detach `orbis/financial`).
+ * Снятие привязки: сущность перестала нести аспект контракта денег.
  * Переиспользует ветку принудительной отвязки `targetBindingOps` (`props: null`) — той же,
- * которой отвязывается ставший шаблоном recurring; нового SQL здесь нет.
+ * которой отвязывается ставший шаблоном повторения; нового SQL здесь нет.
  *
  * Зачем отдельная точка входа: `bindingOps` строит цель из АСПЕКТОВ сущности, а у
  * detach'нутой их уже нет — `bindingTargetOf` возвращает null, и снять устаревшую связь
- * было некому. Висящая parent-связь показывала не-financial ребёнка в `children_of`
- * конверта (на spent не влияет — SQL-агрегаты фильтруют по financial).
+ * было некому. Висящая parent-связь показывала не-движение ребёнком в `children_of`
+ * конверта (на spent не влияет — ведомость фильтрует по контракту).
  */
 export async function unbindOps(
   tx: Tx,
-  args: { ownerId: string; entityId: string; reads?: BindingReads },
+  args: { ownerId: string; entityId: string; contour: BudgetContour; reads?: BindingReads },
 ): Promise<BudgetOpDesc[]> {
-  return targetBindingOps(tx, args.reads ?? new BindingReads(), args.ownerId, {
+  return targetBindingOps(tx, args.reads ?? new BindingReads(args.contour), args.ownerId, {
     txnId: args.entityId,
+    aspects: [], // аспекта уже нет — цель безусловной отвязки, слоты ей не нужны
     props: null,
   });
 }
@@ -484,11 +527,17 @@ interface RebindSide {
   periodEnd: string;
 }
 
-function sideOf(entity: WireEntity | null): RebindSide | null {
-  if (entity === null || !entity.aspects.includes('orbis/budget')) return null;
-  const categoryRef = entity.props[PROP_FINANCE_CATEGORY];
-  const periodStart = entity.props[PROP_PERIOD_START];
-  const periodEnd = entity.props[PROP_PERIOD_END];
+function sideOf(contour: BudgetContour, entity: WireEntity | null): RebindSide | null {
+  if (entity === null) return null;
+  const binding = bindingFor(contour.envelope, entity.aspects);
+  if (binding === undefined) return null;
+  const categoryProp = binding.bind[SLOT_CATEGORY];
+  const startProp = binding.bind[SLOT_PERIOD_START];
+  const endProp = binding.bind[SLOT_PERIOD_END];
+  if (categoryProp === undefined || startProp === undefined || endProp === undefined) return null;
+  const categoryRef = entity.props[categoryProp];
+  const periodStart = entity.props[startProp];
+  const periodEnd = entity.props[endProp];
   if (
     typeof categoryRef !== 'string' ||
     typeof periodStart !== 'string' ||
@@ -513,13 +562,14 @@ export async function rebindForEnvelope(
     ownerId: string;
     envelope: WireEntity;
     before: WireEntity | null;
+    contour: BudgetContour;
     /** Общий кэш чтений исполнения; без него — свой, живущий только этот вызов. */
     reads?: BindingReads;
   },
 ): Promise<BudgetOpDesc[]> {
-  const { ownerId, envelope, before } = args;
+  const { ownerId, envelope, before, contour } = args;
   const sides: RebindSide[] = [];
-  for (const side of [sideOf(before), sideOf(envelope)]) {
+  for (const side of [sideOf(contour, before), sideOf(contour, envelope)]) {
     if (
       side !== null &&
       !sides.some(
@@ -534,32 +584,50 @@ export async function rebindForEnvelope(
   }
   if (sides.length === 0) return [];
 
-  // Затронутые транзакции: неархивные, с occurred_on (не шаблоны), категория и дата
-  // в старом ИЛИ новом периоде. ORDER BY id — детерминированный порядок ops в action.
-  const conds = sides.map(
-    (s) => sql`(props->>'orbis/finance_category' = ${s.categoryRef}
-      AND props->>'orbis/occurred_on' >= ${s.periodStart}
-      AND props->>'orbis/occurred_on' <= ${s.periodEnd})`,
-  );
-  // «Не шаблон повторения» (§2.8) в WHERE ниже — ПАРА условий («аспект приложен И свойство
-  // задано»), близнец помощника `notRecurringTemplateSql` из `aggregates.ts`; общего дома у
-  // них нет, потому что импорт идёт оттуда сюда. Потерять вторую половину — считать шаблон
-  // операцией вместе с его инстансами.
+  // Окно ребиндинга — ПО ВЕТКЕ НА КАЖДУЮ привязку движения: слоты `category` и `date` у
+  // аспекта владельца выражены его собственными свойствами, и один литеральный
+  // `props->>'orbis/occurred_on'` его строк просто не нашёл бы — уехавший конверт оставил бы
+  // ребро висеть на чужом периоде. Привязка без обоих слотов пропускается: комбинации из неё
+  // всё равно не выйдет (`combinationOf` вернёт null), а ветка отобрала бы лишние строки.
+  // «Не шаблон повторения» (§2.8) — из контура (`templateSql`): та же ПАРА условий («аспект
+  // приложен И маркер задан»), что была литералом. Общий дом у неё теперь есть, но ТОЛЬКО для
+  // пишущей половины: оракул остаётся при своей копии `notRecurringTemplateSql` по РП-4, и это
+  // записано, а не забыто.
+  const e = sql.raw('e');
+  const branches: SQL[] = [];
+  for (const b of contour.movement.bindings) {
+    const categoryProp = b.bind[SLOT_CATEGORY];
+    const dateProp = b.bind[SLOT_DATE];
+    if (categoryProp === undefined || dateProp === undefined) continue;
+    const windows = sides.map(
+      (s) => sql`(e.props->>${categoryProp} = ${s.categoryRef}
+        AND e.props->>${dateProp} >= ${s.periodStart}
+        AND e.props->>${dateProp} <= ${s.periodEnd})`,
+    );
+    branches.push(sql`(e.aspects @> ARRAY[${b.aspectId}]::text[]
+      AND e.props->>${dateProp} IS NOT NULL
+      AND (${sql.join(windows, sql` OR `)}))`);
+  }
+  if (branches.length === 0) return [];
+
+  // ORDER BY id — детерминированный порядок ops в action (не менялся).
   const rows = (await tx.execute(sql`
-    SELECT id, props FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived
-      AND 'orbis/financial' = ANY(aspects)
-      AND props->>'orbis/occurred_on' IS NOT NULL
-      AND NOT ('orbis/schedule' = ANY(aspects) AND props->'orbis/recurrence' IS NOT NULL)
-      AND (${sql.join(conds, sql` OR `)})
-    ORDER BY id
-  `)) as unknown as Array<{ id: string; props: Record<string, unknown> }>;
+    SELECT e.id, e.aspects, e.props FROM entities e
+    WHERE e.owner_id = ${ownerId} AND NOT e.archived
+      AND NOT (${templateSql(contour, e)})
+      AND (${sql.join(branches, sql` OR `)})
+    ORDER BY e.id
+  `)) as unknown as Array<{ id: string; aspects: string[]; props: Record<string, unknown> }>;
   if (rows.length === 0) return [];
 
   // Прогрев на все затронутые строки: один запрос на конверты и один на родителей
   // вместо двух на строку (N+1, названный в бэклоге фазы A).
-  const reads = args.reads ?? new BindingReads();
-  const targets: BindingTarget[] = rows.map((row) => ({ txnId: row.id, props: row.props }));
+  const reads = args.reads ?? new BindingReads(contour);
+  const targets: BindingTarget[] = rows.map((row) => ({
+    txnId: row.id,
+    aspects: row.aspects,
+    props: row.props,
+  }));
   await reads.prefetch(tx, { ownerId, targets });
   const defCur = await reads.defaultCurrency(tx, ownerId);
   const ops: BudgetOpDesc[] = [];

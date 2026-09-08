@@ -351,8 +351,11 @@ function countingDb() {
  */
 const READS = {
   selector: (q: string) => q.includes("'orbis/period_end'"),
+  // Запрос родителей узнаётся по СВОЕЙ форме (join к источнику + порядок), а не по литералу
+  // `'orbis/budget' = ANY(e.aspects)`: с обобщением хука (§С8-18) множество аспектов-конвертов
+  // приезжает из декларации связанным параметром, и литерала в тексте запроса больше нет.
   parents: (q: string) =>
-    q.includes("'orbis/budget' = ANY(e.aspects)") &&
+    q.includes('JOIN entities e ON e.id = r.source_id') &&
     q.includes('ORDER BY r.target_id, r.source_id'),
   currency: (q: string) => q.includes('user_settings'),
 };

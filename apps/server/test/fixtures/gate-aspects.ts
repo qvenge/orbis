@@ -4,7 +4,7 @@
 // `gf_`/`gp_`: греп-доказательство задачи 10 ищет их по всему дереву и обязано находить только здесь,
 // в данных снимка поверхностей и в заголовках/комментариях самого теста гейта (`gate-c8-18.test.ts`,
 // Р-К-54) — больше нигде.
-import { addDays, ROLE_DEPENDENCY, ROLE_ENVELOPE_BINDING } from '@orbis/shared';
+import { addDays, ROLE_DEPENDENCY } from '@orbis/shared';
 import { execute } from '../../src/executor/executor';
 import { appRouter } from '../../src/router';
 import { createCallerFactory } from '../../src/trpc';
@@ -227,29 +227,6 @@ export async function seedGateSurfaceRows(ownerId: string): Promise<void> {
       });
       if (!r.ok) throw new Error(`мир гейта ${op.tool}: ${r.error.code} — ${r.error.message}`);
     }
-    // Пишущая половина привязки — остаток вехи I (Р-К-39): ребро `envelope-binding` ставит
-    // бюджет-хук, а он на `user/gate-fin` не срабатывает (жёсткие id `orbis/financial` в
-    // `binding.ts:combinationOf`, `BUDGET_CONTOUR_ASPECTS` `executor.ts`). ТЕ ЖЕ три строки,
-    // что в `seedGateWorld` ниже; без них строка гейта не сдвинет `spent` в снимке
-    // `custom-aspect`. Механизм `seed`: роль системная, механизмом `user` вызов упал бы
-    // `ROLE_SYSTEM_ONLY`. Снимает задача 11 тем же коммитом, что обобщает хук.
-    const bound = await execute(db, {
-      actorUserId: ownerId,
-      actorKind: 'owner',
-      source: 'ui',
-      mechanism: 'seed',
-      operations: [
-        {
-          tool: 'relation_create',
-          input: {
-            source_id: id('env-food'),
-            target_id: id('gate-spend'),
-            role: ROLE_ENVELOPE_BINDING,
-          },
-        },
-      ],
-    });
-    if (!bound.ok) throw new Error(`привязка гейта: ${bound.error.code} — ${bound.error.message}`);
   } finally {
     await client.end();
   }
@@ -331,26 +308,6 @@ export async function seedGateWorld(ownerId: string): Promise<GateWorld> {
         [GATE_PROPS.finWhen]: at(tomorrow, '12:00'),
       },
     });
-    // Пишущая половина привязки — остаток вехи I: обобщение бюджет-хука по слотам
-    // `orbis/money-movement` в карте файлов Б-1 не значится, и гейт §С8-18 проверяет ЧИТАЮЩУЮ
-    // половину. Ребро кладёт фикстура; механизм `seed` — потому что роль `envelope-binding`
-    // системная (`created_by: 'system'`), и тот же вызов механизмом `user` упал бы
-    // `ROLE_SYSTEM_ONLY`. Фикстуры — названное исключение «только через исполнитель».
-    // Задача 11 обобщает хук и снимает эти строки (Р-К-39).
-    const bound = await execute(db, {
-      actorUserId: ownerId,
-      actorKind: 'owner',
-      source: 'ui',
-      mechanism: 'seed',
-      operations: [
-        {
-          tool: 'relation_create',
-          input: { source_id: envelopeId, target_id: finId, role: ROLE_ENVELOPE_BINDING },
-        },
-      ],
-    });
-    if (!bound.ok) throw new Error(`привязка гейта: ${bound.error.code} — ${bound.error.message}`);
-
     const windowId = await mk('Дело гейта в окне', {
       aspects: [GATE_PLAIN_KEY],
       props: { [GATE_PROPS.plainState]: 'open', [GATE_PROPS.plainAt]: at(tomorrow, '10:00') },
