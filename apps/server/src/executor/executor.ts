@@ -3051,8 +3051,15 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
  * ВНУТРЕННИЕ обратные операции — те же две, что перечислены ниже: их зовёт только undo.ts
  * через `execute` во внутреннем режиме, в `CORE_TOOLS` их нет, и `dispatchTool` их не
  * резолвит (реестр тулов не знает таких имён).
+ *
+ * ЭКСПОРТИРОВАНО ради инварианта §С8-23 (`mcp/mcp.test.ts`) — по тому же доводу, что
+ * `routineGate` и `routineDeferForbidden` в диспатче: рубеж, который никто не проверил, — это
+ * рубеж, которого нет. Множество отвечает на вопрос «кто берёт замок», и инвариант сверяет с
+ * ним ПИСАТЕЛЕЙ: писатель без замка — цикл ожидания, писатель без ветки политики — молчаливая
+ * мутация реестра. Второго читателя в бою у множества нет и заводить его не следует:
+ * «кто берёт замок» — вопрос исполнителя, а не диспатча.
  */
-const REGISTRY_OPS: ReadonlySet<string> = new Set([
+export const REGISTRY_OPS: ReadonlySet<string> = new Set([
   ...REGISTRY_TOOL_NAMES,
   'property_row_restore',
   'property_merge_undo',

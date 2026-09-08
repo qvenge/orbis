@@ -6,6 +6,8 @@
 // в окружении его больше нет.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
@@ -15,7 +17,7 @@ import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
+import { execute, REGISTRY_OPS } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import {
   createAuthorizationCode,
@@ -24,9 +26,11 @@ import {
   revokeGrant,
   verifyBearer,
 } from '../oauth/grants';
+import { reconfiguresOf } from '../policy/confirmation';
 import { approvePending } from '../policy/pending';
 import { appRouter } from '../router';
 import { AGENT_VERB_NAMES, buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
+import { REGISTRY_TOOL_NAMES, REGISTRY_TOOLS } from '../tools/registry-tools';
 import { createCallerFactory } from '../trpc';
 import { MCP_MAX_BODY_BYTES, makeMcpHandler } from './transport';
 
@@ -1031,6 +1035,89 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       expect(a.source).toBe('mcp');
       expect(a.actor_grant_id).toBe(grant.grantId);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §С8-23: инвариант против fail-open — каждый писатель реестра виден классификатору
+// ---------------------------------------------------------------------------
+
+/**
+ * ЧТО ЗДЕСЬ СТОРОЖИТСЯ И ПОЧЕМУ ОТ ПИСАТЕЛЕЙ, А НЕ ОТ МНОЖЕСТВА ЗАМКА.
+ *
+ * Дыра, ради которой §С8-23 завёл инвариант, выглядит так: мутирующий тул, который ПИШЕТ в
+ * таблицу реестра, но заведён мимо `REGISTRY_TOOLS` (скажем, строкой в `CORE_TOOLS`).
+ * `reconfiguresOf` до этой задачи отвечал на такое имя `'none'` — то есть §7.10 пропускала
+ * его в `execute` молча, а §С2-1 говорит «молчаливых мутаций реестра не существует ни для
+ * какого актора». Проверять это множеством `REGISTRY_OPS` (кто берёт замок реестра)
+ * НЕДОСТАТОЧНО: тул, заведённый мимо обоих множеств, не попал бы и в него — инвариант
+ * проверял бы «взял замок ⇒ виден», а нужен «пишет ⇒ виден».
+ *
+ * ПИСАТЕЛИ ВЫЧИТЫВАЮТСЯ, А НЕ ПЕРЕПИСЫВАЮТСЯ ЗДЕСЬ РУКАМИ. Журнальный план реестровой
+ * операции строит РОВНО ОДНА фабрика — `registryPlan(type, tool, title)`
+ * (`executor/executor.ts`), и имя тула стоит у неё вторым аргументом ЛИТЕРАЛОМ. Приём тот же,
+ * что у «golden-близнеца писателей предусловий» (`executor/props.test.ts`): источник истины —
+ * исходник, поэтому новая `prepareX`, забывшая ветку политики, роняет тест сама.
+ *
+ * КЭШ `spent` (`budget/spent-cache.ts`) СЮДА НЕ ОТНОСИТСЯ, и это названо, а не умолчано: он
+ * пишется хуком исполнителя мимо всякого тула и таблицей РЕЕСТРА не является — это
+ * материализация агрегата по строкам графа (§Б5-4), у которой нет ни ряда §С2-1, ни замка
+ * реестра. Прямой сид (`db/seed-registries.ts`, механизм `'seed'`) — второе исключение: он
+ * назван планом как исключение из «только через executor» и политику §7.10 не проходит по
+ * построению.
+ *
+ * ГДЕ ОХРАНА СЛЕПНЕТ — сказано, а не умолчано: (1) писатель, собравший `JournalPlan` руками,
+ * мимо фабрики; (2) `registryPlan`, позванный с именем-переменной. Первое ловится последним
+ * `expect` ниже (число вызовов фабрики сверяется с числом РАЗОБРАННЫХ имён), второе — им же.
+ */
+describe('§С8-23: инвариант против fail-open — писатели реестра, замок и ось worker', () => {
+  const EXECUTOR_SRC = readFileSync(join(import.meta.dir, '../executor/executor.ts'), 'utf8');
+  const writers = new Set(
+    [...EXECUTOR_SRC.matchAll(/registryPlan\(\s*'[a-z_]+',\s*'([a-z_]+)'/g)].map(
+      (m) => m[1] as string,
+    ),
+  );
+
+  test('писатели реестра разобраны, и КАЖДЫЙ берёт замок реестра', () => {
+    // Пять публичных тулов + две внутренние обратные операции (`property_row_restore`,
+    // `property_merge_undo`): их зовёт только undo, снаружи они недостижимы.
+    expect([...writers].sort()).toEqual([
+      'aspect_delta_remove',
+      'aspect_delta_set',
+      'property_create',
+      'property_merge',
+      'property_merge_undo',
+      'property_row_restore',
+      'property_update',
+    ]);
+    // Писатель без замка встал бы в очередь позже конкурента, уже держащего бюджетный, —
+    // ровно тот цикл ожидания, ради которого порядок «реестр → бюджет → строки» и заведён.
+    expect([...writers].filter((n) => !REGISTRY_OPS.has(n))).toEqual([]);
+    // Охрана не ослепла: каждый вызов фабрики разобран (плюс её собственное объявление).
+    expect(EXECUTOR_SRC.match(/registryPlan\(/g) ?? []).toHaveLength(writers.size + 1);
+  });
+
+  test('каждый писатель, ДОСТИЖИМЫЙ снаружи, виден классификатору §7.10', async () => {
+    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
+    const published = new Set(defs.map((d) => d.name));
+    const reachable = [...writers].filter((n) => published.has(n));
+    // Не вырожденно: достижимых писателей ровно столько, сколько тулов реестра.
+    expect(reachable.sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
+    // Падение НАЗЫВАЕТ имена — чинить вслепую не придётся.
+    expect(reachable.filter((n) => reconfiguresOf(n, {}) === 'none')).toEqual([]);
+  });
+
+  test('видимый классификатору мутирующий тул фону не адресован (ось worker, §А9-4)', async () => {
+    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
+    const seen = defs.filter((d) => reconfiguresOf(d.name, {}) !== 'none');
+    expect(seen.map((d) => d.name).sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
+    // ПЕРВАЯ ось — объявление адресата: `fullScopeOnly` у всех тулов реестра. Она несущая у
+    // ЧИТАЮЩЕГО тула реестра (правило «чтения открыты все» пропустило бы его на вызове), и
+    // читающих тулов реестра в Б-1 нет — но объявление обязано быть верным заранее.
+    expect(seen.filter((d) => d.fullScopeOnly !== true).map((d) => d.name)).toEqual([]);
+    expect(REGISTRY_TOOLS.every((d) => d.fullScopeOnly === true)).toBe(true);
+    // ВТОРАЯ ось — общее правило скоупа: мутация вне `WORKER_SCOPE_TOOLS` отказывает сама.
+    expect(seen.filter((d) => WORKER_SCOPE_TOOLS.has(d.name)).map((d) => d.name)).toEqual([]);
   });
 });
 
