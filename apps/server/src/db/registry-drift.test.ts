@@ -320,6 +320,12 @@ describe('конфликты пересева становятся единиц�
             ],
           },
         },
+        classMap: {
+          'orbis/content_type': [
+            { contract: 'orbis/completable', slot: 'status', variant: 'md', class: 'active' },
+            { contract: 'orbis/completable', slot: 'status', variant: 'table', class: 'active' },
+          ],
+        },
       },
     };
     const { merged, conflicts } = threeWayMerge(UNKNOWN_PREV_SYSTEM, codeSystemDefinitions(), row);
@@ -358,6 +364,12 @@ describe('конфликты пересева становятся единиц�
       'orbis/content_type'
     ]?.add;
     expect(added?.map((o) => o.key)).toEqual(['table']);
+    // Нагрузка единицы — дельта МИНУС спорный вариант, и карта вычищена вместе с ним:
+    // незачищенная оставила бы висячее отнесение, и «Принять» упало бы на применении.
+    const map = (input.delta.classMap as Record<string, Array<{ variant: string }>>)[
+      'orbis/content_type'
+    ];
+    expect(map?.map((e) => e.variant)).toEqual(['table']);
 
     // Повторный прогон пересева той же версии второй карточки не кладёт.
     const again = await withIdentity(db, owner, (tx) =>

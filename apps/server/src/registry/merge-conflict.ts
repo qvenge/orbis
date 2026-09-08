@@ -96,11 +96,19 @@ export async function createDriftConflictUnits(
     const selectOptions = { ...merged.selectOptions };
     if (kept.length > 0) selectOptions[propertyId] = { add: kept };
     else delete selectOptions[propertyId];
+    // Карта классов чистится ТЕМ ЖЕ движением: одобрение применяет дельту без спорного
+    // варианта, и отнесение к нему стало бы висячим (§Б2-2).
+    const classMap = { ...merged.classMap };
+    const keptClasses = (classMap[propertyId] ?? []).filter((e) => e.variant !== option.mine);
+    if (keptClasses.length > 0) classMap[propertyId] = keptClasses;
+    else delete classMap[propertyId];
     const delta: AspectDelta = {
       ...merged,
       ...(Object.keys(selectOptions).length > 0 ? { selectOptions } : { selectOptions: undefined }),
+      ...(Object.keys(classMap).length > 0 ? { classMap } : { classMap: undefined }),
     };
     if (delta.selectOptions === undefined) delete delta.selectOptions;
+    if (delta.classMap === undefined) delete delta.classMap;
 
     const { id } = await createSystemPending(tx, {
       ownerId: args.ownerId,
