@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(92);
+SELECT plan(97);
 
 -- Фикстуры под ролью с BYPASSRLS (обходит RLS; postgres здесь НЕ суперпользователь)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -650,6 +650,40 @@ SELECT lives_ok(
     VALUES ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a',
             '2026-09-02', 1, 0, 1)$$,
   'envelope_spent_cache: INSERT своей строки проходит');
+-- Политика `owner_owns_row` объявлена FOR ALL, но пин на INSERT/SELECT про UPDATE и DELETE не
+-- говорит НИЧЕГО: `FOR ALL` можно однажды разрезать на команды и потерять половину, не уронив
+-- ни одного теста. Чужая строка обязана давать НОЛЬ задетых (её прячет USING), своя — одну.
+SELECT results_eq(
+  $$WITH u AS (UPDATE envelope_spent_cache SET spent = 999
+               WHERE envelope_id = '00000000-0000-7000-8000-0000000000b1' RETURNING 1)
+    SELECT count(*)::int FROM u$$,
+  ARRAY[0], 'envelope_spent_cache: UPDATE чужой строки задевает ноль строк (USING)');
+SELECT results_eq(
+  $$WITH d AS (DELETE FROM envelope_spent_cache
+               WHERE envelope_id = '00000000-0000-7000-8000-0000000000b1' RETURNING 1)
+    SELECT count(*)::int FROM d$$,
+  ARRAY[0], 'envelope_spent_cache: DELETE чужой строки задевает ноль строк (USING)');
+SELECT results_eq(
+  $$WITH u AS (UPDATE envelope_spent_cache SET spent = 7
+               WHERE envelope_id = '00000000-0000-7000-8000-0000000000a1'
+                 AND as_of = '2026-09-02' RETURNING 1)
+    SELECT count(*)::int FROM u$$,
+  ARRAY[1], 'envelope_spent_cache: свою строку владелец правит');
+SELECT results_eq(
+  $$WITH d AS (DELETE FROM envelope_spent_cache
+               WHERE envelope_id = '00000000-0000-7000-8000-0000000000a1'
+                 AND as_of = '2026-09-02' RETURNING 1)
+    SELECT count(*)::int FROM d$$,
+  ARRAY[1], 'envelope_spent_cache: свою строку владелец удаляет');
+-- Роль приложения: грант есть (миграция 0018 выдаёт все четыре права), политики для неё НЕТ —
+-- значит RLS вернёт пусто, а не 42501. Проверка СТРУКТУРНАЯ по той же причине, что у
+-- `user_settings` выше: SET ROLE orbis_app из админского DSN недоступен (см. разбор группы 11).
+SELECT ok(
+  has_table_privilege('orbis_app', 'public.envelope_spent_cache', 'SELECT')
+    AND has_table_privilege('orbis_app', 'public.envelope_spent_cache', 'INSERT')
+    AND has_table_privilege('orbis_app', 'public.envelope_spent_cache', 'UPDATE')
+    AND has_table_privilege('orbis_app', 'public.envelope_spent_cache', 'DELETE'),
+  'envelope_spent_cache: у orbis_app все четыре права (0018) — путь без identity падает пустотой, не 42501');
 RESET ROLE;
 
 -- Deny-by-default для реестров: claims чистим ЯВНО, иначе проверки унаследуют identity A.

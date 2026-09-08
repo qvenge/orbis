@@ -27,6 +27,7 @@ import * as schema from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
+import { budgetOverview } from './aggregates';
 import { selectEnvelope, selectEnvelopes } from './binding';
 
 requireEnv();
@@ -93,6 +94,19 @@ async function createEntity(user: string, input: Record<string, unknown>): Promi
 }
 
 /** Живые привязки транзакции к конвертам — истина в БД (админ-DSN, обходит RLS). */
+/** Строк кэша `spent` у конверта — истина в БД (админ-DSN, обходит RLS). */
+async function cacheRowCount(envelopeId: string): Promise<number> {
+  const { db: admin, client } = adminDb();
+  try {
+    const rows = (await admin.execute(
+      sql`SELECT count(*)::int AS n FROM envelope_spent_cache WHERE envelope_id = ${envelopeId}`,
+    )) as unknown as Array<{ n: number }>;
+    return rows[0]?.n ?? 0;
+  } finally {
+    await client.end();
+  }
+}
+
 async function budgetParents(txnId: string): Promise<string[]> {
   const { db: admin, client: adminClient } = adminDb();
   try {
@@ -429,6 +443,54 @@ describe('число обращений к селектору не растёт 
       // Счётчик действительно ловит эти чтения (иначе «≤ K» выполнялось бы вхолостую)
       expect(counts.selector).toBeGreaterThan(0);
       expect(counts.parents).toBeGreaterThan(0);
+    } finally {
+      await counting.client.end();
+    }
+  });
+
+  test('правка НЕфинансового поля движения: родителей не читаем и строку кэша не сносим', async () => {
+    // Кэш `spent` (§Б5-5) сносит строку конверта по родителям движения — но спрашивать их у
+    // КАЖДОЙ правки незачем: если срез свойств аспекта денег не изменился (ветки `bind`/
+    // `unbind` не сработали), ни одно слагаемое ведомости не сдвинулось. Без этого отказа
+    // правка одного заголовка стоила бы SELECT родителей плюс DELETE строки, а импорт
+    // заголовков — по паре запросов на строку.
+    const counting = countingDb();
+    try {
+      const user = freshUserId();
+      const cat = newId();
+      const envelope = await createEntity(user, {
+        title: 'Конверт заголовков',
+        props: budgetProps(cat, '2026-07-01', '2026-07-31'),
+        aspects: ['orbis/budget'],
+      });
+      const txn = await createEntity(user, {
+        title: 'Трата',
+        props: finProps(cat, '2026-07-05'),
+        aspects: ['orbis/financial'],
+      });
+      expect(await budgetParents(txn.id)).toEqual([envelope.id]);
+      // Прогрев: строка кэша конверта обязана существовать ДО правки, иначе «не снесли»
+      // проверяло бы пустоту, которая и так была.
+      await budgetOverview(db, user, '2026-07', () => new Date('2026-07-10T09:00:00.000Z'));
+      expect(await cacheRowCount(envelope.id)).toBe(1);
+
+      counting.queries.length = 0; // считаем только правку заголовка
+      ok(
+        await execute(
+          counting.db,
+          {
+            actorUserId: user,
+            actorKind: 'owner',
+            source: 'fast_path',
+            operations: [{ tool: 'entity_update', input: { id: txn.id, title: 'Трата (правка)' } }],
+          },
+          { sink },
+        ),
+      );
+      expect(counting.queries.filter(READS.parents).length).toBe(0);
+      expect(counting.queries.filter(READS.selector).length).toBe(0);
+      // И строка кэша цела: ведомость от правки заголовка не изменилась.
+      expect(await cacheRowCount(envelope.id)).toBe(1);
     } finally {
       await counting.client.end();
     }

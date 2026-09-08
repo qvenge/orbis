@@ -87,7 +87,6 @@ import {
   syncRefMirror,
 } from '../registry/ref';
 import { projectBodyTemplate } from '../seed/project-body';
-// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import {
   budgetContourFor,
   type SpentCacheContour,
@@ -102,6 +101,7 @@ import {
   propertyUpdateInput,
   REGISTRY_TOOL_NAMES,
 } from '../tools/registry-tools';
+// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { PROJECT_ASPECT, recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
@@ -1286,7 +1286,7 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
     // `invalidateParents` внутреннего цикла тот же вопрос стоил бы отдельного запроса на
     // каждый хук — то есть вернул бы N+1 массового импорта (пин `binding-batch.test.ts`,
     // «чтения привязки — константа»).
-    const parentsBefore = await spentCacheParentsOf(ctx, hook, reads);
+    const parentsBefore = await spentCacheParentsOf(ctx, hook, reads, branches[i]);
     for (const desc of descs) {
       const plan = await prepareOp(hookCtx, desc.tool, desc.input);
       await plan.apply(hookCtx);
@@ -1312,11 +1312,23 @@ function carriesContourSide(aspects: ReadonlySet<string>, row: EntityRow | null)
  * Живые конверты-родители движения ДО дописанных операций (см. вызывающего). Не движение —
  * пустой список: у конверта своих родителей-конвертов не бывает, и лишний запрос по строке,
  * которая заведомо ничего не вернёт, платил бы каждый импорт.
+ *
+ * ВТОРОЙ отказ — по веткам хука, и он про цену: у СУЩЕСТВУЮЩЕГО движения, у которого не
+ * сработала ни ветка `bind`, ни `unbind`, срез свойств аспекта денег не изменился
+ * (`hookAspectChanged` сравнивает его целиком), архивность не менялась и аспект не снимался —
+ * то есть ни одно слагаемое ведомости не сдвинулось, и сносить строку конверта не за что.
+ * Без этого отказа правка ЗАГОЛОВКА движения стоила бы SELECT родителей плюс DELETE строки,
+ * а на импорте одних заголовков — по паре запросов на строку (пин — `binding-batch.test.ts`,
+ * «правка НЕфинансового поля движения»).
+ *
+ * Создание (`before === null`) сюда не попадает намеренно: у него `bind` истинна по
+ * построению, и путь инкремента начинается именно с него.
  */
 async function spentCacheParentsOf(
   ctx: ExecCtx,
   hook: BudgetHook,
   reads: BindingReads,
+  branches: { rebind: boolean; bind: boolean; unbind: boolean } | undefined,
 ): Promise<readonly string[]> {
   const contour = spentContourOf(ctx);
   if (!contour.enabled) return [];
@@ -1324,6 +1336,7 @@ async function spentCacheParentsOf(
     carriesContourSide(contour.movementAspects, hook.after) ||
     carriesContourSide(contour.movementAspects, hook.before);
   if (!isMovement) return [];
+  if (hook.before !== null && branches?.bind !== true && branches?.unbind !== true) return [];
   // `parentsOf` отбирает рёбра ПО РОЛИ привязки и по аспекту конверта у источника;
   // `archived` он НЕ спрашивает — архивный конверт свою строку кэша тоже теряет, и это
   // правильный ответ: пересчёт ленивый.

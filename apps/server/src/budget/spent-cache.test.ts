@@ -456,7 +456,11 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
   const cat = newId();
   const clock = () => new Date('2026-07-10T09:00:00.000Z');
 
-  test('undo действия сносит кэш владельца: откат правит props, а хук в нём не зовётся вовсе', async () => {
+  // ИМЯ ЧЕСТНОЕ: этот тест держит НЕ снос владельца, а путь №1. Откат СОЗДАНИЯ проигрывает
+  // inverse `[relation_delete envelope-binding, entity_update {archived}]`, и строку сносит
+  // `prepareRelationDelete.apply` — то есть выключи `invalidateSpentCacheOfOwner`, он останется
+  // зелёным (гейт Fable, Important-2). Собственно путь отката держит тест ниже.
+  test('undo СОЗДАНИЯ движения: строку сносит relation_delete из inverse (путь №1)', async () => {
     const env = await createEntity(user, {
       title: 'Кино — июль',
       props: budgetProps(cat),
@@ -481,6 +485,93 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
     expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
     expect(await cacheRows(env.id)).toEqual([]);
     expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('0.00');
+  });
+
+  test('undo ПРАВКИ суммы сносит кэш владельца: рёбер откат не трогает, хука в нём нет (Ф-Б1-45)', async () => {
+    // Ровно тот сценарий, ради которого `invalidateSpentCacheOfOwner` и стоит на пути отката:
+    // inverse правки — `entity_update` с прежними props, привязка не меняется (конверт тот же),
+    // хук в режиме `internalUndo` не зовётся вовсе. Без сноса строка осталась бы на 250.00 при
+    // графе 100.00 — деньги на экране владельца до следующей записи.
+    const cat2 = newId();
+    const env = await createEntity(user, {
+      title: 'Театр — июль',
+      props: budgetProps(cat2),
+      aspects: ['orbis/budget'],
+    });
+    const txn = await createEntity(user, {
+      title: 'Билет',
+      props: finProps(cat2, '2026-07-04', { 'orbis/amount': '100.00' }),
+      aspects: ['orbis/financial'],
+    });
+    const edited = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', { id: txn.id, props: { 'orbis/amount': '250.00' } }),
+        { sink },
+      ),
+    );
+    // Прогрев ПОСЛЕ правки: строка кэша обязана существовать и нести новое число, иначе
+    // «снесена» ниже проверяло бы пустоту, которая и так была.
+    await budgetOverview(db, user, '2026-07', clock);
+    expect((await cacheRows(env.id))[0]?.spent).toBe('250.00');
+
+    const undone = await undoAction(db, { actorUserId: user, actionId: edited.actionId });
+    expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
+    // Рёбер откат не трогал — путь №1 здесь помочь не мог.
+    expect(await cacheRows(env.id)).toEqual([]);
+    expect(
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+        (e) => e.envelope.id === env.id,
+      )?.spent,
+    ).toBe('100.00');
+  });
+
+  test('то же на BATCH-пути: откат пачки правок сносит кэш владельца (executor:644)', async () => {
+    // Одиночный и batch пути откатывают РАЗНЫМИ ветками (`executor.ts`), и снос стоит в обеих:
+    // тест одиночного пути про вторую ничего не говорит.
+    const cat3 = newId();
+    const env = await createEntity(user, {
+      title: 'Книги — июль',
+      props: budgetProps(cat3),
+      aspects: ['orbis/budget'],
+    });
+    const a = await createEntity(user, {
+      title: 'Книга 1',
+      props: finProps(cat3, '2026-07-04', { 'orbis/amount': '100.00' }),
+      aspects: ['orbis/financial'],
+    });
+    const b = await createEntity(user, {
+      title: 'Книга 2',
+      props: finProps(cat3, '2026-07-05', { 'orbis/amount': '200.00' }),
+      aspects: ['orbis/financial'],
+    });
+    const edited = ok(
+      await execute(
+        db,
+        {
+          actorUserId: user,
+          actorKind: 'owner',
+          source: 'fast_path',
+          batchId: newId(),
+          operations: [
+            { tool: 'entity_update', input: { id: a.id, props: { 'orbis/amount': '111.00' } } },
+            { tool: 'entity_update', input: { id: b.id, props: { 'orbis/amount': '222.00' } } },
+          ],
+        },
+        { sink },
+      ),
+    );
+    await budgetOverview(db, user, '2026-07', clock);
+    expect((await cacheRows(env.id))[0]?.spent).toBe('333.00');
+
+    const undone = await undoAction(db, { actorUserId: user, actionId: edited.actionId });
+    expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
+    expect(await cacheRows(env.id)).toEqual([]);
+    expect(
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+        (e) => e.envelope.id === env.id,
+      )?.spent,
+    ).toBe('300.00');
   });
 
   test('property_merge сносит кэш владельца ЦЕЛИКОМ и виден предикату замка контура', async () => {
