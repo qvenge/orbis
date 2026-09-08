@@ -352,6 +352,25 @@ function statusSlotsOf(
 }
 
 /**
+ * Варианты, которые карта ВПРАВЕ отнести: добавляемые этой же дельтой плюс собственные варианты
+ * свойства. Второе — не послабление: свой вариант владелец мог завести прошлой дельтой, а класс
+ * назначить сегодня, и требовать повторного `selectOptions.add` значило бы отказ на законном жесте.
+ */
+function variantDomainOf(
+  propertyId: string,
+  delta: AspectDeltaVariants,
+  reg: { properties: ReadonlyMap<string, PropertyDefinition> },
+): Set<string> {
+  const out = new Set<string>();
+  for (const option of delta.selectOptions?.[propertyId]?.add ?? []) out.add(option.key);
+  const prop = reg.properties.get(propertyId);
+  for (const variant of (prop === undefined ? null : variantsOf(prop)) ?? []) {
+    out.add(String(variant));
+  }
+  return out;
+}
+
+/**
  * ПОЛНОТА ОТНЕСЕНИЯ ВАРИАНТОВ ДЕЛЬТЫ (§Б2-2, fail-closed): вариант, добавленный дельтой к
  * свойству-слоту-статусу, принимается ТОЛЬКО вместе с отнесением к классу КАЖДОГО контракта, где
  * этот слот участвует.
@@ -363,7 +382,16 @@ function statusSlotsOf(
  *
  * Зовётся НА ЗАПИСИ (`registry/ops.ts`, `setAspectDelta`), не на чтении: `applyDeltas` fail-closed
  * на каждом чтении реестра, и отказ там запер бы владельца снаружи собственного графа после
- * пересева, изменившего контракт.
+ * пересева, изменившего контракт. Единственный зватель — `setAspectDelta`; слияние свойств
+ * (`ops.ts`, `mergeProperty`) карту лишь ПЕРЕИМЕНОВЫВАЕТ прямым UPDATE и сюда не заходит, поэтому
+ * строгость этой проверки перенос ключа не задевает.
+ *
+ * ЧТО ИМЕННО ОТВЕРГАЕТСЯ — две половины, и обе fail-closed (Ф-Б1-49):
+ *  1. добавленный вариант БЕЗ класса (или с классом не из контракта) — `VARIANT_UNMAPPED`;
+ *  2. отнесение, которому не к чему прицепиться, — `UNKNOWN_CONTRACT`/`UNKNOWN_SLOT`, а вариант
+ *     не из области свойства — `VARIANT_UNMAPPED`/`unknown_variant`.
+ * Вторая половина не «на всякий случай»: строка карты доезжает до `value_map` привязки, то есть
+ * до индекса, которым живут все читатели членства.
  */
 export function checkClassMap(
   delta: AspectDeltaVariants,
@@ -401,39 +429,69 @@ export function checkClassMap(
               contract,
               slot,
               ...(hit !== undefined && { class: hit.class }),
+              // Тот же словарь, что у `checkImplements` (Ф-Б1-18/Ф-Б1-51): «не отнесён вовсе»
+              // и «отнесён в класс, которого у контракта нет» — разные починки у владельца.
+              reason: hit === undefined ? 'unmapped' : 'unknown_class',
             },
           });
         }
       }
     }
   }
-  // Отнесения, которым не к чему прицепиться: принять их молча — это владелец, уверенный, что
-  // вариант отнесён, и фильтр, который его не видит.
-  //
-  // ГРАНИЦА ПРОВЕРКИ — свойство, которое ХОТЬ ГДЕ-ТО работает слотом-статусом. У свойства вне
-  // привязок классов нет вовсе (`orbis/content_type`, любое своё число), отнесение на нём
-  // ИНЕРТНО — `applyDeltas` дописывает отнесение только в привязку, где `bind[slot]` и есть это
-  // свойство, — и обмануть владельца насчёт фильтра оно не может: набора, в котором вариант
-  // «должен был найтись», не существует. Отказ на таком отнесении запретил бы законные пути,
-  // которые карту лишь ПЕРЕНОСЯТ, ничего не обещая: единицу пачки по конфликту пересева
-  // (`registry/merge-conflict.ts`, одобрение переписывает дельту целиком) и слияние свойств,
-  // переставляющее КЛЮЧ карты на цель (`registry/ops.ts`, `rewriteDelta`). Опечатка же ловится
-  // там, где она способна навредить: у свойства, слот-статус которого есть.
+  // ОТНЕСЕНИЯ, КОТОРЫМ НЕ К ЧЕМУ ПРИЦЕПИТЬСЯ. Принять их молча — это владелец, уверенный, что
+  // вариант отнесён, и фильтр, который его не видит. Проверяются ВСЕ, включая карту на свойстве,
+  // которое нигде не работает слотом-статусом: «инертной» такая строка не является — `applyDeltas`
+  // дописывает её в `value_map` привязки, стоит свойству оказаться связанным с НЕстатусным слотом
+  // (`orbis/due_date` → `orbis/when.deadline`), а это ровно форма, которую `checkImplements`
+  // отвергает `reason: 'not_status'`. Разница в причине, а не в наличии отказа:
+  //  - `absent`     — у контракта нет такого слота (или самого контракта);
+  //  - `facts`      — контракт-словарь фактов, слотов и классов у него нет по форме;
+  //  - `not_status` — слот есть, но классов у него нет (§Б1-1: классы только у слота-статуса);
+  //  - `not_bound`  — слот-статус есть, но это свойство в нём не стоит ни у одного аспекта.
   for (const [propertyId, entries] of Object.entries(delta.classMap ?? {})) {
     const slots = statusSlotsOf(propertyId, reg);
-    if (slots.length === 0) continue;
+    const domain = variantDomainOf(propertyId, delta, reg);
     for (const entry of entries) {
-      if (!reg.contracts.has(entry.contract)) {
+      const contract = reg.contracts.get(entry.contract);
+      if (contract === undefined || contract.kind === 'facts') {
         issues.push({
           code: 'UNKNOWN_CONTRACT',
-          details: { propertyId, contract: entry.contract },
+          details: {
+            propertyId,
+            contract: entry.contract,
+            reason: contract === undefined ? 'absent' : 'facts',
+          },
         });
         continue;
       }
       if (!slots.some((s) => s.contract === entry.contract && s.slot === entry.slot)) {
+        const decl = contract.slots.find((s) => s.name === entry.slot);
         issues.push({
           code: 'UNKNOWN_SLOT',
-          details: { propertyId, contract: entry.contract, slot: entry.slot },
+          details: {
+            propertyId,
+            contract: entry.contract,
+            slot: entry.slot,
+            reason:
+              decl === undefined ? 'absent' : decl.status === true ? 'not_bound' : 'not_status',
+          },
+        });
+        continue;
+      }
+      // ВАРИАНТ, КОТОРОГО НЕТ. Отнести можно только то, что у свойства есть или что дельта ему
+      // добавляет: опечатка в ключе (`in_reveiw`) значений не соберёт никогда, а строка уедет в
+      // `value_map` и будет шуметь в индексе привязок. Тот же смысл у `unknown_variant`
+      // `checkImplements`.
+      if (!domain.has(String(entry.variant))) {
+        issues.push({
+          code: 'VARIANT_UNMAPPED',
+          details: {
+            propertyId,
+            contract: entry.contract,
+            slot: entry.slot,
+            variant: entry.variant,
+            reason: 'unknown_variant',
+          },
         });
       }
     }

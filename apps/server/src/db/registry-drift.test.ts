@@ -7,7 +7,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { hasRegistryDrift, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { approvePending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
@@ -300,6 +307,24 @@ describe('конфликты пересева становятся единиц�
   const owner = freshUserId();
 
   test('«вариант рядом с похожим» → единица пачки с aspect_delta_set; approve применяет дельту', async () => {
+    // ФИКСТУРА, БЕЗ КОТОРОЙ КАРТА КЛАССОВ В ДЕЛЬТЕ НЕЗАКОННА (Ф-Б1-49). `orbis/content_type` —
+    // обычный select заметки, слотом-статусом он становится только у того, кто его туда поставил:
+    // здесь это свой аспект владельца. Без него `checkClassMap` отвергнет карту на approve
+    // (`UNKNOWN_SLOT`/`not_bound`), и это правильно — карта, которая никуда не ведёт, отвергается.
+    // `value_map` привязки пуст: классы добавленным вариантам назначает именно дельта.
+    await seedCustomAspect(owner, {
+      key: 'user/content-status',
+      label: { ru: 'Вид текста как статус' },
+      properties: [{ key: 'note', type: { kind: 'number' } }],
+      implements: [
+        {
+          contract: 'orbis/completable',
+          bind: { status: 'orbis/content_type' },
+          value_map: [],
+          fixed: {},
+        },
+      ],
+    });
     // Владелец добавил в `orbis/content_type` два своих варианта. У первого подпись
     // совпадает с системным «Markdown», ключ — другой: это ровно тот ряд §А3-3, где
     // молчаливого правильного ответа нет («слить их может только владелец»). Второй

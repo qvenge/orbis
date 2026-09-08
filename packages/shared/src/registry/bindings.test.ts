@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { AspectDeltaVariants } from './bindings';
 import { bindingIndexOf, checkClassMap, checkImplements } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from './index';
@@ -556,6 +557,9 @@ describe('checkClassMap: вариант дельты без отнесения �
       { contract: 'orbis/completable', slot: 'status', variant: 'in_review', class: cls },
     ],
   });
+  /** Пара «код + причина» — то, по чему отказ различает вызывающий (Ф-Б1-18, Ф-Б1-51). */
+  const codes = (d: Parameters<typeof checkClassMap>[0], a: AspectDefinition = TASK) =>
+    checkClassMap(d, a, REG).map((i) => [i.code, i.details.reason]);
 
   test('вариант слота-статуса без отнесения — VARIANT_UNMAPPED с адресом слота', () => {
     expect(checkClassMap({ selectOptions: ADD }, TASK, REG)).toEqual([
@@ -566,6 +570,7 @@ describe('checkClassMap: вариант дельты без отнесения �
           variant: 'in_review',
           contract: 'orbis/completable',
           slot: 'status',
+          reason: 'unmapped',
         },
       },
     ]);
@@ -576,9 +581,9 @@ describe('checkClassMap: вариант дельты без отнесения �
     expect(checkClassMap(delta, NOTE, REG)).toEqual([]);
   });
   test('отнесение к НЕСУЩЕСТВУЮЩЕМУ классу — тот же отказ, а не молчание', () => {
-    expect(
-      checkClassMap({ selectOptions: ADD, classMap: map('paused') }, TASK, REG).map((i) => i.code),
-    ).toEqual(['VARIANT_UNMAPPED']);
+    expect(codes({ selectOptions: ADD, classMap: map('paused') })).toEqual([
+      ['VARIANT_UNMAPPED', 'unknown_class'],
+    ]);
   });
   test('вариант обычного select (ничей слот-статус) отнесения не требует', () => {
     // `orbis/content_type` — обычный select заметки: классов у него нет, и требовать отнесение
@@ -596,19 +601,47 @@ describe('checkClassMap: вариант дельты без отнесения �
         { contract: 'orbis/completable', slot: 'moment', variant: 'in_review', class: 'active' },
       ],
     };
-    expect(checkClassMap({ selectOptions: ADD, classMap }, TASK, REG).map((i) => i.code)).toEqual([
-      'UNKNOWN_CONTRACT',
-      'UNKNOWN_SLOT',
+    expect(codes({ selectOptions: ADD, classMap })).toEqual([
+      ['UNKNOWN_CONTRACT', 'absent'],
+      ['UNKNOWN_SLOT', 'absent'],
     ]);
   });
-  test('отнесение на свойстве ВНЕ привязок инертно и замечанием не считается', () => {
-    // Граница проверки орфанов: у `orbis/content_type` слота-статуса нет НИ У ОДНОГО аспекта,
-    // значит `applyDeltas` такое отнесение никуда не допишет, а набора, в котором вариант
-    // «должен был найтись», не существует — обмануть владельца ему нечем. Отказ здесь запретил
-    // бы два законных ПЕРЕНОСА той же карты: нагрузку единицы пачки по конфликту пересева и
-    // переписывание ключа при слиянии свойств.
+
+  // --- Ф-Б1-49: fail-open, найденный гейтом. Три формы, каждая — «владелец думает, что
+  // настроил класс, а он никуда не ведёт», и все три раньше проходили молча. ---
+
+  test('карта на НЕстатусном слоте — not_status, а не молчание (§Б1-1)', () => {
+    // `orbis/due_date` РЕАЛЬНО стоит в слоте `deadline` контракта `orbis/when` у задачи, но
+    // классов у слота дат нет. Молча принятая строка доезжала до `value_map` привязки — ровно
+    // ту форму `checkImplements` отвергает `reason: 'not_status'`.
     expect(
-      checkClassMap(
+      codes({
+        classMap: {
+          'orbis/due_date': [
+            { contract: 'orbis/when', slot: 'deadline', variant: 'x', class: 'active' },
+          ],
+        },
+      }),
+    ).toEqual([['UNKNOWN_SLOT', 'not_status']]);
+  });
+  test('карта на свойстве, которое в этом слоте НЕ стоит, — not_bound', () => {
+    // Слот-статус существует, но `orbis/priority` в нём не стоит ни у одного аспекта: отнесение
+    // не доедет ни до одной привязки, а владелец уверен, что назначил класс.
+    expect(
+      codes({
+        classMap: {
+          'orbis/priority': [
+            { contract: 'orbis/completable', slot: 'status', variant: 'urgent', class: 'active' },
+          ],
+        },
+      }),
+    ).toEqual([['UNKNOWN_SLOT', 'not_bound']]);
+  });
+  test('свойство вне привязок вовсе — тот же not_bound, а не «инертно»', () => {
+    // Прежняя редакция пропускала этот случай гвардом «слотов нет — пропустить». Пропуск был
+    // fail-open: карта уезжала в строку дельты, а фильтр её не видел никогда.
+    expect(
+      codes(
         {
           classMap: {
             'orbis/content_type': [
@@ -617,8 +650,102 @@ describe('checkClassMap: вариант дельты без отнесения �
           },
         },
         NOTE,
-        REG,
       ),
+    ).toEqual([['UNKNOWN_SLOT', 'not_bound']]);
+  });
+  test('ФАНТОМНЫЙ вариант карты (ни добавленный, ни свой) — unknown_variant', () => {
+    // Опечатка в ключе: `in_reveiw` вместо `in_review`. Значение с таким ключом валидатор в
+    // запись не пустит, но строка уезжает в `value_map` и шумит в индексе привязок.
+    expect(
+      codes({
+        classMap: {
+          'orbis/task_status': [
+            {
+              contract: 'orbis/completable',
+              slot: 'status',
+              variant: 'in_reveiw',
+              class: 'active',
+            },
+          ],
+        },
+      }),
+    ).toEqual([['VARIANT_UNMAPPED', 'unknown_variant']]);
+    // Свой вариант свойства отнести МОЖНО и без `selectOptions` — область не сузилась.
+    expect(
+      codes({
+        classMap: {
+          'orbis/task_status': [
+            { contract: 'orbis/completable', slot: 'status', variant: 'done', class: 'active' },
+          ],
+        },
+      }),
     ).toEqual([]);
+  });
+  test('контракт фактов слотов не имеет — UNKNOWN_CONTRACT reason facts', () => {
+    expect(
+      codes({
+        classMap: {
+          'orbis/task_status': [
+            {
+              contract: 'orbis/sensitivity',
+              slot: 'status',
+              variant: 'in_review',
+              class: 'active',
+            },
+          ],
+        },
+      }),
+    ).toEqual([['UNKNOWN_CONTRACT', 'facts']]);
+  });
+  test('СЛОВАРЬ reason ПОЛОН: шесть причин, и ни одна не выдумана вызывающим', () => {
+    // Пин по образцу Ф-Б1-18: отказы различаются причиной, и вызывающий (`ops.ts`,
+    // `execErrorOfImplementsIssue`) кладёт её в `details` — расширение словаря обязано быть
+    // видно здесь, а не обнаруживаться карточкой отказа у владельца.
+    const battery: AspectDeltaVariants[] = [
+      { selectOptions: ADD }, // unmapped
+      { selectOptions: ADD, classMap: map('paused') }, // unknown_class
+      {
+        classMap: {
+          'orbis/task_status': [
+            { contract: 'orbis/nope', slot: 'status', variant: 'done', class: 'active' },
+            { contract: 'orbis/sensitivity', slot: 'status', variant: 'done', class: 'active' },
+            { contract: 'orbis/completable', slot: 'moment', variant: 'done', class: 'active' },
+            {
+              contract: 'orbis/completable',
+              slot: 'status',
+              variant: 'net-takogo',
+              class: 'active',
+            },
+          ],
+          'orbis/due_date': [
+            { contract: 'orbis/when', slot: 'deadline', variant: 'x', class: 'active' },
+          ],
+          'orbis/priority': [
+            { contract: 'orbis/completable', slot: 'status', variant: 'urgent', class: 'active' },
+          ],
+        },
+      },
+    ];
+    const seen = new Set<string>();
+    for (const delta of battery) {
+      for (const issue of checkClassMap(delta, TASK, REG)) {
+        seen.add(`${issue.code}/${String(issue.details.reason)}`);
+      }
+    }
+    expect([...seen].sort()).toEqual([
+      'UNKNOWN_CONTRACT/absent',
+      'UNKNOWN_CONTRACT/facts',
+      'UNKNOWN_SLOT/absent',
+      'UNKNOWN_SLOT/not_bound',
+      'UNKNOWN_SLOT/not_status',
+      'VARIANT_UNMAPPED/unknown_class',
+      'VARIANT_UNMAPPED/unknown_variant',
+      'VARIANT_UNMAPPED/unmapped',
+    ]);
+  });
+  test('свойства нет в реестре — UNKNOWN_PROPERTY, и обход не идёт дальше', () => {
+    expect(
+      codes({ selectOptions: { 'user/net-takogo': { add: [{ key: 'a', label: {}, rank: 1 }] } } }),
+    ).toEqual([['UNKNOWN_PROPERTY', undefined]]);
   });
 });
