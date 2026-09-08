@@ -4,7 +4,7 @@
 // `budget/aggregates.ts` (:342, :363, :365-368, :390-392), они переписаны здесь дословно, а не
 // импортированы: `aggregates.ts` тянет за собой db/client и executor, а сверять надо АРИФМЕТИКУ.
 import { describe, expect, test } from 'bun:test';
-import { daysInclusive, type ResolvedBinding } from '@orbis/shared';
+import { BUDGET_DEF, daysInclusive, type ResolvedBinding } from '@orbis/shared';
 import {
   EXPR_TREE_DEPTH_CAP,
   type ExprNode,
@@ -156,7 +156,8 @@ describe('evalExpr: сравнения и семантика отсутстви�
     expect(evalExpr({ op: '=', args: [{ const: '850.0' }, { const: '850.00' }] }, scopeOf())).toBe(
       true,
     );
-    expect(evalExpr({ op: '=', args: [{ const: 15 }, { const: '15' }] }, scopeOf())).toBe(true);
+    // Числа и decimal-строки рядом в `=` не пинятся: чекер (§Б3, EQUATABLE) такую пару не пускает
+    // до рантайма вовсе, и пин здесь обещал бы контракт, которого нет.
   });
 
   test('даты сравниваются лексикографически — у ISO это и есть хронология (phaseOf, :350-353)', () => {
@@ -448,32 +449,30 @@ describe('evalExpr: арифметика дат (§Б3-2: date_add / date_diff /
   });
 });
 
-/** Декларации §Б5-4 в каноне §Б3-5 — ровно то, что сеет задача 9 (эталон П2 поправлен: строки, слоты). */
-const EFFECTIVE_LIMIT: ExprNode = {
-  op: '+',
-  args: [
-    { slot: 'limit' },
-    { op: 'if', args: [{ has: 'carryover' }, { slot: 'carryover' }, { const: '0' }] },
-  ],
-};
-const REMAINING: ExprNode = { op: '-', args: [{ agg: 'effective_limit' }, { agg: 'spent' }] };
-const DAILY_PACE: ExprNode = {
-  op: 'if',
-  args: [
-    {
-      op: 'and',
-      args: [{ phase: 'active' }, { op: '>=', args: [{ agg: 'remaining' }, { const: '0' }] }],
-    },
-    {
-      op: '/',
-      args: [{ agg: 'remaining' }, { days_inclusive: [{ ctx: '$today' }, { slot: 'period_end' }] }],
-    },
-    { const: null },
-  ],
-};
+/**
+ * Формулы берутся ИЗ САМОЙ ДЕКЛАРАЦИИ (`BUDGET_DEF`, норматив §Б5-4), а не переписываются рядом:
+ * копия рядом делала бы заголовок «то, что сеет задача 9» обещанием, а не фактом, и расхождение
+ * декларации с оракулом (охрана `remaining >= "0"` у `daily_pace` — рулинг Ф-Б1-34) этот сьют бы
+ * проспал. Порог тревоги декларация задаёт не выражением, а числом (`alerts.warn_at`), и сравнение
+ * из него собирает движок — здесь собрано так же, из того же поля.
+ */
+function seededFormula(name: string): ExprNode {
+  const agg = BUDGET_DEF.aggregates[name];
+  if (agg === undefined || agg.kind !== 'formula') {
+    throw new Error(`величина '${name}' в BUDGET_DEF не формула`);
+  }
+  return agg.expr;
+}
+
+const EFFECTIVE_LIMIT = seededFormula('effective_limit');
+const REMAINING = seededFormula('remaining');
+const DAILY_PACE = seededFormula('daily_pace');
 const ALERT: ExprNode = {
   op: '>=',
-  args: [{ agg: 'spent' }, { op: '*', args: [{ agg: 'effective_limit' }, { const: '0.85' }] }],
+  args: [
+    { agg: 'spent' },
+    { op: '*', args: [{ agg: 'effective_limit' }, { const: BUDGET_DEF.alerts.warn_at }] },
+  ],
 };
 
 describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates.ts', () => {
@@ -535,10 +534,13 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
       phase: 'active',
     },
     {
-      name: 'копеечный лимит: 0.85 умножить на 100.01 = 85.0085',
-      limit: '100.01',
+      // Свидетель запрета округлять `decMul`: 0.85 · 100.04 = 85.034, округлённое — 85.03, и
+      // spent = 85.03 из «не тревога» (оракул: 20·85.03 = 1700.60 < 17·100.04 = 1700.68) стал бы
+      // «тревога». На 100.01 вердикт не менялся бы — округление там идёт ВВЕРХ.
+      name: 'копеечный лимит: 0.85 · 100.04 = 85.034 — округление сменило бы вердикт',
+      limit: '100.04',
       carryover: undefined,
-      spent: '85.01',
+      spent: '85.03',
       periodEnd: '2026-05-31',
       phase: 'active',
     },

@@ -111,10 +111,18 @@ export const BUDGET_DEF: BudgetSubscription = {
     daily_pace: {
       kind: 'formula',
       scope: 'envelope',
+      // Охрана `remaining >= "0"` — ПО ОРАКУЛУ (`statusOf` в `budget/aggregates.ts`, 03-budget §2.9б):
+      // на перерасходе темп не показывается ВОВСЕ. Спека §Б5-4 пишет формулу без охраны, и без неё
+      // сверка §С8-15 «ноль расхождений» задачи 9 покраснела бы на первом же перерасходе: конверт
+      // 1000/1500 дал бы «−29.41 в день» там, где оракул молчит. Эталон сверки — оракул (рулинг
+      // Ф-Б1-34); ОВ-Б1-2 — эррата спеки за владельцем.
       expr: {
         op: 'if',
         args: [
-          { phase: 'active' },
+          {
+            op: 'and',
+            args: [{ phase: 'active' }, { op: '>=', args: [{ agg: 'remaining' }, { const: '0' }] }],
+          },
           {
             op: '/',
             args: [

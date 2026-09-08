@@ -38,6 +38,12 @@ export interface ExprEvalScope {
   /** Уже посчитанные величины ТОЙ ЖЕ ведомости; порядок обеспечивает движок (§Б3-2, ациклично). */
   aggs: Record<string, ExprScalar>;
   phase: string | null;
+  /**
+   * Значения строки: ключ — id свойства; core-поля лежат ЗДЕСЬ ЖЕ под своими id (`orbis/title`,
+   * `orbis/archived`, `orbis/created_at`, `orbis/updated_at` — `CORE_COLUMN` в `query/compile-ast.ts`),
+   * их подмешивает движок ведомостей (задача 9). Тот же договор записан ниже для целей `deref`:
+   * два разных правила для «своей» строки и «чужой» развели бы одно чтение реестра на два.
+   */
   props: Record<string, unknown>;
   /** Привязка области: без неё `{slot}`, `{has: слот}` и `{deref:{slot}}` незаконны (§Б5-4). */
   binding?: ResolvedBinding;
@@ -106,6 +112,15 @@ function guarded<T>(what: string, compute: () => T): T {
   }
 }
 
+/**
+ * Чтение ключа plain-record — ТОЛЬКО свой ключ: у `{}` есть `toString`, и `props['toString']` вернул
+ * бы функцию прототипа, то есть отказ `EXPR_VALUE` там, где значения просто нет. Чекер спрашивает
+ * реестр тем же `Object.hasOwn` (`expr/check.ts`) — дисциплина у двух бэкендов одна.
+ */
+function own<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 /** Значение из `props` в скаляр E; json-объект сюда доехать не должен — его ловит чекер (§С8-28). */
 function scalarOf(raw: unknown, what: string): ExprValue {
   if (raw === undefined || raw === null) return null;
@@ -128,7 +143,7 @@ function propValue(
   scope: ExprEvalScope,
   what: string,
 ): ExprValue {
-  const raw = props[propertyId];
+  const raw = own(props, propertyId);
   if (raw !== undefined && raw !== null) return scalarOf(raw, what);
   const fallback = scope.defaults?.get(propertyId);
   return fallback === undefined ? null : fallback; // умолчание может быть объявлено как null
@@ -139,11 +154,11 @@ function slotValue(slot: string, scope: ExprEvalScope): ExprValue {
   if (binding === undefined) {
     return fail('EXPR_SCOPE', `слот '${slot}' вне области с контрактом: привязки нет`, { slot });
   }
-  const propertyId = binding.bind[slot];
+  const propertyId = own(binding.bind, slot);
   if (propertyId !== undefined) {
     return propValue(scope.props, propertyId, scope, `слота '${slot}' (${propertyId})`);
   }
-  const fixed = binding.fixed[slot];
+  const fixed = own(binding.fixed, slot);
   if (fixed !== undefined) return fixed;
   return null; // §Б2-3: необязательный слот можно не связывать — это отсутствие, а не отказ
 }
@@ -161,20 +176,20 @@ function ev(node: ExprNode, scope: ExprEvalScope, depth: number): ExprValue {
   if ('prop' in node) return propValue(scope.props, node.prop, scope, `свойства '${node.prop}'`);
   if ('slot' in node) return slotValue(node.slot, scope);
   if ('param' in node) {
-    if (!(node.param in scope.params)) {
+    if (!Object.hasOwn(scope.params, node.param)) {
       return fail('EXPR_SCOPE', `параметра '${node.param}' нет в области ведомости`, {
         param: node.param,
       });
     }
-    return scope.params[node.param] ?? null;
+    return own(scope.params, node.param) ?? null;
   }
   if ('agg' in node) {
-    if (!(node.agg in scope.aggs)) {
+    if (!Object.hasOwn(scope.aggs, node.agg)) {
       return fail('EXPR_SCOPE', `величины '${node.agg}' нет в области ведомости`, {
         agg: node.agg,
       });
     }
-    return scope.aggs[node.agg] ?? null;
+    return own(scope.aggs, node.agg) ?? null;
   }
   if ('phase' in node) return scope.phase === node.phase;
   if ('ctx' in node) {
@@ -256,6 +271,13 @@ function cmpText(a: string, b: string): -1 | 0 | 1 {
  *     значило бы завести второй реестр в горячем цикле на 480 конвертов. Живого потребителя у
  *     остатка в Б-1 нет: единственный текст ведомости — `deref(category).title`, и он идёт в ключ
  *     порядка, а не в `=`.
+ *
+ * ВТОРОЙ НАЗВАННЫЙ ОСТАТОК — ТАЙМЗОНА (Ф-Б1-19). Момент сравнивается по СЫРОМУ тексту, то есть у
+ * '…Z' — по дню UTC, тогда как чекер обещает «момент читается в таймзоне владельца», а SQL-бэкенд
+ * после задачи 6 приводит `AT TIME ZONE`. В декларациях Б-1 этого случая нет: `date`⟷`timestamp`
+ * сравнивают правила Agenda (их считает SQL), а ведомость Budget сравнивает даты с датами
+ * (`period_start`/`period_end`/`$today` — все `date`). Приводить время здесь без потребителя значило
+ * бы завести в горячем цикле третье правило часовых поясов; остаток — в реестр задачи 19.
  */
 function compare(op: '=' | '!=' | '>' | '<' | '>=' | '<=', a: ExprValue, b: ExprValue): boolean {
   if (a === null || b === null) return false;
@@ -351,8 +373,13 @@ function applyOp(
       const [left, right] = binary(op, args);
       return arith(op, ev(left, scope, d), ev(right, scope, d));
     }
-    default:
-      return fail('EXPR_BACKEND_UNSUPPORTED', `оператор '${op}' ещё не подключён`, { op });
+    default: {
+      // Все пятнадцать операторов `EXPR_OPS` разобраны выше, и это утверждение держит `never`:
+      // появится шестнадцатый — красным станет typecheck, а не рантайм у владельца. Ветка не
+      // «каркас, который допишут»: недостижимая форма узла — дефект вызывающего, EXPR_VALUE.
+      const unreachable: never = op;
+      return fail('EXPR_VALUE', `оператора нет в языке E: ${String(unreachable)}`, { op });
+    }
   }
 }
 
@@ -408,12 +435,13 @@ function truthy(value: ExprValue): boolean {
 function hasValue(name: string, scope: ExprEvalScope): boolean {
   const binding = scope.binding;
   if (binding !== undefined) {
-    const propertyId = binding.bind[name];
+    const propertyId = own(binding.bind, name);
     if (propertyId !== undefined)
-      return scalarOf(scope.props[propertyId], `слота '${name}'`) !== null;
-    if (name in binding.fixed) return true; // fixed — значение самой декларации, оно есть всегда
+      return scalarOf(own(scope.props, propertyId), `слота '${name}'`) !== null;
+    // fixed — значение самой декларации, оно есть всегда
+    if (Object.hasOwn(binding.fixed, name)) return true;
   }
-  return scalarOf(scope.props[name], `свойства '${name}'`) !== null;
+  return scalarOf(own(scope.props, name), `свойства '${name}'`) !== null;
 }
 
 /**
@@ -447,7 +475,14 @@ function dateTextOf(value: ExprValue, what: string): string {
   return textOf(value, what);
 }
 
-/** Календарный день у даты и у момента — одни и те же первые десять символов (`date.ts`). */
+/**
+ * Календарный день у даты и у момента — одни и те же первые десять символов (`date.ts`).
+ *
+ * У момента это день ЕГО СОБСТВЕННОГО смещения: '2026-05-15T23:30:00Z' даёт 15 мая, хотя у владельца
+ * в +03:00 это уже 16-е. Тот же названный остаток, что у `compare` выше (Ф-Б1-19): в декларациях Б-1
+ * календарная арифметика зовётся только над `date` (окна Budget — `period_start`/`period_end`/`$today`),
+ * а SQL-бэкенд свою ветку момент⟷дата переводит на `AT TIME ZONE` задачей 6. Остаток — задача 19.
+ */
 function calendarHead(value: string): string {
   return value.slice(0, 10);
 }
