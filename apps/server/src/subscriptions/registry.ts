@@ -3,6 +3,7 @@
 // там означала бы владельца, запертого снаружи графа после пересева, изменившего контракт (Р-И-7).
 // На чтении разбирается только ФОРМА, смысл — здесь, у сида, тула и дельты.
 import {
+  type BindingIndex,
   type BudgetSubscription,
   bindingIndexOf,
   EXPR_RECURSION,
@@ -467,4 +468,62 @@ function assertAggregatesAcyclic(id: string, def: BudgetSubscription): void {
     state.set(name, 'done');
   };
   for (const name of edges.keys()) walk(name, []);
+}
+
+export interface SlotHost {
+  id?: string;
+  aspects: readonly string[];
+  props: Record<string, unknown>;
+}
+
+/**
+ * ЗНАЧЕНИЕ СЛОТА КОНТРАКТА У СУЩНОСТИ (§Б5-6, §С8-21). Конфликт SLOT_AMBIGUOUS живёт ЗДЕСЬ, а не в
+ * валидаторе декларации: две привязки одного слота — свойство СУЩНОСТИ (свой аспект + orbis/schedule на
+ * одной записи), в реестре обе законны по отдельности. Проверка на декларации была бы либо ложной
+ * тревогой (аспекты никогда не встретятся вместе), либо молчанием (встретятся — а декларация принята).
+ * ПУСТОЙ СЛОТ — НЕ РЕАЛИЗАЦИЯ (§Б2-3): иначе событие без начала спорило бы за слот, которого у него нет.
+ *
+ * `details` ЗДЕСЬ БЕЗ `subscription` — и это не потеря поля §1.1, а разделение того, кто что знает: функция
+ * зовётся движком и подписки не видит (шестым параметром её пришлось бы протаскивать через каждый вызов ради
+ * одной строки отказа). Имя дописывает ВЫЗЫВАЮЩИЙ: `rowOf` движка Agenda (задача 6) ловит `SLOT_AMBIGUOUS`,
+ * дописывает `{ subscription: AGENDA_SUBSCRIPTION_ID }` в `details` и перебрасывает — у пользователя отказ
+ * приходит полным (`{subscription, contract, slot, entityId, aspects}`), а у чистой функции остаётся один
+ * источник правды о конфликте.
+ */
+export function resolveSlotOnEntity(
+  idx: BindingIndex,
+  entity: SlotHost,
+  contract: string,
+  slot: string,
+  prefer: readonly string[],
+): { aspectId: string; value: unknown } | null {
+  const on = new Set(entity.aspects);
+  const live: { aspectId: string; value: unknown }[] = [];
+  for (const binding of idx.byContract(contract)) {
+    if (!on.has(binding.aspectId)) continue;
+    const bound = idx.slotOf(binding.aspectId, contract, slot);
+    if (bound === undefined) continue;
+    const value = 'fixed' in bound ? bound.fixed : entity.props[bound.prop];
+    if (value === undefined || value === null) continue;
+    live.push({ aspectId: binding.aspectId, value });
+  }
+  const only = live[0];
+  if (only === undefined) return null;
+  if (live.length === 1) return only;
+  // Порядок prefer И ЕСТЬ приоритет: первый совпавший, а не «самый ранний аспект по rank».
+  for (const aspectId of prefer) {
+    const hit = live.find((c) => c.aspectId === aspectId);
+    if (hit !== undefined) return hit;
+  }
+  // `subscription` в details дописывает движок (задача 6, `rowOf`) — см. докблок выше.
+  throw new ExecError(
+    'SLOT_AMBIGUOUS',
+    `слот ${contract}.${slot} реализуют ${live.length} аспекта сущности — подписке нужен prefer`,
+    {
+      contract,
+      slot,
+      entityId: entity.id ?? null,
+      aspects: live.map((c) => c.aspectId).sort(),
+    },
+  );
 }

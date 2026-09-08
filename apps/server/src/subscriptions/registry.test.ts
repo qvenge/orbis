@@ -3,23 +3,28 @@
 // Первые три describe — чистые: вход это готовый снимок реестра и литерал декларации, живая
 // база к ответу ничего не добавляет. Четвёртый и пятый — против БД: конфликт слота живёт у
 // СУЩНОСТИ, и собрать его можно только двумя настоящими привязками в реестре владельца.
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   AGENDA_DEF,
+  type BindingIndex,
   BUDGET_DEF,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  bindingIndexOf,
 } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv } from '../../test/helpers';
+import { GATE_PLAIN_ASPECT } from '../../test/fixtures/gate-aspects';
+import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
+import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot, SubscriptionRow } from '../registry/load';
-import { assertSubscription, exprSitesOf, rawValueRefs } from './registry';
+import { assertSubscription, exprSitesOf, rawValueRefs, resolveSlotOnEntity } from './registry';
 
 requireEnv();
 
-const { client } = appDb();
+const { db, client } = appDb();
 
 afterAll(async () => {
   await client.end();
@@ -195,5 +200,73 @@ describe('типы позиций E и круги ведомостей (§С8-28
     expect(
       assertSubscription(row(BUDGET_DEF, { surface: 'finance/budget-overview' }), seed).engine,
     ).toBe('budget');
+  });
+});
+
+describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с prefer — детерминированный выбор', () => {
+  const owner = freshUserId();
+  let idx: BindingIndex;
+  let plain: string;
+  let sched: string;
+  beforeAll(async () => {
+    await truncateAll();
+    // Аспект владельца фикстуры реализует тот же слот `moment` контракта «когда», что и
+    // `orbis/schedule`: две законные по отдельности привязки на одной сущности — и есть §С8-21.
+    await seedCustomAspect(owner, GATE_PLAIN_ASPECT);
+    idx = bindingIndexOf(await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)));
+    // Адрес свойства берётся ИЗ ПРИВЯЗКИ, а не литералом: иначе тест пинил бы форму фикстуры 0d.
+    const a = idx.slotOf(GATE_PLAIN_ASPECT.key, 'orbis/when', 'moment');
+    const b = idx.slotOf('orbis/schedule', 'orbis/when', 'moment');
+    if (a === undefined || b === undefined || !('prop' in a) || !('prop' in b)) {
+      throw new Error('фикстура: обе привязки — по свойству');
+    }
+    plain = a.prop;
+    sched = b.prop;
+  });
+  const host = () => ({
+    id: 'e1',
+    aspects: [GATE_PLAIN_ASPECT.key, 'orbis/schedule'],
+    props: { [plain]: '2026-09-01T09:00:00Z', [sched]: '2026-09-02T18:00:00Z' },
+  });
+  test('две привязки одного слота без prefer — SLOT_AMBIGUOUS с аспектами в details', () => {
+    let caught: ExecError | null = null;
+    try {
+      resolveSlotOnEntity(idx, host(), 'orbis/when', 'moment', []);
+    } catch (e) {
+      caught = e as ExecError;
+    }
+    expect(caught?.code).toBe('SLOT_AMBIGUOUS');
+    // Поле `subscription` (реестр §1.1) дописывает движок (задача 6, `rowOf`): чистая функция подписки не
+    // знает, и лишний параметр ради одной строки отказа протаскивался бы через каждый вызов.
+    expect(caught?.details).toEqual({
+      contract: 'orbis/when',
+      slot: 'moment',
+      entityId: 'e1',
+      aspects: [GATE_PLAIN_ASPECT.key, 'orbis/schedule'].sort(),
+    });
+  });
+  test('prefer выбирает детерминированно — по порядку перечисления', () => {
+    expect(
+      resolveSlotOnEntity(idx, host(), 'orbis/when', 'moment', ['orbis/schedule'])?.aspectId,
+    ).toBe('orbis/schedule');
+    expect(
+      resolveSlotOnEntity(idx, host(), 'orbis/when', 'moment', [GATE_PLAIN_ASPECT.key])?.value,
+    ).toBe('2026-09-01T09:00:00Z');
+  });
+  test('пустой слот второй привязки конфликта не даёт (§Б2-3 частичная привязка)', () => {
+    expect(
+      resolveSlotOnEntity(
+        idx,
+        { ...host(), props: { [plain]: '2026-09-01T09:00:00Z' } },
+        'orbis/when',
+        'moment',
+        [],
+      )?.aspectId,
+    ).toBe(GATE_PLAIN_ASPECT.key);
+  });
+  test('ни одной привязки — null, а не отказ: подписка просто не видит сущность', () => {
+    expect(
+      resolveSlotOnEntity(idx, { aspects: ['orbis/note'], props: {} }, 'orbis/when', 'moment', []),
+    ).toBeNull();
   });
 });
