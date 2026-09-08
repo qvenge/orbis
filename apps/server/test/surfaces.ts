@@ -11,7 +11,6 @@
 // случайными uuid. Здесь четыре поверхности считаются на ОДНОЙ `withIdentity`-tx тем же
 // компилятором и тем же движком подписки, что и ручки, — с прибитым `today` и без записи.
 import {
-  addDays,
   type BudgetOverview,
   type BudgetSubscription,
   canonicalJson,
@@ -28,6 +27,7 @@ import type { WireEntity } from '../src/executor/types';
 import { type CompileCtx, compileQueryAst } from '../src/query/compile-ast';
 import { queryContext } from '../src/query/context';
 import { parseQueryText } from '../src/query/parse-text';
+import { agendaListOf, agendaSubscriptionOf } from '../src/subscriptions/agenda';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
 import { toWireEntityFromSql } from '../src/wire';
@@ -160,7 +160,8 @@ function ops(ownerId: string): { tool: string; input: Record<string, unknown> }[
     }),
     // Категория без конверта — единственная строка Unbudgeted (§2.3 шаг 5).
     mv('mv-coffee', 'Кофе с собой', 'cat-coffee', '700.00', '2026-07-02'),
-    // Два аспекта разом — единственный вход во ВТОРУЮ выборку «Просроченного» (`useAgenda.ts:58`).
+    // Два аспекта разом — единственный вход в СЛИЯНИЕ двух дат «Просроченного»: движок берёт
+    // минимум `deadline` и локального дня `moment` (§Б5-6), прежде это склеивал клиент.
     plain('task-open', 'Задача просроченная', ['orbis/task', 'orbis/schedule'], {
       'orbis/task_status': 'inbox',
       'orbis/due_date': '2026-07-02',
@@ -184,8 +185,8 @@ function ops(ownerId: string): { tool: string; input: Record<string, unknown> }[
     plain('event-today', 'Событие сегодня', ['orbis/schedule'], {
       'orbis/start_at': '2026-07-03T10:00:00+03:00',
     }),
-    // Шаблон recurring: в выборку окна попадает, снимается КЛИЕНТСКИМ фильтром
-    // (`useAgenda.ts:93-95`) — задача 6 переводит его в декларацию `hide`.
+    // Шаблон recurring: в выборку окна попадает и снимается ДЕКЛАРАЦИЕЙ `hide` подписки
+    // (задача 6); прежде его снимал клиентский фильтр (`useAgenda.ts:93-95`).
     plain('tpl-weekly', 'Еженедельная встреча', ['orbis/schedule'], {
       'orbis/start_at': '2026-07-03T08:00:00+03:00',
       'orbis/recurrence': { freq: 'weekly', interval: 1 },
@@ -245,17 +246,15 @@ async function queryEntities(tx: Tx, cctx: CompileCtx, text: string): Promise<Wi
   return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
 }
 
-/** Три текста — ДОСЛОВНО `useAgenda.ts:44/:51/:58` (их близнец — `AGENDA_QUERY_TEXTS`). */
-const AGENDA_DAYS_QUERY =
-  'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200';
-const AGENDA_OVERDUE_DUE_QUERY =
-  'aspect=orbis/task, orbis/due_date=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=200';
-const AGENDA_OVERDUE_START_QUERY =
-  'aspect=orbis/task, aspect=orbis/schedule, orbis/start_at=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/start_at:asc, limit=200';
-const AGENDA_DAYS = 8;
-
-/** Локальный день момента — копия `useAgenda.localDay` (`:104-112`). */
+/**
+ * Локальный день момента — близнец `localDay` движка (`subscriptions/agenda.ts`, задача 6).
+ *
+ * ПЕРВОЙ СТРОКОЙ — охранник date-значения: слот `moment`, привязанный к date-свойству, отдаёт
+ * уже день (`'2026-07-02'`), и прогон такого значения через `new Date()` читал бы его как
+ * полночь UTC и уводил дату на сутки назад в зонах западнее UTC.
+ */
 function localDay(iso: string, timeZone: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   return new Intl.DateTimeFormat('en-CA', {
@@ -265,53 +264,36 @@ function localDay(iso: string, timeZone: string): string | null {
     day: '2-digit',
   }).format(d);
 }
-const strProp = (e: WireEntity, id: string): string | null =>
-  typeof e.props[id] === 'string' ? (e.props[id] as string) : null;
-const isTemplate = (e: WireEntity): boolean => e.props['orbis/recurrence'] !== undefined;
+
+/** То же окно, что у клиента (`AGENDA_DAYS` 0b): состав снимка не должен ехать не по делу. */
+const AGENDA_SURFACE_DAYS = 8;
 
 /**
- * ВРЕМЕННАЯ СЕРВЕРНАЯ КОПИЯ клиентских правил Agenda (`useAgenda.ts:93-95`, `:142-166`,
- * `:207-235`): раскладка по локальному дню, `all_day` первым, слияние двух выборок
- * «Просроченного» по минимальной дате. Замену кладёт задача 6 (`agenda.list`), а копию сносит
- * задача 10 (шаг 7, Р-К-27): снимок переключается на `agendaListOf`.
+ * Поверхность повестки — ДВИЖОК ПОДПИСКИ (задача 6). Временная серверная копия клиентских
+ * правил 0b (`useAgenda.ts:93-95`, `:142-166`, `:207-235`) снята здесь (шаг 7, Р-К-27):
+ * пока снимок считал Agenda копией, «снимок после» описывал старую машинерию и гейт §С8-18
+ * по этой поверхности ничего не доказывал.
  *
- * Снимок хранит для окна ДЕНЬ (`localDay`), а не момент: сравнимость с эталоном 0b (Р-К-26);
- * у «Просроченного» дата уже дневная в обеих выборках и кладётся как есть.
+ * `at` окна ПРИВОДИТСЯ К ДНЮ. Движок для `window` отдаёт значение слота `moment` как есть
+ * (`'2026-07-03T10:00:00+03:00'`), а эталон 0b хранит локальный день (`'2026-07-03'`). Снимок
+ * хранит ДЕНЬ окна ради сравнимости с эталоном 0b: сменись форма поля — `baseline` пришлось бы
+ * пересдать, а вместе с ним умерла бы сама проверка «веха I выдачу на неизменившемся мире не
+ * изменила». Секцию `overdue` движок уже отдаёт днём (минимум `deadline` и локального дня
+ * `moment`, §Б5-6) — берётся как есть.
  */
 async function agendaSurface(tx: Tx, cctx: CompileCtx): Promise<AgendaSurfaceRow[]> {
-  const tz = cctx.timeZone;
-  const out: AgendaSurfaceRow[] = [];
-  const win = await queryEntities(tx, cctx, AGENDA_DAYS_QUERY);
-  for (let i = 0; i < AGENDA_DAYS; i++) {
-    const day = addDays(cctx.today, i);
-    const inDay = win.filter((e) => {
-      const s = strProp(e, 'orbis/start_at');
-      return !isTemplate(e) && s !== null && localDay(s, tz) === day;
-    });
-    // Array#sort стабилен — порядок сервера (start_at asc) внутри дня сохраняется.
-    inDay.sort(
-      (a, b) =>
-        Number(b.props['orbis/all_day'] === true) - Number(a.props['orbis/all_day'] === true),
-    );
-    for (const e of inDay) out.push({ section: 'window', id: e.id, title: e.title, at: day });
-  }
-  const merged = new Map<string, AgendaSurfaceRow>();
-  const add = (e: WireEntity, at: string) => {
-    const prev = merged.get(e.id);
-    if (prev === undefined || at < prev.at)
-      merged.set(e.id, { section: 'overdue', id: e.id, title: e.title, at });
-  };
-  for (const e of await queryEntities(tx, cctx, AGENDA_OVERDUE_DUE_QUERY)) {
-    const due = strProp(e, 'orbis/due_date');
-    if (!isTemplate(e) && due !== null) add(e, due);
-  }
-  for (const e of await queryEntities(tx, cctx, AGENDA_OVERDUE_START_QUERY)) {
-    const s = strProp(e, 'orbis/start_at');
-    const day = s === null ? null : localDay(s, tz);
-    if (!isTemplate(e) && day !== null) add(e, day);
-  }
-  out.push(...[...merged.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)));
-  return out;
+  const def = agendaSubscriptionOf(cctx.reg);
+  const res = await agendaListOf(tx, cctx.ownerId, def, {
+    today: cctx.today,
+    timeZone: cctx.timeZone,
+    days: AGENDA_SURFACE_DAYS,
+  });
+  return res.rows.map((r) => ({
+    section: r.section,
+    id: r.entity.id,
+    title: r.entity.title,
+    at: r.section === 'window' ? (localDay(r.at, cctx.timeZone) ?? r.at) : r.at,
+  }));
 }
 
 /**

@@ -67,7 +67,7 @@ describe('снимки поверхностей: консервативност�
     ]);
     expect(ov.comingUp).toEqual([]);
   });
-  test('снимок Agenda — три текста useAgenda с клиентскими правилами §4.1/§4.2', async () => {
+  test('снимок Agenda — движок подписки §Б5-6: окно и просроченное на прибитом today', async () => {
     const snap = await snapshotSurfaces(db, SURFACE_OWNER_ID, 'baseline', SURFACE_TODAY);
     expect(snap.surfaces['planner/agenda']).toEqual([
       // `@tpl-weekly` (08:00) выборкой возвращён и снят фильтром шаблона.
