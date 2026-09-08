@@ -22,7 +22,6 @@ import { DEFAULT_TIMEZONE } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
 import { spentContributionOf } from '../subscriptions/budget';
-import { measureP95 } from '../test/perf';
 import { budgetOverview } from './aggregates';
 import { defaultCurrencyOf } from './binding';
 import { decAdd, decCmp } from './decimal';
@@ -616,13 +615,22 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
   });
 });
 
-describe('приёмка §С8-16: чтение кэша ≤ 10 мс p95', () => {
+describe('прогретый кэш отвечает на все ключи разом (§С8-16, поведенческая половина)', () => {
   const user = freshUserId();
   /** Сорок конвертов периода — объём одного месяца синтетики П2 (12 × 40, задача 0c). */
   const ENVELOPES = 40;
-  const P95_RUNS = 20; // при n = 20 nearest-rank берёт девятнадцатый из двадцати
 
-  test('сорок конвертов: p95 чтения прогретого кэша ≤ 10 мс', async () => {
+  /**
+   * ЧИСЛО приёмки (`p95 ≤ 10 мс`) мерится НЕ ЗДЕСЬ, а в перф-полосе
+   * (`perf/volume.test.ts`, «приёмка §С8-16»): Р-К-38 разрешает перенос при флаке, и флак
+   * состоялся. Один и тот же код и те же сорок ключей дали 5,5 мс медианы на тихой машине и
+   * 10,3–12,6 мс под фоновой индексацией диска (load ≈ 4) — то есть в общем сьюте, который
+   * гонится ПАРАЛЛЕЛЬНО с web (Ф-Б1-41), порог сторожил бы загрузку машины, а не кэш.
+   *
+   * Здесь остаётся то, что от загрузки не зависит и ломается от настоящего дефекта: прогретый
+   * кэш обязан ответить на ВСЕ сорок ключей одним запросом, без единого промаха.
+   */
+  test('сорок конвертов: одно чтение закрывает все сорок ключей, промахов нет', async () => {
     const ids: string[] = [];
     for (let i = 0; i < ENVELOPES; i++) {
       const cat = newId();
@@ -644,15 +652,8 @@ describe('приёмка §С8-16: чтение кэша ≤ 10 мс p95', () =>
       ),
     );
     const keys = ids.map((envelopeId) => ({ envelopeId, asOf }));
-    const p95 = await measureP95('spent-cache read(40)', P95_RUNS, () =>
-      withIdentity(db, user, async (tx) => {
-        const hit = await readSpentCache(tx, user, keys, versions);
-        if (hit.size !== ENVELOPES)
-          throw new Error(`прогретый кэш промахнулся: ${hit.size}/${ENVELOPES}`);
-      }),
-    );
-    // Порог §С8-16 дословно. Промах сюда не входит намеренно: приёмка называет ЧТЕНИЕ кэша,
-    // а холодный путь мерит перф-гейт задачи 12 (p95 ≤ 2× оракула и ≤ 500 мс).
-    expect([p95 <= 10, `p95=${p95.toFixed(1)}ms`]).toEqual([true, `p95=${p95.toFixed(1)}ms`]);
+    const hit = await withIdentity(db, user, (tx) => readSpentCache(tx, user, keys, versions));
+    expect(hit.size).toBe(ENVELOPES);
+    expect([...new Set(hit.values())]).toEqual(['1234.56']);
   }, 120_000);
 });
