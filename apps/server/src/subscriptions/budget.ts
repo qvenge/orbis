@@ -489,6 +489,110 @@ async function runSumCached(
   return out;
 }
 
+/**
+ * Контур кэша `spent`, СОБРАННЫЙ ИЗ ДЕКЛАРАЦИИ (§Б5-5): какие аспекты дают движение, какие —
+ * конверт, каким ребром они связаны и включён ли кэш вообще.
+ *
+ * Ни одного литерала `'orbis/financial'`/`'orbis/budget'` здесь нет намеренно. Аспект гейта
+ * `user/gate-fin` объявляет ТОТ ЖЕ контракт `orbis/money-movement`, и жёсткий id выкинул бы
+ * его из кэша, оставив ведомость и кэш с разными множествами — ровно тот разъезд, которым
+ * §С8-18 и меряется. Пин — греп: в этом файле и в `spent-cache.ts` нет ни одного id
+ * встроенного аспекта.
+ *
+ * Нет строки подписки — контур ВЫКЛЮЧЕН, а не исключение: кэш обязан молчать там, где
+ * декларации нет (литеральные снимки фикстур, владелец без модуля Финансы), и падать
+ * исполнитель из-за отсутствующего кэша не должен.
+ */
+export interface SpentCacheContour {
+  enabled: boolean;
+  /** Имя материализуемой ведомости (сегодня — `spent`); null — кэш выключен. */
+  aggregate: string | null;
+  movementAspects: ReadonlySet<string>;
+  envelopeAspects: ReadonlySet<string>;
+  bindingRole: string;
+}
+
+const CONTOUR_OFF: SpentCacheContour = {
+  enabled: false,
+  aggregate: null,
+  movementAspects: new Set(),
+  envelopeAspects: new Set(),
+  bindingRole: '',
+};
+
+export function spentCacheContourOf(reg: RegistrySnapshot): SpentCacheContour {
+  if (reg.subscriptions.get(BUDGET_SUBSCRIPTION_ID) === undefined) return CONTOUR_OFF;
+  const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
+  const names = [...materializedAggregatesOf(def, reg)];
+  const idx = bindingsOf(reg);
+  return {
+    enabled: names.length > 0,
+    aggregate: names[0] ?? null,
+    movementAspects: new Set(
+      idx.byContract(def.sources.movement.contract).map((b) => b.aspectId),
+    ),
+    envelopeAspects: new Set(
+      idx.byContract(def.sources.envelope.contract).map((b) => b.aspectId),
+    ),
+    bindingRole: def.sources.envelope.binding_role,
+  };
+}
+
+/**
+ * Вклад ОДНОЙ сущности в материализуемую ведомость КОНКРЕТНОГО конверта — тем же текстом,
+ * что и сама ведомость: набор `counted_set` подписки, её `where` и её правило валюты,
+ * скомпилированные тем же бэкендом E. Второго предиката про деньги в срезе не заводится —
+ * это условие врезки, а не стиль.
+ *
+ * `null` — «не считается» (доход, план, шаблон, архив, чужая валюта, нет даты или суммы):
+ * инкремент тогда не делается вовсе, а не делается нулём.
+ *
+ * Имя слота `date` — единственный литерал, и он тот же, что у окна ведомости в
+ * `sumLedgerSql`: окно объявляет ПРАВИЛО («период»), а слот, которым правило меряется,
+ * назван контрактом `orbis/money-movement`. Один литерал на движок, не на аспект.
+ *
+ * Движение будущего дня вклада не даёт: `date <= $today` входит в набор `facts`. Строк
+ * будущих дней в кэше и нет — их посчитает первый читатель того дня.
+ */
+export async function spentContributionOf(
+  tx: Tx,
+  ownerId: string,
+  cctx: CompileCtx,
+  args: { entityId: string; envelopeId: string; defaultCurrency: string },
+): Promise<{ amount: string; asOf: string } | null> {
+  const contour = spentCacheContourOf(cctx.reg);
+  if (!contour.enabled || contour.aggregate === null) return null;
+  const def = builtinSubscription(cctx.reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
+  const agg = def.aggregates[contour.aggregate];
+  if (agg === undefined || agg.kind !== 'sum') return null;
+  const mv = def.sources.movement.contract;
+  const envContract = def.sources.envelope.contract;
+  const e = sql.raw('e');
+  const env = sql.raw('env');
+  const where: SQL[] = [
+    compileContractPredicate(mv, { const: true }, cctx, e),
+    compileClassMembership(mv, def.sources.movement.counted_set, cctx, e),
+  ];
+  if (agg.where !== undefined) {
+    where.push(compileExprPredicate(agg.where, { cctx, contract: mv, row: e }));
+  }
+  if (agg.currency === 'same_as_envelope') {
+    where.push(sql`coalesce(${slotExpr('currency', mv, cctx, e)}, ${args.defaultCurrency})
+        = coalesce(${slotExpr('currency', envContract, cctx, env)}, ${args.defaultCurrency})`);
+  }
+  const rows = (await tx.execute(sql`
+    SELECT (${slotExpr(agg.of.slot, mv, cctx, e)})::numeric::text AS amount,
+           (${slotExpr('date', mv, cctx, e)})::text AS as_of
+    FROM entities e, entities env
+    WHERE e.id = ${args.entityId} AND env.id = ${args.envelopeId}
+      AND e.owner_id = ${ownerId} AND NOT e.archived
+      AND ${sql.join(where, sql` AND `)}
+  `)) as unknown as Array<{ amount: string | null; as_of: string | null }>;
+  const row = rows[0];
+  if (row === undefined || row.amount === null || row.as_of === null) return null;
+  return { amount: row.amount, asOf: row.as_of };
+}
+
 // ---------------------------------------------------------------------------
 // Формулы, фазы, порог
 // ---------------------------------------------------------------------------

@@ -15,8 +15,13 @@ import {
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
+import { DEFAULT_TIMEZONE } from '../query/context';
+import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
+import { spentContributionOf } from '../subscriptions/budget';
 import { budgetOverview } from './aggregates';
+import { defaultCurrencyOf } from './binding';
+import { decAdd, decCmp } from './decimal';
 import { invalidateSpentCache, readSpentCache, spentCacheKey, writeSpentCache } from './spent-cache';
 
 requireEnv();
@@ -184,5 +189,171 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
     });
     await budgetOverview(db, user, '2026-07', () => new Date('2026-07-11T09:00:00.000Z'));
     expect((await cacheRows(env.id)).map((r) => r.as_of)).toEqual(['2026-07-11']);
+  });
+});
+
+describe('врезка в бюджет-хук: инкремент нового движения, снос — всё остальное (§Б5-5, Р-К-16)', () => {
+  const user = freshUserId();
+  const cat = newId();
+  const clock = () => new Date('2026-07-10T09:00:00.000Z');
+
+  test('новое движение ИНКРЕМЕНТИРУЕТ прогретую строку конверта — без пересчёта по графу', async () => {
+    const env = await createEntity(user, {
+      title: 'Еда — июль',
+      props: budgetProps(cat),
+      aspects: ['orbis/budget'],
+    });
+    await budgetOverview(db, user, '2026-07', clock); // прогрев: строка за 2026-07-10 = 0
+    expect((await cacheRows(env.id)).map((r) => [r.as_of, r.spent])).toEqual([
+      ['2026-07-10', '0.00'],
+    ]);
+
+    await createEntity(user, {
+      title: 'Продукты',
+      props: finProps(cat, '2026-07-05'),
+      aspects: ['orbis/financial'],
+    });
+    // Инкремент прошёл В ТОЙ ЖЕ tx, что запись движения: строка уже верна ДО всякого чтения.
+    expect((await cacheRows(env.id))[0]?.spent).toBe('340.00');
+    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('340.00');
+  });
+
+  test('движение будущего дня строку СЕГОДНЯ не трогает (as_of >= occurred_on)', async () => {
+    await createEntity(user, {
+      title: 'Аванс за август',
+      props: finProps(cat, '2026-07-20'),
+      aspects: ['orbis/financial'],
+    });
+    const env = (await budgetOverview(db, user, '2026-07', clock)).envelopes[0];
+    expect(env?.spent).toBe('340.00');
+  });
+
+  test('правка суммы привязку не меняет (descs пуст), но строку конверта СНОСИТ', async () => {
+    const txn = await createEntity(user, {
+      title: 'Кафе',
+      props: finProps(cat, '2026-07-06', { 'orbis/amount': '100.00' }),
+      aspects: ['orbis/financial'],
+    });
+    const envId = ((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]
+      ?.envelope as WireEntity).id;
+    expect((await cacheRows(envId))[0]?.spent).toBe('440.00');
+    ok(await execute(db, req(user, 'entity_update', { id: txn.id, props: { 'orbis/amount': '250.00' } })));
+    expect(await cacheRows(envId)).toEqual([]); // ленивый пересчёт
+    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('590.00');
+  });
+
+  test('доход и план не инкрементируют вовсе (предикат тот же, что у ведомости)', async () => {
+    const envId = ((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]
+      ?.envelope as WireEntity).id;
+    const before = (await cacheRows(envId))[0]?.spent;
+    // Прогретая строка ОБЯЗАНА быть: без неё «не изменилась» было бы сравнением двух
+    // `undefined`, то есть тавтологией.
+    expect(typeof before).toBe('string');
+    await createEntity(user, {
+      title: 'Зарплата',
+      props: finProps(cat, '2026-07-07', { 'orbis/direction': 'income' }),
+      aspects: ['orbis/financial'],
+    });
+    expect((await cacheRows(envId))[0]?.spent).toBe(before as string);
+  });
+});
+
+describe('вклад одного движения — из декларации подписки (§Б5-4, §Б5-5)', () => {
+  const user = freshUserId();
+  const cat = newId();
+
+  /** Тот же вход, что у врезки в исполнителе: снимок владельца + его «сегодня». */
+  async function contribution(entityId: string, envelopeId: string) {
+    return withIdentity(db, user, async (tx) => {
+      const reg = await effectiveRegistry(tx, user);
+      const cctx = {
+        ownerId: user,
+        today: '2026-07-10',
+        timeZone: DEFAULT_TIMEZONE,
+        reg,
+        thisEntityId: null,
+      };
+      return spentContributionOf(tx, user, cctx, {
+        entityId,
+        envelopeId,
+        defaultCurrency: await defaultCurrencyOf(tx, user),
+      });
+    });
+  }
+
+  test('расход своей валюты даёт сумму и день; доход, план и чужая валюта — null', async () => {
+    const env = await createEntity(user, {
+      title: 'Вклад',
+      props: budgetProps(cat),
+      aspects: ['orbis/budget'],
+    });
+    const spend = await createEntity(user, {
+      title: 'Расход',
+      props: finProps(cat, '2026-07-05'),
+      aspects: ['orbis/financial'],
+    });
+    // `asOf` — значение слота `date`, а НЕ «сегодня»: строка более раннего дня этого
+    // движения не видела, и инкремент обязан знать, с какого дня оно считается.
+    expect(await contribution(spend.id, env.id)).toEqual({ amount: '340.00', asOf: '2026-07-05' });
+
+    const income = await createEntity(user, {
+      title: 'Доход',
+      props: finProps(cat, '2026-07-05', { 'orbis/direction': 'income' }),
+      aspects: ['orbis/financial'],
+    });
+    expect(await contribution(income.id, env.id)).toBeNull(); // класс inflow вне `where`
+    const planned = await createEntity(user, {
+      title: 'План',
+      props: finProps(cat, '2026-07-05', { 'orbis/planned': true }),
+      aspects: ['orbis/financial'],
+    });
+    expect(await contribution(planned.id, env.id)).toBeNull(); // набор `facts`
+    const usd = await createEntity(user, {
+      title: 'Валюта',
+      props: finProps(cat, '2026-07-05', { 'orbis/currency': 'USD' }),
+      aspects: ['orbis/financial'],
+    });
+    expect(await contribution(usd.id, env.id)).toBeNull(); // currency: same_as_envelope
+  });
+
+  test('вклады и ведомость считают ОДНО множество: сумма вкладов = spent конверта', async () => {
+    // Ровно эта сверка отличает инкремент от второй правды о деньгах: разъедься предикат
+    // вклада с предикатом ведомости — числа разойдутся здесь, а не на экране владельца.
+    const cat2 = newId();
+    const env = await createEntity(user, {
+      title: 'Сверка',
+      props: budgetProps(cat2),
+      aspects: ['orbis/budget'],
+    });
+    const ids: string[] = [];
+    for (const [day, amount] of [
+      ['2026-07-02', '100.00'],
+      ['2026-07-03', '250.50'],
+      ['2026-07-04', '1.25'],
+    ] as const) {
+      ids.push(
+        (
+          await createEntity(user, {
+            title: `Т ${day}`,
+            props: finProps(cat2, day, { 'orbis/amount': amount }),
+            aspects: ['orbis/financial'],
+          })
+        ).id,
+      );
+    }
+    let sum = '0';
+    for (const id of ids) {
+      const c = await contribution(id, env.id);
+      sum = decAdd(sum, c?.amount ?? '0');
+    }
+    const overview = await budgetOverview(
+      db,
+      user,
+      '2026-07',
+      () => new Date('2026-07-10T09:00:00.000Z'),
+    );
+    expect(
+      decCmp(sum, overview.envelopes.find((e) => e.envelope.id === env.id)?.spent ?? '0'),
+    ).toBe(0);
   });
 });
