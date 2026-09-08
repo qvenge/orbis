@@ -35,9 +35,12 @@ import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 export const budgetRouter = router({
   /**
    * Overview месяца (§3.1). Сначала конвейер §2.8 (postDue + материализация окна
-   * [today; today+14]) — «при первом открытии или финансовом запросе», затем агрегаты.
+   * [today; today+14]) — «при первом открытии или финансовом запросе», затем ведомости.
    * Чтение → protectedProcedure (системные due-переходы внутри — идемпотентные
    * batch'и executor'а от имени владельца, не пользовательская мутация).
+   *
+   * Считает ДВИЖОК ПОДПИСКИ по декларации `orbis/budget-overview` (§Б5-4): состав ведомостей,
+   * порог тревоги, окно списков и правило валюты — данные реестра, а не код обёртки.
    */
   overview: protectedProcedure
     .input(budgetOverviewInput)
@@ -46,9 +49,9 @@ export const budgetRouter = router({
     }),
 
   /**
-   * Бейдж вкладки Budget (§6.1, Task B7): count-only чтение агрегата БЕЗ конвейера
-   * §2.8 — лёгкий запрос при инвалидации server-state-кэша; month опционален
-   * (дефолт — текущий месяц пользователя).
+   * Бейдж вкладки Budget (§6.1, Task B7): count-only чтение БЕЗ конвейера §2.8 — лёгкий запрос
+   * при инвалидации server-state-кэша; month опционален (дефолт — текущий месяц пользователя).
+   * Порог считает тот же движок подписки, что и карточку, — иначе бейдж и карточка разошлись бы.
    */
   alertCount: protectedProcedure
     .input(budgetAlertCountInput)
@@ -56,14 +59,16 @@ export const budgetRouter = router({
       return budgetAlertCount(ctx.db, ctx.actorUserId, input.month);
     }),
 
-  /** Мини-тренд категории (§3.2): spent/limit по месяцам конвертов категории. */
+  /** Мини-тренд категории (§3.2): spent/limit по месяцам конвертов категории — теми же
+   *  ведомостями движка подписки, что и карточка. */
   categoryTrend: protectedProcedure
     .input(categoryTrendInput)
     .query(({ ctx, input }): Promise<CategoryTrendPoint[]> => {
       return categoryTrend(ctx.db, ctx.actorUserId, input);
     }),
 
-  /** Конверт категории на дату — fast-path-карточка «осталось N ₽» (§4.1) и quick-add. */
+  /** Конверт категории на дату — fast-path-карточка «осталось N ₽» (§4.1) и quick-add;
+   *  ведомости движка подписки на ОДНОМ конверте (без агрегации дерева §2.10). */
   envelopeForCategory: protectedProcedure
     .input(envelopeForCategoryInput)
     .query(({ ctx, input }): Promise<EnvelopeStatus | null> => {

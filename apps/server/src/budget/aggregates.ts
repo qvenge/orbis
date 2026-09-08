@@ -1,4 +1,13 @@
 // apps/server/src/budget/aggregates.ts
+// ЧИТАЮЩАЯ ЧАСТЬ ЭТОГО ФАЙЛА — ОРАКУЛ СВЕРКИ §С8-15, а не путь прода. Пять обёрток ниже
+// (`budgetOverview`, `budgetAlertCount`, `budgetStatus`, `envelopeForCategory`, `categoryTrend`)
+// с задачи 9 считают ДВИЖКОМ ПОДПИСКИ (`subscriptions/budget.ts`) по декларации
+// `orbis/budget-overview`; `computeOverview` и его помощники остаются рядом ВТОРЫМ МНЕНИЕМ, на
+// котором доказывается «ноль расхождений» — двумя реализациями на ОДНОЙ транзакции. Снос оракула —
+// Б-2 (Р-К-5): убери его до перф-гейта задачи 12, и сверять станет не с чем.
+// `rolloverPreview` и `rolloverCreate` на движок НЕ переводятся: переход §3.5 — правило (Р12), а не
+// ведомость; декларация несёт лишь его параметры, и их читает `rolloverCreate`.
+//
 // Агрегаты Budget (Task A6, 03-budget §2, §3.1) — вычисления НА ЛЕТУ поверх графа:
 // spent не хранится (§2.2, глобальное ограничение «никаких материализованных
 // агрегатов»), суммы наборов считает SQL (::numeric — точный decimal PG), формулы
@@ -15,6 +24,7 @@ import {
   addDays,
   type BudgetOverview,
   type BudgetStatusResult,
+  type BudgetSubscription,
   batchAuditMessageId,
   type CategoryTrendPoint,
   daysInclusive,
@@ -37,8 +47,22 @@ import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { materializeInstances } from '../recurring/materialize';
 import { postDueInstances } from '../recurring/post-due';
+import { effectiveRegistry } from '../registry/cache';
+import {
+  BUDGET_SUBSCRIPTION_ID,
+  budgetAlertCountOf,
+  budgetOverviewOf,
+  budgetStatusOf,
+  categoryTrendOf,
+  envelopeForCategoryOf,
+} from '../subscriptions/budget';
+import { builtinSubscription } from '../subscriptions/registry';
 import { toWireEntity } from '../wire';
-import { defaultCurrencyOf, selectEnvelope } from './binding';
+import { defaultCurrencyOf } from './binding';
+// Карточки категорий живут в общем доме `budget/categories.ts`: их читают ОБА движка Финансов
+// (оракул и подписка), и две копии разошлись бы иконкой — сверка §С8-15 приняла бы это за
+// расхождение движков. Там же `ownerCategories`: его зовёт движок подписки (`budgetStatusOf`).
+import { type CategoryInfo, categoriesById } from './categories';
 import { decAdd, decCmp, decDivBy, decMulInt, decSub } from './decimal';
 
 // «Конверт-родитель» в агрегатах — РОВНО роль `envelope-binding`, и с 0017 это относится ко
@@ -205,49 +229,6 @@ async function spentByEnvelope(
     GROUP BY r.source_id
   `)) as unknown as Array<{ envelope_id: string; spent: string }>;
   return new Map(rows.map((r) => [r.envelope_id, r.spent]));
-}
-
-interface CategoryInfo {
-  id: string;
-  title: string;
-  icon: string | null;
-  color: string | null;
-  spendClass: 'fixed' | 'discretionary' | null;
-}
-
-/** Карточки категорий по id (включая архивные — конверт переживает архивацию категории). */
-async function categoriesById(tx: Tx, ids: string[]): Promise<Map<string, CategoryInfo>> {
-  if (ids.length === 0) return new Map();
-  const list = sql.join(
-    ids.map((id) => sql`${id}`),
-    sql`, `,
-  );
-  const rows = (await tx.execute(sql`
-    SELECT id, title, props, ('orbis/category' = ANY(aspects)) AS is_category FROM entities
-    WHERE id IN (${list})
-  `)) as unknown as Array<{
-    id: string;
-    title: string;
-    props: Record<string, unknown>;
-    is_category: boolean;
-  }>;
-  return new Map(
-    rows.map((r) => {
-      // Не категория — карточка пустая: ровно то, что давала старая карта без своего ключа.
-      const c = r.is_category ? r.props : {};
-      const spendClass = c['orbis/spend_class'];
-      return [
-        r.id,
-        {
-          id: r.id,
-          title: r.title,
-          icon: typeof c['orbis/icon'] === 'string' ? c['orbis/icon'] : null,
-          color: typeof c['orbis/color'] === 'string' ? c['orbis/color'] : null,
-          spendClass: spendClass === 'fixed' || spendClass === 'discretionary' ? spendClass : null,
-        },
-      ];
-    }),
-  );
 }
 
 function categoryOr(map: Map<string, CategoryInfo>, id: string): CategoryInfo {
@@ -640,6 +621,14 @@ async function preparePeriod(db: Db, ownerId: string, clock: Clock): Promise<str
   return today;
 }
 
+/** Снимок реестра и разобранная декларация Budget на уже открытой tx — общая половина всех пяти
+ *  обёрток. Второго источника декларации у них нет: разойдись он с реестром транзакции, и бейдж
+ *  считался бы по одному порогу, а карточка по другому. */
+async function budgetDefOf(tx: Tx, ownerId: string) {
+  const reg = await effectiveRegistry(tx, ownerId);
+  return { reg, def: builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription };
+}
+
 /** BudgetOverview месяца (§3.1); month опционален — текущий месяц пользователя. */
 export async function budgetOverview(
   db: Db,
@@ -647,9 +636,13 @@ export async function budgetOverview(
   month?: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<BudgetOverview> {
+  // Конвейер §2.8 — ВНЕ подписки: §Б5-4 про ведомости, а не про материализацию.
   const today = await preparePeriod(db, ownerId, clock);
   const m = month ?? today.slice(0, 7);
-  return withIdentity(db, ownerId, (tx) => computeOverview(tx, ownerId, m, today));
+  return withIdentity(db, ownerId, async (tx) => {
+    const { reg, def } = await budgetDefOf(tx, ownerId);
+    return budgetOverviewOf(tx, ownerId, { month: m, today }, def, reg);
+  });
 }
 
 /**
@@ -666,9 +659,8 @@ export async function budgetAlertCount(
 ): Promise<number> {
   return withIdentity(db, ownerId, async (tx) => {
     const today = await localTodayTx(tx, ownerId, clock);
-    const defCur = await defaultCurrencyOf(tx, ownerId);
-    const raws = await rawEnvelopesOfMonth(tx, ownerId, month ?? today.slice(0, 7), today, defCur);
-    return countAlerts(raws, today);
+    const { reg, def } = await budgetDefOf(tx, ownerId);
+    return budgetAlertCountOf(tx, ownerId, { month: month ?? today.slice(0, 7), today }, def, reg);
   });
 }
 
@@ -686,22 +678,8 @@ export async function budgetStatus(
   const today = await preparePeriod(db, ownerId, clock);
   const m = month ?? today.slice(0, 7);
   return withIdentity(db, ownerId, async (tx) => {
-    const overview = await computeOverview(tx, ownerId, m, today);
-    const rows = (await tx.execute(sql`
-      SELECT id, title, props->>'orbis/spend_class' AS spend_class
-      FROM entities
-      WHERE owner_id = ${ownerId} AND NOT archived AND 'orbis/category' = ANY(aspects)
-      ORDER BY title, id
-    `)) as unknown as Array<{ id: string; title: string; spend_class: string | null }>;
-    return {
-      ...overview,
-      categories: rows.map((r) => ({
-        id: r.id,
-        title: r.title,
-        spendClass:
-          r.spend_class === 'fixed' || r.spend_class === 'discretionary' ? r.spend_class : null,
-      })),
-    };
+    const { reg, def } = await budgetDefOf(tx, ownerId);
+    return budgetStatusOf(tx, ownerId, { month: m, today }, def, reg);
   });
 }
 
@@ -719,23 +697,8 @@ export async function envelopeForCategory(
 ): Promise<EnvelopeStatus | null> {
   return withIdentity(db, ownerId, async (tx) => {
     const today = await localTodayTx(tx, ownerId, clock);
-    const defCur = await defaultCurrencyOf(tx, ownerId);
-    const envelopeId = await selectEnvelope(tx, {
-      ownerId,
-      categoryRef: args.categoryId,
-      currency: defCur,
-      occurredOn: args.date,
-      defaultCurrency: defCur,
-    });
-    if (envelopeId === null) return null;
-    const rows = await tx.select().from(entities).where(eq(entities.id, envelopeId));
-    const row = rows[0];
-    if (row === undefined) return null;
-    const spentMap = await spentByEnvelope(tx, ownerId, [envelopeId], today, defCur);
-    const raw = rawEnvelopeOf(row, spentMap, defCur);
-    if (raw === null) return null;
-    const catMap = await categoriesById(tx, [raw.categoryRef]);
-    return statusOf(raw, categoryOr(catMap, raw.categoryRef), raw.spent, raw.effectiveLimit, today);
+    const { reg, def } = await budgetDefOf(tx, ownerId);
+    return envelopeForCategoryOf(tx, ownerId, { ...args, today }, def, reg);
   });
 }
 
@@ -758,57 +721,8 @@ export async function categoryTrend(
 ): Promise<CategoryTrendPoint[]> {
   return withIdentity(db, ownerId, async (tx) => {
     const today = await localTodayTx(tx, ownerId, clock);
-    const defCur = await defaultCurrencyOf(tx, ownerId);
-    const curMonth = today.slice(0, 7);
-    const monthsList = Array.from({ length: args.months }, (_, i) =>
-      shiftMonth(curMonth, i - (args.months - 1)),
-    );
-    const first = monthsList[0] as string;
-    const rows = await tx
-      .select()
-      .from(entities)
-      .where(
-        and(
-          eq(entities.ownerId, ownerId),
-          eq(entities.archived, false),
-          sql`'orbis/budget' = ANY(${entities.aspects})`,
-          sql`${entities.props}->>'orbis/finance_category' = ${args.categoryId}`,
-          sql`${entities.props}->>'orbis/period_start' >= ${`${first}-01`}`,
-          sql`${entities.props}->>'orbis/period_start' <= ${monthRange(curMonth).end}`,
-          // только валюта по умолчанию — см. валютную границу в docstring
-          sql`coalesce(${entities.props}->>'orbis/currency', ${defCur}) = ${defCur}`,
-        ),
-      );
-    const spentMap = await spentByEnvelope(
-      tx,
-      ownerId,
-      rows.map((r) => r.id),
-      today,
-      defCur,
-    );
-    const buckets = new Map<string, { spent: string; limit: string }>();
-    for (const row of rows) {
-      const raw = rawEnvelopeOf(row, spentMap, defCur);
-      if (raw === null) continue;
-      const key = raw.periodStart.slice(0, 7);
-      const prev = buckets.get(key);
-      buckets.set(key, {
-        spent: prev === undefined ? raw.spent : decAdd(prev.spent, raw.spent),
-        // штриховая линия limit §3.2 — сумма limit (без carryover)
-        limit:
-          prev === undefined
-            ? decAdd(String(raw.props['orbis/limit']), '0')
-            : decAdd(prev.limit, String(raw.props['orbis/limit'])),
-      });
-    }
-    return monthsList.map((period) => {
-      const bucket = buckets.get(period);
-      return {
-        period,
-        spent: bucket?.spent ?? '0.00',
-        limit: bucket?.limit ?? null,
-      };
-    });
+    const { reg, def } = await budgetDefOf(tx, ownerId);
+    return categoryTrendOf(tx, ownerId, { ...args, today }, def, reg);
   });
 }
 
@@ -1045,6 +959,31 @@ export async function rolloverCreate(
   const { defCur, catMap } = await withIdentity(db, ownerId, async (tx) => {
     const replay = (await rolloverSink.findByAuditId(tx, auditId)) !== undefined;
     const currency = await defaultCurrencyOf(tx, ownerId);
+    // Р12: правило перехода остаётся КОДОМ (§Б4-3 — это не агрегат), а декларация несёт его
+    // ПАРАМЕТРЫ. Снимок читается ТУТ ЖЕ, а не приходит параметром: фаза чтения уже держит tx, и
+    // второй источник декларации разошёлся бы с тем реестром, по которому исполнитель проверит
+    // запись. Молчаливая деградация запрещена: невыразимый параметр — отказ, а не «как раньше»,
+    // потому что здесь она стоит владельцу денег на счёте.
+    const roll = (
+      builtinSubscription(
+        await effectiveRegistry(tx, ownerId),
+        BUDGET_SUBSCRIPTION_ID,
+      ) as BudgetSubscription
+    ).rollover;
+    if (roll.source !== 'exact_calendar_month') {
+      throw new ExecError(
+        'VALIDATION',
+        `правило переноса умеет только календарный месяц, а декларация просит «${roll.source}» (§3.5)`,
+        { reason: 'ROLLOVER_SOURCE_UNSUPPORTED', source: roll.source },
+      );
+    }
+    if (roll.carry.agg !== 'remaining') {
+      throw new ExecError(
+        'VALIDATION',
+        `правило переноса переносит остаток, а декларация просит ведомость «${roll.carry.agg}» (§3.5)`,
+        { reason: 'ROLLOVER_CARRY_UNSUPPORTED', agg: roll.carry.agg },
+      );
+    }
     if (!replay) {
       const list = sql.join(
         categoryIds.map((id) => sql`${id}`),

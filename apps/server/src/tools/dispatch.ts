@@ -709,9 +709,11 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
 }
 
 /**
- * budget_status (Task A6, 03-budget §4.3/§4.5/§4.7): готовые агрегаты Budget для
- * финансовых вопросов LLM/MCP. Исполняется вне pre-tx: budgetStatus начинается
- * конвейером §2.8 (postDueInstances + materializeInstances) — executor в собственных tx.
+ * budget_status (Task A6, 03-budget §4.3/§4.5/§4.7): готовые ведомости Budget для
+ * финансовых вопросов LLM/MCP — их считает движок подписки по декларации
+ * `orbis/budget-overview` (§Б5-4), тот же, что и карточку Overview. Исполняется вне pre-tx:
+ * budgetStatus начинается конвейером §2.8 (postDueInstances + materializeInstances) —
+ * executor в собственных tx.
  * Карточки нет: результат — данные для ответа модели, а не сущность/выборка (02 §2.3).
  */
 async function runBudgetStatus(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
