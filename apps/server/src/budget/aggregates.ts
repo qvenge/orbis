@@ -55,6 +55,7 @@ import {
   budgetStatusOf,
   categoryTrendOf,
   envelopeForCategoryOf,
+  HORIZON_DAYS,
 } from '../subscriptions/budget';
 import { builtinSubscription } from '../subscriptions/registry';
 import { toWireEntity } from '../wire';
@@ -119,8 +120,10 @@ function notRecurringTemplateSql(aspectsCol: SQL | AnyColumn, propsCol: SQL | An
   return sql`NOT ('orbis/schedule' = ANY(${aspectsCol}) AND ${propsCol}->'orbis/recurrence' IS NOT NULL)`;
 }
 
-/** Горизонт Coming up и материализации — 14 дней (01-arch §5.4). */
-const HORIZON_DAYS = 14;
+// Горизонт Coming up и материализации живёт ОДНИМ экземпляром в движке подписки
+// (`subscriptions/budget.ts`, `HORIZON_DAYS`): он подставляет его декларации параметром
+// `horizon_end`, конвейер ниже материализует ровно это окно, и разъедься два числа — список
+// предстоящих списаний спрашивал бы окно, которого материализация не заполнила.
 
 // ---------------------------------------------------------------------------
 // «Сегодня» пользователя — локальная дата в user_settings.timezone (03-budget §2.3;

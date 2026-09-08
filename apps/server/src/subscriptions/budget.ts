@@ -20,6 +20,25 @@
 // ЧЕГО ЗДЕСЬ НЕТ. Конвейера §2.8 (postDue + материализация окна): §Б5-4 про ведомости, а не про
 // материализацию, и он остаётся в обёртках `aggregates.ts`. Правила `rollover`: оно код (Р12), а
 // декларация — носитель его параметров.
+//
+// ПОЛЯ ДЕКЛАРАЦИИ, КОТОРЫЕ ДВИЖОК НЕ ЧИТАЕТ, — названный остаток (правило 5 §С1-4 «почему кодом»,
+// реестр остатков задачи 19). Мутация любого из них сегодня ничего не меняет, и молчать об этом
+// нельзя: читатель декларации вправе думать, что она вся исполняется.
+//   · `sources.envelope.binding_role` — ребро привязки движок берёт из `bound_via`/`unbound_via`
+//     САМОЙ ведомости: там оно у каждой суммы своё, а поле источника называет одно на всех. Свести
+//     их в одно место — Б-2, вместе с переводом хука на контракт.
+//   · `sources.envelope.selector` (`match`/`tie_break`) — выбор конверта под трату исполняет
+//     `budget/binding.ts` (`selectEnvelope`) по аспекту `orbis/budget` (Р-К-50): это ПИШУЩАЯ
+//     половина, её обобщение по контракту — задача 11. Движок зовёт тот же `selectEnvelope`, чтобы
+//     fast-path и хук не разошлись, но правило выбора читает не он.
+//   · `currency_rule: 'owner_default_if_absent'` — валютное правило живёт у КАЖДОЙ суммы полем
+//     `currency` (`same_as_envelope` против `owner_default_only`, П2 №2), и общее поле осталось
+//     единственным допустимым значением схемы: читать его — значит выбирать из одного.
+//   · `spent.alive` — «живой конверт» осмыслен только у `unbound_via` (архивен ли конверт, которого
+//     у траты НЕТ); у суммы по ребру конверт задан ребром, и его архивность отсекает фаза 1.
+//   · `spent.window: 'envelope_period'` — период уже сказан ребром привязки (селектор ставит её
+//     только внутрь периода), и второе условие по датам было бы вторым мнением о смысле ребра.
+//     Читается только ветка `'period'` (см. `sumLedgerSql`).
 import {
   addDays,
   type BindingIndex,
@@ -53,8 +72,15 @@ import { toWireEntity } from '../wire';
 
 export const BUDGET_SUBSCRIPTION_ID = 'orbis/budget-overview';
 
-/** Горизонт Coming up — 14 дней (01-arch §5.4); подписка получает его как `horizon_end`. */
-const HORIZON_DAYS = 14;
+/**
+ * Горизонт Coming up и материализации — 14 дней (01-arch §5.4). ЕДИНСТВЕННЫЙ экземпляр числа:
+ * движок подставляет его подписке параметром `horizon_end`, а конвейер §2.8 (`preparePeriod` в
+ * `budget/aggregates.ts`) материализует ровно это окно — разъедься они, список `coming_up`
+ * спрашивал бы окно, которого материализация не заполнила, и владелец увидел бы дыру в
+ * предстоящих списаниях. Дом — здесь, а не в оракуле: `aggregates.ts` импортирует ЭТОТ модуль
+ * (обёртки), обратный импорт замкнул бы цикл.
+ */
+export const HORIZON_DAYS = 14;
 
 /** Разделитель частей ключа сортировки — U+0000, как у оракула: на любом печатном символе
  *  порядок разъехался бы на титулах с общим префиксом («Еда» и «Еда и напитки»). */
@@ -262,18 +288,20 @@ export function planLedgers(
   cctx: CompileCtx,
   args: LedgerArgs,
   envelopeIds: readonly string[] = [],
+  envelopeFilter?: ExprNode,
 ): LedgerPlan {
   const { start, end } = monthRangeOf(args.month);
   const e = sql.raw('e');
   const env = def.sources.envelope.contract;
   const mv = def.sources.movement.contract;
-  const intersectsMonth: ExprNode = {
-    op: 'and',
-    args: [
-      { op: '<=', args: [{ slot: 'period_start' }, { const: end }] },
-      { op: '>=', args: [{ slot: 'period_end' }, { const: start }] },
-    ],
-  };
+  const window: ExprNode[] = [
+    { op: '<=', args: [{ slot: 'period_start' }, { const: end }] },
+    { op: '>=', args: [{ slot: 'period_end' }, { const: start }] },
+  ];
+  // Сужение читателя (Ф-Б1-39) — ТЕМ ЖЕ предикатом контракта, а не вторым запросом рядом: экран
+  // категории и fast-path обязаны видеть ровно то подмножество конвертов, которое видит карточка.
+  if (envelopeFilter !== undefined) window.push(envelopeFilter);
+  const intersectsMonth: ExprNode = { op: 'and', args: window };
   const envelopes = sql`SELECT e.id FROM entities e
     WHERE e.owner_id = ${cctx.ownerId} AND NOT e.archived
       AND ${compileContractPredicate(env, intersectsMonth, cctx, e)}`;
@@ -418,23 +446,46 @@ function slotValueOf(
 const REMAINDER_PHASE = 'active';
 
 /**
- * Фаза конверта. `active` считается ПОСЛЕДНЕЙ — и это не оптимизация порядка, а единственный
- * способ прочитать декларацию правильно: колонка `definition` объявлена `jsonb`, а jsonb
- * ПЕРЕУПОРЯДОЧИВАЕТ ключи объекта (длина, затем байты). «Порядок ключей = порядок вычисления»
- * §Б5-3 до движка не доезжает: из базы `active` («остаток», `{const:true}`) приходит ПЕРВЫМ, и
- * наивный проход объявил бы активным каждый конверт, включая закрытые и будущие — то есть показал
- * бы владельцу темп трат по периодам, которых нет.
+ * Фаза конверта — ПРАВИЛО Ф-Б1-37, а не проход по ключам.
  *
- * Выражение самого `active` при этом всё равно вычисляется: остаток — про ПОРЯДОК, а не про право
- * декларации сказать здесь что-то своё.
+ * Колонка `definition` объявлена `jsonb`, а jsonb ПЕРЕУПОРЯДОЧИВАЕТ ключи объекта (длина, затем
+ * байты): «порядок ключей = порядок вычисления» §Б5-3 до движка не доезжает вовсе. Из базы
+ * `active` («остаток», `{const:true}`) приходит ПЕРВЫМ, и наивный проход объявил бы активным
+ * каждый конверт, включая закрытые и будущие, — то есть показал бы владельцу темп трат по
+ * периодам, которых нет.
+ *
+ * Отсюда два правила. (1) `active` — объявленный ОСТАТОК и проверяется последним; выражение его
+ * при этом всё равно вычисляется — остаток про ПОРЯДОК, а не про право декларации сказать здесь
+ * что-то своё. (2) Прочие фазы ОБЯЗАНЫ быть взаимоисключающими, и это проверяется на каждом
+ * конверте: две истинные — ОТКАЗ с их именами, а не «короткая первой». Молчаливый выбор по длине
+ * ключа означал бы, что смысл декларации владельца зависит от того, как он назвал фазу.
+ *
+ * Отказ — `VALIDATION` с причиной, а не `INVARIANT`: перекрытие пишет владелец дельтой, и он же
+ * его чинит. Соседний `INVARIANT` ниже — про другое: он недостижим, пока валидатор требует ключ
+ * `active` (`SUBSCRIPTION_PHASE_ACTIVE_MISSING`), и остаётся сторожем самого движка.
  */
 function phaseOf(def: BudgetSubscription, scope: ExprEvalScope): string {
-  const keys = Object.keys(def.phases).filter((k) => k !== REMAINDER_PHASE);
-  keys.push(REMAINDER_PHASE);
-  for (const key of keys) {
-    const expr = def.phases[key];
-    if (expr !== undefined && evalExpr(expr, scope) === true) return key;
+  const hit: string[] = [];
+  for (const [key, expr] of Object.entries(def.phases)) {
+    if (key === REMAINDER_PHASE) continue;
+    if (evalExpr(expr, scope) === true) hit.push(key);
   }
+  if (hit.length > 1) {
+    // Имена сортируются: порядок ключей из jsonb непредсказуем, а сообщение об отказе обязано быть
+    // одним и тем же на двух прогонах — иначе владелец сравнивает несравнимое.
+    throw new ExecError(
+      'VALIDATION',
+      `фазы декларации перекрываются на конверте: ${[...hit].sort().join(', ')}`,
+      {
+        reason: 'SUBSCRIPTION_PHASES_OVERLAP',
+        subscription: BUDGET_SUBSCRIPTION_ID,
+        phases: [...hit].sort(),
+      },
+    );
+  }
+  if (hit.length === 1) return hit[0] as string;
+  const remainder = def.phases[REMAINDER_PHASE];
+  if (remainder !== undefined && evalExpr(remainder, scope) === true) return REMAINDER_PHASE;
   throw new ExecError(
     'INVARIANT',
     'фазы декларации не покрыли конверт — ключ active обязан быть остатком',
@@ -552,9 +603,15 @@ function isAlert(def: BudgetSubscription, spent: string, limit: string): boolean
 /**
  * ЧТО с чем сравнивает порог, §Б5-4 не говорит: `alerts` несёт долю, но не операнды. Движок берёт
  * единственную ведомость-сумму конверта (`scope:'envelope'` + `bound_via`) числителем и ту из
- * `rollup.applies_to`, которая не она, — знаменателем: обе величины уже названы декларацией, и
- * второго кандидата в ней нет. Появится в §Б5-4 поле `alerts.of/against` — пара уедет туда, тела
- * правил это не тронет.
+ * `rollup.applies_to`, которая не она, — знаменателем: обе величины уже названы декларацией.
+ *
+ * Выбор здесь ОДНОЗНАЧЕН не по удаче, а потому что неоднозначность отклоняется НА ЗАПИСИ
+ * (Ф-Б1-38, `assertAlertOperands` в `subscriptions/registry.ts`): вторая сумма конверта с
+ * `bound_via` и `rollup.applies_to` без числителя либо длиннее двух — отказ валидатора. Отказ
+ * ниже остаётся сторожем самого движка на случай декларации, приехавшей мимо валидатора.
+ *
+ * Явное поле `alerts.of/against` — ОВ-Б1-4 (вопрос владельцу: ассет спеки несёт `alerts.when`,
+ * схема §1.6 — нет); задача 16 либо Б-2. Тела правил это не тронет.
  */
 function alertOperands(def: BudgetSubscription): { spent: string; limit: string } {
   const spent = Object.entries(def.aggregates).find(
@@ -629,6 +686,8 @@ interface RawEnvelope {
   categoryRef: string;
   currency: string;
   phase: string;
+  /** Суммы ЭТОГО конверта — семена обоих вычислений (свои величины и величины карточки). */
+  sums: Record<string, ExprScalar>;
   /** Ведомости СВОЕГО конверта — на них считает порог (`on_raw`). */
   raw: Record<string, ExprScalar>;
   /** Ведомости карточки — после rollup дерева (§2.10). */
@@ -763,11 +822,37 @@ interface LedgerRun {
 }
 
 /**
+ * СУЖЕНИЕ ЧТЕНИЯ (Ф-Б1-39). Посылка брифа «цикл по месяцам дешевле одного запроса» опровергнута
+ * измерением на корпусе 20k: `categoryTrendOf(12)` считал 4,4 с, потому что каждый виток гонял
+ * ведомости периода (баланс и Unbudgeted по ВСЕМУ месяцу) и дерево категорий ради одной категории.
+ *
+ * Сужение говорит движку, ЧТО читателю нужно, а не КАК считать: подмножество конвертов (одна
+ * категория, один конверт) и нужны ли ведомости периода и дерево. Ветка по имени читателя здесь не
+ * появляется — все четверо зовут один `runLedgers`, и «ноль расхождений» остаётся сверкой одного
+ * кода с оракулом, а не четырёх.
+ *
+ * Суммы КОНВЕРТА считаются всегда: их читают формулы декларации, и пропуск любой из них означал бы
+ * `0.00` в позиции, где формула ждёт величину. Ведомости ПЕРИОДА пропускать безопасно — формула
+ * конверта на них ссылаться не вправе (отказ валидатора, Ф-Б1-40г).
+ */
+interface LedgerNarrowing {
+  /** Только конверты этой категории (тренд §3.2 и fast-path §4.1). */
+  category?: string;
+  /** Только этот конверт (fast-path §4.1 читает ровно его). */
+  envelope?: string;
+  /** Считать ли ведомости периода — баланс §2.5 и Unbudgeted. Умолчание — да. */
+  period?: boolean;
+  /** Агрегировать ли дерево категорий §2.10. Умолчание — да. */
+  rollup?: boolean;
+}
+
+/**
  * Обе фазы плана и ведомости конвертов — ОДИН вход на все пять читателей (§Б5-4: карточка, бейдж,
  * тул, fast-path, тренд). Разными путями они разошлись бы на первой правке декларации, а
  * расхождение бейджа с карточкой владелец видит как враньё интерфейса (§6.1 vs §3.1 — ровно та
  * коллизия, которую владелец разбирал 2026-07-23).
- * `only` — сузить фазу 1 до одного конверта (fast-path §4.1 читает ровно его).
+ * `narrow` — сужение читателя (см. `LedgerNarrowing`): подмножество конвертов и отказ от ведомостей
+ * периода и дерева там, где читателю они не нужны.
  */
 async function runLedgers(
   tx: Tx,
@@ -775,7 +860,7 @@ async function runLedgers(
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
-  only?: string,
+  narrow: LedgerNarrowing = {},
 ): Promise<LedgerRun> {
   const cctx: CompileCtx = {
     ownerId,
@@ -793,19 +878,30 @@ async function runLedgers(
 
   // ФАЗА 1 — источник с селектором: только id, дальше строки читает drizzle (тот же читатель и тот
   // же проектор, что у оракула, значит расхождение по типам колонок исключено построением).
+  // Сужение по категории уходит В ЗАПРОС, а не в фильтр по ответу: на корпусе 20k это разница
+  // между сорока конвертами месяца и одним-двумя.
+  const filter: ExprNode | undefined =
+    narrow.category === undefined
+      ? undefined
+      : { op: '=', args: [{ slot: 'category' }, { const: narrow.category }] };
   const all = (
-    (await tx.execute(planLedgers(def, cctx, la).sources.envelopeIds)) as unknown as Array<{
+    (await tx.execute(
+      planLedgers(def, cctx, la, [], filter).sources.envelopeIds,
+    )) as unknown as Array<{
       id: string;
     }>
   ).map((r) => r.id);
-  const ids = only === undefined ? all : all.filter((id) => id === only);
+  const ids = narrow.envelope === undefined ? all : all.filter((id) => id === narrow.envelope);
   const rows =
     ids.length === 0 ? [] : await tx.select().from(entities).where(inArray(entities.id, ids));
 
-  // ФАЗА 2 — ведомости-суммы по этим id (план каждой строит сам `runSum`, см. его докблок)
+  // ФАЗА 2 — ведомости-суммы по этим id (план каждой строит сам `runSum`, см. его докблок).
+  // Суммы КОНВЕРТА считаются всегда (их читают формулы), ведомости ПЕРИОДА — по сужению.
   const sums = new Map<string, Map<string, string>>();
   for (const [name, agg] of Object.entries(def.aggregates)) {
-    if (agg.kind === 'sum') sums.set(name, await runSum(tx, cctx, def, la, name, ids));
+    if (agg.kind !== 'sum') continue;
+    if (agg.scope === 'period' && narrow.period === false) continue;
+    sums.set(name, await runSum(tx, cctx, def, la, name, ids));
   }
 
   // Ведомости конверта: сначала СВОИ (на них порог, `on_raw`), затем rollup дерева.
@@ -825,12 +921,14 @@ async function runLedgers(
       props,
       binding,
       currency,
+      sums: seed,
       raw: own,
       card: own,
       phase: String(own[PHASE_KEY] ?? ''),
       categoryRef: String(slotValueOf(binding, props, 'category') ?? ''),
     };
   });
+  if (narrow.rollup === false) return { cctx, la, raws, sums };
   const edges = await rollupEdges(tx, ownerId, def.rollup.role);
   for (const e of raws) {
     const kin = descendantsOf(edges, e.categoryRef);
@@ -846,7 +944,11 @@ async function runLedgers(
       }
       overrides[name] = total;
     }
-    e.card = envelopeLedgers(def, e.binding, e.props, overrides, la);
+    // Семена карточки — СВОИ суммы конверта ⊕ величины дерева, а не одни `applies_to`: формула,
+    // читающая сумму конверта вне этого списка (законная декларация — вторая сумма конверта без
+    // `bound_via`), иначе не нашла бы её и уронила бы Overview `INVARIANT`'ом. Величины дерева
+    // кладутся ПОСЛЕ и потому окончательны.
+    e.card = envelopeLedgers(def, e.binding, e.props, { ...e.sums, ...overrides }, la);
   }
   return { cctx, la, raws, sums };
 }
@@ -1002,7 +1104,14 @@ export async function budgetOverviewOf(
   };
 }
 
-/** Бейдж §6.1: ЛЁГКОЕ чтение — ведомости конвертов без списков и карточек категорий. */
+/**
+ * Бейдж §6.1: ЛЁГКОЕ чтение — суммы конвертов месяца и порог, больше ничего.
+ *
+ * Ни списков, ни карточек категорий, ни ведомостей ПЕРИОДА, ни дерева (Ф-Б1-39): порог считает
+ * `on_raw`, то есть СЫРЫЕ величины конверта до агрегации дерева, — значит rollup для бейджа не
+ * просто лишний, а не участвует в ответе по построению. Бейдж инвалидируется на каждой записи
+ * денег, и лишний скан месяца здесь стоил владельцу задержки на каждом вводе траты.
+ */
 export async function budgetAlertCountOf(
   tx: Tx,
   ownerId: string,
@@ -1010,7 +1119,8 @@ export async function budgetAlertCountOf(
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<number> {
-  return countAlerts(def, (await runLedgers(tx, ownerId, args, def, reg)).raws);
+  const run = await runLedgers(tx, ownerId, args, def, reg, { period: false, rollup: false });
+  return countAlerts(def, run.raws);
 }
 
 /** Тул `budget_status` (§4.3): Overview + классификация ВСЕХ категорий владельца. */
@@ -1050,13 +1160,15 @@ export async function envelopeForCategoryOf(
   if (envelopeId === null) return null;
   // Месяц берётся у САМОЙ даты, а не у «сегодня»: при историческом вводе (§7.1) фаза 1 месяца
   // «сегодня» этот конверт не вернула бы, и fast-path соврал бы «конверта нет».
+  // Сужение (Ф-Б1-39): конверты ОДНОЙ категории, ни ведомостей периода, ни дерева — экран быстрой
+  // траты показывает СВОЙ конверт (§4.1 против §2.10), и остальное в его ответ не входит.
   const { raws } = await runLedgers(
     tx,
     ownerId,
     { month: args.date.slice(0, 7), today: args.today },
     def,
     reg,
-    envelopeId,
+    { category: args.categoryId, envelope: envelopeId, period: false, rollup: false },
   );
   const e = raws[0];
   if (e === undefined) return null;
@@ -1066,8 +1178,11 @@ export async function envelopeForCategoryOf(
 /**
  * Мини-тренд (§3.2): бакет — месяц `period_start` конверта, штриховая линия — сумма СЛОТА `limit`
  * (без carryover), валюта — только по умолчанию (§5: RUB и USD без конверсии не складываются).
- * Месяцев тут единицы (экран категории просит 1–12), поэтому цикл по месяцам дешевле одного
- * запроса «на всё» — и считает ровно те же ведомости, что карточка.
+ *
+ * Цикл по месяцам остаётся, но каждый виток сужен ДО КАТЕГОРИИ (Ф-Б1-39): экран читает две
+ * величины одной категории, а до фикса каждый виток считал сорок конвертов месяца, обе ведомости
+ * периода и дерево — 4,4 с на корпусе 20k за двенадцать точек графика. Ведомости периода и дерево
+ * в ответ тренда не входят вовсе: точка — это `spent` и сумма слота `limit` своих конвертов.
  */
 export async function categoryTrendOf(
   tx: Tx,
@@ -1087,10 +1202,10 @@ export async function categoryTrendOf(
       { month: period, today: args.today },
       def,
       reg,
+      { category: args.categoryId, period: false, rollup: false },
     );
     const mine = raws.filter(
       (e) =>
-        e.categoryRef === args.categoryId &&
         e.currency === la.defaultCurrency &&
         String(slotValueOf(e.binding, e.props, 'period_start') ?? '').slice(0, 7) === period,
     );

@@ -12,6 +12,7 @@ import {
   bindingIndexOf,
   canonicalJson,
   newId,
+  ROLE_ENVELOPE_BINDING,
   ROLE_INSTANCE_OF,
 } from '@orbis/shared';
 import type { ExprNode } from '@orbis/shared/expr';
@@ -653,6 +654,154 @@ describe('четыре читателя движка помимо карточк
       expect(byId.get(catFood)).toEqual({ id: catFood, title: 'Еда', spendClass: 'discretionary' });
       expect(byId.get(catSalary)?.spendClass).toBeNull(); // доходная категория — без класса
     });
+  });
+});
+
+describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 гейта)', () => {
+  /**
+   * Мир: конверт с привязанной тратой, конверт архивирован, ребро привязки НА МЕСТЕ.
+   *
+   * Ребро возвращается руками намеренно. Бюджет-хук на архивации конверта привязку снимает
+   * (`rebindForEnvelope`: у архивного конверта селектор комбинацию не выбирает), и через один
+   * лишь исполнитель состояние «ребро на архивный конверт» недостижимо — ровно поэтому `alive`
+   * и оказался незапиненным. Но состояние законно и наблюдаемо: так выглядит граф между записью
+   * архивации и хуком, так же выглядят рёбра, приехавшие импортом или починкой данных. §Б5-4 №5
+   * называет ответ на него частью ДЕКЛАРАЦИИ, и проверять его нужно на нём.
+   */
+  async function archivedWithEdge(slug: 'food' | 'transport', amount: string) {
+    const user = freshUserId();
+    await seedOwnerGraph(db, user);
+    const cat = seedCategoryId(user, slug);
+    const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '5000.00'));
+    const spend = await exec(user, 'entity_create', txn(cat, amount, today));
+    const before = await overviewOf(user, curMonth);
+    expect(envById(before, env.id).spent).toBe(amount); // привязка встала хуком
+    expect(before.unbudgeted).toHaveLength(0);
+
+    await exec(user, 'entity_update', { id: env.id, archived: true });
+    await exec(user, 'relation_create', {
+      source_id: env.id,
+      target_id: spend.id,
+      role: ROLE_ENVELOPE_BINDING,
+    });
+    // Сторож обстановки: без ребра тест выродился бы в «трата без конверта», а он не про это.
+    const edges = (await withIdentity(db, user, (tx) =>
+      tx.execute(sql`SELECT count(*)::int AS n FROM relations
+        WHERE source_id = ${env.id}::uuid AND target_id = ${spend.id}::uuid
+          AND role = ${ROLE_ENVELOPE_BINDING}`),
+    )) as unknown as Array<{ n: number }>;
+    expect(edges[0]?.n).toBe(1);
+    return { user, cat, env: env.id };
+  }
+
+  test('ребро на АРХИВНЫЙ конверт не прячет трату от Unbudgeted — у ОБЕИХ реализаций', async () => {
+    const { user, cat } = await archivedWithEdge('food', '777.00');
+    // Обе реализации на ОДНОЙ tx: расхождение здесь было бы расхождением движков, а не данных.
+    await engineOn(user, async ({ tx, reg, def }) => {
+      const oracle = await computeOverview(tx, user, curMonth, today);
+      const mine = await budgetOverviewOf(tx, user, { month: curMonth, today }, def, reg);
+      expect(canonicalJson(mine)).toEqual(canonicalJson(oracle));
+      expect(mine.envelopes).toHaveLength(0); // архивный конверт карточки не даёт
+      expect(mine.unbudgeted.map((u) => [u.category.id, u.total])).toEqual([[cat, '777.00']]);
+    });
+  });
+
+  test('alive: false дельтой владельца ведёт себя ИНАЧЕ — то же ребро трату прячет', async () => {
+    // Пин самого условия, а не его следствия: перестань движок читать `alive` — и этот тест
+    // сравняет два ответа, которые обязаны различаться.
+    const { user } = await archivedWithEdge('transport', '640.00');
+    expect((await overviewOf(user, curMonth)).unbudgeted.map((u) => u.total)).toEqual(['640.00']);
+
+    const def = await engineOn(user, async ({ def: d }) => d);
+    const unbudgeted = def.aggregates.unbudgeted;
+    if (unbudgeted?.kind !== 'sum') throw new Error('в декларации нет ведомости Unbudgeted');
+    try {
+      await withIdentity(db, user, (tx) =>
+        setSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID, {
+          definition: {
+            ...def,
+            aggregates: { ...def.aggregates, unbudgeted: { ...unbudgeted, alive: false } },
+          },
+        }),
+      );
+      // «Не живой» — значит архивность конверта не важна: ребро есть, и трата спрятана.
+      expect((await overviewOf(user, curMonth)).unbudgeted).toHaveLength(0);
+    } finally {
+      await withIdentity(db, user, (tx) =>
+        removeSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID),
+      );
+    }
+    expect((await overviewOf(user, curMonth)).unbudgeted).toHaveLength(1);
+  });
+});
+
+describe('фазы: остаток последним и взаимоисключаемость (Ф-Б1-37)', () => {
+  test('две истинные не-остаточные фазы — отказ с их именами, а не «короткая первой»', async () => {
+    // Порядок ключей из jsonb непредсказуем (длина, затем байты), поэтому выбор «первой истинной»
+    // означал бы, что смысл декларации зависит от того, как владелец назвал фазу.
+    const def = await engineOn(userA, async ({ def: d }) => d);
+    const overlap = {
+      ...def,
+      phases: {
+        ...def.phases,
+        // Обе истинны на любом конверте текущего месяца: «начался» и «не закончился».
+        upcoming: { op: '>=', args: [{ ctx: '$today' }, { slot: 'period_start' }] } as ExprNode,
+        closed: { op: '<=', args: [{ ctx: '$today' }, { slot: 'period_end' }] } as ExprNode,
+      },
+    };
+    try {
+      await withIdentity(db, userA, (tx) =>
+        setSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID, { definition: overlap }),
+      );
+      const err = (await overviewOf(userA, curMonth).catch((e) => e)) as ExecError;
+      expect([err.code, (err.details as { reason?: string }).reason]).toEqual([
+        'VALIDATION',
+        'SUBSCRIPTION_PHASES_OVERLAP',
+      ]);
+      expect((err.details as { phases?: string[] }).phases).toEqual(['closed', 'upcoming']);
+    } finally {
+      await withIdentity(db, userA, (tx) =>
+        removeSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID),
+      );
+    }
+    // Встроенные `upcoming`/`closed` взаимоисключающие — норматив проходит.
+    expect((await overviewOf(userA, curMonth)).envelopes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('семена карточки после rollup (Minor-1 гейта)', () => {
+  test('формула читает сумму конверта ВНЕ rollup.applies_to — Overview не падает INVARIANT', async () => {
+    // Дельта заводит вторую сумму КОНВЕРТА (без `bound_via`, поэтому числитель порога по-прежнему
+    // однозначен — Ф-Б1-38) и формулу над ней. Сей карточка только `applies_to`, эта формула не
+    // нашла бы своей суммы у владельца с деревом категорий — и Overview падал бы целиком.
+    const def = await engineOn(userA, async ({ def: d }) => d);
+    const spent = def.aggregates.spent;
+    if (spent?.kind !== 'sum') throw new Error('в декларации нет суммы spent');
+    const { bound_via: _drop, ...withoutEdge } = spent;
+    const widened = {
+      ...def,
+      aggregates: {
+        ...def.aggregates,
+        spent_any: { ...withoutEdge, where: undefined },
+        head_room: {
+          kind: 'formula' as const,
+          scope: 'envelope' as const,
+          expr: { op: '-', args: [{ agg: 'effective_limit' }, { agg: 'spent_any' }] } as ExprNode,
+        },
+      },
+    };
+    try {
+      await withIdentity(db, userA, (tx) =>
+        setSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID, { definition: widened }),
+      );
+      // `envParent` — конверт родительской категории: у него есть потомки, значит rollup идёт.
+      const ov = await overviewOf(userA, curMonth);
+      expect(envById(ov, envParent).effectiveLimit).toBe('15000.00');
+    } finally {
+      await withIdentity(db, userA, (tx) =>
+        removeSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID),
+      );
+    }
   });
 });
 
