@@ -44,6 +44,45 @@ requireEnv();
 const { db, client } = appDb();
 /** Прогонов на замер — как в `graph.test.ts:61`: на семи p95 вырождается в максимум. */
 const P95_RUNS = 20;
+
+/**
+ * Пороги §С8-15 — ДОСЛОВНО из спеки, а не «то, что получилось» (образец `graph.test.ts:63-69`).
+ *
+ * Второй важнее первого: «≤ 500 мс» ловит абсолютную негодность, «≤ 2× оракула» — регрессию
+ * относительно сегодняшнего кода, то есть отвечает на вопрос среза «декларация вместо кода не
+ * сделала хуже в разы». Оракул мерится ТЕМ ЖЕ прогоном на той же машине (Р-И-26); базовая линия
+ * 0c — ориентир, не порог.
+ *
+ * Ориентир пробы П2 (`.superpowers/probe/p2/bench-B-indexed.txt`, RUNS=100 WARMUP=20,
+ * ИНДЕКСИРОВАННЫЙ прогон — называть обязательно): 272,9 / 231,6 / 174,5 мс; без экспрессионных
+ * индексов (`bench-A2-noindex.txt`) — 312,5 / 291,1 / 185,3. В репозитории этих индексов НЕТ
+ * (миграция среза одна — 0018, Р-И-23), поэтому запас до 500 мс здесь меньше, чем был у пробы;
+ * измеренный вход для решения об индексе дают вердикты EXPLAIN ниже.
+ */
+const VOLUME_BUDGETS = { overviewP95Ms: 500, ratioToOracle: 2 } as const;
+
+interface Measured {
+  oracleP95: number;
+  engineP95: number;
+}
+
+/** Нарушители — СПИСКОМ, а не первым упавшим (образец `graph.test.ts:265/:289`). */
+function gateViolations(
+  m: Measured,
+  budgets: { overviewP95Ms: number; ratioToOracle: number },
+): string[] {
+  const out: string[] = [];
+  if (m.engineP95 > budgets.overviewP95Ms) {
+    out.push(`overview:engine=${m.engineP95.toFixed(0)}ms > ${budgets.overviewP95Ms}ms`);
+  }
+  const ceiling = m.oracleP95 * budgets.ratioToOracle;
+  if (m.engineP95 > ceiling) {
+    out.push(
+      `overview:engine=${m.engineP95.toFixed(0)}ms > ${budgets.ratioToOracle}× оракула (${ceiling.toFixed(0)}ms)`,
+    );
+  }
+  return out;
+}
 let fixture: Awaited<ReturnType<typeof ensureVolumeFixture>>;
 
 beforeAll(async () => {
@@ -253,4 +292,15 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
     )) as unknown as Array<{ n: number }>;
     expect(rows[0]?.n).toBe(VOLUME_ENVELOPES);
   }, 900_000);
+});
+
+test('гейт §С8-15: пороги дословно из спеки и они действительно гейтят', () => {
+  // Порог, подкрученный под результат, — самый дешёвый способ сделать гейт зелёным, поэтому
+  // оба числа пинятся строкой: правка любого из них красит этот тест первым.
+  expect(`${VOLUME_BUDGETS.overviewP95Ms}/${VOLUME_BUDGETS.ratioToOracle}`).toBe('500/2');
+  // Мутационная проверка: без неё `expect(...).toEqual([])` в гейте был бы истинен и у функции,
+  // которая ВСЕГДА возвращает пустой список, — дефект, из-за которого три проверки
+  // `explain.test.ts` оказались тавтологиями (докблок `expectVerdict` там же).
+  expect(gateViolations({ oracleP95: 100, engineP95: 600 }, VOLUME_BUDGETS)).toHaveLength(2);
+  expect(gateViolations({ oracleP95: 100, engineP95: 150 }, VOLUME_BUDGETS)).toEqual([]);
 });
