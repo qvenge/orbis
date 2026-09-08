@@ -397,6 +397,24 @@ const probeIdList = () =>
     sql`, `,
   );
 
+/**
+ * Уборка проб сторожа Р-К-2 — И строк кэша `spent` владельца корпуса (Ф-Б1-44).
+ *
+ * Пробы кладутся ЧЕРЕЗ ИСПОЛНИТЕЛЯ, то есть бюджет-хук инкрементирует ими тёплые строки
+ * `envelope_spent_cache`; уборка же идёт админ-SQL — мимо всех писателей кэша. Каскад FK
+ * уносит рёбра проб и строки кэша САМИХ проб, но не строки КОНВЕРТОВ, в которые пробы попали:
+ * без явного сноса второй прогон читал бы `spent` с вкладом сущностей, которых уже нет, и
+ * сверка «ноль расхождений» краснела бы на прогретом корпусе (штатный режим Ф-Б1-14 и
+ * «прогретый корпус» задачи 12).
+ *
+ * Правило шире этого случая: ВСЯКАЯ уборка мимо исполнителя обязана снести кэш владельца —
+ * кэш отвечает на вопрос о графе, а не о том, кто его правил.
+ */
+export async function cleanupVolumeProbes(db: Db): Promise<void> {
+  await db.execute(sql`DELETE FROM entities WHERE id IN (${probeIdList()})`);
+  await db.execute(sql`DELETE FROM envelope_spent_cache WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`);
+}
+
 async function countRows(
   db: Db,
 ): Promise<{ entities: number; envelopes: number; bindings: number }> {
@@ -483,8 +501,10 @@ export async function ensureVolumeFixture(): Promise<{
   const { db, client } = adminDb();
   try {
     // Хвост оборванного сторожа сносится ДО пересчёта: иначе сотня лишних строк читалась бы как
-    // «корпус не тот» и гнала бы полный пересев на каждом прогоне.
-    await db.execute(sql`DELETE FROM entities WHERE id IN (${probeIdList()})`);
+    // «корпус не тот» и гнала бы полный пересев на каждом прогоне. Вместе с ним — кэш `spent`
+    // владельца (Ф-Б1-44): пробы прошлого прогона инкрементировали строки конвертов, и без
+    // сноса реюз корпуса читал бы деньги несуществующих сущностей.
+    await cleanupVolumeProbes(db);
     const before = await countRows(db);
     if (
       before.entities === VOLUME_ENTITIES &&

@@ -22,6 +22,7 @@ import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/b
 import { builtinSubscription } from '../src/subscriptions/registry';
 import { measureP95 } from '../src/test/perf';
 import {
+  cleanupVolumeProbes,
   ensureVolumeFixture,
   VOLUME_DEFAULT_CURRENCY,
   VOLUME_ENTITIES,
@@ -31,7 +32,6 @@ import {
   VOLUME_MIN_BINDINGS,
   VOLUME_MONTHS,
   VOLUME_OWNER_ID,
-  VOLUME_PROBE_IDS,
   VOLUME_TODAY,
   volumeCombination,
   volumeMonth,
@@ -64,15 +64,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Пробы сторожа — не часть корпуса: без уборки счётчик кеша разъедется и следующий прогон
-  // пересеет 23 712 строк. Рёбра и версии уходят каскадом FK (`schema.ts:108/:111/:276-278`).
+  // пересеет 23 712 строк. Рёбра и версии уходят каскадом FK (`schema.ts:108/:111/:276-278`),
+  // а вот строки `envelope_spent_cache` КОНВЕРТОВ, в которые пробы попали, — не уходят: их
+  // сносит `cleanupVolumeProbes` (Ф-Б1-44). Уборка тут админ-SQL, то есть мимо исполнителя,
+  // и кэш о ней узнать неоткуда.
   const admin = adminDb();
   try {
-    await admin.db.execute(
-      sql`DELETE FROM entities WHERE id IN (${sql.join(
-        VOLUME_PROBE_IDS.map((id) => sql`${id}::uuid`),
-        sql`, `,
-      )})`,
-    );
+    await cleanupVolumeProbes(admin.db);
   } finally {
     await admin.client.end();
   }
@@ -166,8 +164,31 @@ test('базовая линия: p95 computeOverview под ролью прил�
 }, 900_000);
 
 describe('§С8-15: Budget из подписки на синтетике 20k×40×12 — ноль расхождений', () => {
-  test('12 месяцев × 40 конвертов: обе реализации совпадают', async () => {
-    const diffs: string[] = [];
+  /**
+   * Сверка ДВУХПРОХОДНАЯ (Ф-Б1-44): холодный путь движка ≡ тёплый ≡ оракул.
+   *
+   * Одного прохода мало с тех пор, как ведомость `spent` материализуется (§Б5-5). На свежем
+   * севе КАЖДЫЙ конверт читается ровно один раз (у месяца свои сорок), то есть один проход
+   * меряет только ПРОМАХ — путь, в котором кэша фактически нет. Попадание тогда покрывалось бы
+   * лишь повторным запуском всего гейта, а он идёт при реюзе корпуса, то есть в режиме, где
+   * поломку легко списать на «грязный стенд».
+   *
+   * Поэтому кэш владельца сносится ЯВНО перед сверкой (уборка мимо исполнителя — значит и
+   * мимо писателей кэша, Ф-Б1-44), первый вызов движка считает по графу и кладёт строки,
+   * второй обязан вернуть то же самое из строк. Разъедься они — виноват кэш, и это видно
+   * прямо здесь, а не на следующем прогоне.
+   */
+  test('12 месяцев × 40 конвертов: холодный ≡ тёплый ≡ оракул', async () => {
+    const admin = adminDb();
+    try {
+      await admin.db.execute(
+        sql`DELETE FROM envelope_spent_cache WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`,
+      );
+    } finally {
+      await admin.client.end();
+    }
+    const coldDiffs: string[] = [];
+    const warmDiffs: string[] = [];
     for (let k = 0; k < VOLUME_MONTHS; k += 1) {
       const month = volumeMonth(k);
       await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
@@ -176,18 +197,37 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
         // Часы корпуса ПРИБИТЫ (`VOLUME_TODAY`): даты синтетики выведены из них, и с системным
         // «сегодня» корпус протухал бы каждую полночь.
         const a = await computeOverview(tx, VOLUME_OWNER_ID, month, VOLUME_TODAY);
-        const b = await budgetOverviewOf(
+        const cold = await budgetOverviewOf(
           tx,
           VOLUME_OWNER_ID,
           { month, today: VOLUME_TODAY },
           def,
           reg,
         );
-        if (canonicalJson(a) !== canonicalJson(b)) diffs.push(month);
+        // Тот же вызов ВТОРОЙ раз: сорок строк кэша уже записаны первым, и ответ обязан
+        // прийти из них — байт в байт.
+        const warm = await budgetOverviewOf(
+          tx,
+          VOLUME_OWNER_ID,
+          { month, today: VOLUME_TODAY },
+          def,
+          reg,
+        );
+        const oracle = canonicalJson(a);
+        if (canonicalJson(cold) !== oracle) coldDiffs.push(month);
+        if (canonicalJson(warm) !== oracle) warmDiffs.push(month);
         // Сторож: сверка идёт по ДАННЫМ, а не по пустоте — число из корпуса, не литералом.
         expect(a.envelopes.length).toBe(VOLUME_ENVELOPES_PER_MONTH);
       });
     }
-    expect(diffs).toEqual([]); // список нарушителей, а не первый упавший
+    // Списки нарушителей, а не первый упавший; порознь — чтобы было видно, ЧЕЙ путь разошёлся.
+    expect({ cold: coldDiffs, warm: warmDiffs }).toEqual({ cold: [], warm: [] });
+    // И кэш действительно наполнился: иначе «тёплый» был бы вторым холодным, а сверка —
+    // тавтологией «движок равен себе».
+    const rows = (await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+      tx.execute(sql`SELECT count(*)::int AS n FROM envelope_spent_cache
+                     WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`),
+    )) as unknown as Array<{ n: number }>;
+    expect(rows[0]?.n).toBe(VOLUME_ENVELOPES);
   }, 900_000);
 });
