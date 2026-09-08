@@ -7,6 +7,7 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
+  bumpRegistryVersion,
   executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
@@ -15,6 +16,7 @@ import {
 import { withIdentity } from '../db/with-identity';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { readRegistryVersions } from '../registry/version';
+import { budgetOverview } from './aggregates';
 import { invalidateSpentCache, readSpentCache, spentCacheKey, writeSpentCache } from './spent-cache';
 
 requireEnv();
@@ -123,5 +125,64 @@ describe('таблица кэша: форма строки и обе полов�
       ).toBe(0);
     });
     expect(await cacheRows(env.id)).toEqual([]);
+  });
+});
+
+describe('чтение spent идёт через кэш (§Б5-5): промах считает и пишет, попадание не считает', () => {
+  const user = freshUserId();
+  const cat = newId();
+
+  test('первый overview кладёт строку конверта; второй берёт её; смена версии реестра — снова промах', async () => {
+    const env = await createEntity(user, {
+      title: 'Такси — июль',
+      props: budgetProps(cat),
+      aspects: ['orbis/budget'],
+    });
+    await createEntity(user, {
+      title: 'Такси 1',
+      props: finProps(cat, '2026-07-05'),
+      aspects: ['orbis/financial'],
+    });
+    const clock = () => new Date('2026-07-10T09:00:00.000Z');
+
+    expect(await cacheRows(env.id)).toEqual([]);
+    const first = await budgetOverview(db, user, '2026-07', clock);
+    expect(first.envelopes.map((e) => e.spent)).toEqual(['340.00']);
+    // Промах записал строку ровно за «сегодня» владельца и с текущей парой версий.
+    const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
+    expect(await cacheRows(env.id)).toEqual([
+      { as_of: '2026-07-10', spent: '340.00', owner_version: versions.ownerVersion },
+    ]);
+
+    // Подмена строки кэша заведомо неверным числом: если бы читатель считал по графу, он
+    // вернул бы 340.00 и тест не отличил бы кэш от его отсутствия.
+    await withIdentity(db, user, async (tx) => {
+      await writeSpentCache(
+        tx,
+        user,
+        [{ envelopeId: env.id, asOf: '2026-07-10', spent: '999.00' }],
+        versions,
+      );
+    });
+    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent)).toEqual(
+      ['999.00'],
+    );
+
+    // §С8-16: смена registry_version инвалидирует — строка чужой версии не отвечает.
+    await bumpRegistryVersion(user);
+    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent)).toEqual(
+      ['340.00'],
+    );
+  });
+
+  test('конверт без трат кэшируется НУЛЁМ: иначе он промахивался бы вечно', async () => {
+    const other = newId();
+    const env = await createEntity(user, {
+      title: 'Пустой',
+      props: budgetProps(other),
+      aspects: ['orbis/budget'],
+    });
+    await budgetOverview(db, user, '2026-07', () => new Date('2026-07-11T09:00:00.000Z'));
+    expect((await cacheRows(env.id)).map((r) => r.as_of)).toEqual(['2026-07-11']);
   });
 });

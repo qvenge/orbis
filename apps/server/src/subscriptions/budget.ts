@@ -53,9 +53,10 @@ import {
 // `SQL` — ЗНАЧЕНИЕМ, а не только типом: `runSum` сужает им ветку плана (`instanceof SQL`).
 import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
 import { inArray, SQL, sql } from 'drizzle-orm';
-import { defaultCurrencyOf, selectEnvelope } from '../budget/binding';
+import { defaultCurrencyOf, lockOwnerBudget, selectEnvelope } from '../budget/binding';
 import { type CategoryInfo, categoriesById, ownerCategories } from '../budget/categories';
 import { decAdd, decCmp, decMul, decSub } from '../budget/decimal';
+import { readSpentCache, spentCacheKey, writeSpentCache } from '../budget/spent-cache';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -68,6 +69,7 @@ import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
 import { DEFAULT_TIMEZONE } from '../query/context';
 import type { RegistrySnapshot } from '../registry/load';
+import { builtinSubscription } from './registry';
 import { toWireEntity } from '../wire';
 
 export const BUDGET_SUBSCRIPTION_ID = 'orbis/budget-overview';
@@ -383,6 +385,107 @@ async function runSum(
     // баланса месяца ровно у того владельца, ради которого §С8-18 и затевался.
     out.set(key, decAdd(out.get(key) ?? '0', r.total));
   }
+  return out;
+}
+
+/**
+ * Материализуемые ведомости: декларация ВЕЛИТ (`materialize: true`) И аспект-конверт
+ * ПУБЛИКУЕТ величину (`aggregations[name].published`, §4.3 PRD). Два условия, потому что
+ * это два разных утверждения: «её дорого считать» — свойство ведомости, «её видно снаружи»
+ * — свойство аспекта. Кэшировать непубличную величину значило бы держать строку, которую
+ * никто не спросит, а материализовать публичную без разрешения декларации — включить
+ * кэш кодом там, где спека дала декларацию.
+ *
+ * `scope: 'envelope'` — третье условие и оно же граница возможного: строка кэша ключуется
+ * конвертом, а ведомость периода (`period_balance`, `unbudgeted`) группируется по значению
+ * слота, и класть её в ту же таблицу было бы подменой ключа.
+ */
+export function materializedAggregatesOf(
+  def: BudgetSubscription,
+  reg: RegistrySnapshot,
+): ReadonlySet<string> {
+  const published = new Set<string>();
+  for (const binding of bindingsOf(reg).byContract(def.sources.envelope.contract)) {
+    const aspect = reg.aspects.get(binding.aspectId);
+    for (const [name, decl] of Object.entries(aspect?.aggregations ?? {})) {
+      if (decl.published) published.add(name);
+    }
+  }
+  const out = new Set<string>();
+  for (const [name, agg] of Object.entries(def.aggregates)) {
+    if (agg.kind === 'sum' && agg.materialize && agg.scope === 'envelope' && published.has(name)) {
+      out.add(name);
+    }
+  }
+  return out;
+}
+
+/**
+ * Ведомость-сумма ЧЕРЕЗ КЭШ (§Б5-5, приёмка §С8-16) — НАДСТРОЙКА над `runSum`, а не его
+ * замена: попадания берутся строками `(envelope_id, as_of)`, промахи считает ТОТ ЖЕ SQL
+ * ведомости. Второго счёта денег не появляется по построению — в кэш попадает ровно то
+ * число, которое вернул бы движок без него.
+ *
+ * Ключ дня — `cctx.today`: набор `facts` отбирает движения условием `date <= $today`, то
+ * есть значение ведомости зависит ровно от пары (конверт, сегодня), а не от месяца запроса.
+ *
+ * ЗАМОК КОНТУРА БЕРЁТСЯ ТОЛЬКО НА ПРОМАХЕ, и он здесь не перестраховка. Без него возможен
+ * порядок: читатель посчитал 100 → писатель закоммитил +50 и попытался инкрементировать
+ * строку, которой ещё нет (ноль задетых строк) → читатель вставил 100. Кэш остался бы
+ * враньём на 50 до следующей инвалидации, а это деньги на экране владельца. Писатели держат
+ * этот же замок всю свою транзакцию (`lockBudgetContour`, `executor.ts`), поэтому захват
+ * ДО пересчёта выстраивает обе стороны в одну очередь. На прогретом кэше замок не берётся
+ * вовсе — то есть массовое чтение писателям не мешает.
+ */
+async function runSumCached(
+  tx: Tx,
+  ownerId: string,
+  cctx: CompileCtx,
+  def: BudgetSubscription,
+  la: LedgerArgs,
+  name: string,
+  envIds: readonly string[],
+): Promise<Map<string, string>> {
+  if (!materializedAggregatesOf(def, cctx.reg).has(name))
+    return runSum(tx, cctx, def, la, name, envIds);
+  // Версии берутся ИЗ СНИМКА транзакции, а не отдельным SELECT'ом: снимок и есть тот
+  // реестр, по которому скомпилирован план, и спрашивать версию второй раз значило бы
+  // допустить пару «план по одной версии, ключ по другой».
+  const versions = { ownerVersion: cctx.reg.ownerVersion, systemVersion: cctx.reg.systemVersion };
+  const asOf = cctx.today;
+  const cached = await readSpentCache(
+    tx,
+    ownerId,
+    envIds.map((envelopeId) => ({ envelopeId, asOf })),
+    versions,
+  );
+  const out = new Map<string, string>();
+  const misses: string[] = [];
+  for (const id of envIds) {
+    const hit = cached.get(spentCacheKey({ envelopeId: id, asOf }));
+    if (hit === undefined) misses.push(id);
+    else out.set(id, hit);
+  }
+  if (misses.length === 0) return out;
+
+  await lockOwnerBudget(tx, ownerId);
+  const computed = await runSum(tx, cctx, def, la, name, misses);
+  // Нули пишутся ТОЖЕ: конверт без трат — такой же ответ, и без строки он промахивался бы
+  // при каждом чтении, то есть кэш не работал бы ровно на пустом месяце.
+  //
+  // Нуль пишется КАНОНОМ `'0.00'`, а не `'0'`, и это не косметика. Без кэша конверт без трат
+  // не приезжает в карту `runSum` вовсе, и канон ему подставляет ЧИТАТЕЛЬ (`runLedgers`:
+  // `?? '0.00'`). Кэш отвечает за КАЖДЫЙ конверт, читатель до его подстановки не доходит, и
+  // «0» уехало бы в карточку владельца вместо «0.00» — то есть кэш изменил бы видимый ответ.
+  // `numeric` масштаб сохраняет (`'0.00'::numeric::text` = `0.00`), поэтому канон переживает
+  // и запись, и инкремент.
+  await writeSpentCache(
+    tx,
+    ownerId,
+    misses.map((envelopeId) => ({ envelopeId, asOf, spent: computed.get(envelopeId) ?? '0.00' })),
+    versions,
+  );
+  for (const id of misses) out.set(id, computed.get(id) ?? '0.00');
   return out;
 }
 
@@ -901,7 +1004,16 @@ async function runLedgers(
   for (const [name, agg] of Object.entries(def.aggregates)) {
     if (agg.kind !== 'sum') continue;
     if (agg.scope === 'period' && narrow.period === false) continue;
-    sums.set(name, await runSum(tx, cctx, def, la, name, ids));
+    // Ведомости КОНВЕРТА идут через кэш (§Б5-5): у него ключ `(конверт, сегодня)`, и
+    // материализуемость решает декларация (`runSumCached` сам вернётся к `runSum`, если
+    // клапан снят). Ведомости ПЕРИОДА кэш не обслуживает — у них ключ не конверт, а
+    // значение слота, и класть их в ту же таблицу было бы подменой ключа.
+    sums.set(
+      name,
+      agg.scope === 'envelope'
+        ? await runSumCached(tx, ownerId, cctx, def, la, name, ids)
+        : await runSum(tx, cctx, def, la, name, ids),
+    );
   }
 
   // Ведомости конверта: сначала СВОИ (на них порог, `on_raw`), затем rollup дерева.
