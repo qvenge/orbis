@@ -9,25 +9,36 @@
 // ПРОГРЕТОМ корпусе; холодный записывается, порога не несёт) и трёхзначные EXPLAIN-вердикты по
 // горячим запросам Budget под ролью приложения (§С8-10, Р-14).
 //
-// ЗАМЕР 09.09.2026, машина: Intel Core i7-9750H @ 2,6 ГГц (12 потоков), 16 ГБ, Darwin 25.2.0,
+// ЗАМЕР 08–09.09.2026, машина: Intel Core i7-9750H @ 2,6 ГГц (12 потоков), 16 ГБ, Darwin 25.2.0,
 // локальный Supabase в Docker; прогоны последовательные, ничего параллельного. Корпус:
 // 23 712 сущностей / 480 конвертов / 16 211 привязок (счёт — из `ensureVolumeFixture`, не из
-// головы); сев 76…99 с, прогон файла 39…41 с при реюзе и 124…136 с со свежим севом.
-// ШЕСТЬ прогонов гейта (не лучший из них, а весь разброс — Ф-Б1-12):
-//   overview:oracle:warm      p95 173…251 мс (медиана 169…220) — оракул `computeOverview`
-//   overview:engine:warm      p95 271…330 мс (медиана 241…267) — движок подписки
-//   отношение движок/оракул   1,20…1,77× при пороге 2× — ХУДШИЙ прогон ближе к порогу, чем
-//                             медианный, и это главное число файла: запас по отношению ýже,
-//                             чем по абсолютному потолку, потому что быстрый оракул опускает
-//                             потолок вместе с собой (173 мс оракула → потолок 347 мс)
-//   overview:engine:cold      p95 308…411 мс (медиана 294…367) — он же без кэша spent
+// головы); сев 76…99 с, прогон файла 39…50 с при реюзе, 124…136 с со свежим севом.
+//
+// ЗДЕСЬ ДИАПАЗОН ПО ВСЕМ ПРОГОНАМ, А НЕ ТОЧКА, и это не осторожность, а замер: первый же
+// независимый прогон (гейт-ревью 09.09) вышел за записанную тогда полосу — оракул p95 291,9 при
+// записанных 173…251. Причина в форме статистики, а не в коде: p95 при n = 20 — ВТОРОЙ максимум
+// выборки, и двух выбросов стенда хватает, чтобы сдвинуть его на десятки процентов при
+// неподвижной медиане. Поэтому медиана стоит рядом с каждым p95.
+//
+// ГЕЙТОВЫЕ СЕРИИ — с 09.09 чередующиеся, N = 40 на сторону (Ф-Б1-47; p95 = 38-й из 40, третий
+// сверху). Три прогона новой формы:
+//   overview:oracle:warm  p95 210…253 мс (медиана 202…206)
+//   overview:engine:warm  p95 255…284 мс (медиана 241…242)
+//   отношение движок/оракул 1,01…1,36× при пороге 2×
+// ПРЕЖНЯЯ форма (две серии подряд по 20; девять прогонов 08–09.09) давала НА ТОМ ЖЕ КОДЕ
+// отношение 0,97…1,77×, и разброс шёл от ОРАКУЛА (p95 173…292 при медиане 169…228), а не от
+// движка (p95 265…330 при медиане 241…267): чередование убирает дрейф стенда между сериями.
+//
+// НЕГЕЙТОВЫЕ строки (по-прежнему n = 20, порога не несут):
+//   overview:engine:cold      p95 308…461 мс (медиана 294…392) — движок без кэша spent
 //   spent-cache:invalidate480 медиана 7,2…9,6 мс                — цена сноса 480 строк кэша
-//   volume:overview (0c)      p95 199…261 мс                    — базовая линия, порога не несёт
-// ОБА порога §С8-15 ДОСТИГНУТЫ во всех шести прогонах: 271…330 мс против 500 мс и против
-// 347…502 мс (2× оракула). Числа — этой машины и этого корпуса, а не гарантия: увидел хуже
-// записанного — ЗАМЕНИ абзац, а не молчи (дисциплина `perf.test.ts:100-107`,
-// `graph.test.ts:74-88`). Пороги при этом не трогать ни при каких числах: они дословно из
-// спеки, и подкрутка под результат — первое, что ловит тест «пороги дословно из спеки».
+//   volume:overview (0c)      p95 199…289 мс                    — базовая линия задачи 0c
+//
+// ОБА порога §С8-15 ДОСТИГНУТЫ во ВСЕХ прогонах обеих форм. Числа — этой машины и этого корпуса,
+// а не гарантия: увидел хуже записанного — РАСШИРЬ диапазон, а не молчи (дисциплина
+// `perf.test.ts:100-107`, `graph.test.ts:74-88`). Пороги при этом не трогать ни при каких числах:
+// они дословно из спеки, и подкрутка под результат — первое, что ловит тест «пороги дословно из
+// спеки».
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   type BudgetOverview,
@@ -42,6 +53,7 @@ import { selectEnvelopes } from '../src/budget/binding';
 import { invalidateSpentCache } from '../src/budget/spent-cache';
 import { type Tx, withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
+import { lit } from '../src/query/compile-ast';
 import { effectiveRegistry } from '../src/registry/cache';
 import type { RegistrySnapshot } from '../src/registry/load';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
@@ -71,6 +83,12 @@ requireEnv();
 const { db, client } = appDb();
 /** Прогонов на замер — как в `graph.test.ts:61`: на семи p95 вырождается в максимум. */
 const P95_RUNS = 20;
+/**
+ * Прогонов на КАЖДУЮ сторону гейта — сорок, а не двадцать (Ф-Б1-47, как §С8-16 в `perf.test.ts`).
+ * При nearest-rank p95 на двадцати — ВТОРОЙ максимум, и один выброс стенда решал судьбу гейта; на
+ * сорока p95 — 38-й из 40, третий сверху, и два выброса подряд гейт переживает.
+ */
+const GATE_P95_RUNS = 40;
 
 /**
  * Пороги §С8-15 — ДОСЛОВНО из спеки, а не «то, что получилось» (образец `graph.test.ts:63-69`).
@@ -173,9 +191,10 @@ async function envelopeIdsOf(tx: Tx): Promise<string[]> {
 
 /**
  * Обе реализации — на ОДНОЙ tx и с одним `today`. Реестр и подписка берутся из `beforeAll`.
- * Конвейер §2.8 (`preparePeriod`, `aggregates.ts:628`) не зовётся: он исполняет `execute()` в
- * СВОИХ транзакциях (докблок `aggregates.ts:8-12`), к подписке отношения не имеет и внутрь
- * одной tx не влезает; корпус 0c статичен.
+ * Конвейер §2.8 (`preparePeriod`, `aggregates.ts:614`) не зовётся, и это видно по его сигнатуре:
+ * он принимает `Db`, а не `Tx`, и зовётся ДО `withIdentity` (`:643` против `:645`), потому что
+ * внутри гоняет `postDueInstances`/`materializeInstances` через `execute()` — в своих
+ * транзакциях. Внутрь одной tx он не влезает, к подписке отношения не имеет, а корпус 0c статичен.
  */
 async function overviewPairOn(tx: Tx, month: string) {
   const oracle = await computeOverview(tx, VOLUME_OWNER_ID, month, VOLUME_TODAY);
@@ -263,6 +282,76 @@ async function warmSpentCache(envelopeIds: readonly string[]): Promise<void> {
   }
 }
 
+/**
+ * p95 — nearest-rank ⌈0,95·n⌉ и тот же формат печати, что у `measureP95` (`src/test/perf.ts:55-74`).
+ * Своя копия нужна ровно из-за чередования ниже: `measureP95` ведёт СВОЙ цикл вокруг ОДНОЙ
+ * функции, а гейту нужен один цикл с двумя секундомерами внутри одной транзакции.
+ */
+function reportP95(label: string, samples: readonly number[]): number {
+  const sorted = [...samples].sort((a, b) => a - b);
+  const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1] as number;
+  const median = sorted[Math.floor(sorted.length / 2)] as number;
+  console.log(
+    `perf: ${label} p95=${p95.toFixed(1)}ms median=${median.toFixed(1)}ms runs=${samples.length}` +
+      ` samples=[${samples.map((x) => x.toFixed(1)).join(', ')}]`,
+  );
+  return p95;
+}
+
+/**
+ * Оракул и движок мерятся ЧЕРЕДУЯСЬ — вызов за вызовом в одной транзакции (Ф-Б1-47), а не двумя
+ * сериями подряд.
+ *
+ * Довод — из восьми прогонов прежней формы: p95 ОРАКУЛА гулял 173…292 мс при медиане 169…228, и
+ * отношение движок/оракул выходило 0,97…1,77× НА ОДНОМ И ТОМ ЖЕ коде. То есть относительный порог
+ * мерил дрейф стенда между двумя сериями не меньше, чем разницу двух реализаций. Чередование
+ * ставит обе программы в одни и те же миллисекунды машины; порог §С8-15 при этом не тронут —
+ * лечится ФОРМА замера, а не число.
+ *
+ * Порядок ВНУТРИ пары тоже чередуется: на чётной итерации первым идёт оракул, на нечётной —
+ * движок. Иначе второй вызов пары систематически получал бы от первого прогретый буферный пул, и
+ * чередование сняло бы дрейф машины ценой новой, зато постоянной форы одной из сторон.
+ *
+ * Мерится ЧИСТАЯ работа обеих реализаций внутри уже открытой tx: `BEGIN`/`SET LOCAL ROLE`/`COMMIT`
+ * в замер не входят — они одинаковы для обеих и к сравнению двух программ отношения не имеют
+ * (тот же довод, что у приёмки §С8-16: «замер — чтение внутри открытой tx»).
+ */
+async function measureInterleavedP95(runs: number): Promise<Measured> {
+  const oracle: number[] = [];
+  const engine: number[] = [];
+  for (let i = 0; i < runs; i++) {
+    await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+      const tickOracle = async () => {
+        const t0 = performance.now();
+        await computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY);
+        oracle.push(performance.now() - t0);
+      };
+      const tickEngine = async () => {
+        const t0 = performance.now();
+        await budgetOverviewOf(
+          tx,
+          VOLUME_OWNER_ID,
+          { month: VOLUME_LAST_MONTH, today: VOLUME_TODAY },
+          budgetDef,
+          reg,
+        );
+        engine.push(performance.now() - t0);
+      };
+      if (i % 2 === 0) {
+        await tickOracle();
+        await tickEngine();
+      } else {
+        await tickEngine();
+        await tickOracle();
+      }
+    });
+  }
+  return {
+    oracleP95: reportP95('overview:oracle:warm', oracle),
+    engineP95: reportP95('overview:engine:warm', engine),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // EXPLAIN-вердикты по горячим запросам Budget (§С8-10, Р-14) — вход решения об индексах
 // ---------------------------------------------------------------------------
@@ -342,6 +431,29 @@ async function corpusShareOfEntities(): Promise<number> {
   }
 }
 
+/**
+ * Пин ИНВАРИАНТА, а не строки вердикта, — для индексов, чей выбор решает СЕЛЕКТИВНОСТЬ (Ф-Б1-48а).
+ *
+ * `entities_owner_updated` — ровно такой. Замер по семи долям корпуса в `entities` (ревью 09.09,
+ * копии строк под чужим владельцем + `ANALYZE` + EXPLAIN + `ROLLBACK`): 100 / 90 / 80 / 70 / 60 %
+ * → Seq Scan; 50 / 40 / 31 % → Bitmap Index Scan по этому индексу. Точка переключения планировщика
+ * лежит между 50 и 60 %, то есть `chosen` — не факт про индекс, а непрерывная функция состава
+ * таблицы: естественный порядок `bun run test:perf` → `bun run test:perf:volume` оставляет рядом
+ * фикстуру на ~3 тыс. строк, доля становится 89 %, и пин по порогу доли красит гейт ПРИ НЕТРОНУТОМ
+ * КОДЕ (воспроизведено: 11/12).
+ *
+ * Что держится на ВСЕХ долях — два утверждения, и оба про RLS, а не про cost-модель:
+ *   1. `usable === true` — индекс запросу подходит (при `enable_seqscan = off` берётся всегда);
+ *   2. `chosen === usableWithoutRls` — политика `owner_owns_row` выбор по этому индексу НЕ меняет.
+ * Второе — содержательное трёхзначное утверждение файла и НЕ тавтология: у `entities_aspects_gin`
+ * (форма движка) и у `relations_source_role` оно ЛОЖНО, и оба пинятся строкой рядом.
+ */
+function expectRlsNeutral(v: Verdict): void {
+  expect(`${v.index}: usable=${v.usable} rls-neutral=${v.chosen === v.usableWithoutRls}`).toBe(
+    `${v.index}: usable=true rls-neutral=true`,
+  );
+}
+
 /** Пин вердикта СТРОКОЙ целиком: сменится любой из трёх флагов — тест покраснеет (образец `:162`). */
 function expectVerdict(v: Verdict, expected: string): void {
   expect(`${v.index}: chosen=${v.chosen} usable=${v.usable} admin=${v.usableWithoutRls}`).toBe(
@@ -363,12 +475,39 @@ function envelopesOfMonthQuery(period: { start: string; end: string }): SQL {
 }
 
 /**
+ * ТОТ ЖЕ отбор конвертов месяца, но ФОРМОЙ ДВИЖКА (Ф-Б1-48б) — `aspects @> ARRAY['orbis/budget']`.
+ *
+ * Так компилирует предикат контракта `expr/compile.ts:465` (литерал — `lit`,
+ * `query/compile-ast.ts:130`), и именно этим запросом приложение ходит после Б-1
+ * (`subscriptions/budget.ts:308-310`). Разница с формой оракула не косметическая: `@>` — операция,
+ * которую GIN по массиву обслуживает, а `= ANY(…)` — scalar-array-op, и её не обслуживает никто.
+ * Без вердикта по ЭТОЙ форме вход решения об индексах говорил бы о запросе, которого в бою нет.
+ */
+function engineAspectEnvelopesQuery(period: { start: string; end: string }): SQL {
+  return sql`SELECT e.id FROM entities e
+     WHERE e.owner_id = ${VOLUME_OWNER_ID} AND NOT e.archived
+       AND e.aspects @> ARRAY[${lit('orbis/budget')}]
+       AND e.props->>'orbis/period_start' <= ${period.end}
+       AND e.props->>'orbis/period_end' >= ${period.start}`;
+}
+
+/**
  * Доступ к `relations` в `spentByEnvelope` (`aggregates.ts:215-232`) — ровно два предиката, и
  * они решают выбор индекса: роль и `source_id IN (…)`. Фильтры по `entities` не переносятся
  * намеренно: выбор индекса ПО `relations` они не меняют, а джойн с `entities` и предикат
  * шаблонности сделали бы вердикт вердиктом о ДРУГОМ запросе. Сам предикат —
- * `notRecurringTemplateSql` (`aggregates.ts:93`) — остаётся ПРИВАТНОЙ функцией оракула
+ * `notRecurringTemplateSql` (`aggregates.ts:119`) — остаётся ПРИВАТНОЙ функцией оракула
  * (РП-4/Р-К-38), поэтому в копию не переносится и никуда не экспортируется.
+ *
+ * ГЛАВНАЯ ЦЕНА ЭТОГО ЗАПРОСА ПОД РОЛЬЮ — не индекс, а политика. `owner_owns_both_ends`
+ * (`0001`) исполняется ДВУМЯ hashed SubPlan'ами, и каждый — Seq Scan по `entities` на 23 712
+ * строк (живой EXPLAIN 09.09). Сам доступ к `relations` при этом Index Only Scan по `rel_uniq`;
+ * то есть выбор индекса здесь уже оптимален, а платит запрос за проверку обоих концов ребра.
+ *
+ * ЧЕГО СТОРОЖ КОПИИ НЕ ЛОВИТ (остаток 12-m-3): он сверяет ЧИСЛО строк, а не текст запроса, и
+ * дрейф ОРИГИНАЛА мимо копии пройдёт молча, если на корпусе он ничего не меняет (снятый
+ * `NOT archived` при нуле архивных конвертов — проверено ревью). Форма сторожа предписана
+ * брифом; замена — задача 19.
  */
 function bindingsOfEnvelopesQuery(envelopeIds: readonly string[]): SQL {
   const ids = sql.join(
@@ -570,22 +709,7 @@ test('перф-гейт §С8-15: p95 движка ≤ 2× оракула и ≤
   const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
   await warmSpentCache(ids);
 
-  const oracleP95 = await measureP95('overview:oracle:warm', P95_RUNS, () =>
-    withIdentity(db, VOLUME_OWNER_ID, (tx) =>
-      computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY),
-    ),
-  );
-  const engineP95 = await measureP95('overview:engine:warm', P95_RUNS, () =>
-    withIdentity(db, VOLUME_OWNER_ID, (tx) =>
-      budgetOverviewOf(
-        tx,
-        VOLUME_OWNER_ID,
-        { month: VOLUME_LAST_MONTH, today: VOLUME_TODAY },
-        budgetDef,
-        reg,
-      ),
-    ),
-  );
+  const { oracleP95, engineP95 } = await measureInterleavedP95(GATE_P95_RUNS);
 
   // Строка порога печатается на КАЖДОМ прогоне и для достигнутого тоже: «достигнут» — такой же
   // факт замера, как «не достигнут» (образец `graph.test.ts:270-279`).
@@ -635,7 +759,7 @@ test('холодный корпус: p95 без кэша spent записыва�
   expect(cold).toBeGreaterThan(0);
 }, 900_000);
 
-test('EXPLAIN под ролью: GIN по аспектам недостижим, btree по владельцу — по доле корпуса', async () => {
+test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ формах, btree по владельцу RLS-нейтрален', async () => {
   const period = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
     const { oracle } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
     return oracle.period; // границы месяца считает сам оракул — копии календаря нет
@@ -650,46 +774,55 @@ test('EXPLAIN под ролью: GIN по аспектам недостижим,
 
   // ВЕРДИКТ снят прогоном 09.09 и записан как есть (Р-К-41: пин, а не предсказание).
   //
-  // `entities_aspects_gin` — chosen=false usable=false admin=FALSE, и «false» третьим флагом
-  // здесь важнее двух первых: недостижимость НЕ про RLS. Оракул спрашивает аспект формой
-  // `'orbis/budget' = ANY(aspects)` — это scalar-array-op, а GIN по массиву обслуживает
-  // операторы вхождения (`@>`, `&&`). Форма запроса индексом не покрывается НИ ПОД КАКОЙ
-  // ролью, и `enable_seqscan = off` её не спасает (в отличие от трёх GIN `explain.test.ts`,
-  // которые под админ-DSN берутся). Для решения об индексе это значит: экспрессионный индекс
-  // пробы П2 тут ни при чём — сперва форма предиката, потом индекс.
+  // Форма ОРАКУЛА (`= ANY(aspects)`): chosen=false usable=false admin=FALSE. Третий флаг здесь
+  // важнее двух первых — недостижимость НЕ про RLS: `'orbis/budget' = ANY(aspects)` это
+  // scalar-array-op, а GIN по массиву обслуживает операции вхождения (`@>`, `&&`). Эту форму не
+  // берёт никто и ни под какой ролью, и `enable_seqscan = off` её не спасает.
   expectVerdict(
-    await verdictFor('entities_aspects_gin', q, 'конверты месяца'),
+    await verdictFor('entities_aspects_gin', q, 'конверты месяца, форма ОРАКУЛА (= ANY(aspects))'),
     'chosen=false usable=false admin=false',
   );
-  // `entities_owner_updated` — вердикт У ЭТОГО индекса НЕ ОДИН, и это сам по себе результат
-  // замера, а не шаткость теста. `usable=true` держится всегда: при `enable_seqscan = off`
-  // берётся Bitmap Index Scan по нему. А `chosen` решает ДОЛЯ корпуса в таблице:
-  //   • корпус занимает `entities` целиком (прогон сразу после `truncateAll`, доля ≈ 100 %) —
-  //     `owner_id = auth.uid()` отбирает все строки, seq scan дешевле, индекс не выбирается ни
-  //     под ролью, ни под админом;
-  //   • в таблице лежат и соседние перф-корпуса (graph 50k после `test:perf:explain`, доля
-  //     ≈ 30 %) — предикат становится селективным, и тот же индекс ВЫБИРАЕТСЯ обоими.
-  // Замерено живьём 09.09: 23 712/23 712 → `chosen=false admin=false`; 23 712/76 750 →
-  // `chosen=true admin=true`. Для решения об индексе вывод один и он важнее обеих строк:
-  // `entities_owner_updated` НУЖЕН — в бою владельцев много, то есть режим второй, а не первый;
-  // первый — артефакт синтетики с единственным владельцем.
+
+  // ПЯТЫЙ вердикт — по форме ДВИЖКА (Ф-Б1-48б), и он переворачивает вывод предыдущего.
   //
-  // Пин поэтому идёт ОТ ДОЛИ, а не от «как получилось в прошлый раз»: пин на одну строку красил
-  // бы гейт при смене порядка перф-скриптов, а пин «любая из двух» пропустил бы настоящую
-  // перемену. Третий исход (доля в промежутке даёт не тот план) — законный повод покраснеть и
-  // дописать сюда третий режим.
+  // Приложение после Б-1 ходит `aspects @> ARRAY['orbis/budget']`, а это ровно та операция,
+  // которую GIN обслуживает: под АДМИНОМ план берёт `entities_aspects_gin` (480 строк, 26
+  // heap-блоков против Seq Scan по 23 712). Под ролью — нет, и причина названа в
+  // `explain.test.ts:27-38`: политика `owner_owns_row` приходит security qual'ом, а
+  // `arraycontains` не leakproof (`pg_proc.proleakproof = false`), поэтому индексным условием
+  // containment стать не может в принципе. То есть «сперва форма предиката, потом индекс»
+  // приложению НИЧЕГО не даёт — форма уже правильная, не пускает модель доступа. Тем же мерилом
+  // измерены и экспрессионные индексы пробы П2 (`props->>'orbis/period_*'`): `->>`
+  // (`jsonb_object_field_text`) тоже не leakproof, и под ролью у них нет `Index Cond` вовсе.
+  const qEngine = engineAspectEnvelopesQuery(period);
+  const idsEngine = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => [
+    ...((await tx.execute(qEngine)) as unknown as Array<{ id: string }>),
+  ]);
+  // Сторож копии: форма другая — множество то же самое, иначе вердикты сравнивались бы по разным
+  // запросам, а не по разным формам одного.
+  expect(idsEngine).toHaveLength(VOLUME_ENVELOPES_PER_MONTH);
+  expectVerdict(
+    await verdictFor(
+      'entities_aspects_gin',
+      qEngine,
+      'те же конверты месяца, форма ДВИЖКА (aspects @> ARRAY[…])',
+    ),
+    'chosen=false usable=false admin=true',
+  );
+
+  // `entities_owner_updated` — пин ИНВАРИАНТА, а не строки (Ф-Б1-48а; докблок `expectRlsNeutral`).
+  // Доля печатается как факт замера: она объясняет `chosen`, но гейтом не является.
   const share = await corpusShareOfEntities();
   console.log(
-    `explain: корпус занимает ${(share * 100).toFixed(0)} % таблицы entities —` +
-      ` режим «${share >= 0.9 ? 'единственный владелец' : 'таблица делится с соседями'}»`,
+    `explain: корпус занимает ${(share * 100).toFixed(0)} % таблицы entities` +
+      ' — доля объясняет chosen, но пином не является (Ф-Б1-48а)',
   );
-  expectVerdict(
+  expectRlsNeutral(
     await verdictFor(
       'entities_owner_updated',
       q,
-      `он же, частичный btree (owner_id, updated_at); доля корпуса ${(share * 100).toFixed(0)} %`,
+      `частичный btree (owner_id, updated_at); доля корпуса ${(share * 100).toFixed(0)} %`,
     ),
-    share >= 0.9 ? 'chosen=false usable=true admin=false' : 'chosen=true usable=true admin=true',
   );
 }, 300_000);
 
@@ -741,8 +874,16 @@ test('EXPLAIN под ролью: привязки конвертов берут 
 test('сводка EXPLAIN напечатана по всем снятым вердиктам', () => {
   // Список пинится целиком: вердикт, выпавший из прогона (тест переименовали, вызов потеряли),
   // иначе исчез бы из сводки молча, а сводка — это ВЕСЬ отчёт задачи об индексах.
+  // `entities_aspects_gin` стоит ДВАЖДЫ намеренно: две формы одного отбора (оракула и движка)
+  // дают РАЗНЫЕ вердикты, и именно эта пара — главный вход решения (Ф-Б1-48б).
   expect(verdicts.map((v) => v.index).sort()).toEqual(
-    ['entities_aspects_gin', 'entities_owner_updated', 'rel_uniq', 'relations_source_role'].sort(),
+    [
+      'entities_aspects_gin',
+      'entities_aspects_gin',
+      'entities_owner_updated',
+      'rel_uniq',
+      'relations_source_role',
+    ].sort(),
   );
   console.log('explain: СВОДКА ДЛЯ РЕШЕНИЯ ОБ ИНДЕКСАХ (вход 0019/Б-2, не Б-1)');
   for (const v of verdicts) {
@@ -752,12 +893,13 @@ test('сводка EXPLAIN напечатана по всем снятым ве�
     const why = v.chosen
       ? 'используется приложением'
       : v.usable
-        ? `приложением НЕ выбирается, но пригоден (при enable_seqscan=off берётся) — планировщик предпочёл другой доступ; под админ-DSN ${v.usableWithoutRls ? 'выбирается' : 'тоже не выбирается'}`
+        ? `под ролью НЕ выбирается, но пригоден (при enable_seqscan=off берётся) — планировщик предпочёл другой доступ; под админ-DSN ${v.usableWithoutRls ? 'выбирается' : 'тоже не выбирается'}`
         : v.usableWithoutRls
-          ? 'приложением НЕ используется: под ролью план другой (политика спрашивает больше колонок либо предикат не leakproof); под админ-DSN работает'
+          ? 'приложением НЕ используется, хотя запросу подходит: под ролью его не пускает модель доступа (предикат не leakproof либо политика спрашивает больше колонок); под админ-DSN работает'
           : 'форма запроса индексом не покрывается ни под какой ролью';
+    // Пометка печатается ВМЕСТЕ с именем: две строки одного индекса различает только она.
     console.log(
-      `  ${v.index}: chosen=${v.chosen} usable=${v.usable} admin=${v.usableWithoutRls} — ${why}`,
+      `  ${v.index} [${v.note}]: chosen=${v.chosen} usable=${v.usable} admin=${v.usableWithoutRls} — ${why}`,
     );
   }
 });
