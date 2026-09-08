@@ -21,8 +21,9 @@
 //                годами/месяцами/временем суток (кламп «31 января + 1 месяц» — правило, у которого
 //                в Б-1 нет ни одного потребителя-декларации: окна Budget задаются параметрами
 //                period_start/period_end/horizon_end, Р-К-4; в SQL кламп делает сам Postgres).
-import type { ResolvedBinding } from '@orbis/shared';
+import { addDays, daysInclusive, epochDays, type ResolvedBinding, toParts } from '@orbis/shared';
 import {
+  EXPR_DURATION_RE,
   EXPR_TREE_DEPTH_CAP,
   type ExprNode,
   type ExprOp,
@@ -201,6 +202,28 @@ function ev(node: ExprNode, scope: ExprEvalScope, depth: number): ExprValue {
       { role: node.agg_via.role, name: node.agg_via.name },
     );
   }
+  if ('date_add' in node) {
+    const [value, duration] = pair(node.date_add, scope, depth, 'date_add');
+    return addDuration(dateTextOf(value, 'date_add'), textOf(duration, 'date_add'));
+  }
+  if ('date_diff' in node) {
+    const [from, to] = pair(node.date_diff, scope, depth, 'date_diff');
+    return guarded(
+      'date_diff',
+      () =>
+        epochDays(toParts(calendarHead(dateTextOf(to, 'date_diff')))) -
+        epochDays(toParts(calendarHead(dateTextOf(from, 'date_diff')))),
+    );
+  }
+  if ('days_inclusive' in node) {
+    const [from, to] = pair(node.days_inclusive, scope, depth, 'days_inclusive');
+    return guarded('days_inclusive', () =>
+      daysInclusive(
+        calendarHead(dateTextOf(from, 'days_inclusive')),
+        calendarHead(dateTextOf(to, 'days_inclusive')),
+      ),
+    );
+  }
   if ('has' in node) return hasValue(node.has, scope);
   if ('op' in node) return applyOp(node.op, node.args, scope, depth);
   return fail('EXPR_VALUE', `неизвестная форма узла E: ${JSON.stringify(node)}`);
@@ -297,6 +320,17 @@ function applyOp(
       }
       return !decisive;
     }
+    case 'if': {
+      // §Б3-1: `if` — ВЫРАЖЕНИЕ, а не ветвление T. Плечи вычисляются ЛЕНИВО: `daily_pace` §Б5-4
+      // закрывает невзятым плечом деление на ноль (в закрытой фазе дней не осталось), и жадное
+      // вычисление обменяло бы null на отказ.
+      if (args.length !== 3) {
+        fail('EXPR_VALUE', `оператор 'if' ожидает ровно три аргумента`, { got: args.length });
+      }
+      return truthy(ev(args[0] as ExprNode, scope, d))
+        ? ev(args[1] as ExprNode, scope, d)
+        : ev(args[2] as ExprNode, scope, d);
+    }
     case 'not': {
       if (args.length !== 1) fail('EXPR_VALUE', `оператор 'not' ожидает ровно один аргумент`);
       return !truthy(ev(args[0] as ExprNode, scope, d));
@@ -379,4 +413,66 @@ function hasValue(name: string, scope: ExprEvalScope): boolean {
     if (name in binding.fixed) return true; // fixed — значение самой декларации, оно есть всегда
   }
   return scalarOf(scope.props[name], `свойства '${name}'`) !== null;
+}
+
+/**
+ * Разбор длительности НА КОМПОНЕНТЫ. ФОРМУ держит схема узла `{duration}` — `EXPR_DURATION_RE`
+ * (`expr/ast.ts`, задача 3), и проверяется она ею же, а не второй копией: та регулярка RE2-безопасна
+ * (перечисление вместо lookahead, Р-К-33), потому что уезжает в `exprJsonSchema` и дальше в схему тула,
+ * а здесь нужен только разбор на части. Эта регулярка — надмножество схемной: всё, что схема приняла,
+ * она разложит; мост «схема принимает — бэкенд считает или отказывает названной причиной» запинен тестом.
+ */
+const DURATION_PARTS_RE = /^P(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(\d+H)?(\d+M)?(\d+S)?)?$/;
+
+function pair(
+  args: readonly [ExprNode, ExprNode],
+  scope: ExprEvalScope,
+  depth: number,
+  what: string,
+): [ExprValue, ExprValue] {
+  if (args.length !== 2) fail('EXPR_VALUE', `'${what}' ожидает ровно два аргумента`);
+  return [ev(args[0], scope, depth + 1), ev(args[1], scope, depth + 1)];
+}
+
+function textOf(value: ExprValue, what: string): string {
+  if (typeof value !== 'string') fail('EXPR_ARITH', `'${what}': операнд не текст`, { value });
+  return value;
+}
+
+function dateTextOf(value: ExprValue, what: string): string {
+  // §Б3-4: календарь над ОТСУТСТВУЮЩЕЙ датой — не «сегодня» и не null, а отказ: тотальность такой
+  // формулы обязан был проверить чекер при сохранении (`EXPR_NOT_TOTAL`).
+  if (value === null) fail('EXPR_ARITH', `'${what}': дата отсутствует`);
+  return textOf(value, what);
+}
+
+/** Календарный день у даты и у момента — одни и те же первые десять символов (`date.ts`). */
+function calendarHead(value: string): string {
+  return value.slice(0, 10);
+}
+
+/**
+ * `date_add` этого бэкенда — ДНЕВНОЙ гранулярности: недели и дни считает `addDays` (civil-алгоритм
+ * `date.ts`), у момента сдвигается календарная голова, хвост (время и смещение зоны) остаётся как
+ * был. Годы, месяцы и время суток — отказ, и это названный остаток с причиной: «31 января + 1 месяц»
+ * требует ПРАВИЛА клампа, у которого в Б-1 нет ни одного потребителя-декларации (окна Budget задаются
+ * параметрами `period_start`/`period_end`/`horizon_end` — Р-К-4, §Б5-4), а выбирать правило без
+ * случая, который его проверяет, — это молча решить за владельца. В SQL-бэкенде кламп делает Postgres
+ * (`+ interval`), и второе, отличающееся правило здесь было бы хуже отказа.
+ */
+function addDuration(value: string, duration: string): string {
+  if (!EXPR_DURATION_RE.test(duration)) {
+    fail('EXPR_ARITH', `не ISO 8601 длительность: "${duration}"`);
+  }
+  const match = DURATION_PARTS_RE.exec(duration);
+  if (match === null) fail('EXPR_ARITH', `не ISO 8601 длительность: "${duration}"`);
+  const [, years, months, weeks, days, time] = match;
+  if (years !== undefined || months !== undefined || time !== undefined) {
+    fail('EXPR_BACKEND_UNSUPPORTED', `date_add с годами/месяцами/временем суток: "${duration}"`, {
+      duration,
+    });
+  }
+  const shift = 7 * Number(weeks?.slice(0, -1) ?? 0) + Number(days?.slice(0, -1) ?? 0);
+  const head = calendarHead(value);
+  return guarded('date_add', () => `${addDays(head, shift)}${value.slice(10)}`);
 }

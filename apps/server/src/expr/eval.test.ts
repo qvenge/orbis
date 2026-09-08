@@ -4,9 +4,14 @@
 // `budget/aggregates.ts` (:346, :367, :369-372, :394-396), они переписаны здесь дословно, а не
 // импортированы: `aggregates.ts` тянет за собой db/client и executor, а сверять надо АРИФМЕТИКУ.
 import { describe, expect, test } from 'bun:test';
-import type { ResolvedBinding } from '@orbis/shared';
-import { EXPR_TREE_DEPTH_CAP, type ExprNode, type ExprScalar } from '@orbis/shared/expr';
-import { decDivBy } from '../budget/decimal';
+import { daysInclusive, type ResolvedBinding } from '@orbis/shared';
+import {
+  EXPR_TREE_DEPTH_CAP,
+  type ExprNode,
+  type ExprScalar,
+  exprNodeSchema,
+} from '@orbis/shared/expr';
+import { decAdd, decCmp, decDivBy, decMulInt, decSub } from '../budget/decimal';
 import { ExecError } from '../errors';
 import { type ExprEvalScope, evalExpr } from './eval';
 
@@ -372,5 +377,239 @@ describe('evalExpr: умолчание реестра — семантика Ч�
     const s = scopeOf({ props: {}, binding: MOVEMENT_BINDING });
     expect(evalExpr({ slot: 'planned' }, s)).toBeNull();
     expect(evalExpr({ op: '=', args: [{ slot: 'planned' }, { const: false }] }, s)).toBe(false);
+  });
+});
+
+describe('evalExpr: арифметика дат (§Б3-2: date_add / date_diff / days_inclusive)', () => {
+  test('date_diff — знаковое число дней ОТ первой даты К второй (тот же порядок, что у days_inclusive)', () => {
+    expect(
+      evalExpr({ date_diff: [{ const: '2026-05-01' }, { const: '2026-05-31' }] }, scopeOf()),
+    ).toBe(30);
+    expect(
+      evalExpr({ date_diff: [{ const: '2026-05-31' }, { const: '2026-05-01' }] }, scopeOf()),
+    ).toBe(-30);
+    expect(evalExpr({ date_diff: [{ ctx: '$today' }, { ctx: '$today' }] }, scopeOf())).toBe(0);
+  });
+
+  test('days_inclusive — ТА ЖЕ функция, что у Budget: одна календарная арифметика', () => {
+    expect(
+      evalExpr({ days_inclusive: [{ ctx: '$today' }, { const: '2026-05-31' }] }, scopeOf()),
+    ).toBe(daysInclusive(TODAY, '2026-05-31'));
+    expect(
+      evalExpr({ days_inclusive: [{ const: '2026-05-31' }, { ctx: '$today' }] }, scopeOf()),
+    ).toBe(0);
+  });
+
+  test('date_add дневной гранулярности: дни и недели; у момента сдвигается календарная голова', () => {
+    expect(evalExpr({ date_add: [{ const: '2026-05-15' }, { duration: 'P1D' }] }, scopeOf())).toBe(
+      '2026-05-16',
+    );
+    expect(evalExpr({ date_add: [{ const: '2026-02-28' }, { duration: 'P1D' }] }, scopeOf())).toBe(
+      '2026-03-01',
+    );
+    expect(evalExpr({ date_add: [{ const: '2026-05-15' }, { duration: 'P2W' }] }, scopeOf())).toBe(
+      '2026-05-29',
+    );
+    expect(
+      evalExpr({ date_add: [{ const: '2026-05-15T09:30:00Z' }, { duration: 'P1D' }] }, scopeOf()),
+    ).toBe('2026-05-16T09:30:00Z');
+  });
+
+  test('годы, месяцы и время суток этот бэкенд не сдвигает — отказ с причиной, а не тихий результат', () => {
+    for (const duration of ['P1M', 'P1Y', 'PT1H', 'P1DT12H']) {
+      expect(
+        `${duration}: ${reasonOf(() => evalExpr({ date_add: [{ const: '2026-05-15' }, { duration }] }, scopeOf()))}`,
+      ).toBe(`${duration}: VALIDATION/EXPR_BACKEND_UNSUPPORTED`);
+    }
+  });
+
+  test('что схема узла принимает, то бэкенд либо считает, либо отказывает названной причиной', () => {
+    // Пин против расхождения разбора длительности с формой схемы (`expr/ast.ts`, задача 3).
+    expect(exprNodeSchema.safeParse({ duration: 'P1D' }).success).toBe(true);
+    expect(exprNodeSchema.safeParse({ duration: 'P' }).success).toBe(false);
+    expect(
+      reasonOf(() =>
+        evalExpr({ date_add: [{ const: '2026-05-15' }, { duration: 'P' }] }, scopeOf()),
+      ),
+    ).toBe('VALIDATION/EXPR_ARITH');
+  });
+
+  test('несуществующая дата и отсутствующий операнд — EXPR_ARITH, а не тихая нормализация', () => {
+    expect(
+      reasonOf(() =>
+        evalExpr({ days_inclusive: [{ const: '2026-02-30' }, { ctx: '$today' }] }, scopeOf()),
+      ),
+    ).toBe('VALIDATION/EXPR_ARITH');
+    expect(
+      reasonOf(() =>
+        evalExpr({ date_diff: [{ prop: 'orbis/due_date' }, { ctx: '$today' }] }, scopeOf()),
+      ),
+    ).toBe('VALIDATION/EXPR_ARITH');
+  });
+});
+
+/** Декларации §Б5-4 в каноне §Б3-5 — ровно то, что сеет задача 9 (эталон П2 поправлен: строки, слоты). */
+const EFFECTIVE_LIMIT: ExprNode = {
+  op: '+',
+  args: [
+    { slot: 'limit' },
+    { op: 'if', args: [{ has: 'carryover' }, { slot: 'carryover' }, { const: '0' }] },
+  ],
+};
+const REMAINING: ExprNode = { op: '-', args: [{ agg: 'effective_limit' }, { agg: 'spent' }] };
+const DAILY_PACE: ExprNode = {
+  op: 'if',
+  args: [
+    {
+      op: 'and',
+      args: [{ phase: 'active' }, { op: '>=', args: [{ agg: 'remaining' }, { const: '0' }] }],
+    },
+    {
+      op: '/',
+      args: [{ agg: 'remaining' }, { days_inclusive: [{ ctx: '$today' }, { slot: 'period_end' }] }],
+    },
+    { const: null },
+  ],
+};
+const ALERT: ExprNode = {
+  op: '>=',
+  args: [{ agg: 'spent' }, { op: '*', args: [{ agg: 'effective_limit' }, { const: '0.85' }] }],
+};
+
+describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates.ts', () => {
+  const ENVELOPES = [
+    {
+      name: 'активный с carryover',
+      limit: '30000.00',
+      carryover: '1200.00',
+      spent: '2680.00',
+      periodEnd: '2026-05-31',
+      phase: 'active',
+    },
+    {
+      name: 'без carryover',
+      limit: '30000.00',
+      carryover: undefined,
+      spent: '2680.00',
+      periodEnd: '2026-05-31',
+      phase: 'active',
+    },
+    {
+      name: 'отрицательный carryover (§2.6)',
+      limit: '30000.00',
+      carryover: '-800.00',
+      spent: '29500.00',
+      periodEnd: '2026-05-31',
+      phase: 'active',
+    },
+    {
+      name: 'перерасход — pace null',
+      limit: '1000.00',
+      carryover: undefined,
+      spent: '1500.00',
+      periodEnd: '2026-05-31',
+      phase: 'active',
+    },
+    {
+      name: 'закрытый период',
+      limit: '1000.00',
+      carryover: undefined,
+      spent: '500.00',
+      periodEnd: '2026-04-30',
+      phase: 'closed',
+    },
+    {
+      name: 'upcoming',
+      limit: '1000.00',
+      carryover: undefined,
+      spent: '0.00',
+      periodEnd: '2026-06-30',
+      phase: 'upcoming',
+    },
+    {
+      name: 'ровно 85 % — бейдж включительно',
+      limit: '1000.00',
+      carryover: undefined,
+      spent: '850.00',
+      periodEnd: '2026-05-31',
+      phase: 'active',
+    },
+    {
+      name: 'копеечный лимит: 0.85 умножить на 100.01 = 85.0085',
+      limit: '100.01',
+      carryover: undefined,
+      spent: '85.01',
+      periodEnd: '2026-05-31',
+      phase: 'active',
+    },
+    {
+      name: 'последний день периода — делитель 1',
+      limit: '1000.00',
+      carryover: undefined,
+      spent: '100.00',
+      periodEnd: TODAY,
+      phase: 'active',
+    },
+  ] as const;
+
+  for (const env of ENVELOPES) {
+    test(`${env.name}: effective_limit / remaining / daily_pace / порог alerts`, () => {
+      const props: Record<string, unknown> = {
+        'orbis/limit': env.limit,
+        'orbis/period_end': env.periodEnd,
+      };
+      if (env.carryover !== undefined) props['orbis/carryover'] = env.carryover;
+      const base = scopeOf({ props, binding: ENVELOPE_BINDING, phase: env.phase });
+
+      // Эталон aggregates.ts:346 — дословно, включая подстановку '0' на нестроку (Р-К-13: после
+      // среза А валидатор не пускает нестроку в decimal-свойство, ветка недостижима).
+      const oracleLimit = decAdd(
+        env.limit,
+        typeof env.carryover === 'string' ? env.carryover : '0',
+      );
+      expect(`${env.name}: ${String(evalExpr(EFFECTIVE_LIMIT, base))}`).toBe(
+        `${env.name}: ${oracleLimit}`,
+      );
+
+      // Эталон aggregates.ts:367
+      const withLimit = { ...base, aggs: { spent: env.spent, effective_limit: oracleLimit } };
+      const oracleRemaining = decSub(oracleLimit, env.spent);
+      expect(`${env.name}: ${String(evalExpr(REMAINING, withLimit))}`).toBe(
+        `${env.name}: ${oracleRemaining}`,
+      );
+
+      // Эталон aggregates.ts:369-372. Закрытая фаза — гейт ЛЕНИВОСТИ `if`: days_inclusive(today,
+      // period_end) там равен 0, и посчитайся плечо жадно, было бы деление на ноль вместо null.
+      const withRemaining = {
+        ...withLimit,
+        aggs: { ...withLimit.aggs, remaining: oracleRemaining },
+      };
+      const oraclePace =
+        env.phase === 'active' && decCmp(oracleRemaining, '0') >= 0
+          ? decDivBy(oracleRemaining, daysInclusive(TODAY, env.periodEnd))
+          : null;
+      expect(`${env.name}: ${String(evalExpr(DAILY_PACE, withRemaining))}`).toBe(
+        `${env.name}: ${String(oraclePace)}`,
+      );
+
+      // Эталон aggregates.ts:394-396 (порог 0.85 ВКЛЮЧИТЕЛЬНО, sign-off владельца 2026-07-23)
+      const oracleAlert = decCmp(decMulInt(env.spent, 20), decMulInt(oracleLimit, 17)) >= 0;
+      expect(`${env.name}: ${String(evalExpr(ALERT, withRemaining))}`).toBe(
+        `${env.name}: ${String(oracleAlert)}`,
+      );
+    });
+  }
+
+  test('плечо `if` считается ТОЛЬКО выбранное: невзятое может быть невычислимым', () => {
+    const bomb: ExprNode = { op: '/', args: [{ const: '1' }, { const: 0 }] };
+    expect(evalExpr({ op: 'if', args: [{ const: true }, { const: 'ок' }, bomb] }, scopeOf())).toBe(
+      'ок',
+    );
+    expect(evalExpr({ op: 'if', args: [{ const: false }, bomb, { const: 'ок' }] }, scopeOf())).toBe(
+      'ок',
+    );
+    expect(
+      reasonOf(() => evalExpr({ op: 'if', args: [{ const: true }, { const: 1 }] }, scopeOf())),
+    ).toBe('VALIDATION/EXPR_VALUE');
   });
 });
