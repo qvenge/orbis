@@ -14766,7 +14766,7 @@ function divergencesOf(oracle: BudgetOverview, engine: BudgetOverview, month: st
 let reg: RegistrySnapshot;
 let budgetDef: BudgetSubscription;
 reg = await withIdentity(db, VOLUME_OWNER_ID, (tx) => effectiveRegistry(tx, VOLUME_OWNER_ID));
-const def = builtinSubscription(reg, 'orbis/budget-overview');
+const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID); // эррата 12: константа уже в шапке файла с задачи 9 — не литерал
 // Сужение объединения: подписка не той машинки — не «пустой Overview», а остановка прогона.
 if (def.engine !== 'budget') throw new Error(`подписка orbis/budget-overview не бюджетная: ${def.engine}`);
 budgetDef = def;
@@ -14859,13 +14859,13 @@ test('холодный корпус: p95 без кэша spent записыва�
 
 - [ ] **Шаг 11: красный — трёхзначный EXPLAIN-вердикт по горячим запросам Budget.**
 ```ts
-test('EXPLAIN под ролью: GIN по аспектам недостижим, btree по владельцу бесполезен', async () => {
+test('EXPLAIN под ролью: GIN по аспектам недостижим (форма `= ANY`, не RLS), btree по владельцу — по доле корпуса', async () => { // эррата 12: заголовок под факт
   const period = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
     const { oracle } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
     return oracle.period;               // границы месяца считает сам оракул — копии календаря нет
   });
   const q = envelopesOfMonthQuery(period);
-  // Сторож копии: запрос списан с `aggregates.ts:418-429` и без этой строки мог бы разъехаться с
+  // Сторож копии: запрос списан с `aggregates.ts:398-414` (эррата 12: адрес после задач 9–11) и без этой строки мог бы разъехаться с
   // боевым молча — тогда вердикт был бы вердиктом о другом запросе.
   const ids = await withIdentity(db, VOLUME_OWNER_ID, async (tx) =>
     [...((await tx.execute(q)) as unknown as Array<{ id: string }>)]);
@@ -14880,7 +14880,7 @@ test('EXPLAIN под ролью: привязки конвертов берут 
   const q = bindingsOfEnvelopesQuery(ids);
   const rows = await withIdentity(db, VOLUME_OWNER_ID, async (tx) =>
     [...((await tx.execute(q)) as unknown as Array<{ count: string }>)]);
-  expect(Number(rows[0]?.count)).toBe(fixture.bindings);   // сторож копии: столько же, сколько насеяла 0c
+  expect(Number(rows[0]?.count) - probeBound).toBe(fixture.bindings); // эррата 12: пробы Р-К-2 (100 через исполнитель раньше по файлу) хук привязывает к тем же конвертам — вклад проб считается отдельным запросом и вычитается
   expectVerdict(await verdictFor('relations_source_role', q, `привязки 480 конвертов, роль ${ROLE_ENVELOPE_BINDING}`), 'chosen=true usable=true admin=true');
 }, 300_000);
 ```
@@ -14948,7 +14948,7 @@ function expectVerdict(v: Verdict, expected: string): void {
 }
 
 /**
- * Конверты месяца — запрос СПИСАН с `aggregates.ts:418-429` (`rawEnvelopesOfMonth` приватна, а
+ * Конверты месяца — запрос СПИСАН с `aggregates.ts:398-414` (эррата 12; `rawEnvelopesOfMonth` приватна, а
  * экспортировать её ради EXPLAIN значило бы править оракул — РП-4 запрещает). Копия привязана к
  * оригиналу сторожем в тесте: она обязана вернуть ровно те же 40 конвертов месяца.
  */
@@ -14961,7 +14961,7 @@ function envelopesOfMonthQuery(period: { start: string; end: string }): SQL {
 }
 
 /**
- * Доступ к `relations` в `spentByEnvelope` (`aggregates.ts:194-210`) — ровно два предиката, и они
+ * Доступ к `relations` в `spentByEnvelope` (`aggregates.ts:215-232`, эррата 12) — ровно два предиката, и они
  * решают выбор индекса: роль и `source_id IN (…)`. Фильтры по `entities` не переносятся
  * намеренно: выбор индекса ПО `relations` они не меняют, а джойн с `entities` и предикат
  * шаблонности сделали бы вердикт вердиктом о ДРУГОМ запросе. Сам предикат —
@@ -14978,6 +14978,18 @@ function bindingsOfEnvelopesQuery(envelopeIds: readonly string[]): SQL {
   `fixture` — результат `ensureVolumeFixture()` из `beforeAll` (если 0c его не сохраняет — завести
   `let fixture` рядом с `reg`). PASS (или пересдача пина по факту — шаг 11). Коммит:
   `test(perf): трёхзначный EXPLAIN-вердикт по горячим запросам Budget под ролью приложения (§С8-10)`.
+
+> **Эррата по исполнению 12 (09.09).** Все три предсказания брифа об индексах опровергнуты живым EXPLAIN и пересданы по факту:
+> `entities_aspects_gin` недостижим из-за ФОРМЫ предиката (`= ANY(aspects)` — не GIN-операция), а не из-за RLS; `entities_owner_updated`
+> выбирается планировщиком в зависимости от ДОЛИ корпуса в `entities` (переключение между 50 и 60 %; `test:perf` перед `test:perf:volume`
+> даёт 89 %) — пин НЕ порогом доли, а инвариантом «`usable === true` и `chosen под ролью === chosen под админом`» (гейт I-1, Ф-Б1-48а);
+> `relations_source_role` под ролью проигрывает `rel_uniq` (политика спрашивает оба конца) — заведён ЧЕТВЁРТЫЙ вердикт `rel_uniq`, без него
+> сводка утверждала бы «запрос не обслужен»; ПЯТЫЙ вердикт — по форме ДВИЖКА `aspects @> ARRAY[…]`: GIN берётся под админом и не берётся
+> под ролью (`arraycontains` не leakproof) — довод «`= ANY` лечится предикатом» неверен для пути приложения (гейт I-2, Ф-Б1-48б).
+> Ветки сводки читают все три флага (иначе «форма не покрывается» печаталось бы и для пригодного индекса); подписи порогов — из
+> констант `VOLUME_BUDGETS`. Относительный порог — p95 ≤ 2 × p95 оракула по букве спеки; серии движка и оракула чередуются, N = 40
+> (Ф-Б1-47). **Ответ на В-П-4: индекс 0019 не нужен — по числам (движок 271–330 мс против 500), не по доводу.** Машина замеров — Intel
+> Core i7-9750H (запись 0c «Apple Silicon» неточна). Шапка файла держит диапазон по всем прогонам, не точку (Ф-Б1-48г).
 
 - [ ] **Шаг 13: сводка вердиктов одним местом.**
 ```ts
@@ -20874,6 +20886,14 @@ test('носителя шима контрактов в дереве нет: ф�
 `autoDeploy: false`) → приёмка. Врезка «чего в этом срезе НЕТ»: разрушающего пересева мира,
 второй миграции, правки промптов v5 (линейка `v6` едет кодом).
 Коммит шагов 18–19: `docs(implementation): карта реализации и runbook — девятнадцать таблиц, disabled_modules, чек-лист деплоя Б-1`.
+
+> **Эррата (задачи 11–12, 09.09) к реестру остатков шага 20.** Дописать: `agenda:horizon` в `perf/perf.test.ts` меряет дореформенный
+> `AGENDA_WINDOW_TEXT_PRE_B1` (I7) — перевод на движок Agenda; эталон §С8-15 после смерти оракула `computeOverview` в Б-2 (В-П-2, Ф-Б1-47);
+> сторож копии запроса по числу строк слеп к дрейфу боевого запроса при 0 архивных конвертов (12-m-3); четыре словаря снимка
+> (properties/aspects/roles/contracts) читаются без вторичного `ORDER BY` — порядок внутри группы недетерминирован (11-m-load-order);
+> селектор конверта не обобщён (Р-К-50, 11-oos-selector); `invalidateSpentCacheOfOwner` на любом undo — полный холодный пересчёт
+> (11-oos-undo-full); паритет `isTemplate`/`templateSql` (11-m-5); рунбук `02-ops-runbook.md` описывает перф-полосу только через §С8-15
+> (11-m-runbook — правится вместе с чек-листом деплоя этой задачи).
 
 - [ ] **Шаг 20: именованные остатки среза (правило 5 §С1-4).** Над `computeOverview`
 (`apps/server/src/budget/aggregates.ts:446`) — докблок «почему кодом», без него остаток безымянный:
