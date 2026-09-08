@@ -29,6 +29,7 @@ import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
+import { reconfiguresOf } from '../policy/confirmation';
 import { approvePending } from '../policy/pending';
 import type { RegistrySnapshot } from '../registry/load';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -4780,6 +4781,89 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Ни единицы в пачке, ни дельты в реестре: «не откладывается никогда».
     expect(await pendingsOf(owner, threadId)).toHaveLength(0);
     expect(await deltaRowsOf(owner)).toBe(0);
+  });
+
+  test('ряд 3 для НОВЫХ объектов: привязка встроенного аспекта фону не откладывается, привязка своего — откладывается', async () => {
+    // Тулов привязки ещё нет (задача 15) — рубеж проверяется ПРЯМЫМ вызовом, ровно как
+    // `routineGate` и связи выше: рубеж, который никто не проверил, — это рубеж, которого нет.
+    // Диспатч доведёт до него сам, как только тул появится: уровень `system-object` поднимает
+    // ряд 4a до explicit, а `level !== 'execute'` включает пре-чек.
+    const owner = freshUserId();
+    const ctx = ctxFor({ actorUserId: owner, actorKind: 'agent', source: 'routine' });
+    const forbidden = async (tool: string, input: Record<string, unknown>) =>
+      routineDeferForbidden(
+        ctx,
+        [{ tool, input }],
+        { grantsAutonomy: false, reconfigures: reconfiguresOf(tool, input) },
+        [],
+      );
+
+    for (const [tool, input] of [
+      ['aspect_implements_set', { aspect: 'orbis/task', implements: [] }],
+      ['aspect_implements_remove', { aspect: 'orbis/financial', contract: 'orbis/money-movement' }],
+    ] as const) {
+      const message = await forbidden(tool, input);
+      expect([tool, message]).toEqual([
+        tool,
+        expect.stringContaining('перенастройка системного объекта'),
+      ]);
+      // Выход назван в самом отказе — иначе агент чинил бы не то.
+      expect(message).toContain('orbis_ask');
+      // …и объект назван так, как его видит владелец, а не одним словом «аспект».
+      expect(message).toContain('привязка встроенного аспекта');
+    }
+    // Привязка СВОЕГО аспекта — штатная отложенная единица: объект владельца, и рутина вправе
+    // предложить правку (§С2-1 ряд 1 против ряда 3).
+    expect(
+      await forbidden('aspect_implements_set', { aspect: 'user/sleep-log', implements: [] }),
+    ).toBeNull();
+    // Набор поверх ВСТРОЕННОГО контракта — тоже откладывается: ряд задаёт тул (Р9).
+    expect(
+      await forbidden('contract_sets_delta_set', { contract: 'orbis/completable', setsDelta: {} }),
+    ).toBeNull();
+    expect(
+      await forbidden('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: {},
+      }),
+    ).toBeNull();
+  });
+
+  test('ряд 2 живьём: aspect_delta_set с картой классов поверх ВСТРОЕННОГО аспекта от рутины → отложенная единица, а не запрет', async () => {
+    // Р9 в одном тесте: та же цель, тот же тул, разное содержимое правки — и разный исход.
+    // Карта классов это ПОВЕДЕНИЕ («какие значения считаются закрытыми»), а не системный объект;
+    // адресное правило дало бы запрет по объекту и закрыло бы садовнику §Б5-2 законный путь.
+    const owner = freshUserId();
+    const { ctx, threadId } = await gardener(owner, ['aspect_delta_set']);
+    const r = await dispatchTool(ctx, 'aspect_delta_set', {
+      aspect: 'orbis/task',
+      delta: {
+        classMap: {
+          'orbis/task_status': [
+            { contract: 'orbis/completable', slot: 'status', variant: 'planned', class: 'active' },
+          ],
+        },
+      },
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица');
+    }
+    expect(r.card.summary).toBe('Настройка аспекта «Задача»');
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+    // До решения владельца реестр не тронут. «Принять» здесь НЕ жмём намеренно: исполнение
+    // классовой дельты — территория задачи 13 (там же её тесты `ops.test.ts`), а этот тест
+    // про УРОВЕНЬ, и лишний прогон операции сделал бы его падение двусмысленным.
+    expect(await deltaRowsOf(owner)).toBe(0);
+
+    // Та же цель, правка ПОДПИСИ — прежний запрет по объекту: Р9 сдвинул ровно одну ветку.
+    const label = await dispatchTool(ctx, 'aspect_delta_set', {
+      aspect: 'orbis/task',
+      delta: { label: { ru: 'Дела' } },
+    });
+    expectError(label, 'FORBIDDEN_LEVEL');
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
   });
 
   test('тот же aspect_delta_set из ЧАТА → карточка-запрос, а не молчаливое исполнение', async () => {
