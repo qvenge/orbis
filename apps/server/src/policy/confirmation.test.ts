@@ -723,6 +723,43 @@ describe('§С2-1: перенастраивает поверхность или 
         'system-object',
       ],
       [
+        // Непустота меряется СОДЕРЖИМЫМ, а не наличием ключа свойства: обе формы ниже схема
+        // дельты принимает, а поведения они не меняют. Запись при этом ставит дельту ЦЕЛИКОМ
+        // (`DO UPDATE SET delta = EXCLUDED.delta`), то есть «Принять все» стёрло бы прежнюю
+        // настройку встроенного аспекта, не изменив ни одного варианта.
+        '7г. selectOptions с пустым патчем свойства — ряд по ОБЪЕКТУ',
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { selectOptions: { 'orbis/task_status': {} } } },
+        'system-object',
+      ],
+      [
+        '7д. selectOptions с пустым add — тот же ответ',
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { selectOptions: { 'orbis/task_status': { add: [] } } } },
+        'system-object',
+      ],
+      [
+        '7е. classMap с пустым списком отнесений — ряд по ОБЪЕКТУ',
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { classMap: { 'orbis/task_status': [] } } },
+        'system-object',
+      ],
+      [
+        '5д. один добавленный вариант — уже ряд 2 (граница снизу)',
+        'aspect_delta_set',
+        {
+          aspect: 'orbis/task',
+          delta: {
+            selectOptions: {
+              'orbis/task_status': {
+                add: [{ key: 'in_review', label: { ru: 'На ревью' }, rank: 45 }],
+              },
+            },
+          },
+        },
+        'behavior-delta',
+      ],
+      [
         '5г. свой аспект остаётся ряд 2 и со смешанной дельтой — там решает адрес',
         'aspect_delta_set',
         { aspect: 'user/sleep-log', delta: { label: { ru: 'Сон' }, classMap: {} } },

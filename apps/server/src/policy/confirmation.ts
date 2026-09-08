@@ -241,6 +241,42 @@ function ownRegistryAddress(value: unknown): boolean {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Два поля дельты, состав которых и есть «перенастройка поведения» (§Б2-2, Ф-Б1-50). */
+const BEHAVIOR_DELTA_KEYS: ReadonlySet<string> = new Set(['selectOptions', 'classMap']);
+
+/**
+ * Несёт ли поле дельты хоть одно РЕАЛЬНОЕ изменение состава — вариант в `selectOptions.<свойство>.add`
+ * или пару «вариант → класс» в `classMap.<свойство>[]`.
+ *
+ * Считается СОДЕРЖИМОЕ, а не наличие ключа свойства: `{'orbis/task_status': {}}` и
+ * `{'orbis/task_status': []}` схема дельты принимает, а поведения они не меняют ни на йоту.
+ */
+function carriesVariants(field: unknown): boolean {
+  if (!isRecord(field)) return false;
+  return Object.values(field).some((value) =>
+    Array.isArray(value)
+      ? value.length > 0 // classMap: список отнесений свойства
+      : isRecord(value) && Array.isArray(value.add) && value.add.length > 0,
+  );
+}
+
+/**
+ * Дельта аспекта, которая НЕ НЕСЁТ НИЧЕГО, кроме непустого состава вариантов и их отнесения к
+ * классам (Ф-Б1-50). Ровно на такой дельте ряд §С2-1 определяется ТУЛОМ, а не адресом объекта —
+ * довод в докблоке `reconfiguresOf` ниже.
+ *
+ * ПОЧЕМУ «НЕПУСТОГО» ЗДЕСЬ ВАЖНЕЕ, ЧЕМ КАЖЕТСЯ: `setAspectDelta` пишет дельту ЦЕЛИКОМ
+ * (`DO UPDATE SET delta = EXCLUDED.delta`), поэтому вызов с пустым по содержимому `selectOptions`
+ * СТИРАЕТ прежнюю настройку встроенного аспекта, не изменив ни одного варианта. Пропустив такую
+ * форму на ряд 2, замок по объекту снимался бы жестом, который ничего не настраивает.
+ */
+function behaviorOnlyDelta(delta: unknown): boolean {
+  if (!isRecord(delta)) return false;
+  const keys = Object.keys(delta);
+  if (keys.length === 0 || !keys.every((k) => BEHAVIOR_DELTA_KEYS.has(k))) return false;
+  return keys.some((k) => carriesVariants(delta[k]));
+}
+
 /**
  * ЧТО ОДНА ОПЕРАЦИЯ ПЕРЕНАСТРАИВАЕТ В СИСТЕМЕ (§С2-1) — по имени тула и АДРЕСУ ОБЪЕКТА.
  *
@@ -289,20 +325,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * действия вообще отменяемы моделью, — и разбор ушёл владельцу. Фону путь закрыт:
  * `undo_last` в `ROUTINE_CLOSED_TOOLS` (`tools/registry.ts`).
  */
-/**
- * Дельта аспекта, которая НЕ НЕСЁТ НИЧЕГО, кроме непустого состава вариантов и их отнесения к
- * классам (Ф-Б1-50). Ровно на такой дельте ряд §С2-1 определяется ТУЛОМ, а не адресом объекта:
- * см. довод в `reconfiguresOf`.
- */
-const BEHAVIOR_DELTA_KEYS: ReadonlySet<string> = new Set(['selectOptions', 'classMap']);
-function behaviorOnlyDelta(delta: unknown): boolean {
-  if (!isRecord(delta)) return false;
-  const keys = Object.keys(delta);
-  if (keys.length === 0 || !keys.every((k) => BEHAVIOR_DELTA_KEYS.has(k))) return false;
-  // Непустым обязано быть хоть одно из полей: `{selectOptions: {}}` меняет ровно ничего.
-  return keys.some((k) => isRecord(delta[k]) && Object.keys(delta[k] as object).length > 0);
-}
-
 export function reconfiguresOf(tool: string, input: unknown): Reconfigures {
   if (!REGISTRY_TOOL_NAMES.has(tool)) return 'none';
   // Форма проверяется защитно: сюда доезжает уже envelope-валидированный payload (тот же
@@ -339,11 +361,13 @@ export function reconfiguresOf(tool: string, input: unknown): Reconfigures {
       //
       // И ТОЛЬКО КОГДА ДЕЛЬТА НЕСЁТ ЭТО И БОЛЬШЕ НИЧЕГО (Ф-Б1-50). Послабление ряда — плата за
       // перенастройку поведения, а не пропуск для всего, что приехало в том же объекте: с
-      // проверкой «есть такой ключ» рутина добавляла бы пустой `selectOptions: {}` к
-      // переименованию встроенного аспекта, и запрет по объекту превращался бы в отложенную
+      // проверкой «есть такой ключ» рутина добавляла бы к переименованию встроенного аспекта
+      // поле, которое ничего не меняет, и запрет по объекту превращался бы в отложенную
       // единицу — `routineDeferForbidden` (`tools/dispatch.ts`) фону `system-object` не
       // откладывает, а `behavior-delta` откладывает, и «Принять все» снимало бы замок мимоходом.
-      // Пустые карты тоже не в счёт: поведения они не меняют. Fail-closed — сомнительная форма
+      // Непустота меряется СОДЕРЖИМЫМ (`carriesVariants`): `{selectOptions: {}}`,
+      // `{selectOptions: {'orbis/task_status': {}}}` и `{classMap: {'orbis/task_status': []}}` —
+      // все три законны по схеме и все три поведения не меняют. Fail-closed: сомнительная форма
       // уходит на ряд по объекту.
       if (behaviorOnlyDelta(input.delta)) return 'behavior-delta';
       return ownRegistryAddress(input.aspect) ? 'behavior-delta' : 'system-object';
