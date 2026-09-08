@@ -30,6 +30,9 @@ import {
   GATE_AMOUNT,
   GATE_ASPECT_KEYS,
   GATE_FIN_ASPECT,
+  GATE_GREP_ALLOWED,
+  GATE_GREP_PATHSPEC,
+  GATE_GREP_TOKENS,
   GATE_PLAIN_ASPECT,
   GATE_PROPS,
   type GateWorld,
@@ -68,6 +71,24 @@ describe('гейт §С8-18: доказательства вехи I', () => {
     const marks = ['failing', 'todo'].join('|');
     const pattern = `\\b(test|it|describe)\\.(${marks})\\b`;
     expect(gitGrep(pattern, ['apps', 'packages', 'scripts'])).toEqual([]);
+  });
+
+  test('токены аспектов гейта не встречаются вне фикстуры, снимка и самого теста (§С8-18)', () => {
+    // Шаблон собирается из GATE_GREP_TOKENS: литералы токенов пишутся ТОЛЬКО в
+    // fixtures/gate-aspects.ts (дисциплина токенов 0d), иначе строка с ними в ЭТОМ файле сама
+    // оказалась бы шаблоном и тест ловил бы себя.
+    const files = new Set(
+      gitGrep(GATE_GREP_TOKENS.join('|'), GATE_GREP_PATHSPEC).map((line) =>
+        line.slice(0, line.indexOf(':')),
+      ),
+    );
+    expect([...files].sort()).toEqual([...GATE_GREP_ALLOWED].filter((f) => files.has(f)).sort());
+    // Фикстура обязана совпасть ВСЕГДА: пустой результат значил бы, что шаблон собран неверно
+    // и «ноль совпадений» получен не потому, что кода под аспект нет.
+    expect(files.has('apps/server/test/fixtures/gate-aspects.ts')).toBe(true);
+    // И ни одного совпадения в ПРОДУКТОВОМ коде — та половина списка путей, ради которой гейт
+    // заведён; `test/` в нём законно шумит заголовками (Р-К-54), `src/` — не должен вовсе.
+    expect([...files].filter((f) => f.includes('/src/'))).toEqual([]);
   });
 });
 
