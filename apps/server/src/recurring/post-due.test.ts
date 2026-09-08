@@ -338,15 +338,21 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
     const instanceId = await materializeOne(user, templateId, '2026-07-01');
 
-    // Прежнее состояние привязки — ПУСТОЕ: владелец отвязал инстанс от конверта
+    // Прежнее состояние привязки — ПУСТОЕ: инстанс отвязан от конверта.
+    // Р7: снятие системной привязки руками теперь запрещено — фикстура играет роль системы.
     ok(
       await execute(
         db,
-        req(user, 'relation_delete', {
-          source_id: envelopeId,
-          target_id: instanceId,
-          role: 'envelope-binding',
-        }),
+        req(
+          user,
+          'relation_delete',
+          {
+            source_id: envelopeId,
+            target_id: instanceId,
+            role: 'envelope-binding',
+          },
+          { mechanism: 'seed' },
+        ),
         { sink },
       ),
     );

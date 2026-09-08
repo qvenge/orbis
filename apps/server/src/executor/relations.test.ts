@@ -759,6 +759,56 @@ describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', (
     const inverse = first(sink.entries).action.inverse;
     expect(inverse.some((op) => op.op === 'relation_delete')).toBe(true);
   });
+
+  test('21. relation_delete системной роли из-под механизма user → ROLE_SYSTEM_ONLY; seed — ок; ребро цело', async () => {
+    // Р7/РП-6: симметрия создания и удаления. До Б-1 удаление было разрешено осознанно
+    // (докблок `relations.ts`), и владелец мог снять привязку к конверту руками; с кэшем
+    // spent (§Б5-5) это путь мимо всех его писателей, а саму привязку выводит селектор.
+    const ticket = await createEntity({ title: 'Тикет-удаление' });
+    const run = await createEntity({ title: 'Прогон-удаление' });
+    ok(await createRelation(ticket.id, run.id, 'run', AS_SYSTEM));
+    const denied = err(
+      await execute(
+        db,
+        req('relation_delete', { source_id: ticket.id, target_id: run.id, role: 'run' }),
+      ),
+    );
+    expect(denied.error.code).toBe('ROLE_SYSTEM_ONLY');
+    expect((denied.error.details as { role?: string }).role).toBe('run');
+    expect(await relCount(ticket.id, run.id, 'run')).toBe(1);
+    ok(
+      await execute(
+        db,
+        req('relation_delete', { source_id: ticket.id, target_id: run.id, role: 'run' }, AS_SYSTEM),
+      ),
+    );
+    expect(await relCount(ticket.id, run.id, 'run')).toBe(0);
+  });
+
+  test('22. удаление ролью владельца гейта не касается; target_max_incoming на удалении НЕ срабатывает', async () => {
+    // Пин против самой вероятной ошибки правки: `assertTargetMaxIncoming` на удалении видит
+    // ровно одно входящее ребро (своё) и, посчитай оно себя, отказало бы в снятии привязки
+    // самому хуку (`others` исключает `key.sourceId`).
+    const category = newId();
+    const envelope = await createEntity({
+      title: 'Конверт снятия',
+      props: budgetProps(category),
+      aspects: ['orbis/budget'],
+    });
+    const txn = await createEntity({
+      title: 'Транзакция снятия',
+      props: finProps({ 'orbis/finance_category': category }),
+      aspects: ['orbis/financial'],
+    });
+    expect(await relCount(envelope.id, txn.id, 'envelope-binding')).toBe(1);
+    ok(
+      await execute(
+        db,
+        req('entity_update', { id: txn.id, aspects: { detach: ['orbis/financial'] } }),
+      ),
+    );
+    expect(await relCount(envelope.id, txn.id, 'envelope-binding')).toBe(0);
+  });
 });
 
 describe('роль ребра резолвится реестром (§А4-3)', () => {

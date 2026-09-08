@@ -65,13 +65,21 @@ function roleName(def: RelationRoleDefinition | undefined, role: string): string
 
 /**
  * Единственный вход стадии 4 для ролевых ограничений (§А4-2): существование роли, гейт
- * механизма и все объявленные `constraints`. Вызывается ТОЛЬКО из `relation_create` —
- * удаление ребра ни одного из этих правил не нарушает, а гейт `created_by` на удалении
- * запер бы владельцу уборку собственного графа (снять привязку к конверту руками).
+ * механизма и — на создании — все объявленные `constraints`.
  *
- * `ctx` собран в объект, а не разложен по позиционным аргументам, ровно потому, что все три
- * его поля отвечают на один вопрос — «от чьего имени идёт запись»: владелец графа (замок
- * ацикличности берётся на него), механизм (гейт `created_by`) и признак отката.
+ * ЗОВЁТСЯ С ОБЕИХ СТОРОН, `op` говорит с какой (Р7, изменение поведения среза А). До Б-1
+ * функция вызывалась только из `relation_create`, и докблок называл это выбором: «гейт
+ * created_by на удалении запер бы владельцу уборку собственного графа». Кэш `spent` (§Б5-5)
+ * этот выбор отменил: ручное снятие `envelope-binding` — путь мимо всех писателей кэша, а
+ * саму привязку и без владельца выводит селектор (§Б5-4 R10/R11). Видимая цена записана
+ * вопросом владельцу В-П-1 плана.
+ *
+ * На удалении проверяется ТОЛЬКО гейт: ацикличность снятие ребра нарушить не может, а
+ * `target_max_incoming` на существующем ребре пришлось бы читать «есть ли у цели ещё столько
+ * же» — вопрос, к удалению отношения не имеющий.
+ *
+ * `ctx` собран в объект, а не разложен по позиционным аргументам, ровно потому, что все его
+ * поля отвечают на один вопрос — «от чьего имени и что именно пишется».
  */
 export async function assertRoleConstraints(
   tx: Tx,
@@ -88,6 +96,8 @@ export async function assertRoleConstraints(
      * пропускает гейт флагов свойств (см. `InternalUndoMode`).
      */
     undoReplay: boolean;
+    /** Какая половина: создание проверяет все ограничения, удаление — только гейт. */
+    op: 'create' | 'delete';
   },
 ): Promise<void> {
   const def = reg.roles.get(key.role);
@@ -100,10 +110,12 @@ export async function assertRoleConstraints(
   if (def.constraints.created_by === 'system' && ctx.mechanism === 'user' && !ctx.undoReplay) {
     throw new ExecError(
       'ROLE_SYSTEM_ONLY',
-      `связь роли «${roleName(def, key.role)}» ставит сервер, а не пользователь (§А4-4)`,
-      { role: key.role, mechanism: ctx.mechanism },
+      `связь роли «${roleName(def, key.role)}» ${ctx.op === 'delete' ? 'снимает' : 'ставит'} сервер, а не пользователь (§А4-4)`,
+      { role: key.role, mechanism: ctx.mechanism, op: ctx.op },
     );
   }
+
+  if (ctx.op === 'delete') return;
 
   if (def.constraints.acyclic === true) {
     await assertAcyclic(tx, ctx.ownerId, key, def, effects);

@@ -2460,6 +2460,7 @@ async function prepareRelationCreate(
     ownerId: ctx.req.actorUserId,
     mechanism: ctx.mechanism,
     undoReplay: ctx.internalUndo !== undefined,
+    op: 'create',
   });
   // Дубль ловим ДО записи на ОБОИХ путях, а не только в batch: дубль ВНУТРИ одной
   // транзакции существует лишь в виртуальном графе — строки в БД для него ещё нет, и
@@ -2615,6 +2616,14 @@ async function prepareRelationDelete(
       target: routineEnds.target.aspects,
     });
   }
+  // Гейт `created_by` — симметрично созданию (Р7): роль, которую ставит сервер, сервер же и
+  // снимает. Виртуальные эффекты batch не нужны — из трёх ограничений здесь работает одно.
+  await assertRoleConstraints(ctx.tx, ctx.registry, key, undefined, {
+    ownerId: ctx.req.actorUserId,
+    mechanism: ctx.mechanism,
+    undoReplay: ctx.internalUndo !== undefined,
+    op: 'delete',
+  });
   gateEntitlements(ctx, 'relation_delete');
 
   // Эффекты batch: связь исчезает из виртуального графа
