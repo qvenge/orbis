@@ -1,7 +1,7 @@
 // apps/server/src/expr/eval.test.ts
 // Decimal-бэкенд языка E (§Б3-5, задача 8): интерпретатор формул ведомостей. Тесты чистые —
 // значения приходят готовыми (props/params/aggs), БД не нужна. Эталон бит-в-бит — четыре формулы
-// `budget/aggregates.ts` (:346, :367, :369-372, :394-396), они переписаны здесь дословно, а не
+// `budget/aggregates.ts` (:342, :363, :365-368, :390-392), они переписаны здесь дословно, а не
 // импортированы: `aggregates.ts` тянет за собой db/client и executor, а сверять надо АРИФМЕТИКУ.
 import { describe, expect, test } from 'bun:test';
 import { daysInclusive, type ResolvedBinding } from '@orbis/shared';
@@ -561,7 +561,7 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
       if (env.carryover !== undefined) props['orbis/carryover'] = env.carryover;
       const base = scopeOf({ props, binding: ENVELOPE_BINDING, phase: env.phase });
 
-      // Эталон aggregates.ts:346 — дословно, включая подстановку '0' на нестроку (Р-К-13: после
+      // Эталон aggregates.ts:342 — дословно, включая подстановку '0' на нестроку (Р-К-13: после
       // среза А валидатор не пускает нестроку в decimal-свойство, ветка недостижима).
       const oracleLimit = decAdd(
         env.limit,
@@ -571,14 +571,14 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
         `${env.name}: ${oracleLimit}`,
       );
 
-      // Эталон aggregates.ts:367
+      // Эталон aggregates.ts:363
       const withLimit = { ...base, aggs: { spent: env.spent, effective_limit: oracleLimit } };
       const oracleRemaining = decSub(oracleLimit, env.spent);
       expect(`${env.name}: ${String(evalExpr(REMAINING, withLimit))}`).toBe(
         `${env.name}: ${oracleRemaining}`,
       );
 
-      // Эталон aggregates.ts:369-372. Закрытая фаза — гейт ЛЕНИВОСТИ `if`: days_inclusive(today,
+      // Эталон aggregates.ts:365-368. Закрытая фаза — гейт ЛЕНИВОСТИ `if`: days_inclusive(today,
       // period_end) там равен 0, и посчитайся плечо жадно, было бы деление на ноль вместо null.
       const withRemaining = {
         ...withLimit,
@@ -592,7 +592,7 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
         `${env.name}: ${String(oraclePace)}`,
       );
 
-      // Эталон aggregates.ts:394-396 (порог 0.85 ВКЛЮЧИТЕЛЬНО, sign-off владельца 2026-07-23)
+      // Эталон aggregates.ts:390-392 (порог 0.85 ВКЛЮЧИТЕЛЬНО, sign-off владельца 2026-07-23)
       const oracleAlert = decCmp(decMulInt(env.spent, 20), decMulInt(oracleLimit, 17)) >= 0;
       expect(`${env.name}: ${String(evalExpr(ALERT, withRemaining))}`).toBe(
         `${env.name}: ${String(oracleAlert)}`,
@@ -642,7 +642,7 @@ describe('evalExpr: deref — одношаговое разыменование 
     expect(evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, empty)).toBeNull();
   });
 
-  test('компоненты ключа порядка карточек §Б5-4 №6 — те же, что у aggregates.ts:574-578', () => {
+  test('компоненты ключа порядка карточек §Б5-4 №6 — те же, что у aggregates.ts:576-582', () => {
     // Сегодня ключ склеивает КОД: название категории, разделитель NUL, period_start, NUL, id.
     // Декларация даёт те же три компонента; склейку делает движок (задача 9), значения — этот бэкенд.
     const parts = [

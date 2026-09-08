@@ -174,7 +174,7 @@ describe('daysInclusive: дни от даты до даты включитель
     expect(daysInclusive('2026-06-01', '2026-05-01')).toBe(0);
   });
 
-  test('совпадает с прежней копией на Date.UTC (budget/aggregates.ts:156-161) там, где та звалась', () => {
+  test('совпадает с прежней копией на Date.UTC (снята в budget/aggregates.ts) там, где та звалась', () => {
     // Копия звалась ТОЛЬКО при from ≤ to (фаза active, §2.4) — этот диапазон и сверяем.
     const old = (from: string, to: string): number => {
       const [fy, fm, fd] = from.split('-').map(Number) as [number, number, number];
