@@ -436,6 +436,46 @@ export function applyDeltas(
       options.sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
       properties.set(propertyId, { ...property, type: { ...property.type, options } });
     }
+
+    // КАРТА КЛАССОВ ⊕ ПРИВЯЗКИ (§Б2-2). Отнесение дописывается в `value_map` КАЖДОЙ привязки,
+    // связывающей это свойство с названным слотом, — в чьём бы аспекте она ни стояла: вариант
+    // приезжает в ТИП свойства и виден всем носителям, а отнесение, положенное только на
+    // аспект-цель дельты, дало бы запись, которую `class=` находит через один аспект и теряет
+    // через другой.
+    // ДОПИСЫВАЕТСЯ, А НЕ ПЕРЕЗАПИСЫВАЕТ (§Б2-4 «привязку можно только дополнять»): пара (слот,
+    // вариант), уже отнесённая системой, дельтой не трогается — иначе `done → active` молча
+    // переопределил бы смысл встроенного набора `closed`, на котором стоят чекбокс строки,
+    // Agenda и `excludeBlocked`. Тот же довод у дубля внутри одной карты: выигрывает первое
+    // отнесение, порядок массива владелец видит в диффе Ш1.
+    // ПРОВЕРОК ПОЛНОТЫ ЗДЕСЬ НЕТ намеренно: `applyDeltas` fail-closed на КАЖДОМ чтении реестра,
+    // и отказ тут запер бы владельца снаружи графа после пересева, изменившего контракт.
+    // Полноту проверяет запись — `checkClassMap` в `registry/ops.ts`.
+    for (const [propertyId, entries] of Object.entries(delta.classMap ?? {})) {
+      for (const entry of entries) {
+        for (const aspectId of [...aspects.keys()]) {
+          const carrier = aspects.get(aspectId) as AspectDefinition;
+          let touched = false;
+          const next = carrier.implements.map((binding) => {
+            if (binding.contract !== entry.contract) return binding;
+            if (binding.bind[entry.slot] !== propertyId) return binding;
+            if (
+              binding.value_map.some((m) => m.slot === entry.slot && m.variant === entry.variant)
+            ) {
+              return binding;
+            }
+            touched = true;
+            return {
+              ...binding,
+              value_map: [
+                ...binding.value_map,
+                { slot: entry.slot, variant: entry.variant, class: entry.class },
+              ],
+            };
+          });
+          if (touched) aspects.set(aspectId, { ...carrier, implements: next });
+        }
+      }
+    }
   }
 
   return { ...system, properties, aspects, contracts, subscriptions };

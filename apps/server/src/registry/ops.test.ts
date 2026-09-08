@@ -2456,3 +2456,75 @@ describe('форма дерева объявления проверяется Д
     );
   });
 });
+
+describe('карта классов и пользовательский набор в фильтрах class= (§С8-19)', () => {
+  const setOwner = freshUserId();
+  const inReview = newId();
+  const dropped = newId();
+  const runS = (tool: string, input: unknown): Promise<ExecuteResult> =>
+    execute(
+      db,
+      { actorUserId: setOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  const callS = (name: string, input: unknown): Promise<ToolDispatchResult> =>
+    dispatchTool(
+      { db, actorUserId: setOwner, actorKind: 'owner', source: 'chat', explicitCommand: false },
+      name,
+      input,
+    );
+  /** id выборки — из КАРТОЧКИ: она строится по id, а LLM-проекция печатает key (§А9-2). */
+  function idsOf(r: ToolDispatchResult): string[] {
+    if (r.status !== 'ok') throw new Error(`entity_query отказал: ${JSON.stringify(r)}`);
+    return [...((r.card as { entityIds?: string[] } | undefined)?.entityIds ?? [])].sort();
+  }
+  // Шаги ОТЛОЖЕННЫЕ (`() =>`), а не готовые промисы: `runS` стартует запрос уже при сборке
+  // массива, и `attach_orbis_task` уходил бы в базу одновременно с `entity_create` той же
+  // сущности — гонка, дающая `NOT_FOUND` на ровном месте. Порядок здесь — часть сценария.
+  const task = (id: string, title: string, status: string) => [
+    () => runS('entity_create', { id, title, tags: [] }),
+    () => runS('attach_orbis_task', { entity_id: id, data: { 'orbis/task_status': status } }),
+  ];
+
+  test('вариант с отнесением попадает в open, свой набор — в свой фильтр', async () => {
+    ok(
+      await runS('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: {
+          selectOptions: {
+            'orbis/task_status': {
+              add: [{ key: 'in_review', label: { ru: 'На ревью' }, rank: 45 }],
+            },
+          },
+          classMap: {
+            'orbis/task_status': [
+              {
+                contract: 'orbis/completable',
+                slot: 'status',
+                variant: 'in_review',
+                class: 'active',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    // Пользовательский набор поверх встроенного контракта (§Б5-2). Тула дельты контракта здесь
+    // ещё нет (задача 16) — строка ставится тем же писателем, которого он позовёт.
+    await withIdentity(db, setOwner, (tx) =>
+      setContractDelta(tx, setOwner, 'orbis/completable', {
+        setsDelta: { dropped: ['cancelled'] },
+      }),
+    );
+    for (const step of [
+      ...task(inReview, 'На ревью', 'in_review'),
+      ...task(dropped, 'Брошено', 'cancelled'),
+    ]) {
+      ok(await step());
+    }
+    const q = (text: string) => callS('entity_query', { query: text });
+    expect(idsOf(await q('class=orbis/completable:open'))).toEqual([inReview]);
+    expect(idsOf(await q('class=orbis/completable:closed'))).toEqual([dropped]);
+    expect(idsOf(await q('class=orbis/completable:dropped'))).toEqual([dropped]);
+  });
+});

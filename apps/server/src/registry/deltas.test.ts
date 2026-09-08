@@ -813,4 +813,40 @@ describe('карта классов дельты (§Б2-2)', () => {
       ),
     ).toEqual({ code: 'VALIDATION', reason: 'DELTA_MALFORMED' });
   });
+
+  const expectActive = (s: RegistrySnapshot, aspectId: string) =>
+    expect(completableOf(s, aspectId)?.value_map).toContainEqual({
+      slot: 'status',
+      variant: 'in_review',
+      class: 'active',
+    });
+
+  test('отнесение дописывается в value_map привязки', () => {
+    expectActive(
+      applyDeltas(snapshotWith(), [row('aspect', 'orbis/task', CLASS_MAP_DELTA)]),
+      'orbis/task',
+    );
+  });
+  test('привязка ищется ПО СЛОТУ, а не по цели дельты: дельта на note доносит класс до task', () => {
+    // Вариант приезжает в ТИП свойства и виден всем носителям; отнесение обязано быть таким же
+    // общим, иначе `class=` находит запись через один аспект и теряет через другой.
+    expectActive(
+      applyDeltas(snapshotWith(), [row('aspect', 'orbis/note', CLASS_MAP_DELTA)]),
+      'orbis/task',
+    );
+  });
+  test('отнесение, переопределяющее СИСТЕМНОЕ, не дописывается (§Б2-4: только дополнять)', () => {
+    const after = applyDeltas(snapshotWith(), [
+      row('aspect', 'orbis/task', {
+        classMap: {
+          'orbis/task_status': [
+            { contract: 'orbis/completable', slot: 'status', variant: 'done', class: 'active' },
+          ],
+        },
+      }),
+    ]);
+    expect(
+      completableOf(after, 'orbis/task')?.value_map.filter((m) => m.variant === 'done'),
+    ).toEqual([{ slot: 'status', variant: 'done', class: 'done' }]);
+  });
 });
