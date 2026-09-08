@@ -1,7 +1,8 @@
-import { expect, test } from 'bun:test';
-import { bindingIndexOf, checkImplements } from './bindings';
+import { describe, expect, test } from 'bun:test';
+import { bindingIndexOf, checkClassMap, checkImplements } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from './index';
+import type { AspectDefinition } from './property-type';
 import { aspectDefinitionSchema, aspectImplementsSchema } from './property-type';
 
 test('форма привязки §Б2-1: полный разбор, умолчания трёх полей, .strict()', () => {
@@ -537,4 +538,87 @@ test('слот-статус, закрытый константой: лишний
       },
     },
   ]);
+});
+
+describe('checkClassMap: вариант дельты без отнесения — VARIANT_UNMAPPED (§Б2-2)', () => {
+  const REG = {
+    properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+  };
+  const TASK = REG.aspects.get('orbis/task') as AspectDefinition;
+  const NOTE = REG.aspects.get('orbis/note') as AspectDefinition;
+  const ADD = {
+    'orbis/task_status': { add: [{ key: 'in_review', label: { ru: 'На ревью' }, rank: 45 }] },
+  };
+  const map = (cls: string) => ({
+    'orbis/task_status': [
+      { contract: 'orbis/completable', slot: 'status', variant: 'in_review', class: cls },
+    ],
+  });
+
+  test('вариант слота-статуса без отнесения — VARIANT_UNMAPPED с адресом слота', () => {
+    expect(checkClassMap({ selectOptions: ADD }, TASK, REG)).toEqual([
+      {
+        code: 'VARIANT_UNMAPPED',
+        details: {
+          propertyId: 'orbis/task_status',
+          variant: 'in_review',
+          contract: 'orbis/completable',
+          slot: 'status',
+        },
+      },
+    ]);
+  });
+  test('полное отнесение — ноль замечаний; цель дельты роли не играет', () => {
+    const delta = { selectOptions: ADD, classMap: map('active') };
+    expect(checkClassMap(delta, TASK, REG)).toEqual([]);
+    expect(checkClassMap(delta, NOTE, REG)).toEqual([]);
+  });
+  test('отнесение к НЕСУЩЕСТВУЮЩЕМУ классу — тот же отказ, а не молчание', () => {
+    expect(
+      checkClassMap({ selectOptions: ADD, classMap: map('paused') }, TASK, REG).map((i) => i.code),
+    ).toEqual(['VARIANT_UNMAPPED']);
+  });
+  test('вариант обычного select (ничей слот-статус) отнесения не требует', () => {
+    // `orbis/content_type` — обычный select заметки: классов у него нет, и требовать отнесение
+    // значило бы запретить владельцу добавлять варианты вообще.
+    const add = {
+      'orbis/content_type': { add: [{ key: 'table', label: { ru: 'Таблица' }, rank: 9 }] },
+    };
+    expect(checkClassMap({ selectOptions: add }, NOTE, REG)).toEqual([]);
+  });
+  test('незнакомый контракт и слот, которого свойство не занимает', () => {
+    const classMap = {
+      'orbis/task_status': [
+        ...map('active')['orbis/task_status'],
+        { contract: 'orbis/nope', slot: 'status', variant: 'in_review', class: 'active' },
+        { contract: 'orbis/completable', slot: 'moment', variant: 'in_review', class: 'active' },
+      ],
+    };
+    expect(checkClassMap({ selectOptions: ADD, classMap }, TASK, REG).map((i) => i.code)).toEqual([
+      'UNKNOWN_CONTRACT',
+      'UNKNOWN_SLOT',
+    ]);
+  });
+  test('отнесение на свойстве ВНЕ привязок инертно и замечанием не считается', () => {
+    // Граница проверки орфанов: у `orbis/content_type` слота-статуса нет НИ У ОДНОГО аспекта,
+    // значит `applyDeltas` такое отнесение никуда не допишет, а набора, в котором вариант
+    // «должен был найтись», не существует — обмануть владельца ему нечем. Отказ здесь запретил
+    // бы два законных ПЕРЕНОСА той же карты: нагрузку единицы пачки по конфликту пересева и
+    // переписывание ключа при слиянии свойств.
+    expect(
+      checkClassMap(
+        {
+          classMap: {
+            'orbis/content_type': [
+              { contract: 'orbis/completable', slot: 'status', variant: 'table', class: 'active' },
+            ],
+          },
+        },
+        NOTE,
+        REG,
+      ),
+    ).toEqual([]);
+  });
 });

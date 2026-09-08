@@ -12,7 +12,7 @@
  */
 import type { ContractDefinition, ContractSlot } from './contract-type';
 import type { AspectDefinition, AspectImplements, PropertyDefinition } from './property-type';
-import type { PropertyKind } from './types';
+import type { PropertyKind, SelectOption } from './types';
 
 type SlotsContract = Extract<ContractDefinition, { kind: 'slots' }>;
 type SlotType = ContractSlot['type'];
@@ -301,6 +301,144 @@ function checkVariants(
     }
   }
   return out;
+}
+
+/** Одно отнесение карты классов: «вариант свойства = класс контракта в этом слоте» (§Б2-2). */
+export interface ClassMapEntry {
+  contract: string;
+  slot: string;
+  variant: string | boolean;
+  class: string;
+}
+
+/**
+ * Форма дельты, которую видит проверка, — ровно два её поля. `AspectDelta` живёт на сервере
+ * (`apps/server/src/registry/deltas.ts`), а проверка — здесь, рядом с `checkImplements`: правило
+ * «вариант без класса» одно на встроенные привязки и на дельты, и двумя экземплярами оно
+ * разъехалось бы на первом же новом контракте. Импорт серверного типа в shared невозможен —
+ * форма объявлена структурно, `AspectDelta` ей удовлетворяет по построению.
+ */
+export interface AspectDeltaVariants {
+  selectOptions?: Record<string, { add?: readonly SelectOption[] }>;
+  classMap?: Record<string, readonly ClassMapEntry[]>;
+}
+
+/** (контракт, слот), где свойство работает СЛОТОМ-СТАТУСОМ хоть у одного аспекта реестра. */
+function statusSlotsOf(
+  propertyId: string,
+  reg: {
+    contracts: ReadonlyMap<string, ContractDefinition>;
+    aspects: ReadonlyMap<string, AspectDefinition>;
+  },
+): Array<{ contract: string; slot: string }> {
+  const out: Array<{ contract: string; slot: string }> = [];
+  const seen = new Set<string>();
+  for (const aspect of reg.aspects.values()) {
+    for (const binding of aspect.implements) {
+      const contract = reg.contracts.get(binding.contract);
+      if (contract === undefined || contract.kind !== 'slots') continue;
+      for (const [slot, bound] of Object.entries(binding.bind)) {
+        if (bound !== propertyId) continue;
+        // Классы вешаются только на слот-статус (§Б1-1): у прочих слотов классов нет.
+        if (contract.slots.find((s) => s.name === slot)?.status !== true) continue;
+        const key = `${binding.contract} ${slot}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ contract: binding.contract, slot });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * ПОЛНОТА ОТНЕСЕНИЯ ВАРИАНТОВ ДЕЛЬТЫ (§Б2-2, fail-closed): вариант, добавленный дельтой к
+ * свойству-слоту-статусу, принимается ТОЛЬКО вместе с отнесением к классу КАЖДОГО контракта, где
+ * этот слот участвует.
+ *
+ * Почему «каждого контракта», а не «контракта аспекта-цели»: `selectOptions` адресует СВОЙСТВО, и
+ * вариант приезжает в его тип — то есть ко всем носителям сразу. Проверка по одному аспекту
+ * оставила бы запись, которую `class=` находит через один аспект и теряет через другой; поэтому
+ * словарь аспектов входит в `reg`.
+ *
+ * Зовётся НА ЗАПИСИ (`registry/ops.ts`, `setAspectDelta`), не на чтении: `applyDeltas` fail-closed
+ * на каждом чтении реестра, и отказ там запер бы владельца снаружи собственного графа после
+ * пересева, изменившего контракт.
+ */
+export function checkClassMap(
+  delta: AspectDeltaVariants,
+  aspect: AspectDefinition,
+  reg: {
+    properties: ReadonlyMap<string, PropertyDefinition>;
+    contracts: ReadonlyMap<string, ContractDefinition>;
+    aspects: ReadonlyMap<string, AspectDefinition>;
+  },
+): ImplementsIssue[] {
+  const issues: ImplementsIssue[] = [];
+  for (const [propertyId, patch] of Object.entries(delta.selectOptions ?? {})) {
+    const added = patch.add ?? [];
+    if (added.length === 0) continue;
+    if (!reg.properties.has(propertyId)) {
+      issues.push({ code: 'UNKNOWN_PROPERTY', details: { aspect: aspect.id, propertyId } });
+      continue;
+    }
+    const entries = delta.classMap?.[propertyId] ?? [];
+    for (const { contract, slot } of statusSlotsOf(propertyId, reg)) {
+      const def = reg.contracts.get(contract);
+      const classes = new Set(def?.kind === 'slots' ? def.classes.map((c) => c.key) : []);
+      for (const option of added) {
+        const hit = entries.find(
+          (e) => e.contract === contract && e.slot === slot && String(e.variant) === option.key,
+        );
+        // Отнесение к классу, которого у контракта нет, — то же «вариант не отнесён»: фильтры
+        // набора его не найдут, а владелец уверен, что назначил.
+        if (hit === undefined || !classes.has(hit.class)) {
+          issues.push({
+            code: 'VARIANT_UNMAPPED',
+            details: {
+              propertyId,
+              variant: option.key,
+              contract,
+              slot,
+              ...(hit !== undefined && { class: hit.class }),
+            },
+          });
+        }
+      }
+    }
+  }
+  // Отнесения, которым не к чему прицепиться: принять их молча — это владелец, уверенный, что
+  // вариант отнесён, и фильтр, который его не видит.
+  //
+  // ГРАНИЦА ПРОВЕРКИ — свойство, которое ХОТЬ ГДЕ-ТО работает слотом-статусом. У свойства вне
+  // привязок классов нет вовсе (`orbis/content_type`, любое своё число), отнесение на нём
+  // ИНЕРТНО — `applyDeltas` дописывает отнесение только в привязку, где `bind[slot]` и есть это
+  // свойство, — и обмануть владельца насчёт фильтра оно не может: набора, в котором вариант
+  // «должен был найтись», не существует. Отказ на таком отнесении запретил бы законные пути,
+  // которые карту лишь ПЕРЕНОСЯТ, ничего не обещая: единицу пачки по конфликту пересева
+  // (`registry/merge-conflict.ts`, одобрение переписывает дельту целиком) и слияние свойств,
+  // переставляющее КЛЮЧ карты на цель (`registry/ops.ts`, `rewriteDelta`). Опечатка же ловится
+  // там, где она способна навредить: у свойства, слот-статус которого есть.
+  for (const [propertyId, entries] of Object.entries(delta.classMap ?? {})) {
+    const slots = statusSlotsOf(propertyId, reg);
+    if (slots.length === 0) continue;
+    for (const entry of entries) {
+      if (!reg.contracts.has(entry.contract)) {
+        issues.push({
+          code: 'UNKNOWN_CONTRACT',
+          details: { propertyId, contract: entry.contract },
+        });
+        continue;
+      }
+      if (!slots.some((s) => s.contract === entry.contract && s.slot === entry.slot)) {
+        issues.push({
+          code: 'UNKNOWN_SLOT',
+          details: { propertyId, contract: entry.contract, slot: entry.slot },
+        });
+      }
+    }
+  }
+  return issues;
 }
 
 export interface ResolvedBinding {
