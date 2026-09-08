@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
+  BUILTIN_SUBSCRIPTION_DEFS,
   CONTRACT_IDS,
   RELATION_ROLE_IDS,
 } from '@orbis/shared';
@@ -170,11 +171,21 @@ test('снимок несёт словарь контрактов: шесть в
   expect(reg.contracts.get('orbis/sensitivity')?.facts?.length).toBe(5);
 });
 
-test('словарь подписок несёт засеянную Agenda: строка разобрана схемой, поверхность на месте', async () => {
+test('словарь подписок несёт обе засеянные: строки разобраны схемой, поверхности на месте', async () => {
   const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
-  expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda']);
+  // Состав — по СИДУ, а не литералом: задача, дописавшая третью подписку, не обязана искать этот
+  // тест; порядок пиннится отдельно, потому что он и есть `rank`.
+  expect([...reg.subscriptions.keys()]).toEqual(BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id));
+  expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda', 'orbis/budget-overview']);
   const row = reg.subscriptions.get('orbis/agenda');
   // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.
   expect(row?.definition.engine).toBe('agenda');
   expect([row?.surface, row?.module, row?.ownerId]).toEqual(['planner/agenda', 'planner', null]);
+  const budget = reg.subscriptions.get('orbis/budget-overview');
+  expect(budget?.definition.engine).toBe('budget');
+  expect([budget?.surface, budget?.module, budget?.ownerId]).toEqual([
+    'finance/budget-overview',
+    'finance',
+    null,
+  ]);
 });

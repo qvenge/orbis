@@ -256,6 +256,10 @@ test('registryDriftIds: плоский список для /health называ�
   rows.actions = [{ id: 'orbis/close' }];
   expect(registryDriftIds(diffBuiltinRegistries(rows))).toEqual([
     'properties:orbis/task_status нет',
+    // Вторая встроенная подписка (задача 9) в подменённых строках отсутствует ЦЕЛИКОМ — и это
+    // «нет», а не расхождение колонок: вердикт обязан отличать «строку не засеяли» от
+    // «засеяли не тем», иначе владелец пересеет не то.
+    'subscriptions:orbis/budget-overview нет',
     'subscriptions:orbis/agenda definition+module+rank+surface',
     'actions:orbis/close лишний',
   ]);
