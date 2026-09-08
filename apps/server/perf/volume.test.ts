@@ -317,6 +317,26 @@ async function verdictFor(index: string, query: SQL, note: string): Promise<Verd
   return v;
 }
 
+/**
+ * Доля корпуса в `entities` — ПОД АДМИН-DSN, потому что под ролью чужих владельцев не видно, а
+ * планировщик их видит и считает по ним селективность.
+ *
+ * Число здесь не украшение: оно решает вердикт по `entities_owner_updated` (см. тест ниже).
+ */
+async function corpusShareOfEntities(): Promise<number> {
+  const admin = adminDb();
+  try {
+    const rows = (await admin.db.execute(sql`
+      SELECT (SELECT count(*) FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid)::float8
+             / greatest((SELECT count(*) FROM entities), 1)::float8 AS share`)) as unknown as Array<{
+      share: number;
+    }>;
+    return Number(rows[0]?.share ?? 0);
+  } finally {
+    await admin.client.end();
+  }
+}
+
 /** Пин вердикта СТРОКОЙ целиком: сменится любой из трёх флагов — тест покраснеет (образец `:162`). */
 function expectVerdict(v: Verdict, expected: string): void {
   expect(`${v.index}: chosen=${v.chosen} usable=${v.usable} admin=${v.usableWithoutRls}`).toBe(
@@ -610,7 +630,7 @@ test('холодный корпус: p95 без кэша spent записыва�
   expect(cold).toBeGreaterThan(0);
 }, 900_000);
 
-test('EXPLAIN под ролью: GIN по аспектам недостижим, btree по владельцу бесполезен', async () => {
+test('EXPLAIN под ролью: GIN по аспектам недостижим, btree по владельцу — по доле корпуса', async () => {
   const period = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
     const { oracle } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
     return oracle.period; // границы месяца считает сам оракул — копии календаря нет
@@ -636,14 +656,35 @@ test('EXPLAIN под ролью: GIN по аспектам недостижим,
     await verdictFor('entities_aspects_gin', q, 'конверты месяца'),
     'chosen=false usable=false admin=false',
   );
-  // `entities_owner_updated` — chosen=false usable=TRUE admin=false: индекс пригоден (при
-  // запрете seq scan берётся Bitmap Index Scan по нему), но не выбирается ни под ролью, ни под
-  // админом, и по одной причине: у корпуса ОДИН владелец, поэтому `owner_id = auth.uid()`
-  // отбирает ВСЮ таблицу, и seq scan дешевле. На боевых данных с многими владельцами вердикт
-  // будет другим — здесь он говорит о синтетике, и это ограничение корпуса, а не индекса.
+  // `entities_owner_updated` — вердикт У ЭТОГО индекса НЕ ОДИН, и это сам по себе результат
+  // замера, а не шаткость теста. `usable=true` держится всегда: при `enable_seqscan = off`
+  // берётся Bitmap Index Scan по нему. А `chosen` решает ДОЛЯ корпуса в таблице:
+  //   • корпус занимает `entities` целиком (прогон сразу после `truncateAll`, доля ≈ 100 %) —
+  //     `owner_id = auth.uid()` отбирает все строки, seq scan дешевле, индекс не выбирается ни
+  //     под ролью, ни под админом;
+  //   • в таблице лежат и соседние перф-корпуса (graph 50k после `test:perf:explain`, доля
+  //     ≈ 30 %) — предикат становится селективным, и тот же индекс ВЫБИРАЕТСЯ обоими.
+  // Замерено живьём 09.09: 23 712/23 712 → `chosen=false admin=false`; 23 712/76 750 →
+  // `chosen=true admin=true`. Для решения об индексе вывод один и он важнее обеих строк:
+  // `entities_owner_updated` НУЖЕН — в бою владельцев много, то есть режим второй, а не первый;
+  // первый — артефакт синтетики с единственным владельцем.
+  //
+  // Пин поэтому идёт ОТ ДОЛИ, а не от «как получилось в прошлый раз»: пин на одну строку красил
+  // бы гейт при смене порядка перф-скриптов, а пин «любая из двух» пропустил бы настоящую
+  // перемену. Третий исход (доля в промежутке даёт не тот план) — законный повод покраснеть и
+  // дописать сюда третий режим.
+  const share = await corpusShareOfEntities();
+  console.log(
+    `explain: корпус занимает ${(share * 100).toFixed(0)} % таблицы entities —` +
+      ` режим «${share >= 0.9 ? 'единственный владелец' : 'таблица делится с соседями'}»`,
+  );
   expectVerdict(
-    await verdictFor('entities_owner_updated', q, 'он же, частичный btree (owner_id, updated_at)'),
-    'chosen=false usable=true admin=false',
+    await verdictFor(
+      'entities_owner_updated',
+      q,
+      `он же, частичный btree (owner_id, updated_at); доля корпуса ${(share * 100).toFixed(0)} %`,
+    ),
+    share >= 0.9 ? 'chosen=false usable=true admin=false' : 'chosen=true usable=true admin=true',
   );
 }, 300_000);
 
