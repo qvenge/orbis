@@ -14,12 +14,20 @@ import {
   BUILTIN_RELATION_ROLE_META,
   bindingIndexOf,
 } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import { GATE_PLAIN_ASPECT } from '../../test/fixtures/gate-aspects';
-import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { effectiveRegistry } from '../registry/cache';
-import type { RegistrySnapshot, SubscriptionRow } from '../registry/load';
+import { loadRegistryRows, type RegistrySnapshot, type SubscriptionRow } from '../registry/load';
 import { assertSubscription, exprSitesOf, rawValueRefs, resolveSlotOnEntity } from './registry';
 
 requireEnv();
@@ -43,7 +51,12 @@ function snapshot(): RegistrySnapshot {
   };
 }
 
-/** Строка подписки вокруг декларации: валидатор смотрит и на неё (поверхность, id в отказе). */
+/**
+ * Строка подписки вокруг декларации: валидатор смотрит и на неё (поверхность, id в отказе).
+ * `definition` — `unknown` с кастом: тип строки после разбора на чтении (`load.ts`) обещает уже
+ * РАЗОБРАННУЮ форму, а сюда нарочно подсовывают кривые декларации — ровно их валидатор и обязан
+ * отвергнуть. Каст один здесь, а не `as never` в каждом из двенадцати вызовов.
+ */
 function row(definition: unknown, over: Partial<SubscriptionRow> = {}): SubscriptionRow {
   return {
     id: 'orbis/agenda',
@@ -53,7 +66,7 @@ function row(definition: unknown, over: Partial<SubscriptionRow> = {}): Subscrip
     module: null,
     rank: 1,
     ...over,
-  };
+  } as SubscriptionRow;
 }
 
 /** Код отказа и его ПРИЧИНА: коды реформы закрыты (errors.ts), причина едет в details. */
@@ -268,5 +281,12 @@ describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с
     expect(
       resolveSlotOnEntity(idx, { aspects: ['orbis/note'], props: {} }, 'orbis/when', 'moment', []),
     ).toBeNull();
+  });
+  test('кривая строка subscription_definitions роняет чтение реестра, а не проезжает молча', async () => {
+    const { db: admin, client: ac } = adminDb();
+    await admin.execute(sql`INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
+      VALUES ('user/broken', ${owner}::uuid, 'planner/agenda', '{"engine":"agenda"}'::jsonb, NULL, 1)`);
+    await ac.end();
+    await expect(withIdentity(db, owner, (tx) => loadRegistryRows(tx, owner))).rejects.toThrow();
   });
 });

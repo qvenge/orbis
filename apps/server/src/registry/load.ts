@@ -43,6 +43,11 @@
 // Строки ПРОХОДЯТ через строгие схемы `@orbis/shared`: реестр, который сам не разбирается
 // собственной схемой, до валидации данных доезжать не должен. Отказ здесь — fail-closed:
 // лучше громкая ошибка на первом запросе, чем валидация записей по кривому определению.
+//
+// ПОДПИСКИ РАЗБИРАЮТСЯ ТОЛЬКО ПО ФОРМЕ. Смысл (ссылки на контракты и наборы, типы выражений,
+// сырые предикаты) проверяет `subscriptions/registry.ts` НА ЗАПИСИ: fail-closed по смыслу здесь
+// означал бы, что пересев, изменивший контракт, запирает владельца снаружи графа, — а починить
+// это ему нечем, потому что чинится оно тоже через реестр.
 import {
   type AspectDefinition,
   aspectDefinitionSchema,
@@ -52,21 +57,24 @@ import {
   propertyDefinitionSchema,
   type RelationRoleDefinition,
   relationRoleDefinitionSchema,
+  type SubscriptionDefinition,
+  subscriptionDefinitionSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistryDeltaRow, RegistryDeltaTargetKind } from './deltas';
 
 /**
- * Строка реестра подписок КАК ОНА ЛЕЖИТ: `definition` здесь `unknown`, и это не лень. Разбор
- * декларации (`subscriptionDefinitionSchema`) приезжает вместе с валидатором на записи, а словарь
- * нужен снимку уже сейчас — иначе десять литеральных фикстур переписывались бы дважды.
+ * Строка реестра подписок КАК ОНА ЛЕЖИТ: колонки строки плюс РАЗОБРАННАЯ схемой декларация.
+ * `surface` при этом остаётся свободным текстом — словарь поверхностей стережёт запись
+ * (`SURFACE_UNKNOWN`), а не чтение: поверхность, снятая пересевом, обязана дать отказ у своей
+ * подписки, а не уронить весь снимок реестра.
  */
 export interface SubscriptionRow {
   id: string;
   ownerId: string | null;
   surface: string;
-  definition: unknown;
+  definition: SubscriptionDefinition;
   module: string | null;
   rank: number;
 }
@@ -239,7 +247,7 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
       id: r.id as string,
       ownerId: r.owner_id as string | null,
       surface: r.surface as string,
-      definition: r.definition,
+      definition: subscriptionDefinitionSchema.parse(r.definition),
       module: r.module as string | null,
       rank: r.rank as number,
     });
