@@ -2080,6 +2080,35 @@ describe('дельта аспекта как держатель свойства
       byKey,
     );
   });
+
+  test('КЛЮЧ classMap — адрес свойства: слияние переписывает его, как и ключ selectOptions', async () => {
+    // Докблок `collectPropertyHolders` называет этот класс дефекта прямо: «дельта была видна
+    // графу зависимостей и невидима слиянию». Новое поле обязано пройти обе функции.
+    const src = await mkProp('user/cm-src');
+    const dst = await mkProp('user/cm-dst');
+    ok(
+      await runH('aspect_delta_set', {
+        aspect: 'orbis/note',
+        delta: {
+          classMap: {
+            [src]: [
+              { contract: 'orbis/completable', slot: 'status', variant: 'meh', class: 'active' },
+            ],
+          },
+        },
+      }),
+    );
+    const holders = await withIdentity(db, holderOwner, (tx) =>
+      collectPropertyHolders(tx, holderOwner),
+    );
+    expect(holders.some((h) => h.kind === 'delta' && h.properties.includes(src))).toBe(true);
+    ok(await runH('property_merge', { source: src, into: dst }));
+    const stored = (await withIdentity(db, holderOwner, (tx) =>
+      tx.execute(sql`SELECT delta FROM registry_deltas
+                     WHERE owner_id = ${holderOwner}::uuid AND target_id = 'orbis/note'`),
+    )) as unknown as Array<{ delta: { classMap?: Record<string, unknown> } }>;
+    expect(Object.keys(stored[0]?.delta.classMap ?? {})).toEqual([dst]);
+  });
 });
 
 // ---------------------------------------------------------------------------

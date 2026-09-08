@@ -811,8 +811,9 @@ export async function updateProperty(
  *    (`backfill-body-doc.test.ts` его пиннит) и снимается пересевом Задачи 23, после
  *    которого строк без документа не остаётся вовсе;
  *  - `delta` — строка `registry_deltas` (§А3-2). Дерева не несёт вовсе, но адресует
- *    свойства пятью полями: `properties.add[].propertyId`, `properties.hide[]`,
- *    `properties.relaxRequired[]`, КЛЮЧИ `properties.rank{}` и КЛЮЧИ `selectOptions{}`.
+ *    свойства шестью полями: `properties.add[].propertyId`, `properties.hide[]`,
+ *    `properties.relaxRequired[]`, КЛЮЧИ `properties.rank{}`, КЛЮЧИ `selectOptions{}`
+ *    и КЛЮЧИ `classMap{}`.
  *
  * ПЯТЫЙ ДЕРЖАТЕЛЬ СУЩЕСТВУЕТ И ЖИВЁТ ВНЕ ЭТОГО ПЕРЕЧНЯ — зеркало-ребро роли `ref`,
  * подписанное `relations.meta.property` (§А6-2). Слияние переписывает его подпись само
@@ -891,7 +892,7 @@ function rewriteQueryTextKeys(text: string, from: ReadonlySet<string>, to: strin
   return out + text.slice(cut);
 }
 
-/** Имена свойств, названные ДЕЛЬТОЙ аспекта: пять полей, перечисленных у `PropertyHolder`. */
+/** Имена свойств, названные ДЕЛЬТОЙ аспекта: шесть полей, перечисленных у `PropertyHolder`. */
 function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
   if (typeof delta !== 'object' || delta === null) return;
   const d = delta as AspectDelta;
@@ -900,6 +901,7 @@ function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
   for (const id of d.properties?.relaxRequired ?? []) out.add(id);
   for (const id of Object.keys(d.properties?.rank ?? {})) out.add(id);
   for (const id of Object.keys(d.selectOptions ?? {})) out.add(id);
+  for (const id of Object.keys(d.classMap ?? {})) out.add(id);
 }
 
 /**
@@ -1083,6 +1085,7 @@ function rewriteDelta(delta: unknown, from: ReadonlySet<string>, to: string): un
     ...d,
     ...(nextProperties !== undefined && { properties: nextProperties }),
     ...(d.selectOptions !== undefined && { selectOptions: renameKeys(d.selectOptions) }),
+    ...(d.classMap !== undefined && { classMap: renameKeys(d.classMap) }),
   };
 }
 
