@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS } from './builtin-contracts';
 import type { AspectDefinition } from './property-type';
-import { M14_ROW_ELEMENTS, rowProjectionOf } from './row';
+import { M14_ROW_ELEMENTS, rowProjectionOf, rowStatusPropertyOf } from './row';
 
 const REG = {
   aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
@@ -65,6 +65,10 @@ describe('rowProjectionOf: контракт → элемент', () => {
       direction: 'outflow',
       currency: null,
     });
+    // ИЗМЕНЕНИЕ ВИДИМОГО ПОВЕДЕНИЯ: у операции без суммы элемент ПУСТ. Разметка печатала
+    // `String(props['orbis/amount'] ?? '0')`, то есть «−0.00» там, где суммы нет вовсе.
+    expect(fin({ 'orbis/direction': 'expense' }).amount).toBeNull();
+    expect(fin({}).amount).toBeNull();
   });
   test('дата: deadline сильнее moment; у события остаётся moment', () => {
     const both = rowProjectionOf(
@@ -92,6 +96,25 @@ describe('rowProjectionOf: контракт → элемент', () => {
     expect(
       rowProjectionOf(task({ 'orbis/task_status': 'done', 'orbis/priority': 'high' }), REG).badges,
     ).toEqual([]);
+    // ИЗМЕНЕНИЕ ВИДИМОГО ПОВЕДЕНИЯ: у ОТМЕНЁННОЙ важность гаснет тоже. Разметка гасила точку при
+    // `done` (`!done`), то есть у отменённой с `priority=high` рисовала её; условие теперь —
+    // членство в наборе `closed`, и бейдж у такой записи остаётся ровно один: класс.
+    expect(
+      rowProjectionOf(task({ 'orbis/task_status': 'cancelled', 'orbis/priority': 'high' }), REG)
+        .badges,
+    ).toEqual([{ kind: 'class', contract: 'orbis/completable', cls: 'cancelled' }]);
+  });
+  test('свойство статуса — из ПОБЕДИВШЕЙ привязки; без контракта его нет', () => {
+    // Читатель один — гард переключения чекбокса: писатель шапки знает ровно `orbis/task_status`,
+    // и у чужой привязки клик записал бы не то свойство.
+    expect(rowStatusPropertyOf(task({ 'orbis/task_status': 'inbox' }), REG)).toBe(
+      'orbis/task_status',
+    );
+    expect(rowStatusPropertyOf({ aspects: ['orbis/note'], props: {} }, REG)).toBeUndefined();
+    // Значение осталось, аспект снят — привязки нет, и переключать нечего (Р9).
+    expect(
+      rowStatusPropertyOf({ aspects: [], props: { 'orbis/task_status': 'done' } }, REG),
+    ).toBeUndefined();
   });
   test('две привязки одного контракта: слот выбирается правилом, привязка — по rank аспекта', () => {
     // task и schedule оба реализуют `when`: deadline пуст → берётся moment у schedule.

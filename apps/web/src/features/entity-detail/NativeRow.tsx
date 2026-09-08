@@ -3,7 +3,7 @@ import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { displayText } from '../../lib/registry/format';
 import { classLabel, fieldLabel } from '../../lib/registry/labels';
-import { useRowProjection } from '../../lib/registry/row';
+import { useRowProjection, useRowStatusProperty } from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -21,6 +21,20 @@ const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
 
 // NativeRow живёт на странице Detail — title здесь является заголовком страницы.
 const TITLE_CLASS = 'text-xl font-semibold tracking-tight';
+
+/**
+ * Свойство, в которое умеет писать переключатель шапки (`useEntityDetail.toggleTask` кладёт
+ * литерал `done ? 'done' : 'inbox'`). ГАРД, а не общее правило: показать состояние строка обязана
+ * у ВСЯКОГО реализатора `orbis/completable` (§С8-18), а записать — только туда, куда писатель
+ * умеет. Без гарда клик по чекбоксу записи с пользовательским аспектом клал бы на неё ЧУЖОЕ
+ * `orbis/task_status`, своё свойство статуса не менял, и галочка не появлялась бы вовсе.
+ *
+ * ПОЧЕМУ КОДОМ, а не декларацией: запись через привязку — «положи первый вариант класса из
+ * `variantsOfClass`» — это Б-2 (у писателя нет ни выбора варианта внутри класса, ни поля `default`
+ * у свойства); до неё гард назван вслух и стоит здесь. Остаток — в реестр остатков задачи 19.
+ */
+const TOGGLABLE_STATUS_PROPERTY = 'orbis/task_status';
+const TOGGLE_BLOCKED_TITLE = 'переключение доступно только задачам';
 
 /**
  * Заголовок строки: статичный текст без onSaveTitle (списки транзакций CategoryScreen) и
@@ -181,6 +195,7 @@ export function NativeRow({
   // порядка хуков на первой же смене аспекта у открытой записи.
   const registry = useRegistry();
   const row = useRowProjection(entity);
+  const statusProperty = useRowStatusProperty(entity);
   // Память — своя строка (В7): её смысл (образец сопоставления и цель) живёт в свойствах, а не в
   // контрактах; в таблицу M14 запись памяти не входит.
   if (aspects.has('orbis/memory'))
@@ -205,10 +220,21 @@ export function NativeRow({
     .filter((id) => props[id] !== undefined)
     .slice(0, 3);
 
+  // ИЗМЕНЕНИЕ ВИДИМОГО ПОВЕДЕНИЯ: ОТМЕНЁННАЯ задача выглядит закрытой — чекбокс отмечен, заголовок
+  // зачёркнут (прежде чекбокс был пуст, а рядом стоял сырой бейдж `cancelled`). Так и задумано:
+  // чекбокс показывает МЕМБЕРСТВО в наборе `closed`, а не класс `done`, и различает классы бейдж
+  // («Отменено»). Цена названа: снятие галочки у отменённой возвращает её в `inbox` — тем же
+  // литералом, что и у сделанной (Р-К-18), то есть «отменено» отменяется в «входящие».
   return (
     <div className="flex items-center gap-2" data-testid="native-row">
       {row.checkbox !== null && (
-        <Checkbox aria-label="Готово" checked={closed} onCheckedChange={onToggleTask} />
+        <Checkbox
+          aria-label="Готово"
+          checked={closed}
+          onCheckedChange={onToggleTask}
+          disabled={statusProperty !== TOGGLABLE_STATUS_PROPERTY}
+          title={statusProperty === TOGGLABLE_STATUS_PROPERTY ? undefined : TOGGLE_BLOCKED_TITLE}
+        />
       )}
       <Title
         value={entity.title}

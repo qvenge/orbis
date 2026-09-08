@@ -1,4 +1,9 @@
-import { BUILTIN_CONTRACT_DEFS, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
+import {
+  type AspectDefinition,
+  BUILTIN_CONTRACT_DEFS,
+  effectiveLabel,
+  OWNER_LOCALE,
+} from '@orbis/shared';
 import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import type { MockHandler } from '../../test/harness';
@@ -433,6 +438,70 @@ test('M14: отменённая — бейдж класса ПОДПИСЬЮ, с
   );
   expect(await screen.findByText(classLabelOf('cancelled'))).toBeInTheDocument();
   expect(screen.queryByText('cancelled')).toBeNull();
+  // ИЗМЕНЕНИЕ ВИДИМОГО ПОВЕДЕНИЯ: отменённая выглядит ЗАКРЫТОЙ — чекбокс отмечен (прежде он был
+  // пуст, а класс печатался сырым ключом рядом). Чекбокс показывает членство в наборе `closed`,
+  // класс внутри набора называет бейдж.
+  expect(screen.getByRole('checkbox')).toBeChecked();
+});
+
+/**
+ * Пользовательский аспект, заведённый ТОЛЬКО декларацией: свой статус в СВОЁМ свойстве. Строка
+ * обязана дать ему чекбокс (§С8-18), а переключение — нет: писатель шапки
+ * (`useEntityDetail.toggleTask`) кладёт литерал `orbis/task_status`, и клик записал бы на такую
+ * запись чужое свойство, не тронув её собственное.
+ */
+const probeAspect = (): AspectDefinition => {
+  const task = BUILTIN_REGISTRY.aspects.find((a) => a.id === 'orbis/task');
+  if (task === undefined) throw new Error('встроенного аспекта задачи нет');
+  return {
+    ...task,
+    id: 'user/probe-done',
+    key: 'user/probe-done',
+    rank: 99,
+    properties: [],
+    implements: [
+      {
+        contract: 'orbis/completable',
+        bind: { status: 'user/probe_state' },
+        fixed: {},
+        value_map: [
+          { slot: 'status', variant: 'open', class: 'active' },
+          { slot: 'status', variant: 'closed', class: 'done' },
+        ],
+      },
+    ],
+  };
+};
+const withProbeAspect: MockHandler = (path) =>
+  path === 'registry.effective'
+    ? { ...BUILTIN_REGISTRY, aspects: [...BUILTIN_REGISTRY.aspects, probeAspect()] }
+    : {};
+
+test('переключение — только у задач: чужая привязка даёт чекбокс, но НЕактивный', async () => {
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'user/probe_state': 'open' }, ['user/probe-done'])}
+      onToggleTask={() => {}}
+    />,
+    withProbeAspect,
+  );
+  const box = await screen.findByRole('checkbox');
+  // Состояние показываем — прятать чекбокс у члена контракта значило бы соврать о нём.
+  expect(box).toBeDisabled();
+  expect(box).toHaveAttribute('title', 'переключение доступно только задачам');
+});
+
+test('переключение у orbis/task активно — контроль к гарду выше', async () => {
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/task_status': 'inbox' }, ['orbis/task'])}
+      onToggleTask={() => {}}
+    />,
+    registryHandler,
+  );
+  const box = await screen.findByRole('checkbox');
+  expect(box).toBeEnabled();
+  expect(box).not.toHaveAttribute('title');
 });
 
 test('M14: у платежа со сроком чекбокс, дата и сумма стоят в одной строке', async () => {

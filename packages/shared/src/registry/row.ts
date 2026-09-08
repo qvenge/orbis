@@ -111,15 +111,49 @@ function slotValue(b: ResolvedBinding, entity: RowEntity, slot: string): unknown
 /**
  * Класс записи под привязкой — по status-слоту (§Б2-2). Варианты `present`/`absent` json-слотов
  * (Р-К-3) сюда не попадают: их контракт (`orbis/recurrence`) в таблице M14 не участвует.
+ *
+ * Возвращается ПАРА, а не один класс: имя слота нужно тем, кто спрашивает не «какой класс», а «в
+ * каком свойстве он лежит» (гард переключения чекбокса, `rowStatusPropertyOf`).
  */
-function classOf(b: ResolvedBinding, entity: RowEntity): string | null {
+function classOf(b: ResolvedBinding, entity: RowEntity): { slot: string; cls: string } | null {
   for (const [slot, byVariant] of b.classOfVariant) {
     const value = slotValue(b, entity, slot);
     if (value === undefined || value === null) continue;
     const cls = byVariant.get(String(value));
-    if (cls !== undefined) return cls;
+    if (cls !== undefined) return { slot, cls };
   }
   return null;
+}
+
+/**
+ * Привязка `orbis/completable`, ПОБЕДИВШАЯ у этой записи, — та самая, чей класс показывает чекбокс.
+ * Отдельной функцией, потому что читателей два: сама проекция и гард переключения; второе правило
+ * выбора означало бы, что чекбокс показывает одну привязку, а гард отвечает про другую.
+ */
+function checkboxBindingOf(
+  entity: RowEntity,
+  reg: RowRegistry,
+): { binding: ResolvedBinding; slot: string; cls: string } | null {
+  const rule = ruleOf('checkbox');
+  for (const binding of bindingsOn(indexOf(reg), entity, reg, rule.contract ?? '')) {
+    const hit = classOf(binding, entity);
+    if (hit !== null) return { binding, ...hit };
+  }
+  return null;
+}
+
+/**
+ * Свойство, в котором лежит СТАТУС завершаемости этой записи (слот-статус победившей привязки).
+ * `undefined` — контракт не реализован либо слот закрыт константой `fixed`: переключать нечего.
+ *
+ * Нужно ровно одному читателю — гарду переключения чекбокса в шапке записи: писатель
+ * (`useEntityDetail.toggleTask`) кладёт литерал `orbis/task_status`, и у чужой привязки клик
+ * записал бы не то свойство. В `RowProjection` поле НЕ добавлено намеренно: форма проекции —
+ * эталон снимка поверхностей (§1.9), и новое поле пересдало бы его без единого изменения смысла.
+ */
+export function rowStatusPropertyOf(entity: RowEntity, reg: RowRegistry): string | undefined {
+  const hit = checkboxBindingOf(entity, reg);
+  return hit === null ? undefined : hit.binding.bind[hit.slot];
 }
 /** Несёт ли свойство хоть один аспект, СТОЯЩИЙ на записи (Р9). */
 function carried(entity: RowEntity, reg: RowRegistry, propertyId: string): boolean {
@@ -133,13 +167,9 @@ export function rowProjectionOf(entity: RowEntity, reg: RowRegistry): RowProject
   const checkboxRule = ruleOf('checkbox');
   const closedSet = setClasses(reg, checkboxRule.contract ?? '', checkboxRule.set ?? '');
 
-  let checkbox: RowProjection['checkbox'] = null;
-  for (const b of bindingsOn(idx, entity, reg, checkboxRule.contract ?? '')) {
-    const cls = classOf(b, entity);
-    if (cls === null) continue;
-    checkbox = { closed: closedSet.includes(cls), cls };
-    break;
-  }
+  const won = checkboxBindingOf(entity, reg);
+  const checkbox: RowProjection['checkbox'] =
+    won === null ? null : { closed: closedSet.includes(won.cls), cls: won.cls };
 
   const dateRule = ruleOf('date');
   let date: RowProjection['date'] = null;
@@ -163,7 +193,7 @@ export function rowProjectionOf(entity: RowEntity, reg: RowRegistry): RowProject
       amount: raw,
       // Направление — КЛАСС money-movement; промах (значения нет, вариант не отнесён) читается как
       // расход: тот же дефолт, что стоял в строке до реформы (`?? 'expense'`).
-      direction: classOf(b, entity) === 'inflow' ? 'inflow' : 'outflow',
+      direction: classOf(b, entity)?.cls === 'inflow' ? 'inflow' : 'outflow',
       currency: typeof currency === 'string' && currency !== '' ? currency : null,
     };
     break;

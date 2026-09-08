@@ -5,6 +5,7 @@ import {
   type RowProjection,
   type RowRegistry,
   rowProjectionOf,
+  rowStatusPropertyOf,
 } from '@orbis/shared';
 import type { EffectiveRegistry } from './labels';
 import { useRegistry } from './useRegistry';
@@ -41,4 +42,14 @@ export function rowRegistryOf(data: EffectiveRegistry | undefined): RowRegistry 
  */
 export function useRowProjection(entity: RowEntity): RowProjection {
   return rowProjectionOf(entity, rowRegistryOf(useRegistry().data));
+}
+
+/**
+ * Свойство статуса победившей привязки `orbis/completable` — для ГАРДА переключения чекбокса
+ * (`NativeRow`): показать состояние можно у всякого реализатора контракта, а записать — только
+ * туда, куда умеет писатель. `undefined` — реестр ещё едет, контракт не реализован либо слот
+ * закрыт константой.
+ */
+export function useRowStatusProperty(entity: RowEntity): string | undefined {
+  return rowStatusPropertyOf(entity, rowRegistryOf(useRegistry().data));
 }
