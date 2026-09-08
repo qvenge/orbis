@@ -165,7 +165,7 @@ describe('снимки поверхностей: консервативност�
 
   test('эталон держит ровно объявленные состояния и все четыре поверхности', () => {
     const states = Object.keys((GOLDEN as { states: Record<string, unknown> }).states);
-    expect(states).toEqual(['baseline']); // задача 10 добавит 'custom-aspect', задача 18 — ещё два
+    expect(states.sort()).toEqual(['baseline', 'custom-aspect']); // задача 18 добавит ещё два
     for (const state of states) {
       expect(SURFACE_STATES).toContain(state as SurfaceState);
       const payload = (GOLDEN as { states: Record<string, Record<string, unknown>> }).states[state];

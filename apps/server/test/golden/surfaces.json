@@ -335,6 +335,386 @@
         "@task-open",
         "@tpl-weekly"
       ]
+    },
+    "custom-aspect": {
+      "planner/agenda": [
+        {
+          "section": "window",
+          "id": "@event-today",
+          "title": "Событие сегодня",
+          "at": "2026-07-03"
+        },
+        {
+          "section": "window",
+          "id": "@gate-spend",
+          "title": "Трата гейта",
+          "at": "2026-07-04"
+        },
+        {
+          "section": "overdue",
+          "id": "@task-open",
+          "title": "Задача просроченная",
+          "at": "2026-07-01"
+        },
+        {
+          "section": "overdue",
+          "id": "@gate-todo",
+          "title": "Дело гейта",
+          "at": "2026-07-01"
+        }
+      ],
+      "finance/budget-overview": {
+        "period": {
+          "start": "2026-07-01",
+          "end": "2026-07-31"
+        },
+        "balance": {
+          "income": "50000.00",
+          "expense": "11040.00",
+          "balance": "38960.00"
+        },
+        "envelopes": [
+          {
+            "envelope": {
+              "id": "@env-food",
+              "ownerId": "<ownerId>",
+              "title": "Конверт: Еда",
+              "emoji": null,
+              "body": "",
+              "bodyRefs": [],
+              "tags": [],
+              "props": {
+                "orbis/limit": "10000.00",
+                "orbis/currency": "RUB",
+                "orbis/period_end": "2026-07-12",
+                "orbis/period_start": "2026-07-01",
+                "orbis/finance_category": "@cat-food"
+              },
+              "aspects": ["orbis/budget"],
+              "queryRefs": [],
+              "createdAt": "<createdAt>",
+              "updatedAt": "<updatedAt>",
+              "archived": false
+            },
+            "category": {
+              "id": "@cat-food",
+              "title": "Еда",
+              "icon": "🍎",
+              "color": null
+            },
+            "spent": "9340.00",
+            "effectiveLimit": "10000.00",
+            "remaining": "660.00",
+            "dailyPace": "66.00",
+            "phase": "active"
+          },
+          {
+            "envelope": {
+              "id": "@env-transport",
+              "ownerId": "<ownerId>",
+              "title": "Конверт: Транспорт",
+              "emoji": null,
+              "body": "",
+              "bodyRefs": [],
+              "tags": [],
+              "props": {
+                "orbis/limit": "5000.00",
+                "orbis/currency": "RUB",
+                "orbis/period_end": "2026-07-12",
+                "orbis/period_start": "2026-07-01",
+                "orbis/finance_category": "@cat-transport"
+              },
+              "aspects": ["orbis/budget"],
+              "queryRefs": [],
+              "createdAt": "<createdAt>",
+              "updatedAt": "<updatedAt>",
+              "archived": false
+            },
+            "category": {
+              "id": "@cat-transport",
+              "title": "Транспорт",
+              "icon": "🚕",
+              "color": null
+            },
+            "spent": "1000.00",
+            "effectiveLimit": "5000.00",
+            "remaining": "4000.00",
+            "dailyPace": "400.00",
+            "phase": "active"
+          }
+        ],
+        "comingUp": [],
+        "planned": [
+          {
+            "entity": {
+              "id": "@mv-planned",
+              "ownerId": "<ownerId>",
+              "title": "Покупка запланированная",
+              "emoji": null,
+              "body": "",
+              "bodyRefs": [],
+              "tags": [],
+              "props": {
+                "orbis/amount": "2000.00",
+                "orbis/planned": true,
+                "orbis/currency": "RUB",
+                "orbis/direction": "expense",
+                "orbis/occurred_on": "2026-07-10",
+                "orbis/finance_category": "@cat-transport"
+              },
+              "aspects": ["orbis/financial"],
+              "queryRefs": [],
+              "createdAt": "<createdAt>",
+              "updatedAt": "<updatedAt>",
+              "archived": false
+            },
+            "amount": "2000.00",
+            "categoryTitle": "Транспорт"
+          }
+        ],
+        "unbudgeted": [
+          {
+            "category": {
+              "id": "@cat-coffee",
+              "title": "Кофе",
+              "icon": "☕"
+            },
+            "total": "700.00"
+          }
+        ],
+        "alertCount": 1
+      },
+      "core/row": {
+        "@gate-todo": {
+          "checkbox": {
+            "closed": false,
+            "cls": "active"
+          },
+          "date": {
+            "value": "2026-07-01T10:00:00+03:00",
+            "slot": "moment"
+          },
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@cat-food": {
+          "checkbox": null,
+          "date": null,
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@tpl-weekly": {
+          "checkbox": null,
+          "date": {
+            "value": "2026-07-03T08:00:00+03:00",
+            "slot": "moment"
+          },
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@task-blocked": {
+          "checkbox": {
+            "closed": false,
+            "cls": "active"
+          },
+          "date": {
+            "value": "2026-07-10",
+            "slot": "deadline"
+          },
+          "amount": null,
+          "progress": null,
+          "badges": [
+            {
+              "kind": "priority"
+            }
+          ]
+        },
+        "@task-done": {
+          "checkbox": {
+            "closed": true,
+            "cls": "done"
+          },
+          "date": {
+            "value": "2026-07-01",
+            "slot": "deadline"
+          },
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@task-open": {
+          "checkbox": {
+            "closed": false,
+            "cls": "active"
+          },
+          "date": {
+            "value": "2026-07-02",
+            "slot": "deadline"
+          },
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@note-blocker": {
+          "checkbox": null,
+          "date": null,
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@mv-salary": {
+          "checkbox": null,
+          "date": null,
+          "amount": {
+            "amount": "50000.00",
+            "direction": "inflow",
+            "currency": "RUB"
+          },
+          "progress": null,
+          "badges": []
+        },
+        "@env-food": {
+          "checkbox": null,
+          "date": null,
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@env-transport": {
+          "checkbox": null,
+          "date": null,
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@cat-coffee": {
+          "checkbox": null,
+          "date": null,
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@mv-coffee": {
+          "checkbox": null,
+          "date": null,
+          "amount": {
+            "amount": "700.00",
+            "direction": "outflow",
+            "currency": "RUB"
+          },
+          "progress": null,
+          "badges": []
+        },
+        "@mv-planned": {
+          "checkbox": null,
+          "date": null,
+          "amount": {
+            "amount": "2000.00",
+            "direction": "outflow",
+            "currency": "RUB"
+          },
+          "progress": null,
+          "badges": []
+        },
+        "@mem-rule": {
+          "checkbox": null,
+          "date": null,
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@mv-food-1": {
+          "checkbox": null,
+          "date": null,
+          "amount": {
+            "amount": "3000.00",
+            "direction": "outflow",
+            "currency": "RUB"
+          },
+          "progress": null,
+          "badges": []
+        },
+        "@mv-food-2": {
+          "checkbox": null,
+          "date": null,
+          "amount": {
+            "amount": "6000.00",
+            "direction": "outflow",
+            "currency": "RUB"
+          },
+          "progress": null,
+          "badges": []
+        },
+        "@event-today": {
+          "checkbox": null,
+          "date": {
+            "value": "2026-07-03T10:00:00+03:00",
+            "slot": "moment"
+          },
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@mv-transport-1": {
+          "checkbox": null,
+          "date": null,
+          "amount": {
+            "amount": "1000.00",
+            "direction": "outflow",
+            "currency": "RUB"
+          },
+          "progress": null,
+          "badges": []
+        },
+        "@cat-transport": {
+          "checkbox": null,
+          "date": null,
+          "amount": null,
+          "progress": null,
+          "badges": []
+        },
+        "@gate-spend": {
+          "checkbox": {
+            "closed": false,
+            "cls": "active"
+          },
+          "date": {
+            "value": "2026-07-04T12:00:00+03:00",
+            "slot": "moment"
+          },
+          "amount": {
+            "amount": "340.00",
+            "direction": "outflow",
+            "currency": null
+          },
+          "progress": null,
+          "badges": []
+        }
+      },
+      "core/exclude-blocked": [
+        "@cat-coffee",
+        "@cat-food",
+        "@cat-transport",
+        "@env-food",
+        "@env-transport",
+        "@event-today",
+        "@gate-spend",
+        "@gate-todo",
+        "@mem-rule",
+        "@mv-coffee",
+        "@mv-food-1",
+        "@mv-food-2",
+        "@mv-planned",
+        "@mv-salary",
+        "@mv-transport-1",
+        "@note-blocker",
+        "@task-done",
+        "@task-open",
+        "@tpl-weekly"
+      ]
     }
   }
 }
