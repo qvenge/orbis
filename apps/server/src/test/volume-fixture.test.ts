@@ -1,4 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { BUILTIN_ASPECT_DEFS, BUILTIN_CONTRACT_DEFS, BUDGET_DEF } from '@orbis/shared';
+import { budgetContourOf } from '../budget/contour';
+import { bindingTargetOf } from '../budget/binding';
+import type { WireEntity } from '../executor/types';
+import type { RegistrySnapshot } from '../registry/load';
 import {
   buildVolumeWorld,
   VOLUME_CATEGORIES,
@@ -177,5 +182,40 @@ describe('пробы сторожа Р-К-2', () => {
       ]),
     ).toBeNull();
     expect(volumeCombination({}, ['orbis/task'])).toBeNull();
+  });
+
+  /**
+   * Сторож Р-К-2 (Ф-Б1-13) против ОБОБЩЁННОГО хука, а не против литерала.
+   *
+   * Правило шаблона у сева (`volumeCombination`) и у хука (`bindingTargetOf`) — два разных
+   * текста: сев пинился литералом `orbis/recurrence` под `orbis/schedule`, а хук читает его
+   * из контура декларации. Разъедься они — оба сторожа остались бы зелёными порознь, а корпус
+   * молча считал бы шаблон тратой. Здесь они сверяются напрямую и БЕЗ БД: контур собирается
+   * из встроенных определений, `budgetContourOf` в базу не ходит.
+   */
+  test('Р-К-2: шаблонность у сева и у хука — одно правило (volumeCombination ⇔ bindingTargetOf)', () => {
+    const reg = {
+      aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+      contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+    } as unknown as RegistrySnapshot;
+    const contour = budgetContourOf(BUDGET_DEF, reg);
+    const wire = (aspects: string[], props: Record<string, unknown>): WireEntity =>
+      ({ id: VOLUME_PROBE_IDS[0] as string, aspects, props, archived: false }) as WireEntity;
+
+    const p = probes.find((x) => x.currency === null) as VolumeProbe;
+    const movement = wire(['orbis/financial'], volumeProbeProps(p));
+    expect(volumeCombination(movement.props, movement.aspects) === null).toBe(
+      bindingTargetOf(movement, contour)?.props === null,
+    );
+    expect(bindingTargetOf(movement, contour)?.props).not.toBeNull();
+
+    const template = wire(
+      ['orbis/financial', 'orbis/schedule'],
+      { 'orbis/recurrence': { freq: 'monthly', interval: 1 } },
+    );
+    expect(volumeCombination(template.props, template.aspects) === null).toBe(
+      bindingTargetOf(template, contour)?.props === null,
+    );
+    expect(bindingTargetOf(template, contour)?.props).toBeNull();
   });
 });
