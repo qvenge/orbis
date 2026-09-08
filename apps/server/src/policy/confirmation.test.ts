@@ -684,6 +684,28 @@ describe('§С2-1: перенастраивает поверхность или 
         'system-object',
       ],
       [
+        // Р9/Б1.13: адрес тут ни при чём — карта классов и добавленные варианты меняют
+        // ПОВЕДЕНИЕ (членство в классах, все фильтры наборов), и §С2-1 даёт им ряд 2.
+        '5в. карта классов поверх ВСТРОЕННОГО аспекта — ряд по туру, не по адресу',
+        'aspect_delta_set',
+        {
+          aspect: 'orbis/task',
+          delta: {
+            classMap: {
+              'orbis/task_status': [
+                {
+                  contract: 'orbis/completable',
+                  slot: 'status',
+                  variant: 'in_review',
+                  class: 'active',
+                },
+              ],
+            },
+          },
+        },
+        'behavior-delta',
+      ],
+      [
         '7. снятие дельты встроенного аспекта',
         'aspect_delta_remove',
         { aspect: 'orbis/note' },
