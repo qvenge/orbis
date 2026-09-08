@@ -6,22 +6,16 @@
 // Browser; NativeRow брать нельзя — это типографика страницы Detail (прецедент B5).
 // Слева от неё в дневных секциях — колонка времени (§4.1: время start_at, диапазон
 // при end_at, «весь день» для all_day-сущностей).
-import type { AgendaRow } from '@orbis/shared';
+import { type AgendaRow, type RowRegistry, rowProjectionOf } from '@orbis/shared';
 import { AlertTriangle } from 'lucide-react';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { rowRegistryOf } from '../../lib/registry/row';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
 import { EntityRow, formatDay } from '../browser/EntityRow';
-import {
-  type AgendaEntity,
-  dueDate,
-  endAt,
-  isFinancial,
-  localTime,
-  useAgendaDays,
-  useAgendaOverdue,
-} from './useAgenda';
+import { type AgendaEntity, endAt, localTime, useAgendaDays, useAgendaOverdue } from './useAgenda';
 
 const ROW_CLASS =
   'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50';
@@ -58,37 +52,34 @@ function timeLabel(r: AgendaRow, tz: string | undefined): string {
 
 /**
  * Подпись строки «Просроченного» (мокап §4: «срок был 11.06») — РЕЛЕВАНТНАЯ дата
- * элемента (более ранняя из due_date и локального дня start_at, §4.2). Своя подпись
- * здесь обязательна: у задачи с прошедшим start_at и будущим сроком собственная мета
+ * элемента (более ранняя из deadline и локального дня moment, §4.2). Своя подпись
+ * здесь обязательна: у задачи с прошедшим моментом и будущим сроком собственная дата
  * EntityRow показала бы в красной секции дату из будущего.
  *
- * Поэтому мету EntityRow гасим — но ТОЛЬКО там, где он нарисовал бы дату, то есть у
- * строк без `orbis/financial` (`showMeta={isFinancial(entity)}`): иначе у самой частой
- * строки (срок вчера) одна и та же дата печаталась бы дважды. У financial-сущности его
- * мета — сумма (приоритет financial → task.due_date), дублирования нет вовсе, а сумма
- * просроченного платежа — ровно то, ради чего строка и читается.
+ * Поэтому дату строки в этой секции гасим ЦЕЛИКОМ (`showDate={false}`): её печатает сама
+ * секция, и вторая печать была бы дублем. Суммы это не касается вовсе — после разделения
+ * меты на элементы `date` и `amount` (M14, §Б5-6) сумма гасится не проп'ом, а тем, что
+ * контракта денег на записи нет; у просроченного платежа она ровно то, ради чего строка
+ * и читается.
  */
 function overdueLabel(date: string): string {
   return `был ${formatDay(date)}`;
 }
 
 /**
- * Мета строки ДНЕВНОЙ секции (уборочная фаза): та же болезнь, что D2b вычистил в
- * «Просроченном». Секция уже подписана датой, слева стоит колонка времени — третья
- * печать той же даты справа была шумом, и у события она считалась в таймзоне БРАУЗЕРА
- * (`start_at` — полный ISO, `formatDay` форматирует его локально), тогда как сама секция
- * считается в `settings.timezone`: при несовпадении зон ночные строки расходились
- * с заголовком своей секции.
+ * Печатать ли дату строки в ДНЕВНОЙ секции. Секция уже подписана датой, слева стоит колонка
+ * времени: момент она называет дважды, и у события он считался в таймзоне БРАУЗЕРА
+ * (`formatDay` форматирует полный ISO локально), тогда как сама секция — в `settings.timezone`:
+ * при несовпадении зон ночные строки расходились с заголовком своей секции.
  *
- * Гасим ровно дубль, а не мету целиком: сумма financial-строки (приоритет меты
- * EntityRow) — не дата, её печатать некому; СВОЙ срок, отличающийся от дня секции
- * («встреча завтра, сдать послезавтра»), — новое знание, а не повтор. Сравнение
- * date-only строк прямое: `due_date` и дата секции обе 'YYYY-MM-DD'.
+ * СВОЙ срок, отличающийся от дня секции («встреча завтра, сдать послезавтра»), — новое знание
+ * и остаётся. Суммы этот проп не касается вовсе: `date` и `amount` — РАЗНЫЕ элементы M14.
+ * Сравнение date-only строк прямое: срок и дата секции обе 'YYYY-MM-DD'.
  */
-function showRowMeta(e: AgendaEntity, sectionDate: string): boolean {
-  if (isFinancial(e)) return true;
-  const due = dueDate(e);
-  return due !== null && due !== sectionDate;
+function showRowDate(e: AgendaEntity, sectionDate: string, reg: RowRegistry): boolean {
+  const date = rowProjectionOf(e, reg).date;
+  if (date === null || date.slot === 'moment') return false;
+  return date.value !== sectionDate;
 }
 
 function openEntity(id: string) {
@@ -99,11 +90,11 @@ function openEntity(id: string) {
 function AgendaLine({
   entity,
   time,
-  showMeta,
+  showDate,
 }: {
   entity: AgendaEntity;
   time?: string;
-  showMeta?: boolean;
+  showDate?: boolean;
 }) {
   return (
     <li>
@@ -117,7 +108,7 @@ function AgendaLine({
         {time !== undefined && (
           <span className="w-24 shrink-0 text-xs tabular-nums text-text-muted">{time}</span>
         )}
-        <EntityRow entity={entity} showMeta={showMeta} />
+        <EntityRow entity={entity} showDate={showDate} />
       </button>
     </li>
   );
@@ -125,6 +116,9 @@ function AgendaLine({
 
 export function AgendaScreen() {
   const { days, timezone, isLoading, isError } = useAgendaDays();
+  // Словари снимка — ОДИН раз на экран: правило строки чистое, а секции зовут его на каждую
+  // строку дня, и пересборка карт стоила бы обхода реестра на строку.
+  const reg = rowRegistryOf(useRegistry().data);
   const overdue = useAgendaOverdue();
   const today = days[0]?.date ?? '';
 
@@ -153,7 +147,7 @@ export function AgendaScreen() {
                     key={it.entity.id}
                     entity={it.entity}
                     time={overdueLabel(it.at)}
-                    showMeta={isFinancial(it.entity)}
+                    showDate={false}
                   />
                 ))}
               </ul>
@@ -188,7 +182,7 @@ export function AgendaScreen() {
                         key={r.entity.id}
                         entity={r.entity}
                         time={timeLabel(r, timezone)}
-                        showMeta={showRowMeta(r.entity, d.date)}
+                        showDate={showRowDate(r.entity, d.date, reg)}
                       />
                     ))}
                   </ul>

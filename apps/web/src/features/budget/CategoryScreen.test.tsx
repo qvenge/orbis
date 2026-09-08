@@ -263,6 +263,9 @@ test('транзакции: entity.query по детям конверта, Nativ
   // Заголовок секции — период текущего конверта (мокап §3.2: «Транзакции июня»)
   expect(screen.getByText('Транзакции июля')).toBeInTheDocument();
 
+  // Сумма — ЭЛЕМЕНТ строки M14: она приезжает с привязками снимка реестра, а сами строки —
+  // ответом `entity.query`, то есть раньше; без ожидания тест мерил бы кадр без суммы.
+  await waitFor(() => expect(screen.getAllByTestId('tx-row')[0]).toHaveTextContent('−2 340'));
   const rows = screen.getAllByTestId('tx-row');
   expect(rows[0]).toHaveTextContent('Перекрёсток');
   expect(rows[0]).toHaveTextContent('−2 340'); // native-рендер §3.6: сумма со знаком

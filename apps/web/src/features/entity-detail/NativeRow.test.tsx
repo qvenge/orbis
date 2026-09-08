@@ -1,3 +1,4 @@
+import { BUILTIN_CONTRACT_DEFS, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
 import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import type { MockHandler } from '../../test/harness';
@@ -53,7 +54,7 @@ const CAT_FOOD = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
 // Ссылка в категорию, которой в списке нет — запасной вариант «показать uuid».
 const CAT_GHOST = 'd1f0c8e5-4b2a-4d6e-8f01-9a7c3b5e2d44';
 
-test('financial: сумма с минусом и тоном danger', () => {
+test('financial: сумма с минусом и тоном danger', async () => {
   renderWithProviders(
     <NativeRow
       entity={financial({
@@ -65,12 +66,13 @@ test('financial: сумма с минусом и тоном danger', () => {
     />,
     registryHandler,
   );
-  const amount = screen.getByTestId('native-amount');
+  // Ждём снимок реестра: сумма — элемент M14, а привязки приезжают ответом `registry.effective`.
+  const amount = await screen.findByTestId('native-amount');
   expect(amount.textContent?.startsWith('−')).toBe(true);
   expect(amount.className).toContain('text-danger');
 });
 
-test('financial: income → плюс и позитивный тон', () => {
+test('financial: income → плюс и позитивный тон', async () => {
   renderWithProviders(
     <NativeRow
       entity={financial({
@@ -82,7 +84,7 @@ test('financial: income → плюс и позитивный тон', () => {
     />,
     registryHandler,
   );
-  const amount = screen.getByTestId('native-amount');
+  const amount = await screen.findByTestId('native-amount');
   expect(amount.textContent?.startsWith('+')).toBe(true);
   expect(amount.className).toContain('text-success');
 });
@@ -157,8 +159,9 @@ test('financial: пока категории грузятся, бейджа с u
     withCategories(categories),
   );
   // Значение ещё неизвестно — бейджа нет вовсе (ни uuid, ни пустой пилюли).
+  await screen.findByTestId('native-amount');
   expect(screen.queryByText(CAT_FOOD)).toBeNull();
-  expect(screen.getByTestId('native-financial').querySelectorAll('span')).toHaveLength(2);
+  expect(screen.getByTestId('native-row').querySelectorAll('span')).toHaveLength(2);
 
   release([category(CAT_FOOD, 'Еда')]);
   expect(await screen.findByText('Еда')).toBeInTheDocument();
@@ -176,7 +179,7 @@ test('нефинансовая строка список категорий не
   expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
 });
 
-test('task: рендерит чекбокс', () => {
+test('task: рендерит чекбокс', async () => {
   renderWithProviders(
     <NativeRow
       entity={row({ 'orbis/task_status': 'inbox', 'orbis/priority': 'high' }, ['orbis/task'])}
@@ -184,7 +187,8 @@ test('task: рендерит чекбокс', () => {
     />,
     registryHandler,
   );
-  expect(screen.getByRole('checkbox')).toBeInTheDocument();
+  // Чекбокс — элемент M14: он появляется вместе с привязками снимка, а не сразу.
+  expect(await screen.findByRole('checkbox')).toBeInTheDocument();
 });
 
 /**
@@ -236,7 +240,7 @@ test('generic: состав keyFields берётся из СНИМКА реес�
   expect(screen.getByText('да')).toBeInTheDocument();
 });
 
-test('generic: 2-3 keyFields из реестра', () => {
+test('generic: 2-3 keyFields из реестра', async () => {
   renderWithProviders(
     <NativeRow
       entity={row({ 'orbis/content_type': 'text', 'orbis/pinned': true }, ['orbis/note'])}
@@ -244,7 +248,7 @@ test('generic: 2-3 keyFields из реестра', () => {
     />,
     registryHandler,
   );
-  expect(screen.getByTestId('native-generic')).toBeInTheDocument();
+  expect(await screen.findByTestId('native-row')).toBeInTheDocument();
 });
 
 // Круг правок 1 задачи E3 (I1): незаполненные keyFields не печатаются вовсе — то же
@@ -404,7 +408,50 @@ test('категория: отказ списка категорий — бей�
       return registryReply(path) ?? {};
     },
   );
-  await screen.findByTestId('native-financial');
+  await screen.findByTestId('native-amount');
   await waitFor(() => expect(screen.queryByText(CAT_FOOD)).toBeNull());
-  expect(screen.getByTestId('native-financial').textContent).not.toContain(CAT_FOOD);
+  expect(screen.getByTestId('native-row').textContent).not.toContain(CAT_FOOD);
+});
+
+// Подпись класса контракта: слова выбирает сид, тест пинит «подпись, а не ключ». Копия хелпера из
+// browser.test.tsx — общего дома ей нет: `test/registry.ts` о локали читателя не знает.
+const classLabelOf = (cls: string): string => {
+  const found = (
+    BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/completable')?.classes ?? []
+  ).find((c) => c.key === cls);
+  if (found === undefined) throw new Error(`класс ${cls} не найден в контракте`);
+  return effectiveLabel(found.label, OWNER_LOCALE);
+};
+
+test('M14: отменённая — бейдж класса ПОДПИСЬЮ, сырого ключа статуса на экране нет', async () => {
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/task_status': 'cancelled' }, ['orbis/task'])}
+      onToggleTask={() => {}}
+    />,
+    registryHandler,
+  );
+  expect(await screen.findByText(classLabelOf('cancelled'))).toBeInTheDocument();
+  expect(screen.queryByText('cancelled')).toBeNull();
+});
+
+test('M14: у платежа со сроком чекбокс, дата и сумма стоят в одной строке', async () => {
+  renderWithProviders(
+    <NativeRow
+      onToggleTask={() => {}}
+      entity={row(
+        {
+          'orbis/task_status': 'planned',
+          'orbis/due_date': '2026-09-10',
+          'orbis/amount': '1200.00',
+          'orbis/direction': 'expense',
+        },
+        ['orbis/task', 'orbis/financial'],
+      )}
+    />,
+    registryHandler,
+  );
+  expect(await screen.findByRole('checkbox')).toBeInTheDocument();
+  expect(screen.getByText('10 сент.')).toBeInTheDocument();
+  expect(screen.getByTestId('native-amount')).toHaveTextContent('−1 200.00');
 });

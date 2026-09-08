@@ -14,6 +14,7 @@ import {
   trpcError,
   wireEntity as wireFixture,
 } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 
 // --- фикстуры -------------------------------------------------------------------------
@@ -83,7 +84,9 @@ const handler =
     }
     if (path === 'relation.listFor') return [];
     if (path === 'budget.confirmPurchase') return (over.confirm ?? okConfirm)(input);
-    return {};
+    // Реестр НАСТОЯЩИЙ: чекбокс шапки — элемент строки M14, и он собирается из привязок
+    // снимка; без ответа `registry.effective` его на экране не было бы вовсе.
+    return registryReply(path) ?? {};
   };
 
 beforeEach(() => {

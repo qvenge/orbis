@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { displayText } from '../../lib/registry/format';
-import { fieldLabel } from '../../lib/registry/labels';
+import { classLabel, fieldLabel } from '../../lib/registry/labels';
+import { useRowProjection } from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
+import { formatDay } from '../browser/EntityRow';
 import { useCategoryTitle } from '../budget/categories';
 
 type Entity = RouterOutputs['entity']['query'][number];
@@ -96,7 +98,7 @@ function TitleEditor({
  * правится карточкой свойства, как любое другое значение.
  *
  * Отдельный компонент, а не ветка внутри NativeRow: хук разыменования ссылки обязан быть
- * безусловным (та же причина, что у FinancialRow).
+ * безусловным (та же причина, что у `CategoryBadge`).
  */
 function MemoryRow({
   title,
@@ -140,53 +142,29 @@ function MemoryRow({
   );
 }
 
-// Отдельный компонент, а не ветка внутри NativeRow (D6c п.2): хук названия категории
-// обязан быть безусловным, а запрос категорий не должен уходить с каждой нефинансовой
-// строки (прецедент CategoryField в AspectCards).
-function FinancialRow({
-  title,
-  props,
-  onSaveTitle,
-}: {
-  title: string;
-  /** Свойства ЗАПИСИ (§А1-1); аспект `orbis/financial` — только признак рода строки. */
-  props: Record<string, unknown>;
-  onSaveTitle?: (title: string) => void;
-}) {
-  const money = formatMoney(
-    String(props['orbis/amount'] ?? '0'),
-    (props['orbis/direction'] as 'expense' | 'income') ?? 'expense',
-  );
-  const ref = props['orbis/finance_category'];
-  const categoryRef = typeof ref === 'string' ? ref : '';
-  // Бейдж — НАЗВАНИЕ категории (D6c п.2): сырой uuid остаётся лишь запасным вариантом,
-  // когда категория не найдена. Раньше это был единственный текст, и для транзакции
-  // без конверта (строки остатка нет) пользователь видел только uuid.
-  // Пока список категорий грузится, значение неизвестно — бейджа нет вовсе (D6d п.1):
-  // иначе на холодном кэше uuid мелькал и подменялся названием, бейдж дёргался по ширине.
-  const {
-    title: categoryTitle,
-    isPending: categoryPending,
-    isError: categoryFailed,
-  } = useCategoryTitle(categoryRef);
-
-  return (
-    <div className="flex items-center gap-2" data-testid="native-financial">
-      <Title value={title} onSave={onSaveTitle} />
-      <span
-        data-testid="native-amount"
-        className={`text-lg font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}
-      >
-        {money.text}
-      </span>
-      {categoryRef !== '' && !categoryPending && !categoryFailed && <Badge>{categoryTitle}</Badge>}
-    </div>
-  );
+/**
+ * Бейдж категории — свой компонент ради ХУКА (D6c п.2): хук обязан быть безусловным, а запрос
+ * категорий не должен уходить с каждой нефинансовой строки. Пока значение неизвестно — бейджа нет
+ * вовсе (D6d п.1): иначе на холодном кэше мелькал бы uuid.
+ */
+function CategoryBadge({ categoryRef }: { categoryRef: string }) {
+  const { title, isPending, isError } = useCategoryTitle(categoryRef);
+  if (isPending || isError) return null;
+  return <Badge>{title}</Badge>;
 }
 
-// §3.6 нативный рендер строки сущности: ветки task / financial / schedule / generic.
-// onSaveTitle — опционален: с ним заголовок становится inline-редактором (Detail),
-// без него остаётся текстом (строки транзакций CategoryScreen).
+/**
+ * §3.6 нативный рендер строки сущности — ОДНА строка по таблице M14 (§Б5-6), а не четыре ветки
+ * по именам аспектов: чекбокс, заголовок, дата, сумма и бейджи собираются из ПРИВЯЗОК реестра,
+ * и аспект владельца, которого этот файл не знает, получает их наравне со встроенным (§С8-18).
+ *
+ * Вне M14 остались три вещи, и каждая — осознанно: строка ПАМЯТИ (её смысл живёт в свойствах,
+ * а не в контрактах, В7), бейдж КАТЕГОРИИ (свойство-ссылка, контракта «категория» в v1 нет,
+ * В-2) и `keyFields` шапки (§А9-2 — их показывают записи, у которых не сработал ни один элемент).
+ *
+ * onSaveTitle — опционален: с ним заголовок становится inline-редактором (Detail), без него
+ * остаётся текстом (строки транзакций CategoryScreen).
+ */
 export function NativeRow({
   entity,
   onToggleTask,
@@ -196,94 +174,85 @@ export function NativeRow({
   onToggleTask: (done: boolean) => void;
   onSaveTitle?: (title: string) => void;
 }) {
-  // Значения — плоско в `props` по id свойства, род строки — по СПИСКУ аспектов (§А1-1).
-  // Прежде и то, и другое читалось из одной карты, и «аспект навешен» было неотличимо от
-  // «в аспекте что-то заполнено»: задача без единого свойства не получала чекбокса.
   const props = entity.props;
   const aspects = new Set(entity.aspects);
-  // Подписи и состав keyFields — из реестра (§А9-2). Хук зовётся ДО веток рода строки:
-  // ветвление идёт ниже по данным, и вызов хука внутри ветки нарушил бы правило порядка
-  // хуков на первой же смене аспекта у открытой записи.
+  // Подписи, keyFields и правило строки — из реестра (§А9-2, §Б5-6). Хуки зовутся ДО ветки
+  // памяти: ветвление идёт ниже по данным, и вызов хука внутри ветки нарушил бы правило
+  // порядка хуков на первой же смене аспекта у открытой записи.
   const registry = useRegistry();
-
-  if (aspects.has('orbis/task')) {
-    const status = props['orbis/task_status'];
-    const done = status === 'done';
-    return (
-      <div className="flex items-center gap-2" data-testid="native-task">
-        <Checkbox aria-label="Готово" checked={done} onCheckedChange={onToggleTask} />
-        <Title
-          value={entity.title}
-          onSave={onSaveTitle}
-          className={done ? 'text-text-muted line-through' : ''}
-        />
-        {typeof status === 'string' && status !== 'done' && <Badge>{status}</Badge>}
-      </div>
-    );
-  }
-
-  if (aspects.has('orbis/financial')) {
-    return <FinancialRow title={entity.title} props={props} onSaveTitle={onSaveTitle} />;
-  }
-
-  if (aspects.has('orbis/memory')) {
+  const row = useRowProjection(entity);
+  // Память — своя строка (В7): её смысл (образец сопоставления и цель) живёт в свойствах, а не в
+  // контрактах; в таблицу M14 запись памяти не входит.
+  if (aspects.has('orbis/memory'))
     return <MemoryRow title={entity.title} props={props} onSaveTitle={onSaveTitle} />;
-  }
 
-  if (aspects.has('orbis/schedule')) {
-    return (
-      <div className="flex items-center gap-2" data-testid="native-schedule">
-        <Title value={entity.title} onSave={onSaveTitle} />
-        {props['orbis/all_day'] ? (
-          <Badge>весь день</Badge>
-        ) : (
-          <span className="text-xs text-text-secondary">
-            {String(props['orbis/start_at'] ?? '')}
-          </span>
-        )}
-      </div>
-    );
-  }
-
-  // generic: первые 2–3 keyFields установленного аспекта из РЕЕСТРА (§А9-2) — ЗАПОЛНЕННЫЕ и
-  // подписанные тем же источником, что карточки свойств и карточки чата. Без подписи шапка
-  // печатала сырой ключ ровно над карточкой, где то же поле подписано словом: у цели
-  // «target_value: 300000.00» стояло над «Целевое значение: 300000.00» — одно значение, два
-  // имени, на одном экране.
-  //
-  // «Первый аспект» — первый по RANK реестра, а не первый ключ объекта: порядок ключей карты
-  // задавался порядком записи в jsonb, то есть тем, в каком порядке аспекты навешивали, — и
-  // одна и та же запись показывала разные поля у двух владельцев. Список `entity.aspects`
-  // такой же неупорядоченный, поэтому порядок берётся у выдачи реестра (она сортирована по
-  // `rank`, §А2-2), а не у записи.
-  //
-  // Состав keyFields — тоже из снимка (`view_config`), а не из статики shared: владелец
-  // вправе поменять его у своего аспекта, и вторая копия состава разъехалась бы с реестром.
-  //
-  // Отбор по наличию значения повторяет правило сервера, который собирает keyFields
-  // чат-карточек из того же реестра и незаполненные поля пропускает
-  // (tools/dispatch.ts: `if (value !== undefined) keyFields[propertyId] = value`).
-  // Без него у цели (E3) шапка печатала «Текущее значение: —» — кэш, который сервер не
-  // пишет никогда (goals/progress.ts считает прогресс на каждом чтении), — прямо над
-  // полосой прогресса, где стоит настоящее число.
-  const firstAspect = (registry.data?.aspects ?? []).find((a) => aspects.has(a.id));
+  const closed = row.checkbox?.closed === true;
+  const money =
+    row.amount === null
+      ? null
+      : formatMoney(row.amount.amount, row.amount.direction === 'inflow' ? 'income' : 'expense');
+  const catRef =
+    typeof props['orbis/finance_category'] === 'string'
+      ? (props['orbis/finance_category'] as string)
+      : '';
+  // keyFields — только когда ни один элемент M14 не сработал: записи без контрактов шапке нечего
+  // показать, кроме её ключевых полей (§А9-2; первый аспект — по rank реестра, не по порядку записи).
+  const bare = row.checkbox === null && row.date === null && row.amount === null;
+  const firstAspect = bare
+    ? (registry.data?.aspects ?? []).find((a) => aspects.has(a.id))
+    : undefined;
   const fields = (firstAspect?.viewConfig.keyFields ?? [])
     .filter((id) => props[id] !== undefined)
     .slice(0, 3);
+
   return (
-    <div className="flex items-center gap-2" data-testid="native-generic">
-      <Title value={entity.title} onSave={onSaveTitle} />
-      <dl className="flex gap-2 text-xs text-text-secondary">
-        {fields.map((id) => (
-          <div key={id} className="flex gap-1">
-            <dt>{fieldLabel(registry, id)}:</dt>
-            {/* Показ — по ТИПУ свойства: у `select` печатается подпись варианта, а не его
-                ключ, у булева — «да»/«нет». `String(value)` печатал `true` и `text` теми же
-                словами, которыми они лежат в базе. */}
-            <dd>{displayText(registry.property(id), props[id])}</dd>
-          </div>
-        ))}
-      </dl>
+    <div className="flex items-center gap-2" data-testid="native-row">
+      {row.checkbox !== null && (
+        <Checkbox aria-label="Готово" checked={closed} onCheckedChange={onToggleTask} />
+      )}
+      <Title
+        value={entity.title}
+        onSave={onSaveTitle}
+        className={closed ? 'text-text-muted line-through' : ''}
+      />
+      {row.date !== null && (
+        <span className="text-xs text-text-secondary">{formatDay(row.date.value)}</span>
+      )}
+      {money !== null && (
+        <span
+          data-testid="native-amount"
+          className={`text-lg font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}
+        >
+          {money.text}
+        </span>
+      )}
+      {/* прогресс — контракта `orbis/progress` в Б-1 нет (Б-3) */}
+      {row.badges.map((b) =>
+        b.kind === 'priority' ? (
+          <span
+            key="priority"
+            role="img"
+            aria-label="высокий приоритет"
+            className="size-1.5 shrink-0 rounded-full bg-danger"
+          />
+        ) : (
+          <Badge key={`${b.contract}:${b.cls}`}>{classLabel(registry, b.contract, b.cls)}</Badge>
+        ),
+      )}
+      {/* raw_value вне M14: «весь день» — свойство записи, контракта «признак суток» в v1 нет */}
+      {props['orbis/all_day'] === true && <Badge>весь день</Badge>}
+      {catRef !== '' && <CategoryBadge categoryRef={catRef} />}
+      {fields.length > 0 && (
+        <dl className="flex gap-2 text-xs text-text-secondary">
+          {fields.map((id) => (
+            <div key={id} className="flex gap-1">
+              <dt>{fieldLabel(registry, id)}:</dt>
+              {/* Показ — по ТИПУ свойства: у `select` печатается подпись варианта, у булева — «да»/«нет». */}
+              <dd>{displayText(registry.property(id), props[id])}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }

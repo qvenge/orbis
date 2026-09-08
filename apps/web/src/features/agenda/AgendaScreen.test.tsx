@@ -15,6 +15,7 @@ import { App } from '../../App';
 import { ActiveScreen } from '../../app/router';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { todayISO } from '../budget/useBudget';
 import { AgendaScreen } from './AgendaScreen';
 
@@ -68,7 +69,10 @@ const agendaHandler =
   (f: Fixtures): MockHandler =>
   (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path !== 'agenda.list') return {};
+    // Реестр НАСТОЯЩИЙ и обязателен: элементы строки (чекбокс, дата, сумма) собираются из
+    // ПРИВЯЗОК снимка (M14), и без него ни один из них не появился бы вовсе — тесты про
+    // гашение даты были бы зелены по ложной причине.
+    if (path !== 'agenda.list') return registryReply(path) ?? {};
     return {
       today,
       timezone: TZ,
@@ -474,14 +478,14 @@ test('дневная секция: у платежа сумма остаётся
   expect(within(daySection(tomorrow)).getByText('−1 200.00')).toBeInTheDocument();
 });
 
-test('дефолт меты EntityRow не менялся: в Browser строка по-прежнему печатает дату', async () => {
+test('дефолт даты EntityRow не менялся: в Browser строка по-прежнему печатает дату', async () => {
   // Дефолт пропа общий с Browser — правка Повестки не имеет права его сдвинуть.
   const { EntityRow } = await import('../browser/EntityRow');
   const task = ent('b1', 'Отчёт', { 'orbis/task_status': 'planned', 'orbis/due_date': tomorrow }, [
     'orbis/task',
   ]);
-  renderWithProviders(<EntityRow entity={task} />);
-  expect(screen.getByText(dayLabel(tomorrow))).toBeInTheDocument();
+  renderWithProviders(<EntityRow entity={task} />, (path) => registryReply(path) ?? {});
+  expect(await screen.findByText(dayLabel(tomorrow))).toBeInTheDocument();
 });
 
 // --- пользовательские строки экрана (D2c) ---------------------------------------------
@@ -581,7 +585,9 @@ function overdueRoundTripHandler(task: ReturnType<typeof ent>, state: { closed: 
       return task;
     }
     if (path === 'relation.listFor') return [];
-    return {};
+    // Реестр обязателен и на detail: чекбокс шапки — элемент строки M14, он собирается из
+    // привязок снимка, а не из имени аспекта.
+    return registryReply(path) ?? {};
   };
   return handler;
 }

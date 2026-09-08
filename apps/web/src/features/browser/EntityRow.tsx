@@ -1,6 +1,8 @@
 import { CheckCircle2, Circle, FileText } from 'lucide-react';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { classLabel } from '../../lib/registry/labels';
+import { useRowProjection } from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 
@@ -27,21 +29,20 @@ export function formatDay(value: string): string {
 
 /**
  * «Живая строка сущности» — подпись дизайна Orbis: слева эмодзи (или тип-глиф),
- * справа типизированная мета из аспектов (срок задачи, сумма с тоном, дата события).
+ * справа типизированные элементы строки (срок, сумма, бейджи).
  * Не контрол: чекбокс-глиф задачи — индикатор состояния, переключение — в Detail.
  *
- * `showMeta={false}` подавляет правую мету — для списков, где дату строки задаёт сам
- * список («Просроченное» в Agenda подписывает строку релевантной датой, §4.2). Дефолт
- * `true`: Browser (EntityList) прежний, поведение по умолчанию не менялось.
+ * Род элементов — по КОНТРАКТАМ (M14, §Б5-6): строка не знает ни одного имени аспекта.
+ * `showDate={false}` гасит ровно дату — для списков, где дату строки подписывает сам
+ * список (§4.2); сумма не гасится никогда, её печатать больше некому.
  */
-export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMeta?: boolean }) {
-  // Род строки — по СПИСКУ аспектов, значения — плоско в `props` по id свойства (§А1-1).
-  // Прежде и то, и другое читалось из одной карты, и «аспект навешен» было неотличимо от
-  // «в аспекте что-то заполнено»: задача без единого свойства оставалась без глифа.
+export function EntityRow({ entity, showDate = true }: { entity: Entity; showDate?: boolean }) {
   const props = entity.props;
-  const aspects = new Set(entity.aspects);
-  const task = aspects.has('orbis/task');
-  const done = props['orbis/task_status'] === 'done';
+  const registry = useRegistry();
+  // Элементы строки — из привязок реестра, а не из веток по аспектам (§Б5-6). Пока снимок
+  // едет, проекция пуста: строка печатает заголовок и дорисовывает элементы первым ответом.
+  const row = useRowProjection(entity);
+  const closed = row.checkbox?.closed === true;
 
   /**
    * ПРАВИЛО ПАМЯТИ ПОКАЗЫВАЕТСЯ ИЗ СВОЙСТВ (В7) — та же граница, что у слоя памяти промпта
@@ -69,7 +70,6 @@ export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMet
    * (`useRefTitle`: `refId === ''` гасит запрос) — на списках без правил сеть не трогается
    * вовсе, а полсотни строк с целями схлопываются react-query в один запрос.
    */
-  const registry = useRegistry();
   const ruleTarget = props['orbis/memory_kind'] === 'rule' ? props['orbis/rule_target'] : undefined;
   const ruleTargetRef = typeof ruleTarget === 'string' ? ruleTarget : '';
   const rulePattern = props['orbis/rule_pattern'];
@@ -84,12 +84,14 @@ export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMet
   const ruleTargetResolved =
     isRule && !rulePending && !ruleFailed && ruleTargetTitle !== ruleTargetRef;
 
+  // Глиф слева — по ЭЛЕМЕНТУ «чекбокс», а не по аспекту задачи: завершаемость есть у всякого,
+  // кто реализует контракт, включая аспект владельца, которого этот файл не знает.
   const leading = entity.emoji ? (
     <span aria-hidden className="w-5 text-center leading-none">
       {entity.emoji}
     </span>
-  ) : task ? (
-    done ? (
+  ) : row.checkbox !== null ? (
+    closed ? (
       <CheckCircle2 size={16} className="w-5 shrink-0 text-text-muted" aria-hidden />
     ) : (
       <Circle size={16} className="w-5 shrink-0 text-text-muted/70" aria-hidden />
@@ -98,43 +100,43 @@ export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMet
     <FileText size={16} className="w-5 shrink-0 text-text-muted/70" aria-hidden />
   );
 
-  const due = props['orbis/due_date'];
-  const startAt = props['orbis/start_at'];
-  let meta: React.ReactNode = null;
-  if (aspects.has('orbis/financial')) {
-    const money = formatMoney(
-      String(props['orbis/amount'] ?? '0'),
-      (props['orbis/direction'] as 'expense' | 'income') ?? 'expense',
-    );
-    meta = (
-      <span className={`text-xs font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}>
-        {money.text}
-      </span>
-    );
-  } else if (task && typeof due === 'string') {
-    meta = <span className="text-xs text-text-muted">{formatDay(due)}</span>;
-  } else if (aspects.has('orbis/schedule') && typeof startAt === 'string') {
-    meta = <span className="text-xs text-text-muted">{formatDay(startAt)}</span>;
-  }
+  const money =
+    row.amount === null
+      ? null
+      : formatMoney(row.amount.amount, row.amount.direction === 'inflow' ? 'income' : 'expense');
 
   return (
     <>
       {leading}
       <span
         data-testid={isRule ? 'entity-row-rule' : undefined}
-        className={`flex-1 truncate ${done ? 'text-text-muted line-through' : ''}`}
+        className={`flex-1 truncate ${closed ? 'text-text-muted line-through' : ''}`}
       >
         {isRule ? rulePattern : entity.title}
       </span>
       {ruleTargetResolved && <span className="text-xs text-text-muted">{ruleTargetTitle}</span>}
-      {task && props['orbis/priority'] === 'high' && !done && (
-        <span
-          role="img"
-          aria-label="высокий приоритет"
-          className="size-1.5 shrink-0 rounded-full bg-danger"
-        />
+      {showDate && row.date !== null && (
+        <span className="text-xs text-text-muted">{formatDay(row.date.value)}</span>
       )}
-      {showMeta && meta}
+      {money !== null && (
+        <span className={`text-xs font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}>
+          {money.text}
+        </span>
+      )}
+      {row.badges.map((b) =>
+        b.kind === 'priority' ? (
+          <span
+            key="priority"
+            role="img"
+            aria-label="высокий приоритет"
+            className="size-1.5 shrink-0 rounded-full bg-danger"
+          />
+        ) : (
+          <span key={`${b.contract}:${b.cls}`} className="text-xs text-text-muted">
+            {classLabel(registry, b.contract, b.cls)}
+          </span>
+        ),
+      )}
     </>
   );
 }

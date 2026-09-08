@@ -9,13 +9,7 @@ import { screen } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
 import { todayISO } from '../budget/useBudget';
-import {
-  dueDate,
-  isFinancial,
-  isRecurringTemplate,
-  useAgendaDays,
-  useAgendaOverdue,
-} from './useAgenda';
+import { isRecurringTemplate, useAgendaDays, useAgendaOverdue } from './useAgenda';
 
 const TZ = 'Europe/Moscow';
 const today = todayISO(TZ);
@@ -155,14 +149,10 @@ test('date-значение слота остаётся своим днём за
 test('чтения адресуют СВОЙСТВА по id — теми же именами, что стоят в реестре', () => {
   // Прежде запрос спрашивал `orbis/start_at`, а клиент читал ответ парой «аспект + поле»:
   // переименование рвало ровно одну из двух половин, и молча.
-  expect(dueDate(overdueTask)).toBe(yesterday);
+  //
+  // Чтений здесь осталось одно: срок и признак «это операция» уехали в правило строки M14
+  // (`rowProjectionOf` — контракты `orbis/when` и `orbis/money-movement`), и своей копии
+  // «какое свойство несёт дату» у Повестки больше нет.
   expect(isRecurringTemplate(template)).toBe(true);
   expect(isRecurringTemplate(event)).toBe(false);
-  // Признак «это операция» — СПИСОК аспектов: у записи без единого заполненного поля
-  // Финансов ключ старой карты был пуст, и мета строки печаталась бы датой вместо суммы.
-  expect(isFinancial(overduePayment)).toBe(true);
-  expect(isFinancial(overdueTask)).toBe(false);
-  expect(
-    isFinancial(wireEntity({ id: 'x', title: 'Пустая операция', aspects: ['orbis/financial'] })),
-  ).toBe(true);
 });

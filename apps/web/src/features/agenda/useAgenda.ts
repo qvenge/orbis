@@ -37,18 +37,6 @@ function stringProp(e: AgendaEntity, propertyId: string): string | null {
 }
 
 export const endAt = (e: AgendaEntity) => stringProp(e, 'orbis/end_at');
-export const dueDate = (e: AgendaEntity) => stringProp(e, 'orbis/due_date');
-
-/**
- * Есть ли у сущности `orbis/financial`. Нужно «Просроченному»: EntityRow выбирает мету
- * по приоритету financial → сумма, иначе дата. Дату строка секции печатает сама, сумму —
- * нет, поэтому подавлять чужую мету можно только у НЕфинансовых строк (§4.2).
- *
- * Признак — СПИСОК аспектов, а не «в карте есть ключ»: у операции без единого заполненного
- * поля (её оставляет импорт до резолва) ключ карты был пуст, и мета EntityRow — сумма —
- * печаталась бы поверх даты секции.
- */
-export const isFinancial = (e: AgendaEntity) => e.aspects.includes('orbis/financial');
 
 /**
  * Шаблон повторения — сущность с заданным `orbis/recurrence`. ПОВЕСТКЕ БОЛЬШЕ НЕ НУЖЕН: там

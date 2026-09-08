@@ -1,10 +1,13 @@
+import { BUILTIN_CONTRACT_DEFS, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
 import { EntityList } from './EntityList';
+import { EntityRow } from './EntityRow';
 import { PinnedList } from './PinnedList';
 import { QuickCapture } from './QuickCapture';
 
@@ -157,4 +160,46 @@ test('QuickCapture: ошибка мутации → toast «Не удалось 
   await waitFor(() => expect(screen.getByText('Не удалось сохранить')).toBeInTheDocument());
   // Введённый текст НЕ очищен — пользователь может повторить сабмит.
   expect(screen.getByLabelText(/быстрая запись/i)).toHaveValue('важная заметка');
+});
+
+// Строка списка — таблица M14 (§Б5-6): порядок чекбокс → заголовок → дата → сумма → бейджи, и ни
+// одного `if` по имени аспекта. Реестр НАСТОЯЩИЙ: правило берётся из привязок встроенных аспектов.
+const m14 = (path: string) => registryReply(path) ?? {};
+// Слова классов выбирает сид (задача 1) — тест их не пинит, он пинит «подпись, а не ключ».
+const classLabelOf = (cls: string): string => {
+  const found = (
+    BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/completable')?.classes ?? []
+  ).find((c) => c.key === cls);
+  if (found === undefined) throw new Error(`класс ${cls} не найден в контракте`);
+  return effectiveLabel(found.label, OWNER_LOCALE);
+};
+
+test('M14: у платежа со сроком печатаются И дата, И сумма — элементы разные', async () => {
+  const payment = wireEntity({
+    id: 'p1',
+    title: 'Аренда',
+    aspects: ['orbis/task', 'orbis/financial'],
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': '2026-09-10',
+      'orbis/amount': '1200.00',
+      'orbis/direction': 'expense',
+    },
+  });
+  renderWithProviders(<EntityRow entity={payment} />, m14);
+  expect(await screen.findByText('−1 200.00')).toBeInTheDocument();
+  expect(screen.getByText('10 сент.')).toBeInTheDocument();
+});
+
+test('M14: отменённая — зачёркнута и с бейджем класса ПОДПИСЬЮ, а не ключом', async () => {
+  const cancelled = wireEntity({
+    id: 'c1',
+    title: 'Отменённая',
+    aspects: ['orbis/task'],
+    props: { 'orbis/task_status': 'cancelled' },
+  });
+  renderWithProviders(<EntityRow entity={cancelled} />, m14);
+  expect(await screen.findByText(classLabelOf('cancelled'))).toBeInTheDocument();
+  expect(screen.queryByText('cancelled')).toBeNull(); // ключ варианта на экран не выходит
+  expect(screen.getByText('Отменённая').className).toContain('line-through');
 });
