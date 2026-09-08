@@ -5359,6 +5359,9 @@ function slotSql(slot: string, scope: Required<Pick<ExprCompileScope, 'cctx' | '
   снимки `RegistrySnapshot` правки не требуют): `llm/prompts/routine-v3.test.ts:63`, `llm/prompts/v5.test.ts:66`,
   `recurring/materialize.test.ts:576`, `seed/onboarding.test.ts:308`, `:1255`, `tools/registry.test.ts:330`,
   `apps/web/src/lib/query-blocks/catalog.ts:66-80`, `packages/shared/src/query/ast-fixtures.ts:178`.
+- Изменить, docs (эррата по исполнению 4): `docs/prd/02-core-os.md` §3.3 — четыре строки запросов смарт-листов, те же,
+  что в `seed/smart-lists.ts`: `onboarding.test.ts:267` сверяет тела сидов с markdown-блоками документа байт-в-байт и требует
+  везти их вместе (§А12-7); проза блоков не трогается.
 - Изменить, web: `apps/web/src/features/entity-detail/Blocks.tsx:14-15` (только докблок; сама константа
   `CLOSED` снимается задачей 7 — Р-К-14).
 - Test: `packages/shared/src/query/{ast,parse-ast,normalize,print}.test.ts`,
@@ -5830,8 +5833,7 @@ AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::
 `{contract, set}` — один): максимум набора упал 8 → 7, и на семёрке теперь ПЯТЬ эталонов (#0, #2, #13, #19,
 #20), а не два. `compile.golden.test.ts:119` → `expect(deepest).toBe(7);` с комментарием «до Б-1 максимум был
 8 и держался на двух эталонах сахара: узел `sourceNotIn` нёс массив значений». `ast.ts:74-77` — та же правка
-в докблоке `QUERY_TREE_DEPTH_CAP`: «самое глубокое дерево нормативных наборов — **7** уровней (пять эталонов
-golden; максимум фикстур канона — 7)». `ast.test.ts:221-232` **НЕ ТРОГАТЬ**: там `toBeLessThanOrEqual(8)` —
+в докблоке `QUERY_TREE_DEPTH_CAP`: «самое глубокое дерево нормативных наборов — **7** уровней (шесть эталонов golden — #0, #2, #13, #19, #20 и новый #53 class-формы тела сида; «пять» бриф считал до появления #53 — эррата 4)». `ast.test.ts:221-232` **НЕ ТРОГАТЬ**: там `toBeLessThanOrEqual(8)` —
 неравенство, оно остаётся истинным.
 `bun test src/query/compile.golden.test.ts` и `cd packages/shared && bun test src/query/ast.test.ts` → **PASS**.
 Коммит: `test(query): эталоны SQL пересчитаны под набор контракта, два новых эталона class, пин глубины 8 → 7 (§А5-7)`.
