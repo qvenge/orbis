@@ -10,7 +10,13 @@
 // `queryWithMaterialization`; оба ПИШУТ в граф, а материализованные инстансы приезжали бы со
 // случайными uuid. Здесь четыре поверхности считаются на ОДНОЙ `withIdentity`-tx тем же
 // компилятором и тем же `computeOverview`, что и ручки, — с прибитым `today` и без записи.
-import { addDays, type BudgetOverview, canonicalJson, ORBIS_NAMESPACE } from '@orbis/shared';
+import {
+  addDays,
+  type BudgetOverview,
+  canonicalJson,
+  ORBIS_NAMESPACE,
+  SURFACES,
+} from '@orbis/shared';
 import { v5 as uuidv5 } from 'uuid';
 import { computeOverview } from '../src/budget/aggregates';
 import type { Db } from '../src/db/client';
@@ -28,16 +34,12 @@ export const SURFACE_STATES = ['baseline', 'module-off', 'custom-aspect', 'relab
 export type SurfaceState = (typeof SURFACE_STATES)[number];
 
 /**
- * Имена снимков (Р-К-10). Первые две — поверхности подписок Б-1, `core/*` подписками не
- * описаны. Задача 5 заводит `SURFACES` в `packages/shared/src/registry/modules.ts` — тогда
- * список станет `[...SURFACES, 'core/row', 'core/exclude-blocked']`.
+ * Имена снимков (Р-К-10). Первые два ПРИЕЗЖАЮТ ИЗ `SURFACES` (`registry/modules.ts`), а не повторены
+ * литералом: по `SURFACES` отказывает `SURFACE_UNKNOWN`, и разъезд двух списков означал бы снимок
+ * поверхности, которую валидатор уже не признаёт, — молча и до первого пересева. `core/*` подписками
+ * не описаны (правило строки — константа `M14_ROW_ELEMENTS`, Р-К-1), поэтому дописаны здесь.
  */
-export const SNAPSHOT_SURFACES = [
-  'planner/agenda',
-  'finance/budget-overview',
-  'core/row',
-  'core/exclude-blocked',
-] as const;
+export const SNAPSHOT_SURFACES = [...SURFACES, 'core/row', 'core/exclude-blocked'] as const;
 export type SnapshotSurface = (typeof SNAPSHOT_SURFACES)[number];
 
 export const SURFACE_OWNER_ID = uuidv5('surface-snapshot-fixture:owner', ORBIS_NAMESPACE);

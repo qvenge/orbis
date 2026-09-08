@@ -7,6 +7,9 @@ export * from './builtin-contracts';
 export * from './builtin-properties';
 export * from './builtin-roles';
 export * from './contract-type';
+// Словарь модулей и поверхностей (§Б5-1, §Б8-1): по нему отказывает `SURFACE_UNKNOWN` и по нему же
+// собираются имена снимков поверхностей — второго списка имён в корпусе нет (Р-К-10).
+export * from './modules';
 export * from './property-type';
 // Модель-обращённая поверхность реестра (§А9-1): имя attach_*-тула и схема его data.
 export * from './tool-schema';
