@@ -1,18 +1,19 @@
 // apps/server/test/surfaces.ts — снимок ВЫДАЧИ четырёх поверхностей (§С8-20).
 //
 // «Сегодня» ПРИБИТО, мир — в абсолютных датах: все читатели берут `today` параметром
-// (`computeOverview(tx,…,today)`, `CompileCtx.today`), поэтому эталон не зависит от дня
+// (`budgetOverviewOf(tx,…,{month,today})`, `CompileCtx.today`), поэтому эталон не зависит от дня
 // прогона; мир относительно реального «сегодня» давал бы каждый день другой `dailyPace` и
 // другой `period_balance` на границе месяца.
 //
-// Снимок идёт МИМО tRPC-ручек: `budgetOverview` (`aggregates.ts:648`) гоняет `preparePeriod`
+// Снимок идёт МИМО tRPC-ручек: `budgetOverview` гоняет `preparePeriod`
 // (`:634` — postDue + материализация), `entity.query` (`routers/entity.ts:317`) —
 // `queryWithMaterialization`; оба ПИШУТ в граф, а материализованные инстансы приезжали бы со
 // случайными uuid. Здесь четыре поверхности считаются на ОДНОЙ `withIdentity`-tx тем же
-// компилятором и тем же `computeOverview`, что и ручки, — с прибитым `today` и без записи.
+// компилятором и тем же движком подписки, что и ручки, — с прибитым `today` и без записи.
 import {
   addDays,
   type BudgetOverview,
+  type BudgetSubscription,
   canonicalJson,
   ORBIS_NAMESPACE,
   type RowProjection,
@@ -20,7 +21,6 @@ import {
   SURFACES,
 } from '@orbis/shared';
 import { v5 as uuidv5 } from 'uuid';
-import { computeOverview } from '../src/budget/aggregates';
 import type { Db } from '../src/db/client';
 import { type Tx, withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
@@ -28,6 +28,8 @@ import type { WireEntity } from '../src/executor/types';
 import { type CompileCtx, compileQueryAst } from '../src/query/compile-ast';
 import { queryContext } from '../src/query/context';
 import { parseQueryText } from '../src/query/parse-text';
+import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
+import { builtinSubscription } from '../src/subscriptions/registry';
 import { toWireEntityFromSql } from '../src/wire';
 import { appDb } from './helpers';
 
@@ -376,7 +378,17 @@ export async function snapshotSurfaces(
     );
     return {
       'planner/agenda': await agendaSurface(tx, cctx),
-      'finance/budget-overview': await computeOverview(tx, ownerId, today.slice(0, 7), today),
+      // Считает ДВИЖОК ПОДПИСКИ (задача 9): эталон при переводе не пересдавался — на
+      // детерминированном мире декларация даёт байт-в-байт то же, что давал оракул, и это и есть
+      // «ноль расхождений» §С8-15 на снимке. `computeOverview` остаётся вторым мнением сверки
+      // (РП-4), но снимок теперь читает то, что читает прод.
+      'finance/budget-overview': await budgetOverviewOf(
+        tx,
+        ownerId,
+        { month: today.slice(0, 7), today },
+        builtinSubscription(cctx.reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription,
+        cctx.reg,
+      ),
       'core/row': rowsById,
       'core/exclude-blocked': visible.map((e) => e.id),
     } satisfies SurfacePayloads;
