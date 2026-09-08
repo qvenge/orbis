@@ -331,7 +331,10 @@ function assertAlertOperands(id: string, def: BudgetSubscription): void {
  * (`scope: 'period'` — баланс, Unbudgeted) невыразима по построению: период считается один на весь
  * месяц, а формула живёт на строке конверта, и «какое значение периода взять» ответа не имеет.
  * Раньше такая декларация проходила запись и падала `INVARIANT` на ЧТЕНИИ, у владельца, — отказ
- * обязан приходить автору декларации.
+ * обязан приходить автору декларации. Обходятся ВСЕ формулы, не только `scope: 'envelope'`: формул
+ * периода движок не считает вовсе (`envelopeLedgers` сеет только суммы конверта), так что формула над
+ * `period_balance`/`unbudgeted` невыразима при любом `scope` — отказ на записи здесь fail-closed
+ * (ре-ревью задачи 9, m-1).
  */
 function assertEnvelopeFormulas(id: string, def: BudgetSubscription): void {
   const periodAggs = new Set(
