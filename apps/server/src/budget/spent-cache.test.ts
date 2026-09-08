@@ -299,6 +299,81 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
     ).toBe(versions.ownerVersion + 1);
     expect(await spentOf()).toBe('340.00');
   });
+
+  test('СВОЙ ВАРИАНТ НАПРАВЛЕНИЯ доезжает до движка: без карты — отказ, с картой spent 340 → 440', async () => {
+    // §С8-19 в четвёртом читателе — движке Budget, а не только в его кэше. Класс контракта
+    // `orbis/money-movement` — то, по чему `runSum` отбирает строки набора `outflow`; вариант
+    // `orbis/direction`, не отнесённый к классу, дал бы движение, которого нет ни в одной
+    // сумме, и владельцу об этом никто бы не сказал.
+    const cat6 = newId();
+    const clock = () => new Date('2026-07-13T09:00:00.000Z');
+    const env = await createEntity(user, {
+      title: 'Перевод — июль',
+      props: budgetProps(cat6),
+      aspects: ['orbis/budget'],
+    });
+    await createEntity(user, {
+      title: 'Обычный расход',
+      props: finProps(cat6, '2026-07-06'),
+      aspects: ['orbis/financial'],
+    });
+    const spentOf = async (): Promise<string | undefined> =>
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+        (e) => e.envelope.id === env.id,
+      )?.spent;
+    expect(await spentOf()).toBe('340.00');
+
+    const addDirection = (classMap?: unknown) =>
+      execute(
+        db,
+        req(user, 'aspect_delta_set', {
+          aspect: 'orbis/financial',
+          delta: {
+            selectOptions: {
+              'orbis/direction': {
+                add: [{ key: 'transfer_out', label: { ru: 'Перевод со счёта' }, rank: 3 }],
+              },
+            },
+            ...(classMap !== undefined && { classMap }),
+          },
+        }),
+      );
+    // Без карты — отказ ДО записи: `orbis/direction` стоит слотом-статусом money-movement.
+    const refused = await addDirection();
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? null : refused.error.code).toBe('VARIANT_UNMAPPED');
+    expect(refused.ok ? null : refused.error.details).toMatchObject({
+      propertyId: 'orbis/direction',
+      variant: 'transfer_out',
+      contract: 'orbis/money-movement',
+      slot: 'direction',
+      reason: 'unmapped',
+    });
+
+    ok(
+      await addDirection({
+        'orbis/direction': [
+          {
+            contract: 'orbis/money-movement',
+            slot: 'direction',
+            variant: 'transfer_out',
+            class: 'outflow',
+          },
+        ],
+      }),
+    );
+    await createEntity(user, {
+      title: 'Перевод',
+      props: finProps(cat6, '2026-07-07', {
+        'orbis/direction': 'transfer_out',
+        'orbis/amount': '100.00',
+      }),
+      aspects: ['orbis/financial'],
+    });
+    // Движок сложил новый класс с прежним: 340 + 100. Пройти мимо кэша тут нечем — дельта
+    // подняла версию реестра, и старая строка на ключ не отвечает.
+    expect(await spentOf()).toBe('440.00');
+  });
 });
 
 describe('врезка в бюджет-хук: инкремент нового движения, снос — всё остальное (§Б5-5, Р-К-16)', () => {
