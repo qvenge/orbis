@@ -16,3 +16,18 @@ export function surfaceModuleOf(surface: string): ModuleId | null {
   const head = surface.split('/')[0] ?? '';
   return (MODULE_IDS as readonly string[]).includes(head) ? (head as ModuleId) : null;
 }
+
+/**
+ * КАКОЙ ДВИЖОК ОБСЛУЖИВАЕТ ПОВЕРХНОСТЬ. Таблица нужна потому, что дискриминант декларации — `engine`,
+ * а адрес показа — `surface`, и без сверки декларация Budget, объявленная на повестку, проходила бы
+ * все проверки формы: движок повестки получил бы чужую форму уже на исполнении, то есть у владельца,
+ * а не у автора декларации.
+ *
+ * Имена движков написаны здесь литералами, а не импортом из `subscription-type.ts`: стрелка между
+ * файлами односторонняя (форма подписки читает словарь поверхностей), и обратная замкнула бы цикл.
+ * `satisfies` держит таблицу ПОЛНОЙ: новая поверхность без движка не скомпилируется.
+ */
+export const SURFACE_ENGINE = {
+  'planner/agenda': 'agenda',
+  'finance/budget-overview': 'budget',
+} as const satisfies Readonly<Record<SurfaceName, string>>;

@@ -8,7 +8,12 @@ import {
 
 describe('форма подписки: agenda/budget строгая; строка в E-позиции — SECOND_LANGUAGE', () => {
   test('agenda разбирается и подставляет умолчания params/prefer/sortBy/limit', () => {
-    const d = agendaSubscriptionSchema.parse(AGENDA_DEF);
+    // Разбирается КОПИЯ БЕЗ полей с умолчанием: сам эталон типизирован разобранной формой и потому
+    // несёт их явно (`subscription-fixtures.ts`), а подстановку наблюдает только вход без них.
+    const { params: _params, ...rest } = AGENDA_DEF;
+    const { prefer: _sp, sortBy: _ss, limit: _sl, ...show } = AGENDA_DEF.show;
+    const { prefer: _op, limit: _ol, ...overdue } = AGENDA_DEF.overdue;
+    const d = agendaSubscriptionSchema.parse({ ...rest, show, overdue });
     expect(d.params).toEqual(['window_from', 'window_to']);
     expect([d.show.prefer.length, d.show.sortBy, d.show.limit, d.overdue.limit]).toEqual([
       0,

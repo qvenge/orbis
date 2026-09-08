@@ -65,11 +65,14 @@ export const BUDGET_DEF: BudgetSubscription = {
       },
     },
   },
+  // Фаза меряется «сегодня» ПРОТИВ СОБСТВЕННОГО периода конверта, а не против границ запрошенного
+  // месяца: оракул (`budget/aggregates.ts`, `phaseOf`) сравнивает `today` с `periodStart`/`periodEnd`
+  // САМОГО конверта, и у произвольного конверта внутри месяца (§2.9) две мерки дают разные ответы.
   // `active` — ОСТАТОК, и потому `{const:true}`: две прочие фазы называют условие, а активной
   // становится всё, что ими не отобрано (порядок разбора — забота движка, §Б5-6).
   phases: {
-    upcoming: { op: '>', args: [{ slot: 'period_start' }, { param: 'period_end' }] },
-    closed: { op: '<', args: [{ slot: 'period_end' }, { param: 'period_start' }] },
+    upcoming: { op: '<', args: [{ ctx: '$today' }, { slot: 'period_start' }] },
+    closed: { op: '>', args: [{ ctx: '$today' }, { slot: 'period_end' }] },
     active: { const: true },
   },
   aggregates: {
@@ -115,7 +118,10 @@ export const BUDGET_DEF: BudgetSubscription = {
             op: '/',
             args: [
               { agg: 'remaining' },
-              { days_inclusive: [{ ctx: '$today' }, { param: 'period_end' }] },
+              // Конец периода — СЛОТ конверта, а не параметр запроса: оракул делит на
+              // `daysInclusive(today, raw.periodEnd)`, и у конверта, не совпадающего с месяцем,
+              // параметр дал бы другое число дней.
+              { days_inclusive: [{ ctx: '$today' }, { slot: 'period_end' }] },
             ],
           },
           { const: null },
@@ -128,15 +134,21 @@ export const BUDGET_DEF: BudgetSubscription = {
     mode: 'same_currency_only',
     applies_to: ['spent', 'effective_limit', 'remaining'],
   },
-  // Порог — СТРОКА (§Б3-5): дробное JSON-число потеряло бы хвост ещё до чекера.
-  alerts: { warn_at: '0.85', on_raw: true, skip_phases: ['upcoming', 'closed'], inclusive: true },
+  // Порог — СТРОКА (§Б3-5): дробное JSON-число потеряло бы хвост ещё до чекера. Пропускается ровно
+  // одна фаза — `upcoming` (§2.9а и `countAlerts` оракула): у закрытого конверта перерасход показать
+  // надо, иначе бейдж молчал бы ровно там, где уже поздно что-то менять.
+  alerts: { warn_at: '0.85', on_raw: true, skip_phases: ['upcoming'], inclusive: true },
   lists: {
-    // Материализованные экземпляры повторения: у них есть ребро порождения, у ручного плана — нет.
+    // Оба списка — ПЛАНОВЫЕ движения (§Б5-4 «списки: planned=true ∧ окно»); разводит их ребро
+    // порождения: у материализованного экземпляра повторения оно есть, у ручного плана — нет.
+    // Без `planned = true` сюда попал бы экземпляр, проведённый `postDue` сегодня (он уже факт,
+    // `planned=false`, дата = сегодня), — а оракул (`aggregates.ts`, `comingRows`) его не берёт.
     coming_up: {
       over: 'movement',
       counted_set: 'outflow',
       requires_relation: { role: 'instance-of', side: 'source' },
       window: { from: { ctx: '$today' }, to: { param: 'horizon_end' } },
+      where: { op: '=', args: [{ slot: 'planned' }, { const: true }] },
       order_by: [{ slot: 'date' }, { core: 'id' }],
     },
     planned: {

@@ -1,8 +1,8 @@
 // apps/server/src/subscriptions/registry.test.ts
 // Валидатор декларации подписки (§Б5-1, §Б5-2) и разрешение слота у сущности (§С8-21).
 // Первые три describe — чистые: вход это готовый снимок реестра и литерал декларации, живая
-// база к ответу ничего не добавляет. Четвёртый и пятый — против БД: конфликт слота живёт у
-// СУЩНОСТИ, и собрать его можно только двумя настоящими привязками в реестре владельца.
+// база к ответу ничего не добавляет. Четвёртый — против БД: конфликт слота живёт у СУЩНОСТИ,
+// и собрать его можно только двумя настоящими привязками в реестре владельца.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   AGENDA_DEF,
@@ -107,6 +107,18 @@ describe('позиции языка E в декларации и сырые сс
       rawValueRefs({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, before } } as never),
     ).toEqual([]);
   });
+  test('{has} по id свойства — тоже сырая ссылка; {has} по имени слота — нет', () => {
+    // Узел `has` один, а смысла у него два (`expr/check.ts`): в области с контрактом он принимает и id
+    // свойства, и имя слота. Различает их форма имени — слот слаг, id свойства несёт `/`.
+    const byProp = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'orbis/task_status' }] };
+    expect(
+      rawValueRefs({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where: byProp } } as never),
+    ).toEqual(['overdue.where.args.1']);
+    const bySlot = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'deadline' }] };
+    expect(
+      rawValueRefs({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where: bySlot } } as never),
+    ).toEqual([]);
+  });
   test('budget: позиции — фазы, формулы, where сумм и окна списков', () => {
     expect(exprSitesOf(BUDGET_DEF).map((s) => s.path)).toContain('aggregates.daily_pace.expr');
   });
@@ -135,6 +147,14 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
   });
   test('законная системная декларация проходит и возвращает разобранную форму', () => {
     expect(assertSubscription(row(AGENDA_DEF), seed).engine).toBe('agenda');
+  });
+  test('движок, которого поверхность не обслуживает, — SUBSCRIPTION_ENGINE_SURFACE', () => {
+    // Форма разбирается, ссылки целы — и всё равно отказ: иначе движок повестки получил бы форму
+    // Budget уже на исполнении, у владельца, а не у автора декларации.
+    expect(refusal(() => assertSubscription(row(BUDGET_DEF), seed))).toEqual({
+      code: 'VALIDATION',
+      reason: 'SUBSCRIPTION_ENGINE_SURFACE',
+    });
   });
   test('counted_set вне наборов контракта — SUBSCRIPTION_UNKNOWN_SET', () => {
     const def = {
@@ -165,6 +185,16 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
         assertSubscription(row({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } }), seed),
       ).code,
     ).toBe('SUBSCRIPTION_RAW_REF');
+  });
+  test('{has} по id свойства системному сиду запрещён так же, как {prop}', () => {
+    const where = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'orbis/task_status' }] };
+    const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
+    expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
+    const own = assertSubscription(row(def, { ownerId: freshUserId() }), {
+      reg: snapshot(),
+      systemSeed: false,
+    });
+    expect(rawValueRefs(own)).toEqual(['overdue.where.args.1']);
   });
   test('сырой предикат по свойству: системному сиду запрещён, владельцу — помечается', () => {
     const where = {

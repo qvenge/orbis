@@ -9,8 +9,11 @@ import {
   EXPR_RECURSION,
   EXPR_TYPE,
   SECOND_LANGUAGE,
+  SLOT_KEY_RE,
+  SURFACE_ENGINE,
   SURFACES,
   type SubscriptionDefinition,
+  type SurfaceName,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
 import type { ExprScope, ExprType } from '@orbis/shared/expr';
@@ -155,9 +158,19 @@ function budgetSites(d: Record<string, unknown>): ExprSite[] {
   return out;
 }
 
-/** Прямой адрес свойства: `{prop}` и `{deref:{prop}}`. */
+/**
+ * Прямой адрес свойства: `{prop}`, `{deref:{prop}}` и `{has: <id свойства>}`.
+ *
+ * `has` РАЗДВОЕН по форме имени, потому что узел один, а смысла у него два (`expr/check.ts`): в области
+ * с контрактом он принимает и id свойства, и имя слота. Слот — слаг (`SLOT_KEY_RE`), id свойства несёт
+ * `/` — по этому и различаются. Пропустить `{has}` значило бы дыру ровно того рода, ради которой
+ * перечень и заведён: `and(class in open, has(orbis/…))` — предикат по СВОЙСТВУ, и системному сиду он
+ * запрещён (§Б5-2), а у владельца обязан получить пометку `raw_value` в диффе Ш1.
+ */
 const isRawNode = (n: Record<string, unknown>): boolean =>
-  typeof n.prop === 'string' || typeof rec(n.deref)?.prop === 'string';
+  typeof n.prop === 'string' ||
+  typeof rec(n.deref)?.prop === 'string' ||
+  (typeof n.has === 'string' && !SLOT_KEY_RE.test(n.has));
 
 function walkRaw(value: unknown, path: string, out: string[]): void {
   if (Array.isArray(value)) {
@@ -220,6 +233,18 @@ export function assertSubscription(
     });
   }
   const def = parsed.data;
+  // Движок обязан совпасть с тем, что поверхность умеет показывать: иначе её движок получил бы чужую
+  // форму на ИСПОЛНЕНИИ — у владельца, а не у автора декларации. Поверхность к этому месту уже в
+  // словаре (проверка первой ступенью), поэтому ответа `undefined` у таблицы здесь не бывает.
+  const engine = SURFACE_ENGINE[row.surface as SurfaceName];
+  if (engine !== def.engine) {
+    bad(
+      'SUBSCRIPTION_ENGINE_SURFACE',
+      row.id,
+      `поверхность ${row.surface} обслуживает движок ${engine}, а декларация объявлена для ${def.engine}`,
+      { surface: row.surface, expected: engine, actual: def.engine },
+    );
+  }
   assertReferences(row.id, def, scope.reg);
   assertExprTypes(row.id, def, scope.reg);
   if (def.engine === 'budget') assertAggregatesAcyclic(row.id, def);
@@ -397,7 +422,7 @@ function assertNoRawValues(id: string, def: SubscriptionDefinition): void {
     {
       subscription: id,
       path,
-      ref: node?.prop ?? rec(node?.deref)?.prop ?? null,
+      ref: node?.prop ?? rec(node?.deref)?.prop ?? node?.has ?? null,
     },
   );
 }
