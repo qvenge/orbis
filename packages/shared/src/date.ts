@@ -187,6 +187,26 @@ export function addDays(dateISO: string, days: number): string {
   return fromParts(partsFromEpochDays(epochDays(parts) + days));
 }
 
+/**
+ * Дней от `from` до `to` ВКЛЮЧИТЕЛЬНО — узел `days_inclusive` языка E (§Б3-2/§Б3-5) и «дни до конца
+ * периода» у `daily_pace` (03-budget §2.4).
+ *
+ * Обратный порядок даёт 0, а не 1 и не отрицательное: «периода не осталось» — это ноль дней, и делить
+ * на него нельзя (`decDiv` ответит RangeError, бэкенд формул превратит его в структурный отказ). Прежняя
+ * копия в `budget/aggregates.ts` зажимала результат в `Math.max(1, …)`, но звалась ровно в одной точке —
+ * под условием `phase === 'active'`, где `today ≤ period_end` по построению фазы (`phaseOf`), то есть
+ * зажим не срабатывал ни разу. Здесь его нет, чтобы у нуля был честный смысл.
+ *
+ * Даты разбираются `toParts` — со СТРОГИМ календарём: 30 февраля прежняя реализация на `Date.UTC` молча
+ * нормализовала во 2 марта, а значение свойства вида `date` такую форму не проходит на записи (§А7-1,
+ * `hasValidCalendar` выше). Молчаливая нормализация здесь означала бы деньги, посчитанные по несуществующему
+ * дню, — отказ честнее.
+ */
+export function daysInclusive(fromISO: string, toISO: string): number {
+  const days = epochDays(toParts(toISO)) - epochDays(toParts(fromISO)) + 1;
+  return days > 0 ? days : 0;
+}
+
 /** Индекс дня недели (0 = понедельник): 1970-01-01 — четверг (индекс 3). */
 export function mondayIndex(days: number): number {
   return (((days + 3) % 7) + 7) % 7;

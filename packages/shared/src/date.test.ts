@@ -2,6 +2,7 @@
 // разъехавшись с mondayIndex, алфавит дней сдвинул бы КАЖДЫЙ прогон на день.
 import { describe, expect, test } from 'bun:test';
 import {
+  daysInclusive,
   epochDays,
   HHMM_RE,
   hasValidCalendar,
@@ -154,5 +155,47 @@ describe('hasValidCalendar: существует ли момент или ден
     expect(hasValidCalendar('2026-08-27T99:99')).toBe(true);
     // А вот ДЕНЬ у него проверяется: голова разобрана, и 30 февраля не бывает нигде.
     expect(hasValidCalendar('2026-02-30T07:00')).toBe(false);
+  });
+});
+
+describe('daysInclusive: дни от даты до даты включительно (§Б3-2, §Б5-4 daily_pace)', () => {
+  test('включительно с обоих концов; один и тот же день — 1', () => {
+    expect(daysInclusive('2026-05-01', '2026-05-01')).toBe(1);
+    expect(daysInclusive('2026-05-01', '2026-05-31')).toBe(31);
+    expect(daysInclusive('2026-02-01', '2026-03-01')).toBe(29); // 2026 не високосный: 28 + 1
+  });
+
+  test('високосный февраль считается по календарю, а не по 30-дневному месяцу', () => {
+    expect(daysInclusive('2028-02-01', '2028-03-01')).toBe(30); // 29 дней февраля + 1
+  });
+
+  test('обратный порядок — 0, а не 1 и не отрицательное: «дней не осталось»', () => {
+    expect(daysInclusive('2026-05-02', '2026-05-01')).toBe(0);
+    expect(daysInclusive('2026-06-01', '2026-05-01')).toBe(0);
+  });
+
+  test('совпадает с прежней копией на Date.UTC (budget/aggregates.ts:156-161) там, где та звалась', () => {
+    // Копия звалась ТОЛЬКО при from ≤ to (фаза active, §2.4) — этот диапазон и сверяем.
+    const old = (from: string, to: string): number => {
+      const [fy, fm, fd] = from.split('-').map(Number) as [number, number, number];
+      const [ty, tm, td] = to.split('-').map(Number) as [number, number, number];
+      return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000) + 1;
+    };
+    const pairs: Array<[string, string]> = [
+      ['2026-01-01', '2026-12-31'],
+      ['2026-03-28', '2026-04-01'],
+      ['2028-02-28', '2028-03-01'],
+      ['2026-10-25', '2026-11-01'],
+      ['2026-05-15', '2026-05-15'],
+    ];
+    for (const [from, to] of pairs) {
+      expect(`${from}→${to}: ${daysInclusive(from, to)}`).toBe(`${from}→${to}: ${old(from, to)}`);
+    }
+  });
+
+  test('несуществующая дата — RangeError (toParts), а не молчаливая нормализация Date.UTC', () => {
+    expect(() => daysInclusive('2026-02-30', '2026-03-01')).toThrow(RangeError);
+    expect(() => daysInclusive('2026-05-01', '2026-13-01')).toThrow(RangeError);
+    expect(() => daysInclusive('01.05.2026', '2026-05-31')).toThrow(RangeError);
   });
 });
