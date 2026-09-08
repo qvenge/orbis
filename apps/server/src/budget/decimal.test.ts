@@ -3,7 +3,7 @@
 // «деньги — только decimal-строки»): BigInt поверх строк, без IEEE-754; деление —
 // ровно 2 знака, half-away-from-zero (бриф A6). Чистые тесты, БД не нужна.
 import { describe, expect, test } from 'bun:test';
-import { decAdd, decCmp, decDivBy, decMulInt, decRatio, decSub } from './decimal';
+import { decAdd, decCmp, decDiv, decDivBy, decMul, decMulInt, decRatio, decSub } from './decimal';
 
 describe('decAdd/decSub: сложение и вычитание decimal-строк', () => {
   test('складывает с выравниванием масштаба; итог минимум 2 знака', () => {
@@ -57,6 +57,78 @@ describe('decDivBy: деление на целые дни — 2 знака, half
 
   test('деление на 1 нормализует к 2 знакам', () => {
     expect(decDivBy('123', 1)).toBe('123.00');
+  });
+});
+
+describe('decMul: умножение decimal×decimal — точно, без округления', () => {
+  test('масштаб результата = сумма масштабов (но канонический минимум — 2 знака)', () => {
+    expect(decMul('100.02', '0.85')).toBe('85.0170'); // 2+2 знака; округление сдвинуло бы вердикт §6.1
+    expect(decMul('850.00', '20')).toBe('17000.00');
+    expect(decMul('3', '4')).toBe('12.00'); // 0+0 знаков → канон «минимум два»
+    expect(decMul('-2.5', '4')).toBe('-10.00');
+    expect(decMul('-0.5', '0')).toBe('0.00'); // "-0.00" схлопывается, как у decAdd/decSub
+  });
+
+  test('на целом множителе совпадает с decMulInt — порог §6.1 переписывается без сдвига', () => {
+    for (const a of ['0.00', '850.00', '1000.00', '999999999.99', '-50.00']) {
+      expect(`${a}: ${decMul(a, '20')}`).toBe(`${a}: ${decMulInt(a, 20)}`);
+      expect(`${a}: ${decMul(a, '17')}`).toBe(`${a}: ${decMulInt(a, 17)}`);
+    }
+  });
+
+  test('порог 0.85 ВКЛЮЧИТЕЛЬНО: decCmp(spent, decMul(limit, "0.85")) ≥ 0 ≡ isAlert (:394-396)', () => {
+    // Декларация §Б5-4 пишет порог литералом {const:"0.85"} (ревизия 3: decimal — строкой), то
+    // есть через ЭТО умножение. Округли decMul до двух знаков — и конверт с копеечным лимитом
+    // сменил бы вердикт: 0.85 · 100.01 = 85.0085, а не 85.01.
+    const oldWay = (s: string, l: string) => decCmp(decMulInt(s, 20), decMulInt(l, 17)) >= 0;
+    const newWay = (s: string, l: string) => decCmp(s, decMul(l, '0.85')) >= 0;
+    const cases: Array<[string, string]> = [
+      ['850.00', '1000.00'], // ровно 85 % — alert (sign-off владельца 2026-07-23)
+      ['849.99', '1000.00'],
+      ['85.01', '100.01'],
+      ['85.00', '100.01'],
+      ['0.00', '0.00'], // нулевой лимит: 0 ≥ 0 у обеих формул
+      ['0.00', '100.00'],
+      ['150.00', '100.00'],
+    ];
+    for (const [s, l] of cases) {
+      expect(`${s}/${l}: ${newWay(s, l)}`).toBe(`${s}/${l}: ${oldWay(s, l)}`);
+    }
+  });
+});
+
+describe('decDiv: деление decimal÷decimal — заданный масштаб, half-away-from-zero', () => {
+  test('умолчание — 2 знака; дробь округляется от нуля в обе стороны', () => {
+    expect(decDiv('1', '3')).toBe('0.33');
+    expect(decDiv('2', '3')).toBe('0.67');
+    expect(decDiv('900.50', '3')).toBe('300.17');
+    expect(decDiv('0.05', '2')).toBe('0.03');
+    expect(decDiv('-0.05', '2')).toBe('-0.03');
+  });
+
+  test('масштаб — параметр: 0 знаков даёт целую строку, 6 — долю', () => {
+    expect(decDiv('10', '4', 0)).toBe('3'); // 2.5 → от нуля вверх
+    expect(decDiv('1', '3', 6)).toBe('0.333333');
+    expect(decDiv('2', '3', 6)).toBe('0.666667');
+  });
+
+  test('на натуральном делителе совпадает с decDivBy — daily_pace не сдвигается', () => {
+    for (const a of ['8400.00', '900.50', '0.05', '-0.05', '123', '28520.00']) {
+      for (const n of [1, 2, 3, 14, 31]) {
+        expect(`${a}/${n}: ${decDiv(a, String(n))}`).toBe(`${a}/${n}: ${decDivBy(a, n)}`);
+      }
+    }
+  });
+
+  test('ноль в делителе — RangeError, а не Infinity (как у decRatio)', () => {
+    expect(() => decDiv('10', '0')).toThrow(RangeError);
+    expect(() => decDiv('10', '0.00')).toThrow(RangeError);
+  });
+
+  test('масштаб — целое ≥ 0; не decimal-строка — RangeError, а не тихий NaN', () => {
+    expect(() => decDiv('10', '3', -1)).toThrow(RangeError);
+    expect(() => decDiv('10', '3', 1.5)).toThrow(RangeError);
+    expect(() => decDiv('не число', '3')).toThrow(RangeError);
   });
 });
 
