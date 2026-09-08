@@ -269,8 +269,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *     `behavior-delta`;
  *  5. у аспекта появилась или сменилась дельта (`aspect_delta_set`): подпись, иконка, состав
  *     свойств, скрытия, ослабления обязательности, наборы вариантов select — и он определяется
- *     ТУЛОМ, когда дельта несёт `selectOptions`/`classMap` (Р9): состав вариантов и их классы
- *     меняют поведение независимо от того, чей аспект адресован;
+ *     ТУЛОМ, когда дельта несёт ТОЛЬКО непустые `selectOptions`/`classMap` (Р9, Ф-Б1-50): состав
+ *     вариантов и их классы меняют поведение независимо от того, чей аспект адресован, а всё
+ *     прочее в той же дельте возвращает ряд к адресу объекта;
  *  6. дельта аспекта снята (`aspect_delta_remove`) — эффективное определение вернулось к
  *     системному, а всё, что владелец настроил, исчезло;
  *  7. любой из шести переходов адресован ЧУЖОМУ объекту (встроенное свойство, встроенный
@@ -288,6 +289,20 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * действия вообще отменяемы моделью, — и разбор ушёл владельцу. Фону путь закрыт:
  * `undo_last` в `ROUTINE_CLOSED_TOOLS` (`tools/registry.ts`).
  */
+/**
+ * Дельта аспекта, которая НЕ НЕСЁТ НИЧЕГО, кроме непустого состава вариантов и их отнесения к
+ * классам (Ф-Б1-50). Ровно на такой дельте ряд §С2-1 определяется ТУЛОМ, а не адресом объекта:
+ * см. довод в `reconfiguresOf`.
+ */
+const BEHAVIOR_DELTA_KEYS: ReadonlySet<string> = new Set(['selectOptions', 'classMap']);
+function behaviorOnlyDelta(delta: unknown): boolean {
+  if (!isRecord(delta)) return false;
+  const keys = Object.keys(delta);
+  if (keys.length === 0 || !keys.every((k) => BEHAVIOR_DELTA_KEYS.has(k))) return false;
+  // Непустым обязано быть хоть одно из полей: `{selectOptions: {}}` меняет ровно ничего.
+  return keys.some((k) => isRecord(delta[k]) && Object.keys(delta[k] as object).length > 0);
+}
+
 export function reconfiguresOf(tool: string, input: unknown): Reconfigures {
   if (!REGISTRY_TOOL_NAMES.has(tool)) return 'none';
   // Форма проверяется защитно: сюда доезжает уже envelope-валидированный payload (тот же
@@ -321,9 +336,16 @@ export function reconfiguresOf(tool: string, input: unknown): Reconfigures {
       // переподписывается: системная строка аспекта не меняется, меняется слой владельца поверх
       // неё, и «обсудить» (ряд 2) точнее запрета по объекту (ряд 3) — рутина вправе предложить
       // такую правку отложенной единицей D42.
-      if (isRecord(input.delta) && ('classMap' in input.delta || 'selectOptions' in input.delta)) {
-        return 'behavior-delta';
-      }
+      //
+      // И ТОЛЬКО КОГДА ДЕЛЬТА НЕСЁТ ЭТО И БОЛЬШЕ НИЧЕГО (Ф-Б1-50). Послабление ряда — плата за
+      // перенастройку поведения, а не пропуск для всего, что приехало в том же объекте: с
+      // проверкой «есть такой ключ» рутина добавляла бы пустой `selectOptions: {}` к
+      // переименованию встроенного аспекта, и запрет по объекту превращался бы в отложенную
+      // единицу — `routineDeferForbidden` (`tools/dispatch.ts`) фону `system-object` не
+      // откладывает, а `behavior-delta` откладывает, и «Принять все» снимало бы замок мимоходом.
+      // Пустые карты тоже не в счёт: поведения они не меняют. Fail-closed — сомнительная форма
+      // уходит на ряд по объекту.
+      if (behaviorOnlyDelta(input.delta)) return 'behavior-delta';
       return ownRegistryAddress(input.aspect) ? 'behavior-delta' : 'system-object';
     case 'aspect_delta_remove':
       return ownRegistryAddress(input.aspect) ? 'behavior-delta' : 'system-object';

@@ -706,6 +706,29 @@ describe('§С2-1: перенастраивает поверхность или 
         'behavior-delta',
       ],
       [
+        // Ф-Б1-50: ряд по ТУЛУ даётся только дельте, которая НИЧЕГО, кроме вариантов и их
+        // классов, не несёт. Иначе пустое поле рядом с переименованием встроенного аспекта
+        // превращало бы запрет по объекту в отложенную единицу: `routineDeferForbidden`
+        // (`tools/dispatch.ts`) отказывает фону на `system-object` и ОТКЛАДЫВАЕТ
+        // `behavior-delta`, то есть «Принять все» снимало бы замок мимоходом.
+        '7б. переименование ВСТРОЕННОГО аспекта с пустым selectOptions — ряд по ОБЪЕКТУ',
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { label: { ru: 'Дела' }, selectOptions: {} } },
+        'system-object',
+      ],
+      [
+        '7в. пустая карта классов сама по себе поведения не меняет — ряд по ОБЪЕКТУ',
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { classMap: {} } },
+        'system-object',
+      ],
+      [
+        '5г. свой аспект остаётся ряд 2 и со смешанной дельтой — там решает адрес',
+        'aspect_delta_set',
+        { aspect: 'user/sleep-log', delta: { label: { ru: 'Сон' }, classMap: {} } },
+        'behavior-delta',
+      ],
+      [
         '7. снятие дельты встроенного аспекта',
         'aspect_delta_remove',
         { aspect: 'orbis/note' },
