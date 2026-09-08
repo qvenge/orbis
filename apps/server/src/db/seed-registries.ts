@@ -1,8 +1,8 @@
 // apps/server/src/db/seed-registries.ts
 //
-// Сид ЧЕТЫРЁХ реестров: свойства (§А2-1), роли рёбер (§А4-2), аспекты (§А3-1) и контракты
-// (§Б1-1, первый акт среза Б-1). Подписки и действия остаются ПУСТЫМИ таблицами: их сид —
-// задачи 6 и 9 (Agenda, Budget) и §Б6 соответственно.
+// Сид ПЯТИ реестров: свойства (§А2-1), роли рёбер (§А4-2), аспекты (§А3-1), контракты
+// (§Б1-1) и подписки (§Б5-1: `orbis/agenda` — задача 6, `orbis/budget-overview` — задача 9).
+// Гейт П5 ревизией 3 снят, поэтому ПУСТОЙ остаётся одна таблица — действия (§Б6, не в Б-1).
 //
 // Почему модуль, а не два скрипта: сид запускается двумя путями — `bun run db:prepare`
 // (локально и в CI, через `scripts/seed-registries.ts`) и `bun scripts/ops.ts
@@ -29,6 +29,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  BUILTIN_SUBSCRIPTION_DEFS,
   type ContractDefinition,
   contractDefinitionSchema,
   type PropertyDefinition,
@@ -68,8 +69,10 @@ export interface SeedRegistriesResult {
   properties: number;
   roles: number;
   aspects: number;
-  /** §Б1-1: контракты сеются с Б-1; подписки (задачи 6/9) и действия (§Б6) — ещё нет. */
+  /** §Б1-1: контракты сеются с Б-1; действия (§Б6) — ещё нет. */
   contracts: number;
+  /** §Б5-1: встроенные подписки — поверхности читают декларацию из реестра, не из кода. */
+  subscriptions: number;
   /** Версия system-реестров ПОСЛЕ сида — она же ключ инвалидации кешей (§А10-1). */
   version: number;
   /** Дельт, пересчитанных трёхсторонним слиянием под новую системную версию (§А3-3). */
@@ -167,6 +170,18 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
         sets = EXCLUDED.sets, facts = EXCLUDED.facts, module = EXCLUDED.module, rank = EXCLUDED.rank`;
   }
 
+  // §Б5-1: декларация поверхности — СТРОКА РЕЕСТРА, а не литерал в коде движка. Дельта
+  // владельца (`subscription_set`) кладётся отдельной строкой с его `owner_id`, поэтому
+  // конфликт разрешается тем же частичным индексом, что у остальных четырёх реестров.
+  for (const s of BUILTIN_SUBSCRIPTION_DEFS) {
+    await sql`
+      INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
+      VALUES (${s.id}, NULL, ${s.surface}, ${sql.json(j(s.definition))}, ${s.module}, ${s.rank})
+      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
+        surface = EXCLUDED.surface, definition = EXCLUDED.definition,
+        module = EXCLUDED.module, rank = EXCLUDED.rank`;
+  }
+
   // Версия двигается ПОСЛЕ строк и всегда — даже когда ни одна строка фактически не
   // изменилась. Так «сид был» отличимо от «сида не было» одним числом, а кеши, ключуемые
   // версией, гарантированно переживают пересев (§А10-1); угадывать «а изменилось ли
@@ -187,6 +202,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
     roles: BUILTIN_RELATION_ROLE_META.length,
     aspects: BUILTIN_ASPECT_DEFS.length,
     contracts: BUILTIN_CONTRACT_DEFS.length,
+    subscriptions: BUILTIN_SUBSCRIPTION_DEFS.length,
     version: row.version,
     mergedDeltas: merge.merged,
     conflicts: merge.conflicts,
@@ -291,10 +307,22 @@ export function codeSystemDefinitions(): SystemDefinitions {
     properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
-    // Встроенных подписок в коде ПОКА НЕТ — сид не кладёт ни строки, и пустая карта означает ровно это.
-    // Условие, при котором строка меняется: появилась первая встроенная подписка (сид Agenda, §Б5-6) —
-    // тогда карта собирается из её списка тем же map'ом.
-    subscriptions: new Map(),
+    // `ownerId: null` проставляется здесь, а не берётся из `BuiltinSubscriptionDef`: у встроенной
+    // декларации владельца нет по определению, и второе поле в списке кода означало бы, что
+    // system-строку можно объявить чужой.
+    subscriptions: new Map(
+      BUILTIN_SUBSCRIPTION_DEFS.map((s) => [
+        s.id,
+        {
+          id: s.id,
+          ownerId: null,
+          surface: s.surface,
+          definition: s.definition,
+          module: s.module,
+          rank: s.rank,
+        },
+      ]),
+    ),
   };
 }
 
@@ -411,7 +439,8 @@ export async function mergeRegistryDeltas(
 export function seedRegistriesReport(r: SeedRegistriesResult): string[] {
   return [
     `seed-registries: свойств ${r.properties}, ролей ${r.roles}, аспектов ${r.aspects}, ` +
-      `контрактов ${r.contracts}; версия system-реестров ${r.version}; дельт слито ${r.mergedDeltas}`,
+      `контрактов ${r.contracts}, подписок ${r.subscriptions}; ` +
+      `версия system-реестров ${r.version}; дельт слито ${r.mergedDeltas}`,
     ...(r.conflicts.length === 0
       ? []
       : [

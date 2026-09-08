@@ -15,6 +15,7 @@ import { BUILTIN_ASPECT_DEFS } from './registry/builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS } from './registry/builtin-contracts';
 import { BUILTIN_PROPERTY_META } from './registry/builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './registry/builtin-roles';
+import { BUILTIN_SUBSCRIPTION_DEFS } from './registry/builtin-subscriptions';
 
 /**
  * Канонический JSON для сравнения схем: ключи объектов сортируются, порядок массивов
@@ -202,8 +203,23 @@ function expectedContracts(): Map<string, Record<string, unknown>> {
 }
 
 /**
- * Ожидание для реестров, которые ещё пусты: подписки (первый сид — задачи 6 и 9) и действия
- * (§Б6, не в Б-1). Любая system-строка здесь означает, что сид положили раньше времени.
+ * Ожидание для подписок (§Б5-1). `definition` сверяется ЦЕЛИКОМ одним столбцом: у декларации
+ * нет «важных» и «неважных» полей — разъехавшийся `limit` секции так же меняет выдачу, как
+ * разъехавшийся контракт, и дробить её на подполя значило бы заводить второй разбор формы
+ * рядом с `subscriptionDefinitionSchema`.
+ */
+function expectedSubscriptions(): Map<string, Record<string, unknown>> {
+  return new Map(
+    BUILTIN_SUBSCRIPTION_DEFS.map((s) => [
+      s.id,
+      { surface: s.surface, definition: s.definition, module: s.module, rank: s.rank },
+    ]),
+  );
+}
+
+/**
+ * Ожидание для реестра, который ещё пуст: действия (§Б6, не в Б-1). Любая system-строка здесь
+ * означает, что сид положили раньше времени. Подписки из этого списка ушли — их сеет Б-1.
  */
 const EMPTY_EXPECTATION = (): Map<string, Record<string, unknown>> => new Map();
 
@@ -212,7 +228,7 @@ const EXPECTATIONS: Record<RegistryKind, () => Map<string, Record<string, unknow
   aspects: expectedAspects,
   roles: expectedRoles,
   contracts: expectedContracts,
-  subscriptions: EMPTY_EXPECTATION,
+  subscriptions: expectedSubscriptions,
   actions: EMPTY_EXPECTATION,
 };
 

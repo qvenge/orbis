@@ -16,6 +16,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  BUILTIN_SUBSCRIPTION_DEFS,
 } from './registry';
 
 /**
@@ -78,7 +79,13 @@ function seeded(): RegistryDbRows {
       module: c.module,
       rank: c.rank, // ключи — имена КОЛОНОК, как их отдаёт SELECT дрейфа
     })),
-    subscriptions: [],
+    subscriptions: BUILTIN_SUBSCRIPTION_DEFS.map((s) => ({
+      id: s.id,
+      surface: s.surface,
+      definition: s.definition,
+      module: s.module,
+      rank: s.rank,
+    })),
     actions: [],
   };
 }
@@ -107,7 +114,7 @@ test('canonicalJson: порядок МАССИВА значим (enum/required �
   expect(canonicalJson({ required: ['a', 'b'] })).not.toBe(canonicalJson({ required: ['b', 'a'] }));
 });
 
-test('свежий пересев ЧЕТЫРЁХ реестров — расхождений нет; подписки и действия пусты', () => {
+test('свежий пересев ПЯТИ реестров — расхождений нет; действия пусты', () => {
   const drift = diffBuiltinRegistries(seeded());
   expect(drift).toEqual({
     properties: EMPTY,
@@ -213,8 +220,8 @@ test('роли: разошёлся source_label — дрейф с именем �
   expect(registryDriftIds(drift)).toEqual(['roles:envelope-binding source_label']);
 });
 
-// §Б1-1: контракты сеются с Б-1 и сверяются ПО КОЛОНКАМ; подписки и действия ещё пусты —
-// там любая system-строка по-прежнему лишняя.
+// §Б1-1: контракты сеются с Б-1 и сверяются ПО КОЛОНКАМ; действия ещё пусты — там любая
+// system-строка по-прежнему лишняя.
 test('контракты: незнакомая строка — extra, пропавшая — missing; действия пусты', () => {
   const rows = seeded();
   rows.contracts = [...rows.contracts.filter((c) => c.id !== 'orbis/when'), { id: 'orbis/zzz' }];
@@ -243,10 +250,14 @@ test('контракт с подменённым набором — drifted по
 test('registryDriftIds: плоский список для /health называет и реестр, и id', () => {
   const rows = seeded();
   rows.properties = rows.properties.filter((r) => r.id !== 'orbis/task_status');
+  // Строка-обрубок с ЗАСЕЯННЫМ id — это расхождение колонок, а не «лишняя»: id подписки в
+  // коде есть, и вердикт обязан назвать столбцы, иначе владелец не узнает, что пересеять.
   rows.subscriptions = [{ id: 'orbis/agenda' }];
+  rows.actions = [{ id: 'orbis/close' }];
   expect(registryDriftIds(diffBuiltinRegistries(rows))).toEqual([
     'properties:orbis/task_status нет',
-    'subscriptions:orbis/agenda лишний',
+    'subscriptions:orbis/agenda definition+module+rank+surface',
+    'actions:orbis/close лишний',
   ]);
 });
 

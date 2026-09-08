@@ -1,6 +1,6 @@
 // apps/server/test/seed-registries.test.ts
-// Приёмка сида ЧЕТЫРЁХ реестров (§А12-1 п.1, §Б1-1) против ЖИВОЙ базы: состав system-строк,
-// пустота подписок и действий и монотонность версии. Чистые проверки формы деклараций живут в
+// Приёмка сида ПЯТИ реестров (§А12-1 п.1, §Б1-1, §Б5-1) против ЖИВОЙ базы: состав system-строк,
+// пустота действий и монотонность версии. Чистые проверки формы деклараций живут в
 // packages/shared/src/registry/builtin.test.ts — здесь только то, что видно лишь в БД.
 import { describe, expect, test } from 'bun:test';
 import {
@@ -8,6 +8,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  BUILTIN_SUBSCRIPTION_DEFS,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
@@ -34,7 +35,7 @@ async function systemVersion(db: ReturnType<typeof adminDb>['db']): Promise<numb
   return row.version;
 }
 
-describe('сид четырёх реестров', () => {
+describe('сид пяти реестров', () => {
   test('состав system-строк = ровно BUILTIN_* (77 свойств, 11 ролей, 13 аспектов, 6 контрактов)', async () => {
     const { db, client } = adminDb();
     try {
@@ -61,12 +62,23 @@ describe('сид четырёх реестров', () => {
     }
   });
 
-  // Подписки сеются задачами 6 и 9 (Agenda, Budget), действия — §Б6, не в Б-1. До них любая
-  // system-строка здесь означает, что сид положили раньше времени.
-  test('подписки и действия — БЕЗ system-строк', async () => {
+  test('сид подписок: ровно BUILTIN_SUBSCRIPTION_DEFS', async () => {
     const { db, client } = adminDb();
     try {
-      expect(await ids(db, 'subscription_definitions')).toEqual([]);
+      expect(await ids(db, 'subscription_definitions')).toEqual(
+        [...BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id)].sort(),
+      );
+      expect(BUILTIN_SUBSCRIPTION_DEFS.length).toBe(1); // число отдельно от состава
+    } finally {
+      await client.end();
+    }
+  });
+
+  // Действия — §Б6, не в Б-1. До них любая system-строка здесь означает, что сид положили
+  // раньше времени. Подписки из этого пина ушли: их сеет задача 6 (Agenda), см. тест выше.
+  test('действия — БЕЗ system-строк', async () => {
+    const { db, client } = adminDb();
+    try {
       expect(await ids(db, 'action_definitions')).toEqual([]);
     } finally {
       await client.end();
@@ -399,6 +411,7 @@ describe('сид четырёх реестров', () => {
         roles: 11,
         aspects: 13,
         contracts: 6,
+        subscriptions: 1,
         version: before + 1,
         mergedDeltas: 0,
         conflicts: [],
