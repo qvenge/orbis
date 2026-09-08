@@ -28,7 +28,10 @@
 // (`lockOwnerRegistry`, `executor/executor.ts` — первым statement'ом, до бюджетного).
 // Своего замка они не берут: два места, знающие порядок захвата, — это и есть дедлок.
 import {
+  type AspectDefinition,
   assertPatternRegular,
+  checkClassMap,
+  type ImplementsIssue,
   type LocalizedText,
   newId,
   PATTERN_NOT_REGULAR,
@@ -1757,6 +1760,38 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
 // Дельты аспектов, контрактов и подписок (§А3-2, §Б5-2)
 // ---------------------------------------------------------------------------
 
+/**
+ * ImplementsIssue → ExecError — один экземпляр на оба писателя привязок (setAspectDelta, задача 13;
+ * aspect_create/aspect_implements_set, задача 15). BIND_TYPE и VARIANT_UNMAPPED — свои коды §С1-2;
+ * UNKNOWN_CONTRACT/SLOT/PROPERTY и REQUIRED_SLOT_UNBOUND — опечатка адреса, а не расхождение типов:
+ * VALIDATION с причиной в details (та же природа, что у остальных отказов дельт).
+ */
+export function execErrorOfImplementsIssue(
+  issue: ImplementsIssue,
+  extra: Record<string, unknown> = {},
+): ExecError {
+  const d = issue.details as Record<string, unknown>;
+  if (issue.code === 'VARIANT_UNMAPPED') {
+    return new ExecError(
+      'VARIANT_UNMAPPED',
+      `вариант «${String(d.variant)}» не отнесён к классу контракта ${String(d.contract)}`,
+      { ...extra, ...d },
+    );
+  }
+  if (issue.code === 'BIND_TYPE') {
+    return new ExecError(
+      'BIND_TYPE',
+      `слот ${String(d.slot)} контракта ${String(d.contract)}: тип свойства не подходит`,
+      { ...extra, ...d },
+    );
+  }
+  return new ExecError('VALIDATION', `привязка не сходится с реестром: ${issue.code}`, {
+    reason: issue.code,
+    ...extra,
+    ...d,
+  });
+}
+
 export async function readAspectDelta(
   tx: Tx,
   ownerId: string,
@@ -1809,6 +1844,14 @@ export async function setAspectDelta(
   // `applyDeltas` ищет свойство в словаре ПО id (`properties.get`), то есть записанный
   // ключом адрес не резолвился бы никогда и молча.
   const normalized = normalizeDeltaAddresses(parsed.data, rows.properties, aspectId);
+  // ПОЛНОТА ОТНЕСЕНИЯ ВАРИАНТОВ (§Б2-2) — ДО записи, тем же доводом, что и проба применимости
+  // ниже: `applyDeltas` вариант примет молча, и запись со свежим статусом выпала бы из всех
+  // наборов контракта — из чекбокса строки, из `class=`, из Agenda — без следа причины.
+  // `rows` — это `RegistryDictionaries` (properties/aspects/contracts), ровно тот словарь,
+  // который ждёт проверка.
+  const target = rows.aspects.get(aspectId) as AspectDefinition;
+  const issue = checkClassMap(normalized, target, rows)[0];
+  if (issue !== undefined) throw execErrorOfImplementsIssue(issue, { aspect: aspectId });
   const versions = await readRegistryVersions(tx, ownerId);
   const existing = await loadRegistryDeltas(tx, ownerId);
   const probe = [

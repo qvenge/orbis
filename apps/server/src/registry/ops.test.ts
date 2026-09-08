@@ -2556,4 +2556,45 @@ describe('карта классов и пользовательский набо
     expect(idsOf(await q('class=orbis/completable:closed'))).toEqual([dropped]);
     expect(idsOf(await q('class=orbis/completable:dropped'))).toEqual([dropped]);
   });
+
+  test('вариант без отнесения — VARIANT_UNMAPPED ДО записи, реестр цел', async () => {
+    const e = err(
+      await runS('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: {
+          selectOptions: {
+            'orbis/task_status': {
+              add: [{ key: 'blocked', label: { ru: 'Заблокирована' }, rank: 46 }],
+            },
+          },
+        },
+      }),
+    );
+    expect(e.code).toBe('VARIANT_UNMAPPED');
+    expect(e.details).toMatchObject({
+      propertyId: 'orbis/task_status',
+      variant: 'blocked',
+      contract: 'orbis/completable',
+      slot: 'status',
+    });
+    // Прежняя дельта на месте, а `blocked` в реестр не попал.
+    const reg = await withIdentity(db, setOwner, (tx) => effectiveRegistry(tx, setOwner));
+    const status = reg.properties.get('orbis/task_status');
+    if (status?.type.kind !== 'select') throw new Error('orbis/task_status перестал быть select');
+    const keys = status.type.options.map((o) => o.key);
+    expect(keys).toContain('in_review');
+    expect(keys).not.toContain('blocked');
+  });
+  test('вариант обычного select (не слот-статус) отнесения не требует', async () => {
+    ok(
+      await runS('aspect_delta_set', {
+        aspect: 'orbis/note',
+        delta: {
+          selectOptions: {
+            'orbis/content_type': { add: [{ key: 'table', label: { ru: 'Таблица' }, rank: 9 }] },
+          },
+        },
+      }),
+    );
+  });
 });
