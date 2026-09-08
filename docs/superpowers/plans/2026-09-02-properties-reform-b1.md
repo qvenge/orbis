@@ -10382,7 +10382,10 @@ export const BUDGET_OVERVIEW_SUBSCRIPTION: BuiltinSubscriptionDef = {
 ```
 Прогон Шага 1 → **PASS**. Коммит: `feat(registry): декларация подписки Budget §Б5-4 — ведомости, фазы, алерты, списки, порядок карточек, носитель rollover`.
 
-- [ ] **Шаг 3: красный тест набора `plans`.** В `packages/shared/src/registry/builtin-contracts.test.ts`:
+- [ ] **Шаг 3: красный тест набора `plans`.** В `packages/shared/src/registry/builtin.test.ts` (эррата 9: файла
+  `builtin-contracts.test.ts` в дереве нет — тесты встроенных контрактов живут в `builtin.test.ts`; шаги 3–4 исполняются ПЕРЕД 1–2:
+  валидатор `assertSubscription` проверяет `counted_set` против наборов контракта, и декларация, севшая до набора `plans`,
+  красила бы `subscriptions/registry.test.ts`):
 ```ts
 describe('наборы money-movement: facts (задача 4) и plans (списки Budget)', () => {
   const mm = BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/money-movement');
@@ -10398,7 +10401,7 @@ describe('наборы money-movement: facts (задача 4) и plans (спис
   });
 });
 ```
-`cd packages/shared && bun test src/registry/builtin-contracts.test.ts` → **FAIL**: `sets.plans` = `undefined`.
+`cd packages/shared && bun test src/registry/builtin.test.ts` → **FAIL**: `sets.plans` = `undefined`.
 
 - [ ] **Шаг 4: набор `plans` + пересев.** В `builtin-contracts.ts`, в `sets` контракта `orbis/money-movement`:
 ```ts
@@ -10588,7 +10591,7 @@ describe('двухфазный план §Б5-3', () => {
   test('ведомость spent ограничена `= ANY($ids)`, конверт другого конца — из entities, не из CTE', async () => {
     await engineOn(userA, async ({ def, cctx }) => {
       const plan = planLedgers(def, cctx, { month: curMonth, today, defaultCurrency: 'RUB', defaults: propertyDefaultsOf(cctx.reg) });
-      const text = String((plan.aggregates.get('spent') as SQL).queryChunks.join(''));
+      const text = new PgDialect().sqlToQuery(plan.aggregates.get('spent') as SQL).sql; // эррата 9: `queryChunks.join('')` текста SQL не даёт — приём golden компилятора Q
       expect(text).toContain('= ANY(');
       expect(text).toContain('JOIN entities env');
       // CTE набора без статистики дал бы вложенный цикл на 458k пар (П2 §10.3) — плана «WITH» тут нет.
@@ -10660,8 +10663,10 @@ export function planLedgers(def: BudgetSubscription, cctx: CompileCtx, args: Led
   const envelopes = sql`SELECT e.id FROM entities e
     WHERE e.owner_id = ${cctx.ownerId} AND NOT e.archived
       AND ${compileContractPredicate(env, { const: true }, cctx, e)}
-      AND ${compileExprPredicate({ op: '<=', args: [{ slot: 'period_start' }, { param: 'period_end' }] }, { ...scope, params: { period_end: end } })}
-      AND ${compileExprPredicate({ op: '>=', args: [{ slot: 'period_end' }, { param: 'period_start' }] }, { ...scope, params: { period_start: start } })}`;
+      AND ${compileContractPredicate(env, and(period_start <= {const: end}, period_end >= {const: start}), …)}`;
+      // эррата 9: `compileExprPredicate` здесь не работает — он требует `binding` в области (`slotScopeOf`), которой на верхнем
+      // уровне нет, а `{param}` читает только из `scope.params`. Окно строит `compileContractPredicate` с `{const}`: он
+      // разворачивает предикат по ВСЕМ привязкам контракта и требует обязательные слоты (как оракул в `rawEnvelopeOf`).
   const movementIds = sql`${compileContractPredicate(mv, { const: true }, cctx, e)}
       AND ${compileClassMembership(mv, def.sources.movement.counted_set, cctx, e)}`;
   const aggregates = new Map<string, SQL | ExprNode>();
@@ -10905,9 +10910,10 @@ describe('формулы E и фазы (§2.4, §2.9)', () => {
 - [ ] **Шаг 14: формулы через `evalExpr`.** В `budget.ts`:
 ```ts
 /**
- * Формулы считаются в порядке ОБЪЯВЛЕНИЯ: `remaining` читает `{agg:'effective_limit'}` и
- * `{agg:'spent'}`, `daily_pace` — `{agg:'remaining'}`. Топологической сортировки нет
- * намеренно: цикл в формулах ловит тайп-чекер (EXPR_RECURSION §С8-28) на записи.
+ * Эррата 9 (Ф-Б1-37): порядок ОБЪЯВЛЕНИЯ до движка не доезжает — колонка `subscription_definitions.definition` объявлена
+ * `jsonb`, а jsonb переупорядочивает ключи (по длине, затем побайтно): из базы `remaining` (9) приходит РАНЬШЕ
+ * `effective_limit` (15). Порядок задают САМИ ССЫЛКИ `{agg}` (топологический проход `formulaOrderOf`); цикл остаётся
+ * `INVARIANT`'ом движка, а на записи его ловит тайп-чекер (EXPR_RECURSION §С8-28).
  */
 /** Горизонт Coming up — 14 дней (01-arch §5.4); подписка получает его как `horizon_end`. */
 const HORIZON_DAYS = 14;
@@ -10950,7 +10956,9 @@ function envelopeLedgers(def: BudgetSubscription, binding: ResolvedBinding | und
   return scope.aggs;
 }
 function phaseOf(def: BudgetSubscription, scope: ExprEvalScope): string {
-  for (const [key, expr] of Object.entries(def.phases)) if (evalExpr(expr, scope) === true) return key;
+  // эррата 9 (Ф-Б1-37): из jsonb ключи приходят `active`, `closed`, `upcoming` — наивный проход объявил бы активным КАЖДЫЙ
+  // конверт; `active` — объявленный остаток и проверяется ПОСЛЕДНИМ (его выражение всё равно вычисляется)
+  for (const [key, expr] of phaseOrderOf(def)) if (evalExpr(expr, scope) === true) return key;
   throw new ExecError('INVARIANT', 'фазы декларации не покрыли конверт — ключ active обязан быть остатком',
     { subscription: BUDGET_SUBSCRIPTION_ID });
 }
@@ -11064,6 +11072,9 @@ function isAlert(def: BudgetSubscription, spent: string, limit: string): boolean
  * ту из `rollup.applies_to`, которая не она, — знаменателем: обе величины уже названы
  * декларацией, и второго кандидата в ней нет. Появится в §Б5-4 поле `alerts.of/against` —
  * пара уедет туда (открытый вопрос 8), тела правил это не тронет.
+ * Эррата 9 (Ф-Б1-38, по гейту): выбор «другой из `applies_to`» вслепую недопустим — валидатор задачи 5 отказывает на
+ * записи всякой декларации, где операнды неоднозначны (вторая envelope-сумма с `bound_via`; `rollup.applies_to` не из
+ * «числитель + ровно один другой»). Явное `alerts.of/against` — ОВ-Б1-4 (задача 16 / Б-2).
  */
 function alertOperands(def: BudgetSubscription): { spent: string; limit: string } {
   const spent = Object.entries(def.aggregates)
@@ -11153,7 +11164,7 @@ function cardKey(def: BudgetSubscription, e: RawEnvelope, cats: Map<string, Cate
       const ref = slotValueOf(e.binding, e.props, part.deref.slot);
       // Один шаг и только core-заголовок (§Б3-3): цепочка ссылок здесь невыразима намеренно.
       if (part.deref.read !== 'orbis/title') {
-        throw new ExecError('EXPR_BACKEND_UNSUPPORTED', `deref читает только core-заголовок`,
+        throw new ExecError('VALIDATION', `deref читает только core-заголовок`, // эррата 9: `EXPR_BACKEND_UNSUPPORTED` — не член `ExecErrorCode`, а причина в `details.reason`
           { subscription: BUDGET_SUBSCRIPTION_ID, read: part.deref.read });
       }
       return typeof ref === 'string' ? (cats.get(ref)?.title ?? '') : '';
@@ -11219,7 +11230,7 @@ async function runLedgers(tx: Tx, ownerId: string, args: BudgetArgs, def: Budget
       }
       overrides[name] = total;
     }
-    e.card = envelopeLedgers(def, e.binding, e.props, { ...overrides }, la);
+    e.card = envelopeLedgers(def, e.binding, e.props, { ...сырые_суммы_конверта, ...overrides }, la); // эррата 9 (гейт m-1): семена — сырые суммы ⊕ rollup, иначе дельта `applies_to: ['effective_limit']` роняет Overview INVARIANT'ом
   }
   return { cctx, la, raws, sums };
 }
@@ -11526,8 +11537,10 @@ export async function envelopeForCategoryOf(tx: Tx, ownerId: string,
 /**
  * Мини-тренд (§3.2): бакет — месяц `period_start` конверта, штриховая линия — сумма СЛОТА
  * `limit` (без carryover), валюта — только по умолчанию (§5: RUB и USD без конверсии не
- * складываются). Месяцев тут единицы (экран категории просит 1–12), поэтому цикл по месяцам
- * дешевле одного запроса «на всё» — и считает ровно те же ведомости, что карточка.
+ * складываются). Эррата 9 (Ф-Б1-39): посылка «цикл по месяцам дешевле» опровергнута пробой гейта на корпусе 20k —
+ * `categoryTrendOf(12)` считал все 40 конвертов месяца, обе ведомости периода и rollup ради одной категории: 3520 мс.
+ * Читатели считают ТОЛЬКО нужное: движок принимает сужение (ведомости, конверты одной категории, без периода/списков/rollup);
+ * приёмка фикса — ≤ 1000 мс за 12 месяцев на 20k; формальные пороги — задача 12.
  */
 export async function categoryTrendOf(tx: Tx, ownerId: string,
   args: { categoryId: string; months: number; today: string }, def: BudgetSubscription,
@@ -11704,6 +11717,17 @@ test('декларация Budget не читает ни одного timestamp-
 ```
 Прогон: `cd apps/server && bun test test/gate-c8-18.test.ts src/registry/surfaces-golden.test.ts` и `cd packages/shared && bun test src/registry/builtin-subscriptions.test.ts` → **PASS**.
 Коммит: `feat(subscriptions): снимок поверхности budget-overview из движка; гейт §С8-18 «spent» зелёный`.
+
+> **Эррата по исполнению 9 (08.09).** (а) `bindingIndexOf` мемоизирован по снимку (`WeakMap`): бриф звал его в `slotExpr` и
+> `classKeyOf` — на 480 конвертах это тысячи пересборок индекса в горячем цикле. (б) Норматив `BUDGET_DEF` правился в семи местах,
+> каждое названо в докблоке фикстуры: дописаны `period_balance`/`unbudgeted`, `spent.materialize: false`, `rollup.applies_to` до
+> двух ведомостей, списки на набор `plans`, сторона `instance-of` `source` → `target`, отсечение шаблонов в `planned` через
+> `where`, порядок списков `[date, id]`. (в) Ключ ведомости, сводимый в класс контракта, может прийти двумя строками (`expense`
+> встроенного аспекта и `out` аспекта владельца — один класс `outflow`): `runSum` СКЛАДЫВАЕТ, а не перезаписывает.
+> (г) Фикстура recurring-инстанса: `orbis/recurring: true` законна только при входящем ребре порождения (§3.3) — ставится
+> `entity_update` после `relation_create`. (д) Тест умолчаний сравнивает вердикты `notPlanned` на ОДНОМ множестве-кандидате
+> (члены контракта): форма брифа расходилась на шаблоне без `orbis/occurred_on`, а не на умолчаниях. (е) Адреса `aggregates.ts`
+> (`:642-651` и далее) съехали задачами 0b/6/8 — якоря по тексту.
 
 - [ ] **Шаг 22: «ноль расхождений» на 480 конвертах.** В `apps/server/perf/volume.test.ts` (файл 0c) новый describe:
 ```ts
