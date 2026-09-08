@@ -749,14 +749,29 @@ test('слоты, классы и наборы — дословно §Б1-2', ()
     'outflow',
     'inflow',
     'facts',
+    'plans',
   ]);
-  // Списочные наборы остаются списками: предикат заведён РОВНО один, и «предикатом стало
-  // всё подряд» краснеет здесь, а не на первом запросе владельца.
+  // Списочные наборы остаются списками: предикатов заведено РОВНО два (`facts` и его зеркало
+  // `plans`), и «предикатом стало всё подряд» краснеет здесь, а не на первом запросе владельца.
+  const predicates = new Set(['facts', 'plans']);
   for (const def of BUILTIN_CONTRACT_DEFS)
     for (const set of Object.keys(def.sets ?? {})) {
-      const expected = def.id === 'orbis/money-movement' && set === 'facts' ? 'predicate' : 'list';
+      const expected =
+        def.id === 'orbis/money-movement' && predicates.has(set) ? 'predicate' : 'list';
       expect([def.id, set, contractSetKind(def, set)]).toEqual([def.id, set, expected]);
     }
+});
+
+test('money-movement.plans — предикат-набор «планируемая операция», источник списков §Б5-4', () => {
+  const mm = BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/money-movement');
+  if (!mm) throw new Error('нет контракта money-movement');
+  expect(isPredicateSet(mm.sets?.plans)).toBe(true);
+  // Форма пиннится ЦЕЛИКОМ: `plans` — зеркало `facts` ровно по одному слоту, и всякий
+  // дописанный сюда конъюнкт (дата, направление, шаблоны) выбил бы из `coming_up` инстансы
+  // повторения — то есть спрятал бы от владельца ближайшие списания.
+  expect(mm.sets?.plans).toEqual({ op: '=', args: [{ slot: 'planned' }, { const: true }] });
+  // Предикат обязан быть валидным E-деревом — иначе он доедет до сида и упадёт на чтении.
+  expect(exprNodeSchema.safeParse(mm.sets?.plans).success).toBe(true);
 });
 
 test('money-movement.facts — предикатный набор, а не список классов', () => {
