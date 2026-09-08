@@ -5,6 +5,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { canonicalJson } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { GATE_SURFACE_SLUGS } from '../../test/fixtures/gate-aspects';
 import GOLDEN from '../../test/golden/surfaces.json';
 import { appDb, requireEnv, truncateAll } from '../../test/helpers';
 import {
@@ -161,6 +162,62 @@ describe('снимки поверхностей: консервативност�
         `${surface}: ${canonicalJson(golden?.[surface])}`,
       );
     }
+  });
+
+  /** Пути расходящихся листьев двух значений — читаемая форма «где именно отличается». */
+  function diffPaths(a: unknown, b: unknown, prefix = ''): string[] {
+    if (canonicalJson(a) === canonicalJson(b)) return [];
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return [prefix];
+    const keys = new Set([...Object.keys(a as object), ...Object.keys(b as object)]);
+    return [...keys]
+      .flatMap((k) =>
+        diffPaths(
+          (a as Record<string, unknown>)[k],
+          (b as Record<string, unknown>)[k],
+          prefix === '' ? k : `${prefix}.${k}`,
+        ),
+      )
+      .sort();
+  }
+  const isGate = (s: string) => GATE_SURFACE_SLUGS.some((g) => s === `@${g}`);
+
+  test('custom-aspect отличается от baseline ровно строками гейта и ровно в spent конверта', () => {
+    const states = (GOLDEN as { states: Record<string, Record<string, unknown> | undefined> })
+      .states;
+    const base = states.baseline;
+    const cust = states['custom-aspect'];
+    // Оба состояния обязаны БЫТЬ: без явной проверки терпимое чтение ниже превратило бы
+    // «состояния в эталоне нет» в «состояния совпали», и тест зеленел бы на пустом эталоне.
+    if (base === undefined || cust === undefined)
+      throw new Error('в эталоне нет обоих состояний: baseline и custom-aspect');
+    // Три поверхности: убираем строки гейта — остаток обязан совпасть с baseline байт-в-байт.
+    const rows = Object.fromEntries(
+      Object.entries(cust['core/row'] as Record<string, unknown>).filter(([k]) => !isGate(k)),
+    );
+    expect(canonicalJson(rows)).toBe(canonicalJson(base['core/row']));
+    expect(
+      canonicalJson((cust['core/exclude-blocked'] as string[]).filter((s) => !isGate(s))),
+    ).toBe(canonicalJson(base['core/exclude-blocked']));
+    expect(
+      canonicalJson((cust['planner/agenda'] as { id: string }[]).filter((r) => !isGate(r.id))),
+    ).toBe(canonicalJson(base['planner/agenda']));
+    // Budget вычитанием не разделить: аспект гейта обязан ДВИГАТЬ числа конверта — в этом и есть
+    // §С8-18. Поэтому утверждается СПИСОК мест, которые сдвинулись, и он закрытый. Порядковый
+    // индекс `envelopes.0` — карточка `@env-food`: порядок карточек задан ключом
+    // `title periodStart id` и зафиксирован эталоном `baseline`.
+    expect(diffPaths(base['finance/budget-overview'], cust['finance/budget-overview'])).toEqual([
+      'balance.balance',
+      'balance.expense',
+      'envelopes.0.dailyPace',
+      'envelopes.0.remaining',
+      'envelopes.0.spent',
+    ]);
+    // И строки гейта действительно есть — иначе три сравнения выше стали бы тавтологией.
+    expect(
+      Object.keys(cust['core/row'] as object)
+        .filter(isGate)
+        .sort(),
+    ).toEqual(['@gate-spend', '@gate-todo']);
   });
 
   test('эталон держит ровно объявленные состояния и все четыре поверхности', () => {
