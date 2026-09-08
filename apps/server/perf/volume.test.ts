@@ -15,7 +15,7 @@ import {
 import { sql } from 'drizzle-orm';
 import { computeOverview } from '../src/budget/aggregates';
 import { selectEnvelopes } from '../src/budget/binding';
-import { withIdentity } from '../src/db/with-identity';
+import { type Tx, withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { effectiveRegistry } from '../src/registry/cache';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
@@ -77,6 +77,20 @@ afterAll(async () => {
   await client.end();
 });
 
+/**
+ * Идентификаторы всех конвертов корпуса — ПОД ТОЙ ЖЕ РОЛЬЮ, что и замер.
+ *
+ * Порядок по `id` фиксирован: список уходит и в сторож, и в `invalidateSpentCache` холодного
+ * замера, а недетерминированный порядок сделал бы «холодное» число невоспроизводимым.
+ */
+async function envelopeIdsOf(tx: Tx): Promise<string[]> {
+  const rows = (await tx.execute(sql`
+    SELECT id FROM entities
+     WHERE owner_id = ${VOLUME_OWNER_ID} AND NOT archived AND 'orbis/budget' = ANY(aspects)
+     ORDER BY id`)) as unknown as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
 test('корпус наполнен: гейт меряет данные, а не пустой граф', async () => {
   expect(fixture.envelopes).toBe(VOLUME_ENVELOPES);
   expect(fixture.bindings).toBeGreaterThanOrEqual(VOLUME_MIN_BINDINGS);
@@ -90,6 +104,15 @@ test('корпус наполнен: гейт меряет данные, а не
   expect(overview.unbudgeted.length).toBeGreaterThan(0);
   expect(Number(overview.balance.expense)).toBeGreaterThan(0);
 }, 900_000);
+
+test('корпус: 480 конвертов видны под ролью приложения, а не только админу', async () => {
+  // Корпус сеется прямыми INSERT под админ-DSN (Р-К-2/РП-8), а гейт мерит путь владельца.
+  // Разъехался бы `owner_id` — админ строки видит, роль нет, и весь замер шёл бы по пустоте,
+  // оставаясь зелёным (класс сторожа `perf.test.ts:212`, `graph.test.ts:181`).
+  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  expect(ids).toHaveLength(VOLUME_ENVELOPES);
+  expect(new Set(ids).size).toBe(VOLUME_ENVELOPES);
+}, 300_000);
 
 test('Р-К-2: сто движений через исполнитель дают те же привязки, что проход селектора', async () => {
   const probes = volumeProbes();
