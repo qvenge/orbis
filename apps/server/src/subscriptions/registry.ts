@@ -2,9 +2,20 @@
 // `applyDeltas`/`loadRegistryRows` отказывают fail-closed на КАЖДОМ чтении реестра: проверка смысла
 // там означала бы владельца, запертого снаружи графа после пересева, изменившего контракт (Р-И-7).
 // На чтении разбирается только ФОРМА, смысл — здесь, у сида, тула и дельты.
-import type { SubscriptionDefinition } from '@orbis/shared';
+import {
+  type BudgetSubscription,
+  bindingIndexOf,
+  EXPR_RECURSION,
+  EXPR_TYPE,
+  SECOND_LANGUAGE,
+  SURFACES,
+  type SubscriptionDefinition,
+  subscriptionDefinitionSchema,
+} from '@orbis/shared';
 import type { ExprScope, ExprType } from '@orbis/shared/expr';
-import type { RegistrySnapshot } from '../registry/load';
+import { ExecError } from '../errors';
+import { assertExprChecked } from '../expr/check';
+import type { RegistrySnapshot, SubscriptionRow } from '../registry/load';
 
 export interface SubscriptionCheckScope {
   reg: RegistrySnapshot;
@@ -171,4 +182,289 @@ export function rawValueRefs(def: SubscriptionDefinition): readonly string[] {
   const out: string[] = [];
   for (const site of exprSitesOf(def)) walkRaw(site.value, site.path, out);
   return out;
+}
+
+/**
+ * ПОЛНАЯ ПРОВЕРКА ПЕРЕД ЗАПИСЬЮ. Порядок — не косметика: (1) поверхность (дешевле всего и решает, кому
+ * декларация адресована); (2) строка в E-позиции — ДО разбора формы; (3) форма; (4) поимённые ссылки по
+ * фиксированным путям, без обхода дерева; (5) типы выражений — здесь же срабатывает кап глубины дерева E
+ * (`assertExprChecked`); (6) круги между ведомостями; (7) глубокие обходы (аспект вне prefer, сырые
+ * предикаты) — ПОСЛЕ капа шага 5: обход дерева без гейта глубины был бы вторым входом дерева без гейта.
+ */
+export function assertSubscription(
+  row: SubscriptionRow,
+  scope: SubscriptionCheckScope,
+): SubscriptionDefinition {
+  if (!(SURFACES as readonly string[]).includes(row.surface)) {
+    throw new ExecError(
+      'SURFACE_UNKNOWN',
+      `поверхности «${row.surface}» нет: подписке ${row.id} некого обслуживать`,
+      { subscription: row.id, surface: row.surface, known: [...SURFACES] },
+    );
+  }
+  for (const site of exprSitesOf(row.definition)) {
+    if (typeof site.value !== 'string') continue;
+    throw new ExecError(
+      SECOND_LANGUAGE,
+      `${row.id}: в позиции ${site.path} ожидается выражение E, а не текст`,
+      { subscription: row.id, path: site.path },
+    );
+  }
+  const parsed = subscriptionDefinitionSchema.safeParse(row.definition);
+  if (!parsed.success) {
+    throw new ExecError('VALIDATION', `декларация подписки ${row.id} не разобрана`, {
+      reason: 'SUBSCRIPTION_MALFORMED',
+      subscription: row.id,
+      issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+    });
+  }
+  const def = parsed.data;
+  assertReferences(row.id, def, scope.reg);
+  assertExprTypes(row.id, def, scope.reg);
+  if (def.engine === 'budget') assertAggregatesAcyclic(row.id, def);
+  assertNoAspectRefs(row.id, def, scope.reg);
+  if (scope.systemSeed) assertNoRawValues(row.id, def);
+  return def;
+}
+
+/** Отказ формы декларации: VALIDATION с ПРИЧИНОЙ в details — как у дельт (`deltas.ts`). */
+function bad(
+  reason: string,
+  subscription: string,
+  message: string,
+  details: Record<string, unknown> = {},
+): never {
+  throw new ExecError('VALIDATION', message, { reason, subscription, ...details });
+}
+
+function contractOf(reg: RegistrySnapshot, id: string, sub: string) {
+  const c = reg.contracts.get(id);
+  if (c === undefined)
+    bad('SUBSCRIPTION_UNKNOWN_CONTRACT', sub, `контракта ${id} нет в реестре`, {
+      contract: id,
+    });
+  return c;
+}
+const slotNames = (reg: RegistrySnapshot, id: string, sub: string) =>
+  new Set((contractOf(reg, id, sub).slots ?? []).map((s) => s.name));
+const setNames = (reg: RegistrySnapshot, id: string, sub: string) =>
+  new Set(Object.keys(contractOf(reg, id, sub).sets ?? {}));
+function assertRole(reg: RegistrySnapshot, sub: string, role: string): void {
+  if (!reg.roles.has(role))
+    bad('SUBSCRIPTION_UNKNOWN_ROLE', sub, `роли ${role} нет в реестре`, {
+      role,
+    });
+}
+
+/** Поимённые ссылки декларации — по фиксированным путям; дерево здесь не обходится. */
+function assertReferences(id: string, def: SubscriptionDefinition, reg: RegistrySnapshot): void {
+  const idx = bindingIndexOf(reg);
+  const known = (name: string, set: ReadonlySet<string>, reason: string, path: string): void => {
+    if (!set.has(name)) {
+      bad(reason, id, `${path}: имени «${name}» в реестре или декларации нет`, { path, name });
+    }
+  };
+  if (def.engine === 'agenda') {
+    known(
+      def.hide.set,
+      setNames(reg, 'orbis/recurrence', id),
+      'SUBSCRIPTION_UNKNOWN_SET',
+      'hide.set',
+    );
+    const prefer = (list: readonly string[], slots: readonly string[], path: string): void => {
+      for (const a of list) {
+        if (!reg.aspects.has(a)) {
+          bad('SUBSCRIPTION_UNKNOWN_ASPECT', id, `аспекта ${a} нет`, { aspect: a, path });
+        }
+        // Аспект в prefer, не реализующий спорный слот, — мёртвая строка: приоритет, который никогда
+        // не сработает, а SLOT_AMBIGUOUS при этом продолжит падать.
+        if (!slots.some((s) => idx.slotOf(a, 'orbis/when', s) !== undefined)) {
+          bad('SUBSCRIPTION_PREFER_UNBOUND', id, `${a} не реализует слот секции ${path}`, {
+            aspect: a,
+            path,
+          });
+        }
+      }
+    };
+    prefer(def.show.prefer, [def.show.slot], 'show.prefer');
+    prefer(def.overdue.prefer, def.overdue.slots, 'overdue.prefer');
+    return;
+  }
+  const mSets = setNames(reg, def.sources.movement.contract, id);
+  const mSlots = slotNames(reg, def.sources.movement.contract, id);
+  const eSlots = slotNames(reg, def.sources.envelope.contract, id);
+  const aggNames = new Set(Object.keys(def.aggregates));
+  const phaseKeys = new Set(Object.keys(def.phases));
+  known(
+    def.sources.movement.counted_set,
+    mSets,
+    'SUBSCRIPTION_UNKNOWN_SET',
+    'sources.movement.counted_set',
+  );
+  assertRole(reg, id, def.sources.envelope.binding_role);
+  assertRole(reg, id, def.rollup.role);
+  // Ключ `active` обязателен: прочие фазы — условия, активная — ОСТАТОК; без неё `if(phase=active, …)`
+  // в daily_pace молча считался бы всегда null.
+  if (!phaseKeys.has('active'))
+    bad('SUBSCRIPTION_PHASE_ACTIVE_MISSING', id, 'у Budget нет фазы active');
+  for (const n of def.rollup.applies_to) {
+    known(n, aggNames, 'SUBSCRIPTION_UNKNOWN_AGG', 'rollup.applies_to');
+  }
+  for (const p of def.alerts.skip_phases) {
+    known(p, phaseKeys, 'SUBSCRIPTION_UNKNOWN_PHASE', 'alerts.skip_phases');
+  }
+  known(def.rollover.carry.agg, aggNames, 'SUBSCRIPTION_UNKNOWN_AGG', 'rollover.carry.agg');
+  for (const [n, agg] of Object.entries(def.aggregates)) {
+    if (agg.kind !== 'sum') continue;
+    known(agg.of.slot, mSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', `aggregates.${n}.of.slot`);
+    if (agg.group_by !== undefined) {
+      known(agg.group_by.slot, mSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', `aggregates.${n}.group_by`);
+    }
+    for (const r of [agg.bound_via, agg.unbound_via]) if (r !== undefined) assertRole(reg, id, r);
+  }
+  for (const [n, list] of Object.entries(def.lists)) {
+    known(list.counted_set, mSets, 'SUBSCRIPTION_UNKNOWN_SET', `lists.${n}.counted_set`);
+    for (const r of [list.requires_relation, list.excludes_relation]) {
+      if (r !== undefined) assertRole(reg, id, r.role);
+    }
+    for (const o of list.order_by) {
+      if ('slot' in o) known(o.slot, mSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', `lists.${n}.order_by`);
+    }
+  }
+  for (const o of def.cards.order_by) {
+    if ('slot' in o) known(o.slot, eSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', 'cards.order_by');
+    if (!('deref' in o)) continue;
+    known(o.deref.slot, eSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', 'cards.order_by.deref');
+    if (!reg.properties.has(o.deref.read)) {
+      bad('SUBSCRIPTION_UNKNOWN_PROPERTY', id, `свойства ${o.deref.read} нет`, {
+        property: o.deref.read,
+      });
+    }
+  }
+}
+
+function walkAspectRefs(
+  v: unknown,
+  path: string,
+  inPrefer: boolean,
+  aspects: ReadonlyMap<string, unknown>,
+  out: string[],
+): void {
+  if (typeof v === 'string') {
+    if (!inPrefer && aspects.has(v)) out.push(path);
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const [i, x] of v.entries()) {
+      walkAspectRefs(x, `${path}.${i}`, inPrefer, aspects, out);
+    }
+    return;
+  }
+  const node = rec(v);
+  if (node === undefined) return;
+  for (const [k, x] of Object.entries(node)) {
+    walkAspectRefs(x, path === '' ? k : `${path}.${k}`, inPrefer || k === 'prefer', aspects, out);
+  }
+}
+
+/** §Б5-2: ссылка на id аспекта законна ТОЛЬКО в `prefer`; везде иначе — SUBSCRIPTION_RAW_REF. */
+function assertNoAspectRefs(id: string, def: SubscriptionDefinition, reg: RegistrySnapshot): void {
+  const found: string[] = [];
+  walkAspectRefs(def, '', false, reg.aspects, found);
+  const path = found[0];
+  if (path === undefined) return;
+  throw new ExecError('SUBSCRIPTION_RAW_REF', `${id}: ссылка на аспект вне prefer (${path})`, {
+    subscription: id,
+    path,
+    ref: valueAt(def, path),
+  });
+}
+
+/**
+ * СИСТЕМНОМУ СИДУ СЫРОЙ ПРЕДИКАТ ЗАПРЕЩЁН. Пометить его нечем: `raw_value` — вывод валидатора для
+ * диффа Ш1, а не поле декларации, и «немаркированное сырое значение в системном сиде» (§Б5-2) значит
+ * ровно «любое»: встроенная подписка обязана ссылаться на контракт и набор. У владельца тот же
+ * предикат законен и уезжает в дифф пометкой.
+ */
+function assertNoRawValues(id: string, def: SubscriptionDefinition): void {
+  const path = rawValueRefs(def)[0];
+  if (path === undefined) return;
+  const node = rec(valueAt(def, path));
+  throw new ExecError(
+    'SUBSCRIPTION_RAW_REF',
+    `${id}: системный сид ссылается на свойство (${path})`,
+    {
+      subscription: id,
+      path,
+      ref: node?.prop ?? rec(node?.deref)?.prop ?? null,
+    },
+  );
+}
+
+function valueAt(root: unknown, path: string): unknown {
+  let cur: unknown = root;
+  for (const key of path.split('.')) {
+    cur = Array.isArray(cur) ? cur[Number(key)] : rec(cur)?.[key];
+    if (cur === undefined) return undefined;
+  }
+  return cur;
+}
+
+function assertExprTypes(id: string, def: SubscriptionDefinition, reg: RegistrySnapshot): void {
+  for (const site of exprSitesOf(def)) {
+    // `allowSensitivity` не выставляется НИГДЕ: {ctx:'$sensitivity'} живёт только в assign_level правил
+    // (§Б3-2а, Б-2), и подписка его видеть не должна.
+    const type = assertExprChecked(site.value, { reg, ...site.scope });
+    if (site.expect === null || site.expect.includes(type.kind)) continue;
+    throw new ExecError(
+      EXPR_TYPE,
+      `${id}: в позиции ${site.path} ожидался ${site.expect.join('|')}, получен ${type.kind}`,
+      { subscription: id, path: site.path, expected: site.expect.join('|'), actual: type.kind },
+    );
+  }
+}
+
+/** Имена ведомостей, названные выражением через `{agg}`. */
+function aggRefs(node: unknown, out: Set<string>): void {
+  if (Array.isArray(node)) {
+    for (const v of node) aggRefs(v, out);
+    return;
+  }
+  const o = rec(node);
+  if (o === undefined) return;
+  if (typeof o.agg === 'string') {
+    out.add(o.agg);
+    return;
+  }
+  for (const v of Object.values(o)) aggRefs(v, out);
+}
+
+/**
+ * КРУГ МЕЖДУ ВЕДОМОСТЯМИ — EXPR_RECURSION (§С8-28 «рекурсия невыразима»). Чекер выражения его не видит:
+ * он знает ИМЕНА доступных величин, но не их тела, и круг `remaining → daily_pace → remaining`
+ * собирается из двух законных по отдельности формул. Без проверки движок ведомостей ушёл бы в
+ * бесконечный обход на первом же конверте.
+ */
+function assertAggregatesAcyclic(id: string, def: BudgetSubscription): void {
+  const edges = new Map<string, Set<string>>();
+  for (const [name, agg] of Object.entries(def.aggregates)) {
+    const refs = new Set<string>();
+    if (agg.kind === 'formula') aggRefs(agg.expr, refs);
+    edges.set(name, refs);
+  }
+  const state = new Map<string, 'open' | 'done'>();
+  const walk = (name: string, trail: readonly string[]): void => {
+    if (state.get(name) === 'done') return;
+    if (state.get(name) === 'open') {
+      throw new ExecError(
+        EXPR_RECURSION,
+        `${id}: ведомости ссылаются по кругу: ${[...trail, name].join(' → ')}`,
+        { subscription: id, path: `aggregates.${name}`, cycle: [...trail, name] },
+      );
+    }
+    state.set(name, 'open');
+    for (const next of edges.get(name) ?? []) walk(next, [...trail, name]);
+    state.set(name, 'done');
+  };
+  for (const name of edges.keys()) walk(name, []);
 }

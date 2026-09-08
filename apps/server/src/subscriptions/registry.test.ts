@@ -4,9 +4,18 @@
 // база к ответу ничего не добавляет. Четвёртый и пятый — против БД: конфликт слота живёт у
 // СУЩНОСТИ, и собрать его можно только двумя настоящими привязками в реестре владельца.
 import { afterAll, describe, expect, test } from 'bun:test';
-import { AGENDA_DEF, BUDGET_DEF } from '@orbis/shared';
-import { appDb, requireEnv } from '../../test/helpers';
-import { exprSitesOf, rawValueRefs } from './registry';
+import {
+  AGENDA_DEF,
+  BUDGET_DEF,
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
+} from '@orbis/shared';
+import { appDb, freshUserId, requireEnv } from '../../test/helpers';
+import { ExecError } from '../errors';
+import type { RegistrySnapshot, SubscriptionRow } from '../registry/load';
+import { assertSubscription, exprSitesOf, rawValueRefs } from './registry';
 
 requireEnv();
 
@@ -15,6 +24,43 @@ const { client } = appDb();
 afterAll(async () => {
   await client.end();
 });
+
+/** Снимок «как из БД» без единой строки владельца: встроенные словари и обе версии. */
+function snapshot(): RegistrySnapshot {
+  return {
+    properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+    subscriptions: new Map(),
+    ownerVersion: 1,
+    systemVersion: 1,
+  };
+}
+
+/** Строка подписки вокруг декларации: валидатор смотрит и на неё (поверхность, id в отказе). */
+function row(definition: unknown, over: Partial<SubscriptionRow> = {}): SubscriptionRow {
+  return {
+    id: 'orbis/agenda',
+    ownerId: null,
+    surface: 'planner/agenda',
+    definition,
+    module: null,
+    rank: 1,
+    ...over,
+  };
+}
+
+/** Код отказа и его ПРИЧИНА: коды реформы закрыты (errors.ts), причина едет в details. */
+function refusal(fn: () => unknown): { code: string; reason: string } {
+  try {
+    fn();
+  } catch (e) {
+    if (!(e instanceof ExecError)) throw e;
+    return { code: e.code, reason: (e.details as { reason?: string }).reason ?? '' };
+  }
+  throw new Error('ожидался отказ, его не было');
+}
 
 describe('позиции языка E в декларации и сырые ссылки (§Б5-2)', () => {
   test('agenda: четыре позиции E с путями', () => {
@@ -45,5 +91,109 @@ describe('позиции языка E в декларации и сырые сс
   });
   test('budget: позиции — фазы, формулы, where сумм и окна списков', () => {
     expect(exprSitesOf(BUDGET_DEF).map((s) => s.path)).toContain('aggregates.daily_pace.expr');
+  });
+});
+
+describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RAW_REF / raw_value', () => {
+  const seed = { reg: snapshot(), systemSeed: true };
+  test('поверхность вне словаря — SURFACE_UNKNOWN', () => {
+    expect(
+      refusal(() => assertSubscription(row(AGENDA_DEF, { surface: 'core/row' }), seed)).code,
+    ).toBe('SURFACE_UNKNOWN');
+  });
+  test('строка в E-позиции — SECOND_LANGUAGE с путём, а не «форма не разобралась»', () => {
+    const def = {
+      ...AGENDA_DEF,
+      overdue: { ...AGENDA_DEF.overdue, where: 'class(completable) in open' },
+    };
+    expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SECOND_LANGUAGE');
+  });
+  test('кривая форма — VALIDATION/SUBSCRIPTION_MALFORMED', () => {
+    const { hide, ...def } = AGENDA_DEF;
+    expect(refusal(() => assertSubscription(row(def), seed))).toEqual({
+      code: 'VALIDATION',
+      reason: 'SUBSCRIPTION_MALFORMED',
+    });
+  });
+  test('законная системная декларация проходит и возвращает разобранную форму', () => {
+    expect(assertSubscription(row(AGENDA_DEF), seed).engine).toBe('agenda');
+  });
+  test('counted_set вне наборов контракта — SUBSCRIPTION_UNKNOWN_SET', () => {
+    const def = {
+      ...BUDGET_DEF,
+      sources: {
+        ...BUDGET_DEF.sources,
+        movement: { ...BUDGET_DEF.sources.movement, counted_set: 'нет-такого' },
+      },
+    };
+    expect(
+      refusal(() => assertSubscription(row(def, { surface: 'finance/budget-overview' }), seed)),
+    ).toEqual({ code: 'VALIDATION', reason: 'SUBSCRIPTION_UNKNOWN_SET' });
+  });
+  test('prefer с аспектом, не реализующим слот секции, — SUBSCRIPTION_PREFER_UNBOUND', () => {
+    const def = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, prefer: ['orbis/note'] } };
+    expect(refusal(() => assertSubscription(row(def), seed)).reason).toBe(
+      'SUBSCRIPTION_PREFER_UNBOUND',
+    );
+  });
+  test('prefer с реализующим аспектом законен — единственное место ссылки на аспект (§Б5-2)', () => {
+    const def = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, prefer: ['orbis/schedule'] } };
+    expect(assertSubscription(row(def), seed).engine).toBe('agenda');
+  });
+  test('id аспекта ВНЕ prefer — SUBSCRIPTION_RAW_REF с путём и ссылкой', () => {
+    const where = { op: '=', args: [{ const: 'orbis/task' }, { const: 'orbis/task' }] };
+    expect(
+      refusal(() =>
+        assertSubscription(row({ ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } }), seed),
+      ).code,
+    ).toBe('SUBSCRIPTION_RAW_REF');
+  });
+  test('сырой предикат по свойству: системному сиду запрещён, владельцу — помечается', () => {
+    const where = {
+      op: 'and',
+      args: [
+        { op: 'in', args: [{ class: { contract: 'orbis/completable' } }, { const: ['active'] }] },
+        { op: '!=', args: [{ prop: 'orbis/task_status' }, { const: 'waiting' }] },
+      ],
+    };
+    const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
+    expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
+    const own = assertSubscription(row(def, { ownerId: freshUserId() }), {
+      reg: snapshot(),
+      systemSeed: false,
+    });
+    expect(rawValueRefs(own)).toEqual(['overdue.where.args.1.args.0']);
+  });
+});
+
+describe('типы позиций E и круги ведомостей (§С8-28, §Б5-3)', () => {
+  const seed = { reg: snapshot(), systemSeed: true };
+  test('окно, объявленное булевым выражением, — EXPR_TYPE', () => {
+    const show = {
+      ...AGENDA_DEF.show,
+      window: { ...AGENDA_DEF.show.window, to: { const: true } },
+    };
+    expect(refusal(() => assertSubscription(row({ ...AGENDA_DEF, show }), seed)).code).toBe(
+      'EXPR_TYPE',
+    );
+  });
+  test('ведомости, ссылающиеся по кругу, — EXPR_RECURSION', () => {
+    const aggregates = {
+      ...BUDGET_DEF.aggregates,
+      remaining: { kind: 'formula', scope: 'envelope', expr: { agg: 'daily_pace' } },
+    };
+    expect(
+      refusal(() =>
+        assertSubscription(
+          row({ ...BUDGET_DEF, aggregates }, { surface: 'finance/budget-overview' }),
+          seed,
+        ),
+      ).code,
+    ).toBe('EXPR_RECURSION');
+  });
+  test('законная декларация Budget проходит целиком', () => {
+    expect(
+      assertSubscription(row(BUDGET_DEF, { surface: 'finance/budget-overview' }), seed).engine,
+    ).toBe('budget');
   });
 });
