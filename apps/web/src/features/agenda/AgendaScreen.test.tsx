@@ -1,27 +1,22 @@
-// Task D1 — Agenda-lite (02-core-os §4). Фикстуры повторяют приёмку §8.1–8.4:
-// граница «Просроченного» (чистые события не входят), задача с due_date, дедуп
-// task+schedule, дневные секции только по orbis/schedule.
+// Task D1 — Повестка (02-core-os §4). Фикстуры повторяют приёмку §8.1–8.4: граница
+// «Просроченного» (чистые события не входят), задача с due_date, слияние task+schedule,
+// дневные секции только по слоту `moment`.
+//
+// Отбор строк уехал на сервер (§А5-5): фикстура здесь — ОТВЕТ подписки, то есть уже
+// разложенные по секциям строки. Что именно попадает в секцию, меряет живая приёмка
+// (`apps/server/src/routers/agenda-acceptance.test.ts`); здесь — что экран делает с ответом.
 //
 // «Сегодня» на клиенте шва не имеет — фикстуры строятся ОТНОСИТЕЛЬНО todayISO(TZ)
 // и addDays (прецедент TransactionsScreen.test.tsx), поэтому тест не протухает.
-import { addDays } from '@orbis/shared';
-import { parseQueryAst } from '@orbis/shared/query';
-import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
+import { type AgendaRow, addDays } from '@orbis/shared';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { ActiveScreen } from '../../app/router';
-import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
-import { BUILTIN_REGISTRY } from '../../test/registry';
 import { todayISO } from '../budget/useBudget';
 import { AgendaScreen } from './AgendaScreen';
-import {
-  AGENDA_DAYS_QUERY,
-  AGENDA_OVERDUE_DUE_QUERY,
-  AGENDA_OVERDUE_START_QUERY,
-} from './useAgenda';
 
 const TZ = 'Europe/Moscow';
 const today = todayISO(TZ);
@@ -63,23 +58,39 @@ const settings = {
   pinnedEntities: [],
 };
 
-type Fixtures = { days?: unknown[]; overdueDue?: unknown[]; overdueStart?: unknown[] };
+type Fixtures = {
+  window?: AgendaRow[];
+  overdue?: AgendaRow[];
+  truncated?: { window: boolean; overdue: boolean };
+};
 
-// Роутинг мока по ТОЧНОЙ строке запроса: несовпадение строки грамматики валит тест
-// (unknown query → пустая выдача во всех секциях), а не проходит молча.
 const agendaHandler =
   (f: Fixtures): MockHandler =>
-  (path, input) => {
+  (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
-      if (q === AGENDA_DAYS_QUERY) return f.days ?? [];
-      if (q === AGENDA_OVERDUE_DUE_QUERY) return f.overdueDue ?? [];
-      if (q === AGENDA_OVERDUE_START_QUERY) return f.overdueStart ?? [];
-      return [];
-    }
-    return {};
+    if (path !== 'agenda.list') return {};
+    return {
+      today,
+      timezone: TZ,
+      rows: [...(f.window ?? []), ...(f.overdue ?? [])],
+      truncated: f.truncated ?? { window: false, overdue: false },
+    };
   };
+
+/** Строка окна: `at` — момент как есть, клиент раскладывает по нему день и время. */
+const win = (e: ReturnType<typeof ent>, at: string, allDay = false): AgendaRow => ({
+  entity: e,
+  section: 'window',
+  at,
+  slot: 'moment',
+  allDay,
+});
+/** Строка просроченного: `at` — релевантная ДАТА, её выбрал сервер минимумом двух. */
+const late = (
+  e: ReturnType<typeof ent>,
+  at: string,
+  slot: 'deadline' | 'moment' = 'deadline',
+): AgendaRow => ({ entity: e, section: 'overdue', at, slot, allDay: false });
 
 const overdueSection = () => screen.getByTestId('agenda-overdue');
 const daySection = (date: string) => screen.getByTestId(`agenda-day-${date}`);
@@ -96,61 +107,15 @@ beforeEach(() => {
   });
 });
 
-// --- строки грамматики (§А5-3) ---------------------------------------------------------
+// --- граница вкладки (§А5-5) -----------------------------------------------------------
 
-test('Agenda шлёт три запроса канона §А5-3 дословно', async () => {
+test('Повестка шлёт ОДНУ подписку agenda.list с горизонтом вкладки', async () => {
   const { calls } = renderWithProviders(<AgendaScreen />, agendaHandler({}));
-
   await waitFor(() =>
-    expect(calls.filter((c) => c.path === 'entity.query').length).toBeGreaterThanOrEqual(3),
+    expect(calls.filter((c) => c.path === 'agenda.list').length).toBeGreaterThan(0),
   );
-  const queries = calls
-    .filter((c) => c.path === 'entity.query')
-    .map((c) => (c.input as { query: string }).query);
-
-  // Окно §4.1: только orbis/schedule, сегодня+7, потолок 200 (K18)
-  expect(queries).toContain(
-    'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200',
-  );
-  // §4.2 п.1 — orbis/due_date не материализуемое поле, дешёвый путь, отдельный запрос (K16)
-  expect(queries).toContain(
-    'aspect=orbis/task, orbis/due_date=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=200',
-  );
-  // §4.2 п.2 — два aspect= в одном запросе (K14): чистые события сюда не попадают
-  expect(queries).toContain(
-    'aspect=orbis/task, aspect=orbis/schedule, orbis/start_at=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/start_at:asc, limit=200',
-  );
-});
-
-/**
- * Три текста Agenda РАВНЫ эталонным key-формам `AGENDA_QUERY_TEXTS` (§А5-5) — байт в байт.
- *
- * Эталон живёт в фикстурах канона и там же проверен на обратимость печати
- * (`print.test.ts`), поэтому равенство здесь означает: запрос Agenda и есть тот текст,
- * который канон обещал разбирать и печатать обратно. Сверять «на глаз» было нечем: три
- * строки различаются одним словом каждая.
- */
-test('тексты Agenda равны эталонным key-формам AGENDA_QUERY_TEXTS', () => {
-  expect(AGENDA_DAYS_QUERY).toBe(AGENDA_QUERY_TEXTS.days);
-  expect(AGENDA_OVERDUE_DUE_QUERY).toBe(AGENDA_QUERY_TEXTS.overdueDue);
-  expect(AGENDA_OVERDUE_START_QUERY).toBe(AGENDA_QUERY_TEXTS.overdueStart);
-});
-
-/**
- * И разбираются каноном §А5-3ж.
- *
- * Проверка отдельная от равенства выше и стоит именно на `parseQueryAst`. Заведена она была
- * тогда, когда серверный разбор принимал ещё и старую форму через мост: «Agenda работает» не
- * доказывало перевода — непереведённый текст уходил в старую ветку молча. Моста больше нет
- * (Задача 21b), но проверка осталась живой: она про то, что тексты вкладки — КАНОН, а не про
- * то, что сервер их как-нибудь примет.
- */
-test('тексты Agenda разбираются каноном §А5-3', () => {
-  const registry = buildQueryRegistry(BUILTIN_REGISTRY).parse;
-  for (const query of [AGENDA_DAYS_QUERY, AGENDA_OVERDUE_DUE_QUERY, AGENDA_OVERDUE_START_QUERY]) {
-    const r = parseQueryAst(query, registry);
-    expect(r.ok, query).toBe(true);
-  }
+  expect(calls.filter((c) => c.path === 'entity.query')).toHaveLength(0);
+  expect(calls.find((c) => c.path === 'agenda.list')?.input).toEqual({ days: 8 });
 });
 
 // --- приёмка §8 -----------------------------------------------------------------------
@@ -161,7 +126,10 @@ test('§8.1: прошедшее чистое событие не попадае�
   const past = ent('ev-past', 'Прошедший созвон', { 'orbis/start_at': at(yesterday, '10:00') }, [
     'orbis/schedule',
   ]);
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [past] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(past, at(yesterday, '10:00'))] }),
+  );
 
   await waitFor(() => expect(daySection(today)).toBeInTheDocument());
   expect(screen.queryByTestId('agenda-overdue')).toBeNull();
@@ -175,11 +143,11 @@ test('§8.2: незакрытая задача с прошедшим due_date �
     { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
     ['orbis/task'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [task] }));
+  renderWithProviders(<AgendaScreen />, agendaHandler({ overdue: [late(task, yesterday)] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
   expect(rowTitles(overdueSection())).toEqual(['Закончить API']);
-  // §4.1: задачи без orbis/schedule в дневные секции не попадают
+  // §4.1: строк окна у неё нет — слот `moment` не заполнен
   expect(rowTitles(daySection(today))).toEqual([]);
 });
 
@@ -194,10 +162,10 @@ test('§8.3: task+schedule с обеими прошедшими датами —
     },
     ['orbis/task', 'orbis/schedule'],
   );
-  // Сущность приходит В ОБЕИХ выборках — слияние по id (§4.2)
+  // Слияние по id сделал сервер (§Б5-6) — сюда приезжает ОДНА строка секции
   renderWithProviders(
     <AgendaScreen />,
-    agendaHandler({ overdueDue: [both], overdueStart: [both] }),
+    agendaHandler({ overdue: [late(both, addDays(today, -3))] }),
   );
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
@@ -225,7 +193,9 @@ test('§8.3: сортировка «Просроченного» — старе�
   );
   renderWithProviders(
     <AgendaScreen />,
-    agendaHandler({ overdueDue: [later, older], overdueStart: [later] }),
+    agendaHandler({
+      overdue: [late(later, addDays(today, -10), 'moment'), late(older, addDays(today, -5))],
+    }),
   );
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
@@ -239,7 +209,10 @@ test('§8.4: задача с orbis/schedule попадает в свой ден�
     { 'orbis/task_status': 'planned', 'orbis/start_at': at(tomorrow, '14:00') },
     ['orbis/task', 'orbis/schedule'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(scheduled, at(tomorrow, '14:00'))] }),
+  );
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
   expect(rowTitles(daySection(today))).toEqual([]);
@@ -258,15 +231,23 @@ test('§4.1: recurring-шаблон скрыт, инстанс виден', asyn
   const instance = ent('inst', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, [
     'orbis/schedule',
   ]);
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [template, instance] }));
+  // Шаблон прячет СЕРВЕР (набор `templates`, §Б5-6) — в ответе подписки его нет вовсе
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(instance, at(today, '09:00'))] }),
+  );
 
   await waitFor(() => expect(rowTitles(daySection(today))).toEqual(['Стендап']));
   expect(screen.queryByText('Стендап (шаблон)')).toBeNull();
+  expect(template.props['orbis/recurrence']).toBeDefined(); // фикстура шаблона осмысленна
 });
 
 test('§4.1: горизонт — 8 секций, пустой день показывает «день свободен»', async () => {
   const event = ent('ev', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']);
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [event] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(event, at(today, '09:00'))] }),
+  );
 
   await waitFor(() => expect(screen.getAllByTestId(/^agenda-day-/)).toHaveLength(8));
   expect(daySection(addDays(today, 7))).toBeInTheDocument();
@@ -277,19 +258,31 @@ test('§4.1: горизонт — 8 секций, пустой день пока
 
 test('§4.1: all_day — в начале дня с пометкой «весь день», далее по времени start_at', async () => {
   // Сервер уже отсортировал по start_at:asc; all_day поднимается клиентом
+  // Признак «весь день» приезжает ПОЛЕМ строки (`allDay`), а не читается из props: его
+  // выбрал сервер по типу свойства в слоте `moment` либо по сырому `orbis/all_day` (§Б5-6).
   const days = [
-    ent('e1', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']),
-    ent('e2', 'Отпуск: день 1', { 'orbis/start_at': at(today, '00:00'), 'orbis/all_day': true }, [
-      'orbis/schedule',
-    ]),
-    ent(
-      'e3',
-      'Врач',
-      { 'orbis/start_at': at(today, '14:00'), 'orbis/end_at': at(today, '15:30') },
-      ['orbis/schedule'],
+    win(
+      ent('e1', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']),
+      at(today, '09:00'),
+    ),
+    win(
+      ent('e2', 'Отпуск: день 1', { 'orbis/start_at': at(today, '00:00'), 'orbis/all_day': true }, [
+        'orbis/schedule',
+      ]),
+      at(today, '00:00'),
+      true,
+    ),
+    win(
+      ent(
+        'e3',
+        'Врач',
+        { 'orbis/start_at': at(today, '14:00'), 'orbis/end_at': at(today, '15:30') },
+        ['orbis/schedule'],
+      ),
+      at(today, '14:00'),
     ),
   ];
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days }));
+  renderWithProviders(<AgendaScreen />, agendaHandler({ window: days }));
 
   await waitFor(() =>
     expect(rowTitles(daySection(today))).toEqual(['Отпуск: день 1', 'Стендап', 'Врач']),
@@ -319,14 +312,13 @@ test('§4.2: recurring-шаблон не висит в «Просроченно�
     { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday },
     ['orbis/task'],
   );
-  renderWithProviders(
-    <AgendaScreen />,
-    agendaHandler({ overdueDue: [template, task], overdueStart: [template] }),
-  );
+  // Шаблон отсеял сервер набором `templates` — в ответе только живая задача
+  renderWithProviders(<AgendaScreen />, agendaHandler({ overdue: [late(task, yesterday)] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
   expect(rowTitles(overdueSection())).toEqual(['Закончить API']);
   expect(screen.getByTestId('agenda-overdue-count')).toHaveTextContent('1');
+  expect(template.props['orbis/recurrence']).toBeDefined(); // фикстура шаблона осмысленна
 });
 
 // --- релевантная дата строки «Просроченного» (мокап §4: «срок был 11.06») --------------
@@ -344,7 +336,10 @@ test('§4.2: строка «Просроченного» подписана ре
     },
     ['orbis/task', 'orbis/schedule'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueStart: [task] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ overdue: [late(task, yesterday, 'moment')] }),
+  );
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
   expect(within(overdueSection()).getByText(`был ${dayLabel(yesterday)}`)).toBeInTheDocument();
@@ -361,7 +356,7 @@ test('§4.2 (D2b): в строке «Просроченного» дата пе�
     { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
     ['orbis/task'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [task] }));
+  renderWithProviders(<AgendaScreen />, agendaHandler({ overdue: [late(task, yesterday)] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
   expect(within(overdueSection()).getAllByText(`был ${dayLabel(yesterday)}`)).toHaveLength(1);
@@ -384,7 +379,7 @@ test('§4.2 (D2c): у просроченного платежа сумма ос�
     },
     ['orbis/task', 'orbis/financial'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [payment] }));
+  renderWithProviders(<AgendaScreen />, agendaHandler({ overdue: [late(payment, yesterday)] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
   // '−' здесь U+2212, разделитель групп — обычный пробел (lib/format.ts formatMoney)
@@ -403,7 +398,10 @@ test('дневная секция: у события дата справа не 
   const event = ent('e1', 'Созвон', { 'orbis/start_at': at(tomorrow, '14:00') }, [
     'orbis/schedule',
   ]);
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [event] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(event, at(tomorrow, '14:00'))] }),
+  );
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Созвон']));
   // Время слева осталось; голой даты справа — ни одной
@@ -424,7 +422,10 @@ test('дневная секция: срок, СОВПАВШИЙ с днём се
     },
     ['orbis/task', 'orbis/schedule'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(scheduled, at(tomorrow, '14:00'))] }),
+  );
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
   expect(within(daySection(tomorrow)).getByText('14:00')).toBeInTheDocument();
@@ -444,7 +445,10 @@ test('дневная секция: срок, отличающийся от дн�
     },
     ['orbis/task', 'orbis/schedule'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(scheduled, at(tomorrow, '14:00'))] }),
+  );
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
   expect(within(daySection(tomorrow)).getByText(dayLabel(dayAfter))).toBeInTheDocument();
@@ -461,7 +465,10 @@ test('дневная секция: у платежа сумма остаётся
     },
     ['orbis/schedule', 'orbis/financial'],
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [payment] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(payment, at(tomorrow, '09:00'))] }),
+  );
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Аренда']));
   expect(within(daySection(tomorrow)).getByText('−1 200.00')).toBeInTheDocument();
@@ -482,13 +489,9 @@ test('дефолт меты EntityRow не менялся: в Browser строк
 test('D2c: шапка и плашка ошибки называют экран «Повесткой», а не «Agenda»', async () => {
   // Пользователь жмёт вкладку «Повестка» (слово владельца 2026-07-25) — экран, на который
   // он попадает, обязан называться так же. Идентификаторы и testid при этом не меняются.
-  renderWithProviders(<AgendaScreen />, (path, input) => {
+  renderWithProviders(<AgendaScreen />, (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
-      if (q === AGENDA_DAYS_QUERY) throw trpcError('INTERNAL_SERVER_ERROR');
-      return [];
-    }
+    if (path === 'agenda.list') throw trpcError('INTERNAL_SERVER_ERROR');
     return {};
   });
 
@@ -498,32 +501,19 @@ test('D2c: шапка и плашка ошибки называют экран �
   );
 });
 
-// --- таймзона: раскладка ждёт настроек ------------------------------------------------
+// --- ответ подписки: пока его нет, раскладывать нечего -------------------------------
 
-test('настройки ещё грузятся → скелетон, а не раскладка в таймзоне браузера', async () => {
-  // Выборки пришли, user.getSettings висит: группировать по дням и считать локальный
-  // день start_at сейчас нечем (§4 «сегодня» — в таймзоне пользователя).
-  const event = ent('e1', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']);
-  const task = ent(
-    't1',
-    'Закончить API',
-    { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday },
-    ['orbis/task'],
-  );
-  const { calls } = renderWithProviders(<AgendaScreen />, (path, input) => {
-    if (path === 'user.getSettings') return new Promise(() => {}); // настройки не приходят
-    if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
-      if (q === AGENDA_DAYS_QUERY) return [event];
-      if (q === AGENDA_OVERDUE_DUE_QUERY) return [task];
-      return [];
-    }
+test('ручка не ответила → скелетон, дней нет', async () => {
+  // Ждать больше нечего, кроме самой подписки: «сегодня» и таймзона приезжают ЕЁ ответом
+  // (§А5-5), и до него дни считались бы в зоне браузера — строки у полуночи уехали бы
+  // в соседнюю секцию.
+  const { calls } = renderWithProviders(<AgendaScreen />, (path) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'agenda.list') return new Promise(() => {}); // ответ не приходит
     return {};
   });
 
-  await waitFor(() =>
-    expect(calls.filter((c) => c.path === 'entity.query').length).toBeGreaterThanOrEqual(3),
-  );
+  await waitFor(() => expect(calls.filter((c) => c.path === 'agenda.list').length).toBe(1));
   await waitFor(() => expect(screen.getAllByLabelText('Загрузка').length).toBeGreaterThan(0));
   expect(screen.queryAllByTestId(/^agenda-day-/)).toHaveLength(0);
   expect(screen.queryByTestId('agenda-overdue')).toBeNull();
@@ -532,21 +522,32 @@ test('настройки ещё грузятся → скелетон, а не �
 // --- потолок выборки (K18, урок C6) ---------------------------------------------------
 
 test('«Просроченное»: при упоре в потолок счётчик показывает «200+», а не молчит', async () => {
-  const many = Array.from({ length: 200 }, (_, i) =>
-    ent(`t${i}`, `Задача ${i}`, { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday }, [
-      'orbis/task',
-    ]),
+  // Усечение приезжает ФЛАГОМ секции (§А5-5), а не угадывается по длине списка: клиент
+  // больше не знает потолка вовсе, и три строки с поднятым флагом — законный ответ.
+  const rows = Array.from({ length: 3 }, (_, i) =>
+    late(
+      ent(`t${i}`, `Задача ${i}`, { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday }, [
+        'orbis/task',
+      ]),
+      yesterday,
+    ),
   );
-  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: many }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ overdue: rows, truncated: { window: false, overdue: true } }),
+  );
 
-  await waitFor(() => expect(screen.getByTestId('agenda-overdue-count')).toHaveTextContent('200+'));
+  await waitFor(() => expect(screen.getByTestId('agenda-overdue-count')).toHaveTextContent('3+'));
 });
 
 // --- навигация ------------------------------------------------------------------------
 
 test('тап по строке пушит detail в стек вкладки agenda', async () => {
   const event = ent('e1', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']);
-  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [event] }));
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ window: [win(event, at(today, '09:00'))] }),
+  );
 
   await waitFor(() => expect(rowTitles(daySection(today))).toEqual(['Стендап']));
   fireEvent.click(within(daySection(today)).getAllByTestId('agenda-row')[0] as HTMLElement);
@@ -557,18 +558,21 @@ test('тап по строке пушит detail в стек вкладки agen
 // --- §8.2: элемент ПОКИДАЕТ секцию после действия (полный путь через detail) -----------
 //
 // Единственный способ закрыть/архивировать задачу из Agenda — push detail (§4.2, §1.1).
-// Выборки Agenda держат staleTime 60 с (K16) и refetchOnWindowFocus выключен, поэтому
-// после «Готово» секция обновится ТОЛЬКО если mutation инвалидирует entity.query.
+// Подписка Повестки держит staleTime 60 с (K16) и refetchOnWindowFocus выключен, поэтому
+// после «Готово» секция обновится ТОЛЬКО если mutation инвалидирует agenda.list.
 // Тест гоняет ActiveScreen (реальный роутер), чтобы поймать разрыв между экранами.
 
-/** Мок «живого сервера»: закрытая задача перестаёт попадать в status=!done&!cancelled. */
+/** Мок «живого сервера»: закрытая задача выходит из набора `open` и покидает секцию. */
 function overdueRoundTripHandler(task: ReturnType<typeof ent>, state: { closed: boolean }) {
-  const handler: MockHandler = (path, input) => {
+  const handler: MockHandler = (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
-      if (q === AGENDA_OVERDUE_DUE_QUERY) return state.closed ? [] : [task];
-      return [];
+    if (path === 'agenda.list') {
+      return {
+        today,
+        timezone: TZ,
+        rows: state.closed ? [] : [late(task, yesterday)],
+        truncated: { window: false, overdue: false },
+      };
     }
     if (path === 'entity.get')
       return { entity: task, relations: [], thread: { threadId: 'th1', messages: [] } };
@@ -650,7 +654,7 @@ const overdueTask = ent(
 
 test('бейдж Agenda: просроченное>0 → число в tab-bar И sidebar, вкладка не открыта', async () => {
   onChatTab();
-  renderWithProviders(<App />, agendaHandler({ overdueDue: [overdueTask] }));
+  renderWithProviders(<App />, agendaHandler({ overdue: [late(overdueTask, yesterday)] }));
 
   await waitFor(() => expect(screen.getByTestId('agenda-badge')).toHaveTextContent('1'));
   expect(screen.getByTestId('sidebar-agenda-badge')).toHaveTextContent('1');
@@ -663,15 +667,7 @@ test('просроченного нет → бейджа Agenda нет ни в �
   const { calls } = renderWithProviders(<App />, agendaHandler({}));
 
   await waitFor(() => expect(screen.getByTestId('tab-agenda')).toBeInTheDocument());
-  await waitFor(() =>
-    expect(
-      calls.some(
-        (c) =>
-          c.path === 'entity.query' &&
-          (c.input as { query: string }).query === AGENDA_OVERDUE_DUE_QUERY,
-      ),
-    ).toBe(true),
-  );
+  await waitFor(() => expect(calls.some((c) => c.path === 'agenda.list')).toBe(true));
   expect(screen.queryByTestId('agenda-badge')).toBeNull();
   expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
 });
@@ -680,7 +676,7 @@ test('ошибка запроса «Просроченного» → бейдж�
   onChatTab();
   renderWithProviders(<App />, (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
+    if (path === 'agenda.list') throw trpcError('INTERNAL_SERVER_ERROR');
     return {};
   });
 
@@ -690,59 +686,52 @@ test('ошибка запроса «Просроченного» → бейдж�
   expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
 });
 
-test('D2b: отказ ОДНОЙ из двух выборок → бейджа нет ни в одной поверхности, вкладка жива', async () => {
-  // start_at упал, due_date вернул строку: «1» на бейдже читалось бы как полная картина,
-  // хотя часть просроченного не пришла. Заниженный счётчик хуже отсутствующего
-  // (прецедент Budget: ошибка alertCount → бейджа нет).
-  const task = ent(
-    't1',
-    'Закончить API',
-    { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
-    ['orbis/task'],
-  );
-  renderWithProviders(<App />, (path, input) => {
+test('D2b: отказ подписки → бейджа нет, но сигнал не теряется — плашка на вкладке', async () => {
+  // Заниженный счётчик хуже отсутствующего: «1» на бейдже читалось бы как полная картина
+  // (прецедент Budget: ошибка alertCount → бейджа нет). С одной выборкой занизиться нечем
+  // вовсе — зато обязана остаться ПЛАШКА на самой вкладке, где неполнота видна явно.
+  renderWithProviders(<App />, (path) => {
     if (path === 'user.getSettings') return settings;
-    if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
-      if (q === AGENDA_OVERDUE_START_QUERY) throw trpcError('INTERNAL_SERVER_ERROR');
-      if (q === AGENDA_OVERDUE_DUE_QUERY) return [task];
-      return [];
-    }
+    if (path === 'agenda.list') throw trpcError('INTERNAL_SERVER_ERROR');
     return {};
   });
 
-  // Успешная выборка дошла до экрана — значит бейджу было чем занизиться (не тавтология)
-  await waitFor(() => expect(rowTitles(overdueSection())).toEqual(['Закончить API']));
+  await waitFor(() =>
+    expect(screen.getByText('Не удалось загрузить просроченное')).toBeInTheDocument(),
+  );
   expect(screen.queryByTestId('agenda-badge')).toBeNull();
   expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
-  // Плашка неполноты на самой вкладке остаётся: сигнал не теряется, он переезжает
-  expect(screen.getByText('Не удалось загрузить просроченное')).toBeInTheDocument();
   expect(screen.getByTestId('tab-agenda')).toBeInTheDocument();
 });
 
 test('бейдж при упоре в потолок показывает «200+», а не усечённое число', async () => {
   onChatTab();
-  const many = Array.from({ length: 200 }, (_, i) =>
-    ent(`t${i}`, `Задача ${i}`, { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday }, [
-      'orbis/task',
-    ]),
+  const rows = Array.from({ length: 3 }, (_, i) =>
+    late(
+      ent(`t${i}`, `Задача ${i}`, { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday }, [
+        'orbis/task',
+      ]),
+      yesterday,
+    ),
   );
-  renderWithProviders(<App />, agendaHandler({ overdueDue: many }));
+  renderWithProviders(
+    <App />,
+    agendaHandler({ overdue: rows, truncated: { window: false, overdue: true } }),
+  );
 
-  await waitFor(() => expect(screen.getByTestId('agenda-badge')).toHaveTextContent('200+'));
-  expect(screen.getByTestId('sidebar-agenda-badge')).toHaveTextContent('200+');
+  await waitFor(() => expect(screen.getByTestId('agenda-badge')).toHaveTextContent('3+'));
+  expect(screen.getByTestId('sidebar-agenda-badge')).toHaveTextContent('3+');
 });
 
-test('бейдж и вкладка делят один источник: второго запроса «Просроченного» нет', async () => {
+test('бейдж и вкладка делят один источник: второго вызова подписки нет', async () => {
   // Таб agenda: хук зовут ТРИ компонента (TabBar, SidebarNav, AgendaScreen) — на сервер
-  // при этом уходит ровно один запрос на каждую из двух выборок §4.2.
-  const { calls } = renderWithProviders(<App />, agendaHandler({ overdueDue: [overdueTask] }));
+  // при этом уходит ровно ОДИН вызов подписки, а не по одному на компонент.
+  const { calls } = renderWithProviders(
+    <App />,
+    agendaHandler({ overdue: [late(overdueTask, yesterday)] }),
+  );
 
   await waitFor(() => expect(screen.getByTestId('agenda-badge')).toHaveTextContent('1'));
   expect(rowTitles(overdueSection())).toEqual(['Закончить API']);
-  const overdueCalls = calls
-    .filter((c) => c.path === 'entity.query')
-    .map((c) => (c.input as { query: string }).query)
-    .filter((q) => q === AGENDA_OVERDUE_DUE_QUERY || q === AGENDA_OVERDUE_START_QUERY);
-  expect(overdueCalls).toHaveLength(2);
+  expect(calls.filter((c) => c.path === 'agenda.list')).toHaveLength(1);
 });

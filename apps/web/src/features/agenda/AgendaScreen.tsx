@@ -6,6 +6,7 @@
 // Browser; NativeRow брать нельзя — это типографика страницы Detail (прецедент B5).
 // Слева от неё в дневных секциях — колонка времени (§4.1: время start_at, диапазон
 // при end_at, «весь день» для all_day-сущностей).
+import type { AgendaRow } from '@orbis/shared';
 import { AlertTriangle } from 'lucide-react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useNav } from '../../state/navigation';
@@ -16,10 +17,8 @@ import {
   type AgendaEntity,
   dueDate,
   endAt,
-  isAllDay,
   isFinancial,
   localTime,
-  startAt,
   useAgendaDays,
   useAgendaOverdue,
 } from './useAgenda';
@@ -40,13 +39,19 @@ function dayTitle(date: string, today: string): string {
   return date === today ? `Сегодня · ${label}` : label;
 }
 
-/** Колонка времени строки дня (§4.1): «весь день» / «09:00» / «14:00–15:30». */
-function timeLabel(e: AgendaEntity, tz: string | undefined): string {
-  if (isAllDay(e)) return 'весь день';
-  const start = startAt(e);
-  const from = start === null ? null : localTime(start, tz);
+/**
+ * Колонка времени строки дня (§4.1): «весь день» / «09:00» / «14:00–15:30».
+ *
+ * Начало и признак «весь день» приезжают СТРОКОЙ подписки (`at`/`allDay`): их выбрал сервер,
+ * разрешив слот `moment` по привязкам владельца, и читать их вторым способом — прямо из
+ * `props` — значило бы разойтись с ним у любого, чей аспект реализует момент не `start_at`.
+ * Конец диапазона остаётся сырым чтением: слотом он в §Б1-2 не объявлен.
+ */
+function timeLabel(r: AgendaRow, tz: string | undefined): string {
+  if (r.allDay) return 'весь день';
+  const from = localTime(r.at, tz);
   if (from === null) return '';
-  const end = endAt(e);
+  const end = endAt(r.entity);
   const to = end === null ? null : localTime(end, tz);
   return to === null ? from : `${from}–${to}`;
 }
@@ -91,7 +96,7 @@ function openEntity(id: string) {
   push(activeTab, { kind: 'entity', id });
 }
 
-function AgendaRow({
+function AgendaLine({
   entity,
   time,
   showMeta,
@@ -144,10 +149,10 @@ export function AgendaScreen() {
             <Card className="border-danger/40 p-1">
               <ul className="flex flex-col gap-px">
                 {overdue.items.map((it) => (
-                  <AgendaRow
+                  <AgendaLine
                     key={it.entity.id}
                     entity={it.entity}
-                    time={overdueLabel(it.date)}
+                    time={overdueLabel(it.at)}
                     showMeta={isFinancial(it.entity)}
                   />
                 ))}
@@ -173,17 +178,17 @@ export function AgendaScreen() {
               {/* Заголовок дня — обычным регистром (мокап §4), не капсом секций Budget */}
               <h2 className="text-sm font-medium text-text-secondary">{dayTitle(d.date, today)}</h2>
               <Card className="p-1">
-                {d.entities.length === 0 ? (
+                {d.rows.length === 0 ? (
                   // §4.1: пустой день не скрывается — горизонт читается целиком
                   <p className="px-2.5 py-2 text-sm text-text-muted">день свободен</p>
                 ) : (
                   <ul className="flex flex-col gap-px">
-                    {d.entities.map((e) => (
-                      <AgendaRow
-                        key={e.id}
-                        entity={e}
-                        time={timeLabel(e, timezone)}
-                        showMeta={showRowMeta(e, d.date)}
+                    {d.rows.map((r) => (
+                      <AgendaLine
+                        key={r.entity.id}
+                        entity={r.entity}
+                        time={timeLabel(r, timezone)}
+                        showMeta={showRowMeta(r.entity, d.date)}
                       />
                     ))}
                   </ul>

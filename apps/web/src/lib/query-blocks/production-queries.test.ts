@@ -24,11 +24,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseQueryAst } from '@orbis/shared/query';
 import { expect, test } from 'vitest';
-import {
-  AGENDA_DAYS_QUERY,
-  AGENDA_OVERDUE_DUE_QUERY,
-  AGENDA_OVERDUE_START_QUERY,
-} from '../../features/agenda/useAgenda';
 import { browserQuery, buildFilterQuery } from '../../features/browser/query';
 import { envelopeTransactionsQuery } from '../../features/budget/CategoryScreen';
 import { CATEGORIES_QUERY } from '../../features/budget/categories';
@@ -89,9 +84,6 @@ const ID = '019d48ea-4188-765d-8e96-93a0ad9c262a';
  * (пробел разделяет конструкции, §А5-3), и ломает их подстановка, а не литерал.
  */
 const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
-  ['features/agenda/useAgenda.ts (AGENDA_DAYS_QUERY)', AGENDA_DAYS_QUERY],
-  ['features/agenda/useAgenda.ts (AGENDA_OVERDUE_DUE_QUERY)', AGENDA_OVERDUE_DUE_QUERY],
-  ['features/agenda/useAgenda.ts (AGENDA_OVERDUE_START_QUERY)', AGENDA_OVERDUE_START_QUERY],
   [
     'features/browser/query.ts (buildFilterQuery+browserQuery)',
     browserQuery({
@@ -196,17 +188,19 @@ test('контрол ссылки — ровно одна реализация �
 });
 
 /**
- * Список ПОЛОН: пятнадцать адресов против шестнадцати в описи Задачи 8 (владелец `10c`).
+ * Список ПОЛОН: двенадцать адресов против шестнадцати в описи Задачи 8 (владелец `10c`).
  * Разница ровно одна и названа: `EnvelopeCreateSheet.tsx` носил ИНЛАЙН-ДУБЛЬ строки
  * категорий, дубля больше нет (тест выше), и отдельного текста у него не осталось.
  * `SmartListSave.tsx` собственного текста не имел (он оборачивал в `{{query:…}}` строку
  * Browser, покрытую записями `browser/query.ts`) и снят Задачей 21b как механизм без
- * единого вызывателя — причина записана в докблоке `BrowserScreen.tsx`.
+ * единого вызывателя — причина записана в докблоке `BrowserScreen.tsx`. Ещё минус три адреса
+ * Повестки — вкладка перешла на подписку `agenda.list` (§А5-5), собственного текста запроса у
+ * неё нет.
  *
  * Число пиннится, потому что молча УКОРОТИТЬ этот список — самый дешёвый способ сделать тест
  * зелёным, не переведя текст.
  */
-test('в списке боевых текстов ровно пятнадцать адресов', () => {
-  expect(PRODUCTION_TEXTS.length).toBe(15);
-  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(15);
+test('в списке боевых текстов ровно двенадцать адресов', () => {
+  expect(PRODUCTION_TEXTS.length).toBe(12);
+  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(12);
 });

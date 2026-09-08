@@ -1,25 +1,18 @@
-// Чтения Повестки — по `props` (§А1-1), а сама выборка остаётся ТРЕМЯ запросами.
+// Чтения Повестки — по `props` (§А1-1), а сама выборка стала ОДНОЙ (§А5-5).
 //
 // Зачем отдельный файл при живом `AgendaScreen.test`. Тот проверяет ЭКРАН: заголовки секций,
-// подписи строк, гашение дублей даты. Здесь проверяется ПАРИТЕТ СОСТАВА после переезда адреса
-// значения: те же три текста запроса уходят на сервер, и те же сущности попадают в те же
-// секции — при том что читает их клиент уже по id свойства, а не парой «аспект + поле».
-// Решение А5-5 (Повестка одним запросом с OR-деревом) — срез Б-1; в срезе А запросов три, и
-// это пиннится здесь, а не подразумевается.
-import { addDays } from '@orbis/shared';
+// подписи строк, гашение дублей даты. Здесь проверяется ГРАНИЦА: вкладка спрашивает ровно один
+// раз и ровно подпиской, а раскладка по дням и порядок «Просроченного» остались клиентскими
+// (Р-И-18) — сервер отдаёт плоский список с тегом секции, а не готовые дни.
+import { type AgendaListResult, type AgendaRow, addDays } from '@orbis/shared';
 import { screen } from '@testing-library/react';
 import { expect, test } from 'vitest';
-import { renderWithProviders, wireEntity } from '../../test/harness';
+import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
 import { todayISO } from '../budget/useBudget';
 import {
-  AGENDA_DAYS_QUERY,
-  AGENDA_OVERDUE_DUE_QUERY,
-  AGENDA_OVERDUE_START_QUERY,
   dueDate,
-  isAllDay,
   isFinancial,
   isRecurringTemplate,
-  startAt,
   useAgendaDays,
   useAgendaOverdue,
 } from './useAgenda';
@@ -73,63 +66,54 @@ const overdueStart = wireEntity({
   aspects: ['orbis/task', 'orbis/schedule'],
 });
 
-/** Три выборки под ТОЧНЫМИ текстами: несовпадение строки валит тест, а не проходит молча. */
-const handler = (path: string, input: unknown) => {
-  if (path === 'user.getSettings') return { timezone: TZ, defaultCurrency: 'RUB' };
-  if (path !== 'entity.query') return {};
-  const q = (input as { query: string }).query;
-  if (q === AGENDA_DAYS_QUERY) return [event, template];
-  if (q === AGENDA_OVERDUE_DUE_QUERY) return [overdueTask, overduePayment];
-  if (q === AGENDA_OVERDUE_START_QUERY) return [overdueStart];
-  throw new Error(`незнакомый запрос Повестки: ${q}`);
+const row = (entity: ReturnType<typeof wireEntity>, over: Partial<AgendaRow>): AgendaRow =>
+  ({ entity, section: 'window', at: '', slot: 'moment', allDay: false, ...over }) as AgendaRow;
+const result: AgendaListResult = {
+  today,
+  timezone: TZ,
+  truncated: { window: false, overdue: false },
+  rows: [
+    row(event, { at: at(today, '09:00'), allDay: true }),
+    row(overdueTask, { section: 'overdue', at: yesterday, slot: 'deadline' }),
+    row(overduePayment, { section: 'overdue', at: yesterday, slot: 'deadline' }),
+    row(overdueStart, { section: 'overdue', at: yesterday, slot: 'moment' }),
+  ],
 };
+const handler: MockHandler = (path) => (path === 'agenda.list' ? result : {});
 
-/** Пробник: печатает СОСТАВ секций строкой — по нему и сверяется паритет. */
+/** Пробник: печатает СОСТАВ секций строкой — по нему и сверяется раскладка. */
 function Probe() {
   const days = useAgendaDays();
   const overdue = useAgendaOverdue();
   return (
     <>
       <span data-testid="day-today">
-        {(days.days.find((d) => d.date === today)?.entities ?? []).map((e) => e.id).join(',')}
+        {(days.days.find((d) => d.date === today)?.rows ?? []).map((r) => r.entity.id).join(',')}
       </span>
       <span data-testid="day-tomorrow">
-        {(days.days.find((d) => d.date === tomorrow)?.entities ?? []).map((e) => e.id).join(',')}
+        {(days.days.find((d) => d.date === tomorrow)?.rows ?? []).map((r) => r.entity.id).join(',')}
       </span>
       <span data-testid="overdue">
-        {overdue.items.map((i) => `${i.entity.id}@${i.date}`).join(',')}
+        {overdue.items.map((i) => `${i.entity.id}@${i.at}`).join(',')}
       </span>
       <span data-testid="badge">{overdue.badgeLabel ?? ''}</span>
     </>
   );
 }
 
-test('три запроса Повестки — и ровно три, теми же текстами', async () => {
+test('один вызов agenda.list — и ровно один; запросов графа нет', async () => {
   const { calls } = renderWithProviders(<Probe />, handler);
-  await screen.findByText(`${overdueTask.id}@${yesterday},${overduePayment.id}@${yesterday}`, {
-    exact: false,
-  });
-  const queries = calls
-    .filter((c) => c.path === 'entity.query')
-    .map((c) => (c.input as { query: string }).query);
-  expect([...new Set(queries)].sort()).toEqual(
-    [AGENDA_DAYS_QUERY, AGENDA_OVERDUE_DUE_QUERY, AGENDA_OVERDUE_START_QUERY].sort(),
-  );
+  await screen.findByText(`${overdueTask.id}@${yesterday}`, { exact: false });
+  expect(calls.filter((c) => c.path === 'agenda.list')).toHaveLength(1);
+  expect(calls.filter((c) => c.path === 'entity.query')).toHaveLength(0);
 });
 
-test('паритет состава: дневная секция и «Просроченное» собраны по props', async () => {
+test('раскладка осталась клиентской: день — по локальному дню at, «Просроченное» — по at', async () => {
   renderWithProviders(<Probe />, handler);
-  // Шаблон повторения скрыт (`orbis/recurrence` — свойство записи, а не поле аспекта),
-  // событие своего дня — на месте.
   await screen.findByText('ev');
   expect(screen.getByTestId('day-today')).toHaveTextContent('ev');
-  expect(screen.getByTestId('day-today').textContent).not.toContain('tpl');
   expect(screen.getByTestId('day-tomorrow')).toBeEmptyDOMElement();
-
-  // «Просроченное» — слияние двух выборок по id с более ранней релевантной датой: у задачи
-  // с прошедшим НАЧАЛОМ и будущим сроком берётся день начала, а не срок.
-  const overdue = screen.getByTestId('overdue').textContent ?? '';
-  expect(overdue.split(',')).toEqual([
+  expect((screen.getByTestId('overdue').textContent ?? '').split(',')).toEqual([
     `${overdueTask.id}@${yesterday}`,
     `${overduePayment.id}@${yesterday}`,
     `${overdueStart.id}@${yesterday}`,
@@ -137,12 +121,20 @@ test('паритет состава: дневная секция и «Проср
   expect(screen.getByTestId('badge')).toHaveTextContent('3');
 });
 
-test('чтения адресуют СВОЙСТВА по id — теми же именами, что стоят в текстах запросов', () => {
+test('шаблоны прячет сервер: второго фильтра на клиенте нет', async () => {
+  // Клиентский `isRecurringTemplate` из Повестки снят — шаблоны прячет набор `templates`
+  // контракта повторения (§Б5-6). Функция жива ради Финансов, см. её докблок.
+  renderWithProviders(<Probe />, () => ({
+    ...result,
+    rows: [...result.rows, row(template, { at: at(today, '09:00') })],
+  }));
+  await screen.findByText('ev,tpl');
+});
+
+test('чтения адресуют СВОЙСТВА по id — теми же именами, что стоят в реестре', () => {
   // Прежде запрос спрашивал `orbis/start_at`, а клиент читал ответ парой «аспект + поле»:
   // переименование рвало ровно одну из двух половин, и молча.
-  expect(startAt(event)).toBe(at(today, '09:00'));
   expect(dueDate(overdueTask)).toBe(yesterday);
-  expect(isAllDay(event)).toBe(true);
   expect(isRecurringTemplate(template)).toBe(true);
   expect(isRecurringTemplate(event)).toBe(false);
   // Признак «это операция» — СПИСОК аспектов: у записи без единого заполненного поля

@@ -128,9 +128,11 @@ const LIST50_QUERY =
 // Бейдж smart list «Inbox» (02-core-os §3.3): count без limit.
 const BADGE_QUERY = 'aspect=orbis/task, orbis/task_status=inbox';
 
-// Горизонт Agenda — дословно AGENDA_DAYS_QUERY клиента
-// (apps/web/src/features/agenda/useAgenda.ts): мерить надо то, что реально уходит.
-const AGENDA_DAYS_QUERY =
+// Форма запроса дневного окна Повестки ДО перевода на подписку (Б-1). Текст здесь ЗАМОРОЖЕН
+// намеренно: гейт D21 сравнивает медианы с базой, снятой на нём же, и подмена операции на
+// `agenda.list` сравнивала бы разные вещи — база перестала бы что-либо значить. Перевод перфа
+// на подписку — отдельная работа с новой базой (I7, вариант А).
+const AGENDA_WINDOW_TEXT_PRE_B1 =
   'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200';
 
 // Состав detail-чтения — ровно тот, что уходит с экрана сущности
@@ -221,7 +223,7 @@ test('фикстура наполнена: гейт меряет данные, �
   // spent > 0 хотя бы у одного конверта: транзакции реально привязаны бюджет-хуком
   expect(overview.envelopes.some((e) => e.spent !== '0.00')).toBe(true);
 
-  const agenda = await caller.entity.query({ query: AGENDA_DAYS_QUERY });
+  const agenda = await caller.entity.query({ query: AGENDA_WINDOW_TEXT_PRE_B1 });
   expect(agenda.length).toBeGreaterThan(100);
 
   const detail = await caller.entity.get({ id: perfHubId(user), include: [...DETAIL_INCLUDE] });
@@ -281,7 +283,7 @@ test('перф-бюджеты серверных операций', async () => 
     [
       'agenda:horizon',
       await measureMedian('agenda:horizon', 5, () =>
-        caller.entity.query({ query: AGENDA_DAYS_QUERY }),
+        caller.entity.query({ query: AGENDA_WINDOW_TEXT_PRE_B1 }),
       ),
     ],
     [

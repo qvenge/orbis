@@ -57,4 +57,7 @@ export function invalidateGraph(utils: ReturnType<typeof trpc.useUtils>): void {
   // (PinnedList) считают элементы отдельным запросом, и без него счётчик врал бы
   // ровно там, где список рядом уже обновился.
   void utils.entity.count.invalidate();
+  // Четвёртый ключ: у Повестки СВОЙ ключ (agenda.list) и staleTime 60 с — без него закрытая
+  // задача провисела бы в «Просроченном» минуту (тот же довод, что у трёх выше).
+  void utils.agenda.list.invalidate();
 }
