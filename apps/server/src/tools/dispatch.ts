@@ -1392,7 +1392,8 @@ export function registryOperationSummary(
     case 'contract_sets_delta_remove':
       return `Сброс наборов контракта «${contractName(payload.contract)}»`;
   }
-  // Недостижимо: зовётся под `REGISTRY_TOOL_NAMES` (`:1019`, `:1198`, `:1640`), и switch
+  // Недостижимо: зовётся под `REGISTRY_TOOL_NAMES` (три места: сводка pending-единицы, батч-разбор и
+  // `snapshotRegistryUnit` — имена вместо номеров строк, они съезжают), и switch
   // перечисляет все двенадцать имён Б-1 — семь из них войдут в реестр тулов задачами 15/16, а
   // фраза стоит раньше тула намеренно (без неё `pendingSummary` показал бы владельцу голое имя).
   return tool;
