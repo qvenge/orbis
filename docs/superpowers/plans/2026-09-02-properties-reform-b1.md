@@ -12291,7 +12291,8 @@ export async function seedSurfaceWorld(ownerId: string, opts?: { gateAspects?: b
   `apps/server/test/helpers.ts:52-54` (`truncateAll`), `apps/server/test/rls/rls.pgtap.sql:6`
   (`plan(89)`→`plan(92)`), `:99-103` (фикстуры), `:105-116` (список 18 имён → 19 и текст
   «восемнадцати» → «девятнадцати»), после `:630` (группа 19 по образцу группы 17 `:605-618`).
-- Изменить, декларация и клапан: `packages/shared/src/registry/builtin-subscriptions.ts`
+- Изменить, декларация и клапан: `packages/shared/src/registry/subscription-fixtures.ts` (эррата 11: норматив `BUDGET_DEF` со
+  `spent.materialize` живёт здесь, Ф-Б1-27; `builtin-subscriptions.ts` лишь ссылается на него)
   (`aggregates.spent.materialize: false` → `true`; запись `BUDGET_OVERVIEW_SUBSCRIPTION` задачи 9),
   `packages/shared/src/registry/property-type.ts:131-154` (`aggregations` в схеме аспекта),
   `registry/builtin-aspects.ts` (`orbis/budget` `:142-166`), `packages/shared/src/aspect-registry.ts:137-156`,
@@ -12706,7 +12707,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON "envelope_spent_cache" TO orbis_app;--> 
 ALTER TABLE "user_settings" ADD COLUMN "disabled_modules" text[] DEFAULT '{}' NOT NULL;
 ```
   Прогон: `bun run db:prepare` (корень) → миграция применена, сид прошёл, `test:rls` пока КРАСНЫЙ
-  (`plan(89)` против 19 таблиц) — это ожидаемо и лечится шагом 4.
+  (`plan(89)` против 19 таблиц) — это ожидаемо и лечится шагом 4. (Эррата 11: красноты НЕ будет — счёт таблиц в pgTAP идёт по
+  ЯВНОМУ списку имён, до шага 4 сьют зелёный; шаг 4 — правка без красного.)
 
 - [ ] **Шаг 4: pgTAP — четыре правки.** `apps/server/test/rls/rls.pgtap.sql`:
   (1) `:6` — `SELECT plan(89);` → `SELECT plan(92);` (три новых теста группы 19);
@@ -13028,7 +13030,7 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
   доезжает — читатель считает по графу.
 
 - [ ] **Шаг 10: материализация ведомости в движке — `materialize: true` и `runSumCached`.**
-  (а) `packages/shared/src/registry/builtin-subscriptions.ts`, ведомость `spent` записи
+  (а) `packages/shared/src/registry/subscription-fixtures.ts` (эррата 11: норматив `BUDGET_DEF`), ведомость `spent` записи
   `BUDGET_OVERVIEW_SUBSCRIPTION` (задача 9, шаг 2) — `materialize: false` → `true`, комментарий
   задачи 9 «materialize задача 11 переведёт в true» заменяется на:
 ```ts
@@ -13140,7 +13142,10 @@ async function runSumCached(
 }
 ```
   (в) в сборке `budgetOverviewOf` (задача 9, шаг 16) и в `budgetStatusOf`/`categoryTrendOf` каждый
-  вызов `runSum(tx, cctx, def, la, name, envIds)` для ведомостей `scope: 'envelope'` заменяется на
+  вызов `runSum(tx, cctx, def, la, name, envIds)` для ведомостей `scope: 'envelope'` (эррата 11: он ОДИН — все пять читателей идут
+  через `runLedgers`, ветвление по `agg.scope`; и промах-нуль пишется каноном `'0.00'`, не `'0'`: без кэша конверт без трат в карту
+  `runSum` не приезжает и `'0.00'` подставляет читатель, а кэш отвечает за каждый конверт до подстановки — `'0'` менял бы видимый
+  ответ, 12 тестов `aggregates.test.ts` красны) заменяется на
   `runSumCached(tx, ownerId, cctx, def, la, name, envIds)`. Ведомости `scope: 'period'`
   (`period_balance`, `unbudgeted`) идут через `runSum` как раньше — у них ключ не конверт.
   Ни имя, ни сигнатура `runSum` не меняются: кэш стоит НАД ним, и снятие клапана возвращает
@@ -13358,7 +13363,10 @@ export async function spentContributionOf(
   **PASS** (четвёртый describe; describe инкремента шага 11 остаётся красным — врезки ещё нет).
   Коммит: `feat(subscriptions): контур кэша spent и вклад одного движения — из декларации подписки, без литералов аспектов (§Б5-5, §С8-18)`.
 
-- [ ] **Шаг 14: врезка во ВНЕШНИЙ цикл `applyBudgetFollowUps`.** `apps/server/src/executor/executor.ts`:
+- [ ] **Шаг 14: врезка во ВНЕШНИЙ цикл `applyBudgetFollowUps`.** `apps/server/src/executor/executor.ts` (эррата 11: дословная врезка
+  читала `reads.parentsOf(after.id)` ПОСЛЕ внутреннего цикла, а тот зовёт `reads.invalidateParents` — N+1 на импорте 50 движений и
+  красный пин «чтения привязки — константа» (51 против ≤ 4); родители снимаются ДО применения операций (`spentCacheParentsOf`) —
+  в снос попадают и старый конверт, и новый):
   (а) импорты: `import { bumpSpentCache, invalidateSpentCache, invalidateSpentCacheOfOwner } from '../budget/spent-cache';`
   и `import { type SpentCacheContour, spentCacheContourOf, spentContributionOf } from '../subscriptions/budget';`
   (цикла нет: движок подписки исполнителя НЕ импортирует — в отличие от оракула `aggregates.ts:33`);
@@ -14159,6 +14167,9 @@ function budgetHookBranches(
  *
 ```
   Прогон (серверные сьюты делят одну БД — по очереди):
+  (Эррата 11: матчер `READS.parents` в `binding-batch.test.ts` узнавал запрос родителей по литералу `'orbis/budget' = ANY(e.aspects)`
+  — с обобщением множество аспектов приезжает параметром; матчер переведён на стабильную форму `JOIN entities e ON e.id = r.source_id`
+  + `ORDER BY`, поведенческие утверждения не менялись. Пин `reset-world.test.ts` «шесть нулей» → семь.)
   `cd apps/server && bun test src/budget/binding.test.ts src/budget/binding-batch.test.ts` → **PASS
   БЕЗ ПРАВОК ТЕСТОВ** — это и есть доказательство «встроенный путь даёт те же рёбра»;
   затем `bun test test/gate-c8-18.test.ts` → **PASS** (три теста шага 17 зелены);
@@ -14373,13 +14384,13 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
         key, label: { ru: key }, description: { ru: 'Проба слияния' },
         type: { kind: 'text' }, status: 'active',
       }));
-    ok(await mk('user/проба-слияния-1'));
-    ok(await mk('user/проба-слияния-2'));
+    ok(await mk('user/merge-probe-1')); // эррата 11: ключ — ASCII-слаг (`NAMESPACED_KEY_RE`), кириллица отвергается
+    ok(await mk('user/merge-probe-2'));
     const env = (await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.envelope as WireEntity;
     expect((await cacheRows(env.id)).length).toBe(1);
 
     ok(await execute(db, req(user, 'property_merge',
-      { source: 'user/проба-слияния-1', into: 'user/проба-слияния-2' })));
+      { source: 'user/merge-probe-1', into: 'user/merge-probe-2' })));
     expect(await cacheRows(env.id)).toEqual([]);
 
     // Предикат замка обязан ВИДЕТЬ слияние: иначе конкурентный бюджет-хук считал бы привязку
@@ -14485,6 +14496,17 @@ describe('приёмка §С8-16: чтение кэша ≤ 10 мс p95', () =>
   Импорт `measureP95` из `../test/perf`. `cd apps/server && bun test src/budget/spent-cache.test.ts`
   → **PASS**, в выводе строка `perf: spent-cache read(40) p95=…ms` (печатается всегда — дрейф
   виден и на зелёном, довод `perf.ts:20-22`).
+
+> **Эррата по исполнению 11 (08.09, гейт).** (а) Карта файлов дополняется `apps/server/perf/volume.test.ts` и `src/test/volume-fixture.ts`
+> (файлы 0c/9): уборка проб Р-К-2 шла админ-SQL мимо кэша после инкремента хуком — второй (тёплый) прогон краснел при чистом дереве;
+> уборка сносит `envelope_spent_cache` владельца, сверка «ноль расхождений» двухпроходная cold ≡ warm ≡ оракул (Ф-Б1-44). (б) Тест пути
+> мимо хука №2 (undo) — на ПРАВКЕ суммы, не на создании: у создания строку сносит `relation_delete` из inverse (Ф-Б1-45).
+> (в) `seedGateSurfaceRows` живёт в `test/fixtures/gate-aspects.ts` — снятие ручных рёбер (шаг 19) правит только его.
+> (г) Первая редакция докблоков `spent-cache.ts`/`budget.ts` называла `user/gate-fin` — сторож Р-К-54 красен; проза — «аспект владельца».
+> (д) pgTAP после фикс-раунда — `plan(97)`: группа 19 держит UPDATE/DELETE чужой (0) и своей (1) строки под `orbis_app` и четыре права.
+> (е) Приёмка §С8-16 (`read(40) p95 ≤ 10 мс`) живёт в `perf/perf.test.ts` (в CI через `bun run test:perf`; самодостаточна — свои 40
+> конвертов) и мерит ровно чтение внутри открытой tx (боевой путь `runSumCached`); старая форма с 4 round-trip'ами печатается рядом,
+> порог не менялся (ре-ревью N-3). Снос кэша в `cleanupVolumeProbes` пинится тестом фикстуры (N-1).
 
 - [ ] **Шаг 27: два греп-доказательства.** (а) «пятого пути мимо кэша нет» — проверка и
   докблок-запись в шапке `spent-cache.ts` (раздел «кто ещё пишет в граф»):
