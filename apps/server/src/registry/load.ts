@@ -153,7 +153,10 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
     SELECT id, owner_id, surface, definition, module, rank
     FROM subscription_definitions
     WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
-    ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
+    ORDER BY owner_id NULLS FIRST, id`)) as unknown as Row[];
+  // `, id` — порядок словаря подписок в снимке детерминирован: без вторичного ключа он повторял физический
+  // порядок строк и менялся после пересева/UPDATE (пин `load.test.ts` «словарь подписок несёт обе засеянные»
+  // краснел в полном прогоне задачи 11 и был зелен поодиночке). Остальные словари — Deferred 11-m-load-order.
 
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
