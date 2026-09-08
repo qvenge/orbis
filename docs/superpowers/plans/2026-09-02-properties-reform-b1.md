@@ -15198,7 +15198,7 @@ describe('карта классов и пользовательский набо
     if (r.status !== 'ok') throw new Error(`entity_query отказал: ${JSON.stringify(r)}`);
     return [...((r.card as { entityIds?: string[] } | undefined)?.entityIds ?? [])].sort();
   }
-  const task = (id: string, title: string, status: string) => [
+  const task = (id: string, title: string, status: string) => [  // эррата 13: массив стартовал ОБА запроса при сборке — `attach` уходил в базу вместе с `create` (NOT_FOUND); шаги отложенные `() => runS(...)`, вызов `await step()`
     runS('entity_create', { id, title, tags: [] }),
     runS('attach_orbis_task', { entity_id: id, data: { 'orbis/task_status': status } }),
   ];
@@ -15238,7 +15238,7 @@ describe('карта классов и пользовательский набо
   вариант `in_review` лёг в тип свойства, но ни в одну `value_map` привязки, и компилятор
   членства (задача 4) его класса не знает.
 
-- [ ] **Шаг 4: красный — три юнита слияния.** В `describe('карта классов дельты (§Б2-2)')`:
+- [ ] **Шаг 4: красный — три юнита слияния.** В `describe('карта классов дельты (§Б2-2)')`: (Эррата 13: красных ДВА — тест «отнесение, переопределяющее СИСТЕМНОЕ, не дописывается» на HEAD зелен вхолостую и служит мутационным сторожем шага 5.)
 ```ts
   const expectActive = (s: RegistrySnapshot, aspectId: string) =>
     expect(completableOf(s, aspectId)?.value_map).toContainEqual({
@@ -15315,7 +15315,7 @@ describe('карта классов и пользовательский набо
   (приёмка §С8-19 шага 3 зеленеет). `bun run typecheck`, `bun run lint`.
   Коммит: `feat(registry): applyDeltas дописывает отнесения карты классов в value_map привязок — §С8-19`.
 
-- [ ] **Шаг 6: красный — отнесение едет вместе со своим вариантом (§А3-3).** В
+- [ ] **Шаг 6: красный — отнесение едет вместе со своим вариантом (§А3-3).** В (Эррата 13: красным становится ВТОРОЙ тест — «вариант, оставленный рядом с похожим, отнесение СОХРАНЯЕТ»; первый («у первого `merged` = `{classMap:{…}}`») зелен вхолостую — мутационный сторож шага 7.)
   `describe('threeWayMerge: система поехала под живой дельтой (§А3-3)')` (`:313`):
 ```ts
   const moodSystems = (theirsKey: string, theirsLabel: string) => ({
@@ -15535,6 +15535,13 @@ describe('checkClassMap: вариант дельты без отнесения �
   `cd packages/shared && bun test src/registry/bindings.test.ts` → **FAIL**:
   `checkClassMap is not a function` — экспорта в `bindings.ts` нет.
 
+> **Эррата по исполнению 13 (09.09, гейт).** Гвард «свойство нигде не слот-статус → пропустить», добавленный имплементером в цикл
+> отнесений-сирот, СНЯТ (Ф-Б1-49): он был fail-open — карта на `orbis/due_date` → `when:deadline` проходила чекер и дописывалась в
+> `value_map`, карта на `orbis/priority` → `completable:status` принималась молча. Фикстуры шагов 8/10 кладут карту на аспект СО
+> слотом-статусом (`seedCustomAspect(..., implements)`), иначе они законны только благодаря гварду (круг). `checkClassMap.details`
+> несёт `reason` в едином словаре с `checkImplements` (Ф-Б1-51); фантомный вариант (нет среди `selectOptions`) — отказ на записи.
+> `execErrorOfImplementsIssue` собирает `{...d, reason: issue.code, cause: d.reason}` — код не перекрывается `d.reason` (гейт I-1).
+
 - [ ] **Шаг 13: реализация — `checkClassMap`.** `packages/shared/src/registry/bindings.ts`, после
   `checkImplements`:
 ```ts
@@ -15720,7 +15727,7 @@ export function checkClassMap(
   const issue = checkClassMap(normalized, target, rows)[0];
   if (issue !== undefined) throw execErrorOfImplementsIssue(issue, { aspect: aspectId });
 ```
-  Там же (`ops.ts`, рядом с `deltaError` `:164`) — ЕДИНСТВЕННОЕ отображение замечаний привязки в отказ
+  Там же (эррата 13: `deltaError` живёт в `registry/deltas.ts`; `execErrorOfImplementsIssue` — в шапке секции «Дельты аспектов, контрактов и подписок» `ops.ts`, перед `readAspectDelta`) — ЕДИНСТВЕННОЕ отображение замечаний привязки в отказ
   (Р-К-35; второй читатель — `assertImplements` тулов привязок, задача 15):
 ```ts
 /**
@@ -15769,7 +15776,7 @@ export function execErrorOfImplementsIssue(issue: ImplementsIssue, extra: Record
   `bun test src/policy/confirmation.test.ts` → **FAIL**: получено `'system-object'` —
   `reconfiguresOf` (`:315-317`) ветвится только по `ownRegistryAddress`.
 
-- [ ] **Шаг 17: реализация — ветка `reconfiguresOf`.** `confirmation.ts:315-317`:
+- [ ] **Шаг 17: реализация — ветка `reconfiguresOf`.** `confirmation.ts:315-317`: (Эррата 13, Ф-Б1-50: ряд «по тулу» — только при ключах дельты ⊆ {`selectOptions`, `classMap`} и непустых ПО СОДЕРЖИМОМУ (хоть один вариант / хоть одна пара «вариант → класс»; `{selectOptions: {k: {}}}` — тоже пусто); `{label, selectOptions: {}}` на `orbis/task` иначе уезжал в `behavior-delta` и обходил `routineDeferForbidden` для `system-object`, а «Принять все» стёр бы дельту целиком.)
 ```ts
     case 'aspect_delta_set':
       // РЯД ОПРЕДЕЛЯЕТСЯ ТУЛОМ, А НЕ АДРЕСОМ (Р9, §С2-1 ряд 2), когда дельта несёт варианты или
@@ -15792,7 +15799,7 @@ export function execErrorOfImplementsIssue(issue: ImplementsIssue, extra: Record
   `:741` (`{icon}`) зелены — ни `selectOptions`, ни `classMap` в них нет.
   Коммит: `feat(policy): ряд §С2-1 для дельты с вариантами и картой классов — по туру (Р9)`.
 
-- [ ] **Шаг 18: JSON Schema тула и пересдача эталона.** `registry-tools.ts:183-214` —
+- [ ] **Шаг 18: JSON Schema тула и пересдача эталона.** `registry-tools.ts:183-214` — (Эррата 13: полная регенерация меняла ДВЕ записи — `aspect_delta_set` по смыслу и `attach_orbis_goal` порядком ключей `contract`/`set` в подсхеме `sourceNotIn`, который `canonicalJson` игнорирует; в эталон внесена только `aspect_delta_set`, сверка канонических форм — ровно одна запись, 37 элементов.)
   `aspectDeltaJsonSchema` получает `classMap` И недостающие `selectOptions`/`properties.rank`
   (разрыв «zod ↔ JSON Schema», опровержение О-6: сегодня они названы только прозой `:186-188`). В
   `description` дописывается `', selectOptions.<свойство>.add, classMap.<свойство> — отнесение
