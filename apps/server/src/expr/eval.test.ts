@@ -613,3 +613,68 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
     ).toBe('VALIDATION/EXPR_VALUE');
   });
 });
+
+describe('evalExpr: deref — одношаговое разыменование ref (§Б3-3)', () => {
+  const CAT_ID = '00000000-0000-4000-8000-0000000000c1';
+  const scope = scopeOf({
+    props: { 'orbis/finance_category': CAT_ID, 'orbis/period_start': '2026-05-01' },
+    binding: ENVELOPE_BINDING,
+    deref: (id) => (id === CAT_ID ? { 'orbis/title': 'Еда', tags: ['быт', 'регулярное'] } : null),
+  });
+
+  test('читает свойство цели и по слоту, и по id свойства', () => {
+    expect(evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, scope)).toBe('Еда');
+    expect(
+      evalExpr({ deref: { prop: 'orbis/finance_category', read: 'orbis/title' } }, scope),
+    ).toBe('Еда');
+  });
+
+  test('tags цели — список строк (Е-3), членство через in', () => {
+    const tags: ExprNode = { deref: { slot: 'category', read: 'tags' } };
+    expect(evalExpr({ op: 'in', args: [{ const: 'быт' }, tags] }, scope)).toBe(true);
+    expect(evalExpr({ op: 'in', args: [{ const: 'работа' }, tags] }, scope)).toBe(false);
+  });
+
+  test('цель не найдена или архивна — ОТСУТСТВИЕ значения, а не отказ (§Б3-3, тотальность)', () => {
+    const missing = { ...scope, props: { ...scope.props, 'orbis/finance_category': 'нет-такой' } };
+    expect(evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, missing)).toBeNull();
+    const empty = { ...scope, props: {} };
+    expect(evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, empty)).toBeNull();
+  });
+
+  test('компоненты ключа порядка карточек §Б5-4 №6 — те же, что у aggregates.ts:574-578', () => {
+    // Сегодня ключ склеивает КОД: название категории, разделитель NUL, period_start, NUL, id.
+    // Декларация даёт те же три компонента; склейку делает движок (задача 9), значения — этот бэкенд.
+    const parts = [
+      evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, scope),
+      evalExpr({ slot: 'period_start' }, scope),
+      'env-1',
+    ].map(String);
+    expect(parts).toEqual(['Еда', '2026-05-01', 'env-1']);
+  });
+
+  test('свойство цели с умолчанием реестра читается умолчанием — правило одно для своей строки и чужой', () => {
+    // Умолчание принадлежит СВОЙСТВУ (РП-9), а не строке: `deref` адресует те же id того же реестра,
+    // и второе правило для «чужой» строки развело бы два чтения одного `orbis/planned`.
+    const withDefaults = {
+      ...scope,
+      defaults: new Map<string, ExprScalar>([['orbis/planned', false]]),
+    };
+    expect(evalExpr({ deref: { slot: 'category', read: 'orbis/planned' } }, withDefaults)).toBe(
+      false,
+    );
+    expect(
+      evalExpr({ deref: { slot: 'category', read: 'orbis/all_day' } }, withDefaults),
+    ).toBeNull();
+  });
+
+  test('читателя целей в области нет — структурный отказ: движок обязан его дать', () => {
+    const noReader = scopeOf({
+      props: { 'orbis/finance_category': CAT_ID },
+      binding: ENVELOPE_BINDING,
+    });
+    expect(
+      reasonOf(() => evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, noReader)),
+    ).toBe('VALIDATION/EXPR_SCOPE');
+  });
+});

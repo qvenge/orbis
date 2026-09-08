@@ -225,6 +225,7 @@ function ev(node: ExprNode, scope: ExprEvalScope, depth: number): ExprValue {
     );
   }
   if ('has' in node) return hasValue(node.has, scope);
+  if ('deref' in node) return derefValue(node.deref, scope);
   if ('op' in node) return applyOp(node.op, node.args, scope, depth);
   return fail('EXPR_VALUE', `неизвестная форма узла E: ${JSON.stringify(node)}`);
 }
@@ -475,4 +476,39 @@ function addDuration(value: string, duration: string): string {
   const shift = 7 * Number(weeks?.slice(0, -1) ?? 0) + Number(days?.slice(0, -1) ?? 0);
   const head = calendarHead(value);
   return guarded('date_add', () => `${addDays(head, shift)}${value.slice(10)}`);
+}
+
+/**
+ * Одношаговое разыменование `ref` (§Б3-3): читает свойства ЦЕЛИ, глубина ровно 1, цепочек нет.
+ * Тотальность: цель не найдена или архивна — ОТСУТСТВИЕ значения (спека дословно), поэтому `null`
+ * читателя не отказ. Чем адресоваться (`prop` или `slot`) — ровно одно из двух, это держит схема
+ * узла (`expr/ast.ts`, задача 3).
+ *
+ * Что обязан вернуть читатель `scope.deref` — договор с движком ведомостей (задача 9): запись,
+ * адресуемая ТЕМИ ЖЕ ключами, что стоят в `read`, то есть id свойств для `props`, core-id для колонок
+ * ядра (`orbis/title` — колонка `title`, `CORE_COLUMN` в `query/compile-ast.ts`) и `'tags'` для
+ * массива тегов (Е-3: теги — core-слой, не свойство).
+ *
+ * Чтение цели идёт через тот же `propValue`, что и чтение своей строки: умолчание реестра — свойство
+ * СВОЙСТВА, а не строки (РП-9). У core-ключей (`orbis/title`, `'tags'`) умолчаний в реестре нет, так
+ * что для них `propValue` — это тот же `scalarOf`.
+ */
+function derefValue(
+  ref: { prop?: string; slot?: string; read: string },
+  scope: ExprEvalScope,
+): ExprValue {
+  const address =
+    ref.prop !== undefined
+      ? propValue(scope.props, ref.prop, scope, `свойства '${ref.prop}'`)
+      : slotValue(ref.slot as string, scope);
+  if (address === null) return null;
+  if (typeof address !== 'string') {
+    fail('EXPR_VALUE', 'deref: значение-адрес не ref-строка', { read: ref.read });
+  }
+  if (scope.deref === undefined) {
+    return fail('EXPR_SCOPE', 'deref: читателя целей в области нет', { read: ref.read });
+  }
+  const target = scope.deref(address);
+  if (target === null) return null;
+  return propValue(target, ref.read, scope, `цели deref по '${ref.read}'`);
 }
