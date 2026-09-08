@@ -4,7 +4,25 @@
 // же доводу, что `test:perf:graph`: сев идёт десятки секунд, а под параллельной нагрузкой полного
 // прогона медианы уезжают в разы (шапка `perf/perf.test.ts:1-25`).
 // В вехе 0 здесь два сторожа (корпус наполнен; проход селектора равен бюджет-хуку) и БАЗОВАЯ
-// ЛИНИЯ p95 `computeOverview` под ролью приложения. Порогов нет — их ставит задача 12.
+// ЛИНИЯ p95 `computeOverview` под ролью приложения; задача 9 добавила сверку «ноль расхождений»
+// (холодный ≡ тёплый ≡ оракул), задача 12 — ГЕЙТ §С8-15 (p95 движка ≤ 2× оракула и ≤ 500 мс на
+// ПРОГРЕТОМ корпусе; холодный записывается, порога не несёт) и трёхзначные EXPLAIN-вердикты по
+// горячим запросам Budget под ролью приложения (§С8-10, Р-14).
+//
+// ЗАМЕР 09.09.2026, машина: Intel Core i7-9750H @ 2,6 ГГц (12 потоков), 16 ГБ, Darwin 25.2.0,
+// локальный Supabase в Docker; прогоны последовательные, ничего параллельного. Корпус:
+// 23 712 сущностей / 480 конвертов / 16 211 привязок (счёт — из `ensureVolumeFixture`, не из
+// головы). Два прогона — со свежим севом (84 с, весь файл 124 с) и с реюзом корпуса (41 с):
+//   overview:oracle:warm    p95 231 / 219 мс (медиана 205 / 205) — оракул `computeOverview`
+//   overview:engine:warm    p95 277 / 271 мс (медиана 241 / 246) — движок подписки, 1,20× / 1,24×
+//   overview:engine:cold    p95 388 / 400 мс (медиана 344 / 347) — он же без кэша spent
+//   spent-cache:invalidate480 медиана 7,2 / 9,0 мс               — цена сноса 480 строк кэша
+//   volume:overview (0c)    p95 235 / 236 мс                     — базовая линия, порога не несёт
+// ОБА порога §С8-15 ДОСТИГНУТЫ с запасом: 271…277 мс против 500 мс и против 437…463 мс (2×
+// оракула). Числа — этой машины и этого корпуса, а не гарантия: увидел хуже записанного — ЗАМЕНИ
+// абзац, а не молчи (дисциплина `perf.test.ts:100-107`, `graph.test.ts:74-88`). Пороги при этом
+// не трогать ни при каких числах: они дословно из спеки, и подкрутка под результат — первое, что
+// ловит тест «пороги дословно из спеки».
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   type BudgetOverview,
@@ -15,8 +33,8 @@ import {
 } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import { computeOverview } from '../src/budget/aggregates';
-import { invalidateSpentCache } from '../src/budget/spent-cache';
 import { selectEnvelopes } from '../src/budget/binding';
+import { invalidateSpentCache } from '../src/budget/spent-cache';
 import { type Tx, withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { effectiveRegistry } from '../src/registry/cache';
@@ -191,7 +209,14 @@ function divergencesOf(oracle: BudgetOverview, engine: BudgetOverview, month: st
     }
   }
   for (const id of rest.keys()) out.push(`${month} ${id}: лишний конверт в выдаче движка`);
-  for (const l of ['period', 'balance', 'comingUp', 'planned', 'unbudgeted', 'alertCount'] as const) {
+  for (const l of [
+    'period',
+    'balance',
+    'comingUp',
+    'planned',
+    'unbudgeted',
+    'alertCount',
+  ] as const) {
     if (canonicalJson(oracle[l]) !== canonicalJson(engine[l])) {
       out.push(
         `${month} ведомость ${l}: оракул ${canonicalJson(oracle[l])} ≠ движок ${canonicalJson(engine[l])}`,
@@ -540,8 +565,13 @@ test('перф-гейт §С8-15: p95 движка ≤ 2× оракула и ≤
   // Строка порога печатается на КАЖДОМ прогоне и для достигнутого тоже: «достигнут» — такой же
   // факт замера, как «не достигнут» (образец `graph.test.ts:270-279`).
   for (const [key, ceil] of [
-    ['overview:engine ≤ 500 мс', VOLUME_BUDGETS.overviewP95Ms],
-    ['overview:engine ≤ 2× оракула', oracleP95 * VOLUME_BUDGETS.ratioToOracle],
+    // Подписи строятся ИЗ порогов, а не пишутся числом второй раз: разъехавшаяся подпись
+    // («≤ 500 мс» при пороге 100) — первое, что видит читатель лога, и она бы врала.
+    [`overview:engine ≤ ${VOLUME_BUDGETS.overviewP95Ms} мс`, VOLUME_BUDGETS.overviewP95Ms],
+    [
+      `overview:engine ≤ ${VOLUME_BUDGETS.ratioToOracle}× оракула`,
+      oracleP95 * VOLUME_BUDGETS.ratioToOracle,
+    ],
   ] as const) {
     console.log(
       `perf: ${key} — порог §С8-15 ${ceil.toFixed(0)} мс ${
