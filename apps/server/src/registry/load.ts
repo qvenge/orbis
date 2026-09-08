@@ -134,7 +134,7 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
     ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
   const aspectRows = (await tx.execute(sql`
     SELECT id, owner_id, key, label, description, properties, ai_instructions,
-           tag_mappings, implements, view_config, module, service, rank
+           tag_mappings, implements, aggregations, view_config, module, service, rank
     FROM aspect_definitions
     WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
     ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
@@ -191,6 +191,9 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
         aiInstructions: r.ai_instructions,
         tagMappings: r.tag_mappings,
         implements: r.implements,
+        // Колонка 0000 объявлена nullable с default `'{}'`: строка с явным NULL иначе уронила
+        // бы разбор снимка НА ЧТЕНИИ, то есть заперла бы владельца снаружи его реестра.
+        aggregations: r.aggregations ?? undefined,
         viewConfig: r.view_config,
         module: r.module,
         service: r.service,

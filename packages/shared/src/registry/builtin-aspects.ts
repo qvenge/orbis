@@ -221,6 +221,7 @@ const ENTRIES: readonly AspectEntry[] = [
     aiInstructions:
       'Конверт на период: orbis/finance_category, orbis/limit (decimal-строка), orbis/period_start и orbis/period_end включительно. Потраченное не хранится — сервер считает его по транзакциям конверта.',
     tagMappings: ['budget', 'envelope', 'limit'],
+    aggregations: { spent: { published: true }, remaining: { published: true } },
     // §Б2-1 (budget): шесть слотов конверта. Слота-статуса у `orbis/envelope` нет — фазы ведомости
     // считает подписка Budget (§Б5-4), а не класс контракта, потому и отнесений нет.
     implements: [

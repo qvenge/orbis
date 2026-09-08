@@ -48,6 +48,7 @@ function seeded(): RegistryDbRows {
       ai_instructions: a.aiInstructions,
       tag_mappings: a.tagMappings,
       implements: a.implements,
+      aggregations: a.aggregations,
       view_config: a.viewConfig,
       module: a.module,
       service: a.service,

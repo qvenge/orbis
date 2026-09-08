@@ -195,6 +195,25 @@ export const aspectDefinitionSchema = z
     // `checkImplements` (`VARIANT_UNMAPPED`) и в конвертах тулов (задача 15,
     // `aspectImplementsToolSchema`); здесь `.default([])` держит форму строки реестра (замер П1).
     implements: z.array(aspectImplementsSchema).default([]),
+    /**
+     * §Б5-5/§4.3 PRD: НОСИТЕЛЬ ДЕКЛАРАЦИИ МАТЕРИАЛИЗАЦИИ. Колонка `aggregations` заведена
+     * миграцией 0000 и до Б-1 не имела ни одного читателя (ни схемы, ни сида, ни SELECT'а,
+     * ни дрейфа) — то есть была мёртвым адресом, выглядящим как гарантия.
+     *
+     * Значение — «какие вычисленные величины подписки этот аспект ПУБЛИКУЕТ»: у
+     * `orbis/budget` это `spent` и `remaining`, и ровно их читает Е-2 `agg_via(role, имя)`
+     * через ребро `envelope-binding` (§Б3-5). `published` — единственное поле намеренно:
+     * второе («чем считать») жило бы в двух местах с декларацией подписки.
+     *
+     * Читатель поля в Б-1 — `materializedAggregatesOf` (`subscriptions/budget.ts`): кэш
+     * `spent` включается, только когда ВЕЛИЧИНУ ПУБЛИКУЕТ аспект-конверт И ведомость помечена
+     * `materialize: true`. Два условия, а не одно: `materialize` — свойство ведомости («её
+     * дорого считать»), `published` — свойство аспекта («её видно снаружи»), и владелец,
+     * снявший аспект с публикации, обязан гасить и её кэш.
+     */
+    aggregations: z
+      .record(z.string(), z.object({ published: z.boolean() }).strict())
+      .default({}),
     viewConfig: z.object({ keyFields: z.array(z.string()), icon: z.string().optional() }).strict(),
     module: z.string().nullable(),
     /**

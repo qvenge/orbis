@@ -135,16 +135,18 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
   for (const a of BUILTIN_ASPECT_DEFS) {
     await sql`
       INSERT INTO aspect_definitions
-        (id, owner_id, key, label, description, properties, implements,
+        (id, owner_id, key, label, description, properties, implements, aggregations,
          ai_instructions, tag_mappings, view_config, module, service, rank)
       VALUES
         (${a.id}, NULL, ${a.key}, ${sql.json(j(a.label))}, ${sql.json(j(a.description))},
          ${sql.json(j(a.properties))}, ${sql.json(j(a.implements))},
+         ${sql.json(j(a.aggregations))},
          ${a.aiInstructions}, ${a.tagMappings}, ${sql.json(j(a.viewConfig))},
          ${a.module}, ${a.service}, ${a.rank})
       ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, implements = EXCLUDED.implements,
+        aggregations = EXCLUDED.aggregations,
         ai_instructions = EXCLUDED.ai_instructions,
         tag_mappings = EXCLUDED.tag_mappings, view_config = EXCLUDED.view_config,
         module = EXCLUDED.module, service = EXCLUDED.service, rank = EXCLUDED.rank`;
@@ -217,7 +219,7 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
     FROM property_definitions WHERE owner_id IS NULL`;
   const aspectRows = await sql<Record<string, unknown>[]>`
     SELECT id, owner_id, key, label, description, properties, ai_instructions, tag_mappings,
-           implements, view_config, module, service, rank
+           implements, aggregations, view_config, module, service, rank
     FROM aspect_definitions WHERE owner_id IS NULL`;
   const contractRows = await sql<Record<string, unknown>[]>`
     SELECT id, owner_id, key, label, description, kind, slots, classes, sets, facts, module, rank
@@ -260,6 +262,8 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
         aiInstructions: r.ai_instructions,
         tagMappings: r.tag_mappings,
         implements: r.implements,
+        // См. `registry/load.ts`: явный NULL в колонке не должен ронять разбор снимка.
+        aggregations: r.aggregations ?? undefined,
         viewConfig: r.view_config,
         module: r.module,
         service: r.service,

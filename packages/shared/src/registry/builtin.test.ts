@@ -27,6 +27,7 @@ import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builti
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import { contractSetKind, isPredicateSet } from './contract-type';
+import { aspectDefinitionSchema } from './property-type';
 
 /** Строка таблицы §А8: [поле аспекта сегодня (null — свойство заведено реформой), id свойства, Req]. */
 type Row = readonly [string | null, string, boolean];
@@ -995,4 +996,24 @@ test('подписи ролей и аспектов — по §А4-3 и пере
     'orbis/agent-run': 'Прогон агента',
     'orbis/routine': 'Рутина',
   });
+});
+
+test('клапан aggregations: orbis/budget объявляет опубликованные величины, остальные аспекты — пусто (§Б5-5, Р-И-30)', () => {
+  const byId = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
+  expect(byId.get('orbis/budget')?.aggregations).toEqual({
+    spent: { published: true },
+    remaining: { published: true },
+  });
+  // Публикуются ровно те две величины, которые читает Е-2 `agg_via` по ребру
+  // envelope-binding (§Б3-5) — третья появилась бы вместе с читателем, не раньше.
+  expect(
+    BUILTIN_ASPECT_DEFS.filter((a) => Object.keys(a.aggregations).length > 0).map((a) => a.id),
+  ).toEqual(['orbis/budget']);
+  // Форма строгая: неизвестный ключ внутри величины отвергается схемой.
+  expect(
+    aspectDefinitionSchema.safeParse({
+      ...(byId.get('orbis/budget') as object),
+      aggregations: { spent: { published: true, extra: 1 } },
+    }).success,
+  ).toBe(false);
 });
