@@ -4,9 +4,10 @@
 // Реестр НАСТОЯЩИЙ (`BUILTIN_REGISTRY`): слова, которыми проверяются подписи, обязаны быть
 // теми же, что увидит владелец. Выдуманный словарь здесь означал бы тест, зелёный при любом
 // содержимом реестра.
+import { BUILTIN_CONTRACT_DEFS, effectiveLabel, OWNER_LOCALE } from '@orbis/shared';
 import { expect, test } from 'vitest';
 import { BUILTIN_REGISTRY } from '../../test/registry';
-import { aspectLabel, fieldLabel, lookupOf, propertyIdOf } from './labels';
+import { aspectLabel, classLabel, fieldLabel, lookupOf, propertyIdOf } from './labels';
 
 const reg = lookupOf(BUILTIN_REGISTRY);
 
@@ -88,4 +89,43 @@ test('реестра ещё нет — каждый адрес показыва�
   expect(fieldLabel(empty, 'orbis/task_status')).toBe('orbis/task_status');
   expect(aspectLabel(empty, 'orbis/task')).toBe('orbis/task');
   expect(empty.carrierOf('orbis/task_status')).toBeUndefined();
+});
+
+test('подпись класса — из словаря контрактов, в локали читателя; промах — сам ключ', () => {
+  const completable = BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/completable');
+  if (completable?.kind !== 'slots') throw new Error('orbis/completable — контракт со слотами');
+  const cancelled = completable.classes.find((c) => c.key === 'cancelled');
+  if (cancelled === undefined)
+    throw new Error('класса cancelled нет в контракте orbis/completable');
+  // Слово выбирает СИД (задача 1) — тест пинит «ПОДПИСЬ, а не ключ», а не сам текст: label
+  // владелец переименовывает бесплатно (§А10-2), и пин литерала «Отменено» красил бы тест,
+  // который о переименованиях ничего не знает.
+  expect(classLabel(reg, 'orbis/completable', 'cancelled')).toBe(
+    effectiveLabel(cancelled.label, OWNER_LOCALE),
+  );
+  expect(classLabel(reg, 'orbis/completable', 'cancelled')).not.toBe('cancelled');
+  // Контракт адресуется id И key — та же пара форм, что у свойства (§А9-2).
+  expect(reg.contract('orbis/completable')?.id).toBe('orbis/completable');
+  // Локаль выбирает ЧИТАТЕЛЬ, как у `label()`. Проверяется на СВОЁМ словаре — так тест не зависит
+  // от того, на скольких языках сид назвал класс (иначе обе стороны считались бы одинаково и
+  // сравнение было бы пустым).
+  const bilingual = lookupOf({
+    version: '2.0',
+    properties: [],
+    aspects: [],
+    roles: [],
+    contracts: [
+      { ...completable, classes: [{ key: 'paused', label: { ru: 'На паузе', en: 'Paused' } }] },
+    ],
+  });
+  expect(bilingual.classLabel('orbis/completable', 'paused')).toBe('На паузе');
+  expect(bilingual.classLabel('orbis/completable', 'paused', 'en')).toBe('Paused');
+  // Три промаха — и все дают САМ ключ класса, а не пустое место: членство существует, и назвать
+  // его машинным именем честнее (то же правило деградации, что у `fieldLabel`/`aspectLabel`).
+  expect(classLabel(reg, 'orbis/completable', 'user/paused')).toBe('user/paused'); // класса нет
+  expect(classLabel(reg, 'user/нет-контракта', 'done')).toBe('done'); // контракта нет
+  expect(classLabel(reg, 'orbis/sensitivity', 'external')).toBe('external'); // kind:'facts' — classes: null
+  // Реестр ещё едет — подпись сырая, но бейдж рисуется (прятать его до первого ответа значило бы
+  // убрать с экрана то, что уже известно).
+  expect(classLabel(lookupOf(undefined), 'orbis/completable', 'done')).toBe('done');
 });

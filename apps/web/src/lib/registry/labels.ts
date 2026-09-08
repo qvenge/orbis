@@ -25,6 +25,7 @@
 import {
   type AspectDefinition,
   CORE_PROPERTY_IDS,
+  type ContractDefinition,
   effectiveLabel,
   OWNER_LOCALE,
   type PropertyDefinition,
@@ -47,9 +48,9 @@ export interface EffectiveRegistry {
   aspects: readonly WireRegistry['aspects'][number][];
   roles: readonly WireRegistry['roles'][number][];
   /**
-   * §Б1-3: контракты доезжают до клиента вместе с тремя словарями. Читателей у поля два, и оба
-   * косвенные: фикстура ответа (`test/registry.ts`) и `buildQueryRegistry` (задача 4). ПОДПИСИ
-   * классов (`RegistryLookup.contract()`, `classLabel`) заводит задача 7 вместе со строкой M14.
+   * §Б1-3: контракты доезжают до клиента вместе с тремя словарями. Читателей у поля три:
+   * конструктор запросов (`buildQueryRegistry`), правило строки M14 (`lib/registry/row.ts` —
+   * словари для `rowProjectionOf`) и подписи классов ниже (`contract()`/`classLabel`).
    */
   contracts: readonly WireRegistry['contracts'][number][];
 }
@@ -84,6 +85,16 @@ export interface RegistryLookup {
    * слово слева от точки, а не смысл строки.
    */
   carrierOf(propertyId: string): AspectDefinition | undefined;
+  /** Контракт по id ИЛИ по key — та же пара форм адреса, что у свойства (§А9-2). */
+  contract(idOrKey: string): ContractDefinition | undefined;
+  /**
+   * Подпись КЛАССА контракта в локали читателя. Промах на любом шаге — контракта нет, классов
+   * у него нет вовсе (`kind: 'facts'`, `classes: null`), класс чужой — даёт САМ ключ класса:
+   * то же правило, что у `label()`, и по той же причине (членство существует; машинное имя
+   * честнее пустого места). Локаль здесь, а не у свободной функции, потому что она закрыта в
+   * `lookupOf`: второй её источник дал бы «Отменено» в строке и `cancelled` в карточке.
+   */
+  classLabel(contract: string, cls: string, locale?: string): string;
 }
 
 /** Индекс по id и по key; id сильнее — по нему адресуют значения (`props`, Q-AST). */
@@ -109,6 +120,7 @@ export function lookupOf(
   const properties = indexOf(data?.properties ?? []);
   const aspects = indexOf(data?.aspects ?? []);
   const roles = indexOf(data?.roles ?? []);
+  const contracts = indexOf(data?.contracts ?? []);
   // Носитель считается ОДИН раз на снимок: у 77 свойств и 13 аспектов обход дешёв, но он
   // ушёл бы в каждую строку каждой карточки, а строк на экране прогона сотни.
   const carriers = new Map<string, AspectDefinition>();
@@ -126,6 +138,12 @@ export function lookupOf(
       return def === undefined ? idOrKey : effectiveLabel(def.label, loc);
     },
     carrierOf: (propertyId) => carriers.get(propertyId),
+    contract: (idOrKey) => contracts.get(idOrKey),
+    classLabel: (contract, cls, loc = locale) => {
+      // `classes` у контракта-фактов — `null` (§Б1-1), поэтому `?? []`, а не `.find` по полю.
+      const found = (contracts.get(contract)?.classes ?? []).find((c) => c.key === cls);
+      return found === undefined ? cls : effectiveLabel(found.label, loc);
+    },
   };
 }
 
@@ -188,4 +206,14 @@ export function fieldLabel(reg: RegistryLookup, field: string): string {
 /** Подпись АСПЕКТА; промах — сам id (кастомный аспект, снятая строка реестра). */
 export function aspectLabel(reg: RegistryLookup, aspectId: string): string {
   return reg.label(aspectId);
+}
+
+/**
+ * Подпись класса — ФУНКЦИЕЙ над читателем, как `fieldLabel` и `aspectLabel`: её зовут и
+ * компоненты (`EntityRow`, `NativeRow` — у них `RegistryView`), и чистые текстовые модули,
+ * которым React недоступен. Тело — делегат к методу, как у `aspectLabel`: локаль живёт в
+ * одном месте.
+ */
+export function classLabel(reg: RegistryLookup, contract: string, cls: string): string {
+  return reg.classLabel(contract, cls);
 }
