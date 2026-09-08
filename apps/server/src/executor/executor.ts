@@ -488,6 +488,12 @@ export async function execute(
         // Зеркала ссылок (§А6-2) — по той же причине: откат вернул ЗНАЧЕНИЕ, ребро обязано
         // сойтись с ним (своего inverse у зеркала нет — см. шапку `registry/ref.ts`).
         await applyRefEffects(ctx, [plan]);
+        // Кэш spent (§Б5-5): откат — путь мимо бюджет-хука, и единственный, где множество
+        // задетых сущностей не выражено планами: `property_merge_undo` переписывает `props`
+        // одним UPDATE в CTE (`registry/ops.ts`), никого не называя. Сносим кэш владельца
+        // целиком — это один ленивый пересчёт против неполной модели того, что откат сделал.
+        // Отмена — редкая явная операция, цена честная.
+        await invalidateSpentCacheOfOwner(tx, req.actorUserId);
         await ctx.internalUndo.writeUndoMessage(tx);
       } else if (out.replay !== true) {
         const allPlans = [plan, ...followUps];
@@ -633,6 +639,9 @@ async function executeBatch(
         // См. одиночный путь: откату пересчёт предков и сведение зеркал нужны, журнала нет.
         await applyAncestorRecompute(ctx, plans);
         await applyRefEffects(ctx, plans);
+        // Кэш spent — см. одиночный путь: откат идёт мимо хука, задетые сущности планами не
+        // выражены, снос владельца дешевле неполной модели.
+        await invalidateSpentCacheOfOwner(tx, req.actorUserId);
         await internalUndo.writeUndoMessage(tx);
         return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
       }
@@ -765,6 +774,12 @@ export function touchesBudgetContour(
       return true;
     }
   }
+  // `property_merge` переписывает `props` ВСЕХ носителей свойства одним UPDATE в CTE
+  // (`registry/ops.ts`) — без per-entity операций и без бюджет-хука. Ни один из предикатов
+  // ниже его не видит (вход — `{source, into}`), а переписать он может ровно `orbis/amount`
+  // или `orbis/finance_category`. Точность в сторону «лишний раз взяли» здесь не критична:
+  // замок владельческий, реентерабельный и дешёвый (докблок выше).
+  if (op.tool === 'property_merge' || op.tool === 'property_merge_undo') return true;
   if (op.tool === 'batch_execute') {
     const env = op.input as { operations?: Array<{ tool: string; input: unknown }> } | null;
     return (env?.operations ?? []).some((inner) => touchesBudgetContour(reg, inner));
@@ -3181,6 +3196,10 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
       // Адрес резолвит сама операция, в своей транзакции (см. `preparePropertyUpdate`):
       // `resolveMergePair` принимает и id, и key, а снимок исполнителя пачку не видит.
       const merged = await mergeProperty(applyCtx.tx, applyCtx.req.actorUserId, input);
+      // §Б5-5: слияние переписало props носителей — состав spent мог измениться у любого
+      // конверта. Половина владельца в `registry_version` тоже сдвинулась (`registry/ops.ts`)
+      // и строки перестали бы отвечать сами; снос — чтобы они не пережили пересчёт мусором.
+      await invalidateSpentCacheOfOwner(applyCtx.tx, applyCtx.req.actorUserId);
       const { source, into } = merged.inverse;
       journal.title = `Свойства слиты: ${source} → ${into}`;
       journal.operations.push({

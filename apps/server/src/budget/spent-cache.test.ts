@@ -14,7 +14,10 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
+import { touchesBudgetContour } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
+import { undoAction } from '../executor/undo';
 import { DEFAULT_TIMEZONE } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
@@ -26,6 +29,8 @@ import { invalidateSpentCache, readSpentCache, spentCacheKey, writeSpentCache } 
 
 requireEnv();
 const { db, client } = appDb();
+/** Без журнала `undoAction` не найдёт action (образец `binding.test.ts`). */
+const sink = makeChatJournalSink();
 beforeAll(async () => {
   await truncateAll();
 });
@@ -398,5 +403,79 @@ describe('вклад одного движения — из декларации
     expect(
       decCmp(sum, overview.envelopes.find((e) => e.envelope.id === env.id)?.spent ?? '0'),
     ).toBe(0);
+  });
+});
+
+describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
+  const user = freshUserId();
+  const cat = newId();
+  const clock = () => new Date('2026-07-10T09:00:00.000Z');
+
+  test('undo действия сносит кэш владельца: откат правит props, а хук в нём не зовётся вовсе', async () => {
+    const env = await createEntity(user, {
+      title: 'Кино — июль',
+      props: budgetProps(cat),
+      aspects: ['orbis/budget'],
+    });
+    const created = ok(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Билеты',
+          tags: [],
+          props: finProps(cat, '2026-07-04'),
+          aspects: ['orbis/financial'],
+        }),
+        { sink },
+      ),
+    );
+    await budgetOverview(db, user, '2026-07', clock);
+    expect((await cacheRows(env.id))[0]?.spent).toBe('340.00');
+
+    const undone = await undoAction(db, { actorUserId: user, actionId: created.actionId });
+    expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
+    expect(await cacheRows(env.id)).toEqual([]);
+    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('0.00');
+  });
+
+  test('property_merge сносит кэш владельца ЦЕЛИКОМ и виден предикату замка контура', async () => {
+    // Свойства здесь ПОЛЬЗОВАТЕЛЬСКИЕ и к финансам отношения не имеют: инвалидация не
+    // условная. Так и надо — слияние переписывает `props` неизвестного заранее множества
+    // носителей одним UPDATE в CTE, и «а задело ли оно деньги» вопрос без дешёвого ответа.
+    const mk = (key: string) =>
+      execute(
+        db,
+        req(user, 'property_create', {
+          key,
+          label: { ru: key },
+          description: { ru: 'Проба слияния' },
+          type: { kind: 'text' },
+          status: 'active',
+        }),
+      );
+    ok(await mk('user/merge-probe-1'));
+    ok(await mk('user/merge-probe-2'));
+    const env = (await budgetOverview(db, user, '2026-07', clock)).envelopes[0]
+      ?.envelope as WireEntity;
+    expect((await cacheRows(env.id)).length).toBe(1);
+
+    ok(
+      await execute(
+        db,
+        req(user, 'property_merge', {
+          source: 'user/merge-probe-1',
+          into: 'user/merge-probe-2',
+        }),
+      ),
+    );
+    expect(await cacheRows(env.id)).toEqual([]);
+
+    // Предикат замка обязан ВИДЕТЬ слияние: иначе конкурентный бюджет-хук считал бы привязку
+    // по props, которые слияние переписывает мимо всякой per-entity операции.
+    const reg = await withIdentity(db, user, (tx) => effectiveRegistry(tx, user));
+    expect(
+      touchesBudgetContour(reg, { tool: 'property_merge', input: { source: 'a', into: 'b' } }),
+    ).toBe(true);
+    expect(touchesBudgetContour(reg, { tool: 'property_merge_undo', input: {} })).toBe(true);
   });
 });
