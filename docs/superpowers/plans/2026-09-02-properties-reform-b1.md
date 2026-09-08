@@ -15911,7 +15911,7 @@ export function execErrorOfImplementsIssue(issue: ImplementsIssue, extra: Record
   - `apps/server/src/executor/executor.ts` — `:2853-2863` (`REGISTRY_OPS` → `export`, докблок).
 - **Test:** `apps/server/src/policy/confirmation.test.ts` (`:29-43`, `:594-891`);
   `apps/server/src/tools/dispatch.test.ts` (`:4283-4815`, `:4845-4897`);
-  `apps/server/src/mcp/mcp.test.ts` (`:7-31` импорты, новый `describe` после `:901`).
+  `apps/server/src/mcp/mcp.test.ts` (`:7-31` импорты, новый `describe` после `:901`). (эррата 14: `:901` закрывает ТЕСТ внутри `describe('/mcp: скоуп worker …')` — блок встаёт после закрытия того describe, `:1035`)
 
 **Интерфейсы:**
 
@@ -16136,7 +16136,7 @@ export const REGISTRY_OPS: ReadonlySet<string>;                                 
   Прогон: `cd apps/server && bun test src/policy/sensitivity.test.ts` → **PASS** (5 тестов).
   Коммит: `feat(policy): словарь фактов чувствительности из контракта orbis/sensitivity (§С8-23)`
 
-- [ ] **Шаг 5: красный — множество фактов как вход классификатора.** В `confirmation.test.ts`, в конец
+- [ ] **Шаг 5: красный — множество фактов как вход классификатора.** В `confirmation.test.ts`, в конец (Эррата 14: RED здесь даёт `bun run typecheck` — `bun test` типы не проверяет и остаётся зелёным.)
   `describe` §С2-1 (`:594`):
   ```ts
   test('множество фактов — вход §7.10, но уровень в Б-1 не меняет (потребитель — assign_level, Б-2)', () => {
@@ -16340,7 +16340,7 @@ export const REGISTRY_OPS: ReadonlySet<string>;                                 
         // классах, а значит чекбокса строки, `class=`-фильтров, Agenda и `spent`. Снести её
         // при переносе — уронить пин «5в. карта классов поверх ВСТРОЕННОГО аспекта»
         // (`confirmation.test.ts`, задача 13, шаг 16) и живой ряд 2 ниже (шаг 14).
-        if (isRecord(input.delta) && ('classMap' in input.delta || 'selectOptions' in input.delta)) {
+        if (isRecord(input.delta) && ('classMap' in input.delta || 'selectOptions' in input.delta)) {  // эррата 14: ветка УСТАРЕЛА — из дерева переезжает дословная `behaviorOnlyDelta(delta)` задачи 13 (Ф-Б1-50: ключи ⊆ {selectOptions, classMap} и непустые по содержимому)
           return 'behavior-delta';
         }
         return ownRegistryAddress(input.aspect) ? 'behavior-delta' : 'system-object';
@@ -16668,7 +16668,7 @@ export const REGISTRY_OPS: ReadonlySet<string>;                                 
   ЗДЕСЬ и только здесь. Задачи 15 и 16 своих `case` в `registryOperationSummary` не кладут и
   golden фраз не переписывают — они дописывают `payloads` к уже существующему пину и кладут ветки
   `snapshotRegistryUnit` («было → станет»), для которых у них есть операции чтения (шаг 17).
-  Прогон: `cd apps/server && bun test src/tools/dispatch.test.ts -t 'сводки мутации реестра'` →
+  Прогон: `cd apps/server && bun test src/tools/dispatch.test.ts -t 'сводка мутации реестра'` → (эррата 14: describe называется «сводка…», подстрока брифа не матчила)
   **PASS**; `bun run lint` → **PASS**.
 
 - [ ] **Шаг 17: докблоки адресов и хвоста единицы.** Кода не добавляет — называет две границы:
