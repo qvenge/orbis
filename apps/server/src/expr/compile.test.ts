@@ -177,7 +177,7 @@ function withBlockedSet(): Map<string, ContractDefinition> {
   map.set(done.id, {
     ...done,
     sets: { ...done.sets, blocked: { has_relation: { role: ROLE_DEPENDENCY, alive: true } } },
-  } as unknown as ContractDefinition);
+  });
   return map;
 }
 

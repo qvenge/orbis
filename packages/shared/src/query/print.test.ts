@@ -151,6 +151,26 @@ test('label-форма — подписи по локали, имена поле
   const back = parseQueryAst(printQueryAst(ast.ast, REG, 'label'), REG);
   expect(back.ok).toBe(true);
   if (back.ok) expect(back.ast).toEqual(ast.ast);
+
+  // КОНТРАКТ — ИСКЛЮЧЕНИЕ, и оно проверяемо: закавыченной label-формы у него нет (подписи
+  // §А5-3б резолвятся у полей, аспектов и ролей), поэтому `class=` печатается КЛЮЧОМ и в
+  // label-форме тоже. Напечатай печать подпись — обратный разбор ответил бы `SYNTAX`
+  // («лишние символы после закрывающей кавычки»), и утверждение выше стало бы неправдой
+  // ровно на этом узле.
+  const cls = parseQueryAst('class=orbis/completable:closed', REG);
+  expect(cls.ok).toBe(true);
+  if (!cls.ok) return;
+  const labelled = printQueryAst(cls.ast, REG, 'label');
+  expect(labelled).toBe('class=orbis/completable:closed');
+  const clsBack = parseQueryAst(labelled, REG);
+  expect(clsBack.ok, labelled).toBe(true);
+  if (clsBack.ok) expect(clsBack.ast).toEqual(cls.ast);
+  // И у СВОЕГО контракта (key ≠ id) — тот же круг: печатается key, разбирается в id.
+  const own = parseQueryAst('class=user/reviewable:live', REG);
+  expect(own.ok).toBe(true);
+  if (!own.ok) return;
+  expect(own.ast.filter).toEqual({ class: { contract: FIXTURE_USER_CONTRACT_ID, set: 'live' } });
+  expect(printQueryAst(own.ast, REG, 'label')).toBe('class=user/reviewable:live');
 });
 
 test('дерево, невыразимое плоской грамматикой v1, печатается скобками и не разбирается назад', () => {

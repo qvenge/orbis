@@ -130,7 +130,13 @@ function names(reg: ParseRegistry, form: QueryPrintForm): Names {
     prop: (id) => pick(reg.properties.get(id), id),
     aspect: (id) => pick(reg.aspects.get(id), id),
     role: (id) => pick(reg.roles.get(id), id),
-    contract: (id) => pick(reg.contracts.get(id), id),
+    // КЛЮЧ В ОБЕИХ ФОРМАХ, а не `pick`: закавыченной label-формы у контракта нет намеренно
+    // (докблок `resolveContract`, `parse-ast.ts`) — подписи §А5-3б резолвятся у полей,
+    // аспектов и ролей, того, что владелец называет вслух. Напечатай мы здесь подпись,
+    // label-форма перестала бы разбираться обратно: `class="Завершаемость":closed` —
+    // это `SYNTAX: лишние символы после закрывающей кавычки`, то есть `parse(print(a)) ≡ a`
+    // ломается ровно на этом узле. Нерезолвенный id печатается собой — печать тотальна.
+    contract: (id) => reg.contracts.get(id)?.key ?? id,
     // Реестр нужен и здесь: сахар — это КОНКРЕТНЫЕ id роли и свойства, а в дереве лежат id,
     // не ключи. Через `Names` (а не пятым параметром `printNode`), потому что это ровно тот
     // же класс знания — «как назвать/опознать запись реестра».
