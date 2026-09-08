@@ -6197,7 +6197,7 @@ import type { AgendaSubscription, BudgetSubscription } from './subscription-type
   ведомостями `spent` (sum, `where` = `{op:'in',args:[{class:{contract:'orbis/money-movement'}},{const:'outflow'}]}` —
   именованные наборы, как в сидах задач 6 и 9, Р-И-11; перечисление классов — форма деклараций владельца),
   `effective_limit` = `{op:'+',args:[{slot:'limit'},{op:'if',args:[{has:'carryover'},{slot:'carryover'},{const:'0'}]}]}`
-  (Р-К-13), `remaining`, `daily_pace`, `alerts.warn_at:'0.85'`, списками `coming_up`/`planned`, `cards.order_by` с
+  (Р-К-13), `remaining`, `daily_pace`, `alerts.warn_at:'0.85'`, списками `coming_up`/`planned` (эррата 5 по гейт-ревью, Ф-Б1-24: ОБА с `planned = true`; фазы — от `$today` против периода конверта, как оракул `phaseOf`; `skip_phases: ['upcoming']`), `cards.order_by` с
   `deref`, `rollover.carry.agg:'remaining'`.
 
   Второй файл — красный тест `packages/shared/src/registry/subscription-type.test.ts`:
@@ -6794,7 +6794,7 @@ describe('дельта контракта setsDelta и подписки definiti
       .toEqual({ code: 'VALIDATION', reason: 'DELTA_SET_BUILTIN' });
   });
   test('класс, которого у контракта нет, — DELTA_SET_UNKNOWN_CLASS', () => {
-    expect(refusal(() => applyDeltas(snapshotWith(), [row('contract', 'orbis/completable', { setsDelta: { my: ['нет'] } })])).reason)
+    expect(refusal(() => applyDeltas(snapshotWith(), [row('contract', 'orbis/completable', { setsDelta: { my: ['net_takogo'] } })])).reason) // эррата 5: имя класса — слаг (`SLOT_KEY_RE`, §1.7), кириллица давала бы DELTA_MALFORMED раньше проверки
       .toBe('DELTA_SET_UNKNOWN_CLASS');
   });
   test('дельта подписки заменяет декларацию целиком; чужой движок — DELTA_ENGINE_MISMATCH', () => {
@@ -6960,7 +6960,8 @@ function parseDelta(row: RegistryDeltaRow): RegistryDelta {
   В `merge-conflict.ts` первой строкой цикла (`:84`) — `if (conflict.targetKind !== 'aspect') continue;` с
   комментарием «нагрузка единицы — `aspect_delta_set`; у конфликтов контракта и подписки тула разрешения в Б-1 ещё
   нет (задача 16), и карточка вела бы к кнопке без исполнителя». Прогон: `cd apps/server && bun test
-  src/registry/deltas.test.ts src/registry/merge-conflict.test.ts` → **PASS**.
+  src/registry/deltas.test.ts src/registry/cache.test.ts` → **PASS** (эррата 5: файла `merge-conflict.test.ts` в дереве нет —
+  гвард `targetKind` покрыт тестом в `deltas.test.ts`).
   Коммит: `дельты: контракт (setsDelta) и подписка (полная замена) — apply, parse, слияние (§Б5-2)`.
 
 - [ ] **Шаг 20: красный тест шести операций дельт.** В `ops.test.ts` после describe `aspect_delta_set /
@@ -7019,7 +7020,11 @@ async function writeDeltaRow(
     ...existing.filter((r) => !(r.targetKind === targetKind && r.targetId === targetId)),
     { id: newId(), ownerId, targetKind, targetId, baseVersion: versions.systemVersion, delta },
   ];
-  check?.(applyDeltas({ ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion }, probe));
+  // Эррата по исполнению 5 (Д-1): у необязательного вызова `check?.(…)` АРГУМЕНТ не вычисляется, когда `check` не
+  // передан — проба применения не запускалась вовсе, и неприменимая дельта набора писалась молча (fail-closed на
+  // чтении запер бы владельца снаружи реестра). Проба — всегда, `check` — поверх неё.
+  const applied = applyDeltas({ ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion }, probe);
+  check?.(applied);
   await tx.execute(sql`
     INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
     VALUES (${newId()}::uuid, ${ownerId}::uuid, ${targetKind}, ${targetId},
