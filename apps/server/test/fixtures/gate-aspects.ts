@@ -9,6 +9,7 @@ import { execute } from '../../src/executor/executor';
 import { appRouter } from '../../src/router';
 import { createCallerFactory } from '../../src/trpc';
 import { appDb, type CustomAspectSpec } from '../helpers';
+import { surfaceEntityId } from '../surfaces';
 
 export const GATE_FIN_KEY = 'user/gate-fin';
 export const GATE_PLAIN_KEY = 'user/gate-plain';
@@ -168,6 +169,91 @@ export const GATE_PLAIN_ASPECT: CustomAspectSpec = {
     { contract: 'orbis/when', bind: { moment: GATE_PROPS.plainAt }, value_map: [], fixed: {} },
   ],
 };
+
+export const GATE_SURFACE_SLUGS = ['gate-spend', 'gate-todo'] as const;
+export const GATE_SURFACE_AMOUNT = '340.00';
+
+/**
+ * Две строки гейта в мире снимков (§С8-20 состояние `custom-aspect`). Через исполнителя — тем же
+ * путём, что и весь мир 0b: обстановка, положенная прямыми INSERT, не доказала бы, что аспект
+ * работает на боевых путях. Категория и конверт берутся из мира 0b (`cat-food`/`env-food`) —
+ * трата гейта обязана лечь в УЖЕ существующий конверт, иначе `spent` не сдвинется.
+ *
+ * Все даты ПРИБИТЫ относительно `SURFACE_TODAY` (`2026-07-03`): `seedGateWorld` выше считает
+ * «сегодня» от системных часов, и снятый на нём эталон жил бы ровно сутки.
+ */
+export async function seedGateSurfaceRows(ownerId: string): Promise<void> {
+  const { db, client } = appDb();
+  try {
+    const id = (slug: string) => surfaceEntityId(ownerId, slug);
+    const ops = [
+      {
+        tool: 'entity_create',
+        input: {
+          id: id('gate-spend'),
+          title: 'Трата гейта',
+          tags: [],
+          aspects: [GATE_FIN_KEY],
+          props: {
+            [GATE_PROPS.finAmount]: GATE_SURFACE_AMOUNT,
+            [GATE_PROPS.finDirection]: 'out',
+            [GATE_PROPS.finCategory]: id('cat-food'),
+            [GATE_PROPS.finDate]: '2026-07-02',
+            [GATE_PROPS.finState]: 'todo',
+            [GATE_PROPS.finWhen]: '2026-07-04T12:00:00+03:00',
+          },
+        },
+      },
+      {
+        tool: 'entity_create',
+        input: {
+          id: id('gate-todo'),
+          title: 'Дело гейта',
+          tags: [],
+          aspects: [GATE_PLAIN_KEY],
+          props: {
+            [GATE_PROPS.plainState]: 'open',
+            [GATE_PROPS.plainAt]: '2026-07-01T10:00:00+03:00',
+          },
+        },
+      },
+    ];
+    for (const op of ops) {
+      const r = await execute(db, {
+        actorUserId: ownerId,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [op],
+      });
+      if (!r.ok) throw new Error(`мир гейта ${op.tool}: ${r.error.code} — ${r.error.message}`);
+    }
+    // Пишущая половина привязки — остаток вехи I (Р-К-39): ребро `envelope-binding` ставит
+    // бюджет-хук, а он на `user/gate-fin` не срабатывает (жёсткие id `orbis/financial` в
+    // `binding.ts:combinationOf`, `BUDGET_CONTOUR_ASPECTS` `executor.ts`). ТЕ ЖЕ три строки,
+    // что в `seedGateWorld` выше; без них строка гейта не сдвинет `spent` в снимке
+    // `custom-aspect`. Механизм `seed`: роль системная, механизмом `user` вызов упал бы
+    // `ROLE_SYSTEM_ONLY`. Снимает задача 11 тем же коммитом, что обобщает хук.
+    const bound = await execute(db, {
+      actorUserId: ownerId,
+      actorKind: 'owner',
+      source: 'ui',
+      mechanism: 'seed',
+      operations: [
+        {
+          tool: 'relation_create',
+          input: {
+            source_id: id('env-food'),
+            target_id: id('gate-spend'),
+            role: ROLE_ENVELOPE_BINDING,
+          },
+        },
+      ],
+    });
+    if (!bound.ok) throw new Error(`привязка гейта: ${bound.error.code} — ${bound.error.message}`);
+  } finally {
+    await client.end();
+  }
+}
 
 export interface GateWorld {
   today: string;

@@ -10,6 +10,7 @@ import { appDb, requireEnv, truncateAll } from '../../test/helpers';
 import {
   compareSnapshots,
   SNAPSHOT_SURFACES,
+  SURFACE_GATE_OWNER_ID,
   SURFACE_OWNER_ID,
   SURFACE_SLUGS,
   SURFACE_STATES,
@@ -36,6 +37,10 @@ const countOf = async (q: ReturnType<typeof sql>): Promise<number> =>
 beforeAll(async () => {
   await truncateAll();
   await seedSurfaceWorld(SURFACE_OWNER_ID);
+  // Второй мир — РЯДОМ, у своего владельца (Р-К-24): состояния снимка обязаны быть сравнимы
+  // между собой, а один мир, переигранный дважды, потребовал бы зачистки между состояниями и
+  // сделал бы порядок тестов значимым.
+  await seedSurfaceWorld(SURFACE_GATE_OWNER_ID, { gateAspects: true });
 });
 afterAll(async () => {
   await client.end();
@@ -146,6 +151,18 @@ describe('снимки поверхностей: консервативност�
     }
     expect(canonicalJson(snap.surfaces)).toBe(canonicalJson(golden));
   });
+  test('снимок custom-aspect снят и лежит в эталоне', async () => {
+    const snap = await snapshotSurfaces(db, SURFACE_GATE_OWNER_ID, 'custom-aspect', SURFACE_TODAY);
+    const golden = (GOLDEN as { states: Record<string, Record<string, unknown>> }).states[
+      'custom-aspect'
+    ];
+    for (const surface of SNAPSHOT_SURFACES) {
+      expect(`${surface}: ${canonicalJson(snap.surfaces[surface])}`).toBe(
+        `${surface}: ${canonicalJson(golden?.[surface])}`,
+      );
+    }
+  });
+
   test('эталон держит ровно объявленные состояния и все четыре поверхности', () => {
     const states = Object.keys((GOLDEN as { states: Record<string, unknown> }).states);
     expect(states).toEqual(['baseline']); // задача 10 добавит 'custom-aspect', задача 18 — ещё два

@@ -31,7 +31,13 @@ import { agendaListOf, agendaSubscriptionOf } from '../src/subscriptions/agenda'
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
 import { toWireEntityFromSql } from '../src/wire';
-import { appDb } from './helpers';
+import {
+  GATE_FIN_ASPECT,
+  GATE_PLAIN_ASPECT,
+  GATE_SURFACE_SLUGS,
+  seedGateSurfaceRows,
+} from './fixtures/gate-aspects';
+import { appDb, seedCustomAspect } from './helpers';
 
 export const SURFACE_STATES = ['baseline', 'module-off', 'custom-aspect', 'relabeled'] as const;
 export type SurfaceState = (typeof SURFACE_STATES)[number];
@@ -46,6 +52,13 @@ export const SNAPSHOT_SURFACES = [...SURFACES, 'core/row', 'core/exclude-blocked
 export type SnapshotSurface = (typeof SNAPSHOT_SURFACES)[number];
 
 export const SURFACE_OWNER_ID = uuidv5('surface-snapshot-fixture:owner', ORBIS_NAMESPACE);
+/**
+ * Владелец состояния `custom-aspect` (Р-К-24): у каждого состояния снимка свой КОНСТАНТНЫЙ
+ * владелец, и миры четырёх состояний живут рядом. Иначе состояние приходилось бы получать
+ * переигрыванием одного мира, порядок тестов стал бы значимым, а сравнение состояний между
+ * собой — невозможным.
+ */
+export const SURFACE_GATE_OWNER_ID = uuidv5('surface-snapshot-fixture:gate-owner', ORBIS_NAMESPACE);
 /** Прибитое «сегодня» снимка — внутри периода конвертов (прецедент `compile.golden.test.ts:66`). */
 export const SURFACE_TODAY = '2026-07-03';
 export const SURFACE_MONTH = '2026-07';
@@ -205,7 +218,19 @@ function ops(ownerId: string): { tool: string; input: Record<string, unknown> }[
   ];
 }
 
-export async function seedSurfaceWorld(ownerId: string): Promise<void> {
+/**
+ * Мир снимка. `opts.gateAspects` добавляет состояние `custom-aspect` (§С8-20): два аспекта
+ * владельца — ТОЛЬКО декларацией — и две их строки поверх того же мира 0b.
+ */
+export async function seedSurfaceWorld(
+  ownerId: string,
+  opts?: { gateAspects?: boolean },
+): Promise<void> {
+  // Аспекты — ДО мира: `entity_create` с неизвестным аспектом отвергается валидатором.
+  if (opts?.gateAspects === true) {
+    await seedCustomAspect(ownerId, GATE_FIN_ASPECT);
+    await seedCustomAspect(ownerId, GATE_PLAIN_ASPECT);
+  }
   const { db, client } = appDb();
   try {
     for (const op of ops(ownerId)) {
@@ -220,6 +245,7 @@ export async function seedSurfaceWorld(ownerId: string): Promise<void> {
   } finally {
     await client.end();
   }
+  if (opts?.gateAspects === true) await seedGateSurfaceRows(ownerId);
 }
 
 export interface AgendaSurfaceRow {
@@ -305,8 +331,19 @@ async function agendaSurface(tx: Tx, cctx: CompileCtx): Promise<AgendaSurfaceRow
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MASKED_KEYS = new Set(['ownerId', 'createdAt', 'updatedAt']);
 
+/**
+ * Словарь `uuid → слаг`. Слаги гейта входят в него ВСЕГДА, а не только у состояния
+ * `custom-aspect`: иначе id двух строк гейта уехали бы в эталон как `<uuid>`, и снимок
+ * перестал бы быть сравнимым между состояниями. Лишние имена в словаре безвредны — в мире
+ * состояния, где строк гейта нет, они просто ни на что не отображаются.
+ */
 function namesOf(ownerId: string): ReadonlyMap<string, string> {
-  return new Map(SURFACE_SLUGS.map((s) => [surfaceEntityId(ownerId, s).toLowerCase(), `@${s}`]));
+  return new Map(
+    [...SURFACE_SLUGS, ...GATE_SURFACE_SLUGS].map((s) => [
+      surfaceEntityId(ownerId, s).toLowerCase(),
+      `@${s}`,
+    ]),
+  );
 }
 
 function stabilize(value: unknown, names: ReadonlyMap<string, string>): unknown {
