@@ -153,7 +153,12 @@ export function useAgendaOverdue(): {
   const items = [...(q.data?.rows ?? [])]
     .filter((r) => r.section === 'overdue')
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-  const countLabel = q.data?.truncated.overdue === true ? `${items.length}+` : String(items.length);
+  // Необязательная цепочка на ОБЯЗАТЕЛЬНОМ поле контракта — не перестраховка: бейдж
+  // смонтирован на ЛЮБОМ экране (§1.5), и ответ без `truncated` (старый сервер против нового
+  // клиента, мок соседнего сьюта) ронял бы не счётчик, а всё приложение. Та же терпимость,
+  // что у `rows ?? []` выше: нет поля — считаем «не усечено».
+  const countLabel =
+    q.data?.truncated?.overdue === true ? `${items.length}+` : String(items.length);
   return {
     items,
     countLabel,

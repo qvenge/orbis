@@ -613,7 +613,10 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
   test('дельта на цель, которой нет в реестре, — NOT_FOUND', async () => {
     for (const call of [
       (tx: Tx) => setContractDelta(tx, o, 'orbis/net-takogo', { setsDelta: {} }),
-      (tx: Tx) => setSubscriptionDelta(tx, o, 'orbis/agenda', { definition: AGENDA_DEF }),
+      // Не `orbis/agenda`: с задачи 6 она засеяна, и дельта на неё ЗАКОННА — путь «дельта
+      // подписки доехала до движка» меряет приёмка §С8-21 (`routers/agenda-acceptance.test.ts`).
+      (tx: Tx) =>
+        setSubscriptionDelta(tx, o, 'orbis/net-takoy-podpiski', { definition: AGENDA_DEF }),
     ]) {
       expect(((await inTx(call).catch((x) => x)) as ExecError).code).toBe('NOT_FOUND');
     }

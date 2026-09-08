@@ -10,9 +10,17 @@ import { trpc } from '../trpc';
 const appMocks = (path: string) => {
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
-  // Бейдж Agenda (§1.5) смонтирован на любом экране в обеих поверхностях навигации,
-  // поэтому App всегда шлёт entity.query — контракт процедуры массив, не {}.
+  // Бейдж Повестки (§1.5) смонтирован на любом экране в обеих поверхностях навигации,
+  // поэтому App всегда шлёт agenda.list; `entity.query` шлёт пробник ниже. У обоих контракт
+  // ответа непустой, и `{}` вместо него уронил бы дерево, а не тест.
   if (path === 'entity.query') return [];
+  if (path === 'agenda.list')
+    return {
+      today: '2026-09-08',
+      timezone: 'UTC',
+      rows: [],
+      truncated: { window: false, overdue: false },
+    };
   return {};
 };
 
@@ -73,6 +81,10 @@ test('переход offline→online (window "online") → автослив н�
 // закреплённых smart-list'ов).
 
 function GraphProbe() {
+  // Все ТРИ ключа держит пробник, а не App: до перевода Повестки на подписку `entity.query`
+  // случайно держал бейдж, и «перечитался» этот ключ ровно потому, что у него был наблюдатель.
+  // Ключ без наблюдателя инвалидация не перечитывает вовсе — тест мерил бы соседа, а не Р17.
+  trpc.entity.query.useQuery({ query: 'aspect=orbis/task' });
   trpc.entity.get.useQuery({ id: 'e1' });
   trpc.entity.count.useQuery({ query: 'aspect=orbis/task' });
   return null;
@@ -94,6 +106,7 @@ async function flushWithOutcome(outcome: 'confirmed' | 'business_rejection') {
   );
   // Ждём первого чтения каждого ключа, иначе «прибавилось» считалось бы от нуля.
   await waitFor(() => {
+    expect(calls.some((c) => c.path === 'entity.query')).toBe(true);
     expect(calls.some((c) => c.path === 'entity.get')).toBe(true);
     expect(calls.some((c) => c.path === 'entity.count')).toBe(true);
   });

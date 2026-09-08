@@ -170,7 +170,11 @@ test('снимок несёт словарь контрактов: шесть в
   expect(reg.contracts.get('orbis/sensitivity')?.facts?.length).toBe(5);
 });
 
-test('словарь подписок в снимке есть и пуст: первый сид — задачи Agenda и Budget', async () => {
+test('словарь подписок несёт засеянную Agenda: строка разобрана схемой, поверхность на месте', async () => {
   const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
-  expect(reg.subscriptions.size).toBe(0);
+  expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda']);
+  const row = reg.subscriptions.get('orbis/agenda');
+  // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.
+  expect(row?.definition.engine).toBe('agenda');
+  expect([row?.surface, row?.module, row?.ownerId]).toEqual(['planner/agenda', 'planner', null]);
 });
