@@ -61,9 +61,26 @@ import {
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
+// Цикла нет: валидатор берёт из `registry/load` только тип строки.
+import { assertSubscription } from '../subscriptions/registry';
 import { parseRegistryOfSnapshot } from './cache';
-import { type AspectDelta, applyDeltas, aspectDeltaSchema } from './deltas';
-import { loadRegistryDeltas, loadRegistryRows, type RegistrySnapshot } from './load';
+import {
+  type AspectDelta,
+  applyDeltas,
+  aspectDeltaSchema,
+  type ContractDelta,
+  contractDeltaSchema,
+  type RegistryDelta,
+  type RegistryDeltaTargetKind,
+  type SubscriptionDelta,
+  subscriptionDeltaSchema,
+} from './deltas';
+import {
+  loadRegistryDeltas,
+  loadRegistryRows,
+  type RegistryDictionaries,
+  type RegistrySnapshot,
+} from './load';
 import { bumpOwnerRegistryVersion, readRegistryVersions } from './version';
 
 /**
@@ -1734,7 +1751,7 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
 }
 
 // ---------------------------------------------------------------------------
-// Дельты аспектов (§А3-2)
+// Дельты аспектов, контрактов и подписок (§А3-2, §Б5-2)
 // ---------------------------------------------------------------------------
 
 export async function readAspectDelta(
@@ -1824,6 +1841,153 @@ export async function removeAspectDelta(tx: Tx, ownerId: string, aspectId: strin
     DELETE FROM registry_deltas
      WHERE owner_id = ${ownerId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}`);
   await bumpOwnerRegistryVersion(tx, ownerId);
+}
+
+/**
+ * ПРОБА ПРИМЕНЕНИЯ → СТРОКА → ВЕРСИЯ — один порядок на все рода дельт, по тому же доводу, что у
+ * `setAspectDelta`: `applyDeltas` fail-closed на каждом чтении, значит неприменимая дельта обязана быть
+ * отвергнута ДО INSERT'а. Общая функция, а не третья копия: у трёх родов совпадает ВСЁ, кроме проверок
+ * до пробы, — и разъехались бы они на первом же новом роде (ровно так уже случилось с
+ * `propertyNamesInDelta`).
+ */
+async function writeDeltaRow(
+  tx: Tx,
+  ownerId: string,
+  targetKind: RegistryDeltaTargetKind,
+  targetId: string,
+  delta: RegistryDelta,
+  rows: RegistryDictionaries,
+  check?: (probe: RegistrySnapshot) => void,
+): Promise<void> {
+  const versions = await readRegistryVersions(tx, ownerId);
+  const existing = await loadRegistryDeltas(tx, ownerId);
+  const probe = [
+    ...existing.filter((r) => !(r.targetKind === targetKind && r.targetId === targetId)),
+    { id: newId(), ownerId, targetKind, targetId, baseVersion: versions.systemVersion, delta },
+  ];
+  // Проба считается БЕЗУСЛОВНО, а не внутри аргумента `check?.()`: у необязательного вызова
+  // аргумент не вычисляется вовсе, и род без своей проверки (дельта контракта) писал бы
+  // неприменимую строку молча — то есть ровно то, ради чего проба и заведена.
+  const applied = applyDeltas(
+    { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
+    probe,
+  );
+  check?.(applied);
+  await tx.execute(sql`
+    INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+    VALUES (${newId()}::uuid, ${ownerId}::uuid, ${targetKind}, ${targetId},
+            ${versions.systemVersion}, ${JSON.stringify(delta)}::jsonb)
+    ON CONFLICT (owner_id, target_kind, target_id)
+      DO UPDATE SET delta = EXCLUDED.delta, base_version = EXCLUDED.base_version`);
+  await bumpOwnerRegistryVersion(tx, ownerId);
+}
+
+async function readDeltaRow(
+  tx: Tx,
+  ownerId: string,
+  kind: RegistryDeltaTargetKind,
+  targetId: string,
+): Promise<unknown> {
+  const rows = (await tx.execute(sql`
+    SELECT delta FROM registry_deltas
+    WHERE owner_id = ${ownerId}::uuid AND target_kind = ${kind} AND target_id = ${targetId}`)) as unknown as RawRow[];
+  return rows[0]?.delta;
+}
+
+async function removeDeltaRow(
+  tx: Tx,
+  ownerId: string,
+  kind: RegistryDeltaTargetKind,
+  targetId: string,
+): Promise<void> {
+  await tx.execute(sql`DELETE FROM registry_deltas
+     WHERE owner_id = ${ownerId}::uuid AND target_kind = ${kind} AND target_id = ${targetId}`);
+  await bumpOwnerRegistryVersion(tx, ownerId);
+}
+
+export async function readContractDelta(
+  tx: Tx,
+  ownerId: string,
+  contractId: string,
+): Promise<ContractDelta | null> {
+  const delta = await readDeltaRow(tx, ownerId, 'contract', contractId);
+  return delta === undefined ? null : (delta as ContractDelta);
+}
+
+export async function setContractDelta(
+  tx: Tx,
+  ownerId: string,
+  contractId: string,
+  delta: ContractDelta,
+): Promise<void> {
+  const parsed = contractDeltaSchema.safeParse(delta);
+  if (!parsed.success) {
+    throw new ExecError('VALIDATION', `дельта контракта ${contractId} не разбирается схемой`, {
+      reason: 'DELTA_MALFORMED',
+      contract: contractId,
+      issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+    });
+  }
+  const rows = await loadRegistryRows(tx, ownerId);
+  if (!rows.contracts.has(contractId)) {
+    throw new ExecError('NOT_FOUND', `контракта ${contractId} нет в реестре`, {
+      contract: contractId,
+    });
+  }
+  await writeDeltaRow(tx, ownerId, 'contract', contractId, parsed.data, rows);
+}
+
+export async function removeContractDelta(
+  tx: Tx,
+  ownerId: string,
+  contractId: string,
+): Promise<void> {
+  await removeDeltaRow(tx, ownerId, 'contract', contractId);
+}
+
+export async function readSubscriptionDelta(
+  tx: Tx,
+  ownerId: string,
+  subscriptionId: string,
+): Promise<SubscriptionDelta | null> {
+  const delta = await readDeltaRow(tx, ownerId, 'subscription', subscriptionId);
+  return delta === undefined ? null : (delta as SubscriptionDelta);
+}
+
+export async function setSubscriptionDelta(
+  tx: Tx,
+  ownerId: string,
+  subscriptionId: string,
+  delta: SubscriptionDelta,
+): Promise<void> {
+  const parsed = subscriptionDeltaSchema.safeParse(delta);
+  if (!parsed.success) {
+    throw new ExecError('VALIDATION', `дельта подписки ${subscriptionId} не разбирается схемой`, {
+      reason: 'DELTA_MALFORMED',
+      subscription: subscriptionId,
+      issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+    });
+  }
+  const rows = await loadRegistryRows(tx, ownerId);
+  if (!rows.subscriptions.has(subscriptionId)) {
+    throw new ExecError('NOT_FOUND', `подписки ${subscriptionId} нет в реестре`, {
+      subscription: subscriptionId,
+    });
+  }
+  await writeDeltaRow(tx, ownerId, 'subscription', subscriptionId, parsed.data, rows, (probe) => {
+    // СМЫСЛ ПРОВЕРЯЕТСЯ ЗДЕСЬ, а не в applyDeltas: на записи владелец видит отказ и может его исправить,
+    // на чтении — только запертый реестр (Р-И-7).
+    const merged = probe.subscriptions.get(subscriptionId);
+    if (merged !== undefined) assertSubscription(merged, { reg: probe, systemSeed: false });
+  });
+}
+
+export async function removeSubscriptionDelta(
+  tx: Tx,
+  ownerId: string,
+  subscriptionId: string,
+): Promise<void> {
+  await removeDeltaRow(tx, ownerId, 'subscription', subscriptionId);
 }
 
 // ---------------------------------------------------------------------------

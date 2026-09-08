@@ -3,13 +3,14 @@
 // базы: это первые писатели реестра снаружи сида, и всё, что здесь проверяется, — про то,
 // как они ведут себя с ДАННЫМИ ВЛАДЕЛЬЦА, а не про форму входа.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import { AGENDA_DEF, newId } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
+import type { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
@@ -19,7 +20,14 @@ import { seedOwnerGraph, seedSmartListId } from '../seed/onboarding';
 import { SEED_SMART_LISTS } from '../seed/smart-lists';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { effectiveRegistry } from './cache';
-import { collectPropertyHolders } from './ops';
+import {
+  collectPropertyHolders,
+  lockOwnerRegistry,
+  readContractDelta,
+  removeContractDelta,
+  setContractDelta,
+  setSubscriptionDelta,
+} from './ops';
 import { readRegistryVersions } from './version';
 
 requireEnv();
@@ -564,6 +572,58 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
     expect(undone.ok).toBe(true);
     const reg = await withIdentity(db, deltaOwner, (tx) => effectiveRegistry(tx, deltaOwner));
     expect(reg.aspects.get('orbis/note')?.viewConfig.icon).toBe('📗');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §Б5-1/2: дельты контракта и подписки
+// ---------------------------------------------------------------------------
+
+describe('дельты контракта и подписки (§Б5-1/2)', () => {
+  const o = freshUserId();
+  // Замок берётся ПЕРВЫМ statement'ом транзакции — ровно как его берёт исполнитель (§А10-2):
+  // функции реестра своего замка не берут, и два места, знающие порядок захвата, — это дедлок.
+  const inTx = <T>(fn: (tx: Tx) => Promise<T>) =>
+    withIdentity(db, o, async (tx) => {
+      await lockOwnerRegistry(tx, o);
+      return fn(tx);
+    });
+  test('set пишет набор, read читает, remove снимает', async () => {
+    await inTx((tx) =>
+      setContractDelta(tx, o, 'orbis/completable', { setsDelta: { my_open: ['active'] } }),
+    );
+    const reg = await withIdentity(db, o, (tx) => effectiveRegistry(tx, o));
+    expect(Object.keys(reg.contracts.get('orbis/completable')?.sets ?? {})).toContain('my_open');
+    expect(
+      (await inTx((tx) => readContractDelta(tx, o, 'orbis/completable')))?.setsDelta.my_open,
+    ).toEqual(['active']);
+    await inTx((tx) => removeContractDelta(tx, o, 'orbis/completable'));
+    const back = await withIdentity(db, o, (tx) => effectiveRegistry(tx, o));
+    expect(Object.keys(back.contracts.get('orbis/completable')?.sets ?? {})).not.toContain(
+      'my_open',
+    );
+  });
+  test('НЕПРИМЕНИМАЯ дельта набора отвергается ДО записи — реестр остаётся читаемым', async () => {
+    const e = await inTx((tx) =>
+      setContractDelta(tx, o, 'orbis/completable', { setsDelta: { closed: ['active'] } }),
+    ).catch((x) => x);
+    expect((e as ExecError).code).toBe('VALIDATION');
+    await withIdentity(db, o, (tx) => effectiveRegistry(tx, o)); // читается
+  });
+  test('дельта на цель, которой нет в реестре, — NOT_FOUND', async () => {
+    for (const call of [
+      (tx: Tx) => setContractDelta(tx, o, 'orbis/net-takogo', { setsDelta: {} }),
+      (tx: Tx) => setSubscriptionDelta(tx, o, 'orbis/agenda', { definition: AGENDA_DEF }),
+    ]) {
+      expect(((await inTx(call).catch((x) => x)) as ExecError).code).toBe('NOT_FOUND');
+    }
+  });
+  test('версия реестра владельца двигается каждой записью (§А10-1)', async () => {
+    const before = await withIdentity(db, o, (tx) => readRegistryVersions(tx, o));
+    await inTx((tx) => setContractDelta(tx, o, 'orbis/when', { setsDelta: {} }));
+    expect((await withIdentity(db, o, (tx) => readRegistryVersions(tx, o))).ownerVersion).toBe(
+      before.ownerVersion + 1,
+    );
   });
 });
 
