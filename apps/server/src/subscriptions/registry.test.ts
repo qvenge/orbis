@@ -8,6 +8,7 @@ import {
   AGENDA_DEF,
   type BindingIndex,
   BUDGET_DEF,
+  type BudgetSubscription,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -29,7 +30,14 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { effectiveRegistry } from '../registry/cache';
 import { loadRegistryRows, type RegistrySnapshot, type SubscriptionRow } from '../registry/load';
-import { assertSubscription, exprSitesOf, rawValueRefs, resolveSlotOnEntity } from './registry';
+import { agendaSubscriptionOf } from './agenda';
+import {
+  assertSubscription,
+  builtinSubscription,
+  exprSitesOf,
+  rawValueRefs,
+  resolveSlotOnEntity,
+} from './registry';
 
 requireEnv();
 
@@ -339,5 +347,37 @@ describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с
       VALUES ('user/broken', ${owner}::uuid, 'planner/agenda', '{"engine":"agenda"}'::jsonb, NULL, 1)`);
     await ac.end();
     await expect(withIdentity(db, owner, (tx) => loadRegistryRows(tx, owner))).rejects.toThrow();
+  });
+});
+
+describe('builtinSubscription: эффективная декларация из снимка', () => {
+  const userA = freshUserId();
+  test('orbis/budget-overview читается из снимка уже разобранным', async () => {
+    await withIdentity(db, userA, async (tx) => {
+      const def = builtinSubscription(await effectiveRegistry(tx, userA), 'orbis/budget-overview');
+      expect(def.engine).toBe('budget');
+      expect((def as BudgetSubscription).alerts.warn_at).toBe('0.85');
+    });
+  });
+  test('неизвестный id — NOT_FOUND, а не пустота (§С8-3)', async () => {
+    await withIdentity(db, userA, async (tx) => {
+      const reg = await effectiveRegistry(tx, userA);
+      let caught: ExecError | null = null;
+      try {
+        builtinSubscription(reg, 'orbis/nope');
+      } catch (e) {
+        caught = e as ExecError;
+      }
+      expect(caught).toBeInstanceOf(ExecError);
+      expect(caught?.code).toBe('NOT_FOUND');
+    });
+  });
+  test('agendaSubscriptionOf — обёртка над ним: тот же литерал, что в снимке (M12)', async () => {
+    // Узкая обёртка задачи 6 обязана остаться СИНОНИМОМ общего чтения, а не вторым путём:
+    // разойдись они — повестка и Budget читали бы разные реестры в одной транзакции.
+    await withIdentity(db, userA, async (tx) => {
+      const reg = await effectiveRegistry(tx, userA);
+      expect(agendaSubscriptionOf(reg)).toBe(builtinSubscription(reg, 'orbis/agenda'));
+    });
   });
 });

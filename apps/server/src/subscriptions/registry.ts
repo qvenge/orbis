@@ -553,3 +553,21 @@ export function resolveSlotOnEntity(
     },
   );
 }
+
+/**
+ * Эффективная декларация подписки владельца. Второго чтения тут нет: снимок уже слил систему с
+ * дельтой (`applyDeltas`), и отдельный запрос вернул бы реестр, которого в транзакции движка ещё
+ * нет — тот же довод, что у `effectiveRegistry`.
+ *
+ * Отказ, а не пустая выдача: незасеянный реестр обязан быть виден как поломка сида (§С8-3), иначе
+ * владелец увидел бы пустой Overview там, где на самом деле нечем считать.
+ */
+export function builtinSubscription(reg: RegistrySnapshot, id: string): SubscriptionDefinition {
+  const row = reg.subscriptions.get(id);
+  if (row === undefined) {
+    throw new ExecError('NOT_FOUND', `подписка '${id}' не найдена в реестре — пересейте реестры`, {
+      subscription: id,
+    });
+  }
+  return row.definition;
+}

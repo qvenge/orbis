@@ -31,34 +31,30 @@ import { queryContext } from '../query/context';
 import { wallClockIn } from '../recurring/materialize';
 import type { RegistrySnapshot } from '../registry/load';
 import { toWireEntityFromSql } from '../wire';
-import { resolveSlotOnEntity } from './registry';
+import { builtinSubscription, resolveSlotOnEntity } from './registry';
 
 export const AGENDA_SUBSCRIPTION_ID = 'orbis/agenda';
 /** Строка entities в подзапросе — алиас `e`, тот же, что у `compileQueryAst`. */
 const ROW: SQL = sql.raw('e');
 
 /**
- * Декларация Agenda из снимка реестра. Читатель строки снимка здесь пока один, поэтому и хелпер
- * узкий; задача 9 заводит общий `builtinSubscription(reg, id)` (`subscriptions/registry.ts`) и
- * обобщает ЭТУ функцию до обёртки над ним (M12) — имя, сигнатура и оба отказа ниже остаются, так
- * что ни движок, ни роутер при этом не правятся.
+ * Декларация Agenda из снимка реестра — УЗКАЯ ОБЁРТКА над общим `builtinSubscription`
+ * (`subscriptions/registry.ts`, задача 9, M12): имя, сигнатура и оба отказа те же, что были, а
+ * чтение строки снимка — одно на оба движка. Второе чтение разошлось бы с первым ровно там, где
+ * это дороже всего: у владельца с дельтой подписки, применённой к одному движку и не к другому.
+ *
+ * Сужение типа остаётся здесь: `builtinSubscription` отвечает союзом деклараций, а движку повестки
+ * нужна именно `agenda` — и «объявлена чужим движком» обязано быть отказом, а не пустой повесткой.
  */
 export function agendaSubscriptionOf(reg: RegistrySnapshot): AgendaSubscription {
-  const row = reg.subscriptions.get(AGENDA_SUBSCRIPTION_ID);
-  // Отказ, а не пустая повестка: незасеянный реестр обязан быть виден как поломка сида.
-  if (row === undefined)
-    throw new ExecError(
-      'NOT_FOUND',
-      `подписка '${AGENDA_SUBSCRIPTION_ID}' не засеяна — пересейте реестры`,
-      { subscription: AGENDA_SUBSCRIPTION_ID },
-    );
-  if (row.definition.engine !== 'agenda')
+  const definition = builtinSubscription(reg, AGENDA_SUBSCRIPTION_ID);
+  if (definition.engine !== 'agenda')
     throw new ExecError(
       'VALIDATION',
-      `подписка '${AGENDA_SUBSCRIPTION_ID}' объявлена движком '${row.definition.engine}'`,
+      `подписка '${AGENDA_SUBSCRIPTION_ID}' объявлена движком '${definition.engine}'`,
       { reason: 'SUBSCRIPTION_ENGINE', subscription: AGENDA_SUBSCRIPTION_ID },
     );
-  return row.definition;
+  return definition;
 }
 
 /** Привязка контракта, реализующая ИМЕННО этот слот: аспект + свойство под ним. */
