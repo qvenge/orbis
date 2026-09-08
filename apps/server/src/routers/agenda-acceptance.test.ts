@@ -2,9 +2,12 @@
 // Task D6a — приёмка 02-core-os §8.1–8.4 (Agenda) на СЕРВЕРНОЙ стороне.
 //
 // Клиентская половина приёмки живёт в apps/web/src/features/agenda/AgendaScreen.test.tsx:
-// там пиннятся ДОСЛОВНЫЕ строки грамматики §6.1, которые шлёт вкладка «Повестка», и
-// проверяется раскладка по секциям на моках. Здесь проверяется СМЫСЛ тех же строк на
-// живой БД: какие сущности реальный компилятор §6.1 действительно вернёт и какие — нет.
+// там проверяется раскладка по секциям на моках. Здесь проверяется СМЫСЛ выборки на живой
+// БД: какие сущности подписка `orbis/agenda` действительно вернёт и какие — нет.
+//
+// Вкладка спрашивает ОДНОЙ ручкой `agenda.list` (§А5-5), поэтому и приёмка спрашивает ею:
+// собственных текстов запроса у Повестки больше нет, а паритет §С8-17 и означает, что все
+// четыре пункта §8.1–§8.4 остались зелёными после перевода на подписку.
 // Пункты §8.1 («остаётся доступна в Browser») и §8.4 («видна в Daily Planning/Upcoming»)
 // вне вкладки Agenda вообще и на клиентских моках недоказуемы.
 //
@@ -13,8 +16,12 @@
 // Ни одна фикстура не recurring: K15 — start_at=overdue расширяет окно материализации
 // только до [today; today], прошлое задним числом не материализуется.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { addDays } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { type AgendaSubscription, addDays, BUILTIN_SUBSCRIPTION_DEFS } from '@orbis/shared';
+import { TRPCError } from '@trpc/server';
+import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
+import { ExecError } from '../errors';
+import { setSubscriptionDelta } from '../registry/ops';
 import { appRouter } from '../router';
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '../seed/smart-lists';
 import { createCallerFactory } from '../trpc';
@@ -31,17 +38,6 @@ const tomorrow = addDays(today, 1);
 
 /** Момент 'YYYY-MM-DDTHH:MM:00+03:00' — фиксированное смещение Europe/Moscow. */
 const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
-
-// --- три строки вкладки «Повестка» (apps/web/src/features/agenda/useAgenda.ts) ---------
-// Скопированы дословно; на web-стороне они пиннятся тестом «Agenda шлёт три запроса
-// грамматики §6.1 дословно», поэтому расхождение поймает та проверка, а не молчание.
-
-const DAYS_QUERY =
-  'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200';
-const OVERDUE_DUE_QUERY =
-  'aspect=orbis/task, orbis/due_date=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=200';
-const OVERDUE_START_QUERY =
-  'aspect=orbis/task, aspect=orbis/schedule, orbis/start_at=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/start_at:asc, limit=200';
 
 /** Browser без фильтров (apps/web/src/features/browser/query.ts browserQuery). */
 const BROWSER_QUERY = 'sortBy=orbis/updated_at:desc, limit=50';
@@ -80,11 +76,17 @@ async function createEntity(user: string, title: string, form: NewForm): Promise
   return e.id;
 }
 
-/** id'шники выдачи запроса — состав важен, порядок здесь не проверяется. */
-async function idsOf(user: string, query: string): Promise<Set<string>> {
-  const rows = await callerFor(user).entity.query({ query });
-  return new Set(rows.map((r) => r.id));
-}
+/** Секция повестки одним вызовом — ровно тем, которым её читает вкладка. */
+const agendaIds = async (u: string, section: 'window' | 'overdue') =>
+  new Set(
+    (await callerFor(u).agenda.list({ days: 8 })).rows
+      .filter((r) => r.section === section)
+      .map((r) => r.entity.id),
+  );
+
+/** Browser и сид-списки остаются на entity.query — они не подписка. */
+const queryIds = async (u: string, query: string) =>
+  new Set((await callerFor(u).entity.query({ query })).map((r) => r.id));
 
 beforeAll(async () => {
   await truncateAll();
@@ -104,14 +106,13 @@ describe('приёмка 02-core-os §8.1: прошедшее чистое со�
       aspects: ['orbis/schedule'],
     });
 
-    // Обе выборки §4.2 требуют aspect=orbis/task — чистое событие отсекается ими обеими.
-    // Именно второй запрос нетривиален: два aspect= в одной строке компилируются в AND.
-    expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(event)).toBe(false);
-    expect((await idsOf(user, OVERDUE_START_QUERY)).has(event)).toBe(false);
+    // Просроченное требует членства в наборе `open` контракта завершаемости (§Б5-6): у
+    // чистого события класса нет вовсе, и обе причины просрочки — срок и начало — мимо.
+    expect((await agendaIds(user, 'overdue')).has(event)).toBe(false);
 
     // …и при этом сущность жива и находится обычным списком Browser (02 §3)
-    expect((await idsOf(user, BROWSER_QUERY)).has(event)).toBe(true);
-    expect((await idsOf(user, `aspect=orbis/schedule, ${BROWSER_QUERY}`)).has(event)).toBe(true);
+    expect((await queryIds(user, BROWSER_QUERY)).has(event)).toBe(true);
+    expect((await queryIds(user, `aspect=orbis/schedule, ${BROWSER_QUERY}`)).has(event)).toBe(true);
   });
 
   test('та же сущность с добавленным orbis/task попадает в «Просроченное» по start_at', async () => {
@@ -122,7 +123,7 @@ describe('приёмка 02-core-os §8.1: прошедшее чистое со�
       props: { 'orbis/start_at': at(yesterday, '10:00') },
       aspects: ['orbis/schedule'],
     });
-    expect((await idsOf(user, OVERDUE_START_QUERY)).has(event)).toBe(false);
+    expect((await agendaIds(user, 'overdue')).has(event)).toBe(false);
 
     await callerFor(user).entity.update({
       id: event,
@@ -131,7 +132,7 @@ describe('приёмка 02-core-os §8.1: прошедшее чистое со�
       },
       aspects: { attach: ['orbis/task'] },
     });
-    expect((await idsOf(user, OVERDUE_START_QUERY)).has(event)).toBe(true);
+    expect((await agendaIds(user, 'overdue')).has(event)).toBe(true);
   });
 });
 
@@ -153,11 +154,14 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
       aspects: ['orbis/task', 'orbis/schedule'],
     });
 
-    const overdue = await idsOf(user, OVERDUE_DUE_QUERY);
+    const overdue = await agendaIds(user, 'overdue');
     expect(overdue.has(bare)).toBe(true);
     expect(overdue.has(scheduled)).toBe(true);
-    // вторая выборка §4.2 к делу не относится: её start_at не просрочен
-    expect((await idsOf(user, OVERDUE_START_QUERY)).has(scheduled)).toBe(false);
+    // …и просрочена она ПО СРОКУ: начало в будущем, слот строки обязан назвать причину
+    const rows = (await callerFor(user).agenda.list({ days: 8 })).rows;
+    expect(rows.find((r) => r.entity.id === scheduled && r.section === 'overdue')?.slot).toBe(
+      'deadline',
+    );
   });
 
   test('после done исчезает', async () => {
@@ -166,7 +170,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
     });
-    expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(true);
+    expect((await agendaIds(user, 'overdue')).has(task)).toBe(true);
 
     await callerFor(user).entity.update({
       id: task,
@@ -175,7 +179,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
       },
       aspects: { attach: ['orbis/task'] },
     });
-    expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(false);
+    expect((await agendaIds(user, 'overdue')).has(task)).toBe(false);
   });
 
   test('после переноса срока исчезает', async () => {
@@ -184,7 +188,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
     });
-    expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(true);
+    expect((await agendaIds(user, 'overdue')).has(task)).toBe(true);
 
     await callerFor(user).entity.update({
       id: task,
@@ -193,7 +197,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
       },
       aspects: { attach: ['orbis/task'] },
     });
-    expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(false);
+    expect((await agendaIds(user, 'overdue')).has(task)).toBe(false);
   });
 
   test('после архивации исчезает', async () => {
@@ -202,19 +206,18 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
     });
-    expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(true);
+    expect((await agendaIds(user, 'overdue')).has(task)).toBe(true);
 
     await callerFor(user).entity.update({ id: task, archived: true });
-    expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(false);
+    expect((await agendaIds(user, 'overdue')).has(task)).toBe(false);
   });
 });
 
 describe('приёмка 02-core-os §8.3: task+schedule с обеими прошедшими датами', () => {
-  // «Task + schedule с прошедшим start_at показывается в „Просроченном“ один раз,
-  // даже если одновременно просрочен due_date». Сервер отдаёт плоские выборки —
-  // сущность приходит В ОБЕИХ, и именно поэтому клиент обязан слить их по id
-  // (одна строка секции — AgendaScreen.test.tsx §8.3).
-  test('сущность приходит в обеих выборках, в каждой — ровно одной строкой', async () => {
+  // «Task + schedule с прошедшим start_at показывается в „Просроченном“ один раз, даже если
+  // одновременно просрочен due_date». Слияние по id уехало на сервер (§Б5-6): выборка одна,
+  // и одна строка секции — теперь утверждение об ЭТОЙ выборке, а не о работе клиента.
+  test('обе причины просрочки — ОДНА строка секции, слияние сделал сервер', async () => {
     const user = freshUserId();
     const both = await createEntity(user, 'Подтвердить созвон', {
       props: {
@@ -225,12 +228,12 @@ describe('приёмка 02-core-os §8.3: task+schedule с обеими про�
       aspects: ['orbis/task', 'orbis/schedule'],
     });
 
-    const byDue = await callerFor(user).entity.query({ query: OVERDUE_DUE_QUERY });
-    const byStart = await callerFor(user).entity.query({ query: OVERDUE_START_QUERY });
-    expect(byDue.filter((r) => r.id === both)).toHaveLength(1);
-    expect(byStart.filter((r) => r.id === both)).toHaveLength(1);
-    // объединение двух выборок = один элемент «Просроченного»
-    expect(new Set([...byDue, ...byStart].map((r) => r.id)).size).toBe(1);
+    const overdue = (await callerFor(user).agenda.list({ days: 8 })).rows.filter(
+      (r) => r.section === 'overdue',
+    );
+    expect(overdue.filter((r) => r.entity.id === both)).toHaveLength(1);
+    // Дата строки — более ранняя из двух (срок), и слот назван ею же
+    expect([overdue[0]?.at, overdue[0]?.slot]).toEqual([addDays(today, -3), 'deadline']);
   });
 });
 
@@ -249,11 +252,11 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
     });
 
     // сид-списки владельца (02 §3.3) — задачи там видны обе, каждая в своём списке
-    expect((await idsOf(user, DAILY_TODAY_QUERY)).has(dueToday)).toBe(true);
-    expect((await idsOf(user, UPCOMING_7D_QUERY)).has(dueTomorrow)).toBe(true);
+    expect((await queryIds(user, DAILY_TODAY_QUERY)).has(dueToday)).toBe(true);
+    expect((await queryIds(user, UPCOMING_7D_QUERY)).has(dueTomorrow)).toBe(true);
 
     // дневное окно Agenda требует orbis/schedule — одного due_date недостаточно (§4.1)
-    const days = await idsOf(user, DAYS_QUERY);
+    const days = await agendaIds(user, 'window');
     expect(days.has(dueToday)).toBe(false);
     expect(days.has(dueTomorrow)).toBe(false);
   });
@@ -264,7 +267,7 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
       props: { 'orbis/task_status': 'planned', 'orbis/due_date': tomorrow },
       aspects: ['orbis/task'],
     });
-    expect((await idsOf(user, DAYS_QUERY)).has(task)).toBe(false);
+    expect((await agendaIds(user, 'window')).has(task)).toBe(false);
 
     await callerFor(user).entity.update({
       id: task,
@@ -274,10 +277,87 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
       aspects: { attach: ['orbis/schedule'] },
     });
 
-    const rows = await callerFor(user).entity.query({ query: DAYS_QUERY });
-    const row = rows.find((r) => r.id === task);
+    const rows = (await callerFor(user).agenda.list({ days: 8 })).rows;
+    const row = rows.find((r) => r.entity.id === task && r.section === 'window');
     expect(row).toBeDefined();
-    // «в соответствующем дне»: раскладку по секциям делает клиент по этому же start_at
-    expect(row?.props['orbis/start_at']).toBe(at(tomorrow, '14:00'));
+    // «в соответствующем дне»: раскладку по дням делает клиент по этому же значению слота
+    expect([row?.at, row?.slot]).toEqual([at(tomorrow, '14:00'), 'moment']);
+  });
+});
+
+describe('приёмка §С8-17: просрочено по сроку ИЛИ по началу — одним запросом', () => {
+  test('обе причины в одной секции, дата строки — более ранняя из двух', async () => {
+    const user = freshUserId();
+    const byDue = await createEntity(user, 'Закончить API', {
+      props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+      aspects: ['orbis/task'],
+    });
+    const byStart = await createEntity(user, 'Подтвердить созвон', {
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/due_date': addDays(today, 3),
+        'orbis/start_at': at(yesterday, '09:00'),
+      },
+      aspects: ['orbis/task', 'orbis/schedule'],
+    });
+    const overdue = (await callerFor(user).agenda.list({ days: 8 })).rows.filter(
+      (r) => r.section === 'overdue',
+    );
+    expect(new Set(overdue.map((r) => r.entity.id))).toEqual(new Set([byDue, byStart]));
+    // У задачи с прошедшим НАЧАЛОМ и будущим сроком дата строки — день начала, не срок
+    const row = overdue.find((r) => r.entity.id === byStart);
+    expect([row?.at, row?.slot]).toEqual([yesterday, 'moment']);
+  });
+});
+
+describe('приёмка §С8-21 сквозь ручку: две привязки слота без prefer — отказ, с prefer — строка', () => {
+  test('SLOT_AMBIGUOUS доезжает до клиента структурно; prefer в дельте подписки его снимает', async () => {
+    const user = freshUserId();
+    // Свой аспект со слотом `moment` — ДЕКЛАРАЦИЕЙ (0d расширила `CustomAspectSpec` полем `implements`).
+    // Имя — `probe`, не `gate`: токены гейта разрешены только фикстуре 0d и golden (Р-К-27).
+    await seedCustomAspect(user, {
+      key: 'user/probe-when',
+      label: { ru: 'Проба момента' },
+      properties: [{ key: 'probe_at', type: { kind: 'timestamp' } }],
+      implements: [
+        { contract: 'orbis/when', bind: { moment: 'user/probe_at' }, value_map: [], fixed: {} },
+      ],
+    });
+    const id = await createEntity(user, 'Две привязки момента', {
+      aspects: ['user/probe-when', 'orbis/schedule'],
+      props: { 'user/probe_at': at(tomorrow, '10:00'), 'orbis/start_at': at(tomorrow, '12:00') },
+    });
+    // Без prefer — отказ ДВИЖКА (не строки `rowOf` в юните задачи 5), и он структурный: `execErrorToTRPC`
+    // кладёт исходный ExecError в `cause` (`errors.ts`), клиент видит код, подписку и сущность.
+    const failed = await callerFor(user)
+      .agenda.list({ days: 8 })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(failed).toBeInstanceOf(TRPCError);
+    const cause = (failed as TRPCError).cause;
+    expect(cause).toBeInstanceOf(ExecError);
+    const details = (cause as ExecError).details as
+      | { subscription?: string; entityId?: string }
+      | undefined;
+    expect([(cause as ExecError).code, details?.subscription, details?.entityId]).toEqual([
+      'SLOT_AMBIGUOUS',
+      'orbis/agenda',
+      id,
+    ]);
+    // `prefer` — дельта подписки владельца (§Б5-2): слот `moment` читается из `orbis/schedule`.
+    const seeded = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
+      ?.definition as AgendaSubscription;
+    await withIdentity(db, user, (tx) =>
+      setSubscriptionDelta(tx, user, 'orbis/agenda', {
+        definition: { ...seeded, show: { ...seeded.show, prefer: ['orbis/schedule'] } },
+      }),
+    );
+    const row = (await callerFor(user).agenda.list({ days: 8 })).rows.find(
+      (r) => r.entity.id === id,
+    );
+    expect([row?.section, row?.slot]).toEqual(['window', 'moment']);
+    expect(new Date(row?.at ?? '').getTime()).toBe(new Date(at(tomorrow, '12:00')).getTime()); // start_at, не probe_at
   });
 });

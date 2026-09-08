@@ -6,6 +6,7 @@
 // мёртвой — а на её мнимой живости держалось объяснение, почему колонка `schema` не видит
 // дельт. Реестр аспектов отдаёт `registry.effective`: там три словаря, версия снимка и
 // эффективные определения (система ⊕ строки владельца ⊕ дельты).
+import { agendaRouter } from './routers/agenda';
 import { agentRunRouter } from './routers/agent-run';
 import { aiRouter } from './routers/ai';
 import { budgetRouter } from './routers/budget';
@@ -33,6 +34,8 @@ export const appRouter = router({
   // строит подписи, формы и каталог полей — вместо рукописных словарей в коде.
   registry: registryRouter,
   budget: budgetRouter,
+  // Поверхность «Повестка» одной подпиской (§А5-5): три запроса вкладки сведены в один
+  agenda: agendaRouter,
   import: importRouter,
   // Закреплённые версии тела (С11): страховка владельца перед работой агента
   version: versionRouter,
