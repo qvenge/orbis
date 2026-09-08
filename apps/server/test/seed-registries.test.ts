@@ -68,7 +68,7 @@ describe('сид пяти реестров', () => {
       expect(await ids(db, 'subscription_definitions')).toEqual(
         [...BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id)].sort(),
       );
-      expect(BUILTIN_SUBSCRIPTION_DEFS.length).toBe(1); // число отдельно от состава
+      expect(BUILTIN_SUBSCRIPTION_DEFS.length).toBe(2); // число отдельно от состава
     } finally {
       await client.end();
     }
@@ -411,7 +411,7 @@ describe('сид пяти реестров', () => {
         roles: 11,
         aspects: 13,
         contracts: 6,
-        subscriptions: 1,
+        subscriptions: 2,
         version: before + 1,
         mergedDeltas: 0,
         conflicts: [],
