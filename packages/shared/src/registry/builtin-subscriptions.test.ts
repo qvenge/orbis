@@ -5,7 +5,7 @@
 // реформы, а не мелочь стиля: ради него вся часть Б и затевалась.
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_CONTRACT_DEFS } from './builtin-contracts';
-import { BUILTIN_SUBSCRIPTION_DEFS } from './builtin-subscriptions';
+import { BUDGET_OVERVIEW_SUBSCRIPTION, BUILTIN_SUBSCRIPTION_DEFS } from './builtin-subscriptions';
 import { AGENDA_DEF, BUDGET_DEF } from './subscription-fixtures';
 import { type BudgetSubscription, subscriptionDefinitionSchema } from './subscription-type';
 
@@ -47,6 +47,8 @@ describe('подписка Budget §Б5-4: форма декларации', () 
   const def = row?.definition as BudgetSubscription | undefined;
 
   test('вторая встроенная подписка: поверхность finance/budget-overview, модуль finance', () => {
+    // Именованная запись и элемент массива — ОДИН объект, а не копия.
+    expect(row).toBe(BUDGET_OVERVIEW_SUBSCRIPTION);
     expect(row?.surface).toBe('finance/budget-overview');
     expect(row?.module).toBe('finance');
     expect(BUILTIN_SUBSCRIPTION_DEFS).toHaveLength(2); // agenda (задача 6) + budget

@@ -10,6 +10,16 @@
 import { AGENDA_DEF, BUDGET_DEF } from './subscription-fixtures';
 import type { BuiltinSubscriptionDef } from './subscription-type';
 
+/** Обзор бюджета §Б5-4 — названа отдельно: на неё ссылаются сьюты сида и наборов контракта,
+ *  а поиск по массиву в каждом из них означал бы три места, знающих её id. */
+export const BUDGET_OVERVIEW_SUBSCRIPTION: BuiltinSubscriptionDef = {
+  id: 'orbis/budget-overview',
+  surface: 'finance/budget-overview',
+  module: 'finance',
+  rank: 20,
+  definition: BUDGET_DEF,
+};
+
 export const BUILTIN_SUBSCRIPTION_DEFS: readonly BuiltinSubscriptionDef[] = [
   {
     id: 'orbis/agenda',
@@ -18,11 +28,5 @@ export const BUILTIN_SUBSCRIPTION_DEFS: readonly BuiltinSubscriptionDef[] = [
     rank: 10,
     definition: AGENDA_DEF,
   },
-  {
-    id: 'orbis/budget-overview',
-    surface: 'finance/budget-overview',
-    module: 'finance',
-    rank: 20,
-    definition: BUDGET_DEF,
-  },
+  BUDGET_OVERVIEW_SUBSCRIPTION,
 ];
