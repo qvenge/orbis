@@ -17,6 +17,7 @@ import {
   type RelationRoleDefinition,
 } from '@orbis/shared';
 import { QUERY_DEPTH_CAP, type QueryAst, type QueryFilterNode } from '@orbis/shared/query';
+import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { ExecError } from '../errors';
 import type { RegistrySnapshot } from '../registry/load';
@@ -26,6 +27,8 @@ import {
   compileLatestAst,
   compileQueryAst,
   compileSumAst,
+  ENTITY_SELECT_COLUMNS,
+  propertyLocalDateExpr,
 } from './compile-ast';
 
 const dialect = new PgDialect();
@@ -55,6 +58,11 @@ function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
 }
 
 const CTX = ctxOf();
+
+/** Текст готового выражения (не запроса): `sqlOf` ниже собирает запрос ПО УЗЛУ фильтра. */
+function rawSql(fragment: SQL): string {
+  return dialect.sqlToQuery(fragment).sql;
+}
 
 /** Плоский SQL запроса по одному узлу фильтра. */
 function sqlOf(filter: QueryFilterNode | null, ctx: CompileCtx = CTX): string {
@@ -588,5 +596,35 @@ describe('агрегаты: тип свойства решает, можно л�
     expect(count.sql).not.toContain('ORDER BY');
     const where = (s: string) => s.slice(s.indexOf(' WHERE '), s.length);
     expect(where(count.sql)).toBe(where(full.sql.slice(0, full.sql.indexOf(' ORDER BY '))));
+  });
+});
+
+// Оба имени экспортированы ради ОДНОГО потребителя — движков подписок (§Б5-6): им нужны не
+// предикат и не готовый SELECT, а кирпичи — список колонок под свою обёртку и дата значения
+// свойства под BETWEEN окна. Копии рядом разошлись бы с запросами молча, и здесь пиннится
+// именно совпадение, а не сам факт экспорта.
+describe('экспорты для движков подписок (§Б5-6)', () => {
+  test('ENTITY_SELECT_COLUMNS — те же колонки, что собирает toWireEntityFromSql', () => {
+    expect(ENTITY_SELECT_COLUMNS.split(', ')).toEqual([
+      'id',
+      'owner_id',
+      'title',
+      'emoji',
+      'body',
+      'body_refs',
+      'tags',
+      'props',
+      'aspects',
+      'query_refs',
+      'created_at',
+      'updated_at',
+      'archived',
+    ]);
+  });
+  test('propertyLocalDateExpr: date — как есть, timestamp — в таймзоне владельца', () => {
+    const ctx = ctxOf({ timeZone: 'Europe/Moscow' });
+    expect(rawSql(propertyLocalDateExpr('orbis/due_date', ctx))).not.toContain('AT TIME ZONE');
+    expect(rawSql(propertyLocalDateExpr('orbis/start_at', ctx))).toContain('AT TIME ZONE');
+    expect(() => propertyLocalDateExpr('orbis/task_status', ctx)).toThrow(/date\/timestamp/);
   });
 });

@@ -338,3 +338,38 @@ describe('SQL-бэкенд E: членство в наборе', () => {
     ).toContain('r.target_id = e.id');
   });
 });
+
+// Ф-Б1-19: чекер обещает, что момент читается В ТАЙМЗОНЕ ВЛАДЕЛЬЦА, а сравнение timestamptz
+// с `'…'::date` Postgres делает в СЕССИОННОЙ зоне — на границе суток это разные ответы.
+describe('дата против момента: календарный день владельца (Ф-Б1-19)', () => {
+  const ctx = ctxOf({ timeZone: 'Europe/Moscow', today: '2026-07-03' });
+  const cmp = (op: '<' | '=', left: string): ExprNode => ({
+    op,
+    args: [{ prop: left }, { ctx: '$today' }],
+  });
+
+  test('timestamp против $today — обе стороны приведены к дню владельца', () => {
+    // Момент 2026-07-02T23:30Z — это уже 3 июля по Москве, то есть СЕГОДНЯ и не просрочено.
+    // Сессионная зона (UTC) назвала бы его вчерашним, и просроченным стало бы дело,
+    // назначенное на сегодняшнее утро владельца.
+    expect(sqlOf(compileExprPredicate(cmp('<', 'orbis/start_at'), { cctx: ctx, row: ROW }))).toBe(
+      `((e.props->>'orbis/start_at')::timestamptz AT TIME ZONE $1)::date < $2::date`,
+    );
+  });
+
+  test('date против $today — как было: приводить нечего, зона ни при чём', () => {
+    expect(sqlOf(compileExprPredicate(cmp('=', 'orbis/due_date'), { cctx: ctx, row: ROW }))).toBe(
+      `(e.props->>'orbis/due_date')::date = $1::date`,
+    );
+  });
+
+  test('момент против момента — оба timestamptz, приведения к дню НЕТ', () => {
+    const both: ExprNode = {
+      op: '<',
+      args: [{ prop: 'orbis/start_at' }, { prop: 'orbis/end_at' }],
+    };
+    expect(sqlOf(compileExprPredicate(both, { cctx: ctx, row: ROW }))).not.toContain(
+      'AT TIME ZONE',
+    );
+  });
+});

@@ -102,8 +102,12 @@ const DEFAULT_LIMIT = 500;
  * Колонки полного SELECT — ровно те, из которых `toWireEntityFromSql` собирает wire-форму
  * (`wire.ts:70`). Список общий со старым компилятором по смыслу, но НЕ импортируется из
  * него: `compile.ts` удаляется в Задаче 9b, и импорт умер бы вместе с ним.
+ *
+ * Наружу — ради движков подписок (§Б5-6): у них своя обёртка запроса (оконные функции, тег
+ * секции), но та же проекция строки. Своя копия списка разошлась бы с `toWireEntityFromSql`
+ * на первой же новой колонке, и разъезд был бы виден не отказом, а пустым полем у клиента.
  */
-const ENTITY_COLUMNS =
+export const ENTITY_SELECT_COLUMNS =
   'id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
 
 /** UUID сущности — та же форма, что у `REL_TARGET_PATTERN` канона (§А5-7). */
@@ -408,6 +412,19 @@ function dateExpr(ref: PropRef, ctx: CompileCtx): SQL {
   if (ref.def.type.kind === 'date') return sql`(${ref.text})::date`;
   if (ref.core) return sql`(${ref.text} AT TIME ZONE ${ctx.timeZone})::date`;
   return sql`((${ref.text})::timestamptz AT TIME ZONE ${ctx.timeZone})::date`;
+}
+
+/**
+ * Календарная дата значения свойства в таймзоне владельца — та же формула, по которой
+ * сравниваются date-токены грамматики (`dateExpr` выше).
+ *
+ * Экспортируется ради ОДНОГО потребителя — движка подписки Agenda: ему нужен не предикат, а
+ * сама дата, под `BETWEEN` окна, под `LEAST` двух слотов и под `ORDER BY` секции. Копия рядом
+ * разошлась бы с запросами на первом же слоте `moment`, реализованном date-свойством
+ * (§Б1-2 `any_of[timestamp, date]`).
+ */
+export function propertyLocalDateExpr(propertyId: string, ctx: CompileCtx): SQL {
+  return dateExpr(propRef(propertyId, ctx), ctx);
 }
 
 /**
@@ -879,7 +896,7 @@ function compileOrderBy(ast: QueryAst, ctx: CompileCtx): SQL | null {
 
 /** Полный SELECT: WHERE + ORDER BY + LIMIT (кап 500 без `limit`). */
 export function compileQueryAst(ast: QueryAst, ctx: CompileCtx): SQL {
-  let q = sql`SELECT ${sql.raw(ENTITY_COLUMNS)} FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+  let q = sql`SELECT ${sql.raw(ENTITY_SELECT_COLUMNS)} FROM entities e WHERE ${compileWhere(ast, ctx)}`;
   const order = compileOrderBy(ast, ctx);
   if (order) q = sql`${q} ORDER BY ${order}`;
   return sql`${q} LIMIT ${ast.limit ?? DEFAULT_LIMIT}`;

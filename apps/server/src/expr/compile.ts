@@ -367,6 +367,37 @@ function inPredicate(args: readonly ExprNode[], scope: ExprCompileScope): SQL {
   });
 }
 
+/**
+ * Временной род операнда сравнения: `date` (календарный день) или `timestamp` (момент).
+ * `undefined` — «род не временной либо неизвестен», и тогда сравнение остаётся как было.
+ *
+ * Нужен ровно одному месту — выравниванию сторон ниже: у `{ctx:'$today'}` род календарный,
+ * у слота `when.moment` — моментный, и без выравнивания их сравнивал бы Postgres в
+ * СЕССИОННОЙ зоне. `date_add` намеренно не разбирается: его результат — момент по правилам
+ * SQL, и приписывать ему день значило бы менять смысл там, где зона ни при чём.
+ */
+function temporalKindOf(node: ExprNode, scope: ExprCompileScope): 'date' | 'timestamp' | undefined {
+  if ('ctx' in node) return node.ctx === '$today' ? 'date' : undefined;
+  const propertyId =
+    'prop' in node
+      ? node.prop
+      : 'slot' in node && scope.binding !== undefined
+        ? scope.binding.bind[node.slot]
+        : undefined;
+  if (propertyId === undefined) return undefined;
+  const kind = scope.cctx.reg.properties.get(propertyId)?.type.kind;
+  return kind === 'date' || kind === 'timestamp' ? kind : undefined;
+}
+
+/**
+ * Момент → календарный день ВЛАДЕЛЬЦА. Формула та же, что у `dateExpr` компилятора Q
+ * (`compile-ast.ts`, `propertyLocalDateExpr`): второй способ читать день сущности означал бы,
+ * что запрос и предикат декларации расходятся на строках у полуночи.
+ */
+function localDateSql(value: SQL, scope: ExprCompileScope): SQL {
+  return sql`(${value} AT TIME ZONE ${scope.cctx.timeZone})::date`;
+}
+
 export function compileExprPredicate(expr: ExprNode, scope: ExprCompileScope): SQL {
   if ('op' in expr) {
     if (expr.op === 'and' || expr.op === 'or') {
@@ -379,8 +410,18 @@ export function compileExprPredicate(expr: ExprNode, scope: ExprCompileScope): S
     if (expr.op === 'in') return inPredicate(expr.args, scope);
     const operator = COMPARISON_SQL[expr.op];
     if (operator === undefined) return unsupported(`оператор '${expr.op}'`);
-    const l = valueSql(expr.args[0] as ExprNode, scope);
-    const r = valueSql(expr.args[1] as ExprNode, scope);
+    const leftNode = expr.args[0] as ExprNode;
+    const rightNode = expr.args[1] as ExprNode;
+    const kindL = temporalKindOf(leftNode, scope);
+    const kindR = temporalKindOf(rightNode, scope);
+    let l = valueSql(leftNode, scope);
+    let r = valueSql(rightNode, scope);
+    // ДЕНЬ ПРОТИВ МОМЕНТА (Ф-Б1-19): момент приводится к календарному дню владельца, а не
+    // сравнивается с датой как есть. Иначе Postgres достраивает `'…'::date` до полуночи
+    // СЕССИОННОЙ зоны, и дело, назначенное на утро владельца, читается вчерашним — тем самым
+    // просроченным — у каждого, чья зона не равна серверной.
+    if (kindL === 'date' && kindR === 'timestamp') r = localDateSql(r, scope);
+    if (kindL === 'timestamp' && kindR === 'date') l = localDateSql(l, scope);
     return sql`${l} ${sql.raw(operator)} ${r}`;
   }
   if ('const' in expr) {
