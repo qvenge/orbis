@@ -617,6 +617,85 @@ describe('§С2-1: перенастраивает поверхность или 
       sensitivity: [],
     });
 
+  /**
+   * СЕМЬ ИМЁН, КОТОРЫХ ЕЩЁ НЕТ В РЕЕСТРЕ ТУЛОВ. Их кладут задачи 15/16, а ответ политики стоит
+   * ЗДЕСЬ и раньше — потому что порядок «тул сперва, замок потом» и есть та самая дыра, которую
+   * §С8-23 закрывает: тул вне `REGISTRY_TOOL_NAMES` до этой задачи получал молчаливое `'none'`.
+   * Список литеральный, и это временно: с задачей 16 все семь войдут в `REGISTRY_TOOL_NAMES`,
+   * пин ниже вырастет с пяти имён до двенадцати, а этот тест сольётся с ним.
+   */
+  const B1_TOOLS_AHEAD: Array<[string, unknown, Reconfigures]> = [
+    // §С2-1 ряд 1: свой аспект заводит владелец через AI — «показать» карточкой. Чужого этим
+    // тулом не завести: конверт держит key в namespace `user/` (§А2-1, гейт KEY_NAMESPACE).
+    ['aspect_create', { key: 'user/sleep-log', label: { ru: 'Сон' } }, 'own-property'],
+    // Ряд 1 дословно называет «привязку СВОЕГО аспекта»…
+    ['aspect_implements_set', { aspect: 'user/sleep-log', implements: [] }, 'own-property'],
+    [
+      'aspect_implements_remove',
+      { aspect: 'user/sleep-log', contract: 'orbis/when' },
+      'own-property',
+    ],
+    // …а ряд 3 — «`implements` ВСТРОЕННЫХ аспектов»: фону это запрещено по объекту.
+    ['aspect_implements_set', { aspect: 'orbis/task', implements: [] }, 'system-object'],
+    ['aspect_implements_remove', { aspect: 'orbis/task', contract: 'orbis/when' }, 'system-object'],
+    // Ряд 2 — «подписка … дельта поведения (`value_map`, скрытия, НАБОРЫ)»: ответ даёт ТУЛ, а
+    // не адрес (Р9 рамки). Иначе садовник §Б5-2 упирался бы в запрет по объекту на законном пути.
+    [
+      'subscription_set',
+      { id: 'orbis/agenda', surface: 'planner/agenda', definition: {} },
+      'behavior-delta',
+    ],
+    [
+      'subscription_set',
+      { id: 'user/my-agenda', surface: 'planner/agenda', definition: {} },
+      'behavior-delta',
+    ],
+    ['subscription_remove', { id: 'orbis/agenda' }, 'behavior-delta'],
+    [
+      'contract_sets_delta_set',
+      { contract: 'orbis/completable', setsDelta: { mine: ['active'] } },
+      'behavior-delta',
+    ],
+    ['contract_sets_delta_remove', { contract: 'orbis/completable' }, 'behavior-delta'],
+  ];
+
+  test('семь тулов вехи II разложены по рядам §С2-1 ДО того, как появятся в реестре', () => {
+    for (const [tool, input, expected] of B1_TOOLS_AHEAD) {
+      expect([tool, JSON.stringify(input), reconfiguresOf(tool, input)]).toEqual([
+        tool,
+        JSON.stringify(input),
+        expected,
+      ]);
+    }
+    // Ни одно из семи имён сегодня в реестре тулов НЕ значится — то есть ответ даёт switch, а
+    // не принадлежность множеству (иначе тест зеленел бы по другой причине, чем написан).
+    for (const [tool] of B1_TOOLS_AHEAD) expect(REGISTRY_TOOL_NAMES.has(tool)).toBe(false);
+  });
+
+  test('ряды по тулу доходят до уровня: наборы и подписки — explicit для любого актора', () => {
+    for (const [tool, input, expected] of B1_TOOLS_AHEAD) {
+      const level = levelFor(tool, input, 'ai');
+      expect([tool, level]).toEqual([
+        tool,
+        expected === 'own-property' ? 'preview' : 'explicit-confirmation',
+      ]);
+    }
+    // Своя привязка от ВЛАДЕЛЬЦА — `execute`: подтверждать некому (ряд 4b по актору).
+    expect(
+      levelFor('aspect_implements_set', { aspect: 'user/sleep-log', implements: [] }, 'owner'),
+    ).toBe('execute');
+  });
+
+  test('мусор вместо конверта у нового тула — тоже самый тяжёлый ответ', () => {
+    for (const tool of ['aspect_create', 'aspect_implements_set', 'subscription_set']) {
+      for (const input of [null, 'строка', 42, ['список']]) {
+        expect([tool, input, reconfiguresOf(tool, input)]).toEqual([tool, input, 'system-object']);
+      }
+    }
+    // Граница с обратной стороны: тул ГРАФА с мусором на входе реестра не трогает.
+    expect(reconfiguresOf('entity_update', null)).toBe('none');
+  });
+
   test('пять тулов реестра разложены по трём ответам; всё прочее — none', () => {
     // ПЕРЕХОДЫ, а не формы вызова (вывод десяти фикс-раундов Задачи 12): каждая строка —
     // один переход защищаемого состояния «что владелец видит и что система делает».
@@ -985,6 +1064,7 @@ describe('§С2-1: перенастраивает поверхность или 
   test('перечень тулов реестра берётся у реестра, а не переписан здесь литералами', () => {
     // Шестой тул реестра, заведённый без правки `reconfiguresOf`, получит `system-object`
     // (fail-closed ветка switch'а), а не молчаливое `none`, — и упадёт вот на этой строке.
+    // Двенадцатое имя Б-1 в реестре — и этот список вырастет с пяти до двенадцати (задача 16).
     expect([...REGISTRY_TOOL_NAMES].sort()).toEqual([
       'aspect_delta_remove',
       'aspect_delta_set',
@@ -993,6 +1073,11 @@ describe('§С2-1: перенастраивает поверхность или 
       'property_update',
     ]);
     for (const tool of REGISTRY_TOOL_NAMES) {
+      expect([tool, reconfiguresOf(tool, {})]).not.toEqual([tool, 'none']);
+    }
+    // …и ни одно из семи имён вехи II не осталось без ответа: пин ловит и то, что УЖЕ в реестре,
+    // и то, что в него вот-вот войдёт.
+    for (const [tool] of B1_TOOLS_AHEAD) {
       expect([tool, reconfiguresOf(tool, {})]).not.toEqual([tool, 'none']);
     }
   });
