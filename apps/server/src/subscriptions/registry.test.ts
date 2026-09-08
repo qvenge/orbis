@@ -275,6 +275,74 @@ describe('типы позиций E и круги ведомостей (§С8-28
   });
 });
 
+describe('однозначность порога и границы словарей Budget (Ф-Б1-38, Ф-Б1-40в/г)', () => {
+  const seed = { reg: snapshot(), systemSeed: true };
+  const budget = (over: Record<string, unknown>) =>
+    refusal(() =>
+      assertSubscription(
+        row({ ...BUDGET_DEF, ...over }, { surface: 'finance/budget-overview' }),
+        seed,
+      ),
+    );
+
+  test('вторая сумма конверта с bound_via — SUBSCRIPTION_ALERT_NUMERATOR, а не догадка движка', () => {
+    // Числитель порога движок берёт СТРУКТУРНО (единственная сумма конверта по ребру привязки).
+    // Второй кандидат означал бы бейдж, сравнивающий не ту величину, — и владелец увидел бы это
+    // не отказом, а враньём счётчика.
+    const aggregates = {
+      ...BUDGET_DEF.aggregates,
+      spent_cash: { ...BUDGET_DEF.aggregates.spent },
+    };
+    expect(budget({ aggregates })).toEqual({
+      code: 'VALIDATION',
+      reason: 'SUBSCRIPTION_ALERT_NUMERATOR',
+    });
+  });
+
+  test('rollup.applies_to без числителя либо длиннее двух — SUBSCRIPTION_ALERT_DENOMINATOR', () => {
+    const rollup = { ...BUDGET_DEF.rollup };
+    expect(budget({ rollup: { ...rollup, applies_to: ['effective_limit'] } })).toEqual({
+      code: 'VALIDATION',
+      reason: 'SUBSCRIPTION_ALERT_DENOMINATOR',
+    });
+    expect(
+      budget({ rollup: { ...rollup, applies_to: ['spent', 'effective_limit', 'remaining'] } }),
+    ).toEqual({ code: 'VALIDATION', reason: 'SUBSCRIPTION_ALERT_DENOMINATOR' });
+  });
+
+  test('фаза вне словаря провода — SUBSCRIPTION_PHASE_UNKNOWN (Ф-Б1-40в)', () => {
+    // Движок отдаёт фазу клиенту как есть: своё слово владельца доехало бы до трёх клиентов и
+    // golden как чужой enum, то есть сломало бы разбор ответа. Фазы владельца — Б-2.
+    const phases = { ...BUDGET_DEF.phases, frozen: { const: true } };
+    expect(budget({ phases })).toEqual({
+      code: 'VALIDATION',
+      reason: 'SUBSCRIPTION_PHASE_UNKNOWN',
+    });
+  });
+
+  test('формула конверта, читающая ведомость периода, — SUBSCRIPTION_PERIOD_AGG_IN_FORMULA (Ф-Б1-40г)', () => {
+    // Раньше такая декларация проходила запись и падала INVARIANT на ЧТЕНИИ, у владельца.
+    const aggregates = {
+      ...BUDGET_DEF.aggregates,
+      remaining: {
+        kind: 'formula',
+        scope: 'envelope',
+        expr: { op: '-', args: [{ agg: 'effective_limit' }, { agg: 'period_balance' }] },
+      },
+    };
+    expect(budget({ aggregates })).toEqual({
+      code: 'VALIDATION',
+      reason: 'SUBSCRIPTION_PERIOD_AGG_IN_FORMULA',
+    });
+  });
+
+  test('норматив проходит все четыре новых гейта', () => {
+    expect(
+      assertSubscription(row(BUDGET_DEF, { surface: 'finance/budget-overview' }), seed).engine,
+    ).toBe('budget');
+  });
+});
+
 describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с prefer — детерминированный выбор', () => {
   const owner = freshUserId();
   let idx: BindingIndex;

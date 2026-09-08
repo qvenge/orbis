@@ -283,6 +283,79 @@ function assertRole(reg: RegistrySnapshot, sub: string, role: string): void {
     });
 }
 
+/**
+ * Фазы, которые умеет назвать провод карточки конверта (`envelopeStatusSchema.phase`,
+ * `@orbis/shared/contracts/budget`). Ф-Б1-40в: пока провод не переведён на классы (Б-2), это и есть
+ * закрытый словарь фаз Budget.
+ */
+const WIRE_PHASES: ReadonlySet<string> = new Set(['upcoming', 'active', 'closed']);
+
+/**
+ * ОПЕРАНДЫ ПОРОГА §6.1 — структурны, и структура обязана быть ОДНОЗНАЧНОЙ (Ф-Б1-38).
+ *
+ * Числитель движок берёт как ЕДИНСТВЕННУЮ сумму конверта с ребром привязки (`scope: 'envelope'` +
+ * `bound_via`), знаменатель — как второй член `rollup.applies_to`. Обе выборки молчаливы: вторая
+ * такая сумма или третий член списка дали бы владельцу порог, сравнивающий не те величины, и
+ * увидел бы он это бейджем, который врёт. Поэтому неоднозначность — отказ ЗДЕСЬ, на записи, а не
+ * догадка движка на чтении.
+ *
+ * Явное поле `alerts.of/against` (ассет спеки несёт `alerts.when`, схема §1.6 — нет) — вопрос
+ * владельцу ОВ-Б1-4, задача 16 либо Б-2.
+ */
+function assertAlertOperands(id: string, def: BudgetSubscription): void {
+  const numerators = Object.entries(def.aggregates)
+    .filter(([, a]) => a.kind === 'sum' && a.scope === 'envelope' && a.bound_via !== undefined)
+    .map(([n]) => n);
+  if (numerators.length !== 1) {
+    bad(
+      'SUBSCRIPTION_ALERT_NUMERATOR',
+      id,
+      `числитель порога — ровно одна сумма конверта с bound_via, а их ${numerators.length}`,
+      { aggregates: numerators },
+    );
+  }
+  const numerator = numerators[0] as string;
+  const others = def.rollup.applies_to.filter((n) => n !== numerator);
+  if (!def.rollup.applies_to.includes(numerator) || others.length !== 1) {
+    bad(
+      'SUBSCRIPTION_ALERT_DENOMINATOR',
+      id,
+      `rollup.applies_to обязан нести числитель «${numerator}» и ровно один другой член`,
+      { numerator, applies_to: [...def.rollup.applies_to] },
+    );
+  }
+}
+
+/**
+ * Ф-Б1-40г: формула конверта вправе читать только ведомости КОНВЕРТА. Ссылка на ведомость периода
+ * (`scope: 'period'` — баланс, Unbudgeted) невыразима по построению: период считается один на весь
+ * месяц, а формула живёт на строке конверта, и «какое значение периода взять» ответа не имеет.
+ * Раньше такая декларация проходила запись и падала `INVARIANT` на ЧТЕНИИ, у владельца, — отказ
+ * обязан приходить автору декларации.
+ */
+function assertEnvelopeFormulas(id: string, def: BudgetSubscription): void {
+  const periodAggs = new Set(
+    Object.entries(def.aggregates)
+      .filter(([, a]) => a.kind === 'sum' && a.scope === 'period')
+      .map(([n]) => n),
+  );
+  if (periodAggs.size === 0) return;
+  for (const [name, agg] of Object.entries(def.aggregates)) {
+    if (agg.kind !== 'formula') continue;
+    const refs = new Set<string>();
+    aggRefs(agg.expr, refs);
+    const forbidden = [...refs].filter((r) => periodAggs.has(r));
+    if (forbidden.length > 0) {
+      bad(
+        'SUBSCRIPTION_PERIOD_AGG_IN_FORMULA',
+        id,
+        `формула конверта «${name}» читает ведомость периода`,
+        { aggregate: name, refs: forbidden },
+      );
+    }
+  }
+}
+
 /** Поимённые ссылки декларации — по фиксированным путям; дерево здесь не обходится. */
 function assertReferences(id: string, def: SubscriptionDefinition, reg: RegistrySnapshot): void {
   const idx = bindingIndexOf(reg);
@@ -334,9 +407,27 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
   // в daily_pace молча считался бы всегда null.
   if (!phaseKeys.has('active'))
     bad('SUBSCRIPTION_PHASE_ACTIVE_MISSING', id, 'у Budget нет фазы active');
+  // Ф-Б1-40в: словарь фаз в Б-1 ограничен ПРОВОДОМ (`envelopeStatusSchema.phase`). Движок отдаёт
+  // фазу клиенту как есть, и своё слово владельца доехало бы до трёх клиентов и golden как чужой
+  // enum — то есть сломало бы разбор ответа, а не показало новую фазу. Фазы владельца — Б-2.
+  for (const p of phaseKeys) {
+    if (!WIRE_PHASES.has(p)) {
+      bad(
+        'SUBSCRIPTION_PHASE_UNKNOWN',
+        id,
+        `фаза «${p}» не выражается проводом карточки конверта`,
+        {
+          phase: p,
+          allowed: [...WIRE_PHASES],
+        },
+      );
+    }
+  }
   for (const n of def.rollup.applies_to) {
     known(n, aggNames, 'SUBSCRIPTION_UNKNOWN_AGG', 'rollup.applies_to');
   }
+  assertAlertOperands(id, def);
+  assertEnvelopeFormulas(id, def);
   for (const p of def.alerts.skip_phases) {
     known(p, phaseKeys, 'SUBSCRIPTION_UNKNOWN_PHASE', 'alerts.skip_phases');
   }
