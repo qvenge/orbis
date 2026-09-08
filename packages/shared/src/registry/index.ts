@@ -6,6 +6,7 @@ export * from './builtin-aspects';
 export * from './builtin-contracts';
 export * from './builtin-properties';
 export * from './builtin-roles';
+export * from './builtin-subscriptions';
 export * from './contract-type';
 // Словарь модулей и поверхностей (§Б5-1, §Б8-1): по нему отказывает `SURFACE_UNKNOWN` и по нему же
 // собираются имена снимков поверхностей — второго списка имён в корпусе нет (Р-К-10).
