@@ -347,6 +347,14 @@ export function useEntityDetail(entityId: string) {
    *
    * Возврат в `inbox` снимает и `orbis/completed_at`: момент закрытия у открытой задачи —
    * факт, которого не было.
+   *
+   * Возврат в `inbox` — ЛИТЕРАЛ, а не значение по умолчанию свойства: поля `default` у
+   * `propertyDefinitionSchema` нет вовсе (`registry/property-type.ts`), а класс `active`
+   * контракта `orbis/completable` отвечает на «открыта ли», а не «каким вариантом открыть» —
+   * вариантов у класса четыре (`inbox`, `planned`, `in_progress`, `waiting`), и выбрать из
+   * них контракт не может по построению. Р4 читается так (Р-К-18): `default` свойства
+   * приходит в Б-3, и тогда строка станет чтением реестра; до тех пор литерал назван вслух,
+   * а не спрятан.
    */
   function toggleTask(done: boolean) {
     mutation.mutate({

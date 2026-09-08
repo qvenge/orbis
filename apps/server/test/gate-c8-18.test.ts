@@ -1,17 +1,19 @@
 // apps/server/test/gate-c8-18.test.ts
 // Гейт части Б (§С8-18, ревизия 3): два пользовательских аспекта, заведённых ТОЛЬКО декларацией,
-// участвуют в четырёх потребителях без строки кода под них. Четыре утверждения помечены
-// `test.failing`: сегодня они ложны, и каждое переводит в `test` та задача вехи I, которая его
-// зеленит (4 — excludeBlocked, 6 — Agenda, 7 — строка M14, 9 — spent; Р-К-9). Задача 10 проверяет,
-// что `test.failing` в файле не осталось, и снимает греп-доказательство.
+// участвуют в четырёх потребителях без строки кода под них. Изначально все четыре утверждения
+// были помечены `test.failing`: каждое переводит в `test` та задача вехи I, которая его зеленит
+// (4 — excludeBlocked, 6 — Agenda, 7 — строка M14, 9 — spent; Р-К-9). Помеченным остаётся один —
+// `spent` (задача 9). Задача 10 проверяет, что `test.failing` в файле не осталось, и снимает
+// греп-доказательство.
 //
-// ПОЧЕМУ ТЕЛА ЧЕТЫРЁХ `test.failing` СИНХРОННЫЕ. Bun 1.2.7 игнорирует пометку `.failing`, если
+// ПОЧЕМУ ТЕЛА `test.failing` СИНХРОННЫЕ. Bun 1.2.7 игнорирует пометку `.failing`, если
 // тест вышел в макрозадачу (любой поход в БД или через tRPC — она): красный перестаёт
 // поглощаться, а зелёный перестаёт валить сьют, то есть ломаются ОБЕ половины гарантии Р-К-9.
 // Поэтому все походы к потребителям собраны в `beforeAll`, а тела тестов синхронно читают
 // собранное. ПРАВИЛО: новый `test.failing` в этом репозитории — только с синхронным телом.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { type RowProjection, rowProjectionOf } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
@@ -126,39 +128,11 @@ async function collect<T>(fn: () => Promise<T>): Promise<Collected<T>> {
 }
 
 /** Развернуть собранное СИНХРОННО. Ошибку потребителя перебрасывает КАК ЕСТЬ: причина провала
- *  обязана остаться настоящей («нет rowProjectionOf»), а не выродиться в `undefined`. */
+ *  обязана остаться настоящей (отказ ручки, промах движка), а не выродиться в `undefined`. */
 function taken<T>(r: Collected<T> | undefined, what: string): T {
   if (r === undefined) throw new Error(`сбор потребителя «${what}» не выполнялся`);
   if ('err' in r) throw r.err;
   return r.ok;
-}
-
-interface GateRowProjection {
-  checkbox: { closed: boolean; cls: string } | null;
-  date: { value: string; slot: 'deadline' | 'moment' } | null;
-  amount: { amount: string; direction: 'outflow' | 'inflow'; currency: string | null } | null;
-}
-/** Локальный слепок формы (Р-И-20). Задача 7 снимает его и импортирует настоящий `RowProjection`. */
-type RowProjectionFn = (
-  entity: { aspects: readonly string[]; props: Record<string, unknown> },
-  reg: unknown,
-) => GateRowProjection;
-
-/**
- * Модуля `packages/shared/src/registry/row.ts` (задача 7) ещё нет, и импортировать его в шапке
- * НЕЛЬЗЯ: сломанный импорт уронил бы загрузку файла и все четыре теста разом — три из них
- * перестали бы говорить о своей причине. Поэтому ленивая загрузка с названной причиной.
- */
-async function rowProjectionOrFail(): Promise<RowProjectionFn> {
-  const shared = (await import('@orbis/shared')) as Record<string, unknown>;
-  const fn = shared.rowProjectionOf;
-  if (typeof fn !== 'function') {
-    throw new Error(
-      'строка M14 не переведена на контракты: в @orbis/shared нет rowProjectionOf ' +
-        '(packages/shared/src/registry/row.ts — задача 7)',
-    );
-  }
-  return fn as unknown as RowProjectionFn;
 }
 
 /**
@@ -179,12 +153,7 @@ const EXCLUDE_BLOCKED_QUERY = 'excludeBlocked=true, sortBy=orbis/title:asc, limi
 
 let overview: Collected<Overview>;
 let agenda: Collected<Array<{ id: string; section: 'window' | 'overdue' }>>;
-let m14: Collected<{
-  rowProjectionOf: RowProjectionFn;
-  reg: Registry;
-  fin: WireEntityRead;
-  closed: WireEntityRead;
-}>;
+let m14: Collected<{ reg: Registry; fin: WireEntityRead; closed: WireEntityRead }>;
 let excluded: Collected<Set<string>>;
 
 beforeAll(async () => {
@@ -198,11 +167,10 @@ beforeAll(async () => {
   overview = await collect(() => c.budget.overview({ month: world.month }));
   agenda = await collect(() => agendaRows(owner));
   m14 = await collect(async () => {
-    const rowProjectionOf = await rowProjectionOrFail();
     const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
     const fin = (await c.entity.get({ id: world.finId })).entity;
     const closed = (await c.entity.get({ id: world.blockerClosedId })).entity;
-    return { rowProjectionOf, reg, fin, closed };
+    return { reg, fin, closed };
   });
   excluded = await collect(
     async () => new Set((await c.entity.query({ query: EXCLUDE_BLOCKED_QUERY })).map((e) => e.id)),
@@ -251,10 +219,13 @@ describe('гейт §С8-18: аспект только декларацией', 
     expect(section.get(world.overdueId)).toBe('overdue');
   });
 
-  // Зеленит задача 7 (контракт → элемент строки).
-  test.failing('строка M14 собирается по контрактам: чекбокс, дата, сумма (§С8-18, потребитель 3)', () => {
-    const { rowProjectionOf, reg, fin, closed } = taken(m14, 'строка M14');
-    const finRow = rowProjectionOf(fin, reg);
+  // ЗЕЛЁНЫЙ с задачи 7. Прежде строку собирали ветки `if` по именам аспектов
+  // (`orbis/task`/`orbis/financial`/`orbis/schedule`), и аспект гейта не давал ни чекбокса, ни
+  // даты, ни суммы. Теперь правило — данные (`M14_ROW_ELEMENTS` + `rowProjectionOf`), и элемент
+  // получает всякий, кто реализует контракт: под `user/gate-fin` нет ни строки кода.
+  test('строка M14 собирается по контрактам: чекбокс, дата, сумма (§С8-18, потребитель 3)', () => {
+    const { reg, fin, closed } = taken(m14, 'строка M14');
+    const finRow: RowProjection = rowProjectionOf(fin, reg);
     expect(finRow.checkbox).toEqual({ closed: false, cls: 'active' });
     expect(finRow.amount).toEqual({ amount: GATE_AMOUNT, direction: 'outflow', currency: null });
     expect(finRow.date?.slot).toBe('moment');
