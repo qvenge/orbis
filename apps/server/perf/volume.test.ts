@@ -5,13 +5,21 @@
 // прогона медианы уезжают в разы (шапка `perf/perf.test.ts:1-25`).
 // В вехе 0 здесь два сторожа (корпус наполнен; проход селектора равен бюджет-хуку) и БАЗОВАЯ
 // ЛИНИЯ p95 `computeOverview` под ролью приложения. Порогов нет — их ставит задача 12.
-import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { newId, ROLE_ENVELOPE_BINDING } from '@orbis/shared';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import {
+  type BudgetSubscription,
+  canonicalJson,
+  newId,
+  ROLE_ENVELOPE_BINDING,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { computeOverview } from '../src/budget/aggregates';
 import { selectEnvelopes } from '../src/budget/binding';
 import { withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
+import { effectiveRegistry } from '../src/registry/cache';
+import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
+import { builtinSubscription } from '../src/subscriptions/registry';
 import { measureP95 } from '../src/test/perf';
 import {
   ensureVolumeFixture,
@@ -21,10 +29,12 @@ import {
   VOLUME_ENVELOPES_PER_MONTH,
   VOLUME_LAST_MONTH,
   VOLUME_MIN_BINDINGS,
+  VOLUME_MONTHS,
   VOLUME_OWNER_ID,
   VOLUME_PROBE_IDS,
   VOLUME_TODAY,
   volumeCombination,
+  volumeMonth,
   volumeProbeProps,
   volumeProbes,
 } from '../src/test/volume-fixture';
@@ -154,3 +164,30 @@ test('базовая линия: p95 computeOverview под ролью прил�
   );
   expect(p95).toBeGreaterThan(0);
 }, 900_000);
+
+describe('§С8-15: Budget из подписки на синтетике 20k×40×12 — ноль расхождений', () => {
+  test('12 месяцев × 40 конвертов: обе реализации совпадают', async () => {
+    const diffs: string[] = [];
+    for (let k = 0; k < VOLUME_MONTHS; k += 1) {
+      const month = volumeMonth(k);
+      await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+        const reg = await effectiveRegistry(tx, VOLUME_OWNER_ID);
+        const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
+        // Часы корпуса ПРИБИТЫ (`VOLUME_TODAY`): даты синтетики выведены из них, и с системным
+        // «сегодня» корпус протухал бы каждую полночь.
+        const a = await computeOverview(tx, VOLUME_OWNER_ID, month, VOLUME_TODAY);
+        const b = await budgetOverviewOf(
+          tx,
+          VOLUME_OWNER_ID,
+          { month, today: VOLUME_TODAY },
+          def,
+          reg,
+        );
+        if (canonicalJson(a) !== canonicalJson(b)) diffs.push(month);
+        // Сторож: сверка идёт по ДАННЫМ, а не по пустоте — число из корпуса, не литералом.
+        expect(a.envelopes.length).toBe(VOLUME_ENVELOPES_PER_MONTH);
+      });
+    }
+    expect(diffs).toEqual([]); // список нарушителей, а не первый упавший
+  }, 900_000);
+});
