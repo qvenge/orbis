@@ -179,7 +179,7 @@ export const GATE_SURFACE_AMOUNT = '340.00';
  * работает на боевых путях. Категория и конверт берутся из мира 0b (`cat-food`/`env-food`) —
  * трата гейта обязана лечь в УЖЕ существующий конверт, иначе `spent` не сдвинется.
  *
- * Все даты ПРИБИТЫ относительно `SURFACE_TODAY` (`2026-07-03`): `seedGateWorld` выше считает
+ * Все даты ПРИБИТЫ относительно `SURFACE_TODAY` (`2026-07-03`): `seedGateWorld` ниже считает
  * «сегодня» от системных часов, и снятый на нём эталон жил бы ровно сутки.
  */
 export async function seedGateSurfaceRows(ownerId: string): Promise<void> {
@@ -230,7 +230,7 @@ export async function seedGateSurfaceRows(ownerId: string): Promise<void> {
     // Пишущая половина привязки — остаток вехи I (Р-К-39): ребро `envelope-binding` ставит
     // бюджет-хук, а он на `user/gate-fin` не срабатывает (жёсткие id `orbis/financial` в
     // `binding.ts:combinationOf`, `BUDGET_CONTOUR_ASPECTS` `executor.ts`). ТЕ ЖЕ три строки,
-    // что в `seedGateWorld` выше; без них строка гейта не сдвинет `spent` в снимке
+    // что в `seedGateWorld` ниже; без них строка гейта не сдвинет `spent` в снимке
     // `custom-aspect`. Механизм `seed`: роль системная, механизмом `user` вызов упал бы
     // `ROLE_SYSTEM_ONLY`. Снимает задача 11 тем же коммитом, что обобщает хук.
     const bound = await execute(db, {
