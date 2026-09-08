@@ -8,12 +8,12 @@ import {
   AGENDA_DEF,
   type BindingIndex,
   BUDGET_DEF,
-  type BudgetSubscription,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   BUILTIN_SUBSCRIPTION_DEFS,
+  type BudgetSubscription,
   bindingIndexOf,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
@@ -377,7 +377,11 @@ describe('builtinSubscription: эффективная декларация из 
     // разойдись они — повестка и Budget читали бы разные реестры в одной транзакции.
     await withIdentity(db, userA, async (tx) => {
       const reg = await effectiveRegistry(tx, userA);
-      expect(agendaSubscriptionOf(reg)).toBe(builtinSubscription(reg, 'orbis/agenda'));
+      // Сравнение по ССЫЛКЕ, а не по форме: общий читатель отдаёт союз деклараций, обёртка —
+      // сужение того же литерала, и `toBe` ловит появление второго чтения.
+      expect(agendaSubscriptionOf(reg) as unknown).toBe(
+        builtinSubscription(reg, 'orbis/agenda') as unknown,
+      );
     });
   });
 });
