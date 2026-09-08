@@ -30,7 +30,10 @@ export const BUILTIN_SUBSCRIPTION_DEFS: readonly BuiltinSubscriptionDef[] = [
         before: { ctx: '$today' },
         // `where`, а не `hide_when … in closed` (ревизия 3): у сущности без класса сравнение
         // с отсутствующим — false (§Б3-4), и чистое событие попадало бы в просроченное.
-        where: { op: 'in', args: [{ class: { contract: 'orbis/completable' } }, { const: 'open' }] },
+        where: {
+          op: 'in',
+          args: [{ class: { contract: 'orbis/completable' } }, { const: 'open' }],
+        },
         prefer: [],
         limit: 200,
       },
