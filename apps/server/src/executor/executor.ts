@@ -50,6 +50,11 @@ import {
   rebindForEnvelope,
   unbindOps,
 } from '../budget/binding';
+import {
+  bumpSpentCache,
+  invalidateSpentCache,
+  invalidateSpentCacheOfOwner,
+} from '../budget/spent-cache';
 import type { Db } from '../db/client';
 import { entities, entityOrigins, entityVersions, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -90,6 +95,11 @@ import {
   REGISTRY_TOOL_NAMES,
 } from '../tools/registry-tools';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
+import {
+  type SpentCacheContour,
+  spentCacheContourOf,
+  spentContributionOf,
+} from '../subscriptions/budget';
 import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { PROJECT_ASPECT, recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
@@ -176,6 +186,17 @@ interface ExecCtx {
    * по `user_settings` за таймзону, которой ей не нужно.
    */
   compileCtx?: Promise<CompileCtx>;
+  /**
+   * Контур кэша `spent` (§Б5-5) — ЛЕНИВЫЙ и на транзакцию, как `compileCtx` выше. Его сборка
+   * читает декларацию подписки и строит индекс привязок; на импорте в сотни операций пересчёт
+   * на каждую строку стоил бы больше, чем сам кэш экономит.
+   */
+  spentContour?: SpentCacheContour;
+}
+
+function spentContourOf(ctx: ExecCtx): SpentCacheContour {
+  ctx.spentContour ??= spentCacheContourOf(ctx.registry);
+  return ctx.spentContour;
 }
 
 /**
@@ -1223,14 +1244,85 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
   const hookCtx: ExecCtx = { ...ctx, mechanism: 'hook' };
   const applied: PreparedOp[] = [];
   for (const [i, hook] of hooks.entries()) {
-    for (const desc of await budgetFollowUpDescs(ctx, hook, reads, branches[i])) {
+    const descs = await budgetFollowUpDescs(ctx, hook, reads, branches[i]);
+    for (const desc of descs) {
       const plan = await prepareOp(hookCtx, desc.tool, desc.input);
       await plan.apply(hookCtx);
       reads.invalidateParents(desc.input.target_id);
       applied.push(plan);
     }
+    // Кэш spent (§Б5-5) — ПО КАЖДОМУ ХУКУ, во ВНЕШНЕМ цикле (Р-К-16). Во внутреннем он бы
+    // не выполнился ни разу в самом частом случае: при неизменной привязке (правка суммы)
+    // `budgetFollowUpDescs` возвращает пустой список, а spent при этом меняется.
+    await applySpentCacheEffect(ctx, hook, reads, descs);
   }
   return applied;
+}
+
+/**
+ * Эффект одного бюджет-хука на кэш spent (§Б5-5, приёмка §С8-16).
+ *
+ * «Движение» и «конверт» узнаются ПО КОНТУРУ ДЕКЛАРАЦИИ (`spentCacheContourOf`), а не по
+ * литералам аспектов: аспект владельца, объявивший контракт `orbis/money-movement`, обязан
+ * двигать тот же кэш, что и встроенный (§С8-18).
+ *
+ * ГРАНИЦА НА ЭТОМ ШАГЕ, И ЕЁ СНИМАЕТ ОБОБЩЕНИЕ ХУКА. Пока сам хук поднимается только на
+ * встроенной паре аспектов (`BUDGET_CONTOUR_ASPECTS`, и `budgetParentsOfMany` в
+ * `budget/binding.ts` тоже читает конверт жёстко), у движения с аспектом владельца
+ * инкремента не будет: контур КЭША уже собран из декларации, а контур ХУКА — ещё нет, и
+ * вторая половина догоняет первую следующим шагом (Р-К-39). Кэш и до него не врёт: ребро
+ * привязки таким движениям ставит не хук, а любой его записи/снятию отвечает инвалидация
+ * обоих концов; цена — лишний пересчёт и одна щель, «правка суммы такого движения БЕЗ
+ * касания рёбер строку не сносит». Этот абзац переписывается обобщением — он обязан
+ * перестать быть правдой.
+ *
+ * Задетые конверты собираются из ТРЁХ источников, и ни один не лишний: источники дописанных
+ * операций (ребиндинг увёл деньги из старого конверта в новый), сама сущность, если она
+ * конверт (правка лимита/периода/архивация меняет и его строку), и живые родители движения
+ * (правка суммы привязку не трогает — `descs` пуст, а spent меняется).
+ *
+ * ИНКРЕМЕНТ — ровно один случай: НОВОЕ движение, попавшее ровно в один конверт. Только у него
+ * вклад «до» равен нулю по построению; во всех прочих случаях дельту пришлось бы считать по
+ * состоянию, которого в БД уже нет, то есть повторить предикат траты на JS — вторую правду о
+ * деньгах. Остальное — снос строк: пересчёт ленивый, и первый читатель посчитает по графу.
+ */
+async function applySpentCacheEffect(
+  ctx: ExecCtx,
+  hook: BudgetHook,
+  reads: BindingReads,
+  descs: readonly BudgetOpDesc[],
+): Promise<void> {
+  const contour = spentContourOf(ctx);
+  if (!contour.enabled) return; // декларация материализации не просила — писателей нет
+  const ownerId = ctx.req.actorUserId;
+  const { before, after } = hook;
+  const carries = (aspects: ReadonlySet<string>, row: EntityRow | null): boolean =>
+    row !== null && row.aspects.some((id) => aspects.has(id));
+  const touched = new Set(descs.map((d) => d.input.source_id));
+  const isEnvelope =
+    carries(contour.envelopeAspects, after) || carries(contour.envelopeAspects, before);
+  if (isEnvelope) touched.add(after.id);
+  const isMovement =
+    carries(contour.movementAspects, after) || carries(contour.movementAspects, before);
+  if (isMovement) {
+    // `parentsOf` отбирает рёбра ПО РОЛИ привязки и по аспекту конверта у источника;
+    // `archived` он НЕ спрашивает — архивный конверт свою строку кэша тоже теряет, и это
+    // правильный ответ: пересчёт ленивый.
+    for (const edge of await reads.parentsOf(ctx.tx, after.id)) touched.add(edge.sourceId);
+  }
+  if (touched.size === 0) return;
+
+  if (before === null && isMovement && !isEnvelope && touched.size === 1) {
+    const envelopeId = [...touched][0] as string;
+    const add = await spentContributionOf(ctx.tx, ownerId, await compileCtxOf(ctx), {
+      entityId: after.id,
+      envelopeId,
+      defaultCurrency: await reads.defaultCurrency(ctx.tx, ownerId),
+    });
+    if (add !== null) await bumpSpentCache(ctx.tx, ownerId, envelopeId, add.amount, add.asOf);
+    return;
+  }
+  await invalidateSpentCache(ctx.tx, ownerId, [...touched]);
 }
 
 /**
