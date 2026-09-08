@@ -82,6 +82,10 @@ export async function createDriftConflictUnits(
 ): Promise<string[]> {
   const out: string[] = [];
   for (const conflict of driftConflictDecidable(args.conflicts)) {
+    // Нагрузка единицы — `aspect_delta_set`; у конфликтов контракта и подписки тула разрешения в
+    // Б-1 ещё нет (задача 16), и карточка вела бы к кнопке без исполнителя. Гвард стоит и ради
+    // каста ниже: `merged as AspectDelta` на дельте контракта читал бы чужую форму.
+    if (conflict.targetKind !== 'aspect') continue;
     const option = conflict.option;
     const propertyId = conflict.propertyId;
     if (option === undefined || propertyId === undefined) continue;

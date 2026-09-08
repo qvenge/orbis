@@ -29,9 +29,12 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  type ContractDefinition,
+  contractDefinitionSchema,
   type PropertyDefinition,
   propertyDefinitionSchema,
   registryMergeNoteId,
+  subscriptionDefinitionSchema,
 } from '@orbis/shared';
 import { sql as drizzleSql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -47,6 +50,7 @@ import {
   type SystemDefinitions,
   threeWayMerge,
 } from '../registry/deltas';
+import type { SubscriptionRow } from '../registry/load';
 import { createDriftConflictUnits } from '../registry/merge-conflict';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import * as schema from './schema';
@@ -199,6 +203,12 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
     SELECT id, owner_id, key, label, description, properties, ai_instructions, tag_mappings,
            implements, view_config, module, service, rank
     FROM aspect_definitions WHERE owner_id IS NULL`;
+  const contractRows = await sql<Record<string, unknown>[]>`
+    SELECT id, owner_id, key, label, description, kind, slots, classes, sets, facts, module, rank
+    FROM contract_definitions WHERE owner_id IS NULL`;
+  const subscriptionRows = await sql<Record<string, unknown>[]>`
+    SELECT id, owner_id, surface, definition, module, rank
+    FROM subscription_definitions WHERE owner_id IS NULL`;
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
     properties.set(
@@ -241,7 +251,38 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
       }),
     );
   }
-  return { properties, aspects };
+  const contracts = new Map<string, ContractDefinition>();
+  for (const r of contractRows) {
+    contracts.set(
+      r.id as string,
+      contractDefinitionSchema.parse({
+        id: r.id,
+        ownerId: r.owner_id,
+        key: r.key,
+        label: r.label,
+        description: r.description,
+        kind: r.kind,
+        slots: r.slots,
+        classes: r.classes,
+        sets: r.sets,
+        facts: r.facts,
+        module: r.module,
+        rank: r.rank,
+      }),
+    );
+  }
+  const subscriptions = new Map<string, SubscriptionRow>();
+  for (const r of subscriptionRows) {
+    subscriptions.set(r.id as string, {
+      id: r.id as string,
+      ownerId: r.owner_id as string | null,
+      surface: r.surface as string,
+      definition: subscriptionDefinitionSchema.parse(r.definition),
+      module: r.module as string | null,
+      rank: r.rank as number,
+    });
+  }
+  return { properties, aspects, contracts, subscriptions };
 }
 
 /** Системные определения ИЗ КОДА — сторона «после»; та самая, что упала в базу выше. */
@@ -249,6 +290,11 @@ export function codeSystemDefinitions(): SystemDefinitions {
   return {
     properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+    // Встроенных подписок в коде ПОКА НЕТ — сид не кладёт ни строки, и пустая карта означает ровно это.
+    // Условие, при котором строка меняется: появилась первая встроенная подписка (сид Agenda, §Б5-6) —
+    // тогда карта собирается из её списка тем же map'ом.
+    subscriptions: new Map(),
   };
 }
 

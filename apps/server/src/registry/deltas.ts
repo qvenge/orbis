@@ -24,17 +24,21 @@
 import {
   type AspectDefinition,
   BUILTIN_ASPECT_DEFS,
+  type ContractDefinition,
+  canonicalJson,
   type LocalizedText,
   localizedTextSchema,
   type PropertyDefinition,
   type SelectOption,
+  SLOT_KEY_RE,
   selectOptionSchema,
+  subscriptionDefinitionSchema,
 } from '@orbis/shared';
 import type { QueryFilterNode } from '@orbis/shared/query';
 import { z } from 'zod';
 import { ExecError } from '../errors';
 // Только тип — рантайм-цикла с `load.ts` (тот берёт отсюда тип строки дельты) нет.
-import type { RegistrySnapshot } from './load';
+import type { RegistrySnapshot, SubscriptionRow } from './load';
 
 /** Цели дельты — те же шесть, что перечисляет CHECK-ограничение `registry_deltas` (0014). */
 export const REGISTRY_DELTA_TARGET_KINDS = [
@@ -115,7 +119,34 @@ export const propertyDeltaSchema = z
   .strict();
 export type PropertyDelta = z.infer<typeof propertyDeltaSchema>;
 
-export type RegistryDelta = AspectDelta | PropertyDelta;
+/**
+ * Дельта контракта — ТОЛЬКО пользовательские наборы (§Б5-2): встроенный контракт есть API модуля, и
+ * правка его слотов и классов сменила бы смысл уже записанных данных. Имя, занятое встроенным набором,
+ * отвергается, а не «перекрывает»: перекрытие значило бы, что фильтр `class=…:closed` у двух владельцев
+ * значит разное.
+ */
+export const contractDeltaSchema = z
+  .object({
+    setsDelta: z.record(
+      z.string().regex(SLOT_KEY_RE),
+      z.array(z.string().regex(SLOT_KEY_RE)).min(1),
+    ),
+  })
+  .strict();
+export type ContractDelta = z.infer<typeof contractDeltaSchema>;
+
+/**
+ * Дельта подписки — ПОЛНАЯ ЗАМЕНА, а не патч: патч-языка для вложенных строгих объектов у нас нет, а
+ * замена диффуется Ш1 как «было → станет» тем же кодом, что и всё прочее. Движок обязан совпасть с
+ * системным: подписка другого движка — другая подписка, и поверхность получила бы декларацию, которую
+ * её движок не понимает.
+ */
+export const subscriptionDeltaSchema = z
+  .object({ definition: subscriptionDefinitionSchema })
+  .strict();
+export type SubscriptionDelta = z.infer<typeof subscriptionDeltaSchema>;
+
+export type RegistryDelta = AspectDelta | PropertyDelta | ContractDelta | SubscriptionDelta;
 
 /**
  * БЕЛЫЙ СПИСОК ОСЛАБЛЕНИЯ ОБЯЗАТЕЛЬНОСТИ (§А3-2: «по явному списку мест, где код
@@ -169,6 +200,8 @@ function deltaError(reason: string, message: string, details: Record<string, unk
 export interface SystemDefinitions {
   properties: ReadonlyMap<string, PropertyDefinition>;
   aspects: ReadonlyMap<string, AspectDefinition>;
+  contracts: ReadonlyMap<string, ContractDefinition>;
+  subscriptions: ReadonlyMap<string, SubscriptionRow>;
 }
 
 /**
@@ -215,6 +248,8 @@ export function applyDeltas(
   if (deltas.length === 0) return system;
   const properties = new Map(system.properties);
   const aspects = new Map(system.aspects);
+  const contracts = new Map(system.contracts);
+  const subscriptions = new Map(system.subscriptions);
   const ordered = [...deltas].sort(
     (a, b) => a.targetKind.localeCompare(b.targetKind) || a.targetId.localeCompare(b.targetId),
   );
@@ -225,7 +260,7 @@ export function applyDeltas(
       // Определения может не быть: строки реестров не удаляются (§А10-3), но модуль бывает
       // выключен (§Б8) — и тогда дельта на его свойство просто некуда прикладывать.
       if (base === undefined) continue;
-      const delta = parseDelta(row);
+      const delta = parseDelta(row) as PropertyDelta;
       properties.set(row.targetId, {
         ...base,
         ...(delta.label !== undefined && { label: delta.label }),
@@ -233,14 +268,61 @@ export function applyDeltas(
       });
       continue;
     }
+    if (row.targetKind === 'contract') {
+      const base = contracts.get(row.targetId);
+      if (base === undefined) continue;
+      const delta = parseDelta(row) as ContractDelta;
+      if (base.kind !== 'slots') {
+        throw deltaError(
+          'DELTA_SET_ON_FACTS',
+          `у контракта ${row.targetId} нет наборов: это словарь фактов`,
+          { targetId: row.targetId },
+        );
+      }
+      const classes = new Set(base.classes.map((c) => c.key));
+      for (const [name, members] of Object.entries(delta.setsDelta)) {
+        if (name in base.sets) {
+          throw deltaError(
+            'DELTA_SET_BUILTIN',
+            `набор «${name}» контракта ${row.targetId} — встроенный`,
+            { targetId: row.targetId, set: name },
+          );
+        }
+        for (const cls of members) {
+          if (!classes.has(cls)) {
+            throw deltaError(
+              'DELTA_SET_UNKNOWN_CLASS',
+              `класса «${cls}» у контракта ${row.targetId} нет`,
+              { targetId: row.targetId, set: name, class: cls },
+            );
+          }
+        }
+      }
+      contracts.set(row.targetId, { ...base, sets: { ...base.sets, ...delta.setsDelta } });
+      continue;
+    }
+    if (row.targetKind === 'subscription') {
+      const base = subscriptions.get(row.targetId);
+      if (base === undefined) continue;
+      const delta = parseDelta(row) as SubscriptionDelta;
+      if (delta.definition.engine !== base.definition.engine) {
+        throw deltaError('DELTA_ENGINE_MISMATCH', `дельта подписки ${row.targetId} меняет движок`, {
+          targetId: row.targetId,
+          engine: base.definition.engine,
+        });
+      }
+      // СМЫСЛ ЗДЕСЬ НЕ ПРОВЕРЯЕТСЯ (Р-И-7): assertSubscription живёт на записи — fail-closed по смыслу
+      // на чтении запер бы владельца после пересева контракта.
+      subscriptions.set(row.targetId, { ...base, definition: delta.definition });
+      continue;
+    }
     if (row.targetKind !== 'aspect') {
-      // contract/subscription/action/relation_role: их реестры срез А создаёт пустыми
-      // (§А12-1), тулов записи дельт ещё нет (Задача 15) — такая строка может появиться
-      // только ручной правкой базы, и молча её игнорировать нельзя: владелец увидел бы
-      // «настройка не применилась» без единого следа причины.
+      // relation_role/action: тула записи у этих родов нет — строка появляется только ручной
+      // правкой базы, и молчать нельзя: владелец увидел бы «настройка не применилась» без
+      // единого следа причины.
       throw deltaError(
         'DELTA_TARGET_UNSUPPORTED',
-        `дельта цели «${row.targetKind}» в срезе А не поддерживается`,
+        `дельта цели «${row.targetKind}» не поддерживается`,
         { targetKind: row.targetKind, targetId: row.targetId },
       );
     }
@@ -335,12 +417,34 @@ export function applyDeltas(
     }
   }
 
-  return { ...system, properties, aspects };
+  return { ...system, properties, aspects, contracts, subscriptions };
 }
 
+/**
+ * Схема по роду цели — ТАБЛИЦЕЙ, а не цепочкой тернарников: родов шесть, и «схемы нет» —
+ * такой же законный ответ, как схема, но отвечать на него обязан один и тот же код.
+ */
+const DELTA_SCHEMA: Record<RegistryDeltaTargetKind, z.ZodTypeAny | null> = {
+  property: propertyDeltaSchema,
+  aspect: aspectDeltaSchema,
+  contract: contractDeltaSchema,
+  subscription: subscriptionDeltaSchema,
+  relation_role: null,
+  action: null,
+};
+
 /** Разбор `delta` строки по её `target_kind`; форма закрыта (`.strict()`). */
-function parseDelta(row: RegistryDeltaRow): AspectDelta & PropertyDelta {
-  const schema = row.targetKind === 'aspect' ? aspectDeltaSchema : propertyDeltaSchema;
+function parseDelta(row: RegistryDeltaRow): RegistryDelta {
+  const schema = DELTA_SCHEMA[row.targetKind];
+  // Тула записи у этих родов нет — строка появляется только ручной правкой базы, и молчать нельзя:
+  // владелец увидел бы «настройка не применилась» без единого следа причины.
+  if (schema === null) {
+    throw deltaError(
+      'DELTA_TARGET_UNSUPPORTED',
+      `дельта цели «${row.targetKind}» не поддерживается`,
+      { targetKind: row.targetKind, targetId: row.targetId },
+    );
+  }
   const parsed = schema.safeParse(row.delta);
   if (!parsed.success) {
     throw deltaError('DELTA_MALFORMED', `дельта ${row.targetKind}/${row.targetId} не разобрана`, {
@@ -349,7 +453,7 @@ function parseDelta(row: RegistryDeltaRow): AspectDelta & PropertyDelta {
       issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
     });
   }
-  return parsed.data as AspectDelta & PropertyDelta;
+  return parsed.data as RegistryDelta;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,13 +467,19 @@ function parseDelta(row: RegistryDeltaRow): AspectDelta & PropertyDelta {
  * деплойного слияния его нет (находка 46).
  */
 export interface RegistryConflict {
-  kind: 'variant-merge' | 'hidden-required';
+  kind: 'variant-merge' | 'hidden-required' | 'set-merge' | 'subscription-rebased';
   targetKind: RegistryDeltaTargetKind;
   targetId: string;
   propertyId?: string;
   detail: string;
   /**
    * Ключи двух ПОХОЖИХ вариантов — только у `variant-merge`, где оба остались (Задача 15).
+   *
+   * У двух родов части Б поля нет: выбора у владельца там не возникает. Набор, имя которого заняла
+   * система, снимается по единственному применимому исходу (иначе `applyDeltas` отказывает
+   * `DELTA_SET_BUILTIN` на каждом чтении), а замена подписки либо остаётся как есть, либо
+   * сбрасывается на системную вместе со сменой движка — обе развилки решены правилом, а не
+   * владельцем.
    *
    * Поле СТРУКТУРНОЕ, потому что по нему собирается единица пачки: «слить» значит убрать из
    * дельты вариант `mine`, и вытаскивать его имя из `detail` регуляркой было бы разбором
@@ -405,6 +515,8 @@ export interface RegistryConflict {
 export const UNKNOWN_PREV_SYSTEM: SystemDefinitions = {
   properties: new Map(),
   aspects: new Map(),
+  contracts: new Map(),
+  subscriptions: new Map(),
 };
 
 /**
@@ -512,6 +624,53 @@ export function threeWayMerge(
   row: RegistryDeltaRow,
 ): { merged: RegistryDelta; conflicts: RegistryConflict[] } {
   const conflicts: RegistryConflict[] = [];
+  if (row.targetKind === 'contract') {
+    const delta = parseDelta(row) as ContractDelta;
+    const nextSets = nextSystem.contracts.get(row.targetId)?.sets ?? {};
+    const setsDelta: ContractDelta['setsDelta'] = {};
+    for (const [name, members] of Object.entries(delta.setsDelta)) {
+      if (!(name in nextSets)) {
+        setsDelta[name] = members;
+        continue;
+      }
+      // Система завела набор с тем же именем. Оставить пользовательский нельзя: applyDeltas отказывает
+      // DELTA_SET_BUILTIN на КАЖДОМ чтении — владелец заперт. Выбора нет, поэтому конфликт
+      // докладывается, а единицей пачки не становится.
+      conflicts.push({
+        kind: 'set-merge',
+        targetKind: 'contract',
+        targetId: row.targetId,
+        detail: `обновление завело набор «${name}» — ваш набор с тем же именем снят`,
+      });
+    }
+    return { merged: { setsDelta }, conflicts };
+  }
+  if (row.targetKind === 'subscription') {
+    const delta = parseDelta(row) as SubscriptionDelta;
+    const next = nextSystem.subscriptions.get(row.targetId);
+    if (next === undefined) return { merged: delta, conflicts };
+    if (next.definition.engine !== delta.definition.engine) {
+      // Движок сменился — прежняя ЗАМЕНА неприменима по построению (тот же довод, что у
+      // hidden-required): дельта сбрасывается на системную декларацию.
+      conflicts.push({
+        kind: 'subscription-rebased',
+        targetKind: 'subscription',
+        targetId: row.targetId,
+        detail: 'обновление сменило движок подписки — ваша настройка сброшена на системную',
+      });
+      return { merged: { definition: next.definition }, conflicts };
+    }
+    const prev = prevSystem.subscriptions.get(row.targetId);
+    if (prev !== undefined && canonicalJson(prev.definition) !== canonicalJson(next.definition)) {
+      conflicts.push({
+        kind: 'subscription-rebased',
+        targetKind: 'subscription',
+        targetId: row.targetId,
+        detail: 'обновление изменило системную подписку — ваша замена оставлена как есть',
+      });
+    }
+    return { merged: delta, conflicts };
+  }
   if (row.targetKind !== 'aspect') return { merged: parseDelta(row), conflicts };
 
   const delta = parseDelta(row) as AspectDelta;

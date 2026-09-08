@@ -3,20 +3,30 @@
 // вход обеих функций это готовые определения и строки дельт, и живая база к ответу ничего
 // не добавляет. Их наблюдаемость СКВОЗЬ реестр (attach_*-тул, форма) — в `cache.test.ts`.
 import { describe, expect, test } from 'bun:test';
-import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, type PropertyDefinition } from '@orbis/shared';
+import {
+  AGENDA_DEF,
+  BUDGET_DEF,
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
+  BUILTIN_PROPERTY_META,
+  type PropertyDefinition,
+} from '@orbis/shared';
 import { ExecError } from '../errors';
 import {
   applyDeltas,
   baseSystemFor,
+  type ContractDelta,
   previewMergeConflicts,
   RELAXABLE_REQUIRED_PROPERTY_IDS,
   type RegistryDeltaRow,
   relaxWhitelistViolations,
+  type SubscriptionDelta,
   type SystemDefinitions,
   threeWayMerge,
   UNKNOWN_PREV_SYSTEM,
 } from './deltas';
-import type { RegistrySnapshot } from './load';
+import type { RegistrySnapshot, SubscriptionRow } from './load';
+import { driftConflictDecidable } from './merge-conflict';
 
 const OWNER = '11111111-1111-4111-8111-111111111111';
 
@@ -28,7 +38,7 @@ function snapshotWith(overrides: PropertyDefinition[] = []): RegistrySnapshot {
     properties,
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     roles: new Map(),
-    contracts: new Map(),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
     subscriptions: new Map(),
     ownerVersion: 1,
     systemVersion: 1,
@@ -42,7 +52,12 @@ function required(def: PropertyDefinition | undefined): PropertyDefinition {
 }
 
 function systemOf(snapshot: RegistrySnapshot): SystemDefinitions {
-  return { properties: snapshot.properties, aspects: snapshot.aspects };
+  return {
+    properties: snapshot.properties,
+    aspects: snapshot.aspects,
+    contracts: snapshot.contracts,
+    subscriptions: snapshot.subscriptions,
+  };
 }
 
 function row(
@@ -279,10 +294,13 @@ describe('applyDeltas: система ⊕ дельта (§А3-2)', () => {
     ).toEqual({ code: 'VALIDATION', reason: 'DELTA_MALFORMED' });
   });
 
-  test('цель части Б (контракт) — VALIDATION: реестры срезом А созданы пустыми', () => {
-    expect(
-      refusal(() => applyDeltas(snapshotWith(), [row('contract', 'orbis/completable', {})])),
-    ).toEqual({ code: 'VALIDATION', reason: 'DELTA_TARGET_UNSUPPORTED' });
+  test('цели без тулов записи (relation_role, action) — VALIDATION', () => {
+    for (const kind of ['relation_role', 'action'] as const) {
+      expect(refusal(() => applyDeltas(snapshotWith(), [row(kind, 'subitem', {})]))).toEqual({
+        code: 'VALIDATION',
+        reason: 'DELTA_TARGET_UNSUPPORTED',
+      });
+    }
   });
 
   test('дельта на определение, которого нет (выключенный модуль), пропускается без отказа', () => {
@@ -499,6 +517,61 @@ describe('threeWayMerge: система поехала под живой дел�
       ).map((c) => c.kind),
     ).toEqual(['hidden-required']);
   });
+
+  test('система завела набор с тем же именем — set-merge, пользовательский снят', () => {
+    const prev = systemOf(snapshotWith());
+    const c = prev.contracts.get('orbis/completable');
+    if (c === undefined || c.kind !== 'slots') throw new Error('нет встроенного orbis/completable');
+    const next = {
+      ...prev,
+      contracts: new Map(prev.contracts).set('orbis/completable', {
+        ...c,
+        sets: { ...c.sets, my_open: ['active'] },
+      }),
+    };
+    const m = threeWayMerge(
+      prev,
+      next,
+      row('contract', 'orbis/completable', {
+        setsDelta: { my_open: ['active'], mine2: ['done'] },
+      }),
+    );
+    expect(m.conflicts.map((x) => x.kind)).toEqual(['set-merge']);
+    expect(Object.keys((m.merged as ContractDelta).setsDelta)).toEqual(['mine2']);
+  });
+
+  test('системная декларация подписки изменилась под живой дельтой — subscription-rebased', () => {
+    const prev = systemOf(snapshotWith());
+    const sub = (limit: number): SubscriptionRow => ({
+      id: 'orbis/agenda',
+      ownerId: null,
+      surface: 'planner/agenda',
+      definition: { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, limit } },
+      module: null,
+      rank: 1,
+    });
+    const m = threeWayMerge(
+      { ...prev, subscriptions: new Map([['orbis/agenda', sub(200)]]) },
+      { ...prev, subscriptions: new Map([['orbis/agenda', sub(100)]]) },
+      row('subscription', 'orbis/agenda', { definition: sub(50).definition }),
+    );
+    expect(m.conflicts.map((x) => x.kind)).toEqual(['subscription-rebased']);
+    const merged = (m.merged as SubscriptionDelta).definition;
+    expect(merged.engine === 'agenda' ? merged.show.limit : null).toBe(50);
+  });
+
+  test('новые рода конфликта единиц пачки не заводят — решать пока нечем', () => {
+    expect(
+      driftConflictDecidable([
+        {
+          kind: 'set-merge',
+          targetKind: 'contract',
+          targetId: 'orbis/completable',
+          detail: '',
+        },
+      ]),
+    ).toEqual([]);
+  });
 });
 
 /**
@@ -651,5 +724,65 @@ describe('база слияния выбирается по base_version (§А3-
     ]);
     // Та же дельта с актуальной базой конфликтов не даёт — правило про базу, не про поле.
     expect(previewMergeConflicts(system, system, [{ ...stale, baseVersion: 7 }], 7)).toEqual([]);
+  });
+});
+
+describe('дельта контракта setsDelta и подписки definition: apply/parse/threeWayMerge', () => {
+  test('пользовательский набор добавляется, встроенные не меняются (§Б5-2)', () => {
+    const c = applyDeltas(snapshotWith(), [
+      row('contract', 'orbis/completable', { setsDelta: { my_open: ['active'] } }),
+    ]).contracts.get('orbis/completable');
+    expect(Object.keys(c?.sets ?? {}).sort()).toEqual(['closed', 'my_open', 'open']);
+    expect((c?.sets as Record<string, unknown>).closed).toEqual(['done', 'cancelled']);
+  });
+  test('имя, занятое встроенным набором, — DELTA_SET_BUILTIN', () => {
+    expect(
+      refusal(() =>
+        applyDeltas(snapshotWith(), [
+          row('contract', 'orbis/completable', { setsDelta: { closed: ['active'] } }),
+        ]),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'DELTA_SET_BUILTIN' });
+  });
+  // Имя класса в дельте — СЛАГ (`SLOT_KEY_RE`, §1.7), поэтому «которого нет» пишется законной
+  // формой: кириллица отвергалась бы схемой как DELTA_MALFORMED, и проверка «нет такого класса»
+  // не дошла бы до кода вовсе.
+  test('класс, которого у контракта нет, — DELTA_SET_UNKNOWN_CLASS', () => {
+    expect(
+      refusal(() =>
+        applyDeltas(snapshotWith(), [
+          row('contract', 'orbis/completable', { setsDelta: { my: ['net_takogo'] } }),
+        ]),
+      ).reason,
+    ).toBe('DELTA_SET_UNKNOWN_CLASS');
+  });
+  test('дельта подписки заменяет декларацию целиком; чужой движок — DELTA_ENGINE_MISMATCH', () => {
+    const base = snapshotWith();
+    base.subscriptions.set('orbis/agenda', {
+      id: 'orbis/agenda',
+      ownerId: null,
+      surface: 'planner/agenda',
+      definition: AGENDA_DEF,
+      module: null,
+      rank: 1,
+    });
+    const changed = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, limit: 50 } };
+    const after = applyDeltas(base, [
+      row('subscription', 'orbis/agenda', { definition: changed }),
+    ]).subscriptions.get('orbis/agenda')?.definition;
+    // Сужение по движку, а не каст: союз декларации разводится ровно тем полем, которым его
+    // разводит схема, и вопрос «а той ли ветки нам подсунули замену» здесь тоже проверяется.
+    expect(after?.engine === 'agenda' ? after.show.limit : null).toBe(50);
+    expect(
+      refusal(() =>
+        applyDeltas(base, [row('subscription', 'orbis/agenda', { definition: BUDGET_DEF })]),
+      ).reason,
+    ).toBe('DELTA_ENGINE_MISMATCH');
+  });
+  test('дельта на подписку, которой нет (модуль выключен), пропускается без отказа', () => {
+    expect(
+      applyDeltas(snapshotWith(), [row('subscription', 'user/нет', { definition: AGENDA_DEF })])
+        .subscriptions.size,
+    ).toBe(0);
   });
 });
