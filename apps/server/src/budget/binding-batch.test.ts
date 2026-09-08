@@ -94,19 +94,6 @@ async function createEntity(user: string, input: Record<string, unknown>): Promi
 }
 
 /** Живые привязки транзакции к конвертам — истина в БД (админ-DSN, обходит RLS). */
-/** Строк кэша `spent` у конверта — истина в БД (админ-DSN, обходит RLS). */
-async function cacheRowCount(envelopeId: string): Promise<number> {
-  const { db: admin, client } = adminDb();
-  try {
-    const rows = (await admin.execute(
-      sql`SELECT count(*)::int AS n FROM envelope_spent_cache WHERE envelope_id = ${envelopeId}`,
-    )) as unknown as Array<{ n: number }>;
-    return rows[0]?.n ?? 0;
-  } finally {
-    await client.end();
-  }
-}
-
 async function budgetParents(txnId: string): Promise<string[]> {
   const { db: admin, client: adminClient } = adminDb();
   try {
@@ -120,6 +107,19 @@ async function budgetParents(txnId: string): Promise<string[]> {
     return rows.map((r) => (r as { source_id: string }).source_id);
   } finally {
     await adminClient.end();
+  }
+}
+
+/** Строк кэша `spent` у конверта — истина в БД (админ-DSN, обходит RLS). */
+async function cacheRowCount(envelopeId: string): Promise<number> {
+  const { db: admin, client } = adminDb();
+  try {
+    const rows = (await admin.execute(
+      sql`SELECT count(*)::int AS n FROM envelope_spent_cache WHERE envelope_id = ${envelopeId}`,
+    )) as unknown as Array<{ n: number }>;
+    return rows[0]?.n ?? 0;
+  } finally {
+    await client.end();
   }
 }
 

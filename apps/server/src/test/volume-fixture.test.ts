@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { BUDGET_DEF, BUILTIN_ASPECT_DEFS, BUILTIN_CONTRACT_DEFS } from '@orbis/shared';
+import { BUDGET_DEF, BUILTIN_ASPECT_DEFS, BUILTIN_CONTRACT_DEFS, newId } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
+import { adminDb, requireEnv } from '../../test/helpers';
 import { bindingTargetOf } from '../budget/binding';
 import { budgetContourOf } from '../budget/contour';
 import type { WireEntity } from '../executor/types';
 import type { RegistrySnapshot } from '../registry/load';
 import {
   buildVolumeWorld,
+  cleanupVolumeProbes,
   VOLUME_CATEGORIES,
   VOLUME_ENTITIES,
   VOLUME_ENVELOPES,
@@ -216,5 +219,52 @@ describe('пробы сторожа Р-К-2', () => {
       bindingTargetOf(template, contour)?.props === null,
     );
     expect(bindingTargetOf(template, contour)?.props).toBeNull();
+  });
+});
+
+/**
+ * Уборка проб сносит и КЭШ владельца корпуса (Ф-Б1-44) — и это держится ОТДЕЛЬНЫМ пином.
+ *
+ * Двухпроходная сверка §С8-15 сама начинается со сноса кэша, поэтому снятие `DELETE` из
+ * `cleanupVolumeProbes` она бы не заметила: строки, оставленные уборкой, сверка убирает своей
+ * рукой. А заметил бы это следующий прогон гейта — тот самый, который до Ф-Б1-44 краснел
+ * деньгами несуществующих проб. Тест ходит в БД (в отличие от чистых проверок выше): предмет
+ * проверки — оператор SQL, и вне базы его не наблюдать.
+ */
+describe('уборка проб сносит кэш spent владельца корпуса (Ф-Б1-44)', () => {
+  requireEnv();
+
+  test('после cleanupVolumeProbes строк кэша владельца корпуса не остаётся', async () => {
+    const { db, client } = adminDb();
+    const envelopeId = newId();
+    try {
+      // Обстановка: одна ПРОГРЕТАЯ строка кэша владельца корпуса. Своя сущность-конверт, а не
+      // проба: пробы уносит каскад FK, и снос кэша на них был бы неразличим.
+      await db.execute(
+        sql`INSERT INTO entities (id, owner_id, title)
+            VALUES (${envelopeId}::uuid, ${VOLUME_OWNER_ID}::uuid, 'Конверт пина уборки')`,
+      );
+      await db.execute(
+        sql`INSERT INTO envelope_spent_cache
+              (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+            VALUES (${envelopeId}::uuid, ${VOLUME_OWNER_ID}::uuid, '2026-07-15', 1234.56, 0, 1)`,
+      );
+      const count = async (): Promise<number> => {
+        const rows = (await db.execute(
+          sql`SELECT count(*)::int AS n FROM envelope_spent_cache
+              WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`,
+        )) as unknown as Array<{ n: number }>;
+        return rows[0]?.n ?? 0;
+      };
+      // Предусловие: сносить было ЧТО — иначе «ноль» ниже проверял бы пустоту.
+      expect(await count()).toBeGreaterThan(0);
+
+      await cleanupVolumeProbes(db);
+
+      expect(await count()).toBe(0);
+    } finally {
+      await db.execute(sql`DELETE FROM entities WHERE id = ${envelopeId}::uuid`);
+      await client.end();
+    }
   });
 });

@@ -31,16 +31,21 @@
 // `perf: …`, а не по красному прогону, — за тем они и печатаются всегда (D21).
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
+import { readSpentCache, writeSpentCache } from '../src/budget/spent-cache';
+import { withIdentity } from '../src/db/with-identity';
+import { readRegistryVersions } from '../src/registry/version';
 import { appRouter } from '../src/router';
 import {
   measureMedian,
+  measureP95,
   perfEnvelopeCategoryId,
   perfGoalId,
   perfHubId,
   seedPerfFixture,
 } from '../src/test/perf';
 import { createCallerFactory } from '../src/trpc';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
 
 requireEnv();
 
@@ -313,4 +318,85 @@ test('перф-бюджеты серверных операций', async () => 
   // что просело, — иначе разбор идёт по одной операции за прогон.
   const over = results.filter(([key, ms]) => ms > (BUDGETS_MS[key] as number));
   expect(over.map(([key, ms]) => `${key}=${ms.toFixed(0)}ms`)).toEqual([]);
+}, 120_000);
+
+/**
+ * ПРИЁМКА §С8-16 — «чтение прогретого кэша `spent` ≤ 10 мс p95».
+ *
+ * ДОМ ЗДЕСЬ, а не в общем сьюте и не в `perf/volume.test.ts`, и у каждого «не там» своя
+ * причина. Не в общем сьюте — Р-К-38 (перенос при флаке): `bun run test` гонит server и web
+ * ПАРАЛЛЕЛЬНО (Ф-Б1-41), и один и тот же код на тех же сорока ключах давал 5,5 мс медианы на
+ * тихой машине и 10–25 мс под фоновой индексацией диска, то есть порог сторожил бы загрузку.
+ * Не в `volume.test.ts` — тот вне CI (как `test:perf:graph`), а приёмка спеки обязана падать
+ * в CI: гейт, который никто не гоняет, не гейт. Этот файл — `bun run test:perf`, отдельный
+ * шаг CI (`ci.yml`), ровно для приёмочных чисел и заведённый.
+ *
+ * Мир СВОЙ, корпус 20k не нужен: приёмка называет чтение сорока ключей. Строки кладутся прямо
+ * админ-DSN — сев через исполнитель добавил бы сорок транзакций записи, к делу не относящихся,
+ * и сдвинул бы фикстуру гейта выше (её сторож считает строки).
+ *
+ * ЧТО ИМЕННО МЕРИТСЯ — ОДИН SELECT ПО СОРОКА КЛЮЧАМ ВНУТРИ УЖЕ ОТКРЫТОЙ ТРАНЗАКЦИИ, и это не
+ * послабление. Боевой читатель (`runSumCached` в движке) зовёт кэш ИЗНУТРИ транзакции, которую
+ * `budgetOverview` уже открыл; заворачивать каждый замер в свой `withIdentity` значит добавлять
+ * к чтению четыре round-trip'а (BEGIN, `set_config`, `SET LOCAL ROLE`, COMMIT), которые запрос
+ * платит и БЕЗ кэша — их платит и оракул. Цена запроса ЦЕЛИКОМ печатается второй строкой БЕЗ
+ * порога: она честно зависит от машины, и прятать её незачем — дрейф виден и на зелёном.
+ *
+ * Промах в замер не входит намеренно: приёмка про ЧТЕНИЕ кэша, холодный путь мерит задача 12.
+ */
+test('приёмка §С8-16: p95 чтения прогретого кэша spent (40 конвертов) ≤ 10 мс', async () => {
+  /** Сорок конвертов периода — объём одного месяца синтетики П2 (12 × 40). */
+  const ENVELOPES = 40;
+  /** При n = 20 nearest-rank берёт девятнадцатый из двадцати (`src/test/perf.ts`). */
+  const P95_RUNS = 20;
+  const owner = newId();
+  const ids: string[] = [];
+  const admin = adminDb();
+  try {
+    for (let i = 0; i < ENVELOPES; i += 1) {
+      const id = newId();
+      ids.push(id);
+      await admin.db.execute(
+        sql`INSERT INTO entities (id, owner_id, title)
+            VALUES (${id}::uuid, ${owner}::uuid, ${`Конверт кэша ${i}`})`,
+      );
+    }
+  } finally {
+    await admin.client.end();
+  }
+  const asOf = '2026-07-15';
+  const versions = await withIdentity(db, owner, (tx) => readRegistryVersions(tx, owner));
+  await withIdentity(db, owner, (tx) =>
+    writeSpentCache(
+      tx,
+      owner,
+      ids.map((envelopeId) => ({ envelopeId, asOf, spent: '1234.56' })),
+      versions,
+    ),
+  );
+  const keys = ids.map((envelopeId) => ({ envelopeId, asOf }));
+  const check = (hit: Map<string, string>) => {
+    if (hit.size !== ENVELOPES) {
+      throw new Error(`прогретый кэш промахнулся: ${hit.size}/${ENVELOPES}`);
+    }
+  };
+  // Приёмочное число: транзакция открыта ОДИН раз, в замер входит ровно чтение.
+  const p95 = await withIdentity(db, owner, (tx) =>
+    measureP95('spent-cache read(40)', P95_RUNS, async () =>
+      check(await readSpentCache(tx, owner, keys, versions)),
+    ),
+  );
+  // Справочное: то же чтение вместе с обвязкой запроса (BEGIN/identity/COMMIT).
+  await measureP95('spent-cache read(40)+tx', P95_RUNS, () =>
+    withIdentity(db, owner, async (tx) => check(await readSpentCache(tx, owner, keys, versions))),
+  );
+  // Мир приёмки уносится за собой: фикстура гейта считает строки, и сорок чужих конвертов
+  // сдвинули бы её сторож.
+  const cleanup = adminDb();
+  try {
+    await cleanup.db.execute(sql`DELETE FROM entities WHERE owner_id = ${owner}::uuid`);
+  } finally {
+    await cleanup.client.end();
+  }
+  expect([p95 <= 10, `p95=${p95.toFixed(1)}ms`]).toEqual([true, `p95=${p95.toFixed(1)}ms`]);
 }, 120_000);

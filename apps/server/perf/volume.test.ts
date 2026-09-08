@@ -15,11 +15,9 @@ import {
 import { sql } from 'drizzle-orm';
 import { computeOverview } from '../src/budget/aggregates';
 import { selectEnvelopes } from '../src/budget/binding';
-import { readSpentCache, writeSpentCache } from '../src/budget/spent-cache';
 import { withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { effectiveRegistry } from '../src/registry/cache';
-import { readRegistryVersions } from '../src/registry/version';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
 import { measureP95 } from '../src/test/perf';
@@ -231,82 +229,5 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
                      WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`),
     )) as unknown as Array<{ n: number }>;
     expect(rows[0]?.n).toBe(VOLUME_ENVELOPES);
-  }, 900_000);
-});
-
-/**
- * ЧИСЛО приёмки §С8-16 («чтение кэша ≤ 10 мс p95») живёт В ПЕРФ-ПОЛОСЕ, а не в общем сьюте
- * (Р-К-38 разрешает перенос при флаке — флак состоялся): `bun run test` гонит server и web
- * ПАРАЛЛЕЛЬНО (Ф-Б1-41), и порог сторожил бы загрузку машины, а не кэш.
- *
- * ЧТО ИМЕННО МЕРИТСЯ — ОДИН SELECT ПО СОРОКА КЛЮЧАМ ВНУТРИ УЖЕ ОТКРЫТОЙ ТРАНЗАКЦИИ, и это не
- * послабление, а единственная честная форма вопроса. Боевой читатель (`runSumCached` в движке)
- * зовёт кэш ИЗНУТРИ транзакции, которую `budgetOverview` уже открыл; заворачивать каждый замер
- * в свой `withIdentity` значит добавлять к чтению четыре round-trip'а (BEGIN, `set_config`,
- * `SET LOCAL ROLE`, COMMIT), которые запрос платит и БЕЗ кэша — их платит и оракул. На тихой
- * машине разница тонула (5,5 мс медианы на пять round-trip'ов), под фоновой индексацией диска
- * всплыла: те же сорок ключей давали 10–12 мс медианы, из которых собственно чтение — пятая
- * часть. Мерить обвязку запроса порогом, названным про кэш, — мерить не то.
- *
- * Цена запроса ЦЕЛИКОМ печатается второй строкой БЕЗ порога: она честно зависит от машины, и
- * прятать её незачем — дрейф виден и на зелёном (довод `src/test/perf.ts`).
- *
- * Конверты СВОИ, а не из корпуса 20k: приёмка называет чтение сорока ключей, и мешать в него
- * сев корпуса значило бы мерить не то. Промах в замер не входит намеренно — приёмка про
- * ЧТЕНИЕ кэша, а холодный путь мерит задача 12 (p95 ≤ 2× оракула и ≤ 500 мс).
- */
-describe('приёмка §С8-16: чтение прогретого кэша ≤ 10 мс p95', () => {
-  /** Сорок конвертов периода — объём одного месяца синтетики П2 (12 × 40). */
-  const ENVELOPES = 40;
-
-  test('сорок конвертов: p95 чтения прогретого кэша ≤ 10 мс', async () => {
-    const user = newId();
-    const ids: string[] = [];
-    const admin = adminDb();
-    try {
-      // Строки кладутся ПРЯМО (админ-DSN): приёмка мерит чтение, и сев через исполнитель
-      // добавил бы к ней сорок транзакций записи, к делу не относящихся.
-      for (let i = 0; i < ENVELOPES; i += 1) {
-        const id = newId();
-        ids.push(id);
-        await admin.db.execute(
-          sql`INSERT INTO entities (id, owner_id, title) VALUES (${id}::uuid, ${user}::uuid, ${`Конверт ${i}`})`,
-        );
-      }
-    } finally {
-      await admin.client.end();
-    }
-    const asOf = '2026-07-15';
-    const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
-    await withIdentity(db, user, (tx) =>
-      writeSpentCache(
-        tx,
-        user,
-        ids.map((envelopeId) => ({ envelopeId, asOf, spent: '1234.56' })),
-        versions,
-      ),
-    );
-    const keys = ids.map((envelopeId) => ({ envelopeId, asOf }));
-    const check = (hit: Map<string, string>) => {
-      if (hit.size !== ENVELOPES)
-        throw new Error(`прогретый кэш промахнулся: ${hit.size}/${ENVELOPES}`);
-    };
-    // Приёмочное число: транзакция открыта ОДИН раз, в замер входит ровно чтение.
-    const p95 = await withIdentity(db, user, (tx) =>
-      measureP95('spent-cache read(40)', P95_RUNS, async () =>
-        check(await readSpentCache(tx, user, keys, versions)),
-      ),
-    );
-    // Справочное: то же чтение вместе с обвязкой запроса (BEGIN/identity/COMMIT).
-    await measureP95('spent-cache read(40)+tx', P95_RUNS, () =>
-      withIdentity(db, user, async (tx) => check(await readSpentCache(tx, user, keys, versions))),
-    );
-    const cleanup = adminDb();
-    try {
-      await cleanup.db.execute(sql`DELETE FROM entities WHERE owner_id = ${user}::uuid`);
-    } finally {
-      await cleanup.client.end();
-    }
-    expect([p95 <= 10, `p95=${p95.toFixed(1)}ms`]).toEqual([true, `p95=${p95.toFixed(1)}ms`]);
   }, 900_000);
 });
