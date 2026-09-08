@@ -131,6 +131,27 @@ test('шаблоны прячет сервер: второго фильтра н
   await screen.findByText('ev,tpl');
 });
 
+test('date-значение слота остаётся своим днём западнее UTC (I-2)', async () => {
+  // Слот `moment` бывает date-свойством (§Б1-2 `any_of`), и у такого значения часов нет.
+  // `new Date('2026-09-08')` — полночь UTC, то есть в Нью-Йорке «вчера»: дело, назначенное на
+  // сегодня, уезжало в день, которого нет в окне, и молча пропадало с Повестки.
+  const NY = 'America/New_York';
+  const allDayToday = wireEntity({
+    id: 'ad',
+    title: 'Отпуск: день 1',
+    props: { 'orbis/due_date': today },
+    aspects: ['orbis/task'],
+  });
+  renderWithProviders(<Probe />, () => ({
+    today,
+    timezone: NY,
+    truncated: { window: false, overdue: false },
+    rows: [row(allDayToday, { at: today, allDay: true })],
+  }));
+  await screen.findByText('ad');
+  expect(screen.getByTestId('day-today')).toHaveTextContent('ad');
+});
+
 test('чтения адресуют СВОЙСТВА по id — теми же именами, что стоят в реестре', () => {
   // Прежде запрос спрашивал `orbis/start_at`, а клиент читал ответ парой «аспект + поле»:
   // переименование рвало ровно одну из двух половин, и молча.

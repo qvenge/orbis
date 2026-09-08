@@ -168,6 +168,59 @@ describe('движок Agenda: потолок секций, наборы кон�
     expect(win.length).toBeGreaterThanOrEqual(7); // по инстансу на каждый день окна
   });
 
+  test('за потолком ОДНОЙ секции строка не просачивается через другую (I-1)', async () => {
+    // 201 просроченная задача плюс 202-я, которая ещё и в окне: внешний WHERE пропускает её по
+    // окну, и до правки цикл толкал её в просроченное — 201 строка при поднятом флаге.
+    // Даты подобраны так, что двойная сортируется в просроченном ПОСЛЕДНЕЙ (LEAST по её паре
+    // даёт вчера против позавчера у остальных), то есть её rn_overdue заведомо за сторожем.
+    const u = freshUserId();
+    for (let i = 0; i < 201; i++)
+      await make(u, `Просрочено ${i}`, {
+        props: { 'orbis/task_status': 'planned', 'orbis/due_date': addDays(today, -2) },
+        aspects: ['orbis/task'],
+      });
+    const both = await make(u, 'И в окне, и просрочено', {
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/due_date': addDays(today, -1),
+        'orbis/start_at': at(addDays(today, 1), '09:00'),
+      },
+      aspects: ['orbis/task', 'orbis/schedule'],
+    });
+    const r = await listFor(u);
+    expect(r.rows.filter((x) => x.section === 'overdue')).toHaveLength(200);
+    expect(r.truncated).toEqual({ window: false, overdue: true });
+    // …и своей ЗАКОННОЙ секции она при этом не теряет: потолок окна не задет
+    expect(idsOf(r, 'window').has(both)).toBe(true);
+    expect(idsOf(r, 'overdue').has(both)).toBe(false);
+  });
+
+  test('направление окна — из декларации: sortBy desc переворачивает порядок (M-3)', async () => {
+    const u = freshUserId();
+    const t1 = await make(u, 'Сегодня', {
+      props: { 'orbis/start_at': at(today, '10:00') },
+      aspects: ['orbis/schedule'],
+    });
+    const t2 = await make(u, 'Завтра', {
+      props: { 'orbis/start_at': at(addDays(today, 1), '10:00') },
+      aspects: ['orbis/schedule'],
+    });
+    const listWith = (sortBy: 'asc' | 'desc') =>
+      withIdentity(db, u, async (tx) => {
+        const def = agendaSubscriptionOf(await effectiveRegistry(tx, u));
+        return agendaListOf(
+          tx,
+          u,
+          { ...def, show: { ...def.show, sortBy } },
+          { today, timeZone: TZ, days: 8 },
+        );
+      });
+    const idsIn = (r: AgendaListResult) =>
+      r.rows.filter((x) => x.section === 'window').map((x) => x.entity.id);
+    expect(idsIn(await listWith('asc'))).toEqual([t1, t2]);
+    expect(idsIn(await listWith('desc'))).toEqual([t2, t1]);
+  });
+
   test('горизонт — параметр вызова: days=1 отдаёт только сегодняшний день', async () => {
     const u = freshUserId();
     const t1 = await make(u, 'Сегодня', {

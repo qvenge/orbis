@@ -12,6 +12,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  BUILTIN_SUBSCRIPTION_DEFS,
   bindingIndexOf,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
@@ -211,6 +212,26 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
       systemSeed: false,
     });
     expect(rawValueRefs(own)).toEqual(['overdue.where.args.1.args.0']);
+  });
+});
+
+describe('встроенный сид проходит валидатор записи (§Б5-1)', () => {
+  // Сид кладёт строки МИМО `assertSubscription` (прямой INSERT в `seed-registries.ts`), поэтому
+  // декларация, которую валидатор отверг бы у владельца, уехала бы в базу молча — и упала бы уже
+  // на чтении снимка. Здесь список пиннится целиком: задача 9 дописывает budget в тот же массив.
+  test('каждая BUILTIN_SUBSCRIPTION_DEFS законна как system-строка своей поверхности', () => {
+    expect(BUILTIN_SUBSCRIPTION_DEFS.length).toBeGreaterThan(0); // не тавтология на пустом списке
+    for (const s of BUILTIN_SUBSCRIPTION_DEFS) {
+      const seeded = row(s.definition, {
+        id: s.id,
+        surface: s.surface,
+        module: s.module,
+        rank: s.rank,
+      });
+      expect(assertSubscription(seeded, { reg: snapshot(), systemSeed: true }).engine).toBe(
+        s.definition.engine,
+      );
+    }
   });
 });
 

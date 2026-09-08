@@ -10,17 +10,9 @@ import { trpc } from '../trpc';
 const appMocks = (path: string) => {
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
-  // Бейдж Повестки (§1.5) смонтирован на любом экране в обеих поверхностях навигации,
-  // поэтому App всегда шлёт agenda.list; `entity.query` шлёт пробник ниже. У обоих контракт
-  // ответа непустой, и `{}` вместо него уронил бы дерево, а не тест.
+  // `entity.query` шлёт пробник ниже; подписку Повестки (её бейдж смонтирован на любом экране
+  // в обеих поверхностях навигации) за нас роутит обвязка — `UNROUTED_DEFAULTS` в `test/harness.tsx`.
   if (path === 'entity.query') return [];
-  if (path === 'agenda.list')
-    return {
-      today: '2026-09-08',
-      timezone: 'UTC',
-      rows: [],
-      truncated: { window: false, overdue: false },
-    };
   return {};
 };
 

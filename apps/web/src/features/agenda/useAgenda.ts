@@ -69,8 +69,16 @@ function intl(tz: string | undefined, opts: Intl.DateTimeFormatOptions, locale: 
 
 const DAY_OPTS = { year: 'numeric', month: '2-digit', day: '2-digit' } as const;
 
-/** Локальный день 'YYYY-MM-DD' момента в таймзоне пользователя; битый вход → null. */
+/**
+ * Локальный день 'YYYY-MM-DD' значения слота в таймзоне пользователя; битый вход → null.
+ *
+ * Date-значение возвращается КАК ЕСТЬ — зеркало серверного `localDay` (`subscriptions/agenda.ts`).
+ * Слот `moment` объявлен `any_of[timestamp, date]` (§Б1-2), и у date-значения дня уже нет часов:
+ * `new Date('2026-09-08')` — полночь UTC, то есть в любой зоне западнее Гринвича «вчера», и дело,
+ * назначенное на сегодня, молча исчезало бы с Повестки.
+ */
 export function localDay(iso: string, tz?: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   try {
@@ -153,12 +161,7 @@ export function useAgendaOverdue(): {
   const items = [...(q.data?.rows ?? [])]
     .filter((r) => r.section === 'overdue')
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-  // Необязательная цепочка на ОБЯЗАТЕЛЬНОМ поле контракта — не перестраховка: бейдж
-  // смонтирован на ЛЮБОМ экране (§1.5), и ответ без `truncated` (старый сервер против нового
-  // клиента, мок соседнего сьюта) ронял бы не счётчик, а всё приложение. Та же терпимость,
-  // что у `rows ?? []` выше: нет поля — считаем «не усечено».
-  const countLabel =
-    q.data?.truncated?.overdue === true ? `${items.length}+` : String(items.length);
+  const countLabel = q.data?.truncated.overdue === true ? `${items.length}+` : String(items.length);
   return {
     items,
     countLabel,

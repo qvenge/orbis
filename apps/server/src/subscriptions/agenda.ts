@@ -157,6 +157,13 @@ export async function agendaListOf(
     moments.map((b) => slotInstant(b, cctx)),
     sql`, `,
   )})`;
+  // Направление окна — ИЗ ДЕКЛАРАЦИИ (`sortBy`), иначе дельта владельца `sortBy: 'desc'` молча
+  // ничего не меняла бы. Литерал выбирается ветвлением, а не склеивается из строки декларации:
+  // `sql.raw` над значением, пришедшим из БД, — это ввод владельца в тексте запроса.
+  const winDir = def.show.sortBy === 'desc' ? sql.raw('DESC') : sql.raw('ASC');
+  // У просроченного направления в декларации НЕТ (§Б5-4): «старейшие сверху» — свойство самой
+  // секции, а не настройка, и второго порядка у неё не предусмотрено.
+
   const ovSort = sql`LEAST(${sql.join([...deadlines, ...moments].map(dateOf), sql`, `)})`;
   const wCap = def.show.limit + 1;
   const oCap = def.overdue.limit + 1;
@@ -165,7 +172,7 @@ export async function agendaListOf(
   const rows = (await tx.execute(sql`
     SELECT ${cols}, in_window, in_overdue, rn_window, rn_overdue FROM (
       SELECT ${cols}, ${inWindow} AS in_window, ${inOverdue} AS in_overdue,
-        ROW_NUMBER() OVER (PARTITION BY ${inWindow} ORDER BY ${winSort} ASC NULLS LAST, id) AS rn_window,
+        ROW_NUMBER() OVER (PARTITION BY ${inWindow} ORDER BY ${winSort} ${winDir} NULLS LAST, id) AS rn_window,
         ROW_NUMBER() OVER (PARTITION BY ${inOverdue} ORDER BY ${ovSort} ASC NULLS LAST, id) AS rn_overdue
       FROM entities e
       WHERE ${compileWhere({ filter: null }, cctx)} AND (${inWindow} OR ${inOverdue})
@@ -177,13 +184,16 @@ export async function agendaListOf(
   const truncated = { window: false, overdue: false };
   for (const r of rows) {
     const entity = toWireEntityFromSql(r);
-    // Строка-сторож (rn = limit+1) в выдачу не едет — она и есть доказательство усечения.
+    // Сравнение СТРОГО БОЛЬШЕ потолка, а не равенство сторожу: строка проходит внешний WHERE,
+    // если её пропустила ХОТЯ БЫ ОДНА секция, и тогда её номер в ДРУГОЙ секции ничем не
+    // ограничен. Проверка `=== limit+1` пропускала 202-ю просроченную, оказавшуюся заодно
+    // третьей в окне, — потолок декларации нарушался, а счётчик показывал «201+».
     if (r.in_window === true) {
-      if (Number(r.rn_window) === wCap) truncated.window = true;
+      if (Number(r.rn_window) > def.show.limit) truncated.window = true;
       else out.push(rowOf(entity, 'window', cctx, def));
     }
     if (r.in_overdue === true) {
-      if (Number(r.rn_overdue) === oCap) truncated.overdue = true;
+      if (Number(r.rn_overdue) > def.overdue.limit) truncated.overdue = true;
       else out.push(rowOf(entity, 'overdue', cctx, def));
     }
   }

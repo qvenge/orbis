@@ -120,6 +120,32 @@ const SUSPENDED = <div data-testid="harness-suspended">дерево подвис
  * написавший StrictMode внутри, проверяет ровно то же, что и без него, и зелен при любой
  * реализации. Поэтому StrictMode здесь оборачивает ВСЁ дерево, включая провайдеры.
  */
+/**
+ * Ответы, которые обвязка подставляет ЗА сьют, не роутивший путь (соглашение корпуса — вернуть
+ * `{}` из хендлера на всё незнакомое).
+ *
+ * Здесь лежит ровно то, что дерево приложения спрашивает НА ЛЮБОМ экране, а не «удобные
+ * умолчания вообще»: бейдж Повестки (§1.5) смонтирован в обеих поверхностях навигации, и его
+ * подписка уходит даже там, где сьют проверяет навигацию или Бюджет. Без этой строки девяти
+ * чужим сьютам пришлось бы знать форму чужого контракта — а хук был бы вынужден терпеть ответ,
+ * которого контракт не допускает, и терпимость прятала бы настоящий разъезд клиента с сервером.
+ */
+const UNROUTED_DEFAULTS: Readonly<Record<string, unknown>> = {
+  'agenda.list': {
+    today: '2026-07-03',
+    timezone: 'Europe/Moscow',
+    rows: [],
+    truncated: { window: false, overdue: false },
+  },
+};
+
+/** «Сьют этот путь не роутил»: пустой объект — то самое соглашение корпуса. */
+const unrouted = (value: unknown): boolean =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  Object.keys(value).length === 0;
+
 export function renderWithProviders(
   ui: ReactNode,
   handler: MockHandler = () => ({}),
@@ -131,9 +157,11 @@ export function renderWithProviders(
   });
   const client = trpc.createClient({
     links: [
-      mockLink((path, input) => {
+      mockLink(async (path, input) => {
         calls.push({ path, input });
-        return handler(path, input);
+        const answer = await handler(path, input);
+        const fallback = UNROUTED_DEFAULTS[path];
+        return fallback !== undefined && unrouted(answer) ? fallback : answer;
       }),
     ],
   });

@@ -241,8 +241,10 @@ describe('гейт §С8-18: аспект только декларацией', 
     expect(env?.spent).toBe(GATE_AMOUNT);
   });
 
-  // Зеленит задача 6. Сегодня оба текста требуют `aspect=orbis/schedule`/`aspect=orbis/task` —
-  // дело гейта не несёт ни того, ни другого и в повестку не попадает ни в одну секцию.
+  // ЗЕЛЁНЫЙ с задачи 6. Прежде вкладка спрашивала тремя текстами, требовавшими
+  // `aspect=orbis/schedule`/`aspect=orbis/task`, и дело гейта, не несущее ни того ни другого,
+  // не попадало ни в одну секцию. Теперь секции строит подписка по КОНТРАКТАМ — `user/gate-plain`
+  // реализует `orbis/when` (слот `moment`) и `orbis/completable`, и этого достаточно.
   test('дела gate-plain попадают в Agenda: окно и просроченное (§С8-18, потребитель 2)', () => {
     const section = new Map(taken(agenda, 'Agenda').map((r) => [r.id, r.section]));
     expect(section.get(world.windowId)).toBe('window');
