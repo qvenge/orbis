@@ -15,8 +15,8 @@
 // движок подписки (`subscriptions/budget.ts`) уже берёт `lockOwnerBudget` из `binding.ts`, и
 // обратный импорт декларации замкнул бы цикл. Здесь нет ни одного запроса — только разбор и
 // куски SQL-предикатов, которые собирает вызывающий.
-import { bindingIndexOf, type BudgetSubscription, type ResolvedBinding } from '@orbis/shared';
-import { sql, type SQL } from 'drizzle-orm';
+import { type BudgetSubscription, bindingIndexOf, type ResolvedBinding } from '@orbis/shared';
+import { type SQL, sql } from 'drizzle-orm';
 import type { RegistrySnapshot } from '../registry/load';
 
 /** Слоты, которыми пишущая половина пользуется по имени (§1.4: деньги и конверт). */

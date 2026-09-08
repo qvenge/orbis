@@ -339,8 +339,10 @@ describe('§С8-18, пишущая половина: ребро envelope-binding
   beforeAll(async () => {
     await seedCustomAspect(writer, GATE_FIN_ASPECT);
     const caller = callerFor(writer);
-    const mk = async (title: string, form: { props?: Record<string, unknown>; aspects?: string[] }) =>
-      (await caller.entity.create({ input: { title, tags: [], ...form }, source: 'ui' })).id;
+    const mk = async (
+      title: string,
+      form: { props?: Record<string, unknown>; aspects?: string[] },
+    ) => (await caller.entity.create({ input: { title, tags: [], ...form }, source: 'ui' })).id;
     const category = await mk('Категория пишущей половины', { aspects: ['orbis/category'] });
     const envelope = await mk('Конверт пишущей половины', {
       aspects: ['orbis/budget'],
@@ -393,7 +395,10 @@ describe('§С8-18, пишущая половина: ребро envelope-binding
     // Идёт ПОСЛЕДНИМ: сущность после него движением быть перестаёт. `unbindOps` строит цель
     // принудительной отвязкой (`props: null`) именно потому, что у detach'нутой сущности
     // аспекта уже нет и `bindingTargetOf` вернул бы null — снять связь было бы некому.
-    await callerFor(writer).entity.update({ id: ids.movement, aspects: { detach: [GATE_FIN_KEY] } });
+    await callerFor(writer).entity.update({
+      id: ids.movement,
+      aspects: { detach: [GATE_FIN_KEY] },
+    });
     expect(await boundBy(ids.movement)).toEqual([]);
   });
 });

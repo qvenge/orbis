@@ -11,17 +11,16 @@ import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import type { WireEntity } from '../executor/types';
 import {
-  bindingFor,
   type BudgetContour,
+  bindingFor,
   carriesSide,
   isTemplate,
-  propOfSlot,
-  sideAspectsSql,
   SLOT_CATEGORY,
   SLOT_CURRENCY,
   SLOT_DATE,
   SLOT_PERIOD_END,
   SLOT_PERIOD_START,
+  sideAspectsSql,
   templateSql,
 } from './contour';
 
@@ -264,12 +263,10 @@ export interface BindingTarget {
 }
 
 /** Цель привязки для сущности (§2.3); null — привязка не применяется (не движение/архив). */
-export function bindingTargetOf(
-  entity: WireEntity,
-  contour: BudgetContour,
-): BindingTarget | null {
+export function bindingTargetOf(entity: WireEntity, contour: BudgetContour): BindingTarget | null {
   if (!carriesSide(contour.movement, entity.aspects) || entity.archived) return null;
-  if (isTemplate(contour, entity)) return { txnId: entity.id, aspects: entity.aspects, props: null };
+  if (isTemplate(contour, entity))
+    return { txnId: entity.id, aspects: entity.aspects, props: null };
   return { txnId: entity.id, aspects: entity.aspects, props: entity.props };
 }
 

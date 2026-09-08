@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { BUILTIN_ASPECT_DEFS, BUILTIN_CONTRACT_DEFS, BUDGET_DEF } from '@orbis/shared';
-import { budgetContourOf } from '../budget/contour';
+import { BUDGET_DEF, BUILTIN_ASPECT_DEFS, BUILTIN_CONTRACT_DEFS } from '@orbis/shared';
 import { bindingTargetOf } from '../budget/binding';
+import { budgetContourOf } from '../budget/contour';
 import type { WireEntity } from '../executor/types';
 import type { RegistrySnapshot } from '../registry/load';
 import {
@@ -209,10 +209,9 @@ describe('пробы сторожа Р-К-2', () => {
     );
     expect(bindingTargetOf(movement, contour)?.props).not.toBeNull();
 
-    const template = wire(
-      ['orbis/financial', 'orbis/schedule'],
-      { 'orbis/recurrence': { freq: 'monthly', interval: 1 } },
-    );
+    const template = wire(['orbis/financial', 'orbis/schedule'], {
+      'orbis/recurrence': { freq: 'monthly', interval: 1 },
+    });
     expect(volumeCombination(template.props, template.aspects) === null).toBe(
       bindingTargetOf(template, contour)?.props === null,
     );

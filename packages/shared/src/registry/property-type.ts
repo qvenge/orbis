@@ -211,9 +211,7 @@ export const aspectDefinitionSchema = z
      * дорого считать»), `published` — свойство аспекта («её видно снаружи»), и владелец,
      * снявший аспект с публикации, обязан гасить и её кэш.
      */
-    aggregations: z
-      .record(z.string(), z.object({ published: z.boolean() }).strict())
-      .default({}),
+    aggregations: z.record(z.string(), z.object({ published: z.boolean() }).strict()).default({}),
     viewConfig: z.object({ keyFields: z.array(z.string()), icon: z.string().optional() }).strict(),
     module: z.string().nullable(),
     /**

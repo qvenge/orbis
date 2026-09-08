@@ -50,7 +50,7 @@ import {
   rebindForEnvelope,
   unbindOps,
 } from '../budget/binding';
-import { type BudgetContour, carriesSide, type ContourSide } from '../budget/contour';
+import { type BudgetContour, type ContourSide, carriesSide } from '../budget/contour';
 import {
   bumpSpentCache,
   invalidateSpentCache,
@@ -87,6 +87,13 @@ import {
   syncRefMirror,
 } from '../registry/ref';
 import { projectBodyTemplate } from '../seed/project-body';
+// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
+import {
+  budgetContourFor,
+  type SpentCacheContour,
+  spentCacheContourOf,
+  spentContributionOf,
+} from '../subscriptions/budget';
 import {
   aspectDeltaRemoveInput,
   aspectDeltaSetInput,
@@ -95,13 +102,6 @@ import {
   propertyUpdateInput,
   REGISTRY_TOOL_NAMES,
 } from '../tools/registry-tools';
-// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
-import {
-  budgetContourFor,
-  type SpentCacheContour,
-  spentCacheContourOf,
-  spentContributionOf,
-} from '../subscriptions/budget';
 import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { PROJECT_ASPECT, recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
@@ -1170,8 +1170,7 @@ function budgetHookBranches(
     // шаблоном» закрывает ветка (а) через bindingTargetOf → props:null.
     unbind: hadMovement && !hasMovement,
     rebind:
-      touchesEnvelope &&
-      (before === null || archivedChanged || changed(contour.envelope.aspects)),
+      touchesEnvelope && (before === null || archivedChanged || changed(contour.envelope.aspects)),
     // Аспекты контракта `orbis/recurrence` в условии — сценарий «пометить повторяющейся»
     // (§3.1): attach/detach маркера меняет шаблонность при неизменных данных движения, и
     // привязку надо пересчитать (шаблон отвязывается, экс-шаблон привязывается заново).
@@ -1304,7 +1303,9 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
 
 /** Несёт ли строка хоть один аспект стороны контура кэша. */
 function carriesContourSide(aspects: ReadonlySet<string>, row: EntityRow | null): boolean {
-  return row !== null && row.aspects.some((id) => aspects.has(id));
+  // `=== true`, а не голая цепочка: у `?.` результат `boolean | undefined`, и предикат
+  // контура обязан оставаться булевым — на нём стоят ветки инкремента и сноса.
+  return row?.aspects.some((id) => aspects.has(id)) === true;
 }
 
 /**

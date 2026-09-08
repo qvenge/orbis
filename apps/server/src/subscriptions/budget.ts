@@ -55,12 +55,8 @@ import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
 import { inArray, SQL, sql } from 'drizzle-orm';
 import { defaultCurrencyOf, lockOwnerBudget, selectEnvelope } from '../budget/binding';
 import { type CategoryInfo, categoriesById, ownerCategories } from '../budget/categories';
+import { type BudgetContour, budgetContourOf, EMPTY_CONTOUR } from '../budget/contour';
 import { decAdd, decCmp, decMul, decSub } from '../budget/decimal';
-import {
-  type BudgetContour,
-  budgetContourOf,
-  EMPTY_CONTOUR,
-} from '../budget/contour';
 import { readSpentCache, spentCacheKey, writeSpentCache } from '../budget/spent-cache';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -74,8 +70,8 @@ import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
 import { DEFAULT_TIMEZONE } from '../query/context';
 import type { RegistrySnapshot } from '../registry/load';
-import { builtinSubscription } from './registry';
 import { toWireEntity } from '../wire';
+import { builtinSubscription } from './registry';
 
 export const BUDGET_SUBSCRIPTION_ID = 'orbis/budget-overview';
 

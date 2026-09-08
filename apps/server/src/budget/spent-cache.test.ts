@@ -19,14 +19,19 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { DEFAULT_TIMEZONE } from '../query/context';
-import { measureP95 } from '../test/perf';
 import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
 import { spentContributionOf } from '../subscriptions/budget';
+import { measureP95 } from '../test/perf';
 import { budgetOverview } from './aggregates';
 import { defaultCurrencyOf } from './binding';
 import { decAdd, decCmp } from './decimal';
-import { invalidateSpentCache, readSpentCache, spentCacheKey, writeSpentCache } from './spent-cache';
+import {
+  invalidateSpentCache,
+  readSpentCache,
+  spentCacheKey,
+  writeSpentCache,
+} from './spent-cache';
 
 requireEnv();
 const { db, client } = appDb();
@@ -61,11 +66,7 @@ async function createEntity(user: string, input: Record<string, unknown>): Promi
   return ok(await execute(db, req(user, 'entity_create', { tags: [], ...input })))
     .results[0] as WireEntity;
 }
-function budgetProps(
-  cat: string,
-  from = '2026-07-01',
-  to = '2026-07-31',
-): Record<string, unknown> {
+function budgetProps(cat: string, from = '2026-07-01', to = '2026-07-31'): Record<string, unknown> {
   return {
     'orbis/finance_category': cat,
     'orbis/limit': '30000.00',
@@ -175,15 +176,15 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
         versions,
       );
     });
-    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent)).toEqual(
-      ['999.00'],
-    );
+    expect(
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent),
+    ).toEqual(['999.00']);
 
     // §С8-16: смена registry_version инвалидирует — строка чужой версии не отвечает.
     await bumpRegistryVersion(user);
-    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent)).toEqual(
-      ['340.00'],
-    );
+    expect(
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent),
+    ).toEqual(['340.00']);
   });
 
   test('конверт без трат кэшируется НУЛЁМ: иначе он промахивался бы вечно', async () => {
@@ -276,17 +277,24 @@ describe('врезка в бюджет-хук: инкремент нового �
       props: finProps(cat, '2026-07-06', { 'orbis/amount': '100.00' }),
       aspects: ['orbis/financial'],
     });
-    const envId = ((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]
-      ?.envelope as WireEntity).id;
+    const envId = (
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.envelope as WireEntity
+    ).id;
     expect((await cacheRows(envId))[0]?.spent).toBe('440.00');
-    ok(await execute(db, req(user, 'entity_update', { id: txn.id, props: { 'orbis/amount': '250.00' } })));
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_update', { id: txn.id, props: { 'orbis/amount': '250.00' } }),
+      ),
+    );
     expect(await cacheRows(envId)).toEqual([]); // ленивый пересчёт
     expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('590.00');
   });
 
   test('доход и план не инкрементируют вовсе (предикат тот же, что у ведомости)', async () => {
-    const envId = ((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]
-      ?.envelope as WireEntity).id;
+    const envId = (
+      (await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.envelope as WireEntity
+    ).id;
     const before = (await cacheRows(envId))[0]?.spent;
     // Прогретая строка ОБЯЗАНА быть: без неё «не изменилась» было бы сравнением двух
     // `undefined`, то есть тавтологией.
@@ -523,41 +531,37 @@ describe('приёмка §С8-16: чтение кэша ≤ 10 мс p95', () =>
   const ENVELOPES = 40;
   const P95_RUNS = 20; // при n = 20 nearest-rank берёт девятнадцатый из двадцати
 
-  test(
-    'сорок конвертов: p95 чтения прогретого кэша ≤ 10 мс',
-    async () => {
-      const ids: string[] = [];
-      for (let i = 0; i < ENVELOPES; i++) {
-        const cat = newId();
-        const env = await createEntity(user, {
-          title: `Конверт ${i}`,
-          props: budgetProps(cat),
-          aspects: ['orbis/budget'],
-        });
-        ids.push(env.id);
-      }
-      const asOf = '2026-07-15';
-      const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
-      await withIdentity(db, user, (tx) =>
-        writeSpentCache(
-          tx,
-          user,
-          ids.map((envelopeId) => ({ envelopeId, asOf, spent: '1234.56' })),
-          versions,
-        ),
-      );
-      const keys = ids.map((envelopeId) => ({ envelopeId, asOf }));
-      const p95 = await measureP95('spent-cache read(40)', P95_RUNS, () =>
-        withIdentity(db, user, async (tx) => {
-          const hit = await readSpentCache(tx, user, keys, versions);
-          if (hit.size !== ENVELOPES)
-            throw new Error(`прогретый кэш промахнулся: ${hit.size}/${ENVELOPES}`);
-        }),
-      );
-      // Порог §С8-16 дословно. Промах сюда не входит намеренно: приёмка называет ЧТЕНИЕ кэша,
-      // а холодный путь мерит перф-гейт задачи 12 (p95 ≤ 2× оракула и ≤ 500 мс).
-      expect([p95 <= 10, `p95=${p95.toFixed(1)}ms`]).toEqual([true, `p95=${p95.toFixed(1)}ms`]);
-    },
-    120_000,
-  );
+  test('сорок конвертов: p95 чтения прогретого кэша ≤ 10 мс', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < ENVELOPES; i++) {
+      const cat = newId();
+      const env = await createEntity(user, {
+        title: `Конверт ${i}`,
+        props: budgetProps(cat),
+        aspects: ['orbis/budget'],
+      });
+      ids.push(env.id);
+    }
+    const asOf = '2026-07-15';
+    const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
+    await withIdentity(db, user, (tx) =>
+      writeSpentCache(
+        tx,
+        user,
+        ids.map((envelopeId) => ({ envelopeId, asOf, spent: '1234.56' })),
+        versions,
+      ),
+    );
+    const keys = ids.map((envelopeId) => ({ envelopeId, asOf }));
+    const p95 = await measureP95('spent-cache read(40)', P95_RUNS, () =>
+      withIdentity(db, user, async (tx) => {
+        const hit = await readSpentCache(tx, user, keys, versions);
+        if (hit.size !== ENVELOPES)
+          throw new Error(`прогретый кэш промахнулся: ${hit.size}/${ENVELOPES}`);
+      }),
+    );
+    // Порог §С8-16 дословно. Промах сюда не входит намеренно: приёмка называет ЧТЕНИЕ кэша,
+    // а холодный путь мерит перф-гейт задачи 12 (p95 ≤ 2× оракула и ≤ 500 мс).
+    expect([p95 <= 10, `p95=${p95.toFixed(1)}ms`]).toEqual([true, `p95=${p95.toFixed(1)}ms`]);
+  }, 120_000);
 });

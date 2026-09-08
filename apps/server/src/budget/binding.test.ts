@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId, ROLE_ENVELOPE_BINDING } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { GATE_FIN_ASPECT, GATE_FIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
 import {
   adminDb,
   appDb,
@@ -17,7 +18,6 @@ import {
   seedRefTargetRows,
   truncateAll,
 } from '../../test/helpers';
-import { GATE_FIN_ASPECT, GATE_FIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
@@ -1318,9 +1318,7 @@ describe('контур бюджет-хука собран из ДЕКЛАРАЦ�
     const contour = budgetContourFor(
       await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)),
     );
-    expect([...contour.movement.aspects].sort()).toEqual(
-      ['orbis/financial', GATE_FIN_KEY].sort(),
-    );
+    expect([...contour.movement.aspects].sort()).toEqual(['orbis/financial', GATE_FIN_KEY].sort());
     expect(propOfSlot(contour.movement, GATE_FIN_KEY, SLOT_DATE)).toBe(GATE_PROPS.finDate);
     expect(propOfSlot(contour.movement, GATE_FIN_KEY, SLOT_CATEGORY)).toBe(GATE_PROPS.finCategory);
     // Слот `currency` аспект гейта не привязывает — и это законно: комбинация возьмёт
