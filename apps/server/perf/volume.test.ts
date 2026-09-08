@@ -7,6 +7,7 @@
 // ЛИНИЯ p95 `computeOverview` под ролью приложения. Порогов нет — их ставит задача 12.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
+  type BudgetOverview,
   type BudgetSubscription,
   canonicalJson,
   newId,
@@ -18,6 +19,7 @@ import { selectEnvelopes } from '../src/budget/binding';
 import { type Tx, withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { effectiveRegistry } from '../src/registry/cache';
+import type { RegistrySnapshot } from '../src/registry/load';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
 import { measureP95 } from '../src/test/perf';
@@ -84,6 +86,13 @@ function gateViolations(
   return out;
 }
 let fixture: Awaited<ReturnType<typeof ensureVolumeFixture>>;
+/**
+ * Снимок реестра и декларация подписки — ОДИН раз на прогон, а не на каждый замер: в бою их
+ * отдаёт кеш (`registry/cache.ts:103-104`), и промах кеша, попавший в p95, мерил бы первое
+ * открытие приложения, а не чтение ведомостей.
+ */
+let reg: RegistrySnapshot;
+let budgetDef: BudgetSubscription;
 
 beforeAll(async () => {
   const t0 = performance.now();
@@ -97,6 +106,13 @@ beforeAll(async () => {
       })`,
   );
   expect(fixture.entities).toBe(VOLUME_ENTITIES);
+  reg = await withIdentity(db, VOLUME_OWNER_ID, (tx) => effectiveRegistry(tx, VOLUME_OWNER_ID));
+  const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID);
+  // Сужение объединения: подписка не той машинки — не «пустой Overview», а остановка прогона.
+  if (def.engine !== 'budget') {
+    throw new Error(`подписка ${BUDGET_SUBSCRIPTION_ID} не бюджетная: ${def.engine}`);
+  }
+  budgetDef = def;
   // @ts-expect-error bun-types 1.2.7 не объявляет второй аргумент beforeAll — таймаут, — хотя
   // рантайм его принимает (та же пометка, что `graph.test.ts:169-172`).
 }, 900_000);
@@ -128,6 +144,59 @@ async function envelopeIdsOf(tx: Tx): Promise<string[]> {
      WHERE owner_id = ${VOLUME_OWNER_ID} AND NOT archived AND 'orbis/budget' = ANY(aspects)
      ORDER BY id`)) as unknown as Array<{ id: string }>;
   return rows.map((r) => r.id);
+}
+
+/**
+ * Обе реализации — на ОДНОЙ tx и с одним `today`. Реестр и подписка берутся из `beforeAll`.
+ * Конвейер §2.8 (`preparePeriod`, `aggregates.ts:628`) не зовётся: он исполняет `execute()` в
+ * СВОИХ транзакциях (докблок `aggregates.ts:8-12`), к подписке отношения не имеет и внутрь
+ * одной tx не влезает; корпус 0c статичен.
+ */
+async function overviewPairOn(tx: Tx, month: string) {
+  const oracle = await computeOverview(tx, VOLUME_OWNER_ID, month, VOLUME_TODAY);
+  const engine = await budgetOverviewOf(
+    tx,
+    VOLUME_OWNER_ID,
+    { month, today: VOLUME_TODAY },
+    budgetDef,
+    reg,
+  );
+  return { oracle, engine };
+}
+
+/**
+ * Расхождения — ПОИМЁННО: «не равны» на сорока конвертах и шести ведомостях не говорит, ЧТО
+ * разъехалось, а §С8-15 требует ноль расхождений «по всем 480 конвертам и всем ведомостям».
+ * Сравнение через `canonicalJson` (`aspect-registry.ts:25`): jsonb не хранит порядок ключей, и
+ * наивный `JSON.stringify` объявил бы расхождением любое значение, прошедшее через БД.
+ */
+function divergencesOf(oracle: BudgetOverview, engine: BudgetOverview, month: string): string[] {
+  const out: string[] = [];
+  const rest = new Map(engine.envelopes.map((e) => [e.envelope.id, e]));
+  for (const o of oracle.envelopes) {
+    const e = rest.get(o.envelope.id);
+    if (!e) {
+      out.push(`${month} ${o.envelope.id}: конверта нет в выдаче движка`);
+      continue;
+    }
+    rest.delete(o.envelope.id);
+    for (const f of ['spent', 'effectiveLimit', 'remaining', 'dailyPace', 'phase'] as const) {
+      if (canonicalJson(o[f]) !== canonicalJson(e[f])) {
+        out.push(
+          `${month} ${o.envelope.id}.${f}: оракул ${canonicalJson(o[f])} ≠ движок ${canonicalJson(e[f])}`,
+        );
+      }
+    }
+  }
+  for (const id of rest.keys()) out.push(`${month} ${id}: лишний конверт в выдаче движка`);
+  for (const l of ['period', 'balance', 'comingUp', 'planned', 'unbudgeted', 'alertCount'] as const) {
+    if (canonicalJson(oracle[l]) !== canonicalJson(engine[l])) {
+      out.push(
+        `${month} ведомость ${l}: оракул ${canonicalJson(oracle[l])} ≠ движок ${canonicalJson(engine[l])}`,
+      );
+    }
+  }
+  return out;
 }
 
 test('корпус наполнен: гейт меряет данные, а не пустой граф', async () => {
@@ -304,3 +373,15 @@ test('гейт §С8-15: пороги дословно из спеки и они
   expect(gateViolations({ oracleP95: 100, engineP95: 600 }, VOLUME_BUDGETS)).toHaveLength(2);
   expect(gateViolations({ oracleP95: 100, engineP95: 150 }, VOLUME_BUDGETS)).toEqual([]);
 });
+
+test('сверка и замер — на одной транзакции: движок и оракул дают один Overview', async () => {
+  // Полная сверка (12 месяцев × 40 конвертов, все ведомости) стоит выше и отвечает за §С8-15
+  // «ноль расхождений». Эта отвечает за смысл ЧИСЛА: без неё p95 сравнивал бы две программы,
+  // про равенство которых известно из соседнего теста, — а он мог отработать на другой tx и
+  // при другом состоянии кэша spent.
+  const diffs = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+    const { oracle, engine } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
+    return divergencesOf(oracle, engine, VOLUME_LAST_MONTH);
+  });
+  expect(diffs).toEqual([]);
+}, 300_000);
