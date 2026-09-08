@@ -256,6 +256,49 @@ describe('врезка в бюджет-хук: инкремент нового �
     });
     expect((await cacheRows(envId))[0]?.spent).toBe(before as string);
   });
+
+  test('ребро envelope-binding, поставленное/снятое не хуком, сносит строку конверта', async () => {
+    const otherCat = newId();
+    const env = await createEntity(user, {
+      title: 'Ручной конверт',
+      props: budgetProps(otherCat),
+      aspects: ['orbis/budget'],
+    });
+    const txn = await createEntity(user, {
+      title: 'Ручная трата',
+      props: finProps(otherCat, '2026-07-08'),
+      aspects: ['orbis/financial'],
+    });
+    await budgetOverview(db, user, '2026-07', clock);
+    expect((await cacheRows(env.id))[0]?.spent).toBe('340.00');
+    // Механизм seed — фикстура играет роль системы (§А4-4): гейт created_by пропускает.
+    ok(
+      await execute(
+        db,
+        req(
+          user,
+          'relation_delete',
+          { source_id: env.id, target_id: txn.id, role: 'envelope-binding' },
+          { mechanism: 'seed' },
+        ),
+      ),
+    );
+    expect(await cacheRows(env.id)).toEqual([]);
+    await budgetOverview(db, user, '2026-07', clock);
+    expect((await cacheRows(env.id))[0]?.spent).toBe('0.00');
+    ok(
+      await execute(
+        db,
+        req(
+          user,
+          'relation_create',
+          { source_id: env.id, target_id: txn.id, role: 'envelope-binding' },
+          { mechanism: 'seed' },
+        ),
+      ),
+    );
+    expect(await cacheRows(env.id)).toEqual([]);
+  });
 });
 
 describe('вклад одного движения — из декларации подписки (§Б5-4, §Б5-5)', () => {

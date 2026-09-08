@@ -1245,6 +1245,13 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
   const applied: PreparedOp[] = [];
   for (const [i, hook] of hooks.entries()) {
     const descs = await budgetFollowUpDescs(ctx, hook, reads, branches[i]);
+    // Конверты-родители движения снимаются ДО применения дописанных операций, и это не
+    // оптимизация, а точность: ребиндинг уводит деньги ИЗ старого конверта В новый, и обе
+    // строки обязаны потерять кэш. Заодно чтение идёт по ПРОГРЕТОМУ `reads`: после
+    // `invalidateParents` внутреннего цикла тот же вопрос стоил бы отдельного запроса на
+    // каждый хук — то есть вернул бы N+1 массового импорта (пин `binding-batch.test.ts`,
+    // «чтения привязки — константа»).
+    const parentsBefore = await spentCacheParentsOf(ctx, hook, reads);
     for (const desc of descs) {
       const plan = await prepareOp(hookCtx, desc.tool, desc.input);
       await plan.apply(hookCtx);
@@ -1254,9 +1261,36 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
     // Кэш spent (§Б5-5) — ПО КАЖДОМУ ХУКУ, во ВНЕШНЕМ цикле (Р-К-16). Во внутреннем он бы
     // не выполнился ни разу в самом частом случае: при неизменной привязке (правка суммы)
     // `budgetFollowUpDescs` возвращает пустой список, а spent при этом меняется.
-    await applySpentCacheEffect(ctx, hook, reads, descs);
+    await applySpentCacheEffect(ctx, hook, reads, descs, parentsBefore);
   }
   return applied;
+}
+
+/** Несёт ли строка хоть один аспект стороны контура кэша. */
+function carriesContourSide(aspects: ReadonlySet<string>, row: EntityRow | null): boolean {
+  return row !== null && row.aspects.some((id) => aspects.has(id));
+}
+
+/**
+ * Живые конверты-родители движения ДО дописанных операций (см. вызывающего). Не движение —
+ * пустой список: у конверта своих родителей-конвертов не бывает, и лишний запрос по строке,
+ * которая заведомо ничего не вернёт, платил бы каждый импорт.
+ */
+async function spentCacheParentsOf(
+  ctx: ExecCtx,
+  hook: BudgetHook,
+  reads: BindingReads,
+): Promise<readonly string[]> {
+  const contour = spentContourOf(ctx);
+  if (!contour.enabled) return [];
+  const isMovement =
+    carriesContourSide(contour.movementAspects, hook.after) ||
+    carriesContourSide(contour.movementAspects, hook.before);
+  if (!isMovement) return [];
+  // `parentsOf` отбирает рёбра ПО РОЛИ привязки и по аспекту конверта у источника;
+  // `archived` он НЕ спрашивает — архивный конверт свою строку кэша тоже теряет, и это
+  // правильный ответ: пересчёт ленивый.
+  return (await reads.parentsOf(ctx.tx, hook.after.id)).map((edge) => edge.sourceId);
 }
 
 /**
@@ -1291,25 +1325,21 @@ async function applySpentCacheEffect(
   hook: BudgetHook,
   reads: BindingReads,
   descs: readonly BudgetOpDesc[],
+  parentsBefore: readonly string[],
 ): Promise<void> {
   const contour = spentContourOf(ctx);
   if (!contour.enabled) return; // декларация материализации не просила — писателей нет
   const ownerId = ctx.req.actorUserId;
   const { before, after } = hook;
-  const carries = (aspects: ReadonlySet<string>, row: EntityRow | null): boolean =>
-    row !== null && row.aspects.some((id) => aspects.has(id));
   const touched = new Set(descs.map((d) => d.input.source_id));
   const isEnvelope =
-    carries(contour.envelopeAspects, after) || carries(contour.envelopeAspects, before);
+    carriesContourSide(contour.envelopeAspects, after) ||
+    carriesContourSide(contour.envelopeAspects, before);
   if (isEnvelope) touched.add(after.id);
   const isMovement =
-    carries(contour.movementAspects, after) || carries(contour.movementAspects, before);
-  if (isMovement) {
-    // `parentsOf` отбирает рёбра ПО РОЛИ привязки и по аспекту конверта у источника;
-    // `archived` он НЕ спрашивает — архивный конверт свою строку кэша тоже теряет, и это
-    // правильный ответ: пересчёт ленивый.
-    for (const edge of await reads.parentsOf(ctx.tx, after.id)) touched.add(edge.sourceId);
-  }
+    carriesContourSide(contour.movementAspects, after) ||
+    carriesContourSide(contour.movementAspects, before);
+  for (const sourceId of parentsBefore) touched.add(sourceId);
   if (touched.size === 0) return;
 
   if (before === null && isMovement && !isEnvelope && touched.size === 1) {
@@ -2480,6 +2510,17 @@ async function prepareRelationCreate(
           .returning();
         const row = inserted[0];
         if (!row) throw new ExecError('NOT_FOUND', 'связь не записана', { ...key }); // недостижимо
+        // Хуковую привязку кэш считает САМ (инкремент нового движения, applySpentCacheEffect) —
+        // сносить строку здесь значило бы отменить инкремент, ради которого §Б5-5 и заведён.
+        // Любой другой механизм (фикстура `seed`, откат, ручной глагол, движение с аспектом
+        // владельца, которому хук не поднимается) кэшу о своём ребре не сообщает — ему сносим
+        // строки конверта. Роль берётся ИЗ КОНТУРА (`bindingRole` декларации, §Б5-4), а не из
+        // константы: имя роли — часть декларации подписки, и второй его копией в исполнителе
+        // кэш разъехался бы с ведомостью ровно в день, когда роль переименуют.
+        const contour = spentContourOf(applyCtx);
+        if (contour.enabled && key.role === contour.bindingRole && applyCtx.mechanism !== 'hook') {
+          await invalidateSpentCache(applyCtx.tx, applyCtx.req.actorUserId, [key.sourceId]);
+        }
         return { result: toWireRelation(row) };
       } catch (e) {
         const pg = pgErrorInfo(e);
@@ -2618,6 +2659,14 @@ async function prepareRelationDelete(
         .returning();
       const row = deleted[0];
       if (!row) throw new ExecError('NOT_FOUND', 'связь не найдена', { ...key });
+      // Снятие привязки уносит деньги из конверта на ЛЮБОМ механизме — включая хуковый
+      // ребиндинг: перевести конверт в ленивый пересчёт дешевле и честнее, чем считать два
+      // инкремента с разными знаками по состоянию, которого в БД уже нет. Роль — из контура
+      // декларации, по тому же доводу, что и у создания.
+      const contour = spentContourOf(applyCtx);
+      if (contour.enabled && key.role === contour.bindingRole) {
+        await invalidateSpentCache(applyCtx.tx, applyCtx.req.actorUserId, [key.sourceId]);
+      }
       return { result: toWireRelation(row) };
     },
   };
