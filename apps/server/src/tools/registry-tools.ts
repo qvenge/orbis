@@ -184,7 +184,9 @@ const aspectDeltaJsonSchema = {
   type: 'object',
   description:
     'настройка поверх системного определения: label, description, icon, ' +
-    'properties.add/hide/relaxRequired/rank, selectOptions.<свойство>.add',
+    'properties.add/hide/relaxRequired/rank, selectOptions.<свойство>.add, ' +
+    'classMap.<свойство> — отнесение КАЖДОГО добавленного варианта к классу контракта ' +
+    '(без него вариант отвергается)',
   properties: {
     label: localizedJsonSchema,
     description: localizedJsonSchema,
@@ -207,8 +209,60 @@ const aspectDeltaJsonSchema = {
         },
         hide: { type: 'array', items: { type: 'string' } },
         relaxRequired: { type: 'array', items: { type: 'string' } },
+        rank: { type: 'object', additionalProperties: { type: 'integer' } },
       },
       additionalProperties: false,
+    },
+    selectOptions: {
+      type: 'object',
+      description: 'по id свойства: добавляемые варианты select',
+      additionalProperties: {
+        type: 'object',
+        properties: {
+          add: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string' },
+                label: localizedJsonSchema,
+                rank: { type: 'integer' },
+              },
+              required: ['key', 'label', 'rank'],
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    // Обязательность `classMap` — ОПИСАНИЕМ, а не `required`/`dependencies` схемы: она
+    // УСЛОВНА (нужна только варианту свойства, связанного со слотом-статусом контракта;
+    // варианты `orbis/priority` без карты законны), и схема JSON её не выражает. Закон §Б2-2
+    // держит проверка записи (`checkClassMap` → `VARIANT_UNMAPPED`), конверт — говорит о нём
+    // вслух, чтобы модель не узнавала о правиле отказом.
+    classMap: {
+      type: 'object',
+      description:
+        'по id свойства: [{contract, slot, variant, class}] — например ' +
+        '{"orbis/task_status":[{"contract":"orbis/completable","slot":"status",' +
+        '"variant":"in_review","class":"active"}]}. ОБЯЗАТЕЛЕН для каждого варианта из ' +
+        'selectOptions.add у свойства, связанного со слотом-статусом контракта (§Б2-2) — иначе отказ ' +
+        'VARIANT_UNMAPPED; у свойства вне привязок (orbis/priority) не нужен',
+      additionalProperties: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            contract: { type: 'string' },
+            slot: { type: 'string' },
+            variant: { type: ['string', 'boolean'] },
+            class: { type: 'string' },
+          },
+          required: ['contract', 'slot', 'variant', 'class'],
+          additionalProperties: false,
+        },
+      },
     },
   },
 } as const;
