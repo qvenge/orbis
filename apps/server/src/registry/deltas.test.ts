@@ -572,6 +572,40 @@ describe('threeWayMerge: система поехала под живой дел�
       ]),
     ).toEqual([]);
   });
+
+  const moodSystems = (theirsKey: string, theirsLabel: string) => ({
+    prev: systemOf(snapshotWith([selectProperty([{ key: 'good', label: 'Хорошо', rank: 1 }])])),
+    next: systemOf(
+      snapshotWith([
+        selectProperty([
+          { key: 'good', label: 'Хорошо', rank: 1 },
+          { key: theirsKey, label: theirsLabel, rank: 2 },
+        ]),
+      ]),
+    ),
+  });
+  const moodDelta = {
+    selectOptions: { 'user/mood': { add: [{ key: 'meh', label: { ru: 'Так себе' }, rank: 5 }] } },
+    classMap: {
+      'user/mood': [
+        { contract: 'orbis/completable', slot: 'status', variant: 'meh', class: 'active' },
+      ],
+    },
+  };
+
+  test('снятый по совпавшему ключу вариант УНОСИТ своё отнесение', () => {
+    // Иначе `applyDeltas` назначила бы класс варианту, которого в дельте больше нет.
+    const { prev, next } = moodSystems('meh', 'Средне');
+    const { merged, conflicts } = threeWayMerge(prev, next, row('aspect', 'orbis/note', moodDelta));
+    expect(conflicts.map((c) => c.kind)).toEqual(['variant-merge']);
+    expect(merged).toEqual({});
+  });
+  test('вариант, оставленный рядом с похожим, отнесение СОХРАНЯЕТ', () => {
+    const { prev, next } = moodSystems('so-so', 'так себе');
+    expect(threeWayMerge(prev, next, row('aspect', 'orbis/note', moodDelta)).merged).toEqual(
+      moodDelta,
+    );
+  });
 });
 
 /**

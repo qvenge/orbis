@@ -761,6 +761,8 @@ export function threeWayMerge(
 
   // (3) Варианты select, добавленные системой рядом с пользовательскими.
   const selectOptions: NonNullable<AspectDelta['selectOptions']> = {};
+  /** Ключи вариантов, снятых слиянием, — по свойству: их отнесения уезжают вместе с ними. */
+  const droppedVariants = new Map<string, Set<string>>();
   for (const [propertyId, patch] of Object.entries(delta.selectOptions ?? {})) {
     const current = optionsOf(nextSystem.properties.get(propertyId));
     const before = new Set(optionsOf(prevSystem.properties.get(propertyId)).map((o) => o.key));
@@ -781,6 +783,11 @@ export function threeWayMerge(
       const twin = byKey ?? fresh.find((o) => sameLabel(o.label, mine.label));
       if (twin === undefined) return true;
       const sameKey = byKey !== undefined;
+      if (sameKey) {
+        const set = droppedVariants.get(propertyId) ?? new Set<string>();
+        set.add(mine.key);
+        droppedVariants.set(propertyId, set);
+      }
       conflicts.push({
         kind: 'variant-merge',
         targetKind: 'aspect',
@@ -798,6 +805,17 @@ export function threeWayMerge(
     if (kept.length > 0) selectOptions[propertyId] = { add: kept };
   }
 
+  // (3б) Карта классов едет ПАРОЙ со своим вариантом (§Б2-2): отнесение, чей вариант слияние
+  // сняло, дожило бы до `applyDeltas` и назначило класс варианту, которого в дельте нет.
+  const classMap: NonNullable<AspectDelta['classMap']> = {};
+  for (const [propertyId, entries] of Object.entries(delta.classMap ?? {})) {
+    const dropped = droppedVariants.get(propertyId);
+    // Ключ варианта — строка (`selectOptionSchema.key`); boolean-отнесения приходят от
+    // boolean-слотов, которых дельта не добавляет, и под снятие не попадают никогда.
+    const kept = entries.filter((e) => dropped === undefined || !dropped.has(String(e.variant)));
+    if (kept.length > 0) classMap[propertyId] = kept;
+  }
+
   const properties = {
     ...(add.length > 0 && { add }),
     ...(hide.length > 0 && { hide }),
@@ -813,6 +831,7 @@ export function threeWayMerge(
     ...(delta.icon !== undefined && { icon: delta.icon }),
     ...(Object.keys(properties).length > 0 && { properties }),
     ...(Object.keys(selectOptions).length > 0 && { selectOptions }),
+    ...(Object.keys(classMap).length > 0 && { classMap }),
   };
   return { merged, conflicts };
 }
