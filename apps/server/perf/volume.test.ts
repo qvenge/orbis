@@ -15,6 +15,7 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { computeOverview } from '../src/budget/aggregates';
+import { invalidateSpentCache } from '../src/budget/spent-cache';
 import { selectEnvelopes } from '../src/budget/binding';
 import { type Tx, withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
@@ -22,7 +23,7 @@ import { effectiveRegistry } from '../src/registry/cache';
 import type { RegistrySnapshot } from '../src/registry/load';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
-import { measureP95 } from '../src/test/perf';
+import { measureMedian, measureP95 } from '../src/test/perf';
 import {
   cleanupVolumeProbes,
   ensureVolumeFixture,
@@ -453,4 +454,31 @@ test('перф-гейт §С8-15: p95 движка ≤ 2× оракула и ≤
     );
   }
   expect(gateViolations({ oracleP95, engineP95 }, VOLUME_BUDGETS)).toEqual([]);
+}, 900_000);
+
+test('холодный корпус: p95 без кэша spent записывается (порога не несёт)', async () => {
+  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  // Цена самой инвалидации — отдельной строкой: иначе читатель не отличит «движок медленный без
+  // кэша» от «DELETE 480 строк дорогой», а холодное число включает и то и другое.
+  await measureMedian('spent-cache:invalidate480', 5, () =>
+    withIdentity(db, VOLUME_OWNER_ID, (tx) => invalidateSpentCache(tx, VOLUME_OWNER_ID, ids)),
+  );
+  const cold = await measureP95('overview:engine:cold', P95_RUNS, () =>
+    withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+      // Инвалидация и расчёт — в ОДНОЙ tx: расчёт тут же перезаписывает строки кэша, поэтому
+      // следующий прогон снова холодный. Разнеси по двум tx — второй замер стал бы прогретым.
+      await invalidateSpentCache(tx, VOLUME_OWNER_ID, ids);
+      return budgetOverviewOf(
+        tx,
+        VOLUME_OWNER_ID,
+        { month: VOLUME_LAST_MONTH, today: VOLUME_TODAY },
+        budgetDef,
+        reg,
+      );
+    }),
+  );
+  console.log(
+    `perf: overview:engine:cold p95 = ${cold.toFixed(0)} мс — ЗАПИСЫВАЕТСЯ, порога нет (Р8 рамки)`,
+  );
+  expect(cold).toBeGreaterThan(0);
 }, 900_000);
