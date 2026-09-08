@@ -81,6 +81,7 @@ import {
   ROUTINE_TOOLS_PROPERTY,
 } from '../policy/confirmation';
 import { createPending, deferDedupeKey, listRunUnits, operationsNoun } from '../policy/pending';
+import { sensitivityFactsOf } from '../policy/sensitivity';
 import {
   type CompileCtx,
   compileCountAst,
@@ -295,6 +296,10 @@ export async function dispatchTool(
         grantsAutonomy: false,
         // …и перенастраивать ему тоже нечего: имени нет в реестре, объекта у вызова нет
         reconfigures: 'none',
+        // …и фактов чувствительности у него нет по той же причине: имени нет в реестре, объекта
+        // у вызова нет, снимка у этой ветки нет тоже (она стоит ДО pre-tx). Ряд «!known» первый
+        // в таблице — на исход множество не влияет.
+        sensitivity: [],
       });
       const gated = levelGate(level, name, `неизвестный тул «${name}» — вызов запрещён (§7.10)`);
       if (gated !== null) return gated;
@@ -314,10 +319,12 @@ export async function dispatchTool(
       // thread_post таблицей недостижим (не batch) — карточки предпросмотра нет.
       // Envelope-валидация — ДО классификации (§7.10 дословно, fix round Task 5).
       const parsed = parseEnvelope(threadPostInput, input, 'thread_post');
+      const threadFacts = factsFromToolCall(pre.def, parsed);
       const level = classifyToolCall({
-        ...factsFromToolCall(pre.def, parsed),
+        ...threadFacts,
         actorKind: ctx.actorKind,
         explicitCommand: ctx.explicitCommand,
+        sensitivity: sensitivityFactsOf(pre.reg, threadFacts),
       });
       const gated = levelGate(level, pre.def.name);
       if (gated !== null) return gated;
@@ -338,10 +345,12 @@ export async function dispatchTool(
       // тот пролетел бы мимо catch ниже (там ловится только ExecError) и стал бы 500.
       // Схема — из карты глаголов, валидация ДО классификации (§7.10 дословно).
       const parsed = parseEnvelope(AGENT_VERB_ENVELOPES[pre.def.name], input, pre.def.name);
+      const verbFacts = factsFromToolCall(pre.def, parsed);
       const level = classifyToolCall({
-        ...factsFromToolCall(pre.def, parsed),
+        ...verbFacts,
         actorKind: ctx.actorKind,
         explicitCommand: ctx.explicitCommand,
+        sensitivity: sensitivityFactsOf(pre.reg, verbFacts),
       });
       const gated = levelGate(level, pre.def.name);
       if (gated !== null) return gated;
@@ -852,6 +861,7 @@ async function runMutation(
     ...facts,
     actorKind: ctx.actorKind,
     explicitCommand: ctx.explicitCommand,
+    sensitivity: sensitivityFactsOf(reg, facts),
   });
   const gated = levelGate(classified, def.name);
   if (gated !== null) return gated;

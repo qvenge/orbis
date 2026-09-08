@@ -38,6 +38,7 @@ function facts(over: Partial<ToolCallFacts> = {}): ToolCallFacts {
     isBatch: false,
     grantsAutonomy: false,
     reconfigures: 'none',
+    sensitivity: [],
     ...over,
   };
 }
@@ -190,7 +191,9 @@ describe('глаголы исполнителя и thread_post → execute (ин
       // (ряд 3). У фонового прогона он всегда false: прямой команды человека за
       // вызовом нет. Проверяем оба значения — уровень от них не зависит.
       for (const explicitCommand of [false, true]) {
-        expect(classifyToolCall({ ...f, actorKind: 'agent', explicitCommand })).toBe('execute');
+        expect(
+          classifyToolCall({ ...f, actorKind: 'agent', explicitCommand, sensitivity: [] }),
+        ).toBe('execute');
       }
     });
   }
@@ -216,7 +219,9 @@ describe('factsFromToolCall: извлечение фактов формы выз
   test('граница брифа «archived: false → execute»: явное false — не архивация', () => {
     const f = factsFromToolCall(UPDATE_DEF, { id: newId(), archived: false });
     expect(f.archives).toBe(false);
-    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe('execute');
+    expect(
+      classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false, sensitivity: [] }),
+    ).toBe('execute');
   });
 
   test('entity_update без archived и с не-объектным input → archives: false (невалидный упадёт стадией 1)', () => {
@@ -384,6 +389,7 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
       ...factsFromToolCall(def, input),
       actorKind,
       explicitCommand: false,
+      sensitivity: [],
     });
   }
 
@@ -608,6 +614,7 @@ describe('§С2-1: перенастраивает поверхность или 
       ...factsFromToolCall(defOf(name), input),
       actorKind,
       explicitCommand: false,
+      sensitivity: [],
     });
 
   test('пять тулов реестра разложены по трём ответам; всё прочее — none', () => {
@@ -895,9 +902,9 @@ describe('§С2-1: перенастраивает поверхность или 
     };
     const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
     expect(f.reconfigures).toBe('behavior-delta');
-    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
-      'explicit-confirmation',
-    );
+    expect(
+      classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false, sensitivity: [] }),
+    ).toBe('explicit-confirmation');
   });
 
   test('ряд 4b НЕ гасит ряд масштаба: 11 операций с property_create внутри → explicit-confirmation', () => {
@@ -915,9 +922,9 @@ describe('§С2-1: перенастраивает поверхность или 
     };
     const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
     expect([f.reconfigures, f.batchSize]).toEqual(['own-property', 11]);
-    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
-      'explicit-confirmation',
-    );
+    expect(
+      classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false, sensitivity: [] }),
+    ).toBe('explicit-confirmation');
   });
 
   test('ряд 4b НЕ гасит замок автономии: пачка «своё свойство + act-рутина» → explicit-confirmation', () => {
@@ -933,9 +940,9 @@ describe('§С2-1: перенастраивает поверхность или 
     };
     const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
     expect([f.reconfigures, f.grantsAutonomy]).toEqual(['own-property', true]);
-    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
-      'explicit-confirmation',
-    );
+    expect(
+      classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false, sensitivity: [] }),
+    ).toBe('explicit-confirmation');
   });
 
   test('ряд 3 остаётся первее: архивирующий вызов с реестром в пачке — тот же explicit-confirmation', () => {
@@ -950,9 +957,9 @@ describe('§С2-1: перенастраивает поверхность или 
     };
     const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
     expect([f.archives, f.reconfigures]).toEqual([true, 'own-property']);
-    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
-      'explicit-confirmation',
-    );
+    expect(
+      classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false, sensitivity: [] }),
+    ).toBe('explicit-confirmation');
   });
 
   test('мусор вместо конверта — самый тяжёлый ответ, а не самый лёгкий (fail-closed)', () => {
@@ -988,6 +995,21 @@ describe('§С2-1: перенастраивает поверхность или 
     for (const tool of REGISTRY_TOOL_NAMES) {
       expect([tool, reconfiguresOf(tool, {})]).not.toEqual([tool, 'none']);
     }
+  });
+
+  test('множество фактов — вход §7.10, но уровень в Б-1 не меняет (потребитель — assign_level, Б-2)', () => {
+    // ТРИШКА, А НЕ ПРОВЕРКА ПРАВИЛА: сегодня таблица читает типизированные входы
+    // (`reconfigures`, `grantsAutonomy`), а множество только ПУБЛИКУЕТСЯ. Появится в Б-2
+    // `assign_level` с контекстом `$sensitivity` — этот тест упадёт, и его перепишут вместе с
+    // рядом, который множество читает. Без него поле выглядело бы забытым входом таблицы.
+    const heavy = facts({ reconfigures: 'behavior-delta', sensitivity: ['changes_registry'] });
+    expect(classifyToolCall(heavy)).toBe('explicit-confirmation');
+    expect(classifyToolCall({ ...heavy, sensitivity: [] })).toBe('explicit-confirmation');
+    const light = facts({ tool: 'entity_update' });
+    expect(classifyToolCall(light)).toBe('execute');
+    expect(
+      classifyToolCall({ ...light, sensitivity: ['changes_registry', 'grants_autonomy'] }),
+    ).toBe('execute');
   });
 });
 

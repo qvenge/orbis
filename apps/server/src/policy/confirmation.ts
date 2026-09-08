@@ -5,7 +5,7 @@
 // классификатор сознательно НЕ смотрит на source — внешний агент не может получить
 // более широкие права, обойдя политику другим транспортом. Каждый ряд таблицы и границы
 // закреплены юнит-тестами (confirmation.test.ts); подключение — tools/dispatch.ts.
-import { batchExecuteInput } from '@orbis/shared';
+import { batchExecuteInput, type SensitivityFact } from '@orbis/shared';
 import type { ActionRecord, ActorKind } from '../executor/types';
 import { REGISTRY_TOOL_NAMES } from '../tools/registry-tools';
 
@@ -51,6 +51,14 @@ export interface ToolCallFacts {
    * Считается по имени тула и адресу объекта — `reconfiguresOf` ниже.
    */
   reconfigures: Reconfigures;
+  /**
+   * §С8-23: ФАКТЫ ЧУВСТВИТЕЛЬНОСТИ вызова именами словаря `orbis/sensitivity` (§Б1-2).
+   * Считает их `policy/sensitivity.ts` — ему нужен снимок реестра, а классификатор чист по
+   * построению, поэтому поле ЗАПОЛНЯЕТ ВЫЗЫВАЮЩИЙ, как `actorKind` и `explicitCommand`.
+   * Таблица §7.10 множество сегодня не читает (потребитель — `assign_level`, Б-2): оно
+   * публикуется, и это названо в докблоке `sensitivityFactsOf`.
+   */
+  sensitivity: readonly SensitivityFact[];
 }
 
 /**
@@ -121,11 +129,18 @@ export function classifyToolCall(facts: ToolCallFacts): ConfirmationLevel {
  * Акторные факты (actorKind, explicitCommand) добавляет вызывающий из ToolCallCtx;
  * known: true — сюда доходит только найденный реестром def, ряд «!known» dispatch
  * строит сам по результату резолва.
+ *
+ * ФАКТЫ ЧУВСТВИТЕЛЬНОСТИ (§С8-23) ВЫЧТЕНЫ ИЗ ВОЗВРАТА ТОЙ ЖЕ МЕРКОЙ, и это решение, а не
+ * пропуск: пустое множество, выданное здесь по умолчанию, было бы ЛОЖЬЮ о вызове
+ * («`property_merge` ничего чувствительного не трогает»), и ложью невидимой — компилятор
+ * молчит, тест на неё писать негде. Сузив `Omit`, ответ на каждой точке классификации
+ * требует КОМПИЛЯТОР: словарь читает `sensitivityFactsOf` (`policy/sensitivity.ts`), которому
+ * нужен снимок реестра, а он есть только у вызывающего.
  */
 export function factsFromToolCall(
   def: { name: string; kind: 'read' | 'mutate' },
   input: unknown,
-): Omit<ToolCallFacts, 'actorKind' | 'explicitCommand'> {
+): Omit<ToolCallFacts, 'actorKind' | 'explicitCommand' | 'sensitivity'> {
   const base = { tool: def.name, kind: def.kind, known: true as const };
   if (def.name === 'batch_execute') {
     const parsed = batchExecuteInput.safeParse(input);
