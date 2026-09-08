@@ -108,19 +108,6 @@ export function mockLink(handler: MockHandler): TRPCLink<AppRouter> {
 const SUSPENDED = <div data-testid="harness-suspended">дерево подвисло под Suspense обёртки</div>;
 
 /**
- * `strict: true` — прогнать дерево под StrictMode, то есть с ДВОЙНЫМ прогоном эффектов
- * монтирования (так приложение и живёт в разработке, см. main.tsx).
- *
- * Флаг существует потому, что «просто передать `<StrictMode>` внутри `ui`» НЕ РАБОТАЕТ, и это
- * замерено: двойной прогон эффектов включается, только когда StrictMode — САМЫЙ ВЕРХНИЙ
- * элемент, переданный в `render`. Достаточно любого элемента над ним, чтобы прогон стал
- * одинарным: `<StrictMode><X/></StrictMode>` → 2 прогона, `<div><StrictMode><X/></StrictMode>
- * </div>` → 1, `<QueryClientProvider><StrictMode><X/></StrictMode></QueryClientProvider>` → 1
- * (три пробы, React 19.2). А `renderWithProviders` ставит над `ui` три обёртки — то есть тест,
- * написавший StrictMode внутри, проверяет ровно то же, что и без него, и зелен при любой
- * реализации. Поэтому StrictMode здесь оборачивает ВСЁ дерево, включая провайдеры.
- */
-/**
  * Ответы, которые обвязка подставляет ЗА сьют, не роутивший путь (соглашение корпуса — вернуть
  * `{}` из хендлера на всё незнакомое).
  *
@@ -146,6 +133,19 @@ const unrouted = (value: unknown): boolean =>
   !Array.isArray(value) &&
   Object.keys(value).length === 0;
 
+/**
+ * `strict: true` — прогнать дерево под StrictMode, то есть с ДВОЙНЫМ прогоном эффектов
+ * монтирования (так приложение и живёт в разработке, см. main.tsx).
+ *
+ * Флаг существует потому, что «просто передать `<StrictMode>` внутри `ui`» НЕ РАБОТАЕТ, и это
+ * замерено: двойной прогон эффектов включается, только когда StrictMode — САМЫЙ ВЕРХНИЙ
+ * элемент, переданный в `render`. Достаточно любого элемента над ним, чтобы прогон стал
+ * одинарным: `<StrictMode><X/></StrictMode>` → 2 прогона, `<div><StrictMode><X/></StrictMode>
+ * </div>` → 1, `<QueryClientProvider><StrictMode><X/></StrictMode></QueryClientProvider>` → 1
+ * (три пробы, React 19.2). А `renderWithProviders` ставит над `ui` три обёртки — то есть тест,
+ * написавший StrictMode внутри, проверяет ровно то же, что и без него, и зелен при любой
+ * реализации. Поэтому StrictMode здесь оборачивает ВСЁ дерево, включая провайдеры.
+ */
 export function renderWithProviders(
   ui: ReactNode,
   handler: MockHandler = () => ({}),

@@ -7275,6 +7275,7 @@ describe('встроенные подписки §Б5-4', () => {
     // Сырых ссылок на свойства в СИСТЕМНОМ сиде нет вовсе; prefer пуст (рамка §4-3)
     expect(JSON.stringify(def)).not.toContain('"prop"');
     expect([def.show.prefer, def.overdue.prefer]).toEqual([[], []]);
+  > Эррата 6 (рулинг Ф-Б1-27): сид `orbis/agenda` ссылается на норматив `AGENDA_DEF` задачи 5 (`from: {ctx:'$today'}`), копии с `{param:'window_from'}` нет — обе формы резолвятся движком в `args.today`; пины ниже читать против `AGENDA_DEF`.
     expect(def.params).toEqual(['window_from', 'window_to']);
     expect(def.show.window).toEqual({ from: { param: 'window_from' }, to: { param: 'window_to' } });
   });
@@ -7346,7 +7347,7 @@ export const BUILTIN_SUBSCRIPTION_DEFS: readonly BuiltinSubscriptionDef[] = [
   rows.actions = [{ id: 'orbis/close' }];
   expect(registryDriftIds(diffBuiltinRegistries(rows))).toEqual([
     'properties:orbis/task_status нет',
-    'subscriptions:orbis/agenda расходится (definition + module + rank + surface)',
+    'subscriptions:orbis/agenda definition+module+rank+surface', // эррата 6: фактический формат `registryDriftIds` — столбцы через `+`
     'actions:orbis/close лишний',
   ]);
 ```
@@ -7382,7 +7383,8 @@ function expectedSubscriptions(): Map<string, Record<string, unknown>> {
   Коммит: `feat(db): сид подписки Agenda — пятый реестр в seedRegistries, expectedSubscriptions в сверке дрейфа (§Б5-1)`.
 
 - [ ] **Шаг 7: красный — два экспорта компилятора.** В `apps/server/src/query/compile-ast.test.ts`
-  (хелперы `ctxOf`/`sqlOf` — `:32-62`) новый describe:
+  (хелперы `ctxOf`/`sqlOf` — `:32-62`; эррата 6: `sqlOf` файла принимает `QueryFilterNode`, не `SQL` — для фрагментов
+  заведён соседний `rawSql(fragment: SQL)`, ниже читать `sqlOf(...)` как `rawSql(...)`) новый describe:
 ```ts
 describe('экспорты для движков подписок (§Б5-6)', () => {
   test('ENTITY_SELECT_COLUMNS — те же колонки, что собирает toWireEntityFromSql', () => {
