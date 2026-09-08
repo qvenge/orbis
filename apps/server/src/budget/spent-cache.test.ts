@@ -19,6 +19,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { DEFAULT_TIMEZONE } from '../query/context';
+import { measureP95 } from '../test/perf';
 import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
 import { spentContributionOf } from '../subscriptions/budget';
@@ -194,6 +195,42 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
     });
     await budgetOverview(db, user, '2026-07', () => new Date('2026-07-11T09:00:00.000Z'));
     expect((await cacheRows(env.id)).map((r) => r.as_of)).toEqual(['2026-07-11']);
+  });
+
+  test('полночь: новый день — новая строка, вчерашняя остаётся при своём числе', async () => {
+    const cat3 = newId();
+    const env = await createEntity(user, {
+      title: 'Границы суток',
+      props: budgetProps(cat3),
+      aspects: ['orbis/budget'],
+    });
+    await createEntity(user, {
+      title: 'Вчера',
+      props: finProps(cat3, '2026-07-10'),
+      aspects: ['orbis/financial'],
+    });
+    await budgetOverview(db, user, '2026-07', () => new Date('2026-07-10T18:00:00.000Z'));
+    await createEntity(user, {
+      title: 'Завтра',
+      props: finProps(cat3, '2026-07-11'),
+      aspects: ['orbis/financial'],
+    });
+    // Движение завтрашнего дня в строку за 10-е не попало (as_of >= occurred_on).
+    expect((await cacheRows(env.id)).map((r) => [r.as_of, r.spent])).toEqual([
+      ['2026-07-10', '340.00'],
+    ]);
+    // Наступило 11-е: ключ другой, ответ пересчитан, вчерашняя строка не тронута.
+    const day11 = await budgetOverview(
+      db,
+      user,
+      '2026-07',
+      () => new Date('2026-07-11T09:00:00.000Z'),
+    );
+    expect(day11.envelopes.find((e) => e.envelope.id === env.id)?.spent).toBe('680.00');
+    expect((await cacheRows(env.id)).map((r) => [r.as_of, r.spent])).toEqual([
+      ['2026-07-10', '340.00'],
+      ['2026-07-11', '680.00'],
+    ]);
   });
 });
 
@@ -478,4 +515,49 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
     ).toBe(true);
     expect(touchesBudgetContour(reg, { tool: 'property_merge_undo', input: {} })).toBe(true);
   });
+});
+
+describe('приёмка §С8-16: чтение кэша ≤ 10 мс p95', () => {
+  const user = freshUserId();
+  /** Сорок конвертов периода — объём одного месяца синтетики П2 (12 × 40, задача 0c). */
+  const ENVELOPES = 40;
+  const P95_RUNS = 20; // при n = 20 nearest-rank берёт девятнадцатый из двадцати
+
+  test(
+    'сорок конвертов: p95 чтения прогретого кэша ≤ 10 мс',
+    async () => {
+      const ids: string[] = [];
+      for (let i = 0; i < ENVELOPES; i++) {
+        const cat = newId();
+        const env = await createEntity(user, {
+          title: `Конверт ${i}`,
+          props: budgetProps(cat),
+          aspects: ['orbis/budget'],
+        });
+        ids.push(env.id);
+      }
+      const asOf = '2026-07-15';
+      const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
+      await withIdentity(db, user, (tx) =>
+        writeSpentCache(
+          tx,
+          user,
+          ids.map((envelopeId) => ({ envelopeId, asOf, spent: '1234.56' })),
+          versions,
+        ),
+      );
+      const keys = ids.map((envelopeId) => ({ envelopeId, asOf }));
+      const p95 = await measureP95('spent-cache read(40)', P95_RUNS, () =>
+        withIdentity(db, user, async (tx) => {
+          const hit = await readSpentCache(tx, user, keys, versions);
+          if (hit.size !== ENVELOPES)
+            throw new Error(`прогретый кэш промахнулся: ${hit.size}/${ENVELOPES}`);
+        }),
+      );
+      // Порог §С8-16 дословно. Промах сюда не входит намеренно: приёмка называет ЧТЕНИЕ кэша,
+      // а холодный путь мерит перф-гейт задачи 12 (p95 ≤ 2× оракула и ≤ 500 мс).
+      expect([p95 <= 10, `p95=${p95.toFixed(1)}ms`]).toEqual([true, `p95=${p95.toFixed(1)}ms`]);
+    },
+    120_000,
+  );
 });

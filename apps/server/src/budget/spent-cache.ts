@@ -11,15 +11,19 @@
 // Модуль — ЛИСТ: он не знает ни об исполнителе, ни о движке, ни об агрегатах, и потому его
 // одинаково законно зовут обе стороны — читатель (движок) и писатель (исполнитель).
 //
-// КТО ЕЩЁ ПИШЕТ В ГРАФ, ТО ЕСТЬ МОГ БЫ СДВИНУТЬ `spent` МИМО ЭТИХ ПИСАТЕЛЕЙ (греп шага 27,
-// `UPDATE entities` / `update(entities)` по боевому коду сервера — пятого пути нет):
-//  — `executor/executor.ts` (создание и правка сущности) — через бюджет-хук, а он зовёт
-//    `applySpentCacheEffect`;
-//  — `registry/ops.ts` (слияние свойств и его откат, плюс переписывание AST-ссылок той же
-//    транзакцией) — снос кэша владельца целиком (`invalidateSpentCacheOfOwner`);
-//  — `registry/ref.ts` — правит только `tags` зеркала ссылок; `executor/ancestors.ts` — только
-//    вычисляемые `orbis/*_project`; `seed/onboarding.ts` и `db/backfill-body-doc.ts` — только
-//    тело документа: денег не касается ни один;
+// КТО ЕЩЁ ПИШЕТ В ГРАФ, ТО ЕСТЬ МОГ БЫ СДВИНУТЬ `spent` МИМО ЭТИХ ПИСАТЕЛЕЙ. Греп
+// `UPDATE entities` / `update(entities)` по боевому коду сервера даёт ТРИНАДЦАТЬ вызовов в
+// ШЕСТИ файлах (плюс докблочный хит `db/schema.ts` про ручной откат конверсии тел и этот
+// абзац — прозу греп тоже видит, и перечень обязан совпадать с выводом, а не с намерением):
+//  — `executor/executor.ts` (`prepareEntityUpdate`, `prepareAttach`) — обе правки поднимают
+//    бюджет-хук, а он зовёт `applySpentCacheEffect`; создание идёт `insert(entities)` тем же
+//    хуком;
+//  — `registry/ops.ts` — три вызова в `mergeProperty` (props носителей и AST-ссылки одной
+//    транзакцией) и три в `undoMerge`: обе операции сносят кэш владельца целиком
+//    (`invalidateSpentCacheOfOwner` в `preparePropertyMerge.apply` и на пути отката);
+//  — `registry/ref.ts` (два вызова) — правит только `tags` зеркала ссылок;
+//    `executor/ancestors.ts` — только вычисляемые `orbis/*_project`; `seed/onboarding.ts` и
+//    `db/backfill-body-doc.ts` — только тело документа: денег не касается ни один;
 //  — четыре писателя, идущих ЧЕРЕЗ `execute` и потому покрытых хуком: `import/review.ts`,
 //    `recurring/post-due.ts`, `recurring/materialize.ts`, `budget/plan-to-fact.ts`.
 // Пятый путь — суточная граница, и её закрывает не писатель, а КЛЮЧ `(envelope_id, as_of)`.
