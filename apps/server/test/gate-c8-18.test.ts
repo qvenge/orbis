@@ -1,18 +1,25 @@
 // apps/server/test/gate-c8-18.test.ts
 // Гейт части Б (§С8-18, ревизия 3): два пользовательских аспекта, заведённых ТОЛЬКО декларацией,
 // участвуют в четырёх потребителях без строки кода под них. Изначально все четыре утверждения
-// были помечены `test.failing`: каждое переводит в `test` та задача вехи I, которая его зеленит
-// (4 — excludeBlocked, 6 — Agenda, 7 — строка M14, 9 — spent; Р-К-9). С задачи 9 помеченных не
-// осталось: все четыре потребителя зелены. Задача 10 проверяет это отдельно и снимает
-// греп-доказательство.
+// несли пометку `.failing`: каждое переводит в обычный тест та задача вехи I, которая его
+// зеленит (4 — excludeBlocked, 6 — Agenda, 7 — строка M14, 9 — spent; Р-К-9). С задачи 9
+// помеченных не осталось: все четыре потребителя зелены. Задача 10 проверяет это сторожем
+// ниже и снимает греп-доказательство.
 //
-// ПОЧЕМУ ТЕЛА `test.failing` СИНХРОННЫЕ. Bun 1.2.7 игнорирует пометку `.failing`, если
+// ПОЧЕМУ ПОМЕТКА НИГДЕ НЕ НАЗВАНА ПОЛНЫМ ИМЕНЕМ (`test` + точка + `failing`) — ни в коде, ни в
+// этих комментариях. Сторож «в репозитории не осталось ни одной пометки» ищет полное имя
+// `git grep`'ом по `apps`/`packages`/`scripts`, и любая прозаическая строка с ним сделала бы
+// сторожа вечно красным, то есть бесполезным. По той же причине и шаблон внутри сторожа
+// собирается из кусков, а не пишется литералом.
+//
+// ПОЧЕМУ ТЕЛА ПОМЕЧЕННЫХ ТЕСТОВ БЫЛИ СИНХРОННЫЕ. Bun 1.2.7 игнорирует пометку `.failing`, если
 // тест вышел в макрозадачу (любой поход в БД или через tRPC — она): красный перестаёт
 // поглощаться, а зелёный перестаёт валить сьют, то есть ломаются ОБЕ половины гарантии Р-К-9.
 // Поэтому все походы к потребителям собраны в `beforeAll`, а тела тестов синхронно читают
-// собранное. ПРАВИЛО: новый `test.failing` в этом репозитории — только с синхронным телом.
+// собранное. ПРАВИЛО: новая пометка `.failing` в этом репозитории — только с синхронным телом.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { type RowProjection, rowProjectionOf } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
@@ -34,6 +41,34 @@ requireEnv();
 const { db, client } = appDb();
 afterAll(async () => {
   await client.end();
+});
+
+/** Корень репозитория: `bun test` идёт из `apps/server`, а pathspec'ы git отсчитываются от cwd. */
+function repoRoot(): string {
+  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`gate: git rev-parse упал: ${r.stderr}`);
+  return r.stdout.trim();
+}
+function gitGrep(pattern: string, pathspec: readonly string[]): string[] {
+  const r = spawnSync('git', ['grep', '-n', '-a', '-P', '-e', pattern, '--', ...pathspec], {
+    cwd: repoRoot(),
+    encoding: 'utf8',
+  });
+  // 0 — есть совпадения, 1 — нет, >1 — ошибка (нет PCRE2). Ошибку нельзя принять за «чисто»:
+  // молчащий гейт хуже отсутствующего (тот же разбор — `check-legacy-form.ts:432-440`).
+  if (r.status !== null && r.status > 1)
+    throw new Error(`gate: git grep код ${r.status}: ${r.stderr}`);
+  return r.stdout.split('\n').filter((l) => l.length > 0);
+}
+
+describe('гейт §С8-18: доказательства вехи I', () => {
+  test('в репозитории не осталось ни одной пометки failing/todo (Р-К-9)', () => {
+    // Шаблон СОБИРАЕТСЯ, а не пишется литералом: литерал пометки в этом файле сам стал бы
+    // совпадением, и сторож ловил бы себя — вечно красный и потому бесполезный.
+    const marks = ['failing', 'todo'].join('|');
+    const pattern = `\\b(test|it|describe)\\.(${marks})\\b`;
+    expect(gitGrep(pattern, ['apps', 'packages', 'scripts'])).toEqual([]);
+  });
 });
 
 describe('фикстура гейта: хелпер пишет привязки', () => {
@@ -162,7 +197,7 @@ beforeAll(async () => {
   await seedCustomAspect(owner, GATE_PLAIN_ASPECT);
   world = await seedGateWorld(owner);
 
-  // Четыре похода к потребителям — здесь и только здесь (см. шапку файла про `test.failing`).
+  // Четыре похода к потребителям — здесь и только здесь (см. шапку файла про пометку `.failing`).
   const c = callerFor(owner);
   overview = await collect(() => c.budget.overview({ month: world.month }));
   agenda = await collect(() => agendaRows(owner));
