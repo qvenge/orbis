@@ -12,7 +12,6 @@
 // собранное. ПРАВИЛО: новый `test.failing` в этом репозитории — только с синхронным телом.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
@@ -163,22 +162,16 @@ async function rowProjectionOrFail(): Promise<RowProjectionFn> {
 }
 
 /**
- * Строки повестки. Сегодня — три боевых текста §6.1 (`AGENDA_QUERY_TEXTS`, они же
- * `useAgenda.ts`); задача 6 заменяет тело на `caller.agenda.list({ days: 8 })`. Утверждение
- * теста при этом не меняется — меняется только способ спросить; вызов остаётся из `beforeAll`.
+ * Строки повестки — ОДНИМ вызовом подписки (§А5-5). Три боевых текста §6.1 сняты вместе с
+ * переводом вкладки (шаг 18): собственного текста запроса у Повестки больше нет.
+ * Аспект гейта попадает сюда ТОЛЬКО декларацией — `user/gate-plain` реализует `orbis/when`
+ * (слот `moment`) и `orbis/completable`, ни строки кода под него ни в движке, ни в роутере.
  */
 async function agendaRows(
   user: string,
 ): Promise<Array<{ id: string; section: 'window' | 'overdue' }>> {
-  const c = callerFor(user);
-  const win = await c.entity.query({ query: AGENDA_QUERY_TEXTS.days });
-  const due = await c.entity.query({ query: AGENDA_QUERY_TEXTS.overdueDue });
-  const start = await c.entity.query({ query: AGENDA_QUERY_TEXTS.overdueStart });
-  return [
-    ...win.map((e) => ({ id: e.id, section: 'window' as const })),
-    ...due.map((e) => ({ id: e.id, section: 'overdue' as const })),
-    ...start.map((e) => ({ id: e.id, section: 'overdue' as const })),
-  ];
+  const r = await callerFor(user).agenda.list({ days: 8 });
+  return r.rows.map((x) => ({ id: x.entity.id, section: x.section }));
 }
 
 /** Тот же текст, что у снимка `core/exclude-blocked` (0b): состав, а не порядок. */
@@ -250,7 +243,7 @@ describe('гейт §С8-18: аспект только декларацией', 
 
   // Зеленит задача 6. Сегодня оба текста требуют `aspect=orbis/schedule`/`aspect=orbis/task` —
   // дело гейта не несёт ни того, ни другого и в повестку не попадает ни в одну секцию.
-  test.failing('дела gate-plain попадают в Agenda: окно и просроченное (§С8-18, потребитель 2)', () => {
+  test('дела gate-plain попадают в Agenda: окно и просроченное (§С8-18, потребитель 2)', () => {
     const section = new Map(taken(agenda, 'Agenda').map((r) => [r.id, r.section]));
     expect(section.get(world.windowId)).toBe('window');
     expect(section.get(world.overdueId)).toBe('overdue');
