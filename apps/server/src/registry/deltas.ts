@@ -73,7 +73,13 @@ export interface RegistryDeltaRow {
  *
  * `selectOptions` — карта по id СВОЙСТВА, а не по имени поля: вариант добавляется к типу
  * свойства, а аспект здесь лишь место, откуда жест сделан (§А3-2 «добавленные варианты
- * select»). Карты классов контракта в срезе А нет (РП-19) — она приезжает с частью Б.
+ * select»).
+ *
+ * `classMap` — та же карта по id СВОЙСТВА: отнесение ДОБАВЛЕННОГО варианта к классу контракта
+ * (§Б2-2). Отдельным полем, а не внутри `selectOptions[].add[]`: вариант описан
+ * `selectOptionSchema` (`shared/registry/types.ts`), и расширение той схемы поменяло бы форму
+ * ВСЕХ встроенных свойств ради поля, которое есть только у дельты (Р6). Отнесение едет ПАРОЙ со
+ * своим вариантом: снимается вариант — снимается и оно (`threeWayMerge`, `merge-conflict.ts`).
  */
 export const aspectDeltaSchema = z
   .object({
@@ -101,6 +107,21 @@ export const aspectDeltaSchema = z
       .optional(),
     selectOptions: z
       .record(z.string().min(1), z.object({ add: z.array(selectOptionSchema).optional() }).strict())
+      .optional(),
+    classMap: z
+      .record(
+        z.string().min(1), // id свойства — тот же адрес, что у `selectOptions` (Р6)
+        z.array(
+          z
+            .object({
+              contract: z.string().min(1),
+              slot: z.string(),
+              variant: z.union([z.string(), z.boolean()]),
+              class: z.string(),
+            })
+            .strict(),
+        ),
+      )
       .optional(),
   })
   .strict();

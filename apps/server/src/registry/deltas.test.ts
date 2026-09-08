@@ -786,3 +786,31 @@ describe('дельта контракта setsDelta и подписки definiti
     ).toBe(0);
   });
 });
+
+describe('карта классов дельты (§Б2-2)', () => {
+  const CLASS_MAP_DELTA = {
+    selectOptions: {
+      'orbis/task_status': { add: [{ key: 'in_review', label: { ru: 'На ревью' }, rank: 45 }] },
+    },
+    classMap: {
+      'orbis/task_status': [
+        { contract: 'orbis/completable', slot: 'status', variant: 'in_review', class: 'active' },
+      ],
+    },
+  };
+  const completableOf = (s: RegistrySnapshot, aspectId: string) =>
+    s.aspects.get(aspectId)?.implements.find((b) => b.contract === 'orbis/completable');
+
+  test('classMap разбирается схемой рядом с selectOptions', () => {
+    expect(() =>
+      applyDeltas(snapshotWith(), [row('aspect', 'orbis/task', CLASS_MAP_DELTA)]),
+    ).not.toThrow();
+  });
+  test('поле вне закрытой формы по-прежнему DELTA_MALFORMED — .strict() не ослаблен', () => {
+    expect(
+      refusal(() =>
+        applyDeltas(snapshotWith(), [row('aspect', 'orbis/task', { classMapping: {} })]),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'DELTA_MALFORMED' });
+  });
+});
