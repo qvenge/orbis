@@ -11891,6 +11891,9 @@ describe('гейт §С8-18: доказательства вехи I', () => {
 ```
   Прогон: `cd apps/server && bun test test/gate-c8-18.test.ts` → **PASS** (4 утверждения гейта + контроль
   + сторож). Если сторож красный — веха I не закрыта: назвать задачу-зеленитель по Р-К-9 и **остановиться**.
+  (Эррата 10: шаблон сторожа ловит и ПРОЗУ — четыре комментария шапки файла называли пометку полным именем; шаблон оставлен
+  дословно, комментарии перефразированы (пометка зовётся `.failing`), без allow-list'а — Ф-Б1-42. Сторож коммитится ЗДЕСЬ:
+  `git checkout --` шага 3 иначе сносит несохранённый шаг 2.)
 
 - [ ] **Шаг 3: мутационная проверка сторожа (без неё он — зелёный кирпич).**
   `perl -0pi -e 's/^  test\((\x27трата gate-fin попадает)/  test.failing($1/m' apps/server/test/gate-c8-18.test.ts`
@@ -11976,7 +11979,9 @@ git log --oneline -S'gp_'        <sha-0d>..HEAD -- <те же пути>
   Для каждого выведенного коммита — `git show --name-only --format= <sha>` и проверка, что тронуты только
   файлы из `GATE_GREP_ALLOWED`. Все четыре вывода — дословно в отчёт вехи. Коммита нет.
 
-- [ ] **Шаг 7: снять две временные копии в `test/surfaces.ts`.** Пока снимок считает Agenda копией
+- [ ] **Шаг 7: снять две временные копии в `test/surfaces.ts`.** (Эррата 10: вместе с копией снимаются устаревшие тексты 0b —
+  заголовок теста «снимок Agenda — три текста useAgenda…» и два комментария мира про `useAgenda.ts:58`/`:93-95`; Budget-копию
+  уже сняла задача 9, остаётся Agenda.) Пока снимок считает Agenda копией
   клиентских правил, а Budget — оракулом `computeOverview`, «снимок после» описывает старую машинерию
   и гейт ничего не доказывает. Проверка: `grep -n 'AGENDA_DAYS_QUERY\|AGENDA_OVERDUE\|computeOverview'
   apps/server/test/surfaces.ts` — если пусто, задачи 6/9 уже перевели снимок и шаг сводится к этой
@@ -12070,7 +12075,7 @@ export async function seedGateSurfaceRows(ownerId: string): Promise<void> {
     }
     // Пишущая половина привязки — остаток вехи I (Р-К-39): ребро `envelope-binding` ставит бюджет-хук,
     // а он на `user/gate-fin` не срабатывает (жёсткие id `orbis/financial` в `binding.ts:combinationOf`,
-    // `BUDGET_CONTOUR_ASPECTS` `executor.ts:681`). ТЕ ЖЕ три строки, что в `seedGateWorld` (задача 9,
+    // `BUDGET_CONTOUR_ASPECTS` в `executor.ts` — по имени, адрес :681 съехал задачей 9). ТЕ ЖЕ три строки, что в `seedGateWorld` (задача 9,
     // шаг 21(б)); без них строка гейта не сдвинет `spent` в снимке `custom-aspect`. Механизм `seed`:
     // роль системная, механизмом `user` вызов упал бы `ROLE_SYSTEM_ONLY`. Снимает задача 11 (шаг 19).
     const bound = await execute(db, {
@@ -12167,7 +12172,8 @@ export async function seedSurfaceWorld(ownerId: string, opts?: { gateAspects?: b
 ```
   Порядковый индекс `envelopes.0` — карточка `@env-food`: порядок карточек задан ключом
   `title periodStart id` (`aggregates.ts:576-585`) и зафиксирован эталоном `baseline`.
-  Сторож состояний шага 14 брифа 0b (`toEqual(['baseline'])`) правится здесь тем же коммитом.
+  Сторож состояний шага 14 брифа 0b (`toEqual(['baseline'])`) правится КОММИТОМ ШАГА 10 (эррата 10: без неё шаг 10 не
+  зелен, а дерево между коммитами стояло бы красным); здесь — только тест «отличие ровно в назначенном месте».
   Прогон: `cd apps/server && bun test src/registry/surfaces-golden.test.ts` → **PASS**.
   Коммит: `test(surfaces): custom-aspect отличается от baseline ровно строками гейта (§С8-20, §С1-3 п.9)`.
 
