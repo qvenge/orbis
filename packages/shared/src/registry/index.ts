@@ -11,6 +11,11 @@ export * from './contract-type';
 // собираются имена снимков поверхностей — второго списка имён в корпусе нет (Р-К-10).
 export * from './modules';
 export * from './property-type';
+// Форма декларации подписки и два эталона (§Б5-4/§Б5-6). Эталоны в барреле — намеренно, в отличие
+// от `query/ast-fixtures.ts`: тот вне барреля потому, что разбирает встроенные словари схемой НА
+// ЗАГРУЗКЕ модуля, здесь же — два литерала без единого `parse`, и их читают серверные сьюты.
+export * from './subscription-fixtures';
+export * from './subscription-type';
 // Модель-обращённая поверхность реестра (§А9-1): имя attach_*-тула и схема его data.
 export * from './tool-schema';
 export * from './types';
