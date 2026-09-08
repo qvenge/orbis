@@ -11,11 +11,6 @@ type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number]
 /** Куда смотрит создаваемая связь: текущая блокирует выбранную (out) или наоборот (in). */
 type Direction = 'out' | 'in';
 
-// «Незакрытая» — ровно семантика excludeBlocked (§6.1): блокер, НЕ принадлежащий набору
-// `closed` контракта `orbis/completable`, — живой (блокер без реализации контракта тоже
-// живой). Разъезд с ней ломает lock-иконку §3.6. Вторая копия набора здесь СНИМАЕТСЯ
-// задачей 7 среза Б-1 — подписи классов приедут читателю реестра.
-const CLOSED = new Set(['done', 'cancelled']);
 const SECTION_LABEL = 'text-2xs font-medium uppercase tracking-wide text-text-muted';
 const ROW =
   'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition hover:bg-surface-2/60';
@@ -73,12 +68,11 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
   const sides = trpc.entity.resolveRefs.useQuery({ ids }, { enabled: ids.length > 0 });
   const byId = new Map((sides.data ?? []).map((e) => [e.id, e]));
   const title = (id: string) => byId.get(id)?.title ?? `${id.slice(0, 8)}…`;
-  // Пока сущность не доехала — блокер считается живым: спрятать реальную блокировку
-  // хуже, чем показать лишнюю строку на время загрузки.
-  const alive = (id: string) => {
-    const e = byId.get(id);
-    return !e || !CLOSED.has(String(e.status ?? ''));
-  };
+  // Пока сущность не доехала — блокер считается живым: спрятать реальную блокировку хуже,
+  // чем показать лишнюю строку на время загрузки. «Закрыт» приходит с сервера полем
+  // `completable` (набор `closed` контракта) — второй копии набора в web больше нет
+  // (§6.1, Р-К-14): её разъезд с компилятором ломал lock-иконку §3.6.
+  const alive = (id: string) => byId.get(id)?.completable?.closed !== true;
   const blockedBy = incoming.filter((r) => alive(r.sourceId));
 
   // Был entity.query с `search=`, то есть FTS по plainto_tsquery — совпадение только по
@@ -97,7 +91,7 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
   // неповторимой (id уже в `known`). Направления «блокирует» ограничение не касается —
   // исходящая связь видна всегда.
   const found = (search.data ?? []).filter(
-    (e) => !known.has(e.id) && (direction === 'out' || !CLOSED.has(String(e.status ?? ''))),
+    (e) => !known.has(e.id) && (direction === 'out' || e.completable?.closed !== true),
   );
 
   /**

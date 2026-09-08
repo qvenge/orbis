@@ -17,14 +17,14 @@ type Row = {
   id: string;
   title: string;
   emoji: string | null;
-  status: string | null;
+  completable: { class: string; closed: boolean } | null;
   archived: boolean;
 };
 const row = (id: string, over: Partial<Row> = {}): Row => ({
   id,
   title: 'Заголовок',
   emoji: null,
-  status: null,
+  completable: null,
   archived: false,
   ...over,
 });
@@ -213,8 +213,8 @@ test('закрытая задача — зачёркнутый чип, откр�
       <BodyEditor doc={parseBody(`[[entity:${B}]]`)} onChange={vi.fn()} />
     </>,
     refs([
-      row(A, { title: 'Сделано', status: 'done' }),
-      row(B, { title: 'В работе', status: 'in_progress' }),
+      row(A, { title: 'Сделано', completable: { class: 'done', closed: true } }),
+      row(B, { title: 'В работе', completable: { class: 'active', closed: false } }),
     ]),
   );
   await waitFor(() => expect(screen.getAllByTestId('entity-chip')).toHaveLength(2));

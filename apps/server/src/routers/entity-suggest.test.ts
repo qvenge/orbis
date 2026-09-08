@@ -146,14 +146,14 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     });
     const got = await caller.entity.suggest({ term: 'куп' });
     expect(titles(got)).toEqual(['Купить хлеб']);
-    expect(got[0]?.status).toBe('done');
+    expect(got[0]?.completable).toEqual({ class: 'done', closed: true });
   });
 
   // Проба расхождением колонок (§А1-1): аспект задачи СНЯТ, `orbis/task_status` в `props`
-  // остался (Р9 — detach значений не трогает). Старая карта теряла статус вместе с
-  // аспектом; без признака носителя чип продолжал бы зачёркивать «сделанное» у записи,
-  // задачей быть переставшей.
-  test('снятый аспект задачи обнуляет статус подсказки, хотя значение осталось в props (Р9)', async () => {
+  // остался (Р9 — detach значений не трогает). Вместе с аспектом уходит его ПРИВЯЗКА к
+  // контракту `orbis/completable`, а значит и завершаемость: без этого чип продолжал бы
+  // зачёркивать «сделанное» у записи, задачей быть переставшей.
+  test('снятый аспект задачи обнуляет ЗАВЕРШАЕМОСТЬ подсказки, хотя значение осталось в props (Р9)', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     const e = await seedEntity(caller, {
@@ -161,7 +161,9 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
       props: { 'orbis/task_status': 'done' },
       aspects: ['orbis/task'],
     });
-    expect((await caller.entity.suggest({ term: 'купить сыр' }))[0]?.status).toBe('done');
+    expect((await caller.entity.suggest({ term: 'купить сыр' }))[0]?.completable?.closed).toBe(
+      true,
+    );
 
     const detached = await caller.entity.update({
       id: e.id,
@@ -173,12 +175,12 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
 
     const got = await caller.entity.suggest({ term: 'купить сыр' });
     expect(got.map((x) => x.id)).toEqual([e.id]);
-    expect(got[0]?.status).toBeNull();
+    expect(got[0]?.completable).toBeNull();
     // Тот же ответ у пачки чипов: обе процедуры читают один `toSuggestion`.
-    expect((await caller.entity.resolveRefs({ ids: [e.id] }))[0]?.status).toBeNull();
+    expect((await caller.entity.resolveRefs({ ids: [e.id] }))[0]?.completable).toBeNull();
   });
 
-  test('статус задачи приезжает ПЛОСКИМ полем, emoji и archived — тоже', async () => {
+  test('завершаемость приезжает ПЛОСКИМ полем, emoji и archived — тоже', async () => {
     const caller = callerFor(freshUserId());
     const e = await seedEntity(caller, {
       title: 'Купить молоко',
@@ -189,15 +191,21 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
       aspects: ['orbis/task'],
     });
     expect(await caller.entity.suggest({ term: 'куп' })).toEqual([
-      { id: e.id, title: 'Купить молоко', emoji: '🥛', status: 'inbox', archived: false },
+      {
+        id: e.id,
+        title: 'Купить молоко',
+        emoji: '🥛',
+        completable: { class: 'active', closed: false },
+        archived: false,
+      },
     ]);
   });
 
-  test('сущность без task-аспекта отдаёт status = null, emoji = null', async () => {
+  test('сущность без завершаемости отдаёт completable = null, emoji = null', async () => {
     const caller = callerFor(freshUserId());
     const e = await seedEntity(caller, { title: 'Купить без аспекта' });
     expect(await caller.entity.suggest({ term: 'куп' })).toEqual([
-      { id: e.id, title: 'Купить без аспекта', emoji: null, status: null, archived: false },
+      { id: e.id, title: 'Купить без аспекта', emoji: null, completable: null, archived: false },
     ]);
   });
 
@@ -282,6 +290,17 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const e = await trpcError(callerFor(freshUserId()).entity.suggest({ term: '' }));
     expect(e.code).toBe('BAD_REQUEST');
   });
+
+  test('завершаемость — по КОНТРАКТУ: cancelled закрыт наравне с done (Р4)', async () => {
+    const caller = callerFor(freshUserId());
+    await seedEntity(caller, {
+      title: 'Купить зонт',
+      aspects: ['orbis/task'],
+      props: { 'orbis/task_status': 'cancelled' },
+    });
+    const got = await caller.entity.suggest({ term: 'купить зонт' });
+    expect(got[0]?.completable).toEqual({ class: 'cancelled', closed: true });
+  });
 });
 
 describe('entity.resolveRefs (заголовки чипов одним запросом)', () => {
@@ -330,11 +349,11 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
     const caller = callerFor(freshUserId());
     const a = await seedEntity(caller, { title: 'Архивная цель', archived: true });
     expect(await caller.entity.resolveRefs({ ids: [a.id] })).toEqual([
-      { id: a.id, title: 'Архивная цель', emoji: null, status: null, archived: true },
+      { id: a.id, title: 'Архивная цель', emoji: null, completable: null, archived: true },
     ]);
   });
 
-  test('статус задачи — плоским полем (чип зачёркивает done)', async () => {
+  test('завершаемость — плоским полем (чип зачёркивает закрытое)', async () => {
     const caller = callerFor(freshUserId());
     const a = await seedEntity(caller, {
       title: 'Сделанная',
@@ -343,7 +362,10 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
       },
       aspects: ['orbis/task'],
     });
-    expect((await caller.entity.resolveRefs({ ids: [a.id] }))[0]?.status).toBe('done');
+    expect((await caller.entity.resolveRefs({ ids: [a.id] }))[0]?.completable).toEqual({
+      class: 'done',
+      closed: true,
+    });
   });
 
   test('чужие сущности не резолвятся (RLS §4.10)', async () => {

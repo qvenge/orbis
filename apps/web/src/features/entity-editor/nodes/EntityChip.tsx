@@ -5,9 +5,6 @@ import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { openEntity } from '../../../state/navigation';
 import { useRefTitle } from './RefTitlesContext';
 
-/** Закрытые статусы задачи — те же два, что у секции «Блокировки» (Blocks.tsx:15). */
-const CLOSED = new Set(['done', 'cancelled']);
-
 function Chip({ node }: NodeViewProps) {
   // Атрибуты ноды типизированы как Record<string, any> — сужаем на входе, а не по месту.
   // id зовётся КАК ЕСТЬ: приведение к нижнему регистру уже сделала сама нода при разборе
@@ -22,9 +19,11 @@ function Chip({ node }: NodeViewProps) {
   // каждом открытии записи. Подписи нет — обрубок id, потому что невидимый чип неотличим от
   // пропавшей ссылки.
   const text = found?.title ?? label ?? `${entityId.slice(0, 8)}…`;
-  const closed = CLOSED.has(String(found?.status ?? ''));
+  const closed = found?.completable?.closed === true;
   // Три состояния одной строкой: закрытая — серая и зачёркнутая, разрешённая — акцент,
-  // неразрешённая (не доехала или не найдена) — серая.
+  // неразрешённая (не доехала или не найдена) — серая. Закрытость — из набора `closed`
+  // контракта `completable`, её считает сервер той же функцией, что рисует строку списка;
+  // своей копии списка статусов у редактора нет.
   const tone = closed ? 'text-text-muted line-through' : found ? 'text-accent' : 'text-text-muted';
 
   return (

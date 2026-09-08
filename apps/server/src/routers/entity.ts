@@ -8,6 +8,8 @@ import {
   entityResolveRefsInput,
   entitySuggestInput,
   entityUpdateUiInput,
+  type RowRegistry,
+  rowProjectionOf,
 } from '@orbis/shared';
 import {
   normalizeQueryAst,
@@ -32,6 +34,7 @@ import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
+import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf, toWireEntityFromSql } from '../wire';
@@ -160,8 +163,12 @@ export interface EntitySuggestion {
   id: string;
   title: string;
   emoji: string | null;
-  /** Статус task-аспекта плоским полем: чипу и пикеру нужен только он (зачеркнуть done). */
-  status: string | null;
+  /**
+   * Завершаемость по контракту `orbis/completable` — то же, что чекбокс строки M14, и та же
+   * функция (`rowProjectionOf`). Плоское `status` снято: оно знало ровно один аспект
+   * (`orbis/task`), и «закрыто» у чипа расходилось с «закрыто» компилятора запросов (§6.1).
+   */
+  completable: { class: string; closed: boolean } | null;
   archived: boolean;
 }
 
@@ -183,19 +190,21 @@ interface SuggestionRow {
  * Маппинг строки (jsonb уже разобран драйвером — как у toWireEntityFromSql) в форму
  * подсказки. Годится и сырой выдаче, и select'у drizzle: имена полей у обеих одинаковы.
  *
- * Статус читается ПОД признаком носителя (Р9): `orbis/task_status` остаётся в `props` и
- * после снятия аспекта задачи, а старая карта теряла его вместе с аспектом. Без признака
- * чип зачёркивал бы как «сделанное» запись, задачей быть переставшую.
+ * Завершаемость считает ТА ЖЕ функция, что рисует чекбокс строки списка (`rowProjectionOf`,
+ * §Б5-6): второй копии правила «что значит закрыто» в корпусе быть не должно — от неё и
+ * лечится разъезд чипа с компилятором запросов.
  */
-function toSuggestion(row: SuggestionRow): EntitySuggestion {
+function toSuggestion(row: SuggestionRow, reg: RowRegistry): EntitySuggestion {
   const aspects = (row.aspects ?? []) as string[];
   const props = (row.props ?? {}) as Record<string, unknown>;
-  const status = aspects.includes('orbis/task') ? props['orbis/task_status'] : undefined;
+  // Класс читается ПОД признаком носителя (Р9): значение остаётся в `props` и после снятия
+  // аспекта, а привязки у снятого аспекта на записи больше нет — чекбокс гаснет вместе с ним.
+  const checkbox = rowProjectionOf({ aspects, props }, reg).checkbox;
   return {
     id: String(row.id),
     title: String(row.title),
     emoji: row.emoji == null ? null : String(row.emoji),
-    status: typeof status === 'string' ? status : null,
+    completable: checkbox === null ? null : { class: checkbox.cls, closed: checkbox.closed },
     archived: row.archived === true,
   };
 }
@@ -358,6 +367,7 @@ export const entityRouter = router({
       const anywhere = `%${needle}%`;
       const fromStart = `${needle}%`;
       return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        const reg = await effectiveRegistry(tx, ctx.actorUserId);
         // Закрытые задачи НЕ фильтруются намеренно: упомянуть сделанное — валидный сценарий
         // ссылки, а чип сам зачёркивает done/cancelled. Архивные — отфильтрованы: их прячет
         // весь UI. Решение зафиксировано при v2 (ревью И14 требовало явности).
@@ -372,7 +382,7 @@ export const entityRouter = router({
               ORDER BY (lower(title) LIKE ${fromStart}) DESC, updated_at DESC, id DESC
               LIMIT ${limit}`,
         );
-        return [...rows].map((r) => toSuggestion(r as unknown as SuggestionRow));
+        return [...rows].map((r) => toSuggestion(r as unknown as SuggestionRow, reg));
       });
     }),
 
@@ -389,6 +399,7 @@ export const entityRouter = router({
   resolveRefs: protectedProcedure.input(entityResolveRefsInput).query(
     ({ ctx, input }): Promise<EntitySuggestion[]> =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        const reg = await effectiveRegistry(tx, ctx.actorUserId);
         // Не сырое `= ANY($1::uuid[])`: массив из шаблона `sql` уезжает в драйвер как есть и
         // падает «malformed array literal» (проверено пробой). inArray — идиома репозитория
         // (ai/escalation.ts:217, recurring/materialize.ts:285) и разворачивается в IN-список.
@@ -403,7 +414,7 @@ export const entityRouter = router({
           })
           .from(entities)
           .where(inArray(entities.id, input.ids));
-        return rows.map(toSuggestion);
+        return rows.map((r) => toSuggestion(r, reg));
       }),
   ),
 

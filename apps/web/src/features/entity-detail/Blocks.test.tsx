@@ -46,14 +46,19 @@ const rel = (id: string, sourceId: string, targetId: string, role: string) => ({
 });
 
 /**
- * Форма строки entity.suggest / entity.resolveRefs: только то, что рисуется, и статус
- * task-аспекта ПЛОСКИМ полем — сущности целиком секция больше не получает.
+ * Форма строки entity.suggest / entity.resolveRefs: только то, что рисуется, и ЗАВЕРШАЕМОСТЬ
+ * плоским полем — сущности целиком секция больше не получает. Класс и членство в наборе
+ * `closed` считает сервер (`rowProjectionOf`), поэтому фикстура повторяет его ответ, а не
+ * заводит вторую копию списка статусов.
  */
 const sugg = (e: ReturnType<typeof ent>) => ({
   id: e.id,
   title: e.title,
   emoji: e.emoji,
-  status: (e.props['orbis/task_status'] as string | undefined) ?? null,
+  completable:
+    e.props['orbis/task_status'] === 'done'
+      ? { class: 'done', closed: true }
+      : { class: 'active', closed: false },
   archived: e.archived,
 });
 
