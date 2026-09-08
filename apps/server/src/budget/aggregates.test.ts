@@ -62,6 +62,12 @@ const cmEnd = lastDayOf(curMonth);
 const prevMonth = shiftMonth(curMonth, -1);
 const nextMonth = shiftMonth(curMonth, 1);
 
+/**
+ * НЕЗАВИСИМАЯ (от `@orbis/shared/date`) проверка календаря: тест обязан считать дни своим способом,
+ * иначе он проверял бы реализацию ею же. Ту же роль играет `paceOf` ниже для деления. Отличие от
+ * shared-версии одно и намеренное: здесь нет ветки «from > to → 0» — тест зовёт функцию только при
+ * from ≤ to (фаза active).
+ */
 function daysInclusive(from: string, to: string): number {
   const [fy, fm, fd] = from.split('-').map(Number) as [number, number, number];
   const [ty, tm, td] = to.split('-').map(Number) as [number, number, number];

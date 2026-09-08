@@ -17,6 +17,7 @@ import {
   type BudgetStatusResult,
   batchAuditMessageId,
   type CategoryTrendPoint,
+  daysInclusive,
   type EnvelopeStatus,
   ROLE_CATEGORY_PARENT,
   ROLE_ENVELOPE_BINDING,
@@ -152,13 +153,8 @@ function shiftMonth(month: string, delta: number): string {
   return `${yy}-${mm}`;
 }
 
-/** Дней от from до to включительно (§2.4: дни до конца периода); минимум 1. */
-function daysInclusive(from: string, to: string): number {
-  const [fy, fm, fd] = from.split('-').map(Number) as [number, number, number];
-  const [ty, tm, td] = to.split('-').map(Number) as [number, number, number];
-  const days = Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000) + 1;
-  return Math.max(1, days);
-}
+// `daysInclusive` живёт в `@orbis/shared` (`date.ts`): календарная арифметика монорепо одна (Р-И-15).
+// Своя копия на `Date.UTC` расходилась бы с civil-алгоритмом на переполнении месяца (докблок `date.ts`).
 
 // ---------------------------------------------------------------------------
 // SQL-блоки агрегатов
