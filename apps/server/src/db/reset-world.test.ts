@@ -56,7 +56,7 @@ const PROD_DSN = `postgresql://postgres.${PROD_REF}:pa%40ss:word@aws-0-eu-centra
 // Форма локального стенда: имени проекта в ней нет ни в пользователе, ни в хосте.
 const LOCAL_DSN_SHAPE = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 
-/** Шесть таблиц графа и журнала — тот же список, что сносит операция (порядок отчёта). */
+/** Семь таблиц графа и журнала — тот же список, что сносит операция (порядок отчёта). */
 const GRAPH_TABLES_UNDER_TEST = [
   'entities',
   'relations',
@@ -64,6 +64,7 @@ const GRAPH_TABLES_UNDER_TEST = [
   'chat_messages',
   'entity_origins',
   'entity_versions',
+  'envelope_spent_cache',
 ] as const;
 
 const { db: admin, client: adminClient } = adminDb();
@@ -305,6 +306,11 @@ describe('reset-world — состав пересева на живой базе
           VALUES (${newId()}::uuid, ${owner}::uuid, ${entity.id}::uuid, 'проба', 'тело',
                   ${owner}::uuid, 'owner')`,
     );
+    await admin.execute(
+      sql`INSERT INTO envelope_spent_cache
+            (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+          VALUES (${entity.id}::uuid, ${owner}::uuid, '2026-09-01', 1, 0, 1)`,
+    );
 
     versionBefore = await systemVersion();
   });
@@ -315,7 +321,7 @@ describe('reset-world — состав пересева на живой базе
     expect(await count('registry_deltas')).toBe(1);
     expect(await count('property_definitions', 'owner_id IS NOT NULL')).toBe(1);
     expect(await count('aspect_definitions', 'owner_id IS NOT NULL')).toBe(1);
-    // Все ШЕСТЬ таблиц сноса непусты ДО операции — иначе «снесено» ниже проверяло бы пустоту,
+    // Все СЕМЬ таблиц сноса непусты ДО операции — иначе «снесено» ниже проверяло бы пустоту,
     // которая и так была.
     for (const table of GRAPH_TABLES_UNDER_TEST) {
       const n = await count(table);
@@ -336,6 +342,7 @@ describe('reset-world — состав пересева на живой базе
     expect(report.graph.chat_messages).toBe(1);
     expect(report.graph.entity_origins).toBe(1);
     expect(report.graph.entity_versions).toBe(1);
+    expect(report.graph.envelope_spent_cache).toBe(1);
     expect(report.deltas).toBe(1);
     expect(report.definitions.property_definitions).toBe(1);
     expect(report.definitions.aspect_definitions).toBe(1);
@@ -346,7 +353,7 @@ describe('reset-world — состав пересева на живой базе
       expect([table, await count(table)]).toEqual([table, 0]);
     }
     // Снимок «после» самой операции говорит то же самое — им оператор Шага 6 и сверяется.
-    expect(Object.values(report.after.graph)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(Object.values(report.after.graph)).toEqual([0, 0, 0, 0, 0, 0, 0]);
     expect(report.after.deltas).toBe(0);
     expect(report.after.ownerDefinitions).toBe(0);
     expect(report.after.ownerVersionMax).toBe(0);

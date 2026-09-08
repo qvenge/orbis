@@ -7,6 +7,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   smallint,
@@ -17,11 +18,11 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-// Схема 18 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
+// Схема 19 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
 // две таблицы доступа внешних агентов §4.13–§4.14 D34 в конце файла, entity_versions
-// ADE-среза 1) и семь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
-// таблица дельт и однострочная таблица версии system-реестра — они в конце файла, после
-// исходных.
+// ADE-среза 1) и восемь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
+// таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5) —
+// они в конце файла, после исходных.
 // RLS-политики и сид аспектов — Слайс 1; здесь только структура, defaults, индексы, FK.
 // owner_id логически ссылается на auth.users (Supabase); FK на auth-схему не объявляем —
 // она управляется Supabase, а не нашими миграциями.
@@ -193,6 +194,13 @@ export const userSettings = pgTable('user_settings', {
    * на новую колонку незачем.
    */
   registryVersion: integer('registry_version').notNull().default(0),
+  /**
+   * §Б8-1 (ревизия 3, Р13): модули, ВЫКЛЮЧЕННЫЕ владельцем. Список выключенных, а не
+   * включённых, намеренно: модуль, появившийся после этой строки, обязан быть включён у
+   * всех и без миграции данных, а список включённых пришлось бы досевать каждому владельцу.
+   * Колонка приезжает ЗДЕСЬ, а читателя ей даёт задача 17: миграция на срез одна (Р-И-23).
+   */
+  disabledModules: text('disabled_modules').array().notNull().default(sql`'{}'`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -568,4 +576,41 @@ export const registrySystem = pgTable(
     seededAt: timestamp('seeded_at', { withTimezone: true }),
   },
   (t) => [check('registry_system_singleton', sql`${t.id} = 1`)],
+);
+
+/**
+ * §Б5-5: кэш `spent` конверта — ОБЫЧНАЯ таблица под RLS владельца, а не MATERIALIZED VIEW
+ * (его нельзя обновить частично и он живёт вне политик — П2 §11-3).
+ *
+ * Ключ — ПАРА `(envelope_id, as_of)`, и второй его половиной закрыт четвёртый путь мимо
+ * бюджет-хука: ведомость `spent` фильтрует движения условием `occurred_on <= today`, то есть
+ * в полночь её состав меняется БЕЗ единой мутации. Со строкой на день полночь просто даёт
+ * промах по новому ключу, а не тихо устаревший ответ.
+ *
+ * Обе половины версии реестра (§А10-1) лежат В СТРОКЕ: читатель сравнивает их со своими и
+ * строку чужой версии не видит — это и есть «смена registry_version инвалидирует» (§С8-16).
+ * Отдельного сноса при пересеве не нужно, а `reset-world` сносит таблицу целиком.
+ *
+ * `spent numeric`, а НЕ `text`: агрегат отдаёт `sum(...)::text`, и хранение строкой однажды
+ * разошлось бы с ним в округлении и в масштабе. На выходе — снова `::text` (§Б3-5: decimal
+ * пересекает границу только строкой).
+ */
+export const envelopeSpentCache = pgTable(
+  'envelope_spent_cache',
+  {
+    envelopeId: uuid('envelope_id')
+      .notNull()
+      .references(() => entities.id, { onDelete: 'cascade' }),
+    ownerId: uuid('owner_id').notNull(),
+    asOf: date('as_of').notNull(),
+    spent: numeric('spent').notNull(),
+    ownerVersion: integer('owner_version').notNull(),
+    systemVersion: integer('system_version').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.envelopeId, t.asOf] }),
+    // Снос по владельцу (property_merge, undo) и отчёт `reset-world` ходят по owner_id.
+    index('envelope_spent_cache_owner').on(t.ownerId, t.asOf),
+  ],
 );

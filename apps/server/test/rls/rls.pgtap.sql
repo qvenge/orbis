@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(89);
+SELECT plan(92);
 
 -- Фикстуры под ролью с BYPASSRLS (обходит RLS; postgres здесь НЕ суперпользователь)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -102,7 +102,13 @@ INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version,
   ('00000000-0000-7000-8000-0000000000bb', '00000000-0000-4000-8000-00000000000b',
    'property', 'orbis/priority', 1, '{"label":{"ru":"Чужое"}}');
 
--- 1) RLS включён и FORCE на всех 18 таблицах (11 исходных + 7 реестров реформы, 0014)
+-- Кэш spent (0018): по строке каждой стороне — без строки B проверка «видит только свою»
+-- была бы ложно-зелёной и при вовсе снятой политике.
+INSERT INTO envelope_spent_cache (envelope_id, owner_id, as_of, spent, owner_version, system_version) VALUES
+  ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a', '2026-09-01', 100, 0, 1),
+  ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b', '2026-09-01', 200, 0, 1);
+
+-- 1) RLS включён и FORCE на всех 19 таблицах (11 исходных + 7 реестров реформы 0014 + кэш spent 0018)
 SELECT is(
   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind = 'r'
@@ -111,9 +117,10 @@ SELECT is(
                        'agent_grants','oauth_clients','entity_versions',
                        'property_definitions','relation_role_definitions',
                        'contract_definitions','subscription_definitions',
-                       'action_definitions','registry_deltas','registry_system')
+                       'action_definitions','registry_deltas','registry_system',
+                       'envelope_spent_cache')
      AND c.relrowsecurity AND c.relforcerowsecurity),
-  18, 'RLS ENABLE+FORCE на всех восемнадцати таблицах');
+  19, 'RLS ENABLE+FORCE на всех девятнадцати таблицах');
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
@@ -628,6 +635,21 @@ SELECT throws_ok(
   $$INSERT INTO registry_system (id, version) VALUES (2, 0)$$,
   '42501', NULL,
     'registry_system: вторая строка под authenticated отклоняется (политики INSERT нет)');
+
+-- Группа 19: envelope_spent_cache — таблица чисто владельца (owner_owns_row FOR ALL, 0018),
+-- встроенных строк кэша не бывает по определению.
+SELECT results_eq('SELECT count(*)::int FROM envelope_spent_cache', ARRAY[1],
+  'envelope_spent_cache: A видит ровно свою строку кэша');
+SELECT throws_ok(
+  $$INSERT INTO envelope_spent_cache (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+    VALUES ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b',
+            '2026-09-02', 1, 0, 1)$$,
+  '42501', NULL, 'envelope_spent_cache: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT lives_ok(
+  $$INSERT INTO envelope_spent_cache (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+    VALUES ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a',
+            '2026-09-02', 1, 0, 1)$$,
+  'envelope_spent_cache: INSERT своей строки проходит');
 RESET ROLE;
 
 -- Deny-by-default для реестров: claims чистим ЯВНО, иначе проверки унаследуют identity A.
