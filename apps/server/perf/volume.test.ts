@@ -13,7 +13,7 @@ import {
   newId,
   ROLE_ENVELOPE_BINDING,
 } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
+import { type SQL, sql } from 'drizzle-orm';
 import { computeOverview } from '../src/budget/aggregates';
 import { invalidateSpentCache } from '../src/budget/spent-cache';
 import { selectEnvelopes } from '../src/budget/binding';
@@ -35,6 +35,7 @@ import {
   VOLUME_MIN_BINDINGS,
   VOLUME_MONTHS,
   VOLUME_OWNER_ID,
+  VOLUME_PROBE_IDS,
   VOLUME_TODAY,
   volumeCombination,
   volumeMonth,
@@ -230,6 +231,102 @@ async function warmSpentCache(envelopeIds: readonly string[]): Promise<void> {
   } finally {
     await admin.client.end();
   }
+}
+
+// ---------------------------------------------------------------------------
+// EXPLAIN-вердикты по горячим запросам Budget (§С8-10, Р-14) — вход решения об индексах
+// ---------------------------------------------------------------------------
+
+/** План под ролью приложения (образец `explain.test.ts:91`). */
+async function planOf(query: SQL, forceIndex: boolean): Promise<string> {
+  const rows = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+    if (forceIndex) await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+    return [...(await tx.execute(sql`EXPLAIN (FORMAT JSON) ${query}`))];
+  });
+  return JSON.stringify(rows);
+}
+
+/** Тот же план под админ-DSN: политик нет — значит нет и security qual (образец `:100`). */
+async function adminPlanOf(query: SQL): Promise<string> {
+  const admin = adminDb();
+  try {
+    const rows = await admin.db.transaction(async (tx) => [
+      ...(await tx.execute(sql`EXPLAIN (FORMAT JSON) ${query}`)),
+    ]);
+    return JSON.stringify(rows);
+  } finally {
+    await admin.client.end();
+  }
+}
+
+interface Verdict {
+  index: string;
+  chosen: boolean;
+  usable: boolean;
+  usableWithoutRls: boolean;
+  note: string;
+}
+
+const verdicts: Verdict[] = [];
+
+/**
+ * ТРИ вопроса, а не один (шапка `explain.test.ts:16-24`): выбран ли индекс под ролью; может ли
+ * он быть выбран под ней вообще (`enable_seqscan = off`); берётся ли он под админ-DSN, где
+ * политик нет. Третий отделяет «индекс не подходит запросу» от «подходит, но RLS не пускает» —
+ * без него вердикт «не используется» читался бы как «снимайте» в обоих случаях.
+ */
+async function verdictFor(index: string, query: SQL, note: string): Promise<Verdict> {
+  const v: Verdict = {
+    index,
+    chosen: (await planOf(query, false)).includes(index),
+    usable: (await planOf(query, true)).includes(index),
+    usableWithoutRls: (await adminPlanOf(query)).includes(index),
+    note,
+  };
+  verdicts.push(v);
+  console.log(
+    `explain: ${index} — под ролью ${v.chosen ? 'ВЫБРАН' : 'НЕ выбран'}, при enable_seqscan=off ` +
+      `${v.usable ? 'пригоден' : 'НЕ пригоден'}; под админ-DSN ` +
+      `${v.usableWithoutRls ? 'ВЫБРАН' : 'не выбран'} — ${note}`,
+  );
+  return v;
+}
+
+/** Пин вердикта СТРОКОЙ целиком: сменится любой из трёх флагов — тест покраснеет (образец `:162`). */
+function expectVerdict(v: Verdict, expected: string): void {
+  expect(`${v.index}: chosen=${v.chosen} usable=${v.usable} admin=${v.usableWithoutRls}`).toBe(
+    `${v.index}: ${expected}`,
+  );
+}
+
+/**
+ * Конверты месяца — запрос СПИСАН с `aggregates.ts:398-414` (`rawEnvelopesOfMonth` приватна, а
+ * экспортировать её ради EXPLAIN значило бы править оракул — РП-4 запрещает). Копия привязана к
+ * оригиналу сторожем в тесте: она обязана вернуть ровно те же сорок конвертов месяца.
+ */
+function envelopesOfMonthQuery(period: { start: string; end: string }): SQL {
+  return sql`SELECT id FROM entities
+     WHERE owner_id = ${VOLUME_OWNER_ID} AND NOT archived
+       AND 'orbis/budget' = ANY(aspects)
+       AND props->>'orbis/period_start' <= ${period.end}
+       AND props->>'orbis/period_end' >= ${period.start}`;
+}
+
+/**
+ * Доступ к `relations` в `spentByEnvelope` (`aggregates.ts:215-232`) — ровно два предиката, и
+ * они решают выбор индекса: роль и `source_id IN (…)`. Фильтры по `entities` не переносятся
+ * намеренно: выбор индекса ПО `relations` они не меняют, а джойн с `entities` и предикат
+ * шаблонности сделали бы вердикт вердиктом о ДРУГОМ запросе. Сам предикат —
+ * `notRecurringTemplateSql` (`aggregates.ts:93`) — остаётся ПРИВАТНОЙ функцией оракула
+ * (РП-4/Р-К-38), поэтому в копию не переносится и никуда не экспортируется.
+ */
+function bindingsOfEnvelopesQuery(envelopeIds: readonly string[]): SQL {
+  const ids = sql.join(
+    envelopeIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  return sql`SELECT count(*)::text AS count FROM relations r
+     WHERE r.role = ${ROLE_ENVELOPE_BINDING} AND r.source_id IN (${ids})`;
 }
 
 test('корпус наполнен: гейт меряет данные, а не пустой граф', async () => {
@@ -482,3 +579,85 @@ test('холодный корпус: p95 без кэша spent записыва�
   );
   expect(cold).toBeGreaterThan(0);
 }, 900_000);
+
+test('EXPLAIN под ролью: GIN по аспектам недостижим, btree по владельцу бесполезен', async () => {
+  const period = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+    const { oracle } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
+    return oracle.period; // границы месяца считает сам оракул — копии календаря нет
+  });
+  const q = envelopesOfMonthQuery(period);
+  // Сторож копии: запрос списан с `aggregates.ts:398-414` и без этой строки мог бы разъехаться
+  // с боевым молча — тогда вердикт был бы вердиктом о другом запросе.
+  const ids = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => [
+    ...((await tx.execute(q)) as unknown as Array<{ id: string }>),
+  ]);
+  expect(ids).toHaveLength(VOLUME_ENVELOPES_PER_MONTH);
+
+  // ВЕРДИКТ снят прогоном 09.09 и записан как есть (Р-К-41: пин, а не предсказание).
+  //
+  // `entities_aspects_gin` — chosen=false usable=false admin=FALSE, и «false» третьим флагом
+  // здесь важнее двух первых: недостижимость НЕ про RLS. Оракул спрашивает аспект формой
+  // `'orbis/budget' = ANY(aspects)` — это scalar-array-op, а GIN по массиву обслуживает
+  // операторы вхождения (`@>`, `&&`). Форма запроса индексом не покрывается НИ ПОД КАКОЙ
+  // ролью, и `enable_seqscan = off` её не спасает (в отличие от трёх GIN `explain.test.ts`,
+  // которые под админ-DSN берутся). Для решения об индексе это значит: экспрессионный индекс
+  // пробы П2 тут ни при чём — сперва форма предиката, потом индекс.
+  expectVerdict(
+    await verdictFor('entities_aspects_gin', q, 'конверты месяца'),
+    'chosen=false usable=false admin=false',
+  );
+  // `entities_owner_updated` — chosen=false usable=TRUE admin=false: индекс пригоден (при
+  // запрете seq scan берётся Bitmap Index Scan по нему), но не выбирается ни под ролью, ни под
+  // админом, и по одной причине: у корпуса ОДИН владелец, поэтому `owner_id = auth.uid()`
+  // отбирает ВСЮ таблицу, и seq scan дешевле. На боевых данных с многими владельцами вердикт
+  // будет другим — здесь он говорит о синтетике, и это ограничение корпуса, а не индекса.
+  expectVerdict(
+    await verdictFor('entities_owner_updated', q, 'он же, частичный btree (owner_id, updated_at)'),
+    'chosen=false usable=true admin=false',
+  );
+}, 300_000);
+
+test('EXPLAIN под ролью: привязки конвертов берут rel_uniq, а не relations_source_role', async () => {
+  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  const q = bindingsOfEnvelopesQuery(ids);
+  const { total, probeBound } = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+    const rows = (await tx.execute(q)) as unknown as Array<{ count: string }>;
+    // Пробы сторожа Р-К-2 создаёт соседний тест ЧЕРЕЗ ИСПОЛНИТЕЛЬ, и бюджет-хук привязывает их
+    // к тем же конвертам корпуса — их вклад считается отдельно, иначе сторож копии сравнивал бы
+    // счёт корпуса со счётом «корпус плюс пробы» и краснел бы на полном прогоне.
+    const probes = (await tx.execute(sql`
+      SELECT count(*)::text AS count FROM relations r
+       WHERE r.role = ${ROLE_ENVELOPE_BINDING}
+         AND r.target_id IN (${sql.join(
+           VOLUME_PROBE_IDS.map((id) => sql`${id}::uuid`),
+           sql`, `,
+         )})`)) as unknown as Array<{ count: string }>;
+    return { total: Number(rows[0]?.count), probeBound: Number(probes[0]?.count) };
+  });
+  // Сторож копии: столько же, сколько насеяла 0c.
+  expect(total - probeBound).toBe(fixture.bindings);
+  // ВЕРДИКТ снят прогоном 09.09 и записан как есть (Р-К-41).
+  //
+  // `relations_source_role` (source_id, role) под ролью НЕ выбирается — и не потому, что запрос
+  // идёт по куче: политика `owner_owns_both_ends` спрашивает ОБА конца ребра, поэтому плану
+  // нужен ещё и `target_id`. Его несёт `rel_uniq` (source_id, target_id, role) — и выигрывает
+  // Index Only Scan'ом, без единого похода в кучу. Под админ-DSN политики нет, `target_id`
+  // не нужен, и берётся `relations_source_role`.
+  expectVerdict(
+    await verdictFor(
+      'relations_source_role',
+      q,
+      `привязки 480 конвертов, роль ${ROLE_ENVELOPE_BINDING}`,
+    ),
+    'chosen=false usable=false admin=true',
+  );
+  // Четвёртый вердикт — не украшение: без него сводка сказала бы «приложением не используется»
+  // и читалась бы как «запрос не проиндексирован», тогда как он обслужен полностью, просто
+  // другим индексом. Именно это и есть ответ входа Р-14 про `relations`: заводить индекс не
+  // нужно, а `relations_source_role` для пути приложения — кандидат в лишние (вопрос Б-2, не
+  // Б-1: миграции среза исчерпаны 0018, Р-И-23).
+  expectVerdict(
+    await verdictFor('rel_uniq', q, 'он же — уникальный (source_id, target_id, role)'),
+    'chosen=true usable=true admin=false',
+  );
+}, 300_000);
