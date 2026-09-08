@@ -199,6 +199,38 @@ function divergencesOf(oracle: BudgetOverview, engine: BudgetOverview, month: st
   return out;
 }
 
+/**
+ * ПРОГРЕТЫЙ корпус (Р8 рамки) — две вещи, обе обязательны.
+ *
+ * (1) Кэш `spent` (§Б5-5, задача 11) заполнен по всем двенадцати месяцам: первый Overview
+ * считает промахи SQL'ем и пишет строки, дальше читает их. Мерить первый вызов значило бы
+ * мерить холодный под видом прогретого.
+ *
+ * (2) У таблицы кэша есть статистика планировщика: без ANALYZE planner берёт умолчания, и
+ * `budget.overview` на одной фикстуре давал то 64, то 464 мс (докблок `src/test/perf.ts:378`).
+ * ANALYZE требует прав владельца — админ-DSN, как `truncateAll`.
+ */
+async function warmSpentCache(envelopeIds: readonly string[]): Promise<void> {
+  expect(envelopeIds).toHaveLength(VOLUME_ENVELOPES);
+  for (let k = 0; k < VOLUME_MONTHS; k++) {
+    await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+      budgetOverviewOf(
+        tx,
+        VOLUME_OWNER_ID,
+        { month: volumeMonth(k), today: VOLUME_TODAY },
+        budgetDef,
+        reg,
+      ),
+    );
+  }
+  const admin = adminDb();
+  try {
+    await admin.db.execute(sql`ANALYZE envelope_spent_cache`);
+  } finally {
+    await admin.client.end();
+  }
+}
+
 test('корпус наполнен: гейт меряет данные, а не пустой граф', async () => {
   expect(fixture.envelopes).toBe(VOLUME_ENVELOPES);
   expect(fixture.bindings).toBeGreaterThanOrEqual(VOLUME_MIN_BINDINGS);
@@ -385,3 +417,40 @@ test('сверка и замер — на одной транзакции: дв�
   });
   expect(diffs).toEqual([]);
 }, 300_000);
+
+test('перф-гейт §С8-15: p95 движка ≤ 2× оракула и ≤ 500 мс на прогретом корпусе', async () => {
+  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  await warmSpentCache(ids);
+
+  const oracleP95 = await measureP95('overview:oracle:warm', P95_RUNS, () =>
+    withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+      computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY),
+    ),
+  );
+  const engineP95 = await measureP95('overview:engine:warm', P95_RUNS, () =>
+    withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+      budgetOverviewOf(
+        tx,
+        VOLUME_OWNER_ID,
+        { month: VOLUME_LAST_MONTH, today: VOLUME_TODAY },
+        budgetDef,
+        reg,
+      ),
+    ),
+  );
+
+  // Строка порога печатается на КАЖДОМ прогоне и для достигнутого тоже: «достигнут» — такой же
+  // факт замера, как «не достигнут» (образец `graph.test.ts:270-279`).
+  for (const [key, ceil] of [
+    ['overview:engine ≤ 500 мс', VOLUME_BUDGETS.overviewP95Ms],
+    ['overview:engine ≤ 2× оракула', oracleP95 * VOLUME_BUDGETS.ratioToOracle],
+  ] as const) {
+    console.log(
+      `perf: ${key} — порог §С8-15 ${ceil.toFixed(0)} мс ${
+        engineP95 <= ceil ? 'ДОСТИГНУТ' : 'НЕ достигнут'
+      } (p95 = ${engineP95.toFixed(0)} мс, оракул ${oracleP95.toFixed(0)} мс,` +
+        ` отношение ${(engineP95 / oracleP95).toFixed(2)}×)`,
+    );
+  }
+  expect(gateViolations({ oracleP95, engineP95 }, VOLUME_BUDGETS)).toEqual([]);
+}, 900_000);
