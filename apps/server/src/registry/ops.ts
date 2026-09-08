@@ -1765,6 +1765,13 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
  * aspect_create/aspect_implements_set, задача 15). BIND_TYPE и VARIANT_UNMAPPED — свои коды §С1-2;
  * UNKNOWN_CONTRACT/SLOT/PROPERTY и REQUIRED_SLOT_UNBOUND — опечатка адреса, а не расхождение типов:
  * VALIDATION с причиной в details (та же природа, что у остальных отказов дельт).
+ *
+ * ПОРЯДОК СЛОЖЕНИЯ В ВЕТКЕ VALIDATION — не косметика. У замечаний привязок `details.reason` УЖЕ
+ * занят словарём Ф-Б1-18 (`UNKNOWN_CONTRACT` несёт `duplicate`, `VARIANT_UNMAPPED` — `not_status`
+ * и прочие), и спред `{reason: issue.code, ...d}` затирал КОД замечания его же уточнением:
+ * наружу уходил `reason: 'duplicate'`, по которому не отличить вторую привязку того же контракта
+ * от снятого контракта. Поэтому код ложится ПОСЛЕ `d`, а вытесненное уточнение переезжает в
+ * `cause` — оба различения остаются у читателя отказа.
  */
 export function execErrorOfImplementsIssue(
   issue: ImplementsIssue,
@@ -1786,9 +1793,10 @@ export function execErrorOfImplementsIssue(
     );
   }
   return new ExecError('VALIDATION', `привязка не сходится с реестром: ${issue.code}`, {
-    reason: issue.code,
     ...extra,
     ...d,
+    reason: issue.code,
+    ...(typeof d.reason === 'string' && { cause: d.reason }),
   });
 }
 

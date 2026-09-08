@@ -6,7 +6,14 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { AGENDA_DEF, addDays, newId, rowProjectionOf } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
@@ -23,6 +30,7 @@ import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { effectiveRegistry } from './cache';
 import {
   collectPropertyHolders,
+  execErrorOfImplementsIssue,
   lockOwnerRegistry,
   readContractDelta,
   removeContractDelta,
@@ -1945,6 +1953,24 @@ describe('дельта аспекта как держатель свойства
     return (r.results[0] as { property: string }).property;
   }
 
+  /**
+   * То же, но `select` с одним вариантом: у карты классов вариант обязан существовать
+   * (`unknown_variant`), а у слияния — совпасть ЭФФЕКТИВНЫЕ типы обоих концов (`MERGE_TYPE`),
+   * поэтому набор вариантов у источника и цели один и тот же.
+   */
+  async function mkSelectProp(key: string): Promise<string> {
+    const r = ok(
+      await runH('property_create', {
+        key,
+        label: { ru: key },
+        description: { ru: key },
+        type: { kind: 'select', options: [{ key: 'meh', label: { ru: 'Так себе' }, rank: 1 }] },
+        status: 'active',
+      }),
+    );
+    return (r.results[0] as { property: string }).property;
+  }
+
   /** Состав аспекта КАК ЕГО ВИДИТ ЧИТАТЕЛЬ — через эффективный снимок, не через строку. */
   async function taskRefs(): Promise<Array<{ propertyId: string; required: boolean }>> {
     const reg = await withIdentity(db, holderOwner, (tx) => effectiveRegistry(tx, holderOwner));
@@ -2085,8 +2111,20 @@ describe('дельта аспекта как держатель свойства
   test('КЛЮЧ classMap — адрес свойства: слияние переписывает его, как и ключ selectOptions', async () => {
     // Докблок `collectPropertyHolders` называет этот класс дефекта прямо: «дельта была видна
     // графу зависимостей и невидима слиянию». Новое поле обязано пройти обе функции.
-    const src = await mkProp('user/cm-src');
-    const dst = await mkProp('user/cm-dst');
+    //
+    // ФИКСТУРА ЧЕСТНАЯ (Ф-Б1-49): свойства — select с тем самым вариантом, который карта относит,
+    // и `src` РЕАЛЬНО стоит слотом-статусом у своего аспекта владельца. Иначе карта незаконна и
+    // `aspect_delta_set` отвергнет её, не дав даже поставить пробу.
+    const src = await mkSelectProp('user/cm-src');
+    const dst = await mkSelectProp('user/cm-dst');
+    await seedCustomAspect(holderOwner, {
+      key: 'user/cm-carrier',
+      label: { ru: 'Носитель статуса' },
+      properties: [{ key: 'cm-note', type: { kind: 'number' } }],
+      implements: [
+        { contract: 'orbis/completable', bind: { status: src }, value_map: [], fixed: {} },
+      ],
+    });
     ok(
       await runH('aspect_delta_set', {
         aspect: 'orbis/note',
@@ -2550,12 +2588,15 @@ describe('карта классов и пользовательский набо
       }),
     );
     // Пользовательский набор поверх встроенного контракта (§Б5-2). Тула дельты контракта здесь
-    // ещё нет (задача 16) — строка ставится тем же писателем, которого он позовёт.
-    await withIdentity(db, setOwner, (tx) =>
-      setContractDelta(tx, setOwner, 'orbis/completable', {
+    // ещё нет (задача 16) — строка ставится тем же писателем, которого он позовёт, и ПОД ТЕМ ЖЕ
+    // ЗАМКОМ: функции реестра своего замка не берут (шапка `ops.ts`), и порядок захвата обязан
+    // воспроизводиться боевым — иначе проба меряет путь, которого в бою нет.
+    await withIdentity(db, setOwner, async (tx) => {
+      await lockOwnerRegistry(tx, setOwner);
+      await setContractDelta(tx, setOwner, 'orbis/completable', {
         setsDelta: { dropped: ['cancelled'] },
-      }),
-    );
+      });
+    });
     for (const step of [
       ...task(inReview, 'На ревью', 'in_review'),
       ...task(dropped, 'Брошено', 'cancelled'),
@@ -2615,6 +2656,7 @@ describe('карта классов и пользовательский набо
       variant: 'blocked',
       contract: 'orbis/completable',
       slot: 'status',
+      reason: 'unmapped',
     });
     // Прежняя дельта на месте, а `blocked` в реестр не попал.
     const reg = await withIdentity(db, setOwner, (tx) => effectiveRegistry(tx, setOwner));
@@ -2635,5 +2677,116 @@ describe('карта классов и пользовательский набо
         },
       }),
     );
+  });
+
+  test('карта, которая НИКУДА не ведёт, отвергается на записи, а не пишется молча (Ф-Б1-49)', async () => {
+    // Три формы fail-open, найденные гейтом. Каждая раньше проходила молча и уезжала в строку
+    // дельты: владелец уверен, что назначил класс, а ни один фильтр его не видит.
+    const cases: Array<[string, unknown, string, string]> = [
+      [
+        'слот дат классов не имеет (§Б1-1)',
+        {
+          'orbis/due_date': [
+            { contract: 'orbis/when', slot: 'deadline', variant: 'x', class: 'active' },
+          ],
+        },
+        'UNKNOWN_SLOT',
+        'not_status',
+      ],
+      [
+        'свойство в слоте-статусе не стоит',
+        {
+          'orbis/priority': [
+            { contract: 'orbis/completable', slot: 'status', variant: 'urgent', class: 'active' },
+          ],
+        },
+        'UNKNOWN_SLOT',
+        'not_bound',
+      ],
+      [
+        'контракта нет в реестре',
+        {
+          'orbis/task_status': [
+            { contract: 'orbis/net-takogo', slot: 'status', variant: 'done', class: 'active' },
+          ],
+        },
+        'UNKNOWN_CONTRACT',
+        'absent',
+      ],
+    ];
+    for (const [what, classMap, reason, cause] of cases) {
+      const e = err(await runS('aspect_delta_set', { aspect: 'orbis/task', delta: { classMap } }));
+      // Код замечания едет в `reason`, а его уточнение — в `cause`: спред `{reason: code, ...d}`
+      // затирал бы код словарным уточнением, и `UNKNOWN_CONTRACT` было бы не отличить.
+      expect([what, e.code, (e.details as { reason?: string; cause?: string }).reason]).toEqual([
+        what,
+        'VALIDATION',
+        reason,
+      ]);
+      expect([what, (e.details as { cause?: string }).cause]).toEqual([what, cause]);
+    }
+  });
+
+  test('ФАНТОМНЫЙ вариант карты — VARIANT_UNMAPPED/unknown_variant, а не строка в value_map', async () => {
+    // Опечатка в ключе: значений с ним валидатор не пропустит, но отнесение уехало бы в
+    // `value_map` привязки и шумело бы в индексе.
+    const e = err(
+      await runS('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: {
+          classMap: {
+            'orbis/task_status': [
+              {
+                contract: 'orbis/completable',
+                slot: 'status',
+                variant: 'in_reveiw',
+                class: 'active',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(e.code).toBe('VARIANT_UNMAPPED');
+    expect(e.details).toMatchObject({ variant: 'in_reveiw', reason: 'unknown_variant' });
+  });
+});
+
+describe('execErrorOfImplementsIssue: код замечания не теряется под словарным reason (Ф-Б1-18)', () => {
+  test('VALIDATION-ветка: reason — КОД, уточнение словаря — cause', () => {
+    // `checkImplements` кладёт в `details.reason` уточнение (`duplicate` у второй привязки того
+    // же контракта). Прежний порядок спреда затирал им код, и задача 15 не смогла бы отличить
+    // «контракта нет» от «привязка задвоена».
+    const e = execErrorOfImplementsIssue(
+      {
+        code: 'UNKNOWN_CONTRACT',
+        details: { aspect: 'user/probe', contract: 'orbis/when', reason: 'duplicate' },
+      },
+      { aspect: 'user/probe' },
+    );
+    expect(e.code).toBe('VALIDATION');
+    expect(e.details).toMatchObject({
+      reason: 'UNKNOWN_CONTRACT',
+      cause: 'duplicate',
+      contract: 'orbis/when',
+    });
+  });
+  test('замечание без словарного уточнения cause не заводит', () => {
+    const e = execErrorOfImplementsIssue({
+      code: 'REQUIRED_SLOT_UNBOUND',
+      details: { aspect: 'user/probe', contract: 'orbis/money-movement', slot: 'amount' },
+    });
+    expect(e.details).toMatchObject({ reason: 'REQUIRED_SLOT_UNBOUND' });
+    expect((e.details as { cause?: string }).cause).toBeUndefined();
+  });
+  test('свои коды §С1-2 остаются кодами, а их reason — словарным', () => {
+    const e = execErrorOfImplementsIssue({
+      code: 'VARIANT_UNMAPPED',
+      details: { contract: 'orbis/completable', variant: 'x', reason: 'unknown_variant' },
+    });
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VARIANT_UNMAPPED',
+      'unknown_variant',
+    ]);
   });
 });
