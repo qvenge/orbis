@@ -144,7 +144,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 13 core + 8 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 40', async () => {
+  test('builtin-реестр (userB без кастомных): 13 core + 12 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 44', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -163,7 +163,15 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
     // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
     // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
-    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 40 тулов, пиннит `registry-golden`.
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 44 тула, пиннит `registry-golden`.
+    for (const name of [
+      'subscription_set',
+      'subscription_remove',
+      'contract_sets_delta_set',
+      'contract_sets_delta_remove',
+    ]) {
+      expect(names).toContain(name);
+    }
     expect(defs.length).toBe(TOOL_REGISTRY_GOLDEN.length);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
@@ -202,14 +210,14 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('fullScopeOnly: true у property_catalog и восьми тулов реестра (§А9-4) — и ни у кого больше', async () => {
+  test('fullScopeOnly: true у property_catalog и двенадцати тулов реестра (§А9-4) — и ни у кого больше', async () => {
     // У каталога признак нужен именно потому, что тул ЧИТАЮЩИЙ: правило «чтения открыты
     // все» его бы пропустило, и `worker` получил бы карту поверхности владельца целиком.
     // У тулов реестра он отвечает на другой вопрос — кому этот тул вообще адресован:
     // мутации фону закрывает и `WORKER_SCOPE_TOOLS`, а устройство системы владельца —
     // не то, над чем фоновый исполнитель работает (§А9-4, РП-14).
     //
-    // ЧЕСТНО О СИЛЕ ЭТОГО ПИНА: у восьми реестровых тулов флаг сегодня НЕ НЕСУЩИЙ — снятие
+    // ЧЕСТНО О СИЛЕ ЭТОГО ПИНА: у двенадцати реестровых тулов флаг сегодня НЕ НЕСУЩИЙ — снятие
     // его не меняет ни списка, ни вызова (мутационная проба Задачи 15), потому что оба
     // гейта отказывают им уже по правилу «мутация не из `WORKER_SCOPE_TOOLS`». Это пин
     // ОБЪЯВЛЕНИЯ, а не поведения, и он станет несущим у первого ЧИТАЮЩЕГО тула реестра —
@@ -227,6 +235,10 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
       'aspect_create',
       'aspect_implements_set',
       'aspect_implements_remove',
+      'subscription_set',
+      'subscription_remove',
+      'contract_sets_delta_set',
+      'contract_sets_delta_remove',
     ]);
     expect(defOf(defs, 'property_catalog').kind).toBe('read');
     for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind).toBe('mutate');

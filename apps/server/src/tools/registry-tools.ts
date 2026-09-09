@@ -1,14 +1,17 @@
 // apps/server/src/tools/registry-tools.ts
 //
-// ВОСЕМЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2, §Б2-1): завести своё свойство, поправить его,
-// слить два в одно, поставить и снять дельту аспекта, завести СВОЙ аспект и переписать либо
-// снять его привязки к контрактам. Это первая поверхность, которой владелец и модель МЕНЯЮТ
-// САМУ СИСТЕМУ, а не данные в ней.
+// ДВЕНАДЦАТЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2, §Б2-1, §Б5-1, §Б1-1): завести своё
+// свойство, поправить его, слить два в одно, поставить и снять дельту аспекта, завести СВОЙ
+// аспект и переписать либо снять его привязки к контрактам, настроить и снять подписку
+// поверхности, добавить и снять свои именованные наборы контракта. Это первая поверхность,
+// которой владелец и модель МЕНЯЮТ САМУ СИСТЕМУ, а не данные в ней.
 //
-// Три последних заводит срез Б-1: аспект перестал быть только «набором полей» — привязка
+// Семь последних заводит срез Б-1. Аспект перестал быть только «набором полей»: привязка
 // (`implements`) включает его в Повестку, Бюджет и строку списка ДЕКЛАРАЦИЕЙ, без строки
-// кода (§Б2-1), и завести такую декларацию владелец и модель обязаны тем же путём, что
-// остальное устройство системы, — тулом через исполнителя, а не правкой базы.
+// кода (§Б2-1). Подписка отвечает на второй вопрос той же декларативности — ЧЕМ поверхность
+// наполняется (§Б5-1), а дельта наборов даёт декларациям имя для состава классов вместо
+// перечисления (§Б1-1). Завести такое владелец и модель обязаны тем же путём, что остальное
+// устройство системы, — тулом через исполнителя, а не правкой базы.
 //
 // ДВА ПРЕДСТАВЛЕНИЯ, КАК У ОСТАЛЬНЫХ CORE-ТУЛОВ (`tools/registry.ts`): zod-envelope
 // валидирует вход на исполнении, JSON Schema уезжает модели. Живут они здесь ВМЕСТЕ —
@@ -16,12 +19,12 @@
 // приходится сторожить отдельным тестом; у новых тулов сторожить нечего, потому что оба
 // представления стоят в одном файле друг под другом.
 //
-// `fullScopeOnly: true` У ВСЕХ ВОСЬМИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
+// `fullScopeOnly: true` У ВСЕХ ДВЕНАДЦАТИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
 // не адресован вовсе: он работает над ЗАДАЧЕЙ владельца, а не над устройством его системы.
 // Флаг — не «мутации фону закрыты» (это и так держит `WORKER_SCOPE_TOOLS`), а ответ на
 // другой вопрос: кому этот тул вообще предназначен.
 //
-// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ВОСЬМИ НАЗНАЧАЕТ §7.10, И НАЗНАЧАЕТ ПО ОБЪЕКТУ (§С2-1, Задача 16):
+// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ДВЕНАДЦАТИ НАЗНАЧАЕТ §7.10, И НАЗНАЧАЕТ ПО ОБЪЕКТУ (§С2-1, Задача 16):
 // своя строка владельца от AI — `preview` (исполнено и показано карточкой), перенастройка
 // поведения (статус, слияние, дельта) — `explicit-confirmation` для любого актора, а от
 // рутины та же операция становится отложенной единицей пачки D42. Встроенные строки реестра
@@ -30,10 +33,16 @@
 // `tools/dispatch.ts` (`routineDeferForbidden`); приёмка §С8-11 — тест на каждый ряд.
 // Прежняя редакция этой шапки называла отсутствие гейта знаемой дырой одной задачи; дыра
 // закрыта, и абзац снят вместе с ней.
-import { aspectImplementsSchema, localizedTextSchema, PROPERTY_KINDS } from '@orbis/shared';
+import {
+  aspectImplementsSchema,
+  localizedTextSchema,
+  PROPERTY_KINDS,
+  SURFACES,
+  subscriptionDefinitionSchema,
+} from '@orbis/shared';
 import { queryAstJsonSchema } from '@orbis/shared/query';
 import { z } from 'zod';
-import { aspectDeltaSchema } from '../registry/deltas';
+import { aspectDeltaSchema, contractDeltaSchema } from '../registry/deltas';
 import type { OrbisToolDef } from './registry';
 
 /** Подпись/смысл в локалях — та же форма, что в реестре (`localizedTextSchema`). */
@@ -441,10 +450,111 @@ const aspectImplementsRemoveJsonSchema = {
   },
 } as const;
 
+// ---------------------------------------------------------------------------
+// subscription_set / subscription_remove (§Б5-1, §Б5-2)
+// ---------------------------------------------------------------------------
+
+export const subscriptionSetInput = z
+  .object({
+    id: z.string().min(1),
+    surface: z.enum(SURFACES),
+    definition: subscriptionDefinitionSchema,
+  })
+  .strict();
+export type SubscriptionSetInput = z.infer<typeof subscriptionSetInput>;
+
+export const subscriptionRemoveInput = z.object({ id: z.string().min(1) }).strict();
+export type SubscriptionRemoveInput = z.infer<typeof subscriptionRemoveInput>;
+
 /**
- * Дефы восьми тулов. Порядок — тот, в котором их видит модель и эталон снимка
- * (`test/golden/tool-registry.json`): создание, правка, слияние, дельта, снятие дельты,
- * заведение своего аспекта и две операции его привязок.
+ * `definition` описана модели ПРОЗОЙ, а не развёрнутой JSON Schema союза — тот же приём и тот
+ * же довод, что у `propertyTypeJsonSchema` выше: разложить `subscriptionDefinitionSchema`
+ * механически нечем (два движка, у каждого десяток вложенных strict-объектов), а написать
+ * руками значило бы завести ВТОРОЕ описание подписки рядом с реестром. Форму проверяет zod на
+ * исполнении и отвечает модели точным `issues`-путём.
+ */
+const subscriptionDefinitionJsonSchema = {
+  type: 'object',
+  description:
+    'декларация подписки: {"engine":"agenda", show:{…}, overdue:{…}, hide:{…}} либо ' +
+    '{"engine":"budget", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. ' +
+    'Ссылаться можно на контракты, их слоты и ИМЕНОВАННЫЕ НАБОРЫ, не на id аспектов и не на ' +
+    'сырые значения свойств (исключения — prefer и предикат в hide/where). Выражения — только ' +
+    'деревьями языка E: строка в позиции выражения отвергается.',
+  properties: { engine: { type: 'string', enum: ['agenda', 'budget'] } },
+  required: ['engine'],
+} as const;
+
+const subscriptionSetJsonSchema = {
+  type: 'object',
+  properties: {
+    id: {
+      type: 'string',
+      description:
+        'адрес подписки. orbis/… — настройка ПОВЕРХ системной декларации (сама она не ' +
+        'меняется и переживает обновления); user/… — своя подписка владельца, и она законна ' +
+        'только на поверхности, где системной подписки нет.',
+    },
+    surface: {
+      type: 'string',
+      enum: [...SURFACES],
+      description:
+        'поверхность-потребитель: planner/agenda — Повестка, finance/budget-overview — Бюджет',
+    },
+    definition: subscriptionDefinitionJsonSchema,
+  },
+  required: ['id', 'surface', 'definition'],
+  additionalProperties: false,
+} as const;
+
+const subscriptionRemoveJsonSchema = {
+  type: 'object',
+  properties: { id: { type: 'string', description: 'адрес подписки: orbis/… или user/…' } },
+  required: ['id'],
+  additionalProperties: false,
+} as const;
+
+// ---------------------------------------------------------------------------
+// contract_sets_delta_set / contract_sets_delta_remove (§Б1-1, §Б5-2)
+// ---------------------------------------------------------------------------
+
+export const contractSetsDeltaSetInput = z
+  .object({ contract: z.string().min(1), setsDelta: contractDeltaSchema.shape.setsDelta })
+  .strict();
+export type ContractSetsDeltaSetInput = z.infer<typeof contractSetsDeltaSetInput>;
+
+export const contractSetsDeltaRemoveInput = z.object({ contract: z.string().min(1) }).strict();
+export type ContractSetsDeltaRemoveInput = z.infer<typeof contractSetsDeltaRemoveInput>;
+
+const contractSetsDeltaSetJsonSchema = {
+  type: 'object',
+  properties: {
+    contract: { type: 'string', description: 'id контракта, например orbis/completable' },
+    setsDelta: {
+      type: 'object',
+      description:
+        'СВОИ именованные наборы классов: {"мои_открытые":["active"]}. Встроенные наборы ' +
+        'контракта не меняются и не переименовываются — дельта только добавляет; имя, ' +
+        'занятое встроенным набором, отвергается.',
+      additionalProperties: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  required: ['contract', 'setsDelta'],
+  additionalProperties: false,
+} as const;
+
+const contractSetsDeltaRemoveJsonSchema = {
+  type: 'object',
+  properties: { contract: { type: 'string', description: 'id контракта' } },
+  required: ['contract'],
+  additionalProperties: false,
+} as const;
+
+/**
+ * Дефы двенадцати тулов. Порядок — тот, в котором их видит модель и эталон снимка
+ * (`test/golden/tool-registry.json`): создание свойства, правка, слияние, дельта аспекта,
+ * снятие дельты, заведение своего аспекта и две операции его привязок, настройка подписки и
+ * её снятие, дельта наборов контракта и её снятие.
  */
 export const REGISTRY_TOOLS: OrbisToolDef[] = [
   {
@@ -527,12 +637,49 @@ export const REGISTRY_TOOLS: OrbisToolDef[] = [
     kind: 'mutate',
     fullScopeOnly: true,
   },
+  {
+    name: 'subscription_set',
+    description:
+      'Настроить подписку поверхности — чем наполняются Повестка и Бюджет: какие контракты, ' +
+      'наборы классов и окна они читают. Адрес orbis/… кладёт настройку поверх системной ' +
+      'декларации, адрес user/… заводит свою подписку. Декларация проверяется целиком до ' +
+      'записи: неизвестная поверхность, чужой движок, строка вместо выражения и ссылка на id ' +
+      'аспекта — отказ.',
+    inputJsonSchema: subscriptionSetJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
+  {
+    name: 'subscription_remove',
+    description:
+      'Снять подписку: настройка поверх системной снимается и поверхность возвращается к ' +
+      'системной декларации, своя подписка удаляется.',
+    inputJsonSchema: subscriptionRemoveJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
+  {
+    name: 'contract_sets_delta_set',
+    description:
+      'Добавить контракту свои именованные наборы классов — чтобы подписки и запросы ' +
+      'ссылались на имя набора, а не перечисляли значения. Встроенные наборы не меняются.',
+    inputJsonSchema: contractSetsDeltaSetJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
+  {
+    name: 'contract_sets_delta_remove',
+    description: 'Снять свои наборы контракта: остаются только встроенные.',
+    inputJsonSchema: contractSetsDeltaRemoveJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
 ];
 
-/** Имена восьми тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
+/** Имена двенадцати тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
 export const REGISTRY_TOOL_NAMES: ReadonlySet<string> = new Set(REGISTRY_TOOLS.map((d) => d.name));
 
-/** Envelope-схемы восьми тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
+/** Envelope-схемы двенадцати тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
 export const REGISTRY_TOOL_ENVELOPES: Record<string, z.ZodTypeAny> = {
   property_create: propertyCreateInput,
   property_update: propertyUpdateInput,
@@ -542,4 +689,8 @@ export const REGISTRY_TOOL_ENVELOPES: Record<string, z.ZodTypeAny> = {
   aspect_create: aspectCreateInput,
   aspect_implements_set: aspectImplementsSetInput,
   aspect_implements_remove: aspectImplementsRemoveInput,
+  subscription_set: subscriptionSetInput,
+  subscription_remove: subscriptionRemoveInput,
+  contract_sets_delta_set: contractSetsDeltaSetInput,
+  contract_sets_delta_remove: contractSetsDeltaRemoveInput,
 };
