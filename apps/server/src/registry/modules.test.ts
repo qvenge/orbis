@@ -15,12 +15,14 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { budgetOverview } from '../budget/aggregates';
+import { defaultCurrencyOf } from '../budget/binding';
 import { ensureGlobalThread } from '../chat/threads';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import { undoLast } from '../executor/undo';
 import { buildContext } from '../llm/context';
+import { DEFAULT_TIMEZONE, ownerTimeZone } from '../query/context';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
@@ -169,6 +171,27 @@ describe('маска модулей: чтение и запись (§Б8-1)', ()
     expect(await withIdentity(db, maskOwner, (tx) => disabledModulesOf(tx, maskOwner))).toEqual([
       'goals',
     ]);
+  });
+
+  test('строку настроек заводит сама маска, и её дефолты = дефолты КОДА (Ф-Б1-10)', async () => {
+    // Владельца без онбординга строкой `user_settings` снабжает теперь `setModuleDisabled`
+    // своим `INSERT … ON CONFLICT` (эррата 08.09 к задаче 0b: сев 0b её больше не пишет).
+    // Разойдись дефолты КОЛОНОК с дефолтами КОДА — один и тот же владелец считал бы «сегодня»
+    // и валюту по-разному до и после первого выключения модуля.
+    //
+    // Сравнивается ПОВЕДЕНИЕ, а не литералы: `ownerTimeZone`/`defaultCurrencyOf` — те самые
+    // читатели, чьё умолчание «дефолтом кода» и является; пин на строковые константы зеленел
+    // бы и при расхождении с колонкой.
+    const fresh = freshUserId();
+    const read = (u: string) =>
+      withIdentity(db, u, async (tx) => [
+        await ownerTimeZone(tx, u),
+        await defaultCurrencyOf(tx, u),
+      ]);
+    const before = await read(fresh);
+    await withIdentity(db, fresh, (tx) => setModuleDisabled(tx, fresh, 'finance', true));
+    expect(await read(fresh)).toEqual(before);
+    expect(before[0]).toBe(DEFAULT_TIMEZONE);
   });
 });
 
