@@ -325,6 +325,59 @@ describe('типы позиций E и круги ведомостей (§С8-28
       assertSubscription(row(BUDGET_DEF, { surface: 'finance/budget-overview' }), seed).engine,
     ).toBe('budget');
   });
+
+  /**
+   * ОБЛАСТЬ `where` УЖЕ ОБЛАСТИ ГРАНИЦ (B3 I-1, вторая половина фикса). Предикат уезжает в
+   * SQL-бэкенд, а тот не знает ни параметров вызова, ни разыменования: принять их на записи
+   * значило бы адресовать отказ владельцу на чтении, а не автору декларации (Р-И-7).
+   * Слоты контракта в этот перечень НЕ входят — их бэкенд умеет с той же правкой (`budget.ts`,
+   * `agenda.ts` через `compileContractPredicate`), и пин их законности стоит в `budget.test.ts`.
+   */
+  test('`where` без параметров и без разыменования — отказ на ЗАПИСИ', () => {
+    const spent = BUDGET_DEF.aggregates.spent;
+    const planned = BUDGET_DEF.lists.planned;
+    if (spent === undefined || planned === undefined) throw new Error('сид Бюджета изменился');
+    const withDeref = {
+      ...BUDGET_DEF,
+      aggregates: {
+        ...BUDGET_DEF.aggregates,
+        spent: {
+          ...spent,
+          where: {
+            op: '=',
+            args: [{ deref: { slot: 'category', read: 'orbis/title' } }, { const: 'Еда' }],
+          },
+        },
+      },
+    };
+    const withParam = {
+      ...BUDGET_DEF,
+      lists: {
+        ...BUDGET_DEF.lists,
+        planned: {
+          ...planned,
+          where: { op: '>=', args: [{ slot: 'date' }, { param: 'period_start' }] },
+        },
+      },
+    };
+    for (const def of [withDeref, withParam]) {
+      expect(
+        refusal(() => assertSubscription(row(def, { surface: 'finance/budget-overview' }), seed))
+          .code,
+      ).toBe('EXPR_TYPE');
+    }
+    // Контроль: та же позиция со СЛОТОМ контракта по-прежнему принимается — сужение адресное.
+    const withSlot = {
+      ...BUDGET_DEF,
+      aggregates: {
+        ...BUDGET_DEF.aggregates,
+        spent: { ...spent, where: { op: '>', args: [{ slot: 'amount' }, { const: '500' }] } },
+      },
+    };
+    expect(
+      assertSubscription(row(withSlot, { surface: 'finance/budget-overview' }), seed).engine,
+    ).toBe('budget');
+  });
 });
 
 describe('однозначность порога и границы словарей Budget (Ф-Б1-38, Ф-Б1-40в/г)', () => {

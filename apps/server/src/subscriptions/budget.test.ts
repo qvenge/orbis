@@ -48,7 +48,7 @@ import {
   planLedgers,
   propertyDefaultsOf,
 } from './budget';
-import { builtinSubscription } from './registry';
+import { assertSubscription, builtinSubscription } from './registry';
 
 requireEnv();
 const { db, client } = appDb();
@@ -341,6 +341,139 @@ describe('двухфазный план §Б5-3', () => {
       // CTE набора без статистики дал бы вложенный цикл на 458k пар (П2 §10.3) — плана «WITH» тут нет.
       expect(text).not.toContain('WITH ');
     });
+  });
+});
+
+/**
+ * ОБЛАСТЬ `where` У ВЕДОМОСТИ И СПИСКА (находка B3 I-1). Валидатор записи типизирует `where` в
+ * области КОНТРАКТА движения (`subscriptions/registry.ts`, `budgetSites`), а движок компилировал
+ * тот же `where` БЕЗ привязки — и `{slot}`/`{has:<слот>}`, принятые на записи, отказывали
+ * `EXPR_SHAPE` на ЧТЕНИИ (пять читателей Budget) и на ЗАПИСИ траты (хук `spentContributionOf`).
+ * Расхождение истины в двух местах одного языка: отказ приходил не автору декларации (Р-И-7).
+ */
+describe('область `where` ведомости и списка (B3 I-1)', () => {
+  const OUTFLOW_NODE: ExprNode = {
+    op: 'in',
+    args: [{ class: { contract: 'orbis/money-movement' } }, { const: 'outflow' }],
+  };
+  /** `and(outflow, amount > "500")` — слот контракта движения прямо в предикате ведомости. */
+  const BIG_OUTFLOW: ExprNode = {
+    op: 'and',
+    args: [OUTFLOW_NODE, { op: '>', args: [{ slot: 'amount' }, { const: '500' }] }],
+  };
+  const spentWhere = (def: BudgetSubscription, where: ExprNode): BudgetSubscription =>
+    ({
+      ...def,
+      aggregates: { ...def.aggregates, spent: { ...def.aggregates.spent, where } },
+    }) as BudgetSubscription;
+  const listWhere = (def: BudgetSubscription, where: ExprNode): BudgetSubscription =>
+    ({
+      ...def,
+      lists: { ...def.lists, planned: { ...def.lists.planned, where } },
+    }) as BudgetSubscription;
+  const rowOf = (definition: BudgetSubscription) => ({
+    id: BUDGET_SUBSCRIPTION_ID,
+    ownerId: userA,
+    surface: 'finance/budget-overview',
+    definition,
+    module: 'finance',
+    rank: 20,
+  });
+
+  test('валидатор принял {slot}/{has} в where — движок обязан скомпилировать', async () => {
+    await engineOn(userA, async ({ tx, reg, def, cctx }) => {
+      const hasAmount: ExprNode = { op: 'and', args: [OUTFLOW_NODE, { has: 'amount' }] };
+      for (const where of [BIG_OUTFLOW, hasAmount]) {
+        const withSlot = spentWhere(def, where);
+        // Ступень 1 — валидатор записи ПРИНИМАЕТ (иначе отказ пришёл бы автору дельты).
+        expect(() =>
+          assertSubscription(rowOf(withSlot), { reg: cctx.reg, systemSeed: false }),
+        ).not.toThrow();
+        // Ступень 2 — тот же `where` обязан скомпилироваться движком.
+        const text = new PgDialect().sqlToQuery(
+          planLedgers(withSlot, cctx, {
+            month: curMonth,
+            today,
+            defaultCurrency: 'RUB',
+            defaults: propertyDefaultsOf(cctx.reg),
+          }).aggregates.get('spent') as SQL,
+        ).sql;
+        expect(text).toContain("'orbis/amount'"); // слот дошёл до SQL, а не отказал
+      }
+      // Тот же язык у списка (`runList`, `budget.ts:1279`) — через боевого читателя.
+      const withList = listWhere(def, { op: 'and', args: [OUTFLOW_NODE, { has: 'amount' }] });
+      expect(() =>
+        assertSubscription(rowOf(withList), { reg: cctx.reg, systemSeed: false }),
+      ).not.toThrow();
+      const ov = await budgetOverviewOf(tx, userA, { month: curMonth, today }, withList, reg);
+      expect(ov.planned.map((r) => r.entity.id)).toContain(plannedTxnId);
+    });
+  });
+
+  test('семантический пин: and(outflow, amount > "500") считает только крупные траты', async () => {
+    // Ведомость СЧИТАЕТСЯ, а не читается из кэша: `spent` материализуема, и через `budgetOverviewOf`
+    // сужение не наблюдалось бы вовсе. Пин нужен затем, что «скомпилировалось» ≠ «значит»: предикат,
+    // скомпилированный и НЕ положенный в `where[]`, дал бы тот же текст SQL.
+    await engineOn(userA, async ({ tx, def, cctx }) => {
+      const args = {
+        month: curMonth,
+        today,
+        defaultCurrency: 'RUB',
+        defaults: propertyDefaultsOf(cctx.reg),
+      };
+      const ids = (
+        (await tx.execute(
+          planLedgers(def, cctx, args).sources.envelopeIds,
+        )) as unknown as Array<{ id: string }>
+      ).map((r) => r.id);
+      const spentOf = async (d: BudgetSubscription) =>
+        (
+          (await tx.execute(
+            planLedgers(d, cctx, args, ids).aggregates.get('spent') as SQL,
+          )) as unknown as Array<{ key: string; total: string }>
+        ).find((r) => r.key === envFood)?.total;
+      // Норматив даёт 2680 = 340 + 2340; сужение обязано отсечь 340 и оставить 2340.
+      expect([await spentOf(def), await spentOf(spentWhere(def, BIG_OUTFLOW))]).toEqual([
+        '2680.00',
+        '2340.00',
+      ]);
+    });
+  });
+
+  test('живая дельта со слотом в where: entity_create траты не падает (хук кэша, :625)', async () => {
+    const user = freshUserId();
+    await seedOwnerGraph(db, user);
+    const cat = seedCategoryId(user, 'food');
+    const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
+    const def = await withIdentity(db, user, async (tx) =>
+      builtinSubscription(await effectiveRegistry(tx, user), BUDGET_SUBSCRIPTION_ID),
+    );
+    await withIdentity(db, user, (tx) =>
+      setSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID, {
+        definition: spentWhere(def as BudgetSubscription, BIG_OUTFLOW),
+      }),
+    );
+    try {
+      // Хук `applySpentCacheEffect` идёт БЕЗ try/catch внутри транзакции: отказ компиляции здесь
+      // валит саму запись траты, а не только кэш.
+      await exec(user, 'entity_create', txn(cat, '340.00', today));
+      await exec(user, 'entity_create', txn(cat, '2340.00', today));
+      const ov = await withIdentity(db, user, async (tx) => {
+        const reg = await effectiveRegistry(tx, user);
+        return budgetOverviewOf(
+          tx,
+          user,
+          { month: curMonth, today },
+          builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription,
+          reg,
+        );
+      });
+      expect(envById(ov, env.id).spent).toBe('2340.00');
+    } finally {
+      await withIdentity(db, user, (tx) =>
+        removeSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID),
+      );
+    }
   });
 });
 

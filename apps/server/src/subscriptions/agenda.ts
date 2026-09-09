@@ -23,7 +23,7 @@ import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import type { WireEntity } from '../executor/types';
-import { compileClassMembership, compileExprPredicate } from '../expr/compile';
+import { compileClassMembership, compileContractPredicate } from '../expr/compile';
 import {
   type CompileCtx,
   compileWhere,
@@ -148,7 +148,13 @@ export async function agendaListOf(
   const moments = slotBindings(cctx.reg, def.show.contract, def.show.slot);
   const deadlines = slotBindings(cctx.reg, def.overdue.contract, def.overdue.slots[0]);
   const notTemplate = not(compileClassMembership(def.hide.contract, def.hide.set, cctx, ROW));
-  const openClass = total(compileExprPredicate(def.overdue.where, { cctx, row: ROW }));
+  // `where` секции просроченного компилируется В ОБЛАСТИ КОНТРАКТА, объявленного самой
+  // декларацией (B3 I-1): валидатор записи типизирует его там же (`agendaSites`), и компиляция
+  // без привязки отказывала бы `EXPR_SHAPE` на любом `{slot}`/`{has:<слот>}` — то есть не автору
+  // декларации, а владельцу на чтении, роняя `agenda.list` целиком (Р-И-7).
+  const openClass = total(
+    compileContractPredicate(def.overdue.contract, def.overdue.where, cctx, ROW),
+  );
   const dateOf = (b: SlotBinding) => propertyLocalDateExpr(b.propertyId, cctx);
 
   const inWindow = total(

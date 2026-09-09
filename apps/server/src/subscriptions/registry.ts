@@ -68,6 +68,12 @@ function agendaSites(d: Record<string, unknown>): ExprSite[] {
     params: paramTypes(d.params, ['window_from', 'window_to']),
     allowDeref: true,
   } as const;
+  // ОБЛАСТЬ `where` УЖЕ ОБЛАСТИ ГРАНИЦ (B3 I-1, fail-closed): предикат уезжает в SQL-бэкенд, а тот
+  // не знает ни параметров вызова (их подставляет интерпретатор при расчёте границ), ни
+  // разыменования вовсе. Обещать в декларации то, чего исполнитель не умеет, — значит адресовать
+  // отказ не автору (Р-И-7); отказ называет чекер своим словарём (`EXPR_TYPE`), второго мнения тут
+  // не заводится. Контракт в области остаётся: `{slot}`/`{has:<слот>}`/`{class}` бэкенд умеет.
+  const whereScope = { contract: scope.contract, allowDeref: false } as const;
   const out: ExprSite[] = [];
   const w = rec(rec(d.show)?.window);
   if (w !== undefined) {
@@ -80,7 +86,7 @@ function agendaSites(d: Record<string, unknown>): ExprSite[] {
   if (o !== undefined) {
     out.push(
       { path: 'overdue.before', value: o.before, scope, expect: DATE_KINDS },
-      { path: 'overdue.where', value: o.where, scope, expect: ['boolean'] },
+      { path: 'overdue.where', value: o.where, scope: whereScope, expect: ['boolean'] },
     );
   }
   return out;
@@ -126,11 +132,12 @@ function budgetSites(d: Record<string, unknown>): ExprSite[] {
         },
       });
     } else if (agg.where !== undefined) {
+      // Область `where` — см. `whereScope` у Agenda: без параметров и без разыменования.
       out.push({
         path: `aggregates.${name}.where`,
         value: agg.where,
         expect: ['boolean'],
-        scope: { contract: 'orbis/money-movement', params, allowDeref: true },
+        scope: { contract: 'orbis/money-movement', allowDeref: false },
       });
     }
   }
@@ -142,7 +149,7 @@ function budgetSites(d: Record<string, unknown>): ExprSite[] {
         path: `lists.${name}.where`,
         value: list.where,
         expect: ['boolean'],
-        scope: { contract: 'orbis/money-movement', params, allowDeref: true },
+        scope: { contract: 'orbis/money-movement', allowDeref: false },
       });
     }
     const w = rec(list.window);

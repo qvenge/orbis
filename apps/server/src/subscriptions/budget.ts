@@ -64,11 +64,7 @@ import { readSpentCache, spentCacheKey, writeSpentCache } from '../budget/spent-
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
-import {
-  compileClassMembership,
-  compileContractPredicate,
-  compileExprPredicate,
-} from '../expr/compile';
+import { compileClassMembership, compileContractPredicate } from '../expr/compile';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
 import { DEFAULT_TIMEZONE } from '../query/context';
@@ -239,7 +235,7 @@ function sumLedgerSql(
   const value = sql`(${slotExpr(agg.of.slot, mv, cctx, e)})::numeric`;
   const where: SQL[] = [sql`e.owner_id = ${cctx.ownerId}`, sql`NOT e.archived`, movement];
   if (agg.where !== undefined) {
-    where.push(compileExprPredicate(agg.where, { cctx, contract: mv, row: e }));
+    where.push(compileContractPredicate(mv, agg.where, cctx, e));
   }
   if (agg.window === 'period') {
     // Верхняя граница «не позже сегодня» тут НЕ повторяется: она уже сказана набором `facts`
@@ -288,7 +284,11 @@ function sumLedgerSql(
  * Предикат пишется `compileContractPredicate`, а не `compileExprPredicate`: он разворачивает
  * условие по ВСЕМ привязкам контракта (у `compileExprPredicate` привязки на руках нет, и `{slot}`
  * в нём незаконен) и заодно требует обязательные слоты — то же, что оракул делает разбором
- * `rawEnvelopeOf` («структурно битый конверт не роняет Overview»).
+ * `rawEnvelopeOf` («структурно битый конверт не роняет Overview»). ТЕМ ЖЕ ВЫЗОВОМ идут и `where`
+ * ведомостей со списками (B3 I-1): валидатор записи типизирует их в области контракта движения,
+ * и компиляция без привязки означала бы отказ `EXPR_SHAPE` не автору декларации, а владельцу на
+ * чтении (Р-И-7). Конъюнкция с `movementIds` от этого не меняется: каждый дизъюнкт развёртки
+ * импликует свой аспект, то есть повторное условие идемпотентно.
  */
 export function planLedgers(
   def: BudgetSubscription,
@@ -622,7 +622,7 @@ export async function spentContributionOf(
     compileClassMembership(mv, def.sources.movement.counted_set, cctx, e),
   ];
   if (agg.where !== undefined) {
-    where.push(compileExprPredicate(agg.where, { cctx, contract: mv, row: e }));
+    where.push(compileContractPredicate(mv, agg.where, cctx, e));
   }
   if (agg.currency === 'same_as_envelope') {
     where.push(sql`coalesce(${slotExpr('currency', mv, cctx, e)}, ${args.defaultCurrency})
@@ -1276,7 +1276,7 @@ async function runList(
     );
   }
   if (list.where !== undefined) {
-    where.push(compileExprPredicate(list.where, { cctx, contract: mv, row: e }));
+    where.push(compileContractPredicate(mv, list.where, cctx, e));
   }
   const ids = (
     (await tx.execute(sql`SELECT e.id FROM entities e

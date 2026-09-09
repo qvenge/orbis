@@ -221,6 +221,40 @@ describe('движок Agenda: потолок секций, наборы кон�
     expect(idsIn(await listWith('desc'))).toEqual([t2, t1]);
   });
 
+  /**
+   * B3 I-1: `overdue.where` валидатор типизирует в области контракта `orbis/when` (`agendaSites`),
+   * а движок компилировал его БЕЗ привязки — и слот контракта, принятый на записи, отказывал
+   * `EXPR_SHAPE` на чтении, роняя `agenda.list` целиком.
+   */
+  test('слот контракта в overdue.where: принято на записи — обязано считаться на чтении', async () => {
+    const u = freshUserId();
+    const byDeadline = await make(u, 'Со сроком', {
+      props: { 'orbis/task_status': 'planned', 'orbis/due_date': addDays(today, -1) },
+      aspects: ['orbis/task'],
+    });
+    const byMoment = await make(u, 'Только момент', {
+      props: { 'orbis/task_status': 'planned', 'orbis/start_at': at(addDays(today, -1), '10:00') },
+      aspects: ['orbis/task', 'orbis/schedule'],
+    });
+    const r = await withIdentity(db, u, async (tx) => {
+      const def = agendaSubscriptionOf(await effectiveRegistry(tx, u));
+      return agendaListOf(
+        tx,
+        u,
+        {
+          ...def,
+          overdue: {
+            ...def.overdue,
+            where: { op: 'and', args: [def.overdue.where, { has: 'deadline' }] },
+          },
+        },
+        { today, timeZone: TZ, days: 8 },
+      );
+    });
+    const overdue = idsOf(r, 'overdue');
+    expect([overdue.has(byDeadline), overdue.has(byMoment)]).toEqual([true, false]);
+  });
+
   test('горизонт — параметр вызова: days=1 отдаёт только сегодняшний день', async () => {
     const u = freshUserId();
     const t1 = await make(u, 'Сегодня', {
