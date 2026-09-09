@@ -422,9 +422,9 @@ describe('область `where` ведомости и списка (B3 I-1)', (
         defaults: propertyDefaultsOf(cctx.reg),
       };
       const ids = (
-        (await tx.execute(
-          planLedgers(def, cctx, args).sources.envelopeIds,
-        )) as unknown as Array<{ id: string }>
+        (await tx.execute(planLedgers(def, cctx, args).sources.envelopeIds)) as unknown as Array<{
+          id: string;
+        }>
       ).map((r) => r.id);
       const spentOf = async (d: BudgetSubscription) =>
         (

@@ -9,11 +9,7 @@
 // Europe/Moscow — прецедент `agenda-acceptance.test.ts`.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type AgendaListResult, addDays } from '@orbis/shared';
-import {
-  GATE_PLAIN_ASPECT,
-  GATE_PLAIN_KEY,
-  GATE_PROPS,
-} from '../../test/fixtures/gate-aspects';
+import { GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
 import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { materializeInstances } from '../recurring/materialize';

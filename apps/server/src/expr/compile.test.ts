@@ -464,8 +464,18 @@ describe('паритет гейта записи и SQL-бэкенда (B2 I-2)'
   const BOOL_SLOT: ExprNode = { slot: 'planned' };
 
   test.each([
-    ['булев {prop} предикатом', BOOL_PROP, 'orbis/when', () => compileExprPredicate(BOOL_PROP, { cctx: CTX, row: ROW })],
-    ['оператор if предикатом', IF_NODE, 'orbis/when', () => compileExprPredicate(IF_NODE, { cctx: CTX, row: ROW })],
+    [
+      'булев {prop} предикатом',
+      BOOL_PROP,
+      'orbis/when',
+      () => compileExprPredicate(BOOL_PROP, { cctx: CTX, row: ROW }),
+    ],
+    [
+      'оператор if предикатом',
+      IF_NODE,
+      'orbis/when',
+      () => compileExprPredicate(IF_NODE, { cctx: CTX, row: ROW }),
+    ],
     [
       'булев {slot} предикатом',
       BOOL_SLOT,
@@ -495,7 +505,8 @@ describe('паритет гейта записи и SQL-бэкенда (B2 I-2)'
   });
 
   test('небулево свойство в предикатной позиции — EXPR_SHAPE, а не ошибка Postgres', () => {
-    expect(refusal(() => compileExprPredicate({ prop: 'orbis/title' }, { cctx: CTX, row: ROW })))
-      .toMatchObject({ code: 'VALIDATION', reason: 'EXPR_SHAPE' });
+    expect(
+      refusal(() => compileExprPredicate({ prop: 'orbis/title' }, { cctx: CTX, row: ROW })),
+    ).toMatchObject({ code: 'VALIDATION', reason: 'EXPR_SHAPE' });
   });
 });

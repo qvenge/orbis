@@ -1313,14 +1313,18 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
             ...base.overdue,
             where: {
               op: 'and',
-              args: [base.overdue.where, { op: '>', args: [{ prop: 'user/effort' }, { const: 3 }] }],
+              args: [
+                base.overdue.where,
+                { op: '>', args: [{ prop: 'user/effort' }, { const: 3 }] },
+              ],
             },
           },
         },
       }),
     );
-    const where = ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription)
-      .overdue.where as unknown as { args: [unknown, { args: [{ prop: string }, unknown] }] };
+    const where = (
+      (await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription
+    ).overdue.where as unknown as { args: [unknown, { args: [{ prop: string }, unknown] }] };
     // Вторая половина утверждения несущая: она ловит половинчатый фикс, который нормализует ВХОД
     // проверки, а в базу кладёт ключ (тогда падал бы уже читатель — `compile.ts`, `EXPR_SHAPE`).
     expect(where.args[1].args[0].prop).toBe(propId);

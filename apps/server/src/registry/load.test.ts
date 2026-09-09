@@ -178,9 +178,7 @@ test('словарь подписок несёт обе засеянные: ст
   // совпадение с рангом сегодня держится на АЛФАВИТЕ (`orbis/agenda` < `orbis/budget-overview`),
   // и третья встроенная подписка с меньшим рангом покрасила бы этот пин при исправном коде.
   // Поэтому ожидание сортируется тем же ключом, каким сортирует читатель.
-  expect([...reg.subscriptions.keys()]).toEqual(
-    BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id).sort(),
-  );
+  expect([...reg.subscriptions.keys()]).toEqual(BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id).sort());
   expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda', 'orbis/budget-overview']);
   const row = reg.subscriptions.get('orbis/agenda');
   // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.
