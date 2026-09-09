@@ -174,8 +174,13 @@ test('снимок несёт словарь контрактов: шесть в
 test('словарь подписок несёт обе засеянные: строки разобраны схемой, поверхности на месте', async () => {
   const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   // Состав — по СИДУ, а не литералом: задача, дописавшая третью подписку, не обязана искать этот
-  // тест; порядок пиннится отдельно, потому что он и есть `rank`.
-  expect([...reg.subscriptions.keys()]).toEqual(BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id));
+  // тест. Порядок словаря — это `ORDER BY owner_id NULLS FIRST, id` (`load.ts`), а НЕ `rank`:
+  // совпадение с рангом сегодня держится на АЛФАВИТЕ (`orbis/agenda` < `orbis/budget-overview`),
+  // и третья встроенная подписка с меньшим рангом покрасила бы этот пин при исправном коде.
+  // Поэтому ожидание сортируется тем же ключом, каким сортирует читатель.
+  expect([...reg.subscriptions.keys()]).toEqual(
+    BUILTIN_SUBSCRIPTION_DEFS.map((s) => s.id).sort(),
+  );
   expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda', 'orbis/budget-overview']);
   const row = reg.subscriptions.get('orbis/agenda');
   // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.

@@ -96,6 +96,30 @@ describe('тайп-чекер §С8-28: арифметика и in', () => {
     ).toBe(EXPR_TYPE);
   });
 
+  test('доводка литерала СИММЕТРИЧНА: "0.85" * limit ≡ limit * "0.85" (B2 M-1)', () => {
+    // §Б3-4 обещает доводку литерала по соседу, а умножение коммутативно: несимметричное
+    // приведение отказывало владельцу на форме, которую сам же чекер принимает зеркально.
+    for (const args of [
+      [{ const: '0.85' }, { slot: 'limit' }],
+      [{ slot: 'limit' }, { const: '0.85' }],
+      [{ const: 30 }, { agg: 'remaining' }],
+      [{ agg: 'remaining' }, { const: 30 }],
+      [{ const: '0' }, { slot: 'limit' }],
+    ] as ExprNode[][]) {
+      expect([args, checkExpr({ op: '*', args } as ExprNode, ENV)]).toEqual([
+        args,
+        { kind: 'decimal' },
+      ]);
+    }
+    // Симметрия НЕ отменяет типовых отказов: decimal + number остаётся EXPR_TYPE в обе стороны.
+    for (const args of [
+      [{ slot: 'limit' }, { const: 1 }],
+      [{ const: 1 }, { slot: 'limit' }],
+    ] as ExprNode[][]) {
+      expect(refusal(() => checkExpr({ op: '+', args } as ExprNode, ENV)).code).toBe(EXPR_TYPE);
+    }
+  });
+
   test('in: по списку классов и по имени набора; чужое имя набора — EXPR_TYPE', () => {
     expect(
       checkExpr(

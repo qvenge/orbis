@@ -244,8 +244,12 @@ function arith(op: ExprOp, l: Typed, r: Typed, path: readonly string[]): Typed {
   if (l.optional) return bad(EXPR_NOT_TOTAL, [...path, '0'], 'значение, которое есть всегда');
   if (r.optional) return bad(EXPR_NOT_TOTAL, [...path, '1'], 'значение, которое есть всегда');
   // Деньги на число умножать и делить законно (`remaining / days_inclusive(…)` §Б5-4),
-  // складывать — почти всегда ошибка типа: у слагаемых разные единицы.
+  // складывать — почти всегда ошибка типа: у слагаемых разные единицы. УМНОЖЕНИЕ КОММУТАТИВНО,
+  // поэтому обе стороны равноправны; деление — нет, и `число / деньги` остаётся отказом.
   if ((op === '*' || op === '/') && l.type.kind === 'decimal' && r.type.kind === 'number') {
+    return { type: { kind: 'decimal' }, optional: false };
+  }
+  if (op === '*' && r.type.kind === 'decimal' && l.type.kind === 'number') {
     return { type: { kind: 'decimal' }, optional: false };
   }
   // Р-К-29: деление — ВСЕГДА decimal (масштаб 2), иначе `daily_pace` §Б5-4 теряет копейки;
@@ -253,15 +257,19 @@ function arith(op: ExprOp, l: Typed, r: Typed, path: readonly string[]): Typed {
   if (op === '/' && l.type.kind === 'number' && r.type.kind === 'number') {
     return { type: { kind: 'decimal' }, optional: false };
   }
-  if (coerce(r, l.type) === undefined || (l.type.kind !== 'number' && l.type.kind !== 'decimal')) {
+  // Доводка литерала — СИММЕТРИЧНАЯ (`unify`, как у `compare`), а не только справа налево:
+  // §Б3-4 обещает доводку по соседу, и `"0.85" * limit` обязано значить ровно то же, что
+  // `limit * "0.85"`. Несимметричный `coerce(r, l.type)` отказывал первой форме `EXPR_TYPE`.
+  const common = unify(l, r);
+  if (common === undefined || (common.kind !== 'number' && common.kind !== 'decimal')) {
     return bad(
       EXPR_TYPE,
       path,
-      `${label(l.type)} и ${label(l.type)}`,
+      'операнды одного числового типа',
       `${label(l.type)} и ${label(r.type)}`,
     );
   }
-  return { type: l.type, optional: false };
+  return { type: common, optional: false };
 }
 
 /** Имена, про которые условие `if` уже сказало «есть»: has(x) в положительной позиции и внутри and. */

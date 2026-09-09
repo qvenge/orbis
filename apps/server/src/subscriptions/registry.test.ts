@@ -425,6 +425,19 @@ describe('однозначность порога и границы словар
     });
   });
 
+  test('фаза active с предикатом вместо остатка — отказ на записи (B3 M-1)', () => {
+    // Движок трактует `active` как ОСТАТОК (`phaseOf`): дельта `active = (currency="RUB")`
+    // оставила бы USD-конверт вне всех фаз, и `budget.overview` падал бы `INVARIANT` на чтении.
+    const phases = {
+      ...BUDGET_DEF.phases,
+      active: { op: '=', args: [{ slot: 'currency' }, { const: 'RUB' }] },
+    };
+    expect(budget({ phases })).toEqual({
+      code: 'VALIDATION',
+      reason: 'SUBSCRIPTION_PHASE_ACTIVE_NOT_REMAINDER',
+    });
+  });
+
   test('формула конверта, читающая ведомость периода, — SUBSCRIPTION_PERIOD_AGG_IN_FORMULA (Ф-Б1-40г)', () => {
     // Раньше такая декларация проходила запись и падала INVARIANT на ЧТЕНИИ, у владельца.
     const aggregates = {

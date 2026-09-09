@@ -6,6 +6,7 @@ import {
   type BindingIndex,
   type BudgetSubscription,
   bindingIndexOf,
+  canonicalJson,
   EXPR_RECURSION,
   EXPR_TYPE,
   SECOND_LANGUAGE,
@@ -459,6 +460,21 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
   // в daily_pace молча считался бы всегда null.
   if (!phaseKeys.has('active'))
     bad('SUBSCRIPTION_PHASE_ACTIVE_MISSING', id, 'у Budget нет фазы active');
+  // …и она обязана быть ОСТАТКОМ, а не предикатом (B3 M-1). Движок трактует `active` именно так
+  // (`phaseOf`: ни одна фаза не сработала → `active`), и дельта вроде `active = (currency="RUB")`
+  // оставила бы конверт вне всех фаз — а это `INVARIANT` на ЧТЕНИИ, у владельца, вместо отказа
+  // автору декларации (Р-И-7). Проверка структурная: `{const:true}` — единственная форма остатка.
+  if (canonicalJson(def.phases.active) !== canonicalJson({ const: true })) {
+    bad(
+      'SUBSCRIPTION_PHASE_ACTIVE_NOT_REMAINDER',
+      id,
+      'фаза active — остаток, её условие {const:true}',
+      {
+        phase: 'active',
+        actual: def.phases.active,
+      },
+    );
+  }
   // Ф-Б1-40в: словарь фаз в Б-1 ограничен ПРОВОДОМ (`envelopeStatusSchema.phase`). Движок отдаёт
   // фазу клиенту как есть, и своё слово владельца доехало бы до трёх клиентов и golden как чужой
   // enum — то есть сломало бы разбор ответа, а не показало новую фазу. Фазы владельца — Б-2.
@@ -477,10 +493,15 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
   }
   for (const n of WIRE_LEDGERS) {
     if (!Object.hasOwn(def.aggregates, n)) {
-      bad('SUBSCRIPTION_WIRE_AGG_MISSING', id, `провод карточки конверта требует ведомость «${n}»`, {
-        aggregate: n,
-        required: [...WIRE_LEDGERS],
-      });
+      bad(
+        'SUBSCRIPTION_WIRE_AGG_MISSING',
+        id,
+        `провод карточки конверта требует ведомость «${n}»`,
+        {
+          aggregate: n,
+          required: [...WIRE_LEDGERS],
+        },
+      );
     }
   }
   for (const n of WIRE_LISTS) {

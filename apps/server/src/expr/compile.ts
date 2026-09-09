@@ -251,7 +251,11 @@ function valueSql(node: ExprNode, scope: ExprCompileScope): SQL {
   }
   if ('ctx' in node) {
     if (node.ctx === '$today') return sql`${scope.cctx.today}::date`;
-    if (node.ctx === '$self') return sql`${scope.row}.id`;
+    // `::text`, а не голая колонка: чекер типизирует `$self` ТЕКСТОМ (`check.ts`, «`$owner` и
+    // `$self` — идентификаторы: сравнивать их можно только с текстом»), а ссылочное свойство
+    // приезжает проекцией `props->>…`, тоже текстом. Без каста Postgres встречал бы
+    // `uuid = text` и отвечал 42883 — ошибкой запроса НА ЧТЕНИИ вместо структурного отказа.
+    if (node.ctx === '$self') return sql`${scope.row}.id::text`;
     if (node.ctx === '$owner') return sql`${scope.cctx.ownerId}`;
     return unsupported('$sensitivity');
   }

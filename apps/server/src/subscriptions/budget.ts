@@ -716,8 +716,11 @@ const REMAINDER_PHASE = 'active';
  * ключа означал бы, что смысл декларации владельца зависит от того, как он назвал фазу.
  *
  * Отказ — `VALIDATION` с причиной, а не `INVARIANT`: перекрытие пишет владелец дельтой, и он же
- * его чинит. Соседний `INVARIANT` ниже — про другое: он недостижим, пока валидатор требует ключ
- * `active` (`SUBSCRIPTION_PHASE_ACTIVE_MISSING`), и остаётся сторожем самого движка.
+ * его чинит. Соседний `INVARIANT` ниже — про другое: он недостижим, пока валидатор требует и
+ * КЛЮЧ `active` (`SUBSCRIPTION_PHASE_ACTIVE_MISSING`), и то, что его выражение — остаток
+ * (`SUBSCRIPTION_PHASE_ACTIVE_NOT_REMAINDER`, B3 M-1; без второй проверки дельта
+ * `active = (currency="RUB")` оставляла бы USD-конверт вне всех фаз). Остаётся сторожем самого
+ * движка.
  */
 function phaseOf(def: BudgetSubscription, scope: ExprEvalScope): string {
   const hit: string[] = [];
