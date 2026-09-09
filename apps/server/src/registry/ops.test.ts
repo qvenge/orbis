@@ -3,7 +3,15 @@
 // базы: это первые писатели реестра снаружи сида, и всё, что здесь проверяется, — про то,
 // как они ведут себя с ДАННЫМИ ВЛАДЕЛЬЦА, а не про форму входа.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { AGENDA_DEF, addDays, newId, rowProjectionOf } from '@orbis/shared';
+import {
+  AGENDA_DEF,
+  type AgendaSubscription,
+  addDays,
+  BUILTIN_SUBSCRIPTION_DEFS,
+  newId,
+  rowProjectionOf,
+  type SubscriptionDefinition,
+} from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import {
@@ -23,19 +31,25 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { approvePending } from '../policy/pending';
+import { appRouter } from '../router';
 import { seedOwnerGraph, seedSmartListId } from '../seed/onboarding';
 import { SEED_SMART_LISTS } from '../seed/smart-lists';
 import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry } from '../tools/registry';
+import { createCallerFactory } from '../trpc';
 import { effectiveRegistry } from './cache';
+import type { SubscriptionRow } from './load';
 import {
   collectPropertyHolders,
   execErrorOfImplementsIssue,
   lockOwnerRegistry,
   readContractDelta,
+  readSubscriptionRow,
   removeContractDelta,
+  removeOwnSubscription,
   setContractDelta,
+  setOwnSubscription,
   setSubscriptionDelta,
 } from './ops';
 import { readRegistryVersions } from './version';
@@ -1126,6 +1140,219 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
     expect((await withIdentity(db, o, (tx) => readRegistryVersions(tx, o))).ownerVersion).toBe(
       before.ownerVersion + 1,
     );
+  });
+});
+
+describe('своя строка подписки: setOwnSubscription / removeOwnSubscription (§Б5-1)', () => {
+  const subOwner = freshUserId();
+  const AGENDA = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda');
+  const row = (over: Partial<SubscriptionRow> = {}): SubscriptionRow => ({
+    id: 'user/my-agenda',
+    ownerId: subOwner,
+    surface: 'planner/agenda',
+    definition: AGENDA?.definition as SubscriptionDefinition,
+    module: 'planner',
+    rank: 1000,
+    ...over,
+  });
+  const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> => withIdentity(db, subOwner, fn);
+
+  test('своя строка пишется, читается снимком и двигает версию владельца', async () => {
+    const before = await inTx((tx) => readRegistryVersions(tx, subOwner));
+    await inTx((tx) => setOwnSubscription(tx, subOwner, row()));
+    const after = await inTx((tx) => readRegistryVersions(tx, subOwner));
+    expect(after.ownerVersion).toBe(before.ownerVersion + 1);
+    const reg = await inTx((tx) => effectiveRegistry(tx, subOwner));
+    expect(reg.subscriptions.get('user/my-agenda')?.surface).toBe('planner/agenda');
+    // Читатель адресует ту же строку и находит СВОЮ, а не системную.
+    expect((await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda')))?.ownerId).toBe(
+      subOwner,
+    );
+    expect(
+      (await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/agenda')))?.ownerId,
+    ).toBeNull();
+  });
+
+  test('чужой namespace — отказ SUBSCRIPTION_NAMESPACE, строки не появилось', async () => {
+    const e = await inTx((tx) =>
+      setOwnSubscription(tx, subOwner, row({ id: 'orbis/agenda-2' })),
+    ).then(
+      () => null,
+      (x: ExecError) => x,
+    );
+    expect([e?.code, (e?.details as { reason?: string })?.reason]).toEqual([
+      'VALIDATION',
+      'SUBSCRIPTION_NAMESPACE',
+    ]);
+    expect(await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/agenda-2'))).toBeNull();
+  });
+
+  test('снятие удаляет строку и тоже двигает версию', async () => {
+    const before = await inTx((tx) => readRegistryVersions(tx, subOwner));
+    await inTx((tx) => removeOwnSubscription(tx, subOwner, 'user/my-agenda'));
+    expect((await inTx((tx) => readRegistryVersions(tx, subOwner))).ownerVersion).toBe(
+      before.ownerVersion + 1,
+    );
+    expect(await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda'))).toBeNull();
+  });
+});
+
+describe('subscription_set / subscription_remove / contract_sets_delta_* через исполнителя (§Б5-2, §Б1-1)', () => {
+  const toolOwner = freshUserId();
+  const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
+  function runAs(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      {
+        actorUserId: toolOwner,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
+      { sink },
+    );
+  }
+  const regOf = () => withIdentity(db, toolOwner, (tx) => effectiveRegistry(tx, toolOwner));
+
+  test('subscription_set по orbis/… кладёт ДЕЛЬТУ, а не строку; снимок несёт новую декларацию', async () => {
+    const tweaked = {
+      ...(AGENDA_SUB as AgendaSubscription),
+      show: { ...(AGENDA_SUB as AgendaSubscription).show, limit: 50 },
+    };
+    ok(
+      await runAs('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: tweaked,
+      }),
+    );
+    const reg = await regOf();
+    expect(
+      (reg.subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show.limit,
+    ).toBe(50);
+    // Системная строка не тронута: перекрытие живёт дельтой.
+    const raw = await withIdentity(db, toolOwner, (tx) =>
+      readSubscriptionRow(tx, toolOwner, 'orbis/agenda'),
+    );
+    expect(raw?.ownerId).toBeNull();
+  });
+
+  test('своя подписка на ЗАНЯТУЮ поверхность отвергается: её не прочитает ни один движок', async () => {
+    const e = err(
+      await runAs('subscription_set', {
+        id: 'user/my-agenda',
+        surface: 'planner/agenda',
+        definition: AGENDA_SUB,
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('SURFACE_TAKEN');
+  });
+
+  test('undo возвращает ПРЕЖНЮЮ декларацию, а не снимает настройку', async () => {
+    const second = ok(
+      await runAs('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: {
+          ...(AGENDA_SUB as AgendaSubscription),
+          show: { ...(AGENDA_SUB as AgendaSubscription).show, limit: 7 },
+        },
+      }),
+    );
+    expect(
+      ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
+        .limit,
+    ).toBe(7);
+    expect((await undoAction(db, { actorUserId: toolOwner, actionId: second.actionId })).ok).toBe(
+      true,
+    );
+    expect(
+      ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
+        .limit,
+    ).toBe(50);
+  });
+
+  test('subscription_remove снимает дельту — поверхность возвращается к системной декларации', async () => {
+    ok(await runAs('subscription_remove', { id: 'orbis/agenda' }));
+    expect(
+      ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
+        .limit,
+    ).toBe((AGENDA_SUB as AgendaSubscription).show.limit);
+  });
+
+  test('поверхность в конверте обязана совпасть с поверхностью системной строки', async () => {
+    const e = err(
+      await runAs('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'finance/budget-overview',
+        definition: AGENDA_SUB,
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('SUBSCRIPTION_SURFACE_MISMATCH');
+  });
+
+  test('contract_sets_delta_set: свой набор виден снимком; встроенное имя — DELTA_SET_BUILTIN; undo', async () => {
+    const set = ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { my_open: ['active'] },
+      }),
+    );
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
+    const e = err(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { closed: ['active'] },
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('DELTA_SET_BUILTIN');
+    // Встроенный набор цел — отказ пришёл ДО записи.
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.closed).toEqual([
+      'done',
+      'cancelled',
+    ]);
+    expect((await undoAction(db, { actorUserId: toolOwner, actionId: set.actionId })).ok).toBe(
+      true,
+    );
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toBeUndefined();
+  });
+
+  test('contract_sets_delta_remove снимает свои наборы; несуществующий контракт — NOT_FOUND', async () => {
+    // Контракт — `orbis/recurrence`, а не `orbis/when`: класс `instance` объявляет ИМЕННО он
+    // (`orbis/when` — контракт двух слотов, классов у него нет вовсе, и любой набор на нём
+    // отвергается `DELTA_SET_UNKNOWN_CLASS` до того, как тест дойдёт до своего вопроса).
+    ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/recurrence',
+        setsDelta: { my_dated: ['instance'] },
+      }),
+    );
+    ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/recurrence' }));
+    expect((await regOf()).contracts.get('orbis/recurrence')?.sets?.my_dated).toBeUndefined();
+    expect(
+      err(
+        await runAs('contract_sets_delta_set', {
+          contract: 'orbis/net-takogo',
+          setsDelta: { x: ['active'] },
+        }),
+      ).code,
+    ).toBe('NOT_FOUND');
+  });
+
+  test('ручка владельца исполняет ту же операцию без карточки (source: ui)', async () => {
+    const caller = createCallerFactory(appRouter)({
+      actorUserId: toolOwner,
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
+    await caller.registry.setContractSetsDelta({
+      contract: 'orbis/recurrence',
+      setsDelta: { my_dated: ['instance'] },
+    });
+    expect((await regOf()).contracts.get('orbis/recurrence')?.sets?.my_dated).toEqual(['instance']);
+    await caller.registry.removeContractSetsDelta({ contract: 'orbis/recurrence' });
+    expect((await regOf()).contracts.get('orbis/recurrence')?.sets?.my_dated).toBeUndefined();
   });
 });
 

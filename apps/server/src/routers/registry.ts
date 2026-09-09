@@ -32,9 +32,13 @@ import {
   aspectDeltaSetInput,
   aspectImplementsRemoveInput,
   aspectImplementsSetInput,
+  contractSetsDeltaRemoveInput,
+  contractSetsDeltaSetInput,
   propertyCreateInput,
   propertyMergeInput,
   propertyUpdateInput,
+  subscriptionRemoveInput,
+  subscriptionSetInput,
 } from '../tools/registry-tools';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf } from '../wire';
@@ -188,6 +192,22 @@ export const registryRouter = router({
   removeAspectImplements: ownerOnlyProcedure
     .input(aspectImplementsRemoveInput)
     .mutation(({ ctx, input }) => registryMutation('aspect_implements_remove')(ctx, input)),
+
+  setSubscription: ownerOnlyProcedure
+    .input(subscriptionSetInput)
+    .mutation(({ ctx, input }) => registryMutation('subscription_set')(ctx, input)),
+
+  removeSubscription: ownerOnlyProcedure
+    .input(subscriptionRemoveInput)
+    .mutation(({ ctx, input }) => registryMutation('subscription_remove')(ctx, input)),
+
+  setContractSetsDelta: ownerOnlyProcedure
+    .input(contractSetsDeltaSetInput)
+    .mutation(({ ctx, input }) => registryMutation('contract_sets_delta_set')(ctx, input)),
+
+  removeContractSetsDelta: ownerOnlyProcedure
+    .input(contractSetsDeltaRemoveInput)
+    .mutation(({ ctx, input }) => registryMutation('contract_sets_delta_remove')(ctx, input)),
 
   effective: protectedProcedure.query(
     ({ ctx }): Promise<WireRegistry> =>
