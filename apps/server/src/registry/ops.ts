@@ -56,6 +56,7 @@ import {
   readBodyDoc,
   serializeBody,
 } from '@orbis/shared/doc';
+import type { ExprNormalizeRegistry } from '@orbis/shared/expr';
 import {
   assertStaticQuery,
   maskQuotedValues,
@@ -67,7 +68,6 @@ import {
   queryTreeExceedsDepth,
   ScopeNotStaticError,
 } from '@orbis/shared/query';
-import type { ExprNormalizeRegistry } from '@orbis/shared/expr';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';

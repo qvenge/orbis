@@ -871,6 +871,24 @@ describe('дельта контракта setsDelta и подписки definiti
       ),
     ).toEqual({ code: 'VALIDATION', reason: 'DELTA_SET_BUILTIN' });
   });
+  test('набор с именем из прототипа (`constructor`) встроенным не считается', () => {
+    // Имя приезжает из дельты владельца: `name in sets` нашёл бы `constructor` в прототипе и
+    // отказал бы `DELTA_SET_BUILTIN` про набор, которого у контракта нет вовсе.
+    const applied = applyDeltas(snapshotWith(), [
+      row('contract', 'orbis/completable', { setsDelta: { constructor: ['active'] } }),
+    ]);
+    const sets = new Map(Object.entries(applied.contracts.get('orbis/completable')?.sets ?? {}));
+    expect(sets.get('constructor')).toEqual(['active']);
+    // И слияние того же имени тоже не считает системным: набор доезжает до базы целым.
+    const both = systemOf(snapshotWith());
+    expect(
+      threeWayMerge(
+        both,
+        both,
+        row('contract', 'orbis/completable', { setsDelta: { constructor: ['active'] } }),
+      ),
+    ).toEqual({ merged: { setsDelta: { constructor: ['active'] } }, conflicts: [] });
+  });
   // Имя класса в дельте — СЛАГ (`SLOT_KEY_RE`, §1.7), поэтому «которого нет» пишется законной
   // формой: кириллица отвергалась бы схемой как DELTA_MALFORMED, и проверка «нет такого класса»
   // не дошла бы до кода вовсе.

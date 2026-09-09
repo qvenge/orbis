@@ -13,7 +13,7 @@
 // Использование:
 //   bun scripts/ops.ts check           # только чтение: расхождение реестров с кодом
 //   bun scripts/ops.ts migrate         # накатить неприменённые миграции схемы
-//   bun scripts/ops.ts seed-registries # upsert встроенных свойств, ролей и аспектов
+//   bun scripts/ops.ts seed-registries # upsert пяти реестров: свойства, роли, аспекты, контракты, подписки
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
@@ -595,12 +595,12 @@ async function issuePat(args: string[]): Promise<number> {
 const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: string }> = {
   check: {
     run: check,
-    help: 'только чтение: расхождение реестров прода с кодом (шесть родов; контракты — по колонкам)',
+    help: 'только чтение: расхождение реестров прода с кодом (шесть родов; действия — только по id)',
   },
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-registries': {
     run: seedRegistriesOp,
-    help: 'upsert встроенных свойств, ролей, аспектов и контрактов (идемпотентно)',
+    help: 'upsert пяти реестров: свойства, роли, аспекты, контракты, подписки (идемпотентно)',
   },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
   census: {
@@ -619,7 +619,7 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
     run: resetWorldOp,
     help:
       'РАЗРУШАЮЩАЯ: снести граф и журнал владельцев, пользовательские строки реестров и дельты; ' +
-      'пересеять четыре реестра. Требует --confirm <PROD_REF> и --i-understand RESET',
+      'пересеять пять реестров. Требует --confirm <PROD_REF> и --i-understand RESET',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   'issue-pat': {

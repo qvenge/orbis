@@ -307,7 +307,10 @@ export function applyDeltas(
       }
       const classes = new Set(base.classes.map((c) => c.key));
       for (const [name, members] of Object.entries(delta.setsDelta)) {
-        if (name in base.sets) {
+        // `Object.hasOwn`, а не `in`: имя набора приезжает из ДЕЛЬТЫ владельца, и `constructor`
+        // либо `toString` нашлись бы в прототипе — набор с таким именем отказывал бы
+        // `DELTA_SET_BUILTIN`, которого в контракте нет (то же правило, что у `setPredicate`).
+        if (Object.hasOwn(base.sets, name)) {
           throw deltaError(
             'DELTA_SET_BUILTIN',
             `набор «${name}» контракта ${row.targetId} — встроенный`,
@@ -703,7 +706,8 @@ export function threeWayMerge(
       next === undefined || next.kind !== 'slots' ? null : new Set(next.classes.map((c) => c.key));
     const setsDelta: ContractDelta['setsDelta'] = {};
     for (const [name, members] of Object.entries(delta.setsDelta)) {
-      if (!(name in nextSets)) {
+      // `Object.hasOwn` — см. довод у `applyDeltas` выше: имя приезжает из дельты владельца.
+      if (!Object.hasOwn(nextSets, name)) {
         // Контракт стал словарём фактов: наборов у него нет вовсе (`DELTA_SET_ON_FACTS`).
         if (next !== undefined && next.kind !== 'slots') {
           conflicts.push({
