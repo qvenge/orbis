@@ -598,6 +598,41 @@ describe('threeWayMerge: система поехала под живой дел�
     ).not.toThrow();
   });
 
+  test('дельта подписки устаревшей формы — слияние СБРАСЫВАЕТ её на системную, а не роняет пересев', () => {
+    // Дельта подписки — ПОЛНАЯ копия декларации под `.strict()`, и первое ломающее изменение
+    // схемы (обязательное поле, удаление/переименование, сужение enum) делает записанную дельту
+    // неразбираемой. `parseDelta` стоял ПЕРВОЙ строкой ветки, то есть `threeWayMerge` бросал
+    // `DELTA_MALFORMED` уже ПОСЛЕ бампа версии: сид красный, версия поднята, а владелец заперт на
+    // каждом вызове MCP (`dispatchTool` берёт снимок первым действием).
+    const stale = JSON.parse(JSON.stringify(BUDGET_DEF)) as Record<string, unknown>;
+    delete (stale.alerts as Record<string, unknown>).inclusive;
+    const sys = (definition: unknown): SystemDefinitions => ({
+      properties: new Map(),
+      aspects: new Map(),
+      contracts: new Map(),
+      subscriptions: new Map([
+        [
+          'orbis/budget-overview',
+          {
+            id: 'orbis/budget-overview',
+            ownerId: null,
+            surface: 'finance/budget-overview',
+            definition,
+            module: 'finance',
+            rank: 20,
+          } as SubscriptionRow,
+        ],
+      ]),
+    });
+    const r = threeWayMerge(
+      sys(BUDGET_DEF),
+      sys(BUDGET_DEF),
+      row('subscription', 'orbis/budget-overview', { definition: stale }, 7),
+    );
+    expect(r.conflicts.map((c) => c.kind)).toEqual(['subscription-rebased']);
+    expect(r.merged).toEqual({ definition: BUDGET_DEF });
+  });
+
   test('системная декларация подписки изменилась под живой дельтой — subscription-rebased', () => {
     const prev = systemOf(snapshotWith());
     const sub = (limit: number): SubscriptionRow => ({

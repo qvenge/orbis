@@ -746,8 +746,27 @@ export function threeWayMerge(
     return { merged: { setsDelta }, conflicts };
   }
   if (row.targetKind === 'subscription') {
-    const delta = parseDelta(row) as SubscriptionDelta;
     const next = nextSystem.subscriptions.get(row.targetId);
+    // МЯГКИЙ РАЗБОР — ТОЛЬКО ЗДЕСЬ. Дельта подписки это полная копия декларации под `.strict()`,
+    // и первое ломающее изменение схемы (обязательное поле, удаление/переименование, сужение
+    // enum) делает уже записанную дельту неразбираемой. Строгий разбор первой строкой означал бы
+    // `DELTA_MALFORMED` внутри пересева — ПОСЛЕ бампа версии: сид красный, версия поднята,
+    // повторный прогон падает так же, а владелец заперт на каждом вызове MCP (`dispatchTool`
+    // берёт снимок первым действием). Форма устарела — настройка сбрасывается на системную и
+    // владелец узнаёт об этом заметкой; сбрасывать не на что (`next === undefined`) — прежний
+    // отказ, он честен. На ЧТЕНИИ (`applyDeltas`) разбор остаётся строгим: fail-closed там —
+    // сознательный выбор, и лечит его сид.
+    const soft = subscriptionDeltaSchema.safeParse(row.delta);
+    if (!soft.success && next !== undefined) {
+      conflicts.push({
+        kind: 'subscription-rebased',
+        targetKind: 'subscription',
+        targetId: row.targetId,
+        detail: 'форма настройки устарела — она сброшена на системную',
+      });
+      return { merged: { definition: next.definition }, conflicts };
+    }
+    const delta = parseDelta(row) as SubscriptionDelta;
     if (next === undefined) return { merged: delta, conflicts };
     if (next.definition.engine !== delta.definition.engine) {
       // Движок сменился — прежняя ЗАМЕНА неприменима по построению (тот же довод, что у

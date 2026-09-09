@@ -212,7 +212,18 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
   };
 }
 
-/** Системные определения из БД (`owner_id IS NULL`) — сторона «до» трёхстороннего слияния. */
+/**
+ * Системные определения из БД (`owner_id IS NULL`) — сторона «до» трёхстороннего слияния.
+ *
+ * РАЗБОР МЯГКИЙ, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ. Функция зовётся ПЕРВОЙ строкой сида, до всех upsert'ов,
+ * а разбирает она строки ПРОШЛОГО релиза новой схемой: строгий разбор означал бы сид, который
+ * падает ровно на том, что сам же и чинит, — и починить это нечем (`reset-world` system-строк не
+ * трогает и зовёт тот же сид, а белый список `ops.ts` ручного SQL не знает). Строка, не
+ * разобравшаяся новой схемой, просто не кладётся в базу «до»: это эквивалент `UNKNOWN_PREV_SYSTEM`
+ * для своего рода, а докблок §А3-3 прямо разрешает ошибаться «в сторону лишнего конфликта».
+ * `registry/load.ts` при этом остаётся строгим: fail-closed на чтении — сознательный выбор, и
+ * лечит его именно этот сид.
+ */
 export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinitions> {
   const propertyRows = await sql<Record<string, unknown>[]>`
     SELECT id, owner_id, key, label, description, type, status, storage, scope,
@@ -230,75 +241,71 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
     FROM subscription_definitions WHERE owner_id IS NULL`;
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
-    properties.set(
-      r.id as string,
-      propertyDefinitionSchema.parse({
-        id: r.id,
-        ownerId: r.owner_id,
-        key: r.key,
-        label: r.label,
-        description: r.description,
-        type: r.type,
-        status: r.status,
-        storage: r.storage,
-        scope: r.scope,
-        mergedInto: r.merged_into,
-        module: r.module,
-        rank: r.rank,
-        flags: r.flags,
-      }),
-    );
+    const parsed = propertyDefinitionSchema.safeParse({
+      id: r.id,
+      ownerId: r.owner_id,
+      key: r.key,
+      label: r.label,
+      description: r.description,
+      type: r.type,
+      status: r.status,
+      storage: r.storage,
+      scope: r.scope,
+      mergedInto: r.merged_into,
+      module: r.module,
+      rank: r.rank,
+      flags: r.flags,
+    });
+    if (parsed.success) properties.set(r.id as string, parsed.data);
   }
   const aspects = new Map<string, AspectDefinition>();
   for (const r of aspectRows) {
-    aspects.set(
-      r.id as string,
-      aspectDefinitionSchema.parse({
-        id: r.id,
-        ownerId: r.owner_id,
-        key: r.key,
-        label: r.label,
-        description: r.description,
-        properties: r.properties,
-        aiInstructions: r.ai_instructions,
-        tagMappings: r.tag_mappings,
-        implements: r.implements,
-        // См. `registry/load.ts`: явный NULL в колонке не должен ронять разбор снимка.
-        aggregations: r.aggregations ?? undefined,
-        viewConfig: r.view_config,
-        module: r.module,
-        service: r.service,
-        rank: r.rank,
-      }),
-    );
+    const parsed = aspectDefinitionSchema.safeParse({
+      id: r.id,
+      ownerId: r.owner_id,
+      key: r.key,
+      label: r.label,
+      description: r.description,
+      properties: r.properties,
+      aiInstructions: r.ai_instructions,
+      tagMappings: r.tag_mappings,
+      implements: r.implements,
+      // См. `registry/load.ts`: явный NULL в колонке не должен ронять разбор снимка.
+      aggregations: r.aggregations ?? undefined,
+      viewConfig: r.view_config,
+      module: r.module,
+      service: r.service,
+      rank: r.rank,
+    });
+    if (parsed.success) aspects.set(r.id as string, parsed.data);
   }
   const contracts = new Map<string, ContractDefinition>();
   for (const r of contractRows) {
-    contracts.set(
-      r.id as string,
-      contractDefinitionSchema.parse({
-        id: r.id,
-        ownerId: r.owner_id,
-        key: r.key,
-        label: r.label,
-        description: r.description,
-        kind: r.kind,
-        slots: r.slots,
-        classes: r.classes,
-        sets: r.sets,
-        facts: r.facts,
-        module: r.module,
-        rank: r.rank,
-      }),
-    );
+    const parsed = contractDefinitionSchema.safeParse({
+      id: r.id,
+      ownerId: r.owner_id,
+      key: r.key,
+      label: r.label,
+      description: r.description,
+      kind: r.kind,
+      slots: r.slots,
+      classes: r.classes,
+      sets: r.sets,
+      facts: r.facts,
+      module: r.module,
+      rank: r.rank,
+    });
+    if (parsed.success) contracts.set(r.id as string, parsed.data);
   }
   const subscriptions = new Map<string, SubscriptionRow>();
   for (const r of subscriptionRows) {
+    const parsed = subscriptionDefinitionSchema.safeParse(r.definition);
+    if (!parsed.success) continue;
     subscriptions.set(r.id as string, {
       id: r.id as string,
       ownerId: r.owner_id as string | null,
       surface: r.surface as string,
-      definition: subscriptionDefinitionSchema.parse(r.definition),
+      definition: parsed.data,
       module: r.module as string | null,
       rank: r.rank as number,
     });

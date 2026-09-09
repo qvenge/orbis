@@ -394,6 +394,66 @@ describe('сид пяти реестров', () => {
   // Версия проверяется ОТНОСИТЕЛЬНО: `truncateAll` строку registry_system не трогает
   // намеренно (одна строка, PK = 1), а `db:prepare` уже сеял до начала прогона — абсолютное
   // значение здесь зависело бы от того, сколько раз базу готовили.
+  /**
+   * ФОРМА ПОДПИСКИ ПОЕХАЛА ПОД ЖИВОЙ ДЕЛЬТОЙ (находка B1 I-2). Дельта подписки — полная копия
+   * декларации под `.strict()`, а system-строку прошлого релиза сид разбирает ПЕРВОЙ строкой,
+   * до всех upsert'ов. Строгий разбор в обоих местах означал бы сид, который падает уже ПОСЛЕ
+   * бампа версии и на том самом, что сам же и чинит: повторный прогон падает так же, а владелец
+   * заперт на каждом вызове MCP. Проба ставит обе половины разом — устаревшую system-строку и
+   * дельту той же устаревшей формы.
+   */
+  test('устаревшая форма подписки: сид доезжает, строка починена, дельта сброшена на системную', async () => {
+    const { db, client } = adminDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const owner = crypto.randomUUID();
+    try {
+      await db.execute(sql`TRUNCATE registry_deltas`);
+      const baseVersion = await systemVersion(db);
+      // Форма ПРОШЛОГО релиза: поля, ставшего обязательным (`alerts.inclusive` — `z.literal(true)`),
+      // в ней нет. Ставится и в system-строку, и в дельту владельца.
+      await db.execute(sql`
+        UPDATE subscription_definitions SET definition = definition #- '{alerts,inclusive}'
+         WHERE id = 'orbis/budget-overview' AND owner_id IS NULL`);
+      const stale = (
+        (await db.execute(
+          sql`SELECT definition FROM subscription_definitions
+               WHERE id = 'orbis/budget-overview' AND owner_id IS NULL`,
+        )) as unknown as { definition: unknown }[]
+      )[0]?.definition;
+      await db.execute(sql`
+        INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+        VALUES (gen_random_uuid(), ${owner}::uuid, 'subscription', 'orbis/budget-overview',
+                ${baseVersion}, ${JSON.stringify({ definition: stale })}::jsonb)`);
+
+      const result = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      expect(result.conflicts.map((c) => c.kind)).toEqual(['subscription-rebased']);
+      // System-строка починена сидом — ровно тем прогоном, который прежде падал бы на ней.
+      const fixed = (
+        (await db.execute(
+          sql`SELECT definition->'alerts'->>'inclusive' AS v FROM subscription_definitions
+               WHERE id = 'orbis/budget-overview' AND owner_id IS NULL`,
+        )) as unknown as { v: string | null }[]
+      )[0]?.v;
+      expect(fixed).toBe('true');
+      // Дельта сброшена на системную декларацию — и реестр владельца ЧИТАЕТСЯ.
+      const app = appDb();
+      try {
+        const reg = await withIdentity(app.db, owner, (tx) => effectiveRegistry(tx, owner));
+        expect(reg.subscriptions.get('orbis/budget-overview')).toBeDefined();
+      } finally {
+        await app.client.end();
+      }
+    } finally {
+      await db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
+        (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+      await raw.end();
+      await client.end();
+    }
+  }, 30_000);
+
   test('версия system-реестров растёт на 1 за прогон и сид идемпотентен', async () => {
     const { db, client } = adminDb();
     const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
