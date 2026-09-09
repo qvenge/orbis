@@ -28,6 +28,7 @@ import {
   relationCreateInput,
   relationDeleteInput,
   type SurfaceName,
+  subscriptionDefinitionSchema,
 } from '@orbis/shared';
 import {
   normalizeQueryAst,
@@ -94,10 +95,16 @@ import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 
-import { readAspectDelta, readOwnAspect } from '../registry/ops';
+import {
+  readAspectDelta,
+  readContractDelta,
+  readOwnAspect,
+  readSubscriptionDelta,
+} from '../registry/ops';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
+import { rawValueRefs } from '../subscriptions/registry';
 import { toLlmEntity, toWireEntityFromSql } from '../wire';
 import { propertyCatalogInput, runPropertyCatalog } from './property-catalog';
 import {
@@ -1823,16 +1830,64 @@ export async function snapshotRegistryUnit(
         ],
       };
     }
+    case 'subscription_set':
+    case 'subscription_remove': {
+      const before = await readSubscriptionDelta(tx, ownerId, String(payload.id));
+      // `reg` уже снят в шапке функции — второго чтения снимка здесь не заводим.
+      const own = reg.subscriptions.get(String(payload.id));
+      // Сырые ссылки `{prop}` в декларации (§Б5-2, пометка raw_value диффа Ш1) — ОТДЕЛЬНОЙ строкой:
+      // владелец обязан видеть обход контрактов до «Принять», а не искать его в JSON декларации.
+      // Конверт здесь ещё не разобран схемой тула (снимок — до исполнения), поэтому разбор свой и
+      // мягкий: невалидную декларацию отвергнет исполнитель, строке снимка о ней сказать нечего.
+      const parsed =
+        tool === 'subscription_set'
+          ? subscriptionDefinitionSchema.safeParse(payload.definition)
+          : null;
+      const raw = parsed?.success === true ? rawValueRefs(parsed.data) : [];
+      return {
+        // Адрес подписки — её id, освобождения ключа у неё нет (в отличие от свойств,
+        // `freeKey`), поэтому нормализовать нечего: единица несёт конверт как есть.
+        input: payload,
+        summary,
+        rows: [
+          {
+            field: 'definition',
+            ...(before !== null
+              ? { before: rowValue(before.definition) }
+              : own !== undefined
+                ? { before: rowValue(own.definition) }
+                : {}),
+            after:
+              tool === 'subscription_set' ? rowValue(payload.definition) : DEFERRED_UNSET_VALUE,
+          },
+          ...(raw.length > 0 ? [{ field: 'raw_value', after: raw.join(', ') }] : []),
+        ],
+      };
+    }
+    case 'contract_sets_delta_set':
+    case 'contract_sets_delta_remove': {
+      const before = await readContractDelta(tx, ownerId, String(payload.contract));
+      return {
+        input: payload,
+        summary,
+        rows: [
+          {
+            field: 'setsDelta',
+            ...(before !== null && { before: rowValue(before.setsDelta) }),
+            after:
+              tool === 'contract_sets_delta_set'
+                ? rowValue(payload.setsDelta)
+                : DEFERRED_UNSET_VALUE,
+          },
+        ],
+      };
+    }
   }
-  // Сюда доходят все ВОСЕМЬ тулов реестра — пять среза А (с Р-24-7 в том числе
-  // `property_create`: `preview` своей строки от рутины откладывается, а не отклоняется) и три
-  // тула аспектов и привязок (задача 15). Родовую строку получают ОСОЗНАННО четыре тула
-  // задачи 16 (подписки и наборы): адресные строки «было → станет» им кладёт она вместе со
-  // своими чтениями прежнего состояния (`readContractDelta`/`readSubscriptionDelta`) — ветка,
-  // написанная раньше своей операции чтения, была бы кодом, который нечем прогнать (тот же
-  // довод, что у тришки `implements` в `confirmation.test.ts`). Фраза сводки при этом у них
-  // уже есть — `registryOperationSummary` выше, — то есть родовой остаётся только строка, а
-  // не карточка.
+  // Сюда доходят все ДВЕНАДЦАТЬ тулов реестра — пять среза А (с Р-24-7 в том числе
+  // `property_create`: `preview` своей строки от рутины откладывается, а не отклоняется), три
+  // тула аспектов и привязок (задача 15) и четыре тула подписок и наборов (задача 16): у
+  // каждого своя ветка выше. Fail-closed остаётся на случай ТРИНАДЦАТОГО: родовая строка
+  // показывает владельцу конверт целиком — хуже адресной, но не молчание.
   return { input: payload, summary, rows: [{ field: tool, after: rowValue(payload) }] };
 }
 

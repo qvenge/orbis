@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  type AgendaSubscription,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -4883,6 +4884,113 @@ describe('§С2-1: мутации реестра — уровень подтве
     if (r.status !== 'pending_confirmation') return;
     await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
     expect(await deltaRowsOf(owner)).toBe(1);
+  });
+
+  test('subscription_set от рутины → отложенная единица пачки, реестр не тронут (ряд 2 живьём)', async () => {
+    const owner = freshUserId();
+    const { ctx, runId, routineId, threadId } = await gardener(owner, ['subscription_set']);
+    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
+    const r = await dispatchTool(ctx, 'subscription_set', {
+      id: 'orbis/agenda',
+      surface: 'planner/agenda',
+      definition: def,
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица');
+    }
+    // «БЫЛО» У ПОДПИСКИ ЕСТЬ ВСЕГДА, и это не деталь фикстуры: `orbis/agenda` засеяна системно
+    // (задача 6), поэтому `snapshotRegistryUnit` возьмёт прежнюю декларацию из снимка даже у
+    // владельца, который эту подписку ещё не трогал (своей дельты нет). Ждать строку без
+    // `before` значило бы пинить ветку, которой на этом адресе не бывает.
+    expect(r.card).toEqual({
+      kind: 'deferred_action_card',
+      pendingId: r.pendingId,
+      runId,
+      routineId,
+      summary: 'Настройка подписки «Повестка»',
+      rows: [{ field: 'definition', before: expect.any(String), after: expect.any(String) }],
+    });
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+    expect(await deltaRowsOf(owner)).toBe(0);
+  });
+
+  test('subscription_set с сырой ссылкой {prop} — строка raw_value в отложенной единице (§Б5-2, пометка диффа Ш1)', async () => {
+    const owner = freshUserId();
+    const { ctx } = await gardener(owner, ['subscription_set']);
+    const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
+      ?.definition as AgendaSubscription;
+    // Та же форма, что в тесте `rawValueRefs` задачи 5: `{prop}` вторым конъюнктом `overdue.where`.
+    const raw = {
+      ...def,
+      overdue: {
+        ...def.overdue,
+        where: {
+          op: 'and',
+          args: [
+            def.overdue.where,
+            { op: '!=', args: [{ prop: 'orbis/task_status' }, { const: 'waiting' }] },
+          ],
+        },
+      },
+    };
+    const r = await dispatchTool(ctx, 'subscription_set', {
+      id: 'orbis/agenda',
+      surface: 'planner/agenda',
+      definition: raw,
+    });
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица');
+    }
+    // Владелец видит обход контрактов ДО «Принять» — отдельной строкой, а не внутри JSON декларации.
+    expect(r.card.rows.map((row) => row.field)).toEqual(['definition', 'raw_value']);
+    expect(r.card.rows[1]).toEqual({ field: 'raw_value', after: 'overdue.where.args.1.args.0' });
+  });
+
+  test('contract_sets_delta_set поверх ВСТРОЕННОГО контракта от рутины — отложенная единица, НЕ запрет (Р9)', async () => {
+    // Р9 дословно: ряд §С2-1 определяется ТУЛОМ. Адресное правило дало бы `system-object` и
+    // закрыло бы законный путь садовника §Б5-2 наглухо — этот тест сторожит именно его.
+    const owner = freshUserId();
+    const { ctx, threadId } = await gardener(owner, ['contract_sets_delta_set']);
+    const r = await dispatchTool(ctx, 'contract_sets_delta_set', {
+      contract: 'orbis/completable',
+      setsDelta: { my_open: ['active'] },
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица, а не отказ по объекту');
+    }
+    expect(r.card.summary).toBe('Настройка наборов контракта «Завершаемость»');
+    // А здесь `before` НЕТ — и это тоже правило, а не случай: у наборов «было» берётся из
+    // дельты владельца (`readContractDelta`), встроенные наборы контракта дельта не заменяет.
+    // Первая настройка у свежего владельца дельты не имеет.
+    expect(r.card.rows).toEqual([{ field: 'setsDelta', after: '{"my_open":["active"]}' }]);
+    expect(await deltaRowsOf(owner)).toBe(0);
+    // …и «Принять» доводит путь до конца.
+    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect(await deltaRowsOf(owner)).toBe(1);
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+  });
+
+  test('тот же contract_sets_delta_set из ЧАТА → карточка-запрос с ФРАЗОЙ, а не с именем тула', async () => {
+    // Прежний дефект этого класса (фикс-раунд Задачи 16 среза А): без ветки сводки владелец
+    // получал «Требуется подтверждение: contract_sets_delta_set» и жал «Принять» вслепую.
+    // Этот тест ЗЕЛЁН с самого начала — ветку сводки положила задача 14, — и стоит он здесь не
+    // ради неё, а ради ЖИВОГО пути: юнит задачи 14 зовёт `registryOperationSummary` напрямую и
+    // не отвечает на вопрос, доносит ли её до карточки чата сам диспатч.
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(
+      ctxFor({ actorUserId: owner, threadId }),
+      'contract_sets_delta_set',
+      { contract: 'orbis/completable', setsDelta: { my_open: ['active'] } },
+    );
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'confirmation_card') {
+      throw new Error('ожидалась карточка-запрос');
+    }
+    expect(r.card.summary).toBe('Настройка наборов контракта «Завершаемость»');
+    expect(await deltaRowsOf(owner)).toBe(0);
   });
 
   test('MCP-агент с полным грантом отвечает так же, как чат: правила §7.10 едины (§9.3)', async () => {
