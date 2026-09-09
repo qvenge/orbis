@@ -19273,7 +19273,7 @@ describe('§С8-22: запись при выключенном модуле — 
     // txId создан ДО выключения модуля (общий `beforeAll` файла, шаг 3); version=1 — сущность
     // с тех пор не правилась.
     expect((await execute(db, { actorUserId: owner, actorKind: 'owner', source: 'ui',
-      operations: [{ tool: 'entity_update', input: { id: txId, version: 1,
+      operations: [{ tool: 'entity_update', input: { id: txId, /* эррата 17: поля `version` у entity_update нет — CAS зовётся expectedUpdatedAt и необязателен */
         props: { 'orbis/amount': '700.00' } } }] })).ok).toBe(true);
     expect((await execute(db, { actorUserId: owner, actorKind: 'owner', source: 'ui',
       operations: [{ tool: 'attach_orbis_financial', input: { entity_id: txId,
@@ -19543,6 +19543,21 @@ describe('§С8-22: подписки и сохранённые AST при вык
   на чем — движков два и поверхностей две, и таблица из двух строк стала бы третьим местом с тем же знанием.
   `cd apps/server && bun test src/registry/modules.test.ts src/subscriptions src/budget` → PASS.
   Коммит: `feat(subscriptions): движки пропускают поверхность выключенного модуля, чужие подписки не меняются (§С8-22)`.
+
+> **Эррата по исполнению 17 (09.09).** (а) `packages/shared/src/registry/modules.test.ts` существует с задачи 5 — шаг 1 «создать» →
+> «дописать describe». (б) Таблицы `actions` в базе нет — журнал §7.8 живёт в `chat_messages.metadata.actions[0]` (`executor/journal.ts`);
+> тест ищет строку по `actionId` из `ExecuteOk`; `execute` в тесте и ручка `user.setModuleEnabled` обязаны получать `sink`
+> (`makeChatJournalSink()`), иначе журнала нет и `undoLast` пуст. (в) `beforeAll` внутри `describe` в bun 1.2.7 исполняется ДО первого
+> теста файла для всех describe — «вход блока» переписан на `beforeEach(blockEntry([...]))` с замком (ровно один раз на блок).
+> (г) У `entity_update` нет поля `version` — CAS §5.2 зовётся `expectedUpdatedAt` и необязателен; `version: 1` при `.strict()` давал бы
+> `VALIDATION` до гейта §Б8-3. (д) Фикстура Agenda без `orbis/schedule`/`orbis/start_at` не попадала в окно (слот `moment` привязан к
+> `orbis/start_at`) — сравнение «чужая подписка не шелохнулась» вырождалось. (е) `v6.test.ts` — строка в `ALLOWLIST` гейта `--gate`
+> (маркер `bare-field`, как у `v5.test.ts`: утверждение об отказе разбора голого имени пишется дословно). (ж) Сверх брифа по мутациям:
+> тест «повтор выключения», `entity_update`-путь гейта, врезки в `envelopeForCategoryOf`/`categoryTrendOf` (Р-К-45), пин Ф-Б1-10.
+> (з) Гейт, Ф-Б1-57: гейт §Б8-3 НЕ действует на `mechanism: materialize` (инстанс шаблона — следствие, не новое создание; иначе при
+> выключенных Финансах шаблон не материализуется и Повестка пустеет); ручка `user.setModuleEnabled` в Б-1 — только `finance`;
+> `MODULE_DISABLED` и внутри `batch_execute`; `prepareModuleSet` — только владелец. `FROZEN_PROMPTS += v5` — холостой allowlist, побайтный
+> пин v5 — `v5.test.ts`.
 
 - [ ] **Шаг 17: полный прогон и закрытие задачи.** `bun run test` (корень), `bun run lint`, `bun run typecheck`,
   `bun run test:rls` (новых таблиц нет — `plan(N)` не двигается), `bun scripts/check-legacy-form.ts --gate` = 0,
