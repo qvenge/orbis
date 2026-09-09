@@ -1987,6 +1987,92 @@
     }
   },
   {
+    "name": "subscription_set",
+    "description": "Настроить подписку поверхности — чем наполняются Повестка и Бюджет: какие контракты, наборы классов и окна они читают. Адрес orbis/… кладёт настройку поверх системной декларации, адрес user/… заводит свою подписку. Декларация проверяется целиком до записи: неизвестная поверхность, чужой движок, строка вместо выражения и ссылка на id аспекта — отказ.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "адрес подписки. orbis/… — настройка ПОВЕРХ системной декларации (сама она не меняется и переживает обновления); user/… — своя подписка владельца, и она законна только на поверхности, где системной подписки нет."
+        },
+        "surface": {
+          "type": "string",
+          "enum": ["planner/agenda", "finance/budget-overview"],
+          "description": "поверхность-потребитель: planner/agenda — Повестка, finance/budget-overview — Бюджет"
+        },
+        "definition": {
+          "type": "object",
+          "description": "декларация подписки: {\"engine\":\"agenda\", show:{…}, overdue:{…}, hide:{…}} либо {\"engine\":\"budget\", sources:{…}, phases:{…}, aggregates:{…}, alerts:{…}, …}. Ссылаться можно на контракты, их слоты и ИМЕНОВАННЫЕ НАБОРЫ, не на id аспектов и не на сырые значения свойств (исключения — prefer и предикат в hide/where). Выражения — только деревьями языка E: строка в позиции выражения отвергается.",
+          "properties": {
+            "engine": {
+              "type": "string",
+              "enum": ["agenda", "budget"]
+            }
+          },
+          "required": ["engine"]
+        }
+      },
+      "required": ["id", "surface", "definition"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "subscription_remove",
+    "description": "Снять подписку: настройка поверх системной снимается и поверхность возвращается к системной декларации, своя подписка удаляется.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "адрес подписки: orbis/… или user/…"
+        }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "contract_sets_delta_set",
+    "description": "Добавить контракту свои именованные наборы классов — чтобы подписки и запросы ссылались на имя набора, а не перечисляли значения. Встроенные наборы не меняются.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string",
+          "description": "id контракта, например orbis/completable"
+        },
+        "setsDelta": {
+          "type": "object",
+          "description": "СВОИ именованные наборы классов: {\"мои_открытые\":[\"active\"]}. Встроенные наборы контракта не меняются и не переименовываются — дельта только добавляет; имя, занятое встроенным набором, отвергается.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": ["contract", "setsDelta"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "contract_sets_delta_remove",
+    "description": "Снять свои наборы контракта: остаются только встроенные.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "string",
+          "description": "id контракта"
+        }
+      },
+      "required": ["contract"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "orbis_my_queue",
     "description": "Что мне назначено: список тикетов этого доступа с их статусом, проектом и сводкой последнего прогона. Брать в работу можно только тикеты с claimable=true (статус inbox или planned) — остальные ждут владельца. По дороге сервер помечает брошенные прогоны (поле swept: сколько подмёл) и возвращает их тикеты в очередь. Начинай круг с этого вызова и бери ОДИН тикет за раз.",
     "inputJsonSchema": {
