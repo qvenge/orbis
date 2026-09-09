@@ -288,7 +288,10 @@ describe('движок Agenda: потолок секций, наборы кон�
         );
       });
     // Без единого prefer движок обязан отказать — контроль, что фикстура и есть §С8-21.
-    expect(listWith({ show: [], overdue: [] })).rejects.toThrow();
+    // `await` несущий: без него утверждение не ждётся, и фикстура, переставшая быть
+    // неоднозначной, прошла бы контроль вхолостую, оставив два следующих утверждения
+    // тривиальными (тест зелен, а fallback им больше не доказан).
+    await expect(listWith({ show: [], overdue: [] })).rejects.toThrow();
     // `show.prefer` снимает неоднозначность и для просроченного.
     const r = await listWith({ show: [GATE_PLAIN_KEY], overdue: [] });
     expect(idsOf(r, 'overdue').has(both)).toBe(true);
