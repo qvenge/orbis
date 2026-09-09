@@ -20,6 +20,8 @@ import {
   attachToolName,
   BUILTIN_RELATION_ROLE_META,
   effectiveLabel,
+  isModuleEnabled,
+  moduleOfTool,
   PROPOSAL_ALLOWED_TOOLS,
   QUESTION_MAX,
   QUESTION_OPTION_MAX,
@@ -33,6 +35,7 @@ import { aspectDefinitions } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
+import { disabledModulesOf } from '../registry/modules';
 import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
 import { REGISTRY_TOOLS } from './registry-tools';
 
@@ -1258,9 +1261,12 @@ function attachToolDef(aspect: AspectDefinition, reg: RegistrySnapshot): OrbisTo
  * (`registry-golden.test.ts`) как СПИСОК, и порядок, зависящий от порядка строк из БД, делал
  * бы эталон флаковым.
  */
-export function buildToolDefs(reg: RegistrySnapshot): OrbisToolDef[] {
+export function buildToolDefs(reg: RegistrySnapshot, disabled: readonly string[] = []): OrbisToolDef[] {
   const attachable = [...reg.aspects.values()]
     .filter((a) => !a.service)
+    // §Б8-3: аспект выключенного модуля тула не даёт — его поверхность у модели исчезает
+    // вместе с модулем. Умолчание `disabled = []` оставляет прежний вызов побайтно тем же.
+    .filter((a) => isModuleEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
   return [
     ...CORE_TOOLS,
@@ -1271,11 +1277,18 @@ export function buildToolDefs(reg: RegistrySnapshot): OrbisToolDef[] {
     ...AGENT_VERB_TOOLS,
     PROPOSE_TOOL,
     ASK_TOOL,
-    ...attachable.map((a) => attachToolDef(a, reg)),
-  ];
+  ]
+    .filter((d) => isModuleEnabled(moduleOfTool(d.name, reg), disabled))
+    .concat(attachable.map((a) => attachToolDef(a, reg)));
 }
 
-/** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого неслужебного аспекта (§7.6). */
+/**
+ * Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого неслужебного аспекта (§7.6).
+ *
+ * Маска читается ЗДЕСЬ: через эту функцию идут ТРИ из четырёх поверхностей — MCP
+ * (`mcp/server.ts:59`), чат (`ai/send-message.ts:321`), рутина (`routines/runner.ts:256`).
+ * Четвёртая, диспатч (`tools/dispatch.ts:197`), берёт маску сама: снимок у неё уже свой.
+ */
 export async function buildToolRegistry(tx: Tx, ownerId: string): Promise<OrbisToolDef[]> {
-  return buildToolDefs(await effectiveRegistry(tx, ownerId));
+  return buildToolDefs(await effectiveRegistry(tx, ownerId), await disabledModulesOf(tx, ownerId));
 }

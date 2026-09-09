@@ -22,6 +22,7 @@ import {
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
+  moduleOfTool,
   newId,
   pendingMessageId,
   proposeInput,
@@ -94,6 +95,7 @@ import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
+import { disabledModulesOf } from '../registry/modules';
 
 import {
   readAspectDelta,
@@ -203,9 +205,26 @@ export async function dispatchTool(
       // Второй снимок, взятый отдельно, мог бы разойтись с первым на правке реестра между
       // двумя чтениями (тот же довод, что у `loadTargets` предложения).
       const reg = await effectiveRegistry(tx, ctx.actorUserId);
-      const defs = buildToolDefs(reg);
+      const disabled = await disabledModulesOf(tx, ctx.actorUserId);
+      const defs = buildToolDefs(reg, disabled);
       const def = defs.find((d) => d.name === name);
-      if (!def) return { kind: 'unknown' };
+      if (!def) {
+        // Вторая линия отказа (§Б8-3): тул СУЩЕСТВУЕТ, но его модуль выключен. «Неизвестный
+        // тул» здесь был бы ложью — модель решила бы, что такого тула в системе нет вовсе.
+        const hidden = buildToolDefs(reg).find((d) => d.name === name);
+        if (hidden) {
+          const module = moduleOfTool(hidden.name, reg);
+          return {
+            kind: 'done',
+            out: errorResult(
+              'MODULE_DISABLED',
+              `тул «${name}» принадлежит выключенному модулю «${module}» (§Б8-3)`,
+              { tool: name, module },
+            ),
+          };
+        }
+        return { kind: 'unknown' };
+      }
       // internalOnly — fail-closed прямо в диспатче (fix round): фильтрация списка
       // тулов в MCP-адаптере (Task 10) — вторая линия, не единственная
       if (def.internalOnly === true && ctx.source === 'mcp') {

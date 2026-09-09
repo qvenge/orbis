@@ -4,7 +4,7 @@
 //
 // Тесты интеграционные: одна живая БД под `withIdentity`, потому что предмет проверки —
 // СТРОКА `user_settings.disabled_modules` и то, что по ней видят четыре поверхности сразу.
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { MODULE_IDS } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -20,6 +20,8 @@ import { makeChatJournalSink } from '../executor/journal';
 import { undoLast } from '../executor/undo';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
+import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
+import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
 import { disabledModulesOf, setModuleDisabled } from './modules';
 
@@ -119,6 +121,22 @@ async function setModules(disabled: readonly string[]): Promise<void> {
   });
 }
 
+/**
+ * ВХОД БЛОКА по маске. `beforeAll` внутри describe для этого не годится: bun 1.2.7 исполняет
+ * ВСЕ describe-level `beforeAll` файла ДО первого теста (проверено пробой), и «вход блока»
+ * выродился бы в общий вход файла, где выигрывает последний объявленный. `beforeEach` с
+ * замком исполняется в свой момент и ровно один раз на блок — то, что и требовалось: маска,
+ * унаследованная от соседа, превратила бы порядок тестов в скрытый вход.
+ */
+function blockEntry(disabled: readonly string[]): () => Promise<void> {
+  let done = false;
+  return async () => {
+    if (done) return;
+    done = true;
+    await setModules(disabled);
+  };
+}
+
 describe('маска модулей: чтение и запись (§Б8-1)', () => {
   test('строки настроек нет — маска пуста, а не отказ', async () => {
     expect(await withIdentity(db, maskOwner, (tx) => disabledModulesOf(tx, maskOwner))).toEqual([]);
@@ -169,9 +187,7 @@ async function inverseOf(actionId: string): Promise<JournalAction['inverse'] | u
 describe('module_set: переключение — действие исполнителя с журналом и undo (§Б8-1 №28)', () => {
   // Вход блока назван явно: `owner` пришёл из общего `beforeAll` без выключенных модулей,
   // и полагаться на это молча значило бы завязать блок на порядок соседей.
-  beforeAll(async () => {
-    await setModules([]);
-  });
+  beforeEach(blockEntry([]));
 
   test('ручка выключает модуль; настройки отдают маску наружу', async () => {
     await caller.user.setModuleEnabled({ module: 'finance', enabled: false });
@@ -232,5 +248,50 @@ describe('module_set: переключение — действие исполн
     expect(await inverseOf(r.actionId)).toEqual([
       { op: 'module_set', payload: { module: 'finance', enabled: false } },
     ]);
+  });
+});
+
+describe('§С8-22: маска на реестре тулов — один фильтр на четыре поверхности', () => {
+  beforeEach(blockEntry([])); // предыдущий блок оставил finance выключенным
+
+  test('выключенные Финансы уносят ровно свои тулы и ничего сверх', async () => {
+    const all = (await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner))).map(
+      (d) => d.name,
+    );
+    expect(all).toContain('budget_status');
+    await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
+    });
+    const masked = (await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner))).map(
+      (d) => d.name,
+    );
+    // Консервативность §С1-3 п.9: разница — ровно пять имён Финансов
+    expect(all.filter((n) => !masked.includes(n)).sort()).toEqual([
+      'attach_orbis_budget',
+      'attach_orbis_category',
+      'attach_orbis_financial',
+      'budget_status',
+      'import_csv_start',
+    ]);
+    expect(masked.filter((n) => !all.includes(n))).toEqual([]);
+  });
+
+  test('вызов скрытого маской тула — MODULE_DISABLED, а не «неизвестный тул»', async () => {
+    // Порядок аргументов — (ctx, name, input) (`dispatch.ts:183`); форма контекста — `dispatch.test.ts:62-72`.
+    const ctx: ToolCallCtx = {
+      db,
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'chat',
+      explicitCommand: false,
+    };
+    const out = await dispatchTool(ctx, 'budget_status', {});
+    expect(out.status).toBe('error');
+    if (out.status !== 'error') return; // сужение союза: у ветки 'ok' поля `error` нет вовсе
+    expect(out.error.code).toBe('MODULE_DISABLED');
+    expect(out.error.details).toMatchObject({ tool: 'budget_status', module: 'finance' });
   });
 });
