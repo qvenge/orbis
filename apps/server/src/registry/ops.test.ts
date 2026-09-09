@@ -1376,6 +1376,122 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
   });
 });
 
+describe('наборы под живой подпиской: SET_IN_USE и один вердикт на два пути записи (Ф-Б1-55б/в)', () => {
+  const useOwner = freshUserId();
+  const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
+    ?.definition as AgendaSubscription;
+  /** Та же Повестка, но «незакрытое» названо СВОИМ набором владельца, а не встроенным `open`. */
+  const readsMyOpen = (): AgendaSubscription => ({
+    ...AGENDA_SUB,
+    overdue: {
+      ...AGENDA_SUB.overdue,
+      where: {
+        op: 'in',
+        args: [{ class: { contract: 'orbis/completable' } }, { const: 'my_open' }],
+      },
+    } as AgendaSubscription['overdue'],
+  });
+  const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
+    execute(
+      db,
+      { actorUserId: useOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  const regOf = () => withIdentity(db, useOwner, (tx) => effectiveRegistry(tx, useOwner));
+
+  test('снятие набора, который читает подписка, — отказ SET_IN_USE; Повестка остаётся читаемой', async () => {
+    ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { my_open: ['active'] },
+      }),
+    );
+    ok(
+      await runAs('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: readsMyOpen(),
+      }),
+    );
+    const e = err(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'SET_IN_USE',
+    ]);
+    // Отказ НАЗЫВАЕТ подписку — иначе владелец искал бы держателя набора вручную.
+    expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual(['orbis/agenda']);
+    // Набор на месте, и Повестка ЧИТАЕТСЯ: ровно то, что снятие уничтожило бы молча.
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
+    const reg = await regOf();
+    await withIdentity(db, useOwner, (tx) =>
+      agendaListOf(tx, useOwner, agendaSubscriptionOf(reg), {
+        today: '2026-09-09',
+        timeZone: 'Europe/Moscow',
+        days: 8,
+      }),
+    );
+  });
+
+  test('замена дельты БЕЗ используемого набора — тот же отказ: дельта пишется целиком', async () => {
+    const e = err(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { my_closed: ['done'] },
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('SET_IN_USE');
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
+  });
+
+  test('проба НЕ вырождена: без держателя тот же набор снимается свободно', async () => {
+    ok(await runAs('subscription_remove', { id: 'orbis/agenda' }));
+    ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toBeUndefined();
+  });
+
+  test('Ф-Б1-55в: одна декларация — один вердикт на ОБОИХ путях записи подписки', async () => {
+    ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { my_open: ['active'] },
+      }),
+    );
+    // Путь дельты системной подписки — снимок с дельтами, набор виден.
+    ok(
+      await runAs('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: readsMyOpen(),
+      }),
+    );
+    // Путь СВОЕЙ строки — тот же снимок и тот же вердикт (до Ф-Б1-55в здесь был `EXPR_TYPE`:
+    // валидатор смотрел в сырые строки, где набора владельца нет).
+    await withIdentity(db, useOwner, (tx) =>
+      setOwnSubscription(tx, useOwner, {
+        id: 'user/my-agenda',
+        ownerId: useOwner,
+        surface: 'planner/agenda',
+        definition: readsMyOpen(),
+        module: 'planner',
+        rank: 1000,
+      }),
+    );
+    expect(
+      (
+        await withIdentity(db, useOwner, (tx) =>
+          readSubscriptionRow(tx, useOwner, 'user/my-agenda'),
+        )
+      )?.ownerId,
+    ).toBe(useOwner);
+    // …и своя строка тоже держит набор: снятие теперь называет ОБЕ подписки.
+    const e = err(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
+    expect((e.details as { subscriptions?: string[] }).subscriptions?.sort()).toEqual([
+      'orbis/agenda',
+      'user/my-agenda',
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // §А10-2: слияние
 // ---------------------------------------------------------------------------

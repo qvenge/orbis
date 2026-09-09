@@ -1970,6 +1970,64 @@ async function removeDeltaRow(
   await bumpOwnerRegistryVersion(tx, ownerId);
 }
 
+/**
+ * ПОДПИСКИ, КОТОРЫЕ ЭТА ПРАВКА НАБОРОВ СЛОМАЛА (Ф-Б1-55б) — fail-closed на ЗАПИСИ.
+ *
+ * Набор контракта — не только «свой ярлык»: на него ссылаются декларации подписок
+ * (`{op:'in', args:[{class:{contract}}, {const:'<набор>'}]}`). Сняв дельту наборов либо
+ * заменив её целиком, владелец уносит имя ИЗ-ПОД живой подписки — и `agendaListOf` падает
+ * `UNKNOWN_SET` на КАЖДОМ чтении: тул отчитался успехом, а Повестка заперта до `undo`.
+ * Смысл подписки проверяется на записи ПОДПИСКИ (Р-И-7) — значит и на записи того, из чего
+ * подписка собрана.
+ *
+ * СЧИТАЕТСЯ РАЗНОСТЬ «БЫЛО → СТАНЕТ», А НЕ ПРОСТО «СЛОМАНО ПОСЛЕ». Подписка, уже нечитаемая
+ * ДО правки (её мог сломать `property_merge` или пересев), не относится к этой операции, и
+ * отказывать ею значило бы запереть владельцу ещё и наборы: «набор используется» про набор,
+ * который тут ни при чём. Отказ называет ИМЕНА подписок — иначе чинить пришлось бы вслепую.
+ */
+function assertSetsFreeOfSubscribers(
+  before: RegistrySnapshot,
+  after: RegistrySnapshot,
+  contractId: string,
+): void {
+  const unusable = (reg: RegistrySnapshot): Set<string> => {
+    const broken = new Set<string>();
+    for (const [id, row] of reg.subscriptions) {
+      try {
+        assertSubscription(row, { reg, systemSeed: false });
+      } catch {
+        broken.add(id);
+      }
+    }
+    return broken;
+  };
+  const wasBroken = unusable(before);
+  const nowBroken = [...unusable(after)].filter((id) => !wasBroken.has(id));
+  if (nowBroken.length === 0) return;
+  throw new ExecError(
+    'VALIDATION',
+    `наборы контракта ${contractId} читают подписки: ${nowBroken.join(', ')} — правка оставила бы их без набора`,
+    { reason: 'SET_IN_USE', contract: contractId, subscriptions: nowBroken },
+  );
+}
+
+/** Снимок владельца со ВСЕМИ его дельтами, кроме названной, — «как читалось бы после правки». */
+async function probeSnapshot(
+  tx: Tx,
+  ownerId: string,
+  rows: RegistryDictionaries,
+  drop?: { targetKind: RegistryDeltaTargetKind; targetId: string },
+): Promise<RegistrySnapshot> {
+  const versions = await readRegistryVersions(tx, ownerId);
+  const deltas = await loadRegistryDeltas(tx, ownerId);
+  return applyDeltas(
+    { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
+    drop === undefined
+      ? deltas
+      : deltas.filter((r) => !(r.targetKind === drop.targetKind && r.targetId === drop.targetId)),
+  );
+}
+
 export async function readContractDelta(
   tx: Tx,
   ownerId: string,
@@ -1999,7 +2057,12 @@ export async function setContractDelta(
       contract: contractId,
     });
   }
-  await writeDeltaRow(tx, ownerId, 'contract', contractId, parsed.data, rows);
+  // Дельта наборов — ЗАМЕНА целиком (`DO UPDATE SET delta = EXCLUDED.delta`), поэтому набор,
+  // выпавший из нового состава, исчезает так же, как при снятии дельты: проба одна на оба пути.
+  const before = await probeSnapshot(tx, ownerId, rows);
+  await writeDeltaRow(tx, ownerId, 'contract', contractId, parsed.data, rows, (probe) => {
+    assertSetsFreeOfSubscribers(before, probe, contractId);
+  });
 }
 
 export async function removeContractDelta(
@@ -2007,6 +2070,12 @@ export async function removeContractDelta(
   ownerId: string,
   contractId: string,
 ): Promise<void> {
+  const rows = await loadRegistryRows(tx, ownerId);
+  assertSetsFreeOfSubscribers(
+    await probeSnapshot(tx, ownerId, rows),
+    await probeSnapshot(tx, ownerId, rows, { targetKind: 'contract', targetId: contractId }),
+    contractId,
+  );
   await removeDeltaRow(tx, ownerId, 'contract', contractId);
 }
 
@@ -2104,10 +2173,16 @@ export async function setOwnSubscription(
       { reason: 'SUBSCRIPTION_NAMESPACE', subscription: row.id },
     );
   }
+  // СНИМОК С ДЕЛЬТАМИ, а не сырые строки (Ф-Б1-55в): своя подписка вправе ссылаться на СВОЙ
+  // набор контракта — он живёт дельтой, и без неё та же декларация, что законна у
+  // `setSubscriptionDelta`, здесь получала бы `EXPR_TYPE`. Один вердикт на оба пути записи.
   const rows = await loadRegistryRows(tx, ownerId);
   assertSubscription(
     { ...row, ownerId },
-    { reg: { ...rows, ownerVersion: 0, systemVersion: 0 }, systemSeed: false },
+    {
+      reg: await probeSnapshot(tx, ownerId, rows),
+      systemSeed: false,
+    },
   );
   await tx.execute(sql`
     INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
