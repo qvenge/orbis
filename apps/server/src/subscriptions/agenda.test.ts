@@ -9,7 +9,12 @@
 // Europe/Moscow — прецедент `agenda-acceptance.test.ts`.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type AgendaListResult, addDays } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  GATE_PLAIN_ASPECT,
+  GATE_PLAIN_KEY,
+  GATE_PROPS,
+} from '../../test/fixtures/gate-aspects';
+import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { materializeInstances } from '../recurring/materialize';
 import { effectiveRegistry } from '../registry/cache';
@@ -253,6 +258,47 @@ describe('движок Agenda: потолок секций, наборы кон�
     });
     const overdue = idsOf(r, 'overdue');
     expect([overdue.has(byDeadline), overdue.has(byMoment)]).toEqual([true, false]);
+  });
+
+  /**
+   * `prefer` — ОДИН НА СЛОТ (Ф-Б1-60). Владелец, снявший `SLOT_AMBIGUOUS` документированным путём
+   * (`show.prefer`), получал тот же отказ, когда сущность с двумя `moment` становилась
+   * ПРОСРОЧЕННОЙ: секция `overdue` читала только свой `overdue.prefer` — и `agenda.list` падала
+   * целиком, а не одной строкой. Явный `overdue.prefer` по-прежнему главнее.
+   */
+  test('overdue наследует show.prefer, когда свой prefer пуст (Ф-Б1-60)', async () => {
+    const u = freshUserId();
+    await seedCustomAspect(u, GATE_PLAIN_ASPECT);
+    const both = await make(u, 'Две привязки moment, просрочено', {
+      aspects: ['orbis/schedule', GATE_PLAIN_KEY],
+      props: {
+        'orbis/start_at': at(addDays(today, -1), '10:00'),
+        [GATE_PROPS.plainState]: 'open',
+        [GATE_PROPS.plainAt]: at(addDays(today, -1), '09:00'),
+      },
+    });
+    const listWith = (prefer: { show: string[]; overdue: string[] }) =>
+      withIdentity(db, u, async (tx) => {
+        const def = agendaSubscriptionOf(await effectiveRegistry(tx, u));
+        return agendaListOf(
+          tx,
+          u,
+          {
+            ...def,
+            show: { ...def.show, prefer: prefer.show },
+            overdue: { ...def.overdue, prefer: prefer.overdue },
+          },
+          { today, timeZone: TZ, days: 8 },
+        );
+      });
+    // Без единого prefer движок обязан отказать — контроль, что фикстура и есть §С8-21.
+    expect(listWith({ show: [], overdue: [] })).rejects.toThrow();
+    // `show.prefer` снимает неоднозначность и для просроченного.
+    const r = await listWith({ show: [GATE_PLAIN_KEY], overdue: [] });
+    expect(idsOf(r, 'overdue').has(both)).toBe(true);
+    // Явный `overdue.prefer` главнее унаследованного: выбирается ДРУГАЯ привязка (09:00 vs 10:00).
+    const own = await listWith({ show: [GATE_PLAIN_KEY], overdue: ['orbis/schedule'] });
+    expect(idsOf(own, 'overdue').has(both)).toBe(true);
   });
 
   test('горизонт — параметр вызова: days=1 отдаёт только сегодняшний день', async () => {

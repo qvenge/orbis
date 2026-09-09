@@ -258,8 +258,13 @@ function rowOf(
       allDay: isAllDay(entity, moment, idx, def.show.contract, cctx),
     };
   }
-  const dl = pick(def.overdue.contract, def.overdue.slots[0], def.overdue.prefer);
-  const mo = pick(def.overdue.contract, def.overdue.slots[1], def.overdue.prefer);
+  // `prefer` — ОДИН НА СЛОТ (Ф-Б1-60): пустой `overdue.prefer` наследует `show.prefer`, иначе
+  // владелец, снявший `SLOT_AMBIGUOUS` документированным путём, получает тот же отказ, как только
+  // сущность с двумя `moment` становится просроченной, — и падает вся `agenda.list`, а не строка.
+  // Явный `overdue.prefer` главнее: своё слово секции ничем не перекрывается.
+  const oPrefer = def.overdue.prefer.length > 0 ? def.overdue.prefer : def.show.prefer;
+  const dl = pick(def.overdue.contract, def.overdue.slots[0], oPrefer);
+  const mo = pick(def.overdue.contract, def.overdue.slots[1], oPrefer);
   const d = dl === null ? null : localDay(String(dl.value), cctx.timeZone);
   const m = mo === null ? null : localDay(String(mo.value), cctx.timeZone);
   // Минимум двух дат (§Б5-6); при равенстве выигрывает `deadline` — порядок слотов подписки.
