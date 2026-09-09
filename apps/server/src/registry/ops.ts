@@ -67,6 +67,7 @@ import {
   queryTreeExceedsDepth,
   ScopeNotStaticError,
 } from '@orbis/shared/query';
+import type { ExprNormalizeRegistry } from '@orbis/shared/expr';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -75,7 +76,7 @@ import { ExecError } from '../errors';
 // строка перекрывает встроенную» разъехался бы с первым ровно там, где владелец завёл свою.
 import { resolvePropertyRef } from '../executor/props';
 // Цикла нет: валидатор берёт из `registry/load` только тип строки.
-import { assertSubscription } from '../subscriptions/registry';
+import { assertSubscription, normalizeSubscriptionExprs } from '../subscriptions/registry';
 import { parseRegistryOfSnapshot } from './cache';
 import {
   type AspectDelta,
@@ -2092,6 +2093,11 @@ function assertSetsFreeOfSubscribers(after: RegistrySnapshot, contractId: string
   );
 }
 
+/** Реестр резолва имён языка E: разбор Q плюс контракты (слоты и наборы живут только у них). */
+function exprNormalizeRegistryOf(reg: RegistrySnapshot): ExprNormalizeRegistry {
+  return { ...parseRegistryOfSnapshot(reg), contracts: reg.contracts };
+}
+
 /** Снимок владельца со ВСЕМИ его дельтами, кроме названной, — «как читалось бы после правки». */
 async function probeSnapshot(
   tx: Tx,
@@ -2187,7 +2193,16 @@ export async function setSubscriptionDelta(
       subscription: subscriptionId,
     });
   }
-  await writeDeltaRow(tx, ownerId, 'subscription', subscriptionId, parsed.data, rows, (probe) => {
+  // ИМЕНА → ИДЕНТИФИКАТОРЫ ДО ЗАПИСИ (§А5-2): резолв идёт по ТОМУ ЖЕ снимку, против которого
+  // пойдёт проверка (Ф-Б1-55в, «один вердикт на оба пути»), и нормализованное уезжает и в
+  // `assertSubscription`, и в строку дельты — иначе читатель получил бы ключ там, где ждёт id.
+  const normalized = {
+    definition: normalizeSubscriptionExprs(
+      parsed.data.definition,
+      exprNormalizeRegistryOf(await probeSnapshot(tx, ownerId, rows)),
+    ),
+  } as SubscriptionDelta;
+  await writeDeltaRow(tx, ownerId, 'subscription', subscriptionId, normalized, rows, (probe) => {
     // СМЫСЛ ПРОВЕРЯЕТСЯ ЗДЕСЬ, а не в applyDeltas: на записи владелец видит отказ и может его исправить,
     // на чтении — только запертый реестр (Р-И-7).
     const merged = probe.subscriptions.get(subscriptionId);
@@ -2256,17 +2271,14 @@ export async function setOwnSubscription(
   // набор контракта — он живёт дельтой, и без неё та же декларация, что законна у
   // `setSubscriptionDelta`, здесь получала бы `EXPR_TYPE`. Один вердикт на оба пути записи.
   const rows = await loadRegistryRows(tx, ownerId);
-  assertSubscription(
-    { ...row, ownerId },
-    {
-      reg: await probeSnapshot(tx, ownerId, rows),
-      systemSeed: false,
-    },
-  );
+  const probe = await probeSnapshot(tx, ownerId, rows);
+  // Тот же резолв имён, что у дельты: правило адреса одно на оба писателя языка E.
+  const definition = normalizeSubscriptionExprs(row.definition, exprNormalizeRegistryOf(probe));
+  assertSubscription({ ...row, ownerId, definition }, { reg: probe, systemSeed: false });
   await tx.execute(sql`
     INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
     VALUES (${row.id}, ${ownerId}::uuid, ${row.surface},
-            ${JSON.stringify(row.definition)}::jsonb, ${row.module}, ${row.rank})
+            ${JSON.stringify(definition)}::jsonb, ${row.module}, ${row.rank})
     ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL
       DO UPDATE SET surface = EXCLUDED.surface, definition = EXCLUDED.definition,
                     module = EXCLUDED.module, rank = EXCLUDED.rank`);

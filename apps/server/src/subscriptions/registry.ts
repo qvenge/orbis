@@ -16,7 +16,13 @@ import {
   type SurfaceName,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
-import type { ExprScope, ExprType } from '@orbis/shared/expr';
+import {
+  type ExprNode,
+  type ExprNormalizeRegistry,
+  type ExprScope,
+  type ExprType,
+  normalizeExpr,
+} from '@orbis/shared/expr';
 import { ExecError } from '../errors';
 import { assertExprChecked } from '../expr/check';
 import type { RegistrySnapshot, SubscriptionRow } from '../registry/load';
@@ -559,6 +565,49 @@ function valueAt(root: unknown, path: string): unknown {
     if (cur === undefined) return undefined;
   }
   return cur;
+}
+
+/**
+ * Запись значения по тому же пути, каким `exprSitesOf` его нашла. Пара к `valueAt`: перечень
+ * E-позиций один, и второй способ ходить по нему разъехался бы с первым на первом новом поле.
+ * Промежуточные узлы к этому месту существуют по построению — путь взят у самого обхода.
+ */
+function setAt(root: unknown, path: string, value: unknown): void {
+  const keys = path.split('.');
+  let cur: unknown = root;
+  for (const key of keys.slice(0, -1)) {
+    cur = Array.isArray(cur) ? cur[Number(key)] : rec(cur)?.[key];
+  }
+  const last = keys[keys.length - 1] as string;
+  if (Array.isArray(cur)) cur[Number(last)] = value;
+  else {
+    const o = rec(cur);
+    if (o !== undefined) o[last] = value;
+  }
+}
+
+/**
+ * ИМЕНА В ДЕКЛАРАЦИИ — К ИДЕНТИФИКАТОРАМ (§А5-2, находка B2 I-3). Владелец пишет декларацию
+ * тулом, а все поверхности говорят ему KEY (`property_catalog` называет key «адресом, которым
+ * модель пишет и читает это свойство»); у встроенных записей `key = id`, у СВОЕЙ строки id — uuid.
+ * Без резолва законный жест §Б5-2 («предикат по своему свойству в `where`») отказывал бы
+ * `EXPR_TYPE` на записи, хотя тот же адрес принимают `aspect_create` и `implements.bind`.
+ *
+ * Нормализованное обязано УЙТИ В ЗАПИСЬ, а не только в проверку: читатель резолвит `{prop}` тоже
+ * только по id (`expr/compile.ts`, `EXPR_SHAPE`), и половинчатый фикс принял бы декларацию и
+ * запер поверхность на чтении — то есть был бы хуже отказа.
+ *
+ * Неразрешимое имя уезжает КАК ЕСТЬ — как у `normalizeBindAddresses` и как обещает докблок
+ * `normalizeExpr`: отказ называет чекер одним словарём, второго мнения не заводится.
+ */
+export function normalizeSubscriptionExprs<T>(def: T, reg: ExprNormalizeRegistry): T {
+  const sites = exprSitesOf(def).filter((s) => rec(s.value) !== undefined);
+  if (sites.length === 0) return def;
+  // Копия, а не правка на месте: то же дерево может лежать в конверте пачки, и нормализация
+  // одной операции не должна менять вход соседней (тот же довод, что у `normalizeExpr`).
+  const out = structuredClone(def);
+  for (const site of sites) setAt(out, site.path, normalizeExpr(site.value as ExprNode, reg));
+  return out;
 }
 
 function assertExprTypes(id: string, def: SubscriptionDefinition, reg: RegistrySnapshot): void {

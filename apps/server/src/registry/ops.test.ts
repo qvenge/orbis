@@ -1282,6 +1282,49 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     ).toBe((AGENDA_SUB as AgendaSubscription).show.limit);
   });
 
+  /**
+   * §А5-2: в дереве лежат ID, а key — адрес, которым модель пишет и читает (`property_catalog`).
+   * Своя строка получает uuid, поэтому key ≠ id — и без резолва законный жест §Б5-2 «предикат по
+   * своему свойству в where» отказывал `EXPR_TYPE` прямо на записи (находка B2 I-3).
+   */
+  test('§А5-2: своё свойство в предикате подписки названо KEY — в реестр ложится ИДЕНТИФИКАТОРОМ', async () => {
+    const created = ok(
+      await runAs('property_create', {
+        key: 'user/effort',
+        label: { ru: 'Усилие' },
+        description: { ru: 'Своё свойство владельца' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const propId = (created.results[0] as { property: string }).property;
+    expect(propId).not.toBe('user/effort');
+
+    const base = AGENDA_SUB as AgendaSubscription;
+    ok(
+      await runAs('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: {
+          ...base,
+          overdue: {
+            ...base.overdue,
+            where: {
+              op: 'and',
+              args: [base.overdue.where, { op: '>', args: [{ prop: 'user/effort' }, { const: 3 }] }],
+            },
+          },
+        },
+      }),
+    );
+    const where = ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription)
+      .overdue.where as unknown as { args: [unknown, { args: [{ prop: string }, unknown] }] };
+    // Вторая половина утверждения несущая: она ловит половинчатый фикс, который нормализует ВХОД
+    // проверки, а в базу кладёт ключ (тогда падал бы уже читатель — `compile.ts`, `EXPR_SHAPE`).
+    expect(where.args[1].args[0].prop).toBe(propId);
+    ok(await runAs('subscription_remove', { id: 'orbis/agenda' }));
+  });
+
   test('поверхность в конверте обязана совпасть с поверхностью системной строки', async () => {
     const e = err(
       await runAs('subscription_set', {
