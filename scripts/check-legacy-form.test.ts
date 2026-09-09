@@ -322,6 +322,36 @@ const SAMPLES: ReadonlyArray<{
       'const c = buildFieldCatalog(defs);',
     ],
   },
+  // --- Шимы «дата смерти Б-1» (срез Б-1, §С8-18) ------------------------------------------
+  { id: 'shim-contract-ids', lines: ['const a = CONTRACT_IDS_V1;', 'type B = ContractIdV1;'] },
+  {
+    id: 'p5-gate-docblock',
+    // Две формы фразы: «после гейта П5» и «раньше гейта П5» — обе живут в докблоках среза А.
+    lines: [
+      'const a = "первый акт среза Б-1 после гейта П5";',
+      'const b = "положенная раньше гейта П5";',
+    ],
+  },
+  { id: 'class-not-available', lines: [`const a = 'CLASS_NOT_AVAILABLE';`] },
+  {
+    id: 'source-not-in-prop',
+    lines: [
+      'const a = { sourceNotIn: { prop: x, values: [] } };',
+      'type T = { sourceNotIn?: { prop: string } };',
+    ],
+  },
+  {
+    id: 'agenda-three-texts',
+    lines: [
+      'const a = AGENDA_DAYS_QUERY;',
+      'const b = AGENDA_OVERDUE_DUE_QUERY;',
+      'const c = AGENDA_OVERDUE_START_QUERY;',
+    ],
+  },
+  {
+    id: 'exclude-blocked-literal',
+    lines: ['const a = EXCLUDE_BLOCKED_STATUS_KEY;', 'const b = EXCLUDE_BLOCKED_CLOSED;'],
+  },
 ];
 
 test('позитивный контроль: у каждого маркера есть образец', () => {
@@ -390,6 +420,12 @@ test('имена маркеров — договор: на них ссылают
     'service-const',
     'prop-type-heur',
     'legacy-grammar',
+    'shim-contract-ids',
+    'p5-gate-docblock',
+    'class-not-available',
+    'source-not-in-prop',
+    'agenda-three-texts',
+    'exclude-blocked-literal',
   ]);
 });
 
