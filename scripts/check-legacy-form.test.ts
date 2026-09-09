@@ -493,3 +493,60 @@ test('rule-parser: парсера заголовка правила в рабо�
     'scripts/check-legacy-form.ts',
   ]);
 });
+
+/**
+ * ТРЕТЬЯ проба ПО РАБОЧЕМУ ДЕРЕВУ, и исключение из правила шапки — по той же причине, что у
+ * `rule-parser` и `legacy-grammar`: цифра здесь не двигается. Шесть шимов интервала А→Б-1
+ * сняты срезом Б-1 (§С8-18), их носители удалены, и вернуться они могут только новой правкой,
+ * а не «незаконченным переводом». Синтетика подтвердила бы работу регулярок — вопрос про
+ * РЕПОЗИТОРИЙ.
+ *
+ * `allowed` перечисляется поимённо: зелёный ноль значим только тогда, когда регулярка вообще
+ * что-то находит. Гейт находит СЕБЯ лишь у двух маркеров из шести — там, где паттерн записан
+ * литералом (`CONTRACT_IDS_V1`, `CLASS_NOT_AVAILABLE`); у остальных четырёх в тексте паттерна
+ * стоят альтернация или escape, и собственную запись он не находит.
+ *
+ * `apps/server/perf/perf.test.ts` в списке НЕТ, и это факт исполнения, а не упущение: задача 6
+ * переименовала замороженную копию текста дневного окна в `AGENDA_WINDOW_TEXT_PRE_B1`
+ * (открытый вопрос 8, вариант А), поэтому под маркер она больше не подпадает и записи в
+ * `ALLOWLIST` ей не нужно.
+ */
+const CLOSED_AFTER_B1: ReadonlyArray<{ readonly id: string; readonly allowed: readonly string[] }> =
+  [
+    {
+      id: 'shim-contract-ids',
+      allowed: ['scripts/check-legacy-form.test.ts', 'scripts/check-legacy-form.ts'],
+    },
+    { id: 'p5-gate-docblock', allowed: ['scripts/check-legacy-form.test.ts'] },
+    {
+      id: 'class-not-available',
+      allowed: ['scripts/check-legacy-form.test.ts', 'scripts/check-legacy-form.ts'],
+    },
+    { id: 'source-not-in-prop', allowed: ['scripts/check-legacy-form.test.ts'] },
+    // Законное совпадение сверх образца — запись allowlist: корпус печати описи ДО реформы
+    // (`PRODUCTION_QUERY_TEXTS` называет снятые боевые константы Agenda по имени). Не боевой код.
+    {
+      id: 'agenda-three-texts',
+      allowed: ['packages/shared/src/query/ast-fixtures.ts', 'scripts/check-legacy-form.test.ts'],
+    },
+    { id: 'exclude-blocked-literal', allowed: ['scripts/check-legacy-form.test.ts'] },
+  ];
+
+test('шимы А→Б-1 сняты: шесть маркеров дают ноль по рабочему дереву', () => {
+  const root = join(import.meta.dir, '..');
+  for (const { id, allowed } of CLOSED_AFTER_B1) {
+    const marker = LEGACY_MARKERS.find((m) => m.id === id);
+    expect([id, marker !== undefined]).toEqual([id, true]);
+    if (marker === undefined) continue;
+    const report = scanMarker(marker, root);
+    expect([id, report.hits.map((h) => `${h.path}:${h.line}`)]).toEqual([id, []]);
+    expect([id, [...report.allowed.keys()].sort()]).toEqual([id, [...allowed].sort()]);
+  }
+});
+
+test('носителя шима контрактов в дереве нет: файл удалён, а не опустошён', () => {
+  // Имя могло исчезнуть, а модуль остаться мёртвым — тот же довод, что у `legacy-grammar`.
+  expect(
+    existsSync(join(import.meta.dir, '..', 'packages/shared/src/registry/contract-ids.ts')),
+  ).toBe(false);
+});
