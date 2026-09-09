@@ -2927,16 +2927,19 @@ function knownToolNames(defs: OrbisToolDef[]): ReadonlySet<string> {
  * вовсе, и стала бы искать обход вместо того, чтобы сказать владельцу про модуль.
  *
  * Немаскированный реестр собирается ТОЛЬКО на пути отказа и только при непустой маске:
- * общий путь второй сборки не платит. `null` — тула нет и без маски.
+ * общий путь второй сборки не платит. `undefined` — «это не про модуль»: маски нет, тула нет и
+ * без маски, либо у найденного тула модуля нет вовсе. Последнее недостижимо (маска скрывает
+ * ровно тулы модулей), но и достижимое оно означало бы «неизвестный тул», а не `MODULE_DISABLED`
+ * с пустым именем модуля в тексте отказа, — поэтому род ответа один, а не три.
  */
 function hiddenToolModule(
   name: string,
   reg: RegistrySnapshot,
   disabled: readonly string[],
-): ModuleId | null | undefined {
+): ModuleId | undefined {
   if (disabled.length === 0) return undefined;
   const hidden = buildToolDefs(reg).find((d) => d.name === name);
-  return hidden === undefined ? undefined : moduleOfTool(hidden.name, reg);
+  return hidden === undefined ? undefined : (moduleOfTool(hidden.name, reg) ?? undefined);
 }
 
 function assertBatchToolsKnown(

@@ -758,24 +758,26 @@ describe('aspect_create (§Б2-1, §С3)', () => {
         properties: [{ propertyId: 'orbis/priority', required: false }],
       }),
     );
-    const e = err(
-      await runAs('aspect_create', {
-        key: 'user/a_b',
-        label: { ru: 'Подчёркивание' },
-        description: { ru: 'x' },
-        properties: [{ propertyId: 'orbis/priority', required: false }],
-      }),
-    );
+    const second = await runAs('aspect_create', {
+      key: 'user/a_b',
+      label: { ru: 'Подчёркивание' },
+      description: { ru: 'x' },
+      properties: [{ propertyId: 'orbis/priority', required: false }],
+    });
+    // ПРОБА ПОВЕРХНОСТИ — ПЕРВОЙ, ДО утверждения об отказе, и порядок здесь несущий: `err()`
+    // бросает сам, поэтому после него проба поверхности недостижима ровно в том случае, ради
+    // которого заведена (отказ снят → второй аспект записан → два дефа с одним именем).
+    const defs = await withIdentity(db, aspectOwner, (tx) => buildToolRegistry(tx, aspectOwner));
+    const names = defs.map((d) => d.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.filter((n) => n === 'attach_user_a_b')).toHaveLength(1);
+    // …и отказ ИМЕНОВАН: не «ключ занят вообще», а «занято имя тула».
+    const e = err(second);
     expect([
       e.code,
       (e.details as { reason?: string }).reason,
       (e.details as { cause?: string }).cause,
     ]).toEqual(['VALIDATION', 'KEY_TAKEN', 'tool_name']);
-    // Проба не по ответу, а по ПОВЕРХНОСТИ: имена тулов уникальны.
-    const defs = await withIdentity(db, aspectOwner, (tx) => buildToolRegistry(tx, aspectOwner));
-    const names = defs.map((d) => d.name);
-    expect(new Set(names).size).toBe(names.length);
-    expect(names.filter((n) => n === 'attach_user_a_b')).toHaveLength(1);
   });
 
   test('граница длины ключа: 56 проходит, 57 — отказ схемы (имя тула уезжает провайдеру как есть)', async () => {
