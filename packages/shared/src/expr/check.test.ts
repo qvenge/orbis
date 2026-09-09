@@ -209,6 +209,55 @@ describe('тайп-чекер §С8-28: тотальность (§Б3-4)', () =>
       ),
     ).toEqual({ kind: 'decimal' });
   });
+
+  test('то же плечо у БУЛЕВА if — EXPR_NOT_TOTAL: предикат необязательным не бывает', () => {
+    // Необязательная ВЕЛИЧИНА законна (тест выше), необязательная ИСТИНА — нет: «ни истина, ни
+    // ложь» не значит ничего ни одному бэкенду, и SQL-бэкенд предикатов отвечает на такое плечо
+    // отказом. Принять его на записи значило бы адресовать отказ владельцу на чтении (Ф-Б1-61).
+    const W = scope({ contract: 'orbis/when' });
+    const nullArm = {
+      op: 'if',
+      args: [{ has: 'orbis/all_day' }, { prop: 'orbis/all_day' }, { const: null }],
+    } as ExprNode;
+    expect(refusal(() => checkExpr(nullArm, W))).toEqual({ code: EXPR_NOT_TOTAL, path: '' });
+    // …и путь адресует УЗЕЛ, а не корень, когда `if` стоит внутри предиката.
+    expect(
+      refusal(() =>
+        checkExpr(
+          {
+            op: 'and',
+            args: [
+              { op: 'in', args: [{ class: { contract: 'orbis/completable' } }, { const: 'open' }] },
+              nullArm,
+            ],
+          } as ExprNode,
+          W,
+        ),
+      ),
+    ).toEqual({ code: EXPR_NOT_TOTAL, path: 'args.1' });
+    // Сторона плеча роли не играет — отказ тот же.
+    expect(
+      refusal(() =>
+        checkExpr(
+          {
+            op: 'if',
+            args: [{ has: 'orbis/all_day' }, { const: null }, { prop: 'orbis/all_day' }],
+          } as ExprNode,
+          W,
+        ),
+      ).code,
+    ).toBe(EXPR_NOT_TOTAL);
+    // Контроль: то же `if` с булевыми плечами законно — отвергается ПЛЕЧО null, а не оператор.
+    expect(
+      checkExpr(
+        {
+          op: 'if',
+          args: [{ has: 'orbis/all_day' }, { prop: 'orbis/all_day' }, { const: false }],
+        } as ExprNode,
+        W,
+      ),
+    ).toEqual({ kind: 'boolean' });
+  });
 });
 
 describe('тайп-чекер §С8-28: арифметика дат', () => {

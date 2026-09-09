@@ -428,8 +428,19 @@ function opNodeType(
     const b = typeOf(args[2] as ExprNode, s, at(2), present);
     // Плечо `{const:null}` — не тип, а признак: величина объявлена НЕОБЯЗАТЕЛЬНОЙ
     // (`daily_pace` вне активной фазы), и второе плечо задаёт её тип целиком.
-    if (a.type.kind === 'null') return { type: b.type, optional: true };
-    if (b.type.kind === 'null') return { type: a.type, optional: true };
+    //
+    // НО НЕ У ПРЕДИКАТА. Необязательная ВЕЛИЧИНА осмысленна, необязательная ИСТИНА — нет:
+    // «ни истина, ни ложь» не значит ничего ни одному бэкенду, и SQL-бэкенд предикатов на
+    // такое плечо отвечает отказом («предикат обязан быть булевым»). Типизировать это
+    // `boolean` значило бы принять декларацию на записи и отказать владельцу на ЧТЕНИИ
+    // поверхности — ровно то, что §Б3-4 обещает не делать (Ф-Б1-61, Р-И-7).
+    if (a.type.kind === 'null' || b.type.kind === 'null') {
+      const other = a.type.kind === 'null' ? b : a;
+      if (other.type.kind === 'boolean') {
+        return bad(EXPR_NOT_TOTAL, path, 'предикат, который есть всегда', 'плечо {const:null}');
+      }
+      return { type: other.type, optional: true };
+    }
     const common = unify(a, b);
     if (common === undefined) {
       return bad(EXPR_TYPE, path, 'плечи одного типа', `${label(a.type)} и ${label(b.type)}`);

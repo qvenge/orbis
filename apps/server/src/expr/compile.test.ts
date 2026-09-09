@@ -462,6 +462,16 @@ describe('паритет гейта записи и SQL-бэкенда (B2 I-2)'
     ],
   };
   const BOOL_SLOT: ExprNode = { slot: 'planned' };
+  /**
+   * Плечо `{const:null}` у БУЛЕВА `if` (Minor-2 раунда 2): чекер типизировал такое дерево
+   * `boolean` и пропускал на записи, а SQL-бэкенд отвечал `EXPR_SHAPE` («предикат обязан быть
+   * булевым») — то есть отказ приезжал владельцу на чтении. Необязательная ВЕЛИЧИНА законна
+   * (`daily_pace` вне активной фазы), необязательная ИСТИНА — нет.
+   */
+  const NULL_ARM: ExprNode = {
+    op: 'if',
+    args: [{ has: 'orbis/all_day' }, { prop: 'orbis/all_day' }, { const: null }],
+  };
 
   test.each([
     [
@@ -481,6 +491,12 @@ describe('паритет гейта записи и SQL-бэкенда (B2 I-2)'
       BOOL_SLOT,
       'orbis/money-movement',
       () => compileContractPredicate('orbis/money-movement', BOOL_SLOT, CTX, ROW),
+    ],
+    [
+      'плечо {const:null} у булева if',
+      NULL_ARM,
+      'orbis/when',
+      () => compileExprPredicate(NULL_ARM, { cctx: CTX, row: ROW }),
     ],
   ])('%s: запись и чтение отвечают одинаково', (_name, expr, contract, compile) => {
     expect(accepts(() => checkExpr(expr as ExprNode, scopeOf(contract as string)))).toBe(
