@@ -5081,7 +5081,7 @@ describe('сводка мутации реестра: правила, а не с
   const headOf = (phrase: string): string => phrase.split(' ')[0] ?? '';
 
   test('фразы сводки нейтральны ко времени: голова каждой — отглагольное существительное', () => {
-    // Фикстуры ведутся ОТ РЕЕСТРА ТУЛОВ, а не списком в тесте: шестой реестровый тул без
+    // Фикстуры ведутся ОТ РЕЕСТРА ТУЛОВ, а не списком в тесте: тринадцатый реестровый тул без
     // фикстуры уронит первую же строку, и фразу для него придётся написать осознанно.
     const payloads: Record<string, Record<string, unknown>> = {
       property_create: { label: { ru: 'Усилие' }, status: 'proposed' },
@@ -5094,6 +5094,13 @@ describe('сводка мутации реестра: правила, а не с
       aspect_create: { key: 'user/sleep', label: { ru: 'Сон' }, properties: [] },
       aspect_implements_set: { aspect: 'user/sleep', implements: [{ contract: 'orbis/when' }] },
       aspect_implements_remove: { aspect: 'user/sleep', contract: 'orbis/when' },
+      subscription_set: { id: 'orbis/agenda', surface: 'planner/agenda', definition: {} },
+      subscription_remove: { id: 'orbis/agenda' },
+      contract_sets_delta_set: {
+        contract: 'orbis/completable',
+        setsDelta: { my_open: ['active'] },
+      },
+      contract_sets_delta_remove: { contract: 'orbis/completable' },
     };
     expect(Object.keys(payloads).sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
 
@@ -5115,6 +5122,14 @@ describe('сводка мутации реестра: правила, а не с
       aspect_create: 'Заведение аспекта «Сон»',
       aspect_implements_set: 'Привязка аспекта «user/sleep» к контрактам: «Когда»',
       aspect_implements_remove: 'Снятие привязки аспекта «user/sleep» к контракту «Когда»',
+      // ДОСЛОВНО те же строки, что в пине задачи 14 «фразы семи тулов вехи II»: фраза одна,
+      // мест её проверки два, и разойтись они не должны. Здесь список полный по построению
+      // теста (он ведётся реестром), там — семь имён вехи II; пересечение из четырёх строк
+      // поэтому неизбежно, и правило простое: правится сначала golden задачи 14.
+      subscription_set: 'Настройка подписки «Повестка»',
+      subscription_remove: 'Сброс подписки «Повестка»',
+      contract_sets_delta_set: 'Настройка наборов контракта «Завершаемость»',
+      contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
     });
 
     for (const [tool, phrase] of Object.entries(phrases)) {
