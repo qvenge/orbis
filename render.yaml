@@ -10,7 +10,6 @@ services:
     plan: free
     region: frankfurt
     branch: main
-    autoDeploy: false # выключен на время среза Б-1 реформы свойств (D43, В-8 рамки): миграция 0018 и сид реестров контрактов/подписок идут руками ДО выкатки кода, а мерж в main после каждой задачи иначе выкатывал бы полсреза на прод с пустыми реестрами; вернуть прод-процедурой закрытия (задача 21)
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
