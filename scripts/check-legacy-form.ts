@@ -409,10 +409,11 @@ export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
   // --- 2. Утверждения об отказе -----------------------------------------------------------
   {
     path: 'packages/shared/src/query/ast-fixtures.ts',
-    markers: ['bare-field'],
+    markers: ['bare-field', 'agenda-three-texts'],
     reason:
       'опись боевых текстов ДО реформы: у каждой записи `verdict: UNKNOWN_FIELD` — это ' +
-      'фикстуры ОТКАЗА разбора, и старая форма в них предмет проверки',
+      'фикстуры ОТКАЗА разбора, и старая форма в них предмет проверки; и корпус печати ' +
+      'называет снятые боевые константы Agenda по имени: он опись ДО реформы, а не её потребитель',
   },
   {
     path: 'apps/web/src/lib/query-blocks/parse.test.ts',
