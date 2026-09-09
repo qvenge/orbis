@@ -276,6 +276,41 @@ function slotScopeOf(scope: ExprCompileScope, form: string): SlotScope {
   return { cctx: scope.cctx, contract: scope.contract, binding: scope.binding, row: scope.row };
 }
 
+/**
+ * БУЛЕВ УЗЕЛ-ЗНАЧЕНИЕ В ПРЕДИКАТНОЙ ПОЗИЦИИ (B2 I-2). Чекер типизирует `{prop}`/`{slot}` булева
+ * рода как `boolean` и пропускает такую декларацию на записи (§Б3-4), поэтому бэкенд обязан её
+ * СЧИТАТЬ, а не отвечать «формы нет»: иначе отказ приезжает не автору декларации, а владельцу на
+ * чтении поверхности (Р-И-7).
+ *
+ * COALESCE — не украшение, а ТОТАЛЬНОСТЬ: без него отсутствующее значение даёт NULL, и строка
+ * молча выпадает из выдачи вместо честного «не член» (то же правило, что у `negated`).
+ *
+ * НЕбулевой род — отказ ЗДЕСЬ и структурный (`EXPR_SHAPE`), а не ошибка Postgres на чтении:
+ * через дверь записи такая форма недостижима (чекер требует `boolean`), но §С8-3 требует, чтобы
+ * у невыразимого было имя.
+ */
+function booleanValueSql(node: ExprNode, scope: ExprCompileScope): SQL {
+  const type =
+    'prop' in node
+      ? scope.cctx.reg.properties.get(node.prop)?.type
+      : slotsContract(slotScopeOf(scope, 'slot').contract, scope.cctx)?.slots.find(
+          (s) => s.name === (node as { slot: string }).slot,
+        )?.type;
+  // Неизвестное имя назовёт `valueSql` своим отказом — второго словаря на одно место не заводится.
+  const boolean =
+    type === undefined ||
+    type.kind === 'boolean' ||
+    (type.kind === 'any_of' && type.kinds.includes('boolean'));
+  if (!boolean) {
+    return fail(
+      'EXPR_SHAPE',
+      `${formOf(node)} рода ${type.kind} в предикатной позиции: здесь законно только булево значение`,
+      { form: formOf(node), kind: type.kind },
+    );
+  }
+  return sql`COALESCE(${valueSql(node, scope)}, false)`;
+}
+
 /** Оператор сравнения в SQL: `!=` пишется стандартным `<>`. */
 const COMPARISON_SQL: Partial<Record<ExprOp, string>> = {
   '=': '=',
@@ -424,6 +459,16 @@ export function compileExprPredicate(expr: ExprNode, scope: ExprCompileScope): S
     // значением давала бы NULL и молча выпадала из выдачи.
     if (expr.op === 'not') return negated(compileExprPredicate(expr.args[0] as ExprNode, scope));
     if (expr.op === 'in') return inPredicate(expr.args, scope);
+    // `if` — член канона §Б3-5, и чекер типизирует его булевым: плечи компилируются теми же
+    // предикатами, условие — тоже. Плечо `{const:null}` отвергает ветка `const` ниже
+    // (`EXPR_SHAPE`): «необязательное» в предикатной позиции у бэкенда смысла не имеет.
+    if (expr.op === 'if') {
+      const [cond, then, other] = expr.args as [ExprNode, ExprNode, ExprNode];
+      return sql`(CASE WHEN ${compileExprPredicate(cond, scope)} THEN ${compileExprPredicate(
+        then,
+        scope,
+      )} ELSE ${compileExprPredicate(other, scope)} END)`;
+    }
     const operator = COMPARISON_SQL[expr.op];
     if (operator === undefined) return unsupported(`оператор '${expr.op}'`);
     const leftNode = expr.args[0] as ExprNode;
@@ -448,6 +493,7 @@ export function compileExprPredicate(expr: ExprNode, scope: ExprCompileScope): S
   }
   if ('has' in expr) return hasPredicate(expr.has, scope);
   if ('has_relation' in expr) return relationPredicate(expr.has_relation, scope);
+  if ('prop' in expr || 'slot' in expr) return booleanValueSql(expr, scope);
   return unsupported(formOf(expr));
 }
 

@@ -18,7 +18,7 @@ import {
   ROLE_DEPENDENCY,
   ROLE_SUBITEM,
 } from '@orbis/shared';
-import type { ExprNode } from '@orbis/shared/expr';
+import { checkExpr, type ExprNode, type ExprScope } from '@orbis/shared/expr';
 import { type SQL, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { GATE_FIN_ASPECT } from '../../test/fixtures/gate-aspects';
@@ -411,5 +411,79 @@ describe('дата против момента: календарный день 
     expect(sqlOf(compileExprPredicate(both, { cctx: ctx, row: ROW }))).not.toContain(
       'AT TIME ZONE',
     );
+  });
+});
+
+/**
+ * ПАРИТЕТ ГЕЙТА ЗАПИСИ И SQL-БЭКЕНДА (находка B2 I-2, §Б3-4). Чекер типизирует булев узел-значение
+ * (`{prop}`/`{slot}`) и оператор `if` как `boolean` и пропускает декларацию на записи, а бэкенд
+ * предикатов отвечал `EXPR_BACKEND_UNSUPPORTED` — то есть отказ приходил владельцу на ЧТЕНИИ
+ * поверхности, а не автору декларации (Р-И-7). Инвариант написан «одним вердиктом»: обе стороны
+ * обязаны отвечать одинаково, каким бы способом ни закрывали расхождение.
+ */
+describe('паритет гейта записи и SQL-бэкенда (B2 I-2)', () => {
+  const accepts = (fn: () => unknown): boolean => {
+    try {
+      fn();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const OPEN: ExprNode = {
+    op: 'in',
+    args: [{ class: { contract: 'orbis/completable' } }, { const: 'open' }],
+  };
+  const scopeOf = (contract: string): ExprScope => ({
+    reg: { properties: CTX.reg.properties, contracts: CTX.reg.contracts },
+    contract,
+    params: {},
+    allowDeref: false,
+  });
+  const BOOL_PROP: ExprNode = { op: 'and', args: [OPEN, { prop: 'orbis/all_day' }] };
+  const IF_NODE: ExprNode = {
+    op: 'if',
+    args: [
+      { has: 'orbis/due_date' },
+      { op: '<', args: [{ prop: 'orbis/due_date' }, { ctx: '$today' }] },
+      { const: false },
+    ],
+  };
+  const BOOL_SLOT: ExprNode = { slot: 'planned' };
+
+  test.each([
+    ['булев {prop} предикатом', BOOL_PROP, 'orbis/when', () => compileExprPredicate(BOOL_PROP, { cctx: CTX, row: ROW })],
+    ['оператор if предикатом', IF_NODE, 'orbis/when', () => compileExprPredicate(IF_NODE, { cctx: CTX, row: ROW })],
+    [
+      'булев {slot} предикатом',
+      BOOL_SLOT,
+      'orbis/money-movement',
+      () => compileContractPredicate('orbis/money-movement', BOOL_SLOT, CTX, ROW),
+    ],
+  ])('%s: запись и чтение отвечают одинаково', (_name, expr, contract, compile) => {
+    expect(accepts(() => checkExpr(expr as ExprNode, scopeOf(contract as string)))).toBe(
+      accepts(compile as () => unknown),
+    );
+  });
+
+  // ТОТАЛЬНОСТЬ — ОТДЕЛЬНЫМ ПИНОМ: инвариант выше её не ловит (значение без COALESCE даёт NULL,
+  // и строка молча выпадает из выдачи вместо честного «не член»).
+  test('булев узел-значение тотален, if — CASE WHEN', () => {
+    expect(sqlOf(compileExprPredicate({ prop: 'orbis/all_day' }, { cctx: CTX, row: ROW }))).toBe(
+      `COALESCE((e.props->>'orbis/all_day')::boolean, false)`,
+    );
+    expect(
+      sqlOf(
+        compileExprPredicate(
+          { op: 'if', args: [{ has: 'orbis/due_date' }, { const: true }, { const: false }] },
+          { cctx: CTX, row: ROW },
+        ),
+      ),
+    ).toContain('CASE WHEN');
+  });
+
+  test('небулево свойство в предикатной позиции — EXPR_SHAPE, а не ошибка Postgres', () => {
+    expect(refusal(() => compileExprPredicate({ prop: 'orbis/title' }, { cctx: CTX, row: ROW })))
+      .toMatchObject({ code: 'VALIDATION', reason: 'EXPR_SHAPE' });
   });
 });
