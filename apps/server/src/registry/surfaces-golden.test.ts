@@ -358,7 +358,7 @@ describe('снимки поверхностей: консервативност�
   });
 });
 
-// Типизация эталона — как у эталона SQL (`query/compile.golden.test.ts:85`): JSON приезжает
+// Типизация эталона — как у эталона SQL (`query/compile.golden.test.ts`, `const GOLDENS = goldens as Golden[]`): JSON приезжает
 // структурно, тип навешивается один раз здесь. Имя своё (не `GOLDEN`): импорт эталона уже занят
 // тестами 0b/10, и переименовывать его задача 18 не вправе.
 const GOLDEN_STATES = (GOLDEN as unknown as { states: Record<SurfaceState, SurfacePayloads> })
