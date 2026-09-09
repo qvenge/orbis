@@ -816,6 +816,63 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
     ]);
   });
 
+  test('поглощённое слиянием свойство в слоте — отказ, а не молчаливая привязка к пустому', async () => {
+    // ВИСЯЧИЙ `bind` ПОСЛЕ `property_merge`: слияние привязок не видит вовсе
+    // (`collectPropertyHolders` знает четыре рода держателей, состава аспекта среди них нет),
+    // а строка source остаётся живой (`deprecated` + `merged_into`) — значит `checkImplements`
+    // на неё замечания не даёт. Отказ ставит сервер, и он же называет выход.
+    const src = ok(
+      await runAs('property_create', {
+        key: 'user/gig-src',
+        label: { ru: 'Начало (старое)' },
+        description: { ru: 'x' },
+        type: { kind: 'timestamp' },
+        status: 'active',
+      }),
+    );
+    const into = ok(
+      await runAs('property_create', {
+        key: 'user/gig-into',
+        label: { ru: 'Начало' },
+        description: { ru: 'x' },
+        type: { kind: 'timestamp' },
+        status: 'active',
+      }),
+    );
+    const srcId = (src.results[0] as { property: string }).property;
+    const intoId = (into.results[0] as { property: string }).property;
+    ok(
+      await runAs('aspect_create', {
+        key: 'user/gig-merged',
+        label: { ru: 'Выступление 2' },
+        description: { ru: 'x' },
+        properties: [
+          { propertyId: srcId, required: false },
+          { propertyId: intoId, required: false },
+        ],
+      }),
+    );
+    ok(await runAs('property_merge', { source: srcId, into: intoId }));
+    const e = err(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig-merged',
+        implements: [{ contract: 'orbis/when', bind: { moment: srcId }, value_map: [] }],
+      }),
+    );
+    expect([e.code, (e.details as { reason?: string; cause?: string }).reason]).toEqual([
+      'VALIDATION',
+      'UNKNOWN_PROPERTY',
+    ]);
+    expect((e.details as { cause?: string }).cause).toBe('merged');
+    // Выход назван: та же привязка на ЦЕЛЬ слияния проходит.
+    ok(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig-merged',
+        implements: [{ contract: 'orbis/when', bind: { moment: intoId }, value_map: [] }],
+      }),
+    );
+  });
+
   test('снятие несуществующей привязки — NOT_FOUND, а не тихий успех', async () => {
     expect(
       err(

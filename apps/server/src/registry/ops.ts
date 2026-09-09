@@ -2144,8 +2144,40 @@ function aspectDefinitionOf(row: AspectRow, ownerId: string): AspectDefinition {
  *
  * Проверяется РОВНО правимая строка, а не весь реестр владельца: чужая строка, посеянная
  * фикстурой или прошлой версией кода, не должна делать неисполнимой правку соседней.
+ *
+ * ПОГЛОЩЁННОЕ СЛИЯНИЕМ СВОЙСТВО В СЛОТЕ — ОТКАЗ, И ЭТО ПРОВЕРКА СЕРВЕРА, А НЕ SHARED.
+ * `property_merge` не видит привязок вовсе (`collectPropertyHolders` знает четыре рода
+ * держателей — `scope`/`ref.target`, `progress_source`, текст запроса в теле и дельты, — а
+ * состава аспекта и его `bind` среди них нет), поэтому после слияния `src → into` привязка
+ * носителя продолжает указывать на `src`. Строка `src` при этом ЖИВА (`status: deprecated`,
+ * `merged_into` — §А10-2), и `checkImplements` замечания не даёт: свойство и есть, и носится.
+ * Молча это означало бы слот, в котором значений уже нет (они переехали в `into`), — то есть
+ * аспект, тихо выпавший из Повестки и Бюджета. Из двух исходов выбран громкий: повторная
+ * запись такой привязки отказывает, а исправляется она одним движением — привязать `into`.
+ * Словарь замечаний при этом НЕ расширяется (Р-К-34, пин «словарь полон» задачи 13): отказ
+ * говорит `reason: 'UNKNOWN_PROPERTY'` с уточнением `cause: 'merged'` — ровно та же пара
+ * «код + уточнение», что кладёт `execErrorOfImplementsIssue`.
  */
 function assertImplements(next: AspectRow, ownerId: string, reg: RegistrySnapshot): void {
+  for (const binding of next.implements) {
+    for (const [slot, propertyId] of Object.entries(binding.bind)) {
+      const def = reg.properties.get(propertyId);
+      if (def === undefined || def.mergedInto === null) continue;
+      throw new ExecError(
+        'VALIDATION',
+        `свойство «${propertyId}» поглощено слиянием (значения переехали в «${def.mergedInto}») — ` +
+          `слот ${slot} контракта ${binding.contract} привяжите к цели слияния`,
+        {
+          aspect: next.id,
+          contract: binding.contract,
+          slot,
+          propertyId,
+          reason: 'UNKNOWN_PROPERTY',
+          cause: 'merged',
+        },
+      );
+    }
+  }
   const issue = checkImplements(aspectDefinitionOf(next, ownerId), reg)[0];
   if (issue === undefined) return;
   // Единственное отображение ImplementsIssue → ExecError — `execErrorOfImplementsIssue` из этого же
