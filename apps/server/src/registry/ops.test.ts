@@ -729,11 +729,24 @@ describe('aspect_create (§Б2-1, §С3)', () => {
     expect(names.filter((n) => n === 'attach_user_a_b')).toHaveLength(1);
   });
 
-  test('ключ аспекта длиннее 64 — отказ схемы: имя тула уезжает провайдеру как есть', async () => {
+  test('граница длины ключа: 56 проходит, 57 — отказ схемы (имя тула уезжает провайдеру как есть)', async () => {
+    // 56 — меньший из двух провайдерских пределов минус префикс: `attach_` (7) + 56 = 63 ≤ 64
+    // (OpenAI; у Anthropic 128). Проба ОБЕИХ сторон границы — иначе тест зеленел бы и на
+    // потолке «любое число, меньшее 200».
+    const keyOf = (length: number) => `user/${'a'.repeat(length - 'user/'.length)}`;
+    expect(keyOf(56)).toHaveLength(56);
+    ok(
+      await runAs('aspect_create', {
+        key: keyOf(56),
+        label: { ru: 'Ровно по пределу' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+      }),
+    );
     const e = err(
       await runAs('aspect_create', {
-        key: `user/${'a'.repeat(70)}`,
-        label: { ru: 'Длинный' },
+        key: keyOf(57),
+        label: { ru: 'На символ длиннее' },
         description: { ru: 'x' },
         properties: [{ propertyId: 'orbis/priority', required: false }],
       }),
