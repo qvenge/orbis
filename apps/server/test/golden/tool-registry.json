@@ -1801,6 +1801,191 @@
     }
   },
   {
+    "name": "aspect_create",
+    "description": "Завести СВОЙ аспект — новую интерпретацию записи («тренировка», «созвон»). Поля берутся из уже заведённых свойств: сперва property_catalog, и только потом property_create на недостающее. implements — привязки к контрактам: именно они, а не код, включают аспект в Повестку, Бюджет и строку списка.",
+    "inputJsonSchema": {
+      "type": "object",
+      "required": ["key", "label", "description", "properties"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "ручка вида user/sleep-log — она же адрес аспекта"
+        },
+        "label": {
+          "type": "object",
+          "description": "подпись по локалям, например {\"ru\":\"Усилие\",\"en\":\"Effort\"}",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "object",
+          "description": "что аспект означает — по нему ты решаешь, вешать ли его",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "properties": {
+          "type": "array",
+          "description": "поля аспекта: propertyId — id или key УЖЕ заведённого свойства (см. property_catalog)",
+          "items": {
+            "type": "object",
+            "required": ["propertyId", "required"],
+            "additionalProperties": false,
+            "properties": {
+              "propertyId": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "implements": {
+          "type": "array",
+          "description": "какие КОНТРАКТЫ реализует аспект: bind — слот контракта → своё свойство, value_map — вариант значения → класс контракта, fixed — слот, заданный константой. Именно привязка включает аспект в Повестку, Бюджет и строку списка — без строки кода.",
+          "items": {
+            "type": "object",
+            "required": ["contract", "value_map"],
+            "additionalProperties": false,
+            "properties": {
+              "contract": {
+                "type": "string",
+                "description": "id контракта, например orbis/completable"
+              },
+              "bind": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "value_map": {
+                "type": "array",
+                "description": "ОБЯЗАТЕЛЕН: отнесение КАЖДОГО варианта слота-статуса к классу контракта (§Б2-2); у контракта без слота-статуса (orbis/when) — пустой массив",
+                "items": {
+                  "type": "object",
+                  "required": ["slot", "variant", "class"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "slot": {
+                      "type": "string"
+                    },
+                    "variant": {},
+                    "class": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "fixed": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "viewConfig": {
+          "type": "object",
+          "required": ["keyFields"],
+          "additionalProperties": false,
+          "properties": {
+            "keyFields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "icon": {
+              "type": "string"
+            }
+          }
+        },
+        "tagMappings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "aspect_implements_set",
+    "description": "Переписать привязки своего аспекта к контрактам ЦЕЛИКОМ: список замещает прежний. Слот связывается со свойством того же типа, варианты статуса — с классами контракта; несовпадение типа или непокрытый вариант — отказ ДО записи.",
+    "inputJsonSchema": {
+      "type": "object",
+      "required": ["aspect", "implements"],
+      "additionalProperties": false,
+      "properties": {
+        "aspect": {
+          "type": "string",
+          "description": "id своего аспекта"
+        },
+        "implements": {
+          "type": "array",
+          "description": "какие КОНТРАКТЫ реализует аспект: bind — слот контракта → своё свойство, value_map — вариант значения → класс контракта, fixed — слот, заданный константой. Именно привязка включает аспект в Повестку, Бюджет и строку списка — без строки кода.",
+          "items": {
+            "type": "object",
+            "required": ["contract", "value_map"],
+            "additionalProperties": false,
+            "properties": {
+              "contract": {
+                "type": "string",
+                "description": "id контракта, например orbis/completable"
+              },
+              "bind": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "value_map": {
+                "type": "array",
+                "description": "ОБЯЗАТЕЛЕН: отнесение КАЖДОГО варианта слота-статуса к классу контракта (§Б2-2); у контракта без слота-статуса (orbis/when) — пустой массив",
+                "items": {
+                  "type": "object",
+                  "required": ["slot", "variant", "class"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "slot": {
+                      "type": "string"
+                    },
+                    "variant": {},
+                    "class": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "fixed": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "aspect_implements_remove",
+    "description": "Снять привязку своего аспекта к одному контракту: аспект перестаёт участвовать в его потребителях, остальные привязки остаются.",
+    "inputJsonSchema": {
+      "type": "object",
+      "required": ["aspect", "contract"],
+      "additionalProperties": false,
+      "properties": {
+        "aspect": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "string",
+          "description": "id контракта, привязку к которому снимаем"
+        }
+      }
+    }
+  },
+  {
     "name": "orbis_my_queue",
     "description": "Что мне назначено: список тикетов этого доступа с их статусом, проектом и сводкой последнего прогона. Брать в работу можно только тикеты с claimable=true (статус inbox или planned) — остальные ждут владельца. По дороге сервер помечает брошенные прогоны (поле swept: сколько подмёл) и возвращает их тикеты в очередь. Начинай круг с этого вызова и бери ОДИН тикет за раз.",
     "inputJsonSchema": {
