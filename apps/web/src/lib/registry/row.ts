@@ -4,6 +4,7 @@ import {
   type RowEntity,
   type RowProjection,
   type RowRegistry,
+  rowCategoryRefOf,
   rowProjectionOf,
   rowStatusPropertyOf,
 } from '@orbis/shared';
@@ -52,4 +53,13 @@ export function useRowProjection(entity: RowEntity): RowProjection {
  */
 export function useRowStatusProperty(entity: RowEntity): string | undefined {
   return rowStatusPropertyOf(entity, rowRegistryOf(useRegistry().data));
+}
+
+/**
+ * Ссылка на категорию ДВИЖЕНИЯ (слот `category` контракта денег) — для бейджа категории в шапке.
+ * `null` — реестр ещё едет либо запись движением не является: у конверта, несущего то же свойство
+ * слотом СВОЕГО контракта, бейджа и запроса категорий быть не должно (B4 M-1).
+ */
+export function useRowCategoryRef(entity: RowEntity): string | null {
+  return rowCategoryRefOf(entity, rowRegistryOf(useRegistry().data));
 }

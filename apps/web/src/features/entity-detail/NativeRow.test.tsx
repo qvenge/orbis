@@ -184,6 +184,51 @@ test('нефинансовая строка список категорий не
   expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
 });
 
+/**
+ * B4 M-1: то же свойство `orbis/finance_category` несёт КОНВЕРТ — слотом `category` СВОЕГО
+ * контракта (`orbis/envelope`). Сырое чтение вешало на шапку конверта чужой бейдж категории и
+ * лишний запрос списка категорий, которого на этом экране не было; читатель обязан спрашивать
+ * контракт денег, а не свойство.
+ */
+test('конверт: бейджа категории нет и список категорий не запрашивается (B4 M-1)', async () => {
+  const { calls } = renderWithProviders(
+    <NativeRow
+      entity={row(
+        {
+          'orbis/finance_category': CAT_FOOD,
+          'orbis/limit': '30000.00',
+          'orbis/period_start': '2026-07-01',
+          'orbis/period_end': '2026-07-31',
+        },
+        ['orbis/budget'],
+        { title: 'Конверт Еда' },
+      )}
+      onToggleTask={() => {}}
+    />,
+    withCategories([category(CAT_FOOD, 'Еда')]),
+  );
+  await screen.findByText('Конверт Еда');
+  await waitFor(() => expect(screen.queryByText('Еда')).toBeNull());
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+});
+
+/** Второе плечо Р9: значение переживает снятие аспекта-носителя, бейдж — нет. */
+test('снятый аспект-носитель: бейджа категории нет (B4 M-1)', async () => {
+  const { calls } = renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/finance_category': CAT_FOOD }, [], { title: 'Осиротевшая запись' })}
+      onToggleTask={() => {}}
+    />,
+    withCategories([category(CAT_FOOD, 'Еда')]),
+  );
+  await screen.findByText('Осиротевшая запись');
+  // Запрос списка категорий — наблюдаемый след бейджа: он уходит из `CategoryBadge`, и его
+  // отсутствие ловится детерминированно, в отличие от «текста ещё нет».
+  await waitFor(() => expect(calls.some((c) => c.path === 'registry.effective')).toBe(true));
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+  expect(screen.queryByText('Еда')).toBeNull();
+});
+
 test('task: рендерит чекбокс', async () => {
   renderWithProviders(
     <NativeRow

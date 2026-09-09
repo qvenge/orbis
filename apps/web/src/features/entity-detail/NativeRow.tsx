@@ -3,7 +3,7 @@ import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { displayText } from '../../lib/registry/format';
 import { classLabel, fieldLabel } from '../../lib/registry/labels';
-import { useRowProjection, useRowStatusProperty } from '../../lib/registry/row';
+import { useRowCategoryRef, useRowProjection, useRowStatusProperty } from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -196,6 +196,11 @@ export function NativeRow({
   const registry = useRegistry();
   const row = useRowProjection(entity);
   const statusProperty = useRowStatusProperty(entity);
+  // Категория — по КОНТРАКТУ денег (слот `category`), а не по сырому свойству: то же свойство
+  // несёт конверт слотом своего контракта, и сырое чтение вешало бы на его шапку чужой бейдж и
+  // лишний запрос списка категорий; а запись со снятым аспектом-носителем показывала бы бейдж по
+  // пережившему снятие значению (Р9). Бейдж остаётся вне M14 (контракта «категория» в v1 нет, В-2).
+  const catRef = useRowCategoryRef(entity);
   // Память — своя строка (В7): её смысл (образец сопоставления и цель) живёт в свойствах, а не в
   // контрактах; в таблицу M14 запись памяти не входит.
   if (aspects.has('orbis/memory'))
@@ -206,10 +211,6 @@ export function NativeRow({
     row.amount === null
       ? null
       : formatMoney(row.amount.amount, row.amount.direction === 'inflow' ? 'income' : 'expense');
-  const catRef =
-    typeof props['orbis/finance_category'] === 'string'
-      ? (props['orbis/finance_category'] as string)
-      : '';
   // keyFields — только когда ни один элемент M14 не сработал: записи без контрактов шапке нечего
   // показать, кроме её ключевых полей (§А9-2; первый аспект — по rank реестра, не по порядку записи).
   const bare = row.checkbox === null && row.date === null && row.amount === null;
@@ -267,7 +268,7 @@ export function NativeRow({
       )}
       {/* raw_value вне M14: «весь день» — свойство записи, контракта «признак суток» в v1 нет */}
       {props['orbis/all_day'] === true && <Badge>весь день</Badge>}
-      {catRef !== '' && <CategoryBadge categoryRef={catRef} />}
+      {catRef !== null && <CategoryBadge categoryRef={catRef} />}
       {fields.length > 0 && (
         <dl className="flex gap-2 text-xs text-text-secondary">
           {fields.map((id) => (

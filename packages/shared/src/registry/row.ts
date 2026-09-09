@@ -155,6 +155,26 @@ export function rowStatusPropertyOf(entity: RowEntity, reg: RowRegistry): string
   const hit = checkboxBindingOf(entity, reg);
   return hit === null ? undefined : hit.binding.bind[hit.slot];
 }
+/**
+ * Ссылка на категорию ДВИЖЕНИЯ — слот `category` контракта `orbis/money-movement` у привязки,
+ * стоящей на записи. Как и `rowStatusPropertyOf`, поле `RowProjection` НЕ занимает: форма проекции
+ * — эталон снимка поверхностей (§1.9), и новое поле пересдало бы его без изменения смысла.
+ *
+ * Читается КОНТРАКТОМ, а не сырым `orbis/finance_category`, и это не педантизм (B4 M-1): то же
+ * свойство несёт конверт (слот `category` контракта `orbis/envelope`), и сырое чтение вешало на
+ * шапку конверта бейдж категории и лишний запрос списка категорий, которых там не было; а запись
+ * со СНЯТЫМ аспектом-носителем показывала бы бейдж по пережившему снятие значению (Р9) — та же
+ * асимметрия, от которой важность защищена `carried`.
+ */
+export function rowCategoryRefOf(entity: RowEntity, reg: RowRegistry): string | null {
+  const rule = ruleOf('amount');
+  for (const b of bindingsOn(indexOf(reg), entity, reg, rule.contract ?? '')) {
+    const value = slotValue(b, entity, 'category');
+    if (typeof value === 'string' && value !== '') return value;
+  }
+  return null;
+}
+
 /** Несёт ли свойство хоть один аспект, СТОЯЩИЙ на записи (Р9). */
 function carried(entity: RowEntity, reg: RowRegistry, propertyId: string): boolean {
   return entity.aspects.some((id) =>
