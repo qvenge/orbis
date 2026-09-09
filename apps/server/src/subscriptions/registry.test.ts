@@ -79,6 +79,17 @@ function row(definition: unknown, over: Partial<SubscriptionRow> = {}): Subscrip
 }
 
 /** Код отказа и его ПРИЧИНА: коды реформы закрыты (errors.ts), причина едет в details. */
+/** Отказ ЦЕЛИКОМ — когда проверяются не только код и причина, но и адресные поля деталей. */
+function failure(fn: () => unknown): ExecError {
+  try {
+    fn();
+  } catch (e) {
+    if (!(e instanceof ExecError)) throw e;
+    return e;
+  }
+  throw new Error('ожидался отказ, его не было');
+}
+
 function refusal(fn: () => unknown): { code: string; reason: string } {
   try {
     fn();
@@ -177,6 +188,47 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
       refusal(() => assertSubscription(row(def, { surface: 'finance/budget-overview' }), seed)),
     ).toEqual({ code: 'VALIDATION', reason: 'SUBSCRIPTION_UNKNOWN_SET' });
   });
+  test('SUBSCRIPTION_UNKNOWN_SET НАЗЫВАЕТ контракт — по нему писатель наборов узнаёт СВОЮ поломку', () => {
+    // Это вход второй ветки критерия `assertSetsFreeOfSubscribers` (`registry/ops.ts`): обход
+    // дерева разбирает известные формы ссылки, а всё остальное ловится по ОТКАЗУ, называющему
+    // контракт. Без `details.contract` отказ говорит «имени нет» и не отвечает на вопрос
+    // «чья это правка» — писатель наборов пропускал бы форму, которой обход не знает.
+    // `lists.<n>.counted_set` — та самая форма без соседнего контракта: он берётся из
+    // `sources.movement`, и в отказе обязан оказаться оттуда же.
+    const comingUp = BUDGET_DEF.lists.coming_up;
+    if (comingUp === undefined) throw new Error('в сиде Бюджета нет списка coming_up');
+    const def = {
+      ...BUDGET_DEF,
+      lists: { ...BUDGET_DEF.lists, coming_up: { ...comingUp, counted_set: 'нет-такого' } },
+    };
+    const e = failure(() =>
+      assertSubscription(row(def, { surface: 'finance/budget-overview' }), seed),
+    );
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'SUBSCRIPTION_UNKNOWN_SET',
+    ]);
+    expect(e.details as { contract?: string; path?: string }).toMatchObject({
+      contract: 'orbis/money-movement',
+      path: 'lists.coming_up.counted_set',
+    });
+    // …и у второй позиции того же контракта контракт в отказе тот же — правило, а не случай.
+    const movement = {
+      ...BUDGET_DEF,
+      sources: {
+        ...BUDGET_DEF.sources,
+        movement: { ...BUDGET_DEF.sources.movement, counted_set: 'нет-такого' },
+      },
+    };
+    expect(
+      (
+        failure(() =>
+          assertSubscription(row(movement, { surface: 'finance/budget-overview' }), seed),
+        ).details as { contract?: string }
+      ).contract,
+    ).toBe('orbis/money-movement');
+  });
+
   test('prefer с аспектом, не реализующим слот секции, — SUBSCRIPTION_PREFER_UNBOUND', () => {
     const def = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, prefer: ['orbis/note'] } };
     expect(refusal(() => assertSubscription(row(def), seed)).reason).toBe(

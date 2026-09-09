@@ -362,9 +362,24 @@ function assertEnvelopeFormulas(id: string, def: BudgetSubscription): void {
 /** Поимённые ссылки декларации — по фиксированным путям; дерево здесь не обходится. */
 function assertReferences(id: string, def: SubscriptionDefinition, reg: RegistrySnapshot): void {
   const idx = bindingIndexOf(reg);
-  const known = (name: string, set: ReadonlySet<string>, reason: string, path: string): void => {
+  // `contract` В ДЕТАЛЯХ ОТКАЗА — не украшение: по нему писатель наборов (`contract_sets_delta_*`,
+  // `registry/ops.ts`) решает, ЕГО ли правка сломала подписку. Имя набора без контракта отвечает
+  // «что-то не сошлось», а зависимость считается по контракту — и форма ссылки, которую обход
+  // дерева не разбирает (`lists.<n>.counted_set` берёт контракт из `sources.movement`), иначе
+  // проходила бы мимо обеих проверок.
+  const known = (
+    name: string,
+    set: ReadonlySet<string>,
+    reason: string,
+    path: string,
+    contract?: string,
+  ): void => {
     if (!set.has(name)) {
-      bad(reason, id, `${path}: имени «${name}» в реестре или декларации нет`, { path, name });
+      bad(reason, id, `${path}: имени «${name}» в реестре или декларации нет`, {
+        path,
+        name,
+        ...(contract !== undefined && { contract }),
+      });
     }
   };
   if (def.engine === 'agenda') {
@@ -373,6 +388,7 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
       setNames(reg, 'orbis/recurrence', id),
       'SUBSCRIPTION_UNKNOWN_SET',
       'hide.set',
+      'orbis/recurrence',
     );
     const prefer = (list: readonly string[], slots: readonly string[], path: string): void => {
       for (const a of list) {
@@ -403,6 +419,7 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
     mSets,
     'SUBSCRIPTION_UNKNOWN_SET',
     'sources.movement.counted_set',
+    def.sources.movement.contract,
   );
   assertRole(reg, id, def.sources.envelope.binding_role);
   assertRole(reg, id, def.rollup.role);
@@ -444,7 +461,13 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
     for (const r of [agg.bound_via, agg.unbound_via]) if (r !== undefined) assertRole(reg, id, r);
   }
   for (const [n, list] of Object.entries(def.lists)) {
-    known(list.counted_set, mSets, 'SUBSCRIPTION_UNKNOWN_SET', `lists.${n}.counted_set`);
+    known(
+      list.counted_set,
+      mSets,
+      'SUBSCRIPTION_UNKNOWN_SET',
+      `lists.${n}.counted_set`,
+      def.sources.movement.contract,
+    );
     for (const r of [list.requires_relation, list.excludes_relation]) {
       if (r !== undefined) assertRole(reg, id, r.role);
     }

@@ -7,7 +7,9 @@ import {
   AGENDA_DEF,
   type AgendaSubscription,
   addDays,
+  BUDGET_DEF,
   BUILTIN_SUBSCRIPTION_DEFS,
+  type BudgetSubscription,
   newId,
   rowProjectionOf,
   type SubscriptionDefinition,
@@ -1565,6 +1567,46 @@ describe('зависимость от набора считается ПО ПР�
     ]);
     expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual(['orbis/agenda']);
     expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
+  });
+
+  test('ЧЕТВЁРТАЯ форма ссылки: lists.<n>.counted_set без соседнего контракта — тоже SET_IN_USE', async () => {
+    // Имя набора здесь стоит БЕЗ `contract` в узле (`over: 'movement'`), контракт лежит этажом
+    // выше — в `sources.movement`. Обход, читавший только соседние ключи, эту ссылку не видел:
+    // набор снимался «ок», а `orbis/budget-overview` умирала `SUBSCRIPTION_UNKNOWN_SET`.
+    ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/money-movement',
+        setsDelta: { my_plans: ['outflow'] },
+      }),
+    );
+    const comingUp = BUDGET_DEF.lists.coming_up;
+    if (comingUp === undefined) throw new Error('в сиде Бюджета нет списка coming_up');
+    const withOwnList: BudgetSubscription = {
+      ...BUDGET_DEF,
+      lists: { ...BUDGET_DEF.lists, coming_up: { ...comingUp, counted_set: 'my_plans' } },
+    };
+    ok(
+      await runAs('subscription_set', {
+        id: 'orbis/budget-overview',
+        surface: 'finance/budget-overview',
+        definition: withOwnList,
+      }),
+    );
+    const e = err(await runAs('contract_sets_delta_remove', { contract: 'orbis/money-movement' }));
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'SET_IN_USE',
+    ]);
+    expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual([
+      'orbis/budget-overview',
+    ]);
+    expect((await regOf()).contracts.get('orbis/money-movement')?.sets?.my_plans).toEqual([
+      'outflow',
+    ]);
+    // Убираем держателя — и набор снимается: проба не выродилась в «наборы движений не трогать».
+    ok(await runAs('subscription_remove', { id: 'orbis/budget-overview' }));
+    ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/money-movement' }));
+    expect((await regOf()).contracts.get('orbis/money-movement')?.sets?.my_plans).toBeUndefined();
   });
 
   test('негативный контроль: сломанная подписка НЕ запирает наборы ЧУЖОГО контракта', async () => {

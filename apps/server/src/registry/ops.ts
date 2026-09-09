@@ -1975,27 +1975,45 @@ async function removeDeltaRow(
 /**
  * ССЫЛКИ НА НАБОРЫ КОНТРАКТА В ДЕКЛАРАЦИИ — обход дерева, а не разбор по схеме движка.
  *
- * Имя набора стоит в декларации в трёх разных формах: правым операндом `in`
+ * Имя набора стоит в декларации в ЧЕТЫРЁХ формах: правым операндом `in`
  * (`{op:'in', args:[{class:{contract}}, {const:'<набор>'}]}`), полем пары `{contract, set}`
- * (`hide`, `has_relation.in_set`) и полем `counted_set` источника ведомостей. Разбирать их
- * ТИПАМИ двух движков значило бы завести третье описание формы подписки рядом с zod-схемой и
- * валидатором — и первое же новое место ссылки прошло бы мимо. Обход по ключам ловит все три
- * формы одним правилом и переживает четвёртую; лишняя пара (совпадение имён полей) стоит
- * ровно одного лишнего отказа с названной причиной.
+ * (`hide`, `has_relation.in_set`), полем `counted_set` РЯДОМ со своим `contract`
+ * (`sources.movement`) и — четвёртой — полем `counted_set` БЕЗ соседнего контракта
+ * (`lists.<n>.counted_set`: там стоит `over: 'movement'`, а контракт лежит этажом выше, в
+ * `sources.movement.contract`). Четвёртая и есть довод против разбора «по соседним ключам без
+ * контекста»: узел сам себя не адресует, и без снесённого сверху контракта источника ссылка
+ * читалась бы ничьей — ровно так набор `lists.*` и снимался «ок» из-под живой подписки.
+ * Поэтому обход несёт `context` — контракт источника движений, снятый с `sources.movement`
+ * на входе в поддерево.
+ *
+ * Разбирать формы ТИПАМИ двух движков значило бы завести третье описание подписки рядом с
+ * zod-схемой и валидатором. Обход по ключам ловит все четыре одним правилом; ПЯТУЮ страхует
+ * ветка (б) `assertSetsFreeOfSubscribers` — отказ валидатора, называющий контракт
+ * (`details.contract` у `SUBSCRIPTION_UNKNOWN_SET`, `subscriptions/registry.ts`).
  */
 function setRefsOf(
   value: unknown,
   out: Array<{ contract: string; set: string }> = [],
-): Array<{
-  contract: string;
-  set: string;
-}> {
+  context: string | null = null,
+): Array<{ contract: string; set: string }> {
   if (Array.isArray(value)) {
-    for (const item of value) setRefsOf(item, out);
+    for (const item of value) setRefsOf(item, out, context);
     return out;
   }
   if (value === null || typeof value !== 'object') return out;
   const node = value as Record<string, unknown>;
+  // Контракт источника движений — контекст для всего поддерева: `lists.*` адресуют набор
+  // ИМЕННО его (`over: 'movement'`), не называя контракт у себя.
+  const sources = node.sources;
+  const movement =
+    sources !== null && typeof sources === 'object'
+      ? (sources as Record<string, unknown>).movement
+      : undefined;
+  const movementContract =
+    movement !== null && typeof movement === 'object'
+      ? (movement as Record<string, unknown>).contract
+      : undefined;
+  const inner = typeof movementContract === 'string' ? movementContract : context;
   const left = Array.isArray(node.args) ? node.args[0] : undefined;
   const right = Array.isArray(node.args) ? node.args[1] : undefined;
   if (node.op === 'in' && left !== null && typeof left === 'object') {
@@ -2010,13 +2028,12 @@ function setRefsOf(
         : undefined;
     if (typeof contract === 'string' && typeof name === 'string') out.push({ contract, set: name });
   }
-  if (typeof node.contract === 'string') {
-    if (typeof node.set === 'string') out.push({ contract: node.contract, set: node.set });
-    if (typeof node.counted_set === 'string') {
-      out.push({ contract: node.contract, set: node.counted_set });
-    }
+  const own = typeof node.contract === 'string' ? node.contract : inner;
+  if (own !== null) {
+    if (typeof node.set === 'string') out.push({ contract: own, set: node.set });
+    if (typeof node.counted_set === 'string') out.push({ contract: own, set: node.counted_set });
   }
-  for (const item of Object.values(node)) setRefsOf(item, out);
+  for (const item of Object.values(node)) setRefsOf(item, out, inner);
   return out;
 }
 
@@ -2037,8 +2054,11 @@ function setRefsOf(
  * теста зависимости:
  *   (а) декларация СИНТАКСИЧЕСКИ называет набор этого контракта, которого после правки не
  *       будет (`setRefsOf`) — не зависит от того, читаема ли подписка сейчас;
- *   (б) проба `assertSubscription` после правки отказывает, НАЗЫВАЯ этот контракт, — страховка
- *       на форму ссылки, которую обход не знает.
+ *   (б) проба `assertSubscription` после правки отказывает, НАЗЫВАЯ этот контракт
+ *       (`details.contract` у `SUBSCRIPTION_UNKNOWN_SET`, `subscriptions/registry.ts`), —
+ *       страховка на форму ссылки, которую обход не знает. Ветка не декоративна и это
+ *       ПРОВЕРЕНО мутацией: с выключенным (а) четвёртая форма (`lists.<n>.counted_set`)
+ *       по-прежнему даёт `SET_IN_USE` — держит её именно (б).
  * Чужая поломка (другой контракт, другая причина) наборы НЕ запирает: отказывать ею значило бы
  * отвечать «набор используется» про набор, который тут ни при чём.
  */
