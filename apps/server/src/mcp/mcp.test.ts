@@ -429,7 +429,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 10 публичных core + 5 реестровых + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 10 публичных core + 12 реестровых + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -464,6 +464,12 @@ describe('/mcp tools/list (§9.2)', () => {
         'aspect_create',
         'aspect_implements_set',
         'aspect_implements_remove',
+        // Тулы реестра части Б (§Б5-1, §Б1-1, задача 16): полному доступу адресованы так же,
+        // как чату владельца.
+        'subscription_set',
+        'subscription_remove',
+        'contract_sets_delta_set',
+        'contract_sets_delta_remove',
         // Глаголы исполнителя (§9.3): грант есть у любого MCP-вызова, поэтому agentOnly
         // список не сужает — сужает его только скоуп (тест worker ниже)
         'orbis_my_queue',
@@ -504,9 +510,9 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 40 − 3 internalOnly − 2 routineOnly = 35
+      // builtin-набор: 44 − 3 internalOnly − 2 routineOnly = 39
       expect(tools).toHaveLength(publicDefs.length);
-      expect(tools).toHaveLength(35);
+      expect(tools).toHaveLength(39);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();
@@ -768,7 +774,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
         // §А9-4/РП-14: `fullScopeOnly` — исключение из «чтения открыты все». Каталог
         // свойств это карта поверхности ВЛАДЕЛЬЦА, фону она не адресована.
         'property_catalog',
-        // Тем же признаком закрыты восемь тулов реестра: фоновый исполнитель работает над
+        // Тем же признаком закрыты двенадцать тулов реестра: фоновый исполнитель работает над
         // ЗАДАЧЕЙ владельца, а не над устройством его системы (§А9-4).
         'property_create',
         'property_update',
@@ -778,6 +784,10 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
         'aspect_create',
         'aspect_implements_set',
         'aspect_implements_remove',
+        'subscription_set',
+        'subscription_remove',
+        'contract_sets_delta_set',
+        'contract_sets_delta_remove',
       ]) {
         expect(names).not.toContain(name);
       }
@@ -1077,8 +1087,8 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
  * ГДЕ ОХРАНА СЛЕПНЕТ — сказано, а не умолчано: (1) писатель, собравший `JournalPlan` руками,
  * мимо фабрики; (2) `registryPlan`, позванный с именем-переменной; (3) писатель, зовущий функции
  * `registry/ops.ts` НАПРЯМУЮ мимо executor (сегодня таких нет: все семь ops-писателей зовутся только
- * из `executor.ts`; `setContractDelta`/`setSubscriptionDelta` задачи 5 — без боевых вызывателей до
- * задачи 16). Первое ловится последним `expect` ниже (число вызовов фабрики сверяется с числом
+ * из `executor.ts`; `setContractDelta`/`setSubscriptionDelta` задачи 5 позвал
+ * исполнитель задачи 16). Первое ловится последним `expect` ниже (число вызовов фабрики сверяется с числом
  * РАЗОБРАННЫХ имён), второе — им же; третье — только грепом ревью (гейт задачи 14, m-2).
  */
 describe('§С8-23: инвариант против fail-open — писатели реестра, замок и ось worker', () => {
@@ -1090,8 +1100,12 @@ describe('§С8-23: инвариант против fail-open — писател
   );
 
   test('писатели реестра разобраны, и КАЖДЫЙ берёт замок реестра', () => {
-    // Восемь публичных тулов + три внутренние обратные операции (`property_row_restore`,
-    // `property_merge_undo`, `aspect_row_restore`): их зовёт только undo, снаружи недостижимы.
+    // Двенадцать публичных тулов + ТРИ внутренние обратные операции (`property_row_restore`,
+    // `property_merge_undo` — срез А; `aspect_row_restore` — задача 15): их зовёт только undo,
+    // снаружи они недостижимы. У подписок и наборов своей обратной операции нет: обратное к
+    // `subscription_set` — снова `subscription_set` (прежняя декларация), к
+    // `contract_sets_delta_set` — `contract_sets_delta_remove` (задача 16), и внутренних имён
+    // ей заводить не пришлось.
     expect([...writers].sort()).toEqual([
       'aspect_create',
       'aspect_delta_remove',
@@ -1099,11 +1113,15 @@ describe('§С8-23: инвариант против fail-open — писател
       'aspect_implements_remove',
       'aspect_implements_set',
       'aspect_row_restore',
+      'contract_sets_delta_remove',
+      'contract_sets_delta_set',
       'property_create',
       'property_merge',
       'property_merge_undo',
       'property_row_restore',
       'property_update',
+      'subscription_remove',
+      'subscription_set',
     ]);
     // Писатель без замка встал бы в очередь позже конкурента, уже держащего бюджетный, —
     // ровно тот цикл ожидания, ради которого порядок «реестр → бюджет → строки» и заведён.
