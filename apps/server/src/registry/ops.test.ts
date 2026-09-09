@@ -695,6 +695,39 @@ describe('aspect_create (§Б2-1, §С3)', () => {
     if (!undone.ok) expect(undone.error.code).toBe('INVARIANT');
   });
 
+  test('inline implements: bind по KEY ложится идентификатором уже при ЗАВЕДЕНИИ', async () => {
+    // Нормализация адреса стоит у ОБОИХ писателей привязок, и пин нужен обоим: `aspect_create`
+    // принимает `implements` прямо в конверте, то есть первая привязка своего аспекта может
+    // родиться, ни разу не пройдя через `aspect_implements_set`. Без этого теста ветка
+    // заведения снималась бы молча — тест соседнего писателя её не держит.
+    const prop = ok(
+      await runAs('property_create', {
+        key: 'user/ac-when',
+        label: { ru: 'Когда' },
+        description: { ru: 'x' },
+        type: { kind: 'timestamp' },
+        status: 'active',
+      }),
+    );
+    const propertyId = (prop.results[0] as { property: string }).property;
+    ok(
+      await runAs('aspect_create', {
+        key: 'user/ac-inline',
+        label: { ru: 'С привязкой сразу' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'user/ac-when', required: false }],
+        implements: [{ contract: 'orbis/when', bind: { moment: 'user/ac-when' }, value_map: [] }],
+      }),
+    );
+    // Проба по СТРОКЕ, а не по снимку: в базу обязан лечь id, иначе читатели привязок
+    // (`bindingIndexOf`, `checkImplements`) ищут по id и не находят носимое свойство.
+    const row = (await withIdentity(db, aspectOwner, (tx) =>
+      tx.execute(sql`SELECT implements FROM aspect_definitions
+                     WHERE owner_id = ${aspectOwner}::uuid AND id = 'user/ac-inline'`),
+    )) as unknown as Array<{ implements: Array<{ bind: Record<string, string> }> }>;
+    expect(row[0]?.implements[0]?.bind).toEqual({ moment: propertyId });
+  });
+
   test('два ключа с одним ИМЕНЕМ ТУЛА — отказ: attach_* сворачивает «-» и «/» в «_»', async () => {
     // `attachToolName` нормализует НЕОБРАТИМО (`shared/registry/tool-schema.ts`), поэтому
     // `user/a-b` и `user/a_b` дают один `attach_user_a_b`. Два дефа с одним именем разводят
@@ -760,19 +793,34 @@ describe('aspect_create (§Б2-1, §С3)', () => {
   test('дубль в составе и keyFields мимо состава — отказ ДО записи', async () => {
     // Формы, которых сид не породит: два `propertyId` на одно свойство (rank и required
     // разошлись бы у одного поля) и ключевое поле карточки, которого в составе нет.
+    //
+    // ПАРА «KEY + UUID» ОДНОГО СВОЙСТВА, а не один литерал дважды: у пользовательского свойства
+    // адрес двойной (Р3), и сравнение сырых строк такую пару пропустило бы — ловит её только
+    // счёт ПОСЛЕ резолва. Два одинаковых литерала проверяли бы правило, которого нет.
+    const twice = ok(
+      await runAs('property_create', {
+        key: 'user/twice',
+        label: { ru: 'Дважды названное' },
+        description: { ru: 'x' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const twiceId = (twice.results[0] as { property: string }).property;
     const dup = err(
       await runAs('aspect_create', {
         key: 'user/dup',
         label: { ru: 'Дубль' },
         description: { ru: 'x' },
         properties: [
-          { propertyId: 'orbis/priority', required: false },
-          // ТОТ ЖЕ адрес другим именем — резолв к id это ловит, а сравнение строк не поймало бы.
-          { propertyId: 'orbis/priority', required: true },
+          { propertyId: 'user/twice', required: false },
+          { propertyId: twiceId, required: true },
         ],
       }),
     );
     expect((dup.details as { reason?: string }).reason).toBe('PROPERTY_DUPLICATE');
+    // Отказ называет РЕЗОЛВЛЕННЫЙ адрес — тот, по которому дубль и обнаружен.
+    expect((dup.details as { property?: string }).property).toBe(twiceId);
     const keyf = err(
       await runAs('aspect_create', {
         key: 'user/keyf',
