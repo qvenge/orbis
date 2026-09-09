@@ -24,6 +24,7 @@ import {
   RULE_NEAREST_ANCESTOR,
   relationCreateInput,
   relationDeleteInput,
+  surfaceModuleOf,
 } from '@orbis/shared';
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
 // на сервер и клиент; своей копии у executor'а нет и быть не должно.
@@ -36,7 +37,7 @@ import {
   queryRefsFromDoc,
 } from '@orbis/shared/doc';
 import { OWNER_LOCALE } from '@orbis/shared/query';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   assertEnvelopeUnique,
@@ -75,14 +76,23 @@ import {
   mergeProperty,
   type PropertyRow,
   readAspectDelta,
+  readContractDelta,
   readOwnAspect,
   readOwnProperty,
+  readSubscriptionDelta,
+  readSubscriptionRow,
   removeAspectDelta,
   removeAspectImplements,
+  removeContractDelta,
+  removeOwnSubscription,
+  removeSubscriptionDelta,
   restoreAspectRow,
   restorePropertyRow,
   setAspectDelta,
   setAspectImplements,
+  setContractDelta,
+  setOwnSubscription,
+  setSubscriptionDelta,
   undoMerge,
   updateProperty,
 } from '../registry/ops';
@@ -106,10 +116,14 @@ import {
   aspectDeltaSetInput,
   aspectImplementsRemoveInput,
   aspectImplementsSetInput,
+  contractSetsDeltaRemoveInput,
+  contractSetsDeltaSetInput,
   propertyCreateInput,
   propertyMergeInput,
   propertyUpdateInput,
   REGISTRY_TOOL_NAMES,
+  subscriptionRemoveInput,
+  subscriptionSetInput,
 } from '../tools/registry-tools';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
@@ -263,7 +277,11 @@ export type WireRegistryResult =
   | { property: string; key: string }
   | { property: string }
   | { source: string; into: string; rewrittenEntities: number; rewrittenQueries: number }
-  | { aspect: string };
+  | { aspect: string }
+  // Подписка и контракт — адрес строки реестра, которую тронула операция части Б (§Б5-1,
+  // §Б1-1): та же форма ответа, что у свойства и аспекта, и по той же причине.
+  | { subscription: string }
+  | { contract: string };
 
 interface OpOutcome {
   result: WireEntity | WireRelation | WireOrigin | WireEntityVersion | WireRegistryResult;
@@ -907,6 +925,10 @@ async function prepareOp(
   if (tool === 'aspect_create') return prepareAspectCreate(ctx, input);
   if (tool === 'aspect_implements_set') return prepareAspectImplementsSet(ctx, input);
   if (tool === 'aspect_implements_remove') return prepareAspectImplementsRemove(ctx, input);
+  if (tool === 'subscription_set') return prepareSubscriptionSet(ctx, input);
+  if (tool === 'subscription_remove') return prepareSubscriptionRemove(ctx, input);
+  if (tool === 'contract_sets_delta_set') return prepareContractSetsDeltaSet(ctx, input);
+  if (tool === 'contract_sets_delta_remove') return prepareContractSetsDeltaRemove(ctx, input);
   if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
   if (tool === 'property_merge_undo') return preparePropertyMergeUndo(ctx, input);
@@ -3387,6 +3409,225 @@ async function prepareAspectImplementsRemove(
         });
       }
       return { result: { aspect: input.aspect } };
+    },
+  };
+}
+
+/**
+ * `user/…` — СВОЯ строка подписки, всё прочее — ДЕЛЬТА поверх системной (рамка Б1.13, §Б5-1).
+ * Один тул с веткой по адресу, а не два тула: вопрос владельца один — «пусть поверхность
+ * читает вот это», и разводить его по двум именам значило бы заставлять модель знать
+ * устройство хранилища.
+ *
+ * ПОЧЕМУ СВОЯ ПОДПИСКА НА ЗАНЯТУЮ ПОВЕРХНОСТЬ — ОТКАЗ, А НЕ ЗАПИСЬ. Движки Б-1 адресуют
+ * подписку ПО ID (`agendaSubscriptionOf`, `budgetOverviewOf`), а не по поверхности: своя
+ * строка рядом с системной легла бы в снимок и не была бы прочитана никем — тул отрапортовал
+ * бы успех о настройке, которой не видно нигде. Условие снятия гейта названо: движок начнёт
+ * выбирать подписку поверхности по `rank` (§Б5-1) — тогда здесь останется только проверка
+ * namespace.
+ */
+async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(subscriptionSetInput, rawInput, 'subscription_set');
+  const journal = registryPlan(
+    'subscription_set',
+    'subscription_set',
+    `Настройка подписки «${input.id}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const ownerId = applyCtx.req.actorUserId;
+      const current = await readSubscriptionRow(applyCtx.tx, ownerId, input.id);
+      if (input.id.startsWith('user/')) {
+        const occupied = await readSurfaceOwner(applyCtx.tx, ownerId, input.surface, input.id);
+        if (occupied !== null) {
+          throw new ExecError(
+            'VALIDATION',
+            `поверхность «${input.surface}» уже описана подпиской «${occupied}» — настройте её (§Б5-1)`,
+            { reason: 'SURFACE_TAKEN', surface: input.surface, subscription: occupied },
+          );
+        }
+        await setOwnSubscription(applyCtx.tx, ownerId, {
+          id: input.id,
+          ownerId,
+          surface: input.surface,
+          definition: input.definition,
+          module: surfaceModuleOf(input.surface),
+          rank: current?.rank ?? OWN_SUBSCRIPTION_RANK,
+        });
+        journal.operations.push({ op: 'subscription_set', payload: { ...input } });
+        journal.inverse.push(
+          current === null
+            ? { op: 'subscription_remove', payload: { id: input.id } }
+            : {
+                op: 'subscription_set',
+                payload: {
+                  id: current.id,
+                  surface: current.surface,
+                  definition: current.definition,
+                },
+              },
+        );
+      } else {
+        if (current === null) {
+          throw new ExecError('NOT_FOUND', `подписки ${input.id} нет в реестре`, {
+            subscription: input.id,
+          });
+        }
+        // Поверхность дельтой не меняется: она свойство САМОЙ подписки, а дельта заменяет
+        // только декларацию. Несовпадение — отказ, а не тихое игнорирование поля конверта.
+        if (current.surface !== input.surface) {
+          throw new ExecError(
+            'VALIDATION',
+            `подписка ${input.id} описывает поверхность «${current.surface}», а не «${input.surface}»`,
+            {
+              reason: 'SUBSCRIPTION_SURFACE_MISMATCH',
+              subscription: input.id,
+              surface: current.surface,
+            },
+          );
+        }
+        const before = await readSubscriptionDelta(applyCtx.tx, ownerId, input.id);
+        await setSubscriptionDelta(applyCtx.tx, ownerId, input.id, {
+          definition: input.definition,
+        });
+        journal.operations.push({ op: 'subscription_set', payload: { ...input } });
+        journal.inverse.push(
+          before === null
+            ? { op: 'subscription_remove', payload: { id: input.id } }
+            : {
+                op: 'subscription_set',
+                payload: {
+                  id: input.id,
+                  surface: current.surface,
+                  definition: before.definition,
+                },
+              },
+        );
+      }
+      return { result: { subscription: input.id } };
+    },
+  };
+}
+
+/** Ранг своей подписки: системные сиды занимают 1..N (§Б5-1), своя встаёт за ними. */
+const OWN_SUBSCRIPTION_RANK = 1000;
+
+/** Кто ещё описывает эту поверхность (кроме самого адресата) — id или null. */
+async function readSurfaceOwner(
+  tx: Tx,
+  ownerId: string,
+  surface: string,
+  exceptId: string,
+): Promise<string | null> {
+  const rows = (await tx.execute(sql`
+    SELECT id FROM subscription_definitions
+     WHERE surface = ${surface} AND id <> ${exceptId}
+       AND (owner_id IS NULL OR owner_id = ${ownerId}::uuid) LIMIT 1`)) as unknown as Array<{
+    id: string;
+  }>;
+  return rows[0]?.id ?? null;
+}
+
+async function prepareSubscriptionRemove(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(subscriptionRemoveInput, rawInput, 'subscription_remove');
+  const journal = registryPlan(
+    'subscription_removed',
+    'subscription_remove',
+    `Подписка «${input.id}» снята`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const ownerId = applyCtx.req.actorUserId;
+      const current = await readSubscriptionRow(applyCtx.tx, ownerId, input.id);
+      journal.operations.push({ op: 'subscription_remove', payload: { ...input } });
+      if (input.id.startsWith('user/')) {
+        if (current === null || current.ownerId === null) {
+          throw new ExecError('NOT_FOUND', `своей подписки ${input.id} нет`, {
+            subscription: input.id,
+          });
+        }
+        await removeOwnSubscription(applyCtx.tx, ownerId, input.id);
+        journal.inverse.push({
+          op: 'subscription_set',
+          payload: {
+            id: current.id,
+            surface: current.surface,
+            definition: current.definition,
+          },
+        });
+      } else {
+        const before = await readSubscriptionDelta(applyCtx.tx, ownerId, input.id);
+        await removeSubscriptionDelta(applyCtx.tx, ownerId, input.id);
+        // Прежней настройки не было — возвращать нечего; inverse пуст, как у `aspect_delta_remove`.
+        if (before !== null && current !== null) {
+          journal.inverse.push({
+            op: 'subscription_set',
+            payload: {
+              id: input.id,
+              surface: current.surface,
+              definition: before.definition,
+            },
+          });
+        }
+      }
+      return { result: { subscription: input.id } };
+    },
+  };
+}
+
+async function prepareContractSetsDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(contractSetsDeltaSetInput, rawInput, 'contract_sets_delta_set');
+  const journal = registryPlan(
+    'contract_sets_delta_set',
+    'contract_sets_delta_set',
+    `Настройка наборов контракта «${input.contract}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const before = await readContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract);
+      await setContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract, {
+        setsDelta: input.setsDelta,
+      });
+      journal.operations.push({ op: 'contract_sets_delta_set', payload: { ...input } });
+      journal.inverse.push(
+        before === null
+          ? { op: 'contract_sets_delta_remove', payload: { contract: input.contract } }
+          : {
+              op: 'contract_sets_delta_set',
+              payload: { contract: input.contract, setsDelta: before.setsDelta },
+            },
+      );
+      return { result: { contract: input.contract } };
+    },
+  };
+}
+
+async function prepareContractSetsDeltaRemove(
+  _ctx: ExecCtx,
+  rawInput: unknown,
+): Promise<PreparedOp> {
+  const input = parseEnvelope(contractSetsDeltaRemoveInput, rawInput, 'contract_sets_delta_remove');
+  const journal = registryPlan(
+    'contract_sets_delta_removed',
+    'contract_sets_delta_remove',
+    `Наборы контракта «${input.contract}» сброшены`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const before = await readContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract);
+      await removeContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract);
+      journal.operations.push({ op: 'contract_sets_delta_remove', payload: { ...input } });
+      if (before !== null) {
+        journal.inverse.push({
+          op: 'contract_sets_delta_set',
+          payload: { contract: input.contract, setsDelta: before.setsDelta },
+        });
+      }
+      return { result: { contract: input.contract } };
     },
   };
 }

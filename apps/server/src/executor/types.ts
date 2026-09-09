@@ -212,6 +212,10 @@ export interface ActionRecord {
   // сведён к `aspect_created`: у свойств восстановление строки ложится под `property_updated`
   // (правка — тоже правка), а «снос строки аспекта» под заголовком «Заведён аспект» врал бы
   // владельцу в списке «отмени последнее» ровно там, где он читает, что отменяет.
+  //
+  // subscription_set / subscription_removed / contract_sets_delta_set /
+  // contract_sets_delta_removed — операции реестра ЧАСТИ Б (§Б5-1, §Б1-1). `entity_id: null` по
+  // тому же доводу, что у пяти реестровых операций среза А: меняется устройство системы.
   type:
     | 'entity_created'
     | 'entity_updated'
@@ -230,6 +234,10 @@ export interface ActionRecord {
     | 'aspect_implements_set'
     | 'aspect_implements_removed'
     | 'aspect_row_restored'
+    | 'subscription_set'
+    | 'subscription_removed'
+    | 'contract_sets_delta_set'
+    | 'contract_sets_delta_removed'
     | 'batch';
   entity_id: string | null;
   actor_user_id: string;
