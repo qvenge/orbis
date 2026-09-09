@@ -1297,8 +1297,9 @@ export function buildToolDefs(
  * Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого неслужебного аспекта (§7.6).
  *
  * Маска читается ЗДЕСЬ: через эту функцию идут ТРИ из четырёх поверхностей — MCP
- * (`mcp/server.ts:59`), чат (`ai/send-message.ts:321`), рутина (`routines/runner.ts:256`).
- * Четвёртая, диспатч (`tools/dispatch.ts:197`), берёт маску сама: снимок у неё уже свой.
+ * (`mcp/server.ts`), чат (`ai/send-message.ts`), рутина (`routineToolDefs`, `routines/runner.ts`).
+ * Четвёртая, диспатч (`dispatchTool`, `tools/dispatch.ts`), берёт маску сама: снимок у неё
+ * уже свой.
  */
 export async function buildToolRegistry(tx: Tx, ownerId: string): Promise<OrbisToolDef[]> {
   return buildToolDefs(await effectiveRegistry(tx, ownerId), await disabledModulesOf(tx, ownerId));

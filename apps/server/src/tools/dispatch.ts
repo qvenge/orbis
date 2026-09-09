@@ -22,6 +22,7 @@ import {
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
+  type ModuleId,
   moduleOfTool,
   newId,
   pendingMessageId,
@@ -209,11 +210,9 @@ export async function dispatchTool(
       const defs = buildToolDefs(reg, disabled);
       const def = defs.find((d) => d.name === name);
       if (!def) {
-        // Вторая линия отказа (§Б8-3): тул СУЩЕСТВУЕТ, но его модуль выключен. «Неизвестный
-        // тул» здесь был бы ложью — модель решила бы, что такого тула в системе нет вовсе.
-        const hidden = buildToolDefs(reg).find((d) => d.name === name);
-        if (hidden) {
-          const module = moduleOfTool(hidden.name, reg);
+        // Вторая линия отказа §Б8-3 — та же функция, что у операции внутри пачки.
+        const module = hiddenToolModule(name, reg, disabled);
+        if (module !== undefined) {
           return {
             kind: 'done',
             out: errorResult(
@@ -303,6 +302,8 @@ export async function dispatchTool(
         reg,
         keyFieldsByAspect: keyFieldsByAspect(reg),
         knownTools: knownToolNames(defs),
+        // Маска доезжает до `runMutation`: вторая линия отказа §Б8-3 нужна и внутри пачки.
+        disabled,
       };
     });
     if (pre.kind === 'unknown') {
@@ -447,7 +448,15 @@ export async function dispatchTool(
       // отработали выше; envelope разбирается здесь, как у глаголов.
       return await runAsk(ctx, parseEnvelope(askInput, input, pre.def.name));
     }
-    return await runMutation(ctx, pre.def, input, pre.reg, pre.keyFieldsByAspect, pre.knownTools);
+    return await runMutation(
+      ctx,
+      pre.def,
+      input,
+      pre.reg,
+      pre.keyFieldsByAspect,
+      pre.knownTools,
+      pre.disabled,
+    );
   } catch (e) {
     // Доменные отказы (NOT_FOUND, VALIDATION, ...) — структурированный error-результат;
     // инфраструктурные ошибки и баги не маскируются (та же дисциплина, что в execute)
@@ -473,6 +482,8 @@ type Resolution =
       keyFieldsByAspect: Map<string, string[]>;
       /** Имена тулов реестра — гейт вложенных операций batch (перевода имён больше нет). */
       knownTools: ReadonlySet<string>;
+      /** Маска модулей вызова (§Б8-3) — вторая линия отказа для операций внутри пачки. */
+      disabled: readonly string[];
     };
 
 function errorResult(code: string, message: string, details?: unknown): ToolDispatchResult {
@@ -854,6 +865,7 @@ async function runMutation(
   reg: RegistrySnapshot,
   keyFieldsMap: Map<string, string[]>,
   knownTools: ReadonlySet<string>,
+  disabled: readonly string[],
 ): Promise<ToolDispatchResult> {
   // Имя тула — ОДНО на реестр, диспатч и исполнителя (общая `attachToolName`, §А9-1):
   // переводить его здесь больше не во что.
@@ -865,7 +877,7 @@ async function runMutation(
   const tool = def.name;
   const batchPayload =
     def.name === 'batch_execute'
-      ? validateBatchOperations(assertBatchToolsKnown(input, knownTools))
+      ? validateBatchOperations(assertBatchToolsKnown(input, knownTools, reg, disabled))
       : undefined;
   const payload = batchPayload ?? validateMutationEnvelope(def, input);
 
@@ -2908,15 +2920,48 @@ function knownToolNames(defs: OrbisToolDef[]): ReadonlySet<string> {
   return new Set(defs.map((d) => d.name));
 }
 
-function assertBatchToolsKnown(input: unknown, known: ReadonlySet<string>): BatchExecuteInput {
+/**
+ * ВТОРАЯ ЛИНИЯ ОТКАЗА §Б8-3, общая для одиночного вызова и для операции ВНУТРИ пачки: имя
+ * есть в НЕМАСКИРОВАННОМ реестре — значит тул существует, а выключен его модуль.
+ * «Неизвестный тул» здесь был бы ложью: модель решила бы, что такого тула в системе нет
+ * вовсе, и стала бы искать обход вместо того, чтобы сказать владельцу про модуль.
+ *
+ * Немаскированный реестр собирается ТОЛЬКО на пути отказа и только при непустой маске:
+ * общий путь второй сборки не платит. `null` — тула нет и без маски.
+ */
+function hiddenToolModule(
+  name: string,
+  reg: RegistrySnapshot,
+  disabled: readonly string[],
+): ModuleId | null | undefined {
+  if (disabled.length === 0) return undefined;
+  const hidden = buildToolDefs(reg).find((d) => d.name === name);
+  return hidden === undefined ? undefined : moduleOfTool(hidden.name, reg);
+}
+
+function assertBatchToolsKnown(
+  input: unknown,
+  known: ReadonlySet<string>,
+  reg: RegistrySnapshot,
+  disabled: readonly string[],
+): BatchExecuteInput {
   const parsed = parseEnvelope(batchExecuteInput, input, 'batch_execute');
   for (const [index, op] of parsed.operations.entries()) {
-    if (!known.has(op.tool)) {
-      throw new ExecError('VALIDATION', `batch_execute: неизвестный тул операции «${op.tool}»`, {
-        index,
-        tool: op.tool,
-      });
+    if (known.has(op.tool)) continue;
+    // Та же вторая линия, что у одиночного вызова (Ф-Б1-57в): пачка не вправе отвечать про
+    // скрытый маской тул иначе, чем одиночный вызов того же тула.
+    const module = hiddenToolModule(op.tool, reg, disabled);
+    if (module !== undefined) {
+      throw new ExecError(
+        'MODULE_DISABLED',
+        `batch_execute: тул «${op.tool}» принадлежит выключенному модулю «${module}» (§Б8-3)`,
+        { index, tool: op.tool, module },
+      );
     }
+    throw new ExecError('VALIDATION', `batch_execute: неизвестный тул операции «${op.tool}»`, {
+      index,
+      tool: op.tool,
+    });
   }
   return parsed;
 }

@@ -10,10 +10,10 @@ import { isModuleEnabled } from '@orbis/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { agentGrants } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { ExecError } from '../errors';
 import type { RegistrySnapshot } from '../registry/load';
+import { ExecError } from './errors';
 import type { EntityState } from './props';
-import type { MutationSource } from './types';
+import type { MutationMechanism, MutationSource } from './types';
 
 /**
  * Титулы сущностей для человекочитаемых сообщений: виртуальные (созданные batch'ем) —
@@ -202,13 +202,25 @@ export function assertRoutineUntouchable(
  *
  * `aspects` — только ДОБАВЛЯЕМЫЕ аспекты, а не итоговое состояние: иначе правка суммы
  * существующей транзакции ловилась бы вместе с созданием новой.
+ *
+ * `mechanism` — вторая ось того же вопроса «чья это запись»: см. ветку `materialize` ниже.
  */
 export function assertModuleEnabled(
   reg: RegistrySnapshot,
   disabled: readonly string[],
+  mechanism: MutationMechanism,
   aspects: readonly string[],
 ): void {
   if (disabled.length === 0) return; // общий путь — без единого обращения к реестру
+  // МАТЕРИАЛИЗАЦИЯ — НЕ СОЗДАНИЕ (Ф-Б1-57а). Инстанс повторяющегося рождает сервер как
+  // СЛЕДСТВИЕ уже существующего шаблона владельца, а не как новую его запись, и §Б8-3
+  // запрещает второе, а не первое. Гейт на этом пути стоил бы буквы §С1-3 п.9: финансовый
+  // recurring-шаблон при выключенных Финансах переставал бы материализоваться, каждая
+  // выборка Повестки писала бы warn (`recurring/materialize.ts`, ветка «прочие отказы») и
+  // молча теряла строки инстансов — то есть выключение одного модуля меняло бы результат
+  // ЧУЖОЙ подписки. Ось отдельная от `internalUndo` намеренно: тот про откат своей же
+  // записи, этот — про происхождение записи вообще.
+  if (mechanism === 'materialize') return;
   for (const id of aspects) {
     const module = reg.aspects.get(id)?.module ?? null;
     if (isModuleEnabled(module, disabled)) continue;

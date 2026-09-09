@@ -1716,7 +1716,7 @@ async function prepareEntityCreate(
   });
   // Гейт §Б8-3 — ДО гейта флагов и по тому же доводу: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы». У create ДОБАВЛЯЕМЫЕ аспекты — это всё состояние.
-  assertModuleEnabled(ctx.registry, ctx.disabledModules, state.aspects);
+  assertModuleEnabled(ctx.registry, ctx.disabledModules, ctx.mechanism, state.aspects);
   // Гейт флагов (§А2-5/Б6) — ДО валидации значений: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы», когда запись запрещена независимо от значения.
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
@@ -2026,6 +2026,7 @@ async function prepareEntityUpdate(
       assertModuleEnabled(
         ctx.registry,
         ctx.disabledModules,
+        ctx.mechanism,
         state.aspects.filter((a) => !before.aspects.includes(a)),
       );
       // Гейт флагов (§А2-5/Б6). Внутренний undo его ПРОПУСКАЕТ — ровно как семь проверок
@@ -2325,6 +2326,7 @@ async function prepareAttach(
   assertModuleEnabled(
     ctx.registry,
     ctx.disabledModules,
+    ctx.mechanism,
     before.aspects.includes(aspectId) ? [] : [aspectId],
   );
   // Гейт флагов (§А2-5/Б6) и стадия 2 — по итоговому состоянию; `DEPRECATED` — по
@@ -3156,7 +3158,7 @@ const propertyRowRestoreInput = z
  * Вход `module_set` — ТА ЖЕ схема, что читает ручка `user.setModuleEnabled` (объявлена в
  * `packages/shared/src/registry/modules.ts`). Второй, «похожей» схемы здесь нет намеренно:
  * два описания одной операции разъехались бы — тот же довод, что в докблоке
- * `registryMutation` (`routers/registry.ts:40-46`).
+ * `registryMutation` (`routers/registry.ts`).
  */
 const moduleSetInput = setModuleEnabledInput;
 
@@ -3335,10 +3337,23 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
 /**
  * Переключение модуля (§Б8-1 №28). ВНУТРЕННЯЯ операция, как `property_row_restore`: в
  * `CORE_TOOLS`/`REGISTRY_TOOLS` её нет, реестр тулов такого имени не резолвит — значит ни
- * модель, ни рутина её не позовут (`dispatchTool` ответит «неизвестный тул»). Единственный
- * вход — ручка владельца `user.setModuleEnabled`.
+ * модель, ни рутина её не позовут (`dispatchTool` ответит «неизвестный тул», а внутри
+ * `batch_execute` — `MODULE_DISABLED`/«неизвестный тул операции»). Единственный вход —
+ * ручка владельца `user.setModuleEnabled`.
+ *
+ * ГЕЙТ ПО АКТОРУ (Ф-Б1-57г) — защита в глубину, а не дубль: снаружи операцию держит резолв
+ * диспатча, но `execute()` доступен ЛЮБОМУ серверному пути, и обещание «единственный вход —
+ * владелец» иначе держал бы чужой код. Переключение модуля меняет всё, что видит владелец,
+ * — цена ошибки тут несимметрична: лишний отказ агенту дешевле молчаливой перенастройки.
+ * Код `FORBIDDEN_LEVEL` (§7.10 «forbidden»), как у прочих запретов по актору/источнику.
  */
-async function prepareModuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+async function prepareModuleSet(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  if (ctx.req.actorKind !== 'owner') {
+    throw new ExecError('FORBIDDEN_LEVEL', 'переключение модуля — операция владельца (§Б8-1 №28)', {
+      tool: 'module_set',
+      actorKind: ctx.req.actorKind,
+    });
+  }
   const input = parseEnvelope(moduleSetInput, rawInput, 'module_set');
   const journal = registryPlan(
     'module_set',

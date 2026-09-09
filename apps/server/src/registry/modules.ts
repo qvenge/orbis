@@ -6,9 +6,10 @@ import type { Tx } from '../db/with-identity';
 
 /**
  * Маска включённости (§Б8-3) — ОТДЕЛЬНО от снимка реестра и намеренно. Тем же снимком
- * (`cache.ts:114`) резолвятся СОХРАНЁННЫЕ AST на чтении (`query/context.ts:67`), а §Б8-3
+ * (`effectiveRegistry`, `registry/cache.ts`) резолвятся СОХРАНЁННЫЕ AST на чтении
+ * (`queryContext`, `query/context.ts`), а §Б8-3
  * требует: определения выключенного модуля остаются резолвимыми. Второй довод —
- * `user.updateSettings` не двигает `registry_version` (`routers/user.ts:67-81`), и маска
+ * `user.updateSettings` (`routers/user.ts`) не двигает `registry_version`, и маска
  * внутри снимка застревала бы в процессном кеше.
  *
  * Следствие, названное вслух: кэш `spent` (`budget/spent-cache.ts`) при переключении модуля
@@ -21,7 +22,7 @@ export async function disabledModulesOf(tx: Tx, ownerId: string): Promise<readon
     disabled_modules: string[] | null;
   }[];
   // Строки настроек может не быть (владелец не проходил онбординг) — законный случай:
-  // ничего не выключено. Тот же приём, что у readRegistryVersions (`version.ts:73`).
+  // ничего не выключено. Тот же приём, что у `readRegistryVersions` (`registry/version.ts`).
   return rows[0]?.disabled_modules ?? [];
 }
 

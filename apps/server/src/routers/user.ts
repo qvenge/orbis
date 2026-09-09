@@ -92,7 +92,8 @@ export const userRouter = router({
 
   /**
    * §Б8-1 №28: трансляция в операцию тем же приёмом, что `registryMutation`
-   * (`routers/registry.ts:48`) — `actorKind: 'owner'`, `source: 'ui'`, одна операция.
+   * (`registryMutation`, `routers/registry.ts`) — `actorKind: 'owner'`, `source: 'ui'`, одна
+   * операция.
    * `updateSettingsInput` модулями НЕ расширяется: у одной настройки было бы два пути
    * записи — один с журналом и undo, другой без.
    */

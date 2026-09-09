@@ -8,6 +8,7 @@ import {
   modulePromptFragments,
   SURFACE_RE,
   SURFACES,
+  SWITCHABLE_MODULE_IDS,
   setModuleEnabledInput,
   surfaceModuleOf,
 } from './modules';
@@ -78,6 +79,13 @@ describe('манифест модуля (§Б8-1): состав вне реес�
       true,
     );
     expect(setModuleEnabledInput.safeParse({ module: 'nope', enabled: false }).success).toBe(false);
+    // Ф-Б1-57б: переключается ТОЛЬКО `finance` — у остальных четырёх серверной половины
+    // §Б8-1 в Б-1 нет, и выключение дало бы владельцу ПОЛОВИНУ выключения (реестр снялся бы,
+    // проза промпта осталась).
+    expect([...SWITCHABLE_MODULE_IDS]).toEqual(['finance']);
+    for (const m of MODULE_IDS.filter((id) => id !== 'finance')) {
+      expect(setModuleEnabledInput.safeParse({ module: m, enabled: false }).success).toBe(false);
+    }
     expect(
       setModuleEnabledInput.safeParse({ module: 'finance', enabled: false, x: 1 }).success,
     ).toBe(false);

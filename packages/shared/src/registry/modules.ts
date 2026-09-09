@@ -39,7 +39,7 @@ export const SURFACE_ENGINE = {
 /**
  * Манифест модуля (§Б8-1) — всё, чего НЕТ в колонке `module` строк реестров. Реестровая
  * половина состава Финансов (18 свойств + 3 аспекта + 2 роли) уже размечена данными
- * (`builtin-aspects.ts:121/:164/:187`) и здесь не дублируется: два списка одного состава
+ * (колонкой `module` в `builtin-aspects.ts`) и здесь не дублируется: два списка одного состава
  * разошлись бы на первой новой строке.
  */
 export interface ModuleManifest {
@@ -53,7 +53,8 @@ export interface ModuleManifest {
 /**
  * Блок «Бюджет» — ДОСЛОВНО четыре строки `llm/prompts/v5.ts:83-86`. `spend_class` в нём —
  * ключ ОТВЕТА тула `budget_status`, и тот же текст стоит в описании тула
- * (`tools/registry.ts:1100`): правка одной стороны развела бы фрагмент с описанием.
+ * (деф тула `budget_status` в `tools/registry.ts`): правка одной стороны развела бы
+ * фрагмент с описанием.
  */
 const FIN_BUDGET_TEXT =
   'Бюджет (тул budget_status):\n- Финансовые вопросы — «что по бюджету?», «могу позволить X?», остатки конвертов, распределение бюджета — решай вызовом budget_status: он возвращает готовые агрегаты месяца (конверты со spent/remaining/dailyPace, баланс, comingUp, planned, unbudgeted) и spend_class категорий. Не пересчитывай эти агрегаты вручную через entity_query/user_query.\n- Свободные деньги («могу позволить?»): сумма remaining конвертов категорий со spend_class=discretionary МИНУС будущие planned-оттоки — записи planned и comingUp из budget_status, брать только direction=expense: доходные инстансы (например, будущую зарплату из comingUp) НЕ вычитай. Будущие recurring-платежи УЖЕ входят туда как planned-инстансы — НЕ суммируй recurring отдельно: это двойной вычет.\n- Категорию без spend_class не включай в расчёт молча — явно попроси пользователя классифицировать её (fixed/discretionary).';
@@ -129,7 +130,7 @@ export const MODULE_MANIFESTS: Readonly<Record<ModuleId, ModuleManifest>> = {
     surfaces: [],
     codeRemainder: [
       {
-        where: 'tools/registry.ts:267 — memory_rule_suggestion',
+        where: 'tools/registry.ts — вид карточки memory_rule_suggestion',
         why: '§Б8-1 называет её тулом; в коде это ВИД КАРТОЧКИ — уносить нечего до появления тула',
       },
     ],
@@ -176,10 +177,20 @@ export function modulePromptFragments(disabled: readonly string[]): string | nul
 }
 
 /**
+ * Модули, которые владелец вправе переключать СЕГОДНЯ (Ф-Б1-57б). В Б-1 это ровно
+ * `finance`: серверная половина §Б8-1 (тулы, фрагменты промпта, поверхность, врезки в
+ * движки) есть только у него, а манифесты остальных четырёх пусты до Б-3. Выключение
+ * `planner` сняло бы 15 строк реестра, attach-тулы и создание задач — но проза v6
+ * продолжила бы учить модель ставить `orbis/schedule`, то есть владелец получил бы
+ * ПОЛОВИНУ выключения. Список растёт вместе с модулями, а не заранее.
+ */
+export const SWITCHABLE_MODULE_IDS = ['finance'] as const satisfies readonly ModuleId[];
+
+/**
  * Схема входа объявлена ЗДЕСЬ: её читают и ручка `user.setModuleEnabled`, и стадия 1
  * исполнителя. Два «похожих» описания одной операции разъехались бы — тот же довод, что в
- * докблоке `registryMutation` (`routers/registry.ts:40-46`).
+ * докблоке `registryMutation` (`routers/registry.ts`, `registryMutation`).
  */
 export const setModuleEnabledInput = z
-  .object({ module: z.enum(MODULE_IDS), enabled: z.boolean() })
+  .object({ module: z.enum(SWITCHABLE_MODULE_IDS), enabled: z.boolean() })
   .strict();

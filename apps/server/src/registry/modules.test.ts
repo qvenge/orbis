@@ -5,7 +5,7 @@
 // Тесты интеграционные: одна живая БД под `withIdentity`, потому что предмет проверки —
 // СТРОКА `user_settings.disabled_modules` и то, что по ней видят четыре поверхности сразу.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { MODULE_IDS } from '@orbis/shared';
+import { addDays, MODULE_IDS, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   appDb,
@@ -23,6 +23,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import { undoLast } from '../executor/undo';
 import { buildContext } from '../llm/context';
 import { DEFAULT_TIMEZONE, ownerTimeZone } from '../query/context';
+import { materializeInstances } from '../recurring/materialize';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
@@ -56,10 +57,17 @@ function lastDayOf(month: string): string {
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 }
 // Категория сид-мира, а не выдуманный uuid: с §А6-1 ссылка обязана указывать на живую
-// категорию ТОГО ЖЕ владельца (`aggregates.test.ts:93`).
+// категорию ТОГО ЖЕ владельца (тот же приём, что в `budget/aggregates.test.ts`).
 const CATEGORY_ID = seedCategoryId(owner, 'food');
 let txId = '';
 let noteId = '';
+/**
+ * ВТОРОЙ носитель для attach-теста. Один `noteId` на два теста делал их зависимыми: снимите
+ * гейт update — и тест attach превращается в «повторный attach уже навешенного аспекта» и
+ * краснеет каскадом, скрывая, какой именно гейт сняли (гейт-ревью, мутация M2b: 2 fail
+ * вместо 1).
+ */
+let attachNoteId = '';
 
 async function seedOne(input: Record<string, unknown>): Promise<string> {
   const r = await execute(db, {
@@ -82,6 +90,12 @@ beforeAll(async () => {
   await truncateAll();
   await seedOwnerGraph(db, owner);
   noteId = await seedOne({ title: 'Заметка', tags: [], props: {}, aspects: ['orbis/note'] });
+  attachNoteId = await seedOne({
+    title: 'Заметка для attach',
+    tags: [],
+    props: {},
+    aspects: ['orbis/note'],
+  });
   txId = await seedOne({
     title: 'Такси',
     tags: [],
@@ -220,11 +234,30 @@ async function inverseOf(actionId: string): Promise<JournalAction['inverse'] | u
   return (await actionOf(actionId))?.inverse;
 }
 
+/** Переключение Финансов через исполнителя — с боевым синком, иначе журнала не будет. */
+function setFinance(enabled: boolean) {
+  return execute(
+    db,
+    {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled } }],
+    },
+    { sink },
+  );
+}
+
 describe('module_set: переключение — действие исполнителя с журналом и undo (§Б8-1 №28)', () => {
-  // Вход блока назван явно: `owner` пришёл из общего `beforeAll` без выключенных модулей,
-  // и полагаться на это молча значило бы завязать блок на порядок соседей.
+  // Вход блока назван явно: `owner` начинает без выключенных модулей, и полагаться на это
+  // молча значило бы завязать блок на порядок соседей.
   beforeEach(blockEntry([]));
 
+  /**
+   * Переключается ТОЛЬКО `finance` (Ф-Б1-57б): у остальных четырёх модулей серверной
+   * половины §Б8-1 в Б-1 нет, и схема входа их не принимает. Поэтому весь блок ходит по
+   * одному модулю, а «прежнее состояние» разводится ПОРЯДКОМ операций, а не вторым именем.
+   */
   test('ручка выключает модуль; настройки отдают маску наружу', async () => {
     await caller.user.setModuleEnabled({ module: 'finance', enabled: false });
     expect(await withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner))).toEqual([
@@ -234,56 +267,66 @@ describe('module_set: переключение — действие исполн
   });
 
   test('inverse — ПРЕЖНЕЕ состояние, а не обратный знак входа', async () => {
-    const r = await execute(
-      db,
-      {
-        actorUserId: owner,
-        actorKind: 'owner',
-        source: 'ui',
-        operations: [{ tool: 'module_set', input: { module: 'goals', enabled: false } }],
-      },
-      { sink },
-    );
+    // Вход теста: `finance` выключен предыдущим. Включаем и снова выключаем — прежним
+    // состоянием ВТОРОГО действия оказывается «включён», и его обязан вернуть inverse.
+    await setFinance(true);
+    const r = await setFinance(false);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const action = await actionOf(r.actionId);
     expect(action?.type).toBe('module_set');
     expect(action?.entity_id).toBeNull(); // меняется устройство системы, а не запись графа
     expect(action?.inverse).toEqual([
-      { op: 'module_set', payload: { module: 'goals', enabled: true } },
+      { op: 'module_set', payload: { module: 'finance', enabled: true } },
     ]);
   });
 
   test('undo возвращает модуль во включённое состояние', async () => {
-    // Второй аргумент — ОБЪЕКТ (`undo.ts:229`); последнее неотменённое действие журнала —
-    // выключение `goals` предыдущим тестом, `finance` остаётся выключенным.
+    // Второй аргумент — ОБЪЕКТ (`undoLast`, `executor/undo.ts`); последнее неотменённое действие
+    // журнала — выключение `finance` предыдущим тестом.
     expect((await undoLast(db, { actorUserId: owner })).ok).toBe(true);
-    expect(await withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner))).toEqual([
-      'finance',
-    ]);
+    expect(await withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner))).toEqual([]);
   });
 
   test('повтор выключения: inverse — «уже был выключен», а не обратный знак входа', async () => {
-    // Тест выше не различает две реализации: `goals` был ВКЛЮЧЁН, и «прежнее состояние» там
-    // совпадает с «обратным знаком входа». Различает их ПОВТОР: `finance` выключен с первого
-    // теста блока, и inverse обязан сказать «оставался выключенным». Обратный знак входа дал
-    // бы здесь `enabled: true` — то есть undo ВКЛЮЧИЛ бы модуль, которого это действие не
+    // Тест выше не различает две реализации: на СМЕНЕ состояния «прежнее состояние» и
+    // «обратный знак входа» совпадают всегда. Различает их ПОВТОР: второе выключение уже
+    // выключенного обязано сказать «оставался выключенным». Обратный знак входа дал бы
+    // здесь `enabled: true` — то есть undo ВКЛЮЧИЛ бы модуль, которого это действие не
     // выключало.
-    const r = await execute(
-      db,
-      {
-        actorUserId: owner,
-        actorKind: 'owner',
-        source: 'ui',
-        operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
-      },
-      { sink },
-    );
+    await setFinance(false);
+    const r = await setFinance(false);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(await inverseOf(r.actionId)).toEqual([
       { op: 'module_set', payload: { module: 'finance', enabled: false } },
     ]);
+  });
+
+  test('module_set — операция ВЛАДЕЛЬЦА: агенту и рутине отказ (Ф-Б1-57г)', async () => {
+    // Снаружи операция недостижима (её нет ни в одном реестре тулов), но обещание докблока
+    // «единственный вход — ручка владельца» держал бы чужой код. Гейт по актору — защита в
+    // глубину: `execute()` доступен всякому серверному пути.
+    const mask = () => withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner));
+    const before = await mask();
+    for (const actorKind of ['agent', 'ai'] as const) {
+      const denied = await execute(db, {
+        actorUserId: owner,
+        actorKind,
+        // Вход выбран ПРОТИВОПОЛОЖНЫМ текущему состоянию: пройди отказ мимо — маска
+        // изменилась бы, и сравнение ниже это увидело бы.
+        operations: [
+          {
+            tool: 'module_set',
+            input: { module: 'finance', enabled: !before.includes('finance') },
+          },
+        ],
+        source: 'mcp',
+      });
+      expect(denied.ok).toBe(false);
+      if (!denied.ok) expect(denied.error.code).toBe('FORBIDDEN_LEVEL');
+    }
+    expect(await mask()).toEqual(before);
   });
 });
 
@@ -316,7 +359,8 @@ describe('§С8-22: маска на реестре тулов — один фи�
   });
 
   test('вызов скрытого маской тула — MODULE_DISABLED, а не «неизвестный тул»', async () => {
-    // Порядок аргументов — (ctx, name, input) (`dispatch.ts:183`); форма контекста — `dispatch.test.ts:62-72`.
+    // Порядок аргументов — (ctx, name, input) (`dispatchTool`); форма контекста — как в
+    // `tools/dispatch.test.ts`.
     const ctx: ToolCallCtx = {
       db,
       actorUserId: owner,
@@ -329,6 +373,63 @@ describe('§С8-22: маска на реестре тулов — один фи�
     if (out.status !== 'error') return; // сужение союза: у ветки 'ok' поля `error` нет вовсе
     expect(out.error.code).toBe('MODULE_DISABLED');
     expect(out.error.details).toMatchObject({ tool: 'budget_status', module: 'finance' });
+  });
+
+  test('скрытый маской тул ВНУТРИ batch_execute — тот же MODULE_DISABLED (Ф-Б1-57в)', async () => {
+    // Пачка не вправе отвечать про тот же тул иначе, чем одиночный вызов: «неизвестный тул
+    // операции» научил бы модель, что тула нет вовсе, и она пошла бы искать обход вместо
+    // того, чтобы сказать владельцу про выключенный модуль.
+    const ctx: ToolCallCtx = {
+      db,
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'chat',
+      explicitCommand: false,
+    };
+    const out = await dispatchTool(ctx, 'batch_execute', {
+      batch_id: crypto.randomUUID(),
+      operations: [
+        {
+          tool: 'attach_orbis_financial',
+          input: {
+            entity_id: noteId,
+            data: {
+              'orbis/amount': '10.00',
+              'orbis/direction': 'expense',
+              'orbis/occurred_on': today,
+              'orbis/finance_category': CATEGORY_ID,
+            },
+          },
+        },
+      ],
+    });
+    expect(out.status).toBe('error');
+    if (out.status !== 'error') return;
+    expect(out.error.code).toBe('MODULE_DISABLED');
+    expect(out.error.details).toMatchObject({
+      index: 0,
+      tool: 'attach_orbis_financial',
+      module: 'finance',
+    });
+  });
+
+  test('в пачке НЕсуществующий тул остаётся «неизвестным», а не MODULE_DISABLED', async () => {
+    // Обратная сторона предыдущего: вторая линия отвечает только про тул, который в системе
+    // ЕСТЬ. Иначе опечатка в имени получала бы отказ про модуль, которого у неё нет.
+    const ctx: ToolCallCtx = {
+      db,
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'chat',
+      explicitCommand: false,
+    };
+    const out = await dispatchTool(ctx, 'batch_execute', {
+      batch_id: crypto.randomUUID(),
+      operations: [{ tool: 'attach_orbis_nonesuch', input: { entity_id: noteId, data: {} } }],
+    });
+    expect(out.status).toBe('error');
+    if (out.status !== 'error') return;
+    expect(out.error.code).toBe('VALIDATION');
   });
 });
 
@@ -449,7 +550,7 @@ describe('§С8-22: запись при выключенном модуле — 
       operations: [
         {
           tool: 'attach_orbis_category',
-          input: { entity_id: noteId, data: { 'orbis/icon': '🍏' } },
+          input: { entity_id: attachNoteId, data: { 'orbis/icon': '🍏' } },
         },
       ],
     });
@@ -500,7 +601,7 @@ describe('§С8-22: подписки и сохранённые AST при вык
   });
 
   test('сохранённый AST с orbis/amount продолжает резолвиться и находить записи (§Б8-3)', async () => {
-    // `entity.query` отдаёт МАССИВ строк (`routers/entity.ts:317-322`), не конверт с `items`.
+    // `entity.query` отдаёт МАССИВ строк (`routers/entity.ts`), не конверт с `items`.
     const found = await caller.entity.query({ query: 'aspect=orbis/financial, orbis/amount>100' });
     expect(found.length).toBeGreaterThan(0); // определения остаются резолвимыми на чтение
   });
@@ -516,6 +617,31 @@ describe('§С8-22: подписки и сохранённые AST при вык
     expect(
       (await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner))).map((d) => d.name),
     ).toContain('budget_status');
+  });
+
+  test('Планировщик выключен — Повестка пуста, ведомость Финансов не шелохнулась', async () => {
+    // Обратное направление той же врезки: без него врезка Agenda не покрыта ни одним тестом
+    // (мутация гейт-ревью «снять её целиком» была зелёной). Маска пишется НАПРЯМУЮ:
+    // `module_set` в Б-1 принимает только `finance` (Ф-Б1-57б), а движок спрашивает саму
+    // колонку — то есть путь проверяется тот же, что у прода после Б-3.
+    const budgetBefore = await budgetOverview(db, owner, curMonth);
+    expect(budgetBefore.envelopes.length).toBeGreaterThan(0);
+    expect((await agenda()).rows.length).toBeGreaterThan(0);
+    // `finally` — не вежливость: провались утверждение внутри, и `planner` остался бы
+    // выключенным, а соседний тест канала покраснел бы каскадом на чужой причине.
+    await setModules(['planner']);
+    try {
+      expect(await agenda()).toEqual({
+        today,
+        timezone: TZ,
+        rows: [],
+        truncated: { window: false, overdue: false },
+      });
+      // Консервативность §С1-3 п.9 в другую сторону: чужая подписка не шелохнулась
+      expect(await budgetOverview(db, owner, curMonth)).toEqual(budgetBefore);
+    } finally {
+      await setModules([]);
+    }
   });
 
   test('канал модели: проза Финансов и инструкции orbis/financial уходят вместе с модулем и возвращаются с ним (§Б8-3)', async () => {
@@ -543,5 +669,75 @@ describe('§С8-22: подписки и сохранённые AST при вык
     expect((await channel()).system).toBe(on); // включение возвращает канал байт-в-байт
     // Канал рутины (`routines/context.ts`) зовёт ту же `aspectInstructionsSection(tx, disabled)`
     // с той же маской — второго пути у инструкций нет, отдельного прогона не заводится.
+  });
+});
+
+describe('§Б8-3 против §С1-3 п.9: материализация — не создание (Ф-Б1-57а)', () => {
+  beforeEach(blockEntry([]));
+
+  test('финансовый recurring-шаблон материализуется при выключенных Финансах, без warn и без потери строк Повестки', async () => {
+    // Шаблон заводится при ВКЛЮЧЁННЫХ Финансах — это законная запись владельца. Дальше
+    // модуль выключается, и сервер обязан продолжать рождать инстансы: инстанс — следствие
+    // существующего шаблона, а не новая запись. Иначе выключение Финансов молча уносило бы
+    // строки ЧУЖОЙ подписки (Повестки) — буква §С1-3 п.9.
+    const templateId = await seedOne({
+      title: 'Аренда',
+      tags: [],
+      props: {
+        'orbis/start_at': `${today}T09:00:00+03:00`,
+        'orbis/timezone': TZ,
+        'orbis/recurrence': { freq: 'daily', interval: 1 },
+        'orbis/amount': '340.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CATEGORY_ID,
+        'orbis/recurring': true,
+      },
+      aspects: ['orbis/schedule', 'orbis/financial'],
+    });
+
+    await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
+    });
+
+    // `console.warn` — наблюдаемый след отказа: `materializeInstances` не роняет запрос
+    // вызывающего, а ПРОПУСКАЕТ шаблон с warn. Без перехвата тест зеленел бы на `created: 0`.
+    const warns: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warns.push(args.map(String).join(' '));
+    };
+    let created = 0;
+    try {
+      created = (
+        await materializeInstances({
+          db,
+          ownerId: owner,
+          from: today,
+          to: addDays(today, 2),
+          today,
+        })
+      ).created;
+    } finally {
+      console.warn = realWarn;
+    }
+    expect(warns.filter((w) => w.includes('recurring/materialize'))).toEqual([]);
+    expect(created).toBeGreaterThan(0);
+
+    // Инстансы видны в окне Повестки — то, что теряется, если гейт стоит на materialize.
+    const rows = await withIdentity(db, owner, async (tx) =>
+      agendaListOf(tx, owner, agendaSubscriptionOf(await effectiveRegistry(tx, owner)), {
+        today,
+        timeZone: TZ,
+        days: 3,
+      }),
+    );
+    const instanceIds = [today, addDays(today, 1), addDays(today, 2)].map((d) =>
+      recurringInstanceId(templateId, d),
+    );
+    expect(rows.rows.filter((r) => instanceIds.includes(r.entity.id)).length).toBeGreaterThan(0);
   });
 });
