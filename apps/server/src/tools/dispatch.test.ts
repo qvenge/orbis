@@ -4997,6 +4997,11 @@ describe('сводка мутации реестра: правила, а не с
       property_merge: { source: SOURCE, into: INTO },
       aspect_delta_set: { aspect: 'orbis/task', delta: { icon: '📌' } },
       aspect_delta_remove: { aspect: 'orbis/task' },
+      // Адрес аспекта здесь СВОЙ и в снимке `REG` отсутствует — `aspectName` честно отдаёт
+      // адрес; контракт `orbis/when` в снимке есть, и `contractName` отдаёт его подпись.
+      aspect_create: { key: 'user/sleep', label: { ru: 'Сон' }, properties: [] },
+      aspect_implements_set: { aspect: 'user/sleep', implements: [{ contract: 'orbis/when' }] },
+      aspect_implements_remove: { aspect: 'user/sleep', contract: 'orbis/when' },
     };
     expect(Object.keys(payloads).sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
 
@@ -5013,6 +5018,11 @@ describe('сводка мутации реестра: правила, а не с
       property_merge: 'Слияние свойств: «Усилие» → «Уровень усилия»',
       aspect_delta_set: 'Настройка аспекта «Задача»',
       aspect_delta_remove: 'Сброс настройки аспекта «Задача»',
+      // ДОСЛОВНО та же форма, что в пине «фразы семи тулов вехи II» ниже: фраза одна, мест её
+      // проверки два, и разойтись они не должны.
+      aspect_create: 'Заведение аспекта «Сон»',
+      aspect_implements_set: 'Привязка аспекта «user/sleep» к контрактам: «Когда»',
+      aspect_implements_remove: 'Снятие привязки аспекта «user/sleep» к контракту «Когда»',
     });
 
     for (const [tool, phrase] of Object.entries(phrases)) {
