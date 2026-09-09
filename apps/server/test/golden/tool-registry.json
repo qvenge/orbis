@@ -1810,7 +1810,8 @@
       "properties": {
         "key": {
           "type": "string",
-          "description": "ручка вида user/sleep-log — она же адрес аспекта"
+          "maxLength": 64,
+          "description": "ручка вида user/sleep-log — она же адрес аспекта и имя его attach_*-тула; не длиннее 64 символов, «-» и «_» в имени тула НЕ различаются"
         },
         "label": {
           "type": "object",

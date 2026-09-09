@@ -694,6 +694,85 @@ describe('aspect_create (§Б2-1, §С3)', () => {
     expect(undone.ok).toBe(false);
     if (!undone.ok) expect(undone.error.code).toBe('INVARIANT');
   });
+
+  test('два ключа с одним ИМЕНЕМ ТУЛА — отказ: attach_* сворачивает «-» и «/» в «_»', async () => {
+    // `attachToolName` нормализует НЕОБРАТИМО (`shared/registry/tool-schema.ts`), поэтому
+    // `user/a-b` и `user/a_b` дают один `attach_user_a_b`. Два дефа с одним именем разводят
+    // модель и исполнителя молча: `toSdkTools` (`Object.fromEntries`) оставляет модели схему
+    // ПОСЛЕДНЕГО, а `resolveAttachAspect` резолвит вызов в ПЕРВЫЙ — заполняются поля одного
+    // аспекта, надевается другой.
+    ok(
+      await runAs('aspect_create', {
+        key: 'user/a-b',
+        label: { ru: 'Дефис' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+      }),
+    );
+    const e = err(
+      await runAs('aspect_create', {
+        key: 'user/a_b',
+        label: { ru: 'Подчёркивание' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+      }),
+    );
+    expect([
+      e.code,
+      (e.details as { reason?: string }).reason,
+      (e.details as { cause?: string }).cause,
+    ]).toEqual(['VALIDATION', 'KEY_TAKEN', 'tool_name']);
+    // Проба не по ответу, а по ПОВЕРХНОСТИ: имена тулов уникальны.
+    const defs = await withIdentity(db, aspectOwner, (tx) => buildToolRegistry(tx, aspectOwner));
+    const names = defs.map((d) => d.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.filter((n) => n === 'attach_user_a_b')).toHaveLength(1);
+  });
+
+  test('ключ аспекта длиннее 64 — отказ схемы: имя тула уезжает провайдеру как есть', async () => {
+    const e = err(
+      await runAs('aspect_create', {
+        key: `user/${'a'.repeat(70)}`,
+        label: { ru: 'Длинный' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+      }),
+    );
+    expect(e.code).toBe('VALIDATION');
+    expect(
+      (e.details as { issues: { path: unknown[] }[] }).issues.some((i) => i.path.includes('key')),
+    ).toBe(true);
+  });
+
+  test('дубль в составе и keyFields мимо состава — отказ ДО записи', async () => {
+    // Формы, которых сид не породит: два `propertyId` на одно свойство (rank и required
+    // разошлись бы у одного поля) и ключевое поле карточки, которого в составе нет.
+    const dup = err(
+      await runAs('aspect_create', {
+        key: 'user/dup',
+        label: { ru: 'Дубль' },
+        description: { ru: 'x' },
+        properties: [
+          { propertyId: 'orbis/priority', required: false },
+          // ТОТ ЖЕ адрес другим именем — резолв к id это ловит, а сравнение строк не поймало бы.
+          { propertyId: 'orbis/priority', required: true },
+        ],
+      }),
+    );
+    expect((dup.details as { reason?: string }).reason).toBe('PROPERTY_DUPLICATE');
+    const keyf = err(
+      await runAs('aspect_create', {
+        key: 'user/keyf',
+        label: { ru: 'Ключевые поля' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+        viewConfig: { keyFields: ['orbis/due_date'] },
+      }),
+    );
+    expect((keyf.details as { reason?: string }).reason).toBe('KEYFIELD_NOT_CARRIED');
+    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    expect([reg.aspects.has('user/dup'), reg.aspects.has('user/keyf')]).toEqual([false, false]);
+  });
 });
 
 describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
@@ -871,6 +950,58 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
         implements: [{ contract: 'orbis/when', bind: { moment: intoId }, value_map: [] }],
       }),
     );
+  });
+
+  test('bind по KEY своего свойства ложится идентификатором — тот же адрес, что у состава', async () => {
+    // Один тул принимал адрес двумя правилами: `properties[].propertyId` резолвился
+    // (`resolvePropertyRef`), а значения `bind` уезжали как есть — и `checkImplements`,
+    // который ищет по id, отвечал `UNKNOWN_PROPERTY/absent` на свойство, которое есть и
+    // носится. `property_catalog` показывает модели KEY, значит именно им она и назовёт.
+    const prop = ok(
+      await runAs('property_create', {
+        key: 'user/gig-when',
+        label: { ru: 'Когда выступление' },
+        description: { ru: 'x' },
+        type: { kind: 'timestamp' },
+        status: 'active',
+      }),
+    );
+    const propertyId = (prop.results[0] as { property: string }).property;
+    ok(
+      await runAs('aspect_create', {
+        key: 'user/gig-by-key',
+        label: { ru: 'Выступление по ключу' },
+        description: { ru: 'x' },
+        // Состав — тоже по key: обе половины одного тула принимают один и тот же адрес.
+        properties: [{ propertyId: 'user/gig-when', required: false }],
+      }),
+    );
+    ok(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig-by-key',
+        implements: [{ contract: 'orbis/when', bind: { moment: 'user/gig-when' }, value_map: [] }],
+      }),
+    );
+    const reg = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    expect(reg.aspects.get('user/gig-by-key')?.implements[0]?.bind).toEqual({ moment: propertyId });
+  });
+
+  test('привязка НЕ носимого свойства — not_carried через тул, а не только в shared', async () => {
+    // `orbis/due_date` в реестре есть и по типу слоту `deadline` подходит — отказ приходит
+    // ровно от носимости: аспект обязан НЕСТИ то, что биндит (§Б2-1).
+    const e = err(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig',
+        implements: [
+          { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [] },
+        ],
+      }),
+    );
+    expect([
+      e.code,
+      (e.details as { reason?: string }).reason,
+      (e.details as { cause?: string }).cause,
+    ]).toEqual(['VALIDATION', 'UNKNOWN_PROPERTY', 'not_carried']);
   });
 
   test('снятие несуществующей привязки — NOT_FOUND, а не тихий успех', async () => {

@@ -33,6 +33,7 @@ import {
   type AspectPropertyRef,
   aspectDefinitionSchema,
   assertPatternRegular,
+  attachToolName,
   checkClassMap,
   checkImplements,
   type ImplementsIssue,
@@ -2185,6 +2186,33 @@ function assertImplements(next: AspectRow, ownerId: string, reg: RegistrySnapsho
   throw execErrorOfImplementsIssue(issue, { aspect: next.id });
 }
 
+/**
+ * АДРЕСА СВОЙСТВ В `bind` — К id, тем же резолвом, что состав аспекта (`resolvePropertyRef`).
+ *
+ * Один тул не вправе принимать адрес двумя правилами. `properties[].propertyId` резолвился, а
+ * значения `bind` уезжали как есть — и `checkImplements`, который ищет свойство ПО id, отвечал
+ * `UNKNOWN_PROPERTY/absent` на свойство, которое в реестре есть и аспектом носится. Модель
+ * при этом видит в `property_catalog` именно KEY (Р12), то есть промахивалась бы на главном
+ * жесте §Б2-4 — и отказ не называл бы выхода.
+ *
+ * Неразрешимый адрес уезжает КАК ПРИШЁЛ: назвать его должен чекер привязок, одним словарём с
+ * остальными замечаниями (`UNKNOWN_PROPERTY/absent`), а не второй отказ на ту же опечатку.
+ */
+function normalizeBindAddresses(
+  bindings: readonly AspectImplements[],
+  reg: RegistrySnapshot,
+): AspectImplements[] {
+  return bindings.map((b) => ({
+    ...b,
+    bind: Object.fromEntries(
+      Object.entries(b.bind).map(([slot, address]) => [
+        slot,
+        resolvePropertyRef(reg, address)?.id ?? address,
+      ]),
+    ),
+  }));
+}
+
 export interface CreateAspectInput {
   key: string;
   label: LocalizedText;
@@ -2218,6 +2246,22 @@ export async function createAspect(
       aspect: input.key,
     });
   }
+  // ЗАНЯТ НЕ ТОЛЬКО КЛЮЧ, НО И ИМЯ ТУЛА. `attachToolName` сворачивает и «/», и «-» в «_», и
+  // сворачивает НЕОБРАТИМО: `user/a-b` и `user/a_b` дают один `attach_user_a_b`. Два дефа с
+  // одним именем расходятся молча и в разные стороны — `toSdkTools` (`llm/ai-sdk.ts`,
+  // `Object.fromEntries`) оставляет модели схему ПОСЛЕДНЕГО, а `resolveAttachAspect`
+  // (`executor/executor.ts`) резолвит вызов в ПЕРВЫЙ: модель заполняет поля одного аспекта,
+  // надевается другой. Проба идёт по снимку целиком, значит и по встроенным `attach_*`.
+  const wantedTool = attachToolName(input.key);
+  const clash = [...reg.aspects.values()].find((a) => attachToolName(a.key) === wantedTool);
+  if (clash !== undefined) {
+    throw new ExecError(
+      'VALIDATION',
+      `имя тула «${wantedTool}» уже занято аспектом «${clash.key}» — в имени тула «-» и «_» ` +
+        `не различаются; выберите другой ключ`,
+      { reason: 'KEY_TAKEN', cause: 'tool_name', aspect: input.key, conflictsWith: clash.key },
+    );
+  }
   const properties = input.properties.map((p, index) => {
     const def = resolvePropertyRef(reg, p.propertyId);
     if (def === undefined) {
@@ -2231,18 +2275,49 @@ export async function createAspect(
     // ключом адрес не резолвился бы молча (довод `normalizeDeltaAddresses`).
     return { propertyId: def.id, required: p.required, rank: index + 1 };
   });
+  // ДУБЛЬ СЧИТАЕТСЯ ПОСЛЕ РЕЗОЛВА, а не по строкам входа: одно и то же свойство законно
+  // назвать и ключом, и id (Р3), и сравнение сырых адресов такую пару пропустило бы. Две
+  // ссылки на одно поле — это два `rank` и две `required` у одного значения; читатель
+  // (`properties.get`) увидит одну из них, а какую — зависит от порядка обхода.
+  const carried = new Set<string>();
+  for (const p of properties) {
+    if (carried.has(p.propertyId)) {
+      throw new ExecError('VALIDATION', `свойство «${p.propertyId}» названо в составе дважды`, {
+        reason: 'PROPERTY_DUPLICATE',
+        aspect: input.key,
+        property: p.propertyId,
+      });
+    }
+    carried.add(p.propertyId);
+  }
+  // КЛЮЧЕВЫЕ ПОЛЯ КАРТОЧКИ — из состава, и нормализуются тем же резолвом. Поле извне состава
+  // карточка показала бы пустым: значения читаются по составу аспекта, а не по реестру.
+  const keyFields = (input.viewConfig?.keyFields ?? []).map((field) => {
+    const id = resolvePropertyRef(reg, field)?.id ?? field;
+    if (!carried.has(id)) {
+      throw new ExecError(
+        'VALIDATION',
+        `ключевое поле «${field}» не входит в состав аспекта — карточка показала бы его пустым`,
+        { reason: 'KEYFIELD_NOT_CARRIED', aspect: input.key, property: field },
+      );
+    }
+    return id;
+  });
   const row: AspectRow = {
     id: input.key,
     key: input.key,
     label: input.label,
     description: input.description,
     properties,
-    implements: input.implements ?? [],
+    implements: normalizeBindAddresses(input.implements ?? [], reg),
     aiInstructions: null,
     tagMappings: input.tagMappings ?? [],
     // keyFields по умолчанию — первые три поля: карточка (02 §2.3) показывает три, как у всех
     // встроенных; полный список превратил бы её в ленту значений.
-    viewConfig: input.viewConfig ?? { keyFields: properties.slice(0, 3).map((p) => p.propertyId) },
+    viewConfig:
+      input.viewConfig === undefined
+        ? { keyFields: properties.slice(0, 3).map((p) => p.propertyId) }
+        : { ...input.viewConfig, keyFields },
     module: null,
     service: false,
     rank: Math.max(0, ...[...reg.aspects.values()].map((a) => a.rank)) + 1,
@@ -2281,9 +2356,11 @@ export async function setAspectImplements(
   bindings: AspectImplements[],
 ): Promise<void> {
   const row = await ownAspectForWrite(tx, ownerId, aspectId);
-  assertImplements({ ...row, implements: bindings }, ownerId, await currentRegistry(tx, ownerId));
+  const reg = await currentRegistry(tx, ownerId);
+  const next = normalizeBindAddresses(bindings, reg);
+  assertImplements({ ...row, implements: next }, ownerId, reg);
   await tx.execute(sql`
-    UPDATE aspect_definitions SET implements = ${JSON.stringify(bindings)}::jsonb
+    UPDATE aspect_definitions SET implements = ${JSON.stringify(next)}::jsonb
      WHERE owner_id = ${ownerId}::uuid AND id = ${row.id}`);
   await bumpOwnerRegistryVersion(tx, ownerId);
 }

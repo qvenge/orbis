@@ -337,7 +337,16 @@ export const aspectImplementsToolSchema = aspectImplementsSchema
 
 export const aspectCreateInput = z
   .object({
-    key: z.string().regex(/^user\/[a-z][a-z0-9_-]*$/, 'свой аспект живёт в namespace user/'),
+    // ПОТОЛОК ДЛИНЫ — не косметика: ключ аспекта это его id И имя `attach_*`-тула
+    // (`attachToolName`), а имя тула уезжает провайдеру КАК ЕСТЬ — ни `toSdkTools`
+    // (`llm/ai-sdk.ts`), ни адаптеры Anthropic/OpenAI его не режут и не проверяют. Предел
+    // имени у Anthropic — 128 символов; `attach_` + 64 даёт максимум 71, то есть запас есть
+    // у обоих провайдеров. Без потолка ключ на 200 символов положил бы ВЕСЬ ход разговора:
+    // тулы уезжают одним запросом, и провайдер отверг бы его целиком.
+    key: z
+      .string()
+      .regex(/^user\/[a-z][a-z0-9_-]*$/, 'свой аспект живёт в namespace user/')
+      .max(64, 'ключ аспекта — не длиннее 64 символов: из него собирается имя тула'),
     label: localizedTextSchema,
     description: localizedTextSchema,
     properties: z
@@ -368,7 +377,13 @@ const aspectCreateJsonSchema = {
   required: ['key', 'label', 'description', 'properties'],
   additionalProperties: false,
   properties: {
-    key: { type: 'string', description: 'ручка вида user/sleep-log — она же адрес аспекта' },
+    key: {
+      type: 'string',
+      maxLength: 64,
+      description:
+        'ручка вида user/sleep-log — она же адрес аспекта и имя его attach_*-тула; ' +
+        'не длиннее 64 символов, «-» и «_» в имени тула НЕ различаются',
+    },
     label: localizedJsonSchema,
     description: {
       ...localizedJsonSchema,

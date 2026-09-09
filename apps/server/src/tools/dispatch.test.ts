@@ -4968,6 +4968,49 @@ describe('§С2-1: мутации реестра — уровень подтве
     );
     expect(snap.rows).toEqual([{ field: 'implements', before: 'orbis/when', after: '—' }]);
   });
+
+  test('снимок единицы, ветка set: «было» читается из БД, пустой список даёт «—»', async () => {
+    // Вторая ветка того же `case` — та, что ЧИТАЕТ прежнее состояние (`readOwnAspect`).
+    // Тест выше её не задевал: у `remove` «было» это сам снимаемый контракт, и запроса нет.
+    const own = freshUserId();
+    const run = (tool: string, input: unknown) =>
+      execute(db, {
+        actorUserId: own,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      });
+    const created = await run('aspect_create', {
+      key: 'user/snap-gig',
+      label: { ru: 'Снимок' },
+      description: { ru: 'x' },
+      properties: [{ propertyId: 'orbis/start_at', required: false }],
+    });
+    if (!created.ok) throw new Error(`aspect_create: ${created.error.code}`);
+    const bound = await run('aspect_implements_set', {
+      aspect: 'user/snap-gig',
+      implements: [{ contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [] }],
+    });
+    if (!bound.ok) throw new Error(`aspect_implements_set: ${bound.error.code}`);
+
+    const snap = await withIdentity(db, own, (tx) =>
+      snapshotRegistryUnit(tx, own, 'aspect_implements_set', {
+        aspect: 'user/snap-gig',
+        implements: [{ contract: 'orbis/completable' }],
+      }),
+    );
+    expect(snap.rows).toEqual([
+      { field: 'implements', before: 'orbis/when', after: 'orbis/completable' },
+    ]);
+    // Пустой список — «станет» читается как снятие, а не как падение на `JSON.stringify`.
+    const emptied = await withIdentity(db, own, (tx) =>
+      snapshotRegistryUnit(tx, own, 'aspect_implements_set', {
+        aspect: 'user/snap-gig',
+        implements: [],
+      }),
+    );
+    expect(emptied.rows).toEqual([{ field: 'implements', before: 'orbis/when', after: '—' }]);
+  });
 });
 
 // ---------------------------------------------------------------------------
