@@ -304,6 +304,25 @@ function assertRole(reg: RegistrySnapshot, sub: string, role: string): void {
 const WIRE_PHASES: ReadonlySet<string> = new Set(['upcoming', 'active', 'closed']);
 
 /**
+ * ИМЕНА, КОТОРЫЕ ПРОВОД ЧИТАЕТ ЛИТЕРАЛАМИ (находка B3 I-2) — тот же довод, что у `WIRE_PHASES`.
+ *
+ * Движок берёт три величины карточки картой `WIRE_FIELDS`, оба списка Overview —
+ * `runList(..., 'coming_up')` / `runList(..., 'planned')`, а ключ карточки умеет ровно один
+ * `deref.read` (`cardKey`). Имя, ушедшее из декларации, ломает Финансы на ЧТЕНИИ: список даёт
+ * `NOT_FOUND`, ведомость — `null` в поле, объявленном непустым `decimal` (`envelopeStatusSchema`),
+ * и web бьётся о него `formatAmount(null)`, а чужой `deref.read` — `EXPR_BACKEND_UNSUPPORTED` у
+ * первой же карточки. Отказ обязан приходить автору декларации, а не владельцу на чтении (Р-И-7).
+ *
+ * `daily_pace` в перечне НЕТ: провод объявляет его `nullable`, и клиент обрабатывает пустоту явно.
+ *
+ * Словари живут здесь, а не импортируются из движка: `budget.ts` уже импортирует этот файл, и
+ * обратный импорт замкнул бы цикл. Единый источник имён рядом с `envelopeStatusSchema` — Б-2.
+ */
+const WIRE_LEDGERS: readonly string[] = ['spent', 'effective_limit', 'remaining'];
+const WIRE_LISTS: readonly string[] = ['coming_up', 'planned'];
+const WIRE_DEREF_READ = 'orbis/title';
+
+/**
  * ОПЕРАНДЫ ПОРОГА §6.1 — структурны, и структура обязана быть ОДНОЗНАЧНОЙ (Ф-Б1-38).
  *
  * Числитель движок берёт как ЕДИНСТВЕННУЮ сумму конверта с ребром привязки (`scope: 'envelope'` +
@@ -456,6 +475,22 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
       );
     }
   }
+  for (const n of WIRE_LEDGERS) {
+    if (!Object.hasOwn(def.aggregates, n)) {
+      bad('SUBSCRIPTION_WIRE_AGG_MISSING', id, `провод карточки конверта требует ведомость «${n}»`, {
+        aggregate: n,
+        required: [...WIRE_LEDGERS],
+      });
+    }
+  }
+  for (const n of WIRE_LISTS) {
+    if (!Object.hasOwn(def.lists, n)) {
+      bad('SUBSCRIPTION_WIRE_LIST_MISSING', id, `провод Overview требует список «${n}»`, {
+        list: n,
+        required: [...WIRE_LISTS],
+      });
+    }
+  }
   for (const n of def.rollup.applies_to) {
     known(n, aggNames, 'SUBSCRIPTION_UNKNOWN_AGG', 'rollup.applies_to');
   }
@@ -492,6 +527,14 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
     if ('slot' in o) known(o.slot, eSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', 'cards.order_by');
     if (!('deref' in o)) continue;
     known(o.deref.slot, eSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', 'cards.order_by.deref');
+    if (o.deref.read !== WIRE_DEREF_READ) {
+      bad(
+        'SUBSCRIPTION_WIRE_DEREF_READ',
+        id,
+        `ключ карточки разыменовывает только ${WIRE_DEREF_READ}`,
+        { property: o.deref.read, required: WIRE_DEREF_READ },
+      );
+    }
     if (!reg.properties.has(o.deref.read)) {
       bad('SUBSCRIPTION_UNKNOWN_PROPERTY', id, `свойства ${o.deref.read} нет`, {
         property: o.deref.read,

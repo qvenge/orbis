@@ -441,6 +441,69 @@ describe('однозначность порога и границы словар
     });
   });
 
+  /**
+   * ПРОВОД ЧИТАЕТ ИМЕНА ЛИТЕРАЛАМИ (находка B3 I-2). Движок берёт `spent`/`effective_limit`/
+   * `remaining` картой `WIRE_FIELDS`, оба списка — `runList(..., 'coming_up'|'planned')`, а
+   * `cardKey` умеет ровно один `deref.read`. Имя, ушедшее из декларации, ломает Финансы на
+   * ЧТЕНИИ (`NOT_FOUND`, `null` в непустом decimal-проводе → `formatAmount(null)` в web,
+   * `EXPR_BACKEND_UNSUPPORTED` у первой же карточки) — то есть отказ приходит не автору
+   * декларации. Довод Ф-Б1-40в о фазах дословно переносится на эти имена.
+   */
+  test.each([
+    [
+      'список coming_up',
+      (d: BudgetSubscription) => {
+        d.lists.upcoming_bills = d.lists.coming_up as never;
+        delete d.lists.coming_up;
+      },
+      'SUBSCRIPTION_WIRE_LIST_MISSING',
+    ],
+    [
+      'список planned',
+      (d: BudgetSubscription) => {
+        d.lists.manual = d.lists.planned as never;
+        delete d.lists.planned;
+      },
+      'SUBSCRIPTION_WIRE_LIST_MISSING',
+    ],
+    [
+      'ведомость spent',
+      (d: BudgetSubscription) => {
+        d.aggregates.outlay = d.aggregates.spent as never;
+        delete d.aggregates.spent;
+        (d.aggregates.remaining as unknown as { expr: { args: unknown[] } }).expr.args[1] = {
+          agg: 'outlay',
+        };
+        d.rollup.applies_to = ['outlay', 'effective_limit'];
+      },
+      'SUBSCRIPTION_WIRE_AGG_MISSING',
+    ],
+    [
+      'ведомость remaining',
+      (d: BudgetSubscription) => {
+        d.aggregates.left = d.aggregates.remaining as never;
+        delete d.aggregates.remaining;
+        delete d.aggregates.daily_pace;
+        d.rollover.carry.agg = 'left';
+      },
+      'SUBSCRIPTION_WIRE_AGG_MISSING',
+    ],
+    [
+      'deref.read',
+      (d: BudgetSubscription) => {
+        (d.cards.order_by[0] as unknown as { deref: { read: string } }).deref.read = 'orbis/icon';
+      },
+      'SUBSCRIPTION_WIRE_DEREF_READ',
+    ],
+  ])('провод пинит имя: %s', (_name, mutate, reason) => {
+    const def = JSON.parse(JSON.stringify(BUDGET_DEF)) as BudgetSubscription;
+    mutate(def);
+    expect(
+      refusal(() => assertSubscription(row(def, { surface: 'finance/budget-overview' }), seed))
+        .reason,
+    ).toBe(reason);
+  });
+
   test('норматив проходит все четыре новых гейта', () => {
     expect(
       assertSubscription(row(BUDGET_DEF, { surface: 'finance/budget-overview' }), seed).engine,
