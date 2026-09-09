@@ -294,6 +294,11 @@ export function applyDeltas(
       if (base === undefined) continue;
       const delta = parseDelta(row) as ContractDelta;
       if (base.kind !== 'slots') {
+        // ПУСТАЯ дельта наборов ничего не утверждает, и отказывать ей не на чем: ровно её
+        // оставляет слияние, когда обновление сделало контракт словарём фактов (`set-merge`).
+        // Отказать здесь значило бы запереть владельца дельтой, которую сам же пересев и
+        // обнулил, — а починить её нечем: `execute` берёт снимок первым действием (Р-И-7).
+        if (Object.keys(delta.setsDelta).length === 0) continue;
         throw deltaError(
           'DELTA_SET_ON_FACTS',
           `у контракта ${row.targetId} нет наборов: это словарь фактов`,
@@ -687,11 +692,45 @@ export function threeWayMerge(
   const conflicts: RegistryConflict[] = [];
   if (row.targetKind === 'contract') {
     const delta = parseDelta(row) as ContractDelta;
-    const nextSets = nextSystem.contracts.get(row.targetId)?.sets ?? {};
+    const next = nextSystem.contracts.get(row.targetId);
+    const nextSets = next?.sets ?? {};
+    // СОСТАВ, А НЕ ТОЛЬКО ИМЯ: класс, который обновление сняло или переименовало, обязан уйти из
+    // набора здесь — `applyDeltas` отказывает `DELTA_SET_UNKNOWN_CLASS` на КАЖДОМ чтении, и
+    // владелец заперт снаружи графа (починить нечем: `contract_sets_delta_remove` идёт через
+    // `execute`, а тот берёт снимок первым делом). `null` — «классы неизвестны»: контракта нет в
+    // коде (дрейф), и `applyDeltas` такую дельту просто пропускает — снимать её незачем.
+    const nextClasses =
+      next === undefined || next.kind !== 'slots' ? null : new Set(next.classes.map((c) => c.key));
     const setsDelta: ContractDelta['setsDelta'] = {};
     for (const [name, members] of Object.entries(delta.setsDelta)) {
       if (!(name in nextSets)) {
-        setsDelta[name] = members;
+        // Контракт стал словарём фактов: наборов у него нет вовсе (`DELTA_SET_ON_FACTS`).
+        if (next !== undefined && next.kind !== 'slots') {
+          conflicts.push({
+            kind: 'set-merge',
+            targetKind: 'contract',
+            targetId: row.targetId,
+            detail: `обновление сделало ${row.targetId} словарём фактов — ваш набор «${name}» снят`,
+          });
+          continue;
+        }
+        const kept = nextClasses === null ? members : members.filter((c) => nextClasses.has(c));
+        if (kept.length === members.length) {
+          setsDelta[name] = members;
+          continue;
+        }
+        const gone = members.filter((c) => !kept.includes(c));
+        conflicts.push({
+          kind: 'set-merge',
+          targetKind: 'contract',
+          targetId: row.targetId,
+          detail:
+            kept.length === 0
+              ? `обновление сняло класс «${gone.join('», «')}» — ваш набор «${name}» снят`
+              : `обновление сняло класс «${gone.join('», «')}» — он убран из вашего набора «${name}»`,
+        });
+        // Набор без классов схемой не выразим (`.min(1)`), поэтому пустой снимается целиком.
+        if (kept.length > 0) setsDelta[name] = kept;
         continue;
       }
       // Система завела набор с тем же именем. Оставить пользовательский нельзя: applyDeltas отказывает

@@ -540,6 +540,64 @@ describe('threeWayMerge: система поехала под живой дел�
     expect(Object.keys((m.merged as ContractDelta).setsDelta)).toEqual(['mine2']);
   });
 
+  test('обновление сняло класс — set-merge, и слитая дельта ПРИМЕНИМА', () => {
+    // Владелец записал набор из класса `cancelled` (законно), релиз переименовал класс в
+    // `dropped`. Слияние обязано убрать снятый класс: иначе `applyDeltas` отказывает
+    // `DELTA_SET_UNKNOWN_CLASS` на КАЖДОМ чтении реестра — владелец заперт снаружи графа, и
+    // починить дельту нечем (`contract_sets_delta_remove` идёт через `execute`, а тот берёт
+    // снимок первым делом). Инвариант шапки: ошибаться слияние вправе только в сторону лишнего
+    // конфликта, никогда — в сторону НЕПРИМЕНИМОЙ дельты.
+    const prev = systemOf(snapshotWith());
+    const c = prev.contracts.get('orbis/completable');
+    if (c === undefined || c.kind !== 'slots') throw new Error('нет встроенного orbis/completable');
+    const nextSnapshot: RegistrySnapshot = {
+      ...snapshotWith(),
+      contracts: new Map(prev.contracts).set('orbis/completable', {
+        ...c,
+        classes: c.classes.map((x) => (x.key === 'cancelled' ? { ...x, key: 'dropped' } : x)),
+        sets: { closed: ['done', 'dropped'], open: ['active'] },
+      }),
+    };
+    const m = threeWayMerge(
+      prev,
+      systemOf(nextSnapshot),
+      row('contract', 'orbis/completable', {
+        setsDelta: { my_closed: ['cancelled'], my_open: ['active'] },
+      }),
+    );
+    expect(m.conflicts.map((x) => x.kind)).toEqual(['set-merge']);
+    // Набор, оставшийся без единого класса, снимается целиком: пустой массив схемой не выразим.
+    expect(Object.keys((m.merged as ContractDelta).setsDelta)).toEqual(['my_open']);
+    expect(() =>
+      applyDeltas(nextSnapshot, [row('contract', 'orbis/completable', m.merged)]),
+    ).not.toThrow();
+  });
+
+  test('контракт стал словарём фактов — набор снимается тем же конфликтом (DELTA_SET_ON_FACTS)', () => {
+    const prev = systemOf(snapshotWith());
+    const c = prev.contracts.get('orbis/completable');
+    if (c === undefined || c.kind !== 'slots') throw new Error('нет встроенного orbis/completable');
+    const facts = prev.contracts.get('orbis/sensitivity');
+    if (facts === undefined || facts.kind !== 'facts') throw new Error('нет словаря фактов');
+    const nextSnapshot: RegistrySnapshot = {
+      ...snapshotWith(),
+      contracts: new Map(prev.contracts).set('orbis/completable', {
+        ...facts,
+        id: 'orbis/completable',
+      }),
+    };
+    const m = threeWayMerge(
+      prev,
+      systemOf(nextSnapshot),
+      row('contract', 'orbis/completable', { setsDelta: { my_open: ['active'] } }),
+    );
+    expect(m.conflicts.map((x) => x.kind)).toEqual(['set-merge']);
+    expect(Object.keys((m.merged as ContractDelta).setsDelta)).toEqual([]);
+    expect(() =>
+      applyDeltas(nextSnapshot, [row('contract', 'orbis/completable', m.merged)]),
+    ).not.toThrow();
+  });
+
   test('системная декларация подписки изменилась под живой дельтой — subscription-rebased', () => {
     const prev = systemOf(snapshotWith());
     const sub = (limit: number): SubscriptionRow => ({
