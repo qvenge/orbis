@@ -19674,7 +19674,7 @@ import { SURFACE_STATES, type SurfacePayloads, type SurfaceState } from '../../t
 
 // Типизация эталона — как у эталона SQL (`query/compile.golden.test.ts:85`): JSON приезжает
 // структурно, тип навешивается один раз здесь.
-const GOLDEN = GOLDEN_JSON as { states: Record<SurfaceState, SurfacePayloads> };
+const GOLDEN_STATES = GOLDEN_JSON as { states: Record<SurfaceState, SurfacePayloads> }; // эррата 18: имя GOLDEN занято импортом 0b
 
 describe('четыре состояния: отличие ровно в назначенном месте (§С8-20)', () => {
   test('эталон несёт ровно четыре состояния SURFACE_STATES и ни одного лишнего', () => {
@@ -20092,6 +20092,16 @@ const aspectLabels = new Map<SurfaceState, string | undefined>();
      модуль достаётся ему. Проба и есть доказательство, что разделение владельцев несёт нагрузку, а
      не украшение: на общем владельце «тесты соседей зелёные» — неправда.
   Результат проб — в отчёт задачи.
+
+> **Эррата по исполнению 18 (09.09).** (а) Имя `GOLDEN` занято импортом 0b (его читают тесты 0b/10) — типизованный алиас назван
+> `GOLDEN_STATES`; ниже `GOLDEN.states[...]` читать как `GOLDEN_STATES.states[...]`. (б) Сторож состояний 0b/10 пинил литерал
+> `[baseline, custom-aspect]` — расширен до четырёх (эррата задачи 10 это предвидела). (в) Шаг 4б: сторож сева 0b ходит под
+> `withIdentity(SURFACE_OWNER_ID)` — RLS уже скоупила счёт, с четырьмя мирами он был зелён и до правки; `owner_id` всё равно добавлен.
+> (г) Таймаут у `beforeAll` (Ф-Б1-41) невозможен: `beforeAll` в bun 1.2.7 принимает ровно один аргумент (`TS2554`) — и не нужен (76 операций
+> хука проверены живьём, запас есть). (д) `SURFACE_RELABEL_LABEL` — через `satisfies LocalizedText` (под `noUncheckedIndexedAccess`
+> аннотация `: LocalizedText` даёт `.ru: string | undefined`, сторож `toBe(SURFACE_RELABEL_LABEL.ru)` не типизируется). (е) `module-off`
+> задаётся ручкой `user.setModuleEnabled` (поверх операции исполнителя `module_set`, задача 17) — прямого `execute` у фикстуры нет;
+> `caller` строится и для состояний 1/3. Адреса строк в комментариях — именами файлов.
 
 - [ ] **Шаг 16: полные прогоны и коммит.**
   `cd apps/server && bun test src/registry/surfaces-golden.test.ts` → PASS;
