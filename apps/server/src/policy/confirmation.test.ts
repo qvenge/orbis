@@ -618,12 +618,13 @@ describe('§С2-1: перенастраивает поверхность или 
     });
 
   /**
-   * СЕМЬ ИМЁН, КОТОРЫХ ЕЩЁ НЕТ В РЕЕСТРЕ ТУЛОВ. Их кладут задачи 15/16, а ответ политики стоит
-   * ЗДЕСЬ и раньше — потому что порядок «тул сперва, замок потом» и есть та самая дыра, которую
-   * §С8-23 закрывает: тул вне `REGISTRY_TOOL_NAMES` до этой задачи получал молчаливое `'none'`.
-   * Список литеральный, и это временно: с задачей 16 все семь войдут в `REGISTRY_TOOL_NAMES`,
-   * пин ниже вырастет с восьми имён до двенадцати, а этот тест сольётся с ним (три имени
-   * аспектов задача 15 в реестр уже внесла).
+   * СЕМЬ ИМЁН ВЕХИ II. Ответ политики на них написан задачей 14 — РАНЬШЕ самих тулов, потому
+   * что порядок «тул сперва, замок потом» и есть та самая дыра, которую §С8-23 закрывает: тул
+   * вне `REGISTRY_TOOL_NAMES` до задачи 14 получал молчаливое `'none'`.
+   *
+   * Список написан РАНЬШЕ тулов; с задачей 16 все семь стоят в `REGISTRY_TOOL_NAMES`, и
+   * таблица осталась ради РЯДОВ (какой ответ даёт политика на какой конверт), а не ради имён —
+   * имена стережёт пин ниже.
    */
   const B1_TOOLS_AHEAD: Array<[string, unknown, Reconfigures]> = [
     // §С2-1 ряд 1: свой аспект заводит владелец через AI — «показать» карточкой. Чужого этим
@@ -660,7 +661,7 @@ describe('§С2-1: перенастраивает поверхность или 
     ['contract_sets_delta_remove', { contract: 'orbis/completable' }, 'behavior-delta'],
   ];
 
-  test('семь тулов вехи II разложены по рядам §С2-1 ДО того, как появятся в реестре', () => {
+  test('семь тулов вехи II разложены по рядам §С2-1', () => {
     for (const [tool, input, expected] of B1_TOOLS_AHEAD) {
       expect([tool, JSON.stringify(input), reconfiguresOf(tool, input)]).toEqual([
         tool,
@@ -668,16 +669,29 @@ describe('§С2-1: перенастраивает поверхность или 
         expected,
       ]);
     }
-    // Три имени аспектов задача 15 в реестр ВНЕСЛА — «их ещё нет» про них уже неправда.
-    // Не-вырожденность держат четыре имени задачи 16: на них ответ по-прежнему даёт switch,
-    // а не принадлежность множеству, — то есть тест зелен по той причине, по какой написан.
-    for (const tool of [
+  });
+
+  test('подписки и наборы: explicit-confirmation для ЛЮБОГО актора, включая владельца', () => {
+    // Случаи — из той же таблицы задачи 14, а не вторым списком: разъехавшись, список ряда и
+    // список уровня врали бы порознь и молча. Ряд 4a (`confirmation.ts:100`) поднимает
+    // behavior-delta до подтверждения ДО ветки по актору (`:108`) — вот это и меряется.
+    const rows2 = B1_TOOLS_AHEAD.filter(([, , expected]) => expected === 'behavior-delta');
+    // Не вырожденно: две настройки подписки, снятие подписки, два тула наборов.
+    expect(rows2.map(([tool]) => tool)).toEqual([
+      'subscription_set',
       'subscription_set',
       'subscription_remove',
       'contract_sets_delta_set',
       'contract_sets_delta_remove',
-    ]) {
-      expect([tool, REGISTRY_TOOL_NAMES.has(tool)]).toEqual([tool, false]);
+    ]);
+    for (const [tool, input] of rows2) {
+      for (const actorKind of ['ai', 'agent', 'owner'] as const) {
+        expect([tool, actorKind, levelFor(tool, input, actorKind)]).toEqual([
+          tool,
+          actorKind,
+          'explicit-confirmation',
+        ]);
+      }
     }
   });
 
@@ -1071,27 +1085,28 @@ describe('§С2-1: перенастраивает поверхность или 
   });
 
   test('перечень тулов реестра берётся у реестра, а не переписан здесь литералами', () => {
-    // Девятый тул реестра, заведённый без правки `reconfiguresOf`, получит `system-object`
+    // Тринадцатый тул реестра, заведённый без правки `reconfiguresOf`, получит `system-object`
     // (fail-closed ветка switch'а), а не молчаливое `none`, — и упадёт вот на этой строке.
-    // Двенадцатое имя Б-1 в реестре — и этот список вырастет с восьми до двенадцати (задача 16).
+    // Двенадцать: пять среза А + три задачи 15 + четыре здесь.
     expect([...REGISTRY_TOOL_NAMES].sort()).toEqual([
       'aspect_create',
       'aspect_delta_remove',
       'aspect_delta_set',
       'aspect_implements_remove',
       'aspect_implements_set',
+      'contract_sets_delta_remove',
+      'contract_sets_delta_set',
       'property_create',
       'property_merge',
       'property_update',
+      'subscription_remove',
+      'subscription_set',
     ]);
     for (const tool of REGISTRY_TOOL_NAMES) {
       expect([tool, reconfiguresOf(tool, {})]).not.toEqual([tool, 'none']);
     }
-    // …и ни одно из семи имён вехи II не осталось без ответа: пин ловит и то, что УЖЕ в реестре,
-    // и то, что в него вот-вот войдёт.
-    for (const [tool] of B1_TOOLS_AHEAD) {
-      expect([tool, reconfiguresOf(tool, {})]).not.toEqual([tool, 'none']);
-    }
+    // Цикл задачи 14 по `B1_TOOLS_AHEAD` СНЯТ (она обещала это слияние дословно): все семь
+    // имён вехи II теперь ВНУТРИ `REGISTRY_TOOL_NAMES`, и цикл выше их уже прошёл.
   });
 
   test('множество фактов — вход §7.10, но уровень в Б-1 не меняет (потребитель — assign_level, Б-2)', () => {
