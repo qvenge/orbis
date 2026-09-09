@@ -1492,6 +1492,97 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
   });
 });
 
+describe('зависимость от набора считается ПО ПРИЧИНЕ, а не по факту поломки (Ф-Б1-55б, уточнение)', () => {
+  const twoStepOwner = freshUserId();
+  const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
+    ?.definition as AgendaSubscription;
+  /** Повестка, которая читает СВОЙ набор владельца и предпочитает СВОЙ аспект в `show`. */
+  const readsMyOpen = (): AgendaSubscription => ({
+    ...AGENDA_SUB,
+    show: { ...AGENDA_SUB.show, prefer: ['user/gig'] },
+    overdue: {
+      ...AGENDA_SUB.overdue,
+      where: {
+        op: 'in',
+        args: [{ class: { contract: 'orbis/completable' } }, { const: 'my_open' }],
+      },
+    } as AgendaSubscription['overdue'],
+  });
+  const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
+    execute(
+      db,
+      {
+        actorUserId: twoStepOwner,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
+      { sink },
+    );
+  const regOf = () => withIdentity(db, twoStepOwner, (tx) => effectiveRegistry(tx, twoStepOwner));
+
+  test('ДВА ШАГА: подписку сломала ЧУЖАЯ причина — набор всё равно не снимается (SET_IN_USE)', async () => {
+    // Дыра прежнего критерия «сломано после − сломано до» жила ровно здесь: первый шаг делал
+    // подписку нечитаемой ДРУГОЙ причиной (`SUBSCRIPTION_PREFER_UNBOUND`), разность становилась
+    // пустой — и набор снимался «ок». Повестка при этом ещё читалась и гасла ПОЗЖЕ: в момент,
+    // когда владелец чинил первую причину и обнаруживал `UNKNOWN_SET` вместо починки.
+    ok(
+      await runAs('aspect_create', {
+        key: 'user/gig',
+        label: { ru: 'Выступление' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/start_at', required: true }],
+      }),
+    );
+    ok(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig',
+        implements: [{ contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [] }],
+      }),
+    );
+    ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { my_open: ['active'] },
+      }),
+    );
+    ok(
+      await runAs('subscription_set', {
+        id: 'orbis/agenda',
+        surface: 'planner/agenda',
+        definition: readsMyOpen(),
+      }),
+    );
+    // ШАГ 1: привязка снята — подписка стала нечитаемой ПО ДРУГОЙ ПРИЧИНЕ (остаток 19: этот
+    // тул зависимых не смотрит). Повестка на этом шаге ещё жива.
+    ok(await runAs('aspect_implements_remove', { aspect: 'user/gig', contract: 'orbis/when' }));
+    // ШАГ 2: снятие набора — ОТКАЗ, потому что декларация НАЗЫВАЕТ `my_open` (критерий «по
+    // причине»), а не потому, что подписка стала ломаться именно сейчас.
+    const e = err(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'SET_IN_USE',
+    ]);
+    expect((e.details as { subscriptions?: string[] }).subscriptions).toEqual(['orbis/agenda']);
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
+  });
+
+  test('негативный контроль: сломанная подписка НЕ запирает наборы ЧУЖОГО контракта', async () => {
+    // Подписка по-прежнему нечитаема (`prefer` без привязки), и её `hide` называет
+    // `orbis/recurrence:templates` — но набор `templates` ВСТРОЕННЫЙ и правку переживает,
+    // а отказ `PREFER_UNBOUND` этого контракта не называет. Значит наборы `orbis/recurrence`
+    // владельцу открыты: «набор используется» про набор, который ни при чём, было бы враньём.
+    ok(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/recurrence',
+        setsDelta: { my_dated: ['instance'] },
+      }),
+    );
+    ok(await runAs('contract_sets_delta_remove', { contract: 'orbis/recurrence' }));
+    expect((await regOf()).contracts.get('orbis/recurrence')?.sets?.my_dated).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // §А10-2: слияние
 // ---------------------------------------------------------------------------

@@ -1931,8 +1931,10 @@ async function writeDeltaRow(
     { id: newId(), ownerId, targetKind, targetId, baseVersion: versions.systemVersion, delta },
   ];
   // Проба считается БЕЗУСЛОВНО, а не внутри аргумента `check?.()`: у необязательного вызова
-  // аргумент не вычисляется вовсе, и род без своей проверки (дельта контракта) писал бы
-  // неприменимую строку молча — то есть ровно то, ради чего проба и заведена.
+  // аргумент не вычисляется вовсе, и род БЕЗ своей проверки писал бы неприменимую строку
+  // молча — то есть ровно то, ради чего проба и заведена. Сегодня свой `check` есть у всех
+  // трёх родов (аспект — `VARIANT_UNMAPPED`, подписка — `assertSubscription`, контракт —
+  // `assertSetsFreeOfSubscribers`), и безусловность держит уже не их, а ЧЕТВЁРТЫЙ род.
   const applied = applyDeltas(
     { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
     probe,
@@ -1971,43 +1973,102 @@ async function removeDeltaRow(
 }
 
 /**
- * ПОДПИСКИ, КОТОРЫЕ ЭТА ПРАВКА НАБОРОВ СЛОМАЛА (Ф-Б1-55б) — fail-closed на ЗАПИСИ.
+ * ССЫЛКИ НА НАБОРЫ КОНТРАКТА В ДЕКЛАРАЦИИ — обход дерева, а не разбор по схеме движка.
  *
- * Набор контракта — не только «свой ярлык»: на него ссылаются декларации подписок
- * (`{op:'in', args:[{class:{contract}}, {const:'<набор>'}]}`). Сняв дельту наборов либо
- * заменив её целиком, владелец уносит имя ИЗ-ПОД живой подписки — и `agendaListOf` падает
- * `UNKNOWN_SET` на КАЖДОМ чтении: тул отчитался успехом, а Повестка заперта до `undo`.
+ * Имя набора стоит в декларации в трёх разных формах: правым операндом `in`
+ * (`{op:'in', args:[{class:{contract}}, {const:'<набор>'}]}`), полем пары `{contract, set}`
+ * (`hide`, `has_relation.in_set`) и полем `counted_set` источника ведомостей. Разбирать их
+ * ТИПАМИ двух движков значило бы завести третье описание формы подписки рядом с zod-схемой и
+ * валидатором — и первое же новое место ссылки прошло бы мимо. Обход по ключам ловит все три
+ * формы одним правилом и переживает четвёртую; лишняя пара (совпадение имён полей) стоит
+ * ровно одного лишнего отказа с названной причиной.
+ */
+function setRefsOf(
+  value: unknown,
+  out: Array<{ contract: string; set: string }> = [],
+): Array<{
+  contract: string;
+  set: string;
+}> {
+  if (Array.isArray(value)) {
+    for (const item of value) setRefsOf(item, out);
+    return out;
+  }
+  if (value === null || typeof value !== 'object') return out;
+  const node = value as Record<string, unknown>;
+  const left = Array.isArray(node.args) ? node.args[0] : undefined;
+  const right = Array.isArray(node.args) ? node.args[1] : undefined;
+  if (node.op === 'in' && left !== null && typeof left === 'object') {
+    const cls = (left as Record<string, unknown>).class;
+    const contract =
+      cls !== null && typeof cls === 'object'
+        ? (cls as Record<string, unknown>).contract
+        : undefined;
+    const name =
+      right !== null && typeof right === 'object'
+        ? (right as Record<string, unknown>).const
+        : undefined;
+    if (typeof contract === 'string' && typeof name === 'string') out.push({ contract, set: name });
+  }
+  if (typeof node.contract === 'string') {
+    if (typeof node.set === 'string') out.push({ contract: node.contract, set: node.set });
+    if (typeof node.counted_set === 'string') {
+      out.push({ contract: node.contract, set: node.counted_set });
+    }
+  }
+  for (const item of Object.values(node)) setRefsOf(item, out);
+  return out;
+}
+
+/**
+ * ПОДПИСКИ, ЗАВИСЯЩИЕ ОТ НАБОРОВ ЭТОГО КОНТРАКТА (Ф-Б1-55б) — fail-closed на ЗАПИСИ.
+ *
+ * Набор контракта — не только «свой ярлык»: на него ссылаются декларации подписок. Сняв дельту
+ * наборов либо заменив её целиком, владелец уносит имя ИЗ-ПОД живой подписки — и `agendaListOf`
+ * падает `UNKNOWN_SET` на КАЖДОМ чтении: тул отчитался успехом, а Повестка заперта до `undo`.
  * Смысл подписки проверяется на записи ПОДПИСКИ (Р-И-7) — значит и на записи того, из чего
  * подписка собрана.
  *
- * СЧИТАЕТСЯ РАЗНОСТЬ «БЫЛО → СТАНЕТ», А НЕ ПРОСТО «СЛОМАНО ПОСЛЕ». Подписка, уже нечитаемая
- * ДО правки (её мог сломать `property_merge` или пересев), не относится к этой операции, и
- * отказывать ею значило бы запереть владельцу ещё и наборы: «набор используется» про набор,
- * который тут ни при чём. Отказ называет ИМЕНА подписок — иначе чинить пришлось бы вслепую.
+ * ЗАВИСИМОСТЬ СЧИТАЕТСЯ ПО ПРИЧИНЕ, А НЕ ПО ФАКТУ ПОЛОМКИ (уточнение Ф-Б1-55б после ре-ревью).
+ * Прежняя редакция брала разность «сломано после − сломано до» и оставляла живой путь в два
+ * шага: `aspect_implements_remove` ломал подписку ДРУГОЙ причиной (`SUBSCRIPTION_PREFER_UNBOUND`,
+ * Повестка при этом ещё читалась), разность становилась пустой, набор снимался «ок» — и
+ * Повестка гасла позже, в момент, когда владелец чинил ПЕРВУЮ причину. Поэтому здесь два
+ * теста зависимости:
+ *   (а) декларация СИНТАКСИЧЕСКИ называет набор этого контракта, которого после правки не
+ *       будет (`setRefsOf`) — не зависит от того, читаема ли подписка сейчас;
+ *   (б) проба `assertSubscription` после правки отказывает, НАЗЫВАЯ этот контракт, — страховка
+ *       на форму ссылки, которую обход не знает.
+ * Чужая поломка (другой контракт, другая причина) наборы НЕ запирает: отказывать ею значило бы
+ * отвечать «набор используется» про набор, который тут ни при чём.
  */
-function assertSetsFreeOfSubscribers(
-  before: RegistrySnapshot,
-  after: RegistrySnapshot,
-  contractId: string,
-): void {
-  const unusable = (reg: RegistrySnapshot): Set<string> => {
-    const broken = new Set<string>();
-    for (const [id, row] of reg.subscriptions) {
-      try {
-        assertSubscription(row, { reg, systemSeed: false });
-      } catch {
-        broken.add(id);
-      }
+function assertSetsFreeOfSubscribers(after: RegistrySnapshot, contractId: string): void {
+  const contract = after.contracts.get(contractId);
+  const sets = contract !== undefined && contract.kind === 'slots' ? (contract.sets ?? {}) : {};
+  const dependent: string[] = [];
+  for (const [id, row] of after.subscriptions) {
+    const orphan = setRefsOf(row.definition).some(
+      (ref) => ref.contract === contractId && !Object.hasOwn(sets, ref.set),
+    );
+    if (orphan) {
+      dependent.push(id);
+      continue;
     }
-    return broken;
-  };
-  const wasBroken = unusable(before);
-  const nowBroken = [...unusable(after)].filter((id) => !wasBroken.has(id));
-  if (nowBroken.length === 0) return;
+    try {
+      assertSubscription(row, { reg: after, systemSeed: false });
+    } catch (e) {
+      const named =
+        e instanceof ExecError &&
+        (e.message.includes(contractId) ||
+          (e.details as { contract?: unknown } | undefined)?.contract === contractId);
+      if (named) dependent.push(id);
+    }
+  }
+  if (dependent.length === 0) return;
   throw new ExecError(
     'VALIDATION',
-    `наборы контракта ${contractId} читают подписки: ${nowBroken.join(', ')} — правка оставила бы их без набора`,
-    { reason: 'SET_IN_USE', contract: contractId, subscriptions: nowBroken },
+    `наборы контракта ${contractId} читают подписки: ${dependent.join(', ')} — правка оставила бы их без набора`,
+    { reason: 'SET_IN_USE', contract: contractId, subscriptions: dependent },
   );
 }
 
@@ -2059,9 +2120,8 @@ export async function setContractDelta(
   }
   // Дельта наборов — ЗАМЕНА целиком (`DO UPDATE SET delta = EXCLUDED.delta`), поэтому набор,
   // выпавший из нового состава, исчезает так же, как при снятии дельты: проба одна на оба пути.
-  const before = await probeSnapshot(tx, ownerId, rows);
   await writeDeltaRow(tx, ownerId, 'contract', contractId, parsed.data, rows, (probe) => {
-    assertSetsFreeOfSubscribers(before, probe, contractId);
+    assertSetsFreeOfSubscribers(probe, contractId);
   });
 }
 
@@ -2072,7 +2132,6 @@ export async function removeContractDelta(
 ): Promise<void> {
   const rows = await loadRegistryRows(tx, ownerId);
   assertSetsFreeOfSubscribers(
-    await probeSnapshot(tx, ownerId, rows),
     await probeSnapshot(tx, ownerId, rows, { targetKind: 'contract', targetId: contractId }),
     contractId,
   );
