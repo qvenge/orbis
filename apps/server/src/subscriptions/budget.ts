@@ -48,7 +48,10 @@ import {
   bindingIndexOf,
   type CategoryTrendPoint,
   type EnvelopeStatus,
+  isModuleEnabled,
   type ResolvedBinding,
+  type SurfaceName,
+  surfaceModuleOf,
 } from '@orbis/shared';
 // `SQL` — ЗНАЧЕНИЕМ, а не только типом: `runSum` сужает им ветку плана (`instanceof SQL`).
 import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
@@ -70,6 +73,7 @@ import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
 import { DEFAULT_TIMEZONE } from '../query/context';
 import type { RegistrySnapshot } from '../registry/load';
+import { disabledModulesOf } from '../registry/modules';
 import { toWireEntity } from '../wire';
 import { builtinSubscription } from './registry';
 
@@ -1308,6 +1312,40 @@ async function runList(
   });
 }
 
+/**
+ * §Б8-3: ПОВЕРХНОСТЬ выключенного модуля не считается вовсе — ни строки данных, но и ни
+ * одного отказа: подписка УШЛА, а не сломалась (снимок `module-off`, §С8-20, задача 18).
+ *
+ * Условие спрашивает САМ движок, а не пятеро вызывающих (`budget/aggregates.ts`,
+ * `routers/budget.ts`, `tools/dispatch.ts`, ручки fast-path): протащить маску через них
+ * значило бы пять мест, где её забудут. Своим `SurfaceName` в каждом движке, без общей
+ * таблицы «подписка → модуль»: движков два и поверхностей две, и таблица из двух строк стала
+ * бы третьим местом с тем же знанием.
+ *
+ * Кэш `spent` при переключении модуля НЕ инвалидируется и не должен: маска вне снимка
+ * (§Б8-3), в ключ кеша не входит, а выключенный модуль просто не идёт читать.
+ */
+const BUDGET_SURFACE: SurfaceName = 'finance/budget-overview';
+
+async function budgetSurfaceOff(tx: Tx, ownerId: string): Promise<boolean> {
+  return !isModuleEnabled(surfaceModuleOf(BUDGET_SURFACE), await disabledModulesOf(tx, ownerId));
+}
+
+/** Пустая ведомость той же формы, что у живой (`packages/shared/src/contracts/budget.ts`). */
+function emptyOverview(month: string): BudgetOverview {
+  return {
+    // `monthRangeOf` — приватный хелпер этого файла; `period` схемы — ровно `{start, end}`,
+    // поэтому пара уезжает как есть.
+    period: monthRangeOf(month),
+    balance: { income: '0.00', expense: '0.00', balance: '0.00' },
+    envelopes: [],
+    comingUp: [],
+    planned: [],
+    unbudgeted: [],
+    alertCount: 0,
+  };
+}
+
 export async function budgetOverviewOf(
   tx: Tx,
   ownerId: string,
@@ -1315,6 +1353,7 @@ export async function budgetOverviewOf(
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<BudgetOverview> {
+  if (await budgetSurfaceOff(tx, ownerId)) return emptyOverview(args.month);
   const { cctx, la, raws, sums } = await runLedgers(tx, ownerId, args, def, reg);
   const { start, end } = monthRangeOf(args.month);
   const { balance: balanceName, unbudgeted: unbudgetedName } = periodLedgerNames(def);
@@ -1379,6 +1418,7 @@ export async function budgetAlertCountOf(
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<number> {
+  if (await budgetSurfaceOff(tx, ownerId)) return 0;
   const run = await runLedgers(tx, ownerId, args, def, reg, { period: false, rollup: false });
   return countAlerts(def, run.raws);
 }
@@ -1391,6 +1431,12 @@ export async function budgetStatusOf(
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<BudgetStatusResult> {
+  // Условие названо и здесь, а не унаследовано от `budgetOverviewOf`: список категорий —
+  // НЕ ведомость подписки (он живёт в `budget/categories.ts`), и без своей врезки тул
+  // выключенного модуля отдавал бы пустую ведомость с полным списком категорий Финансов.
+  if (await budgetSurfaceOff(tx, ownerId)) {
+    return { ...emptyOverview(args.month), categories: [] };
+  }
   const overview = await budgetOverviewOf(tx, ownerId, args, def, reg);
   // Список категорий — НЕ ведомость подписки: контракта «категория» в Б-1 нет (В-2), запрос живёт
   // в `budget/categories.ts` рядом с карточками.
@@ -1409,6 +1455,8 @@ export async function envelopeForCategoryOf(
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<EnvelopeStatus | null> {
+  // Форма «пустого» ответа — по Produces задачи 9 (Р-К-45): пусто, не отказ.
+  if (await budgetSurfaceOff(tx, ownerId)) return null;
   const defCur = await defaultCurrencyOf(tx, ownerId);
   const envelopeId = await selectEnvelope(tx, {
     ownerId,
@@ -1451,6 +1499,7 @@ export async function categoryTrendOf(
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<CategoryTrendPoint[]> {
+  if (await budgetSurfaceOff(tx, ownerId)) return []; // Р-К-45: пусто, не отказ
   const cur = args.today.slice(0, 7);
   const { spent: spentName } = alertOperands(def);
   const out: CategoryTrendPoint[] = [];

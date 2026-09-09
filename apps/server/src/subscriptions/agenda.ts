@@ -14,6 +14,9 @@ import {
   addDays,
   type BindingIndex,
   bindingIndexOf,
+  isModuleEnabled,
+  type SurfaceName,
+  surfaceModuleOf,
 } from '@orbis/shared';
 import type { ExprNode } from '@orbis/shared/expr';
 import { type SQL, sql } from 'drizzle-orm';
@@ -30,10 +33,12 @@ import {
 import { queryContext } from '../query/context';
 import { wallClockIn } from '../recurring/materialize';
 import type { RegistrySnapshot } from '../registry/load';
+import { disabledModulesOf } from '../registry/modules';
 import { toWireEntityFromSql } from '../wire';
 import { builtinSubscription, resolveSlotOnEntity } from './registry';
 
 export const AGENDA_SUBSCRIPTION_ID = 'orbis/agenda';
+const AGENDA_SURFACE: SurfaceName = 'planner/agenda';
 /** Строка entities в подзапросе — алиас `e`, тот же, что у `compileQueryAst`. */
 const ROW: SQL = sql.raw('e');
 
@@ -117,6 +122,20 @@ export async function agendaListOf(
   def: AgendaSubscription,
   args: { today: string; timeZone: string; days: number },
 ): Promise<AgendaListResult> {
+  // §Б8-3: поверхность выключенного модуля не считается вовсе — ни строки данных, но и ни
+  // одного отказа: подписка УШЛА, а не сломалась (снимок `module-off`, §С8-20, задача 18).
+  // Условие спрашивает САМ движок: протащить маску через вызывающих значило бы столько же
+  // мест, где её забудут. Своим `SurfaceName`, без общей таблицы «подписка → модуль»:
+  // движков два и поверхностей две, и таблица из двух строк стала бы третьим местом с тем
+  // же знанием.
+  if (!isModuleEnabled(surfaceModuleOf(AGENDA_SURFACE), await disabledModulesOf(tx, ownerId))) {
+    return {
+      today: args.today,
+      timezone: args.timeZone,
+      rows: [],
+      truncated: { window: false, overdue: false },
+    };
+  }
   // Контекст компиляции — отсюда, «сегодня»/таймзона — из args: материализация роутера уже
   // посчитала их, и пересчёт на границе суток разъехался бы с её окном.
   const base = await queryContext(tx, ownerId, null);

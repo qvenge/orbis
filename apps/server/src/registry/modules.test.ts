@@ -14,15 +14,20 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
+import { budgetOverview } from '../budget/aggregates';
+import { ensureGlobalThread } from '../chat/threads';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import { undoLast } from '../executor/undo';
+import { buildContext } from '../llm/context';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
+import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
+import { effectiveRegistry } from './cache';
 import { disabledModulesOf, setModuleDisabled } from './modules';
 
 requireEnv();
@@ -98,12 +103,20 @@ beforeAll(async () => {
     aspects: ['orbis/budget'],
   });
   // Строка окна Agenda: «чужая подписка не шелохнулась» (шаг 15) обязана проверяться на
-  // НЕПУСТОЙ выдаче — два пустых списка совпадут и при сломанном движке.
+  // НЕПУСТОЙ выдаче — два пустых списка совпадут и при сломанном движке. Секция `window`
+  // идёт по слоту `moment` контракта «когда», а он привязан к `orbis/start_at`
+  // (`orbis/schedule`), НЕ к `orbis/due_date` — задачи без расписания в окне не видно, и
+  // фикстура брифа отдавала бы пустой список (адрес опровергнут деревом).
   await seedOne({
     title: 'Позвонить в банк',
     tags: [],
-    props: { 'orbis/task_status': 'planned', 'orbis/due_date': today },
-    aspects: ['orbis/task'],
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': today,
+      'orbis/start_at': `${today}T09:00:00.000Z`,
+      'orbis/all_day': false,
+    },
+    aspects: ['orbis/task', 'orbis/schedule'],
   });
 });
 afterAll(async () => {
@@ -419,5 +432,93 @@ describe('§С8-22: запись при выключенном модуле — 
     });
     expect(denied.ok).toBe(false);
     if (!denied.ok) expect(denied.error.code).toBe('MODULE_DISABLED');
+  });
+});
+
+describe('§С8-22: подписки и сохранённые AST при выключенном модуле', () => {
+  beforeEach(blockEntry([])); // блок начинает со всех включённых
+
+  /**
+   * Движок Agenda зовётся ТАК ЖЕ, как его зовёт ручка (`routers/agenda.ts`, задача 6):
+   * `agendaListOf(tx, ownerId, def, args)`, где `def` — строка снимка, добытая
+   * `agendaSubscriptionOf`. Обёртки «на два аргумента» у него нет — и заводить её здесь
+   * значило бы проверять не тот путь, по которому ходит прод.
+   */
+  const agenda = () =>
+    withIdentity(db, owner, async (tx) =>
+      agendaListOf(tx, owner, agendaSubscriptionOf(await effectiveRegistry(tx, owner)), {
+        today,
+        timeZone: TZ,
+        days: 8,
+      }),
+    );
+
+  test('Budget-ведомость пуста, Agenda — байт-в-байт как до выключения', async () => {
+    const before = await budgetOverview(db, owner, curMonth);
+    expect(before.envelopes.length).toBeGreaterThan(0);
+    const agendaBefore = await agenda();
+    expect(agendaBefore.rows.length).toBeGreaterThan(0); // сравнение не вырождено в «пусто = пусто»
+    await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
+    });
+    const after = await budgetOverview(db, owner, curMonth);
+    expect([
+      after.envelopes,
+      after.comingUp,
+      after.planned,
+      after.unbudgeted,
+      after.alertCount,
+    ]).toEqual([[], [], [], [], 0]);
+    // Консервативность §С1-3 п.9: чужая подписка не шелохнулась
+    expect(await agenda()).toEqual(agendaBefore);
+  });
+
+  test('сохранённый AST с orbis/amount продолжает резолвиться и находить записи (§Б8-3)', async () => {
+    // `entity.query` отдаёт МАССИВ строк (`routers/entity.ts:317-322`), не конверт с `items`.
+    const found = await caller.entity.query({ query: 'aspect=orbis/financial, orbis/amount>100' });
+    expect(found.length).toBeGreaterThan(0); // определения остаются резолвимыми на чтение
+  });
+
+  test('повторное включение — всё на месте', async () => {
+    await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled: true } }],
+    });
+    expect((await budgetOverview(db, owner, curMonth)).envelopes.length).toBeGreaterThan(0);
+    expect(
+      (await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner))).map((d) => d.name),
+    ).toContain('budget_status');
+  });
+
+  test('канал модели: проза Финансов и инструкции orbis/financial уходят вместе с модулем и возвращаются с ним (§Б8-3)', async () => {
+    // Канал собирается ТЕМ ЖЕ `buildContext`, что и чат (`llm/context.ts`), — юнит на
+    // `modulePromptFragments` (шаг 2) не отвечает, доносит ли их до модели сама сборка.
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const channel = () =>
+      withIdentity(db, owner, (tx) => buildContext(tx, { ownerId: owner, threadId }));
+    const setFinance = (enabled: boolean) =>
+      execute(db, {
+        actorUserId: owner,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'module_set', input: { module: 'finance', enabled } }],
+      });
+    const on = (await channel()).system;
+    expect(on).toContain('Бюджет (тул budget_status):'); // проза манифеста (шаг 14)
+    expect(on).toContain('- orbis/financial:'); // инструкция аспекта модуля (§Б8-3)
+    await setFinance(false);
+    const off = (await channel()).system;
+    expect(off).not.toContain('Бюджет (тул budget_status):');
+    expect(off).not.toContain('- orbis/financial:');
+    expect(off).toContain('- orbis/task:'); // чужие инструкции на месте — маска, а не пустота
+    await setFinance(true);
+    expect((await channel()).system).toBe(on); // включение возвращает канал байт-в-байт
+    // Канал рутины (`routines/context.ts`) зовёт ту же `aspectInstructionsSection(tx, disabled)`
+    // с той же маской — второго пути у инструкций нет, отдельного прогона не заводится.
   });
 });
