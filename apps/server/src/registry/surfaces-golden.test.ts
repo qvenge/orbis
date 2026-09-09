@@ -2,6 +2,17 @@
 // `tools/registry-golden.test.ts`: эталон снимается ОДИН РАЗ на посчитанном руками мире и
 // дальше ЗАЩИЩАЕТ. «Записать что вышло» запрещено — расхождение разбирается, а намеренная
 // правка пересдаётся ОТДЕЛЬНЫМ движением с объяснением в коммите.
+//
+// ЧЕТЫРЕ СОСТОЯНИЯ (§С8-20, консервативность §С1-3 п.9). Словарь состояний — тот же, что у
+// семантических гардов промпта (§Б7-4): эталон / выключенный модуль / пользовательский аспект с
+// привязкой / переименованный label. Один словарь на два места намеренно: «четыре состояния»
+// обязано означать одно и то же в приёмке поверхностей и в приёмке канала.
+//
+// Утверждение консервативности — НЕ «снимок отличается», а «отличается РОВНО в назначенном месте,
+// остальное байт-в-байт». Поэтому у каждого состояния два теста: равенство своему эталону
+// (регрессия) и адресное сравнение с `baseline` (смысл). Эталон снимается ОДИН раз и дальше
+// защищает; при расхождении разбирается расхождение, а не пересдаётся эталон (тот же запрет и тот
+// же довод, что в `tools/registry-golden.test.ts:11-20`).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { canonicalJson } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
@@ -9,18 +20,28 @@ import { GATE_SURFACE_SLUGS } from '../../test/fixtures/gate-aspects';
 import GOLDEN from '../../test/golden/surfaces.json';
 import { appDb, requireEnv, truncateAll } from '../../test/helpers';
 import {
+  applySurfaceState,
   compareSnapshots,
   SNAPSHOT_SURFACES,
   SURFACE_GATE_OWNER_ID,
   SURFACE_OWNER_ID,
+  SURFACE_RELABEL_ASPECT,
+  SURFACE_RELABEL_LABEL,
   SURFACE_SLUGS,
+  SURFACE_STATE_OWNER,
   SURFACE_STATES,
   SURFACE_TODAY,
+  type SurfacePayloads,
+  type SurfaceSnapshot,
   type SurfaceState,
   seedSurfaceWorld,
   snapshotSurfaces,
+  surfaceEntityId,
 } from '../../test/surfaces';
 import { withIdentity } from '../db/with-identity';
+import { appRouter } from '../router';
+import { createCallerFactory } from '../trpc';
+import { effectiveRegistry } from './cache';
 
 requireEnv();
 const { db, client } = appDb();
@@ -35,14 +56,110 @@ const countOf = async (q: ReturnType<typeof sql>): Promise<number> =>
     async (tx) => ((await tx.execute(q)) as unknown as { n: number }[])[0]?.n ?? -1,
   );
 
+/**
+ * Состояние 3 — единственное, чей мир другой: в него досеиваются аспекты гейта (0d/10). Опции
+ * состояний 1 и 3 повторяют то, что сеяли 0b и 10, буква в букву: цикл ничего не меняет в их
+ * мирах, он лишь перестаёт повторять сев дважды.
+ */
+const WORLD_OPTS: Readonly<Record<SurfaceState, { gateAspects?: boolean }>> = {
+  baseline: {},
+  'module-off': {},
+  'custom-aspect': { gateAspects: true },
+  relabeled: {},
+};
+
+const snapshots = new Map<SurfaceState, SurfaceSnapshot>();
+
+/**
+ * СОХРАНЁННЫЙ AST, а не текст: §С8-22 обещает, что запросы владельца не ломаются выключением
+ * модуля, а хранится у него именно дерево (тела документов, `ref.target`, `scope`). Дерево
+ * подаётся в `entity.query` напрямую (`{ast}` — вторая половина `querySignature`), мимо разбора
+ * текста: разбор — отдельный слой, и его участие ослабило бы утверждение.
+ */
+const AMOUNT_AST = {
+  filter: { prop: 'orbis/amount', op: 'gt' as const, value: '0' },
+  sortBy: [{ field: 'orbis/title', dir: 'asc' as const }],
+};
+/** Ответы запроса — СЛАГАМИ, а не id: см. довод у сбора ниже. */
+const amountNames = new Map<SurfaceState, string[]>();
+/** Подпись аспекта состояния 4 в эффективном реестре КАЖДОГО владельца. */
+const aspectLabels = new Map<SurfaceState, string | undefined>();
+
+/**
+ * ЧЕТЫРЕ МИРА СТОЯТ РЯДОМ, А НЕ СМЕНЯЮТ ДРУГ ДРУГА ЧЕРЕЗ `truncateAll`.
+ *
+ * Первое следствие — тесты 0b и 10 не теряют своих миров: они читают `SURFACE_OWNER_ID` и
+ * `SURFACE_GATE_OWNER_ID` (счёт сева, «baseline равен эталону», два прогона подряд,
+ * «custom-aspect равен эталону»), и фикстура состояний у них ничего не отбирает. Один владелец
+ * на четыре состояния оставил бы им пустую базу — «зелёные тесты соседей» было бы неправдой.
+ *
+ * Второе — снимается вопрос кеша реестра целиком. Ключ снимка — `(владелец, его версия,
+ * системная)` (`registry/cache.ts`), у четырёх владельцев ключи не пересекаются даже на нулевой
+ * версии. Версию внутри владельца двигают САМИ боевые писатели: `setAspectDelta` зовёт
+ * `bumpOwnerRegistryVersion` последним statement'ом (`registry/ops.ts`), сев кастомных аспектов
+ * состояния 3 — там же. Доводить версию из фикстуры не нужно и нельзя: это был бы второй
+ * механизм инвалидации, которого в бою нет, и зелень на нём ничего не говорила бы о проде.
+ *
+ * `truncateAll` — ОДИН, в начале (он же стоял в `beforeAll` 0b): база нужна чистая один раз, а
+ * между состояниями чистить нечего — миры не пересекаются ни по владельцу, ни по id.
+ *
+ * Таймаута у хука нет — и не «забыт», а НЕВОЗМОЖЕН и НЕ НУЖЕН: `beforeAll` в bun 1.2.7 принимает
+ * ровно один аргумент (`bun-types`; второй не проходит typecheck), и таймаут теста на хук не
+ * распространяется — прецедент `perf/graph.test.ts:133`, где в том же `beforeAll` сеется корпус
+ * на 50 000 сущностей. Ф-Б1-41 (явные `30_000`) — про ТЕЛА тестов; здесь все 76 операций
+ * исполнителя стоят в хуке, а тела читают готовые снимки.
+ */
 beforeAll(async () => {
   await truncateAll();
-  await seedSurfaceWorld(SURFACE_OWNER_ID);
-  // Второй мир — РЯДОМ, у своего владельца (Р-К-24): состояния снимка обязаны быть сравнимы
-  // между собой, а один мир, переигранный дважды, потребовал бы зачистки между состояниями и
-  // сделал бы порядок тестов значимым.
-  await seedSurfaceWorld(SURFACE_GATE_OWNER_ID, { gateAspects: true });
+  for (const state of SURFACE_STATES) {
+    const owner = SURFACE_STATE_OWNER[state];
+    await seedSurfaceWorld(owner, WORLD_OPTS[state]);
+    await applySurfaceState(db, owner, state);
+    snapshots.set(state, await snapshotSurfaces(db, owner, state, SURFACE_TODAY));
+    const caller = createCallerFactory(appRouter)({
+      actorUserId: owner,
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
+    // Сравниваются слаги, а не id: у каждого состояния свой владелец, а id мира считаются от него
+    // (`surfaceEntityId`). Тот же перевод, что делает `stabilize` внутри снимка; на сырых id «то
+    // же множество» было бы недостижимо по построению, а не по смыслу.
+    const names = new Map(
+      SURFACE_SLUGS.map((s) => [surfaceEntityId(owner, s).toLowerCase(), `@${s}`]),
+    );
+    const found = await caller.entity.query({ ast: AMOUNT_AST });
+    amountNames.set(
+      state,
+      found.map((r) => names.get(r.id.toLowerCase()) ?? '<uuid>'),
+    );
+    // Подпись — строка, а не id, поэтому её значение сравнимо между владельцами напрямую;
+    // читается она из эффективного реестра ИМЕННО этого владельца (дельта состояния 4 стоит
+    // только у него).
+    aspectLabels.set(
+      state,
+      await withIdentity(db, owner, async (tx) => {
+        const reg = await effectiveRegistry(tx, owner);
+        return reg.aspects.get(SURFACE_RELABEL_ASPECT)?.label.ru;
+      }),
+    );
+  }
+  // ПЕРЕСДАЧА ЭТАЛОНА — РУЧНАЯ И ОСОЗНАННАЯ, как у эталона тулов (`registry-golden.test.ts:11-20`):
+  // «записать что вышло» при расхождении запрещено. Печать по явному требованию — НЕ
+  // автообновление: она избавляет от одноразового скрипта, вставляет человек, и коммит обязан
+  // объяснить, ЧТО изменилось. SURFACES_PRINT=module-off bun test src/registry/surfaces-golden.test.ts
+  const printed = process.env.SURFACES_PRINT;
+  if (printed !== undefined) {
+    console.log(JSON.stringify(snap(printed as SurfaceState).surfaces, null, 2));
+  }
 });
+
+/** Снимок состояния — с внятным отказом вместо `undefined` в глубине сравнения. */
+function snap(state: SurfaceState): SurfaceSnapshot {
+  const s = snapshots.get(state);
+  if (s === undefined) throw new Error(`снимок состояния ${state} не снят — сломан beforeAll`);
+  return s;
+}
 afterAll(async () => {
   await client.end();
 });
@@ -54,8 +171,15 @@ describe('снимки поверхностей: консервативност�
         sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${SURFACE_OWNER_ID}`,
       ),
     ).toBe(SURFACE_SLUGS.length);
+    // Счёт по ВЛАДЕЛЬЦУ, а не по базе: рядом стоят ещё три мира состояний, и «одно ребро на всю
+    // таблицу» проверяло бы число миров в фикстуре, а не полноту сева этого мира. Своей колонки
+    // владельца у `relations` нет (`db/schema.ts`) — владение приходит концами ребра. RLS под
+    // личностью владельца скоупит выдачу и сама, но условие стоит в запросе: сторож не должен
+    // зависеть от того, чьей личностью открыта tx.
     expect(
-      await countOf(sql`SELECT count(*)::int AS n FROM relations WHERE role = 'dependency'`),
+      await countOf(sql`SELECT count(*)::int AS n FROM relations r
+      JOIN entities e ON e.id = r.source_id
+      WHERE r.role = 'dependency' AND e.owner_id = ${SURFACE_OWNER_ID}`),
     ).toBe(1);
   });
 
@@ -222,11 +346,90 @@ describe('снимки поверхностей: консервативност�
 
   test('эталон держит ровно объявленные состояния и все четыре поверхности', () => {
     const states = Object.keys((GOLDEN as { states: Record<string, unknown> }).states);
-    expect(states.sort()).toEqual(['baseline', 'custom-aspect']); // задача 18 добавит ещё два
+    // Список ЛИТЕРАЛОМ, а сторож новой группы («ровно четыре состояния») сверяет ключи эталона с
+    // `SURFACE_STATES`: вместе они пиннят и сам словарь состояний — состояние, вычеркнутое разом
+    // из эталона и из `SURFACE_STATES`, покраснело бы здесь.
+    expect(states.sort()).toEqual(['baseline', 'custom-aspect', 'module-off', 'relabeled']);
     for (const state of states) {
       expect(SURFACE_STATES).toContain(state as SurfaceState);
       const payload = (GOLDEN as { states: Record<string, Record<string, unknown>> }).states[state];
       expect(Object.keys(payload ?? {}).sort()).toEqual([...SNAPSHOT_SURFACES].sort());
     }
+  });
+});
+
+// Типизация эталона — как у эталона SQL (`query/compile.golden.test.ts:85`): JSON приезжает
+// структурно, тип навешивается один раз здесь. Имя своё (не `GOLDEN`): импорт эталона уже занят
+// тестами 0b/10, и переименовывать его задача 18 не вправе.
+const GOLDEN_STATES = (GOLDEN as unknown as { states: Record<SurfaceState, SurfacePayloads> })
+  .states;
+
+describe('четыре состояния: отличие ровно в назначенном месте (§С8-20)', () => {
+  test('эталон несёт ровно четыре состояния SURFACE_STATES и ни одного лишнего', () => {
+    // §С8-20 называет число состояний приёмкой. Ключи эталона — единственное место, где это
+    // число наблюдаемо: пятое состояние, дописанное «на всякий случай», и пропавшее четвёртое
+    // выглядели бы одинаково зелёными, если бы тесты проверяли только те состояния, что помнят.
+    expect(Object.keys(GOLDEN_STATES).sort()).toEqual([...SURFACE_STATES].sort());
+  });
+
+  test('module-off снят и равен эталону states["module-off"]', () => {
+    // Сверка по КАНОНИЧЕСКОЙ форме (порядок ключей объекта не значим, порядок элементов списка —
+    // значим): тот же довод, что у `registry-golden.test.ts`.
+    expect(canonicalJson(snap('module-off').surfaces)).toBe(
+      canonicalJson(GOLDEN_STATES['module-off']),
+    );
+  });
+
+  test('module-off: finance/budget-overview пуст, в baseline — непуст (§С8-22)', () => {
+    const base = snap('baseline').surfaces['finance/budget-overview'];
+    const off = snap('module-off').surfaces['finance/budget-overview'];
+    // Непустота baseline — половина утверждения: без неё «пусто при выключенном модуле» было бы
+    // зелёным и на мире, где конвертов нет вовсе.
+    expect(base.envelopes.length).toBeGreaterThan(0);
+    expect(off.envelopes).toEqual([]);
+    expect(off.comingUp).toEqual([]);
+    expect(off.planned).toEqual([]);
+    expect(off.unbudgeted).toEqual([]);
+    expect(off.alertCount).toBe(0);
+  });
+
+  test('module-off: planner/agenda, core/row, core/exclude-blocked — байт-в-байт как baseline', () => {
+    const base = snap('baseline');
+    const off = snap('module-off');
+    // §Б8-3: маска включённости стоит на ПОВЕРХНОСТЯХ-потребителях (реестр тулов, промпт-фрагменты,
+    // подписки, `entity_create`/`attach`), а не внутри эффективного реестра — определения остаются
+    // резолвимыми на чтение. Поэтому строка списка продолжает показывать сумму уже записанной
+    // транзакции: выключение модуля — не потеря данных на экране.
+    for (const surface of ['planner/agenda', 'core/row', 'core/exclude-blocked'] as const) {
+      expect(canonicalJson(off.surfaces[surface])).toBe(canonicalJson(base.surfaces[surface]));
+    }
+    // И то же утверждение целиком: расходится РОВНО одна поверхность, а не «ещё какая-то тоже».
+    expect(compareSnapshots(base, off).map((d) => d.surface)).toEqual(['finance/budget-overview']);
+  });
+
+  test('module-off: сохранённый AST с orbis/amount возвращает то же, что в baseline (§С8-22)', () => {
+    const base = amountNames.get('baseline') ?? [];
+    expect(base.length).toBeGreaterThan(0); // иначе утверждение пустое
+    // Ни одного `<uuid>`: иначе сравнивались бы две маски, а не два ответа на запрос.
+    expect(base).not.toContain('<uuid>');
+    expect(amountNames.get('module-off')).toEqual(base);
+  });
+
+  test('relabeled снят и равен эталону states["relabeled"]', () => {
+    expect(canonicalJson(snap('relabeled').surfaces)).toBe(canonicalJson(GOLDEN_STATES.relabeled));
+  });
+
+  test('relabeled: ни одна из четырёх поверхностей не сдвинулась', () => {
+    // Подпись живёт в реестре и рисуется КЛИЕНТОМ (`classLabel`, `effectiveLabel`); ни отбор, ни
+    // вычисление её не читают.
+    expect(compareSnapshots(snap('baseline'), snap('relabeled'))).toEqual([]);
+  });
+
+  test('relabeled: подпись аспекта в эффективном реестре ДРУГАЯ — состояние не пустое', () => {
+    // Без этого сторожа «снимки совпали» означало бы что угодно, включая «дельта молча не легла».
+    const base = aspectLabels.get('baseline');
+    expect(base).toBeDefined();
+    expect(aspectLabels.get('relabeled')).toBe(SURFACE_RELABEL_LABEL.ru);
+    expect(aspectLabels.get('relabeled')).not.toBe(base);
   });
 });

@@ -14,6 +14,7 @@ import {
   type BudgetOverview,
   type BudgetSubscription,
   canonicalJson,
+  type LocalizedText,
   ORBIS_NAMESPACE,
   type RowProjection,
   rowProjectionOf,
@@ -27,9 +28,11 @@ import type { WireEntity } from '../src/executor/types';
 import { type CompileCtx, compileQueryAst } from '../src/query/compile-ast';
 import { queryContext } from '../src/query/context';
 import { parseQueryText } from '../src/query/parse-text';
+import { appRouter } from '../src/router';
 import { agendaListOf, agendaSubscriptionOf } from '../src/subscriptions/agenda';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
+import { createCallerFactory } from '../src/trpc';
 import { toWireEntityFromSql } from '../src/wire';
 import {
   GATE_FIN_ASPECT,
@@ -422,4 +425,85 @@ export async function snapshotSurfaces(
   // датами.
   surfaces['core/exclude-blocked'].sort();
   return { state, surfaces };
+}
+
+/** Модуль состояния 2 — единственный, у которого в Б-1 есть подписка (§Б8-2, §С8-22). */
+export const SURFACE_OFF_MODULE = 'finance';
+/**
+ * Аспект состояния 4 — САМЫЙ читаемый: `orbis/task` участвует в чекбоксе и бейдже строки M14, в
+ * обеих секциях Agenda и в наборе `closed`. Если бы подпись куда-то текла, она текла бы отсюда.
+ */
+export const SURFACE_RELABEL_ASPECT = 'orbis/task';
+/**
+ * Тип ВЫВОДИТСЯ (`satisfies`), а не объявляется `LocalizedText`: под `noUncheckedIndexedAccess`
+ * `Record<string, string>` отдаёт `string | undefined` на любом ключе, и сторож подписи
+ * (`toBe(SURFACE_RELABEL_LABEL.ru)`) пришлось бы писать через каст. Значение остаётся
+ * `LocalizedText` для всех потребителей — это и проверяет `satisfies`.
+ */
+export const SURFACE_RELABEL_LABEL = { ru: 'Дело', en: 'Deed' } satisfies LocalizedText;
+
+/**
+ * ЧЕТЫРЕ СОСТОЯНИЯ — ЧЕТЫРЕ ВЛАДЕЛЬЦА, И ЭТО ЗАДУМАНО 0b, А НЕ ПРИДУМАНО ЗДЕСЬ.
+ *
+ * Стабилизация снимка (`stabilize`/`namesOf`) маскирует `ownerId` и переводит id мира в слаги
+ * (`@task-open`) с прямо записанным доводом: «эталон обязан быть сравним между прогонами И между
+ * четырьмя состояниями, у каждого из которых свой владелец». Значит «остальное байт-в-байт» между
+ * состояниями РАЗНЫХ владельцев — утверждение проверяемое, а не недостижимое.
+ *
+ * Владельцы — константы (uuidv5 от имени), как `SURFACE_OWNER_ID` и `SURFACE_GATE_OWNER_ID`.
+ * Случайный `freshUserId()` здесь запрещён вдвойне: id мира считаются от владельца
+ * (`surfaceEntityId`), и на случайном владельце они уехали бы в снимок как `<uuid>` вместо
+ * `@slug` — красный тест 0b «ни одного id мимо словаря слагов».
+ */
+export const SURFACE_OFF_OWNER_ID = uuidv5('surface-snapshot-fixture:off-owner', ORBIS_NAMESPACE);
+export const SURFACE_RELABEL_OWNER_ID = uuidv5(
+  'surface-snapshot-fixture:relabel-owner',
+  ORBIS_NAMESPACE,
+);
+
+/** Владелец каждого состояния. Состояния 1 и 3 остаются на владельцах 0b и 10 — их тесты читают их миры. */
+export const SURFACE_STATE_OWNER: Readonly<Record<SurfaceState, string>> = {
+  baseline: SURFACE_OWNER_ID,
+  'module-off': SURFACE_OFF_OWNER_ID,
+  'custom-aspect': SURFACE_GATE_OWNER_ID,
+  relabeled: SURFACE_RELABEL_OWNER_ID,
+};
+
+/**
+ * Перевести мир владельца в состояние — ПОСЛЕ сева (`seedSurfaceWorld`), не до.
+ *
+ * Порядок — суть, а не стиль: сев создаёт конверты и движения, то есть `entity_create` с
+ * аспектами Финансов, а при выключенном модуле это честный отказ `MODULE_DISABLED` (§Б8-3).
+ * «Сначала выключить, потом сеять» дало бы пустой мир и зелёный снимок не про модуль вовсе.
+ *
+ * Состояния задаются ТЕМИ ЖЕ жестами, что доступны владельцу (ручки tRPC поверх исполнителя:
+ * `user.setModuleEnabled` — операция `module_set`, `registry.setAspectDelta` — `aspect_delta_set`),
+ * а не прямыми UPDATE: снимок обязан описывать поведение продукта, а не поведение фикстуры.
+ */
+export async function applySurfaceState(
+  db: Db,
+  ownerId: string,
+  state: SurfaceState,
+): Promise<void> {
+  const caller = createCallerFactory(appRouter)({
+    actorUserId: ownerId,
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+  });
+  switch (state) {
+    // Состояния 1 и 3 целиком задаются СЕВОМ (`gateAspects`) — поверх него делать нечего.
+    case 'baseline':
+    case 'custom-aspect':
+      return;
+    case 'module-off':
+      await caller.user.setModuleEnabled({ module: SURFACE_OFF_MODULE, enabled: false });
+      return;
+    case 'relabeled':
+      await caller.registry.setAspectDelta({
+        aspect: SURFACE_RELABEL_ASPECT,
+        delta: { label: SURFACE_RELABEL_LABEL },
+      });
+      return;
+  }
 }
