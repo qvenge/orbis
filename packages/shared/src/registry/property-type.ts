@@ -236,8 +236,9 @@ export const relationRoleDefinitionSchema = z
     sourceLabel: localizedTextSchema,
     targetLabel: localizedTextSchema,
     hierarchical: z.boolean(),
-    // Generic-ограничения §А4-2. В срезе А поля ЛЕЖАТ: `target_max_incoming` включает
-    // Задача 7a, `source_contract`/`target_contract` — часть Б (контрактов ещё нет).
+    // Generic-ограничения §А4-2. `target_max_incoming` включила Задача 7a среза А;
+    // `source_contract`/`target_contract` ЛЕЖАТ и после Б-1 — контракты засеяны, а их
+    // проверка на записи ребра — срез Б-2 (вместе с правилами каталога).
     constraints: z
       .object({
         target_max_incoming: z.number().int().min(1).optional(),
