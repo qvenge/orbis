@@ -35,11 +35,17 @@ export const GENUS_ORDER: readonly Genus[] = ['Q', 'D', 'C', 'T', 'V', 'E', 'P',
 
 /** Счёт мест по зонам — шапка §С1-4 (спека:644). Пин: парсер обязан воспроизвести его. */
 export const DECLARED_PLACES: Readonly<Record<string, number>> = {
-  Z1: 112, Z2: 108, Z3: 100, Z4: 141, Z5: 181,
+  Z1: 112,
+  Z2: 108,
+  Z3: 100,
+  Z4: 141,
+  Z5: 181,
 };
 /** Прогноз §С8-14 (спека:1620): «по ведущему роду ≈ 445 / ≈ 180 / ≈ 17 из 642». */
 export const FORECAST: Readonly<Record<Basket, number>> = {
-  данные: 445, 'машинерия B': 180, 'остаток C': 17,
+  данные: 445,
+  'машинерия B': 180,
+  'остаток C': 17,
 };
 /** §С8-14: расхождение больше этой доли разбирается поимённо. */
 export const DEVIATION_LIMIT = 0.1;
@@ -72,7 +78,12 @@ export function placeNumbers(cell: string): string[] {
   return out;
 }
 
-interface ZoneSlice { zone: string; table: string[]; summary: string[]; caption: string }
+interface ZoneSlice {
+  zone: string;
+  table: string[];
+  summary: string[];
+  caption: string;
+}
 
 /** Разрез спеки на зоны: таблица покрытия и её «Сводка (правило 5)». */
 export function sliceZones(md: string): ZoneSlice[] {
@@ -105,25 +116,37 @@ export function sliceZones(md: string): ZoneSlice[] {
 
 /** Клетки строки таблицы; хвост после третьей колонки не разбирается — там свободный текст. */
 function cells(line: string): string[] {
-  return line.split('|').slice(1).map((s) => s.trim());
+  return line
+    .split('|')
+    .slice(1)
+    .map((s) => s.trim());
 }
 const isRule = (line: string): boolean => /^\|\s*[-:]+/.test(line);
 
 export interface ZoneCoverage {
-  zone: string; rows: number; places: number;
-  byGenus: Record<Genus, number>; byBasket: Record<Basket, number>;
-  residualLeading: string[]; residualAny: string[];
+  zone: string;
+  rows: number;
+  places: number;
+  byGenus: Record<Genus, number>;
+  byBasket: Record<Basket, number>;
+  residualLeading: string[];
+  residualAny: string[];
   declared: { leading: boolean; byGenus: Record<Genus, number> } | null;
 }
 export interface Coverage {
-  zones: ZoneCoverage[]; places: number; byBasket: Record<Basket, number>; residualAny: string[];
+  zones: ZoneCoverage[];
+  places: number;
+  byBasket: Record<Basket, number>;
+  residualAny: string[];
 }
 
 const zeroGenus = (): Record<Genus, number> =>
   Object.fromEntries(GENUS_ORDER.map((g) => [g, 0])) as Record<Genus, number>;
 
 /** Счётчик из «Сводки» зоны — и объявленный ею метод (сверять можно только «по ведущему роду»). */
-function parseDeclared(slice: ZoneSlice): { leading: boolean; byGenus: Record<Genus, number> } | null {
+function parseDeclared(
+  slice: ZoneSlice,
+): { leading: boolean; byGenus: Record<Genus, number> } | null {
   if (slice.summary.length === 0) return null;
   const byGenus = zeroGenus();
   for (const line of slice.summary) {
@@ -162,18 +185,75 @@ export function parseCoverage(md: string): Coverage {
     const byBasket: Record<Basket, number> = { данные: 0, 'машинерия B': 0, 'остаток C': 0 };
     for (const g of GENUS_ORDER) byBasket[basketOf(g)] += byGenus[g];
     zones.push({
-      zone: slice.zone, rows, places: genusOf.size, byGenus, byBasket,
-      residualLeading: [...genusOf.entries()].filter(([, g]) => g === 'остаток C').map(([n]) => `${slice.zone}-${n}`),
+      zone: slice.zone,
+      rows,
+      places: genusOf.size,
+      byGenus,
+      byBasket,
+      residualLeading: [...genusOf.entries()]
+        .filter(([, g]) => g === 'остаток C')
+        .map(([n]) => `${slice.zone}-${n}`),
       residualAny: [...anyResidual].map((n) => `${slice.zone}-${n}`),
       declared: parseDeclared(slice),
     });
   }
   const byBasket: Record<Basket, number> = { данные: 0, 'машинерия B': 0, 'остаток C': 0 };
-  for (const z of zones) for (const b of Object.keys(byBasket) as Basket[]) byBasket[b] += z.byBasket[b];
+  for (const z of zones)
+    for (const b of Object.keys(byBasket) as Basket[]) byBasket[b] += z.byBasket[b];
   return {
     zones,
     places: zones.reduce((a, z) => a + z.places, 0),
     byBasket,
     residualAny: zones.flatMap((z) => z.residualAny),
   };
+}
+
+const pct = (v: number, base: number): string => `${(((v - base) / base) * 100).toFixed(1)} %`;
+
+export function formatReport(cov: Coverage): string {
+  const L: string[] = [];
+  L.push(
+    '| Зона | строк | мест | данные | машинерия B | остаток C |',
+    '|---|---:|---:|---:|---:|---:|',
+  );
+  for (const z of cov.zones) {
+    L.push(
+      `| ${z.zone} | ${z.rows} | ${z.places} | ${z.byBasket['данные']} | ${z.byBasket['машинерия B']} | ${z.byBasket['остаток C']} |`,
+    );
+  }
+  L.push(
+    `| **Итого** | | **${cov.places}** | **${cov.byBasket['данные']}** | **${cov.byBasket['машинерия B']}** | **${cov.byBasket['остаток C']}** |`,
+  );
+  L.push(
+    '',
+    '| Корзина | факт | прогноз §С8-14 | отклонение | разбирается поимённо |',
+    '|---|---:|---:|---:|---|',
+  );
+  for (const b of ['данные', 'машинерия B', 'остаток C'] as Basket[]) {
+    const over = Math.abs(cov.byBasket[b] - FORECAST[b]) / FORECAST[b] > DEVIATION_LIMIT;
+    L.push(
+      `| ${b} | ${cov.byBasket[b]} | ≈ ${FORECAST[b]} | ${pct(cov.byBasket[b], FORECAST[b])} | ${over ? 'да' : 'нет'} |`,
+    );
+  }
+  for (const b of ['данные', 'машинерия B', 'остаток C'] as Basket[]) {
+    if (Math.abs(cov.byBasket[b] - FORECAST[b]) / FORECAST[b] <= DEVIATION_LIMIT) continue;
+    L.push(
+      '',
+      `**Поимённо — «${b}»** (§С8-14: место переехало или у него появилась записанная причина):`,
+    );
+    if (b === 'остаток C') {
+      L.push(
+        `- ведущий род «остаток C» — ${cov.byBasket[b]} мест: ${cov.zones.flatMap((z) => z.residualLeading).join(', ')}`,
+      );
+      L.push(
+        `- остаток C упомянут хоть раз (вторым вердиктом тоже) — ${cov.residualAny.length}: ${cov.residualAny.join(', ')}`,
+      );
+    }
+  }
+  return L.join('\n');
+}
+
+if (import.meta.main) {
+  const md = await Bun.file(SPEC_PATH).text(); // запуск — из корня репозитория, как у греп-гейта
+  console.log(formatReport(parseCoverage(md)));
 }
