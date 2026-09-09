@@ -64,12 +64,16 @@ const ROW = sql.raw('e');
 const sqlOf = (s: SQL): string => dialect.sqlToQuery(s).sql.replaceAll(/\s+/g, ' ').trim();
 
 /** Отказ компилятора: код всегда VALIDATION, различает причина в details. */
-function refusal(fn: () => unknown): { code: string; reason: string } {
+function refusal(fn: () => unknown): { code: string; reason: string; details: unknown } {
   try {
     fn();
   } catch (e) {
     if (e instanceof ExecError) {
-      return { code: e.code, reason: String((e.details as { reason?: unknown })?.reason) };
+      return {
+        code: e.code,
+        reason: String((e.details as { reason?: unknown })?.reason),
+        details: e.details,
+      };
     }
     throw e;
   }
@@ -279,6 +283,42 @@ describe('SQL-бэкенд E: членство в наборе', () => {
     expect(
       sqlOf(compileClassListMembership('orbis/completable', ['done', 'cancelled'], CTX, ROW)),
     ).toBe(sqlOf(compileClassMembership('orbis/completable', 'closed', CTX, ROW)));
+  });
+
+  test('набор, ссылающийся САМ НА СЕБЯ, отказывает названно, а не переполнением стека (Ф-Б1-21)', () => {
+    // Обстановка кладётся ДЕКЛАРАЦИЕЙ — тулом такой набор владельцу не завести (состав своего
+    // набора это классы контракта, `contractDeltaSchema`), и цикл сюда может прийти только
+    // сидом либо будущей формой дельты. Проверяется именно то, ради чего кап заведён:
+    // компилятор ОТКАЗЫВАЕТ, а не роняет процесс.
+    const base = BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/completable');
+    if (base === undefined || base.kind !== 'slots') throw new Error('нет контракта фикстуры');
+    const looped: ContractDefinition = {
+      ...base,
+      sets: {
+        ...base.sets,
+        // «Член набора `петля` тот, кто член набора `петля`» — короткий цикл из одного набора.
+        петля: {
+          op: 'in',
+          args: [{ class: { contract: 'orbis/completable' } }, { const: 'петля' }],
+        } as never,
+      },
+    };
+    const ctx = ctxOf({
+      reg: snapshot({
+        contracts: new Map([
+          ...BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c] as const),
+          ['orbis/completable', looped],
+        ]),
+      }),
+    });
+    const e = refusal(() => compileClassMembership('orbis/completable', 'петля', ctx, ROW));
+    expect([e.code, e.reason]).toEqual(['VALIDATION', 'EXPR_SHAPE']);
+    // Отказ НАЗЫВАЕТ набор — иначе владелец искал бы цикл по всему реестру.
+    expect(e.details).toMatchObject({ contract: 'orbis/completable', set: 'петля', setDepth: 16 });
+    // Проба не вакуумна: без цикла тот же путь компилируется.
+    expect(sqlOf(compileClassMembership('orbis/completable', 'closed', ctx, ROW))).toContain(
+      'orbis/task_status',
+    );
   });
 
   test('неизвестный контракт и неизвестный набор — РАЗНЫЕ причины, не пустота (§С8-3)', () => {

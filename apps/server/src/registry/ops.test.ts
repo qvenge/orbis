@@ -1339,6 +1339,26 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     ).toBe('NOT_FOUND');
   });
 
+  test('САМОССЫЛЬНЫЙ набор через тул — отказ на ЗАПИСИ, а не переполнение стека на чтении (Ф-Б1-21)', async () => {
+    // Самоссылка владельцу невыразима ПО ПОСТРОЕНИЮ, и это ответ сильнее капа: состав своего
+    // набора — КЛАССЫ контракта (`contractDeltaSchema`), а имя набора классом не является,
+    // поэтому «набор из самого себя» отвергается словарём классов ДО записи. Кап развёртки
+    // (`SET_RECURSION_CAP`, `expr/compile.ts`) остаётся вторым рубежом — для цикла, пришедшего
+    // сидом; здесь пинится первый, и пинится он именно как ОТКАЗ С ПРИЧИНОЙ.
+    const e = err(
+      await runAs('contract_sets_delta_set', {
+        contract: 'orbis/completable',
+        setsDelta: { loop: ['loop'] },
+      }),
+    );
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'DELTA_SET_UNKNOWN_CLASS',
+    ]);
+    // Реестр читается: отказ пришёл до записи.
+    expect((await regOf()).contracts.get('orbis/completable')?.sets?.loop).toBeUndefined();
+  });
+
   test('ручка владельца исполняет ту же операцию без карточки (source: ui)', async () => {
     const caller = createCallerFactory(appRouter)({
       actorUserId: toolOwner,

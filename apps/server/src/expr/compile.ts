@@ -61,6 +61,14 @@ export interface ExprCompileScope {
    * обёртки начинают с нуля.
    */
   relationDepth?: number;
+  /**
+   * Сколько ПРЕДИКАТНЫХ НАБОРОВ уже развёрнуто на этом пути (кап — `SET_RECURSION_CAP`).
+   * Считается отдельно от `relationDepth`, а не тем же числом, и это несущее различие:
+   * `relationDepth` заодно даёт алиасы подзапросов, и увеличив его ради набора, мы сдвинули
+   * бы имена `r`/`far` у уже написанного SQL. Набор же рекурсирует и БЕЗ нового EXISTS —
+   * через правый операнд `in` (`{const:'<набор>'}`), — поэтому свой счётчик обязателен.
+   */
+  setDepth?: number;
 }
 
 /** Область слотов: контракт и привязка известны оба или ни один. */
@@ -330,7 +338,14 @@ function relationPredicate(
   }
   if (spec.in_set !== undefined) {
     conds.push(
-      classMembershipAt(spec.in_set.contract, spec.in_set.set, scope.cctx, far, depth + 1),
+      classMembershipAt(
+        spec.in_set.contract,
+        spec.in_set.set,
+        scope.cctx,
+        far,
+        depth + 1,
+        scope.setDepth ?? 0,
+      ),
     );
   }
   return sql`EXISTS (SELECT 1 FROM relations ${rel} JOIN entities ${far} ON ${far}.id = ${rel}.source_id WHERE ${sql.join(conds, sql.raw(' AND '))})`;
@@ -357,6 +372,7 @@ function inPredicate(args: readonly ExprNode[], scope: ExprCompileScope): SQL {
       scope.cctx,
       scope.row,
       scope.relationDepth ?? 0,
+      scope.setDepth ?? 0,
     );
   }
   if (Array.isArray(value)) {
@@ -444,13 +460,14 @@ export function compileContractPredicate(
   return contractPredicateAt(contract, expr, cctx, row, 0);
 }
 
-/** То же, но с уровнем вложенности EXISTS'ов: см. `ExprCompileScope.relationDepth`. */
+/** То же, но с уровнями вложенности: см. `ExprCompileScope.relationDepth`/`setDepth`. */
 function contractPredicateAt(
   contract: string,
   expr: ExprNode,
   cctx: CompileCtx,
   row: SQL,
   depth: number,
+  setDepth = 0,
 ): SQL {
   if (!cctx.reg.contracts.get(contract)) {
     return fail('UNKNOWN_CONTRACT', `контракта '${contract}' нет в реестре владельца`, {
@@ -473,6 +490,7 @@ function contractPredicateAt(
       binding,
       row,
       relationDepth: depth,
+      setDepth,
     });
     return sql`(${sql.join([aspect, ...required, body], sql.raw(' AND '))})`;
   });
@@ -485,17 +503,44 @@ export function compileClassMembership(
   cctx: CompileCtx,
   row: SQL,
 ): SQL {
-  return classMembershipAt(contract, set, cctx, row, 0);
+  return classMembershipAt(contract, set, cctx, row, 0, 0);
 }
 
-/** То же, но с уровнем вложенности EXISTS'ов: см. `ExprCompileScope.relationDepth`. */
+/**
+ * ПОТОЛОК РАЗВЁРТКИ ПРЕДИКАТНЫХ НАБОРОВ (Ф-Б1-21). Набор, предикат которого через `in` либо
+ * `has_relation.in_set` приводит обратно к нему самому, разворачивался бы бесконечно —
+ * и владелец получал бы не отказ, а переполнение стека, то есть падение без единого имени.
+ *
+ * ЧИСЛО, А НЕ ГРАФ ССЫЛОК: цикл ловится там же, где он больно бьёт, — на развёртке, — и
+ * ловится ЛЮБОЙ, включая цикл через три-четыре набора. Граф пришлось бы держать вторым
+ * описанием устройства наборов рядом с самими наборами. 16 — заведомо выше всего, что
+ * встречается: самая глубокая встроенная цепочка Б-1 разворачивает один набор внутри
+ * другого (`blocked` → `open`), то есть два уровня.
+ *
+ * ЗАПИСЬ ЭТОТ КАП НЕ ЗАМЕНЯЕТ, А ДОПОЛНЯЕТ: тул `contract_sets_delta_set` отвергает
+ * самоссылку владельца раньше и точнее — состав СВОЕГО набора это КЛАССЫ контракта
+ * (`contractDeltaSchema`), и имя набора среди них не значится (`DELTA_SET_UNKNOWN_CLASS`
+ * ДО записи). Здесь fail-closed на случай цикла, пришедшего сидом либо будущей формой
+ * дельты: пропустить его значило бы уронить процесс на чтении.
+ */
+const SET_RECURSION_CAP = 16;
+
+/** То же, но с уровнями вложенности: см. `ExprCompileScope.relationDepth`/`setDepth`. */
 function classMembershipAt(
   contract: string,
   set: string,
   cctx: CompileCtx,
   row: SQL,
   depth: number,
+  setDepth: number,
 ): SQL {
+  if (setDepth >= SET_RECURSION_CAP) {
+    return fail(
+      'EXPR_SHAPE',
+      `набор '${set}' контракта '${contract}' разворачивается глубже ${SET_RECURSION_CAP} уровней — вероятна ссылка набора на себя`,
+      { contract, set, setDepth },
+    );
+  }
   const def = cctx.reg.contracts.get(contract);
   if (!def) {
     return fail('UNKNOWN_CONTRACT', `контракта '${contract}' нет в реестре владельца`, {
@@ -514,7 +559,7 @@ function classMembershipAt(
   // (§Б2-3, `slotSql`), а `NULL = false` — это NULL, а не «не член». Без обёртки строка
   // молча выпадала бы и из набора, и из `NOT (…)` над ним.
   if (!Array.isArray(spec)) {
-    return sql`COALESCE((${contractPredicateAt(contract, spec, cctx, row, depth)}), false)`;
+    return sql`COALESCE((${contractPredicateAt(contract, spec, cctx, row, depth, setDepth + 1)}), false)`;
   }
   // Списочный набор — перечисление классов контракта: та же ветка, что у `{const:[…]}` в `in`.
   return compileClassListMembership(contract, spec, cctx, row);
