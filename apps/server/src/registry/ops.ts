@@ -45,6 +45,7 @@ import {
   type PropertyType,
   propertyDefinitionSchema,
   ROLE_REF,
+  type SubscriptionDefinition,
 } from '@orbis/shared';
 import {
   type BodyDoc,
@@ -92,6 +93,7 @@ import {
   loadRegistryRows,
   type RegistryDictionaries,
   type RegistrySnapshot,
+  type SubscriptionRow,
 } from './load';
 import { bumpOwnerRegistryVersion, readRegistryVersions } from './version';
 
@@ -2051,6 +2053,77 @@ export async function removeSubscriptionDelta(
   subscriptionId: string,
 ): Promise<void> {
   await removeDeltaRow(tx, ownerId, 'subscription', subscriptionId);
+}
+
+/**
+ * Строка подписки по адресу — СВОЯ, если она есть, иначе системная.
+ *
+ * Один читатель на оба вопроса, потому что вопрос один: «что сейчас стоит по этому адресу».
+ * `ORDER BY owner_id NULLS LAST` — та же дисциплина перекрытия, что у `loadRegistryRows`
+ * (`registry/load.ts`), только развёрнутая: там снимок собирается сверху вниз и своя строка
+ * ложится ПОСЛЕ системной, здесь нужна одна строка и своя важнее.
+ */
+export async function readSubscriptionRow(
+  tx: Tx,
+  ownerId: string,
+  id: string,
+): Promise<SubscriptionRow | null> {
+  const rows = (await tx.execute(sql`
+    SELECT id, owner_id, surface, definition, module, rank FROM subscription_definitions
+     WHERE id = ${id} AND (owner_id IS NULL OR owner_id = ${ownerId}::uuid)
+     ORDER BY owner_id NULLS LAST LIMIT 1`)) as unknown as RawRow[];
+  const r = rows[0];
+  if (r === undefined) return null;
+  return {
+    id: r.id as string,
+    ownerId: (r.owner_id as string | null) ?? null,
+    surface: r.surface as string,
+    definition: r.definition as SubscriptionDefinition,
+    module: (r.module as string | null) ?? null,
+    rank: Number(r.rank),
+  };
+}
+
+/**
+ * Своя подписка владельца (§Б5-1). Namespace — тот же гейт и тот же довод, что у свойств
+ * (`KEY_NAMESPACE` выше): `orbis/…` завтра посеет релиз, и своя строка МОЛЧА перекрыла бы
+ * системную по правилу «своя перекрывает встроенную».
+ *
+ * Смысл декларации проверяется ЗДЕСЬ, до INSERT'а (Р-И-7): на записи владелец видит отказ и
+ * может его исправить, на чтении — только запертый снимок реестра.
+ */
+export async function setOwnSubscription(
+  tx: Tx,
+  ownerId: string,
+  row: SubscriptionRow,
+): Promise<void> {
+  if (!row.id.startsWith('user/')) {
+    throw new ExecError(
+      'VALIDATION',
+      `свои подписки живут в namespace user/ — «${row.id}» занимает чужой (§Б5-1)`,
+      { reason: 'SUBSCRIPTION_NAMESPACE', subscription: row.id },
+    );
+  }
+  const rows = await loadRegistryRows(tx, ownerId);
+  assertSubscription(
+    { ...row, ownerId },
+    { reg: { ...rows, ownerVersion: 0, systemVersion: 0 }, systemSeed: false },
+  );
+  await tx.execute(sql`
+    INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
+    VALUES (${row.id}, ${ownerId}::uuid, ${row.surface},
+            ${JSON.stringify(row.definition)}::jsonb, ${row.module}, ${row.rank})
+    ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL
+      DO UPDATE SET surface = EXCLUDED.surface, definition = EXCLUDED.definition,
+                    module = EXCLUDED.module, rank = EXCLUDED.rank`);
+  await bumpOwnerRegistryVersion(tx, ownerId);
+}
+
+/** Снятие своей подписки: системные строки не трогаются (`owner_id IS NOT NULL`). */
+export async function removeOwnSubscription(tx: Tx, ownerId: string, id: string): Promise<void> {
+  await tx.execute(sql`
+    DELETE FROM subscription_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${id}`);
+  await bumpOwnerRegistryVersion(tx, ownerId);
 }
 
 // ---------------------------------------------------------------------------
