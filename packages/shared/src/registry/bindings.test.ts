@@ -624,6 +624,72 @@ describe('checkClassMap: вариант дельты без отнесения �
       }),
     ).toEqual([['UNKNOWN_SLOT', 'not_status']]);
   });
+  test('привязка к НЕ носимому свойству слотом-статусом не считается — not_bound (Ф-Б1-54а)', () => {
+    // ОДНА ИСТИНА НОСИМОСТИ НА ОБА ЧЕКЕРА. Аспект биндит `orbis/task_status` в слот-статус, но
+    // в составе его НЕ несёт: `checkImplements` такую привязку отвергает
+    // (`UNKNOWN_PROPERTY/not_carried`), и `statusSlotsOf` теперь тоже не считает её слотом —
+    // иначе на одной строке два чекера отвечали бы по-разному, а карта уезжала бы в `value_map`
+    // привязки, которую писатель привязок не принял бы.
+    const carrier: AspectDefinition = {
+      ...NOTE,
+      id: 'user/not-carrying',
+      key: 'user/not-carrying',
+      ownerId: '00000000-0000-4000-8000-000000000001',
+      properties: [],
+      implements: [
+        {
+          contract: 'orbis/completable',
+          bind: { status: 'orbis/task_status' },
+          value_map: [],
+          fixed: {},
+        },
+      ],
+    };
+    const reg = { ...REG, aspects: new Map([...REG.aspects, [carrier.id, carrier]]) };
+    // Позитивный контроль: тот же аспект, НЕСУЩИЙ свойство, слот даёт — значит тест падает
+    // от носимости, а не от того, что фикстура вообще ни к чему не привязана.
+    const honest = {
+      ...carrier,
+      properties: [{ propertyId: 'orbis/task_status', required: false, rank: 1 }],
+    };
+    const withHonest = { ...REG, aspects: new Map([...REG.aspects, [honest.id, honest]]) };
+    const delta = {
+      classMap: {
+        'orbis/task_status': [
+          { contract: 'orbis/completable', slot: 'status', variant: 'done', class: 'done' },
+        ],
+      },
+    };
+    expect(checkClassMap(delta, NOTE, reg).map((i) => [i.code, i.details.reason])).toEqual([]);
+    expect(checkClassMap(delta, NOTE, withHonest)).toEqual([]);
+    // …а на СВОЁМ свойстве, которое носит только не носящий аспект, — `not_bound`.
+    const own = {
+      classMap: {
+        'orbis/content_type': [
+          { contract: 'orbis/completable', slot: 'status', variant: 'md', class: 'done' },
+        ],
+      },
+    };
+    const bindsContent: AspectDefinition = {
+      ...carrier,
+      implements: [
+        {
+          contract: 'orbis/completable',
+          bind: { status: 'orbis/content_type' },
+          value_map: [],
+          fixed: {},
+        },
+      ],
+    };
+    const notCarried = {
+      ...REG,
+      aspects: new Map([...REG.aspects, [bindsContent.id, bindsContent]]),
+    };
+    expect(checkClassMap(own, NOTE, notCarried).map((i) => [i.code, i.details.reason])).toEqual([
+      ['UNKNOWN_SLOT', 'not_bound'],
+    ]);
+  });
+
   test('карта на свойстве, которое в этом слоте НЕ стоит, — not_bound', () => {
     // Слот-статус существует, но `orbis/priority` в нём не стоит ни у одного аспекта: отнесение
     // не доедет ни до одной привязки, а владелец уверен, что назначил класс.

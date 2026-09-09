@@ -2550,6 +2550,9 @@ describe('дельта аспекта как держатель свойства
       key: 'user/cm-carrier',
       label: { ru: 'Носитель статуса' },
       properties: [{ key: 'cm-note', type: { kind: 'number' } }],
+      // Аспект НЕСЁТ то, что биндит (Ф-Б1-54а): привязка к не носимому свойству — форма,
+      // которую `checkImplements` отвергает, а `statusSlotsOf` теперь тоже не считает слотом.
+      carries: [src],
       implements: [
         { contract: 'orbis/completable', bind: { status: src }, value_map: [], fixed: {} },
       ],

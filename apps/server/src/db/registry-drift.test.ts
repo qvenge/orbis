@@ -316,6 +316,9 @@ describe('конфликты пересева становятся единиц�
       key: 'user/content-status',
       label: { ru: 'Вид текста как статус' },
       properties: [{ key: 'note', type: { kind: 'number' } }],
+      // Аспект НЕСЁТ биндуемое свойство (Ф-Б1-54а): носимость — общая истина `checkImplements`
+      // и `statusSlotsOf`, и привязка к не носимому слотом-статусом не считается.
+      carries: ['orbis/content_type'],
       implements: [
         {
           contract: 'orbis/completable',

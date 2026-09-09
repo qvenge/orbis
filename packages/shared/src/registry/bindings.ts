@@ -323,7 +323,18 @@ export interface AspectDeltaVariants {
   classMap?: Record<string, readonly ClassMapEntry[]>;
 }
 
-/** (контракт, слот), где свойство работает СЛОТОМ-СТАТУСОМ хоть у одного аспекта реестра. */
+/**
+ * (контракт, слот), где свойство работает СЛОТОМ-СТАТУСОМ хоть у одного аспекта реестра.
+ *
+ * НОСИМОСТЬ ПРОВЕРЯЕТСЯ ЗДЕСЬ ТОЖЕ — одна истина на оба чекера (Ф-Б1-54а). `checkImplements`
+ * отвергает привязку к свойству, которого аспект не несёт (`UNKNOWN_PROPERTY/not_carried`:
+ * `carried` — это состав аспекта), а этот обход смотрел только на `bind` — и на одной и той же
+ * строке два чекера отвечали по-разному: «карта законна» ≠ «привязка законна». Расходились они
+ * ровно на строках, посеянных МИМО тулов (фикстуры, прямой сид): у встроенных и у всего, что
+ * пишут тулы задачи 15, аспект носит биндуемое по построению. Молчаливое расхождение хуже
+ * отказа: карта классов на такую пару принималась и уезжала в `value_map` привязки, которую
+ * писатель привязок отверг бы.
+ */
 function statusSlotsOf(
   propertyId: string,
   reg: {
@@ -334,11 +345,14 @@ function statusSlotsOf(
   const out: Array<{ contract: string; slot: string }> = [];
   const seen = new Set<string>();
   for (const aspect of reg.aspects.values()) {
+    const carried = new Set(aspect.properties.map((p) => p.propertyId));
     for (const binding of aspect.implements) {
       const contract = reg.contracts.get(binding.contract);
       if (contract === undefined || contract.kind !== 'slots') continue;
       for (const [slot, bound] of Object.entries(binding.bind)) {
         if (bound !== propertyId) continue;
+        // Привязка к не носимому свойству — не привязка (`checkImplements`, `not_carried`).
+        if (!carried.has(propertyId)) continue;
         // Классы вешаются только на слот-статус (§Б1-1): у прочих слотов классов нет.
         if (contract.slots.find((s) => s.name === slot)?.status !== true) continue;
         const key = `${binding.contract} ${slot}`;

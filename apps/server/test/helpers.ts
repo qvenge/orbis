@@ -117,6 +117,17 @@ export interface CustomAspectSpec {
    * здесь же одной строкой — значения фикстуры уже написаны в целевой форме.
    */
   implements?: unknown[];
+  /**
+   * УЖЕ СУЩЕСТВУЮЩИЕ свойства (id), которые аспект НЕСЁТ сверх собственных полей.
+   *
+   * Нужно ровно там, где фикстура биндит чужое свойство: носимость — общая истина обоих
+   * чекеров (`checkImplements` отвергает `not_carried`, `statusSlotsOf` такую привязку не
+   * считает слотом-статусом, Ф-Б1-54а), и аспект, биндящий то, чего не носит, — форма, которую
+   * ни тул, ни сид не породят. Собственные поля хелпер сам заводит и адресует
+   * `<namespace>/<имя>`, а эти строки уже есть — и адресуются своим id (у пользовательского
+   * свойства это uuid, Р3).
+   */
+  carries?: readonly string[];
   /** Модуль аспекта (§Б8-2): нужен снимкам состояния «модуль выключен» (задача 18). */
   module?: string | null;
 }
@@ -156,11 +167,18 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
           type = EXCLUDED.type, rank = EXCLUDED.rank`);
     }
 
-    const refs = spec.properties.map((p, index) => ({
-      propertyId: propertyId(p.key),
-      required: p.required ?? false,
-      rank: index + 1,
-    }));
+    const refs = [
+      ...spec.properties.map((p, index) => ({
+        propertyId: propertyId(p.key),
+        required: p.required ?? false,
+        rank: index + 1,
+      })),
+      ...(spec.carries ?? []).map((id, index) => ({
+        propertyId: id,
+        required: false,
+        rank: spec.properties.length + index + 1,
+      })),
+    ];
 
     await db.execute(sql`
       INSERT INTO aspect_definitions
