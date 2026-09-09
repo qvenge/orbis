@@ -67,7 +67,7 @@ describe('манифест модуля (§Б8-1): состав вне реес�
   test('moduleOfTool: attach_* — по module аспекта, core-тул — по манифесту', () => {
     const reg = { aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])) };
     expect(moduleOfTool('attach_orbis_financial', reg)).toBe('finance');
-    expect(moduleOfTool('attach_orbis_note', reg)).toBe(null); // ядро, builtin-aspects.ts:139
+    expect(moduleOfTool('attach_orbis_note', reg)).toBe(null); // ядро: у `orbis/note` в builtin-aspects.ts поля module нет
     expect(moduleOfTool('budget_status', reg)).toBe('finance');
     expect(moduleOfTool('entity_create', reg)).toBe(null);
   });
