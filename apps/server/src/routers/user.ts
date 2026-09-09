@@ -4,12 +4,18 @@
 // Экспорт и настройки идут одним withIdentity-tx; сид — ТРЕМЯ транзакциями (мир пачкой через
 // исполнитель, настройки с тредом, садовник словаря), и все три держит `seedOwner`: роутер не
 // вправе знать, сколько их, — иначе следующая фаза сева потребует правки и здесь.
-// user_settings — конфигурация, НЕ сущность: пишется напрямую, не через executor/журнал (§2.2).
+// `user_settings` — конфигурация, НЕ сущность: LWW-поля (§7.3) пишутся напрямую. ИСКЛЮЧЕНИЕ —
+// `disabled_modules`: включённость модуля меняет всё, что видит владелец (тулы, промпт,
+// подписки, запись), и §Б8-1 №28 требует журнал и undo — она идёт через executor операцией
+// `module_set`, как реестровые.
+import { setModuleEnabledInput } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
+import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
 import { exportData, type OrbisExport } from '../export';
 import { isValidTimeZone } from '../query/context';
 import { seedOwner } from '../seed/onboarding';
@@ -39,6 +45,10 @@ const updateSettingsInput = z
     viewPreferences: z.record(z.unknown()).optional(),
   })
   .strict();
+
+// Боевой синк журнала — один инстанс на модуль (состояния не хранит), как в роутерах 1a:
+// без него действие ушло бы в NOOP_SINK, и «отмени последнее» переключение не нашло бы.
+const journalSink = makeChatJournalSink();
 
 export const userRouter = router({
   // §9.3: сид/настройки/экспорт — управление аккаунтом, PAT-агенту закрыто (ownerOnly);
@@ -79,6 +89,38 @@ export const userRouter = router({
         return toWireUserSettings(rows[0]);
       }),
   ),
+
+  /**
+   * §Б8-1 №28: трансляция в операцию тем же приёмом, что `registryMutation`
+   * (`routers/registry.ts:48`) — `actorKind: 'owner'`, `source: 'ui'`, одна операция.
+   * `updateSettingsInput` модулями НЕ расширяется: у одной настройки было бы два пути
+   * записи — один с журналом и undo, другой без.
+   */
+  setModuleEnabled: ownerOnlyProcedure
+    .input(setModuleEnabledInput)
+    .mutation(async ({ ctx, input }): Promise<WireUserSettings> => {
+      const r = await execute(
+        ctx.db,
+        {
+          actorUserId: ctx.actorUserId,
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [{ tool: 'module_set', input }],
+        },
+        { sink: journalSink },
+      );
+      if (!r.ok) throw execErrorToTRPC(r.error);
+      return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        const rows = await tx
+          .select()
+          .from(userSettings)
+          .where(eq(userSettings.ownerId, ctx.actorUserId));
+        if (!rows[0]) {
+          throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
+        }
+        return toWireUserSettings(rows[0]);
+      });
+    }),
 
   exportData: ownerOnlyProcedure.query(
     ({ ctx }): Promise<OrbisExport> =>

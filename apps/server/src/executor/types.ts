@@ -238,6 +238,11 @@ export interface ActionRecord {
     | 'subscription_removed'
     | 'contract_sets_delta_set'
     | 'contract_sets_delta_removed'
+    // module_set — переключение модуля владельцем (§Б8-1 №28). Тот же `entity_id: null` и по
+    // тому же доводу, что у реестровых: меняется устройство системы, а не запись графа. Имя
+    // совпадает с именем операции: у переключателя нет пары «завёл/снял», обратное к нему —
+    // он же с прежним значением, и второй тип действия называл бы то же самое дважды.
+    | 'module_set'
     | 'batch';
   entity_id: string | null;
   actor_user_id: string;

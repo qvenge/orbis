@@ -1100,12 +1100,12 @@ describe('§С8-23: инвариант против fail-open — писател
   );
 
   test('писатели реестра разобраны, и КАЖДЫЙ берёт замок реестра', () => {
-    // Двенадцать публичных тулов + ТРИ внутренние обратные операции (`property_row_restore`,
-    // `property_merge_undo` — срез А; `aspect_row_restore` — задача 15): их зовёт только undo,
-    // снаружи они недостижимы. У подписок и наборов своей обратной операции нет: обратное к
-    // `subscription_set` — снова `subscription_set` (прежняя декларация), к
-    // `contract_sets_delta_set` — `contract_sets_delta_remove` (задача 16), и внутренних имён
-    // ей заводить не пришлось.
+    // Двенадцать публичных тулов реестра плюс ЧЕТЫРЕ внутренние операции
+    // (`property_row_restore`, `property_merge_undo`, `aspect_row_restore`, `module_set`):
+    // первые три зовёт только undo, четвёртую — ручка владельца; снаружи ни одна не достижима.
+    // У подписок и наборов своей обратной операции нет: обратное к `subscription_set` — снова
+    // `subscription_set` (прежняя декларация), к `contract_sets_delta_set` —
+    // `contract_sets_delta_remove` (задача 16), и внутренних имён ей заводить не пришлось.
     expect([...writers].sort()).toEqual([
       'aspect_create',
       'aspect_delta_remove',
@@ -1115,6 +1115,7 @@ describe('§С8-23: инвариант против fail-open — писател
       'aspect_row_restore',
       'contract_sets_delta_remove',
       'contract_sets_delta_set',
+      'module_set',
       'property_create',
       'property_merge',
       'property_merge_undo',

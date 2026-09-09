@@ -24,6 +24,7 @@ import {
   RULE_NEAREST_ANCESTOR,
   relationCreateInput,
   relationDeleteInput,
+  setModuleEnabledInput,
   surfaceModuleOf,
 } from '@orbis/shared';
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
@@ -65,6 +66,7 @@ import type { CompileCtx } from '../query/compile-ast';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
+import { disabledModulesOf, setModuleDisabled } from '../registry/modules';
 import {
   type AspectRow,
   type CreateAspectInput,
@@ -197,6 +199,8 @@ interface ExecCtx {
   tx: Tx;
   /** Снимок реестров владельца на транзакцию (§А10): по нему идут и резолв, и валидация. */
   registry: RegistrySnapshot;
+  /** Маска §Б8-3 на транзакцию — рядом со снимком, но НЕ внутри него. */
+  disabledModules: readonly string[];
   /** Механизм записи (§А4-4): ось гейтов флагов, отдельная от канала `req.source`. */
   mechanism: MutationMechanism;
   req: ExecuteRequest;
@@ -281,7 +285,10 @@ export type WireRegistryResult =
   // Подписка и контракт — адрес строки реестра, которую тронула операция части Б (§Б5-1,
   // §Б1-1): та же форма ответа, что у свойства и аспекта, и по той же причине.
   | { subscription: string }
-  | { contract: string };
+  | { contract: string }
+  // Переключение модуля (§Б8-1 №28): ни строка реестра, ни запись графа — состояние
+  // ВЛАДЕЛЬЦА. Форма несёт обе половины входа, потому что ответ ручки читает UI.
+  | { module: string; enabled: boolean };
 
 interface OpOutcome {
   result: WireEntity | WireRelation | WireOrigin | WireEntityVersion | WireRegistryResult;
@@ -491,6 +498,9 @@ export async function execute(
       const ctx: ExecCtx = {
         tx,
         registry,
+        // Одно точечное чтение по PK на мутацию: ленивость стоила бы асинхронного гейта в
+        // трёх точках записи, где всё остальное синхронно.
+        disabledModules: await disabledModulesOf(tx, req.actorUserId),
         mechanism: req.mechanism ?? 'user',
         req,
         actionId,
@@ -622,6 +632,8 @@ async function executeBatch(
       const ctx: ExecCtx = {
         tx,
         registry,
+        // То же одно чтение по PK, что и на одиночном пути (см. его комментарий).
+        disabledModules: await disabledModulesOf(tx, req.actorUserId),
         mechanism: req.mechanism ?? 'user',
         req,
         actionId: batchId,
@@ -930,6 +942,7 @@ async function prepareOp(
   if (tool === 'contract_sets_delta_set') return prepareContractSetsDeltaSet(ctx, input);
   if (tool === 'contract_sets_delta_remove') return prepareContractSetsDeltaRemove(ctx, input);
   if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
+  if (tool === 'module_set') return prepareModuleSet(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
   if (tool === 'property_merge_undo') return preparePropertyMergeUndo(ctx, input);
   if (tool.startsWith('attach_')) {
@@ -3100,6 +3113,9 @@ export const REGISTRY_OPS: ReadonlySet<string> = new Set([
   'property_row_restore',
   'property_merge_undo',
   'aspect_row_restore',
+  // Замок реестра владельца — та же сериализация, что у дельт: маску и снимок читают вместе
+  // четыре поверхности, и две параллельные перенастройки владельца незачем пускать внахлёст.
+  'module_set',
 ]);
 
 /**
@@ -3114,6 +3130,14 @@ export const REGISTRY_OPS: ReadonlySet<string> = new Set([
 const propertyRowRestoreInput = z
   .object({ id: z.string().min(1), row: z.record(z.unknown()).nullable() })
   .strict();
+
+/**
+ * Вход `module_set` — ТА ЖЕ схема, что читает ручка `user.setModuleEnabled` (объявлена в
+ * `packages/shared/src/registry/modules.ts`). Второй, «похожей» схемы здесь нет намеренно:
+ * два описания одной операции разъехались бы — тот же довод, что в докблоке
+ * `registryMutation` (`routers/registry.ts:40-46`).
+ */
+const moduleSetInput = setModuleEnabledInput;
 
 /** ВНУТРЕННЯЯ обратная операция слияния — ОДНА на всё, что слияние сделало (§А10-2). */
 const propertyMergeUndoInput = z
@@ -3283,6 +3307,37 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
           rewrittenQueries: merged.rewrittenQueries,
         },
       };
+    },
+  };
+}
+
+/**
+ * Переключение модуля (§Б8-1 №28). ВНУТРЕННЯЯ операция, как `property_row_restore`: в
+ * `CORE_TOOLS`/`REGISTRY_TOOLS` её нет, реестр тулов такого имени не резолвит — значит ни
+ * модель, ни рутина её не позовут (`dispatchTool` ответит «неизвестный тул»). Единственный
+ * вход — ручка владельца `user.setModuleEnabled`.
+ */
+async function prepareModuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(moduleSetInput, rawInput, 'module_set');
+  const journal = registryPlan(
+    'module_set',
+    'module_set',
+    input.enabled ? `Модуль «${input.module}» включён` : `Модуль «${input.module}» выключен`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      // Прежнее состояние читается ЗДЕСЬ, под уже взятым замком реестра: inverse обязан
+      // вернуть то, что было, а не «обратное входу» — повтор выключения иначе включил бы.
+      const before = await disabledModulesOf(applyCtx.tx, applyCtx.req.actorUserId);
+      const wasEnabled = !before.includes(input.module);
+      await setModuleDisabled(applyCtx.tx, applyCtx.req.actorUserId, input.module, !input.enabled);
+      journal.operations.push({ op: 'module_set', payload: { ...input } });
+      journal.inverse.push({
+        op: 'module_set',
+        payload: { module: input.module, enabled: wasEnabled },
+      });
+      return { result: { module: input.module, enabled: input.enabled } };
     },
   };
 }

@@ -217,6 +217,12 @@ export interface WireUserSettings {
   installedViews: string[];
   pinnedEntities: PinnedEntity[];
   viewPreferences: Record<string, unknown>;
+  /**
+   * Модули, ВЫКЛЮЧЕННЫЕ владельцем (§Б8-1). Наружу едет тем же `toWireUserSettings`, что и
+   * остальные настройки, — поэтому и в дампе `export.ts` маска оказывается сама собой, и
+   * «повторное включение — всё на месте» (§С8-22) выполняется для выгрузки тоже.
+   */
+  disabledModules: string[];
   updatedAt: string;
 }
 
@@ -231,6 +237,7 @@ export function toWireUserSettings(row: UserSettingsRow): WireUserSettings {
     installedViews: row.installedViews,
     pinnedEntities: row.pinnedEntities as PinnedEntity[], // jsonb [{id, order}] — как есть
     viewPreferences: row.viewPreferences as Record<string, unknown>,
+    disabledModules: row.disabledModules,
     updatedAt: row.updatedAt.toISOString(),
   };
 }

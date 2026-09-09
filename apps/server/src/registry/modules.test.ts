@@ -16,6 +16,8 @@ import {
 } from '../../test/helpers';
 import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { makeChatJournalSink } from '../executor/journal';
+import { undoLast } from '../executor/undo';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import { createCallerFactory } from '../trpc';
@@ -31,6 +33,9 @@ const owner = freshUserId();
  * а гонять маску на общем владельце значило бы утащить состояние в соседние блоки.
  */
 const maskOwner = freshUserId();
+// Боевой синк журнала: без него `execute` уходит в NOOP_SINK, и «отмени последнее» не
+// нашло бы ни одного действия — предмет проверки блока `module_set` пропал бы вместе с ним.
+const sink = makeChatJournalSink();
 const createCaller = createCallerFactory(appRouter);
 const caller = createCaller({ actorUserId: owner, actorKind: 'owner', db, clientVersion: null });
 
@@ -132,6 +137,100 @@ describe('маска модулей: чтение и запись (§Б8-1)', ()
     await withIdentity(db, maskOwner, (tx) => setModuleDisabled(tx, maskOwner, 'finance', false));
     expect(await withIdentity(db, maskOwner, (tx) => disabledModulesOf(tx, maskOwner))).toEqual([
       'goals',
+    ]);
+  });
+});
+
+/**
+ * Строка журнала §7.8 по её id. Журнал живёт в `metadata` audit-сообщения
+ * (`executor/journal.ts`), отдельной таблицы `actions` в базе НЕТ — адрес брифа опровергнут
+ * деревом. Ищем по `actionId`, а не по «последнему по времени»: `created_at` точности 3
+ * на двух записях одной миллисекунды дал бы неустойчивый порядок.
+ */
+type JournalAction = {
+  type: string;
+  entity_id: string | null;
+  inverse: { op: string; payload: unknown }[];
+};
+async function actionOf(actionId: string): Promise<JournalAction | undefined> {
+  const rows = (await withIdentity(db, owner, (tx) =>
+    tx.execute(sql`
+      SELECT m.metadata->'actions'->0 AS action
+      FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+      WHERE t.owner_id = ${owner}::uuid
+        AND m.metadata->'actions'->0->>'id' = ${actionId}`),
+  )) as unknown as { action: JournalAction }[];
+  return rows[0]?.action;
+}
+async function inverseOf(actionId: string): Promise<JournalAction['inverse'] | undefined> {
+  return (await actionOf(actionId))?.inverse;
+}
+
+describe('module_set: переключение — действие исполнителя с журналом и undo (§Б8-1 №28)', () => {
+  // Вход блока назван явно: `owner` пришёл из общего `beforeAll` без выключенных модулей,
+  // и полагаться на это молча значило бы завязать блок на порядок соседей.
+  beforeAll(async () => {
+    await setModules([]);
+  });
+
+  test('ручка выключает модуль; настройки отдают маску наружу', async () => {
+    await caller.user.setModuleEnabled({ module: 'finance', enabled: false });
+    expect(await withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner))).toEqual([
+      'finance',
+    ]);
+    expect((await caller.user.getSettings()).disabledModules).toEqual(['finance']);
+  });
+
+  test('inverse — ПРЕЖНЕЕ состояние, а не обратный знак входа', async () => {
+    const r = await execute(
+      db,
+      {
+        actorUserId: owner,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'module_set', input: { module: 'goals', enabled: false } }],
+      },
+      { sink },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const action = await actionOf(r.actionId);
+    expect(action?.type).toBe('module_set');
+    expect(action?.entity_id).toBeNull(); // меняется устройство системы, а не запись графа
+    expect(action?.inverse).toEqual([
+      { op: 'module_set', payload: { module: 'goals', enabled: true } },
+    ]);
+  });
+
+  test('undo возвращает модуль во включённое состояние', async () => {
+    // Второй аргумент — ОБЪЕКТ (`undo.ts:229`); последнее неотменённое действие журнала —
+    // выключение `goals` предыдущим тестом, `finance` остаётся выключенным.
+    expect((await undoLast(db, { actorUserId: owner })).ok).toBe(true);
+    expect(await withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner))).toEqual([
+      'finance',
+    ]);
+  });
+
+  test('повтор выключения: inverse — «уже был выключен», а не обратный знак входа', async () => {
+    // Тест выше не различает две реализации: `goals` был ВКЛЮЧЁН, и «прежнее состояние» там
+    // совпадает с «обратным знаком входа». Различает их ПОВТОР: `finance` выключен с первого
+    // теста блока, и inverse обязан сказать «оставался выключенным». Обратный знак входа дал
+    // бы здесь `enabled: true` — то есть undo ВКЛЮЧИЛ бы модуль, которого это действие не
+    // выключало.
+    const r = await execute(
+      db,
+      {
+        actorUserId: owner,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
+      },
+      { sink },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(await inverseOf(r.actionId)).toEqual([
+      { op: 'module_set', payload: { module: 'finance', enabled: false } },
     ]);
   });
 });
