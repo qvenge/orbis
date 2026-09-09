@@ -1180,6 +1180,12 @@ export interface AspectToolRow {
   description: string | null;
   aiInstructions: string | null;
   viewConfig: Record<string, unknown> | null;
+  /**
+   * Модуль строки (§Б8-1) — пятая колонка запроса. Нужна ровно одному читателю: секция
+   * инструкций аспектов маскирует выключенный модуль (§Б8-3), а `module` дельта не меняет
+   * (докблок `registry/load.ts`), поэтому признак берётся из того же сырого запроса.
+   */
+  module: string | null;
 }
 
 /**
@@ -1194,6 +1200,7 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
       description: aspectDefinitions.description,
       aiInstructions: aspectDefinitions.aiInstructions,
       viewConfig: aspectDefinitions.viewConfig,
+      module: aspectDefinitions.module,
     })
     .from(aspectDefinitions)
     .orderBy(sql`${aspectDefinitions.ownerId} NULLS FIRST`);
@@ -1208,6 +1215,7 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
       description: (row.description as Record<string, string> | null)?.ru ?? null,
       aiInstructions: row.aiInstructions,
       viewConfig: row.viewConfig as Record<string, unknown> | null,
+      module: row.module,
     });
   }
   return [...byId.values()];

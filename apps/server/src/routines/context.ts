@@ -31,6 +31,7 @@ import { ROUTINE_SYSTEM_PROMPT_V3, routineModeSection } from '../llm/prompts/rou
 import type { LLMMessage } from '../llm/types';
 import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
 import type { RejectReason } from '../policy/pending';
+import { disabledModulesOf } from '../registry/modules';
 import { decisionsNoun } from './constants';
 
 /**
@@ -295,7 +296,12 @@ export async function buildRoutineContext(
     }),
   ];
 
-  const instructions = await aspectInstructionsSection(tx);
+  // Маска §Б8-3 и в канале рутины: у инструкций аспектов один путь на оба канала, и
+  // умолчания у параметра нет намеренно — оно оставило бы фон без маски молча.
+  const instructions = await aspectInstructionsSection(
+    tx,
+    await disabledModulesOf(tx, input.ownerId),
+  );
   if (instructions !== null) sections.push(instructions);
 
   const memory = await loadMemory(tx);

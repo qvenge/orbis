@@ -7,7 +7,7 @@ import type { RunSummary } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ROUTINE_SYSTEM_PROMPT_V3 } from '../llm/prompts/routine-v3';
-import { SYSTEM_PROMPT_V5 } from '../llm/prompts/v5';
+import { SYSTEM_PROMPT_V6 } from '../llm/prompts/v6';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { buildRoutineContext, type RoutineHistoryItem, type RoutineHistoryUnit } from './context';
 
@@ -94,7 +94,7 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
     expect(system.startsWith(ROUTINE_SYSTEM_PROMPT_V3)).toBe(true);
     // Промпт чат-ассистента в фоновом прогоне не участвует (V1.5): он завершал бы цикл
     // «ответом пользователю», которого никто не прочтёт
-    expect(system).not.toContain(SYSTEM_PROMPT_V5);
+    expect(system).not.toContain(SYSTEM_PROMPT_V6);
     expect(system).toContain('режим: propose');
     expect(system).toContain(`run_id этого прогона: ${RUN_ID}`);
     expect(system).toContain('2026-08-17T07:00');
