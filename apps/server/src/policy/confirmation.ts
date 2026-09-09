@@ -398,10 +398,10 @@ function reconfiguresByTool(
  * наборы контрактов и подписки поверхностей. ИМЁН РЕЕСТРА В Б-1 ДВЕНАДЦАТЬ —
  * `property_create`, `property_update`, `property_merge`, `aspect_delta_set`,
  * `aspect_delta_remove` (пять тулов среза А), `aspect_create`, `aspect_implements_set`,
- * `aspect_implements_remove` (задача 15) — эти восемь уже в `REGISTRY_TOOL_NAMES`, — плюс
- * `subscription_set`, `subscription_remove`, `contract_sets_delta_set`,
- * `contract_sets_delta_remove` (четыре тула задачи 16: ответ политики стоит здесь и РАНЬШЕ
- * них). Переходов у
+ * `aspect_implements_remove` (задача 15), `subscription_set`, `subscription_remove`,
+ * `contract_sets_delta_set`, `contract_sets_delta_remove` (задача 16). Все двенадцать стоят в
+ * `REGISTRY_TOOL_NAMES`: ответ политики был написан РАНЬШЕ семи из них (задача 14) и с
+ * задачей 16 перестал быть авансом — пин имён держит `confirmation.test.ts`. Переходов у
  * этих двенадцати имён ДЕСЯТЬ, и разрез между ними такой: 1–7 — переходы среза А, где ответ
  * решает АДРЕС объекта; 8–10 — переходы Б-1, и у последнего из них ответ решает ТУЛ (Р9):
  *

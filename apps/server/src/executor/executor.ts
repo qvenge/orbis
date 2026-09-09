@@ -3083,7 +3083,7 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
 // ---------------------------------------------------------------------------
 
 /**
- * Имена, при которых транзакция берёт замок реестра. Восемь публичных тулов плюс три
+ * Имена, при которых транзакция берёт замок реестра. Двенадцать публичных тулов плюс три
  * ВНУТРЕННИЕ обратные операции — те же три, что перечислены ниже: их зовёт только undo.ts
  * через `execute` во внутреннем режиме, в `CORE_TOOLS` их нет, и `dispatchTool` их не
  * резолвит (реестр тулов не знает таких имён).
@@ -3529,6 +3529,14 @@ async function readSurfaceOwner(
   return rows[0]?.id ?? null;
 }
 
+/**
+ * СНЯТИЕ НЕСУЩЕСТВУЮЩЕЙ НАСТРОЙКИ — УСПЕХ С ЗАПИСЬЮ В ЖУРНАЛ (Ф-Б1-56), и это выбор, а не
+ * недосмотр: прецедент — `aspect_delta_remove`, а состояние на выходе у обоих исходов одно
+ * («настройки нет»). Владельцу, сказавшему «верни как было», отказ «а её и не было» ничего не
+ * сообщает. Исключение — СВОЯ строка (`user/…`): её снятие адресует конкретную строку, а не
+ * состояние, и промах адресом — `NOT_FOUND` (ветка ниже). Обратная операция у пустого снятия
+ * пуста, поэтому `undo` такого action'а — не-операция, а не «воскрешение из ничего».
+ */
 async function prepareSubscriptionRemove(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
   const input = parseEnvelope(subscriptionRemoveInput, rawInput, 'subscription_remove');
   const journal = registryPlan(
@@ -3605,6 +3613,7 @@ async function prepareContractSetsDeltaSet(_ctx: ExecCtx, rawInput: unknown): Pr
   };
 }
 
+/** Снятие несуществующей дельты наборов — успех с пустым inverse: см. `prepareSubscriptionRemove`. */
 async function prepareContractSetsDeltaRemove(
   _ctx: ExecCtx,
   rawInput: unknown,

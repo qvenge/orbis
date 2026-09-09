@@ -244,17 +244,23 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind).toBe('mutate');
   });
 
-  test('три тула аспектов: mutate + fullScopeOnly, конверт и JSON Schema стоят по соседству', async () => {
+  test('ВСЕ реестровые тулы: mutate + fullScopeOnly, конверт и JSON Schema стоят по соседству', async () => {
     const defs = await registryFor(userB);
-    for (const name of ['aspect_create', 'aspect_implements_set', 'aspect_implements_remove']) {
+    // Цикл ведётся РЕЕСТРОМ, а не тройкой имён задачи 15: тул, у которого забыли строку в
+    // `REGISTRY_TOOL_ENVELOPES`, до этой правки не ловился здесь вовсе — падала только
+    // интеграция (`dispatch.test.ts`) голым «нет схемы envelope для …», то есть на два шага
+    // дальше от места, где строку и забыли.
+    expect(Object.keys(REGISTRY_TOOL_ENVELOPES).sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
+    for (const name of REGISTRY_TOOL_NAMES) {
       const def = defOf(defs, name);
       expect([name, def.kind, def.fullScopeOnly]).toEqual([name, 'mutate', true]);
       // Парность двух представлений у реестровых тулов держит СОСЕДСТВО строк (докблок
       // registry-tools.ts:7-11), поэтому пробуем оба — envelope и схему модели.
-      expect(REGISTRY_TOOL_ENVELOPES[name]).toBeDefined();
-      expect((def.inputJsonSchema as { additionalProperties?: boolean }).additionalProperties).toBe(
-        false,
-      );
+      expect([name, REGISTRY_TOOL_ENVELOPES[name] !== undefined]).toEqual([name, true]);
+      expect([
+        name,
+        (def.inputJsonSchema as { additionalProperties?: boolean }).additionalProperties,
+      ]).toEqual([name, false]);
     }
   });
 
