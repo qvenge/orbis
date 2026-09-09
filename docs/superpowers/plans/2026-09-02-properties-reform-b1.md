@@ -16831,7 +16831,7 @@ export const REGISTRY_OPS: ReadonlySet<string>;                                 
 
 **Файлы:**
 - Изменить: `apps/server/src/tools/registry-tools.ts` (шапка `:2-25` «ПЯТЬ ТУЛОВ» → восемь; конверты и JSON Schema после `:181`; дефы в `REGISTRY_TOOLS` перед закрывающей `];` `:288`; `REGISTRY_TOOL_ENVELOPES` `:294-300`), `apps/server/src/registry/ops.ts` (новый блок после дельт аспектов `:1825`), `apps/server/src/executor/executor.ts` (`prepareOp` `:845`; `REGISTRY_OPS` `:2859-2863`; конверт рядом с `propertyRowRestoreInput` `:2874-2876`; prepare-функции после `:3092`), `apps/server/src/executor/types.ts:208-222`, `apps/server/src/tools/dispatch.ts` (`snapshotRegistryUnit` `:1632/:1690-1706`, докблок `registryAddressesToId` `:1607-1617`; `registryOperationSummary` `:1299-1334` — **НЕ трогается**, её семь `case` вехи II и резолверы `contractName`/`surfaceName` пишет задача 14, шаг 16), `apps/server/src/routers/registry.ts:24-29/:165`.
-- Тесты: `apps/server/src/registry/ops.test.ts` (+2 describe после `:566`), `apps/server/src/tools/registry.test.ts:219-226`, `apps/server/src/mcp/mcp.test.ts:451-457/:498-500/:763-768` **и describe «§С8-23: инвариант против fail-open» задачи 14 (после `:901`) — список `writers`**, `apps/server/src/policy/confirmation.test.ts:880-886` **и блок `B1_TOOLS_AHEAD` задачи 14 — хвостовой цикл `REGISTRY_TOOL_NAMES.has(...) === false`**, `apps/server/src/tools/dispatch.test.ts:4868-4874`/`:4884-4890` (`payloads` и golden фраз; `NEUTRAL_HEADS` `:4856-4862` расширяет задача 14) (+тесты в describe `:4283`), `apps/server/src/routers/registry.test.ts` (+тест после `:180`).
+- Тесты: `apps/server/src/registry/ops.test.ts` (+2 describe после `:566`), `apps/server/src/tools/registry.test.ts:219-226`, `apps/server/src/mcp/mcp.test.ts:451-457/:498-500/:763-768` **и describe «§С8-23: инвариант против fail-open» задачи 14 (после `:901`) — список `writers`**, `apps/server/src/policy/confirmation.test.ts:880-886` **и блок `B1_TOOLS_AHEAD` задачи 14 — хвостовой цикл `REGISTRY_TOOL_NAMES.has(...) === false`**, `apps/server/src/tools/dispatch.test.ts:4868-4874`/`:4884-4890` (`payloads` и golden фраз; `NEUTRAL_HEADS` `:4856-4862` расширяет задача 14) (+тесты в describe `:4283`), `apps/server/src/routers/registry.test.ts` (+тест после `:180`). (эррата 15: после `:180` теперь describe `dependants` — тест ручки ставится в describe `registry.effective`; `effectiveRegistry` в `dispatch.test.ts` импортируется)
 - НЕ трогать: `docs/prd/01-architecture.md:1296/:1318/:1322` — числа PRD пересдаёт **задача 16** вместе со своей пересдачей эталона 40 → 44; эталон `apps/server/test/golden/tool-registry.json` эта задача пересдаёт САМА 37 → 40 (шаг 15а, Р-К-42); `apps/server/test/helpers.ts:131-180` (`seedCustomAspect`) остаётся фикстурой гейта 0d — тул даёт первый боевой путь, но фикстуру не отменяет.
 
 **Интерфейсы — Consumes** (дословно, HEAD `3abd3f7`; из задач 1/2 — помечено):
@@ -17087,7 +17087,7 @@ describe('aspect_create (§Б2-1, §С3)', () => {
 ```
   `bun test src/registry/ops.test.ts -t 'aspect_create'` → **FAIL**: `VALIDATION «неизвестный тул aspect_create»`.
 
-- [ ] **Шаг 6: `createAspect` в `registry/ops.ts`** (после `:1825`; импорты файла `+ aspectDefinitionSchema`, `AspectDefinition`, `AspectPropertyRef`, `AspectImplements`, `checkImplements` из `@orbis/shared`, `resolvePropertyRef` из `./ref`):
+- [ ] **Шаг 6: `createAspect` в `registry/ops.ts`** (после `:1825`; импорты файла `+ aspectDefinitionSchema`, `AspectDefinition`, `AspectPropertyRef`, `AspectImplements`, `checkImplements` из `@orbis/shared`, `resolvePropertyRef` из `./ref`): (Эррата 15: `resolvePropertyRef` живёт в `executor/props.ts`, не в `./ref`; цикла импортов нет — `executor/props` в `registry/ops` не заходит.)
 ```ts
 const ASPECT_ROW_COLUMNS = sql`id, owner_id, key, label, description, properties, implements,
   ai_instructions, tag_mappings, view_config, module, service, rank, created_at`;
@@ -17232,7 +17232,7 @@ async function prepareAspectCreate(_ctx: ExecCtx, rawInput: unknown): Promise<Pr
 ```
   `bun test src/registry/ops.test.ts -t 'aspect_create'` → **PASS** (три теста). `bun run typecheck` отдельно.
 
-- [ ] **Шаг 8: красный — отмена заведения.** В тот же describe:
+- [ ] **Шаг 8: красный — отмена заведения.** В тот же describe: (Эррата 15: конверт `entity_create` требует `tags` — в фикстуре `tags: []`.)
 ```ts
   test('undo заведения сносит строку', async () => {
     const created = ok(await runAs('aspect_create', { key: 'user/undo-me', label: { ru: 'Отменяемый' },
@@ -17306,7 +17306,7 @@ export async function restoreAspectRow(tx: Tx, ownerId: string, id: string, row:
 ```
   `bun test src/registry/ops.test.ts -t 'aspect_create'` → **PASS** (пять тестов).
 
-- [ ] **Шаг 10: красный — привязки.** Второй describe в `ops.test.ts`:
+- [ ] **Шаг 10: красный — привязки.** Второй describe в `ops.test.ts`: (Эррата 15: фикстура нежизнеспособна как написана — аспект `user/gig` обязан НОСИТЬ биндуемое `orbis/task_status` (иначе `not_carried`); `value_map` — все шесть вариантов (`TASK_STATUS_MAP`); тест BIND_TYPE биндит `orbis/location` (text, обычное props-свойство), не core-проекцию `orbis/title`.)
 ```ts
 describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
   const bindOwner = freshUserId();
@@ -17445,7 +17445,7 @@ async function prepareAspectImplementsSet(_ctx: ExecCtx, rawInput: unknown): Pro
 ```
   Прогон → **FAIL**: приходит fail-closed родовая строка `{ field: 'aspect_implements_remove', after: '{…}' }`.
 
-- [ ] **Шаг 13: три `case` в `snapshotRegistryUnit`** (`dispatch.ts:1690`, перед fail-closed хвостом):
+- [ ] **Шаг 13: три `case` в `snapshotRegistryUnit`** (`dispatch.ts:1690`, перед fail-closed хвостом): (Эррата 15: у `remove` прежняя строка из БД не читается — результат не используется; `after` у `set` — список контрактов формой `isRecord(b) ? b.contract : b`, пустой список печатается `—`.)
 ```ts
     case 'aspect_create':
       // Строки ещё нет — «было» не бывает (как у property_create).
@@ -17499,7 +17499,7 @@ async function prepareAspectImplementsSet(_ctx: ExecCtx, rawInput: unknown): Pro
 - [ ] **Шаг 15: ряды §С2-1 живьём (доля задачи 15 в приёмке §С8-23).** В describe `:4283` по образцу `:4733` (запрет по объекту) и `:4764` (тот же вызов из чата):
 ```ts
   test('aspect_implements_set поверх ВСТРОЕННОГО аспекта от рутины — запрет по объекту, не откладывается', async () => {
-    const ctx = await ctxFor({ actorKind: 'ai', source: 'routine', routine: gardener(owner, ['aspect_implements_set']) });
+    const ctx = await ctxFor({ actorKind: 'ai', source: 'routine', routine: gardener(owner, ['aspect_implements_set']) });  // эррата 15: `ctxFor` синхронная, а `gardener(owner, allowed)` — асинхронный хелпер `{ctx, routineId, runId, threadId}`; форма — как у соседних тестов
     const r = await dispatchTool(ctx, 'aspect_implements_set',
       { aspect: 'orbis/task', implements: [{ contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [] }] });
     expectError(r, 'FORBIDDEN_LEVEL');
@@ -17542,6 +17542,15 @@ bun dump-golden.tmp.ts && bunx biome check --write test/golden/tool-registry.jso
   Прогон: `cd apps/server && bun test src/tools/registry-golden.test.ts src/tools/registry.test.ts` → **PASS**
   (`registry.test.ts:146` считает длину от эталона — 40).
   Коммит: `эталон реестра тулов: 37 → 40 — три тула аспектов и привязок (§С8-2, пересдача вручную)`.
+
+> **Эррата по исполнению 15 (09.09, гейт).** (а) `KEY_TAKEN` сверяет и ИМЯ ТУЛА `attach_<key>` (сворачивание `-` → `_` давало два тула с
+> одним именем — молчаливая подмена аспекта; `cause: 'tool_name'`), ключ аспекта `.max(56)` (предел имени функции OpenAI — 64: `attach_` + 56 = 63), дубли `propertyId` в составе и `keyFields` мимо
+> состава — отказ (Ф-Б1-53). (б) `bind` в `implements` принимает key своего свойства — нормализация через `resolvePropertyRef` (дефект брифа,
+> §Б2-4). (в) `statusSlotsOf` пропускает привязку не носимого свойства — та же истина носимости, что у `checkImplements`; фикстуры задачи 13
+> носят биндуемое (Ф-Б1-54а). (г) Висячий `bind` после `property_merge` — отказ `UNKNOWN_PROPERTY`/`cause: 'merged'` при повторной записи той
+> же строки (словарь shared не расширен, Р-К-34); корень — `collectPropertyHolders` не знает состав/`bind` — остаток 19. (д) Капа `aspect_create`
+> не вводится (Р-К-44); `aggregations` вне `AspectRow` безопасно (ON CONFLICT колонку не трогает). Golden 37 → 40: прежние записи берутся из
+> старого эталона по имени — регенерация с нуля переставляет ключи чужой `entity_query.sourceNotIn`; задаче 16 (40 → 44) — тот же приём.
 
 - [ ] **Шаг 16: полный прогон.** `bun run test` из корня (голый `bun test` ЗАВИСАЕТ), затем `bun run lint` и `bun run typecheck` отдельными вызовами. Красных нет: эталон пересдан шагом 15а (37 → 40, Р-К-42), `registry-golden.test.ts:67/:81/:87` и `registry.test.ts:146` зелены. оба пина задачи 14 (`writers` в `mcp.test.ts`, цикл `has(...) === false` в `confirmation.test.ts`) перепинены шагом 3 и **зелёные** — если они красны на этом прогоне, значит шаг 3 сделан не до конца, и чинится он, а не эталон. Пересев реестров не нужен: сиды не менялись, `db:prepare` не запускается.
 
