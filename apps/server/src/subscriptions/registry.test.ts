@@ -78,7 +78,6 @@ function row(definition: unknown, over: Partial<SubscriptionRow> = {}): Subscrip
   } as SubscriptionRow;
 }
 
-/** Код отказа и его ПРИЧИНА: коды реформы закрыты (errors.ts), причина едет в details. */
 /** Отказ ЦЕЛИКОМ — когда проверяются не только код и причина, но и адресные поля деталей. */
 function failure(fn: () => unknown): ExecError {
   try {
@@ -90,6 +89,7 @@ function failure(fn: () => unknown): ExecError {
   throw new Error('ожидался отказ, его не было');
 }
 
+/** Код отказа и его ПРИЧИНА: коды реформы закрыты (errors.ts), причина едет в details. */
 function refusal(fn: () => unknown): { code: string; reason: string } {
   try {
     fn();
