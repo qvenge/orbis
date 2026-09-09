@@ -27,8 +27,11 @@ import { effectiveRegistry } from '../registry/cache';
 import { dependantsOf, dependencyGraph } from '../registry/deps-graph';
 import { collectPropertyHolders } from '../registry/ops';
 import {
+  aspectCreateInput,
   aspectDeltaRemoveInput,
   aspectDeltaSetInput,
+  aspectImplementsRemoveInput,
+  aspectImplementsSetInput,
   propertyCreateInput,
   propertyMergeInput,
   propertyUpdateInput,
@@ -173,6 +176,18 @@ export const registryRouter = router({
   removeAspectDelta: ownerOnlyProcedure
     .input(aspectDeltaRemoveInput)
     .mutation(({ ctx, input }) => registryMutation('aspect_delta_remove')(ctx, input)),
+
+  createAspect: ownerOnlyProcedure
+    .input(aspectCreateInput)
+    .mutation(({ ctx, input }) => registryMutation('aspect_create')(ctx, input)),
+
+  setAspectImplements: ownerOnlyProcedure
+    .input(aspectImplementsSetInput)
+    .mutation(({ ctx, input }) => registryMutation('aspect_implements_set')(ctx, input)),
+
+  removeAspectImplements: ownerOnlyProcedure
+    .input(aspectImplementsRemoveInput)
+    .mutation(({ ctx, input }) => registryMutation('aspect_implements_remove')(ctx, input)),
 
   effective: protectedProcedure.query(
     ({ ctx }): Promise<WireRegistry> =>

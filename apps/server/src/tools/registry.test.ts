@@ -53,7 +53,7 @@ import {
   undoLastInput,
   userQueryInput,
 } from './registry';
-import { REGISTRY_TOOL_NAMES } from './registry-tools';
+import { REGISTRY_TOOL_ENVELOPES, REGISTRY_TOOL_NAMES } from './registry-tools';
 
 requireEnv();
 
@@ -144,7 +144,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 13 core + 5 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 37', async () => {
+  test('builtin-реестр (userB без кастомных): 13 core + 8 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 40', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -163,7 +163,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
     // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
     // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
-    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 37 тулов, пиннит `registry-golden`.
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 40 тулов, пиннит `registry-golden`.
     expect(defs.length).toBe(TOOL_REGISTRY_GOLDEN.length);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
@@ -202,14 +202,14 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('fullScopeOnly: true у property_catalog и пяти тулов реестра (§А9-4) — и ни у кого больше', async () => {
+  test('fullScopeOnly: true у property_catalog и восьми тулов реестра (§А9-4) — и ни у кого больше', async () => {
     // У каталога признак нужен именно потому, что тул ЧИТАЮЩИЙ: правило «чтения открыты
     // все» его бы пропустило, и `worker` получил бы карту поверхности владельца целиком.
     // У тулов реестра он отвечает на другой вопрос — кому этот тул вообще адресован:
     // мутации фону закрывает и `WORKER_SCOPE_TOOLS`, а устройство системы владельца —
     // не то, над чем фоновый исполнитель работает (§А9-4, РП-14).
     //
-    // ЧЕСТНО О СИЛЕ ЭТОГО ПИНА: у пяти реестровых тулов флаг сегодня НЕ НЕСУЩИЙ — снятие
+    // ЧЕСТНО О СИЛЕ ЭТОГО ПИНА: у восьми реестровых тулов флаг сегодня НЕ НЕСУЩИЙ — снятие
     // его не меняет ни списка, ни вызова (мутационная проба Задачи 15), потому что оба
     // гейта отказывают им уже по правилу «мутация не из `WORKER_SCOPE_TOOLS`». Это пин
     // ОБЪЯВЛЕНИЯ, а не поведения, и он станет несущим у первого ЧИТАЮЩЕГО тула реестра —
@@ -224,9 +224,26 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
       'property_merge',
       'aspect_delta_set',
       'aspect_delta_remove',
+      'aspect_create',
+      'aspect_implements_set',
+      'aspect_implements_remove',
     ]);
     expect(defOf(defs, 'property_catalog').kind).toBe('read');
     for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind).toBe('mutate');
+  });
+
+  test('три тула аспектов: mutate + fullScopeOnly, конверт и JSON Schema стоят по соседству', async () => {
+    const defs = await registryFor(userB);
+    for (const name of ['aspect_create', 'aspect_implements_set', 'aspect_implements_remove']) {
+      const def = defOf(defs, name);
+      expect([name, def.kind, def.fullScopeOnly]).toEqual([name, 'mutate', true]);
+      // Парность двух представлений у реестровых тулов держит СОСЕДСТВО строк (докблок
+      // registry-tools.ts:7-11), поэтому пробуем оба — envelope и схему модели.
+      expect(REGISTRY_TOOL_ENVELOPES[name]).toBeDefined();
+      expect((def.inputJsonSchema as { additionalProperties?: boolean }).additionalProperties).toBe(
+        false,
+      );
+    }
   });
 
   test('internalOnly: true только у user_query, import_csv_start и undo_last (§9.2: MCP не отдаются)', async () => {

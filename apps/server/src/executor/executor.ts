@@ -65,17 +65,24 @@ import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import {
+  type AspectRow,
+  type CreateAspectInput,
   type CreatePropertyInput,
+  createAspect,
   createProperty,
   lockOwnerRegistry,
   type MergeInverse,
   mergeProperty,
   type PropertyRow,
   readAspectDelta,
+  readOwnAspect,
   readOwnProperty,
   removeAspectDelta,
+  removeAspectImplements,
+  restoreAspectRow,
   restorePropertyRow,
   setAspectDelta,
+  setAspectImplements,
   undoMerge,
   updateProperty,
 } from '../registry/ops';
@@ -94,8 +101,11 @@ import {
   spentContributionOf,
 } from '../subscriptions/budget';
 import {
+  aspectCreateInput,
   aspectDeltaRemoveInput,
   aspectDeltaSetInput,
+  aspectImplementsRemoveInput,
+  aspectImplementsSetInput,
   propertyCreateInput,
   propertyMergeInput,
   propertyUpdateInput,
@@ -894,6 +904,10 @@ async function prepareOp(
   if (tool === 'property_merge') return preparePropertyMerge(ctx, input);
   if (tool === 'aspect_delta_set') return prepareAspectDeltaSet(ctx, input);
   if (tool === 'aspect_delta_remove') return prepareAspectDeltaRemove(ctx, input);
+  if (tool === 'aspect_create') return prepareAspectCreate(ctx, input);
+  if (tool === 'aspect_implements_set') return prepareAspectImplementsSet(ctx, input);
+  if (tool === 'aspect_implements_remove') return prepareAspectImplementsRemove(ctx, input);
+  if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
   if (tool === 'property_merge_undo') return preparePropertyMergeUndo(ctx, input);
   if (tool.startsWith('attach_')) {
@@ -3047,8 +3061,8 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
 // ---------------------------------------------------------------------------
 
 /**
- * Имена, при которых транзакция берёт замок реестра. Пять публичных тулов плюс две
- * ВНУТРЕННИЕ обратные операции — те же две, что перечислены ниже: их зовёт только undo.ts
+ * Имена, при которых транзакция берёт замок реестра. Восемь публичных тулов плюс три
+ * ВНУТРЕННИЕ обратные операции — те же три, что перечислены ниже: их зовёт только undo.ts
  * через `execute` во внутреннем режиме, в `CORE_TOOLS` их нет, и `dispatchTool` их не
  * резолвит (реестр тулов не знает таких имён).
  *
@@ -3063,6 +3077,7 @@ export const REGISTRY_OPS: ReadonlySet<string> = new Set([
   ...REGISTRY_TOOL_NAMES,
   'property_row_restore',
   'property_merge_undo',
+  'aspect_row_restore',
 ]);
 
 /**
@@ -3295,6 +3310,114 @@ async function prepareAspectDeltaRemove(_ctx: ExecCtx, rawInput: unknown): Promi
         });
       }
       return { result: { aspect: input.aspect } };
+    },
+  };
+}
+
+async function prepareAspectCreate(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(aspectCreateInput, rawInput, 'aspect_create');
+  const journal = registryPlan(
+    'aspect_created',
+    'aspect_create',
+    `Заведён аспект «${effectiveLabel(input.label, OWNER_LOCALE)}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const created = await createAspect(
+        applyCtx.tx,
+        applyCtx.req.actorUserId,
+        input as CreateAspectInput,
+      );
+      journal.operations.push({ op: 'aspect_create', payload: { ...input, id: created.id } });
+      journal.inverse.push({ op: 'aspect_row_restore', payload: { id: created.id, row: null } });
+      return { result: { aspect: created.id } };
+    },
+  };
+}
+
+async function prepareAspectImplementsSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(aspectImplementsSetInput, rawInput, 'aspect_implements_set');
+  const journal = registryPlan(
+    'aspect_implements_set',
+    'aspect_implements_set',
+    `Привязки аспекта «${input.aspect}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const owner = applyCtx.req.actorUserId;
+      // Прежняя строка читается ЗДЕСЬ, а не по снимку исполнителя: снимок снят до стадий, и
+      // аспект, заведённый предыдущей операцией той же пачки, в нём отсутствует.
+      const before = await readOwnAspect(applyCtx.tx, owner, input.aspect);
+      await setAspectImplements(applyCtx.tx, owner, input.aspect, input.implements);
+      journal.operations.push({ op: 'aspect_implements_set', payload: { ...input } });
+      if (before !== undefined) {
+        journal.inverse.push({
+          op: 'aspect_row_restore',
+          payload: { id: before.id, row: before as unknown as Record<string, unknown> },
+        });
+      }
+      return { result: { aspect: input.aspect } };
+    },
+  };
+}
+
+async function prepareAspectImplementsRemove(
+  _ctx: ExecCtx,
+  rawInput: unknown,
+): Promise<PreparedOp> {
+  const input = parseEnvelope(aspectImplementsRemoveInput, rawInput, 'aspect_implements_remove');
+  const journal = registryPlan(
+    'aspect_implements_removed',
+    'aspect_implements_remove',
+    `Снята привязка аспекта «${input.aspect}» к «${input.contract}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const owner = applyCtx.req.actorUserId;
+      const before = await readOwnAspect(applyCtx.tx, owner, input.aspect);
+      await removeAspectImplements(applyCtx.tx, owner, input.aspect, input.contract);
+      journal.operations.push({ op: 'aspect_implements_remove', payload: { ...input } });
+      if (before !== undefined) {
+        journal.inverse.push({
+          op: 'aspect_row_restore',
+          payload: { id: before.id, row: before as unknown as Record<string, unknown> },
+        });
+      }
+      return { result: { aspect: input.aspect } };
+    },
+  };
+}
+
+/**
+ * ВНУТРЕННЯЯ обратная операция для `aspect_create` и обеих операций привязок сразу — приёмом
+ * `property_row_restore` (§7.8): «строки не было» (снос) и «строка была вот такой» (upsert) —
+ * один вопрос с двумя ответами. Самообратной парой `implements_set/remove` не обойтись: `set`
+ * заменяет массив ЦЕЛИКОМ, и возврат к ПУСТОМУ списку конвертом с `.min(1)` невыразим.
+ */
+const aspectRowRestoreInput = z
+  .object({ id: z.string().min(1), row: z.record(z.unknown()).nullable() })
+  .strict();
+
+async function prepareAspectRowRestore(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(aspectRowRestoreInput, rawInput, 'aspect_row_restore');
+  const journal = registryPlan(
+    'aspect_row_restored',
+    'aspect_row_restore',
+    `Возврат строки аспекта «${input.id}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      await restoreAspectRow(
+        applyCtx.tx,
+        applyCtx.req.actorUserId,
+        input.id,
+        (input.row ?? null) as AspectRow | null,
+      );
+      return { result: { aspect: input.id } };
     },
   };
 }

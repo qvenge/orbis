@@ -33,6 +33,7 @@ import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { reconfiguresOf } from '../policy/confirmation';
 import { approvePending } from '../policy/pending';
+import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
@@ -43,6 +44,7 @@ import {
   registryOperationSummary,
   routineDeferForbidden,
   routineGate,
+  snapshotRegistryUnit,
   type ToolCallCtx,
 } from './dispatch';
 import { buildToolRegistry, type RoutineRef } from './registry';
@@ -4918,6 +4920,53 @@ describe('§С2-1: мутации реестра — уровень подтве
       mode: 'preview',
       summary: 'Заведение свойства «Агентское» (предложение)',
     });
+  });
+
+  test('aspect_implements_set поверх ВСТРОЕННОГО аспекта от рутины — запрет по объекту, не откладывается', async () => {
+    // Ряды `reconfiguresOf` для трёх имён завела задача 14 (Р-К-15) — тест не пишет второй
+    // копии правила, а проверяет его ЖИВЬЁМ, через диспатч: падение здесь означало бы
+    // нарушенный порядок 14 → 15, а не повод переписывать классификатор.
+    const owner = freshUserId();
+    const { ctx, threadId } = await gardener(owner, ['aspect_implements_set']);
+    const r = await dispatchTool(ctx, 'aspect_implements_set', {
+      aspect: 'orbis/task',
+      implements: [{ contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [] }],
+    });
+    expectError(r, 'FORBIDDEN_LEVEL');
+    if (r.status !== 'error') throw new Error('ожидался отказ');
+    expect((r.error.details as { reason?: string }).reason).toBe('routine_untouchable');
+    expect(await pendingsOf(owner, threadId)).toHaveLength(0); // и НЕ применилось
+  });
+
+  test('aspect_create из чата от модели — preview: своя строка исполнена и показана карточкой', async () => {
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'aspect_create', {
+      key: 'user/from-chat',
+      label: { ru: 'Из чата' },
+      description: { ru: 'x' },
+      properties: [{ propertyId: 'orbis/priority', required: false }],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'preview',
+      summary: 'Заведение аспекта «Из чата»',
+    });
+    const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    expect(reg.aspects.has('user/from-chat')).toBe(true);
+  });
+
+  test('снимок единицы: тулы аспектов дают адресные строки, а не родовую «тул → конверт»', async () => {
+    const own = freshUserId();
+    const snap = await withIdentity(db, own, (tx) =>
+      snapshotRegistryUnit(tx, own, 'aspect_implements_remove', {
+        aspect: 'user/gig',
+        contract: 'orbis/when',
+      }),
+    );
+    expect(snap.rows).toEqual([{ field: 'implements', before: 'orbis/when', after: '—' }]);
   });
 });
 

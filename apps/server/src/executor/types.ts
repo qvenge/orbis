@@ -205,6 +205,13 @@ export interface ActionRecord {
   // меняется устройство системы, а не запись в графе, и подставлять сюда «какую-нибудь»
   // сущность значило бы, что «отмени последнее» покажет владельцу чужой заголовок.
   // Аддитивность та же, что у origin/version: исчерпывающих switch по полю в коде нет.
+  //
+  // aspect_created / aspect_implements_set / aspect_implements_removed / aspect_row_restored —
+  // операции СВОЕГО аспекта и его привязок (§Б2-1, задача 15). У них тот же `entity_id: null`
+  // и по той же причине: меняется устройство системы. Четвёртый тип заведён отдельно, а не
+  // сведён к `aspect_created`: у свойств восстановление строки ложится под `property_updated`
+  // (правка — тоже правка), а «снос строки аспекта» под заголовком «Заведён аспект» врал бы
+  // владельцу в списке «отмени последнее» ровно там, где он читает, что отменяет.
   type:
     | 'entity_created'
     | 'entity_updated'
@@ -219,6 +226,10 @@ export interface ActionRecord {
     | 'property_merged'
     | 'aspect_delta_set'
     | 'aspect_delta_removed'
+    | 'aspect_created'
+    | 'aspect_implements_set'
+    | 'aspect_implements_removed'
+    | 'aspect_row_restored'
     | 'batch';
   entity_id: string | null;
   actor_user_id: string;

@@ -27,6 +27,7 @@ import { seedOwnerGraph, seedSmartListId } from '../seed/onboarding';
 import { SEED_SMART_LISTS } from '../seed/smart-lists';
 import { agendaListOf, agendaSubscriptionOf } from '../subscriptions/agenda';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
+import { buildToolRegistry } from '../tools/registry';
 import { effectiveRegistry } from './cache';
 import {
   collectPropertyHolders,
@@ -581,6 +582,246 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
     expect(undone.ok).toBe(true);
     const reg = await withIdentity(db, deltaOwner, (tx) => effectiveRegistry(tx, deltaOwner));
     expect(reg.aspects.get('orbis/note')?.viewConfig.icon).toBe('📗');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §Б2-1, §С3: свой аспект и его привязки к контрактам
+// ---------------------------------------------------------------------------
+
+describe('aspect_create (§Б2-1, §С3)', () => {
+  const aspectOwner = freshUserId();
+  const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
+    execute(
+      db,
+      { actorUserId: aspectOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+
+  test('свой аспект заводится, виден в снимке и приносит СВОЙ attach-тул', async () => {
+    const prop = ok(
+      await runAs('property_create', {
+        key: 'user/sleep-hours',
+        label: { ru: 'Часы сна' },
+        description: { ru: 'Сколько спал' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const propertyId = (prop.results[0] as { property: string }).property;
+    const created = ok(
+      await runAs('aspect_create', {
+        key: 'user/sleep-log',
+        label: { ru: 'Сон' },
+        description: { ru: 'Трекинг сна' },
+        properties: [{ propertyId, required: true }],
+      }),
+    );
+    expect(created.results[0]).toEqual({ aspect: 'user/sleep-log' });
+    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    expect(reg.aspects.get('user/sleep-log')?.properties).toEqual([
+      { propertyId, required: true, rank: 1 },
+    ]);
+    // Поверхность модели — производная реестра (§А9-1): без attach-тула аспект нечем надеть.
+    const defs = await withIdentity(db, aspectOwner, (tx) => buildToolRegistry(tx, aspectOwner));
+    expect(defs.map((d) => d.name)).toContain('attach_user_sleep_log');
+  });
+
+  test('ключ вне user/ и занятый ключ — отказ ДО записи', async () => {
+    expect(
+      err(
+        await runAs('aspect_create', {
+          key: 'orbis/sleep',
+          label: { ru: 'Сон' },
+          description: { ru: 'x' },
+          properties: [{ propertyId: 'orbis/priority', required: false }],
+        }),
+      ).code,
+    ).toBe('VALIDATION');
+    const taken = err(
+      await runAs('aspect_create', {
+        key: 'user/sleep-log',
+        label: { ru: 'Сон-2' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+      }),
+    );
+    expect((taken.details as { reason?: string }).reason).toBe('KEY_TAKEN');
+  });
+
+  test('неизвестное свойство в составе — отказ, аспекта не появилось', async () => {
+    const e = err(
+      await runAs('aspect_create', {
+        key: 'user/ghost',
+        label: { ru: 'Призрак' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'user/net-takogo', required: false }],
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('UNKNOWN_PROPERTY');
+    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    expect(reg.aspects.has('user/ghost')).toBe(false);
+  });
+
+  test('undo заведения сносит строку', async () => {
+    const created = ok(
+      await runAs('aspect_create', {
+        key: 'user/undo-me',
+        label: { ru: 'Отменяемый' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+      }),
+    );
+    expect(
+      (await undoAction(db, { actorUserId: aspectOwner, actionId: created.actionId })).ok,
+    ).toBe(true);
+    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    expect(reg.aspects.has('user/undo-me')).toBe(false);
+  });
+
+  test('откат НЕ сносит аспект, который успели надеть на запись', async () => {
+    const created = ok(
+      await runAs('aspect_create', {
+        key: 'user/worn',
+        label: { ru: 'Надетый' },
+        description: { ru: 'x' },
+        properties: [{ propertyId: 'orbis/priority', required: false }],
+      }),
+    );
+    // `tags` у конверта `entity_create` обязателен (§9.2, может быть пустым) — бриф его опустил.
+    ok(await runAs('entity_create', { title: 'Запись', tags: [], aspects: ['user/worn'] }));
+    const undone = await undoAction(db, { actorUserId: aspectOwner, actionId: created.actionId });
+    expect(undone.ok).toBe(false);
+    if (!undone.ok) expect(undone.error.code).toBe('INVARIANT');
+  });
+});
+
+describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
+  const bindOwner = freshUserId();
+  const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
+    execute(
+      db,
+      { actorUserId: bindOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  /**
+   * ОТНЕСЕНИЕ ВСЕХ ШЕСТИ ВАРИАНТОВ `orbis/task_status`, а не одного: §Б2-2 требует полноты, и
+   * `checkImplements` отвечает `VARIANT_UNMAPPED` на первый же неотнесённый (`unmapped`).
+   */
+  const TASK_STATUS_MAP = [
+    ['inbox', 'active'],
+    ['planned', 'active'],
+    ['in_progress', 'active'],
+    ['waiting', 'active'],
+    ['done', 'done'],
+    ['cancelled', 'cancelled'],
+  ].map(([variant, cls]) => ({ slot: 'status', variant, class: cls }));
+
+  test('привязка своего аспекта к orbis/when ложится и видна снимком', async () => {
+    // Аспект НОСИТ всё, что биндит: `checkImplements` считает `carried` по составу аспекта и
+    // на связанное, но не носимое свойство отвечает `UNKNOWN_PROPERTY`/`not_carried`.
+    ok(
+      await runAs('aspect_create', {
+        key: 'user/gig',
+        label: { ru: 'Выступление' },
+        description: { ru: 'x' },
+        properties: [
+          { propertyId: 'orbis/start_at', required: true },
+          { propertyId: 'orbis/location', required: false },
+          { propertyId: 'orbis/task_status', required: false },
+        ],
+      }),
+    );
+    ok(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig',
+        implements: [{ contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [] }],
+      }),
+    );
+    const reg = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    expect(reg.aspects.get('user/gig')?.implements).toEqual([
+      { contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [], fixed: {} },
+    ]);
+  });
+
+  test('value_map обязателен в конверте тула (§Б2-2): без него — отказ схемы с именем поля, не VARIANT_UNMAPPED', async () => {
+    const e = err(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig',
+        implements: [{ contract: 'orbis/when', bind: { moment: 'orbis/start_at' } }],
+      }),
+    );
+    expect(e.code).toBe('VALIDATION'); // `parseEnvelope` исполнителя: issues zod в details
+    expect(
+      (e.details as { issues: { path: unknown[] }[] }).issues.some((i) =>
+        i.path.includes('value_map'),
+      ),
+    ).toBe(true);
+  });
+
+  test('слот не того типа — BIND_TYPE ДО записи, прежние привязки на месте', async () => {
+    // `moment` — any_of[timestamp,date] (§Б1-1), `orbis/location` — text.
+    const e = err(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig',
+        implements: [{ contract: 'orbis/when', bind: { moment: 'orbis/location' }, value_map: [] }],
+      }),
+    );
+    expect(e.code).toBe('BIND_TYPE');
+    const reg = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    expect(reg.aspects.get('user/gig')?.implements).toHaveLength(1);
+  });
+
+  test('встроенный аспект привязками тула не правится — отказ указывает на дельту', async () => {
+    const e = err(
+      await runAs('aspect_implements_set', {
+        aspect: 'orbis/task',
+        implements: [
+          { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [] },
+        ],
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('ASPECT_BUILTIN_IMMUTABLE');
+    expect(e.message).toContain('aspect_delta_set');
+  });
+
+  test('снятие привязки к контракту оставляет остальные; undo возвращает снятую', async () => {
+    ok(
+      await runAs('aspect_implements_set', {
+        aspect: 'user/gig',
+        implements: [
+          { contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [] },
+          {
+            contract: 'orbis/completable',
+            bind: { status: 'orbis/task_status' },
+            value_map: TASK_STATUS_MAP,
+          },
+        ],
+      }),
+    );
+    const removed = ok(
+      await runAs('aspect_implements_remove', { aspect: 'user/gig', contract: 'orbis/when' }),
+    );
+    const after = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    expect(after.aspects.get('user/gig')?.implements.map((b) => b.contract)).toEqual([
+      'orbis/completable',
+    ]);
+    expect((await undoAction(db, { actorUserId: bindOwner, actionId: removed.actionId })).ok).toBe(
+      true,
+    );
+    const back = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    expect(back.aspects.get('user/gig')?.implements.map((b) => b.contract)).toEqual([
+      'orbis/when',
+      'orbis/completable',
+    ]);
+  });
+
+  test('снятие несуществующей привязки — NOT_FOUND, а не тихий успех', async () => {
+    expect(
+      err(
+        await runAs('aspect_implements_remove', { aspect: 'user/gig', contract: 'orbis/envelope' }),
+      ).code,
+    ).toBe('NOT_FOUND');
   });
 });
 

@@ -94,7 +94,7 @@ import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 
-import { readAspectDelta } from '../registry/ops';
+import { readAspectDelta, readOwnAspect } from '../registry/ops';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
@@ -1687,6 +1687,10 @@ async function snapshotDeferredUnit(
  * и единица, стоявшая по ключу, применилась бы к другой строке. У аспектов, контрактов и
  * подписок физического удаления с освобождением ключа нет (§А10-3: «удалить» = deprecate), а
  * адресуются они id; появится у них `freeKey` — сюда добавится ветка.
+ *
+ * У АСПЕКТА, СВЕРХ ТОГО, ID И ЕСТЬ ЕГО KEY (`createAspect` кладёт `id = key = user/…`, суффикса
+ * разведения у него нет по построению): подмены «ключ освободился и указал на другую строку»
+ * тут не бывает даже теоретически, и три тула задачи 15 сюда не приезжают именно поэтому.
  */
 function registryAddressesToId(
   reg: RegistrySnapshot,
@@ -1702,7 +1706,15 @@ function registryAddressesToId(
   return payload;
 }
 
-async function snapshotRegistryUnit(
+/**
+ * «БЫЛО → СТАНЕТ» ОДНОЙ ЕДИНИЦЫ РЕЕСТРА — карточка отложенного действия и карточка-запрос.
+ *
+ * ЭКСПОРТИРОВАНА по тому же доводу, что `registryOperationSummary` и `routineGate`: рубеж,
+ * который никто не проверил, — это рубеж, которого нет. Живьём через диспатч доходят не все
+ * ветки (у части тулов уровень выше `preview`, и единица рождается только от рутины), и
+ * перебор по ним возможен только отсюда.
+ */
+export async function snapshotRegistryUnit(
   tx: Tx,
   ownerId: string,
   tool: string,
@@ -1773,15 +1785,54 @@ async function snapshotRegistryUnit(
         ],
       };
     }
+    case 'aspect_create':
+      // Строки ещё нет — «было» не бывает (как у property_create).
+      return {
+        input: payload,
+        summary,
+        rows: (['label', 'description', 'properties', 'implements'] as const)
+          .filter((field) => field in payload)
+          .map((field) => ({ field, after: rowValue(payload[field]) })),
+      };
+    case 'aspect_implements_set':
+    case 'aspect_implements_remove': {
+      // «БЫЛО» У ЗАМЕНЫ — прежний список контрактов, и его надо прочитать; у СНЯТИЯ — сам
+      // снимаемый контракт: он и есть то, что исчезнет, и второго запроса ради него не нужно.
+      // Строка одна, а не по контракту на строку: меняется ОДНО поле — то, чем аспект
+      // участвует в потребителях, — и «было → станет» тут буквальны.
+      const before =
+        tool === 'aspect_implements_set'
+          ? (await readOwnAspect(tx, ownerId, String(payload.aspect)))?.implements
+              .map((b) => b.contract)
+              .join(', ')
+          : String(payload.contract);
+      // Форма конверта здесь та же, что у сводки выше (`isRecord(b) ? b.contract : b`), и по
+      // той же причине: снимок единицы зовётся и на пути, где конверт ещё не разобран.
+      const contracts = (Array.isArray(payload.implements) ? payload.implements : [])
+        .map((b) => (isRecord(b) ? String(b.contract) : String(b)))
+        .join(', ');
+      const after =
+        tool === 'aspect_implements_set' && contracts !== ''
+          ? rowValue(contracts)
+          : DEFERRED_UNSET_VALUE;
+      return {
+        input: payload,
+        summary,
+        rows: [
+          { field: 'implements', ...(before !== undefined && before !== '' && { before }), after },
+        ],
+      };
+    }
   }
-  // Сюда доходят все ПЯТЬ тулов реестра среза А — с Р-24-7 в том числе `property_create`
-  // (`preview` своей строки от рутины теперь откладывается, а не отклоняется). Семь тулов Б-1
-  // родовую строку получают ОСОЗНАННО: адресные строки «было → станет» им кладут задачи 15/16
-  // вместе со своими чтениями прежнего состояния (`readContractDelta`/`readSubscriptionDelta`,
-  // `implements` из снимка) — ветка, написанная раньше своей операции чтения, была бы кодом,
-  // который нечем прогнать (тот же довод, что у тришки `implements` в `confirmation.test.ts`).
-  // Фраза сводки при этом у них уже есть — `registryOperationSummary` выше, — то есть родовой
-  // остаётся только строка, а не карточка.
+  // Сюда доходят все ВОСЕМЬ тулов реестра — пять среза А (с Р-24-7 в том числе
+  // `property_create`: `preview` своей строки от рутины откладывается, а не отклоняется) и три
+  // тула аспектов и привязок (задача 15). Родовую строку получают ОСОЗНАННО четыре тула
+  // задачи 16 (подписки и наборы): адресные строки «было → станет» им кладёт она вместе со
+  // своими чтениями прежнего состояния (`readContractDelta`/`readSubscriptionDelta`) — ветка,
+  // написанная раньше своей операции чтения, была бы кодом, который нечем прогнать (тот же
+  // довод, что у тришки `implements` в `confirmation.test.ts`). Фраза сводки при этом у них
+  // уже есть — `registryOperationSummary` выше, — то есть родовой остаётся только строка, а
+  // не карточка.
   return { input: payload, summary, rows: [{ field: tool, after: rowValue(payload) }] };
 }
 

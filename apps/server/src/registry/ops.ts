@@ -29,8 +29,12 @@
 // Своего замка они не берут: два места, знающие порядок захвата, — это и есть дедлок.
 import {
   type AspectDefinition,
+  type AspectImplements,
+  type AspectPropertyRef,
+  aspectDefinitionSchema,
   assertPatternRegular,
   checkClassMap,
+  checkImplements,
   type ImplementsIssue,
   type LocalizedText,
   newId,
@@ -64,6 +68,10 @@ import {
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
+// Цикла нет: `executor/props` читает из `registry/{cache,load}` и в `registry/ops` не заходит.
+// Резолвер адреса свойства — ОДИН на исполнитель и на реестр: второй экземпляр правила «своя
+// строка перекрывает встроенную» разъехался бы с первым ровно там, где владелец завёл свою.
+import { resolvePropertyRef } from '../executor/props';
 // Цикла нет: валидатор берёт из `registry/load` только тип строки.
 import { assertSubscription } from '../subscriptions/registry';
 import { parseRegistryOfSnapshot } from './cache';
@@ -2042,6 +2050,302 @@ export async function removeSubscriptionDelta(
   subscriptionId: string,
 ): Promise<void> {
   await removeDeltaRow(tx, ownerId, 'subscription', subscriptionId);
+}
+
+// ---------------------------------------------------------------------------
+// Свой аспект и его привязки к контрактам (§Б2-1, §С3)
+// ---------------------------------------------------------------------------
+
+/**
+ * ПОЛНАЯ строка `aspect_definitions` владельца — в той же форме, что `PropertyRow` у свойств
+ * и по тому же доводу: обратная операция обязана вернуть строку такой, какой она была,
+ * включая момент заведения, а `AspectDefinition` момента не несёт.
+ *
+ * `aggregations` (§Б5-5) в форму НЕ входит: у своей строки она пустует по построению —
+ * писателя у неё в Б-1 нет ни одного, — а колонка с умолчанием `{}` переживает и создание,
+ * и откат (`ON CONFLICT … DO UPDATE` её не перечисляет). Появится писатель — поле приедет
+ * сюда вместе с ним, иначе откат молча гасил бы публикацию величин.
+ */
+export interface AspectRow {
+  id: string;
+  key: string;
+  label: LocalizedText;
+  description: LocalizedText;
+  properties: AspectPropertyRef[];
+  implements: AspectImplements[];
+  aiInstructions: string | null;
+  tagMappings: string[];
+  viewConfig: { keyFields: string[]; icon?: string };
+  module: string | null;
+  service: boolean;
+  rank: number;
+  createdAt: string;
+}
+
+const ASPECT_ROW_COLUMNS = sql`id, owner_id, key, label, description, properties, implements,
+  ai_instructions, tag_mappings, view_config, module, service, rank, created_at`;
+
+function toAspectRow(r: RawRow): AspectRow {
+  return {
+    id: r.id as string,
+    key: r.key as string,
+    label: r.label as LocalizedText,
+    description: r.description as LocalizedText,
+    properties: r.properties as AspectPropertyRef[],
+    implements: r.implements as AspectImplements[],
+    aiInstructions: (r.ai_instructions ?? null) as string | null,
+    tagMappings: (r.tag_mappings ?? []) as string[],
+    viewConfig: r.view_config as { keyFields: string[]; icon?: string },
+    module: (r.module ?? null) as string | null,
+    service: r.service as boolean,
+    rank: Number(r.rank),
+    createdAt:
+      (r.created_at as Date | string) instanceof Date
+        ? (r.created_at as Date).toISOString()
+        : String(r.created_at),
+  };
+}
+
+/**
+ * СВОЯ строка аспекта по id ИЛИ key. У аспекта они совпадают (`user/sleep-log` — и адрес, и
+ * ключ), и запрос всё равно спрашивает оба: перекрытие встроенного аспекта своей строкой
+ * законно (`routers/registry.test.ts`, «своя строка ПЕРЕКРЫВАЕТ встроенную»), а там key
+ * равен встроенному id.
+ */
+export async function readOwnAspect(
+  tx: Tx,
+  ownerId: string,
+  idOrKey: string,
+): Promise<AspectRow | undefined> {
+  const rows = (await tx.execute(sql`
+    SELECT ${ASPECT_ROW_COLUMNS} FROM aspect_definitions
+    WHERE owner_id = ${ownerId}::uuid AND (id = ${idOrKey} OR key = ${idOrKey})`)) as unknown as RawRow[];
+  return rows[0] === undefined ? undefined : toAspectRow(rows[0]);
+}
+
+/** Строка → определение со строгим разбором; отказ ДО записи (образец `definitionOf` свойств). */
+function aspectDefinitionOf(row: AspectRow, ownerId: string): AspectDefinition {
+  const { createdAt: _createdAt, ...definition } = row;
+  const parsed = aspectDefinitionSchema.safeParse({ ...definition, ownerId });
+  if (!parsed.success) {
+    throw new ExecError('VALIDATION', `определение аспекта ${row.id} не разбирается схемой`, {
+      reason: 'ASPECT_MALFORMED',
+      aspect: row.id,
+      issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+    });
+  }
+  return parsed.data;
+}
+
+/**
+ * Привязки проверяются ДО записи чистой функцией shared (Р-И-7). На ЧТЕНИИ реестра их не
+ * проверяет никто (`load.ts` берёт только форму zod) — fail-closed на чтении запер бы владельца
+ * снаружи графа, — значит писатель и есть единственное место, где ловится несоответствие типа.
+ *
+ * Проверяется РОВНО правимая строка, а не весь реестр владельца: чужая строка, посеянная
+ * фикстурой или прошлой версией кода, не должна делать неисполнимой правку соседней.
+ */
+function assertImplements(next: AspectRow, ownerId: string, reg: RegistrySnapshot): void {
+  const issue = checkImplements(aspectDefinitionOf(next, ownerId), reg)[0];
+  if (issue === undefined) return;
+  // Единственное отображение ImplementsIssue → ExecError — `execErrorOfImplementsIssue` из этого же
+  // файла (задача 13, Р-К-35): BIND_TYPE/VARIANT_UNMAPPED — свои коды §С1-2, прочие — VALIDATION с `reason`.
+  throw execErrorOfImplementsIssue(issue, { aspect: next.id });
+}
+
+export interface CreateAspectInput {
+  key: string;
+  label: LocalizedText;
+  description: LocalizedText;
+  properties: Array<{ propertyId: string; required: boolean }>;
+  implements?: AspectImplements[];
+  viewConfig?: { keyFields: string[]; icon?: string };
+  tagMappings?: string[];
+}
+
+export async function createAspect(
+  tx: Tx,
+  ownerId: string,
+  input: CreateAspectInput,
+): Promise<{ id: string }> {
+  // Гейт namespace — довод `createProperty` (`KEY_NAMESPACE`): своя строка с ключом будущего
+  // встроенного аспекта МОЛЧА подменила бы его после пересева (`ORDER BY owner_id NULLS FIRST`).
+  if (!input.key.startsWith('user/')) {
+    throw new ExecError(
+      'VALIDATION',
+      `свои аспекты живут в namespace user/ — «${input.key}» занимает чужой (§А2-1)`,
+      { reason: 'KEY_NAMESPACE', key: input.key },
+    );
+  }
+  const reg = await currentRegistry(tx, ownerId);
+  // Суффикса разведения у аспекта НЕТ, в отличие от свойства: его key — это его id и имя тула
+  // `attach_*`, и «завёл user/sleep, получил user/sleep-2» подменило бы уже названный адрес.
+  if (reg.aspects.has(input.key)) {
+    throw new ExecError('VALIDATION', `аспект «${input.key}» уже есть`, {
+      reason: 'KEY_TAKEN',
+      aspect: input.key,
+    });
+  }
+  const properties = input.properties.map((p, index) => {
+    const def = resolvePropertyRef(reg, p.propertyId);
+    if (def === undefined) {
+      throw new ExecError('VALIDATION', `свойства «${p.propertyId}» нет в реестре`, {
+        reason: 'UNKNOWN_PROPERTY',
+        aspect: input.key,
+        property: p.propertyId,
+      });
+    }
+    // Адрес — к id: состав аспекта читают через `properties.get(propertyId)`, и записанный
+    // ключом адрес не резолвился бы молча (довод `normalizeDeltaAddresses`).
+    return { propertyId: def.id, required: p.required, rank: index + 1 };
+  });
+  const row: AspectRow = {
+    id: input.key,
+    key: input.key,
+    label: input.label,
+    description: input.description,
+    properties,
+    implements: input.implements ?? [],
+    aiInstructions: null,
+    tagMappings: input.tagMappings ?? [],
+    // keyFields по умолчанию — первые три поля: карточка (02 §2.3) показывает три, как у всех
+    // встроенных; полный список превратил бы её в ленту значений.
+    viewConfig: input.viewConfig ?? { keyFields: properties.slice(0, 3).map((p) => p.propertyId) },
+    module: null,
+    service: false,
+    rank: Math.max(0, ...[...reg.aspects.values()].map((a) => a.rank)) + 1,
+    createdAt: new Date().toISOString(),
+  };
+  assertImplements(row, ownerId, reg);
+  await insertAspectRow(tx, ownerId, row);
+  await bumpOwnerRegistryVersion(tx, ownerId);
+  return { id: row.id };
+}
+
+/** Своя строка под правку привязок; встроенный аспект — отказ с указанием законного пути. */
+async function ownAspectForWrite(tx: Tx, ownerId: string, aspectId: string): Promise<AspectRow> {
+  const row = await readOwnAspect(tx, ownerId, aspectId);
+  if (row !== undefined) return row;
+  const builtin = (await tx.execute(sql`
+    SELECT 1 AS hit FROM aspect_definitions WHERE owner_id IS NULL AND id = ${aspectId}`)) as unknown as unknown[];
+  if (builtin.length > 0) {
+    // Приём `BUILTIN_IMMUTABLE` свойств: молчаливый NOT_FOUND отправил бы владельца искать
+    // несуществующую строку, а законный путь есть — дельта (задача 13 кладёт в неё `classMap`,
+    // дополняющий `value_map` встроенной привязки).
+    throw new ExecError(
+      'VALIDATION',
+      `${aspectId} — встроенный аспект: его привязки дополняются дельтой (aspect_delta_set, поле classMap), ` +
+        `а системное определение остаётся системным`,
+      { reason: 'ASPECT_BUILTIN_IMMUTABLE', aspect: aspectId },
+    );
+  }
+  throw new ExecError('NOT_FOUND', `аспекта ${aspectId} нет среди ваших`, { aspect: aspectId });
+}
+
+export async function setAspectImplements(
+  tx: Tx,
+  ownerId: string,
+  aspectId: string,
+  bindings: AspectImplements[],
+): Promise<void> {
+  const row = await ownAspectForWrite(tx, ownerId, aspectId);
+  assertImplements({ ...row, implements: bindings }, ownerId, await currentRegistry(tx, ownerId));
+  await tx.execute(sql`
+    UPDATE aspect_definitions SET implements = ${JSON.stringify(bindings)}::jsonb
+     WHERE owner_id = ${ownerId}::uuid AND id = ${row.id}`);
+  await bumpOwnerRegistryVersion(tx, ownerId);
+}
+
+export async function removeAspectImplements(
+  tx: Tx,
+  ownerId: string,
+  aspectId: string,
+  contract: string,
+): Promise<void> {
+  const row = await ownAspectForWrite(tx, ownerId, aspectId);
+  const kept = row.implements.filter((b) => b.contract !== contract);
+  if (kept.length === row.implements.length) {
+    // Тихий успех хуже отказа: владелец снял НЕ ТУ привязку и узнал бы об этом только по тому,
+    // что аспект по-прежнему в Повестке.
+    throw new ExecError('NOT_FOUND', `аспект ${row.id} не привязан к контракту ${contract}`, {
+      aspect: row.id,
+      contract,
+    });
+  }
+  await tx.execute(sql`
+    UPDATE aspect_definitions SET implements = ${JSON.stringify(kept)}::jsonb
+     WHERE owner_id = ${ownerId}::uuid AND id = ${row.id}`);
+  await bumpOwnerRegistryVersion(tx, ownerId);
+}
+
+/**
+ * Восстановление строки аспекта из журнала (§7.8) — ОДНА обратная операция на `aspect_create`
+ * и на обе операции привязок: «строки не было» (снос) и «строка была вот такой» (upsert) —
+ * один вопрос с двумя ответами, ровно как у `restorePropertyRow`.
+ */
+export async function restoreAspectRow(
+  tx: Tx,
+  ownerId: string,
+  id: string,
+  row: AspectRow | null,
+): Promise<void> {
+  if (row === null) {
+    const existing = await readOwnAspect(tx, ownerId, id);
+    if (existing === undefined) return; // строки уже нет — откат идемпотентен
+    // Страховка, а не логика (образец `restorePropertyRow`): аспект создало отменяемое
+    // действие, носителей у него быть не может. Появились ПОСЛЕ — снос осиротил бы записи, у
+    // которых в `aspects[]` остался адрес без определения, и валидатор начал бы отказывать на
+    // каждой их правке.
+    const worn = (await tx.execute(sql`
+      SELECT count(*)::int AS n FROM entities
+       WHERE owner_id = ${ownerId}::uuid AND aspects @> ARRAY[${existing.id}]::text[]`)) as unknown as {
+      n: number;
+    }[];
+    const n = Number(worn[0]?.n ?? 0);
+    if (n > 0) {
+      throw new ExecError(
+        'INVARIANT',
+        `аспект ${id} нельзя снять откатом: он надет на записей — ${n}`,
+        { aspect: id, entities: n },
+      );
+    }
+    await tx.execute(sql`
+      DELETE FROM aspect_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${existing.id}`);
+    await bumpOwnerRegistryVersion(tx, ownerId);
+    return;
+  }
+  await insertAspectRow(tx, ownerId, row, { restore: true });
+  await bumpOwnerRegistryVersion(tx, ownerId);
+}
+
+async function insertAspectRow(
+  tx: Tx,
+  ownerId: string,
+  row: AspectRow,
+  opts: { restore?: boolean } = {},
+): Promise<void> {
+  aspectDefinitionOf(row, ownerId); // fail-closed до записи
+  // ON CONFLICT нужен только откату; создание идёт по пустому месту, и конфликт там означал бы
+  // занятый id — о нём молчать нельзя (тот же размен, что в `insertRow` свойств).
+  const conflict = opts.restore
+    ? sql`ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO UPDATE SET
+            key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
+            properties = EXCLUDED.properties, implements = EXCLUDED.implements,
+            ai_instructions = EXCLUDED.ai_instructions, tag_mappings = EXCLUDED.tag_mappings,
+            view_config = EXCLUDED.view_config, module = EXCLUDED.module,
+            service = EXCLUDED.service, rank = EXCLUDED.rank`
+    : sql``;
+  await tx.execute(sql`
+    INSERT INTO aspect_definitions
+      (id, owner_id, key, label, description, properties, implements, ai_instructions,
+       tag_mappings, view_config, module, service, rank, created_at)
+    VALUES (${row.id}, ${ownerId}::uuid, ${row.key}, ${JSON.stringify(row.label)}::jsonb,
+            ${JSON.stringify(row.description)}::jsonb, ${JSON.stringify(row.properties)}::jsonb,
+            ${JSON.stringify(row.implements)}::jsonb, ${row.aiInstructions},
+            ${row.tagMappings.length === 0 ? sql`ARRAY[]::text[]` : textArray(row.tagMappings)},
+            ${JSON.stringify(row.viewConfig)}::jsonb, ${row.module}, ${row.service},
+            ${row.rank}, ${row.createdAt}::timestamptz)
+    ${conflict}`);
 }
 
 // ---------------------------------------------------------------------------

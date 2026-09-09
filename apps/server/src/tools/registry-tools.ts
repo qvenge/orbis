@@ -1,8 +1,14 @@
 // apps/server/src/tools/registry-tools.ts
 //
-// ПЯТЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2): завести своё свойство, поправить его, слить два
-// в одно, поставить и снять дельту аспекта. Это первая поверхность, которой владелец и
-// модель МЕНЯЮТ САМУ СИСТЕМУ, а не данные в ней.
+// ВОСЕМЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2, §Б2-1): завести своё свойство, поправить его,
+// слить два в одно, поставить и снять дельту аспекта, завести СВОЙ аспект и переписать либо
+// снять его привязки к контрактам. Это первая поверхность, которой владелец и модель МЕНЯЮТ
+// САМУ СИСТЕМУ, а не данные в ней.
+//
+// Три последних заводит срез Б-1: аспект перестал быть только «набором полей» — привязка
+// (`implements`) включает его в Повестку, Бюджет и строку списка ДЕКЛАРАЦИЕЙ, без строки
+// кода (§Б2-1), и завести такую декларацию владелец и модель обязаны тем же путём, что
+// остальное устройство системы, — тулом через исполнителя, а не правкой базы.
 //
 // ДВА ПРЕДСТАВЛЕНИЯ, КАК У ОСТАЛЬНЫХ CORE-ТУЛОВ (`tools/registry.ts`): zod-envelope
 // валидирует вход на исполнении, JSON Schema уезжает модели. Живут они здесь ВМЕСТЕ —
@@ -10,12 +16,12 @@
 // приходится сторожить отдельным тестом; у новых тулов сторожить нечего, потому что оба
 // представления стоят в одном файле друг под другом.
 //
-// `fullScopeOnly: true` У ВСЕХ ПЯТИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
+// `fullScopeOnly: true` У ВСЕХ ВОСЬМИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
 // не адресован вовсе: он работает над ЗАДАЧЕЙ владельца, а не над устройством его системы.
 // Флаг — не «мутации фону закрыты» (это и так держит `WORKER_SCOPE_TOOLS`), а ответ на
 // другой вопрос: кому этот тул вообще предназначен.
 //
-// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ПЯТИ НАЗНАЧАЕТ §7.10, И НАЗНАЧАЕТ ПО ОБЪЕКТУ (§С2-1, Задача 16):
+// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ВОСЬМИ НАЗНАЧАЕТ §7.10, И НАЗНАЧАЕТ ПО ОБЪЕКТУ (§С2-1, Задача 16):
 // своя строка владельца от AI — `preview` (исполнено и показано карточкой), перенастройка
 // поведения (статус, слияние, дельта) — `explicit-confirmation` для любого актора, а от
 // рутины та же операция становится отложенной единицей пачки D42. Встроенные строки реестра
@@ -24,7 +30,7 @@
 // `tools/dispatch.ts` (`routineDeferForbidden`); приёмка §С8-11 — тест на каждый ряд.
 // Прежняя редакция этой шапки называла отсутствие гейта знаемой дырой одной задачи; дыра
 // закрыта, и абзац снят вместе с ней.
-import { PROPERTY_KINDS } from '@orbis/shared';
+import { aspectImplementsSchema, localizedTextSchema, PROPERTY_KINDS } from '@orbis/shared';
 import { queryAstJsonSchema } from '@orbis/shared/query';
 import { z } from 'zod';
 import { aspectDeltaSchema } from '../registry/deltas';
@@ -284,9 +290,139 @@ const aspectDeltaRemoveJsonSchema = {
   additionalProperties: false,
 } as const;
 
+// ---------------------------------------------------------------------------
+// aspect_create / aspect_implements_set / aspect_implements_remove (§Б2-1, §С3)
+// ---------------------------------------------------------------------------
+
+/** Привязка к контракту (§Б2-1) — одна схема на три тула; форму даёт shared (задача 2). */
+const aspectImplementsJsonSchema = {
+  type: 'array',
+  description:
+    'какие КОНТРАКТЫ реализует аспект: bind — слот контракта → своё свойство, value_map — ' +
+    'вариант значения → класс контракта, fixed — слот, заданный константой. Именно привязка ' +
+    'включает аспект в Повестку, Бюджет и строку списка — без строки кода.',
+  items: {
+    type: 'object',
+    required: ['contract', 'value_map'],
+    additionalProperties: false,
+    properties: {
+      contract: { type: 'string', description: 'id контракта, например orbis/completable' },
+      bind: { type: 'object', additionalProperties: { type: 'string' } },
+      value_map: {
+        type: 'array',
+        description:
+          'ОБЯЗАТЕЛЕН: отнесение КАЖДОГО варианта слота-статуса к классу контракта (§Б2-2); ' +
+          'у контракта без слота-статуса (orbis/when) — пустой массив',
+        items: {
+          type: 'object',
+          required: ['slot', 'variant', 'class'],
+          additionalProperties: false,
+          properties: { slot: { type: 'string' }, variant: {}, class: { type: 'string' } },
+        },
+      },
+      fixed: { type: 'object' },
+    },
+  },
+} as const;
+
 /**
- * Дефы пяти тулов. Порядок — тот, в котором их видит модель и эталон снимка
- * (`test/golden/tool-registry.json`): создание, правка, слияние, дельта, снятие дельты.
+ * Конверт привязки для ТУЛОВ: `value_map` ОБЯЗАТЕЛЕН (§Б2-2). Обязательность живёт в конверте, а не в
+ * строке реестра (`aspectImplementsSchema`, задача 2: там `.default([])` держит форму строки, замер П1):
+ * модель, забывшая отнесения, получает отказ схемы с именем поля, а не `VARIANT_UNMAPPED` из глубины
+ * `checkImplements`; для контракта без слота-статуса (`orbis/when`) поле передаётся пустым массивом.
+ */
+export const aspectImplementsToolSchema = aspectImplementsSchema
+  .extend({ value_map: aspectImplementsSchema.shape.value_map.removeDefault() })
+  .strict();
+
+export const aspectCreateInput = z
+  .object({
+    key: z.string().regex(/^user\/[a-z][a-z0-9_-]*$/, 'свой аспект живёт в namespace user/'),
+    label: localizedTextSchema,
+    description: localizedTextSchema,
+    properties: z
+      .array(z.object({ propertyId: z.string().min(1), required: z.boolean() }).strict())
+      .min(1),
+    implements: z.array(aspectImplementsToolSchema).default([]),
+    viewConfig: z
+      .object({ keyFields: z.array(z.string()), icon: z.string().optional() })
+      .strict()
+      .optional(),
+    tagMappings: z.array(z.string()).default([]),
+  })
+  .strict();
+export type AspectCreateInput = z.infer<typeof aspectCreateInput>;
+
+export const aspectImplementsSetInput = z
+  .object({ aspect: z.string().min(1), implements: z.array(aspectImplementsToolSchema).min(1) })
+  .strict();
+export type AspectImplementsSetInput = z.infer<typeof aspectImplementsSetInput>;
+
+export const aspectImplementsRemoveInput = z
+  .object({ aspect: z.string().min(1), contract: z.string().min(1) })
+  .strict();
+export type AspectImplementsRemoveInput = z.infer<typeof aspectImplementsRemoveInput>;
+
+const aspectCreateJsonSchema = {
+  type: 'object',
+  required: ['key', 'label', 'description', 'properties'],
+  additionalProperties: false,
+  properties: {
+    key: { type: 'string', description: 'ручка вида user/sleep-log — она же адрес аспекта' },
+    label: localizedJsonSchema,
+    description: {
+      ...localizedJsonSchema,
+      description: 'что аспект означает — по нему ты решаешь, вешать ли его',
+    },
+    properties: {
+      type: 'array',
+      description:
+        'поля аспекта: propertyId — id или key УЖЕ заведённого свойства (см. property_catalog)',
+      items: {
+        type: 'object',
+        required: ['propertyId', 'required'],
+        additionalProperties: false,
+        properties: { propertyId: { type: 'string' }, required: { type: 'boolean' } },
+      },
+    },
+    implements: aspectImplementsJsonSchema,
+    viewConfig: {
+      type: 'object',
+      required: ['keyFields'],
+      additionalProperties: false,
+      properties: {
+        keyFields: { type: 'array', items: { type: 'string' } },
+        icon: { type: 'string' },
+      },
+    },
+    tagMappings: { type: 'array', items: { type: 'string' } },
+  },
+} as const;
+
+const aspectImplementsSetJsonSchema = {
+  type: 'object',
+  required: ['aspect', 'implements'],
+  additionalProperties: false,
+  properties: {
+    aspect: { type: 'string', description: 'id своего аспекта' },
+    implements: aspectImplementsJsonSchema,
+  },
+} as const;
+
+const aspectImplementsRemoveJsonSchema = {
+  type: 'object',
+  required: ['aspect', 'contract'],
+  additionalProperties: false,
+  properties: {
+    aspect: { type: 'string' },
+    contract: { type: 'string', description: 'id контракта, привязку к которому снимаем' },
+  },
+} as const;
+
+/**
+ * Дефы восьми тулов. Порядок — тот, в котором их видит модель и эталон снимка
+ * (`test/golden/tool-registry.json`): создание, правка, слияние, дельта, снятие дельты,
+ * заведение своего аспекта и две операции его привязок.
  */
 export const REGISTRY_TOOLS: OrbisToolDef[] = [
   {
@@ -339,16 +475,49 @@ export const REGISTRY_TOOLS: OrbisToolDef[] = [
     kind: 'mutate',
     fullScopeOnly: true,
   },
+  {
+    name: 'aspect_create',
+    description:
+      'Завести СВОЙ аспект — новую интерпретацию записи («тренировка», «созвон»). Поля берутся ' +
+      'из уже заведённых свойств: сперва property_catalog, и только потом property_create на ' +
+      'недостающее. implements — привязки к контрактам: именно они, а не код, включают аспект ' +
+      'в Повестку, Бюджет и строку списка.',
+    inputJsonSchema: aspectCreateJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
+  {
+    name: 'aspect_implements_set',
+    description:
+      'Переписать привязки своего аспекта к контрактам ЦЕЛИКОМ: список замещает прежний. Слот ' +
+      'связывается со свойством того же типа, варианты статуса — с классами контракта; ' +
+      'несовпадение типа или непокрытый вариант — отказ ДО записи.',
+    inputJsonSchema: aspectImplementsSetJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
+  {
+    name: 'aspect_implements_remove',
+    description:
+      'Снять привязку своего аспекта к одному контракту: аспект перестаёт участвовать в его ' +
+      'потребителях, остальные привязки остаются.',
+    inputJsonSchema: aspectImplementsRemoveJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
 ];
 
-/** Имена пяти тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
+/** Имена восьми тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
 export const REGISTRY_TOOL_NAMES: ReadonlySet<string> = new Set(REGISTRY_TOOLS.map((d) => d.name));
 
-/** Envelope-схемы пяти тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
+/** Envelope-схемы восьми тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
 export const REGISTRY_TOOL_ENVELOPES: Record<string, z.ZodTypeAny> = {
   property_create: propertyCreateInput,
   property_update: propertyUpdateInput,
   property_merge: propertyMergeInput,
   aspect_delta_set: aspectDeltaSetInput,
   aspect_delta_remove: aspectDeltaRemoveInput,
+  aspect_create: aspectCreateInput,
+  aspect_implements_set: aspectImplementsSetInput,
+  aspect_implements_remove: aspectImplementsRemoveInput,
 };

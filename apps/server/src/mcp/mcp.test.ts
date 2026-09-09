@@ -459,6 +459,11 @@ describe('/mcp tools/list (§9.2)', () => {
         'property_merge',
         'aspect_delta_set',
         'aspect_delta_remove',
+        // Тулы аспектов и привязок (§Б2-1, задача 15) — тем же правилом: устройство системы
+        // владельца полному гранту адресовано, фону (`worker`) — нет.
+        'aspect_create',
+        'aspect_implements_set',
+        'aspect_implements_remove',
         // Глаголы исполнителя (§9.3): грант есть у любого MCP-вызова, поэтому agentOnly
         // список не сужает — сужает его только скоуп (тест worker ниже)
         'orbis_my_queue',
@@ -499,9 +504,9 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 37 − 3 internalOnly − 2 routineOnly = 32
+      // builtin-набор: 40 − 3 internalOnly − 2 routineOnly = 35
       expect(tools).toHaveLength(publicDefs.length);
-      expect(tools).toHaveLength(32);
+      expect(tools).toHaveLength(35);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();
@@ -763,13 +768,16 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
         // §А9-4/РП-14: `fullScopeOnly` — исключение из «чтения открыты все». Каталог
         // свойств это карта поверхности ВЛАДЕЛЬЦА, фону она не адресована.
         'property_catalog',
-        // Тем же признаком закрыты пять тулов реестра: фоновый исполнитель работает над
+        // Тем же признаком закрыты восемь тулов реестра: фоновый исполнитель работает над
         // ЗАДАЧЕЙ владельца, а не над устройством его системы (§А9-4).
         'property_create',
         'property_update',
         'property_merge',
         'aspect_delta_set',
         'aspect_delta_remove',
+        'aspect_create',
+        'aspect_implements_set',
+        'aspect_implements_remove',
       ]) {
         expect(names).not.toContain(name);
       }
@@ -1082,11 +1090,15 @@ describe('§С8-23: инвариант против fail-open — писател
   );
 
   test('писатели реестра разобраны, и КАЖДЫЙ берёт замок реестра', () => {
-    // Пять публичных тулов + две внутренние обратные операции (`property_row_restore`,
-    // `property_merge_undo`): их зовёт только undo, снаружи они недостижимы.
+    // Восемь публичных тулов + три внутренние обратные операции (`property_row_restore`,
+    // `property_merge_undo`, `aspect_row_restore`): их зовёт только undo, снаружи недостижимы.
     expect([...writers].sort()).toEqual([
+      'aspect_create',
       'aspect_delta_remove',
       'aspect_delta_set',
+      'aspect_implements_remove',
+      'aspect_implements_set',
+      'aspect_row_restore',
       'property_create',
       'property_merge',
       'property_merge_undo',

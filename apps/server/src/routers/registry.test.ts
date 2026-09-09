@@ -124,6 +124,27 @@ describe('registry.effective (§А9-2)', () => {
       (await a.registry.effective()).aspects.find((x) => x.id === 'orbis/task')?.label.ru,
     ).toBe('Задача');
   });
+
+  test('ручка заводит аспект тем же путём, что тул: он приезжает в registry.effective', async () => {
+    const caller = callerFor(freshUserId());
+    const prop = await caller.registry.createProperty({
+      key: 'user/mood',
+      label: { ru: 'Настроение' },
+      description: { ru: 'x' },
+      type: { kind: 'number' },
+      status: 'active',
+    });
+    await caller.registry.createAspect({
+      key: 'user/diary',
+      label: { ru: 'Дневник' },
+      description: { ru: 'x' },
+      properties: [{ propertyId: (prop as { property: string }).property, required: false }],
+    });
+    const reg = await caller.registry.effective();
+    // Встроенных 13 (пин выше); своя строка добавляется рядом, а не перекрывает.
+    expect(reg.aspects.length).toBe(14);
+    expect(reg.aspects.find((a) => a.id === 'user/diary')?.label.ru).toBe('Дневник');
+  });
 });
 
 describe('registry.dependants: честные зависимости (§А3-5, §С1-3 п.10)', () => {
