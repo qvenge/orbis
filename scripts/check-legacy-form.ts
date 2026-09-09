@@ -300,6 +300,14 @@ export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
       'разбора голых имён — обе половины требуют старой формы дословно',
   },
   {
+    path: 'apps/server/src/llm/prompts/v6.test.ts',
+    markers: ['bare-field'],
+    reason:
+      'гард смены линейки v6: утверждает ОТКАЗ разбора голых имён поля — форма отказа ' +
+      'пишется в нём дословно, иначе тест проверяет не то, что называет. Цитат v5 здесь ' +
+      'нет: голое имя сняла ещё v5, и двухверсионное сравнение осталось в v5.test.ts',
+  },
+  {
     path: 'apps/server/src/llm/prompts/routine-v3.test.ts',
     markers: ['bare-field'],
     reason: 'то же, что у v5.test.ts, для линейки рутин: цитата routine-v2 плюс отказ разбора',
