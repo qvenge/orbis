@@ -6,10 +6,12 @@
 // Ролевой слой графа (идентичность ребра, `acyclic`, `target_max_incoming`, `created_by`,
 // уникальность) переехал в `relations.ts` вместе с реформой §А4-3: там он один механизм с
 // параметром из реестра, здесь был бы набором доменных правил с зашитыми значениями.
+import { isModuleEnabled } from '@orbis/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { agentGrants } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { ExecError } from './errors';
+import { ExecError } from '../errors';
+import type { RegistrySnapshot } from '../registry/load';
 import type { EntityState } from './props';
 import type { MutationSource } from './types';
 
@@ -190,6 +192,32 @@ export function assertRoutineUntouchable(
   const hitsAssignment = args.touched.includes('orbis/assignment');
   if (!hitsObject && !hitsAssignment) return;
   throw routineUntouchableError();
+}
+
+/**
+ * Запись в выключенный модуль (§Б8-3): создание и навешивание — нет, правка существующей
+ * записи — да (данные не трогаются, скрытое ≠ удалённое). Отказ по ОБЪЕКТУ, как
+ * COMPUTED_WRITE: повторять с другим значением бессмысленно — потому у `MODULE_DISABLED`
+ * и стоит 403 в `TRPC_CODE_BY_EXEC`.
+ *
+ * `aspects` — только ДОБАВЛЯЕМЫЕ аспекты, а не итоговое состояние: иначе правка суммы
+ * существующей транзакции ловилась бы вместе с созданием новой.
+ */
+export function assertModuleEnabled(
+  reg: RegistrySnapshot,
+  disabled: readonly string[],
+  aspects: readonly string[],
+): void {
+  if (disabled.length === 0) return; // общий путь — без единого обращения к реестру
+  for (const id of aspects) {
+    const module = reg.aspects.get(id)?.module ?? null;
+    if (isModuleEnabled(module, disabled)) continue;
+    throw new ExecError(
+      'MODULE_DISABLED',
+      `модуль «${module}» выключен: аспект «${id}» не навешивается (§Б8-3)`,
+      { module, aspect: id },
+    );
+  }
 }
 
 /**

@@ -295,3 +295,129 @@ describe('§С8-22: маска на реестре тулов — один фи�
     expect(out.error.details).toMatchObject({ tool: 'budget_status', module: 'finance' });
   });
 });
+
+describe('§С8-22: запись при выключенном модуле — create/attach нет, update да', () => {
+  // `CATEGORY_ID`, `txId`, `noteId` пришли из ОБЩЕГО `beforeAll` файла (шаг 3): они заведены до
+  // первого выключения — завести их здесь уже нельзя, гейт шага 11 не пустил бы.
+  beforeEach(blockEntry(['finance']));
+
+  test('entity_create с orbis/financial → MODULE_DISABLED; ядро — проходит', async () => {
+    const denied = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Такси',
+            tags: [],
+            aspects: ['orbis/financial'],
+            props: {
+              'orbis/amount': '500.00',
+              'orbis/direction': 'expense',
+              'orbis/occurred_on': '2026-09-03',
+              'orbis/finance_category': CATEGORY_ID,
+            },
+          },
+        },
+      ],
+    });
+    expect(denied.ok).toBe(false);
+    if (denied.ok) return;
+    expect(denied.error.code).toBe('MODULE_DISABLED');
+    expect(denied.error.details).toMatchObject({ module: 'finance', aspect: 'orbis/financial' });
+    expect(
+      (
+        await execute(db, {
+          actorUserId: owner,
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [
+            {
+              tool: 'entity_create',
+              input: { title: 'Заметка', tags: [], aspects: ['orbis/note'], props: {} },
+            },
+          ],
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
+  test('правка существующей транзакции и повторный attach того же аспекта — разрешены', async () => {
+    // txId создан ДО выключения модуля (общий `beforeAll` файла, шаг 3). Поля `version` у
+    // `entity_update` НЕТ: CAS-предусловие §5.2 называется `expectedUpdatedAt`, оно
+    // необязательно, и здесь не нужно — конкурента у теста нет. Лишний ключ `.strict()`
+    // отверг бы кодом `VALIDATION`, то есть до гейта §Б8-3 проверка бы не дошла вовсе
+    // (адрес брифа опровергнут деревом).
+    expect(
+      (
+        await execute(db, {
+          actorUserId: owner,
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [
+            { tool: 'entity_update', input: { id: txId, props: { 'orbis/amount': '700.00' } } },
+          ],
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await execute(db, {
+          actorUserId: owner,
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [
+            {
+              tool: 'attach_orbis_financial',
+              input: {
+                entity_id: txId,
+                data: {
+                  'orbis/amount': '800.00',
+                  'orbis/direction': 'expense',
+                  'orbis/occurred_on': '2026-09-03',
+                  'orbis/finance_category': CATEGORY_ID,
+                },
+              },
+            },
+          ],
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
+  test('entity_update, добавляющий аспект модуля, — MODULE_DISABLED (третий путь появления)', async () => {
+    // Гейт в create и attach без третьей точки был бы дырой: `entity_update` навешивает
+    // аспект полем `aspects.attach` — тем же путём, что и `attach_*`, только другим тулом.
+    const denied = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: noteId, aspects: { attach: ['orbis/category'] } },
+        },
+      ],
+    });
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) expect(denied.error.code).toBe('MODULE_DISABLED');
+  });
+
+  test('навешивание НОВОГО аспекта модуля на существующую запись — MODULE_DISABLED', async () => {
+    const denied = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'attach_orbis_category',
+          input: { entity_id: noteId, data: { 'orbis/icon': '🍏' } },
+        },
+      ],
+    });
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) expect(denied.error.code).toBe('MODULE_DISABLED');
+  });
+});

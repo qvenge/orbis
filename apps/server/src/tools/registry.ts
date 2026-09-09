@@ -1261,7 +1261,10 @@ function attachToolDef(aspect: AspectDefinition, reg: RegistrySnapshot): OrbisTo
  * (`registry-golden.test.ts`) как СПИСОК, и порядок, зависящий от порядка строк из БД, делал
  * бы эталон флаковым.
  */
-export function buildToolDefs(reg: RegistrySnapshot, disabled: readonly string[] = []): OrbisToolDef[] {
+export function buildToolDefs(
+  reg: RegistrySnapshot,
+  disabled: readonly string[] = [],
+): OrbisToolDef[] {
   const attachable = [...reg.aspects.values()]
     .filter((a) => !a.service)
     // §Б8-3: аспект выключенного модуля тула не даёт — его поверхность у модели исчезает

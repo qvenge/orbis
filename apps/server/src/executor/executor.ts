@@ -135,6 +135,7 @@ import { bodyFieldsFromMarkdown } from './body-fields';
 import { ExecError } from './errors';
 import {
   assertAssignment,
+  assertModuleEnabled,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
   assertRunSubject,
@@ -1713,6 +1714,9 @@ async function prepareEntityCreate(
     next: state.aspects,
     touched: touchedAspects(ctx.registry, before, state, propsPatch),
   });
+  // Гейт §Б8-3 — ДО гейта флагов и по тому же доводу: «вам сюда нельзя» честнее, чем
+  // «ваше значение не той формы». У create ДОБАВЛЯЕМЫЕ аспекты — это всё состояние.
+  assertModuleEnabled(ctx.registry, ctx.disabledModules, state.aspects);
   // Гейт флагов (§А2-5/Б6) — ДО валидации значений: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы», когда запись запрещена независимо от значения.
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
@@ -2016,6 +2020,14 @@ async function prepareEntityUpdate(
       if (touched.includes('orbis/budget')) {
         await normalizeEnvelopeProps(ctx, before, state, propsPatch);
       }
+      // Гейт §Б8-3: только ПОЯВИВШИЕСЯ аспекты — правка суммы существующей транзакции
+      // выключенного модуля разрешена (§Б8-3: скрытое ≠ удалённое), а появление нового
+      // аспекта модуля через `entity_update` — тот же обход, что через attach.
+      assertModuleEnabled(
+        ctx.registry,
+        ctx.disabledModules,
+        state.aspects.filter((a) => !before.aspects.includes(a)),
+      );
       // Гейт флагов (§А2-5/Б6). Внутренний undo его ПРОПУСКАЕТ — ровно как семь проверок
       // ниже: он восстанавливает СВОЁ ЖЕ законно записанное состояние, и отказ здесь
       // означал бы, что законную запись нельзя отменить.
@@ -2306,6 +2318,15 @@ async function prepareAttach(
     touched,
   });
 
+  // Гейт §Б8-3: повторный attach ТОГО ЖЕ аспекта — правка, а не появление (докблок выше
+  // подтверждает, что внутренний undo сюда не заходит — у него свой путь в entity_update).
+  // Гейт в двух точках из трёх был бы дырой: `attach_*` заводит аспект на готовой сущности
+  // мимо create.
+  assertModuleEnabled(
+    ctx.registry,
+    ctx.disabledModules,
+    before.aspects.includes(aspectId) ? [] : [aspectId],
+  );
   // Гейт флагов (§А2-5/Б6) и стадия 2 — по итоговому состоянию; `DEPRECATED` — по
   // затронутым (свободное deprecated-значение не обязано запирать навешивание аспекта).
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
