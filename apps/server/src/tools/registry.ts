@@ -557,7 +557,7 @@ const propertyCatalogJsonSchema = {
     },
     contract: {
       type: 'string',
-      description: 'контракты появятся позже — сейчас параметр ничего не сужает',
+      description: 'контракты уже есть, но выдачу этот параметр пока не сужает (сужение — позже)',
     },
     orphans: {
       type: 'boolean',
