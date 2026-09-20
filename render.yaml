@@ -10,6 +10,7 @@ services:
     plan: free
     region: frankfurt
     branch: main
+    autoDeploy: false # выключен на время среза «Г — единица владения» (D44, РП-1 плана): миграция 0019 переименовывает owner_id → graph_id и несовместима со старым кодом, а мерж в main после каждой задачи иначе выкатывал бы код на базу без переименования; вернуть прод-процедурой закрытия (задача Г-5)
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
