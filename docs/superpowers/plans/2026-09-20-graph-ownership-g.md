@@ -2178,7 +2178,20 @@ async function assertHoldsOwnerGrant(db: Db, who: Identity): Promise<void> {
   `createAuthorizationCode(…)` с той же парой — `rejects.toBeInstanceOf(NotGraphOwnerError)`, строк в `agent_grants` с
   `graph_id = A` — ноль; с `personal(A)` — выдаётся, строка несёт `issued_by = accountOf(A)`. В `routers/oauth.ts:122-129`
   (`consent`) отказ переводится в `TRPCError({ code: 'FORBIDDEN' })`, а не уходит 500; `scripts/ops.ts issue-pat` и
-  `scripts/issue-pat.ts` печатают текст отказа и выходят с кодом 1. Вызывающие: `routers/oauth.ts:124` →
+  `scripts/issue-pat.ts` печатают текст отказа и выходят с кодом 1.
+  **ОБЯЗАТЕЛЬНЫЙ второй кейс — аккаунт БЕЗ графа** (правка 21.09 по гейт-ревью Г-2, Important-1, Р-ИГ-7). Миграция
+  `0020` завела FK `agent_grants.graph_id → graphs.id`, и путь «согласие OAuth до онбординга» стал падать сырым
+  `23503` → 500: экран согласия рендерится ВНЕ `OnboardingGate` (`apps/web/src/main.tsx:31-43`, «согласие не требует
+  онбординга»), то есть личного графа у аккаунта может ещё не быть. `assertHoldsOwnerGrant` закрывает это
+  типизированным отказом — именно его первая причина («граф не заведён»), — но ТОЛЬКО если он проверяется тестом:
+  прежний пин `oauth.e2e.test.ts` после Г-2 берёт граф из `mintGraph()` и дыру больше не видит. Поэтому в
+  `grants.test.ts` завести кейс на `const noGraph = parseAccountId(crypto.randomUUID())` (аккаунт, у которого строки в
+  `graphs` НЕТ): `issuePatGrant` и `createAuthorizationCode` с `identityOfPerson(noGraph)` → `NotGraphOwnerError`, в
+  `agent_grants` ноль строк, `23503` наружу НЕ уходит; в `routers/oauth.ts` тот же кейс даёт `FORBIDDEN`, а не 500.
+  Этим же закрывается `ops.ts issue-pat` (Minor-3 гейта Г-2): он сверяет аргумент с `auth.users`, но не с `graphs` —
+  после правки незасиденный аккаунт получает текст отказа и код 1 вместо сырого `23503`.
+  ЧЕГО ЗДЕСЬ НЕ ДЕЛАТЬ: заводить личный граф неявно на пути согласия — прод-код графы сам не создаёт (спека §3.5,
+  Р-КГ-3); и не трогать `apps/web` — порядок экранов согласия и онбординга решает владелец (строка в `03-pending`, Г-5). Вызывающие: `routers/oauth.ts:124` →
   `identity: ctx.identity`; `scripts/issue-pat.ts:22` и `scripts/ops.ts:580` (вызовы `issuePatGrant`; разбор аргумента — `issue-pat.ts:10,19`) — аргумент
   CLI есть id АККАУНТА (в `ops.ts:571-579` он сверяется с `auth.users`): `identityOfPerson(parseAccountId(arg))`, справку скриптов уточнить («uuid аккаунта; грант
   выдаётся на его личный граф»). `listGrants(db, graph: GraphId)`, `revokeGrant(db, { grantId, graph: GraphId })` — предикат
@@ -3151,6 +3164,11 @@ GRANT SELECT ON graph_members TO orbis_app;
     компании окажется таймзоной графа; составные имена «на граф» без `Id` и голое `owner` в тестах (список —
     `rename-ledger.md`) — переименовывать ли; строка «владельцу, ревизией 5 реформы свойств»: §Б3-5 — `$owner` есть id
     ТЕКУЩЕГО ГРАФА (в коде исполнено Г-3); строка «ступень 2»: формулы `uuidv5` после перепривязки владельца;
+    строка «владельцу, при планировании страниц» (правка 21.09, Р-ИГ-7): экран согласия OAuth рендерится ВНЕ
+    `OnboardingGate` (`apps/web/src/main.tsx:31-43`), поэтому аккаунт может дойти до согласия раньше, чем у него
+    появится личный граф; срез отвечает на это типизированным отказом (`NotGraphOwnerError` → `FORBIDDEN`, Г-3),
+    а правильный ли это ответ продуктово — «сначала онбординг» или «завести граф прямо на согласии» — решает владелец;
+    `apps/web` срез не трогает;
     строка «ступень 2» (правка 21.09, Ф-Г-28): запрос в граф, где у актора нет гранта, отдаёт ноль строк, но
     платит сканом по строкам ЧУЖОГО графа — security-qual RLS в гейтовый `One-Time Filter` Postgres не поднимает;
     это тайминговый канал размера чужого графа для того, кто умеет назвать чужой `graph_id` (в v1 текущий граф
