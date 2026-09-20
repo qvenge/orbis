@@ -4,7 +4,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { DOC_SCHEMA_VERSION, parseBody, serializeBody } from '@orbis/shared/doc';
 import { sql } from 'drizzle-orm';
-import { adminDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { extractBodyRefs } from '../executor/normalize';
 import {
   ALL_TASKS_BODY,
@@ -39,7 +39,7 @@ async function insertBody(body: string): Promise<string> {
   const id = newId();
   await admin.execute(
     sql`INSERT INTO entities (id, graph_id, title, body)
-        VALUES (${id}, ${freshUserId()}, 'тело', ${body})`,
+        VALUES (${id}, ${await freshGraph()}, 'тело', ${body})`,
   );
   return id;
 }
@@ -239,7 +239,7 @@ test('переписанный body не рассинхронизирует body
     ids.push(id);
     await admin.execute(
       sql`INSERT INTO entities (id, graph_id, title, body, body_refs)
-          VALUES (${id}, ${freshUserId()}, 'со ссылкой', ${body}, ${refs}::text[])`,
+          VALUES (${id}, ${await freshGraph()}, 'со ссылкой', ${body}, ${refs}::text[])`,
     );
   }
   expect(await backfillBodyDoc(io)).toEqual({ done: bodies.length, skipped: 0, pending: 0 });
@@ -387,7 +387,7 @@ test('CAS в SQL умеет сравнивать NULL-тело (IS NOT DISTINCT 
   // строка не совпала бы НИКОГДА (`NULL = NULL` → NULL) и молча копилась бы в пропущенных.
   const id = newId();
   await admin.execute(
-    sql`INSERT INTO entities (id, graph_id, title, body) VALUES (${id}, ${freshUserId()}, 'нулевое', '')`,
+    sql`INSERT INTO entities (id, graph_id, title, body) VALUES (${id}, ${await freshGraph()}, 'нулевое', '')`,
   );
 
   // Снятие NOT NULL живёт ВНУТРИ транзакции с гарантированным откатом. DDL в Postgres

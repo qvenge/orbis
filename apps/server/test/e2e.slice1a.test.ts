@@ -18,7 +18,7 @@ import { appRouter } from '../src/router';
 import { SEED_CATEGORIES } from '../src/seed/categories';
 import { seedCategoryId } from '../src/seed/onboarding';
 import { createCallerFactory } from '../src/trpc';
-import { appDb, freshUserId, requireEnv, truncateAll } from './helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from './helpers';
 
 /**
  * «Сегодня» глазами СЕРВЕРА: та же функция и та же зона по умолчанию, которыми date-токены
@@ -53,8 +53,8 @@ type JournalMeta = { actions?: ActionRecord[]; type?: string; undoes?: string };
 
 describe('e2e слайс 1a: день из 02 §5 (два пользователя)', () => {
   // Общий state сценария — заполняется по шагам, читается последующими.
-  const userA = freshUserId();
-  const userB = freshUserId();
+  const userA = mintGraph();
+  const userB = mintGraph();
   const a = callerFor(userA);
   const b = callerFor(userB);
 

@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -18,7 +18,7 @@ function callerFor(user: string) {
   return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 }
 
-const owner = freshUserId();
+const owner = mintGraph();
 const a = callerFor(owner);
 
 beforeAll(async () => {
@@ -101,7 +101,7 @@ describe('registry.effective (§А9-2)', () => {
     // Форма ответа не предполагает «только встроенные»: пользовательские строки едут тем же
     // массивом. Проба — переопределением встроенного аспекта (тот же id, свой graph_id):
     // счёт аспектов обязан остаться прежним, а подпись — стать своей.
-    const other = freshUserId();
+    const other = await freshGraph();
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(sql`
@@ -126,7 +126,7 @@ describe('registry.effective (§А9-2)', () => {
   });
 
   test('ручка заводит аспект тем же путём, что тул: он приезжает в registry.effective', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const prop = await caller.registry.createProperty({
       key: 'user/mood',
       label: { ru: 'Настроение' },
@@ -148,7 +148,7 @@ describe('registry.effective (§А9-2)', () => {
 });
 
 describe('registry.dependants: честные зависимости (§А3-5, §С1-3 п.10)', () => {
-  const depOwner = freshUserId();
+  const depOwner = mintGraph();
   const dep = callerFor(depOwner);
 
   test('ссылочное свойство, чья ЦЕЛЬ называет другое свойство, в ответе есть', async () => {

@@ -23,7 +23,7 @@ import postgres from 'postgres';
 import {
   adminDb,
   appDb,
-  freshUserId,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -56,8 +56,8 @@ const PROD_DSN = `postgresql://postgres.${PROD_REF}:pa%40ss:word@aws-0-eu-centra
 // Форма локального стенда: имени проекта в ней нет ни в пользователе, ни в хосте.
 const LOCAL_DSN_SHAPE = 'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 
-/** Семь таблиц графа и журнала — тот же список, что сносит операция (порядок отчёта). */
-const GRAPH_TABLES_UNDER_TEST = [
+/** Семь таблиц мира и журнала — тот же список, что сносит операция (порядок отчёта). */
+const WORLD_TABLES_UNDER_TEST = [
   'entities',
   'relations',
   'chat_threads',
@@ -216,8 +216,8 @@ describe('reset-world — подтверждение двумя флагами',
 });
 
 describe('reset-world — состав пересева на живой базе', () => {
-  const owner = freshUserId();
-  const otherOwner = freshUserId();
+  const owner = mintGraph();
+  const otherOwner = mintGraph();
   const clientId = `test-client-${newId()}`;
   let versionBefore = 0;
 
@@ -315,7 +315,7 @@ describe('reset-world — состав пересева на живой базе
     versionBefore = await systemVersion();
   });
 
-  test('после пересева: граф пуст, реестры только системные, версии на месте, доступы целы', async () => {
+  test('после пересева: мир пуст, графы целы, реестры только системные, версии на месте, доступы целы', async () => {
     // Предусловие, без которого зелень ничего не значит: сносить было ЧТО.
     expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
     expect(await count('registry_deltas')).toBe(1);
@@ -323,10 +323,14 @@ describe('reset-world — состав пересева на живой базе
     expect(await count('aspect_definitions', 'graph_id IS NOT NULL')).toBe(1);
     // Все СЕМЬ таблиц сноса непусты ДО операции — иначе «снесено» ниже проверяло бы пустоту,
     // которая и так была.
-    for (const table of GRAPH_TABLES_UNDER_TEST) {
+    for (const table of WORLD_TABLES_UNDER_TEST) {
       const n = await count(table);
       expect([table, n > 0]).toEqual([table, true]);
     }
+    // Графы и членство пересев ПЕРЕЖИВАЮТ (D44): единица владения — сам граф, сносится его мир.
+    const graphsBefore = await count('graphs');
+    const membersBefore = await count('graph_members');
+    expect(await count('graphs', `id = '${owner}'`)).toBe(1);
 
     const raw = postgres(ADMIN_DSN, { max: 1 });
     let report: Awaited<ReturnType<typeof resetWorld>>;
@@ -337,23 +341,33 @@ describe('reset-world — состав пересева на живой базе
     }
 
     // Отчёт называет снесённое поимённо — по нему оператор сверяет масштаб.
-    expect(report.graph.entities).toBe(SEED_WORLD_SIZE + 1);
-    expect(report.graph.relations).toBe(1);
-    expect(report.graph.chat_messages).toBe(1);
-    expect(report.graph.entity_origins).toBe(1);
-    expect(report.graph.entity_versions).toBe(1);
-    expect(report.graph.envelope_spent_cache).toBe(1);
+    expect(report.world.entities).toBe(SEED_WORLD_SIZE + 1);
+    expect(report.world.relations).toBe(1);
+    expect(report.world.chat_messages).toBe(1);
+    expect(report.world.entity_origins).toBe(1);
+    expect(report.world.entity_versions).toBe(1);
+    expect(report.world.envelope_spent_cache).toBe(1);
     expect(report.deltas).toBe(1);
     expect(report.definitions.property_definitions).toBe(1);
     expect(report.definitions.aspect_definitions).toBe(1);
     expect(report.settingsReset).toBe(2);
 
     // Граф и журнал — начисто.
-    for (const table of [...GRAPH_TABLES_UNDER_TEST, 'registry_deltas']) {
+    for (const table of [...WORLD_TABLES_UNDER_TEST, 'registry_deltas']) {
       expect([table, await count(table)]).toEqual([table, 0]);
     }
+    // …а графы и членство — на месте: столько же строк, и личный граф владельца теста жив.
+    expect(await count('graphs')).toBe(graphsBefore);
+    expect(await count('graph_members')).toBe(membersBefore);
+    expect(await count('graphs', `id = '${owner}'`)).toBe(1);
+    expect(
+      await count(
+        'graph_members',
+        `graph_id = '${owner}' AND grant_kind = 'owner' AND revoked_at IS NULL`,
+      ),
+    ).toBe(1);
     // Снимок «после» самой операции говорит то же самое — им оператор Шага 6 и сверяется.
-    expect(Object.values(report.after.graph)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    expect(Object.values(report.after.world)).toEqual([0, 0, 0, 0, 0, 0, 0]);
     expect(report.after.deltas).toBe(0);
     expect(report.after.ownerDefinitions).toBe(0);
     expect(report.after.ownerVersionMax).toBe(0);

@@ -24,7 +24,7 @@ import {
   newId,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
@@ -36,7 +36,7 @@ requireEnv();
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
-const user = freshUserId();
+const user = mintGraph();
 const foodId = seedCategoryId(user, 'food');
 const caller = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 

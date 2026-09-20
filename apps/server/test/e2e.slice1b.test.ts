@@ -33,12 +33,12 @@ import { issuePatGrant } from '../src/oauth/grants';
 import { appRouter } from '../src/router';
 import type { Card } from '../src/tools/registry';
 import { createCallerFactory } from '../src/trpc';
-import { appDb, freshUserId, requireEnv, truncateAll } from './helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from './helpers';
 
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const createCaller = createCallerFactory(appRouter);
 
 /** Живой headless-грант владельца: с переездом на таблицу (D34) токен выдаётся в базу. */

@@ -12,7 +12,7 @@ import { eq } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -167,7 +167,7 @@ async function usageRows(user: string) {
 
 describe('ai.sendMessage (а): «создай задачу» — цикл из tool_use + end_turn', () => {
   test('сущность в БД, audit-сообщение, entity_card, метеринг суммой двух шагов', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([
       toolUse([{ name: 'entity_create', input: { title: 'Купить хлеб', tags: [] } }], {
@@ -261,7 +261,7 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
 
 describe('ai.sendMessage (б): tool-цикл из 2 вызовов (query → create)', () => {
   test('три вызова провайдера; каждый результат — следующим каноническим tool_result', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([
       toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
@@ -303,7 +303,7 @@ describe('ai.sendMessage (б): tool-цикл из 2 вызовов (query → cr
 
 describe('ai.sendMessage (в): лимит шагов MAX_AGENT_STEPS', () => {
   test('10 tool_use подряд → ровно 8 вызовов провайдера, принудительный финал (не ошибка)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider(
       Array.from({ length: 10 }, () =>
@@ -337,7 +337,7 @@ describe('ai.sendMessage: обрыв по потолку токенов', () => 
   // Усечённый (а при adaptive thinking — пустой) ответ персистился как нормальный,
   // и replay-ветка возвращала бы этот обрубок на каждый повтор того же client-id.
   test('stopReason max_tokens → в ответе видимая пометка обрезки', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const truncated: LLMResponse = {
       content: 'Начал отвечать и не доска',
@@ -357,7 +357,7 @@ describe('ai.sendMessage: обрыв по потолку токенов', () => 
   });
 
   test('пустой content при max_tokens → пометка всё равно видна (не пустое сообщение)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const empty: LLMResponse = {
       content: '',
@@ -382,7 +382,7 @@ describe('ai.sendMessage: обрыв по потолку токенов', () => 
 
 describe('ai.sendMessage: продолжения разговора маркером (D19)', () => {
   test('продолжения из ответа модели попадают в metadata.suggestions, а не в текст', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([
       endTurn('Записал 340 ₽ в Еду.\n\n[[suggest: что по бюджету? | отменить]]'),
@@ -409,7 +409,7 @@ describe('ai.sendMessage: продолжения разговора маркер
   });
 
   test('маркера нет — ключа suggestions в metadata нет вовсе (у ответа просто нет чипов)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const r = answered(
       await callerWith(user, new ScriptedProvider([endTurn('Готово.')])).ai.sendMessage({
@@ -425,7 +425,7 @@ describe('ai.sendMessage: продолжения разговора маркер
   test('обрыв по потолку токенов: маркер разобран ДО дописки пометки, служебной строки в тексте нет', async () => {
     // Разбор ПОСЛЕ склейки с MAX_TOKENS_NOTE не сработал бы: маркер перестаёт быть
     // последней строкой — служебная строка утекла бы в ленту как проза.
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const truncated: LLMResponse = {
       content: 'Начал отвечать и не доска\n\n[[suggest: продолжи | покажи задачи]]',
@@ -447,7 +447,7 @@ describe('ai.sendMessage: продолжения разговора маркер
   });
 
   test('принудительный финал по лимиту шагов: маркер тоже вырезан, пометка на месте', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const withMarker: LLMResponse = {
       ...toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
@@ -467,7 +467,7 @@ describe('ai.sendMessage: продолжения разговора маркер
 
 describe('ai.sendMessage: отказ модели (stopReason refusal)', () => {
   test('refusal → error_card «модель отказалась отвечать», tool-цикл не продолжается', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     // toolCalls при refusal не исполняются: отказ — терминальный исход хода
     const refusal: LLMResponse = {
@@ -508,7 +508,7 @@ describe('ai.sendMessage: отказ модели (stopReason refusal)', () => {
 
 describe('ai.sendMessage (г): сбой провайдера — деградация §7.9', () => {
   test('provider.chat бросает → LLM_UNAVAILABLE (503); user-сообщение сохранено, очереди нет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([]); // первый же вызов бросает (скрипт исчерпан)
     const msgId = newId();
@@ -531,7 +531,7 @@ describe('ai.sendMessage (г): сбой провайдера — деграда�
 
 describe('ai.sendMessage (д): entitlements-гейт §8 ДО провайдера', () => {
   test('лимит 0 → TOO_MANY_REQUESTS; провайдер не тронут; user-сообщение уже персистировано', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([endTurn('не должен быть вызван')]);
     const msgId = newId();
@@ -556,7 +556,7 @@ describe('ai.sendMessage (д): entitlements-гейт §8 ДО провайдер
 
 describe('ai.sendMessage (е): explicit-confirmation внутри цикла (batch archived)', () => {
   test('pending-карточка в ответе, граф не тронут, tool-результат запрещает повтор', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const target = await seedEntity(user, { title: 'Архивная цель', tags: [] });
     const scripted = new ScriptedProvider([
@@ -610,7 +610,7 @@ describe('ai.sendMessage (е): explicit-confirmation внутри цикла (ba
 
 describe('ai.sendMessage (ж): user_query sum по decimal', () => {
   test('сумма доходит до модели точной decimal-строкой (§3.3), не float', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     for (const amount of ['10.10', '20.20']) {
       await seedEntity(user, {
@@ -662,7 +662,7 @@ describe('ai.sendMessage (ж): user_query sum по decimal', () => {
 
 describe('ai.sendMessage: ретрай с тем же client-id (fix round — replay ответа)', () => {
   test('ответ существует → replay БЕЗ провайдера и метеринга; ни второй сущности, ни второго ответа', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const msgId = newId();
     const first = new ScriptedProvider([
@@ -717,7 +717,7 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
   });
 
   test('ответа нет (первый вызов упал LLM_UNAVAILABLE) → легитимный ретрай §7.9: цикл гонится', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const msgId = newId();
     const failing = new ScriptedProvider([]); // первый вызов провайдера бросает
@@ -761,7 +761,7 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
     // Дыра временно́й логики (findAnswerAfter): «ближайший assistant ПОСЛЕ A» — это Rb,
     // ответ на ПОЗЖЕ пришедшее B, а не на A. Детерминизм по metadata.replyTo это чинит:
     // у A ответа нет → честный прогон в провайдер, НИКОГДА чужой Rb.
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const idA = newId();
 
@@ -844,7 +844,7 @@ describe('ai.sendMessage: конкурентный ретрай во время 
   }
 
   test('два конкурентных вызова с одним client-UUID → один tool-цикл, второй ответ { status: processing }', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const msgId = newId();
     const gated = new GatedProvider();
@@ -883,7 +883,7 @@ describe('ai.sendMessage: конкурентный ретрай во время 
   });
 
   test('маркер моложе 10 минут без ответа → { status: processing }, провайдер не тронут', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const msgId = newId();
     // Сымитированный живой прогон другого процесса: user-сообщение + маркер без ответа
@@ -897,7 +897,7 @@ describe('ai.sendMessage: конкурентный ретрай во время 
   });
 
   test('маркер старше 10 минут без ответа → прогон умер: цикл перезапускается', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const msgId = newId();
     await seedDeadRun(user, threadId, msgId, T0);
@@ -917,7 +917,7 @@ describe('ai.sendMessage: конкурентный ретрай во время 
   });
 
   test('сбой прогона снимает маркер: немедленный ретрай — легитимный полный прогон (§7.9)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const msgId = newId();
     const failing = new ScriptedProvider([]); // первый вызов провайдера бросает
@@ -960,7 +960,7 @@ async function seedDeadRun(user: string, threadId: string, msgId: string, at: Da
 
 describe('ai.sendMessage: ошибка тула в цикле', () => {
   test('error_card в карточках; модель получает структурную ошибку (путь самокоррекции)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([
       toolUse([{ name: 'entity_update', input: { id: newId(), title: 'Нет такой' } }]),
@@ -990,7 +990,7 @@ describe('ai.sendMessage: тред СУЩНОСТИ (дефект живого �
     // (entity.get его отдаёт) и слал в него первое сообщение — предпроверка честно отбивала
     // его NOT_FOUND. Семантика сервера верна и не менялась; тест держит ОБЕ её стороны, чтобы
     // «починка» на клиенте не была однажды переложена сюда молчаливым созданием треда.
-    const user = freshUserId();
+    const user = await freshGraph();
     const entity = await seedEntity(user, { title: 'Носитель треда', tags: [] });
     const threadId = entityThreadId(user, entity.id);
     const scripted = new ScriptedProvider([endTurn('Готово')]);
@@ -1016,7 +1016,7 @@ describe('ai.sendMessage: ctx.ai не инжектирован — fail-fast (§
     // Боевой путь ВСЕГДА инжектит ai (index.ts). Отсутствие ctx.ai — дефект DI, а не
     // легитимный сценарий: раньше роутер молча собирал боевые deps по env (в тест-окружении
     // — EchoProvider) и прогонял цикл на валидном треде. Теперь defaultAiDeps() бросает.
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user); // валидный тред: старый фолбэк дошёл бы до цикла
     const caller = createCaller({
       actorUserId: user,
@@ -1036,7 +1036,7 @@ describe('ai.sendMessage: ownerOnly (§9.3)', () => {
     // db — стаб: если middleware пропустит, вызов упадёт не-FORBIDDEN ошибкой БД
     const scripted = new ScriptedProvider([]);
     const agent = createCaller({
-      actorUserId: freshUserId(),
+      actorUserId: await freshGraph(),
       actorKind: 'agent',
       db: null as unknown as Context['db'],
       clientVersion: null,
@@ -1060,7 +1060,7 @@ describe('ai.sendMessage: реестр тулов чата не содержит
     // прогон адресуется КОНКРЕТНОМУ доступу (С2). Дай мы модели orbis_claim_task —
     // лучшим исходом был бы честный VALIDATION диспатча, худшим (при эволюции кода)
     // прогон без адресата. Дешевле не показывать: сверяем ИМЕННО набор, уехавший в LLM.
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await globalThread(user);
     const scripted = new ScriptedProvider([endTurn('Готово')]);
     await callerWith(user, scripted).ai.sendMessage({

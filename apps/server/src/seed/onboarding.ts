@@ -31,6 +31,7 @@ import { bodyFieldsFromMarkdown } from '../executor/body-fields';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { seedGardener } from './gardener';
+import { ensurePersonalGraph } from './personal-graph';
 import {
   ROUTINES_BATCH_QUERY,
   SEED_HORIZON_LISTS,
@@ -128,9 +129,11 @@ export async function seedOwner(
  * полный мир владельца минус рутина-садовник, которая в чужом сьюте только шумит
  * (`test/perf.ts`, гейт бюджета, импорт).
  *
- * ПОРЯДОК: мир → настройки, и стрелка существенна. Строка `user_settings` — маркер
- * «онбординг прошёл», по ней стоит guard `seedOnboarding`; появись она раньше графа, упавший
- * сев мира остался бы незамеченным навсегда.
+ * ПОРЯДОК: граф → мир → настройки, и обе стрелки существенны. Строка `graphs` идёт ПЕРВОЙ
+ * (D44, спека Ш-1б): с миграции 0020 каждая строка мира несёт FK на `graphs`, и без неё сев
+ * упал бы на первой же записи. Строка `user_settings` — маркер «онбординг прошёл», по ней стоит
+ * guard `seedOnboarding`; появись она раньше графа, упавший сев мира остался бы незамеченным
+ * навсегда. Маркером сев графа при этом не служит: `ensurePersonalGraph` идемпотентен сам.
  *
  * СЕВ МИРА ИДЁТ БЕЗУСЛОВНО, БЕЗ GUARD'А ПО СТРОКЕ НАСТРОЕК (рулинг Р-24-6). Прежде вопрос
  * «свежий ли владелец» задавался по `user_settings`, а `db/reset-world.ts` эту строку
@@ -151,6 +154,10 @@ export async function seedOwnerGraph(
   graphId: string,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
+  // ГРАФ — ПЕРВЫМ (D44, спека Ш-1б): первая же запись мира (`seedOwnerWorld`) несёт FK на `graphs`,
+  // и без строки графа упала бы на нём. Порядок «граф → мир → настройки»; стрелка «мир → настройки»
+  // из докблока выше не нарушена: строка графа маркером «онбординг прошёл» не служит.
+  await withIdentity(db, graphId, (tx) => ensurePersonalGraph(tx, graphId));
   await seedOwnerWorld(db, graphId, { clock });
   return withIdentity(db, graphId, (tx) => seedOnboarding(tx, graphId, clock));
 }

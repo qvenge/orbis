@@ -10,7 +10,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -206,7 +206,7 @@ async function scanActions(user: string, to: readonly string[]): Promise<ActionR
 
 /** Владелец с двумя категориями: «Еда» (from) и «Развлечения» (to). */
 async function freshOwner(): Promise<{ user: string; food: string; fun: string }> {
-  const user = freshUserId();
+  const user = await freshGraph();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
   return { user, food, fun };
@@ -420,7 +420,7 @@ describe('эскалация повторных исправлений кате�
     // Занимаем PK будущего сообщения-предложения ЧУЖИМ сообщением: под RLS оно невидимо,
     // поэтому appendMessageIdempotent бросит CONFLICT внутри эскалации — реальный сбой
     // на последнем её шаге, уже после коммита правки категории
-    const alien = freshUserId();
+    const alien = await freshGraph();
     const poisoned = memoryRuleSuggestionId({
       graphId: user,
       pattern: 'пятерочка',
@@ -733,7 +733,7 @@ describe('эскалация повторных исправлений кате�
     // Тот же приём, что в тесте 9: PK будущего сообщения-предложения занят ЧУЖИМ
     // сообщением (под RLS невидимо) → appendMessageIdempotent бросит CONFLICT уже
     // после коммита правки категории
-    const alien = freshUserId();
+    const alien = await freshGraph();
     const poisoned = memoryRuleSuggestionId({
       graphId: user,
       pattern: 'пятерочка',
@@ -861,7 +861,7 @@ describe('эскалация повторных исправлений кате�
 
     // Тот же приём, что в тестах 9 и 23: PK будущего сообщения-предложения занят ЧУЖИМ
     // сообщением (под RLS невидимо) → CONFLICT уже после коммита самих правок.
-    const alien = freshUserId();
+    const alien = await freshGraph();
     const poisoned = memoryRuleSuggestionId({
       graphId: user,
       pattern: 'пятерочка',

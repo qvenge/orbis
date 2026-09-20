@@ -45,12 +45,12 @@ import {
   seedPerfFixture,
 } from '../src/test/perf';
 import { createCallerFactory } from '../src/trpc';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
+import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../test/helpers';
 
 requireEnv();
 
 const { db, client } = appDb();
-const user = freshUserId();
+const user = mintGraph();
 const caller = createCallerFactory(appRouter)({
   actorUserId: user,
   actorKind: 'owner',
@@ -349,7 +349,7 @@ test('приёмка §С8-16: p95 чтения прогретого кэша sp
   const ENVELOPES = 40;
   /** При n = 20 nearest-rank берёт девятнадцатый из двадцати (`src/test/perf.ts`). */
   const P95_RUNS = 40; // Ф-Б1-46: n = 40 — при n = 20 p95 держит единственный выброс (9,7 мс из 4–6 типичных); порог не менялся
-  const owner = newId();
+  const owner = await freshGraph();
   const ids: string[] = [];
   const admin = adminDb();
   try {

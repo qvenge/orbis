@@ -21,15 +21,15 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { canonicalJson } from '@orbis/shared';
 import GOLDEN from '../../test/golden/tool-registry.json';
-import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { buildToolRegistry, type OrbisToolDef } from './registry';
 
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
-const withCustom = freshUserId();
+const owner = mintGraph();
+const withCustom = mintGraph();
 
 /** Кастомный аспект с «/» и «-» в ключе — второй ряд эталона: +1 тул, схема из своих свойств. */
 const CUSTOM_ASPECT_KEY = 'user/sleep-log';

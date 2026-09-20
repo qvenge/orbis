@@ -7,7 +7,7 @@ import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
 import { QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import type { ActionRecord } from '../executor/types';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -43,7 +43,7 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
 
 describe('entity.create / entity.get (§9.2)', () => {
   test('create→get круговой: аспекты сохранены, wire-форма проходит entitySchema', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: {
@@ -76,7 +76,7 @@ describe('entity.create / entity.get (§9.2)', () => {
   });
 
   test('невалидный source create отклоняется на входе (zod роутера) → BAD_REQUEST', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const e = await trpcError(
       caller.entity.create({
         input: { title: 'X', tags: [] },
@@ -91,13 +91,13 @@ describe('entity.create / entity.get (§9.2)', () => {
     // Единый wire-контракт id_conflict (финальное ревью): entity_create маппится
     // на тот же CONFLICT/409, что и chat.appendMessage — 1b MCP и 1c retry-буфер
     // ключуются на кодах, а не на текстах.
-    const owner = callerFor(freshUserId());
+    const owner = callerFor(await freshGraph());
     const created = await owner.entity.create({
       input: { title: 'Своя', tags: [] },
       source: 'fast_path',
     });
     const e = await trpcError(
-      callerFor(freshUserId()).entity.create({
+      callerFor(await freshGraph()).entity.create({
         input: { id: created.id, title: 'Чужая', tags: [] },
         source: 'fast_path',
       }),
@@ -109,7 +109,7 @@ describe('entity.create / entity.get (§9.2)', () => {
   });
 
   test('actionId из create пригоден для ai.undo; идемпотентный replay actionId не отдаёт (03 §3.6)', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const id = crypto.randomUUID();
     const created = await caller.entity.create({
       input: { id, title: 'Обед 340', tags: [] },
@@ -134,7 +134,7 @@ describe('entity.create / entity.get (§9.2)', () => {
   });
 
   test('get несуществующей (или чужой под RLS) сущности → NOT_FOUND', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const e = await trpcError(caller.entity.get({ id: crypto.randomUUID() }));
     expect(e.code).toBe('NOT_FOUND');
   });
@@ -142,7 +142,7 @@ describe('entity.create / entity.get (§9.2)', () => {
   // Форма секции — { entity, via } с Task D5 (§3.5.8): объединяет related_to и body_refs.
   // Полное покрытие — routers/entity-backlinks.test.ts.
   test('get include=backlinks: упоминание через body_refs → via mention', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const target = await caller.entity.create({
       input: { title: 'Цель ссылки', tags: [] },
@@ -159,7 +159,7 @@ describe('entity.create / entity.get (§9.2)', () => {
   });
 
   test('get include=thread: детерминированный entityThreadId, лениво НЕ создаёт', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const e = await caller.entity.create({
       input: { title: 'С тредом', tags: [] },
@@ -183,7 +183,7 @@ describe('entity.create / entity.get (§9.2)', () => {
 
 describe('entity.update: optimistic-check §5.2 (перенесённый контракт optimistic-check)', () => {
   test('stale expectedUpdatedAt → CONFLICT; повтор со свежим — успех; tags — LWW без проверки', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: { title: 'Документ', tags: [], body: 'v1' },
@@ -224,7 +224,7 @@ describe('entity.update: optimistic-check §5.2 (перенесённый кон
   });
 
   test('audit-сообщение update атрибутировано source=ui (прямое действие владельца в UI, не fast_path)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: { title: 'Атрибуция', tags: [] },
@@ -255,7 +255,7 @@ describe('entity.update: optimistic-check §5.2 (перенесённый кон
 
 describe('entity.query / entity.count (§6.3–6.4)', () => {
   test('query блока Inbox (02 §3.3) находит созданную задачу', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: {
@@ -284,7 +284,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
    * пропускать её через форму, в которую она не помещается.
    */
   test('entity.query со входом `ast`: то же дерево, что разобрал бы текст, — та же выдача', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: {
@@ -309,7 +309,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
   });
 
   test('РОВНО одно из двух: и текст, и дерево — отказ; ни одного — тоже', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     // Два непустых входа — это два РАЗНЫХ запроса в одном вызове, и молчаливый выбор
     // победителя был бы невидимым отбором «не того» (§С8-3).
     const both = await trpcError(
@@ -327,7 +327,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
    * `QUERY_TREE_DEPTH_CAP`), и запас между ними — то, ради чего кап и стоит первым.
    */
   test('дерево глубже капа — структурный отказ с НАЗВАННЫМ числом (§А5-7)', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     // Кап меряется по ДЕРЕВУ; строим вдвое глубже него, чтобы проба не зависела от того,
     // считает ли конверт сам код.
     let deep: unknown = { tag: 'дом' };
@@ -339,7 +339,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
   });
 
   test('count игнорирует limit (бейджи 02 §3.2), query — нет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     for (const title of ['Одна', 'Две', 'Три']) {
       await caller.entity.create({
@@ -360,7 +360,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
   });
 
   test('невалидный запрос → BAD_REQUEST с {message, position} в cause (§6.4)', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const e = await trpcError(caller.entity.query({ query: 'nosuchfield=42' }));
     expect(e.code).toBe('BAD_REQUEST');
     const cause = e.cause as unknown as { message: string; position: number };
@@ -374,7 +374,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
 
 describe('relation.create / relation.delete / relation.listFor (§4.2)', () => {
   test('listFor видит обе стороны; delete → { ok: true }; самосвязь → UNPROCESSABLE_CONTENT', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const a = await caller.entity.create({ input: { title: 'A', tags: [] }, source: 'fast_path' });
     const b = await caller.entity.create({ input: { title: 'B', tags: [] }, source: 'fast_path' });
@@ -430,7 +430,7 @@ describe('CAS-предусловие не протекает в tRPC (entity.upd
     // Предусловие — параметр серверных путей (С7): его знает exec-схема executor'а,
     // а вход роутера (entityUpdateUiInput) — strict-надмножество тул-контракта БЕЗ него.
     // Клиент не должен получать CAS-рычаг вместе с обычной правкой карточки.
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: {

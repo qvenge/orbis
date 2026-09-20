@@ -40,7 +40,15 @@ import {
   type GateWorld,
   seedGateWorld,
 } from './fixtures/gate-aspects';
-import { adminDb, appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from './helpers';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  mintGraph,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from './helpers';
 
 requireEnv();
 const { db, client } = appDb();
@@ -103,7 +111,7 @@ describe('фикстура гейта: хелпер пишет привязки'
     // `implements`/`module` не перечисляет, и фикстура гейта, севшая дважды в одном прогоне,
     // вернула бы первую версию привязок. Одного второго мало: до правки оно ЗЕЛЁНОЕ — в базе и так
     // `[]` и NULL, но не потому, что хелпер их записал, а потому, что он записал литералы.
-    const user = freshUserId();
+    const user = await freshGraph();
     const spec = {
       key: 'user/impl-probe',
       label: { ru: 'Проба' },
@@ -144,7 +152,7 @@ describe('фикстура гейта: хелпер пишет привязки'
 
 describe('фикстура гейта: два аспекта заведены только декларацией', () => {
   test('оба аспекта и восемь их свойств видны в снимке реестра владельца', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await seedCustomAspect(user, GATE_FIN_ASPECT);
     await seedCustomAspect(user, GATE_PLAIN_ASPECT);
     const reg = await withIdentity(db, user, (tx) => effectiveRegistry(tx, user));
@@ -157,7 +165,7 @@ describe('фикстура гейта: два аспекта заведены т
   });
 });
 
-const owner = freshUserId();
+const owner = mintGraph();
 let world: GateWorld;
 const createCaller = createCallerFactory(appRouter);
 const callerFor = (user: string) =>
@@ -319,7 +327,7 @@ describe('гейт §С8-18: аспект только декларацией', 
 });
 
 describe('§С8-18, пишущая половина: ребро envelope-binding ставит ХУК', () => {
-  const writer = freshUserId();
+  const writer = mintGraph();
   let ids: { category: string; envelope: string; movement: string };
 
   /** Источники живых рёбер привязки к сущности — истина в БД (админ-DSN, мимо RLS). */

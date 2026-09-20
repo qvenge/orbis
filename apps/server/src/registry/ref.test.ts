@@ -16,7 +16,7 @@ import {
 import { assertStaticQuery, type QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -199,7 +199,7 @@ test('ref: множество цели компилируется тем же д
 });
 
 test('ref: значение вне множества target — VALIDATION REF_TARGET «цель не в множестве target»', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const note = okEntity(
     await execute(
       db,
@@ -265,7 +265,7 @@ test('ref: значение вне множества target — VALIDATION REF_
 });
 
 test('ref: установка/смена/снятие создаёт/переносит/удаляет ребро role=ref с meta.property; ребро пересоздаётся при расхождении', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
 
@@ -340,7 +340,7 @@ test('ref: установка/смена/снятие создаёт/перен�
 });
 
 test('ref: архивация цели помечает источники needs-review; повторная установка той же категории — отказ', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const food = await createCategory(user, 'Еда');
   const one = await createTxn(user, 'Обед', food);
   const two = await createTxn(user, 'Ужин', food);
@@ -433,7 +433,7 @@ test('ref: архивация цели помечает источники needs
 });
 
 test('ref/registry_ref: run_routine принимает только рутину; rule_scope — контракт из таблицы', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const note = okEntity(
     await execute(
       db,
@@ -509,7 +509,7 @@ test('ref/registry_ref: run_routine принимает только рутину
 });
 
 test('ref: batch «заведи категорию и положи в неё трату» проходит — цель ищется по ИТОГОВОМУ состоянию tx', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const categoryId = newId();
   const r = await execute(
     db,
@@ -551,7 +551,7 @@ test('ref: batch «заведи категорию и положи в неё т�
 });
 
 test('ref: два ссылочных свойства на одну цель — одно ребро, а не отказ', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const food = await createCategory(user, 'Еда');
   // `orbis/rule_target` и `orbis/finance_category` — оба ref в категорию; на одной записи
   // они дают одну пару (источник, цель) и ОДНУ роль `ref`, а `rel_uniq (source_id,
@@ -599,7 +599,7 @@ test('ref: два ссылочных свойства на одну цель —
 });
 
 test('ref: undo правки категории возвращает и свойство, и зеркало-ребро', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const sink = makeChatJournalSink();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
@@ -628,7 +628,7 @@ test('ref: undo правки категории возвращает и свой
 });
 
 test('ref: undo архивации цели снимает needs-review — и только у тех, кого пометила эта операция (Р-11-1)', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const sink = makeChatJournalSink();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
@@ -761,7 +761,7 @@ async function txnUnderProject(
 }
 
 test('ref: правка категории у записи под проектом не вешает ребро на проект, и архивация проекта её не метит (Р-11-2)', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const { project, txn } = await txnUnderProject(user);
   const second = await createCategory(user, 'Развлечения');
 
@@ -811,7 +811,7 @@ test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисля�
   // `changedRefProps`), поэтому список тут рукописный. Гейт писателя недостижим боевым
   // путём СЕГОДНЯ, но он связывает будущего производителя списка (правило `mirror_relation`
   // строкой реестра, часть Б) — и без этой пробы был бы украшением.
-  const user = freshUserId();
+  const user = await freshGraph();
   const { project, txn, category } = await txnUnderProject(user);
   await withIdentity(db, user, async (tx) => {
     const reg = await effectiveRegistry(tx, user);
@@ -856,7 +856,7 @@ test('ref × merge: слияние переписывает подпись зе�
   // `collectPropertyHolders` не входит. Не переписать её значит вывести ребро из
   // самопочинки навсегда — `syncRefMirror` снимает устаревшие только по подписям из
   // `changed`, а поглощённого id в `props` больше нет.
-  const user = freshUserId();
+  const user = await freshGraph();
   const sink = makeChatJournalSink();
   const c1 = await createCategory(user, 'Еда');
   const c2 = await createCategory(user, 'Развлечения');
@@ -903,7 +903,7 @@ test('ref × merge: слияние переписывает подпись зе�
 });
 
 test('ref × merge: undo слияния возвращает подпись зеркала поглощённому свойству', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const sink = makeChatJournalSink();
   const c = await createCategory(user, 'Еда');
   const a = await ownRefProperty(user, 'user/client', 'Клиент');

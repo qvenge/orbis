@@ -11,7 +11,8 @@ import { sql } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -33,8 +34,8 @@ import {
 requireEnv();
 
 const { db, client } = appDb();
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 
 // «Сегодня» — как считает сервер: локальная дата в таймзоне сида (Europe/Moscow §7.3)
 const TZ = 'Europe/Moscow';
@@ -326,7 +327,7 @@ afterAll(async () => {
  * пересева не будет; здесь они проверяются прямо, чтобы правило было видно.
  */
 describe('«конверт-родитель» — одна роль envelope-binding (§13.7 после 0017)', () => {
-  const userC = freshUserId();
+  const userC = mintGraph();
   const catC = seedCategoryId(userC, 'food');
   const catOther = seedCategoryId(userC, 'entertainment');
   let envC = '';
@@ -659,7 +660,7 @@ describe('тул budget_status (Шаг 4 брифа: §4.3, §4.7)', () => {
 // ---------------------------------------------------------------------------
 describe('spent не считает recurring-шаблон (§2.2, §2.8)', () => {
   test('конверсия факт-транзакции в шаблон: связь снята, spent — только posted-инстанс, один раз', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
     const fact = await exec(user, 'entity_create', txn(cat, '500.00', today));
@@ -684,7 +685,7 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
   });
 
   test('висящая parent-связь на шаблон (защита в SQL): spent = 0', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
     // Шаблон с occurred_on (валиден §3.3: recurrence на той же сущности); until в прошлом —
@@ -747,7 +748,7 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
   });
 
   test('count-only: НЕ материализует recurring-инстансы (в отличие от overview)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await exec(user, 'entity_create', {
       title: 'Подписка',
       tags: [],
@@ -799,7 +800,7 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
 // ---------------------------------------------------------------------------
 describe('clock-шов: границы дат (Task A1)', () => {
   test('граница суток: recurring-инстанс становится фактом в день наступления даты (§2.8)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const env = await exec(
       user,
@@ -840,7 +841,7 @@ describe('clock-шов: границы дат (Task A1)', () => {
   });
 
   test('последний день закрывающегося месяца: остаток к переносу меняется на локальной полуночи (§2.6, §3.5)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     await exec(user, 'entity_create', envelope(cat, '2026-08-01', '2026-08-31', '10000.00'));
     // Трата ПОСЛЕДНЕГО дня августа: только она отличает две стороны границы

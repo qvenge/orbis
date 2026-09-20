@@ -15,7 +15,7 @@ import postgres from 'postgres';
 import { seedRegistries } from '../src/db/seed-registries';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
-import { adminDb, appDb, requireEnv } from './helpers';
+import { adminDb, appDb, freshGraph, requireEnv } from './helpers';
 
 requireEnv();
 
@@ -181,7 +181,7 @@ describe('сид пяти реестров', () => {
   test('пересев под живой дельтой: конфликты в отчёте, дельта переписана, заметка в треде', async () => {
     const { db, client } = adminDb();
     const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
-    const owner = crypto.randomUUID();
+    const owner = await freshGraph();
     try {
       // Сид — операция ГЛОБАЛЬНАЯ: его отчёт считает дельты ВСЕХ владельцев базы, и
       // строки, оставленные соседними сьютами, сделали бы число зависимым от порядка
@@ -292,7 +292,7 @@ describe('сид пяти реестров', () => {
   test('дельта с отставшим base_version сливается по широкому правилу, а не вслепую', async () => {
     const { db, client } = adminDb();
     const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
-    const owner = crypto.randomUUID();
+    const owner = await freshGraph();
     try {
       await db.execute(sql`TRUNCATE registry_deltas`);
       // base_version НАМЕРЕННО отстал на несколько прогонов; система при этом в порядке.
@@ -345,7 +345,7 @@ describe('сид пяти реестров', () => {
     const { db, client } = adminDb();
     const app = appDb();
     const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
-    const owner = crypto.randomUUID();
+    const owner = await freshGraph();
     try {
       await db.execute(sql`TRUNCATE registry_deltas`);
       await db.execute(sql`
@@ -405,7 +405,7 @@ describe('сид пяти реестров', () => {
   test('устаревшая форма подписки: сид доезжает, строка починена, дельта сброшена на системную', async () => {
     const { db, client } = adminDb();
     const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
-    const owner = crypto.randomUUID();
+    const owner = await freshGraph();
     try {
       await db.execute(sql`TRUNCATE registry_deltas`);
       const baseVersion = await systemVersion(db);

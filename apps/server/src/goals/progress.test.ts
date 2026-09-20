@@ -11,7 +11,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   seedRefTargetRows,
   truncateAll,
@@ -207,7 +207,7 @@ afterAll(async () => {
 
 describe('computeGoalProgress: агрегаты §11.3', () => {
   test('aggregate=sum складывает поле по отобранным сущностям', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await createIncome(user, caller, 'Отложил в мае', '100000.00', ['savings']);
     await createIncome(user, caller, 'Отложил в июне', '50000.00', ['savings']);
@@ -243,7 +243,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
   });
 
   test('aggregate=count считает сущности, а не поле', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     for (const title of ['Хоббит', 'Дюна', 'Сиддхартха']) {
       await caller.entity.create({
@@ -267,7 +267,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
   });
 
   test('aggregate=latest берёт значение поля у последней по updated_at, а не по созданию', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     // Массивов чисел во встроенных аспектах нет, поэтому «последнее измерение»
     // моделируется реальным числовым полем — orbis/financial.amount (взносы по кредиту).
@@ -301,7 +301,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
   });
 
   test('пустая выборка даёт 0, а не ошибку (§6.4: пустота ≠ ошибка)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const p = await progressOf(user, {
       progress_source: {
         query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
@@ -317,7 +317,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
   });
 
   test('перевыполненная цель отдаёт значение как есть, не подрезая его целью', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await createIncome(user, caller, 'Премия', '150000.00', ['savings']);
 
@@ -340,7 +340,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
 
 describe('computeGoalProgress: источник хранится ДЕРЕВОМ (§А5-2/Р12)', () => {
   test('дерево-литерал считается, а ЗАКОННЫЙ текст того же запроса — нет: конвертера старого текста нет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await createIncome(user, caller, 'Отложил', '100.00', ['savings']);
 
@@ -380,8 +380,8 @@ describe('computeGoalProgress: источник хранится ДЕРЕВОМ 
 
 describe('computeGoalProgress: изоляция владельца', () => {
   test('цель не считает чужие сущности — ни в sum, ни в count, ни через entity.get', async () => {
-    const me = freshUserId();
-    const other = freshUserId();
+    const me = await freshGraph();
+    const other = await freshGraph();
     // Чужие сущности подобраны так, чтобы ЛЮБАЯ утечка была видна в ответе: суммы и
     // счётчики отличаются на порядки. Скомпилированный SQL owner-фильтра не содержит
     // вовсе (`query/compile-ast.ts`, §инварианты) — изоляцию целиком даёт identity транзакции
@@ -431,7 +431,7 @@ describe('computeGoalProgress: изоляция владельца', () => {
 
 describe('computeGoalProgress: честные отказы вместо падения (§12 п.6, fail-soft)', () => {
   test('поле внутри JSONB-массива не поддерживается — честный флаг, а не тихий ноль', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const p = await progressOf(user, {
       // Запрос валиден, аспект существует — отказ ровно про поле внутри массива
       progress_source: {
@@ -448,7 +448,7 @@ describe('computeGoalProgress: честные отказы вместо паде
   });
 
   test('опечатка в поле отличима от массива: invalid_field, а не array_field', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const typo = await progressOf(user, {
       progress_source: {
         query: 'aspect=orbis/financial, orbis/direction=income',
@@ -483,7 +483,7 @@ describe('computeGoalProgress: честные отказы вместо паде
   });
 
   test('неразбираемый и нескомпилируемый query — invalid_query, расчёт не падает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     // Лог проверяется ЗДЕСЬ, а не отдельным тестом, потому что оба места, дающие
     // `invalid_query`, дают его с разным диагнозом (грамматика vs компиляция), и второе
     // достижимо только вне контекста сущности — то есть мимо entity.get.
@@ -526,7 +526,7 @@ describe('computeGoalProgress: честные отказы вместо паде
 
 describe('computeGoalProgress: отказ САМОГО SQL не роняет чтение', () => {
   test('нечисловое значение в числовом поле — compute_failed, транзакция жива', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const row = await createIncome(user, caller, 'Взнос', '10.00', ['drift']);
     // Рассинхрон реестра и данных: реестр считает orbis/amount числом, а в JSONB текст.
@@ -569,7 +569,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
   });
 
   test('NaN на выходе агрегата — тоже compute_failed, и ловит его ДРУГОЙ catch', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const row = await createIncome(user, caller, 'Взнос', '10.00', ['nan']);
     // 'NaN' — ЗАКОННОЕ значение numeric в PostgreSQL: каст не падает, падает уже разбор
@@ -616,7 +616,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
 
 describe('entity.get: прогресс приезжает с целью и только с ней', () => {
   test('снятый аспект цели гасит полосу, хотя источник и цель остались в props (Р9)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await createIncome(user, caller, 'Отложил', '75000.00', ['savings']);
     const goal = await createGoal(user, {
@@ -653,7 +653,7 @@ describe('entity.get: прогресс приезжает с целью и то�
   });
 
   test('цель получает goalProgress, обычная сущность — нет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await createIncome(user, caller, 'Отложил', '75000.00', ['savings']);
     const goal = await createGoal(user, {
@@ -686,7 +686,7 @@ describe('entity.get: прогресс приезжает с целью и то�
   });
 
   test('`this` в источнике прогресса — сама цель (children_of=this считает подзадачи)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const goal = await createGoal(user, {
       title: 'Прочитать 24 книги',
@@ -715,7 +715,7 @@ describe('entity.get: прогресс приезжает с целью и то�
   });
 
   test('испорченный источник прогресса не мешает открыть цель', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const goal = await createGoal(user, {
       title: 'Цель с мусорным запросом',
@@ -730,7 +730,7 @@ describe('entity.get: прогресс приезжает с целью и то�
   });
 
   test('обычная сущность не платит за расчёт цели ни одним запросом (Р14)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const plain = await caller.entity.create({
       input: { title: 'Обычная заметка', tags: [], aspects: ['orbis/note'] },
@@ -818,7 +818,7 @@ describe('логи отказа: конфигурационный отказ н�
   }
 
   test('повторный отказ той же цели по той же причине логируется один раз', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const goal = await goalWith(user, 'Цель с опечаткой в поле', {
       query: 'aspect=orbis/financial, orbis/direction=income',
@@ -839,7 +839,7 @@ describe('логи отказа: конфигурационный отказ н�
   });
 
   test('новая беда той же цели в том же месте печатается, а не гасится устаревшей', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const goal = await goalWith(user, 'Цель, которую чинят', {
       query: 'aspect=orbis/financial, orbis/direction=income',
@@ -875,7 +875,7 @@ describe('логи отказа: конфигурационный отказ н�
   });
 
   test('конфигурационный отказ цели не молчит: ярлык и id цели есть в логе', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
 
     // Самая вероятная жалоба владельца — «прогресс не считается, а почему, не понять».
@@ -908,7 +908,7 @@ describe('логи отказа: конфигурационный отказ н�
   });
 
   test('аспект, не прошедший свою схему, тоже не молчит — хотя ярлыка у него нет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const goal = await goalWith(user, 'Цель с дрейфом схемы', {
       query: 'aspect=orbis/financial',
@@ -951,7 +951,7 @@ describe('логи отказа: конфигурационный отказ н�
    * отказ не молчит — в логе ровно одна строка про эту цель.
    */
   test('уже лежащее значение глубже капа: чтение fail-soft, а не 500 (Р-13c-2)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const goal = await goalWith(user, 'Цель с отравленным источником', {
       query: 'aspect=orbis/financial',
@@ -997,7 +997,7 @@ describe('имена в хранимом дереве источника — id,
     // чтение отвечало `invalid_query` — пустая полоса прогресса навсегда, без единого
     // отказа ни владельцу, ни модели. У встроенного свойства `id == key`, поэтому
     // расхождение видно только на СВОЕЙ строке.
-    const user = freshUserId();
+    const user = await freshGraph();
     const created = await execute(db, {
       actorUserId: user,
       actorKind: 'owner',
@@ -1113,7 +1113,7 @@ describe('неканоническая форма дерева источник�
 
   for (const [name, query] of BAD) {
     test(`entity_create: ${name} → VALIDATION/TYPE`, async () => {
-      const user = freshUserId();
+      const user = await freshGraph();
       const r = await execute(db, {
         actorUserId: user,
         actorKind: 'owner',
@@ -1135,7 +1135,7 @@ describe('неканоническая форма дерева источник�
 
     test(`attach_orbis_goal: ${name} → VALIDATION/TYPE`, async () => {
       // Второй строитель патча (`replaceAspectProps`) — тот же гард закрывает оба.
-      const user = freshUserId();
+      const user = await freshGraph();
       const created = await execute(db, {
         actorUserId: user,
         actorKind: 'owner',

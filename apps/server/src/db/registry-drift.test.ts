@@ -10,7 +10,8 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -210,7 +211,7 @@ test('контракты: незнакомая system-строка — extra, и
 
 // Кастомные строки эталона в коде не имеют — дрейфом они не бывают ни в какую сторону.
 test('кастомные строки владельца сверку не трогают', async () => {
-  const owner = crypto.randomUUID();
+  const owner = await freshGraph();
   try {
     await admin.db.execute(
       sql`INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
@@ -233,7 +234,7 @@ test('кастомные строки владельца сверку не тр�
  * дельту и показывает обе стороны: админская роль её видит, роль приложения — нет.
  */
 test('registry_deltas: админ видит строку, роль приложения — ни одной (RLS без актора)', async () => {
-  const owner = crypto.randomUUID();
+  const owner = await freshGraph();
   try {
     await admin.db.execute(
       sql`INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
@@ -304,7 +305,7 @@ describe('reportRegistryDriftOnStartup: провал ≠ «дрейфа нет»
 // ---------------------------------------------------------------------------
 
 describe('конфликты пересева становятся единицами пачки (§А3-3)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
 
   test('«вариант рядом с похожим» → единица пачки с aspect_delta_set; approve применяет дельту', async () => {
     // ФИКСТУРА, БЕЗ КОТОРОЙ КАРТА КЛАССОВ В ДЕЛЬТЕ НЕЗАКОННА (Ф-Б1-49). `orbis/content_type` —

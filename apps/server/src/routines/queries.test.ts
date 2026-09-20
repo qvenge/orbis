@@ -14,7 +14,7 @@
 // В pgTAP (группа 11) осталась структурная половина: форма политики и наличие гранта.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 import { graphIdsForScheduler } from './queries';
@@ -44,8 +44,8 @@ async function codeOfRejection(run: Promise<unknown>): Promise<string> {
   return run.then(() => 'запрос прошёл', pgCode);
 }
 
-const OWNER_A = freshUserId();
-const OWNER_B = freshUserId();
+const OWNER_A = mintGraph();
+const OWNER_B = mintGraph();
 
 beforeAll(async () => {
   await truncateAll();
@@ -94,7 +94,7 @@ test('user_settings под orbis_app без identity: запись отклон�
   // Политика 0013 — FOR SELECT, грант — ровно SELECT. Какой из двух барьеров сработает
   // первым, тест не пинит: важен итог «служебная роль настройки не пишет».
   const code = await codeOfRejection(
-    db.execute(sql`INSERT INTO user_settings (graph_id) VALUES (${freshUserId()})`),
+    db.execute(sql`INSERT INTO user_settings (graph_id) VALUES (${await freshGraph()})`),
   );
   expect(code).toBe('42501');
 });

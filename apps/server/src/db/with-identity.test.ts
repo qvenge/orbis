@@ -1,15 +1,15 @@
 // apps/server/src/db/with-identity.test.ts
 import { afterAll, describe, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv } from '../../test/helpers';
 import { withIdentity } from './with-identity';
 
 requireEnv(); // бросает с внятным сообщением, если DATABASE_URL/DATABASE_URL_ADMIN не заданы
 
 describe('withIdentity (RLS-механика, findings B7)', () => {
   const { db, client } = appDb();
-  const userA = freshUserId();
-  const userB = freshUserId();
+  const userA = mintGraph();
+  const userB = mintGraph();
 
   test('невалидный actorUserId отклоняется до SQL', async () => {
     await expect(withIdentity(db, 'not-a-uuid', async () => {})).rejects.toThrow(/UUID/);

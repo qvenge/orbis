@@ -18,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { appDb, entityColumnsFrom, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, entityColumnsFrom, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -28,8 +28,8 @@ import { type CompileCtx, compileCountAst, compileQueryAst } from './compile-ast
 requireEnv();
 
 const { db, client } = appDb();
-const USER_A = freshUserId();
-const USER_B = freshUserId();
+const USER_A = mintGraph();
+const USER_B = mintGraph();
 
 /** «Сегодня» датасета — все due_date/updated_at эталона расставлены вокруг этой даты. */
 const TODAY = '2026-07-03';
@@ -983,7 +983,7 @@ describe('новое в каноне: OR-дерево разных свойст�
 });
 
 // ─── Служебные аспекты (02-core-os §3.9, §А5-6) ───
-const USER_C = freshUserId();
+const USER_C = mintGraph();
 
 const ID_C = {
   ticket: '019eb300-d5e1-7000-8000-000000000021',
@@ -1061,7 +1061,7 @@ describe('служебные аспекты: спрятаны, пока не н�
 });
 
 // ─── Семейство иерархии в children_of/parents_of (§А4-3, Ч10-С1) ───
-const USER_D = freshUserId();
+const USER_D = mintGraph();
 
 const ID_D = {
   project: '019eb300-d5e1-7000-8000-000000000031',
@@ -1183,7 +1183,7 @@ describe('children_of/parents_of: семейство иерархии из ре�
 });
 
 // ─── Рекурсивный обход и кап глубины (§А5-1, QUERY_DEPTH_CAP) ───
-const USER_E = freshUserId();
+const USER_E = mintGraph();
 
 /** Цепочка subitem длиной 40 + ветка на глубине 2 — вход обоих тестов обхода. */
 const CHAIN_LENGTH = 40;

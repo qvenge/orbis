@@ -2,7 +2,7 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { MyQueueResult } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { listRunUnits } from '../policy/pending';
@@ -82,7 +82,7 @@ afterAll(async () => {
 
 describe('sweepStaleRuns (С6, инвариант 6)', () => {
   test('прогон без шагов дольше порога: без external → тикет planned, прогон abandoned; с external → тикет waiting с waiting_for о разборе', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const grantId = await workerGrant(owner, 'подметание');
     const clean = await seedRun(owner, {
       grantId,
@@ -137,7 +137,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
   });
 
   test('свежий прогон (last_step_at = T0-5мин) не трогается; тикет не в in_progress → помечается только прогон', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const grantId = await workerGrant(owner, 'свежесть');
     const fresh = await seedRun(owner, {
       grantId,
@@ -188,7 +188,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
   });
 
   test('orbis_my_queue подметает по дороге: swept в ответе, тикет вернулся claimable', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const grantId = await workerGrant(owner, 'очередь подметает');
     const stale = await seedRun(owner, {
       grantId,
@@ -239,7 +239,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
   }
 
   test('старый прогон подметается, тикет активного прогона остаётся in_progress, orbis_finish живого проходит', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const grantId = await workerGrant(owner, 'два прогона одного тикета');
     const ticket = await seedEntity(owner, {
       title: 'Тикет, сброшенный владельцем руками',
@@ -301,7 +301,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
   });
 
   test('архивированный running-прогон подметается (инвариант 6 держится и после отката захвата)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const grantId = await workerGrant(owner, 'архивный прогон');
     const { ticketId, runId } = await seedRun(owner, {
       grantId,
@@ -333,7 +333,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
   });
 
   test('очередь гранта A метёт брошенный прогон гранта B: подметание — про владельца, не про грант', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const grantA = await workerGrant(owner, 'грант A');
     const grantB = await workerGrant(owner, 'грант B');
     const foreign = await seedRun(owner, {
@@ -362,7 +362,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
 
 describe('sweepStaleRuns: рутинный прогон закрывается как failed (V1.12)', () => {
   test('прогон рутины без шагов дольше порога → failed + fail_note, тикета нет; грантовый прогон рядом — abandoned как был', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const grantId = await workerGrant(owner, 'подметание рутин');
     const routineId = await seedRoutine(owner, { title: 'Рутина, чей процесс умер' });
     const { runId } = await seedRoutineRun(owner, {
@@ -418,7 +418,7 @@ describe('sweepStaleRuns: пачка переживает смерть проц�
     // «Рестарт и сон — основной вид сбоя» (V1.12): для рутины подметание не экзотика, а
     // штатный конец прогона на засыпающем инстансе. Пропущенный здесь флажок означает
     // пачку, которую владелец никогда не увидит: карточки в треде лежат, а сигнала нет.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const routineId = await seedRoutine(owner, { title: 'Рутина, умершая с пачкой' });
     const { runId } = await seedRoutineRun(owner, {
       routineId,

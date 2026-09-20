@@ -18,7 +18,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type AgendaSubscription, addDays, BUILTIN_SUBSCRIPTION_DEFS } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { setSubscriptionDelta } from '../registry/ops';
@@ -100,7 +100,7 @@ describe('приёмка 02-core-os §8.1: прошедшее чистое со�
   // «Прошедшая чистая сущность с одним orbis/schedule не появляется в „Просроченном“
   // и остаётся доступна в Browser».
   test('вчерашнее событие без orbis/task: нет в обеих выборках «Просроченного», есть в Browser', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const event = await createEntity(user, 'Прошедший созвон', {
       props: { 'orbis/start_at': at(yesterday, '10:00') },
       aspects: ['orbis/schedule'],
@@ -118,7 +118,7 @@ describe('приёмка 02-core-os §8.1: прошедшее чистое со�
   test('та же сущность с добавленным orbis/task попадает в «Просроченное» по start_at', async () => {
     // Негатив к предыдущему тесту: отсекает именно отсутствие orbis/task, а не что-то ещё
     // (иначе первый тест проходил бы и при сломанном start_at=overdue).
-    const user = freshUserId();
+    const user = await freshGraph();
     const event = await createEntity(user, 'Созвон, ставший задачей', {
       props: { 'orbis/start_at': at(yesterday, '10:00') },
       aspects: ['orbis/schedule'],
@@ -140,7 +140,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   // «Незакрытая task-сущность с просроченным due_date появляется в „Просроченном“
   // независимо от наличия schedule; после done, переноса или архивации исчезает».
   test('появляется независимо от наличия schedule', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const bare = await createEntity(user, 'Закончить API', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
@@ -165,7 +165,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   });
 
   test('после done исчезает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const task = await createEntity(user, 'Закончить API', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
@@ -183,7 +183,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   });
 
   test('после переноса срока исчезает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const task = await createEntity(user, 'Закончить API', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
@@ -201,7 +201,7 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   });
 
   test('после архивации исчезает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const task = await createEntity(user, 'Закончить API', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
@@ -218,7 +218,7 @@ describe('приёмка 02-core-os §8.3: task+schedule с обеими про�
   // одновременно просрочен due_date». Слияние по id уехало на сервер (§Б5-6): выборка одна,
   // и одна строка секции — теперь утверждение об ЭТОЙ выборке, а не о работе клиента.
   test('обе причины просрочки — ОДНА строка секции, слияние сделал сервер', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const both = await createEntity(user, 'Подтвердить созвон', {
       props: {
         'orbis/task_status': 'planned',
@@ -241,7 +241,7 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
   // «Задача с одним due_date видна в Daily Planning/Upcoming, но не в дневной секции
   // Agenda; после добавления orbis/schedule появляется в соответствующем дне».
   test('без schedule: видна в Daily Planning и Upcoming, но не в дневном окне Agenda', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const dueToday = await createEntity(user, 'Разобрать Inbox', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': today },
       aspects: ['orbis/task'],
@@ -262,7 +262,7 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
   });
 
   test('после добавления orbis/schedule появляется в дневном окне', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const task = await createEntity(user, 'Врач', {
       props: { 'orbis/task_status': 'planned', 'orbis/due_date': tomorrow },
       aspects: ['orbis/task'],
@@ -287,7 +287,7 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
 
 describe('приёмка §С8-17: просрочено по сроку ИЛИ по началу — одним запросом', () => {
   test('обе причины в одной секции, дата строки — более ранняя из двух', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const byDue = await createEntity(user, 'Закончить API', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
       aspects: ['orbis/task'],
@@ -312,7 +312,7 @@ describe('приёмка §С8-17: просрочено по сроку ИЛИ �
 
 describe('приёмка §С8-21 сквозь ручку: две привязки слота без prefer — отказ, с prefer — строка', () => {
   test('SLOT_AMBIGUOUS доезжает до клиента структурно; prefer в дельте подписки его снимает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     // Свой аспект со слотом `moment` — ДЕКЛАРАЦИЕЙ (0d расширила `CustomAspectSpec` полем `implements`).
     // Имя — `probe`, не `gate`: токены гейта разрешены только фикстуре 0d и golden (Р-К-27).
     await seedCustomAspect(user, {

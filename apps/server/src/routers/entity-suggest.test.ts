@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -75,7 +75,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     // Ради этой разницы процедура и заведена: `search=` — plainto_tsquery('simple'),
     // то есть совпадение по ЦЕЛОМУ слову. «куп» не находило «Купить кроссовки», и пикер
     // связей честно извинялся подсказкой «введите слово целиком».
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     await seedEntity(caller, { title: 'Купить кроссовки' });
 
     // Контроль: `search=` жив и по целому слову находит — иначе тест был бы зелёным
@@ -89,7 +89,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('регистр не важен', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     await seedEntity(caller, { title: 'Купить кроссовки' });
     expect(titles(await caller.entity.suggest({ term: 'КУП' }))).toEqual(['Купить кроссовки']);
   });
@@ -99,7 +99,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     // квартал» набором «квартал» находиться обязан. Платы за снятие якоря нет — индекса под
     // этот запрос всё равно не существует (см. комментарий у процедуры), а при Seq Scan
     // '%куп%' стоит ровно столько же, сколько 'куп%'.
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     await seedEntity(caller, { title: 'Отчёт за квартал' });
 
     // Контроль: прежний путь это находил — значит речь о СОХРАНЕНИИ находимости, а не о
@@ -116,7 +116,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     // Релевантность важнее свежести: набирая «куп», человек ищет «Купить…», а не заметку,
     // где это слово встретилось в середине. Порядок создания здесь ПРОТИВ ожидаемого
     // порядка выдачи — иначе тест прошёл бы и на одном updated_at DESC.
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const fromStart = await seedEntity(caller, { title: 'Купить кроссовки' });
     const inMiddle = await seedEntity(caller, { title: 'Не забыть купить' });
     expect((await caller.entity.suggest({ term: 'куп' })).map((e) => e.id)).toEqual([
@@ -126,7 +126,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('архивные не предлагаются', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const live = await seedEntity(caller, { title: 'Купить живое' });
     await seedEntity(caller, { title: 'Купить старое', archived: true });
     const got = await caller.entity.suggest({ term: 'куп' });
@@ -136,7 +136,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('ЗАКРЫТЫЕ задачи остаются в выдаче (решение v2), архивные — нет', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     await seedEntity(caller, {
       title: 'Купить хлеб',
       props: {
@@ -154,7 +154,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   // контракту `orbis/completable`, а значит и завершаемость: без этого чип продолжал бы
   // зачёркивать «сделанное» у записи, задачей быть переставшей.
   test('снятый аспект задачи обнуляет ЗАВЕРШАЕМОСТЬ подсказки, хотя значение осталось в props (Р9)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const e = await seedEntity(caller, {
       title: 'Купить сыр',
@@ -181,7 +181,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('завершаемость приезжает ПЛОСКИМ полем, emoji и archived — тоже', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const e = await seedEntity(caller, {
       title: 'Купить молоко',
       emoji: '🥛',
@@ -202,7 +202,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('сущность без завершаемости отдаёт completable = null, emoji = null', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const e = await seedEntity(caller, { title: 'Купить без аспекта' });
     expect(await caller.entity.suggest({ term: 'куп' })).toEqual([
       { id: e.id, title: 'Купить без аспекта', emoji: null, completable: null, archived: false },
@@ -210,7 +210,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('спецсимволы шаблона LIKE экранированы: «%», «_» и «\\» ищут себя, а не что угодно', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     await seedEntity(caller, { title: 'Купить кроссовки' });
     const pct = await seedEntity(caller, { title: '%скидка' });
     const under = await seedEntity(caller, { title: '_черновик' });
@@ -224,9 +224,9 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('чужие сущности не предлагаются (RLS §4.10)', async () => {
-    const owner = callerFor(freshUserId());
+    const owner = callerFor(await freshGraph());
     const e = await seedEntity(owner, { title: 'Купить чужое' });
-    expect(await callerFor(freshUserId()).entity.suggest({ term: 'куп' })).toEqual([]);
+    expect(await callerFor(await freshGraph()).entity.suggest({ term: 'куп' })).toEqual([]);
     // Контроль: пусто именно у ЧУЖОГО. Без этой строки тест был бы зелёным и от вовсе
     // сломанного suggest — классика ложного зелёного.
     expect((await owner.entity.suggest({ term: 'куп' })).map((r) => r.id)).toEqual([e.id]);
@@ -234,7 +234,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
 
   test('порядок — по updated_at DESC: свежее наверху', async () => {
     // `/`-меню показывает 10 из многих: без порядка «десять любых» зависели бы от плана.
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const first = await seedEntity(caller, { title: 'Купить первое' });
     const second = await seedEntity(caller, { title: 'Купить второе' });
     expect((await caller.entity.suggest({ term: 'куп' })).map((r) => r.id)).toEqual([
@@ -254,7 +254,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     // `updated_at` по умолчанию now() — время НАЧАЛА транзакции, поэтому всё, созданное
     // одним batch_execute, получает ОДИН штамп. Без последнего ключа порядок таких строк
     // определял бы план, и выдача «десяти из многих» плавала бы между запросами.
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const made: string[] = [];
     for (let i = 0; i < 8; i++) made.push((await seedEntity(caller, { title: `Купить ${i}` })).id);
@@ -278,7 +278,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('limit: по умолчанию 10, переданный уважается, свыше 20 — BAD_REQUEST', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     for (let i = 0; i < 12; i++) await seedEntity(caller, { title: `Купить ${i}` });
     expect((await caller.entity.suggest({ term: 'куп' })).length).toBe(10);
     expect((await caller.entity.suggest({ term: 'куп', limit: 3 })).length).toBe(3);
@@ -287,12 +287,12 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   });
 
   test('пустой term отклоняется на входе → BAD_REQUEST', async () => {
-    const e = await trpcError(callerFor(freshUserId()).entity.suggest({ term: '' }));
+    const e = await trpcError(callerFor(await freshGraph()).entity.suggest({ term: '' }));
     expect(e.code).toBe('BAD_REQUEST');
   });
 
   test('завершаемость — по КОНТРАКТУ: cancelled закрыт наравне с done (Р4)', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     await seedEntity(caller, {
       title: 'Купить зонт',
       aspects: ['orbis/task'],
@@ -305,7 +305,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
 
 describe('entity.resolveRefs (заголовки чипов одним запросом)', () => {
   test('отдаёт заголовки пачкой', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const a = await seedEntity(caller, { title: 'Первая' });
     const b = await seedEntity(caller, { title: 'Вторая' });
     expect(titles(await caller.entity.resolveRefs({ ids: [a.id, b.id] }))).toEqual([
@@ -315,7 +315,7 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
   });
 
   test('несуществующий id не роняет запрос и просто отсутствует в ответе', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const a = await seedEntity(caller, { title: 'Первая' });
     const got = await caller.entity.resolveRefs({
       ids: [a.id, '11111111-1111-4111-8111-111111111111'],
@@ -324,7 +324,7 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
   });
 
   test('101 id не роняет запрос (лимит 200: тело со 101 ссылкой валило весь резолв)', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const a = await seedEntity(caller, { title: 'Единственная живая' });
     const ids = [a.id, ...Array.from({ length: 100 }, () => crypto.randomUUID())];
     expect(ids.length).toBe(101);
@@ -334,19 +334,19 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
 
   test('201 id отклоняется на входе → BAD_REQUEST (а не таймаутом в БД)', async () => {
     const ids = Array.from({ length: 201 }, () => crypto.randomUUID());
-    const e = await trpcError(callerFor(freshUserId()).entity.resolveRefs({ ids }));
+    const e = await trpcError(callerFor(await freshGraph()).entity.resolveRefs({ ids }));
     expect(e.code).toBe('BAD_REQUEST');
   });
 
   test('пустой список отклоняется на входе → BAD_REQUEST', async () => {
-    const e = await trpcError(callerFor(freshUserId()).entity.resolveRefs({ ids: [] }));
+    const e = await trpcError(callerFor(await freshGraph()).entity.resolveRefs({ ids: [] }));
     expect(e.code).toBe('BAD_REQUEST');
   });
 
   test('АРХИВНАЯ резолвится и помечена archived: чип обязан показать заголовок', async () => {
     // Ссылка на архивную сущность в теле остаётся ссылкой: спрятать заголовок значило бы
     // показать «11111111…» вместо названия. Признак отдаём — рисовать решает чип.
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const a = await seedEntity(caller, { title: 'Архивная цель', archived: true });
     expect(await caller.entity.resolveRefs({ ids: [a.id] })).toEqual([
       { id: a.id, title: 'Архивная цель', emoji: null, completable: null, archived: true },
@@ -354,7 +354,7 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
   });
 
   test('завершаемость — плоским полем (чип зачёркивает закрытое)', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const a = await seedEntity(caller, {
       title: 'Сделанная',
       props: {
@@ -369,15 +369,17 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
   });
 
   test('чужие сущности не резолвятся (RLS §4.10)', async () => {
-    const owner = callerFor(freshUserId());
+    const owner = callerFor(await freshGraph());
     const a = await seedEntity(owner, { title: 'Чужая цель' });
-    expect(await callerFor(freshUserId()).entity.resolveRefs({ ids: [a.id] })).toEqual([]);
+    expect(await callerFor(await freshGraph()).entity.resolveRefs({ ids: [a.id] })).toEqual([]);
     // Контроль: тот же id владельцем резолвится — иначе пустота ничего не доказывала бы.
     expect((await owner.entity.resolveRefs({ ids: [a.id] })).map((r) => r.id)).toEqual([a.id]);
   });
 
   test('не-uuid отклоняется на входе → BAD_REQUEST', async () => {
-    const e = await trpcError(callerFor(freshUserId()).entity.resolveRefs({ ids: ['не-uuid'] }));
+    const e = await trpcError(
+      callerFor(await freshGraph()).entity.resolveRefs({ ids: ['не-uuid'] }),
+    );
     expect(e.code).toBe('BAD_REQUEST');
   });
 });

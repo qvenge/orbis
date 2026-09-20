@@ -11,7 +11,7 @@ import { type DiffUnit, flattenBlocks } from '@orbis/shared/doc/diff';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { ensureEntityThread } from '../chat/threads';
@@ -41,7 +41,7 @@ import { type Context, createCallerFactory } from '../trpc';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const { actionsOf, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
   agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);

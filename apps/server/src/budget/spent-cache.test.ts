@@ -9,7 +9,7 @@ import {
   appDb,
   bumpRegistryVersion,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -102,7 +102,7 @@ async function cacheRows(
 }
 
 describe('таблица кэша: форма строки и обе половины версии (§Б5-5, §А10-1)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
 
   test('запись и чтение по ключу (envelope_id, as_of); строка чужой версии невидима', async () => {
@@ -140,7 +140,7 @@ describe('таблица кэша: форма строки и обе полов�
 });
 
 describe('чтение spent идёт через кэш (§Б5-5): промах считает и пишет, попадание не считает', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
 
   test('первый overview кладёт строку конверта; второй берёт её; смена версии реестра — снова промах', async () => {
@@ -377,7 +377,7 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
 });
 
 describe('врезка в бюджет-хук: инкремент нового движения, снос — всё остальное (§Б5-5, Р-К-16)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
   const clock = () => new Date('2026-07-10T09:00:00.000Z');
 
@@ -493,7 +493,7 @@ describe('врезка в бюджет-хук: инкремент нового �
 });
 
 describe('вклад одного движения — из декларации подписки (§Б5-4, §Б5-5)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
 
   /** Тот же вход, что у врезки в исполнителе: снимок владельца + его «сегодня». */
@@ -593,7 +593,7 @@ describe('вклад одного движения — из декларации
 });
 
 describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
   const clock = () => new Date('2026-07-10T09:00:00.000Z');
 
@@ -758,7 +758,7 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
 });
 
 describe('прогретый кэш отвечает на все ключи разом (§С8-16, поведенческая половина)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   /** Сорок конвертов периода — объём одного месяца синтетики П2 (12 × 40, задача 0c). */
   const ENVELOPES = 40;
 

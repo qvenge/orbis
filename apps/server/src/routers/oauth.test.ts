@@ -11,7 +11,7 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { agentGrants, oauthClients } from '../db/schema';
 import { exchangeAuthorizationCode, issuePatGrant, verifyBearer } from '../oauth/grants';
 import { appRouter } from '../router';
@@ -29,8 +29,8 @@ const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
 
 const savedOrigin = process.env.ORBIS_PUBLIC_URL;
 
-const owner = freshUserId();
-const stranger = freshUserId();
+const owner = mintGraph();
+const stranger = mintGraph();
 
 const createCaller = createCallerFactory(appRouter);
 const ownerCaller = createCaller({

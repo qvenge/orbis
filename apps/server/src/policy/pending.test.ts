@@ -14,7 +14,7 @@ import {
   rejectMessageId,
 } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
@@ -43,8 +43,8 @@ import {
 requireEnv();
 
 const { db, client } = appDb();
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 const T0 = new Date('2026-07-04T12:00:00.000Z');
 const clock = () => T0;
 
@@ -1509,7 +1509,7 @@ describe('listRunUnits: контракт по identity (Minor-1 ревью За�
 // ---------------------------------------------------------------------------
 
 describe('createSystemPending: запись без актора', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
 
   test('атрибуция system в записи; approve исполняет ОТ ВЛАДЕЛЬЦА и остаётся видимым в ленте', async () => {
     const entity = await seedEntity(owner, { title: 'Цель системной единицы', tags: [] });

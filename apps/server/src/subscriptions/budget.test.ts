@@ -21,7 +21,8 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -52,7 +53,7 @@ import { assertSubscription, builtinSubscription } from './registry';
 
 requireEnv();
 const { db, client } = appDb();
-const userA = freshUserId();
+const userA = mintGraph();
 const TZ = 'Europe/Moscow';
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
 
@@ -441,7 +442,7 @@ describe('область `where` ведомости и списка (B3 I-1)', (
   });
 
   test('живая дельта со слотом в where: entity_create траты не падает (хук кэша, :625)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await seedOwnerGraph(db, user);
     const cat = seedCategoryId(user, 'food');
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
@@ -505,7 +506,7 @@ describe('ведомость spent (§2.2, П2 №1)', () => {
     // `orbis/recurring = true` стоит и на шаблоне, и на инстансе. Считай движок `recurring`
     // маркером шаблона — набор `facts` выбросил бы инстанс, и владелец перестал бы видеть
     // половину своих расходов; считай он шаблон операцией — увидел бы двойной.
-    const user = freshUserId();
+    const user = await freshGraph();
     await seedOwnerGraph(db, user);
     const cat = newId();
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
@@ -802,7 +803,7 @@ describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 �
    * называет ответ на него частью ДЕКЛАРАЦИИ, и проверять его нужно на нём.
    */
   async function archivedWithEdge(slug: 'food' | 'transport', amount: string) {
-    const user = freshUserId();
+    const user = await freshGraph();
     await seedOwnerGraph(db, user);
     const cat = seedCategoryId(user, slug);
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '5000.00'));
@@ -940,7 +941,7 @@ describe('семена карточки после rollup (Minor-1 гейта)',
 
 describe('rollover: параметры перехода — из декларации (Р12)', () => {
   test('exact_calendar_month даёт границы месяца; чужой carry — структурный отказ', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await seedOwnerGraph(db, user);
     const cat = seedCategoryId(user, 'food');
     const r = await rolloverCreate(db, user, {

@@ -21,7 +21,7 @@ import { GATE_PLAIN_ASPECT } from '../../test/fixtures/gate-aspects';
 import {
   adminDb,
   appDb,
-  freshUserId,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -251,7 +251,7 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
     const where = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'orbis/task_status' }] };
     const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
     expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
-    const own = assertSubscription(row(def, { graphId: freshUserId() }), {
+    const own = assertSubscription(row(def, { graphId: mintGraph() }), {
       reg: snapshot(),
       systemSeed: false,
     });
@@ -267,7 +267,7 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
     };
     const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
     expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
-    const own = assertSubscription(row(def, { graphId: freshUserId() }), {
+    const own = assertSubscription(row(def, { graphId: mintGraph() }), {
       reg: snapshot(),
       systemSeed: false,
     });
@@ -525,7 +525,7 @@ describe('однозначность порога и границы словар
 });
 
 describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с prefer — детерминированный выбор', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   let idx: BindingIndex;
   let plain: string;
   let sched: string;
@@ -600,7 +600,7 @@ describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с
 });
 
 describe('builtinSubscription: эффективная декларация из снимка', () => {
-  const userA = freshUserId();
+  const userA = mintGraph();
   test('orbis/budget-overview читается из снимка уже разобранным', async () => {
     await withIdentity(db, userA, async (tx) => {
       const def = builtinSubscription(await effectiveRegistry(tx, userA), 'orbis/budget-overview');

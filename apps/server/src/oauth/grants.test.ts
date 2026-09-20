@@ -4,7 +4,7 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { agentGrants, oauthClients } from '../db/schema';
 import {
   createAuthorizationCode,
@@ -18,7 +18,7 @@ import {
 
 requireEnv();
 const { db, client: dbClient } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const REDIRECT = 'http://localhost:8080/callback';
 
 /** PKCE-пара по RFC 7636: challenge = base64url(sha256(verifier)). */
@@ -411,13 +411,15 @@ test('чужой владелец не отзывает грант', async () =>
   const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
   const identity = await verifyBearer(db, pat);
   if (!identity) throw new Error('verifyBearer не вернул identity');
-  expect(await revokeGrant(db, { graphId: freshUserId(), grantId: identity.grantId })).toBe(false);
+  expect(await revokeGrant(db, { graphId: await freshGraph(), grantId: identity.grantId })).toBe(
+    false,
+  );
   expect(await verifyBearer(db, pat)).not.toBeNull();
 });
 
 test('listGrants отдаёт свои гранты и не отдаёт хеши', async () => {
   const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
-  await issuePatGrant(db, { graphId: freshUserId(), label: 'чужой' });
+  await issuePatGrant(db, { graphId: await freshGraph(), label: 'чужой' });
   const grants = await listGrants(db, owner);
   expect(grants).toHaveLength(1);
   expect(grants[0]).toMatchObject({ kind: 'pat', label: 'CI' });

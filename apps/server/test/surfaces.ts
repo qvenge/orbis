@@ -40,7 +40,7 @@ import {
   GATE_SURFACE_SLUGS,
   seedGateSurfaceRows,
 } from './fixtures/gate-aspects';
-import { appDb, seedCustomAspect } from './helpers';
+import { appDb, ensureGraphs, mintGraph, seedCustomAspect } from './helpers';
 
 export const SURFACE_STATES = ['baseline', 'module-off', 'custom-aspect', 'relabeled'] as const;
 export type SurfaceState = (typeof SURFACE_STATES)[number];
@@ -54,14 +54,18 @@ export type SurfaceState = (typeof SURFACE_STATES)[number];
 export const SNAPSHOT_SURFACES = [...SURFACES, 'core/row', 'core/exclude-blocked'] as const;
 export type SnapshotSurface = (typeof SNAPSHOT_SURFACES)[number];
 
-export const SURFACE_OWNER_ID = uuidv5('surface-snapshot-fixture:owner', ORBIS_NAMESPACE);
+export const SURFACE_OWNER_ID = mintGraph(
+  uuidv5('surface-snapshot-fixture:owner', ORBIS_NAMESPACE),
+);
 /**
  * Владелец состояния `custom-aspect` (Р-К-24): у каждого состояния снимка свой КОНСТАНТНЫЙ
  * владелец, и миры четырёх состояний живут рядом. Иначе состояние приходилось бы получать
  * переигрыванием одного мира, порядок тестов стал бы значимым, а сравнение состояний между
  * собой — невозможным.
  */
-export const SURFACE_GATE_OWNER_ID = uuidv5('surface-snapshot-fixture:gate-owner', ORBIS_NAMESPACE);
+export const SURFACE_GATE_OWNER_ID = mintGraph(
+  uuidv5('surface-snapshot-fixture:gate-owner', ORBIS_NAMESPACE),
+);
 /** Прибитое «сегодня» снимка — внутри периода конвертов (прецедент `compile.golden.test.ts:66`). */
 export const SURFACE_TODAY = '2026-07-03';
 export const SURFACE_MONTH = '2026-07';
@@ -229,6 +233,10 @@ export async function seedSurfaceWorld(
   graphId: string,
   opts?: { gateAspects?: boolean },
 ): Promise<void> {
+  // Граф — ДО всего (0020): владельцы снимка — КОНСТАНТЫ, объявленные в этом модуле, и `mintGraph`
+  // их только регистрирует. Строки заводит вот эта строка: хук реестра до импортированного модуля
+  // не дотягивается (bun исполняет побочные эффекты импорта раньше, чем открывает область файла).
+  await ensureGraphs([graphId]);
   // Аспекты — ДО мира: `entity_create` с неизвестным аспектом отвергается валидатором.
   if (opts?.gateAspects === true) {
     await seedCustomAspect(graphId, GATE_FIN_ASPECT);
@@ -451,14 +459,15 @@ export const SURFACE_RELABEL_LABEL = { ru: 'Дело', en: 'Deed' } satisfies Lo
  * состояниями РАЗНЫХ владельцев — утверждение проверяемое, а не недостижимое.
  *
  * Владельцы — константы (uuidv5 от имени), как `SURFACE_OWNER_ID` и `SURFACE_GATE_OWNER_ID`.
- * Случайный `freshUserId()` здесь запрещён вдвойне: id мира считаются от владельца
+ * Случайный `freshGraph()` здесь запрещён вдвойне: id мира считаются от владельца
  * (`surfaceEntityId`), и на случайном владельце они уехали бы в снимок как `<uuid>` вместо
  * `@slug` — красный тест 0b «ни одного id мимо словаря слагов».
  */
-export const SURFACE_OFF_OWNER_ID = uuidv5('surface-snapshot-fixture:off-owner', ORBIS_NAMESPACE);
-export const SURFACE_RELABEL_OWNER_ID = uuidv5(
-  'surface-snapshot-fixture:relabel-owner',
-  ORBIS_NAMESPACE,
+export const SURFACE_OFF_OWNER_ID = mintGraph(
+  uuidv5('surface-snapshot-fixture:off-owner', ORBIS_NAMESPACE),
+);
+export const SURFACE_RELABEL_OWNER_ID = mintGraph(
+  uuidv5('surface-snapshot-fixture:relabel-owner', ORBIS_NAMESPACE),
 );
 
 /** Владелец каждого состояния. Состояния 1 и 3 остаются на владельцах 0b и 10 — их тесты читают их миры. */

@@ -29,7 +29,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -64,7 +64,7 @@ import { undoAction } from './undo';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const sink = makeChatJournalSink();
 const T0 = new Date('2026-08-26T10:00:00.000Z');
 const CATEGORY_A = '019e4466-aaaa-7e07-b5d4-64be9721da51';

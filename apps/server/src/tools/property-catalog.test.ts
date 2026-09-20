@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -14,8 +14,8 @@ import { type PropertyCatalogRow, runPropertyCatalog } from './property-catalog'
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
-const stranger = freshUserId();
+const owner = mintGraph();
+const stranger = mintGraph();
 
 /** Свободное свойство владельца: носителя-аспекта нет, id и key РАЗНЫЕ (§А1-2). */
 const FREE_ID = 'user/p-sleep';

@@ -14,7 +14,7 @@ import { eq, sql } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -136,7 +136,7 @@ function recomputeOps(sink: InMemoryJournalSink): ActionOperation[] {
 }
 
 test('проект → подпроект → задача → подзадача: parent_project = подпроект, root_project = проект; перенос подпроекта под другой проект пересчитывает всё поддерево в той же tx', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const p = await project(owner, 'Проект');
   const sp = await project(owner, 'Подпроект');
   const task = await createEntity(owner, { title: 'Задача' });
@@ -194,7 +194,7 @@ test('проект → подпроект → задача → подзадач�
 });
 
 test('прогон под тикетом под проектом получает parent_project = проект (через роли run/ticket)', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const p = await project(owner, 'Проект прогонов');
   const ticket = await createEntity(owner, {
     title: 'Тикет',
@@ -237,7 +237,7 @@ test('прогон под тикетом под проектом получае�
 // и сверить их может только живая база: отставший сид развёл бы «пересчитано по правилу X» с
 // правилом, которое реестр объявляет у свойства.
 test('имя правила в журнале — то же, что во flags.computed.rule строки реестра', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const p = await project(owner, 'Проект имени правила');
   const task = await createEntity(owner, { title: 'Задача имени правила' });
   const sink = new InMemoryJournalSink();
@@ -258,7 +258,7 @@ test('имя правила в журнале — то же, что во flags.c
 });
 
 test('неиерархическая связь пересчёт не запускает: строки «пересчитано» в журнале нет', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const p = await project(owner, 'Проект тишины');
   const note = await createEntity(owner, { title: 'Заметка' });
   const sink = new InMemoryJournalSink();
@@ -269,7 +269,7 @@ test('неиерархическая связь пересчёт не запус
 });
 
 test('навешивание и снятие аспекта orbis/project пересчитывает всё поддерево', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const top = await project(owner, 'Верхний проект');
   const mid = await createEntity(owner, { title: 'Середина' });
   const leaf = await createEntity(owner, { title: 'Лист' });
@@ -311,7 +311,7 @@ test('навешивание и снятие аспекта orbis/project пер
 });
 
 test('undo relation_create иерархического ребра: parent_project возвращается (пересчёт по восстановленным рёбрам); inverse пересчёта не существует', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const p = await project(owner, 'Проект отката');
   const task = await createEntity(owner, { title: 'Задача отката' });
   // Боевой синк, а не InMemory: undo ищет действие в журнале БД, и на памяти теста
@@ -330,7 +330,7 @@ test('undo relation_create иерархического ребра: parent_proje
 });
 
 test('entity_update props.orbis/parent_project из тула → COMPUTED_WRITE', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const p = await project(owner, 'Проект гейта');
   const task = await createEntity(owner, { title: 'Задача гейта' });
   const r = await execute(
@@ -345,7 +345,7 @@ test('entity_update props.orbis/parent_project из тула → COMPUTED_WRITE'
 });
 
 test('цикл в иерархии не вешает пересчёт: обход ограничен капом глубины', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const p = await project(owner, 'Проект цикла');
   const a = await createEntity(owner, { title: 'A' });
   const b = await createEntity(owner, { title: 'B' });
@@ -359,8 +359,8 @@ test('цикл в иерархии не вешает пересчёт: обхо�
 });
 
 test('чужое поддерево пересчёт не трогает (RLS)', async () => {
-  const owner = freshUserId();
-  const stranger = freshUserId();
+  const owner = await freshGraph();
+  const stranger = await freshGraph();
   const p = await project(owner, 'Мой проект');
   const mine = await createEntity(owner, { title: 'Моя задача' });
   const alien = await createEntity(stranger, { title: 'Чужая задача' });

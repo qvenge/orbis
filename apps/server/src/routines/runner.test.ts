@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -31,7 +31,7 @@ import { type RunEnd, runRoutineRun } from './runner';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const { actionsOf, propsOf, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 
 const MODEL = 'scripted-model';

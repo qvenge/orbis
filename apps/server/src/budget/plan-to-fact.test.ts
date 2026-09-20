@@ -12,7 +12,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -157,7 +157,7 @@ async function actionMessageCount(actionId: string): Promise<number> {
 
 describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fact', () => {
   test('перевод ставит факт и конверт по ФАКТИЧЕСКОЙ дате (не по прежней); расход входит в spent', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const julyEnv = await createEnvelope(user, cat, JULY);
     const augEnv = await createEnvelope(user, cat, AUG);
@@ -193,7 +193,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('Undo восстанавливает planned=true, прежний occurred_on и прежнюю привязку целиком (§7.6)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const julyEnv = await createEnvelope(user, cat, JULY);
     const augEnv = await createEnvelope(user, cat, AUG);
@@ -219,7 +219,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('повтор того же batchId → idempotentReplay: состояние не меняется, action один', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const augEnv = await createEnvelope(user, cat, AUG);
     const purchase = await createPlanned(user, cat, PLANNED_ON);
@@ -239,7 +239,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('уже-факт → INVARIANT (переводить нечего)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     await createEnvelope(user, cat, AUG);
     // Уже факт: planned=false с самого создания
@@ -266,7 +266,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('архивная planned-покупка → INVARIANT (сначала разархивировать); состояние не тронуто', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     await createEnvelope(user, cat, JULY);
     const planned = await exec(user, 'entity_create', {
@@ -299,7 +299,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('recurring-инстанс (derived_from) → INVARIANT (его переводит postDue, §2.8)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     await createEnvelope(user, cat, JULY);
     // Шаблон подписки + материализованный инстанс на 2026-07-15
@@ -340,7 +340,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('шаблон recurring → INVARIANT', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const template = await exec(user, 'entity_create', {
       title: 'Аренда',
@@ -371,7 +371,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('не-financial сущность → INVARIANT', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     // Сущность без orbis/financial (только заголовок) — переводить нечего
     const note = await exec(user, 'entity_create', { title: 'Заметка', tags: [] });
     await expect(
@@ -384,8 +384,8 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('чужая сущность (RLS) → INVARIANT', async () => {
-    const owner = freshUserId();
-    const other = freshUserId();
+    const owner = await freshGraph();
+    const other = await freshGraph();
     const cat = newId();
     await createEnvelope(owner, cat, AUG);
     const purchase = await createPlanned(owner, cat, PLANNED_ON);
@@ -401,7 +401,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
   });
 
   test('мутация — поверхность владельца: агенту FORBIDDEN (§9.3)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const purchase = await createPlanned(user, cat, PLANNED_ON);
     const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });

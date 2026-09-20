@@ -15,7 +15,7 @@ import {
 } from '@orbis/shared';
 import { canonicalizeBody, DOC_SCHEMA_VERSION, serializeBody } from '@orbis/shared/doc';
 import { eq, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
@@ -80,7 +80,7 @@ function err(r: Awaited<ReturnType<typeof execute>>): { code: string; message: s
 
 /** Свежий владелец + пустая сущность: гейт §5.2 проверяется на update, а не на create. */
 async function createOne(body?: string): Promise<{ entity: WireEntity; owner: string }> {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const input: Record<string, unknown> = { title: 'проба', tags: [] };
   if (body !== undefined) input.body = body;
   const entity = okFirst(await execute(db, req('entity_create', input, owner)));
@@ -866,7 +866,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
   });
 
   test('2. create с засевом заготовки проекта', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const entity = okFirst(
       await execute(
         db,

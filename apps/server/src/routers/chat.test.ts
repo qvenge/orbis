@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, globalThreadId, newId, processingMessageId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
@@ -42,7 +42,7 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
 
 describe('chat.ensureThread (§4.5)', () => {
   test('без entityId — глобальный тред с детерминированным id; вызов идемпотентен', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const t1 = await caller.chat.ensureThread({});
     expect(t1).toEqual({ threadId: globalThreadId(user) });
@@ -50,7 +50,7 @@ describe('chat.ensureThread (§4.5)', () => {
   });
 
   test('с entityId — тред сущности; несуществующая сущность → NOT_FOUND', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const e = await caller.entity.create({
       input: { title: 'Носитель треда', tags: [] },
@@ -66,7 +66,7 @@ describe('chat.ensureThread (§4.5)', () => {
 
 describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
   test('append → list по created_at DESC; limit и before; wire-таймстампы UTC Z', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
 
@@ -101,7 +101,7 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
   // ними не должна терять/задваивать. Старый ms-курсор (lt createdAt) исключал бы второе
   // (same ms) целиком — оно бы пропало со страницы 2.
   test('пагинация по границе двух сообщений с одинаковым createdAt — оба ровно один раз', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
 
@@ -143,7 +143,7 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
   // eq(created_at, <мс>) не совпадало и tie-break по id не работал: сообщения одной
   // миллисекунды пропадали на границе страниц. Колонка теперь timestamptz(3) (0003).
   test('пагинация не теряет сообщения, записанные одним now() (defaultNow, без явных дат)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
 
@@ -171,7 +171,7 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
   // Ревью Task 2: недоверенный before-курсор валидируется строгой regex ДО резолвера —
   // мусор и кривой uuid отбиваются чистым 400, а не 500 из Postgres (invalid uuid syntax).
   test('невалидный before-курсор → BAD_REQUEST (400), не 500', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const threadId = crypto.randomUUID();
     // id-часть не-uuid: без строгой валидации дошло бы до Postgres → 500
     const badId = await trpcError(
@@ -190,8 +190,8 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
   });
 
   test('чужой тред: append → NOT_FOUND (RLS: чужое и несуществующее неразличимы)', async () => {
-    const owner = freshUserId();
-    const stranger = freshUserId();
+    const owner = await freshGraph();
+    const stranger = await freshGraph();
     const { threadId } = await callerFor(owner).chat.ensureThread({});
     const err = await trpcError(
       callerFor(stranger).chat.appendUserMessage({ id: newId(), threadId, content: 'взлом' }),
@@ -225,7 +225,7 @@ describe('chat.listMessages: processing-маркеры ai.sendMessage не от�
   }
 
   test('живой маркер (цикл идёт) не виден в списке — пустого system-пузыря в окне рефетча нет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const msgId = newId();
@@ -238,7 +238,7 @@ describe('chat.listMessages: processing-маркеры ai.sendMessage не от�
   });
 
   test('«вечный» маркер краша (ответа нет, маркер не снят) не висит в треде навсегда', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const msgId = newId();
@@ -250,7 +250,7 @@ describe('chat.listMessages: processing-маркеры ai.sendMessage не от�
   });
 
   test('прочие system-сообщения (audit/undo) фильтр не задевает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const auditId = newId();
@@ -272,7 +272,7 @@ describe('chat.listMessages: processing-маркеры ai.sendMessage не от�
 
 describe('chat.listMessages: audit системной материализации скрыт (§5.4, fix round A3)', () => {
   test('материализующий batch (source=system) не в выдаче; журнал §7.8 цел; обычный audit виден', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
@@ -324,7 +324,7 @@ describe('chat.listMessages: audit системной материализаци
 
 describe('chat.appendUserMessage: идемпотентный повтор по client-UUID (fix round, зеркально §5.3)', () => {
   test('повтор с тем же id → 200, та же строка, счётчик сообщений не вырос', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const id = newId();
@@ -335,7 +335,7 @@ describe('chat.appendUserMessage: идемпотентный повтор по c
   });
 
   test('повтор с тем же id, но другим content → возвращается ИСХОДНАЯ строка', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const id = newId();
@@ -348,7 +348,7 @@ describe('chat.appendUserMessage: идемпотентный повтор по c
 
   test('id занят сообщением чужого пользователя → CONFLICT, без SQL-текста в message', async () => {
     // id занимает ЧУЖОЕ сообщение — под RLS оно невидимо второму пользователю
-    const stranger = freshUserId();
+    const stranger = await freshGraph();
     const strangerCaller = callerFor(stranger);
     const strangerThread = await strangerCaller.chat.ensureThread({});
     const id = newId();
@@ -358,7 +358,7 @@ describe('chat.appendUserMessage: идемпотентный повтор по c
       content: 'чужое',
     });
 
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const e = await trpcError(caller.chat.appendUserMessage({ id, threadId, content: 'моё' }));
@@ -372,7 +372,7 @@ describe('chat.appendUserMessage: идемпотентный повтор по c
 
 describe('ai.undo / ai.undoLast (§7.8)', () => {
   test('undoLast гасит последний create: сущность архивирована, actionId — отменённого действия', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: { title: 'Отменяемая', tags: [] },
@@ -399,7 +399,7 @@ describe('ai.undo / ai.undoLast (§7.8)', () => {
   });
 
   test('undo по actionId; повторная отмена → BAD_REQUEST (уже отменено)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     const created = await caller.entity.create({
       input: { title: 'Точечная отмена', tags: [] },

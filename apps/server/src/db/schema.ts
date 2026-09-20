@@ -18,20 +18,22 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-// Схема 19 таблиц: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
+// Схема 21 таблицы: одиннадцать исходных (docs/prd/01-architecture.md §4 — восемь §4.1–§4.8,
 // две таблицы доступа внешних агентов §4.13–§4.14 D34 в конце файла, entity_versions
-// ADE-среза 1) и восемь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
+// ADE-среза 1), восемь таблиц реформы свойств (§С6 спеки «Реформа свойств»): пять реестров,
 // таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5) —
-// они в конце файла, после исходных.
+// и две таблицы среза «Г — единица владения» (D44): `graphs` и `graph_members` в самом конце файла.
 // RLS-политики и сид аспектов — Слайс 1; здесь только структура, defaults, индексы, FK.
 // graph_id — ключ владения и изоляции (D44): строка принадлежит ГРАФУ. У личного графа id равен id
 // аккаунта Supabase по построению (CHECK таблицы graphs, срез Г-2). FK на auth-схему не объявляем —
-// она управляется Supabase, а не нашими миграциями; FK на graphs.id приезжает миграцией 0020.
+// она управляется Supabase, а не нашими миграциями; FK на graphs.id стоит с миграции 0020.
 
 // §4.1 entities
 export const entities = pgTable('entities', {
   id: uuid('id').primaryKey(), // UUIDv7, генерируется клиентом
-  graphId: uuid('graph_id').notNull(),
+  graphId: uuid('graph_id')
+    .notNull()
+    .references(() => graphs.id, { onDelete: 'no action' }),
   title: text('title').notNull(),
   emoji: text('emoji'),
   body: text('body').notNull().default(''),
@@ -145,7 +147,7 @@ export const aspectDefinitions = pgTable(
   'aspect_definitions',
   {
     id: text('id').notNull(), // namespaced: orbis/task, user/sleep
-    graphId: uuid('graph_id'), // NULL = встроенный аспект
+    graphId: uuid('graph_id').references(() => graphs.id, { onDelete: 'no action' }), // NULL = встроенный аспект
     // Машинная ручка §А2-3: из неё собирается имя тула attach_* (§А9-1). У встроенных = id.
     key: text('key').notNull(),
     label: jsonb('label').notNull(), // per-locale {ru, en} — подпись для человека
@@ -178,7 +180,9 @@ export const aspectDefinitions = pgTable(
 
 // §4.4 user_settings — имена столбцов настроек в camelCase (историческое соответствие коду)
 export const userSettings = pgTable('user_settings', {
-  graphId: uuid('graph_id').primaryKey(),
+  graphId: uuid('graph_id')
+    .primaryKey()
+    .references(() => graphs.id, { onDelete: 'no action' }),
   plan: text('plan').notNull().default('dev'),
   timezone: text('timezone').notNull().default('Europe/Moscow'),
   defaultCurrency: text('defaultCurrency').notNull().default('RUB'),
@@ -210,7 +214,9 @@ export const chatThreads = pgTable(
   'chat_threads',
   {
     id: uuid('id').primaryKey(), // детерминированный uuidv5, генерируется клиентом
-    graphId: uuid('graph_id').notNull(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
     entityId: uuid('entity_id').references(() => entities.id),
     title: text('title'),
     archived: boolean('archived').notNull().default(false),
@@ -245,7 +251,9 @@ export const chatMessages = pgTable('chat_messages', {
 export const aiUsage = pgTable(
   'ai_usage',
   {
-    graphId: uuid('graph_id').notNull(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
     date: date('date').notNull(), // календарный день в UTC
     model: text('model').notNull(),
     inputTokens: bigint('input_tokens', { mode: 'number' }).notNull().default(0),
@@ -260,7 +268,9 @@ export const entityOrigins = pgTable(
   'entity_origins',
   {
     id: uuid('id').primaryKey(),
-    graphId: uuid('graph_id').notNull(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
     entityId: uuid('entity_id')
       .notNull()
       .references(() => entities.id),
@@ -279,7 +289,9 @@ export const entityVersions = pgTable(
   'entity_versions',
   {
     id: uuid('id').primaryKey(), // UUIDv7, генерирует сервер (newId)
-    graphId: uuid('graph_id').notNull(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
     // cascade: версия — снимок ТЕЛА конкретной сущности, без неё она ничего не значит.
     // Держать снимки удалённой записи значит хранить текст, который человек уже стёр.
     entityId: uuid('entity_id')
@@ -314,7 +326,12 @@ export const agentGrants = pgTable(
   'agent_grants',
   {
     id: uuid('id').primaryKey(),
-    graphId: uuid('graph_id').notNull(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
+    // Аккаунт, выдавший грант (D44, спека §3.4–§3.5): актор путей без живого человека. NULLABLE до
+    // миграции 0021 — писатели появляются задачей Г-3, NOT NULL ставит Г-4 (Р-КГ-2).
+    issuedBy: uuid('issued_by'),
     // NULL у PAT: у headless-доступа нет зарегистрированного клиента
     clientId: text('client_id').references(() => oauthClients.clientId, { onDelete: 'cascade' }),
     kind: text('kind').notNull(), // oauth | pat
@@ -371,7 +388,7 @@ export const propertyDefinitions = pgTable(
     // Тождество, не меняется НИКОГДА. У встроенных — читаемая строка (`orbis/task_status`),
     // у пользовательских и приложений — uuid (Р3). На экране id — баг.
     id: text('id').notNull(),
-    graphId: uuid('graph_id'), // NULL = встроенное
+    graphId: uuid('graph_id').references(() => graphs.id, { onDelete: 'no action' }), // NULL = встроенное
     // Машинная ручка: имя параметра тула, текст запроса, MCP, канонический экспорт.
     // У встроенных изначально = id; меняется только релизом системы (№12).
     key: text('key').notNull(),
@@ -421,7 +438,7 @@ export const relationRoleDefinitions = pgTable(
   'relation_role_definitions',
   {
     id: text('id').notNull(),
-    graphId: uuid('graph_id'), // NULL = системная роль; свои роли — v1.5 (Ч7)
+    graphId: uuid('graph_id').references(() => graphs.id, { onDelete: 'no action' }), // NULL = системная роль; свои роли — v1.5 (Ч7)
     key: text('key').notNull(), // namespace НЕ обязателен: системные v1 — голые слаги
     label: jsonb('label').notNull(),
     description: jsonb('description').notNull(),
@@ -463,7 +480,7 @@ export const contractDefinitions = pgTable(
   'contract_definitions',
   {
     id: text('id').notNull(),
-    graphId: uuid('graph_id'), // v1 — только NULL: пользовательские контракты — v1.5 (Ч7)
+    graphId: uuid('graph_id').references(() => graphs.id, { onDelete: 'no action' }), // v1 — только NULL: пользовательские контракты — v1.5 (Ч7)
     key: text('key').notNull(),
     label: jsonb('label').notNull(),
     description: jsonb('description').notNull(),
@@ -490,7 +507,7 @@ export const subscriptionDefinitions = pgTable(
   'subscription_definitions',
   {
     id: text('id').notNull(),
-    graphId: uuid('graph_id'),
+    graphId: uuid('graph_id').references(() => graphs.id, { onDelete: 'no action' }),
     surface: text('surface').notNull(), // поверхность-потребитель: agenda, budget, …
     definition: jsonb('definition').notNull(), // декларация подписки (§Б5)
     module: text('module'),
@@ -510,7 +527,7 @@ export const actionDefinitions = pgTable(
   'action_definitions',
   {
     id: text('id').notNull(),
-    graphId: uuid('graph_id'),
+    graphId: uuid('graph_id').references(() => graphs.id, { onDelete: 'no action' }),
     key: text('key').notNull(),
     label: jsonb('label').notNull(),
     description: jsonb('description').notNull(),
@@ -545,7 +562,9 @@ export const registryDeltas = pgTable(
   'registry_deltas',
   {
     id: uuid('id').primaryKey(),
-    graphId: uuid('graph_id').notNull(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
     targetKind: text('target_kind').notNull(),
     targetId: text('target_id').notNull(),
     baseVersion: integer('base_version').notNull(),
@@ -604,7 +623,9 @@ export const envelopeSpentCache = pgTable(
     envelopeId: uuid('envelope_id')
       .notNull()
       .references(() => entities.id, { onDelete: 'cascade' }),
-    graphId: uuid('graph_id').notNull(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
     asOf: date('as_of').notNull(),
     spent: numeric('spent').notNull(),
     ownerVersion: integer('owner_version').notNull(),
@@ -615,5 +636,52 @@ export const envelopeSpentCache = pgTable(
     primaryKey({ columns: [t.envelopeId, t.asOf] }),
     // Снос по владельцу (property_merge, undo) и отчёт `reset-world` ходят по graph_id.
     index('envelope_spent_cache_graph').on(t.graphId, t.asOf),
+  ],
+);
+
+// §3.1 спеки «граф как единица владения» (D44): граф — вещь со своим владельцем в записи.
+// Личный граф — частный случай: owner_kind = 'person' и id = owner_ref = id аккаунта; это тождество
+// держит CHECK, а «один личный граф на аккаунт» (И-3) следует из PK. У organization owner_ref
+// допускает NULL — на что он ссылается, решает ступень 2. FK на auth.users не объявляем (см. шапку файла).
+export const graphs = pgTable(
+  'graphs',
+  {
+    id: uuid('id').primaryKey(),
+    ownerKind: text('owner_kind').notNull(), // person | organization (v1 — только person)
+    ownerRef: uuid('owner_ref'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('graphs_owner_kind', sql`${t.ownerKind} IN ('person','organization')`),
+    // `owner_ref IS NOT NULL` обязателен: без него выражение для person с пустым owner_ref даёт
+    // NULL, а CHECK на NULL проходит — личный граф без тождества id (эррата Э-3 плана среза Г).
+    check(
+      'graphs_personal_identity',
+      sql`(${t.ownerKind} = 'person' AND ${t.ownerRef} IS NOT NULL AND ${t.id} = ${t.ownerRef}) OR ${t.ownerKind} = 'organization'`,
+    ),
+  ],
+);
+
+// §3.2: грант аккаунта на граф. id — суррогатный: история отзывов не затирается повторной выдачей.
+// Не сливается с agent_grants (там OAuth-механика); общая надстройка — ступень 2.
+export const graphMembers = pgTable(
+  'graph_members',
+  {
+    id: uuid('id').primaryKey(),
+    graphId: uuid('graph_id')
+      .notNull()
+      .references(() => graphs.id, { onDelete: 'no action' }),
+    accountId: uuid('account_id').notNull(), // аккаунт Supabase; FK на auth не объявляем
+    grantKind: text('grant_kind').notNull(), // owner | operator | observer (`grant` — слово SQL)
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull().defaultNow(),
+    issuedBy: uuid('issued_by').notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('graph_members_active_uniq')
+      .on(t.graphId, t.accountId)
+      .where(sql`${t.revokedAt} IS NULL`),
+    index('graph_members_account').on(t.accountId),
+    check('graph_members_grant_kind', sql`${t.grantKind} IN ('owner','operator','observer')`),
   ],
 );

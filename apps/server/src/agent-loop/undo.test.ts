@@ -11,7 +11,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { globalThreadId, newId, type RunStepResult } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
@@ -55,7 +55,7 @@ afterAll(async () => {
 });
 
 describe('«отмени последнее» гасит шаг агента (приёмка 14, §7.8)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   const ownerCaller = createCaller({
     actorUserId: owner,
     actorKind: 'owner',

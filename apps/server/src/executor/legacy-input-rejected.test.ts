@@ -19,7 +19,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from './executor';
 import type { ExecuteRequest } from './types';
@@ -27,7 +27,7 @@ import type { ExecuteRequest } from './types';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 
 beforeAll(async () => {
   await truncateAll();

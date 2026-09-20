@@ -10,7 +10,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -185,7 +185,7 @@ async function materializeOne(user: string, templateId: string, date: string): P
 
 describe('postDueInstances (03-budget §2.8): переход planned→fact', () => {
   test('due-инстанс (occurred_on=today): planned=false, привязан к конверту, входит в spent; batch системный с детерминированным id', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const envelopeId = await createEnvelope(user, cat);
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
@@ -225,7 +225,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
   });
 
   test('будущий инстанс, ручная planned-покупка и шаблон не тронуты; просроченный (occurred_on < today) постится', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const envelopeId = await createEnvelope(user, cat);
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
@@ -283,7 +283,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
   });
 
   test('повторный вызов идемпотентен: posted не растёт; после ручного возврата planned=true — replay по audit-PK, ничего не применяется', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     await createEnvelope(user, cat);
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
@@ -316,7 +316,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
   });
 
   test('архивированный заранее инстанс не постится (приёмка 03-budget §7.2)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     await createEnvelope(user, cat);
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
@@ -332,7 +332,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
   });
 
   test('Undo перехода: восстанавливает planned=true И прежнюю привязку одним undoAction; повтор postDue после Undo не пере-постит', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const envelopeId = await createEnvelope(user, cat);
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
@@ -387,7 +387,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
   test('гонка: два конкурентных вызова с двух «устройств» → ровно один action в журнале', async () => {
     const iterations = 8;
     for (let i = 0; i < iterations; i++) {
-      const user = freshUserId();
+      const user = await freshGraph();
       const cat = newId();
       const envelopeId = await createEnvelope(user, cat);
       const templateId = await createFinTemplate(user, cat, '2026-07-01');
@@ -414,7 +414,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
   //  • ЕСТЬ аспект, но `planned` не стоит: граница РП-9 «отсутствие = false». Ослабь её —
   //    и переход применился бы к обычному факту, ещё раз привязав его к конверту.
   test('снятый аспект финансов и не-planned инстанс переход не получают (Р9, РП-9)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const detached = newId();
     const notPlanned = newId();
@@ -480,7 +480,7 @@ describe('tRPC budget.postDue (заготовка роутера, наполне
   // сьютов трёх пакетов ответы приходят медленнее лимита — падение было по нетерпению,
   // а не по ошибке (изолированно тест зелёный). Замерено за срез Ш1, 2026-08-20/21.
   test('владелец: постит due-инстансы на локальное «сегодня» (user_settings.timezone); агенту — FORBIDDEN', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     // «Сегодня» в дефолтной таймзоне (user_settings нет → Europe/Moscow), как в A3
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(

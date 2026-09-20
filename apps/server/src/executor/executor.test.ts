@@ -15,7 +15,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -50,8 +50,8 @@ const seededProjectBody = (id: string): string =>
   serializeBody(bindQueryBlocks(parseBody(projectBodyTemplate(id)), FIXTURE_PARSE_REGISTRY));
 
 const { db, client } = appDb();
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 const CATEGORY_REF = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 const T0 = new Date('2026-07-04T10:00:00.000Z');
 const T1 = new Date('2026-07-04T11:30:00.000Z');

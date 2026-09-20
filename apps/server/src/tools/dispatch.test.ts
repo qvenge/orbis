@@ -20,7 +20,8 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   rawEntityRow,
   requireEnv,
   seedCustomAspect,
@@ -54,8 +55,8 @@ import { REGISTRY_TOOL_NAMES } from './registry-tools';
 requireEnv();
 
 const { db, client } = appDb();
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 const CATEGORY_REF = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 /**
  * Своя категория для userC. С §А6-1 ссылка обязана указывать на категорию ТОГО ЖЕ
@@ -538,7 +539,7 @@ describe('LLM-контракты entity_create/entity_update на свойств
   });
 
   test('entity_query печатает props по KEY, без meta и без карты аспектов (§А9-2)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     // Обе стороны границы в фикстуре: встроенное свойство (key = id) и СВОЁ, у которого
     // key и id РАЗНЫЕ, — только на втором видно, что печатается именно key.
     const admin = adminDb();
@@ -639,7 +640,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     // Minor-4 Task 6 закрыт не только протоколом pendingNote, но и БД: pendingId
     // детерминирован по batch_id (pendingMessageId) → повтор того же batch = ON CONFLICT.
     // Свежий владелец — глобальный тред пуст, поэтому счёт pending-карточек точен.
-    const user = freshUserId();
+    const user = await freshGraph();
     const ctx = ctxFor({ actorUserId: user });
     const target = await seedEntity(user, { title: 'Цель дедупа pending', tags: [] });
     const globalThreadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
@@ -1022,7 +1023,7 @@ describe('dispatchTool: import_csv_start — вход в импорт из ча�
 describe('dispatchTool: undo_last — «отмени последнее» словами в чате (хвост V1, Д-1; §7.8)', () => {
   // Свой владелец: «последнее» считается по ВСЕМУ журналу владельца, и общий userA дал бы
   // порядок, зависящий от соседних describe
-  const userU = freshUserId();
+  const userU = mintGraph();
   const chat = (over: Partial<ToolCallCtx> = {}) => ctxFor({ actorUserId: userU, ...over });
 
   async function archivedOf(id: string): Promise<boolean | undefined> {
@@ -1246,7 +1247,7 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
 describe('dispatchTool: user_query материализует окно запроса (обязательство ревью A3, §5.4)', () => {
   // Свой пользователь: до вызова user_query у него НЕТ ни одного инстанса — сумма
   // видна только если сам вызов материализовал окно (тот же каркас, что entity_query)
-  const userC = freshUserId();
+  const userC = mintGraph();
   const tz = 'Europe/Moscow'; // дефолт queryContext без строки user_settings
   const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
   const tomorrow = (() => {
@@ -1414,7 +1415,7 @@ describe('dispatchTool: thread_post — сообщение в тред сущн�
 // ---------------------------------------------------------------------------
 
 describe('dispatchTool: скоуп worker — fail-closed гейт доступа (С7, §4.14)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   let grantId: string;
   let ticket: WireEntity;
   let project: WireEntity;
@@ -1648,7 +1649,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
  * фонового прогона нет человека, который нажал бы «подтвердить».
  */
 describe('dispatchTool: глаголы исполнителя никогда не дают pending (инвариант 4, §9.3)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   let grantId: string;
   let projectId: string;
 
@@ -3553,7 +3554,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   }
 
   test('лимит routines.max: вторая рутина → LIMIT; limit null — без ограничений', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const first = await seedEntity(owner, { title: 'Утренний обзор', tags: [] });
     const second = await seedEntity(owner, { title: 'Вечерний разбор', tags: [] });
     const oneRoutine = ctxFor({
@@ -3604,7 +3605,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   // читает гейт лимита» поведением не наблюдаемо; здесь они говорят разное, и читатель
   // старой карты пропустил бы вторую рутину сверх лимита.
   test('лимит считает рутину, объявленную только новой формой — и её же правку лимитом не считает', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const ghostRoutine = newId();
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values(
@@ -3654,7 +3655,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // Группа исполняется целиком и уровнем preview (§7.10) — то есть СРАЗУ. Проверка
     // «сейчас рутин меньше лимита» пропустила бы batch, переваливающий за лимит всеми
     // своими операциями вместе: с limit 1 и нулём рутин завелись бы обе.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const oneRoutine = ctxFor({
       actorUserId: owner,
       entitlements: () => ({ allowed: true, limit: 1 }),
@@ -4019,7 +4020,7 @@ describe('отложка небезопасного действия рутин�
   }
 
   test('рутина act: архивация записи → pending kind:action с предусловием archived in:[false] и снимком заголовка в карточке; модели вернулся pending_confirmation с pendingId; прогон-журнал §7.8 пуст (приёмка 2)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     // Тред вызова НАРОЧНО чужой: единица ложится в тред РУТИНЫ (V1.6) — там, где владелец
     // читает её историю, — а не туда, куда пишет audit текущего вызова
     const host = await seedEntity(owner, { title: 'Посторонний тред', tags: [] });
@@ -4071,7 +4072,7 @@ describe('отложка небезопасного действия рутин�
   });
 
   test('ретрай того же вызова (в т.ч. с переставленными ключами JSON) → тот же pendingId, второй карточки нет (приёмка 15)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await deferCtx(owner);
     const target = await seedEntity(owner, { title: 'Цель ретрая', tags: [] });
 
@@ -4090,7 +4091,7 @@ describe('отложка небезопасного действия рутин�
   });
 
   test('ретрай ПОСЛЕ правки цели владельцем → тот же pendingId и ПЕРВЫЙ снимок предусловий: личность единицы считается от ИСХОДНОГО payload модели, а предусловия не переснимаются (ОЧ.13, §9.4)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await deferCtx(owner);
     const target = await seedEntity(owner, {
       title: 'Цель, которую тронули между попытками',
@@ -4146,7 +4147,7 @@ describe('отложка небезопасного действия рутин�
   });
 
   test('11-я открытая единица → VALIDATION «пачка полна» с reason run_units_cap; ретрай уже стоящей единицы кап НЕ отвергает (Р-15); прогон может продолжаться (приёмка 16)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await deferCtx(owner);
     const ids: string[] = [];
     for (let i = 0; i < 10; i++) {
@@ -4182,7 +4183,7 @@ describe('отложка небезопасного действия рутин�
     // Предусловие архивации ставится ЛИТЕРАЛОМ `in:[false]`, а не снимком. Если цель уже
     // в архиве, карточка родилась бы с «было: false» — ЛОЖЬЮ владельцу — и с заведомым
     // CONFLICT на «Принять», а модель считала бы единицу поставленной
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await deferCtx(owner);
     const target = await seedEntity(owner, { title: 'Уже в архиве', tags: [] });
     const own = await execute(db, {
@@ -4204,7 +4205,7 @@ describe('отложка небезопасного действия рутин�
   test('отложка с несуществующим id цели → NOT_FOUND на диспатче, pending не создан', async () => {
     // Отказ обязан прийти МОДЕЛИ, здесь и сейчас, а не владельцу на кнопке «Принять»:
     // регресс, уносящий его на approve, без этого пина прошёл бы незаметно
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await deferCtx(owner);
     const r = await dispatchTool(ctx, 'entity_update', { id: newId(), archived: true });
     expectError(r, 'NOT_FOUND');
@@ -4212,7 +4213,7 @@ describe('отложка небезопасного действия рутин�
   });
 
   test('«Принять» отложенную архивацию после изменения цели → stale с mismatches (предусловия сняты при постановке и не переснимаются — ОЧ.13, §9.4)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx } = await deferCtx(owner);
     const target = await seedEntity(owner, { title: 'Цель, которую тронул владелец', tags: [] });
 
@@ -4241,7 +4242,7 @@ describe('отложка небезопасного действия рутин�
   test('чат/MCP: ветка createPending байт-в-байт прежняя (dedupeKey batch-only, карточка confirmation_card)', async () => {
     // Отложка — рычаг ТОЛЬКО фона: у чата и MCP за карточкой стоит владелец, который
     // смотрит на неё сейчас, и ни единицей пачки, ни дедупом по содержимому она не стала
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const host = await seedEntity(owner, { title: 'Хост-тред', tags: [] });
     const threadId = await withIdentity(db, owner, (tx) => ensureEntityThread(tx, owner, host.id));
     const target = await seedEntity(owner, { title: 'Цель чата', tags: [] });
@@ -4387,7 +4388,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   }
 
   test('property_create proposed из чата (actor model) → preview: исполнено + карточка; от владельца через UI-роутер → execute без карточки', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const input = {
       label: { ru: 'Усилие' },
@@ -4433,7 +4434,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   });
 
   test('property_merge из чата → explicit-confirmation: карточка-запрос, реестр НЕ тронут; approve исполняет', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
@@ -4477,7 +4478,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Довод — тот же, по которому фикс-раунд 3 Задачи 12 переводил ветку инструкции со
     // «вместо» на «склеиваются»: владелец подписывает ВСЁ, что подняло уровень. Здесь
     // поводов два и они из разных ветвей — реестр (ряд 4a §С2-1) и автономия (V1.10).
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
@@ -4511,7 +4512,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   });
 
   test('property_merge от рутины (садовник) → отложенная единица пачки D42 в треде рутины, прогон продолжается', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
     const { ctx, routineId, runId, threadId } = await gardener(owner, ['property_merge']);
@@ -4556,7 +4557,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   });
 
   test('property_update(status) от рутины — тоже отложенная единица: «было → станет» по полю патча', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const target = await ownProperty(owner, 'Черновое свойство');
     const { ctx, threadId } = await gardener(owner, ['property_update']);
 
@@ -4576,7 +4577,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // виден модели по белому списку, промпт `routine-v3` прямо велит им пользоваться, а PRD
     // §7.10 обещает «свои строки владельца откладываются» — до этой правки все трое
     // обещали путь, которому был гарантирован отказ по уровню.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await gardener(owner, ['property_create']);
 
     const r = await dispatchTool(ctx, 'property_create', {
@@ -4603,7 +4604,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('property_update{label} (без status) от рутины — тоже отложенная единица, а не отказ', async () => {
     // Сосед зелёного теста про `status` выше: тот же тул, тот же белый список, разница
     // только в поле патча — и она меняла исход с отложки на `FORBIDDEN_LEVEL`.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const target = await ownProperty(owner, 'Усилие');
     const { ctx, threadId } = await gardener(owner, ['property_update']);
 
@@ -4624,7 +4625,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // отклонённого неиспользованного `proposed` освобождается физическим удалением строки
     // (`freeKey`). Единица, поставленная по key, применилась бы к ОДНОФАМИЛЬЦУ, о котором на
     // карточке не было ни слова, — молча и необратимо.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx } = await gardener(owner, ['property_update']);
     const first = await execute(db, {
       actorUserId: owner,
@@ -4693,7 +4694,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Тот же «однофамилец», что у отложенной единицы (тест выше), но по чатовому пути:
     // `property_update{status}` от AI даёт `explicit-confirmation` → карточка в треде, и она
     // ждёт решения владельца дольше всего. Первоисточник (A5-Minor-1) называл ОБЕ точки.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const first = await execute(db, {
       actorUserId: owner,
@@ -4762,7 +4763,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // чужих модулей»): в срезе А из перечисленного достижимы встроенные строки реестра —
     // `implements` пустует до части Б, роли тулами не адресуются (см. юнит-тест-tripwire в
     // `confirmation.test.ts`). Правило написано по АДРЕСУ объекта и накрывает их все.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await gardener(owner, ['aspect_delta_set', 'aspect_delta_remove']);
 
     for (const [tool, input] of [
@@ -4793,7 +4794,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // `routineGate` и связи выше: рубеж, который никто не проверил, — это рубеж, которого нет.
     // Диспатч доведёт до него сам, как только тул появится: уровень `system-object` поднимает
     // ряд 4a до explicit, а `level !== 'execute'` включает пре-чек.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const ctx = ctxFor({ actorUserId: owner, actorKind: 'agent', source: 'routine' });
     const forbidden = async (tool: string, input: Record<string, unknown>) =>
       routineDeferForbidden(
@@ -4839,7 +4840,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Р9 в одном тесте: та же цель, тот же тул, разное содержимое правки — и разный исход.
     // Карта классов это ПОВЕДЕНИЕ («какие значения считаются закрытыми»), а не системный объект;
     // адресное правило дало бы запрет по объекту и закрыло бы садовнику §Б5-2 законный путь.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await gardener(owner, ['aspect_delta_set']);
     const r = await dispatchTool(ctx, 'aspect_delta_set', {
       aspect: 'orbis/task',
@@ -4873,7 +4874,7 @@ describe('§С2-1: мутации реестра — уровень подтве
 
   test('тот же aspect_delta_set из ЧАТА → карточка-запрос, а не молчаливое исполнение', async () => {
     // Запрет по объекту адресован ФОНУ; в чате владелец стоит рядом и решает карточкой.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'aspect_delta_set', {
       aspect: 'orbis/task',
@@ -4887,7 +4888,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   });
 
   test('subscription_set от рутины → отложенная единица пачки, реестр не тронут (ряд 2 живьём)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, runId, routineId, threadId } = await gardener(owner, ['subscription_set']);
     const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
     const r = await dispatchTool(ctx, 'subscription_set', {
@@ -4916,7 +4917,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   });
 
   test('subscription_set с сырой ссылкой {prop} — строка raw_value в отложенной единице (§Б5-2, пометка диффа Ш1)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx } = await gardener(owner, ['subscription_set']);
     const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
       ?.definition as AgendaSubscription;
@@ -4950,7 +4951,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('contract_sets_delta_set поверх ВСТРОЕННОГО контракта от рутины — отложенная единица, НЕ запрет (Р9)', async () => {
     // Р9 дословно: ряд §С2-1 определяется ТУЛОМ. Адресное правило дало бы `system-object` и
     // закрыло бы законный путь садовника §Б5-2 наглухо — этот тест сторожит именно его.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await gardener(owner, ['contract_sets_delta_set']);
     const r = await dispatchTool(ctx, 'contract_sets_delta_set', {
       contract: 'orbis/completable',
@@ -4978,7 +4979,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Этот тест ЗЕЛЁН с самого начала — ветку сводки положила задача 14, — и стоит он здесь не
     // ради неё, а ради ЖИВОГО пути: юнит задачи 14 зовёт `registryOperationSummary` напрямую и
     // не отвечает на вопрос, доносит ли её до карточки чата сам диспатч.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const r = await dispatchTool(
       ctxFor({ actorUserId: owner, threadId }),
@@ -4996,7 +4997,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('MCP-агент с полным грантом отвечает так же, как чат: правила §7.10 едины (§9.3)', async () => {
     // Классификатор по `source` не ветвится намеренно — внешний агент не должен получать
     // более широкие права, придя другим транспортом. Пин на обоих концах шкалы.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
@@ -5034,7 +5035,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Ряды `reconfiguresOf` для трёх имён завела задача 14 (Р-К-15) — тест не пишет второй
     // копии правила, а проверяет его ЖИВЬЁМ, через диспатч: падение здесь означало бы
     // нарушенный порядок 14 → 15, а не повод переписывать классификатор.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const { ctx, threadId } = await gardener(owner, ['aspect_implements_set']);
     const r = await dispatchTool(ctx, 'aspect_implements_set', {
       aspect: 'orbis/task',
@@ -5047,7 +5048,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   });
 
   test('aspect_create из чата от модели — preview: своя строка исполнена и показана карточкой', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'aspect_create', {
       key: 'user/from-chat',
@@ -5067,7 +5068,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   });
 
   test('снимок единицы: тулы аспектов дают адресные строки, а не родовую «тул → конверт»', async () => {
-    const own = freshUserId();
+    const own = await freshGraph();
     const snap = await withIdentity(db, own, (tx) =>
       snapshotRegistryUnit(tx, own, 'aspect_implements_remove', {
         aspect: 'user/gig',
@@ -5080,7 +5081,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('снимок единицы, ветка set: «было» читается из БД, пустой список даёт «—»', async () => {
     // Вторая ветка того же `case` — та, что ЧИТАЕТ прежнее состояние (`readOwnAspect`).
     // Тест выше её не задевал: у `remove` «было» это сам снимаемый контракт, и запроса нет.
-    const own = freshUserId();
+    const own = await freshGraph();
     const run = (tool: string, input: unknown) =>
       execute(db, {
         actorUserId: own,

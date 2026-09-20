@@ -3,7 +3,18 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(97);
+SELECT plan(125);
+
+-- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
+-- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
+INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-00000000000a', 'person', '00000000-0000-4000-8000-00000000000a'),
+  ('00000000-0000-4000-8000-00000000000b', 'person', '00000000-0000-4000-8000-00000000000b');
+INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALUES
+  ('00000000-0000-7000-8000-0000000000ac', '00000000-0000-4000-8000-00000000000a',
+   '00000000-0000-4000-8000-00000000000a', 'owner', '00000000-0000-4000-8000-00000000000a'),
+  ('00000000-0000-7000-8000-0000000000bc', '00000000-0000-4000-8000-00000000000b',
+   '00000000-0000-4000-8000-00000000000b', 'owner', '00000000-0000-4000-8000-00000000000b');
 
 -- Фикстуры под ролью с BYPASSRLS (обходит RLS; postgres здесь НЕ суперпользователь)
 INSERT INTO entities (id, graph_id, title) VALUES
@@ -108,7 +119,8 @@ INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_ver
   ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a', '2026-09-01', 100, 0, 1),
   ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b', '2026-09-01', 200, 0, 1);
 
--- 1) RLS включён и FORCE на всех 19 таблицах (11 исходных + 7 реестров реформы 0014 + кэш spent 0018)
+-- 1) RLS включён и FORCE на всех 21 таблице (11 исходных + 7 реестров реформы 0014 + кэш spent 0018
+--    + graphs и graph_members 0020)
 SELECT is(
   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind = 'r'
@@ -118,9 +130,9 @@ SELECT is(
                        'property_definitions','relation_role_definitions',
                        'contract_definitions','subscription_definitions',
                        'action_definitions','registry_deltas','registry_system',
-                       'envelope_spent_cache')
+                       'envelope_spent_cache','graphs','graph_members')
      AND c.relrowsecurity AND c.relforcerowsecurity),
-  19, 'RLS ENABLE+FORCE на всех девятнадцати таблицах');
+  21, 'RLS ENABLE+FORCE на всех двадцати одной таблице');
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
@@ -697,6 +709,97 @@ SELECT results_eq($$SELECT count(*)::int FROM property_definitions WHERE id LIKE
 SELECT results_eq('SELECT count(*)::int FROM registry_deltas', ARRAY[0],
   'без identity: registry_deltas — 0 строк');
 RESET ROLE;
+
+-- ── Пины имён после 0019 (5 проверок; правка 21.09 по гейт-ревью Г-1, Р-ИГ-5) ────────────────
+-- Пять имён, которых RENAME COLUMN не касается (Ф-Г-7), переименованы миграцией 0019 поимённо, и до
+-- этого блока их не держало НИЧТО в CI: drizzle-kit generate CI не гоняет, perf-сьюты вне CI (Ф-Г-19),
+-- а `chat_threads_graph` не пинил вообще никто. Ошибка в имени тиха: индекс остаётся, запрос работает,
+-- расходится только docblock и пин перфа — и находится это через месяцы.
+SELECT has_index('public', 'entities', 'entities_graph_updated', 'индекс упорядоченного чтения списка');
+SELECT has_index('public', 'chat_threads', 'chat_threads_graph', 'индекс тредов по графу');
+SELECT has_index('public', 'agent_grants', 'agent_grants_graph', 'индекс грантов агентов по графу');
+SELECT has_index('public', 'envelope_spent_cache', 'envelope_spent_cache_graph', 'индекс кэша конвертов по графу');
+SELECT col_is_pk('public', 'ai_usage', ARRAY['graph_id','date','model'], 'PK ai_usage — по графу, дате и модели');
+
+-- ── Группа 20: graphs (спека §3.6) ─────────────────────────────────────────────────────────
+RESET ROLE;
+-- И-2 держит ОТСУТСТВИЕ ПОЛИТИК, а не отсутствие права: право выдаём здесь (транзакция откатится) и
+-- требуем ноль задетых строк — такая проверка верна в любом окружении (урок группы 9, :298-322).
+GRANT UPDATE, DELETE ON graphs, graph_members TO authenticated;
+SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
+    AND tablename IN ('graphs','graph_members') AND cmd IN ('UPDATE','DELETE','ALL')),
+  0, 'И-2: у graphs и graph_members нет ни одной политики UPDATE/DELETE/ALL');
+SELECT throws_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-0000000000d1', 'person', '00000000-0000-4000-8000-0000000000d2')$$,
+  '23514', NULL, 'CHECK: у личного графа id = owner_ref');
+SELECT throws_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-0000000000d1', 'person', NULL)$$,
+  '23514', NULL, 'CHECK: person с пустым owner_ref — отказ (без IS NOT NULL выражение дало бы NULL)');
+SELECT lives_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-0000000000d3', 'organization', NULL)$$,
+  'organization с NULL в owner_ref зарезервирован для ступени 2');
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT count(*)::int FROM graphs', ARRAY[1], 'A видит ровно свой граф');
+SELECT results_eq($$SELECT count(*)::int FROM graphs WHERE id = '00000000-0000-4000-8000-00000000000b'$$,
+  ARRAY[0], 'граф без гранта невидим');
+WITH u AS (UPDATE graphs SET owner_kind = 'organization' RETURNING 1)
+SELECT is((SELECT count(*)::int FROM u), 0, 'И-2: даже с правом UPDATE граф неизменяем — политики нет');
+WITH d AS (DELETE FROM graphs RETURNING 1)
+SELECT is((SELECT count(*)::int FROM d), 0, 'И-2: даже с правом DELETE граф не удалить — политики нет');
+RESET ROLE;
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000c","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+SELECT throws_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-0000000000d4', 'person', '00000000-0000-4000-8000-0000000000d4')$$,
+  '42501', NULL, 'INSERT чужого личного графа — отказ политики');
+SELECT throws_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-00000000000c', 'organization', '00000000-0000-4000-8000-00000000000c')$$,
+  '42501', NULL, 'INSERT organization под authenticated — отказ политики (v1 — только person)');
+SELECT lives_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-00000000000c', 'person', '00000000-0000-4000-8000-00000000000c')$$,
+  'В заводит свой личный граф: id = owner_ref = auth.uid()');
+
+-- ── Группа 21: graph_members ───────────────────────────────────────────────────────────────
+SELECT throws_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALUES
+  (gen_random_uuid(), '00000000-0000-4000-8000-00000000000c', '00000000-0000-4000-8000-00000000000c',
+   'operator', '00000000-0000-4000-8000-00000000000c')$$,
+  '42501', NULL, 'себя можно вписать только как owner');
+SELECT throws_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALUES
+  (gen_random_uuid(), '00000000-0000-4000-8000-00000000000a', '00000000-0000-4000-8000-00000000000c',
+   'owner', '00000000-0000-4000-8000-00000000000c')$$,
+  '42501', NULL, 'самовыдача членства в ЧУЖОЙ граф — отказ');
+SELECT throws_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALUES
+  (gen_random_uuid(), '00000000-0000-4000-8000-00000000000c', '00000000-0000-4000-8000-00000000000b',
+   'owner', '00000000-0000-4000-8000-00000000000c')$$,
+  '42501', NULL, 'вписать ДРУГОЙ аккаунт в свой граф — отказ (приглашения — ступень 2)');
+SELECT lives_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALUES
+  (gen_random_uuid(), '00000000-0000-4000-8000-00000000000c', '00000000-0000-4000-8000-00000000000c',
+   'owner', '00000000-0000-4000-8000-00000000000c')$$,
+  'В вписывает себя owner своего личного графа');
+SELECT results_eq('SELECT count(*)::int FROM graph_members', ARRAY[1], 'В видит ровно свою строку членства');
+SELECT results_eq('SELECT count(*)::int FROM graphs', ARRAY[1], 'после гранта свой граф виден');
+WITH u AS (UPDATE graph_members SET revoked_at = now() RETURNING 1)
+SELECT is((SELECT count(*)::int FROM u), 0, 'пути отзыва у authenticated в v1 нет: политики UPDATE нет');
+WITH d AS (DELETE FROM graph_members RETURNING 1)
+SELECT is((SELECT count(*)::int FROM d), 0, 'и политики DELETE нет — иначе самовыдача и самоотзыв членства');
+RESET ROLE;
+SELECT throws_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALUES
+  (gen_random_uuid(), '00000000-0000-4000-8000-00000000000a', '00000000-0000-4000-8000-00000000000a',
+   'owner', '00000000-0000-4000-8000-00000000000a')$$,
+  '23505', NULL, 'второй ДЕЙСТВУЮЩИЙ грант той же пары — отказ частичной уникальности');
+
+-- ── Группа 22: планировщик читает членство (структурно — образец группы 11, :388-417) ────────
+SELECT policy_cmd_is('public', 'graph_members', 'scheduler_reads_members', 'SELECT',
+  'политика планировщика — только SELECT');
+SELECT policy_roles_are('public', 'graph_members', 'scheduler_reads_members', ARRAY['orbis_app']::name[],
+  'политика планировщика выдана ровно orbis_app');
+SELECT ok(has_table_privilege('orbis_app', 'public.graph_members', 'SELECT'),
+  'orbis_app читает graph_members (без гранта — 42501 до всякой политики)');
+-- Пиним НАЛИЧИЕ нужного права; отсутствие лишних не пиним (правило :411-415) — запрет записи под
+-- orbis_app держит поведением серверный тест db/graphs-policies.test.ts.
 
 SELECT finish();
 ROLLBACK;

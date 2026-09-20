@@ -1,4 +1,5 @@
 // apps/server/test/helpers.ts
+import { beforeAll } from 'bun:test';
 import type { LocalizedText, PropertyType } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { type Db, makeDb } from '../src/db/client';
@@ -36,9 +37,87 @@ export function adminDb() {
   }
 }
 
-/** Случайный owner: FK на auth.users не объявлен (решение 1 плана), строка в auth не нужна. */
-export function freshUserId(): string {
-  return crypto.randomUUID();
+/**
+ * Личности тестового процесса: id личных графов (они же id аккаунтов), выданные хелперами ниже.
+ *
+ * ЗАЧЕМ РЕЕСТР. С FK `graph_id → graphs.id` (0020) владельца «из воздуха» больше не бывает: строка
+ * графа обязана существовать до первой записи. Но 120 из 577 выдач id происходят СИНХРОННО — на
+ * уровне модуля и в теле `describe`, где `await` невозможен, — а десятки файлов держат модульного
+ * владельца И зовут `truncateAll()` в `beforeAll`: граф, заведённый при выдаче id, был бы снесён
+ * до первого теста. Поэтому выдача id и появление строк разведены: `mintGraph()` только
+ * регистрирует, а строки доводит до базы `ensureGraphs()` — его зовёт `truncateAll()` своим
+ * последним действием («мир пуст, личности процесса на месте») и `freshGraph()` сразу.
+ * Сам `truncateAll()` графы личностей процесса не трогает — сносит только чужие (см. его докблок).
+ *
+ * ПОЧЕМУ `mintGraph()` ЕЩЁ И ВЕШАЕТ ХУК. Тела `describe` в Bun 1.2.7 исполняются НЕ при сборе
+ * файла: до первого хука успевает отработать только ПЕРВОЕ тело, остальные идут уже после
+ * `beforeAll` файла (проверено 21.09 отдельным тестом порядка). Значит id, выданный в теле
+ * второго и следующих `describe`, к моменту `truncateAll()` файла ещё не существовал, и его
+ * графа в базе не будет — первая же запись упала бы на FK. Поэтому `mintGraph()` регистрирует
+ * `beforeAll(ensureGraphs)` в ТЕКУЩЕЙ области: у модульного вызова это область файла (хук встаёт
+ * перед `truncateAll` файла и дублируется его же хвостом), у вызова в теле `describe` — область
+ * этого `describe`, то есть ПОСЛЕ внешнего `truncateAll`. Повторы бесплатны: `ensureGraphs`
+ * доводит до базы только то, чего там ещё нет (`PRESENT`).
+ */
+const MINTED = new Set<string>();
+
+/**
+ * Что из `MINTED` уже лежит в базе. Не сбрасывается никогда: `truncateAll()` личности процесса
+ * не сносит (см. его докблок). Без этого счёта сотни хуков `ensureGraphs` гоняли бы по две
+ * вставки на ~600 id каждый.
+ */
+const PRESENT = new Set<string>();
+
+/** Синхронно: id личного графа, строк в базе ещё нет — их заведёт `ensureGraphs()`/`truncateAll()`. */
+export function mintGraph(id: string = crypto.randomUUID()): string {
+  MINTED.add(id);
+  // Регистрация вне фазы сбора (например, из тела теста) ничего не ломает: bun такой хук
+  // просто не исполнит, а нужные строки к тому моменту уже доведены более ранним хуком.
+  beforeAll(ensureGraphs);
+  return id;
+}
+
+/** Свежий личный граф с грантом owner — строки уже в базе. Форма по умолчанию для async-тел. */
+export async function freshGraph(): Promise<string> {
+  const id = mintGraph();
+  await ensureGraphs([id]);
+  return id;
+}
+
+/**
+ * ОДНО админское соединение на весь процесс — только для реестра личностей.
+ *
+ * `freshGraph()` зовётся сотнями раз за прогон, а подъём нового соединения стоит ~18 мс против
+ * ~2,5 мс на саму вставку (замер 21.09): открывай хелпер соединение на каждый вызов — и реестр
+ * съел бы десятки секунд прогона. Соединение остаётся открытым до конца процесса намеренно:
+ * bun завершает прогон и с живым сокетом postgres.js (проверено), а закрывать его здесь
+ * некому — `truncateAll()` вызывается не всеми файлами.
+ */
+let registryDb: ReturnType<typeof adminDb> | undefined;
+
+/** Доводит id до базы: граф `person` и грант `owner` самому себе (админ-DSN, идемпотентно). */
+export async function ensureGraphs(ids: Iterable<string> = MINTED): Promise<void> {
+  const list = [...ids].filter((id) => !PRESENT.has(id));
+  if (list.length === 0) return;
+  if (registryDb === undefined) registryDb = adminDb();
+  const rows = sql.join(
+    list.map((id) => sql`(${id}::uuid)`),
+    sql`, `,
+  );
+  // ОДИН statement, а не транзакция из двух: неявная транзакция statement'а даёт ту же гарантию —
+  // отложенный триггер И-1 проверяет грант owner на её коммите, когда обе строки уже на месте, —
+  // и обходится одним round-trip'ом вместо трёх (BEGIN/INSERT/INSERT/COMMIT). FK
+  // `graph_members → graphs` проверяется в конце statement'а, то есть после вставки графов
+  // ветвью `ins`.
+  await registryDb.db.execute(sql`WITH v(g) AS (VALUES ${rows}),
+    ins AS (
+      INSERT INTO graphs (id, owner_kind, owner_ref)
+      SELECT v.g, 'person', v.g FROM v ON CONFLICT (id) DO NOTHING
+    )
+    INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by)
+    SELECT gen_random_uuid(), v.g, v.g, 'owner', v.g FROM v
+    ON CONFLICT (graph_id, account_id) WHERE revoked_at IS NULL DO NOTHING`);
+  for (const id of list) PRESENT.add(id);
 }
 
 // Шесть definition-таблиц реформы берутся ИЗ ПРОД-ОПЕРАЦИИ пересева (`db/reset-world.ts`), а
@@ -46,7 +125,7 @@ export function freshUserId(): string {
 // остаются», и седьмой реестр части Б, попавший только в один из двух списков, дал бы либо
 // течь состояния между сьютами, либо переживший пересев мусор в проде.
 
-/** Полная зачистка данных между сьютами (админ-DSN, обходит RLS). */
+/** Полная зачистка данных между сьютами (админ-DSN, обходит RLS); личности процесса остаются. */
 export async function truncateAll(): Promise<void> {
   const { db, client } = adminDb();
   await db.execute(sql`TRUNCATE entities, relations, user_settings, chat_threads,
@@ -60,10 +139,39 @@ export async function truncateAll(): Promise<void> {
   }
   // Дельты бывают только пользовательские (graph_id NOT NULL) — здесь чистится всё.
   await db.execute(sql`TRUNCATE registry_deltas`);
+  // Графы и членство — ПОСЛЕДНИМИ и НЕ в списке `TRUNCATE … CASCADE` выше: на `graphs` ссылаются
+  // все шесть реестров, и CASCADE снёс бы их ЦЕЛИКОМ, вместе со встроенными строками. На `graphs`
+  // к этому моменту никто не ссылается, поэтому голого `DELETE` достаточно.
+  //
+  // ЛИЧНОСТИ ПРОЦЕССА НЕ СНОСЯТСЯ, А ОСТАВЛЯЮТСЯ (цена прогона). Снести все графы и завести их
+  // заново — по две вставки на весь реестр (к концу сьюта — сотни id) плюс столько же исполнений
+  // отложенного триггера И-1 на КАЖДЫЙ из сотен вызовов `truncateAll`; замер 21.09 дал на этом
+  // +34 % к серверному прогону. Видимый контракт тот же: чужого графа после вызова нет, граф
+  // личности процесса — есть, ровно с одним действующим грантом owner. Пара удалений идёт ОДНОЙ
+  // транзакцией: строковый триггер И-1 отложенный, и удали мы членство отдельным statement'ом,
+  // на его коммите граф был бы ещё жив и без владельца — 23514.
+  const keep = [...MINTED];
+  await db.transaction(async (tx) => {
+    if (keep.length === 0) {
+      await tx.execute(sql`DELETE FROM graph_members`);
+      await tx.execute(sql`DELETE FROM graphs`);
+      return;
+    }
+    const list = sql.join(
+      keep.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    );
+    await tx.execute(sql`DELETE FROM graph_members WHERE graph_id NOT IN (${list})`);
+    await tx.execute(sql`DELETE FROM graphs WHERE id NOT IN (${list})`);
+  });
   // registry_system НЕ трогается НАМЕРЕННО: строка одна, PK = 1, и её удаление сломало бы
   // инкремент версии в сидере (UPDATE … WHERE id = 1 не нашёл бы строки). Поэтому тесты
   // версии сида пишутся ОТНОСИТЕЛЬНО — `after === before + 1`, а не абсолютом.
   await client.end();
+  // Хвост доводит до базы личности, выданные ПОСЛЕ прошлого захода (например, в теле `describe`,
+  // которое bun исполняет уже после `beforeAll` файла). Доведённые ранее остались на месте —
+  // `PRESENT` поэтому не сбрасывается, и вызов бесплатен, пока новых id нет.
+  await ensureGraphs();
 }
 
 /**

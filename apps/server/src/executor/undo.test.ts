@@ -10,7 +10,8 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -135,7 +136,7 @@ async function relCount(sourceId: string, targetId: string, role: string): Promi
 }
 
 describe('undoAction: создание → архивация (§7.8)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   let actionId = '';
   let entityId = '';
 
@@ -165,7 +166,7 @@ describe('undoAction: создание → архивация (§7.8)', () => {
   });
 
   test('чужой action под userB → NOT_FOUND (RLS скоупит журнал владельцем)', async () => {
-    const userB = freshUserId();
+    const userB = await freshGraph();
     const r = err(await undoAction(db, { actorUserId: userB, actionId }));
     expect(r.error.code).toBe('NOT_FOUND');
   });
@@ -181,7 +182,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
   const T = new Date('2026-08-26T10:00:00.000Z');
 
   test('inverse несёт прежние значения ТОЛЬКО затронутых свойств; третье свойство аспекта переживает откат', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const created = ok(
       await execute(
         db,
@@ -294,7 +295,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
   });
 
   test('attach аспекта: inverse = detach + unset ровно добавленных свойств; чужие значения остаются', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const created = ok(
       await execute(
         db,
@@ -352,7 +353,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
   });
 
   test('слитое свойство orbis/finance_category: одна правка — оба носителя, откат возвращает значение', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catA = newId();
     const catB = newId();
     const created = ok(
@@ -411,7 +412,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
   });
 
   test('материализованное умолчание валюты снимается откатом: шов слитого orbis/currency закрыт', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     // Транзакция БЕЗ валюты: у financial поле необязательно, умолчание не материализуется
     const created = ok(
@@ -467,7 +468,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
 
 describe('undoAction: связи и batch (§7.8)', () => {
   test('undo relation_create удаляет связь', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const s = ok(
       await execute(db, req(user, 'entity_create', { title: 'Источник', tags: [] }), { sink }),
     ).results[0] as WireEntity;
@@ -493,7 +494,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
   });
 
   test('undo batch применяет inverse в обратном порядке одним tx: связь удалена, сущности архивированы', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const batchId = newId();
     const sId = newId();
     const tId = newId();
@@ -528,7 +529,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
   });
 
   test('undo attach восстанавливает прежнее отсутствие аспект-ключа (null → detach)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const e = ok(
       await execute(db, req(user, 'entity_create', { title: 'Без аспекта', tags: [] }), { sink }),
     ).results[0] as WireEntity;
@@ -549,7 +550,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
 
 describe('undoLast: скан журнала с конца (§7.8)', () => {
   test('пропускает уже отменённое и undo-записи, применяет inverse первого неотменённого', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const r1 = ok(
       await execute(db, req(user, 'entity_create', { title: 'Первая', tags: [] }), { sink }),
     );
@@ -574,7 +575,7 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
   });
 
   test('«отмени последнее» пропускает системные действия (source=system): откатывается fast-path, инстансы живы (fix round A3)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
       new Date(),
     );

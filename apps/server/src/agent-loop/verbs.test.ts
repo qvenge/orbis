@@ -13,7 +13,7 @@ import type {
 } from '@orbis/shared';
 import { batchAuditMessageId, newId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -71,7 +71,7 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe('orbis_my_queue: очередь исполнителя (§9.3, С7)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   let grantId = '';
   let otherGrantId = '';
   let projectId = '';
@@ -183,7 +183,7 @@ describe('orbis_my_queue: очередь исполнителя (§9.3, С7)', (
 // ---------------------------------------------------------------------------
 
 describe('orbis_claim_task: атомарный захват (С7, инвариант 1)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   let grantId = '';
   let otherGrantId = '';
   let projectId = '';
@@ -442,7 +442,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
   });
 
   test('чужой тикет (RLS) → NOT_FOUND', async () => {
-    const stranger = freshUserId();
+    const stranger = await freshGraph();
     const alien = (
       await seedEntity(stranger, {
         title: 'Тикет постороннего',
@@ -662,7 +662,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
 // ---------------------------------------------------------------------------
 
 describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, инвариант 5)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   let grantId = '';
   let otherGrantId = '';
   const MINUTE = 60_000;
@@ -1276,7 +1276,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     });
 
     // Чужой (RLS) и несуществующий прогон неразличимы намеренно: оба NOT_FOUND
-    const stranger = freshUserId();
+    const stranger = await freshGraph();
     const alien = await seedEntity(stranger, {
       title: 'Прогон постороннего',
       tags: [],
@@ -1314,7 +1314,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
 // ---------------------------------------------------------------------------
 
 describe('субъект прогона — рутина (V1.5)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   const MINUTE = 60_000;
   const T1 = new Date(T0.getTime() + 5 * MINUTE);
 
@@ -1579,7 +1579,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
   });
 
   test('грантовый путь не изменился: захват → шаг → итог по-прежнему ведут тикет', async () => {
-    const grantOwner = freshUserId();
+    const grantOwner = await freshGraph();
     const grantId = await workerGrant(grantOwner, 'грантовый путь после обобщения');
     const ticket = await seedEntity(grantOwner, {
       title: 'Тикет грантового пути',

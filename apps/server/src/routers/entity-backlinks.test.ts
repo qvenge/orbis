@@ -7,7 +7,7 @@
 // пиннится здесь.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -37,7 +37,7 @@ function viaById(backlinks: { entity: { id: string }; via: string }[] | undefine
 }
 
 test('backlinks: связи роли mention обеих сторон + упоминания body_refs с пометкой источника', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const target = await caller.entity.create({
     input: { title: 'Цель', tags: [] },
@@ -89,7 +89,7 @@ test('backlinks: связи роли mention обеих сторон + упом�
 });
 
 test('backlinks: секция «Связанное» подписывает направление из реестра ролей', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const target = await caller.entity.create({
     input: { title: 'Цель подписей', tags: [] },
@@ -143,7 +143,7 @@ test('backlinks: секция «Связанное» подписывает на
 // Обе стороны одной пары — это ОДНА строка секции, а не две: направления сворачиваются
 // до объединения источников, иначе взаимное упоминание раздваивало бы запись в списке.
 test('backlinks: взаимное упоминание — одна строка, подпись входящего направления', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const target = await caller.entity.create({
     input: { title: 'Взаимная цель', tags: [] },
@@ -162,7 +162,7 @@ test('backlinks: взаимное упоминание — одна строка
 });
 
 test('backlinks: и связь, и упоминание одной сущностью → одна строка с пометкой «связь»', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const target = await caller.entity.create({
     input: { title: 'Цель', tags: [] },
@@ -184,7 +184,7 @@ test('backlinks: и связь, и упоминание одной сущнос�
 });
 
 test('backlinks: архивные исключены (обе стороны — и связь, и упоминание)', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const target = await caller.entity.create({
     input: { title: 'Цель', tags: [] },
@@ -211,8 +211,8 @@ test('backlinks: архивные исключены (обе стороны — 
 });
 
 test('backlinks: чужая сущность недостижима (RLS)', async () => {
-  const owner = freshUserId();
-  const stranger = freshUserId();
+  const owner = await freshGraph();
+  const stranger = await freshGraph();
   const target = await callerFor(owner).entity.create({
     input: { title: 'Моя цель', tags: [] },
     source: 'fast_path',
@@ -232,7 +232,7 @@ test('backlinks: чужая сущность недостижима (RLS)', asyn
 // ровно та связь, которую пользователь только что создал, и признака обрезания наружу не
 // было вовсе (урок C6: молчаливого усечения быть не должно).
 test('backlinks: потолок 100 строк — свежие первыми, с признаком усечения', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const target = await caller.entity.create({
     input: { title: 'Популярная', tags: [] },
@@ -273,7 +273,7 @@ test('backlinks: потолок 100 строк — свежие первыми, 
 // `entityCreateInput` — это ещё тул-контракт старой карты (перевод — Задача 12), и
 // `orbis/rule_target` в неё не выражается вовсе.
 test('backlinks категории: транзакции и правила памяти по ref, подпись — label свойства', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const category = await caller.entity.create({
     input: { title: 'Еда', tags: [], aspects: ['orbis/category'] },
@@ -358,7 +358,7 @@ test('backlinks категории: транзакции и правила па�
  * дубль — в списке будет две строки, и владелец увидит одну запись дважды.
  */
 test('backlinks: `ref` и `mention` от ОДНОГО источника к одной цели → одна строка (Р-23b-15)', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const caller = callerFor(user);
   const category = await caller.entity.create({
     input: { title: 'Категория-цель', tags: [], aspects: ['orbis/category'] },

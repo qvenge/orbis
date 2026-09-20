@@ -27,12 +27,17 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
-import { adminDb } from '../../test/helpers';
+import { adminDb, ensureGraphs, mintGraph } from '../../test/helpers';
 import { type EnvelopeCombination, type EnvelopeQuery, selectEnvelopes } from '../budget/binding';
 import type { Db } from '../db/client';
 import { entities, relations, userSettings } from '../db/schema';
 
-export const VOLUME_OWNER_ID = uuidv5('volume-perf-fixture:owner', ORBIS_NAMESPACE);
+/**
+ * Владелец корпуса объёма — константа: `mintGraph` регистрирует его в реестре личностей процесса
+ * (0020: без строки `graphs` FK не пустит ни одной сущности), а строки заводит `ensureGraphs`
+ * первым действием сева — корпус живёт вне `truncateAll`.
+ */
+export const VOLUME_OWNER_ID = mintGraph(uuidv5('volume-perf-fixture:owner', ORBIS_NAMESPACE));
 /** Тот же seed, что у пробы П2 (`.superpowers/probe/p2/lib/world.ts:11`) — числа сравнимы. */
 export const VOLUME_SEED = 20260825;
 export const VOLUME_TODAY = '2026-08-25';
@@ -498,6 +503,7 @@ export async function ensureVolumeFixture(): Promise<{
   bindings: number;
   seeded: boolean;
 }> {
+  await ensureGraphs([VOLUME_OWNER_ID]);
   const { db, client } = adminDb();
   try {
     // Хвост оборванного сторожа сносится ДО пересчёта: иначе сотня лишних строк читалась бы как

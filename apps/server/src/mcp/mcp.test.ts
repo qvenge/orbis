@@ -11,7 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -33,7 +33,7 @@ import { MCP_MAX_BODY_BYTES, makeMcpHandler } from './transport';
 requireEnv();
 
 const { db, client: dbClient } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 
 /** Живой headless-грант владельца; выдаётся в базу в beforeAll (сырой токен — оттуда). */
 let TOKEN: string;

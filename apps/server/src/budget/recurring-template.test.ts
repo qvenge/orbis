@@ -17,7 +17,7 @@ import { newId } from '@orbis/shared';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -79,7 +79,7 @@ function expense(
 }
 
 test('шаблон с occurred_on не попадает ни в unbudgeted, ни в баланс периода (D20, §2.3/§2.5)', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const catRent = newId();
   const catFood = newId();
 
@@ -111,7 +111,7 @@ test('шаблон с occurred_on не попадает ни в unbudgeted, ни
 });
 
 test('шаблон не попадает в список planned-покупок §2.7 (D20)', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const catRent = newId();
   const catGift = newId();
 
@@ -143,7 +143,7 @@ test('шаблон не попадает в список planned-покупок 
 });
 
 test('шаблон не завышает suggestedLimit rollover-превью §3.5 (D20)', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const catRent = newId();
   const catFood = newId();
 

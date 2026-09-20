@@ -12,7 +12,8 @@ import {
   appDb,
   entityColumns,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   seedRefTargetRows,
@@ -158,7 +159,7 @@ function selector(
 // Шаг 1: селектор §2.3
 // ---------------------------------------------------------------------------
 describe('selectEnvelope: селектор конверта §2.3', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
 
   test('месячный конверт, период включает дату → выбран', async () => {
@@ -270,7 +271,7 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
   });
 
   test('дефолтная валюта из user_settings: конверт без currency матчится по defaultCurrency', async () => {
-    const userEur = freshUserId();
+    const userEur = await freshGraph();
     const catE = newId();
     const { db: admin, client: adminClient } = adminDb();
     try {
@@ -312,7 +313,7 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
 // Шаг 2: интеграция в executor — привязка в том же action (§2.3)
 // ---------------------------------------------------------------------------
 describe('авто-привязка: entity_create транзакции (§2.3)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
   let envId = '';
 
@@ -423,7 +424,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
 
   test('batch «конверт + транзакция» одним batch_execute: транзакция привязана к конверту того же batch', async () => {
     // Форма CSV-импорта/онбординга: групповая мутация — один batch_execute (01-arch §9.2)
-    const userB = freshUserId();
+    const userB = await freshGraph();
     const catB = newId();
     const envelopeId = newId();
     const txnId = newId();
@@ -505,7 +506,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
 
 describe('ребиндинг при создании/правке/архивации конверта (§2.3)', () => {
   test('2+3. узкий конверт перехватывает у месячного; архивация узкого возвращает месячному', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const { entity: monthly } = await createEntity(user, {
       title: 'Путешествия — август',
@@ -539,7 +540,7 @@ describe('ребиндинг при создании/правке/архивац
   });
 
   test('правка периода конверта: окно затронутых = старый ∪ новый период', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Плавающий',
@@ -576,7 +577,7 @@ describe('ребиндинг при создании/правке/архивац
   });
 
   test('уникальность и ребиндинг вместе: повторное создание архивированной комбинации подхватывает транзакции', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Первый',
@@ -604,7 +605,7 @@ describe('ребиндинг при создании/правке/архивац
 
   test('6. приёмка 03-budget §7.3: порядок создания конвертов не влияет на итог', async () => {
     // Вариант А: транзакция → месячный → узкий
-    const userA = freshUserId();
+    const userA = await freshGraph();
     const catA = newId();
     const { entity: txnA } = await createEntity(userA, {
       title: 'Ужин в отпуске',
@@ -623,7 +624,7 @@ describe('ребиндинг при создании/правке/архивац
     });
 
     // Вариант Б: транзакция → узкий → месячный
-    const userB = freshUserId();
+    const userB = await freshGraph();
     const catB = newId();
     const { entity: txnB } = await createEntity(userB, {
       title: 'Ужин в отпуске',
@@ -676,7 +677,7 @@ describe('ребиндинг при создании/правке/архивац
 // Шаг 4: уникальность конверта (03-budget §2.1)
 // ---------------------------------------------------------------------------
 describe('уникальность конверта: (category_ref, currency, period_start, period_end) среди неархивных (§2.1)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
 
   test('повторный create той же точной комбинации → INVARIANT duplicate_envelope', async () => {
@@ -835,7 +836,7 @@ describe('уникальность конверта: (category_ref, currency, pe
 // иначе spent конверта считал бы шаблон вместе с его инстансами (двойной счёт).
 // ---------------------------------------------------------------------------
 describe('конверсия транзакции в recurring-шаблон снимает привязку (§2.3, §3.1)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
   let envId = '';
   let txnId = '';
@@ -896,7 +897,7 @@ describe('конверсия транзакции в recurring-шаблон сн
 // её условие «в итоговых аспектах есть financial» не выполняется вовсе.
 // ---------------------------------------------------------------------------
 describe('detach orbis/financial снимает привязку к конверту (§2.3)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const cat = newId();
 
   test('detach → budget-parent снят тем же action', async () => {
@@ -1002,7 +1003,7 @@ describe('хук привязки трогает только роль envelope-
    * первой же правке суммы — тихая потеря связи, которую владелец поставил руками.
    */
   test('ребро `subitem` ОТ ВТОРОГО КОНВЕРТА переживает ребиндинг: отделяет его только роль', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const { entity: env } = await createEntity(user, {
       title: 'Конверт Ремонт',
@@ -1063,7 +1064,7 @@ describe('хук привязки трогает только роль envelope-
     // Транзакция здесь категории, у которой конверта НЕТ: иначе хук привязал бы её сам, и
     // `target_max_incoming: 1` не дал бы поставить второе ребро той же роли — проба
     // уперлась бы в ограничение реестра, не дойдя до предиката.
-    const user = freshUserId();
+    const user = await freshGraph();
     const { entity: txn } = await createEntity(user, {
       title: 'Трата без конверта',
       props: finProps(newId(), '2026-08-12'),
@@ -1110,7 +1111,7 @@ describe('хук привязки трогает только роль envelope-
 
 describe('гонка «create транзакции ∥ create конверта» (§2.3)', () => {
   test('после обеих операций транзакция привязана к конверту, а не Unbudgeted', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const iterations = 15;
     let unbudgeted = 0;
     for (let i = 0; i < iterations; i += 1) {
@@ -1158,7 +1159,7 @@ describe('гонка «create транзакции ∥ create конверта»
 // ---------------------------------------------------------------------------
 describe('дедлок «правка транзакции ∥ запись конверта» (§2.3)', () => {
   test('20 конкурентных пар операций проходят без отказов по дедлоку', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const failures: string[] = [];
     for (let i = 0; i < 20; i += 1) {
       // Своя категория на итерацию: конверты не конфликтуют между собой по §2.1
@@ -1211,7 +1212,7 @@ describe('дедлок «правка транзакции ∥ запись ко
 // `INVARIANT self_relation` — отказ, по которому понять нечего.
 describe('транзакция, ставшая конвертом: селектор не выбирает саму запись (§2.3)', () => {
   test('attach orbis/budget на транзакцию с накрывающим периодом проходит, а не падает self_relation', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const { entity: txn } = await createEntity(user, {
       title: 'Транзакция, ставшая конвертом',
@@ -1235,7 +1236,7 @@ describe('транзакция, ставшая конвертом: селект�
   });
 
   test('исключение себя не выбрасывает транзакцию из ЧУЖОГО конверта: она остаётся привязанной', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     // Широкий конверт месяца — он и должен считать транзакцию
     const { entity: wide } = await createEntity(user, {
@@ -1267,7 +1268,7 @@ describe('транзакция, ставшая конвертом: селект�
   });
 
   test('узкий конверт-транзакция считает ДРУГИЕ транзакции: исключение — только про себя', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const { entity: txn } = await createEntity(user, {
       title: 'Транзакция-конверт',
@@ -1299,7 +1300,7 @@ describe('транзакция, ставшая конвертом: селект�
 
 describe('контур бюджет-хука собран из ДЕКЛАРАЦИИ (§С8-18, Р-К-39)', () => {
   test('встроенный владелец даёт ровно встроенную пару; аспект владельца входит наравне', async () => {
-    const plain = freshUserId();
+    const plain = await freshGraph();
     const builtin = budgetContourFor(
       await withIdentity(db, plain, (tx) => effectiveRegistry(tx, plain)),
     );
@@ -1313,7 +1314,7 @@ describe('контур бюджет-хука собран из ДЕКЛАРАЦ�
     // одна трата вообще.
     expect(builtin.templates.map((b) => b.aspectId)).toEqual(['orbis/schedule']);
 
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await seedCustomAspect(owner, GATE_FIN_ASPECT);
     const contour = budgetContourFor(
       await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)),

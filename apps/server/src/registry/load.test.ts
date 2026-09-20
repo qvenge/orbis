@@ -13,7 +13,8 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -41,8 +42,8 @@ async function failedConstraint(run: () => Promise<unknown>): Promise<string> {
 }
 
 const { db, client } = appDb();
-const owner = freshUserId();
-const stranger = freshUserId();
+const owner = mintGraph();
+const stranger = mintGraph();
 
 beforeAll(async () => {
   await truncateAll();
@@ -146,7 +147,7 @@ test('версии: системная — из registry_system, владель�
   // СВОЙ владелец, а не общий `owner` файла: у того строку настроек уже завёл инкремент
   // версии, которым сопровождается всякая мутация реестра (§А10-1), — а проверяется здесь
   // ровно случай «строки настроек нет вовсе».
-  const virgin = freshUserId();
+  const virgin = await freshGraph();
   const noSettings = await withIdentity(db, virgin, (tx) => effectiveRegistry(tx, virgin));
   expect(noSettings.systemVersion).toBeGreaterThan(0); // сид db:prepare уже был
   expect(noSettings.ownerVersion).toBe(0); // строки настроек у владельца нет

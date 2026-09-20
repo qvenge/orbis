@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appendMessage } from './messages';
@@ -13,8 +13,8 @@ import { ensureEntityThread, ensureGlobalThread } from './threads';
 requireEnv();
 
 const { db, client } = appDb();
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 
 beforeAll(async () => {
   await truncateAll();

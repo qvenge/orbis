@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { entitySchema } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv } from '../test/helpers';
+import { appDb, freshGraph, requireEnv } from '../test/helpers';
 import { withIdentity } from './db/with-identity';
 import { toWireEntity } from './wire';
 
@@ -11,7 +11,7 @@ requireEnv();
 describe('wire-сериализация (решение 12 плана)', () => {
   test('строка из Postgres → toWireEntity → entitySchema.parse проходит; формат — UTC Z', async () => {
     const { db, client } = appDb();
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const id = crypto.randomUUID();
     try {
       const row = await withIdentity(db, owner, async (tx) => {
@@ -33,7 +33,7 @@ describe('wire-сериализация (решение 12 плана)', () => {
 
   test('wire-форма несёт ТОЛЬКО новую правду: props/aspects/queryRefs, и старых носителей нет', async () => {
     const { db, client } = appDb();
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const id = crypto.randomUUID();
     try {
       const row = await withIdentity(db, owner, async (tx) => {

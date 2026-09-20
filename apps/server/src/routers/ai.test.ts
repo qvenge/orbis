@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -20,8 +20,8 @@ requireEnv();
 
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 
 function callerFor(user: string) {
   return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
@@ -77,7 +77,7 @@ describe('ai.approve / ai.reject: ownerOnly (§9.3)', () => {
   test('PAT-агент не может approve/reject: FORBIDDEN из middleware до БД', async () => {
     // db — стаб: если middleware пропустит, вызов упадёт не-FORBIDDEN ошибкой БД
     const agentCtx: Context = {
-      actorUserId: freshUserId(),
+      actorUserId: await freshGraph(),
       actorKind: 'agent',
       db: null as unknown as Context['db'],
       clientVersion: null,

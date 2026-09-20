@@ -12,7 +12,7 @@ import {
   routineRunId,
 } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { type RunProps, runsOfParent } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun, type VerbCtx } from '../agent-loop/verbs';
@@ -58,7 +58,7 @@ import { makeRoutineLocks } from './locks';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const { actionsOf, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
   agentLoopHelpers(db);
 

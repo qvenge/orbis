@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
@@ -178,7 +178,7 @@ async function actionMessageCount(actionId: string): Promise<number> {
 
 describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   test('профицит → положительный carryover; carryover прошлого конверта входит в remaining; suggestedLimit = limit прошлого', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catFood = await createCategory(user, 'Еда', '🍔');
     const catFun = await createCategory(user, 'Развлечения', '🎉');
     // Еда: limit 30000, трат 28800 → carryover +1200
@@ -213,7 +213,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   });
 
   test('дефицит → отрицательный carryover (перерасход урезает следующий период)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = await createCategory(user, 'Транспорт', '🚕');
     await createEnvelope(user, cat, prevStart, prevEnd, '9000.00');
     await createTxn(user, cat, '10100.00', `${prev}-15`);
@@ -229,7 +229,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   });
 
   test('категория с уже созданным конвертом-преемником целевого месяца — не в rows', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catA = await createCategory(user, 'Еда');
     const catB = await createCategory(user, 'Жильё', '🏠');
     await createEnvelope(user, catA, prevStart, prevEnd, '30000.00');
@@ -242,7 +242,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   });
 
   test('произвольные периоды (§2.9): не источник carryover; пересекающий целевой месяц — не преемник-блокер', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catTravel = await createCategory(user, 'Путешествия', '✈️');
     const catFood = await createCategory(user, 'Еда');
     // Произвольный конверт прошлого месяца (не календарный месяц) с тратами:
@@ -259,7 +259,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   });
 
   test('категория с тратами без конверта (история есть): carryover 0, suggestedLimit = spent вверх до 100', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catFood = await createCategory(user, 'Еда');
     const catNew = await createCategory(user, 'Кофейни', '☕');
     const catExact = await createCategory(user, 'Аптека', '💊');
@@ -281,7 +281,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   });
 
   test('валютная граница: конверт прошлого месяца в чужой валюте не участвует (как categoryTrend, §5)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = await createCategory(user, 'Подписки', '📺');
     await createEnvelope(user, cat, prevStart, prevEnd, '50.00', { 'orbis/currency': 'USD' });
     await createTxn(user, cat, '30.00', `${prev}-03`, { 'orbis/currency': 'USD' });
@@ -293,7 +293,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   });
 
   test('валютная граница NOT EXISTS: категория с единственным USD-конвертом и RUB-тратами — spending-only строка превью, а не молчаливое исчезновение', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catMain = await createCategory(user, 'Еда', '🍔');
     const catTravel = await createCategory(user, 'Путешествия', '✈️');
     // История есть: месячный RUB-конверт прошлого месяца у другой категории
@@ -316,7 +316,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
   });
 
   test('needsSetup=true: траты прошлого месяца без единого конверта — первый месяц без истории (§3.5)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = await createCategory(user, 'Еда');
     await createTxn(user, cat, '12500.00', `${prev}-20`);
 
@@ -325,7 +325,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
     expect(p.needsSetup).toBe(true);
 
     // Без трат и без конвертов needsSetup=false (нечего настраивать по факту)
-    const empty = freshUserId();
+    const empty = await freshGraph();
     const pe = await ownerCaller(empty).budget.rolloverPreview({ month: target });
     expect(pe.rows).toEqual([]);
     expect(pe.needsSetup).toBe(false);
@@ -334,7 +334,7 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
 
 describe('budget.rollover (03-budget §3.5): атомарное создание конвертов', () => {
   test('создаёт N конвертов одним batch: период = целевой месяц, валюта = defaultCurrency; авто-перехват транзакций (A4); превью пустеет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catFood = await createCategory(user, 'Еда');
     const catFun = await createCategory(user, 'Развлечения');
     await createEnvelope(user, catFood, prevStart, prevEnd, '30000.00');
@@ -381,7 +381,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
   });
 
   test('повтор batchId → idempotentReplay: те же envelopeIds, конверты не дублируются', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = await createCategory(user, 'Еда');
     await createEnvelope(user, cat, prevStart, prevEnd, '30000.00');
 
@@ -405,7 +405,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
   });
 
   test('дубль категории во входе → INVARIANT, ни один конверт не создан (атомарность)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = await createCategory(user, 'Еда');
     const other = await createCategory(user, 'Транспорт');
 
@@ -424,7 +424,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
   });
 
   test('уже существующий преемник (в т.ч. без явной currency) → INVARIANT всего batch', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catA = await createCategory(user, 'Еда');
     const catB = await createCategory(user, 'Жильё');
     // Преемник catB создан без явной currency (NULL коалесится в defaultCurrency)
@@ -446,7 +446,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
   });
 
   test('Undo сносит все конверты группы одним action; перехваченная транзакция освобождается', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const catA = await createCategory(user, 'Еда');
     const catB = await createCategory(user, 'Транспорт');
     const txnId = await createTxn(user, catA, '500.00', targetStart);
@@ -474,7 +474,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
   });
 
   test('мутация — поверхность владельца: агенту FORBIDDEN (§9.3)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = await createCategory(user, 'Еда');
     const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
     await expect(

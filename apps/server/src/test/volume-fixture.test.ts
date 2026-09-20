@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { BUDGET_DEF, BUILTIN_ASPECT_DEFS, BUILTIN_CONTRACT_DEFS, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, requireEnv } from '../../test/helpers';
+import { adminDb, ensureGraphs, requireEnv } from '../../test/helpers';
 import { bindingTargetOf } from '../budget/binding';
 import { budgetContourOf } from '../budget/contour';
 import type { WireEntity } from '../executor/types';
@@ -235,6 +235,9 @@ describe('уборка проб сносит кэш spent владельца к�
   requireEnv();
 
   test('после cleanupVolumeProbes строк кэша владельца корпуса не остаётся', async () => {
+    // Этот тест пишет за владельца корпуса НАПРЯМУЮ, минуя `ensureVolumeFixture()`, — значит,
+    // строку графа (0020) заводит сам: владелец корпуса живёт вне `truncateAll` (константа).
+    await ensureGraphs([VOLUME_OWNER_ID]);
     const { db, client } = adminDb();
     const envelopeId = newId();
     try {

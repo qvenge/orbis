@@ -14,7 +14,7 @@ import {
   ROLE_TICKET,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { effectiveRegistry } from './cache';
@@ -40,7 +40,7 @@ async function fromSql(owner: string): Promise<string[]> {
 }
 
 test('иерархические роли: подзапрос и снимок реестра дают один список', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const snapshot = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   expect(await fromSql(owner)).toEqual(hierarchicalRoles(snapshot).sort());
   // Встроенный состав §А4-3: `envelope-binding` в семейство иерархии НЕ входит
@@ -48,7 +48,7 @@ test('иерархические роли: подзапрос и снимок р
 });
 
 test('своя строка роли перекрывает встроенную: снятый признак иерархии виден обоим', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   // Реестровых операций ещё нет (Задача 15) — своя строка кладётся напрямую, как это
   // делает админский сид системных строк.
   await withIdentity(db, owner, async (tx) => {
@@ -80,7 +80,7 @@ test('своя строка роли перекрывает встроенную
  * базы, поэтому заодно проверяет, что константа вообще резолвится в реестре владельца.
  */
 test('каждая поимённая роль указывает на ту роль, чьё имя носит (подпись из сида)', async () => {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   const labelOf = (id: string): string | undefined => reg.roles.get(id)?.label.ru;
   expect(labelOf(ROLE_SUBITEM)).toBe('Подпункт');

@@ -29,7 +29,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { globalThreadId, OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import type { AiDeps } from '../ai/send-message';
 import { createApp } from '../app';
 import { chatMessages } from '../db/schema';
@@ -41,7 +41,7 @@ import { createCallerFactory } from '../trpc';
 requireEnv();
 
 const { db, client: dbClient } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 
 /** Адрес возврата в манере Claude Code — локальная петля (register.ts: RFC 8252 §7.3). */
 const REDIRECT = 'http://localhost:8080/callback';

@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ClaimTaskResult, FinishResult, RunStepResult } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
@@ -75,7 +75,7 @@ interface Scene {
 
 /** Владелец с проектом, назначенным исполнителю тикетом и живым грантом. */
 async function scene(title: string): Promise<Scene> {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   const grantId = await workerGrant(owner, `исполнитель отката (${title})`);
   const project = await seedEntity(owner, {
     title: `Проект отката (${title})`,
@@ -289,7 +289,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
   });
 
   test('откатывать нечего (прогона нет или он чужой) → ok с пустым undone, журнал не тронут', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const before = await undoMessages(owner);
     const out = await rollbackRun(db, { actorUserId: owner, runId: crypto.randomUUID() });
     expect(out).toEqual({ ok: true, undone: [], note: ROLLBACK_NOTE });

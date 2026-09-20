@@ -23,7 +23,7 @@ import {
   adminDb,
   appDb,
   entityColumns,
-  freshUserId,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -46,7 +46,7 @@ const createCaller = createCallerFactory(appRouter);
 
 const NS = 'csv:tinkoff-c3';
 const FILE = 'c'.repeat(64);
-const user = freshUserId();
+const user = mintGraph();
 const foodId = seedCategoryId(user, 'food');
 const adoptTargetId = newId();
 const controlId = newId();

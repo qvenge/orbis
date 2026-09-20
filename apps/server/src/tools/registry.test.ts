@@ -35,7 +35,7 @@ import TOOL_REGISTRY_GOLDEN from '../../test/golden/tool-registry.json';
 import {
   adminDb,
   appDb,
-  freshUserId,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -63,8 +63,8 @@ import { REGISTRY_TOOL_ENVELOPES, REGISTRY_TOOL_NAMES, REGISTRY_TOOLS } from './
 requireEnv();
 
 const { db, client } = appDb();
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 
 /** Кастомный аспект userA: id с '/' И '-' — проверка нормализации имени тула (решение 3). */
 const CUSTOM_ASPECT_ID = 'user/sleep-log';

@@ -17,7 +17,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -98,7 +98,7 @@ async function derivedFrom(owner: string, templateId: string) {
 
 describe('materializeInstances (01 §5.4)', () => {
   test('daily-шаблон: окно 3 дней → 3 инстанса с byte-точными uuidv5-id, копия title/emoji/tags, derived_from', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     // Байт-точный пример из PRD 01 §5.4: шаблон 019ded47-… + дата 2026-07-01
     const templateId = '019ded47-d100-717a-8307-a5b7a5be722f';
     await createTemplate(owner, {
@@ -148,7 +148,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('повторная материализация: created 0, правка инстанса переживает повтор; пересечение окон без дублей', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const templateId = await createTemplate(owner, {
       title: 'Планёрка',
       props: dailyScheduleProps('2026-07-01'),
@@ -205,7 +205,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('окно дальше today+14 обрезается горизонтом (§5.4)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const templateId = await createTemplate(owner, {
       title: 'Ежедневное',
       props: dailyScheduleProps('2026-07-01'),
@@ -226,7 +226,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('нижняя граница окна клампится today−92д (fix round B5): запрос 2020..today не тащит годы истории', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     // Месячный шаблон с 2020-01-01: без клампа окно 2020..today синхронно
     // материализовало бы ~78 инстансов + post-due переписал бы spent исторических месяцев
     const templateId = await createTemplate(owner, {
@@ -262,7 +262,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('financial-шаблон: инстансы с occurred_on=дата, planned=true, recurring=true (§3.3)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const categoryRef = crypto.randomUUID();
     const templateId = await createTemplate(owner, {
       title: 'Аренда',
@@ -306,7 +306,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('архивированный шаблон не материализуется', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const templateId = await createTemplate(owner, {
       title: 'Старое расписание',
       props: dailyScheduleProps('2026-07-01'),
@@ -333,7 +333,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('битое recurrence-правило пропускается с console.warn (диагностируемость), не роняя остальных', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     // byweekday: массив произвольных строк проходит схему реестра, но expandRecurrence
     // на неизвестном дне недели бросает RangeError — шаблон пропускаем, запрос не роняем
     const brokenId = await createTemplate(owner, {
@@ -378,7 +378,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('financial без orbis/schedule.recurrence — не шаблон: пропускается, не падает', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await createTemplate(owner, {
       title: 'Разовая трата',
       props: {
@@ -402,7 +402,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('Р-28: перечень наследуемых свойств ЯВНЫЙ — инстанс транзакции получает ровно его, без bank_txn_id', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const categoryRef = crypto.randomUUID();
     const templateId = await createTemplate(
       owner,
@@ -471,7 +471,7 @@ describe('materializeInstances (01 §5.4)', () => {
   //  • финансовые значения БЕЗ аспекта финансов на живом шаблоне: перечень Р-28 не должен
   //    попасть в инстанс, иначе он родится «транзакцией», которой шаблон уже не является.
   test('снятый аспект отменяет и сам шаблон, и наследование финансов (Р9)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const ghost = crypto.randomUUID();
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values(
@@ -535,7 +535,7 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 
   test('Р-28: инстанс задачи-шаблона несёт только расписание — ни финансовых свойств, ни статуса задачи', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const templateId = await createTemplate(owner, {
       title: 'Полить цветы',
       props: {
@@ -706,7 +706,7 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
 
 describe('хук entity.query/count (§5.4: любой запрос диапазона дат материализует)', () => {
   test('entity.query со start_at=next_7d триггерит материализацию', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const caller = callerFor(owner);
     // Реальное «сегодня» в дефолтной таймзоне (user_settings нет → Europe/Moscow)
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
@@ -731,7 +731,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
   });
 
   test('запрос без date-полей не материализует (ноль инстансов, ноль лишней работы)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const caller = callerFor(owner);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
       new Date(),
@@ -750,7 +750,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
   });
 
   test('AI-тул entity_query со start_at=next_7d видит материализованные инстансы (dispatch, fix round A3)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
       new Date(),
     );
@@ -777,7 +777,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
   });
 
   test('entity.query с абсолютным диапазоном occurred_on (B5) материализует инстансы будущей части окна (≤ today+14)', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const caller = callerFor(owner);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
       new Date(),

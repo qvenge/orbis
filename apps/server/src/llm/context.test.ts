@@ -12,7 +12,8 @@ import {
   appDb,
   entityColumns,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -87,7 +88,7 @@ function memoryLines(system: string): string[] {
 }
 
 describe('buildContext — слой 1: тело промпта + ai_instructions аспектов', () => {
-  const user = freshUserId();
+  const user = mintGraph();
 
   // Пин был `startsWith(SYSTEM_PROMPT_V6)`. После §Б7-6-2 блок продолжений уехал в ХВОСТ
   // собранного канала, поэтому промпт лежит в канале двумя кусками и целиком в его начале
@@ -133,7 +134,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
   });
 
   test('канал несёт дату владельца в его таймзоне — после промпта, до инструкций аспектов', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await withIdentity(db, user, (tx) =>
       tx.insert(userSettings).values({ graphId: user, timezone: 'Asia/Bangkok' }),
     );
@@ -157,7 +158,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
   });
 
   test('дата берётся в дефолтной зоне, когда строки user_settings ещё нет (онбординг не пройден)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const ctx = await withIdentity(db, user, async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, {
@@ -173,7 +174,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
   });
 
   test('блок продолжений — ПОСЛЕДНЯЯ секция собранного канала при непустых памяти и якоре', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await createMemory(user, { title: 'ПАМЯТЬ-ХВОСТ', kind: 'rule' });
     const anchorId = newId();
     await withIdentity(db, user, async (tx) =>
@@ -208,7 +209,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
 });
 
 describe('buildContext — слой 2: память с капом и приоритетом (§7.4)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
   const base = Date.UTC(2026, 0, 10, 12, 0, 0);
 
   test(`кап ${MEMORY_CAP}, rule раньше fact, scoped раньше глобальных, archived исключена`, async () => {
@@ -266,7 +267,7 @@ describe('buildContext — слой 2: память с капом и приор�
   // Сохранённая подпись здесь НАМЕРЕННО оставлена устаревшей («… → Еда»): пока она в
   // колонке лжёт, видно, что канал собран из свойств, а не взят из title.
   test('правило: подпись в канале собирается из свойств и переживает переименование категории', async () => {
-    const user5 = freshUserId();
+    const user5 = await freshGraph();
     const category = newId();
     const ruleId = newId();
     // Категорию заводит фикстурный помощник (обстановка, не предмет проверки), поэтому
@@ -330,7 +331,7 @@ describe('buildContext — слой 2: память с капом и приор�
    * этого не ловил (`context.test.ts` был 25/0 в обе стороны).
    */
   test('правило со СНЕСЁННОЙ целью: подпись — один образец, а не устаревший заголовок', async () => {
-    const user6 = freshUserId();
+    const user6 = await freshGraph();
     const category = newId();
     const one = (input: Record<string, unknown>, tool = 'entity_create') => ({
       actorUserId: user6,
@@ -368,7 +369,7 @@ describe('buildContext — слой 2: память с капом и приор�
   });
 
   test(`body памяти обрезается превью ${MEMORY_BODY_PREVIEW} символов`, async () => {
-    const user2 = freshUserId();
+    const user2 = await freshGraph();
     await createMemory(user2, {
       title: 'LONG-BODY',
       kind: 'fact',
@@ -383,7 +384,7 @@ describe('buildContext — слой 2: память с капом и приор�
   });
 
   test('многострочный body памяти схлопывается в одну строку списка', async () => {
-    const user3 = freshUserId();
+    const user3 = await freshGraph();
     await createMemory(user3, {
       title: 'MULTILINE',
       kind: 'fact',
@@ -398,7 +399,7 @@ describe('buildContext — слой 2: память с капом и приор�
   });
 
   test('превью не рвёт суррогатные пары: обрезка по code points (fix round)', async () => {
-    const user4 = freshUserId();
+    const user4 = await freshGraph();
     // 200-й code point — emoji (2 UTF-16 юнита): срез по юнитам оставил бы одиночный суррогат
     await createMemory(user4, {
       title: 'EMOJI-EDGE',
@@ -417,7 +418,7 @@ describe('buildContext — слой 2: память с капом и приор�
 });
 
 describe('buildContext — слой 3: якорная сущность (02 §2.2)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
 
   async function createAnchor(): Promise<string> {
     const id = newId();
@@ -505,7 +506,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
 });
 
 describe('buildContext — слой 4: rolling-история (решение 6 плана)', () => {
-  const user = freshUserId();
+  const user = mintGraph();
 
   test(`история обрезается до ${CONTEXT_HISTORY_LIMIT} ПОСЛЕДНИХ сообщений в хронологическом порядке`, async () => {
     const total = CONTEXT_HISTORY_LIMIT + 5; // 35
@@ -542,7 +543,7 @@ describe('buildContext — слой 4: rolling-история (решение 6 
   test('посты рутины/агента/AI в тред (role user, metadata.author_kind) помечаются автором в тексте, роль остаётся user; реплика владельца — без пометки (хвост финала)', async () => {
     // Пост в тред (thread_post) ложится role 'user' с author_kind у не-владельца — без пометки
     // чат-модель читала бы слова ночной рутины или внешнего агента как реплику владельца
-    const who = freshUserId();
+    const who = await freshGraph();
     const base = Date.UTC(2026, 5, 2, 9, 0, 0);
     const threadId = await withIdentity(db, who, async (tx) => {
       const id = await ensureGlobalThread(tx, who);
@@ -619,7 +620,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   }
 
   test('audit своих действий (actor_kind=ai) → assistant с компактной строкой; сырой JSON не течёт', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const entityId = newId();
     // Реалистичная форма истории: audit всегда следует за user-репликой.
     // Отдельные tx — детерминированный created_at-порядок (transaction_timestamp)
@@ -648,7 +649,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   });
 
   test('окно, начинающееся со сжатого ai-audit (assistant), обрезается до первого user (Anthropic API)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
     await withIdentity(db, user, (tx) =>
       appendAudit(tx, threadId, {
@@ -666,7 +667,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   });
 
   test('audit действий агента (actor_kind=agent) → user с префиксом «[система]»', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const entityId = newId();
     const ctx = await withIdentity(db, user, async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
@@ -685,7 +686,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   });
 
   test('batch-audit без entity_id → компактная строка без id', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
     // Предшествующий user — иначе ведущий assistant-audit отброшен инвариантом окна
     await withIdentity(db, user, (tx) =>
@@ -708,7 +709,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   });
 
   test('недействийные system-сообщения (undo/pending/reject) → user «[система] <content>» без metadata', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const actionId = newId();
     const pendingId = newId();
     // Отдельные транзакции: created_at = transaction_timestamp(), в одном tx
@@ -755,7 +756,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   });
 
   test(`скрытые system-строки не съедают rolling-окно: ${CONTEXT_HISTORY_LIMIT}+ инфраструктурных строк новее живого диалога, диалог всё ещё в истории (фильтр в SQL до limit)`, async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const base = Date.UTC(2026, 5, 2, 9, 0, 0);
     const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
     await withIdentity(db, user, async (tx) => {
@@ -816,7 +817,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   });
 
   test('audit системной материализации (source=system) не попадает в историю модели; ui-audit остаётся (fix round A3)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const entityId = newId();
     // Отдельные транзакции — детерминированный created_at-порядок
     const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));

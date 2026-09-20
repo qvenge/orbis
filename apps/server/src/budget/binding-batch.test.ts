@@ -19,7 +19,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -144,7 +144,7 @@ interface Scene {
 }
 
 async function makeScene(): Promise<Scene> {
-  const user = freshUserId();
+  const user = await freshGraph();
   const catA = newId();
   const catB = newId();
   const catC = newId();
@@ -378,7 +378,7 @@ describe('число обращений к селектору не растёт 
   test('batch из 50 транзакций: чтения привязки — константа', async () => {
     const counting = countingDb();
     try {
-      const user = freshUserId();
+      const user = await freshGraph();
       const cat = newId();
       const envelope = ok(
         await execute(
@@ -456,7 +456,7 @@ describe('число обращений к селектору не растёт 
     // заголовков — по паре запросов на строку.
     const counting = countingDb();
     try {
-      const user = freshUserId();
+      const user = await freshGraph();
       const cat = newId();
       const envelope = await createEntity(user, {
         title: 'Конверт заголовков',

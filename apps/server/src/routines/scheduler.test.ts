@@ -10,7 +10,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, routineRunId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { RUN_STALE_AFTER_MS } from '../agent-loop/constants';
 import { runsOfParent } from '../agent-loop/queries';
 import { chatMessages, userSettings } from '../db/schema';
@@ -95,7 +95,7 @@ function toolUse(name: string, input: Record<string, unknown>): LLMResponse {
 
 /** Владелец, видимый планировщику: строка user_settings с таймзоной (0013, V1.13). */
 async function newOwner(timezone = 'Europe/Moscow'): Promise<string> {
-  const owner = freshUserId();
+  const owner = await freshGraph();
   await withIdentity(db, owner, (tx) =>
     tx.insert(userSettings).values({ graphId: owner, timezone }),
   );

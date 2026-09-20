@@ -11,7 +11,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -28,8 +28,8 @@ import { InMemoryJournalSink } from './types';
 requireEnv();
 
 const { db, client } = appDb();
-const userA = freshUserId();
-const userB = freshUserId();
+const userA = mintGraph();
+const userB = mintGraph();
 const CATEGORY_REF = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 const T0 = new Date('2026-07-05T10:00:00.000Z');
 

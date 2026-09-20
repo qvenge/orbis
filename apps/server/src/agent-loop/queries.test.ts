@@ -10,7 +10,8 @@ import { sql } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -47,7 +48,7 @@ afterAll(async () => {
 
 describe('runsForBucket: прогоны слота рутины (V1.3)', () => {
   test('отбор по паре (routine_id, bucket) в порядке created_at; соседний бакет и соседняя рутина не примешиваются', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const routineId = await seedRoutine(owner, { title: 'Рутина слотов' });
     const otherId = await seedRoutine(owner, { title: 'Соседняя рутина' });
 
@@ -81,8 +82,8 @@ describe('runsForBucket: прогоны слота рутины (V1.3)', () => {
   });
 
   test('прогоны чужого владельца не видны (RLS)', async () => {
-    const owner = freshUserId();
-    const stranger = freshUserId();
+    const owner = await freshGraph();
+    const stranger = await freshGraph();
     const routineId = await seedRoutine(stranger, { title: 'Рутина постороннего' });
     await seedRoutineRun(stranger, { routineId, bucket: '2026-08-17T07:00' });
 
@@ -95,7 +96,7 @@ describe('runsForBucket: прогоны слота рутины (V1.3)', () => {
 
 describe('runsOfParent: прогоны родителя — и тикета, и рутины', () => {
   test('дети по связи parent в порядке появления; у рутины это её прогоны', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const routineId = await seedRoutine(owner, { title: 'Рутина истории' });
     const a = await seedRoutineRun(owner, { routineId, bucket: '2026-08-17T07:00' });
     const b = await seedRoutineRun(owner, {
@@ -111,7 +112,7 @@ describe('runsOfParent: прогоны родителя — и тикета, и 
 
 describe('parentProject / ticketOfRun: проект и тикет через роли (§А4-3)', () => {
   test('очередь исполнителя: тикеты по роли ticket/run; parentProject → props.orbis/parent_project', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const project = await seedEntity(owner, {
       title: 'Проект очереди',
       tags: [],
@@ -153,7 +154,7 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
   });
 
   test('тикет ЧЕРЕЗ подзадачу: проект находится по вычисленному предку, а не по одному ребру', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const project = await seedEntity(owner, {
       title: 'Проект в глубину',
       tags: [],
@@ -177,7 +178,7 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
   // Проектов над тикетом бывает несколько: очередь показывает БЛИЖАЙШИЙ («в каком проекте
   // я работаю»), а не самый верхний — иначе исполнитель получил бы процесс не той затеи.
   test('под подпроектом внутри проекта очередь показывает БЛИЖАЙШИЙ проект, не корневой', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const top = await seedEntity(owner, {
       title: 'Корневой проект',
       tags: [],
@@ -209,7 +210,7 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
   });
 
   test('тикет без проекта над собой — законный случай: null, а не отказ', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const parent = await seedEntity(owner, { title: 'Просто задача', tags: [] });
     const ticket = await seedEntity(owner, {
       title: 'Личный тикет',
@@ -224,7 +225,7 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
 
 describe('activeRoutines / routineById (V1.13)', () => {
   test('activeRoutines: только активные и неархивные, с телом-инструкцией; paused и архив не видны', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const active = await seedRoutine(owner, {
       title: 'Утренний обзор',
       body: 'Пройди по задачам дня и предложи план.',
@@ -271,8 +272,8 @@ describe('activeRoutines / routineById (V1.13)', () => {
   });
 
   test('routineById: рутина с телом и аспектом; не-рутина, чужая и несуществующая — null', async () => {
-    const owner = freshUserId();
-    const stranger = freshUserId();
+    const owner = await freshGraph();
+    const stranger = await freshGraph();
     const routineId = await seedRoutine(owner, {
       title: 'Вечерний разбор',
       body: 'Закрой день: что сделано, что перенести.',
@@ -315,7 +316,7 @@ describe('assignedTickets: очередь исполнителя читает Н
   // аспектом (значения остались — Р9), «вернуть ничего» — строка, у которой назначение
   // записано как положено. Прямой INSERT нужен ровно ради первой: исполнитель такой строки
   // не создаёт, а читатель обязан на ней отличать «аспект есть» от «значение есть».
-  const owner = freshUserId();
+  const owner = mintGraph();
   const grantId = newId();
   const otherGrantId = newId();
   const byProps = newId();
@@ -463,7 +464,7 @@ describe('runSummary: шестнадцать полей читаются по id
 
 describe('runSummary: рутинные поля сводки (V1.4)', () => {
   test('routine_id, bucket, attempt, fail_note и статус предложения едут в сводку; mismatches — нет', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const routineId = await seedRoutine(owner, { title: 'Рутина сводки' });
     const pendingId = newId();
     const { runId } = await seedRoutineRun(owner, {
@@ -505,7 +506,7 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
   });
 
   test('edited_from предложения едет в сводку (Ш1.8): следующий прогон обязан узнать, что его текст правили', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const routineId = await seedRoutine(owner, { title: 'Рутина правки' });
     const pendingId = newId();
     const editedFrom = newId();
@@ -540,7 +541,7 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
   });
 
   test('undecided едет в сводку только как true (D42 ОЧ.6): при false ключа в сводке нет', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const routineId = await seedRoutine(owner, { title: 'Рутина пачки' });
     const open = await seedRoutineRun(owner, {
       routineId,
@@ -581,7 +582,7 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
   });
 
   test('грантовая сводка рутинных ключей не заводит: `?` значит «этого не было»', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const ticket = await seedEntity(owner, {
       title: 'Тикет сводки',
       tags: [],

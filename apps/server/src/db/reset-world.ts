@@ -1,7 +1,7 @@
 // apps/server/src/db/reset-world.ts
 //
-// «ПЕРЕСЕВ МИРА» (РП-7, D43): разрушающая прод-операция, которая сносит граф и журнал
-// владельцев, их строки реестров и дельты, а затем пересевает три системных реестра.
+// «ПЕРЕСЕВ МИРА» (РП-7, D43): разрушающая прод-операция, которая сносит МИР графов и журнал,
+// пользовательские строки реестров и дельты, а затем пересевает три системных реестра.
 // Запускается ровно одним путём — `bun scripts/ops.ts reset-world` (белый список, секрет из
 // Ключницы); здесь живут её состав, подтверждение и отчёт.
 //
@@ -16,6 +16,9 @@
 // прода и зачисткой между сьютами (`test/helpers.ts:truncateAll`, которая сносит и настройки,
 // и гранты): владелец после пересева заходит в то же приложение теми же ключами, просто в
 // пустой мир.
+// …а также `graphs` и `graph_members` (D44): граф — единица владения, пересев сносит МИР графа, а не
+// сам граф. Снос графа при живых `user_settings`, `agent_grants` и `ai_usage` упал бы на FK (TRUNCATE
+// здесь без CASCADE — см. ниже), а с CASCADE сломал бы контракт «те же ключи, пустой мир».
 import type { ISql, Sql } from 'postgres';
 import { type SeedRegistriesResult, seedRegistries, seedRegistriesReport } from './seed-registries';
 
@@ -39,7 +42,7 @@ export const DEFINITION_TABLES = [
 ] as const;
 
 /**
- * Граф и журнал владельцев — то, что сносится начисто.
+ * Мир графов и журнал — то, что сносится начисто (сами графы и членство пересев переживают).
  *
  * `TRUNCATE` списком, БЕЗ `CASCADE`, и это выбор, а не упущение. FK-граф базы (восемь связей)
  * ссылается на `entities` и `chat_threads` только из этой же семёрки, поэтому `CASCADE`
@@ -52,7 +55,7 @@ export const DEFINITION_TABLES = [
  * восьмая связь на `entities` приехала срезом Б-1, и без строки ниже прод-пересев упал бы
  * на висячей ссылке кэша.
  */
-const GRAPH_TABLES = [
+export const WORLD_TABLES = [
   'entities',
   'relations',
   'chat_threads',
@@ -70,8 +73,8 @@ const GRAPH_TABLES = [
  * граф, и на непустом графе с чистыми реестрами был бы зелёным.
  */
 export interface ResetWorldState {
-  /** Строк в каждой таблице графа и журнала. */
-  graph: Record<(typeof GRAPH_TABLES)[number], number>;
+  /** Строк в каждой таблице мира и журнала. */
+  world: Record<(typeof WORLD_TABLES)[number], number>;
   /** Строк в `registry_deltas`. */
   deltas: number;
   /** Пользовательских строк во всех шести реестрах суммой. */
@@ -83,8 +86,8 @@ export interface ResetWorldState {
 }
 
 export interface ResetWorldReport {
-  /** Сколько строк было в каждой таблице графа и журнала ДО сноса. */
-  graph: Record<(typeof GRAPH_TABLES)[number], number>;
+  /** Сколько строк было в каждой таблице мира и журнала ДО сноса. */
+  world: Record<(typeof WORLD_TABLES)[number], number>;
   /** Снесённые дельты реестров (их снос идёт ПЕРВЫМ — см. `resetWorld`). */
   deltas: number;
   /** Снесённые пользовательские строки каждого реестра. */
@@ -106,7 +109,7 @@ export interface ResetWorldReport {
  */
 async function readState(tx: ISql): Promise<ResetWorldState> {
   const [row] = (await tx.unsafe(
-    `SELECT ${GRAPH_TABLES.map((t) => `(SELECT count(*) FROM ${t})::int AS ${t}`).join(', ')},
+    `SELECT ${WORLD_TABLES.map((t) => `(SELECT count(*) FROM ${t})::int AS ${t}`).join(', ')},
             (SELECT count(*) FROM registry_deltas)::int AS deltas,
             ${DEFINITION_TABLES.map(
               (t) => `(SELECT count(*) FROM ${t} WHERE graph_id IS NOT NULL)::int`,
@@ -115,10 +118,10 @@ async function readState(tx: ISql): Promise<ResetWorldState> {
             (SELECT version FROM registry_system WHERE id = 1)::int AS system_version`,
   )) as unknown as Record<string, number>[];
   if (row === undefined) throw new Error('reset-world: снимок состояния не вернул ни одной строки');
-  const graph = {} as ResetWorldState['graph'];
-  for (const t of GRAPH_TABLES) graph[t] = row[t] ?? 0;
+  const world = {} as ResetWorldState['world'];
+  for (const t of WORLD_TABLES) world[t] = row[t] ?? 0;
   return {
-    graph,
+    world,
     deltas: row.deltas ?? 0,
     ownerDefinitions: row.owner_definitions ?? 0,
     ownerVersionMax: row.owner_version_max ?? 0,
@@ -160,7 +163,7 @@ export async function resetWorld(sql: Sql, adminDsn: string): Promise<ResetWorld
     await tx.unsafe('TRUNCATE registry_deltas');
 
     // (2) Граф и журнал.
-    await tx.unsafe(`TRUNCATE ${GRAPH_TABLES.join(', ')} RESTART IDENTITY`);
+    await tx.unsafe(`TRUNCATE ${WORLD_TABLES.join(', ')} RESTART IDENTITY`);
 
     // (3) Пользовательские строки реестров.
     const definitions = {} as ResetWorldReport['definitions'];
@@ -183,7 +186,7 @@ export async function resetWorld(sql: Sql, adminDsn: string): Promise<ResetWorld
     const after = await readState(tx);
 
     return {
-      graph: before.graph,
+      world: before.world,
       deltas: before.deltas,
       definitions,
       settingsReset: settingsReset.count,
@@ -198,7 +201,7 @@ export async function resetWorld(sql: Sql, adminDsn: string): Promise<ResetWorld
 export function resetWorldReport(r: ResetWorldReport): string[] {
   return [
     'reset-world: снесено —',
-    `  граф и журнал: ${Object.entries(r.graph)
+    `  мир и журнал: ${Object.entries(r.world)
       .map(([t, n]) => `${t} ${n}`)
       .join(', ')}`,
     `  дельты реестров: ${r.deltas}`,
@@ -208,7 +211,7 @@ export function resetWorldReport(r: ResetWorldReport): string[] {
     `  версия реестра владельца обнулена у строк настроек: ${r.settingsReset}`,
     ...seedRegistriesReport(r.seed),
     'reset-world: после —',
-    `  граф и журнал: ${Object.entries(r.after.graph)
+    `  мир и журнал: ${Object.entries(r.after.world)
       .map(([t, n]) => `${t} ${n}`)
       .join(', ')}`,
     `  дельты реестров: ${r.after.deltas}`,

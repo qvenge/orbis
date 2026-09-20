@@ -25,7 +25,7 @@ import {
   adminDb,
   appDb,
   entityColumns,
-  freshUserId,
+  freshGraph,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -81,7 +81,7 @@ function ownerCaller(user: string, provider?: LLMProvider, entitlements?: Entitl
 
 /** Свежий владелец с онбординг-категориями (aliases нужны suggestedCategoryRef). */
 async function freshOwner(): Promise<{ user: string; foodId: string; transportId: string }> {
-  const user = freshUserId();
+  const user = await freshGraph();
   await seedOwnerGraph(db, user);
   return {
     user,
@@ -1429,7 +1429,7 @@ describe('import.analyze: маппинг колонок через tool-call', (
 describe('роутер import: ownerOnly (§9.3)', () => {
   test('PAT-агент получает FORBIDDEN до какой-либо работы', async () => {
     const agent = createCaller({
-      actorUserId: freshUserId(),
+      actorUserId: await freshGraph(),
       actorKind: 'agent',
       db: null as unknown as ReturnType<typeof appDb>['db'],
       clientVersion: null,

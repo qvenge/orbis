@@ -10,7 +10,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type AgendaListResult, addDays } from '@orbis/shared';
 import { GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
-import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { materializeInstances } from '../recurring/materialize';
 import { effectiveRegistry } from '../registry/cache';
@@ -51,7 +51,7 @@ afterAll(async () => {
 
 describe('движок Agenda: одна подписка, один запрос, тег секции', () => {
   test('§8.1: чистое событие вчера — ни в окне, ни в просроченном (класса завершаемости нет)', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const ev = await make(u, 'Прошедший созвон', {
       props: { 'orbis/start_at': at(addDays(today, -1), '10:00') },
       aspects: ['orbis/schedule'],
@@ -70,7 +70,7 @@ describe('движок Agenda: одна подписка, один запрос,
   });
 
   test('§8.2: срок вчера — просроченное; done уносит строку (класс вышел из набора open)', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const t = await make(u, 'Закончить API', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': addDays(today, -1) },
       aspects: ['orbis/task'],
@@ -85,7 +85,7 @@ describe('движок Agenda: одна подписка, один запрос,
   });
 
   test('§8.3: обе даты в прошлом — ОДНА строка, дата — минимум из двух, слот назван', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const t = await make(u, 'Подтвердить созвон', {
       props: {
         'orbis/task_status': 'planned',
@@ -104,7 +104,7 @@ describe('движок Agenda: одна подписка, один запрос,
   });
 
   test('§8.4: окно — только слот moment; задача с одним сроком в него не попадает', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const due = await make(u, 'Разобрать Inbox', {
       props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': addDays(today, 1) },
       aspects: ['orbis/task'],
@@ -121,7 +121,7 @@ describe('движок Agenda: одна подписка, один запрос,
   test('срок вчера + начало завтра — строки ОБЕИХ секций (паритет трёх запросов)', async () => {
     // Сегодня такая задача приходит и в дневном окне, и в просроченном; единственный запрос
     // обязан сохранить оба вхождения — иначе паритет §С8-17 фиктивен.
-    const u = freshUserId();
+    const u = await freshGraph();
     const t = await make(u, 'Оплатить интернет', {
       props: {
         'orbis/task_status': 'planned',
@@ -143,7 +143,7 @@ describe('движок Agenda: одна подписка, один запрос,
 
 describe('движок Agenda: потолок секций, наборы контрактов, горизонт', () => {
   test('«200+» — ПО СЕКЦИИ: 201-я строка просроченного не приезжает, флаг поднят, окно цело', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     for (let i = 0; i < 201; i++)
       await make(u, `Задача ${i}`, {
         props: { 'orbis/task_status': 'planned', 'orbis/due_date': addDays(today, -1) },
@@ -155,7 +155,7 @@ describe('движок Agenda: потолок секций, наборы кон�
   }, 30_000); // явный таймаут: десятки операций через исполнитель не влезают в 5 с при server ∥ web (Ф-Б1-41)
 
   test('шаблон повторения скрыт набором templates, инстанс виден; окно материализации из декларации (Р-К-12)', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const tpl = await make(u, 'Стендап (шаблон)', {
       props: {
         'orbis/start_at': at(today, '09:00'),
@@ -174,7 +174,7 @@ describe('движок Agenda: потолок секций, наборы кон�
     // окну, и до правки цикл толкал её в просроченное — 201 строка при поднятом флаге.
     // Даты подобраны так, что двойная сортируется в просроченном ПОСЛЕДНЕЙ (LEAST по её паре
     // даёт вчера против позавчера у остальных), то есть её rn_overdue заведомо за сторожем.
-    const u = freshUserId();
+    const u = await freshGraph();
     for (let i = 0; i < 201; i++)
       await make(u, `Просрочено ${i}`, {
         props: { 'orbis/task_status': 'planned', 'orbis/due_date': addDays(today, -2) },
@@ -197,7 +197,7 @@ describe('движок Agenda: потолок секций, наборы кон�
   }, 30_000); // явный таймаут: десятки операций через исполнитель не влезают в 5 с при server ∥ web (Ф-Б1-41)
 
   test('направление окна — из декларации: sortBy desc переворачивает порядок (M-3)', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const t1 = await make(u, 'Сегодня', {
       props: { 'orbis/start_at': at(today, '10:00') },
       aspects: ['orbis/schedule'],
@@ -228,7 +228,7 @@ describe('движок Agenda: потолок секций, наборы кон�
    * `EXPR_SHAPE` на чтении, роняя `agenda.list` целиком.
    */
   test('слот контракта в overdue.where: принято на записи — обязано считаться на чтении', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const byDeadline = await make(u, 'Со сроком', {
       props: { 'orbis/task_status': 'planned', 'orbis/due_date': addDays(today, -1) },
       aspects: ['orbis/task'],
@@ -263,7 +263,7 @@ describe('движок Agenda: потолок секций, наборы кон�
    * целиком, а не одной строкой. Явный `overdue.prefer` по-прежнему главнее.
    */
   test('overdue наследует show.prefer, когда свой prefer пуст (Ф-Б1-60)', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     await seedCustomAspect(u, GATE_PLAIN_ASPECT);
     const both = await make(u, 'Две привязки moment, просрочено', {
       aspects: ['orbis/schedule', GATE_PLAIN_KEY],
@@ -301,7 +301,7 @@ describe('движок Agenda: потолок секций, наборы кон�
   });
 
   test('горизонт — параметр вызова: days=1 отдаёт только сегодняшний день', async () => {
-    const u = freshUserId();
+    const u = await freshGraph();
     const t1 = await make(u, 'Сегодня', {
       props: { 'orbis/start_at': at(today, '10:00') },
       aspects: ['orbis/schedule'],

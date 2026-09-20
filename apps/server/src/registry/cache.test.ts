@@ -10,7 +10,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { attachToolName, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
@@ -75,7 +75,7 @@ async function ownerVersion(graphId: string): Promise<number> {
 
 describe('версия реестра — в той же транзакции, что мутация (§А10-1)', () => {
   test('дельта и инкремент видны ВМЕСТЕ: внутри своей tx обе правки уже на месте', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const before = await ownerVersion(owner);
     const inside = await withIdentity(db, owner, async (tx) => {
       await insertDelta(tx, owner, 'aspect', 'orbis/task', { label: { ru: 'Дело' } });
@@ -89,7 +89,7 @@ describe('версия реестра — в той же транзакции, �
   });
 
   test('откат уносит ОБЕ правки: ни дельты, ни сдвинутой версии не остаётся', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const before = await ownerVersion(owner);
     await expect(
       withIdentity(db, owner, async (tx) => {
@@ -103,7 +103,7 @@ describe('версия реестра — в той же транзакции, �
   });
 
   test('инкремент заводит строку настроек, если её не было: UPDATE не тронул бы ни одной', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     expect(await ownerVersion(owner)).toBe(0); // строки user_settings ещё нет
     await withIdentity(db, owner, (tx) => bumpOwnerRegistryVersion(tx, owner));
     expect(await ownerVersion(owner)).toBe(1);
@@ -112,7 +112,7 @@ describe('версия реестра — в той же транзакции, �
 
 describe('кеш эффективных определений (§А10-1)', () => {
   test('второе чтение той же версии — попадание, чтение после мутации — промах и НОВЫЙ снимок', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const first = registryCacheStats();
     const a = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
     const afterFirst = registryCacheStats();
@@ -131,8 +131,8 @@ describe('кеш эффективных определений (§А10-1)', () =
   });
 
   test('два владельца независимы: дельта одного не видна другому и не вытесняет его снимок', async () => {
-    const mine = freshUserId();
-    const neighbour = freshUserId();
+    const mine = await freshGraph();
+    const neighbour = await freshGraph();
     await writeDelta(mine, 'aspect', 'orbis/task', { label: { ru: 'Дело' } });
     const a = await withIdentity(db, mine, (tx) => effectiveRegistry(tx, mine));
     const b = await withIdentity(db, neighbour, (tx) => effectiveRegistry(tx, neighbour));
@@ -146,11 +146,11 @@ describe('кеш эффективных определений (§А10-1)', () =
   });
 
   test('размер кеша не растёт выше предела, а вытесненный владелец читается заново', async () => {
-    const first = freshUserId();
+    const first = await freshGraph();
     await withIdentity(db, first, (tx) => effectiveRegistry(tx, first));
     // Ещё REGISTRY_CACHE_LIMIT владельцев: первый обязан быть вытеснен как самый старый.
     for (let i = 0; i < REGISTRY_CACHE_LIMIT; i += 1) {
-      const other = freshUserId();
+      const other = await freshGraph();
       await withIdentity(db, other, (tx) => effectiveRegistry(tx, other));
     }
     expect(registryCacheStats().size).toBe(REGISTRY_CACHE_LIMIT);
@@ -160,7 +160,7 @@ describe('кеш эффективных определений (§А10-1)', () =
   }, 60_000);
 
   test('транзакция, которая уже писала, кеш ОБХОДИТ — и не читает его, и не наполняет', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     // Строка настроек нужна, чтобы запись ниже была именно UPDATE'ом, не меняющим версию.
     await withIdentity(db, owner, (tx) => bumpOwnerRegistryVersion(tx, owner));
     // Прогрев: снимок этой версии в кеше есть.
@@ -185,7 +185,7 @@ describe('кеш эффективных определений (§А10-1)', () =
 
 describe('дельта видна сквозь реестр: тул и форма (§А3-2, §А9-2)', () => {
   test('скрытое дельтой поле исчезает из attach_task и из registry.effective, добавленное — появляется', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const caller = createCaller({
       actorUserId: owner,
       actorKind: 'owner',
@@ -225,7 +225,7 @@ describe('дельта видна сквозь реестр: тул и форм�
   });
 
   test('дельта подписи свойства доезжает до описания параметра attach_*-тула', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await writeDelta(owner, 'property', 'orbis/priority', {
       label: { ru: 'Важность' },
       description: { ru: 'Насколько это срочно для меня' },

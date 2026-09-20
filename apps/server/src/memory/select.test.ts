@@ -13,7 +13,7 @@ import { sql } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -59,7 +59,7 @@ async function titlesOf(user: string, where: ReturnType<typeof memoryRulesWhere>
 }
 
 test('memoryRulesWhere отбирает правила своей области И глобальные; факты, архив и снятый носитель — нет', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const target = newId();
   await create(user, {
     title: 'КАТ',
@@ -132,7 +132,7 @@ test('memoryRulesWhere отбирает правила своей области
 });
 
 test('SQL-предикат области и клиентский ruleAppliesTo отвечают одинаково на одних строках', async () => {
-  const user = freshUserId();
+  const user = await freshGraph();
   const target = newId();
   await create(user, {
     title: 'КАТ',

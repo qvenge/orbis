@@ -20,11 +20,16 @@
 import { ORBIS_NAMESPACE } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
-import { adminDb } from '../../test/helpers';
+import { adminDb, ensureGraphs, mintGraph } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 
-/** Владелец корпуса — один и тот же между прогонами, иначе кеш не имел бы смысла. */
-export const GRAPH_OWNER_ID = uuidv5('graph-perf-fixture:owner', ORBIS_NAMESPACE);
+/**
+ * Владелец корпуса — один и тот же между прогонами, иначе кеш не имел бы смысла. `mintGraph`
+ * регистрирует его в реестре личностей процесса (0020: без строки `graphs` FK не пустит ни одной
+ * сущности), но строки заводит не он — корпус живёт вне `truncateAll`, поэтому сев зовёт
+ * `ensureGraphs([GRAPH_OWNER_ID])` первым действием.
+ */
+export const GRAPH_OWNER_ID = mintGraph(uuidv5('graph-perf-fixture:owner', ORBIS_NAMESPACE));
 
 /**
  * Размеры уровней иерархии: девять уровней (0…8) — ровно глубина 8. Числа подобраны так,
@@ -171,6 +176,7 @@ export async function ensureGraphFixture(): Promise<{
   relations: number;
   seeded: boolean;
 }> {
+  await ensureGraphs([GRAPH_OWNER_ID]);
   const { db, client } = adminDb();
   try {
     const before = await countRows(db);

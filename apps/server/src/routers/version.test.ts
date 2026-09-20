@@ -7,7 +7,7 @@ import { newId } from '@orbis/shared';
 import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -38,7 +38,7 @@ interface Node {
   attrs?: Record<string, unknown>;
 }
 
-const owner = freshUserId();
+const owner = mintGraph();
 const a = callerFor(owner);
 
 beforeAll(async () => {
@@ -235,7 +235,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
   });
 
   test('чужие версии недостижимы: list пуст, pin и restore → NOT_FOUND (RLS §4.10)', async () => {
-    const b = callerFor(freshUserId());
+    const b = callerFor(await freshGraph());
     const id = newId();
     await a.entity.create({
       input: { id, title: 'Только моё', tags: [], body: 'тело' },

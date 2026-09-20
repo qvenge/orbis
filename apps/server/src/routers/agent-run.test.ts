@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ClaimTaskResult, MyQueueResult } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import type { ActionRecord } from '../executor/types';
 import { appRouter } from '../router';
 import { type AnyRecord, agentLoopHelpers } from '../test/agent-loop-helpers';
@@ -60,7 +60,7 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
-  const owner = freshUserId();
+  const owner = mintGraph();
   const a = callerFor(owner);
   let grantId = '';
   let projectId = '';
@@ -289,8 +289,8 @@ describe('agentRun.sweep (С6)', () => {
 
   test('с экрана: тот же результат, что подметание в orbis_my_queue; actor owner, source system', async () => {
     // Две одинаковые фикстуры у РАЗНЫХ владельцев: сравниваем не «похоже», а результат
-    const viaScreen = freshUserId();
-    const viaQueue = freshUserId();
+    const viaScreen = await freshGraph();
+    const viaQueue = await freshGraph();
     const screenGrant = await workerGrant(viaScreen, 'подметание с экрана');
     const queueGrant = await workerGrant(viaQueue, 'подметание из очереди');
     const screen = await seedStale(viaScreen, screenGrant);
@@ -336,7 +336,7 @@ describe('agentRun.sweep (С6)', () => {
   });
 
   test('подметать нечего → swept 0, журнал не растёт', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const before = (await actionsOf(owner)).length;
     expect(await callerFor(owner).agentRun.sweep({})).toEqual({ swept: 0 });
     expect((await actionsOf(owner)).length).toBe(before);
@@ -354,7 +354,7 @@ describe('agentRun: ownerOnly (§9.3)', () => {
    * свой же вопрос. Гейт обязан лететь ДО БД, поэтому caller без рабочего пула.
    */
   const agent = createCaller({
-    actorUserId: freshUserId(),
+    actorUserId: mintGraph(),
     actorKind: 'agent',
     db: undefined as never,
     clientVersion: null,

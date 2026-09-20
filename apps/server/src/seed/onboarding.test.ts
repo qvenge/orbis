@@ -19,7 +19,7 @@ import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/quer
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { assertEntityProps } from '../executor/aspects-validate';
@@ -84,6 +84,36 @@ async function counts(
   }
 }
 
+/**
+ * Личный граф аккаунта в цифрах: строка `graphs` с тождеством `id = owner_ref` и ровно один
+ * действующий грант `owner`, выданный самим аккаунтом (спека §3.1–§3.2). Читается админ-DSN:
+ * у графа без членства SELECT-политика молчит, и ноль строк означал бы не «нет графа», а «не видно».
+ */
+async function graphRows(
+  user: string,
+): Promise<{ graphs: number; ownerRefOk: number; members: number; issuedByOk: number }> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const g = await admin.execute(
+      sql`SELECT count(*)::int AS n, count(*) FILTER (WHERE owner_ref = ${user}::uuid AND owner_kind = 'person')::int AS ok
+          FROM graphs WHERE id = ${user}::uuid`,
+    );
+    const m = await admin.execute(
+      sql`SELECT count(*)::int AS n, count(*) FILTER (WHERE issued_by = ${user}::uuid)::int AS ok
+          FROM graph_members
+          WHERE graph_id = ${user}::uuid AND grant_kind = 'owner' AND revoked_at IS NULL`,
+    );
+    return {
+      graphs: Number(g[0]?.n),
+      ownerRefOk: Number(g[0]?.ok),
+      members: Number(m[0]?.n),
+      issuedByOk: Number(m[0]?.ok),
+    };
+  } finally {
+    await adminClient.end();
+  }
+}
+
 beforeAll(async () => {
   await truncateAll();
 });
@@ -93,13 +123,16 @@ afterAll(async () => {
 });
 
 describe('user.seedOnboarding (02 §7): состав и одноразовость', () => {
-  test('создаёт ровно 12+6+садовник сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
-    const user = freshUserId();
+  test('создаёт личный граф, ровно 12+6+садовник сущностей, настройки и глобальный тред; повтор → {seeded:false}, ни граф, ни count не растут', async () => {
+    // Аккаунт БЕЗ графа — обычной фикстурой `freshGraph()` строка `graphs` уже была бы заведена,
+    // и сев графа первым шагом `seedOwnerGraph` (D44) проверять было бы нечем.
+    const user = crypto.randomUUID();
     const caller = callerFor(user);
 
     const first = await caller.user.seedOnboarding();
     expect(first).toEqual({ seeded: true });
     expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
+    expect(await graphRows(user)).toEqual({ graphs: 1, ownerRefOk: 1, members: 1, issuedByOk: 1 });
     // …и число 19 — не литерал из воздуха: мир владельца (`seed/world.ts`, 12 категорий +
     // 6 смарт-листов) плюс садовник, которого сеет отдельная транзакция. Сложи кто-нибудь
     // в набор седьмой список — литерал выше покраснеет, и вот эта строка скажет, почему.
@@ -116,14 +149,16 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
       await adminClient.end();
     }
 
-    // Одноразовость §7: повторный вызов ничего не добавляет
+    // Одноразовость §7: повторный вызов ничего не добавляет — включая личный граф
+    // (`seedOwnerGraph` идёт вторым заходом целиком, `ensurePersonalGraph` идемпотентен).
     const second = await caller.user.seedOnboarding();
     expect(second).toEqual({ seeded: false });
     expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
+    expect(await graphRows(user)).toEqual({ graphs: 1, ownerRefOk: 1, members: 1, issuedByOk: 1 });
   });
 
   test('конкурентные два seedOnboarding под разными коннекшнами → без дублей (детерминированные id + ON CONFLICT)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const a = appDb();
     const b = appDb();
     try {
@@ -150,7 +185,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
 
 describe('категории §7.1', () => {
   test('12 категорий; каждая из БД проходит валидатор реестра; spend_class отсутствует у доходных', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -193,7 +228,7 @@ describe('категории §7.1', () => {
   });
 
   test('категория «Еда» находится entity.query(tags=category, search=Еда)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -224,7 +259,7 @@ describe('категории §7.1', () => {
  */
 describe('сид против запрета core-проекций в props (§А1-3, единица 15-бис)', () => {
   test('все 19 посеянных строк проходят валидатор реестра: core-значения — в колонках, в props их нет', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -303,7 +338,7 @@ describe('smart lists §7.2 / §3.3', () => {
     // Реестр — из ручки, а не из фикстуры: страховка от опечатки в сиде стоит ровно
     // столько, сколько стоит её словарь, а сидированный блок увидит именно тот реестр,
     // который отдаёт сервер.
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const { properties, roles, aspects, contracts } = await caller.registry.effective();
     const reg = toParseRegistry(
       {
@@ -345,7 +380,7 @@ describe('smart lists §7.2 / §3.3', () => {
   // исчерпывающим разбором токенов и типов полей. Блок, который парсится, но не
   // компилируется, приехал бы пользователю красной плашкой в готовом списке.
   test('каждый query-блок шести списков выполняется entity.query против живой БД', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -368,7 +403,7 @@ describe('smart lists §7.2 / §3.3', () => {
   });
 
   test('шесть сущностей smart-list: tags, emoji, детерминированный id, порядок pinned', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -393,7 +428,7 @@ describe('smart lists §7.2 / §3.3', () => {
 
   // E4: два верхних горизонта планирования — отдельные сущности со своими слагами.
   test('два горизонта: заголовки Год/Жизнь на детерминированных id', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -416,7 +451,7 @@ describe('smart lists §7.2 / §3.3', () => {
 
 describe('настройки §7.3 (getSettings / updateSettings)', () => {
   test('getSettings: дефолты §7.3; pinnedEntities в порядке daily/upcoming/allTasks/Год/Рутины', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -437,7 +472,7 @@ describe('настройки §7.3 (getSettings / updateSettings)', () => {
   });
 
   test('updateSettings: частичная правка меняет заданные поля, остальные не трогает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -459,7 +494,7 @@ describe('настройки §7.3 (getSettings / updateSettings)', () => {
 // аккаунтом (FORBIDDEN), read-пути ему открыты, владельцу гейт не мешает.
 describe('ownerOnly (§9.3): агент против владельца', () => {
   test('агент: мутации аккаунта → FORBIDDEN; getSettings доступен; владелец — ok', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const owner = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
     const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
 
@@ -497,7 +532,7 @@ describe('ownerOnly (§9.3): агент против владельца', () => 
 // прочих значений/полей.
 describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
   test('новый пользователь получает orbis-budget при первом сидировании', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -506,7 +541,7 @@ describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
   });
 
   test('пользователь без orbis-budget получает его при повторном seedOnboarding; повтор не дублирует', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -524,7 +559,7 @@ describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
   });
 
   test('кастомные значения installedViews не теряются при бэкфилле', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -538,7 +573,7 @@ describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
   });
 
   test('бэкфилл не трогает остальные поля user_settings', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -578,7 +613,7 @@ describe('горизонты показывают обещанное (§3.3, E4)
   }
 
   test('«Год» отбирает цели, «Жизнь» — сущности с тегом life, и ничего сверх', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -673,7 +708,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
   ];
 
   test('новый пользователь получает оба горизонта и закрепление «Года» за один проход', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
 
@@ -689,7 +724,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
   });
 
   test('засиденный ДО E4: повторный seedOnboarding досевает оба горизонта и пин; повтор не дублирует', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -716,7 +751,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
   });
 
   test('досевается РОВНО недостающее: удалён один горизонт — вставлен один, пин не тронут', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -733,7 +768,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
   });
 
   test('кастомные закрепления не теряются: «Год» дописывается в конец', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -752,7 +787,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
   // По длине массива новый пин получил бы order 2 и встал бы В СЕРЕДИНУ сайдбара, хотя
   // и код, и тест обещают «в конец». Берём max(order)+1.
   test('дыра в order: «Год» получает max(order)+1, а не длину массива', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -822,7 +857,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   ];
 
   test('новый владелец: шесть списков, «Рутины» шестым и пятым закреплением', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
 
@@ -843,7 +878,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   });
 
   test('засиденный ДО V1: повторный seedOnboarding досевает список и пин; повтор идемпотентен', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -873,7 +908,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   });
 
   test('«Ждут ответа» находит прогон с исходом checkpoint и не находит отвеченный', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await callerFor(user).user.seedOnboarding();
 
     const routineId = await helpers.seedRoutine(user, { title: 'Утренний обзор' });
@@ -909,7 +944,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   });
 
   test('«Активные рутины» находит active и не находит paused', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await callerFor(user).user.seedOnboarding();
 
     const active = await helpers.seedRoutine(user, { title: 'Активная' });
@@ -927,7 +962,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   // терминальным вопросом (первый блок), «ждёт решения» — предложением рутины, и слить
   // три вида ожидания в один заголовок значило бы обещать одну кнопку на все три.
   test('«Пачка решений» находит прогон с undecided=true и не находит ни разобранный, ни checkpoint-прогон без флажка; первый блок пачку не показывает', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await callerFor(user).user.seedOnboarding();
 
     const routineId = await helpers.seedRoutine(user, { title: 'Ночная сводка' });
@@ -1071,7 +1106,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     }
 
     test('бэкфилл D42: тело владельца с блоком пачки — no-op; без блока — блок добавлен; текст владельца не затёрт', async () => {
-      const user = freshUserId();
+      const user = await freshGraph();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
 
@@ -1108,7 +1143,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       // навсегда. Признак «блока нет» отвечает на нужный вопрос, а дописывание в конец
       // сохраняет чужой текст (перезапись уничтожила бы его без следа — версий у
       // мимо-executor'ного сида нет).
-      const user = freshUserId();
+      const user = await freshGraph();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
       const note = 'Моя заметка: не трогать.';
@@ -1127,7 +1162,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     test('свой блок владельца на то же свойство считается пачкой — сид второй не навязывает', async () => {
       // Признак спрашивает АДРЕС СВОЙСТВА, а не заголовок и не текст: владелец, собравший
       // свой список отложенного, второй такой же блок получить не должен.
-      const user = freshUserId();
+      const user = await freshGraph();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
       await setRoutinesBody(
@@ -1147,7 +1182,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       // прод-тела дерева нет ни у одного блока: строгий разбор старую грамматику отвергает
       // (проба на HEAD: `query_refs` = []). Спрашивать только дерево значило бы ответить
       // «пачки нет» там, где она есть третьим блоком, и дописать её второй раз.
-      const user = freshUserId();
+      const user = await freshGraph();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
       await setRoutinesBody(user, PROD_ROUTINES_BODY_D42);
@@ -1167,7 +1202,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     test('ПРОД-ТЕЛО до D42 (два блока старой грамматики): блок пачки ДОПИСАН один раз', async () => {
       // Обратная сторона: у владельца V1 пачки нет, и текстовый признак обязан это увидеть
       // — иначе фикс первого теста превратился бы в «никогда не досеваем».
-      const user = freshUserId();
+      const user = await freshGraph();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
       await setRoutinesBody(user, PROD_ROUTINES_BODY_BEFORE_D42);
@@ -1191,7 +1226,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       // Текстовый путь признака читает ИМЯ ПОЛЯ, а не подстроку: подпись, которую владелец
       // написал сам, адресом не является. Без снятия кавычек признак ответил бы «пачка уже
       // есть» на блоке, где её нет, и владелец не получил бы её никогда.
-      const user = freshUserId();
+      const user = await freshGraph();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
       await setRoutinesBody(
@@ -1208,7 +1243,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     });
 
     test('владелец, засиденный ДО «Рутин» вовсе: досев вставляет список сразу с тремя блоками', async () => {
-      const user = freshUserId();
+      const user = await freshGraph();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
       await deleteRoutinesList(user);
@@ -1222,7 +1257,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
 
 describe('registry.effective (§А9-2): эффективный реестр владельца одним ответом', () => {
   test('отдаёт встроенные свойства, аспекты и роли в порядке rank, graphId у встроенных — null', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const { properties, roles, aspects } = await caller.registry.effective();
 
     // Словари ЦЕЛИКОМ: каталог полей web строится по ним, и недостача любого свойства
@@ -1247,7 +1282,7 @@ describe('registry.effective (§А9-2): эффективный реестр вл
   });
 
   test('снимок разбора из ОДНОЙ выдачи резолвит имена канона §А5-3', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     // Ровно та сборка, которую делает web (`buildQueryRegistry`): выдачи ОДНОЙ ручки
     // достаточно, чтобы разобрать боевой текст без единого обращения к БД. До Задачи 13a
     // ручек было две (`aspect.list` + `aspect.properties`), и аспект приходилось собирать
@@ -1277,7 +1312,7 @@ describe('механизм сева мира (§А2-5)', () => {
   const CARRYOVER = 'orbis/carryover';
 
   test('механизм сева ВПРАВЕ писать system_writable-свойство', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const r = await execute(db, {
       actorUserId: user,
       actorKind: 'owner',
@@ -1294,7 +1329,7 @@ describe('механизм сева мира (§А2-5)', () => {
   });
 
   test('тот же вызов БЕЗ механизма сева — отказ по системному свойству (§А2-5)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const r = await execute(db, {
       actorUserId: user,
       actorKind: 'owner',

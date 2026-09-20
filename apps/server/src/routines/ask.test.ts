@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type AskResult, entityThreadId, newId, pendingMessageId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { askDedupeKey } from '../policy/pending';
@@ -20,7 +20,7 @@ import { MAX_RUN_UNITS } from './constants';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const { propsOf, routineCtx, seedRoutine, seedRoutineRun, worker, workerGrant } =
   agentLoopHelpers(db);
 

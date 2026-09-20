@@ -10,7 +10,8 @@ import { sql } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -36,13 +37,13 @@ import { disabledModulesOf, setModuleDisabled } from './modules';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 /**
  * Владелец ТОЛЬКО для чтения-записи маски: у него нет строки настроек, и это предмет первого
  * теста. Сид мира завёл бы её вместе с графом — проверять «строки нет» стало бы не на ком,
  * а гонять маску на общем владельце значило бы утащить состояние в соседние блоки.
  */
-const maskOwner = freshUserId();
+const maskOwner = mintGraph();
 // Боевой синк журнала: без него `execute` уходит в NOOP_SINK, и «отмени последнее» не
 // нашло бы ни одного действия — предмет проверки блока `module_set` пропал бы вместе с ним.
 const sink = makeChatJournalSink();
@@ -196,7 +197,7 @@ describe('маска модулей: чтение и запись (§Б8-1)', ()
     // Сравнивается ПОВЕДЕНИЕ, а не литералы: `ownerTimeZone`/`defaultCurrencyOf` — те самые
     // читатели, чьё умолчание «дефолтом кода» и является; пин на строковые константы зеленел
     // бы и при расхождении с колонкой.
-    const fresh = freshUserId();
+    const fresh = await freshGraph();
     const read = (u: string) =>
       withIdentity(db, u, async (tx) => [
         await ownerTimeZone(tx, u),

@@ -9,7 +9,7 @@
 // можно только там, где реестр тулов собирает раннер по посеянным свойствам рутины.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { type RoutineRow, routineById } from '../agent-loop/queries';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
@@ -164,7 +164,7 @@ async function runGardener(
 
 describe('сид садовника словаря (Р-17-1)', () => {
   test('онбординг сеет ОДНОГО садовника с детерминированным id; повтор ручки не плодит второго', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     const caller = callerFor(owner);
 
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
@@ -189,7 +189,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
     // Сценарий Р-17-1 живьём: первая фаза закоммитилась, вторая упала (кончился коннекшн,
     // отказ валидатора — что угодно). Guard настроек на следующем заходе ответил бы
     // «онбординг уже был» и не досеял бы садовника НИКОГДА.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await seedOwnerGraph(db, owner);
     expect(await routineRows(owner)).toHaveLength(0);
 
@@ -202,7 +202,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
   });
 
   test('доверенность садовника: act, белый список РОВНО property_merge, понедельник 09:00, стадия active', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
     const props = await propsOf(owner, seedRoutineId(owner, GARDENER_SLUG));
 
@@ -216,7 +216,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
   });
 
   test('сев прошёл ЧЕРЕЗ исполнителя и МИМО журнала: аспект на строке есть, audit-сообщения нет', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
 
     // Через исполнителя — значит строка прошла стадию 2: аспект лежит в колонке `aspects`,
@@ -241,7 +241,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
 
 describe('прогон садовника (Р-16-1, §С8-11)', () => {
   test('дубль своих свойств → property_merge ложится ОТЛОЖЕННОЙ ЕДИНИЦЕЙ в пачку, реестр не тронут, прогон продолжается и пишет отчёт', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
@@ -287,7 +287,7 @@ describe('прогон садовника (Р-16-1, §С8-11)', () => {
   });
 
   test('ВСТРОЕННОЕ свойство концом слияния → отказ по объекту (routine_untouchable), единица НЕ рождается', async () => {
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
     const own = await ownProperty(owner, 'Усилие');
 
@@ -324,7 +324,7 @@ describe('прогон садовника (Р-16-1, §С8-11)', () => {
   test('реестр тулов прогона: `property_merge` и чтения видны, остальные четыре тула реестра — нет; вызов сверх списка отклонён гейтом режима', async () => {
     // Вторая половина «ровно одного тула»: список тулов — подсказка модели, доступ решает
     // сервер, и разойтись они не имеют права (V1.10). Пин на ОБОИХ рубежах.
-    const owner = freshUserId();
+    const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
 
     const provider = new ScriptedProvider([

@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { batchAuditMessageId, globalThreadId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -107,7 +107,7 @@ function actionsOf(msg: MessageRow): ActionRecord[] {
 
 describe('боевой JournalSink: audit-сообщение в chat_messages (§7.8)', () => {
   test('1. execute(entity_create, fast_path) без threadId → системное сообщение в глобальном треде; формат action дословно §7.8 + атрибуция', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const r = ok(
       await execute(db, req(user, 'entity_create', { title: 'Кофе', tags: ['Кофе'] }), { sink }),
     );
@@ -182,7 +182,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('1b. запись entity_update: props по id свойства, без meta и без карты аспектов; mechanism на месте (§А7-4)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const created = ok(
       await execute(
         db,
@@ -268,7 +268,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('2. явный req.threadId: audit-сообщение попадает в указанный тред, не в глобальный', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const created = ok(
       await execute(db, req(user, 'entity_create', { title: 'Носитель', tags: [] }), { sink }),
     );
@@ -295,7 +295,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('3. batch: ровно одно сообщение с PK = batchAuditMessageId, action.id = batch_id, results сохранены; повтор — idempotentReplay без второго сообщения', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const batchId = newId();
     const ops = [
       { tool: 'entity_create', input: { title: 'Раз', tags: [] } },
@@ -328,7 +328,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('4. идемпотентный replay одиночного entity_create по client-UUID не пишет второго сообщения (§5.3)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const id = newId();
     const input = { id, title: 'Идемпотент', tags: [] };
     ok(await execute(db, req(user, 'entity_create', input), { sink }));
@@ -338,7 +338,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('5. КОНКУРЕНТНАЯ гонка одинаковых batch: PK chat_messages — арбитр; один applied, другой idempotentReplay, эффекты одни', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const batchId = newId();
     // Операции БЕЗ явных id: каждый вызов генерирует свои id сущностей, поэтому
     // единственная точка конфликта конкурентов — PK audit-сообщения
@@ -382,7 +382,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('6. write отклоняет entry с ≠1 action → VALIDATION: инвариант «один action на сообщение» (§7.8), на metadata.actions[0] опирается findLastUndoable (undo.ts)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const action: ActionRecord = {
       id: newId(),
       type: 'entity_updated',
@@ -415,7 +415,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('7. source=chat: карточка БЕЗ kind — сторож против дубля в ленте (карточку чат-пути уже пишет ответ ассистента)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const fromChat = req(
       user,
       'entity_create',
@@ -438,7 +438,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('8. batch (entity_id = null): карточка прежней формы и НЕ пустая — на cards[0] стоит findByAuditId (идемпотентный replay §7.8)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const batchId = newId();
     const r = ok(
       await execute(
@@ -468,7 +468,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('9. entity_id = null у источника из белого списка: карточка всё равно прежней формы (entityId клиента — строка, не null)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const auditId = newId();
     const action: ActionRecord = {
       id: newId(),
@@ -507,7 +507,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   // бы такую пробу ложно-положительной для проб вида `{"run_id": null}` и раздула бы
   // каждую строку журнала двумя пустыми ключами.
   test('10. actorGrantId/runId одиночного вызова: поля в action, контейнмент-проба находит; без них ключей НЕТ', async () => {
-    const agentUser = freshUserId();
+    const agentUser = await freshGraph();
     const grantId = newId();
     const runId = newId();
     ok(
@@ -538,7 +538,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
 
     // владельческий путь: ключей нет вовсе — иначе пробы по грантам/прогонам ловили бы
     // и действия, сделанные руками владельца
-    const ownerUser = freshUserId();
+    const ownerUser = await freshGraph();
     ok(
       await execute(db, req(ownerUser, 'entity_create', { title: 'Своими руками', tags: [] }), {
         sink,
@@ -550,7 +550,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   });
 
   test('11. batch: грант и прогон попадают в ОБЩИЙ action пакета (§7.8 — один action на batch)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const batchId = newId();
     const grantId = newId();
     const runId = newId();
@@ -584,7 +584,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
   // audit-сообщение, и форма обязана быть клиентской (с kind), иначе renderCards уйдёт
   // в default и от карточки останется голая строка content.
   test('12. source=routine: карточка ленты клиентской формы с Undo (белый список, как fast_path)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const runId = newId();
     const r = ok(
       await execute(

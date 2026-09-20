@@ -12,7 +12,7 @@ import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import type { GrantScope } from '@orbis/shared';
 import { Hono } from 'hono';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
 import type { AiDeps } from '../ai/send-message';
 import { createApp } from '../app';
 import type { Db } from '../db/client';
@@ -88,7 +88,7 @@ async function seedCode(
     .values({ clientId, clientName: 'Claude Code', redirectUris: [REDIRECT] })
     .onConflictDoNothing();
   const code = await createAuthorizationCode(db, {
-    graphId: freshUserId(),
+    graphId: await freshGraph(),
     clientId,
     label: 'проба',
     redirectUri: REDIRECT,

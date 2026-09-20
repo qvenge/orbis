@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, newId, type ProposeResult, pendingMessageId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun, runAgentVerb } from '../agent-loop/verbs';
 import { chatMessages } from '../db/schema';
@@ -25,7 +25,7 @@ import { proposalView } from './lifecycle';
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const {
   actionsOf,
   propsOf,

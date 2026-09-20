@@ -10,7 +10,7 @@ import {
   relationRoleDefinitionSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
+import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../test/helpers';
 import { bumpOwnerRegistryVersion } from './registry/version';
 import { appRouter } from './router';
 import { createCallerFactory } from './trpc';
@@ -34,7 +34,7 @@ afterAll(async () => {
 
 describe('user.exportData (§9.4)', () => {
   test('после сидирования: 19 сущностей, настройки, глобальный тред, 0 aspectDefinitions', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -85,7 +85,7 @@ describe('user.exportData (§9.4)', () => {
    * round-trip был бы истинным на пустом месте.
    */
   test('дамп v2 читается обратно: сущности и строки реестров владельца разбираются каноном', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
@@ -155,7 +155,7 @@ describe('user.exportData (§9.4)', () => {
   });
 
   test('экспорт другого пользователя (без сидирования) — пуст (RLS скоупит владельцем)', async () => {
-    const caller = callerFor(freshUserId());
+    const caller = callerFor(await freshGraph());
     const exp = await caller.user.exportData();
     expect(exp.entities).toEqual([]);
     expect(exp.relations).toEqual([]);

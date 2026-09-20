@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import { SignJWT } from 'jose';
-import { appDb, freshUserId, requireEnv } from '../test/helpers';
+import { appDb, mintGraph, requireEnv } from '../test/helpers';
 import { makeCreateContext } from './context';
 import { issuePatGrant, revokeGrant, verifyBearer } from './oauth/grants';
 import { appRouter } from './router';
@@ -19,7 +19,7 @@ requireEnv();
 const LOCAL_JWT_SECRET = 'super-secret-jwt-token-with-at-least-32-characters-long';
 
 const { db, client: dbClient } = appDb();
-const PAT_OWNER = freshUserId();
+const PAT_OWNER = mintGraph();
 /** Живой headless-грант владельца PAT_OWNER; выдаётся в базу в beforeAll. */
 let PAT_TOKEN: string;
 
@@ -33,7 +33,7 @@ beforeAll(async () => {
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_JWKS_URL;
   process.env.SUPABASE_JWT_SECRET = LOCAL_JWT_SECRET;
-  // truncateAll здесь не нужен: владелец случайный (freshUserId), чужие строки этому
+  // truncateAll здесь не нужен: владелец случайный (mintGraph), чужие строки этому
   // сьюту не мешают, а лишняя зачистка связывала бы файл с остальными сьютами.
   PAT_TOKEN = await issuePatGrant(db, { graphId: PAT_OWNER, label: 'тестовый агент' });
 });

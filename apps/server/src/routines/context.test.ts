@@ -4,7 +4,7 @@
 // быть НЕ должно: чат-промпта, роли 'system' в messages, обрезанной инструкции.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { RunSummary } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ROUTINE_SYSTEM_PROMPT_V3 } from '../llm/prompts/routine-v3';
 import { SYSTEM_PROMPT_V6 } from '../llm/prompts/v6';
@@ -14,7 +14,7 @@ import { buildRoutineContext, type RoutineHistoryItem, type RoutineHistoryUnit }
 requireEnv();
 
 const { db, client } = appDb();
-const owner = freshUserId();
+const owner = mintGraph();
 const { seedEntity, seedRoutine } = agentLoopHelpers(db);
 
 beforeAll(async () => {

@@ -12,7 +12,7 @@ import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
-  freshUserId,
+  freshGraph,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -91,7 +91,7 @@ async function setDefaultCurrency(user: string, currency: string): Promise<void>
 
 describe('нормализация currency конверта NULL→defaultCurrency (бэклог A7, §2.1)', () => {
   test('create без currency: сохраняется явная defaultCurrency (фолбэк RUB)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const r = ok(
       await execute(
         db,
@@ -109,7 +109,7 @@ describe('нормализация currency конверта NULL→defaultCurre
   });
 
   test('create без currency при user_settings.defaultCurrency=EUR → сохраняется EUR', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     await setDefaultCurrency(user, 'EUR');
     const r = ok(
       await execute(
@@ -128,7 +128,7 @@ describe('нормализация currency конверта NULL→defaultCurre
   });
 
   test('ГЛАВНЫЙ A7-кейс: конверт без currency + конверт с явной defaultCurrency на ту же (категория, период) → duplicate_envelope', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     ok(
       await execute(
@@ -159,7 +159,7 @@ describe('нормализация currency конверта NULL→defaultCurre
   });
 
   test('зеркальный порядок: явная RUB создана первой, второй без currency → duplicate_envelope', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     ok(
       await execute(
@@ -189,7 +189,7 @@ describe('нормализация currency конверта NULL→defaultCurre
   });
 
   test('иная явная валюта — по-прежнему другая комбинация (EUR при дефолте RUB)', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     ok(
       await execute(
@@ -218,7 +218,7 @@ describe('нормализация currency конверта NULL→defaultCurre
   });
 
   test('attach-путь: attach без currency нормализуется и ловит дубль явной defaultCurrency', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     ok(
       await execute(
@@ -264,7 +264,7 @@ describe('нормализация currency конверта NULL→defaultCurre
   });
 
   test('update-путь: patch {currency: null} не оставляет NULL — нормализуется в defaultCurrency', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     const created = ok(
       await execute(
@@ -294,7 +294,7 @@ describe('нормализация currency конверта NULL→defaultCurre
   });
 
   test('update-путь: перевод периода в комбинацию, занятую NULL-нормализованным конвертом → duplicate_envelope', async () => {
-    const user = freshUserId();
+    const user = await freshGraph();
     const cat = newId();
     ok(
       await execute(

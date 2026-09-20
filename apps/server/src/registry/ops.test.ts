@@ -19,7 +19,8 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
-  freshUserId,
+  freshGraph,
+  mintGraph,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -60,7 +61,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const sink = makeChatJournalSink();
-const owner = freshUserId();
+const owner = mintGraph();
 
 beforeAll(async () => {
   await truncateAll();
@@ -120,7 +121,7 @@ async function entityRow(id: string): Promise<Record<string, unknown> | undefine
 // ---------------------------------------------------------------------------
 
 describe('property_create / property_update: жизненный цикл proposed (§А2-7, §А10-3)', () => {
-  const capOwner = freshUserId();
+  const capOwner = mintGraph();
 
   function runAs(actor: string, tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -524,7 +525,7 @@ describe('гейты записи определения — четвёртый 
 // ---------------------------------------------------------------------------
 
 describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
-  const deltaOwner = freshUserId();
+  const deltaOwner = mintGraph();
 
   function runDelta(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -606,7 +607,7 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
 // ---------------------------------------------------------------------------
 
 describe('aspect_create (§Б2-1, §С3)', () => {
-  const aspectOwner = freshUserId();
+  const aspectOwner = mintGraph();
   const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
@@ -855,7 +856,7 @@ describe('aspect_create (§Б2-1, §С3)', () => {
 });
 
 describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
-  const bindOwner = freshUserId();
+  const bindOwner = mintGraph();
   const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
@@ -1097,7 +1098,7 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
 // ---------------------------------------------------------------------------
 
 describe('дельты контракта и подписки (§Б5-1/2)', () => {
-  const o = freshUserId();
+  const o = mintGraph();
   // Замок берётся ПЕРВЫМ statement'ом транзакции — ровно как его берёт исполнитель (§А10-2):
   // функции реестра своего замка не берут, и два места, знающие порядок захвата, — это дедлок.
   const inTx = <T>(fn: (tx: Tx) => Promise<T>) =>
@@ -1148,7 +1149,7 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
 });
 
 describe('своя строка подписки: setOwnSubscription / removeOwnSubscription (§Б5-1)', () => {
-  const subOwner = freshUserId();
+  const subOwner = mintGraph();
   const AGENDA = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda');
   const row = (over: Partial<SubscriptionRow> = {}): SubscriptionRow => ({
     id: 'user/my-agenda',
@@ -1202,7 +1203,7 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
 });
 
 describe('subscription_set / subscription_remove / contract_sets_delta_* через исполнителя (§Б5-2, §Б1-1)', () => {
-  const toolOwner = freshUserId();
+  const toolOwner = mintGraph();
   const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
   function runAs(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -1428,7 +1429,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
 });
 
 describe('наборы под живой подпиской: SET_IN_USE и один вердикт на два пути записи (Ф-Б1-55б/в)', () => {
-  const useOwner = freshUserId();
+  const useOwner = mintGraph();
   const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
     ?.definition as AgendaSubscription;
   /** Та же Повестка, но «незакрытое» названо СВОИМ набором владельца, а не встроенным `open`. */
@@ -1544,7 +1545,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
 });
 
 describe('зависимость от набора считается ПО ПРИЧИНЕ, а не по факту поломки (Ф-Б1-55б, уточнение)', () => {
-  const twoStepOwner = freshUserId();
+  const twoStepOwner = mintGraph();
   const AGENDA_SUB = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
     ?.definition as AgendaSubscription;
   /** Повестка, которая читает СВОЙ набор владельца и предпочитает СВОЙ аспект в `show`. */
@@ -1679,7 +1680,7 @@ describe('зависимость от набора считается ПО ПР�
 // ---------------------------------------------------------------------------
 
 describe('property_merge (§А10-2, приёмка §С8-5)', () => {
-  const mergeOwner = freshUserId();
+  const mergeOwner = mintGraph();
 
   function runMerge(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -2279,7 +2280,7 @@ async function propertyRowByKey(
 // ---------------------------------------------------------------------------
 
 describe('registry_version (§А10-1)', () => {
-  const versionOwner = freshUserId();
+  const versionOwner = mintGraph();
 
   function runV(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -2357,7 +2358,7 @@ describe('registry_version (§А10-1)', () => {
 // ---------------------------------------------------------------------------
 
 describe('порядок замков: реестр ПЕРВЫМ, бюджет вторым', () => {
-  const lockOwner = freshUserId();
+  const lockOwner = mintGraph();
 
   /**
    * SQL-лог транзакции исполнителя. Подмена `tx.execute` в `beforeStages` — единственный
@@ -2444,7 +2445,7 @@ describe('порядок замков: реестр ПЕРВЫМ, бюджет �
 // ---------------------------------------------------------------------------
 
 describe('property_merge при конфликте значений (§А10-2)', () => {
-  const conflictOwner = freshUserId();
+  const conflictOwner = mintGraph();
 
   /**
    * Путь ТУЛА, а не голый `execute`: карточка разбора кладётся ОТДЕЛЬНОЙ транзакцией
@@ -2623,7 +2624,7 @@ describe('property_merge при конфликте значений (§А10-2)',
 // ---------------------------------------------------------------------------
 
 describe('дельта и scope не могут объявить одно свойство на одном аспекте (§А3-4)', () => {
-  const dupOwner = freshUserId();
+  const dupOwner = mintGraph();
 
   function runDup(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -2727,7 +2728,7 @@ describe('дельта и scope не могут объявить одно сво
 // ---------------------------------------------------------------------------
 
 describe('property_merge: границы операции (фикс-раунд 1)', () => {
-  const edgeOwner = freshUserId();
+  const edgeOwner = mintGraph();
 
   function runEdge(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -2814,7 +2815,7 @@ describe('property_merge: границы операции (фикс-раунд 1
 // ---------------------------------------------------------------------------
 
 describe('границы записи определения (фикс-раунд 2)', () => {
-  const edge2 = freshUserId();
+  const edge2 = mintGraph();
 
   function run2(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -2960,7 +2961,7 @@ describe('границы записи определения (фикс-раун�
 // ---------------------------------------------------------------------------
 
 describe('дельта аспекта как держатель свойства (фикс-раунд 3)', () => {
-  const holderOwner = freshUserId();
+  const holderOwner = mintGraph();
 
   function runH(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -3193,7 +3194,7 @@ describe('дельта аспекта как держатель свойства
 // ---------------------------------------------------------------------------
 
 describe('слияние отказывает громко, если после него реестр не читается', () => {
-  const lockOwner2 = freshUserId();
+  const lockOwner2 = mintGraph();
 
   function runL(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -3341,7 +3342,7 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     // и колонка осталась бы пустой навсегда. Потеря была бы ТИХОЙ — слияние отчиталось бы
     // «переписано запросов: 0», а проба §А10-3 разрешила бы удалить строку из-под живого
     // списка.
-    const seedUser = freshUserId();
+    const seedUser = await freshGraph();
     await seedOwnerGraph(db, seedUser);
 
     const holders = await withIdentity(db, seedUser, (tx) => collectPropertyHolders(tx, seedUser));
@@ -3370,7 +3371,7 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     // насколько полна колонка. Писатель тела, который её не заполняет, делает свою запись
     // невидимой для слияния и для пробы §А10-3 — и это ровно та причина, по которой сид
     // (`smartListRow`) и слияние (`mergeProperty`) её теперь пишут.
-    const dark = freshUserId();
+    const dark = await freshGraph();
     const hidden = newId();
     const { db: admin, client: adminClient } = adminDb();
     try {
@@ -3394,7 +3395,7 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
 // ---------------------------------------------------------------------------
 
 describe('нормализация имён в дереве Q-AST (§А5-2)', () => {
-  const astOwner = freshUserId();
+  const astOwner = mintGraph();
 
   function runAst(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -3496,7 +3497,7 @@ describe('нормализация имён в дереве Q-AST (§А5-2)', ()
 });
 
 describe('форма дерева объявления проверяется ДО обхода (N-1)', () => {
-  const shapeOwner = freshUserId();
+  const shapeOwner = mintGraph();
 
   function runShape(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
@@ -3564,7 +3565,7 @@ describe('форма дерева объявления проверяется Д
 });
 
 describe('карта классов и пользовательский набор в фильтрах class= (§С8-19)', () => {
-  const setOwner = freshUserId();
+  const setOwner = mintGraph();
   const inReview = newId();
   const dropped = newId();
   const runS = (tool: string, input: unknown): Promise<ExecuteResult> =>
