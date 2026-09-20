@@ -885,7 +885,7 @@ export const WORLD_TABLES   // было GRAPH_TABLES; ключ отчёта `gra
 ```
 SQL: политики `member_reads_graph`, `person_creates_own_graph` (`graphs`); `account_reads_own_membership`,
 `account_owns_personal_graph`, `scheduler_reads_members` (`graph_members`); триггеры `graphs_require_owner`,
-`graph_members_keep_owner`; FK `<таблица>_graph_id_graphs_id_fk` ×16; pgTAP — `plan(120)`.
+`graph_members_keep_owner`; FK `<таблица>_graph_id_graphs_id_fk` ×16; pgTAP — `plan(125)`.
 
 - [ ] **Шаг 1: красные тесты схемы — `apps/server/src/db/graphs.test.ts`.** Все проверки — под `adminDb()` (инварианты
   держит база, а не политика). Ошибку drizzle ловить через `e.code ?? e.cause?.code` (образец — `db/with-identity.test.ts:38-63`).
@@ -1567,11 +1567,23 @@ INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALU
    '00000000-0000-4000-8000-00000000000b', 'owner', '00000000-0000-4000-8000-00000000000b');
 ```
   Проверку «RLS ENABLE+FORCE» (список таблиц — `:113-121`, счёт `19` — `:123`) расширить на `'graphs','graph_members'`: `19` → `21`, подпись — «на всех двадцати
-  одной таблице». Перед `SELECT finish();` добавить три группы — **23 проверки**, `SELECT plan(97);` → **`SELECT plan(120);`**.
+  одной таблице». Перед `SELECT finish();` добавить три группы и блок пинов имён — **28 проверок**,
+  `SELECT plan(97);` → **`SELECT plan(125);`**.
   Правило файла (`:298-322`, `:411-415`): ОТСУТСТВИЕ права не пинится — default privileges различаются между локальным
   стеком и образом CI; пинится второй барьер: право выдаётся прямо в тесте, и всё равно ноль строк.
   Аккаунт В (`…00000000000c`) — без графа: на нём пинятся INSERT-политики.
 ```sql
+-- ── Пины имён после 0019 (5 проверок; правка 21.09 по гейт-ревью Г-1, Р-ИГ-5) ────────────────
+-- Пять имён, которых RENAME COLUMN не касается (Ф-Г-7), переименованы миграцией 0019 поимённо, и до
+-- этого блока их не держало НИЧТО в CI: drizzle-kit generate CI не гоняет, perf-сьюты вне CI (Ф-Г-19),
+-- а `chat_threads_graph` не пинил вообще никто. Ошибка в имени тиха: индекс остаётся, запрос работает,
+-- расходится только docblock и пин перфа — и находится это через месяцы.
+SELECT has_index('public', 'entities', 'entities_graph_updated', 'индекс упорядоченного чтения списка');
+SELECT has_index('public', 'chat_threads', 'chat_threads_graph', 'индекс тредов по графу');
+SELECT has_index('public', 'agent_grants', 'agent_grants_graph', 'индекс грантов агентов по графу');
+SELECT has_index('public', 'envelope_spent_cache', 'envelope_spent_cache_graph', 'индекс кэша конвертов по графу');
+SELECT col_is_pk('public', 'ai_usage', ARRAY['graph_id','date','model'], 'PK ai_usage — по графу, дате и модели');
+
 -- ── Группа 20: graphs (спека §3.6) ─────────────────────────────────────────────────────────
 RESET ROLE;
 -- И-2 держит ОТСУТСТВИЕ ПОЛИТИК, а не отсутствие права: право выдаём здесь (транзакция откатится) и
@@ -1725,7 +1737,7 @@ test('под идентичностью аккаунт видит только �
 cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && bunx supabase db reset && bun run db:prepare
 cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g/apps/server && bun test src/db/graphs.test.ts src/db/graphs-policies.test.ts src/db/reset-world.test.ts src/seed/onboarding.test.ts
 ```
-  Ожидание: `db:prepare` — EXIT=0, накат `0000…0020`, `test:rls` — `plan(120)` без «Looks like you planned»; четыре файла — зелёные.
+  Ожидание: `db:prepare` — EXIT=0, накат `0000…0020`, `test:rls` — `plan(125)` без «Looks like you planned»; четыре файла — зелёные.
   Гонка И-1 (шаг 1) — обязательная мутация для отчёта: убрать `FOR NO KEY UPDATE` из `graph_members_keep_owner` (на
   локальной базе, `CREATE OR REPLACE FUNCTION`) → тест гонки КРАСНЫЙ (оба отзыва проходят, владельцев 0); вернуть.
 
@@ -1760,7 +1772,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && bun run 
 
 - [ ] **Шаг 14: коммит.**
 ```
-cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git add -A && git status --short | head -30 && git commit -m "$(printf 'feat(graph): таблицы graphs и graph_members, бэкфилл, FK, сид личного графа, тестовая обвязка (срез Г, D44, Ш-1б)\n\nМиграция 0020: таблицы → бэкфилл (UNION по 15 таблицам, у реестров WHERE graph_id IS NOT NULL) → 16 FK →\nотложенные триггеры И-1 (замок строки графа FOR NO KEY UPDATE) → политики и явные гранты новых таблиц,\nвключая SELECT для orbis_app (тик планировщика). agent_grants.issued_by — nullable с бэкфиллом; писатели\nприходят задачей Г-3, NOT NULL — миграцией 0021. Личный граф заводится первым шагом seedOwnerGraph под\nauthenticated, без RETURNING. Обвязка: mintGraph / freshGraph / ensureGraphs; truncateAll сносит графы\n(НЕ через TRUNCATE … CASCADE — он снёс бы встроенные строки реестров) и восстанавливает личности процесса.\nreset-world графы и членство сохраняет; GRAPH_TABLES → WORLD_TABLES. pgTAP: plan(120).\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>')"
+cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git add -A && git status --short | head -30 && git commit -m "$(printf 'feat(graph): таблицы graphs и graph_members, бэкфилл, FK, сид личного графа, тестовая обвязка (срез Г, D44, Ш-1б)\n\nМиграция 0020: таблицы → бэкфилл (UNION по 15 таблицам, у реестров WHERE graph_id IS NOT NULL) → 16 FK →\nотложенные триггеры И-1 (замок строки графа FOR NO KEY UPDATE) → политики и явные гранты новых таблиц,\nвключая SELECT для orbis_app (тик планировщика). agent_grants.issued_by — nullable с бэкфиллом; писатели\nприходят задачей Г-3, NOT NULL — миграцией 0021. Личный граф заводится первым шагом seedOwnerGraph под\nauthenticated, без RETURNING. Обвязка: mintGraph / freshGraph / ensureGraphs; truncateAll сносит графы\n(НЕ через TRUNCATE … CASCADE — он снёс бы встроенные строки реестров) и восстанавливает личности процесса.\nreset-world графы и членство сохраняет; GRAPH_TABLES → WORLD_TABLES. pgTAP: plan(125).\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>')"
 ```
   Закрытие — протокол глобальных ограничений (гейт Fable → rebase → push → CI → ff-push в `main`, флаг автодеплоя перечитан).
 
@@ -2419,7 +2431,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && bun run 
   Ожидание: `bun run test` — EXIT=0, ровно ДВЕ пометки во всём дереве
   (`git grep -c 'test\.failing(' -- apps/server packages scripts` → один файл, 2; считать вызовы, а не слово — оно есть и в
   комментарии) — обе в `graph-vs-account.test.ts`; pgTAP —
-  `plan(120)` без изменений (миграции в задаче нет); внеCI-скрипты — EXIT=0 (они импортируют `withIdentity` и ломаются
+  `plan(125)` без изменений (миграции в задаче нет); внеCI-скрипты — EXIT=0 (они импортируют `withIdentity` и ломаются
   молча — Ф-Г-19); семь медиан — записать.
 
 - [ ] **Шаг 14: коммит.**
@@ -2466,7 +2478,7 @@ public.actor_owns_current_graph()    RETURNS boolean  -- действующий 
 -- все четыре: LANGUAGE sql STABLE SECURITY INVOKER SET search_path = ''
 политики строк:  current_graph_select / _insert / _update / _delete — по одной на команду, TO authenticated
 реестры ×6:      read_builtin_or_own / write_own / update_own / delete_own — имена прежние, предикат новый
-agent_grants.issued_by NOT NULL;  pgTAP — plan(143);  пометок test.failing в дереве — 0
+agent_grants.issued_by NOT NULL;  pgTAP — plan(148);  пометок test.failing в дереве — 0
 ```
 
 - [ ] **Шаг 1: красный гейт — снять пометки.** В `apps/server/test/graph-vs-account.test.ts` оба `test.failing(` → `test(`,
@@ -2503,7 +2515,7 @@ INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by, revo
 INSERT INTO entities (id, graph_id, title) VALUES
   ('00000000-0000-7000-8000-0000000000e1', '00000000-0000-4000-8000-00000000000e', 'Е: запись личного графа');
 ```
-  (в) перед `SELECT finish();` — группа 23, **23 проверки**; `SELECT plan(120);` → **`SELECT plan(143);`**:
+  (в) перед `SELECT finish();` — группа 23, **23 проверки**; `SELECT plan(125);` → **`SELECT plan(148);`**:
 ```sql
 -- ── Группа 23: актор ≠ граф — «текущий граф ∧ членство» (спека §3.5–§3.6) ───────────────────
 RESET ROLE;
@@ -2831,7 +2843,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && psql "$(
 cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g/apps/server && bunx drizzle-kit generate --name should_be_empty 2>&1 | tail -3
 ```
   (Каждый запрос — своим `-c`: локальный psql 14 при нескольких командах в одном `-c` печатает результат только последней.)
-  Ожидание: `db:prepare` — EXIT=0, накат `0000…0021`, `test:rls` — `plan(143)` без «Looks like you planned»; политик всего
+  Ожидание: `db:prepare` — EXIT=0, накат `0000…0021`, `test:rls` — `plan(148)` без «Looks like you planned»; политик всего
   **77** (39 живых до среза − 35 + 68 + 5 политик `0020`); с именем `owner_owns%` — **0**; под `{public}` остались ровно
   `read_all` (остальные три нетронутые — `TO orbis_app`); генератор — `No schema changes`. Четвёртой миграции нет (РП-3).
 
@@ -2885,7 +2897,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && bun run 
 
 - [ ] **Шаг 10: коммит.**
 ```
-cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git add -A && git status --short | head -30 && git commit -m "$(printf 'feat(rls): изоляция «текущий граф ∧ членство» — 35 политик, две закрытые межграфовые дыры (срез Г, D44, Ш-3)\n\nМиграция 0021: четыре функции политик (SECURITY INVOKER, пустой search_path; обхода RLS нет), 35 политик\nсняты и созданы заново: у таблиц строк — по одной политике на команду (FOR ALL оставила бы observer право\nDELETE, пара «SELECT + ALL» склеилась бы через OR), у шести реестров — своя форма с `graph_id IS NULL OR …`, чтобы стартовая проверка дрейфа читала\nвстроенные строки без идентичности. Политики выданы authenticated, а не PUBLIC: тела функций зовут\nauth.uid() при вызове, а у orbis_app нет USAGE на схему auth. Закрыты chat_threads.entity_id и\nenvelope_spent_cache.envelope_id; грант агенту выписывает только держатель гранта owner;\nagent_grants.issued_by — NOT NULL. Без текущего графа — пусто. pgTAP: plan(143). Поведенческий тест\n«граф ≠ аккаунт» зелёный без пометок. Перф — против базовой линии Г-0, вердикты скрипта планов те же.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>')"
+cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git add -A && git status --short | head -30 && git commit -m "$(printf 'feat(rls): изоляция «текущий граф ∧ членство» — 35 политик, две закрытые межграфовые дыры (срез Г, D44, Ш-3)\n\nМиграция 0021: четыре функции политик (SECURITY INVOKER, пустой search_path; обхода RLS нет), 35 политик\nсняты и созданы заново: у таблиц строк — по одной политике на команду (FOR ALL оставила бы observer право\nDELETE, пара «SELECT + ALL» склеилась бы через OR), у шести реестров — своя форма с `graph_id IS NULL OR …`, чтобы стартовая проверка дрейфа читала\nвстроенные строки без идентичности. Политики выданы authenticated, а не PUBLIC: тела функций зовут\nauth.uid() при вызове, а у orbis_app нет USAGE на схему auth. Закрыты chat_threads.entity_id и\nenvelope_spent_cache.envelope_id; грант агенту выписывает только держатель гранта owner;\nagent_grants.issued_by — NOT NULL. Без текущего графа — пусто. pgTAP: plan(148). Поведенческий тест\n«граф ≠ аккаунт» зелёный без пометок. Перф — против базовой линии Г-0, вердикты скрипта планов те же.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>')"
 ```
   Закрытие — протокол глобальных ограничений; мерж в `main` — ТОЛЬКО при зелёном `graph-vs-account.test.ts` (гейт спеки Ш-3).
 
@@ -2912,7 +2924,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git add 
 
 **Интерфейсы:**
 
-*Consumes:* Г-1…Г-4 в `main` (`0019…0021`, `plan(143)`, ноль пометок `test.failing`, маркер `owner-key`); базовая линия Г-0;
+*Consumes:* Г-1…Г-4 в `main` (`0019…0021`, `plan(148)`, ноль пометок `test.failing`, маркер `owner-key`); базовая линия Г-0;
 `recon-5-docs.md` (адреса доков), `recon-4-harness-prod.md` §6–§7, §10 (прод-процедура Б-1/Б-2, 22 шага; ранбук §4.3; смоук 7/7).
 ```
 .superpowers/sdd/2026-09-02-properties-reform-b1/step-prod-b1.md, acceptance-b1.md:20-30 — образцы сценария и таблицы приёмки
@@ -3133,7 +3145,7 @@ REVOKE ALL ON graphs, graph_members FROM anon, authenticated;
 GRANT SELECT, INSERT ON graphs, graph_members TO authenticated;
 GRANT SELECT ON graph_members TO orbis_app;
 ```
-    и число проверок в тексте рядом — `plan(143)`. Сверка блока с миграциями: `grep -n '^GRANT\|^REVOKE' apps/server/src/db/migrations/*.sql`.
+    и число проверок в тексте рядом — `plan(148)`. Сверка блока с миграциями: `grep -n '^GRANT\|^REVOKE' apps/server/src/db/migrations/*.sql`.
   - `docs/implementation/03-pending.md` §2.2а: статус — «срез Г исполнен, в проде <дата>»; новые строки «при планировании
     ступени 2»: `user_settings` смешивает настройки аккаунта (`timezone`, `plan`) и графа — таймзона рутины в графе
     компании окажется таймзоной графа; составные имена «на граф» без `Id` и голое `owner` в тестах (список —
@@ -3217,7 +3229,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && bun run 
 ```
   Ожидание: журнал — **20**; графов = числу различных ключей до миграции (у владельца-одиночки — 1, плюс графы прочих
   строк, если есть); действующих `owner` = графов; графов без членства — 0; грантов без `issued_by` — 0; политик — **77**;
-  pgTAP на восстановленной базе — `plan(143)` зелёный (файл — одна транзакция с ROLLBACK, данные не трогает). Любой отказ
+  pgTAP на восстановленной базе — `plan(148)` зелёный (файл — одна транзакция с ROLLBACK, данные не трогает). Любой отказ
   миграции здесь — СТОП до прода: это ровно то, ради чего репетиция. Проба процедуры ранбука (шаг 6) — в транзакции с
   откатом: подставить в SQL перепривязки `:old` = uuid владельца, `:new` = `gen_random_uuid()`, заменить `COMMIT` на
   `SET CONSTRAINTS ALL IMMEDIATE; ROLLBACK;` — EXIT=0 доказывает, что текст ранбука исполним. Уборка — тем же шагом:
@@ -3315,7 +3327,7 @@ cd /Users/birzhan/projects/orbis && sed -i '' '/autoDeploy: false/d' render.yaml
 
 - [ ] **Шаг 16: статусы.** `04-decision-log.md`, D44 «Статус» — дата прода и итог приёмки (9/9); `03-pending.md` §2.2а — «в
   проде <дата>»; docs-коммит в `main`. `progress.md` леджера — итог среза четырьмя блоками: что сделано (хеши задач),
-  цифры (счётчики сьютов, `plan(143)`, семь медиан Г-0 → Г-4, длительность окна, расход токенов), находки ревью
+  цифры (счётчики сьютов, `plan(148)`, семь медиан Г-0 → Г-4, длительность окна, расход токенов), находки ревью
   (Critical/Important/Minor, ложных), остатки владельцу.
 
 - [ ] **Шаг 17: `/Users/birzhan/projects/orbis/.superpowers/sdd/2026-09-20-graph-ownership/handoff-b2.md` — факты для правки плана Б-2 (спека §8.2; правка — отдельным словом владельца).**
@@ -3325,7 +3337,7 @@ cd /Users/birzhan/projects/orbis && sed -i '' '/autoDeploy: false/d' render.yaml
      (⇒ у Б-2 `0019` → `0022`, резерв `0020` → `0023`, «третья = СТОП» — `0024`; правило Р-18 по смыслу не меняется); в
      `_journal.json` — 20 записей (⇒ пин прод-шага Б-2 «применено 1 (в журнале 18)» → «(в журнале 21)»); снимок, от которого
      Б-2 строит миграцию, — `meta/0021_snapshot.json`.
-  3. **pgTAP:** `SELECT plan(143);` (`rls.pgtap.sql:6`) — пять мест плана Б-2 с `plan(97)` (`:225, :321, :355, :3421, :3592`);
+  3. **pgTAP:** `SELECT plan(148);` (`rls.pgtap.sql:6`) — пять мест плана Б-2 с `plan(97)` (`:225, :321, :355, :3421, :3592`);
      таблиц под ENABLE+FORCE — 21; claims в pgTAP несут ключ `graph`.
   4. **API идентичности (итоговые имена, дословно из блока Produces задачи Г-3):** `AccountId`, `GraphId`
      (`packages/shared/src/ids.ts`); `Identity`, `parseAccountId`, `parseGraphId`, `identityOfPerson`, `identityOfGrant`,
@@ -3361,10 +3373,10 @@ cd /Users/birzhan/projects/orbis && git worktree remove .claude/worktrees/graph-
 |---|---|---|
 | 0 | Г-0 | базовая линия: `bun run test`, `lint`, `typecheck`, `test:rls` (`plan(97)`), `test:perf` (семь медиан), `test:perf:volume` → `explain` → `graph`, `check-legacy-form --gate`, сборка веба; проба планов §3.6 (`InitPlan`, fail-closed); прод `autoDeploy: "no"` |
 | I | Г-1 | гейт `owner-key` = 0; нормализованный дифф = только ручные правки; golden «только имя»; `tool-registry.json` и фикстуры промптов байт-в-байт; счётчики сьютов РАВНЫ Г-0; `plan(97)`; снимок `0019` = схема |
-| II | Г-2 | `graphs.test.ts` (CHECK, И-1 с гонкой и мутацией замка, бэкфилл по 15 таблицам, `truncateAll`), `graphs-policies.test.ts`, `reset-world.test.ts`; `plan(120)`; ноль FK-отказов в полном прогоне; снимок `0020` = схема |
+| II | Г-2 | `graphs.test.ts` (CHECK, И-1 с гонкой и мутацией замка, бэкфилл по 15 таблицам, `truncateAll`), `graphs-policies.test.ts`, `reset-world.test.ts`; `plan(125)`; ноль FK-отказов в полном прогоне; снимок `0020` = схема |
 | III | Г-3 | `typecheck` с двумя `@ts-expect-error`; греп-гейт приведений пуст; `identity.test.ts`, близнец interleaved-теста; ровно ДВЕ пометки `test.failing` (обе — «граф ≠ аккаунт»); внеCI-скрипты зелёные |
-| IV | Г-4 | **гейт: `graph-vs-account.test.ts` зелёный без пометок**; `plan(143)`; политик 77, `owner_owns%` — 0; тест дрейфа зелёный без идентичности; четыре мутации политик; перф по Р-КГ-10, вердикты `explain` = Г-0 |
-| V | Г-5 | гейты доков (фраза PRD — 0, `owner_id` в живых доках — только исторические записи); пин версий; финальное ревью APPROVE; репетиция на дампе (журнал 17 → 20, политик 77, `plan(143)`); прод; приёмка 9/9; `handoff-b2.md` |
+| IV | Г-4 | **гейт: `graph-vs-account.test.ts` зелёный без пометок**; `plan(148)`; политик 77, `owner_owns%` — 0; тест дрейфа зелёный без идентичности; четыре мутации политик; перф по Р-КГ-10, вердикты `explain` = Г-0 |
+| V | Г-5 | гейты доков (фраза PRD — 0, `owner_id` в живых доках — только исторические записи); пин версий; финальное ревью APPROVE; репетиция на дампе (журнал 17 → 20, политик 77, `plan(148)`); прод; приёмка 9/9; `handoff-b2.md` |
 
 ## Порядок деплоя (кратко; подробно — задача Г-5, шаги 9–15)
 
@@ -3495,7 +3507,7 @@ cd /Users/birzhan/projects/orbis && git worktree remove .claude/worktrees/graph-
   accountId)` (Г-2) ← `who.actor` (Г-3); `Identity { actor, graph }`, `identityOfPerson`/`identityOfGrant`/
   `identitiesForScheduler`, `personal`/`accountOf`/`addMember` (Г-3 → Г-4, Г-5 ш. 17); `issued_by` nullable (Г-2) → писатели и
   fail-closed ветка (Г-3) → NOT NULL и снятие ветки (Г-4); имена политик и функций `0020`/`0021` — в РП-10 и в pgTAP одни и те
-  же; `plan(97)` → `plan(120)` (Г-2, +23) → `plan(143)` (Г-4, +23); журнал миграций 17 → 20 записей; политик 39 → 44 (Г-2) → 77 (Г-4).
+  же; `plan(97)` → `plan(125)` (Г-2, +28) → `plan(148)` (Г-4, +23); журнал миграций 17 → 20 записей; политик 39 → 44 (Г-2) → 77 (Г-4).
 - **Ревью двумя линзами (20.09, после сборки) и ре-ревью.** Opus 5 («исполнимость, адреса, команды»): Critical 1, Important 5,
   Minor 29; Fable 5.1 («спека, маппинг, приёмки, порядок»): Critical 0, Important 6, Minor 10; ре-ревью тем же ревьюером
   Fable: всё закрыто, регрессий от правок нет, новые — Important 1, Minor 4; ложных находок — 0. Закрыто координатором до
