@@ -343,7 +343,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(sql`
-        INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+        INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
         VALUES (${propertyId}, ${owner}::uuid, 'user/ticket-note',
                 ${JSON.stringify({ ru: 'Пометка', en: 'Note' })}::jsonb,
                 ${JSON.stringify({ ru: 'Пометка владельца', en: "The owner's note" })}::jsonb,
@@ -1151,7 +1151,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     // Подметённый прогон терминален так же: агент вернулся через час — работа уже не его
     const ab = await claimed('Терминальность брошенного');
     await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'owner',
       clock: () => new Date(T0.getTime() + 31 * MINUTE),
     });
@@ -1339,7 +1339,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
   function verbCtx(routineId: string, clock: () => Date = () => T0): VerbCtx {
     return {
       db,
-      ownerId: owner,
+      graphId: owner,
       subject: { kind: 'routine', routineId },
       clock,
       sink: makeChatJournalSink(),
@@ -1511,7 +1511,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
     const decided = await seedRoutineRun(owner, { routineId, bucket: '2026-08-18T08:00' });
     const pendingId = await askFrom(routineId, decided.runId, 'Брать ли отчёт сегодня?');
     expect(
-      await answerPendingQuestion(db, { ownerId: owner, pendingId, answer: 'да, бери' }),
+      await answerPendingQuestion(db, { graphId: owner, pendingId, answer: 'да, бери' }),
     ).toEqual({ status: 'answered', pendingId });
     expect(
       (

@@ -152,7 +152,7 @@ describe('executor: entity_create', () => {
     expect(e.bodyRefs).toEqual([refId]); // dedupe + lowercase
     expect(e.createdAt).toBe(T0.toISOString());
     expect(e.updatedAt).toBe(T0.toISOString());
-    expect(e.ownerId).toBe(userA);
+    expect(e.graphId).toBe(userA);
 
     // строка реально в БД (под RLS владельца)
     const rows = await withIdentity(db, userA, (tx) =>
@@ -165,7 +165,7 @@ describe('executor: entity_create', () => {
     // стадии 6–7: sink получил action с inverse-архивацией
     expect(sink.entries.length).toBe(1);
     const entry = first(sink.entries);
-    expect(entry.ownerId).toBe(userA);
+    expect(entry.graphId).toBe(userA);
     expect(entry.action.type).toBe('entity_created');
     expect(entry.action.actor_user_id).toBe(userA);
     expect(entry.action.actor_kind).toBe('owner');
@@ -708,7 +708,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
   });
 
   test('21. executor=agent с живым грантом владельца — ок; executor=human с grant_id → VALIDATION; отзыв гранта закрывает назначение', async () => {
-    const token = await issuePatGrant(db, { ownerId: userA, label: 'исполнитель' });
+    const token = await issuePatGrant(db, { graphId: userA, label: 'исполнитель' });
     const identity = await verifyBearer(db, token);
     expect(identity).not.toBeNull();
     const grantId = identity?.grantId ?? '';
@@ -783,7 +783,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     expect(attOk.ok).toBe(true);
 
     // Отозванный грант — тот же NOT_FOUND, что и чужой
-    await revokeGrant(db, { ownerId: userA, grantId });
+    await revokeGrant(db, { graphId: userA, grantId });
     const revoked = await execute(
       db,
       req('entity_update', {

@@ -322,7 +322,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect(replay.results).toEqual(r.results);
     expect((await messagesInThread(globalThreadId(user))).length).toBe(1);
     const n = await adminCount(
-      sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${user}`,
+      sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}`,
     );
     expect(n).toBe(2); // данные не задвоены
   });
@@ -370,12 +370,12 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect(audits).toBe(1);
     // ровно один набор эффектов: по одной сущности каждого титула, всего две
     const total = await adminCount(
-      sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${user}`,
+      sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}`,
     );
     expect(total).toBe(2);
     for (const title of ['Гонка-А', 'Гонка-Б']) {
       const n = await adminCount(
-        sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${user} AND title = ${title}`,
+        sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user} AND title = ${title}`,
       );
       expect(n).toBe(1);
     }
@@ -397,7 +397,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     // Нарушение контракта: два action в одном audit-сообщении — undo взял бы только
     // actions[0], второй молча потерялся бы. write обязан отклонить ДО любой записи.
     const bad = {
-      ownerId: user,
+      graphId: user,
       action: [action, action],
       card: { tool: 'entity_update', entity_id: null, title: 'нарушение' },
     } as unknown as JournalWrite;
@@ -484,7 +484,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     await withIdentity(db, user, (tx) =>
       sink.write(tx, {
         id: auditId,
-        ownerId: user,
+        graphId: user,
         action,
         card: { tool: 'relation_create', entity_id: null, title: 'связь' },
       }),

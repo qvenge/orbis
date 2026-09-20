@@ -40,7 +40,7 @@ export const aiRouter = router({
     .mutation(async ({ ctx, input }): Promise<SendMessageResult> => {
       try {
         return await sendMessage(ctx.db, ctx.ai ?? defaultAiDeps(), {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           ...input,
         });
       } catch (e) {
@@ -77,7 +77,7 @@ export const aiRouter = router({
     .input(pendingIdInput)
     .mutation(async ({ ctx, input }): Promise<ExecuteOk> => {
       const r = await approvePending(ctx.db, {
-        ownerId: ctx.actorUserId,
+        graphId: ctx.actorUserId,
         pendingId: input.pendingId,
       });
       if (!r.ok) throw execErrorToTRPC(r.error);
@@ -93,7 +93,7 @@ export const aiRouter = router({
    */
   reject: ownerOnlyProcedure.input(pendingIdInput).mutation(async ({ ctx, input }) => {
     const r = await rejectPending(ctx.db, {
-      ownerId: ctx.actorUserId,
+      graphId: ctx.actorUserId,
       pendingId: input.pendingId,
     });
     if (!r.ok) throw execErrorToTRPC(r.error);
@@ -127,7 +127,7 @@ export const aiRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await declineRuleSuggestion(ctx.db, { ownerId: ctx.actorUserId, ...input });
+        return await declineRuleSuggestion(ctx.db, { graphId: ctx.actorUserId, ...input });
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;

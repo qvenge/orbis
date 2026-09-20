@@ -13,7 +13,7 @@ import { ExecError } from '../errors';
 /** Общий примитив: идемпотентная вставка треда с детерминированным id + чтение. */
 async function ensureThread(
   tx: Tx,
-  values: { id: string; ownerId: string; entityId: string | null },
+  values: { id: string; graphId: string; entityId: string | null },
 ): Promise<string> {
   // Без цели конфликта: гасим и PK, и partial unique (§4.5) — при детерминированном id
   // любой из них означает «строка уже есть»
@@ -23,15 +23,16 @@ async function ensureThread(
     .from(chatThreads)
     .where(eq(chatThreads.id, values.id));
   if (rows.length === 0) {
-    // Недостижимо при identity == ownerId: RLS спрятала строку → ошибка вызывающего
-    throw new Error(`ensureThread: тред ${values.id} не виден после вставки (identity ≠ owner?)`);
+    // Недостижимо, пока тред заводится в ТЕКУЩЕМ графе вызова: RLS спрятала строку →
+    // ошибка вызывающего (в личном графе граф и аккаунт совпадают, в графе компании — нет)
+    throw new Error(`ensureThread: тред ${values.id} не виден после вставки (identity ≠ graph?)`);
   }
   return values.id;
 }
 
 /** Глобальный тред владельца (§4.5): NULL entity_id, id = uuidv5(owner:global-thread). */
-export async function ensureGlobalThread(tx: Tx, ownerId: string): Promise<string> {
-  return ensureThread(tx, { id: globalThreadId(ownerId), ownerId, entityId: null });
+export async function ensureGlobalThread(tx: Tx, graphId: string): Promise<string> {
+  return ensureThread(tx, { id: globalThreadId(graphId), graphId, entityId: null });
 }
 
 /**
@@ -41,7 +42,7 @@ export async function ensureGlobalThread(tx: Tx, ownerId: string): Promise<strin
  */
 export async function ensureEntityThread(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   entityId: string,
 ): Promise<string> {
   const visible = await tx
@@ -51,5 +52,5 @@ export async function ensureEntityThread(
   if (visible.length === 0) {
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: entityId });
   }
-  return ensureThread(tx, { id: entityThreadId(ownerId, entityId), ownerId, entityId });
+  return ensureThread(tx, { id: entityThreadId(graphId, entityId), graphId, entityId });
 }

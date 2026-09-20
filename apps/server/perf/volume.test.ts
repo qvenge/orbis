@@ -184,7 +184,7 @@ afterAll(async () => {
 async function envelopeIdsOf(tx: Tx): Promise<string[]> {
   const rows = (await tx.execute(sql`
     SELECT id FROM entities
-     WHERE owner_id = ${VOLUME_OWNER_ID} AND NOT archived AND 'orbis/budget' = ANY(aspects)
+     WHERE graph_id = ${VOLUME_OWNER_ID} AND NOT archived AND 'orbis/budget' = ANY(aspects)
      ORDER BY id`)) as unknown as Array<{ id: string }>;
   return rows.map((r) => r.id);
 }
@@ -415,13 +415,13 @@ async function verdictFor(index: string, query: SQL, note: string): Promise<Verd
  * Доля корпуса в `entities` — ПОД АДМИН-DSN, потому что под ролью чужих владельцев не видно, а
  * планировщик их видит и считает по ним селективность.
  *
- * Число здесь не украшение: оно решает вердикт по `entities_owner_updated` (см. тест ниже).
+ * Число здесь не украшение: оно решает вердикт по `entities_graph_updated` (см. тест ниже).
  */
 async function corpusShareOfEntities(): Promise<number> {
   const admin = adminDb();
   try {
     const rows = (await admin.db.execute(sql`
-      SELECT (SELECT count(*) FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid)::float8
+      SELECT (SELECT count(*) FROM entities WHERE graph_id = ${VOLUME_OWNER_ID}::uuid)::float8
              / greatest((SELECT count(*) FROM entities), 1)::float8 AS share`)) as unknown as Array<{
       share: number;
     }>;
@@ -434,7 +434,7 @@ async function corpusShareOfEntities(): Promise<number> {
 /**
  * Пин ИНВАРИАНТА, а не строки вердикта, — для индексов, чей выбор решает СЕЛЕКТИВНОСТЬ (Ф-Б1-48а).
  *
- * `entities_owner_updated` — ровно такой. Замер по восьми долям корпуса в `entities` (ревью 09.09; 100 % — естественная, семь —
+ * `entities_graph_updated` — ровно такой. Замер по восьми долям корпуса в `entities` (ревью 09.09; 100 % — естественная, семь —
  * копии строк под чужим владельцем + `ANALYZE` + EXPLAIN + `ROLLBACK`): 100 / 90 / 80 / 70 / 60 %
  * → Seq Scan; 50 / 40 / 31 % → Bitmap Index Scan по этому индексу. Точка переключения планировщика
  * лежит между 50 и 60 %, то есть `chosen` — не факт про индекс, а непрерывная функция состава
@@ -468,7 +468,7 @@ function expectVerdict(v: Verdict, expected: string): void {
  */
 function envelopesOfMonthQuery(period: { start: string; end: string }): SQL {
   return sql`SELECT id FROM entities
-     WHERE owner_id = ${VOLUME_OWNER_ID} AND NOT archived
+     WHERE graph_id = ${VOLUME_OWNER_ID} AND NOT archived
        AND 'orbis/budget' = ANY(aspects)
        AND props->>'orbis/period_start' <= ${period.end}
        AND props->>'orbis/period_end' >= ${period.start}`;
@@ -487,7 +487,7 @@ function envelopesOfMonthQuery(period: { start: string; end: string }): SQL {
  */
 function engineAspectEnvelopesQuery(period: { start: string; end: string }): SQL {
   return sql`SELECT e.id FROM entities e
-     WHERE e.owner_id = ${VOLUME_OWNER_ID} AND NOT e.archived
+     WHERE e.graph_id = ${VOLUME_OWNER_ID} AND NOT e.archived
        AND e.aspects @> ARRAY[${lit('orbis/budget')}]
        AND e.props->>'orbis/period_start' <= ${period.end}
        AND e.props->>'orbis/period_end' >= ${period.start}`;
@@ -536,7 +536,7 @@ test('корпус наполнен: гейт меряет данные, а не
 
 test('корпус: 480 конвертов видны под ролью приложения, а не только админу', async () => {
   // Корпус сеется прямыми INSERT под админ-DSN (Р-К-2/РП-8), а гейт мерит путь владельца.
-  // Разъехался бы `owner_id` — админ строки видит, роль нет, и весь замер шёл бы по пустоте,
+  // Разъехался бы `graph_id` — админ строки видит, роль нет, и весь замер шёл бы по пустоте,
   // оставаясь зелёным (класс сторожа `perf.test.ts:212`, `graph.test.ts:181`).
   const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
   expect(ids).toHaveLength(VOLUME_ENVELOPES);
@@ -549,7 +549,7 @@ test('Р-К-2: сто движений через исполнитель даю�
   //    которым сеялись 16 000+ привязок корпуса.
   const expected = await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
     selectEnvelopes(tx, {
-      ownerId: VOLUME_OWNER_ID,
+      graphId: VOLUME_OWNER_ID,
       defaultCurrency: VOLUME_DEFAULT_CURRENCY,
       rows: probes.map((p) => {
         const c = volumeCombination(volumeProbeProps(p), ['orbis/financial']);
@@ -634,7 +634,7 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
     const admin = adminDb();
     try {
       await admin.db.execute(
-        sql`DELETE FROM envelope_spent_cache WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`,
+        sql`DELETE FROM envelope_spent_cache WHERE graph_id = ${VOLUME_OWNER_ID}::uuid`,
       );
     } finally {
       await admin.client.end();
@@ -678,7 +678,7 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
     // тавтологией «движок равен себе».
     const rows = (await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
       tx.execute(sql`SELECT count(*)::int AS n FROM envelope_spent_cache
-                     WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`),
+                     WHERE graph_id = ${VOLUME_OWNER_ID}::uuid`),
     )) as unknown as Array<{ n: number }>;
     expect(rows[0]?.n).toBe(VOLUME_ENVELOPES);
   }, 900_000);
@@ -812,7 +812,7 @@ test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ форм
     'chosen=false usable=false admin=true',
   );
 
-  // `entities_owner_updated` — пин ИНВАРИАНТА, а не строки (Ф-Б1-48а; докблок `expectRlsNeutral`).
+  // `entities_graph_updated` — пин ИНВАРИАНТА, а не строки (Ф-Б1-48а; докблок `expectRlsNeutral`).
   // Доля печатается как факт замера: она объясняет `chosen`, но гейтом не является.
   const share = await corpusShareOfEntities();
   console.log(
@@ -821,9 +821,9 @@ test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ форм
   );
   expectRlsNeutral(
     await verdictFor(
-      'entities_owner_updated',
+      'entities_graph_updated',
       q,
-      `частичный btree (owner_id, updated_at); доля корпуса ${(share * 100).toFixed(0)} %`,
+      `частичный btree (graph_id, updated_at); доля корпуса ${(share * 100).toFixed(0)} %`,
     ),
   );
 }, 300_000);
@@ -882,7 +882,7 @@ test('сводка EXPLAIN напечатана по всем снятым ве�
     [
       'entities_aspects_gin',
       'entities_aspects_gin',
-      'entities_owner_updated',
+      'entities_graph_updated',
       'rel_uniq',
       'relations_source_role',
     ].sort(),

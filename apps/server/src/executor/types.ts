@@ -101,7 +101,7 @@ export type ExecuteResult = ExecuteOk | ExecuteErr;
  */
 export interface WireEntity {
   id: string;
-  ownerId: string;
+  graphId: string;
   title: string;
   emoji: string | null;
   body: string;
@@ -287,11 +287,11 @@ export interface ActionCard {
 export interface JournalWrite {
   /**
    * Явный PK audit-сообщения. Batch (§7.8) передаёт детерминированный
-   * batchAuditMessageId(ownerId, batchId) — уникальность этого id и делает повтор
+   * batchAuditMessageId(graphId, batchId) — уникальность этого id и делает повтор
    * batch проверяемым. Отсутствует → id выбирает реализация синка.
    */
   id?: string;
-  ownerId: string;
+  graphId: string;
   threadId?: string; // нет → глобальный тред владельца (резолвит боевой синк, Task 11)
   action: ActionRecord;
   card: ActionCard;

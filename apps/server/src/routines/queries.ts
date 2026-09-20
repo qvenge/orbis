@@ -22,10 +22,10 @@ import { userSettings } from '../db/schema';
  * между релизами) тикают в одну и ту же минуту, и одинаковый порядок обхода делает их
  * гонку за бакет воспроизводимой, а не «через раз».
  */
-export async function ownerIdsForScheduler(db: Db): Promise<string[]> {
+export async function graphIdsForScheduler(db: Db): Promise<string[]> {
   const rows = await db
-    .select({ ownerId: userSettings.ownerId })
+    .select({ graphId: userSettings.graphId })
     .from(userSettings)
-    .orderBy(userSettings.ownerId);
-  return rows.map((r) => r.ownerId);
+    .orderBy(userSettings.graphId);
+  return rows.map((r) => r.graphId);
 }

@@ -121,7 +121,7 @@ export const oauthRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { clientName } = await requireValidRequest(ctx.db, input);
       const code = await createAuthorizationCode(ctx.db, {
-        ownerId: ctx.actorUserId,
+        graphId: ctx.actorUserId,
         clientId: input.clientId,
         // Метка в списке «Агенты» — та же подпись, что владелец видел на экране согласия
         label: clientName,
@@ -157,6 +157,6 @@ export const oauthRouter = router({
     .mutation(async ({ ctx, input }) => ({
       // Скоуп по владельцу — внутри revokeGrant: идентификатор приезжает снаружи, и без
       // него один аккаунт гасил бы доступы другого.
-      revoked: await revokeGrant(ctx.db, { ownerId: ctx.actorUserId, grantId: input.grantId }),
+      revoked: await revokeGrant(ctx.db, { graphId: ctx.actorUserId, grantId: input.grantId }),
     })),
 });

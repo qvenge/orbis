@@ -178,7 +178,7 @@ async function actionMessageCount(actionId: string): Promise<number> {
 
 /** Материализация одного дня startDate (окно в один день). */
 async function materializeOne(user: string, templateId: string, date: string): Promise<string> {
-  const r = await materializeInstances({ db, ownerId: user, from: date, to: date, today: date });
+  const r = await materializeInstances({ db, graphId: user, from: date, to: date, today: date });
   if (r.created !== 1) throw new Error(`ожидался 1 инстанс, создано ${r.created}`);
   return recurringInstanceId(templateId, date);
 }
@@ -191,7 +191,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
     await materializeInstances({
       db,
-      ownerId: user,
+      graphId: user,
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -202,7 +202,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await spentOf(envelopeId)).toBe('0');
 
-    const r = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(r.posted).toBe(1);
 
     // planned снят, остальные поля financial не тронуты (shallow-merge §9.2)
@@ -231,7 +231,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
     await materializeInstances({
       db,
-      ownerId: user,
+      graphId: user,
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -250,7 +250,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       aspects: ['orbis/financial'],
     });
 
-    const r = await postDueInstances({ db, ownerId: user, today: '2026-07-02' });
+    const r = await postDueInstances({ db, graphId: user, today: '2026-07-02' });
     expect(r.posted).toBe(2); // 07-01 (просрочен) и 07-02 (сегодня)
 
     expect((await propsOf(recurringInstanceId(templateId, '2026-07-01')))['orbis/planned']).toBe(
@@ -289,11 +289,11 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
     const instanceId = await materializeOne(user, templateId, '2026-07-01');
 
-    const first = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const first = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(first.posted).toBe(1);
 
     // Повтор: planned уже false → нечего постить
-    const second = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const second = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(second.posted).toBe(0);
 
     // Владелец вернул planned=true правкой; batch_id детерминирован → повторный вызов
@@ -309,7 +309,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
         { sink },
       ),
     );
-    const third = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const third = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(third.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await actionMessageCount(postFinancialBatchId(instanceId))).toBe(1);
@@ -325,7 +325,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // Пользователь пропускает ожидаемую операцию — архивирует инстанс до даты (§2.8)
     ok(await execute(db, req(user, 'entity_update', { id: instanceId, archived: true }), { sink }));
 
-    const r = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(r.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await actionById(postFinancialBatchId(instanceId))).toBeUndefined();
@@ -358,7 +358,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     );
     expect(await budgetParents(instanceId)).toEqual([]);
 
-    const r = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(r.posted).toBe(1);
     // transition снял planned И привязал к конверту (binding-операция дописана A4-хуком
     // в ТОТ ЖЕ action — виден relation_create в операциях batch)
@@ -376,7 +376,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     expect(await budgetParents(instanceId)).toEqual([]); // прежняя (пустая) привязка
 
     // Undo «липкий»: batch_id детерминирован → повтор postDue реплеится по audit-PK
-    const again = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const again = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(again.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
   });
@@ -394,8 +394,8 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       const instanceId = await materializeOne(user, templateId, '2026-07-01');
 
       const [a, b] = await Promise.all([
-        postDueInstances({ db, ownerId: user, today: '2026-07-01' }),
-        postDueInstances({ db, ownerId: user, today: '2026-07-01' }),
+        postDueInstances({ db, graphId: user, today: '2026-07-01' }),
+        postDueInstances({ db, graphId: user, today: '2026-07-01' }),
       ]);
 
       // Ровно один применил переход; второй сошёлся в replay по audit-PK (01 §3.3)
@@ -422,7 +422,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     await withIdentity(db, user, (tx) =>
       tx.insert(entities).values([
         rawEntityRow({
-          ownerId: user,
+          graphId: user,
           id: detached,
           title: 'Инстанс без аспекта финансов',
           props: {
@@ -436,7 +436,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
           aspects: [],
         }),
         rawEntityRow({
-          ownerId: user,
+          graphId: user,
           id: notPlanned,
           title: 'Инстанс уже факт',
           props: {
@@ -466,7 +466,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       ),
     );
 
-    const r = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
     expect(r.posted).toBe(0);
     // Ни одна строка не тронута: у первой `planned` остался `true`, у второй его как не
     // было, так и нет (переход записал бы `false`).

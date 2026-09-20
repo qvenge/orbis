@@ -256,7 +256,7 @@ function valueSql(node: ExprNode, scope: ExprCompileScope): SQL {
     // приезжает проекцией `props->>…`, тоже текстом. Без каста Postgres встречал бы
     // `uuid = text` и отвечал 42883 — ошибкой запроса НА ЧТЕНИИ вместо структурного отказа.
     if (node.ctx === '$self') return sql`${scope.row}.id::text`;
-    if (node.ctx === '$owner') return sql`${scope.cctx.ownerId}`;
+    if (node.ctx === '$owner') return sql`${scope.cctx.graphId}`;
     return unsupported('$sensitivity');
   }
   if ('date_add' in node) {

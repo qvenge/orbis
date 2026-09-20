@@ -195,12 +195,12 @@ describe('батч-селектор конвертов: эквивалентно
     }));
 
     const batch = await withIdentity(db, s.user, (tx) =>
-      selectEnvelopes(tx, { ownerId: s.user, defaultCurrency: 'RUB', rows }),
+      selectEnvelopes(tx, { graphId: s.user, defaultCurrency: 'RUB', rows }),
     );
     const singles = await withIdentity(db, s.user, async (tx) => {
       const out = new Map<string, string | null>();
       for (const row of rows) {
-        out.set(row.key, await selectEnvelope(tx, { ownerId: s.user, ...row }));
+        out.set(row.key, await selectEnvelope(tx, { graphId: s.user, ...row }));
       }
       return out;
     });

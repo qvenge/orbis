@@ -7,7 +7,7 @@ import { AGENDA_DAYS_MAX, agendaListInput, agendaListResultSchema } from './agen
 
 const ENT = {
   id: '019d48ea-4188-765d-8e96-93a0ad9c262a',
-  ownerId: '019d48ea-4188-765d-8e96-93a0ad9c262b',
+  graphId: '019d48ea-4188-765d-8e96-93a0ad9c262b',
   title: 'Стендап',
   props: { 'orbis/start_at': '2026-09-03T09:00:00+03:00' },
   aspects: ['orbis/schedule'],

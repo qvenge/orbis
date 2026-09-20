@@ -12,13 +12,13 @@
 // только внимательность. Здесь копия одна.
 //
 // Мутация реестра ПРЯМОЙ записью в БД — названное планом исключение из правила «только
-// через executor» (Р-1): system-строки (`owner_id IS NULL`) ничьи, актора у них нет, и
+// через executor» (Р-1): system-строки (`graph_id IS NULL`) ничьи, актора у них нет, и
 // executor, который весь построен на владельце и его RLS, писать их не может.
 //
 // Колонка `symmetric` пишется в кавычках: SYMMETRIC — зарезервированное слово SQL, и без
 // кавычек PostgreSQL отвергает список колонок разбором (проверено пробоем).
 //
-// Идемпотентен: `ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE` (опора — partial unique
+// Идемпотентен: `ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE` (опора — partial unique
 // index `*_builtin_uniq` каждой таблицы). Лишние system-строки НЕ удаляет: строка, которой
 // нет в коде, — это дрейф (Р-23) и решение человека («свойство удалили» или «код откатили
 // на старую версию»), а не то, что вправе решить сид. Отчёт `ops.ts check` называет такие
@@ -86,7 +86,7 @@ export interface SeedRegistriesResult {
  * Пишет встроенные строки ПЯТИ реестров (свойства, роли, аспекты, контракты, подписки) и двигает
  * глобальную версию. Шестой род — действия (§Б6) — не сеется: встроенных строк у него нет.
  *
- * `sql` — админское подключение: RLS запрещает запись строк с `owner_id IS NULL` любой
+ * `sql` — админское подключение: RLS запрещает запись строк с `graph_id IS NULL` любой
  * роли, кроме обходящей политики.
  *
  * Тип `ISql`, а не `Sql`, — то общее, что есть у пула и у ОТКРЫТОЙ ТРАНЗАКЦИИ (postgres.js
@@ -104,14 +104,14 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
   for (const p of BUILTIN_PROPERTY_META) {
     await sql`
       INSERT INTO property_definitions
-        (id, owner_id, key, label, description, type, status, storage, scope,
+        (id, graph_id, key, label, description, type, status, storage, scope,
          merged_into, module, rank, flags)
       VALUES
         (${p.id}, NULL, ${p.key}, ${sql.json(j(p.label))}, ${sql.json(j(p.description))},
          ${sql.json(j(p.type))}, ${p.status}, ${p.storage},
          ${p.scope === null ? null : sql.json(j(p.scope))},
          ${p.mergedInto}, ${p.module}, ${p.rank}, ${sql.json(j(p.flags))})
-      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
+      ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         type = EXCLUDED.type, status = EXCLUDED.status, storage = EXCLUDED.storage,
         scope = EXCLUDED.scope, merged_into = EXCLUDED.merged_into,
@@ -121,13 +121,13 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
   for (const r of BUILTIN_RELATION_ROLE_META) {
     await sql`
       INSERT INTO relation_role_definitions
-        (id, owner_id, key, label, description, source_label, target_label,
+        (id, graph_id, key, label, description, source_label, target_label,
          hierarchical, constraints, "symmetric", module, rank)
       VALUES
         (${r.id}, NULL, ${r.key}, ${sql.json(j(r.label))}, ${sql.json(j(r.description))},
          ${sql.json(j(r.sourceLabel))}, ${sql.json(j(r.targetLabel))},
          ${r.hierarchical}, ${sql.json(j(r.constraints))}, ${r.symmetric}, ${r.module}, ${r.rank})
-      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
+      ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         source_label = EXCLUDED.source_label, target_label = EXCLUDED.target_label,
         hierarchical = EXCLUDED.hierarchical, constraints = EXCLUDED.constraints,
@@ -137,7 +137,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
   for (const a of BUILTIN_ASPECT_DEFS) {
     await sql`
       INSERT INTO aspect_definitions
-        (id, owner_id, key, label, description, properties, implements, aggregations,
+        (id, graph_id, key, label, description, properties, implements, aggregations,
          ai_instructions, tag_mappings, view_config, module, service, rank)
       VALUES
         (${a.id}, NULL, ${a.key}, ${sql.json(j(a.label))}, ${sql.json(j(a.description))},
@@ -145,7 +145,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
          ${sql.json(j(a.aggregations))},
          ${a.aiInstructions}, ${a.tagMappings}, ${sql.json(j(a.viewConfig))},
          ${a.module}, ${a.service}, ${a.rank})
-      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
+      ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, implements = EXCLUDED.implements,
         aggregations = EXCLUDED.aggregations,
@@ -160,7 +160,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
     // Тот же приём, что у `scope` свойства выше.
     await sql`
       INSERT INTO contract_definitions
-        (id, owner_id, key, label, description, kind, slots, classes, sets, facts, module, rank)
+        (id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank)
       VALUES
         (${c.id}, NULL, ${c.key}, ${sql.json(j(c.label))}, ${sql.json(j(c.description))}, ${c.kind},
          ${c.slots === null ? null : sql.json(j(c.slots))},
@@ -168,20 +168,20 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
          ${c.sets === null ? null : sql.json(j(c.sets))},
          ${c.facts === null ? null : sql.json(j(c.facts))},
          ${c.module}, ${c.rank})
-      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
+      ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         kind = EXCLUDED.kind, slots = EXCLUDED.slots, classes = EXCLUDED.classes,
         sets = EXCLUDED.sets, facts = EXCLUDED.facts, module = EXCLUDED.module, rank = EXCLUDED.rank`;
   }
 
   // §Б5-1: декларация поверхности — СТРОКА РЕЕСТРА, а не литерал в коде движка. Дельта
-  // владельца (`subscription_set`) кладётся отдельной строкой с его `owner_id`, поэтому
+  // владельца (`subscription_set`) кладётся отдельной строкой с его `graph_id`, поэтому
   // конфликт разрешается тем же частичным индексом, что у остальных четырёх сеемых реестров.
   for (const s of BUILTIN_SUBSCRIPTION_DEFS) {
     await sql`
-      INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
+      INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
       VALUES (${s.id}, NULL, ${s.surface}, ${sql.json(j(s.definition))}, ${s.module}, ${s.rank})
-      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
+      ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         surface = EXCLUDED.surface, definition = EXCLUDED.definition,
         module = EXCLUDED.module, rank = EXCLUDED.rank`;
   }
@@ -214,7 +214,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
 }
 
 /**
- * Системные определения из БД (`owner_id IS NULL`) — сторона «до» трёхстороннего слияния.
+ * Системные определения из БД (`graph_id IS NULL`) — сторона «до» трёхстороннего слияния.
  *
  * РАЗБОР МЯГКИЙ, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ. Функция зовётся ПЕРВОЙ строкой сида, до всех upsert'ов,
  * а разбирает она строки ПРОШЛОГО релиза новой схемой: строгий разбор означал бы сид, который
@@ -227,24 +227,24 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
  */
 export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinitions> {
   const propertyRows = await sql<Record<string, unknown>[]>`
-    SELECT id, owner_id, key, label, description, type, status, storage, scope,
+    SELECT id, graph_id, key, label, description, type, status, storage, scope,
            merged_into, module, rank, flags
-    FROM property_definitions WHERE owner_id IS NULL`;
+    FROM property_definitions WHERE graph_id IS NULL`;
   const aspectRows = await sql<Record<string, unknown>[]>`
-    SELECT id, owner_id, key, label, description, properties, ai_instructions, tag_mappings,
+    SELECT id, graph_id, key, label, description, properties, ai_instructions, tag_mappings,
            implements, aggregations, view_config, module, service, rank
-    FROM aspect_definitions WHERE owner_id IS NULL`;
+    FROM aspect_definitions WHERE graph_id IS NULL`;
   const contractRows = await sql<Record<string, unknown>[]>`
-    SELECT id, owner_id, key, label, description, kind, slots, classes, sets, facts, module, rank
-    FROM contract_definitions WHERE owner_id IS NULL`;
+    SELECT id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank
+    FROM contract_definitions WHERE graph_id IS NULL`;
   const subscriptionRows = await sql<Record<string, unknown>[]>`
-    SELECT id, owner_id, surface, definition, module, rank
-    FROM subscription_definitions WHERE owner_id IS NULL`;
+    SELECT id, graph_id, surface, definition, module, rank
+    FROM subscription_definitions WHERE graph_id IS NULL`;
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
     const parsed = propertyDefinitionSchema.safeParse({
       id: r.id,
-      ownerId: r.owner_id,
+      graphId: r.graph_id,
       key: r.key,
       label: r.label,
       description: r.description,
@@ -263,7 +263,7 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
   for (const r of aspectRows) {
     const parsed = aspectDefinitionSchema.safeParse({
       id: r.id,
-      ownerId: r.owner_id,
+      graphId: r.graph_id,
       key: r.key,
       label: r.label,
       description: r.description,
@@ -284,7 +284,7 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
   for (const r of contractRows) {
     const parsed = contractDefinitionSchema.safeParse({
       id: r.id,
-      ownerId: r.owner_id,
+      graphId: r.graph_id,
       key: r.key,
       label: r.label,
       description: r.description,
@@ -304,7 +304,7 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
     if (!parsed.success) continue;
     subscriptions.set(r.id as string, {
       id: r.id as string,
-      ownerId: r.owner_id as string | null,
+      graphId: r.graph_id as string | null,
       surface: r.surface as string,
       definition: parsed.data,
       module: r.module as string | null,
@@ -320,7 +320,7 @@ export function codeSystemDefinitions(): SystemDefinitions {
     properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
-    // `ownerId: null` проставляется здесь, а не берётся из `BuiltinSubscriptionDef`: у встроенной
+    // `graphId: null` проставляется здесь, а не берётся из `BuiltinSubscriptionDef`: у встроенной
     // декларации владельца нет по определению, и второе поле в списке кода означало бы, что
     // system-строку можно объявить чужой.
     subscriptions: new Map(
@@ -328,7 +328,7 @@ export function codeSystemDefinitions(): SystemDefinitions {
         s.id,
         {
           id: s.id,
-          ownerId: null,
+          graphId: null,
           surface: s.surface,
           definition: s.definition,
           module: s.module,
@@ -374,9 +374,9 @@ export async function mergeRegistryDeltas(
   systemVersion: number,
 ): Promise<{ merged: number; conflicts: RegistryConflict[] }> {
   const rows = await sql<Record<string, unknown>[]>`
-    SELECT id, owner_id, target_kind, target_id, base_version, delta
+    SELECT id, graph_id, target_kind, target_id, base_version, delta
     FROM registry_deltas WHERE base_version < ${systemVersion}
-    ORDER BY owner_id, target_kind, target_id`;
+    ORDER BY graph_id, target_kind, target_id`;
   if (rows.length === 0) return { merged: 0, conflicts: [] };
 
   const nextSystem = codeSystemDefinitions();
@@ -395,7 +395,7 @@ export async function mergeRegistryDeltas(
     for (const r of rows) {
       const row: RegistryDeltaRow = {
         id: r.id as string,
-        ownerId: r.owner_id as string,
+        graphId: r.graph_id as string,
         targetKind: r.target_kind as RegistryDeltaTargetKind,
         targetId: r.target_id as string,
         baseVersion: r.base_version as number,
@@ -413,12 +413,12 @@ export async function mergeRegistryDeltas(
                        SET delta = ${JSON.stringify(merged)}::jsonb, base_version = ${systemVersion}
                      WHERE id = ${row.id}::uuid`,
         );
-        await bumpOwnerRegistryVersion(tx, row.ownerId);
+        await bumpOwnerRegistryVersion(tx, row.graphId);
         if (conflicts.length === 0) return;
         // Заметка — ТОЙ ЖЕ транзакцией, что переписывает дельту. Порознь возможен исход
         // «дельта слита, а владельцу не сказали»: следующий прогон её уже не найдёт
         // (`base_version` переехал на текущую версию) и промолчит навсегда.
-        const threadId = await ensureGlobalThread(tx, row.ownerId);
+        const threadId = await ensureGlobalThread(tx, row.graphId);
         await appendMessageIdempotent(tx, {
           id: registryMergeNoteId(row.id, systemVersion),
           threadId,
@@ -433,7 +433,7 @@ export async function mergeRegistryDeltas(
         // выбор ещё остался (§А3-3, Задача 15). Тем же tx и по той же причине, что заметка:
         // порознь возможен исход «дельта слита, а разобрать её владельцу не предложили».
         await createDriftConflictUnits(tx, {
-          ownerId: row.ownerId,
+          graphId: row.graphId,
           systemVersion,
           deltaRowId: row.id,
           merged,

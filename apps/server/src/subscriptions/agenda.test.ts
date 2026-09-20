@@ -163,7 +163,7 @@ describe('движок Agenda: потолок секций, наборы кон�
       },
       aspects: ['orbis/schedule'],
     });
-    await materializeInstances({ db, ownerId: u, from: today, to: addDays(today, 7), today });
+    await materializeInstances({ db, graphId: u, from: today, to: addDays(today, 7), today });
     const win = (await listFor(u)).rows.filter((x) => x.section === 'window');
     expect(win.map((x) => x.entity.id)).not.toContain(tpl);
     expect(win.length).toBeGreaterThanOrEqual(7); // по инстансу на каждый день окна

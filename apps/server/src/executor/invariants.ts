@@ -57,12 +57,12 @@ export async function resolveEntityTitles(
  * проверку ровно тогда, когда аспект назначения появляется или меняется.
  *
  * Чтение agent_grants идёт под `SET LOCAL ROLE authenticated` (withIdentity): политика
- * owner_owns_row показывает только строки владельца, но условие на owner_id всё равно
+ * owner_owns_row показывает только строки владельца, но условие на graph_id всё равно
  * оставлено явным — оно же служит фильтром «грант чужой» на любых иных ролях.
  * Чужой и несуществующий грант неразличимы намеренно (единый NOT_FOUND, как у сущностей):
  * иначе назначение стало бы оракулом чужих grant_id.
  */
-export async function assertAssignment(tx: Tx, ownerId: string, next: EntityState): Promise<void> {
+export async function assertAssignment(tx: Tx, graphId: string, next: EntityState): Promise<void> {
   if (!next.aspects.includes('orbis/assignment')) return;
   const executor = next.props['orbis/executor'];
   const grantId = next.props['orbis/grant'];
@@ -78,7 +78,7 @@ export async function assertAssignment(tx: Tx, ownerId: string, next: EntityStat
       .where(
         and(
           eq(agentGrants.id, grantId),
-          eq(agentGrants.ownerId, ownerId),
+          eq(agentGrants.graphId, graphId),
           isNull(agentGrants.revokedAt),
         ),
       );

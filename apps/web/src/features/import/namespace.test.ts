@@ -1,5 +1,5 @@
 // Task C4b (03-budget §3.4.1): правило нормализации имени источника в namespace
-// entity_origins. Значение попадает в уникальный ключ (owner_id, namespace, external_id)
+// entity_origins. Значение попадает в уникальный ключ (graph_id, namespace, external_id)
 // НАВСЕГДА, поэтому правило покрыто пунктом за пунктом: две выгрузки одного счёта за
 // разные месяцы обязаны дать ОДИН namespace, иначе повторная строка получит ✓ вместо ⟳.
 import { importNamespaceSchema } from '@orbis/shared';

@@ -1,6 +1,6 @@
 // apps/server/src/ai/metering.ts
 // Метеринг LLM-вызовов (§4.7 ai_usage, §8): upsert-инкремент строки
-// (owner_id, date, model). Решение 8 плана 1b: запись — ВНЕ tx executor'а/цикла,
+// (graph_id, date, model). Решение 8 плана 1b: запись — ВНЕ tx executor'а/цикла,
 // отдельной короткой транзакцией ПОСЛЕ tool-цикла, суммой всех шагов.
 // Таблица под RLS (owner_owns_row) — пишем под withIdentity владельца.
 // День — календарный в UTC (§4.7); clock инжектируется тестами.
@@ -22,7 +22,7 @@ export function utcDay(now: Date): string {
 }
 
 /**
- * Инкремент дневных счётчиков: INSERT … ON CONFLICT (owner_id, date, model)
+ * Инкремент дневных счётчиков: INSERT … ON CONFLICT (graph_id, date, model)
  * DO UPDATE SET counter = ai_usage.counter + excluded.counter. Атомарно на уровне
  * PG — конкурентные вызовы не теряют инкременты. Ошибки НЕ глотает: решение
  * «сбой метеринга не ломает ответ пользователю» реализует вызывающий
@@ -30,14 +30,14 @@ export function utcDay(now: Date): string {
  */
 export async function recordUsage(
   db: Db,
-  args: { ownerId: string; model: string; usage: UsageTotals; clock?: () => Date },
+  args: { graphId: string; model: string; usage: UsageTotals; clock?: () => Date },
 ): Promise<void> {
   const date = utcDay((args.clock ?? (() => new Date()))());
-  await withIdentity(db, args.ownerId, (tx) =>
+  await withIdentity(db, args.graphId, (tx) =>
     tx
       .insert(aiUsage)
       .values({
-        ownerId: args.ownerId,
+        graphId: args.graphId,
         date,
         model: args.model,
         inputTokens: args.usage.inputTokens,
@@ -45,7 +45,7 @@ export async function recordUsage(
         requestCount: args.usage.requestCount,
       })
       .onConflictDoUpdate({
-        target: [aiUsage.ownerId, aiUsage.date, aiUsage.model],
+        target: [aiUsage.graphId, aiUsage.date, aiUsage.model],
         set: {
           inputTokens: sql`${aiUsage.inputTokens} + excluded.input_tokens`,
           outputTokens: sql`${aiUsage.outputTokens} + excluded.output_tokens`,

@@ -84,7 +84,7 @@ export const SLOT_KEY_RE = /^[a-z][a-z0-9_]*$/;
 export const propertyDefinitionSchema = z
   .object({
     id: z.string().min(1),
-    ownerId: z.string().uuid().nullable(),
+    graphId: z.string().uuid().nullable(),
     key: z.string().regex(NAMESPACED_KEY_RE, 'namespaced ASCII-слаг'),
     label: localizedTextSchema,
     // description ОБЯЗАТЕЛЕН (Р4): единственный носитель смысла для AI — он уезжает в
@@ -179,7 +179,7 @@ export type AspectImplements = z.infer<typeof aspectImplementsSchema>;
 export const aspectDefinitionSchema = z
   .object({
     id: z.string().min(1),
-    ownerId: z.string().uuid().nullable(),
+    graphId: z.string().uuid().nullable(),
     key: z.string().regex(NAMESPACED_KEY_RE, 'namespaced ASCII-слаг'),
     label: localizedTextSchema,
     description: localizedTextSchema,
@@ -228,7 +228,7 @@ export type AspectDefinition = z.infer<typeof aspectDefinitionSchema>;
 export const relationRoleDefinitionSchema = z
   .object({
     id: z.string().min(1),
-    ownerId: z.string().uuid().nullable(),
+    graphId: z.string().uuid().nullable(),
     key: z.string().regex(RELATION_ROLE_KEY_RE, 'ASCII-слаг роли'),
     label: localizedTextSchema,
     description: localizedTextSchema,

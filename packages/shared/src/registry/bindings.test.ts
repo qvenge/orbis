@@ -354,7 +354,7 @@ function probeAspect(props: readonly string[], impl: readonly unknown[]) {
   const p = probe(props, impl);
   return aspectDefinitionSchema.parse({
     ...p,
-    ownerId: null,
+    graphId: null,
     key: p.id,
     label: { ru: 'Проба', en: 'Probe' },
     description: { ru: 'Проба', en: 'Probe' },
@@ -639,13 +639,13 @@ describe('checkClassMap: вариант дельты без отнесения �
       ...(REG.properties.get('orbis/task_status') as PropertyDefinition),
       id: '019e4466-3333-7e07-b5d4-64be9721da03',
       key: 'user/gig-status',
-      ownerId: '00000000-0000-4000-8000-000000000001',
+      graphId: '00000000-0000-4000-8000-000000000001',
     };
     const carrier = (carries: boolean): AspectDefinition => ({
       ...NOTE,
       id: 'user/gig',
       key: 'user/gig',
-      ownerId: OWN_STATUS.ownerId,
+      graphId: OWN_STATUS.graphId,
       properties: carries ? [{ propertyId: OWN_STATUS.id, required: false, rank: 1 }] : [],
       implements: [
         {

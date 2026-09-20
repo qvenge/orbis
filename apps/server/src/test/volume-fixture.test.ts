@@ -80,7 +80,7 @@ describe('мир корпуса: финансовый слой', () => {
     expect((august[0]?.props as Record<string, unknown>)['orbis/period_end']).toBe('2026-08-31');
   });
   test('форма после среза А: props/aspects, пустой query_refs, старых имён нет', () => {
-    expect(world.entities.every((e) => e.ownerId === VOLUME_OWNER_ID)).toBe(true);
+    expect(world.entities.every((e) => e.graphId === VOLUME_OWNER_ID)).toBe(true);
     expect(world.entities.every((e) => (e.queryRefs as string[]).length === 0)).toBe(true);
     expect(JSON.stringify(byAspect('orbis/budget')[0]?.props)).not.toContain('category_ref');
   });
@@ -241,18 +241,18 @@ describe('уборка проб сносит кэш spent владельца к�
       // Обстановка: одна ПРОГРЕТАЯ строка кэша владельца корпуса. Своя сущность-конверт, а не
       // проба: пробы уносит каскад FK, и снос кэша на них был бы неразличим.
       await db.execute(
-        sql`INSERT INTO entities (id, owner_id, title)
+        sql`INSERT INTO entities (id, graph_id, title)
             VALUES (${envelopeId}::uuid, ${VOLUME_OWNER_ID}::uuid, 'Конверт пина уборки')`,
       );
       await db.execute(
         sql`INSERT INTO envelope_spent_cache
-              (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+              (envelope_id, graph_id, as_of, spent, owner_version, system_version)
             VALUES (${envelopeId}::uuid, ${VOLUME_OWNER_ID}::uuid, '2026-07-15', 1234.56, 0, 1)`,
       );
       const count = async (): Promise<number> => {
         const rows = (await db.execute(
           sql`SELECT count(*)::int AS n FROM envelope_spent_cache
-              WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`,
+              WHERE graph_id = ${VOLUME_OWNER_ID}::uuid`,
         )) as unknown as Array<{ n: number }>;
         return rows[0]?.n ?? 0;
       };

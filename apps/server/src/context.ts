@@ -34,7 +34,7 @@ export function makeCreateContext(db: Db, ai?: AiDeps) {
     if (token !== null && BEARER_PREFIXES.some((p) => token.startsWith(p))) {
       const identity = await verifyBearer(db, token);
       return {
-        actorUserId: identity?.ownerId ?? null,
+        actorUserId: identity?.graphId ?? null,
         actorKind: 'agent',
         // Идентичность гранта (С2) — симметрично /mcp (mcp/server.ts): один и тот же
         // токен пускают обе поверхности, и то, что известно о доступе, не должно

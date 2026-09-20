@@ -233,7 +233,7 @@ function sumLedgerSql(
   const cur = (row: SQL, contract: string) =>
     sql`coalesce(${slotExpr('currency', contract, cctx, row)}, ${args.defaultCurrency})`;
   const value = sql`(${slotExpr(agg.of.slot, mv, cctx, e)})::numeric`;
-  const where: SQL[] = [sql`e.owner_id = ${cctx.ownerId}`, sql`NOT e.archived`, movement];
+  const where: SQL[] = [sql`e.graph_id = ${cctx.graphId}`, sql`NOT e.archived`, movement];
   if (agg.where !== undefined) {
     where.push(compileContractPredicate(mv, agg.where, cctx, e));
   }
@@ -310,7 +310,7 @@ export function planLedgers(
   if (envelopeFilter !== undefined) window.push(envelopeFilter);
   const intersectsMonth: ExprNode = { op: 'and', args: window };
   const envelopes = sql`SELECT e.id FROM entities e
-    WHERE e.owner_id = ${cctx.ownerId} AND NOT e.archived
+    WHERE e.graph_id = ${cctx.graphId} AND NOT e.archived
       AND ${compileContractPredicate(env, intersectsMonth, cctx, e)}`;
   const movementIds = sql`${compileContractPredicate(mv, { const: true }, cctx, e)}
       AND ${compileClassMembership(mv, def.sources.movement.counted_set, cctx, e)}`;
@@ -460,7 +460,7 @@ export function materializedAggregatesOf(
  */
 async function runSumCached(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   cctx: CompileCtx,
   def: BudgetSubscription,
   la: LedgerArgs,
@@ -476,7 +476,7 @@ async function runSumCached(
   const asOf = cctx.today;
   const cached = await readSpentCache(
     tx,
-    ownerId,
+    graphId,
     envIds.map((envelopeId) => ({ envelopeId, asOf })),
     versions,
   );
@@ -489,7 +489,7 @@ async function runSumCached(
   }
   if (misses.length === 0) return out;
 
-  await lockOwnerBudget(tx, ownerId);
+  await lockOwnerBudget(tx, graphId);
   const computed = await runSum(tx, cctx, def, la, name, misses);
   // Нули пишутся ТОЖЕ: конверт без трат — такой же ответ, и без строки он промахивался бы
   // при каждом чтении, то есть кэш не работал бы ровно на пустом месяце.
@@ -502,7 +502,7 @@ async function runSumCached(
   // и запись, и инкремент.
   await writeSpentCache(
     tx,
-    ownerId,
+    graphId,
     misses.map((envelopeId) => ({ envelopeId, asOf, spent: computed.get(envelopeId) ?? '0.00' })),
     versions,
   );
@@ -604,7 +604,7 @@ export function spentCacheContourOf(reg: RegistrySnapshot): SpentCacheContour {
  */
 export async function spentContributionOf(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   cctx: CompileCtx,
   args: { entityId: string; envelopeId: string; defaultCurrency: string },
 ): Promise<{ amount: string; asOf: string } | null> {
@@ -633,7 +633,7 @@ export async function spentContributionOf(
            (${slotExpr('date', mv, cctx, e)})::text AS as_of
     FROM entities e, entities env
     WHERE e.id = ${args.entityId} AND env.id = ${args.envelopeId}
-      AND e.owner_id = ${ownerId} AND NOT e.archived
+      AND e.graph_id = ${graphId} AND NOT e.archived
       AND ${sql.join(where, sql` AND `)}
   `)) as unknown as Array<{ amount: string | null; as_of: string | null }>;
   const row = rows[0];
@@ -910,11 +910,11 @@ function periodLedgerNames(def: BudgetSubscription): { balance: string; unbudget
  * нет. Наблюдаемая разница: чтобы ребро от НЕ-категории повлияло на карточку, владельцу надо ещё и
  * направить на неё конверт слотом `category`.
  */
-async function rollupEdges(tx: Tx, ownerId: string, role: string): Promise<Map<string, string[]>> {
+async function rollupEdges(tx: Tx, graphId: string, role: string): Promise<Map<string, string[]>> {
   const rows = (await tx.execute(sql`
     SELECT r.source_id, r.target_id FROM relations r
     JOIN entities s ON s.id = r.source_id
-    WHERE r.role = ${role} AND s.owner_id = ${ownerId}`)) as unknown as Array<{
+    WHERE r.role = ${role} AND s.graph_id = ${graphId}`)) as unknown as Array<{
     source_id: string;
     target_id: string;
   }>;
@@ -1114,14 +1114,14 @@ interface LedgerNarrowing {
  */
 async function runLedgers(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
   narrow: LedgerNarrowing = {},
 ): Promise<LedgerRun> {
   const cctx: CompileCtx = {
-    ownerId,
+    graphId,
     today: args.today,
     timeZone: DEFAULT_TIMEZONE,
     reg,
@@ -1129,7 +1129,7 @@ async function runLedgers(
   };
   const la: LedgerArgs = {
     ...args,
-    defaultCurrency: await defaultCurrencyOf(tx, ownerId),
+    defaultCurrency: await defaultCurrencyOf(tx, graphId),
     defaults: propertyDefaultsOf(reg),
   };
   const envContract = def.sources.envelope.contract;
@@ -1166,7 +1166,7 @@ async function runLedgers(
     sums.set(
       name,
       agg.scope === 'envelope'
-        ? await runSumCached(tx, ownerId, cctx, def, la, name, ids)
+        ? await runSumCached(tx, graphId, cctx, def, la, name, ids)
         : await runSum(tx, cctx, def, la, name, ids),
     );
   }
@@ -1196,7 +1196,7 @@ async function runLedgers(
     };
   });
   if (narrow.rollup === false) return { cctx, la, raws, sums };
-  const edges = await rollupEdges(tx, ownerId, def.rollup.role);
+  const edges = await rollupEdges(tx, graphId, def.rollup.role);
   for (const e of raws) {
     const kin = descendantsOf(edges, e.categoryRef);
     if (kin.size === 0) continue;
@@ -1249,7 +1249,7 @@ async function runList(
     horizon_end: addDays(args.today, HORIZON_DAYS),
   };
   const where: SQL[] = [
-    sql`e.owner_id = ${cctx.ownerId}`,
+    sql`e.graph_id = ${cctx.graphId}`,
     sql`NOT e.archived`,
     compileContractPredicate(mv, { const: true }, cctx, e),
     compileClassMembership(mv, list.counted_set, cctx, e),
@@ -1330,8 +1330,8 @@ async function runList(
  */
 const BUDGET_SURFACE: SurfaceName = 'finance/budget-overview';
 
-async function budgetSurfaceOff(tx: Tx, ownerId: string): Promise<boolean> {
-  return !isModuleEnabled(surfaceModuleOf(BUDGET_SURFACE), await disabledModulesOf(tx, ownerId));
+async function budgetSurfaceOff(tx: Tx, graphId: string): Promise<boolean> {
+  return !isModuleEnabled(surfaceModuleOf(BUDGET_SURFACE), await disabledModulesOf(tx, graphId));
 }
 
 /** Пустая ведомость той же формы, что у живой (`packages/shared/src/contracts/budget.ts`). */
@@ -1351,13 +1351,13 @@ function emptyOverview(month: string): BudgetOverview {
 
 export async function budgetOverviewOf(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<BudgetOverview> {
-  if (await budgetSurfaceOff(tx, ownerId)) return emptyOverview(args.month);
-  const { cctx, la, raws, sums } = await runLedgers(tx, ownerId, args, def, reg);
+  if (await budgetSurfaceOff(tx, graphId)) return emptyOverview(args.month);
+  const { cctx, la, raws, sums } = await runLedgers(tx, graphId, args, def, reg);
   const { start, end } = monthRangeOf(args.month);
   const { balance: balanceName, unbudgeted: unbudgetedName } = periodLedgerNames(def);
 
@@ -1416,20 +1416,20 @@ export async function budgetOverviewOf(
  */
 export async function budgetAlertCountOf(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<number> {
-  if (await budgetSurfaceOff(tx, ownerId)) return 0;
-  const run = await runLedgers(tx, ownerId, args, def, reg, { period: false, rollup: false });
+  if (await budgetSurfaceOff(tx, graphId)) return 0;
+  const run = await runLedgers(tx, graphId, args, def, reg, { period: false, rollup: false });
   return countAlerts(def, run.raws);
 }
 
 /** Тул `budget_status` (§4.3): Overview + классификация ВСЕХ категорий владельца. */
 export async function budgetStatusOf(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
@@ -1437,13 +1437,13 @@ export async function budgetStatusOf(
   // Условие названо и здесь, а не унаследовано от `budgetOverviewOf`: список категорий —
   // НЕ ведомость подписки (он живёт в `budget/categories.ts`), и без своей врезки тул
   // выключенного модуля отдавал бы пустую ведомость с полным списком категорий Финансов.
-  if (await budgetSurfaceOff(tx, ownerId)) {
+  if (await budgetSurfaceOff(tx, graphId)) {
     return { ...emptyOverview(args.month), categories: [] };
   }
-  const overview = await budgetOverviewOf(tx, ownerId, args, def, reg);
+  const overview = await budgetOverviewOf(tx, graphId, args, def, reg);
   // Список категорий — НЕ ведомость подписки: контракта «категория» в Б-1 нет (В-2), запрос живёт
   // в `budget/categories.ts` рядом с карточками.
-  return { ...overview, categories: await ownerCategories(tx, ownerId) };
+  return { ...overview, categories: await ownerCategories(tx, graphId) };
 }
 
 /**
@@ -1453,16 +1453,16 @@ export async function budgetStatusOf(
  */
 export async function envelopeForCategoryOf(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   args: { categoryId: string; date: string; today: string },
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<EnvelopeStatus | null> {
   // Форма «пустого» ответа — по Produces задачи 9 (Р-К-45): пусто, не отказ.
-  if (await budgetSurfaceOff(tx, ownerId)) return null;
-  const defCur = await defaultCurrencyOf(tx, ownerId);
+  if (await budgetSurfaceOff(tx, graphId)) return null;
+  const defCur = await defaultCurrencyOf(tx, graphId);
   const envelopeId = await selectEnvelope(tx, {
-    ownerId,
+    graphId,
     categoryRef: args.categoryId,
     currency: defCur,
     occurredOn: args.date,
@@ -1475,7 +1475,7 @@ export async function envelopeForCategoryOf(
   // траты показывает СВОЙ конверт (§4.1 против §2.10), и остальное в его ответ не входит.
   const { raws } = await runLedgers(
     tx,
-    ownerId,
+    graphId,
     { month: args.date.slice(0, 7), today: args.today },
     def,
     reg,
@@ -1497,12 +1497,12 @@ export async function envelopeForCategoryOf(
  */
 export async function categoryTrendOf(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   args: { categoryId: string; months: number; today: string },
   def: BudgetSubscription,
   reg: RegistrySnapshot,
 ): Promise<CategoryTrendPoint[]> {
-  if (await budgetSurfaceOff(tx, ownerId)) return []; // Р-К-45: пусто, не отказ
+  if (await budgetSurfaceOff(tx, graphId)) return []; // Р-К-45: пусто, не отказ
   const cur = args.today.slice(0, 7);
   const { spent: spentName } = alertOperands(def);
   const out: CategoryTrendPoint[] = [];
@@ -1510,7 +1510,7 @@ export async function categoryTrendOf(
     const period = shiftMonthOf(cur, i - (args.months - 1));
     const { raws, la } = await runLedgers(
       tx,
-      ownerId,
+      graphId,
       { month: period, today: args.today },
       def,
       reg,

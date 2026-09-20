@@ -138,7 +138,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       // Строка «до бэкфилла»: body_doc пуст. Вставка мимо executor'а намеренна — его путь
       // такое состояние больше не порождает, а в базе оно живёт с прошлых релизов.
       await admin.execute(
-        sql`INSERT INTO entities (id, owner_id, title, body)
+        sql`INSERT INTO entities (id, graph_id, title, body)
             VALUES (${id}, ${owner}, ${'Легаси'}, ${legacy})`,
       );
     } finally {

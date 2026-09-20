@@ -12,7 +12,7 @@
 // «желателен рядом», а обязан идти тем же коммитом: либо видны обе правки, либо ни одной.
 //
 // Инкремент — UPSERT, а не UPDATE. Строки настроек у владельца может не быть вовсе (§А10-1
-// не обещает её существования: онбординг мог не проходиться), и `UPDATE … WHERE owner_id`
+// не обещает её существования: онбординг мог не проходиться), и `UPDATE … WHERE graph_id`
 // в этом случае трогает НОЛЬ строк — то есть тихо не двигает версию и оставляет кеш на
 // прежнем ключе ровно в том случае, ради которого функция и заведена. Отличить «версия
 // поднята» от «строки нет» по числу задетых строк невозможно постфактум, поэтому строка
@@ -72,11 +72,11 @@ export interface RegistryVersions {
  */
 export async function readRegistryVersions(
   tx: RegistrySqlRunner,
-  ownerId: string,
+  graphId: string,
 ): Promise<RegistryVersions> {
   const rows = (await tx.execute(sql`
     SELECT (SELECT version FROM registry_system WHERE id = 1) AS system_version,
-           (SELECT registry_version FROM user_settings WHERE owner_id = ${ownerId}::uuid)
+           (SELECT registry_version FROM user_settings WHERE graph_id = ${graphId}::uuid)
              AS owner_version,
            pg_current_xact_id_if_assigned() IS NOT NULL AS tx_has_written`)) as unknown as {
     system_version: number | null;
@@ -115,18 +115,18 @@ export async function readRegistryVersions(
  */
 export async function bumpOwnerRegistryVersion(
   tx: RegistrySqlRunner,
-  ownerId: string,
+  graphId: string,
 ): Promise<number> {
   const rows = (await tx.execute(sql`
-    INSERT INTO user_settings (owner_id, registry_version) VALUES (${ownerId}::uuid, 1)
-    ON CONFLICT (owner_id)
+    INSERT INTO user_settings (graph_id, registry_version) VALUES (${graphId}::uuid, 1)
+    ON CONFLICT (graph_id)
       DO UPDATE SET registry_version = user_settings.registry_version + 1
     RETURNING registry_version`)) as unknown as { registry_version: number }[];
   const version = rows[0]?.registry_version;
   if (version === undefined) {
     // Недостижимо: UPSERT по PK либо вставляет, либо обновляет. Пустой RETURNING означал бы
     // отфильтрованную RLS строку — то есть мутацию чужого реестра, о которой нельзя молчать.
-    throw new Error('bumpOwnerRegistryVersion: UPSERT не вернул строку (чужой owner_id?)');
+    throw new Error('bumpOwnerRegistryVersion: UPSERT не вернул строку (чужой graph_id?)');
   }
   return version;
 }

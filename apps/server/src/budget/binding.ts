@@ -40,11 +40,11 @@ const PROP_PERIOD_END = 'orbis/period_end';
 const FALLBACK_CURRENCY = 'RUB';
 
 /** Дефолтная валюта владельца ($defCur селектора §2.3) — user_settings.defaultCurrency. */
-export async function defaultCurrencyOf(tx: Tx, ownerId: string): Promise<string> {
+export async function defaultCurrencyOf(tx: Tx, graphId: string): Promise<string> {
   const rows = await tx
     .select({ currency: userSettings.defaultCurrency })
     .from(userSettings)
-    .where(eq(userSettings.ownerId, ownerId));
+    .where(eq(userSettings.graphId, graphId));
   return rows[0]?.currency ?? FALLBACK_CURRENCY;
 }
 
@@ -76,7 +76,7 @@ export interface EnvelopeQuery extends EnvelopeCombination {
 export async function selectEnvelopes(
   tx: Tx,
   args: {
-    ownerId: string;
+    graphId: string;
     /** Уже разрезолвленная дефолтная валюта ($defCur §2.3) — один читатель на набор. */
     defaultCurrency: string;
     rows: readonly EnvelopeQuery[];
@@ -102,7 +102,7 @@ export async function selectEnvelopes(
       AS q(k, category_ref, currency, occurred_on, exclude_id)
     LEFT JOIN LATERAL (
       SELECT id FROM entities
-      WHERE owner_id = ${args.ownerId} AND NOT archived
+      WHERE graph_id = ${args.graphId} AND NOT archived
         AND (q.exclude_id IS NULL OR id <> q.exclude_id)
         AND 'orbis/budget' = ANY(aspects)
         AND props->>'orbis/finance_category' = q.category_ref
@@ -131,7 +131,7 @@ const SINGLE_KEY = 'single';
 export async function selectEnvelope(
   tx: Tx,
   args: {
-    ownerId: string;
+    graphId: string;
     categoryRef: string;
     currency: string;
     occurredOn: string;
@@ -141,9 +141,9 @@ export async function selectEnvelope(
     excludeId?: string;
   },
 ): Promise<string | null> {
-  const defCur = args.defaultCurrency ?? (await defaultCurrencyOf(tx, args.ownerId));
+  const defCur = args.defaultCurrency ?? (await defaultCurrencyOf(tx, args.graphId));
   const picked = await selectEnvelopes(tx, {
-    ownerId: args.ownerId,
+    graphId: args.graphId,
     defaultCurrency: defCur,
     rows: [
       {
@@ -170,11 +170,11 @@ export async function selectEnvelope(
  */
 export async function normalizeEnvelopeCurrency(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   props: Record<string, unknown>,
 ): Promise<void> {
   if (props[PROP_CURRENCY] === undefined || props[PROP_CURRENCY] === null) {
-    props[PROP_CURRENCY] = await defaultCurrencyOf(tx, ownerId);
+    props[PROP_CURRENCY] = await defaultCurrencyOf(tx, graphId);
   }
 }
 
@@ -303,8 +303,8 @@ function combinationOf(
   };
 }
 
-function envelopeCacheKey(ownerId: string, c: EnvelopeCombination): string {
-  return JSON.stringify([ownerId, c.categoryRef, c.currency, c.occurredOn]);
+function envelopeCacheKey(graphId: string, c: EnvelopeCombination): string {
+  return JSON.stringify([graphId, c.categoryRef, c.currency, c.occurredOn]);
 }
 
 /**
@@ -333,21 +333,21 @@ export class BindingReads {
   constructor(readonly contour: BudgetContour) {}
 
   /** user_settings.defaultCurrency владельца — один раз за исполнение. */
-  async defaultCurrency(tx: Tx, ownerId: string): Promise<string> {
-    const cached = this.currencies.get(ownerId);
+  async defaultCurrency(tx: Tx, graphId: string): Promise<string> {
+    const cached = this.currencies.get(graphId);
     if (cached !== undefined) return cached;
-    const value = await defaultCurrencyOf(tx, ownerId);
-    this.currencies.set(ownerId, value);
+    const value = await defaultCurrencyOf(tx, graphId);
+    this.currencies.set(graphId, value);
     return value;
   }
 
   /** Победитель селектора для комбинации (§2.3). */
   async envelopeOf(
     tx: Tx,
-    args: { ownerId: string; defaultCurrency: string; combination: EnvelopeCombination },
+    args: { graphId: string; defaultCurrency: string; combination: EnvelopeCombination },
   ): Promise<string | null> {
-    await this.loadEnvelopes(tx, args.ownerId, args.defaultCurrency, [args.combination]);
-    return this.envelopes.get(envelopeCacheKey(args.ownerId, args.combination)) ?? null;
+    await this.loadEnvelopes(tx, args.graphId, args.defaultCurrency, [args.combination]);
+    return this.envelopes.get(envelopeCacheKey(args.graphId, args.combination)) ?? null;
   }
 
   /** Живые конверты-родители транзакции с ролями их рёбер (§4.2). */
@@ -359,7 +359,7 @@ export class BindingReads {
   /** Прогрев на весь набор целей: ≤3 запроса независимо от размера набора. */
   async prefetch(
     tx: Tx,
-    args: { ownerId: string; targets: readonly BindingTarget[] },
+    args: { graphId: string; targets: readonly BindingTarget[] },
   ): Promise<void> {
     const combinations: EnvelopeCombination[] = [];
     const txnIds: string[] = [];
@@ -369,13 +369,13 @@ export class BindingReads {
         txnIds.push(target.txnId); // отвязка шаблона: нужны только родители
         continue;
       }
-      defCur ??= await this.defaultCurrency(tx, args.ownerId);
+      defCur ??= await this.defaultCurrency(tx, args.graphId);
       const combination = combinationOf(this.contour, target, defCur);
       if (combination === null) continue; // привязка этой строки не считается — читать нечего
       combinations.push(combination);
       txnIds.push(target.txnId);
     }
-    if (defCur !== null) await this.loadEnvelopes(tx, args.ownerId, defCur, combinations);
+    if (defCur !== null) await this.loadEnvelopes(tx, args.graphId, defCur, combinations);
     await this.loadParents(tx, txnIds);
   }
 
@@ -386,17 +386,17 @@ export class BindingReads {
 
   private async loadEnvelopes(
     tx: Tx,
-    ownerId: string,
+    graphId: string,
     defaultCurrency: string,
     combinations: readonly EnvelopeCombination[],
   ): Promise<void> {
     const rows: EnvelopeQuery[] = [];
     for (const c of combinations) {
-      const key = envelopeCacheKey(ownerId, c);
+      const key = envelopeCacheKey(graphId, c);
       if (!this.envelopes.has(key)) rows.push({ key, ...c });
     }
     if (rows.length === 0) return;
-    for (const [key, id] of await selectEnvelopes(tx, { ownerId, defaultCurrency, rows })) {
+    for (const [key, id] of await selectEnvelopes(tx, { graphId, defaultCurrency, rows })) {
       this.envelopes.set(key, id);
     }
   }
@@ -419,7 +419,7 @@ export class BindingReads {
 async function targetBindingOps(
   tx: Tx,
   reads: BindingReads,
-  ownerId: string,
+  graphId: string,
   target: BindingTarget,
   /** Уже разрезолвленная дефолтная валюта — чтобы не перечитывать user_settings в циклах. */
   defaultCurrency?: string,
@@ -432,10 +432,10 @@ async function targetBindingOps(
       input: { source_id: edge.sourceId, target_id: txnId, role: edge.role },
     }));
   }
-  const defCur = defaultCurrency ?? (await reads.defaultCurrency(tx, ownerId));
+  const defCur = defaultCurrency ?? (await reads.defaultCurrency(tx, graphId));
   const combination = combinationOf(reads.contour, target, defCur);
   if (combination === null) return [];
-  let desired = await reads.envelopeOf(tx, { ownerId, defaultCurrency: defCur, combination });
+  let desired = await reads.envelopeOf(tx, { graphId, defaultCurrency: defCur, combination });
   if (desired === txnId) {
     // Запись, которая ОДНОВРЕМЕННО транзакция и конверт, не считает сама себя: ребро в себя
     // запрещено по построению (`rel_no_self`), а «конверт» здесь — она же. Раньше это было
@@ -449,7 +449,7 @@ async function targetBindingOps(
     // выкидывало бы её сумму из чужого бюджета. Запрос идёт мимо кэша `reads` намеренно:
     // ключ кэша — комбинация, общая на множество транзакций, а исключение — своё у каждой.
     desired = await selectEnvelope(tx, {
-      ownerId,
+      graphId,
       ...combination,
       defaultCurrency: defCur,
       excludeId: txnId,
@@ -489,11 +489,11 @@ async function targetBindingOps(
  */
 export async function bindingOps(
   tx: Tx,
-  args: { ownerId: string; entity: WireEntity; contour: BudgetContour; reads?: BindingReads },
+  args: { graphId: string; entity: WireEntity; contour: BudgetContour; reads?: BindingReads },
 ): Promise<BudgetOpDesc[]> {
   const target = bindingTargetOf(args.entity, args.contour);
   if (target === null) return [];
-  return targetBindingOps(tx, args.reads ?? new BindingReads(args.contour), args.ownerId, target);
+  return targetBindingOps(tx, args.reads ?? new BindingReads(args.contour), args.graphId, target);
 }
 
 /**
@@ -508,9 +508,9 @@ export async function bindingOps(
  */
 export async function unbindOps(
   tx: Tx,
-  args: { ownerId: string; entityId: string; contour: BudgetContour; reads?: BindingReads },
+  args: { graphId: string; entityId: string; contour: BudgetContour; reads?: BindingReads },
 ): Promise<BudgetOpDesc[]> {
-  return targetBindingOps(tx, args.reads ?? new BindingReads(args.contour), args.ownerId, {
+  return targetBindingOps(tx, args.reads ?? new BindingReads(args.contour), args.graphId, {
     txnId: args.entityId,
     aspects: [], // аспекта уже нет — цель безусловной отвязки, слоты ей не нужны
     props: null,
@@ -556,7 +556,7 @@ function sideOf(contour: BudgetContour, entity: WireEntity | null): RebindSide |
 export async function rebindForEnvelope(
   tx: Tx,
   args: {
-    ownerId: string;
+    graphId: string;
     envelope: WireEntity;
     before: WireEntity | null;
     contour: BudgetContour;
@@ -564,7 +564,7 @@ export async function rebindForEnvelope(
     reads?: BindingReads;
   },
 ): Promise<BudgetOpDesc[]> {
-  const { ownerId, envelope, before, contour } = args;
+  const { graphId, envelope, before, contour } = args;
   const sides: RebindSide[] = [];
   for (const side of [sideOf(contour, before), sideOf(contour, envelope)]) {
     if (
@@ -610,7 +610,7 @@ export async function rebindForEnvelope(
   // ORDER BY id — детерминированный порядок ops в action (не менялся).
   const rows = (await tx.execute(sql`
     SELECT e.id, e.aspects, e.props FROM entities e
-    WHERE e.owner_id = ${ownerId} AND NOT e.archived
+    WHERE e.graph_id = ${graphId} AND NOT e.archived
       AND NOT (${templateSql(contour, e)})
       AND (${sql.join(branches, sql` OR `)})
     ORDER BY e.id
@@ -625,11 +625,11 @@ export async function rebindForEnvelope(
     aspects: row.aspects,
     props: row.props,
   }));
-  await reads.prefetch(tx, { ownerId, targets });
-  const defCur = await reads.defaultCurrency(tx, ownerId);
+  await reads.prefetch(tx, { graphId, targets });
+  const defCur = await reads.defaultCurrency(tx, graphId);
   const ops: BudgetOpDesc[] = [];
   for (const target of targets) {
-    ops.push(...(await targetBindingOps(tx, reads, ownerId, target, defCur)));
+    ops.push(...(await targetBindingOps(tx, reads, graphId, target, defCur)));
   }
   return ops;
 }
@@ -684,9 +684,9 @@ function envelopeCombinationMatches(
  * ровно в тот день, когда роли привязки припишут `acyclic` (или владелец заведёт свою роль
  * с таким же id — Задача 15). Сегодня замок берут два места, и оба зовут эту функцию.
  */
-export async function lockOwnerBudget(tx: Tx, ownerId: string): Promise<void> {
+export async function lockOwnerBudget(tx: Tx, graphId: string): Promise<void> {
   await tx.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${ownerId}:envelope_unique`}, 0))`,
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graphId}:envelope_unique`}, 0))`,
   );
 }
 
@@ -709,13 +709,13 @@ export async function lockOwnerBudget(tx: Tx, ownerId: string): Promise<void> {
 export async function assertEnvelopeUnique(
   tx: Tx,
   args: {
-    ownerId: string;
+    graphId: string;
     entityId: string;
     props: Record<string, unknown>;
     virtualEntities?: ReadonlyMap<string, EnvelopeRowLike>;
   },
 ): Promise<void> {
-  const { ownerId, entityId, props, virtualEntities } = args;
+  const { graphId, entityId, props, virtualEntities } = args;
   const categoryRef = props[PROP_FINANCE_CATEGORY];
   const periodStart = props[PROP_PERIOD_START];
   const periodEnd = props[PROP_PERIOD_END];
@@ -733,11 +733,11 @@ export async function assertEnvelopeUnique(
     periodEnd,
   };
 
-  await lockOwnerBudget(tx, ownerId);
+  await lockOwnerBudget(tx, graphId);
 
   const rows = (await tx.execute(sql`
     SELECT id FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived AND id <> ${entityId}
+    WHERE graph_id = ${graphId} AND NOT archived AND id <> ${entityId}
       AND 'orbis/budget' = ANY(aspects)
       AND props->>'orbis/finance_category' = ${key.categoryRef}
       AND (props->>'orbis/currency') IS NOT DISTINCT FROM ${key.currency}

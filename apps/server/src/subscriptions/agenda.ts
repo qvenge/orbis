@@ -118,7 +118,7 @@ function slotInstant(b: SlotBinding, cctx: CompileCtx): SQL {
 
 export async function agendaListOf(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   def: AgendaSubscription,
   args: { today: string; timeZone: string; days: number },
 ): Promise<AgendaListResult> {
@@ -128,7 +128,7 @@ export async function agendaListOf(
   // мест, где её забудут. Своим `SurfaceName`, без общей таблицы «подписка → модуль»:
   // движков два и поверхностей две, и таблица из двух строк стала бы третьим местом с тем
   // же знанием.
-  if (!isModuleEnabled(surfaceModuleOf(AGENDA_SURFACE), await disabledModulesOf(tx, ownerId))) {
+  if (!isModuleEnabled(surfaceModuleOf(AGENDA_SURFACE), await disabledModulesOf(tx, graphId))) {
     return {
       today: args.today,
       timezone: args.timeZone,
@@ -138,7 +138,7 @@ export async function agendaListOf(
   }
   // Контекст компиляции — отсюда, «сегодня»/таймзона — из args: материализация роутера уже
   // посчитала их, и пересчёт на границе суток разъехался бы с её окном.
-  const base = await queryContext(tx, ownerId, null);
+  const base = await queryContext(tx, graphId, null);
   const cctx: CompileCtx = { ...base, today: args.today, timeZone: args.timeZone };
   const params = { window_from: args.today, window_to: addDays(args.today, args.days - 1) };
   const from = dateOfNode(def.show.window.from, params, args.today);

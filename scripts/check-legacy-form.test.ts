@@ -356,6 +356,16 @@ const SAMPLES: ReadonlyArray<{
     id: 'exclude-blocked-literal',
     lines: ['const a = EXCLUDE_BLOCKED_STATUS_KEY;', 'const b = EXCLUDE_BLOCKED_CLOSED;'],
   },
+  {
+    id: 'owner-key',
+    lines: [
+      'const a = row.owner_id;',
+      'const b = input.ownerId;',
+      'const c = ownerIdsForScheduler;',
+      // составного имени с заглавной `O` в дереве сегодня нет — строка пинит ветку `[oO]` паттерна
+      'const d = byOwnerId;',
+    ],
+  },
 ];
 
 test('позитивный контроль: у каждого маркера есть образец', () => {
@@ -430,6 +440,7 @@ test('имена маркеров — договор: на них ссылают
     'source-not-in-prop',
     'agenda-three-texts',
     'exclude-blocked-literal',
+    'owner-key',
   ]);
 });
 

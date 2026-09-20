@@ -99,18 +99,18 @@ describe('registry.effective (§А9-2)', () => {
 
   test('своя строка реестра владельца ПЕРЕКРЫВАЕТ встроенную, а не добавляется рядом', async () => {
     // Форма ответа не предполагает «только встроенные»: пользовательские строки едут тем же
-    // массивом. Проба — переопределением встроенного аспекта (тот же id, свой owner_id):
+    // массивом. Проба — переопределением встроенного аспекта (тот же id, свой graph_id):
     // счёт аспектов обязан остаться прежним, а подпись — стать своей.
     const other = freshUserId();
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(sql`
         INSERT INTO aspect_definitions
-          (id, owner_id, key, label, description, properties, ai_instructions, tag_mappings,
+          (id, graph_id, key, label, description, properties, ai_instructions, tag_mappings,
            view_config, module, service, rank)
         SELECT id, ${other}::uuid, key, '{"ru":"Дело","en":"Deed"}'::jsonb, description,
                properties, ai_instructions, tag_mappings, view_config, module, service, rank
-          FROM aspect_definitions WHERE id = 'orbis/task' AND owner_id IS NULL`);
+          FROM aspect_definitions WHERE id = 'orbis/task' AND graph_id IS NULL`);
       await bumpOwnerRegistryVersion(admin, other); // мутация реестра двигает версию (§А10-1)
     } finally {
       await adminClient.end();

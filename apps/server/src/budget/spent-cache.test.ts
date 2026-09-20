@@ -501,7 +501,7 @@ describe('вклад одного движения — из декларации
     return withIdentity(db, user, async (tx) => {
       const reg = await effectiveRegistry(tx, user);
       const cctx = {
-        ownerId: user,
+        graphId: user,
         today: '2026-07-10',
         timeZone: DEFAULT_TIMEZONE,
         reg,

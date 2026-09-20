@@ -36,7 +36,7 @@ import { type AspectDefinition, aspectDefinitionSchema } from './property-type';
 
 type AspectEntry = Omit<
   z.input<typeof aspectDefinitionSchema>,
-  'id' | 'ownerId' | 'key' | 'rank' | 'properties'
+  'id' | 'graphId' | 'key' | 'rank' | 'properties'
 > & {
   id: AspectId;
   /** [id свойства, обязательность в этом аспекте] в порядке строк таблицы §А8. */
@@ -476,7 +476,7 @@ const ENTRIES: readonly AspectEntry[] = [
 export const BUILTIN_ASPECT_DEFS: readonly AspectDefinition[] = ENTRIES.map((entry, index) =>
   aspectDefinitionSchema.parse({
     ...entry,
-    ownerId: null,
+    graphId: null,
     key: entry.id, // у встроенных key = id (§А2-1); имя тула attach_* берётся из key (§А9-1)
     properties: entry.properties.map(([propertyId, required], order) => ({
       propertyId,

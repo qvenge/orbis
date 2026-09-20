@@ -88,7 +88,7 @@ async function seedCode(
     .values({ clientId, clientName: 'Claude Code', redirectUris: [REDIRECT] })
     .onConflictDoNothing();
   const code = await createAuthorizationCode(db, {
-    ownerId: freshUserId(),
+    graphId: freshUserId(),
     clientId,
     label: 'проба',
     redirectUri: REDIRECT,
@@ -163,7 +163,7 @@ test('выданный access-токен действительно открыв
   if (!token) throw new Error('обмен не вернул access_token');
   const identity = await verifyBearer(db, token);
   expect(identity).not.toBeNull();
-  expect(identity?.ownerId).toBe((await onlyGrant()).ownerId);
+  expect(identity?.graphId).toBe((await onlyGrant()).graphId);
 });
 
 // Требование, вытекающее из Task 2: повторное предъявление кода наш модуль трактует как

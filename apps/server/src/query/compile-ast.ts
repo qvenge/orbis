@@ -74,10 +74,10 @@ import { literalFormViolation } from '../registry/validate-props';
 /**
  * Контекст компиляции. Имена полей — из плана (на них ссылаются Задачи 9b, 10a/10b, 11, 13c).
  *
- * `ownerId` сам компилятор в SQL НЕ подставляет (изоляцию даёт RLS) — он в контексте
- * потому, что этим же контекстом ходят соседи по конвейеру: снимок реестра `reg` снят под
- * ОПРЕДЕЛЁННЫМ владельцем, и компилят, исполненный под чужой identity, молча собрался бы
- * из чужих свойств. Поле называет ту identity, под которой компилят обязан исполняться.
+ * `graphId` сам компилятор в SQL НЕ подставляет (изоляцию даёт RLS) — он в контексте
+ * потому, что этим же контекстом ходят соседи по конвейеру: снимок реестра `reg` снят в
+ * ОПРЕДЕЛЁННОМ графе, и компилят, исполненный в чужом графе, молча собрался бы из чужих
+ * свойств. Поле называет тот граф, в котором компилят обязан исполняться.
  *
  * `thisEntityId` в интерфейсе плана не назван, но без него узел `{rel: {of: 'this'}}` канона
  * не компилируется вовсе: §6.1 резолвит `this` контекстом ПОТРЕБИТЕЛЯ (detail-экран
@@ -85,7 +85,7 @@ import { literalFormViolation } from '../registry/validate-props';
  * читается как «контекста нет», и `this` в таком запросе — честный отказ, а не пустота.
  */
 export interface CompileCtx {
-  ownerId: string;
+  graphId: string;
   /** Сегодня в таймзоне владельца, YYYY-MM-DD. */
   today: string;
   /** IANA-таймзона владельца — по ней date-токены читают timestamp-свойства. */
@@ -108,7 +108,7 @@ const DEFAULT_LIMIT = 500;
  * на первой же новой колонке, и разъезд был бы виден не отказом, а пустым полем у клиента.
  */
 export const ENTITY_SELECT_COLUMNS =
-  'id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
+  'id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
 
 /** UUID сущности — та же форма, что у `REL_TARGET_PATTERN` канона (§А5-7). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

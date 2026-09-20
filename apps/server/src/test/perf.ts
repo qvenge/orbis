@@ -100,8 +100,8 @@ const INCOME_SLUGS = SEED_CATEGORIES.filter((c) => c.spendClass === null).map((c
  * Детерминирован по владельцу: тест адресует его, не получая id из сида (сигнатура
  * seedPerfFixture остаётся `Promise<void>`).
  */
-export function perfHubId(ownerId: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:perf-hub`, ORBIS_NAMESPACE);
+export function perfHubId(graphId: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:perf-hub`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -110,8 +110,8 @@ export function perfHubId(ownerId: string): string {
  * тот замер в замер другой операции (чтение + расчёт прогресса) — с прежним названием,
  * прежним порогом и зелёным гейтом.
  */
-export function perfGoalId(ownerId: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:perf-goal`, ORBIS_NAMESPACE);
+export function perfGoalId(graphId: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:perf-goal`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -121,10 +121,10 @@ export function perfGoalId(ownerId: string): string {
  * `entity.create` прошёл бы, просто не нашёл конверт, и замер молча съехал бы на более
  * дешёвый путь (без привязки) при зелёном гейте.
  */
-export function perfEnvelopeCategoryId(ownerId: string): string {
+export function perfEnvelopeCategoryId(graphId: string): string {
   const slug = EXPENSE_SLUGS[0];
   if (!slug) throw new Error('perf-фикстура: в сиде не осталось расходных категорий');
-  return seedCategoryId(ownerId, slug);
+  return seedCategoryId(graphId, slug);
 }
 
 /** Таймзона сида (02-core-os §7.3) — та же, в которой сервер считает `today`. */
@@ -150,11 +150,11 @@ function monthEnd(date: string): string {
 
 type Op = { tool: string; input: unknown };
 
-async function runBatches(db: Db, ownerId: string, ops: Op[]): Promise<void> {
+async function runBatches(db: Db, graphId: string, ops: Op[]): Promise<void> {
   for (let i = 0; i < ops.length; i += BATCH_SIZE) {
     const chunk = ops.slice(i, i + BATCH_SIZE);
     const r = await execute(db, {
-      actorUserId: ownerId,
+      actorUserId: graphId,
       actorKind: 'owner',
       source: 'ui',
       operations: chunk,
@@ -179,18 +179,18 @@ const PRIORITIES = ['low', 'medium', 'high'] as const;
  * месяц бюджета) резолвятся сервером по ней же, фиксированные даты сделали бы фикстуру
  * протухающей.
  */
-export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
-  await seedOwnerGraph(db, ownerId);
+export async function seedPerfFixture(db: Db, graphId: string): Promise<void> {
+  await seedOwnerGraph(db, graphId);
 
   const today = todayInSeedTz();
   const curStart = monthStart(today);
   const curEnd = monthEnd(today);
   const prevEnd = addDaysISO(curStart, -1);
   const prevStart = monthStart(prevEnd);
-  const hubId = perfHubId(ownerId);
+  const hubId = perfHubId(graphId);
 
   // Хаб — до всего остального: заметки ссылаются на него в body, задачи — связью.
-  await runBatches(db, ownerId, [
+  await runBatches(db, graphId, [
     {
       tool: 'entity_create',
       input: {
@@ -211,7 +211,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
       title: `Конверт ${slug} ${curStart}`,
       tags: [],
       props: {
-        'orbis/finance_category': seedCategoryId(ownerId, slug),
+        'orbis/finance_category': seedCategoryId(graphId, slug),
         'orbis/limit': '30000.00',
         'orbis/period_start': curStart,
         'orbis/period_end': curEnd,
@@ -227,7 +227,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
         title: `Конверт ${slug} ${prevStart}`,
         tags: [],
         props: {
-          'orbis/finance_category': seedCategoryId(ownerId, slug),
+          'orbis/finance_category': seedCategoryId(graphId, slug),
           'orbis/limit': '28000.00',
           'orbis/period_start': prevStart,
           'orbis/period_end': prevEnd,
@@ -236,7 +236,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
       },
     });
   }
-  await runBatches(db, ownerId, envelopes);
+  await runBatches(db, graphId, envelopes);
 
   // Задачи: статусы и приоритеты по кругу, срок разложен в окне ±60 дней вокруг сегодня —
   // ни один горячий запрос не должен попадать в вырожденный «все строки подходят».
@@ -259,7 +259,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
       },
     };
   });
-  await runBatches(db, ownerId, tasks);
+  await runBatches(db, graphId, tasks);
 
   // События: половина — в окне [сегодня; +7д] (горизонт Agenda), остальные размазаны
   // на ±30 дней, чтобы окно реально отсекало, а не возвращало всё подряд.
@@ -278,7 +278,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
       },
     };
   });
-  await runBatches(db, ownerId, schedules);
+  await runBatches(db, graphId, schedules);
 
   // Заметки-упоминания: body_refs → хаб (ветка GIN в backlinks). Их больше, чем потолок
   // секции «Связанное» (100), — замер идёт по усечённой выдаче, как на живом detail.
@@ -292,12 +292,12 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
       aspects: ['orbis/note'],
     },
   }));
-  await runBatches(db, ownerId, mentions);
+  await runBatches(db, graphId, mentions);
 
   // Явные related_to на хаб — вторая ветка UNION'а backlinks.
   await runBatches(
     db,
-    ownerId,
+    graphId,
     taskIds.slice(0, HUB_RELATIONS).map((id) => ({
       tool: 'relation_create',
       input: { source_id: hubId, target_id: id, role: 'mention' },
@@ -320,15 +320,15 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
           props: {
             'orbis/amount': `${100 + (i % 900)}.00`,
             'orbis/direction': income ? 'income' : 'expense',
-            'orbis/finance_category': seedCategoryId(ownerId, slugs[i % slugs.length] as string),
+            'orbis/finance_category': seedCategoryId(graphId, slugs[i % slugs.length] as string),
             'orbis/occurred_on': addDaysISO(from, i % span),
           },
           aspects: ['orbis/financial'],
         },
       };
     });
-  await runBatches(db, ownerId, txnOps(TXN_CURRENT, curStart, 28));
-  await runBatches(db, ownerId, txnOps(TXN_PREVIOUS, prevStart, 28));
+  await runBatches(db, graphId, txnOps(TXN_CURRENT, curStart, 28));
+  await runBatches(db, graphId, txnOps(TXN_PREVIOUS, prevStart, 28));
 
   // Цель — после транзакций, потому что считает именно их. Агрегат источника — `sum`, а не
   // `count`, хотя счётчик по задачам был бы проще: `count` компилируется тем же
@@ -342,11 +342,11 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
   // широкой выборкой потерянный индекс — самообман: замерено на фикстуре, расходов 966 при
   // 3037 сущностях владельца, то есть треть таблицы, и на такой селективности планировщик
   // индекс не возьмёт и сегодня (тот же довод — в шапке perf.test.ts про list50/badge).
-  await runBatches(db, ownerId, [
+  await runBatches(db, graphId, [
     {
       tool: 'entity_create',
       input: {
-        id: perfGoalId(ownerId),
+        id: perfGoalId(graphId),
         title: 'Цель перф-фикстуры: расходы года',
         tags: ['goal'],
         // Внутренняя форма (§А1-1) — и она же ЕДИНСТВЕННАЯ, которой цель заводится с

@@ -59,7 +59,7 @@ export const contractSetSchema = z.union([
 const HEAD = {
   id: z.string().min(1),
   // v1 — только NULL: пользовательские контракты приезжают с view-декларациями (Ч7, v1.5).
-  ownerId: z.string().uuid().nullable(),
+  graphId: z.string().uuid().nullable(),
   key: z.string().regex(CONTRACT_KEY_RE, 'namespaced ASCII-слаг'),
   label: localizedTextSchema,
   description: localizedTextSchema,

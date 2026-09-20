@@ -78,8 +78,8 @@ test('снимок несёт систему целиком: 77 свойств, 
 
 test('система ⊕ СВОИ: свой аспект и его свойства видны, чужие — нет (RLS)', async () => {
   const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
-  expect(snap.aspects.get('user/sleep-log')?.ownerId).toBe(owner);
-  expect(snap.properties.get('user/hours')?.ownerId).toBe(owner);
+  expect(snap.aspects.get('user/sleep-log')?.graphId).toBe(owner);
+  expect(snap.properties.get('user/hours')?.graphId).toBe(owner);
   // Чужой аспект того же namespace невидим — его отсекает не фильтр запроса, а политика.
   expect(snap.aspects.has('user/mood')).toBe(false);
   expect(snap.properties.has('user/level')).toBe(false);
@@ -88,19 +88,19 @@ test('система ⊕ СВОИ: свой аспект и его свойст�
 /**
  * Своя строка с ТЕМ ЖЕ id, что у встроенной, законна и перекрывает её — на этом стоит
  * сегодняшнее переопределение аспекта (`registry.test.ts`) и будущая дельта. Частичные
- * уникальности разведены по `owner_id IS NULL` / `IS NOT NULL` ровно ради этого.
+ * уникальности разведены по `graph_id IS NULL` / `IS NOT NULL` ровно ради этого.
  */
-test('своё определение с id встроенного ПЕРЕКРЫВАЕТ его (ORDER BY owner_id NULLS FIRST)', async () => {
+test('своё определение с id встроенного ПЕРЕКРЫВАЕТ его (ORDER BY graph_id NULLS FIRST)', async () => {
   const { db: admin, client: adminClient } = adminDb();
   try {
     await admin.execute(sql`
-      INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+      INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
       VALUES ('orbis/priority', ${owner}::uuid, 'orbis/priority', '{"ru":"Важность"}'::jsonb,
               '{"ru":"Своя важность"}'::jsonb, '{"kind":"text"}'::jsonb, 1)`);
     await bumpOwnerRegistryVersion(admin, owner); // мутация реестра двигает версию (§А10-1)
     const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
     const overridden = snap.properties.get('orbis/priority');
-    expect(overridden?.ownerId).toBe(owner);
+    expect(overridden?.graphId).toBe(owner);
     expect(overridden?.label.ru).toBe('Важность');
     // Ровно одна запись под этим id — снимок не задваивает.
     expect([...snap.properties.keys()].filter((k) => k === 'orbis/priority').length).toBe(1);
@@ -109,14 +109,14 @@ test('своё определение с id встроенного ПЕРЕКР�
     expect(
       await failedConstraint(async () => {
         await admin.execute(sql`
-          INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+          INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
           VALUES ('orbis/priority', ${owner}::uuid, 'orbis/priority-2', '{"ru":"Дубль"}'::jsonb,
                   '{"ru":"Дубль"}'::jsonb, '{"kind":"text"}'::jsonb, 2)`);
       }),
     ).toBe('property_definitions_custom_uniq');
   } finally {
     await admin.execute(
-      sql`DELETE FROM property_definitions WHERE id = 'orbis/priority' AND owner_id IS NOT NULL`,
+      sql`DELETE FROM property_definitions WHERE id = 'orbis/priority' AND graph_id IS NOT NULL`,
     );
     await adminClient.end();
   }
@@ -128,7 +128,7 @@ test('key уникален среди СВОИХ: два свойства вла
     expect(
       await failedConstraint(async () => {
         await admin.execute(sql`
-          INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+          INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
           VALUES ('user/dup-a', ${owner}::uuid, 'user/dup', '{"ru":"А"}'::jsonb,
                   '{"ru":"А"}'::jsonb, '{"kind":"text"}'::jsonb, 1),
                  ('user/dup-b', ${owner}::uuid, 'user/dup', '{"ru":"Б"}'::jsonb,
@@ -136,7 +136,7 @@ test('key уникален среди СВОИХ: два свойства вла
       }),
     ).toBe('property_definitions_custom_key');
   } finally {
-    await admin.execute(sql`DELETE FROM property_definitions WHERE owner_id = ${owner}::uuid
+    await admin.execute(sql`DELETE FROM property_definitions WHERE graph_id = ${owner}::uuid
                             AND key = 'user/dup'`);
     await adminClient.end();
   }
@@ -152,7 +152,7 @@ test('версии: системная — из registry_system, владель�
   expect(noSettings.ownerVersion).toBe(0); // строки настроек у владельца нет
 
   await withIdentity(db, virgin, (tx) =>
-    tx.execute(sql`INSERT INTO user_settings (owner_id, registry_version)
+    tx.execute(sql`INSERT INTO user_settings (graph_id, registry_version)
                    VALUES (${virgin}::uuid, 7)`),
   );
   const withSettings = await withIdentity(db, virgin, (tx) => effectiveRegistry(tx, virgin));
@@ -174,7 +174,7 @@ test('снимок несёт словарь контрактов: шесть в
 test('словарь подписок несёт обе засеянные: строки разобраны схемой, поверхности на месте', async () => {
   const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   // Состав — по СИДУ, а не литералом: задача, дописавшая третью подписку, не обязана искать этот
-  // тест. Порядок словаря — это `ORDER BY owner_id NULLS FIRST, id` (`load.ts`), а НЕ `rank`:
+  // тест. Порядок словаря — это `ORDER BY graph_id NULLS FIRST, id` (`load.ts`), а НЕ `rank`:
   // совпадение с рангом сегодня держится на АЛФАВИТЕ (`orbis/agenda` < `orbis/budget-overview`),
   // и третья встроенная подписка с меньшим рангом покрасила бы этот пин при исправном коде.
   // Поэтому ожидание сортируется тем же ключом, каким сортирует читатель.
@@ -183,10 +183,10 @@ test('словарь подписок несёт обе засеянные: ст
   const row = reg.subscriptions.get('orbis/agenda');
   // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.
   expect(row?.definition.engine).toBe('agenda');
-  expect([row?.surface, row?.module, row?.ownerId]).toEqual(['planner/agenda', 'planner', null]);
+  expect([row?.surface, row?.module, row?.graphId]).toEqual(['planner/agenda', 'planner', null]);
   const budget = reg.subscriptions.get('orbis/budget-overview');
   expect(budget?.definition.engine).toBe('budget');
-  expect([budget?.surface, budget?.module, budget?.ownerId]).toEqual([
+  expect([budget?.surface, budget?.module, budget?.graphId]).toEqual([
     'finance/budget-overview',
     'finance',
     null,

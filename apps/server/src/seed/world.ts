@@ -47,15 +47,15 @@ import { execute } from '../executor/executor';
 import { SEED_CATEGORIES } from './categories';
 import { SEED_SMART_LISTS } from './smart-lists';
 
-// Формулы seed-слагов — серверная деталь (НЕ в shared): id порождается от owner_id
+// Формулы seed-слагов — серверная деталь (НЕ в shared): id порождается от graph_id
 // (workspace-scoped при введении workspace'ов, D11) и стабильного слага. uuid-библиотека
 // принимает (name, namespace) — обратный порядок к нотации PRD uuidv5(NS, name).
-export function seedCategoryId(ownerId: string, slug: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:seed-category:${slug}`, ORBIS_NAMESPACE);
+export function seedCategoryId(graphId: string, slug: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:seed-category:${slug}`, ORBIS_NAMESPACE);
 }
 
-export function seedSmartListId(ownerId: string, slug: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:seed-smartlist:${slug}`, ORBIS_NAMESPACE);
+export function seedSmartListId(graphId: string, slug: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:seed-smartlist:${slug}`, ORBIS_NAMESPACE);
 }
 
 /** Сколько сущностей составляют мир владельца без садовника (12 категорий + 6 списков). */
@@ -104,14 +104,14 @@ export const WORLD_SEED_MECHANISM = 'seed' as const;
  */
 export async function seedOwnerWorld(
   db: Db,
-  ownerId: string,
+  graphId: string,
   deps: SeedWorldDeps = {},
 ): Promise<SeedWorldResult> {
   const clock = deps.clock ?? (() => new Date());
 
   const wanted = [
     ...SEED_CATEGORIES.map((c) => ({
-      id: seedCategoryId(ownerId, c.slug),
+      id: seedCategoryId(graphId, c.slug),
       input: {
         title: c.title,
         tags: ['category'],
@@ -128,7 +128,7 @@ export async function seedOwnerWorld(
       },
     })),
     ...SEED_SMART_LISTS.map((s) => ({
-      id: seedSmartListId(ownerId, s.slug),
+      id: seedSmartListId(graphId, s.slug),
       input: {
         title: s.title,
         emoji: s.emoji,
@@ -144,7 +144,7 @@ export async function seedOwnerWorld(
 
   const missing = await missingIds(
     db,
-    ownerId,
+    graphId,
     wanted.map((w) => w.id),
   );
   if (missing.size === 0) return { created: 0, skipped: wanted.length };
@@ -154,14 +154,14 @@ export async function seedOwnerWorld(
     .map((w) => ({ tool: 'entity_create', input: { id: w.id, ...w.input } }));
 
   const r = await execute(db, {
-    actorUserId: ownerId,
+    actorUserId: graphId,
     actorKind: 'owner',
     source: 'system',
     // `source: 'system'` (а не `'routine'`) — чтобы не включился `assertRoutineUntouchable`;
     // механизм сева входит в `SYSTEM_WRITABLE_MECHANISMS`, то есть системные свойства
     // сеятелю доступны, а вычисляемые — нет (их у мира и не бывает).
     mechanism: WORLD_SEED_MECHANISM,
-    batchId: worldBatchId(ownerId),
+    batchId: worldBatchId(graphId),
     operations,
     clock,
   });
@@ -172,7 +172,7 @@ export async function seedOwnerWorld(
     // поломки: мир на месте — значит сев состоялся, просто не этой транзакцией.
     const stillMissing = await missingIds(
       db,
-      ownerId,
+      graphId,
       wanted.map((w) => w.id),
     );
     if (stillMissing.size === 0) return { created: 0, skipped: wanted.length };
@@ -182,16 +182,16 @@ export async function seedOwnerWorld(
 }
 
 /** batchId пачки сева — детерминированный: повтор не заводит второго audit-сообщения. */
-function worldBatchId(ownerId: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:seed-world`, ORBIS_NAMESPACE);
+function worldBatchId(graphId: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:seed-world`, ORBIS_NAMESPACE);
 }
 
 /** Какие из перечисленных id ещё не существуют у владельца (одним запросом, под RLS). */
-async function missingIds(db: Db, ownerId: string, ids: string[]): Promise<Set<string>> {
-  const rows = (await withIdentity(db, ownerId, (tx) =>
+async function missingIds(db: Db, graphId: string, ids: string[]): Promise<Set<string>> {
+  const rows = (await withIdentity(db, graphId, (tx) =>
     tx.execute(sql`
       SELECT id::text AS id FROM entities
-       WHERE owner_id = ${ownerId} AND id IN (${sql.join(
+       WHERE graph_id = ${graphId} AND id IN (${sql.join(
          ids.map((id) => sql`${id}::uuid`),
          sql`, `,
        )})`),

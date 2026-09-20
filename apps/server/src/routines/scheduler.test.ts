@@ -97,7 +97,7 @@ function toolUse(name: string, input: Record<string, unknown>): LLMResponse {
 async function newOwner(timezone = 'Europe/Moscow'): Promise<string> {
   const owner = freshUserId();
   await withIdentity(db, owner, (tx) =>
-    tx.insert(userSettings).values({ ownerId: owner, timezone }),
+    tx.insert(userSettings).values({ graphId: owner, timezone }),
   );
   return owner;
 }
@@ -314,7 +314,7 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
       await startBucketRun(
         deps(provider, () => minutes(60)),
         {
-          ownerId: owner,
+          graphId: owner,
           routine: { id: routineId, title: 'Утренний обзор' },
           bucket: BUCKET,
         },

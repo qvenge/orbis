@@ -28,7 +28,7 @@ export const queryFixtures: Entity[] = [
   {
     // Задача: in_progress / high / срок сегодня-около — для status=, priority=, due_date=today.
     id: '019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Написать отчёт по проекту',
     emoji: '📝',
     body: 'Черновик к вечеру, финал после ревью.',
@@ -49,7 +49,7 @@ export const queryFixtures: Entity[] = [
   {
     // Сквозной пример PRD 01 §2.4: задача + расписание + planned-расход в одной сущности.
     id: '019ea8b1-4778-7f3d-9a5c-6a521fa1cc24',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Купить кроссовки',
     emoji: '👟',
     body: 'К субботней пробежке. Модель выбрана в [[entity:019e4466-1000-7e07-b5d4-64be9721da51|Wishlist: бег]].',
@@ -78,7 +78,7 @@ export const queryFixtures: Entity[] = [
   {
     // Задача: inbox без priority и due_date — минимальный orbis/task.
     id: '019eb2f4-3c20-7d15-8e44-7b9c0d1e2f30',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Разобрать входящие письма',
     emoji: null,
     body: '',
@@ -96,7 +96,7 @@ export const queryFixtures: Entity[] = [
   {
     // Задача: done / low, completed_at проставлен (PRD 01 §3.2).
     id: '019eb2f4-4d10-70aa-b3c2-8e5f6a7b8c40',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Оплатить интернет',
     emoji: '🌐',
     body: '',
@@ -117,7 +117,7 @@ export const queryFixtures: Entity[] = [
   {
     // Задача: waiting с waiting_for и просроченным due_date — для due_date=overdue.
     id: '019eb2f4-5e00-7188-a1d0-9f6a7b8c9d50',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Получить справку из бухгалтерии',
     emoji: null,
     body: 'Запросил 25 июня, обещали до конца месяца.',
@@ -138,7 +138,7 @@ export const queryFixtures: Entity[] = [
   {
     // Задача: cancelled и archived=true — для archived=true|any.
     id: '019eb2f4-6f00-72bb-b2e1-0a1b2c3d4e60',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Старый черновик плана на квартал',
     emoji: null,
     body: 'Заменён новым планом.',
@@ -157,7 +157,7 @@ export const queryFixtures: Entity[] = [
   {
     // Заметка: orbis/note — маркер «главное назначение — текст» (PRD 01 §3.4).
     id: '019eb2f4-7a00-73cc-93f2-1b2c3d4e5f70',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Идеи для отпуска',
     emoji: '🏝️',
     body: '- Грузия, сентябрь\n- Алтай, июль\n- Проверить визовые требования',
@@ -176,7 +176,7 @@ export const queryFixtures: Entity[] = [
   {
     // Финансовый факт: расход (пример PRD 01 §3.5) — для amount-сравнений и aspect=orbis/financial.
     id: '019eac7a-5980-7fa8-8425-8b14dfcbba25',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Обед',
     emoji: null,
     body: '',
@@ -201,7 +201,7 @@ export const queryFixtures: Entity[] = [
   {
     // Финансовый факт: доход — для direction=income и amount>1000.
     id: '019eb2f4-9c00-75ee-85a4-3d4e5f6a7b90',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Зарплата за июнь',
     emoji: '💰',
     body: '',
@@ -225,7 +225,7 @@ export const queryFixtures: Entity[] = [
   {
     // Planned-расход в границе диапазона — для amount=500..2000 (включительно).
     id: '019eb2f4-ad00-76ff-96b5-4e5f6a7b8ca0',
-    ownerId: FIXTURE_OWNER_ID,
+    graphId: FIXTURE_OWNER_ID,
     title: 'Абонемент в бассейн',
     emoji: '🏊',
     body: '',

@@ -124,12 +124,12 @@ test('backlinks: секция «Связанное» подписывает на
   try {
     await admin.execute(sql`
       INSERT INTO relation_role_definitions
-        (id, owner_id, key, label, description, source_label, target_label,
+        (id, graph_id, key, label, description, source_label, target_label,
          hierarchical, constraints, "symmetric", module, rank)
       SELECT id, ${user}::uuid, key, label, description,
              '{"ru":"Ссылается на нас"}'::jsonb, target_label,
              hierarchical, constraints, "symmetric", module, rank
-        FROM relation_role_definitions WHERE id = 'mention' AND owner_id IS NULL`);
+        FROM relation_role_definitions WHERE id = 'mention' AND graph_id IS NULL`);
     await bumpOwnerRegistryVersion(admin, user); // мутация реестра двигает версию (§А10-1)
   } finally {
     await adminClient.end();
@@ -244,7 +244,7 @@ test('backlinks: потолок 100 строк — свежие первыми, 
   const { db: admin, client: adminClient } = adminDb();
   try {
     await admin.execute(sql`
-      INSERT INTO entities (id, owner_id, title, body, body_refs, created_at)
+      INSERT INTO entities (id, graph_id, title, body, body_refs, created_at)
       SELECT gen_random_uuid(), ${user}::uuid, 'Ссылка ' || g, '', ARRAY[${target.id}]::text[],
              now() - make_interval(mins => g)
       FROM generate_series(1, 105) AS g
@@ -328,7 +328,7 @@ test('backlinks категории: транзакции и правила па�
   // `property_definitions` не менялась, менялась только дельта.
   await withIdentity(db, user, async (tx) => {
     await tx.execute(sql`
-      INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+      INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
       SELECT gen_random_uuid(), ${user}::uuid, 'property', 'orbis/finance_category',
              (SELECT version FROM registry_system WHERE id = 1),
              '{"label":{"ru":"Статья расходов"}}'::jsonb`);

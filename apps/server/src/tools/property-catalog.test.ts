@@ -46,7 +46,7 @@ async function seedProperty(spec: {
   try {
     await admin.db.execute(sql`
       INSERT INTO property_definitions
-        (id, owner_id, key, label, description, type, status, storage, module, rank, flags,
+        (id, graph_id, key, label, description, type, status, storage, module, rank, flags,
          created_at)
       VALUES (${spec.id}, ${owner}, ${spec.key},
               ${JSON.stringify({ ru: spec.label })}::jsonb,
@@ -54,7 +54,7 @@ async function seedProperty(spec: {
               ${JSON.stringify({ kind: 'number' })}::jsonb, ${spec.status}, 'props',
               ${spec.module ?? null}, 200, '{}'::jsonb,
               ${(spec.createdAt ?? new Date()).toISOString()}::timestamptz)
-      ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+      ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO NOTHING`);
     // Правка реестра двигает его версию тем же путём, что боевой писатель (§А10-1):
     // без этого кеш эффективных определений отдал бы снимок без нового свойства.
     await bumpOwnerRegistryVersion(admin.db, owner);
@@ -92,13 +92,13 @@ beforeAll(async () => {
     for (const title of ['Ночь на понедельник', 'Ночь на вторник']) {
       await tx
         .insert(entities)
-        .values({ id: newId(), ownerId: owner, title, props: { [FREE_ID]: 7 }, aspects: [] });
+        .values({ id: newId(), graphId: owner, title, props: { [FREE_ID]: 7 }, aspects: [] });
     }
   });
   await withIdentity(db, stranger, async (tx) => {
     await tx.insert(entities).values({
       id: newId(),
-      ownerId: stranger,
+      graphId: stranger,
       title: 'Чужая ночь',
       props: { [FREE_ID]: 9 },
       aspects: [],
@@ -122,7 +122,7 @@ function run(
   now: Date = new Date(),
 ): Promise<PropertyCatalogRow[]> {
   return withIdentity(db, owner, async (tx) => {
-    const r = await runPropertyCatalog(tx, reg, input, 'ru', { ownerId: owner, now });
+    const r = await runPropertyCatalog(tx, reg, input, 'ru', { graphId: owner, now });
     return r.properties;
   });
 }

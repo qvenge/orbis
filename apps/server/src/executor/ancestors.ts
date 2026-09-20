@@ -77,7 +77,7 @@ const DEPTH_CAP = 32;
  */
 export async function recomputeProjectAncestors(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   changedTargetIds: string[],
   reg: RegistrySnapshot,
 ): Promise<{ recomputed: number }> {
@@ -97,7 +97,7 @@ export async function recomputeProjectAncestors(
   const rows = (await tx.execute(sql`
     WITH RECURSIVE down(id, depth) AS (
         SELECT e.id, 0 FROM entities e
-         WHERE e.id IN (${rootList}) AND e.owner_id = ${ownerId}::uuid
+         WHERE e.id IN (${rootList}) AND e.graph_id = ${graphId}::uuid
       UNION
         SELECT r.target_id, d.depth + 1
           FROM down d

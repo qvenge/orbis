@@ -101,7 +101,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     });
 
     const { swept } = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -156,7 +156,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     });
 
     const { swept } = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -179,7 +179,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
 
     // Повторное подметание ничего не находит: подобранный прогон терминален
     const again = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -273,7 +273,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
     expect(runB).not.toBe(runA);
 
     const { swept } = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -319,7 +319,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
     if (!archived.ok) throw new Error(`архивация прогона: ${archived.error.message}`);
 
     const { swept } = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -379,7 +379,7 @@ describe('sweepStaleRuns: рутинный прогон закрывается �
     });
 
     const { swept } = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'ai',
       clock: () => T0,
     });
@@ -437,7 +437,7 @@ describe('sweepStaleRuns: пачка переживает смерть проц�
     expect(asked.status).toBe('ok');
 
     const { swept } = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'ai',
       clock: () => T0,
     });

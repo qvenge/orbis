@@ -66,12 +66,12 @@ export async function categoriesById(tx: Tx, ids: string[]): Promise<Map<string,
  */
 export async function ownerCategories(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
 ): Promise<BudgetStatusResult['categories']> {
   const rows = (await tx.execute(sql`
     SELECT id, title, props->>'orbis/spend_class' AS spend_class
     FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived AND 'orbis/category' = ANY(aspects)
+    WHERE graph_id = ${graphId} AND NOT archived AND 'orbis/category' = ANY(aspects)
     ORDER BY title, id
   `)) as unknown as Array<{ id: string; title: string; spend_class: string | null }>;
   return rows.map((r) => ({

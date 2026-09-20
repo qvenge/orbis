@@ -93,7 +93,7 @@ async function actionById(user: string, actionId: string): Promise<ActionRecord>
   const rows = await adminRows(
     sql`SELECT m.metadata FROM chat_messages m
         JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.owner_id = ${user} AND m.metadata @> ${probe}::jsonb
+        WHERE t.graph_id = ${user} AND m.metadata @> ${probe}::jsonb
         LIMIT 1`,
   );
   const action = (rows[0]?.metadata as { actions?: ActionRecord[] } | undefined)?.actions?.find(
@@ -109,7 +109,7 @@ async function undoMessageCount(user: string, actionId: string): Promise<number>
   const rows = await adminRows(
     sql`SELECT count(*)::int AS n FROM chat_messages m
         JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.owner_id = ${user} AND m.metadata @> ${probe}::jsonb`,
+        WHERE t.graph_id = ${user} AND m.metadata @> ${probe}::jsonb`,
   );
   return rows[0]?.n as number;
 }
@@ -119,7 +119,7 @@ async function actionMessageCount(user: string): Promise<number> {
   const rows = await adminRows(
     sql`SELECT count(*)::int AS n FROM chat_messages m
         JOIN chat_threads t ON t.id = m.thread_id
-        WHERE t.owner_id = ${user}
+        WHERE t.graph_id = ${user}
           AND m.metadata @> '{"actions": []}'::jsonb
           AND jsonb_array_length(m.metadata->'actions') > 0`,
   );
@@ -599,7 +599,7 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
 
     // Между действием владельца и его отменой случилась системная материализация
     // (§5.4) — её batch-audit стал ПОСЛЕДНИМ action'ом журнала
-    const m = await materializeInstances({ db, ownerId: user, from: today, to: today, today });
+    const m = await materializeInstances({ db, graphId: user, from: today, to: today, today });
     expect(m.created).toBe(1);
     const instanceId = recurringInstanceId(tpl.id, today);
 

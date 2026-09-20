@@ -441,7 +441,7 @@ export async function rollbackRun(
     await closeOpenOfRun(
       { db, clock: () => new Date() },
       {
-        ownerId: actorUserId,
+        graphId: actorUserId,
         routineId: plan.closeOpen.routineId,
         runId,
         props: plan.closeOpen.props,

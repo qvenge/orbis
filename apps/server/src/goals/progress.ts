@@ -283,7 +283,7 @@ function logFailure(
  */
 export async function goalProgressFor(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   entity: WireEntity,
 ): Promise<GoalProgress | undefined> {
   // Признак носителя (Р9): значения `orbis/progress_source` и `orbis/target_value`
@@ -331,7 +331,7 @@ export async function goalProgressFor(
     return undefined;
   }
   // `this` источника прогресса — сама цель: query-блок принадлежит ей (§6.1)
-  const cctx = await queryContext(tx, ownerId, entity.id);
+  const cctx = await queryContext(tx, graphId, entity.id);
   return computeGoalProgress(tx, cctx, goal.data);
 }
 
@@ -339,7 +339,7 @@ export async function goalProgressFor(
  * Считает прогресс в УЖЕ ОТКРЫТОЙ транзакции вызывающего. Не `Db`: entity.get работает
  * внутри withIdentity, и второй `db.transaction` внутри живой транзакции истощал бы пул
  * соединений (тот же принцип, что в recurring/with-materialization.ts и budget/aggregates.ts).
- * `ownerId` не нужен вовсе: скомпилированный SQL owner-фильтра не содержит, изоляцию
+ * `graphId` не нужен вовсе: скомпилированный SQL фильтра по графу не содержит, изоляцию
  * даёт RLS через identity транзакции.
  */
 export async function computeGoalProgress(

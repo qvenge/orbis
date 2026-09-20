@@ -4,7 +4,7 @@ import { renderWithProviders, trpcError } from '../../test/harness';
 import { OnboardingGate } from './OnboardingGate';
 
 const settings = {
-  ownerId: 'u1',
+  graphId: 'u1',
   plan: 'dev',
   timezone: 'Europe/Moscow',
   defaultCurrency: 'RUB',

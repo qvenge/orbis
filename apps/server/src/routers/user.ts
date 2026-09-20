@@ -65,7 +65,7 @@ export const userRouter = router({
         const rows = await tx
           .select()
           .from(userSettings)
-          .where(eq(userSettings.ownerId, ctx.actorUserId));
+          .where(eq(userSettings.graphId, ctx.actorUserId));
         if (!rows[0]) {
           // Нет строки → онбординг не проходил (или чужая под RLS): единый NOT_FOUND
           throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
@@ -81,7 +81,7 @@ export const userRouter = router({
         const rows = await tx
           .update(userSettings)
           .set({ ...input, updatedAt: new Date() })
-          .where(eq(userSettings.ownerId, ctx.actorUserId))
+          .where(eq(userSettings.graphId, ctx.actorUserId))
           .returning();
         if (!rows[0]) {
           throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
@@ -115,7 +115,7 @@ export const userRouter = router({
         const rows = await tx
           .select()
           .from(userSettings)
-          .where(eq(userSettings.ownerId, ctx.actorUserId));
+          .where(eq(userSettings.graphId, ctx.actorUserId));
         if (!rows[0]) {
           throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
         }

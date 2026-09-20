@@ -234,7 +234,7 @@ async function crashedEdit(
       ?.input?.operations;
     if (stored === undefined) throw new Error('crashedEdit: у предложения нет payload’а');
     const rejected = await rejectPendingTx(tx, {
-      ownerId: owner,
+      graphId: owner,
       pendingId: run.pendingId,
       reason: 'edited',
     });
@@ -278,7 +278,7 @@ describe('supersedeOpen: новый прогон гасит незакрытое
       startedAt: minutes(10),
     });
 
-    const out = await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId });
+    const out = await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newRunId });
     expect(out).toEqual({ superseded: 1, staled: 0 });
 
     const run = (await propsOf(owner, oldRunId)) as {
@@ -316,7 +316,7 @@ describe('supersedeOpen: новый прогон гасит незакрытое
       startedAt: minutes(10),
     });
 
-    const out = await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: currentId });
+    const out = await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: currentId });
     expect(out).toEqual({ superseded: 0, staled: 1 });
 
     expect((await propsOf(owner, askedId))['orbis/run_outcome']).toBe('stale');
@@ -340,7 +340,7 @@ describe('supersedeOpen: новый прогон гасит незакрытое
     if (pendingId === undefined) throw new Error('у прогона нет предложения');
     // Окно V1.8: владелец нажал «отклонить» (reject-строка с reason 'owner' уже лежит), а
     // decideProposal (Задача 11) ещё не дописал статус на прогон — он по-прежнему pending
-    const owned = await rejectPending(db, { ownerId: owner, pendingId, reason: 'owner' });
+    const owned = await rejectPending(db, { graphId: owner, pendingId, reason: 'owner' });
     expect(owned).toMatchObject({ ok: true, alreadyRejected: false, reason: 'owner' });
     const { runId: newRunId } = await seedRoutineRun(owner, {
       routineId,
@@ -348,7 +348,7 @@ describe('supersedeOpen: новый прогон гасит незакрытое
       startedAt: minutes(10),
     });
 
-    const out = await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId });
+    const out = await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newRunId });
     expect(out).toEqual({ superseded: 0, staled: 0 });
 
     // Статус пишет тот, чей reason в reject-строке: «заменено» поверх «владелец отклонил»
@@ -366,7 +366,7 @@ describe('supersedeOpen: новый прогон гасит незакрытое
   test('гасить нечего → нули, повтор идемпотентен (второй раз тоже нули)', async () => {
     const routineId = await seedRoutine(owner);
     const { runId } = await seedRoutineRun(owner, { routineId });
-    const first = await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: runId });
+    const first = await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: runId });
     expect(first).toEqual({ superseded: 0, staled: 0 });
 
     const asked = await seedRoutineRun(owner, {
@@ -385,11 +385,11 @@ describe('supersedeOpen: новый прогон гасит незакрытое
       startedAt: minutes(30),
     });
     expect(
-      await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: laterId }),
+      await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: laterId }),
     ).toEqual({ superseded: 0, staled: 1 });
     // второй проход: гасить уже нечего — stale не гасится повторно
     expect(
-      await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: laterId }),
+      await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: laterId }),
     ).toEqual({ superseded: 0, staled: 0 });
     expect((await propsOf(owner, asked.runId))['orbis/run_outcome']).toBe('stale');
   });
@@ -403,7 +403,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
   function verbCtx(routineId: string): VerbCtx {
     return {
       db,
-      ownerId: owner,
+      graphId: owner,
       subject: { kind: 'routine', routineId },
       clock: () => T0,
       sink: makeChatJournalSink(),
@@ -469,7 +469,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     const defer = await deferUnit(routineId, runId, 'Прошлогодний отчёт');
 
     const out = await closeOpenOfRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routineId,
       runId,
       props: await runProps(runId),
@@ -524,7 +524,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     });
 
     const out = await closeOpenOfRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routineId,
       runId,
       props: await runProps(runId),
@@ -550,7 +550,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     const answered = await askUnit(routineId, runId, 'Сдвигать ли дедлайн по отчёту?');
     const open = await askUnit(routineId, runId, 'Кому отдать разбор писем?');
     expect(
-      await answerPendingQuestion(db, { ownerId: owner, pendingId: answered, answer: 'сдвигай' }),
+      await answerPendingQuestion(db, { graphId: owner, pendingId: answered, answer: 'сдвигай' }),
     ).toEqual({ status: 'answered', pendingId: answered });
     // Флажок ставит НАСТОЯЩИЙ его писатель — закрытие прогона (Задача 7), а не рука теста:
     // снятие обязано работать ровно над тем, что оставляет пара «close-патч → гашение»
@@ -566,7 +566,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     expect((await runProps(runId))['orbis/undecided']).toBe(true);
 
     const out = await closeOpenOfRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routineId,
       runId,
       props: await runProps(runId),
@@ -594,7 +594,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     // Повтор: гасить нечего и снимать нечего — второго бухгалтерского патча не появляется
     expect(
       await closeOpenOfRun(deps(), {
-        ownerId: owner,
+        graphId: owner,
         routineId,
         runId,
         props: await runProps(runId),
@@ -612,14 +612,14 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     // Окно V1.8: reject-строка владельца уже в ленте, а статус на прогоне ещё `pending` —
     // `closeProposalOfRun` вернёт `null`, «решено ЧУЖОЙ причиной». Прежняя форма этого
     // выхода уносила управление из ФУНКЦИИ целиком, и пачка висела бы на владельце вечно.
-    expect(await rejectPending(db, { ownerId: owner, pendingId, reason: 'owner' })).toMatchObject({
+    expect(await rejectPending(db, { graphId: owner, pendingId, reason: 'owner' })).toMatchObject({
       ok: true,
       alreadyRejected: false,
       reason: 'owner',
     });
 
     const out = await closeOpenOfRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routineId,
       runId,
       props: await runProps(runId),
@@ -656,10 +656,10 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     // Снимок прочитан ДО ответа — ровно та гонка, которую сторожит предусловие `outcome`:
     // владелец ответил, пока мы читали, и терминальный вопрос гасить уже нельзя
     const snapshot = await runProps(runId);
-    await answerRoutineCheckpoint(deps(), { ownerId: owner, runId, answer: 'не переносим' });
+    await answerRoutineCheckpoint(deps(), { graphId: owner, runId, answer: 'не переносим' });
 
     const out = await closeOpenOfRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routineId,
       runId,
       props: snapshot,
@@ -699,15 +699,15 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
 
     // Владелец разобрал пачку сам: одну единицу принял, вторую отклонил СВОЕЙ причиной
     expect(
-      (await approvePending(db, { ownerId: owner, pendingId: approved.pendingId, clock: () => T0 }))
+      (await approvePending(db, { graphId: owner, pendingId: approved.pendingId, clock: () => T0 }))
         .ok,
     ).toBe(true);
     expect(
-      await rejectPending(db, { ownerId: owner, pendingId: refused.pendingId, reason: 'owner' }),
+      await rejectPending(db, { graphId: owner, pendingId: refused.pendingId, reason: 'owner' }),
     ).toMatchObject({ ok: true, alreadyRejected: false, reason: 'owner' });
 
     const out = await closeOpenOfRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routineId,
       runId,
       props: await runProps(runId),
@@ -776,11 +776,11 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     expect(CONSECUTIVE_FAILURES_TO_PAUSE).toBe(3);
     await seedFailed(routineId, '2026-08-15T07:00', 1);
     await seedFailed(routineId, '2026-08-16T07:00', 2);
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: false });
     expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
 
     await seedFailed(routineId, '2026-08-17T07:00', 3);
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: true });
     expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('paused');
 
     const notes = (await threadRows(routineId)).filter(
@@ -790,7 +790,7 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     expect(notes[0]?.role).toBe('system');
 
     // Повтор ничего не делает: рутина уже на паузе, второй записи в тред не появляется
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: false });
     expect(
       (await threadRows(routineId)).filter(
         (r) => (r.metadata as { type?: string }).type === 'routine_paused',
@@ -809,7 +809,7 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     });
     await seedFailed(routineId, '2026-08-16T07:00', 3);
 
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: false });
     expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
   });
 
@@ -818,7 +818,7 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     await seedFailed(routineId, '2026-08-15T07:00', 1);
     await seedFailed(routineId, '2026-08-16T07:00', 2);
     await seedFailed(routineId, '2026-08-17T07:00', 3);
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: true });
     const first = (await threadRows(routineId)).filter(
       (r) => (r.metadata as { type?: string }).type === 'routine_paused',
     );
@@ -850,14 +850,14 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     // Один НОВЫЙ плановый сбой (транзиент): хвост старых [f,f,f] не считается — паузы нет,
     // и попытки 2–3 бакета смогут случиться
     await seedFailed(routineId, '2026-08-18T07:00', 5);
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: false });
     expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
 
     // Ещё два новых подряд — три новых, пауза снова, вторая запись с новой границей
     await seedFailed(routineId, '2026-08-19T07:00', 6);
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: false });
     await seedFailed(routineId, '2026-08-20T07:00', 7);
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: true });
     expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('paused');
     const notes = (await threadRows(routineId)).filter(
       (r) => (r.metadata as { type?: string }).type === 'routine_paused',
@@ -874,14 +874,14 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     await seedFailed(routineId, '2026-08-16T07:00', 2);
     await withIdentity(db, owner, (tx) =>
       appendSystemNote(tx, {
-        ownerId: owner,
+        graphId: owner,
         entityId: routineId,
         content: 'Рутина поставлена на паузу (старый формат)',
         metadata: { type: 'routine_paused', routine_id: routineId },
       }),
     );
     await seedFailed(routineId, '2026-08-17T07:00', 3);
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: true });
   });
 
   test('удачный прогон в хвосте сбрасывает счёт', async () => {
@@ -900,7 +900,7 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     });
     await seedFailed(routineId, '2026-08-18T07:00', 4);
 
-    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    expect(await pauseIfFailing(deps(), { graphId: owner, routineId })).toEqual({ paused: false });
   });
 });
 
@@ -909,7 +909,7 @@ describe('appendSystemNote и routineHistory', () => {
     const routineId = await seedRoutine(owner);
     await withIdentity(db, owner, (tx) =>
       appendSystemNote(tx, {
-        ownerId: owner,
+        graphId: owner,
         entityId: routineId,
         content: 'Проверка записи',
         metadata: { type: 'routine_note', routine_id: routineId },
@@ -1000,10 +1000,10 @@ describe('routineHistory: единицы пачки прошлых прогон�
     await askUnit(routineId, runId, SECOND);
     // Судьбы ставят НАСТОЯЩИЕ их писатели — кнопки владельца, а не рука теста
     expect(
-      await answerPendingQuestion(db, { ownerId: owner, pendingId: answered, answer: ANSWER }),
+      await answerPendingQuestion(db, { graphId: owner, pendingId: answered, answer: ANSWER }),
     ).toEqual({ status: 'answered', pendingId: answered });
     expect(
-      (await approvePending(db, { ownerId: owner, pendingId: defer.pendingId, clock: () => T0 }))
+      (await approvePending(db, { graphId: owner, pendingId: defer.pendingId, clock: () => T0 }))
         .ok,
     ).toBe(true);
 
@@ -1027,7 +1027,7 @@ describe('routineHistory: единицы пачки прошлых прогон�
     const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-14T07:00' });
     const defer = await deferUnit(routineId, runId, 'Отчёт позапрошлого года');
     expect(
-      await rejectPending(db, { ownerId: owner, pendingId: defer.pendingId, reason: 'owner' }),
+      await rejectPending(db, { graphId: owner, pendingId: defer.pendingId, reason: 'owner' }),
     ).toMatchObject({ ok: true, reason: 'owner' });
 
     const { runId: currentId } = await seedRoutineRun(owner, {
@@ -1100,7 +1100,7 @@ describe('routineHistory: единицы пачки прошлых прогон�
     // Кап единиц считает ОТКРЫТЫЕ, а потолок истории — ВСЕ: два ответа освобождают место
     // под капом, и за прогон единиц накапливается больше десяти. Ветка «и ещё N» живая
     for (const pendingId of asked.slice(0, 2)) {
-      expect(await answerPendingQuestion(db, { ownerId: owner, pendingId, answer: 'да' })).toEqual({
+      expect(await answerPendingQuestion(db, { graphId: owner, pendingId, answer: 'да' })).toEqual({
         status: 'answered',
         pendingId,
       });
@@ -1184,7 +1184,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     const bucket = '2026-08-17T07:00';
 
     const first = await startBucketRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routine: routineRef(routineId),
       bucket,
     });
@@ -1217,7 +1217,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
 
     // Тот же бакет, пока прогон идёт — «уже идёт», второй сущности нет
     expect(
-      await startBucketRun(deps(), { ownerId: owner, routine: routineRef(routineId), bucket }),
+      await startBucketRun(deps(), { graphId: owner, routine: routineRef(routineId), bucket }),
     ).toEqual({ started: false, reason: 'running' });
     expect(await runsOf(routineId)).toHaveLength(1);
 
@@ -1227,12 +1227,12 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       'orbis/run_finished_at': T0.toISOString(),
     });
     expect(
-      await startBucketRun(deps(), { ownerId: owner, routine: routineRef(routineId), bucket }),
+      await startBucketRun(deps(), { graphId: owner, routine: routineRef(routineId), bucket }),
     ).toEqual({ started: false, reason: 'done' });
     // Вопрос (checkpoint) и ответ на него — тоже «отработан»: попытка не повторяется
     await patchRun(first.runId, { 'orbis/run_outcome': 'checkpoint' });
     expect(
-      await startBucketRun(deps(), { ownerId: owner, routine: routineRef(routineId), bucket }),
+      await startBucketRun(deps(), { graphId: owner, routine: routineRef(routineId), bucket }),
     ).toEqual({ started: false, reason: 'done' });
   });
 
@@ -1240,7 +1240,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     for (let round = 0; round < 5; round++) {
       const routineId = await seedRoutine(owner);
       const bucket = '2026-08-17T07:00';
-      const args = { ownerId: owner, routine: routineRef(routineId), bucket };
+      const args = { graphId: owner, routine: routineRef(routineId), bucket };
       // Два экземпляра замка = два процесса (locks.ts): межпроцессную гонку одного бакета
       // держат batch_id/PK, и именно их здесь и проверяем — общий замок процесса свёл бы
       // второй запуск к «уже идёт», не дав дойти до execute
@@ -1282,7 +1282,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
   test('ретраи: failed → пауза RETRY_DELAYS_MS[attempt−1] от finished_at → следующая попытка с новым id; после MAX_ATTEMPTS — attempts', async () => {
     const routineId = await seedRoutine(owner);
     const bucket = '2026-08-17T07:00';
-    const args = { ownerId: owner, routine: routineRef(routineId), bucket };
+    const args = { graphId: owner, routine: routineRef(routineId), bucket };
     // Попытка 1 провалилась в T0
     await seedRoutineRun(owner, {
       routineId,
@@ -1353,12 +1353,12 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       const routineId = await seedRoutine(owner);
       const [manual, bucket] = await Promise.all([
         startManualRun(deps(), {
-          ownerId: owner,
+          graphId: owner,
           routine: routineRef(routineId),
           timeZone: 'Europe/Moscow',
         }),
         startBucketRun(deps(), {
-          ownerId: owner,
+          graphId: owner,
           routine: routineRef(routineId),
           bucket: '2026-08-17T07:00',
         }),
@@ -1374,14 +1374,14 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
   test('идущий прогон ДРУГОГО слота (ручной) блокирует бакет: у рутины не бывает двух running', async () => {
     const routineId = await seedRoutine(owner);
     const manual = await startManualRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routine: routineRef(routineId),
       timeZone: 'Europe/Moscow',
     });
     expect(manual.started).toBe(true);
     expect(
       await startBucketRun(deps(), {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         bucket: '2026-08-17T07:00',
       }),
@@ -1401,7 +1401,7 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     const limited = deps({ entitlements: runsPerDay(1) });
     expect(
       await startBucketRun(limited, {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         bucket: '2026-08-17T07:00',
       }),
@@ -1409,7 +1409,7 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     // T0 = 12:00Z = 15:00 мск 17-го: локальный день тот же — ручной прогон тоже не заводится
     expect(
       await startManualRun(limited, {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         timeZone: 'Europe/Moscow',
       }),
@@ -1417,7 +1417,7 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     // Отказ резолвера («прогонов на этом плане нет») — тот же исход без счёта
     expect(
       await startBucketRun(deps({ entitlements: runsPerDay(null, false) }), {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         bucket: '2026-08-17T07:00',
       }),
@@ -1440,7 +1440,7 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     });
     const limited = deps({ entitlements: runsPerDay(1) });
     const started = await startBucketRun(limited, {
-      ownerId: owner,
+      graphId: owner,
       routine: routineRef(routineId),
       bucket: '2026-08-17T07:00',
     });
@@ -1457,14 +1457,14 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     });
     expect(
       await startManualRun(limited, {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         timeZone: 'Europe/Moscow',
       }),
     ).toEqual({ started: false, reason: 'limit' });
     // Тот же граф без лимита (план dev) — ручной прогон заводится
     const free = await startManualRun(deps({ clock: () => minutes(1) }), {
-      ownerId: owner,
+      graphId: owner,
       routine: routineRef(routineId),
       timeZone: 'Europe/Moscow',
     });
@@ -1476,7 +1476,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
   test('bucket = manual:<ISO часов>, attempt 1, свежий batch_id; повтор в ту же миллисекунду — id_conflict, а не replay; при running — running', async () => {
     const routineId = await seedRoutine(owner);
     const first = await startManualRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routine: routineRef(routineId),
       timeZone: 'Europe/Moscow',
     });
@@ -1499,7 +1499,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     // Пока идёт — второй ручной не заводится
     expect(
       await startManualRun(deps(), {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         timeZone: 'Europe/Moscow',
       }),
@@ -1513,7 +1513,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     // id — прогон не заводится и модель никто не гонит
     expect(
       await startManualRun(deps(), {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         timeZone: 'Europe/Moscow',
       }),
@@ -1522,7 +1522,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     // Плановый бакет ручным прогоном не занят: слот 07:00 свободен
     expect(
       await startBucketRun(deps(), {
-        ownerId: owner,
+        graphId: owner,
         routine: routineRef(routineId),
         bucket: '2026-08-17T07:00',
       }),
@@ -1538,7 +1538,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     let ticks = 0;
     const ticking = deps({ clock: () => new Date(T0.getTime() + ticks++) });
     const out = await startManualRun(ticking, {
-      ownerId: owner,
+      graphId: owner,
       routine: routineRef(routineId),
       timeZone: 'Europe/Moscow',
     });
@@ -1579,7 +1579,7 @@ describe('edited_from переживает решение по предложе�
     const editedFrom = await markEdited(runId);
 
     const decided = await decideProposal(deps(), {
-      ownerId: owner,
+      graphId: owner,
       runId,
       pendingId,
       decision: 'approve',
@@ -1615,7 +1615,7 @@ describe('edited_from переживает решение по предложе�
     if (!done.ok) throw new Error(`закрытие задачи: ${done.error.code}`);
 
     const decided = await decideProposal(deps(), {
-      ownerId: owner,
+      graphId: owner,
       runId,
       pendingId,
       decision: 'approve',
@@ -1635,7 +1635,7 @@ describe('edited_from переживает решение по предложе�
     const editedFrom = await markEdited(runId);
 
     const decided = await decideProposal(deps(), {
-      ownerId: owner,
+      graphId: owner,
       runId,
       pendingId,
       decision: 'reject',
@@ -1664,7 +1664,7 @@ describe('edited_from переживает решение по предложе�
     // живёт дитя: не пойди гашение за правкой, оно вышло бы без записи и оставило бы
     // живое предложение, на которое никто не указывает.
     expect(
-      await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId }),
+      await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newRunId }),
     ).toEqual({ superseded: 1, staled: 0 });
 
     expect(await rejectReasonOf(child)).toBe('superseded');
@@ -1685,7 +1685,7 @@ describe('edited_from переживает решение по предложе�
     });
 
     expect(
-      await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId }),
+      await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newRunId }),
     ).toEqual({ superseded: 1, staled: 0 });
 
     const proposal = await proposalOf(oldRunId);
@@ -1722,7 +1722,7 @@ describe('возобновление лестницы правки: крэш-о�
     const { runId, taskId, pendingId, child } = await crashed('2026-08-16T07:00', edits);
 
     const decided = await decideProposal(deps(), {
-      ownerId: owner,
+      graphId: owner,
       runId,
       pendingId,
       decision: 'approve',
@@ -1747,7 +1747,7 @@ describe('возобновление лестницы правки: крэш-о�
     );
 
     const decided = await decideProposal(deps(), {
-      ownerId: owner,
+      graphId: owner,
       runId,
       pendingId,
       decision: 'approve',
@@ -1778,7 +1778,7 @@ describe('возобновление лестницы правки: крэш-о�
     );
 
     const decided = await decideProposal(deps(), {
-      ownerId: owner,
+      graphId: owner,
       runId,
       pendingId: child,
       decision: 'approve',
@@ -1799,7 +1799,7 @@ describe('возобновление лестницы правки: крэш-о�
     );
 
     expect(
-      await decideProposal(deps(), { ownerId: owner, runId, pendingId: child, decision: 'reject' }),
+      await decideProposal(deps(), { graphId: owner, runId, pendingId: child, decision: 'reject' }),
     ).toEqual({ status: 'rejected' });
     expect(await rejectReasonOf(child)).toBe('owner');
     expect(await proposalOf(runId)).toMatchObject({
@@ -1836,14 +1836,14 @@ describe('гонка двух правок одного предложения (
 
       const [a, b] = await Promise.all([
         decideProposal(deps(), {
-          ownerId: owner,
+          graphId: owner,
           runId,
           pendingId,
           decision: 'approve',
           edits: first,
         }),
         decideProposal(deps(), {
-          ownerId: owner,
+          graphId: owner,
           runId,
           pendingId,
           decision: 'approve',

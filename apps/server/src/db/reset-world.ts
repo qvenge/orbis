@@ -20,7 +20,7 @@ import type { ISql, Sql } from 'postgres';
 import { type SeedRegistriesResult, seedRegistries, seedRegistriesReport } from './seed-registries';
 
 /**
- * Шесть definition-таблиц реформы: встроенные строки (`owner_id IS NULL`) переживают и
+ * Шесть definition-таблиц реформы: встроенные строки (`graph_id IS NULL`) переживают и
  * пересев, и зачистку между сьютами, пользовательские — ни того, ни другого.
  *
  * Список ОДИН на прод-операцию и на `truncateAll` тестов намеренно: у обеих ровно одно и то
@@ -109,7 +109,7 @@ async function readState(tx: ISql): Promise<ResetWorldState> {
     `SELECT ${GRAPH_TABLES.map((t) => `(SELECT count(*) FROM ${t})::int AS ${t}`).join(', ')},
             (SELECT count(*) FROM registry_deltas)::int AS deltas,
             ${DEFINITION_TABLES.map(
-              (t) => `(SELECT count(*) FROM ${t} WHERE owner_id IS NOT NULL)::int`,
+              (t) => `(SELECT count(*) FROM ${t} WHERE graph_id IS NOT NULL)::int`,
             ).join(' + ')} AS owner_definitions,
             (SELECT coalesce(max(registry_version), 0) FROM user_settings)::int AS owner_version_max,
             (SELECT version FROM registry_system WHERE id = 1)::int AS system_version`,
@@ -148,7 +148,7 @@ async function readState(tx: ISql): Promise<ResetWorldState> {
  * которого больше нет ни в одной таблице.
  *
  * `sql` — АДМИНСКОЕ подключение: под ролью приложения RLS не даст ни тронуть чужие строки,
- * ни записать system-строки реестра (`owner_id IS NULL`).
+ * ни записать system-строки реестра (`graph_id IS NULL`).
  */
 export async function resetWorld(sql: Sql, adminDsn: string): Promise<ResetWorldReport> {
   return sql.begin(async (tx) => {
@@ -165,7 +165,7 @@ export async function resetWorld(sql: Sql, adminDsn: string): Promise<ResetWorld
     // (3) Пользовательские строки реестров.
     const definitions = {} as ResetWorldReport['definitions'];
     for (const table of DEFINITION_TABLES) {
-      const removed = await tx.unsafe(`DELETE FROM ${table} WHERE owner_id IS NOT NULL`);
+      const removed = await tx.unsafe(`DELETE FROM ${table} WHERE graph_id IS NOT NULL`);
       definitions[table] = removed.count;
     }
 

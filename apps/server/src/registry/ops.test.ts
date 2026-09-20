@@ -103,7 +103,7 @@ function err(r: ExecuteResult): { code: string; message: string; details?: unkno
 async function propertyRow(id: string): Promise<Record<string, unknown> | undefined> {
   const rows = (await withIdentity(db, owner, (tx) =>
     tx.execute(sql`SELECT id, key, status, merged_into, scope, type, rank
-                   FROM property_definitions WHERE owner_id = ${owner}::uuid AND id = ${id}`),
+                   FROM property_definitions WHERE graph_id = ${owner}::uuid AND id = ${id}`),
   )) as unknown as Array<Record<string, unknown>>;
   return rows[0];
 }
@@ -739,7 +739,7 @@ describe('aspect_create (§Б2-1, §С3)', () => {
     // (`bindingIndexOf`, `checkImplements`) ищут по id и не находят носимое свойство.
     const row = (await withIdentity(db, aspectOwner, (tx) =>
       tx.execute(sql`SELECT implements FROM aspect_definitions
-                     WHERE owner_id = ${aspectOwner}::uuid AND id = 'user/ac-inline'`),
+                     WHERE graph_id = ${aspectOwner}::uuid AND id = 'user/ac-inline'`),
     )) as unknown as Array<{ implements: Array<{ bind: Record<string, string> }> }>;
     expect(row[0]?.implements[0]?.bind).toEqual({ moment: propertyId });
   });
@@ -1152,7 +1152,7 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
   const AGENDA = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda');
   const row = (over: Partial<SubscriptionRow> = {}): SubscriptionRow => ({
     id: 'user/my-agenda',
-    ownerId: subOwner,
+    graphId: subOwner,
     surface: 'planner/agenda',
     definition: AGENDA?.definition as SubscriptionDefinition,
     module: 'planner',
@@ -1169,11 +1169,11 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
     const reg = await inTx((tx) => effectiveRegistry(tx, subOwner));
     expect(reg.subscriptions.get('user/my-agenda')?.surface).toBe('planner/agenda');
     // Читатель адресует ту же строку и находит СВОЮ, а не системную.
-    expect((await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda')))?.ownerId).toBe(
+    expect((await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda')))?.graphId).toBe(
       subOwner,
     );
     expect(
-      (await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/agenda')))?.ownerId,
+      (await inTx((tx) => readSubscriptionRow(tx, subOwner, 'orbis/agenda')))?.graphId,
     ).toBeNull();
   });
 
@@ -1238,7 +1238,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     const raw = await withIdentity(db, toolOwner, (tx) =>
       readSubscriptionRow(tx, toolOwner, 'orbis/agenda'),
     );
-    expect(raw?.ownerId).toBeNull();
+    expect(raw?.graphId).toBeNull();
   });
 
   test('своя подписка на ЗАНЯТУЮ поверхность отвергается: её не прочитает ни один движок', async () => {
@@ -1520,7 +1520,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     await withIdentity(db, useOwner, (tx) =>
       setOwnSubscription(tx, useOwner, {
         id: 'user/my-agenda',
-        ownerId: useOwner,
+        graphId: useOwner,
         surface: 'planner/agenda',
         definition: readsMyOpen(),
         module: 'planner',
@@ -1532,7 +1532,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
         await withIdentity(db, useOwner, (tx) =>
           readSubscriptionRow(tx, useOwner, 'user/my-agenda'),
         )
-      )?.ownerId,
+      )?.graphId,
     ).toBe(useOwner);
     // …и своя строка тоже держит набор: снятие теперь называет ОБЕ подписки.
     const e = err(await runAs('contract_sets_delta_remove', { contract: 'orbis/completable' }));
@@ -1692,7 +1692,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
   async function ownRow(id: string): Promise<Record<string, unknown> | undefined> {
     const rows = (await withIdentity(db, mergeOwner, (tx) =>
       tx.execute(sql`SELECT id, status, merged_into, type FROM property_definitions
-                     WHERE owner_id = ${mergeOwner}::uuid AND id = ${id}`),
+                     WHERE graph_id = ${mergeOwner}::uuid AND id = ${id}`),
     )) as unknown as Array<Record<string, unknown>>;
     return rows[0];
   }
@@ -2156,7 +2156,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(sql`
-        INSERT INTO entities (id, owner_id, title, body, query_refs)
+        INSERT INTO entities (id, graph_id, title, body, query_refs)
         VALUES (${noDoc}::uuid, ${mergeOwner}::uuid, 'Индекс без документа',
                 ${`Проза\n\n{{query:aspect=orbis/task, user/no-doc-src=5}}`},
                 ARRAY[${sourceId}]::text[])`);
@@ -2264,12 +2264,12 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
  * заводили и адресуют, лежит в `key`. Сверять по нему — единственный честный способ.
  */
 async function propertyRowByKey(
-  ownerId: string,
+  graphId: string,
   key: string,
 ): Promise<Record<string, unknown> | undefined> {
-  const rows = (await withIdentity(db, ownerId, (tx) =>
+  const rows = (await withIdentity(db, graphId, (tx) =>
     tx.execute(sql`SELECT id, key, scope, status, merged_into, type FROM property_definitions
-                   WHERE owner_id = ${ownerId}::uuid AND key = ${key}`),
+                   WHERE graph_id = ${graphId}::uuid AND key = ${key}`),
   )) as unknown as Array<Record<string, unknown>>;
   return rows[0];
 }
@@ -2533,7 +2533,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     const asked = await call('property_merge', { source, into });
     expect(asked.status).toBe('pending_confirmation');
     if (asked.status !== 'pending_confirmation') throw new Error('ожидалась карточка-запрос');
-    const r = await approvePending(db, { ownerId: conflictOwner, pendingId: asked.pendingId });
+    const r = await approvePending(db, { graphId: conflictOwner, pendingId: asked.pendingId });
     expect(r.ok).toBe(false);
     expect(!r.ok && r.error.code).toBe('REGISTRY_CONFLICT');
 
@@ -2549,7 +2549,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     // Указатель тоже не проставлен: строка реестра осталась активной.
     const srcRow = (await withIdentity(db, conflictOwner, (tx) =>
       tx.execute(sql`SELECT status, merged_into FROM property_definitions
-                     WHERE owner_id = ${conflictOwner}::uuid AND id = ${source}`),
+                     WHERE graph_id = ${conflictOwner}::uuid AND id = ${source}`),
     )) as unknown as Array<Record<string, unknown>>;
     expect(srcRow[0]).toMatchObject({ status: 'active', merged_into: null });
 
@@ -2578,7 +2578,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     expect(askedAgain.status).toBe('pending_confirmation');
     if (askedAgain.status !== 'pending_confirmation') throw new Error('ожидалась карточка');
     const again = await approvePending(db, {
-      ownerId: conflictOwner,
+      graphId: conflictOwner,
       pendingId: askedAgain.pendingId,
     });
     expect(again.ok).toBe(false);
@@ -2590,7 +2590,7 @@ describe('property_merge при конфликте значений (§А10-2)',
 
     // Разобрав конфликт, владелец подтверждает единицу — слияние проходит целиком.
     const approved = await approvePending(db, {
-      ownerId: conflictOwner,
+      graphId: conflictOwner,
       pendingId: pending.id as string,
     });
     // Пока значения не разобраны, approve честно отказывает тем же кодом (ревалидация
@@ -2607,7 +2607,7 @@ describe('property_merge при конфликте значений (§А10-2)',
       { sink },
     );
     const approvedAgain = await approvePending(db, {
-      ownerId: conflictOwner,
+      graphId: conflictOwner,
       pendingId: pending.id as string,
     });
     expect(approvedAgain.ok).toBe(true);
@@ -2788,7 +2788,7 @@ describe('property_merge: границы операции (фикс-раунд 1
     // Указатель a не появился, глубина цепочки — по-прежнему один шаг.
     const rows = (await withIdentity(db, edgeOwner, (tx) =>
       tx.execute(sql`SELECT id, merged_into FROM property_definitions
-                     WHERE owner_id = ${edgeOwner}::uuid AND id IN (${a}, ${b}, ${c})`),
+                     WHERE graph_id = ${edgeOwner}::uuid AND id IN (${a}, ${b}, ${c})`),
     )) as unknown as Array<{ id: string; merged_into: string | null }>;
     const byId = new Map(rows.map((r) => [r.id, r.merged_into]));
     expect(byId.get(a)).toBeNull();
@@ -2914,7 +2914,7 @@ describe('границы записи определения (фикс-раун�
     // Полусостояния не возникло: строка как была поглощённой, так и осталась.
     const row = (await withIdentity(db, edge2, (tx) =>
       tx.execute(sql`SELECT status, merged_into FROM property_definitions
-                     WHERE owner_id = ${edge2}::uuid AND id = ${a}`),
+                     WHERE graph_id = ${edge2}::uuid AND id = ${a}`),
     )) as unknown as Array<Record<string, unknown>>;
     expect(row[0]).toMatchObject({ status: 'deprecated', merged_into: b });
     // Путь назад, на который указывает отказ, РАБОТАЕТ — иначе это была бы ловушка.
@@ -3134,7 +3134,7 @@ describe('дельта аспекта как держатель свойства
     );
     const stored = (await withIdentity(db, holderOwner, (tx) =>
       tx.execute(sql`SELECT delta FROM registry_deltas
-                     WHERE owner_id = ${holderOwner}::uuid AND target_id = 'orbis/memory'`),
+                     WHERE graph_id = ${holderOwner}::uuid AND target_id = 'orbis/memory'`),
     )) as unknown as Array<{ delta: { properties: { add: Array<{ propertyId: string }> } } }>;
     expect(stored[0]?.delta.properties.add[0]?.propertyId).toBe(byKey);
     const reg = await withIdentity(db, holderOwner, (tx) => effectiveRegistry(tx, holderOwner));
@@ -3182,7 +3182,7 @@ describe('дельта аспекта как держатель свойства
     ok(await runH('property_merge', { source: src, into: dst }));
     const stored = (await withIdentity(db, holderOwner, (tx) =>
       tx.execute(sql`SELECT delta FROM registry_deltas
-                     WHERE owner_id = ${holderOwner}::uuid AND target_id = 'orbis/note'`),
+                     WHERE graph_id = ${holderOwner}::uuid AND target_id = 'orbis/note'`),
     )) as unknown as Array<{ delta: { classMap?: Record<string, unknown> } }>;
     expect(Object.keys(stored[0]?.delta.classMap ?? {})).toEqual([dst]);
   });
@@ -3256,7 +3256,7 @@ describe('слияние отказывает громко, если после 
     expect(await registryReadable()).toBe(true);
     const rows = (await withIdentity(db, lockOwner2, (tx) =>
       tx.execute(sql`SELECT id, status, merged_into FROM property_definitions
-                     WHERE owner_id = ${lockOwner2}::uuid AND id IN (${p}, ${q})`),
+                     WHERE graph_id = ${lockOwner2}::uuid AND id IN (${p}, ${q})`),
     )) as unknown as Array<Record<string, unknown>>;
     for (const row of rows) expect(row).toMatchObject({ status: 'active', merged_into: null });
     // И выход есть: разобрав настройку, владелец сливает как хотел.
@@ -3288,7 +3288,7 @@ describe('слияние отказывает громко, если после 
     expect(await registryReadable()).toBe(true);
     const row = (await withIdentity(db, lockOwner2, (tx) =>
       tx.execute(sql`SELECT status, merged_into FROM property_definitions
-                     WHERE owner_id = ${lockOwner2}::uuid AND id = ${p}`),
+                     WHERE graph_id = ${lockOwner2}::uuid AND id = ${p}`),
     )) as unknown as Array<Record<string, unknown>>;
     expect(row[0]).toMatchObject({ status: 'active', merged_into: null });
   });
@@ -3376,7 +3376,7 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     try {
       await admin.insert(entities).values({
         id: hidden,
-        ownerId: dark,
+        graphId: dark,
         title: 'Тело мимо индекса',
         body: '{{query:aspect=orbis/task, orbis/task_status=inbox}}',
         tags: [],
@@ -3488,7 +3488,7 @@ describe('нормализация имён в дереве Q-AST (§А5-2)', ()
 
     const rows = (await withIdentity(db, astOwner, (tx) =>
       tx.execute(sql`SELECT type FROM property_definitions
-                     WHERE owner_id = ${astOwner}::uuid AND id = ${refId}`),
+                     WHERE graph_id = ${astOwner}::uuid AND id = ${refId}`),
     )) as unknown as Array<{ type: { target: { filter: { and: Array<{ prop?: string }> } } } }>;
     const named = rows[0]?.type.target.filter.and.find((n) => n.prop !== undefined);
     expect(named?.prop).toBe(baseId);

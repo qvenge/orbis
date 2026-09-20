@@ -259,7 +259,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     if (r.status !== 'ok') return;
     const { pending_id: pendingId } = r.result as ProposeResult;
 
-    const applied = await approvePending(db, { ownerId: owner, pendingId, clock: () => T0 });
+    const applied = await approvePending(db, { graphId: owner, pendingId, clock: () => T0 });
     expect(applied.ok).toBe(true);
     expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('planned');
     expect((await propsOf(owner, otherId))['orbis/task_status']).toBe('done');
@@ -334,7 +334,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     ]);
 
     // Экран предложения: строка снятия называет свойство и «станет» литералом «—».
-    const view = await proposalView(db, { ownerId: owner, runId });
+    const view = await proposalView(db, { graphId: owner, runId });
     expect(
       view?.operations.map((o) => ({ field: o.field, before: o.before, after: o.after })),
     ).toEqual([
@@ -412,7 +412,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     ]);
 
     // И «Принять» проходит: граф с тех пор не менялся.
-    const applied = await approvePending(db, { ownerId: owner, pendingId });
+    const applied = await approvePending(db, { graphId: owner, pendingId });
     expect(applied.ok).toBe(true);
     const after = await propsOf(owner, goal.id);
     expect(after['orbis/progress_source']).toMatchObject({ aggregate: 'latest' });
@@ -453,7 +453,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       ],
     });
 
-    const denied = await approvePending(db, { ownerId: owner, pendingId: pending1 });
+    const denied = await approvePending(db, { graphId: owner, pendingId: pending1 });
     expect(denied.ok).toBe(false);
     if (denied.ok) return;
     expect(denied.error.code).toBe('CONFLICT');
@@ -494,7 +494,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       ],
     });
 
-    const denied2 = await approvePending(db, { ownerId: owner, pendingId: pending2 });
+    const denied2 = await approvePending(db, { graphId: owner, pendingId: pending2 });
     expect(denied2.ok).toBe(false);
     if (denied2.ok) return;
     expect(denied2.error.code).toBe('CONFLICT');
@@ -732,7 +732,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const step = await runAgentVerb(
       {
         db,
-        ownerId: owner,
+        graphId: owner,
         subject: { kind: 'routine', routineId },
         clock: () => T0,
         sink: makeChatJournalSink(),
@@ -777,7 +777,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
 
     // Предложение действующее: «Принять» исполняет его
     const applied = await approvePending(db, {
-      ownerId: owner,
+      graphId: owner,
       pendingId: result.pending_id,
       clock: () => T0,
     });
@@ -799,7 +799,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     await runAgentVerb(
       {
         db,
-        ownerId: owner,
+        graphId: owner,
         subject: { kind: 'routine', routineId },
         clock: () => T0,
         sink: makeChatJournalSink(),
@@ -816,7 +816,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expectError(clash, 'CONFLICT');
     const pendingId = pendingMessageId(owner, `proposal:${runId}`);
     // Владелец успел отклонить карточку с экрана
-    const rejected = await rejectPending(db, { ownerId: owner, pendingId, reason: 'owner' });
+    const rejected = await rejectPending(db, { graphId: owner, pendingId, reason: 'owner' });
     expect(rejected.ok).toBe(true);
 
     const again = await dispatchTool(ctx, 'orbis_propose', {
@@ -841,7 +841,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const closed = await closeRoutineRun(
       {
         db,
-        ownerId: owner,
+        graphId: owner,
         subject: { kind: 'routine', routineId },
         clock: () => T0,
         sink: makeChatJournalSink(),
@@ -897,7 +897,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     // Грант полного скоупа: у worker-скоупа раньше сработал бы гейт §4.14, и до сборки
     // субъекта вызов бы не дошёл — проверялся бы не тот рубеж
     const token = await issuePatGrant(db, {
-      ownerId: owner,
+      graphId: owner,
       label: 'propose-двойной-субъект',
       scope: 'full',
     });

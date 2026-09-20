@@ -57,7 +57,7 @@ export async function queryWithMaterialization<T>(
   if (phase1.kind === 'done') return phase1.result;
   await materializeInstances({
     db,
-    ownerId: actorUserId,
+    graphId: actorUserId,
     from: phase1.window.from,
     to: phase1.window.to,
     today: phase1.cctx.today,

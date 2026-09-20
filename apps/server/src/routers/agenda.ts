@@ -26,7 +26,7 @@ export const agendaRouter = router({
         });
         await materializeInstances({
           db: ctx.db,
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           from: today,
           to: addDays(today, input.days - 1),
           today,

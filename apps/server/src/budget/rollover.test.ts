@@ -146,7 +146,7 @@ async function envelopesOf(
 ): Promise<Array<{ id: string; archived: boolean; props: Record<string, unknown> }>> {
   const rows = await adminRows(
     sql`SELECT id, archived, props FROM entities
-        WHERE owner_id = ${user} AND 'orbis/budget' = ANY(aspects) ORDER BY id`,
+        WHERE graph_id = ${user} AND 'orbis/budget' = ANY(aspects) ORDER BY id`,
   );
   return rows.map((r) => ({
     id: r.id as string,

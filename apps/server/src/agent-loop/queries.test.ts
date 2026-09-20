@@ -326,7 +326,7 @@ describe('assignedTickets: очередь исполнителя читает Н
 
   beforeAll(async () => {
     const row = (id: string, title: string, props: Record<string, unknown>, aspects: string[]) =>
-      rawEntityRow({ ownerId: owner, id, title, props, aspects });
+      rawEntityRow({ graphId: owner, id, title, props, aspects });
 
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values([

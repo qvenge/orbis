@@ -139,13 +139,13 @@ const SYSTEM_CLOCK: Clock = () => new Date();
 
 export async function localTodayTx(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<string> {
   const rows = await tx
     .select({ timezone: userSettings.timezone })
     .from(userSettings)
-    .where(eq(userSettings.ownerId, ownerId));
+    .where(eq(userSettings.graphId, graphId));
   const stored = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
   // мусорная зона из БД деградирует до дефолта, не роняя запрос (как queryContext)
   const timezone = isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
@@ -154,10 +154,10 @@ export async function localTodayTx(
 
 export async function localToday(
   db: Db,
-  ownerId: string,
+  graphId: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<string> {
-  return withIdentity(db, ownerId, (tx) => localTodayTx(tx, ownerId, clock));
+  return withIdentity(db, graphId, (tx) => localTodayTx(tx, graphId, clock));
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ function shiftMonth(month: string, delta: number): string {
  */
 async function spentByEnvelope(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   envelopeIds: string[],
   today: string,
   defaultCurrency: string,
@@ -221,7 +221,7 @@ async function spentByEnvelope(
     JOIN entities e   ON e.id = r.target_id
     WHERE r.role = ${ROLE_ENVELOPE_BINDING}
       AND r.source_id IN (${ids})
-      AND e.owner_id = ${ownerId} AND NOT e.archived
+      AND e.graph_id = ${graphId} AND NOT e.archived
       AND 'orbis/financial' = ANY(e.aspects)
       AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
       AND e.props->>'orbis/direction' = 'expense'
@@ -248,13 +248,13 @@ function categoryOr(map: Map<string, CategoryInfo>, id: string): CategoryInfo {
  * одно — то, которое владелец назвал деревом. Связь `subitem` между категориями остаётся
  * связью, но агрегат родительской карточки её не собирает.
  */
-async function categoryEdges(tx: Tx, ownerId: string): Promise<Map<string, string[]>> {
+async function categoryEdges(tx: Tx, graphId: string): Promise<Map<string, string[]>> {
   const rows = (await tx.execute(sql`
     SELECT r.source_id, r.target_id FROM relations r
     JOIN entities s ON s.id = r.source_id
     JOIN entities t ON t.id = r.target_id
     WHERE r.role = ${ROLE_CATEGORY_PARENT}
-      AND s.owner_id = ${ownerId}
+      AND s.graph_id = ${graphId}
       AND 'orbis/category' = ANY(s.aspects) AND 'orbis/category' = ANY(t.aspects)
   `)) as unknown as Array<{ source_id: string; target_id: string }>;
   const children = new Map<string, string[]>();
@@ -389,7 +389,7 @@ function countAlerts(raws: RawEnvelope[], today: string): number {
 /** Сырые конверты, пересекающие месяц (месячные + произвольные §2.9), со spent §2.2. */
 async function rawEnvelopesOfMonth(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   month: string,
   today: string,
   defCur: string,
@@ -400,7 +400,7 @@ async function rawEnvelopesOfMonth(
     .from(entities)
     .where(
       and(
-        eq(entities.ownerId, ownerId),
+        eq(entities.graphId, graphId),
         eq(entities.archived, false),
         sql`'orbis/budget' = ANY(${entities.aspects})`,
         sql`${entities.props}->>'orbis/period_start' <= ${end}`,
@@ -409,7 +409,7 @@ async function rawEnvelopesOfMonth(
     );
   const spentMap = await spentByEnvelope(
     tx,
-    ownerId,
+    graphId,
     envRows.map((r) => r.id),
     today,
     defCur,
@@ -442,16 +442,16 @@ async function rawEnvelopesOfMonth(
  */
 export async function computeOverview(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   month: string,
   today: string,
 ): Promise<BudgetOverview> {
-  const defCur = await defaultCurrencyOf(tx, ownerId);
+  const defCur = await defaultCurrencyOf(tx, graphId);
   const { start, end } = monthRange(month);
   const horizon = addDays(today, HORIZON_DAYS);
 
   // Конверты, пересекающие месяц (месячные + произвольные §2.9)
-  const raws = await rawEnvelopesOfMonth(tx, ownerId, month, today, defCur);
+  const raws = await rawEnvelopesOfMonth(tx, graphId, month, today, defCur);
 
   // Баланс периода (§2.5): факты в [start;end] и ≤ сегодня, валюта периода = дефолтная;
   // шаблоны recurring (свойство orbis/recurrence) — не операции, исключены
@@ -459,7 +459,7 @@ export async function computeOverview(
     SELECT e.props->>'orbis/direction' AS direction,
            coalesce(sum((e.props->>'orbis/amount')::numeric), 0)::text AS total
     FROM entities e
-    WHERE e.owner_id = ${ownerId} AND NOT e.archived
+    WHERE e.graph_id = ${graphId} AND NOT e.archived
       AND 'orbis/financial' = ANY(e.aspects)
       AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
       AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
@@ -478,7 +478,7 @@ export async function computeOverview(
     SELECT e.props->>'orbis/finance_category' AS category_id,
            sum((e.props->>'orbis/amount')::numeric)::text AS total
     FROM entities e
-    WHERE e.owner_id = ${ownerId} AND NOT e.archived
+    WHERE e.graph_id = ${graphId} AND NOT e.archived
       AND 'orbis/financial' = ANY(e.aspects)
       AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
       AND e.props->>'orbis/direction' = 'expense'
@@ -504,7 +504,7 @@ export async function computeOverview(
     .from(entities)
     .where(
       and(
-        eq(entities.ownerId, ownerId),
+        eq(entities.graphId, graphId),
         eq(entities.archived, false),
         sql`'orbis/financial' = ANY(${entities.aspects})`,
         sql`coalesce((${entities.props}->>'orbis/planned')::boolean, false)`,
@@ -522,7 +522,7 @@ export async function computeOverview(
     .from(entities)
     .where(
       and(
-        eq(entities.ownerId, ownerId),
+        eq(entities.graphId, graphId),
         eq(entities.archived, false),
         sql`'orbis/financial' = ANY(${entities.aspects})`,
         sql`coalesce((${entities.props}->>'orbis/planned')::boolean, false)`,
@@ -548,7 +548,7 @@ export async function computeOverview(
   // Агрегация — поверх СЫРЫХ значений (потомки рекурсивно все, двойного счёта нет)
   // и ТОЛЬКО в валюте родительского конверта (fix round: чужая валюта не искажает
   // агрегаты, §5 — суммировать RUB- и USD-строки без конверсии нельзя).
-  const edges = await categoryEdges(tx, ownerId);
+  const edges = await categoryEdges(tx, graphId);
   const statuses = raws.map((raw) => {
     let spent = raw.spent;
     let effectiveLimit = raw.effectiveLimit;
@@ -622,12 +622,12 @@ export async function computeOverview(
 // ---------------------------------------------------------------------------
 
 /** Конвейер §2.8 перед агрегатами: due-переходы + материализация окна [today; +14]. */
-async function preparePeriod(db: Db, ownerId: string, clock: Clock): Promise<string> {
-  const today = await localToday(db, ownerId, clock);
-  await postDueInstances({ db, ownerId, today });
+async function preparePeriod(db: Db, graphId: string, clock: Clock): Promise<string> {
+  const today = await localToday(db, graphId, clock);
+  await postDueInstances({ db, graphId, today });
   await materializeInstances({
     db,
-    ownerId,
+    graphId,
     from: today,
     to: addDays(today, HORIZON_DAYS),
     today,
@@ -638,24 +638,24 @@ async function preparePeriod(db: Db, ownerId: string, clock: Clock): Promise<str
 /** Снимок реестра и разобранная декларация Budget на уже открытой tx — общая половина всех пяти
  *  обёрток. Второго источника декларации у них нет: разойдись он с реестром транзакции, и бейдж
  *  считался бы по одному порогу, а карточка по другому. */
-async function budgetDefOf(tx: Tx, ownerId: string) {
-  const reg = await effectiveRegistry(tx, ownerId);
+async function budgetDefOf(tx: Tx, graphId: string) {
+  const reg = await effectiveRegistry(tx, graphId);
   return { reg, def: builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription };
 }
 
 /** BudgetOverview месяца (§3.1); month опционален — текущий месяц пользователя. */
 export async function budgetOverview(
   db: Db,
-  ownerId: string,
+  graphId: string,
   month?: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<BudgetOverview> {
   // Конвейер §2.8 — ВНЕ подписки: §Б5-4 про ведомости, а не про материализацию.
-  const today = await preparePeriod(db, ownerId, clock);
+  const today = await preparePeriod(db, graphId, clock);
   const m = month ?? today.slice(0, 7);
-  return withIdentity(db, ownerId, async (tx) => {
-    const { reg, def } = await budgetDefOf(tx, ownerId);
-    return budgetOverviewOf(tx, ownerId, { month: m, today }, def, reg);
+  return withIdentity(db, graphId, async (tx) => {
+    const { reg, def } = await budgetDefOf(tx, graphId);
+    return budgetOverviewOf(tx, graphId, { month: m, today }, def, reg);
   });
 }
 
@@ -667,14 +667,14 @@ export async function budgetOverview(
  */
 export async function budgetAlertCount(
   db: Db,
-  ownerId: string,
+  graphId: string,
   month?: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<number> {
-  return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId, clock);
-    const { reg, def } = await budgetDefOf(tx, ownerId);
-    return budgetAlertCountOf(tx, ownerId, { month: month ?? today.slice(0, 7), today }, def, reg);
+  return withIdentity(db, graphId, async (tx) => {
+    const today = await localTodayTx(tx, graphId, clock);
+    const { reg, def } = await budgetDefOf(tx, graphId);
+    return budgetAlertCountOf(tx, graphId, { month: month ?? today.slice(0, 7), today }, def, reg);
   });
 }
 
@@ -685,15 +685,15 @@ export async function budgetAlertCount(
  */
 export async function budgetStatus(
   db: Db,
-  ownerId: string,
+  graphId: string,
   month?: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<BudgetStatusResult> {
-  const today = await preparePeriod(db, ownerId, clock);
+  const today = await preparePeriod(db, graphId, clock);
   const m = month ?? today.slice(0, 7);
-  return withIdentity(db, ownerId, async (tx) => {
-    const { reg, def } = await budgetDefOf(tx, ownerId);
-    return budgetStatusOf(tx, ownerId, { month: m, today }, def, reg);
+  return withIdentity(db, graphId, async (tx) => {
+    const { reg, def } = await budgetDefOf(tx, graphId);
+    return budgetStatusOf(tx, graphId, { month: m, today }, def, reg);
   });
 }
 
@@ -705,14 +705,14 @@ export async function budgetStatus(
  */
 export async function envelopeForCategory(
   db: Db,
-  ownerId: string,
+  graphId: string,
   args: { categoryId: string; date: string },
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<EnvelopeStatus | null> {
-  return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId, clock);
-    const { reg, def } = await budgetDefOf(tx, ownerId);
-    return envelopeForCategoryOf(tx, ownerId, { ...args, today }, def, reg);
+  return withIdentity(db, graphId, async (tx) => {
+    const today = await localTodayTx(tx, graphId, clock);
+    const { reg, def } = await budgetDefOf(tx, graphId);
+    return envelopeForCategoryOf(tx, graphId, { ...args, today }, def, reg);
   });
 }
 
@@ -729,14 +729,14 @@ export async function envelopeForCategory(
  */
 export async function categoryTrend(
   db: Db,
-  ownerId: string,
+  graphId: string,
   args: { categoryId: string; months: number },
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<CategoryTrendPoint[]> {
-  return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId, clock);
-    const { reg, def } = await budgetDefOf(tx, ownerId);
-    return categoryTrendOf(tx, ownerId, { ...args, today }, def, reg);
+  return withIdentity(db, graphId, async (tx) => {
+    const today = await localTodayTx(tx, graphId, clock);
+    const { reg, def } = await budgetDefOf(tx, graphId);
+    return categoryTrendOf(tx, graphId, { ...args, today }, def, reg);
   });
 }
 
@@ -788,13 +788,13 @@ function decCeilToHundred(amount: string): string {
  */
 export async function rolloverPreview(
   db: Db,
-  ownerId: string,
+  graphId: string,
   month: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<RolloverPreview> {
-  return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId, clock);
-    const defCur = await defaultCurrencyOf(tx, ownerId);
+  return withIdentity(db, graphId, async (tx) => {
+    const today = await localTodayTx(tx, graphId, clock);
+    const defCur = await defaultCurrencyOf(tx, graphId);
     const prevRange = monthRange(shiftMonth(month, -1));
     const targetRange = monthRange(month);
 
@@ -804,7 +804,7 @@ export async function rolloverPreview(
       .from(entities)
       .where(
         and(
-          eq(entities.ownerId, ownerId),
+          eq(entities.graphId, graphId),
           eq(entities.archived, false),
           sql`'orbis/budget' = ANY(${entities.aspects})`,
           sql`${entities.props}->>'orbis/period_start' = ${prevRange.start}`,
@@ -817,7 +817,7 @@ export async function rolloverPreview(
     const succRows = (await tx.execute(sql`
       SELECT DISTINCT props->>'orbis/finance_category' AS category_id
       FROM entities
-      WHERE owner_id = ${ownerId} AND NOT archived
+      WHERE graph_id = ${graphId} AND NOT archived
         AND 'orbis/budget' = ANY(aspects)
         AND props->>'orbis/period_start' = ${targetRange.start}
         AND props->>'orbis/period_end' = ${targetRange.end}
@@ -827,7 +827,7 @@ export async function rolloverPreview(
 
     const spentMap = await spentByEnvelope(
       tx,
-      ownerId,
+      graphId,
       prevEnvs.map((r) => r.id),
       today,
       defCur,
@@ -869,7 +869,7 @@ export async function rolloverPreview(
       SELECT e.props->>'orbis/finance_category' AS category_id,
              sum((e.props->>'orbis/amount')::numeric)::text AS total
       FROM entities e
-      WHERE e.owner_id = ${ownerId} AND NOT e.archived
+      WHERE e.graph_id = ${graphId} AND NOT e.archived
         AND 'orbis/financial' = ANY(e.aspects)
         AND e.props->>'orbis/finance_category' IS NOT NULL
         AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
@@ -881,7 +881,7 @@ export async function rolloverPreview(
         AND coalesce(e.props->>'orbis/currency', ${defCur}) = ${defCur}
         AND NOT EXISTS (
           SELECT 1 FROM entities env
-          WHERE env.owner_id = ${ownerId} AND NOT env.archived
+          WHERE env.graph_id = ${graphId} AND NOT env.archived
             AND 'orbis/budget' = ANY(env.aspects)
             AND env.props->>'orbis/finance_category' = e.props->>'orbis/finance_category'
             AND coalesce(env.props->>'orbis/currency', ${defCur}) = ${defCur}
@@ -950,7 +950,7 @@ export async function rolloverPreview(
  */
 export async function rolloverCreate(
   db: Db,
-  ownerId: string,
+  graphId: string,
   input: RolloverInput,
 ): Promise<RolloverResult> {
   const seen = new Set<string>();
@@ -966,13 +966,13 @@ export async function rolloverCreate(
   }
 
   const { start, end } = monthRange(input.month);
-  const auditId = batchAuditMessageId(ownerId, input.batchId);
+  const auditId = batchAuditMessageId(graphId, input.batchId);
   const categoryIds = input.rows.map((r) => r.categoryId);
 
   // Фаза чтения: replay-детект, defaultCurrency, титулы, пречек преемников
-  const { defCur, catMap } = await withIdentity(db, ownerId, async (tx) => {
+  const { defCur, catMap } = await withIdentity(db, graphId, async (tx) => {
     const replay = (await rolloverSink.findByAuditId(tx, auditId)) !== undefined;
-    const currency = await defaultCurrencyOf(tx, ownerId);
+    const currency = await defaultCurrencyOf(tx, graphId);
     // Р12: правило перехода остаётся КОДОМ (§Б4-3 — это не агрегат), а декларация несёт его
     // ПАРАМЕТРЫ. Снимок читается ТУТ ЖЕ, а не приходит параметром: фаза чтения уже держит tx, и
     // второй источник декларации разошёлся бы с тем реестром, по которому исполнитель проверит
@@ -980,7 +980,7 @@ export async function rolloverCreate(
     // потому что здесь она стоит владельцу денег на счёте.
     const roll = (
       builtinSubscription(
-        await effectiveRegistry(tx, ownerId),
+        await effectiveRegistry(tx, graphId),
         BUDGET_SUBSCRIPTION_ID,
       ) as BudgetSubscription
     ).rollover;
@@ -1006,7 +1006,7 @@ export async function rolloverCreate(
       const succ = (await tx.execute(sql`
         SELECT DISTINCT props->>'orbis/finance_category' AS category_id
         FROM entities
-        WHERE owner_id = ${ownerId} AND NOT archived
+        WHERE graph_id = ${graphId} AND NOT archived
           AND 'orbis/budget' = ANY(aspects)
           AND props->>'orbis/finance_category' IN (${list})
           AND props->>'orbis/period_start' = ${start}
@@ -1028,7 +1028,7 @@ export async function rolloverCreate(
   });
 
   const request: ExecuteRequest = {
-    actorUserId: ownerId,
+    actorUserId: graphId,
     actorKind: 'owner',
     source: 'ui', // подтверждённое действие владельца на экране Rollover (§3.5)
     // Механизм — правило каталога (§А4-4): перенос остатка пишет `orbis/carryover`, и

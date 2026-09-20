@@ -69,7 +69,7 @@ function snapshot(): RegistrySnapshot {
 function row(definition: unknown, over: Partial<SubscriptionRow> = {}): SubscriptionRow {
   return {
     id: 'orbis/agenda',
-    ownerId: null,
+    graphId: null,
     surface: 'planner/agenda',
     definition,
     module: null,
@@ -251,7 +251,7 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
     const where = { op: 'and', args: [AGENDA_DEF.overdue.where, { has: 'orbis/task_status' }] };
     const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
     expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
-    const own = assertSubscription(row(def, { ownerId: freshUserId() }), {
+    const own = assertSubscription(row(def, { graphId: freshUserId() }), {
       reg: snapshot(),
       systemSeed: false,
     });
@@ -267,7 +267,7 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
     };
     const def = { ...AGENDA_DEF, overdue: { ...AGENDA_DEF.overdue, where } };
     expect(refusal(() => assertSubscription(row(def), seed)).code).toBe('SUBSCRIPTION_RAW_REF');
-    const own = assertSubscription(row(def, { ownerId: freshUserId() }), {
+    const own = assertSubscription(row(def, { graphId: freshUserId() }), {
       reg: snapshot(),
       systemSeed: false,
     });
@@ -592,7 +592,7 @@ describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с
   });
   test('кривая строка subscription_definitions роняет чтение реестра, а не проезжает молча', async () => {
     const { db: admin, client: ac } = adminDb();
-    await admin.execute(sql`INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
+    await admin.execute(sql`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
       VALUES ('user/broken', ${owner}::uuid, 'planner/agenda', '{"engine":"agenda"}'::jsonb, NULL, 1)`);
     await ac.end();
     await expect(withIdentity(db, owner, (tx) => loadRegistryRows(tx, owner))).rejects.toThrow();

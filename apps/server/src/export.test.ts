@@ -1,7 +1,7 @@
 // apps/server/src/export.test.ts
 // Интеграционные тесты Task 13: экспорт графа (01 §9.4, §С5, D8) через createCallerFactory.
 // Все чтения — одним withIdentity-tx, RLS ограничивает владельцем; встроенные строки
-// реестров НЕ экспортируются (только owner_id = актор).
+// реестров НЕ экспортируются (только graph_id = актор).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   aspectDefinitionSchema,
@@ -99,14 +99,14 @@ describe('user.exportData (§9.4)', () => {
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(sql`
-        INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+        INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
         VALUES (${propertyId}, ${user}::uuid, 'user/sleep-hours',
                 ${JSON.stringify({ ru: 'Часов сна', en: 'Sleep hours' })}::jsonb,
                 ${JSON.stringify({ ru: 'Сколько спал', en: 'How long the sleep was' })}::jsonb,
                 ${JSON.stringify({ kind: 'number' })}::jsonb, 1000)`);
       await admin.execute(sql`
         INSERT INTO aspect_definitions
-          (id, owner_id, key, label, description, properties, tag_mappings, view_config, rank)
+          (id, graph_id, key, label, description, properties, tag_mappings, view_config, rank)
         VALUES (${aspectId}, ${user}::uuid, 'user/sleep-log',
                 ${JSON.stringify({ ru: 'Сон', en: 'Sleep' })}::jsonb,
                 ${JSON.stringify({ ru: 'Запись о сне', en: 'A sleep record' })}::jsonb,
@@ -114,7 +114,7 @@ describe('user.exportData (§9.4)', () => {
                 '{}'::text[], ${JSON.stringify({ keyFields: [propertyId] })}::jsonb, 1000)`);
       await admin.execute(sql`
         INSERT INTO relation_role_definitions
-          (id, owner_id, key, label, description, source_label, target_label, rank)
+          (id, graph_id, key, label, description, source_label, target_label, rank)
         VALUES (${roleId}, ${user}::uuid, 'sleeps-after',
                 ${JSON.stringify({ ru: 'Сон после', en: 'Sleeps after' })}::jsonb,
                 ${JSON.stringify({ ru: 'Своя роль владельца', en: "The owner's own role" })}::jsonb,
@@ -137,7 +137,7 @@ describe('user.exportData (§9.4)', () => {
       ...exp.aspectDefinitions,
       ...exp.relationRoleDefinitions,
     ]) {
-      expect(row.ownerId).toBe(user);
+      expect(row.graphId).toBe(user);
     }
 
     for (const row of exp.propertyDefinitions) {

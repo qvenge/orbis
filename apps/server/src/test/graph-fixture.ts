@@ -124,7 +124,7 @@ function entityRow(level: number, index: number): typeof entities.$inferInsert {
   if (level <= 1) aspects.push('orbis/project');
   return {
     id: graphNodeId(level, index),
-    ownerId: GRAPH_OWNER_ID,
+    graphId: GRAPH_OWNER_ID,
     title: `Узел ${level}.${index}`,
     body: '',
     tags: [],
@@ -151,10 +151,10 @@ async function countRows(
   db: ReturnType<typeof adminDb>['db'],
 ): Promise<{ entities: number; relations: number }> {
   const rows = (await db.execute(sql`
-    SELECT (SELECT count(*) FROM entities WHERE owner_id = ${GRAPH_OWNER_ID}::uuid) AS e,
+    SELECT (SELECT count(*) FROM entities WHERE graph_id = ${GRAPH_OWNER_ID}::uuid) AS e,
            (SELECT count(*) FROM relations r
               JOIN entities s ON s.id = r.source_id
-             WHERE s.owner_id = ${GRAPH_OWNER_ID}::uuid) AS r`)) as unknown as Array<{
+             WHERE s.graph_id = ${GRAPH_OWNER_ID}::uuid) AS r`)) as unknown as Array<{
     e: string;
     r: string;
   }>;
@@ -179,7 +179,7 @@ export async function ensureGraphFixture(): Promise<{
     }
     // Неполный корпус — не «досеваем», а пересеваем: досев ЛЮБОЙ формы обязан знать, какие
     // именно строки уже есть, а знать этого он не может — прошлый прогон могли оборвать.
-    await db.execute(sql`DELETE FROM entities WHERE owner_id = ${GRAPH_OWNER_ID}::uuid`);
+    await db.execute(sql`DELETE FROM entities WHERE graph_id = ${GRAPH_OWNER_ID}::uuid`);
 
     const rows: (typeof entities.$inferInsert)[] = [];
     for (const [level, size] of LEVEL_SIZES.entries()) {

@@ -5,6 +5,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { setDraftScope } from './draft-storage';
 import { SaveIndicator } from './SaveIndicator';
 import { type BodySave, type BodySaveEntity, useBodySave } from './useBodySave';
 
@@ -14,7 +15,7 @@ installCrashTrap();
 
 // --- стенд ----------------------------------------------------------------------------------
 
-/** Владелец записи: черновики скоупятся по нему (см. KEY). */
+/** Аккаунт сессии: черновики скоупятся по нему (см. KEY). */
 const OWNER = 'u1';
 
 /**
@@ -32,19 +33,16 @@ const THREE = parseBody('совсем другое тело');
 
 /** Сущность на момент открытия: `updatedAt` намеренно далёк от системного времени прогона. */
 const ENTITY: BodySaveEntity = {
-  ownerId: OWNER,
   updatedAt: '2026-08-14T10:00:00.000Z',
   bodyDoc: BASE,
 };
 /** Соседняя запись: её `updatedAt` РАНЬШЕ всего, что вернёт сервер по первой. */
 const SECOND: BodySaveEntity = {
-  ownerId: OWNER,
   updatedAt: '2026-08-14T10:30:00.000Z',
   bodyDoc: BASE,
 };
 /** Та же запись, но сервер её с тех пор двигали: метка ПОЗЖЕ той, на которой набран черновик. */
 const MOVED: BodySaveEntity = {
-  ownerId: OWNER,
   updatedAt: '2026-08-14T12:00:00.000Z',
   bodyDoc: THREE,
 };
@@ -203,6 +201,10 @@ async function leaveDraft(doc: BodyDoc = ONE): Promise<void> {
 
 beforeEach(() => {
   localStorage.clear();
+  // Скоуп черновиков ставит AuthProvider из сессии (`session.userId`), а не запись: ключ записи
+  // — граф, а черновик принадлежит аккаунту за этим браузером (D44). Стенд поднимает хук без
+  // провайдера, поэтому аккаунт сессии объявляется здесь — тем же вызовом, что и в бою.
+  setDraftScope(OWNER);
   vi.useFakeTimers().setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
   return () => {
     vi.useRealTimers();
@@ -291,7 +293,7 @@ test('успех по прежней записи стирает ЕЁ черно
   );
   await s.set({
     id: 'e2',
-    entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+    entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
   });
   await server.answer(0, SAVED);
 
@@ -377,7 +379,7 @@ test('черновик, уже совпавший с телом записи, н
   // ловит это раньше сети.
   await leaveDraft();
 
-  const s = mount({ entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
   expect(s.updates()).toEqual([]);
   expect(raw()).toBeNull(); // и с диска снят: держать его больше незачем
@@ -488,7 +490,7 @@ test('черновик чужой сущности не подставляетс
   // автодосылом — молча и в чужое тело.
   const other = mount({
     id: 'e2',
-    entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: THREE },
+    entity: { updatedAt: ENTITY.updatedAt, bodyDoc: THREE },
   });
   await tick(SAVE_PAUSE * 2);
   expect(other.updates()).toEqual([]);
@@ -510,7 +512,7 @@ test('смена записи гасит предложенный чернови
 
   await s.set({
     id: 'e2',
-    entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+    entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
   });
   await tick();
   expect(s.api().pendingDraft).toBeNull();
@@ -809,19 +811,21 @@ function agedDraft(days: number, doc: BodyDoc = ONE): string {
 }
 
 test('черновик соседнего аккаунта не подставляется и не досылается', async () => {
-  // Браузер бывает общим. Не скоупь мы ключ по владельцу — следующий залогинившийся аккаунт
+  // Браузер бывает общим. Не скоупь мы ключ по аккаунту — следующий залогинившийся аккаунт
   // увидел бы чужую неотправленную заметку в баннере, а при совпавших метках дослал бы её на
   // сервер от своего имени. Тот же приём и по той же причине, что у retry-буфера.
   await leaveDraft();
 
-  const other = mount({ entity: { ...ENTITY, ownerId: 'u2' } });
+  setDraftScope('u2');
+  const other = mount({ entity: ENTITY });
   await tick(SAVE_PAUSE * 2);
   expect(other.updates()).toEqual([]);
   expect(other.api().pendingDraft).toBeNull();
-  expect(raw(), 'черновик первого владельца цел — он просто не виден второму').not.toBeNull();
+  expect(raw(), 'черновик первого аккаунта цел — он просто не виден второму').not.toBeNull();
   await other.unmount();
 
-  // Положительный контроль: своему владельцу тот же черновик виден и уезжает автодосылом.
+  // Положительный контроль: своему аккаунту тот же черновик виден и уезжает автодосылом.
+  setDraftScope(OWNER);
   const own = mount({ entity: ENTITY });
   await tick();
   expect(own.updates()).toHaveLength(1);
@@ -1188,7 +1192,7 @@ test('черновик, уже лежащий в теле записи, не п�
   // который уже в базе.
   await leaveDraft();
 
-  const s = mount({ entity: { ownerId: OWNER, updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
   expect(s.api().pendingDraft).toBeNull();
   expect(s.updates()).toEqual([]);
@@ -1200,7 +1204,7 @@ test('черновик, уже лежащий в теле записи, не п�
   // Положительный контроль: черновик, ОТЛИЧНЫЙ от тела, при тех же метках предлагается.
   await s.unmount();
   await leaveDraft(TWO);
-  const other = mount({ entity: { ownerId: OWNER, updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const other = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
   await tick();
   expect(other.api().pendingDraft?.doc).toEqual(TWO);
 });
@@ -1425,7 +1429,7 @@ test('терминальный отказ брошенного запроса н
   await s.unmount();
 
   // И на следующем открытии он уезжает автодосылом, как всякий непомеченный.
-  const back = mount({ entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: BASE } });
+  const back = mount({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: BASE } });
   await tick();
   expect(back.updates()).toHaveLength(1);
   expect((back.input(0) as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);
@@ -1542,7 +1546,7 @@ test('перештамповка идёт ДО сверки с телом: те�
   // ПОСЛЕ неё, она не срабатывала бы никогда, и человека спрашивали бы про текст из базы.
   seed(OLD, 'СТАРАЯ-МЕТКА');
 
-  const s = mount({ entity: { ownerId: OWNER, updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
 
   expect(s.api().pendingDraft).toBeNull();

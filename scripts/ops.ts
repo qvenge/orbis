@@ -164,7 +164,7 @@ async function check(): Promise<number> {
       read.deltaRows.map(
         (r): RegistryDeltaRow => ({
           id: r.id as string,
-          ownerId: r.owner_id as string,
+          graphId: r.graph_id as string,
           targetKind: r.target_kind as RegistryDeltaRow['targetKind'],
           targetId: r.target_id as string,
           baseVersion: r.base_version as number,
@@ -393,7 +393,7 @@ async function auditBodiesOp(): Promise<number> {
     if (!who.bypassRls) {
       console.error(
         `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
-          '\nс политикой owner_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
+          '\nс политикой graph_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
           '\nпоэтому такая роль видит НОЛЬ строк — и нули выше означают «корпус НЕ ВИДЕН»,' +
           '\nа НЕ «корпус здоров». Нужен DSN роли с BYPASSRLS (на Supabase — postgres).',
       );
@@ -451,7 +451,7 @@ async function backfillBodyDocOp(): Promise<number> {
               '\n(или ленивая конверсия при первом чтении). Если же и остаток, и сконвертировано' +
               '\nнулевые — корпус либо уже сконвертирован, либо пуст; сверь с `audit-bodies`.'
           : `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
-              '\nс политикой owner_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
+              '\nс политикой graph_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
               '\nпоэтому такая роль видит НОЛЬ строк — и нули выше означают «корпус НЕ ВИДЕН»,' +
               '\nа НЕ «корпус сконвертирован». Нужен DSN роли с BYPASSRLS (на Supabase — postgres).',
       );
@@ -561,7 +561,7 @@ async function issuePat(args: string[]): Promise<number> {
     );
     return 2;
   }
-  const { ownerId, label, scope } = parsed;
+  const { graphId, label, scope } = parsed;
   return withDb(async (sql) => {
     // Проверка владельца ДО выдачи. Опечатка в UUID иначе дала бы живой токен
     // несуществующего владельца: аутентификация им прошла бы, а агент молча видел бы
@@ -569,15 +569,15 @@ async function issuePat(args: string[]): Promise<number> {
     // проверки нет намеренно: там auth.users пуст ровно до первого входа, и гейт мешал бы
     // готовить стенд. Здесь же цена ошибки — мёртвый доступ в проде.
     const [owner] = await sql<{ ok: number }[]>`
-      SELECT 1 AS ok FROM auth.users WHERE id = ${ownerId}::uuid`;
+      SELECT 1 AS ok FROM auth.users WHERE id = ${graphId}::uuid`;
     if (!owner) {
       console.error(
-        `issue-pat: пользователя ${ownerId} нет в auth.users — токен не выдан.\n` +
+        `issue-pat: пользователя ${graphId} нет в auth.users — токен не выдан.\n` +
           'UUID берётся в Supabase → Authentication → Users.',
       );
       return 2;
     }
-    const token = await issuePatGrant(drizzle(sql, { schema }), { ownerId, label, scope });
+    const token = await issuePatGrant(drizzle(sql, { schema }), { graphId, label, scope });
     console.log(
       `Токен выдан («${label}», область ${scope}). Показывается ОДИН раз — сохрани его сейчас:`,
     );

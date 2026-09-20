@@ -469,7 +469,7 @@ async function plannedProposed(title: string, routineId?: string): Promise<Plann
   plannedSeq += 1;
   const bucket = `2026-08-${String((plannedSeq % 28) + 1).padStart(2, '0')}T07:00`;
   const started = await startBucketRun(deps(), {
-    ownerId: owner,
+    graphId: owner,
     routine: { id: rid, title: routineTitle },
     bucket,
   });
@@ -478,7 +478,7 @@ async function plannedProposed(title: string, routineId?: string): Promise<Plann
   const routine = await withIdentity(db, owner, (tx) => routineById(tx, rid));
   if (routine === null) throw new Error('рутина не найдена');
   const provider = new ScriptedProvider([toolUse([proposeCall(runId, taskId)])]);
-  const end = await runRoutineRun(deps(provider), { ownerId: owner, routine, runId, bucket });
+  const end = await runRoutineRun(deps(provider), { graphId: owner, routine, runId, bucket });
   expect(end).toEqual({ outcome: 'finished' });
   const aspect = await runAspect(runId);
   const pendingId = aspect['orbis/run_proposal']?.pending_id;
@@ -875,7 +875,7 @@ describe('routine.proposal / decideProposal', () => {
 
   test('предложение, погашенное новым прогоном, решению не поддаётся → already со статусом superseded', async () => {
     const { routineId, taskId, runId, pendingId } = await proposed('Записаться к врачу');
-    await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newId() });
+    await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newId() });
     expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('superseded');
 
     expect(
@@ -1852,7 +1852,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
 
     // Слот отработан: архивный терминальный прогон занимает его — ретрая нет
     const slot = await startBucketRun(deps(), {
-      ownerId: owner,
+      graphId: owner,
       routine: { id: routineId, title: routineTitle },
       bucket,
     });
@@ -2543,7 +2543,7 @@ describe('routine.answerQuestion: вопрос пачки (приёмка 5, В2
       bucket: '2026-08-18T07:00',
       startedAt: new Date(T0.getTime() + 24 * 3600_000),
     });
-    await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newId() });
+    await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newId() });
 
     expect(await callerLater().routine.answerQuestion({ pendingId, answer: 'Да' })).toEqual({
       status: 'stale',
@@ -2608,7 +2608,7 @@ describe('routine.answerQuestion: вопрос пачки (приёмка 5, В2
     // metadata НАВСЕГДА: там его не исправить ни правкой, ни повторным ответом
     const failed = await answerRunQuestion(
       { db, clock: () => LATER },
-      { ownerId: owner, pendingId, answer: 'А', option: -1 },
+      { graphId: owner, pendingId, answer: 'А', option: -1 },
     ).then(
       () => null,
       (e: unknown) => e,

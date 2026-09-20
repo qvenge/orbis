@@ -76,7 +76,7 @@ function row(over: Partial<PropertyRow> & Pick<PropertyRow, 'id' | 'key'>): Prop
     description: { ru: over.key },
     status: 'active',
     merged_into: null,
-    owner_id: OWNER,
+    graph_id: OWNER,
     ...over,
   };
 }
@@ -104,7 +104,7 @@ const FIXTURE: PropertyRow[] = [
   row({
     id: 'orbis/task_status',
     key: 'orbis/task_status',
-    owner_id: null,
+    graph_id: null,
     label: { ru: 'Состояние задачи' },
     description: { ru: 'Стадия работы над задачей' },
   }),
@@ -112,14 +112,14 @@ const FIXTURE: PropertyRow[] = [
   row({
     id: 'orbis/period_start',
     key: 'orbis/period_start',
-    owner_id: null,
+    graph_id: null,
     label: { ru: 'Начало периода' },
     description: { ru: 'Первый день периода бюджета' },
   }),
   row({
     id: 'orbis/period_end',
     key: 'orbis/period_end',
-    owner_id: null,
+    graph_id: null,
     label: { ru: 'Конец периода' },
     description: { ru: 'Последний день периода бюджета' },
   }),

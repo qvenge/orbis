@@ -91,7 +91,7 @@ export interface RoutineContextRoutine {
 }
 
 export interface BuildRoutineContextInput {
-  ownerId: string;
+  graphId: string;
   routine: RoutineContextRoutine;
   run: { id: string; bucket: string };
   history: RoutineHistoryItem[];
@@ -287,7 +287,7 @@ export async function buildRoutineContext(
     // Дата — сразу за промптом, как и в чате (§Б7-6-1): рутина работает со «сроком
     // сегодня» и «просрочено», и без даты считала бы их от даты обучения модели.
     // Переставлять из-за неё нечего: блока продолжений у раннера нет.
-    await todaySectionFor(tx, input.ownerId, (input.clock ?? (() => new Date()))()),
+    await todaySectionFor(tx, input.graphId, (input.clock ?? (() => new Date()))()),
     routineModeSection({
       mode: routine.props[ROUTINE_MODE_PROPERTY],
       allowedTools: routine.props[ROUTINE_TOOLS_PROPERTY] ?? [],
@@ -300,7 +300,7 @@ export async function buildRoutineContext(
   // умолчания у параметра нет намеренно — оно оставило бы фон без маски молча.
   const instructions = await aspectInstructionsSection(
     tx,
-    await disabledModulesOf(tx, input.ownerId),
+    await disabledModulesOf(tx, input.graphId),
   );
   if (instructions !== null) sections.push(instructions);
 
@@ -311,7 +311,7 @@ export async function buildRoutineContext(
 
   // Якорь — сама рутина (V1.5): её тело и есть задание, поэтому приезжает целиком
   sections.push(
-    await anchorBlock(tx, input.ownerId, routine.id, {
+    await anchorBlock(tx, input.graphId, routine.id, {
       intro: 'Рутина, которая сработала — работай по ней:',
       instruction: true,
     }),

@@ -39,7 +39,7 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
     const id = crypto.randomUUID();
     await withIdentity(db, userA, async (tx) => {
       await tx.execute(
-        sql`INSERT INTO entities (id, owner_id, title) VALUES (${id}, ${userA}, 'своя')`,
+        sql`INSERT INTO entities (id, graph_id, title) VALUES (${id}, ${userA}, 'своя')`,
       );
     });
     const mine = await withIdentity(db, userA, async (tx) =>
@@ -67,7 +67,7 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
     await expect(
       withIdentity(db, userA, async (tx) => {
         await tx.execute(
-          sql`INSERT INTO entities (id, owner_id, title) VALUES (${id}, ${userA}, 'x')`,
+          sql`INSERT INTO entities (id, graph_id, title) VALUES (${id}, ${userA}, 'x')`,
         );
         throw new Error('boom');
       }),

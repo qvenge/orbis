@@ -100,7 +100,7 @@ async function mergedIntoOf(owner: string, id: string): Promise<unknown> {
   const rows = (await withIdentity(db, owner, (tx) =>
     tx.execute(
       sql`SELECT merged_into FROM property_definitions
-           WHERE owner_id = ${owner}::uuid AND id = ${id}`,
+           WHERE graph_id = ${owner}::uuid AND id = ${id}`,
     ),
   )) as unknown as Array<{ merged_into: unknown }>;
   return rows[0]?.merged_into ?? null;
@@ -110,7 +110,7 @@ async function mergedIntoOf(owner: string, id: string): Promise<unknown> {
 async function routineRows(owner: string): Promise<Array<{ id: string; title: string }>> {
   return (await withIdentity(db, owner, (tx) =>
     tx.execute(sql`SELECT id, title FROM entities
-                    WHERE owner_id = ${owner}::uuid AND aspects @> ARRAY['orbis/routine']::text[]
+                    WHERE graph_id = ${owner}::uuid AND aspects @> ARRAY['orbis/routine']::text[]
                     ORDER BY created_at`),
   )) as unknown as Array<{ id: string; title: string }>;
 }
@@ -153,7 +153,7 @@ async function runGardener(
   if (routine === null) throw new Error('садовник не найден — сид не отработал');
   const end = await runRoutineRun(
     { db, provider, model: MODEL, clock: () => T0 },
-    { ownerId: owner, routine: routine satisfies RoutineRow, runId, bucket },
+    { graphId: owner, routine: routine satisfies RoutineRow, runId, bucket },
   );
   const threadId = await withIdentity(db, owner, (tx) => ensureEntityThread(tx, owner, routineId));
   const run = (await propsOf(owner, runId)) as unknown as RunProps;
@@ -233,7 +233,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
     const msgs = (await withIdentity(db, owner, (tx) =>
       tx.execute(sql`SELECT count(*)::int AS n FROM chat_messages m
                       JOIN chat_threads t ON t.id = m.thread_id
-                     WHERE t.owner_id = ${owner}::uuid`),
+                     WHERE t.graph_id = ${owner}::uuid`),
     )) as unknown as Array<{ n: number }>;
     expect(Number(msgs[0]?.n)).toBe(0);
   });

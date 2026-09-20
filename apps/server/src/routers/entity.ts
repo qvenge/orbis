@@ -269,7 +269,7 @@ export const entityRouter = router({
       // хуков в executor'е нет — вызов идёт ЗДЕСЬ, после успешного execute, отдельной
       // транзакцией. Своей ошибки наружу не отдаёт: правка категории уже закоммичена.
       await escalateAfterMutation(ctx.db, {
-        ownerId: ctx.actorUserId,
+        graphId: ctx.actorUserId,
         actionId: r.actionId,
         operations: [{ tool: 'entity_update', input }],
       });
@@ -335,7 +335,7 @@ export const entityRouter = router({
    * Поиск сущности по заголовку для `/`-меню, @-упоминаний и пикеров. Грамматику `search=`
    * (§6.1) не трогаем: там семантика ЦЕЛОГО слова осмысленна и на неё завязаны сидированные
    * смарт-листы, а меню, не находящее по началу набранного слова, бесполезно. RLS скоупит
-   * выдачу владельцем (§4.10) — своего owner_id в WHERE нет намеренно, источник правды о
+   * выдачу владельцем (§4.10) — своего graph_id в WHERE нет намеренно, источник правды о
    * видимости один.
    *
    * Сопоставление — по ВХОЖДЕНИЮ (`%фрагмент%`), а не по началу заголовка: якорь отнимал бы
@@ -353,7 +353,7 @@ export const entityRouter = router({
    * миграции 0007 убран, он только дорожал бы на каждой правке заголовка. Ровно та же участь
    * у GIN entities_title_fts под живущим в проде `search=` (to_tsvector/ts_match_vq тоже не
    * leakproof) — это свойство схемы, а не беда этой процедуры. Фактически план опирается на
-   * entities_owner_updated (owner_id, updated_at DESC) WHERE NOT archived, то есть стоимость
+   * entities_graph_updated (graph_id, updated_at DESC) WHERE NOT archived, то есть стоимость
    * линейна по числу сущностей ВЛАДЕЛЬЦА, а не всей таблицы. Путь на будущее, если счёт
    * сущностей вырастет, — хранимая колонка lower(title) с btree text_pattern_ops и запрос
    * явным диапазоном: операторы диапазона по КОЛОНКЕ leakproof, и квал снова станет

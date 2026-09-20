@@ -10,7 +10,7 @@
 // `explain: корпус …`, а засевает его та же фикстура, что и перф-гейт).
 //
 // ПОЧЕМУ ПОД РОЛЬЮ ПРИЛОЖЕНИЯ, А НЕ ПОД АДМИН-DSN. Роль без `BYPASSRLS` получает поверх
-// запроса политику `owner_owns_row` (`owner_id = (SELECT auth.uid())`), и планировщик видит
+// запроса политику `owner_owns_row` (`graph_id = (SELECT auth.uid())`), и планировщик видит
 // ДРУГОЙ запрос: у него появляется второй отбор, меняется оценка селективности, а вместе с
 // ней — и выбор доступа. Вердикт, снятый под админом, к бою отношения не имеет (§А1-4/§С8-10).
 //
@@ -30,7 +30,7 @@
 // пиннится тестом ниже). PostgreSQL обязан проверить security qual ПЕРВОЙ, а индексное
 // условие проверяется до неё — поэтому не-leakproof предикат индексным условием стать не
 // может в принципе. Под админ-DSN тот же запрос берёт GIN и отрабатывает за доли
-// миллисекунды; под ролью приложения — Bitmap Heap Scan по `entities_owner_updated` с
+// миллисекунды; под ролью приложения — Bitmap Heap Scan по `entities_graph_updated` с
 // фильтром по куче (44 мс против 0,5 мс на 50 000 строк).
 //
 // Отсюда и предупреждение выжимки «роль без BYPASSRLS видит другой план» оказалось сильнее,
@@ -167,7 +167,7 @@ function expectVerdict(v: Verdict, expected: string): void {
 }
 
 const ctx = () => ({
-  ownerId: GRAPH_OWNER_ID,
+  graphId: GRAPH_OWNER_ID,
   today: '2026-07-03',
   timeZone: 'Europe/Moscow',
   reg,
@@ -208,7 +208,7 @@ test('вердикт по entities_aspects_gin: горячий запрос — 
  * юнит-сьюте селектора, и это переезд по ре-ревью, а не украшение.
  *
  * Проба жила в `src/memory/select.test.ts` и была зелёной навсегда: она снимала EXPLAIN под
- * АДМИН-соединением, дописав `owner_id = '…'` ОБЫЧНЫМ предикатом, — то есть имитировала RLS
+ * АДМИН-соединением, дописав `graph_id = '…'` ОБЫЧНЫМ предикатом, — то есть имитировала RLS
  * тем, чем RLS не является. Под ролью приложения тот же отбор приходит security qual'ом
  * политики `owner_owns_row`, и вывод менялся на противоположный. Ровно та ловушка, о
  * которой предупреждает шапка этого файла.
@@ -299,10 +299,10 @@ test('вердикт по entities_query_refs_gin: колонка заполне
     // UPDATE ниже прогон не краснило.
     await admin.execute(sql`
       UPDATE entities SET query_refs = '{}'
-       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`);
+       WHERE graph_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`);
     const before = (await admin.execute(sql`
       SELECT count(*)::int AS n FROM entities
-       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`)) as unknown as {
+       WHERE graph_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`)) as unknown as {
       n: number;
     }[];
     // Заодно утверждение о САМОМ КОРПУСЕ: он пишется прямым INSERT'ом и колонку не трогает.
@@ -320,10 +320,10 @@ test('вердикт по entities_query_refs_gin: колонка заполне
         ],
         sql``,
       )}
-       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND props ? ${RARE_PROPERTY}`);
+       WHERE graph_id = ${GRAPH_OWNER_ID}::uuid AND props ? ${RARE_PROPERTY}`);
     const after = (await admin.execute(sql`
       SELECT count(*)::int AS n FROM entities
-       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`)) as unknown as {
+       WHERE graph_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`)) as unknown as {
       n: number;
     }[];
     filled = after[0]?.n ?? 0;

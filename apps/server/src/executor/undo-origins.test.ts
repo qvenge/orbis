@@ -138,7 +138,7 @@ async function originKeysPresent(): Promise<string[]> {
   );
   const rows = await adminRows(
     sql`SELECT external_id FROM entity_origins
-        WHERE owner_id = ${user} AND namespace = ${NS} AND external_id IN (${list})
+        WHERE graph_id = ${user} AND namespace = ${NS} AND external_id IN (${list})
         ORDER BY external_id`,
   );
   return rows.map((r) => r.external_id as string);
@@ -217,7 +217,7 @@ beforeAll(async () => {
     tx.insert(entities).values([
       {
         id: adoptTargetId,
-        ownerId: user,
+        graphId: user,
         title: 'Ручной обед',
         tags: [],
         ...(await entityColumns(
@@ -237,7 +237,7 @@ beforeAll(async () => {
       },
       {
         id: controlId,
-        ownerId: user,
+        graphId: user,
         title: 'Контрольная запись',
         tags: [],
         ...(await entityColumns(
@@ -257,7 +257,7 @@ beforeAll(async () => {
       },
       {
         id: envelopeId,
-        ownerId: user,
+        graphId: user,
         title: 'Конверт Еда',
         tags: [],
         ...(await entityColumns(

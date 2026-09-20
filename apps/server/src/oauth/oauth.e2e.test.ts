@@ -312,7 +312,7 @@ test('путь агента целиком: 401 → метаданные → DCR
     };
     expect(payload.result.title).toBe('из агента по OAuth');
     // Сущность легла ВЛАДЕЛЬЦУ гранта: токен несёт identity, а не только право входа
-    expect(payload.result.ownerId).toBe(owner);
+    expect(payload.result.graphId).toBe(owner);
     createdByAgentId = payload.result.id;
   } finally {
     await agent.close();

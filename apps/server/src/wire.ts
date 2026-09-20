@@ -23,7 +23,7 @@ type UserSettingsRow = typeof userSettings.$inferSelect;
 export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity {
   return {
     id: row.id,
-    ownerId: row.ownerId,
+    graphId: row.graphId,
     title: row.title,
     emoji: row.emoji,
     body: row.body,
@@ -46,7 +46,7 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
  *  - `props` адресованы **key** свойства, а не id. Модель обязана писать тем же именем,
  *    которым читала (`props` тулов, `unset`, `entity_query`), а id ПОЛЬЗОВАТЕЛЬСКОГО
  *    свойства — uuid, и до модели он доезжать не должен;
- *  - `ownerId` и `queryRefs` не едут: первое модель знает по построению (это владелец
+ *  - `graphId` и `queryRefs` не едут: первое модель знает по построению (это текущий граф
  *    вызова), второе — служебный индекс ссылок тела, читателя у него в чате нет.
  *
  * Внутренний wire (`toWireEntity`) остаётся по id: web строит формы и контролы по реестру
@@ -116,7 +116,7 @@ export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
   return {
     ...toWireEntity({
       id: row.id,
-      ownerId: row.owner_id,
+      graphId: row.graph_id,
       title: row.title,
       emoji: row.emoji,
       body: row.body,
@@ -162,7 +162,7 @@ export function toWireChatMessage(row: ChatMessageRow): WireChatMessage {
 /** Wire-форма треда (§4.5): entityId NULL — глобальный тред владельца. */
 export interface WireThread {
   id: string;
-  ownerId: string;
+  graphId: string;
   entityId: string | null;
   title: string | null;
   archived: boolean;
@@ -173,7 +173,7 @@ export interface WireThread {
 export function toWireThread(row: ChatThreadRow): WireThread {
   return {
     id: row.id,
-    ownerId: row.ownerId,
+    graphId: row.graphId,
     entityId: row.entityId,
     title: row.title,
     archived: row.archived,
@@ -208,7 +208,7 @@ export interface PinnedEntity {
 
 /** Wire-форма user_settings (§4.4): столбцы уже camelCase, updated_at → ISO. */
 export interface WireUserSettings {
-  ownerId: string;
+  graphId: string;
   plan: string;
   timezone: string;
   defaultCurrency: string;
@@ -228,7 +228,7 @@ export interface WireUserSettings {
 
 export function toWireUserSettings(row: UserSettingsRow): WireUserSettings {
   return {
-    ownerId: row.ownerId,
+    graphId: row.graphId,
     plan: row.plan,
     timezone: row.timezone,
     defaultCurrency: row.defaultCurrency,

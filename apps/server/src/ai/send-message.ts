@@ -119,7 +119,7 @@ export function defaultAiDeps(): AiDeps {
 }
 
 export interface SendMessageInput {
-  ownerId: string;
+  graphId: string;
   /** Client-generated UUID user-сообщения (§2.1); повтор — идемпотентный replay. */
   id: string;
   threadId: string;
@@ -200,7 +200,7 @@ export async function sendMessage(
     existingAnswer?: WireChatMessage;
     processing?: true;
   }
-  const pre = await withIdentity(db, input.ownerId, async (tx): Promise<Preflight> => {
+  const pre = await withIdentity(db, input.graphId, async (tx): Promise<Preflight> => {
     const rows = await tx
       .select({ entityId: chatThreads.entityId })
       .from(chatThreads)
@@ -279,7 +279,7 @@ export async function sendMessage(
     // немедленный ретрай легитимен (§7.9), «processing» не блокирует его до TTL.
     // Сбой уборки не маскирует исходную ошибку.
     try {
-      await withIdentity(db, input.ownerId, (tx) =>
+      await withIdentity(db, input.graphId, (tx) =>
         tx.delete(chatMessages).where(eq(chatMessages.id, markerId)),
       );
     } catch (cleanupError) {
@@ -304,21 +304,21 @@ async function runAgentLoop(
   const { clock, resolve, anchorEntityId, markerId } = run;
 
   // 2. Entitlements-гейт §8 — ДО первого вызова провайдера
-  await gateAiEntitlements(db, input.ownerId, resolve, clock);
+  await gateAiEntitlements(db, input.graphId, resolve, clock);
 
   // 3. Контекст §7.1 (слои 1–4) + реестр тулов (слой 5) — один withIdentity-tx.
   //    system идёт ОТДЕЛЬНЫМ полем запроса (контракт Task 7: system-роль в messages
   //    запрещена — Anthropic бросает); buildContext это гарантирует по построению.
-  const { system, history, tools } = await withIdentity(db, input.ownerId, async (tx) => {
+  const { system, history, tools } = await withIdentity(db, input.graphId, async (tx) => {
     const ctx = await buildContext(tx, {
-      ownerId: input.ownerId,
+      graphId: input.graphId,
       threadId: input.threadId,
       ...(anchorEntityId !== null && { anchorEntityId }),
       // Часы вызова — те же, что у гейта и метеринга: «сегодня» в канале и день
       // списания обязаны считаться от одного момента, а не от двух разных
       clock,
     });
-    const defs = await buildToolRegistry(tx, input.ownerId);
+    const defs = await buildToolRegistry(tx, input.graphId);
     // OrbisToolDef → LLMToolDef; internalOnly (user_query) остаётся: внутренний чат —
     // его законный потребитель, отсечение касается только MCP (Task 10)
     const llmTools: LLMToolDef[] = defs
@@ -422,7 +422,7 @@ async function runAgentLoop(
     //    сбоя — честный расход); сбой метеринга не ломает ответ пользователю
     if (usage.requestCount > 0) {
       try {
-        await recordUsage(db, { ownerId: input.ownerId, model: deps.model, usage, clock });
+        await recordUsage(db, { graphId: input.graphId, model: deps.model, usage, clock });
       } catch (e) {
         console.error('[ai.sendMessage] метеринг ai_usage не записан:', e);
       }
@@ -436,7 +436,7 @@ async function runAgentLoop(
   //    заводит, чтобы «чипов нет» не отличалось от «поле не писали». id — серверный uuidv7: ретрай
   //    sendMessage — новый прогон цикла, а не replay ответа (осознанно, MVP).
   //    Маркер processing снимается ТОЙ ЖЕ tx: «ответ есть» и «прогон идёт» не сосуществуют.
-  const assistantMessage = await withIdentity(db, input.ownerId, async (tx) => {
+  const assistantMessage = await withIdentity(db, input.graphId, async (tx) => {
     const message = await appendMessage(tx, {
       id: newId(),
       threadId: input.threadId,
@@ -499,7 +499,7 @@ async function runToolCall(
   const r = await dispatchTool(
     {
       db,
-      actorUserId: input.ownerId,
+      actorUserId: input.graphId,
       actorKind: 'ai', // внутренний AI (§7.8 атрибуция; MutationSource 'chat')
       source: 'chat',
       threadId: input.threadId,
@@ -548,12 +548,12 @@ async function runToolCall(
  */
 export async function gateAiEntitlements(
   db: Db,
-  ownerId: string,
+  graphId: string,
   resolve: EntitlementResolver,
   clock: () => Date,
 ): Promise<void> {
-  const requests = resolve(ownerId, AI_REQUESTS_KEY);
-  const tokens = resolve(ownerId, AI_TOKENS_KEY);
+  const requests = resolve(graphId, AI_REQUESTS_KEY);
+  const tokens = resolve(graphId, AI_TOKENS_KEY);
   for (const [key, decision] of [
     [AI_REQUESTS_KEY, requests],
     [AI_TOKENS_KEY, tokens],
@@ -565,7 +565,7 @@ export async function gateAiEntitlements(
   if (requests.limit === null && tokens.limit === null) return;
 
   const date = utcDay(clock());
-  const rows = await withIdentity(db, ownerId, (tx) =>
+  const rows = await withIdentity(db, graphId, (tx) =>
     tx
       .select({
         inputTokens: aiUsage.inputTokens,

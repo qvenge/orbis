@@ -154,7 +154,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     );
     // Часы подметания — на час позже часов исполнителя: прогон брошен по порогу С6
     const swept = await sweepStaleRuns(db, {
-      ownerId: owner,
+      graphId: owner,
       actorKind: 'owner',
       clock: () => new Date(T0.getTime() + 60 * MINUTE),
     });

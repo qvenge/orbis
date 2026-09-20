@@ -32,7 +32,7 @@ import type { SelectOption } from './types';
 /** Встроенные поля одинаковы у всех 77 записей и проставляются ниже, а не руками. */
 type PropertyEntry = Omit<
   z.input<typeof propertyDefinitionSchema>,
-  'id' | 'ownerId' | 'key' | 'rank' | 'status'
+  'id' | 'graphId' | 'key' | 'rank' | 'status'
 > & { id: string };
 
 /** Варианты select в порядке объявления; `rank` = позиция, см. шапку файла. */
@@ -1125,12 +1125,12 @@ const ENTRIES: readonly PropertyEntry[] = [
 
 /**
  * Встроенный словарь свойств: 73 доменных (`storage: 'props'`) + 4 core-проекции.
- * `key` встроенного изначально равен `id` (§А2-1), `owner_id` — NULL, статус — `active`.
+ * `key` встроенного изначально равен `id` (§А2-1), `graph_id` — NULL, статус — `active`.
  */
 export const BUILTIN_PROPERTY_META: readonly PropertyDefinition[] = ENTRIES.map((entry, index) =>
   propertyDefinitionSchema.parse({
     ...entry,
-    ownerId: null,
+    graphId: null,
     key: entry.id,
     status: 'active',
     rank: index + 1,

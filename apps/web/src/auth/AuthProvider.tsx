@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
+import { setDraftScope } from '../features/entity-editor/draft-storage';
 import { setRetryScope } from '../state/retry';
 import { onClientOutdated, onUnauthorized } from './events';
 import { LoginScreen } from './LoginScreen';
@@ -27,6 +28,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // раньше эффектов родителя, а useRetryFlush в App дренирует очередь на монтировании).
   // Иначе на общем браузере следующий аккаунт дослал бы чужие записи в свой workspace.
   setRetryScope(session.userId);
+  // Скоуп черновиков — по тому же аккаунту сессии и по той же причине (общий браузер).
+  setDraftScope(session.userId ?? '');
 
   useEffect(() => {
     onClientOutdated(() => setOutdated(true));

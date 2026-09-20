@@ -11,8 +11,8 @@
 //
 // ПОЧЕМУ ЭТО НЕ ВТОРАЯ ПРАВДА И ГДЕ ЕЁ ГРАНИЦА. Правило разрешения коллизии здесь то же,
 // что в снимке: своя строка владельца ПЕРЕКРЫВАЕТ встроенную (снимок добивается этого
-// `ORDER BY owner_id NULLS FIRST` + перезаписью ключа Map, здесь —
-// `DISTINCT ON (id) … ORDER BY owner_id DESC NULLS LAST`), и равенство запиннено
+// `ORDER BY graph_id NULLS FIRST` + перезаписью ключа Map, здесь —
+// `DISTINCT ON (id) … ORDER BY graph_id DESC NULLS LAST`), и равенство запиннено
 // `roles.test.ts` на живой базе.
 //
 // А вот ДЕЛЬТ (§А3-2) подзапрос не знает и знать не может: дельта — отдельная таблица,
@@ -43,7 +43,7 @@ import type { RegistrySnapshot } from './load';
 export function effectiveRolesSql(): SQL {
   return sql`(SELECT DISTINCT ON (id) *
                 FROM relation_role_definitions
-               ORDER BY id, owner_id DESC NULLS LAST)`;
+               ORDER BY id, graph_id DESC NULLS LAST)`;
 }
 
 /**

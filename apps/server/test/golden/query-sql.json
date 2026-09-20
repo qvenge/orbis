@@ -58,7 +58,7 @@
       "display": "compact",
       "title": "Активные задачи проекта"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND NOT COALESCE((props->>'orbis/task_status' = $2 OR props->>'orbis/task_status' = $3), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $4 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $5 AND r.role = ANY(ARRAY[$6, $7, $8, $9]::text[]))) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $10",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND NOT COALESCE((props->>'orbis/task_status' = $2 OR props->>'orbis/task_status' = $3), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $4 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $5 AND r.role = ANY(ARRAY[$6, $7, $8, $9]::text[]))) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $10",
     "params": [
       "orbis/agent-run",
       "done",
@@ -109,7 +109,7 @@
       "display": "list",
       "title": "Inbox"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND props->>'orbis/task_status' = $2) ORDER BY created_at DESC NULLS LAST LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND props->>'orbis/task_status' = $2) ORDER BY created_at DESC NULLS LAST LIMIT $3",
     "params": ["orbis/agent-run", "inbox", 500],
     "countSql": "SELECT count(*) FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND props->>'orbis/task_status' = $2)",
     "countParams": ["orbis/agent-run", "inbox"]
@@ -189,7 +189,7 @@
       "display": "list",
       "title": "Сегодня"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5 OR props->>'orbis/task_status' = $6), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $7 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $8",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5 OR props->>'orbis/task_status' = $6), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $7 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $8",
     "params": [
       "orbis/agent-run",
       "2026-07-03",
@@ -226,7 +226,7 @@
       "display": "compact",
       "title": "Ожидание"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND props->>'orbis/task_status' = $2) ORDER BY updated_at ASC NULLS LAST LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND props->>'orbis/task_status' = $2) ORDER BY updated_at ASC NULLS LAST LIMIT $3",
     "params": ["orbis/agent-run", "waiting", 500]
   },
   {
@@ -239,7 +239,7 @@
         "value": "2026-07-02T09:00:00Z"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND updated_at > $2::timestamptz LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND updated_at > $2::timestamptz LIMIT $3",
     "params": ["orbis/agent-run", "2026-07-02T09:00:00Z", 500]
   },
   {
@@ -255,7 +255,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/amount')::numeric BETWEEN $2::numeric AND $3::numeric LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/amount')::numeric BETWEEN $2::numeric AND $3::numeric LIMIT $4",
     "params": ["orbis/agent-run", "500", "2000", 500]
   },
   {
@@ -268,7 +268,7 @@
         "value": "1000"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/amount')::numeric > $2::numeric LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/amount')::numeric > $2::numeric LIMIT $3",
     "params": ["orbis/agent-run", "1000", 500]
   },
   {
@@ -286,7 +286,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND true) LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND true) LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -297,7 +297,7 @@
         "archived": "true"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -310,7 +310,7 @@
         "value": true
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived = $2::boolean LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived = $2::boolean LIMIT $3",
     "params": ["orbis/agent-run", true, 500]
   },
   {
@@ -323,7 +323,7 @@
         "value": false
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived = $2::boolean LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived = $2::boolean LIMIT $3",
     "params": ["orbis/agent-run", false, 500]
   },
   {
@@ -334,7 +334,7 @@
         "has": "orbis/archived"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND archived IS NOT NULL LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND archived IS NOT NULL LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -345,7 +345,7 @@
         "search": "API"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (to_tsvector('simple', title) @@ plainto_tsquery('simple', $2) OR to_tsvector('simple', body) @@ plainto_tsquery('simple', $3)) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (to_tsvector('simple', title) @@ plainto_tsquery('simple', $2) OR to_tsvector('simple', body) @@ plainto_tsquery('simple', $3)) LIMIT $4",
     "params": ["orbis/agent-run", "API", "API", 500],
     "countSql": "SELECT count(*) FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (to_tsvector('simple', title) @@ plainto_tsquery('simple', $2) OR to_tsvector('simple', body) @@ plainto_tsquery('simple', $3))",
     "countParams": ["orbis/agent-run", "API", "API"]
@@ -381,7 +381,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((tags @> ARRAY[$2]::text[] OR tags @> ARRAY[$3]::text[]) AND NOT COALESCE((tags @> ARRAY[$4]::text[] OR tags @> ARRAY[$5]::text[]), false)) LIMIT $6",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((tags @> ARRAY[$2]::text[] OR tags @> ARRAY[$3]::text[]) AND NOT COALESCE((tags @> ARRAY[$4]::text[] OR tags @> ARRAY[$5]::text[]), false)) LIMIT $6",
     "params": ["orbis/agent-run", "work", "personal", "someday", "maybe", 500]
   },
   {
@@ -402,7 +402,7 @@
         }
       ]
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $2)::date BETWEEN $3::date AND $4::date + 7 ORDER BY (props->>'orbis/start_at')::timestamptz ASC NULLS LAST LIMIT $5",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $2)::date BETWEEN $3::date AND $4::date + 7 ORDER BY (props->>'orbis/start_at')::timestamptz ASC NULLS LAST LIMIT $5",
     "params": ["orbis/agent-run", "Europe/Moscow", "2026-07-03", "2026-07-03", 500]
   },
   {
@@ -426,7 +426,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $2 AND r.role = ANY(ARRAY[$3, $4, $5, $6]::text[])) AND EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.target_id = $7 AND r.role = ANY(ARRAY[$8, $9, $10, $11]::text[]))) LIMIT $12",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $2 AND r.role = ANY(ARRAY[$3, $4, $5, $6]::text[])) AND EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.target_id = $7 AND r.role = ANY(ARRAY[$8, $9, $10, $11]::text[]))) LIMIT $12",
     "params": [
       "orbis/agent-run",
       "019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10",
@@ -454,7 +454,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (created_at AT TIME ZONE $2)::date = $3::date LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (created_at AT TIME ZONE $2)::date = $3::date LIMIT $4",
     "params": ["orbis/agent-run", "Europe/Moscow", "2026-07-03", 500]
   },
   {
@@ -478,7 +478,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date < $2::date OR (props->>'orbis/due_date')::date = $3::date) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date < $2::date OR (props->>'orbis/due_date')::date = $3::date) LIMIT $4",
     "params": ["orbis/agent-run", "2026-07-03", "2026-08-01", 500]
   },
   {
@@ -498,7 +498,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/budget'] AND props->>'orbis/finance_category' = $2) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/budget'] AND props->>'orbis/finance_category' = $2) LIMIT $3",
     "params": ["orbis/agent-run", "019d48ea-4188-765d-8e96-93a0ad9c262a", 500]
   },
   {
@@ -548,7 +548,7 @@
       "display": "list",
       "title": "Ближайшие 7 дней"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date + 7 AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST, CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST LIMIT $6",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date BETWEEN $2::date AND $3::date + 7 AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST, CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST LIMIT $6",
     "params": ["orbis/agent-run", "2026-07-03", "2026-07-03", "done", "cancelled", 500]
   },
   {
@@ -595,7 +595,7 @@
       "display": "compact",
       "title": "Позже"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date > $2::date + 7 AND NOT COALESCE((props->>'orbis/task_status' = $3 OR props->>'orbis/task_status' = $4), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $5",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND (props->>'orbis/due_date')::date > $2::date + 7 AND NOT COALESCE((props->>'orbis/task_status' = $3 OR props->>'orbis/task_status' = $4), false)) ORDER BY (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $5",
     "params": ["orbis/agent-run", "2026-07-03", "done", "cancelled", 30]
   },
   {
@@ -611,7 +611,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND updated_at BETWEEN $2::timestamptz AND $3::timestamptz LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND updated_at BETWEEN $2::timestamptz AND $3::timestamptz LIMIT $4",
     "params": ["orbis/agent-run", "2026-07-01T00:00:00Z", "2026-07-02T00:00:00Z", 500]
   },
   {
@@ -636,7 +636,7 @@
         }
       ]
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND aspects @> ARRAY['orbis/financial'] ORDER BY (props->>'orbis/amount')::numeric DESC NULLS LAST, props->>'orbis/counterparty' ASC NULLS LAST, title ASC NULLS LAST LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND aspects @> ARRAY['orbis/financial'] ORDER BY (props->>'orbis/amount')::numeric DESC NULLS LAST, props->>'orbis/counterparty' ASC NULLS LAST, title ASC NULLS LAST LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -665,7 +665,7 @@
         }
       ]
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/financial'] AND (props->>'orbis/occurred_on')::date BETWEEN $2::date AND $3::date) ORDER BY (props->>'orbis/occurred_on')::date DESC NULLS LAST LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/financial'] AND (props->>'orbis/occurred_on')::date BETWEEN $2::date AND $3::date) ORDER BY (props->>'orbis/occurred_on')::date DESC NULLS LAST LIMIT $4",
     "params": ["orbis/agent-run", "2026-06-01", "2026-06-30", 500]
   },
   {
@@ -690,7 +690,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/financial'] AND (props->>'orbis/occurred_on')::date > $2::date AND (props->>'orbis/due_date')::date < $3::date) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/financial'] AND (props->>'orbis/occurred_on')::date > $2::date AND (props->>'orbis/due_date')::date < $3::date) LIMIT $4",
     "params": ["orbis/agent-run", "2026-06-01", "2026-07-01", 500]
   },
   {
@@ -710,7 +710,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/category'] AND props @> $2::jsonb) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/category'] AND props @> $2::jsonb) LIMIT $3",
     "params": ["orbis/agent-run", "{\"orbis/aliases\":[\"такси\"]}", 500],
     "countSql": "SELECT count(*) FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/category'] AND props @> $2::jsonb)",
     "countParams": ["orbis/agent-run", "{\"orbis/aliases\":[\"такси\"]}"]
@@ -741,7 +741,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/category'] AND (props @> $2::jsonb OR props @> $3::jsonb)) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/category'] AND (props @> $2::jsonb OR props @> $3::jsonb)) LIMIT $4",
     "params": [
       "orbis/agent-run",
       "{\"orbis/aliases\":[\"такси\"]}",
@@ -768,7 +768,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/category'] AND NOT COALESCE(props @> $2::jsonb, false)) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/category'] AND NOT COALESCE(props @> $2::jsonb, false)) LIMIT $3",
     "params": ["orbis/agent-run", "{\"orbis/aliases\":[\"такси\"]}", 500]
   },
   {
@@ -779,7 +779,7 @@
         "aspect": "orbis/agent-run"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND aspects @> ARRAY['orbis/agent-run'] LIMIT $1",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND aspects @> ARRAY['orbis/agent-run'] LIMIT $1",
     "params": [500],
     "countSql": "SELECT count(*) FROM entities e WHERE true AND NOT archived AND aspects @> ARRAY['orbis/agent-run']",
     "countParams": []
@@ -794,7 +794,7 @@
         "value": "running"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND props->>'orbis/run_outcome' = $1 LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND props->>'orbis/run_outcome' = $1 LIMIT $2",
     "params": ["running", 500]
   },
   {
@@ -805,7 +805,7 @@
         "has": "orbis/recurrence"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND props ? 'orbis/recurrence' LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND props ? 'orbis/recurrence' LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -816,7 +816,7 @@
         "has": "orbis/title"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND title IS NOT NULL LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND title IS NOT NULL LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -842,7 +842,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date < $2::date OR ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $3)::date < $4::date) LIMIT $5",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND ((props->>'orbis/due_date')::date < $2::date OR ((props->>'orbis/start_at')::timestamptz AT TIME ZONE $3)::date < $4::date) LIMIT $5",
     "params": ["orbis/agent-run", "2026-07-03", "Europe/Moscow", "2026-07-03", 500]
   },
   {
@@ -857,7 +857,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $2 AND r.role = $3) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $2 AND r.role = $3) LIMIT $4",
     "params": ["orbis/agent-run", "019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10", "subitem", 500]
   },
   {
@@ -872,7 +872,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND e.id IN (WITH RECURSIVE walk(id, depth) AS ( SELECT r.target_id, 1 FROM relations r WHERE r.source_id = $2 AND r.role = $3 UNION SELECT r.target_id, w.depth + 1 FROM walk w JOIN relations r ON r.source_id = w.id AND r.role = $4 WHERE w.depth < 32 ) SELECT id FROM walk) LIMIT $5",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND e.id IN (WITH RECURSIVE walk(id, depth) AS ( SELECT r.target_id, 1 FROM relations r WHERE r.source_id = $2 AND r.role = $3 UNION SELECT r.target_id, w.depth + 1 FROM walk w JOIN relations r ON r.source_id = w.id AND r.role = $4 WHERE w.depth < 32 ) SELECT id FROM walk) LIMIT $5",
     "params": ["orbis/agent-run", "019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10", "subitem", "subitem", 500]
   },
   {
@@ -887,7 +887,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND e.id IN (WITH RECURSIVE walk(id, depth) AS ( SELECT r.source_id, 1 FROM relations r WHERE r.target_id = $2 AND r.role = $3 UNION SELECT r.source_id, w.depth + 1 FROM walk w JOIN relations r ON r.target_id = w.id AND r.role = $4 WHERE w.depth < 32 ) SELECT id FROM walk) LIMIT $5",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND e.id IN (WITH RECURSIVE walk(id, depth) AS ( SELECT r.source_id, 1 FROM relations r WHERE r.target_id = $2 AND r.role = $3 UNION SELECT r.source_id, w.depth + 1 FROM walk w JOIN relations r ON r.target_id = w.id AND r.role = $4 WHERE w.depth < 32 ) SELECT id FROM walk) LIMIT $5",
     "params": ["orbis/agent-run", "019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10", "subitem", "subitem", 500]
   },
   {
@@ -900,7 +900,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.role = ANY(ARRAY[$2, $3, $4, $5]::text[])) LIMIT $6",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.role = ANY(ARRAY[$2, $3, $4, $5]::text[])) LIMIT $6",
     "params": ["orbis/agent-run", "category-parent", "run", "subitem", "ticket", 500]
   },
   {
@@ -916,7 +916,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.role = $2), false) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.role = $2), false) LIMIT $3",
     "params": ["orbis/agent-run", "subitem", 500]
   },
   {
@@ -930,7 +930,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.role = $2) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.role = $2) LIMIT $3",
     "params": ["orbis/agent-run", "dependency", 500]
   },
   {
@@ -950,7 +950,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $2 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $2 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false) LIMIT $3",
     "params": ["orbis/agent-run", "dependency", 500]
   },
   {
@@ -963,7 +963,7 @@
         "value": "1000"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/limit')::numeric > $2::numeric LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/limit')::numeric > $2::numeric LIMIT $3",
     "params": ["orbis/agent-run", "1000", 500]
   },
   {
@@ -980,7 +980,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/due_date')::date <= $2::date LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/due_date')::date <= $2::date LIMIT $3",
     "params": ["orbis/agent-run", "2026-07-03", 500]
   },
   {
@@ -995,7 +995,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/amount')::numeric >= $2::numeric LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/amount')::numeric >= $2::numeric LIMIT $3",
     "params": ["orbis/agent-run", "500", 500]
   },
   {
@@ -1010,7 +1010,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/due_date')::date <= $2::date LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/due_date')::date <= $2::date LIMIT $3",
     "params": ["orbis/agent-run", "2026-07-10", 500]
   },
   {
@@ -1025,7 +1025,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(COALESCE((props->>'orbis/planned')::boolean, false) = $2::boolean, false) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(COALESCE((props->>'orbis/planned')::boolean, false) = $2::boolean, false) LIMIT $3",
     "params": ["orbis/agent-run", true, 500]
   },
   {
@@ -1038,7 +1038,7 @@
         "value": true
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/all_day')::boolean = $2::boolean LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props->>'orbis/all_day')::boolean = $2::boolean LIMIT $3",
     "params": ["orbis/agent-run", true, 500]
   },
   {
@@ -1051,7 +1051,7 @@
         "value": "done"
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(props->>'orbis/task_status' = $2, false) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(props->>'orbis/task_status' = $2, false) LIMIT $3",
     "params": ["orbis/agent-run", "done", 500]
   },
   {
@@ -1064,7 +1064,7 @@
         "value": ["inbox", "planned"]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND props->>'orbis/task_status' IN ($2, $3) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND props->>'orbis/task_status' IN ($2, $3) LIMIT $4",
     "params": ["orbis/agent-run", "inbox", "planned", 500]
   },
   {
@@ -1077,7 +1077,7 @@
         "value": ["такси", "метро"]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props @> $2::jsonb OR props @> $3::jsonb) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (props @> $2::jsonb OR props @> $3::jsonb) LIMIT $4",
     "params": [
       "orbis/agent-run",
       "{\"orbis/aliases\":[\"такси\"]}",
@@ -1104,7 +1104,7 @@
         ]
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/routine'] AND props->>'orbis/routine_at' >= $2) LIMIT $3",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/routine'] AND props->>'orbis/routine_at' >= $2) LIMIT $3",
     "params": ["orbis/agent-run", "09:00", 500]
   },
   {
@@ -1117,7 +1117,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE((to_tsvector('simple', title) @@ plainto_tsquery('simple', $2) OR to_tsvector('simple', body) @@ plainto_tsquery('simple', $3)), false) LIMIT $4",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE((to_tsvector('simple', title) @@ plainto_tsquery('simple', $2) OR to_tsvector('simple', body) @@ plainto_tsquery('simple', $3)), false) LIMIT $4",
     "params": ["orbis/agent-run", "API", "API", 500]
   },
   {
@@ -1130,7 +1130,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(true, false) LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(true, false) LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -1144,7 +1144,7 @@
         }
       }
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (e.aspects @> ARRAY['orbis/task'] AND e.props->>'orbis/task_status' IN ('inbox', 'planned', 'in_progress', 'waiting')) LIMIT $2",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (e.aspects @> ARRAY['orbis/task'] AND e.props->>'orbis/task_status' IN ('inbox', 'planned', 'in_progress', 'waiting')) LIMIT $2",
     "params": ["orbis/agent-run", 500]
   },
   {
@@ -1214,7 +1214,7 @@
       "display": "list",
       "title": "Сегодня"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND (e.aspects @> ARRAY['orbis/task'] AND e.props->>'orbis/task_status' IN ('inbox', 'planned', 'in_progress', 'waiting')) AND NOT COALESCE(props->>'orbis/task_status' = $4, false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $5 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $6",
+    "sql": "SELECT id, graph_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND (e.aspects @> ARRAY['orbis/task'] AND e.props->>'orbis/task_status' IN ('inbox', 'planned', 'in_progress', 'waiting')) AND NOT COALESCE(props->>'orbis/task_status' = $4, false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $5 AND NOT COALESCE((b.aspects @> ARRAY['orbis/task'] AND b.props->>'orbis/task_status' IN ('done', 'cancelled')), false)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $6",
     "params": ["orbis/agent-run", "2026-07-03", "2026-07-03", "waiting", "dependency", 500]
   }
 ]

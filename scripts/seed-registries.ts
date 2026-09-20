@@ -1,6 +1,6 @@
 // scripts/seed-registries.ts — сид встроенных строк трёх реестров (свойства, роли, аспекты)
 // для локальной базы и CI. Шаг `bun run db:prepare` (package.json). Требует
-// DATABASE_URL_ADMIN: system-строки (`owner_id IS NULL`) пишутся мимо RLS.
+// DATABASE_URL_ADMIN: system-строки (`graph_id IS NULL`) пишутся мимо RLS.
 //
 // Логика — в `apps/server/src/db/seed-registries.ts`, одна на этот скрипт и на прод-операцию
 // `bun scripts/ops.ts seed-registries`: до реформы копий upsert'а было две, и расходились

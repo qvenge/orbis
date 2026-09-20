@@ -56,9 +56,9 @@ export async function truncateAll(): Promise<void> {
   // Встроенные строки реестров сознательно переживают зачистку: их кладёт один раз
   // `bun run db:prepare`, и пересевать реестр между сьютами значило бы гонять сид сотни раз.
   for (const table of DEFINITION_TABLES) {
-    await db.execute(sql`DELETE FROM ${sql.raw(table)} WHERE owner_id IS NOT NULL`);
+    await db.execute(sql`DELETE FROM ${sql.raw(table)} WHERE graph_id IS NOT NULL`);
   }
-  // Дельты бывают только пользовательские (owner_id NOT NULL) — здесь чистится всё.
+  // Дельты бывают только пользовательские (graph_id NOT NULL) — здесь чистится всё.
   await db.execute(sql`TRUNCATE registry_deltas`);
   // registry_system НЕ трогается НАМЕРЕННО: строка одна, PK = 1, и её удаление сломало бы
   // инкремент версии в сидере (UPDATE … WHERE id = 1 не нашёл бы строки). Поэтому тесты
@@ -82,10 +82,10 @@ export async function truncateAll(): Promise<void> {
  * Своё подключение админской ролью: у фикстур транзакции на руках нет, а строка настроек
  * владельца может ещё не существовать (UPSERT внутри её заводит).
  */
-export async function bumpRegistryVersion(ownerId: string): Promise<number> {
+export async function bumpRegistryVersion(graphId: string): Promise<number> {
   const { db, client } = adminDb();
   try {
-    return await bumpOwnerRegistryVersion(db, ownerId);
+    return await bumpOwnerRegistryVersion(db, graphId);
   } finally {
     await client.end();
   }
@@ -148,7 +148,7 @@ export interface CustomAspectSpec {
  * карточек и старой валидации — локальная часть key (см. `keyFieldsByAspect` в
  * `tools/dispatch.ts`).
  */
-export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec): Promise<void> {
+export async function seedCustomAspect(graphId: string, spec: CustomAspectSpec): Promise<void> {
   const namespace = spec.key.split('/')[0] ?? 'user';
   const propertyId = (field: string): string => `${namespace}/${field}`;
 
@@ -157,12 +157,12 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
     for (const [index, p] of spec.properties.entries()) {
       await db.execute(sql`
         INSERT INTO property_definitions
-          (id, owner_id, key, label, description, type, status, storage, rank, flags)
-        VALUES (${propertyId(p.key)}, ${ownerId}, ${propertyId(p.key)},
+          (id, graph_id, key, label, description, type, status, storage, rank, flags)
+        VALUES (${propertyId(p.key)}, ${graphId}, ${propertyId(p.key)},
                 ${JSON.stringify({ ru: p.key })}::jsonb,
                 ${JSON.stringify({ ru: `Поле ${p.key} (${spec.key})` })}::jsonb,
                 ${JSON.stringify(p.type)}::jsonb, 'active', 'props', ${index + 1}, '{}'::jsonb)
-        ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO UPDATE SET
+        ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO UPDATE SET
           key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
           type = EXCLUDED.type, rank = EXCLUDED.rank`);
     }
@@ -182,9 +182,9 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
 
     await db.execute(sql`
       INSERT INTO aspect_definitions
-        (id, owner_id, key, label, description, properties, implements,
+        (id, graph_id, key, label, description, properties, implements,
          ai_instructions, tag_mappings, view_config, module, service, rank)
-      VALUES (${spec.key}, ${ownerId}, ${spec.key},
+      VALUES (${spec.key}, ${graphId}, ${spec.key},
               ${JSON.stringify(spec.label)}::jsonb,
               ${JSON.stringify(spec.description ?? spec.label)}::jsonb,
               ${JSON.stringify(refs)}::jsonb, ${JSON.stringify(spec.implements ?? [])}::jsonb,
@@ -196,7 +196,7 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
       -- новая: правило списка — «колонка, которую вход умеет задавать, обязана обновляться».
       -- Половинчатый список и есть тот дефект, из-за которого повторный сев того же ключа
       -- молча сохранял бы привязки первого сева (Р12).
-      ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO UPDATE SET
+      ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, implements = EXCLUDED.implements,
         ai_instructions = EXCLUDED.ai_instructions, tag_mappings = EXCLUDED.tag_mappings,
@@ -211,7 +211,7 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
     // безразлично (никто не наблюдает её промежуточные состояния), но писателю реестра
     // так писать НЕЛЬЗЯ: образец транзакционного инкремента — `registry/cache.test.ts`,
     // где INSERT дельты и `bumpOwnerRegistryVersion` идут одним `withIdentity`.
-    await bumpOwnerRegistryVersion(db, ownerId);
+    await bumpOwnerRegistryVersion(db, graphId);
   } finally {
     await client.end();
   }
@@ -274,16 +274,16 @@ export function entityColumnsFrom(
  */
 export async function entityColumns(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   props: Record<string, unknown>,
   aspects: string[],
 ): Promise<EntityValueColumns> {
-  return entityColumnsFrom(await effectiveRegistry(tx, ownerId), props, aspects);
+  return entityColumnsFrom(await effectiveRegistry(tx, graphId), props, aspects);
 }
 
 /** Строка `entities`, записанная ПРЯМЫМ INSERT'ом мимо исполнителя, — вход `rawEntityRow`. */
 export interface RawRowSpec {
-  ownerId: string;
+  graphId: string;
   id: string;
   title: string;
   /** Значения по id свойства (§А1-1). */
@@ -310,7 +310,7 @@ export interface RawRowSpec {
 export function rawEntityRow(spec: RawRowSpec): typeof entities.$inferInsert {
   return {
     id: spec.id,
-    ownerId: spec.ownerId,
+    graphId: spec.graphId,
     title: spec.title,
     props: spec.props,
     aspects: spec.aspects,
@@ -333,7 +333,7 @@ export function rawEntityRow(spec: RawRowSpec): typeof entities.$inferInsert {
  * идемпотентным: сьюты зовут её и на общий id describe-блока, и повторно внутри тестов.
  */
 export async function seedRefTargetRows(
-  ownerId: string,
+  graphId: string,
   targets: ReadonlyArray<{ id: string; aspect: string }>,
 ): Promise<void> {
   if (targets.length === 0) return;
@@ -344,8 +344,8 @@ export async function seedRefTargetRows(
       if (seen.has(target.id)) continue;
       seen.add(target.id);
       await db.execute(sql`
-        INSERT INTO entities (id, owner_id, title, tags, props, aspects)
-        VALUES (${target.id}::uuid, ${ownerId}::uuid, ${`Цель ссылки (${target.aspect})`},
+        INSERT INTO entities (id, graph_id, title, tags, props, aspects)
+        VALUES (${target.id}::uuid, ${graphId}::uuid, ${`Цель ссылки (${target.aspect})`},
                 '{}'::text[], '{}'::jsonb, ARRAY[${target.aspect}]::text[])
         ON CONFLICT (id) DO NOTHING`);
     }
@@ -393,7 +393,7 @@ const FIXTURE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
  * что ищет страж `scripts/legacy-aspects-map.test.ts`, и докблок стоил бы ему записи в
  * allowlist на ровном месте.
  */
-export async function seedCategoriesOfInput(ownerId: string, input: unknown): Promise<void> {
+export async function seedCategoriesOfInput(graphId: string, input: unknown): Promise<void> {
   const targets: Array<{ id: string; aspect: string }> = [];
   const walk = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -410,7 +410,7 @@ export async function seedCategoriesOfInput(ownerId: string, input: unknown): Pr
     }
   };
   walk(input);
-  await seedRefTargetRows(ownerId, targets);
+  await seedRefTargetRows(graphId, targets);
 }
 
 /**

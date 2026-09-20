@@ -123,7 +123,7 @@ export interface EntityReadResult {
  */
 export async function readEntity(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   input: EntityGetUiInput,
 ): Promise<EntityReadResult> {
   const include = new Set(input.include ?? ['body', 'relations']);
@@ -140,7 +140,7 @@ export async function readEntity(
   // иначе счёт вызывателей `effectiveRegistry` в докблоке `registry/cache.ts` перестал бы
   // сходиться грепом.
   let regOnce: Promise<RegistrySnapshot> | undefined;
-  const registry = (): Promise<RegistrySnapshot> => (regOnce ??= effectiveRegistry(tx, ownerId));
+  const registry = (): Promise<RegistrySnapshot> => (regOnce ??= effectiveRegistry(tx, graphId));
 
   // Тело, созданное до этой работы, документа ещё не имеет — собираем на лету. Правило
   // разрешения общее с клиентом (readBodyDoc): битую форму или версию из будущего пересобираем
@@ -215,7 +215,7 @@ export async function readEntity(
         UNION
         SELECT id FROM ref_side
       )
-      SELECT e.id, e.owner_id, e.title, e.emoji, e.body, e.body_refs, e.tags,
+      SELECT e.id, e.graph_id, e.title, e.emoji, e.body, e.body_refs, e.tags,
              -- Столбцы те же, что в SELECT-листе компилятора (§6): их ждёт
              -- toWireEntityFromSql, и списочное чтение обязано нести ту же новую форму,
              -- что и одиночное (иначе backlinks молча отдают пустые props/aspects).
@@ -293,7 +293,7 @@ export async function readEntity(
   }
   if (include.has('thread')) {
     // Детерминированный id (§4.5); лениво НЕ создаёт: нет треда → пустой список
-    const threadId = entityThreadId(ownerId, row.id);
+    const threadId = entityThreadId(graphId, row.id);
     const msgs = await tx
       .select()
       .from(chatMessages)

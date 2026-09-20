@@ -10,7 +10,7 @@
 import { GRANT_SCOPES, type GrantScope } from '@orbis/shared';
 
 export interface PatArgs {
-  ownerId: string;
+  graphId: string;
   label: string;
   scope: GrantScope;
 }
@@ -66,7 +66,7 @@ export function parsePatArgs(args: readonly string[]): PatArgs | { error: string
     scope = value as GrantScope;
   }
 
-  const ownerId = positional[0];
-  if (ownerId === undefined || ownerId === '') return { error: 'нужен owner-uuid' };
-  return { ownerId, label: positional[1] ?? DEFAULT_LABEL, scope };
+  const graphId = positional[0];
+  if (graphId === undefined || graphId === '') return { error: 'нужен owner-uuid' };
+  return { graphId, label: positional[1] ?? DEFAULT_LABEL, scope };
 }

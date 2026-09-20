@@ -263,7 +263,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(
-        sql`UPDATE entities SET updated_at = '2026-08-14T00:00:00Z' WHERE owner_id = ${user}::uuid`,
+        sql`UPDATE entities SET updated_at = '2026-08-14T00:00:00Z' WHERE graph_id = ${user}::uuid`,
       );
     } finally {
       await adminClient.end();

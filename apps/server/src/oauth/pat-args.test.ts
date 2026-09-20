@@ -13,7 +13,7 @@ function parsed(...args: string[]) {
 }
 
 test('позиционные аргументы: владелец и метка', () => {
-  expect(parsed('owner-1', 'CI')).toEqual({ ownerId: 'owner-1', label: 'CI', scope: 'full' });
+  expect(parsed('owner-1', 'CI')).toEqual({ graphId: 'owner-1', label: 'CI', scope: 'full' });
 });
 
 // Область по умолчанию — полный доступ: так подключены все уже описанные в документации
@@ -29,7 +29,7 @@ test('--scope worker сужает выдачу', () => {
 // Флаг читается в любом месте строки и не съедает метку: позиционные считаются отдельно.
 test('флаг перед позиционными не путается с меткой', () => {
   expect(parsed('--scope', 'worker', 'owner-1', 'CI')).toEqual({
-    ownerId: 'owner-1',
+    graphId: 'owner-1',
     label: 'CI',
     scope: 'worker',
   });

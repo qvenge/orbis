@@ -766,7 +766,7 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
       withIdentity(db, user, async (tx) => {
         const rows = (await tx.execute(sql`
           SELECT count(*)::int AS n FROM entities e
-          WHERE e.owner_id = ${user}
+          WHERE e.graph_id = ${user}
             AND EXISTS (SELECT 1 FROM relations r
                         WHERE r.target_id = e.id AND r.role = 'instance-of')
         `)) as unknown as Array<{ n: number }>;

@@ -50,7 +50,7 @@ function snapshot(over: Partial<RegistrySnapshot> = {}): RegistrySnapshot {
 
 function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
   return {
-    ownerId: '00000000-0000-7000-8000-0000000000a1',
+    graphId: '00000000-0000-7000-8000-0000000000a1',
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     reg: snapshot(),
@@ -138,7 +138,7 @@ function gateRegistry(): Pick<RegistrySnapshot, 'properties' | 'aspects'> {
         label: { ru: p.key },
         description: { ru: `Поле ${p.key}` },
         type: p.type,
-        ownerId: CTX.ownerId,
+        graphId: CTX.graphId,
         status: 'active',
         rank: i + 1,
       }),
@@ -149,7 +149,7 @@ function gateRegistry(): Pick<RegistrySnapshot, 'properties' | 'aspects'> {
     GATE_FIN_ASPECT.key,
     aspectDefinitionSchema.parse({
       id: GATE_FIN_ASPECT.key,
-      ownerId: CTX.ownerId,
+      graphId: CTX.graphId,
       key: GATE_FIN_ASPECT.key,
       label: GATE_FIN_ASPECT.label,
       description: GATE_FIN_ASPECT.description,

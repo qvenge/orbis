@@ -170,7 +170,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
         .select({ metadata: chatMessages.metadata })
         .from(chatMessages)
         .innerJoin(chatThreads, eq(chatThreads.id, chatMessages.threadId))
-        .where(eq(chatThreads.ownerId, owner)),
+        .where(eq(chatThreads.graphId, owner)),
     );
     return rows.flatMap((r) => (r.metadata as { actions?: ActionRecord[] }).actions ?? []);
   }
@@ -180,7 +180,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * владельца, а вставка строки руками обходила бы ровно тот код, которым скоуп пишется.
    */
   async function workerGrant(owner: string, label: string): Promise<string> {
-    const token = await issuePatGrant(db, { ownerId: owner, label, scope: 'worker' });
+    const token = await issuePatGrant(db, { graphId: owner, label, scope: 'worker' });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный worker-PAT не прошёл verifyBearer');
     return identity.grantId;

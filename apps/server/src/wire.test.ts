@@ -16,7 +16,7 @@ describe('wire-сериализация (решение 12 плана)', () => {
     try {
       const row = await withIdentity(db, owner, async (tx) => {
         await tx.execute(
-          sql`INSERT INTO entities (id, owner_id, title) VALUES (${id}, ${owner}, 'parity')`,
+          sql`INSERT INTO entities (id, graph_id, title) VALUES (${id}, ${owner}, 'parity')`,
         );
         const rows = await tx.query.entities.findMany({ where: (e, { eq }) => eq(e.id, id) });
         return rows[0];
@@ -46,7 +46,7 @@ describe('wire-сериализация (решение 12 плана)', () => {
         // «негде взять». Проверка формы наружу при этом остаётся — за ней следят и разбор
         // схемы ниже, и wire-контракт.
         await tx.execute(
-          sql`INSERT INTO entities (id, owner_id, title, props, aspects, query_refs)
+          sql`INSERT INTO entities (id, graph_id, title, props, aspects, query_refs)
               VALUES (${id}, ${owner}, 'носитель',
                       ${JSON.stringify({ 'orbis/task_status': 'todo' })}::jsonb,
                       ARRAY['orbis/task']::text[], '{}'::text[])`,

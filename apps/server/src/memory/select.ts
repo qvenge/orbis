@@ -39,7 +39,7 @@ import { MEMORY_ASPECT, MEMORY_KIND, RULE_SCOPE } from './rules';
  * индексным условием стать не может в принципе. Все три потребителя селектора ходят через
  * `withIdentity` (`SET LOCAL ROLE authenticated`), то есть ровно этим путём:
  * `llm/context.ts`, `ai/escalation.ts`, `import/review.ts`. План у обеих форм под этой
- * ролью ОДИН И ТОТ ЖЕ — Bitmap Heap Scan по `entities_owner_updated` с фильтром по куче.
+ * ролью ОДИН И ТОТ ЖЕ — Bitmap Heap Scan по `entities_graph_updated` с фильтром по куче.
  *
  * ПОЧЕМУ ТОГДА `@>`, А НЕ `= ANY` — честно и коротко: потому что это форма из брифа задачи
  * и потому что она НЕ ХУЖЕ. Выигрыша на боевом пути у неё нет.

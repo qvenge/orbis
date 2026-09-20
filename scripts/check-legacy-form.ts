@@ -282,6 +282,13 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
     pattern: String.raw`EXCLUDE_BLOCKED_(STATUS_KEY|CLOSED)`,
     exclude: [COMMENT_ONLY_LINE],
   },
+  // owner-key — ключ строк больше не называется словом `owner` (срез «Г — единица владения», D44,
+  // спека §3.4): колонка — `graph_id`, поле — `graphId`, а где по смыслу аккаунт — `accountId`.
+  // Исключения `COMMENT_ONLY_LINE` НЕТ намеренно: докблок, называющий ключ старым именем, после
+  // переименования — ложь, а не история; история живёт в применённых миграциях (они вне pathspec).
+  // Роль «владелец» (`actorKind: 'owner'`, `ownerOnlyProcedure`, `ownerCaller`) маркер не ловит и
+  // ловить не должен: это проверка транспорта, а не ключ строк (спека §2).
+  { id: 'owner-key', pattern: String.raw`[oO]wner_?[Ii]d` },
 ];
 
 export type AllowEntry = {

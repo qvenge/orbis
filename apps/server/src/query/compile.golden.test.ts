@@ -66,7 +66,7 @@ const REG: RegistrySnapshot = {
 const PARSE_REG = toParseRegistry(REG, 'ru');
 
 const CTX: CompileCtx = {
-  ownerId: '00000000-0000-7000-8000-0000000000a1',
+  graphId: '00000000-0000-7000-8000-0000000000a1',
   today: '2026-07-03',
   timeZone: 'Europe/Moscow',
   reg: REG,

@@ -74,7 +74,7 @@ import type { RegistryDeltaRow, RegistryDeltaTargetKind } from './deltas';
  */
 export interface SubscriptionRow {
   id: string;
-  ownerId: string | null;
+  graphId: string | null;
   surface: string;
   definition: SubscriptionDefinition;
   module: string | null;
@@ -103,13 +103,13 @@ interface Row {
 }
 
 /**
- * ORDER BY owner_id NULLS FIRST: при коллизии id собственное определение ПЕРЕКРЫВАЕТ
+ * ORDER BY graph_id NULLS FIRST: при коллизии id собственное определение ПЕРЕКРЫВАЕТ
  * встроенное — так же, как это делал прежний реестр аспектов. Уникальность БД этого не
- * запрещает и не должна: частичные индексы разведены по `owner_id IS NULL` / `IS NOT NULL`
+ * запрещает и не должна: частичные индексы разведены по `graph_id IS NULL` / `IS NOT NULL`
  * именно ради переопределения (на нём стоит и сегодняшний кастомный `orbis/note`).
  * Запрещена только ВТОРАЯ своя строка с тем же id — её ловит `*_custom_uniq`.
  *
- * RLS сама скоупит выдачу под `withIdentity`, но условие по `owner_id` стоит и в запросе:
+ * RLS сама скоупит выдачу под `withIdentity`, но условие по `graph_id` стоит и в запросе:
  * снимок обязан быть одинаковым и под админским подключением (сиды, миграции, скрипты),
  * где политик нет вовсе.
  *
@@ -124,38 +124,38 @@ interface Row {
  * потому что снаружи в реестр не писал никто; она завела писателей и в тот же день гейт —
  * разбор в шапке `queryFilterNodeSchema` (`@orbis/shared`, `query/ast.ts`), пункт 4.
  */
-export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<RegistryDictionaries> {
+export async function loadRegistryRows(tx: Tx, graphId: string): Promise<RegistryDictionaries> {
   // Запросы идут ПОСЛЕДОВАТЕЛЬНО, а не Promise.all: транзакция живёт на одном соединении,
   // и параллельные запросы по нему сериализуются в лучшем случае, а в худшем — путают
   // порядок с `SET LOCAL`. Реестров пять, каждый — один индексный проход.
   const propertyRows = (await tx.execute(sql`
-    SELECT id, owner_id, key, label, description, type, status, storage,
+    SELECT id, graph_id, key, label, description, type, status, storage,
            scope, merged_into, module, rank, flags
     FROM property_definitions
-    WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
-    ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
+    WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
+    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
   const aspectRows = (await tx.execute(sql`
-    SELECT id, owner_id, key, label, description, properties, ai_instructions,
+    SELECT id, graph_id, key, label, description, properties, ai_instructions,
            tag_mappings, implements, aggregations, view_config, module, service, rank
     FROM aspect_definitions
-    WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
-    ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
+    WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
+    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
   const roleRows = (await tx.execute(sql`
-    SELECT id, owner_id, key, label, description, source_label, target_label,
+    SELECT id, graph_id, key, label, description, source_label, target_label,
            hierarchical, constraints, "symmetric", module, rank
     FROM relation_role_definitions
-    WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
-    ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
+    WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
+    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
   const contractRows = (await tx.execute(sql`
-    SELECT id, owner_id, key, label, description, kind, slots, classes, sets, facts, module, rank
+    SELECT id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank
     FROM contract_definitions
-    WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
-    ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
+    WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
+    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
   const subscriptionRows = (await tx.execute(sql`
-    SELECT id, owner_id, surface, definition, module, rank
+    SELECT id, graph_id, surface, definition, module, rank
     FROM subscription_definitions
-    WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
-    ORDER BY owner_id NULLS FIRST, id`)) as unknown as Row[];
+    WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
+    ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
   // `, id` — порядок словаря подписок в снимке детерминирован: без вторичного ключа он повторял физический
   // порядок строк и менялся после пересева/UPDATE (пин `load.test.ts` «словарь подписок несёт обе засеянные»
   // краснел в полном прогоне задачи 11 и был зелен поодиночке). Остальные словари — Deferred 11-m-load-order.
@@ -166,7 +166,7 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
       r.id as string,
       propertyDefinitionSchema.parse({
         id: r.id,
-        ownerId: r.owner_id,
+        graphId: r.graph_id,
         key: r.key,
         label: r.label,
         description: r.description,
@@ -188,7 +188,7 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
       r.id as string,
       aspectDefinitionSchema.parse({
         id: r.id,
-        ownerId: r.owner_id,
+        graphId: r.graph_id,
         key: r.key,
         label: r.label,
         description: r.description,
@@ -213,7 +213,7 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
       r.id as string,
       relationRoleDefinitionSchema.parse({
         id: r.id,
-        ownerId: r.owner_id,
+        graphId: r.graph_id,
         key: r.key,
         label: r.label,
         description: r.description,
@@ -234,7 +234,7 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
       r.id as string,
       contractDefinitionSchema.parse({
         id: r.id,
-        ownerId: r.owner_id,
+        graphId: r.graph_id,
         key: r.key,
         label: r.label,
         description: r.description,
@@ -253,7 +253,7 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
   for (const r of subscriptionRows) {
     subscriptions.set(r.id as string, {
       id: r.id as string,
-      ownerId: r.owner_id as string | null,
+      graphId: r.graph_id as string | null,
       surface: r.surface as string,
       definition: subscriptionDefinitionSchema.parse(r.definition),
       module: r.module as string | null,
@@ -269,18 +269,18 @@ export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<Registr
  * адресует строку целиком (`target_kind` + `target_id`), а не колонку, и складывать её с
  * определением умеет `applyDeltas` — в SQL это правило пришлось бы написать второй раз.
  *
- * Встроенных дельт не бывает по определению (`owner_id NOT NULL` в 0014), поэтому условие
+ * Встроенных дельт не бывает по определению (`graph_id NOT NULL` в 0014), поэтому условие
  * по владельцу здесь ровно одно и совпадает с политикой RLS `owner_owns_row`.
  */
-export async function loadRegistryDeltas(tx: Tx, ownerId: string): Promise<RegistryDeltaRow[]> {
+export async function loadRegistryDeltas(tx: Tx, graphId: string): Promise<RegistryDeltaRow[]> {
   const rows = (await tx.execute(sql`
-    SELECT id, owner_id, target_kind, target_id, base_version, delta
+    SELECT id, graph_id, target_kind, target_id, base_version, delta
     FROM registry_deltas
-    WHERE owner_id = ${ownerId}::uuid
+    WHERE graph_id = ${graphId}::uuid
     ORDER BY target_kind, target_id`)) as unknown as Row[];
   return rows.map((r) => ({
     id: r.id as string,
-    ownerId: r.owner_id as string,
+    graphId: r.graph_id as string,
     targetKind: r.target_kind as RegistryDeltaTargetKind,
     targetId: r.target_id as string,
     baseVersion: r.base_version as number,

@@ -34,43 +34,43 @@ afterAll(async () => {
 
 /** Дельта + инкремент версии ОДНОЙ транзакцией — тот же путь, что у боевого писателя. */
 async function writeDelta(
-  ownerId: string,
+  graphId: string,
   targetKind: 'aspect' | 'property',
   targetId: string,
   delta: unknown,
 ): Promise<void> {
-  await withIdentity(db, ownerId, async (tx) => {
-    await insertDelta(tx, ownerId, targetKind, targetId, delta);
-    await bumpOwnerRegistryVersion(tx, ownerId);
+  await withIdentity(db, graphId, async (tx) => {
+    await insertDelta(tx, graphId, targetKind, targetId, delta);
+    await bumpOwnerRegistryVersion(tx, graphId);
   });
 }
 
 async function insertDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   targetKind: string,
   targetId: string,
   delta: unknown,
 ): Promise<void> {
-  const base = (await readRegistryVersions(tx, ownerId)).systemVersion;
+  const base = (await readRegistryVersions(tx, graphId)).systemVersion;
   await tx.execute(sql`
-    INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
-    VALUES (${newId()}, ${ownerId}::uuid, ${targetKind}, ${targetId}, ${base},
+    INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+    VALUES (${newId()}, ${graphId}::uuid, ${targetKind}, ${targetId}, ${base},
             ${JSON.stringify(delta)}::jsonb)
-    ON CONFLICT (owner_id, target_kind, target_id) DO UPDATE SET delta = EXCLUDED.delta`);
+    ON CONFLICT (graph_id, target_kind, target_id) DO UPDATE SET delta = EXCLUDED.delta`);
 }
 
-async function deltaCount(ownerId: string): Promise<number> {
-  const rows = (await withIdentity(db, ownerId, (tx) =>
+async function deltaCount(graphId: string): Promise<number> {
+  const rows = (await withIdentity(db, graphId, (tx) =>
     tx.execute(
-      sql`SELECT count(*)::int AS n FROM registry_deltas WHERE owner_id = ${ownerId}::uuid`,
+      sql`SELECT count(*)::int AS n FROM registry_deltas WHERE graph_id = ${graphId}::uuid`,
     ),
   )) as unknown as { n: number }[];
   return rows[0]?.n ?? 0;
 }
 
-async function ownerVersion(ownerId: string): Promise<number> {
-  return (await withIdentity(db, ownerId, (tx) => readRegistryVersions(tx, ownerId))).ownerVersion;
+async function ownerVersion(graphId: string): Promise<number> {
+  return (await withIdentity(db, graphId, (tx) => readRegistryVersions(tx, graphId))).ownerVersion;
 }
 
 describe('версия реестра — в той же транзакции, что мутация (§А10-1)', () => {
@@ -171,7 +171,7 @@ describe('кеш эффективных определений (§А10-1)', () =
     await withIdentity(db, owner, async (tx) => {
       // Запись, не трогающая реестр: транзакции выдаётся xid, версия остаётся прежней.
       await tx.execute(sql`UPDATE user_settings SET timezone = timezone
-                           WHERE owner_id = ${owner}::uuid`);
+                           WHERE graph_id = ${owner}::uuid`);
       await effectiveRegistry(tx, owner);
       await effectiveRegistry(tx, owner);
     });

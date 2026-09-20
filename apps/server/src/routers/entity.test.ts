@@ -58,7 +58,7 @@ describe('entity.create / entity.get (§9.2)', () => {
       source: 'fast_path',
     });
     expect(() => entitySchema.parse(created)).not.toThrow();
-    expect(created.ownerId).toBe(user);
+    expect(created.graphId).toBe(user);
     expect(created.tags).toEqual(['task']); // нормализация executor'а, не роутера
     expect(created.createdAt.endsWith('Z')).toBe(true);
     // actionId — аддитивное поле поверх wire-сущности (Undo из UI-форм, 03-budget §3.6)

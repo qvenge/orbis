@@ -47,14 +47,14 @@ import { execute } from '../executor/executor';
 
 /**
  * Слаг садовника. Формула id — та же, что у категорий и смарт-листов (`onboarding.ts`):
- * uuidv5 от owner_id и стабильного слага, то есть id воспроизводим без обращения к БД, и
+ * uuidv5 от graph_id и стабильного слага, то есть id воспроизводим без обращения к БД, и
  * идемпотентность сева держится им, а не флагом.
  */
 export const GARDENER_SLUG = 'dictionary-gardener';
 
 /** id садовника у этого владельца — детерминированный, как `seedCategoryId`. */
-export function seedRoutineId(ownerId: string, slug: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:seed-routine:${slug}`, ORBIS_NAMESPACE);
+export function seedRoutineId(graphId: string, slug: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:seed-routine:${slug}`, ORBIS_NAMESPACE);
 }
 
 export const GARDENER_TITLE = 'Садовник словаря';
@@ -159,17 +159,17 @@ export interface GardenerSeedResult {
  */
 export async function seedGardener(
   db: Db,
-  ownerId: string,
+  graphId: string,
   clock: () => Date = () => new Date(),
 ): Promise<GardenerSeedResult> {
-  const id = seedRoutineId(ownerId, GARDENER_SLUG);
-  const existing = await withIdentity(db, ownerId, (tx) =>
-    tx.execute(sql`SELECT 1 FROM entities WHERE id = ${id}::uuid AND owner_id = ${ownerId}`),
+  const id = seedRoutineId(graphId, GARDENER_SLUG);
+  const existing = await withIdentity(db, graphId, (tx) =>
+    tx.execute(sql`SELECT 1 FROM entities WHERE id = ${id}::uuid AND graph_id = ${graphId}`),
   );
   if (existing.length > 0) return { seeded: false, id };
 
   const r = await execute(db, {
-    actorUserId: ownerId,
+    actorUserId: graphId,
     actorKind: 'owner',
     source: 'system',
     mechanism: 'seed',

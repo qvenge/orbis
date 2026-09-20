@@ -29,7 +29,7 @@
           {
             "envelope": {
               "id": "@env-food",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Конверт: Еда",
               "emoji": null,
               "body": "",
@@ -63,7 +63,7 @@
           {
             "envelope": {
               "id": "@env-transport",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Конверт: Транспорт",
               "emoji": null,
               "body": "",
@@ -100,7 +100,7 @@
           {
             "entity": {
               "id": "@mv-planned",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Покупка запланированная",
               "emoji": null,
               "body": "",
@@ -377,7 +377,7 @@
           {
             "envelope": {
               "id": "@env-food",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Конверт: Еда",
               "emoji": null,
               "body": "",
@@ -411,7 +411,7 @@
           {
             "envelope": {
               "id": "@env-transport",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Конверт: Транспорт",
               "emoji": null,
               "body": "",
@@ -448,7 +448,7 @@
           {
             "entity": {
               "id": "@mv-planned",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Покупка запланированная",
               "emoji": null,
               "body": "",
@@ -976,7 +976,7 @@
           {
             "envelope": {
               "id": "@env-food",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Конверт: Еда",
               "emoji": null,
               "body": "",
@@ -1010,7 +1010,7 @@
           {
             "envelope": {
               "id": "@env-transport",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Конверт: Транспорт",
               "emoji": null,
               "body": "",
@@ -1047,7 +1047,7 @@
           {
             "entity": {
               "id": "@mv-planned",
-              "ownerId": "<ownerId>",
+              "graphId": "<graphId>",
               "title": "Покупка запланированная",
               "emoji": null,
               "body": "",

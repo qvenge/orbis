@@ -138,7 +138,7 @@ async function rawOrigins(): Promise<Array<{ namespace: string; externalId: stri
   try {
     const rows = (await admin.execute(sql`
       SELECT namespace, external_id, entity_id FROM entity_origins
-      WHERE owner_id = ${user} ORDER BY external_id
+      WHERE graph_id = ${user} ORDER BY external_id
     `)) as unknown as Array<{ namespace: string; external_id: string; entity_id: string }>;
     return rows.map((r) => ({
       namespace: r.namespace,

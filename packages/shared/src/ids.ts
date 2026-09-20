@@ -1,5 +1,5 @@
 // Формулы — дословно PRD 01 §5.4 (инстансы), §4.5 (треды), §7.8 (batch-audit).
-// Формулы с owner_id — workspace-scoped при введении workspace'ов (D11).
+// Формулы с graph_id — на ключе ГРАФА (D44): единица владения — граф, а не аккаунт.
 import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 
 export const ORBIS_NAMESPACE = 'cb339e97-82d7-4d16-91c6-942d42df7054';
@@ -9,8 +9,8 @@ export function newId(): string {
   return uuidv7();
 }
 
-export function globalThreadId(ownerId: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:global-thread`, ORBIS_NAMESPACE);
+export function globalThreadId(graphId: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:global-thread`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -46,15 +46,15 @@ export function bodyDraftNoteId(entityId: string, savedAt: string): string {
   return uuidv5(`body-draft-note:${entityId.toLowerCase()}:${savedAt}`, ORBIS_NAMESPACE);
 }
 
-export function entityThreadId(ownerId: string, entityId: string): string {
+export function entityThreadId(graphId: string, entityId: string): string {
   return uuidv5(
-    `${ownerId.toLowerCase()}:entity-thread:${entityId.toLowerCase()}`,
+    `${graphId.toLowerCase()}:entity-thread:${entityId.toLowerCase()}`,
     ORBIS_NAMESPACE,
   );
 }
 
-export function batchAuditMessageId(ownerId: string, batchId: string): string {
-  return uuidv5(`batch:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
+export function batchAuditMessageId(graphId: string, batchId: string): string {
+  return uuidv5(`batch:${graphId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -75,16 +75,16 @@ export function retryCreateId(originalId: string): string {
  * batchId: идемпотентный повтор confirm возвращает исходное сообщение, а не пишет вторую
  * сводку, — иначе один и тот же файл считался бы дважды.
  */
-export function importSummaryMessageId(ownerId: string, batchId: string): string {
+export function importSummaryMessageId(graphId: string, batchId: string): string {
   return uuidv5(
-    `import-summary:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`,
+    `import-summary:${graphId.toLowerCase()}:${batchId.toLowerCase()}`,
     ORBIS_NAMESPACE,
   );
 }
 
 /** PK reject-сообщения pending-подтверждения (§7.10): идемпотентность reject по PK. */
-export function rejectMessageId(ownerId: string, pendingId: string): string {
-  return uuidv5(`reject:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);
+export function rejectMessageId(graphId: string, pendingId: string): string {
+  return uuidv5(`reject:${graphId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -93,8 +93,8 @@ export function rejectMessageId(ownerId: string, pendingId: string): string {
  * не плодит вторую pending-карточку (митигация Minor-4 Task 6). Server-derived — с сырым
  * batch_id клиента не совпадает (approve исполняет batch_id = pendingId, §7.10).
  */
-export function pendingMessageId(ownerId: string, batchId: string): string {
-  return uuidv5(`pending:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
+export function pendingMessageId(graphId: string, batchId: string): string {
+  return uuidv5(`pending:${graphId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -103,8 +103,8 @@ export function pendingMessageId(ownerId: string, batchId: string): string {
  * строке с этим PK: повтор того же ответа обязан быть replay'ем, а не второй записью и не
  * CONFLICT'ом. Пространство `answer:` своё — см. урок ниже про непересечение.
  */
-export function answerMessageId(ownerId: string, pendingId: string): string {
-  return uuidv5(`answer:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);
+export function answerMessageId(graphId: string, pendingId: string): string {
+  return uuidv5(`answer:${graphId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
 /**
@@ -113,9 +113,9 @@ export function answerMessageId(ownerId: string, pendingId: string): string {
  * это правило перечиткой ОБОИХ PK под замком — совпади они, гашение садилось бы поверх
  * ответа и различить две судьбы стало бы нечем.
  */
-export function questionStaleMessageId(ownerId: string, pendingId: string): string {
+export function questionStaleMessageId(graphId: string, pendingId: string): string {
   return uuidv5(
-    `question-stale:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`,
+    `question-stale:${graphId.toLowerCase()}:${pendingId.toLowerCase()}`,
     ORBIS_NAMESPACE,
   );
 }
@@ -136,7 +136,7 @@ export function processingMessageId(userMessageId: string): string {
  * PK блокировал бы повторное предложение навсегда, а окно подавления — 30 дней.
  */
 interface MemoryRuleKey {
-  ownerId: string;
+  graphId: string;
   pattern: string;
   fromCategoryId: string;
   toCategoryId: string;
@@ -145,7 +145,7 @@ interface MemoryRuleKey {
 
 function memoryRuleKey(prefix: string, k: MemoryRuleKey): string {
   return uuidv5(
-    `${prefix}:${k.ownerId.toLowerCase()}:${k.fromCategoryId.toLowerCase()}:${k.toCategoryId.toLowerCase()}:${k.pattern}:${k.date}`,
+    `${prefix}:${k.graphId.toLowerCase()}:${k.fromCategoryId.toLowerCase()}:${k.toCategoryId.toLowerCase()}:${k.pattern}:${k.date}`,
     ORBIS_NAMESPACE,
   );
 }

@@ -24,13 +24,14 @@ import {
 // таблица дельт, однострочная таблица версии system-реестра и кэш `spent` конверта (§Б5-5) —
 // они в конце файла, после исходных.
 // RLS-политики и сид аспектов — Слайс 1; здесь только структура, defaults, индексы, FK.
-// owner_id логически ссылается на auth.users (Supabase); FK на auth-схему не объявляем —
-// она управляется Supabase, а не нашими миграциями.
+// graph_id — ключ владения и изоляции (D44): строка принадлежит ГРАФУ. У личного графа id равен id
+// аккаунта Supabase по построению (CHECK таблицы graphs, срез Г-2). FK на auth-схему не объявляем —
+// она управляется Supabase, а не нашими миграциями; FK на graphs.id приезжает миграцией 0020.
 
 // §4.1 entities
 export const entities = pgTable('entities', {
   id: uuid('id').primaryKey(), // UUIDv7, генерируется клиентом
-  ownerId: uuid('owner_id').notNull(),
+  graphId: uuid('graph_id').notNull(),
   title: text('title').notNull(),
   emoji: text('emoji'),
   body: text('body').notNull().default(''),
@@ -144,7 +145,7 @@ export const aspectDefinitions = pgTable(
   'aspect_definitions',
   {
     id: text('id').notNull(), // namespaced: orbis/task, user/sleep
-    ownerId: uuid('owner_id'), // NULL = встроенный аспект
+    graphId: uuid('graph_id'), // NULL = встроенный аспект
     // Машинная ручка §А2-3: из неё собирается имя тула attach_* (§А9-1). У встроенных = id.
     key: text('key').notNull(),
     label: jsonb('label').notNull(), // per-locale {ru, en} — подпись для человека
@@ -168,16 +169,16 @@ export const aspectDefinitions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('aspect_definitions_builtin_uniq').on(t.id).where(sql`${t.ownerId} IS NULL`),
+    uniqueIndex('aspect_definitions_builtin_uniq').on(t.id).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('aspect_definitions_custom_uniq')
-      .on(t.ownerId, t.id)
-      .where(sql`${t.ownerId} IS NOT NULL`),
+      .on(t.graphId, t.id)
+      .where(sql`${t.graphId} IS NOT NULL`),
   ],
 );
 
 // §4.4 user_settings — имена столбцов настроек в camelCase (историческое соответствие коду)
 export const userSettings = pgTable('user_settings', {
-  ownerId: uuid('owner_id').primaryKey(),
+  graphId: uuid('graph_id').primaryKey(),
   plan: text('plan').notNull().default('dev'),
   timezone: text('timezone').notNull().default('Europe/Moscow'),
   defaultCurrency: text('defaultCurrency').notNull().default('RUB'),
@@ -209,7 +210,7 @@ export const chatThreads = pgTable(
   'chat_threads',
   {
     id: uuid('id').primaryKey(), // детерминированный uuidv5, генерируется клиентом
-    ownerId: uuid('owner_id').notNull(),
+    graphId: uuid('graph_id').notNull(),
     entityId: uuid('entity_id').references(() => entities.id),
     title: text('title'),
     archived: boolean('archived').notNull().default(false),
@@ -217,9 +218,9 @@ export const chatThreads = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('chat_threads_global_uniq').on(t.ownerId).where(sql`${t.entityId} IS NULL`),
+    uniqueIndex('chat_threads_global_uniq').on(t.graphId).where(sql`${t.entityId} IS NULL`),
     uniqueIndex('chat_threads_entity_uniq')
-      .on(t.ownerId, t.entityId)
+      .on(t.graphId, t.entityId)
       .where(sql`${t.entityId} IS NOT NULL`),
   ],
 );
@@ -240,18 +241,18 @@ export const chatMessages = pgTable('chat_messages', {
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 });
 
-// §4.7 ai_usage — метеринг LLM per user/day/model; PK (owner_id, date, model)
+// §4.7 ai_usage — метеринг LLM per user/day/model; PK (graph_id, date, model)
 export const aiUsage = pgTable(
   'ai_usage',
   {
-    ownerId: uuid('owner_id').notNull(),
+    graphId: uuid('graph_id').notNull(),
     date: date('date').notNull(), // календарный день в UTC
     model: text('model').notNull(),
     inputTokens: bigint('input_tokens', { mode: 'number' }).notNull().default(0),
     outputTokens: bigint('output_tokens', { mode: 'number' }).notNull().default(0),
     requestCount: integer('request_count').notNull().default(0),
   },
-  (t) => [primaryKey({ columns: [t.ownerId, t.date, t.model] })],
+  (t) => [primaryKey({ columns: [t.graphId, t.date, t.model] })],
 );
 
 // §4.8 entity_origins — provenance импорта
@@ -259,7 +260,7 @@ export const entityOrigins = pgTable(
   'entity_origins',
   {
     id: uuid('id').primaryKey(),
-    ownerId: uuid('owner_id').notNull(),
+    graphId: uuid('graph_id').notNull(),
     entityId: uuid('entity_id')
       .notNull()
       .references(() => entities.id),
@@ -267,18 +268,18 @@ export const entityOrigins = pgTable(
     externalId: text('external_id').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique('entity_origins_uniq').on(t.ownerId, t.namespace, t.externalId)],
+  (t) => [unique('entity_origins_uniq').on(t.graphId, t.namespace, t.externalId)],
 );
 
 // entity_versions (§2.2, ADE-срез 1, С11) — закреплённые версии тела: снимок текста с
 // подписью, который делает ЧЕЛОВЕК. Не история правок (её ведёт редактор), а те точки,
-// к которым он решил иметь возможность вернуться. Владение прямое, по owner_id, — как у
+// к которым он решил иметь возможность вернуться. Владение прямое, по graph_id, — как у
 // entity_origins: снимок принадлежит владельцу сущности и живёт под той же RLS.
 export const entityVersions = pgTable(
   'entity_versions',
   {
     id: uuid('id').primaryKey(), // UUIDv7, генерирует сервер (newId)
-    ownerId: uuid('owner_id').notNull(),
+    graphId: uuid('graph_id').notNull(),
     // cascade: версия — снимок ТЕЛА конкретной сущности, без неё она ничего не значит.
     // Держать снимки удалённой записи значит хранить текст, который человек уже стёр.
     entityId: uuid('entity_id')
@@ -313,7 +314,7 @@ export const agentGrants = pgTable(
   'agent_grants',
   {
     id: uuid('id').primaryKey(),
-    ownerId: uuid('owner_id').notNull(),
+    graphId: uuid('graph_id').notNull(),
     // NULL у PAT: у headless-доступа нет зарегистрированного клиента
     clientId: text('client_id').references(() => oauthClients.clientId, { onDelete: 'cascade' }),
     kind: text('kind').notNull(), // oauth | pat
@@ -345,7 +346,7 @@ export const agentGrants = pgTable(
     uniqueIndex('agent_grants_access_hash').on(t.accessHash),
     uniqueIndex('agent_grants_refresh_hash').on(t.refreshHash),
     uniqueIndex('agent_grants_code_hash').on(t.codeHash),
-    index('agent_grants_owner').on(t.ownerId),
+    index('agent_grants_graph').on(t.graphId),
     check('agent_grants_kind', sql`${t.kind} IN ('oauth','pat')`),
   ],
 );
@@ -353,10 +354,10 @@ export const agentGrants = pgTable(
 // ---------------------------------------------------------------------------
 // Реестры реформы свойств (§С6) — семь таблиц.
 //
-// Общая форма пяти реестров: `owner_id IS NULL` — встроенная запись из сида (общая для
+// Общая форма пяти реестров: `graph_id IS NULL` — встроенная запись из сида (общая для
 // всех), иначе запись владельца. Уникальность — не PK, а пара partial unique index'ов
 // (образец — aspect_definitions §4.3): своя запись с тем же `id`, что у встроенной,
-// ЗАКОННА и перекрывает её при загрузке (ORDER BY owner_id NULLS FIRST) — на этом стоит
+// ЗАКОННА и перекрывает её при загрузке (ORDER BY graph_id NULLS FIRST) — на этом стоит
 // сегодняшнее переопределение аспекта и будущая дельта.
 //
 // RLS, GRANT'ы и политики — рукописная часть миграции 0014 (drizzle-kit их не видит).
@@ -370,7 +371,7 @@ export const propertyDefinitions = pgTable(
     // Тождество, не меняется НИКОГДА. У встроенных — читаемая строка (`orbis/task_status`),
     // у пользовательских и приложений — uuid (Р3). На экране id — баг.
     id: text('id').notNull(),
-    ownerId: uuid('owner_id'), // NULL = встроенное
+    graphId: uuid('graph_id'), // NULL = встроенное
     // Машинная ручка: имя параметра тула, текст запроса, MCP, канонический экспорт.
     // У встроенных изначально = id; меняется только релизом системы (№12).
     key: text('key').notNull(),
@@ -398,18 +399,18 @@ export const propertyDefinitions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('property_definitions_builtin_uniq').on(t.id).where(sql`${t.ownerId} IS NULL`),
+    uniqueIndex('property_definitions_builtin_uniq').on(t.id).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('property_definitions_custom_uniq')
-      .on(t.ownerId, t.id)
-      .where(sql`${t.ownerId} IS NOT NULL`),
+      .on(t.graphId, t.id)
+      .where(sql`${t.graphId} IS NOT NULL`),
     // key уникален отдельно от id: по нему адресуют запросы и параметры тулов, и два
     // свойства с одним key сделали бы текст запроса неоднозначным. «Уникален среди
     // ВИДИМОГО владельцу» (встроенные ∪ свои) индексом не выражается — эту половину
     // проверяет приложение при создании и переименовании key (Задача 15).
-    uniqueIndex('property_definitions_builtin_key').on(t.key).where(sql`${t.ownerId} IS NULL`),
+    uniqueIndex('property_definitions_builtin_key').on(t.key).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('property_definitions_custom_key')
-      .on(t.ownerId, t.key)
-      .where(sql`${t.ownerId} IS NOT NULL`),
+      .on(t.graphId, t.key)
+      .where(sql`${t.graphId} IS NOT NULL`),
     check('property_definitions_status', sql`${t.status} IN ('active','proposed','deprecated')`),
     check('property_definitions_storage', sql`${t.storage} IN ('props','core')`),
   ],
@@ -420,7 +421,7 @@ export const relationRoleDefinitions = pgTable(
   'relation_role_definitions',
   {
     id: text('id').notNull(),
-    ownerId: uuid('owner_id'), // NULL = системная роль; свои роли — v1.5 (Ч7)
+    graphId: uuid('graph_id'), // NULL = системная роль; свои роли — v1.5 (Ч7)
     key: text('key').notNull(), // namespace НЕ обязателен: системные v1 — голые слаги
     label: jsonb('label').notNull(),
     description: jsonb('description').notNull(),
@@ -440,10 +441,10 @@ export const relationRoleDefinitions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('relation_role_definitions_builtin_uniq').on(t.id).where(sql`${t.ownerId} IS NULL`),
+    uniqueIndex('relation_role_definitions_builtin_uniq').on(t.id).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('relation_role_definitions_custom_uniq')
-      .on(t.ownerId, t.id)
-      .where(sql`${t.ownerId} IS NOT NULL`),
+      .on(t.graphId, t.id)
+      .where(sql`${t.graphId} IS NOT NULL`),
   ],
 );
 
@@ -462,7 +463,7 @@ export const contractDefinitions = pgTable(
   'contract_definitions',
   {
     id: text('id').notNull(),
-    ownerId: uuid('owner_id'), // v1 — только NULL: пользовательские контракты — v1.5 (Ч7)
+    graphId: uuid('graph_id'), // v1 — только NULL: пользовательские контракты — v1.5 (Ч7)
     key: text('key').notNull(),
     label: jsonb('label').notNull(),
     description: jsonb('description').notNull(),
@@ -476,10 +477,10 @@ export const contractDefinitions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('contract_definitions_builtin_uniq').on(t.id).where(sql`${t.ownerId} IS NULL`),
+    uniqueIndex('contract_definitions_builtin_uniq').on(t.id).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('contract_definitions_custom_uniq')
-      .on(t.ownerId, t.id)
-      .where(sql`${t.ownerId} IS NOT NULL`),
+      .on(t.graphId, t.id)
+      .where(sql`${t.graphId} IS NOT NULL`),
     check('contract_definitions_kind', sql`${t.kind} IN ('slots','facts')`),
   ],
 );
@@ -489,7 +490,7 @@ export const subscriptionDefinitions = pgTable(
   'subscription_definitions',
   {
     id: text('id').notNull(),
-    ownerId: uuid('owner_id'),
+    graphId: uuid('graph_id'),
     surface: text('surface').notNull(), // поверхность-потребитель: agenda, budget, …
     definition: jsonb('definition').notNull(), // декларация подписки (§Б5)
     module: text('module'),
@@ -497,10 +498,10 @@ export const subscriptionDefinitions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('subscription_definitions_builtin_uniq').on(t.id).where(sql`${t.ownerId} IS NULL`),
+    uniqueIndex('subscription_definitions_builtin_uniq').on(t.id).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('subscription_definitions_custom_uniq')
-      .on(t.ownerId, t.id)
-      .where(sql`${t.ownerId} IS NOT NULL`),
+      .on(t.graphId, t.id)
+      .where(sql`${t.graphId} IS NOT NULL`),
   ],
 );
 
@@ -509,7 +510,7 @@ export const actionDefinitions = pgTable(
   'action_definitions',
   {
     id: text('id').notNull(),
-    ownerId: uuid('owner_id'),
+    graphId: uuid('graph_id'),
     key: text('key').notNull(),
     label: jsonb('label').notNull(),
     description: jsonb('description').notNull(),
@@ -523,10 +524,10 @@ export const actionDefinitions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex('action_definitions_builtin_uniq').on(t.id).where(sql`${t.ownerId} IS NULL`),
+    uniqueIndex('action_definitions_builtin_uniq').on(t.id).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('action_definitions_custom_uniq')
-      .on(t.ownerId, t.id)
-      .where(sql`${t.ownerId} IS NOT NULL`),
+      .on(t.graphId, t.id)
+      .where(sql`${t.graphId} IS NOT NULL`),
   ],
 );
 
@@ -544,7 +545,7 @@ export const registryDeltas = pgTable(
   'registry_deltas',
   {
     id: uuid('id').primaryKey(),
-    ownerId: uuid('owner_id').notNull(),
+    graphId: uuid('graph_id').notNull(),
     targetKind: text('target_kind').notNull(),
     targetId: text('target_id').notNull(),
     baseVersion: integer('base_version').notNull(),
@@ -552,7 +553,7 @@ export const registryDeltas = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    unique('registry_deltas_uniq').on(t.ownerId, t.targetKind, t.targetId),
+    unique('registry_deltas_uniq').on(t.graphId, t.targetKind, t.targetId),
     check(
       'registry_deltas_target_kind',
       sql`${t.targetKind} IN ('property','aspect','contract','relation_role','subscription','action')`,
@@ -603,7 +604,7 @@ export const envelopeSpentCache = pgTable(
     envelopeId: uuid('envelope_id')
       .notNull()
       .references(() => entities.id, { onDelete: 'cascade' }),
-    ownerId: uuid('owner_id').notNull(),
+    graphId: uuid('graph_id').notNull(),
     asOf: date('as_of').notNull(),
     spent: numeric('spent').notNull(),
     ownerVersion: integer('owner_version').notNull(),
@@ -612,7 +613,7 @@ export const envelopeSpentCache = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.envelopeId, t.asOf] }),
-    // Снос по владельцу (property_merge, undo) и отчёт `reset-world` ходят по owner_id.
-    index('envelope_spent_cache_owner').on(t.ownerId, t.asOf),
+    // Снос по владельцу (property_merge, undo) и отчёт `reset-world` ходят по graph_id.
+    index('envelope_spent_cache_graph').on(t.graphId, t.asOf),
   ],
 );

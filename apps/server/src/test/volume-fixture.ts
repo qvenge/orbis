@@ -110,7 +110,7 @@ function entityRow(
 ): typeof entities.$inferInsert {
   return {
     id,
-    ownerId: VOLUME_OWNER_ID,
+    graphId: VOLUME_OWNER_ID,
     title,
     body: '',
     tags: [],
@@ -412,18 +412,18 @@ const probeIdList = () =>
  */
 export async function cleanupVolumeProbes(db: Db): Promise<void> {
   await db.execute(sql`DELETE FROM entities WHERE id IN (${probeIdList()})`);
-  await db.execute(sql`DELETE FROM envelope_spent_cache WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`);
+  await db.execute(sql`DELETE FROM envelope_spent_cache WHERE graph_id = ${VOLUME_OWNER_ID}::uuid`);
 }
 
 async function countRows(
   db: Db,
 ): Promise<{ entities: number; envelopes: number; bindings: number }> {
   const rows = (await db.execute(sql`
-    SELECT (SELECT count(*) FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid) AS e,
-           (SELECT count(*) FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid
+    SELECT (SELECT count(*) FROM entities WHERE graph_id = ${VOLUME_OWNER_ID}::uuid) AS e,
+           (SELECT count(*) FROM entities WHERE graph_id = ${VOLUME_OWNER_ID}::uuid
                              AND 'orbis/budget' = ANY(aspects)) AS env,
            (SELECT count(*) FROM relations r JOIN entities s ON s.id = r.source_id
-             WHERE s.owner_id = ${VOLUME_OWNER_ID}::uuid AND r.role = ${ROLE_ENVELOPE_BINDING}) AS b
+             WHERE s.graph_id = ${VOLUME_OWNER_ID}::uuid AND r.role = ${ROLE_ENVELOPE_BINDING}) AS b
   `)) as unknown as Array<{ e: string; env: string; b: string }>;
   const row = rows[0];
   return {
@@ -436,7 +436,7 @@ async function countRows(
 /**
  * Привязки конверт→движение — одним проходом ТОГО ЖЕ селектора, что зовёт бюджет-хук
  * (`binding.ts:451` → `selectEnvelopes`), и по тому же правилу комбинации. Проход идёт под
- * админ-DSN: RLS здесь ничего не меняет — селектор и так фильтрует `owner_id = $1`, а вторая
+ * админ-DSN: RLS здесь ничего не меняет — селектор и так фильтрует `graph_id = $1`, а вторая
  * приложенческая коннекция ради этого не нужна.
  */
 async function seedBindings(db: Db, world: VolumeWorld): Promise<number> {
@@ -466,7 +466,7 @@ async function seedBindings(db: Db, world: VolumeWorld): Promise<number> {
   for (let i = 0; i < unique.length; i += SELECTOR_BATCH) {
     const won = await db.transaction(async (tx) =>
       selectEnvelopes(tx, {
-        ownerId: VOLUME_OWNER_ID,
+        graphId: VOLUME_OWNER_ID,
         defaultCurrency: VOLUME_DEFAULT_CURRENCY,
         rows: unique.slice(i, i + SELECTOR_BATCH),
       }),
@@ -515,13 +515,13 @@ export async function ensureVolumeFixture(): Promise<{
     }
     // Неполный корпус не досевается, а пересевается: досев обязан знать, какие строки уже есть, а
     // знать этого он не может — прошлый прогон могли оборвать (`graph-fixture.ts:180-182`).
-    await db.execute(sql`DELETE FROM entities WHERE owner_id = ${VOLUME_OWNER_ID}::uuid`);
+    await db.execute(sql`DELETE FROM entities WHERE graph_id = ${VOLUME_OWNER_ID}::uuid`);
     // Часы владельца — UTC: «сегодня» корпуса обязано быть воспроизводимым, а не зависеть от
     // зоны машины (`localToday` читает user_settings.timezone).
     await db
       .insert(userSettings)
       .values({
-        ownerId: VOLUME_OWNER_ID,
+        graphId: VOLUME_OWNER_ID,
         timezone: 'UTC',
         defaultCurrency: VOLUME_DEFAULT_CURRENCY,
       })

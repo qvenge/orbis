@@ -48,7 +48,7 @@ function snapshot(over: Partial<RegistrySnapshot> = {}): RegistrySnapshot {
 
 function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
   return {
-    ownerId: '00000000-0000-7000-8000-0000000000a1',
+    graphId: '00000000-0000-7000-8000-0000000000a1',
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     reg: snapshot(),
@@ -607,7 +607,7 @@ describe('экспорты для движков подписок (§Б5-6)', ()
   test('ENTITY_SELECT_COLUMNS — те же колонки, что собирает toWireEntityFromSql', () => {
     expect(ENTITY_SELECT_COLUMNS.split(', ')).toEqual([
       'id',
-      'owner_id',
+      'graph_id',
       'title',
       'emoji',
       'body',

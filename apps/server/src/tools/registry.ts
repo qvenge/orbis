@@ -1172,7 +1172,7 @@ const CORE_TOOLS: OrbisToolDef[] = [
  * Реестру тулов и карточкам она больше не нужна: с Задачи 12 они собираются из снимка
  * `effectiveRegistry` — того же, по которому валидируется запись. Здесь остался ровно один
  * читатель — секция «Инструкции активных аспектов»: ей нужны `id` и `aiInstructions`, но не
- * нужен `ownerId`, а `effectiveRegistry` без него не зовётся (снимок скоупится и под админским
+ * нужен `graphId`, а `effectiveRegistry` без него не зовётся (снимок скоупится и под админским
  * подключением, где политик RLS нет вовсе).
  */
 export interface AspectToolRow {
@@ -1190,7 +1190,7 @@ export interface AspectToolRow {
 
 /**
  * Аспекты, видимые актору: builtin + собственные кастомные (RLS того же tx).
- * ORDER BY owner_id NULLS FIRST: при коллизии id собственное определение
+ * ORDER BY graph_id NULLS FIRST: при коллизии id собственное определение
  * перекрывает builtin — как в снимке реестра исполнителя (`registry/load.ts`).
  */
 export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
@@ -1203,7 +1203,7 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
       module: aspectDefinitions.module,
     })
     .from(aspectDefinitions)
-    .orderBy(sql`${aspectDefinitions.ownerId} NULLS FIRST`);
+    .orderBy(sql`${aspectDefinitions.graphId} NULLS FIRST`);
   const byId = new Map<string, AspectToolRow>();
   for (const row of rows) {
     byId.set(row.id, {
@@ -1301,6 +1301,6 @@ export function buildToolDefs(
  * Четвёртая, диспатч (`dispatchTool`, `tools/dispatch.ts`), берёт маску сама: снимок у неё
  * уже свой.
  */
-export async function buildToolRegistry(tx: Tx, ownerId: string): Promise<OrbisToolDef[]> {
-  return buildToolDefs(await effectiveRegistry(tx, ownerId), await disabledModulesOf(tx, ownerId));
+export async function buildToolRegistry(tx: Tx, graphId: string): Promise<OrbisToolDef[]> {
+  return buildToolDefs(await effectiveRegistry(tx, graphId), await disabledModulesOf(tx, graphId));
 }

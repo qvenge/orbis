@@ -81,7 +81,7 @@ export type RunSubject =
  */
 export type VerbCtx = {
   db: Db;
-  ownerId: string;
+  graphId: string;
   subject: RunSubject;
   clock: () => Date;
   sink: JournalSink;
@@ -239,7 +239,7 @@ type RunLookup =
  * решается в самих глаголах (см. `terminalError`).
  */
 async function readRun(ctx: VerbCtx, runId: string): Promise<RunLookup> {
-  const row = await withIdentity(ctx.db, ctx.ownerId, (tx) => runById(tx, runId));
+  const row = await withIdentity(ctx.db, ctx.graphId, (tx) => runById(tx, runId));
   if (row === null) return { error: err('NOT_FOUND', 'прогон не найден', { run_id: runId }) };
   if (row.props[subjectProperty(ctx.subject)] !== subjectId(ctx.subject)) {
     return {
@@ -408,13 +408,13 @@ async function myQueue(ctx: VerbCtx, grant: GrantRef): Promise<ToolDispatchResul
   // брошенным, обязан приехать агенту уже свободным — иначе он увидит его
   // `in_progress` и уйдёт ни с чем ровно в тот момент, когда работа освободилась.
   const { swept } = await sweepStaleRuns(ctx.db, {
-    ownerId: ctx.ownerId,
+    graphId: ctx.graphId,
     actorKind: 'agent',
     actorGrantId: grant.id,
     clock: ctx.clock,
   });
 
-  const tickets = await withIdentity(ctx.db, ctx.ownerId, async (tx) => {
+  const tickets = await withIdentity(ctx.db, ctx.graphId, async (tx) => {
     const rows = await assignedTickets(tx, grant.id);
     const out: QueueTicket[] = [];
     for (const row of rows) {
@@ -452,13 +452,13 @@ async function claimTask(
   grant: GrantRef,
   input: ClaimTaskInput,
 ): Promise<ToolDispatchResult> {
-  const ticket = await withIdentity(ctx.db, ctx.ownerId, (tx) => ticketById(tx, input.ticket_id));
+  const ticket = await withIdentity(ctx.db, ctx.graphId, (tx) => ticketById(tx, input.ticket_id));
   // Чужой и несуществующий тикет под RLS неразличимы намеренно: исполнителю не с чего
   // узнавать, что за пределами его назначений вообще что-то есть.
   if (ticket === null) {
     return err('NOT_FOUND', 'тикет не найден', { ticket_id: input.ticket_id });
   }
-  const project = await withIdentity(ctx.db, ctx.ownerId, (tx) =>
+  const project = await withIdentity(ctx.db, ctx.graphId, (tx) =>
     parentProject(tx, input.ticket_id),
   );
 
@@ -535,7 +535,7 @@ async function claimTask(
   const r = await execute(
     ctx.db,
     {
-      actorUserId: ctx.ownerId,
+      actorUserId: ctx.graphId,
       ...actorOf(ctx.subject),
       runId,
       batchId,
@@ -602,7 +602,7 @@ async function claimTask(
   }
   const actualRunId = runWire.id;
 
-  const { history, ticketForModel } = await withIdentity(ctx.db, ctx.ownerId, async (tx) => {
+  const { history, ticketForModel } = await withIdentity(ctx.db, ctx.graphId, async (tx) => {
     const runs = await runsOfParent(tx, ticket.id);
     return {
       history: runs.filter((row) => row.id !== actualRunId).map(runSummary),
@@ -611,7 +611,7 @@ async function claimTask(
       // `{аспект: {поле: значение}}` из wire-формы; она снята Задачей 13c, и второй перевод
       // «свойство → имя для модели» дал бы агенту поле, которое он прочитал одним именем, а
       // записать обязан другим.
-      ticketForModel: toLlmEntity(ticketWire, await effectiveRegistry(tx, ctx.ownerId)),
+      ticketForModel: toLlmEntity(ticketWire, await effectiveRegistry(tx, ctx.graphId)),
     };
   });
 
@@ -692,7 +692,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
     const r = await execute(
       ctx.db,
       {
-        actorUserId: ctx.ownerId,
+        actorUserId: ctx.graphId,
         ...actorOf(ctx.subject),
         runId: found.run.id,
         batchId,
@@ -784,8 +784,8 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
  * молча не найдутся и вся пачка прочитается открытой (её докблок).
  */
 async function hasOpenUnits(ctx: VerbCtx, runId: string): Promise<boolean> {
-  const units = await withIdentity(ctx.db, ctx.ownerId, (tx) =>
-    listRunUnits(tx, ctx.ownerId, runId),
+  const units = await withIdentity(ctx.db, ctx.graphId, (tx) =>
+    listRunUnits(tx, ctx.graphId, runId),
   );
   return units.some((u) => u.fate === 'open');
 }
@@ -863,7 +863,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   let ticket: TicketRow | null = null;
   let ticketUpdate: TicketUpdate | null = null;
   if (ctx.subject.kind === 'grant') {
-    ticket = await withIdentity(ctx.db, ctx.ownerId, (tx) => ticketOfRun(tx, run.id));
+    ticket = await withIdentity(ctx.db, ctx.graphId, (tx) => ticketOfRun(tx, run.id));
     // Прогон-сирота: закрывать нечего и некуда отчитываться. Случай не гипотетический —
     // связь мог снять владелец, — и молча закрыть один прогон было бы хуже отказа.
     if (ticket === null) {
@@ -922,7 +922,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   const r = await execute(
     ctx.db,
     {
-      actorUserId: ctx.ownerId,
+      actorUserId: ctx.graphId,
       ...actorOf(ctx.subject),
       runId: run.id,
       batchId,

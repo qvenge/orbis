@@ -53,7 +53,7 @@ async function contextOf(
 ) {
   return withIdentity(db, owner, (tx) =>
     buildRoutineContext(tx, {
-      ownerId: owner,
+      graphId: owner,
       routine: {
         id: routineId,
         title: 'Утренний обзор',

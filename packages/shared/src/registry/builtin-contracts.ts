@@ -56,10 +56,10 @@ const c = (key: string, ru: string, en: string) => ({ key, label: { ru, en } });
 
 // `Omit` по ВЕТКЕ, а не по union'у: `Omit<A|B, K>` не дистрибутивен и потерял бы дискриминатор —
 // запись `{kind:'facts', slots:[…]}` перестала бы падать типом.
-type SlotsEntry = Omit<z.input<typeof contractSlotsSchema>, 'ownerId' | 'key' | 'rank'> & {
+type SlotsEntry = Omit<z.input<typeof contractSlotsSchema>, 'graphId' | 'key' | 'rank'> & {
   id: ContractId;
 };
-type FactsEntry = Omit<z.input<typeof contractFactsSchema>, 'ownerId' | 'key' | 'rank'> & {
+type FactsEntry = Omit<z.input<typeof contractFactsSchema>, 'graphId' | 'key' | 'rank'> & {
   id: ContractId;
 };
 
@@ -237,7 +237,7 @@ const ENTRIES: readonly (SlotsEntry | FactsEntry)[] = [
 export const BUILTIN_CONTRACT_DEFS: readonly ContractDefinition[] = ENTRIES.map((entry, index) =>
   contractDefinitionSchema.parse({
     ...entry,
-    ownerId: null,
+    graphId: null,
     key: entry.id /* у встроенных key = id (§А2-1) */,
     rank: index + 1,
   }),

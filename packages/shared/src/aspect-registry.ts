@@ -267,7 +267,7 @@ function diffOne(
  * ручная операция `bun scripts/ops.ts check`: второй реализации «что считать дрейфом» быть
  * не должно, иначе однажды они разойдутся в ответах.
  *
- * КАСТОМНЫЕ строки (`owner_id IS NOT NULL`) сюда не попадают вовсе — их отбирает SELECT
+ * КАСТОМНЫЕ строки (`graph_id IS NOT NULL`) сюда не попадают вовсе — их отбирает SELECT
  * вызывающего: у пользовательских записей нет эталона в коде, и дрейфом они не бывают.
  */
 export function diffBuiltinRegistries(rows: RegistryDbRows): RegistryDrift {

@@ -67,8 +67,8 @@ export const SURFACE_TODAY = '2026-07-03';
 export const SURFACE_MONTH = '2026-07';
 
 /** id сущности мира — uuidv5 от владельца и слага: воспроизводим без обращения к БД. */
-export function surfaceEntityId(ownerId: string, slug: string): string {
-  return uuidv5(`${ownerId.toLowerCase()}:surface-world:${slug}`, ORBIS_NAMESPACE);
+export function surfaceEntityId(graphId: string, slug: string): string {
+  return uuidv5(`${graphId.toLowerCase()}:surface-world:${slug}`, ORBIS_NAMESPACE);
 }
 
 /** Слаги мира в порядке сева; они же — читаемые имена в эталоне вместо uuid. */
@@ -96,8 +96,8 @@ export const SURFACE_SLUGS = [
 // Ниже — операции сева. Порядок значим: категории → конверты → движения (бюджет-хук
 // привязывает движение к УЖЕ существующему конверту тем же `selectEnvelope`, `binding.ts:121`),
 // связь `dependency` — последней.
-function ops(ownerId: string): { tool: string; input: Record<string, unknown> }[] {
-  const id = (slug: string) => surfaceEntityId(ownerId, slug);
+function ops(graphId: string): { tool: string; input: Record<string, unknown> }[] {
+  const id = (slug: string) => surfaceEntityId(graphId, slug);
   const cat = (slug: string, title: string, icon: string) => ({
     tool: 'entity_create',
     input: {
@@ -226,19 +226,19 @@ function ops(ownerId: string): { tool: string; input: Record<string, unknown> }[
  * владельца — ТОЛЬКО декларацией — и две их строки поверх того же мира 0b.
  */
 export async function seedSurfaceWorld(
-  ownerId: string,
+  graphId: string,
   opts?: { gateAspects?: boolean },
 ): Promise<void> {
   // Аспекты — ДО мира: `entity_create` с неизвестным аспектом отвергается валидатором.
   if (opts?.gateAspects === true) {
-    await seedCustomAspect(ownerId, GATE_FIN_ASPECT);
-    await seedCustomAspect(ownerId, GATE_PLAIN_ASPECT);
+    await seedCustomAspect(graphId, GATE_FIN_ASPECT);
+    await seedCustomAspect(graphId, GATE_PLAIN_ASPECT);
   }
   const { db, client } = appDb();
   try {
-    for (const op of ops(ownerId)) {
+    for (const op of ops(graphId)) {
       const r = await execute(db, {
-        actorUserId: ownerId,
+        actorUserId: graphId,
         actorKind: 'owner',
         source: 'ui',
         operations: [op],
@@ -248,7 +248,7 @@ export async function seedSurfaceWorld(
   } finally {
     await client.end();
   }
-  if (opts?.gateAspects === true) await seedGateSurfaceRows(ownerId);
+  if (opts?.gateAspects === true) await seedGateSurfaceRows(graphId);
 }
 
 export interface AgendaSurfaceRow {
@@ -312,7 +312,7 @@ const AGENDA_SURFACE_DAYS = 8;
  */
 async function agendaSurface(tx: Tx, cctx: CompileCtx): Promise<AgendaSurfaceRow[]> {
   const def = agendaSubscriptionOf(cctx.reg);
-  const res = await agendaListOf(tx, cctx.ownerId, def, {
+  const res = await agendaListOf(tx, cctx.graphId, def, {
     today: cctx.today,
     timeZone: cctx.timeZone,
     days: AGENDA_SURFACE_DAYS,
@@ -328,11 +328,11 @@ async function agendaSurface(tx: Tx, cctx: CompileCtx): Promise<AgendaSurfaceRow
 /**
  * ЧТО МАСКИРУЕТСЯ И ПОЧЕМУ: эталон обязан быть сравним между прогонами И между четырьмя
  * состояниями (задача 18), у каждого из которых свой владелец, значит и свои id. Поэтому id
- * мира → читаемый слаг (`@task-open`), `ownerId` и оба таймстампа → метка рода. Всё прочее —
+ * мира → читаемый слаг (`@task-open`), `graphId` и оба таймстампа → метка рода. Всё прочее —
  * байт-в-байт: маска, съевшая лишнее, и есть способ, которым эталон перестаёт что-то значить.
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MASKED_KEYS = new Set(['ownerId', 'createdAt', 'updatedAt']);
+const MASKED_KEYS = new Set(['graphId', 'createdAt', 'updatedAt']);
 
 /**
  * Словарь `uuid → слаг`. Слаги гейта входят в него ВСЕГДА, а не только у состояния
@@ -340,10 +340,10 @@ const MASKED_KEYS = new Set(['ownerId', 'createdAt', 'updatedAt']);
  * перестал бы быть сравнимым между состояниями. Лишние имена в словаре безвредны — в мире
  * состояния, где строк гейта нет, они просто ни на что не отображаются.
  */
-function namesOf(ownerId: string): ReadonlyMap<string, string> {
+function namesOf(graphId: string): ReadonlyMap<string, string> {
   return new Map(
     [...SURFACE_SLUGS, ...GATE_SURFACE_SLUGS].map((s) => [
-      surfaceEntityId(ownerId, s).toLowerCase(),
+      surfaceEntityId(graphId, s).toLowerCase(),
       `@${s}`,
     ]),
   );
@@ -379,13 +379,13 @@ export function compareSnapshots(
 
 export async function snapshotSurfaces(
   db: Db,
-  ownerId: string,
+  graphId: string,
   state: SurfaceState,
   today: string,
 ): Promise<SurfaceSnapshot> {
-  const raw = await withIdentity(db, ownerId, async (tx) => {
+  const raw = await withIdentity(db, graphId, async (tx) => {
     // `today` — ПАРАМЕТР снимка, а не системные часы: иначе эталон устаревал бы за сутки.
-    const cctx: CompileCtx = { ...(await queryContext(tx, ownerId, null)), today };
+    const cctx: CompileCtx = { ...(await queryContext(tx, graphId, null)), today };
     const all = await queryEntities(tx, cctx, 'sortBy=orbis/title:asc, limit=200');
     // Правило строки — ОБЩЕЕ (`@orbis/shared`, `M14_ROW_ELEMENTS` + `rowProjectionOf`): своей
     // копии у снимка больше нет (задача 7 сняла временную). Именно поэтому эталон `core/row`
@@ -406,7 +406,7 @@ export async function snapshotSurfaces(
       // (РП-4), но снимок теперь читает то, что читает прод.
       'finance/budget-overview': await budgetOverviewOf(
         tx,
-        ownerId,
+        graphId,
         { month: today.slice(0, 7), today },
         builtinSubscription(cctx.reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription,
         cctx.reg,
@@ -416,7 +416,7 @@ export async function snapshotSurfaces(
     } satisfies SurfacePayloads;
   });
   // Каст законен: `stabilize` меняет ЗНАЧЕНИЯ (uuid → слаг, таймстамп → метка), но не форму.
-  const surfaces = stabilize(raw, namesOf(ownerId)) as SurfacePayloads;
+  const surfaces = stabilize(raw, namesOf(graphId)) as SurfacePayloads;
   // Порядок списка — по СЛАГУ, и потому сортировка идёт ПОСЛЕ стабилизации, а не по сырым id:
   // id мира — uuidv5 от имени ВЛАДЕЛЬЦА, и тот же состав у состояния с другим владельцем
   // (задача 18) лёг бы в другом порядке — с baseline байт-в-байт не сошлось бы никогда.
@@ -445,7 +445,7 @@ export const SURFACE_RELABEL_LABEL = { ru: 'Дело', en: 'Deed' } satisfies Lo
 /**
  * ЧЕТЫРЕ СОСТОЯНИЯ — ЧЕТЫРЕ ВЛАДЕЛЬЦА, И ЭТО ЗАДУМАНО 0b, А НЕ ПРИДУМАНО ЗДЕСЬ.
  *
- * Стабилизация снимка (`stabilize`/`namesOf`) маскирует `ownerId` и переводит id мира в слаги
+ * Стабилизация снимка (`stabilize`/`namesOf`) маскирует `graphId` и переводит id мира в слаги
  * (`@task-open`) с прямо записанным доводом: «эталон обязан быть сравним между прогонами И между
  * четырьмя состояниями, у каждого из которых свой владелец». Значит «остальное байт-в-байт» между
  * состояниями РАЗНЫХ владельцев — утверждение проверяемое, а не недостижимое.
@@ -482,11 +482,11 @@ export const SURFACE_STATE_OWNER: Readonly<Record<SurfaceState, string>> = {
  */
 export async function applySurfaceState(
   db: Db,
-  ownerId: string,
+  graphId: string,
   state: SurfaceState,
 ): Promise<void> {
   const caller = createCallerFactory(appRouter)({
-    actorUserId: ownerId,
+    actorUserId: graphId,
     actorKind: 'owner',
     db,
     clientVersion: null,

@@ -88,7 +88,7 @@ const ID = {
 const DATASET_A: DatasetRow[] = [
   {
     id: ID.project,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Проект Орбис',
     body: 'Интеграция API платежей и обновление лендинга.',
     tags: ['project'],
@@ -98,7 +98,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskToday,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Задача на сегодня',
     tags: ['task', 'work'],
     props: {
@@ -112,7 +112,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskOverdue,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Просроченная задача',
     tags: ['task'],
     props: {
@@ -126,7 +126,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskBlocked,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Заблокированная задача со сроком сегодня',
     tags: ['task'],
     props: {
@@ -140,7 +140,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskBlocker,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Живой блокер (in_progress, без срока)',
     tags: ['task'],
     props: { 'orbis/task_status': 'in_progress', 'orbis/priority': 'low' },
@@ -152,7 +152,7 @@ const DATASET_A: DatasetRow[] = [
     // COALESCE-семантика excludeBlocked: заблокирована сущностью БЕЗ orbis/task —
     // такой блокер считается живым (§6.1), задача уходит из «Сегодня».
     id: ID.taskBlocked2,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Задача, заблокированная заметкой без task-аспекта',
     tags: ['task'],
     props: {
@@ -167,7 +167,7 @@ const DATASET_A: DatasetRow[] = [
   {
     // Блокер-заметка: orbis/task-аспекта нет вовсе — путь COALESCE(...,'') в SQL.
     id: ID.noteBlocker,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Заметка-блокер без task-аспекта',
     tags: ['note'],
     props: { 'orbis/content_type': 'plain' },
@@ -177,7 +177,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskInbox,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Неразобранная задача без приоритета',
     tags: ['task'],
     props: { 'orbis/task_status': 'inbox' },
@@ -187,7 +187,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskDone,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Закрытая задача со сроком сегодня',
     tags: ['task'],
     props: {
@@ -202,7 +202,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.fin010,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Комиссия 0.10',
     tags: ['expense'],
     props: {
@@ -217,7 +217,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.fin020,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Комиссия 0.20',
     tags: ['expense'],
     props: {
@@ -232,7 +232,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.fin340,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Обед 340.00',
     tags: ['expense'],
     props: {
@@ -247,7 +247,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.fin1000,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Покупка 1000.00',
     tags: ['expense'],
     props: {
@@ -262,7 +262,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.archived,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Старый черновик плана',
     tags: ['task'],
     props: { 'orbis/task_status': 'cancelled', 'orbis/priority': 'low' },
@@ -276,7 +276,7 @@ const DATASET_A: DatasetRow[] = [
   // выдачу курсорного теста 3.
   {
     id: ID.taskNext7,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Задача через три дня',
     tags: ['task'],
     props: {
@@ -290,7 +290,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskAfter7,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Задача через две недели',
     tags: ['task'],
     props: {
@@ -304,7 +304,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskAfter7b,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Задача в конце месяца',
     tags: ['task'],
     props: {
@@ -319,7 +319,7 @@ const DATASET_A: DatasetRow[] = [
   {
     // Без due_date: ждущая задача не попадает ни в «Сегодня», ни в Upcoming
     id: ID.taskWaiting1,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Делегированная задача (ждёт давно)',
     tags: ['task'],
     props: { 'orbis/task_status': 'waiting', 'orbis/priority': 'medium' },
@@ -329,7 +329,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.taskWaiting2,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Ожидание ответа подрядчика',
     tags: ['task'],
     props: { 'orbis/task_status': 'waiting' },
@@ -343,7 +343,7 @@ const DATASET_A: DatasetRow[] = [
   {
     // Явный planned=true — ручная planned-покупка (§2.7): фильтр «Факт» обязан её скрыть.
     id: ID.finPlanned,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Запланированная покупка 45.00',
     tags: ['expense'],
     props: {
@@ -360,7 +360,7 @@ const DATASET_A: DatasetRow[] = [
   {
     // Явный planned=false (путь post-due/confirmPurchase): «Факт» обязан её показать.
     id: ID.finFact,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Совершённая покупка 55.00',
     tags: ['expense'],
     props: {
@@ -377,7 +377,7 @@ const DATASET_A: DatasetRow[] = [
   {
     // §13.6: сущность с amount '0.30' — цель запроса грамматики amount=0.30
     id: ID.fin030,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Комиссия 0.30',
     tags: ['expense'],
     props: {
@@ -395,7 +395,7 @@ const DATASET_A: DatasetRow[] = [
   // `aliases=такси` давал тихий ноль, а `aliases=!такси` — все категории подряд.
   {
     id: ID.catTransport,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Транспорт',
     tags: ['category'],
     props: {
@@ -410,7 +410,7 @@ const DATASET_A: DatasetRow[] = [
   },
   {
     id: ID.catFood,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Еда',
     tags: ['category'],
     props: {
@@ -437,7 +437,7 @@ const DATASET_A: DatasetRow[] = [
     // Доходная категория: spend_class отсутствует (§3.6) — заодно сущность с аспектом,
     // но БЕЗ искомого алиаса: отрицание обязано её вернуть.
     id: ID.catSalary,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Зарплата',
     tags: ['category'],
     props: {
@@ -455,7 +455,7 @@ const DATASET_A: DatasetRow[] = [
     // json-свойству. updated_at — «ранняя половина» (< 2026-07-02), чтобы не менять выдачу
     // курсорного теста 3.
     id: ID.eventOverdue,
-    ownerId: USER_A,
+    graphId: USER_A,
     title: 'Еженедельная планёрка (начало вчера)',
     tags: ['event'],
     props: {
@@ -477,7 +477,7 @@ const DATASET_A: DatasetRow[] = [
 const DATASET_B: DatasetRow[] = [
   {
     id: ID.taskB,
-    ownerId: USER_B,
+    graphId: USER_B,
     title: 'Чужая задача на сегодня',
     tags: ['task'],
     props: {
@@ -491,7 +491,7 @@ const DATASET_B: DatasetRow[] = [
   },
   {
     id: ID.finB,
-    ownerId: USER_B,
+    graphId: USER_B,
     title: 'Чужая покупка 1000.00',
     tags: ['expense'],
     props: {
@@ -558,7 +558,7 @@ const DAILY_TODAY_CLASS =
 let reg: RegistrySnapshot;
 
 function ctx(): CompileCtx {
-  return { ownerId: USER_A, today: TODAY, timeZone: TIMEZONE, reg, thisEntityId: null };
+  return { graphId: USER_A, today: TODAY, timeZone: TIMEZONE, reg, thisEntityId: null };
 }
 
 function astOf(query: string): QueryAst {
@@ -998,7 +998,7 @@ describe('служебные аспекты: спрятаны, пока не н�
         datasetRows(own, [
           {
             id: ID_C.ticket,
-            ownerId: USER_C,
+            graphId: USER_C,
             title: 'Тикет',
             tags: ['task'],
             props: { 'orbis/task_status': 'in_progress' },
@@ -1008,7 +1008,7 @@ describe('служебные аспекты: спрятаны, пока не н�
           },
           {
             id: ID_C.run,
-            ownerId: USER_C,
+            graphId: USER_C,
             title: 'Прогон исполнителя',
             tags: [],
             props: {
@@ -1079,7 +1079,7 @@ describe('children_of/parents_of: семейство иерархии из ре�
         datasetRows(own, [
           {
             id: ID_D.project,
-            ownerId: USER_D,
+            graphId: USER_D,
             title: 'Проект D',
             tags: [],
             props: { 'orbis/project_stage': 'active' },
@@ -1089,7 +1089,7 @@ describe('children_of/parents_of: семейство иерархии из ре�
           },
           {
             id: ID_D.ticket,
-            ownerId: USER_D,
+            graphId: USER_D,
             title: 'Тикет D',
             tags: [],
             props: { 'orbis/task_status': 'planned' },
@@ -1099,7 +1099,7 @@ describe('children_of/parents_of: семейство иерархии из ре�
           },
           {
             id: ID_D.subtask,
-            ownerId: USER_D,
+            graphId: USER_D,
             title: 'Подпункт D',
             tags: [],
             props: { 'orbis/task_status': 'planned' },
@@ -1109,7 +1109,7 @@ describe('children_of/parents_of: семейство иерархии из ре�
           },
           {
             id: ID_D.envelope,
-            ownerId: USER_D,
+            graphId: USER_D,
             title: 'Конверт D',
             tags: [],
             props: {
@@ -1124,7 +1124,7 @@ describe('children_of/parents_of: семейство иерархии из ре�
           },
           {
             id: ID_D.txn,
-            ownerId: USER_D,
+            graphId: USER_D,
             title: 'Расход D',
             tags: [],
             props: {
@@ -1198,7 +1198,7 @@ describe('descendants_of/ancestors_of: обход по одной роли и к
       for (let i = 0; i <= CHAIN_LENGTH; i++) {
         rows.push({
           id: chainId(i),
-          ownerId: USER_E,
+          graphId: USER_E,
           title: `Узел ${i}`,
           tags: [],
           aspects: [],
@@ -1208,7 +1208,7 @@ describe('descendants_of/ancestors_of: обход по одной роли и к
       }
       rows.push({
         id: BRANCH_ID,
-        ownerId: USER_E,
+        graphId: USER_E,
         title: 'Ветка на глубине 2',
         tags: [],
         aspects: [],
@@ -1306,7 +1306,7 @@ describe('фикстура прямого INSERT не проходит молч�
       datasetRows(reg, [
         {
           id: ID.taskToday,
-          ownerId: USER_A,
+          graphId: USER_A,
           title: 'Опечатка в адресе',
           tags: [],
           props: { 'orbis/finance_cateogry': ID.project },
@@ -1322,7 +1322,7 @@ describe('фикстура прямого INSERT не проходит молч�
     const [row] = datasetRows(reg, [
       {
         id: ID.taskToday,
-        ownerId: USER_A,
+        graphId: USER_A,
         title: 'Верный адрес',
         tags: [],
         props: { 'orbis/finance_category': ID.project },
@@ -1340,7 +1340,7 @@ describe('фикстура прямого INSERT не проходит молч�
       datasetRows(reg, [
         {
           id: ID.taskToday,
-          ownerId: USER_A,
+          graphId: USER_A,
           title: 'Значение без носителя',
           tags: [],
           props: { 'orbis/amount': '1.00' },

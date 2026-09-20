@@ -59,7 +59,7 @@ export type RegistryDeltaTargetKind = (typeof REGISTRY_DELTA_TARGET_KINDS)[numbe
  */
 export interface RegistryDeltaRow {
   id: string;
-  ownerId: string;
+  graphId: string;
   targetKind: RegistryDeltaTargetKind;
   targetId: string;
   baseVersion: number;

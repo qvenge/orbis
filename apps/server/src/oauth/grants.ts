@@ -25,7 +25,7 @@ import {
 
 export interface GrantIdentity {
   grantId: string;
-  ownerId: string;
+  graphId: string;
   /** Область гранта (С2): 'full' — весь граф владельца, 'worker' — сужение до тикета. */
   scope: GrantScope;
   /** Подпись доступа, которую владелец видит на экране «Агенты». */
@@ -122,7 +122,7 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
     )
     .returning({
       id: agentGrants.id,
-      ownerId: agentGrants.ownerId,
+      graphId: agentGrants.graphId,
       scope: agentGrants.scope,
       label: agentGrants.label,
     });
@@ -136,7 +136,7 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
   // «не 'full' → не полный доступ», а не сравнением с одним лишь 'worker'.
   return {
     grantId: row.id,
-    ownerId: row.ownerId,
+    graphId: row.graphId,
     scope: row.scope as GrantScope,
     label: row.label,
   };
@@ -153,7 +153,7 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
 export async function createAuthorizationCode(
   db: Db,
   input: {
-    ownerId: string;
+    graphId: string;
     clientId: string;
     label: string;
     redirectUri: string;
@@ -164,7 +164,7 @@ export async function createAuthorizationCode(
   const code = mintToken(CODE_PREFIX);
   await db.insert(agentGrants).values({
     id: newId(),
-    ownerId: input.ownerId,
+    graphId: input.graphId,
     clientId: input.clientId,
     kind: 'oauth',
     label: input.label,
@@ -303,12 +303,12 @@ export async function rotateRefresh(
  */
 export async function issuePatGrant(
   db: Db,
-  input: { ownerId: string; label: string; scope?: GrantScope },
+  input: { graphId: string; label: string; scope?: GrantScope },
 ): Promise<string> {
   const token = mintToken(PAT_PREFIX);
   await db.insert(agentGrants).values({
     id: newId(),
-    ownerId: input.ownerId,
+    graphId: input.graphId,
     kind: 'pat',
     label: input.label,
     scope: input.scope ?? 'full',
@@ -323,7 +323,7 @@ export async function issuePatGrant(
  * «нет ни access, ни refresh»: у PAT refresh_hash пуст всегда, и проверка на один
  * refresh выдала бы каждый headless-токен за брошенную попытку авторизации.
  */
-export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[]> {
+export async function listGrants(db: Db, graphId: string): Promise<GrantSummary[]> {
   return db
     .select({
       id: agentGrants.id,
@@ -339,17 +339,17 @@ export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[
       revokedAt: agentGrants.revokedAt,
     })
     .from(agentGrants)
-    .where(eq(agentGrants.ownerId, ownerId))
+    .where(eq(agentGrants.graphId, graphId))
     .orderBy(sql`${agentGrants.createdAt} DESC`);
 }
 
 /**
- * Отзыв: условие на owner_id — ЕДИНСТВЕННОЕ, что не даёт владельцу отозвать чужой грант.
+ * Отзыв: условие на graph_id — ЕДИНСТВЕННОЕ, что не даёт владельцу отозвать чужой грант.
  *
  * Формулировка «вторая линия к RLS» стояла здесь и была неверной. Процедура зовётся на
  * `ctx.db`, то есть под ролью `orbis_app`, а её политика — `USING (true) WITH CHECK (true)`
  * (0005_oauth_rls.sql): под этой ролью RLS не скоупит ничего и подстраховать предикат
- * не может. Политика владельца (`owner_id = auth.uid()`) действует для роли
+ * не может. Политика владельца (`graph_id = auth.uid()`) действует для роли
  * `authenticated`, под которой этот путь не исполняется вовсе — по построению, а не по
  * недосмотру: те же процедуры ищут грант по хешу ДО того, как владелец известен, и
  * withIdentity к ним неприменим. Убрать предикат «как дубль RLS» — значит открыть отзыв
@@ -360,12 +360,12 @@ export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[
  */
 export async function revokeGrant(
   db: Db,
-  input: { ownerId: string; grantId: string },
+  input: { graphId: string; grantId: string },
 ): Promise<boolean> {
   const rows = await db
     .update(agentGrants)
     .set({ revokedAt: revokedAtStamp })
-    .where(and(eq(agentGrants.id, input.grantId), eq(agentGrants.ownerId, input.ownerId)))
+    .where(and(eq(agentGrants.id, input.grantId), eq(agentGrants.graphId, input.graphId)))
     .returning({ id: agentGrants.id });
   return rows.length > 0;
 }

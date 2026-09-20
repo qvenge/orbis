@@ -38,7 +38,7 @@ afterAll(async () => {
 async function insertBody(body: string): Promise<string> {
   const id = newId();
   await admin.execute(
-    sql`INSERT INTO entities (id, owner_id, title, body)
+    sql`INSERT INTO entities (id, graph_id, title, body)
         VALUES (${id}, ${freshUserId()}, 'тело', ${body})`,
   );
   return id;
@@ -238,7 +238,7 @@ test('переписанный body не рассинхронизирует body
     const id = newId();
     ids.push(id);
     await admin.execute(
-      sql`INSERT INTO entities (id, owner_id, title, body, body_refs)
+      sql`INSERT INTO entities (id, graph_id, title, body, body_refs)
           VALUES (${id}, ${freshUserId()}, 'со ссылкой', ${body}, ${refs}::text[])`,
     );
   }
@@ -387,7 +387,7 @@ test('CAS в SQL умеет сравнивать NULL-тело (IS NOT DISTINCT 
   // строка не совпала бы НИКОГДА (`NULL = NULL` → NULL) и молча копилась бы в пропущенных.
   const id = newId();
   await admin.execute(
-    sql`INSERT INTO entities (id, owner_id, title, body) VALUES (${id}, ${freshUserId()}, 'нулевое', '')`,
+    sql`INSERT INTO entities (id, graph_id, title, body) VALUES (${id}, ${freshUserId()}, 'нулевое', '')`,
   );
 
   // Снятие NOT NULL живёт ВНУТРИ транзакции с гарантированным откатом. DDL в Postgres
@@ -450,7 +450,7 @@ test('роль без BYPASSRLS: нули НЕ означают «сконвер
   await truncateAll();
   await insertBody('# тело');
   // Сценарий M-2 целиком, на живой базе. `authenticated` — роль С ГРАНТАМИ на entities, но
-  // БЕЗ rolbypassrls. Под FORCE RLS и политикой owner_id = auth.uid() (а auth.uid() у прямого
+  // БЕЗ rolbypassrls. Под FORCE RLS и политикой graph_id = auth.uid() (а auth.uid() у прямого
   // подключения пуст) она не видит НИ ОДНОЙ строки — молча, без ошибки.
   await admin.transaction(async (tx) => {
     await tx.execute(sql`SET LOCAL ROLE authenticated`);

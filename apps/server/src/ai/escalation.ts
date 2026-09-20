@@ -440,7 +440,7 @@ async function alreadyOffered(tx: Tx, pattern: string, rc: Recategorization): Pr
 
 async function considerOne(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   compileCtx: () => Promise<CompileCtx>,
   loadJournal: () => Promise<Recategorization[]>,
   rc: Recategorization,
@@ -491,10 +491,10 @@ async function considerOne(
     toCategoryId: rc.to,
     categoryTitle,
   };
-  const threadId = await ensureGlobalThread(tx, ownerId);
+  const threadId = await ensureGlobalThread(tx, graphId);
   await appendMessageIdempotent(tx, {
     id: memoryRuleSuggestionId({
-      ownerId,
+      graphId,
       pattern,
       fromCategoryId: rc.from,
       toCategoryId: rc.to,
@@ -518,12 +518,12 @@ async function considerOne(
  */
 export async function maybeSuggestRule(deps: {
   db: Db;
-  ownerId: string;
+  graphId: string;
   action: ActionRecord;
 }): Promise<SuggestRuleResult> {
   const recats = extractRecategorizations(deps.action);
   if (recats.length === 0) return { suggested: false, reason: 'not_recategorization' };
-  return withIdentity(deps.db, deps.ownerId, async (tx) => {
+  return withIdentity(deps.db, deps.graphId, async (tx) => {
     // Скан журнала — один на ДЕЙСТВИЕ, а не на операцию: аргументы у всех итераций
     // одинаковы, а сам скан тянет до JOURNAL_SCAN_LIMIT строк JSONB. До этого «перенеси
     // эти 10 покупок из Еды в Развлечения» давал 10 одинаковых сканов подряд, синхронно,
@@ -536,7 +536,7 @@ export async function maybeSuggestRule(deps: {
     // доходят не все рекатегоризации (гейты паттерна отвечают раньше).
     let compiled: Promise<CompileCtx> | undefined;
     const compileCtx = (): Promise<CompileCtx> => {
-      compiled ??= queryContext(tx, deps.ownerId, null);
+      compiled ??= queryContext(tx, deps.graphId, null);
       return compiled;
     };
     const targets = recats.map((rc) => rc.to);
@@ -546,7 +546,7 @@ export async function maybeSuggestRule(deps: {
     };
     let last: SuggestRuleResult = { suggested: false, reason: 'not_recategorization' };
     for (const rc of recats) {
-      last = await considerOne(tx, deps.ownerId, compileCtx, loadJournal, rc);
+      last = await considerOne(tx, deps.graphId, compileCtx, loadJournal, rc);
       if (last.suggested) return last;
     }
     return last;
@@ -596,12 +596,12 @@ function touchesCategoryRef(operations: readonly MutationOp[]): boolean {
  */
 export async function escalateAfterMutation(
   db: Db,
-  args: { ownerId: string; actionId: string; operations: readonly MutationOp[] },
+  args: { graphId: string; actionId: string; operations: readonly MutationOp[] },
 ): Promise<void> {
   if (!touchesCategoryRef(args.operations)) return;
   try {
-    const action = await withIdentity(db, args.ownerId, (tx) => findAction(tx, args.actionId));
-    if (action) await maybeSuggestRule({ db, ownerId: args.ownerId, action });
+    const action = await withIdentity(db, args.graphId, (tx) => findAction(tx, args.actionId));
+    if (action) await maybeSuggestRule({ db, graphId: args.graphId, action });
   } catch (e) {
     console.error('[ai.escalation] предложение правила не записано:', e);
   }
@@ -615,7 +615,7 @@ export async function escalateAfterMutation(
  */
 export async function declineRuleSuggestion(
   db: Db,
-  args: { ownerId: string; pattern: string; fromCategoryId: string; toCategoryId: string },
+  args: { graphId: string; pattern: string; fromCategoryId: string; toCategoryId: string },
 ): Promise<{ alreadyDeclined: boolean }> {
   const card: Card = {
     kind: 'memory_rule_declined',
@@ -623,8 +623,8 @@ export async function declineRuleSuggestion(
     fromCategoryId: args.fromCategoryId,
     toCategoryId: args.toCategoryId,
   };
-  return withIdentity(db, args.ownerId, async (tx) => {
-    const threadId = await ensureGlobalThread(tx, args.ownerId);
+  return withIdentity(db, args.graphId, async (tx) => {
+    const threadId = await ensureGlobalThread(tx, args.graphId);
     const { replayed } = await appendMessageIdempotent(tx, {
       id: memoryRuleDeclinedId({ ...args, date: idDate() }),
       threadId,

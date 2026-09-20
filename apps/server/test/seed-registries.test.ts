@@ -21,7 +21,7 @@ requireEnv();
 
 async function ids(db: ReturnType<typeof adminDb>['db'], table: string): Promise<string[]> {
   const rows = (await db.execute(
-    sql`SELECT id FROM ${sql.raw(table)} WHERE owner_id IS NULL ORDER BY id`,
+    sql`SELECT id FROM ${sql.raw(table)} WHERE graph_id IS NULL ORDER BY id`,
   )) as unknown as { id: string }[];
   return rows.map((r) => r.id);
 }
@@ -112,9 +112,9 @@ describe('сид пяти реестров', () => {
       const rows = (await db.execute(
         sql`SELECT a.id, r.value->>'propertyId' AS property_id
             FROM aspect_definitions a, jsonb_array_elements(a.properties) r
-            WHERE a.owner_id IS NULL
+            WHERE a.graph_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM property_definitions p
-                              WHERE p.owner_id IS NULL AND p.id = r.value->>'propertyId')`,
+                              WHERE p.graph_id IS NULL AND p.id = r.value->>'propertyId')`,
       )) as unknown as { id: string; property_id: string }[];
       expect(rows).toEqual([]);
     } finally {
@@ -129,7 +129,7 @@ describe('сид пяти реестров', () => {
       // непересеянной базе, где `implements` пуст у всех (довод счётчиков 77/11/13 на :51-53).
       const [count] = (await db.execute(
         sql`SELECT count(*)::int AS n FROM aspect_definitions a, jsonb_array_elements(a.implements) b
-            WHERE a.owner_id IS NULL`,
+            WHERE a.graph_id IS NULL`,
       )) as unknown as { n: number }[];
       // Семь привязок §Б2-1: две у orbis/schedule, две у orbis/task, две у orbis/financial и
       // одна у orbis/budget. Число названо отдельно от состава (состав пинит снимок B2 в shared).
@@ -138,18 +138,18 @@ describe('сид пяти реестров', () => {
       const dangling = (await db.execute(
         sql`SELECT a.id AS aspect_id, b.value->>'contract' AS contract_id
             FROM aspect_definitions a, jsonb_array_elements(a.implements) b
-            WHERE a.owner_id IS NULL
+            WHERE a.graph_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM contract_definitions c
-                              WHERE c.owner_id IS NULL AND c.id = b.value->>'contract')`,
+                              WHERE c.graph_id IS NULL AND c.id = b.value->>'contract')`,
       )) as unknown as unknown[];
       expect(dangling).toEqual([]);
       const badSlots = (await db.execute(
         sql`SELECT a.id AS aspect_id, kv.slot_name
             FROM aspect_definitions a, jsonb_array_elements(a.implements) b,
                  jsonb_each_text(b.value->'bind') AS kv(slot_name, property_id)
-            WHERE a.owner_id IS NULL
+            WHERE a.graph_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM contract_definitions c, jsonb_array_elements(c.slots) sl
-                              WHERE c.owner_id IS NULL AND c.id = b.value->>'contract'
+                              WHERE c.graph_id IS NULL AND c.id = b.value->>'contract'
                                 AND sl.value->>'name' = kv.slot_name)`,
       )) as unknown as unknown[];
       expect(badSlots).toEqual([]);
@@ -157,9 +157,9 @@ describe('сид пяти реестров', () => {
         sql`SELECT a.id AS aspect_id, kv.property_id
             FROM aspect_definitions a, jsonb_array_elements(a.implements) b,
                  jsonb_each_text(b.value->'bind') AS kv(slot_name, property_id)
-            WHERE a.owner_id IS NULL
+            WHERE a.graph_id IS NULL
               AND NOT EXISTS (SELECT 1 FROM property_definitions p
-                              WHERE p.owner_id IS NULL AND p.id = kv.property_id)`,
+                              WHERE p.graph_id IS NULL AND p.id = kv.property_id)`,
       )) as unknown as unknown[];
       expect(badProps).toEqual([]);
     } finally {
@@ -192,7 +192,7 @@ describe('сид пяти реестров', () => {
       // Дельта владельца: прячет статус (в БАЗЕ он сейчас необязателен) и добавляет свой
       // вариант `cancelled` (в БАЗЕ такого варианта сейчас нет).
       await db.execute(sql`
-        INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+        INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
         VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', ${baseVersion},
                 ${JSON.stringify({
                   label: { ru: 'Дело' },
@@ -210,13 +210,13 @@ describe('сид пяти реестров', () => {
                                                    THEN jsonb_set(e, '{required}', 'false')
                                                    ELSE e END)
                                FROM jsonb_array_elements(properties) e)
-         WHERE id = 'orbis/task' AND owner_id IS NULL`);
+         WHERE id = 'orbis/task' AND graph_id IS NULL`);
       await db.execute(sql`
         UPDATE property_definitions
            SET type = jsonb_set(type, '{options}',
                  (SELECT jsonb_agg(e) FROM jsonb_array_elements(type->'options') e
                    WHERE e->>'key' <> 'cancelled'))
-         WHERE id = 'orbis/task_status' AND owner_id IS NULL`);
+         WHERE id = 'orbis/task_status' AND graph_id IS NULL`);
 
       const result = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
       expect(result.mergedDeltas).toBe(1);
@@ -229,7 +229,7 @@ describe('сид пяти реестров', () => {
       // Дельта ПЕРЕПИСАНА: обе конфликтные части сняты, молчаливая (label) осталась,
       // `base_version` переехал на новую системную версию.
       const rows = (await db.execute(
-        sql`SELECT delta, base_version FROM registry_deltas WHERE owner_id = ${owner}::uuid`,
+        sql`SELECT delta, base_version FROM registry_deltas WHERE graph_id = ${owner}::uuid`,
       )) as unknown as { delta: unknown; base_version: number }[];
       expect(rows[0]?.delta).toEqual({ label: { ru: 'Дело' } });
       expect(rows[0]?.base_version).toBe(result.version);
@@ -237,7 +237,7 @@ describe('сид пяти реестров', () => {
       // Версия ВЛАДЕЛЬЦА сдвинута тем же коммитом (§А10-1): его дельта изменилась, и кеш
       // эффективных определений обязан это заметить.
       const settings = (await db.execute(
-        sql`SELECT registry_version FROM user_settings WHERE owner_id = ${owner}::uuid`,
+        sql`SELECT registry_version FROM user_settings WHERE graph_id = ${owner}::uuid`,
       )) as unknown as { registry_version: number }[];
       expect(settings[0]?.registry_version).toBe(1);
 
@@ -246,7 +246,7 @@ describe('сид пяти реестров', () => {
       const notes = (await db.execute(
         sql`SELECT m.role, m.content, m.metadata
               FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-             WHERE t.owner_id = ${owner}::uuid AND t.entity_id IS NULL`,
+             WHERE t.graph_id = ${owner}::uuid AND t.entity_id IS NULL`,
       )) as unknown as { role: string; content: string; metadata: Record<string, unknown> }[];
       expect(notes).toHaveLength(1);
       expect(notes[0]?.role).toBe('system');
@@ -264,16 +264,16 @@ describe('сид пяти реестров', () => {
           (await db.execute(
             sql`SELECT count(*)::int AS n FROM chat_messages m
                   JOIN chat_threads t ON t.id = m.thread_id
-                 WHERE t.owner_id = ${owner}::uuid`,
+                 WHERE t.graph_id = ${owner}::uuid`,
           )) as unknown as { n: number }[]
         )[0]?.n,
       ).toBe(1);
     } finally {
-      await db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
       await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
-        (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
-      await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
-      await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+        (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM user_settings WHERE graph_id = ${owner}::uuid`);
       await raw.end();
       await client.end();
     }
@@ -297,7 +297,7 @@ describe('сид пяти реестров', () => {
       await db.execute(sql`TRUNCATE registry_deltas`);
       // base_version НАМЕРЕННО отстал на несколько прогонов; система при этом в порядке.
       await db.execute(sql`
-        INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+        INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
         VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', 1,
                 ${JSON.stringify({ properties: { hide: ['orbis/task_status'] } })}::jsonb)`);
 
@@ -306,23 +306,23 @@ describe('сид пяти реестров', () => {
       expect(result.conflicts.map((c) => c.kind)).toEqual(['hidden-required']);
       expect(result.conflicts[0]?.propertyId).toBe('orbis/task_status');
       const rows = (await db.execute(
-        sql`SELECT delta, base_version FROM registry_deltas WHERE owner_id = ${owner}::uuid`,
+        sql`SELECT delta, base_version FROM registry_deltas WHERE graph_id = ${owner}::uuid`,
       )) as unknown as { delta: unknown; base_version: number }[];
       expect(rows[0]?.delta).toEqual({});
       expect(rows[0]?.base_version).toBe(result.version);
       // Владельцу сказано той же транзакцией.
       const notes = (await db.execute(
         sql`SELECT m.metadata FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-             WHERE t.owner_id = ${owner}::uuid`,
+             WHERE t.graph_id = ${owner}::uuid`,
       )) as unknown as { metadata: Record<string, unknown> }[];
       expect(notes).toHaveLength(1);
       expect(notes[0]?.metadata.type).toBe('registry-merge');
     } finally {
-      await db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
       await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
-        (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
-      await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
-      await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+        (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM user_settings WHERE graph_id = ${owner}::uuid`);
       await raw.end();
       await client.end();
     }
@@ -349,7 +349,7 @@ describe('сид пяти реестров', () => {
     try {
       await db.execute(sql`TRUNCATE registry_deltas`);
       await db.execute(sql`
-        INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+        INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
         VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', 1,
                 ${JSON.stringify({
                   selectOptions: {
@@ -376,15 +376,15 @@ describe('сид пяти реестров', () => {
       const again = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
       expect(again.conflicts).toEqual([]);
       const rows = (await db.execute(
-        sql`SELECT delta FROM registry_deltas WHERE owner_id = ${owner}::uuid`,
+        sql`SELECT delta FROM registry_deltas WHERE graph_id = ${owner}::uuid`,
       )) as unknown as { delta: unknown }[];
       expect(rows[0]?.delta).toEqual({});
     } finally {
-      await db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
       await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
-        (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
-      await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
-      await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+        (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM user_settings WHERE graph_id = ${owner}::uuid`);
       await app.client.end();
       await raw.end();
       await client.end();
@@ -413,15 +413,15 @@ describe('сид пяти реестров', () => {
       // в ней нет. Ставится и в system-строку, и в дельту владельца.
       await db.execute(sql`
         UPDATE subscription_definitions SET definition = definition #- '{alerts,inclusive}'
-         WHERE id = 'orbis/budget-overview' AND owner_id IS NULL`);
+         WHERE id = 'orbis/budget-overview' AND graph_id IS NULL`);
       const stale = (
         (await db.execute(
           sql`SELECT definition FROM subscription_definitions
-               WHERE id = 'orbis/budget-overview' AND owner_id IS NULL`,
+               WHERE id = 'orbis/budget-overview' AND graph_id IS NULL`,
         )) as unknown as { definition: unknown }[]
       )[0]?.definition;
       await db.execute(sql`
-        INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+        INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
         VALUES (gen_random_uuid(), ${owner}::uuid, 'subscription', 'orbis/budget-overview',
                 ${baseVersion}, ${JSON.stringify({ definition: stale })}::jsonb)`);
 
@@ -431,7 +431,7 @@ describe('сид пяти реестров', () => {
       const fixed = (
         (await db.execute(
           sql`SELECT definition->'alerts'->>'inclusive' AS v FROM subscription_definitions
-               WHERE id = 'orbis/budget-overview' AND owner_id IS NULL`,
+               WHERE id = 'orbis/budget-overview' AND graph_id IS NULL`,
         )) as unknown as { v: string | null }[]
       )[0]?.v;
       expect(fixed).toBe('true');
@@ -444,11 +444,11 @@ describe('сид пяти реестров', () => {
         await app.client.end();
       }
     } finally {
-      await db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
       await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
-        (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
-      await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
-      await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+        (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM user_settings WHERE graph_id = ${owner}::uuid`);
       await raw.end();
       await client.end();
     }

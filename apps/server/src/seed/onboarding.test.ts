@@ -70,13 +70,13 @@ async function counts(
   const { db: admin, client: adminClient } = adminDb();
   try {
     const e = await admin.execute(
-      sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${user}`,
+      sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}`,
     );
     const s = await admin.execute(
-      sql`SELECT count(*)::int AS n FROM user_settings WHERE owner_id = ${user}`,
+      sql`SELECT count(*)::int AS n FROM user_settings WHERE graph_id = ${user}`,
     );
     const t = await admin.execute(
-      sql`SELECT count(*)::int AS n FROM chat_threads WHERE owner_id = ${user}`,
+      sql`SELECT count(*)::int AS n FROM chat_threads WHERE graph_id = ${user}`,
     );
     return { entities: Number(e[0]?.n), settings: Number(s[0]?.n), threads: Number(t[0]?.n) };
   } finally {
@@ -109,7 +109,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     const { db: admin, client: adminClient } = adminDb();
     try {
       const gt = await admin.execute(
-        sql`SELECT entity_id FROM chat_threads WHERE owner_id = ${user}`,
+        sql`SELECT entity_id FROM chat_threads WHERE graph_id = ${user}`,
       );
       expect(gt[0]?.entity_id).toBeNull();
     } finally {
@@ -654,7 +654,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     try {
       await admin.delete(entities).where(
         and(
-          eq(entities.ownerId, user),
+          eq(entities.graphId, user),
           inArray(
             entities.id,
             slugs.map((s) => seedSmartListId(user, s)),
@@ -808,7 +808,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     try {
       await admin
         .delete(entities)
-        .where(and(eq(entities.ownerId, user), eq(entities.id, seedSmartListId(user, 'routines'))));
+        .where(and(eq(entities.graphId, user), eq(entities.id, seedSmartListId(user, 'routines'))));
     } finally {
       await adminClient.end();
     }
@@ -1029,7 +1029,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
           })
           .from(entities)
           .where(
-            and(eq(entities.ownerId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
+            and(eq(entities.graphId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
           );
         const row = rows[0];
         if (row === undefined) throw new Error('списка «Рутины» нет');
@@ -1063,7 +1063,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
             updatedAt: new Date('2026-08-01T00:00:00.000Z'),
           })
           .where(
-            and(eq(entities.ownerId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
+            and(eq(entities.graphId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
           );
       } finally {
         await adminClient.end();
@@ -1221,7 +1221,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
 });
 
 describe('registry.effective (§А9-2): эффективный реестр владельца одним ответом', () => {
-  test('отдаёт встроенные свойства, аспекты и роли в порядке rank, ownerId у встроенных — null', async () => {
+  test('отдаёт встроенные свойства, аспекты и роли в порядке rank, graphId у встроенных — null', async () => {
     const caller = callerFor(freshUserId());
     const { properties, roles, aspects } = await caller.registry.effective();
 
@@ -1238,7 +1238,7 @@ describe('registry.effective (§А9-2): эффективный реестр вл
     // Порядок наблюдаем: по нему конструктор рисует строки полей и список сортировки.
     const ranks = properties.map((p) => p.rank);
     expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
-    expect(properties.every((p) => p.ownerId === null)).toBe(true);
+    expect(properties.every((p) => p.graphId === null)).toBe(true);
 
     // Тип едет ЦЕЛИКОМ, а не обеднённым словарём старого каталога: по нему web решает,
     // какие операторы предлагать (`time` упорядочен, `json` не фильтруется вовсе).

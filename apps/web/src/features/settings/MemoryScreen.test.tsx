@@ -26,7 +26,7 @@ const rule = mem('r1', 'кофе → Развлечения', 'rule');
 const fact = mem('f1', 'Работаю из дома по пятницам', 'fact');
 
 const settings = {
-  ownerId: 'u',
+  graphId: 'u',
   plan: 'dev',
   timezone: 'Europe/Moscow',
   defaultCurrency: 'RUB',

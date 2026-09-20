@@ -23,7 +23,6 @@ import {
   markDraftRejected,
   readDraft,
   saveDraft,
-  setDraftScope,
   sweepDrafts,
 } from './draft-storage';
 import { sameDoc } from './strip-ids';
@@ -96,8 +95,6 @@ type Failure = 'network' | 'terminal';
  * принимает сущность из useEntityDetail как есть, без приведения на стороне экрана.
  */
 export type BodySaveEntity = {
-  /** Владелец записи: по нему скоупятся черновики на диске (см. draft-storage). */
-  ownerId: string;
   updatedAt: string;
   bodyDoc?: { v: number; doc: Record<string, unknown> } | null;
 };
@@ -222,11 +219,6 @@ function toCurrentSchema(draft: Draft): Draft | null {
  * её сервер, и только он.
  */
 export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave {
-  // Скоуп хранилища — ПРЯМО В РЕНДЕРЕ, раньше любого чтения черновика (эффект ниже) и раньше
-  // любой записи. Владелец записи и есть владелец сессии, и ставить его отсюда дешевле, чем
-  // тянуть в листовой модуль хранилища знание об аутентификации. Тот же приём и по той же
-  // причине, что `setRetryScope` в AuthProvider.
-  setDraftScope(entity.ownerId);
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   const mutate = mutation.mutate;
 

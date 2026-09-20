@@ -110,7 +110,7 @@ function assignedToGrant(grantId: string): string {
  */
 export async function isWorkerThreadTarget(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   grantId: string,
   entityId: string,
 ): Promise<boolean> {
@@ -118,7 +118,7 @@ export async function isWorkerThreadTarget(
     sql`SELECT 1 AS ok
         FROM entities t
         JOIN entities target ON target.id = ${entityId}::uuid AND NOT target.archived
-        WHERE t.owner_id = ${ownerId}::uuid
+        WHERE t.graph_id = ${graphId}::uuid
           AND NOT t.archived
           AND 'orbis/assignment' = ANY(t.aspects)
           AND t.props @> ${assignedToGrant(grantId)}::jsonb
@@ -248,7 +248,7 @@ function toRoutineRow(row: RawRow): RoutineRow {
  * ПРО ИНДЕКС — ЧЕСТНО (замер 2026-08-27, `perf/explain.test.ts`). GIN `entities_props_gin`
  * это условие ПОД РОЛЬЮ ПРИЛОЖЕНИЯ НЕ БЕРЁТ: политика RLS `owner_owns_row` — security qual,
  * а `jsonb_contains` не leakproof, поэтому планировщик обязан применить политику раньше и
- * уходит в Bitmap Heap Scan по `entities_owner_updated` с фильтром по куче. Под админским
+ * уходит в Bitmap Heap Scan по `entities_graph_updated` с фильтром по куче. Под админским
  * подключением (сиды, скрипты, `ops.ts`) тот же запрос индекс берёт. Прежняя формулировка
  * «покрыт GIN-индексом» была неправдой ровно на боевом пути (долг 5 ветки).
  *

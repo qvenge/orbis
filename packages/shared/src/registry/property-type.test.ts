@@ -118,7 +118,7 @@ test('decimal: exclusiveMin вместо lookahead; assertPatternRegular отв�
 test('формы деклараций строги: description обязателен, key — слаг, лишних полей нет', () => {
   const ok = {
     id: 'user/effort',
-    ownerId: '00000000-0000-4000-8000-000000000001',
+    graphId: '00000000-0000-4000-8000-000000000001',
     key: 'user/effort',
     label,
     description,
@@ -145,11 +145,11 @@ test('формы деклараций строги: description обязател
   expect(propertyDefinitionSchema.safeParse({ ...ok, key: 'user/Effort' }).success).toBe(false);
   // Лишнее поле — отказ, а не тихое отбрасывание: сид пишет строку в БД дословно.
   expect(propertyDefinitionSchema.safeParse({ ...ok, aspect: 'orbis/task' }).success).toBe(false);
-  expect(propertyDefinitionSchema.safeParse({ ...ok, ownerId: 'не-uuid' }).success).toBe(false);
+  expect(propertyDefinitionSchema.safeParse({ ...ok, graphId: 'не-uuid' }).success).toBe(false);
 
   const aspect = {
     id: 'user/fitness',
-    ownerId: null,
+    graphId: null,
     key: 'user/fitness',
     label,
     description,
@@ -191,7 +191,7 @@ test('формы деклараций строги: description обязател
 
   const role = {
     id: 'subitem',
-    ownerId: null,
+    graphId: null,
     key: 'subitem',
     label,
     description,
@@ -243,7 +243,7 @@ test('§А6-1: ref.target — Q-AST целиком, а не голый узел 
 test('§А2-1: scope свойства — статический Q-AST, а не произвольный jsonb', () => {
   const base = {
     id: 'user/x',
-    ownerId: null,
+    graphId: null,
     key: 'user/x',
     label: { ru: 'X' },
     description: { ru: 'X' },

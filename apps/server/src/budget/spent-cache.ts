@@ -56,7 +56,7 @@ export function spentCacheKey(key: SpentCacheKey): string {
  */
 export async function readSpentCache(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   keys: readonly SpentCacheKey[],
   versions: SpentCacheVersions,
 ): Promise<Map<string, string>> {
@@ -68,7 +68,7 @@ export async function readSpentCache(
   const rows = (await tx.execute(sql`
     SELECT envelope_id, as_of::text AS as_of, spent::text AS spent
     FROM envelope_spent_cache
-    WHERE owner_id = ${ownerId}
+    WHERE graph_id = ${graphId}
       AND owner_version = ${versions.ownerVersion}
       AND system_version = ${versions.systemVersion}
       AND (envelope_id, as_of) IN (${pairs})
@@ -84,21 +84,21 @@ export async function readSpentCache(
  */
 export async function writeSpentCache(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   rows: readonly (SpentCacheKey & { spent: string })[],
   versions: SpentCacheVersions,
 ): Promise<void> {
   if (rows.length === 0) return;
   const values = sql.join(
     rows.map(
-      (r) => sql`(${r.envelopeId}::uuid, ${ownerId}::uuid, ${r.asOf}::date, ${r.spent}::numeric,
+      (r) => sql`(${r.envelopeId}::uuid, ${graphId}::uuid, ${r.asOf}::date, ${r.spent}::numeric,
                   ${versions.ownerVersion}, ${versions.systemVersion}, now())`,
     ),
     sql`, `,
   );
   await tx.execute(sql`
     INSERT INTO envelope_spent_cache
-      (envelope_id, owner_id, as_of, spent, owner_version, system_version, updated_at)
+      (envelope_id, graph_id, as_of, spent, owner_version, system_version, updated_at)
     VALUES ${values}
     ON CONFLICT (envelope_id, as_of) DO UPDATE SET
       spent = EXCLUDED.spent, owner_version = EXCLUDED.owner_version,
@@ -108,7 +108,7 @@ export async function writeSpentCache(
 /** Снос ВСЕХ дней перечисленных конвертов: пересчёт ленивый — посчитает первый читатель. */
 export async function invalidateSpentCache(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   envelopeIds: readonly string[],
 ): Promise<void> {
   if (envelopeIds.length === 0) return;
@@ -117,7 +117,7 @@ export async function invalidateSpentCache(
     sql`, `,
   );
   await tx.execute(sql`
-    DELETE FROM envelope_spent_cache WHERE owner_id = ${ownerId} AND envelope_id IN (${ids})`);
+    DELETE FROM envelope_spent_cache WHERE graph_id = ${graphId} AND envelope_id IN (${ids})`);
 }
 
 /**
@@ -127,8 +127,8 @@ export async function invalidateSpentCache(
  * неполную модель того, что операция сделала; снос владельца стоит одного ленивого пересчёта
  * (сорок конвертов месяца — один SQL).
  */
-export async function invalidateSpentCacheOfOwner(tx: Tx, ownerId: string): Promise<void> {
-  await tx.execute(sql`DELETE FROM envelope_spent_cache WHERE owner_id = ${ownerId}`);
+export async function invalidateSpentCacheOfOwner(tx: Tx, graphId: string): Promise<void> {
+  await tx.execute(sql`DELETE FROM envelope_spent_cache WHERE graph_id = ${graphId}`);
 }
 
 /**
@@ -145,7 +145,7 @@ export async function invalidateSpentCacheOfOwner(tx: Tx, ownerId: string): Prom
  */
 export async function bumpSpentCache(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   envelopeId: string,
   delta: string,
   asOf: string,
@@ -153,5 +153,5 @@ export async function bumpSpentCache(
   await tx.execute(sql`
     UPDATE envelope_spent_cache
        SET spent = spent + ${delta}::numeric, updated_at = now()
-     WHERE owner_id = ${ownerId} AND envelope_id = ${envelopeId} AND as_of >= ${asOf}::date`);
+     WHERE graph_id = ${graphId} AND envelope_id = ${envelopeId} AND as_of >= ${asOf}::date`);
 }

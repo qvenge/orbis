@@ -144,12 +144,12 @@ beforeAll(async () => {
   try {
     await admin.db.execute(sql`
       INSERT INTO property_definitions
-        (id, owner_id, key, label, description, type, status, storage, rank, flags)
+        (id, graph_id, key, label, description, type, status, storage, rank, flags)
       VALUES (${FREE_PROPERTY_ID}, ${owner}, ${FREE_PROPERTY_KEY},
               ${JSON.stringify({ ru: 'Часов сна' })}::jsonb,
               ${JSON.stringify({ ru: 'Сколько часов владелец спал' })}::jsonb,
               ${JSON.stringify({ kind: 'number' })}::jsonb, 'active', 'props', 100, '{}'::jsonb)
-      ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+      ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO NOTHING`);
     await bumpOwnerRegistryVersion(admin.db, owner); // мутация реестра двигает версию (§А10-1)
   } finally {
     await admin.client.end();
@@ -1180,7 +1180,7 @@ describe('списочные пути несут новую форму', () => {
       const rows = [
         ...(await tx.execute(
           compileQueryAst(parsed.ast, {
-            ownerId: owner,
+            graphId: owner,
             reg,
             thisEntityId: note.id,
             today: '2026-08-26',
@@ -1239,7 +1239,7 @@ describe('applyPropsPatch и резолв адреса', () => {
     expect(nearestPropertyKey(reg, 'orbis/amount')).toBe('orbis/amount');
 
     // ДЕТЕРМИНИЗМ на равном расстоянии: два кандидата на дистанции 1 от одного входа.
-    // Порядок обхода снимка не гарантирован (`ORDER BY owner_id`), поэтому тай-брейк —
+    // Порядок обхода снимка не гарантирован (`ORDER BY graph_id`), поэтому тай-брейк —
     // алфавит, и ответ обязан быть одним и тем же на снимках с РАЗНЫМ порядком вставки.
     const template = reg.properties.get('orbis/amount');
     if (template === undefined) throw new Error('в снимке нет orbis/amount');
@@ -1271,7 +1271,7 @@ describe('applyPropsPatch и резолв адреса', () => {
     // здесь чистая функция, которой база не нужна.
     const system = reg.properties.get('orbis/run_report');
     if (system === undefined) throw new Error('в снимке нет orbis/run_report');
-    const shadow = { ...system, id: 'user/p-shadow', ownerId: owner, flags: {} };
+    const shadow = { ...system, id: 'user/p-shadow', graphId: owner, flags: {} };
     const shadowed: RegistrySnapshot = {
       ...reg,
       properties: new Map([...reg.properties, ['user/p-shadow', shadow]]),
@@ -1282,7 +1282,7 @@ describe('applyPropsPatch и резолв адреса', () => {
     expect(resolvePropertyRef(shadowed, 'orbis/run_report')?.id).toBe('user/p-shadow');
     expect(resolvePropertyRef(shadowed, 'user/p-shadow')?.id).toBe('user/p-shadow');
     // Порядок перекрытия не зависит от порядка обхода: системная строка идёт первой
-    // (ORDER BY owner_id NULLS FIRST), и заменить её вправе только собственная.
+    // (ORDER BY graph_id NULLS FIRST), и заменить её вправе только собственная.
     const reversed: RegistrySnapshot = {
       ...reg,
       properties: new Map([['user/p-shadow', shadow], ...reg.properties]),

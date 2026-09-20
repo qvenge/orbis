@@ -422,7 +422,7 @@ describe('эскалация повторных исправлений кате�
     // на последнем её шаге, уже после коммита правки категории
     const alien = freshUserId();
     const poisoned = memoryRuleSuggestionId({
-      ownerId: user,
+      graphId: user,
       pattern: 'пятерочка',
       fromCategoryId: food,
       toCategoryId: fun,
@@ -464,7 +464,7 @@ describe('эскалация повторных исправлений кате�
       ),
     );
     expect(
-      await maybeSuggestRule({ db, ownerId: user, action: await actionById(r.actionId) }),
+      await maybeSuggestRule({ db, graphId: user, action: await actionById(r.actionId) }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
 
@@ -473,7 +473,7 @@ describe('эскалация повторных исправлений кате�
     await recategorize(user, await createTxn(user, 'SBOL 1234', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'SBOL 5678', food), fun);
     expect(
-      await maybeSuggestRule({ db, ownerId: user, action: await actionById(actionId) }),
+      await maybeSuggestRule({ db, graphId: user, action: await actionById(actionId) }),
     ).toEqual({ suggested: false, reason: 'empty_pattern' });
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
@@ -569,7 +569,7 @@ describe('эскалация повторных исправлений кате�
     expect((await scanActions(user, [fun])).map((a) => a.id)).toEqual([actionId]);
     // и рекатегоризацией она не считается: разбор идёт по тому же property-id
     expect(
-      await maybeSuggestRule({ db, ownerId: user, action: await actionById(amount.actionId) }),
+      await maybeSuggestRule({ db, graphId: user, action: await actionById(amount.actionId) }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
 
@@ -635,7 +635,7 @@ describe('эскалация повторных исправлений кате�
     // Исправление ОДНО: если бы подавление проверялось после скана, ответом было бы
     // not_repeated — то есть журнал читался бы там, где ответ уже известен
     expect(
-      await maybeSuggestRule({ db, ownerId: user, action: await actionById(actionId) }),
+      await maybeSuggestRule({ db, graphId: user, action: await actionById(actionId) }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
   });
 
@@ -735,7 +735,7 @@ describe('эскалация повторных исправлений кате�
     // после коммита правки категории
     const alien = freshUserId();
     const poisoned = memoryRuleSuggestionId({
-      ownerId: user,
+      graphId: user,
       pattern: 'пятерочка',
       fromCategoryId: food,
       toCategoryId: fun,
@@ -808,7 +808,7 @@ describe('эскалация повторных исправлений кате�
     await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 999', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     expect(
-      await maybeSuggestRule({ db, ownerId: user, action: await actionById(actionId) }),
+      await maybeSuggestRule({ db, graphId: user, action: await actionById(actionId) }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
     // новой карточки не появилось: по «пятерочка» осталась ровно одна — засеянная
     const offers = await cardsOf(user, 'memory_rule_suggestion');
@@ -863,7 +863,7 @@ describe('эскалация повторных исправлений кате�
     // сообщением (под RLS невидимо) → CONFLICT уже после коммита самих правок.
     const alien = freshUserId();
     const poisoned = memoryRuleSuggestionId({
-      ownerId: user,
+      graphId: user,
       pattern: 'пятерочка',
       fromCategoryId: food,
       toCategoryId: fun,
@@ -937,7 +937,7 @@ describe('эскалация: уборочная фаза', () => {
     const mod = await import('./escalation');
     const spy = spyOn(mod, 'scanFinancialUpdates');
     try {
-      await maybeSuggestRule({ db, ownerId: user, action: await actionById(r.actionId) });
+      await maybeSuggestRule({ db, graphId: user, action: await actionById(r.actionId) });
       expect(spy.mock.calls.length).toBe(1);
     } finally {
       spy.mockRestore();

@@ -201,7 +201,7 @@ export function renderWithProviders(
  */
 export interface WireEntityFixture {
   id: string;
-  ownerId: string;
+  graphId: string;
   title: string;
   emoji: string | null;
   body: string;
@@ -236,7 +236,7 @@ export function wireEntity(
   const props = over.props ?? {};
   const aspects = over.aspects ?? [];
   return {
-    ownerId: 'u',
+    graphId: 'u',
     emoji: null,
     body: '',
     bodyRefs: [],

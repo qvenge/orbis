@@ -53,7 +53,7 @@ test('код меняется на пару токенов, access пускае�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -68,14 +68,14 @@ test('код меняется на пару токенов, access пускае�
   });
   expect(pair.accessToken.startsWith('orbis_at_')).toBe(true);
   expect(pair.expiresIn).toBe(3600);
-  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ ownerId: owner });
+  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ graphId: owner });
 });
 
 test('код одноразовый: повторный обмен отвергнут и грант отозван', async () => {
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -104,7 +104,7 @@ test('неверный verifier не проходит', async () => {
   const clientId = await seedClient();
   const { challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -126,7 +126,7 @@ test('код, выданный другому клиенту, не меняет�
   const other = await seedClient('other-client');
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -147,7 +147,7 @@ test('несовпадающий redirect_uri не меняет код', async (
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -168,7 +168,7 @@ test('просроченный код не меняется', async () => {
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -194,7 +194,7 @@ test('грант, отозванный между выдачей кода и о�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -207,7 +207,7 @@ test('грант, отозванный между выдачей кода и о�
   expect(pending).toHaveLength(1);
   const pendingGrant = pending[0];
   if (!pendingGrant) throw new Error('грант по выданному коду в listGrants не виден');
-  expect(await revokeGrant(db, { ownerId: owner, grantId: pendingGrant.id })).toBe(true);
+  expect(await revokeGrant(db, { graphId: owner, grantId: pendingGrant.id })).toBe(true);
   // Иначе клиент получил бы 200 с парой токенов, которая не работает нигде,
   // и считал бы себя подключённым.
   await expect(
@@ -224,7 +224,7 @@ test('refresh ротируется, старый больше не работа�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -239,7 +239,7 @@ test('refresh ротируется, старый больше не работа�
   });
   const second = await rotateRefresh(db, { refreshToken: first.refreshToken, clientId });
   expect(second.refreshToken).not.toBe(first.refreshToken);
-  expect(await verifyBearer(db, second.accessToken)).toMatchObject({ ownerId: owner });
+  expect(await verifyBearer(db, second.accessToken)).toMatchObject({ graphId: owner });
   expect(await verifyBearer(db, first.accessToken)).toBeNull();
   await expect(
     rotateRefresh(db, { refreshToken: first.refreshToken, clientId }),
@@ -250,7 +250,7 @@ test('реплей ротированного refresh гасит цепочку 
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -264,7 +264,7 @@ test('реплей ротированного refresh гасит цепочку 
     clientId,
   });
   const second = await rotateRefresh(db, { refreshToken: first.refreshToken, clientId });
-  expect(await verifyBearer(db, second.accessToken)).toMatchObject({ ownerId: owner });
+  expect(await verifyBearer(db, second.accessToken)).toMatchObject({ graphId: owner });
   // Перехватчик предъявляет ПЕРВЫЙ refresh уже после легитимной ротации: сам по себе
   // отказ ничего не решает, потому что у перехватчика на руках может быть и второй.
   await expect(
@@ -282,7 +282,7 @@ test('чужой client_id не ротирует и НЕ гасит грант',
   const other = await seedClient('other-client');
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -300,16 +300,16 @@ test('чужой client_id не ротирует и НЕ гасит грант',
   ).rejects.toMatchObject({ code: 'invalid_grant' });
   // Сбитый конфиг чужого клиента не должен стоить владельцу доступа: грант жив,
   // и законный клиент по-прежнему ротируется.
-  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ ownerId: owner });
+  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ graphId: owner });
   const rotated = await rotateRefresh(db, { refreshToken: pair.refreshToken, clientId });
-  expect(await verifyBearer(db, rotated.accessToken)).toMatchObject({ ownerId: owner });
+  expect(await verifyBearer(db, rotated.accessToken)).toMatchObject({ graphId: owner });
 });
 
 test('мёртвый refresh при предъявлении гасит грант целиком, access перестаёт пускать', async () => {
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -328,7 +328,7 @@ test('мёртвый refresh при предъявлении гасит гран
     .update(agentGrants)
     .set({ refreshExpiresAt: new Date(Date.now() - 1000) })
     .where(eq(agentGrants.refreshHash, sha256hex(pair.refreshToken)));
-  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ ownerId: owner });
+  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ graphId: owner });
   await expect(
     rotateRefresh(db, { refreshToken: pair.refreshToken, clientId }),
   ).rejects.toMatchObject({ code: 'invalid_grant' });
@@ -336,12 +336,12 @@ test('мёртвый refresh при предъявлении гасит гран
 });
 
 test('PAT пускает бессрочно и отзывается', async () => {
-  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
   expect(pat.startsWith('orbis_pat_')).toBe(true);
   const identity = await verifyBearer(db, pat);
-  expect(identity).toMatchObject({ ownerId: owner });
+  expect(identity).toMatchObject({ graphId: owner });
   if (!identity) throw new Error('verifyBearer не вернул identity');
-  expect(await revokeGrant(db, { ownerId: owner, grantId: identity.grantId })).toBe(true);
+  expect(await revokeGrant(db, { graphId: owner, grantId: identity.grantId })).toBe(true);
   expect(await verifyBearer(db, pat)).toBeNull();
 });
 
@@ -349,23 +349,23 @@ test('PAT пускает бессрочно и отзывается', async () =
 // гейта Задачи 7) и подпись (атрибуция в журнале и на экране «Агенты»). Скоуп читается
 // впервые: до этого колонка agent_grants.scope существовала, но никем не читалась.
 test('verifyBearer отдаёт область и подпись гранта, а не только владельца', async () => {
-  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
   const identity = await verifyBearer(db, pat);
-  expect(identity).toMatchObject({ ownerId: owner, scope: 'full', label: 'CI' });
+  expect(identity).toMatchObject({ graphId: owner, scope: 'full', label: 'CI' });
 });
 
 // Задача 8: скоуп теперь ВЫДАЁТСЯ, а не только читается. До неё колонка заполнялась одним
 // лишь DEFAULT, и «выдать исполнителя» можно было только UPDATE'ом мимо кода — то есть
 // сузить доступ штатным путём было нечем.
 test('PAT выдаётся со скоупом worker, и его читает verifyBearer', async () => {
-  const pat = await issuePatGrant(db, { ownerId: owner, label: 'исполнитель', scope: 'worker' });
+  const pat = await issuePatGrant(db, { graphId: owner, label: 'исполнитель', scope: 'worker' });
   expect(await verifyBearer(db, pat)).toMatchObject({ scope: 'worker', label: 'исполнитель' });
 });
 
 // Умолчание — 'full': скрипты выдачи PAT зовут issuePatGrant без области, и молчаливое
 // сужение отобрало бы доступ у уже описанного в документации способа подключения.
 test('PAT без указанной области остаётся полным', async () => {
-  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
   expect(await verifyBearer(db, pat)).toMatchObject({ scope: 'full' });
 });
 
@@ -376,7 +376,7 @@ test('область кода доезжает до токенов и до от�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Исполнитель',
     redirectUri: REDIRECT,
@@ -400,24 +400,24 @@ test('область кода доезжает до токенов и до от�
 // Экран «Настройки → Агенты» показывает область каждой строки: без неё владелец не
 // отличает полный доступ от исполнителя и не понимает, что именно отзывает.
 test('listGrants отдаёт область гранта', async () => {
-  await issuePatGrant(db, { ownerId: owner, label: 'исполнитель', scope: 'worker' });
-  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  await issuePatGrant(db, { graphId: owner, label: 'исполнитель', scope: 'worker' });
+  await issuePatGrant(db, { graphId: owner, label: 'CI' });
   const grants = await listGrants(db, owner);
   expect(grants.find((g) => g.label === 'исполнитель')?.scope).toBe('worker');
   expect(grants.find((g) => g.label === 'CI')?.scope).toBe('full');
 });
 
 test('чужой владелец не отзывает грант', async () => {
-  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
   const identity = await verifyBearer(db, pat);
   if (!identity) throw new Error('verifyBearer не вернул identity');
-  expect(await revokeGrant(db, { ownerId: freshUserId(), grantId: identity.grantId })).toBe(false);
+  expect(await revokeGrant(db, { graphId: freshUserId(), grantId: identity.grantId })).toBe(false);
   expect(await verifyBearer(db, pat)).not.toBeNull();
 });
 
 test('listGrants отдаёт свои гранты и не отдаёт хеши', async () => {
-  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
-  await issuePatGrant(db, { ownerId: freshUserId(), label: 'чужой' });
+  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  await issuePatGrant(db, { graphId: freshUserId(), label: 'чужой' });
   const grants = await listGrants(db, owner);
   expect(grants).toHaveLength(1);
   expect(grants[0]).toMatchObject({ kind: 'pat', label: 'CI' });
@@ -435,7 +435,7 @@ test('listGrants отличает необменянный код от подк�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -459,7 +459,7 @@ test('listGrants отличает необменянный код от подк�
 // «нет ни того, ни другого» держит именно этот случай — проверка на один refresh
 // выдала бы каждый headless-токен за незавершённое подключение.
 test('PAT в списке — подключённый доступ, а не брошенная попытка', async () => {
-  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  await issuePatGrant(db, { graphId: owner, label: 'CI' });
   expect((await listGrants(db, owner))[0]).toMatchObject({ kind: 'pat', connected: true });
 });
 
@@ -467,10 +467,10 @@ test('PAT в списке — подключённый доступ, а не б�
 // прыгала бы на «сейчас» от повторного нажатия (или гонки двух вкладок), и владелец терял
 // бы единственную улику о том, когда доступ на самом деле погас.
 test('повторный отзыв не двигает дату отзыва', async () => {
-  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  await issuePatGrant(db, { graphId: owner, label: 'CI' });
   const grant = (await listGrants(db, owner))[0];
   if (!grant) throw new Error('грант не создан');
-  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  expect(await revokeGrant(db, { graphId: owner, grantId: grant.id })).toBe(true);
   const first = (await listGrants(db, owner))[0]?.revokedAt;
   if (!first) throw new Error('первый отзыв не проставил дату');
   // Пауза обязательна: без неё «сейчас» второго отзыва совпало бы с первым с точностью
@@ -479,7 +479,7 @@ test('повторный отзыв не двигает дату отзыва', 
   // true, а не false: доступ владельца отозван — это и есть результат, о котором просили.
   // Отличать «уже было отозвано» от «грант не ваш» одним и тем же false значило бы
   // сделать невозможным честное сообщение об отказе на экране.
-  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  expect(await revokeGrant(db, { graphId: owner, grantId: grant.id })).toBe(true);
   const second = (await listGrants(db, owner))[0]?.revokedAt;
   expect(second?.getTime()).toBe(first.getTime());
 });
@@ -494,7 +494,7 @@ test('повторный код не двигает дату уже проста
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -509,7 +509,7 @@ test('повторный код не двигает дату уже проста
   });
   const grant = (await listGrants(db, owner))[0];
   if (!grant) throw new Error('грант не создан');
-  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  expect(await revokeGrant(db, { graphId: owner, grantId: grant.id })).toBe(true);
   const first = (await listGrants(db, owner))[0]?.revokedAt;
   if (!first) throw new Error('отзыв не проставил дату');
   // Пауза — как в тесте идемпотентности выше: без неё «сейчас» второго отзыва совпало бы
@@ -530,7 +530,7 @@ test('реплей ротированного refresh не двигает дат
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    ownerId: owner,
+    graphId: owner,
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -547,7 +547,7 @@ test('реплей ротированного refresh не двигает дат
   await rotateRefresh(db, { refreshToken: first.refreshToken, clientId });
   const grant = (await listGrants(db, owner))[0];
   if (!grant) throw new Error('грант не создан');
-  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  expect(await revokeGrant(db, { graphId: owner, grantId: grant.id })).toBe(true);
   const revokedAt = (await listGrants(db, owner))[0]?.revokedAt;
   if (!revokedAt) throw new Error('отзыв не проставил дату');
   await Bun.sleep(20);

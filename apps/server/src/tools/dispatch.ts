@@ -423,7 +423,7 @@ export async function dispatchTool(
       return await runAgentVerb(
         {
           db: ctx.db,
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           subject,
           clock: ctx.clock ?? (() => new Date()),
           sink,
@@ -610,7 +610,7 @@ async function runRead(
       // Часы вызова, а не `now()` БД: фильтр возраста (`olderThanDays`) обязан мерить время
       // тем же источником, которым его мерит весь остальной прогон.
       result: await runPropertyCatalog(tx, reg, parsed, OWNER_LOCALE, {
-        ownerId: ctx.actorUserId,
+        graphId: ctx.actorUserId,
         now: (ctx.clock ?? (() => new Date()))(),
       }),
     };
@@ -1197,7 +1197,7 @@ async function runMutation(
   // отфильтровать «не рекатегоризации» — работа самой эскалации.
   if (ctx.source === 'chat' && actionId !== undefined) {
     await escalateAfterMutation(ctx.db, {
-      ownerId: ctx.actorUserId,
+      graphId: ctx.actorUserId,
       actionId,
       // payload'ы уже прошли схемы тулов в validateMutationEnvelope/validateBatchOperations
       operations: batchPayload?.operations ?? [{ tool, input: payload }],
@@ -1584,14 +1584,14 @@ async function deferRoutineUnit(
  */
 async function snapshotDeferredUnit(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   tool: string,
   payload: unknown,
 ): Promise<
   { input: unknown; summary: string; rows: DeferredRow[] } | { error: ToolDispatchResult }
 > {
   if (REGISTRY_TOOL_NAMES.has(tool) && isRecord(payload)) {
-    return await snapshotRegistryUnit(tx, ownerId, tool, payload);
+    return await snapshotRegistryUnit(tx, graphId, tool, payload);
   }
   if (tool !== 'entity_update' || !isRecord(payload)) {
     return {
@@ -1602,7 +1602,7 @@ async function snapshotDeferredUnit(
       ),
     };
   }
-  const targets = await loadTargets(tx, ownerId, [{ tool, input: payload }]);
+  const targets = await loadTargets(tx, graphId, [{ tool, input: payload }]);
   if ('error' in targets) return { error: targets.error };
   const id = String(payload.id);
   const current = targets.rows.get(id);
@@ -1754,11 +1754,11 @@ function registryAddressesToId(
  */
 export async function snapshotRegistryUnit(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   tool: string,
   payload: Record<string, unknown>,
 ): Promise<{ input: unknown; summary: string; rows: DeferredRow[] }> {
-  const reg = await effectiveRegistry(tx, ownerId);
+  const reg = await effectiveRegistry(tx, graphId);
   const summary = registryOperationSummary(reg, tool, payload);
   const propertyName = (address: unknown): string => {
     if (typeof address !== 'string') return String(address);
@@ -1810,7 +1810,7 @@ export async function snapshotRegistryUnit(
     }
     case 'aspect_delta_set':
     case 'aspect_delta_remove': {
-      const before = await readAspectDelta(tx, ownerId, String(payload.aspect));
+      const before = await readAspectDelta(tx, graphId, String(payload.aspect));
       return {
         input: payload,
         summary,
@@ -1840,7 +1840,7 @@ export async function snapshotRegistryUnit(
       // участвует в потребителях, — и «было → станет» тут буквальны.
       const before =
         tool === 'aspect_implements_set'
-          ? (await readOwnAspect(tx, ownerId, String(payload.aspect)))?.implements
+          ? (await readOwnAspect(tx, graphId, String(payload.aspect)))?.implements
               .map((b) => b.contract)
               .join(', ')
           : String(payload.contract);
@@ -1863,7 +1863,7 @@ export async function snapshotRegistryUnit(
     }
     case 'subscription_set':
     case 'subscription_remove': {
-      const before = await readSubscriptionDelta(tx, ownerId, String(payload.id));
+      const before = await readSubscriptionDelta(tx, graphId, String(payload.id));
       // `reg` уже снят в шапке функции — второго чтения снимка здесь не заводим.
       const own = reg.subscriptions.get(String(payload.id));
       // Сырые ссылки `{prop}` в декларации (§Б5-2, пометка raw_value диффа Ш1) — ОТДЕЛЬНОЙ строкой:
@@ -1897,7 +1897,7 @@ export async function snapshotRegistryUnit(
     }
     case 'contract_sets_delta_set':
     case 'contract_sets_delta_remove': {
-      const before = await readContractDelta(tx, ownerId, String(payload.contract));
+      const before = await readContractDelta(tx, graphId, String(payload.contract));
       return {
         input: payload,
         summary,

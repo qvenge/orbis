@@ -86,13 +86,13 @@ if (provider !== null && provider.modelId === 'echo') {
  * владельца. Набор с кастомными аспектами и есть интересный случай гейта — рукописный
  * набор его не воспроизводит.
  */
-const ownerId = process.env.ORBIS_SMOKE_OWNER_ID;
-if (!ownerId) {
+const graphId = process.env.ORBIS_SMOKE_OWNER_ID;
+if (!graphId) {
   console.error('llm-smoke: задайте ORBIS_SMOKE_OWNER_ID — от него зависит эффективный реестр.');
   process.exit(1);
 }
 const { db, client } = makeDb({ max: 1 });
-const registry = await withIdentity(db, ownerId, (tx) => effectiveRegistry(tx, ownerId));
+const registry = await withIdentity(db, graphId, (tx) => effectiveRegistry(tx, graphId));
 await client.end();
 // Та же конвертация OrbisToolDef → LLMToolDef, что в бою (ai/send-message.ts):
 // расхождение здесь означало бы, что гейт проверяет не ту форму запроса.

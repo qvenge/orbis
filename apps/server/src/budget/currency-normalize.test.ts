@@ -81,8 +81,8 @@ async function setDefaultCurrency(user: string, currency: string): Promise<void>
   const { db: admin, client: adminClient } = adminDb();
   try {
     await admin.execute(
-      sql`INSERT INTO user_settings (owner_id, "defaultCurrency") VALUES (${user}, ${currency})
-          ON CONFLICT (owner_id) DO UPDATE SET "defaultCurrency" = ${currency}`,
+      sql`INSERT INTO user_settings (graph_id, "defaultCurrency") VALUES (${user}, ${currency})
+          ON CONFLICT (graph_id) DO UPDATE SET "defaultCurrency" = ${currency}`,
     );
   } finally {
     await adminClient.end();

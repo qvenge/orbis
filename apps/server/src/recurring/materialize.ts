@@ -294,7 +294,7 @@ export function materializationWindow(
 
 export interface MaterializeDeps {
   db: Db;
-  ownerId: string;
+  graphId: string;
   /** Окно запроса, 'YYYY-MM-DD' включительно с обеих сторон. */
   from: string;
   to: string;
@@ -310,7 +310,7 @@ export interface MaterializeDeps {
  * невалидные данные) пропускается, не роняя запрос вызывающего.
  */
 export async function materializeInstances(deps: MaterializeDeps): Promise<{ created: number }> {
-  const { db, ownerId, today } = deps;
+  const { db, graphId, today } = deps;
   if (!DATE_RE.test(deps.from) || !DATE_RE.test(deps.to)) {
     throw new RangeError(`Некорректное окно материализации: [${deps.from}; ${deps.to}]`);
   }
@@ -325,7 +325,7 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
   // Фаза чтения (короткий tx под RLS): шаблоны владельца + его таймзона.
   // Шаблон = неархивная сущность с orbis/schedule.recurrence (§3.1); financial без
   // recurrence шаблоном не является и сюда не попадает (§3.3 — пропуск по построению).
-  const { templates, userTimezone } = await withIdentity(db, ownerId, async (tx) => {
+  const { templates, userTimezone } = await withIdentity(db, graphId, async (tx) => {
     const rows = await tx
       .select()
       .from(entities)
@@ -342,7 +342,7 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
     const settings = await tx
       .select({ timezone: userSettings.timezone })
       .from(userSettings)
-      .where(eq(userSettings.ownerId, ownerId));
+      .where(eq(userSettings.graphId, graphId));
     const stored = settings[0]?.timezone ?? DEFAULT_TIMEZONE;
     return {
       templates: rows,
@@ -352,7 +352,7 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
 
   let created = 0;
   for (const template of templates) {
-    created += await materializeTemplate(db, ownerId, template, userTimezone, from, to);
+    created += await materializeTemplate(db, graphId, template, userTimezone, from, to);
   }
   return { created };
 }
@@ -360,7 +360,7 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
 /** Материализация одного шаблона; возвращает число созданных инстансов. */
 async function materializeTemplate(
   db: Db,
-  ownerId: string,
+  graphId: string,
   template: TemplateRow,
   userTimezone: string,
   from: string,
@@ -409,7 +409,7 @@ async function materializeTemplate(
     const idByDate = new Map(dates.map((d) => [d, recurringInstanceId(template.id, d)]));
     const existing = new Set(
       (
-        await withIdentity(db, ownerId, (tx) =>
+        await withIdentity(db, graphId, (tx) =>
           tx
             .select({ id: entities.id })
             .from(entities)
@@ -426,7 +426,7 @@ async function materializeTemplate(
     const r = await execute(
       db,
       {
-        actorUserId: ownerId,
+        actorUserId: graphId,
         actorKind: 'owner',
         source: 'system',
         // Механизм — материализация (§А4-4): экземпляры повторяющегося рождает сервер

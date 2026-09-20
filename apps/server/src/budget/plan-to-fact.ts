@@ -41,14 +41,14 @@ function invariant(message: string): ExecError {
  */
 export async function confirmPurchase(
   db: Db,
-  ownerId: string,
+  graphId: string,
   input: ConfirmPurchaseInput,
 ): Promise<ConfirmPurchaseResult> {
-  const auditId = batchAuditMessageId(ownerId, input.batchId);
+  const auditId = batchAuditMessageId(graphId, input.batchId);
 
   // Фаза чтения: replay-детект + пречек §2.7. Пречек — только когда это НЕ повтор того
   // же batchId (иначе уже переведённая покупка ложно отклонялась бы «уже факт»).
-  await withIdentity(db, ownerId, async (tx) => {
+  await withIdentity(db, graphId, async (tx) => {
     const replay = (await sink.findByAuditId(tx, auditId)) !== undefined;
     if (replay) return;
 
@@ -65,7 +65,7 @@ export async function confirmPurchase(
           WHERE r.target_id = e.id AND r.role = ${ROLE_INSTANCE_OF}
         ) AS derived
       FROM entities e
-      WHERE e.id = ${input.entityId} AND e.owner_id = ${ownerId}
+      WHERE e.id = ${input.entityId} AND e.graph_id = ${graphId}
     `)) as unknown as Array<{
       archived: boolean;
       financial: boolean;
@@ -99,7 +99,7 @@ export async function confirmPurchase(
   // Один batch (§2.7): entity_update planned=false + фактическая дата. batchId клиента →
   // ветка executeBatch (идемпотентность/Undo по audit-PK), A4-хук переселектит конверт.
   const request: ExecuteRequest = {
-    actorUserId: ownerId,
+    actorUserId: graphId,
     actorKind: 'owner',
     source: 'ui', // подтверждённое действие владельца на карточке «Покупка совершена?» (§2.7)
     batchId: input.batchId,

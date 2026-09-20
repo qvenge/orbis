@@ -236,12 +236,12 @@ describe('reset-world — состав пересева на живой базе
       properties: [{ key: 'hours', type: { kind: 'number' } }],
     });
     await admin.execute(
-      sql`INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+      sql`INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
           VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', 0,
                   '{"label":{"ru":"Дело"}}'::jsonb)`,
     );
     await admin.execute(
-      sql`UPDATE user_settings SET registry_version = 7 WHERE owner_id = ${owner}::uuid`,
+      sql`UPDATE user_settings SET registry_version = 7 WHERE graph_id = ${owner}::uuid`,
     );
 
     // Доступы и метеринг — то, что пересев обязан СОХРАНИТЬ.
@@ -250,22 +250,22 @@ describe('reset-world — состав пересева на живой базе
           VALUES (${clientId}, 'тестовый клиент', ARRAY['https://example.invalid/cb'])`,
     );
     await admin.execute(
-      sql`INSERT INTO agent_grants (id, owner_id, client_id, kind, label, scope)
+      sql`INSERT INTO agent_grants (id, graph_id, client_id, kind, label, scope)
           VALUES (${newId()}::uuid, ${owner}::uuid, ${clientId}, 'oauth', 'проба', 'full')`,
     );
     await admin.execute(
-      sql`INSERT INTO ai_usage (owner_id, date, model, input_tokens, output_tokens, request_count)
+      sql`INSERT INTO ai_usage (graph_id, date, model, input_tokens, output_tokens, request_count)
           VALUES (${owner}::uuid, current_date, 'gpt-5.5', 10, 20, 1)`,
     );
     // Второй владелец — со строкой настроек и версией: пересев глобален, и обнулить он обязан
     // всех, а не только того, чей граф мы разглядываем.
     await admin.execute(
-      sql`INSERT INTO user_settings (owner_id, registry_version) VALUES (${otherOwner}::uuid, 3)`,
+      sql`INSERT INTO user_settings (graph_id, registry_version) VALUES (${otherOwner}::uuid, 3)`,
     );
     // Журнальные таблицы наполняем прямо: боевой путь их пишет в других сценариях, а пересеву
     // важно, что они попадают под снос вместе с графом.
     const seeded = (await admin.execute(
-      sql`SELECT id FROM entities WHERE owner_id = ${owner}::uuid ORDER BY id LIMIT 2`,
+      sql`SELECT id FROM entities WHERE graph_id = ${owner}::uuid ORDER BY id LIMIT 2`,
     )) as unknown as { id: string }[];
     const entity = seeded[0];
     const second = seeded[1];
@@ -298,17 +298,17 @@ describe('reset-world — состав пересева на живой базе
       });
     });
     await admin.execute(
-      sql`INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id)
+      sql`INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id)
           VALUES (${newId()}::uuid, ${owner}::uuid, ${entity.id}::uuid, 'csv:проба', '1')`,
     );
     await admin.execute(
-      sql`INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
+      sql`INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id, actor_kind)
           VALUES (${newId()}::uuid, ${owner}::uuid, ${entity.id}::uuid, 'проба', 'тело',
                   ${owner}::uuid, 'owner')`,
     );
     await admin.execute(
       sql`INSERT INTO envelope_spent_cache
-            (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+            (envelope_id, graph_id, as_of, spent, owner_version, system_version)
           VALUES (${entity.id}::uuid, ${owner}::uuid, '2026-09-01', 1, 0, 1)`,
     );
 
@@ -317,10 +317,10 @@ describe('reset-world — состав пересева на живой базе
 
   test('после пересева: граф пуст, реестры только системные, версии на месте, доступы целы', async () => {
     // Предусловие, без которого зелень ничего не значит: сносить было ЧТО.
-    expect(await count('entities', `owner_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
     expect(await count('registry_deltas')).toBe(1);
-    expect(await count('property_definitions', 'owner_id IS NOT NULL')).toBe(1);
-    expect(await count('aspect_definitions', 'owner_id IS NOT NULL')).toBe(1);
+    expect(await count('property_definitions', 'graph_id IS NOT NULL')).toBe(1);
+    expect(await count('aspect_definitions', 'graph_id IS NOT NULL')).toBe(1);
     // Все СЕМЬ таблиц сноса непусты ДО операции — иначе «снесено» ниже проверяло бы пустоту,
     // которая и так была.
     for (const table of GRAPH_TABLES_UNDER_TEST) {
@@ -361,7 +361,7 @@ describe('reset-world — состав пересева на живой базе
 
     // Реестры — только системные строки, и ровно те, что в коде.
     for (const table of DEFINITION_TABLES) {
-      expect([table, await count(table, 'owner_id IS NOT NULL')]).toEqual([table, 0]);
+      expect([table, await count(table, 'graph_id IS NOT NULL')]).toEqual([table, 0]);
     }
     expect(await count('property_definitions')).toBe(BUILTIN_PROPERTY_META.length);
     expect(await count('relation_role_definitions')).toBe(BUILTIN_RELATION_ROLE_META.length);
@@ -369,10 +369,10 @@ describe('reset-world — состав пересева на живой базе
 
     // Версии: владельца — в ноль (у ОБОИХ), системная — на единицу вверх, её двигает сид.
     const settings = (await admin.execute(
-      sql`SELECT owner_id, registry_version, plan, timezone FROM user_settings ORDER BY owner_id`,
-    )) as unknown as { owner_id: string; registry_version: number; plan: string }[];
+      sql`SELECT graph_id, registry_version, plan, timezone FROM user_settings ORDER BY graph_id`,
+    )) as unknown as { graph_id: string; registry_version: number; plan: string }[];
     expect(settings.map((s) => s.registry_version)).toEqual([0, 0]);
-    expect(settings.map((s) => s.owner_id).sort()).toEqual([owner, otherOwner].sort());
+    expect(settings.map((s) => s.graph_id).sort()).toEqual([owner, otherOwner].sort());
     // Настройки СОХРАНЯЮТСЯ — обнуляется только версия: владелец заходит в то же приложение.
     expect(settings.every((s) => s.plan === 'dev')).toBe(true);
     expect(await systemVersion()).toBe(versionBefore + 1);
@@ -390,19 +390,19 @@ describe('reset-world — состав пересева на живой базе
     // определялась по ней, заход досевал четыре сущности из девятнадцати, а три пина
     // сайдбара указывали на снесённые id. Проба идёт ПОСЛЕ пересева в этом же describe —
     // именно в том состоянии базы, которое оставляет операция.
-    expect(await count('entities', `owner_id = '${owner}'`)).toBe(0);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(0);
 
     const again = await seedOwner(app, owner);
     // `seeded: false` — строка настроек на месте, онбординг «уже был». Мир при этом посеян:
     // ответ про фазу настроек, а не про граф (см. докблок `seedOwner`).
     expect(again.seeded).toBe(false);
-    expect(await count('entities', `owner_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
 
     // Пины сходятся сами: id мира детерминированы от owner + слаг, и после пересева
     // возвращаются те же. Проверяется НЕ формула, а то, что каждая закреплённая сущность
     // существует, — иначе сайдбар покажет сырые uuid.
     const settings = (await admin.execute(
-      sql`SELECT "pinnedEntities" AS pinned FROM user_settings WHERE owner_id = ${owner}::uuid`,
+      sql`SELECT "pinnedEntities" AS pinned FROM user_settings WHERE graph_id = ${owner}::uuid`,
     )) as unknown as Array<{ pinned: Array<{ id: string }> }>;
     const pinned = settings[0]?.pinned ?? [];
     expect(pinned.length).toBeGreaterThan(0);
@@ -412,7 +412,7 @@ describe('reset-world — состав пересева на живой базе
 
     // Повторный заход ничего не удваивает — идемпотентность держит проба по PK, а не guard.
     await seedOwner(app, owner);
-    expect(await count('entities', `owner_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
   });
 
   test('после пересева `check` чист: дрейфа реестров нет, конфликтов слияния нет', async () => {

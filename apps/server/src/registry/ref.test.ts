@@ -44,7 +44,7 @@ const GOLDEN_REG: RegistrySnapshot = {
 };
 
 const GOLDEN_CTX: CompileCtx = {
-  ownerId: '00000000-0000-7000-8000-0000000000a1',
+  graphId: '00000000-0000-7000-8000-0000000000a1',
   today: '2026-08-27',
   timeZone: 'Europe/Moscow',
   reg: GOLDEN_REG,

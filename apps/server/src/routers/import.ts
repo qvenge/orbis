@@ -45,7 +45,7 @@ export const importRouter = router({
     .mutation(async ({ ctx, input }): Promise<ImportAnalyzeResult> => {
       try {
         return await analyzeCsv(ctx.db, ctx.ai ?? defaultAiDeps(), {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           sampleRows: input.sampleRows,
         });
       } catch (e) {

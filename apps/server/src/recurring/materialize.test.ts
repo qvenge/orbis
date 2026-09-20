@@ -112,7 +112,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -157,7 +157,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const first = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -179,7 +179,7 @@ describe('materializeInstances (01 §5.4)', () => {
     // Повтор того же окна — идемпотентен, правка не перезаписана
     const again = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -189,7 +189,7 @@ describe('materializeInstances (01 §5.4)', () => {
     // Пересекающееся окно другого запроса: досоздаёт только новые даты, без дублей
     const overlap = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-02',
       to: '2026-07-05',
       today: '2026-07-01',
@@ -214,7 +214,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-31',
       today: '2026-07-01',
@@ -241,7 +241,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2020-01-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -279,7 +279,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-02',
       today: '2026-07-01',
@@ -322,7 +322,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -355,7 +355,7 @@ describe('materializeInstances (01 §5.4)', () => {
     try {
       const r = await materializeInstances({
         db,
-        ownerId: owner,
+        graphId: owner,
         from: '2026-07-01',
         to: '2026-07-02',
         today: '2026-07-01',
@@ -393,7 +393,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -430,7 +430,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -476,7 +476,7 @@ describe('materializeInstances (01 §5.4)', () => {
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
-          ownerId: owner,
+          graphId: owner,
           id: ghost,
           title: 'Расписание снято, правило осталось',
           props: {
@@ -513,7 +513,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -549,7 +549,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      ownerId: owner,
+      graphId: owner,
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',

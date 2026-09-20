@@ -59,7 +59,7 @@ export const FIXTURE_USER_CONTRACT_ID = '019d48ea-4188-7c02-8e96-1f0000000003';
 const EXTRA_CONTRACT: ContractDefinition = contractDefinitionSchema.parse({
   kind: 'slots',
   id: FIXTURE_USER_CONTRACT_ID,
-  ownerId: null,
+  graphId: null,
   key: 'user/reviewable',
   label: { ru: 'Проверяемость', en: 'Reviewable' },
   description: { ru: 'Контракт фикстур: черновик и опубликованное.', en: 'A fixture contract.' },
@@ -148,7 +148,7 @@ const EXTRA_PROPERTIES: readonly PropertyDefinition[] = [
     rank: 1003,
   },
 ].map((entry) =>
-  propertyDefinitionSchema.parse({ ...entry, ownerId: null, status: 'active', module: null }),
+  propertyDefinitionSchema.parse({ ...entry, graphId: null, status: 'active', module: null }),
 );
 
 /** Аспекты-носители добавок: без них `aspect=` не развёл бы одинаковые подписи. */
@@ -166,7 +166,7 @@ const EXTRA_REFS: Readonly<Record<string, readonly string[]>> = {
  */
 const EXTRA_ASPECT: AspectDefinition = aspectDefinitionSchema.parse({
   id: 'user/note_alias',
-  ownerId: null,
+  graphId: null,
   key: 'user/note-alias',
   label: { ru: 'Заметка', en: 'Note alias' },
   description: { ru: 'Двойник подписи «Заметка»', en: 'A duplicate of the Note label' },
@@ -181,7 +181,7 @@ const EXTRA_ASPECT: AspectDefinition = aspectDefinitionSchema.parse({
 
 const EXTRA_ROLE: RelationRoleDefinition = relationRoleDefinitionSchema.parse({
   id: 'user/mention_alias',
-  ownerId: null,
+  graphId: null,
   key: 'user/mention-alias',
   label: { ru: 'Упоминание', en: 'Mention alias' },
   description: { ru: 'Двойник подписи «Упоминание»', en: 'A duplicate of the Mention label' },

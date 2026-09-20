@@ -19,7 +19,7 @@ function overview(comingUp: unknown[]): unknown {
 /** Сущность в минимуме, который требует `entitySchema` (остальное — со значениями по умолчанию). */
 const ENTITY = {
   id: '019e4466-1000-7e07-b5d4-64be9721da51',
-  ownerId: '019e4466-2000-7e07-b5d4-64be9721da52',
+  graphId: '019e4466-2000-7e07-b5d4-64be9721da52',
   title: 'Аренда',
   createdAt: '2026-07-01T00:00:00.000Z',
   updatedAt: '2026-07-01T00:00:00.000Z',

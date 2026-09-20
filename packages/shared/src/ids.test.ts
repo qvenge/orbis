@@ -146,14 +146,14 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
   });
   test('memoryRule*Id (§7.8): детерминированы ключом, различают предложение и отказ, чувствительны к дате', () => {
     const k = {
-      ownerId: '00000000-0000-4000-8000-00000000000a',
+      graphId: '00000000-0000-4000-8000-00000000000a',
       pattern: 'пятерочка',
       fromCategoryId: '00000000-0000-7000-8000-0000000000d4',
       toCategoryId: '00000000-0000-7000-8000-0000000000d5',
       date: '2026-07-25',
     };
     expect(memoryRuleSuggestionId(k)).toBe(
-      memoryRuleSuggestionId({ ...k, ownerId: k.ownerId.toUpperCase() }),
+      memoryRuleSuggestionId({ ...k, graphId: k.graphId.toUpperCase() }),
     );
     expect(memoryRuleSuggestionId(k)).not.toBe(memoryRuleDeclinedId(k));
     expect(memoryRuleSuggestionId(k)).not.toBe(

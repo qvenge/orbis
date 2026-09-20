@@ -6,7 +6,7 @@
 //
 // Три инварианта задачи:
 //   1. Provenance строки — НЕ поле сущности, а строка entity_origins (01-arch §4.8)
-//      с уникальностью (owner_id, namespace, external_id); external_id считает общий
+//      с уникальностью (graph_id, namespace, external_id); external_id считает общий
 //      с клиентом код C1 (externalRowId) — второй реализации хэша нет.
 //   2. Импорт — ОДИН batch_execute с клиентским batch_id: идемпотентен по нему,
 //      падение любой строки не оставляет частичного импорта, Undo откатывает группу
@@ -83,8 +83,8 @@ export interface ImportDeps {
  * 'dev' разрешено, отказ резолвера → LIMIT (429 маппингом errors.ts). Резолвер —
  * параметром (шов mcp/server.ts): вызывающий подставляет deps.entitlements ?? боевой.
  */
-export function gateImportCsv(ownerId: string, resolve: EntitlementResolver): void {
-  const decision = resolve(ownerId, IMPORT_CSV_KEY);
+export function gateImportCsv(graphId: string, resolve: EntitlementResolver): void {
+  const decision = resolve(graphId, IMPORT_CSV_KEY);
   if (!decision.allowed) {
     throw new ExecError('LIMIT', `лимит «${IMPORT_CSV_KEY}» исчерпан`, {
       key: IMPORT_CSV_KEY,
@@ -151,15 +151,15 @@ function truncateRowCodePoints(row: string, maxCodePoints: number): string {
 export async function analyzeCsv(
   db: Db,
   deps: AiDeps,
-  args: { ownerId: string; sampleRows: string[] },
+  args: { graphId: string; sampleRows: string[] },
 ): Promise<ImportAnalyzeResult> {
   const resolve = deps.entitlements ?? resolveEntitlement;
-  gateImportCsv(args.ownerId, resolve);
+  gateImportCsv(args.graphId, resolve);
   // Гейт AI-бюджета §8 — ТОТ ЖЕ, что у ai.sendMessage: analyze зовёт провайдера и
   // списывает в общий дневной счётчик ai_usage (recordUsage ниже), поэтому ключи
   // ai.requests_per_day / ai.tokens_per_day обязаны его ограничивать. Оба гейта —
   // ДО обращения к провайдеру; резолвер — из того же инъецируемого шва.
-  await gateAiEntitlements(db, args.ownerId, resolve, deps.clock ?? (() => new Date()));
+  await gateAiEntitlements(db, args.graphId, resolve, deps.clock ?? (() => new Date()));
 
   const samples = args.sampleRows.map((row) => truncateRowCodePoints(row, MAX_ANALYZE_ROW_CHARS));
   const request: LLMRequest = {
@@ -191,7 +191,7 @@ export async function analyzeCsv(
   // маппинг; сбой метрики логируется, но не ломает ответ (решение 8 плана 1b)
   try {
     await recordUsage(db, {
-      ownerId: args.ownerId,
+      graphId: args.graphId,
       model: deps.model,
       usage: {
         inputTokens: response.usage.inputTokens,
@@ -274,14 +274,14 @@ async function knownExternalIds(
  */
 async function candidateWindow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   from: string,
   to: string,
 ): Promise<Map<string, Candidate[]>> {
   const rows = (await tx.execute(sql`
     SELECT id, title, props
     FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived
+    WHERE graph_id = ${graphId} AND NOT archived
       AND 'orbis/financial' = ANY(aspects)
       AND NOT ('orbis/schedule' = ANY(aspects) AND props->'orbis/recurrence' IS NOT NULL)
       AND props->>'orbis/occurred_on' >= ${from}
@@ -330,11 +330,11 @@ async function candidateWindow(
  * Категории владельца для резолва по алиасам — тот же словарь, что у fast-path (§7.5).
  * title выбирается ради memory-правил: правило называет категорию НАЗВАНИЕМ (D3a).
  */
-async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCategory[]> {
+async function categoryDictionary(tx: Tx, graphId: string): Promise<FastPathCategory[]> {
   const rows = (await tx.execute(sql`
     SELECT id, title, props->'orbis/aliases' AS aliases
     FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived AND 'orbis/category' = ANY(aspects)
+    WHERE graph_id = ${graphId} AND NOT archived AND 'orbis/category' = ANY(aspects)
     ORDER BY id
   `)) as unknown as Array<{ id: string; title: string; aliases: unknown }>;
   return rows.map((r) => ({
@@ -362,13 +362,13 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
  * записать такое правило больше нельзя (`memory/rules.ts` — fail-closed), но данные,
  * записанные прямым SQL, до резолва доходить не должны.
  */
-async function memoryRules(tx: Tx, ownerId: string): Promise<FastPathRule[]> {
+async function memoryRules(tx: Tx, graphId: string): Promise<FastPathRule[]> {
   const rows = (await tx.execute(sql`
     SELECT props ->> ${RULE_PATTERN} AS pattern,
            props ->> ${RULE_TARGET}  AS target_id,
            updated_at
     FROM entities
-    WHERE owner_id = ${ownerId} AND ${memoryRulesWhere(CONTRACT_MONEY_MOVEMENT)}
+    WHERE graph_id = ${graphId} AND ${memoryRulesWhere(CONTRACT_MONEY_MOVEMENT)}
     ORDER BY id
   `)) as unknown as Array<{ pattern: unknown; target_id: unknown; updated_at: unknown }>;
   const rules: FastPathRule[] = [];
@@ -427,11 +427,11 @@ function suggestCategoryRef(
  */
 export async function reviewImport(
   db: Db,
-  ownerId: string,
+  graphId: string,
   input: ImportReviewInput,
   deps: ImportDeps = {},
 ): Promise<ImportReviewResult> {
-  gateImportCsv(ownerId, deps.entitlements ?? resolveEntitlement);
+  gateImportCsv(graphId, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.rows.length);
 
   const externalIds = await Promise.all(
@@ -442,11 +442,11 @@ export async function reviewImport(
   const from = addDays(dates[0] as string, -1);
   const to = addDays(dates[dates.length - 1] as string, 1);
 
-  return withIdentity(db, ownerId, async (tx) => {
+  return withIdentity(db, graphId, async (tx) => {
     const known = await knownExternalIds(tx, input.namespace, externalIds);
-    const buckets = await candidateWindow(tx, ownerId, from, to);
-    const categories = await categoryDictionary(tx, ownerId);
-    const rules = await memoryRules(tx, ownerId);
+    const buckets = await candidateWindow(tx, graphId, from, to);
+    const categories = await categoryDictionary(tx, graphId);
+    const rules = await memoryRules(tx, graphId);
 
     const rows: ImportReviewRow[] = input.rows.map((row, i) => {
       const externalId = externalIds[i] as string;
@@ -523,7 +523,7 @@ function isWireEntity(result: unknown): result is WireEntity {
  */
 async function unbudgetedOf(
   db: Db,
-  ownerId: string,
+  graphId: string,
   entityIds: string[],
 ): Promise<ImportConfirmResult['unbudgeted']> {
   if (entityIds.length === 0) return [];
@@ -531,7 +531,7 @@ async function unbudgetedOf(
     entityIds.map((id) => sql`${id}`),
     sql`, `,
   );
-  const rows = await withIdentity(db, ownerId, async (tx) => {
+  const rows = await withIdentity(db, graphId, async (tx) => {
     return (await tx.execute(sql`
       SELECT ref.target_id AS category_ref,
              count(*)::int AS count
@@ -572,7 +572,7 @@ async function unbudgetedOf(
  */
 async function assertAdoptTargets(
   db: Db,
-  ownerId: string,
+  graphId: string,
   input: ImportConfirmInput,
 ): Promise<void> {
   const targets = new Map<string, number>(); // id цели → rowIndex первого использования
@@ -587,8 +587,8 @@ async function assertAdoptTargets(
   }
   if (targets.size === 0) return;
 
-  await withIdentity(db, ownerId, async (tx) => {
-    const replay = await sink.findByAuditId(tx, batchAuditMessageId(ownerId, input.batchId));
+  await withIdentity(db, graphId, async (tx) => {
+    const replay = await sink.findByAuditId(tx, batchAuditMessageId(graphId, input.batchId));
     if (replay !== undefined) return; // повтор batchId: executor вернёт результат первого прогона
 
     const ids = sql.join(
@@ -598,7 +598,7 @@ async function assertAdoptTargets(
     const rows = (await tx.execute(sql`
       SELECT id, archived, ('orbis/financial' = ANY(aspects)) AS financial
       FROM entities
-      WHERE owner_id = ${ownerId} AND id IN (${ids})
+      WHERE graph_id = ${graphId} AND id IN (${ids})
     `)) as unknown as Array<{ id: string; archived: boolean; financial: boolean }>;
     const byId = new Map(rows.map((r) => [r.id, r]));
 
@@ -661,7 +661,7 @@ async function assertAdoptTargets(
  */
 async function writeImportSummary(
   db: Db,
-  ownerId: string,
+  graphId: string,
   input: ImportConfirmInput,
   counts: { created: number; adopted: number },
 ): Promise<void> {
@@ -673,10 +673,10 @@ async function writeImportSummary(
   const total = Math.max(input.rowsTotal ?? sent, sent);
   const skipped = total - sent;
   try {
-    await withIdentity(db, ownerId, async (tx) => {
-      const threadId = await ensureGlobalThread(tx, ownerId);
+    await withIdentity(db, graphId, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, graphId);
       await appendMessageIdempotent(tx, {
-        id: importSummaryMessageId(ownerId, input.batchId),
+        id: importSummaryMessageId(graphId, input.batchId),
         threadId,
         role: 'system',
         content: `Импорт выписки: строк ${total}, создано ${counts.created}, привязано к существующим ${counts.adopted}, уже было ${skipped}`,
@@ -701,13 +701,13 @@ async function writeImportSummary(
 
 export async function confirmImport(
   db: Db,
-  ownerId: string,
+  graphId: string,
   input: ImportConfirmInput,
   deps: ImportDeps = {},
 ): Promise<ImportConfirmResult> {
-  gateImportCsv(ownerId, deps.entitlements ?? resolveEntitlement);
+  gateImportCsv(graphId, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.items.length);
-  await assertAdoptTargets(db, ownerId, input);
+  await assertAdoptTargets(db, graphId, input);
 
   const operations: ExecuteRequest['operations'] = [];
   let created = 0;
@@ -786,14 +786,14 @@ export async function confirmImport(
     // Выписка, которую Orbis знал ЦЕЛИКОМ, — лучший возможный исход для метрики §8, и
     // потерять его нельзя: сводка пишется ДО отказа (created=0, adopted=0, всё «уже было»).
     // Пользовательское поведение прежнее — импортировать по-прежнему нечего.
-    await writeImportSummary(db, ownerId, input, { created: 0, adopted: 0 });
+    await writeImportSummary(db, graphId, input, { created: 0, adopted: 0 });
     throw new ExecError('VALIDATION', 'нет строк для импорта: все строки помечены «пропустить»', {
       items: input.items.length,
     });
   }
 
   const request: ExecuteRequest = {
-    actorUserId: ownerId,
+    actorUserId: graphId,
     actorKind: 'owner', // импорт — путь владельца; LLM/MCP этот флоу не инициируют
     source: 'ui', // подтверждённое действие владельца на экране ревью (§3.4 шаг 4)
     // Механизм — импорт (§А4-4): только ему разрешено писать `orbis/bank_txn_id` (§А2-5)
@@ -809,7 +809,7 @@ export async function confirmImport(
   // Идентификаторы созданных сущностей — из результатов batch (а не из сгенерированных
   // выше id): идемпотентный повтор возвращает СОХРАНЁННЫЕ результаты первого прогона
   const entityIds = r.results.filter(isWireEntity).map((e) => e.id);
-  await writeImportSummary(db, ownerId, input, { created, adopted });
+  await writeImportSummary(db, graphId, input, { created, adopted });
   return {
     actionId: r.actionId,
     idempotentReplay: r.idempotentReplay,
@@ -817,6 +817,6 @@ export async function confirmImport(
     adopted,
     skipped,
     entityIds,
-    unbudgeted: await unbudgetedOf(db, ownerId, entityIds),
+    unbudgeted: await unbudgetedOf(db, graphId, entityIds),
   };
 }

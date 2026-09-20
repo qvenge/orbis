@@ -41,14 +41,14 @@ export interface McpDeps {
  * владельца гранта. Каждый tools/call — свежий tx-цикл dispatchTool; реестр tools/list
  * строится per-request под withIdentity — агент видит и custom-аспекты владельца (§7.6).
  *
- * Второй аргумент — ЦЕЛИКОМ идентичность гранта (С2), а не один ownerId: за токеном
+ * Второй аргумент — ЦЕЛИКОМ идентичность гранта (С2), а не один graphId: за токеном
  * стоит конкретный доступ конкретного агента, и адаптеру дальше нужен и он (область
  * гранта — вход гейта, id — атрибуция в журнале §7.8). Разбирать identity на транспорте
  * значило бы решать здесь, что из неё «важно», — и терять остальное молча.
  */
 export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   const resolve = deps.entitlements ?? resolveEntitlement;
-  const ownerId = identity.ownerId;
+  const graphId = identity.graphId;
   const server = new Server({ name: 'orbis', version: '0.0.0' }, { capabilities: { tools: {} } });
 
   // tools/list: публичный реестр §9.2 — имена/описания/inputSchema как в реестре,
@@ -56,7 +56,7 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   server.setRequestHandler(
     ListToolsRequestSchema,
     sanitized(async (): Promise<ListToolsResult> => {
-      const defs = await withIdentity(deps.db, ownerId, (tx) => buildToolRegistry(tx, ownerId));
+      const defs = await withIdentity(deps.db, graphId, (tx) => buildToolRegistry(tx, graphId));
       return {
         tools: defs
           .filter(
@@ -93,13 +93,13 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   server.setRequestHandler(
     CallToolRequestSchema,
     sanitized(async (req: CallToolRequest): Promise<CallToolResult> => {
-      const gate = gateAgentRequest(resolve, ownerId);
+      const gate = gateAgentRequest(resolve, graphId);
       if (gate !== null) return toCallToolResult(gate);
 
       const result = await dispatchTool(
         {
           db: deps.db,
-          actorUserId: ownerId,
+          actorUserId: graphId,
           actorKind: 'agent', // честная атрибуция внешнего агента (§7.8, D11)
           // Грант — вторая половина той же атрибуции (С2): по записи журнала владелец
           // видит не «какой-то агент», а КАКОЙ доступ это сделал, и отзывает именно его.
@@ -148,9 +148,9 @@ function sanitized<A extends unknown[], R>(fn: (...args: A) => Promise<R>) {
  */
 function gateAgentRequest(
   resolve: EntitlementResolver,
-  ownerId: string,
+  graphId: string,
 ): ToolDispatchResult | null {
-  const decision = resolve(ownerId, AGENT_REQUESTS_KEY);
+  const decision = resolve(graphId, AGENT_REQUESTS_KEY);
   if (!decision.allowed || (decision.limit !== null && decision.limit <= 0)) {
     return {
       status: 'error',

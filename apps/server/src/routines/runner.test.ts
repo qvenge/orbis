@@ -98,7 +98,7 @@ async function closeForeign(routineId: string, runId: string, failNote: string):
   const r = await closeRoutineRun(
     {
       db,
-      ownerId: owner,
+      graphId: owner,
       subject: { kind: 'routine', routineId },
       clock: () => T0,
       sink: realSink,
@@ -161,7 +161,7 @@ async function run(
 ): Promise<RunEnd> {
   const routine = await routineRow(args.routineId);
   return runRoutineRun(deps(provider, over), {
-    ownerId: owner,
+    graphId: owner,
     routine,
     runId: args.runId,
     bucket: args.bucket,

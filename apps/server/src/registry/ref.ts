@@ -341,7 +341,7 @@ export function changedRefProps(
  * приносит сюда ВСЕ ссылочные свойства сущности именно затем, чтобы у второй фазы был полный
  * список кандидатов.
  *
- * `ownerId` стоит в обоих запросах, хотя RLS уже скоупит выдачу: та же защита в глубину, что
+ * `graphId` стоит в обоих запросах, хотя RLS уже скоупит выдачу: та же защита в глубину, что
  * у пересчёта предков (`executor/ancestors.ts`), — под админским подключением (сиды,
  * скрипты) политик нет вовсе, а ребро, поставленное на чужую сущность, увидеть было бы негде.
  *
@@ -351,7 +351,7 @@ export function changedRefProps(
  */
 export async function syncRefMirror(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   entityId: string,
   changed: readonly RefPropChange[],
   reg: RegistrySnapshot,
@@ -382,7 +382,7 @@ export async function syncRefMirror(
            sql`, `,
          )})
          AND EXISTS (SELECT 1 FROM entities e
-                      WHERE e.id = relations.source_id AND e.owner_id = ${ownerId}::uuid)`);
+                      WHERE e.id = relations.source_id AND e.graph_id = ${graphId}::uuid)`);
   }
 
   // Фаза 2: вставить недостающие. `remaining` считается по ЦЕЛИ, а не по паре
@@ -398,7 +398,7 @@ export async function syncRefMirror(
         SELECT ${newId()}::uuid, ${entityId}::uuid, ${targetId}::uuid, ${ROLE_REF},
                jsonb_build_object('property', ${propertyId}::text), now(), now()
          WHERE EXISTS (SELECT 1 FROM entities e
-                        WHERE e.id = ${entityId}::uuid AND e.owner_id = ${ownerId}::uuid)
+                        WHERE e.id = ${entityId}::uuid AND e.graph_id = ${graphId}::uuid)
         ON CONFLICT DO NOTHING`);
     }
   }
@@ -422,13 +422,13 @@ export async function syncRefMirror(
  */
 export async function markRefSourcesNeedsReview(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   archivedTargetId: string,
 ): Promise<string[]> {
   const rows = (await tx.execute(sql`
     UPDATE entities e
        SET tags = e.tags || ARRAY[${NEEDS_REVIEW_TAG}]::text[]
-     WHERE e.owner_id = ${ownerId}::uuid
+     WHERE e.graph_id = ${graphId}::uuid
        AND NOT (${NEEDS_REVIEW_TAG} = ANY(e.tags))
        AND EXISTS (SELECT 1 FROM relations r
                     WHERE r.target_id = ${archivedTargetId}::uuid
@@ -456,14 +456,14 @@ export async function markRefSourcesNeedsReview(
  */
 export async function unmarkRefSources(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   sourceIds: readonly string[],
 ): Promise<string[]> {
   if (sourceIds.length === 0) return [];
   const rows = (await tx.execute(sql`
     UPDATE entities e
        SET tags = array_remove(e.tags, ${NEEDS_REVIEW_TAG})
-     WHERE e.owner_id = ${ownerId}::uuid
+     WHERE e.graph_id = ${graphId}::uuid
        AND e.id = ANY(${uuidArray(sourceIds)})
        AND ${NEEDS_REVIEW_TAG} = ANY(e.tags)
        AND NOT EXISTS (SELECT 1 FROM relations r

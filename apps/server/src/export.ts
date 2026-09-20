@@ -2,8 +2,8 @@
 // Экспорт всего графа владельца (01-architecture §9.4, §С5, D8): JSON-дамп одной кнопкой из
 // настроек (02 §1.6). Все чтения — одним withIdentity-tx: RLS сама ограничивает выборку
 // владельцем (§4.10), поэтому явных owner-фильтров на entities/relations/chat_* нет.
-// Реестры — ИСКЛЮЧЕНИЕ: экспортируются ТОЛЬКО строки владельца (owner_id = актор);
-// встроенные (owner_id IS NULL) в дамп не входят (§С5: это не пользовательские данные) —
+// Реестры — ИСКЛЮЧЕНИЕ: экспортируются ТОЛЬКО строки владельца (graph_id = актор);
+// встроенные (graph_id IS NULL) в дамп не входят (§С5: это не пользовательские данные) —
 // их восстанавливает сид реестра.
 import type { AspectDefinition, PropertyDefinition, RelationRoleDefinition } from '@orbis/shared';
 import { asc, eq } from 'drizzle-orm';
@@ -49,7 +49,7 @@ export interface OrbisExport {
   chatThreads: WireThread[];
   chatMessages: WireChatMessage[];
   userSettings: WireUserSettings | null;
-  /** Только строки владельца (owner_id = актор); форма — декларация реестра (§А2-1). */
+  /** Только строки владельца (graph_id = актор); форма — декларация реестра (§А2-1). */
   propertyDefinitions: PropertyDefinition[];
   aspectDefinitions: AspectDefinition[];
   relationRoleDefinitions: RelationRoleDefinition[];
@@ -63,20 +63,20 @@ export interface OrbisExport {
  * заведённое ради дампа, разъехалось бы с ним молча — дамп начал бы описывать реестр
  * формой, которой приложение не пользуется.
  *
- * Признак «своя» — `ownerId !== null`: встроенные строки приезжают тем же снимком (система
+ * Признак «своя» — `graphId !== null`: встроенные строки приезжают тем же снимком (система
  * ⊕ владелец) и в дамп не входят (§С5).
  */
-function ownRows<T extends { id: string; ownerId: string | null; rank: number }>(
+function ownRows<T extends { id: string; graphId: string | null; rank: number }>(
   rows: ReadonlyMap<string, T>,
 ): T[] {
   return [...rows.values()]
-    .filter((r) => r.ownerId !== null)
+    .filter((r) => r.graphId !== null)
     .sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
 }
 
 export async function exportData(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   clock: () => Date = () => new Date(),
 ): Promise<OrbisExport> {
   const entityRows = await tx
@@ -98,8 +98,8 @@ export async function exportData(
   const settingsRows = await tx
     .select()
     .from(userSettings)
-    .where(eq(userSettings.ownerId, ownerId));
-  const registry = await effectiveRegistry(tx, ownerId);
+    .where(eq(userSettings.graphId, graphId));
+  const registry = await effectiveRegistry(tx, graphId);
 
   return {
     format: 'orbis-export',

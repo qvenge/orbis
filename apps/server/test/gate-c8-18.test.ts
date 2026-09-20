@@ -119,7 +119,7 @@ describe('фикстура гейта: хелпер пишет привязки'
     const read = async (): Promise<{ implements: unknown[]; module: string | null } | undefined> =>
       (
         (await adb.execute(sql`SELECT implements, module FROM aspect_definitions
-        WHERE owner_id = ${user} AND id = 'user/impl-probe'`)) as unknown as Array<{
+        WHERE graph_id = ${user} AND id = 'user/impl-probe'`)) as unknown as Array<{
           implements: unknown[];
           module: string | null;
         }>

@@ -107,14 +107,14 @@ export interface SeedResult {
  */
 export async function seedOwner(
   db: Db,
-  ownerId: string,
+  graphId: string,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
   // ПОРЯДОК: мир → настройки → садовник; довод по первой стрелке — в `seedOwnerGraph`.
-  const result = await seedOwnerGraph(db, ownerId, clock);
+  const result = await seedOwnerGraph(db, graphId, clock);
   // Садовник — 19-я сущность мира и ЕДИНСТВЕННАЯ, которую сеют всегда: у неё своя проба по
   // PK и своя роль досева для владельцев, засиденных до V1 (см. `seed/gardener.ts`).
-  await seedGardener(db, ownerId, clock);
+  await seedGardener(db, graphId, clock);
   return result;
 }
 
@@ -148,11 +148,11 @@ export async function seedOwner(
  */
 export async function seedOwnerGraph(
   db: Db,
-  ownerId: string,
+  graphId: string,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
-  await seedOwnerWorld(db, ownerId, { clock });
-  return withIdentity(db, ownerId, (tx) => seedOnboarding(tx, ownerId, clock));
+  await seedOwnerWorld(db, graphId, { clock });
+  return withIdentity(db, graphId, (tx) => seedOnboarding(tx, graphId, clock));
 }
 
 /**
@@ -169,7 +169,7 @@ export async function seedOwnerGraph(
  */
 export async function seedOnboarding(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
   const now = clock();
@@ -180,12 +180,12 @@ export async function seedOnboarding(
   // Снимается всё же ДО guard'а, а не внутри ветви: `effectiveRegistry` зовётся из этого
   // файла ровно ОДИН раз, и счёт читателей в докблоке `registry/cache.ts` ведётся грепом —
   // второй вызов сделал бы его ложным. Цена — один лишний снимок на первом заходе владельца.
-  const reg = await effectiveRegistry(tx, ownerId);
+  const reg = await effectiveRegistry(tx, graphId);
 
   // Слой 1: guard. FOR UPDATE блокирует существующую строку настроек (защита от гонки с
   // updateSettings); если строки нет — идём сидировать, конкуренцию закрывает слой 2.
   const guard = await tx.execute(
-    sql`SELECT 1 FROM user_settings WHERE owner_id = ${ownerId} FOR UPDATE`,
+    sql`SELECT 1 FROM user_settings WHERE graph_id = ${graphId} FOR UPDATE`,
   );
   if (guard.length > 0) {
     // Бэкфилл A9 (§4.4): пользователь, засиденный ДО слайса 2, мог не иметь orbis-budget.
@@ -197,15 +197,15 @@ export async function seedOnboarding(
       sql`UPDATE user_settings
           SET "installedViews" = array_append("installedViews", ${BUDGET_VIEW_ID}),
               updated_at = ${now.toISOString()}::timestamptz
-          WHERE owner_id = ${ownerId}
+          WHERE graph_id = ${graphId}
             AND NOT (${BUDGET_VIEW_ID} = ANY("installedViews"))`,
     );
-    await backfillHorizons(tx, ownerId, reg, now);
-    await backfillRoutinesList(tx, ownerId, reg, now);
+    await backfillHorizons(tx, graphId, reg, now);
+    await backfillRoutinesList(tx, graphId, reg, now);
     // Порядок не случаен, хотя оба и сходятся к одному: досев выше вставляет
     // отсутствующий список УЖЕ с новым телом, и условный UPDATE на него не срабатывает по
     // условию. В обратном порядке UPDATE зря шёл бы по ещё не созданной строке
-    await backfillRoutinesListBody(tx, ownerId, reg, now);
+    await backfillRoutinesListBody(tx, graphId, reg, now);
     return { seeded: false };
   }
 
@@ -221,25 +221,25 @@ export async function seedOnboarding(
   await tx
     .insert(userSettings)
     .values({
-      ownerId,
+      graphId,
       plan: 'dev',
       timezone: 'Europe/Moscow',
       defaultCurrency: 'RUB',
       weekStartDay: 'monday',
       installedViews: [BUDGET_VIEW_ID], // §4.4: Budget — стартовый установленный view
       pinnedEntities: [
-        { id: seedSmartListId(ownerId, 'daily-planning'), order: 0 },
-        { id: seedSmartListId(ownerId, 'upcoming'), order: 1 },
-        { id: seedSmartListId(ownerId, 'all-tasks'), order: 2 },
-        { id: seedSmartListId(ownerId, PINNED_HORIZON_SLUG), order: 3 },
-        { id: seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug), order: 4 },
+        { id: seedSmartListId(graphId, 'daily-planning'), order: 0 },
+        { id: seedSmartListId(graphId, 'upcoming'), order: 1 },
+        { id: seedSmartListId(graphId, 'all-tasks'), order: 2 },
+        { id: seedSmartListId(graphId, PINNED_HORIZON_SLUG), order: 3 },
+        { id: seedSmartListId(graphId, SEED_ROUTINES_LIST.slug), order: 4 },
       ],
       updatedAt: now,
     })
     .onConflictDoNothing();
 
   // Глобальный тред §7.3 — детерминированный id, ensure идемпотентен (§4.5)
-  await ensureGlobalThread(tx, ownerId);
+  await ensureGlobalThread(tx, graphId);
 
   return { seeded: true };
 }
@@ -260,11 +260,11 @@ export async function seedOnboarding(
  * — иначе первое сохранение из редактора сдвинуло бы тело, и «сид не переписывает чужое»
  * сработало бы против самого сида.
  */
-function smartListRow(ownerId: string, list: SeedSmartList, reg: RegistrySnapshot, now: Date) {
+function smartListRow(graphId: string, list: SeedSmartList, reg: RegistrySnapshot, now: Date) {
   const fields = bodyFieldsFromMarkdown(list.body, reg);
   return {
-    id: seedSmartListId(ownerId, list.slug),
-    ownerId,
+    id: seedSmartListId(graphId, list.slug),
+    graphId,
     title: list.title,
     emoji: list.emoji,
     body: fields.body,
@@ -302,16 +302,16 @@ function smartListRow(ownerId: string, list: SeedSmartList, reg: RegistrySnapsho
  */
 async function backfillHorizons(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   reg: RegistrySnapshot,
   now: Date,
 ): Promise<void> {
   await tx
     .insert(entities)
-    .values(SEED_HORIZON_LISTS.map((list) => smartListRow(ownerId, list, reg, now)))
+    .values(SEED_HORIZON_LISTS.map((list) => smartListRow(graphId, list, reg, now)))
     .onConflictDoNothing();
 
-  await pinIfAbsent(tx, ownerId, seedSmartListId(ownerId, PINNED_HORIZON_SLUG), now);
+  await pinIfAbsent(tx, graphId, seedSmartListId(graphId, PINNED_HORIZON_SLUG), now);
 }
 
 /**
@@ -328,16 +328,16 @@ async function backfillHorizons(
  */
 async function backfillRoutinesList(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   reg: RegistrySnapshot,
   now: Date,
 ): Promise<void> {
   await tx
     .insert(entities)
-    .values([smartListRow(ownerId, SEED_ROUTINES_LIST, reg, now)])
+    .values([smartListRow(graphId, SEED_ROUTINES_LIST, reg, now)])
     .onConflictDoNothing();
 
-  await pinIfAbsent(tx, ownerId, seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug), now);
+  await pinIfAbsent(tx, graphId, seedSmartListId(graphId, SEED_ROUTINES_LIST.slug), now);
 }
 
 /**
@@ -409,14 +409,14 @@ function addressesBatch(doc: BodyDoc): boolean {
 
 async function backfillRoutinesListBody(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   reg: RegistrySnapshot,
   now: Date,
 ): Promise<void> {
-  const id = seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug);
+  const id = seedSmartListId(graphId, SEED_ROUTINES_LIST.slug);
   const rows = (await tx.execute(sql`
     SELECT body, body_doc FROM entities
-     WHERE id = ${id}::uuid AND owner_id = ${ownerId} FOR UPDATE`)) as unknown as Array<{
+     WHERE id = ${id}::uuid AND graph_id = ${graphId} FOR UPDATE`)) as unknown as Array<{
     body: string | null;
     body_doc: unknown;
   }>;
@@ -435,7 +435,7 @@ async function backfillRoutinesListBody(
            body_refs = ${textArray(next.bodyRefs)},
            query_refs = ${textArray(next.queryRefs)},
            updated_at = ${now.toISOString()}::timestamptz
-     WHERE id = ${id}::uuid AND owner_id = ${ownerId}`);
+     WHERE id = ${id}::uuid AND graph_id = ${graphId}`);
 }
 
 /**
@@ -446,7 +446,7 @@ async function backfillRoutinesListBody(
  * длина 2), и по длине новый пин встал бы в СЕРЕДИНУ сайдбара. updated_at сдвигается только
  * при фактической вставке — иначе web-синк LWW дёргался бы на каждом старте сессии.
  */
-async function pinIfAbsent(tx: Tx, ownerId: string, pinId: string, now: Date): Promise<void> {
+async function pinIfAbsent(tx: Tx, graphId: string, pinId: string, now: Date): Promise<void> {
   await tx.execute(
     sql`UPDATE user_settings
         SET "pinnedEntities" = "pinnedEntities" || jsonb_build_array(
@@ -457,7 +457,7 @@ async function pinIfAbsent(tx: Tx, ownerId: string, pinId: string, now: Date): P
                 ) + 1)
             ),
             updated_at = ${now.toISOString()}::timestamptz
-        WHERE owner_id = ${ownerId}
+        WHERE graph_id = ${graphId}
           AND NOT ("pinnedEntities" @> jsonb_build_array(jsonb_build_object('id', ${pinId}::text)))`,
   );
 }

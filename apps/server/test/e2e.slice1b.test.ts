@@ -62,7 +62,7 @@ const ownerCaller = createCaller({
 
 beforeAll(async () => {
   await truncateAll();
-  TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'внешний агент e2e' });
+  TOKEN = await issuePatGrant(db, { graphId: owner, label: 'внешний агент e2e' });
 
   const app = new Hono();
   app.all('/mcp', makeMcpHandler({ db }));

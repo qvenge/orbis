@@ -151,7 +151,7 @@ function selector(
   user: string,
   args: { categoryRef: string; currency: string; occurredOn: string },
 ): Promise<string | null> {
-  return withIdentity(db, user, (tx) => selectEnvelope(tx, { ownerId: user, ...args }));
+  return withIdentity(db, user, (tx) => selectEnvelope(tx, { graphId: user, ...args }));
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     await withIdentity(db, user, async (tx) =>
       tx.insert(entities).values({
         id: idSmall,
-        ownerId: user,
+        graphId: user,
         title: 'legacy без currency (дефолт RUB)',
         ...(await entityColumns(tx, user, budgetProps(catC, '2026-07-01', '2026-07-31'), [
           'orbis/budget',
@@ -275,7 +275,7 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(
-        sql`INSERT INTO user_settings (owner_id, "defaultCurrency") VALUES (${userEur}, 'EUR')`,
+        sql`INSERT INTO user_settings (graph_id, "defaultCurrency") VALUES (${userEur}, 'EUR')`,
       );
     } finally {
       await adminClient.end();
@@ -785,7 +785,7 @@ describe('уникальность конверта: (category_ref, currency, pe
     // в разницу «до/после», которой тест меряет откат batch.
     await seedRefTargetRows(user, [{ id: catB, aspect: 'orbis/category' }]);
     const sinkEntriesBefore = await adminRows(
-      sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${user}`,
+      sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}`,
     );
     const r = err(
       await execute(
@@ -823,7 +823,7 @@ describe('уникальность конверта: (category_ref, currency, pe
     expect(invariantOf(r)).toBe('duplicate_envelope');
     // откат целиком: ни одной новой сущности
     const after = await adminRows(
-      sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${user}`,
+      sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${user}`,
     );
     expect(after[0]?.n).toBe(sinkEntriesBefore[0]?.n);
   });

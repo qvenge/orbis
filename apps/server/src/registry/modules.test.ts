@@ -173,7 +173,7 @@ describe('маска модулей: чтение и запись (§Б8-1)', ()
 
   test('выключение идемпотентно, включение снимает ровно один модуль', async () => {
     await withIdentity(db, maskOwner, async (tx) => {
-      await tx.insert(userSettings).values({ ownerId: maskOwner });
+      await tx.insert(userSettings).values({ graphId: maskOwner });
       await setModuleDisabled(tx, maskOwner, 'finance', true);
       await setModuleDisabled(tx, maskOwner, 'finance', true); // повтор не дублирует
       await setModuleDisabled(tx, maskOwner, 'goals', true);
@@ -225,7 +225,7 @@ async function actionOf(actionId: string): Promise<JournalAction | undefined> {
     tx.execute(sql`
       SELECT m.metadata->'actions'->0 AS action
       FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
-      WHERE t.owner_id = ${owner}::uuid
+      WHERE t.graph_id = ${owner}::uuid
         AND m.metadata->'actions'->0->>'id' = ${actionId}`),
   )) as unknown as { action: JournalAction }[];
   return rows[0]?.action;
@@ -564,7 +564,7 @@ describe('§С8-22: подписки и сохранённые AST при вык
 
   /**
    * Движок Agenda зовётся ТАК ЖЕ, как его зовёт ручка (`routers/agenda.ts`, задача 6):
-   * `agendaListOf(tx, ownerId, def, args)`, где `def` — строка снимка, добытая
+   * `agendaListOf(tx, graphId, def, args)`, где `def` — строка снимка, добытая
    * `agendaSubscriptionOf`. Обёртки «на два аргумента» у него нет — и заводить её здесь
    * значило бы проверять не тот путь, по которому ходит прод.
    */
@@ -649,7 +649,7 @@ describe('§С8-22: подписки и сохранённые AST при вык
     // `modulePromptFragments` (шаг 2) не отвечает, доносит ли их до модели сама сборка.
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const channel = () =>
-      withIdentity(db, owner, (tx) => buildContext(tx, { ownerId: owner, threadId }));
+      withIdentity(db, owner, (tx) => buildContext(tx, { graphId: owner, threadId }));
     const setFinance = (enabled: boolean) =>
       execute(db, {
         actorUserId: owner,
@@ -715,7 +715,7 @@ describe('§Б8-3 против §С1-3 п.9: материализация — н
       created = (
         await materializeInstances({
           db,
-          ownerId: owner,
+          graphId: owner,
           from: today,
           to: addDays(today, 2),
           today,

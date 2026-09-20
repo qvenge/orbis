@@ -17,7 +17,7 @@ import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
-import { ownerIdsForScheduler } from './queries';
+import { graphIdsForScheduler } from './queries';
 
 requireEnv();
 
@@ -76,8 +76,8 @@ test('сьют идёт под служебной ролью без identity —
   expect(role[0]?.anon).toBe(true);
 });
 
-test('ownerIdsForScheduler под orbis_app без identity: видит владельцев, созданных сидом, по возрастанию', async () => {
-  const ids = await ownerIdsForScheduler(db);
+test('graphIdsForScheduler под orbis_app без identity: видит владельцев, созданных сидом, по возрастанию', async () => {
+  const ids = await graphIdsForScheduler(db);
   // Оба владельца, а не «свой»: под orbis_app auth.uid() пуст, и узкая политика вернула бы
   // пустоту. Именно чужие строки — то, ради чего 0013 существует. Двух РАЗНЫХ владельцев
   // достаточно: одного дала бы и политика, скоупленная по владельцу.
@@ -94,7 +94,7 @@ test('user_settings под orbis_app без identity: запись отклон�
   // Политика 0013 — FOR SELECT, грант — ровно SELECT. Какой из двух барьеров сработает
   // первым, тест не пинит: важен итог «служебная роль настройки не пишет».
   const code = await codeOfRejection(
-    db.execute(sql`INSERT INTO user_settings (owner_id) VALUES (${freshUserId()})`),
+    db.execute(sql`INSERT INTO user_settings (graph_id) VALUES (${freshUserId()})`),
   );
   expect(code).toBe('42501');
 });

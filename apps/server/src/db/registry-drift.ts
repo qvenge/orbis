@@ -64,18 +64,18 @@ import type { Db } from './client';
 export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
   properties: `SELECT id, key, label, description, type, status, storage, scope,
                       merged_into, module, rank, flags
-               FROM property_definitions WHERE owner_id IS NULL`,
+               FROM property_definitions WHERE graph_id IS NULL`,
   aspects: `SELECT id, key, label, description, properties, ai_instructions, tag_mappings,
                    implements, aggregations, view_config, module, service, rank
-            FROM aspect_definitions WHERE owner_id IS NULL`,
+            FROM aspect_definitions WHERE graph_id IS NULL`,
   roles: `SELECT id, key, label, description, source_label, target_label, hierarchical,
                  constraints, "symmetric", module, rank
-          FROM relation_role_definitions WHERE owner_id IS NULL`,
+          FROM relation_role_definitions WHERE graph_id IS NULL`,
   contracts: `SELECT id, key, label, description, kind, slots, classes, sets, facts, module, rank
-              FROM contract_definitions WHERE owner_id IS NULL`,
+              FROM contract_definitions WHERE graph_id IS NULL`,
   subscriptions: `SELECT id, surface, definition, module, rank
-                  FROM subscription_definitions WHERE owner_id IS NULL`,
-  actions: `SELECT id FROM action_definitions WHERE owner_id IS NULL`,
+                  FROM subscription_definitions WHERE graph_id IS NULL`,
+  actions: `SELECT id FROM action_definitions WHERE graph_id IS NULL`,
 };
 
 /**
@@ -94,19 +94,19 @@ export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
  * Снять это ограничение может только политика чтения дельт для сервисной роли — то есть
  * миграция; в срезе А их ровно четыре и все расписаны.
  */
-export const REGISTRY_DELTAS_QUERY = `SELECT id, owner_id, target_kind, target_id,
+export const REGISTRY_DELTAS_QUERY = `SELECT id, graph_id, target_kind, target_id,
                                              base_version, delta
-                                      FROM registry_deltas ORDER BY owner_id, target_kind, target_id`;
+                                      FROM registry_deltas ORDER BY graph_id, target_kind, target_id`;
 
 /**
- * Читает встроенные (`owner_id IS NULL`) строки шести таблиц и сравнивает с кодом.
+ * Читает встроенные (`graph_id IS NULL`) строки шести таблиц и сравнивает с кодом.
  *
  * ЧТЕНИЕ ИДЁТ ПОД РОЛЬЮ ПРИЛОЖЕНИЯ, и это половина смысла проверки. Роль приложения
  * NOINHERIT, гранты на таблицы висят на `authenticated` (миграции 0001 и 0014,
  * setup-db.ts), поэтому забытый GRANT новой таблице даёт здесь 42501 — и проверка честно
  * скажет `unknown` вместо тихого «расхождений нет». `withIdentity` для этого не годится: он
  * требует UUID актора, а у стартовой проверки актора нет; политика чтения встроенных
- * (`owner_id IS NULL OR owner_id = auth.uid()`) при пустых claims пропускает ровно их.
+ * (`graph_id IS NULL OR graph_id = auth.uid()`) при пустых claims пропускает ровно их.
  *
  * ЗАЧЕМ ТРАНЗАКЦИЯ — за `SET LOCAL`: вне транзакции он не действует (PostgreSQL применяет
  * его до конца текущей tx, а её нет). Одной транзакции для согласованности снимка МАЛО:

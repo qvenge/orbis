@@ -17,9 +17,9 @@ function snapshot(
   } = {},
 ): RegistrySnapshot {
   const properties = new Map(
-    BUILTIN_PROPERTY_META.map((d) => [d.id, { ...d, ownerId: null } as never]),
+    BUILTIN_PROPERTY_META.map((d) => [d.id, { ...d, graphId: null } as never]),
   );
-  const aspects = new Map(BUILTIN_ASPECT_DEFS.map((d) => [d.id, { ...d, ownerId: null } as never]));
+  const aspects = new Map(BUILTIN_ASPECT_DEFS.map((d) => [d.id, { ...d, graphId: null } as never]));
   for (const p of extra.properties ?? []) properties.set(p.id as string, p as never);
   for (const a of extra.aspects ?? []) aspects.set(a.id as string, a as never);
   return {
@@ -63,7 +63,7 @@ describe('dependencyGraph / dependantsOf (§А3-5)', () => {
       properties: [
         {
           id: 'user/effort',
-          ownerId: OWNER,
+          graphId: OWNER,
           key: 'user/effort',
           label: { ru: 'Усилие' },
           description: { ru: 'Сколько сил' },
@@ -97,7 +97,7 @@ describe('dependencyGraph / dependantsOf (§А3-5)', () => {
       properties: [
         {
           id: 'user/a',
-          ownerId: OWNER,
+          graphId: OWNER,
           key: 'user/a',
           label: { ru: 'A' },
           description: { ru: 'A' },
@@ -112,7 +112,7 @@ describe('dependencyGraph / dependantsOf (§А3-5)', () => {
         },
         {
           id: 'user/b',
-          ownerId: OWNER,
+          graphId: OWNER,
           key: 'user/b',
           label: { ru: 'B' },
           description: { ru: 'B' },

@@ -49,7 +49,7 @@ async function saveRegistries(): Promise<void> {
   for (const table of DEFINITION_TABLES) {
     const rows = (await admin.db.execute(
       sql`SELECT coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb) AS rows
-          FROM ${sql.raw(table)} t WHERE owner_id IS NULL`,
+          FROM ${sql.raw(table)} t WHERE graph_id IS NULL`,
     )) as unknown as { rows: unknown }[];
     snapshots.set(table, JSON.stringify(rows[0]?.rows ?? []));
   }
@@ -57,7 +57,7 @@ async function saveRegistries(): Promise<void> {
 
 async function restoreRegistries(): Promise<void> {
   for (const table of DEFINITION_TABLES) {
-    await admin.db.execute(sql`DELETE FROM ${sql.raw(table)} WHERE owner_id IS NULL`);
+    await admin.db.execute(sql`DELETE FROM ${sql.raw(table)} WHERE graph_id IS NULL`);
     await admin.db.execute(
       sql`INSERT INTO ${sql.raw(table)}
           SELECT * FROM jsonb_populate_recordset(NULL::${sql.raw(table)},
@@ -128,7 +128,7 @@ test('label свойства в БД разошёлся с кодом — drifte
   try {
     await admin.db.execute(
       sql`UPDATE property_definitions SET label = '{"ru":"Не тот"}'::jsonb
-          WHERE id = 'orbis/amount' AND owner_id IS NULL`,
+          WHERE id = 'orbis/amount' AND graph_id IS NULL`,
     );
     const drift = await checkRegistryDrift(db);
     expect(drift.properties.drifted).toEqual([{ id: 'orbis/amount', what: ['label'] }]);
@@ -145,7 +145,7 @@ test('набор properties аспекта устарел — drifted (рели�
   try {
     await admin.db.execute(
       sql`UPDATE aspect_definitions SET properties = '[]'::jsonb
-          WHERE id = 'orbis/financial' AND owner_id IS NULL`,
+          WHERE id = 'orbis/financial' AND graph_id IS NULL`,
     );
     const drift = await checkRegistryDrift(db);
     expect(drift.aspects.drifted).toEqual([{ id: 'orbis/financial', what: ['properties'] }]);
@@ -158,7 +158,7 @@ test('набор properties аспекта устарел — drifted (рели�
 test('роли нет в реестре — missing (релиз добавил роль без пересева)', async () => {
   try {
     await admin.db.execute(
-      sql`DELETE FROM relation_role_definitions WHERE id = 'mention' AND owner_id IS NULL`,
+      sql`DELETE FROM relation_role_definitions WHERE id = 'mention' AND graph_id IS NULL`,
     );
     expect((await checkRegistryDrift(db)).roles.missing).toEqual(['mention']);
   } finally {
@@ -172,7 +172,7 @@ test('роли нет в реестре — missing (релиз добавил �
 test('лишняя system-строка свойства — extra, а не тишина (Р-23)', async () => {
   try {
     await admin.db.execute(
-      sql`INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+      sql`INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
           VALUES ('orbis/zzz', NULL, 'orbis/zzz', '{"ru":"Ж"}'::jsonb, '{"ru":"Ж"}'::jsonb,
                   '{"kind":"text"}'::jsonb, 999)`,
     );
@@ -188,14 +188,14 @@ test('лишняя system-строка свойства — extra, а не ти�
 test('контракты: незнакомая system-строка — extra, испорченная — drifted; действия пусты', async () => {
   try {
     await admin.db.execute(
-      sql`INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+      sql`INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
           VALUES ('orbis/zzz', NULL, 'orbis/zzz', '{"ru":"З"}'::jsonb, '{"ru":"З"}'::jsonb, 'slots', 900)`,
     );
     await admin.db.execute(
       sql`UPDATE contract_definitions SET module = 'взлом' WHERE id = 'orbis/when'`,
     );
     await admin.db.execute(
-      sql`INSERT INTO action_definitions (id, owner_id, key, label, description)
+      sql`INSERT INTO action_definitions (id, graph_id, key, label, description)
           VALUES ('orbis/close', NULL, 'orbis/close', '{"ru":"З"}'::jsonb, '{"ru":"З"}'::jsonb)`,
     );
     const drift = await checkRegistryDrift(db);
@@ -213,13 +213,13 @@ test('кастомные строки владельца сверку не тр�
   const owner = crypto.randomUUID();
   try {
     await admin.db.execute(
-      sql`INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+      sql`INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
           VALUES ('user/mood', ${owner}::uuid, 'user/mood', '{"ru":"Настроение"}'::jsonb,
                   '{"ru":"Настроение"}'::jsonb, '{"kind":"text"}'::jsonb, 1)`,
     );
     expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
   } finally {
-    await admin.db.execute(sql`DELETE FROM property_definitions WHERE owner_id IS NOT NULL`);
+    await admin.db.execute(sql`DELETE FROM property_definitions WHERE graph_id IS NOT NULL`);
   }
 });
 
@@ -236,7 +236,7 @@ test('registry_deltas: админ видит строку, роль прилож
   const owner = crypto.randomUUID();
   try {
     await admin.db.execute(
-      sql`INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+      sql`INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
           VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', 1,
                   '{"label":{"ru":"Дело"}}'::jsonb)`,
     );
@@ -251,7 +251,7 @@ test('registry_deltas: админ видит строку, роль прилож
     });
     expect(byApp.length).toBe(0);
   } finally {
-    await admin.db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+    await admin.db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
   }
 });
 
@@ -335,7 +335,7 @@ describe('конфликты пересева становятся единиц�
     // настройки, о которой его не спрашивали.
     const row: RegistryDeltaRow = {
       id: newId(),
-      ownerId: owner,
+      graphId: owner,
       targetKind: 'aspect',
       targetId: 'orbis/note',
       baseVersion: 0,
@@ -363,7 +363,7 @@ describe('конфликты пересева становятся единиц�
 
     const ids = await withIdentity(db, owner, (tx) =>
       createDriftConflictUnits(tx, {
-        ownerId: owner,
+        graphId: owner,
         systemVersion: 7,
         deltaRowId: row.id,
         merged,
@@ -402,7 +402,7 @@ describe('конфликты пересева становятся единиц�
     // Повторный прогон пересева той же версии второй карточки не кладёт.
     const again = await withIdentity(db, owner, (tx) =>
       createDriftConflictUnits(tx, {
-        ownerId: owner,
+        graphId: owner,
         systemVersion: 7,
         deltaRowId: row.id,
         merged,
@@ -422,13 +422,13 @@ describe('конфликты пересева становятся единиц�
     const withOldVariant = newId();
     await withIdentity(db, owner, (tx) =>
       tx.execute(sql`
-        INSERT INTO entities (id, owner_id, title, props, aspects, tags)
+        INSERT INTO entities (id, graph_id, title, props, aspects, tags)
         VALUES (${withOldVariant}::uuid, ${owner}::uuid, 'Заметка со старым вариантом',
                 '{"orbis/content_type":"md"}'::jsonb, ARRAY['orbis/note'], ARRAY[]::text[])`),
     );
 
     // approve ПРИМЕНЯЕТ дельту обычным конвейером — своего пути записи у конфликта нет.
-    const approved = await approvePending(db, { ownerId: owner, pendingId });
+    const approved = await approvePending(db, { graphId: owner, pendingId });
     expect(approved.ok).toBe(true);
     const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
     const options = reg.properties.get('orbis/content_type')?.type;

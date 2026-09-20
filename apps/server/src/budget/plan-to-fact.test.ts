@@ -320,7 +320,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     });
     await materializeInstances({
       db,
-      ownerId: user,
+      graphId: user,
       from: PLANNED_ON,
       to: PLANNED_ON,
       today: PLANNED_ON,

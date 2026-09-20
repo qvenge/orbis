@@ -247,7 +247,7 @@ test('73 доменных свойства + 4 core; id/key уникальны; 
   expect(new Set(BUILTIN_PROPERTY_META.map((p) => p.rank)).size).toBe(BUILTIN_PROPERTY_META.length);
 
   for (const p of BUILTIN_PROPERTY_META) {
-    expect(p.ownerId).toBeNull(); // встроенное = owner_id IS NULL (§А2-1)
+    expect(p.graphId).toBeNull(); // встроенное = graph_id IS NULL (§А2-1)
     expect(p.key).toBe(p.id); // у встроенных key изначально = id (§А2-1)
     expect(p.status).toBe('active');
     expect(p.mergedInto).toBeNull();
@@ -497,7 +497,7 @@ test('роли: 11 id, иерархия, target_max_incoming конверта, a
   ).toEqual(['run', 'envelope-binding', 'instance-of', 'ref']);
 
   for (const role of BUILTIN_RELATION_ROLE_META) {
-    expect(role.ownerId).toBeNull();
+    expect(role.graphId).toBeNull();
     expect(role.key).toBe(role.id);
     expect(role.symmetric).toBe(false); // named-future Ч10-С2
     for (const text of [role.label, role.description, role.sourceLabel, role.targetLabel]) {
@@ -614,7 +614,7 @@ test('все 13 аспектов: keyFields, иконка, теги и подп�
     expect(def.tagMappings).toEqual([...snap.tags]);
     // `aiInstructions` СЮДА НЕ ВХОДЯТ (рулинг Р-1-1): их содержание стережёт греп ниже.
     expect(def.key).toBe(def.id); // у встроенных key = id; имя тула attach_* — из key
-    expect(def.ownerId).toBeNull();
+    expect(def.graphId).toBeNull();
     expect((def.label.ru ?? '').length).toBeGreaterThan(0);
     expect((def.label.en ?? '').length).toBeGreaterThan(0);
     expect((def.description.ru ?? '').length).toBeGreaterThan(0);
@@ -695,7 +695,7 @@ test('BUILTIN_CONTRACT_DEFS — шесть контрактов §Б1-2 в но�
   ]);
   expect(BUILTIN_CONTRACT_DEFS.map((c) => c.id)).toEqual([...CONTRACT_IDS]);
   expect(BUILTIN_CONTRACT_DEFS.map((c) => c.rank)).toEqual([1, 2, 3, 4, 5, 6]);
-  expect(BUILTIN_CONTRACT_DEFS.every((c) => c.ownerId === null && c.key === c.id)).toBe(true);
+  expect(BUILTIN_CONTRACT_DEFS.every((c) => c.graphId === null && c.key === c.id)).toBe(true);
   // module NULL = ядро (§Б8-2): выключение Финансов не вправе унести грамматику.
   expect(Object.fromEntries(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c.module]))).toEqual({
     'orbis/completable': null,

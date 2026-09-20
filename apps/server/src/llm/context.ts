@@ -135,13 +135,13 @@ export function todaySection(input: { today: string; timeZone: string }): string
  * (см. шапку файла): дата, собранная дважды, разъехалась бы форматом — и фоновый прогон
  * видел бы «сегодня» иначе, чем чат.
  */
-export async function todaySectionFor(tx: Tx, ownerId: string, now: Date): Promise<string> {
-  const timeZone = await ownerTimeZone(tx, ownerId);
+export async function todaySectionFor(tx: Tx, graphId: string, now: Date): Promise<string> {
+  const timeZone = await ownerTimeZone(tx, graphId);
   return todaySection({ today: todayInTimeZone(timeZone, now), timeZone });
 }
 
 export interface BuildContextInput {
-  ownerId: string;
+  graphId: string;
   threadId: string;
   /** Сущность-якорь (02 §2.2) — передаётся ТОЛЬКО для треда сущности. */
   anchorEntityId?: string;
@@ -362,13 +362,13 @@ export interface AnchorBlockOptions {
 /** Компактный блок якоря: id (для тулов), title, tags, аспекты, тело. */
 export async function anchorBlock(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   anchorEntityId: string,
   opts: AnchorBlockOptions = {},
 ): Promise<string> {
   // include: [] — только сама сущность, без relations/backlinks/треда
   // (историю треда несёт слой 4); невидимая/чужая → NOT_FOUND из readEntity
-  const { entity } = await readEntity(tx, ownerId, { id: anchorEntityId, include: [] });
+  const { entity } = await readEntity(tx, graphId, { id: anchorEntityId, include: [] });
   // title/tags/body — данные владельца (их пишет и внешний агент через MCP): переводы
   // строк из них не должны подделывать строки этого блока (см. flatten).
   const lines = [
@@ -389,7 +389,7 @@ export async function anchorBlock(
    * сигнатуры ради одной строки значило бы связать сборщик контекста с порядком загрузки
    * реестра у обоих вызывающих.
    */
-  const llm = toLlmEntity(entity, await effectiveRegistry(tx, ownerId));
+  const llm = toLlmEntity(entity, await effectiveRegistry(tx, graphId));
   if (llm.aspects.length > 0) lines.push(`аспекты: ${llm.aspects.join(', ')}`);
   if (Object.keys(llm.props).length > 0) {
     // Компактным JSON: статус задачи, суммы и сроки — рабочий контекст, а не украшение.
@@ -534,12 +534,12 @@ export async function aspectInstructionsSection(
 export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
   // Всё, что дописывается между телом промпта и блоком продолжений (§Б7-6-2)
   const dynamic: string[] = [
-    await todaySectionFor(tx, input.ownerId, (input.clock ?? (() => new Date()))()),
+    await todaySectionFor(tx, input.graphId, (input.clock ?? (() => new Date()))()),
   ];
 
   // Маска модулей — ОДНО чтение на сборку канала: её спрашивают обе секции ниже, и второй
   // SELECT по PK ради того же ответа был бы лишним.
-  const disabled = await disabledModulesOf(tx, input.ownerId);
+  const disabled = await disabledModulesOf(tx, input.graphId);
   // Проза включённых модулей — ВТОРОЙ секцией, сразу за датой: пин «дата стоит ровно на
   // PROMPT_BODY.length» (`context.test.ts`) обязан остаться зелёным.
   const fragments = modulePromptFragments(disabled);
@@ -556,7 +556,7 @@ export async function buildContext(tx: Tx, input: BuildContextInput): Promise<Bu
 
   // Слой 3: якорная сущность — только для треда сущности
   if (input.anchorEntityId) {
-    dynamic.push(await anchorBlock(tx, input.ownerId, input.anchorEntityId));
+    dynamic.push(await anchorBlock(tx, input.graphId, input.anchorEntityId));
   }
 
   // Слой 4: rolling-история текущего треда (§7.3: скоупится разговор)

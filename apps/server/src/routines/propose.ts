@@ -299,7 +299,7 @@ export async function runPropose(
   const closed = await closeRoutineRun(
     {
       db: ctx.db,
-      ownerId: ctx.actorUserId,
+      graphId: ctx.actorUserId,
       subject: { kind: 'routine', routineId: routine.id },
       clock: ctx.clock ?? (() => new Date()),
       sink,
@@ -332,7 +332,7 @@ export async function runPropose(
     });
     if (!alive) {
       await rejectPending(ctx.db, {
-        ownerId: ctx.actorUserId,
+        graphId: ctx.actorUserId,
         pendingId,
         reason: 'stale',
       });
@@ -543,7 +543,7 @@ interface TargetRow {
  */
 export async function loadTargets(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   parsed: Array<{ tool: string; input: Record<string, unknown> }>,
 ): Promise<
   { reg: RegistrySnapshot; rows: Map<string, TargetRow> } | { error: ToolDispatchResult }
@@ -551,7 +551,7 @@ export async function loadTargets(
   // Снимок реестра берётся ЗДЕСЬ, вместе со строками, и уезжает вызывающему: предусловия
   // снимаются по нему же (`buildUpdate`), и второй снимок, взятый отдельно, мог бы
   // разойтись с первым на правке реестра между двумя чтениями.
-  const reg = await effectiveRegistry(tx, ownerId);
+  const reg = await effectiveRegistry(tx, graphId);
   const wanted: Array<{ index: number; tool: string; id: string }> = [];
   for (const [index, op] of parsed.entries()) {
     if (op.tool === 'entity_update') {

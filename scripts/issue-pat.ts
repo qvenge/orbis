@@ -16,10 +16,10 @@ if ('error' in args) {
   process.exit(1);
 }
 
-const { ownerId, label, scope } = args;
+const { graphId, label, scope } = args;
 const { db, client } = makeDb({ max: 1 });
 try {
-  const token = await issuePatGrant(db, { ownerId, label, scope });
+  const token = await issuePatGrant(db, { graphId, label, scope });
   console.log(`Токен выдан («${label}», область ${scope}). Показывается ОДИН раз:`);
   console.log(`  ${token}`);
   console.log('');

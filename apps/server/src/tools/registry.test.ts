@@ -395,7 +395,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
         .select({ ai: aspectDefinitions.aiInstructions })
         .from(aspectDefinitions)
         .where(
-          sql`${aspectDefinitions.id} = 'orbis/task' AND ${isNull(aspectDefinitions.ownerId)}`,
+          sql`${aspectDefinitions.id} = 'orbis/task' AND ${isNull(aspectDefinitions.graphId)}`,
         ),
     );
     const expected = rows[0]?.ai;
@@ -580,7 +580,7 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     }
   });
 
-  test('собственное определение перекрывает builtin при коллизии id (ORDER BY owner_id NULLS FIRST)', async () => {
+  test('собственное определение перекрывает builtin при коллизии id (ORDER BY graph_id NULLS FIRST)', async () => {
     // Кастомный orbis/note userA поверх builtin: attach_orbis_note берёт описание кастомного
     const { db: admin, client: adminClient } = adminDb();
     try {
@@ -598,7 +598,7 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
       await admin
         .delete(aspectDefinitions)
         .where(
-          sql`${aspectDefinitions.id} = 'orbis/note' AND ${eq(aspectDefinitions.ownerId, userA)}`,
+          sql`${aspectDefinitions.id} = 'orbis/note' AND ${eq(aspectDefinitions.graphId, userA)}`,
         );
       await adminClient.end();
     }

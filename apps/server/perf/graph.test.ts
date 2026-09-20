@@ -144,7 +144,7 @@ beforeAll(async () => {
   const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
     ...(await tx.execute(
       compileCountAst(walkAllAst(subtreeRoot), {
-        ownerId: GRAPH_OWNER_ID,
+        graphId: GRAPH_OWNER_ID,
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
         reg,
@@ -157,7 +157,7 @@ beforeAll(async () => {
   const smallRows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
     ...(await tx.execute(
       compileCountAst(walkAllAst(smallRoot), {
-        ownerId: GRAPH_OWNER_ID,
+        graphId: GRAPH_OWNER_ID,
         today: '2026-07-03',
         timeZone: 'Europe/Moscow',
         reg,
@@ -181,7 +181,7 @@ afterAll(async () => {
 test('корпус наполнен: обход идёт по данным, а не по пустоте', async () => {
   expect(subtreeSize).toBeGreaterThanOrEqual(4900);
   const ctx = {
-    ownerId: GRAPH_OWNER_ID,
+    graphId: GRAPH_OWNER_ID,
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     reg,
@@ -209,7 +209,7 @@ test('корпус наполнен: обход идёт по данным, а �
 }, 300_000);
 
 test('П6: descendants_of под RLS и пересчёт предков на поддереве ≥5k', async () => {
-  const ctx = { ownerId: GRAPH_OWNER_ID, today: '2026-07-03', timeZone: 'Europe/Moscow', reg };
+  const ctx = { graphId: GRAPH_OWNER_ID, today: '2026-07-03', timeZone: 'Europe/Moscow', reg };
 
   // Два наблюдения рядом с гейтом (порога не несут, но без них порог нечем толковать):
   // обход ОТ КОРНЯ (весь корпус) и выгрузка ВСЕГО поддерева вместо страницы.
@@ -257,7 +257,7 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
   const cleared = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => {
     await tx.execute(sql`
       UPDATE entities SET props = props - 'orbis/parent_project' - 'orbis/root_project'
-       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND props ? 'orbis/parent_project'`);
+       WHERE graph_id = ${GRAPH_OWNER_ID}::uuid AND props ? 'orbis/parent_project'`);
     return recomputeProjectAncestors(tx, GRAPH_OWNER_ID, [subtreeRoot], reg);
   });
   expect(cleared.recomputed).toBeGreaterThanOrEqual(4900);

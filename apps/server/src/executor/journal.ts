@@ -94,7 +94,7 @@ export function makeChatJournalSink(): JournalSink {
           count: actions.length,
         });
       }
-      const threadId = entry.threadId ?? (await ensureGlobalThread(tx, entry.ownerId));
+      const threadId = entry.threadId ?? (await ensureGlobalThread(tx, entry.graphId));
       const id = entry.id ?? newId();
       const metadata: Record<string, unknown> = {
         actions,
@@ -132,7 +132,7 @@ export function makeChatJournalSink(): JournalSink {
           id: chatMessages.id,
           threadId: chatMessages.threadId,
           metadata: chatMessages.metadata,
-          ownerId: chatThreads.ownerId,
+          graphId: chatThreads.graphId,
         })
         .from(chatMessages)
         .innerJoin(chatThreads, eq(chatThreads.id, chatMessages.threadId))
@@ -153,7 +153,7 @@ export function makeChatJournalSink(): JournalSink {
       // то есть feedCard оставляет прежнюю ActionCard.
       return {
         id: row.id,
-        ownerId: row.ownerId,
+        graphId: row.graphId,
         threadId: row.threadId,
         action,
         card,

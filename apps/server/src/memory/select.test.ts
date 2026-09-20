@@ -163,7 +163,7 @@ test('SQL-предикат области и клиентский ruleAppliesTo 
   await withIdentity(db, user, async (tx) =>
     tx.insert(entities).values(
       rawEntityRow({
-        ownerId: user,
+        graphId: user,
         id: newId(),
         title: 'КЛЮЧ-NULL',
         props: {
@@ -198,8 +198,8 @@ test('SQL-предикат области и клиентский ruleAppliesTo 
  *
  * Первая редакция этого файла пиннила план: сеяла 20 000 строк и требовала, чтобы условие
  * по `aspects` стояло `Index Cond` у `entities_aspects_gin`. Пробу сняли — она отвечала не
- * на тот вопрос. EXPLAIN снимался под АДМИН-соединением с дописанным `owner_id = '…'`, то
- * есть RLS ИМИТИРОВАЛАСЬ обычным предикатом; а под ролью приложения тот же `owner_id`
+ * на тот вопрос. EXPLAIN снимался под АДМИН-соединением с дописанным `graph_id = '…'`, то
+ * есть RLS ИМИТИРОВАЛАСЬ обычным предикатом; а под ролью приложения тот же `graph_id`
  * приходит security qual'ом политики `owner_owns_row`, и containment (не leakproof)
  * индексным условием стать не может в принципе. Боевой путь — именно роль приложения:
  * все три потребителя селектора идут через `withIdentity`.

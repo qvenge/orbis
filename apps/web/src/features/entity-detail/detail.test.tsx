@@ -21,6 +21,7 @@ import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
 import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
+import { setDraftScope } from '../entity-editor/draft-storage';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
 import { RoutineStatusBlock } from './RoutineStatusBlock';
@@ -52,9 +53,11 @@ function PropsProbe() {
 
 /**
  * Неотправленный черновик прошлой сессии на диске: ключ — договор, поэтому выписан строкой.
- * Владелец в ключе — тот же, что у записи ниже: черновики скоупятся по нему (draft-storage).
+ * Аккаунт в ключе — тот, которым стенд скоупит хранилище черновиков (`setDraftScope` в
+ * `beforeEach`): в бою скоуп ставит `AuthProvider` из сессии, а не запись (draft-storage).
  */
-const DRAFT_KEY = 'orbis:body-draft:u:e1';
+const DRAFT_ACCOUNT = 'u';
+const DRAFT_KEY = `orbis:body-draft:${DRAFT_ACCOUNT}:e1`;
 
 /**
  * `savedAt` — СЕГОДНЯШНИЙ, и это не украшение: у черновика есть срок жизни (30 дней), а прогон
@@ -85,6 +88,9 @@ const entity = wireEntity({
 
 beforeEach(() => {
   localStorage.clear();
+  // Скоуп черновиков — аккаунт сессии (`AuthProvider`), а не поле записи: стенд поднимает экран
+  // без провайдера, поэтому аккаунт объявляется здесь тем же вызовом, что и в бою.
+  setDraftScope(DRAFT_ACCOUNT);
   // Заведённые треды помнит МОДУЛЬ (useEnsuredThread), а модуль живёт дольше теста: без сброса
   // первый же тест, открывший «Тред» записи e1, оставлял бы следующему нулевое число вызовов
   // ensureThread — и проверка «завели ровно один раз» краснела бы от соседа, а не от кода.

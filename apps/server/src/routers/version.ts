@@ -71,7 +71,7 @@ export const versionRouter = router({
       return r.results[0] as WireEntityVersion;
     }),
 
-  /** Снимки сущности, свежие сверху (§4.10: RLS скоупит владельцем — своего owner_id в WHERE нет). */
+  /** Снимки сущности, свежие сверху (§4.10: RLS скоупит владельцем — своего graph_id в WHERE нет). */
   list: ownerOnlyProcedure.input(z.object({ entityId: z.string().uuid() }).strict()).query(
     ({ ctx, input }): Promise<WireEntityVersion[]> =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {

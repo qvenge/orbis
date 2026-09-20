@@ -545,12 +545,12 @@ describe('LLM-контракты entity_create/entity_update на свойств
     try {
       await admin.db.execute(sql`
         INSERT INTO property_definitions
-          (id, owner_id, key, label, description, type, status, storage, rank, flags)
+          (id, graph_id, key, label, description, type, status, storage, rank, flags)
         VALUES ('user/p-mood', ${owner}, 'user/mood',
                 ${JSON.stringify({ ru: 'Настроение' })}::jsonb,
                 ${JSON.stringify({ ru: 'Как прошёл день' })}::jsonb,
                 ${JSON.stringify({ kind: 'number' })}::jsonb, 'active', 'props', 300, '{}'::jsonb)
-        ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+        ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO NOTHING`);
       await bumpOwnerRegistryVersion(admin.db, owner); // мутация реестра двигает версию (§А10-1)
     } finally {
       await admin.client.end();
@@ -576,7 +576,7 @@ describe('LLM-контракты entity_create/entity_update на свойств
     expect(row.aspects).toEqual(['orbis/task']);
     expect(row.id).toBe(created.id);
     // Ни мешка, ни старой карты, ни служебных полей внутреннего wire.
-    for (const gone of ['meta', 'aspectsMap', 'ownerId', 'queryRefs']) {
+    for (const gone of ['meta', 'aspectsMap', 'graphId', 'queryRefs']) {
       expect(`${gone}: ${gone in row}`).toBe(`${gone}: false`);
     }
   });
@@ -960,8 +960,8 @@ describe('dispatchTool: import_csv_start — вход в импорт из ча�
     try {
       const rows = (await admin.execute(sql`
         SELECT
-          (SELECT count(*)::int FROM entities WHERE owner_id = ${user}) AS entities,
-          (SELECT count(*)::int FROM entity_origins WHERE owner_id = ${user}) AS origins
+          (SELECT count(*)::int FROM entities WHERE graph_id = ${user}) AS entities,
+          (SELECT count(*)::int FROM entity_origins WHERE graph_id = ${user}) AS origins
       `)) as unknown as Array<{ entities: number; origins: number }>;
       return { entities: rows[0]?.entities ?? 0, origins: rows[0]?.origins ?? 0 };
     } finally {
@@ -1434,7 +1434,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     // assertAssignment требует ЖИВОГО гранта владельца, а вставка строки руками обходила
     // бы ровно тот код, которым скоуп теперь и записывается.
     const token = await issuePatGrant(db, {
-      ownerId: owner,
+      graphId: owner,
       label: 'worker-тест',
       scope: 'worker',
     });
@@ -1588,11 +1588,11 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     // правка, откат миграции, будущий скоуп на старом коде). verifyBearer отдаёт его КАК
     // ЕСТЬ, а гейт обязан читать «не full → не полный доступ». Сравнение с одним лишь
     // 'worker' открыло бы такому гранту весь граф — ровно наоборот.
-    const token = await issuePatGrant(db, { ownerId: owner, label: 'скоуп из будущего' });
+    const token = await issuePatGrant(db, { graphId: owner, label: 'скоуп из будущего' });
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(
-        sql`UPDATE agent_grants SET scope = 'foo' WHERE owner_id = ${owner}::uuid AND label = 'скоуп из будущего'`,
+        sql`UPDATE agent_grants SET scope = 'foo' WHERE graph_id = ${owner}::uuid AND label = 'скоуп из будущего'`,
       );
     } finally {
       await adminClient.end();
@@ -1702,7 +1702,7 @@ describe('dispatchTool: глаголы исполнителя никогда н�
   }
 
   beforeAll(async () => {
-    const token = await issuePatGrant(db, { ownerId: owner, label: 'круг', scope: 'worker' });
+    const token = await issuePatGrant(db, { graphId: owner, label: 'круг', scope: 'worker' });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный worker-PAT не прошёл verifyBearer');
     grantId = identity.grantId;
@@ -3512,7 +3512,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // Fail-closed на СБОРКЕ контекста: молчаливое «грант побеждает» писало бы шаги
     // внешнего исполнителя в прогон рутины, и разобрать такой журнал было бы нечем.
     const grantToken = await issuePatGrant(db, {
-      ownerId: userA,
+      graphId: userA,
       label: 'двойной субъект',
       scope: 'full',
     });
@@ -3609,7 +3609,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     await withIdentity(db, owner, (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
-          ownerId: owner,
+          graphId: owner,
           id: ghostRoutine,
           title: 'Рутина только в props',
           props: {
@@ -4229,7 +4229,7 @@ describe('отложка небезопасного действия рутин�
     });
     expect(own.ok).toBe(true);
 
-    const applied = await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    const applied = await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect(applied.ok).toBe(false);
     if (applied.ok) return;
     expect(applied.error.code).toBe('CONFLICT');
@@ -4339,7 +4339,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const rows = (await withIdentity(db, owner, (tx) =>
       tx.execute(sql`
         SELECT label, status, merged_into FROM property_definitions
-         WHERE owner_id = ${owner}::uuid AND id = ${id}`),
+         WHERE graph_id = ${owner}::uuid AND id = ${id}`),
     )) as unknown as Array<{ label: Record<string, string>; status: string; merged_into: unknown }>;
     return rows[0];
   }
@@ -4348,7 +4348,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   async function ownPropertyCount(owner: string): Promise<number> {
     const rows = (await withIdentity(db, owner, (tx) =>
       tx.execute(
-        sql`SELECT count(*)::int AS n FROM property_definitions WHERE owner_id = ${owner}::uuid`,
+        sql`SELECT count(*)::int AS n FROM property_definitions WHERE graph_id = ${owner}::uuid`,
       ),
     )) as unknown as Array<{ n: number }>;
     return Number(rows[0]?.n ?? 0);
@@ -4357,7 +4357,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   async function deltaRowsOf(owner: string): Promise<number> {
     const rows = (await withIdentity(db, owner, (tx) =>
       tx.execute(
-        sql`SELECT count(*)::int AS n FROM registry_deltas WHERE owner_id = ${owner}::uuid`,
+        sql`SELECT count(*)::int AS n FROM registry_deltas WHERE graph_id = ${owner}::uuid`,
       ),
     )) as unknown as Array<{ n: number }>;
     return Number(rows[0]?.n ?? 0);
@@ -4469,7 +4469,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
 
     // Отказ ведёт к выходу: подтверждение владельца исполняет ровно этот вызов.
-    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect((await registryRow(owner, source.id))?.merged_into).toBe(into.id);
   });
 
@@ -4551,7 +4551,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(await pendingsOf(owner, threadId)).toHaveLength(1);
 
     // …а «Принять» исполняет отложенное — путь до конца, а не тупик.
-    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect((await registryRow(owner, source.id))?.merged_into).toBe(into.id);
   });
 
@@ -4596,7 +4596,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // До решения владельца строки в реестре нет.
     expect(await ownPropertyCount(owner)).toBe(0);
 
-    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect(await ownPropertyCount(owner)).toBe(1);
   });
 
@@ -4684,7 +4684,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const secondId = (second.results[0] as { property: string }).property;
 
     // «Принять» честно упирается в исчезнувшую строку, а не правит однофамильца.
-    const applied = await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    const applied = await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect(applied.ok ? 'ok' : applied.error.code).toBe('NOT_FOUND');
     expect((await registryRow(owner, secondId))?.label).toEqual({ ru: 'Однофамилец' });
   });
@@ -4752,7 +4752,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     if (!second.ok) throw new Error(`однофамилец: ${second.error.message}`);
     const secondId = (second.results[0] as { property: string }).property;
 
-    const applied = await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    const applied = await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect(applied.ok ? 'ok' : applied.error.code).toBe('NOT_FOUND');
     expect((await registryRow(owner, secondId))?.status).toBe('active');
   });
@@ -4882,7 +4882,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(r.status).toBe('pending_confirmation');
     expect(await deltaRowsOf(owner)).toBe(0);
     if (r.status !== 'pending_confirmation') return;
-    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect(await deltaRowsOf(owner)).toBe(1);
   });
 
@@ -4967,7 +4967,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(r.card.rows).toEqual([{ field: 'setsDelta', after: '{"my_open":["active"]}' }]);
     expect(await deltaRowsOf(owner)).toBe(0);
     // …и «Принять» доводит путь до конца.
-    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
     expect(await deltaRowsOf(owner)).toBe(1);
     expect(await pendingsOf(owner, threadId)).toHaveLength(1);
   });
@@ -5000,7 +5000,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
-    const token = await issuePatGrant(db, { ownerId: owner, scope: 'full', label: 'полный' });
+    const token = await issuePatGrant(db, { graphId: owner, scope: 'full', label: 'полный' });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный full-PAT не прошёл verifyBearer');
     const ctx = ctxFor({
@@ -5132,7 +5132,7 @@ describe('сводка мутации реестра: правила, а не с
     ...(BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/priority') as PropertyDefinition),
     id,
     key: `user/${ru}`,
-    ownerId: newId(),
+    graphId: newId(),
     label: { ru },
   });
   const SOURCE = '019e4466-1111-7e07-b5d4-64be9721da01';
@@ -5154,7 +5154,7 @@ describe('сводка мутации реестра: правила, а не с
         s.id,
         {
           id: s.id,
-          ownerId: null,
+          graphId: null,
           surface: s.surface,
           definition: s.definition,
           module: s.module,

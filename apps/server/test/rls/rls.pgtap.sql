@@ -6,31 +6,31 @@ CREATE EXTENSION IF NOT EXISTS pgtap;
 SELECT plan(97);
 
 -- Фикстуры под ролью с BYPASSRLS (обходит RLS; postgres здесь НЕ суперпользователь)
-INSERT INTO entities (id, owner_id, title) VALUES
+INSERT INTO entities (id, graph_id, title) VALUES
   ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a', 'A: задача'),
   ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b', 'B: задача');
-INSERT INTO chat_threads (id, owner_id) VALUES
+INSERT INTO chat_threads (id, graph_id) VALUES
   ('00000000-0000-7000-8000-0000000000a2', '00000000-0000-4000-8000-00000000000a');
 INSERT INTO chat_messages (id, thread_id, role, content) VALUES
   ('00000000-0000-7000-8000-0000000000a3', '00000000-0000-7000-8000-0000000000a2', 'user', 'привет');
-INSERT INTO aspect_definitions (id, owner_id, key, label, description)
+INSERT INTO aspect_definitions (id, graph_id, key, label, description)
   VALUES ('orbis/pgtap-probe', NULL, 'orbis/pgtap-probe', '{"ru":"Проба"}', '{"ru":"Проба"}');
 -- Фикстуры для обеих сторон (A и B): без строки B проверки «видит только свою»
 -- были бы ложно-зелёными даже при сломанном RLS.
-INSERT INTO user_settings (owner_id) VALUES
+INSERT INTO user_settings (graph_id) VALUES
   ('00000000-0000-4000-8000-00000000000a'),
   ('00000000-0000-4000-8000-00000000000b');
-INSERT INTO ai_usage (owner_id, date, model) VALUES
+INSERT INTO ai_usage (graph_id, date, model) VALUES
   ('00000000-0000-4000-8000-00000000000a', '2026-07-01', 'pgtap-model'),
   ('00000000-0000-4000-8000-00000000000b', '2026-07-01', 'pgtap-model');
-INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id) VALUES
+INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id) VALUES
   ('00000000-0000-7000-8000-0000000000a6', '00000000-0000-4000-8000-00000000000a',
    '00000000-0000-7000-8000-0000000000a1', 'telegram', 'ext-a'),
   ('00000000-0000-7000-8000-0000000000b6', '00000000-0000-4000-8000-00000000000b',
    '00000000-0000-7000-8000-0000000000b1', 'telegram', 'ext-b');
 INSERT INTO oauth_clients (client_id, client_name, redirect_uris) VALUES
   ('pgtap-client', 'Claude Code', ARRAY['http://localhost:8080/callback']);
-INSERT INTO agent_grants (id, owner_id, client_id, kind, label, access_hash) VALUES
+INSERT INTO agent_grants (id, graph_id, client_id, kind, label, access_hash) VALUES
   ('00000000-0000-7000-8000-0000000000a7', '00000000-0000-4000-8000-00000000000a',
    'pgtap-client', 'oauth', 'Claude Code', 'hash-a'),
   ('00000000-0000-7000-8000-0000000000b7', '00000000-0000-4000-8000-00000000000b',
@@ -38,7 +38,7 @@ INSERT INTO agent_grants (id, owner_id, client_id, kind, label, access_hash) VAL
 -- Закреплённые версии тела (ADE-срез 1, С11) — по одной у A и у B: без строки B
 -- проверка «A видит ровно свою» была бы ложно-зелёной и при сломанном RLS.
 -- body_doc не задаём: версия, снятая с ещё не сконвертированного тела, — законный случай.
-INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind) VALUES
+INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id, actor_kind) VALUES
   ('00000000-0000-7000-8000-0000000000a8', '00000000-0000-4000-8000-00000000000a',
    '00000000-0000-7000-8000-0000000000a1', 'до правки A', 'тело A',
    '00000000-0000-4000-8000-00000000000a', 'owner'),
@@ -46,57 +46,57 @@ INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id
    '00000000-0000-7000-8000-0000000000b1', 'до правки B', 'тело B',
    '00000000-0000-4000-8000-00000000000b', 'owner');
 
--- Фикстуры реестров реформы (0014). У каждого — по ТРИ строки: встроенная (owner_id NULL,
+-- Фикстуры реестров реформы (0014). У каждого — по ТРИ строки: встроенная (graph_id NULL,
 -- читается всеми), строка A и строка B. Без строки B проверки «видит только своё» были бы
 -- ложно-зелёными даже при полностью снятой RLS, а без встроенной — не различались бы
 -- политики read_builtin_or_own и update_own.
 -- Префикс id `pgtap/` отделяет пробы от 77 засеянных свойств, 11 ролей и 13 аспектов,
 -- которые в базе уже лежат: счётчики ниже считают ровно пробы.
-INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
   VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"П"}'::jsonb,
           '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900);
-INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
   VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a', '{"ru":"П"}'::jsonb,
           '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900);
-INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
   VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b', '{"ru":"П"}'::jsonb,
           '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900);
 INSERT INTO relation_role_definitions
-  (id, owner_id, key, label, description, source_label, target_label, rank)
+  (id, graph_id, key, label, description, source_label, target_label, rank)
   VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"Р"}'::jsonb,
           '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900);
 INSERT INTO relation_role_definitions
-  (id, owner_id, key, label, description, source_label, target_label, rank)
+  (id, graph_id, key, label, description, source_label, target_label, rank)
   VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a', '{"ru":"Р"}'::jsonb,
           '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900);
 INSERT INTO relation_role_definitions
-  (id, owner_id, key, label, description, source_label, target_label, rank)
+  (id, graph_id, key, label, description, source_label, target_label, rank)
   VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b', '{"ru":"Р"}'::jsonb,
           '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900);
-INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
   VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"К"}'::jsonb,
           '{"ru":"К"}'::jsonb, 'slots', 900);
-INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
   VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a', '{"ru":"К"}'::jsonb,
           '{"ru":"К"}'::jsonb, 'slots', 900);
-INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
   VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b', '{"ru":"К"}'::jsonb,
           '{"ru":"К"}'::jsonb, 'slots', 900);
-INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
   VALUES ('pgtap/probe', NULL, 'agenda', '{}'::jsonb, 900);
-INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
   VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'agenda', '{}'::jsonb, 900);
-INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
   VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'agenda', '{}'::jsonb, 900);
-INSERT INTO action_definitions (id, owner_id, key, label, description)
+INSERT INTO action_definitions (id, graph_id, key, label, description)
   VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb);
-INSERT INTO action_definitions (id, owner_id, key, label, description)
+INSERT INTO action_definitions (id, graph_id, key, label, description)
   VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a',
           '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb);
-INSERT INTO action_definitions (id, owner_id, key, label, description)
+INSERT INTO action_definitions (id, graph_id, key, label, description)
   VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b',
           '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb);
-INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta) VALUES
+INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta) VALUES
   ('00000000-0000-7000-8000-0000000000aa', '00000000-0000-4000-8000-00000000000a',
    'property', 'orbis/priority', 1, '{"label":{"ru":"Своё"}}'),
   ('00000000-0000-7000-8000-0000000000bb', '00000000-0000-4000-8000-00000000000b',
@@ -104,7 +104,7 @@ INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version,
 
 -- Кэш spent (0018): по строке каждой стороне — без строки B проверка «видит только свою»
 -- была бы ложно-зелёной и при вовсе снятой политике.
-INSERT INTO envelope_spent_cache (envelope_id, owner_id, as_of, spent, owner_version, system_version) VALUES
+INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_version, system_version) VALUES
   ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a', '2026-09-01', 100, 0, 1),
   ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b', '2026-09-01', 200, 0, 1);
 
@@ -132,15 +132,15 @@ SELECT results_eq(
   $$SELECT count(*)::int FROM entities WHERE id = '00000000-0000-7000-8000-0000000000b1'$$,
   ARRAY[0], 'чужая сущность невидима');
 SELECT throws_ok(
-  $$INSERT INTO entities (id, owner_id, title)
+  $$INSERT INTO entities (id, graph_id, title)
     VALUES ('00000000-0000-7000-8000-0000000000c1', '00000000-0000-4000-8000-00000000000b',
             'подлог')$$,
-  '42501', NULL, 'INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT lives_ok(
-  $$INSERT INTO entities (id, owner_id, title)
+  $$INSERT INTO entities (id, graph_id, title)
     VALUES ('00000000-0000-7000-8000-0000000000a4', '00000000-0000-4000-8000-00000000000a',
             'своя')$$,
-  'INSERT со своим owner_id проходит');
+  'INSERT со своим graph_id проходит');
 SELECT throws_ok(
   $$INSERT INTO relations (id, source_id, target_id, role)
     VALUES ('00000000-0000-7000-8000-0000000000c2',
@@ -166,45 +166,45 @@ SELECT results_eq(
 
 -- Группа 1: user_settings — A видит только свою строку (в фикстурах есть и строка B)
 SELECT results_eq(
-  'SELECT owner_id::text FROM user_settings',
+  'SELECT graph_id::text FROM user_settings',
   ARRAY['00000000-0000-4000-8000-00000000000a'],
   'user_settings: A видит только свою строку');
--- owner C — третий пользователь без своей строки: PK user_settings = owner_id,
+-- owner C — третий пользователь без своей строки: PK user_settings = graph_id,
 -- поэтому чужой B дал бы неоднозначность «WITH CHECK vs PK-конфликт»
 SELECT throws_ok(
-  $$INSERT INTO user_settings (owner_id)
+  $$INSERT INTO user_settings (graph_id)
     VALUES ('00000000-0000-4000-8000-00000000000c')$$,
-  '42501', NULL, 'user_settings: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'user_settings: INSERT с чужим graph_id отклоняется WITH CHECK');
 
 -- Группа 2: ai_usage — только свои строки; чужой INSERT запрещён
 SELECT results_eq(
-  'SELECT owner_id::text FROM ai_usage',
+  'SELECT graph_id::text FROM ai_usage',
   ARRAY['00000000-0000-4000-8000-00000000000a'],
   'ai_usage: A видит только свои строки');
--- другая дата — чтобы не пересечься с PK (owner_id, date, model) строки B
+-- другая дата — чтобы не пересечься с PK (graph_id, date, model) строки B
 SELECT throws_ok(
-  $$INSERT INTO ai_usage (owner_id, date, model)
+  $$INSERT INTO ai_usage (graph_id, date, model)
     VALUES ('00000000-0000-4000-8000-00000000000b', '2026-07-02', 'pgtap-model')$$,
-  '42501', NULL, 'ai_usage: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'ai_usage: INSERT с чужим graph_id отклоняется WITH CHECK');
 
 -- Группа 3: entity_origins — только свои строки; чужой INSERT запрещён
 SELECT results_eq(
-  'SELECT owner_id::text FROM entity_origins',
+  'SELECT graph_id::text FROM entity_origins',
   ARRAY['00000000-0000-4000-8000-00000000000a'],
   'entity_origins: A видит только свои строки');
 -- external_id новый — уникальность (owner, namespace, external_id) не задета
 SELECT throws_ok(
-  $$INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id)
+  $$INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id)
     VALUES ('00000000-0000-7000-8000-0000000000c6',
             '00000000-0000-4000-8000-00000000000b',
             '00000000-0000-7000-8000-0000000000b1', 'telegram', 'ext-c')$$,
-  '42501', NULL, 'entity_origins: INSERT с чужим owner_id отклоняется WITH CHECK');
--- Дыра из ревью Task 2: owner_id свой, но entity_id — ЧУЖАЯ сущность (B).
--- Старая политика (только owner_id) это пропускала → загрязнение provenance,
+  '42501', NULL, 'entity_origins: INSERT с чужим graph_id отклоняется WITH CHECK');
+-- Дыра из ревью Task 2: graph_id свой, но entity_id — ЧУЖАЯ сущность (B).
+-- Старая политика (только graph_id) это пропускала → загрязнение provenance,
 -- а FK NO ACTION блокировал бы будущий hard-delete чужой строки. Новая WITH CHECK
 -- требует владения entity_id → 42501. external_id новый — уникальность не задета.
 SELECT throws_ok(
-  $$INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id)
+  $$INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id)
     VALUES ('00000000-0000-7000-8000-0000000000c7',
             '00000000-0000-4000-8000-00000000000a',
             '00000000-0000-7000-8000-0000000000b1', 'telegram', 'ext-cross')$$,
@@ -213,7 +213,7 @@ SELECT throws_ok(
 -- Позитив-пара: origins на СВОЮ сущность (a1) проходит — WITH CHECK не сузил
 -- легитимный путь. Новый external_id, чтобы не пересечься с фикстурной ext-a.
 SELECT lives_ok(
-  $$INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id)
+  $$INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id)
     VALUES ('00000000-0000-7000-8000-0000000000a7',
             '00000000-0000-4000-8000-00000000000a',
             '00000000-0000-7000-8000-0000000000a1', 'telegram', 'ext-a-own')$$,
@@ -232,12 +232,12 @@ SELECT results_eq(
   ARRAY['00000000-0000-7000-8000-0000000000a4'],
   'relations: target не изменился после отклонённого перенацеливания');
 
--- Группа 6: builtin-аспекты (owner_id NULL) закрыты на запись под authenticated
+-- Группа 6: builtin-аспекты (graph_id NULL) закрыты на запись под authenticated
 SELECT throws_ok(
-  $$INSERT INTO aspect_definitions (id, owner_id, key, label, description)
+  $$INSERT INTO aspect_definitions (id, graph_id, key, label, description)
     VALUES ('orbis/pgtap-fake-builtin', NULL, 'orbis/pgtap-fake-builtin',
             '{"ru":"Подлог"}', '{"ru":"Подлог"}')$$,
-  '42501', NULL, 'aspect_definitions: INSERT builtin (owner_id NULL) отклоняется WITH CHECK');
+  '42501', NULL, 'aspect_definitions: INSERT builtin (graph_id NULL) отклоняется WITH CHECK');
 -- DELETE строки, отфильтрованной USING, — молчаливый «DELETE 0» (не ошибка),
 -- поэтому проверяем сохранность строки, а не исключение.
 DELETE FROM aspect_definitions WHERE id = 'orbis/pgtap-probe';
@@ -251,13 +251,13 @@ SELECT results_eq(
 SELECT results_eq('SELECT count(*)::int FROM agent_grants', ARRAY[1],
   'A видит ровно свой грант');
 SELECT results_eq(
-  $$SELECT count(*)::int FROM agent_grants WHERE owner_id = '00000000-0000-4000-8000-00000000000b'$$,
+  $$SELECT count(*)::int FROM agent_grants WHERE graph_id = '00000000-0000-4000-8000-00000000000b'$$,
   ARRAY[0], 'чужой грант невидим');
 SELECT throws_ok(
-  $$INSERT INTO agent_grants (id, owner_id, kind, label)
+  $$INSERT INTO agent_grants (id, graph_id, kind, label)
     VALUES ('00000000-0000-7000-8000-0000000000c7',
             '00000000-0000-4000-8000-00000000000b', 'pat', 'подлог')$$,
-  '42501', NULL, 'грант с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'грант с чужим graph_id отклоняется WITH CHECK');
 
 -- Как пользователь B: чужой тред закрыт на чтение и вставку
 SELECT set_config('request.jwt.claims',
@@ -271,7 +271,7 @@ SELECT throws_ok(
 -- Группа 1 (продолжение): строка настроек A невидима под B
 SELECT results_eq(
   $$SELECT count(*)::int FROM user_settings
-    WHERE owner_id = '00000000-0000-4000-8000-00000000000a'$$,
+    WHERE graph_id = '00000000-0000-4000-8000-00000000000a'$$,
   ARRAY[0], 'user_settings: B не видит строку A');
 -- Группа 4: связи A-A (сущности A созданы выше) невидимы под B — USING требует оба конца
 SELECT results_eq('SELECT count(*)::int FROM relations', ARRAY[0],
@@ -352,18 +352,18 @@ SET LOCAL ROLE authenticated;
 SELECT results_eq('SELECT count(*)::int FROM entity_versions', ARRAY[1],
   'entity_versions: A видит ровно свою версию');
 SELECT throws_ok(
-  $$INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
+  $$INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id, actor_kind)
     VALUES ('00000000-0000-7000-8000-0000000000c8',
             '00000000-0000-4000-8000-00000000000b',
             '00000000-0000-7000-8000-0000000000b1', 'подлог', 'тело',
             '00000000-0000-4000-8000-00000000000b', 'owner')$$,
-  '42501', NULL, 'entity_versions: INSERT с чужим owner_id отклоняется WITH CHECK');
--- Та же дыра, что закрыл 0002 у entity_origins: owner_id СВОЙ, а entity_id — ЧУЖАЯ
--- сущность (B). Предикат только по owner_id это пропускал: RI-проверка FK идёт мимо RLS
+  '42501', NULL, 'entity_versions: INSERT с чужим graph_id отклоняется WITH CHECK');
+-- Та же дыра, что закрыл 0002 у entity_origins: graph_id СВОЙ, а entity_id — ЧУЖАЯ
+-- сущность (B). Предикат только по graph_id это пропускал: RI-проверка FK идёт мимо RLS
 -- и чужую сущность видит. Версия чужой записи ломает сквозное владение §4.10, поэтому
 -- WITH CHECK требует ещё и владения самой сущностью → 42501.
 SELECT throws_ok(
-  $$INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
+  $$INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id, actor_kind)
     VALUES ('00000000-0000-7000-8000-0000000000c9',
             '00000000-0000-4000-8000-00000000000a',
             '00000000-0000-7000-8000-0000000000b1', 'версия чужой', 'тело',
@@ -371,7 +371,7 @@ SELECT throws_ok(
   '42501', NULL,
   'entity_versions: INSERT версии на чужую сущность (свой owner) отклоняется WITH CHECK');
 SELECT lives_ok(
-  $$INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
+  $$INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id, actor_kind)
     VALUES ('00000000-0000-7000-8000-0000000000a9',
             '00000000-0000-4000-8000-00000000000a',
             '00000000-0000-7000-8000-0000000000a1', 'своя', 'тело A2',
@@ -434,21 +434,21 @@ SELECT results_eq(
   ARRAY[2],
   'property_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
 SELECT lives_ok(
-  $$INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+  $$INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
     VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2', '{"ru":"П"}'::jsonb,
             '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900)$$,
   'property_definitions: INSERT своей строки проходит (write_own + GRANT)');
 SELECT throws_ok(
-  $$INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+  $$INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
     VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c', '{"ru":"П"}'::jsonb,
             '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900)$$,
-  '42501', NULL, 'property_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'property_definitions: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT throws_ok(
-  $$INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+  $$INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
     VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"П"}'::jsonb,
             '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900)$$,
   '42501', NULL,
-    'property_definitions: INSERT встроенной строки (owner_id NULL) под authenticated отклоняется');
+    'property_definitions: INSERT встроенной строки (graph_id NULL) под authenticated отклоняется');
 -- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
 -- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
 UPDATE property_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
@@ -472,23 +472,23 @@ SELECT results_eq(
   'relation_role_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
 SELECT lives_ok(
   $$INSERT INTO relation_role_definitions
-  (id, owner_id, key, label, description, source_label, target_label, rank)
+  (id, graph_id, key, label, description, source_label, target_label, rank)
     VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2', '{"ru":"Р"}'::jsonb,
             '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900)$$,
   'relation_role_definitions: INSERT своей строки проходит (write_own + GRANT)');
 SELECT throws_ok(
   $$INSERT INTO relation_role_definitions
-  (id, owner_id, key, label, description, source_label, target_label, rank)
+  (id, graph_id, key, label, description, source_label, target_label, rank)
     VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c', '{"ru":"Р"}'::jsonb,
             '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900)$$,
-  '42501', NULL, 'relation_role_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'relation_role_definitions: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT throws_ok(
   $$INSERT INTO relation_role_definitions
-  (id, owner_id, key, label, description, source_label, target_label, rank)
+  (id, graph_id, key, label, description, source_label, target_label, rank)
     VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"Р"}'::jsonb,
             '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900)$$,
   '42501', NULL,
-    'relation_role_definitions: INSERT встроенной строки (owner_id NULL) отклоняется');
+    'relation_role_definitions: INSERT встроенной строки (graph_id NULL) отклоняется');
 -- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
 -- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
 UPDATE relation_role_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
@@ -511,20 +511,20 @@ SELECT results_eq(
   ARRAY[2],
   'contract_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
 SELECT lives_ok(
-  $$INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+  $$INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
     VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2', '{"ru":"К"}'::jsonb,
             '{"ru":"К"}'::jsonb, 'slots', 900)$$,
   'contract_definitions: INSERT своей строки проходит (write_own + GRANT)');
 SELECT throws_ok(
-  $$INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+  $$INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
     VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c', '{"ru":"К"}'::jsonb,
             '{"ru":"К"}'::jsonb, 'slots', 900)$$,
-  '42501', NULL, 'contract_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'contract_definitions: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT throws_ok(
-  $$INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+  $$INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
     VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"К"}'::jsonb, '{"ru":"К"}'::jsonb, 'slots', 900)$$,
   '42501', NULL,
-    'contract_definitions: INSERT встроенной строки (owner_id NULL) под authenticated отклоняется');
+    'contract_definitions: INSERT встроенной строки (graph_id NULL) под authenticated отклоняется');
 -- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
 -- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
 UPDATE contract_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
@@ -547,18 +547,18 @@ SELECT results_eq(
   ARRAY[2],
   'subscription_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
 SELECT lives_ok(
-  $$INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+  $$INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
     VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'agenda', '{}'::jsonb, 900)$$,
   'subscription_definitions: INSERT своей строки проходит (write_own + GRANT)');
 SELECT throws_ok(
-  $$INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+  $$INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
     VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'agenda', '{}'::jsonb, 900)$$,
-  '42501', NULL, 'subscription_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'subscription_definitions: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT throws_ok(
-  $$INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+  $$INSERT INTO subscription_definitions (id, graph_id, surface, definition, rank)
     VALUES ('pgtap/c', NULL, 'agenda', '{}'::jsonb, 900)$$,
   '42501', NULL,
-    'subscription_definitions: INSERT встроенной строки (owner_id NULL) отклоняется');
+    'subscription_definitions: INSERT встроенной строки (graph_id NULL) отклоняется');
 -- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
 -- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
 UPDATE subscription_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
@@ -581,20 +581,20 @@ SELECT results_eq(
   ARRAY[2],
   'action_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
 SELECT lives_ok(
-  $$INSERT INTO action_definitions (id, owner_id, key, label, description)
+  $$INSERT INTO action_definitions (id, graph_id, key, label, description)
     VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2',
             '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb)$$,
   'action_definitions: INSERT своей строки проходит (write_own + GRANT)');
 SELECT throws_ok(
-  $$INSERT INTO action_definitions (id, owner_id, key, label, description)
+  $$INSERT INTO action_definitions (id, graph_id, key, label, description)
     VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c',
             '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb)$$,
-  '42501', NULL, 'action_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'action_definitions: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT throws_ok(
-  $$INSERT INTO action_definitions (id, owner_id, key, label, description)
+  $$INSERT INTO action_definitions (id, graph_id, key, label, description)
     VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb)$$,
   '42501', NULL,
-    'action_definitions: INSERT встроенной строки (owner_id NULL) под authenticated отклоняется');
+    'action_definitions: INSERT встроенной строки (graph_id NULL) под authenticated отклоняется');
 -- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
 -- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
 UPDATE action_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
@@ -614,12 +614,12 @@ SELECT results_eq($$SELECT count(*)::int FROM action_definitions WHERE id = 'pgt
 SELECT results_eq('SELECT count(*)::int FROM registry_deltas', ARRAY[1],
   'registry_deltas: A видит ровно свою дельту');
 SELECT throws_ok(
-  $$INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+  $$INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
     VALUES ('00000000-0000-7000-8000-0000000000cc', '00000000-0000-4000-8000-00000000000b', 'property',
             'orbis/limit', 1, '{}')$$,
-  '42501', NULL, 'registry_deltas: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'registry_deltas: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT lives_ok(
-  $$INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+  $$INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
     VALUES ('00000000-0000-7000-8000-0000000000dd', '00000000-0000-4000-8000-00000000000a', 'property',
             'orbis/limit', 1, '{}')$$,
   'registry_deltas: INSERT своей дельты проходит');
@@ -641,12 +641,12 @@ SELECT throws_ok(
 SELECT results_eq('SELECT count(*)::int FROM envelope_spent_cache', ARRAY[1],
   'envelope_spent_cache: A видит ровно свою строку кэша');
 SELECT throws_ok(
-  $$INSERT INTO envelope_spent_cache (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+  $$INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_version, system_version)
     VALUES ('00000000-0000-7000-8000-0000000000b1', '00000000-0000-4000-8000-00000000000b',
             '2026-09-02', 1, 0, 1)$$,
-  '42501', NULL, 'envelope_spent_cache: INSERT с чужим owner_id отклоняется WITH CHECK');
+  '42501', NULL, 'envelope_spent_cache: INSERT с чужим graph_id отклоняется WITH CHECK');
 SELECT lives_ok(
-  $$INSERT INTO envelope_spent_cache (envelope_id, owner_id, as_of, spent, owner_version, system_version)
+  $$INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_version, system_version)
     VALUES ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a',
             '2026-09-02', 1, 0, 1)$$,
   'envelope_spent_cache: INSERT своей строки проходит');

@@ -357,7 +357,7 @@ test('приёмка §С8-16: p95 чтения прогретого кэша sp
       const id = newId();
       ids.push(id);
       await admin.db.execute(
-        sql`INSERT INTO entities (id, owner_id, title)
+        sql`INSERT INTO entities (id, graph_id, title)
             VALUES (${id}::uuid, ${owner}::uuid, ${`Конверт кэша ${i}`})`,
       );
     }
@@ -394,7 +394,7 @@ test('приёмка §С8-16: p95 чтения прогретого кэша sp
   // сдвинули бы её сторож.
   const cleanup = adminDb();
   try {
-    await cleanup.db.execute(sql`DELETE FROM entities WHERE owner_id = ${owner}::uuid`);
+    await cleanup.db.execute(sql`DELETE FROM entities WHERE graph_id = ${owner}::uuid`);
   } finally {
     await cleanup.client.end();
   }

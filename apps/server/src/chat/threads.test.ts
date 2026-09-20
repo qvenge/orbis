@@ -26,7 +26,7 @@ afterAll(async () => {
 
 /** Строки chat_threads по владельцу/сущности (админ-DSN — RLS обходится, видим всё). */
 async function threadRows(
-  ownerId: string,
+  graphId: string,
   entityId: string | null,
 ): Promise<Array<Record<string, unknown>>> {
   const { db: admin, client: adminClient } = adminDb();
@@ -34,10 +34,10 @@ async function threadRows(
     const rows =
       entityId === null
         ? await admin.execute(
-            sql`SELECT id FROM chat_threads WHERE owner_id = ${ownerId} AND entity_id IS NULL`,
+            sql`SELECT id FROM chat_threads WHERE graph_id = ${graphId} AND entity_id IS NULL`,
           )
         : await admin.execute(
-            sql`SELECT id FROM chat_threads WHERE owner_id = ${ownerId} AND entity_id = ${entityId}`,
+            sql`SELECT id FROM chat_threads WHERE graph_id = ${graphId} AND entity_id = ${entityId}`,
           );
     return [...rows];
   } finally {
@@ -46,10 +46,10 @@ async function threadRows(
 }
 
 /** Сущность-носитель треда напрямую (без executor'а — chat-модуль от него не зависит). */
-async function createEntityRow(ownerId: string): Promise<string> {
+async function createEntityRow(graphId: string): Promise<string> {
   const id = newId();
-  await withIdentity(db, ownerId, (tx) =>
-    tx.insert(entities).values({ id, ownerId, title: 'Тред-носитель' }),
+  await withIdentity(db, graphId, (tx) =>
+    tx.insert(entities).values({ id, graphId, title: 'Тред-носитель' }),
   );
   return id;
 }

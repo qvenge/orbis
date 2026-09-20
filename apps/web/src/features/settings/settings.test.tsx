@@ -8,7 +8,7 @@ import { GeneralForm } from './GeneralForm';
 import { SettingsScreen } from './SettingsScreen';
 
 const settings = {
-  ownerId: 'u',
+  graphId: 'u',
   plan: 'dev',
   timezone: 'Europe/Moscow',
   defaultCurrency: 'RUB',
@@ -154,7 +154,7 @@ test('ExportButton формирует Blob с format:orbis-export', async () => 
 test('AspectsList: подпись, иконка и СОСТАВ свойств — из эффективного реестра', async () => {
   const aspect = {
     id: 'orbis/task',
-    ownerId: null,
+    graphId: null,
     key: 'orbis/task',
     label: { ru: 'Задача', en: 'Task' },
     description: { ru: 'Действие со сроком', en: 'Action with a due date' },

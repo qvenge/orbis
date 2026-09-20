@@ -4,7 +4,7 @@ import { SLOT_KEY_RE } from './property-type';
 
 const ROW = {
   id: 'orbis/probe',
-  ownerId: null,
+  graphId: null,
   key: 'orbis/probe',
   label: { ru: 'Проба' },
   description: { ru: 'Проба' },
@@ -32,7 +32,7 @@ test('ветка slots: classes/sets по умолчанию пусты, facts �
 test('ветка facts: слотов, классов и наборов у неё НЕТ (§Б1-2, orbis/sensitivity)', () => {
   const def = contractDefinitionSchema.parse({
     id: 'orbis/f',
-    ownerId: null,
+    graphId: null,
     key: 'orbis/f',
     label: { ru: 'Ф' },
     description: { ru: 'Ф' },

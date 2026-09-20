@@ -35,7 +35,7 @@ beforeAll(async () => {
   process.env.SUPABASE_JWT_SECRET = LOCAL_JWT_SECRET;
   // truncateAll здесь не нужен: владелец случайный (freshUserId), чужие строки этому
   // сьюту не мешают, а лишняя зачистка связывала бы файл с остальными сьютами.
-  PAT_TOKEN = await issuePatGrant(db, { ownerId: PAT_OWNER, label: 'тестовый агент' });
+  PAT_TOKEN = await issuePatGrant(db, { graphId: PAT_OWNER, label: 'тестовый агент' });
 });
 
 afterAll(async () => {
@@ -128,14 +128,14 @@ test('Bearer с битым PAT → actorUserId null (fail-closed, без JWT-fal
 // Отзыв обязан гасить доступ на ОБЕИХ поверхностях, не только на /mcp: иначе отозванный
 // агент продолжал бы читать граф владельца через tRPC.
 test('отозванный грант → actorUserId null, actorKind остаётся agent', async () => {
-  const token = await issuePatGrant(db, { ownerId: PAT_OWNER, label: 'на отзыв' });
+  const token = await issuePatGrant(db, { graphId: PAT_OWNER, label: 'на отзыв' });
   const identity = await verifyBearer(db, token);
   if (identity === null) throw new Error('выданный токен не прошёл verifyBearer');
   expect((await createContext(makeReq({ authorization: `Bearer ${token}` }))).actorUserId).toBe(
     PAT_OWNER,
   );
 
-  await revokeGrant(db, { ownerId: PAT_OWNER, grantId: identity.grantId });
+  await revokeGrant(db, { graphId: PAT_OWNER, grantId: identity.grantId });
 
   const ctx = await createContext(makeReq({ authorization: `Bearer ${token}` }));
   expect(ctx.actorUserId).toBeNull();

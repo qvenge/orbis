@@ -143,7 +143,7 @@ async function rawOrigins(
   try {
     const rows = (await admin.execute(sql`
       SELECT namespace, external_id, entity_id FROM entity_origins
-      WHERE owner_id = ${user} ORDER BY namespace, external_id
+      WHERE graph_id = ${user} ORDER BY namespace, external_id
     `)) as unknown as Array<{ namespace: string; external_id: string; entity_id: string }>;
     return [...rows];
   } finally {
@@ -157,7 +157,7 @@ async function rawFinancialCount(user: string): Promise<number> {
   try {
     const rows = (await admin.execute(sql`
       SELECT count(*)::int AS count FROM entities
-      WHERE owner_id = ${user} AND 'orbis/financial' = ANY(aspects)
+      WHERE graph_id = ${user} AND 'orbis/financial' = ANY(aspects)
     `)) as unknown as Array<{ count: number }>;
     return rows[0]?.count ?? 0;
   } finally {
@@ -171,7 +171,7 @@ async function financialEntities(user: string) {
     tx
       .select({ id: entities.id, title: entities.title, archived: entities.archived })
       .from(entities)
-      .where(and(eq(entities.ownerId, user), sql`'orbis/financial' = ANY(aspects)`))
+      .where(and(eq(entities.graphId, user), sql`'orbis/financial' = ANY(aspects)`))
       .orderBy(entities.title),
   );
 }
@@ -316,7 +316,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     await withIdentity(db, user, (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
-          ownerId: user,
+          graphId: user,
           id: newId(),
           title: 'пятерочка → Еда',
           props: {
@@ -588,7 +588,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     await withIdentity(db, user, async (tx) =>
       tx.insert(entities).values({
         id: newId(),
-        ownerId: user,
+        graphId: user,
         title: 'NETFLIX',
         tags: [],
         ...(await entityColumns(
@@ -904,7 +904,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       const id = newId();
       await tx.insert(entities).values({
         id,
-        ownerId: user,
+        graphId: user,
         title: 'Архивный обед',
         tags: [],
         archived: true,
@@ -948,7 +948,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       const id = newId();
       await tx.insert(entities).values({
         id,
-        ownerId: user,
+        graphId: user,
         title: 'Ручной обед',
         tags: [],
         ...(await entityColumns(
@@ -1002,7 +1002,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     });
 
     // НОВЫЙ batchId (не replay) с той же строкой того же файла: уникальный индекс
-    // (owner_id, namespace, external_id) обязан отклонить группу целиком
+    // (graph_id, namespace, external_id) обязан отклонить группу целиком
     const err = await trpcError(
       caller.import.confirm({
         batchId: newId(),
@@ -1050,7 +1050,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     await withIdentity(db, user, (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
-          ownerId: user,
+          graphId: user,
           id: envelopeId,
           title: 'Конверт Еда (только props)',
           props: {
@@ -1098,7 +1098,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     await withIdentity(db, user, async (tx) =>
       tx.insert(entities).values({
         id: newId(),
-        ownerId: user,
+        graphId: user,
         title: 'Конверт Еда',
         tags: [],
         ...(await entityColumns(
@@ -1169,7 +1169,7 @@ describe('Undo импорта: origins удаляются физически (§
       const id = newId();
       await tx.insert(entities).values({
         id,
-        ownerId: user,
+        graphId: user,
         title: 'Ручной обед',
         tags: [],
         ...(await entityColumns(
@@ -1382,7 +1382,7 @@ describe('import.analyze: маппинг колонок через tool-call', (
     await ownerCaller(user, provider).import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] });
 
     const rows = await withIdentity(db, user, (tx) =>
-      tx.select().from(aiUsage).where(eq(aiUsage.ownerId, user)),
+      tx.select().from(aiUsage).where(eq(aiUsage.graphId, user)),
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]?.model).toBe(MODEL);
@@ -1474,7 +1474,7 @@ describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
     expect(provider.requests).toHaveLength(0); // гейт ДО обращения к провайдеру
     // …и до метеринга: строк ai_usage нет
     const usage = await withIdentity(db, user, (tx) =>
-      tx.select().from(aiUsage).where(eq(aiUsage.ownerId, user)),
+      tx.select().from(aiUsage).where(eq(aiUsage.graphId, user)),
     );
     expect(usage).toHaveLength(0);
   });
@@ -1495,7 +1495,7 @@ describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
     expect(causeOf(err).details?.key).toBe('ai.requests_per_day');
     expect(provider.requests).toHaveLength(0); // гейт ДО обращения к провайдеру
     const usage = await withIdentity(db, user, (tx) =>
-      tx.select().from(aiUsage).where(eq(aiUsage.ownerId, user)),
+      tx.select().from(aiUsage).where(eq(aiUsage.graphId, user)),
     );
     expect(usage).toHaveLength(0);
   });

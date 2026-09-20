@@ -281,9 +281,9 @@ export function resolvePropertyRef(
   let byKey: PropertyDefinition | undefined;
   for (const def of reg.properties.values()) {
     if (def.key !== keyOrId) continue;
-    // Своя строка перекрывает системную: builtin приходит первым (ORDER BY owner_id
+    // Своя строка перекрывает системную: builtin приходит первым (ORDER BY graph_id
     // NULLS FIRST), поэтому заменяем только его.
-    if (byKey === undefined || (byKey.ownerId === null && def.ownerId !== null)) byKey = def;
+    if (byKey === undefined || (byKey.graphId === null && def.graphId !== null)) byKey = def;
   }
   return byKey ?? reg.properties.get(keyOrId);
 }
@@ -407,7 +407,7 @@ export function propsPatchFromInput(reg: RegistrySnapshot, input: ExecPropsInput
  * обход тех же ссылок разошёлся бы с первым молча — ровно тот класс, из-за которого список
  * служебных аспектов до реформы лежал в трёх копиях (inv §3).
  *
- * Порядок — `rank` аспекта: снимок собран запросом с `ORDER BY owner_id`, то есть порядок
+ * Порядок — `rank` аспекта: снимок собран запросом с `ORDER BY graph_id`, то есть порядок
  * строк БД внутри половины реестра не гарантирован, и выдача плавала бы между вызовами.
  */
 export function carrierAspects(reg: RegistrySnapshot, propertyId: string): string[] {
@@ -455,7 +455,7 @@ function editDistance(a: string, b: string, cap: number): number {
  * подсказка уводила бы в сторону увереннее, чем молчание.
  *
  * ИЗ РАВНЫХ ПОБЕЖДАЕТ МЕНЬШИЙ КЛЮЧ ПО АЛФАВИТУ, и это сортировка, а не порядок обхода.
- * Снимок реестра собран запросом `ORDER BY owner_id` — порядок строк внутри половины БД не
+ * Снимок реестра собран запросом `ORDER BY graph_id` — порядок строк внутри половины БД не
  * гарантирует вовсе, и обход `Map` в порядке вставки давал бы на двух одинаково близких
  * ключах РАЗНУЮ подсказку между прогонами (та же недетерминированность, что чинилась в
  * `carrierAspects`). `rank` для тай-брейка не годится: он уникален только внутри одной

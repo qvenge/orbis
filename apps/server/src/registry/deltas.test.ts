@@ -66,7 +66,7 @@ function row(
   delta: unknown,
   baseVersion = 1,
 ): RegistryDeltaRow {
-  return { id: 'd1', ownerId: OWNER, targetKind, targetId, baseVersion, delta };
+  return { id: 'd1', graphId: OWNER, targetKind, targetId, baseVersion, delta };
 }
 
 /** Код отказа и его ПРИЧИНА: коды реформы закрыты (errors.ts), причина едет в details. */
@@ -86,7 +86,7 @@ function selectProperty(
 ): PropertyDefinition {
   return {
     id: 'user/mood',
-    ownerId: OWNER,
+    graphId: OWNER,
     key: 'user/mood',
     label: { ru: 'Настроение' },
     description: { ru: 'Как прошёл день' },
@@ -615,7 +615,7 @@ describe('threeWayMerge: система поехала под живой дел�
           'orbis/budget-overview',
           {
             id: 'orbis/budget-overview',
-            ownerId: null,
+            graphId: null,
             surface: 'finance/budget-overview',
             definition,
             module: 'finance',
@@ -637,7 +637,7 @@ describe('threeWayMerge: система поехала под живой дел�
     const prev = systemOf(snapshotWith());
     const sub = (limit: number): SubscriptionRow => ({
       id: 'orbis/agenda',
-      ownerId: null,
+      graphId: null,
       surface: 'planner/agenda',
       definition: { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, limit } },
       module: null,
@@ -905,7 +905,7 @@ describe('дельта контракта setsDelta и подписки definiti
     const base = snapshotWith();
     base.subscriptions.set('orbis/agenda', {
       id: 'orbis/agenda',
-      ownerId: null,
+      graphId: null,
       surface: 'planner/agenda',
       definition: AGENDA_DEF,
       module: null,

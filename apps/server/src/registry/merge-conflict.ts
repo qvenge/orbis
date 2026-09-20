@@ -73,7 +73,7 @@ export function driftConflictDecidable(conflicts: readonly RegistryConflict[]): 
 export async function createDriftConflictUnits(
   tx: Tx,
   args: {
-    ownerId: string;
+    graphId: string;
     systemVersion: number;
     deltaRowId: string;
     merged: RegistryDelta;
@@ -111,7 +111,7 @@ export async function createDriftConflictUnits(
     if (delta.classMap === undefined) delete delta.classMap;
 
     const { id } = await createSystemPending(tx, {
-      ownerId: args.ownerId,
+      graphId: args.graphId,
       tool: 'aspect_delta_set',
       input: { aspect: conflict.targetId, delta },
       // ТЕКСТ ОБЕЩАЕТ РОВНО ТО, ЧТО ДЕЛАЕТ APPROVE, и ни словом больше. Прежняя редакция

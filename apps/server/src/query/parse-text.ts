@@ -43,7 +43,7 @@ export function parseRegistryOf(ctx: CompileCtx): ParseRegistry {
 /**
  * Текст запроса → канонический Q-AST по реестру владельца.
  *
- * Контекст, а не `(tx, ownerId)`: снимок реестра уже снят вызывающим (`queryContext`) и
+ * Контекст, а не `(tx, graphId)`: снимок реестра уже снят вызывающим (`queryContext`) и
  * лежит в `ctx.reg` — второе его чтение стоило бы пять запросов к БД на каждый разбор.
  */
 export function parseQueryText(text: string, ctx: CompileCtx): QueryAst {

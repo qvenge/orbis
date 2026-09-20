@@ -87,7 +87,7 @@ export async function assertRoleConstraints(
   key: RelationKey,
   effects: VirtualGraphEffects | undefined,
   ctx: {
-    ownerId: string;
+    graphId: string;
     mechanism: MutationMechanism;
     /**
      * Внутренний режим undo (§7.8): гейт `created_by` спрашивает, кто ребро ПОРОДИЛ, а не
@@ -118,7 +118,7 @@ export async function assertRoleConstraints(
   if (ctx.op === 'delete') return;
 
   if (def.constraints.acyclic === true) {
-    await assertAcyclic(tx, ctx.ownerId, key, def, effects);
+    await assertAcyclic(tx, ctx.graphId, key, def, effects);
   }
 
   const max = def.constraints.target_max_incoming;
@@ -138,7 +138,7 @@ export async function assertRoleConstraints(
  * `category-parent`; у второй это НОВОЕ поведение — ДО реформы циклы в дереве категорий не
  * запрещались ничем (пиннит relations.test, тест 16).
  *
- * ownerId сериализует записи владельца ПО ЭТОЙ РОЛИ advisory-lock'ом (как approve/reject в
+ * graphId сериализует записи владельца ПО ЭТОЙ РОЛИ advisory-lock'ом (как approve/reject в
  * policy/pending). Без него проверка страдает write-skew: FOR UPDATE берётся лишь на два
  * конца нового ребра, а обход графа идёт в READ COMMITTED — две транзакции, добавляющие
  * A→B и C→D при существующих B→C и D→A, друг друга не видят и вместе замыкают цикл.
@@ -148,13 +148,13 @@ export async function assertRoleConstraints(
  */
 export async function assertAcyclic(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   key: RelationKey,
   def: RelationRoleDefinition | undefined,
   virtual?: VirtualGraphEffects,
 ): Promise<void> {
   await tx.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${ownerId}:${key.role}`}, 0))`,
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graphId}:${key.role}`}, 0))`,
   );
   const edges = roleEdgesCte(
     key.role,

@@ -116,6 +116,6 @@ export const budgetRouter = router({
   postDue: ownerOnlyProcedure.mutation(async ({ ctx }): Promise<{ posted: number }> => {
     // «Сегодня» — локальная дата пользователя (user_settings.timezone), как в агрегатах
     const today = await localToday(ctx.db, ctx.actorUserId);
-    return postDueInstances({ db: ctx.db, ownerId: ctx.actorUserId, today });
+    return postDueInstances({ db: ctx.db, graphId: ctx.actorUserId, today });
   }),
 });

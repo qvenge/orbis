@@ -147,7 +147,7 @@ async function usageCounts(tx: Tx, propertyIds: string[]): Promise<Map<string, n
  * когда строку завели. Поэтому и фильтрует он по УЖЕ отобранным id, а не по таблице целиком:
  * строка, которой нет в снимке (скрытая дельтой), из-за возраста в выдаче не появится.
  *
- * `owner_id IS NULL OR owner_id = …` — тот же предикат, что у `loadRegistryRows`: у
+ * `graph_id IS NULL OR graph_id = …` — тот же предикат, что у `loadRegistryRows`: у
  * встроенных строк `created_at` тоже есть (его ставит сид), и молча выкинуть их значило бы
  * отвечать «встроенных свойств старше двух недель не бывает».
  *
@@ -157,7 +157,7 @@ async function usageCounts(tx: Tx, propertyIds: string[]): Promise<Map<string, n
  */
 async function createdBefore(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   propertyIds: string[],
   boundary: Date,
 ): Promise<Set<string>> {
@@ -170,7 +170,7 @@ async function createdBefore(
     SELECT id
     FROM ids, property_definitions d
     WHERE d.id = ANY(ids.arr)
-      AND (d.owner_id IS NULL OR d.owner_id = ${ownerId}::uuid)
+      AND (d.graph_id IS NULL OR d.graph_id = ${graphId}::uuid)
       AND d.created_at < ${boundary.toISOString()}::timestamptz`)) as unknown as Array<{
     id: string;
   }>;
@@ -195,7 +195,7 @@ export async function runPropertyCatalog(
   reg: RegistrySnapshot,
   input: PropertyCatalogInput,
   locale: string,
-  args: { ownerId: string; now: Date },
+  args: { graphId: string; now: Date },
 ): Promise<PropertyCatalogResult> {
   // Носители — общей `carrierAspects` (она же держит запрет по объекту в предложении):
   // второй обход тех же ссылок разошёлся бы с первым молча. Она отдаёт id аспекта, а
@@ -237,7 +237,7 @@ export async function runPropertyCatalog(
       ? undefined
       : await createdBefore(
           tx,
-          args.ownerId,
+          args.graphId,
           selected.map((d) => d.id),
           new Date(args.now.getTime() - input.olderThanDays * 86_400_000),
         );

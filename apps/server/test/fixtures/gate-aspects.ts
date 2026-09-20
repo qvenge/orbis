@@ -182,10 +182,10 @@ export const GATE_SURFACE_AMOUNT = '340.00';
  * Все даты ПРИБИТЫ относительно `SURFACE_TODAY` (`2026-07-03`): `seedGateWorld` ниже считает
  * «сегодня» от системных часов, и снятый на нём эталон жил бы ровно сутки.
  */
-export async function seedGateSurfaceRows(ownerId: string): Promise<void> {
+export async function seedGateSurfaceRows(graphId: string): Promise<void> {
   const { db, client } = appDb();
   try {
-    const id = (slug: string) => surfaceEntityId(ownerId, slug);
+    const id = (slug: string) => surfaceEntityId(graphId, slug);
     const ops = [
       {
         tool: 'entity_create',
@@ -220,7 +220,7 @@ export async function seedGateSurfaceRows(ownerId: string): Promise<void> {
     ];
     for (const op of ops) {
       const r = await execute(db, {
-        actorUserId: ownerId,
+        actorUserId: graphId,
         actorKind: 'owner',
         source: 'ui',
         operations: [op],
@@ -260,11 +260,11 @@ const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
  * что аспект работает на боевых путях, и обстановка, положенная мимо них, этого не докажет.
  * Своё подключение — как у `seedCustomAspect`: у фикстуры транзакции на руках нет.
  */
-export async function seedGateWorld(ownerId: string): Promise<GateWorld> {
+export async function seedGateWorld(graphId: string): Promise<GateWorld> {
   const { db, client } = appDb();
   try {
     const caller = createCallerFactory(appRouter)({
-      actorUserId: ownerId,
+      actorUserId: graphId,
       actorKind: 'owner',
       db,
       clientVersion: null,

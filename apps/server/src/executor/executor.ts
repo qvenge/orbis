@@ -263,7 +263,7 @@ function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
   ctx.compileCtx ??= (async () => {
     const timeZone = await ownerTimeZone(ctx.tx, ctx.req.actorUserId);
     return {
-      ownerId: ctx.req.actorUserId,
+      graphId: ctx.req.actorUserId,
       reg: ctx.registry,
       thisEntityId: null,
       timeZone,
@@ -410,7 +410,7 @@ const entityOriginCreateInput = z
   })
   .strict();
 
-/** Ключ строки origins — уникальная тройка (owner_id из RLS, namespace, external_id). */
+/** Ключ строки origins — уникальная тройка (graph_id из RLS, namespace, external_id). */
 const entityOriginDeleteInput = z
   .object({ namespace: z.string().min(1), external_id: z.string().min(1) })
   .strict();
@@ -716,7 +716,7 @@ async function executeBatch(
       };
       await sink.write(tx, {
         id: auditId,
-        ownerId: req.actorUserId,
+        graphId: req.actorUserId,
         threadId: req.threadId,
         action,
         card: { tool: 'batch_execute', entity_id: null, title: `batch: операций — ${ops.length}` },
@@ -898,19 +898,19 @@ function touchesRegistry(op: { tool: string; input: unknown }): boolean {
 
 async function lockRegistry(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
-  if (ops.some(touchesRegistry)) await lockOwnerRegistry(tx, ownerId);
+  if (ops.some(touchesRegistry)) await lockOwnerRegistry(tx, graphId);
 }
 
 async function lockBudgetContour(
   tx: Tx,
   reg: RegistrySnapshot,
-  ownerId: string,
+  graphId: string,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
-  if (ops.some((op) => touchesBudgetContour(reg, op))) await lockOwnerBudget(tx, ownerId);
+  if (ops.some((op) => touchesBudgetContour(reg, op))) await lockOwnerBudget(tx, graphId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,7 +1013,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     inverse: p.inverse,
   };
   await ctx.sink.write(ctx.tx, {
-    ownerId: ctx.req.actorUserId,
+    graphId: ctx.req.actorUserId,
     threadId: ctx.req.threadId,
     action,
     card: { tool: p.tool, entity_id: p.entityId, title: p.title },
@@ -1248,7 +1248,7 @@ async function budgetFollowUpDescs(
   precomputed?: ReturnType<typeof budgetHookBranches>,
 ): Promise<BudgetOpDesc[]> {
   const { before, after } = hook;
-  const ownerId = ctx.req.actorUserId;
+  const graphId = ctx.req.actorUserId;
   const contour = contourOf(ctx);
   const branches = precomputed ?? budgetHookBranches(ctx.registry, contour, hook);
   const descs: BudgetOpDesc[] = [];
@@ -1257,7 +1257,7 @@ async function budgetFollowUpDescs(
   if (branches.rebind) {
     descs.push(
       ...(await rebindForEnvelope(ctx.tx, {
-        ownerId,
+        graphId,
         envelope: toWire(after),
         before: before === null ? null : toWire(before),
         contour,
@@ -1268,12 +1268,12 @@ async function budgetFollowUpDescs(
 
   // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности
   if (branches.bind) {
-    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after), contour, reads })));
+    descs.push(...(await bindingOps(ctx.tx, { graphId, entity: toWire(after), contour, reads })));
   }
 
   // (в) сущность перестала быть транзакцией: снимаем привязку к конверту
   if (branches.unbind) {
-    descs.push(...(await unbindOps(ctx.tx, { ownerId, entityId: after.id, contour, reads })));
+    descs.push(...(await unbindOps(ctx.tx, { graphId, entityId: after.id, contour, reads })));
   }
 
   // Дедуп в рамках хука: сущность с обоими аспектами могла бы породить одинаковые ops
@@ -1301,7 +1301,7 @@ async function budgetFollowUpDescs(
  * связь инвалидирует кэш родителей своей транзакции, и следующий хук перечитывает их.
  */
 async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
-  const ownerId = ctx.req.actorUserId;
+  const graphId = ctx.req.actorUserId;
   const contour = contourOf(ctx);
   const reads = new BindingReads(contour);
   // Замок владельца (E9) здесь НЕ берётся: он уже взят первым statement'ом транзакции
@@ -1319,7 +1319,7 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
     const target = bindingTargetOf(toWire(hook.after), contour);
     if (target !== null) targets.push(target);
   }
-  if (targets.length > 0) await reads.prefetch(ctx.tx, { ownerId, targets });
+  if (targets.length > 0) await reads.prefetch(ctx.tx, { graphId, targets });
 
   // Механизм операций хука ПРОСТАВЛЯЕТСЯ ЯВНО (§А4-4). Хук не зовёт `execute` — он строит
   // операции через `prepareOp` в ТОМ ЖЕ ctx и без этой строки унаследовал бы механизм
@@ -1425,7 +1425,7 @@ async function applySpentCacheEffect(
 ): Promise<void> {
   const contour = spentContourOf(ctx);
   if (!contour.enabled) return; // декларация материализации не просила — писателей нет
-  const ownerId = ctx.req.actorUserId;
+  const graphId = ctx.req.actorUserId;
   const { before, after } = hook;
   const touched = new Set(descs.map((d) => d.input.source_id));
   const isEnvelope =
@@ -1440,15 +1440,15 @@ async function applySpentCacheEffect(
 
   if (before === null && isMovement && !isEnvelope && touched.size === 1) {
     const envelopeId = [...touched][0] as string;
-    const add = await spentContributionOf(ctx.tx, ownerId, await compileCtxOf(ctx), {
+    const add = await spentContributionOf(ctx.tx, graphId, await compileCtxOf(ctx), {
       entityId: after.id,
       envelopeId,
-      defaultCurrency: await reads.defaultCurrency(ctx.tx, ownerId),
+      defaultCurrency: await reads.defaultCurrency(ctx.tx, graphId),
     });
-    if (add !== null) await bumpSpentCache(ctx.tx, ownerId, envelopeId, add.amount, add.asOf);
+    if (add !== null) await bumpSpentCache(ctx.tx, graphId, envelopeId, add.amount, add.asOf);
     return;
   }
-  await invalidateSpentCache(ctx.tx, ownerId, [...touched]);
+  await invalidateSpentCache(ctx.tx, graphId, [...touched]);
 }
 
 /**
@@ -1782,7 +1782,7 @@ async function prepareEntityCreate(
   // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
   if (state.aspects.includes('orbis/budget')) {
     await assertEnvelopeUnique(ctx.tx, {
-      ownerId: ctx.req.actorUserId,
+      graphId: ctx.req.actorUserId,
       entityId: id,
       props: state.props,
       virtualEntities: batch?.entities,
@@ -1792,7 +1792,7 @@ async function prepareEntityCreate(
 
   const values = {
     id,
-    ownerId: ctx.req.actorUserId,
+    graphId: ctx.req.actorUserId,
     title: input.title,
     emoji: input.emoji ?? null,
     body,
@@ -2077,7 +2077,7 @@ async function prepareEntityUpdate(
     (touched.includes('orbis/budget') || (input.archived === false && current.archived))
   ) {
     await assertEnvelopeUnique(ctx.tx, {
-      ownerId: ctx.req.actorUserId,
+      graphId: ctx.req.actorUserId,
       entityId: input.id,
       props: state.props,
       virtualEntities: batch?.entities,
@@ -2349,7 +2349,7 @@ async function prepareAttach(
   if (aspectId === 'orbis/budget') {
     // Уникальность конверта (03-budget §2.1) — attach-путь той же комбинации
     await assertEnvelopeUnique(ctx.tx, {
-      ownerId: ctx.req.actorUserId,
+      graphId: ctx.req.actorUserId,
       entityId: input.entity_id,
       props: state.props,
       virtualEntities: batch?.entities,
@@ -2558,7 +2558,7 @@ async function prepareRelationCreate(
   // `relations.test.ts` «26. неизвестная роль»). Без неё несуществующая роль доехала бы до
   // стадии 5 и легла бы в граф строкой, о смысле которой не знает ни один читатель.
   await assertRoleConstraints(ctx.tx, ctx.registry, key, batch?.graph(), {
-    ownerId: ctx.req.actorUserId,
+    graphId: ctx.req.actorUserId,
     mechanism: ctx.mechanism,
     undoReplay: ctx.internalUndo !== undefined,
     op: 'create',
@@ -2720,7 +2720,7 @@ async function prepareRelationDelete(
   // Гейт `created_by` — симметрично созданию (Р7): роль, которую ставит сервер, сервер же и
   // снимает. Виртуальные эффекты batch не нужны — из трёх ограничений здесь работает одно.
   await assertRoleConstraints(ctx.tx, ctx.registry, key, undefined, {
-    ownerId: ctx.req.actorUserId,
+    graphId: ctx.req.actorUserId,
     mechanism: ctx.mechanism,
     undoReplay: ctx.internalUndo !== undefined,
     op: 'delete',
@@ -2851,7 +2851,7 @@ async function prepareOriginCreate(ctx: ExecCtx, rawInput: unknown): Promise<Pre
           .insert(entityOrigins)
           .values({
             id,
-            ownerId: applyCtx.req.actorUserId,
+            graphId: applyCtx.req.actorUserId,
             entityId: input.entity_id,
             namespace: input.namespace,
             externalId: input.external_id,
@@ -2904,7 +2904,7 @@ async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pre
     .from(entityOrigins)
     .where(
       and(
-        eq(entityOrigins.ownerId, ctx.req.actorUserId),
+        eq(entityOrigins.graphId, ctx.req.actorUserId),
         eq(entityOrigins.namespace, input.namespace),
         eq(entityOrigins.externalId, input.external_id),
       ),
@@ -2949,8 +2949,8 @@ async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pre
         .delete(entityOrigins)
         .where(
           and(
-            // owner_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
-            eq(entityOrigins.ownerId, applyCtx.req.actorUserId),
+            // graph_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
+            eq(entityOrigins.graphId, applyCtx.req.actorUserId),
             eq(entityOrigins.namespace, input.namespace),
             eq(entityOrigins.externalId, input.external_id),
           ),
@@ -3025,7 +3025,7 @@ async function prepareVersionPin(
           .insert(entityVersions)
           .values({
             id,
-            ownerId: applyCtx.req.actorUserId,
+            graphId: applyCtx.req.actorUserId,
             entityId: input.entity_id,
             label: input.label,
             body: current.body,
@@ -3069,7 +3069,7 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
   const rows = await ctx.tx
     .select()
     .from(entityVersions)
-    .where(and(eq(entityVersions.ownerId, ctx.req.actorUserId), eq(entityVersions.id, input.id)))
+    .where(and(eq(entityVersions.graphId, ctx.req.actorUserId), eq(entityVersions.id, input.id)))
     .for('update');
   const row = rows[0];
   if (!row) {
@@ -3096,8 +3096,8 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
         .delete(entityVersions)
         .where(
           and(
-            // owner_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
-            eq(entityVersions.ownerId, applyCtx.req.actorUserId),
+            // graph_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
+            eq(entityVersions.graphId, applyCtx.req.actorUserId),
             eq(entityVersions.id, input.id),
           ),
         )
@@ -3527,10 +3527,10 @@ async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const ownerId = applyCtx.req.actorUserId;
-      const current = await readSubscriptionRow(applyCtx.tx, ownerId, input.id);
+      const graphId = applyCtx.req.actorUserId;
+      const current = await readSubscriptionRow(applyCtx.tx, graphId, input.id);
       if (input.id.startsWith('user/')) {
-        const occupied = await readSurfaceOwner(applyCtx.tx, ownerId, input.surface, input.id);
+        const occupied = await readSurfaceOwner(applyCtx.tx, graphId, input.surface, input.id);
         if (occupied !== null) {
           throw new ExecError(
             'VALIDATION',
@@ -3538,9 +3538,9 @@ async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise
             { reason: 'SURFACE_TAKEN', surface: input.surface, subscription: occupied },
           );
         }
-        await setOwnSubscription(applyCtx.tx, ownerId, {
+        await setOwnSubscription(applyCtx.tx, graphId, {
           id: input.id,
-          ownerId,
+          graphId,
           surface: input.surface,
           definition: input.definition,
           module: surfaceModuleOf(input.surface),
@@ -3578,8 +3578,8 @@ async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise
             },
           );
         }
-        const before = await readSubscriptionDelta(applyCtx.tx, ownerId, input.id);
-        await setSubscriptionDelta(applyCtx.tx, ownerId, input.id, {
+        const before = await readSubscriptionDelta(applyCtx.tx, graphId, input.id);
+        await setSubscriptionDelta(applyCtx.tx, graphId, input.id, {
           definition: input.definition,
         });
         journal.operations.push({ op: 'subscription_set', payload: { ...input } });
@@ -3607,14 +3607,14 @@ const OWN_SUBSCRIPTION_RANK = 1000;
 /** Кто ещё описывает эту поверхность (кроме самого адресата) — id или null. */
 async function readSurfaceOwner(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   surface: string,
   exceptId: string,
 ): Promise<string | null> {
   const rows = (await tx.execute(sql`
     SELECT id FROM subscription_definitions
      WHERE surface = ${surface} AND id <> ${exceptId}
-       AND (owner_id IS NULL OR owner_id = ${ownerId}::uuid) LIMIT 1`)) as unknown as Array<{
+       AND (graph_id IS NULL OR graph_id = ${graphId}::uuid) LIMIT 1`)) as unknown as Array<{
     id: string;
   }>;
   return rows[0]?.id ?? null;
@@ -3638,16 +3638,16 @@ async function prepareSubscriptionRemove(_ctx: ExecCtx, rawInput: unknown): Prom
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const ownerId = applyCtx.req.actorUserId;
-      const current = await readSubscriptionRow(applyCtx.tx, ownerId, input.id);
+      const graphId = applyCtx.req.actorUserId;
+      const current = await readSubscriptionRow(applyCtx.tx, graphId, input.id);
       journal.operations.push({ op: 'subscription_remove', payload: { ...input } });
       if (input.id.startsWith('user/')) {
-        if (current === null || current.ownerId === null) {
+        if (current === null || current.graphId === null) {
           throw new ExecError('NOT_FOUND', `своей подписки ${input.id} нет`, {
             subscription: input.id,
           });
         }
-        await removeOwnSubscription(applyCtx.tx, ownerId, input.id);
+        await removeOwnSubscription(applyCtx.tx, graphId, input.id);
         journal.inverse.push({
           op: 'subscription_set',
           payload: {
@@ -3657,8 +3657,8 @@ async function prepareSubscriptionRemove(_ctx: ExecCtx, rawInput: unknown): Prom
           },
         });
       } else {
-        const before = await readSubscriptionDelta(applyCtx.tx, ownerId, input.id);
-        await removeSubscriptionDelta(applyCtx.tx, ownerId, input.id);
+        const before = await readSubscriptionDelta(applyCtx.tx, graphId, input.id);
+        await removeSubscriptionDelta(applyCtx.tx, graphId, input.id);
         // Прежней настройки не было — возвращать нечего; inverse пуст, как у `aspect_delta_remove`.
         if (before !== null && current !== null) {
           journal.inverse.push({

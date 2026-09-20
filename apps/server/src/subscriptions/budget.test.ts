@@ -300,7 +300,7 @@ async function engineOn<T>(
       tx,
       reg,
       def,
-      cctx: { ownerId: user, today, timeZone: DEFAULT_TIMEZONE, reg, thisEntityId: null },
+      cctx: { graphId: user, today, timeZone: DEFAULT_TIMEZONE, reg, thisEntityId: null },
     });
   });
 }
@@ -373,7 +373,7 @@ describe('область `where` ведомости и списка (B3 I-1)', (
     }) as BudgetSubscription;
   const rowOf = (definition: BudgetSubscription) => ({
     id: BUDGET_SUBSCRIPTION_ID,
-    ownerId: userA,
+    graphId: userA,
     surface: 'finance/budget-overview',
     definition,
     module: 'finance',
@@ -627,7 +627,7 @@ describe('умолчания реестра в интерпретаторе E (�
       // SQL-бэкенд: умолчание подставляет `castedExpr` — движение без `orbis/planned` В выдаче.
       const e = sql.raw('e');
       const idsOf = async (expr: ExprNode) =>
-        (await tx.execute(sql`SELECT e.id, e.props FROM entities e WHERE e.owner_id = ${userA}
+        (await tx.execute(sql`SELECT e.id, e.props FROM entities e WHERE e.graph_id = ${userA}
           AND ${compileContractPredicate('orbis/money-movement', expr, cctx, e)}`)) as unknown as Array<{
           id: string;
           props: Record<string, unknown>;

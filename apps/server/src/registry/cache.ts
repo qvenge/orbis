@@ -100,8 +100,8 @@ export function registryCacheStats(): RegistryCacheStats {
   return { size: cache.size, hits, misses, bypassed };
 }
 
-function cacheKey(ownerId: string, versions: RegistryVersions): string {
-  return `${ownerId}:${versions.ownerVersion}:${versions.systemVersion}`;
+function cacheKey(graphId: string, versions: RegistryVersions): string {
+  return `${graphId}:${versions.ownerVersion}:${versions.systemVersion}`;
 }
 
 /**
@@ -111,12 +111,12 @@ function cacheKey(ownerId: string, versions: RegistryVersions): string {
  * тем же снапшотом, что и всё остальное чтение вызывающего, иначе исполнитель валидировал
  * бы запись по реестру, которого в его транзакции ещё (или уже) нет.
  */
-export async function effectiveRegistry(tx: Tx, ownerId: string): Promise<RegistrySnapshot> {
-  const before = await readRegistryVersions(tx, ownerId);
-  const key = cacheKey(ownerId, before);
+export async function effectiveRegistry(tx: Tx, graphId: string): Promise<RegistrySnapshot> {
+  const before = await readRegistryVersions(tx, graphId);
+  const key = cacheKey(graphId, before);
   if (before.txHasWritten) {
     bypassed += 1;
-    return await build(tx, ownerId, before);
+    return await build(tx, graphId, before);
   }
   const hit = cache.get(key);
   if (hit !== undefined) {
@@ -128,8 +128,8 @@ export async function effectiveRegistry(tx: Tx, ownerId: string): Promise<Regist
     return hit;
   }
   misses += 1;
-  const snapshot = await build(tx, ownerId, before);
-  const after = await readRegistryVersions(tx, ownerId);
+  const snapshot = await build(tx, graphId, before);
+  const after = await readRegistryVersions(tx, graphId);
   if (
     after.txHasWritten ||
     after.ownerVersion !== before.ownerVersion ||
@@ -148,11 +148,11 @@ export async function effectiveRegistry(tx: Tx, ownerId: string): Promise<Regist
 
 async function build(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   versions: RegistryVersions,
 ): Promise<RegistrySnapshot> {
-  const rows = await loadRegistryRows(tx, ownerId);
-  const deltas = await loadRegistryDeltas(tx, ownerId);
+  const rows = await loadRegistryRows(tx, graphId);
+  const deltas = await loadRegistryDeltas(tx, graphId);
   return applyDeltas(
     { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
     deltas,

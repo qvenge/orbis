@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const entitySchema = z.object({
   id: z.string().uuid(),
-  ownerId: z.string().uuid(),
+  graphId: z.string().uuid(),
   title: z.string().min(1),
   emoji: z.string().nullable().default(null),
   body: z.string().default(''),

@@ -113,10 +113,10 @@ export const PROPOSED_CAP = 20;
  * операции реестра идут пачкой: свойство, заведённое операцией N той же транзакции, обязано
  * быть видно операции N+1, и снимок, снятый исполнителем ДО стадий, этого не показывает.
  */
-async function currentRegistry(tx: Tx, ownerId: string): Promise<RegistrySnapshot> {
-  const rows = await loadRegistryRows(tx, ownerId);
-  const deltas = await loadRegistryDeltas(tx, ownerId);
-  const versions = await readRegistryVersions(tx, ownerId);
+async function currentRegistry(tx: Tx, graphId: string): Promise<RegistrySnapshot> {
+  const rows = await loadRegistryRows(tx, graphId);
+  const deltas = await loadRegistryDeltas(tx, graphId);
+  const versions = await readRegistryVersions(tx, graphId);
   return applyDeltas(
     { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
     deltas,
@@ -318,14 +318,14 @@ const ROW_COLUMNS = sql`id, key, label, description, type, status, storage, scop
                         merged_into, module, rank, flags, created_at`;
 
 /**
- * СВОЯ строка свойства владельца — вход всех правок. `owner_id = …` в запросе стоит рядом с
+ * СВОЯ строка свойства владельца — вход всех правок. `graph_id = …` в запросе стоит рядом с
  * RLS не для скоупа (её и так даёт политика), а ради РАЗЛИЧЕНИЯ: встроенное свойство под
  * RLS видно, и без этого условия «правлю системное» отвечало бы «не найдено» вместо
  * подсказки про дельту.
  */
 export async function readOwnProperty(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   idOrKey: string,
 ): Promise<PropertyRow | undefined> {
   // АДРЕС РЕЗОЛВИТСЯ ЗДЕСЬ, ЗАПРОСОМ В ТРАНЗАКЦИИ, а не по снимку реестра. Снимок
@@ -337,7 +337,7 @@ export async function readOwnProperty(
   // форме uuid — `NAMESPACED_KEY_RE` такого не принимает (слэш обязателен).
   const rows = (await tx.execute(sql`
     SELECT ${ROW_COLUMNS} FROM property_definitions
-    WHERE owner_id = ${ownerId}::uuid AND (id = ${idOrKey} OR key = ${idOrKey})`)) as unknown as RawRow[];
+    WHERE graph_id = ${graphId}::uuid AND (id = ${idOrKey} OR key = ${idOrKey})`)) as unknown as RawRow[];
   const row = rows[0];
   return row === undefined ? undefined : toPropertyRow(row);
 }
@@ -354,19 +354,19 @@ export async function readOwnProperty(
  */
 export async function restorePropertyRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   id: string,
   row: PropertyRow | null,
 ): Promise<void> {
   if (row === null) {
     // Строку удаляем — значит нужен её `key`: ссылка на неё в теле записана ключом, и без
     // него проба «на ней ничего не держится» слепа ровно на текстовых держателей.
-    const existing = await readOwnProperty(tx, ownerId, id);
+    const existing = await readOwnProperty(tx, graphId, id);
     if (existing === undefined) return; // строки уже нет — откат идемпотентен
     // Страховка, а не логика: строку создало отменяемое действие, и значений у неё быть не
     // может. Если они появились ПОСЛЕ (кто-то успел записать), физическое удаление осиротило
     // бы их — отказываем fail-closed, откат целиком не применяется.
-    const used = await propertyUsage(tx, ownerId, id, existing.key);
+    const used = await propertyUsage(tx, graphId, id, existing.key);
     if (used.values > 0 || used.refs > 0) {
       throw new ExecError(
         'INVARIANT',
@@ -380,10 +380,10 @@ export async function restorePropertyRow(
     // починка бага, а дисциплина: `readOwnProperty` принимает и key, и первый же
     // вызывающий, передавший ключ, получил бы `WHERE id = <key>` — промах по нулю строк
     // молча, без единой ошибки.
-    await assertRegistryStaysReadable(tx, ownerId, existing.id, null);
+    await assertRegistryStaysReadable(tx, graphId, existing.id, null);
     await tx.execute(sql`
-      DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${existing.id}`);
-    await bumpOwnerRegistryVersion(tx, ownerId);
+      DELETE FROM property_definitions WHERE graph_id = ${graphId}::uuid AND id = ${existing.id}`);
+    await bumpOwnerRegistryVersion(tx, graphId);
     return;
   }
   // ОТКАТ ТОЖЕ ПРОХОДИТ ПРОБУ, хотя возвращает состояние, которое когда-то было читаемым.
@@ -391,9 +391,9 @@ export async function restorePropertyRow(
   // дельта аспекта — и возврат `scope` замкнул бы §А3-4 (`SCOPE_DUPLICATE`). Из двух
   // исходов выбран громкий: неприменимый откат — это отказ, который владелец видит и
   // разбирает, а нечитаемый реестр — это замок снаружи всего графа.
-  await assertRegistryStaysReadable(tx, ownerId, id, row);
-  await insertRow(tx, ownerId, row, { restore: true });
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await assertRegistryStaysReadable(tx, graphId, id, row);
+  await insertRow(tx, graphId, row, { restore: true });
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 /**
@@ -405,9 +405,9 @@ export async function restorePropertyRow(
  * только на ней. `createdAt` в схему определения не входит (её форма — то, что читает
  * реестр, а не то, что лежит в колонках), поэтому разбор идёт по строке БЕЗ него.
  */
-function definitionOf(row: PropertyRow, ownerId: string): PropertyDefinition {
+function definitionOf(row: PropertyRow, graphId: string): PropertyDefinition {
   const { createdAt: _createdAt, ...definition } = row;
-  const parsed = propertyDefinitionSchema.safeParse({ ...definition, ownerId });
+  const parsed = propertyDefinitionSchema.safeParse({ ...definition, graphId });
   if (!parsed.success) {
     throw new ExecError('VALIDATION', `определение свойства ${row.id} не разбирается схемой`, {
       property: row.id,
@@ -437,16 +437,16 @@ function definitionOf(row: PropertyRow, ownerId: string): PropertyDefinition {
  */
 async function assertRegistryStaysReadable(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   id: string,
   next: PropertyRow | null,
 ): Promise<void> {
-  const rows = await loadRegistryRows(tx, ownerId);
-  const deltas = await loadRegistryDeltas(tx, ownerId);
-  const versions = await readRegistryVersions(tx, ownerId);
+  const rows = await loadRegistryRows(tx, graphId);
+  const deltas = await loadRegistryDeltas(tx, graphId);
+  const versions = await readRegistryVersions(tx, graphId);
   const properties = new Map(rows.properties);
   if (next === null) properties.delete(id);
-  else properties.set(next.id, definitionOf(next, ownerId));
+  else properties.set(next.id, definitionOf(next, graphId));
   applyDeltas(
     {
       // Спредом, а не перечислением словарей: складывается РОВНО то, что сложит читатель
@@ -462,15 +462,15 @@ async function assertRegistryStaysReadable(
 
 async function insertRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   row: PropertyRow,
   opts: { restore?: boolean } = {},
 ): Promise<void> {
-  definitionOf(row, ownerId);
+  definitionOf(row, graphId);
   // ON CONFLICT нужен только откату (строку могли не удалить, а изменить); создание идёт по
   // пустому месту, и конфликт там означал бы занятый id — о нём молчать нельзя.
   const conflict = opts.restore
-    ? sql`ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO UPDATE SET
+    ? sql`ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO UPDATE SET
             key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
             type = EXCLUDED.type, status = EXCLUDED.status, storage = EXCLUDED.storage,
             scope = EXCLUDED.scope, merged_into = EXCLUDED.merged_into,
@@ -478,9 +478,9 @@ async function insertRow(
     : sql``;
   await tx.execute(sql`
     INSERT INTO property_definitions
-      (id, owner_id, key, label, description, type, status, storage, scope, merged_into,
+      (id, graph_id, key, label, description, type, status, storage, scope, merged_into,
        module, rank, flags, created_at)
-    VALUES (${row.id}, ${ownerId}::uuid, ${row.key}, ${JSON.stringify(row.label)}::jsonb,
+    VALUES (${row.id}, ${graphId}::uuid, ${row.key}, ${JSON.stringify(row.label)}::jsonb,
             ${JSON.stringify(row.description)}::jsonb, ${JSON.stringify(row.type)}::jsonb,
             ${row.status}, ${row.storage},
             ${row.scope === null ? null : JSON.stringify(row.scope)}::jsonb,
@@ -598,19 +598,19 @@ export interface CreatePropertyInput {
  */
 export async function createProperty(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   input: CreatePropertyInput,
 ): Promise<{ id: string; key: string }> {
   assertDeclaration(input.type, input.scope ?? null);
 
-  const reg = await currentRegistry(tx, ownerId);
+  const reg = await currentRegistry(tx, graphId);
   // Имена в `scope`/`ref.target` — к id: снимок реестра появляется только здесь, а форму
   // деревьев `assertDeclaration` проверил выше (она от имён не зависит).
   const { type, scope } = normalizeDeclaration(reg, input.type, input.scope ?? null);
 
   if (input.status === 'proposed') {
     const proposed = [...reg.properties.values()].filter(
-      (d) => d.ownerId !== null && d.status === 'proposed',
+      (d) => d.graphId !== null && d.status === 'proposed',
     ).length;
     if (proposed >= PROPOSED_CAP) {
       throw new ExecError(
@@ -627,7 +627,7 @@ export async function createProperty(
   // Форма входа шире по построению — она же описывает и системные строки, — и без гейта
   // модель, глядя на каталог из `orbis/*`, завела бы `orbis/priority` как своё. Сегодня это
   // прошло бы (ключ ещё не занят), а следующий релиз посеял бы встроенный `orbis/priority` —
-  // и по правилу «своя строка перекрывает системную» (`ORDER BY owner_id NULLS FIRST`,
+  // и по правилу «своя строка перекрывает системную» (`ORDER BY graph_id NULLS FIRST`,
   // `registry/load.ts`) свойство владельца МОЛЧА подменило бы встроенное во всех запросах,
   // промптах и `attach_*`-данных, возможно с другим типом. Отказ на занятом ключе от этого
   // не спасает: он смотрит на то, что занято СЕГОДНЯ.
@@ -667,9 +667,9 @@ export async function createProperty(
     flags: {},
     createdAt: new Date().toISOString(),
   };
-  await assertRegistryStaysReadable(tx, ownerId, row.id, row);
-  await insertRow(tx, ownerId, row);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await assertRegistryStaysReadable(tx, graphId, row.id, row);
+  await insertRow(tx, graphId, row);
+  await bumpOwnerRegistryVersion(tx, graphId);
   return { id: row.id, key: row.key };
 }
 
@@ -692,13 +692,13 @@ export interface UpdatePropertyPatch {
  */
 async function propertyUsage(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   id: string,
   key: string,
 ): Promise<{ values: number; refs: number }> {
   const rows = (await tx.execute(sql`
     SELECT count(*)::int AS n FROM entities WHERE props ? ${id}`)) as unknown as { n: number }[];
-  const holders = await collectPropertyHolders(tx, ownerId);
+  const holders = await collectPropertyHolders(tx, graphId);
   // ССЫЛКА ИЩЕТСЯ ПО ОБОИМ ИМЕНАМ, и это не перестраховка. В дереве §А5-7 лежит id, но
   // дерево приезжает и снаружи — входом `ast:` тула и значением `progress_source`, — а
   // резолвер границы принимает и key (`resolvePropertyRef`), и никто такое дерево к id не
@@ -725,18 +725,18 @@ async function propertyUsage(
  */
 export async function updateProperty(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   id: string,
   patch: UpdatePropertyPatch,
 ): Promise<void> {
-  const row = await readOwnProperty(tx, ownerId, id);
+  const row = await readOwnProperty(tx, graphId, id);
   if (row === undefined) {
     // Встроенное свойство под RLS видно — значит «не своё» надо отличать от «нет такого»:
     // подпись встроенного правится ДЕЛЬТОЙ (§А3-2), и молчаливый NOT_FOUND отправил бы
     // владельца искать несуществующую строку.
     const builtin = (await tx.execute(sql`
       SELECT 1 AS hit FROM property_definitions
-      WHERE owner_id IS NULL AND id = ${id}`)) as unknown as unknown[];
+      WHERE graph_id IS NULL AND id = ${id}`)) as unknown as unknown[];
     if (builtin.length > 0) {
       throw new ExecError(
         'VALIDATION',
@@ -766,17 +766,17 @@ export async function updateProperty(
   assertDeclaration(row.type, scopeInput);
   // Имена в `scope` — к id (§А5-2), той же меркой, что у `createProperty`. `type` правка не
   // меняет вовсе, поэтому `ref.target` здесь нормализовать нечего.
-  const { scope } = normalizeDeclaration(await currentRegistry(tx, ownerId), row.type, scopeInput);
+  const { scope } = normalizeDeclaration(await currentRegistry(tx, graphId), row.type, scopeInput);
 
   if (patch.status === 'deprecated' && row.status === 'proposed') {
-    const used = await propertyUsage(tx, ownerId, row.id, row.key);
+    const used = await propertyUsage(tx, graphId, row.id, row.key);
     if (used.values === 0 && used.refs === 0) {
       // Дальше адресуем ТОЛЬКО `row.id`: во вход мог прийти key (см. `readOwnProperty`),
       // и `WHERE id = <key>` не задел бы ни одной строки — молча, без единой ошибки.
-      await assertRegistryStaysReadable(tx, ownerId, row.id, null);
+      await assertRegistryStaysReadable(tx, graphId, row.id, null);
       await tx.execute(sql`
-        DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${row.id}`);
-      await bumpOwnerRegistryVersion(tx, ownerId);
+        DELETE FROM property_definitions WHERE graph_id = ${graphId}::uuid AND id = ${row.id}`);
+      await bumpOwnerRegistryVersion(tx, graphId);
       return;
     }
   }
@@ -789,9 +789,9 @@ export async function updateProperty(
     rank: patch.rank ?? row.rank,
     status: patch.status ?? row.status,
   };
-  await assertRegistryStaysReadable(tx, ownerId, row.id, next);
-  await insertRow(tx, ownerId, next, { restore: true });
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await assertRegistryStaysReadable(tx, graphId, row.id, next);
+  await insertRow(tx, graphId, next, { restore: true });
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 // ---------------------------------------------------------------------------
@@ -928,12 +928,12 @@ function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
  * они первым же новым родом держателя. Ровно это и случилось с дельтой: она была видна
  * графу зависимостей и невидима слиянию.
  */
-export async function collectPropertyHolders(tx: Tx, ownerId: string): Promise<PropertyHolder[]> {
+export async function collectPropertyHolders(tx: Tx, graphId: string): Promise<PropertyHolder[]> {
   const out: PropertyHolder[] = [];
 
   const regRows = (await tx.execute(sql`
     SELECT id, scope, type FROM property_definitions
-    WHERE owner_id = ${ownerId}::uuid AND (scope IS NOT NULL OR type->>'kind' = 'ref')
+    WHERE graph_id = ${graphId}::uuid AND (scope IS NOT NULL OR type->>'kind' = 'ref')
   `)) as unknown as RawRow[];
   for (const r of regRows) {
     const names = new Set<string>();
@@ -967,7 +967,7 @@ export async function collectPropertyHolders(tx: Tx, ownerId: string): Promise<P
   // `property`/`contract` в срезе А появиться не может (тулов нет), но обход, отбирающий
   // по `target_kind`, промолчал бы о ней ровно тогда, когда она всё-таки появится.
   const deltaRows = (await tx.execute(sql`
-    SELECT id, delta FROM registry_deltas WHERE owner_id = ${ownerId}::uuid`)) as unknown as RawRow[];
+    SELECT id, delta FROM registry_deltas WHERE graph_id = ${graphId}::uuid`)) as unknown as RawRow[];
   for (const r of deltaRows) {
     const names = new Set<string>();
     propertyNamesInDelta(r.delta, names);
@@ -992,7 +992,7 @@ function normalizeDeltaAddresses(
   const byName = new Map<string, string>();
   for (const def of properties.values()) {
     byName.set(def.id, def.id);
-    // Своя строка перекрывает встроенную — `ORDER BY owner_id NULLS FIRST` у `load.ts`.
+    // Своя строка перекрывает встроенную — `ORDER BY graph_id NULLS FIRST` у `load.ts`.
     byName.set(def.key, def.id);
   }
   const resolve = (name: string): string => {
@@ -1031,12 +1031,12 @@ function normalizeDeltaAddresses(
  */
 async function assertMergeLeftRegistryReadable(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   source: string,
   into: string,
 ): Promise<void> {
   try {
-    await currentRegistry(tx, ownerId);
+    await currentRegistry(tx, graphId);
   } catch (e) {
     if (e instanceof ExecError) {
       throw new ExecError(
@@ -1216,8 +1216,8 @@ export function resolveMergePair(
     let found: PropertyDefinition | undefined;
     for (const def of reg.properties.values()) {
       // Своя строка перекрывает встроенную — то же правило, что у `resolvePropertyRef`:
-      // строки идут `ORDER BY owner_id NULLS FIRST`, значит последняя запись и есть своя.
-      if (def.key === name && (found === undefined || found.ownerId === null)) found = def;
+      // строки идут `ORDER BY graph_id NULLS FIRST`, значит последняя запись и есть своя.
+      if (def.key === name && (found === undefined || found.graphId === null)) found = def;
     }
     return found;
   };
@@ -1232,7 +1232,7 @@ export function resolveMergePair(
   if (source.id === into.id) {
     throw new ExecError('VALIDATION', 'слияние свойства с самим собой', { property: source.id });
   }
-  if (source.ownerId === null) {
+  if (source.graphId === null) {
     // Встроенная строка неизменяема (§А3-2): проставленный ей `merged_into` стал бы
     // ВЕЧНЫМ дрейфом (`db/registry-drift.ts` сверяет эту колонку), а пересев затёр бы
     // указатель, оставив данные переписанными. Ошибиться можно только в эту сторону.
@@ -1366,10 +1366,10 @@ function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unkn
  */
 export async function mergeProperty(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   input: { source: string; into: string },
 ): Promise<MergeResult> {
-  const reg = await currentRegistry(tx, ownerId);
+  const reg = await currentRegistry(tx, graphId);
   const { source, into } = resolveMergePair(reg, input);
   const conflicts = await mergeValueConflicts(tx, source.id, into.id);
   if (conflicts.length > 0) {
@@ -1427,7 +1427,7 @@ export async function mergeProperty(
        SET meta = jsonb_set(r.meta, '{property}', to_jsonb(${into.id}::text))
      WHERE r.role = ${ROLE_REF} AND r.meta->>'property' = ${source.id}
        AND EXISTS (SELECT 1 FROM entities e
-                    WHERE e.id = r.source_id AND e.owner_id = ${ownerId}::uuid)
+                    WHERE e.id = r.source_id AND e.graph_id = ${graphId}::uuid)
     RETURNING r.id`)) as unknown as RawRow[];
   const mirrors = mirrorRows.map((r) => r.id as string);
 
@@ -1453,7 +1453,7 @@ export async function mergeProperty(
   // обязана знать `into.key`, а собранный после слияния снимок читал бы уже поглощённую
   // строку.
   const parseReg = parseRegistryOfSnapshot(reg);
-  const holders = (await collectPropertyHolders(tx, ownerId)).filter((h) =>
+  const holders = (await collectPropertyHolders(tx, graphId)).filter((h) =>
     h.properties.some((p) => names.has(p)),
   );
   const registry: MergeInverse['registry'] = [];
@@ -1465,7 +1465,7 @@ export async function mergeProperty(
     if (holder.kind === 'registry') {
       const rows = (await tx.execute(sql`
         SELECT scope, type FROM property_definitions
-        WHERE owner_id = ${ownerId}::uuid AND id = ${holder.id}`)) as unknown as RawRow[];
+        WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}`)) as unknown as RawRow[];
       const row = rows[0];
       if (row === undefined) continue;
       const nextScope = rewriteAst(row.scope ?? null, names, astTarget);
@@ -1475,7 +1475,7 @@ export async function mergeProperty(
         UPDATE property_definitions
            SET scope = ${nextScope === null ? null : JSON.stringify(nextScope)}::jsonb,
                type = ${JSON.stringify(nextType)}::jsonb
-         WHERE owner_id = ${ownerId}::uuid AND id = ${holder.id}`);
+         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}`);
       continue;
     }
     if (holder.kind === 'progress_source') {
@@ -1496,7 +1496,7 @@ export async function mergeProperty(
     if (holder.kind === 'delta') {
       const rows = (await tx.execute(sql`
         SELECT delta FROM registry_deltas
-        WHERE owner_id = ${ownerId}::uuid AND id = ${holder.id}::uuid FOR UPDATE
+        WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}::uuid FOR UPDATE
       `)) as unknown as RawRow[];
       const row = rows[0];
       if (row === undefined) continue;
@@ -1505,7 +1505,7 @@ export async function mergeProperty(
         UPDATE registry_deltas SET delta = ${JSON.stringify(
           rewriteDelta(row.delta, names, astTarget),
         )}::jsonb
-         WHERE owner_id = ${ownerId}::uuid AND id = ${holder.id}::uuid`);
+         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}::uuid`);
       continue;
     }
     const rows = (await tx.execute(sql`
@@ -1563,12 +1563,12 @@ export async function mergeProperty(
   // шагом. Иначе A→B→C копилось бы, а резолвер идёт в ОДИН шаг (Р10) и на второй бы не пошёл.
   const compactedRows = (await tx.execute(sql`
     UPDATE property_definitions SET merged_into = ${into.id}
-     WHERE owner_id = ${ownerId}::uuid AND merged_into = ${source.id}
+     WHERE graph_id = ${graphId}::uuid AND merged_into = ${source.id}
     RETURNING id`)) as unknown as RawRow[];
 
   await tx.execute(sql`
     UPDATE property_definitions SET merged_into = ${into.id}, status = 'deprecated'
-     WHERE owner_id = ${ownerId}::uuid AND id = ${source.id}`);
+     WHERE graph_id = ${graphId}::uuid AND id = ${source.id}`);
 
   // ПРОБА ПОСЛЕ ПЕРЕПИСЫВАНИЯ — последнее, что делает слияние перед версией.
   //
@@ -1594,9 +1594,9 @@ export async function mergeProperty(
   // них разные `required` и `rank`, и выбор между ними — решение владельца, а не операции
   // (тот же довод, по которому §А3-3 не сливает молча два похожих варианта). Отказ говорит,
   // что разобрать надо настройку, и оставляет разбор тому, кто её делал.
-  await assertMergeLeftRegistryReadable(tx, ownerId, source.id, into.id);
+  await assertMergeLeftRegistryReadable(tx, graphId, source.id, into.id);
 
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await bumpOwnerRegistryVersion(tx, graphId);
 
   return {
     rewrittenEntities: values.length,
@@ -1682,7 +1682,7 @@ function rewriteBodyDoc(
  * отмену там, где она как раз и нужна. Цена — потерянная поздняя правка; она предпочтена
  * неотменяемому слиянию тысячи записей.
  */
-export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Promise<void> {
+export async function undoMerge(tx: Tx, graphId: string, iv: MergeInverse): Promise<void> {
   // `iv.deltas` разбирается ЗАЩИТНО по той же причине, что `ref_sources_marked` в
   // `executor/undo.ts`: журнал append-only, и в нём лежат записи, сделанные до появления
   // четвёртого рода держателей. Отсутствие ключа означает «дельт не переписывали», а не
@@ -1708,7 +1708,7 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
       UPDATE property_definitions
          SET scope = ${r.scope === null ? null : JSON.stringify(r.scope)}::jsonb,
              type = ${JSON.stringify(r.type)}::jsonb
-       WHERE owner_id = ${ownerId}::uuid AND id = ${r.id}`);
+       WHERE graph_id = ${graphId}::uuid AND id = ${r.id}`);
   }
   for (const p of iv.progress) {
     await tx.execute(sql`
@@ -1744,7 +1744,7 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
   for (const d of deltaRows) {
     await tx.execute(sql`
       UPDATE registry_deltas SET delta = ${JSON.stringify(d.delta)}::jsonb
-       WHERE owner_id = ${ownerId}::uuid AND id = ${d.id}::uuid`);
+       WHERE graph_id = ${graphId}::uuid AND id = ${d.id}::uuid`);
   }
   // Зеркала (§А6-2) — обратная переподпись ровно по списку из inverse (см. `MergeInverse.mirrors`).
   const mirrorIds = Array.isArray(iv.mirrors) ? iv.mirrors : [];
@@ -1754,18 +1754,18 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
          SET meta = jsonb_set(r.meta, '{property}', to_jsonb(${iv.source}::text))
        WHERE r.id = ANY(${uuidArray(mirrorIds)})
          AND EXISTS (SELECT 1 FROM entities e
-                      WHERE e.id = r.source_id AND e.owner_id = ${ownerId}::uuid)`);
+                      WHERE e.id = r.source_id AND e.graph_id = ${graphId}::uuid)`);
   }
   for (const id of iv.compacted) {
     await tx.execute(sql`
       UPDATE property_definitions SET merged_into = ${iv.source}
-       WHERE owner_id = ${ownerId}::uuid AND id = ${id}`);
+       WHERE graph_id = ${graphId}::uuid AND id = ${id}`);
   }
   await tx.execute(sql`
     UPDATE property_definitions
        SET merged_into = ${iv.sourceRow.mergedInto}, status = ${iv.sourceRow.status}
-     WHERE owner_id = ${ownerId}::uuid AND id = ${iv.source}`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+     WHERE graph_id = ${graphId}::uuid AND id = ${iv.source}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1814,12 +1814,12 @@ export function execErrorOfImplementsIssue(
 
 export async function readAspectDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   aspectId: string,
 ): Promise<AspectDelta | null> {
   const rows = (await tx.execute(sql`
     SELECT delta FROM registry_deltas
-    WHERE owner_id = ${ownerId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}
+    WHERE graph_id = ${graphId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}
   `)) as unknown as RawRow[];
   return rows[0] === undefined ? null : (rows[0].delta as AspectDelta);
 }
@@ -1839,7 +1839,7 @@ export async function readAspectDelta(
  */
 export async function setAspectDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   aspectId: string,
   delta: AspectDelta,
 ): Promise<void> {
@@ -1851,7 +1851,7 @@ export async function setAspectDelta(
       issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
     });
   }
-  const rows = await loadRegistryRows(tx, ownerId);
+  const rows = await loadRegistryRows(tx, graphId);
   if (!rows.aspects.has(aspectId)) {
     throw new ExecError('NOT_FOUND', `аспекта ${aspectId} нет в реестре`, { aspect: aspectId });
   }
@@ -1872,13 +1872,13 @@ export async function setAspectDelta(
   const target = rows.aspects.get(aspectId) as AspectDefinition;
   const issue = checkClassMap(normalized, target, rows)[0];
   if (issue !== undefined) throw execErrorOfImplementsIssue(issue, { aspect: aspectId });
-  const versions = await readRegistryVersions(tx, ownerId);
-  const existing = await loadRegistryDeltas(tx, ownerId);
+  const versions = await readRegistryVersions(tx, graphId);
+  const existing = await loadRegistryDeltas(tx, graphId);
   const probe = [
     ...existing.filter((r) => !(r.targetKind === 'aspect' && r.targetId === aspectId)),
     {
       id: newId(),
-      ownerId,
+      graphId,
       targetKind: 'aspect' as const,
       targetId: aspectId,
       baseVersion: versions.systemVersion,
@@ -1893,20 +1893,20 @@ export async function setAspectDelta(
   );
 
   await tx.execute(sql`
-    INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
-    VALUES (${newId()}::uuid, ${ownerId}::uuid, 'aspect', ${aspectId},
+    INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+    VALUES (${newId()}::uuid, ${graphId}::uuid, 'aspect', ${aspectId},
             ${versions.systemVersion}, ${JSON.stringify(normalized)}::jsonb)
-    ON CONFLICT (owner_id, target_kind, target_id)
+    ON CONFLICT (graph_id, target_kind, target_id)
       DO UPDATE SET delta = EXCLUDED.delta, base_version = EXCLUDED.base_version`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 /** Снятие дельты: аспект возвращается к системному определению (§А3-2). */
-export async function removeAspectDelta(tx: Tx, ownerId: string, aspectId: string): Promise<void> {
+export async function removeAspectDelta(tx: Tx, graphId: string, aspectId: string): Promise<void> {
   await tx.execute(sql`
     DELETE FROM registry_deltas
-     WHERE owner_id = ${ownerId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+     WHERE graph_id = ${graphId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 /**
@@ -1918,18 +1918,18 @@ export async function removeAspectDelta(tx: Tx, ownerId: string, aspectId: strin
  */
 async function writeDeltaRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   targetKind: RegistryDeltaTargetKind,
   targetId: string,
   delta: RegistryDelta,
   rows: RegistryDictionaries,
   check?: (probe: RegistrySnapshot) => void,
 ): Promise<void> {
-  const versions = await readRegistryVersions(tx, ownerId);
-  const existing = await loadRegistryDeltas(tx, ownerId);
+  const versions = await readRegistryVersions(tx, graphId);
+  const existing = await loadRegistryDeltas(tx, graphId);
   const probe = [
     ...existing.filter((r) => !(r.targetKind === targetKind && r.targetId === targetId)),
-    { id: newId(), ownerId, targetKind, targetId, baseVersion: versions.systemVersion, delta },
+    { id: newId(), graphId, targetKind, targetId, baseVersion: versions.systemVersion, delta },
   ];
   // Проба считается БЕЗУСЛОВНО, а не внутри аргумента `check?.()`: у необязательного вызова
   // аргумент не вычисляется вовсе, и род БЕЗ своей проверки писал бы неприменимую строку
@@ -1942,35 +1942,35 @@ async function writeDeltaRow(
   );
   check?.(applied);
   await tx.execute(sql`
-    INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
-    VALUES (${newId()}::uuid, ${ownerId}::uuid, ${targetKind}, ${targetId},
+    INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+    VALUES (${newId()}::uuid, ${graphId}::uuid, ${targetKind}, ${targetId},
             ${versions.systemVersion}, ${JSON.stringify(delta)}::jsonb)
-    ON CONFLICT (owner_id, target_kind, target_id)
+    ON CONFLICT (graph_id, target_kind, target_id)
       DO UPDATE SET delta = EXCLUDED.delta, base_version = EXCLUDED.base_version`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 async function readDeltaRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   kind: RegistryDeltaTargetKind,
   targetId: string,
 ): Promise<unknown> {
   const rows = (await tx.execute(sql`
     SELECT delta FROM registry_deltas
-    WHERE owner_id = ${ownerId}::uuid AND target_kind = ${kind} AND target_id = ${targetId}`)) as unknown as RawRow[];
+    WHERE graph_id = ${graphId}::uuid AND target_kind = ${kind} AND target_id = ${targetId}`)) as unknown as RawRow[];
   return rows[0]?.delta;
 }
 
 async function removeDeltaRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   kind: RegistryDeltaTargetKind,
   targetId: string,
 ): Promise<void> {
   await tx.execute(sql`DELETE FROM registry_deltas
-     WHERE owner_id = ${ownerId}::uuid AND target_kind = ${kind} AND target_id = ${targetId}`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+     WHERE graph_id = ${graphId}::uuid AND target_kind = ${kind} AND target_id = ${targetId}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 /**
@@ -2101,12 +2101,12 @@ function exprNormalizeRegistryOf(reg: RegistrySnapshot): ExprNormalizeRegistry {
 /** Снимок владельца со ВСЕМИ его дельтами, кроме названной, — «как читалось бы после правки». */
 async function probeSnapshot(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   rows: RegistryDictionaries,
   drop?: { targetKind: RegistryDeltaTargetKind; targetId: string },
 ): Promise<RegistrySnapshot> {
-  const versions = await readRegistryVersions(tx, ownerId);
-  const deltas = await loadRegistryDeltas(tx, ownerId);
+  const versions = await readRegistryVersions(tx, graphId);
+  const deltas = await loadRegistryDeltas(tx, graphId);
   return applyDeltas(
     { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
     drop === undefined
@@ -2117,16 +2117,16 @@ async function probeSnapshot(
 
 export async function readContractDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   contractId: string,
 ): Promise<ContractDelta | null> {
-  const delta = await readDeltaRow(tx, ownerId, 'contract', contractId);
+  const delta = await readDeltaRow(tx, graphId, 'contract', contractId);
   return delta === undefined ? null : (delta as ContractDelta);
 }
 
 export async function setContractDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   contractId: string,
   delta: ContractDelta,
 ): Promise<void> {
@@ -2138,7 +2138,7 @@ export async function setContractDelta(
       issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
     });
   }
-  const rows = await loadRegistryRows(tx, ownerId);
+  const rows = await loadRegistryRows(tx, graphId);
   if (!rows.contracts.has(contractId)) {
     throw new ExecError('NOT_FOUND', `контракта ${contractId} нет в реестре`, {
       contract: contractId,
@@ -2146,36 +2146,36 @@ export async function setContractDelta(
   }
   // Дельта наборов — ЗАМЕНА целиком (`DO UPDATE SET delta = EXCLUDED.delta`), поэтому набор,
   // выпавший из нового состава, исчезает так же, как при снятии дельты: проба одна на оба пути.
-  await writeDeltaRow(tx, ownerId, 'contract', contractId, parsed.data, rows, (probe) => {
+  await writeDeltaRow(tx, graphId, 'contract', contractId, parsed.data, rows, (probe) => {
     assertSetsFreeOfSubscribers(probe, contractId);
   });
 }
 
 export async function removeContractDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   contractId: string,
 ): Promise<void> {
-  const rows = await loadRegistryRows(tx, ownerId);
+  const rows = await loadRegistryRows(tx, graphId);
   assertSetsFreeOfSubscribers(
-    await probeSnapshot(tx, ownerId, rows, { targetKind: 'contract', targetId: contractId }),
+    await probeSnapshot(tx, graphId, rows, { targetKind: 'contract', targetId: contractId }),
     contractId,
   );
-  await removeDeltaRow(tx, ownerId, 'contract', contractId);
+  await removeDeltaRow(tx, graphId, 'contract', contractId);
 }
 
 export async function readSubscriptionDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   subscriptionId: string,
 ): Promise<SubscriptionDelta | null> {
-  const delta = await readDeltaRow(tx, ownerId, 'subscription', subscriptionId);
+  const delta = await readDeltaRow(tx, graphId, 'subscription', subscriptionId);
   return delta === undefined ? null : (delta as SubscriptionDelta);
 }
 
 export async function setSubscriptionDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   subscriptionId: string,
   delta: SubscriptionDelta,
 ): Promise<void> {
@@ -2187,7 +2187,7 @@ export async function setSubscriptionDelta(
       issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
     });
   }
-  const rows = await loadRegistryRows(tx, ownerId);
+  const rows = await loadRegistryRows(tx, graphId);
   if (!rows.subscriptions.has(subscriptionId)) {
     throw new ExecError('NOT_FOUND', `подписки ${subscriptionId} нет в реестре`, {
       subscription: subscriptionId,
@@ -2199,10 +2199,10 @@ export async function setSubscriptionDelta(
   const normalized = {
     definition: normalizeSubscriptionExprs(
       parsed.data.definition,
-      exprNormalizeRegistryOf(await probeSnapshot(tx, ownerId, rows)),
+      exprNormalizeRegistryOf(await probeSnapshot(tx, graphId, rows)),
     ),
   } as SubscriptionDelta;
-  await writeDeltaRow(tx, ownerId, 'subscription', subscriptionId, normalized, rows, (probe) => {
+  await writeDeltaRow(tx, graphId, 'subscription', subscriptionId, normalized, rows, (probe) => {
     // СМЫСЛ ПРОВЕРЯЕТСЯ ЗДЕСЬ, а не в applyDeltas: на записи владелец видит отказ и может его исправить,
     // на чтении — только запертый реестр (Р-И-7).
     const merged = probe.subscriptions.get(subscriptionId);
@@ -2212,34 +2212,34 @@ export async function setSubscriptionDelta(
 
 export async function removeSubscriptionDelta(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   subscriptionId: string,
 ): Promise<void> {
-  await removeDeltaRow(tx, ownerId, 'subscription', subscriptionId);
+  await removeDeltaRow(tx, graphId, 'subscription', subscriptionId);
 }
 
 /**
  * Строка подписки по адресу — СВОЯ, если она есть, иначе системная.
  *
  * Один читатель на оба вопроса, потому что вопрос один: «что сейчас стоит по этому адресу».
- * `ORDER BY owner_id NULLS LAST` — та же дисциплина перекрытия, что у `loadRegistryRows`
+ * `ORDER BY graph_id NULLS LAST` — та же дисциплина перекрытия, что у `loadRegistryRows`
  * (`registry/load.ts`), только развёрнутая: там снимок собирается сверху вниз и своя строка
  * ложится ПОСЛЕ системной, здесь нужна одна строка и своя важнее.
  */
 export async function readSubscriptionRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   id: string,
 ): Promise<SubscriptionRow | null> {
   const rows = (await tx.execute(sql`
-    SELECT id, owner_id, surface, definition, module, rank FROM subscription_definitions
-     WHERE id = ${id} AND (owner_id IS NULL OR owner_id = ${ownerId}::uuid)
-     ORDER BY owner_id NULLS LAST LIMIT 1`)) as unknown as RawRow[];
+    SELECT id, graph_id, surface, definition, module, rank FROM subscription_definitions
+     WHERE id = ${id} AND (graph_id IS NULL OR graph_id = ${graphId}::uuid)
+     ORDER BY graph_id NULLS LAST LIMIT 1`)) as unknown as RawRow[];
   const r = rows[0];
   if (r === undefined) return null;
   return {
     id: r.id as string,
-    ownerId: (r.owner_id as string | null) ?? null,
+    graphId: (r.graph_id as string | null) ?? null,
     surface: r.surface as string,
     definition: r.definition as SubscriptionDefinition,
     module: (r.module as string | null) ?? null,
@@ -2257,7 +2257,7 @@ export async function readSubscriptionRow(
  */
 export async function setOwnSubscription(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   row: SubscriptionRow,
 ): Promise<void> {
   if (!row.id.startsWith('user/')) {
@@ -2270,26 +2270,26 @@ export async function setOwnSubscription(
   // СНИМОК С ДЕЛЬТАМИ, а не сырые строки (Ф-Б1-55в): своя подписка вправе ссылаться на СВОЙ
   // набор контракта — он живёт дельтой, и без неё та же декларация, что законна у
   // `setSubscriptionDelta`, здесь получала бы `EXPR_TYPE`. Один вердикт на оба пути записи.
-  const rows = await loadRegistryRows(tx, ownerId);
-  const probe = await probeSnapshot(tx, ownerId, rows);
+  const rows = await loadRegistryRows(tx, graphId);
+  const probe = await probeSnapshot(tx, graphId, rows);
   // Тот же резолв имён, что у дельты: правило адреса одно на оба писателя языка E.
   const definition = normalizeSubscriptionExprs(row.definition, exprNormalizeRegistryOf(probe));
-  assertSubscription({ ...row, ownerId, definition }, { reg: probe, systemSeed: false });
+  assertSubscription({ ...row, graphId, definition }, { reg: probe, systemSeed: false });
   await tx.execute(sql`
-    INSERT INTO subscription_definitions (id, owner_id, surface, definition, module, rank)
-    VALUES (${row.id}, ${ownerId}::uuid, ${row.surface},
+    INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
+    VALUES (${row.id}, ${graphId}::uuid, ${row.surface},
             ${JSON.stringify(definition)}::jsonb, ${row.module}, ${row.rank})
-    ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL
+    ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL
       DO UPDATE SET surface = EXCLUDED.surface, definition = EXCLUDED.definition,
                     module = EXCLUDED.module, rank = EXCLUDED.rank`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
-/** Снятие своей подписки: системные строки не трогаются (`owner_id IS NOT NULL`). */
-export async function removeOwnSubscription(tx: Tx, ownerId: string, id: string): Promise<void> {
+/** Снятие своей подписки: системные строки не трогаются (`graph_id IS NOT NULL`). */
+export async function removeOwnSubscription(tx: Tx, graphId: string, id: string): Promise<void> {
   await tx.execute(sql`
-    DELETE FROM subscription_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${id}`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+    DELETE FROM subscription_definitions WHERE graph_id = ${graphId}::uuid AND id = ${id}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 // ---------------------------------------------------------------------------
@@ -2322,7 +2322,7 @@ export interface AspectRow {
   createdAt: string;
 }
 
-const ASPECT_ROW_COLUMNS = sql`id, owner_id, key, label, description, properties, implements,
+const ASPECT_ROW_COLUMNS = sql`id, graph_id, key, label, description, properties, implements,
   ai_instructions, tag_mappings, view_config, module, service, rank, created_at`;
 
 function toAspectRow(r: RawRow): AspectRow {
@@ -2354,19 +2354,19 @@ function toAspectRow(r: RawRow): AspectRow {
  */
 export async function readOwnAspect(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   idOrKey: string,
 ): Promise<AspectRow | undefined> {
   const rows = (await tx.execute(sql`
     SELECT ${ASPECT_ROW_COLUMNS} FROM aspect_definitions
-    WHERE owner_id = ${ownerId}::uuid AND (id = ${idOrKey} OR key = ${idOrKey})`)) as unknown as RawRow[];
+    WHERE graph_id = ${graphId}::uuid AND (id = ${idOrKey} OR key = ${idOrKey})`)) as unknown as RawRow[];
   return rows[0] === undefined ? undefined : toAspectRow(rows[0]);
 }
 
 /** Строка → определение со строгим разбором; отказ ДО записи (образец `definitionOf` свойств). */
-function aspectDefinitionOf(row: AspectRow, ownerId: string): AspectDefinition {
+function aspectDefinitionOf(row: AspectRow, graphId: string): AspectDefinition {
   const { createdAt: _createdAt, ...definition } = row;
-  const parsed = aspectDefinitionSchema.safeParse({ ...definition, ownerId });
+  const parsed = aspectDefinitionSchema.safeParse({ ...definition, graphId });
   if (!parsed.success) {
     throw new ExecError('VALIDATION', `определение аспекта ${row.id} не разбирается схемой`, {
       reason: 'ASPECT_MALFORMED',
@@ -2398,7 +2398,7 @@ function aspectDefinitionOf(row: AspectRow, ownerId: string): AspectDefinition {
  * говорит `reason: 'UNKNOWN_PROPERTY'` с уточнением `cause: 'merged'` — ровно та же пара
  * «код + уточнение», что кладёт `execErrorOfImplementsIssue`.
  */
-function assertImplements(next: AspectRow, ownerId: string, reg: RegistrySnapshot): void {
+function assertImplements(next: AspectRow, graphId: string, reg: RegistrySnapshot): void {
   for (const binding of next.implements) {
     for (const [slot, propertyId] of Object.entries(binding.bind)) {
       const def = reg.properties.get(propertyId);
@@ -2418,7 +2418,7 @@ function assertImplements(next: AspectRow, ownerId: string, reg: RegistrySnapsho
       );
     }
   }
-  const issue = checkImplements(aspectDefinitionOf(next, ownerId), reg)[0];
+  const issue = checkImplements(aspectDefinitionOf(next, graphId), reg)[0];
   if (issue === undefined) return;
   // Единственное отображение ImplementsIssue → ExecError — `execErrorOfImplementsIssue` из этого же
   // файла (задача 13, Р-К-35): BIND_TYPE/VARIANT_UNMAPPED — свои коды §С1-2, прочие — VALIDATION с `reason`.
@@ -2464,11 +2464,11 @@ export interface CreateAspectInput {
 
 export async function createAspect(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   input: CreateAspectInput,
 ): Promise<{ id: string }> {
   // Гейт namespace — довод `createProperty` (`KEY_NAMESPACE`): своя строка с ключом будущего
-  // встроенного аспекта МОЛЧА подменила бы его после пересева (`ORDER BY owner_id NULLS FIRST`).
+  // встроенного аспекта МОЛЧА подменила бы его после пересева (`ORDER BY graph_id NULLS FIRST`).
   if (!input.key.startsWith('user/')) {
     throw new ExecError(
       'VALIDATION',
@@ -2476,7 +2476,7 @@ export async function createAspect(
       { reason: 'KEY_NAMESPACE', key: input.key },
     );
   }
-  const reg = await currentRegistry(tx, ownerId);
+  const reg = await currentRegistry(tx, graphId);
   // Суффикса разведения у аспекта НЕТ, в отличие от свойства: его key — это его id и имя тула
   // `attach_*`, и «завёл user/sleep, получил user/sleep-2» подменило бы уже названный адрес.
   if (reg.aspects.has(input.key)) {
@@ -2562,18 +2562,18 @@ export async function createAspect(
     rank: Math.max(0, ...[...reg.aspects.values()].map((a) => a.rank)) + 1,
     createdAt: new Date().toISOString(),
   };
-  assertImplements(row, ownerId, reg);
-  await insertAspectRow(tx, ownerId, row);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  assertImplements(row, graphId, reg);
+  await insertAspectRow(tx, graphId, row);
+  await bumpOwnerRegistryVersion(tx, graphId);
   return { id: row.id };
 }
 
 /** Своя строка под правку привязок; встроенный аспект — отказ с указанием законного пути. */
-async function ownAspectForWrite(tx: Tx, ownerId: string, aspectId: string): Promise<AspectRow> {
-  const row = await readOwnAspect(tx, ownerId, aspectId);
+async function ownAspectForWrite(tx: Tx, graphId: string, aspectId: string): Promise<AspectRow> {
+  const row = await readOwnAspect(tx, graphId, aspectId);
   if (row !== undefined) return row;
   const builtin = (await tx.execute(sql`
-    SELECT 1 AS hit FROM aspect_definitions WHERE owner_id IS NULL AND id = ${aspectId}`)) as unknown as unknown[];
+    SELECT 1 AS hit FROM aspect_definitions WHERE graph_id IS NULL AND id = ${aspectId}`)) as unknown as unknown[];
   if (builtin.length > 0) {
     // Приём `BUILTIN_IMMUTABLE` свойств: молчаливый NOT_FOUND отправил бы владельца искать
     // несуществующую строку, а законный путь есть — дельта (задача 13 кладёт в неё `classMap`,
@@ -2590,27 +2590,27 @@ async function ownAspectForWrite(tx: Tx, ownerId: string, aspectId: string): Pro
 
 export async function setAspectImplements(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   aspectId: string,
   bindings: AspectImplements[],
 ): Promise<void> {
-  const row = await ownAspectForWrite(tx, ownerId, aspectId);
-  const reg = await currentRegistry(tx, ownerId);
+  const row = await ownAspectForWrite(tx, graphId, aspectId);
+  const reg = await currentRegistry(tx, graphId);
   const next = normalizeBindAddresses(bindings, reg);
-  assertImplements({ ...row, implements: next }, ownerId, reg);
+  assertImplements({ ...row, implements: next }, graphId, reg);
   await tx.execute(sql`
     UPDATE aspect_definitions SET implements = ${JSON.stringify(next)}::jsonb
-     WHERE owner_id = ${ownerId}::uuid AND id = ${row.id}`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+     WHERE graph_id = ${graphId}::uuid AND id = ${row.id}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 export async function removeAspectImplements(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   aspectId: string,
   contract: string,
 ): Promise<void> {
-  const row = await ownAspectForWrite(tx, ownerId, aspectId);
+  const row = await ownAspectForWrite(tx, graphId, aspectId);
   const kept = row.implements.filter((b) => b.contract !== contract);
   if (kept.length === row.implements.length) {
     // Тихий успех хуже отказа: владелец снял НЕ ТУ привязку и узнал бы об этом только по тому,
@@ -2622,8 +2622,8 @@ export async function removeAspectImplements(
   }
   await tx.execute(sql`
     UPDATE aspect_definitions SET implements = ${JSON.stringify(kept)}::jsonb
-     WHERE owner_id = ${ownerId}::uuid AND id = ${row.id}`);
-  await bumpOwnerRegistryVersion(tx, ownerId);
+     WHERE graph_id = ${graphId}::uuid AND id = ${row.id}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 /**
@@ -2633,12 +2633,12 @@ export async function removeAspectImplements(
  */
 export async function restoreAspectRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   id: string,
   row: AspectRow | null,
 ): Promise<void> {
   if (row === null) {
-    const existing = await readOwnAspect(tx, ownerId, id);
+    const existing = await readOwnAspect(tx, graphId, id);
     if (existing === undefined) return; // строки уже нет — откат идемпотентен
     // Страховка, а не логика (образец `restorePropertyRow`): аспект создало отменяемое
     // действие, носителей у него быть не может. Появились ПОСЛЕ — снос осиротил бы записи, у
@@ -2646,7 +2646,7 @@ export async function restoreAspectRow(
     // каждой их правке.
     const worn = (await tx.execute(sql`
       SELECT count(*)::int AS n FROM entities
-       WHERE owner_id = ${ownerId}::uuid AND aspects @> ARRAY[${existing.id}]::text[]`)) as unknown as {
+       WHERE graph_id = ${graphId}::uuid AND aspects @> ARRAY[${existing.id}]::text[]`)) as unknown as {
       n: number;
     }[];
     const n = Number(worn[0]?.n ?? 0);
@@ -2658,25 +2658,25 @@ export async function restoreAspectRow(
       );
     }
     await tx.execute(sql`
-      DELETE FROM aspect_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${existing.id}`);
-    await bumpOwnerRegistryVersion(tx, ownerId);
+      DELETE FROM aspect_definitions WHERE graph_id = ${graphId}::uuid AND id = ${existing.id}`);
+    await bumpOwnerRegistryVersion(tx, graphId);
     return;
   }
-  await insertAspectRow(tx, ownerId, row, { restore: true });
-  await bumpOwnerRegistryVersion(tx, ownerId);
+  await insertAspectRow(tx, graphId, row, { restore: true });
+  await bumpOwnerRegistryVersion(tx, graphId);
 }
 
 async function insertAspectRow(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   row: AspectRow,
   opts: { restore?: boolean } = {},
 ): Promise<void> {
-  aspectDefinitionOf(row, ownerId); // fail-closed до записи
+  aspectDefinitionOf(row, graphId); // fail-closed до записи
   // ON CONFLICT нужен только откату; создание идёт по пустому месту, и конфликт там означал бы
   // занятый id — о нём молчать нельзя (тот же размен, что в `insertRow` свойств).
   const conflict = opts.restore
-    ? sql`ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO UPDATE SET
+    ? sql`ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO UPDATE SET
             key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
             properties = EXCLUDED.properties, implements = EXCLUDED.implements,
             ai_instructions = EXCLUDED.ai_instructions, tag_mappings = EXCLUDED.tag_mappings,
@@ -2685,9 +2685,9 @@ async function insertAspectRow(
     : sql``;
   await tx.execute(sql`
     INSERT INTO aspect_definitions
-      (id, owner_id, key, label, description, properties, implements, ai_instructions,
+      (id, graph_id, key, label, description, properties, implements, ai_instructions,
        tag_mappings, view_config, module, service, rank, created_at)
-    VALUES (${row.id}, ${ownerId}::uuid, ${row.key}, ${JSON.stringify(row.label)}::jsonb,
+    VALUES (${row.id}, ${graphId}::uuid, ${row.key}, ${JSON.stringify(row.label)}::jsonb,
             ${JSON.stringify(row.description)}::jsonb, ${JSON.stringify(row.properties)}::jsonb,
             ${JSON.stringify(row.implements)}::jsonb, ${row.aiInstructions},
             ${row.tagMappings.length === 0 ? sql`ARRAY[]::text[]` : textArray(row.tagMappings)},
@@ -2720,13 +2720,13 @@ async function insertAspectRow(
  * через исполнителя. Пересев (`db/seed-registries.ts`) пишет system-строки и сливает дельты
  * админским подключением и этого замка НЕ БЕРЁТ: он идёт на деплое, вне запроса, и своей
  * сериализации у пары «пересев ∥ операция владельца» сегодня нет. Общего вреда это не несёт
- * (пересев трогает `owner_id IS NULL`, операции — свои строки), а единственное пересечение —
+ * (пересев трогает `graph_id IS NULL`, операции — свои строки), а единственное пересечение —
  * `registry_deltas`: слияние на пересеве переписывает ту же строку, которую владелец мог
  * править секунду назад. Условие, при котором это перестанет быть допустимым: у пересева
  * появится шаг, читающий строки владельца и решающий по ним, — тогда замок нужен и там.
  */
-export async function lockOwnerRegistry(tx: Tx, ownerId: string): Promise<void> {
+export async function lockOwnerRegistry(tx: Tx, graphId: string): Promise<void> {
   await tx.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${ownerId}:registry`}, 0))`,
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graphId}:registry`}, 0))`,
   );
 }

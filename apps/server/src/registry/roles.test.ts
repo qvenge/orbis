@@ -54,11 +54,11 @@ test('своя строка роли перекрывает встроенную
   await withIdentity(db, owner, async (tx) => {
     await tx.execute(sql`
       INSERT INTO relation_role_definitions
-        (id, owner_id, key, label, description, source_label, target_label,
+        (id, graph_id, key, label, description, source_label, target_label,
          hierarchical, constraints, "symmetric", module, rank)
       SELECT id, ${owner}::uuid, key, label, description, source_label, target_label,
              false, constraints, "symmetric", module, rank
-        FROM relation_role_definitions WHERE id = 'subitem' AND owner_id IS NULL`);
+        FROM relation_role_definitions WHERE id = 'subitem' AND graph_id IS NULL`);
     // Инкремент версии — В ТОЙ ЖЕ транзакции, что и мутация реестра (§А10-1): именно так
     // обязан писать всякий писатель, и фикстура не исключение.
     await bumpOwnerRegistryVersion(tx, owner);

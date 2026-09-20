@@ -187,7 +187,7 @@ export const agentRunRouter = router({
     .input(z.object({}).strict())
     .mutation(async ({ ctx }): Promise<{ swept: number }> => {
       try {
-        return await sweepStaleRuns(ctx.db, { ownerId: ctx.actorUserId, actorKind: 'owner' });
+        return await sweepStaleRuns(ctx.db, { graphId: ctx.actorUserId, actorKind: 'owner' });
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;

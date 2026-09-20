@@ -16,9 +16,9 @@ import type { Tx } from '../db/with-identity';
  * НЕ инвалидируется — маска в ключ кеша не входит по построению, а выключенный модуль просто
  * не читает ведомость. Включение обратно отдаёт те же числа, что и до выключения.
  */
-export async function disabledModulesOf(tx: Tx, ownerId: string): Promise<readonly string[]> {
+export async function disabledModulesOf(tx: Tx, graphId: string): Promise<readonly string[]> {
   const rows = (await tx.execute(sql`
-    SELECT disabled_modules FROM user_settings WHERE owner_id = ${ownerId}::uuid`)) as unknown as {
+    SELECT disabled_modules FROM user_settings WHERE graph_id = ${graphId}::uuid`)) as unknown as {
     disabled_modules: string[] | null;
   }[];
   // Строки настроек может не быть (владелец не проходил онбординг) — законный случай:
@@ -29,21 +29,21 @@ export async function disabledModulesOf(tx: Tx, ownerId: string): Promise<readon
 /** Идемпотентно в обе стороны: повтор не дублирует элемент, включение снимает ровно его. */
 export async function setModuleDisabled(
   tx: Tx,
-  ownerId: string,
+  graphId: string,
   module: string,
   disabled: boolean,
 ): Promise<void> {
   await tx.execute(
     disabled
-      ? sql`INSERT INTO user_settings (owner_id, disabled_modules)
-            VALUES (${ownerId}::uuid, ARRAY[${module}]::text[])
-            ON CONFLICT (owner_id) DO UPDATE
+      ? sql`INSERT INTO user_settings (graph_id, disabled_modules)
+            VALUES (${graphId}::uuid, ARRAY[${module}]::text[])
+            ON CONFLICT (graph_id) DO UPDATE
               SET disabled_modules = array_append(user_settings.disabled_modules, ${module}),
                   updated_at = now()
               WHERE NOT (${module} = ANY(user_settings.disabled_modules))`
       : // Строки нет — выключать нечего: INSERT здесь завёл бы настройки мимо онборда
         sql`UPDATE user_settings
             SET disabled_modules = array_remove(disabled_modules, ${module}), updated_at = now()
-            WHERE owner_id = ${ownerId}::uuid AND ${module} = ANY(disabled_modules)`,
+            WHERE graph_id = ${graphId}::uuid AND ${module} = ANY(disabled_modules)`,
   );
 }

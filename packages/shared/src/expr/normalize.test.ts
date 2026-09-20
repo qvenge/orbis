@@ -14,7 +14,7 @@ import { normalizeExpr } from './normalize';
  * Реестр нормализации = реестр разбора Q ПЛЮС словарь контрактов: у `ParseRegistry`
  * контрактов нет, а `normalizeExpr` резолвит `class.contract` и `has_relation.in_set.contract`.
  * Пользовательский контракт заводится ЗДЕСЬ, потому что во встроенной шестёрке записи с
- * key ≠ id нет ни одной (`ownerId` наследуется от образца: резолв ИМЁН его не читает).
+ * key ≠ id нет ни одной (`graphId` наследуется от образца: резолв ИМЁН его не читает).
  */
 const USER_CONTRACT_ID = '019d48ea-4188-7c02-8e96-1f0000000101';
 const COMPLETABLE = BUILTIN_CONTRACT_DEFS.find(

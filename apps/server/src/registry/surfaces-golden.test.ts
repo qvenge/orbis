@@ -168,7 +168,7 @@ describe('снимки поверхностей: консервативност�
   test('мир снимков засеян целиком: 18 сущностей и ребро dependency', async () => {
     expect(
       await countOf(
-        sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${SURFACE_OWNER_ID}`,
+        sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${SURFACE_OWNER_ID}`,
       ),
     ).toBe(SURFACE_SLUGS.length);
     // Счёт по ВЛАДЕЛЬЦУ, а не по базе: рядом стоят ещё три мира состояний, и «одно ребро на всю
@@ -179,7 +179,7 @@ describe('снимки поверхностей: консервативност�
     expect(
       await countOf(sql`SELECT count(*)::int AS n FROM relations r
       JOIN entities e ON e.id = r.source_id
-      WHERE r.role = 'dependency' AND e.owner_id = ${SURFACE_OWNER_ID}`),
+      WHERE r.role = 'dependency' AND e.graph_id = ${SURFACE_OWNER_ID}`),
     ).toBe(1);
   });
 

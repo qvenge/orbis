@@ -66,11 +66,11 @@ const ownerCaller = createCaller({
 beforeAll(async () => {
   delete process.env.ORBIS_PUBLIC_URL; // база метаданных = адрес запроса (локальный стенд)
   await truncateAll();
-  TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'тестовый агент' });
+  TOKEN = await issuePatGrant(db, { graphId: owner, label: 'тестовый агент' });
   // Скоуп worker выдаётся штатным путём (Задача 8): правка строки под admin-DSN,
   // стоявшая здесь прежде, обходила бы ровно тот код, который теперь и проверяется.
   WORKER_TOKEN = await issuePatGrant(db, {
-    ownerId: owner,
+    graphId: owner,
     label: 'фоновый исполнитель',
     scope: 'worker',
   });
@@ -210,13 +210,13 @@ describe('/mcp: аутентификация по гранту ДО MCP-логи
   // Ради этого теста доступ и переезжал из env в таблицу (Р4): отзыв — строка в базе,
   // а не смена переменной с передеплоем. Токен тут настоящий и до отзыва рабочий.
   test('отозванный токен больше не пускает', async () => {
-    const token = await issuePatGrant(db, { ownerId: owner, label: 'на отзыв' });
+    const token = await issuePatGrant(db, { graphId: owner, label: 'на отзыв' });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный токен не прошёл verifyBearer');
     // До отзыва тот же токен пускает — иначе тест был бы зелёным и на сломанной выдаче
     expect((await post({ authorization: `Bearer ${token}` })).status).toBe(200);
 
-    expect(await revokeGrant(db, { ownerId: owner, grantId: identity.grantId })).toBe(true);
+    expect(await revokeGrant(db, { graphId: owner, grantId: identity.grantId })).toBe(true);
 
     const res = await post({ authorization: `Bearer ${token}` });
     expect(res.status).toBe(401);
@@ -249,7 +249,7 @@ describe('/mcp: аутентификация по гранту ДО MCP-логи
       .onConflictDoNothing();
     const verifier = randomBytes(32).toString('base64url');
     const code = await createAuthorizationCode(db, {
-      ownerId: owner,
+      graphId: owner,
       clientId,
       label: 'Claude Code',
       redirectUri,
@@ -922,11 +922,11 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     // Колонка `scope` — text, и значение мимо перечисления в неё попасть может (ручная
     // правка, откат миграции, будущий скоуп на старом коде). Список обязан сужаться, а не
     // открываться: сравнение с одним лишь 'worker' отдало бы такому гранту весь реестр.
-    const token = await issuePatGrant(db, { ownerId: owner, label: 'скоуп из будущего' });
+    const token = await issuePatGrant(db, { graphId: owner, label: 'скоуп из будущего' });
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(
-        sql`UPDATE agent_grants SET scope = 'foo' WHERE owner_id = ${owner}::uuid AND label = 'скоуп из будущего'`,
+        sql`UPDATE agent_grants SET scope = 'foo' WHERE graph_id = ${owner}::uuid AND label = 'скоуп из будущего'`,
       );
     } finally {
       await adminClient.end();
@@ -1075,7 +1075,7 @@ describe('/mcp: pending-подтверждение несёт грант исх�
       await agent.close();
     }
 
-    const approved = await approvePending(db, { ownerId: owner, pendingId });
+    const approved = await approvePending(db, { graphId: owner, pendingId });
     expect(approved.ok).toBe(true);
 
     // Атрибуция ИСХОДНОГО актора (§7.8, D11) — вместе с грантом: владелец видит, какой

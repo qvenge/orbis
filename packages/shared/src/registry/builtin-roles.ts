@@ -23,7 +23,7 @@ import { type RelationRoleDefinition, relationRoleDefinitionSchema } from './pro
 
 type RoleEntry = Omit<
   z.input<typeof relationRoleDefinitionSchema>,
-  'id' | 'ownerId' | 'key' | 'rank' | 'hierarchical'
+  'id' | 'graphId' | 'key' | 'rank' | 'hierarchical'
 > & { id: RelationRoleId };
 
 const HIERARCHICAL = new Set<string>(HIERARCHICAL_ROLE_IDS);
@@ -174,7 +174,7 @@ export const BUILTIN_RELATION_ROLE_META: readonly RelationRoleDefinition[] = ENT
   (entry, index) =>
     relationRoleDefinitionSchema.parse({
       ...entry,
-      ownerId: null,
+      graphId: null,
       key: entry.id,
       // Признак иерархии выводится из одного списка `HIERARCHICAL_ROLE_IDS`, а не пишется
       // второй раз здесь: компилятор запросов читает список, реестр — поле, и разъехаться

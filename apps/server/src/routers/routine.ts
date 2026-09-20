@@ -156,7 +156,7 @@ export const routineRouter = router({
           signal: runs.signal,
         };
         const started = await startManualRun(deps, {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           routine,
           timeZone,
         });
@@ -165,7 +165,7 @@ export const routineRouter = router({
         void runs
           .track(
             runRoutineRun(deps, {
-              ownerId: ctx.actorUserId,
+              graphId: ctx.actorUserId,
               routine,
               runId: started.runId,
               bucket: started.bucket,
@@ -188,7 +188,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<{ runId: string }> => {
       try {
         return await answerRoutineCheckpoint(writeDeps(ctx), {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           runId: input.runId,
           answer: input.answer,
         });
@@ -207,7 +207,7 @@ export const routineRouter = router({
     .input(runIdInput)
     .query(
       ({ ctx, input }): Promise<ProposalView | null> =>
-        proposalView(ctx.db, { ownerId: ctx.actorUserId, runId: input.runId }),
+        proposalView(ctx.db, { graphId: ctx.actorUserId, runId: input.runId }),
     ),
 
   /**
@@ -223,7 +223,7 @@ export const routineRouter = router({
     .input(z.object({ entityId: z.string().uuid() }).strict())
     .query(
       ({ ctx, input }): Promise<ProposalView[]> =>
-        openProposalsForEntity(ctx.db, { ownerId: ctx.actorUserId, entityId: input.entityId }),
+        openProposalsForEntity(ctx.db, { graphId: ctx.actorUserId, entityId: input.entityId }),
     ),
 
   /**
@@ -256,7 +256,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<DecideProposalResult> => {
       try {
         return await decideProposal(writeDeps(ctx), {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           runId: input.runId,
           pendingId: input.pendingId,
           decision: input.decision,
@@ -289,7 +289,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<DecideDeferredResult> => {
       try {
         return await decideDeferredUnit(writeDeps(ctx), {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           pendingId: input.pendingId,
           decision: input.decision,
         });
@@ -316,7 +316,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<DecideAllItem[]> => {
       try {
         return await decideAllDeferred(writeDeps(ctx), {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           runId: input.runId,
         });
       } catch (e) {
@@ -347,7 +347,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<AnswerQuestionResult> => {
       try {
         return await answerRunQuestion(writeDeps(ctx), {
-          ownerId: ctx.actorUserId,
+          graphId: ctx.actorUserId,
           pendingId: input.pendingId,
           answer: input.answer,
           ...(input.option !== undefined && { option: input.option }),

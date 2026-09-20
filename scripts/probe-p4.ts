@@ -117,7 +117,7 @@ interface CorpusTask {
 }
 
 /**
- * Строка реестра в объёме, нужном обеим цифрам. `owner_id` здесь ОБЯЗАТЕЛЕН и не декоративен:
+ * Строка реестра в объёме, нужном обеим цифрам. `graph_id` здесь ОБЯЗАТЕЛЕН и не декоративен:
  * по нему пара классифицируется в «своё против своего» или «своё против встроенного», а это
  * два РАЗНЫХ ответа порогу §С9 (рулинг Р-17-4, см. `duplicatePairs`).
  */
@@ -128,7 +128,7 @@ export interface PropertyRow {
   description: Record<string, string>;
   status: string;
   merged_into: string | null;
-  owner_id: string | null;
+  graph_id: string | null;
 }
 
 export interface Pair {
@@ -422,7 +422,7 @@ export function duplicatePairs(rows: readonly PropertyRow[]): PairSplit {
       const x = alive[i];
       const y = alive[j];
       if (x === undefined || y === undefined) continue;
-      const ownEnds = (x.owner_id === null ? 0 : 1) + (y.owner_id === null ? 0 : 1);
+      const ownEnds = (x.graph_id === null ? 0 : 1) + (y.graph_id === null ? 0 : 1);
       if (ownEnds === 0) continue; // встроенное против встроенного — не про Р14
       const score = similarity(
         `${ru(x.label)} ${ru(x.description)}`,
@@ -506,14 +506,14 @@ async function main(): Promise<number> {
    */
   const dictionaryRows = async (): Promise<PropertyRow[]> =>
     (await withIdentity(db, owner, (tx) =>
-      tx.execute(sql`SELECT id, owner_id::text AS owner_id, key, label, description, status,
+      tx.execute(sql`SELECT id, graph_id::text AS graph_id, key, label, description, status,
                             merged_into
                        FROM property_definitions
-                      WHERE owner_id IS NULL OR owner_id = ${owner}::uuid
+                      WHERE graph_id IS NULL OR graph_id = ${owner}::uuid
                       ORDER BY created_at, id`),
     )) as unknown as PropertyRow[];
   const ownOf = (rows: readonly PropertyRow[]): PropertyRow[] =>
-    rows.filter((r) => r.owner_id !== null);
+    rows.filter((r) => r.graph_id !== null);
 
   let exitCode = 0;
   try {
@@ -536,7 +536,7 @@ async function main(): Promise<number> {
       let answer: SendMessageResult;
       try {
         answer = await sendMessage(db, deps, {
-          ownerId: owner,
+          graphId: owner,
           id: newId(),
           threadId,
           content: task.text,
@@ -587,7 +587,7 @@ async function main(): Promise<number> {
     const bucket = new Date().toISOString().slice(0, 16);
     const started = await startBucketRun(
       { db, provider, model: provider.modelId, clock },
-      { ownerId: owner, routine: { id: routineId, title: GARDENER_TITLE }, bucket },
+      { graphId: owner, routine: { id: routineId, title: GARDENER_TITLE }, bucket },
     );
     // Оба исхода — того же класса, что сид выше: мерить нечем, а не сломалось.
     if (!started.started) {
@@ -606,7 +606,7 @@ async function main(): Promise<number> {
     // видит. Первый прогон пробы упал ровно на этом — `deps.clock is not a function`.
     const end = await runRoutineRun(
       { db, provider, model: provider.modelId, clock },
-      { ownerId: owner, routine, runId: started.runId, bucket },
+      { graphId: owner, routine, runId: started.runId, bucket },
     );
     const runRows = (await withIdentity(db, owner, (tx) =>
       tx.execute(sql`SELECT props ->> 'orbis/run_report' AS report FROM entities
@@ -636,7 +636,7 @@ async function main(): Promise<number> {
     const mergeUnits = units.filter((u) => u.metadata.pending.tool === 'property_merge');
     let merged = 0;
     for (const unit of mergeUnits) {
-      const r = await approvePending(db, { ownerId: owner, pendingId: unit.id });
+      const r = await approvePending(db, { graphId: owner, pendingId: unit.id });
       if (r.ok) merged += 1;
       else console.error(`  единица ${unit.id}: не применена — ${r.error.code} ${r.error.message}`);
     }

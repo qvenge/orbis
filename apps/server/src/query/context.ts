@@ -38,11 +38,11 @@ export function isValidTimeZone(timezone: string): boolean {
  * 500 на КАЖДОМ чтении графа (а у планировщика — сломанный тик по всем рутинам владельца),
  * поэтому мусор деградирует до дефолта, а не роняет вызывающего.
  */
-export async function ownerTimeZone(tx: Tx, ownerId: string): Promise<string> {
+export async function ownerTimeZone(tx: Tx, graphId: string): Promise<string> {
   const rows = await tx
     .select({ timezone: userSettings.timezone })
     .from(userSettings)
-    .where(eq(userSettings.ownerId, ownerId));
+    .where(eq(userSettings.graphId, graphId));
   const stored = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
   return isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
 }
@@ -66,5 +66,5 @@ export async function queryContext(
 ): Promise<CompileCtx> {
   const reg = await effectiveRegistry(tx, actorUserId);
   const timeZone = await ownerTimeZone(tx, actorUserId);
-  return { ownerId: actorUserId, reg, thisEntityId, today: todayInTimeZone(timeZone), timeZone };
+  return { graphId: actorUserId, reg, thisEntityId, today: todayInTimeZone(timeZone), timeZone };
 }

@@ -58,7 +58,7 @@ function aliasIndex(reg: RegistrySnapshot): Map<string, string> {
   for (const def of reg.properties.values()) {
     byAlias.set(def.id, def.id);
     // Своё определение перекрывает встроенное — то же правило, что у `resolvePropertyRef`:
-    // строки идут `ORDER BY owner_id NULLS FIRST`, значит последняя запись и есть своя.
+    // строки идут `ORDER BY graph_id NULLS FIRST`, значит последняя запись и есть своя.
     byAlias.set(def.key, def.id);
   }
   return byAlias;
