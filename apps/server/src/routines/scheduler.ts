@@ -3,8 +3,8 @@
 // деталь: вся логика «что сейчас должно быть отработано» лежит в dueBuckets/startBucketRun
 // и не зависит от того, бодрствовал ли сервер, — пропущенные тики догоняются в окне.
 //
-// Обход владельцев без обхода RLS (V1.13, инвариант 14): список — служебной ролью по узкой
-// политике (graphIdsForScheduler), вся работа по владельцу — под withIdentity(владелец).
+// Обход ГРАФОВ без обхода RLS (V1.13, инвариант 14): список — служебной ролью по узкой
+// политике (graphIdsForScheduler), вся работа в графе — под withIdentity(граф).
 //
 // Тик заодно зовёт подметание (V1.12): зависший прогон рутины закрывается `failed` ДО
 // решения о запуске — только так умерший процесс даёт ретрай, а не вечный `running`. Тем
@@ -21,7 +21,7 @@ import { runRoutineRun } from './runner';
 import { dueBuckets } from './schedule';
 
 export interface TickResult {
-  /** Сколько владельцев обошёл тик. */
+  /** Сколько графов обошёл тик. */
   owners: number;
   /** Сколько зависших прогонов закрыло подметание. */
   swept: number;
@@ -38,7 +38,7 @@ export interface TickResult {
 }
 
 /**
- * Один тик: владельцы → под identity каждого: подметание → активные рутины → стоп-кран по
+ * Один тик: графы → под identity каждого: подметание → активные рутины → стоп-кран по
  * графу → наступившие бакеты → запуск → цикл модели, последовательно.
  *
  * Стоп-кран В ТИКЕ (хвост C1b-3): раннер зовёт pauseIfFailing только после СВОЕГО сбоя, а
@@ -52,8 +52,8 @@ export interface TickResult {
  * толкались бы за пул и за лимит провайдера. Тик, который не успел за минуту, просто
  * пропускает следующий (startRoutineScheduler) — бакеты никуда не деваются.
  *
- * Ошибка одной рутины (или подметания одного владельца) логируется и не роняет тик: утро
- * одного владельца не должно отменять утро остальных. Раннер бросает только при падении
+ * Ошибка одной рутины (или подметания одного графа) логируется и не роняет тик: утро в одном
+ * графе не должно отменять утро в остальных. Раннер бросает только при падении
  * самого закрытия прогона — тогда прогон остаётся `running`, и его подберёт подметание
  * следующего тика.
  *
@@ -91,7 +91,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
     } catch (e) {
       // Подметание — гигиена перед решением, а не само решение: провал логируем и идём
       // к рутинам — зависший прогон в худшем случае даст «уже идёт» до следующего тика
-      console.error(`[routines] подметание владельца ${graphId} не удалось:`, e);
+      console.error(`[routines] подметание графа ${graphId} не удалось:`, e);
     }
 
     let routines: Awaited<ReturnType<typeof activeRoutines>>;
@@ -102,7 +102,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
         timeZone: await ownerTimeZone(tx, graphId),
       })));
     } catch (e) {
-      console.error(`[routines] рутины владельца ${graphId} не прочитаны:`, e);
+      console.error(`[routines] рутины графа ${graphId} не прочитаны:`, e);
       continue;
     }
 
@@ -116,7 +116,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
           // Диагностика по Logs (runbook §7): пауза из тика — без «живого» сбоя раннера,
           // иначе по логам её не отличить от тихого пропуска бакета
           console.log(
-            `[routines] рутина ${routine.id} владельца ${graphId} поставлена на паузу стоп-краном`,
+            `[routines] рутина ${routine.id} графа ${graphId} поставлена на паузу стоп-краном`,
           );
           continue;
         }
@@ -149,7 +149,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
           );
         }
       } catch (e) {
-        console.error(`[routines] рутина ${routine.id} владельца ${graphId} — сбой тика:`, e);
+        console.error(`[routines] рутина ${routine.id} графа ${graphId} — сбой тика:`, e);
       }
     }
   }
@@ -173,7 +173,7 @@ export interface RoutineScheduler {
  * `client.end()` в shutdown не рвал пул под транзакцией закрытия. Подметание остаётся
  * страховкой на SIGKILL.
  *
- * Исключение тика (не пойманное внутри routineTick — например, упал список владельцев)
+ * Исключение тика (не пойманное внутри routineTick — например, упал список графов)
  * логируется и процесс не роняет: следующий тик попробует снова.
  */
 export function startRoutineScheduler(

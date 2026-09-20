@@ -241,7 +241,7 @@ export const chatMessages = pgTable('chat_messages', {
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 });
 
-// §4.7 ai_usage — метеринг LLM per user/day/model; PK (graph_id, date, model)
+// §4.7 ai_usage — метеринг LLM на ГРАФ/день/модель (расход — на граф, D44); PK (graph_id, date, model)
 export const aiUsage = pgTable(
   'ai_usage',
   {

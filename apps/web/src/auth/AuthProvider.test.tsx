@@ -1,3 +1,4 @@
+import { parseBody } from '@orbis/shared/doc';
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 
@@ -6,6 +7,7 @@ vi.mock('./supabase', () => ({
   useSession: vi.fn(),
 }));
 
+import { saveDraft } from '../features/entity-editor/draft-storage';
 import { AuthProvider, useAuth } from './AuthProvider';
 import { emitClientOutdated } from './events';
 import { useSession } from './supabase';
@@ -19,7 +21,12 @@ function Child() {
   return <div data-testid="child">user:{userId}</div>;
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Скоуп черновиков — модульное состояние `draft-storage`, а ключ ложится на диск браузера:
+  // без уборки соседний тест читал бы чужой ключ.
+  localStorage.clear();
+});
 
 test('anon → LoginScreen', () => {
   mockSession({ token: null, userId: null, status: 'anon' });
@@ -32,7 +39,7 @@ test('anon → LoginScreen', () => {
   expect(screen.queryByTestId('child')).not.toBeInTheDocument();
 });
 
-test('authed → children с userId в контексте', () => {
+test('authed → children с userId в контексте, и черновики скоупятся по этому аккаунту', () => {
   mockSession({ token: 'jwt', userId: 'u1', status: 'authed' });
   render(
     <AuthProvider>
@@ -40,6 +47,22 @@ test('authed → children с userId в контексте', () => {
     </AuthProvider>,
   );
   expect(screen.getByTestId('child')).toHaveTextContent('user:u1');
+
+  // ПРОВОДКА СКОУПА ЧЕРНОВИКОВ, и проверяется она КЛЮЧОМ НА ДИСКЕ, а не шпионом на вызов:
+  // шпион пинит вызов, а вопрос в том, под каким аккаунтом лежит неотправленная заметка.
+  // `AuthProvider` — единственное место, откуда скоуп ставится в бою (`setDraftScope`
+  // из сессии, рядом с `setRetryScope`); до среза «Г» ту же проводку косвенно держал тест
+  // изоляции в `draft.test.tsx`, но он ставил скоуп из поля записи, а ключ записи — ГРАФ
+  // (D44), и теперь скоуп идёт от аккаунта. Без этого пина снятие строки в `AuthProvider`
+  // оставляло весь веб зелёным, а в общем браузере следующий залогинившийся видел бы чужую
+  // неотправленную заметку под общим ключом `orbis:body-draft::e1`.
+  saveDraft(
+    'e1',
+    parseBody('неотправленная правка'),
+    '2026-01-01T00:00:00.000Z',
+    '2026-01-02T00:00:00.000Z',
+  );
+  expect(localStorage.getItem('orbis:body-draft:u1:e1')).not.toBeNull();
 });
 
 test('emitClientOutdated → экран «обновите приложение»', () => {

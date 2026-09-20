@@ -30,7 +30,12 @@ async function ensureThread(
   return values.id;
 }
 
-/** Глобальный тред владельца (§4.5): NULL entity_id, id = uuidv5(owner:global-thread). */
+/**
+ * Глобальный тред ГРАФА (§4.5): NULL entity_id, id = uuidv5(owner:global-thread). Слаг формулы
+ * остаётся словом owner — это ДАННЫЕ: сменив его, мы сменили бы id всех уже заведённых тредов.
+ * Чей этот тред в графе компании (общий на граф или свой у каждого участника) — открытый вопрос
+ * спеки §3.4, и Г-1 его не решает.
+ */
 export async function ensureGlobalThread(tx: Tx, graphId: string): Promise<string> {
   return ensureThread(tx, { id: globalThreadId(graphId), graphId, entityId: null });
 }

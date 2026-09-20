@@ -76,7 +76,7 @@ test('сьют идёт под служебной ролью без identity —
   expect(role[0]?.anon).toBe(true);
 });
 
-test('graphIdsForScheduler под orbis_app без identity: видит владельцев, созданных сидом, по возрастанию', async () => {
+test('graphIdsForScheduler под orbis_app без identity: видит графы, созданные сидом, по возрастанию', async () => {
   const ids = await graphIdsForScheduler(db);
   // Оба владельца, а не «свой»: под orbis_app auth.uid() пуст, и узкая политика вернула бы
   // пустоту. Именно чужие строки — то, ради чего 0013 существует. Двух РАЗНЫХ владельцев
