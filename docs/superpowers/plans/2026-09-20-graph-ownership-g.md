@@ -2418,11 +2418,14 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g/apps/server
   (синк в базу не ходит — RLS не мешает). В отчёте «Пины и мутации» назвать мутацию на каждый: `graphId: req.identity.actor`
   в `executor.ts:719` → красный `journal.test.ts`; `subject` ← `identity.graph` в `executor.ts:992` → красный typecheck.
 
-- [ ] **Шаг 12: греп-гейт приведений (спека Ш-2: «вне резолверов — ноль»).**
+- [ ] **Шаг 12: греп-гейт приведений (спека Ш-2: «вне резолверов — ноль»).** Флаг — `-P`, и это не стиль
+  (правка 21.09 по исполнению Г-3, Ф-Г-40): у `git grep -E` НЕТ словарной границы `\b`, и три команды ниже в
+  прежней записи (`-nE`) были пусты при ЛЮБОМ коде — ложный пин того же класса, что Ф-Г-37. Прежде чем верить
+  пустому выводу, проверь команду на заведомо ловимой строке.
 ```
-cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep -nE 'as (GraphId|AccountId)\b|as unknown as (GraphId|AccountId|Identity)' -- apps/server/src packages/shared/src scripts ':!apps/server/src/identity.ts' ':!*.test.ts' ':!apps/server/src/test/**'
-cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep -nE '\bparse(GraphId|AccountId)\(' -- apps/server/src scripts ':!apps/server/src/identity.ts' ':!*.test.ts' ':!apps/server/src/test/**'
-cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep -nE '\bactorUserId\b' -- apps/server/src ':!*.test.ts' | grep -v 'actor_user_id' | head
+cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep -nP 'as (GraphId|AccountId)\b|as unknown as (GraphId|AccountId|Identity)' -- apps/server/src packages/shared/src scripts ':!apps/server/src/identity.ts' ':!*.test.ts' ':!apps/server/src/test/**'
+cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep -nP '\bparse(GraphId|AccountId)\(' -- apps/server/src scripts ':!apps/server/src/identity.ts' ':!*.test.ts' ':!apps/server/src/test/**'
+cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep -nP '\bactorUserId\b' -- apps/server/src ':!*.test.ts' | grep -v 'actor_user_id' | head
 ```
   Ожидание: первая — ПУСТО; вторая — только границы внешнего мира: `context.ts` (JWT `sub`), `oauth/grants.ts` (строка гранта),
   `db/seed-registries.ts:416,421` (строка `registry_deltas`, прочитанная пересевом под админом: `bumpOwnerRegistryVersion` и
@@ -2498,6 +2501,11 @@ agent_grants.issued_by NOT NULL;  pgTAP — plan(148);  пометок test.fail
   комментарии «ПОМЕТКА Г-3 → Г-4» снять. Прогон: `cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g/apps/server && bun test test/graph-vs-account.test.ts` → **2 fail**
   (`bReadsA` = 0, `bWriteInA` = `throw:42501`, `withoutGraph` = 1) — это красный тест задачи. После миграции `0021` ни один
   перехват `capture` срабатывать не должен: значение, начинающееся с `throw:`, — повод разбирать политику, а не править ожидание.
+  **Тем же шагом вернуть сторож пометок** (правка 21.09 по исполнению Г-3, Ф-Г-43): живой сторож
+  `apps/server/test/gate-c8-18.test.ts` запрещает в дереве ЛЮБУЮ пометку `test.failing`/`test.todo`, и Г-3
+  научила его временно́му исключению ровно на два сюжета (исключение держит и адрес файла, и счёт = 2). Снимая
+  пометки, ВЕРНИ ему прежнюю форму (`toEqual([])`) и убедись, что он краснеет на подсаженной пометке: иначе
+  срез оставит в проде ослабленный сторож, а следующая забытая `test.failing` пройдёт молча.
 
 - [ ] **Шаг 2: красный pgTAP — claims, фикстуры членства, группа 23.** В `apps/server/test/rls/rls.pgtap.sql`:
   (а) каждому `set_config('request.jwt.claims', …)` с непустым `sub` добавить ключ `graph` с ТЕМ ЖЕ uuid:
