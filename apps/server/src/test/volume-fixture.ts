@@ -35,7 +35,9 @@ import { entities, relations, userSettings } from '../db/schema';
 /**
  * Владелец корпуса объёма — константа: `mintGraph` регистрирует его в реестре личностей процесса
  * (0020: без строки `graphs` FK не пустит ни одной сущности), а строки заводит `ensureGraphs`
- * первым действием сева — корпус живёт вне `truncateAll`.
+ * первым действием сева. Хуком не обойтись: `beforeAll(ensureGraphs)` от `mintGraph` исполняется
+ * один раз — в области ПЕРВОГО файла, импортировавшего модуль, остальные берут его из кеша
+ * ES-модулей уже без хука; и корпус вдобавок живёт вне `truncateAll`.
  */
 export const VOLUME_OWNER_ID = mintGraph(uuidv5('volume-perf-fixture:owner', ORBIS_NAMESPACE));
 /** Тот же seed, что у пробы П2 (`.superpowers/probe/p2/lib/world.ts:11`) — числа сравнимы. */

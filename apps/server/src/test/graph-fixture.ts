@@ -26,8 +26,10 @@ import { entities, relations } from '../db/schema';
 /**
  * Владелец корпуса — один и тот же между прогонами, иначе кеш не имел бы смысла. `mintGraph`
  * регистрирует его в реестре личностей процесса (0020: без строки `graphs` FK не пустит ни одной
- * сущности), но строки заводит не он — корпус живёт вне `truncateAll`, поэтому сев зовёт
- * `ensureGraphs([GRAPH_OWNER_ID])` первым действием.
+ * сущности), но строки заводит не он: хук `beforeAll(ensureGraphs)`, который `mintGraph` вешает,
+ * исполнится один раз — в области ПЕРВОГО файла, импортировавшего этот модуль, а остальные
+ * импортёры получат его из кеша ES-модулей уже без хука. Корпус вдобавок живёт вне `truncateAll`.
+ * Поэтому сев зовёт `ensureGraphs([GRAPH_OWNER_ID])` первым действием.
  */
 export const GRAPH_OWNER_ID = mintGraph(uuidv5('graph-perf-fixture:owner', ORBIS_NAMESPACE));
 
