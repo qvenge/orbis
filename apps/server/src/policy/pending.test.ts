@@ -5,6 +5,7 @@
 // без обращения к LLM; идемпотентность approve — по PK детерминированного
 // audit-сообщения (batch-механика §7.8, batch_id = pendingId).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   answerMessageId,
   batchAuditMessageId,
@@ -14,7 +15,7 @@ import {
   rejectMessageId,
 } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
-import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
@@ -51,7 +52,7 @@ const clock = () => T0;
 function ctxFor(over: Partial<ToolCallCtx> = {}): ToolCallCtx {
   return {
     db,
-    actorUserId: userA,
+    identity: personal(userA),
     actorKind: 'ai',
     source: 'chat',
     explicitCommand: false,
@@ -61,9 +62,9 @@ function ctxFor(over: Partial<ToolCallCtx> = {}): ToolCallCtx {
 }
 
 /** Сид-сущность через executor без синка — без audit-шума в тредах. */
-async function seedEntity(owner: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function seedEntity(owner: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool: 'entity_create', input }],
@@ -72,8 +73,8 @@ async function seedEntity(owner: string, input: Record<string, unknown>): Promis
   return r.results[0] as WireEntity;
 }
 
-async function messagesIn(owner: string, threadId: string) {
-  return withIdentity(db, owner, (tx) =>
+async function messagesIn(owner: GraphId, threadId: string) {
+  return withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(chatMessages)
@@ -82,15 +83,15 @@ async function messagesIn(owner: string, threadId: string) {
   );
 }
 
-async function messageById(owner: string, id: string) {
-  const rows = await withIdentity(db, owner, (tx) =>
+async function messageById(owner: GraphId, id: string) {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select().from(chatMessages).where(eq(chatMessages.id, id)),
   );
   return rows[0];
 }
 
-async function archivedOf(owner: string, id: string): Promise<boolean | undefined> {
-  const rows = await withIdentity(db, owner, (tx) =>
+async function archivedOf(owner: GraphId, id: string): Promise<boolean | undefined> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
   );
   return rows[0]?.archived;
@@ -128,7 +129,9 @@ afterAll(async () => {
 describe('createPending через dispatch: explicit-уровень §7.10', () => {
   test('карточка-запрос записана с immutable payload; ни граф, ни журнал не тронуты', async () => {
     const host = await seedEntity(userA, { title: 'Хост-тред pending', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const target = await seedEntity(userA, { title: 'Цель архивации', tags: [] });
 
     const r = await dispatchTool(ctxFor({ threadId }), 'entity_update', {
@@ -179,10 +182,12 @@ describe('createPending через dispatch: explicit-уровень §7.10', ()
 describe('approvePending: исполнение сохранённого payload без LLM (§7.10)', () => {
   test('approve исполняет payload: сущность заархивирована, audit с детерминированным id и атрибуцией исходного актора', async () => {
     const host = await seedEntity(userA, { title: 'Хост approve', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const { target, pendingId } = await pendingArchive(threadId);
 
-    const r = await approvePending(db, { graphId: userA, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.actionId).toBe(pendingId);
@@ -205,20 +210,20 @@ describe('approvePending: исполнение сохранённого payload 
 
   test('повторный approve → идемпотентный replay из сохранённого audit, НЕ второй эффект', async () => {
     const { target, pendingId } = await pendingArchive(undefined);
-    const first = await approvePending(db, { graphId: userA, pendingId, clock });
+    const first = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(first.ok).toBe(true);
 
     // Владелец разархивировал сущность прямым действием — повторный approve НЕ должен
     // заархивировать её снова (иначе это было бы повторное исполнение, не replay)
     const unarchive = await execute(db, {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: target.id, archived: false } }],
     });
     expect(unarchive.ok).toBe(true);
 
-    const again = await approvePending(db, { graphId: userA, pendingId, clock });
+    const again = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(again.ok).toBe(true);
     if (!again.ok || !first.ok) return;
     expect(again.idempotentReplay).toBe(true);
@@ -229,10 +234,10 @@ describe('approvePending: исполнение сохранённого payload 
 
   test('approve после reject → VALIDATION «отклонено», payload не исполнен', async () => {
     const { target, pendingId } = await pendingArchive(undefined);
-    const rejected = await rejectPending(db, { graphId: userA, pendingId });
+    const rejected = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(rejected.ok).toBe(true);
 
-    const r = await approvePending(db, { graphId: userA, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expectExecError(r, 'VALIDATION');
     if (!r.ok) expect(r.error.message).toContain('отклонено');
     expect(await archivedOf(userA, target.id)).toBe(false);
@@ -242,10 +247,14 @@ describe('approvePending: исполнение сохранённого payload 
 
   test('чужой pendingId (userB) → NOT_FOUND: RLS скоупит журнал владельцем', async () => {
     const { pendingId } = await pendingArchive(undefined);
-    const r = await approvePending(db, { graphId: userB, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userB), pendingId, clock });
     expectExecError(r, 'NOT_FOUND');
     // и несуществующий id неразличим с чужим
-    const missing = await approvePending(db, { graphId: userA, pendingId: newId(), clock });
+    const missing = await approvePending(db, {
+      identity: personal(userA),
+      pendingId: newId(),
+      clock,
+    });
     expectExecError(missing, 'NOT_FOUND');
   });
 
@@ -259,7 +268,7 @@ describe('approvePending: исполнение сохранённого payload 
       await adminClient.end();
     }
 
-    const r = await approvePending(db, { graphId: userA, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expectExecError(r, 'NOT_FOUND'); // стадия 3 конвейера: load state не нашёл сущность
     expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
   });
@@ -279,11 +288,15 @@ describe('approvePending: исполнение сохранённого payload 
     expect(r.card.kind).toBe('confirmation_card');
     if (r.card.kind === 'confirmation_card') expect(r.card.summary).toBe('11 операций');
 
-    const approved = await approvePending(db, { graphId: userA, pendingId: r.pendingId, clock });
+    const approved = await approvePending(db, {
+      identity: personal(userA),
+      pendingId: r.pendingId,
+      clock,
+    });
     expect(approved.ok).toBe(true);
     if (!approved.ok) return;
     expect(approved.results.length).toBe(11);
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ id: entities.id }).from(entities).where(inArray(entities.id, ids)),
     );
     expect(rows.length).toBe(11);
@@ -292,7 +305,11 @@ describe('approvePending: исполнение сохранённого payload 
     expect(await messageById(userA, batchAuditMessageId(userA, r.pendingId))).toBeDefined();
     expect(await messageById(userA, batchAuditMessageId(userA, originalBatchId))).toBeUndefined();
 
-    const again = await approvePending(db, { graphId: userA, pendingId: r.pendingId, clock });
+    const again = await approvePending(db, {
+      identity: personal(userA),
+      pendingId: r.pendingId,
+      clock,
+    });
     expect(again.ok).toBe(true);
     if (again.ok) expect(again.idempotentReplay).toBe(true);
   });
@@ -322,9 +339,13 @@ describe('approvePending: исполнение сохранённого payload 
       await adminClient.end();
     }
 
-    const approved = await approvePending(db, { graphId: userA, pendingId: r.pendingId, clock });
+    const approved = await approvePending(db, {
+      identity: personal(userA),
+      pendingId: r.pendingId,
+      clock,
+    });
     expectExecError(approved, 'NOT_FOUND');
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx
         .select({ archived: entities.archived })
         .from(entities)
@@ -341,7 +362,7 @@ describe('approvePending: исполнение сохранённого payload 
 
   test('pending внешнего агента (mcp): атрибуция actor_kind=agent/source=mcp сохраняется в audit', async () => {
     const { pendingId } = await pendingArchive(undefined, { actorKind: 'agent', source: 'mcp' });
-    const r = await approvePending(db, { graphId: userA, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
     const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
     const md = audit?.metadata as { actions?: ActionRecord[] };
@@ -365,8 +386,8 @@ describe('сериализация approve ∥ reject (fix round: write-skew з�
     for (let i = 0; i < iterations; i++) {
       const { target, pendingId } = await pendingArchive(undefined);
       const [a, r] = await Promise.all([
-        approvePending(db, { graphId: userA, pendingId, clock }),
-        rejectPending(db, { graphId: userA, pendingId }),
+        approvePending(db, { identity: personal(userA), pendingId, clock }),
+        rejectPending(db, { identity: personal(userA), pendingId }),
       ]);
       if (a.ok && r.ok) {
         bothOk++; // несогласованный исход — считаем все итерации, отчёт в assert ниже
@@ -395,10 +416,12 @@ describe('сериализация approve ∥ reject (fix round: write-skew з�
 describe('rejectPending: отклонение карточки-запроса', () => {
   test('reject пишет системное сообщение {type: confirmation_rejected, rejects}; повторный reject идемпотентен', async () => {
     const host = await seedEntity(userA, { title: 'Хост reject', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const { target, pendingId } = await pendingArchive(threadId);
 
-    const r = await rejectPending(db, { graphId: userA, pendingId });
+    const r = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.alreadyRejected).toBe(false);
 
@@ -416,7 +439,7 @@ describe('rejectPending: отклонение карточки-запроса', 
     expect(await archivedOf(userA, target.id)).toBe(false);
 
     // Повторный reject — идемпотентен: второго сообщения нет
-    const again = await rejectPending(db, { graphId: userA, pendingId });
+    const again = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(again.ok).toBe(true);
     if (again.ok) expect(again.alreadyRejected).toBe(true);
     expect((await messagesIn(userA, threadId)).length).toBe(2);
@@ -424,20 +447,20 @@ describe('rejectPending: отклонение карточки-запроса', 
 
   test('чужой и несуществующий pendingId → NOT_FOUND', async () => {
     const { pendingId } = await pendingArchive(undefined);
-    const foreign = await rejectPending(db, { graphId: userB, pendingId });
+    const foreign = await rejectPending(db, { identity: personal(userB), pendingId });
     expect(foreign.ok).toBe(false);
     if (!foreign.ok) expect(foreign.error.code).toBe('NOT_FOUND');
-    const missing = await rejectPending(db, { graphId: userA, pendingId: newId() });
+    const missing = await rejectPending(db, { identity: personal(userA), pendingId: newId() });
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.error.code).toBe('NOT_FOUND');
   });
 
   test('reject уже исполненного pending → VALIDATION «уже исполнено»', async () => {
     const { pendingId } = await pendingArchive(undefined);
-    const approved = await approvePending(db, { graphId: userA, pendingId, clock });
+    const approved = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(approved.ok).toBe(true);
 
-    const r = await rejectPending(db, { graphId: userA, pendingId });
+    const r = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('VALIDATION');
@@ -456,8 +479,8 @@ describe('rejectPendingTx: гашение в ЧУЖОЙ транзакции (Ш
     const rejectId = rejectMessageId(userA, pendingId);
 
     await expect(
-      withIdentity(db, userA, async (tx) => {
-        const r = await rejectPendingTx(tx, { graphId: userA, pendingId });
+      withIdentity(db, personal(userA), async (tx) => {
+        const r = await rejectPendingTx(tx, { identity: personal(userA), pendingId });
         expect(r.alreadyRejected).toBe(false);
         // Сообщение видно ИЗНУТРИ этой транзакции до её коммита — значит писала его она,
         // а не собственный tx гашения (тот был бы уже закоммичен и пережил бы откат)
@@ -475,7 +498,7 @@ describe('rejectPendingTx: гашение в ЧУЖОЙ транзакции (Ш
     expect(await messageById(userA, rejectId)).toBeUndefined();
 
     // Предложение живо и гасится начисто; ok-ветка обёртки несёт тред карточки
-    const after = await rejectPending(db, { graphId: userA, pendingId });
+    const after = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(after.ok).toBe(true);
     if (!after.ok) return;
     expect(after.alreadyRejected).toBe(false);
@@ -488,9 +511,9 @@ describe('rejectPendingTx: гашение в ЧУЖОЙ транзакции (Ш
     // сам rejectPendingTx. Не будь повтор no-op'ом, второй захват ждал бы конца этой же
     // транзакции, то есть самого себя, до statement_timeout: тест проходит ровно потому,
     // что этого не происходит, и флага «замок уже взят» контракту не требуется.
-    const advisoryLocks = await withIdentity(db, userA, async (tx) => {
+    const advisoryLocks = await withIdentity(db, personal(userA), async (tx) => {
       await acquirePendingLock(tx, pendingId);
-      const r = await rejectPendingTx(tx, { graphId: userA, pendingId });
+      const r = await rejectPendingTx(tx, { identity: personal(userA), pendingId });
       expect(r.alreadyRejected).toBe(false);
       const rows = await tx.execute(
         sql`SELECT count(*)::int AS n FROM pg_locks
@@ -503,11 +526,13 @@ describe('rejectPendingTx: гашение в ЧУЖОЙ транзакции (Ш
 
   test('возвращает threadId треда карточки-запроса — P2 лестницы ляжет в тред рутины, а не в глобальный', async () => {
     const host = await seedEntity(userA, { title: 'Хост tx-гашения', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const { pendingId } = await pendingArchive(threadId);
 
-    const r = await withIdentity(db, userA, (tx) =>
-      rejectPendingTx(tx, { graphId: userA, pendingId, reason: 'superseded' }),
+    const r = await withIdentity(db, personal(userA), (tx) =>
+      rejectPendingTx(tx, { identity: personal(userA), pendingId, reason: 'superseded' }),
     );
     expect(r).toEqual({ pendingId, alreadyRejected: false, reason: 'superseded', threadId });
 
@@ -519,8 +544,8 @@ describe('rejectPendingTx: гашение в ЧУЖОЙ транзакции (Ш
   });
 
   test('бросает ExecError, а не возвращает {ok:false}: отказ обязан откатить транзакцию вызывателя', async () => {
-    const err = await withIdentity(db, userA, (tx) =>
-      rejectPendingTx(tx, { graphId: userA, pendingId: newId() }),
+    const err = await withIdentity(db, personal(userA), (tx) =>
+      rejectPendingTx(tx, { identity: personal(userA), pendingId: newId() }),
     ).then(
       () => undefined,
       (e: unknown) => e,
@@ -540,7 +565,7 @@ describe('сводка карточки: пустая строка — это О
     // только у того, чья сборка сегодня чинена: пустая сводка — осечка любого сборщика.
     const target = await seedEntity(userA, { title: 'Цель пустой сводки', tags: [] });
     const summaryOf = async (summary: string | undefined): Promise<string> => {
-      const { card } = await withIdentity(db, userA, (tx) =>
+      const { card } = await withIdentity(db, personal(userA), (tx) =>
         createPending(tx, {
           actor: { userId: userA, kind: 'ai', source: 'chat' },
           tool: 'entity_update',
@@ -569,7 +594,7 @@ describe('атрибуция рутины: source routine, run_id и причи�
   test('pending с source=routine и run_id: approve исполняет с runId → action журнала несёт run_id и source routine', async () => {
     const target = await seedEntity(userA, { title: 'Цель предложения рутины', tags: [] });
     const runId = newId();
-    const { pendingId } = await withIdentity(db, userA, (tx) =>
+    const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
       createPending(tx, {
         actor: { userId: userA, kind: 'ai', source: 'routine', runId },
         tool: 'batch_execute',
@@ -582,7 +607,7 @@ describe('атрибуция рутины: source routine, run_id и причи�
       }),
     );
 
-    const r = await approvePending(db, { graphId: userA, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
     expect(await archivedOf(userA, target.id)).toBe(true);
 
@@ -598,7 +623,11 @@ describe('атрибуция рутины: source routine, run_id и причи�
   test('rejectPending с reason superseded → текст «заменено» и metadata.reason; повтор → alreadyRejected с ИСХОДНОЙ причиной', async () => {
     const { pendingId } = await pendingArchive(undefined);
 
-    const r = await rejectPending(db, { graphId: userA, pendingId, reason: 'superseded' });
+    const r = await rejectPending(db, {
+      identity: personal(userA),
+      pendingId,
+      reason: 'superseded',
+    });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.alreadyRejected).toBe(false);
@@ -614,7 +643,11 @@ describe('атрибуция рутины: source routine, run_id и причи�
 
     // Журнал append-only (§4.6): второй вызов с ДРУГОЙ причиной сообщение не переписывает
     // и возвращает ту причину, что записана — иначе владельцу показали бы не тот повод
-    const again = await rejectPending(db, { graphId: userA, pendingId, reason: 'stale' });
+    const again = await rejectPending(db, {
+      identity: personal(userA),
+      pendingId,
+      reason: 'stale',
+    });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.alreadyRejected).toBe(true);
@@ -624,7 +657,7 @@ describe('атрибуция рутины: source routine, run_id и причи�
 
   test('reason по умолчанию — owner; reject-сообщение старой формы (без reason) читается как owner', async () => {
     const { pendingId } = await pendingArchive(undefined);
-    const r = await rejectPending(db, { graphId: userA, pendingId });
+    const r = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.reason).toBe('owner');
     const msg = await messageById(userA, rejectMessageId(userA, pendingId));
@@ -633,7 +666,7 @@ describe('атрибуция рутины: source routine, run_id и причи�
     // Сообщения, написанные ДО появления причины, ключа reason не несут (metadata
     // неизменяема) — читаются как отказ владельца, а не как «причина неизвестна»
     const legacy = await pendingArchive(undefined);
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       appendMessageIdempotent(tx, {
         id: rejectMessageId(userA, legacy.pendingId),
         threadId: globalThreadId(userA),
@@ -643,7 +676,7 @@ describe('атрибуция рутины: source routine, run_id и причи�
       }),
     );
     const old = await rejectPending(db, {
-      graphId: userA,
+      identity: personal(userA),
       pendingId: legacy.pendingId,
       reason: 'stale',
     });
@@ -662,7 +695,7 @@ describe('причина отказа edited: правка владельца (�
   test('reject reason edited: текст «Предложение заменено правкой владельца», metadata.reason=edited; читается обратно как edited, а не через fallback owner', async () => {
     const { pendingId } = await pendingArchive(undefined);
 
-    const r = await rejectPending(db, { graphId: userA, pendingId, reason: 'edited' });
+    const r = await rejectPending(db, { identity: personal(userA), pendingId, reason: 'edited' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.alreadyRejected).toBe(false);
@@ -679,8 +712,14 @@ describe('причина отказа edited: правка владельца (�
     // Вот та самая проверка забытого zod-энама: причина ЧИТАЕТСЯ из ленты, и незнакомая
     // строка откатывается к 'owner' (rejectedReason). Гашение новым прогоном обязано
     // увидеть «правка», а не «владелец отклонил», — иначе оно перепишет чужую судьбу.
-    expect(await withIdentity(db, userA, (tx) => rejectedReason(tx, pendingId))).toBe('edited');
-    const again = await rejectPending(db, { graphId: userA, pendingId, reason: 'superseded' });
+    expect(await withIdentity(db, personal(userA), (tx) => rejectedReason(tx, pendingId))).toBe(
+      'edited',
+    );
+    const again = await rejectPending(db, {
+      identity: personal(userA),
+      pendingId,
+      reason: 'superseded',
+    });
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.alreadyRejected).toBe(true);
@@ -691,7 +730,7 @@ describe('причина отказа edited: правка владельца (�
     const target = await seedEntity(userA, { title: 'Цель правленого предложения', tags: [] });
     const runId = newId();
     const parentId = newId();
-    const { pendingId } = await withIdentity(db, userA, (tx) =>
+    const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
       createPending(tx, {
         actor: {
           userId: userA,
@@ -713,12 +752,12 @@ describe('причина отказа edited: правка владельца (�
 
     // Проба по родителю — то, чем лестница ищет своё дитя в крэш-окне между шагами
     const probe = JSON.stringify({ pending: { edited_from: parentId } });
-    const found = await withIdentity(db, userA, (tx) =>
+    const found = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT id FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
     );
     expect([...found].map((r) => (r as { id: string }).id)).toEqual([pendingId]);
 
-    const r = await approvePending(db, { graphId: userA, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
     const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
     const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
@@ -734,7 +773,7 @@ describe('причина отказа edited: правка владельца (�
       false,
     );
 
-    const r = await approvePending(db, { graphId: userA, pendingId, clock });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(r.ok).toBe(true);
     const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
     const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
@@ -756,7 +795,7 @@ async function deferredAction(
 ): Promise<{ target: WireEntity; pendingId: string }> {
   const target = await seedEntity(userA, { title: 'Цель отложенного действия', tags: [] });
   const input = { id: target.id, archived: true };
-  const { pendingId } = await withIdentity(db, userA, (tx) =>
+  const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
     createPending(tx, {
       threadId,
       actor: { userId: userA, kind: 'ai', source: 'routine', runId },
@@ -778,7 +817,7 @@ async function askedQuestion(
   options?: string[],
   threadId?: string,
 ): Promise<string> {
-  const { pendingId } = await withIdentity(db, userA, (tx) =>
+  const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
     createPending(tx, {
       threadId,
       actor: { userId: userA, kind: 'ai', source: 'routine', runId },
@@ -797,7 +836,7 @@ async function askedQuestion(
 /** Предложение рутины (V1.6): pending того же прогона, но БЕЗ kind — не единица (Б5). */
 async function proposalOfRun(runId: string, threadId?: string): Promise<string> {
   const target = await seedEntity(userA, { title: 'Цель предложения рутины', tags: [] });
-  const { pendingId } = await withIdentity(db, userA, (tx) =>
+  const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
     createPending(tx, {
       threadId,
       actor: { userId: userA, kind: 'ai', source: 'routine', runId },
@@ -820,7 +859,7 @@ async function proposalOfRun(runId: string, threadId?: string): Promise<string> 
  */
 async function craftPending(threadId: string, pending: Record<string, unknown>): Promise<string> {
   const id = pending.id as string;
-  await withIdentity(db, userA, (tx) =>
+  await withIdentity(db, personal(userA), (tx) =>
     appendMessageIdempotent(tx, {
       id,
       threadId,
@@ -843,7 +882,7 @@ const STALE_TEXT = 'Вопрос снят: его задал прошлый пр
  * читателя не проверить вовсе, поэтому фикстура и осталась сырой.
  */
 async function craftStale(pendingId: string, threadId: string): Promise<void> {
-  await withIdentity(db, userA, (tx) =>
+  await withIdentity(db, personal(userA), (tx) =>
     appendMessageIdempotent(tx, {
       id: questionStaleMessageId(userA, pendingId),
       threadId,
@@ -874,14 +913,16 @@ async function backdate(marks: Array<[string, string]>): Promise<void> {
 }
 
 async function unitsOf(runId: string): Promise<RunUnit[]> {
-  return withIdentity(db, userA, (tx) => listRunUnits(tx, userA, runId));
+  return withIdentity(db, personal(userA), (tx) => listRunUnits(tx, userA, runId));
 }
 
 describe('pending-запись единицы: kind и условная обязательность tool/input (ОЧ.2, Б5)', () => {
   test('запись kind:question с question/options и БЕЗ tool/input — валидна; kind:question с tool — VALIDATION; kind:action без tool — VALIDATION; запись без kind с tool/input — валидна (сегодняшние чатовые)', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост схемы единицы', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
 
     // (1) Вопрос без тула — валиден: его читает проба пачки, а не executor
     const questionId = await askedQuestion(runId, 'Какой счёт списать?', ['Карта', 'Наличные']);
@@ -905,7 +946,7 @@ describe('pending-запись единицы: kind и условная обяз
       created_at: T0.toISOString(),
     });
     const badQuestion = await approvePending(db, {
-      graphId: userA,
+      identity: personal(userA),
       pendingId: questionWithTool,
       clock,
     });
@@ -924,7 +965,11 @@ describe('pending-запись единицы: kind и условная обяз
       run_id: runId,
       created_at: T0.toISOString(),
     });
-    const badAction = await approvePending(db, { graphId: userA, pendingId: actionNoTool, clock });
+    const badAction = await approvePending(db, {
+      identity: personal(userA),
+      pendingId: actionNoTool,
+      clock,
+    });
     expect(badAction.ok).toBe(false);
     if (!badAction.ok) {
       expect(badAction.error.code).toBe('VALIDATION');
@@ -934,7 +979,7 @@ describe('pending-запись единицы: kind и условная обяз
     // (4) Обратная совместимость: чатовый pending без kind с tool/input читается как
     // раньше (правило «нет kind = действие» — только при одиночном чтении по id)
     const { pendingId } = await pendingArchive(undefined);
-    const legacy = await rejectPending(db, { graphId: userA, pendingId });
+    const legacy = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(legacy.ok).toBe(true);
   });
 });
@@ -997,12 +1042,14 @@ describe('гейты kind: вопрос не принимают и не откл
   test('approvePending на kind:question → VALIDATION структурной ошибкой, граф не тронут; rejectPending на kind:question → VALIDATION', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост гейтов', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const pendingId = await askedQuestion(runId, 'Продолжать ли перенос?', undefined, threadId);
 
     // Гейт стоит в policy, а не в роутере: approve/reject зовут семь мест (кнопка чата,
     // раннер, лестница правки, MCP), и «вопрос» обязан отскакивать у всех одинаково
-    const approved = await approvePending(db, { graphId: userA, pendingId, clock });
+    const approved = await approvePending(db, { identity: personal(userA), pendingId, clock });
     expect(approved.ok).toBe(false);
     if (!approved.ok) {
       expect(approved.error.code).toBe('VALIDATION');
@@ -1011,7 +1058,7 @@ describe('гейты kind: вопрос не принимают и не откл
     // Ни исполнения, ни записи: audit-сообщения по детерминированному PK нет
     expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
 
-    const rejected = await rejectPending(db, { graphId: userA, pendingId });
+    const rejected = await rejectPending(db, { identity: personal(userA), pendingId });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) {
       expect(rejected.error.code).toBe('VALIDATION');
@@ -1033,7 +1080,7 @@ describe('текст отказа единицы: свой, а не «Предл
 
     const own = 'Отложенное действие снято новым прогоном';
     const r = await rejectPending(db, {
-      graphId: userA,
+      identity: personal(userA),
       pendingId,
       reason: 'superseded',
       text: own,
@@ -1054,7 +1101,7 @@ describe('текст отказа единицы: свой, а не «Предл
 
     // Повтор с ДРУГИМ текстом и причиной ничего не переписывает (журнал append-only)
     const again = await rejectPending(db, {
-      graphId: userA,
+      identity: personal(userA),
       pendingId,
       reason: 'stale',
       text: 'Отложенное действие устарело',
@@ -1068,12 +1115,16 @@ describe('текст отказа единицы: свой, а не «Предл
     // Без text — прежние тексты причин, байт в байт: предложения и чатовые подтверждения
     // этой работой не задеты
     const plain = await deferredAction(runId);
-    await rejectPending(db, { graphId: userA, pendingId: plain.pendingId, reason: 'stale' });
+    await rejectPending(db, {
+      identity: personal(userA),
+      pendingId: plain.pendingId,
+      reason: 'stale',
+    });
     expect((await messageById(userA, rejectMessageId(userA, plain.pendingId)))?.content).toBe(
       'Предложение устарело: состояние изменилось',
     );
     const { pendingId: chatId } = await pendingArchive(undefined);
-    await rejectPending(db, { graphId: userA, pendingId: chatId });
+    await rejectPending(db, { identity: personal(userA), pendingId: chatId });
     expect((await messageById(userA, rejectMessageId(userA, chatId)))?.content).toBe(
       'Подтверждение отклонено',
     );
@@ -1084,7 +1135,9 @@ describe('listRunUnits: единицы прогона одной пробой (�
   test('прогон с вопросом, ДВУМЯ отложками и ЧУЖИМ предложением (pending без kind, дедуп proposal:<runId>) → в пачке только единицы, предложение и чужой прогон не попали (Б5, приёмка 19-предусловие); порядок created_at, id', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост пачки', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
 
     // Порядок ЗАПИСИ намеренно не совпадает с ожидаемым порядком чтения
     const first = await deferredAction(runId, threadId);
@@ -1137,7 +1190,9 @@ describe('listRunUnits: единицы прогона одной пробой (�
   test('listRunUnits судьбы: approved по audit-PK, rejected с причиной, answered по answer-PK, stale по question-stale-PK; answered+stale одновременно → answered (ОЧ.8)', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост судеб пачки', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
 
     const applied = await deferredAction(runId, threadId);
     const dropped = await deferredAction(runId, threadId);
@@ -1147,24 +1202,42 @@ describe('listRunUnits: единицы прогона одной пробой (�
     const open = await askedQuestion(runId, 'Ещё не решённый вопрос', undefined, threadId);
 
     expect(
-      (await approvePending(db, { graphId: userA, pendingId: applied.pendingId, clock })).ok,
+      (await approvePending(db, { identity: personal(userA), pendingId: applied.pendingId, clock }))
+        .ok,
     ).toBe(true);
     expect(
-      (await rejectPending(db, { graphId: userA, pendingId: dropped.pendingId, reason: 'stale' }))
-        .ok,
+      (
+        await rejectPending(db, {
+          identity: personal(userA),
+          pendingId: dropped.pendingId,
+          reason: 'stale',
+        })
+      ).ok,
     ).toBe(true);
     // Судьбы вопроса пишут процедуры Задачи 3 — не фикстуры: так проверяется, что
     // читатель читает ровно ту форму, которую писатель кладёт (контракт Задач 2↔3)
     expect(
-      await answerPendingQuestion(db, { graphId: userA, pendingId: answered, answer: 'Карта' }),
+      await answerPendingQuestion(db, {
+        identity: personal(userA),
+        pendingId: answered,
+        answer: 'Карта',
+      }),
     ).toEqual({ status: 'answered', pendingId: answered });
     expect(
-      await stalePendingQuestion(db, { graphId: userA, pendingId: staled, text: STALE_TEXT }),
+      await stalePendingQuestion(db, {
+        identity: personal(userA),
+        pendingId: staled,
+        text: STALE_TEXT,
+      }),
     ).toEqual({ staled: true });
     // Обе судьбы разом — крэш между ответом и гашением следующего прогона: побеждает
     // ОТВЕТ (ОЧ.8), иначе владельцу сказали бы «снято» про то, что он уже решил.
     // Гашение здесь — сырой фикстурой: процедура отвеченный вопрос не гасит (ОЧ.8)
-    await answerPendingQuestion(db, { graphId: userA, pendingId: both, answer: 'Да, продолжай' });
+    await answerPendingQuestion(db, {
+      identity: personal(userA),
+      pendingId: both,
+      answer: 'Да, продолжай',
+    });
     await craftStale(both, threadId);
 
     const units = await unitsOf(runId);
@@ -1200,7 +1273,9 @@ describe('answerPendingQuestion: ответ владельца — судьба 
   test('ответ на открытый вопрос → append с PK answerMessageId; повторный ТОТ ЖЕ ответ → replay answered, второй записи нет (приёмка 5)', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост ответа', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const pendingId = await askedQuestion(
       runId,
       'Какой счёт списать?',
@@ -1209,7 +1284,7 @@ describe('answerPendingQuestion: ответ владельца — судьба 
     );
 
     const r = await answerPendingQuestion(db, {
-      graphId: userA,
+      identity: personal(userA),
       pendingId,
       answer: 'Карта',
       option: 0,
@@ -1235,9 +1310,9 @@ describe('answerPendingQuestion: ответ владельца — судьба 
 
     // Повтор ТОГО ЖЕ ответа — replay по PK: вторая запись не появляется, лента не растёт
     const before = (await messagesIn(userA, threadId)).length;
-    expect(await answerPendingQuestion(db, { graphId: userA, pendingId, answer: 'Карта' })).toEqual(
-      { status: 'answered', pendingId },
-    );
+    expect(
+      await answerPendingQuestion(db, { identity: personal(userA), pendingId, answer: 'Карта' }),
+    ).toEqual({ status: 'answered', pendingId });
     expect((await messagesIn(userA, threadId)).length).toBe(before);
 
     const unit = (await unitsOf(runId)).find((u) => u.pendingId === pendingId);
@@ -1248,16 +1323,23 @@ describe('answerPendingQuestion: ответ владельца — судьба 
   test('другой ответ после записанного → {already, answer: первый}; запись одна (С5, приёмка 5)', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост второго ответа', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const pendingId = await askedQuestion(runId, 'Какой счёт?', ['Карта', 'Наличные'], threadId);
 
-    await answerPendingQuestion(db, { graphId: userA, pendingId, answer: 'Карта', option: 0 });
+    await answerPendingQuestion(db, {
+      identity: personal(userA),
+      pendingId,
+      answer: 'Карта',
+      option: 0,
+    });
     const before = (await messagesIn(userA, threadId)).length;
 
     // Молча схлопывать разные ответы запрещено (С5): владелец обязан увидеть, ЧТО
     // применилось, — иначе он уверен, что рутина пойдёт по «Наличные»
     const second = await answerPendingQuestion(db, {
-      graphId: userA,
+      identity: personal(userA),
       pendingId,
       answer: 'Наличные',
       option: 1,
@@ -1276,12 +1358,18 @@ describe('answerPendingQuestion: ответ владельца — судьба 
   test('ответ на погашенный → {stale}, записи нет (В2); гашение отвеченного → {staled:false}, ответ жив (ОЧ.8)', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост единственности судьбы', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
 
     // (а) Сначала гашение → ответ НЕ принимается (В2): карточка покажет «снят»
     const staled = await askedQuestion(runId, 'Ждать доставку?', undefined, threadId);
     expect(
-      await stalePendingQuestion(db, { graphId: userA, pendingId: staled, text: STALE_TEXT }),
+      await stalePendingQuestion(db, {
+        identity: personal(userA),
+        pendingId: staled,
+        text: STALE_TEXT,
+      }),
     ).toEqual({ staled: true });
     const staleMsg = await messageById(userA, questionStaleMessageId(userA, staled));
     // Автор гашения — СИСТЕМА (в отличие от ответа: его автор — владелец)
@@ -1291,14 +1379,20 @@ describe('answerPendingQuestion: ответ владельца — судьба 
     expect(staleMsg?.metadata).toEqual({ type: 'question_stale', stales: staled });
     expect(Object.hasOwn(staleMsg?.metadata as object, 'actions')).toBe(false);
 
-    expect(await answerPendingQuestion(db, { graphId: userA, pendingId: staled, answer: 'Да' })) //
+    expect(
+      await answerPendingQuestion(db, {
+        identity: personal(userA),
+        pendingId: staled,
+        answer: 'Да',
+      }),
+    ) //
       .toEqual({ status: 'stale' });
     expect((await fatesOf(staled)).answer).toBeUndefined(); // ответ не записан вовсе
 
     // Повторное гашение с ДРУГИМ текстом ничего не переписывает (append-only, §4.6)
     expect(
       await stalePendingQuestion(db, {
-        graphId: userA,
+        identity: personal(userA),
         pendingId: staled,
         text: 'Другой текст гашения',
       }),
@@ -1309,9 +1403,17 @@ describe('answerPendingQuestion: ответ владельца — судьба 
 
     // (б) Обратный порядок: сначала ответ → гашение ПРОПУСКАЕТСЯ, ответ важнее (ОЧ.8)
     const answered = await askedQuestion(runId, 'Продолжать перенос?', undefined, threadId);
-    await answerPendingQuestion(db, { graphId: userA, pendingId: answered, answer: 'Да' });
+    await answerPendingQuestion(db, {
+      identity: personal(userA),
+      pendingId: answered,
+      answer: 'Да',
+    });
     expect(
-      await stalePendingQuestion(db, { graphId: userA, pendingId: answered, text: STALE_TEXT }),
+      await stalePendingQuestion(db, {
+        identity: personal(userA),
+        pendingId: answered,
+        text: STALE_TEXT,
+      }),
     ).toEqual({ staled: false });
     // Сообщения гашения НЕТ — при перевёрнутом правиле оно бы здесь лежало
     expect((await fatesOf(answered)).stale).toBeUndefined();
@@ -1333,8 +1435,8 @@ describe('answerPendingQuestion: ответ владельца — судьба 
       const runId = newId();
       const pendingId = await askedQuestion(runId, `Гонка ${i}: продолжать?`);
       const [a, s] = await Promise.all([
-        answerPendingQuestion(db, { graphId: userA, pendingId, answer: 'Да' }),
-        stalePendingQuestion(db, { graphId: userA, pendingId, text: STALE_TEXT }),
+        answerPendingQuestion(db, { identity: personal(userA), pendingId, answer: 'Да' }),
+        stalePendingQuestion(db, { identity: personal(userA), pendingId, text: STALE_TEXT }),
       ]);
       const written = await fatesOf(pendingId);
       if (written.answer !== undefined && written.stale !== undefined) {
@@ -1363,10 +1465,14 @@ describe('answerPendingQuestion: ответ владельца — судьба 
 
     // На действие отвечать нечем — его принимают; гейт зеркален assertNotQuestion
     await expect(
-      answerPendingQuestion(db, { graphId: userA, pendingId: actionId, answer: 'Да' }),
+      answerPendingQuestion(db, { identity: personal(userA), pendingId: actionId, answer: 'Да' }),
     ).rejects.toMatchObject({ code: 'VALIDATION' });
     await expect(
-      stalePendingQuestion(db, { graphId: userA, pendingId: actionId, text: STALE_TEXT }),
+      stalePendingQuestion(db, {
+        identity: personal(userA),
+        pendingId: actionId,
+        text: STALE_TEXT,
+      }),
     ).rejects.toMatchObject({ code: 'VALIDATION' });
     expect((await fatesOf(actionId)).answer).toBeUndefined();
     expect((await fatesOf(actionId)).stale).toBeUndefined();
@@ -1376,45 +1482,51 @@ describe('answerPendingQuestion: ответ владельца — судьба 
     // Чатовый pending без kind читается как действие — тот же отказ
     const { pendingId: chatId } = await pendingArchive(undefined);
     await expect(
-      answerPendingQuestion(db, { graphId: userA, pendingId: chatId, answer: 'Да' }),
+      answerPendingQuestion(db, { identity: personal(userA), pendingId: chatId, answer: 'Да' }),
     ).rejects.toMatchObject({ code: 'VALIDATION' });
 
     // Чужой и несуществующий неразличимы: RLS скоупит журнал владельцем
     const foreign = await askedQuestion(newId(), 'Вопрос владельца A');
     await expect(
-      answerPendingQuestion(db, { graphId: userB, pendingId: foreign, answer: 'Да' }),
+      answerPendingQuestion(db, { identity: personal(userB), pendingId: foreign, answer: 'Да' }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(
-      answerPendingQuestion(db, { graphId: userA, pendingId: newId(), answer: 'Да' }),
+      answerPendingQuestion(db, { identity: personal(userA), pendingId: newId(), answer: 'Да' }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(
-      stalePendingQuestion(db, { graphId: userA, pendingId: newId(), text: STALE_TEXT }),
+      stalePendingQuestion(db, { identity: personal(userA), pendingId: newId(), text: STALE_TEXT }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   test('обе судьбы в ленте (запись мимо процедур): процедура сходится с карточкой на ОТВЕТЕ, а не на гашении (ОЧ.8)', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост двойной судьбы', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const pendingId = await askedQuestion(runId, 'Двойная судьба?', undefined, threadId);
 
-    await answerPendingQuestion(db, { graphId: userA, pendingId, answer: 'Да' });
+    await answerPendingQuestion(db, { identity: personal(userA), pendingId, answer: 'Да' });
     await craftStale(pendingId, threadId); // так ляжет только запись мимо процедур
 
     // Карточка показывает «отвечено» (ОЧ.8) — и процедура обязана говорить то же самое,
     // иначе владельцу отвечают «снят» про вопрос, который в ленте помечен решённым
     expect((await unitsOf(runId))[0]?.fate).toBe('answered');
-    expect(await answerPendingQuestion(db, { graphId: userA, pendingId, answer: 'Да' })).toEqual({
+    expect(
+      await answerPendingQuestion(db, { identity: personal(userA), pendingId, answer: 'Да' }),
+    ).toEqual({
       status: 'answered',
       pendingId,
     });
-    expect(await answerPendingQuestion(db, { graphId: userA, pendingId, answer: 'Нет' })).toEqual({
+    expect(
+      await answerPendingQuestion(db, { identity: personal(userA), pendingId, answer: 'Нет' }),
+    ).toEqual({
       status: 'already',
       answer: 'Да',
     });
-    expect(await stalePendingQuestion(db, { graphId: userA, pendingId, text: STALE_TEXT })).toEqual(
-      { staled: false },
-    );
+    expect(
+      await stalePendingQuestion(db, { identity: personal(userA), pendingId, text: STALE_TEXT }),
+    ).toEqual({ staled: false });
   });
 });
 
@@ -1428,7 +1540,7 @@ describe('границы вопроса проверяются при ЗАПИС
     const healthy = await askedQuestion(runId, 'Нормальный вопрос прогона');
 
     const outOfBounds = async (question: string, options?: string[]) =>
-      withIdentity(db, userA, (tx) =>
+      withIdentity(db, personal(userA), (tx) =>
         createPending(tx, {
           actor: { userId: userA, kind: 'ai', source: 'routine', runId },
           kind: 'question',
@@ -1461,7 +1573,9 @@ describe('зеркальный запрет: у действия нет поле
   test('запись {kind:action, tool, input, question} — fail-closed при ЧТЕНИИ: одиночное чтение по id → VALIDATION «повреждена», проба пачки роняет пачку', async () => {
     const runId = newId();
     const host = await seedEntity(userA, { title: 'Хост гибрида', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const hybrid = await craftPending(threadId, {
       id: newId(),
       kind: 'action',
@@ -1476,7 +1590,11 @@ describe('зеркальный запрет: у действия нет поле
 
     // Запрет стоит в схеме — значит ловит у ВСЕХ читателей, а не только в RunUnit:
     // и у одиночного чтения по id (approve/reject), и у пробы пачки
-    const approved = await approvePending(db, { graphId: userA, pendingId: hybrid, clock });
+    const approved = await approvePending(db, {
+      identity: personal(userA),
+      pendingId: hybrid,
+      clock,
+    });
     expect(approved.ok).toBe(false);
     if (!approved.ok) {
       expect(approved.error.code).toBe('VALIDATION');
@@ -1492,13 +1610,19 @@ describe('listRunUnits: контракт по identity (Minor-1 ревью За�
   test('пин к докблоку: tx одного владельца + graphId другого → единицы возвращаются, а судьбы молча читаются как open', async () => {
     const runId = newId();
     const pendingId = await askedQuestion(runId, 'Чей это graphId?');
-    await answerPendingQuestion(db, { graphId: userA, pendingId, answer: 'Владельца A' });
+    await answerPendingQuestion(db, {
+      identity: personal(userA),
+      pendingId,
+      answer: 'Владельца A',
+    });
     expect((await unitsOf(runId))[0]?.fate).toBe('answered');
 
     // Цена рассинхрона, из-за которой докблок и написан: PK судеб считаются от
     // переданного graphId, а строки читаются под RLS транзакции — судьба не находится,
     // и пачка выглядит навсегда нерешённой («Принять все» повторно жуёт решённое)
-    const mismatched = await withIdentity(db, userA, (tx) => listRunUnits(tx, userB, runId));
+    const mismatched = await withIdentity(db, personal(userA), (tx) =>
+      listRunUnits(tx, userB, runId),
+    );
     expect(mismatched.map((u) => u.pendingId)).toEqual([pendingId]);
     expect(mismatched[0]?.fate).toBe('open');
   });
@@ -1513,7 +1637,7 @@ describe('createSystemPending: запись без актора', () => {
 
   test('атрибуция system в записи; approve исполняет ОТ ВЛАДЕЛЬЦА и остаётся видимым в ленте', async () => {
     const entity = await seedEntity(owner, { title: 'Цель системной единицы', tags: [] });
-    const { id } = await withIdentity(db, owner, (tx) =>
+    const { id } = await withIdentity(db, personal(owner), (tx) =>
       createSystemPending(tx, {
         graphId: owner,
         tool: 'entity_update',
@@ -1523,7 +1647,7 @@ describe('createSystemPending: запись без актора', () => {
       }),
     );
 
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select().from(chatMessages).where(eq(chatMessages.id, id)),
     );
     const pending = (rows[0]?.metadata as { pending: Record<string, unknown> }).pending;
@@ -1535,13 +1659,13 @@ describe('createSystemPending: запись без актора', () => {
       'explicit',
     );
 
-    const r = await approvePending(db, { graphId: owner, pendingId: id });
+    const r = await approvePending(db, { identity: personal(owner), pendingId: id });
     expect(r.ok).toBe(true);
 
     // ИСПОЛНЕНИЕ атрибутируется ВЛАДЕЛЬЦУ: `source: 'system'` спрятал бы действие из ленты
     // (`chat/messages.ts`) и из «отмени последнее» (`findLastUndoable` пропускает системные),
     // то есть владелец не смог бы отменить то, что сам и подтвердил.
-    const audit = await withIdentity(db, owner, (tx) =>
+    const audit = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select()
         .from(chatMessages)
@@ -1554,7 +1678,7 @@ describe('createSystemPending: запись без актора', () => {
 
   test('повтор с тем же dedupeKey возвращает ТУ ЖЕ карточку, а не вторую', async () => {
     const key = `probe:${newId()}`;
-    const first = await withIdentity(db, owner, (tx) =>
+    const first = await withIdentity(db, personal(owner), (tx) =>
       createSystemPending(tx, {
         graphId: owner,
         tool: 'entity_update',
@@ -1564,7 +1688,7 @@ describe('createSystemPending: запись без актора', () => {
         clock,
       }),
     );
-    const second = await withIdentity(db, owner, (tx) =>
+    const second = await withIdentity(db, personal(owner), (tx) =>
       createSystemPending(tx, {
         graphId: owner,
         tool: 'entity_update',
@@ -1575,7 +1699,7 @@ describe('createSystemPending: запись без актора', () => {
       }),
     );
     expect(second.id).toBe(first.id);
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select().from(chatMessages).where(eq(chatMessages.id, first.id)),
     );
     // Журнал append-only: сохранён payload ПЕРВОГО запроса (§4.6).

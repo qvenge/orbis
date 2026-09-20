@@ -1,8 +1,10 @@
 // apps/server/src/routines/queries.test.ts
-// Список владельцев для тика планировщика рутин (V1.13, инвариант 14) против живой БД.
+// Пары «граф + держатель гранта owner» для тика планировщика (V1.13, инвариант 14) против
+// живой БД. Сам резолвер переехал в `src/identity.ts` (третий из трёх резолверов пары, D44);
+// имя файла оставлено — на него ссылаются миграция 0013 и pgTAP.
 //
 // Тест намеренно идёт под ролью orbis_app БЕЗ identity — ровно так, как ходит планировщик:
-// у тика нет владельца, он их только перечисляет, а работу ведёт уже под withIdentity.
+// у тика нет актора, он только перечисляет графы, а работу ведёт уже под withIdentity.
 // appDb() поднимает пул на DATABASE_URL (роль orbis_app и локально, и в CI); проверка
 // current_user ниже — страховка от ложно-зелёного: с админским DSN тесты прошли бы и без
 // политики 0013, ничего при этом не доказав.
@@ -14,10 +16,17 @@
 // В pgTAP (группа 11) осталась структурная половина: форма политики и наличие гранта.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
-import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
+import { identitiesForScheduler } from '../identity';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
-import { graphIdsForScheduler } from './queries';
 
 requireEnv();
 
@@ -44,14 +53,14 @@ async function codeOfRejection(run: Promise<unknown>): Promise<string> {
   return run.then(() => 'запрос прошёл', pgCode);
 }
 
-const OWNER_A = mintGraph();
-const OWNER_B = mintGraph();
+const GRAPH_A = mintGraph();
+const GRAPH_B = mintGraph();
 
 beforeAll(async () => {
   await truncateAll();
-  for (const user of [OWNER_A, OWNER_B]) {
+  for (const graph of [GRAPH_A, GRAPH_B]) {
     await createCaller({
-      actorUserId: user,
+      identity: personal(graph),
       actorKind: 'owner',
       db,
       clientVersion: null,
@@ -76,18 +85,21 @@ test('сьют идёт под служебной ролью без identity —
   expect(role[0]?.anon).toBe(true);
 });
 
-test('graphIdsForScheduler под orbis_app без identity: видит графы, созданные сидом, по возрастанию', async () => {
-  const ids = await graphIdsForScheduler(db);
-  // Оба владельца, а не «свой»: под orbis_app auth.uid() пуст, и узкая политика вернула бы
-  // пустоту. Именно чужие строки — то, ради чего 0013 существует. Двух РАЗНЫХ владельцев
-  // достаточно: одного дала бы и политика, скоупленная по владельцу.
-  expect(ids).toContain(OWNER_A);
-  expect(ids).toContain(OWNER_B);
-  // Порядок пинится отдельно: тик обходит владельцев детерминированно, иначе два
+test('identitiesForScheduler под orbis_app без identity: видит графы, созданные сидом, по возрастанию', async () => {
+  const pairs = await identitiesForScheduler(db);
+  // Оба графа, а не «свой»: под orbis_app auth.uid() пуст, и узкая политика вернула бы
+  // пустоту. Именно чужие строки — то, ради чего 0013 существует. Двух РАЗНЫХ графов
+  // достаточно: один дала бы и политика, скоупленная по аккаунту. Сверяется ПАРА целиком:
+  // актор приезжает из graph_members, а не копируется из id графа.
+  expect(pairs).toContainEqual(personal(GRAPH_A));
+  expect(pairs).toContainEqual(personal(GRAPH_B));
+  const graphs = pairs.map((p) => p.graph);
+  // Порядок пинится отдельно: тик обходит графы детерминированно, иначе два
   // сосуществующих деплоя (Render держит старый и новый контейнер) расходились бы в
   // порядке обхода, и гонка за один и тот же бакет ловилась бы через раз.
-  expect(ids).toEqual([...ids].sort());
-  expect(new Set(ids).size).toBe(ids.length);
+  expect(graphs).toEqual([...graphs].sort());
+  // Один актор на граф — это `DISTINCT ON (graph_id)` резолвера, а не случайность сида.
+  expect(new Set(graphs).size).toBe(graphs.length);
 });
 
 test('user_settings под orbis_app без identity: запись отклоняется (0013 даёт только чтение)', async () => {
@@ -99,13 +111,13 @@ test('user_settings под orbis_app без identity: запись отклон�
   expect(code).toBe('42501');
 });
 
-test('граф под orbis_app без identity невидим: 0013 открывает список владельцев, а не их данные', async () => {
+test('граф под orbis_app без identity невидим: 0013 открывает список графов, а не их данные', async () => {
   // Ровно два законных исхода, и оба означают «не видно»: 42501 (гранта на entities у
   // служебной роли нет) либо ноль строк (право откуда-то есть, но политики для этой роли
   // нет и RLS прячет всё). Пинить, КАКОЙ именно, нельзя — default privileges различаются
   // между локальным стеком Supabase CLI и образом CI (урок группы 9 pgTAP). Провал — третий
-  // исход: строки видны. Данные в таблице заведомо есть — сид выше создал 18 сущностей на
-  // каждого из двух владельцев, так что пустота здесь не может быть пустотой таблицы.
+  // исход: строки видны. Данные в таблице заведомо есть — сид выше создал 18 сущностей в
+  // каждом из двух графов, так что пустота здесь не может быть пустотой таблицы.
   const seen = await db
     .execute(sql`SELECT count(*)::int AS n FROM entities`)
     .then((r) => ({ denied: false as const, n: Number(r[0]?.n) }))

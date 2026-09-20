@@ -29,7 +29,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { globalThreadId, OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import type { AiDeps } from '../ai/send-message';
 import { createApp } from '../app';
 import { chatMessages } from '../db/schema';
@@ -49,7 +49,7 @@ const REDIRECT = 'http://localhost:8080/callback';
 const CLIENT_NAME = 'Claude Code';
 
 const ownerCaller = createCallerFactory(appRouter)({
-  actorUserId: owner,
+  identity: personal(owner),
   actorKind: 'owner',
   db,
   clientVersion: null,
@@ -419,7 +419,7 @@ test('созданное агентом действие попало в жур�
   // вид операции несёт `type`.
   expect(createdByAgentId, 'первый тест не дошёл до создания сущности').toBeDefined();
 
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(chatMessages)

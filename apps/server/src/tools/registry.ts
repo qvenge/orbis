@@ -20,6 +20,7 @@ import {
   attachToolName,
   BUILTIN_RELATION_ROLE_META,
   effectiveLabel,
+  type GraphId,
   isModuleEnabled,
   moduleOfTool,
   PROPOSAL_ALLOWED_TOOLS,
@@ -1301,6 +1302,6 @@ export function buildToolDefs(
  * Четвёртая, диспатч (`dispatchTool`, `tools/dispatch.ts`), берёт маску сама: снимок у неё
  * уже свой.
  */
-export async function buildToolRegistry(tx: Tx, graphId: string): Promise<OrbisToolDef[]> {
+export async function buildToolRegistry(tx: Tx, graphId: GraphId): Promise<OrbisToolDef[]> {
   return buildToolDefs(await effectiveRegistry(tx, graphId), await disabledModulesOf(tx, graphId));
 }

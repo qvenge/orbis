@@ -5,10 +5,11 @@
 // поэтому withIdentity здесь неприменим — RLS скоупит эти запросы не по auth.uid(),
 // а самим условием на хеш.
 import { createHash } from 'node:crypto';
-import { type GrantScope, newId } from '@orbis/shared';
+import { type AccountId, type GrantScope, type GraphId, newId } from '@orbis/shared';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { agentGrants } from '../db/schema';
+import { type Identity, parseAccountId, parseGraphId } from '../identity';
 import { OAuthError } from './errors';
 import {
   ACCESS_PREFIX,
@@ -25,7 +26,10 @@ import {
 
 export interface GrantIdentity {
   grantId: string;
-  graphId: string;
+  /** Аккаунт, выдавший грант (`issued_by`) — он и есть актор запросов этого агента. */
+  accountId: AccountId;
+  /** Граф, на который грант выписан, — текущий граф запросов этого агента. */
+  graphId: GraphId;
   /** Область гранта (С2): 'full' — весь граф владельца, 'worker' — сужение до тикета. */
   scope: GrantScope;
   /** Подпись доступа, которую владелец видит на экране «Агенты». */
@@ -33,10 +37,10 @@ export interface GrantIdentity {
 }
 
 /**
- * Грант в контексте вызова — то же самое, что GrantIdentity, минус владелец: на всех
- * путях ниже транспорта владелец уже лежит отдельным полем (actorUserId контекста тула,
- * actorUserId контекста tRPC), и второй его экземпляр рядом стал бы вторым источником
- * правды — расходящимся ровно в тот момент, когда кто-нибудь соберёт GrantRef руками.
+ * Грант в контексте вызова — то же самое, что GrantIdentity, минус ПАРА: актор и граф ниже
+ * транспорта едут одним значением `identity` (поле контекста тула, поле контекста tRPC), и
+ * второй их экземпляр в гранте стал бы второй правдой — расходящейся ровно в тот момент,
+ * когда кто-нибудь соберёт GrantRef руками.
  */
 export interface GrantRef {
   id: string;
@@ -100,7 +104,7 @@ const secondsFromNow = (s: number) => new Date(Date.now() + s * 1000);
 const revokedAtStamp = sql`COALESCE(${agentGrants.revokedAt}, now())`;
 
 /**
- * Bearer → владелец. Живым считается неотозванный грант, у которого срок либо не
+ * Bearer → пара «аккаунт-актор + граф». Живым считается неотозванный грант, у которого срок либо не
  * наступил, либо не задан вовсе (PAT бессрочен — отзывается строкой, не временем).
  * Отметка last_used_at питает экран настроек; она же делает видимым доступ, о котором
  * владелец забыл.
@@ -123,11 +127,15 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
     .returning({
       id: agentGrants.id,
       graphId: agentGrants.graphId,
+      issuedBy: agentGrants.issuedBy,
       scope: agentGrants.scope,
       label: agentGrants.label,
     });
   const row = rows[0];
   if (!row) return null;
+  // issued_by NULLABLE до миграции 0021 (Р-КГ-2): грант без выдавшего аккаунта — не «актор = граф»,
+  // а отказ (fail-closed). После 0021 ветка недостижима и снимается задачей Г-4.
+  if (row.issuedBy === null) return null;
   // Каст, а не разбор: колонка `scope` — text с DEFAULT 'full', перечисление живёт одним
   // списком в @orbis/shared (GRANT_SCOPES), а пишут в неё выдача кода и issuePatGrant —
   // значениями этого же списка. Откат на 'full' при незнакомом значении был бы здесь
@@ -136,10 +144,36 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
   // «не 'full' → не полный доступ», а не сравнением с одним лишь 'worker'.
   return {
     grantId: row.id,
-    graphId: row.graphId,
+    accountId: parseAccountId(row.issuedBy),
+    graphId: parseGraphId(row.graphId),
     scope: row.scope as GrantScope,
     label: row.label,
   };
+}
+
+/**
+ * Грант агенту выписывает ТОЛЬКО держатель гранта owner (D44, спека §3.4): иначе operator выдал бы
+ * агенту full-доступ шире собственного. RLS здесь не помощник — выдача идёт под `orbis_app`
+ * (`server_manages_grants`, 0005:35), поэтому условие держит код. Читает `graph_members` той же
+ * служебной ролью (политика `scheduler_reads_members`, 0020). В v1 владелец личного графа — всегда
+ * сам аккаунт, и отказ недостижим; он станет достижим с первым грантом `operator` (ступень 2).
+ */
+export class NotGraphOwnerError extends Error {
+  constructor(graph: string) {
+    // Две причины под одним отказом, и текст называет обе: у `ops.ts issue-pat` достижима первая
+    // (аккаунт ещё не заходил — личного графа нет), вторая — с первым грантом operator (ступень 2).
+    super(
+      `нет действующего гранта owner в графе ${graph}: граф не заведён либо грант выдающего — не owner`,
+    );
+    this.name = 'NotGraphOwnerError';
+  }
+}
+
+async function assertHoldsOwnerGrant(db: Db, who: Identity): Promise<void> {
+  const rows = await db.execute(sql`SELECT 1 FROM graph_members
+    WHERE graph_id = ${who.graph}::uuid AND account_id = ${who.actor}::uuid
+      AND grant_kind = 'owner' AND revoked_at IS NULL LIMIT 1`);
+  if (rows.length === 0) throw new NotGraphOwnerError(who.graph);
 }
 
 /**
@@ -153,7 +187,7 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
 export async function createAuthorizationCode(
   db: Db,
   input: {
-    graphId: string;
+    identity: Identity;
     clientId: string;
     label: string;
     redirectUri: string;
@@ -161,10 +195,12 @@ export async function createAuthorizationCode(
     scope: GrantScope;
   },
 ): Promise<string> {
+  await assertHoldsOwnerGrant(db, input.identity);
   const code = mintToken(CODE_PREFIX);
   await db.insert(agentGrants).values({
     id: newId(),
-    graphId: input.graphId,
+    graphId: input.identity.graph,
+    issuedBy: input.identity.actor,
     clientId: input.clientId,
     kind: 'oauth',
     label: input.label,
@@ -303,12 +339,14 @@ export async function rotateRefresh(
  */
 export async function issuePatGrant(
   db: Db,
-  input: { graphId: string; label: string; scope?: GrantScope },
+  input: { identity: Identity; label: string; scope?: GrantScope },
 ): Promise<string> {
+  await assertHoldsOwnerGrant(db, input.identity);
   const token = mintToken(PAT_PREFIX);
   await db.insert(agentGrants).values({
     id: newId(),
-    graphId: input.graphId,
+    graphId: input.identity.graph,
+    issuedBy: input.identity.actor,
     kind: 'pat',
     label: input.label,
     scope: input.scope ?? 'full',
@@ -323,7 +361,7 @@ export async function issuePatGrant(
  * «нет ни access, ни refresh»: у PAT refresh_hash пуст всегда, и проверка на один
  * refresh выдала бы каждый headless-токен за брошенную попытку авторизации.
  */
-export async function listGrants(db: Db, graphId: string): Promise<GrantSummary[]> {
+export async function listGrants(db: Db, graphId: GraphId): Promise<GrantSummary[]> {
   return db
     .select({
       id: agentGrants.id,
@@ -360,7 +398,7 @@ export async function listGrants(db: Db, graphId: string): Promise<GrantSummary[
  */
 export async function revokeGrant(
   db: Db,
-  input: { graphId: string; grantId: string },
+  input: { graphId: GraphId; grantId: string },
 ): Promise<boolean> {
   const rows = await db
     .update(agentGrants)

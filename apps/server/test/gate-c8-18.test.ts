@@ -20,6 +20,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import type { GraphId } from '@orbis/shared';
 import { ROLE_ENVELOPE_BINDING, type RowProjection, rowProjectionOf } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
@@ -45,6 +46,7 @@ import {
   appDb,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -75,12 +77,19 @@ function gitGrep(pattern: string, pathspec: readonly string[]): string[] {
 }
 
 describe('гейт §С8-18: доказательства вехи I', () => {
-  test('в репозитории не осталось ни одной пометки failing/todo (Р-К-9)', () => {
+  test('пометок failing/todo нет нигде, кроме гейта миграции 0021 — ровно две (Р-К-9, Р-КГ-11)', () => {
     // Шаблон СОБИРАЕТСЯ, а не пишется литералом: литерал пометки в этом файле сам стал бы
     // совпадением, и сторож ловил бы себя — вечно красный и потому бесполезный.
     const marks = ['failing', 'todo'].join('|');
     const pattern = `\\b(test|it|describe)\\.(${marks})\\b`;
-    expect(gitGrep(pattern, ['apps', 'packages', 'scripts'])).toEqual([]);
+    const hits = gitGrep(pattern, ['apps', 'packages', 'scripts']);
+    // ВРЕМЕННОЕ исключение среза «Г» (D44, Р-КГ-11), и оно названо адресом, а не «где-то».
+    // Два сюжета «граф ≠ аккаунт» красны, пока политики RLS читают только `auth.uid()`:
+    // зелёными их делает миграция 0021 (задача Г-4), она же снимает пометки и эту ветку.
+    // Условие держит И файл, И счёт: иначе исключение стало бы дырой для любой пометки.
+    const allowed = 'apps/server/test/graph-vs-account.test.ts';
+    expect(hits.filter((l) => !l.startsWith(`${allowed}:`))).toEqual([]);
+    expect(hits).toHaveLength(2);
   });
 
   test('токены аспектов гейта не встречаются вне фикстуры, снимка и самого теста (§С8-18)', () => {
@@ -155,7 +164,7 @@ describe('фикстура гейта: два аспекта заведены т
     const user = await freshGraph();
     await seedCustomAspect(user, GATE_FIN_ASPECT);
     await seedCustomAspect(user, GATE_PLAIN_ASPECT);
-    const reg = await withIdentity(db, user, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     expect(GATE_ASPECT_KEYS.every((k) => reg.aspects.has(k))).toBe(true);
     for (const id of Object.values(GATE_PROPS)) expect(reg.properties.has(id)).toBe(true);
     // Привязки доехали до снимка как данные: на вехе 0 их никто не читает, и это ровно то,
@@ -168,8 +177,8 @@ describe('фикстура гейта: два аспекта заведены т
 const owner = mintGraph();
 let world: GateWorld;
 const createCaller = createCallerFactory(appRouter);
-const callerFor = (user: string) =>
-  createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+const callerFor = (user: GraphId) =>
+  createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 
 type Caller = ReturnType<typeof callerFor>;
 type Overview = Awaited<ReturnType<Caller['budget']['overview']>>;
@@ -208,7 +217,7 @@ function taken<T>(r: Collected<T> | undefined, what: string): T {
  * (слот `moment`) и `orbis/completable`, ни строки кода под него ни в движке, ни в роутере.
  */
 async function agendaRows(
-  user: string,
+  user: GraphId,
 ): Promise<Array<{ id: string; section: 'window' | 'overdue' }>> {
   const r = await callerFor(user).agenda.list({ days: 8 });
   return r.rows.map((x) => ({ id: x.entity.id, section: x.section }));
@@ -233,7 +242,7 @@ beforeAll(async () => {
   overview = await collect(() => c.budget.overview({ month: world.month }));
   agenda = await collect(() => agendaRows(owner));
   m14 = await collect(async () => {
-    const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     const fin = (await c.entity.get({ id: world.finId })).entity;
     const closed = (await c.entity.get({ id: world.blockerClosedId })).entity;
     return { reg, fin, closed };

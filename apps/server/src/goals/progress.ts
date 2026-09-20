@@ -22,6 +22,7 @@
 //    конца, и наружу уезжают только они: агрегат считает SQL через `::numeric`, а
 //    процент клиент выводит из тех же строк точным BigInt (§3.3). Числа с плавающей
 //    точкой контракт этой функции не пересекают вовсе.
+import type { GraphId } from '@orbis/shared';
 import {
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
@@ -283,7 +284,7 @@ function logFailure(
  */
 export async function goalProgressFor(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   entity: WireEntity,
 ): Promise<GoalProgress | undefined> {
   // Признак носителя (Р9): значения `orbis/progress_source` и `orbis/target_value`

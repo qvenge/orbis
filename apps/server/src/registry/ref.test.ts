@@ -6,6 +6,7 @@
 // Через `execute()`, а не вызовом `assertRefValue` напрямую: проверяется не функция, а
 // РУБЕЖ — что путь записи в неё заходит на всех трёх точках (create, update, attach).
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
@@ -16,12 +17,13 @@ import {
 import { assertStaticQuery, type QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
+import { parseGraphId } from '../identity';
 import type { CompileCtx } from '../query/compile-ast';
 import { effectiveRegistry } from './cache';
 import type { RegistrySnapshot } from './load';
@@ -44,7 +46,7 @@ const GOLDEN_REG: RegistrySnapshot = {
 };
 
 const GOLDEN_CTX: CompileCtx = {
-  graphId: '00000000-0000-7000-8000-0000000000a1',
+  graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
   today: '2026-08-27',
   timeZone: 'Europe/Moscow',
   reg: GOLDEN_REG,
@@ -52,12 +54,12 @@ const GOLDEN_CTX: CompileCtx = {
 };
 
 function req(
-  user: string,
+  user: GraphId,
   ops: Array<{ tool: string; input: unknown }>,
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'fast_path',
     operations: ops,
@@ -81,7 +83,7 @@ function reasonOf(r: ExecuteResult): unknown {
   return (err(r).details as { reason?: unknown } | undefined)?.reason;
 }
 
-async function createCategory(user: string, title: string): Promise<string> {
+async function createCategory(user: GraphId, title: string): Promise<string> {
   const e = okEntity(
     await execute(
       db,
@@ -94,7 +96,7 @@ async function createCategory(user: string, title: string): Promise<string> {
 }
 
 /** Транзакция с категорией — новой формой (`props` по id свойства). */
-async function createTxn(user: string, title: string, categoryId?: string): Promise<string> {
+async function createTxn(user: GraphId, title: string, categoryId?: string): Promise<string> {
   const e = okEntity(
     await execute(
       db,
@@ -121,10 +123,10 @@ async function createTxn(user: string, title: string, categoryId?: string): Prom
 
 /** Зеркала-рёбра роли `ref` этой сущности: цель + свойство из `meta`. */
 async function refEdges(
-  user: string,
+  user: GraphId,
   entityId: string,
 ): Promise<Array<{ target: string; property: unknown }>> {
-  return await withIdentity(db, user, async (tx) => {
+  return await withIdentity(db, personal(user), async (tx) => {
     const rows = (await tx.execute(sql`
       SELECT target_id, meta->>'property' AS property
         FROM relations
@@ -138,8 +140,8 @@ async function refEdges(
 }
 
 /** Сущности владельца с таким заголовком — проба «записи НЕ появилось». */
-async function titledCount(user: string, title: string): Promise<number> {
-  return await withIdentity(db, user, async (tx) => {
+async function titledCount(user: GraphId, title: string): Promise<number> {
+  return await withIdentity(db, personal(user), async (tx) => {
     const rows = (await tx.execute(
       sql`SELECT count(*)::int AS n FROM entities WHERE title = ${title}`,
     )) as unknown as Array<{ n: number }>;
@@ -148,8 +150,8 @@ async function titledCount(user: string, title: string): Promise<number> {
 }
 
 /** Значения свойств строки — правда сущности (§А1-1), а не её проекция. */
-async function propsOf(user: string, entityId: string): Promise<Record<string, unknown>> {
-  return await withIdentity(db, user, async (tx) => {
+async function propsOf(user: GraphId, entityId: string): Promise<Record<string, unknown>> {
+  return await withIdentity(db, personal(user), async (tx) => {
     const rows = (await tx.execute(
       sql`SELECT props FROM entities WHERE id = ${entityId}::uuid`,
     )) as unknown as Array<{ props: Record<string, unknown> }>;
@@ -159,8 +161,8 @@ async function propsOf(user: string, entityId: string): Promise<Record<string, u
   });
 }
 
-async function tagsOf(user: string, entityId: string): Promise<string[]> {
-  return await withIdentity(db, user, async (tx) => {
+async function tagsOf(user: GraphId, entityId: string): Promise<string[]> {
+  return await withIdentity(db, personal(user), async (tx) => {
     const rows = (await tx.execute(
       sql`SELECT tags FROM entities WHERE id = ${entityId}::uuid`,
     )) as unknown as Array<{ tags: string[] }>;
@@ -617,7 +619,7 @@ test('ref: undo правки категории возвращает и свой
   if (!moved.ok) throw new Error(JSON.stringify(moved.error));
   expect(await refEdges(user, txn)).toEqual([{ target: fun, property: 'orbis/finance_category' }]);
 
-  const undone = await undoAction(db, { actorUserId: user, actionId: moved.actionId });
+  const undone = await undoAction(db, { identity: personal(user), actionId: moved.actionId });
   expect(undone.ok).toBe(true);
   // Единица отката — СВОЙСТВО (§А7-4); ребро производно и сходится за ним само
   const back = okEntity(
@@ -662,7 +664,7 @@ test('ref: undo архивации цели снимает needs-review — и �
   expect(await tagsOf(user, onlyFood)).toEqual(['needs-review']);
   expect(await tagsOf(user, both)).toEqual(['needs-review']);
 
-  const undone = await undoAction(db, { actorUserId: user, actionId: archiveFood.actionId });
+  const undone = await undoAction(db, { identity: personal(user), actionId: archiveFood.actionId });
   expect(undone.ok).toBe(true);
   // У «Обеда» архивных целей не осталось — тег снят.
   expect(await tagsOf(user, onlyFood)).toEqual([]);
@@ -674,7 +676,10 @@ test('ref: undo архивации цели снимает needs-review — и �
   // «Ужин» во второй список не попал (был уже помечен), и её откат тега не снимет. Тег
   // остаётся консервативным следом «требует разбора»; правило выбрано так намеренно, чтобы
   // откат не стирал пометку, поставленную человеком руками.
-  const undoneToo = await undoAction(db, { actorUserId: user, actionId: archiveFun.actionId });
+  const undoneToo = await undoAction(db, {
+    identity: personal(user),
+    actionId: archiveFun.actionId,
+  });
   expect(undoneToo.ok).toBe(true);
   expect(await tagsOf(user, both)).toEqual(['needs-review']);
 });
@@ -725,7 +730,7 @@ test('ref: перечень — у всех встроенных ref-свойс�
  * которых владелец не писал. Ровно эта обстановка нужна обеим пробам Р-11-2.
  */
 async function txnUnderProject(
-  user: string,
+  user: GraphId,
 ): Promise<{ project: string; txn: string; category: string }> {
   const category = await createCategory(user, 'Еда');
   const project = okEntity(
@@ -813,7 +818,7 @@ test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисля�
   // строкой реестра, часть Б) — и без этой пробы был бы украшением.
   const user = await freshGraph();
   const { project, txn, category } = await txnUnderProject(user);
-  await withIdentity(db, user, async (tx) => {
+  await withIdentity(db, personal(user), async (tx) => {
     const reg = await effectiveRegistry(tx, user);
     await syncRefMirror(tx, user, txn, [{ propertyId: 'orbis/root_project', after: project }], reg);
   });
@@ -827,7 +832,7 @@ test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисля�
 // ---------------------------------------------------------------------------
 
 /** Своё ссылочное свойство с множеством цели «любая категория» — обе стороны слияния. */
-async function ownRefProperty(user: string, key: string, label: string): Promise<string> {
+async function ownRefProperty(user: GraphId, key: string, label: string): Promise<string> {
   const r = await execute(
     db,
     req(
@@ -925,7 +930,7 @@ test('ref × merge: undo слияния возвращает подпись зе
   if (!merged.ok) throw new Error(JSON.stringify(merged.error));
   expect(await refEdges(user, y.id)).toEqual([{ target: c, property: b }]);
 
-  const undone = await undoAction(db, { actorUserId: user, actionId: merged.actionId });
+  const undone = await undoAction(db, { identity: personal(user), actionId: merged.actionId });
   expect(undone.ok).toBe(true);
   // «Байт-в-байт» (§7.8) — и для значения, и для подписи производного ребра.
   expect(await propsOf(user, y.id)).toMatchObject({ [a]: c });

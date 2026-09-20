@@ -57,6 +57,7 @@ import {
 import { ensureGlobalThread } from '../apps/server/src/chat/threads';
 import { makeDb } from '../apps/server/src/db/client';
 import { withIdentity } from '../apps/server/src/db/with-identity';
+import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
 import { type LLMProviderEnv, makeLLMProvider } from '../apps/server/src/llm/provider';
 import type { LLMProvider } from '../apps/server/src/llm/types';
 import { approvePending } from '../apps/server/src/policy/pending';
@@ -488,7 +489,9 @@ async function main(): Promise<number> {
   }
 
   const { db, client } = makeDb({ max: 3 });
-  const owner = crypto.randomUUID();
+  // Резолвер 1 (D44): случайный uuid — та же граница внешнего мира, что аргумент CLI.
+  const who = identityOfPerson(parseAccountId(crypto.randomUUID()));
+  const owner = who.graph;
 
   /**
    * СЫРЫЕ строки реестра, видимые владельцу: свои ∪ встроенные. Именно «строки», а не
@@ -505,7 +508,7 @@ async function main(): Promise<number> {
    * `effectiveRegistry`, и абзац перестаёт быть верным.
    */
   const dictionaryRows = async (): Promise<PropertyRow[]> =>
-    (await withIdentity(db, owner, (tx) =>
+    (await withIdentity(db, who, (tx) =>
       tx.execute(sql`SELECT id, graph_id::text AS graph_id, key, label, description, status,
                             merged_into
                        FROM property_definitions
@@ -518,7 +521,7 @@ async function main(): Promise<number> {
   let exitCode = 0;
   try {
     console.log(`probe-p4: провайдер ${provider.modelId}, владелец пробы ${owner}`);
-    const seeded = await seedOwner(db, owner);
+    const seeded = await seedOwner(db, who);
     // Возврат сида тоже проверяется: владелец свежий, `seeded: false` означало бы, что
     // онбординг уже был, — то есть замер пошёл бы по чужому графу. Это КОД 2, а не 1:
     // «замер не состоялся», а не «проба сломалась», — та же граница, что у отсутствия ключа.
@@ -527,7 +530,7 @@ async function main(): Promise<number> {
       console.error('Замер не состоялся (это код 2, а не сбой пробы).');
       throw new ProbeAbort(2);
     }
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, who, (tx) => ensureGlobalThread(tx, owner));
 
     const deps = { provider, model: provider.modelId };
     let failed = 0;
@@ -536,7 +539,7 @@ async function main(): Promise<number> {
       let answer: SendMessageResult;
       try {
         answer = await sendMessage(db, deps, {
-          graphId: owner,
+          identity: who,
           id: newId(),
           threadId,
           content: task.text,
@@ -587,7 +590,7 @@ async function main(): Promise<number> {
     const bucket = new Date().toISOString().slice(0, 16);
     const started = await startBucketRun(
       { db, provider, model: provider.modelId, clock },
-      { graphId: owner, routine: { id: routineId, title: GARDENER_TITLE }, bucket },
+      { identity: who, routine: { id: routineId, title: GARDENER_TITLE }, bucket },
     );
     // Оба исхода — того же класса, что сид выше: мерить нечем, а не сломалось.
     if (!started.started) {
@@ -595,7 +598,7 @@ async function main(): Promise<number> {
       console.error('Замер не состоялся (это код 2, а не сбой пробы).');
       throw new ProbeAbort(2);
     }
-    const routine = await withIdentity(db, owner, (tx) => routineById(tx, routineId));
+    const routine = await withIdentity(db, who, (tx) => routineById(tx, routineId));
     if (routine === null) {
       console.error('probe-p4: садовник не найден — сид не отработал.');
       console.error('Замер не состоялся (это код 2, а не сбой пробы).');
@@ -606,9 +609,9 @@ async function main(): Promise<number> {
     // видит. Первый прогон пробы упал ровно на этом — `deps.clock is not a function`.
     const end = await runRoutineRun(
       { db, provider, model: provider.modelId, clock },
-      { graphId: owner, routine, runId: started.runId, bucket },
+      { identity: who, routine, runId: started.runId, bucket },
     );
-    const runRows = (await withIdentity(db, owner, (tx) =>
+    const runRows = (await withIdentity(db, who, (tx) =>
       tx.execute(sql`SELECT props ->> 'orbis/run_report' AS report FROM entities
                       WHERE id = ${started.runId}::uuid`),
     )) as unknown as Array<{ report: string | null }>;
@@ -627,7 +630,7 @@ async function main(): Promise<number> {
 
     // Владелец принимает то, что садовник отложил: список «после» строится ПОСЛЕ разбора
     // пачки, иначе он показывал бы не работу садовника, а скорость владельца.
-    const units = (await withIdentity(db, owner, (tx) =>
+    const units = (await withIdentity(db, who, (tx) =>
       tx.execute(sql`SELECT id, metadata FROM chat_messages
                       WHERE metadata @> ${JSON.stringify({ pending: { run_id: started.runId, kind: 'action' } })}::jsonb`),
     )) as unknown as Array<{ id: string; metadata: { pending: { tool?: string } } }>;
@@ -636,7 +639,7 @@ async function main(): Promise<number> {
     const mergeUnits = units.filter((u) => u.metadata.pending.tool === 'property_merge');
     let merged = 0;
     for (const unit of mergeUnits) {
-      const r = await approvePending(db, { graphId: owner, pendingId: unit.id });
+      const r = await approvePending(db, { identity: who, pendingId: unit.id });
       if (r.ok) merged += 1;
       else console.error(`  единица ${unit.id}: не применена — ${r.error.code} ${r.error.message}`);
     }

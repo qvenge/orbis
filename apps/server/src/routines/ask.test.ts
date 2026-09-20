@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type AskResult, entityThreadId, newId, pendingMessageId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { askDedupeKey } from '../policy/pending';
@@ -58,7 +58,7 @@ async function liveRoutine(mode: 'propose' | 'act', bucket: string): Promise<Liv
 
 /** Pending-сообщения треда рутины — единицы пачки прогона, как их видит владелец. */
 async function pendingsIn(threadId: string) {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select().from(chatMessages).where(eq(chatMessages.threadId, threadId)),
   );
   return rows.filter((r) => (r.metadata as { pending?: unknown }).pending !== undefined);
@@ -234,7 +234,7 @@ describe('orbis_ask: нетерминальный вопрос владельц�
     const contexts: ToolCallCtx[] = [
       {
         db,
-        actorUserId: owner,
+        identity: personal(owner),
         actorKind: 'ai',
         source: 'chat',
         explicitCommand: false,
@@ -252,7 +252,7 @@ describe('orbis_ask: нетерминальный вопрос владельц�
   test('source routine без контекста рутины → FORBIDDEN_LEVEL (fail-closed)', async () => {
     const broken: ToolCallCtx = {
       db,
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'ai',
       source: 'routine',
       explicitCommand: false,

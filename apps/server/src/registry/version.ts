@@ -17,6 +17,7 @@
 // прежнем ключе ровно в том случае, ради которого функция и заведена. Отличить «версия
 // поднята» от «строки нет» по числу задетых строк невозможно постфактум, поэтому строка
 // создаётся на месте со всеми умолчаниями колонок.
+import type { GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 
@@ -72,7 +73,7 @@ export interface RegistryVersions {
  */
 export async function readRegistryVersions(
   tx: RegistrySqlRunner,
-  graphId: string,
+  graphId: GraphId,
 ): Promise<RegistryVersions> {
   const rows = (await tx.execute(sql`
     SELECT (SELECT version FROM registry_system WHERE id = 1) AS system_version,
@@ -115,7 +116,7 @@ export async function readRegistryVersions(
  */
 export async function bumpOwnerRegistryVersion(
   tx: RegistrySqlRunner,
-  graphId: string,
+  graphId: GraphId,
 ): Promise<number> {
   const rows = (await tx.execute(sql`
     INSERT INTO user_settings (graph_id, registry_version) VALUES (${graphId}::uuid, 1)

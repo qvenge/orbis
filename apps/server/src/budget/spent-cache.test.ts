@@ -2,6 +2,7 @@
 // Кэш spent (§Б5-5, приёмка §С8-16): форма строки, обе половины версии, инкремент по хуку,
 // три пути мимо хука и суточная граница. Реальная БД под withIdentity (RLS enforced).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -10,6 +11,7 @@ import {
   bumpRegistryVersion,
   executeWithFixtureCategories as execute,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -44,13 +46,13 @@ afterAll(async () => {
 });
 
 function req(
-  user: string,
+  user: GraphId,
   tool: string,
   input: unknown,
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'fast_path',
     operations: [{ tool, input }],
@@ -61,7 +63,7 @@ function ok(r: ExecuteResult): ExecuteOk {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
   return r;
 }
-async function createEntity(user: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function createEntity(user: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   return ok(await execute(db, req(user, 'entity_create', { tags: [], ...input })))
     .results[0] as WireEntity;
 }
@@ -111,7 +113,7 @@ describe('таблица кэша: форма строки и обе полов�
       props: budgetProps(cat),
       aspects: ['orbis/budget'],
     });
-    await withIdentity(db, user, async (tx) => {
+    await withIdentity(db, personal(user), async (tx) => {
       const v = await readRegistryVersions(tx, user);
       await writeSpentCache(
         tx,
@@ -157,17 +159,17 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
     const clock = () => new Date('2026-07-10T09:00:00.000Z');
 
     expect(await cacheRows(env.id)).toEqual([]);
-    const first = await budgetOverview(db, user, '2026-07', clock);
+    const first = await budgetOverview(db, personal(user), '2026-07', clock);
     expect(first.envelopes.map((e) => e.spent)).toEqual(['340.00']);
     // Промах записал строку ровно за «сегодня» владельца и с текущей парой версий.
-    const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
+    const versions = await withIdentity(db, personal(user), (tx) => readRegistryVersions(tx, user));
     expect(await cacheRows(env.id)).toEqual([
       { as_of: '2026-07-10', spent: '340.00', owner_version: versions.ownerVersion },
     ]);
 
     // Подмена строки кэша заведомо неверным числом: если бы читатель считал по графу, он
     // вернул бы 340.00 и тест не отличил бы кэш от его отсутствия.
-    await withIdentity(db, user, async (tx) => {
+    await withIdentity(db, personal(user), async (tx) => {
       await writeSpentCache(
         tx,
         user,
@@ -176,13 +178,13 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
       );
     });
     expect(
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent),
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes.map((e) => e.spent),
     ).toEqual(['999.00']);
 
     // §С8-16: смена registry_version инвалидирует — строка чужой версии не отвечает.
     await bumpRegistryVersion(user);
     expect(
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes.map((e) => e.spent),
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes.map((e) => e.spent),
     ).toEqual(['340.00']);
   });
 
@@ -193,7 +195,7 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
       props: budgetProps(other),
       aspects: ['orbis/budget'],
     });
-    await budgetOverview(db, user, '2026-07', () => new Date('2026-07-11T09:00:00.000Z'));
+    await budgetOverview(db, personal(user), '2026-07', () => new Date('2026-07-11T09:00:00.000Z'));
     expect((await cacheRows(env.id)).map((r) => r.as_of)).toEqual(['2026-07-11']);
   });
 
@@ -209,7 +211,7 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
       props: finProps(cat3, '2026-07-10'),
       aspects: ['orbis/financial'],
     });
-    await budgetOverview(db, user, '2026-07', () => new Date('2026-07-10T18:00:00.000Z'));
+    await budgetOverview(db, personal(user), '2026-07', () => new Date('2026-07-10T18:00:00.000Z'));
     await createEntity(user, {
       title: 'Завтра',
       props: finProps(cat3, '2026-07-11'),
@@ -222,7 +224,7 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
     // Наступило 11-е: ключ другой, ответ пересчитан, вчерашняя строка не тронута.
     const day11 = await budgetOverview(
       db,
-      user,
+      personal(user),
       '2026-07',
       () => new Date('2026-07-11T09:00:00.000Z'),
     );
@@ -252,14 +254,14 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
       aspects: ['orbis/financial'],
     });
     const spentOf = async (): Promise<string | undefined> =>
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes.find(
         (e) => e.envelope.id === env.id,
       )?.spent;
     expect(await spentOf()).toBe('340.00');
 
     // Заведомо неверное число в кэше: без него «пересчитал» и «взял из кэша» не различить.
-    const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
-    await withIdentity(db, user, (tx) =>
+    const versions = await withIdentity(db, personal(user), (tx) => readRegistryVersions(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
       writeSpentCache(
         tx,
         user,
@@ -295,7 +297,7 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
       ),
     );
     expect(
-      (await withIdentity(db, user, (tx) => readRegistryVersions(tx, user))).ownerVersion,
+      (await withIdentity(db, personal(user), (tx) => readRegistryVersions(tx, user))).ownerVersion,
     ).toBe(versions.ownerVersion + 1);
     expect(await spentOf()).toBe('340.00');
   });
@@ -318,7 +320,7 @@ describe('чтение spent идёт через кэш (§Б5-5): промах 
       aspects: ['orbis/financial'],
     });
     const spentOf = async (): Promise<string | undefined> =>
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes.find(
         (e) => e.envelope.id === env.id,
       )?.spent;
     expect(await spentOf()).toBe('340.00');
@@ -387,7 +389,7 @@ describe('врезка в бюджет-хук: инкремент нового �
       props: budgetProps(cat),
       aspects: ['orbis/budget'],
     });
-    await budgetOverview(db, user, '2026-07', clock); // прогрев: строка за 2026-07-10 = 0
+    await budgetOverview(db, personal(user), '2026-07', clock); // прогрев: строка за 2026-07-10 = 0
     expect((await cacheRows(env.id)).map((r) => [r.as_of, r.spent])).toEqual([
       ['2026-07-10', '0.00'],
     ]);
@@ -399,7 +401,9 @@ describe('врезка в бюджет-хук: инкремент нового �
     });
     // Инкремент прошёл В ТОЙ ЖЕ tx, что запись движения: строка уже верна ДО всякого чтения.
     expect((await cacheRows(env.id))[0]?.spent).toBe('340.00');
-    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('340.00');
+    expect((await budgetOverview(db, personal(user), '2026-07', clock)).envelopes[0]?.spent).toBe(
+      '340.00',
+    );
   });
 
   test('движение будущего дня строку СЕГОДНЯ не трогает (as_of >= occurred_on)', async () => {
@@ -408,7 +412,7 @@ describe('врезка в бюджет-хук: инкремент нового �
       props: finProps(cat, '2026-07-20'),
       aspects: ['orbis/financial'],
     });
-    const env = (await budgetOverview(db, user, '2026-07', clock)).envelopes[0];
+    const env = (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes[0];
     expect(env?.spent).toBe('340.00');
   });
 
@@ -419,7 +423,8 @@ describe('врезка в бюджет-хук: инкремент нового �
       aspects: ['orbis/financial'],
     });
     const envId = (
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.envelope as WireEntity
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes[0]
+        ?.envelope as WireEntity
     ).id;
     expect((await cacheRows(envId))[0]?.spent).toBe('440.00');
     ok(
@@ -429,12 +434,15 @@ describe('врезка в бюджет-хук: инкремент нового �
       ),
     );
     expect(await cacheRows(envId)).toEqual([]); // ленивый пересчёт
-    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('590.00');
+    expect((await budgetOverview(db, personal(user), '2026-07', clock)).envelopes[0]?.spent).toBe(
+      '590.00',
+    );
   });
 
   test('доход и план не инкрементируют вовсе (предикат тот же, что у ведомости)', async () => {
     const envId = (
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.envelope as WireEntity
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes[0]
+        ?.envelope as WireEntity
     ).id;
     const before = (await cacheRows(envId))[0]?.spent;
     // Прогретая строка ОБЯЗАНА быть: без неё «не изменилась» было бы сравнением двух
@@ -460,7 +468,7 @@ describe('врезка в бюджет-хук: инкремент нового �
       props: finProps(otherCat, '2026-07-08'),
       aspects: ['orbis/financial'],
     });
-    await budgetOverview(db, user, '2026-07', clock);
+    await budgetOverview(db, personal(user), '2026-07', clock);
     expect((await cacheRows(env.id))[0]?.spent).toBe('340.00');
     // Механизм seed — фикстура играет роль системы (§А4-4): гейт created_by пропускает.
     ok(
@@ -475,7 +483,7 @@ describe('врезка в бюджет-хук: инкремент нового �
       ),
     );
     expect(await cacheRows(env.id)).toEqual([]);
-    await budgetOverview(db, user, '2026-07', clock);
+    await budgetOverview(db, personal(user), '2026-07', clock);
     expect((await cacheRows(env.id))[0]?.spent).toBe('0.00');
     ok(
       await execute(
@@ -498,7 +506,7 @@ describe('вклад одного движения — из декларации
 
   /** Тот же вход, что у врезки в исполнителе: снимок владельца + его «сегодня». */
   async function contribution(entityId: string, envelopeId: string) {
-    return withIdentity(db, user, async (tx) => {
+    return withIdentity(db, personal(user), async (tx) => {
       const reg = await effectiveRegistry(tx, user);
       const cctx = {
         graphId: user,
@@ -582,7 +590,7 @@ describe('вклад одного движения — из декларации
     }
     const overview = await budgetOverview(
       db,
-      user,
+      personal(user),
       '2026-07',
       () => new Date('2026-07-10T09:00:00.000Z'),
     );
@@ -619,13 +627,15 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
         { sink },
       ),
     );
-    await budgetOverview(db, user, '2026-07', clock);
+    await budgetOverview(db, personal(user), '2026-07', clock);
     expect((await cacheRows(env.id))[0]?.spent).toBe('340.00');
 
-    const undone = await undoAction(db, { actorUserId: user, actionId: created.actionId });
+    const undone = await undoAction(db, { identity: personal(user), actionId: created.actionId });
     expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
     expect(await cacheRows(env.id)).toEqual([]);
-    expect((await budgetOverview(db, user, '2026-07', clock)).envelopes[0]?.spent).toBe('0.00');
+    expect((await budgetOverview(db, personal(user), '2026-07', clock)).envelopes[0]?.spent).toBe(
+      '0.00',
+    );
   });
 
   test('undo ПРАВКИ суммы сносит кэш владельца: рёбер откат не трогает, хука в нём нет (Ф-Б1-45)', async () => {
@@ -653,15 +663,15 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
     );
     // Прогрев ПОСЛЕ правки: строка кэша обязана существовать и нести новое число, иначе
     // «снесена» ниже проверяло бы пустоту, которая и так была.
-    await budgetOverview(db, user, '2026-07', clock);
+    await budgetOverview(db, personal(user), '2026-07', clock);
     expect((await cacheRows(env.id))[0]?.spent).toBe('250.00');
 
-    const undone = await undoAction(db, { actorUserId: user, actionId: edited.actionId });
+    const undone = await undoAction(db, { identity: personal(user), actionId: edited.actionId });
     expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
     // Рёбер откат не трогал — путь №1 здесь помочь не мог.
     expect(await cacheRows(env.id)).toEqual([]);
     expect(
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes.find(
         (e) => e.envelope.id === env.id,
       )?.spent,
     ).toBe('100.00');
@@ -690,7 +700,7 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
       await execute(
         db,
         {
-          actorUserId: user,
+          identity: personal(user),
           actorKind: 'owner',
           source: 'fast_path',
           batchId: newId(),
@@ -702,14 +712,14 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
         { sink },
       ),
     );
-    await budgetOverview(db, user, '2026-07', clock);
+    await budgetOverview(db, personal(user), '2026-07', clock);
     expect((await cacheRows(env.id))[0]?.spent).toBe('333.00');
 
-    const undone = await undoAction(db, { actorUserId: user, actionId: edited.actionId });
+    const undone = await undoAction(db, { identity: personal(user), actionId: edited.actionId });
     expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
     expect(await cacheRows(env.id)).toEqual([]);
     expect(
-      (await budgetOverview(db, user, '2026-07', clock)).envelopes.find(
+      (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes.find(
         (e) => e.envelope.id === env.id,
       )?.spent,
     ).toBe('300.00');
@@ -732,7 +742,7 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
       );
     ok(await mk('user/merge-probe-1'));
     ok(await mk('user/merge-probe-2'));
-    const env = (await budgetOverview(db, user, '2026-07', clock)).envelopes[0]
+    const env = (await budgetOverview(db, personal(user), '2026-07', clock)).envelopes[0]
       ?.envelope as WireEntity;
     expect((await cacheRows(env.id)).length).toBe(1);
 
@@ -749,7 +759,7 @@ describe('пути мимо хука: undo и property_merge (§Б5-5)', () => {
 
     // Предикат замка обязан ВИДЕТЬ слияние: иначе конкурентный бюджет-хук считал бы привязку
     // по props, которые слияние переписывает мимо всякой per-entity операции.
-    const reg = await withIdentity(db, user, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     expect(
       touchesBudgetContour(reg, { tool: 'property_merge', input: { source: 'a', into: 'b' } }),
     ).toBe(true);
@@ -784,8 +794,8 @@ describe('прогретый кэш отвечает на все ключи ра
       ids.push(env.id);
     }
     const asOf = '2026-07-15';
-    const versions = await withIdentity(db, user, (tx) => readRegistryVersions(tx, user));
-    await withIdentity(db, user, (tx) =>
+    const versions = await withIdentity(db, personal(user), (tx) => readRegistryVersions(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
       writeSpentCache(
         tx,
         user,
@@ -794,7 +804,9 @@ describe('прогретый кэш отвечает на все ключи ра
       ),
     );
     const keys = ids.map((envelopeId) => ({ envelopeId, asOf }));
-    const hit = await withIdentity(db, user, (tx) => readSpentCache(tx, user, keys, versions));
+    const hit = await withIdentity(db, personal(user), (tx) =>
+      readSpentCache(tx, user, keys, versions),
+    );
     expect(hit.size).toBe(ENVELOPES);
     expect([...new Set(hit.values())]).toEqual(['1234.56']);
   }, 120_000);

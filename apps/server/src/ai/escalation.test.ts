@@ -4,6 +4,7 @@
 // системным сообщением с карточкой memory_rule_suggestion. Реальная БД, реальный
 // executor и реальный роутер (appRouter.createCaller) — моков нет.
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { globalThreadId, memoryRuleSuggestionId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -11,6 +12,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -55,21 +57,21 @@ function ok(r: ExecuteResult): ExecuteOk {
   return r;
 }
 
-function req(user: string, operations: ExecuteRequest['operations']): ExecuteRequest {
-  return { actorUserId: user, actorKind: 'owner', source: 'ui', operations };
+function req(user: GraphId, operations: ExecuteRequest['operations']): ExecuteRequest {
+  return { identity: personal(user), actorKind: 'owner', source: 'ui', operations };
 }
 
-function ownerCaller(user: string) {
-  const ctx: Context = { actorUserId: user, actorKind: 'owner', clientVersion: null, db };
+function ownerCaller(user: GraphId) {
+  const ctx: Context = { identity: personal(user), actorKind: 'owner', clientVersion: null, db };
   return appRouter.createCaller(ctx);
 }
 
-async function createEntity(user: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function createEntity(user: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   const r = ok(await execute(db, req(user, [{ tool: 'entity_create', input }]), { sink }));
   return r.results[0] as WireEntity;
 }
 
-async function createCategory(user: string, title: string): Promise<string> {
+async function createCategory(user: GraphId, title: string): Promise<string> {
   const e = await createEntity(user, {
     title,
     tags: [],
@@ -80,7 +82,7 @@ async function createCategory(user: string, title: string): Promise<string> {
 }
 
 /** Транзакция orbis/financial в категории categoryRef. */
-async function createTxn(user: string, title: string, categoryRef: string): Promise<string> {
+async function createTxn(user: GraphId, title: string, categoryRef: string): Promise<string> {
   const e = await createEntity(user, {
     title,
     tags: [],
@@ -96,7 +98,7 @@ async function createTxn(user: string, title: string, categoryRef: string): Prom
 }
 
 /** Рекатегоризация боевым путём владельца — та же процедура, что зовёт UI. */
-async function recategorize(user: string, txnId: string, categoryRef: string): Promise<void> {
+async function recategorize(user: GraphId, txnId: string, categoryRef: string): Promise<void> {
   await ownerCaller(user).entity.update({
     id: txnId,
     // Правка ОДНОГО свойства по id (§А1-1): носитель у транзакции уже есть, навешивать
@@ -111,13 +113,13 @@ async function recategorize(user: string, txnId: string, categoryRef: string): P
  * entitlements (send-message.ts runToolCall) — на путь эскалации они не влияют, поэтому
  * здесь их нет.
  */
-function chatCtx(user: string): ToolCallCtx {
-  return { db, actorUserId: user, actorKind: 'ai', source: 'chat', explicitCommand: false };
+function chatCtx(user: GraphId): ToolCallCtx {
+  return { db, identity: personal(user), actorKind: 'ai', source: 'chat', explicitCommand: false };
 }
 
 /** Рекатегоризация путём модели: тот же диспетчер тулов, что зовёт ai.sendMessage. */
 async function recategorizeViaChat(
-  user: string,
+  user: GraphId,
   txnId: string,
   categoryRef: string,
 ): Promise<void> {
@@ -133,7 +135,7 @@ async function recategorizeViaChat(
  * плана — групповая мутация идёт одним батчем с batch_id), тот же диспетчер тулов.
  */
 async function recategorizeBatchViaChat(
-  user: string,
+  user: GraphId,
   txnIds: string[],
   categoryRef: string,
 ): Promise<void> {
@@ -148,7 +150,7 @@ async function recategorizeBatchViaChat(
 }
 
 /** Рекатегоризация мимо роутера — когда тесту нужен actionId для прямого вызова. */
-async function recategorizeRaw(user: string, txnId: string, categoryRef: string): Promise<string> {
+async function recategorizeRaw(user: GraphId, txnId: string, categoryRef: string): Promise<string> {
   const input = { id: txnId, props: { 'orbis/finance_category': categoryRef } };
   return ok(await execute(db, req(user, [{ tool: 'entity_update', input }]), { sink })).actionId;
 }
@@ -163,7 +165,7 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
 }
 
 /** Карточки заданного вида из глобального треда владельца (админ-DSN — RLS обходится). */
-async function cardsOf(user: string, kind: string): Promise<Card[]> {
+async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
   const rows = await adminRows(
     sql`SELECT metadata FROM chat_messages WHERE thread_id = ${globalThreadId(user)}
         ORDER BY created_at, id`,
@@ -200,12 +202,12 @@ async function categoryRefOf(txnId: string): Promise<string | undefined> {
  * ключ существования у containment'а нет, а ключ `props` без значения затянул бы под
  * пробу любую правку любого свойства. `to` — те категории, в которые переносили.
  */
-async function scanActions(user: string, to: readonly string[]): Promise<ActionRecord[]> {
-  return withIdentity(db, user, (tx) => scanFinancialUpdates(tx, to));
+async function scanActions(user: GraphId, to: readonly string[]): Promise<ActionRecord[]> {
+  return withIdentity(db, personal(user), (tx) => scanFinancialUpdates(tx, to));
 }
 
 /** Владелец с двумя категориями: «Еда» (from) и «Развлечения» (to). */
-async function freshOwner(): Promise<{ user: string; food: string; fun: string }> {
+async function freshOwner(): Promise<{ user: GraphId; food: string; fun: string }> {
   const user = await freshGraph();
   const food = await createCategory(user, 'Еда');
   const fun = await createCategory(user, 'Развлечения');
@@ -217,7 +219,7 @@ async function freshOwner(): Promise<{ user: string; food: string; fun: string }
  * значения, а не части заголовка. Заголовок здесь — генерируемая подпись, и гейт
  * эквивалентности его не читает вовсе.
  */
-async function createRule(user: string, targetId: string): Promise<WireEntity> {
+async function createRule(user: GraphId, targetId: string): Promise<WireEntity> {
   return createEntity(user, {
     title: 'пятерочка → Развлечения',
     tags: [],
@@ -428,7 +430,7 @@ describe('эскалация повторных исправлений кате�
       toCategoryId: fun,
       date: new Date().toISOString().slice(0, 10),
     });
-    await withIdentity(db, alien, async (tx) => {
+    await withIdentity(db, personal(alien), async (tx) => {
       const threadId = await ensureGlobalThread(tx, alien);
       await appendMessage(tx, { id: poisoned, threadId, role: 'system', content: 'чужое' });
     });
@@ -464,7 +466,11 @@ describe('эскалация повторных исправлений кате�
       ),
     );
     expect(
-      await maybeSuggestRule({ db, graphId: user, action: await actionById(r.actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(r.actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
 
@@ -473,7 +479,7 @@ describe('эскалация повторных исправлений кате�
     await recategorize(user, await createTxn(user, 'SBOL 1234', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'SBOL 5678', food), fun);
     expect(
-      await maybeSuggestRule({ db, graphId: user, action: await actionById(actionId) }),
+      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
     ).toEqual({ suggested: false, reason: 'empty_pattern' });
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
@@ -481,7 +487,7 @@ describe('эскалация повторных исправлений кате�
   test('12. отказ доступен только владельцу (ownerOnly, §9.3)', async () => {
     const { user, food, fun } = await freshOwner();
     const agent = appRouter.createCaller({
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'agent',
       clientVersion: null,
       db,
@@ -569,7 +575,11 @@ describe('эскалация повторных исправлений кате�
     expect((await scanActions(user, [fun])).map((a) => a.id)).toEqual([actionId]);
     // и рекатегоризацией она не считается: разбор идёт по тому же property-id
     expect(
-      await maybeSuggestRule({ db, graphId: user, action: await actionById(amount.actionId) }),
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(amount.actionId),
+      }),
     ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
 
@@ -611,7 +621,7 @@ describe('эскалация повторных исправлений кате�
         },
       };
     });
-    await withIdentity(db, user, async (tx) => {
+    await withIdentity(db, personal(user), async (tx) => {
       await ensureGlobalThread(tx, user);
       await tx.insert(chatMessages).values(made.map((m) => m.row));
     });
@@ -635,7 +645,7 @@ describe('эскалация повторных исправлений кате�
     // Исправление ОДНО: если бы подавление проверялось после скана, ответом было бы
     // not_repeated — то есть журнал читался бы там, где ответ уже известен
     expect(
-      await maybeSuggestRule({ db, graphId: user, action: await actionById(actionId) }),
+      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
   });
 
@@ -741,7 +751,7 @@ describe('эскалация повторных исправлений кате�
       toCategoryId: fun,
       date: new Date().toISOString().slice(0, 10),
     });
-    await withIdentity(db, alien, async (tx) => {
+    await withIdentity(db, personal(alien), async (tx) => {
       const threadId = await ensureGlobalThread(tx, alien);
       await appendMessage(tx, { id: poisoned, threadId, role: 'system', content: 'чужое' });
     });
@@ -794,7 +804,7 @@ describe('эскалация повторных исправлений кате�
       offer('пятерочка', JOURNAL_SCAN_LIMIT + 1),
       ...Array.from({ length: JOURNAL_SCAN_LIMIT }, (_, i) => offer('wildberries', i + 1)),
     ];
-    await withIdentity(db, user, async (tx) => {
+    await withIdentity(db, personal(user), async (tx) => {
       await ensureGlobalThread(tx, user);
       await tx.insert(chatMessages).values(rows);
     });
@@ -808,7 +818,7 @@ describe('эскалация повторных исправлений кате�
     await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 999', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     expect(
-      await maybeSuggestRule({ db, graphId: user, action: await actionById(actionId) }),
+      await maybeSuggestRule({ db, identity: personal(user), action: await actionById(actionId) }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
     // новой карточки не появилось: по «пятерочка» осталась ровно одна — засеянная
     const offers = await cardsOf(user, 'memory_rule_suggestion');
@@ -869,7 +879,7 @@ describe('эскалация повторных исправлений кате�
       toCategoryId: fun,
       date: new Date().toISOString().slice(0, 10),
     });
-    await withIdentity(db, alien, async (tx) => {
+    await withIdentity(db, personal(alien), async (tx) => {
       const threadId = await ensureGlobalThread(tx, alien);
       await appendMessage(tx, { id: poisoned, threadId, role: 'system', content: 'чужое' });
     });
@@ -922,7 +932,7 @@ describe('эскалация: уборочная фаза', () => {
       await execute(
         db,
         {
-          actorUserId: user,
+          identity: personal(user),
           actorKind: 'owner',
           source: 'chat',
           batchId: input.batch_id,
@@ -937,7 +947,11 @@ describe('эскалация: уборочная фаза', () => {
     const mod = await import('./escalation');
     const spy = spyOn(mod, 'scanFinancialUpdates');
     try {
-      await maybeSuggestRule({ db, graphId: user, action: await actionById(r.actionId) });
+      await maybeSuggestRule({
+        db,
+        identity: personal(user),
+        action: await actionById(r.actionId),
+      });
       expect(spy.mock.calls.length).toBe(1);
     } finally {
       spy.mockRestore();

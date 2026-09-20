@@ -25,6 +25,7 @@ import {
   entityCreateInput,
   entityUpdateExecInput,
   entityUpdateInput,
+  type GraphId,
   type ProposeInput,
   type ProposeResult,
   pendingMessageId,
@@ -165,15 +166,15 @@ export async function runPropose(
   // и строки целей читаются один раз и служат трём делам — запрету по объекту (обе его
   // половины), снятию предусловий и сборке операций.
   const dedupeKey = `proposal:${routine.runId}`;
-  const pendingId = pendingMessageId(ctx.actorUserId, dedupeKey);
+  const pendingId = pendingMessageId(ctx.identity.graph, dedupeKey);
 
-  const prepared = await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<Prepared> => {
+  const prepared = await withIdentity(ctx.db, ctx.identity, async (tx): Promise<Prepared> => {
     // Предпроверка прогона — ПЕРВОЙ, до любой работы и до записи: закрывать нечего, если
     // прогон уже терминален, и pending в этом случае писать нельзя (см. докблок выше).
     const state = await checkRun(tx, routine.id, routine.runId, pendingId);
     if (state !== 'running') return state;
 
-    const targets = await loadTargets(tx, ctx.actorUserId, parsed);
+    const targets = await loadTargets(tx, ctx.identity.graph, parsed);
     if ('error' in targets) return targets;
 
     // Запрет по объекту, СТАТИЧЕСКАЯ половина: аспект, названный самой операцией.
@@ -221,7 +222,7 @@ export async function runPropose(
 
     // 5. Pending в треде РУТИНЫ (V1.6): предложение — событие рутины, и читается оно там
     // же, где её история, а не в общей ленте владельца.
-    const threadId = await ensureEntityThread(tx, ctx.actorUserId, routine.id);
+    const threadId = await ensureEntityThread(tx, ctx.identity.graph, routine.id);
     // Повтор виден по существующей строке с тем же PK: `createPending` идемпотентен, но
     // «завёл» и «нашёл» он не различает, а ответ обязан их различать (§7.8). Сюда мы
     // попадаем при ЖИВОМ прогоне — то есть это ретрай, у которого не дошло закрытие.
@@ -251,7 +252,7 @@ export async function runPropose(
     await createPending(tx, {
       threadId,
       actor: {
-        userId: ctx.actorUserId,
+        userId: ctx.identity.graph,
         kind: 'ai',
         source: 'routine',
         runId: routine.runId,
@@ -299,7 +300,7 @@ export async function runPropose(
   const closed = await closeRoutineRun(
     {
       db: ctx.db,
-      graphId: ctx.actorUserId,
+      identity: ctx.identity,
       subject: { kind: 'routine', routineId: routine.id },
       clock: ctx.clock ?? (() => new Date()),
       sink,
@@ -322,7 +323,7 @@ export async function runPropose(
     // Гасим ТОЛЬКО если прогон и правда больше не наш живой (перечитываем — состояние
     // авторитетнее текста отказа): нетерминальный отказ (занятый `id` вызова и т. п.)
     // оставляет прогон running, а pending — ждать повтора с новым `id` (см. шапку).
-    const alive = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+    const alive = await withIdentity(ctx.db, ctx.identity, async (tx) => {
       const row = await runById(tx, routine.runId);
       return (
         row !== null &&
@@ -332,7 +333,7 @@ export async function runPropose(
     });
     if (!alive) {
       await rejectPending(ctx.db, {
-        graphId: ctx.actorUserId,
+        identity: ctx.identity,
         pendingId,
         reason: 'stale',
       });
@@ -543,7 +544,7 @@ interface TargetRow {
  */
 export async function loadTargets(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   parsed: Array<{ tool: string; input: Record<string, unknown> }>,
 ): Promise<
   { reg: RegistrySnapshot; rows: Map<string, TargetRow> } | { error: ToolDispatchResult }

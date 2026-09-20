@@ -39,7 +39,7 @@ import {
   graphNodeId,
 } from '../src/test/graph-fixture';
 import { measureMedian, measureP95 } from '../src/test/perf';
-import { appDb, requireEnv } from '../test/helpers';
+import { appDb, personal, requireEnv } from '../test/helpers';
 
 requireEnv();
 
@@ -139,9 +139,11 @@ beforeAll(async () => {
   );
   expect(fixture.entities).toBe(GRAPH_ENTITIES);
   expect(fixture.relations).toBe(GRAPH_RELATIONS);
-  reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => effectiveRegistry(tx, GRAPH_OWNER_ID));
+  reg = await withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
+    effectiveRegistry(tx, GRAPH_OWNER_ID),
+  );
   subtreeRoot = graphNodeId(SUBTREE_ROOT_LEVEL, Math.floor(graphLevelSize(SUBTREE_ROOT_LEVEL) / 2));
-  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+  const rows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
     ...(await tx.execute(
       compileCountAst(walkAllAst(subtreeRoot), {
         graphId: GRAPH_OWNER_ID,
@@ -154,7 +156,7 @@ beforeAll(async () => {
   subtreeSize = Number((rows[0] as { count?: unknown })?.count);
   console.log(`perf: поддерево замера — ${subtreeSize} узлов (уровень ${SUBTREE_ROOT_LEVEL})`);
   smallRoot = graphNodeId(SMALL_ROOT_LEVEL, Math.floor(graphLevelSize(SMALL_ROOT_LEVEL) / 2));
-  const smallRows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+  const smallRows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
     ...(await tx.execute(
       compileCountAst(walkAllAst(smallRoot), {
         graphId: GRAPH_OWNER_ID,
@@ -186,7 +188,7 @@ test('корпус наполнен: обход идёт по данным, а �
     timeZone: 'Europe/Moscow',
     reg,
   };
-  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+  const rows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
     ...(await tx.execute(compileQueryAst(walkAllAst(subtreeRoot), ctx))),
   ]);
   expect(rows).toHaveLength(subtreeSize);
@@ -194,7 +196,7 @@ test('корпус наполнен: обход идёт по данным, а �
   // заведомо меньше целого.
   expect(subtreeSize).toBeLessThan(GRAPH_ENTITIES);
   // И не выродился в один уровень: глубина обхода реально больше единицы.
-  const oneLevel = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+  const oneLevel = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
     ...(await tx.execute(
       compileCountAst(
         {
@@ -215,16 +217,18 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
   // обход ОТ КОРНЯ (весь корпус) и выгрузка ВСЕГО поддерева вместо страницы.
   const rootId = graphNodeId(0, 0);
   await measureMedian('descendants_of:whole-graph', 3, () =>
-    withIdentity(db, GRAPH_OWNER_ID, (tx) => tx.execute(compileCountAst(walkAllAst(rootId), ctx))),
+    withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
+      tx.execute(compileCountAst(walkAllAst(rootId), ctx)),
+    ),
   );
   await measureMedian('descendants_of:subtree-all-rows', 5, () =>
-    withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+    withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
       tx.execute(compileQueryAst(walkAllAst(subtreeRoot), ctx)),
     ),
   );
 
   const subtree = await measureP95('descendants_of:subtree', P95_RUNS, () =>
-    withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+    withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
       tx.execute(compileQueryAst(walkAst(subtreeRoot), ctx)),
     ),
   );
@@ -232,21 +236,21 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
   // Пересчёт предков — под ролью ПРИЛОЖЕНИЯ и в транзакции, как в бою (executor.ts:799).
   // Первый вызов правит строки, последующие находят «уже правильно» и правят ноль, поэтому
   // мерится вызов на подготовленном поддереве — то, что и происходит при переносе ветки.
-  await withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+  await withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
     recomputeProjectAncestors(tx, GRAPH_OWNER_ID, [subtreeRoot], reg),
   );
   const recompute = await measureP95('recompute:subtree5k', P95_RUNS, () =>
-    withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+    withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
       recomputeProjectAncestors(tx, GRAPH_OWNER_ID, [subtreeRoot], reg),
     ),
   );
 
   // Малое поддерево — та же операция на единицах узлов (см. докблок SMALL_ROOT_LEVEL).
-  await withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+  await withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
     recomputeProjectAncestors(tx, GRAPH_OWNER_ID, [smallRoot], reg),
   );
   const recomputeSmall = await measureP95('recompute:subtree-small', P95_RUNS, () =>
-    withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+    withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
       recomputeProjectAncestors(tx, GRAPH_OWNER_ID, [smallRoot], reg),
     ),
   );
@@ -254,7 +258,7 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
   // Пересчёт действительно что-то посчитал: обнулим кэш на поддереве и проверим, что вызов
   // возвращает число правок того же порядка, что размер поддерева. Без этой проверки
   // «≤ 1 с» выполнял бы и вызов, который не нашёл ни одной строки.
-  const cleared = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => {
+  const cleared = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => {
     await tx.execute(sql`
       UPDATE entities SET props = props - 'orbis/parent_project' - 'orbis/root_project'
        WHERE graph_id = ${GRAPH_OWNER_ID}::uuid AND props ? 'orbis/parent_project'`);

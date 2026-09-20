@@ -24,6 +24,7 @@ import {
   adminDb,
   appDb,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -225,7 +226,7 @@ describe('reset-world — состав пересева на живой базе
     await truncateAll();
 
     // Мир владельца — боевым путём: 19 сущностей через исполнитель, настройки, глобальный тред.
-    await seedOwner(app, owner);
+    await seedOwner(app, personal(owner));
 
     // Собственное свойство владельца в реестре + дельта поверх системного аспекта: ровно то,
     // что пересев обязан снести (а `truncateAll` сносит и без него — потому проба и живёт
@@ -277,7 +278,7 @@ describe('reset-world — состав пересева на живой базе
     // доказывалось бы не данными, а только тем, что TRUNCATE без CASCADE упал бы на FK. Для
     // таблицы, которая однажды выйдет из-под FK, этого пина не будет вовсе.
     const edge = await execute(app, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'fast_path',
       operations: [
@@ -288,7 +289,7 @@ describe('reset-world — состав пересева на живой базе
       ],
     });
     if (!edge.ok) throw new Error(`ребро фикстуры не создано: ${JSON.stringify(edge.error)}`);
-    await withIdentity(app, owner, async (tx) => {
+    await withIdentity(app, personal(owner), async (tx) => {
       const threadId = await ensureGlobalThread(tx, owner);
       await appendMessageIdempotent(tx, {
         id: newId(),
@@ -406,7 +407,7 @@ describe('reset-world — состав пересева на живой базе
     // именно в том состоянии базы, которое оставляет операция.
     expect(await count('entities', `graph_id = '${owner}'`)).toBe(0);
 
-    const again = await seedOwner(app, owner);
+    const again = await seedOwner(app, personal(owner));
     // `seeded: false` — строка настроек на месте, онбординг «уже был». Мир при этом посеян:
     // ответ про фазу настроек, а не про граф (см. докблок `seedOwner`).
     expect(again.seeded).toBe(false);
@@ -425,7 +426,7 @@ describe('reset-world — состав пересева на живой базе
     }
 
     // Повторный заход ничего не удваивает — идемпотентность держит проба по PK, а не guard.
-    await seedOwner(app, owner);
+    await seedOwner(app, personal(owner));
     expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
   });
 

@@ -9,6 +9,7 @@
 //   §3.4.1 последний абзац — Undo импорта ФИЗИЧЕСКИ удаляет строки entity_origins,
 //   поэтому тот же файл импортируется заново без ложных «уже импортирована».
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   type CanonicalRow,
   externalRowId,
@@ -26,6 +27,7 @@ import {
   appDb,
   entityColumns,
   freshGraph,
+  personal,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -65,9 +67,9 @@ const NS_OTHER = 'csv:sber-may';
 const FILE_A = 'a'.repeat(64);
 const FILE_B = 'b'.repeat(64);
 
-function ownerCaller(user: string, provider?: LLMProvider, entitlements?: EntitlementResolver) {
+function ownerCaller(user: GraphId, provider?: LLMProvider, entitlements?: EntitlementResolver) {
   return createCaller({
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     db,
     clientVersion: null,
@@ -80,9 +82,9 @@ function ownerCaller(user: string, provider?: LLMProvider, entitlements?: Entitl
 }
 
 /** Свежий владелец с онбординг-категориями (aliases нужны suggestedCategoryRef). */
-async function freshOwner(): Promise<{ user: string; foodId: string; transportId: string }> {
+async function freshOwner(): Promise<{ user: GraphId; foodId: string; transportId: string }> {
   const user = await freshGraph();
-  await seedOwnerGraph(db, user);
+  await seedOwnerGraph(db, personal(user));
   return {
     user,
     foodId: seedCategoryId(user, 'food'),
@@ -137,7 +139,7 @@ function causeOf(err: TRPCError): { code?: string; details?: Record<string, unkn
 
 /** Строки entity_origins владельца — СЫРЫМ админ-соединением (мимо RLS и мимо кода C2). */
 async function rawOrigins(
-  user: string,
+  user: GraphId,
 ): Promise<Array<{ namespace: string; external_id: string; entity_id: string }>> {
   const { db: admin, client: adminClient } = adminDb();
   try {
@@ -152,7 +154,7 @@ async function rawOrigins(
 }
 
 /** Число финансовых сущностей владельца — СЫРЫМ админ-соединением (мимо RLS). */
-async function rawFinancialCount(user: string): Promise<number> {
+async function rawFinancialCount(user: GraphId): Promise<number> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = (await admin.execute(sql`
@@ -166,8 +168,8 @@ async function rawFinancialCount(user: string): Promise<number> {
 }
 
 /** Финансовые сущности владельца (в т.ч. архивные) — проверка «создано/не создано». */
-async function financialEntities(user: string) {
-  return withIdentity(db, user, (tx) =>
+async function financialEntities(user: GraphId) {
+  return withIdentity(db, personal(user), (tx) =>
     tx
       .select({ id: entities.id, title: entities.title, archived: entities.archived })
       .from(entities)
@@ -313,7 +315,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       amount: '843.00',
       counterparty: 'SBOL ПЯТЁРОЧКА 843',
     });
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
           graphId: user,
@@ -585,7 +587,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
     // Шаблон повторения: financial + orbis/schedule.recurrence, occurred_on есть
-    await withIdentity(db, user, async (tx) =>
+    await withIdentity(db, personal(user), async (tx) =>
       tx.insert(entities).values({
         id: newId(),
         graphId: user,
@@ -634,7 +636,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
 
     // (2) Доменная проверка НЕ убрана — у неё внятный details.limit (§3 брифа)
     const domainErr = await execError(
-      reviewImport(db, user, { rows, fileHash: FILE_A, namespace: NS }),
+      reviewImport(db, personal(user), { rows, fileHash: FILE_A, namespace: NS }),
     );
     expect(domainErr.code).toBe('VALIDATION');
     expect(domainErr.details).toMatchObject({ limit: MAX_IMPORT_ROWS, rows: rows.length });
@@ -729,7 +731,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
       fileHash: FILE_A,
       items: [{ row: blank, action: 'create', categoryRef: foodId }],
     });
-    const created = await withIdentity(db, user, (tx) =>
+    const created = await withIdentity(db, personal(user), (tx) =>
       tx
         .select({ props: entities.props })
         .from(entities)
@@ -900,7 +902,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
   test('adopt на архивную финансовую сущность → VALIDATION (reason=archived)', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
-    const archivedId = await withIdentity(db, user, async (tx) => {
+    const archivedId = await withIdentity(db, personal(user), async (tx) => {
       const id = newId();
       await tx.insert(entities).values({
         id,
@@ -944,7 +946,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
   test('повтор batchId с adopt — replay, даже если цель архивирована после первого прогона', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
-    const manualId = await withIdentity(db, user, async (tx) => {
+    const manualId = await withIdentity(db, personal(user), async (tx) => {
       const id = newId();
       await tx.insert(entities).values({
         id,
@@ -981,7 +983,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
 
     // Цель архивирована ПОСЛЕ первого прогона: честный повтор batchId (§7.8) обязан
     // вернуться сохранённым replay'ем, а не упасть пречеком «archived»
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, manualId)),
     );
     const second = await caller.import.confirm(input);
@@ -1047,7 +1049,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
     const envelopeId = newId();
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
           graphId: user,
@@ -1082,7 +1084,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
 
     // Привязка действительно есть — иначе пустой `unbudgeted` мог бы значить «карточка
     // вообще ничего не посчитала», а не «конверт нашёлся».
-    const parents = await withIdentity(db, user, (tx) =>
+    const parents = await withIdentity(db, personal(user), (tx) =>
       tx
         .select({ sourceId: relations.sourceId })
         .from(relations)
@@ -1095,7 +1097,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     const { user, foodId, transportId } = await freshOwner();
     const caller = ownerCaller(user);
     // Конверт «Еда» на май — транзакция еды привяжется автоматически (A4), транспорт нет
-    await withIdentity(db, user, async (tx) =>
+    await withIdentity(db, personal(user), async (tx) =>
       tx.insert(entities).values({
         id: newId(),
         graphId: user,
@@ -1145,7 +1147,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     expect(r.unbudgeted).toEqual([{ categoryRef: transportId, count: 1 }]);
 
     // Привязка «Обеда» к конверту — дописана хуком исполнителя, а не импортом
-    const parents = await withIdentity(db, user, (tx) =>
+    const parents = await withIdentity(db, personal(user), (tx) =>
       tx
         .select({ targetId: relations.targetId })
         .from(relations)
@@ -1165,7 +1167,7 @@ describe('Undo импорта: origins удаляются физически (§
     const caller = ownerCaller(user);
 
     // Ручная (не импортная) операция — цель усыновления
-    const manual = await withIdentity(db, user, async (tx) => {
+    const manual = await withIdentity(db, personal(user), async (tx) => {
       const id = newId();
       await tx.insert(entities).values({
         id,
@@ -1246,7 +1248,7 @@ describe('entity_origin_* : только внутренний путь', () => {
     const { user } = await freshOwner();
     for (const tool of ['entity_origin_create', 'entity_origin_delete']) {
       const r = await dispatchTool(
-        { db, actorUserId: user, actorKind: 'ai', source: 'chat', explicitCommand: false },
+        { db, identity: personal(user), actorKind: 'ai', source: 'chat', explicitCommand: false },
         tool,
         { entity_id: newId(), namespace: NS, external_id: 'x'.repeat(64) },
       );
@@ -1381,7 +1383,7 @@ describe('import.analyze: маппинг колонок через tool-call', (
     const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
     await ownerCaller(user, provider).import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] });
 
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(aiUsage).where(eq(aiUsage.graphId, user)),
     );
     expect(rows).toHaveLength(1);
@@ -1429,7 +1431,7 @@ describe('import.analyze: маппинг колонок через tool-call', (
 describe('роутер import: ownerOnly (§9.3)', () => {
   test('PAT-агент получает FORBIDDEN до какой-либо работы', async () => {
     const agent = createCaller({
-      actorUserId: await freshGraph(),
+      identity: personal(await freshGraph()),
       actorKind: 'agent',
       db: null as unknown as ReturnType<typeof appDb>['db'],
       clientVersion: null,
@@ -1473,7 +1475,7 @@ describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
     expect(causeOf(err).details?.key).toBe(IMPORT_CSV_KEY);
     expect(provider.requests).toHaveLength(0); // гейт ДО обращения к провайдеру
     // …и до метеринга: строк ai_usage нет
-    const usage = await withIdentity(db, user, (tx) =>
+    const usage = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(aiUsage).where(eq(aiUsage.graphId, user)),
     );
     expect(usage).toHaveLength(0);
@@ -1494,7 +1496,7 @@ describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
     expect(causeOf(err).code).toBe('LIMIT');
     expect(causeOf(err).details?.key).toBe('ai.requests_per_day');
     expect(provider.requests).toHaveLength(0); // гейт ДО обращения к провайдеру
-    const usage = await withIdentity(db, user, (tx) =>
+    const usage = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(aiUsage).where(eq(aiUsage.graphId, user)),
     );
     expect(usage).toHaveLength(0);
@@ -1645,7 +1647,7 @@ describe('import.confirm: валюта выписки (§5 «Чужая валю
 // объявлено в PRD, но считать его было НЕЧЕМ — skipped-строки (выписка уже была в Orbis)
 // в графе следа не оставляют, сущностей по ним не создаётся. Сводка кладётся в журнал.
 describe('import.confirm: сводка импорта в журнале (метрика §8)', () => {
-  async function summaries(user: string): Promise<Array<Record<string, unknown>>> {
+  async function summaries(user: GraphId): Promise<Array<Record<string, unknown>>> {
     const { db: admin, client: adminClient } = adminDb();
     try {
       const rows = (await admin.execute(sql`

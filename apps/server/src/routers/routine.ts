@@ -138,9 +138,9 @@ export const routineRouter = router({
             reason: 'shutting_down',
           });
         }
-        const { routine, timeZone } = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => ({
+        const { routine, timeZone } = await withIdentity(ctx.db, ctx.identity, async (tx) => ({
           routine: await routineById(tx, input.routineId),
-          timeZone: await ownerTimeZone(tx, ctx.actorUserId),
+          timeZone: await ownerTimeZone(tx, ctx.identity.graph),
         }));
         // Чужая, архивная и несуществующая под RLS неразличимы — единый NOT_FOUND
         if (routine === null) {
@@ -156,7 +156,7 @@ export const routineRouter = router({
           signal: runs.signal,
         };
         const started = await startManualRun(deps, {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           routine,
           timeZone,
         });
@@ -165,7 +165,7 @@ export const routineRouter = router({
         void runs
           .track(
             runRoutineRun(deps, {
-              graphId: ctx.actorUserId,
+              identity: ctx.identity,
               routine,
               runId: started.runId,
               bucket: started.bucket,
@@ -188,7 +188,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<{ runId: string }> => {
       try {
         return await answerRoutineCheckpoint(writeDeps(ctx), {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           runId: input.runId,
           answer: input.answer,
         });
@@ -207,7 +207,7 @@ export const routineRouter = router({
     .input(runIdInput)
     .query(
       ({ ctx, input }): Promise<ProposalView | null> =>
-        proposalView(ctx.db, { graphId: ctx.actorUserId, runId: input.runId }),
+        proposalView(ctx.db, { identity: ctx.identity, runId: input.runId }),
     ),
 
   /**
@@ -223,7 +223,7 @@ export const routineRouter = router({
     .input(z.object({ entityId: z.string().uuid() }).strict())
     .query(
       ({ ctx, input }): Promise<ProposalView[]> =>
-        openProposalsForEntity(ctx.db, { graphId: ctx.actorUserId, entityId: input.entityId }),
+        openProposalsForEntity(ctx.db, { identity: ctx.identity, entityId: input.entityId }),
     ),
 
   /**
@@ -256,7 +256,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<DecideProposalResult> => {
       try {
         return await decideProposal(writeDeps(ctx), {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           runId: input.runId,
           pendingId: input.pendingId,
           decision: input.decision,
@@ -289,7 +289,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<DecideDeferredResult> => {
       try {
         return await decideDeferredUnit(writeDeps(ctx), {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           pendingId: input.pendingId,
           decision: input.decision,
         });
@@ -316,7 +316,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<DecideAllItem[]> => {
       try {
         return await decideAllDeferred(writeDeps(ctx), {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           runId: input.runId,
         });
       } catch (e) {
@@ -347,7 +347,7 @@ export const routineRouter = router({
     .mutation(async ({ ctx, input }): Promise<AnswerQuestionResult> => {
       try {
         return await answerRunQuestion(writeDeps(ctx), {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           pendingId: input.pendingId,
           answer: input.answer,
           ...(input.option !== undefined && { option: input.option }),
@@ -375,8 +375,8 @@ export const routineRouter = router({
     .input(runIdInput)
     .query(async ({ ctx, input }): Promise<RunUnit[]> => {
       try {
-        return await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
-          listRunUnits(tx, ctx.actorUserId, input.runId),
+        return await withIdentity(ctx.db, ctx.identity, (tx) =>
+          listRunUnits(tx, ctx.identity.graph, input.runId),
         );
       } catch (e) {
         // Чтение пачки fail-closed: повреждённая запись роняет ВЕСЬ список (её докблок), и
@@ -397,10 +397,10 @@ export const routineRouter = router({
       try {
         const { routine, timeZone, runs } = await withIdentity(
           ctx.db,
-          ctx.actorUserId,
+          ctx.identity,
           async (tx) => ({
             routine: await routineById(tx, input.routineId),
-            timeZone: await ownerTimeZone(tx, ctx.actorUserId),
+            timeZone: await ownerTimeZone(tx, ctx.identity.graph),
             runs: await runsOfParent(tx, input.routineId),
           }),
         );

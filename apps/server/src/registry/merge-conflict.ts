@@ -17,6 +17,7 @@
 // pending, позвав этот файл, замкнул бы кольцо). Дом выбран так, чтобы граница была ОДНА и
 // накрывала все пути исполнения сохранённого payload'а, а не перечисляла их: перечень
 // границ — ровно тот класс дефекта, который в этой ветке уже подводил четырежды.
+import type { GraphId } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
 import { createSystemPending } from '../policy/pending';
 import type { AspectDelta, RegistryConflict, RegistryDelta } from './deltas';
@@ -73,7 +74,7 @@ export function driftConflictDecidable(conflicts: readonly RegistryConflict[]): 
 export async function createDriftConflictUnits(
   tx: Tx,
   args: {
-    graphId: string;
+    graphId: GraphId;
     systemVersion: number;
     deltaRowId: string;
     merged: RegistryDelta;

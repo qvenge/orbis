@@ -3,6 +3,7 @@
 // Все чтения — одним withIdentity-tx, RLS ограничивает владельцем; встроенные строки
 // реестров НЕ экспортируются (только graph_id = актор).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   aspectDefinitionSchema,
   entitySchema,
@@ -10,7 +11,7 @@ import {
   relationRoleDefinitionSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../test/helpers';
 import { bumpOwnerRegistryVersion } from './registry/version';
 import { appRouter } from './router';
 import { createCallerFactory } from './trpc';
@@ -20,8 +21,8 @@ requireEnv();
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {

@@ -6,8 +6,9 @@
 // Контракт readEntity общий с LLM/MCP-диспатчем (tools/dispatch), поэтому форма ответа
 // пиннится здесь.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -19,8 +20,8 @@ requireEnv();
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {
@@ -281,7 +282,7 @@ test('backlinks категории: транзакции и правила па�
   });
   const created = async (input: Record<string, unknown>): Promise<string> => {
     const r = await execute(db, {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'fast_path',
       operations: [{ tool: 'entity_create', input }],
@@ -326,7 +327,7 @@ test('backlinks категории: транзакции и правила па�
   // `PropertyDelta`; гейт-ревью Задачи 14, Important-2). Пока подписи брались сырым
   // запросом по таблице, переопределение владельца до этой секции не доходило: строка в
   // `property_definitions` не менялась, менялась только дельта.
-  await withIdentity(db, user, async (tx) => {
+  await withIdentity(db, personal(user), async (tx) => {
     await tx.execute(sql`
       INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
       SELECT gen_random_uuid(), ${user}::uuid, 'property', 'orbis/finance_category',
@@ -367,7 +368,7 @@ test('backlinks: `ref` и `mention` от ОДНОГО источника к од
 
   // Источник ссылается на категорию свойством — исполнитель ставит зеркало роли `ref`…
   const r = await execute(db, {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'fast_path',
     operations: [

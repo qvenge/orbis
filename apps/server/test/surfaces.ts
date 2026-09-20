@@ -10,6 +10,8 @@
 // `queryWithMaterialization`; оба ПИШУТ в граф, а материализованные инстансы приезжали бы со
 // случайными uuid. Здесь четыре поверхности считаются на ОДНОЙ `withIdentity`-tx тем же
 // компилятором и тем же движком подписки, что и ручки, — с прибитым `today` и без записи.
+
+import type { GraphId } from '@orbis/shared';
 import {
   type BudgetOverview,
   type BudgetSubscription,
@@ -40,7 +42,7 @@ import {
   GATE_SURFACE_SLUGS,
   seedGateSurfaceRows,
 } from './fixtures/gate-aspects';
-import { appDb, ensureGraphs, mintGraph, seedCustomAspect } from './helpers';
+import { appDb, ensureGraphs, mintGraph, personal, seedCustomAspect } from './helpers';
 
 export const SURFACE_STATES = ['baseline', 'module-off', 'custom-aspect', 'relabeled'] as const;
 export type SurfaceState = (typeof SURFACE_STATES)[number];
@@ -71,7 +73,7 @@ export const SURFACE_TODAY = '2026-07-03';
 export const SURFACE_MONTH = '2026-07';
 
 /** id сущности мира — uuidv5 от владельца и слага: воспроизводим без обращения к БД. */
-export function surfaceEntityId(graphId: string, slug: string): string {
+export function surfaceEntityId(graphId: GraphId, slug: string): string {
   return uuidv5(`${graphId.toLowerCase()}:surface-world:${slug}`, ORBIS_NAMESPACE);
 }
 
@@ -100,7 +102,7 @@ export const SURFACE_SLUGS = [
 // Ниже — операции сева. Порядок значим: категории → конверты → движения (бюджет-хук
 // привязывает движение к УЖЕ существующему конверту тем же `selectEnvelope`, `binding.ts:121`),
 // связь `dependency` — последней.
-function ops(graphId: string): { tool: string; input: Record<string, unknown> }[] {
+function ops(graphId: GraphId): { tool: string; input: Record<string, unknown> }[] {
   const id = (slug: string) => surfaceEntityId(graphId, slug);
   const cat = (slug: string, title: string, icon: string) => ({
     tool: 'entity_create',
@@ -230,7 +232,7 @@ function ops(graphId: string): { tool: string; input: Record<string, unknown> }[
  * владельца — ТОЛЬКО декларацией — и две их строки поверх того же мира 0b.
  */
 export async function seedSurfaceWorld(
-  graphId: string,
+  graphId: GraphId,
   opts?: { gateAspects?: boolean },
 ): Promise<void> {
   // Граф — ДО всего (0020): владельцы снимка — КОНСТАНТЫ, объявленные в этом модуле, и `mintGraph`
@@ -247,7 +249,7 @@ export async function seedSurfaceWorld(
   try {
     for (const op of ops(graphId)) {
       const r = await execute(db, {
-        actorUserId: graphId,
+        identity: personal(graphId),
         actorKind: 'owner',
         source: 'ui',
         operations: [op],
@@ -349,7 +351,7 @@ const MASKED_KEYS = new Set(['graphId', 'createdAt', 'updatedAt']);
  * перестал бы быть сравнимым между состояниями. Лишние имена в словаре безвредны — в мире
  * состояния, где строк гейта нет, они просто ни на что не отображаются.
  */
-function namesOf(graphId: string): ReadonlyMap<string, string> {
+function namesOf(graphId: GraphId): ReadonlyMap<string, string> {
   return new Map(
     [...SURFACE_SLUGS, ...GATE_SURFACE_SLUGS].map((s) => [
       surfaceEntityId(graphId, s).toLowerCase(),
@@ -388,11 +390,11 @@ export function compareSnapshots(
 
 export async function snapshotSurfaces(
   db: Db,
-  graphId: string,
+  graphId: GraphId,
   state: SurfaceState,
   today: string,
 ): Promise<SurfaceSnapshot> {
-  const raw = await withIdentity(db, graphId, async (tx) => {
+  const raw = await withIdentity(db, personal(graphId), async (tx) => {
     // `today` — ПАРАМЕТР снимка, а не системные часы: иначе эталон устаревал бы за сутки.
     const cctx: CompileCtx = { ...(await queryContext(tx, graphId, null)), today };
     const all = await queryEntities(tx, cctx, 'sortBy=orbis/title:asc, limit=200');
@@ -472,7 +474,7 @@ export const SURFACE_RELABEL_OWNER_ID = mintGraph(
 );
 
 /** Владелец каждого состояния. Состояния 1 и 3 остаются на владельцах 0b и 10 — их тесты читают их миры. */
-export const SURFACE_STATE_OWNER: Readonly<Record<SurfaceState, string>> = {
+export const SURFACE_STATE_OWNER: Readonly<Record<SurfaceState, GraphId>> = {
   baseline: SURFACE_OWNER_ID,
   'module-off': SURFACE_OFF_OWNER_ID,
   'custom-aspect': SURFACE_GATE_OWNER_ID,
@@ -492,11 +494,11 @@ export const SURFACE_STATE_OWNER: Readonly<Record<SurfaceState, string>> = {
  */
 export async function applySurfaceState(
   db: Db,
-  graphId: string,
+  graphId: GraphId,
   state: SurfaceState,
 ): Promise<void> {
   const caller = createCallerFactory(appRouter)({
-    actorUserId: graphId,
+    identity: personal(graphId),
     actorKind: 'owner',
     db,
     clientVersion: null,

@@ -10,8 +10,11 @@
 // Фабрика, а не свободные функции: каждый сьют держит СВОЙ пул (`appDb()` + `client.end()`
 // в afterAll), и передавать `db` первым аргументом в каждый вызов значило бы повторять его
 // в каждой строке теста.
+
+import type { GraphId } from '@orbis/shared';
 import { newId, type RelationRoleId, routineRunBatchId, routineRunId } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
+import { personal } from '../../test/helpers';
 import type { Db } from '../db/client';
 import { chatMessages, chatThreads, entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -31,22 +34,22 @@ export function iso(d: Date): string {
 export type AnyRecord = Record<string, unknown>;
 
 export interface AgentLoopHelpers {
-  seedEntity: (owner: string, input: Record<string, unknown>) => Promise<WireEntity>;
-  link: (owner: string, sourceId: string, targetId: string, role: RelationRoleId) => Promise<void>;
+  seedEntity: (owner: GraphId, input: Record<string, unknown>) => Promise<WireEntity>;
+  link: (owner: GraphId, sourceId: string, targetId: string, role: RelationRoleId) => Promise<void>;
   /** Свойства строки по id (§А1-1) — то, чем аспекты сущности являются в новой форме. */
-  propsOf: (owner: string, id: string) => Promise<AnyRecord>;
-  childrenOf: (owner: string, parentId: string) => Promise<string[]>;
-  actionsOf: (owner: string) => Promise<ActionRecord[]>;
-  workerGrant: (owner: string, label: string) => Promise<string>;
-  worker: (owner: string, grantId: string, over?: Partial<ToolCallCtx>) => ToolCallCtx;
+  propsOf: (owner: GraphId, id: string) => Promise<AnyRecord>;
+  childrenOf: (owner: GraphId, parentId: string) => Promise<string[]>;
+  actionsOf: (owner: GraphId) => Promise<ActionRecord[]>;
+  workerGrant: (owner: GraphId, label: string) => Promise<string>;
+  worker: (owner: GraphId, grantId: string, over?: Partial<ToolCallCtx>) => ToolCallCtx;
   routineCtx: (
-    owner: string,
+    owner: GraphId,
     mode: RoutineRef['mode'],
     allowedTools?: Iterable<string>,
     over?: Partial<ToolCallCtx>,
   ) => ToolCallCtx & { routine: RoutineRef };
-  seedRoutine: (owner: string, over?: SeedRoutineOver) => Promise<string>;
-  seedRoutineRun: (owner: string, args: SeedRoutineRunArgs) => Promise<SeededRoutineRun>;
+  seedRoutine: (owner: GraphId, over?: SeedRoutineOver) => Promise<string>;
+  seedRoutineRun: (owner: GraphId, args: SeedRoutineRunArgs) => Promise<SeededRoutineRun>;
 }
 
 /** Чем отличается сидируемая рутина от умолчания: тело — инструкция, аспект — права. */
@@ -101,9 +104,9 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * (`model_writable: false`) сиду по-прежнему НЕ разрешены: кэш правила фикстуре подделывать
    * незачем, и эта половина гейта на сьютах цела.
    */
-  async function seedEntity(owner: string, input: Record<string, unknown>): Promise<WireEntity> {
+  async function seedEntity(owner: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       mechanism: 'seed',
@@ -120,13 +123,13 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * а сид фикстуры действием владельца не является.
    */
   async function link(
-    owner: string,
+    owner: GraphId,
     sourceId: string,
     targetId: string,
     role: RelationRoleId,
   ): Promise<void> {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       mechanism: 'seed',
@@ -143,8 +146,8 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * до первого свойства, у которого носителя в старой форме нет (своё свойство владельца,
    * свободное свойство §А1-2) — то есть молчал бы там, где расхождение и важно.
    */
-  async function propsOf(owner: string, id: string): Promise<AnyRecord> {
-    const rows = await withIdentity(db, owner, (tx) =>
+  async function propsOf(owner: GraphId, id: string): Promise<AnyRecord> {
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
     );
     const row = rows[0];
@@ -153,8 +156,8 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
   }
 
   /** Прогоны сущности — связи роли `run` (§А4-3). */
-  async function childrenOf(owner: string, parentId: string): Promise<string[]> {
-    const rows = await withIdentity(db, owner, (tx) =>
+  async function childrenOf(owner: GraphId, parentId: string): Promise<string[]> {
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select({ id: relations.targetId })
         .from(relations)
@@ -164,8 +167,8 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
   }
 
   /** Все action'ы журнала §7.8 владельца — по всем его тредам. */
-  async function actionsOf(owner: string): Promise<ActionRecord[]> {
-    const rows = await withIdentity(db, owner, (tx) =>
+  async function actionsOf(owner: GraphId): Promise<ActionRecord[]> {
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select({ metadata: chatMessages.metadata })
         .from(chatMessages)
@@ -179,18 +182,18 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * Грант выдаётся штатным путём: инвариант assertAssignment требует ЖИВОГО гранта
    * владельца, а вставка строки руками обходила бы ровно тот код, которым скоуп пишется.
    */
-  async function workerGrant(owner: string, label: string): Promise<string> {
-    const token = await issuePatGrant(db, { graphId: owner, label, scope: 'worker' });
+  async function workerGrant(owner: GraphId, label: string): Promise<string> {
+    const token = await issuePatGrant(db, { identity: personal(owner), label, scope: 'worker' });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный worker-PAT не прошёл verifyBearer');
     return identity.grantId;
   }
 
   /** Контекст вызова от имени фонового исполнителя (MCP + грант скоупа worker). */
-  function worker(owner: string, grantId: string, over: Partial<ToolCallCtx> = {}): ToolCallCtx {
+  function worker(owner: GraphId, grantId: string, over: Partial<ToolCallCtx> = {}): ToolCallCtx {
     return {
       db,
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'agent',
       source: 'mcp',
       explicitCommand: false,
@@ -207,7 +210,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * тесту, которому нужны настоящие (прогон в БД), их подменяет `over.routine`.
    */
   function routineCtx(
-    owner: string,
+    owner: GraphId,
     mode: RoutineRef['mode'],
     allowedTools: Iterable<string> = [],
     over: Partial<ToolCallCtx> = {},
@@ -216,7 +219,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     const routine: RoutineRef = { id: newId(), runId, mode, allowedTools: new Set(allowedTools) };
     return {
       db,
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'ai', // за прогоном рутины стоит внутренний AI, а не внешний агент
       source: 'routine',
       explicitCommand: false, // прямой команды владельца за фоновым прогоном нет
@@ -236,7 +239,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * (V1.10) молчит только для источников владельца, и сид от имени рутины упирался бы в
    * него — то есть проверял бы не то, что нужно сьюту.
    */
-  async function seedRoutine(owner: string, over: SeedRoutineOver = {}): Promise<string> {
+  async function seedRoutine(owner: GraphId, over: SeedRoutineOver = {}): Promise<string> {
     const e = await seedEntity(owner, {
       title: over.title ?? 'Утренний обзор',
       body: over.body ?? 'Пройди по задачам дня и предложи, что сделать.',
@@ -259,7 +262,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
    * разошёлся бы с боевым путём ровно в том, что проверяют глаголы: субъекте и связи.
    */
   async function seedRoutineRun(
-    owner: string,
+    owner: GraphId,
     args: SeedRoutineRunArgs,
   ): Promise<SeededRoutineRun> {
     const bucket = args.bucket ?? '2026-08-17T07:00';
@@ -270,7 +273,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     // общим T0 давал бы двум попыткам одинаковый ключ сортировки.
     const startedAt = args.startedAt ?? T0;
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'ai',
       source: 'system',
       // Как у боевого пути (lifecycle.startRun): прогон целиком собран из служебных

@@ -1,6 +1,6 @@
 // apps/server/test/helpers.ts
 import { beforeAll } from 'bun:test';
-import type { LocalizedText, PropertyType } from '@orbis/shared';
+import type { AccountId, GraphId, LocalizedText, PropertyType } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { type Db, makeDb } from '../src/db/client';
 import { DEFINITION_TABLES } from '../src/db/reset-world';
@@ -9,6 +9,7 @@ import type { Tx } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { resolvePropertyRef } from '../src/executor/props';
 import type { ExecuteRequest, ExecuteResult, ExecutorDeps } from '../src/executor/types';
+import { type Identity, parseAccountId, parseGraphId } from '../src/identity';
 import { effectiveRegistry } from '../src/registry/cache';
 import type { RegistrySnapshot } from '../src/registry/load';
 import { bumpOwnerRegistryVersion } from '../src/registry/version';
@@ -69,19 +70,46 @@ const MINTED = new Set<string>();
 const PRESENT = new Set<string>();
 
 /** Синхронно: id личного графа, строк в базе ещё нет — их заведёт `ensureGraphs()`/`truncateAll()`. */
-export function mintGraph(id: string = crypto.randomUUID()): string {
+export function mintGraph(id: string = crypto.randomUUID()): GraphId {
   MINTED.add(id);
   // Регистрация вне фазы сбора (например, из тела теста) ничего не ломает: bun такой хук
   // просто не исполнит, а нужные строки к тому моменту уже доведены более ранним хуком.
   beforeAll(ensureGraphs);
-  return id;
+  // `parseGraphId` — граница внешнего мира для тестов: id приходит из crypto.randomUUID()
+  // или из литерала фикстуры, то есть из нетипизированного мира, как JWT в бою.
+  return parseGraphId(id);
 }
 
 /** Свежий личный граф с грантом owner — строки уже в базе. Форма по умолчанию для async-тел. */
-export async function freshGraph(): Promise<string> {
+export async function freshGraph(): Promise<GraphId> {
   const id = mintGraph();
   await ensureGraphs([id]);
   return id;
+}
+
+/** Аккаунт — держатель личного графа: тестовый близнец резолвера `identityOfPerson`. */
+export function accountOf(graph: GraphId): AccountId {
+  return parseAccountId(graph);
+}
+
+/** Пара «человек в своём личном графе» — чем в тестах был голый id владельца. */
+export function personal(graph: GraphId): Identity {
+  return { actor: accountOf(graph), graph };
+}
+
+/** Фикстура «граф ≠ аккаунт»: второй аккаунт получает грант в чужом графе (админ-DSN; у authenticated такого пути нет). */
+export async function addMember(
+  graph: GraphId,
+  account: AccountId,
+  kind: 'owner' | 'operator' | 'observer',
+): Promise<void> {
+  const { db, client } = adminDb();
+  try {
+    await db.execute(sql`INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by)
+      VALUES (gen_random_uuid(), ${graph}::uuid, ${account}::uuid, ${kind}, ${graph}::uuid)`);
+  } finally {
+    await client.end();
+  }
 }
 
 /**
@@ -190,10 +218,10 @@ export async function truncateAll(): Promise<void> {
  * Своё подключение админской ролью: у фикстур транзакции на руках нет, а строка настроек
  * владельца может ещё не существовать (UPSERT внутри её заводит).
  */
-export async function bumpRegistryVersion(graphId: string): Promise<number> {
+export async function bumpRegistryVersion(graphId: GraphId): Promise<number> {
   const { db, client } = adminDb();
   try {
-    return await bumpOwnerRegistryVersion(db, graphId);
+    return await bumpOwnerRegistryVersion(db, mintGraph(graphId));
   } finally {
     await client.end();
   }
@@ -256,7 +284,7 @@ export interface CustomAspectSpec {
  * карточек и старой валидации — локальная часть key (см. `keyFieldsByAspect` в
  * `tools/dispatch.ts`).
  */
-export async function seedCustomAspect(graphId: string, spec: CustomAspectSpec): Promise<void> {
+export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec): Promise<void> {
   const namespace = spec.key.split('/')[0] ?? 'user';
   const propertyId = (field: string): string => `${namespace}/${field}`;
 
@@ -319,7 +347,7 @@ export async function seedCustomAspect(graphId: string, spec: CustomAspectSpec):
     // безразлично (никто не наблюдает её промежуточные состояния), но писателю реестра
     // так писать НЕЛЬЗЯ: образец транзакционного инкремента — `registry/cache.test.ts`,
     // где INSERT дельты и `bumpOwnerRegistryVersion` идут одним `withIdentity`.
-    await bumpOwnerRegistryVersion(db, graphId);
+    await bumpOwnerRegistryVersion(db, mintGraph(graphId));
   } finally {
     await client.end();
   }
@@ -382,16 +410,16 @@ export function entityColumnsFrom(
  */
 export async function entityColumns(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   props: Record<string, unknown>,
   aspects: string[],
 ): Promise<EntityValueColumns> {
-  return entityColumnsFrom(await effectiveRegistry(tx, graphId), props, aspects);
+  return entityColumnsFrom(await effectiveRegistry(tx, mintGraph(graphId)), props, aspects);
 }
 
 /** Строка `entities`, записанная ПРЯМЫМ INSERT'ом мимо исполнителя, — вход `rawEntityRow`. */
 export interface RawRowSpec {
-  graphId: string;
+  graphId: GraphId;
   id: string;
   title: string;
   /** Значения по id свойства (§А1-1). */
@@ -441,7 +469,7 @@ export function rawEntityRow(spec: RawRowSpec): typeof entities.$inferInsert {
  * идемпотентным: сьюты зовут её и на общий id describe-блока, и повторно внутри тестов.
  */
 export async function seedRefTargetRows(
-  graphId: string,
+  graphId: GraphId,
   targets: ReadonlyArray<{ id: string; aspect: string }>,
 ): Promise<void> {
   if (targets.length === 0) return;
@@ -501,7 +529,7 @@ const FIXTURE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
  * что ищет страж `scripts/legacy-aspects-map.test.ts`, и докблок стоил бы ему записи в
  * allowlist на ровном месте.
  */
-export async function seedCategoriesOfInput(graphId: string, input: unknown): Promise<void> {
+export async function seedCategoriesOfInput(graphId: GraphId, input: unknown): Promise<void> {
   const targets: Array<{ id: string; aspect: string }> = [];
   const walk = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -541,5 +569,7 @@ export function executeWithFixtureCategories(
   req: ExecuteRequest,
   deps?: ExecutorDeps,
 ): Promise<ExecuteResult> {
-  return seedCategoriesOfInput(req.actorUserId, req.operations).then(() => execute(db, req, deps));
+  return seedCategoriesOfInput(req.identity.graph, req.operations).then(() =>
+    execute(db, req, deps),
+  );
 }

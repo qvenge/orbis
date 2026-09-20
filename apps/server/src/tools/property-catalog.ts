@@ -11,7 +11,7 @@
 // владельца целиком, и фоновому исполнителю (`worker`) она не адресована — его периметр это
 // назначенные тикеты, а не устройство графа. Гейт стоит дважды: список (`mcp/server.ts`) и
 // вызов (`tools/dispatch.ts`) — список подсказка, доступ решает сервер.
-import { effectiveLabel, type PropertyDefinition } from '@orbis/shared';
+import { effectiveLabel, type GraphId, type PropertyDefinition } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Tx } from '../db/with-identity';
@@ -157,7 +157,7 @@ async function usageCounts(tx: Tx, propertyIds: string[]): Promise<Map<string, n
  */
 async function createdBefore(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   propertyIds: string[],
   boundary: Date,
 ): Promise<Set<string>> {
@@ -195,7 +195,7 @@ export async function runPropertyCatalog(
   reg: RegistrySnapshot,
   input: PropertyCatalogInput,
   locale: string,
-  args: { graphId: string; now: Date },
+  args: { graphId: GraphId; now: Date },
 ): Promise<PropertyCatalogResult> {
   // Носители — общей `carrierAspects` (она же держит запрет по объекту в предложении):
   // второй обход тех же ссылок разошёлся бы с первым молча. Она отдаёт id аспекта, а

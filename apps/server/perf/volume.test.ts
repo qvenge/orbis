@@ -77,7 +77,7 @@ import {
   volumeProbeProps,
   volumeProbes,
 } from '../src/test/volume-fixture';
-import { adminDb, appDb, requireEnv } from '../test/helpers';
+import { adminDb, appDb, personal, requireEnv } from '../test/helpers';
 
 requireEnv();
 const { db, client } = appDb();
@@ -149,7 +149,9 @@ beforeAll(async () => {
       })`,
   );
   expect(fixture.entities).toBe(VOLUME_ENTITIES);
-  reg = await withIdentity(db, VOLUME_OWNER_ID, (tx) => effectiveRegistry(tx, VOLUME_OWNER_ID));
+  reg = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
+    effectiveRegistry(tx, VOLUME_OWNER_ID),
+  );
   const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID);
   // Сужение объединения: подписка не той машинки — не «пустой Overview», а остановка прогона.
   if (def.engine !== 'budget') {
@@ -264,7 +266,7 @@ function divergencesOf(oracle: BudgetOverview, engine: BudgetOverview, month: st
 async function warmSpentCache(envelopeIds: readonly string[]): Promise<void> {
   expect(envelopeIds).toHaveLength(VOLUME_ENVELOPES);
   for (let k = 0; k < VOLUME_MONTHS; k++) {
-    await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+    await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
       budgetOverviewOf(
         tx,
         VOLUME_OWNER_ID,
@@ -320,7 +322,7 @@ async function measureInterleavedP95(runs: number): Promise<Measured> {
   const oracle: number[] = [];
   const engine: number[] = [];
   for (let i = 0; i < runs; i++) {
-    await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+    await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
       const tickOracle = async () => {
         const t0 = performance.now();
         await computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY);
@@ -358,7 +360,7 @@ async function measureInterleavedP95(runs: number): Promise<Measured> {
 
 /** План под ролью приложения (образец `explain.test.ts:91`). */
 async function planOf(query: SQL, forceIndex: boolean): Promise<string> {
-  const rows = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+  const rows = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
     if (forceIndex) await tx.execute(sql`SET LOCAL enable_seqscan = off`);
     return [...(await tx.execute(sql`EXPLAIN (FORMAT JSON) ${query}`))];
   });
@@ -523,7 +525,7 @@ function bindingsOfEnvelopesQuery(envelopeIds: readonly string[]): SQL {
 test('корпус наполнен: гейт меряет данные, а не пустой граф', async () => {
   expect(fixture.envelopes).toBe(VOLUME_ENVELOPES);
   expect(fixture.bindings).toBeGreaterThanOrEqual(VOLUME_MIN_BINDINGS);
-  const overview = await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+  const overview = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
     computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY),
   );
   expect(overview.envelopes).toHaveLength(VOLUME_ENVELOPES_PER_MONTH);
@@ -538,7 +540,7 @@ test('корпус: 480 конвертов видны под ролью прил
   // Корпус сеется прямыми INSERT под админ-DSN (Р-К-2/РП-8), а гейт мерит путь владельца.
   // Разъехался бы `graph_id` — админ строки видит, роль нет, и весь замер шёл бы по пустоте,
   // оставаясь зелёным (класс сторожа `perf.test.ts:212`, `graph.test.ts:181`).
-  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) => envelopeIdsOf(tx));
   expect(ids).toHaveLength(VOLUME_ENVELOPES);
   expect(new Set(ids).size).toBe(VOLUME_ENVELOPES);
 }, 300_000);
@@ -547,7 +549,7 @@ test('Р-К-2: сто движений через исполнитель даю�
   const probes = volumeProbes();
   // 1. Что говорит проход фикстуры — тем же селектором и по тому же `volumeCombination`,
   //    которым сеялись 16 000+ привязок корпуса.
-  const expected = await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+  const expected = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
     selectEnvelopes(tx, {
       graphId: VOLUME_OWNER_ID,
       defaultCurrency: VOLUME_DEFAULT_CURRENCY,
@@ -560,7 +562,7 @@ test('Р-К-2: сто движений через исполнитель даю�
   );
   // 2. Что делает бюджет-хук на настоящем пути записи — своим `combinationOf`.
   const result = await execute(db, {
-    actorUserId: VOLUME_OWNER_ID,
+    identity: personal(VOLUME_OWNER_ID),
     actorKind: 'owner',
     source: 'ui',
     batchId: newId(),
@@ -577,7 +579,7 @@ test('Р-К-2: сто движений через исполнитель даю�
   });
   expect(result.ok).toBe(true);
 
-  const rows = (await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+  const rows = (await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
     tx.execute(sql`
       SELECT r.target_id, r.source_id FROM relations r
       WHERE r.role = ${ROLE_ENVELOPE_BINDING}
@@ -602,7 +604,7 @@ test('базовая линия: p95 computeOverview под ролью прил�
   // Под ролью, а не под админ-DSN: под админом план другой (Р-9a-3, `perf/explain.test.ts`), и
   // число было бы честным, но не про тот путь, каким ходит владелец.
   const run = () =>
-    withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+    withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
       computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY),
     );
   const t0 = performance.now();
@@ -643,7 +645,7 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
     const warmDiffs: string[] = [];
     for (let k = 0; k < VOLUME_MONTHS; k += 1) {
       const month = volumeMonth(k);
-      await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+      await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
         const reg = await effectiveRegistry(tx, VOLUME_OWNER_ID);
         const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
         // Часы корпуса ПРИБИТЫ (`VOLUME_TODAY`): даты синтетики выведены из них, и с системным
@@ -676,7 +678,7 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
     expect({ cold: coldDiffs, warm: warmDiffs }).toEqual({ cold: [], warm: [] });
     // И кэш действительно наполнился: иначе «тёплый» был бы вторым холодным, а сверка —
     // тавтологией «движок равен себе».
-    const rows = (await withIdentity(db, VOLUME_OWNER_ID, (tx) =>
+    const rows = (await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
       tx.execute(sql`SELECT count(*)::int AS n FROM envelope_spent_cache
                      WHERE graph_id = ${VOLUME_OWNER_ID}::uuid`),
     )) as unknown as Array<{ n: number }>;
@@ -700,7 +702,7 @@ test('сверка и замер — на одной транзакции: дв�
   // «ноль расхождений». Эта отвечает за смысл ЧИСЛА: без неё p95 сравнивал бы две программы,
   // про равенство которых известно из соседнего теста, — а он мог отработать на другой tx и
   // при другом состоянии кэша spent.
-  const diffs = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+  const diffs = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
     const { oracle, engine } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
     return divergencesOf(oracle, engine, VOLUME_LAST_MONTH);
   });
@@ -708,7 +710,7 @@ test('сверка и замер — на одной транзакции: дв�
 }, 300_000);
 
 test('перф-гейт §С8-15: p95 движка ≤ 2× оракула и ≤ 500 мс на прогретом корпусе', async () => {
-  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) => envelopeIdsOf(tx));
   await warmSpentCache(ids);
 
   const { oracleP95, engineP95 } = await measureInterleavedP95(GATE_P95_RUNS);
@@ -735,14 +737,16 @@ test('перф-гейт §С8-15: p95 движка ≤ 2× оракула и ≤
 }, 900_000);
 
 test('холодный корпус: p95 без кэша spent записывается (порога не несёт)', async () => {
-  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) => envelopeIdsOf(tx));
   // Цена самой инвалидации — отдельной строкой: иначе читатель не отличит «движок медленный без
   // кэша» от «DELETE 480 строк дорогой», а холодное число включает и то и другое.
   await measureMedian('spent-cache:invalidate480', 5, () =>
-    withIdentity(db, VOLUME_OWNER_ID, (tx) => invalidateSpentCache(tx, VOLUME_OWNER_ID, ids)),
+    withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
+      invalidateSpentCache(tx, VOLUME_OWNER_ID, ids),
+    ),
   );
   const cold = await measureP95('overview:engine:cold', P95_RUNS, () =>
-    withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+    withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
       // Инвалидация и расчёт — в ОДНОЙ tx: расчёт тут же перезаписывает строки кэша, поэтому
       // следующий прогон снова холодный. Разнеси по двум tx — второй замер стал бы прогретым.
       await invalidateSpentCache(tx, VOLUME_OWNER_ID, ids);
@@ -762,14 +766,14 @@ test('холодный корпус: p95 без кэша spent записыва�
 }, 900_000);
 
 test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ формах, btree по владельцу RLS-нейтрален', async () => {
-  const period = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+  const period = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
     const { oracle } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
     return oracle.period; // границы месяца считает сам оракул — копии календаря нет
   });
   const q = envelopesOfMonthQuery(period);
   // Сторож копии: запрос списан с `aggregates.ts:398-414` и без этой строки мог бы разъехаться
   // с боевым молча — тогда вердикт был бы вердиктом о другом запросе.
-  const ids = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => [
+  const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => [
     ...((await tx.execute(q)) as unknown as Array<{ id: string }>),
   ]);
   expect(ids).toHaveLength(VOLUME_ENVELOPES_PER_MONTH);
@@ -797,7 +801,7 @@ test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ форм
   // измерены и экспрессионные индексы пробы П2 (`props->>'orbis/period_*'`): `->>`
   // (`jsonb_object_field_text`) тоже не leakproof, и под ролью у них нет `Index Cond` вовсе.
   const qEngine = engineAspectEnvelopesQuery(period);
-  const idsEngine = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => [
+  const idsEngine = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => [
     ...((await tx.execute(qEngine)) as unknown as Array<{ id: string }>),
   ]);
   // Сторож копии: форма другая — множество то же самое, иначе вердикты сравнивались бы по разным
@@ -829,9 +833,9 @@ test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ форм
 }, 300_000);
 
 test('EXPLAIN под ролью: привязки конвертов берут rel_uniq, а не relations_source_role', async () => {
-  const ids = await withIdentity(db, VOLUME_OWNER_ID, (tx) => envelopeIdsOf(tx));
+  const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) => envelopeIdsOf(tx));
   const q = bindingsOfEnvelopesQuery(ids);
-  const { total, probeBound } = await withIdentity(db, VOLUME_OWNER_ID, async (tx) => {
+  const { total, probeBound } = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
     const rows = (await tx.execute(q)) as unknown as Array<{ count: string }>;
     // Пробы сторожа Р-К-2 создаёт соседний тест ЧЕРЕЗ ИСПОЛНИТЕЛЬ, и бюджет-хук привязывает их
     // к тем же конвертам корпуса — их вклад считается отдельно, иначе сторож копии сравнивал бы

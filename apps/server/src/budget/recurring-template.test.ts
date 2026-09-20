@@ -13,11 +13,13 @@
 //
 // «Сегодня» фиксировано подменяемым Clock (Task A1) — прогон не зависит от даты запуска.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -45,9 +47,9 @@ const clock: Clock = () => new Date('2026-09-10T10:00:00Z');
 const SERIES_START = '2026-09-05T12:00:00+03:00';
 const RECURRENCE = { freq: 'monthly', interval: 1 } as const;
 
-async function exec(user: string, tool: string, input: unknown): Promise<WireEntity> {
+async function exec(user: GraphId, tool: string, input: unknown): Promise<WireEntity> {
   const req: ExecuteRequest = {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool, input }],
@@ -102,7 +104,7 @@ test('шаблон с occurred_on не попадает ни в unbudgeted, ни
   // Положительный контроль: обычный факт того же месяца обязан остаться в обоих агрегатах
   await exec(user, 'entity_create', expense(catFood, '340.00', '2026-09-05'));
 
-  const ov = await budgetOverview(db, user, MONTH, clock);
+  const ov = await budgetOverview(db, personal(user), MONTH, clock);
 
   // В unbudgeted — только категория настоящего факта; 50000.00 шаблона нет ни строкой,
   // ни слагаемым (иначе тут была бы и пара [catRent, '50000.00'])
@@ -137,7 +139,7 @@ test('шаблон не попадает в список planned-покупок 
     expense(catGift, '1200.00', '2026-09-25', { 'orbis/planned': true }),
   );
 
-  const status = await budgetStatus(db, user, MONTH, clock);
+  const status = await budgetStatus(db, personal(user), MONTH, clock);
 
   expect(status.planned.map((p) => p.entity.id)).toEqual([purchase.id]);
 });
@@ -179,7 +181,7 @@ test('шаблон не завышает suggestedLimit rollover-превью §
   });
   await exec(user, 'entity_create', expense(catRent, '340.00', '2026-08-05'));
 
-  const preview = await rolloverPreview(db, user, MONTH, clock);
+  const preview = await rolloverPreview(db, personal(user), MONTH, clock);
 
   // Без фильтра шаблонов было бы prevSpent 50340.00 и suggestedLimit 50400.00 —
   // предложение забюджетировать аренду, которой в этом месяце никто не тратил

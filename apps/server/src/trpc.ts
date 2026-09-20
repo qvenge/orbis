@@ -3,16 +3,18 @@ import { initTRPC, TRPCError } from '@trpc/server';
 // import type — стирается: type-граф trpc остаётся чист от runtime-модулей AI-слоя
 import type { AiDeps } from './ai/send-message';
 import type { Db } from './db/client';
+import type { Identity } from './identity';
 import type { GrantRef } from './oauth/grants';
 
-// Identity течёт только через request-контекст; имя — actorUserId, не userId (D11).
+// Identity течёт только через request-контекст: пара «актор + текущий граф» (D44); ключ
+// журнала по-прежнему `actor_user_id` (D11).
 // db — один инстанс на процесс (index.ts), в контекст кладётся ссылкой (Task 12).
 // createContext живёт в context.ts (Task 14): здесь — только типы и сборка процедур,
 // чтобы type-граф AppRouter → router → trpc не тянул runtime-импорты auth.
 // type, а не interface: у interface нет неявной index signature, и он не проходит
 // требование Record<string, unknown> у createContext в @hono/trpc-server.
 export type Context = {
-  actorUserId: string | null;
+  identity: Identity | null;
   /**
    * Транспортный актор запроса (§9.3): 'owner' — JWT Supabase (и неаутентифицированные
    * запросы), 'agent' — токен внешнего агента из agent_grants (access-токен OAuth либо
@@ -115,8 +117,8 @@ const versionGate = t.middleware(({ ctx, next }) => {
 
 export const publicProcedure = t.procedure.use(versionGate);
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
-  if (!ctx.actorUserId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  return next({ ctx: { actorUserId: ctx.actorUserId } });
+  if (!ctx.identity) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  return next({ ctx: { identity: ctx.identity } });
 });
 
 // §9.3 (Task 3, ужесточено Task 10b): ownerOnly гейтит ЛЮБУЮ мутацию состояния через

@@ -6,6 +6,7 @@
 // unbudgeted). Все даты — ОТНОСИТЕЛЬНО реального «сегодня» (Europe/Moscow — дефолт
 // сида §7.3), кроме приёмки §7.1 с фиксированными датами мая/июня 2026.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { type BudgetOverview, type BudgetStatusResult, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -13,6 +14,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -120,9 +122,9 @@ let plannedTxnId = '';
  * (`system_writable`, §А2-5). Без механизма фикстура падала бы `COMPUTED_WRITE` на
  * подготовке, а не на проверяемом поведении.
  */
-async function exec(user: string, tool: string, input: unknown): Promise<WireEntity> {
+async function exec(user: GraphId, tool: string, input: unknown): Promise<WireEntity> {
   const req: ExecuteRequest = {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     mechanism: 'seed',
@@ -182,7 +184,7 @@ function envById(ov: BudgetOverview, id: string) {
 
 beforeAll(async () => {
   await truncateAll();
-  await seedOwnerGraph(db, userA);
+  await seedOwnerGraph(db, personal(userA));
 
   // Иерархия §2.10: родительская категория → дочерняя (relation parent)
   catParent = (
@@ -334,7 +336,7 @@ describe('«конверт-родитель» — одна роль envelope-bin
   let txnManual = '';
 
   beforeAll(async () => {
-    await seedOwnerGraph(db, userC);
+    await seedOwnerGraph(db, personal(userC));
     envC = (await exec(userC, 'entity_create', envelope(catC, cmStart, cmEnd, '10000.00'))).id;
     // Транзакция ЧУЖОЙ категории — авто-привязка (A4) её к этому конверту не ставит…
     txnManual = (await exec(userC, 'entity_create', txn(catOther, '700.00', today))).id;
@@ -347,12 +349,12 @@ describe('«конверт-родитель» — одна роль envelope-bin
   });
 
   test('связь роли ВЛАДЕЛЬЦА от конверта к транзакции в spent конверта НЕ входит', async () => {
-    const ov = await budgetOverview(db, userC, curMonth);
+    const ov = await budgetOverview(db, personal(userC), curMonth);
     expect(envById(ov, envC).spent).toBe('0.00');
   });
 
   test('та же связь транзакцию из unbudgeted НЕ выводит: у обоих читателей одно множество', async () => {
-    const ov = await budgetOverview(db, userC, curMonth);
+    const ov = await budgetOverview(db, personal(userC), curMonth);
     expect(ov.unbudgeted.map((u) => u.category.id)).toContain(catOther);
   });
 
@@ -360,7 +362,7 @@ describe('«конверт-родитель» — одна роль envelope-bin
     // Контроль правила: без него оба утверждения выше зеленели бы и на сломанном запросе,
     // который не считает ВООБЩЕ ничего.
     const txnBound = (await exec(userC, 'entity_create', txn(catC, '250.00', today))).id;
-    const ov = await budgetOverview(db, userC, curMonth);
+    const ov = await budgetOverview(db, personal(userC), curMonth);
     expect(envById(ov, envC).spent).toBe('250.00');
     expect(txnBound).not.toBe('');
   });
@@ -393,7 +395,7 @@ describe('«конверт-родитель» — одна роль envelope-bin
     ).id;
     await exec(userC, 'entity_create', txn(nested, '1500.00', today));
 
-    const ov = await budgetOverview(db, userC, curMonth);
+    const ov = await budgetOverview(db, personal(userC), curMonth);
     expect(envById(ov, envNested).spent).toBe('1500.00');
     // Роль связи — не `category-parent`, значит для §2.10 это НЕ дерево
     expect(envById(ov, envTop).spent).toBe('0.00');
@@ -404,7 +406,7 @@ describe('«конверт-родитель» — одна роль envelope-bin
     const plain = (await exec(userC, 'entity_create', { title: 'Просто запись', tags: [] })).id;
     const free = (await exec(userC, 'entity_create', txn(catOther, '900.00', today))).id;
     await exec(userC, 'relation_create', { source_id: plain, target_id: free, role: 'subitem' });
-    const ov = await budgetOverview(db, userC, curMonth);
+    const ov = await budgetOverview(db, personal(userC), curMonth);
     expect(envById(ov, envC).spent).toBe('250.00');
     // …и она осталась unbudgeted — родителя-конверта у неё нет
     expect(ov.unbudgeted.map((u) => u.category.id)).toContain(catOther);
@@ -413,7 +415,7 @@ describe('«конверт-родитель» — одна роль envelope-bin
 
 describe('budget.overview: spent и формулы конверта (§2.2, §2.4)', () => {
   test('spent — только факт-расходы своей валюты до сегодня; carryover входит в effectiveLimit', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     const food = envById(ov, envFood);
     // 340 + 2340; planned 8000, USD 500, доход и unbudgeted-транспорт — НЕ входят
     expect(food.spent).toBe('2680.00');
@@ -425,18 +427,18 @@ describe('budget.overview: spent и формулы конверта (§2.2, §2.
   });
 
   test('чужая валюта считается СВОИМ конвертом: USD-конверт видит только USD-транзакцию (один batch-SQL, §5)', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     expect(envById(ov, envUsd).spent).toBe('500.00');
   });
 
   test('dailyPace: remaining / дней до конца периода включительно, 2 знака (§2.4)', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     const food = envById(ov, envFood);
     expect(food.dailyPace).toBe(paceOf('28520.00', daysInclusive(today, cmEnd)));
   });
 
   test('remaining < 0 → dailyPace = null («—/день», §2.4)', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     const ent = envById(ov, envEnt);
     expect(ent.remaining).toBe('-50.00');
     expect(ent.dailyPace).toBeNull();
@@ -444,7 +446,7 @@ describe('budget.overview: spent и формулы конверта (§2.2, §2.
   });
 
   test('phase=upcoming (следующий месяц): spent 0, dailyPace null (§2.9а)', async () => {
-    const ov = await budgetOverview(db, userA, nextMonth);
+    const ov = await budgetOverview(db, personal(userA), nextMonth);
     const st = envById(ov, envNext);
     expect(st.phase).toBe('upcoming');
     expect(st.spent).toBe('0.00');
@@ -452,7 +454,7 @@ describe('budget.overview: spent и формулы конверта (§2.2, §2.
   });
 
   test('phase=closed (май 2026): dailyPace null (§2.9б)', async () => {
-    const ov = await budgetOverview(db, userA, '2026-05');
+    const ov = await budgetOverview(db, personal(userA), '2026-05');
     const st = envById(ov, envMay);
     expect(st.phase).toBe('closed');
     expect(st.dailyPace).toBeNull();
@@ -461,7 +463,7 @@ describe('budget.overview: spent и формулы конверта (§2.2, §2.
 
 describe('budget.overview: баланс периода (§2.5) и Unbudgeted (§3.1)', () => {
   test('баланс включает unbudgeted, исключает чужую валюту, planned и другие месяцы', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     expect(ov.period).toEqual({ start: cmStart, end: cmEnd });
     expect(ov.balance.income).toBe('165000.00');
     // 340+2340 (еда) + 3200 (транспорт unbudgeted) + 900 (жильё) + 150 (развлечения)
@@ -471,7 +473,7 @@ describe('budget.overview: баланс периода (§2.5) и Unbudgeted (§
   });
 
   test('Unbudgeted: фактические траты категории без конверта, с иконкой (§2.3 шаг 5)', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     expect(ov.unbudgeted).toEqual([
       { category: { id: catTransport, title: 'Транспорт', icon: '🚕' }, total: '3200.00' },
     ]);
@@ -480,7 +482,7 @@ describe('budget.overview: баланс периода (§2.5) и Unbudgeted (§
 
 describe('budget.overview: Coming up и Planned не пересекаются (§2.7, §2.8)', () => {
   test('comingUp — recurring-инстансы 14 дней (derived_from); planned — ручные покупки', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
 
     expect(ov.comingUp.map((c) => c.occurredOn)).toEqual([
       addDaysISO(today, 1),
@@ -502,7 +504,7 @@ describe('budget.overview: Coming up и Planned не пересекаются (�
   });
 
   test('planned-инстансы recurring НЕ входят в spent конверта категории (§2.8)', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     // у подписок конверта нет вовсе; их инстансы не всплывают и в unbudgeted (planned=true)
     expect(ov.unbudgeted.some((u) => u.category.id === catSubs)).toBe(false);
   });
@@ -510,14 +512,14 @@ describe('budget.overview: Coming up и Planned не пересекаются (�
 
 describe('budget.overview: alertCount (§6.1) и иерархия категорий (§2.10)', () => {
   test('alertCount: конверты spent > 85% × effectiveLimit (оранжевые + красные)', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     // жильё 900/1000 = 90% (⚠) и развлечения 150/100 = 150% (🔴); еда 2680/31200 — нет
     expect(envById(ov, envHousing).spent).toBe('900.00');
     expect(ov.alertCount).toBe(2);
   });
 
   test('родительская категория агрегирует детей: spent и effectiveLimit суммарные', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     const parent = envById(ov, envParent);
     const child = envById(ov, envChild);
     expect(child.spent).toBe('1000.00');
@@ -530,7 +532,7 @@ describe('budget.overview: alertCount (§6.1) и иерархия категор
   });
 
   test('fix round: агрегация §2.10 не смешивает валюты — USD-конверт ребёнка не входит в RUB-карточку родителя (§5)', async () => {
-    const ov = await budgetOverview(db, userA, curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     // USD-конверт ребёнка живёт своей карточкой…
     const childUsd = envById(ov, envChildUsd);
     expect(childUsd.spent).toBe('100.00');
@@ -544,10 +546,10 @@ describe('budget.overview: alertCount (§6.1) и иерархия категор
 
 describe('приёмка §7.1: исторический импорт', () => {
   test('транзакция occurred_on=2026-05-31, созданная сегодня, — в майском конверте и НЕ в июньском', async () => {
-    const may = await budgetOverview(db, userA, '2026-05');
+    const may = await budgetOverview(db, personal(userA), '2026-05');
     expect(envById(may, envMay).spent).toBe('340.00');
 
-    const june = await budgetOverview(db, userA, '2026-06');
+    const june = await budgetOverview(db, personal(userA), '2026-06');
     expect(envById(june, envJune).spent).toBe('0.00');
     // майский конверт июньскому месяцу не принадлежит
     expect(june.envelopes.some((e) => e.envelope.id === envMay)).toBe(false);
@@ -556,21 +558,24 @@ describe('приёмка §7.1: исторический импорт', () => {
 
 describe('budget.envelopeForCategory (fast-path «осталось N ₽», §4.1)', () => {
   test('находит конверт категории на дату в валюте по умолчанию', async () => {
-    const st = await envelopeForCategory(db, userA, { categoryId: catFood, date: today });
+    const st = await envelopeForCategory(db, personal(userA), { categoryId: catFood, date: today });
     expect(st?.envelope.id).toBe(envFood); // не USD-конверт: селектор фильтрует валюту
     expect(st?.spent).toBe('2680.00');
     expect(st?.remaining).toBe('28520.00');
   });
 
   test('нет конверта на дату → null (Unbudgeted)', async () => {
-    const st = await envelopeForCategory(db, userA, { categoryId: catFood, date: '2019-01-15' });
+    const st = await envelopeForCategory(db, personal(userA), {
+      categoryId: catFood,
+      date: '2019-01-15',
+    });
     expect(st).toBeNull();
   });
 });
 
 describe('budget.categoryTrend (§3.2)', () => {
   test('spent по конвертам прошлых периодов + limit; месяц без конверта — spent 0, limit null', async () => {
-    const points = await categoryTrend(db, userA, { categoryId: catHealth, months: 3 });
+    const points = await categoryTrend(db, personal(userA), { categoryId: catHealth, months: 3 });
     expect(points).toEqual([
       { period: shiftMonth(curMonth, -2), spent: '0.00', limit: null },
       { period: prevMonth, spent: '150.00', limit: '2000.00' },
@@ -581,15 +586,20 @@ describe('budget.categoryTrend (§3.2)', () => {
   test('fix round: тренд не смешивает валюты — USD-конверт категории (envUsd) не входит в бакет месяца (§5)', async () => {
     // у еды в текущем месяце ДВА конверта: RUB (30000, spent 2680) и USD (1000, spent 500);
     // бакет считает только валюту по умолчанию — иначе limit 31000 и spent 3180 бессмысленны
-    const points = await categoryTrend(db, userA, { categoryId: catFood, months: 1 });
+    const points = await categoryTrend(db, personal(userA), { categoryId: catFood, months: 1 });
     expect(points).toEqual([{ period: curMonth, spent: '2680.00', limit: '30000.00' }]);
   });
 });
 
 describe('tRPC budget.overview: смоук через caller (Шаг 3 брифа)', () => {
   const createCaller = createCallerFactory(appRouter);
-  const callerFor = (user: string | null) =>
-    createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+  const callerFor = (user: GraphId | null) =>
+    createCaller({
+      identity: user === null ? null : personal(user),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
 
   test('владелец получает Overview; RLS: другой owner видит пустой месяц', async () => {
     const ov = await callerFor(userA).budget.overview({ month: curMonth });
@@ -612,7 +622,7 @@ describe('tRPC budget.overview: смоук через caller (Шаг 3 бриф�
 describe('тул budget_status (Шаг 4 брифа: §4.3, §4.7)', () => {
   test('dispatch возвращает агрегаты + spend_class категорий; month по умолчанию — текущий', async () => {
     const r = await dispatchTool(
-      { db, actorUserId: userA, actorKind: 'ai', source: 'chat', explicitCommand: false },
+      { db, identity: personal(userA), actorKind: 'ai', source: 'chat', explicitCommand: false },
       'budget_status',
       {},
     );
@@ -629,7 +639,7 @@ describe('тул budget_status (Шаг 4 брифа: §4.3, §4.7)', () => {
 
   test('явный month уважается; невалидный input → VALIDATION', async () => {
     const r = await dispatchTool(
-      { db, actorUserId: userA, actorKind: 'ai', source: 'chat', explicitCommand: false },
+      { db, identity: personal(userA), actorKind: 'ai', source: 'chat', explicitCommand: false },
       'budget_status',
       { month: '2026-05' },
     );
@@ -638,7 +648,7 @@ describe('тул budget_status (Шаг 4 брифа: §4.3, §4.7)', () => {
     expect((r.result as BudgetStatusResult).period.start).toBe('2026-05-01');
 
     const bad = await dispatchTool(
-      { db, actorUserId: userA, actorKind: 'ai', source: 'chat', explicitCommand: false },
+      { db, identity: personal(userA), actorKind: 'ai', source: 'chat', explicitCommand: false },
       'budget_status',
       { month: 'май' },
     );
@@ -647,8 +657,8 @@ describe('тул budget_status (Шаг 4 брифа: §4.3, §4.7)', () => {
   });
 
   test('budgetStatus как функция: то же, что overview + категории', async () => {
-    const status = await budgetStatus(db, userA, curMonth);
-    const ov = await budgetOverview(db, userA, curMonth);
+    const status = await budgetStatus(db, personal(userA), curMonth);
+    const ov = await budgetOverview(db, personal(userA), curMonth);
     expect(status.balance).toEqual(ov.balance);
     expect(status.categories.length).toBeGreaterThanOrEqual(14); // 12 сида + 2 кастомные
   });
@@ -679,8 +689,8 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
     // материализации), второй постит сегодняшний инстанс (planned→fact).
     // spent = 500.00 ровно один раз (posted-инстанс); шаблон не считается —
     // до фикса выходило 1000.00 (шаблон с висящей привязкой + инстанс, двойной счёт).
-    await budgetOverview(db, user, curMonth);
-    const ov = await budgetOverview(db, user, curMonth);
+    await budgetOverview(db, personal(user), curMonth);
+    const ov = await budgetOverview(db, personal(user), curMonth);
     expect(envById(ov, env.id).spent).toBe('500.00');
   });
 
@@ -706,14 +716,14 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
     });
     // Висящая связь (легаси-данные/ручной relation_create): бюджет-хук на relation_create
     // не срабатывает — связь остаётся, spent обязан отфильтровать шаблон сам
-    const st = await envelopeForCategory(db, user, { categoryId: cat, date: today });
+    const st = await envelopeForCategory(db, personal(user), { categoryId: cat, date: today });
     if (st === null) throw new Error('конверт не найден');
     await exec(user, 'relation_create', {
       source_id: st.envelope.id,
       target_id: tpl.id,
       role: 'envelope-binding',
     });
-    const after = await envelopeForCategory(db, user, { categoryId: cat, date: today });
+    const after = await envelopeForCategory(db, personal(user), { categoryId: cat, date: today });
     expect(after?.spent).toBe('0.00');
   });
 });
@@ -724,27 +734,32 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
 // ---------------------------------------------------------------------------
 describe('budget.alertCount (§6.1): count-only бейдж вкладки', () => {
   const createCaller = createCallerFactory(appRouter);
-  const callerFor = (user: string | null) =>
-    createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+  const callerFor = (user: GraphId | null) =>
+    createCaller({
+      identity: user === null ? null : personal(user),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
 
   test('дефолтный месяц (текущий): то же число, что overview.alertCount — ⚠ 85–100% и 🔴 ≥100% вместе', async () => {
     // жильё 900/1000 = 90% (⚠) и развлечения 150/100 = 150% (🔴) — см. фикстуру
-    expect(await budgetAlertCount(db, userA)).toBe(2);
+    expect(await budgetAlertCount(db, personal(userA))).toBe(2);
   });
 
   test('sign-off 2026-07-23: граница ровно 85% — ВКЛЮЧИТЕЛЬНО, бейдж = ⚠-порог карточки §3.1', async () => {
     // Конверт 8500/10000 (изолированный месяц 2026-03): при строгом > выпадал из бейджа,
     // хотя карточка уже ⚠ (>=85, §3.1) — спековая коллизия §3.1 vs §6.1 решена владельцем
     // в пользу «включительно ≥ везде». Обе точки (overview и count-only) — общий countAlerts.
-    const ov = await budgetOverview(db, userA, '2026-03');
+    const ov = await budgetOverview(db, personal(userA), '2026-03');
     expect(envById(ov, envBoundary).spent).toBe('8500.00');
     expect(ov.alertCount).toBe(1);
-    expect(await budgetAlertCount(db, userA, '2026-03')).toBe(1);
+    expect(await budgetAlertCount(db, personal(userA), '2026-03')).toBe(1);
   });
 
   test('месяц без тревог → 0; upcoming-конверты порогами не считаются (§2.9а)', async () => {
-    expect(await budgetAlertCount(db, userA, '2026-05')).toBe(0); // envMay: 340/1000 = 34%
-    expect(await budgetAlertCount(db, userA, nextMonth)).toBe(0); // envNext: фаза upcoming
+    expect(await budgetAlertCount(db, personal(userA), '2026-05')).toBe(0); // envMay: 340/1000 = 34%
+    expect(await budgetAlertCount(db, personal(userA), nextMonth)).toBe(0); // envNext: фаза upcoming
   });
 
   test('count-only: НЕ материализует recurring-инстансы (в отличие от overview)', async () => {
@@ -764,7 +779,7 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
       aspects: ['orbis/schedule', 'orbis/financial'],
     });
     const instanceCount = () =>
-      withIdentity(db, user, async (tx) => {
+      withIdentity(db, personal(user), async (tx) => {
         const rows = (await tx.execute(sql`
           SELECT count(*)::int AS n FROM entities e
           WHERE e.graph_id = ${user}
@@ -774,10 +789,10 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
         return rows[0]?.n ?? 0;
       });
 
-    expect(await budgetAlertCount(db, user)).toBe(0);
+    expect(await budgetAlertCount(db, personal(user))).toBe(0);
     expect(await instanceCount()).toBe(0); // лёгкое чтение ничего не породило
 
-    await budgetOverview(db, user, curMonth); // контраст: конвейер §2.8 материализует
+    await budgetOverview(db, personal(user), curMonth); // контраст: конвейер §2.8 материализует
     expect(await instanceCount()).toBeGreaterThan(0);
   });
 
@@ -825,7 +840,7 @@ describe('clock-шов: границы дат (Task A1)', () => {
     // 23:00 04.09 по Москве: инстанс материализован, но ещё planned — только Coming up
     const before = await budgetOverview(
       db,
-      user,
+      personal(user),
       '2026-09',
       () => new Date('2026-09-04T20:00:00Z'),
     );
@@ -834,7 +849,12 @@ describe('clock-шов: границы дат (Task A1)', () => {
 
     // 00:30 05.09 по Москве — ТОТ ЖЕ календарный день по UTC: сменилась именно
     // локальная дата владельца (§2.3), и postDue перевёл инстанс в факт
-    const after = await budgetOverview(db, user, '2026-09', () => new Date('2026-09-04T21:30:00Z'));
+    const after = await budgetOverview(
+      db,
+      personal(user),
+      '2026-09',
+      () => new Date('2026-09-04T21:30:00Z'),
+    );
     expect(after.comingUp).toEqual([]);
     expect(envById(after, env.id).spent).toBe('1000.00');
     expect(after.balance.expense).toBe('1000.00');
@@ -853,7 +873,7 @@ describe('clock-шов: границы дат (Task A1)', () => {
     // входят (occurred_on ≤ сегодня, §2.2), переносится весь лимит
     const before = await rolloverPreview(
       db,
-      user,
+      personal(user),
       '2026-09',
       () => new Date('2026-08-30T20:00:00Z'),
     );
@@ -864,7 +884,7 @@ describe('clock-шов: границы дат (Task A1)', () => {
     // 00:30 31.08 МСК — та же дата по UTC, сменилась именно локальная дата владельца
     const after = await rolloverPreview(
       db,
-      user,
+      personal(user),
       '2026-09',
       () => new Date('2026-08-30T21:30:00Z'),
     );

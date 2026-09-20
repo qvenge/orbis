@@ -25,7 +25,7 @@
 //
 // §Б7-6: промпт v6 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
 // блок продолжений обязан быть последним для модели, а не последним в тексте константы.
-import { isModuleEnabled, modulePromptFragments } from '@orbis/shared';
+import { type GraphId, isModuleEnabled, modulePromptFragments } from '@orbis/shared';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
@@ -135,13 +135,13 @@ export function todaySection(input: { today: string; timeZone: string }): string
  * (см. шапку файла): дата, собранная дважды, разъехалась бы форматом — и фоновый прогон
  * видел бы «сегодня» иначе, чем чат.
  */
-export async function todaySectionFor(tx: Tx, graphId: string, now: Date): Promise<string> {
+export async function todaySectionFor(tx: Tx, graphId: GraphId, now: Date): Promise<string> {
   const timeZone = await ownerTimeZone(tx, graphId);
   return todaySection({ today: todayInTimeZone(timeZone, now), timeZone });
 }
 
 export interface BuildContextInput {
-  graphId: string;
+  graphId: GraphId;
   threadId: string;
   /** Сущность-якорь (02 §2.2) — передаётся ТОЛЬКО для треда сущности. */
   anchorEntityId?: string;
@@ -362,7 +362,7 @@ export interface AnchorBlockOptions {
 /** Компактный блок якоря: id (для тулов), title, tags, аспекты, тело. */
 export async function anchorBlock(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   anchorEntityId: string,
   opts: AnchorBlockOptions = {},
 ): Promise<string> {

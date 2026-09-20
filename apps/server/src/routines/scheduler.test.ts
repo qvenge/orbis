@@ -8,9 +8,10 @@
 // теста после него ставятся на паузу: активная рутина с незакрытым бакетом иначе съела бы
 // скрипт провайдера следующего теста.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { entityThreadId, routineRunId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { RUN_STALE_AFTER_MS } from '../agent-loop/constants';
 import { runsOfParent } from '../agent-loop/queries';
 import { chatMessages, userSettings } from '../db/schema';
@@ -35,7 +36,7 @@ const BUCKET = '2026-08-18T07:00';
 const MODEL = 'scripted-model';
 
 /** Рутины теста — на паузу после него (см. шапку файла). */
-const createdRoutines: Array<{ owner: string; routineId: string }> = [];
+const createdRoutines: Array<{ owner: GraphId; routineId: string }> = [];
 
 beforeAll(async () => {
   await truncateAll();
@@ -48,7 +49,7 @@ afterAll(async () => {
 afterEach(async () => {
   for (const { owner, routineId } of createdRoutines.splice(0)) {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -94,16 +95,16 @@ function toolUse(name: string, input: Record<string, unknown>): LLMResponse {
 }
 
 /** Владелец, видимый планировщику: строка user_settings с таймзоной (0013, V1.13). */
-async function newOwner(timezone = 'Europe/Moscow'): Promise<string> {
+async function newOwner(timezone = 'Europe/Moscow'): Promise<GraphId> {
   const owner = await freshGraph();
-  await withIdentity(db, owner, (tx) =>
+  await withIdentity(db, personal(owner), (tx) =>
     tx.insert(userSettings).values({ graphId: owner, timezone }),
   );
   return owner;
 }
 
 /** Рутина режима act без белого списка: `end_turn` модели закрывает прогон finished. */
-async function newRoutine(owner: string, routine: Record<string, unknown> = {}): Promise<string> {
+async function newRoutine(owner: GraphId, routine: Record<string, unknown> = {}): Promise<string> {
   const routineId = await seedRoutine(owner, {
     routine: { 'orbis/routine_mode': 'act', ...routine },
   });
@@ -124,16 +125,16 @@ interface RunProps {
   'orbis/fail_note'?: string;
 }
 
-async function runAspect(owner: string, runId: string): Promise<RunProps> {
+async function runAspect(owner: GraphId, runId: string): Promise<RunProps> {
   return (await propsOf(owner, runId)) as unknown as RunProps;
 }
 
-async function stage(owner: string, routineId: string): Promise<string> {
+async function stage(owner: GraphId, routineId: string): Promise<string> {
   return (await propsOf(owner, routineId))['orbis/routine_stage'] as string;
 }
 
-async function runsOf(owner: string, routineId: string) {
-  return withIdentity(db, owner, (tx) => runsOfParent(tx, routineId));
+async function runsOf(owner: GraphId, routineId: string) {
+  return withIdentity(db, personal(owner), (tx) => runsOfParent(tx, routineId));
 }
 
 async function until(pred: () => boolean, timeoutMs = 3_000): Promise<void> {
@@ -158,7 +159,7 @@ describe('routineTick: бакет в таймзоне владельца, «со
     const provider = new ScriptedProvider([endTurn('Утро спокойное, планов нет.')]);
 
     const first = await routineTick(deps(provider));
-    expect(first.owners).toBeGreaterThanOrEqual(1);
+    expect(first.graphs).toBeGreaterThanOrEqual(1);
     expect(first.started).toContain(runId);
     const run = await runAspect(owner, runId);
     expect(run).toMatchObject({
@@ -296,7 +297,7 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
 
     // Стоп-кран: три плановых сбоя подряд → пауза с записью в тред рутины
     expect(await stage(owner, routineId)).toBe('paused');
-    const notes = await withIdentity(db, owner, (tx) =>
+    const notes = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select({ metadata: chatMessages.metadata })
         .from(chatMessages)
@@ -314,7 +315,7 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
       await startBucketRun(
         deps(provider, () => minutes(60)),
         {
-          graphId: owner,
+          identity: personal(owner),
           routine: { id: routineId, title: 'Утренний обзор' },
           bucket: BUCKET,
         },
@@ -356,7 +357,7 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
     // Стоп-кран сработал в тике, а не дожидался «живого» сбоя: рутина на паузе, с записью
     expect(tick.paused).toContain(routineId);
     expect(await stage(owner, routineId)).toBe('paused');
-    const notes = await withIdentity(db, owner, (tx) =>
+    const notes = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select()
         .from(chatMessages)

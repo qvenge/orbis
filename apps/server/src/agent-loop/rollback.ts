@@ -39,6 +39,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionOperation, ActionRecord } from '../executor/types';
 import { isUndone, undoAction } from '../executor/undo';
+import type { Identity } from '../identity';
 import { closeOpenOfRun } from '../routines/lifecycle';
 import type { RollbackConflict, WireRollbackResult } from '../wire';
 import type { RunProps } from './queries';
@@ -367,11 +368,11 @@ async function foreignChangesAfter(
  */
 export async function rollbackRun(
   db: Db,
-  args: { actorUserId: string; runId: string },
+  args: { identity: Identity; runId: string },
 ): Promise<WireRollbackResult> {
-  const { actorUserId, runId } = args;
+  const { identity, runId } = args;
 
-  const plan = await withIdentity(db, actorUserId, async (tx) => {
+  const plan = await withIdentity(db, identity, async (tx) => {
     // Чей прогон — решает политику (шапка файла). Прогона нет (или он чужой под RLS) —
     // грантовая политика по журналу даст пусто, как и раньше
     const facts = await runFacts(tx, runId);
@@ -415,7 +416,7 @@ export async function rollbackRun(
   // здесь — прочитанный план, а не рабочий буфер.
   const undone: string[] = [];
   for (const entry of [...plan.live].reverse()) {
-    const result = await undoAction(db, { actorUserId, actionId: entry.action.id });
+    const result = await undoAction(db, { identity, actionId: entry.action.id });
     if (!result.ok) {
       return {
         ok: false,
@@ -441,7 +442,7 @@ export async function rollbackRun(
     await closeOpenOfRun(
       { db, clock: () => new Date() },
       {
-        graphId: actorUserId,
+        identity,
         routineId: plan.closeOpen.routineId,
         runId,
         props: plan.closeOpen.props,
@@ -457,7 +458,7 @@ export async function rollbackRun(
     const r = await execute(
       db,
       {
-        actorUserId,
+        identity,
         actorKind: 'owner',
         source: 'system',
         // Механизм — глагол исполнителя (§А4-4): это запись О прогоне, не правка графа

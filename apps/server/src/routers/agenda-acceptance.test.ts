@@ -16,9 +16,17 @@
 // Ни одна фикстура не recurring: K15 — start_at=overdue расширяет окно материализации
 // только до [today; today], прошлое задним числом не материализуется.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { type AgendaSubscription, addDays, BUILTIN_SUBSCRIPTION_DEFS } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { appDb, freshGraph, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  freshGraph,
+  personal,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { setSubscriptionDelta } from '../registry/ops';
@@ -61,14 +69,14 @@ const DAILY_TODAY_QUERY = queryBlock(DAILY_PLANNING_BODY, 1);
 /** Upcoming, «Ближайшие 7 дней» (02 §3.3) — первый блок. */
 const UPCOMING_7D_QUERY = queryBlock(UPCOMING_BODY, 0);
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 /** Форма создания §А1-1: значения плоско по id свойства, аспекты — списком навешенного. */
 type NewForm = { props?: Record<string, unknown>; aspects?: string[] };
 
-async function createEntity(user: string, title: string, form: NewForm): Promise<string> {
+async function createEntity(user: GraphId, title: string, form: NewForm): Promise<string> {
   const e = await callerFor(user).entity.create({
     input: { title, tags: [], ...form },
     source: 'ui',
@@ -77,7 +85,7 @@ async function createEntity(user: string, title: string, form: NewForm): Promise
 }
 
 /** Секция повестки одним вызовом — ровно тем, которым её читает вкладка. */
-const agendaIds = async (u: string, section: 'window' | 'overdue') =>
+const agendaIds = async (u: GraphId, section: 'window' | 'overdue') =>
   new Set(
     (await callerFor(u).agenda.list({ days: 8 })).rows
       .filter((r) => r.section === section)
@@ -85,7 +93,7 @@ const agendaIds = async (u: string, section: 'window' | 'overdue') =>
   );
 
 /** Browser и сид-списки остаются на entity.query — они не подписка. */
-const queryIds = async (u: string, query: string) =>
+const queryIds = async (u: GraphId, query: string) =>
   new Set((await callerFor(u).entity.query({ query })).map((r) => r.id));
 
 beforeAll(async () => {
@@ -349,7 +357,7 @@ describe('приёмка §С8-21 сквозь ручку: две привязк
     // `prefer` — дельта подписки владельца (§Б5-2): слот `moment` читается из `orbis/schedule`.
     const seeded = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')
       ?.definition as AgendaSubscription;
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       setSubscriptionDelta(tx, user, 'orbis/agenda', {
         definition: { ...seeded, show: { ...seeded.show, prefer: ['orbis/schedule'] } },
       }),

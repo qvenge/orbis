@@ -12,6 +12,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -36,7 +37,7 @@ const T0 = new Date('2026-07-05T10:00:00.000Z');
 /** Одиночный вызов executor'а с дефолтами теста. */
 function req(tool: string, input: unknown, over: Partial<ExecuteRequest> = {}): ExecuteRequest {
   return {
-    actorUserId: userA,
+    identity: personal(userA),
     actorKind: 'owner',
     source: 'fast_path',
     operations: [{ tool, input }],
@@ -234,7 +235,7 @@ describe('relation_create: базовая семантика (§4.2)', () => {
 
   test('4. чужая сущность (RLS скрывает) → NOT_FOUND единообразно: и как source, и как target', async () => {
     const mine = await createEntity({ title: 'Своя' });
-    const foreign = await createEntity({ title: 'Чужая' }, { actorUserId: userB });
+    const foreign = await createEntity({ title: 'Чужая' }, { identity: personal(userB) });
 
     const asTarget = err(await createRelation(mine.id, foreign.id, 'mention'));
     expect(asTarget.error.code).toBe('NOT_FOUND');

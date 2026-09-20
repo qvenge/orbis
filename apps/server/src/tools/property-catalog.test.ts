@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -88,14 +88,14 @@ beforeAll(async () => {
     createdAt: STALE_PROPOSED_AT,
   });
   // Две сущности со значением свободного свойства и одна — чужая (её счётчик видеть нельзя).
-  await withIdentity(db, owner, async (tx) => {
+  await withIdentity(db, personal(owner), async (tx) => {
     for (const title of ['Ночь на понедельник', 'Ночь на вторник']) {
       await tx
         .insert(entities)
         .values({ id: newId(), graphId: owner, title, props: { [FREE_ID]: 7 }, aspects: [] });
     }
   });
-  await withIdentity(db, stranger, async (tx) => {
+  await withIdentity(db, personal(stranger), async (tx) => {
     await tx.insert(entities).values({
       id: newId(),
       graphId: stranger,
@@ -104,7 +104,7 @@ beforeAll(async () => {
       aspects: [],
     });
   });
-  reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
 });
 
 afterAll(async () => {
@@ -121,7 +121,7 @@ function run(
   input: Parameters<typeof runPropertyCatalog>[2],
   now: Date = new Date(),
 ): Promise<PropertyCatalogRow[]> {
-  return withIdentity(db, owner, async (tx) => {
+  return withIdentity(db, personal(owner), async (tx) => {
     const r = await runPropertyCatalog(tx, reg, input, 'ru', { graphId: owner, now });
     return r.properties;
   });

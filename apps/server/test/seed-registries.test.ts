@@ -15,7 +15,7 @@ import postgres from 'postgres';
 import { seedRegistries } from '../src/db/seed-registries';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
-import { adminDb, appDb, freshGraph, requireEnv } from './helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv } from './helpers';
 
 requireEnv();
 
@@ -365,7 +365,7 @@ describe('сид пяти реестров', () => {
       // Именно эта строка отличает «слияние сработало» от «слияние доложило конфликт и
       // оставило дельту неприменимой», и стоит она ДО проверок текста отчёта намеренно —
       // иначе мутация правила падала бы на формулировке, не дойдя до сути.
-      const reg = await withIdentity(app.db, owner, (tx) => effectiveRegistry(tx, owner));
+      const reg = await withIdentity(app.db, personal(owner), (tx) => effectiveRegistry(tx, owner));
       const status = reg.properties.get('orbis/task_status');
       if (status?.type.kind !== 'select') throw new Error('orbis/task_status перестал быть select');
       expect(status.type.options.filter((o) => o.key === 'cancelled')).toHaveLength(1);
@@ -438,7 +438,9 @@ describe('сид пяти реестров', () => {
       // Дельта сброшена на системную декларацию — и реестр владельца ЧИТАЕТСЯ.
       const app = appDb();
       try {
-        const reg = await withIdentity(app.db, owner, (tx) => effectiveRegistry(tx, owner));
+        const reg = await withIdentity(app.db, personal(owner), (tx) =>
+          effectiveRegistry(tx, owner),
+        );
         expect(reg.subscriptions.get('orbis/budget-overview')).toBeDefined();
       } finally {
         await app.client.end();

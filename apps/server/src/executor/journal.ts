@@ -13,6 +13,7 @@ import { ensureGlobalThread } from '../chat/threads';
 import { chatMessages, chatThreads } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
+import { parseGraphId } from '../identity';
 import type { Card } from '../tools/registry';
 import { pgErrorInfo } from './executor';
 import type { ActionCard, ActionRecord, JournalSink, JournalWrite, MutationSource } from './types';
@@ -153,7 +154,11 @@ export function makeChatJournalSink(): JournalSink {
       // то есть feedCard оставляет прежнюю ActionCard.
       return {
         id: row.id,
-        graphId: row.graphId,
+        // Строка БД — та же граница внешнего мира, что строка гранта и строка реестра у
+        // пересева: значение приехало из колонки, а не из пары вызывающего, и бренд ему
+        // выдаёт `parseGraphId`. Приведением типа его выдавать нельзя — тогда сюда так
+        // же молча проехал бы и id аккаунта (греп-гейт Ш-2: приведений вне резолверов ноль).
+        graphId: parseGraphId(row.graphId),
         threadId: row.threadId,
         action,
         card,

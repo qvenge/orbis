@@ -2,9 +2,18 @@
 // Тесты роутера registry (§А9-2): эффективный реестр владельца одним ответом и версия
 // снимка, по которой клиент решает, перечитывать ли его. Против живой БД, caller как в бою.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -14,8 +23,8 @@ requireEnv();
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 const owner = mintGraph();

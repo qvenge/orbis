@@ -10,13 +10,18 @@
 import { GRANT_SCOPES, type GrantScope } from '@orbis/shared';
 
 export interface PatArgs {
-  graphId: string;
+  /**
+   * uuid АККАУНТА, а не графа (D44): грант выписывается на ЕГО ЛИЧНЫЙ граф, и пару из
+   * этого значения делает `identityOfPerson` у вызывающего. Значение остаётся сырой
+   * строкой — бренд ему выдаёт `parseAccountId` там же, на границе внешнего мира.
+   */
+  accountId: string;
   label: string;
   scope: GrantScope;
 }
 
 /** Строка использования — одна на оба скрипта и на help белого списка ops.ts. */
-export const PAT_USAGE = '<owner-uuid> [метка] [--scope worker]';
+export const PAT_USAGE = '<account-uuid> [метка] [--scope worker]';
 
 /** Метка по умолчанию: строка в списке «Агенты» без подписи была бы безымянной. */
 const DEFAULT_LABEL = 'headless-агент';
@@ -66,7 +71,7 @@ export function parsePatArgs(args: readonly string[]): PatArgs | { error: string
     scope = value as GrantScope;
   }
 
-  const graphId = positional[0];
-  if (graphId === undefined || graphId === '') return { error: 'нужен owner-uuid' };
-  return { graphId, label: positional[1] ?? DEFAULT_LABEL, scope };
+  const accountId = positional[0];
+  if (accountId === undefined || accountId === '') return { error: 'нужен account-uuid' };
+  return { accountId, label: positional[1] ?? DEFAULT_LABEL, scope };
 }

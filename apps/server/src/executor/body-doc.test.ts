@@ -6,6 +6,7 @@
 // которыми пользуется сервер: сравнение «канон равен входу» проходит тождественно, если тело
 // уехало в rawBlock (raw отдаёт свой вход дословно), и такой ассерт зелен по ложной причине.
 import { afterAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   type EntityGetUiInput,
   entityGetInput,
@@ -15,10 +16,11 @@ import {
 } from '@orbis/shared';
 import { canonicalizeBody, DOC_SCHEMA_VERSION, serializeBody } from '@orbis/shared/doc';
 import { eq, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
+import type { Identity } from '../identity';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { execute } from './executor';
@@ -42,8 +44,8 @@ const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const UUID_IN_CODE = '11111111-1111-4111-8111-111111111111';
 
 /** Одиночный вызов executor'а от лица владельца из UI. */
-function req(tool: string, input: unknown, actorUserId: string): ExecuteRequest {
-  return { actorUserId, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] };
+function req(tool: string, input: unknown, identity: Identity): ExecuteRequest {
+  return { identity, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] };
 }
 
 interface StoredRow {
@@ -79,11 +81,11 @@ function err(r: Awaited<ReturnType<typeof execute>>): { code: string; message: s
 }
 
 /** Свежий владелец + пустая сущность: гейт §5.2 проверяется на update, а не на create. */
-async function createOne(body?: string): Promise<{ entity: WireEntity; owner: string }> {
+async function createOne(body?: string): Promise<{ entity: WireEntity; owner: GraphId }> {
   const owner = await freshGraph();
   const input: Record<string, unknown> = { title: 'проба', tags: [] };
   if (body !== undefined) input.body = body;
-  const entity = okFirst(await execute(db, req('entity_create', input, owner)));
+  const entity = okFirst(await execute(db, req('entity_create', input, personal(owner))));
   return { entity, owner };
 }
 
@@ -178,7 +180,7 @@ describe('канон: body в БД — производная документа
       req(
         'entity_update',
         { id: entity.id, body: '* раз\n* два', expectedUpdatedAt: entity.updatedAt },
-        owner,
+        personal(owner),
       ),
     );
     okFirst(r);
@@ -224,7 +226,7 @@ describe('канон: body в БД — производная документа
       req(
         'entity_update',
         { id: entity.id, bodyDoc: doc, expectedUpdatedAt: entity.updatedAt },
-        owner,
+        personal(owner),
       ),
     );
     okFirst(r);
@@ -258,7 +260,7 @@ describe('структурная целость документа — вопр�
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
           expectedUpdatedAt: entity.updatedAt,
         },
-        owner,
+        personal(owner),
       ),
     );
     return { r, row: await rowOf(entity.id) };
@@ -348,7 +350,7 @@ describe('структурная целость документа — вопр�
             bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
             expectedUpdatedAt: entity.updatedAt,
           },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -372,7 +374,7 @@ describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью,
             bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
             expectedUpdatedAt: entity.updatedAt,
           },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -553,7 +555,7 @@ describe('страховка обратимости заполняется ВС�
         req(
           'entity_update',
           { id: entity.id, body: 'новый текст', expectedUpdatedAt: entity.updatedAt },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -573,7 +575,7 @@ describe('страховка обратимости заполняется ВС�
         req(
           'entity_update',
           { id: entity.id, body: 'правка раз', expectedUpdatedAt: entity.updatedAt },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -583,7 +585,7 @@ describe('страховка обратимости заполняется ВС�
         req(
           'entity_update',
           { id: entity.id, body: 'правка два', expectedUpdatedAt: after1.updatedAt },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -611,7 +613,7 @@ describe('страховка обратимости заполняется ВС�
             },
             expectedUpdatedAt: entity.updatedAt,
           },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -651,7 +653,7 @@ describe('все законные формы пустоты сохраняютс
             bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } },
             expectedUpdatedAt: entity.updatedAt,
           },
-          owner,
+          personal(owner),
         ),
       );
       okFirst(r);
@@ -676,7 +678,7 @@ describe('все законные формы пустоты сохраняютс
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
           expectedUpdatedAt: entity.updatedAt,
         },
-        owner,
+        personal(owner),
       ),
     );
     const afterFirst = okFirst(first);
@@ -689,7 +691,7 @@ describe('все законные формы пустоты сохраняютс
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc },
           expectedUpdatedAt: afterFirst.updatedAt,
         },
-        owner,
+        personal(owner),
       ),
     );
     expect(okFirst(second).body).toBe('');
@@ -726,7 +728,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
           },
           expectedUpdatedAt: entity.updatedAt,
         },
-        owner,
+        personal(owner),
       ),
     );
     // Причина сверяется дословно: отказ обязан быть ПО ВЕРСИИ, а не потому что схема не
@@ -771,7 +773,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
           },
           expectedUpdatedAt: entity.updatedAt,
         },
-        owner,
+        personal(owner),
       ),
     );
     const after = okFirst(ok);
@@ -793,7 +795,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
           },
           expectedUpdatedAt: after.updatedAt,
         },
-        owner,
+        personal(owner),
       ),
     );
     expect(err(rejected)).toEqual({
@@ -816,7 +818,7 @@ describe('версия документа сверяется НА ЗАПИСИ (
            },
          })}::jsonb
        WHERE id = ${entity.id}`);
-    const read = await withIdentity(db, owner, (tx) =>
+    const read = await withIdentity(db, personal(owner), (tx) =>
       readEntity(tx, owner, { id: entity.id, include: ['body', 'bodyDoc'] }),
     );
     expect(read.entity.bodyDoc?.v).toBe(DOC_SCHEMA_VERSION);
@@ -878,7 +880,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
             props: { 'orbis/project_stage': 'active' },
             aspects: ['orbis/project'],
           },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -903,7 +905,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
             },
             expectedUpdatedAt: entity.updatedAt,
           },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -924,7 +926,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
             props: { 'orbis/project_stage': 'active' },
             aspects: { attach: ['orbis/project'] },
           },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -939,7 +941,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
         req(
           'attach_orbis_project',
           { entity_id: entity.id, data: { 'orbis/project_stage': 'active' } },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -962,7 +964,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
             body: '{{query: aspect=orbis/goal}}',
             expectedUpdatedAt: entity.updatedAt,
           },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -974,7 +976,7 @@ describe('query_refs — во ВСЕХ пяти точках записи тел
         req(
           'entity_update',
           { id: entity.id, body: 'блок убрали', expectedUpdatedAt: withBlock.updatedAt },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -996,7 +998,11 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
     okFirst(
       await execute(
         db,
-        req('entity_update', { id: entity.id, body, expectedUpdatedAt: entity.updatedAt }, owner),
+        req(
+          'entity_update',
+          { id: entity.id, body, expectedUpdatedAt: entity.updatedAt },
+          personal(owner),
+        ),
       ),
     );
     const row = await rowOf(entity.id);
@@ -1028,7 +1034,7 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
         req(
           'entity_update',
           { id: entity.id, bodyDoc: doc, expectedUpdatedAt: entity.updatedAt },
-          owner,
+          personal(owner),
         ),
       ),
     );
@@ -1053,7 +1059,11 @@ describe('body_refs — из дерева ∪ raw в обеих ветках', (
     okFirst(
       await execute(
         db,
-        req('entity_update', { id: entity.id, body, expectedUpdatedAt: entity.updatedAt }, owner),
+        req(
+          'entity_update',
+          { id: entity.id, body, expectedUpdatedAt: entity.updatedAt },
+          personal(owner),
+        ),
       ),
     );
     const row = await rowOf(entity.id);
@@ -1072,7 +1082,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
       req(
         'entity_update',
         { id: entity.id, bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } } },
-        owner,
+        personal(owner),
       ),
     );
     expect(err(r)).toEqual({
@@ -1092,7 +1102,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
           bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
           expectedUpdatedAt: '2020-01-01T00:00:00.000Z',
         },
-        owner,
+        personal(owner),
       ),
     );
     expect(err(r).code).toBe('STALE_VERSION');
@@ -1100,7 +1110,10 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
 
   test('строковый body без expectedUpdatedAt — по-прежнему VALIDATION', async () => {
     const { entity, owner } = await createOne();
-    const r = await execute(db, req('entity_update', { id: entity.id, body: 'текст' }, owner));
+    const r = await execute(
+      db,
+      req('entity_update', { id: entity.id, body: 'текст' }, personal(owner)),
+    );
     expect(err(r)).toEqual({
       code: 'VALIDATION',
       message: 'правка body требует expectedUpdatedAt (§5.2)',
@@ -1109,7 +1122,10 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
 
   test('патч без тела гейта не требует (LWW)', async () => {
     const { entity, owner } = await createOne();
-    const r = await execute(db, req('entity_update', { id: entity.id, title: 'новое' }, owner));
+    const r = await execute(
+      db,
+      req('entity_update', { id: entity.id, title: 'новое' }, personal(owner)),
+    );
     expect(okFirst(r).title).toBe('новое');
   });
 
@@ -1120,7 +1136,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
 
     const viaBody = await execute(
       db,
-      req('entity_update', { id: entity.id, body: 'откат' }, owner),
+      req('entity_update', { id: entity.id, body: 'откат' }, personal(owner)),
       {
         internalUndo,
       },
@@ -1141,7 +1157,7 @@ describe('гейт §5.2 покрывает ОБА поля тела', () => {
             },
           },
         },
-        owner,
+        personal(owner),
       ),
       { internalUndo },
     );
@@ -1174,7 +1190,7 @@ describe('откат сохранения редактора', () => {
           },
           expectedUpdatedAt: entity.updatedAt,
         },
-        owner,
+        personal(owner),
       ),
       { sink },
     );
@@ -1182,7 +1198,7 @@ describe('откат сохранения редактора', () => {
     expect((await rowOf(entity.id)).body).toBe('новое тело');
 
     const undone = await undoAction(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actionId: (saved as ExecuteOk).actionId,
     });
     expect(undone.ok).toBe(true);
@@ -1200,9 +1216,9 @@ describe('bodyDoc не протекает в путь модели (dispatch/MCP
   // entityUpdateInput, и strict-zod отклоняет лишний ключ ДО классификации §7.10 и до
   // executor'а. Схема разбора executor'а при этом шире — проверяем, что второй линией
   // она первую не отменяет.
-  const modelCtx = (owner: string): ToolCallCtx => ({
+  const modelCtx = (owner: GraphId): ToolCallCtx => ({
     db,
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'ai',
     source: 'chat',
     explicitCommand: false,
@@ -1275,7 +1291,7 @@ describe('документ наружу — только по явному inclu
   test('entity_get без include(bodyDoc) документа не несёт, с ним — несёт', async () => {
     const { entity, owner } = await createOne('# Заголовок');
     const read = (include: EntityGetUiInput['include']) =>
-      withIdentity(db, owner, (tx) => readEntity(tx, owner, { id: entity.id, include }));
+      withIdentity(db, personal(owner), (tx) => readEntity(tx, owner, { id: entity.id, include }));
 
     expect('bodyDoc' in (await read(['body'])).entity).toBe(false);
     expect((await read(['body', 'bodyDoc'])).entity.bodyDoc).toEqual({
@@ -1294,7 +1310,7 @@ describe('документ наружу — только по явному inclu
     // Строка «из прошлого»: колонка ещё не заполнена бэкфиллом.
     await admin.execute(sql`UPDATE entities SET body_doc = NULL WHERE id = ${entity.id}`);
 
-    const out = await withIdentity(db, owner, (tx) =>
+    const out = await withIdentity(db, personal(owner), (tx) =>
       readEntity(tx, owner, { id: entity.id, include: ['body', 'bodyDoc'] }),
     );
     expect(out.entity.bodyDoc).toEqual({
@@ -1316,7 +1332,7 @@ describe('документ наружу — только по явному inclu
     await admin.execute(
       sql`UPDATE entities SET body_doc = ${JSON.stringify({ v: 999, doc: { type: 'doc', content: [] } })}::jsonb WHERE id = ${entity.id}`,
     );
-    const out = await withIdentity(db, owner, (tx) =>
+    const out = await withIdentity(db, personal(owner), (tx) =>
       readEntity(tx, owner, { id: entity.id, include: ['bodyDoc'] }),
     );
     // Не пустой документ из будущего, а пересборка из текста: теряется оформление, не текст.

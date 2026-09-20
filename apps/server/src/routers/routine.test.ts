@@ -11,7 +11,7 @@ import { type DiffUnit, flattenBlocks } from '@orbis/shared/doc/diff';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { ensureEntityThread } from '../chat/threads';
@@ -91,7 +91,7 @@ class GatedProvider implements LLMProvider {
 
 function callerWith(provider: LLMProvider, over: Partial<NonNullable<Context['ai']>> = {}) {
   return createCaller({
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     db,
     clientVersion: null,
@@ -146,7 +146,7 @@ async function runAspect(runId: string): Promise<RunProps> {
 
 /** Сообщение ленты по id — им экран рутины и показывает предложение владельцу. */
 async function messageById(id: string) {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select().from(chatMessages).where(eq(chatMessages.id, id)),
   );
   return rows[0];
@@ -187,7 +187,7 @@ async function seedTask(title: string): Promise<string> {
 /** Правка владельца своей же рукой — то, обо что разбивается устаревшее предложение. */
 async function ownerSets(taskId: string, status: string): Promise<void> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     operations: [
@@ -211,7 +211,7 @@ async function ownerSets(taskId: string, status: string): Promise<void> {
  */
 async function pointRunAt(runId: string, pendingId: string, status: string): Promise<void> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'system',
     // Как на боевом пути (lifecycle.patchRun): указатель предложения — служебное
@@ -403,7 +403,7 @@ function heavyBody(): string {
 
 /** Тело записи документом — то, что реально легло в `body_doc`. */
 async function bodyDocOf(id: string): Promise<unknown> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT body_doc FROM entities WHERE id = ${id}::uuid`),
   );
   return (rows as unknown as Array<{ body_doc: unknown }>)[0]?.body_doc;
@@ -411,7 +411,7 @@ async function bodyDocOf(id: string): Promise<unknown> {
 
 /** Тело записи текстом — проекция документа, она же аварийный дубль (§2.1). */
 async function bodyOf(id: string): Promise<string | undefined> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT body FROM entities WHERE id = ${id}::uuid`),
   );
   return (rows as unknown as Array<{ body: string }>)[0]?.body;
@@ -420,7 +420,7 @@ async function bodyOf(id: string): Promise<string | undefined> {
 /** Сколько pending-предложений лежит в треде рутины (карточки, а не отказы). */
 async function pendingCount(runId: string): Promise<number> {
   const probe = JSON.stringify({ pending: { run_id: runId } });
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT id FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
   );
   return [...rows].length;
@@ -429,7 +429,7 @@ async function pendingCount(runId: string): Promise<number> {
 /** Причина отказа pending'а из ленты (append-only сообщение confirmation_rejected). */
 async function rejectReason(pendingId: string): Promise<string | undefined> {
   const probe = JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId });
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`),
   );
   const row = (rows as unknown as Array<Record<string, unknown>>)[0];
@@ -442,7 +442,7 @@ function deps(provider: LLMProvider = new ScriptedProvider([])): RoutineDeps {
 
 /** Архивирован ли прогон — маркер отката рутинного прогона (rollback.ts). */
 async function isArchived(id: string): Promise<boolean> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
   );
   const row = rows[0];
@@ -469,16 +469,21 @@ async function plannedProposed(title: string, routineId?: string): Promise<Plann
   plannedSeq += 1;
   const bucket = `2026-08-${String((plannedSeq % 28) + 1).padStart(2, '0')}T07:00`;
   const started = await startBucketRun(deps(), {
-    graphId: owner,
+    identity: personal(owner),
     routine: { id: rid, title: routineTitle },
     bucket,
   });
   if (!started.started) throw new Error(`слот не запущен: ${started.reason}`);
   const runId = started.runId;
-  const routine = await withIdentity(db, owner, (tx) => routineById(tx, rid));
+  const routine = await withIdentity(db, personal(owner), (tx) => routineById(tx, rid));
   if (routine === null) throw new Error('рутина не найдена');
   const provider = new ScriptedProvider([toolUse([proposeCall(runId, taskId)])]);
-  const end = await runRoutineRun(deps(provider), { graphId: owner, routine, runId, bucket });
+  const end = await runRoutineRun(deps(provider), {
+    identity: personal(owner),
+    routine,
+    runId,
+    bucket,
+  });
   expect(end).toEqual({ outcome: 'finished' });
   const aspect = await runAspect(runId);
   const pendingId = aspect['orbis/run_proposal']?.pending_id;
@@ -519,7 +524,7 @@ async function proposedOps(
  */
 async function chatConfirmation(taskId: string): Promise<string> {
   const dedupeKey = `chat:${taskId}`;
-  const created = await withIdentity(db, owner, (tx) =>
+  const created = await withIdentity(db, personal(owner), (tx) =>
     createPending(tx, {
       actor: { userId: owner, kind: 'ai', source: 'chat' },
       tool: 'batch_execute',
@@ -547,7 +552,7 @@ async function chatConfirmation(taskId: string): Promise<string> {
  */
 async function archiveRun(runId: string): Promise<void> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'system',
     runId,
@@ -653,7 +658,7 @@ describe('routine.runNow', () => {
     const refused = await trpcError(c.routine.runNow({ routineId }));
     expect(refused.code).toBe('CONFLICT');
     expect(refused.message).toContain('останавливается');
-    const runs = await withIdentity(db, owner, (tx) => runsOfParent(tx, routineId));
+    const runs = await withIdentity(db, personal(owner), (tx) => runsOfParent(tx, routineId));
     expect(runs.map((r) => r.id)).toEqual([runId]);
   });
 });
@@ -703,7 +708,7 @@ describe('routine.answerCheckpoint', () => {
     // Откат рутинного прогона инвертирует только РАБОТУ прогона (source routine); ответ
     // владельца — решение о прогоне, а не работа в графе: он не снимается и конфликтом не
     // считается (rollback.ts). Маркер отката — архив прогона.
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error('ожидался успешный откат');
     expect(rolled.undone).toEqual([]);
@@ -842,7 +847,7 @@ describe('routine.proposal / decideProposal', () => {
     expect(decided.mismatches).toEqual([]);
 
     // Ничего не применено, карточка погашена причиной stale, нота — словами
-    const body = await withIdentity(db, owner, (tx) =>
+    const body = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT body FROM entities WHERE id = ${taskId}::uuid`),
     );
     expect((body as unknown as Array<{ body: string }>)[0]?.body).not.toBe('Описание от рутины');
@@ -875,7 +880,7 @@ describe('routine.proposal / decideProposal', () => {
 
   test('предложение, погашенное новым прогоном, решению не поддаётся → already со статусом superseded', async () => {
     const { routineId, taskId, runId, pendingId } = await proposed('Записаться к врачу');
-    await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newId() });
+    await supersedeOpen(deps(), { identity: personal(owner), routineId, exceptRunId: newId() });
     expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('superseded');
 
     expect(
@@ -983,7 +988,7 @@ describe('routine.proposal / decideProposal', () => {
     // тот же run_id, свой payload, своя проза.
     const secondExplanation = 'Правленое предложение: закрываю задачу сразу.';
     const secondBatchId = `edit:${pendingId}:тест`;
-    const second = await withIdentity(db, owner, async (tx) => {
+    const second = await withIdentity(db, personal(owner), async (tx) => {
       const threadId = await ensureEntityThread(tx, owner, routineId);
       return createPending(tx, {
         threadId,
@@ -1797,7 +1802,7 @@ describe('routine.proposalsForEntity', () => {
   test('PAT-агенту хода нет: ownerOnly, как весь routine.*', async () => {
     const taskId = await seedTask('Не для агента');
     const agent = createCaller({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'agent',
       db,
       clientVersion: null,
@@ -1826,7 +1831,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     if (applied.status !== 'applied') throw new Error('не applied');
     expect(await taskStatus(taskId)).toBe('planned');
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error(`ожидался успешный откат: ${JSON.stringify(rolled)}`);
     // Инвертирована ТОЛЬКО работа прогона — принятое предложение (один batch-action)
@@ -1846,13 +1851,13 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(view?.runArchived).toBe(true);
 
     // Повторное нажатие безопасно: откатывать уже нечего, состояние то же
-    const again = await rollbackRun(db, { actorUserId: owner, runId });
+    const again = await rollbackRun(db, { identity: personal(owner), runId });
     expect(again).toEqual({ ok: true, undone: [], note: ROUTINE_ROLLBACK_NOTE });
     expect(await taskStatus(taskId)).toBe('inbox');
 
     // Слот отработан: архивный терминальный прогон занимает его — ретрая нет
     const slot = await startBucketRun(deps(), {
-      graphId: owner,
+      identity: personal(owner),
       routine: { id: routineId, title: routineTitle },
       bucket,
     });
@@ -1873,7 +1878,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     const today = await plannedProposed('Купить хлеб', yesterday.routineId);
     expect((await runAspect(today.runId))['orbis/run_proposal']?.status).toBe('pending');
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId: yesterday.runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId: yesterday.runId });
     expect(rolled.ok).toBe(true);
     expect(await taskStatus(yesterday.taskId)).toBe('inbox');
     expect(await isArchived(yesterday.runId)).toBe(true);
@@ -1901,7 +1906,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
       aspects: { attach: ['orbis/task'] },
     });
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(false);
     if (rolled.ok) throw new Error('ожидался конфликт');
     expect(rolled.reason).toBe('conflict');
@@ -1916,7 +1921,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('pending');
     expect((await caller().routine.overview({ routineId })).openProposal).toBe(true);
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled).toEqual({ ok: true, undone: [], note: ROUTINE_ROLLBACK_NOTE });
     // Работы у прогона не было (предложение не принято) — граф не тронут
     expect(await taskStatus(taskId)).toBe('inbox');
@@ -1939,7 +1944,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(e.code).toBe('NOT_FOUND');
     expect((await caller().routine.overview({ routineId })).openProposal).toBe(false);
     // Повтор отката — тот же исход, второго отказа pending'а нет
-    expect(await rollbackRun(db, { actorUserId: owner, runId })).toEqual({
+    expect(await rollbackRun(db, { identity: personal(owner), runId })).toEqual({
       ok: true,
       undone: [],
       note: ROUTINE_ROLLBACK_NOTE,
@@ -1963,11 +1968,11 @@ describe('откат рутинного прогона: decideProposal(approve) 
     });
     expect((await caller().routine.overview({ routineId })).waiting).toBe(1);
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     expect((await runAspect(runId))['orbis/run_outcome']).toBe('stale');
     expect(await isArchived(runId)).toBe(true);
-    const notes = await withIdentity(db, owner, (tx) =>
+    const notes = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
         sql`SELECT content FROM chat_messages
             WHERE metadata @> ${JSON.stringify({ type: 'routine_stale', run_id: runId })}::jsonb`,
@@ -1994,7 +1999,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     });
     expect((await caller().routine.overview({ routineId })).waiting).toBe(1);
     const archived = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'system',
       runId,
@@ -2014,13 +2019,13 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
 
-    const undone = await undoLast(db, { actorUserId: owner });
+    const undone = await undoLast(db, { identity: personal(owner) });
     expect(undone.ok).toBe(true);
     expect(await taskStatus(taskId)).toBe('inbox');
     // Статус предложения — бухгалтерия прогона (source system): «отмени последнее» её не видит
     expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('approved');
     // Отменён именно batch предложения — откат прогона после этого пропускает его
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error('ожидался успешный откат');
     expect(rolled.undone).toEqual([]);
@@ -2040,7 +2045,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     if (applied.status !== 'applied') throw new Error('не applied');
     expect(await taskStatus(taskId)).toBe('in_progress');
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error(`ожидался успешный откат: ${JSON.stringify(rolled)}`);
     // Инвертирован батч ПРАВЛЕНОГО предложения — того, что применилось
@@ -2066,14 +2071,14 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
 
-    const undone = await undoLast(db, { actorUserId: owner });
+    const undone = await undoLast(db, { identity: personal(owner) });
     expect(undone.ok).toBe(true);
     expect(await taskStatus(taskId)).toBe('inbox');
     // Снят план, а не пометка: статус предложения и след правки на прогоне не тронуты
     const aspect = await runAspect(runId);
     expect(aspect['orbis/run_proposal']?.status).toBe('approved');
     expect(aspect['orbis/run_proposal']?.edited_from).toBe(pendingId);
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error('ожидался успешный откат');
     expect(rolled.undone).toEqual([]);
@@ -2124,7 +2129,7 @@ describe('routine.overview', () => {
     expect((await caller().routine.overview({ routineId })).openProposal).toBe(true);
 
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -2191,7 +2196,7 @@ describe('routine.overview', () => {
       },
     });
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: rolled.runId, archived: true } }],
@@ -2279,7 +2284,7 @@ async function askUnit(
 
 /** Строки ленты по единице: отказ, ответ, гашение — по ним читается её судьба. */
 async function unitMessages(pendingId: string): Promise<Array<Record<string, unknown>>> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(
       sql`SELECT id, content, metadata FROM chat_messages
           WHERE metadata @> ${JSON.stringify({ rejects: pendingId })}::jsonb
@@ -2332,7 +2337,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     expect(own[0]?.id).toBe(applied.actionId);
     expect(own[0]?.actor_kind).toBe('ai');
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error(`ожидался успешный откат: ${JSON.stringify(rolled)}`);
     expect(rolled.undone).toEqual([applied.actionId]);
@@ -2543,7 +2548,7 @@ describe('routine.answerQuestion: вопрос пачки (приёмка 5, В2
       bucket: '2026-08-18T07:00',
       startedAt: new Date(T0.getTime() + 24 * 3600_000),
     });
-    await supersedeOpen(deps(), { graphId: owner, routineId, exceptRunId: newId() });
+    await supersedeOpen(deps(), { identity: personal(owner), routineId, exceptRunId: newId() });
 
     expect(await callerLater().routine.answerQuestion({ pendingId, answer: 'Да' })).toEqual({
       status: 'stale',
@@ -2608,7 +2613,7 @@ describe('routine.answerQuestion: вопрос пачки (приёмка 5, В2
     // metadata НАВСЕГДА: там его не исправить ни правкой, ни повторным ответом
     const failed = await answerRunQuestion(
       { db, clock: () => LATER },
-      { graphId: owner, pendingId, answer: 'А', option: -1 },
+      { identity: personal(owner), pendingId, answer: 'А', option: -1 },
     ).then(
       () => null,
       (e: unknown) => e,
@@ -2645,7 +2650,7 @@ describe('бухгалтерия флажка пачки (§9.6, приёмка 
     expect(flag[0]?.source).toBe('system');
     expect(flag[0]?.actor_kind).toBe('ai');
 
-    const undone = await undoLast(db, { actorUserId: owner });
+    const undone = await undoLast(db, { identity: personal(owner) });
     expect(undone.ok).toBe(true);
     // Отменено ПРИМЕНЁННОЕ действие: запись снова жива, а флажок остался снятым
     expect(await isArchived(targetId)).toBe(false);
@@ -2661,7 +2666,7 @@ describe('бухгалтерия флажка пачки (§9.6, приёмка 
     const { routineId, runId } = await batchRun('Архивный прогон');
     const { pendingId, targetId } = await deferUnit(routineId, runId, 'Список покупок');
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
@@ -2687,7 +2692,7 @@ describe('routine.runUnits', () => {
     const { pendingId, targetId } = await deferUnit(routineId, runId, 'Акт сверки');
     // Предложение того же прогона — под тем же run_id, но без `kind`
     const proposalId = pendingMessageId(owner, `proposal:${runId}`);
-    await withIdentity(db, owner, async (tx) =>
+    await withIdentity(db, personal(owner), async (tx) =>
       createPending(tx, {
         threadId: await ensureEntityThread(tx, owner, routineId),
         actor: { userId: owner, kind: 'ai', source: 'routine', runId },

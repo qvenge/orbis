@@ -59,6 +59,7 @@ export type RegistryDeltaTargetKind = (typeof REGISTRY_DELTA_TARGET_KINDS)[numbe
  */
 export interface RegistryDeltaRow {
   id: string;
+  /** Колонка строки КАК ОНА ЛЕЖИТ — голый uuid; бренд графа ей выдаёт читатель (`parseGraphId`). */
   graphId: string;
   targetKind: RegistryDeltaTargetKind;
   targetId: string;

@@ -64,7 +64,7 @@ export const agentRunRouter = router({
         // Предпроверка под RLS — ради ВНЯТНОГО отказа: гонку закрывают предусловия ниже,
         // но без чтения человек получал бы на неверную пару id безымянный CONFLICT
         // предусловия вместо «прогон не принадлежит этому тикету».
-        const outcome = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        const outcome = await withIdentity(ctx.db, ctx.identity, async (tx) => {
           const run = await runById(tx, input.runId);
           // Чужой и несуществующий под RLS неразличимы — единый NOT_FOUND
           if (run === null) {
@@ -110,7 +110,7 @@ export const agentRunRouter = router({
         const r = await execute(
           ctx.db,
           {
-            actorUserId: ctx.actorUserId,
+            identity: ctx.identity,
             actorKind: 'owner',
             source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
             // …но МЕХАНИЗМ — глагол исполнителя (§А4-4): ответ ложится в служебные
@@ -187,7 +187,7 @@ export const agentRunRouter = router({
     .input(z.object({}).strict())
     .mutation(async ({ ctx }): Promise<{ swept: number }> => {
       try {
-        return await sweepStaleRuns(ctx.db, { graphId: ctx.actorUserId, actorKind: 'owner' });
+        return await sweepStaleRuns(ctx.db, { identity: ctx.identity, actorKind: 'owner' });
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
@@ -205,6 +205,6 @@ export const agentRunRouter = router({
     .input(z.object({ runId: z.string().uuid() }).strict())
     .mutation(
       ({ ctx, input }): Promise<WireRollbackResult> =>
-        rollbackRun(ctx.db, { actorUserId: ctx.actorUserId, runId: input.runId }),
+        rollbackRun(ctx.db, { identity: ctx.identity, runId: input.runId }),
     ),
 });

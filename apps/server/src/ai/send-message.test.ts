@@ -6,6 +6,7 @@
 // ScriptedProvider ассертит ЗАПРОСЫ к модели: system НЕ в messages (контракт Task 7),
 // tool-результаты — каноническим сериализатором toolResultMessage (контракт Task 8).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { entityThreadId, MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
 import type { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
@@ -13,6 +14,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -75,12 +77,12 @@ function toolUse(
 }
 
 function callerWith(
-  user: string,
+  user: GraphId,
   provider: LLMProvider,
   over: Partial<NonNullable<Context['ai']>> = {},
 ) {
   return createCaller({
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     db,
     clientVersion: null,
@@ -88,13 +90,13 @@ function callerWith(
   });
 }
 
-async function globalThread(user: string): Promise<string> {
-  return withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
+async function globalThread(user: GraphId): Promise<string> {
+  return withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
 }
 
 /** Сообщения треда в хронологии (createdAt, id — как listMessages, но по возрастанию). */
-async function threadMessages(user: string, threadId: string) {
-  return withIdentity(db, user, (tx) =>
+async function threadMessages(user: GraphId, threadId: string) {
+  return withIdentity(db, personal(user), (tx) =>
     tx
       .select()
       .from(chatMessages)
@@ -104,9 +106,9 @@ async function threadMessages(user: string, threadId: string) {
 }
 
 /** Сид-сущность через executor без синка — без audit-шума в тредах. */
-async function seedEntity(owner: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function seedEntity(owner: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool: 'entity_create', input }],
@@ -157,8 +159,10 @@ function answered(r: SendMessageResult): SendMessageAnswer {
   return r;
 }
 
-async function usageRows(user: string) {
-  return withIdentity(db, user, (tx) => tx.select().from(aiUsage).where(eq(aiUsage.date, TODAY)));
+async function usageRows(user: GraphId) {
+  return withIdentity(db, personal(user), (tx) =>
+    tx.select().from(aiUsage).where(eq(aiUsage.date, TODAY)),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +200,7 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     expect(card.undoActionId).toBeDefined();
 
     // Сущность реально в графе
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(entities).where(eq(entities.title, 'Купить хлеб')),
     );
     expect(rows).toHaveLength(1);
@@ -290,7 +294,7 @@ describe('ai.sendMessage (б): tool-цикл из 2 вызовов (query → cr
       'entity_card',
     ]);
     expect(r.assistantMessage.content).toBe('Сделано');
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(entities).where(eq(entities.title, 'Задача из цикла')),
     );
     expect(rows).toHaveLength(1);
@@ -494,7 +498,7 @@ describe('ai.sendMessage: отказ модели (stopReason refusal)', () => {
     expect(String((cards[0] as { message?: string }).message)).toContain('отказалась');
 
     // Тул шага-отказа не исполнен — сущности нет, действий нет
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(entities).where(eq(entities.title, 'Не должна появиться')),
     );
     expect(rows).toHaveLength(0);
@@ -590,7 +594,7 @@ describe('ai.sendMessage (е): explicit-confirmation внутри цикла (ba
     expect(r.actions).toEqual([]); // ничего не исполнено — actions пуст
 
     // Граф не тронут до approve (§7.10)
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, target.id)),
     );
     expect(rows[0]?.archived).toBe(false);
@@ -701,7 +705,7 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
     expect(second.requests).toHaveLength(0);
 
     // Сущность ОДНА, второго action и второго assistant-сообщения нет
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(entities).where(eq(entities.title, 'Ретрай-задача')),
     );
     expect(rows).toHaveLength(1);
@@ -746,7 +750,7 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
     expect(lastOf(retry.requests[0])).toEqual({ role: 'user', content: 'оригинал' });
 
     // Сущность одна; assistant-сообщение одно; метеринг честный — только успешный прогон
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(entities).where(eq(entities.title, 'Задача после сбоя')),
     );
     expect(rows).toHaveLength(1);
@@ -873,7 +877,7 @@ describe('ai.sendMessage: конкурентный ретрай во время 
     if ('status' in r3) throw new Error('ожидался replay существующего ответа');
     expect(r3.replayed).toBe(true);
     expect(r3.assistantMessage.id).toBe(r1.assistantMessage.id);
-    const markerRows = await withIdentity(db, user, (tx) =>
+    const markerRows = await withIdentity(db, personal(user), (tx) =>
       tx
         .select()
         .from(chatMessages)
@@ -926,7 +930,7 @@ describe('ai.sendMessage: конкурентный ретрай во время 
     );
     expect(err.code).toBe('SERVICE_UNAVAILABLE');
     // Маркер мёртвого прогона не должен блокировать ретрай ни секунды
-    const markerRows = await withIdentity(db, user, (tx) =>
+    const markerRows = await withIdentity(db, personal(user), (tx) =>
       tx
         .select()
         .from(chatMessages)
@@ -937,8 +941,13 @@ describe('ai.sendMessage: конкурентный ретрай во время 
 });
 
 /** Сид мёртвого прогона (краш процесса): user-сообщение + маркер processing без ответа. */
-async function seedDeadRun(user: string, threadId: string, msgId: string, at: Date): Promise<void> {
-  await withIdentity(db, user, async (tx) => {
+async function seedDeadRun(
+  user: GraphId,
+  threadId: string,
+  msgId: string,
+  at: Date,
+): Promise<void> {
+  await withIdentity(db, personal(user), async (tx) => {
     await tx.insert(chatMessages).values({
       id: msgId,
       threadId,
@@ -1019,7 +1028,7 @@ describe('ai.sendMessage: ctx.ai не инжектирован — fail-fast (§
     const user = await freshGraph();
     const threadId = await globalThread(user); // валидный тред: старый фолбэк дошёл бы до цикла
     const caller = createCaller({
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       db,
       clientVersion: null,
@@ -1036,7 +1045,7 @@ describe('ai.sendMessage: ownerOnly (§9.3)', () => {
     // db — стаб: если middleware пропустит, вызов упадёт не-FORBIDDEN ошибкой БД
     const scripted = new ScriptedProvider([]);
     const agent = createCaller({
-      actorUserId: await freshGraph(),
+      identity: personal(await freshGraph()),
       actorKind: 'agent',
       db: null as unknown as Context['db'],
       clientVersion: null,

@@ -1,6 +1,8 @@
 // apps/server/src/executor/types.ts
 // Точные сигнатуры executor'а (контракт Task 9; на них встают Task 10–15 и весь 1b).
+import type { GraphId } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
+import type { Identity } from '../identity';
 
 export type ActorKind = 'owner' | 'ai' | 'agent';
 // 'ui' — прямое действие владельца в UI (entity.update / relation.*), отличимое в
@@ -48,7 +50,12 @@ export type MutationMechanism =
   | 'import';
 
 export interface ExecuteRequest {
-  actorUserId: string; // владелец графа (D11); в MVP актор-владелец = owner
+  /**
+   * Пара «актор + текущий граф» (D44): актор — аккаунт, от чьего имени идёт запись
+   * (`actor_user_id` журнала, субъект тарифа), граф — в чьих данных она идёт (ключ строк,
+   * замки, `$owner`, тред сообщения). В личном графе значения равны, смысл — нет.
+   */
+  identity: Identity;
   actorKind: ActorKind;
   source: MutationSource;
   /** Механизм записи (§А4-4); нет → 'user'. По нему смотрят гейты флагов свойств (§А2-5). */
@@ -291,8 +298,9 @@ export interface JournalWrite {
    * batch проверяемым. Отсутствует → id выбирает реализация синка.
    */
   id?: string;
-  graphId: string;
-  threadId?: string; // нет → глобальный тред владельца (резолвит боевой синк, Task 11)
+  /** Граф сообщения журнала — ТЕКУЩИЙ граф записи, не актор (D44): тред принадлежит графу. */
+  graphId: GraphId;
+  threadId?: string; // нет → глобальный тред текущего графа (резолвит боевой синк, Task 11)
   action: ActionRecord;
   card: ActionCard;
   /** Результаты операций batch — источник ответа идемпотентного повтора (§7.8). */

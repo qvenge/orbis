@@ -4,6 +4,7 @@
 // (LWW-откат body без optimistic-check, восстановление ЗАТРОНУТЫХ СВОЙСТВ — §А7-4),
 // повторная отмена, undoLast со сканом с конца, undo связей и batch.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { materializeBatchId, newId, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -12,6 +13,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -51,13 +53,13 @@ function err(r: ExecuteResult): ExecuteErr {
 }
 
 function req(
-  user: string,
+  user: GraphId,
   tool: string,
   input: unknown,
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'fast_path',
     operations: [{ tool, input }],
@@ -89,7 +91,7 @@ async function propsOf(id: string): Promise<Record<string, unknown>> {
 }
 
 /** Запись журнала по id действия — по ней читается ФОРМА operations/inverse (§А7-4). */
-async function actionById(user: string, actionId: string): Promise<ActionRecord> {
+async function actionById(user: GraphId, actionId: string): Promise<ActionRecord> {
   const probe = JSON.stringify({ actions: [{ id: actionId }] });
   const rows = await adminRows(
     sql`SELECT m.metadata FROM chat_messages m
@@ -105,7 +107,7 @@ async function actionById(user: string, actionId: string): Promise<ActionRecord>
 }
 
 /** Число undo-сообщений с данным action_id у владельца (по containment §7.8). */
-async function undoMessageCount(user: string, actionId: string): Promise<number> {
+async function undoMessageCount(user: GraphId, actionId: string): Promise<number> {
   const probe = JSON.stringify({ type: 'undo', undoes: actionId });
   const rows = await adminRows(
     sql`SELECT count(*)::int AS n FROM chat_messages m
@@ -116,7 +118,7 @@ async function undoMessageCount(user: string, actionId: string): Promise<number>
 }
 
 /** Число сообщений владельца, содержащих action (журнал действий). */
-async function actionMessageCount(user: string): Promise<number> {
+async function actionMessageCount(user: GraphId): Promise<number> {
   const rows = await adminRows(
     sql`SELECT count(*)::int AS n FROM chat_messages m
         JOIN chat_threads t ON t.id = m.thread_id
@@ -148,7 +150,7 @@ describe('undoAction: создание → архивация (§7.8)', () => {
     entityId = (r.results[0] as WireEntity).id;
     const actionsBefore = await actionMessageCount(user);
 
-    const u = ok(await undoAction(db, { actorUserId: user, actionId }));
+    const u = ok(await undoAction(db, { identity: personal(user), actionId }));
     expect(u.actionId).toBe(actionId); // вернулся id отменённого действия
 
     const row = await entityRow(entityId);
@@ -159,7 +161,7 @@ describe('undoAction: создание → архивация (§7.8)', () => {
   });
 
   test('повторный undo того же action → VALIDATION «уже отменено»', async () => {
-    const again = err(await undoAction(db, { actorUserId: user, actionId }));
+    const again = err(await undoAction(db, { identity: personal(user), actionId }));
     expect(again.error.code).toBe('VALIDATION');
     expect(again.error.message).toContain('уже отменено');
     expect(await undoMessageCount(user, actionId)).toBe(1); // второго undo-сообщения нет
@@ -167,7 +169,7 @@ describe('undoAction: создание → архивация (§7.8)', () => {
 
   test('чужой action под userB → NOT_FOUND (RLS скоупит журнал владельцем)', async () => {
     const userB = await freshGraph();
-    const r = err(await undoAction(db, { actorUserId: userB, actionId }));
+    const r = err(await undoAction(db, { identity: personal(userB), actionId }));
     expect(r.error.code).toBe('NOT_FOUND');
   });
 });
@@ -276,7 +278,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
       ),
     );
 
-    const u = ok(await undoAction(db, { actorUserId: user, actionId: undoTarget }));
+    const u = ok(await undoAction(db, { identity: personal(user), actionId: undoTarget }));
     expect(u.actionId).toBe(undoTarget);
 
     const row = await entityRow(e.id);
@@ -345,7 +347,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
       },
     ]);
 
-    ok(await undoAction(db, { actorUserId: user, actionId: attached.actionId }));
+    ok(await undoAction(db, { identity: personal(user), actionId: attached.actionId }));
     const row = await entityRow(e.id);
     expect(row.aspects).toEqual(['orbis/note']);
     // Значение, существовавшее ДО attach, откат не трогает
@@ -406,7 +408,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
     expect(afterUpdate['orbis/finance_category']).toBe(catB);
     expect((await entityRow(e.id)).aspects).toEqual(['orbis/financial', 'orbis/budget']);
 
-    ok(await undoAction(db, { actorUserId: user, actionId: updated.actionId }));
+    ok(await undoAction(db, { identity: personal(user), actionId: updated.actionId }));
     const back = (await entityRow(e.id)).props as Record<string, unknown>;
     expect(back['orbis/finance_category']).toBe(catA);
   });
@@ -457,7 +459,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
     const materialized = await propsOf(e.id);
     expect(typeof materialized['orbis/currency']).toBe('string'); // умолчание владельца легло
 
-    ok(await undoAction(db, { actorUserId: user, actionId: updated.actionId }));
+    ok(await undoAction(db, { identity: personal(user), actionId: updated.actionId }));
     const props = await propsOf(e.id);
     // ШОВ: до операции валюты не было — после отката её тоже нет
     expect(Object.hasOwn(props, 'orbis/currency')).toBe(false);
@@ -488,7 +490,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
     );
     expect(await relCount(s.id, t.id, 'mention')).toBe(1);
 
-    ok(await undoAction(db, { actorUserId: user, actionId: rel.actionId }));
+    ok(await undoAction(db, { identity: personal(user), actionId: rel.actionId }));
     expect(await relCount(s.id, t.id, 'mention')).toBe(0);
     expect(await undoMessageCount(user, rel.actionId)).toBe(1);
   });
@@ -502,7 +504,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
       await execute(
         db,
         {
-          actorUserId: user,
+          identity: personal(user),
           actorKind: 'owner',
           source: 'chat',
           batchId,
@@ -520,7 +522,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
     );
     expect(r.actionId).toBe(batchId);
 
-    const u = ok(await undoAction(db, { actorUserId: user, actionId: batchId }));
+    const u = ok(await undoAction(db, { identity: personal(user), actionId: batchId }));
     expect(u.actionId).toBe(batchId);
     expect(await relCount(sId, tId, 'mention')).toBe(0);
     expect((await entityRow(sId)).archived).toBe(true);
@@ -540,7 +542,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
         { sink },
       ),
     );
-    ok(await undoAction(db, { actorUserId: user, actionId: attach.actionId }));
+    ok(await undoAction(db, { identity: personal(user), actionId: attach.actionId }));
     const row = await entityRow(e.id);
     // Аспекта до attach не было — откат снимает его целиком, значений не остаётся.
     expect(row.aspects).toEqual([]);
@@ -561,16 +563,16 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
     const e2 = r2.results[0] as WireEntity;
 
     // последнее действие отменяем явно — его undo-сообщение станет последним сообщением
-    ok(await undoAction(db, { actorUserId: user, actionId: r2.actionId }));
+    ok(await undoAction(db, { identity: personal(user), actionId: r2.actionId }));
     expect((await entityRow(e2.id)).archived).toBe(true);
 
     // undoLast: пропускает undo-запись (не action) и отменённое r2 → отменяет r1
-    const u = ok(await undoLast(db, { actorUserId: user }));
+    const u = ok(await undoLast(db, { identity: personal(user) }));
     expect(u.actionId).toBe(r1.actionId);
     expect((await entityRow(e1.id)).archived).toBe(true);
 
     // всё отменено → структурированный отказ
-    const none = err(await undoLast(db, { actorUserId: user }));
+    const none = err(await undoLast(db, { identity: personal(user) }));
     expect(none.error.code).toBe('NOT_FOUND');
   });
 
@@ -600,13 +602,19 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
 
     // Между действием владельца и его отменой случилась системная материализация
     // (§5.4) — её batch-audit стал ПОСЛЕДНИМ action'ом журнала
-    const m = await materializeInstances({ db, graphId: user, from: today, to: today, today });
+    const m = await materializeInstances({
+      db,
+      identity: personal(user),
+      from: today,
+      to: today,
+      today,
+    });
     expect(m.created).toBe(1);
     const instanceId = recurringInstanceId(tpl.id, today);
 
     // «последнее» = последнее ВИДИМОЕ пользователю действие: системный batch
     // пропускается, откатывается создание шаблона; инстансы не архивируются молча
-    const u = ok(await undoLast(db, { actorUserId: user }));
+    const u = ok(await undoLast(db, { identity: personal(user) }));
     expect(u.actionId).toBe(rTpl.actionId);
     expect((await entityRow(tpl.id)).archived).toBe(true); // отменён именно fast_path
     expect((await entityRow(instanceId)).archived).toBe(false); // инстанс жив
@@ -615,7 +623,7 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
     // id action'а batch = его детерминированный batch_id (materializeBatchId)
     ok(
       await undoAction(db, {
-        actorUserId: user,
+        identity: personal(user),
         actionId: materializeBatchId(tpl.id, today, today),
       }),
     );

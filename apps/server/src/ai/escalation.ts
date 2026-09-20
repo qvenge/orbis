@@ -19,6 +19,7 @@
 import {
   counterpartySimilarity,
   DUP_SIMILARITY_THRESHOLD,
+  type GraphId,
   memoryRuleDeclinedId,
   memoryRuleSuggestionId,
   normalizeCounterparty,
@@ -30,6 +31,7 @@ import type { Db } from '../db/client';
 import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
+import type { Identity } from '../identity';
 import {
   CONTRACT_MONEY_MOVEMENT,
   formatRuleLabel,
@@ -440,7 +442,7 @@ async function alreadyOffered(tx: Tx, pattern: string, rc: Recategorization): Pr
 
 async function considerOne(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   compileCtx: () => Promise<CompileCtx>,
   loadJournal: () => Promise<Recategorization[]>,
   rc: Recategorization,
@@ -518,12 +520,12 @@ async function considerOne(
  */
 export async function maybeSuggestRule(deps: {
   db: Db;
-  graphId: string;
+  identity: Identity;
   action: ActionRecord;
 }): Promise<SuggestRuleResult> {
   const recats = extractRecategorizations(deps.action);
   if (recats.length === 0) return { suggested: false, reason: 'not_recategorization' };
-  return withIdentity(deps.db, deps.graphId, async (tx) => {
+  return withIdentity(deps.db, deps.identity, async (tx) => {
     // Скан журнала — один на ДЕЙСТВИЕ, а не на операцию: аргументы у всех итераций
     // одинаковы, а сам скан тянет до JOURNAL_SCAN_LIMIT строк JSONB. До этого «перенеси
     // эти 10 покупок из Еды в Развлечения» давал 10 одинаковых сканов подряд, синхронно,
@@ -536,7 +538,7 @@ export async function maybeSuggestRule(deps: {
     // доходят не все рекатегоризации (гейты паттерна отвечают раньше).
     let compiled: Promise<CompileCtx> | undefined;
     const compileCtx = (): Promise<CompileCtx> => {
-      compiled ??= queryContext(tx, deps.graphId, null);
+      compiled ??= queryContext(tx, deps.identity.graph, null);
       return compiled;
     };
     const targets = recats.map((rc) => rc.to);
@@ -546,7 +548,7 @@ export async function maybeSuggestRule(deps: {
     };
     let last: SuggestRuleResult = { suggested: false, reason: 'not_recategorization' };
     for (const rc of recats) {
-      last = await considerOne(tx, deps.graphId, compileCtx, loadJournal, rc);
+      last = await considerOne(tx, deps.identity.graph, compileCtx, loadJournal, rc);
       if (last.suggested) return last;
     }
     return last;
@@ -596,12 +598,12 @@ function touchesCategoryRef(operations: readonly MutationOp[]): boolean {
  */
 export async function escalateAfterMutation(
   db: Db,
-  args: { graphId: string; actionId: string; operations: readonly MutationOp[] },
+  args: { identity: Identity; actionId: string; operations: readonly MutationOp[] },
 ): Promise<void> {
   if (!touchesCategoryRef(args.operations)) return;
   try {
-    const action = await withIdentity(db, args.graphId, (tx) => findAction(tx, args.actionId));
-    if (action) await maybeSuggestRule({ db, graphId: args.graphId, action });
+    const action = await withIdentity(db, args.identity, (tx) => findAction(tx, args.actionId));
+    if (action) await maybeSuggestRule({ db, identity: args.identity, action });
   } catch (e) {
     console.error('[ai.escalation] предложение правила не записано:', e);
   }
@@ -615,7 +617,7 @@ export async function escalateAfterMutation(
  */
 export async function declineRuleSuggestion(
   db: Db,
-  args: { graphId: string; pattern: string; fromCategoryId: string; toCategoryId: string },
+  args: { identity: Identity; pattern: string; fromCategoryId: string; toCategoryId: string },
 ): Promise<{ alreadyDeclined: boolean }> {
   const card: Card = {
     kind: 'memory_rule_declined',
@@ -623,10 +625,16 @@ export async function declineRuleSuggestion(
     fromCategoryId: args.fromCategoryId,
     toCategoryId: args.toCategoryId,
   };
-  return withIdentity(db, args.graphId, async (tx) => {
-    const threadId = await ensureGlobalThread(tx, args.graphId);
+  return withIdentity(db, args.identity, async (tx) => {
+    const threadId = await ensureGlobalThread(tx, args.identity.graph);
     const { replayed } = await appendMessageIdempotent(tx, {
-      id: memoryRuleDeclinedId({ ...args, date: idDate() }),
+      id: memoryRuleDeclinedId({
+        graphId: args.identity.graph,
+        pattern: args.pattern,
+        fromCategoryId: args.fromCategoryId,
+        toCategoryId: args.toCategoryId,
+        date: idDate(),
+      }),
       threadId,
       role: 'system',
       content: 'Правило не создаём',

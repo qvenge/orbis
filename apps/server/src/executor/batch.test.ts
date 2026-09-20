@@ -11,6 +11,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -38,7 +39,7 @@ function batchReq(
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: userA,
+    identity: personal(userA),
     actorKind: 'owner',
     source: 'chat',
     operations,
@@ -54,7 +55,7 @@ function singleReq(
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: userA,
+    identity: personal(userA),
     actorKind: 'owner',
     source: 'chat',
     operations: [{ tool, input }],
@@ -446,7 +447,7 @@ describe('batch_execute: границы протокола (§9.2)', () => {
   test('8. operations.length > 1 без batchId → VALIDATION', async () => {
     const r = err(
       await execute(db, {
-        actorUserId: userA,
+        identity: personal(userA),
         actorKind: 'owner',
         source: 'chat',
         operations: [
@@ -538,7 +539,7 @@ describe('batch_execute: занятый id — reject, не replay (fix round р
     expect(state.archived).toBe(false);
 
     // чужой/невидимый занятый id — единообразно тот же отказ
-    const foreign = await createEntity({ title: 'Чужая' }, { actorUserId: userB });
+    const foreign = await createEntity({ title: 'Чужая' }, { identity: personal(userB) });
     const rf = err(
       await execute(
         db,

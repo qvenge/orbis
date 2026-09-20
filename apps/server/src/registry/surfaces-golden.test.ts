@@ -18,7 +18,7 @@ import { canonicalJson } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { GATE_SURFACE_SLUGS } from '../../test/fixtures/gate-aspects';
 import GOLDEN from '../../test/golden/surfaces.json';
-import { appDb, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, personal, requireEnv, truncateAll } from '../../test/helpers';
 import {
   applySurfaceState,
   compareSnapshots,
@@ -52,7 +52,7 @@ const { db, client } = appDb();
 const countOf = async (q: ReturnType<typeof sql>): Promise<number> =>
   withIdentity(
     db,
-    SURFACE_OWNER_ID,
+    personal(SURFACE_OWNER_ID),
     async (tx) => ((await tx.execute(q)) as unknown as { n: number }[])[0]?.n ?? -1,
   );
 
@@ -117,7 +117,7 @@ beforeAll(async () => {
     await applySurfaceState(db, owner, state);
     snapshots.set(state, await snapshotSurfaces(db, owner, state, SURFACE_TODAY));
     const caller = createCallerFactory(appRouter)({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       db,
       clientVersion: null,
@@ -138,7 +138,7 @@ beforeAll(async () => {
     // только у него).
     aspectLabels.set(
       state,
-      await withIdentity(db, owner, async (tx) => {
+      await withIdentity(db, personal(owner), async (tx) => {
         const reg = await effectiveRegistry(tx, owner);
         return reg.aspects.get(SURFACE_RELABEL_ASPECT)?.label.ru;
       }),

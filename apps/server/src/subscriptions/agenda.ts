@@ -14,6 +14,7 @@ import {
   addDays,
   type BindingIndex,
   bindingIndexOf,
+  type GraphId,
   isModuleEnabled,
   type SurfaceName,
   surfaceModuleOf,
@@ -118,7 +119,7 @@ function slotInstant(b: SlotBinding, cctx: CompileCtx): SQL {
 
 export async function agendaListOf(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   def: AgendaSubscription,
   args: { today: string; timeZone: string; days: number },
 ): Promise<AgendaListResult> {

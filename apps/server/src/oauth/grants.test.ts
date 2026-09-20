@@ -3,14 +3,25 @@
 // иначе сьют проверял бы согласованность модуля с самим собой, а не контракт хранения.
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
-import { eq } from 'drizzle-orm';
-import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { eq, sql } from 'drizzle-orm';
+import {
+  accountOf,
+  addMember,
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { agentGrants, oauthClients } from '../db/schema';
+import { identityOfPerson, parseAccountId } from '../identity';
 import {
   createAuthorizationCode,
   exchangeAuthorizationCode,
   issuePatGrant,
   listGrants,
+  NotGraphOwnerError,
   revokeGrant,
   rotateRefresh,
   verifyBearer,
@@ -53,7 +64,7 @@ test('код меняется на пару токенов, access пускае�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -75,7 +86,7 @@ test('код одноразовый: повторный обмен отверг�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -104,7 +115,7 @@ test('неверный verifier не проходит', async () => {
   const clientId = await seedClient();
   const { challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -126,7 +137,7 @@ test('код, выданный другому клиенту, не меняет�
   const other = await seedClient('other-client');
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -147,7 +158,7 @@ test('несовпадающий redirect_uri не меняет код', async (
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -168,7 +179,7 @@ test('просроченный код не меняется', async () => {
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -194,7 +205,7 @@ test('грант, отозванный между выдачей кода и о�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -224,7 +235,7 @@ test('refresh ротируется, старый больше не работа�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -250,7 +261,7 @@ test('реплей ротированного refresh гасит цепочку 
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -282,7 +293,7 @@ test('чужой client_id не ротирует и НЕ гасит грант',
   const other = await seedClient('other-client');
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -309,7 +320,7 @@ test('мёртвый refresh при предъявлении гасит гран
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -336,7 +347,7 @@ test('мёртвый refresh при предъявлении гасит гран
 });
 
 test('PAT пускает бессрочно и отзывается', async () => {
-  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   expect(pat.startsWith('orbis_pat_')).toBe(true);
   const identity = await verifyBearer(db, pat);
   expect(identity).toMatchObject({ graphId: owner });
@@ -349,7 +360,7 @@ test('PAT пускает бессрочно и отзывается', async () =
 // гейта Задачи 7) и подпись (атрибуция в журнале и на экране «Агенты»). Скоуп читается
 // впервые: до этого колонка agent_grants.scope существовала, но никем не читалась.
 test('verifyBearer отдаёт область и подпись гранта, а не только владельца', async () => {
-  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   const identity = await verifyBearer(db, pat);
   expect(identity).toMatchObject({ graphId: owner, scope: 'full', label: 'CI' });
 });
@@ -358,14 +369,18 @@ test('verifyBearer отдаёт область и подпись гранта, �
 // лишь DEFAULT, и «выдать исполнителя» можно было только UPDATE'ом мимо кода — то есть
 // сузить доступ штатным путём было нечем.
 test('PAT выдаётся со скоупом worker, и его читает verifyBearer', async () => {
-  const pat = await issuePatGrant(db, { graphId: owner, label: 'исполнитель', scope: 'worker' });
+  const pat = await issuePatGrant(db, {
+    identity: personal(owner),
+    label: 'исполнитель',
+    scope: 'worker',
+  });
   expect(await verifyBearer(db, pat)).toMatchObject({ scope: 'worker', label: 'исполнитель' });
 });
 
 // Умолчание — 'full': скрипты выдачи PAT зовут issuePatGrant без области, и молчаливое
 // сужение отобрало бы доступ у уже описанного в документации способа подключения.
 test('PAT без указанной области остаётся полным', async () => {
-  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   expect(await verifyBearer(db, pat)).toMatchObject({ scope: 'full' });
 });
 
@@ -376,7 +391,7 @@ test('область кода доезжает до токенов и до от�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Исполнитель',
     redirectUri: REDIRECT,
@@ -400,15 +415,15 @@ test('область кода доезжает до токенов и до от�
 // Экран «Настройки → Агенты» показывает область каждой строки: без неё владелец не
 // отличает полный доступ от исполнителя и не понимает, что именно отзывает.
 test('listGrants отдаёт область гранта', async () => {
-  await issuePatGrant(db, { graphId: owner, label: 'исполнитель', scope: 'worker' });
-  await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'исполнитель', scope: 'worker' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   const grants = await listGrants(db, owner);
   expect(grants.find((g) => g.label === 'исполнитель')?.scope).toBe('worker');
   expect(grants.find((g) => g.label === 'CI')?.scope).toBe('full');
 });
 
 test('чужой владелец не отзывает грант', async () => {
-  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   const identity = await verifyBearer(db, pat);
   if (!identity) throw new Error('verifyBearer не вернул identity');
   expect(await revokeGrant(db, { graphId: await freshGraph(), grantId: identity.grantId })).toBe(
@@ -418,8 +433,8 @@ test('чужой владелец не отзывает грант', async () =>
 });
 
 test('listGrants отдаёт свои гранты и не отдаёт хеши', async () => {
-  const pat = await issuePatGrant(db, { graphId: owner, label: 'CI' });
-  await issuePatGrant(db, { graphId: await freshGraph(), label: 'чужой' });
+  const pat = await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
+  await issuePatGrant(db, { identity: personal(await freshGraph()), label: 'чужой' });
   const grants = await listGrants(db, owner);
   expect(grants).toHaveLength(1);
   expect(grants[0]).toMatchObject({ kind: 'pat', label: 'CI' });
@@ -437,7 +452,7 @@ test('listGrants отличает необменянный код от подк�
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -461,7 +476,7 @@ test('listGrants отличает необменянный код от подк�
 // «нет ни того, ни другого» держит именно этот случай — проверка на один refresh
 // выдала бы каждый headless-токен за незавершённое подключение.
 test('PAT в списке — подключённый доступ, а не брошенная попытка', async () => {
-  await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   expect((await listGrants(db, owner))[0]).toMatchObject({ kind: 'pat', connected: true });
 });
 
@@ -469,7 +484,7 @@ test('PAT в списке — подключённый доступ, а не б�
 // прыгала бы на «сейчас» от повторного нажатия (или гонки двух вкладок), и владелец терял
 // бы единственную улику о том, когда доступ на самом деле погас.
 test('повторный отзыв не двигает дату отзыва', async () => {
-  await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   const grant = (await listGrants(db, owner))[0];
   if (!grant) throw new Error('грант не создан');
   expect(await revokeGrant(db, { graphId: owner, grantId: grant.id })).toBe(true);
@@ -496,7 +511,7 @@ test('повторный код не двигает дату уже проста
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -532,7 +547,7 @@ test('реплей ротированного refresh не двигает дат
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
   const code = await createAuthorizationCode(db, {
-    graphId: owner,
+    identity: personal(owner),
     clientId,
     label: 'Claude Code',
     redirectUri: REDIRECT,
@@ -557,6 +572,81 @@ test('реплей ротированного refresh не двигает дат
     rotateRefresh(db, { refreshToken: first.refreshToken, clientId }),
   ).rejects.toMatchObject({ code: 'invalid_grant' });
   expect((await listGrants(db, owner))[0]?.revokedAt?.getTime()).toBe(revokedAt.getTime());
+});
+
+/** Сколько строк гранта лежит в графе — единственный способ отличить «отказ» от «выписал молча». */
+async function grantsOfGraph(graph: string): Promise<number> {
+  const rows = await db.execute(
+    sql`SELECT count(*)::int AS n FROM agent_grants WHERE graph_id = ${graph}::uuid`,
+  );
+  return Number(rows[0]?.n);
+}
+
+test('грант выписывает только держатель owner: у operator — NotGraphOwnerError, строк ноль', async () => {
+  const A = await freshGraph();
+  const B = await freshGraph();
+  await addMember(A, accountOf(B), 'operator'); // аккаунт Б — ОПЕРАТОР в графе А, не владелец
+  const bInA = { actor: accountOf(B), graph: A };
+  const { challenge } = pkce();
+  const clientId = await seedClient('operator-client');
+
+  await expect(issuePatGrant(db, { identity: bInA, label: 'x' })).rejects.toBeInstanceOf(
+    NotGraphOwnerError,
+  );
+  await expect(
+    createAuthorizationCode(db, {
+      identity: bInA,
+      clientId,
+      label: 'x',
+      redirectUri: REDIRECT,
+      codeChallenge: challenge,
+      scope: 'full',
+    }),
+  ).rejects.toBeInstanceOf(NotGraphOwnerError);
+  expect(await grantsOfGraph(A)).toBe(0);
+
+  // Контроль: тот же граф, но пара ВЛАДЕЛЬЦА — грант выписывается и несёт issued_by актора.
+  await issuePatGrant(db, { identity: personal(A), label: 'свой' });
+  const rows = await db.execute(
+    sql`SELECT issued_by::text AS by FROM agent_grants WHERE graph_id = ${A}::uuid`,
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.by).toBe(accountOf(A));
+});
+
+test('аккаунт БЕЗ графа (согласие до онбординга): NotGraphOwnerError, а не сырой 23503', async () => {
+  // Экран согласия рендерится ВНЕ OnboardingGate, то есть личного графа может ещё не быть
+  // (Р-ИГ-7). С FK `agent_grants.graph_id → graphs.id` (0020) вставка упала бы сырым 23503
+  // → 500; гейт владения превращает это в типизированный отказ ПЕРВОЙ своей причиной.
+  const noGraph = parseAccountId(crypto.randomUUID());
+  const who = identityOfPerson(noGraph);
+  const { challenge } = pkce();
+  const clientId = await seedClient('no-graph-client');
+
+  const patErr = await issuePatGrant(db, { identity: who, label: 'x' }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  const codeErr = await createAuthorizationCode(db, {
+    identity: who,
+    clientId,
+    label: 'x',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+    scope: 'full',
+  }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  for (const e of [patErr, codeErr]) {
+    // МЕХАНИЗМ, а не только класс: `23503` наружу не уходит ни кодом, ни текстом — иначе
+    // тест был бы зелёным и на сыром отказе FK, обёрнутом во что угодно (Ф-Г-37).
+    expect(e).toBeInstanceOf(NotGraphOwnerError);
+    expect((e as { code?: string }).code).toBeUndefined();
+    expect((e as { cause?: { code?: string } }).cause?.code).toBeUndefined();
+    expect((e as Error).message).toContain('граф не заведён');
+  }
+  expect(await grantsOfGraph(noGraph)).toBe(0);
 });
 
 test('мусорный токен и токен без префикса отвергаются', async () => {

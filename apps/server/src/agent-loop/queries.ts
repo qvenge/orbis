@@ -4,6 +4,7 @@
 // (RLS владельца), собственных мутаций здесь нет.
 import type {
   AgentRunStep,
+  GraphId,
   RoutineMode,
   RoutineStage,
   RunCheckpoint,
@@ -110,7 +111,7 @@ function assignedToGrant(grantId: string): string {
  */
 export async function isWorkerThreadTarget(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   grantId: string,
   entityId: string,
 ): Promise<boolean> {

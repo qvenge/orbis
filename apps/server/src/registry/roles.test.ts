@@ -3,6 +3,7 @@
 // и снимок `hierarchicalRoles(reg)` обязаны давать один и тот же список — иначе бюджет,
 // круг исполнителя и компилятор запросов начали бы ходить по разным множествам ролей.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   ROLE_CATEGORY_PARENT,
   ROLE_DEPENDENCY,
@@ -14,7 +15,7 @@ import {
   ROLE_TICKET,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { effectiveRegistry } from './cache';
@@ -32,8 +33,8 @@ afterAll(async () => {
   await client.end();
 });
 
-async function fromSql(owner: string): Promise<string[]> {
-  const rows = await withIdentity(db, owner, (tx) =>
+async function fromSql(owner: GraphId): Promise<string[]> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT id FROM (${hierarchicalRolesSql()}) h ORDER BY id`),
   );
   return (rows as unknown as Array<{ id: string }>).map((r) => r.id);
@@ -41,7 +42,7 @@ async function fromSql(owner: string): Promise<string[]> {
 
 test('иерархические роли: подзапрос и снимок реестра дают один список', async () => {
   const owner = await freshGraph();
-  const snapshot = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const snapshot = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   expect(await fromSql(owner)).toEqual(hierarchicalRoles(snapshot).sort());
   // Встроенный состав §А4-3: `envelope-binding` в семейство иерархии НЕ входит
   expect(await fromSql(owner)).toEqual(['category-parent', 'run', 'subitem', 'ticket']);
@@ -51,7 +52,7 @@ test('своя строка роли перекрывает встроенную
   const owner = await freshGraph();
   // Реестровых операций ещё нет (Задача 15) — своя строка кладётся напрямую, как это
   // делает админский сид системных строк.
-  await withIdentity(db, owner, async (tx) => {
+  await withIdentity(db, personal(owner), async (tx) => {
     await tx.execute(sql`
       INSERT INTO relation_role_definitions
         (id, graph_id, key, label, description, source_label, target_label,
@@ -63,7 +64,7 @@ test('своя строка роли перекрывает встроенную
     // обязан писать всякий писатель, и фикстура не исключение.
     await bumpOwnerRegistryVersion(tx, owner);
   });
-  const snapshot = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const snapshot = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   expect(hierarchicalRoles(snapshot).sort()).toEqual(['category-parent', 'run', 'ticket']);
   expect(await fromSql(owner)).toEqual(['category-parent', 'run', 'ticket']);
 });
@@ -81,7 +82,7 @@ test('своя строка роли перекрывает встроенную
  */
 test('каждая поимённая роль указывает на ту роль, чьё имя носит (подпись из сида)', async () => {
   const owner = await freshGraph();
-  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   const labelOf = (id: string): string | undefined => reg.roles.get(id)?.label.ru;
   expect(labelOf(ROLE_SUBITEM)).toBe('Подпункт');
   expect(labelOf(ROLE_TICKET)).toBe('Тикет');

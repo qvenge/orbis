@@ -24,7 +24,7 @@ import {
   newId,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
@@ -38,7 +38,12 @@ const createCaller = createCallerFactory(appRouter);
 
 const user = mintGraph();
 const foodId = seedCategoryId(user, 'food');
-const caller = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+const caller = createCaller({
+  identity: personal(user),
+  actorKind: 'owner',
+  db,
+  clientVersion: null,
+});
 
 const NS = 'csv:tinkoff-may-2026';
 
@@ -108,7 +113,7 @@ async function fileHashOf(text: string): Promise<string> {
 
 async function exec(tool: string, input: unknown): Promise<WireEntity> {
   const req: ExecuteRequest = {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool, input }],
@@ -243,7 +248,7 @@ function entityOfRow(rowIndex: number): string {
 
 beforeAll(async () => {
   await truncateAll();
-  await seedOwnerGraph(db, user);
+  await seedOwnerGraph(db, personal(user));
 
   // Два конверта ОДНОЙ категории — соседние месяцы (§7.1: майский и июньский)
   envMay = (await exec('entity_create', envelope('2026-05-01', '2026-05-31'))).id;

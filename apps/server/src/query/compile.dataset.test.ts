@@ -15,10 +15,18 @@
 // состояние блокирующей работы (`compile.ts:272` — файл снят Задачей 9b, адрес по git-истории). Тест 1 ниже проверяет обе половины
 // порознь: задача с ЗАВЕРШЁННЫМ блокером видна, с активным — скрыта.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { appDb, entityColumnsFrom, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  entityColumnsFrom,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -569,18 +577,20 @@ function astOf(query: string): QueryAst {
 }
 
 /** Разбирает, компилирует и исполняет запрос под identity пользователя (RLS-путь). */
-async function runAst(userId: string, ast: QueryAst): Promise<Record<string, unknown>[]> {
+async function runAst(userId: GraphId, ast: QueryAst): Promise<Record<string, unknown>[]> {
   const compiled = compileQueryAst(ast, ctx());
-  return withIdentity(db, userId, async (tx) => [...(await tx.execute(compiled))]);
+  return withIdentity(db, personal(userId), async (tx) => [...(await tx.execute(compiled))]);
 }
 
-function run(userId: string, query: string): Promise<Record<string, unknown>[]> {
+function run(userId: GraphId, query: string): Promise<Record<string, unknown>[]> {
   return runAst(userId, astOf(query));
 }
 
-async function runCount(userId: string, query: string): Promise<number> {
+async function runCount(userId: GraphId, query: string): Promise<number> {
   const compiled = compileCountAst(astOf(query), ctx());
-  const rows = await withIdentity(db, userId, async (tx) => [...(await tx.execute(compiled))]);
+  const rows = await withIdentity(db, personal(userId), async (tx) => [
+    ...(await tx.execute(compiled)),
+  ]);
   return Number(rows[0]?.count);
 }
 
@@ -607,12 +617,12 @@ function datasetRows(
 
 beforeAll(async () => {
   await truncateAll(); // санкционировано: локальная тестовая БД
-  reg = await withIdentity(db, USER_A, (tx) => effectiveRegistry(tx, USER_A));
-  await withIdentity(db, USER_A, async (tx) => {
+  reg = await withIdentity(db, personal(USER_A), (tx) => effectiveRegistry(tx, USER_A));
+  await withIdentity(db, personal(USER_A), async (tx) => {
     await tx.insert(entities).values(datasetRows(reg, DATASET_A));
     await tx.insert(relations).values(RELATIONS_A);
   });
-  await withIdentity(db, USER_B, async (tx) => {
+  await withIdentity(db, personal(USER_B), async (tx) => {
     await tx.insert(entities).values(datasetRows(reg, DATASET_B));
   });
 });
@@ -992,7 +1002,7 @@ const ID_C = {
 
 describe('служебные аспекты: спрятаны, пока не названы; список — колонка service реестра', () => {
   beforeAll(async () => {
-    await withIdentity(db, USER_C, async (tx) => {
+    await withIdentity(db, personal(USER_C), async (tx) => {
       const own = await effectiveRegistry(tx, USER_C);
       await tx.insert(entities).values(
         datasetRows(own, [
@@ -1047,7 +1057,7 @@ describe('служебные аспекты: спрятаны, пока не н�
   test('13. прячущее условие собрано ИЗ КОЛОНКИ service, а не из списка в коде', async () => {
     // Проверяется не текст условия, а совпадение его параметров с тем, что лежит в БД:
     // список в коде дал бы то же условие при пустой колонке и разъехался бы молча.
-    const rows = await withIdentity(db, USER_C, async (tx) => [
+    const rows = await withIdentity(db, personal(USER_C), async (tx) => [
       ...(await tx.execute(sql`SELECT id FROM aspect_definitions WHERE service ORDER BY id`)),
     ]);
     const fromDb = rows.map((r) => r.id as string);
@@ -1073,7 +1083,7 @@ const ID_D = {
 
 describe('children_of/parents_of: семейство иерархии из реестра, а не схлопнутый parent', () => {
   beforeAll(async () => {
-    await withIdentity(db, USER_D, async (tx) => {
+    await withIdentity(db, personal(USER_D), async (tx) => {
       const own = await effectiveRegistry(tx, USER_D);
       await tx.insert(entities).values(
         datasetRows(own, [
@@ -1192,7 +1202,7 @@ const BRANCH_ID = chainId(900);
 
 describe('descendants_of/ancestors_of: обход по одной роли и кап глубины 32', () => {
   beforeAll(async () => {
-    await withIdentity(db, USER_E, async (tx) => {
+    await withIdentity(db, personal(USER_E), async (tx) => {
       const own = await effectiveRegistry(tx, USER_E);
       const rows: DatasetRow[] = [];
       for (let i = 0; i <= CHAIN_LENGTH; i++) {
@@ -1271,7 +1281,7 @@ describe('descendants_of/ancestors_of: обход по одной роли и к
 
 describe('§13.6: decimal-точность в новой форме хранения', () => {
   test('21. 0.10+0.20=0.30 в numeric, orbis/amount=0.30, JSON без IEEE-754', async () => {
-    const [sum] = await withIdentity(db, USER_A, async (tx) => [
+    const [sum] = await withIdentity(db, personal(USER_A), async (tx) => [
       ...(await tx.execute(sql`
         SELECT sum((props->>'orbis/amount')::numeric)::text AS total
         FROM entities WHERE id IN (${ID.fin010}, ${ID.fin020})`)),
@@ -1285,7 +1295,7 @@ describe('§13.6: decimal-точность в новой форме хранен
       [USER_A, 7],
       [USER_B, 1],
     ] as const) {
-      const rows = await withIdentity(db, user, async (tx) => [
+      const rows = await withIdentity(db, personal(user), async (tx) => [
         ...(await tx.execute(sql`
           SELECT jsonb_typeof(props->'orbis/amount') AS t
           FROM entities WHERE aspects @> ARRAY['orbis/financial']`)),

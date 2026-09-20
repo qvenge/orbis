@@ -10,6 +10,7 @@ import { sql } from 'drizzle-orm';
 import { appendMessage } from '../chat/messages';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
+import type { Identity } from '../identity';
 import { unmarkRefSources } from '../registry/ref';
 import { ExecError } from './errors';
 import { execute } from './executor';
@@ -123,7 +124,7 @@ function markedRefSources(action: ActionRecord): string[] {
   return out;
 }
 
-async function applyUndo(db: Db, actorUserId: string, found: FoundAction): Promise<ExecuteResult> {
+async function applyUndo(db: Db, who: Identity, found: FoundAction): Promise<ExecuteResult> {
   const { action, threadId } = found;
   if (action.inverse.length === 0) {
     // Недостижимо для действий executor'а (inverse всегда непуст); страховка формата
@@ -133,7 +134,7 @@ async function applyUndo(db: Db, actorUserId: string, found: FoundAction): Promi
     };
   }
   const req: ExecuteRequest = {
-    actorUserId,
+    identity: who,
     actorKind: 'owner', // MVP: undo инициирует владелец графа
     source: 'system',
     operations: action.inverse.map((iv) => ({ tool: iv.op, input: iv.payload })),
@@ -156,7 +157,7 @@ async function applyUndo(db: Db, actorUserId: string, found: FoundAction): Promi
         // тег у списка сущностей» тулом не выражается; и делать это надо ПОСЛЕ применения
         // inverse — цель к этому моменту уже разархивирована, и условие «не осталось ссылок
         // на архивную цель» внутри `unmarkRefSources` считается по восстановленному графу.
-        await unmarkRefSources(tx, actorUserId, markedRefSources(action));
+        await unmarkRefSources(tx, who.graph, markedRefSources(action));
         await appendMessage(tx, {
           id: newId(),
           threadId, // тот же тред, где записано отменяемое действие
@@ -175,10 +176,10 @@ async function applyUndo(db: Db, actorUserId: string, found: FoundAction): Promi
 /** Отмена конкретного действия по id из журнала (§7.8). */
 export async function undoAction(
   db: Db,
-  args: { actorUserId: string; actionId: string },
+  args: { identity: Identity; actionId: string },
 ): Promise<ExecuteResult> {
   try {
-    const found = await withIdentity(db, args.actorUserId, async (tx) => {
+    const found = await withIdentity(db, args.identity, async (tx) => {
       // Чтение action отдельным tx от применения безопасно: журнал append-only,
       // metadata неизменяема (§4.6); статус «отменено» перепроверяется в tx применения
       const msg = await findActionMessage(tx, args.actionId);
@@ -195,7 +196,7 @@ export async function undoAction(
       }
       return msg;
     });
-    return await applyUndo(db, args.actorUserId, found);
+    return await applyUndo(db, args.identity, found);
   } catch (e) {
     if (e instanceof ExecError) {
       return { ok: false, error: { code: e.code, message: e.message, details: e.details } };
@@ -226,9 +227,9 @@ export interface UndoneAction {
 export type UndoLastResult = (ExecuteOk & { undone: UndoneAction }) | ExecuteErr;
 
 /** «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. */
-export async function undoLast(db: Db, args: { actorUserId: string }): Promise<UndoLastResult> {
+export async function undoLast(db: Db, args: { identity: Identity }): Promise<UndoLastResult> {
   try {
-    const found = await withIdentity(db, args.actorUserId, (tx) => findLastUndoable(tx));
+    const found = await withIdentity(db, args.identity, (tx) => findLastUndoable(tx));
     if (!found) {
       return {
         ok: false,
@@ -239,7 +240,7 @@ export async function undoLast(db: Db, args: { actorUserId: string }): Promise<U
         },
       };
     }
-    const result = await applyUndo(db, args.actorUserId, found);
+    const result = await applyUndo(db, args.identity, found);
     if (!result.ok) return result;
     return {
       ...result,

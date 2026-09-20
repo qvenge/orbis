@@ -15,9 +15,11 @@ import {
   type ListToolsResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import type { AccountId } from '@orbis/shared';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
+import { identityOfGrant } from '../identity';
 import type { GrantIdentity } from '../oauth/grants';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
@@ -48,7 +50,10 @@ export interface McpDeps {
  */
 export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   const resolve = deps.entitlements ?? resolveEntitlement;
-  const graphId = identity.graphId;
+  // ЧЕТВЁРТЫЙ сайт рождения пары при трёх резолверах (Ф-Г-16): вторая Bearer-поверхность зовёт
+  // ТОТ ЖЕ identityOfGrant, что и context.ts. Собирать пару здесь руками нельзя — два способа
+  // прочитать одну строку гранта разойдутся ровно в тот день, когда изменится первый.
+  const who = identityOfGrant(identity);
   const server = new Server({ name: 'orbis', version: '0.0.0' }, { capabilities: { tools: {} } });
 
   // tools/list: публичный реестр §9.2 — имена/описания/inputSchema как в реестре,
@@ -56,7 +61,7 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   server.setRequestHandler(
     ListToolsRequestSchema,
     sanitized(async (): Promise<ListToolsResult> => {
-      const defs = await withIdentity(deps.db, graphId, (tx) => buildToolRegistry(tx, graphId));
+      const defs = await withIdentity(deps.db, who, (tx) => buildToolRegistry(tx, who.graph));
       return {
         tools: defs
           .filter(
@@ -93,13 +98,14 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   server.setRequestHandler(
     CallToolRequestSchema,
     sanitized(async (req: CallToolRequest): Promise<CallToolResult> => {
-      const gate = gateAgentRequest(resolve, graphId);
+      // Субъект тарифа — АККАУНТ, а не граф (Р-КГ-6, спека §3.4: «тариф — на аккаунт»).
+      const gate = gateAgentRequest(resolve, who.actor);
       if (gate !== null) return toCallToolResult(gate);
 
       const result = await dispatchTool(
         {
           db: deps.db,
-          actorUserId: graphId,
+          identity: who,
           actorKind: 'agent', // честная атрибуция внешнего агента (§7.8, D11)
           // Грант — вторая половина той же атрибуции (С2): по записи журнала владелец
           // видит не «какой-то агент», а КАКОЙ доступ это сделал, и отзывает именно его.
@@ -148,9 +154,9 @@ function sanitized<A extends unknown[], R>(fn: (...args: A) => Promise<R>) {
  */
 function gateAgentRequest(
   resolve: EntitlementResolver,
-  graphId: string,
+  account: AccountId,
 ): ToolDispatchResult | null {
-  const decision = resolve(graphId, AGENT_REQUESTS_KEY);
+  const decision = resolve(account, AGENT_REQUESTS_KEY);
   if (!decision.allowed || (decision.limit !== null && decision.limit <= 0)) {
     return {
       status: 'error',

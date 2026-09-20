@@ -2,9 +2,10 @@
 // Интеграционные тесты Task 11 (§4.5, §13.3): детерминированные ID тредов,
 // идемпотентность ensure*, конкурентная сходимость к одной строке, RLS чужого треда.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appendMessage } from './messages';
@@ -26,7 +27,7 @@ afterAll(async () => {
 
 /** Строки chat_threads по владельцу/сущности (админ-DSN — RLS обходится, видим всё). */
 async function threadRows(
-  graphId: string,
+  graphId: GraphId,
   entityId: string | null,
 ): Promise<Array<Record<string, unknown>>> {
   const { db: admin, client: adminClient } = adminDb();
@@ -46,9 +47,9 @@ async function threadRows(
 }
 
 /** Сущность-носитель треда напрямую (без executor'а — chat-модуль от него не зависит). */
-async function createEntityRow(graphId: string): Promise<string> {
+async function createEntityRow(graphId: GraphId): Promise<string> {
   const id = newId();
-  await withIdentity(db, graphId, (tx) =>
+  await withIdentity(db, personal(graphId), (tx) =>
     tx.insert(entities).values({ id, graphId, title: 'Тред-носитель' }),
   );
   return id;
@@ -57,8 +58,8 @@ async function createEntityRow(graphId: string): Promise<string> {
 describe('ensureGlobalThread (§4.5)', () => {
   test('создаёт глобальный тред с детерминированным id; повторный вызов идемпотентен', async () => {
     const expected = globalThreadId(userA);
-    const first = await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA));
-    const second = await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA));
+    const first = await withIdentity(db, personal(userA), (tx) => ensureGlobalThread(tx, userA));
+    const second = await withIdentity(db, personal(userA), (tx) => ensureGlobalThread(tx, userA));
     expect(first).toBe(expected);
     expect(second).toBe(expected);
     const rows = await threadRows(userA, null);
@@ -75,8 +76,8 @@ describe('ensureEntityThread (§4.5, §13.3)', () => {
     // Инвариант «ровно одна строка» обеспечивает PK/unique БД, а не тайминг теста:
     // при любом интерливинге проигравшая вставка гасится конфликтом и читает строку.
     const [t1, t2] = await Promise.all([
-      withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, entityId)),
-      withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, entityId)),
+      withIdentity(db, personal(userA), (tx) => ensureEntityThread(tx, userA, entityId)),
+      withIdentity(db, personal(userA), (tx) => ensureEntityThread(tx, userA, entityId)),
     ]);
     expect(t1).toBe(expected);
     expect(t2).toBe(expected);
@@ -88,16 +89,16 @@ describe('ensureEntityThread (§4.5, §13.3)', () => {
   test('чужая/несуществующая сущность → NOT_FOUND (RLS делает их неразличимыми)', async () => {
     const entityId = await createEntityRow(userA);
     await expect(
-      withIdentity(db, userB, (tx) => ensureEntityThread(tx, userB, entityId)),
+      withIdentity(db, personal(userB), (tx) => ensureEntityThread(tx, userB, entityId)),
     ).rejects.toThrow('сущность не найдена');
   });
 });
 
 describe('appendMessage (§4.6)', () => {
   test('append-only вставка возвращает wire-форму с ISO createdAt', async () => {
-    const threadId = await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA));
+    const threadId = await withIdentity(db, personal(userA), (tx) => ensureGlobalThread(tx, userA));
     const id = newId();
-    const msg = await withIdentity(db, userA, (tx) =>
+    const msg = await withIdentity(db, personal(userA), (tx) =>
       appendMessage(tx, {
         id,
         threadId,
@@ -117,9 +118,9 @@ describe('appendMessage (§4.6)', () => {
   });
 
   test('RLS: сообщение в чужой тред под userB отклоняется политикой БД (§13, п.5)', async () => {
-    const threadA = await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA));
+    const threadA = await withIdentity(db, personal(userA), (tx) => ensureGlobalThread(tx, userA));
     await expect(
-      withIdentity(db, userB, (tx) =>
+      withIdentity(db, personal(userB), (tx) =>
         appendMessage(tx, { id: newId(), threadId: threadA, role: 'user', content: 'взлом' }),
       ),
     ).rejects.toThrow();

@@ -11,6 +11,7 @@
 // видеть эффект предыдущего (иначе привязка разъезжается с состоянием БД).
 // Реальная БД под withIdentity (RLS enforced), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -20,6 +21,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -77,12 +79,12 @@ function finProps(
   };
 }
 
-async function createEntity(user: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function createEntity(user: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   const r = ok(
     await execute(
       db,
       {
-        actorUserId: user,
+        identity: personal(user),
         actorKind: 'owner',
         source: 'fast_path',
         operations: [{ tool: 'entity_create', input: { tags: [], ...input } }],
@@ -134,7 +136,7 @@ async function boundEnvelope(txnId: string): Promise<string | null> {
 // Сцена: пересечение месячного и «отпускного» конверта (§7.3) + EUR-конверт
 // ---------------------------------------------------------------------------
 interface Scene {
-  user: string;
+  user: GraphId;
   catA: string;
   catB: string;
   catC: string;
@@ -194,10 +196,10 @@ describe('батч-селектор конвертов: эквивалентно
       occurredOn: r.fin['orbis/occurred_on'] as string,
     }));
 
-    const batch = await withIdentity(db, s.user, (tx) =>
+    const batch = await withIdentity(db, personal(s.user), (tx) =>
       selectEnvelopes(tx, { graphId: s.user, defaultCurrency: 'RUB', rows }),
     );
-    const singles = await withIdentity(db, s.user, async (tx) => {
+    const singles = await withIdentity(db, personal(s.user), async (tx) => {
       const out = new Map<string, string | null>();
       for (const row of rows) {
         out.set(row.key, await selectEnvelope(tx, { graphId: s.user, ...row }));
@@ -220,7 +222,7 @@ describe('батч-селектор конвертов: эквивалентно
       await execute(
         db,
         {
-          actorUserId: s.user,
+          identity: personal(s.user),
           actorKind: 'owner',
           source: 'chat',
           batchId: newId(),
@@ -275,7 +277,7 @@ describe('батч-селектор конвертов: эквивалентно
       await execute(
         db,
         {
-          actorUserId: s.user,
+          identity: personal(s.user),
           actorKind: 'owner',
           source: 'chat',
           batchId: newId(),
@@ -314,7 +316,7 @@ describe('батч-селектор конвертов: эквивалентно
       await execute(
         db,
         {
-          actorUserId: s.user,
+          identity: personal(s.user),
           actorKind: 'owner',
           source: 'chat',
           batchId: newId(),
@@ -384,7 +386,7 @@ describe('число обращений к селектору не растёт 
         await execute(
           counting.db,
           {
-            actorUserId: user,
+            identity: personal(user),
             actorKind: 'owner',
             source: 'fast_path',
             operations: [
@@ -407,7 +409,7 @@ describe('число обращений к селектору не растёт 
       const N = 50;
       const txnIds = Array.from({ length: N }, () => newId());
       const request: ExecuteRequest = {
-        actorUserId: user,
+        identity: personal(user),
         actorKind: 'owner',
         source: 'chat',
         batchId: newId(),
@@ -471,7 +473,12 @@ describe('число обращений к селектору не растёт 
       expect(await budgetParents(txn.id)).toEqual([envelope.id]);
       // Прогрев: строка кэша конверта обязана существовать ДО правки, иначе «не снесли»
       // проверяло бы пустоту, которая и так была.
-      await budgetOverview(db, user, '2026-07', () => new Date('2026-07-10T09:00:00.000Z'));
+      await budgetOverview(
+        db,
+        personal(user),
+        '2026-07',
+        () => new Date('2026-07-10T09:00:00.000Z'),
+      );
       expect(await cacheRowCount(envelope.id)).toBe(1);
 
       counting.queries.length = 0; // считаем только правку заголовка
@@ -479,7 +486,7 @@ describe('число обращений к селектору не растёт 
         await execute(
           counting.db,
           {
-            actorUserId: user,
+            identity: personal(user),
             actorKind: 'owner',
             source: 'fast_path',
             operations: [{ tool: 'entity_update', input: { id: txn.id, title: 'Трата (правка)' } }],

@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { entitySchema } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshGraph, requireEnv } from '../test/helpers';
+import { appDb, freshGraph, personal, requireEnv } from '../test/helpers';
 import { withIdentity } from './db/with-identity';
 import { toWireEntity } from './wire';
 
@@ -14,7 +14,7 @@ describe('wire-сериализация (решение 12 плана)', () => {
     const owner = await freshGraph();
     const id = crypto.randomUUID();
     try {
-      const row = await withIdentity(db, owner, async (tx) => {
+      const row = await withIdentity(db, personal(owner), async (tx) => {
         await tx.execute(
           sql`INSERT INTO entities (id, graph_id, title) VALUES (${id}, ${owner}, 'parity')`,
         );
@@ -36,7 +36,7 @@ describe('wire-сериализация (решение 12 плана)', () => {
     const owner = await freshGraph();
     const id = crypto.randomUUID();
     try {
-      const row = await withIdentity(db, owner, async (tx) => {
+      const row = await withIdentity(db, personal(owner), async (tx) => {
         // Прямой INSERT, а не исполнитель: форма строки здесь и есть предмет проверки.
         //
         // ПРЕЖДЕ строка нарочно несла заполненными старые носители (`meta`,

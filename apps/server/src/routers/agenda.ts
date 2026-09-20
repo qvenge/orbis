@@ -20,20 +20,20 @@ export const agendaRouter = router({
     .input(agendaListInput)
     .query(async ({ ctx, input }): Promise<AgendaListResult> => {
       try {
-        const { today, timeZone } = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-          const tz = await ownerTimeZone(tx, ctx.actorUserId);
+        const { today, timeZone } = await withIdentity(ctx.db, ctx.identity, async (tx) => {
+          const tz = await ownerTimeZone(tx, ctx.identity.graph);
           return { today: todayInTimeZone(tz), timeZone: tz };
         });
         await materializeInstances({
           db: ctx.db,
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           from: today,
           to: addDays(today, input.days - 1),
           today,
         });
-        return await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-          const cctx = await queryContext(tx, ctx.actorUserId, null);
-          return agendaListOf(tx, ctx.actorUserId, agendaSubscriptionOf(cctx.reg), {
+        return await withIdentity(ctx.db, ctx.identity, async (tx) => {
+          const cctx = await queryContext(tx, ctx.identity.graph, null);
+          return agendaListOf(tx, ctx.identity.graph, agendaSubscriptionOf(cctx.reg), {
             today,
             timeZone,
             days: input.days,

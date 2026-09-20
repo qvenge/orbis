@@ -45,7 +45,7 @@ export const budgetRouter = router({
   overview: protectedProcedure
     .input(budgetOverviewInput)
     .query(({ ctx, input }): Promise<BudgetOverview> => {
-      return budgetOverview(ctx.db, ctx.actorUserId, input.month);
+      return budgetOverview(ctx.db, ctx.identity, input.month);
     }),
 
   /**
@@ -56,7 +56,7 @@ export const budgetRouter = router({
   alertCount: protectedProcedure
     .input(budgetAlertCountInput)
     .query(({ ctx, input }): Promise<number> => {
-      return budgetAlertCount(ctx.db, ctx.actorUserId, input.month);
+      return budgetAlertCount(ctx.db, ctx.identity, input.month);
     }),
 
   /** Мини-тренд категории (§3.2): spent/limit по месяцам конвертов категории — теми же
@@ -64,7 +64,7 @@ export const budgetRouter = router({
   categoryTrend: protectedProcedure
     .input(categoryTrendInput)
     .query(({ ctx, input }): Promise<CategoryTrendPoint[]> => {
-      return categoryTrend(ctx.db, ctx.actorUserId, input);
+      return categoryTrend(ctx.db, ctx.identity, input);
     }),
 
   /** Конверт категории на дату — fast-path-карточка «осталось N ₽» (§4.1) и quick-add;
@@ -72,14 +72,14 @@ export const budgetRouter = router({
   envelopeForCategory: protectedProcedure
     .input(envelopeForCategoryInput)
     .query(({ ctx, input }): Promise<EnvelopeStatus | null> => {
-      return envelopeForCategory(ctx.db, ctx.actorUserId, input);
+      return envelopeForCategory(ctx.db, ctx.identity, input);
     }),
 
   /** Превью rollover (§2.6, §3.5): carryover/suggestedLimit по прошлому месяцу — чтение. */
   rolloverPreview: protectedProcedure
     .input(rolloverPreviewInput)
     .query(({ ctx, input }): Promise<RolloverPreview> => {
-      return rolloverPreview(ctx.db, ctx.actorUserId, input.month);
+      return rolloverPreview(ctx.db, ctx.identity, input.month);
     }),
 
   /**
@@ -90,7 +90,7 @@ export const budgetRouter = router({
     .input(rolloverInput)
     .mutation(async ({ ctx, input }): Promise<RolloverResult> => {
       try {
-        return await rolloverCreate(ctx.db, ctx.actorUserId, input);
+        return await rolloverCreate(ctx.db, ctx.identity, input);
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
@@ -105,7 +105,7 @@ export const budgetRouter = router({
     .input(confirmPurchaseInput)
     .mutation(async ({ ctx, input }): Promise<ConfirmPurchaseResult> => {
       try {
-        return await confirmPurchase(ctx.db, ctx.actorUserId, input);
+        return await confirmPurchase(ctx.db, ctx.identity, input);
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
@@ -115,7 +115,7 @@ export const budgetRouter = router({
   // Мутация состояния графа → ownerOnlyProcedure (§9.3): переход исполняет владелец.
   postDue: ownerOnlyProcedure.mutation(async ({ ctx }): Promise<{ posted: number }> => {
     // «Сегодня» — локальная дата пользователя (user_settings.timezone), как в агрегатах
-    const today = await localToday(ctx.db, ctx.actorUserId);
-    return postDueInstances({ db: ctx.db, graphId: ctx.actorUserId, today });
+    const today = await localToday(ctx.db, ctx.identity);
+    return postDueInstances({ db: ctx.db, identity: ctx.identity, today });
   }),
 });

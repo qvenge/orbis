@@ -30,10 +30,10 @@ export const chatRouter = router({
     .input(z.object({ entityId: z.string().uuid().optional() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        const threadId = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
+        const threadId = await withIdentity(ctx.db, ctx.identity, (tx) =>
           input.entityId !== undefined
-            ? ensureEntityThread(tx, ctx.actorUserId, input.entityId)
-            : ensureGlobalThread(tx, ctx.actorUserId),
+            ? ensureEntityThread(tx, ctx.identity.graph, input.entityId)
+            : ensureGlobalThread(tx, ctx.identity.graph),
         );
         return { threadId };
       } catch (e) {
@@ -60,7 +60,7 @@ export const chatRouter = router({
         .strict(),
     )
     .query(({ ctx, input }) =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
         const conds: (SQL | undefined)[] = [
           eq(chatMessages.threadId, input.threadId),
           // Инфраструктурные system-строки (processing-маркеры §7.9, audit системных
@@ -111,7 +111,7 @@ export const chatRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        return await withIdentity(ctx.db, ctx.identity, async (tx) => {
           // Видимость треда под RLS: чужой и несуществующий неразличимы → NOT_FOUND
           // (иначе INSERT упал бы сырой RLS-ошибкой 42501 вместо структурированной)
           const visible = await tx

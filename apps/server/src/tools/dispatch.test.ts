@@ -5,6 +5,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { GraphId } from '@orbis/shared';
 import {
   type AgendaSubscription,
   BUILTIN_ASPECT_DEFS,
@@ -22,6 +23,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   rawEntityRow,
   requireEnv,
   seedCustomAspect,
@@ -69,7 +71,7 @@ const T0 = new Date('2026-07-04T10:00:00.000Z');
 function ctxFor(over: Partial<ToolCallCtx> = {}): ToolCallCtx {
   return {
     db,
-    actorUserId: userA,
+    identity: personal(userA),
     actorKind: 'ai',
     source: 'chat',
     explicitCommand: false,
@@ -79,9 +81,9 @@ function ctxFor(over: Partial<ToolCallCtx> = {}): ToolCallCtx {
 }
 
 /** Сид-сущность через executor без синка — без audit-шума в тредах. */
-async function seedEntity(owner: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function seedEntity(owner: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool: 'entity_create', input }],
@@ -90,8 +92,8 @@ async function seedEntity(owner: string, input: Record<string, unknown>): Promis
   return r.results[0] as WireEntity;
 }
 
-async function messagesIn(owner: string, threadId: string) {
-  return withIdentity(db, owner, (tx) =>
+async function messagesIn(owner: GraphId, threadId: string) {
+  return withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(chatMessages)
@@ -107,7 +109,7 @@ function expectError(r: Awaited<ReturnType<typeof dispatchTool>>, code: string):
 
 /** Новая правда строки (§А1-1) под identity владельца: значения по id свойства. */
 async function propsOfRowA(id: string, owner = userA): Promise<Record<string, unknown>> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
   );
   return (rows[0]?.props ?? {}) as Record<string, unknown>;
@@ -115,7 +117,7 @@ async function propsOfRowA(id: string, owner = userA): Promise<Record<string, un
 
 /** Заголовок строки под identity владельца — проба «отказ случился ДО исполнения». */
 async function titleOfRowA(id: string, owner = userA): Promise<string | undefined> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ title: entities.title }).from(entities).where(eq(entities.id, id)),
   );
   return rows[0]?.title;
@@ -123,7 +125,7 @@ async function titleOfRowA(id: string, owner = userA): Promise<string | undefine
 
 /** Список интерпретаций строки — вторая половина новой правды. */
 async function aspectsOfRowA(id: string, owner = userA): Promise<string[]> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
   );
   return rows[0]?.aspects ?? [];
@@ -163,7 +165,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
   test('entity_create: сущность создана; audit в переданный threadId с actor_kind=ai, source=chat; card entity_card', async () => {
     // Отдельный (не глобальный) тред — проверяем именно «переданный threadId»
     const host = await seedEntity(userA, { title: 'Хост-тред', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
 
     const r = await dispatchTool(ctxFor({ threadId }), 'entity_create', {
       title: 'Тестовая задача',
@@ -204,7 +208,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
   // по run_id) не нашёл бы того, что она сделала.
   test('entity_update с ctx.runId: прогон доезжает до action журнала', async () => {
     const host = await seedEntity(userA, { title: 'Хост-тред прогона', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const target = await seedEntity(userA, { title: 'Цель прогона', tags: [] });
     const runId = newId();
 
@@ -222,7 +228,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
 
   test('attach_orbis_task: аспект установлен; без threadId audit — в глобальный тред', async () => {
     const target = await seedEntity(userA, { title: 'Без аспекта', tags: [] });
-    const globalThread = await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA));
+    const globalThread = await withIdentity(db, personal(userA), (tx) =>
+      ensureGlobalThread(tx, userA),
+    );
     const before = (await messagesIn(userA, globalThread)).length;
 
     const r = await dispatchTool(ctxFor(), 'attach_orbis_task', {
@@ -298,7 +306,9 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
 
   test('batch_execute: атомарная группа исполняется, results по операциям, один audit-action типа batch', async () => {
     const host = await seedEntity(userA, { title: 'Хост batch-треда', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const r = await dispatchTool(ctxFor({ threadId }), 'batch_execute', {
       batch_id: newId(),
       operations: [
@@ -521,7 +531,7 @@ describe('LLM-контракты entity_create/entity_update на свойств
     // входом старой карты во всём сервере; пока союз стоял, эта половина теста проверяла
     // ПРИЁМ той же формы.
     const viaUi = await execute(db, {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -563,7 +573,7 @@ describe('LLM-контракты entity_create/entity_update на свойств
       aspects: ['orbis/task'],
     });
 
-    const r = await dispatchTool(ctxFor({ actorUserId: owner }), 'entity_query', {
+    const r = await dispatchTool(ctxFor({ identity: personal(owner) }), 'entity_query', {
       query: 'tags=llm-projection',
     });
     expect(r.status).toBe('ok');
@@ -589,7 +599,9 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     // временной VALIDATION Task 5; сам pending-механизм покрыт policy/pending.test.ts —
     // здесь фиксируется контракт dispatch: status + card + отсутствие следа в графе/журнале.
     const host = await seedEntity(userA, { title: 'Хост-тред политики', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const target = await seedEntity(userA, { title: 'Кандидат на архив', tags: [] });
 
     const r = await dispatchTool(ctxFor({ threadId }), 'entity_update', {
@@ -606,7 +618,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     });
     // §7.10: до подтверждения ничего не записано — ни в граф, ни в журнал; в тред
     // легла только карточка-запрос (без metadata.actions — это НЕ запись журнала §7.8)
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, target.id)),
     );
     expect(rows[0]?.archived).toBe(false);
@@ -629,7 +641,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     if (r.status === 'pending_confirmation' && r.card.kind === 'confirmation_card') {
       expect(r.card.summary).toBe('11 операций');
     }
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(inArray(entities.id, ids)),
     );
     expect(rows.length).toBe(11);
@@ -641,9 +653,11 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     // детерминирован по batch_id (pendingMessageId) → повтор того же batch = ON CONFLICT.
     // Свежий владелец — глобальный тред пуст, поэтому счёт pending-карточек точен.
     const user = await freshGraph();
-    const ctx = ctxFor({ actorUserId: user });
+    const ctx = ctxFor({ identity: personal(user) });
     const target = await seedEntity(user, { title: 'Цель дедупа pending', tags: [] });
-    const globalThreadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
+    const globalThreadId = await withIdentity(db, personal(user), (tx) =>
+      ensureGlobalThread(tx, user),
+    );
     const call = {
       batch_id: newId(),
       operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
@@ -686,7 +700,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
       pendingId: r.pendingId,
       summary: '11 операций',
     });
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ id: entities.id }).from(entities).where(inArray(entities.id, ids)),
     );
     expect(rows.length).toBe(0);
@@ -706,7 +720,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     expect((r.result as unknown[]).length).toBe(5);
     expect(r.card).toEqual({ kind: 'confirmation_card', mode: 'preview', summary: '5 операций' });
     // §7.10: предпросмотр информационный, не блокирующий — действие уже исполнено
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ id: entities.id }).from(entities).where(inArray(entities.id, ids)),
     );
     expect(rows.length).toBe(5);
@@ -956,7 +970,7 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
 
 describe('dispatchTool: import_csv_start — вход в импорт из чата (Task C4c, 03-budget §3.4)', () => {
   /** Число сущностей и строк entity_origins владельца — СЫРЫМ админ-соединением (мимо RLS). */
-  async function rawWriteCounts(user: string): Promise<{ entities: number; origins: number }> {
+  async function rawWriteCounts(user: GraphId): Promise<{ entities: number; origins: number }> {
     const { db: admin, client: adminClient } = adminDb();
     try {
       const rows = (await admin.execute(sql`
@@ -1024,10 +1038,10 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
   // Свой владелец: «последнее» считается по ВСЕМУ журналу владельца, и общий userA дал бы
   // порядок, зависящий от соседних describe
   const userU = mintGraph();
-  const chat = (over: Partial<ToolCallCtx> = {}) => ctxFor({ actorUserId: userU, ...over });
+  const chat = (over: Partial<ToolCallCtx> = {}) => ctxFor({ identity: personal(userU), ...over });
 
   async function archivedOf(id: string): Promise<boolean | undefined> {
-    const rows = await withIdentity(db, userU, (tx) =>
+    const rows = await withIdentity(db, personal(userU), (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
     );
     return rows[0]?.archived;
@@ -1039,7 +1053,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
     const created = await execute(
       db,
       {
-        actorUserId: userU,
+        identity: personal(userU),
         actorKind: 'owner',
         source: 'fast_path',
         operations: [{ tool: 'entity_create', input: { title: 'Обед 340', tags: [] } }],
@@ -1084,7 +1098,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
     const sys = await execute(
       db,
       {
-        actorUserId: userU,
+        identity: personal(userU),
         actorKind: 'ai',
         source: 'system',
         operations: [{ tool: 'entity_create', input: { title: 'Системный след', tags: [] } }],
@@ -1099,7 +1113,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
     const result = r.result as Record<string, unknown>;
     expect(result.undone).toBe(true);
     expect(result.actionId).toBe(edited.status === 'ok' ? edited.actionId : undefined);
-    const rows = await withIdentity(db, userU, (tx) =>
+    const rows = await withIdentity(db, personal(userU), (tx) =>
       tx.select({ title: entities.title }).from(entities).where(eq(entities.id, target.id)),
     );
     expect(rows[0]?.title).toBe('Правка чатом');
@@ -1110,7 +1124,7 @@ describe('dispatchTool: undo_last — «отмени последнее» сло
     const before = await execute(
       db,
       {
-        actorUserId: userU,
+        identity: personal(userU),
         actorKind: 'owner',
         source: 'fast_path',
         operations: [{ tool: 'entity_create', input: { title: 'Не трогать', tags: [] } }],
@@ -1270,7 +1284,7 @@ describe('dispatchTool: user_query материализует окно запр�
       },
       aspects: ['orbis/schedule', 'orbis/financial'],
     });
-    const r = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
+    const r = await dispatchTool(ctxFor({ identity: personal(userC) }), 'user_query', {
       query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',
       aggregate: 'sum',
       field: 'orbis/amount',
@@ -1281,7 +1295,7 @@ describe('dispatchTool: user_query материализует окно запр�
     // в выборку не попадает) — сумма именно свеже-материализованного инстанса
     expect(r.result).toBe('150.00');
 
-    const count = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
+    const count = await dispatchTool(ctxFor({ identity: personal(userC) }), 'user_query', {
       query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',
       aggregate: 'count',
     });
@@ -1424,7 +1438,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
   /** Контекст вызова от имени фонового исполнителя (MCP + грант со скоупом worker). */
   const worker = () =>
     ctxFor({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'agent',
       source: 'mcp',
       grant: { id: grantId, scope: 'worker', label: 'w' },
@@ -1435,7 +1449,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     // assertAssignment требует ЖИВОГО гранта владельца, а вставка строки руками обходила
     // бы ровно тот код, которым скоуп теперь и записывается.
     const token = await issuePatGrant(db, {
-      graphId: owner,
+      identity: personal(owner),
       label: 'worker-тест',
       scope: 'worker',
     });
@@ -1460,7 +1474,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     });
     note = await seedEntity(owner, { title: 'Личная заметка владельца', tags: [] });
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -1507,7 +1521,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
       expectError(await dispatchTool(worker(), name, input), 'FORBIDDEN_LEVEL');
     }
     // Гейт стоит ДО записи: статус тикета не изменился, связь проект→тикет на месте
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select({ props: entities.props }).from(entities).where(eq(entities.id, ticket.id)),
     );
     expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('planned');
@@ -1566,7 +1580,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
       aspects: ['orbis/task', 'orbis/assignment'],
     });
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: archivedTicket.id, archived: true } }],
@@ -1589,7 +1603,10 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     // правка, откат миграции, будущий скоуп на старом коде). verifyBearer отдаёт его КАК
     // ЕСТЬ, а гейт обязан читать «не full → не полный доступ». Сравнение с одним лишь
     // 'worker' открыло бы такому гранту весь граф — ровно наоборот.
-    const token = await issuePatGrant(db, { graphId: owner, label: 'скоуп из будущего' });
+    const token = await issuePatGrant(db, {
+      identity: personal(owner),
+      label: 'скоуп из будущего',
+    });
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(
@@ -1604,7 +1621,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     expect(String(identity.scope)).toBe('foo');
 
     const unknownScope = ctxFor({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'agent',
       source: 'mcp',
       grant: { id: identity.grantId, scope: identity.scope, label: identity.label },
@@ -1625,7 +1642,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
   test('скоуп full сужению thread_post не подчиняется: пишет в любой свой тред', async () => {
     const r = await dispatchTool(
       ctxFor({
-        actorUserId: owner,
+        identity: personal(owner),
         actorKind: 'agent',
         source: 'mcp',
         grant: { id: grantId, scope: 'full', label: 'f' },
@@ -1656,7 +1673,7 @@ describe('dispatchTool: глаголы исполнителя никогда н�
   /** Контекст фонового исполнителя: MCP + грант worker, без явной команды человека. */
   const workerCtx = () =>
     ctxFor({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'agent',
       source: 'mcp',
       explicitCommand: false, // за вызовом агента прямой команды владельца нет
@@ -1676,7 +1693,7 @@ describe('dispatchTool: глаголы исполнителя никогда н�
       aspects: ['orbis/task', 'orbis/assignment'],
     });
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -1703,7 +1720,11 @@ describe('dispatchTool: глаголы исполнителя никогда н�
   }
 
   beforeAll(async () => {
-    const token = await issuePatGrant(db, { graphId: owner, label: 'круг', scope: 'worker' });
+    const token = await issuePatGrant(db, {
+      identity: personal(owner),
+      label: 'круг',
+      scope: 'worker',
+    });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный worker-PAT не прошёл verifyBearer');
     grantId = identity.grantId;
@@ -1755,7 +1776,7 @@ describe('dispatchTool: глаголы исполнителя никогда н�
     // Сверка по состоянию, а не по возвращённому статусу: pending — это ЗАПИСЬ в тред
     // (policy/pending), и «status не pending» ещё не значит «карточка не легла».
     // RLS скоупит chat_messages владельцем — счёт точен по всему его журналу.
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
         sql`SELECT
               count(*) FILTER (WHERE metadata @> '{"pending": {}}'::jsonb)::int AS pendings,
@@ -1781,7 +1802,7 @@ describe('dispatchTool: глаголы исполнителя никогда н�
       ['orbis_checkpoint', { run_id: newId(), question: 'вопрос мимо гранта?' }],
       ['orbis_finish', { run_id: newId(), report: 'итог мимо гранта' }],
     ] as Array<[string, Record<string, unknown>]>) {
-      const r = await dispatchTool(ctxFor({ actorUserId: owner }), name, input);
+      const r = await dispatchTool(ctxFor({ identity: personal(owner) }), name, input);
       expectError(r, 'VALIDATION');
     }
   });
@@ -1808,7 +1829,7 @@ describe('CAS-предусловие не протекает в путь мод�
       aspects: { attach: ['orbis/task'] },
     });
     expectError(r, 'VALIDATION');
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select().from(entities).where(eq(entities.id, target.id)),
     );
     expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('planned');
@@ -1840,7 +1861,7 @@ describe('CAS-предусловие не протекает в путь мод�
       expect((r.error.details as { index: number; tool: string }).index).toBe(0);
       expect((r.error.details as { index: number; tool: string }).tool).toBe('entity_update');
     }
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select().from(entities).where(eq(entities.id, target.id)),
     );
     expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('planned');
@@ -1888,7 +1909,7 @@ describe('V1: выдача автономии рутине из чата → pen
 
   /** Список аспектов строки (§А1-1): «право писать в граф не выдано» — это пустой список. */
   async function aspectsOfRow(id: string): Promise<string[]> {
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
     );
     return rows[0]?.aspects ?? [];
@@ -1896,7 +1917,7 @@ describe('V1: выдача автономии рутине из чата → pen
 
   /** Значения строки по id свойства (§А1-1) — что именно легло в граф. */
   async function propsOfRow(id: string): Promise<Record<string, unknown>> {
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
     );
     return (rows[0]?.props ?? {}) as Record<string, unknown>;
@@ -1904,7 +1925,9 @@ describe('V1: выдача автономии рутине из чата → pen
 
   test('attach_orbis_routine с mode act → pending_confirmation, карточка в треде, граф не тронут', async () => {
     const host = await seedEntity(userA, { title: 'Хост-тред автономии', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
+      ensureEntityThread(tx, userA, host.id),
+    );
     const target = await seedEntity(userA, { title: 'Утренний обзор', tags: [] });
 
     const r = await dispatchTool(ctxFor({ threadId }), 'attach_orbis_routine', {
@@ -1952,7 +1975,7 @@ describe('V1: выдача автономии рутине из чата → pen
       kind: 'confirmation_card',
       summary: 'Инструкция act-рутины: правка «Утренний план»',
     });
-    const titleAfter = await withIdentity(db, userA, (tx) =>
+    const titleAfter = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ title: entities.title }).from(entities).where(eq(entities.id, act.id)),
     );
     expect(titleAfter[0]?.title).toBe('Утренний план');
@@ -2073,7 +2096,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // массив — она не могла провалиться ни при какой мутации сводки.
     const feed = await messagesIn(
       userA,
-      await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA)),
+      await withIdentity(db, personal(userA), (tx) => ensureGlobalThread(tx, userA)),
     );
     expect(feed.find((m) => m.id === stripOnly.pendingId)?.content).toBe(
       'Требуется подтверждение: Автономия рутины «Утренний обзор»: снимает белый список',
@@ -2153,7 +2176,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // И третья: признак носителя обязателен (Р9) — запись со значениями доверенности, но
     // БЕЗ аспекта рутины, разоружаемой рутиной не считается.
     const ghost = await seedEntity(userA, { title: 'Бывшая рутина', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({ props: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] } })
@@ -2456,7 +2479,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // Тот самый вызов: стадии не было — вызов ставит рабочую, и запись оживает вооружённой.
     // Слово выбрано по прежнему значению: «переводит в рабочую стадию», а не «снимает паузу» —
     // на паузе она не стояла.
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -2484,7 +2507,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // одного свойства. Сценарий: владелец подтвердил «снимает аспект рутины» и считает рутину
     // убранной — модель следующим вызовом бесшумно возвращала её вооружённой.
     const ghost = await seedEntity(userA, { title: 'Бывшая act-рутина', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -2516,7 +2539,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // ВТОРАЯ СТОРОНА ГРАНИЦЫ: та же форма вызова на МИРНЫХ значениях (propose, списка нет) —
     // обычное заведение рутины, исполняется молча. Отличие от ряда выше ровно одно: значения.
     const calm = await seedEntity(userA, { title: 'Бывшая propose-рутина', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -2539,7 +2562,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // `props` здесь доверенности не касается (время запуска), поэтому гейт формы молчит —
     // ответить обязано состояние.
     const both = await seedEntity(userA, { title: 'Оживляемая с расписанием', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -2595,12 +2618,12 @@ describe('V1: выдача автономии рутине из чата → pen
     // {archived:false}` возвращал вооружённую act-рутину в работу молча — ряд §7.10 смотрит
     // только `archived === true`. Воспроизведено живьём до правки: status ok, карточки нет.
     async function archive(id: string): Promise<void> {
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         tx.update(entities).set({ archived: true }).where(eq(entities.id, id)),
       );
     }
     async function archivedOfRow(id: string): Promise<boolean | undefined> {
-      const rows = await withIdentity(db, userA, (tx) =>
+      const rows = await withIdentity(db, personal(userA), (tx) =>
         tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
       );
       return rows[0]?.archived;
@@ -2648,7 +2671,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // ТРЕТЬЯ: обычная запись с боевыми ЗНАЧЕНИЯМИ, но БЕЗ аспекта рутины (Р9). Без носителя
     // она в отбор прогонов не попадёт, сколько бы прав на ней ни лежало, — оживлять нечего.
     const ghost = await seedEntity(userA, { title: 'Архивная бывшая рутина', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -2788,7 +2811,7 @@ describe('V1: выдача автономии рутине из чата → pen
       }),
       aspects: ['orbis/routine'],
     });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, both.id)),
     );
     const halfWay = await dispatchTool(ctxFor(), 'entity_update', { id: both.id, archived: false });
@@ -2796,7 +2819,7 @@ describe('V1: выдача автономии рутине из чата → pen
 
     // ПЯТАЯ: а ОБА выключателя разом — оживление, и карточка называет ОБА. Половина сделанного
     // в карточке была бы тем же классом лжи, что и половина операции.
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, both.id)),
     );
     const bothOn = await dispatchTool(ctxFor(), 'entity_update', {
@@ -2822,7 +2845,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // Стартовое состояние — то, что остаётся после подтверждённого владельцем `detach`:
     // аспекта нет, значения боевые, стадия рабочая (Р9).
     const disarmedByOwner = await seedEntity(userA, { title: 'Убранная владельцем', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -2884,7 +2907,7 @@ describe('V1: выдача автономии рутине из чата → pen
       }),
       aspects: ['orbis/routine'],
     });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, offTwice.id)),
     );
     const bothSwitches = await dispatchTool(ctxFor(), 'batch_execute', {
@@ -2917,7 +2940,7 @@ describe('V1: выдача автономии рутине из чата → pen
       }),
       aspects: ['orbis/routine'],
     });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx.update(entities).set({ archived: true }).where(eq(entities.id, stillOff.id)),
     );
     const halfWay = await dispatchTool(ctxFor(), 'batch_execute', {
@@ -2998,7 +3021,7 @@ describe('V1: выдача автономии рутине из чата → pen
       // Состояние после подтверждённого владельцем `detach`: значения боевые, носителя нет,
       // стадия нерабочая (Р9 — значения переживают снятие аспекта).
       const e = await seedEntity(userA, { title, tags: [] });
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         tx
           .update(entities)
           .set({
@@ -3077,7 +3100,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // ВТОРАЯ СТОРОНА ГРАНИЦЫ: правка тела обычной записи БЕЗ боевых значений — `ok`, и возврат
     // носителя такой записи тоже. Отличие от рядов выше ровно одно: значения мирные.
     const plain = await seedEntity(userA, { title: 'Обычная заметка', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -3159,7 +3182,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // (вторая правит её тело), и это ДВА разных события для владельца. Схлопни дедупликация
     // по заголовку — одно из них пропало бы молча.
     const bothReasons = await seedEntity(userA, { title: 'Оба повода', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -3226,7 +3249,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // …и обратное направление той же цепочки не сломано: у операции ПОСЛЕ навешивания носителя
     // субъект — рутина, хотя допачечная строка аспекта ещё не знает.
     const gains = await seedEntity(userA, { title: 'Навесили и правят', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({
@@ -3371,7 +3394,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     routineCtx(userA, mode, allowed, { clock: () => T0, ...over });
 
   async function titleOf(id: string): Promise<string | undefined> {
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ title: entities.title }).from(entities).where(eq(entities.id, id)),
     );
     return rows[0]?.title;
@@ -3412,7 +3435,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
 
     // orbis_propose — единственная мутация, открытая режиму propose: гейт его пропускает
     // (поведение самого глагола закрыто routines/propose.test.ts)
-    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx, userA));
+    const defs = await withIdentity(db, personal(userA), (tx) => buildToolRegistry(tx, userA));
     const propose = defs.find((d) => d.name === 'orbis_propose');
     expect(propose).toBeDefined();
     if (propose !== undefined) expect(routineGate(propose, ctx)).toBeNull();
@@ -3469,7 +3492,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     const r = await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true });
     expect(r.status).toBe('pending_confirmation');
     // До решения владельца в графе по-прежнему ничего не изменилось (§7.10)
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, target.id)),
     );
     expect(rows[0]?.archived).toBe(false);
@@ -3487,7 +3510,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   });
 
   test('routineOnly-тул от chat|mcp → VALIDATION; обычный тул гейт не трогает', async () => {
-    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx, userA));
+    const defs = await withIdentity(db, personal(userA), (tx) => buildToolRegistry(tx, userA));
     // routineOnly-дефы продового реестра — orbis_propose (V1.6) и orbis_ask (D42 ОЧ.12).
     // Правило проверяется на них же, а не на подложенном объекте: гейт, отделённый от
     // реестра, однажды разойдётся с ним молча. Пометка именно routineOnly, а не agentOnly:
@@ -3513,7 +3536,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // Fail-closed на СБОРКЕ контекста: молчаливое «грант побеждает» писало бы шаги
     // внешнего исполнителя в прогон рутины, и разобрать такой журнал было бы нечем.
     const grantToken = await issuePatGrant(db, {
-      graphId: userA,
+      identity: personal(userA),
       label: 'двойной субъект',
       scope: 'full',
     });
@@ -3544,8 +3567,8 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
    * перестало бы ловить мутацию гейта — сьют считал бы по своему правилу и не заметил бы,
    * что боевое читает не ту колонку.
    */
-  async function routineCountOf(owner: string): Promise<number> {
-    const rows = await withIdentity(db, owner, (tx) =>
+  async function routineCountOf(owner: GraphId): Promise<number> {
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
         sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND 'orbis/routine' = ANY(aspects)`,
       ),
@@ -3558,7 +3581,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     const first = await seedEntity(owner, { title: 'Утренний обзор', tags: [] });
     const second = await seedEntity(owner, { title: 'Вечерний разбор', tags: [] });
     const oneRoutine = ctxFor({
-      actorUserId: owner,
+      identity: personal(owner),
       entitlements: () => ({ allowed: true, limit: 1 }),
     });
 
@@ -3592,7 +3615,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // Боевой резолвер (limit null) ограничений не ставит
     expect(
       (
-        await dispatchTool(ctxFor({ actorUserId: owner }), 'attach_orbis_routine', {
+        await dispatchTool(ctxFor({ identity: personal(owner) }), 'attach_orbis_routine', {
           entity_id: second.id,
           data: ROUTINE_DATA,
         })
@@ -3607,7 +3630,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   test('лимит считает рутину, объявленную только новой формой — и её же правку лимитом не считает', async () => {
     const owner = await freshGraph();
     const ghostRoutine = newId();
-    await withIdentity(db, owner, (tx) =>
+    await withIdentity(db, personal(owner), (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
           graphId: owner,
@@ -3626,7 +3649,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     expect(await routineCountOf(owner)).toBe(1);
 
     const oneRoutine = ctxFor({
-      actorUserId: owner,
+      identity: personal(owner),
       entitlements: () => ({ allowed: true, limit: 1 }),
     });
     const target = await seedEntity(owner, { title: 'Кандидат во вторую рутину', tags: [] });
@@ -3657,7 +3680,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // своими операциями вместе: с limit 1 и нулём рутин завелись бы обе.
     const owner = await freshGraph();
     const oneRoutine = ctxFor({
-      actorUserId: owner,
+      identity: personal(owner),
       entitlements: () => ({ allowed: true, limit: 1 }),
     });
     const create = (title: string) => ({
@@ -3733,7 +3756,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     // Механизм `verb` (§А4-4) обязателен: `step_count` — служебное свойство прогона
     // (`system_writable`, §А2-5), и раннер пишет его именно так.
     const bySystem = await execute(db, {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'ai',
       source: 'system',
       mechanism: 'verb',
@@ -3880,7 +3903,7 @@ describe('объектный пре-чек рутинной мутации (D42 
   // как правка инструкции act-рутины и получала бы отказ на ровном месте.
   test('значения act-рутины БЕЗ её аспекта правку не запрещают (Р9)', async () => {
     const ghost = await seedEntity(userA, { title: 'Бывшая act-рутина', tags: [] });
-    await withIdentity(db, userA, (tx) =>
+    await withIdentity(db, personal(userA), (tx) =>
       tx
         .update(entities)
         .set({ props: { 'orbis/routine_mode': 'act', 'orbis/routine_stage': 'active' } })
@@ -3962,7 +3985,7 @@ describe('объектный пре-чек рутинной мутации (D42 
 
     // Чат: пре-чек не зовётся вовсе — архивация РУТИНЫ по-прежнему уезжает в карточку
     // владельцу, который тут же на неё смотрит
-    const threadId = await withIdentity(db, userA, (tx) =>
+    const threadId = await withIdentity(db, personal(userA), (tx) =>
       ensureEntityThread(tx, userA, routineId),
     );
     const chat = await dispatchTool(ctxFor({ threadId }), 'entity_update', {
@@ -3986,7 +4009,7 @@ describe('отложка небезопасного действия рутин�
    * здесь не годится.
    */
   async function deferCtx(
-    owner: string,
+    owner: GraphId,
     over: Partial<ToolCallCtx> = {},
   ): Promise<{ ctx: ToolCallCtx; routineId: string; runId: string; threadId: string }> {
     const routineId = await seedRoutine(owner, {
@@ -3999,21 +4022,21 @@ describe('отложка небезопасного действия рутин�
       routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(['entity_update']) },
       ...over,
     });
-    const threadId = await withIdentity(db, owner, (tx) =>
+    const threadId = await withIdentity(db, personal(owner), (tx) =>
       ensureEntityThread(tx, owner, routineId),
     );
     return { ctx, routineId, runId, threadId };
   }
 
   /** Pending-сообщения треда — единицы пачки прогона, как их видит владелец. */
-  async function pendingsIn(owner: string, threadId: string) {
+  async function pendingsIn(owner: GraphId, threadId: string) {
     return (await messagesIn(owner, threadId)).filter(
       (m) => (m.metadata as { pending?: unknown }).pending !== undefined,
     );
   }
 
-  async function archivedOf(owner: string, id: string): Promise<boolean | undefined> {
-    const rows = await withIdentity(db, owner, (tx) =>
+  async function archivedOf(owner: GraphId, id: string): Promise<boolean | undefined> {
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
     );
     return rows[0]?.archived;
@@ -4024,7 +4047,7 @@ describe('отложка небезопасного действия рутин�
     // Тред вызова НАРОЧНО чужой: единица ложится в тред РУТИНЫ (V1.6) — там, где владелец
     // читает её историю, — а не туда, куда пишет audit текущего вызова
     const host = await seedEntity(owner, { title: 'Посторонний тред', tags: [] });
-    const hostThread = await withIdentity(db, owner, (tx) =>
+    const hostThread = await withIdentity(db, personal(owner), (tx) =>
       ensureEntityThread(tx, owner, host.id),
     );
     const { ctx, routineId, runId, threadId } = await deferCtx(owner, { threadId: hostThread });
@@ -4107,7 +4130,7 @@ describe('отложка небезопасного действия рутин�
 
     // Владелец сдвинул статус — ВТОРОЕ снятие предусловий дало бы `in:['in_progress']`
     const own = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -4187,7 +4210,7 @@ describe('отложка небезопасного действия рутин�
     const { ctx, threadId } = await deferCtx(owner);
     const target = await seedEntity(owner, { title: 'Уже в архиве', tags: [] });
     const own = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
@@ -4223,14 +4246,14 @@ describe('отложка небезопасного действия рутин�
 
     // Владелец архивировал сам — предусловие, снятое при постановке, больше не выполнено
     const own = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
     });
     expect(own.ok).toBe(true);
 
-    const applied = await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    const applied = await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect(applied.ok).toBe(false);
     if (applied.ok) return;
     expect(applied.error.code).toBe('CONFLICT');
@@ -4244,12 +4267,14 @@ describe('отложка небезопасного действия рутин�
     // смотрит на неё сейчас, и ни единицей пачки, ни дедупом по содержимому она не стала
     const owner = await freshGraph();
     const host = await seedEntity(owner, { title: 'Хост-тред', tags: [] });
-    const threadId = await withIdentity(db, owner, (tx) => ensureEntityThread(tx, owner, host.id));
+    const threadId = await withIdentity(db, personal(owner), (tx) =>
+      ensureEntityThread(tx, owner, host.id),
+    );
     const target = await seedEntity(owner, { title: 'Цель чата', tags: [] });
 
     for (const source of ['chat', 'mcp'] as const) {
       const r = await dispatchTool(
-        ctxFor({ actorUserId: owner, source, threadId }),
+        ctxFor({ identity: personal(owner), source, threadId }),
         'entity_update',
         { id: target.id, archived: true },
       );
@@ -4312,9 +4337,9 @@ describe('§С2-1: мутации реестра — уровень подтве
   const { routineCtx, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 
   /** Своё свойство владельца — через ту же операцию исполнителя, что зовут тул и роутер. */
-  async function ownProperty(owner: string, ru: string): Promise<{ id: string; key: string }> {
+  async function ownProperty(owner: GraphId, ru: string): Promise<{ id: string; key: string }> {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -4336,8 +4361,8 @@ describe('§С2-1: мутации реестра — уровень подтве
   }
 
   /** Строка реестра как она лежит: пробой «мутация НЕ применилась» служит она, а не ответ. */
-  async function registryRow(owner: string, id: string) {
-    const rows = (await withIdentity(db, owner, (tx) =>
+  async function registryRow(owner: GraphId, id: string) {
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`
         SELECT label, status, merged_into FROM property_definitions
          WHERE graph_id = ${owner}::uuid AND id = ${id}`),
@@ -4346,8 +4371,8 @@ describe('§С2-1: мутации реестра — уровень подтве
   }
 
   /** Сколько СВОИХ строк свойств у владельца — проба «мутация ещё не применилась». */
-  async function ownPropertyCount(owner: string): Promise<number> {
-    const rows = (await withIdentity(db, owner, (tx) =>
+  async function ownPropertyCount(owner: GraphId): Promise<number> {
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
         sql`SELECT count(*)::int AS n FROM property_definitions WHERE graph_id = ${owner}::uuid`,
       ),
@@ -4355,8 +4380,8 @@ describe('§С2-1: мутации реестра — уровень подтве
     return Number(rows[0]?.n ?? 0);
   }
 
-  async function deltaRowsOf(owner: string): Promise<number> {
-    const rows = (await withIdentity(db, owner, (tx) =>
+  async function deltaRowsOf(owner: GraphId): Promise<number> {
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
         sql`SELECT count(*)::int AS n FROM registry_deltas WHERE graph_id = ${owner}::uuid`,
       ),
@@ -4365,7 +4390,7 @@ describe('§С2-1: мутации реестра — уровень подтве
   }
 
   /** Живой прогон живой act-рутины с названным белым списком — «садовник словаря». */
-  async function gardener(owner: string, allowed: string[]) {
+  async function gardener(owner: GraphId, allowed: string[]) {
     const routineId = await seedRoutine(owner, {
       title: 'Садовник словаря',
       routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': allowed },
@@ -4375,13 +4400,13 @@ describe('§С2-1: мутации реестра — уровень подтве
       clock: () => T0,
       routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(allowed) },
     });
-    const threadId = await withIdentity(db, owner, (tx) =>
+    const threadId = await withIdentity(db, personal(owner), (tx) =>
       ensureEntityThread(tx, owner, routineId),
     );
     return { ctx, routineId, runId, threadId };
   }
 
-  async function pendingsOf(owner: string, threadId: string) {
+  async function pendingsOf(owner: GraphId, threadId: string) {
     return (await messagesIn(owner, threadId)).filter(
       (m) => (m.metadata as { pending?: unknown }).pending !== undefined,
     );
@@ -4389,7 +4414,7 @@ describe('§С2-1: мутации реестра — уровень подтве
 
   test('property_create proposed из чата (actor model) → preview: исполнено + карточка; от владельца через UI-роутер → execute без карточки', async () => {
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const input = {
       label: { ru: 'Усилие' },
       description: { ru: 'Сколько сил отнимет дело' },
@@ -4398,7 +4423,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     };
 
     const r = await dispatchTool(
-      ctxFor({ actorUserId: owner, threadId }),
+      ctxFor({ identity: personal(owner), threadId }),
       'property_create',
       input,
     );
@@ -4419,7 +4444,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // адресует preview не-владельцу). Проба не подменяет роутер своим `execute`: она зовёт
     // ту самую процедуру, которой пользуется экран.
     const caller = createCallerFactory(appRouter)({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       db,
       clientVersion: null,
@@ -4435,14 +4460,18 @@ describe('§С2-1: мутации реестра — уровень подтве
 
   test('property_merge из чата → explicit-confirmation: карточка-запрос, реестр НЕ тронут; approve исполняет', async () => {
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
 
-    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'property_merge', {
-      source: source.id,
-      into: into.id,
-    });
+    const r = await dispatchTool(
+      ctxFor({ identity: personal(owner), threadId }),
+      'property_merge',
+      {
+        source: source.id,
+        into: into.id,
+      },
+    );
     expect(r.status).toBe('pending_confirmation');
     if (r.status !== 'pending_confirmation') return;
     // КАРТОЧКА НАЗЫВАЕТ СОДЕРЖАНИЕ, А НЕ ИМЯ ТУЛА (гейт-ревью Задачи 16). §С8-11 требует у
@@ -4470,7 +4499,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
 
     // Отказ ведёт к выходу: подтверждение владельца исполняет ровно этот вызов.
-    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect((await registryRow(owner, source.id))?.merged_into).toBe(into.id);
   });
 
@@ -4479,7 +4508,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // «вместо» на «склеиваются»: владелец подписывает ВСЁ, что подняло уровень. Здесь
     // поводов два и они из разных ветвей — реестр (ряд 4a §С2-1) и автономия (V1.10).
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
     const routineId = await seedRoutine(owner, {
@@ -4487,7 +4516,7 @@ describe('§С2-1: мутации реестра — уровень подтве
       routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
     });
 
-    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'batch_execute', {
+    const r = await dispatchTool(ctxFor({ identity: personal(owner), threadId }), 'batch_execute', {
       batch_id: newId(),
       operations: [
         { tool: 'property_merge', input: { source: source.id, into: into.id } },
@@ -4552,7 +4581,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(await pendingsOf(owner, threadId)).toHaveLength(1);
 
     // …а «Принять» исполняет отложенное — путь до конца, а не тупик.
-    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect((await registryRow(owner, source.id))?.merged_into).toBe(into.id);
   });
 
@@ -4597,7 +4626,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // До решения владельца строки в реестре нет.
     expect(await ownPropertyCount(owner)).toBe(0);
 
-    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect(await ownPropertyCount(owner)).toBe(1);
   });
 
@@ -4628,7 +4657,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const owner = await freshGraph();
     const { ctx } = await gardener(owner, ['property_update']);
     const first = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -4657,7 +4686,7 @@ describe('§С2-1: мутации реестра — уровень подтве
 
     // Владелец отклоняет неиспользованное предложение — строка удаляется, key свободен…
     const dropped = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'property_update', input: { id: firstId, status: 'deprecated' } }],
@@ -4665,7 +4694,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     if (!dropped.ok) throw new Error(`отклонение: ${dropped.error.message}`);
     // …и тот же key занимает ДРУГОЕ свойство другого смысла.
     const second = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -4685,7 +4714,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const secondId = (second.results[0] as { property: string }).property;
 
     // «Принять» честно упирается в исчезнувшую строку, а не правит однофамильца.
-    const applied = await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    const applied = await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect(applied.ok ? 'ok' : applied.error.code).toBe('NOT_FOUND');
     expect((await registryRow(owner, secondId))?.label).toEqual({ ru: 'Однофамилец' });
   });
@@ -4695,9 +4724,9 @@ describe('§С2-1: мутации реестра — уровень подтве
     // `property_update{status}` от AI даёт `explicit-confirmation` → карточка в треде, и она
     // ждёт решения владельца дольше всего. Первоисточник (A5-Minor-1) называл ОБЕ точки.
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const first = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -4717,16 +4746,20 @@ describe('§С2-1: мутации реестра — уровень подтве
     const firstId = (first.results[0] as { property: string }).property;
 
     // Модель просит смену статуса ПО KEY — карточка-запрос владельцу.
-    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'property_update', {
-      id: 'user/effort',
-      status: 'deprecated',
-    });
+    const r = await dispatchTool(
+      ctxFor({ identity: personal(owner), threadId }),
+      'property_update',
+      {
+        id: 'user/effort',
+        status: 'deprecated',
+      },
+    );
     expect(r.status).toBe('pending_confirmation');
     if (r.status !== 'pending_confirmation') return;
 
     // Владелец отклоняет неиспользованное предложение — строка удаляется, key свободен…
     const dropped = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'property_update', input: { id: firstId, status: 'deprecated' } }],
@@ -4734,7 +4767,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     if (!dropped.ok) throw new Error(`отклонение: ${dropped.error.message}`);
     // …и тот же key занимает ДРУГОЕ свойство.
     const second = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -4753,7 +4786,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     if (!second.ok) throw new Error(`однофамилец: ${second.error.message}`);
     const secondId = (second.results[0] as { property: string }).property;
 
-    const applied = await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    const applied = await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect(applied.ok ? 'ok' : applied.error.code).toBe('NOT_FOUND');
     expect((await registryRow(owner, secondId))?.status).toBe('active');
   });
@@ -4795,7 +4828,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Диспатч доведёт до него сам, как только тул появится: уровень `system-object` поднимает
     // ряд 4a до explicit, а `level !== 'execute'` включает пре-чек.
     const owner = await freshGraph();
-    const ctx = ctxFor({ actorUserId: owner, actorKind: 'agent', source: 'routine' });
+    const ctx = ctxFor({ identity: personal(owner), actorKind: 'agent', source: 'routine' });
     const forbidden = async (tool: string, input: Record<string, unknown>) =>
       routineDeferForbidden(
         ctx,
@@ -4875,15 +4908,19 @@ describe('§С2-1: мутации реестра — уровень подтве
   test('тот же aspect_delta_set из ЧАТА → карточка-запрос, а не молчаливое исполнение', async () => {
     // Запрет по объекту адресован ФОНУ; в чате владелец стоит рядом и решает карточкой.
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
-    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'aspect_delta_set', {
-      aspect: 'orbis/task',
-      delta: { icon: '📌' },
-    });
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(
+      ctxFor({ identity: personal(owner), threadId }),
+      'aspect_delta_set',
+      {
+        aspect: 'orbis/task',
+        delta: { icon: '📌' },
+      },
+    );
     expect(r.status).toBe('pending_confirmation');
     expect(await deltaRowsOf(owner)).toBe(0);
     if (r.status !== 'pending_confirmation') return;
-    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect(await deltaRowsOf(owner)).toBe(1);
   });
 
@@ -4968,7 +5005,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(r.card.rows).toEqual([{ field: 'setsDelta', after: '{"my_open":["active"]}' }]);
     expect(await deltaRowsOf(owner)).toBe(0);
     // …и «Принять» доводит путь до конца.
-    await approvePending(db, { graphId: owner, pendingId: r.pendingId });
+    await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
     expect(await deltaRowsOf(owner)).toBe(1);
     expect(await pendingsOf(owner, threadId)).toHaveLength(1);
   });
@@ -4980,9 +5017,9 @@ describe('§С2-1: мутации реестра — уровень подтве
     // ради неё, а ради ЖИВОГО пути: юнит задачи 14 зовёт `registryOperationSummary` напрямую и
     // не отвечает на вопрос, доносит ли её до карточки чата сам диспатч.
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const r = await dispatchTool(
-      ctxFor({ actorUserId: owner, threadId }),
+      ctxFor({ identity: personal(owner), threadId }),
       'contract_sets_delta_set',
       { contract: 'orbis/completable', setsDelta: { my_open: ['active'] } },
     );
@@ -4998,14 +5035,18 @@ describe('§С2-1: мутации реестра — уровень подтве
     // Классификатор по `source` не ветвится намеренно — внешний агент не должен получать
     // более широкие права, придя другим транспортом. Пин на обоих концах шкалы.
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const source = await ownProperty(owner, 'Усилие');
     const into = await ownProperty(owner, 'Уровень усилия');
-    const token = await issuePatGrant(db, { graphId: owner, scope: 'full', label: 'полный' });
+    const token = await issuePatGrant(db, {
+      identity: personal(owner),
+      scope: 'full',
+      label: 'полный',
+    });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный full-PAT не прошёл verifyBearer');
     const ctx = ctxFor({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'agent',
       source: 'mcp',
       threadId,
@@ -5049,8 +5090,8 @@ describe('§С2-1: мутации реестра — уровень подтве
 
   test('aspect_create из чата от модели — preview: своя строка исполнена и показана карточкой', async () => {
     const owner = await freshGraph();
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
-    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'aspect_create', {
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ identity: personal(owner), threadId }), 'aspect_create', {
       key: 'user/from-chat',
       label: { ru: 'Из чата' },
       description: { ru: 'x' },
@@ -5063,13 +5104,13 @@ describe('§С2-1: мутации реестра — уровень подтве
       mode: 'preview',
       summary: 'Заведение аспекта «Из чата»',
     });
-    const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     expect(reg.aspects.has('user/from-chat')).toBe(true);
   });
 
   test('снимок единицы: тулы аспектов дают адресные строки, а не родовую «тул → конверт»', async () => {
     const own = await freshGraph();
-    const snap = await withIdentity(db, own, (tx) =>
+    const snap = await withIdentity(db, personal(own), (tx) =>
       snapshotRegistryUnit(tx, own, 'aspect_implements_remove', {
         aspect: 'user/gig',
         contract: 'orbis/when',
@@ -5084,7 +5125,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const own = await freshGraph();
     const run = (tool: string, input: unknown) =>
       execute(db, {
-        actorUserId: own,
+        identity: personal(own),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],
@@ -5102,7 +5143,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     });
     if (!bound.ok) throw new Error(`aspect_implements_set: ${bound.error.code}`);
 
-    const snap = await withIdentity(db, own, (tx) =>
+    const snap = await withIdentity(db, personal(own), (tx) =>
       snapshotRegistryUnit(tx, own, 'aspect_implements_set', {
         aspect: 'user/snap-gig',
         implements: [{ contract: 'orbis/completable' }],
@@ -5112,7 +5153,7 @@ describe('§С2-1: мутации реестра — уровень подтве
       { field: 'implements', before: 'orbis/when', after: 'orbis/completable' },
     ]);
     // Пустой список — «станет» читается как снятие, а не как падение на `JSON.stringify`.
-    const emptied = await withIdentity(db, own, (tx) =>
+    const emptied = await withIdentity(db, personal(own), (tx) =>
       snapshotRegistryUnit(tx, own, 'aspect_implements_set', {
         aspect: 'user/snap-gig',
         implements: [],

@@ -4,11 +4,13 @@
 // `gf_`/`gp_`: греп-доказательство задачи 10 ищет их по всему дереву и обязано находить только здесь,
 // в данных снимка поверхностей и в заголовках/комментариях самого теста гейта (`gate-c8-18.test.ts`,
 // Р-К-54) — больше нигде.
+
+import type { GraphId } from '@orbis/shared';
 import { addDays, ROLE_DEPENDENCY } from '@orbis/shared';
 import { execute } from '../../src/executor/executor';
 import { appRouter } from '../../src/router';
 import { createCallerFactory } from '../../src/trpc';
-import { appDb, type CustomAspectSpec } from '../helpers';
+import { appDb, type CustomAspectSpec, personal } from '../helpers';
 import { surfaceEntityId } from '../surfaces';
 
 export const GATE_FIN_KEY = 'user/gate-fin';
@@ -182,7 +184,7 @@ export const GATE_SURFACE_AMOUNT = '340.00';
  * Все даты ПРИБИТЫ относительно `SURFACE_TODAY` (`2026-07-03`): `seedGateWorld` ниже считает
  * «сегодня» от системных часов, и снятый на нём эталон жил бы ровно сутки.
  */
-export async function seedGateSurfaceRows(graphId: string): Promise<void> {
+export async function seedGateSurfaceRows(graphId: GraphId): Promise<void> {
   const { db, client } = appDb();
   try {
     const id = (slug: string) => surfaceEntityId(graphId, slug);
@@ -220,7 +222,7 @@ export async function seedGateSurfaceRows(graphId: string): Promise<void> {
     ];
     for (const op of ops) {
       const r = await execute(db, {
-        actorUserId: graphId,
+        identity: personal(graphId),
         actorKind: 'owner',
         source: 'ui',
         operations: [op],
@@ -260,11 +262,11 @@ const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
  * что аспект работает на боевых путях, и обстановка, положенная мимо них, этого не докажет.
  * Своё подключение — как у `seedCustomAspect`: у фикстуры транзакции на руках нет.
  */
-export async function seedGateWorld(graphId: string): Promise<GateWorld> {
+export async function seedGateWorld(graphId: GraphId): Promise<GateWorld> {
   const { db, client } = appDb();
   try {
     const caller = createCallerFactory(appRouter)({
-      actorUserId: graphId,
+      identity: personal(graphId),
       actorKind: 'owner',
       db,
       clientVersion: null,

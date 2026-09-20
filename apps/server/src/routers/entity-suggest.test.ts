@@ -3,9 +3,10 @@
 // entity.resolveRefs (заголовки чипов ПАЧКОЙ). Обе процедуры — чтение под withIdentity
 // (RLS, §4.10), входы ТОЛЬКО tRPC: в реестре тулов (§9.2) их нет и не должно быть.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -15,8 +16,8 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 /** Caller от лица владельца: ctx как в бою — actorUserId + db (§9.1). */
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 type Caller = ReturnType<typeof callerFor>;
 

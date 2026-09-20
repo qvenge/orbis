@@ -38,12 +38,13 @@
 // строка проходит стадию 2 (`validateEntityProps` по эффективному реестру) — ту же, что и
 // любая правка владельца, а посеянная сырым SQL она была бы ДОВЕРЕННОСТЬЮ
 // (`orbis/routine_mode`, `orbis/allowed_tools`), не прошедшей ни одного валидатора.
-import { ORBIS_NAMESPACE } from '@orbis/shared';
+import { type GraphId, ORBIS_NAMESPACE } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
+import type { Identity } from '../identity';
 
 /**
  * Слаг садовника. Формула id — та же, что у категорий и смарт-листов (`onboarding.ts`):
@@ -53,7 +54,7 @@ import { execute } from '../executor/executor';
 export const GARDENER_SLUG = 'dictionary-gardener';
 
 /** id садовника у этого владельца — детерминированный, как `seedCategoryId`. */
-export function seedRoutineId(graphId: string, slug: string): string {
+export function seedRoutineId(graphId: GraphId, slug: string): string {
   return uuidv5(`${graphId.toLowerCase()}:seed-routine:${slug}`, ORBIS_NAMESPACE);
 }
 
@@ -159,17 +160,17 @@ export interface GardenerSeedResult {
  */
 export async function seedGardener(
   db: Db,
-  graphId: string,
+  who: Identity,
   clock: () => Date = () => new Date(),
 ): Promise<GardenerSeedResult> {
-  const id = seedRoutineId(graphId, GARDENER_SLUG);
-  const existing = await withIdentity(db, graphId, (tx) =>
-    tx.execute(sql`SELECT 1 FROM entities WHERE id = ${id}::uuid AND graph_id = ${graphId}`),
+  const id = seedRoutineId(who.graph, GARDENER_SLUG);
+  const existing = await withIdentity(db, who, (tx) =>
+    tx.execute(sql`SELECT 1 FROM entities WHERE id = ${id}::uuid AND graph_id = ${who.graph}`),
   );
   if (existing.length > 0) return { seeded: false, id };
 
   const r = await execute(db, {
-    actorUserId: graphId,
+    identity: who,
     actorKind: 'owner',
     source: 'system',
     mechanism: 'seed',

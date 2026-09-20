@@ -4,6 +4,7 @@
 // идемпотентный batch с детерминированным batch_id = postFinancialBatchId(instance_id),
 // авто-привязка к конверту — бюджет-хуком executor'а (A4) в том же action.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId, postFinancialBatchId, ROLE_INSTANCE_OF, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -11,6 +12,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -47,13 +49,13 @@ afterAll(async () => {
 });
 
 function req(
-  user: string,
+  user: GraphId,
   tool: string,
   input: unknown,
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool, input }],
@@ -66,14 +68,14 @@ function ok(r: ExecuteResult): ExecuteOk {
   return r;
 }
 
-async function createEntity(user: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function createEntity(user: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   const r = ok(await execute(db, req(user, 'entity_create', { tags: [], ...input }), { sink }));
   return r.results[0] as WireEntity;
 }
 
 /** Recurring-шаблон подписки: daily с 09:00 Москвы + orbis/financial (§2.8). */
 async function createFinTemplate(
-  user: string,
+  user: GraphId,
   categoryRef: string,
   startDate: string,
   amount = '500.00',
@@ -96,7 +98,7 @@ async function createFinTemplate(
 }
 
 /** Конверт категории на июль 2026 (период включает даты инстансов тестов). */
-async function createEnvelope(user: string, categoryRef: string): Promise<string> {
+async function createEnvelope(user: GraphId, categoryRef: string): Promise<string> {
   const e = await createEntity(user, {
     title: 'Конверт',
     props: {
@@ -177,8 +179,14 @@ async function actionMessageCount(actionId: string): Promise<number> {
 }
 
 /** Материализация одного дня startDate (окно в один день). */
-async function materializeOne(user: string, templateId: string, date: string): Promise<string> {
-  const r = await materializeInstances({ db, graphId: user, from: date, to: date, today: date });
+async function materializeOne(user: GraphId, templateId: string, date: string): Promise<string> {
+  const r = await materializeInstances({
+    db,
+    identity: personal(user),
+    from: date,
+    to: date,
+    today: date,
+  });
   if (r.created !== 1) throw new Error(`ожидался 1 инстанс, создано ${r.created}`);
   return recurringInstanceId(templateId, date);
 }
@@ -191,7 +199,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
     await materializeInstances({
       db,
-      graphId: user,
+      identity: personal(user),
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -202,7 +210,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await spentOf(envelopeId)).toBe('0');
 
-    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(r.posted).toBe(1);
 
     // planned снят, остальные поля financial не тронуты (shallow-merge §9.2)
@@ -231,7 +239,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
     await materializeInstances({
       db,
-      graphId: user,
+      identity: personal(user),
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -250,7 +258,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       aspects: ['orbis/financial'],
     });
 
-    const r = await postDueInstances({ db, graphId: user, today: '2026-07-02' });
+    const r = await postDueInstances({ db, identity: personal(user), today: '2026-07-02' });
     expect(r.posted).toBe(2); // 07-01 (просрочен) и 07-02 (сегодня)
 
     expect((await propsOf(recurringInstanceId(templateId, '2026-07-01')))['orbis/planned']).toBe(
@@ -271,7 +279,8 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // envelopeForCategory читает конверт без конвейера §2.8 (planned-инстансы не постятся
     // побочно) и исключает 07-03 именно по planned — его occurred_on ≤ реального «сегодня».
     expect(
-      (await envelopeForCategory(db, user, { categoryId: cat, date: '2026-07-03' }))?.spent,
+      (await envelopeForCategory(db, personal(user), { categoryId: cat, date: '2026-07-03' }))
+        ?.spent,
     ).toBe('1000.00');
     // ручная покупка не тронута, batch для неё не заводился
     expect((await propsOf(manual.id))['orbis/planned']).toBe(true);
@@ -289,11 +298,11 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = await createFinTemplate(user, cat, '2026-07-01');
     const instanceId = await materializeOne(user, templateId, '2026-07-01');
 
-    const first = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const first = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(first.posted).toBe(1);
 
     // Повтор: planned уже false → нечего постить
-    const second = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const second = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(second.posted).toBe(0);
 
     // Владелец вернул planned=true правкой; batch_id детерминирован → повторный вызов
@@ -309,7 +318,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
         { sink },
       ),
     );
-    const third = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const third = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(third.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await actionMessageCount(postFinancialBatchId(instanceId))).toBe(1);
@@ -325,7 +334,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // Пользователь пропускает ожидаемую операцию — архивирует инстанс до даты (§2.8)
     ok(await execute(db, req(user, 'entity_update', { id: instanceId, archived: true }), { sink }));
 
-    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(r.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await actionById(postFinancialBatchId(instanceId))).toBeUndefined();
@@ -358,7 +367,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     );
     expect(await budgetParents(instanceId)).toEqual([]);
 
-    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(r.posted).toBe(1);
     // transition снял planned И привязал к конверту (binding-операция дописана A4-хуком
     // в ТОТ ЖЕ action — виден relation_create в операциях batch)
@@ -370,13 +379,13 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
 
     // §2.8: «уже выполненный transition можно отменить обычным Undo» — точечный
     // undoAction по детерминированному action_id (undoLast системные пропускает)
-    const u = await undoAction(db, { actorUserId: user, actionId: batchId });
+    const u = await undoAction(db, { identity: personal(user), actionId: batchId });
     expect(u.ok).toBe(true);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await budgetParents(instanceId)).toEqual([]); // прежняя (пустая) привязка
 
     // Undo «липкий»: batch_id детерминирован → повтор postDue реплеится по audit-PK
-    const again = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const again = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(again.posted).toBe(0);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
   });
@@ -394,8 +403,8 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       const instanceId = await materializeOne(user, templateId, '2026-07-01');
 
       const [a, b] = await Promise.all([
-        postDueInstances({ db, graphId: user, today: '2026-07-01' }),
-        postDueInstances({ db, graphId: user, today: '2026-07-01' }),
+        postDueInstances({ db, identity: personal(user), today: '2026-07-01' }),
+        postDueInstances({ db, identity: personal(user), today: '2026-07-01' }),
       ]);
 
       // Ровно один применил переход; второй сошёлся в replay по audit-PK (01 §3.3)
@@ -419,7 +428,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const detached = newId();
     const notPlanned = newId();
 
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(entities).values([
         rawEntityRow({
           graphId: user,
@@ -455,7 +464,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const templateId = (
       await createEntity(user, { title: 'Шаблон пробы', tags: [], aspects: ['orbis/note'] })
     ).id;
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(relations).values(
         [detached, notPlanned].map((target) => ({
           id: newId(),
@@ -466,7 +475,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       ),
     );
 
-    const r = await postDueInstances({ db, graphId: user, today: '2026-07-01' });
+    const r = await postDueInstances({ db, identity: personal(user), today: '2026-07-01' });
     expect(r.posted).toBe(0);
     // Ни одна строка не тронута: у первой `planned` остался `true`, у второй его как не
     // было, так и нет (переход записал бы `false`).
@@ -500,14 +509,24 @@ describe('tRPC budget.postDue (заготовка роутера, наполне
     const templateId = await createFinTemplate(user, cat, today);
     const instanceId = await materializeOne(user, templateId, today);
 
-    const caller = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+    const caller = createCaller({
+      identity: personal(user),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
     const r = await caller.budget.postDue();
     expect(r.posted).toBe(1);
     expect((await propsOf(instanceId))['orbis/planned']).toBe(false);
     expect(await budgetParents(instanceId)).toEqual([envelope.id]);
 
     // Мутационная поверхность tRPC — поверхность владельца (§9.3)
-    const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
+    const agent = createCaller({
+      identity: personal(user),
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+    });
     await expect(agent.budget.postDue()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   }, 20_000);
 });

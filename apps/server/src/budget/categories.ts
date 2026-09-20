@@ -12,7 +12,7 @@
 // Б-1 нет, В-2), поэтому запрос `ownerCategories` переехал сюда ЦЕЛИКОМ и дословно, а не был
 // выражен декларацией.
 
-import type { BudgetStatusResult } from '@orbis/shared';
+import type { BudgetStatusResult, GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 
@@ -66,7 +66,7 @@ export async function categoriesById(tx: Tx, ids: string[]): Promise<Map<string,
  */
 export async function ownerCategories(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
 ): Promise<BudgetStatusResult['categories']> {
   const rows = (await tx.execute(sql`
     SELECT id, title, props->>'orbis/spend_class' AS spend_class

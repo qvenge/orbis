@@ -12,6 +12,7 @@
 // и из него же разбирает текст запроса `query/parse-text.ts`. Один снимок на запрос, а не
 // два чтения: реестр читается пятью запросами, и второй его загрузкой ради разбора текста
 // платил бы каждый вызов entity.query.
+import type { GraphId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -38,11 +39,11 @@ export function isValidTimeZone(timezone: string): boolean {
  * 500 на КАЖДОМ чтении графа (а у планировщика — сломанный тик по всем рутинам владельца),
  * поэтому мусор деградирует до дефолта, а не роняет вызывающего.
  */
-export async function ownerTimeZone(tx: Tx, graphId: string): Promise<string> {
+export async function ownerTimeZone(tx: Tx, graph: GraphId): Promise<string> {
   const rows = await tx
     .select({ timezone: userSettings.timezone })
     .from(userSettings)
-    .where(eq(userSettings.graphId, graphId));
+    .where(eq(userSettings.graphId, graph));
   const stored = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
   return isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
 }
@@ -61,10 +62,10 @@ export function todayInTimeZone(timeZone: string, now: Date = new Date()): strin
 
 export async function queryContext(
   tx: Tx,
-  actorUserId: string,
+  graph: GraphId,
   thisEntityId: string | null,
 ): Promise<CompileCtx> {
-  const reg = await effectiveRegistry(tx, actorUserId);
-  const timeZone = await ownerTimeZone(tx, actorUserId);
-  return { graphId: actorUserId, reg, thisEntityId, today: todayInTimeZone(timeZone), timeZone };
+  const reg = await effectiveRegistry(tx, graph);
+  const timeZone = await ownerTimeZone(tx, graph);
+  return { graphId: graph, reg, thisEntityId, today: todayInTimeZone(timeZone), timeZone };
 }

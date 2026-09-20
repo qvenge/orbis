@@ -83,7 +83,7 @@ async function verifyViaLegacySecret(token: string): Promise<JWTPayload | null> 
   }
 }
 
-/** Валидный токен → sub (actorUserId); невалидный/неверифицируемый → null, без throw. */
+/** Валидный токен → `sub` (id АККАУНТА, из него резолвер 1 делает пару); иначе null, без throw. */
 export async function verifyAccessToken(token: string): Promise<string | null> {
   const payload = (await verifyViaJwks(token)) ?? (await verifyViaLegacySecret(token));
   const sub = payload?.sub;

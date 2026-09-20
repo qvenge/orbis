@@ -45,7 +45,7 @@ export const importRouter = router({
     .mutation(async ({ ctx, input }): Promise<ImportAnalyzeResult> => {
       try {
         return await analyzeCsv(ctx.db, ctx.ai ?? defaultAiDeps(), {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           sampleRows: input.sampleRows,
         });
       } catch (e) {
@@ -59,7 +59,7 @@ export const importRouter = router({
     .input(importReviewInput)
     .mutation(async ({ ctx, input }): Promise<ImportReviewResult> => {
       try {
-        return await reviewImport(ctx.db, ctx.actorUserId, input, importDeps(ctx));
+        return await reviewImport(ctx.db, ctx.identity, input, importDeps(ctx));
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
@@ -71,7 +71,7 @@ export const importRouter = router({
     .input(importConfirmInput)
     .mutation(async ({ ctx, input }): Promise<ImportConfirmResult> => {
       try {
-        return await confirmImport(ctx.db, ctx.actorUserId, input, importDeps(ctx));
+        return await confirmImport(ctx.db, ctx.identity, input, importDeps(ctx));
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;

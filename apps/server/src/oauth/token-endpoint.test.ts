@@ -12,7 +12,7 @@ import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import type { GrantScope } from '@orbis/shared';
 import { Hono } from 'hono';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import type { AiDeps } from '../ai/send-message';
 import { createApp } from '../app';
 import type { Db } from '../db/client';
@@ -88,7 +88,7 @@ async function seedCode(
     .values({ clientId, clientName: 'Claude Code', redirectUris: [REDIRECT] })
     .onConflictDoNothing();
   const code = await createAuthorizationCode(db, {
-    graphId: await freshGraph(),
+    identity: personal(await freshGraph()),
     clientId,
     label: 'проба',
     redirectUri: REDIRECT,
@@ -163,7 +163,7 @@ test('выданный access-токен действительно открыв
   if (!token) throw new Error('обмен не вернул access_token');
   const identity = await verifyBearer(db, token);
   expect(identity).not.toBeNull();
-  expect(identity?.graphId).toBe((await onlyGrant()).graphId);
+  expect(identity?.graphId as string).toBe((await onlyGrant()).graphId);
 });
 
 // Требование, вытекающее из Task 2: повторное предъявление кода наш модуль трактует как

@@ -8,8 +8,9 @@
 // одного тула» — это утверждения о том, ЧТО ВИДИТ И МОЖЕТ МОДЕЛЬ ПРОГОНА, и проверить их
 // можно только там, где реестр тулов собирает раннер по посеянным свойствам рутины.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { type RoutineRow, routineById } from '../agent-loop/queries';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
@@ -37,8 +38,8 @@ const createCaller = createCallerFactory(appRouter);
 
 const MODEL = 'scripted-model';
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {
@@ -73,9 +74,9 @@ function toolUse(name: string, input: Record<string, unknown>): LLMResponse {
 }
 
 /** Своё свойство владельца — той же операцией исполнителя, что зовут тул и роутер. */
-async function ownProperty(owner: string, ru: string): Promise<{ id: string; key: string }> {
+async function ownProperty(owner: GraphId, ru: string): Promise<{ id: string; key: string }> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     operations: [
@@ -96,8 +97,8 @@ async function ownProperty(owner: string, ru: string): Promise<{ id: string; key
 }
 
 /** Строки реестра как они лежат: «слияние НЕ применилось» доказывает база, а не ответ тула. */
-async function mergedIntoOf(owner: string, id: string): Promise<unknown> {
-  const rows = (await withIdentity(db, owner, (tx) =>
+async function mergedIntoOf(owner: GraphId, id: string): Promise<unknown> {
+  const rows = (await withIdentity(db, personal(owner), (tx) =>
     tx.execute(
       sql`SELECT merged_into FROM property_definitions
            WHERE graph_id = ${owner}::uuid AND id = ${id}`,
@@ -107,8 +108,8 @@ async function mergedIntoOf(owner: string, id: string): Promise<unknown> {
 }
 
 /** Сущности владельца с аспектом рутины — «сколько садовников в графе» спрашиваем у графа. */
-async function routineRows(owner: string): Promise<Array<{ id: string; title: string }>> {
-  return (await withIdentity(db, owner, (tx) =>
+async function routineRows(owner: GraphId): Promise<Array<{ id: string; title: string }>> {
+  return (await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT id, title FROM entities
                     WHERE graph_id = ${owner}::uuid AND aspects @> ARRAY['orbis/routine']::text[]
                     ORDER BY created_at`),
@@ -116,8 +117,8 @@ async function routineRows(owner: string): Promise<Array<{ id: string; title: st
 }
 
 /** Карточки пачки в треде рутины — единица пачки наблюдается строкой в БД, а не ответом. */
-async function pendingsOf(owner: string, threadId: string) {
-  const rows = (await withIdentity(db, owner, (tx) =>
+async function pendingsOf(owner: GraphId, threadId: string) {
+  const rows = (await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT metadata FROM chat_messages
                     WHERE thread_id = ${threadId}::uuid AND metadata ? 'pending'
                     ORDER BY created_at`),
@@ -143,19 +144,21 @@ function nextBucket(): string {
  * Возвращает всё, что нужно потребителю для проб У ПОТРЕБИТЕЛЯ (тред, прогон, исход).
  */
 async function runGardener(
-  owner: string,
+  owner: GraphId,
   provider: LLMProvider,
 ): Promise<{ end: RunEnd; runId: string; threadId: string; routineId: string; run: RunProps }> {
   const routineId = seedRoutineId(owner, GARDENER_SLUG);
   const bucket = nextBucket();
   const { runId } = await seedRoutineRun(owner, { routineId, bucket });
-  const routine = await withIdentity(db, owner, (tx) => routineById(tx, routineId));
+  const routine = await withIdentity(db, personal(owner), (tx) => routineById(tx, routineId));
   if (routine === null) throw new Error('садовник не найден — сид не отработал');
   const end = await runRoutineRun(
     { db, provider, model: MODEL, clock: () => T0 },
-    { graphId: owner, routine: routine satisfies RoutineRow, runId, bucket },
+    { identity: personal(owner), routine: routine satisfies RoutineRow, runId, bucket },
   );
-  const threadId = await withIdentity(db, owner, (tx) => ensureEntityThread(tx, owner, routineId));
+  const threadId = await withIdentity(db, personal(owner), (tx) =>
+    ensureEntityThread(tx, owner, routineId),
+  );
   const run = (await propsOf(owner, runId)) as unknown as RunProps;
   return { end, runId, threadId, routineId, run };
 }
@@ -178,7 +181,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
     expect(await routineRows(owner)).toHaveLength(1);
 
     // …и прямой повтор второй фазы тоже: идемпотентность держит проба по PK, а не guard.
-    expect(await seedGardener(db, owner)).toEqual({
+    expect(await seedGardener(db, personal(owner))).toEqual({
       seeded: false,
       id: seedRoutineId(owner, GARDENER_SLUG),
     });
@@ -190,7 +193,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
     // отказ валидатора — что угодно). Guard настроек на следующем заходе ответил бы
     // «онбординг уже был» и не досеял бы садовника НИКОГДА.
     const owner = await freshGraph();
-    await seedOwnerGraph(db, owner);
+    await seedOwnerGraph(db, personal(owner));
     expect(await routineRows(owner)).toHaveLength(0);
 
     const caller = callerFor(owner);
@@ -221,7 +224,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
 
     // Через исполнителя — значит строка прошла стадию 2: аспект лежит в колонке `aspects`,
     // а свойства — плоско по id (§А1-1). Прямой SQL-сид этого не гарантировал бы.
-    const rows = (await withIdentity(db, owner, (tx) =>
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT aspects, props FROM entities
                       WHERE id = ${seedRoutineId(owner, GARDENER_SLUG)}::uuid`),
     )) as unknown as Array<{ aspects: string[]; props: Record<string, unknown> }>;
@@ -230,7 +233,7 @@ describe('сид садовника словаря (Р-17-1)', () => {
     expect(rows[0]?.props['orbis/title']).toBeUndefined();
 
     // Мимо журнала: ни одного сообщения у владельца — ни audit'а сева, ни карточки.
-    const msgs = (await withIdentity(db, owner, (tx) =>
+    const msgs = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT count(*)::int AS n FROM chat_messages m
                       JOIN chat_threads t ON t.id = m.thread_id
                      WHERE t.graph_id = ${owner}::uuid`),

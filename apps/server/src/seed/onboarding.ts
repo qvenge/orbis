@@ -19,6 +19,7 @@
 //      вставках — страховка от гонки двух устройств/вкладок поверх guard'а: конкурентная
 //      вставка тем же PK блокируется на неподтверждённой строке и гасится конфликтом
 //      (§5.4), дубль невозможен по построению.
+import type { GraphId } from '@orbis/shared';
 import { type BodyDoc, queryRefsFromDoc, readBodyDoc } from '@orbis/shared/doc';
 import { maskQuotedValues } from '@orbis/shared/query';
 import type { JSONContent } from '@tiptap/core';
@@ -28,6 +29,7 @@ import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { bodyFieldsFromMarkdown } from '../executor/body-fields';
+import type { Identity } from '../identity';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { seedGardener } from './gardener';
@@ -108,14 +110,14 @@ export interface SeedResult {
  */
 export async function seedOwner(
   db: Db,
-  graphId: string,
+  who: Identity,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
   // ПОРЯДОК: мир → настройки → садовник; довод по первой стрелке — в `seedOwnerGraph`.
-  const result = await seedOwnerGraph(db, graphId, clock);
+  const result = await seedOwnerGraph(db, who, clock);
   // Садовник — 19-я сущность мира и ЕДИНСТВЕННАЯ, которую сеют всегда: у неё своя проба по
   // PK и своя роль досева для владельцев, засиденных до V1 (см. `seed/gardener.ts`).
-  await seedGardener(db, graphId, clock);
+  await seedGardener(db, who, clock);
   return result;
 }
 
@@ -151,15 +153,15 @@ export async function seedOwner(
  */
 export async function seedOwnerGraph(
   db: Db,
-  graphId: string,
+  who: Identity,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
   // ГРАФ — ПЕРВЫМ (D44, спека Ш-1б): первая же запись мира (`seedOwnerWorld`) несёт FK на `graphs`,
   // и без строки графа упала бы на нём. Порядок «граф → мир → настройки»; стрелка «мир → настройки»
   // из докблока выше не нарушена: строка графа маркером «онбординг прошёл» не служит.
-  await withIdentity(db, graphId, (tx) => ensurePersonalGraph(tx, graphId));
-  await seedOwnerWorld(db, graphId, { clock });
-  return withIdentity(db, graphId, (tx) => seedOnboarding(tx, graphId, clock));
+  await withIdentity(db, who, (tx) => ensurePersonalGraph(tx, who.graph));
+  await seedOwnerWorld(db, who, { clock });
+  return withIdentity(db, who, (tx) => seedOnboarding(tx, who.graph, clock));
 }
 
 /**
@@ -176,7 +178,7 @@ export async function seedOwnerGraph(
  */
 export async function seedOnboarding(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
   const now = clock();
@@ -267,7 +269,7 @@ export async function seedOnboarding(
  * — иначе первое сохранение из редактора сдвинуло бы тело, и «сид не переписывает чужое»
  * сработало бы против самого сида.
  */
-function smartListRow(graphId: string, list: SeedSmartList, reg: RegistrySnapshot, now: Date) {
+function smartListRow(graphId: GraphId, list: SeedSmartList, reg: RegistrySnapshot, now: Date) {
   const fields = bodyFieldsFromMarkdown(list.body, reg);
   return {
     id: seedSmartListId(graphId, list.slug),
@@ -309,7 +311,7 @@ function smartListRow(graphId: string, list: SeedSmartList, reg: RegistrySnapsho
  */
 async function backfillHorizons(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   reg: RegistrySnapshot,
   now: Date,
 ): Promise<void> {
@@ -335,7 +337,7 @@ async function backfillHorizons(
  */
 async function backfillRoutinesList(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   reg: RegistrySnapshot,
   now: Date,
 ): Promise<void> {
@@ -416,7 +418,7 @@ function addressesBatch(doc: BodyDoc): boolean {
 
 async function backfillRoutinesListBody(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   reg: RegistrySnapshot,
   now: Date,
 ): Promise<void> {
@@ -453,7 +455,7 @@ async function backfillRoutinesListBody(
  * длина 2), и по длине новый пин встал бы в СЕРЕДИНУ сайдбара. updated_at сдвигается только
  * при фактической вставке — иначе web-синк LWW дёргался бы на каждом старте сессии.
  */
-async function pinIfAbsent(tx: Tx, graphId: string, pinId: string, now: Date): Promise<void> {
+async function pinIfAbsent(tx: Tx, graphId: GraphId, pinId: string, now: Date): Promise<void> {
   await tx.execute(
     sql`UPDATE user_settings
         SET "pinnedEntities" = "pinnedEntities" || jsonb_build_array(

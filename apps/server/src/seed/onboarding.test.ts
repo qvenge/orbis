@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { GraphId } from '@orbis/shared';
 import {
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
@@ -19,11 +20,12 @@ import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/quer
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { assertEntityProps } from '../executor/aspects-validate';
 import { execute } from '../executor/executor';
+import { parseGraphId } from '../identity';
 import { effectiveRegistry } from '../registry/cache';
 import { validateEntityProps } from '../registry/validate-props';
 import { appRouter } from '../router';
@@ -59,13 +61,13 @@ function queryBlocksOf(body: string): string[] {
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 /** Счётчики строк владельца через админ-DSN (обходит RLS) — независимая от роутеров сверка. */
 async function counts(
-  user: string,
+  user: GraphId,
 ): Promise<{ entities: number; settings: number; threads: number }> {
   const { db: admin, client: adminClient } = adminDb();
   try {
@@ -90,7 +92,7 @@ async function counts(
  * у графа без членства SELECT-политика молчит, и ноль строк означал бы не «нет графа», а «не видно».
  */
 async function graphRows(
-  user: string,
+  user: GraphId,
 ): Promise<{ graphs: number; ownerRefOk: number; members: number; issuedByOk: number }> {
   const { db: admin, client: adminClient } = adminDb();
   try {
@@ -126,7 +128,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
   test('создаёт личный граф, ровно 12+6+садовник сущностей, настройки и глобальный тред; повтор → {seeded:false}, ни граф, ни count не растут', async () => {
     // Аккаунт БЕЗ графа — обычной фикстурой `freshGraph()` строка `graphs` уже была бы заведена,
     // и сев графа первым шагом `seedOwnerGraph` (D44) проверять было бы нечем.
-    const user = crypto.randomUUID();
+    const user = parseGraphId(crypto.randomUUID());
     const caller = callerFor(user);
 
     const first = await caller.user.seedOnboarding();
@@ -163,13 +165,13 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     const b = appDb();
     try {
       const callerA = createCaller({
-        actorUserId: user,
+        identity: personal(user),
         actorKind: 'owner',
         db: a.db,
         clientVersion: null,
       });
       const callerB = createCaller({
-        actorUserId: user,
+        identity: personal(user),
         actorKind: 'owner',
         db: b.db,
         clientVersion: null,
@@ -195,7 +197,7 @@ describe('категории §7.1', () => {
     // исполнителя, `assertEntityProps` по эффективному снимку реестра). Прежде здесь стояла
     // zod-схема аспекта старой формы: она была ВТОРЫМ описанием тех же полей и могла
     // разойтись с реестром — с «Пересевом мира» второго описания больше нет.
-    const reg = await withIdentity(db, user, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     for (const r of rows) {
       expect(() =>
         assertEntityProps(reg, { props: r.props, aspects: [...r.aspects] }),
@@ -263,7 +265,7 @@ describe('сид против запрета core-проекций в props (§�
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
-    const rows = await withIdentity(db, user, async (tx) => {
+    const rows = await withIdentity(db, personal(user), async (tx) => {
       const reg = await effectiveRegistry(tx, user);
       const seeded = await tx
         .select({
@@ -495,8 +497,18 @@ describe('настройки §7.3 (getSettings / updateSettings)', () => {
 describe('ownerOnly (§9.3): агент против владельца', () => {
   test('агент: мутации аккаунта → FORBIDDEN; getSettings доступен; владелец — ok', async () => {
     const user = await freshGraph();
-    const owner = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
-    const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
+    const owner = createCaller({
+      identity: personal(user),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
+    const agent = createCaller({
+      identity: personal(user),
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+    });
 
     // owner → ok: сид проходит под ownerOnlyProcedure
     expect((await owner.user.seedOnboarding()).seeded).toBe(true);
@@ -605,7 +617,7 @@ describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
 // который на полуночи увидел бы разные сутки у себя и у сервера, здесь нет по построению.
 describe('горизонты показывают обещанное (§3.3, E4)', () => {
   /** id результатов N-го блока тела списка. */
-  async function idsOfBlock(user: string, body: string, index: number): Promise<Set<string>> {
+  async function idsOfBlock(user: GraphId, body: string, index: number): Promise<Set<string>> {
     const block = queryBlocksOf(body)[index];
     if (block === undefined) throw new Error(`в body нет query-блока №${index}`);
     const rows = await callerFor(user).entity.query({ query: block });
@@ -684,7 +696,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
   const HORIZONS = ['horizon-year', 'horizon-life'];
 
   /** Симуляция пользователя, засиденного ДО E4: часть горизонтов удалена админ-DSN (мимо RLS). */
-  async function deleteHorizons(user: string, slugs: readonly string[]): Promise<void> {
+  async function deleteHorizons(user: GraphId, slugs: readonly string[]): Promise<void> {
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.delete(entities).where(
@@ -701,7 +713,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     }
   }
 
-  const basePins = (user: string) => [
+  const basePins = (user: GraphId) => [
     { id: seedSmartListId(user, 'daily-planning'), order: 0 },
     { id: seedSmartListId(user, 'upcoming'), order: 1 },
     { id: seedSmartListId(user, 'all-tasks'), order: 2 },
@@ -830,7 +842,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   const helpers = agentLoopHelpers(db);
 
   /** id результатов N-го блока тела «Рутин» — тем же путём, каким его увидит виджет. */
-  async function idsOfBlock(user: string, index: number): Promise<Set<string>> {
+  async function idsOfBlock(user: GraphId, index: number): Promise<Set<string>> {
     const block = queryBlocksOf(ROUTINES_LIST_BODY)[index];
     if (block === undefined) throw new Error(`в теле «Рутин» нет query-блока №${index}`);
     const rows = await callerFor(user).entity.query({ query: block });
@@ -838,7 +850,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   }
 
   /** Симуляция владельца, засиденного ДО V1: списка нет, закреплены первые четыре. */
-  async function deleteRoutinesList(user: string): Promise<void> {
+  async function deleteRoutinesList(user: GraphId): Promise<void> {
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin
@@ -849,7 +861,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     }
   }
 
-  const pinsBeforeV1 = (user: string) => [
+  const pinsBeforeV1 = (user: GraphId) => [
     { id: seedSmartListId(user, 'daily-planning'), order: 0 },
     { id: seedSmartListId(user, 'upcoming'), order: 1 },
     { id: seedSmartListId(user, 'all-tasks'), order: 2 },
@@ -1051,7 +1063,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
 
     /** Тело списка «Рутины», его `body_doc`, индекс запросов и отметка правки — админским DSN. */
     async function routinesBody(
-      user: string,
+      user: GraphId,
     ): Promise<{ body: string; bodyDoc: unknown; queryRefs: string[]; updatedAt: Date }> {
       const { db: admin, client: adminClient } = adminDb();
       try {
@@ -1083,7 +1095,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
      * такого владельца был бы ложен ВСЕГДА — то есть бэкфилл молча выключился бы ровно на
      * тех, ради кого он существует (рулинг Р-21b-5).
      */
-    async function setRoutinesBody(user: string, body: string): Promise<void> {
+    async function setRoutinesBody(user: GraphId, body: string): Promise<void> {
       const { db: admin, client: adminClient } = adminDb();
       try {
         await admin
@@ -1314,7 +1326,7 @@ describe('механизм сева мира (§А2-5)', () => {
   test('механизм сева ВПРАВЕ писать system_writable-свойство', async () => {
     const user = await freshGraph();
     const r = await execute(db, {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'system',
       mechanism: WORLD_SEED_MECHANISM,
@@ -1331,7 +1343,7 @@ describe('механизм сева мира (§А2-5)', () => {
   test('тот же вызов БЕЗ механизма сева — отказ по системному свойству (§А2-5)', async () => {
     const user = await freshGraph();
     const r = await execute(db, {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'system',
       operations: [

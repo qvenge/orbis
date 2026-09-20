@@ -33,7 +33,7 @@ import { issuePatGrant } from '../src/oauth/grants';
 import { appRouter } from '../src/router';
 import type { Card } from '../src/tools/registry';
 import { createCallerFactory } from '../src/trpc';
-import { appDb, mintGraph, requireEnv, truncateAll } from './helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
 
 requireEnv();
 
@@ -54,7 +54,7 @@ const mcpUrl = () => `http://127.0.0.1:${mcp.port}/mcp`;
 
 /** Владелец аккаунта — tRPC-caller (владельческая поверхность, не MCP). */
 const ownerCaller = createCaller({
-  actorUserId: owner,
+  identity: personal(owner),
   actorKind: 'owner',
   db,
   clientVersion: null,
@@ -62,7 +62,7 @@ const ownerCaller = createCaller({
 
 beforeAll(async () => {
   await truncateAll();
-  TOKEN = await issuePatGrant(db, { graphId: owner, label: 'внешний агент e2e' });
+  TOKEN = await issuePatGrant(db, { identity: personal(owner), label: 'внешний агент e2e' });
 
   const app = new Hono();
   app.all('/mcp', makeMcpHandler({ db }));
@@ -106,7 +106,7 @@ async function callTool(
 
 /** actions[0] всех audit-сообщений глобального треда владельца (§7.8). */
 async function globalAuditActions(): Promise<ActionRecord[]> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(chatMessages)
@@ -122,7 +122,7 @@ async function globalAuditActions(): Promise<ActionRecord[]> {
 /** Сид-сущность владельца через executor без синка — без audit-шума в тредах. */
 async function seedEntity(input: Record<string, unknown>): Promise<WireEntity> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool: 'entity_create', input }],
@@ -132,7 +132,7 @@ async function seedEntity(input: Record<string, unknown>): Promise<WireEntity> {
 }
 
 async function entityRow(id: string) {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select().from(entities).where(eq(entities.id, id)),
   );
   return rows[0];
@@ -368,7 +368,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     expect(doneActionId).not.toBe('');
 
     // Заметка агента — в треде сущности, с честной пометкой author_kind=agent (§9.3)
-    const threadRows = await withIdentity(db, owner, (tx) =>
+    const threadRows = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select()
         .from(chatMessages)
@@ -427,7 +427,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     }
 
     // До approve владельца граф не тронут — ни одна сущность не заархивирована
-    const before = await withIdentity(db, owner, (tx) =>
+    const before = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select({ archived: entities.archived })
         .from(entities)
@@ -441,7 +441,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     expect(approved.ok).toBe(true);
     expect(approved.idempotentReplay).toBe(false);
 
-    const after = await withIdentity(db, owner, (tx) =>
+    const after = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select({ archived: entities.archived })
         .from(entities)
@@ -472,7 +472,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       },
     ]);
     const chatCaller = createCaller({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       db,
       clientVersion: null,
@@ -497,7 +497,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     expect(scripted.requests).toHaveLength(2); // никакого реального LLM — только скрипт
 
     // Метеринг §4.7: строка за день UTC инкрементирована суммой обоих шагов
-    const usage = await withIdentity(db, owner, (tx) =>
+    const usage = await withIdentity(db, personal(owner), (tx) =>
       tx.select().from(aiUsage).where(eq(aiUsage.date, TODAY)),
     );
     expect(usage).toHaveLength(1);

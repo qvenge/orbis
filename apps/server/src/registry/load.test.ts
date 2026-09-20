@@ -15,6 +15,7 @@ import {
   appDb,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -66,7 +67,7 @@ afterAll(async () => {
 });
 
 test('снимок несёт систему целиком: 77 свойств, 13 аспектов, 11 ролей', async () => {
-  const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   for (const p of BUILTIN_PROPERTY_META) expect(snap.properties.has(p.id)).toBe(true);
   for (const id of BUILTIN_ASPECT_IDS) expect(snap.aspects.has(id)).toBe(true);
   for (const id of RELATION_ROLE_IDS) expect(snap.roles.has(id)).toBe(true);
@@ -78,7 +79,7 @@ test('снимок несёт систему целиком: 77 свойств, 
 });
 
 test('система ⊕ СВОИ: свой аспект и его свойства видны, чужие — нет (RLS)', async () => {
-  const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   expect(snap.aspects.get('user/sleep-log')?.graphId).toBe(owner);
   expect(snap.properties.get('user/hours')?.graphId).toBe(owner);
   // Чужой аспект того же namespace невидим — его отсекает не фильтр запроса, а политика.
@@ -99,7 +100,7 @@ test('своё определение с id встроенного ПЕРЕКР�
       VALUES ('orbis/priority', ${owner}::uuid, 'orbis/priority', '{"ru":"Важность"}'::jsonb,
               '{"ru":"Своя важность"}'::jsonb, '{"kind":"text"}'::jsonb, 1)`);
     await bumpOwnerRegistryVersion(admin, owner); // мутация реестра двигает версию (§А10-1)
-    const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     const overridden = snap.properties.get('orbis/priority');
     expect(overridden?.graphId).toBe(owner);
     expect(overridden?.label.ru).toBe('Важность');
@@ -148,21 +149,25 @@ test('версии: системная — из registry_system, владель�
   // версии, которым сопровождается всякая мутация реестра (§А10-1), — а проверяется здесь
   // ровно случай «строки настроек нет вовсе».
   const virgin = await freshGraph();
-  const noSettings = await withIdentity(db, virgin, (tx) => effectiveRegistry(tx, virgin));
+  const noSettings = await withIdentity(db, personal(virgin), (tx) =>
+    effectiveRegistry(tx, virgin),
+  );
   expect(noSettings.systemVersion).toBeGreaterThan(0); // сид db:prepare уже был
   expect(noSettings.ownerVersion).toBe(0); // строки настроек у владельца нет
 
-  await withIdentity(db, virgin, (tx) =>
+  await withIdentity(db, personal(virgin), (tx) =>
     tx.execute(sql`INSERT INTO user_settings (graph_id, registry_version)
                    VALUES (${virgin}::uuid, 7)`),
   );
-  const withSettings = await withIdentity(db, virgin, (tx) => effectiveRegistry(tx, virgin));
+  const withSettings = await withIdentity(db, personal(virgin), (tx) =>
+    effectiveRegistry(tx, virgin),
+  );
   expect(withSettings.ownerVersion).toBe(7);
   expect(withSettings.systemVersion).toBe(noSettings.systemVersion);
 });
 
 test('снимок несёт словарь контрактов: шесть встроенных, форма разобрана схемой', async () => {
-  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   expect([...reg.contracts.keys()].sort()).toEqual([...CONTRACT_IDS].sort());
   expect(reg.contracts.get('orbis/completable')?.sets).toEqual({
     closed: ['done', 'cancelled'],
@@ -173,7 +178,7 @@ test('снимок несёт словарь контрактов: шесть в
 });
 
 test('словарь подписок несёт обе засеянные: строки разобраны схемой, поверхности на месте', async () => {
-  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   // Состав — по СИДУ, а не литералом: задача, дописавшая третью подписку, не обязана искать этот
   // тест. Порядок словаря — это `ORDER BY graph_id NULLS FIRST, id` (`load.ts`), а НЕ `rank`:
   // совпадение с рангом сегодня держится на АЛФАВИТЕ (`orbis/agenda` < `orbis/budget-overview`),

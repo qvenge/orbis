@@ -6,7 +6,7 @@
 // Ролевой слой графа (идентичность ребра, `acyclic`, `target_max_incoming`, `created_by`,
 // уникальность) переехал в `relations.ts` вместе с реформой §А4-3: там он один механизм с
 // параметром из реестра, здесь был бы набором доменных правил с зашитыми значениями.
-import { isModuleEnabled } from '@orbis/shared';
+import { type GraphId, isModuleEnabled } from '@orbis/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { agentGrants } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -62,7 +62,7 @@ export async function resolveEntityTitles(
  * Чужой и несуществующий грант неразличимы намеренно (единый NOT_FOUND, как у сущностей):
  * иначе назначение стало бы оракулом чужих grant_id.
  */
-export async function assertAssignment(tx: Tx, graphId: string, next: EntityState): Promise<void> {
+export async function assertAssignment(tx: Tx, graphId: GraphId, next: EntityState): Promise<void> {
   if (!next.aspects.includes('orbis/assignment')) return;
   const executor = next.props['orbis/executor'];
   const grantId = next.props['orbis/grant'];

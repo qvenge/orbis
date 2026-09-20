@@ -1,8 +1,8 @@
 // Подметание брошенных прогонов (С6, инвариант 6): живая БД, executor без моков.
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { MyQueueResult } from '@orbis/shared';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import type { GraphId, MyQueueResult } from '@orbis/shared';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { listRunUnits } from '../policy/pending';
@@ -33,7 +33,7 @@ function minutesBefore(n: number): string {
 
 /** Тикет в in_progress с прогоном-ребёнком; lastStepMinutesAgo задаёт «живость» прогона. */
 async function seedRun(
-  owner: string,
+  owner: GraphId,
   args: {
     grantId: string;
     ticketStatus: string;
@@ -101,7 +101,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     });
 
     const { swept } = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -156,7 +156,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     });
 
     const { swept } = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -179,7 +179,7 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
 
     // Повторное подметание ничего не находит: подобранный прогон терминален
     const again = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -220,12 +220,12 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
 describe('sweepStaleRuns: тикет чинится только по ПОСЛЕДНЕМУ прогону', () => {
   /** Владелец правит тикет руками — своим путём, не глаголом исполнителя. */
   async function patchTask(
-    owner: string,
+    owner: GraphId,
     ticketId: string,
     patch: Record<string, unknown>,
   ): Promise<void> {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -273,7 +273,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
     expect(runB).not.toBe(runA);
 
     const { swept } = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -311,7 +311,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
       external: false,
     });
     const archived = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
@@ -319,7 +319,7 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
     if (!archived.ok) throw new Error(`архивация прогона: ${archived.error.message}`);
 
     const { swept } = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       clock: () => T0,
       staleAfterMs: RUN_STALE_AFTER_MS,
@@ -379,7 +379,7 @@ describe('sweepStaleRuns: рутинный прогон закрывается �
     });
 
     const { swept } = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'ai',
       clock: () => T0,
     });
@@ -437,7 +437,7 @@ describe('sweepStaleRuns: пачка переживает смерть проц�
     expect(asked.status).toBe('ok');
 
     const { swept } = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'ai',
       clock: () => T0,
     });
@@ -451,7 +451,7 @@ describe('sweepStaleRuns: пачка переживает смерть проц�
     // Единицы подметание НЕ трогает: они переживают прогон и ждут решения владельца либо
     // гашения следующим прогоном (ОЧ.8). «Подмели» значит «закрыли прогон», а не «сняли
     // вопрос»: снятый вместе с процессом вопрос владелец никогда бы и не увидел
-    const units = await withIdentity(db, owner, (tx) => listRunUnits(tx, owner, runId));
+    const units = await withIdentity(db, personal(owner), (tx) => listRunUnits(tx, owner, runId));
     expect(units).toHaveLength(1);
     expect(units[0]?.kind).toBe('question');
     expect(units[0]?.fate).toBe('open');

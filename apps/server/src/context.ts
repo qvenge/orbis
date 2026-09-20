@@ -6,6 +6,7 @@ import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import type { AiDeps } from './ai/send-message';
 import { verifyAccessToken } from './auth';
 import type { Db } from './db/client';
+import { identityOfGrant, identityOfPerson, parseAccountId } from './identity';
 import { verifyBearer } from './oauth/grants';
 import { BEARER_PREFIXES } from './oauth/tokens';
 import type { Context } from './trpc';
@@ -25,23 +26,23 @@ export function makeCreateContext(db: Db, ai?: AiDeps) {
     // таблицей грантов, JWT-путь не пробуется: недействительный токен агента остаётся
     // неаутентифицированным (fail-closed), а не «вдруг JWT». Ветка развилки — префикс,
     // а не исход проверки: иначе отозванный токен уезжал бы на владельческий путь и
-    // получал actorKind 'owner' (пусть и без actorUserId) — атрибуцию агента нельзя
+    // получал actorKind 'owner' (пусть и без identity) — атрибуцию агента нельзя
     // терять из-за того, что доступ отозвали.
     //
     // С переездом доступа из env в таблицу (D34) источник правды здесь тот же, что у
     // /mcp: verifyBearer. Двух механизмов с разными источниками правды у одного токена
     // быть не должно — именно поэтому apps/server/src/pat.ts снят целиком.
     if (token !== null && BEARER_PREFIXES.some((p) => token.startsWith(p))) {
-      const identity = await verifyBearer(db, token);
+      const grant = await verifyBearer(db, token);
       return {
-        actorUserId: identity?.graphId ?? null,
+        identity: grant === null ? null : identityOfGrant(grant),
         actorKind: 'agent',
         // Идентичность гранта (С2) — симметрично /mcp (mcp/server.ts): один и тот же
         // токен пускают обе поверхности, и то, что известно о доступе, не должно
         // зависеть от выбранного агентом транспорта. Ключа нет вовсе, если гранта нет
         // (токен неизвестен или отозван) — «нет гранта» и «грант без области» различимы.
-        ...(identity !== null && {
-          grant: { id: identity.grantId, scope: identity.scope, label: identity.label },
+        ...(grant !== null && {
+          grant: { id: grant.grantId, scope: grant.scope, label: grant.label },
         }),
         db,
         clientVersion,
@@ -49,8 +50,9 @@ export function makeCreateContext(db: Db, ai?: AiDeps) {
       };
     }
 
+    const sub = token ? await verifyAccessToken(token) : null;
     return {
-      actorUserId: token ? await verifyAccessToken(token) : null,
+      identity: sub === null ? null : identityOfPerson(parseAccountId(sub)),
       actorKind: 'owner',
       db,
       clientVersion,

@@ -31,6 +31,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
+import type { Identity } from '../identity';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
@@ -91,13 +92,13 @@ function compileAstOrThrow(
  */
 function runQueryWithMaterialization<T>(
   db: Db,
-  actorUserId: string,
+  identity: Identity,
   input: QueryInput,
   run: (tx: Tx, ast: QueryAst, cctx: CompileCtx) => Promise<T>,
 ): Promise<T> {
   return queryWithMaterialization({
     db,
-    actorUserId,
+    identity,
     thisEntityId: input.thisEntityId ?? null,
     // Дерево со входа `ast` идёт мимо разбора — как у тула (§А5-4, «два входа, один путь»):
     // дальше окно материализации, компиляция и выдача у обеих форм одни. Имена в нём
@@ -234,7 +235,7 @@ export const entityRouter = router({
       const r = await execute(
         ctx.db,
         {
-          actorUserId: ctx.actorUserId,
+          identity: ctx.identity,
           actorKind: 'owner',
           source: input.source,
           operations: [{ tool: 'entity_create', input: input.input }],
@@ -257,7 +258,7 @@ export const entityRouter = router({
       const r = await execute(
         ctx.db,
         {
-          actorUserId: ctx.actorUserId,
+          identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
           operations: [{ tool: 'entity_update', input }],
@@ -269,7 +270,7 @@ export const entityRouter = router({
       // хуков в executor'е нет — вызов идёт ЗДЕСЬ, после успешного execute, отдельной
       // транзакцией. Своей ошибки наружу не отдаёт: правка категории уже закоммичена.
       await escalateAfterMutation(ctx.db, {
-        graphId: ctx.actorUserId,
+        identity: ctx.identity,
         actionId: r.actionId,
         operations: [{ tool: 'entity_update', input }],
       });
@@ -286,8 +287,8 @@ export const entityRouter = router({
         input,
       }): Promise<EntityReadResult & { goalProgress?: GoalProgress; registryVersion: string }> => {
         try {
-          return await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-            const result = await readEntity(tx, ctx.actorUserId, input);
+          return await withIdentity(ctx.db, ctx.identity, async (tx) => {
+            const result = await readEntity(tx, ctx.identity.graph, input);
             // Прогресс цели (§11.3) — АДДИТИВНОЕ поле поверх формы readEntity, и добавляется
             // оно здесь, а не в самом readEntity: та форма — общий контракт с
             // LLM/MCP-диспатчем (tools/dispatch.ts), и всё, что в неё положено, уезжает в
@@ -295,7 +296,7 @@ export const entityRouter = router({
             // Прецедент аддитивного поля с явной аннотацией — actionId у create выше.
             // Той же tx: расчёт читает граф под уже установленной identity (RLS), своей
             // транзакции не открывает. Обычная сущность в него не заходит вовсе.
-            const goalProgress = await goalProgressFor(tx, ctx.actorUserId, result.entity);
+            const goalProgress = await goalProgressFor(tx, ctx.identity.graph, result.entity);
             /**
              * Версия реестра (§А10-1) — второе аддитивное поле, и по тому же правилу: в
              * `readEntity` её класть нельзя (контракт с диспатчем тулов, модели она не
@@ -310,7 +311,7 @@ export const entityRouter = router({
              * записи дороже самой записи. Цена — один точечный SELECT в той же tx.
              */
             const registryVersion = registryVersionOf(
-              await readRegistryVersions(tx, ctx.actorUserId),
+              await readRegistryVersions(tx, ctx.identity.graph),
             );
             return goalProgress === undefined
               ? { ...result, registryVersion }
@@ -324,7 +325,7 @@ export const entityRouter = router({
     ),
 
   query: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
-    runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {
+    runQueryWithMaterialization(ctx.db, ctx.identity, input, async (tx, ast, cctx) => {
       const compiled = compileAstOrThrow(ast, cctx, compileQueryAst);
       const rows = await tx.execute(compiled);
       return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
@@ -366,8 +367,8 @@ export const entityRouter = router({
       const needle = escapeLike(input.term);
       const anywhere = `%${needle}%`;
       const fromStart = `${needle}%`;
-      return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-        const reg = await effectiveRegistry(tx, ctx.actorUserId);
+      return withIdentity(ctx.db, ctx.identity, async (tx) => {
+        const reg = await effectiveRegistry(tx, ctx.identity.graph);
         // Закрытые задачи НЕ фильтруются намеренно: упомянуть сделанное — валидный сценарий
         // ссылки, а чип сам зачёркивает done/cancelled. Архивные — отфильтрованы: их прячет
         // весь UI. Решение зафиксировано при v2 (ревью И14 требовало явности).
@@ -398,8 +399,8 @@ export const entityRouter = router({
    */
   resolveRefs: protectedProcedure.input(entityResolveRefsInput).query(
     ({ ctx, input }): Promise<EntitySuggestion[]> =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-        const reg = await effectiveRegistry(tx, ctx.actorUserId);
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
+        const reg = await effectiveRegistry(tx, ctx.identity.graph);
         // Не сырое `= ANY($1::uuid[])`: массив из шаблона `sql` уезжает в драйвер как есть и
         // падает «malformed array literal» (проверено пробой). inArray — идиома репозитория
         // (ai/escalation.ts:217, recurring/materialize.ts:285) и разворачивается в IN-список.
@@ -420,7 +421,7 @@ export const entityRouter = router({
 
   // Бейджи (02 §3.2): count игнорирует limit — compileCountAst не включает его по построению
   count: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
-    runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {
+    runQueryWithMaterialization(ctx.db, ctx.identity, input, async (tx, ast, cctx) => {
       const compiled = compileAstOrThrow(ast, cctx, compileCountAst);
       const rows = await tx.execute(compiled);
       return { count: Number(rows[0]?.count) };

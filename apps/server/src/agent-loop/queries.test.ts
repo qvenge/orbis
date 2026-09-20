@@ -12,6 +12,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -66,7 +67,7 @@ describe('runsForBucket: прогоны слота рутины (V1.3)', () => {
       bucket: '2026-08-17T07:00',
     });
 
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       runsForBucket(tx, routineId, '2026-08-17T07:00'),
     );
     expect(rows.map((r) => r.id)).toEqual([first.runId, retry.runId]);
@@ -76,8 +77,11 @@ describe('runsForBucket: прогоны слота рутины (V1.3)', () => {
     expect(rows.map((r) => r.id)).not.toContain(alien.runId);
 
     expect(
-      (await withIdentity(db, owner, (tx) => runsForBucket(tx, routineId, '2026-08-17T09:00')))
-        .length,
+      (
+        await withIdentity(db, personal(owner), (tx) =>
+          runsForBucket(tx, routineId, '2026-08-17T09:00'),
+        )
+      ).length,
     ).toBe(0);
   });
 
@@ -88,8 +92,11 @@ describe('runsForBucket: прогоны слота рутины (V1.3)', () => {
     await seedRoutineRun(stranger, { routineId, bucket: '2026-08-17T07:00' });
 
     expect(
-      (await withIdentity(db, owner, (tx) => runsForBucket(tx, routineId, '2026-08-17T07:00')))
-        .length,
+      (
+        await withIdentity(db, personal(owner), (tx) =>
+          runsForBucket(tx, routineId, '2026-08-17T07:00'),
+        )
+      ).length,
     ).toBe(0);
   });
 });
@@ -105,7 +112,7 @@ describe('runsOfParent: прогоны родителя — и тикета, и 
       startedAt: new Date(T0.getTime() + 60 * MINUTE),
     });
 
-    const rows = await withIdentity(db, owner, (tx) => runsOfParent(tx, routineId));
+    const rows = await withIdentity(db, personal(owner), (tx) => runsOfParent(tx, routineId));
     expect(rows.map((r) => r.id)).toEqual([a.runId, b.runId]);
   });
 });
@@ -137,7 +144,7 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
       bucket: '2026-08-27T07:00',
     });
 
-    const got = await withIdentity(db, owner, async (tx) => ({
+    const got = await withIdentity(db, personal(owner), async (tx) => ({
       project: await parentProject(tx, ticket.id),
       runs: await runsOfParent(tx, ticket.id),
       ticketOf: await ticketOfRun(tx, run.runId),
@@ -171,7 +178,7 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
     await link(owner, project.id, middle.id, 'subitem');
     await link(owner, middle.id, ticket.id, 'subitem');
 
-    const got = await withIdentity(db, owner, (tx) => parentProject(tx, ticket.id));
+    const got = await withIdentity(db, personal(owner), (tx) => parentProject(tx, ticket.id));
     expect(got?.id).toBe(project.id);
   });
 
@@ -202,7 +209,7 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
     await link(owner, top.id, sub.id, 'subitem');
     await link(owner, sub.id, ticket.id, 'ticket');
 
-    const got = await withIdentity(db, owner, (tx) => parentProject(tx, ticket.id));
+    const got = await withIdentity(db, personal(owner), (tx) => parentProject(tx, ticket.id));
     expect(got).toEqual({ id: sub.id, title: 'Подпроект', body: 'Процесс подпроекта' });
     // …и корневой при этом посчитан тоже — но живёт в СВОЁМ свойстве
     const props = await propsOf(owner, ticket.id);
@@ -219,7 +226,9 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
       aspects: ['orbis/task'],
     });
     await link(owner, parent.id, ticket.id, 'subitem');
-    expect(await withIdentity(db, owner, (tx) => parentProject(tx, ticket.id))).toBeNull();
+    expect(
+      await withIdentity(db, personal(owner), (tx) => parentProject(tx, ticket.id)),
+    ).toBeNull();
   });
 });
 
@@ -242,7 +251,7 @@ describe('activeRoutines / routineById (V1.13)', () => {
     });
     const archived = await seedRoutine(owner, { title: 'Архивная' });
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: archived, archived: true } }],
@@ -256,7 +265,7 @@ describe('activeRoutines / routineById (V1.13)', () => {
       aspects: ['orbis/task'],
     });
 
-    const rows = await withIdentity(db, owner, (tx) => activeRoutines(tx));
+    const rows = await withIdentity(db, personal(owner), (tx) => activeRoutines(tx));
     expect(rows.map((x) => x.id)).toEqual([active]);
     expect(rows[0]?.title).toBe('Утренний обзор');
     // Тело — это и есть инструкция прогону (V1.1): без него раннеру нечего сказать модели
@@ -292,7 +301,7 @@ describe('activeRoutines / routineById (V1.13)', () => {
     });
     const alien = await seedRoutine(stranger, { title: 'Чужая рутина' });
 
-    const row = await withIdentity(db, owner, (tx) => routineById(tx, routineId));
+    const row = await withIdentity(db, personal(owner), (tx) => routineById(tx, routineId));
     expect(row?.id).toBe(routineId);
     expect(row?.title).toBe('Вечерний разбор');
     expect(row?.body).toBe('Закрой день: что сделано, что перенести.');
@@ -305,9 +314,9 @@ describe('activeRoutines / routineById (V1.13)', () => {
       'orbis/routine_days': ['mo', 'fr'],
     });
 
-    expect(await withIdentity(db, owner, (tx) => routineById(tx, task.id))).toBeNull();
-    expect(await withIdentity(db, owner, (tx) => routineById(tx, alien))).toBeNull();
-    expect(await withIdentity(db, owner, (tx) => routineById(tx, newId()))).toBeNull();
+    expect(await withIdentity(db, personal(owner), (tx) => routineById(tx, task.id))).toBeNull();
+    expect(await withIdentity(db, personal(owner), (tx) => routineById(tx, alien))).toBeNull();
+    expect(await withIdentity(db, personal(owner), (tx) => routineById(tx, newId()))).toBeNull();
   });
 });
 
@@ -329,7 +338,7 @@ describe('assignedTickets: очередь исполнителя читает Н
     const row = (id: string, title: string, props: Record<string, unknown>, aspects: string[]) =>
       rawEntityRow({ graphId: owner, id, title, props, aspects });
 
-    await withIdentity(db, owner, (tx) =>
+    await withIdentity(db, personal(owner), (tx) =>
       tx.insert(entities).values([
         // Назначение и задача — только в НОВОЙ форме; старая карта пуста.
         row(
@@ -387,7 +396,7 @@ describe('assignedTickets: очередь исполнителя читает Н
   });
 
   test('в очередь входит строка, назначенная в props под обоими аспектами; строка старой карты — нет', async () => {
-    const rows = await withIdentity(db, owner, (tx) => assignedTickets(tx, grantId));
+    const rows = await withIdentity(db, personal(owner), (tx) => assignedTickets(tx, grantId));
     expect(rows.map((r) => r.id)).toEqual([byProps]);
     expect(rows[0]?.props['orbis/priority']).toBe('high');
     expect(rows[0]?.props['orbis/due_date']).toBe('2026-08-20');
@@ -395,7 +404,7 @@ describe('assignedTickets: очередь исполнителя читает Н
   });
 
   test('снятый аспект (назначения или задачи) убирает строку из очереди, хотя значения в props остались (Р9)', async () => {
-    const ids = (await withIdentity(db, owner, (tx) => assignedTickets(tx, grantId))).map(
+    const ids = (await withIdentity(db, personal(owner), (tx) => assignedTickets(tx, grantId))).map(
       (r) => r.id,
     );
     expect(ids).not.toContain(detachedAssignment);
@@ -484,7 +493,7 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
       },
     });
 
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       runsForBucket(tx, routineId, '2026-08-17T07:00'),
     );
     const row = rows.find((x) => x.id === runId);
@@ -526,7 +535,7 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
       },
     });
 
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       runsForBucket(tx, routineId, '2026-08-17T07:00'),
     );
     const row = rows.find((x) => x.id === runId);
@@ -566,7 +575,7 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
       },
     });
 
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       runsForBucket(tx, routineId, '2026-08-17T07:00'),
     );
     const summaryOf = (runId: string): RunSummary => {
@@ -608,14 +617,14 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
     // Роль ребра — та, что просил вызов: `link` не вправе подставить свою. До 0017
     // `runsOfParent` идёт по ПЕРЕХОДНОЙ колонке и подмены роли не заметил бы, а после —
     // потерял бы прогон молча (§А4-3).
-    const roles = await withIdentity(db, owner, (tx) =>
+    const roles = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(
         sql`SELECT role FROM relations WHERE source_id = ${ticket.id}::uuid AND target_id = ${run.id}::uuid`,
       ),
     );
     expect((roles as unknown as Array<{ role: string }>).map((r) => r.role)).toEqual(['run']);
 
-    const rows = await withIdentity(db, owner, (tx) => runsOfParent(tx, ticket.id));
+    const rows = await withIdentity(db, personal(owner), (tx) => runsOfParent(tx, ticket.id));
     const summary = runSummary(rows[0] as (typeof rows)[number]);
     expect(summary.report).toBe('Готово');
     expect('routine_id' in summary).toBe(false);

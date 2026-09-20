@@ -4,21 +4,32 @@
 // (PK = batchAuditMessageId), идемпотентный повтор без второго сообщения,
 // конкурентная PK-гонка одинаковых batch'ей (перенесённое обязательство Task 10).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { batchAuditMessageId, globalThreadId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  accountOf,
+  adminDb,
+  appDb,
+  freshGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
+import { resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
-import type {
-  ActionRecord,
-  ExecuteOk,
-  ExecuteRequest,
-  ExecuteResult,
-  JournalWrite,
-  WireEntity,
+import {
+  type ActionRecord,
+  type ExecuteOk,
+  type ExecuteRequest,
+  type ExecuteResult,
+  InMemoryJournalSink,
+  type JournalWrite,
+  type WireEntity,
 } from './types';
 
 requireEnv();
@@ -40,13 +51,13 @@ function ok(r: ExecuteResult): ExecuteOk {
 }
 
 function req(
-  user: string,
+  user: GraphId,
   tool: string,
   input: unknown,
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'fast_path',
     operations: [{ tool, input }],
@@ -55,11 +66,11 @@ function req(
 }
 
 function batchReq(
-  user: string,
+  user: GraphId,
   operations: Array<{ tool: string; input: unknown }>,
   batchId: string,
 ): ExecuteRequest {
-  return { actorUserId: user, actorKind: 'owner', source: 'chat', operations, batchId };
+  return { identity: personal(user), actorKind: 'owner', source: 'chat', operations, batchId };
 }
 
 /** Первый элемент массива с внятным падением (вместо non-null assertion). */
@@ -104,6 +115,48 @@ async function adminCount(query: ReturnType<typeof sql>): Promise<number> {
 function actionsOf(msg: MessageRow): ActionRecord[] {
   return (msg.metadata as { actions?: ActionRecord[] }).actions ?? [];
 }
+
+/**
+ * Пин «журнал разводит АКТОРА и ГРАФ» (D44).
+ *
+ * ПОЧЕМУ НЕ НА ПАРЕ С РАЗНЫМИ ЗНАЧЕНИЯМИ, как предполагал план Г-3. В Г-3 политики ещё
+ * старые (`graph_id = auth.uid()`), и запись под парой {actor: X, graph: Y} не доходит до
+ * синка вовсе: WITH CHECK у `entities` отбивает её `42501` ДО стадии журнала — in-memory
+ * синк «не ходит в базу», но исполнитель перед ним ходит. Поведенческая половина этого
+ * пина поэтому лежит помеченной (пометка `.failing`) в `test/graph-vs-account.test.ts` и
+ * становится зелёной с миграцией 0021.
+ *
+ * Что пинится ЗДЕСЬ и краснеет на мутации уже сегодня: разведение по ДВУМ ПОЛЯМ формы и
+ * то, что поля несут РАЗНЫЕ бренды. Мутация `graphId: req.identity.actor` в
+ * `executor.ts` (сборка JournalWrite) делает красным `bun run typecheck`, а не этот файл, —
+ * директивы ниже держат ровно это и станут неиспользуемыми (TS2578), если бренды сольют.
+ */
+describe('журнал: actor_user_id — аккаунт, graphId сообщения — граф (D44)', () => {
+  test('исполнитель раскладывает пару по двум полям записи', async () => {
+    const graph = await freshGraph();
+    const memory = new InMemoryJournalSink();
+    ok(
+      await execute(db, req(graph, 'entity_create', { title: 'запись пары', tags: [] }), {
+        sink: memory,
+      }),
+    );
+    const entry = memory.entries[0];
+    if (entry === undefined) throw new Error('синк не получил записи журнала');
+    expect(entry.graphId).toBe(graph);
+    expect(entry.action.actor_user_id).toBe(accountOf(graph));
+  });
+
+  test('сигнатура: граф записи и актор действия — разные типы (спека Ш-2)', async () => {
+    const graph = await freshGraph();
+    const account = accountOf(graph);
+    // @ts-expect-error — аккаунт на месте графа записи: компилятор обязан отказать
+    const wrong: JournalWrite['graphId'] = account;
+    void wrong;
+    // @ts-expect-error — граф на месте субъекта тарифа: тот же барьер с другой стороны
+    void (() => resolveEntitlement(graph, 'entities.create'));
+    expect(true).toBe(true);
+  });
+});
 
 describe('боевой JournalSink: audit-сообщение в chat_messages (§7.8)', () => {
   test('1. execute(entity_create, fast_path) без threadId → системное сообщение в глобальном треде; формат action дословно §7.8 + атрибуция', async () => {
@@ -273,7 +326,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       await execute(db, req(user, 'entity_create', { title: 'Носитель', tags: [] }), { sink }),
     );
     const e = created.results[0] as WireEntity;
-    const tid = await withIdentity(db, user, (tx) => ensureEntityThread(tx, user, e.id));
+    const tid = await withIdentity(db, personal(user), (tx) => ensureEntityThread(tx, user, e.id));
 
     ok(
       await execute(
@@ -404,7 +457,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
 
     let caught: unknown;
     try {
-      await withIdentity(db, user, (tx) => sink.write(tx, bad));
+      await withIdentity(db, personal(user), (tx) => sink.write(tx, bad));
     } catch (e) {
       caught = e;
     }
@@ -461,7 +514,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       { tool: 'batch_execute', entity_id: null, title: 'batch: операций — 2' },
     ]);
     // Пустой cards обрушил бы replay: findByAuditId возвращает undefined без cards[0]
-    const saved = await withIdentity(db, user, (tx) =>
+    const saved = await withIdentity(db, personal(user), (tx) =>
       sink.findByAuditId(tx, batchAuditMessageId(user, batchId)),
     );
     expect(saved?.results).toEqual(r.results as unknown[]);
@@ -481,7 +534,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       operations: [],
       inverse: [],
     };
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       sink.write(tx, {
         id: auditId,
         graphId: user,
@@ -494,7 +547,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
       { tool: 'relation_create', entity_id: null, title: 'связь' },
     ]);
-    const saved = await withIdentity(db, user, (tx) => sink.findByAuditId(tx, auditId));
+    const saved = await withIdentity(db, personal(user), (tx) => sink.findByAuditId(tx, auditId));
     expect(saved?.card).toEqual({ tool: 'relation_create', entity_id: null, title: 'связь' });
   });
 
@@ -558,7 +611,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       await execute(
         db,
         {
-          actorUserId: user,
+          identity: personal(user),
           actorKind: 'agent',
           source: 'mcp',
           operations: [

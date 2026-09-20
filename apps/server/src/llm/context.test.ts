@@ -6,6 +6,7 @@
 // также порядок СОБРАННОГО канала: блок продолжений идёт последним (§Б7-6-2 — гард
 // переехал сюда с текста промпта, v5.test.ts). Слой 5 — Task 9.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
@@ -14,6 +15,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -49,7 +51,7 @@ afterAll(async () => {
 
 /** memory-сущность напрямую (обычная entity с аспектом orbis/memory, §3.7). */
 async function createMemory(
-  graphId: string,
+  graphId: GraphId,
   opts: {
     title: string;
     body?: string;
@@ -60,7 +62,7 @@ async function createMemory(
   },
 ): Promise<string> {
   const id = newId();
-  await withIdentity(db, graphId, async (tx) =>
+  await withIdentity(db, personal(graphId), async (tx) =>
     tx.insert(entities).values({
       id,
       graphId,
@@ -95,14 +97,14 @@ describe('buildContext — слой 1: тело промпта + ai_instructions
   // больше не стоит ПО ПОСТРОЕНИЮ. Начало канала пиннится телом промпта, целостность
   // текста — тем, что канал несёт оба куска и заканчивается вторым (тесты §Б7-6 ниже).
   test('канал начинается с PROMPT_BODY и содержит ai_instructions активных аспектов из БД', async () => {
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, { graphId: user, threadId });
     });
     expect(ctx.system.startsWith(PROMPT_BODY)).toBe(true);
     expect(ctx.system).toContain(CONTINUATIONS_BLOCK);
     // Инструкция builtin-аспекта — из реестра БД (сид), а не из констант кода
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx
         .select({ ai: aspectDefinitions.aiInstructions })
         .from(aspectDefinitions)
@@ -135,10 +137,10 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
 
   test('канал несёт дату владельца в его таймзоне — после промпта, до инструкций аспектов', async () => {
     const user = await freshGraph();
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(userSettings).values({ graphId: user, timezone: 'Asia/Bangkok' }),
     );
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       // 18:30Z — это уже 01:30 СЛЕДУЮЩЕГО дня в Бангкоке: дата берётся в зоне владельца,
       // а не в UTC сервера, иначе «сегодня» модели расходится с «сегодня» пользователя
@@ -159,7 +161,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
 
   test('дата берётся в дефолтной зоне, когда строки user_settings ещё нет (онбординг не пройден)', async () => {
     const user = await freshGraph();
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, {
         graphId: user,
@@ -177,7 +179,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
     const user = await freshGraph();
     await createMemory(user, { title: 'ПАМЯТЬ-ХВОСТ', kind: 'rule' });
     const anchorId = newId();
-    await withIdentity(db, user, async (tx) =>
+    await withIdentity(db, personal(user), async (tx) =>
       tx.insert(entities).values({
         id: anchorId,
         graphId: user,
@@ -186,7 +188,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
         ...(await entityColumns(tx, user, { 'orbis/task_status': 'in_progress' }, ['orbis/task'])),
       }),
     );
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureEntityThread(tx, user, anchorId);
       return buildContext(tx, { graphId: user, threadId, anchorEntityId: anchorId });
     });
@@ -238,7 +240,7 @@ describe('buildContext — слой 2: память с капом и приор�
       });
     }
 
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, { graphId: user, threadId });
     });
@@ -274,7 +276,7 @@ describe('buildContext — слой 2: память с капом и приор�
     // здесь только правило; сразу после — переименование в «Еда», чтобы обе подписи
     // (сохранённая и собираемая) стартовали одинаковыми и расхождение стало наблюдаемым.
     const one = (input: Record<string, unknown>, tool = 'entity_create') => ({
-      actorUserId: user5,
+      identity: personal(user5),
       actorKind: 'owner' as const,
       source: 'ui' as const,
       operations: [{ tool, input }],
@@ -297,7 +299,7 @@ describe('buildContext — слой 2: память с капом и приор�
     expect(created.ok).toBe(true);
     expect((await execute(db, one({ id: category, title: 'Еда' }, 'entity_update'))).ok).toBe(true);
 
-    const before = await withIdentity(db, user5, async (tx) => {
+    const before = await withIdentity(db, personal(user5), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user5);
       return buildContext(tx, { graphId: user5, threadId });
     });
@@ -305,7 +307,7 @@ describe('buildContext — слой 2: память с капом и приор�
 
     const renamed = await execute(db, one({ id: category, title: 'Продукты' }, 'entity_update'));
     expect(renamed.ok).toBe(true);
-    const after = await withIdentity(db, user5, async (tx) => {
+    const after = await withIdentity(db, personal(user5), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user5);
       return buildContext(tx, { graphId: user5, threadId });
     });
@@ -315,7 +317,7 @@ describe('buildContext — слой 2: память с капом и приор�
     // Правило ЖИВО, а сохранённая подпись в КОЛОНКЕ осталась прежней — именно её показал
     // бы канал, если бы читал `title`. Без этой половины тест не отличал бы «собрано из
     // свойств» от «title заодно переписался».
-    const [stored] = await withIdentity(db, user5, (tx) =>
+    const [stored] = await withIdentity(db, personal(user5), (tx) =>
       tx.select({ title: entities.title }).from(entities).where(eq(entities.id, ruleId)),
     );
     expect(stored?.title).toBe('пятерочка → Еда');
@@ -334,7 +336,7 @@ describe('buildContext — слой 2: память с капом и приор�
     const user6 = await freshGraph();
     const category = newId();
     const one = (input: Record<string, unknown>, tool = 'entity_create') => ({
-      actorUserId: user6,
+      identity: personal(user6),
       actorKind: 'owner' as const,
       source: 'ui' as const,
       operations: [{ tool, input }],
@@ -357,9 +359,11 @@ describe('buildContext — слой 2: память с капом и приор�
     // Сносим цель ПРЯМЫМ SQL: через исполнителя ссылку не оборвать (валидатор целей не
     // даст), а строка, оставшаяся без цели, в графе владельца возможна — ровно этот случай
     // проба и описывает.
-    await withIdentity(db, user6, (tx) => tx.delete(entities).where(eq(entities.id, category)));
+    await withIdentity(db, personal(user6), (tx) =>
+      tx.delete(entities).where(eq(entities.id, category)),
+    );
 
-    const ctx = await withIdentity(db, user6, async (tx) => {
+    const ctx = await withIdentity(db, personal(user6), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user6);
       return buildContext(tx, { graphId: user6, threadId });
     });
@@ -375,7 +379,7 @@ describe('buildContext — слой 2: память с капом и приор�
       kind: 'fact',
       body: `${'б'.repeat(MEMORY_BODY_PREVIEW)}ХВОСТ-ЗА-КАПОМ`,
     });
-    const ctx = await withIdentity(db, user2, async (tx) => {
+    const ctx = await withIdentity(db, personal(user2), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user2);
       return buildContext(tx, { graphId: user2, threadId });
     });
@@ -390,7 +394,7 @@ describe('buildContext — слой 2: память с капом и приор�
       kind: 'fact',
       body: 'строка1\nстрока2\n\nстрока3',
     });
-    const ctx = await withIdentity(db, user3, async (tx) => {
+    const ctx = await withIdentity(db, personal(user3), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user3);
       return buildContext(tx, { graphId: user3, threadId });
     });
@@ -406,7 +410,7 @@ describe('buildContext — слой 2: память с капом и приор�
       kind: 'fact',
       body: `${'x'.repeat(MEMORY_BODY_PREVIEW - 1)}😀ХВОСТ-ЗА-КАПОМ`,
     });
-    const ctx = await withIdentity(db, user4, async (tx) => {
+    const ctx = await withIdentity(db, personal(user4), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user4);
       return buildContext(tx, { graphId: user4, threadId });
     });
@@ -422,7 +426,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
 
   async function createAnchor(): Promise<string> {
     const id = newId();
-    await withIdentity(db, user, async (tx) =>
+    await withIdentity(db, personal(user), async (tx) =>
       tx.insert(entities).values({
         id,
         graphId: user,
@@ -437,7 +441,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
 
   test('тред сущности: якорь в system — title, tags, аспекты, превью body 500', async () => {
     const anchorId = await createAnchor();
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureEntityThread(tx, user, anchorId);
       return buildContext(tx, { graphId: user, threadId, anchorEntityId: anchorId });
     });
@@ -453,7 +457,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
 
   test('превью body якоря режется по code points (граница 500, fix round)', async () => {
     const id = newId();
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(entities).values({
         id,
         graphId: user,
@@ -461,7 +465,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
         body: `${'x'.repeat(ANCHOR_BODY_PREVIEW - 1)}🚀ОТРЕЗАННОЕ`,
       }),
     );
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureEntityThread(tx, user, id);
       return buildContext(tx, { graphId: user, threadId, anchorEntityId: id });
     });
@@ -472,7 +476,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
 
   test('глобальный тред (без anchorEntityId): блока якоря нет', async () => {
     await createAnchor();
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, { graphId: user, threadId });
     });
@@ -482,7 +486,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
 
   test('история скоупнута тредом: сообщения глобального треда не текут в тред сущности (§7.3)', async () => {
     const anchorId = await createAnchor();
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const globalId = await ensureGlobalThread(tx, user);
       await appendMessage(tx, {
         id: newId(),
@@ -511,7 +515,7 @@ describe('buildContext — слой 4: rolling-история (решение 6 
   test(`история обрезается до ${CONTEXT_HISTORY_LIMIT} ПОСЛЕДНИХ сообщений в хронологическом порядке`, async () => {
     const total = CONTEXT_HISTORY_LIMIT + 5; // 35
     const base = Date.UTC(2026, 5, 1, 9, 0, 0);
-    await withIdentity(db, user, async (tx) => {
+    await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       // Прямые INSERT с явным created_at — детерминированный порядок окна
       for (let i = 1; i <= total; i++) {
@@ -524,7 +528,7 @@ describe('buildContext — слой 4: rolling-история (решение 6 
         });
       }
     });
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, { graphId: user, threadId });
     });
@@ -545,7 +549,7 @@ describe('buildContext — слой 4: rolling-история (решение 6 
     // чат-модель читала бы слова ночной рутины или внешнего агента как реплику владельца
     const who = await freshGraph();
     const base = Date.UTC(2026, 5, 2, 9, 0, 0);
-    const threadId = await withIdentity(db, who, async (tx) => {
+    const threadId = await withIdentity(db, personal(who), async (tx) => {
       const id = await ensureGlobalThread(tx, who);
       const rows: Array<{ content: string; metadata: Record<string, unknown> }> = [
         { content: 'Посмотри мой план на день', metadata: {} },
@@ -571,7 +575,9 @@ describe('buildContext — слой 4: rolling-история (решение 6 
       }
       return id;
     });
-    const ctx = await withIdentity(db, who, (tx) => buildContext(tx, { graphId: who, threadId }));
+    const ctx = await withIdentity(db, personal(who), (tx) =>
+      buildContext(tx, { graphId: who, threadId }),
+    );
     expect(ctx.messages).toEqual([
       { role: 'user', content: 'Посмотри мой план на день' },
       { role: 'user', content: '[рутина]: Перенёс две задачи на сегодня' },
@@ -624,11 +630,11 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     const entityId = newId();
     // Реалистичная форма истории: audit всегда следует за user-репликой.
     // Отдельные tx — детерминированный created_at-порядок (transaction_timestamp)
-    const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
-    await withIdentity(db, user, (tx) =>
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
       appendMessage(tx, { id: newId(), threadId, role: 'user', content: 'создай задачу' }),
     );
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       appendAudit(tx, threadId, {
         type: 'entity_created',
         entityId,
@@ -637,7 +643,9 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         source: 'chat',
       }),
     );
-    const ctx = await withIdentity(db, user, (tx) => buildContext(tx, { graphId: user, threadId }));
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
     expect(ctx.messages).toEqual([
       { role: 'user', content: 'создай задачу' },
       { role: 'assistant', content: `[действие: entity_created ${entityId} (chat)]` },
@@ -650,8 +658,8 @@ describe('buildContext — слой 4: сжатие audit/системных с�
 
   test('окно, начинающееся со сжатого ai-audit (assistant), обрезается до первого user (Anthropic API)', async () => {
     const user = await freshGraph();
-    const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
-    await withIdentity(db, user, (tx) =>
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
       appendAudit(tx, threadId, {
         type: 'entity_created',
         entityId: newId(),
@@ -660,7 +668,9 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         source: 'chat',
       }),
     );
-    const ctx = await withIdentity(db, user, (tx) => buildContext(tx, { graphId: user, threadId }));
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
     // Единственное сообщение окна — assistant → отброшено; в реальном потоке Task 9
     // messages никогда не пусты: последним всегда идёт свежее user-сообщение
     expect(ctx.messages).toEqual([]);
@@ -669,7 +679,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   test('audit действий агента (actor_kind=agent) → user с префиксом «[система]»', async () => {
     const user = await freshGraph();
     const entityId = newId();
-    const ctx = await withIdentity(db, user, async (tx) => {
+    const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       await appendAudit(tx, threadId, {
         type: 'entity_updated',
@@ -687,12 +697,12 @@ describe('buildContext — слой 4: сжатие audit/системных с�
 
   test('batch-audit без entity_id → компактная строка без id', async () => {
     const user = await freshGraph();
-    const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
     // Предшествующий user — иначе ведущий assistant-audit отброшен инвариантом окна
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       appendMessage(tx, { id: newId(), threadId, role: 'user', content: 'заархивируй всё' }),
     );
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       appendAudit(tx, threadId, {
         type: 'batch',
         entityId: null,
@@ -701,7 +711,9 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         source: 'chat',
       }),
     );
-    const ctx = await withIdentity(db, user, (tx) => buildContext(tx, { graphId: user, threadId }));
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
     expect(ctx.messages).toEqual([
       { role: 'user', content: 'заархивируй всё' },
       { role: 'assistant', content: '[действие: batch (chat)]' },
@@ -714,8 +726,8 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     const pendingId = newId();
     // Отдельные транзакции: created_at = transaction_timestamp(), в одном tx
     // оба сообщения получили бы одинаковое время — порядок стал бы зависеть от id
-    const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
-    await withIdentity(db, user, (tx) =>
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
       appendMessage(tx, {
         id: newId(),
         threadId,
@@ -724,7 +736,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         metadata: { type: 'undo', undoes: actionId },
       }),
     );
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       appendMessage(tx, {
         id: pendingId,
         threadId,
@@ -743,7 +755,9 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         },
       }),
     );
-    const ctx = await withIdentity(db, user, (tx) => buildContext(tx, { graphId: user, threadId }));
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
     expect(ctx.messages).toEqual([
       { role: 'user', content: `[система] Отменено действие ${actionId}` },
       {
@@ -758,8 +772,8 @@ describe('buildContext — слой 4: сжатие audit/системных с�
   test(`скрытые system-строки не съедают rolling-окно: ${CONTEXT_HISTORY_LIMIT}+ инфраструктурных строк новее живого диалога, диалог всё ещё в истории (фильтр в SQL до limit)`, async () => {
     const user = await freshGraph();
     const base = Date.UTC(2026, 5, 2, 9, 0, 0);
-    const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
-    await withIdentity(db, user, async (tx) => {
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), async (tx) => {
       await tx.insert(chatMessages).values({
         id: newId(),
         threadId,
@@ -809,7 +823,9 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         createdAt: new Date(base + 60_000),
       });
     });
-    const ctx = await withIdentity(db, user, (tx) => buildContext(tx, { graphId: user, threadId }));
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
     expect(ctx.messages).toEqual([
       { role: 'user', content: 'живой вопрос' },
       { role: 'assistant', content: 'живой ответ' },
@@ -820,13 +836,13 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     const user = await freshGraph();
     const entityId = newId();
     // Отдельные транзакции — детерминированный created_at-порядок
-    const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
-    await withIdentity(db, user, (tx) =>
+    const threadId = await withIdentity(db, personal(user), (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, personal(user), (tx) =>
       appendMessage(tx, { id: newId(), threadId, role: 'user', content: 'что на неделе?' }),
     );
     // Материализация recurring-инстансов (§5.4): batch-audit source='system' —
     // инфраструктурный шум на каждый пересчёт агенды, модель его видеть не должна
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       appendAudit(tx, threadId, {
         type: 'batch',
         entityId: null,
@@ -836,7 +852,7 @@ describe('buildContext — слой 4: сжатие audit/системных с�
       }),
     );
     // Обычное действие владельца в UI — наблюдаемое событие среды, остаётся
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       appendAudit(tx, threadId, {
         type: 'entity_updated',
         entityId,
@@ -845,7 +861,9 @@ describe('buildContext — слой 4: сжатие audit/системных с�
         source: 'ui',
       }),
     );
-    const ctx = await withIdentity(db, user, (tx) => buildContext(tx, { graphId: user, threadId }));
+    const ctx = await withIdentity(db, personal(user), (tx) =>
+      buildContext(tx, { graphId: user, threadId }),
+    );
     expect(ctx.messages).toEqual([
       { role: 'user', content: 'что на неделе?' },
       { role: 'user', content: `[система] [действие: entity_updated ${entityId} (ui)]` },

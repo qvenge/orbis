@@ -1,12 +1,13 @@
 import { expect, test } from 'bun:test';
 import { MIN_COMPATIBLE_CLIENT_VERSION } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
+import { accountOf, mintGraph, personal } from '../test/helpers';
 import { appRouter } from './router';
 import type { Context } from './trpc';
 
 // ping/whoami БД не трогают — стаб вместо пула соединений
 const ctx: Context = {
-  actorUserId: null,
+  identity: null,
   actorKind: 'owner',
   clientVersion: null,
   db: null as unknown as Context['db'],
@@ -52,14 +53,14 @@ test('устаревший клиент получает отказ версии
 
 // §9.3 (Task 3): ownerOnlyProcedure — агент (PAT) не управляет аккаунтом владельца.
 // db — стаб: FORBIDDEN обязан лететь из middleware ДО какого-либо обращения к БД.
-const agentUserId = crypto.randomUUID();
-const agentCtx: Context = { ...ctx, actorUserId: agentUserId, actorKind: 'agent' };
+const agentGraph = mintGraph();
+const agentCtx: Context = { ...ctx, identity: personal(agentGraph), actorKind: 'agent' };
 
 // Находка ревью 1c-2: timezone принималась как любая непустая строка, а queryContext
 // строит из неё Intl.DateTimeFormat — невалидная зона роняла RangeError на каждом
 // entity.query/count и на тулах агента. Гейт стоит во входной схеме, до withIdentity
 // (db здесь — стаб: до БД дойти не должно).
-const ownerCtx: Context = { ...ctx, actorUserId: crypto.randomUUID(), actorKind: 'owner' };
+const ownerCtx: Context = { ...ctx, identity: personal(mintGraph()), actorKind: 'owner' };
 
 test('updateSettings: невалидная таймзона отклоняется валидацией входа', async () => {
   const caller = appRouter.createCaller(ownerCtx);
@@ -137,9 +138,10 @@ test('мутации графа/журнала под агентом: entity/rel
 });
 
 test('агент проходит protectedProcedure (whoami) без заголовка версии', async () => {
-  // Identity есть identity: PAT-агент аутентифицирован, version-гейт без заголовка молчит
+  // Identity есть: PAT-агент аутентифицирован, version-гейт без заголовка молчит.
+  // Наружу едет АКТОР пары — у личного графа это его же id (D44, `identityOfPerson`).
   const caller = appRouter.createCaller(agentCtx);
-  expect(await caller.whoami()).toEqual({ actorUserId: agentUserId });
+  expect(await caller.whoami()).toEqual({ actorUserId: accountOf(agentGraph) });
 });
 
 test('равная/новая версия, отсутствие и мусорный заголовок проходят', async () => {

@@ -3,10 +3,18 @@
 // middleware ДО какого-либо обращения к БД; полный цикл против живой БД через
 // createCallerFactory (pending создаёт dispatchTool — как это сделает ai.sendMessage).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -23,8 +31,8 @@ const createCaller = createCallerFactory(appRouter);
 const userA = mintGraph();
 const userB = mintGraph();
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {
@@ -48,7 +56,7 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
 /** Сид-сущность мимо синка + pending архивации инициативой AI (§7.10, ряд archives). */
 async function seedPendingArchive(): Promise<{ target: WireEntity; pendingId: string }> {
   const r = await execute(db, {
-    actorUserId: userA,
+    identity: personal(userA),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool: 'entity_create', input: { title: 'Цель approve', tags: [] } }],
@@ -56,7 +64,7 @@ async function seedPendingArchive(): Promise<{ target: WireEntity; pendingId: st
   if (!r.ok) throw new Error(`seed: ${r.error.code}`);
   const target = r.results[0] as WireEntity;
   const d = await dispatchTool(
-    { db, actorUserId: userA, actorKind: 'ai', source: 'chat', explicitCommand: false },
+    { db, identity: personal(userA), actorKind: 'ai', source: 'chat', explicitCommand: false },
     'entity_update',
     { id: target.id, archived: true },
   );
@@ -67,7 +75,7 @@ async function seedPendingArchive(): Promise<{ target: WireEntity; pendingId: st
 }
 
 async function archivedOf(id: string): Promise<boolean | undefined> {
-  const rows = await withIdentity(db, userA, (tx) =>
+  const rows = await withIdentity(db, personal(userA), (tx) =>
     tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
   );
   return rows[0]?.archived;
@@ -77,7 +85,7 @@ describe('ai.approve / ai.reject: ownerOnly (§9.3)', () => {
   test('PAT-агент не может approve/reject: FORBIDDEN из middleware до БД', async () => {
     // db — стаб: если middleware пропустит, вызов упадёт не-FORBIDDEN ошибкой БД
     const agentCtx: Context = {
-      actorUserId: await freshGraph(),
+      identity: personal(await freshGraph()),
       actorKind: 'agent',
       db: null as unknown as Context['db'],
       clientVersion: null,
@@ -154,7 +162,7 @@ describe('ai.approve / ai.reject: гейт рода записи (D42 ОЧ.2, С
    * прогоном ради одного поля `kind` была бы фикстурой втрое дороже проверяемого.
    */
   async function seedQuestion(question: string): Promise<string> {
-    return withIdentity(db, userA, async (tx) => {
+    return withIdentity(db, personal(userA), async (tx) => {
       const created = await createPending(tx, {
         actor: { userId: userA, kind: 'ai', source: 'routine', runId: newId() },
         kind: 'question',
@@ -180,7 +188,7 @@ describe('ai.approve / ai.reject: гейт рода записи (D42 ОЧ.2, С
     }
 
     // Гейт стоит ДО записи: чужая судьба вопросу не досталась ни одной строкой
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(
         sql`SELECT id FROM chat_messages
             WHERE metadata @> ${JSON.stringify({ rejects: pendingId })}::jsonb`,

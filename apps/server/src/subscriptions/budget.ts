@@ -48,6 +48,7 @@ import {
   bindingIndexOf,
   type CategoryTrendPoint,
   type EnvelopeStatus,
+  type GraphId,
   isModuleEnabled,
   type ResolvedBinding,
   type SurfaceName,
@@ -460,7 +461,7 @@ export function materializedAggregatesOf(
  */
 async function runSumCached(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   cctx: CompileCtx,
   def: BudgetSubscription,
   la: LedgerArgs,
@@ -604,7 +605,7 @@ export function spentCacheContourOf(reg: RegistrySnapshot): SpentCacheContour {
  */
 export async function spentContributionOf(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   cctx: CompileCtx,
   args: { entityId: string; envelopeId: string; defaultCurrency: string },
 ): Promise<{ amount: string; asOf: string } | null> {
@@ -910,7 +911,7 @@ function periodLedgerNames(def: BudgetSubscription): { balance: string; unbudget
  * нет. Наблюдаемая разница: чтобы ребро от НЕ-категории повлияло на карточку, владельцу надо ещё и
  * направить на неё конверт слотом `category`.
  */
-async function rollupEdges(tx: Tx, graphId: string, role: string): Promise<Map<string, string[]>> {
+async function rollupEdges(tx: Tx, graphId: GraphId, role: string): Promise<Map<string, string[]>> {
   const rows = (await tx.execute(sql`
     SELECT r.source_id, r.target_id FROM relations r
     JOIN entities s ON s.id = r.source_id
@@ -1114,7 +1115,7 @@ interface LedgerNarrowing {
  */
 async function runLedgers(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
@@ -1330,7 +1331,7 @@ async function runList(
  */
 const BUDGET_SURFACE: SurfaceName = 'finance/budget-overview';
 
-async function budgetSurfaceOff(tx: Tx, graphId: string): Promise<boolean> {
+async function budgetSurfaceOff(tx: Tx, graphId: GraphId): Promise<boolean> {
   return !isModuleEnabled(surfaceModuleOf(BUDGET_SURFACE), await disabledModulesOf(tx, graphId));
 }
 
@@ -1351,7 +1352,7 @@ function emptyOverview(month: string): BudgetOverview {
 
 export async function budgetOverviewOf(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
@@ -1416,7 +1417,7 @@ export async function budgetOverviewOf(
  */
 export async function budgetAlertCountOf(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
@@ -1429,7 +1430,7 @@ export async function budgetAlertCountOf(
 /** Тул `budget_status` (§4.3): Overview + классификация ВСЕХ категорий владельца. */
 export async function budgetStatusOf(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   args: BudgetArgs,
   def: BudgetSubscription,
   reg: RegistrySnapshot,
@@ -1453,7 +1454,7 @@ export async function budgetStatusOf(
  */
 export async function envelopeForCategoryOf(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   args: { categoryId: string; date: string; today: string },
   def: BudgetSubscription,
   reg: RegistrySnapshot,
@@ -1497,7 +1498,7 @@ export async function envelopeForCategoryOf(
  */
 export async function categoryTrendOf(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   args: { categoryId: string; months: number; today: string },
   def: BudgetSubscription,
   reg: RegistrySnapshot,

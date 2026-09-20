@@ -43,6 +43,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres, { type ISql, type Sql } from 'postgres';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
+import { parseGraphId } from '../identity';
 import {
   baseSystemFor,
   type RegistryConflict,
@@ -413,12 +414,12 @@ export async function mergeRegistryDeltas(
                        SET delta = ${JSON.stringify(merged)}::jsonb, base_version = ${systemVersion}
                      WHERE id = ${row.id}::uuid`,
         );
-        await bumpOwnerRegistryVersion(tx, row.graphId);
+        await bumpOwnerRegistryVersion(tx, parseGraphId(row.graphId));
         if (conflicts.length === 0) return;
         // Заметка — ТОЙ ЖЕ транзакцией, что переписывает дельту. Порознь возможен исход
         // «дельта слита, а владельцу не сказали»: следующий прогон её уже не найдёт
         // (`base_version` переехал на текущую версию) и промолчит навсегда.
-        const threadId = await ensureGlobalThread(tx, row.graphId);
+        const threadId = await ensureGlobalThread(tx, parseGraphId(row.graphId));
         await appendMessageIdempotent(tx, {
           id: registryMergeNoteId(row.id, systemVersion),
           threadId,
@@ -433,7 +434,7 @@ export async function mergeRegistryDeltas(
         // выбор ещё остался (§А3-3, Задача 15). Тем же tx и по той же причине, что заметка:
         // порознь возможен исход «дельта слита, а разобрать её владельцу не предложили».
         await createDriftConflictUnits(tx, {
-          graphId: row.graphId,
+          graphId: parseGraphId(row.graphId),
           systemVersion,
           deltaRowId: row.id,
           merged,

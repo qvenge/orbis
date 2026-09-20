@@ -10,6 +10,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -98,7 +99,7 @@ async function closeForeign(routineId: string, runId: string, failNote: string):
   const r = await closeRoutineRun(
     {
       db,
-      graphId: owner,
+      identity: personal(owner),
       subject: { kind: 'routine', routineId },
       clock: () => T0,
       sink: realSink,
@@ -148,7 +149,7 @@ function deps(provider: LLMProvider, over: Partial<RoutineDeps> = {}): RoutineDe
 }
 
 async function routineRow(routineId: string): Promise<RoutineRow> {
-  const row = await withIdentity(db, owner, (tx) => routineById(tx, routineId));
+  const row = await withIdentity(db, personal(owner), (tx) => routineById(tx, routineId));
   if (row === null) throw new Error(`рутина ${routineId} не найдена`);
   return row;
 }
@@ -161,7 +162,7 @@ async function run(
 ): Promise<RunEnd> {
   const routine = await routineRow(args.routineId);
   return runRoutineRun(deps(provider, over), {
-    graphId: owner,
+    identity: personal(owner),
     routine,
     runId: args.runId,
     bucket: args.bucket,
@@ -185,7 +186,9 @@ async function runAspect(runId: string): Promise<RunProps> {
 }
 
 async function usageRows() {
-  return withIdentity(db, owner, (tx) => tx.select().from(aiUsage).where(eq(aiUsage.model, MODEL)));
+  return withIdentity(db, personal(owner), (tx) =>
+    tx.select().from(aiUsage).where(eq(aiUsage.model, MODEL)),
+  );
 }
 
 async function seedTask(title: string): Promise<string> {
@@ -376,7 +379,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     expect(mutation?.run_id).toBe(runId);
     expect(mutation?.actor_kind).toBe('ai');
 
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('inbox');
   });
@@ -585,7 +588,7 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     // не повод для оценки стоп-крана (V1.3), иначе тот же тап вернул бы паузу по хвосту
     // из тех же трёх плановых сбоев
     const unpaused = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [

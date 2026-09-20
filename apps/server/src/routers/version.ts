@@ -55,7 +55,7 @@ export const versionRouter = router({
       const r = await execute(
         ctx.db,
         {
-          actorUserId: ctx.actorUserId,
+          identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
           operations: [
@@ -74,7 +74,7 @@ export const versionRouter = router({
   /** Снимки сущности, свежие сверху (§4.10: RLS скоупит владельцем — своего graph_id в WHERE нет). */
   list: ownerOnlyProcedure.input(z.object({ entityId: z.string().uuid() }).strict()).query(
     ({ ctx, input }): Promise<WireEntityVersion[]> =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
         // Тела НЕ читаем: в списке их не показывают, а два тела на строку — это вес всего
         // экрана. Вместо документа — признак его наличия (тот же hasDoc, что у wire-формы
         // executor'а; форма собирается здесь, потому что в выдаче нет колонок под неё).
@@ -117,7 +117,7 @@ export const versionRouter = router({
     )
     .mutation(async ({ ctx, input }): Promise<WireEntity> => {
       // Снимок читается под RLS: чужая и несуществующая версия неразличимы — NOT_FOUND
-      const version = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      const version = await withIdentity(ctx.db, ctx.identity, async (tx) => {
         const rows = await tx
           .select()
           .from(entityVersions)
@@ -136,7 +136,7 @@ export const versionRouter = router({
       const r = await execute(
         ctx.db,
         {
-          actorUserId: ctx.actorUserId,
+          identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui',
           operations: [

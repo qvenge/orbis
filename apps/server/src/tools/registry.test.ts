@@ -3,6 +3,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { GraphId } from '@orbis/shared';
 import {
   askInput,
   attachAspectInput,
@@ -36,6 +37,7 @@ import {
   adminDb,
   appDb,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -103,8 +105,8 @@ afterAll(async () => {
   await client.end();
 });
 
-function registryFor(userId: string): Promise<OrbisToolDef[]> {
-  return withIdentity(db, userId, (tx) => buildToolRegistry(tx, userId));
+function registryFor(userId: GraphId): Promise<OrbisToolDef[]> {
+  return withIdentity(db, personal(userId), (tx) => buildToolRegistry(tx, userId));
 }
 
 function defOf(defs: OrbisToolDef[], name: string): OrbisToolDef {
@@ -390,7 +392,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
 describe('buildToolRegistry: attach_* из реестра аспектов (§7.6)', () => {
   test('attach_orbis_task: description = ai_instructions из БД', async () => {
     const defs = await registryFor(userB);
-    const rows = await withIdentity(db, userB, (tx) =>
+    const rows = await withIdentity(db, personal(userB), (tx) =>
       tx
         .select({ ai: aspectDefinitions.aiInstructions })
         .from(aspectDefinitions)

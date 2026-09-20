@@ -22,6 +22,7 @@ import {
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
+  type GraphId,
   type ModuleId,
   moduleOfTool,
   newId,
@@ -70,6 +71,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { undoLast } from '../executor/undo';
+import type { Identity } from '../identity';
 import type { GrantRef } from '../oauth/grants';
 import {
   AUTONOMY_PROPERTIES,
@@ -136,7 +138,8 @@ const sink = makeChatJournalSink();
 
 export interface ToolCallCtx {
   db: Db;
-  actorUserId: string;
+  /** Пара «актор + текущий граф» (D44) — едет в ExecuteRequest как есть. */
+  identity: Identity;
   actorKind: ActorKind; // 'owner' | 'ai' | 'agent'; в ExecuteRequest идёт как есть
   /**
    * Поверхность вызова. 'routine' (V1.5) — внутренний исполнитель в прогоне рутины:
@@ -200,13 +203,13 @@ export async function dispatchTool(
   try {
     // Резолв тула и чтения — один withIdentity-tx (RLS); мутации исполняются после:
     // execute открывает собственный tx, вложить его в текущий нельзя.
-    const pre = await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<Resolution> => {
+    const pre = await withIdentity(ctx.db, ctx.identity, async (tx): Promise<Resolution> => {
       // Снимок реестров — ОДИН на вызов, и он же уезжает дальше: по нему собираются
       // определения тулов, резолвятся ключи свойств на границе и печатается LLM-проекция.
       // Второй снимок, взятый отдельно, мог бы разойтись с первым на правке реестра между
       // двумя чтениями (тот же довод, что у `loadTargets` предложения).
-      const reg = await effectiveRegistry(tx, ctx.actorUserId);
-      const disabled = await disabledModulesOf(tx, ctx.actorUserId);
+      const reg = await effectiveRegistry(tx, ctx.identity.graph);
+      const disabled = await disabledModulesOf(tx, ctx.identity.graph);
       const defs = buildToolDefs(reg, disabled);
       const def = defs.find((d) => d.name === name);
       if (!def) {
@@ -423,7 +426,7 @@ export async function dispatchTool(
       return await runAgentVerb(
         {
           db: ctx.db,
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           subject,
           clock: ctx.clock ?? (() => new Date()),
           sink,
@@ -598,7 +601,7 @@ async function runRead(
   // (хук материализации §5.4 / конвейер §2.8 исполняются вне pre-tx)
   if (name === 'entity_get') {
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
-    return { status: 'ok', result: await readEntity(tx, ctx.actorUserId, parsed) };
+    return { status: 'ok', result: await readEntity(tx, ctx.identity.graph, parsed) };
   }
   if (name === 'property_catalog') {
     // Каталог читается из СНИМКА реестра — того же, по которому собран список тулов и по
@@ -610,7 +613,7 @@ async function runRead(
       // Часы вызова, а не `now()` БД: фильтр возраста (`olderThanDays`) обязан мерить время
       // тем же источником, которым его мерит весь остальной прогон.
       result: await runPropertyCatalog(tx, reg, parsed, OWNER_LOCALE, {
-        graphId: ctx.actorUserId,
+        graphId: ctx.identity.graph,
         now: (ctx.clock ?? (() => new Date()))(),
       }),
     };
@@ -634,7 +637,8 @@ function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
   // Гейт §8 — тот же ключ 'import.csv', что у процедур роутера импорта
   // (по образцу gateImportCsv из import/review.ts): отказ резолвера → LIMIT, не карточка.
   // Резолвер — из инъецируемого шва ctx (как у роутера), иначе денайл непокрываем.
-  const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.actorUserId, IMPORT_CSV_KEY);
+  // Субъект тарифа — АККАУНТ (Р-КГ-6, спека §3.4), не граф.
+  const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.identity.actor, IMPORT_CSV_KEY);
   if (!decision.allowed) {
     throw new ExecError('LIMIT', `лимит «${IMPORT_CSV_KEY}» исчерпан`, {
       key: IMPORT_CSV_KEY,
@@ -680,7 +684,7 @@ async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispat
       { tool: 'undo_last', source: ctx.source, actorKind: ctx.actorKind },
     );
   }
-  const r = await undoLast(ctx.db, { actorUserId: ctx.actorUserId });
+  const r = await undoLast(ctx.db, { identity: ctx.identity });
   if (r.ok) {
     return {
       status: 'ok',
@@ -730,7 +734,7 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
   const parsed = parseEnvelope(entityQueryInput, input, 'entity_query');
   return queryWithMaterialization({
     db: ctx.db,
-    actorUserId: ctx.actorUserId,
+    identity: ctx.identity,
     thisEntityId: null, // `this` вне контекста сущности
     parse: (cctx) =>
       parsed.ast === undefined
@@ -765,7 +769,7 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
  */
 async function runBudgetStatus(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   const parsed = parseEnvelope(budgetStatusInput, input, 'budget_status');
-  const result = await budgetStatus(ctx.db, ctx.actorUserId, parsed.month);
+  const result = await budgetStatus(ctx.db, ctx.identity, parsed.month);
   return { status: 'ok', result };
 }
 
@@ -791,7 +795,7 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
   }
   return queryWithMaterialization({
     db: ctx.db,
-    actorUserId: ctx.actorUserId,
+    identity: ctx.identity,
     thisEntityId: null, // `this` вне контекста сущности
     parse: (cctx) => parseQueryText(parsed.query, cctx),
     run: async (tx, ast, cctx) => {
@@ -1032,7 +1036,7 @@ async function runMutation(
     // payload'ом (уже envelope-валидированным; имена операций batch сверены с реестром);
     // до approve ничего не записано ни в граф, ни в журнал §7.8. Исполнение и
     // ревалидацию текущего состояния делает approve (policy/pending.ts)
-    const pending = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+    const pending = await withIdentity(ctx.db, ctx.identity, async (tx) => {
       // Карточка обязана называть, ЧТО подтверждается, — а не имя тула: снятие замка (как и
       // его установка) — осознанный акт человека (B1-2). Называется ВСЁ, что подняло
       // уровень: и правка автономии (V1.10 — режим, белый список и то, что СНИМАЕТСЯ), и
@@ -1111,7 +1115,7 @@ async function runMutation(
         // Грант едет в pending-запись: подтверждать будет владелец кнопкой, но
         // атрибуция исполнения остаётся за ТЕМ, кто попросил (§7.8, D11 + С2)
         actor: {
-          userId: ctx.actorUserId,
+          userId: ctx.identity.graph,
           kind: ctx.actorKind,
           source: ctx.source,
           grantId: ctx.grant?.id,
@@ -1153,7 +1157,7 @@ async function runMutation(
   const r = await execute(
     ctx.db,
     {
-      actorUserId: ctx.actorUserId,
+      identity: ctx.identity,
       actorKind: ctx.actorKind,
       source: ctx.source,
       threadId: ctx.threadId,
@@ -1197,7 +1201,7 @@ async function runMutation(
   // отфильтровать «не рекатегоризации» — работа самой эскалации.
   if (ctx.source === 'chat' && actionId !== undefined) {
     await escalateAfterMutation(ctx.db, {
-      graphId: ctx.actorUserId,
+      identity: ctx.identity,
       actionId,
       // payload'ы уже прошли схемы тулов в validateMutationEnvelope/validateBatchOperations
       operations: batchPayload?.operations ?? [{ tool, input: payload }],
@@ -1488,9 +1492,9 @@ async function deferRoutineUnit(
     );
   }
   const dedupeKey = deferDedupeKey(runId, tool, payload);
-  const pendingId = pendingMessageId(ctx.actorUserId, dedupeKey);
+  const pendingId = pendingMessageId(ctx.identity.graph, dedupeKey);
 
-  return await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<ToolDispatchResult> => {
+  return await withIdentity(ctx.db, ctx.identity, async (tx): Promise<ToolDispatchResult> => {
     // 1. Проба существования по PK (образец — `routines/propose.ts`): `createPending`
     // идемпотентен, но «завёл» и «нашёл» он не различает, а кап различать обязан.
     const found = await tx
@@ -1514,7 +1518,9 @@ async function deferRoutineUnit(
     // 2. Кап единиц на прогон (ОЧ.10) — по ОТКРЫТЫМ: решённая владельцем освобождает место.
     // Отказ структурный, чтобы модель скорректировалась (§9.9); молчаливое усечение
     // означало бы «сделано» для модели и «не было» для владельца.
-    const open = (await listRunUnits(tx, ctx.actorUserId, runId)).filter((u) => u.fate === 'open');
+    const open = (await listRunUnits(tx, ctx.identity.graph, runId)).filter(
+      (u) => u.fate === 'open',
+    );
     if (open.length >= MAX_RUN_UNITS) {
       return errorResult('VALIDATION', 'пачка полна — заверши прогон', {
         reason: 'run_units_cap',
@@ -1523,14 +1529,14 @@ async function deferRoutineUnit(
     }
 
     // 3. Предусловия и «было» снимаются ЗДЕСЬ и больше не переснимаются (ОЧ.13, §9.4)
-    const snapshot = await snapshotDeferredUnit(tx, ctx.actorUserId, tool, payload);
+    const snapshot = await snapshotDeferredUnit(tx, ctx.identity.graph, tool, payload);
     if ('error' in snapshot) return snapshot.error;
 
     const pending = await createPending(tx, {
       // Тред РУТИНЫ, а не тред вызова (V1.6): единица — событие рутины, и читается она там
       // же, где вся её остальная переписка с владельцем.
-      threadId: await ensureEntityThread(tx, ctx.actorUserId, routine.id),
-      actor: { userId: ctx.actorUserId, kind: ctx.actorKind, source: 'routine', runId },
+      threadId: await ensureEntityThread(tx, ctx.identity.graph, routine.id),
+      actor: { userId: ctx.identity.graph, kind: ctx.actorKind, source: 'routine', runId },
       tool,
       input: snapshot.input,
       level: 'explicit-confirmation',
@@ -1584,7 +1590,7 @@ async function deferRoutineUnit(
  */
 async function snapshotDeferredUnit(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   tool: string,
   payload: unknown,
 ): Promise<
@@ -1754,7 +1760,7 @@ function registryAddressesToId(
  */
 export async function snapshotRegistryUnit(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   tool: string,
   payload: Record<string, unknown>,
 ): Promise<{ input: unknown; summary: string; rows: DeferredRow[] }> {
@@ -2010,7 +2016,7 @@ async function gateRoutinesMax(
   // рутиной: гейт лимита не имеет права открываться от мусора во входе
   const unresolvedCount = overExisting.length - targets.length;
 
-  return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+  return withIdentity(ctx.db, ctx.identity, async (tx) => {
     const alreadyRoutines =
       targets.length === 0 ? new Set<string>() : await routinesAmong(tx, targets);
     // Set: две операции по одной цели заводят одну рутину, а не две
@@ -2018,7 +2024,7 @@ async function gateRoutinesMax(
     const newRoutines = createdCount + newTargets.size + unresolvedCount;
     if (newRoutines === 0) return null;
 
-    const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.actorUserId, ROUTINES_MAX_KEY);
+    const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.identity.actor, ROUTINES_MAX_KEY);
     const denial = errorResult('LIMIT', `достигнут лимит рутин («${ROUTINES_MAX_KEY}»)`, {
       key: ROUTINES_MAX_KEY,
       limit: decision.limit,
@@ -2361,7 +2367,7 @@ async function autonomyChangedByCarrier(
   }
   if (!needsState) return { changes: out, carrierAtOp, instructionAtOp };
 
-  const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
+  const rows = await withIdentity(ctx.db, ctx.identity, (tx) =>
     tx
       .select({
         id: entities.id,
@@ -2807,7 +2813,7 @@ export async function routineDeferForbidden(
   const ids = [...new Set([...entityTargets, ...relationEnds])];
   if (ids.length === 0) return null;
 
-  const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
+  const rows = await withIdentity(ctx.db, ctx.identity, (tx) =>
     tx
       .select({ id: entities.id, aspects: entities.aspects })
       .from(entities)
@@ -3089,7 +3095,7 @@ async function runThreadPost(
   ctx: ToolCallCtx,
   parsed: ThreadPostInput,
 ): Promise<ToolDispatchResult> {
-  const message = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+  const message = await withIdentity(ctx.db, ctx.identity, async (tx) => {
     // Периметр записи фонового исполнителя (С7/С9, инвариант 2 спеки) — ДО создания
     // треда и записи. Условие «не full», а не «= worker», по той же причине, что и в
     // гейте скоупа выше: незнакомое значение колонки scope обязано сужать доступ.
@@ -3099,7 +3105,7 @@ async function runThreadPost(
     if (ctx.grant !== undefined && ctx.grant.scope !== 'full') {
       const allowed = await isWorkerThreadTarget(
         tx,
-        ctx.actorUserId,
+        ctx.identity.graph,
         ctx.grant.id,
         parsed.entity_id,
       );
@@ -3113,7 +3119,7 @@ async function runThreadPost(
     }
     // Тред создаётся только для видимой актору сущности; чужая и несуществующая
     // под RLS неразличимы — единый NOT_FOUND (бросает ensureEntityThread)
-    const threadId = await ensureEntityThread(tx, ctx.actorUserId, parsed.entity_id);
+    const threadId = await ensureEntityThread(tx, ctx.identity.graph, parsed.entity_id);
     const fields = {
       threadId,
       role: 'user' as const,

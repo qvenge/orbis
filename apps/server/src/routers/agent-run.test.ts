@@ -5,9 +5,16 @@
 // иначе «ответ владельца» проверялся бы на руками вылепленном прогоне, а не на том,
 // который оставляет настоящий агент.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { ClaimTaskResult, MyQueueResult } from '@orbis/shared';
+import type { ClaimTaskResult, GraphId, MyQueueResult } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import type { ActionRecord } from '../executor/types';
 import { appRouter } from '../router';
 import { type AnyRecord, agentLoopHelpers } from '../test/agent-loop-helpers';
@@ -23,8 +30,8 @@ const createCaller = createCallerFactory(appRouter);
 const MINUTE = 60_000;
 
 /** Caller от лица владельца: ctx как в бою (§9.1); clientVersion=null — гейт пропускает. */
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 function okResult<T>(r: Awaited<ReturnType<typeof dispatchTool>>): T {
@@ -43,7 +50,7 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
 }
 
 /** Действия журнала, записанные против прогона (обратная ссылка run_id, Задача 6). */
-async function actionsOfRun(owner: string, runId: string): Promise<ActionRecord[]> {
+async function actionsOfRun(owner: GraphId, runId: string): Promise<ActionRecord[]> {
   return (await actionsOf(owner)).filter((a) => a.run_id === runId);
 }
 
@@ -256,7 +263,7 @@ describe('agentRun.sweep (С6)', () => {
    * должно быть — это боевая процедура), поэтому фикстура отсчитывается от Date.now().
    */
   async function seedStale(
-    owner: string,
+    owner: GraphId,
     grantId: string,
   ): Promise<{ ticketId: string; runId: string }> {
     const at = new Date(Date.now() - 31 * MINUTE).toISOString();
@@ -354,7 +361,7 @@ describe('agentRun: ownerOnly (§9.3)', () => {
    * свой же вопрос. Гейт обязан лететь ДО БД, поэтому caller без рабочего пула.
    */
   const agent = createCaller({
-    actorUserId: mintGraph(),
+    identity: personal(mintGraph()),
     actorKind: 'agent',
     db: undefined as never,
     clientVersion: null,

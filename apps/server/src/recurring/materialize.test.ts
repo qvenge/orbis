@@ -3,6 +3,7 @@
 // Интеграционные тесты против живой БД: инстансы порождает ТОЛЬКО сервер, через
 // executor (source='system'), с детерминированными uuidv5-id и горизонтом 14 дней.
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   addDays,
   BUILTIN_ASPECT_DEFS,
@@ -18,6 +19,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -34,8 +36,8 @@ requireEnv();
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {
@@ -48,7 +50,7 @@ afterAll(async () => {
 
 /** Шаблон через executor (единственный путь мутаций); возвращает id. */
 async function createTemplate(
-  owner: string,
+  owner: GraphId,
   input: {
     id?: string;
     title: string;
@@ -62,7 +64,7 @@ async function createTemplate(
   mechanism: 'user' | 'import' = 'user',
 ): Promise<string> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'system',
     mechanism,
@@ -81,14 +83,14 @@ function dailyScheduleProps(startDate: string): Record<string, unknown> {
   };
 }
 
-async function ownEntities(owner: string, ids: string[]) {
-  return withIdentity(db, owner, (tx) =>
+async function ownEntities(owner: GraphId, ids: string[]) {
+  return withIdentity(db, personal(owner), (tx) =>
     tx.select().from(entities).where(inArray(entities.id, ids)),
   );
 }
 
-async function derivedFrom(owner: string, templateId: string) {
-  return withIdentity(db, owner, (tx) =>
+async function derivedFrom(owner: GraphId, templateId: string) {
+  return withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(relations)
@@ -112,7 +114,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -157,7 +159,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const first = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -167,7 +169,7 @@ describe('materializeInstances (01 §5.4)', () => {
     // Правка инстанса (02 §6 «Правка инстанса recurring»: меняется только инстанс)
     const instanceId = recurringInstanceId(templateId, '2026-07-02');
     const upd = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -179,7 +181,7 @@ describe('materializeInstances (01 §5.4)', () => {
     // Повтор того же окна — идемпотентен, правка не перезаписана
     const again = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -189,7 +191,7 @@ describe('materializeInstances (01 §5.4)', () => {
     // Пересекающееся окно другого запроса: досоздаёт только новые даты, без дублей
     const overlap = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-02',
       to: '2026-07-05',
       today: '2026-07-01',
@@ -214,7 +216,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-31',
       today: '2026-07-01',
@@ -241,7 +243,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2020-01-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -279,7 +281,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-02',
       today: '2026-07-01',
@@ -313,7 +315,7 @@ describe('materializeInstances (01 §5.4)', () => {
       aspects: ['orbis/schedule'],
     });
     const arch = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id: templateId, archived: true } }],
@@ -322,7 +324,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -355,7 +357,7 @@ describe('materializeInstances (01 §5.4)', () => {
     try {
       const r = await materializeInstances({
         db,
-        graphId: owner,
+        identity: personal(owner),
         from: '2026-07-01',
         to: '2026-07-02',
         today: '2026-07-01',
@@ -393,7 +395,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-03',
       today: '2026-07-01',
@@ -430,7 +432,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -473,7 +475,7 @@ describe('materializeInstances (01 §5.4)', () => {
   test('снятый аспект отменяет и сам шаблон, и наследование финансов (Р9)', async () => {
     const owner = await freshGraph();
     const ghost = crypto.randomUUID();
-    await withIdentity(db, owner, (tx) =>
+    await withIdentity(db, personal(owner), (tx) =>
       tx.insert(entities).values(
         rawEntityRow({
           graphId: owner,
@@ -495,7 +497,7 @@ describe('materializeInstances (01 §5.4)', () => {
       aspects: ['orbis/schedule'],
     });
     // Финансовые значения кладём мимо аспекта — так же, как их оставил бы detach.
-    await withIdentity(db, owner, (tx) =>
+    await withIdentity(db, personal(owner), (tx) =>
       tx
         .update(entities)
         .set({
@@ -513,7 +515,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -549,7 +551,7 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const r = await materializeInstances({
       db,
-      graphId: owner,
+      identity: personal(owner),
       from: '2026-07-01',
       to: '2026-07-01',
       today: '2026-07-01',
@@ -762,7 +764,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
 
     // §5.4 «любой запрос диапазона дат потребителем query-движка»: LLM/MCP-путь тоже
     const r = await dispatchTool(
-      { db, actorUserId: owner, actorKind: 'ai', source: 'chat', explicitCommand: false },
+      { db, identity: personal(owner), actorKind: 'ai', source: 'chat', explicitCommand: false },
       'entity_query',
       { query: 'orbis/start_at=next_7d' },
     );

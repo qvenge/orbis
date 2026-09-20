@@ -8,9 +8,17 @@
 // «Сегодня» шва не имеет (K13): фикстуры строятся ОТНОСИТЕЛЬНО реального «сегодня» в
 // Europe/Moscow — прецедент `agenda-acceptance.test.ts`.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { type AgendaListResult, addDays } from '@orbis/shared';
 import { GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
-import { appDb, freshGraph, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  freshGraph,
+  personal,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { materializeInstances } from '../recurring/materialize';
 import { effectiveRegistry } from '../registry/cache';
@@ -25,17 +33,17 @@ const createCaller = createCallerFactory(appRouter);
 const TZ = 'Europe/Moscow';
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
 const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
-const callerFor = (u: string) =>
-  createCaller({ actorUserId: u, actorKind: 'owner', db, clientVersion: null });
+const callerFor = (u: GraphId) =>
+  createCaller({ identity: personal(u), actorKind: 'owner', db, clientVersion: null });
 const make = async (
-  u: string,
+  u: GraphId,
   title: string,
   f: { props?: Record<string, unknown>; aspects?: string[] },
 ) => (await callerFor(u).entity.create({ input: { title, tags: [], ...f }, source: 'ui' })).id;
 
 /** Движок напрямую — без роутера и материализации: проверяется выборка, а не конвейер. */
-const listFor = (u: string, days = 8) =>
-  withIdentity(db, u, async (tx) => {
+const listFor = (u: GraphId, days = 8) =>
+  withIdentity(db, personal(u), async (tx) => {
     const reg = await effectiveRegistry(tx, u);
     return agendaListOf(tx, u, agendaSubscriptionOf(reg), { today, timeZone: TZ, days });
   });
@@ -163,7 +171,13 @@ describe('движок Agenda: потолок секций, наборы кон�
       },
       aspects: ['orbis/schedule'],
     });
-    await materializeInstances({ db, graphId: u, from: today, to: addDays(today, 7), today });
+    await materializeInstances({
+      db,
+      identity: personal(u),
+      from: today,
+      to: addDays(today, 7),
+      today,
+    });
     const win = (await listFor(u)).rows.filter((x) => x.section === 'window');
     expect(win.map((x) => x.entity.id)).not.toContain(tpl);
     expect(win.length).toBeGreaterThanOrEqual(7); // по инстансу на каждый день окна
@@ -207,7 +221,7 @@ describe('движок Agenda: потолок секций, наборы кон�
       aspects: ['orbis/schedule'],
     });
     const listWith = (sortBy: 'asc' | 'desc') =>
-      withIdentity(db, u, async (tx) => {
+      withIdentity(db, personal(u), async (tx) => {
         const def = agendaSubscriptionOf(await effectiveRegistry(tx, u));
         return agendaListOf(
           tx,
@@ -237,7 +251,7 @@ describe('движок Agenda: потолок секций, наборы кон�
       props: { 'orbis/task_status': 'planned', 'orbis/start_at': at(addDays(today, -1), '10:00') },
       aspects: ['orbis/task', 'orbis/schedule'],
     });
-    const r = await withIdentity(db, u, async (tx) => {
+    const r = await withIdentity(db, personal(u), async (tx) => {
       const def = agendaSubscriptionOf(await effectiveRegistry(tx, u));
       return agendaListOf(
         tx,
@@ -274,7 +288,7 @@ describe('движок Agenda: потолок секций, наборы кон�
       },
     });
     const listWith = (prefer: { show: string[]; overdue: string[] }) =>
-      withIdentity(db, u, async (tx) => {
+      withIdentity(db, personal(u), async (tx) => {
         const def = agendaSubscriptionOf(await effectiveRegistry(tx, u));
         return agendaListOf(
           tx,

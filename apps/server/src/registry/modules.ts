@@ -1,6 +1,7 @@
 // apps/server/src/registry/modules.ts
 // Маска включённости модулей владельца (§Б8-1/§Б8-3) — чтение и идемпотентная запись колонки
 // `user_settings.disabled_modules` (заведена миграцией 0018).
+import type { GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 
@@ -16,7 +17,7 @@ import type { Tx } from '../db/with-identity';
  * НЕ инвалидируется — маска в ключ кеша не входит по построению, а выключенный модуль просто
  * не читает ведомость. Включение обратно отдаёт те же числа, что и до выключения.
  */
-export async function disabledModulesOf(tx: Tx, graphId: string): Promise<readonly string[]> {
+export async function disabledModulesOf(tx: Tx, graphId: GraphId): Promise<readonly string[]> {
   const rows = (await tx.execute(sql`
     SELECT disabled_modules FROM user_settings WHERE graph_id = ${graphId}::uuid`)) as unknown as {
     disabled_modules: string[] | null;
@@ -29,7 +30,7 @@ export async function disabledModulesOf(tx: Tx, graphId: string): Promise<readon
 /** Идемпотентно в обе стороны: повтор не дублирует элемент, включение снимает ровно его. */
 export async function setModuleDisabled(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   module: string,
   disabled: boolean,
 ): Promise<void> {

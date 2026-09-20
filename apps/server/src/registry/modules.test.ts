@@ -5,6 +5,7 @@
 // Тесты интеграционные: одна живая БД под `withIdentity`, потому что предмет проверки —
 // СТРОКА `user_settings.disabled_modules` и то, что по ней видят четыре поверхности сразу.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { addDays, MODULE_IDS, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -12,6 +13,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -48,7 +50,12 @@ const maskOwner = mintGraph();
 // нашло бы ни одного действия — предмет проверки блока `module_set` пропал бы вместе с ним.
 const sink = makeChatJournalSink();
 const createCaller = createCallerFactory(appRouter);
-const caller = createCaller({ actorUserId: owner, actorKind: 'owner', db, clientVersion: null });
+const caller = createCaller({
+  identity: personal(owner),
+  actorKind: 'owner',
+  db,
+  clientVersion: null,
+});
 
 const TZ = 'Europe/Moscow'; // дефолт сида §7.3 — им же сервер считает «сегодня»
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
@@ -72,7 +79,7 @@ let attachNoteId = '';
 
 async function seedOne(input: Record<string, unknown>): Promise<string> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     mechanism: 'seed',
@@ -89,7 +96,7 @@ async function seedOne(input: Record<string, unknown>): Promise<string> {
  */
 beforeAll(async () => {
   await truncateAll();
-  await seedOwnerGraph(db, owner);
+  await seedOwnerGraph(db, personal(owner));
   noteId = await seedOne({ title: 'Заметка', tags: [], props: {}, aspects: ['orbis/note'] });
   attachNoteId = await seedOne({
     title: 'Заметка для attach',
@@ -146,7 +153,7 @@ afterAll(async () => {
  * унаследованная от предыдущего блока маска превратила бы порядок тестов в скрытый вход.
  */
 async function setModules(disabled: readonly string[]): Promise<void> {
-  await withIdentity(db, owner, async (tx) => {
+  await withIdentity(db, personal(owner), async (tx) => {
     for (const m of MODULE_IDS) await setModuleDisabled(tx, owner, m, disabled.includes(m));
   });
 }
@@ -169,23 +176,29 @@ function blockEntry(disabled: readonly string[]): () => Promise<void> {
 
 describe('маска модулей: чтение и запись (§Б8-1)', () => {
   test('строки настроек нет — маска пуста, а не отказ', async () => {
-    expect(await withIdentity(db, maskOwner, (tx) => disabledModulesOf(tx, maskOwner))).toEqual([]);
+    expect(
+      await withIdentity(db, personal(maskOwner), (tx) => disabledModulesOf(tx, maskOwner)),
+    ).toEqual([]);
   });
 
   test('выключение идемпотентно, включение снимает ровно один модуль', async () => {
-    await withIdentity(db, maskOwner, async (tx) => {
+    await withIdentity(db, personal(maskOwner), async (tx) => {
       await tx.insert(userSettings).values({ graphId: maskOwner });
       await setModuleDisabled(tx, maskOwner, 'finance', true);
       await setModuleDisabled(tx, maskOwner, 'finance', true); // повтор не дублирует
       await setModuleDisabled(tx, maskOwner, 'goals', true);
     });
     expect(
-      [...(await withIdentity(db, maskOwner, (tx) => disabledModulesOf(tx, maskOwner)))].sort(),
+      [
+        ...(await withIdentity(db, personal(maskOwner), (tx) => disabledModulesOf(tx, maskOwner))),
+      ].sort(),
     ).toEqual(['finance', 'goals']);
-    await withIdentity(db, maskOwner, (tx) => setModuleDisabled(tx, maskOwner, 'finance', false));
-    expect(await withIdentity(db, maskOwner, (tx) => disabledModulesOf(tx, maskOwner))).toEqual([
-      'goals',
-    ]);
+    await withIdentity(db, personal(maskOwner), (tx) =>
+      setModuleDisabled(tx, maskOwner, 'finance', false),
+    );
+    expect(
+      await withIdentity(db, personal(maskOwner), (tx) => disabledModulesOf(tx, maskOwner)),
+    ).toEqual(['goals']);
   });
 
   test('строку настроек заводит сама маска, и её дефолты = дефолты КОДА (Ф-Б1-10)', async () => {
@@ -198,13 +211,13 @@ describe('маска модулей: чтение и запись (§Б8-1)', ()
     // читатели, чьё умолчание «дефолтом кода» и является; пин на строковые константы зеленел
     // бы и при расхождении с колонкой.
     const fresh = await freshGraph();
-    const read = (u: string) =>
-      withIdentity(db, u, async (tx) => [
+    const read = (u: GraphId) =>
+      withIdentity(db, personal(u), async (tx) => [
         await ownerTimeZone(tx, u),
         await defaultCurrencyOf(tx, u),
       ]);
     const before = await read(fresh);
-    await withIdentity(db, fresh, (tx) => setModuleDisabled(tx, fresh, 'finance', true));
+    await withIdentity(db, personal(fresh), (tx) => setModuleDisabled(tx, fresh, 'finance', true));
     expect(await read(fresh)).toEqual(before);
     expect(before[0]).toBe(DEFAULT_TIMEZONE);
   });
@@ -222,7 +235,7 @@ type JournalAction = {
   inverse: { op: string; payload: unknown }[];
 };
 async function actionOf(actionId: string): Promise<JournalAction | undefined> {
-  const rows = (await withIdentity(db, owner, (tx) =>
+  const rows = (await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`
       SELECT m.metadata->'actions'->0 AS action
       FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
@@ -240,7 +253,7 @@ function setFinance(enabled: boolean) {
   return execute(
     db,
     {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'module_set', input: { module: 'finance', enabled } }],
@@ -261,7 +274,7 @@ describe('module_set: переключение — действие исполн
    */
   test('ручка выключает модуль; настройки отдают маску наружу', async () => {
     await caller.user.setModuleEnabled({ module: 'finance', enabled: false });
-    expect(await withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner))).toEqual([
+    expect(await withIdentity(db, personal(owner), (tx) => disabledModulesOf(tx, owner))).toEqual([
       'finance',
     ]);
     expect((await caller.user.getSettings()).disabledModules).toEqual(['finance']);
@@ -285,8 +298,10 @@ describe('module_set: переключение — действие исполн
   test('undo возвращает модуль во включённое состояние', async () => {
     // Второй аргумент — ОБЪЕКТ (`undoLast`, `executor/undo.ts`); последнее неотменённое действие
     // журнала — выключение `finance` предыдущим тестом.
-    expect((await undoLast(db, { actorUserId: owner })).ok).toBe(true);
-    expect(await withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner))).toEqual([]);
+    expect((await undoLast(db, { identity: personal(owner) })).ok).toBe(true);
+    expect(await withIdentity(db, personal(owner), (tx) => disabledModulesOf(tx, owner))).toEqual(
+      [],
+    );
   });
 
   test('повтор выключения: inverse — «уже был выключен», а не обратный знак входа', async () => {
@@ -308,11 +323,11 @@ describe('module_set: переключение — действие исполн
     // Снаружи операция недостижима (её нет ни в одном реестре тулов), но обещание докблока
     // «единственный вход — ручка владельца» держал бы чужой код. Гейт по актору — защита в
     // глубину: `execute()` доступен всякому серверному пути.
-    const mask = () => withIdentity(db, owner, (tx) => disabledModulesOf(tx, owner));
+    const mask = () => withIdentity(db, personal(owner), (tx) => disabledModulesOf(tx, owner));
     const before = await mask();
     for (const actorKind of ['agent', 'ai'] as const) {
       const denied = await execute(db, {
-        actorUserId: owner,
+        identity: personal(owner),
         actorKind,
         // Вход выбран ПРОТИВОПОЛОЖНЫМ текущему состоянию: пройди отказ мимо — маска
         // изменилась бы, и сравнение ниже это увидело бы.
@@ -335,19 +350,19 @@ describe('§С8-22: маска на реестре тулов — один фи�
   beforeEach(blockEntry([])); // предыдущий блок оставил finance выключенным
 
   test('выключенные Финансы уносят ровно свои тулы и ничего сверх', async () => {
-    const all = (await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner))).map(
+    const all = (await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner))).map(
       (d) => d.name,
     );
     expect(all).toContain('budget_status');
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
     });
-    const masked = (await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner))).map(
-      (d) => d.name,
-    );
+    const masked = (
+      await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner))
+    ).map((d) => d.name);
     // Консервативность §С1-3 п.9: разница — ровно пять имён Финансов
     expect(all.filter((n) => !masked.includes(n)).sort()).toEqual([
       'attach_orbis_budget',
@@ -364,7 +379,7 @@ describe('§С8-22: маска на реестре тулов — один фи�
     // `tools/dispatch.test.ts`.
     const ctx: ToolCallCtx = {
       db,
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'chat',
       explicitCommand: false,
@@ -382,7 +397,7 @@ describe('§С8-22: маска на реестре тулов — один фи�
     // того, чтобы сказать владельцу про выключенный модуль.
     const ctx: ToolCallCtx = {
       db,
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'chat',
       explicitCommand: false,
@@ -419,7 +434,7 @@ describe('§С8-22: маска на реестре тулов — один фи�
     // ЕСТЬ. Иначе опечатка в имени получала бы отказ про модуль, которого у неё нет.
     const ctx: ToolCallCtx = {
       db,
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'chat',
       explicitCommand: false,
@@ -441,7 +456,7 @@ describe('§С8-22: запись при выключенном модуле — 
 
   test('entity_create с orbis/financial → MODULE_DISABLED; ядро — проходит', async () => {
     const denied = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -468,7 +483,7 @@ describe('§С8-22: запись при выключенном модуле — 
     expect(
       (
         await execute(db, {
-          actorUserId: owner,
+          identity: personal(owner),
           actorKind: 'owner',
           source: 'ui',
           operations: [
@@ -491,7 +506,7 @@ describe('§С8-22: запись при выключенном модуле — 
     expect(
       (
         await execute(db, {
-          actorUserId: owner,
+          identity: personal(owner),
           actorKind: 'owner',
           source: 'ui',
           operations: [
@@ -503,7 +518,7 @@ describe('§С8-22: запись при выключенном модуле — 
     expect(
       (
         await execute(db, {
-          actorUserId: owner,
+          identity: personal(owner),
           actorKind: 'owner',
           source: 'ui',
           operations: [
@@ -529,7 +544,7 @@ describe('§С8-22: запись при выключенном модуле — 
     // Гейт в create и attach без третьей точки был бы дырой: `entity_update` навешивает
     // аспект полем `aspects.attach` — тем же путём, что и `attach_*`, только другим тулом.
     const denied = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -545,7 +560,7 @@ describe('§С8-22: запись при выключенном модуле — 
 
   test('навешивание НОВОГО аспекта модуля на существующую запись — MODULE_DISABLED', async () => {
     const denied = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -570,7 +585,7 @@ describe('§С8-22: подписки и сохранённые AST при вык
    * значило бы проверять не тот путь, по которому ходит прод.
    */
   const agenda = () =>
-    withIdentity(db, owner, async (tx) =>
+    withIdentity(db, personal(owner), async (tx) =>
       agendaListOf(tx, owner, agendaSubscriptionOf(await effectiveRegistry(tx, owner)), {
         today,
         timeZone: TZ,
@@ -579,17 +594,17 @@ describe('§С8-22: подписки и сохранённые AST при вык
     );
 
   test('Budget-ведомость пуста, Agenda — байт-в-байт как до выключения', async () => {
-    const before = await budgetOverview(db, owner, curMonth);
+    const before = await budgetOverview(db, personal(owner), curMonth);
     expect(before.envelopes.length).toBeGreaterThan(0);
     const agendaBefore = await agenda();
     expect(agendaBefore.rows.length).toBeGreaterThan(0); // сравнение не вырождено в «пусто = пусто»
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
     });
-    const after = await budgetOverview(db, owner, curMonth);
+    const after = await budgetOverview(db, personal(owner), curMonth);
     expect([
       after.envelopes,
       after.comingUp,
@@ -609,14 +624,18 @@ describe('§С8-22: подписки и сохранённые AST при вык
 
   test('повторное включение — всё на месте', async () => {
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'module_set', input: { module: 'finance', enabled: true } }],
     });
-    expect((await budgetOverview(db, owner, curMonth)).envelopes.length).toBeGreaterThan(0);
+    expect((await budgetOverview(db, personal(owner), curMonth)).envelopes.length).toBeGreaterThan(
+      0,
+    );
     expect(
-      (await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner))).map((d) => d.name),
+      (await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner))).map(
+        (d) => d.name,
+      ),
     ).toContain('budget_status');
   });
 
@@ -625,7 +644,7 @@ describe('§С8-22: подписки и сохранённые AST при вык
     // (мутация гейт-ревью «снять её целиком» была зелёной). Маска пишется НАПРЯМУЮ:
     // `module_set` в Б-1 принимает только `finance` (Ф-Б1-57б), а движок спрашивает саму
     // колонку — то есть путь проверяется тот же, что у прода после Б-3.
-    const budgetBefore = await budgetOverview(db, owner, curMonth);
+    const budgetBefore = await budgetOverview(db, personal(owner), curMonth);
     expect(budgetBefore.envelopes.length).toBeGreaterThan(0);
     expect((await agenda()).rows.length).toBeGreaterThan(0);
     // `finally` — не вежливость: провались утверждение внутри, и `planner` остался бы
@@ -639,7 +658,7 @@ describe('§С8-22: подписки и сохранённые AST при вык
         truncated: { window: false, overdue: false },
       });
       // Консервативность §С1-3 п.9 в другую сторону: чужая подписка не шелохнулась
-      expect(await budgetOverview(db, owner, curMonth)).toEqual(budgetBefore);
+      expect(await budgetOverview(db, personal(owner), curMonth)).toEqual(budgetBefore);
     } finally {
       await setModules([]);
     }
@@ -648,12 +667,12 @@ describe('§С8-22: подписки и сохранённые AST при вык
   test('канал модели: проза Финансов и инструкции orbis/financial уходят вместе с модулем и возвращаются с ним (§Б8-3)', async () => {
     // Канал собирается ТЕМ ЖЕ `buildContext`, что и чат (`llm/context.ts`), — юнит на
     // `modulePromptFragments` (шаг 2) не отвечает, доносит ли их до модели сама сборка.
-    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const channel = () =>
-      withIdentity(db, owner, (tx) => buildContext(tx, { graphId: owner, threadId }));
+      withIdentity(db, personal(owner), (tx) => buildContext(tx, { graphId: owner, threadId }));
     const setFinance = (enabled: boolean) =>
       execute(db, {
-        actorUserId: owner,
+        identity: personal(owner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool: 'module_set', input: { module: 'finance', enabled } }],
@@ -698,7 +717,7 @@ describe('§Б8-3 против §С1-3 п.9: материализация — н
     });
 
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
@@ -716,7 +735,7 @@ describe('§Б8-3 против §С1-3 п.9: материализация — н
       created = (
         await materializeInstances({
           db,
-          graphId: owner,
+          identity: personal(owner),
           from: today,
           to: addDays(today, 2),
           today,
@@ -729,7 +748,7 @@ describe('§Б8-3 против §С1-3 п.9: материализация — н
     expect(created).toBeGreaterThan(0);
 
     // Инстансы видны в окне Повестки — то, что теряется, если гейт стоит на materialize.
-    const rows = await withIdentity(db, owner, async (tx) =>
+    const rows = await withIdentity(db, personal(owner), async (tx) =>
       agendaListOf(tx, owner, agendaSubscriptionOf(await effectiveRegistry(tx, owner)), {
         today,
         timeZone: TZ,

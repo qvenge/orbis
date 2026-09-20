@@ -3,6 +3,7 @@
 // агрегат считает SQL под RLS-identity владельца, поэтому подделать движок нечем —
 // сущности готовятся ЧЕРЕЗ роутер (единственный путь мутаций), читается — как в бою.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { QUERY_TREE_DEPTH_CAP, type QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -12,6 +13,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   seedRefTargetRows,
   truncateAll,
@@ -38,19 +40,19 @@ const createCaller = createCallerFactory(appRouter);
  * сущности глобально уникален — одна константа на всех больше не годится. id выводится из
  * владельца, поэтому остаётся детерминированным.
  */
-function categoryOf(user: string): string {
+function categoryOf(user: GraphId): string {
   return `019e4466-bbbb-7e07-b5d4-${user.replaceAll('-', '').slice(0, 12)}`;
 }
 
 /** Категория владельца в БД: обстановка ссылки, а не предмет проверки (см. `categoryOf`). */
-async function ensureCategory(user: string): Promise<string> {
+async function ensureCategory(user: GraphId): Promise<string> {
   const id = categoryOf(user);
   await seedRefTargetRows(user, [{ id, aspect: 'orbis/category' }]);
   return id;
 }
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 type Caller = ReturnType<typeof callerFor>;
@@ -69,7 +71,7 @@ function income(categoryRef: string, amount: string, tags: string[], occurredOn 
 }
 
 async function createIncome(
-  user: string,
+  user: GraphId,
   caller: Caller,
   title: string,
   amount: string,
@@ -114,8 +116,8 @@ function toGoalSource(fx: GoalFixture, ctx: CompileCtx): GoalSource {
 }
 
 /** Расчёт как в бою: под identity владельца, контекст компиляции — тот же queryContext. */
-function progressOf(user: string, goal: GoalFixture, thisEntityId: string | null = null) {
-  return withIdentity(db, user, async (tx) => {
+function progressOf(user: GraphId, goal: GoalFixture, thisEntityId: string | null = null) {
+  return withIdentity(db, personal(user), async (tx) => {
     const cctx = await queryContext(tx, user, thisEntityId);
     return computeGoalProgress(tx, cctx, toGoalSource(goal, cctx));
   });
@@ -130,14 +132,14 @@ function progressOf(user: string, goal: GoalFixture, thisEntityId: string | null
  * формы заводится ровно так.
  */
 async function createGoal(
-  user: string,
+  user: GraphId,
   fx: GoalFixture & { title: string; tags?: string[]; unit?: string },
 ): Promise<{ id: string }> {
-  const source = await withIdentity(db, user, async (tx) =>
+  const source = await withIdentity(db, personal(user), async (tx) =>
     toGoalSource(fx, await queryContext(tx, user, null)),
   );
   const r = await execute(db, {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     operations: [
@@ -161,12 +163,12 @@ async function createGoal(
 }
 
 /** Смена источника у существующей цели — тем же путём и той же формой, что и создание. */
-async function updateGoalSource(user: string, id: string, fx: SourceFixture): Promise<void> {
-  const source = await withIdentity(db, user, async (tx) =>
+async function updateGoalSource(user: GraphId, id: string, fx: SourceFixture): Promise<void> {
+  const source = await withIdentity(db, personal(user), async (tx) =>
     toGoalSource({ progress_source: fx, target_value: '100' }, await queryContext(tx, user, null)),
   );
   const r = await execute(db, {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     operations: [
@@ -351,7 +353,7 @@ describe('computeGoalProgress: источник хранится ДЕРЕВОМ 
         and: [{ aspect: 'orbis/financial' }, { tag: 'savings' }],
       },
     };
-    const byAst = await withIdentity(db, user, async (tx) =>
+    const byAst = await withIdentity(db, personal(user), async (tx) =>
       computeGoalProgress(tx, await queryContext(tx, user, null), {
         progressSource: { query: ast, aggregate: 'sum', field: 'orbis/amount' },
         targetValue: '1000.00',
@@ -363,7 +365,7 @@ describe('computeGoalProgress: источник хранится ДЕРЕВОМ 
     // Та же выборка, но записанная ТЕКСТОМ грамматики — законным, разбираемым текстом.
     // Расчёт его не разбирает: неразобранный блок §А5-2 отдаёт `invalid_query`, а не
     // тихий ноль и не результат. Обе стороны границы обязаны краснеть по отдельности.
-    const byText = await withIdentity(db, user, async (tx) =>
+    const byText = await withIdentity(db, personal(user), async (tx) =>
       computeGoalProgress(tx, await queryContext(tx, user, null), {
         progressSource: {
           query: { text: 'aspect=orbis/financial, tags=savings' },
@@ -557,7 +559,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
 
     // Транзакция после отката к savepoint жива: следующий запрос в НЕЙ ЖЕ проходит.
     // Без savepoint упавший statement перевёл бы её в aborted и убил entity.get.
-    const stillReadable = await withIdentity(db, user, async (tx) => {
+    const stillReadable = await withIdentity(db, personal(user), async (tx) => {
       const cctx = await queryContext(tx, user, null);
       await computeGoalProgress(tx, cctx, toGoalSource(goal, cctx));
       const rows = await tx.execute(sql`SELECT count(*)::text AS n FROM entities`);
@@ -637,7 +639,7 @@ describe('entity.get: прогресс приезжает с целью и то�
     // `orbis/target_value` остаются в `props`. Старая карта теряла их вместе с аспектом —
     // и читатель без признака носителя рисовал бы полосу у записи, целью быть переставшей.
     const r = await execute(db, {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -754,7 +756,7 @@ describe('entity.get: прогресс приезжает с целью и то�
       },
     });
     const countingCaller = createCaller({
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       db: drizzle(counted, { schema }),
       clientVersion: null,
@@ -813,7 +815,7 @@ describe('entity.get: прогресс приезжает с целью и то�
 
 describe('логи отказа: конфигурационный отказ не молчит и не льётся потоком', () => {
   /** Цель с заданным источником: важен id — именно он попадает в лог и в ключ дросселя. */
-  function goalWith(user: string, title: string, source: SourceFixture) {
+  function goalWith(user: GraphId, title: string, source: SourceFixture) {
     return createGoal(user, { title, progress_source: source, target_value: '100' });
   }
 
@@ -999,7 +1001,7 @@ describe('имена в хранимом дереве источника — id,
     // расхождение видно только на СВОЕЙ строке.
     const user = await freshGraph();
     const created = await execute(db, {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -1020,7 +1022,7 @@ describe('имена в хранимом дереве источника — id,
     expect(propId).not.toBe('user/book_done'); // id — uuid, key — слаг (Р3)
 
     const books = await execute(db, {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'ui',
       batchId: '019e4466-cccc-7e07-b5d4-64be9721da51',
@@ -1037,7 +1039,7 @@ describe('имена в хранимом дереве источника — id,
 
     // Цель заводится ровно так, как её напишет модель по промпту v5: имя в дереве — KEY.
     const goal = await execute(db, {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -1063,7 +1065,7 @@ describe('имена в хранимом дереве источника — id,
 
     // ХРАНИМАЯ форма — id: §А5-2 обещает именно это, и от неё зависит слияние свойств
     // (`collectPropertyHolders` ищет держателей по обоим именам, но переписывает в id).
-    const stored = await withIdentity(db, user, async (tx) => {
+    const stored = await withIdentity(db, personal(user), async (tx) => {
       const rows = (await tx.execute(
         sql`SELECT props FROM entities WHERE id = ${goalId}::uuid`,
       )) as unknown as Array<{ props: Record<string, unknown> }>;
@@ -1074,7 +1076,7 @@ describe('имена в хранимом дереве источника — id,
     expect(stored.query.filter.prop).toBe(propId);
 
     // И полоса считается, а не молчит `invalid_query`.
-    const progress = await withIdentity(db, user, async (tx) => {
+    const progress = await withIdentity(db, personal(user), async (tx) => {
       const cctx = await queryContext(tx, user, goalId);
       return computeGoalProgress(tx, cctx, {
         progressSource: stored as unknown as GoalSource['progressSource'],
@@ -1115,7 +1117,7 @@ describe('неканоническая форма дерева источник�
     test(`entity_create: ${name} → VALIDATION/TYPE`, async () => {
       const user = await freshGraph();
       const r = await execute(db, {
-        actorUserId: user,
+        identity: personal(user),
         actorKind: 'owner',
         source: 'ui',
         operations: [
@@ -1137,7 +1139,7 @@ describe('неканоническая форма дерева источник�
       // Второй строитель патча (`replaceAspectProps`) — тот же гард закрывает оба.
       const user = await freshGraph();
       const created = await execute(db, {
-        actorUserId: user,
+        identity: personal(user),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool: 'entity_create', input: { title: 'Цель', tags: [] } }],
@@ -1145,7 +1147,7 @@ describe('неканоническая форма дерева источник�
       if (!created.ok) throw new Error(`фикстура: ${created.error.message}`);
       const id = (created.results[0] as { id: string }).id;
       const r = await execute(db, {
-        actorUserId: user,
+        identity: personal(user),
         actorKind: 'owner',
         source: 'ui',
         operations: [

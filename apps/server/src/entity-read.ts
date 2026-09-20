@@ -5,7 +5,13 @@
 // entitySchema всегда несёт body), include управляет доп. секциями.
 // Вызывается ТОЛЬКО под withIdentity (RLS, §4.10); ошибки — ExecError (роутер
 // мапит в TRPCError, диспатч — в структурированный error-результат).
-import { type EntityGetUiInput, entityThreadId, ROLE_MENTION, ROLE_REF } from '@orbis/shared';
+import {
+  type EntityGetUiInput,
+  entityThreadId,
+  type GraphId,
+  ROLE_MENTION,
+  ROLE_REF,
+} from '@orbis/shared';
 import { readBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, or, sql } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
@@ -123,7 +129,7 @@ export interface EntityReadResult {
  */
 export async function readEntity(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   input: EntityGetUiInput,
 ): Promise<EntityReadResult> {
   const include = new Set(input.include ?? ['body', 'relations']);

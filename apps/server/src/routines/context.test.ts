@@ -4,7 +4,7 @@
 // быть НЕ должно: чат-промпта, роли 'system' в messages, обрезанной инструкции.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { RunSummary } from '@orbis/shared';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ROUTINE_SYSTEM_PROMPT_V3 } from '../llm/prompts/routine-v3';
 import { SYSTEM_PROMPT_V6 } from '../llm/prompts/v6';
@@ -51,7 +51,7 @@ async function contextOf(
   allowedTools?: string[],
   clock?: () => Date,
 ) {
-  return withIdentity(db, owner, (tx) =>
+  return withIdentity(db, personal(owner), (tx) =>
     buildRoutineContext(tx, {
       graphId: owner,
       routine: {

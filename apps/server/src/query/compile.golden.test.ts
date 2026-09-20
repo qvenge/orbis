@@ -43,6 +43,7 @@ import {
 } from '@orbis/shared/query';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import goldens from '../../test/golden/query-sql.json';
+import { parseGraphId } from '../identity';
 import type { RegistrySnapshot } from '../registry/load';
 import { type CompileCtx, compileCountAst, compileQueryAst } from './compile-ast';
 
@@ -66,7 +67,7 @@ const REG: RegistrySnapshot = {
 const PARSE_REG = toParseRegistry(REG, 'ru');
 
 const CTX: CompileCtx = {
-  graphId: '00000000-0000-7000-8000-0000000000a1',
+  graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
   today: '2026-07-03',
   timeZone: 'Europe/Moscow',
   reg: REG,

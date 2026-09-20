@@ -19,9 +19,17 @@
 // по-своему, и без этого шага падает `lint`). Сверка идёт по `canonicalJson` РАЗОБРАННОГО
 // JSON, поэтому форматирование на смысл эталона не влияет.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { canonicalJson } from '@orbis/shared';
 import GOLDEN from '../../test/golden/tool-registry.json';
-import { appDb, mintGraph, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  mintGraph,
+  personal,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { buildToolRegistry, type OrbisToolDef } from './registry';
 
@@ -59,8 +67,8 @@ function snapshot(def: OrbisToolDef): Record<string, unknown> {
   return { name: def.name, description: def.description, inputJsonSchema: def.inputJsonSchema };
 }
 
-async function registryFor(userId: string): Promise<Record<string, unknown>[]> {
-  const defs = await withIdentity(db, userId, (tx) => buildToolRegistry(tx, userId));
+async function registryFor(userId: GraphId): Promise<Record<string, unknown>[]> {
+  const defs = await withIdentity(db, personal(userId), (tx) => buildToolRegistry(tx, userId));
   return defs.map(snapshot);
 }
 

@@ -55,6 +55,7 @@ import {
   aspectDefinitionSchema,
   type ContractDefinition,
   contractDefinitionSchema,
+  type GraphId,
   type PropertyDefinition,
   propertyDefinitionSchema,
   type RelationRoleDefinition,
@@ -124,7 +125,7 @@ interface Row {
  * потому что снаружи в реестр не писал никто; она завела писателей и в тот же день гейт —
  * разбор в шапке `queryFilterNodeSchema` (`@orbis/shared`, `query/ast.ts`), пункт 4.
  */
-export async function loadRegistryRows(tx: Tx, graphId: string): Promise<RegistryDictionaries> {
+export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<RegistryDictionaries> {
   // Запросы идут ПОСЛЕДОВАТЕЛЬНО, а не Promise.all: транзакция живёт на одном соединении,
   // и параллельные запросы по нему сериализуются в лучшем случае, а в худшем — путают
   // порядок с `SET LOCAL`. Реестров пять, каждый — один индексный проход.
@@ -272,7 +273,7 @@ export async function loadRegistryRows(tx: Tx, graphId: string): Promise<Registr
  * Встроенных дельт не бывает по определению (`graph_id NOT NULL` в 0014), поэтому условие
  * по владельцу здесь ровно одно и совпадает с политикой RLS `owner_owns_row`.
  */
-export async function loadRegistryDeltas(tx: Tx, graphId: string): Promise<RegistryDeltaRow[]> {
+export async function loadRegistryDeltas(tx: Tx, graphId: GraphId): Promise<RegistryDeltaRow[]> {
   const rows = (await tx.execute(sql`
     SELECT id, graph_id, target_kind, target_id, base_version, delta
     FROM registry_deltas

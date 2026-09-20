@@ -36,6 +36,7 @@ import {
   attachToolName,
   checkClassMap,
   checkImplements,
+  type GraphId,
   type ImplementsIssue,
   type LocalizedText,
   newId,
@@ -113,7 +114,7 @@ export const PROPOSED_CAP = 20;
  * операции реестра идут пачкой: свойство, заведённое операцией N той же транзакции, обязано
  * быть видно операции N+1, и снимок, снятый исполнителем ДО стадий, этого не показывает.
  */
-async function currentRegistry(tx: Tx, graphId: string): Promise<RegistrySnapshot> {
+async function currentRegistry(tx: Tx, graphId: GraphId): Promise<RegistrySnapshot> {
   const rows = await loadRegistryRows(tx, graphId);
   const deltas = await loadRegistryDeltas(tx, graphId);
   const versions = await readRegistryVersions(tx, graphId);
@@ -325,7 +326,7 @@ const ROW_COLUMNS = sql`id, key, label, description, type, status, storage, scop
  */
 export async function readOwnProperty(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   idOrKey: string,
 ): Promise<PropertyRow | undefined> {
   // АДРЕС РЕЗОЛВИТСЯ ЗДЕСЬ, ЗАПРОСОМ В ТРАНЗАКЦИИ, а не по снимку реестра. Снимок
@@ -354,7 +355,7 @@ export async function readOwnProperty(
  */
 export async function restorePropertyRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   id: string,
   row: PropertyRow | null,
 ): Promise<void> {
@@ -405,7 +406,7 @@ export async function restorePropertyRow(
  * только на ней. `createdAt` в схему определения не входит (её форма — то, что читает
  * реестр, а не то, что лежит в колонках), поэтому разбор идёт по строке БЕЗ него.
  */
-function definitionOf(row: PropertyRow, graphId: string): PropertyDefinition {
+function definitionOf(row: PropertyRow, graphId: GraphId): PropertyDefinition {
   const { createdAt: _createdAt, ...definition } = row;
   const parsed = propertyDefinitionSchema.safeParse({ ...definition, graphId });
   if (!parsed.success) {
@@ -437,7 +438,7 @@ function definitionOf(row: PropertyRow, graphId: string): PropertyDefinition {
  */
 async function assertRegistryStaysReadable(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   id: string,
   next: PropertyRow | null,
 ): Promise<void> {
@@ -462,7 +463,7 @@ async function assertRegistryStaysReadable(
 
 async function insertRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   row: PropertyRow,
   opts: { restore?: boolean } = {},
 ): Promise<void> {
@@ -598,7 +599,7 @@ export interface CreatePropertyInput {
  */
 export async function createProperty(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   input: CreatePropertyInput,
 ): Promise<{ id: string; key: string }> {
   assertDeclaration(input.type, input.scope ?? null);
@@ -692,7 +693,7 @@ export interface UpdatePropertyPatch {
  */
 async function propertyUsage(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   id: string,
   key: string,
 ): Promise<{ values: number; refs: number }> {
@@ -725,7 +726,7 @@ async function propertyUsage(
  */
 export async function updateProperty(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   id: string,
   patch: UpdatePropertyPatch,
 ): Promise<void> {
@@ -928,7 +929,7 @@ function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
  * они первым же новым родом держателя. Ровно это и случилось с дельтой: она была видна
  * графу зависимостей и невидима слиянию.
  */
-export async function collectPropertyHolders(tx: Tx, graphId: string): Promise<PropertyHolder[]> {
+export async function collectPropertyHolders(tx: Tx, graphId: GraphId): Promise<PropertyHolder[]> {
   const out: PropertyHolder[] = [];
 
   const regRows = (await tx.execute(sql`
@@ -1031,7 +1032,7 @@ function normalizeDeltaAddresses(
  */
 async function assertMergeLeftRegistryReadable(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   source: string,
   into: string,
 ): Promise<void> {
@@ -1366,7 +1367,7 @@ function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unkn
  */
 export async function mergeProperty(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   input: { source: string; into: string },
 ): Promise<MergeResult> {
   const reg = await currentRegistry(tx, graphId);
@@ -1682,7 +1683,7 @@ function rewriteBodyDoc(
  * отмену там, где она как раз и нужна. Цена — потерянная поздняя правка; она предпочтена
  * неотменяемому слиянию тысячи записей.
  */
-export async function undoMerge(tx: Tx, graphId: string, iv: MergeInverse): Promise<void> {
+export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Promise<void> {
   // `iv.deltas` разбирается ЗАЩИТНО по той же причине, что `ref_sources_marked` в
   // `executor/undo.ts`: журнал append-only, и в нём лежат записи, сделанные до появления
   // четвёртого рода держателей. Отсутствие ключа означает «дельт не переписывали», а не
@@ -1814,7 +1815,7 @@ export function execErrorOfImplementsIssue(
 
 export async function readAspectDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   aspectId: string,
 ): Promise<AspectDelta | null> {
   const rows = (await tx.execute(sql`
@@ -1839,7 +1840,7 @@ export async function readAspectDelta(
  */
 export async function setAspectDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   aspectId: string,
   delta: AspectDelta,
 ): Promise<void> {
@@ -1902,7 +1903,7 @@ export async function setAspectDelta(
 }
 
 /** Снятие дельты: аспект возвращается к системному определению (§А3-2). */
-export async function removeAspectDelta(tx: Tx, graphId: string, aspectId: string): Promise<void> {
+export async function removeAspectDelta(tx: Tx, graphId: GraphId, aspectId: string): Promise<void> {
   await tx.execute(sql`
     DELETE FROM registry_deltas
      WHERE graph_id = ${graphId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}`);
@@ -1918,7 +1919,7 @@ export async function removeAspectDelta(tx: Tx, graphId: string, aspectId: strin
  */
 async function writeDeltaRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   targetKind: RegistryDeltaTargetKind,
   targetId: string,
   delta: RegistryDelta,
@@ -1952,7 +1953,7 @@ async function writeDeltaRow(
 
 async function readDeltaRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   kind: RegistryDeltaTargetKind,
   targetId: string,
 ): Promise<unknown> {
@@ -1964,7 +1965,7 @@ async function readDeltaRow(
 
 async function removeDeltaRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   kind: RegistryDeltaTargetKind,
   targetId: string,
 ): Promise<void> {
@@ -2101,7 +2102,7 @@ function exprNormalizeRegistryOf(reg: RegistrySnapshot): ExprNormalizeRegistry {
 /** Снимок владельца со ВСЕМИ его дельтами, кроме названной, — «как читалось бы после правки». */
 async function probeSnapshot(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   rows: RegistryDictionaries,
   drop?: { targetKind: RegistryDeltaTargetKind; targetId: string },
 ): Promise<RegistrySnapshot> {
@@ -2117,7 +2118,7 @@ async function probeSnapshot(
 
 export async function readContractDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   contractId: string,
 ): Promise<ContractDelta | null> {
   const delta = await readDeltaRow(tx, graphId, 'contract', contractId);
@@ -2126,7 +2127,7 @@ export async function readContractDelta(
 
 export async function setContractDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   contractId: string,
   delta: ContractDelta,
 ): Promise<void> {
@@ -2153,7 +2154,7 @@ export async function setContractDelta(
 
 export async function removeContractDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   contractId: string,
 ): Promise<void> {
   const rows = await loadRegistryRows(tx, graphId);
@@ -2166,7 +2167,7 @@ export async function removeContractDelta(
 
 export async function readSubscriptionDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   subscriptionId: string,
 ): Promise<SubscriptionDelta | null> {
   const delta = await readDeltaRow(tx, graphId, 'subscription', subscriptionId);
@@ -2175,7 +2176,7 @@ export async function readSubscriptionDelta(
 
 export async function setSubscriptionDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   subscriptionId: string,
   delta: SubscriptionDelta,
 ): Promise<void> {
@@ -2212,7 +2213,7 @@ export async function setSubscriptionDelta(
 
 export async function removeSubscriptionDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   subscriptionId: string,
 ): Promise<void> {
   await removeDeltaRow(tx, graphId, 'subscription', subscriptionId);
@@ -2228,7 +2229,7 @@ export async function removeSubscriptionDelta(
  */
 export async function readSubscriptionRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   id: string,
 ): Promise<SubscriptionRow | null> {
   const rows = (await tx.execute(sql`
@@ -2257,7 +2258,7 @@ export async function readSubscriptionRow(
  */
 export async function setOwnSubscription(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   row: SubscriptionRow,
 ): Promise<void> {
   if (!row.id.startsWith('user/')) {
@@ -2286,7 +2287,7 @@ export async function setOwnSubscription(
 }
 
 /** Снятие своей подписки: системные строки не трогаются (`graph_id IS NOT NULL`). */
-export async function removeOwnSubscription(tx: Tx, graphId: string, id: string): Promise<void> {
+export async function removeOwnSubscription(tx: Tx, graphId: GraphId, id: string): Promise<void> {
   await tx.execute(sql`
     DELETE FROM subscription_definitions WHERE graph_id = ${graphId}::uuid AND id = ${id}`);
   await bumpOwnerRegistryVersion(tx, graphId);
@@ -2354,7 +2355,7 @@ function toAspectRow(r: RawRow): AspectRow {
  */
 export async function readOwnAspect(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   idOrKey: string,
 ): Promise<AspectRow | undefined> {
   const rows = (await tx.execute(sql`
@@ -2364,7 +2365,7 @@ export async function readOwnAspect(
 }
 
 /** Строка → определение со строгим разбором; отказ ДО записи (образец `definitionOf` свойств). */
-function aspectDefinitionOf(row: AspectRow, graphId: string): AspectDefinition {
+function aspectDefinitionOf(row: AspectRow, graphId: GraphId): AspectDefinition {
   const { createdAt: _createdAt, ...definition } = row;
   const parsed = aspectDefinitionSchema.safeParse({ ...definition, graphId });
   if (!parsed.success) {
@@ -2398,7 +2399,7 @@ function aspectDefinitionOf(row: AspectRow, graphId: string): AspectDefinition {
  * говорит `reason: 'UNKNOWN_PROPERTY'` с уточнением `cause: 'merged'` — ровно та же пара
  * «код + уточнение», что кладёт `execErrorOfImplementsIssue`.
  */
-function assertImplements(next: AspectRow, graphId: string, reg: RegistrySnapshot): void {
+function assertImplements(next: AspectRow, graphId: GraphId, reg: RegistrySnapshot): void {
   for (const binding of next.implements) {
     for (const [slot, propertyId] of Object.entries(binding.bind)) {
       const def = reg.properties.get(propertyId);
@@ -2464,7 +2465,7 @@ export interface CreateAspectInput {
 
 export async function createAspect(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   input: CreateAspectInput,
 ): Promise<{ id: string }> {
   // Гейт namespace — довод `createProperty` (`KEY_NAMESPACE`): своя строка с ключом будущего
@@ -2569,7 +2570,7 @@ export async function createAspect(
 }
 
 /** Своя строка под правку привязок; встроенный аспект — отказ с указанием законного пути. */
-async function ownAspectForWrite(tx: Tx, graphId: string, aspectId: string): Promise<AspectRow> {
+async function ownAspectForWrite(tx: Tx, graphId: GraphId, aspectId: string): Promise<AspectRow> {
   const row = await readOwnAspect(tx, graphId, aspectId);
   if (row !== undefined) return row;
   const builtin = (await tx.execute(sql`
@@ -2590,7 +2591,7 @@ async function ownAspectForWrite(tx: Tx, graphId: string, aspectId: string): Pro
 
 export async function setAspectImplements(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   aspectId: string,
   bindings: AspectImplements[],
 ): Promise<void> {
@@ -2606,7 +2607,7 @@ export async function setAspectImplements(
 
 export async function removeAspectImplements(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   aspectId: string,
   contract: string,
 ): Promise<void> {
@@ -2633,7 +2634,7 @@ export async function removeAspectImplements(
  */
 export async function restoreAspectRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   id: string,
   row: AspectRow | null,
 ): Promise<void> {
@@ -2668,7 +2669,7 @@ export async function restoreAspectRow(
 
 async function insertAspectRow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   row: AspectRow,
   opts: { restore?: boolean } = {},
 ): Promise<void> {
@@ -2725,8 +2726,6 @@ async function insertAspectRow(
  * править секунду назад. Условие, при котором это перестанет быть допустимым: у пересева
  * появится шаг, читающий строки владельца и решающий по ним, — тогда замок нужен и там.
  */
-export async function lockOwnerRegistry(tx: Tx, graphId: string): Promise<void> {
-  await tx.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graphId}:registry`}, 0))`,
-  );
+export async function lockOwnerRegistry(tx: Tx, graph: GraphId): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graph}:registry`}, 0))`);
 }

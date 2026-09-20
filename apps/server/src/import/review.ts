@@ -14,6 +14,7 @@
 //   3. Привязку к конвертам импорт не создаёт руками — её выводит бюджет-хук
 //      исполнителя (A4) в тот же action.
 import {
+  type AccountId,
   addDays,
   applyMemoryRules,
   batchAuditMessageId,
@@ -23,6 +24,7 @@ import {
   type FastPathCategory,
   type FastPathRule,
   findCategory,
+  type GraphId,
   type ImportAnalyzeResult,
   type ImportConfirmInput,
   type ImportConfirmResult,
@@ -53,6 +55,7 @@ import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
+import type { Identity } from '../identity';
 import type { LLMRequest, LLMResponse } from '../llm/types';
 import { CONTRACT_MONEY_MOVEMENT, RULE_PATTERN, RULE_TARGET } from '../memory/rules';
 import { memoryRulesWhere } from '../memory/select';
@@ -83,8 +86,9 @@ export interface ImportDeps {
  * 'dev' разрешено, отказ резолвера → LIMIT (429 маппингом errors.ts). Резолвер —
  * параметром (шов mcp/server.ts): вызывающий подставляет deps.entitlements ?? боевой.
  */
-export function gateImportCsv(graphId: string, resolve: EntitlementResolver): void {
-  const decision = resolve(graphId, IMPORT_CSV_KEY);
+export function gateImportCsv(account: AccountId, resolve: EntitlementResolver): void {
+  // Субъект тарифа — АККАУНТ (Р-КГ-6, спека §3.4): импорт покупает человек, не граф.
+  const decision = resolve(account, IMPORT_CSV_KEY);
   if (!decision.allowed) {
     throw new ExecError('LIMIT', `лимит «${IMPORT_CSV_KEY}» исчерпан`, {
       key: IMPORT_CSV_KEY,
@@ -151,15 +155,15 @@ function truncateRowCodePoints(row: string, maxCodePoints: number): string {
 export async function analyzeCsv(
   db: Db,
   deps: AiDeps,
-  args: { graphId: string; sampleRows: string[] },
+  args: { identity: Identity; sampleRows: string[] },
 ): Promise<ImportAnalyzeResult> {
   const resolve = deps.entitlements ?? resolveEntitlement;
-  gateImportCsv(args.graphId, resolve);
+  gateImportCsv(args.identity.actor, resolve);
   // Гейт AI-бюджета §8 — ТОТ ЖЕ, что у ai.sendMessage: analyze зовёт провайдера и
   // списывает в общий дневной счётчик ai_usage (recordUsage ниже), поэтому ключи
   // ai.requests_per_day / ai.tokens_per_day обязаны его ограничивать. Оба гейта —
   // ДО обращения к провайдеру; резолвер — из того же инъецируемого шва.
-  await gateAiEntitlements(db, args.graphId, resolve, deps.clock ?? (() => new Date()));
+  await gateAiEntitlements(db, args.identity, resolve, deps.clock ?? (() => new Date()));
 
   const samples = args.sampleRows.map((row) => truncateRowCodePoints(row, MAX_ANALYZE_ROW_CHARS));
   const request: LLMRequest = {
@@ -191,7 +195,7 @@ export async function analyzeCsv(
   // маппинг; сбой метрики логируется, но не ломает ответ (решение 8 плана 1b)
   try {
     await recordUsage(db, {
-      graphId: args.graphId,
+      identity: args.identity,
       model: deps.model,
       usage: {
         inputTokens: response.usage.inputTokens,
@@ -274,7 +278,7 @@ async function knownExternalIds(
  */
 async function candidateWindow(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   from: string,
   to: string,
 ): Promise<Map<string, Candidate[]>> {
@@ -330,7 +334,7 @@ async function candidateWindow(
  * Категории владельца для резолва по алиасам — тот же словарь, что у fast-path (§7.5).
  * title выбирается ради memory-правил: правило называет категорию НАЗВАНИЕМ (D3a).
  */
-async function categoryDictionary(tx: Tx, graphId: string): Promise<FastPathCategory[]> {
+async function categoryDictionary(tx: Tx, graphId: GraphId): Promise<FastPathCategory[]> {
   const rows = (await tx.execute(sql`
     SELECT id, title, props->'orbis/aliases' AS aliases
     FROM entities
@@ -362,7 +366,7 @@ async function categoryDictionary(tx: Tx, graphId: string): Promise<FastPathCate
  * записать такое правило больше нельзя (`memory/rules.ts` — fail-closed), но данные,
  * записанные прямым SQL, до резолва доходить не должны.
  */
-async function memoryRules(tx: Tx, graphId: string): Promise<FastPathRule[]> {
+async function memoryRules(tx: Tx, graphId: GraphId): Promise<FastPathRule[]> {
   const rows = (await tx.execute(sql`
     SELECT props ->> ${RULE_PATTERN} AS pattern,
            props ->> ${RULE_TARGET}  AS target_id,
@@ -427,11 +431,11 @@ function suggestCategoryRef(
  */
 export async function reviewImport(
   db: Db,
-  graphId: string,
+  who: Identity,
   input: ImportReviewInput,
   deps: ImportDeps = {},
 ): Promise<ImportReviewResult> {
-  gateImportCsv(graphId, deps.entitlements ?? resolveEntitlement);
+  gateImportCsv(who.actor, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.rows.length);
 
   const externalIds = await Promise.all(
@@ -442,11 +446,11 @@ export async function reviewImport(
   const from = addDays(dates[0] as string, -1);
   const to = addDays(dates[dates.length - 1] as string, 1);
 
-  return withIdentity(db, graphId, async (tx) => {
+  return withIdentity(db, who, async (tx) => {
     const known = await knownExternalIds(tx, input.namespace, externalIds);
-    const buckets = await candidateWindow(tx, graphId, from, to);
-    const categories = await categoryDictionary(tx, graphId);
-    const rules = await memoryRules(tx, graphId);
+    const buckets = await candidateWindow(tx, who.graph, from, to);
+    const categories = await categoryDictionary(tx, who.graph);
+    const rules = await memoryRules(tx, who.graph);
 
     const rows: ImportReviewRow[] = input.rows.map((row, i) => {
       const externalId = externalIds[i] as string;
@@ -523,7 +527,7 @@ function isWireEntity(result: unknown): result is WireEntity {
  */
 async function unbudgetedOf(
   db: Db,
-  graphId: string,
+  who: Identity,
   entityIds: string[],
 ): Promise<ImportConfirmResult['unbudgeted']> {
   if (entityIds.length === 0) return [];
@@ -531,7 +535,7 @@ async function unbudgetedOf(
     entityIds.map((id) => sql`${id}`),
     sql`, `,
   );
-  const rows = await withIdentity(db, graphId, async (tx) => {
+  const rows = await withIdentity(db, who, async (tx) => {
     return (await tx.execute(sql`
       SELECT ref.target_id AS category_ref,
              count(*)::int AS count
@@ -570,11 +574,7 @@ async function unbudgetedOf(
  * же batchId (§7.8) обязан вернуться сохранённым replay'ем executor'а, а не упасть на
  * цели, архивированной ПОСЛЕ первого прогона.
  */
-async function assertAdoptTargets(
-  db: Db,
-  graphId: string,
-  input: ImportConfirmInput,
-): Promise<void> {
+async function assertAdoptTargets(db: Db, who: Identity, input: ImportConfirmInput): Promise<void> {
   const targets = new Map<string, number>(); // id цели → rowIndex первого использования
   for (const item of input.items) {
     if (
@@ -587,8 +587,8 @@ async function assertAdoptTargets(
   }
   if (targets.size === 0) return;
 
-  await withIdentity(db, graphId, async (tx) => {
-    const replay = await sink.findByAuditId(tx, batchAuditMessageId(graphId, input.batchId));
+  await withIdentity(db, who, async (tx) => {
+    const replay = await sink.findByAuditId(tx, batchAuditMessageId(who.graph, input.batchId));
     if (replay !== undefined) return; // повтор batchId: executor вернёт результат первого прогона
 
     const ids = sql.join(
@@ -598,7 +598,7 @@ async function assertAdoptTargets(
     const rows = (await tx.execute(sql`
       SELECT id, archived, ('orbis/financial' = ANY(aspects)) AS financial
       FROM entities
-      WHERE graph_id = ${graphId} AND id IN (${ids})
+      WHERE graph_id = ${who.graph} AND id IN (${ids})
     `)) as unknown as Array<{ id: string; archived: boolean; financial: boolean }>;
     const byId = new Map(rows.map((r) => [r.id, r]));
 
@@ -661,7 +661,7 @@ async function assertAdoptTargets(
  */
 async function writeImportSummary(
   db: Db,
-  graphId: string,
+  who: Identity,
   input: ImportConfirmInput,
   counts: { created: number; adopted: number },
 ): Promise<void> {
@@ -673,10 +673,10 @@ async function writeImportSummary(
   const total = Math.max(input.rowsTotal ?? sent, sent);
   const skipped = total - sent;
   try {
-    await withIdentity(db, graphId, async (tx) => {
-      const threadId = await ensureGlobalThread(tx, graphId);
+    await withIdentity(db, who, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, who.graph);
       await appendMessageIdempotent(tx, {
-        id: importSummaryMessageId(graphId, input.batchId),
+        id: importSummaryMessageId(who.graph, input.batchId),
         threadId,
         role: 'system',
         content: `Импорт выписки: строк ${total}, создано ${counts.created}, привязано к существующим ${counts.adopted}, уже было ${skipped}`,
@@ -701,13 +701,13 @@ async function writeImportSummary(
 
 export async function confirmImport(
   db: Db,
-  graphId: string,
+  who: Identity,
   input: ImportConfirmInput,
   deps: ImportDeps = {},
 ): Promise<ImportConfirmResult> {
-  gateImportCsv(graphId, deps.entitlements ?? resolveEntitlement);
+  gateImportCsv(who.actor, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.items.length);
-  await assertAdoptTargets(db, graphId, input);
+  await assertAdoptTargets(db, who, input);
 
   const operations: ExecuteRequest['operations'] = [];
   let created = 0;
@@ -786,14 +786,14 @@ export async function confirmImport(
     // Выписка, которую Orbis знал ЦЕЛИКОМ, — лучший возможный исход для метрики §8, и
     // потерять его нельзя: сводка пишется ДО отказа (created=0, adopted=0, всё «уже было»).
     // Пользовательское поведение прежнее — импортировать по-прежнему нечего.
-    await writeImportSummary(db, graphId, input, { created: 0, adopted: 0 });
+    await writeImportSummary(db, who, input, { created: 0, adopted: 0 });
     throw new ExecError('VALIDATION', 'нет строк для импорта: все строки помечены «пропустить»', {
       items: input.items.length,
     });
   }
 
   const request: ExecuteRequest = {
-    actorUserId: graphId,
+    identity: who,
     actorKind: 'owner', // импорт — путь владельца; LLM/MCP этот флоу не инициируют
     source: 'ui', // подтверждённое действие владельца на экране ревью (§3.4 шаг 4)
     // Механизм — импорт (§А4-4): только ему разрешено писать `orbis/bank_txn_id` (§А2-5)
@@ -809,7 +809,7 @@ export async function confirmImport(
   // Идентификаторы созданных сущностей — из результатов batch (а не из сгенерированных
   // выше id): идемпотентный повтор возвращает СОХРАНЁННЫЕ результаты первого прогона
   const entityIds = r.results.filter(isWireEntity).map((e) => e.id);
-  await writeImportSummary(db, graphId, input, { created, adopted });
+  await writeImportSummary(db, who, input, { created, adopted });
   return {
     actionId: r.actionId,
     idempotentReplay: r.idempotentReplay,
@@ -817,6 +817,6 @@ export async function confirmImport(
     adopted,
     skipped,
     entityIds,
-    unbudgeted: await unbudgetedOf(db, graphId, entityIds),
+    unbudgeted: await unbudgetedOf(db, who, entityIds),
   };
 }

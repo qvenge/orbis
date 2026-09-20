@@ -26,9 +26,11 @@
 // решение владельца воплощено батчем принятого предложения (source `routine`), и именно
 // его снимает «отмени последнее» (приёмка 3) и откат прогона (приёмка 11, rollback.ts).
 import {
+  type AccountId,
   BODY_NOTE_PROPERTY,
   type RunProposal as ContractRunProposal,
   entityThreadId,
+  type GraphId,
   isManualBucket,
   manualBucket,
   newId,
@@ -63,6 +65,7 @@ import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
+import type { Identity } from '../identity';
 import type { LLMProvider } from '../llm/types';
 import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
 import {
@@ -177,9 +180,9 @@ export interface SupersedeResult {
  */
 export async function appendSystemNote(
   tx: Tx,
-  args: { graphId: string; entityId: string; content: string; metadata: Record<string, unknown> },
+  args: { graph: GraphId; entityId: string; content: string; metadata: Record<string, unknown> },
 ): Promise<void> {
-  const threadId = await ensureEntityThread(tx, args.graphId, args.entityId);
+  const threadId = await ensureEntityThread(tx, args.graph, args.entityId);
   await appendMessage(tx, {
     id: newId(),
     threadId,
@@ -230,7 +233,7 @@ type PatchResult = { ok: true } | { ok: false; error: StructuredError };
 async function patchRun(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     id: string;
     props: Record<string, unknown>;
     precondition?: Array<Record<string, unknown>>;
@@ -241,7 +244,7 @@ async function patchRun(
   const r = await execute(
     deps.db,
     {
-      actorUserId: args.graphId,
+      identity: args.identity,
       actorKind: actor.kind,
       source: actor.source,
       // Механизм — глагол исполнителя (§А4-4) у ВСЕХ вызывающих этой воронки: и у фоновой
@@ -283,15 +286,15 @@ async function patchRun(
  */
 export async function supersedeOpen(
   deps: RoutineDeps,
-  args: { graphId: string; routineId: string; exceptRunId: string },
+  args: { identity: Identity; routineId: string; exceptRunId: string },
 ): Promise<SupersedeResult> {
-  const runs = await withIdentity(deps.db, args.graphId, (tx) => runsOfParent(tx, args.routineId));
+  const runs = await withIdentity(deps.db, args.identity, (tx) => runsOfParent(tx, args.routineId));
   const out: SupersedeResult = { superseded: 0, staled: 0 };
 
   for (const row of runs) {
     if (row.id === args.exceptRunId) continue;
     const closed = await closeOpenOfRun(deps, {
-      graphId: args.graphId,
+      identity: args.identity,
       routineId: args.routineId,
       runId: row.id,
       props: row.props,
@@ -347,7 +350,7 @@ const UNIT_REJECT_CONTENT: Record<Extract<RejectReason, 'superseded' | 'stale'>,
 export async function closeOpenOfRun(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     routineId: string;
     runId: string;
     /** Свойства прогона (§А1-1) — те же, что отдаёт `runsOfParent`/`runFacts`. */
@@ -357,13 +360,13 @@ export async function closeOpenOfRun(
     questionNote: string;
   },
 ): Promise<{ proposal: boolean; question: boolean; units: number }> {
-  const { graphId, routineId, runId, props, reason } = args;
+  const { identity, routineId, runId, props, reason } = args;
   const out = { proposal: false, question: false, units: 0 };
   const now = deps.clock().toISOString();
   const proposal = props['orbis/run_proposal'];
 
   if (proposal?.status === 'pending') {
-    const closed = await closeProposalOfRun(deps, { graphId, proposal, reason });
+    const closed = await closeProposalOfRun(deps, { identity, proposal, reason });
     // `null` — гасить нечего: карточка исчезла, уже исполнена или решена ЧУЖОЙ причиной.
     // Статус на прогоне пишет тот, чей reason стоит в reject-строке (она — источник
     // правды, V1.8): наше «заменено» поверх его «отклонил» соврало бы владельцу про его
@@ -376,7 +379,7 @@ export async function closeOpenOfRun(
       // умеет — и если решение владельца легло между чтением и патчем, CONFLICT оставит
       // его статус нетронутым.
       const patched = await patchRun(deps, {
-        graphId,
+        identity,
         id: runId,
         props: {
           'orbis/run_proposal': {
@@ -401,7 +404,7 @@ export async function closeOpenOfRun(
 
   if (props['orbis/run_outcome'] === 'checkpoint') {
     const patched = await patchRun(deps, {
-      graphId,
+      identity,
       id: runId,
       props: { 'orbis/run_outcome': 'stale' },
       // Под замком исход мог уже стать `answered` (владелец ответил секунду назад) —
@@ -410,9 +413,9 @@ export async function closeOpenOfRun(
     });
     if (patched.ok) {
       out.question = true;
-      await withIdentity(deps.db, graphId, (tx) =>
+      await withIdentity(deps.db, identity, (tx) =>
         appendSystemNote(tx, {
-          graphId,
+          graph: identity.graph,
           entityId: routineId,
           content: args.questionNote,
           metadata: { type: 'routine_stale', routine_id: routineId, run_id: runId },
@@ -438,7 +441,7 @@ export async function closeOpenOfRun(
     // Актор системный (§9.6, инвариант 5): пиши мы его от владельца, «отмени последнее»
     // после «Принять» сняло бы флажок вместо действия (undoLast пропускает `system`).
     const patched = await patchRun(deps, {
-      graphId,
+      identity,
       id: runId,
       props: { 'orbis/undecided': false },
       actor: { ...ACCOUNTING_ACTOR, runId },
@@ -476,24 +479,26 @@ export async function closeOpenOfRun(
 async function closeUnitsOfRun(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     runId: string;
     reason: Extract<RejectReason, 'superseded' | 'stale'>;
     questionNote: string;
   },
 ): Promise<{ closed: number; complete: boolean }> {
-  const { graphId, runId, reason } = args;
+  const { identity, runId, reason } = args;
   let closed = 0;
   try {
     // Порядок обхода — `created_at, id` самого `listRunUnits`: тай-брейк там не украшение,
     // а условие предсказуемости — два обхода идут по единицам одинаково. Про дедлок это НЕ:
     // замок у каждой единицы свой и живёт одну короткую транзакцию (`decideAllOfRun`, ниже)
-    const units = await withIdentity(deps.db, graphId, (tx) => listRunUnits(tx, graphId, runId));
+    const units = await withIdentity(deps.db, identity, (tx) =>
+      listRunUnits(tx, identity.graph, runId),
+    );
     for (const unit of units) {
       if (unit.fate !== 'open') continue;
       if (unit.kind === 'action') {
         const rejected = await rejectPending(deps.db, {
-          graphId,
+          identity,
           pendingId: unit.pendingId,
           reason,
           text: UNIT_REJECT_CONTENT[reason],
@@ -514,7 +519,7 @@ async function closeUnitsOfRun(
         // `staled:false` — либо вопрос отвечен (ОТВЕТ ВАЖНЕЕ ГАШЕНИЯ, ОЧ.8), либо погашен
         // раньше. Различать эти два случая незачем: и там, и там судьба уже есть, и не наша
         const staled = await stalePendingQuestion(deps.db, {
-          graphId,
+          identity,
           pendingId: unit.pendingId,
           text: args.questionNote,
         });
@@ -549,16 +554,16 @@ const MAX_EDIT_CHAIN = 8;
 async function closeProposalOfRun(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     proposal: RunProposal;
     reason: Extract<RejectReason, 'superseded' | 'stale'>;
   },
 ): Promise<{ pendingId: string; editedFrom?: string; mismatches?: ProposalMismatchNote[] } | null> {
-  const { graphId, reason } = args;
+  const { identity, reason } = args;
   let pendingId = args.proposal.pending_id;
   let editedFrom = args.proposal.edited_from;
   for (let hop = 0; hop < MAX_EDIT_CHAIN; hop++) {
-    const rejected = await rejectPending(deps.db, { graphId, pendingId, reason });
+    const rejected = await rejectPending(deps.db, { identity, pendingId, reason });
     if (!rejected.ok) {
       // Карточка исчезла или уже исполнена: статус прогона тогда правит не гашение, а
       // decideProposal — переписывать его здесь значило бы соврать про судьбу
@@ -580,7 +585,7 @@ async function closeProposalOfRun(
     }
     // Чужое решение (владелец кнопкой, проверка предусловий) старше нашего
     if (rejected.reason !== 'edited') return null;
-    const child = await withIdentity(deps.db, graphId, (tx) => editedChildOf(tx, pendingId));
+    const child = await withIdentity(deps.db, identity, (tx) => editedChildOf(tx, pendingId));
     if (child === undefined) {
       console.error(`[routines] предложение ${pendingId} погашено правкой без правленого`);
       return null;
@@ -603,14 +608,14 @@ export const ROUTINE_PAUSED_NOTE_TYPE = 'routine_paused';
  */
 async function lastPauseCut(
   tx: Tx,
-  graphId: string,
+  graph: GraphId,
   routineId: string,
 ): Promise<string | undefined> {
   const probe = JSON.stringify({ type: ROUTINE_PAUSED_NOTE_TYPE });
   const rows = await tx.execute(
     sql`SELECT metadata ->> 'run_id' AS run_id
         FROM chat_messages
-        WHERE thread_id = ${entityThreadId(graphId, routineId)}::uuid
+        WHERE thread_id = ${entityThreadId(graph, routineId)}::uuid
           AND metadata @> ${probe}::jsonb
         ORDER BY created_at DESC, id DESC
         LIMIT 1`,
@@ -643,11 +648,11 @@ async function lastPauseCut(
  */
 export async function pauseIfFailing(
   deps: RoutineDeps,
-  args: { graphId: string; routineId: string },
+  args: { identity: Identity; routineId: string },
 ): Promise<{ paused: boolean }> {
-  const { runs, cut } = await withIdentity(deps.db, args.graphId, async (tx) => ({
+  const { runs, cut } = await withIdentity(deps.db, args.identity, async (tx) => ({
     runs: await runsOfParent(tx, args.routineId),
-    cut: await lastPauseCut(tx, args.graphId, args.routineId),
+    cut: await lastPauseCut(tx, args.identity.graph, args.routineId),
   }));
   const planned = runs.filter((r) => {
     const bucket = r.props['orbis/run_bucket'];
@@ -667,7 +672,7 @@ export async function pauseIfFailing(
   // почти одновременно, иначе оба записали бы паузу и оба положили бы запись в тред.
   // Проигравший получает CONFLICT и честно отвечает `paused: false` — паузу поставил не он.
   const paused = await patchRun(deps, {
-    graphId: args.graphId,
+    identity: args.identity,
     id: args.routineId,
     props: { [ROUTINE_STAGE_PROPERTY]: 'paused' },
     precondition: [{ property: ROUTINE_STAGE_PROPERTY, in: ['active'] }],
@@ -681,9 +686,9 @@ export async function pauseIfFailing(
     return { paused: false };
   }
 
-  await withIdentity(deps.db, args.graphId, (tx) =>
+  await withIdentity(deps.db, args.identity, (tx) =>
     appendSystemNote(tx, {
-      graphId: args.graphId,
+      graph: args.identity.graph,
       entityId: args.routineId,
       content: `Рутина поставлена на паузу: ${CONSECUTIVE_FAILURES_TO_PAUSE} прогона подряд закончились сбоем. Снимите паузу, когда причина устранена.`,
       // run_id — последний учтённый провал: граница следующего счёта (см. lastPauseCut)
@@ -762,7 +767,7 @@ function skip(reason: Extract<StartOutcome, { started: false }>['reason']): Star
  */
 export async function startBucketRun(
   deps: RoutineDeps,
-  args: { graphId: string; routine: StartRoutineRef; bucket: string },
+  args: { identity: Identity; routine: StartRoutineRef; bucket: string },
 ): Promise<StartOutcome> {
   // Под замком рутины — и чтение снимка, и создание (locks.ts): внутри процесса два запуска
   // одной рутины идут по очереди, и второй видит прогон первого как `running`
@@ -773,9 +778,9 @@ export async function startBucketRun(
 
 async function startBucketRunLocked(
   deps: RoutineDeps,
-  args: { graphId: string; routine: StartRoutineRef; bucket: string },
+  args: { identity: Identity; routine: StartRoutineRef; bucket: string },
 ): Promise<StartOutcome> {
-  const { graphId, routine, bucket } = args;
+  const { identity, routine, bucket } = args;
   const now = deps.clock();
   // ОДИН запрос и один снимок: слот вырезается из прогонов рутины в памяти, а не вторым
   // запросом (runsForBucket). Два запроса даже в одной tx под READ COMMITTED видят разные
@@ -783,7 +788,7 @@ async function startBucketRunLocked(
   // идёт», а «в слоте есть не-failed» = running классифицировался бы как «отработан»
   // (done). С одним снимком исход согласован: читали до коммита конкурента → идём в execute
   // и проигрываем там (replay/id_conflict); после → видим его running.
-  const all = await withIdentity(deps.db, graphId, (tx) => runsOfParent(tx, routine.id));
+  const all = await withIdentity(deps.db, identity, (tx) => runsOfParent(tx, routine.id));
   const ofBucket = all.filter((r) => r.props['orbis/run_bucket'] === bucket);
 
   if (all.some((r) => r.props['orbis/run_outcome'] === 'running')) return skip('running');
@@ -802,11 +807,11 @@ async function startBucketRunLocked(
     if (lastFailedAt + delay > now.getTime()) return skip('backoff');
   }
   // Сутки лимита — по дате бакета (см. overRunsPerDay), а не по «сегодня» тика
-  if (overRunsPerDay(deps, graphId, all, bucket.slice(0, 10))) return skip('limit');
+  if (overRunsPerDay(deps, identity.actor, all, bucket.slice(0, 10))) return skip('limit');
 
   const attempt = failed.length + 1;
   return createRun(deps, {
-    graphId,
+    identity,
     routine,
     bucket,
     attempt,
@@ -828,7 +833,7 @@ async function startBucketRunLocked(
  */
 export async function startManualRun(
   deps: RoutineDeps,
-  args: { graphId: string; routine: StartRoutineRef; timeZone: string },
+  args: { identity: Identity; routine: StartRoutineRef; timeZone: string },
 ): Promise<StartOutcome> {
   // Тот же замок, что у бакета (locks.ts): кнопка в секунду тика — второй, а не параллельный
   return (deps.locks ?? processRoutineLocks).run(args.routine.id, () =>
@@ -838,18 +843,19 @@ export async function startManualRun(
 
 async function startManualRunLocked(
   deps: RoutineDeps,
-  args: { graphId: string; routine: StartRoutineRef; timeZone: string },
+  args: { identity: Identity; routine: StartRoutineRef; timeZone: string },
 ): Promise<StartOutcome> {
-  const { graphId, routine, timeZone } = args;
+  const { identity, routine, timeZone } = args;
   const now = deps.clock();
-  const all = await withIdentity(deps.db, graphId, (tx) => runsOfParent(tx, routine.id));
+  const all = await withIdentity(deps.db, identity, (tx) => runsOfParent(tx, routine.id));
   if (all.some((r) => r.props['orbis/run_outcome'] === 'running')) return skip('running');
-  if (overRunsPerDay(deps, graphId, all, wallClockIn(now, timeZone).date)) return skip('limit');
+  if (overRunsPerDay(deps, identity.actor, all, wallClockIn(now, timeZone).date))
+    return skip('limit');
 
   // Те же `now` — и в ключе (manual:<ISO>), и в started_at/created_at прогона: два чтения
   // часов дали бы бакет и отметку старта, разъехавшиеся на миллисекунды
   return createRun(deps, {
-    graphId,
+    identity,
     routine,
     bucket: manualBucket(now.toISOString()),
     attempt: 1,
@@ -872,11 +878,12 @@ async function startManualRunLocked(
  */
 function overRunsPerDay(
   deps: RoutineDeps,
-  graphId: string,
+  account: AccountId,
   runs: RunRow[],
   localDate: string,
 ): boolean {
-  const decision = (deps.entitlements ?? resolveEntitlement)(graphId, ROUTINE_RUNS_PER_DAY_KEY);
+  // Субъект тарифа — АККАУНТ (Р-КГ-6, спека §3.4), а не граф: лимит прогонов покупает человек.
+  const decision = (deps.entitlements ?? resolveEntitlement)(account, ROUTINE_RUNS_PER_DAY_KEY);
   // Отказ резолвера — «прогонов на этом плане нет вовсе»: считать уже нечего
   if (!decision.allowed) return true;
   if (decision.limit === null) return false; // безлимитный план (сегодняшний 'dev')
@@ -897,7 +904,7 @@ function overRunsPerDay(
 async function createRun(
   deps: RoutineDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     routine: StartRoutineRef;
     bucket: string;
     attempt: number;
@@ -911,7 +918,7 @@ async function createRun(
   const r = await execute(
     deps.db,
     {
-      actorUserId: args.graphId,
+      identity: args.identity,
       actorKind: 'ai',
       source: 'system',
       // Механизм — глагол исполнителя (§А4-4): прогон целиком собран из служебных свойств
@@ -1023,7 +1030,7 @@ function historyUnit(unit: RunUnit): RoutineHistoryUnit {
  * ИСТОРИЯ ПРОГОНОВ», `context.ts`), и без этого слоя владелец отвечал бы в пустоту —
  * рутина спрашивала бы одно и то же каждое утро (блокер Б1 ревью спеки).
  *
- * `graphId` ОТДЕЛЬНЫМ параметром, а не из tx: это КОНТРАКТ `listRunUnits` — tx обязан быть
+ * `identity` ОТДЕЛЬНЫМ параметром, а не из tx: это КОНТРАКТ `listRunUnits` — tx обязан быть
  * открыт `withIdentity` для ТОГО ЖЕ владельца, иначе судьбы молча не найдутся и вся пачка
  * прочитается как открытая (модель увидела бы «без ответа» там, где владелец ответил).
  *
@@ -1040,7 +1047,7 @@ function historyUnit(unit: RunUnit): RoutineHistoryUnit {
  */
 export async function routineHistory(
   tx: Tx,
-  graphId: string,
+  graph: GraphId,
   routineId: string,
   exceptRunId: string,
   tail: number = ROUTINE_HISTORY_TAIL,
@@ -1052,7 +1059,7 @@ export async function routineHistory(
     // Предложение прогона в пачку НЕ попадает (Б5 ревью): проба идёт по явному `kind`,
     // а у предложения его нет — иначе один и тот же текст модель прочитала бы дважды,
     // как проекцию `explanation` и как единицу
-    const units = await listRunUnits(tx, graphId, row.id);
+    const units = await listRunUnits(tx, graph, row.id);
     // Потолок истории считает ВСЕ единицы, а кап пачки (MAX_RUN_UNITS) — только открытые:
     // решённая освобождает место под капом, поэтому за длинный прогон их накапливается и
     // больше десяти, и хвост «и ещё N» — не мёртвая ветка. Усекается именно хвост: ранние
@@ -1105,9 +1112,9 @@ type RunProposal = ContractRunProposal;
  */
 export async function answerRoutineCheckpoint(
   deps: RoutineWriteDeps,
-  args: { graphId: string; runId: string; answer: string },
+  args: { identity: Identity; runId: string; answer: string },
 ): Promise<{ runId: string }> {
-  const row = await withIdentity(deps.db, args.graphId, (tx) => runById(tx, args.runId));
+  const row = await withIdentity(deps.db, args.identity, (tx) => runById(tx, args.runId));
   // Чужой, несуществующий и ТИКЕТНЫЙ прогон здесь неразличимы намеренно: у тикетного своя
   // процедура (agentRun.answerCheckpoint), и отвечать на него отсюда — не «нельзя», а
   // «не тем ключом»; NOT_FOUND сообщает ровно это, не рассказывая про чужой граф.
@@ -1123,7 +1130,7 @@ export async function answerRoutineCheckpoint(
   }
 
   const patched = await patchRun(deps, {
-    graphId: args.graphId,
+    identity: args.identity,
     id: args.runId,
     props: {
       'orbis/run_reply': { text: args.answer, at: deps.clock().toISOString() },
@@ -1306,9 +1313,9 @@ function toExecError(error: StructuredError): ExecError {
  */
 export async function proposalView(
   db: Db,
-  args: { graphId: string; runId: string },
+  args: { identity: Identity; runId: string },
 ): Promise<ProposalView | null> {
-  return withIdentity(db, args.graphId, async (tx) => {
+  return withIdentity(db, args.identity, async (tx) => {
     // Архивный прогон ОТДАЁТСЯ (в отличие от `runById`): архив у рутинного прогона — след
     // отката, и карточка принятого-затем-откаченного предложения обязана остаться читаемой
     // в треде рутины, а не превратиться в «прогон не найден»
@@ -1335,7 +1342,7 @@ export async function proposalView(
       runArchived: row.archived,
       // Дифф тела — только у живого предложения (Ш1.1): статус берётся с прогона, он же
       // источник правды о судьбе
-      operations: await describeOperations(tx, args.graphId, stored.operations, {
+      operations: await describeOperations(tx, args.identity, stored.operations, {
         withDiff: proposal.status === 'pending',
       }),
     };
@@ -1385,16 +1392,16 @@ async function runRowAnyArchive(
  */
 export async function openProposalsForEntity(
   db: Db,
-  args: { graphId: string; entityId: string },
+  args: { identity: Identity; entityId: string },
 ): Promise<ProposalView[]> {
-  const runIds = await withIdentity(db, args.graphId, (tx) => liveProposalRuns(tx, args.entityId));
+  const runIds = await withIdentity(db, args.identity, (tx) => liveProposalRuns(tx, args.entityId));
   const views: ProposalView[] = [];
   for (const runId of runIds) {
     // Сборка — тем же `proposalView`, что и у карточки: у него уже есть заголовки целей,
     // дифф тела и пометка происхождения, а вторая проекция того же предложения разъехалась
     // бы с первой на первой же правке. Запросов на предложение выходит больше, чем
     // минимально возможно, — цена принята: список это 0–1 элемент
-    const view = await proposalView(db, { graphId: args.graphId, runId });
+    const view = await proposalView(db, { identity: args.identity, runId });
     if (view === null) continue;
     if (view.status !== 'pending' || view.runArchived) continue;
     views.push(view);
@@ -1506,7 +1513,7 @@ async function liveProposalRuns(tx: Tx, entityId: string): Promise<string[]> {
 export async function decideProposal(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     runId: string;
     pendingId: string;
     decision: 'approve' | 'reject';
@@ -1527,7 +1534,7 @@ export async function decideProposal(
     );
   }
 
-  const live = await readProposal(deps.db, args.graphId, args.runId);
+  const live = await readProposal(deps.db, args.identity, args.runId);
   const addressed = await addressedProposal(deps, { ...args, edits, live });
   if (addressed.kind === 'answer') return addressed.result;
   // Возобновление (Р-10): правленое предложение — наше, и решать по нему заново нечего,
@@ -1535,7 +1542,7 @@ export async function decideProposal(
   // (двойной тап), и ответ «уже решено» скрыл бы от владельца исход его же правки.
   // Решение здесь всегда `approve`: «наше» опознаётся по правке, а правки едут только с ним.
   if (addressed.kind === 'resume') {
-    return approveProposal(deps, args.graphId, args.runId, addressed.proposal);
+    return approveProposal(deps, args.identity, args.runId, addressed.proposal);
   }
 
   const proposal = addressed.proposal;
@@ -1543,12 +1550,12 @@ export async function decideProposal(
     return { status: 'already', proposalStatus: proposal.status };
   }
   if (args.decision === 'reject') {
-    return rejectProposal(deps, args.graphId, args.runId, proposal);
+    return rejectProposal(deps, args.identity, args.runId, proposal);
   }
   return edits === undefined
-    ? approveProposal(deps, args.graphId, args.runId, proposal)
+    ? approveProposal(deps, args.identity, args.runId, proposal)
     : editAndApprove(deps, {
-        graphId: args.graphId,
+        identity: args.identity,
         runId: args.runId,
         proposal,
         edits,
@@ -1585,34 +1592,34 @@ type AddressedProposal =
 async function addressedProposal(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     runId: string;
     pendingId: string;
     edits?: ProposalEdits;
     live: RunProposal;
   },
 ): Promise<AddressedProposal> {
-  const { graphId, runId, pendingId, live } = args;
+  const { identity, runId, pendingId, live } = args;
 
   if (pendingId === live.pending_id) {
     // Быстрый путь. Одна проба всё же нужна: адресованное могла погасить правка, чей шаг 2
     // не дошёл, — тогда решать по нему нечего, а его дитя ждёт указателя. Авторитетную
     // проверку делает сама лестница под замком; здесь — как fast-path у approvePending.
-    const reason = await withIdentity(deps.db, graphId, (tx) => rejectedReason(tx, pendingId));
+    const reason = await withIdentity(deps.db, identity, (tx) => rejectedReason(tx, pendingId));
     if (reason !== 'edited') return { kind: 'decide', proposal: live };
     return takeoverEdited(deps, args, live);
   }
 
   // Адресовано дитя живого: правка прошла, а указатель не переехал
-  const parent = await withIdentity(deps.db, graphId, (tx) => editedFromOf(tx, pendingId));
+  const parent = await withIdentity(deps.db, identity, (tx) => editedFromOf(tx, pendingId));
   if (parent !== undefined && parent === live.pending_id) {
-    const moved = await pointAtEdited(deps, { graphId, runId, from: live, childId: pendingId });
+    const moved = await pointAtEdited(deps, { identity, runId, from: live, childId: pendingId });
     return moved.pending_id === pendingId
       ? { kind: 'decide', proposal: moved }
-      : { kind: 'answer', result: await replacedProposal(deps.db, graphId, pendingId, moved) };
+      : { kind: 'answer', result: await replacedProposal(deps.db, identity, pendingId, moved) };
   }
 
-  const reason = await withIdentity(deps.db, graphId, (tx) => rejectedReason(tx, pendingId));
+  const reason = await withIdentity(deps.db, identity, (tx) => rejectedReason(tx, pendingId));
   if (reason === 'edited') return takeoverEdited(deps, args, live);
   return { kind: 'answer', result: replacedBy(live, reason ?? 'superseded') };
 }
@@ -1625,11 +1632,11 @@ async function addressedProposal(
  */
 async function takeoverEdited(
   deps: RoutineWriteDeps,
-  args: { graphId: string; runId: string; pendingId: string; edits?: ProposalEdits },
+  args: { identity: Identity; runId: string; pendingId: string; edits?: ProposalEdits },
   live: RunProposal,
 ): Promise<Extract<AddressedProposal, { kind: 'resume' | 'answer' }>> {
-  const { graphId, runId, pendingId, edits } = args;
-  const child = await withIdentity(deps.db, graphId, (tx) => editedChildOf(tx, pendingId));
+  const { identity, runId, pendingId, edits } = args;
+  const child = await withIdentity(deps.db, identity, (tx) => editedChildOf(tx, pendingId));
   if (child === undefined) {
     // Причина стоит, а дитяти нет: чинить нечем, но и врать про судьбу не станем
     console.error(`[routines] предложение ${pendingId} погашено правкой без правленого`);
@@ -1637,14 +1644,14 @@ async function takeoverEdited(
   }
   const current =
     live.pending_id === pendingId
-      ? await pointAtEdited(deps, { graphId, runId, from: live, childId: child })
+      ? await pointAtEdited(deps, { identity, runId, from: live, childId: child })
       : live;
   if (current.pending_id !== child) {
     // Указатель ушёл ещё дальше (цепочка правок либо гашение новым прогоном): чинит его
     // следующий заход владельца — по одному звену за раз
     return { kind: 'answer', result: replacedBy(current, 'edited') };
   }
-  const mine = edits !== undefined && editedPendingId(graphId, pendingId, edits) === child;
+  const mine = edits !== undefined && editedPendingId(identity.graph, pendingId, edits) === child;
   return mine
     ? { kind: 'resume', proposal: current }
     : { kind: 'answer', result: replacedBy(current, 'edited') };
@@ -1660,11 +1667,11 @@ async function takeoverEdited(
  */
 async function replacedProposal(
   db: Db,
-  graphId: string,
+  identity: Identity,
   addressedId: string,
   live: RunProposal,
 ): Promise<DecideProposalResult> {
-  const reason = await withIdentity(db, graphId, (tx) => rejectedReason(tx, addressedId));
+  const reason = await withIdentity(db, identity, (tx) => rejectedReason(tx, addressedId));
   return replacedBy(live, reason ?? 'superseded');
 }
 
@@ -1686,8 +1693,8 @@ function editDedupeKey(parentId: string, edits: ProposalEdits): string {
   return `edit:${parentId}:${editsHash(edits)}`;
 }
 
-function editedPendingId(graphId: string, parentId: string, edits: ProposalEdits): string {
-  return pendingMessageId(graphId, editDedupeKey(parentId, edits));
+function editedPendingId(graph: GraphId, parentId: string, edits: ProposalEdits): string {
+  return pendingMessageId(graph, editDedupeKey(parentId, edits));
 }
 
 /**
@@ -1742,19 +1749,19 @@ type EditStep1 =
  */
 async function editAndApprove(
   deps: RoutineWriteDeps,
-  args: { graphId: string; runId: string; proposal: RunProposal; edits: ProposalEdits },
+  args: { identity: Identity; runId: string; proposal: RunProposal; edits: ProposalEdits },
 ): Promise<DecideProposalResult> {
-  const { graphId, runId, proposal, edits } = args;
+  const { identity, runId, proposal, edits } = args;
   const parentId = proposal.pending_id;
-  const childId = editedPendingId(graphId, parentId, edits);
+  const childId = editedPendingId(identity.graph, parentId, edits);
   const step1 = await createEditedProposal(deps, { ...args, childId });
 
   if (step1.kind === 'decided') return { status: 'already', proposalStatus: step1.status };
   if (step1.kind === 'raced') {
     // Проиграли гонку за исходное. Своей же правкой — доводим её (дитя одно, и оно наше,
     // если хеш совпал); чужим решением — оно старше нашего, и переписывать его нельзя.
-    if (step1.reason !== 'edited') return foreignDecision(deps.db, graphId, runId, step1.reason);
-    const live = await readProposal(deps.db, graphId, runId);
+    if (step1.reason !== 'edited') return foreignDecision(deps.db, identity, runId, step1.reason);
+    const live = await readProposal(deps.db, identity, runId);
     return resumeOrAnswer(
       deps,
       args,
@@ -1765,8 +1772,8 @@ async function editAndApprove(
     // Указатель увели под нами — а увести его может только чужая лестница, то есть
     // исходное погашено правкой. Не погашено — значит прогон просто живёт другим
     // предложением, и решать по прочитанному нечего.
-    const live = await readProposal(deps.db, graphId, runId);
-    const reason = await withIdentity(deps.db, graphId, (tx) => rejectedReason(tx, parentId));
+    const live = await readProposal(deps.db, identity, runId);
+    const reason = await withIdentity(deps.db, identity, (tx) => rejectedReason(tx, parentId));
     if (reason !== 'edited') return replacedBy(live, reason ?? 'superseded');
     return resumeOrAnswer(
       deps,
@@ -1777,10 +1784,10 @@ async function editAndApprove(
 
   // Шаг 2: указатель переезжает на правленое. Отдельной транзакцией — вложить её в шаг 1
   // нельзя (execute открывает свою), и именно поэтому правило возобновления обязательно.
-  const live = await pointAtEdited(deps, { graphId, runId, from: proposal, childId });
+  const live = await pointAtEdited(deps, { identity, runId, from: proposal, childId });
   if (live.pending_id !== childId) return replacedBy(live, 'edited');
   // Шаги 3–4: прежний конвейер — ревалидация, применение, судьба на прогоне
-  return approveProposal(deps, graphId, runId, live);
+  return approveProposal(deps, identity, runId, live);
 }
 
 /**
@@ -1790,12 +1797,12 @@ async function editAndApprove(
  */
 async function resumeOrAnswer(
   deps: RoutineWriteDeps,
-  args: { graphId: string; runId: string },
+  args: { identity: Identity; runId: string },
   addressed: Extract<AddressedProposal, { kind: 'resume' | 'answer' }>,
 ): Promise<DecideProposalResult> {
   return addressed.kind === 'answer'
     ? addressed.result
-    : approveProposal(deps, args.graphId, args.runId, addressed.proposal);
+    : approveProposal(deps, args.identity, args.runId, addressed.proposal);
 }
 
 /**
@@ -1812,16 +1819,16 @@ async function resumeOrAnswer(
 async function createEditedProposal(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     runId: string;
     proposal: RunProposal;
     edits: ProposalEdits;
     childId: string;
   },
 ): Promise<EditStep1> {
-  const { graphId, runId, edits, childId } = args;
+  const { identity, runId, edits, childId } = args;
   const parentId = args.proposal.pending_id;
-  return withIdentity(deps.db, graphId, async (tx) => {
+  return withIdentity(deps.db, identity, async (tx) => {
     await acquirePendingLock(tx, parentId);
     const row = await runById(tx, runId);
     if (
@@ -1847,7 +1854,7 @@ async function createEditedProposal(
     // ExecError отсюда откатывает всю транзакцию, а не половину лестницы
     const operations = buildEditedOperations(stored.operations, edits);
 
-    const rejected = await rejectPendingTx(tx, { graphId, pendingId: parentId, reason: 'edited' });
+    const rejected = await rejectPendingTx(tx, { identity, pendingId: parentId, reason: 'edited' });
     if (rejected.alreadyRejected) return { kind: 'raced', reason: rejected.reason };
 
     // Строки, а не операции, — как и у исходного предложения (см. `countProposalRows`):
@@ -1858,7 +1865,7 @@ async function createEditedProposal(
       // Тред карточки исходного и есть тред рутины: правленое обязано лечь туда же, иначе
       // лента рутины разорвётся, а `ensureEntityThread` здесь был бы вторым источником
       threadId: rejected.threadId,
-      actor: { userId: graphId, kind: 'ai', source: 'routine', runId, editedFrom: parentId },
+      actor: { userId: identity.graph, kind: 'ai', source: 'routine', runId, editedFrom: parentId },
       tool: 'batch_execute',
       input: { batch_id: childId, operations },
       level: 'explicit-confirmation',
@@ -1892,7 +1899,7 @@ async function createEditedProposal(
  */
 async function pointAtEdited(
   deps: RoutineWriteDeps,
-  args: { graphId: string; runId: string; from: RunProposal; childId: string },
+  args: { identity: Identity; runId: string; from: RunProposal; childId: string },
 ): Promise<RunProposal> {
   const next: RunProposal = {
     pending_id: args.childId,
@@ -1900,7 +1907,7 @@ async function pointAtEdited(
     edited_from: args.from.pending_id,
   };
   const patched = await patchRun(deps, {
-    graphId: args.graphId,
+    identity: args.identity,
     id: args.runId,
     props: { 'orbis/run_proposal': next },
     precondition: [{ property: 'orbis/run_proposal', in: [args.from] }],
@@ -1914,7 +1921,7 @@ async function pointAtEdited(
   // `comparePropertyValue`), — но `next` собран из ЧАСТИ полей, а прочитанное предложение
   // несёт ещё и то, что дописал сервер (`decided_at`, `mismatches`). Отсюда правило
   // остаётся прежним: объект `proposal` для CAS всегда берётся ЧТЕНИЕМ, а не сборкой.
-  return readProposal(deps.db, args.graphId, args.runId);
+  return readProposal(deps.db, args.identity, args.runId);
 }
 
 /**
@@ -1922,8 +1929,8 @@ async function pointAtEdited(
  * решать предложения там нечего, и различать «чужой прогон» от «прогон без предложения»
  * владельцу незачем — обе кнопки просто не существуют.
  */
-async function readProposal(db: Db, graphId: string, runId: string): Promise<RunProposal> {
-  const row = await withIdentity(db, graphId, (tx) => runById(tx, runId));
+async function readProposal(db: Db, identity: Identity, runId: string): Promise<RunProposal> {
+  const row = await withIdentity(db, identity, (tx) => runById(tx, runId));
   if (row === null || row.props['orbis/run_routine'] === undefined) {
     throw new ExecError('NOT_FOUND', 'прогон рутины не найден', { runId });
   }
@@ -1937,10 +1944,10 @@ async function readProposal(db: Db, graphId: string, runId: string): Promise<Run
 /** Статус предложения прогона СЕЙЧАС — перечитывается после проигранной гонки. */
 async function currentStatus(
   db: Db,
-  graphId: string,
+  identity: Identity,
   runId: string,
 ): Promise<ProposalStatus | undefined> {
-  const row = await withIdentity(db, graphId, (tx) => runById(tx, runId));
+  const row = await withIdentity(db, identity, (tx) => runById(tx, runId));
   return row?.props['orbis/run_proposal']?.status;
 }
 
@@ -1967,11 +1974,11 @@ const STATUS_BY_REJECT_REASON: Record<RejectReason, ProposalStatus> = {
  */
 async function foreignDecision(
   db: Db,
-  graphId: string,
+  identity: Identity,
   runId: string,
   reason: RejectReason,
 ): Promise<DecideProposalResult> {
-  const status = await currentStatus(db, graphId, runId);
+  const status = await currentStatus(db, identity, runId);
   return {
     status: 'already',
     proposalStatus:
@@ -1993,12 +2000,12 @@ async function foreignDecision(
  */
 async function approveProposal(
   deps: RoutineWriteDeps,
-  graphId: string,
+  identity: Identity,
   runId: string,
   proposal: RunProposal,
 ): Promise<DecideProposalResult> {
   const applied = await approvePending(deps.db, {
-    graphId,
+    identity,
     pendingId: proposal.pending_id,
     clock: deps.clock,
   });
@@ -2016,7 +2023,7 @@ async function approveProposal(
     // же actionId, а статус уже стоит — переписывать его значило бы плодить действие
     // журнала с новым `decided_at` на каждый повторный тап
     if (proposal.status === 'approved') return done;
-    const settled = await settleProposal(deps, { graphId, runId, proposal, status: 'approved' });
+    const settled = await settleProposal(deps, { identity, runId, proposal, status: 'approved' });
     return settled.written ? done : { status: 'already', proposalStatus: settled.proposalStatus };
   }
 
@@ -2026,7 +2033,7 @@ async function approveProposal(
     // отклонили между нашим чтением статуса и approve (гашение новым прогоном идёт именно
     // в таком порядке). Отличаем её по факту, а не по тексту: если предложение с тех пор
     // решено, это `already`, и владелец увидит, чей это был ход.
-    const status = await currentStatus(deps.db, graphId, runId);
+    const status = await currentStatus(deps.db, identity, runId);
     if (status !== undefined && status !== 'pending') {
       return { status: 'already', proposalStatus: status };
     }
@@ -2036,7 +2043,7 @@ async function approveProposal(
   // Порядок как у гашения: сначала карточка, потом статус — иначе прогон говорил бы
   // «устарело», а кнопка «Принять» ещё работала бы
   const rejected = await rejectPending(deps.db, {
-    graphId,
+    identity,
     pendingId: proposal.pending_id,
     reason: 'stale',
   });
@@ -2046,11 +2053,11 @@ async function approveProposal(
     console.error('[routines] устаревшее предложение не отклонено:', rejected.error);
   } else if (rejected.alreadyRejected && rejected.reason !== 'stale') {
     // Пока мы ревалидировали, предложение снял кто-то другой — его решение старше нашего
-    return foreignDecision(deps.db, graphId, runId, rejected.reason);
+    return foreignDecision(deps.db, identity, runId, rejected.reason);
   }
 
   const settled = await settleProposal(deps, {
-    graphId,
+    identity,
     runId,
     proposal,
     status: 'stale',
@@ -2066,12 +2073,12 @@ async function approveProposal(
 /** «Отклонить» (V1.6, приёмка 5): карточка закрыта причиной `owner`, граф не тронут. */
 async function rejectProposal(
   deps: RoutineWriteDeps,
-  graphId: string,
+  identity: Identity,
   runId: string,
   proposal: RunProposal,
 ): Promise<DecideProposalResult> {
   const rejected = await rejectPending(deps.db, {
-    graphId,
+    identity,
     pendingId: proposal.pending_id,
     reason: 'owner',
   });
@@ -2079,10 +2086,10 @@ async function rejectProposal(
   // Повтор собственной кнопки (`owner`) — дописываем недописанный статус; чужая причина
   // (`superseded`/`stale`) — чужое решение, и переписывать его своим «отклонено» нельзя
   if (rejected.alreadyRejected && rejected.reason !== 'owner') {
-    return foreignDecision(deps.db, graphId, runId, rejected.reason);
+    return foreignDecision(deps.db, identity, runId, rejected.reason);
   }
 
-  const settled = await settleProposal(deps, { graphId, runId, proposal, status: 'rejected' });
+  const settled = await settleProposal(deps, { identity, runId, proposal, status: 'rejected' });
   return settled.written
     ? { status: 'rejected' }
     : { status: 'already', proposalStatus: settled.proposalStatus };
@@ -2101,7 +2108,7 @@ async function rejectProposal(
 async function settleProposal(
   deps: RoutineWriteDeps,
   args: {
-    graphId: string;
+    identity: Identity;
     runId: string;
     proposal: RunProposal;
     status: ProposalStatus;
@@ -2110,7 +2117,7 @@ async function settleProposal(
 ): Promise<{ written: true } | { written: false; proposalStatus: ProposalStatus }> {
   const mismatches = args.mismatches ?? args.proposal.mismatches;
   const patched = await patchRun(deps, {
-    graphId: args.graphId,
+    identity: args.identity,
     id: args.runId,
     props: {
       'orbis/run_proposal': {
@@ -2135,7 +2142,7 @@ async function settleProposal(
     console.error(`[routines] статус предложения не записан на ${args.runId}:`, patched.error);
     return { written: true };
   }
-  const status = await currentStatus(deps.db, args.graphId, args.runId);
+  const status = await currentStatus(deps.db, args.identity, args.runId);
   return { written: false, proposalStatus: status ?? args.proposal.status };
 }
 
@@ -2196,10 +2203,10 @@ const UNIT_STALE_BY_STATE = 'Отложенное действие устаре�
  */
 export async function decideDeferredUnit(
   deps: RoutineWriteDeps,
-  args: { graphId: string; pendingId: string; decision: 'approve' | 'reject' },
+  args: { identity: Identity; pendingId: string; decision: 'approve' | 'reject' },
 ): Promise<DecideDeferredResult> {
-  const { graphId, pendingId } = args;
-  const unit = await withIdentity(deps.db, graphId, (tx) => unitRecord(tx, pendingId));
+  const { identity, pendingId } = args;
+  const unit = await withIdentity(deps.db, identity, (tx) => unitRecord(tx, pendingId));
   // Чужая и несуществующая под RLS неразличимы — единый NOT_FOUND, как у approve/reject
   if (unit === null) {
     throw new ExecError('NOT_FOUND', `единица пачки ${pendingId} не найдена`, { pendingId });
@@ -2222,13 +2229,13 @@ export async function decideDeferredUnit(
   // `answered` не превратит «на вопрос отвечают» в «уже решено».
   const decided =
     args.decision === 'approve'
-      ? await approveUnit(deps, { graphId, pendingId, runId, isAction: unit.kind === 'action' })
-      : await rejectUnit(deps, { graphId, pendingId, runId, isAction: unit.kind === 'action' });
+      ? await approveUnit(deps, { identity, pendingId, runId, isAction: unit.kind === 'action' })
+      : await rejectUnit(deps, { identity, pendingId, runId, isAction: unit.kind === 'action' });
 
   // Бухгалтерия — после ЛЮБОГО состоявшегося решения, включая `already` (§5, лестница
   // сбоев): «Принять» исполнилось, а снятие флажка упало — чинится следующим решением или
   // гашением, и повторное нажатие кнопки как раз и есть этот следующий раз.
-  await settleUndecided(deps, graphId, runId);
+  await settleUndecided(deps, identity, runId);
   return decided;
 }
 
@@ -2277,15 +2284,17 @@ export type DecideAllItem = { pendingId: string } & DecideDeferredResult;
  */
 export async function decideAllDeferred(
   deps: RoutineWriteDeps,
-  args: { graphId: string; runId: string },
+  args: { identity: Identity; runId: string },
 ): Promise<DecideAllItem[]> {
-  const { graphId, runId } = args;
-  const units = await withIdentity(deps.db, graphId, (tx) => listRunUnits(tx, graphId, runId));
+  const { identity, runId } = args;
+  const units = await withIdentity(deps.db, identity, (tx) =>
+    listRunUnits(tx, identity.graph, runId),
+  );
   const summary: DecideAllItem[] = [];
   for (const unit of units) {
     if (unit.kind !== 'action' || unit.fate !== 'open') continue;
     const decided = await decideDeferredUnit(deps, {
-      graphId,
+      identity,
       pendingId: unit.pendingId,
       decision: 'approve',
     });
@@ -2297,10 +2306,10 @@ export async function decideAllDeferred(
 /** «Принять» единицу: исполнение сохранённого payload'а и разбор трёх исходов конвейера. */
 async function approveUnit(
   deps: RoutineWriteDeps,
-  args: { graphId: string; pendingId: string; runId: string; isAction: boolean },
+  args: { identity: Identity; pendingId: string; runId: string; isAction: boolean },
 ): Promise<DecideDeferredResult> {
-  const { graphId, pendingId } = args;
-  const applied = await approvePending(deps.db, { graphId, pendingId, clock: deps.clock });
+  const { identity, pendingId } = args;
+  const applied = await approvePending(deps.db, { identity, pendingId, clock: deps.clock });
   if (applied.ok) return { status: 'applied', actionId: applied.actionId };
 
   const divergence = divergenceOf(applied.error);
@@ -2318,7 +2327,7 @@ async function approveUnit(
   // предложения, — оставить её открытой значило бы обещать владельцу кнопку, которая не
   // сработает ни сегодня, ни завтра, и держать этим весь флажок пачки.
   const rejected = await rejectPending(deps.db, {
-    graphId,
+    identity,
     pendingId,
     reason: 'stale',
     text: UNIT_STALE_BY_STATE,
@@ -2337,11 +2346,11 @@ async function approveUnit(
 /** «Отклонить» единицу: append-отказ своим текстом, граф не тронут. */
 async function rejectUnit(
   deps: RoutineWriteDeps,
-  args: { graphId: string; pendingId: string; runId: string; isAction: boolean },
+  args: { identity: Identity; pendingId: string; runId: string; isAction: boolean },
 ): Promise<DecideDeferredResult> {
-  const { graphId, pendingId } = args;
+  const { identity, pendingId } = args;
   const rejected = await rejectPending(deps.db, {
-    graphId,
+    identity,
     pendingId,
     reason: 'owner',
     text: UNIT_REJECTED_BY_OWNER,
@@ -2369,22 +2378,22 @@ async function rejectUnit(
  */
 export async function answerRunQuestion(
   deps: RoutineWriteDeps,
-  args: { graphId: string; pendingId: string; answer: string; option?: number },
+  args: { identity: Identity; pendingId: string; answer: string; option?: number },
 ): Promise<AnswerQuestionResult> {
-  const { graphId, pendingId } = args;
-  const unit = await withIdentity(deps.db, graphId, (tx) => unitRecord(tx, pendingId));
+  const { identity, pendingId } = args;
+  const unit = await withIdentity(deps.db, identity, (tx) => unitRecord(tx, pendingId));
   // `null` и «не вопрос» не отвергаются здесь: NOT_FOUND и гейт рода — дело
   // `answerPendingQuestion`, и второй их текст разъехался бы с первым
   if (unit !== null && unit.kind === 'question' && args.option !== undefined) {
     assertOption(pendingId, args.option, unit.options);
   }
   const answered = await answerPendingQuestion(deps.db, {
-    graphId,
+    identity,
     pendingId,
     answer: args.answer,
     ...(args.option !== undefined && { option: args.option }),
   });
-  if (unit?.runId !== undefined) await settleUndecided(deps, graphId, unit.runId);
+  if (unit?.runId !== undefined) await settleUndecided(deps, identity, unit.runId);
   return answered;
 }
 
@@ -2446,16 +2455,18 @@ function assertOption(pendingId: string, option: number, options?: string[]): vo
  */
 async function settleUndecided(
   deps: RoutineWriteDeps,
-  graphId: string,
+  identity: Identity,
   runId: string,
 ): Promise<void> {
   try {
-    const row = await withIdentity(deps.db, graphId, (tx) => runRowAnyArchive(tx, runId));
+    const row = await withIdentity(deps.db, identity, (tx) => runRowAnyArchive(tx, runId));
     if (row?.props['orbis/undecided'] !== true) return;
-    const units = await withIdentity(deps.db, graphId, (tx) => listRunUnits(tx, graphId, runId));
+    const units = await withIdentity(deps.db, identity, (tx) =>
+      listRunUnits(tx, identity.graph, runId),
+    );
     if (units.some((u) => u.fate === 'open')) return;
     const patched = await patchRun(deps, {
-      graphId,
+      identity,
       id: runId,
       props: { 'orbis/undecided': false },
       actor: { ...ACCOUNTING_ACTOR, runId },
@@ -2471,13 +2482,13 @@ async function settleUndecided(
 /** Судьба ОДНОЙ единицы — перечитывается после проигранной гонки (образец `currentStatus`). */
 async function unitFate(
   deps: RoutineWriteDeps,
-  args: { graphId: string; pendingId: string; runId: string; isAction: boolean },
+  args: { identity: Identity; pendingId: string; runId: string; isAction: boolean },
 ): Promise<RunUnit['fate'] | undefined> {
   // Вопросу перечитка не положена: его отказ — это гейт рода (С7), а не проигранная
   // гонка, и «уже отвечен» на approve означало бы «решено», хотя решать так нельзя вовсе
   if (!args.isAction) return undefined;
-  const units = await withIdentity(deps.db, args.graphId, (tx) =>
-    listRunUnits(tx, args.graphId, args.runId),
+  const units = await withIdentity(deps.db, args.identity, (tx) =>
+    listRunUnits(tx, args.identity.graph, args.runId),
   );
   return units.find((u) => u.pendingId === args.pendingId)?.fate;
 }
@@ -2678,14 +2689,14 @@ function referencedIds(operations: readonly StoredOperation[]): string[] {
  */
 async function describeOperations(
   tx: Tx,
-  graphId: string,
+  identity: Identity,
   operations: readonly StoredOperation[],
   args: { withDiff: boolean },
 ): Promise<ProposalOperationView[]> {
   const titles = await titlesOf(tx, referencedIds(operations));
   // Снимок реестра нужен строке СВЯЗИ: роль подписывает реестр (Ч10-С3). Строкам правки он
   // больше не нужен — адреса свойств в сохранённом payload'е уже id (`buildUpdate`).
-  const reg = await effectiveRegistry(tx, graphId);
+  const reg = await effectiveRegistry(tx, identity.graph);
   // Тот же снимок — дифф тела: обе стороны обязаны привязывать блоки ОДНИМ реестром (Р-21-1),
   // иначе неизменный запрос показался бы владельцу правкой.
   const bodies = await proposalBodyRows(tx, operations, args, parseRegistryOfSnapshot(reg));

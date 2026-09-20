@@ -30,6 +30,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -87,7 +88,7 @@ function run(
   return execute(
     db,
     {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool, input }],
@@ -114,7 +115,7 @@ interface Row {
 
 /** Колонки значений строки как они легли в БД (не wire-форма — именно колонки). */
 async function rowOf(id: string): Promise<Row> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx
       .select({ props: entities.props, aspects: entities.aspects })
       .from(entities)
@@ -154,7 +155,7 @@ beforeAll(async () => {
   } finally {
     await admin.client.end();
   }
-  reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
 });
 
 afterAll(async () => {
@@ -576,7 +577,7 @@ describe('гейты флагов свойств', () => {
     expect(denied.error.code).toBe('COMPUTED_WRITE');
 
     // А откат той же законной записи — проходит, и свойство снимается
-    const undone = await undoAction(db, { actorUserId: owner, actionId: wrote.actionId });
+    const undone = await undoAction(db, { identity: personal(owner), actionId: wrote.actionId });
     expect(undone.ok).toBe(true);
     expect(Object.hasOwn((await rowOf(run0.id)).props, 'orbis/run_report')).toBe(false);
   });
@@ -898,7 +899,7 @@ describe('гейты флагов свойств', () => {
 
     // Откат идёт БЕЗ mechanism (умолчание `user`): без пропуска гейта он упал бы
     // COMPUTED_WRITE, то есть законно записанное состояние стало бы неотменяемым.
-    const undone = await undoAction(db, { actorUserId: owner, actionId: patched.actionId });
+    const undone = await undoAction(db, { identity: personal(owner), actionId: patched.actionId });
     expect(undone.ok).toBe(true);
     const row = await rowOf(created.id);
     expect(row.props['orbis/run_outcome']).toBe('running');
@@ -976,7 +977,7 @@ describe('затронутые аспекты считаются по свойс
     );
     expect((await rowOf(e.id)).props['orbis/finance_category']).toBe(CATEGORY_B);
 
-    const undone = await undoAction(db, { actorUserId: owner, actionId: patched.actionId });
+    const undone = await undoAction(db, { identity: personal(owner), actionId: patched.actionId });
     expect(undone.ok).toBe(true);
     const back = await rowOf(e.id);
     expect(back.props['orbis/finance_category']).toBe(CATEGORY_A);
@@ -1155,14 +1156,14 @@ describe('списочные пути несут новую форму', () => {
       }),
     );
 
-    const single = await withIdentity(db, owner, async (tx) => {
+    const single = await withIdentity(db, personal(owner), async (tx) => {
       const rows = await tx.select().from(entities).where(eq(entities.id, note.id));
       const row = rows[0];
       if (row === undefined) throw new Error('строка не найдена');
       return toWireEntity(row);
     });
 
-    const listed = await withIdentity(db, owner, async (tx) => {
+    const listed = await withIdentity(db, personal(owner), async (tx) => {
       const found = await readEntity(tx, owner, { id: target.id, include: ['backlinks'] });
       return found?.backlinks?.find((b) => b.entity.id === note.id)?.entity;
     });
@@ -1171,7 +1172,7 @@ describe('списочные пути несут новую форму', () => {
     // Второй списочный путь — компилятор §6: та же выдача кормит и tRPC `entity.query`, и
     // тул `entity_query` (tools/dispatch.ts). Он ходит своим SELECT-листом, и без него
     // проверка накрывала бы только backlinks.
-    const queried = await withIdentity(db, owner, async (tx) => {
+    const queried = await withIdentity(db, personal(owner), async (tx) => {
       const parsed = parseQueryAst(
         `aspect=orbis/task, sortBy=orbis/created_at:desc`,
         toParseRegistry(reg, 'ru'),
@@ -1660,7 +1661,7 @@ describe('правило памяти без образца — отказ на 
     expect(violationsOf(denied)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
     // Отказ НАЗЫВАЕТ ВЫХОД — иначе автор записи уйдёт искать обходной путь.
     expect(denied.error.message).toContain('orbis/rule_pattern');
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select({ id: entities.id }).from(entities).where(eq(entities.id, entityId)),
     );
     expect(rows.length).toBe(0);
@@ -1770,7 +1771,7 @@ describe('core-проекция в props — отказ на всех путях
         [{ code: 'CORE_IN_PROPS', propertyId: id, storage: 'core' }],
       ]);
       // Отказ ДО записи: фантомной строки после него не остаётся.
-      const rows = await withIdentity(db, owner, (tx) =>
+      const rows = await withIdentity(db, personal(owner), (tx) =>
         tx.select({ id: entities.id }).from(entities).where(eq(entities.id, entityId)),
       );
       expect([id, rows.length]).toEqual([id, 0]);

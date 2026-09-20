@@ -22,6 +22,7 @@ import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import type { Identity } from '../identity';
 import { reportMergeConflictUnit } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import { dependantsOf, dependencyGraph } from '../registry/deps-graph';
@@ -58,14 +59,11 @@ const sink = makeChatJournalSink();
  * `source: 'ui'` — прямое действие владельца, как у остальных ручек-мутаций.
  */
 function registryMutation(tool: string) {
-  return async (
-    ctx: { db: Parameters<typeof execute>[0]; actorUserId: string },
-    input: unknown,
-  ) => {
+  return async (ctx: { db: Parameters<typeof execute>[0]; identity: Identity }, input: unknown) => {
     const r = await execute(
       ctx.db,
       {
-        actorUserId: ctx.actorUserId,
+        identity: ctx.identity,
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],
@@ -75,7 +73,7 @@ function registryMutation(tool: string) {
     if (!r.ok) {
       // Та же половина, что у тула: конфликт слияния кладёт карточку разбора отдельной
       // транзакцией — слияние к этому моменту откачено целиком (§А10-2).
-      await reportMergeConflictUnit(ctx.db, ctx.actorUserId, r.error);
+      await reportMergeConflictUnit(ctx.db, ctx.identity, r.error);
       throw execErrorToTRPC(r.error);
     }
     return r.results[0];
@@ -132,8 +130,8 @@ export const registryRouter = router({
    */
   dependants: protectedProcedure.input(z.object({ property: z.string().min(1) }).strict()).query(
     ({ ctx, input }): Promise<{ property: string; dependants: string[] }> =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-        const reg = await effectiveRegistry(tx, ctx.actorUserId);
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
+        const reg = await effectiveRegistry(tx, ctx.identity.graph);
         // Отсеиваются ТОЛЬКО держатели-ДЕЛЬТЫ, и это единственный верный отсев: их `id` —
         // uuid строки `registry_deltas`, который владельцу нечем истолковать, а сама
         // зависимость уже приехала в граф ребром `aspect` (дельта сложена в эффективное
@@ -147,7 +145,7 @@ export const registryRouter = router({
         // «на свойстве не стоит никто» при живом ссылочном свойстве, чьё множество цели на
         // нём и держится. Дубля от этого не возникает: `dependantsOf` собирает `from` в Set,
         // а узел-строка реестра и узел-аспект — разные `from`.
-        const holders = (await collectPropertyHolders(tx, ctx.actorUserId)).filter(
+        const holders = (await collectPropertyHolders(tx, ctx.identity.graph)).filter(
           (h) => h.kind !== 'delta',
         );
         const graph = dependencyGraph(reg, {
@@ -211,8 +209,8 @@ export const registryRouter = router({
 
   effective: protectedProcedure.query(
     ({ ctx }): Promise<WireRegistry> =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-        const reg = await effectiveRegistry(tx, ctx.actorUserId);
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
+        const reg = await effectiveRegistry(tx, ctx.identity.graph);
         return {
           version: registryVersionOf(reg),
           properties: byRank(reg.properties),

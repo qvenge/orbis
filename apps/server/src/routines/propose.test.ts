@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, newId, type ProposeResult, pendingMessageId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun, runAgentVerb } from '../agent-loop/verbs';
 import { chatMessages } from '../db/schema';
@@ -73,7 +73,7 @@ async function seedTask(title: string): Promise<string> {
 }
 
 async function messageById(id: string) {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select().from(chatMessages).where(eq(chatMessages.id, id)),
   );
   return rows[0];
@@ -81,7 +81,7 @@ async function messageById(id: string) {
 
 /** Сколько pending-карточек лежит в треде рутины. */
 async function pendingsInRoutineThread(routineId: string): Promise<number> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(chatMessages)
@@ -259,7 +259,11 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     if (r.status !== 'ok') return;
     const { pending_id: pendingId } = r.result as ProposeResult;
 
-    const applied = await approvePending(db, { graphId: owner, pendingId, clock: () => T0 });
+    const applied = await approvePending(db, {
+      identity: personal(owner),
+      pendingId,
+      clock: () => T0,
+    });
     expect(applied.ok).toBe(true);
     expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('planned');
     expect((await propsOf(owner, otherId))['orbis/task_status']).toBe('done');
@@ -272,7 +276,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     expect(actions[0]?.actor_kind).toBe('ai');
 
     // Инвариант 9: у принятого предложения тот же откат, что у любого прогона
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    const rolled = await rollbackRun(db, { identity: personal(owner), runId });
     expect(rolled.ok).toBe(true);
     expect(await propsOf(owner, taskId)).toMatchObject({ 'orbis/task_status': 'inbox' });
     // `toEqual` по всему набору свойств не годится: у тикета есть ещё назначение и
@@ -334,7 +338,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     ]);
 
     // Экран предложения: строка снятия называет свойство и «станет» литералом «—».
-    const view = await proposalView(db, { graphId: owner, runId });
+    const view = await proposalView(db, { identity: personal(owner), runId });
     expect(
       view?.operations.map((o) => ({ field: o.field, before: o.before, after: o.after })),
     ).toEqual([
@@ -367,7 +371,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
 
     // Значение в базе — ровно вложенный объект с обёрткой: если бы его кто-то разворачивал
     // по дороге, тест перестал бы что-либо ловить.
-    const row = await withIdentity(db, owner, (tx) =>
+    const row = await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${goal.id}`),
     );
     const stored = (row as unknown as Array<Record<string, unknown>>)[0];
@@ -412,7 +416,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     ]);
 
     // И «Принять» проходит: граф с тех пор не менялся.
-    const applied = await approvePending(db, { graphId: owner, pendingId });
+    const applied = await approvePending(db, { identity: personal(owner), pendingId });
     expect(applied.ok).toBe(true);
     const after = await propsOf(owner, goal.id);
     expect(after['orbis/progress_source']).toMatchObject({ aggregate: 'latest' });
@@ -442,7 +446,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const pending1 = (r1.result as ProposeResult).pending_id;
 
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -453,7 +457,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       ],
     });
 
-    const denied = await approvePending(db, { graphId: owner, pendingId: pending1 });
+    const denied = await approvePending(db, { identity: personal(owner), pendingId: pending1 });
     expect(denied.ok).toBe(false);
     if (denied.ok) return;
     expect(denied.error.code).toBe('CONFLICT');
@@ -483,7 +487,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const pending2 = (r2.result as ProposeResult).pending_id;
 
     await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -494,7 +498,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       ],
     });
 
-    const denied2 = await approvePending(db, { graphId: owner, pendingId: pending2 });
+    const denied2 = await approvePending(db, { identity: personal(owner), pendingId: pending2 });
     expect(denied2.ok).toBe(false);
     if (denied2.ok) return;
     expect(denied2.error.code).toBe('CONFLICT');
@@ -650,7 +654,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
 
     const chat: ToolCallCtx = {
       db,
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'ai',
       source: 'chat',
       explicitCommand: false,
@@ -661,7 +665,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const grantId = await workerGrant(owner, 'propose-mcp');
     expectError(await dispatchTool(worker(owner, grantId), 'orbis_propose', payload), 'VALIDATION');
 
-    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
+    const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
     expect(defs.find((d) => d.name === 'orbis_propose')?.routineOnly).toBe(true);
     // Фильтры публикации: чат (send-message.ts) и MCP (mcp/server.ts) режут routineOnly
     expect(defs.filter((d) => d.routineOnly !== true).map((d) => d.name)).not.toContain(
@@ -732,7 +736,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const step = await runAgentVerb(
       {
         db,
-        graphId: owner,
+        identity: personal(owner),
         subject: { kind: 'routine', routineId },
         clock: () => T0,
         sink: makeChatJournalSink(),
@@ -777,7 +781,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
 
     // Предложение действующее: «Принять» исполняет его
     const applied = await approvePending(db, {
-      graphId: owner,
+      identity: personal(owner),
       pendingId: result.pending_id,
       clock: () => T0,
     });
@@ -799,7 +803,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     await runAgentVerb(
       {
         db,
-        graphId: owner,
+        identity: personal(owner),
         subject: { kind: 'routine', routineId },
         clock: () => T0,
         sink: makeChatJournalSink(),
@@ -816,7 +820,11 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expectError(clash, 'CONFLICT');
     const pendingId = pendingMessageId(owner, `proposal:${runId}`);
     // Владелец успел отклонить карточку с экрана
-    const rejected = await rejectPending(db, { graphId: owner, pendingId, reason: 'owner' });
+    const rejected = await rejectPending(db, {
+      identity: personal(owner),
+      pendingId,
+      reason: 'owner',
+    });
     expect(rejected.ok).toBe(true);
 
     const again = await dispatchTool(ctx, 'orbis_propose', {
@@ -841,7 +849,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const closed = await closeRoutineRun(
       {
         db,
-        graphId: owner,
+        identity: personal(owner),
         subject: { kind: 'routine', routineId },
         clock: () => T0,
         sink: makeChatJournalSink(),
@@ -897,7 +905,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     // Грант полного скоупа: у worker-скоупа раньше сработал бы гейт §4.14, и до сборки
     // субъекта вызов бы не дошёл — проверялся бы не тот рубеж
     const token = await issuePatGrant(db, {
-      graphId: owner,
+      identity: personal(owner),
       label: 'propose-двойной-субъект',
       scope: 'full',
     });

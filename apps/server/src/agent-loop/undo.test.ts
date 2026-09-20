@@ -9,9 +9,10 @@
 // достаются даром. Ровно это свойство тест и стережёт: стоит глаголу однажды начать
 // писать в БД мимо конвейера — шаг перестанет отменяться, и упадёт здесь.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { globalThreadId, newId, type RunStepResult } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
@@ -36,8 +37,8 @@ function okResult<T>(r: Awaited<ReturnType<typeof dispatchTool>>): T {
 }
 
 /** Сообщения ГЛОБАЛЬНОГО треда владельца: туда ложится audit глаголов (треда у них нет). */
-async function globalMessages(owner: string) {
-  return withIdentity(db, owner, (tx) =>
+async function globalMessages(owner: GraphId) {
+  return withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(chatMessages)
@@ -57,7 +58,7 @@ afterAll(async () => {
 describe('«отмени последнее» гасит шаг агента (приёмка 14, §7.8)', () => {
   const owner = mintGraph();
   const ownerCaller = createCaller({
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     db,
     clientVersion: null,

@@ -45,14 +45,22 @@ import {
   seedPerfFixture,
 } from '../src/test/perf';
 import { createCallerFactory } from '../src/trpc';
-import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../test/helpers';
 
 requireEnv();
 
 const { db, client } = appDb();
 const user = mintGraph();
 const caller = createCallerFactory(appRouter)({
-  actorUserId: user,
+  identity: personal(user),
   actorKind: 'owner',
   db,
   clientVersion: null,
@@ -365,8 +373,8 @@ test('приёмка §С8-16: p95 чтения прогретого кэша sp
     await admin.client.end();
   }
   const asOf = '2026-07-15';
-  const versions = await withIdentity(db, owner, (tx) => readRegistryVersions(tx, owner));
-  await withIdentity(db, owner, (tx) =>
+  const versions = await withIdentity(db, personal(owner), (tx) => readRegistryVersions(tx, owner));
+  await withIdentity(db, personal(owner), (tx) =>
     writeSpentCache(
       tx,
       owner,
@@ -381,14 +389,16 @@ test('приёмка §С8-16: p95 чтения прогретого кэша sp
     }
   };
   // Приёмочное число: транзакция открыта ОДИН раз, в замер входит ровно чтение.
-  const p95 = await withIdentity(db, owner, (tx) =>
+  const p95 = await withIdentity(db, personal(owner), (tx) =>
     measureP95('spent-cache read(40)', P95_RUNS, async () =>
       check(await readSpentCache(tx, owner, keys, versions)),
     ),
   );
   // Справочное: то же чтение вместе с обвязкой запроса (BEGIN/identity/COMMIT).
   await measureP95('spent-cache read(40)+tx', P95_RUNS, () =>
-    withIdentity(db, owner, async (tx) => check(await readSpentCache(tx, owner, keys, versions))),
+    withIdentity(db, personal(owner), async (tx) =>
+      check(await readSpentCache(tx, owner, keys, versions)),
+    ),
   );
   // Мир приёмки уносится за собой: фикстура гейта считает строки, и сорок чужих конвертов
   // сдвинули бы её сторож.

@@ -8,7 +8,12 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { oauthClients } from '../db/schema';
-import { createAuthorizationCode, listGrants, revokeGrant } from '../oauth/grants';
+import {
+  createAuthorizationCode,
+  listGrants,
+  NotGraphOwnerError,
+  revokeGrant,
+} from '../oauth/grants';
 import { configuredCanonicalResource, isOurResource } from '../oauth/metadata';
 import { ownerOnlyProcedure, router } from '../trpc';
 import { toWireAgentGrant, type WireAgentGrant } from '../wire';
@@ -120,15 +125,27 @@ export const oauthRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { clientName } = await requireValidRequest(ctx.db, input);
-      const code = await createAuthorizationCode(ctx.db, {
-        graphId: ctx.actorUserId,
-        clientId: input.clientId,
-        // Метка в списке «Агенты» — та же подпись, что владелец видел на экране согласия
-        label: clientName,
-        redirectUri: input.redirectUri,
-        codeChallenge: input.codeChallenge,
-        scope: input.scope,
-      });
+      // Экран согласия рендерится ВНЕ OnboardingGate (apps/web/src/main.tsx), поэтому
+      // личного графа у аккаунта может ещё не быть (Р-ИГ-7). Отказ гейта владения — это
+      // FORBIDDEN с человеческим текстом, а не 500 от сырого FK `agent_grants.graph_id`.
+      // Заводить граф здесь НЕЛЬЗЯ: прод-код графы сам не создаёт (спека §3.5, Р-КГ-3).
+      let code: string;
+      try {
+        code = await createAuthorizationCode(ctx.db, {
+          identity: ctx.identity,
+          clientId: input.clientId,
+          // Метка в списке «Агенты» — та же подпись, что владелец видел на экране согласия
+          label: clientName,
+          redirectUri: input.redirectUri,
+          codeChallenge: input.codeChallenge,
+          scope: input.scope,
+        });
+      } catch (e) {
+        if (e instanceof NotGraphOwnerError) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: e.message });
+        }
+        throw e;
+      }
       // Адрес возврата строится ТОЛЬКО разбором и `.href`, никакой склейки `${uri}?code=…`.
       // Две причины, обе проверены пробой: (а) redirect_uri с УЖЕ имеющимся query законен
       // (RFC 6749 §3.1.2, реальный пример — `…/auth_callback?tenant=acme`), и склейка
@@ -149,7 +166,7 @@ export const oauthRouter = router({
   // подробности и разбор прежнего неверного обоснования в докблоке WireAgentGrant.
   listGrants: ownerOnlyProcedure.query(
     async ({ ctx }): Promise<WireAgentGrant[]> =>
-      (await listGrants(ctx.db, ctx.actorUserId)).map(toWireAgentGrant),
+      (await listGrants(ctx.db, ctx.identity.graph)).map(toWireAgentGrant),
   ),
 
   revokeGrant: ownerOnlyProcedure
@@ -157,6 +174,6 @@ export const oauthRouter = router({
     .mutation(async ({ ctx, input }) => ({
       // Скоуп по владельцу — внутри revokeGrant: идентификатор приезжает снаружи, и без
       // него один аккаунт гасил бы доступы другого.
-      revoked: await revokeGrant(ctx.db, { graphId: ctx.actorUserId, grantId: input.grantId }),
+      revoked: await revokeGrant(ctx.db, { graphId: ctx.identity.graph, grantId: input.grantId }),
     })),
 });

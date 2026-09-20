@@ -3,10 +3,11 @@
 // через createCallerFactory против живой БД. Мутации entity идут боевым синком —
 // audit-сообщения видны в тредах (§7.8).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { entityThreadId, globalThreadId, newId, processingMessageId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
@@ -18,8 +19,8 @@ requireEnv();
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {
@@ -114,7 +115,7 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
     const idBig = id1 > id2 ? id1 : id2;
     const idSmall = id1 > id2 ? id2 : id1;
     const idOlder = crypto.randomUUID();
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(chatMessages).values([
         { id: idBig, threadId, role: 'user', content: 'A', createdAt: same },
         { id: idSmall, threadId, role: 'user', content: 'B', createdAt: same },
@@ -148,7 +149,7 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
     const { threadId } = await caller.chat.ensureThread({});
 
     const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       // Один tx → один now() на все три строки; createdAt не задаём (defaultNow).
       tx
         .insert(chatMessages)
@@ -205,13 +206,13 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
 describe('chat.listMessages: processing-маркеры ai.sendMessage не отдаются (fix round A1.5)', () => {
   /** Прямая вставка маркера (как пишет sendMessage): system + metadata.type processing. */
   async function seedMarker(
-    user: string,
+    user: GraphId,
     threadId: string,
     userMsgId: string,
     at: Date,
   ): Promise<string> {
     const markerId = processingMessageId(userMsgId);
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(chatMessages).values({
         id: markerId,
         threadId,
@@ -254,7 +255,7 @@ describe('chat.listMessages: processing-маркеры ai.sendMessage не от�
     const caller = callerFor(user);
     const { threadId } = await caller.chat.ensureThread({});
     const auditId = newId();
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       tx.insert(chatMessages).values({
         id: auditId,
         threadId,
@@ -306,7 +307,7 @@ describe('chat.listMessages: audit системной материализаци
 
     // …но журнал §7.8 не тронут: batch-audit физически в chat_messages
     // (replay-идемпотентность и Undo живут на нём)
-    const raw = await withIdentity(db, user, (tx) =>
+    const raw = await withIdentity(db, personal(user), (tx) =>
       tx.select().from(chatMessages).where(eq(chatMessages.threadId, threadId)),
     );
     expect(

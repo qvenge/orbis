@@ -12,6 +12,7 @@ import {
   appDb,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -362,7 +363,7 @@ describe('конфликты пересева становятся единиц�
     // Ключи пары — СТРУКТУРНО: единица собирается по ним, а не разбором человеческого текста.
     expect(conflicts[0]?.option).toEqual({ mine: 'md', theirs: 'markdown' });
 
-    const ids = await withIdentity(db, owner, (tx) =>
+    const ids = await withIdentity(db, personal(owner), (tx) =>
       createDriftConflictUnits(tx, {
         graphId: owner,
         systemVersion: 7,
@@ -374,7 +375,7 @@ describe('конфликты пересева становятся единиц�
     expect(ids).toHaveLength(1);
     const pendingId = ids[0] as string;
 
-    const rows = (await withIdentity(db, owner, (tx) =>
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT content, metadata FROM chat_messages WHERE id = ${pendingId}::uuid`),
     )) as unknown as Array<{ content: string; metadata: Record<string, unknown> }>;
     const pending = (rows[0]?.metadata as { pending: Record<string, unknown> }).pending;
@@ -401,7 +402,7 @@ describe('конфликты пересева становятся единиц�
     expect(map?.map((e) => e.variant)).toEqual(['table']);
 
     // Повторный прогон пересева той же версии второй карточки не кладёт.
-    const again = await withIdentity(db, owner, (tx) =>
+    const again = await withIdentity(db, personal(owner), (tx) =>
       createDriftConflictUnits(tx, {
         graphId: owner,
         systemVersion: 7,
@@ -411,7 +412,7 @@ describe('конфликты пересева становятся единиц�
       }),
     );
     expect(again).toEqual([pendingId]);
-    const count = (await withIdentity(db, owner, (tx) =>
+    const count = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT id FROM chat_messages
                      WHERE metadata @> '{"pending":{"tool":"aspect_delta_set"}}'::jsonb`),
     )) as unknown as unknown[];
@@ -421,7 +422,7 @@ describe('конфликты пересева становятся единиц�
     // говорит. Кладётся прямым INSERT'ом: валидатор до применения дельты варианта «md» не
     // знает, а вопрос теста — что с ЗАПИСЬЮ станет после approve, а не как она появилась.
     const withOldVariant = newId();
-    await withIdentity(db, owner, (tx) =>
+    await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`
         INSERT INTO entities (id, graph_id, title, props, aspects, tags)
         VALUES (${withOldVariant}::uuid, ${owner}::uuid, 'Заметка со старым вариантом',
@@ -429,9 +430,9 @@ describe('конфликты пересева становятся единиц�
     );
 
     // approve ПРИМЕНЯЕТ дельту обычным конвейером — своего пути записи у конфликта нет.
-    const approved = await approvePending(db, { graphId: owner, pendingId });
+    const approved = await approvePending(db, { identity: personal(owner), pendingId });
     expect(approved.ok).toBe(true);
-    const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     const options = reg.properties.get('orbis/content_type')?.type;
     const keys =
       options?.kind === 'select' ? options.options.map((o: { key: string }) => o.key) : [];
@@ -441,7 +442,7 @@ describe('конфликты пересева становятся единиц�
     // ВТОРАЯ ПОЛОВИНА ОБЕЩАНИЯ: карточка говорит, что записи со старым вариантом останутся
     // с ним, — и они остаются. Если однажды «слить» научится переносить значения, падёт
     // именно эта ассерция, и текст придётся переписать вместе с ней.
-    const stillOld = (await withIdentity(db, owner, (tx) =>
+    const stillOld = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${withOldVariant}::uuid`),
     )) as unknown as Array<{ props: Record<string, unknown> }>;
     expect(stillOld[0]?.props).toMatchObject({ 'orbis/content_type': 'md' });

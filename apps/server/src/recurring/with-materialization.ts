@@ -6,13 +6,15 @@
 import type { QueryAst } from '@orbis/shared/query';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
+import type { Identity } from '../identity';
 import type { CompileCtx } from '../query/compile-ast';
 import { queryContext } from '../query/context';
 import { materializationWindow, materializeInstances } from './materialize';
 
 export interface QueryWithMaterializationOpts<T> {
   db: Db;
-  actorUserId: string;
+  /** Пара «актор + текущий граф» (D44): `$owner` и материализация ключуются ГРАФОМ. */
+  identity: Identity;
   /** Сущность-контекст `this` (query-блок в body) или null. */
   thisEntityId: string | null;
   /** Разбор запроса; ошибку парсинга мапит вызывающий (TRPCError у роутера, ExecError у диспатча). */
@@ -38,7 +40,7 @@ export interface QueryWithMaterializationOpts<T> {
 export async function queryWithMaterialization<T>(
   opts: QueryWithMaterializationOpts<T>,
 ): Promise<T> {
-  const { db, actorUserId } = opts;
+  const { db, identity } = opts;
   type Phase1 =
     | { kind: 'done'; result: T }
     | {
@@ -47,8 +49,8 @@ export async function queryWithMaterialization<T>(
         ast: QueryAst;
         cctx: CompileCtx;
       };
-  const phase1 = await withIdentity(db, actorUserId, async (tx): Promise<Phase1> => {
-    const cctx = await queryContext(tx, actorUserId, opts.thisEntityId);
+  const phase1 = await withIdentity(db, identity, async (tx): Promise<Phase1> => {
+    const cctx = await queryContext(tx, identity.graph, opts.thisEntityId);
     const ast = opts.parse(cctx);
     const window = materializationWindow(ast, cctx.today);
     if (window) return { kind: 'materialize', window, ast, cctx };
@@ -57,10 +59,10 @@ export async function queryWithMaterialization<T>(
   if (phase1.kind === 'done') return phase1.result;
   await materializeInstances({
     db,
-    graphId: actorUserId,
+    identity,
     from: phase1.window.from,
     to: phase1.window.to,
     today: phase1.cctx.today,
   });
-  return withIdentity(db, actorUserId, (tx) => opts.run(tx, phase1.ast, phase1.cctx));
+  return withIdentity(db, identity, (tx) => opts.run(tx, phase1.ast, phase1.cctx));
 }

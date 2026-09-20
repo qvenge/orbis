@@ -8,6 +8,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { aiUsage } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import type { Identity } from '../identity';
 
 /** Суммарный расход tool-цикла: input/output-токены и число вызовов провайдера. */
 export interface UsageTotals {
@@ -30,14 +31,16 @@ export function utcDay(now: Date): string {
  */
 export async function recordUsage(
   db: Db,
-  args: { graphId: string; model: string; usage: UsageTotals; clock?: () => Date },
+  args: { identity: Identity; model: string; usage: UsageTotals; clock?: () => Date },
 ): Promise<void> {
   const date = utcDay((args.clock ?? (() => new Date()))());
-  await withIdentity(db, args.graphId, (tx) =>
+  // Строка расхода — НА ГРАФ (В-Г-4): токены жжёт работа в графе, и в графе компании счёт
+  // общий. Субъект ТАРИФА при этом — аккаунт (Р-КГ-6, entitlements.ts): это разные вещи.
+  await withIdentity(db, args.identity, (tx) =>
     tx
       .insert(aiUsage)
       .values({
-        graphId: args.graphId,
+        graphId: args.identity.graph,
         date,
         model: args.model,
         inputTokens: args.usage.inputTokens,

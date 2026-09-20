@@ -23,6 +23,7 @@ import { type SQL, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { GATE_FIN_ASPECT } from '../../test/fixtures/gate-aspects';
 import { ExecError } from '../errors';
+import { parseGraphId } from '../identity';
 import type { CompileCtx } from '../query/compile-ast';
 import { negated } from '../query/compile-ast';
 import type { RegistrySnapshot } from '../registry/load';
@@ -50,7 +51,7 @@ function snapshot(over: Partial<RegistrySnapshot> = {}): RegistrySnapshot {
 
 function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
   return {
-    graphId: '00000000-0000-7000-8000-0000000000a1',
+    graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     reg: snapshot(),

@@ -35,6 +35,7 @@ import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import type { Identity } from '../identity';
 import { toolResultMessage } from '../llm/context';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMToolDef } from '../llm/types';
 import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
@@ -112,7 +113,8 @@ type Verdict =
   | { kind: 'foreign'; end: RunEnd };
 
 export interface RunRoutineRunArgs {
-  graphId: string;
+  /** Пара «актор + текущий граф» (D44): за прогоном стоит держатель гранта owner графа. */
+  identity: Identity;
   routine: RoutineContextRoutine;
   /** Прогон, уже созданный и находящийся в `running`. */
   runId: string;
@@ -129,12 +131,12 @@ export interface RunRoutineRunArgs {
  * иначе последний сбой в счёт не попадёт.
  */
 export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs): Promise<RunEnd> {
-  const { graphId, routine, runId } = args;
+  const { identity, routine, runId } = args;
   const resolve = deps.entitlements ?? resolveEntitlement;
   const sink = deps.sink ?? defaultSink;
   const verbCtx: VerbCtx = {
     db: deps.db,
-    graphId,
+    identity,
     subject: { kind: 'routine', routineId: routine.id },
     clock: deps.clock,
     sink,
@@ -143,7 +145,7 @@ export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs):
   // Отсчёт дедлайна — от `started_at` САМОГО прогона, а не от входа в раннер: прогон
   // создаёт другой код (Задача 10/11), и между созданием и запуском цикла может пройти
   // время — например, если процесс подобрал прогон после рестарта.
-  const row = await withIdentity(deps.db, graphId, (tx) => runById(tx, runId));
+  const row = await withIdentity(deps.db, identity, (tx) => runById(tx, runId));
   if (
     row === null ||
     row.props['orbis/run_routine'] !== routine.id ||
@@ -185,7 +187,7 @@ export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs):
     // честный расход. Сбой метеринга не имеет права менять исход прогона.
     if (usage.requestCount > 0) {
       try {
-        await recordUsage(deps.db, { graphId, model: deps.model, usage, clock: deps.clock });
+        await recordUsage(deps.db, { identity, model: deps.model, usage, clock: deps.clock });
       } catch (e) {
         console.error('[routines] метеринг ai_usage не записан:', e);
       }
@@ -211,15 +213,15 @@ async function prepareAndLoop(
   },
 ): Promise<Verdict> {
   const { args, resolve, verbCtx, usage } = run;
-  const { graphId, routine, runId, bucket } = args;
+  const { identity, routine, runId, bucket } = args;
 
   // 1. V1.8: новый прогон гасит незакрытое от прошлых
-  await supersedeOpen(deps, { graphId, routineId: routine.id, exceptRunId: runId });
+  await supersedeOpen(deps, { identity, routineId: routine.id, exceptRunId: runId });
 
   // 2. Гейт §8 — ДО провайдера (инвариант 13, приёмка 15). Исчерпанный лимит для рутины —
   //    не 429 кому-то в ответ, а исход прогона: `failed`, с ретраем и стоп-краном.
   try {
-    await gateAiEntitlements(deps.db, graphId, resolve, deps.clock);
+    await gateAiEntitlements(deps.db, identity, resolve, deps.clock);
   } catch (e) {
     if (e instanceof ExecError && e.code === 'LIMIT') {
       return {
@@ -239,32 +241,36 @@ async function prepareAndLoop(
     mode: routine.props[ROUTINE_MODE_PROPERTY],
     allowedTools: new Set(routine.props[ROUTINE_TOOLS_PROPERTY] ?? []),
   };
-  const { threadId, system, messages, tools } = await withIdentity(deps.db, graphId, async (tx) => {
-    const thread = await ensureEntityThread(tx, graphId, routine.id);
-    const history = await routineHistory(tx, graphId, routine.id, runId);
-    const ctx = await buildRoutineContext(tx, {
-      graphId,
-      routine,
-      run: { id: runId, bucket },
-      history,
-      // Часы прогона — те же, что у дедлайна и метеринга: «сегодня» в канале обязано
-      // совпадать с моментом, от которого раннер отсчитывает всё остальное
-      clock: deps.clock,
-    });
-    // Реестр раннера — второй рубеж того же правила, что гейт диспатча (V1.10):
-    // показанное модели и исполняемое сервером обязаны совпадать
-    const defs = routineToolDefs(await buildToolRegistry(tx, graphId), routineRef);
-    const llmTools: LLMToolDef[] = defs.map((d) => ({
-      name: d.name,
-      description: d.description,
-      inputSchema: d.inputJsonSchema,
-    }));
-    return { threadId: thread, system: ctx.system, messages: ctx.messages, tools: llmTools };
-  });
+  const { threadId, system, messages, tools } = await withIdentity(
+    deps.db,
+    identity,
+    async (tx) => {
+      const thread = await ensureEntityThread(tx, identity.graph, routine.id);
+      const history = await routineHistory(tx, identity.graph, routine.id, runId);
+      const ctx = await buildRoutineContext(tx, {
+        graphId: identity.graph,
+        routine,
+        run: { id: runId, bucket },
+        history,
+        // Часы прогона — те же, что у дедлайна и метеринга: «сегодня» в канале обязано
+        // совпадать с моментом, от которого раннер отсчитывает всё остальное
+        clock: deps.clock,
+      });
+      // Реестр раннера — второй рубеж того же правила, что гейт диспатча (V1.10):
+      // показанное модели и исполняемое сервером обязаны совпадать
+      const defs = routineToolDefs(await buildToolRegistry(tx, identity.graph), routineRef);
+      const llmTools: LLMToolDef[] = defs.map((d) => ({
+        name: d.name,
+        description: d.description,
+        inputSchema: d.inputJsonSchema,
+      }));
+      return { threadId: thread, system: ctx.system, messages: ctx.messages, tools: llmTools };
+    },
+  );
 
   const toolCtx: ToolCallCtx = {
     db: deps.db,
-    actorUserId: graphId,
+    identity,
     actorKind: 'ai', // за прогоном стоит внутренний AI (§7.8), а не внешний агент
     source: 'routine',
     runId,
@@ -416,7 +422,7 @@ async function modelLoop(
         // модель ещё может исправиться), либо «твоего прогона больше нет» (его закрыл
         // sweep, дедлайн другого процесса или гашение). Различаем ЧТЕНИЕМ прогона, а не
         // разбором текста ошибки: состояние авторитетно, формулировки — нет.
-        const alive = await runStillOurs(deps, args, toolCtx.actorUserId);
+        const alive = await runStillOurs(deps, args, toolCtx.identity);
         if (!alive) return { kind: 'foreign', end: { outcome: 'failed', reason: 'aborted' } };
       }
 
@@ -434,7 +440,7 @@ async function modelLoop(
         if (stepResult.status === 'error') {
           // Шаг не записался — значит прогон уже не `running` (или не наш). Продолжать
           // цикл нельзя: следующие шаги упрутся туда же, а исход уже подведён не нами.
-          const alive = await runStillOurs(deps, args, toolCtx.actorUserId);
+          const alive = await runStillOurs(deps, args, toolCtx.identity);
           if (!alive) return { kind: 'foreign', end: { outcome: 'failed', reason: 'aborted' } };
           console.error('[routines] шаг прогона не записан:', stepResult.error);
         }
@@ -447,9 +453,9 @@ async function modelLoop(
 async function runStillOurs(
   deps: RoutineDeps,
   args: RunRoutineRunArgs,
-  graphId: string,
+  who: Identity,
 ): Promise<boolean> {
-  const row = await withIdentity(deps.db, graphId, (tx) => runById(tx, args.runId));
+  const row = await withIdentity(deps.db, who, (tx) => runById(tx, args.runId));
   return (
     row !== null &&
     row.props['orbis/run_routine'] === args.routine.id &&
@@ -573,7 +579,7 @@ async function settle(
   // сейчас», чтобы проверить починку, — а хвост плановых прогонов всё ещё три сбоя, и
   // оценка по нему вернула бы паузу тем же тапом, которым он её снял.
   if (end.outcome === 'failed' && !isManualBucket(args.bucket)) {
-    await pauseIfFailing(deps, { graphId: args.graphId, routineId: args.routine.id });
+    await pauseIfFailing(deps, { identity: args.identity, routineId: args.routine.id });
   }
   return end;
 }
@@ -595,7 +601,7 @@ async function patchRunUsage(
   const r = await execute(
     deps.db,
     {
-      actorUserId: args.graphId,
+      identity: args.identity,
       actorKind: 'ai',
       source: 'system', // бухгалтерия прогона (Р-7): не правка графа, а протокол
       mechanism: 'verb', // расход — служебное свойство прогона (§А2-5)

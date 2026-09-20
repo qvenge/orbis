@@ -8,12 +8,14 @@
 // v1 нет). Разойдясь, они дали бы правило, которое работает в импорте и молчит в быстром
 // вводе, — молчаливое расхождение ровно того рода, ради которого селектор стал общим.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId, ruleAppliesTo } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   rawEntityRow,
   requireEnv,
   truncateAll,
@@ -41,16 +43,16 @@ function ok(r: ExecuteResult): WireEntity {
   return r.results[0] as WireEntity;
 }
 
-function req(user: string, operations: ExecuteRequest['operations']): ExecuteRequest {
-  return { actorUserId: user, actorKind: 'owner', source: 'ui', operations };
+function req(user: GraphId, operations: ExecuteRequest['operations']): ExecuteRequest {
+  return { identity: personal(user), actorKind: 'owner', source: 'ui', operations };
 }
 
-async function create(user: string, input: Record<string, unknown>): Promise<WireEntity> {
+async function create(user: GraphId, input: Record<string, unknown>): Promise<WireEntity> {
   return ok(await execute(db, req(user, [{ tool: 'entity_create', input }])));
 }
 
-async function titlesOf(user: string, where: ReturnType<typeof memoryRulesWhere>) {
-  return withIdentity(db, user, async (tx) => {
+async function titlesOf(user: GraphId, where: ReturnType<typeof memoryRulesWhere>) {
+  return withIdentity(db, personal(user), async (tx) => {
     const rows = (await tx.execute(
       sql`SELECT title FROM entities WHERE ${where} ORDER BY title`,
     )) as unknown as Array<{ title: string }>;
@@ -160,7 +162,7 @@ test('SQL-предикат области и клиентский ruleAppliesTo 
   }
   // Ключ ЕСТЬ, значение null: через исполнителя такого не записать (тип свойства — ссылка),
   // но прямой SQL это может, и стороны обязаны совпасть и здесь: `NOT props ? key` ложно.
-  await withIdentity(db, user, async (tx) =>
+  await withIdentity(db, personal(user), async (tx) =>
     tx.insert(entities).values(
       rawEntityRow({
         graphId: user,
@@ -177,7 +179,7 @@ test('SQL-предикат области и клиентский ruleAppliesTo 
   );
 
   const fromSql = await titlesOf(user, memoryRulesWhere(CONTRACT_MONEY_MOVEMENT));
-  const allRules = await withIdentity(db, user, async (tx) => {
+  const allRules = await withIdentity(db, personal(user), async (tx) => {
     const rows = (await tx.execute(
       sql`SELECT title, props FROM entities WHERE ${memoryEntitiesWhere()} ORDER BY title`,
     )) as unknown as Array<{ title: string; props: Record<string, unknown> }>;

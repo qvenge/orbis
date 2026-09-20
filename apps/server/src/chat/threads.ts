@@ -4,7 +4,7 @@
 // вставка ждёт исход чужой транзакции на PK, гасится конфликтом и читает строку
 // свежим statement-снапшотом (READ COMMITTED). Partial unique index'ы §4.5 остаются
 // страховочным инвариантом сервера.
-import { entityThreadId, globalThreadId } from '@orbis/shared';
+import { entityThreadId, type GraphId, globalThreadId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { chatThreads, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -13,7 +13,7 @@ import { ExecError } from '../errors';
 /** Общий примитив: идемпотентная вставка треда с детерминированным id + чтение. */
 async function ensureThread(
   tx: Tx,
-  values: { id: string; graphId: string; entityId: string | null },
+  values: { id: string; graphId: GraphId; entityId: string | null },
 ): Promise<string> {
   // Без цели конфликта: гасим и PK, и partial unique (§4.5) — при детерминированном id
   // любой из них означает «строка уже есть»
@@ -24,8 +24,11 @@ async function ensureThread(
     .where(eq(chatThreads.id, values.id));
   if (rows.length === 0) {
     // Недостижимо, пока тред заводится в ТЕКУЩЕМ графе вызова: RLS спрятала строку →
-    // ошибка вызывающего (в личном графе граф и аккаунт совпадают, в графе компании — нет)
-    throw new Error(`ensureThread: тред ${values.id} не виден после вставки (identity ≠ graph?)`);
+    // ошибка вызывающего. Сегодня это значит, что вызывающий собрал id треда по одному графу,
+    // а транзакцию открыл в другом.
+    throw new Error(
+      `ensureThread: тред ${values.id} не виден после вставки: текущий граф транзакции ≠ граф треда`,
+    );
   }
   return values.id;
 }
@@ -34,20 +37,20 @@ async function ensureThread(
  * Глобальный тред ГРАФА (§4.5): NULL entity_id, id = uuidv5(owner:global-thread). Слаг формулы
  * остаётся словом owner — это ДАННЫЕ: сменив его, мы сменили бы id всех уже заведённых тредов.
  * Чей этот тред в графе компании (общий на граф или свой у каждого участника) — открытый вопрос
- * спеки §3.4, и Г-1 его не решает.
+ * спеки §3.4, и срез Г его не решает.
  */
-export async function ensureGlobalThread(tx: Tx, graphId: string): Promise<string> {
-  return ensureThread(tx, { id: globalThreadId(graphId), graphId, entityId: null });
+export async function ensureGlobalThread(tx: Tx, graph: GraphId): Promise<string> {
+  return ensureThread(tx, { id: globalThreadId(graph), graphId: graph, entityId: null });
 }
 
 /**
  * Ленивый тред сущности (§4.5): id = uuidv5(owner:entity-thread:entity).
- * Тред создаётся только для видимой владельцу сущности; чужая и несуществующая
+ * Тред создаётся только для видимой в ТЕКУЩЕМ ГРАФЕ сущности; чужая и несуществующая
  * под RLS неразличимы — единый NOT_FOUND.
  */
 export async function ensureEntityThread(
   tx: Tx,
-  graphId: string,
+  graph: GraphId,
   entityId: string,
 ): Promise<string> {
   const visible = await tx
@@ -57,5 +60,5 @@ export async function ensureEntityThread(
   if (visible.length === 0) {
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: entityId });
   }
-  return ensureThread(tx, { id: entityThreadId(graphId, entityId), graphId, entityId });
+  return ensureThread(tx, { id: entityThreadId(graph, entityId), graphId: graph, entityId });
 }

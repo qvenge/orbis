@@ -6,6 +6,7 @@
 // «без currency» и конверт с явной defaultCurrency больше не считаются разными
 // комбинациями. Реальная БД под withIdentity (RLS), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -13,6 +14,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -32,8 +34,13 @@ afterAll(async () => {
   await client.end();
 });
 
-function req(user: string, tool: string, input: unknown): ExecuteRequest {
-  return { actorUserId: user, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] };
+function req(user: GraphId, tool: string, input: unknown): ExecuteRequest {
+  return {
+    identity: personal(user),
+    actorKind: 'owner',
+    source: 'ui',
+    operations: [{ tool, input }],
+  };
 }
 
 function ok(r: ExecuteResult): ExecuteOk {
@@ -77,7 +84,7 @@ async function storedProps(id: string): Promise<Record<string, unknown>> {
   }
 }
 
-async function setDefaultCurrency(user: string, currency: string): Promise<void> {
+async function setDefaultCurrency(user: GraphId, currency: string): Promise<void> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     await admin.execute(

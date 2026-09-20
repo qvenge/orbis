@@ -30,6 +30,7 @@
 //     `aspects_legacy` не переписывается, потому что раскладывает значения ПО АСПЕКТАМ и
 //     места этим двум свойствам в ней нет; колонки нет с 0017, и вывод остался как
 //     объяснение свободных свойств, а не как исключение из дуальной записи.
+import type { GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
@@ -77,7 +78,7 @@ const DEPTH_CAP = 32;
  */
 export async function recomputeProjectAncestors(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   changedTargetIds: string[],
   reg: RegistrySnapshot,
 ): Promise<{ recomputed: number }> {

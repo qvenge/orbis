@@ -3,8 +3,9 @@
 // деталь: вся логика «что сейчас должно быть отработано» лежит в dueBuckets/startBucketRun
 // и не зависит от того, бодрствовал ли сервер, — пропущенные тики догоняются в окне.
 //
-// Обход ГРАФОВ без обхода RLS (V1.13, инвариант 14): список — служебной ролью по узкой
-// политике (graphIdsForScheduler), вся работа в графе — под withIdentity(граф).
+// Обход ГРАФОВ без обхода RLS (V1.13, инвариант 14): пары «граф + держатель гранта owner» —
+// служебной ролью по узким политикам (`identitiesForScheduler`, третий резолвер пары, D44),
+// вся работа в графе — под withIdentity(пара).
 //
 // Тик заодно зовёт подметание (V1.12): зависший прогон рутины закрывается `failed` ДО
 // решения о запуске — только так умерший процесс даёт ретрай, а не вечный `running`. Тем
@@ -13,16 +14,16 @@
 import { activeRoutines } from '../agent-loop/queries';
 import { sweepStaleRuns } from '../agent-loop/sweep';
 import { withIdentity } from '../db/with-identity';
+import { identitiesForScheduler } from '../identity';
 import { ownerTimeZone } from '../query/context';
 import { TICK_INTERVAL_MS } from './constants';
 import { pauseIfFailing, type RoutineDeps, type StartOutcome, startBucketRun } from './lifecycle';
-import { graphIdsForScheduler } from './queries';
 import { runRoutineRun } from './runner';
 import { dueBuckets } from './schedule';
 
 export interface TickResult {
   /** Сколько графов обошёл тик. */
-  owners: number;
+  graphs: number;
   /** Сколько зависших прогонов закрыло подметание. */
   swept: number;
   /** Рутины, которые ЭТОТ тик поставил на паузу стоп-краном (после подметания, до запуска). */
@@ -62,9 +63,9 @@ export interface TickResult {
  * оставшийся обход.
  */
 export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
-  const owners = await graphIdsForScheduler(deps.db);
+  const pairs = await identitiesForScheduler(deps.db);
   const result: TickResult = {
-    owners: owners.length,
+    graphs: pairs.length,
     swept: 0,
     paused: [],
     started: [],
@@ -74,7 +75,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
   // свойству TS держит через весь цикл — «после первой проверки уже не aborted»
   const aborted = (): boolean => deps.signal?.aborted === true;
 
-  for (const graphId of owners) {
+  for (const who of pairs) {
     if (aborted()) break;
 
     try {
@@ -83,7 +84,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
       // дедлайн прогона 10 мин, и «нет шагов полчаса» надёжно значит «процесс умер», а не
       // «модель думает».
       const { swept } = await sweepStaleRuns(deps.db, {
-        graphId,
+        identity: who,
         actorKind: 'ai',
         clock: deps.clock,
       });
@@ -91,18 +92,18 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
     } catch (e) {
       // Подметание — гигиена перед решением, а не само решение: провал логируем и идём
       // к рутинам — зависший прогон в худшем случае даст «уже идёт» до следующего тика
-      console.error(`[routines] подметание графа ${graphId} не удалось:`, e);
+      console.error(`[routines] подметание графа ${who.graph} не удалось:`, e);
     }
 
     let routines: Awaited<ReturnType<typeof activeRoutines>>;
     let timeZone: string;
     try {
-      ({ routines, timeZone } = await withIdentity(deps.db, graphId, async (tx) => ({
+      ({ routines, timeZone } = await withIdentity(deps.db, who, async (tx) => ({
         routines: await activeRoutines(tx),
-        timeZone: await ownerTimeZone(tx, graphId),
+        timeZone: await ownerTimeZone(tx, who.graph),
       })));
     } catch (e) {
-      console.error(`[routines] рутины графа ${graphId} не прочитаны:`, e);
+      console.error(`[routines] рутины графа ${who.graph} не прочитаны:`, e);
       continue;
     }
 
@@ -110,13 +111,13 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
       if (aborted()) break;
       try {
         // Стоп-кран по графу — ДО запуска: подметённые провалы считаются здесь (см. докблок)
-        const { paused } = await pauseIfFailing(deps, { graphId, routineId: routine.id });
+        const { paused } = await pauseIfFailing(deps, { identity: who, routineId: routine.id });
         if (paused) {
           result.paused.push(routine.id);
           // Диагностика по Logs (runbook §7): пауза из тика — без «живого» сбоя раннера,
           // иначе по логам её не отличить от тихого пропуска бакета
           console.log(
-            `[routines] рутина ${routine.id} графа ${graphId} поставлена на паузу стоп-краном`,
+            `[routines] рутина ${routine.id} графа ${who.graph} поставлена на паузу стоп-краном`,
           );
           continue;
         }
@@ -130,7 +131,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
         });
         for (const { bucket } of due) {
           if (aborted()) break;
-          const outcome = await startBucketRun(deps, { graphId, routine, bucket });
+          const outcome = await startBucketRun(deps, { identity: who, routine, bucket });
           if (!outcome.started) {
             result.skipped.push({ routineId: routine.id, bucket, reason: outcome.reason });
             continue;
@@ -138,7 +139,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
           result.started.push(outcome.runId);
           // Создатель гонит модель (инвариант 1) — здесь же, тем же тиком
           const end = await runRoutineRun(deps, {
-            graphId,
+            identity: who,
             routine,
             runId: outcome.runId,
             bucket,
@@ -149,7 +150,7 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
           );
         }
       } catch (e) {
-        console.error(`[routines] рутина ${routine.id} графа ${graphId} — сбой тика:`, e);
+        console.error(`[routines] рутина ${routine.id} графа ${who.graph} — сбой тика:`, e);
       }
     }
   }

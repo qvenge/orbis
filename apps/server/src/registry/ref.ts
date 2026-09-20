@@ -29,7 +29,7 @@
 // зависят от порядка и гасят друг друга. Поэтому inverse у зеркала нет вовсе, а сходится оно
 // само: `syncRefMirror` зовётся и во внутреннем режиме undo. Проверяется это тестом
 // «undo правки категории возвращает и свойство, и зеркало-ребро» (`ref.test.ts`).
-import { newId, type PropertyType, ROLE_REF } from '@orbis/shared';
+import { type GraphId, newId, type PropertyType, ROLE_REF } from '@orbis/shared';
 import type { QueryAst } from '@orbis/shared/query';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
@@ -351,7 +351,7 @@ export function changedRefProps(
  */
 export async function syncRefMirror(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   entityId: string,
   changed: readonly RefPropChange[],
   reg: RegistrySnapshot,
@@ -422,7 +422,7 @@ export async function syncRefMirror(
  */
 export async function markRefSourcesNeedsReview(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   archivedTargetId: string,
 ): Promise<string[]> {
   const rows = (await tx.execute(sql`
@@ -456,7 +456,7 @@ export async function markRefSourcesNeedsReview(
  */
 export async function unmarkRefSources(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   sourceIds: readonly string[],
 ): Promise<string[]> {
   if (sourceIds.length === 0) return [];

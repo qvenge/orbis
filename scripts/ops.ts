@@ -58,7 +58,8 @@ import {
   seedRegistries,
   seedRegistriesReport,
 } from '../apps/server/src/db/seed-registries';
-import { issuePatGrant } from '../apps/server/src/oauth/grants';
+import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
+import { issuePatGrant, NotGraphOwnerError } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 import {
   previewMergeConflicts,
@@ -556,12 +557,12 @@ async function issuePat(args: string[]): Promise<number> {
     console.error(
       `issue-pat: ${parsed.error}.\n` +
         `  bun scripts/ops.ts issue-pat ${PAT_USAGE}\n` +
-        'owner-uuid — из Supabase → Authentication → Users\n' +
+        'account-uuid — uuid аккаунта (Supabase → Authentication → Users); грант идёт на его личный граф\n' +
         '--scope worker — фоновый исполнитель: чтения и глаголы задач, без прочей записи',
     );
     return 2;
   }
-  const { graphId, label, scope } = parsed;
+  const { accountId, label, scope } = parsed;
   return withDb(async (sql) => {
     // Проверка владельца ДО выдачи. Опечатка в UUID иначе дала бы живой токен
     // несуществующего владельца: аутентификация им прошла бы, а агент молча видел бы
@@ -569,15 +570,33 @@ async function issuePat(args: string[]): Promise<number> {
     // проверки нет намеренно: там auth.users пуст ровно до первого входа, и гейт мешал бы
     // готовить стенд. Здесь же цена ошибки — мёртвый доступ в проде.
     const [owner] = await sql<{ ok: number }[]>`
-      SELECT 1 AS ok FROM auth.users WHERE id = ${graphId}::uuid`;
+      SELECT 1 AS ok FROM auth.users WHERE id = ${accountId}::uuid`;
     if (!owner) {
       console.error(
-        `issue-pat: пользователя ${graphId} нет в auth.users — токен не выдан.\n` +
+        `issue-pat: пользователя ${accountId} нет в auth.users — токен не выдан.\n` +
           'UUID берётся в Supabase → Authentication → Users.',
       );
       return 2;
     }
-    const token = await issuePatGrant(drizzle(sql, { schema }), { graphId, label, scope });
+    // Вторая проба — ГРАФ, а не аккаунт (Р-ИГ-7): `auth.users` отвечает «аккаунт есть»,
+    // но личного графа у не заходившего в приложение аккаунта ещё нет, и вставка гранта
+    // упала бы сырым 23503 на FK. Гейт владения внутри `issuePatGrant` даёт вместо него
+    // читаемый отказ — здесь он переводится в код возврата, как прочие отказы операции.
+    let token: string;
+    try {
+      token = await issuePatGrant(drizzle(sql, { schema }), {
+        identity: identityOfPerson(parseAccountId(accountId)),
+        label,
+        scope,
+      });
+    } catch (e) {
+      if (!(e instanceof NotGraphOwnerError)) throw e;
+      console.error(
+        `issue-pat: ${e.message}.\n` +
+          'Владелец должен хотя бы раз войти в приложение — личный граф заводит онбординг.',
+      );
+      return 1;
+    }
     console.log(
       `Токен выдан («${label}», область ${scope}). Показывается ОДИН раз — сохрани его сейчас:`,
     );

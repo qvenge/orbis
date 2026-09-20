@@ -20,6 +20,7 @@ import { QUERY_DEPTH_CAP, type QueryAst, type QueryFilterNode } from '@orbis/sha
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { ExecError } from '../errors';
+import { parseGraphId } from '../identity';
 import type { RegistrySnapshot } from '../registry/load';
 import {
   type CompileCtx,
@@ -48,7 +49,7 @@ function snapshot(over: Partial<RegistrySnapshot> = {}): RegistrySnapshot {
 
 function ctxOf(over: Partial<CompileCtx> = {}): CompileCtx {
   return {
-    graphId: '00000000-0000-7000-8000-0000000000a1',
+    graphId: parseGraphId('00000000-0000-7000-8000-0000000000a1'),
     today: '2026-07-03',
     timeZone: 'Europe/Moscow',
     reg: snapshot(),

@@ -62,7 +62,7 @@ import {
   RARE_PROPERTY,
   RARE_VALUE,
 } from '../src/test/graph-fixture';
-import { adminDb, appDb, requireEnv } from '../test/helpers';
+import { adminDb, appDb, personal, requireEnv } from '../test/helpers';
 
 requireEnv();
 
@@ -77,7 +77,9 @@ beforeAll(async () => {
       ` (${fixture.seeded ? 'засеян' : 'взят из кеша'})`,
   );
   expect(fixture.entities).toBe(GRAPH_ENTITIES);
-  reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => effectiveRegistry(tx, GRAPH_OWNER_ID));
+  reg = await withIdentity(db, personal(GRAPH_OWNER_ID), (tx) =>
+    effectiveRegistry(tx, GRAPH_OWNER_ID),
+  );
   // @ts-expect-error bun-types 1.2.7 не объявляет второй аргумент `beforeAll` — таймаут, —
   // хотя рантайм его принимает. Убрать число нельзя: засев корпуса в 150k рёбер идёт минуты
   // и упёрся бы в умолчание хука. Пометка снимется сама, когда типы догонят рантайм.
@@ -89,7 +91,7 @@ afterAll(async () => {
 
 /** Плоский текст плана: EXPLAIN (FORMAT JSON) под ролью приложения. */
 async function planOf(query: SQL, forceIndex: boolean): Promise<string> {
-  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => {
+  const rows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => {
     if (forceIndex) await tx.execute(sql`SET LOCAL enable_seqscan = off`);
     return [...(await tx.execute(sql`EXPLAIN (FORMAT JSON) ${query}`))];
   });
@@ -409,7 +411,7 @@ test('ПРИЧИНА, а не только симптом: операторы co
   // Пока флаг `proleakproof` у этих трёх функций false, GIN под RLS индексным условием быть
   // не может; станет true (или изменится модель RLS) — тест покраснеет, и вердикты выше
   // придётся снимать заново.
-  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+  const rows = await withIdentity(db, personal(GRAPH_OWNER_ID), async (tx) => [
     ...(await tx.execute(sql`
       SELECT proname, proleakproof FROM pg_proc
        WHERE oid IN ('jsonb_contains(jsonb,jsonb)'::regprocedure,

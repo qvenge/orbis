@@ -3,6 +3,7 @@
 // базы: это первые писатели реестра снаружи сида, и всё, что здесь проверяется, — про то,
 // как они ведут себя с ДАННЫМИ ВЛАДЕЛЬЦА, а не про форму входа.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   AGENDA_DEF,
   type AgendaSubscription,
@@ -21,6 +22,7 @@ import {
   appDb,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -80,7 +82,7 @@ function run(
   return execute(
     db,
     {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool, input }],
@@ -102,7 +104,7 @@ function err(r: ExecuteResult): { code: string; message: string; details?: unkno
 
 /** Строка свойства как она лежит — сверка идёт по КОЛОНКАМ, а не по снимку реестра. */
 async function propertyRow(id: string): Promise<Record<string, unknown> | undefined> {
-  const rows = (await withIdentity(db, owner, (tx) =>
+  const rows = (await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT id, key, status, merged_into, scope, type, rank
                    FROM property_definitions WHERE graph_id = ${owner}::uuid AND id = ${id}`),
   )) as unknown as Array<Record<string, unknown>>;
@@ -110,7 +112,7 @@ async function propertyRow(id: string): Promise<Record<string, unknown> | undefi
 }
 
 async function entityRow(id: string): Promise<Record<string, unknown> | undefined> {
-  const rows = (await withIdentity(db, owner, (tx) =>
+  const rows = (await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT id, props, body, body_doc FROM entities WHERE id = ${id}::uuid`),
   )) as unknown as Array<Record<string, unknown>>;
   return rows[0];
@@ -123,10 +125,10 @@ async function entityRow(id: string): Promise<Record<string, unknown> | undefine
 describe('property_create / property_update: жизненный цикл proposed (§А2-7, §А10-3)', () => {
   const capOwner = mintGraph();
 
-  function runAs(actor: string, tool: string, input: unknown): Promise<ExecuteResult> {
+  function runAs(actor: GraphId, tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: actor, actorKind: 'ai', source: 'chat', operations: [{ tool, input }] },
+      { identity: personal(actor), actorKind: 'ai', source: 'chat', operations: [{ tool, input }] },
       { sink },
     );
   }
@@ -308,7 +310,7 @@ describe('property_create / property_update: жизненный цикл propose
     ok(await run('property_update', { id, status: 'deprecated' }));
     // …и «отменить последнее» обязано пройти: inverse пишет ЗАТРОНУТОЕ свойство, то есть
     // ровно то, запись которого теперь отвергается.
-    const undone = await undoAction(db, { actorUserId: owner, actionId: edited.actionId });
+    const undone = await undoAction(db, { identity: personal(owner), actionId: edited.actionId });
     expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
     expect((await entityRow(entityId))?.props).toMatchObject({ [id]: 'было' });
   });
@@ -531,7 +533,7 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
     return execute(
       db,
       {
-        actorUserId: deltaOwner,
+        identity: personal(deltaOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],
@@ -547,7 +549,9 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
         delta: { label: { ru: 'Дело' } },
       }),
     );
-    const reg = await withIdentity(db, deltaOwner, (tx) => effectiveRegistry(tx, deltaOwner));
+    const reg = await withIdentity(db, personal(deltaOwner), (tx) =>
+      effectiveRegistry(tx, deltaOwner),
+    );
     expect(reg.aspects.get('orbis/task')?.label.ru).toBe('Дело');
 
     ok(
@@ -556,7 +560,9 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
         delta: { label: { ru: 'Задание' } },
       }),
     );
-    const reg2 = await withIdentity(db, deltaOwner, (tx) => effectiveRegistry(tx, deltaOwner));
+    const reg2 = await withIdentity(db, personal(deltaOwner), (tx) =>
+      effectiveRegistry(tx, deltaOwner),
+    );
     expect(reg2.aspects.get('orbis/task')?.label.ru).toBe('Задание');
   });
 
@@ -573,7 +579,9 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
     );
     expect((e.details as { reason?: string }).reason).toBe('REQUIRED_NOT_RELAXABLE');
     // И главное: реестр после отказа ЧИТАЕТСЯ, а прежняя дельта на месте.
-    const reg = await withIdentity(db, deltaOwner, (tx) => effectiveRegistry(tx, deltaOwner));
+    const reg = await withIdentity(db, personal(deltaOwner), (tx) =>
+      effectiveRegistry(tx, deltaOwner),
+    );
     expect(reg.aspects.get('orbis/task')?.label.ru).toBe('Задание');
   });
 
@@ -586,7 +594,9 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
 
   test('снятие дельты возвращает системное определение', async () => {
     ok(await runDelta('aspect_delta_remove', { aspect: 'orbis/task' }));
-    const reg = await withIdentity(db, deltaOwner, (tx) => effectiveRegistry(tx, deltaOwner));
+    const reg = await withIdentity(db, personal(deltaOwner), (tx) =>
+      effectiveRegistry(tx, deltaOwner),
+    );
     expect(reg.aspects.get('orbis/task')?.label.ru).not.toBe('Задание');
   });
 
@@ -595,9 +605,14 @@ describe('aspect_delta_set / aspect_delta_remove (§А3-2)', () => {
     const second = ok(
       await runDelta('aspect_delta_set', { aspect: 'orbis/note', delta: { icon: '📕' } }),
     );
-    const undone = await undoAction(db, { actorUserId: deltaOwner, actionId: second.actionId });
+    const undone = await undoAction(db, {
+      identity: personal(deltaOwner),
+      actionId: second.actionId,
+    });
     expect(undone.ok).toBe(true);
-    const reg = await withIdentity(db, deltaOwner, (tx) => effectiveRegistry(tx, deltaOwner));
+    const reg = await withIdentity(db, personal(deltaOwner), (tx) =>
+      effectiveRegistry(tx, deltaOwner),
+    );
     expect(reg.aspects.get('orbis/note')?.viewConfig.icon).toBe('📗');
   });
 });
@@ -611,7 +626,12 @@ describe('aspect_create (§Б2-1, §С3)', () => {
   const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
-      { actorUserId: aspectOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(aspectOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
 
@@ -635,12 +655,16 @@ describe('aspect_create (§Б2-1, §С3)', () => {
       }),
     );
     expect(created.results[0]).toEqual({ aspect: 'user/sleep-log' });
-    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    const reg = await withIdentity(db, personal(aspectOwner), (tx) =>
+      effectiveRegistry(tx, aspectOwner),
+    );
     expect(reg.aspects.get('user/sleep-log')?.properties).toEqual([
       { propertyId, required: true, rank: 1 },
     ]);
     // Поверхность модели — производная реестра (§А9-1): без attach-тула аспект нечем надеть.
-    const defs = await withIdentity(db, aspectOwner, (tx) => buildToolRegistry(tx, aspectOwner));
+    const defs = await withIdentity(db, personal(aspectOwner), (tx) =>
+      buildToolRegistry(tx, aspectOwner),
+    );
     expect(defs.map((d) => d.name)).toContain('attach_user_sleep_log');
   });
 
@@ -676,7 +700,9 @@ describe('aspect_create (§Б2-1, §С3)', () => {
       }),
     );
     expect((e.details as { reason?: string }).reason).toBe('UNKNOWN_PROPERTY');
-    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    const reg = await withIdentity(db, personal(aspectOwner), (tx) =>
+      effectiveRegistry(tx, aspectOwner),
+    );
     expect(reg.aspects.has('user/ghost')).toBe(false);
   });
 
@@ -690,9 +716,11 @@ describe('aspect_create (§Б2-1, §С3)', () => {
       }),
     );
     expect(
-      (await undoAction(db, { actorUserId: aspectOwner, actionId: created.actionId })).ok,
+      (await undoAction(db, { identity: personal(aspectOwner), actionId: created.actionId })).ok,
     ).toBe(true);
-    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    const reg = await withIdentity(db, personal(aspectOwner), (tx) =>
+      effectiveRegistry(tx, aspectOwner),
+    );
     expect(reg.aspects.has('user/undo-me')).toBe(false);
   });
 
@@ -707,7 +735,10 @@ describe('aspect_create (§Б2-1, §С3)', () => {
     );
     // `tags` у конверта `entity_create` обязателен (§9.2, может быть пустым) — бриф его опустил.
     ok(await runAs('entity_create', { title: 'Запись', tags: [], aspects: ['user/worn'] }));
-    const undone = await undoAction(db, { actorUserId: aspectOwner, actionId: created.actionId });
+    const undone = await undoAction(db, {
+      identity: personal(aspectOwner),
+      actionId: created.actionId,
+    });
     expect(undone.ok).toBe(false);
     if (!undone.ok) expect(undone.error.code).toBe('INVARIANT');
   });
@@ -738,7 +769,7 @@ describe('aspect_create (§Б2-1, §С3)', () => {
     );
     // Проба по СТРОКЕ, а не по снимку: в базу обязан лечь id, иначе читатели привязок
     // (`bindingIndexOf`, `checkImplements`) ищут по id и не находят носимое свойство.
-    const row = (await withIdentity(db, aspectOwner, (tx) =>
+    const row = (await withIdentity(db, personal(aspectOwner), (tx) =>
       tx.execute(sql`SELECT implements FROM aspect_definitions
                      WHERE graph_id = ${aspectOwner}::uuid AND id = 'user/ac-inline'`),
     )) as unknown as Array<{ implements: Array<{ bind: Record<string, string> }> }>;
@@ -768,7 +799,9 @@ describe('aspect_create (§Б2-1, §С3)', () => {
     // ПРОБА ПОВЕРХНОСТИ — ПЕРВОЙ, ДО утверждения об отказе, и порядок здесь несущий: `err()`
     // бросает сам, поэтому после него проба поверхности недостижима ровно в том случае, ради
     // которого заведена (отказ снят → второй аспект записан → два дефа с одним именем).
-    const defs = await withIdentity(db, aspectOwner, (tx) => buildToolRegistry(tx, aspectOwner));
+    const defs = await withIdentity(db, personal(aspectOwner), (tx) =>
+      buildToolRegistry(tx, aspectOwner),
+    );
     const names = defs.map((d) => d.name);
     expect(new Set(names).size).toBe(names.length);
     expect(names.filter((n) => n === 'attach_user_a_b')).toHaveLength(1);
@@ -850,7 +883,9 @@ describe('aspect_create (§Б2-1, §С3)', () => {
       }),
     );
     expect((keyf.details as { reason?: string }).reason).toBe('KEYFIELD_NOT_CARRIED');
-    const reg = await withIdentity(db, aspectOwner, (tx) => effectiveRegistry(tx, aspectOwner));
+    const reg = await withIdentity(db, personal(aspectOwner), (tx) =>
+      effectiveRegistry(tx, aspectOwner),
+    );
     expect([reg.aspects.has('user/dup'), reg.aspects.has('user/keyf')]).toEqual([false, false]);
   });
 });
@@ -860,7 +895,12 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
   const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
-      { actorUserId: bindOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(bindOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   /**
@@ -897,7 +937,9 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
         implements: [{ contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [] }],
       }),
     );
-    const reg = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    const reg = await withIdentity(db, personal(bindOwner), (tx) =>
+      effectiveRegistry(tx, bindOwner),
+    );
     expect(reg.aspects.get('user/gig')?.implements).toEqual([
       { contract: 'orbis/when', bind: { moment: 'orbis/start_at' }, value_map: [], fixed: {} },
     ]);
@@ -927,7 +969,9 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
       }),
     );
     expect(e.code).toBe('BIND_TYPE');
-    const reg = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    const reg = await withIdentity(db, personal(bindOwner), (tx) =>
+      effectiveRegistry(tx, bindOwner),
+    );
     expect(reg.aspects.get('user/gig')?.implements).toHaveLength(1);
   });
 
@@ -961,14 +1005,18 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
     const removed = ok(
       await runAs('aspect_implements_remove', { aspect: 'user/gig', contract: 'orbis/when' }),
     );
-    const after = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    const after = await withIdentity(db, personal(bindOwner), (tx) =>
+      effectiveRegistry(tx, bindOwner),
+    );
     expect(after.aspects.get('user/gig')?.implements.map((b) => b.contract)).toEqual([
       'orbis/completable',
     ]);
-    expect((await undoAction(db, { actorUserId: bindOwner, actionId: removed.actionId })).ok).toBe(
-      true,
+    expect(
+      (await undoAction(db, { identity: personal(bindOwner), actionId: removed.actionId })).ok,
+    ).toBe(true);
+    const back = await withIdentity(db, personal(bindOwner), (tx) =>
+      effectiveRegistry(tx, bindOwner),
     );
-    const back = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
     expect(back.aspects.get('user/gig')?.implements.map((b) => b.contract)).toEqual([
       'orbis/when',
       'orbis/completable',
@@ -1062,7 +1110,9 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
         implements: [{ contract: 'orbis/when', bind: { moment: 'user/gig-when' }, value_map: [] }],
       }),
     );
-    const reg = await withIdentity(db, bindOwner, (tx) => effectiveRegistry(tx, bindOwner));
+    const reg = await withIdentity(db, personal(bindOwner), (tx) =>
+      effectiveRegistry(tx, bindOwner),
+    );
     expect(reg.aspects.get('user/gig-by-key')?.implements[0]?.bind).toEqual({ moment: propertyId });
   });
 
@@ -1102,7 +1152,7 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
   // Замок берётся ПЕРВЫМ statement'ом транзакции — ровно как его берёт исполнитель (§А10-2):
   // функции реестра своего замка не берут, и два места, знающие порядок захвата, — это дедлок.
   const inTx = <T>(fn: (tx: Tx) => Promise<T>) =>
-    withIdentity(db, o, async (tx) => {
+    withIdentity(db, personal(o), async (tx) => {
       await lockOwnerRegistry(tx, o);
       return fn(tx);
     });
@@ -1110,13 +1160,13 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
     await inTx((tx) =>
       setContractDelta(tx, o, 'orbis/completable', { setsDelta: { my_open: ['active'] } }),
     );
-    const reg = await withIdentity(db, o, (tx) => effectiveRegistry(tx, o));
+    const reg = await withIdentity(db, personal(o), (tx) => effectiveRegistry(tx, o));
     expect(Object.keys(reg.contracts.get('orbis/completable')?.sets ?? {})).toContain('my_open');
     expect(
       (await inTx((tx) => readContractDelta(tx, o, 'orbis/completable')))?.setsDelta.my_open,
     ).toEqual(['active']);
     await inTx((tx) => removeContractDelta(tx, o, 'orbis/completable'));
-    const back = await withIdentity(db, o, (tx) => effectiveRegistry(tx, o));
+    const back = await withIdentity(db, personal(o), (tx) => effectiveRegistry(tx, o));
     expect(Object.keys(back.contracts.get('orbis/completable')?.sets ?? {})).not.toContain(
       'my_open',
     );
@@ -1126,7 +1176,7 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
       setContractDelta(tx, o, 'orbis/completable', { setsDelta: { closed: ['active'] } }),
     ).catch((x) => x);
     expect((e as ExecError).code).toBe('VALIDATION');
-    await withIdentity(db, o, (tx) => effectiveRegistry(tx, o)); // читается
+    await withIdentity(db, personal(o), (tx) => effectiveRegistry(tx, o)); // читается
   });
   test('дельта на цель, которой нет в реестре, — NOT_FOUND', async () => {
     for (const call of [
@@ -1140,11 +1190,11 @@ describe('дельты контракта и подписки (§Б5-1/2)', () =
     }
   });
   test('версия реестра владельца двигается каждой записью (§А10-1)', async () => {
-    const before = await withIdentity(db, o, (tx) => readRegistryVersions(tx, o));
+    const before = await withIdentity(db, personal(o), (tx) => readRegistryVersions(tx, o));
     await inTx((tx) => setContractDelta(tx, o, 'orbis/when', { setsDelta: {} }));
-    expect((await withIdentity(db, o, (tx) => readRegistryVersions(tx, o))).ownerVersion).toBe(
-      before.ownerVersion + 1,
-    );
+    expect(
+      (await withIdentity(db, personal(o), (tx) => readRegistryVersions(tx, o))).ownerVersion,
+    ).toBe(before.ownerVersion + 1);
   });
 });
 
@@ -1160,7 +1210,8 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
     rank: 1000,
     ...over,
   });
-  const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> => withIdentity(db, subOwner, fn);
+  const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> =>
+    withIdentity(db, personal(subOwner), fn);
 
   test('своя строка пишется, читается снимком и двигает версию владельца', async () => {
     const before = await inTx((tx) => readRegistryVersions(tx, subOwner));
@@ -1209,7 +1260,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     return execute(
       db,
       {
-        actorUserId: toolOwner,
+        identity: personal(toolOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],
@@ -1217,7 +1268,8 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
       { sink },
     );
   }
-  const regOf = () => withIdentity(db, toolOwner, (tx) => effectiveRegistry(tx, toolOwner));
+  const regOf = () =>
+    withIdentity(db, personal(toolOwner), (tx) => effectiveRegistry(tx, toolOwner));
 
   test('subscription_set по orbis/… кладёт ДЕЛЬТУ, а не строку; снимок несёт новую декларацию', async () => {
     const tweaked = {
@@ -1236,7 +1288,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
       (reg.subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show.limit,
     ).toBe(50);
     // Системная строка не тронута: перекрытие живёт дельтой.
-    const raw = await withIdentity(db, toolOwner, (tx) =>
+    const raw = await withIdentity(db, personal(toolOwner), (tx) =>
       readSubscriptionRow(tx, toolOwner, 'orbis/agenda'),
     );
     expect(raw?.graphId).toBeNull();
@@ -1268,9 +1320,9 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
       ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
         .limit,
     ).toBe(7);
-    expect((await undoAction(db, { actorUserId: toolOwner, actionId: second.actionId })).ok).toBe(
-      true,
-    );
+    expect(
+      (await undoAction(db, { identity: personal(toolOwner), actionId: second.actionId })).ok,
+    ).toBe(true);
     expect(
       ((await regOf()).subscriptions.get('orbis/agenda')?.definition as AgendaSubscription).show
         .limit,
@@ -1363,9 +1415,9 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
       'done',
       'cancelled',
     ]);
-    expect((await undoAction(db, { actorUserId: toolOwner, actionId: set.actionId })).ok).toBe(
-      true,
-    );
+    expect(
+      (await undoAction(db, { identity: personal(toolOwner), actionId: set.actionId })).ok,
+    ).toBe(true);
     expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toBeUndefined();
   });
 
@@ -1413,7 +1465,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
 
   test('ручка владельца исполняет ту же операцию без карточки (source: ui)', async () => {
     const caller = createCallerFactory(appRouter)({
-      actorUserId: toolOwner,
+      identity: personal(toolOwner),
       actorKind: 'owner',
       db,
       clientVersion: null,
@@ -1446,10 +1498,15 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
   const runAs = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
-      { actorUserId: useOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(useOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
-  const regOf = () => withIdentity(db, useOwner, (tx) => effectiveRegistry(tx, useOwner));
+  const regOf = () => withIdentity(db, personal(useOwner), (tx) => effectiveRegistry(tx, useOwner));
 
   test('снятие набора, который читает подписка, — отказ SET_IN_USE; Повестка остаётся читаемой', async () => {
     ok(
@@ -1475,7 +1532,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     // Набор на месте, и Повестка ЧИТАЕТСЯ: ровно то, что снятие уничтожило бы молча.
     expect((await regOf()).contracts.get('orbis/completable')?.sets?.my_open).toEqual(['active']);
     const reg = await regOf();
-    await withIdentity(db, useOwner, (tx) =>
+    await withIdentity(db, personal(useOwner), (tx) =>
       agendaListOf(tx, useOwner, agendaSubscriptionOf(reg), {
         today: '2026-09-09',
         timeZone: 'Europe/Moscow',
@@ -1518,7 +1575,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     );
     // Путь СВОЕЙ строки — тот же снимок и тот же вердикт (до Ф-Б1-55в здесь был `EXPR_TYPE`:
     // валидатор смотрел в сырые строки, где набора владельца нет).
-    await withIdentity(db, useOwner, (tx) =>
+    await withIdentity(db, personal(useOwner), (tx) =>
       setOwnSubscription(tx, useOwner, {
         id: 'user/my-agenda',
         graphId: useOwner,
@@ -1530,7 +1587,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     );
     expect(
       (
-        await withIdentity(db, useOwner, (tx) =>
+        await withIdentity(db, personal(useOwner), (tx) =>
           readSubscriptionRow(tx, useOwner, 'user/my-agenda'),
         )
       )?.graphId,
@@ -1564,14 +1621,15 @@ describe('зависимость от набора считается ПО ПР�
     execute(
       db,
       {
-        actorUserId: twoStepOwner,
+        identity: personal(twoStepOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],
       },
       { sink },
     );
-  const regOf = () => withIdentity(db, twoStepOwner, (tx) => effectiveRegistry(tx, twoStepOwner));
+  const regOf = () =>
+    withIdentity(db, personal(twoStepOwner), (tx) => effectiveRegistry(tx, twoStepOwner));
 
   test('ДВА ШАГА: подписку сломала ЧУЖАЯ причина — набор всё равно не снимается (SET_IN_USE)', async () => {
     // Дыра прежнего критерия «сломано после − сломано до» жила ровно здесь: первый шаг делал
@@ -1685,13 +1743,18 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
   function runMerge(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: mergeOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(mergeOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   }
 
   async function ownRow(id: string): Promise<Record<string, unknown> | undefined> {
-    const rows = (await withIdentity(db, mergeOwner, (tx) =>
+    const rows = (await withIdentity(db, personal(mergeOwner), (tx) =>
       tx.execute(sql`SELECT id, status, merged_into, type FROM property_definitions
                      WHERE graph_id = ${mergeOwner}::uuid AND id = ${id}`),
     )) as unknown as Array<Record<string, unknown>>;
@@ -1699,7 +1762,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
   }
 
   async function ownEntity(id: string): Promise<Record<string, unknown>> {
-    const rows = (await withIdentity(db, mergeOwner, (tx) =>
+    const rows = (await withIdentity(db, personal(mergeOwner), (tx) =>
       tx.execute(sql`SELECT props, body, body_doc FROM entities WHERE id = ${id}::uuid`),
     )) as unknown as Array<Record<string, unknown>>;
     const row = rows[0];
@@ -1714,7 +1777,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     body_refs: string[];
     query_refs: string[];
   }> {
-    const rows = (await withIdentity(db, mergeOwner, (tx) =>
+    const rows = (await withIdentity(db, personal(mergeOwner), (tx) =>
       tx.execute(sql`SELECT body, body_doc, body_refs, query_refs FROM entities
                      WHERE id = ${id}::uuid`),
     )) as unknown as Array<Record<string, unknown>>;
@@ -1810,7 +1873,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     await execute(
       db,
       {
-        actorUserId: mergeOwner,
+        identity: personal(mergeOwner),
         actorKind: 'owner',
         source: 'ui',
         batchId: newId(),
@@ -1895,7 +1958,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     const block = /\{\{query:([\s\S]*?)\}\}/.exec(bodyAfter)?.[1];
     expect(block).toBeDefined();
     const parseReg = toParseRegistry(
-      await withIdentity(db, mergeOwner, (tx) => effectiveRegistry(tx, mergeOwner)),
+      await withIdentity(db, personal(mergeOwner), (tx) => effectiveRegistry(tx, mergeOwner)),
       'ru',
     );
     const parsed = parseQueryAst(block as string, parseReg);
@@ -1914,7 +1977,10 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     });
 
     // ОДИН inverse на всю операцию — и он возвращает всё сразу, байт-в-байт.
-    const undone = await undoAction(db, { actorUserId: mergeOwner, actionId: merged.actionId });
+    const undone = await undoAction(db, {
+      identity: personal(mergeOwner),
+      actionId: merged.actionId,
+    });
     expect(undone.ok).toBe(true);
     expect((await ownEntity(onlySource)).props).toEqual(before.onlySource as never);
     expect((await ownEntity(bothSame)).props).toEqual(before.bothSame as never);
@@ -1964,7 +2030,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
       await execute(
         db,
         {
-          actorUserId: mergeOwner,
+          identity: personal(mergeOwner),
           actorKind: 'owner',
           source: 'ui',
           batchId: newId(),
@@ -2033,7 +2099,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     // ОТКАТ возвращает все четыре колонки, а не две: расхождение, пережившее транзакцию,
     // не отличалось бы от исходного состояния ничем, кроме индекса.
     const undone = await undoAction(db, {
-      actorUserId: mergeOwner,
+      identity: personal(mergeOwner),
       actionId: merged.actionId,
     });
     expect(undone.ok).toBe(true);
@@ -2077,7 +2143,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
       await execute(
         db,
         {
-          actorUserId: mergeOwner,
+          identity: personal(mergeOwner),
           actorKind: 'owner',
           source: 'ui',
           batchId: newId(),
@@ -2251,7 +2317,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     // И откат второго слияния возвращает указатель A на B, а не оставляет его на C.
     ok(
       (await undoAction(db, {
-        actorUserId: mergeOwner,
+        identity: personal(mergeOwner),
         actionId: second.actionId,
       })) as ExecuteResult,
     );
@@ -2265,10 +2331,10 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
  * заводили и адресуют, лежит в `key`. Сверять по нему — единственный честный способ.
  */
 async function propertyRowByKey(
-  graphId: string,
+  graphId: GraphId,
   key: string,
 ): Promise<Record<string, unknown> | undefined> {
-  const rows = (await withIdentity(db, graphId, (tx) =>
+  const rows = (await withIdentity(db, personal(graphId), (tx) =>
     tx.execute(sql`SELECT id, key, scope, status, merged_into, type FROM property_definitions
                    WHERE graph_id = ${graphId}::uuid AND key = ${key}`),
   )) as unknown as Array<Record<string, unknown>>;
@@ -2286,7 +2352,7 @@ describe('registry_version (§А10-1)', () => {
     return execute(
       db,
       {
-        actorUserId: versionOwner,
+        identity: personal(versionOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],
@@ -2298,7 +2364,7 @@ describe('registry_version (§А10-1)', () => {
   const version = (): Promise<number> =>
     withIdentity(
       db,
-      versionOwner,
+      personal(versionOwner),
       async (tx: Tx) => (await readRegistryVersions(tx, versionOwner)).ownerVersion,
     );
 
@@ -2318,12 +2384,16 @@ describe('registry_version (§А10-1)', () => {
     expect(v1).toBeGreaterThan(v0);
     // Кеш эффективных определений сбрасывать нечем — версия единственный механизм.
     // Читаем ЧЕРЕЗ кеш (не через сырое чтение): протухший снимок ловится только так.
-    const reg1 = await withIdentity(db, versionOwner, (tx) => effectiveRegistry(tx, versionOwner));
+    const reg1 = await withIdentity(db, personal(versionOwner), (tx) =>
+      effectiveRegistry(tx, versionOwner),
+    );
     expect(reg1.properties.get(id)?.label.ru).toBe('Версионируемое');
 
     ok(await runV('property_update', { id, label: { ru: 'Переименованное' } }));
     expect(await version()).toBeGreaterThan(v1);
-    const reg2 = await withIdentity(db, versionOwner, (tx) => effectiveRegistry(tx, versionOwner));
+    const reg2 = await withIdentity(db, personal(versionOwner), (tx) =>
+      effectiveRegistry(tx, versionOwner),
+    );
     expect(reg2.properties.get(id)?.label.ru).toBe('Переименованное');
 
     const v2 = await version();
@@ -2346,9 +2416,11 @@ describe('registry_version (§А10-1)', () => {
     );
     const id = (created.results[0] as { property: string }).property;
     const v = await version();
-    await undoAction(db, { actorUserId: versionOwner, actionId: created.actionId });
+    await undoAction(db, { identity: personal(versionOwner), actionId: created.actionId });
     expect(await version()).toBeGreaterThan(v);
-    const reg = await withIdentity(db, versionOwner, (tx) => effectiveRegistry(tx, versionOwner));
+    const reg = await withIdentity(db, personal(versionOwner), (tx) =>
+      effectiveRegistry(tx, versionOwner),
+    );
     expect(reg.properties.has(id)).toBe(false);
   });
 });
@@ -2389,7 +2461,7 @@ describe('порядок замков: реестр ПЕРВЫМ, бюджет �
     const r = await execute(
       db,
       {
-        actorUserId: lockOwner,
+        identity: personal(lockOwner),
         actorKind: 'owner',
         source: 'ui',
         batchId: newId(),
@@ -2429,7 +2501,7 @@ describe('порядок замков: реестр ПЕРВЫМ, бюджет �
     await execute(
       db,
       {
-        actorUserId: lockOwner,
+        identity: personal(lockOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool: 'entity_create', input: { title: 'Просто запись', tags: [] } }],
@@ -2457,7 +2529,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     return dispatchTool(
       {
         db,
-        actorUserId: conflictOwner,
+        identity: personal(conflictOwner),
         actorKind: 'owner',
         source: 'chat',
         explicitCommand: false,
@@ -2475,7 +2547,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     // здесь чужое правило.
     const mk = async (key: string): Promise<string> => {
       const r = await execute(db, {
-        actorUserId: conflictOwner,
+        identity: personal(conflictOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [
@@ -2502,7 +2574,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     await execute(
       db,
       {
-        actorUserId: conflictOwner,
+        identity: personal(conflictOwner),
         actorKind: 'owner',
         source: 'ui',
         batchId: newId(),
@@ -2534,13 +2606,16 @@ describe('property_merge при конфликте значений (§А10-2)',
     const asked = await call('property_merge', { source, into });
     expect(asked.status).toBe('pending_confirmation');
     if (asked.status !== 'pending_confirmation') throw new Error('ожидалась карточка-запрос');
-    const r = await approvePending(db, { graphId: conflictOwner, pendingId: asked.pendingId });
+    const r = await approvePending(db, {
+      identity: personal(conflictOwner),
+      pendingId: asked.pendingId,
+    });
     expect(r.ok).toBe(false);
     expect(!r.ok && r.error.code).toBe('REGISTRY_CONFLICT');
 
     // «НИЧЕГО НЕ ПРИМЕНЕНО» — проверяется именно «ничего»: частично слитое хуже отказа.
     // Запись БЕЗ конфликта соблазнительнее всего переписать «заодно», и вот она.
-    const rows = (await withIdentity(db, conflictOwner, (tx) =>
+    const rows = (await withIdentity(db, personal(conflictOwner), (tx) =>
       tx.execute(sql`SELECT id, props FROM entities WHERE id IN (${clean}::uuid, ${clashing}::uuid)
                      ORDER BY id`),
     )) as unknown as Array<{ id: string; props: Record<string, unknown> }>;
@@ -2548,7 +2623,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     expect(byId.get(clean)).toEqual({ [source]: 1 });
     expect(byId.get(clashing)).toEqual({ [source]: 2, [into]: 3 });
     // Указатель тоже не проставлен: строка реестра осталась активной.
-    const srcRow = (await withIdentity(db, conflictOwner, (tx) =>
+    const srcRow = (await withIdentity(db, personal(conflictOwner), (tx) =>
       tx.execute(sql`SELECT status, merged_into FROM property_definitions
                      WHERE graph_id = ${conflictOwner}::uuid AND id = ${source}`),
     )) as unknown as Array<Record<string, unknown>>;
@@ -2559,7 +2634,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     // Отбор СУЖЕН Задачей 16 по актору: рядом теперь лежит и карточка-запрос §7.10 того же
     // тула (её попросил владелец через чат), а единица разбора — системная, её ставить
     // некому. Без сужения проба считала бы обе и молча зеленела бы на чужой записи.
-    const pendings = (await withIdentity(db, conflictOwner, (tx) =>
+    const pendings = (await withIdentity(db, personal(conflictOwner), (tx) =>
       tx.execute(sql`SELECT id, content, metadata FROM chat_messages
                      WHERE metadata @> '{"pending":{"tool":"property_merge","actor_kind":"system"}}'::jsonb`),
     )) as unknown as Array<{ id: string; content: string; metadata: Record<string, unknown> }>;
@@ -2579,11 +2654,11 @@ describe('property_merge при конфликте значений (§А10-2)',
     expect(askedAgain.status).toBe('pending_confirmation');
     if (askedAgain.status !== 'pending_confirmation') throw new Error('ожидалась карточка');
     const again = await approvePending(db, {
-      graphId: conflictOwner,
+      identity: personal(conflictOwner),
       pendingId: askedAgain.pendingId,
     });
     expect(again.ok).toBe(false);
-    const after = (await withIdentity(db, conflictOwner, (tx) =>
+    const after = (await withIdentity(db, personal(conflictOwner), (tx) =>
       tx.execute(sql`SELECT id FROM chat_messages
                      WHERE metadata @> '{"pending":{"tool":"property_merge","actor_kind":"system"}}'::jsonb`),
     )) as unknown as unknown[];
@@ -2591,7 +2666,7 @@ describe('property_merge при конфликте значений (§А10-2)',
 
     // Разобрав конфликт, владелец подтверждает единицу — слияние проходит целиком.
     const approved = await approvePending(db, {
-      graphId: conflictOwner,
+      identity: personal(conflictOwner),
       pendingId: pending.id as string,
     });
     // Пока значения не разобраны, approve честно отказывает тем же кодом (ревалидация
@@ -2600,7 +2675,7 @@ describe('property_merge при конфликте значений (§А10-2)',
     await execute(
       db,
       {
-        actorUserId: conflictOwner,
+        identity: personal(conflictOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool: 'entity_update', input: { id: clashing, unset: [into] } }],
@@ -2608,11 +2683,11 @@ describe('property_merge при конфликте значений (§А10-2)',
       { sink },
     );
     const approvedAgain = await approvePending(db, {
-      graphId: conflictOwner,
+      identity: personal(conflictOwner),
       pendingId: pending.id as string,
     });
     expect(approvedAgain.ok).toBe(true);
-    const merged = (await withIdentity(db, conflictOwner, (tx) =>
+    const merged = (await withIdentity(db, personal(conflictOwner), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${clean}::uuid`),
     )) as unknown as Array<{ props: Record<string, unknown> }>;
     expect(merged[0]?.props).toEqual({ [into]: 1 });
@@ -2629,7 +2704,12 @@ describe('дельта и scope не могут объявить одно сво
   function runDup(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: dupOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(dupOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   }
@@ -2713,7 +2793,10 @@ describe('дельта и scope не могут объявить одно сво
         delta: { properties: { add: [{ propertyId: id, required: false, rank: 52 }] } },
       }),
     );
-    const undone = await undoAction(db, { actorUserId: dupOwner, actionId: dropped.actionId });
+    const undone = await undoAction(db, {
+      identity: personal(dupOwner),
+      actionId: dropped.actionId,
+    });
     expect(undone.ok).toBe(false);
     expect(undone.ok === false && (undone.error.details as { reason?: string }).reason).toBe(
       'SCOPE_DUPLICATE',
@@ -2733,7 +2816,12 @@ describe('property_merge: границы операции (фикс-раунд 1
   function runEdge(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: edgeOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(edgeOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   }
@@ -2769,7 +2857,7 @@ describe('property_merge: границы операции (фикс-раунд 1
     expect((e.details as { reason?: string; side?: string }).reason).toBe('MERGE_STORAGE');
     expect((e.details as { side?: string }).side).toBe('into');
     // Ничего не тронуто: колонка своя, props свой.
-    const rows = (await withIdentity(db, edgeOwner, (tx) =>
+    const rows = (await withIdentity(db, personal(edgeOwner), (tx) =>
       tx.execute(sql`SELECT title, props FROM entities WHERE id = ${entity}::uuid`),
     )) as unknown as Array<{ title: string; props: Record<string, unknown> }>;
     expect(rows[0]?.title).toBe('настоящий заголовок');
@@ -2787,7 +2875,7 @@ describe('property_merge: границы операции (фикс-раунд 1
     expect((e.details as { side?: string; successor?: string }).side).toBe('into');
     expect((e.details as { successor?: string }).successor).toBe(c);
     // Указатель a не появился, глубина цепочки — по-прежнему один шаг.
-    const rows = (await withIdentity(db, edgeOwner, (tx) =>
+    const rows = (await withIdentity(db, personal(edgeOwner), (tx) =>
       tx.execute(sql`SELECT id, merged_into FROM property_definitions
                      WHERE graph_id = ${edgeOwner}::uuid AND id IN (${a}, ${b}, ${c})`),
     )) as unknown as Array<{ id: string; merged_into: string | null }>;
@@ -2820,7 +2908,12 @@ describe('границы записи определения (фикс-раун�
   function run2(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: edge2, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(edge2),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   }
@@ -2913,13 +3006,13 @@ describe('границы записи определения (фикс-раун�
     expect((e.details as { reason?: string }).reason).toBe('PROPERTY_MERGED');
     expect((e.details as { successor?: string }).successor).toBe(b);
     // Полусостояния не возникло: строка как была поглощённой, так и осталась.
-    const row = (await withIdentity(db, edge2, (tx) =>
+    const row = (await withIdentity(db, personal(edge2), (tx) =>
       tx.execute(sql`SELECT status, merged_into FROM property_definitions
                      WHERE graph_id = ${edge2}::uuid AND id = ${a}`),
     )) as unknown as Array<Record<string, unknown>>;
     expect(row[0]).toMatchObject({ status: 'deprecated', merged_into: b });
     // Путь назад, на который указывает отказ, РАБОТАЕТ — иначе это была бы ловушка.
-    const undone = await undoAction(db, { actorUserId: edge2, actionId: merged.actionId });
+    const undone = await undoAction(db, { identity: personal(edge2), actionId: merged.actionId });
     expect(undone.ok).toBe(true);
     ok(await run2('property_update', { id: a, label: { ru: 'Снова правится' } }));
   });
@@ -2931,7 +3024,7 @@ describe('границы записи определения (фикс-раун�
     const r = await execute(
       db,
       {
-        actorUserId: edge2,
+        identity: personal(edge2),
         actorKind: 'owner',
         source: 'ui',
         batchId: newId(),
@@ -2967,7 +3060,7 @@ describe('дельта аспекта как держатель свойства
     return execute(
       db,
       {
-        actorUserId: holderOwner,
+        identity: personal(holderOwner),
         actorKind: 'owner',
         source: 'ui',
         operations: [{ tool, input }],
@@ -3009,7 +3102,9 @@ describe('дельта аспекта как держатель свойства
 
   /** Состав аспекта КАК ЕГО ВИДИТ ЧИТАТЕЛЬ — через эффективный снимок, не через строку. */
   async function taskRefs(): Promise<Array<{ propertyId: string; required: boolean }>> {
-    const reg = await withIdentity(db, holderOwner, (tx) => effectiveRegistry(tx, holderOwner));
+    const reg = await withIdentity(db, personal(holderOwner), (tx) =>
+      effectiveRegistry(tx, holderOwner),
+    );
     return (reg.aspects.get('orbis/task')?.properties ?? []).map((r) => ({
       propertyId: r.propertyId,
       required: r.required,
@@ -3038,7 +3133,7 @@ describe('дельта аспекта как держатель свойства
 
     // Откат возвращает дельту байт-в-байт вместе со всем остальным (ОДИН inverse).
     const undone = await undoAction(db, {
-      actorUserId: holderOwner,
+      identity: personal(holderOwner),
       actionId: merged.actionId,
     });
     expect(undone.ok).toBe(true);
@@ -3077,7 +3172,7 @@ describe('дельта аспекта как держатель свойства
     if (!attached.ok) {
       throw new Error(`attach отказал: ${attached.error.code} ${attached.error.message}`);
     }
-    const row = await withIdentity(db, holderOwner, (tx) =>
+    const row = await withIdentity(db, personal(holderOwner), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${entity}::uuid`),
     );
     expect((row as unknown as Array<{ props: Record<string, unknown> }>)[0]?.props).toMatchObject({
@@ -3133,12 +3228,14 @@ describe('дельта аспекта как держатель свойства
         },
       }),
     );
-    const stored = (await withIdentity(db, holderOwner, (tx) =>
+    const stored = (await withIdentity(db, personal(holderOwner), (tx) =>
       tx.execute(sql`SELECT delta FROM registry_deltas
                      WHERE graph_id = ${holderOwner}::uuid AND target_id = 'orbis/memory'`),
     )) as unknown as Array<{ delta: { properties: { add: Array<{ propertyId: string }> } } }>;
     expect(stored[0]?.delta.properties.add[0]?.propertyId).toBe(byKey);
-    const reg = await withIdentity(db, holderOwner, (tx) => effectiveRegistry(tx, holderOwner));
+    const reg = await withIdentity(db, personal(holderOwner), (tx) =>
+      effectiveRegistry(tx, holderOwner),
+    );
     expect((reg.aspects.get('orbis/memory')?.properties ?? []).map((r) => r.propertyId)).toContain(
       byKey,
     );
@@ -3176,12 +3273,12 @@ describe('дельта аспекта как держатель свойства
         },
       }),
     );
-    const holders = await withIdentity(db, holderOwner, (tx) =>
+    const holders = await withIdentity(db, personal(holderOwner), (tx) =>
       collectPropertyHolders(tx, holderOwner),
     );
     expect(holders.some((h) => h.kind === 'delta' && h.properties.includes(src))).toBe(true);
     ok(await runH('property_merge', { source: src, into: dst }));
-    const stored = (await withIdentity(db, holderOwner, (tx) =>
+    const stored = (await withIdentity(db, personal(holderOwner), (tx) =>
       tx.execute(sql`SELECT delta FROM registry_deltas
                      WHERE graph_id = ${holderOwner}::uuid AND target_id = 'orbis/note'`),
     )) as unknown as Array<{ delta: { classMap?: Record<string, unknown> } }>;
@@ -3199,7 +3296,12 @@ describe('слияние отказывает громко, если после 
   function runL(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: lockOwner2, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(lockOwner2),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   }
@@ -3255,7 +3357,7 @@ describe('слияние отказывает громко, если после 
 
     // Ничего не применено И реестр читается — обе половины, потому что вторая тут дороже.
     expect(await registryReadable()).toBe(true);
-    const rows = (await withIdentity(db, lockOwner2, (tx) =>
+    const rows = (await withIdentity(db, personal(lockOwner2), (tx) =>
       tx.execute(sql`SELECT id, status, merged_into FROM property_definitions
                      WHERE graph_id = ${lockOwner2}::uuid AND id IN (${p}, ${q})`),
     )) as unknown as Array<Record<string, unknown>>;
@@ -3287,7 +3389,7 @@ describe('слияние отказывает громко, если после 
     expect((e.details as { reason?: string }).reason).toBe('MERGE_REGISTRY_UNREADABLE');
     expect(JSON.stringify((e.details as { cause?: unknown }).cause)).toContain('SCOPE_DUPLICATE');
     expect(await registryReadable()).toBe(true);
-    const row = (await withIdentity(db, lockOwner2, (tx) =>
+    const row = (await withIdentity(db, personal(lockOwner2), (tx) =>
       tx.execute(sql`SELECT status, merged_into FROM property_definitions
                      WHERE graph_id = ${lockOwner2}::uuid AND id = ${p}`),
     )) as unknown as Array<Record<string, unknown>>;
@@ -3304,7 +3406,9 @@ describe('слияние отказывает громко, если после 
       }),
     );
     ok(await runL('property_merge', { source: p, into: q }));
-    const reg = await withIdentity(db, lockOwner2, (tx) => effectiveRegistry(tx, lockOwner2));
+    const reg = await withIdentity(db, personal(lockOwner2), (tx) =>
+      effectiveRegistry(tx, lockOwner2),
+    );
     expect((reg.aspects.get('orbis/note')?.properties ?? []).map((r) => r.propertyId)).toContain(q);
   });
 
@@ -3343,9 +3447,11 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     // «переписано запросов: 0», а проба §А10-3 разрешила бы удалить строку из-под живого
     // списка.
     const seedUser = await freshGraph();
-    await seedOwnerGraph(db, seedUser);
+    await seedOwnerGraph(db, personal(seedUser));
 
-    const holders = await withIdentity(db, seedUser, (tx) => collectPropertyHolders(tx, seedUser));
+    const holders = await withIdentity(db, personal(seedUser), (tx) =>
+      collectPropertyHolders(tx, seedUser),
+    );
     const bodies = new Map(
       holders.filter((h) => h.kind === 'body').map((h) => [h.id, h.properties]),
     );
@@ -3385,7 +3491,9 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
     } finally {
       await adminClient.end();
     }
-    const holders = await withIdentity(db, dark, (tx) => collectPropertyHolders(tx, dark));
+    const holders = await withIdentity(db, personal(dark), (tx) =>
+      collectPropertyHolders(tx, dark),
+    );
     expect(holders.filter((h) => h.kind === 'body').map((h) => h.id)).not.toContain(hidden);
   });
 });
@@ -3400,14 +3508,25 @@ describe('нормализация имён в дереве Q-AST (§А5-2)', ()
   function runAst(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: astOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(astOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   }
 
   function call(name: string, input: unknown): Promise<ToolDispatchResult> {
     return dispatchTool(
-      { db, actorUserId: astOwner, actorKind: 'owner', source: 'chat', explicitCommand: false },
+      {
+        db,
+        identity: personal(astOwner),
+        actorKind: 'owner',
+        source: 'chat',
+        explicitCommand: false,
+      },
       name,
       input,
     );
@@ -3487,7 +3606,7 @@ describe('нормализация имён в дереве Q-AST (§А5-2)', ()
     );
     const refId = (ref.results[0] as { property: string }).property;
 
-    const rows = (await withIdentity(db, astOwner, (tx) =>
+    const rows = (await withIdentity(db, personal(astOwner), (tx) =>
       tx.execute(sql`SELECT type FROM property_definitions
                      WHERE graph_id = ${astOwner}::uuid AND id = ${refId}`),
     )) as unknown as Array<{ type: { target: { filter: { and: Array<{ prop?: string }> } } } }>;
@@ -3502,7 +3621,12 @@ describe('форма дерева объявления проверяется Д
   function runShape(tool: string, input: unknown): Promise<ExecuteResult> {
     return execute(
       db,
-      { actorUserId: shapeOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(shapeOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   }
@@ -3571,12 +3695,23 @@ describe('карта классов и пользовательский набо
   const runS = (tool: string, input: unknown): Promise<ExecuteResult> =>
     execute(
       db,
-      { actorUserId: setOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      {
+        identity: personal(setOwner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
       { sink },
     );
   const callS = (name: string, input: unknown): Promise<ToolDispatchResult> =>
     dispatchTool(
-      { db, actorUserId: setOwner, actorKind: 'owner', source: 'chat', explicitCommand: false },
+      {
+        db,
+        identity: personal(setOwner),
+        actorKind: 'owner',
+        source: 'chat',
+        explicitCommand: false,
+      },
       name,
       input,
     );
@@ -3630,7 +3765,7 @@ describe('карта классов и пользовательский набо
     // ещё нет (задача 16) — строка ставится тем же писателем, которого он позовёт, и ПОД ТЕМ ЖЕ
     // ЗАМКОМ: функции реестра своего замка не берут (шапка `ops.ts`), и порядок захвата обязан
     // воспроизводиться боевым — иначе проба меряет путь, которого в бою нет.
-    await withIdentity(db, setOwner, async (tx) => {
+    await withIdentity(db, personal(setOwner), async (tx) => {
       await lockOwnerRegistry(tx, setOwner);
       await setContractDelta(tx, setOwner, 'orbis/completable', {
         setsDelta: { dropped: ['cancelled'] },
@@ -3654,14 +3789,14 @@ describe('карта классов и пользовательский набо
     // ВЫРАЖЕНЧЕСКИМ бэкендом (`compileExprPredicate` над `class(...) in 'open'`). Вариант,
     // доехавший в один из трёх, но не в остальные, и есть «запись, которую находят через
     // один аспект и теряют через другой».
-    const reg = await withIdentity(db, setOwner, (tx) => effectiveRegistry(tx, setOwner));
+    const reg = await withIdentity(db, personal(setOwner), (tx) => effectiveRegistry(tx, setOwner));
     const projectionOf = (status: string) =>
       rowProjectionOf({ aspects: ['orbis/task'], props: { 'orbis/task_status': status } }, reg)
         .checkbox;
     expect(projectionOf('in_review')).toEqual({ cls: 'active', closed: false });
     expect(projectionOf('cancelled')).toEqual({ cls: 'cancelled', closed: true });
 
-    const agenda = await withIdentity(db, setOwner, (tx) =>
+    const agenda = await withIdentity(db, personal(setOwner), (tx) =>
       agendaListOf(tx, setOwner, agendaSubscriptionOf(reg), {
         today: agendaToday,
         timeZone: AGENDA_TZ,
@@ -3698,7 +3833,7 @@ describe('карта классов и пользовательский набо
       reason: 'unmapped',
     });
     // Прежняя дельта на месте, а `blocked` в реестр не попал.
-    const reg = await withIdentity(db, setOwner, (tx) => effectiveRegistry(tx, setOwner));
+    const reg = await withIdentity(db, personal(setOwner), (tx) => effectiveRegistry(tx, setOwner));
     const status = reg.properties.get('orbis/task_status');
     if (status?.type.kind !== 'select') throw new Error('orbis/task_status перестал быть select');
     const keys = status.type.options.map((o) => o.key);

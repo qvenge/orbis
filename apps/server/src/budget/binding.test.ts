@@ -4,6 +4,7 @@
 // создании/правке/архивации конверта, уникальность конверта. Реальная БД под
 // withIdentity (RLS enforced), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId, ROLE_ENVELOPE_BINDING } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { GATE_FIN_ASPECT, GATE_FIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
@@ -14,6 +15,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   seedRefTargetRows,
@@ -50,13 +52,13 @@ afterAll(async () => {
 });
 
 function req(
-  user: string,
+  user: GraphId,
   tool: string,
   input: unknown,
   over: Partial<ExecuteRequest> = {},
 ): ExecuteRequest {
   return {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'fast_path',
     operations: [{ tool, input }],
@@ -79,7 +81,7 @@ function invariantOf(r: ExecuteErr): string | undefined {
 }
 
 async function createEntity(
-  user: string,
+  user: GraphId,
   input: Record<string, unknown>,
 ): Promise<{ entity: WireEntity; actionId: string }> {
   const r = ok(await execute(db, req(user, 'entity_create', { tags: [], ...input }), { sink }));
@@ -149,10 +151,10 @@ async function actionById(actionId: string): Promise<ActionRecord> {
 }
 
 function selector(
-  user: string,
+  user: GraphId,
   args: { categoryRef: string; currency: string; occurredOn: string },
 ): Promise<string | null> {
-  return withIdentity(db, user, (tx) => selectEnvelope(tx, { graphId: user, ...args }));
+  return withIdentity(db, personal(user), (tx) => selectEnvelope(tx, { graphId: user, ...args }));
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +239,7 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
     // Прямая вставка мимо исполнителя (в этом и смысл: строка «как из прошлого», без
     // currency). Через drizzle, а не сырым SQL: строка обязана лечь во ВСЕ три колонки
     // формы (§А1-1), а имя `aspects` теперь занято списком аспектов.
-    await withIdentity(db, user, async (tx) =>
+    await withIdentity(db, personal(user), async (tx) =>
       tx.insert(entities).values({
         id: idSmall,
         graphId: user,
@@ -337,7 +339,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
     expect(action.operations.map((o) => o.op)).toEqual(['entity_create', 'relation_create']);
 
     // Undo откатывает целиком: relation удалена, сущность архивирована
-    ok(await undoAction(db, { actorUserId: user, actionId }));
+    ok(await undoAction(db, { identity: personal(user), actionId }));
     expect(await budgetParents(txn.id)).toEqual([]);
     const rows = await adminRows(sql`SELECT archived FROM entities WHERE id = ${txn.id}`);
     expect(rows[0]?.archived).toBe(true);
@@ -433,7 +435,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
       await execute(
         db,
         {
-          actorUserId: userB,
+          identity: personal(userB),
           actorKind: 'owner',
           source: 'chat',
           batchId,
@@ -478,7 +480,7 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
     const batchId = newId();
     const txnId = newId();
     const request: ExecuteRequest = {
-      actorUserId: user,
+      identity: personal(user),
       actorKind: 'owner',
       source: 'mcp',
       batchId,
@@ -792,7 +794,7 @@ describe('уникальность конверта: (category_ref, currency, pe
       await execute(
         db,
         {
-          actorUserId: user,
+          identity: personal(user),
           actorKind: 'owner',
           source: 'chat',
           batchId: newId(),
@@ -953,7 +955,7 @@ describe('detach orbis/financial снимает привязку к конвер
     );
     expect(await budgetParents(txn.id)).toEqual([]);
 
-    const undone = await undoAction(db, { actorUserId: user, actionId: detached.actionId });
+    const undone = await undoAction(db, { identity: personal(user), actionId: detached.actionId });
     // Отказ был бы ROLE_SYSTEM_ONLY — называем его, чтобы красный говорил, что именно сломано.
     expect(undone.ok ? 'ok' : undone.error.code).toBe('ok');
     expect(await budgetParents(txn.id)).toEqual([env.id]);
@@ -1302,7 +1304,7 @@ describe('контур бюджет-хука собран из ДЕКЛАРАЦ�
   test('встроенный владелец даёт ровно встроенную пару; аспект владельца входит наравне', async () => {
     const plain = await freshGraph();
     const builtin = budgetContourFor(
-      await withIdentity(db, plain, (tx) => effectiveRegistry(tx, plain)),
+      await withIdentity(db, personal(plain), (tx) => effectiveRegistry(tx, plain)),
     );
     expect([...builtin.movement.aspects]).toEqual(['orbis/financial']);
     expect([...builtin.envelope.aspects]).toEqual(['orbis/budget']);
@@ -1317,7 +1319,7 @@ describe('контур бюджет-хука собран из ДЕКЛАРАЦ�
     const owner = await freshGraph();
     await seedCustomAspect(owner, GATE_FIN_ASPECT);
     const contour = budgetContourFor(
-      await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)),
+      await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner)),
     );
     expect([...contour.movement.aspects].sort()).toEqual(['orbis/financial', GATE_FIN_KEY].sort());
     expect(propOfSlot(contour.movement, GATE_FIN_KEY, SLOT_DATE)).toBe(GATE_PROPS.finDate);

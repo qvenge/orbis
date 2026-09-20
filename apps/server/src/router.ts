@@ -24,7 +24,10 @@ import { protectedProcedure, publicProcedure, router } from './trpc';
 
 export const appRouter = router({
   ping: publicProcedure.query(() => ({ ok: true })),
-  whoami: protectedProcedure.query(({ ctx }) => ({ actorUserId: ctx.actorUserId })),
+  // Провод диагностики (смоук/ручная проверка токена): наружу едет АКТОР — тот аккаунт,
+  // чьим именем подписана транзакция. Имя поля — ключ журнала `actor_user_id` (D11), оно
+  // не про граф, и переименование сломало бы смоуки, читающие ответ.
+  whoami: protectedProcedure.query(({ ctx }) => ({ actorUserId: ctx.identity.actor })),
   entity: entityRouter,
   relation: relationRouter,
   chat: chatRouter,

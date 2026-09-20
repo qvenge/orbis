@@ -11,7 +11,7 @@
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { agentGrants, oauthClients } from '../db/schema';
 import { exchangeAuthorizationCode, issuePatGrant, verifyBearer } from '../oauth/grants';
 import { appRouter } from '../router';
@@ -34,13 +34,13 @@ const stranger = mintGraph();
 
 const createCaller = createCallerFactory(appRouter);
 const ownerCaller = createCaller({
-  actorUserId: owner,
+  identity: personal(owner),
   actorKind: 'owner',
   db,
   clientVersion: null,
 });
 const strangerCaller = createCaller({
-  actorUserId: stranger,
+  identity: personal(stranger),
   actorKind: 'owner',
   db,
   clientVersion: null,
@@ -400,7 +400,7 @@ test('не-ASCII в адресе возврата даёт годный Location
 test('агент не управляет доступами через tRPC', async () => {
   const clientId = await seedClient();
   const agentCaller = createCaller({
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'agent',
     db,
     clientVersion: null,
@@ -425,7 +425,7 @@ test('агент не управляет доступами через tRPC', as
 // tRPC 11 сам сводит Date к string через Serialize<> (ревью Task 7 проверило компилятором,
 // прежнее обоснование про TypeError на экране было неверным).
 test('таймстампы доступов уезжают ISO-строками, а не Date', async () => {
-  await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   const [grant] = await ownerCaller.oauth.listGrants();
   expect(typeof grant?.createdAt).toBe('string');
   // UTC с суффиксом 'Z', а не '+00:00' — соглашение wire.ts
@@ -442,7 +442,7 @@ test('брошенная попытка авторизации доезжает 
   const clientId = await seedClient();
   await ownerCaller.oauth.consent(consentInput(clientId));
   expect((await ownerCaller.oauth.listGrants())[0]).toMatchObject({ connected: false });
-  await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   const pat = (await ownerCaller.oauth.listGrants()).find((g) => g.kind === 'pat');
   expect(pat).toMatchObject({ connected: true });
 });
@@ -450,21 +450,21 @@ test('брошенная попытка авторизации доезжает 
 // Область — часть wire-формы гранта (WireAgentGrant.scope): по ней экран «Агенты» рисует
 // бейдж, и без поля владелец не отличает полный доступ от исполнителя.
 test('область доступа доезжает до экрана', async () => {
-  await issuePatGrant(db, { graphId: owner, label: 'исполнитель', scope: 'worker' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'исполнитель', scope: 'worker' });
   const [grant] = await ownerCaller.oauth.listGrants();
   expect(grant?.scope).toBe('worker');
 });
 
 test('список доступов скоупится владельцем', async () => {
-  await issuePatGrant(db, { graphId: owner, label: 'мой CI' });
-  await issuePatGrant(db, { graphId: stranger, label: 'чужой CI' });
+  await issuePatGrant(db, { identity: personal(owner), label: 'мой CI' });
+  await issuePatGrant(db, { identity: personal(stranger), label: 'чужой CI' });
   const mine = await ownerCaller.oauth.listGrants();
   expect(mine).toHaveLength(1);
   expect(mine[0]?.label).toBe('мой CI');
 });
 
 test('отзыв гасит грант владельца', async () => {
-  const token = await issuePatGrant(db, { graphId: owner, label: 'CI' });
+  const token = await issuePatGrant(db, { identity: personal(owner), label: 'CI' });
   const [grant] = await ownerCaller.oauth.listGrants();
   if (!grant) throw new Error('список доступов пуст');
   expect(await ownerCaller.oauth.revokeGrant({ grantId: grant.id })).toEqual({ revoked: true });
@@ -474,7 +474,7 @@ test('отзыв гасит грант владельца', async () => {
 // Идентификатор гранта угадывать не нужно — он приезжает снаружи: отзыв обязан скоупиться
 // владельцем, иначе один аккаунт гасит доступы другого.
 test('чужой грант не отзывается', async () => {
-  const token = await issuePatGrant(db, { graphId: stranger, label: 'чужой CI' });
+  const token = await issuePatGrant(db, { identity: personal(stranger), label: 'чужой CI' });
   const [grant] = await strangerCaller.oauth.listGrants();
   if (!grant) throw new Error('список доступов чужого владельца пуст');
   expect(await ownerCaller.oauth.revokeGrant({ grantId: grant.id })).toEqual({ revoked: false });

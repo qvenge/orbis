@@ -5,7 +5,12 @@
 // Реестры — ИСКЛЮЧЕНИЕ: экспортируются ТОЛЬКО строки владельца (graph_id = актор);
 // встроенные (graph_id IS NULL) в дамп не входят (§С5: это не пользовательские данные) —
 // их восстанавливает сид реестра.
-import type { AspectDefinition, PropertyDefinition, RelationRoleDefinition } from '@orbis/shared';
+import type {
+  AspectDefinition,
+  GraphId,
+  PropertyDefinition,
+  RelationRoleDefinition,
+} from '@orbis/shared';
 import { asc, eq } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
 import { chatMessages, chatThreads, entities, relations, userSettings } from './db/schema';
@@ -76,7 +81,7 @@ function ownRows<T extends { id: string; graphId: string | null; rank: number }>
 
 export async function exportData(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   clock: () => Date = () => new Date(),
 ): Promise<OrbisExport> {
   const entityRows = await tx

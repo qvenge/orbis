@@ -17,6 +17,7 @@ import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind } from '../executor/types';
+import type { Identity } from '../identity';
 import { listRunUnits } from '../policy/pending';
 import { RUN_STALE_AFTER_MS } from './constants';
 import { type RunRow, runsOfParent, staleRuns, ticketOfRun } from './queries';
@@ -25,7 +26,8 @@ import { type RunRow, runsOfParent, staleRuns, ticketOfRun } from './queries';
 const sink = makeChatJournalSink();
 
 export interface SweepArgs {
-  graphId: string;
+  /** Пара «актор + текущий граф» (D44): подметание пишет журнал актором, а строки — в графе. */
+  identity: Identity;
   /** Кто дёрнул подметание: агент (пришёл за очередью) или владелец (открыл экран). */
   actorKind: ActorKind;
   actorGrantId?: string;
@@ -82,7 +84,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
   const now = clock();
   const before = new Date(now.getTime() - staleAfterMs);
 
-  const stale = await withIdentity(db, args.graphId, (tx) => staleRuns(tx, before));
+  const stale = await withIdentity(db, args.identity, (tx) => staleRuns(tx, before));
   let swept = 0;
   for (const run of stale) {
     // Субъект прогона (V1.4) решает и исход, и то, есть ли вообще тикетная половина:
@@ -90,7 +92,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
     const isRoutineRun = run.props['orbis/run_routine'] !== undefined;
     const ticket = isRoutineRun
       ? null
-      : await withIdentity(db, args.graphId, (tx) => ticketOfRun(tx, run.id));
+      : await withIdentity(db, args.identity, (tx) => ticketOfRun(tx, run.id));
     // Статус тикета трогает ТОЛЬКО его последний прогон. Двух running-прогонов у тикета
     // хватает одного ручного жеста владельца («верни в planned» при живом прогоне A →
     // захват B), и тогда подметание старого хвоста A выбивало бы из работы тикет, над
@@ -98,7 +100,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
     // экрана истории: «последний» здесь значит то же, что видит человек.
     const isLastRun =
       ticket !== null &&
-      (await withIdentity(db, args.graphId, async (tx) => {
+      (await withIdentity(db, args.identity, async (tx) => {
         const runs = await runsOfParent(tx, ticket.id);
         return runs.at(-1)?.id === run.id;
       }));
@@ -123,8 +125,8 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
     // решённая пачка прочиталась бы открытой.
     const undecided =
       isRoutineRun &&
-      (await withIdentity(db, args.graphId, async (tx) =>
-        (await listRunUnits(tx, args.graphId, run.id)).some((u) => u.fate === 'open'),
+      (await withIdentity(db, args.identity, async (tx) =>
+        (await listRunUnits(tx, args.identity.graph, run.id)).some((u) => u.fate === 'open'),
       ));
 
     const operations: Array<{ tool: string; input: unknown }> = [
@@ -184,7 +186,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
     const r = await execute(
       db,
       {
-        actorUserId: args.graphId,
+        identity: args.identity,
         actorKind: args.actorKind,
         // Обслуживание инварианта 6, а не решение актора: «отмени последнее» такие
         // записи пропускает (undo.ts findLastUndoable), иначе первое же «отмени»

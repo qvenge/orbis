@@ -6,6 +6,7 @@
 // не ручная planned-покупка (уже факт / нет financial / шаблон recurring / инстанс с
 // derived_from). Идемпотентность повтора по batchId (§7.8).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -13,6 +14,7 @@ import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -45,13 +47,13 @@ const AUG = { start: '2026-08-01', end: '2026-08-31' };
 const PLANNED_ON = '2026-07-15';
 const ACTUAL_ON = '2026-08-10';
 
-function ownerCaller(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function ownerCaller(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
-async function exec(user: string, tool: string, input: unknown): Promise<WireEntity> {
+async function exec(user: GraphId, tool: string, input: unknown): Promise<WireEntity> {
   const req: ExecuteRequest = {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool, input }],
@@ -62,7 +64,7 @@ async function exec(user: string, tool: string, input: unknown): Promise<WireEnt
 }
 
 async function createEnvelope(
-  user: string,
+  user: GraphId,
   categoryRef: string,
   period: { start: string; end: string },
 ): Promise<string> {
@@ -83,7 +85,7 @@ async function createEnvelope(
 
 /** Ручная planned-покупка (§2.7): financial БЕЗ derived_from, planned=true. */
 async function createPlanned(
-  user: string,
+  user: GraphId,
   categoryRef: string,
   occurredOn: string,
   amount = '8000.00',
@@ -209,7 +211,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     expect(await budgetParents(purchase)).toEqual([augEnv]);
 
     // Undo целиком: план + прежняя дата + прежний конверт (§2.7 «обратимо целиком»)
-    const u = await undoAction(db, { actorUserId: user, actionId: batchId });
+    const u = await undoAction(db, { identity: personal(user), actionId: batchId });
     expect(u.ok).toBe(true);
     const fin = await propsOf(purchase);
     expect(fin['orbis/planned']).toBe(true);
@@ -320,7 +322,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     });
     await materializeInstances({
       db,
-      graphId: user,
+      identity: personal(user),
       from: PLANNED_ON,
       to: PLANNED_ON,
       today: PLANNED_ON,
@@ -404,7 +406,12 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     const user = await freshGraph();
     const cat = newId();
     const purchase = await createPlanned(user, cat, PLANNED_ON);
-    const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
+    const agent = createCaller({
+      identity: personal(user),
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+    });
     await expect(
       agent.budget.confirmPurchase({
         entityId: purchase,

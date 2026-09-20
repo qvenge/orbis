@@ -3,11 +3,12 @@
 // против живой БД. Роутеры — только трансляция: вход → executor/компилятор,
 // результат → wire, ошибки executor'а → TRPCError (§9.1, §5.2, §6.4).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
 import { QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import type { ActionRecord } from '../executor/types';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -18,8 +19,8 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 /** Caller от лица владельца: ctx как в бою — actorUserId + db (§9.1). */
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {

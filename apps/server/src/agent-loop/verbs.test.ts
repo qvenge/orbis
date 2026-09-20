@@ -13,7 +13,15 @@ import type {
 } from '@orbis/shared';
 import { batchAuditMessageId, newId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -357,7 +365,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
 
     const ticketId = await makeTicket('Тикет со своим свойством');
     const written = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -601,7 +609,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     const pre = await execute(
       db,
       {
-        actorUserId: owner,
+        identity: personal(owner),
         actorKind: 'owner',
         source: 'ui',
         batchId: callId,
@@ -703,7 +711,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
   /** Владелец правит тикет руками — своим путём, не глаголом исполнителя. */
   async function patchTask(ticketId: string, patch: Record<string, unknown>): Promise<void> {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -719,7 +727,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
   /** Владелец переназначает тикет — тем же путём, что из карточки назначения. */
   async function patchAssignment(ticketId: string, patch: Record<string, unknown>): Promise<void> {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -735,7 +743,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
   /** Владелец убирает запись с глаз — архив (не удаление). */
   async function archive(id: string): Promise<void> {
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [{ tool: 'entity_update', input: { id, archived: true } }],
@@ -983,7 +991,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
   test('снятый аспект назначения снимает и право закрытия, хотя may_close остался в props (Р9)', async () => {
     const { ticketId, runId } = await claimed('Работа с отозванным правом', true);
     const r = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -1151,7 +1159,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     // Подметённый прогон терминален так же: агент вернулся через час — работа уже не его
     const ab = await claimed('Терминальность брошенного');
     await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       clock: () => new Date(T0.getTime() + 31 * MINUTE),
     });
@@ -1339,7 +1347,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
   function verbCtx(routineId: string, clock: () => Date = () => T0): VerbCtx {
     return {
       db,
-      graphId: owner,
+      identity: personal(owner),
       subject: { kind: 'routine', routineId },
       clock,
       sink: makeChatJournalSink(),
@@ -1511,7 +1519,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
     const decided = await seedRoutineRun(owner, { routineId, bucket: '2026-08-18T08:00' });
     const pendingId = await askFrom(routineId, decided.runId, 'Брать ли отчёт сегодня?');
     expect(
-      await answerPendingQuestion(db, { graphId: owner, pendingId, answer: 'да, бери' }),
+      await answerPendingQuestion(db, { identity: personal(owner), pendingId, answer: 'да, бери' }),
     ).toEqual({ status: 'answered', pendingId });
     expect(
       (

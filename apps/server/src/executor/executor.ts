@@ -18,6 +18,7 @@ import {
   effectiveLabel,
   entityCreateExecInput,
   entityUpdateExecInput,
+  type GraphId,
   newId,
   type PreconditionMismatch,
   ROLE_INSTANCE_OF,
@@ -261,9 +262,9 @@ function contourOf(ctx: ExecCtx): BudgetContour {
  */
 function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
   ctx.compileCtx ??= (async () => {
-    const timeZone = await ownerTimeZone(ctx.tx, ctx.req.actorUserId);
+    const timeZone = await ownerTimeZone(ctx.tx, ctx.req.identity.graph);
     return {
-      graphId: ctx.req.actorUserId,
+      graphId: ctx.req.identity.graph,
       reg: ctx.registry,
       thisEntityId: null,
       timeZone,
@@ -483,25 +484,25 @@ export async function execute(
     }
 
     const actionId = newId();
-    return await withIdentity(db, req.actorUserId, async (tx) => {
+    return await withIdentity(db, req.identity, async (tx) => {
       // Шов сериализации §7.10 — до первого чтения состояния (см. ExecutorDeps.beforeStages)
       if (deps.beforeStages) await deps.beforeStages(tx);
       // Снимок реестра — ДО замка контура, и это безопасно: три SELECT'а по таблицам
       // определений не берут ни строковых, ни advisory-блокировок, то есть в цикл ожидания
       // §2.3 войти не могут. А замку он НУЖЕН: предикат контура теперь смотрит на id
       // свойств financial/budget по реестру, а не на имена полей во входе (Р-27).
-      const registry = await effectiveRegistry(tx, req.actorUserId);
+      const registry = await effectiveRegistry(tx, req.identity.graph);
       // Замок РЕЕСТРА — ПЕРВЫЙ из двух (см. lockOwnerRegistry): порядок «реестр → бюджет»
       // глобален, и переставить его местами значит завести цикл ожидания.
-      await lockRegistry(tx, req.actorUserId, [single]);
+      await lockRegistry(tx, req.identity.graph, [single]);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
-      await lockBudgetContour(tx, registry, req.actorUserId, [single]);
+      await lockBudgetContour(tx, registry, req.identity.graph, [single]);
       const ctx: ExecCtx = {
         tx,
         registry,
         // Одно точечное чтение по PK на мутацию: ленивость стоила бы асинхронного гейта в
         // трёх точках записи, где всё остальное синхронно.
-        disabledModules: await disabledModulesOf(tx, req.actorUserId),
+        disabledModules: await disabledModulesOf(tx, req.identity.graph),
         mechanism: req.mechanism ?? 'user',
         req,
         actionId,
@@ -532,7 +533,7 @@ export async function execute(
         // одним UPDATE в CTE (`registry/ops.ts`), никого не называя. Сносим кэш владельца
         // целиком — это один ленивый пересчёт против неполной модели того, что откат сделал.
         // Отмена — редкая явная операция, цена честная.
-        await invalidateSpentCacheOfOwner(tx, req.actorUserId);
+        await invalidateSpentCacheOfOwner(tx, req.identity.graph);
         await ctx.internalUndo.writeUndoMessage(tx);
       } else if (out.replay !== true) {
         const allPlans = [plan, ...followUps];
@@ -615,26 +616,26 @@ async function executeBatch(
   }
 
   // Идемпотентность §7.8: детерминированный PK audit-сообщения
-  const auditId = batchAuditMessageId(req.actorUserId, batchId);
+  const auditId = batchAuditMessageId(req.identity.graph, batchId);
 
   try {
-    return await withIdentity(db, req.actorUserId, async (tx) => {
+    return await withIdentity(db, req.identity, async (tx) => {
       // Шов сериализации §7.10 — до первого чтения состояния, ДО replay-проверки и стадий
       // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
       // beforeStages его увидит), либо ждёт этот tx и увидит audit-сообщение
       if (beforeStages) await beforeStages(tx);
       // Снимок реестра — ДО замка контура (см. одиночный путь: плановые SELECT'ы в цикл
       // ожидания не входят, а предикат контура без реестра неполон — Р-27)
-      const registry = await effectiveRegistry(tx, req.actorUserId);
+      const registry = await effectiveRegistry(tx, req.identity.graph);
       // Замок РЕЕСТРА — ПЕРВЫЙ из двух, тем же порядком, что и на одиночном пути
-      await lockRegistry(tx, req.actorUserId, ops);
+      await lockRegistry(tx, req.identity.graph, ops);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
-      await lockBudgetContour(tx, registry, req.actorUserId, ops);
+      await lockBudgetContour(tx, registry, req.identity.graph, ops);
       const ctx: ExecCtx = {
         tx,
         registry,
         // То же одно чтение по PK, что и на одиночном пути (см. его комментарий).
-        disabledModules: await disabledModulesOf(tx, req.actorUserId),
+        disabledModules: await disabledModulesOf(tx, req.identity.graph),
         mechanism: req.mechanism ?? 'user',
         req,
         actionId: batchId,
@@ -682,7 +683,7 @@ async function executeBatch(
         await applyRefEffects(ctx, plans);
         // Кэш spent — см. одиночный путь: откат идёт мимо хука, задетые сущности планами не
         // выражены, снос владельца дешевле неполной модели.
-        await invalidateSpentCacheOfOwner(tx, req.actorUserId);
+        await invalidateSpentCacheOfOwner(tx, req.identity.graph);
         await internalUndo.writeUndoMessage(tx);
         return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
       }
@@ -703,7 +704,7 @@ async function executeBatch(
         id: batchId,
         type: 'batch',
         entity_id: null,
-        actor_user_id: req.actorUserId,
+        actor_user_id: req.identity.actor,
         actor_kind: req.actorKind,
         source: req.source,
         mechanism: ctx.mechanism,
@@ -716,7 +717,7 @@ async function executeBatch(
       };
       await sink.write(tx, {
         id: auditId,
-        graphId: req.actorUserId,
+        graphId: req.identity.graph,
         threadId: req.threadId,
         action,
         card: { tool: 'batch_execute', entity_id: null, title: `batch: операций — ${ops.length}` },
@@ -728,9 +729,7 @@ async function executeBatch(
     // Гонка одинаковых batch'ей: конкурент вставил audit-сообщение первым → конфликт PK
     // (23505) → tx уже откачен → читаем сохранённый результат отдельным tx (§7.8)
     if (e instanceof AuditIdConflictError) {
-      const saved = await withIdentity(db, req.actorUserId, (tx) =>
-        sink.findByAuditId(tx, auditId),
-      );
+      const saved = await withIdentity(db, req.identity, (tx) => sink.findByAuditId(tx, auditId));
       if (saved) return replayFromAudit(batchId, saved);
     }
     throw e;
@@ -898,7 +897,7 @@ function touchesRegistry(op: { tool: string; input: unknown }): boolean {
 
 async function lockRegistry(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
   if (ops.some(touchesRegistry)) await lockOwnerRegistry(tx, graphId);
@@ -907,7 +906,7 @@ async function lockRegistry(
 async function lockBudgetContour(
   tx: Tx,
   reg: RegistrySnapshot,
-  graphId: string,
+  graphId: GraphId,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
   if (ops.some((op) => touchesBudgetContour(reg, op))) await lockOwnerBudget(tx, graphId);
@@ -989,7 +988,7 @@ function parseEnvelope<S extends z.ZodTypeAny>(
 
 /** Стадия 4 (гейт-хук): entitlements §8 — на плане dev всегда разрешено (точка врезки 1b). */
 function gateEntitlements(ctx: ExecCtx, key: string): void {
-  const decision = resolveEntitlement(ctx.req.actorUserId, key);
+  const decision = resolveEntitlement(ctx.req.identity.actor, key);
   if (!decision.allowed) {
     throw new ExecError('LIMIT', `лимит «${key}» исчерпан`, { key, limit: decision.limit });
   }
@@ -1001,7 +1000,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     id: ctx.actionId,
     type: p.type,
     entity_id: p.entityId,
-    actor_user_id: ctx.req.actorUserId,
+    actor_user_id: ctx.req.identity.actor,
     actor_kind: ctx.req.actorKind,
     source: ctx.req.source,
     mechanism: ctx.mechanism,
@@ -1013,7 +1012,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     inverse: p.inverse,
   };
   await ctx.sink.write(ctx.tx, {
-    graphId: ctx.req.actorUserId,
+    graphId: ctx.req.identity.graph,
     threadId: ctx.req.threadId,
     action,
     card: { tool: p.tool, entity_id: p.entityId, title: p.title },
@@ -1045,7 +1044,7 @@ async function applyAncestorRecompute(
   if (roots.length === 0) return [];
   const { recomputed } = await recomputeProjectAncestors(
     ctx.tx,
-    ctx.req.actorUserId,
+    ctx.req.identity.graph,
     roots,
     ctx.registry,
   );
@@ -1124,7 +1123,7 @@ async function applyRefEffects(
     if (plan.refWrite === undefined || plan.refWrite.mirror.length === 0) continue;
     await syncRefMirror(
       ctx.tx,
-      ctx.req.actorUserId,
+      ctx.req.identity.graph,
       plan.refWrite.entityId,
       plan.refWrite.mirror,
       ctx.registry,
@@ -1135,7 +1134,7 @@ async function applyRefEffects(
     if (plan.archivedRefTarget === undefined) continue;
     const sources = await markRefSourcesNeedsReview(
       ctx.tx,
-      ctx.req.actorUserId,
+      ctx.req.identity.graph,
       plan.archivedRefTarget,
     );
     if (sources.length > 0) {
@@ -1248,7 +1247,7 @@ async function budgetFollowUpDescs(
   precomputed?: ReturnType<typeof budgetHookBranches>,
 ): Promise<BudgetOpDesc[]> {
   const { before, after } = hook;
-  const graphId = ctx.req.actorUserId;
+  const graphId = ctx.req.identity.graph;
   const contour = contourOf(ctx);
   const branches = precomputed ?? budgetHookBranches(ctx.registry, contour, hook);
   const descs: BudgetOpDesc[] = [];
@@ -1301,7 +1300,7 @@ async function budgetFollowUpDescs(
  * связь инвалидирует кэш родителей своей транзакции, и следующий хук перечитывает их.
  */
 async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
-  const graphId = ctx.req.actorUserId;
+  const graphId = ctx.req.identity.graph;
   const contour = contourOf(ctx);
   const reads = new BindingReads(contour);
   // Замок владельца (E9) здесь НЕ берётся: он уже взят первым statement'ом транзакции
@@ -1425,7 +1424,7 @@ async function applySpentCacheEffect(
 ): Promise<void> {
   const contour = spentContourOf(ctx);
   if (!contour.enabled) return; // декларация материализации не просила — писателей нет
-  const graphId = ctx.req.actorUserId;
+  const graphId = ctx.req.identity.graph;
   const { before, after } = hook;
   const touched = new Set(descs.map((d) => d.input.source_id));
   const isEnvelope =
@@ -1766,7 +1765,7 @@ async function prepareEntityCreate(
   // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи
   await assertFinancial(ctx, id, state, batch);
   // Живой грант в назначении (С4/С7): у create «затронуто» всё, что пришло во входе
-  await assertAssignment(ctx.tx, ctx.req.actorUserId, state);
+  await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
   // Ровно один субъект у прогона (V1.4) — тем же путём, что и назначение
   assertRunSubject(state);
   // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
@@ -1782,7 +1781,7 @@ async function prepareEntityCreate(
   // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
   if (state.aspects.includes('orbis/budget')) {
     await assertEnvelopeUnique(ctx.tx, {
-      graphId: ctx.req.actorUserId,
+      graphId: ctx.req.identity.graph,
       entityId: id,
       props: state.props,
       virtualEntities: batch?.entities,
@@ -1792,7 +1791,7 @@ async function prepareEntityCreate(
 
   const values = {
     id,
-    graphId: ctx.req.actorUserId,
+    graphId: ctx.req.identity.graph,
     title: input.title,
     emoji: input.emoji ?? null,
     body,
@@ -2050,7 +2049,7 @@ async function prepareEntityUpdate(
     // целиком (даже переименование), а отзыв закрывает доступ агенту, а не сущность.
     // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
     if (ctx.internalUndo === undefined && touched.includes('orbis/assignment')) {
-      await assertAssignment(ctx.tx, ctx.req.actorUserId, state);
+      await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
     }
     // Ровно один субъект у прогона (V1.4) — только когда патч ЗАТРОНУЛ прогон: слияние
     // дописывает свойства к уже навешенному аспекту, то есть второй субъект приезжает
@@ -2077,7 +2076,7 @@ async function prepareEntityUpdate(
     (touched.includes('orbis/budget') || (input.archived === false && current.archived))
   ) {
     await assertEnvelopeUnique(ctx.tx, {
-      graphId: ctx.req.actorUserId,
+      graphId: ctx.req.identity.graph,
       entityId: input.id,
       props: state.props,
       virtualEntities: batch?.entities,
@@ -2338,7 +2337,7 @@ async function prepareAttach(
   // Живой грант в назначении (С4/С7): attach — третий путь появления аспекта, и обходить
   // им инвариант нельзя (тот же довод, что у «одного budget-parent» ниже)
   if (aspectId === 'orbis/assignment') {
-    await assertAssignment(ctx.tx, ctx.req.actorUserId, state);
+    await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
   }
   // Ровно один субъект у прогона (V1.4): attach заменяет аспект ЦЕЛИКОМ, поэтому им можно
   // и потерять субъект, и добавить второй. Гейта по aspectId нет — проверка сама молчит,
@@ -2349,7 +2348,7 @@ async function prepareAttach(
   if (aspectId === 'orbis/budget') {
     // Уникальность конверта (03-budget §2.1) — attach-путь той же комбинации
     await assertEnvelopeUnique(ctx.tx, {
-      graphId: ctx.req.actorUserId,
+      graphId: ctx.req.identity.graph,
       entityId: input.entity_id,
       props: state.props,
       virtualEntities: batch?.entities,
@@ -2507,7 +2506,7 @@ async function normalizeEnvelopeProps(
   patch: PropsPatch,
 ): Promise<void> {
   if (!state.aspects.includes('orbis/budget')) return;
-  await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, state.props);
+  await normalizeEnvelopeCurrency(ctx.tx, ctx.req.identity.graph, state.props);
   // Перенос прошлого периода не переживает смену идентичности конверта (03-budget §2.6) —
   // но только тот, которого патч не касался (см. dropStaleCarryover). Считается ПОСЛЕ
   // подстановки валюты: она входит в идентичность, и до подстановки «валюты не было →
@@ -2558,7 +2557,7 @@ async function prepareRelationCreate(
   // `relations.test.ts` «26. неизвестная роль»). Без неё несуществующая роль доехала бы до
   // стадии 5 и легла бы в граф строкой, о смысле которой не знает ни один читатель.
   await assertRoleConstraints(ctx.tx, ctx.registry, key, batch?.graph(), {
-    graphId: ctx.req.actorUserId,
+    graphId: ctx.req.identity.graph,
     mechanism: ctx.mechanism,
     undoReplay: ctx.internalUndo !== undefined,
     op: 'create',
@@ -2638,7 +2637,7 @@ async function prepareRelationCreate(
         // кэш разъехался бы с ведомостью ровно в день, когда роль переименуют.
         const contour = spentContourOf(applyCtx);
         if (contour.enabled && key.role === contour.bindingRole && applyCtx.mechanism !== 'hook') {
-          await invalidateSpentCache(applyCtx.tx, applyCtx.req.actorUserId, [key.sourceId]);
+          await invalidateSpentCache(applyCtx.tx, applyCtx.req.identity.graph, [key.sourceId]);
         }
         return { result: toWireRelation(row) };
       } catch (e) {
@@ -2720,7 +2719,7 @@ async function prepareRelationDelete(
   // Гейт `created_by` — симметрично созданию (Р7): роль, которую ставит сервер, сервер же и
   // снимает. Виртуальные эффекты batch не нужны — из трёх ограничений здесь работает одно.
   await assertRoleConstraints(ctx.tx, ctx.registry, key, undefined, {
-    graphId: ctx.req.actorUserId,
+    graphId: ctx.req.identity.graph,
     mechanism: ctx.mechanism,
     undoReplay: ctx.internalUndo !== undefined,
     op: 'delete',
@@ -2792,7 +2791,7 @@ async function prepareRelationDelete(
       // декларации, по тому же доводу, что и у создания.
       const contour = spentContourOf(applyCtx);
       if (contour.enabled && key.role === contour.bindingRole) {
-        await invalidateSpentCache(applyCtx.tx, applyCtx.req.actorUserId, [key.sourceId]);
+        await invalidateSpentCache(applyCtx.tx, applyCtx.req.identity.graph, [key.sourceId]);
       }
       return { result: toWireRelation(row) };
     },
@@ -2851,7 +2850,7 @@ async function prepareOriginCreate(ctx: ExecCtx, rawInput: unknown): Promise<Pre
           .insert(entityOrigins)
           .values({
             id,
-            graphId: applyCtx.req.actorUserId,
+            graphId: applyCtx.req.identity.graph,
             entityId: input.entity_id,
             namespace: input.namespace,
             externalId: input.external_id,
@@ -2904,7 +2903,7 @@ async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pre
     .from(entityOrigins)
     .where(
       and(
-        eq(entityOrigins.graphId, ctx.req.actorUserId),
+        eq(entityOrigins.graphId, ctx.req.identity.graph),
         eq(entityOrigins.namespace, input.namespace),
         eq(entityOrigins.externalId, input.external_id),
       ),
@@ -2950,7 +2949,7 @@ async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pre
         .where(
           and(
             // graph_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
-            eq(entityOrigins.graphId, applyCtx.req.actorUserId),
+            eq(entityOrigins.graphId, applyCtx.req.identity.graph),
             eq(entityOrigins.namespace, input.namespace),
             eq(entityOrigins.externalId, input.external_id),
           ),
@@ -3025,7 +3024,7 @@ async function prepareVersionPin(
           .insert(entityVersions)
           .values({
             id,
-            graphId: applyCtx.req.actorUserId,
+            graphId: applyCtx.req.identity.graph,
             entityId: input.entity_id,
             label: input.label,
             body: current.body,
@@ -3033,7 +3032,7 @@ async function prepareVersionPin(
             // значило бы записать в снимок разбор, которого в сущности не было. body
             // (NOT NULL) переживает любую смену схемы документа — этого и достаточно.
             bodyDoc: current.bodyDoc,
-            actorUserId: applyCtx.req.actorUserId,
+            actorUserId: applyCtx.req.identity.actor,
             actorKind: applyCtx.req.actorKind,
             createdAt: now,
           })
@@ -3069,7 +3068,7 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
   const rows = await ctx.tx
     .select()
     .from(entityVersions)
-    .where(and(eq(entityVersions.graphId, ctx.req.actorUserId), eq(entityVersions.id, input.id)))
+    .where(and(eq(entityVersions.graphId, ctx.req.identity.graph), eq(entityVersions.id, input.id)))
     .for('update');
   const row = rows[0];
   if (!row) {
@@ -3097,7 +3096,7 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
         .where(
           and(
             // graph_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
-            eq(entityVersions.graphId, applyCtx.req.actorUserId),
+            eq(entityVersions.graphId, applyCtx.req.identity.graph),
             eq(entityVersions.id, input.id),
           ),
         )
@@ -3241,7 +3240,7 @@ async function preparePropertyCreate(_ctx: ExecCtx, rawInput: unknown): Promise<
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const created = await createProperty(
         applyCtx.tx,
-        applyCtx.req.actorUserId,
+        applyCtx.req.identity.graph,
         input as unknown as CreatePropertyInput,
       );
       journal.operations.push({ op: 'property_create', payload: { ...input, id: created.id } });
@@ -3268,10 +3267,10 @@ async function preparePropertyUpdate(_ctx: ExecCtx, rawInput: unknown): Promise<
       // не снимок реестра. Снимок снят ДО стадий, и свойство, заведённое предыдущей
       // операцией той же пачки, в нём отсутствует — резолв по нему отвечал бы `NOT_FOUND`
       // на ключ, который владелец только что и завёл.
-      const before = await readOwnProperty(applyCtx.tx, applyCtx.req.actorUserId, input.id);
+      const before = await readOwnProperty(applyCtx.tx, applyCtx.req.identity.graph, input.id);
       const id = before?.id ?? input.id;
       journal.title = `Правка свойства «${id}»`;
-      await updateProperty(applyCtx.tx, applyCtx.req.actorUserId, input.id, {
+      await updateProperty(applyCtx.tx, applyCtx.req.identity.graph, input.id, {
         ...(input.label !== undefined && { label: input.label }),
         ...(input.description !== undefined && { description: input.description }),
         ...(input.scope !== undefined && { scope: input.scope as never }),
@@ -3300,11 +3299,11 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       // Адрес резолвит сама операция, в своей транзакции (см. `preparePropertyUpdate`):
       // `resolveMergePair` принимает и id, и key, а снимок исполнителя пачку не видит.
-      const merged = await mergeProperty(applyCtx.tx, applyCtx.req.actorUserId, input);
+      const merged = await mergeProperty(applyCtx.tx, applyCtx.req.identity.graph, input);
       // §Б5-5: слияние переписало props носителей — состав spent мог измениться у любого
       // конверта. Половина владельца в `registry_version` тоже сдвинулась (`registry/ops.ts`)
       // и строки перестали бы отвечать сами; снос — чтобы они не пережили пересчёт мусором.
-      await invalidateSpentCacheOfOwner(applyCtx.tx, applyCtx.req.actorUserId);
+      await invalidateSpentCacheOfOwner(applyCtx.tx, applyCtx.req.identity.graph);
       const { source, into } = merged.inverse;
       journal.title = `Свойства слиты: ${source} → ${into}`;
       journal.operations.push({
@@ -3365,9 +3364,14 @@ async function prepareModuleSet(ctx: ExecCtx, rawInput: unknown): Promise<Prepar
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       // Прежнее состояние читается ЗДЕСЬ, под уже взятым замком реестра: inverse обязан
       // вернуть то, что было, а не «обратное входу» — повтор выключения иначе включил бы.
-      const before = await disabledModulesOf(applyCtx.tx, applyCtx.req.actorUserId);
+      const before = await disabledModulesOf(applyCtx.tx, applyCtx.req.identity.graph);
       const wasEnabled = !before.includes(input.module);
-      await setModuleDisabled(applyCtx.tx, applyCtx.req.actorUserId, input.module, !input.enabled);
+      await setModuleDisabled(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input.module,
+        !input.enabled,
+      );
       journal.operations.push({ op: 'module_set', payload: { ...input } });
       journal.inverse.push({
         op: 'module_set',
@@ -3388,8 +3392,8 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const before = await readAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect);
-      await setAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect, input.delta);
+      const before = await readAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
+      await setAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect, input.delta);
       journal.operations.push({ op: 'aspect_delta_set', payload: { ...input } });
       // Отмена настройки — это ПРЕЖНЯЯ настройка, а если её не было — снятие. Обе формы
       // выражаются существующими операциями: своей обратной у дельты нет и не нужно.
@@ -3413,8 +3417,8 @@ async function prepareAspectDeltaRemove(_ctx: ExecCtx, rawInput: unknown): Promi
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const before = await readAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect);
-      await removeAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect);
+      const before = await readAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
+      await removeAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
       journal.operations.push({ op: 'aspect_delta_remove', payload: { ...input } });
       if (before !== null) {
         journal.inverse.push({
@@ -3439,7 +3443,7 @@ async function prepareAspectCreate(_ctx: ExecCtx, rawInput: unknown): Promise<Pr
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const created = await createAspect(
         applyCtx.tx,
-        applyCtx.req.actorUserId,
+        applyCtx.req.identity.graph,
         input as CreateAspectInput,
       );
       journal.operations.push({ op: 'aspect_create', payload: { ...input, id: created.id } });
@@ -3459,7 +3463,7 @@ async function prepareAspectImplementsSet(_ctx: ExecCtx, rawInput: unknown): Pro
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const owner = applyCtx.req.actorUserId;
+      const owner = applyCtx.req.identity.graph;
       // Прежняя строка читается ЗДЕСЬ, а не по снимку исполнителя: снимок снят до стадий, и
       // аспект, заведённый предыдущей операцией той же пачки, в нём отсутствует.
       const before = await readOwnAspect(applyCtx.tx, owner, input.aspect);
@@ -3489,7 +3493,7 @@ async function prepareAspectImplementsRemove(
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const owner = applyCtx.req.actorUserId;
+      const owner = applyCtx.req.identity.graph;
       const before = await readOwnAspect(applyCtx.tx, owner, input.aspect);
       await removeAspectImplements(applyCtx.tx, owner, input.aspect, input.contract);
       journal.operations.push({ op: 'aspect_implements_remove', payload: { ...input } });
@@ -3527,7 +3531,7 @@ async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const graphId = applyCtx.req.actorUserId;
+      const graphId = applyCtx.req.identity.graph;
       const current = await readSubscriptionRow(applyCtx.tx, graphId, input.id);
       if (input.id.startsWith('user/')) {
         const occupied = await readSurfaceOwner(applyCtx.tx, graphId, input.surface, input.id);
@@ -3607,7 +3611,7 @@ const OWN_SUBSCRIPTION_RANK = 1000;
 /** Кто ещё описывает эту поверхность (кроме самого адресата) — id или null. */
 async function readSurfaceOwner(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   surface: string,
   exceptId: string,
 ): Promise<string | null> {
@@ -3638,7 +3642,7 @@ async function prepareSubscriptionRemove(_ctx: ExecCtx, rawInput: unknown): Prom
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const graphId = applyCtx.req.actorUserId;
+      const graphId = applyCtx.req.identity.graph;
       const current = await readSubscriptionRow(applyCtx.tx, graphId, input.id);
       journal.operations.push({ op: 'subscription_remove', payload: { ...input } });
       if (input.id.startsWith('user/')) {
@@ -3686,8 +3690,12 @@ async function prepareContractSetsDeltaSet(_ctx: ExecCtx, rawInput: unknown): Pr
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const before = await readContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract);
-      await setContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract, {
+      const before = await readContractDelta(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input.contract,
+      );
+      await setContractDelta(applyCtx.tx, applyCtx.req.identity.graph, input.contract, {
         setsDelta: input.setsDelta,
       });
       journal.operations.push({ op: 'contract_sets_delta_set', payload: { ...input } });
@@ -3718,8 +3726,12 @@ async function prepareContractSetsDeltaRemove(
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const before = await readContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract);
-      await removeContractDelta(applyCtx.tx, applyCtx.req.actorUserId, input.contract);
+      const before = await readContractDelta(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        input.contract,
+      );
+      await removeContractDelta(applyCtx.tx, applyCtx.req.identity.graph, input.contract);
       journal.operations.push({ op: 'contract_sets_delta_remove', payload: { ...input } });
       if (before !== null) {
         journal.inverse.push({
@@ -3754,7 +3766,7 @@ async function prepareAspectRowRestore(_ctx: ExecCtx, rawInput: unknown): Promis
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       await restoreAspectRow(
         applyCtx.tx,
-        applyCtx.req.actorUserId,
+        applyCtx.req.identity.graph,
         input.id,
         (input.row ?? null) as AspectRow | null,
       );
@@ -3775,7 +3787,7 @@ async function preparePropertyRowRestore(_ctx: ExecCtx, rawInput: unknown): Prom
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       await restorePropertyRow(
         applyCtx.tx,
-        applyCtx.req.actorUserId,
+        applyCtx.req.identity.graph,
         input.id,
         (input.row ?? null) as PropertyRow | null,
       );
@@ -3794,7 +3806,7 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      await undoMerge(applyCtx.tx, applyCtx.req.actorUserId, input as unknown as MergeInverse);
+      await undoMerge(applyCtx.tx, applyCtx.req.identity.graph, input as unknown as MergeInverse);
       return {
         result: {
           source: input.source,

@@ -24,6 +24,7 @@ import {
   appDb,
   entityColumns,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -53,7 +54,12 @@ const controlId = newId();
 const envelopeId = newId();
 const batchId = newId();
 
-const caller = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+const caller = createCaller({
+  identity: personal(user),
+  actorKind: 'owner',
+  db,
+  clientVersion: null,
+});
 
 function makeRow(o: {
   occurredOn: string;
@@ -203,7 +209,7 @@ async function assertUndoneState(): Promise<void> {
 
 beforeAll(async () => {
   await truncateAll();
-  await seedOwnerGraph(db, user);
+  await seedOwnerGraph(db, personal(user));
 
   // Подготовка МИМО executor и журнала (raw-вставки, как seedOnboarding): журнал
   // владельца должен содержать РОВНО ОДИН action — импорт, иначе второй undoLast
@@ -213,7 +219,7 @@ beforeAll(async () => {
   //   • envelope — конверт «Еда» на май: хук A4 привяжет созданные транзакции,
   //     и undo обязан снять привязки вместе со всей группой.
   const now = new Date();
-  await withIdentity(db, user, async (tx) =>
+  await withIdentity(db, personal(user), async (tx) =>
     tx.insert(entities).values([
       {
         id: adoptTargetId,
@@ -329,7 +335,7 @@ describe('Undo импорта сквозным путём: журнал → inve
     // undoLast, а не undoAction: «отмени последнее» из чата идёт именно сканом журнала
     // с конца (ai.undoLast — обёртка над ним), без знания actionId. Это и есть
     // пользовательский путь, который таск обязан проверить.
-    const u = ok(await undoLast(db, { actorUserId: user }));
+    const u = ok(await undoLast(db, { identity: personal(user) }));
     expect(u.actionId).toBe(actionId);
   }, 20_000);
 
@@ -339,11 +345,11 @@ describe('Undo импорта сквозным путём: журнал → inve
 
   test('повторный undo отклонён и состояние не меняет', async () => {
     // Скан с конца: неотменённых действий в журнале больше нет
-    const again = err(await undoLast(db, { actorUserId: user }));
+    const again = err(await undoLast(db, { identity: personal(user) }));
     expect(again.error.code).toBe('NOT_FOUND');
 
     // Точечный повтор ТОГО ЖЕ action — тоже отказ («уже отменено», §7.8)
-    const targeted = err(await undoAction(db, { actorUserId: user, actionId }));
+    const targeted = err(await undoAction(db, { identity: personal(user), actionId }));
     expect(targeted.error.code).toBe('VALIDATION');
 
     // Состояние из п.4 не изменилось

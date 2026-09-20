@@ -14,6 +14,7 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import type { Identity } from '../identity';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -23,7 +24,8 @@ const sink = makeChatJournalSink();
 
 export interface PostDueDeps {
   db: Db;
-  graphId: string;
+  /** Пара «актор + текущий граф» (D44): переход «план → факт» пишет сервер от имени владельца. */
+  identity: Identity;
   /** «Сегодня» — локальная дата пользователя (user_settings.timezone), 'YYYY-MM-DD'. */
   today: string;
 }
@@ -36,7 +38,7 @@ export interface PostDueDeps {
  * posted — число реально применённых переходов (replay не считается).
  */
 export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: number }> {
-  const { db, graphId, today } = deps;
+  const { db, identity, today } = deps;
   if (!DATE_RE.test(today)) {
     throw new RangeError(`Некорректная дата today (ожидается YYYY-MM-DD): "${today}"`);
   }
@@ -50,10 +52,10 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
   // старой карты они уходили вместе с аспектом. Без него сущность, переставшая быть
   // операцией, получала бы системный переход «план → факт» и привязку к конверту.
   // Форма `planned` — единая на систему (РП-9): «отсутствие = false».
-  const due = await withIdentity(db, graphId, async (tx) => {
+  const due = await withIdentity(db, identity, async (tx) => {
     const rows = (await tx.execute(sql`
       SELECT e.id FROM entities e
-      WHERE e.graph_id = ${graphId} AND NOT e.archived
+      WHERE e.graph_id = ${identity.graph} AND NOT e.archived
         AND 'orbis/financial' = ANY(e.aspects)
         AND coalesce((e.props->>'orbis/planned')::boolean, false) = true
         AND e.props->>'orbis/occurred_on' <= ${today}
@@ -74,7 +76,7 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
     const r = await execute(
       db,
       {
-        actorUserId: graphId,
+        identity,
         actorKind: 'owner',
         source: 'system',
         // Механизм — материализация (§А4-4): переход «план → факт» делает сервер по сроку

@@ -38,23 +38,24 @@
 // ЖУРНАЛА У СЕВА НЕТ: синк не передаётся, `execute` берёт NOOP (решение 6 плана онбординга —
 // «15 audit-сообщений при регистрации это шум в ленте»). Побочное следствие важнее ленты:
 // сев не становится «последним действием», и `undo_last` не может снять мир владельца.
-import { ORBIS_NAMESPACE } from '@orbis/shared';
+import { type GraphId, ORBIS_NAMESPACE } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
+import type { Identity } from '../identity';
 import { SEED_CATEGORIES } from './categories';
 import { SEED_SMART_LISTS } from './smart-lists';
 
 // Формулы seed-слагов — серверная деталь (НЕ в shared): id порождается от graph_id
 // (workspace-scoped при введении workspace'ов, D11) и стабильного слага. uuid-библиотека
 // принимает (name, namespace) — обратный порядок к нотации PRD uuidv5(NS, name).
-export function seedCategoryId(graphId: string, slug: string): string {
+export function seedCategoryId(graphId: GraphId, slug: string): string {
   return uuidv5(`${graphId.toLowerCase()}:seed-category:${slug}`, ORBIS_NAMESPACE);
 }
 
-export function seedSmartListId(graphId: string, slug: string): string {
+export function seedSmartListId(graphId: GraphId, slug: string): string {
   return uuidv5(`${graphId.toLowerCase()}:seed-smartlist:${slug}`, ORBIS_NAMESPACE);
 }
 
@@ -104,10 +105,11 @@ export const WORLD_SEED_MECHANISM = 'seed' as const;
  */
 export async function seedOwnerWorld(
   db: Db,
-  graphId: string,
+  who: Identity,
   deps: SeedWorldDeps = {},
 ): Promise<SeedWorldResult> {
   const clock = deps.clock ?? (() => new Date());
+  const graphId = who.graph;
 
   const wanted = [
     ...SEED_CATEGORIES.map((c) => ({
@@ -144,7 +146,7 @@ export async function seedOwnerWorld(
 
   const missing = await missingIds(
     db,
-    graphId,
+    who,
     wanted.map((w) => w.id),
   );
   if (missing.size === 0) return { created: 0, skipped: wanted.length };
@@ -154,7 +156,7 @@ export async function seedOwnerWorld(
     .map((w) => ({ tool: 'entity_create', input: { id: w.id, ...w.input } }));
 
   const r = await execute(db, {
-    actorUserId: graphId,
+    identity: who,
     actorKind: 'owner',
     source: 'system',
     // `source: 'system'` (а не `'routine'`) — чтобы не включился `assertRoutineUntouchable`;
@@ -172,7 +174,7 @@ export async function seedOwnerWorld(
     // поломки: мир на месте — значит сев состоялся, просто не этой транзакцией.
     const stillMissing = await missingIds(
       db,
-      graphId,
+      who,
       wanted.map((w) => w.id),
     );
     if (stillMissing.size === 0) return { created: 0, skipped: wanted.length };
@@ -182,16 +184,16 @@ export async function seedOwnerWorld(
 }
 
 /** batchId пачки сева — детерминированный: повтор не заводит второго audit-сообщения. */
-function worldBatchId(graphId: string): string {
+function worldBatchId(graphId: GraphId): string {
   return uuidv5(`${graphId.toLowerCase()}:seed-world`, ORBIS_NAMESPACE);
 }
 
 /** Какие из перечисленных id ещё не существуют у владельца (одним запросом, под RLS). */
-async function missingIds(db: Db, graphId: string, ids: string[]): Promise<Set<string>> {
-  const rows = (await withIdentity(db, graphId, (tx) =>
+async function missingIds(db: Db, who: Identity, ids: string[]): Promise<Set<string>> {
+  const rows = (await withIdentity(db, who, (tx) =>
     tx.execute(sql`
       SELECT id::text AS id FROM entities
-       WHERE graph_id = ${graphId} AND id IN (${sql.join(
+       WHERE graph_id = ${who.graph} AND id IN (${sql.join(
          ids.map((id) => sql`${id}::uuid`),
          sql`, `,
        )})`),

@@ -7,10 +7,12 @@
 // транзакции к конвертам бюджет-хуком. Прямые вставки дали бы граф без связей, и замер
 // backlinks/overview мерил бы пустоту. Цена — батчи по BATCH_SIZE операций (не по одной
 // сущности), иначе сид становится самой долгой частью прогона.
+
+import type { GraphId } from '@orbis/shared';
 import { newId, ORBIS_NAMESPACE } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
-import { adminDb } from '../../test/helpers';
+import { adminDb, personal } from '../../test/helpers';
 import type { Db } from '../db/client';
 import { execute } from '../executor/executor';
 import { SEED_CATEGORIES } from '../seed/categories';
@@ -100,7 +102,7 @@ const INCOME_SLUGS = SEED_CATEGORIES.filter((c) => c.spendClass === null).map((c
  * Детерминирован по владельцу: тест адресует его, не получая id из сида (сигнатура
  * seedPerfFixture остаётся `Promise<void>`).
  */
-export function perfHubId(graphId: string): string {
+export function perfHubId(graphId: GraphId): string {
   return uuidv5(`${graphId.toLowerCase()}:perf-hub`, ORBIS_NAMESPACE);
 }
 
@@ -110,7 +112,7 @@ export function perfHubId(graphId: string): string {
  * тот замер в замер другой операции (чтение + расчёт прогресса) — с прежним названием,
  * прежним порогом и зелёным гейтом.
  */
-export function perfGoalId(graphId: string): string {
+export function perfGoalId(graphId: GraphId): string {
   return uuidv5(`${graphId.toLowerCase()}:perf-goal`, ORBIS_NAMESPACE);
 }
 
@@ -121,7 +123,7 @@ export function perfGoalId(graphId: string): string {
  * `entity.create` прошёл бы, просто не нашёл конверт, и замер молча съехал бы на более
  * дешёвый путь (без привязки) при зелёном гейте.
  */
-export function perfEnvelopeCategoryId(graphId: string): string {
+export function perfEnvelopeCategoryId(graphId: GraphId): string {
   const slug = EXPENSE_SLUGS[0];
   if (!slug) throw new Error('perf-фикстура: в сиде не осталось расходных категорий');
   return seedCategoryId(graphId, slug);
@@ -150,11 +152,11 @@ function monthEnd(date: string): string {
 
 type Op = { tool: string; input: unknown };
 
-async function runBatches(db: Db, graphId: string, ops: Op[]): Promise<void> {
+async function runBatches(db: Db, graphId: GraphId, ops: Op[]): Promise<void> {
   for (let i = 0; i < ops.length; i += BATCH_SIZE) {
     const chunk = ops.slice(i, i + BATCH_SIZE);
     const r = await execute(db, {
-      actorUserId: graphId,
+      identity: personal(graphId),
       actorKind: 'owner',
       source: 'ui',
       operations: chunk,
@@ -179,8 +181,8 @@ const PRIORITIES = ['low', 'medium', 'high'] as const;
  * месяц бюджета) резолвятся сервером по ней же, фиксированные даты сделали бы фикстуру
  * протухающей.
  */
-export async function seedPerfFixture(db: Db, graphId: string): Promise<void> {
-  await seedOwnerGraph(db, graphId);
+export async function seedPerfFixture(db: Db, graphId: GraphId): Promise<void> {
+  await seedOwnerGraph(db, personal(graphId));
 
   const today = todayInSeedTz();
   const curStart = monthStart(today);

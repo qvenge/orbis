@@ -40,7 +40,7 @@ export const aiRouter = router({
     .mutation(async ({ ctx, input }): Promise<SendMessageResult> => {
       try {
         return await sendMessage(ctx.db, ctx.ai ?? defaultAiDeps(), {
-          graphId: ctx.actorUserId,
+          identity: ctx.identity,
           ...input,
         });
       } catch (e) {
@@ -54,7 +54,7 @@ export const aiRouter = router({
     .input(z.object({ actionId: z.string().uuid() }).strict())
     .mutation(async ({ ctx, input }): Promise<ExecuteOk> => {
       const r = await undoAction(ctx.db, {
-        actorUserId: ctx.actorUserId,
+        identity: ctx.identity,
         actionId: input.actionId,
       });
       if (!r.ok) throw execErrorToTRPC(r.error);
@@ -63,7 +63,7 @@ export const aiRouter = router({
 
   /** «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. */
   undoLast: ownerOnlyProcedure.mutation(async ({ ctx }): Promise<ExecuteOk> => {
-    const r = await undoLast(ctx.db, { actorUserId: ctx.actorUserId });
+    const r = await undoLast(ctx.db, { identity: ctx.identity });
     if (!r.ok) throw execErrorToTRPC(r.error);
     return r;
   }),
@@ -77,7 +77,7 @@ export const aiRouter = router({
     .input(pendingIdInput)
     .mutation(async ({ ctx, input }): Promise<ExecuteOk> => {
       const r = await approvePending(ctx.db, {
-        graphId: ctx.actorUserId,
+        identity: ctx.identity,
         pendingId: input.pendingId,
       });
       if (!r.ok) throw execErrorToTRPC(r.error);
@@ -93,7 +93,7 @@ export const aiRouter = router({
    */
   reject: ownerOnlyProcedure.input(pendingIdInput).mutation(async ({ ctx, input }) => {
     const r = await rejectPending(ctx.db, {
-      graphId: ctx.actorUserId,
+      identity: ctx.identity,
       pendingId: input.pendingId,
     });
     if (!r.ok) throw execErrorToTRPC(r.error);
@@ -127,7 +127,7 @@ export const aiRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await declineRuleSuggestion(ctx.db, { graphId: ctx.actorUserId, ...input });
+        return await declineRuleSuggestion(ctx.db, { identity: ctx.identity, ...input });
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;

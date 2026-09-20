@@ -27,6 +27,7 @@
 //  — четыре писателя, идущих ЧЕРЕЗ `execute` и потому покрытых хуком: `import/review.ts`,
 //    `recurring/post-due.ts`, `recurring/materialize.ts`, `budget/plan-to-fact.ts`.
 // Пятый путь — суточная граница, и её закрывает не писатель, а КЛЮЧ `(envelope_id, as_of)`.
+import type { GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistryVersions } from '../registry/version';
@@ -56,7 +57,7 @@ export function spentCacheKey(key: SpentCacheKey): string {
  */
 export async function readSpentCache(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   keys: readonly SpentCacheKey[],
   versions: SpentCacheVersions,
 ): Promise<Map<string, string>> {
@@ -84,7 +85,7 @@ export async function readSpentCache(
  */
 export async function writeSpentCache(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   rows: readonly (SpentCacheKey & { spent: string })[],
   versions: SpentCacheVersions,
 ): Promise<void> {
@@ -108,7 +109,7 @@ export async function writeSpentCache(
 /** Снос ВСЕХ дней перечисленных конвертов: пересчёт ленивый — посчитает первый читатель. */
 export async function invalidateSpentCache(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   envelopeIds: readonly string[],
 ): Promise<void> {
   if (envelopeIds.length === 0) return;
@@ -127,7 +128,7 @@ export async function invalidateSpentCache(
  * неполную модель того, что операция сделала; снос владельца стоит одного ленивого пересчёта
  * (сорок конвертов месяца — один SQL).
  */
-export async function invalidateSpentCacheOfOwner(tx: Tx, graphId: string): Promise<void> {
+export async function invalidateSpentCacheOfOwner(tx: Tx, graphId: GraphId): Promise<void> {
   await tx.execute(sql`DELETE FROM envelope_spent_cache WHERE graph_id = ${graphId}`);
 }
 
@@ -145,7 +146,7 @@ export async function invalidateSpentCacheOfOwner(tx: Tx, graphId: string): Prom
  */
 export async function bumpSpentCache(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   envelopeId: string,
   delta: string,
   asOf: string,

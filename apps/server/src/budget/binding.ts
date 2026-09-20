@@ -5,6 +5,7 @@
 // period_start, (3) меньший UUID. Вызывается executor'ом ПОСЛЕ применения породившей
 // операции тем же tx: SQL видит фактическое состояние (включая операции того же batch),
 // а дописанные операции входят в тот же action журнала → Undo откатывает целиком.
+import type { GraphId } from '@orbis/shared';
 import { eq, type SQL, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -40,7 +41,7 @@ const PROP_PERIOD_END = 'orbis/period_end';
 const FALLBACK_CURRENCY = 'RUB';
 
 /** Дефолтная валюта владельца ($defCur селектора §2.3) — user_settings.defaultCurrency. */
-export async function defaultCurrencyOf(tx: Tx, graphId: string): Promise<string> {
+export async function defaultCurrencyOf(tx: Tx, graphId: GraphId): Promise<string> {
   const rows = await tx
     .select({ currency: userSettings.defaultCurrency })
     .from(userSettings)
@@ -76,7 +77,7 @@ export interface EnvelopeQuery extends EnvelopeCombination {
 export async function selectEnvelopes(
   tx: Tx,
   args: {
-    graphId: string;
+    graphId: GraphId;
     /** Уже разрезолвленная дефолтная валюта ($defCur §2.3) — один читатель на набор. */
     defaultCurrency: string;
     rows: readonly EnvelopeQuery[];
@@ -131,7 +132,7 @@ const SINGLE_KEY = 'single';
 export async function selectEnvelope(
   tx: Tx,
   args: {
-    graphId: string;
+    graphId: GraphId;
     categoryRef: string;
     currency: string;
     occurredOn: string;
@@ -170,7 +171,7 @@ export async function selectEnvelope(
  */
 export async function normalizeEnvelopeCurrency(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   props: Record<string, unknown>,
 ): Promise<void> {
   if (props[PROP_CURRENCY] === undefined || props[PROP_CURRENCY] === null) {
@@ -303,7 +304,7 @@ function combinationOf(
   };
 }
 
-function envelopeCacheKey(graphId: string, c: EnvelopeCombination): string {
+function envelopeCacheKey(graphId: GraphId, c: EnvelopeCombination): string {
   return JSON.stringify([graphId, c.categoryRef, c.currency, c.occurredOn]);
 }
 
@@ -333,7 +334,7 @@ export class BindingReads {
   constructor(readonly contour: BudgetContour) {}
 
   /** user_settings.defaultCurrency владельца — один раз за исполнение. */
-  async defaultCurrency(tx: Tx, graphId: string): Promise<string> {
+  async defaultCurrency(tx: Tx, graphId: GraphId): Promise<string> {
     const cached = this.currencies.get(graphId);
     if (cached !== undefined) return cached;
     const value = await defaultCurrencyOf(tx, graphId);
@@ -344,7 +345,7 @@ export class BindingReads {
   /** Победитель селектора для комбинации (§2.3). */
   async envelopeOf(
     tx: Tx,
-    args: { graphId: string; defaultCurrency: string; combination: EnvelopeCombination },
+    args: { graphId: GraphId; defaultCurrency: string; combination: EnvelopeCombination },
   ): Promise<string | null> {
     await this.loadEnvelopes(tx, args.graphId, args.defaultCurrency, [args.combination]);
     return this.envelopes.get(envelopeCacheKey(args.graphId, args.combination)) ?? null;
@@ -359,7 +360,7 @@ export class BindingReads {
   /** Прогрев на весь набор целей: ≤3 запроса независимо от размера набора. */
   async prefetch(
     tx: Tx,
-    args: { graphId: string; targets: readonly BindingTarget[] },
+    args: { graphId: GraphId; targets: readonly BindingTarget[] },
   ): Promise<void> {
     const combinations: EnvelopeCombination[] = [];
     const txnIds: string[] = [];
@@ -386,7 +387,7 @@ export class BindingReads {
 
   private async loadEnvelopes(
     tx: Tx,
-    graphId: string,
+    graphId: GraphId,
     defaultCurrency: string,
     combinations: readonly EnvelopeCombination[],
   ): Promise<void> {
@@ -419,7 +420,7 @@ export class BindingReads {
 async function targetBindingOps(
   tx: Tx,
   reads: BindingReads,
-  graphId: string,
+  graphId: GraphId,
   target: BindingTarget,
   /** Уже разрезолвленная дефолтная валюта — чтобы не перечитывать user_settings в циклах. */
   defaultCurrency?: string,
@@ -489,7 +490,7 @@ async function targetBindingOps(
  */
 export async function bindingOps(
   tx: Tx,
-  args: { graphId: string; entity: WireEntity; contour: BudgetContour; reads?: BindingReads },
+  args: { graphId: GraphId; entity: WireEntity; contour: BudgetContour; reads?: BindingReads },
 ): Promise<BudgetOpDesc[]> {
   const target = bindingTargetOf(args.entity, args.contour);
   if (target === null) return [];
@@ -508,7 +509,7 @@ export async function bindingOps(
  */
 export async function unbindOps(
   tx: Tx,
-  args: { graphId: string; entityId: string; contour: BudgetContour; reads?: BindingReads },
+  args: { graphId: GraphId; entityId: string; contour: BudgetContour; reads?: BindingReads },
 ): Promise<BudgetOpDesc[]> {
   return targetBindingOps(tx, args.reads ?? new BindingReads(args.contour), args.graphId, {
     txnId: args.entityId,
@@ -556,7 +557,7 @@ function sideOf(contour: BudgetContour, entity: WireEntity | null): RebindSide |
 export async function rebindForEnvelope(
   tx: Tx,
   args: {
-    graphId: string;
+    graphId: GraphId;
     envelope: WireEntity;
     before: WireEntity | null;
     contour: BudgetContour;
@@ -684,9 +685,9 @@ function envelopeCombinationMatches(
  * ровно в тот день, когда роли привязки припишут `acyclic` (или владелец заведёт свою роль
  * с таким же id — Задача 15). Сегодня замок берут два места, и оба зовут эту функцию.
  */
-export async function lockOwnerBudget(tx: Tx, graphId: string): Promise<void> {
+export async function lockOwnerBudget(tx: Tx, graph: GraphId): Promise<void> {
   await tx.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graphId}:envelope_unique`}, 0))`,
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graph}:envelope_unique`}, 0))`,
   );
 }
 
@@ -709,7 +710,7 @@ export async function lockOwnerBudget(tx: Tx, graphId: string): Promise<void> {
 export async function assertEnvelopeUnique(
   tx: Tx,
   args: {
-    graphId: string;
+    graphId: GraphId;
     entityId: string;
     props: Record<string, unknown>;
     virtualEntities?: ReadonlyMap<string, EnvelopeRowLike>;

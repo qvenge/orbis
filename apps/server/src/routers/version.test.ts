@@ -3,11 +3,20 @@
 // Роутер — только трансляция: pin/restore идут через executor (единственный путь мутаций,
 // 00-arch §4), list читает под RLS. Против живой БД, caller как в бою (createCallerFactory).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -17,8 +26,8 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 /** Caller от лица владельца: ctx как в бою (§9.1); clientVersion=null — гейт версии пропускает. */
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 /** Ошибка вызова процедуры — TRPCError, с внятным падением при неожиданном успехе. */

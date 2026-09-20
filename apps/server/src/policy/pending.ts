@@ -37,6 +37,7 @@ import {
   batchAuditMessageId,
   batchExecuteInput,
   canonicalJson,
+  type GraphId,
   newId,
   pendingMessageId,
   QUESTION_MAX,
@@ -57,6 +58,7 @@ import { ExecError, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, ExecuteResult } from '../executor/types';
+import type { Identity } from '../identity';
 import type { Card } from '../tools/registry';
 import type { ConfirmationLevel } from './confirmation';
 
@@ -205,7 +207,12 @@ const pendingRecord = z
 export type PendingRecord = z.infer<typeof pendingRecord>;
 
 export interface PendingActor {
-  userId: string; // владелец графа (D11)
+  /**
+   * Ключ ГРАФА, а не аккаунта (D44), несмотря на имя: из него считаются `pendingMessageId`
+   * и глобальный тред карточки. Имя поля — ключ ЗАПИСАННОГО json'а (`metadata.pending.actor`),
+   * и переименование сменило бы форму уже лежащих в проде строк, а не только тип.
+   */
+  userId: GraphId;
   /** `system` — единица, поставленная самой системой (см. `createSystemPending`). */
   kind: ActorKind | 'system';
   source: 'chat' | 'mcp' | 'routine' | 'system';
@@ -432,7 +439,7 @@ export async function createPending(
 export async function createSystemPending(
   tx: Tx,
   args: {
-    graphId: string;
+    graphId: GraphId;
     /** Тред карточки; нет → глобальный тред владельца (§А3-3 требует именно его). */
     threadId?: string;
     tool: string;
@@ -713,7 +720,7 @@ interface MergeConflictDetails {
  */
 export async function reportMergeConflictUnit(
   db: Db,
-  graphId: string,
+  who: Identity,
   error: StructuredError,
 ): Promise<void> {
   if (error.code !== 'REGISTRY_CONFLICT') return;
@@ -728,9 +735,9 @@ export async function reportMergeConflictUnit(
 
   const named = ids.slice(0, NAMED_IN_SUMMARY).join(', ');
   const tail = ids.length > NAMED_IN_SUMMARY ? ` и ещё ${ids.length - NAMED_IN_SUMMARY}` : '';
-  await withIdentity(db, graphId, (tx) =>
+  await withIdentity(db, who, (tx) =>
     createSystemPending(tx, {
-      graphId,
+      graphId: who.graph,
       tool: 'property_merge',
       input: { source, into },
       summary:
@@ -765,10 +772,10 @@ export async function reportMergeConflictUnit(
  */
 export async function approvePending(
   db: Db,
-  args: { graphId: string; pendingId: string; clock?: () => Date },
+  args: { identity: Identity; pendingId: string; clock?: () => Date },
 ): Promise<ExecuteResult> {
   try {
-    const found = await withIdentity(db, args.graphId, async (tx) => {
+    const found = await withIdentity(db, args.identity, async (tx) => {
       const msg = await findPendingMessage(tx, args.pendingId);
       if (!msg) {
         throw new ExecError('NOT_FOUND', `pending-подтверждение ${args.pendingId} не найдено`, {
@@ -792,7 +799,7 @@ export async function approvePending(
     const r = await execute(
       db,
       {
-        actorUserId: args.graphId,
+        identity: args.identity,
         // СИСТЕМНАЯ единица исполняется ОТ ВЛАДЕЛЬЦА, и это развилка, а не приведение
         // типов. `system` в записи отвечает на вопрос «кто поставил» — конфликт слияния
         // поставить некому. Запись же делает рука владельца, нажавшая «Принять», и журнал
@@ -839,7 +846,7 @@ export async function approvePending(
     // этой строки владелец, подтвердивший слияние карточкой, получал бы голый
     // REGISTRY_CONFLICT без единого следа причины. Функция безопасна на ЛЮБОМ отказе — не
     // тот код или не та причина, и она молча ничего не делает.
-    if (!r.ok) await reportMergeConflictUnit(db, args.graphId, r.error);
+    if (!r.ok) await reportMergeConflictUnit(db, args.identity, r.error);
 
     // Эскалация повторных исправлений (§7.8) — ВТОРАЯ точка вызова (уборочная фаза,
     // решение 4). Батч из 11+ операций classifyToolCall уводит в explicit-confirmation,
@@ -852,7 +859,7 @@ export async function approvePending(
     // внутри и не пробрасывает: правки уже закоммичены.
     if (r.ok && !r.idempotentReplay && found.pending.source === 'chat') {
       await escalateAfterMutation(db, {
-        graphId: args.graphId,
+        identity: args.identity,
         actionId: r.actionId,
         operations,
       });
@@ -876,7 +883,8 @@ export async function approvePending(
  * прогона). Повтор ничего не переписывает — журнал append-only, §4.6.
  */
 export interface RejectPendingArgs {
-  graphId: string;
+  /** Пара вызывающего: у tx-формы транзакция обязана быть открыта ПОД НЕЙ (см. докблок). */
+  identity: Identity;
   pendingId: string;
   reason?: RejectReason;
   text?: string;
@@ -921,10 +929,10 @@ export type RejectPendingResult =
  * предложение, обязан увидеть 'owner', а не своё 'superseded'.
  *
  * КОНТРАКТ ВЫЗЫВАТЕЛЯ:
- *  - tx открыт withIdentity(db, graphId) для ТОГО ЖЕ владельца. Проверка этого стоила бы
+ *  - tx открыт withIdentity(db, args.identity) — ПОД ТОЙ ЖЕ парой. Проверка этого стоила бы
  *    round-trip на каждый вызов, поэтому её нет: findPendingMessage/rejectedReason
  *    скоупит RLS по identity транзакции, а rejectMessageId/batchAuditMessageId считаются
- *    от args.graphId — рассинхрон дал бы отказ мимо цели. Тот же контракт у createPending.
+ *    от args.identity.graph — рассинхрон дал бы отказ мимо цели. Тот же контракт у createPending.
  *  - никакого чтения состояния этого pendingId в этой транзакции ДО вызова: замок берётся
  *    здесь, и прочитанное раньше — снапшот до захвата (тот самый write-skew). Вызывателю,
  *    которому состояние нужно раньше (лестница Ш1.5), — сначала acquirePendingLock.
@@ -947,7 +955,7 @@ export async function rejectPendingTx(
   // Гейт — в tx-форме, а не в обёртке: иначе мимо него прошли бы вызовы из открытых
   // транзакций (лестница правки Ш1, гашение пачки)
   assertNotQuestion(msg.pending);
-  const auditId = batchAuditMessageId(args.graphId, args.pendingId);
+  const auditId = batchAuditMessageId(args.identity.graph, args.pendingId);
   const executed = await tx
     .select({ id: chatMessages.id })
     .from(chatMessages)
@@ -969,7 +977,7 @@ export async function rejectPendingTx(
     };
   }
   await appendMessageIdempotent(tx, {
-    id: rejectMessageId(args.graphId, args.pendingId),
+    id: rejectMessageId(args.identity.graph, args.pendingId),
     threadId: msg.threadId,
     role: 'system',
     content: args.text ?? REJECT_CONTENT[reason],
@@ -998,7 +1006,7 @@ export async function rejectPendingTx(
  */
 export async function rejectPending(db: Db, args: RejectPendingArgs): Promise<RejectPendingResult> {
   try {
-    const r = await withIdentity(db, args.graphId, (tx) => rejectPendingTx(tx, args));
+    const r = await withIdentity(db, args.identity, (tx) => rejectPendingTx(tx, args));
     return { ok: true, ...r };
   } catch (e) {
     if (e instanceof ExecError) {
@@ -1046,7 +1054,7 @@ interface QuestionFates {
  */
 async function readQuestionFates(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   pendingId: string,
 ): Promise<QuestionFates> {
   const answerId = answerMessageId(graphId, pendingId);
@@ -1114,9 +1122,9 @@ export type AnswerQuestionResult =
  */
 export async function answerPendingQuestion(
   db: Db,
-  args: { graphId: string; pendingId: string; answer: string; option?: number },
+  args: { identity: Identity; pendingId: string; answer: string; option?: number },
 ): Promise<AnswerQuestionResult> {
-  return withIdentity(db, args.graphId, async (tx): Promise<AnswerQuestionResult> => {
+  return withIdentity(db, args.identity, async (tx): Promise<AnswerQuestionResult> => {
     await acquirePendingLock(tx, args.pendingId); // до первого чтения состояния
     const msg = await findPendingMessage(tx, args.pendingId);
     if (!msg) {
@@ -1127,7 +1135,7 @@ export async function answerPendingQuestion(
       });
     }
     assertQuestion(msg.pending); // род записи неизменяем — перепроверять под замком нечего
-    const fates = await readQuestionFates(tx, args.graphId, args.pendingId);
+    const fates = await readQuestionFates(tx, args.identity.graph, args.pendingId);
     if (fates.answer !== undefined) {
       if (fates.answer === args.answer) return { status: 'answered', pendingId: args.pendingId };
       // `null` — сообщение ответа без текста (запись мимо процедуры): показать нечего,
@@ -1136,7 +1144,7 @@ export async function answerPendingQuestion(
     }
     if (fates.staled === true) return { status: 'stale' };
     await appendMessageIdempotent(tx, {
-      id: answerMessageId(args.graphId, args.pendingId),
+      id: answerMessageId(args.identity.graph, args.pendingId),
       threadId: msg.threadId, // тред карточки-запроса: ответ ложится в ту же ленту
       role: 'user',
       content: `Ответ: «${args.answer}»`,
@@ -1176,9 +1184,9 @@ export async function answerPendingQuestion(
  */
 export async function stalePendingQuestion(
   db: Db,
-  args: { graphId: string; pendingId: string; text: string },
+  args: { identity: Identity; pendingId: string; text: string },
 ): Promise<{ staled: boolean }> {
-  return withIdentity(db, args.graphId, async (tx) => {
+  return withIdentity(db, args.identity, async (tx) => {
     await acquirePendingLock(tx, args.pendingId); // до первого чтения состояния
     const msg = await findPendingMessage(tx, args.pendingId);
     if (!msg) {
@@ -1187,10 +1195,10 @@ export async function stalePendingQuestion(
       });
     }
     assertQuestion(msg.pending);
-    const fates = await readQuestionFates(tx, args.graphId, args.pendingId);
+    const fates = await readQuestionFates(tx, args.identity.graph, args.pendingId);
     if (fates.answer !== undefined || fates.staled === true) return { staled: false };
     await appendMessageIdempotent(tx, {
-      id: questionStaleMessageId(args.graphId, args.pendingId),
+      id: questionStaleMessageId(args.identity.graph, args.pendingId),
       threadId: msg.threadId,
       role: 'system',
       content: args.text,
@@ -1261,7 +1269,7 @@ export interface RunUnit {
  * жевать решённое, а сверка `undecided` никогда не снимет флажок. Ошибки при этом нет
  * нигде — пин в `pending.test.ts` фиксирует именно этот исход.
  */
-export async function listRunUnits(tx: Tx, graphId: string, runId: string): Promise<RunUnit[]> {
+export async function listRunUnits(tx: Tx, graphId: GraphId, runId: string): Promise<RunUnit[]> {
   const asQuestion = JSON.stringify({ pending: { run_id: runId, kind: 'question' } });
   const asAction = JSON.stringify({ pending: { run_id: runId, kind: 'action' } });
   const rows = await tx.execute(

@@ -9,12 +9,14 @@
 // журнала «пересчитано N сущностей» — она пишется только самим движком и только когда он
 // действительно что-то пересчитал.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId, RULE_NEAREST_ANCESTOR } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import {
   appDb,
   executeWithFixtureCategories as execute,
   freshGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -52,9 +54,9 @@ function ok(r: ExecuteResult): ExecuteOk {
   return r;
 }
 
-function req(owner: string, tool: string, input: unknown, over: Partial<ExecuteRequest> = {}) {
+function req(owner: GraphId, tool: string, input: unknown, over: Partial<ExecuteRequest> = {}) {
   return {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner' as const,
     source: 'fast_path' as const,
     operations: [{ tool, input }],
@@ -71,7 +73,7 @@ function req(owner: string, tool: string, input: unknown, over: Partial<ExecuteR
 const AS_SYSTEM: Partial<ExecuteRequest> = { mechanism: 'seed' };
 
 async function createEntity(
-  owner: string,
+  owner: GraphId,
   input: Record<string, unknown>,
   over: Partial<ExecuteRequest> = {},
 ): Promise<WireEntity> {
@@ -79,7 +81,7 @@ async function createEntity(
   return r.results[0] as WireEntity;
 }
 
-async function project(owner: string, title: string): Promise<WireEntity> {
+async function project(owner: GraphId, title: string): Promise<WireEntity> {
   return createEntity(owner, {
     title,
     props: { 'orbis/project_stage': 'active' },
@@ -88,7 +90,7 @@ async function project(owner: string, title: string): Promise<WireEntity> {
 }
 
 async function relate(
-  owner: string,
+  owner: GraphId,
   sourceId: string,
   targetId: string,
   role: string,
@@ -105,8 +107,11 @@ async function relate(
 }
 
 /** Значения вычисляемых предков сущности прямо из строки (правда §А1-1 — `props`). */
-async function ancestorsOf(owner: string, id: string): Promise<{ parent: unknown; root: unknown }> {
-  return withIdentity(db, owner, async (tx) => {
+async function ancestorsOf(
+  owner: GraphId,
+  id: string,
+): Promise<{ parent: unknown; root: unknown }> {
+  return withIdentity(db, personal(owner), async (tx) => {
     const rows = await tx.select().from(entities).where(eq(entities.id, id));
     const props = (rows[0]?.props ?? {}) as Record<string, unknown>;
     return { parent: props['orbis/parent_project'], root: props['orbis/root_project'] };
@@ -114,8 +119,8 @@ async function ancestorsOf(owner: string, id: string): Promise<{ parent: unknown
 }
 
 /** Запись действия из БОЕВОГО журнала — там же её видит undo. */
-async function actionFromJournal(owner: string, actionId: string): Promise<ActionRecord> {
-  const rows = await withIdentity(db, owner, (tx) =>
+async function actionFromJournal(owner: GraphId, actionId: string): Promise<ActionRecord> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(
       sql`SELECT metadata FROM chat_messages
            WHERE metadata @> ${JSON.stringify({ actions: [{ id: actionId }] })}::jsonb
@@ -165,7 +170,7 @@ test('проект → подпроект → задача → подзадач�
     await execute(
       db,
       {
-        actorUserId: owner,
+        identity: personal(owner),
         actorKind: 'owner',
         source: 'fast_path',
         batchId: newId(),
@@ -243,7 +248,7 @@ test('имя правила в журнале — то же, что во flags.c
   const sink = new InMemoryJournalSink();
   await relate(owner, p.id, task.id, 'subitem', {}, sink);
 
-  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   const fromRegistry = reg.properties.get('orbis/parent_project')?.flags.computed?.rule;
   // Отсутствие флага — это НЕ «правило не задано», а сломанный сид: без него движок не
   // объявлен вовсе. Проверяем строкой, а не `?.`, иначе тест был бы зелен на пустом реестре.
@@ -324,7 +329,7 @@ test('undo relation_create иерархического ребра: parent_proje
   expect(action.operations.filter((op) => op.op === 'props_recomputed')).toHaveLength(1);
   expect(action.inverse.some((op) => op.op === 'props_recomputed')).toBe(false);
 
-  ok(await undoAction(db, { actorUserId: owner, actionId: created.actionId }));
+  ok(await undoAction(db, { identity: personal(owner), actionId: created.actionId }));
   // Ребра больше нет — предка тоже: свойство СНЯТО, а не оставлено висеть
   expect(await ancestorsOf(owner, task.id)).toEqual({ parent: undefined, root: undefined });
 });
@@ -368,7 +373,7 @@ test('чужое поддерево пересчёт не трогает (RLS)',
   // Ребро от моего проекта к чужой сущности не создать (RLS) — проба идёт с другого конца:
   // чужая строка обязана остаться без вычисленных предков
   expect(await ancestorsOf(stranger, alien.id)).toEqual({ parent: undefined, root: undefined });
-  const rows = await withIdentity(db, stranger, (tx) =>
+  const rows = await withIdentity(db, personal(stranger), (tx) =>
     tx.execute(sql`SELECT count(*)::int AS n FROM entities WHERE props ? 'orbis/parent_project'`),
   );
   expect((rows as unknown as Array<{ n: number }>)[0]?.n).toBe(0);

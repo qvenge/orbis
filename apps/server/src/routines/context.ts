@@ -16,7 +16,7 @@
 // Роль 'system' в messages ЗАПРЕЩЕНА (контракт провайдера — ai-sdk.ts бросает): и
 // история, и «сработала рутина» едут как 'user'. Инвариант «messages начинается с user»
 // здесь держится по построению — оба сообщения user.
-import type { ProposalStatus, RunOutcome, RunSummary } from '@orbis/shared';
+import type { GraphId, ProposalStatus, RunOutcome, RunSummary } from '@orbis/shared';
 import type { RoutineProps } from '../agent-loop/queries';
 import type { Tx } from '../db/with-identity';
 import {
@@ -91,7 +91,7 @@ export interface RoutineContextRoutine {
 }
 
 export interface BuildRoutineContextInput {
-  graphId: string;
+  graphId: GraphId;
   routine: RoutineContextRoutine;
   run: { id: string; bucket: string };
   history: RoutineHistoryItem[];

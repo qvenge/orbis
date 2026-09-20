@@ -8,9 +8,17 @@
 // операций реестра ещё нет (Задача 15), а инвариант §А10-1 уже есть, и фикстура обязана
 // ему подчиняться так же, как боевой писатель: кеш отличает «до» от «после» только версией.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { attachToolName, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  accountOf,
+  appDb,
+  freshGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
@@ -34,12 +42,12 @@ afterAll(async () => {
 
 /** Дельта + инкремент версии ОДНОЙ транзакцией — тот же путь, что у боевого писателя. */
 async function writeDelta(
-  graphId: string,
+  graphId: GraphId,
   targetKind: 'aspect' | 'property',
   targetId: string,
   delta: unknown,
 ): Promise<void> {
-  await withIdentity(db, graphId, async (tx) => {
+  await withIdentity(db, personal(graphId), async (tx) => {
     await insertDelta(tx, graphId, targetKind, targetId, delta);
     await bumpOwnerRegistryVersion(tx, graphId);
   });
@@ -47,7 +55,7 @@ async function writeDelta(
 
 async function insertDelta(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   targetKind: string,
   targetId: string,
   delta: unknown,
@@ -60,8 +68,8 @@ async function insertDelta(
     ON CONFLICT (graph_id, target_kind, target_id) DO UPDATE SET delta = EXCLUDED.delta`);
 }
 
-async function deltaCount(graphId: string): Promise<number> {
-  const rows = (await withIdentity(db, graphId, (tx) =>
+async function deltaCount(graphId: GraphId): Promise<number> {
+  const rows = (await withIdentity(db, personal(graphId), (tx) =>
     tx.execute(
       sql`SELECT count(*)::int AS n FROM registry_deltas WHERE graph_id = ${graphId}::uuid`,
     ),
@@ -69,15 +77,16 @@ async function deltaCount(graphId: string): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
-async function ownerVersion(graphId: string): Promise<number> {
-  return (await withIdentity(db, graphId, (tx) => readRegistryVersions(tx, graphId))).ownerVersion;
+async function ownerVersion(graphId: GraphId): Promise<number> {
+  return (await withIdentity(db, personal(graphId), (tx) => readRegistryVersions(tx, graphId)))
+    .ownerVersion;
 }
 
 describe('версия реестра — в той же транзакции, что мутация (§А10-1)', () => {
   test('дельта и инкремент видны ВМЕСТЕ: внутри своей tx обе правки уже на месте', async () => {
     const owner = await freshGraph();
     const before = await ownerVersion(owner);
-    const inside = await withIdentity(db, owner, async (tx) => {
+    const inside = await withIdentity(db, personal(owner), async (tx) => {
       await insertDelta(tx, owner, 'aspect', 'orbis/task', { label: { ru: 'Дело' } });
       const version = await bumpOwnerRegistryVersion(tx, owner);
       const reg = await effectiveRegistry(tx, owner);
@@ -92,7 +101,7 @@ describe('версия реестра — в той же транзакции, �
     const owner = await freshGraph();
     const before = await ownerVersion(owner);
     await expect(
-      withIdentity(db, owner, async (tx) => {
+      withIdentity(db, personal(owner), async (tx) => {
         await insertDelta(tx, owner, 'aspect', 'orbis/task', { label: { ru: 'Дело' } });
         await bumpOwnerRegistryVersion(tx, owner);
         throw new Error('падение после мутации реестра');
@@ -105,7 +114,7 @@ describe('версия реестра — в той же транзакции, �
   test('инкремент заводит строку настроек, если её не было: UPDATE не тронул бы ни одной', async () => {
     const owner = await freshGraph();
     expect(await ownerVersion(owner)).toBe(0); // строки user_settings ещё нет
-    await withIdentity(db, owner, (tx) => bumpOwnerRegistryVersion(tx, owner));
+    await withIdentity(db, personal(owner), (tx) => bumpOwnerRegistryVersion(tx, owner));
     expect(await ownerVersion(owner)).toBe(1);
   });
 });
@@ -114,61 +123,87 @@ describe('кеш эффективных определений (§А10-1)', () =
   test('второе чтение той же версии — попадание, чтение после мутации — промах и НОВЫЙ снимок', async () => {
     const owner = await freshGraph();
     const first = registryCacheStats();
-    const a = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const a = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     const afterFirst = registryCacheStats();
     expect(afterFirst.misses).toBe(first.misses + 1);
 
-    const b = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const b = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     expect(registryCacheStats().hits).toBe(afterFirst.hits + 1);
     // Тот же ОБЪЕКТ, а не равный: снимок отдаётся из кеша, а не пересобирается.
     expect(b).toBe(a);
 
     await writeDelta(owner, 'aspect', 'orbis/task', { label: { ru: 'Дело' } });
-    const c = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const c = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     expect(c).not.toBe(a);
     expect(a.aspects.get('orbis/task')?.label.ru).toBe('Задача');
     expect(c.aspects.get('orbis/task')?.label.ru).toBe('Дело');
+  });
+
+  test('ключ кеша реестра — ГРАФ: два актора одного графа делят снимок (D44)', async () => {
+    // Смысл пина: реестр принадлежит ГРАФУ, и работа в одном графе от разных аккаунтов
+    // обязана греть ОДИН снимок, а не по копии на человека. Проверяется на паре с РАЗНЫМИ
+    // значениями — она в Г-3 доступна только на чтение через `withIdentity` (RLS ещё
+    // старая, поэтому читаем не строки графа, а сам факт попадания в кеш).
+    const graph = await freshGraph();
+    const second = await freshGraph(); // второй АККАУНТ; его личный граф тут не при чём
+    await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
+    const hits = registryCacheStats().hits;
+    // Тот же ГРАФ, другой АКТОР: ключ кеша не изменился — попадание, а не промах.
+    await withIdentity(db, { actor: accountOf(second), graph }, (tx) =>
+      effectiveRegistry(tx, graph),
+    );
+    expect(registryCacheStats().hits).toBe(hits + 1);
+  });
+
+  test('сигнатура: снимок реестра нельзя снять по АККАУНТУ (спека Ш-2)', async () => {
+    const graph = await freshGraph();
+    await withIdentity(db, personal(graph), (tx) => {
+      // @ts-expect-error — AccountId на месте GraphId: компилятор обязан отказать
+      void (() => effectiveRegistry(tx, accountOf(graph)));
+      return Promise.resolve();
+    });
+    expect(true).toBe(true);
   });
 
   test('два владельца независимы: дельта одного не видна другому и не вытесняет его снимок', async () => {
     const mine = await freshGraph();
     const neighbour = await freshGraph();
     await writeDelta(mine, 'aspect', 'orbis/task', { label: { ru: 'Дело' } });
-    const a = await withIdentity(db, mine, (tx) => effectiveRegistry(tx, mine));
-    const b = await withIdentity(db, neighbour, (tx) => effectiveRegistry(tx, neighbour));
+    const a = await withIdentity(db, personal(mine), (tx) => effectiveRegistry(tx, mine));
+    const b = await withIdentity(db, personal(neighbour), (tx) => effectiveRegistry(tx, neighbour));
     expect(a.aspects.get('orbis/task')?.label.ru).toBe('Дело');
     expect(b.aspects.get('orbis/task')?.label.ru).toBe('Задача');
     // Соседский снимок читается из кеша и после чтения первого — ключи разные.
     const hits = registryCacheStats().hits;
-    await withIdentity(db, mine, (tx) => effectiveRegistry(tx, mine));
-    await withIdentity(db, neighbour, (tx) => effectiveRegistry(tx, neighbour));
+    await withIdentity(db, personal(mine), (tx) => effectiveRegistry(tx, mine));
+    await withIdentity(db, personal(neighbour), (tx) => effectiveRegistry(tx, neighbour));
     expect(registryCacheStats().hits).toBe(hits + 2);
   });
 
   test('размер кеша не растёт выше предела, а вытесненный владелец читается заново', async () => {
     const first = await freshGraph();
-    await withIdentity(db, first, (tx) => effectiveRegistry(tx, first));
+    await withIdentity(db, personal(first), (tx) => effectiveRegistry(tx, first));
     // Ещё REGISTRY_CACHE_LIMIT владельцев: первый обязан быть вытеснен как самый старый.
     for (let i = 0; i < REGISTRY_CACHE_LIMIT; i += 1) {
       const other = await freshGraph();
-      await withIdentity(db, other, (tx) => effectiveRegistry(tx, other));
+      await withIdentity(db, personal(other), (tx) => effectiveRegistry(tx, other));
     }
     expect(registryCacheStats().size).toBe(REGISTRY_CACHE_LIMIT);
     const misses = registryCacheStats().misses;
-    await withIdentity(db, first, (tx) => effectiveRegistry(tx, first));
+    await withIdentity(db, personal(first), (tx) => effectiveRegistry(tx, first));
     expect(registryCacheStats().misses).toBe(misses + 1);
   }, 60_000);
 
   test('транзакция, которая уже писала, кеш ОБХОДИТ — и не читает его, и не наполняет', async () => {
     const owner = await freshGraph();
     // Строка настроек нужна, чтобы запись ниже была именно UPDATE'ом, не меняющим версию.
-    await withIdentity(db, owner, (tx) => bumpOwnerRegistryVersion(tx, owner));
+    await withIdentity(db, personal(owner), (tx) => bumpOwnerRegistryVersion(tx, owner));
     // Прогрев: снимок этой версии в кеше есть.
-    await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     const before = registryCacheStats();
     const size = before.size;
 
-    await withIdentity(db, owner, async (tx) => {
+    await withIdentity(db, personal(owner), async (tx) => {
       // Запись, не трогающая реестр: транзакции выдаётся xid, версия остаётся прежней.
       await tx.execute(sql`UPDATE user_settings SET timezone = timezone
                            WHERE graph_id = ${owner}::uuid`);
@@ -187,14 +222,14 @@ describe('дельта видна сквозь реестр: тул и форм�
   test('скрытое дельтой поле исчезает из attach_task и из registry.effective, добавленное — появляется', async () => {
     const owner = await freshGraph();
     const caller = createCaller({
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       db,
       clientVersion: null,
     });
 
     const beforeTool = attachTaskProperties(
-      await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)),
+      await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner)),
     );
     expect(beforeTool).toContain('orbis/effort_min');
     expect(beforeTool).not.toContain('orbis/aliases');
@@ -207,7 +242,7 @@ describe('дельта видна сквозь реестр: тул и форм�
     });
 
     const afterTool = attachTaskProperties(
-      await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)),
+      await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner)),
     );
     expect(afterTool).not.toContain('orbis/effort_min');
     expect(afterTool).toContain('orbis/aliases');
@@ -220,7 +255,9 @@ describe('дельта видна сквозь реестр: тул и форм�
     expect(ids).not.toContain('orbis/effort_min');
     expect(ids).toContain('orbis/aliases');
     // Версия ответа сдвинулась вместе с дельтой — клиент получил повод перечитать снимок.
-    const versions = await withIdentity(db, owner, (tx) => readRegistryVersions(tx, owner));
+    const versions = await withIdentity(db, personal(owner), (tx) =>
+      readRegistryVersions(tx, owner),
+    );
     expect(wire.version).toBe(`${versions.systemVersion}.${versions.ownerVersion}`);
   });
 
@@ -230,7 +267,9 @@ describe('дельта видна сквозь реестр: тул и форм�
       label: { ru: 'Важность' },
       description: { ru: 'Насколько это срочно для меня' },
     });
-    const defs = buildToolDefs(await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)));
+    const defs = buildToolDefs(
+      await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner)),
+    );
     const data = attachTaskData(defs);
     const field = (data.properties as Record<string, { description?: string }>)['orbis/priority'];
     expect(field?.description).toContain('Насколько это срочно для меня');

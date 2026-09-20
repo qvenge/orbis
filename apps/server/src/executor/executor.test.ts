@@ -12,10 +12,12 @@ import {
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { sql } from 'drizzle-orm';
 import {
+  accountOf,
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -59,7 +61,7 @@ const T1 = new Date('2026-07-04T11:30:00.000Z');
 /** Одиночный вызов executor'а с дефолтами теста. */
 function req(tool: string, input: unknown, over: Partial<ExecuteRequest> = {}): ExecuteRequest {
   return {
-    actorUserId: userA,
+    identity: personal(userA),
     actorKind: 'owner',
     source: 'fast_path',
     operations: [{ tool, input }],
@@ -126,7 +128,7 @@ afterAll(async () => {
 
 describe('entitlements (стадия 4, план dev)', () => {
   test('resolveEntitlement: dev → всё разрешено без лимитов (§8, субъект параметром)', () => {
-    const r = resolveEntitlement(userA, 'entities.create');
+    const r = resolveEntitlement(accountOf(userA), 'entities.create');
     expect(r).toEqual({ allowed: true, limit: null });
   });
 });
@@ -155,7 +157,7 @@ describe('executor: entity_create', () => {
     expect(e.graphId).toBe(userA);
 
     // строка реально в БД (под RLS владельца)
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT title, tags, body_refs FROM entities WHERE id = ${e.id}`),
     );
     expect(rows[0]?.title).toBe('Кроссовки');
@@ -281,7 +283,7 @@ describe('executor: entity_create', () => {
 
     const foreign = await execute(
       db,
-      req('entity_create', { id, title: 'Чужая', tags: [] }, { actorUserId: userB }),
+      req('entity_create', { id, title: 'Чужая', tags: [] }, { identity: personal(userB) }),
     );
     expect(foreign.ok).toBe(false);
     if (!foreign.ok) {
@@ -480,7 +482,7 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
     ]);
     expect(a.ok).toBe(true);
     expect(b.ok).toBe(true);
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT props, aspects FROM entities WHERE id = ${e.id}`),
     );
     const stored = rows[0] as { props: Record<string, unknown>; aspects: string[] };
@@ -595,7 +597,7 @@ describe('executor: RLS и attach', () => {
     const e = firstEntity(created);
     const r = await execute(
       db,
-      req('entity_update', { id: e.id, title: 'Взлом' }, { actorUserId: userB }),
+      req('entity_update', { id: e.id, title: 'Взлом' }, { identity: personal(userB) }),
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('NOT_FOUND');
@@ -659,7 +661,7 @@ describe('executor: RLS и attach', () => {
 describe('ADE-срез 1: инварианты назначения и засев проекта', () => {
   /** Тело, реально легшее в БД (а не то, что вернул executor): засев проверяется на чтении. */
   async function bodyOf(id: string): Promise<string> {
-    const r = await withIdentity(db, userA, (tx) =>
+    const r = await withIdentity(db, personal(userA), (tx) =>
       readEntity(tx, userA, { id, include: ['body'] }),
     );
     return r.entity.body;
@@ -667,7 +669,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
 
   /** Обе формы тела: строка и документ — засев обязан заполнить ОБЕ. */
   async function bothFormsOf(id: string): Promise<{ body: string; bodyDoc: unknown }> {
-    const r = await withIdentity(db, userA, (tx) =>
+    const r = await withIdentity(db, personal(userA), (tx) =>
       readEntity(tx, userA, { id, include: ['body', 'bodyDoc'] }),
     );
     return { body: r.entity.body, bodyDoc: r.entity.bodyDoc ?? null };
@@ -708,7 +710,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
   });
 
   test('21. executor=agent с живым грантом владельца — ок; executor=human с grant_id → VALIDATION; отзыв гранта закрывает назначение', async () => {
-    const token = await issuePatGrant(db, { graphId: userA, label: 'исполнитель' });
+    const token = await issuePatGrant(db, { identity: personal(userA), label: 'исполнитель' });
     const identity = await verifyBearer(db, token);
     expect(identity).not.toBeNull();
     const grantId = identity?.grantId ?? '';
@@ -1010,7 +1012,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     expect(await bodyOf(e.id)).toBe(seededProjectBody(e.id));
 
     const actionId = (attached as ExecuteOk).actionId;
-    const undone = await undoAction(db, { actorUserId: userA, actionId });
+    const undone = await undoAction(db, { identity: personal(userA), actionId });
     expect(undone.ok).toBe(true);
     const after = firstEntity(undone);
     expect(after.aspects.includes('orbis/project')).toBe(false); // аспект снят
@@ -1054,7 +1056,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
 describe('ADE-срез 1: закреплённые версии тела (С11)', () => {
   /** id снимков сущности, свежие сверху — под identity владельца (RLS §4.10). */
   async function versionIdsOf(entityId: string): Promise<string[]> {
-    return withIdentity(db, userA, async (tx) => {
+    return withIdentity(db, personal(userA), async (tx) => {
       const rows = await tx.execute(
         sql`SELECT id FROM entity_versions WHERE entity_id = ${entityId}
             ORDER BY created_at DESC, id DESC`,
@@ -1066,7 +1068,7 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
   /** Action по id из журнала (§4.6): containment по GIN-индексу, как в undo.ts. */
   async function actionOf(actionId: string): Promise<ActionRecord> {
     const probe = JSON.stringify({ actions: [{ id: actionId }] });
-    return withIdentity(db, userA, async (tx) => {
+    return withIdentity(db, personal(userA), async (tx) => {
       const rows = await tx.execute(
         sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
       );
@@ -1108,7 +1110,7 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     expect(action.entity_id).toBe(e.id);
     expect(action.inverse).toEqual([{ op: 'entity_version_delete', payload: { id: v.id } }]);
 
-    const undone = await undoAction(db, { actorUserId: userA, actionId });
+    const undone = await undoAction(db, { identity: personal(userA), actionId });
     expect(undone.ok).toBe(true);
     expect(await versionIdsOf(e.id)).toEqual([]);
   });
@@ -1131,7 +1133,7 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     // и тело снимка обязано быть её телом, а не отказом «сущность не найдена».
     const id = newId();
     const r = await execute(db, {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'owner',
       source: 'fast_path',
       clock: () => T0,
@@ -1148,7 +1150,7 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     const v = (r as ExecuteOk).results[1] as WireEntityVersion;
     expect(v.entityId).toBe(id);
     expect(await versionIdsOf(id)).toEqual([v.id]);
-    const body = await withIdentity(db, userA, async (tx) => {
+    const body = await withIdentity(db, personal(userA), async (tx) => {
       const rows = await tx.execute(sql`SELECT body FROM entity_versions WHERE id = ${v.id}`);
       return rows[0]?.body as string;
     });
@@ -1159,7 +1161,7 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     const e = firstEntity(await execute(db, req('entity_create', { title: 'Моё', tags: [] })));
     const r = await execute(
       db,
-      req('entity_version_pin', { entity_id: e.id, label: 'чужая' }, { actorUserId: userB }),
+      req('entity_version_pin', { entity_id: e.id, label: 'чужая' }, { identity: personal(userB) }),
     );
     expect(r.ok).toBe(false);
     expect((r as { error: { code: string } }).error.code).toBe('NOT_FOUND');
@@ -1234,7 +1236,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
         expect(loser.error.details).toMatchObject({ reason: 'precondition_failed' });
       }
       // Проигравший не записал ничего: статус ровно один переход от исходного.
-      const rows = await withIdentity(db, userA, (tx) =>
+      const rows = await withIdentity(db, personal(userA), (tx) =>
         tx.execute(sql`SELECT props FROM entities WHERE id = ${id}`),
       );
       const stored = rows[0]?.props as Record<string, unknown>;
@@ -1245,7 +1247,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
   /** Batch тех же операций: предусловие обязано смотреть в ту же строку, что и merge. */
   function batchReq(operations: Array<{ tool: string; input: unknown }>): ExecuteRequest {
     return {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'owner',
       source: 'fast_path',
       operations,
@@ -1293,7 +1295,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     const r = await execute(db, batchReq(capturedThen(stale, ['planned'])));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('CONFLICT');
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${stale}`),
     );
     expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('planned');
@@ -1314,7 +1316,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       expect(details.actual).toBeUndefined();
     }
     // Свойство не появилось: отказ случился ДО merge.
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${id}`),
     );
     expect(Object.keys((rows[0]?.props as Record<string, unknown>) ?? {})).not.toContain(
@@ -1345,7 +1347,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       });
     }
     // Отказ — до записи: заголовок не поменялся.
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT title FROM entities WHERE id = ${id}`),
     );
     expect(rows[0]?.title).toBe('Тикет');
@@ -1370,7 +1372,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('CONFLICT');
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${id}`),
     );
     expect(Object.keys((rows[0]?.props as Record<string, unknown>) ?? {})).not.toContain(
@@ -1457,7 +1459,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
       }),
     );
     expect(first.ok).toBe(true);
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${id}`),
     );
     // Записанное `false` лежит в props НАСТОЯЩИМ значением — именно поэтому его и надо
@@ -1573,7 +1575,7 @@ describe('ADE-срез 1: CAS-предусловие entity_update по свой
     }
 
     // Отказ на предусловии — до merge: не записано ничего.
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${id}`),
     );
     expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('in_progress');
@@ -1603,7 +1605,7 @@ describe('§А1-3: core-свойства в предусловии — коло�
     });
 
   async function archivedOf(id: string): Promise<boolean> {
-    const rows = await withIdentity(db, userA, (tx) =>
+    const rows = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT archived FROM entities WHERE id = ${id}`),
     );
     return rows[0]?.archived as boolean;
@@ -1641,7 +1643,7 @@ describe('§А1-3: core-свойства в предусловии — коло�
     const id = newId();
     await create(id);
     const isoOf = async (column: 'created_at' | 'updated_at'): Promise<string> => {
-      const rows = await withIdentity(db, userA, (tx) =>
+      const rows = await withIdentity(db, personal(userA), (tx) =>
         tx.execute(
           sql`SELECT to_char(${sql.raw(column)} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS iso
               FROM entities WHERE id = ${id}`,
@@ -1649,7 +1651,7 @@ describe('§А1-3: core-свойства в предусловии — коло�
       );
       return String(first(rows as unknown as Array<Record<string, unknown>>).iso);
     };
-    const stored = await withIdentity(db, userA, (tx) =>
+    const stored = await withIdentity(db, personal(userA), (tx) =>
       tx.execute(sql`SELECT props FROM entities WHERE id = ${id}`),
     );
     const row = first(stored as unknown as Array<Record<string, unknown>>);
@@ -1746,7 +1748,7 @@ describe('§А1-3: core-свойства в предусловии — коло�
     // с состоянием «до пачки».
     const born = newId();
     const okBatch = await execute(db, {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'owner',
       source: 'fast_path',
       clock: () => T0,
@@ -1770,7 +1772,7 @@ describe('§А1-3: core-свойства в предусловии — коло�
     const id = newId();
     await create(id);
     const conflict = await execute(db, {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'owner',
       source: 'fast_path',
       clock: () => T0,
@@ -2193,7 +2195,7 @@ describe('V1: источник routine не трогает рутины и на�
     // Разрешённая операция стоит ПЕРВОЙ: batch валидируется целиком на стадиях 1–4
     // (prepareOp по всем операциям) до первого apply — значит и разрешённая не пишется.
     const r = await execute(db, {
-      actorUserId: userA,
+      identity: personal(userA),
       actorKind: 'ai',
       source: 'routine',
       batchId: newId(),

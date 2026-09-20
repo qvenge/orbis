@@ -76,9 +76,9 @@ export async function runAsk(ctx: ToolCallCtx, input: AskInput): Promise<ToolDis
   }
 
   const dedupeKey = askDedupeKey(routine.runId, input.question, input.options);
-  const pendingId = pendingMessageId(ctx.actorUserId, dedupeKey);
+  const pendingId = pendingMessageId(ctx.identity.graph, dedupeKey);
 
-  return await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<ToolDispatchResult> => {
+  return await withIdentity(ctx.db, ctx.identity, async (tx): Promise<ToolDispatchResult> => {
     // 2. Проба существования по PK (образец — `routines/propose.ts`): `createPending`
     // идемпотентен, но «завёл» и «нашёл» он не различает, а ответ модели различать обязан:
     // без признака `replayed` она не отличила бы «спросил» от «уже спрашивал».
@@ -94,7 +94,7 @@ export async function runAsk(ctx: ToolCallCtx, input: AskInput): Promise<ToolDis
     // пачке владельца столько, сколько прогон наспрашивал И наоткладывал. Отказ
     // структурный, чтобы модель скорректировалась (§9.9), — тем же текстом и тем же
     // `reason`, что у отложки: для модели это один и тот же потолок.
-    const open = (await listRunUnits(tx, ctx.actorUserId, routine.runId)).filter(
+    const open = (await listRunUnits(tx, ctx.identity.graph, routine.runId)).filter(
       (u) => u.fate === 'open',
     );
     if (open.length >= MAX_RUN_UNITS) {
@@ -106,10 +106,10 @@ export async function runAsk(ctx: ToolCallCtx, input: AskInput): Promise<ToolDis
 
     // 4. Запись — в тред РУТИНЫ (V1.6): вопрос это событие рутины, и читается он там же,
     // где вся её остальная переписка с владельцем, а не в треде вызова.
-    const threadId = await ensureEntityThread(tx, ctx.actorUserId, routine.id);
+    const threadId = await ensureEntityThread(tx, ctx.identity.graph, routine.id);
     await createPending(tx, {
       threadId,
-      actor: { userId: ctx.actorUserId, kind: 'ai', source: 'routine', runId: routine.runId },
+      actor: { userId: ctx.identity.graph, kind: 'ai', source: 'routine', runId: routine.runId },
       kind: 'question',
       question: input.question,
       ...(input.options !== undefined && { options: input.options }),

@@ -6,6 +6,7 @@
 // «ноль расхождений» имеет смысл только на том мире, на котором оракул уже пропинен. Копия, а не
 // импорт: тест-файл импортировать нельзя — его тесты зарегистрировались бы в этом сьюте.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import {
   type BudgetOverview,
   type BudgetSubscription,
@@ -23,6 +24,7 @@ import {
   executeWithFixtureCategories as execute,
   freshGraph,
   mintGraph,
+  personal,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
@@ -94,9 +96,9 @@ const nextMonth = shiftMonth(curMonth, 1);
 
 /** Фикстура через исполнитель. `mechanism: 'seed'` (§А4-4): сид кладёт ГОТОВОЕ состояние, в том
  *  числе перенесённый остаток `orbis/carryover`, который в проде пишет правило rollover. */
-async function exec(user: string, tool: string, input: unknown): Promise<WireEntity> {
+async function exec(user: GraphId, tool: string, input: unknown): Promise<WireEntity> {
   const req: ExecuteRequest = {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     mechanism: 'seed',
@@ -172,7 +174,7 @@ let plannedTxnId = '';
 
 beforeAll(async () => {
   await truncateAll();
-  await seedOwnerGraph(db, userA);
+  await seedOwnerGraph(db, personal(userA));
   catParent = (
     await exec(userA, 'entity_create', {
       title: 'Хобби',
@@ -275,8 +277,8 @@ beforeAll(async () => {
   // Конвейер §2.8 (postDue + материализация окна) движку НЕ принадлежит — он живёт в обёртке
   // (§Б5-4 про ведомости, не про материализацию). Инстансы Coming up кладёт он, и без этих двух
   // прогонов список был бы пуст у ОБЕИХ реализаций — сверка вышла бы на пустоте.
-  await budgetOverview(db, userA, curMonth);
-  await budgetOverview(db, userA, curMonth);
+  await budgetOverview(db, personal(userA), curMonth);
+  await budgetOverview(db, personal(userA), curMonth);
   // @ts-expect-error bun-types 1.2.7 не объявляет второй аргумент beforeAll — таймаут
 }, 120_000);
 
@@ -286,7 +288,7 @@ afterAll(async () => {
 
 /** Снимок + разобранная декларация + контекст компиляции — один вход на все тесты сьюта. */
 async function engineOn<T>(
-  user: string,
+  user: GraphId,
   fn: (a: {
     tx: Tx;
     reg: RegistrySnapshot;
@@ -294,7 +296,7 @@ async function engineOn<T>(
     cctx: CompileCtx;
   }) => Promise<T>,
 ): Promise<T> {
-  return withIdentity(db, user, async (tx) => {
+  return withIdentity(db, personal(user), async (tx) => {
     const reg = await effectiveRegistry(tx, user);
     const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
     return fn({
@@ -305,7 +307,7 @@ async function engineOn<T>(
     });
   });
 }
-const overviewOf = (user: string, month: string) =>
+const overviewOf = (user: GraphId, month: string) =>
   engineOn(user, ({ tx, reg, def }) => budgetOverviewOf(tx, user, { month, today }, def, reg));
 
 describe('двухфазный план §Б5-3', () => {
@@ -443,13 +445,13 @@ describe('область `where` ведомости и списка (B3 I-1)', (
 
   test('живая дельта со слотом в where: entity_create траты не падает (хук кэша, :625)', async () => {
     const user = await freshGraph();
-    await seedOwnerGraph(db, user);
+    await seedOwnerGraph(db, personal(user));
     const cat = seedCategoryId(user, 'food');
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
-    const def = await withIdentity(db, user, async (tx) =>
+    const def = await withIdentity(db, personal(user), async (tx) =>
       builtinSubscription(await effectiveRegistry(tx, user), BUDGET_SUBSCRIPTION_ID),
     );
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       setSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID, {
         definition: spentWhere(def as BudgetSubscription, BIG_OUTFLOW),
       }),
@@ -459,7 +461,7 @@ describe('область `where` ведомости и списка (B3 I-1)', (
       // валит саму запись траты, а не только кэш.
       await exec(user, 'entity_create', txn(cat, '340.00', today));
       await exec(user, 'entity_create', txn(cat, '2340.00', today));
-      const ov = await withIdentity(db, user, async (tx) => {
+      const ov = await withIdentity(db, personal(user), async (tx) => {
         const reg = await effectiveRegistry(tx, user);
         return budgetOverviewOf(
           tx,
@@ -471,7 +473,7 @@ describe('область `where` ведомости и списка (B3 I-1)', (
       });
       expect(envById(ov, env.id).spent).toBe('2340.00');
     } finally {
-      await withIdentity(db, user, (tx) =>
+      await withIdentity(db, personal(user), (tx) =>
         removeSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID),
       );
     }
@@ -507,7 +509,7 @@ describe('ведомость spent (§2.2, П2 №1)', () => {
     // маркером шаблона — набор `facts` выбросил бы инстанс, и владелец перестал бы видеть
     // половину своих расходов; считай он шаблон операцией — увидел бы двойной.
     const user = await freshGraph();
-    await seedOwnerGraph(db, user);
+    await seedOwnerGraph(db, personal(user));
     const cat = newId();
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
     const tpl = await exec(user, 'entity_create', {
@@ -708,14 +710,14 @@ describe('списки и сверка с оракулом', () => {
     const def = await engineOn(userA, async ({ def: d }) => d);
     const tighter = { ...def, alerts: { ...def.alerts, warn_at: '0.99' } };
     try {
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         setSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID, { definition: tighter }),
       );
       // Жильё 900/1000 = 90 % из бейджа выпадает, развлечения 150/100 = 150 % остаются.
       expect((await overviewOf(userA, curMonth)).alertCount).toBe(1);
     } finally {
       // Дельта живёт у ВЛАДЕЛЬЦА и пережила бы этот тест, сдвинув все следующие.
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         removeSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID),
       );
     }
@@ -804,7 +806,7 @@ describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 �
    */
   async function archivedWithEdge(slug: 'food' | 'transport', amount: string) {
     const user = await freshGraph();
-    await seedOwnerGraph(db, user);
+    await seedOwnerGraph(db, personal(user));
     const cat = seedCategoryId(user, slug);
     const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '5000.00'));
     const spend = await exec(user, 'entity_create', txn(cat, amount, today));
@@ -819,7 +821,7 @@ describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 �
       role: ROLE_ENVELOPE_BINDING,
     });
     // Сторож обстановки: без ребра тест выродился бы в «трата без конверта», а он не про это.
-    const edges = (await withIdentity(db, user, (tx) =>
+    const edges = (await withIdentity(db, personal(user), (tx) =>
       tx.execute(sql`SELECT count(*)::int AS n FROM relations
         WHERE source_id = ${env.id}::uuid AND target_id = ${spend.id}::uuid
           AND role = ${ROLE_ENVELOPE_BINDING}`),
@@ -850,7 +852,7 @@ describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 �
     const unbudgeted = def.aggregates.unbudgeted;
     if (unbudgeted?.kind !== 'sum') throw new Error('в декларации нет ведомости Unbudgeted');
     try {
-      await withIdentity(db, user, (tx) =>
+      await withIdentity(db, personal(user), (tx) =>
         setSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID, {
           definition: {
             ...def,
@@ -861,7 +863,7 @@ describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 �
       // «Не живой» — значит архивность конверта не важна: ребро есть, и трата спрятана.
       expect((await overviewOf(user, curMonth)).unbudgeted).toHaveLength(0);
     } finally {
-      await withIdentity(db, user, (tx) =>
+      await withIdentity(db, personal(user), (tx) =>
         removeSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID),
       );
     }
@@ -884,7 +886,7 @@ describe('фазы: остаток последним и взаимоисклю�
       },
     };
     try {
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         setSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID, { definition: overlap }),
       );
       const err = (await overviewOf(userA, curMonth).catch((e) => e)) as ExecError;
@@ -894,7 +896,7 @@ describe('фазы: остаток последним и взаимоисклю�
       ]);
       expect((err.details as { phases?: string[] }).phases).toEqual(['closed', 'upcoming']);
     } finally {
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         removeSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID),
       );
     }
@@ -925,14 +927,14 @@ describe('семена карточки после rollup (Minor-1 гейта)',
       },
     };
     try {
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         setSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID, { definition: widened }),
       );
       // `envParent` — конверт родительской категории: у него есть потомки, значит rollup идёт.
       const ov = await overviewOf(userA, curMonth);
       expect(envById(ov, envParent).effectiveLimit).toBe('15000.00');
     } finally {
-      await withIdentity(db, userA, (tx) =>
+      await withIdentity(db, personal(userA), (tx) =>
         removeSubscriptionDelta(tx, userA, BUDGET_SUBSCRIPTION_ID),
       );
     }
@@ -942,14 +944,14 @@ describe('семена карточки после rollup (Minor-1 гейта)',
 describe('rollover: параметры перехода — из декларации (Р12)', () => {
   test('exact_calendar_month даёт границы месяца; чужой carry — структурный отказ', async () => {
     const user = await freshGraph();
-    await seedOwnerGraph(db, user);
+    await seedOwnerGraph(db, personal(user));
     const cat = seedCategoryId(user, 'food');
-    const r = await rolloverCreate(db, user, {
+    const r = await rolloverCreate(db, personal(user), {
       month: nextMonth,
       batchId: newId(),
       rows: [{ categoryId: cat, limit: '1000.00', carryover: '10.00' }],
     });
-    const rows = await withIdentity(db, user, (tx) =>
+    const rows = await withIdentity(db, personal(user), (tx) =>
       tx
         .select()
         .from(entities)
@@ -962,13 +964,13 @@ describe('rollover: параметры перехода — из деклара�
     // Дельта владельца называет НЕВЫРАЗИМЫЙ параметр переноса. Правило обязано отказать, а не
     // перенести «как раньше»: тихая деградация здесь стоит владельцу денег на счёте.
     const def = await engineOn(user, async ({ def: d }) => d);
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, personal(user), (tx) =>
       setSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID, {
         definition: { ...def, rollover: { ...def.rollover, carry: { agg: 'spent' } } },
       }),
     );
     try {
-      const err = (await rolloverCreate(db, user, {
+      const err = (await rolloverCreate(db, personal(user), {
         month: shiftMonth(nextMonth, 1),
         batchId: newId(),
         rows: [{ categoryId: cat, limit: '1000.00', carryover: '0.00' }],
@@ -978,7 +980,7 @@ describe('rollover: параметры перехода — из деклара�
         'ROLLOVER_CARRY_UNSUPPORTED',
       ]);
     } finally {
-      await withIdentity(db, user, (tx) =>
+      await withIdentity(db, personal(user), (tx) =>
         removeSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID),
       );
     }

@@ -61,6 +61,7 @@
 // второй как свой. Поэтому транзакция, которой уже выдан xid (то есть она что-то записала),
 // кеш и не читает, и не наполняет. Читающие пути от этого не страдают: снимок реестра они
 // берут ДО первой записи (исполнитель — первым делом в транзакции, `executor.ts`).
+import type { GraphId } from '@orbis/shared';
 import { OWNER_LOCALE, type ParseRegistry, toParseRegistry } from '@orbis/shared/query';
 import type { Tx } from '../db/with-identity';
 import { applyDeltas } from './deltas';
@@ -100,8 +101,12 @@ export function registryCacheStats(): RegistryCacheStats {
   return { size: cache.size, hits, misses, bypassed };
 }
 
-function cacheKey(graphId: string, versions: RegistryVersions): string {
-  return `${graphId}:${versions.ownerVersion}:${versions.systemVersion}`;
+/**
+ * Ключ снимка — ГРАФ, а не актор (D44): реестр свойств принадлежит графу, и два аккаунта,
+ * работающие в одном графе, обязаны делить один снимок, а не греть по копии на человека.
+ */
+function cacheKey(graph: GraphId, versions: RegistryVersions): string {
+  return `${graph}:${versions.ownerVersion}:${versions.systemVersion}`;
 }
 
 /**
@@ -111,12 +116,12 @@ function cacheKey(graphId: string, versions: RegistryVersions): string {
  * тем же снапшотом, что и всё остальное чтение вызывающего, иначе исполнитель валидировал
  * бы запись по реестру, которого в его транзакции ещё (или уже) нет.
  */
-export async function effectiveRegistry(tx: Tx, graphId: string): Promise<RegistrySnapshot> {
-  const before = await readRegistryVersions(tx, graphId);
-  const key = cacheKey(graphId, before);
+export async function effectiveRegistry(tx: Tx, graph: GraphId): Promise<RegistrySnapshot> {
+  const before = await readRegistryVersions(tx, graph);
+  const key = cacheKey(graph, before);
   if (before.txHasWritten) {
     bypassed += 1;
-    return await build(tx, graphId, before);
+    return await build(tx, graph, before);
   }
   const hit = cache.get(key);
   if (hit !== undefined) {
@@ -128,8 +133,8 @@ export async function effectiveRegistry(tx: Tx, graphId: string): Promise<Regist
     return hit;
   }
   misses += 1;
-  const snapshot = await build(tx, graphId, before);
-  const after = await readRegistryVersions(tx, graphId);
+  const snapshot = await build(tx, graph, before);
+  const after = await readRegistryVersions(tx, graph);
   if (
     after.txHasWritten ||
     after.ownerVersion !== before.ownerVersion ||
@@ -148,7 +153,7 @@ export async function effectiveRegistry(tx: Tx, graphId: string): Promise<Regist
 
 async function build(
   tx: Tx,
-  graphId: string,
+  graphId: GraphId,
   versions: RegistryVersions,
 ): Promise<RegistrySnapshot> {
   const rows = await loadRegistryRows(tx, graphId);

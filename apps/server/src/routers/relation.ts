@@ -23,7 +23,7 @@ export const relationRouter = router({
       const r = await execute(
         ctx.db,
         {
-          actorUserId: ctx.actorUserId,
+          identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui', // прямое действие владельца в UI
           operations: [{ tool: 'relation_create', input }],
@@ -38,7 +38,7 @@ export const relationRouter = router({
     const r = await execute(
       ctx.db,
       {
-        actorUserId: ctx.actorUserId,
+        identity: ctx.identity,
         actorKind: 'owner',
         source: 'ui', // прямое действие владельца в UI
         operations: [{ tool: 'relation_delete', input }],
@@ -53,7 +53,7 @@ export const relationRouter = router({
   listFor: protectedProcedure
     .input(z.object({ entityId: z.string().uuid() }).strict())
     .query(({ ctx, input }) =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
         const rows = await tx
           .select()
           .from(relations)

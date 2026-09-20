@@ -4,9 +4,9 @@
 // БД: половина смысла теста в том, ЧТО именно лежит в журнале после настоящих глаголов,
 // а не в моках. Прямые вызовы rollbackRun (роутер — трансляция, его тесты рядом).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { ClaimTaskResult, FinishResult, RunStepResult } from '@orbis/shared';
+import type { ClaimTaskResult, FinishResult, GraphId, RunStepResult } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
@@ -32,8 +32,8 @@ function okResult<T>(r: Awaited<ReturnType<typeof dispatchTool>>): T {
 }
 
 /** Свойства строки — новая правда сущности (§А1-1): её и восстанавливает откат. */
-async function propsOf(owner: string, id: string): Promise<Record<string, unknown>> {
-  const rows = await withIdentity(db, owner, (tx) =>
+async function propsOf(owner: GraphId, id: string): Promise<Record<string, unknown>> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
   );
   const row = rows[0];
@@ -42,8 +42,8 @@ async function propsOf(owner: string, id: string): Promise<Record<string, unknow
 }
 
 /** Архивирован ли прогон: инверсия entity_create — архивация, а не удаление (§7.8). */
-async function isArchived(owner: string, id: string): Promise<boolean> {
-  const rows = await withIdentity(db, owner, (tx) =>
+async function isArchived(owner: GraphId, id: string): Promise<boolean> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
   );
   const row = rows[0];
@@ -52,15 +52,15 @@ async function isArchived(owner: string, id: string): Promise<boolean> {
 }
 
 /** Сколько undo-сообщений §7.8 в журнале владельца — «откачено ли хоть что-то». */
-async function undoMessages(owner: string): Promise<number> {
-  const rows = await withIdentity(db, owner, (tx) =>
+async function undoMessages(owner: GraphId): Promise<number> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT id FROM chat_messages WHERE metadata @> '{"type":"undo"}'::jsonb`),
   );
   return [...rows].length;
 }
 
 /** Действие журнала, записанное против прогона, — по системному источнику (подметание). */
-async function actionOfRun(owner: string, runId: string, source: string): Promise<ActionRecord> {
+async function actionOfRun(owner: GraphId, runId: string, source: string): Promise<ActionRecord> {
   const found = (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === source);
   const first = found[0];
   if (first === undefined) throw new Error(`действия прогона ${runId} с source=${source} нет`);
@@ -68,7 +68,7 @@ async function actionOfRun(owner: string, runId: string, source: string): Promis
 }
 
 interface Scene {
-  owner: string;
+  owner: GraphId;
   grantId: string;
   ticketId: string;
 }
@@ -121,7 +121,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     );
     expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'waiting' });
 
-    const out = await rollbackRun(db, { actorUserId: owner, runId });
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
 
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error('ожидался успешный откат');
@@ -154,14 +154,14 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     );
     // Часы подметания — на час позже часов исполнителя: прогон брошен по порогу С6
     const swept = await sweepStaleRuns(db, {
-      graphId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       clock: () => new Date(T0.getTime() + 60 * MINUTE),
     });
     expect(swept).toEqual({ swept: 1 });
     const sweepAction = await actionOfRun(owner, runId, 'system');
 
-    const out = await rollbackRun(db, { actorUserId: owner, runId });
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
 
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error('ожидался успешный откат');
@@ -185,12 +185,17 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     await dispatchTool(ctx, 'orbis_run_step', { run_id: runId, summary: 'Уперся в развилку' });
     await dispatchTool(ctx, 'orbis_checkpoint', { run_id: runId, question: 'Какую БД брать?' });
 
-    const a = createCaller({ actorUserId: owner, actorKind: 'owner', db, clientVersion: null });
+    const a = createCaller({
+      identity: personal(owner),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
     await a.agentRun.answerCheckpoint({ ticketId, runId, answer: 'Postgres' });
     const answerAction = await actionOfRun(owner, runId, 'ui');
 
     const undoneBefore = await undoMessages(owner);
-    const out = await rollbackRun(db, { actorUserId: owner, runId });
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
 
     expect(out.ok).toBe(false);
     if (out.ok) throw new Error('ожидался конфликт');
@@ -224,7 +229,12 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     // Владелец правит тот же тикет ПОКА ПРОГОН ИДЁТ — самый обычный случай: прогон длится
     // часами. Правка ложится в журнал МЕЖДУ действиями прогона, и окно предпроверки «после
     // последнего действия» её бы не увидело
-    const a = createCaller({ actorUserId: owner, actorKind: 'owner', db, clientVersion: null });
+    const a = createCaller({
+      identity: personal(owner),
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
     await a.entity.update({
       id: ticketId,
       props: { 'orbis/priority': 'high' },
@@ -235,7 +245,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     await dispatchTool(ctx, 'orbis_finish', { run_id: runId, report: 'Готово' });
 
     const undoneBefore = await undoMessages(owner);
-    const out = await rollbackRun(db, { actorUserId: owner, runId });
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
 
     expect(out.ok).toBe(false);
     if (out.ok) throw new Error('ожидался конфликт');
@@ -270,10 +280,10 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     const finish = okResult<FinishResult>(
       await dispatchTool(ctx, 'orbis_finish', { run_id: runId, report: 'Готово' }),
     );
-    const undone = await undoAction(db, { actorUserId: owner, actionId: step.action_id });
+    const undone = await undoAction(db, { identity: personal(owner), actionId: step.action_id });
     expect(undone.ok).toBe(true);
 
-    const out = await rollbackRun(db, { actorUserId: owner, runId });
+    const out = await rollbackRun(db, { identity: personal(owner), runId });
 
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error('ожидался успешный откат');
@@ -291,7 +301,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
   test('откатывать нечего (прогона нет или он чужой) → ok с пустым undone, журнал не тронут', async () => {
     const owner = await freshGraph();
     const before = await undoMessages(owner);
-    const out = await rollbackRun(db, { actorUserId: owner, runId: crypto.randomUUID() });
+    const out = await rollbackRun(db, { identity: personal(owner), runId: crypto.randomUUID() });
     expect(out).toEqual({ ok: true, undone: [], note: ROLLBACK_NOTE });
     expect(await undoMessages(owner)).toBe(before);
   });

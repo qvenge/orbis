@@ -11,7 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { adminDb, appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -57,7 +57,7 @@ const gatedUrl = () => `http://127.0.0.1:${gated.port}/mcp`;
 const createCaller = createCallerFactory(appRouter);
 /** Владелец аккаунта — tRPC-caller (владельческая поверхность, не MCP). */
 const ownerCaller = createCaller({
-  actorUserId: owner,
+  identity: personal(owner),
   actorKind: 'owner',
   db,
   clientVersion: null,
@@ -66,11 +66,11 @@ const ownerCaller = createCaller({
 beforeAll(async () => {
   delete process.env.ORBIS_PUBLIC_URL; // база метаданных = адрес запроса (локальный стенд)
   await truncateAll();
-  TOKEN = await issuePatGrant(db, { graphId: owner, label: 'тестовый агент' });
+  TOKEN = await issuePatGrant(db, { identity: personal(owner), label: 'тестовый агент' });
   // Скоуп worker выдаётся штатным путём (Задача 8): правка строки под admin-DSN,
   // стоявшая здесь прежде, обходила бы ровно тот код, который теперь и проверяется.
   WORKER_TOKEN = await issuePatGrant(db, {
-    graphId: owner,
+    identity: personal(owner),
     label: 'фоновый исполнитель',
     scope: 'worker',
   });
@@ -104,7 +104,7 @@ async function connectAgent(url: string, token: string = TOKEN): Promise<Client>
 
 /** Статус тикета в БД — правда графа, а не ответ тула (приёмка 5 по проводу). */
 async function taskStatus(id: string): Promise<unknown> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
   );
   return (rows[0]?.props as Record<string, unknown> | undefined)?.['orbis/task_status'];
@@ -129,7 +129,7 @@ async function callTool(
 /** Сид-сущность владельца через executor без синка — без audit-шума в тредах. */
 async function seedEntity(input: Record<string, unknown>): Promise<WireEntity> {
   const r = await execute(db, {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'ui',
     operations: [{ tool: 'entity_create', input }],
@@ -140,7 +140,7 @@ async function seedEntity(input: Record<string, unknown>): Promise<WireEntity> {
 
 /** actions[0] всех audit-сообщений глобального треда владельца (§7.8). */
 async function globalAuditActions(): Promise<ActionRecord[]> {
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx
       .select()
       .from(chatMessages)
@@ -210,7 +210,7 @@ describe('/mcp: аутентификация по гранту ДО MCP-логи
   // Ради этого теста доступ и переезжал из env в таблицу (Р4): отзыв — строка в базе,
   // а не смена переменной с передеплоем. Токен тут настоящий и до отзыва рабочий.
   test('отозванный токен больше не пускает', async () => {
-    const token = await issuePatGrant(db, { graphId: owner, label: 'на отзыв' });
+    const token = await issuePatGrant(db, { identity: personal(owner), label: 'на отзыв' });
     const identity = await verifyBearer(db, token);
     if (identity === null) throw new Error('выданный токен не прошёл verifyBearer');
     // До отзыва тот же токен пускает — иначе тест был бы зелёным и на сломанной выдаче
@@ -249,7 +249,7 @@ describe('/mcp: аутентификация по гранту ДО MCP-логи
       .onConflictDoNothing();
     const verifier = randomBytes(32).toString('base64url');
     const code = await createAuthorizationCode(db, {
-      graphId: owner,
+      identity: personal(owner),
       clientId,
       label: 'Claude Code',
       redirectUri,
@@ -278,7 +278,7 @@ describe('/mcp: аутентификация по гранту ДО MCP-логи
     } finally {
       await agent.close();
     }
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select().from(entities).where(eq(entities.id, created.id)),
     );
     expect(rows).toHaveLength(1);
@@ -504,7 +504,7 @@ describe('/mcp tools/list (§9.2)', () => {
 
       // Дословная сверка с реестром (имя, описание, inputSchema) — адаптер ничего не
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
-      const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
+      const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
       // builtin-набор: 44 − 3 internalOnly − 2 routineOnly = 39
       expect(tools).toHaveLength(publicDefs.length);
@@ -555,7 +555,7 @@ describe('/mcp tools/call → dispatchTool (§9.3)', () => {
     }
 
     // Сущность реально в графе
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select().from(entities).where(eq(entities.id, created.id)),
     );
     expect(rows).toHaveLength(1);
@@ -597,7 +597,7 @@ describe('/mcp tools/call → dispatchTool (§9.3)', () => {
     }
 
     // До approve владельца граф не тронут — ни одна сущность не заархивирована
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(inArray(entities.id, ids)),
     );
     expect(rows).toHaveLength(11);
@@ -646,7 +646,7 @@ describe('/mcp tools/call → dispatchTool (§9.3)', () => {
       await agent.close();
     }
     // Гейт стоит ДО dispatch: ни сущности, ни audit-следа
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select().from(entities).where(eq(entities.title, 'Не должно существовать')),
     );
     expect(rows).toHaveLength(0);
@@ -724,7 +724,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
     }
 
     // Статус обновлён слиянием свойств (§А7-1): в НОВОЙ правде строки
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select().from(entities).where(eq(entities.id, task.id)),
     );
     expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('done');
@@ -737,7 +737,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
     expect(agentUpdate?.source).toBe('mcp');
 
     // Заметка агента — в треде сущности, с честной пометкой автора (§9.3)
-    const threadRows = await withIdentity(db, owner, (tx) =>
+    const threadRows = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select()
         .from(chatMessages)
@@ -883,7 +883,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       await agent.close();
     }
     // Отказ до записи: заголовок не изменился
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select({ title: entities.title }).from(entities).where(eq(entities.id, target.id)),
     );
     expect(rows[0]?.title).toBe('Цель worker-отказа');
@@ -894,7 +894,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     // молчит про НОВЫЙ мутирующий тул, который однажды появится в реестре. Инвариант
     // закрывает именно это: список worker'а не может вырасти ничем, кроме чтений и
     // явно разрешённого набора (§4.14, fail-closed).
-    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
+    const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
     const allowed = new Set(
       defs
         .filter((d) => d.kind === 'read' && d.internalOnly !== true && d.fullScopeOnly !== true)
@@ -922,7 +922,10 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     // Колонка `scope` — text, и значение мимо перечисления в неё попасть может (ручная
     // правка, откат миграции, будущий скоуп на старом коде). Список обязан сужаться, а не
     // открываться: сравнение с одним лишь 'worker' отдало бы такому гранту весь реестр.
-    const token = await issuePatGrant(db, { graphId: owner, label: 'скоуп из будущего' });
+    const token = await issuePatGrant(db, {
+      identity: personal(owner),
+      label: 'скоуп из будущего',
+    });
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(
@@ -932,7 +935,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       await adminClient.end();
     }
 
-    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
+    const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
     const allowed = new Set(
       defs.filter((d) => d.kind === 'read' && d.internalOnly !== true).map((d) => d.name),
     );
@@ -975,7 +978,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       aspects: ['orbis/task', 'orbis/assignment'],
     });
     const linked = await execute(db, {
-      actorUserId: owner,
+      identity: personal(owner),
       actorKind: 'owner',
       source: 'ui',
       operations: [
@@ -1028,7 +1031,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     }
 
     // Состояние графа после круга: тикет ждёт владельца, прогон завершён с отчётом
-    const rows = await withIdentity(db, owner, (tx) =>
+    const rows = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select({ id: entities.id, props: entities.props })
         .from(entities)
@@ -1075,14 +1078,14 @@ describe('/mcp: pending-подтверждение несёт грант исх�
       await agent.close();
     }
 
-    const approved = await approvePending(db, { graphId: owner, pendingId });
+    const approved = await approvePending(db, { identity: personal(owner), pendingId });
     expect(approved.ok).toBe(true);
 
     // Атрибуция ИСХОДНОГО актора (§7.8, D11) — вместе с грантом: владелец видит, какой
     // доступ попросил подтверждение, даже если исполнил план он сам кнопкой
     const grant = await verifyBearer(db, TOKEN);
     if (grant === null) throw new Error('тестовый PAT не прошёл verifyBearer');
-    const auditRows = await withIdentity(db, owner, (tx) =>
+    const auditRows = await withIdentity(db, personal(owner), (tx) =>
       tx
         .select()
         .from(chatMessages)

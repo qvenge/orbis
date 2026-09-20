@@ -57,15 +57,15 @@ export const userRouter = router({
   // а не про граф (сев мира идёт на каждом заходе и держится пробой по PK, Р-24-6). Транзакций
   // ТРИ, а не одна: мир пачкой через исполнитель, настройки с тредом, садовник словаря
   // (рулинг Р-17-1, разбор — в докблоке seedOwner).
-  seedOnboarding: ownerOnlyProcedure.mutation(({ ctx }) => seedOwner(ctx.db, ctx.actorUserId)),
+  seedOnboarding: ownerOnlyProcedure.mutation(({ ctx }) => seedOwner(ctx.db, ctx.identity)),
 
   getSettings: protectedProcedure.query(
     ({ ctx }): Promise<WireUserSettings> =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
         const rows = await tx
           .select()
           .from(userSettings)
-          .where(eq(userSettings.graphId, ctx.actorUserId));
+          .where(eq(userSettings.graphId, ctx.identity.graph));
         if (!rows[0]) {
           // Нет строки → онбординг не проходил (или чужая под RLS): единый NOT_FOUND
           throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
@@ -76,12 +76,12 @@ export const userRouter = router({
 
   updateSettings: ownerOnlyProcedure.input(updateSettingsInput).mutation(
     ({ ctx, input }): Promise<WireUserSettings> =>
-      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      withIdentity(ctx.db, ctx.identity, async (tx) => {
         // LWW-правка конфигурации (§5.2): body-optimistic-check не применяется — это не сущность
         const rows = await tx
           .update(userSettings)
           .set({ ...input, updatedAt: new Date() })
-          .where(eq(userSettings.graphId, ctx.actorUserId))
+          .where(eq(userSettings.graphId, ctx.identity.graph))
           .returning();
         if (!rows[0]) {
           throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
@@ -103,7 +103,7 @@ export const userRouter = router({
       const r = await execute(
         ctx.db,
         {
-          actorUserId: ctx.actorUserId,
+          identity: ctx.identity,
           actorKind: 'owner',
           source: 'ui',
           operations: [{ tool: 'module_set', input }],
@@ -111,11 +111,11 @@ export const userRouter = router({
         { sink: journalSink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      return withIdentity(ctx.db, ctx.identity, async (tx) => {
         const rows = await tx
           .select()
           .from(userSettings)
-          .where(eq(userSettings.graphId, ctx.actorUserId));
+          .where(eq(userSettings.graphId, ctx.identity.graph));
         if (!rows[0]) {
           throw execErrorToTRPC({ code: 'NOT_FOUND', message: 'настройки не найдены' });
         }
@@ -125,6 +125,6 @@ export const userRouter = router({
 
   exportData: ownerOnlyProcedure.query(
     ({ ctx }): Promise<OrbisExport> =>
-      withIdentity(ctx.db, ctx.actorUserId, (tx) => exportData(tx, ctx.actorUserId)),
+      withIdentity(ctx.db, ctx.identity, (tx) => exportData(tx, ctx.identity.graph)),
   ),
 });

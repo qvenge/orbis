@@ -22,6 +22,7 @@ import {
   adminDb,
   appDb,
   mintGraph,
+  personal,
   requireEnv,
   seedCustomAspect,
   truncateAll,
@@ -534,7 +535,9 @@ describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с
     // Аспект владельца фикстуры реализует тот же слот `moment` контракта «когда», что и
     // `orbis/schedule`: две законные по отдельности привязки на одной сущности — и есть §С8-21.
     await seedCustomAspect(owner, GATE_PLAIN_ASPECT);
-    idx = bindingIndexOf(await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner)));
+    idx = bindingIndexOf(
+      await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner)),
+    );
     // Адрес свойства берётся ИЗ ПРИВЯЗКИ, а не литералом: иначе тест пинил бы форму фикстуры 0d.
     const a = idx.slotOf(GATE_PLAIN_ASPECT.key, 'orbis/when', 'moment');
     const b = idx.slotOf('orbis/schedule', 'orbis/when', 'moment');
@@ -595,21 +598,23 @@ describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с
     await admin.execute(sql`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
       VALUES ('user/broken', ${owner}::uuid, 'planner/agenda', '{"engine":"agenda"}'::jsonb, NULL, 1)`);
     await ac.end();
-    await expect(withIdentity(db, owner, (tx) => loadRegistryRows(tx, owner))).rejects.toThrow();
+    await expect(
+      withIdentity(db, personal(owner), (tx) => loadRegistryRows(tx, owner)),
+    ).rejects.toThrow();
   });
 });
 
 describe('builtinSubscription: эффективная декларация из снимка', () => {
   const userA = mintGraph();
   test('orbis/budget-overview читается из снимка уже разобранным', async () => {
-    await withIdentity(db, userA, async (tx) => {
+    await withIdentity(db, personal(userA), async (tx) => {
       const def = builtinSubscription(await effectiveRegistry(tx, userA), 'orbis/budget-overview');
       expect(def.engine).toBe('budget');
       expect((def as BudgetSubscription).alerts.warn_at).toBe('0.85');
     });
   });
   test('неизвестный id — NOT_FOUND, а не пустота (§С8-3)', async () => {
-    await withIdentity(db, userA, async (tx) => {
+    await withIdentity(db, personal(userA), async (tx) => {
       const reg = await effectiveRegistry(tx, userA);
       let caught: ExecError | null = null;
       try {
@@ -624,7 +629,7 @@ describe('builtinSubscription: эффективная декларация из 
   test('agendaSubscriptionOf — обёртка над ним: тот же литерал, что в снимке (M12)', async () => {
     // Узкая обёртка задачи 6 обязана остаться СИНОНИМОМ общего чтения, а не вторым путём:
     // разойдись они — повестка и Budget читали бы разные реестры в одной транзакции.
-    await withIdentity(db, userA, async (tx) => {
+    await withIdentity(db, personal(userA), async (tx) => {
       const reg = await effectiveRegistry(tx, userA);
       // Сравнение по ССЫЛКЕ, а не по форме: общий читатель отдаёт союз деклараций, обёртка —
       // сужение того же литерала, и `toBe` ловит появление второго чтения.

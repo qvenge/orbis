@@ -10,6 +10,7 @@
 // всего графа → изоляция второго пользователя (RLS §4.10) на трёх срезах: query
 // категорий, undoLast и экспорт.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { addDays, entitySchema, globalThreadId, newId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import type { ActionRecord } from '../src/executor/types';
@@ -18,7 +19,7 @@ import { appRouter } from '../src/router';
 import { SEED_CATEGORIES } from '../src/seed/categories';
 import { seedCategoryId } from '../src/seed/onboarding';
 import { createCallerFactory } from '../src/trpc';
-import { appDb, mintGraph, requireEnv, truncateAll } from './helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
 
 /**
  * «Сегодня» глазами СЕРВЕРА: та же функция и та же зона по умолчанию, которыми date-токены
@@ -33,8 +34,8 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 /** Caller от лица владельца: ctx как в бою (§9.1); clientVersion=null — гейт версии пропускает. */
-function callerFor(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function callerFor(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 /** Ошибка вызова процедуры — TRPCError, с внятным падением при неожиданном успехе. */

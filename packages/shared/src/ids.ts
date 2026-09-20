@@ -2,6 +2,17 @@
 // Формулы с graph_id — на ключе ГРАФА (D44): единица владения — граф, а не аккаунт.
 import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 
+// Два идентификатора транзакции (D44, спека «граф как единица владения» §3.5). БРЕНДЫ, а не алиасы:
+// в личном графе значения совпадают, смысл — нет, и перепутать их компилятор обязан не дать.
+// Значение бренда рождается только на границе внешнего мира (parseAccountId / parseGraphId в
+// apps/server/src/identity.ts); переход AccountId → GraphId — только резолвер личного графа там же.
+declare const accountIdBrand: unique symbol;
+declare const graphIdBrand: unique symbol;
+/** id аккаунта (`auth.users`) — КТО действует: актор транзакции, субъект тарифа, `actor_user_id` журнала. */
+export type AccountId = string & { readonly [accountIdBrand]: true };
+/** id графа — В ЧЬИХ ДАННЫХ идёт транзакция: ключ строк, реестра, замков, формул `uuidv5`. */
+export type GraphId = string & { readonly [graphIdBrand]: true };
+
 export const ORBIS_NAMESPACE = 'cb339e97-82d7-4d16-91c6-942d42df7054';
 
 /** Client-generated id (UUIDv7 — время в префиксе, 01 §2.1). */

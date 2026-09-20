@@ -19,7 +19,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from './executor';
 import type { ExecuteRequest } from './types';
@@ -39,7 +39,7 @@ afterAll(async () => {
 
 function req(tool: string, input: Record<string, unknown>): ExecuteRequest {
   return {
-    actorUserId: owner,
+    identity: personal(owner),
     actorKind: 'owner',
     source: 'chat',
     mechanism: 'user',
@@ -61,7 +61,7 @@ test('entity_create со старой картой aspects → VALIDATION, ст�
   expect(r.error.code).toBe('VALIDATION');
 
   // Отказ ДО записи, а не после половины: строки в графе нет вовсе.
-  const rows = await withIdentity(db, owner, (tx) =>
+  const rows = await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT count(*)::int AS n FROM entities WHERE id = ${id}`),
   );
   expect((rows[0] as { n: number }).n).toBe(0);

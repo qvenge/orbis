@@ -7,9 +7,10 @@
 // needsSetup — «первый месяц без истории» (§3.5); мутация rollover — идемпотентна по
 // batchId, атомарна (INVARIANT всего batch), Undo сносит все конверты одним action.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
@@ -53,8 +54,8 @@ const prevEnd = lastDayOf(prev);
 const targetStart = `${target}-01`;
 const targetEnd = lastDayOf(target);
 
-function ownerCaller(user: string) {
-  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+function ownerCaller(user: GraphId) {
+  return createCaller({ identity: personal(user), actorKind: 'owner', db, clientVersion: null });
 }
 
 /**
@@ -63,9 +64,9 @@ function ownerCaller(user: string) {
  * (`system_writable`, §А2-5). Без механизма фикстура падала бы `COMPUTED_WRITE` на
  * подготовке, а не на проверяемом поведении.
  */
-async function exec(user: string, tool: string, input: unknown): Promise<WireEntity> {
+async function exec(user: GraphId, tool: string, input: unknown): Promise<WireEntity> {
   const req: ExecuteRequest = {
-    actorUserId: user,
+    identity: personal(user),
     actorKind: 'owner',
     source: 'ui',
     mechanism: 'seed',
@@ -76,7 +77,7 @@ async function exec(user: string, tool: string, input: unknown): Promise<WireEnt
   return r.results[0] as WireEntity;
 }
 
-async function createCategory(user: string, title: string, icon = '🍔'): Promise<string> {
+async function createCategory(user: GraphId, title: string, icon = '🍔'): Promise<string> {
   const e = await exec(user, 'entity_create', {
     title,
     tags: [],
@@ -87,7 +88,7 @@ async function createCategory(user: string, title: string, icon = '🍔'): Promi
 }
 
 async function createEnvelope(
-  user: string,
+  user: GraphId,
   categoryRef: string,
   periodStart: string,
   periodEnd: string,
@@ -110,7 +111,7 @@ async function createEnvelope(
 }
 
 async function createTxn(
-  user: string,
+  user: GraphId,
   categoryRef: string,
   amount: string,
   occurredOn: string,
@@ -142,7 +143,7 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
 
 /** Все конверты владельца (включая архивные) — истина в БД (админ-DSN). */
 async function envelopesOf(
-  user: string,
+  user: GraphId,
 ): Promise<Array<{ id: string; archived: boolean; props: Record<string, unknown> }>> {
   const rows = await adminRows(
     sql`SELECT id, archived, props FROM entities
@@ -462,7 +463,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
     });
     expect(await budgetParents(txnId)).toHaveLength(1);
 
-    const u = await undoAction(db, { actorUserId: user, actionId: batchId });
+    const u = await undoAction(db, { identity: personal(user), actionId: batchId });
     expect(u.ok).toBe(true);
 
     // Все конверты группы архивированы (§7.8: создание → архивация), привязка снята
@@ -476,7 +477,12 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
   test('мутация — поверхность владельца: агенту FORBIDDEN (§9.3)', async () => {
     const user = await freshGraph();
     const cat = await createCategory(user, 'Еда');
-    const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
+    const agent = createCaller({
+      identity: personal(user),
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+    });
     await expect(
       agent.budget.rollover({
         month: target,

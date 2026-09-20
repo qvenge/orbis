@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import { SignJWT } from 'jose';
-import { appDb, mintGraph, requireEnv } from '../test/helpers';
+import { accountOf, appDb, mintGraph, personal, requireEnv } from '../test/helpers';
 import { makeCreateContext } from './context';
 import { issuePatGrant, revokeGrant, verifyBearer } from './oauth/grants';
 import { appRouter } from './router';
@@ -35,7 +35,7 @@ beforeAll(async () => {
   process.env.SUPABASE_JWT_SECRET = LOCAL_JWT_SECRET;
   // truncateAll здесь не нужен: владелец случайный (mintGraph), чужие строки этому
   // сьюту не мешают, а лишняя зачистка связывала бы файл с остальными сьютами.
-  PAT_TOKEN = await issuePatGrant(db, { graphId: PAT_OWNER, label: 'тестовый агент' });
+  PAT_TOKEN = await issuePatGrant(db, { identity: personal(PAT_OWNER), label: 'тестовый агент' });
 });
 
 afterAll(async () => {
@@ -62,27 +62,30 @@ function signHs256(sub: string): Promise<string> {
     .sign(new TextEncoder().encode(LOCAL_JWT_SECRET));
 }
 
-test('Bearer с валидным токеном → actorUserId = sub, actorKind owner; db кладётся ссылкой', async () => {
+test('Bearer с валидным токеном → пара «актор = sub, граф = личный», actorKind owner; db ссылкой', async () => {
   const sub = crypto.randomUUID();
   const ctx = await createContext(makeReq({ authorization: `Bearer ${await signHs256(sub)}` }));
-  expect(ctx.actorUserId).toBe(sub);
+  // Резолвер 1 (D44): у человека по JWT оба id пары — его же аккаунт (его личный граф).
+  expect(ctx.identity?.actor as string).toBe(sub);
+  expect(ctx.identity?.graph as string).toBe(sub);
   expect(ctx.actorKind).toBe('owner'); // JWT-путь не регрессировал (Task 3)
   expect(ctx.db).toBe(db);
 });
 
-test('без Authorization / не-Bearer → actorUserId = null, actorKind owner', async () => {
-  expect((await createContext(makeReq())).actorUserId).toBeNull();
+test('без Authorization / не-Bearer → identity = null, actorKind owner', async () => {
+  expect((await createContext(makeReq())).identity).toBeNull();
   expect((await createContext(makeReq())).actorKind).toBe('owner');
-  expect((await createContext(makeReq({ authorization: 'Basic abc' }))).actorUserId).toBeNull();
-  expect(
-    (await createContext(makeReq({ authorization: 'Bearer not-a-jwt' }))).actorUserId,
-  ).toBeNull();
+  expect((await createContext(makeReq({ authorization: 'Basic abc' }))).identity).toBeNull();
+  expect((await createContext(makeReq({ authorization: 'Bearer not-a-jwt' }))).identity).toBeNull();
 });
 
 // §9.3: агентский путь — префикс orbis_pat_ уводит в таблицу грантов, JWT не пробуется
-test('Bearer с валидным PAT → { actorUserId: владелец гранта, actorKind: agent }', async () => {
+test('Bearer с валидным PAT → пара из строки гранта, actorKind: agent', async () => {
   const ctx = await createContext(makeReq({ authorization: `Bearer ${PAT_TOKEN}` }));
-  expect(ctx.actorUserId).toBe(PAT_OWNER);
+  // Резолвер 2 (D44): актор — `issued_by` гранта, граф — его `graph_id`. Грант выписан на
+  // личный граф PAT_OWNER, поэтому оба id совпадают — и это ЕДИНСТВЕННАЯ причина совпадения.
+  expect(ctx.identity?.actor).toBe(accountOf(PAT_OWNER));
+  expect(ctx.identity?.graph).toBe(PAT_OWNER);
   expect(ctx.actorKind).toBe('agent');
 });
 
@@ -108,11 +111,11 @@ test('владельческий JWT → ctx.grant отсутствует', asyn
 // Access-токен OAuth — второй вид агентского Bearer; для tRPC он ровно то же, что PAT
 test('Bearer с access-токеном OAuth → тот же агентский путь', async () => {
   const ctx = await createContext(makeReq({ authorization: `Bearer orbis_at_${'11'.repeat(32)}` }));
-  expect(ctx.actorUserId).toBeNull(); // такого гранта в таблице нет
+  expect(ctx.identity).toBeNull(); // такого гранта в таблице нет
   expect(ctx.actorKind).toBe('agent'); // но путь агентский — на JWT не откатываемся
 });
 
-test('Bearer с битым PAT → actorUserId null (fail-closed, без JWT-fallback)', async () => {
+test('Bearer с битым PAT → identity null (fail-closed, без JWT-fallback)', async () => {
   // Последний символ подменяется НА ЗАВЕДОМО ДРУГОЙ, а не на константу 'e': токен —
   // это hex (tokens.ts, randomBytes.toString('hex')), поэтому его последний символ сам
   // оказывается 'e' примерно в одном прогоне из шестнадцати, и «битый» токен совпадал с
@@ -121,34 +124,34 @@ test('Bearer с битым PAT → actorUserId null (fail-closed, без JWT-fal
   const last = PAT_TOKEN.slice(-1);
   const broken = `Bearer ${PAT_TOKEN.slice(0, -1)}${last === 'e' ? 'f' : 'e'}`;
   const ctx = await createContext(makeReq({ authorization: broken }));
-  expect(ctx.actorUserId).toBeNull();
+  expect(ctx.identity).toBeNull();
   expect(ctx.actorKind).toBe('agent'); // префикс детектирован — путь агентский, не owner
 });
 
 // Отзыв обязан гасить доступ на ОБЕИХ поверхностях, не только на /mcp: иначе отозванный
 // агент продолжал бы читать граф владельца через tRPC.
-test('отозванный грант → actorUserId null, actorKind остаётся agent', async () => {
-  const token = await issuePatGrant(db, { graphId: PAT_OWNER, label: 'на отзыв' });
+test('отозванный грант → identity null, actorKind остаётся agent', async () => {
+  const token = await issuePatGrant(db, { identity: personal(PAT_OWNER), label: 'на отзыв' });
   const identity = await verifyBearer(db, token);
   if (identity === null) throw new Error('выданный токен не прошёл verifyBearer');
-  expect((await createContext(makeReq({ authorization: `Bearer ${token}` }))).actorUserId).toBe(
-    PAT_OWNER,
+  expect((await createContext(makeReq({ authorization: `Bearer ${token}` }))).identity?.actor).toBe(
+    accountOf(PAT_OWNER),
   );
 
   await revokeGrant(db, { graphId: PAT_OWNER, grantId: identity.grantId });
 
   const ctx = await createContext(makeReq({ authorization: `Bearer ${token}` }));
-  expect(ctx.actorUserId).toBeNull();
+  expect(ctx.identity).toBeNull();
   expect(ctx.actorKind).toBe('agent');
 });
 
 // Агент не шлёт CLIENT_VERSION_HEADER → clientVersion null → version-гейт пропускает:
-// полный путь createContext → appRouter, whoami отвечает владельцем PAT
+// полный путь createContext → appRouter, whoami отвечает АКТОРОМ гранта (`issued_by`)
 test('PAT-запрос без заголовка версии проходит version-гейт (whoami через appRouter)', async () => {
   const ctx = await createContext(makeReq({ authorization: `Bearer ${PAT_TOKEN}` }));
   expect(ctx.clientVersion).toBeNull();
   const caller = appRouter.createCaller(ctx);
-  expect(await caller.whoami()).toEqual({ actorUserId: PAT_OWNER });
+  expect(await caller.whoami()).toEqual({ actorUserId: accountOf(PAT_OWNER) });
 });
 
 test('заголовок версии клиента пробрасывается; отсутствует → null', async () => {

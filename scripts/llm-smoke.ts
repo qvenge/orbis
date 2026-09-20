@@ -31,6 +31,7 @@
 
 import { makeDb } from '../apps/server/src/db/client';
 import { withIdentity } from '../apps/server/src/db/with-identity';
+import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
 import { makeLLMProvider } from '../apps/server/src/llm/provider';
 import type { LLMToolDef } from '../apps/server/src/llm/types';
 import { effectiveRegistry } from '../apps/server/src/registry/cache';
@@ -86,13 +87,16 @@ if (provider !== null && provider.modelId === 'echo') {
  * владельца. Набор с кастомными аспектами и есть интересный случай гейта — рукописный
  * набор его не воспроизводит.
  */
-const graphId = process.env.ORBIS_SMOKE_OWNER_ID;
-if (!graphId) {
+const smokeAccount = process.env.ORBIS_SMOKE_OWNER_ID;
+if (!smokeAccount) {
   console.error('llm-smoke: задайте ORBIS_SMOKE_OWNER_ID — от него зависит эффективный реестр.');
   process.exit(1);
 }
+// Резолвер 1 (D44): env — граница внешнего мира; в переменной id АККАУНТА, реестр читается
+// в его ЛИЧНОМ графе. Имя переменной окружения не меняется — её знают ранбук и смоуки.
+const who = identityOfPerson(parseAccountId(smokeAccount));
 const { db, client } = makeDb({ max: 1 });
-const registry = await withIdentity(db, graphId, (tx) => effectiveRegistry(tx, graphId));
+const registry = await withIdentity(db, who, (tx) => effectiveRegistry(tx, who.graph));
 await client.end();
 // Та же конвертация OrbisToolDef → LLMToolDef, что в бою (ai/send-message.ts):
 // расхождение здесь означало бы, что гейт проверяет не ту форму запроса.
