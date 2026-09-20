@@ -526,7 +526,7 @@ async function chatConfirmation(taskId: string): Promise<string> {
   const dedupeKey = `chat:${taskId}`;
   const created = await withIdentity(db, personal(owner), (tx) =>
     createPending(tx, {
-      actor: { userId: owner, kind: 'ai', source: 'chat' },
+      actor: { graphId: owner, kind: 'ai', source: 'chat' },
       tool: 'batch_execute',
       input: {
         batch_id: pendingMessageId(owner, dedupeKey),
@@ -992,7 +992,7 @@ describe('routine.proposal / decideProposal', () => {
       const threadId = await ensureEntityThread(tx, owner, routineId);
       return createPending(tx, {
         threadId,
-        actor: { userId: owner, kind: 'ai', source: 'routine', runId },
+        actor: { graphId: owner, kind: 'ai', source: 'routine', runId },
         tool: 'batch_execute',
         input: {
           batch_id: pendingMessageId(owner, secondBatchId),
@@ -2695,7 +2695,7 @@ describe('routine.runUnits', () => {
     await withIdentity(db, personal(owner), async (tx) =>
       createPending(tx, {
         threadId: await ensureEntityThread(tx, owner, routineId),
-        actor: { userId: owner, kind: 'ai', source: 'routine', runId },
+        actor: { graphId: owner, kind: 'ai', source: 'routine', runId },
         tool: 'batch_execute',
         input: { batch_id: proposalId, operations: [] },
         level: 'explicit-confirmation',

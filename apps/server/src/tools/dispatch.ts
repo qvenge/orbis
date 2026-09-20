@@ -1115,7 +1115,7 @@ async function runMutation(
         // Грант едет в pending-запись: подтверждать будет владелец кнопкой, но
         // атрибуция исполнения остаётся за ТЕМ, кто попросил (§7.8, D11 + С2)
         actor: {
-          userId: ctx.identity.graph,
+          graphId: ctx.identity.graph,
           kind: ctx.actorKind,
           source: ctx.source,
           grantId: ctx.grant?.id,
@@ -1536,7 +1536,7 @@ async function deferRoutineUnit(
       // Тред РУТИНЫ, а не тред вызова (V1.6): единица — событие рутины, и читается она там
       // же, где вся её остальная переписка с владельцем.
       threadId: await ensureEntityThread(tx, ctx.identity.graph, routine.id),
-      actor: { userId: ctx.identity.graph, kind: ctx.actorKind, source: 'routine', runId },
+      actor: { graphId: ctx.identity.graph, kind: ctx.actorKind, source: 'routine', runId },
       tool,
       input: snapshot.input,
       level: 'explicit-confirmation',

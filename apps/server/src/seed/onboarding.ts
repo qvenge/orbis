@@ -159,7 +159,7 @@ export async function seedOwnerGraph(
   // ГРАФ — ПЕРВЫМ (D44, спека Ш-1б): первая же запись мира (`seedOwnerWorld`) несёт FK на `graphs`,
   // и без строки графа упала бы на нём. Порядок «граф → мир → настройки»; стрелка «мир → настройки»
   // из докблока выше не нарушена: строка графа маркером «онбординг прошёл» не служит.
-  await withIdentity(db, who, (tx) => ensurePersonalGraph(tx, who.graph));
+  await withIdentity(db, who, (tx) => ensurePersonalGraph(tx, who));
   await seedOwnerWorld(db, who, { clock });
   return withIdentity(db, who, (tx) => seedOnboarding(tx, who.graph, clock));
 }

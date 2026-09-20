@@ -20,7 +20,7 @@
 //   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts reset-world --confirm <PROD_REF> --i-understand RESET  # РАЗРУШАЮЩАЯ (РП-7)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
-//   bun scripts/ops.ts issue-pat <owner-uuid> [метка] [--scope worker]  # headless-токен (§9.3)
+//   bun scripts/ops.ts issue-pat <uuid аккаунта> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
 import {
   diffBuiltinRegistries,

@@ -567,7 +567,7 @@ describe('сводка карточки: пустая строка — это О
     const summaryOf = async (summary: string | undefined): Promise<string> => {
       const { card } = await withIdentity(db, personal(userA), (tx) =>
         createPending(tx, {
-          actor: { userId: userA, kind: 'ai', source: 'chat' },
+          actor: { graphId: userA, kind: 'ai', source: 'chat' },
           tool: 'entity_update',
           input: { id: target.id, archived: true },
           level: 'explicit-confirmation',
@@ -596,7 +596,7 @@ describe('атрибуция рутины: source routine, run_id и причи�
     const runId = newId();
     const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
       createPending(tx, {
-        actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+        actor: { graphId: userA, kind: 'ai', source: 'routine', runId },
         tool: 'batch_execute',
         input: {
           batch_id: newId(),
@@ -733,7 +733,7 @@ describe('причина отказа edited: правка владельца (�
     const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
       createPending(tx, {
         actor: {
-          userId: userA,
+          graphId: userA,
           kind: 'ai',
           source: 'routine',
           runId,
@@ -798,7 +798,7 @@ async function deferredAction(
   const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
     createPending(tx, {
       threadId,
-      actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+      actor: { graphId: userA, kind: 'ai', source: 'routine', runId },
       kind: 'action',
       tool: 'entity_update',
       input,
@@ -820,7 +820,7 @@ async function askedQuestion(
   const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
     createPending(tx, {
       threadId,
-      actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+      actor: { graphId: userA, kind: 'ai', source: 'routine', runId },
       kind: 'question',
       question,
       options,
@@ -839,7 +839,7 @@ async function proposalOfRun(runId: string, threadId?: string): Promise<string> 
   const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
     createPending(tx, {
       threadId,
-      actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+      actor: { graphId: userA, kind: 'ai', source: 'routine', runId },
       tool: 'batch_execute',
       input: {
         batch_id: newId(),
@@ -1542,7 +1542,7 @@ describe('границы вопроса проверяются при ЗАПИС
     const outOfBounds = async (question: string, options?: string[]) =>
       withIdentity(db, personal(userA), (tx) =>
         createPending(tx, {
-          actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+          actor: { graphId: userA, kind: 'ai', source: 'routine', runId },
           kind: 'question',
           question,
           options,

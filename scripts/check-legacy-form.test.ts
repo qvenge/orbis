@@ -366,6 +366,17 @@ const SAMPLES: ReadonlyArray<{
       'const d = byOwnerId;',
     ],
   },
+  {
+    id: 'identity-pair',
+    lines: [
+      // Обе ветки паттерна (порядок ключей любой) и обе формы записи — с двоеточием и
+      // сокращённая: выпадет альтернатива — счёт строк разойдётся.
+      'const a = { actor: acc, graph: g };',
+      'const b = { graph: g, actor: acc };',
+      'const c = { actor: acc, graph };',
+      'const d = withIdentity(db, { actor: x, graph: y }, fn);',
+    ],
+  },
 ];
 
 test('позитивный контроль: у каждого маркера есть образец', () => {
@@ -441,6 +452,7 @@ test('имена маркеров — договор: на них ссылают
     'agenda-three-texts',
     'exclude-blocked-literal',
     'owner-key',
+    'identity-pair',
   ]);
 });
 

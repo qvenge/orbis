@@ -164,7 +164,7 @@ describe('ai.approve / ai.reject: гейт рода записи (D42 ОЧ.2, С
   async function seedQuestion(question: string): Promise<string> {
     return withIdentity(db, personal(userA), async (tx) => {
       const created = await createPending(tx, {
-        actor: { userId: userA, kind: 'ai', source: 'routine', runId: newId() },
+        actor: { graphId: userA, kind: 'ai', source: 'routine', runId: newId() },
         kind: 'question',
         question,
         level: 'explicit-confirmation',

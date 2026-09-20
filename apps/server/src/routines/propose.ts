@@ -252,7 +252,7 @@ export async function runPropose(
     await createPending(tx, {
       threadId,
       actor: {
-        userId: ctx.identity.graph,
+        graphId: ctx.identity.graph,
         kind: 'ai',
         source: 'routine',
         runId: routine.runId,

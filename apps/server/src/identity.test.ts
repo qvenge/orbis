@@ -14,6 +14,12 @@ const { db, client } = appDb(); // { db, client } — как во всех сь�
 // `string` и сам тест не компилировался бы — те же значения, что в брифе.
 const ACCOUNT = parseAccountId('0aa00000-0000-4000-8000-0000000000a1');
 const GRAPH = parseGraphId('0bb00000-0000-4000-8000-0000000000b1'); // НЕ равен аккаунту намеренно
+// Граф-организация с четырьмя членами — фикстура предиката JOIN резолвера тика (см. последний кейс).
+const GRAPH2 = parseGraphId('0cc00000-0000-4000-8000-0000000000c1');
+const OPERATOR = parseAccountId('0dd00000-0000-4000-8000-0000000000d1');
+const EX_OWNER = parseAccountId('0dd00000-0000-4000-8000-0000000000d2');
+const OWNER = parseAccountId('0dd00000-0000-4000-8000-0000000000d3');
+const LATE_OWNER = parseAccountId('0dd00000-0000-4000-8000-0000000000d4');
 
 test('границы внешнего мира: не-UUID отклоняется, регистр нормализуется', () => {
   expect(() => parseAccountId('не uuid')).toThrow(/UUID/);
@@ -61,6 +67,36 @@ test('резолвер 3 (тик): пара берётся из graph_members, �
 
 test('резолвер 3: граф без строки настроек (онбординг не пройден) тик не обходит', async () => {
   const pairs = await identitiesForScheduler(db);
-  // truncateAll восстановил личности процесса как графы БЕЗ user_settings — их в обходе быть не должно
-  expect(pairs.every((p) => p.graph === GRAPH)).toBe(true);
+  // truncateAll восстановил личности процесса как графы БЕЗ user_settings — их в обходе быть не
+  // должно. Сравнение СПИСКОМ, а не `every`: на пустом массиве `every` истинен, и тест был бы
+  // зелёным даже если бы резолвер не возвращал вообще ничего (находка гейт-ревью Г-3).
+  expect(pairs.map((p) => p.graph)).toEqual([GRAPH]);
+});
+
+test('резолвер 3: актор — держатель ДЕЙСТВУЮЩЕГО гранта owner, а не первый член графа', async () => {
+  // Три клаузы предиката JOIN пинятся ОДНОЙ фикстурой, и каждая — своим «отвлекающим» членом:
+  //   `grant_kind = 'owner'`  — оператор с САМЫМ РАННИМ issued_at не должен стать актором;
+  //   `revoked_at IS NULL`    — отозванный owner, тоже более ранний, не должен стать актором;
+  //   ORDER BY issued_at      — из двух ДЕЙСТВУЮЩИХ owner'ов берётся ранний (DISTINCT ON).
+  // Случай «у графа не осталось действующего owner» не проверяется здесь НАМЕРЕННО: его
+  // запрещает отложенный триггер И-1 (`graph_members_keep_owner`, 0020) — отзыв последнего
+  // владельца даёт 23514 на коммите, то есть такого графа в базе не бывает по построению.
+  const admin = adminDb();
+  await admin.db.transaction(async (tx) => {
+    await tx.execute(
+      sql`INSERT INTO graphs (id, owner_kind, owner_ref) VALUES (${GRAPH2}::uuid, 'organization', NULL)`,
+    );
+    await tx.execute(sql`INSERT INTO graph_members
+      (id, graph_id, account_id, grant_kind, issued_by, issued_at, revoked_at) VALUES
+      (gen_random_uuid(), ${GRAPH2}::uuid, ${OPERATOR}::uuid, 'operator', ${OPERATOR}::uuid, '2020-01-01Z', NULL),
+      (gen_random_uuid(), ${GRAPH2}::uuid, ${EX_OWNER}::uuid, 'owner',    ${EX_OWNER}::uuid, '2021-01-01Z', now()),
+      (gen_random_uuid(), ${GRAPH2}::uuid, ${OWNER}::uuid,    'owner',    ${OWNER}::uuid,    '2022-01-01Z', NULL),
+      (gen_random_uuid(), ${GRAPH2}::uuid, ${LATE_OWNER}::uuid, 'owner',  ${LATE_OWNER}::uuid, '2023-01-01Z', NULL)`);
+    await tx.execute(sql`INSERT INTO user_settings (graph_id) VALUES (${GRAPH2}::uuid)`);
+  });
+  await admin.client.end();
+  const pairs = await identitiesForScheduler(db);
+  expect(pairs).toContainEqual({ actor: OWNER, graph: GRAPH2 });
+  // И ровно одна пара на граф: `DISTINCT ON (graph_id)` не отдаёт трёх владельцев тремя строками.
+  expect(pairs.filter((p) => p.graph === GRAPH2)).toHaveLength(1);
 });

@@ -241,7 +241,7 @@ async function crashedEdit(
     await createPending(tx, {
       threadId: rejected.threadId,
       actor: {
-        userId: owner,
+        graphId: owner,
         kind: 'ai',
         source: 'routine',
         runId: run.runId,

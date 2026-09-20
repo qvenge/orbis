@@ -208,11 +208,11 @@ export type PendingRecord = z.infer<typeof pendingRecord>;
 
 export interface PendingActor {
   /**
-   * Ключ ГРАФА, а не аккаунта (D44), несмотря на имя: из него считаются `pendingMessageId`
-   * и глобальный тред карточки. Имя поля — ключ ЗАПИСАННОГО json'а (`metadata.pending.actor`),
-   * и переименование сменило бы форму уже лежащих в проде строк, а не только тип.
+   * Граф, которому принадлежит карточка (D44): из него считаются `pendingMessageId` и
+   * глобальный тред. Поле живёт в памяти и в JSON НЕ пишется — `metadata.pending` несёт
+   * `actor_kind`, `source`, `actor_grant_id`, `run_id`, `edited_from` (см. `createPending`).
    */
-  userId: GraphId;
+  graphId: GraphId;
   /** `system` — единица, поставленная самой системой (см. `createSystemPending`). */
   kind: ActorKind | 'system';
   source: 'chat' | 'mcp' | 'routine' | 'system';
@@ -348,9 +348,9 @@ export async function createPending(
     throw new Error(`createPending: уровень «${args.level}» pending не порождает (§7.10)`);
   }
   const pendingId =
-    args.dedupeKey !== undefined ? pendingMessageId(args.actor.userId, args.dedupeKey) : newId();
+    args.dedupeKey !== undefined ? pendingMessageId(args.actor.graphId, args.dedupeKey) : newId();
   if (args.kind === 'question') assertQuestionBounds(pendingId, args.question, args.options);
-  const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.userId));
+  const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.graphId));
   // У вопроса тула нет — `pendingSummary` вернул бы `undefined` в summary карточки и в
   // «Требуется подтверждение: undefined»; сводка вопроса — сам вопрос, усечённый
   //
@@ -452,7 +452,7 @@ export async function createSystemPending(
 ): Promise<{ id: string }> {
   const { pendingId } = await createPending(tx, {
     ...(args.threadId !== undefined && { threadId: args.threadId }),
-    actor: { userId: args.graphId, kind: 'system', source: 'system' },
+    actor: { graphId: args.graphId, kind: 'system', source: 'system' },
     level: 'explicit-confirmation',
     kind: 'action',
     tool: args.tool,

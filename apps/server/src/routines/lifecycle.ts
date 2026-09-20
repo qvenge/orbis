@@ -1865,7 +1865,13 @@ async function createEditedProposal(
       // Тред карточки исходного и есть тред рутины: правленое обязано лечь туда же, иначе
       // лента рутины разорвётся, а `ensureEntityThread` здесь был бы вторым источником
       threadId: rejected.threadId,
-      actor: { userId: identity.graph, kind: 'ai', source: 'routine', runId, editedFrom: parentId },
+      actor: {
+        graphId: identity.graph,
+        kind: 'ai',
+        source: 'routine',
+        runId,
+        editedFrom: parentId,
+      },
       tool: 'batch_execute',
       input: { batch_id: childId, operations },
       level: 'explicit-confirmation',

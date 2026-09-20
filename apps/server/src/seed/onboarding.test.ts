@@ -31,6 +31,7 @@ import { validateEntityProps } from '../registry/validate-props';
 import { appRouter } from '../router';
 import { SEED_CATEGORIES } from '../seed/categories';
 import { seedSmartListId } from '../seed/onboarding';
+import { ensurePersonalGraph } from '../seed/personal-graph';
 import {
   ALL_TASKS_BODY,
   DAILY_PLANNING_BODY,
@@ -125,6 +126,30 @@ afterAll(async () => {
 });
 
 describe('user.seedOnboarding (02 §7): состав и одноразовость', () => {
+  test('сигнатура сева личного графа: один id вместо пары не компилируется (D44, Ш-2)', async () => {
+    // Смысл пина: до фикс-раунда лист принимал `accountId: string`, и вызов с `who.graph`
+    // клал ГРАФ в колонки аккаунта (`owner_ref`, `account_id`, `issued_by`) молча — компилятор
+    // этого не видел (гейт-ревью Г-3, Important-1). Теперь единственный вход — ПАРА.
+    const who = personal(await freshGraph());
+    await withIdentity(db, who, async (tx) => {
+      // @ts-expect-error — GraphId вместо Identity: один id сюда больше не передать
+      void (() => ensurePersonalGraph(tx, who.graph));
+      // @ts-expect-error — AccountId вместо Identity: и аккаунт в одиночку тоже
+      void (() => ensurePersonalGraph(tx, who.actor));
+      // Разведение колонок ВНУТРИ листа (`owner_ref`/`account_id`/`issued_by` — аккаунт,
+      // `id`/`graph_id` — граф) держат брендированные параметры `personalGraphRow`/
+      // `ownerMemberRow`: подстановка одного бренда на место другого — ошибка компиляции,
+      // а не красный тест (колонки drizzle — голый `uuid`, Р-КГ-5). Проверено мутацией.
+      await ensurePersonalGraph(tx, who); // идемпотентно: граф уже заведён `freshGraph()`
+    });
+    expect(await graphRows(who.graph)).toEqual({
+      graphs: 1,
+      ownerRefOk: 1,
+      members: 1,
+      issuedByOk: 1,
+    });
+  });
+
   test('создаёт личный граф, ровно 12+6+садовник сущностей, настройки и глобальный тред; повтор → {seeded:false}, ни граф, ни count не растут', async () => {
     // Аккаунт БЕЗ графа — обычной фикстурой `freshGraph()` строка `graphs` уже была бы заведена,
     // и сев графа первым шагом `seedOwnerGraph` (D44) проверять было бы нечем.

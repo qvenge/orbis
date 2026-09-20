@@ -1,11 +1,34 @@
+import type { AccountId, GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { graphMembers, graphs } from '../db/schema';
 import type { Tx } from '../db/with-identity';
+import type { Identity } from '../identity';
 
 /**
- * Личный граф аккаунта: строка `graphs` (id = id аккаунта — тождество держит CHECK таблицы) и
- * грант `owner` самому себе. Идемпотентно: повторный заход ничего не вставляет.
+ * Строка `graphs` личного графа. Отдельной функцией с ДВУМЯ брендированными параметрами, а не
+ * литералом на месте: колонки drizzle — голый `uuid`, и в `owner_ref` (колонка АККАУНТА) id графа
+ * уехал бы молча. Здесь перепутать их компилятор не даёт — это единственная защита, потому что
+ * бренды на колонки не навешиваются (Р-КГ-5, YAGNI).
+ */
+function personalGraphRow(graph: GraphId, owner: AccountId): typeof graphs.$inferInsert {
+  return { id: graph, ownerKind: 'person', ownerRef: owner };
+}
+
+/** Строка `graph_members`: грант `owner`, выписанный аккаунтом самому себе. Разведение — как выше. */
+function ownerMemberRow(graph: GraphId, account: AccountId): typeof graphMembers.$inferInsert {
+  return { id: newId(), graphId: graph, accountId: account, grantKind: 'owner', issuedBy: account };
+}
+
+/**
+ * Личный граф аккаунта: строка `graphs` и грант `owner` самому себе. Идемпотентно: повторный
+ * заход ничего не вставляет.
+ *
+ * Принимает ПАРУ, а не один id (D44): у графа и аккаунта здесь разные колонки — `id`/`graph_id`
+ * против `owner_ref`/`account_id`/`issued_by`, — и склеить их значением можно только через
+ * резолвер `identityOfPerson`. Тождество `id = owner_ref` приезжает ИЗ НЕГО, а держит его CHECK
+ * `graphs_personal_identity`: пара с `graph ≠ actor` (Bearer, тик) отсюда даст `23514`, а не
+ * молчаливый «личный граф» с чужим `owner_ref`. Второго места тождества id в коде нет.
  *
  * Идёт под ролью `authenticated` с `sub` = аккаунт: INSERT-политики 0020 пускают ровно эту
  * пару строк — личный граф самого себя. БЕЗ `RETURNING`: пока нет строки членства, только что
@@ -22,20 +45,11 @@ import type { Tx } from '../db/with-identity';
  * У `graph_members` арбитр указан: её SELECT-политика (`account_id = auth.uid()`) свою же строку
  * пропускает, а без арбитра частичный индекс не выбрался бы.
  */
-export async function ensurePersonalGraph(tx: Tx, accountId: string): Promise<void> {
-  await tx
-    .insert(graphs)
-    .values({ id: accountId, ownerKind: 'person', ownerRef: accountId })
-    .onConflictDoNothing();
+export async function ensurePersonalGraph(tx: Tx, who: Identity): Promise<void> {
+  await tx.insert(graphs).values(personalGraphRow(who.graph, who.actor)).onConflictDoNothing();
   await tx
     .insert(graphMembers)
-    .values({
-      id: newId(),
-      graphId: accountId,
-      accountId,
-      grantKind: 'owner',
-      issuedBy: accountId,
-    })
+    .values(ownerMemberRow(who.graph, who.actor))
     .onConflictDoNothing({
       target: [graphMembers.graphId, graphMembers.accountId],
       // сырым текстом: колонка drizzle отрендерилась бы квалифицированным именем, а предикату

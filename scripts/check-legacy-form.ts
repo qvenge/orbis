@@ -289,6 +289,24 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
   // Роль «владелец» (`actorKind: 'owner'`, `ownerOnlyProcedure`, `ownerCaller`) маркер не ловит и
   // ловить не должен: это проверка транспорта, а не ключ строк (спека §2).
   { id: 'owner-key', pattern: String.raw`[oO]wner_?[Ii]d` },
+  // identity-pair — ПАРА «актор + текущий граф» (D44, спека Ш-2) рождается ровно в трёх резолверах
+  // `apps/server/src/identity.ts`. Греп-гейт приведений (`as GraphId`) этого не держит: собранный
+  // руками литерал `{ actor: x, graph: y }` — не приведение, оба бренда в нём верные, и четвёртый
+  // «резолвер» заводится молча (гейт-ревью Г-3, Minor-3, мутация MR2; рулинг Р-ИГ-9).
+  //
+  // ЧЕГО МАРКЕР НЕ ЛОВИТ, И ЭТО НАЗВАНО ВСЛУХ: `git grep` построчен, поэтому литерал, разложенный
+  // на строки (`{\n  actor: …,\n  graph: …,\n}`), мимо него проходит. Маркер — растяжка против
+  // дрейфа в той форме, которую печатает biome для короткой пары, а не доказательство. Полное
+  // доказательство даёт закрытый конструктор `Identity` (приватный символ в `identity.ts`) — оно
+  // дороже и оставлено владельцу плана как альтернатива.
+  //
+  // Исключение `COMMENT_ONLY_LINE` есть: пара — ЖИВАЯ форма, и докблоки обязаны называть её
+  // дословно (в отличие от `owner-key`, где старое имя в докблоке — ложь).
+  {
+    id: 'identity-pair',
+    pattern: String.raw`\{[^{}]*\bactor\b[^{}]*\bgraph\b|\{[^{}]*\bgraph\b[^{}]*\bactor\b`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
 ];
 
 export type AllowEntry = {
@@ -410,6 +428,55 @@ export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
       'подогнать их под сегодняшний сид нельзя — в базе лежит именно эта строка, и именно ' +
       'на ней бэкфилл обязан сработать один раз',
   },
+  // --- identity-pair: три резолвера и сьюты, для которых пара — ПРЕДМЕТ проверки ----------
+  {
+    path: 'apps/server/src/identity.ts',
+    markers: ['identity-pair'],
+    reason:
+      'три резолвера пары (D44, спека Ш-2): единственное место, где пара законно собирается — ' +
+      'ради этого маркер и заведён',
+  },
+  {
+    path: 'apps/server/test/helpers.ts',
+    markers: ['identity-pair'],
+    reason:
+      'тестовый близнец резолвера 1 (`personal()`): обвязка обязана уметь собрать пару, иначе ' +
+      'каждый сьют собирал бы её у себя — ровно то, что маркер запрещает',
+  },
+  {
+    path: 'apps/server/src/db/with-identity.test.ts',
+    markers: ['identity-pair'],
+    reason:
+      'сьют самого `withIdentity`: пара с РАЗНЫМИ значениями и не-UUID актор — предмет ' +
+      'проверки, собрать их через `personal()` нельзя по построению',
+  },
+  {
+    path: 'apps/server/src/identity.test.ts',
+    markers: ['identity-pair'],
+    reason: 'сверка того, ЧТО вернули резолверы: ожидаемая пара пишется дословно',
+  },
+  {
+    path: 'apps/server/src/oauth/grants.test.ts',
+    markers: ['identity-pair'],
+    reason:
+      'фикстура «оператор в чужом графе» для гейта владения (Р-ИГ-7): пара с graph ≠ actor — ' +
+      'единственный способ проверить, что гейт различает актора и граф',
+  },
+  {
+    path: 'apps/server/src/registry/cache.test.ts',
+    markers: ['identity-pair'],
+    reason:
+      'пин «ключ кеша реестра — ГРАФ»: два разных актора в одном графе — то самое, что пин ' +
+      'и утверждает',
+  },
+  {
+    path: 'apps/server/test/graph-vs-account.test.ts',
+    markers: ['identity-pair'],
+    reason:
+      'сьют «граф ≠ аккаунт» (гейт миграции 0021) целиком про пару с разными значениями — ' +
+      'и в именах тестов она названа дословно',
+  },
+
   {
     path: 'apps/server/perf/explain.test.ts',
     markers: ['aspects-legacy', 'entity-meta'],

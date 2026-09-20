@@ -109,7 +109,7 @@ export async function runAsk(ctx: ToolCallCtx, input: AskInput): Promise<ToolDis
     const threadId = await ensureEntityThread(tx, ctx.identity.graph, routine.id);
     await createPending(tx, {
       threadId,
-      actor: { userId: ctx.identity.graph, kind: 'ai', source: 'routine', runId: routine.runId },
+      actor: { graphId: ctx.identity.graph, kind: 'ai', source: 'routine', runId: routine.runId },
       kind: 'question',
       question: input.question,
       ...(input.options !== undefined && { options: input.options }),

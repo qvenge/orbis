@@ -13,6 +13,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { agentGrants, oauthClients } from '../db/schema';
+import { identityOfPerson, parseAccountId } from '../identity';
 import { exchangeAuthorizationCode, issuePatGrant, verifyBearer } from '../oauth/grants';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -396,6 +397,36 @@ test('не-ASCII в адресе возврата даёт годный Location
 // ---------------------------------------------------------------------------
 // Список и отзыв доступов
 // ---------------------------------------------------------------------------
+
+/**
+ * Р-ИГ-7 на ТРАНСПОРТЕ. Экран согласия рендерится ВНЕ `OnboardingGate`
+ * (`apps/web/src/main.tsx`), поэтому у аккаунта может ещё не быть личного графа — а с FK
+ * `agent_grants.graph_id → graphs.id` (0020) вставка гранта падала бы сырым `23503` → 500.
+ * Половину «домен отвечает типизированным отказом» держит `oauth/grants.test.ts`; здесь —
+ * вторая половина: что роутер переводит его в FORBIDDEN, а не роняет 500.
+ *
+ * Вызывающий собран НЕ через `mintGraph()`: обвязка тестов заводит строку `graphs` и тем
+ * самым прячет ровно тот случай, ради которого кейс существует (та же мина, что спрятала
+ * дыру в `oauth.e2e.test.ts` после Г-2).
+ */
+test('согласие до онбординга: аккаунт БЕЗ графа получает FORBIDDEN, а не 500 (Р-ИГ-7)', async () => {
+  const clientId = await seedClient();
+  const noGraph = identityOfPerson(parseAccountId(crypto.randomUUID()));
+  const caller = createCaller({ identity: noGraph, actorKind: 'owner', db, clientVersion: null });
+
+  const err = await caller.oauth.consent(consentInput(clientId)).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  // МЕХАНИЗМ, а не просто «отказ» (урок Ф-Г-37): код именно FORBIDDEN, текст — домена, и в
+  // нём нет ни кода FK, ни обезличенного «внутренняя ошибка» от errorFormatter'а 500.
+  expect(err).toBeInstanceOf(TRPCError);
+  expect((err as TRPCError).code).toBe('FORBIDDEN');
+  expect((err as TRPCError).message).toContain('граф не заведён');
+  expect((err as TRPCError).message).not.toContain('23503');
+  // Отказ настоящий: строки гранта после него нет.
+  expect(await db.select().from(agentGrants)).toHaveLength(0);
+});
 
 test('агент не управляет доступами через tRPC', async () => {
   const clientId = await seedClient();

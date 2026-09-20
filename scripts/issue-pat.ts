@@ -20,6 +20,9 @@ if ('error' in args) {
 
 const { accountId, label, scope } = args;
 const { db, client } = makeDb({ max: 1 });
+// Код возврата выставляется ПОСЛЕ `finally`, а не `process.exit` внутри него: выход из
+// catch-ветки прыгал бы мимо единственного `client.end()` (пул закрывался бы дважды).
+let failed = false;
 try {
   // Резолвер 1 (D44): аргумент CLI — граница внешнего мира, пара рождается здесь.
   const token = await issuePatGrant(db, {
@@ -40,8 +43,8 @@ try {
   // с текстом, а не сырой 23503 от FK `agent_grants.graph_id` (Р-ИГ-7).
   if (!(e instanceof NotGraphOwnerError)) throw e;
   console.error(`issue-pat: ${e.message}`);
-  await client.end();
-  process.exit(1);
+  failed = true;
 } finally {
   await client.end();
 }
+if (failed) process.exit(1);
