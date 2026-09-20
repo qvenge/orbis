@@ -607,6 +607,11 @@ import { setDraftScope } from '../features/entity-editor/draft-storage';
   его никто не читает, снять и поле, иначе оно станет `graphId` шагом 4. Тесты `draft.test.tsx` (12 строк) ставили скоуп
   через `entity.ownerId` фикстуры — теперь ставят его явным `setDraftScope('<id>')` в подготовке; тест изоляции двух
   аккаунтов переключает скоуп тем же вызовом. **Новых тестов не добавлять** (счётчик web обязан сойтись с Г-0).
+  Файлов, зависящих от скоупа, ТРИ, а не один (правка 21.09 по исполнению Г-1, Ф-Г-31): кроме `draft.test.tsx` —
+  `apps/web/src/features/entity-detail/detail.test.tsx` (тоже сеет черновик ключом от `entity.ownerId` фикстуры;
+  без правки даёт 16 красных тестов веба) и `useBodySave`-фикстуры `save.test.tsx` (типизированы `BodySaveEntity`
+  и не компилируются после снятия поля). Искать их надо не по списку, а грепом:
+  `git grep -ln 'setDraftScope\|draft-storage' -- apps/web/src`.
   Прогон: `cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g/apps/web && bunx vitest run src/features/entity-editor` → зелёный. В `rename-ledger.md`, раздел (г):
   `draft-storage.ts:78` — аккаунт; `lib/retry-buffer/storage.ts:46` — аккаунт, уже `userId`, не правится;
   `features/import/namespace.ts:2-3` — комментарий про ключ `(owner_id, namespace, external_id)` таблицы `entity_origins`:
@@ -659,14 +664,32 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git diff
 # Отвечает «переименована» (вторая строка списка) на каждый вопрос drizzle-kit о КОЛОНКЕ.
 # Прежняя обёртка (.superpowers/sdd/2026-08-26-properties-reform-a/drizzle-generate.exp) отвечает
 # «create column» — для переименования она непригодна (Ф-Г-18).
+#
+# ОДИН ОТВЕТ НА ВОПРОС, И ЭТО НЕ СТИЛЬ (правка 21.09 по исполнению Г-1, Ф-Г-30). Список drizzle-kit
+# ПЕРЕРИСОВЫВАЕТ себя после каждой нажатой стрелки, и текст вопроса печатается заново. Плоский
+# `exp_continue` на образец вопроса отвечает и на перерисовку тоже: второй «вниз» в списке из двух
+# строк возвращает выбор на «create column», и таблица молча уезжает в DROP+ADD — в первом прогоне
+# Г-1 так ответились `agent_grants` и `contract_definitions` (13 renamed / 2 created) ПРИ EXIT 0.
+# Поэтому после отправки клавиш обёртка ЖДЁТ ВЕРДИКТ по колонке и только потом слушает следующий
+# вопрос, а вердикт «created» останавливает прогон кодом 4 — вместо тихо неверного снимка.
 set timeout 180
 cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g/apps/server
 spawn bunx drizzle-kit generate --name graph_key_rename
-expect {
-  -re {column in [^\n]* table created or renamed} { send "\033\[B\r"; exp_continue }
-  -re {(schema|policy|role|enum|sequence|view) created or renamed} { puts "\nНЕОЖИДАННЫЙ ВОПРОС"; exit 3 }
-  eof { }
-  timeout { puts "TIMEOUT"; exit 2 }
+set running 1
+while {$running} {
+  expect {
+    -re {(schema|policy|role|enum|sequence|view) created or renamed} { puts "\nНЕОЖИДАННЫЙ ВОПРОС"; exit 3 }
+    -re {column in [^\n]* table created or renamed} {
+      send "\033\[B\r"
+      expect {
+        -re {column will be renamed} { }
+        -re {column will be created} { puts "\nОТВЕТ УШЁЛ В create column"; exit 4 }
+        timeout { puts "TIMEOUT"; exit 2 }
+      }
+    }
+    eof { set running 0 }
+    timeout { puts "TIMEOUT"; exit 2 }
+  }
 }
 catch wait result
 exit [lindex $result 3]
