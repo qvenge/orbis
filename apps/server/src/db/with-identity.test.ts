@@ -34,9 +34,35 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
       withIdentity(db, structuredClone(personal(userA)), async () => {}),
     ).rejects.toThrow(/не пара из резолверов/);
 
-    // `JSON.parse` символов не производит вовсе.
+    // `JSON.parse` приватных полей не производит вовсе.
     const parsed = JSON.parse(JSON.stringify(personal(userA))) as Identity;
     await expect(withIdentity(db, parsed, async () => {})).rejects.toThrow(/не пара из резолверов/);
+
+    // ЧЕТЫРЕ ФОРМЫ, КОТОРЫЕ СИМВОЛЬНЫЙ БРЕНД НЕ ДЕРЖАЛ (находка ре-ревью). Символ — свойство:
+    // он виден через прототип, вынимается `getOwnPropertySymbols` и подделывается `Proxy`, и все
+    // четыре давали `isIdentity === true` с ЧУЖИМ графом и доезжали до `set_config`. Приватное
+    // поле класса закрывает их все — оно внутренний слот ЭКЗЕМПЛЯРА, а не свойство.
+    const real = personal(userA);
+    const viaCreate = Object.create(real, {
+      graph: { value: userB, enumerable: true },
+    }) as Identity;
+    await expect(withIdentity(db, viaCreate, async () => {})).rejects.toThrow(
+      /не пара из резолверов/,
+    );
+
+    const viaProto = { actor: accountOf(userA), graph: userB };
+    Object.setPrototypeOf(viaProto, real);
+    await expect(withIdentity(db, viaProto as Identity, async () => {})).rejects.toThrow(
+      /не пара из резолверов/,
+    );
+
+    // Копировать нечего — у пары НЕТ собственных символов; строка это и утверждает.
+    expect(Object.getOwnPropertySymbols(real)).toEqual([]);
+
+    const viaProxy = new Proxy(real, {}) as Identity;
+    await expect(withIdentity(db, viaProxy, async () => {})).rejects.toThrow(
+      /не пара из резолверов/,
+    );
   });
 
   test('рантайм-барьер: ЖИВУЮ пару не подменить на месте — она заморожена', () => {

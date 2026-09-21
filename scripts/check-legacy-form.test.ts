@@ -391,9 +391,17 @@ const SAMPLES: ReadonlyArray<{
       'const b = x as AccountId;',
       'const c = x as unknown as Identity;',
       'const d = who.actor as string as GraphId;',
-      // Отмывка через границу: аргумент — поле пары, а не переменная из внешнего мира.
-      'const e = parseGraphId(who.actor);',
-      'const f = parseAccountId(who.graph);',
+      // Угловая форма того же приведения (альтернатива 2 паттерна).
+      'const e = <GraphId>(raw);',
+      // `as never` / `as any` на поле пары и на переменной актора — универсальное приведение.
+      'const f = who.graph as never;',
+      'const g = someActor as any;',
+      // Отмывка через границу: аргумент — поле пары, а не строка из внешнего мира. Три формы:
+      // одна точка, две точки (`ctx.identity.*` — самая естественная прод-форма) и обёртка.
+      'const h = parseGraphId(who.actor);',
+      'const i = parseAccountId(String(ctx.identity.graph));',
+      // Она же в обратном порядке на одной строке — поле сначала кладут в переменную.
+      'const j = who.actor; const k = parseGraphId(j);',
     ],
     // Литерал пары в образцах `brand-cast` не пишется — иначе он засчитался бы второму маркеру
     // и пин «каждый маркер ловит ТОЛЬКО свой файл» перестал бы быть различающим.

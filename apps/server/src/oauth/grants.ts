@@ -9,7 +9,7 @@ import { type AccountId, type GrantScope, type GraphId, newId } from '@orbis/sha
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { agentGrants } from '../db/schema';
-import { type Identity, parseAccountId, parseGraphId } from '../identity';
+import { type Identity, isIdentity, parseAccountId, parseGraphId } from '../identity';
 import { OAuthError } from './errors';
 import {
   ACCESS_PREFIX,
@@ -167,6 +167,20 @@ export class NotGraphOwnerError extends Error {
 }
 
 async function assertHoldsOwnerGrant(db: Db, who: Identity): Promise<void> {
+  // РАНТАЙМ-БАРЬЕР — ПЕРВОЙ СТРОКОЙ, как в `withIdentity`. Выдача грантов идёт под `orbis_app`
+  // и МИМО `withIdentity` (`ops.ts issue-pat` → `issuePatGrant` → прямой `INSERT agent_grants`),
+  // поэтому барьер, стоящий только там, этот путь НЕ закрывает — измерено зондом ре-ревью:
+  // пара, собранная литералом в `scripts/` (а те не входят ни в один tsconfig, и компилятор их
+  // не видит), проходила проверку членства и ПОЛУЧАЛА токен в чужом графе. Ниже и есть та
+  // проверка членства — она держит «этот аккаунт владеет этим графом», но не «эту пару выдал
+  // резолвер», а у пары из ненадёжного источника оба поля произвольны.
+  if (!isIdentity(who)) {
+    throw new Error(
+      'issueGrant: получена не пара из резолверов identity.ts. Пару выдают только ' +
+        'identityOfPerson / identityOfGrant / identitiesForScheduler; собранный руками объект ' +
+        'той же формы парой не является (D44, спека §3.4).',
+    );
+  }
   const rows = await db.execute(sql`SELECT 1 FROM graph_members
     WHERE graph_id = ${who.graph}::uuid AND account_id = ${who.actor}::uuid
       AND grant_kind = 'owner' AND revoked_at IS NULL LIMIT 1`);

@@ -15,7 +15,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { agentGrants, oauthClients } from '../db/schema';
-import { identityOfGrant, identityOfPerson, parseAccountId } from '../identity';
+import { type Identity, identityOfGrant, identityOfPerson, parseAccountId } from '../identity';
 import {
   createAuthorizationCode,
   exchangeAuthorizationCode,
@@ -612,6 +612,41 @@ test('грант выписывает только держатель owner: у 
   );
   expect(rows).toHaveLength(1);
   expect(rows[0]?.by).toBe(accountOf(A));
+});
+
+test('рантайм-барьер выдачи: подделанная пара не получает гранта, даже когда членство в базе ЕСТЬ', async () => {
+  // Путь выдачи грантов идёт под `orbis_app` и МИМО `withIdentity` (`ops.ts issue-pat` →
+  // `issuePatGrant` → прямой `INSERT agent_grants`), поэтому барьер `isIdentity`, стоящий только
+  // в `withIdentity`, этот путь НЕ закрывал. Измерено зондом ре-ревью: пара, собранная литералом
+  // в `scripts/` (каталог вне всех tsconfig — компилятор его не видит), проходила проверку
+  // членства и ПОЛУЧАЛА токен в чужом графе.
+  //
+  // Фикстура нарочно СОГЛАСОВАНА с базой: членство настоящее, и отказ приходит НЕ от него —
+  // иначе кейс проверял бы `assertHoldsOwnerGrant`, а не бренд. Контроль этого — ниже.
+  const graph = await freshGraph();
+  const forged = { actor: accountOf(graph), graph } as unknown as Identity;
+
+  await expect(issuePatGrant(db, { identity: forged, label: 'подделка' })).rejects.toThrow(
+    /не пара из резолверов/,
+  );
+  const { challenge } = pkce();
+  const clientId = await seedClient('forged-client');
+  await expect(
+    createAuthorizationCode(db, {
+      identity: forged,
+      clientId,
+      label: 'подделка',
+      redirectUri: REDIRECT,
+      codeChallenge: challenge,
+      scope: 'full',
+    }),
+  ).rejects.toThrow(/не пара из резолверов/);
+  expect(await grantsOfGraph(graph)).toBe(0);
+
+  // КОНТРОЛЬ: та же пара из резолвера — грант выписывается. Без него кейс был бы зелен и на
+  // сломанном членстве, то есть доказывал бы не то, что называет.
+  await issuePatGrant(db, { identity: personal(graph), label: 'свой' });
+  expect(await grantsOfGraph(graph)).toBe(1);
 });
 
 test('аккаунт БЕЗ графа (согласие до онбординга): NotGraphOwnerError, а не сырой 23503', async () => {
