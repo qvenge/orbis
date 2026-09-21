@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(157);
+SELECT plan(158);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -976,25 +976,45 @@ SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
   0, 'ни одна политика строк не сравнивает ключ с auth.uid(): вечного доступа по равенству id нет');
 SELECT col_not_null('public', 'agent_grants', 'issued_by', 'у гранта агента всегда есть выдавший аккаунт');
 -- ФОРМА ВСЕХ 68 ПОЛИТИК СТРОК — по каталогу, а не по тексту миграции (Important-3 гейт-ревью).
--- Поведением обе половины проверены на `entities` (126–137) и на двух формах-исключениях (выше),
--- но потерю половины на любой из остальных таблиц не поймал бы НИКТО: мутация «снять actor_reads
--- у user_settings.current_graph_select» прошла pgTAP 148/148 и полный серверный сьют. Это ровно
--- тот отказ, ради которого затеян срез: любой, кто выставил `graph` в claims, читал бы чужой граф.
--- Проверка 147 такое не ловит — она ищет `auth.uid()`, а его там и не будет.
+-- Поведением обе половины проверены на `entities` (группа 23 целиком) и на двух формах-исключениях
+-- — производной таблице и реестре, — но потерю половины на любой из остальных таблиц не поймал бы
+-- НИКТО: мутация «снять actor_reads у user_settings.current_graph_select» проходила pgTAP 148/148 и
+-- полный серверный сьют. Это ровно тот отказ, ради которого затеян срез: любой, кто выставил
+-- `graph` в claims, читал бы чужой граф. Проверка «ни одна политика не сравнивает ключ с auth.uid()»
+-- такое не ловит — она ищет `auth.uid()`, а его там и не будет.
+--
+-- ТРИ ЧИСЛА, А НЕ ОДНО, и обе добавки — по ре-ревью, каждая закрывает свой обход пина:
+-- (1) СЧЁТ политик. Прежние два пина считали СОВПАВШИЕ политики, а не все, поэтому заведённая
+--     сверх набора `rogue_extra … USING (true)` оставляла их зелёными: «68 штук спрашивают граф»
+--     не значит «все спрашивают». Здесь число сверяется с 17 таблицами × 4 команды.
+-- (2) КЛАУЗЫ ПО ОТДЕЛЬНОСТИ. Склейка `qual || with_check` слепа к потере половины в ОДНОЙ клаузе:
+--     мутация «`entities.current_graph_update` без половины графа в WITH CHECK» проходила 157/157.
+--     Живой утечки там нет (перенос строки отбивает SELECT-политика на новую строку — см. пин
+--     переноса выше), но пин обещал больше, чем проверял. Теперь у КАЖДОЙ политики каждая
+--     ПРИСУТСТВУЮЩАЯ клауза обязана нести обе половины: `qual` у SELECT/DELETE, `with_check` у
+--     INSERT, ОБЕ у UPDATE.
 SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
-    AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members')
-    AND coalesce(qual, '') || coalesce(with_check, '') LIKE '%current_graph_id()%'),
-  68, 'все 68 политик строк спрашивают ТЕКУЩИЙ граф');
+    AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members')),
+  68, 'политик строк ровно 68 — 17 таблиц × 4 команды, ни одной лишней и ни одной пропавшей');
+SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
+    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members')
+    AND NOT (p.qual IS NULL AND p.with_check IS NULL)
+    AND (p.qual IS NULL OR p.qual LIKE '%current_graph_id()%')
+    AND (p.with_check IS NULL OR p.with_check LIKE '%current_graph_id()%')),
+  68, 'и КАЖДАЯ КЛАУЗА каждой из них спрашивает ТЕКУЩИЙ граф');
 -- Мало назвать функцию — важно, ЧТОБЫ КОМАНДЕ СООТВЕТСТВОВАЛА СВОЯ: чтение довольствуется любым
 -- грантом, запись требует owner|operator, а гранты агентов — только owner. Подмена одной на другую
 -- (`actor_writes` в INSERT `agent_grants`) даёт operator'у право выписать себе полный доступ.
 SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
     AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members')
-    AND coalesce(p.qual, '') || coalesce(p.with_check, '') LIKE '%' ||
-      CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
+    AND NOT (p.qual IS NULL AND p.with_check IS NULL)
+    AND (p.qual IS NULL OR p.qual LIKE '%' || CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
            WHEN p.tablename = 'agent_grants' THEN 'actor_owns_current_graph()'
-           ELSE 'actor_writes_current_graph()' END || '%'),
-  68, 'и каждая — СВОЮ половину «актор держит грант»: SELECT — actor_reads, запись — actor_writes, гранты агентов — actor_owns');
+           ELSE 'actor_writes_current_graph()' END || '%')
+    AND (p.with_check IS NULL OR p.with_check LIKE '%' || CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
+           WHEN p.tablename = 'agent_grants' THEN 'actor_owns_current_graph()'
+           ELSE 'actor_writes_current_graph()' END || '%')),
+  68, 'и КАЖДАЯ КЛАУЗА — СВОЮ половину «актор держит грант»: SELECT — actor_reads, запись — actor_writes, гранты агентов — actor_owns');
 
 SELECT finish();
 ROLLBACK;
