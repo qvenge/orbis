@@ -450,8 +450,9 @@ test('роль без BYPASSRLS: нули НЕ означают «сконвер
   await truncateAll();
   await insertBody('# тело');
   // Сценарий M-2 целиком, на живой базе. `authenticated` — роль С ГРАНТАМИ на entities, но
-  // БЕЗ rolbypassrls. Под FORCE RLS и политикой graph_id = auth.uid() (а auth.uid() у прямого
-  // подключения пуст) она не видит НИ ОДНОЙ строки — молча, без ошибки.
+  // БЕЗ rolbypassrls. Под FORCE RLS и политикой `current_graph_select` (0021: текущий граф И
+  // грант актора в нём) прямое подключение не выставляет ни графа, ни актора — обе половины
+  // предиката ложны, и роль не видит НИ ОДНОЙ строки, молча и без ошибки.
   await admin.transaction(async (tx) => {
     await tx.execute(sql`SET LOCAL ROLE authenticated`);
     // Вот он, тихий ложный успех: счётчики прогона неотличимы от «корпус уже сконвертирован».

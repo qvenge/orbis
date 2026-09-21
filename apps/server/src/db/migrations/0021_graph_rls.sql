@@ -8,6 +8,18 @@
 -- Текущий граф — ключ `graph` тех же claims, что и `sub` (ставит withIdentity одним set_config).
 -- NULLIF — по канону auth.uid() (scripts/setup-db.ts:12-22): после отката локальной настройки на
 -- соединении из пула остаётся '', а не NULL. Не выставлен — NULL, и обе половины предиката ложны.
+--
+-- ПОЧЕМУ ТРИ ФУНКЦИИ ГРАНТА — plpgsql, А current_graph_id() — sql. ЭТО ЗАМЕРЕНО, НЕ ВКУС.
+-- Тело `LANGUAGE sql` с сублинком (`EXISTS`) планировщик НЕ инлайнит, а кеша планов у SQL-функций
+-- до PostgreSQL 18 нет вовсе (локально и в CI — 17.6): тело разбирается и планируется ЗАНОВО на
+-- КАЖДОМ статементе, а политика зовётся на каждом статементе транзакции. Микроцена — ≈0,3 мс на
+-- статемент, и на пути записи она копится: `fastpath:create` (десяток статементов в одной
+-- транзакции) давал 55–59 мс против 48–50 мс на том же теле в plpgsql (замеры Г-4, фикс-раунд 1).
+-- У plpgsql план тела кешируется в сессии, а соединения живут в пуле. Семантика и свойства те же:
+-- STABLE, SECURITY INVOKER, пустой search_path, все имена со схемой — обхода RLS по-прежнему нет.
+-- `current_graph_id()` остаётся sql НАМЕРЕННО: без сублинка он инлайнится в предикат политики, и
+-- plpgsql только отнял бы эту возможность.
+-- Не возвращай эти три функции на `LANGUAGE sql` «потому что короче»: вернётся и цена на записи.
 
 CREATE FUNCTION "public"."current_graph_id"() RETURNS uuid
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$
@@ -15,24 +27,27 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$
 $$;
 --> statement-breakpoint
 CREATE FUNCTION "public"."actor_reads_current_graph"() RETURNS boolean
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$
-	SELECT EXISTS (SELECT 1 FROM public.graph_members m
-		WHERE m.graph_id = public.current_graph_id() AND m.account_id = auth.uid() AND m.revoked_at IS NULL)
-$$;
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = '' AS $$
+BEGIN
+	RETURN EXISTS (SELECT 1 FROM public.graph_members m
+		WHERE m.graph_id = public.current_graph_id() AND m.account_id = auth.uid() AND m.revoked_at IS NULL);
+END $$;
 --> statement-breakpoint
 CREATE FUNCTION "public"."actor_writes_current_graph"() RETURNS boolean
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$
-	SELECT EXISTS (SELECT 1 FROM public.graph_members m
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = '' AS $$
+BEGIN
+	RETURN EXISTS (SELECT 1 FROM public.graph_members m
 		WHERE m.graph_id = public.current_graph_id() AND m.account_id = auth.uid() AND m.revoked_at IS NULL
-			AND m.grant_kind IN ('owner','operator'))
-$$;
+			AND m.grant_kind IN ('owner','operator'));
+END $$;
 --> statement-breakpoint
 CREATE FUNCTION "public"."actor_owns_current_graph"() RETURNS boolean
-LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$
-	SELECT EXISTS (SELECT 1 FROM public.graph_members m
+LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = '' AS $$
+BEGIN
+	RETURN EXISTS (SELECT 1 FROM public.graph_members m
 		WHERE m.graph_id = public.current_graph_id() AND m.account_id = auth.uid() AND m.revoked_at IS NULL
-			AND m.grant_kind = 'owner')
-$$;
+			AND m.grant_kind = 'owner');
+END $$;
 --> statement-breakpoint
 -- ── Простые таблицы строк: entities, user_settings, ai_usage, registry_deltas ──────────────────
 -- ЧЕТЫРЕ покомандные политики, как у реестров, а не одна FOR ALL и не пара «SELECT + ALL»:

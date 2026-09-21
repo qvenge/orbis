@@ -271,7 +271,8 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
  * определением умеет `applyDeltas` — в SQL это правило пришлось бы написать второй раз.
  *
  * Встроенных дельт не бывает по определению (`graph_id NOT NULL` в 0014), поэтому условие
- * по графу здесь ровно одно и совпадает с политикой RLS `read_builtin_or_own` (0021).
+ * по графу здесь ровно одно и совпадает с политикой RLS `current_graph_select` (0021) — у
+ * `registry_deltas` форма обычной таблицы строк, а не реестровая `read_builtin_or_own`.
  */
 export async function loadRegistryDeltas(tx: Tx, graphId: GraphId): Promise<RegistryDeltaRow[]> {
   const rows = (await tx.execute(sql`

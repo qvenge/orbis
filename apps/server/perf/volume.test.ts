@@ -504,7 +504,7 @@ function engineAspectEnvelopesQuery(period: { start: string; end: string }): SQL
  * (РП-4/Р-К-38), поэтому в копию не переносится и никуда не экспортируется.
  *
  * ГЛАВНАЯ ЦЕНА ЭТОГО ЗАПРОСА ПОД РОЛЬЮ — не индекс, а политика. `current_graph_select` на `relations`
- * (`0001`) исполняется ДВУМЯ hashed SubPlan'ами, и каждый — Seq Scan по `entities` на 23 712
+ * (`0021`) исполняется ДВУМЯ hashed SubPlan'ами, и каждый — Seq Scan по `entities` на 23 712
  * строк (живой EXPLAIN 09.09). Сам доступ к `relations` при этом Index Only Scan по `rel_uniq`;
  * то есть выбор индекса здесь уже оптимален, а платит запрос за проверку обоих концов ребра.
  *

@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(148);
+SELECT plan(157);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -30,6 +30,21 @@ INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by, revo
    '00000000-0000-4000-8000-00000000001a', 'operator', '00000000-0000-4000-8000-00000000000a', now());
 INSERT INTO entities (id, graph_id, title) VALUES
   ('00000000-0000-7000-8000-0000000000e1', '00000000-0000-4000-8000-00000000000e', 'Е: запись личного графа');
+-- Строки графа Е у ЧЕТЫРЁХ производных таблиц (фикс-раунд 1, Important-2 гейт-ревью): пины UPDATE
+-- переносят СУЩЕСТВУЮЩУЮ строку на чужого родителя, и без этих строк переносить было бы нечего —
+-- `throws_ok` ловил бы пустой UPDATE, то есть ничего.
+INSERT INTO chat_threads (id, graph_id, entity_id) VALUES
+  ('00000000-0000-7000-8000-0000000000ec', '00000000-0000-4000-8000-00000000000e',
+   '00000000-0000-7000-8000-0000000000e1');
+INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id, actor_kind) VALUES
+  ('00000000-0000-7000-8000-0000000000ed', '00000000-0000-4000-8000-00000000000e',
+   '00000000-0000-7000-8000-0000000000e1', 'версия Е', 'тело Е',
+   '00000000-0000-4000-8000-00000000000e', 'owner');
+INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id) VALUES
+  ('00000000-0000-7000-8000-0000000000ee', '00000000-0000-4000-8000-00000000000e',
+   '00000000-0000-7000-8000-0000000000e1', 'telegram', 'ext-e-own');
+INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_version, system_version) VALUES
+  ('00000000-0000-7000-8000-0000000000e1', '00000000-0000-4000-8000-00000000000e', '2026-09-03', 5, 0, 1);
 
 -- Фикстуры под ролью с BYPASSRLS (обходит RLS; postgres здесь НЕ суперпользователь)
 INSERT INTO entities (id, graph_id, title) VALUES
@@ -862,6 +877,16 @@ SELECT set_config('request.jwt.claims',
   '{"sub":"00000000-0000-4000-8000-00000000000b","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
 SET LOCAL ROLE authenticated;
 SELECT results_eq('SELECT count(*)::int FROM entities', ARRAY[0], 'текущий граф без гранта — пусто');
+-- Половина «актор держит грант» — НЕ только на entities (Important-3 гейт-ревью: мутация «снять
+-- actor_reads у user_settings» проходила pgTAP 148/148 и весь серверный сьют). Ниже — две формы
+-- политик, отличные от простой: производная таблица (владение через тред) и реестр (`IS NULL OR`).
+-- Замечено при мутационной проверке: у ПРОИЗВОДНОЙ таблицы половина «грант» защищена ДВАЖДЫ —
+-- своей политикой и политикой РОДИТЕЛЯ (RLS действует и внутри выражения политики, поэтому тред
+-- без гранта не виден изнутри EXISTS). Одной снятой половины мало, мутация на этот пин двойная.
+SELECT results_eq('SELECT count(*)::int FROM chat_messages', ARRAY[0],
+  'и на ПРОИЗВОДНОЙ таблице: тред графа А — текущий, но гранта нет — сообщений не видно');
+SELECT results_eq($$SELECT count(*)::int FROM property_definitions WHERE id = 'pgtap/a'$$,
+  ARRAY[0], 'и у РЕЕСТРА, где форма другая (graph_id IS NULL OR …): строка графа А без гранта не видна');
 RESET ROLE;
 SELECT set_config('request.jwt.claims',
   '{"sub":"00000000-0000-4000-8000-00000000001a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
@@ -910,6 +935,34 @@ SELECT throws_ok($$INSERT INTO entity_origins (id, graph_id, entity_id, namespac
   ('00000000-0000-7000-8000-0000000000e6', '00000000-0000-4000-8000-00000000000e',
    '00000000-0000-7000-8000-0000000000a1', 'telegram', 'ext-e')$$,
   '42501', NULL, 'provenance графа Е на сущности графа А — отказ (строгость 0002 сохранена)');
+-- UPDATE-половина тех же дыр (Important-2 гейт-ревью). Пять INSERT-ов выше не говорят о UPDATE
+-- НИЧЕГО: мутации «снять хвост EXISTS из WITH CHECK у current_graph_update» на chat_threads и
+-- envelope_spent_cache проходили 148/148 зелёными, то есть перецепить УЖЕ СУЩЕСТВУЮЩУЮ строку на
+-- сущность чужого графа было можно, и не узнал бы никто. Строка создаётся в своём графе честно, а
+-- чужой становится ОДНИМ UPDATE-ом — это и есть дешёвый путь утечки.
+SELECT throws_ok($$UPDATE chat_threads SET entity_id = '00000000-0000-7000-8000-0000000000a1'
+  WHERE id = '00000000-0000-7000-8000-0000000000ec'$$,
+  '42501', NULL, 'тред графа Е нельзя ПЕРЕЦЕПИТЬ UPDATE-ом на сущность графа А');
+SELECT throws_ok($$UPDATE envelope_spent_cache SET envelope_id = '00000000-0000-7000-8000-0000000000a1'
+  WHERE envelope_id = '00000000-0000-7000-8000-0000000000e1' AND as_of = '2026-09-03'$$,
+  '42501', NULL, 'кэш графа Е нельзя перецепить UPDATE-ом на конверт графа А');
+SELECT throws_ok($$UPDATE entity_versions SET entity_id = '00000000-0000-7000-8000-0000000000a1'
+  WHERE id = '00000000-0000-7000-8000-0000000000ed'$$,
+  '42501', NULL, 'версию графа Е нельзя перецепить UPDATE-ом на сущность графа А');
+SELECT throws_ok($$UPDATE entity_origins SET entity_id = '00000000-0000-7000-8000-0000000000a1'
+  WHERE id = '00000000-0000-7000-8000-0000000000ee'$$,
+  '42501', NULL, 'provenance графа Е нельзя перецепить UPDATE-ом на сущность графа А');
+-- Перенос САМОЙ строки в другой граф — несущее утверждение среза: граф строки не метка, а владелец.
+-- МЕХАНИЗМ НАЗВАН ПО ЗАМЕРУ, а не по догадке (Ф-Г-37: не путать «отказ пришёл» с «отказ пришёл
+-- отсюда»). Барьеров ДВА и они независимы: (1) `WITH CHECK` политики `current_graph_update`;
+-- (2) под `FORCE ROW LEVEL SECURITY` PostgreSQL требует, чтобы строка ПОСЛЕ правки осталась видна
+-- своей же SELECT-политике — иначе её можно было бы «обновить в невидимость». Пробито в psql:
+-- при `WITH CHECK (true)` у UPDATE перенос всё равно даёт 42501 (`ExecWithCheckOptions`), и
+-- проходит он только когда ослаблены ОБЕ политики. Поэтому мутация на этот пин — двойная, и это
+-- записано честно: пин утверждает СВОЙСТВО (перенести нельзя), а держат его два барьера.
+SELECT throws_ok($$UPDATE entities SET graph_id = '00000000-0000-4000-8000-00000000000a'
+  WHERE id = '00000000-0000-7000-8000-0000000000e1'$$,
+  '42501', NULL, 'строку нельзя ПЕРЕНЕСТИ в другой граф: граф строки — единица владения, а не метка');
 -- Структурные пины
 RESET ROLE;
 SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -922,6 +975,26 @@ SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
     AND (coalesce(qual, '') LIKE '%auth.uid()%' OR coalesce(with_check, '') LIKE '%auth.uid()%')),
   0, 'ни одна политика строк не сравнивает ключ с auth.uid(): вечного доступа по равенству id нет');
 SELECT col_not_null('public', 'agent_grants', 'issued_by', 'у гранта агента всегда есть выдавший аккаунт');
+-- ФОРМА ВСЕХ 68 ПОЛИТИК СТРОК — по каталогу, а не по тексту миграции (Important-3 гейт-ревью).
+-- Поведением обе половины проверены на `entities` (126–137) и на двух формах-исключениях (выше),
+-- но потерю половины на любой из остальных таблиц не поймал бы НИКТО: мутация «снять actor_reads
+-- у user_settings.current_graph_select» прошла pgTAP 148/148 и полный серверный сьют. Это ровно
+-- тот отказ, ради которого затеян срез: любой, кто выставил `graph` в claims, читал бы чужой граф.
+-- Проверка 147 такое не ловит — она ищет `auth.uid()`, а его там и не будет.
+SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
+    AND roles = '{authenticated}' AND tablename NOT IN ('graphs','graph_members')
+    AND coalesce(qual, '') || coalesce(with_check, '') LIKE '%current_graph_id()%'),
+  68, 'все 68 политик строк спрашивают ТЕКУЩИЙ граф');
+-- Мало назвать функцию — важно, ЧТОБЫ КОМАНДЕ СООТВЕТСТВОВАЛА СВОЯ: чтение довольствуется любым
+-- грантом, запись требует owner|operator, а гранты агентов — только owner. Подмена одной на другую
+-- (`actor_writes` в INSERT `agent_grants`) даёт operator'у право выписать себе полный доступ.
+SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
+    AND p.roles = '{authenticated}' AND p.tablename NOT IN ('graphs','graph_members')
+    AND coalesce(p.qual, '') || coalesce(p.with_check, '') LIKE '%' ||
+      CASE WHEN p.cmd = 'SELECT' THEN 'actor_reads_current_graph()'
+           WHEN p.tablename = 'agent_grants' THEN 'actor_owns_current_graph()'
+           ELSE 'actor_writes_current_graph()' END || '%'),
+  68, 'и каждая — СВОЮ половину «актор держит грант»: SELECT — actor_reads, запись — actor_writes, гранты агентов — actor_owns');
 
 SELECT finish();
 ROLLBACK;
