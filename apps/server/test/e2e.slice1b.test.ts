@@ -33,7 +33,7 @@ import { issuePatGrant } from '../src/oauth/grants';
 import { appRouter } from '../src/router';
 import type { Card } from '../src/tools/registry';
 import { createCallerFactory } from '../src/trpc';
-import { appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
+import { accountOf, appDb, mintGraph, personal, requireEnv, truncateAll } from './helpers';
 
 requireEnv();
 
@@ -271,7 +271,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     // 3 entity_created (проект+2 задачи+note = 4 create) + 2 relation_created
     expect(agentActions.filter((a) => a.type === 'entity_created')).toHaveLength(4);
     expect(agentActions.filter((a) => a.type === 'relation_created')).toHaveLength(2);
-    for (const a of agentActions) expect(a.actor_user_id).toBe(owner);
+    for (const a of agentActions) expect(a.actor_user_id).toBe(accountOf(owner));
     // Создание проекта отражено
     expect(agentActions.some((a) => a.entity_id === projectId && a.type === 'entity_created')).toBe(
       true,

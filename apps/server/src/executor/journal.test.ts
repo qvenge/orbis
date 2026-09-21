@@ -9,6 +9,7 @@ import { batchAuditMessageId, globalThreadId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   accountOf,
+  addMember,
   adminDb,
   appDb,
   freshGraph,
@@ -20,6 +21,7 @@ import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
+import { identityOfGrant } from '../identity';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
 import {
@@ -132,18 +134,37 @@ function actionsOf(msg: MessageRow): ActionRecord[] {
  * директивы ниже держат ровно это и станут неиспользуемыми (TS2578), если бренды сольют.
  */
 describe('журнал: actor_user_id — аккаунт, graphId сообщения — граф (D44)', () => {
-  test('исполнитель раскладывает пару по двум полям записи', async () => {
+  test('исполнитель раскладывает пару по двум полям записи — актор ЧУЖОЙ графу', async () => {
+    // Фикстура НАМЕРЕННО «оператор в чужом графе», а не личный граф. В личном графе
+    // `accountOf(graph)` и `graph` — одна и та же строка, и подмена полей местами
+    // (`graphId: identity.actor`, `actor_user_id: identity.graph`) оставляла оба `toBe`
+    // зелёными (Ф-Г-44: до 0021 пара с разными значениями до синка не доходила). После 0021
+    // препятствия нет: `addMember` выдаёт второму аккаунту грант `operator` в графе, и
+    // резолвер 2 даёт пару, у которой половины РАЗНЫЕ, — теперь подмена красит обе строки.
     const graph = await freshGraph();
+    const operator = accountOf(await freshGraph());
+    await addMember(graph, operator, 'operator');
     const memory = new InMemoryJournalSink();
     ok(
-      await execute(db, req(graph, 'entity_create', { title: 'запись пары', tags: [] }), {
-        sink: memory,
-      }),
+      await execute(
+        db,
+        req(
+          graph,
+          'entity_create',
+          { title: 'запись пары', tags: [] },
+          {
+            identity: identityOfGrant({ accountId: operator, graphId: graph }),
+          },
+        ),
+        { sink: memory },
+      ),
     );
     const entry = memory.entries[0];
     if (entry === undefined) throw new Error('синк не получил записи журнала');
     expect(entry.graphId).toBe(graph);
-    expect(entry.action.actor_user_id).toBe(accountOf(graph));
+    expect(entry.action.actor_user_id).toBe(operator);
+    // И половины действительно разные — иначе кейс опять ничего не различал бы.
+    expect(entry.action.actor_user_id as string).not.toBe(entry.graphId as string);
   });
 
   test('сигнатура: граф записи и актор действия — разные типы (спека Ш-2)', async () => {
@@ -192,7 +213,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect(action.id).toBe(r.actionId);
     expect(action.type).toBe('entity_created');
     expect(action.entity_id).toBe(e.id);
-    expect(action.actor_user_id).toBe(user);
+    expect(action.actor_user_id).toBe(accountOf(user));
     expect(action.actor_kind).toBe('owner');
     expect(action.source).toBe('fast_path');
     expect(action.mechanism).toBe('user'); // умолчание §А4-4: прямое действие владельца
@@ -440,7 +461,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       id: newId(),
       type: 'entity_updated',
       entity_id: null,
-      actor_user_id: user,
+      actor_user_id: accountOf(user),
       actor_kind: 'owner',
       source: 'ui',
       mechanism: 'user',
@@ -527,7 +548,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       id: newId(),
       type: 'relation_created',
       entity_id: null, // не только batch: одиночные relation-мутации тоже без сущности
-      actor_user_id: user,
+      actor_user_id: accountOf(user),
       actor_kind: 'owner',
       source: 'fast_path',
       mechanism: 'user',

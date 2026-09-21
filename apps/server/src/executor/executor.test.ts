@@ -169,7 +169,7 @@ describe('executor: entity_create', () => {
     const entry = first(sink.entries);
     expect(entry.graphId).toBe(userA);
     expect(entry.action.type).toBe('entity_created');
-    expect(entry.action.actor_user_id).toBe(userA);
+    expect(entry.action.actor_user_id).toBe(accountOf(userA));
     expect(entry.action.actor_kind).toBe('owner');
     expect(entry.action.source).toBe('fast_path');
     expect(entry.action.inverse).toEqual([

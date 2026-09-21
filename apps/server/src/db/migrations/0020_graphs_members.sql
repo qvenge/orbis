@@ -150,9 +150,16 @@ USING ("account_id" = (SELECT auth.uid()));
 --> statement-breakpoint
 -- INSERT — только себя как owner собственного личного графа, РАВЕНСТВОМ id, без EXISTS по graphs
 -- (курица и яйцо с политикой выше).
+--
+-- `revoked_at IS NULL` — не украшение: без него владелец вписывал себе ЗАРАНЕЕ ОТОЗВАННУЮ строку
+-- `owner` (измерено под authenticated), и частичный уникальный индекс её не считал, а триггер И-1
+-- на INSERT не смотрел. Доступа такая строка не даёт (все функции политик фильтруют
+-- `revoked_at IS NULL`), но даёт неограниченный мусор в `graph_members` любым аккаунтом, шум в
+-- «истории отзывов» (§3.2) и в переписи `ops graphs`. Грант рождается ДЕЙСТВУЮЩИМ; отзыв — путь
+-- ступени 2, и его политика заводится там же.
 CREATE POLICY "account_owns_personal_graph" ON "graph_members" FOR INSERT TO authenticated
 WITH CHECK ("graph_id" = (SELECT auth.uid()) AND "account_id" = (SELECT auth.uid())
-	AND "grant_kind" = 'owner' AND "issued_by" = (SELECT auth.uid()));
+	AND "grant_kind" = 'owner' AND "issued_by" = (SELECT auth.uid()) AND "revoked_at" IS NULL);
 --> statement-breakpoint
 -- Планировщик рутин идёт под orbis_app БЕЗ идентичности (0013) и обязан получить пары
 -- «граф, держатель гранта owner». Образец — scheduler_reads_owner_list (0013:25,35): поверхность

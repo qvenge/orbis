@@ -21,12 +21,50 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
   const userA = mintGraph();
   const userB = mintGraph();
 
-  test('невалидный актор отклоняется до SQL', async () => {
-    // Приведение здесь НАМЕРЕННОЕ и единственно возможное: пару с не-UUID компилятор
-    // собрать не даёт (значение бренда рождается только в parse*), а рантайм-страж
-    // withIdentity сторожит вход из нетипизированного мира и обязан быть проверен.
-    const bogus = { actor: 'not-a-uuid', graph: userA } as unknown as Identity;
-    await expect(withIdentity(db, bogus, async () => {})).rejects.toThrow(/UUID/);
+  test('рантайм-барьер: объект формы пары, собранный снаружи, до базы не доходит', async () => {
+    // ТРИ формы, которые ТИП не отбивает (источник — `any` или приведение), измерены матрицей
+    // финального ревью ветки. До этого барьера каждая из них доезжала до `set_config` и открывала
+    // транзакцию в любом графе, какой в неё вписали. Приведения здесь НАМЕРЕННЫЕ и предмет
+    // проверки — файл снят с маркеров `identity-pair` и `brand-cast` именно под них.
+    const forged = { actor: accountOf(userA), graph: userB } as unknown as Identity;
+    await expect(withIdentity(db, forged, async () => {})).rejects.toThrow(/не пара из резолверов/);
+
+    // `structuredClone` символьные ключи ТЕРЯЕТ — копия настоящей пары парой уже не является.
+    await expect(
+      withIdentity(db, structuredClone(personal(userA)), async () => {}),
+    ).rejects.toThrow(/не пара из резолверов/);
+
+    // `JSON.parse` символов не производит вовсе.
+    const parsed = JSON.parse(JSON.stringify(personal(userA))) as Identity;
+    await expect(withIdentity(db, parsed, async () => {})).rejects.toThrow(/не пара из резолверов/);
+  });
+
+  test('рантайм-барьер: ЖИВУЮ пару не подменить на месте — она заморожена', () => {
+    const who = personal(userA);
+    // Обе формы до заморозки МОЛЧА меняли граф у `ctx.identity` прод-пути: `readonly` живёт
+    // только в типах, маркер `identity-pair` построчен (`Object.assign` длиннее `lineWidth`
+    // форматтер переносит на четыре строки), а компилятор `Object.assign` пропускает всегда.
+    expect(() => Object.assign(who, { graph: userB })).toThrow(TypeError);
+    expect(() => Object.defineProperty(who, 'graph', { value: userB })).toThrow(TypeError);
+    expect(who.graph as string).toBe(userA);
+    // И бренд наружу НЕ ВИДЕН: пара осталась двухключевой ровно как до него — иначе форма
+    // экспорта, журнал и `JSON.stringify` увидели бы третий ключ (ровно тот молчаливый дрейф,
+    // против которого затеян `declare` у замка типа).
+    expect(Object.keys(who)).toEqual(['actor', 'graph']);
+    expect(JSON.parse(JSON.stringify(who))).toEqual({ actor: userA, graph: userA });
+  });
+
+  test('невалидный актор отклоняется до SQL — и у НАСТОЯЩЕГО экземпляра пары тоже', async () => {
+    // Рантайм-бренд закрывает сборку объектом чужой формы, но НЕ закрывает конструктор через
+    // прототип живой пары: `Reflect.construct` даёт настоящий `IdentityBox` с любыми значениями
+    // (названо вслух в докблоке замка). Значит проверка UUID — не мёртвый код, и её отдельный
+    // рубеж пинится отдельно: без неё не-UUID уехал бы в `set_config` и дальше в политики.
+    const Box = Object.getPrototypeOf(personal(userA)).constructor as new (
+      a: unknown,
+      g: unknown,
+    ) => Identity;
+    const real = new Box('not-a-uuid', userA);
+    await expect(withIdentity(db, real, async () => {})).rejects.toThrow(/UUID/);
   });
 
   test('внутри транзакции auth.uid() = актор, снаружи — NULL', async () => {

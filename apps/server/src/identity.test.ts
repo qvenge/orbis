@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, truncateAll } from '../test/helpers';
+import { adminDb, appDb, mintGraph, truncateAll } from '../test/helpers';
 import {
   type Identity,
   identitiesForScheduler,
@@ -21,6 +22,14 @@ const OPERATOR = parseAccountId('0dd00000-0000-4000-8000-0000000000d1');
 const EX_OWNER = parseAccountId('0dd00000-0000-4000-8000-0000000000d2');
 const OWNER = parseAccountId('0dd00000-0000-4000-8000-0000000000d3');
 const LATE_OWNER = parseAccountId('0dd00000-0000-4000-8000-0000000000d4');
+// ГРАФ БЕЗ `user_settings`, заведённый ЭТИМ файлом (а не оставшийся от соседних сьютов).
+// Без него пин «онбординг не пройден → тик не обходит» (последний кейс резолвера 3) различающим
+// НЕ был: в изолированном прогоне `truncateAll` сносит все графы, кроме личностей процесса, а
+// этот файл ни одной не минтил — в базе оставался ровно `GRAPH`, у которого настройки ЕСТЬ.
+// Измерено фикс-волной: с мутацией «снять источник `user_settings` у резолвера» изолированный
+// `bun test src/identity.test.ts` был 8 pass / 0 fail. `mintGraph()` регистрирует `ensureGraphs`
+// хуком этой области, а `truncateAll` личности процесса не сносит — граф жив к каждому кейсу.
+const NO_SETTINGS = mintGraph();
 
 test('границы внешнего мира: не-UUID отклоняется, регистр нормализуется', () => {
   expect(() => parseAccountId('не uuid')).toThrow(/UUID/);
@@ -33,6 +42,45 @@ test('резолвер 1 (JWT): граф человека — его личны�
   const who = identityOfPerson(parseAccountId(ACCOUNT));
   expect(who.actor).toBe(ACCOUNT);
   expect(who.graph as string).toBe(ACCOUNT);
+});
+
+test('резолвер 2 зовут РОВНО два Bearer-сайта прод-кода — третий был бы новым местом рождения пары', () => {
+  // Смысл сторожа. `identityOfGrant` экспортирован и принимает ЛЮБУЮ пару брендов: граф берётся
+  // из аргумента, а не из членства, — значит каждый новый вызов это новое место, где решается
+  // «в каком графе идёт транзакция». Типу такое место невидимо, дно тут одно — RLS (нужен грант),
+  // а в ЛИЧНОМ графе (актор = граф) оно не сработает и расхождение вылезет только на ступени 2.
+  // Поэтому список сайтов пинится грепом — тем же приёмом, что сторож пометок
+  // (`test/gate-c8-18.test.ts`), у которого литерал пометки собирается, а не пишется.
+  // Сам вызов пишется в шаблоне, а не литералом: литерал в этом файле стал бы совпадением.
+  const pattern = `\\b${['identity', 'Of', 'Grant'].join('')}\\(`;
+  const root = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (root.status !== 0) throw new Error(`сторож: git rev-parse упал: ${root.stderr}`);
+  const r = spawnSync(
+    'git',
+    [
+      'grep',
+      '-n',
+      '-P',
+      '-e',
+      pattern,
+      '--',
+      'apps',
+      'packages',
+      'scripts',
+      ':!*.test.ts',
+      ':!*.test.tsx',
+      ':!apps/server/src/identity.ts',
+    ],
+    { cwd: root.stdout.trim(), encoding: 'utf8' },
+  );
+  // Код >1 — отказ окружения (нет PCRE2), и принять его за «чисто» нельзя: молчащий сторож
+  // хуже отсутствующего (тот же разбор — `check-legacy-form.ts`).
+  if (r.status !== null && r.status > 1) throw new Error(`сторож: git grep код ${r.status}`);
+  const files = r.stdout
+    .split('\n')
+    .filter((l) => l.length > 0)
+    .map((l) => l.slice(0, l.indexOf(':')));
+  expect(files).toEqual(['apps/server/src/context.ts', 'apps/server/src/mcp/server.ts']);
 });
 
 test('резолвер 2 (Bearer): оба id — из строки гранта, и они НЕ обязаны совпадать', () => {
@@ -106,11 +154,17 @@ test('резолвер 3 (тик): пара берётся из graph_members, �
 });
 
 test('резолвер 3: граф без строки настроек (онбординг не пройден) тик не обходит', async () => {
+  // Различающим кейс делает СВОЙ граф `NO_SETTINGS`: он заведён этим файлом, грант owner у него
+  // есть, а строки `user_settings` нет — ровно «онбординг не пройден». Раньше на его месте были
+  // графы, оставленные ДРУГИМИ файлами, и в изолированном прогоне кейс проходил при любом
+  // резолвере (см. докблок константы).
   const pairs = await identitiesForScheduler(db);
-  // truncateAll восстановил личности процесса как графы БЕЗ user_settings — их в обходе быть не
-  // должно. Сравнение СПИСКОМ, а не `every`: на пустом массиве `every` истинен, и тест был бы
+  // Сравнение СПИСКОМ, а не `every`: на пустом массиве `every` истинен, и тест был бы
   // зелёным даже если бы резолвер не возвращал вообще ничего (находка гейт-ревью Г-3).
   expect(pairs.map((p) => p.graph)).toEqual([GRAPH]);
+  // И тот, кого в списке быть не должно, назван поимённо — иначе читателю не видно, чем
+  // именно этот кейс отличается от соседнего.
+  expect(pairs.map((p) => p.graph)).not.toContain(NO_SETTINGS);
 });
 
 test('резолвер 3: актор — держатель ДЕЙСТВУЮЩЕГО гранта owner, а не первый член графа', async () => {

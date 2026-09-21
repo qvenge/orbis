@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(158);
+SELECT plan(160);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -811,6 +811,13 @@ SELECT throws_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_ki
   (gen_random_uuid(), '00000000-0000-4000-8000-00000000000c', '00000000-0000-4000-8000-00000000000b',
    'owner', '00000000-0000-4000-8000-00000000000c')$$,
   '42501', NULL, 'вписать ДРУГОЙ аккаунт в свой граф — отказ (приглашения — ступень 2)');
+-- Строка-ГРАНТ рождается действующей. Без `revoked_at IS NULL` в WITH CHECK эта вставка проходила
+-- (измерено фикс-волной на живой базе): частичный уникальный индекс отозванные не считает, а
+-- триггер И-1 на INSERT не смотрит — доступа не даёт, но даёт неограниченный мусор в членстве.
+SELECT throws_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by, revoked_at)
+  VALUES (gen_random_uuid(), '00000000-0000-4000-8000-00000000000c', '00000000-0000-4000-8000-00000000000c',
+   'owner', '00000000-0000-4000-8000-00000000000c', now())$$,
+  '42501', NULL, 'вписать себе ЗАРАНЕЕ ОТОЗВАННУЮ строку owner — отказ (грант рождается действующим)');
 SELECT lives_ok($$INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALUES
   (gen_random_uuid(), '00000000-0000-4000-8000-00000000000c', '00000000-0000-4000-8000-00000000000c',
    'owner', '00000000-0000-4000-8000-00000000000c')$$,
@@ -1015,6 +1022,31 @@ SELECT is((SELECT count(*)::int FROM pg_policies p WHERE p.schemaname = 'public'
            WHEN p.tablename = 'agent_grants' THEN 'actor_owns_current_graph()'
            ELSE 'actor_writes_current_graph()' END || '%')),
   68, 'и КАЖДАЯ КЛАУЗА — СВОЮ половину «актор держит грант»: SELECT — actor_reads, запись — actor_writes, гранты агентов — actor_owns');
+-- СОСТАВ ПОЛИТИК СЛУЖЕБНЫХ РОЛЕЙ — ПОИМЁННО (финальное ревью ветки, линза RLS, Important-1).
+-- Три пина выше считают и разбирают ТОЛЬКО политики `{authenticated}` — они и заведены под них.
+-- Поэтому политика, выданная ДРУГОЙ роли, для всего файла невидима: мутация
+-- `CREATE POLICY rogue ON entities FOR SELECT TO orbis_app USING (true)` давала 158 ok / 0 not ok
+-- (измерено фикс-волной), и серверный `routines/queries.test.ts:114-128` тоже молчал — он
+-- принимает 42501 как «не видно», а без `GRANT … TO orbis_app` лишняя политика именно 42501 и
+-- даёт. Сегодня утечки нет; она появилась бы с первым же грантом служебной роли на эту таблицу
+-- под какую-нибудь фичу — и не сказал бы никто.
+--
+-- Пин ПОИМЁННЫЙ, а не счётный: «пять штук» разрешало бы подменить одну другой. Пять — это
+-- поверхность БЕЗ идентичности целиком (спека §3.6, PRD §4.10): четыре под `orbis_app` (гранты
+-- агентов и клиенты OAuth — сервер; список графов и членство — тик планировщика) и одна под
+-- `public` — встроенные строки реестра, общие для всех графов. Шестой в этом списке быть не
+-- должно: `TO public` сверх `registry_system` ловится здесь же структурно, а не поведением.
+-- `COLLATE "C"` — не украшение: у `pg_policies.tablename`/`policyname` тип `name` (сортировка C),
+-- и склейка с литералом даёт «could not determine which collation» ещё до сверки (измерено).
+SELECT is((SELECT string_agg(tablename::text || '.' || policyname::text || ' ' || cmd::text
+      || ' ' || roles::text COLLATE "C", ', ' ORDER BY (tablename::text || policyname::text) COLLATE "C")
+    FROM pg_policies WHERE schemaname = 'public' AND roles <> '{authenticated}'),
+  'agent_grants.server_manages_grants ALL {orbis_app}, '
+  || 'graph_members.scheduler_reads_members SELECT {orbis_app}, '
+  || 'oauth_clients.server_manages_clients ALL {orbis_app}, '
+  || 'registry_system.read_all SELECT {public}, '
+  || 'user_settings.scheduler_reads_owner_list SELECT {orbis_app}',
+  'политики НЕ-`authenticated` ролей — ровно эти пять и никаких больше (поверхность без идентичности)');
 
 SELECT finish();
 ROLLBACK;

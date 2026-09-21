@@ -317,6 +317,35 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
     pattern: String.raw`\{[^{}]*\bactor\b[^{}]*\bgraph\b|\{[^{}]*\bgraph\b[^{}]*\bactor\b|\{\s*\.\.\.[^{}]*\b(graph|actor)\b|Object\.assign\([^;]*\b(graph|actor)\b`,
     exclude: [COMMENT_ONLY_LINE],
   },
+  // brand-cast — СТОЯЧИЙ гейт приведений брендов (финальное ревью ветки, линза идентичности,
+  // Important-2). Заведён потому, что прежний греп приведений был КОМАНДОЙ В ШАГЕ ЗАДАЧИ Г-3 и
+  // исчез вместе с ней, а докблок `identity.ts` ссылался на «гейт в identity.test», которого
+  // никогда не существовало. Измерено на HEAD ветки: `who.actor as string as GraphId` и
+  // `parseGraphId(who.actor)` компилировались (`tsc` EXIT=0) и проходили гейт молча.
+  //
+  // Почему это важнее, чем кажется. `GraphId` и `AccountId` — разные бренды НАД ОДНИМ uuid, и в
+  // личном графе их значения СОВПАДАЮТ (`graphs_personal_identity`). Значит приведение одного к
+  // другому не даёт ни ошибки компилятора, ни красного теста, ни расхождения в бою — ровно до
+  // первого оператора в чужом графе (ступень 2), где актор и граф разойдутся. Тип здесь —
+  // единственная защита, и её обход обязан быть ВИДИМЫМ движением в диффе.
+  //
+  // Две альтернативы:
+  //   1. Приведение к бренду в любой форме записи — `as GraphId`, `as unknown as AccountId`,
+  //      `as any as Identity`, `as string as GraphId` (средний `as <что-то> as` — опциональная
+  //      группа). Законное место одно: `identity.ts`, где живут границы внешнего мира и
+  //      единственное тождество id личного графа.
+  //   2. ОТМЫВКА бренда через границу: `parseGraphId(who.actor)` / `parseAccountId(x.graph)` —
+  //      формально законный вызов парсера, фактически то же приведение. Ловится узко — только
+  //      когда аргумент это поле `.actor`/`.graph`: девять настоящих границ (`parse*` от JWT,
+  //      строки БД, аргумента CLI) берут переменную, а не поле пары, и маркеру не видны.
+  //
+  // Исключение `COMMENT_ONLY_LINE` есть по тому же доводу, что у `identity-pair`: докблоки
+  // замка обязаны называть отбиваемые формы ДОСЛОВНО, иначе они объясняют не то, что запрещают.
+  {
+    id: 'brand-cast',
+    pattern: String.raw`\bas\s+(?:\w+\s+as\s+)?(?:GraphId|AccountId|Identity)\b|parse(?:Graph|Account)Id\(\s*[A-Za-z_$][\w$]*\.(?:actor|graph)\b`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
 ];
 
 export type AllowEntry = {
@@ -446,10 +475,19 @@ export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
   // содержать литерал: сьюты самого замка и сьют, называющий пару в ИМЕНАХ тестов.
   {
     path: 'apps/server/src/db/with-identity.test.ts',
-    markers: ['identity-pair'],
+    markers: ['identity-pair', 'brand-cast'],
     reason:
       'сьют самого `withIdentity`: не-UUID актор для рантайм-стража (через `as unknown as`) и ' +
       'литерал под `@ts-expect-error` — оба предмет проверки, законной пары из них не выйдет',
+  },
+  // --- brand-cast: единственное законное место приведений брендов ---------------------------
+  {
+    path: 'apps/server/src/identity.ts',
+    markers: ['brand-cast'],
+    reason:
+      'границы внешнего мира (`parseAccountId`/`parseGraphId`) и ЕДИНСТВЕННОЕ тождество id ' +
+      'личного графа (`personalGraphOf`) — те самые три приведения, ради которых заведён ' +
+      'маркер; больше их в дереве быть не должно нигде',
   },
   {
     path: 'apps/server/src/identity.test.ts',

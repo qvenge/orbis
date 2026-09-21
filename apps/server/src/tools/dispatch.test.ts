@@ -18,6 +18,7 @@ import {
 } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import {
+  accountOf,
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
@@ -199,7 +200,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     const action = md.actions?.[0];
     expect(action?.actor_kind).toBe('ai');
     expect(action?.source).toBe('chat');
-    expect(action?.actor_user_id).toBe(userA);
+    expect(action?.actor_user_id).toBe(accountOf(userA));
     if (r.card?.kind === 'entity_card') expect(action?.id).toBe(r.card.undoActionId as string);
   });
 

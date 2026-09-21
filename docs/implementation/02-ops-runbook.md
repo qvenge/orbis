@@ -101,7 +101,7 @@ curl -fsS https://<prod-host>/ | head -c 200   # index.html веб-клиент�
 >
 > **Готовой операции для этого в `bun scripts/ops.ts` НЕТ**, и выдумывать её не надо:
 > белый список — `check`, `migrate`, `seed-registries`, `coverage`, `census`, `audit-bodies`,
-> `backfill-body-doc`, `ping`, `issue-pat`, произвольного
+> `backfill-body-doc`, `reset-world`, `ping`, `dump`, `graphs`, `issue-pat`, произвольного
 > SQL там нет по замыслу. Запрос идёт тем же админским DSN, которым `psql` ходит в §4.3, а секрет
 > берётся из Ключницы — из неё же читает и `ops.ts`, так что открытым текстом в историю
 > команд DSN не попадает:
@@ -241,8 +241,18 @@ bun scripts/ops.ts census                    # только чтение: ско
 bun scripts/ops.ts audit-bodies              # только чтение: агрегаты по корпусу тел перед конверсией
 bun scripts/ops.ts backfill-body-doc         # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 bun scripts/ops.ts ping                      # связность и версия PostgreSQL
+bun scripts/ops.ts dump <каталог>            # только чтение: плейн-дамп прода вне git (§4.3)
+bun scripts/ops.ts graphs                    # только чтение: перепись графов, членства и грантов
 bun scripts/ops.ts issue-pat <owner> [метка] [--scope worker]   # headless-токен агента (§3.2)
 ```
+
+`dump` и `graphs` пришли со срезом Г и закрывают два шага прод-процедуры D44, для которых иначе
+пришлось бы брать DSN руками — ровно то, против чего заведена обёртка. `dump` — обёртка
+`backup.sh`/`pg_dump`, и его справка предупреждает: в дампе личные данные, после репетиции каталог
+удалить. `graphs` — только чтение, код **1** при графе без действующего гранта `owner` **или**
+гранте агента без `issued_by`, то есть годится как приёмка шага «следов дыр нет».
+`reset-world` в таблицу выше не вынесена намеренно: она разрушающая, её порядок и двойное
+подтверждение — в §«Пересев мира» ниже.
 
 `issue-pat` появилась здесь не для удобства, а потому что иначе выпуск PAT на проде остался
 бы **без санкционированного пути**: до переезда токена в базу (D34) скрипт выдачи базы не
@@ -1238,6 +1248,14 @@ psql "$ADMIN_DSN" -c "\dt public.*"
 заведённые в графе. `registry_system` перепривязки не требует: у неё нет `graph_id`, это одна
 глобальная строка. Строку членства СТАРОГО графа не трогаем — почему, сказано ниже.
 
+> **ПРЕДУСЛОВИЕ: новым аккаунтом в приложение до прогона НЕ ЗАХОДИТЬ.** uuid берётся в Supabase
+> Dashboard → Authentication → Users (Add user), и на этом всё: первый же вход заведёт личный граф
+> и грант сам (`seed/personal-graph.ts`, `ensurePersonalGraph`), после чего `INSERT INTO graphs`
+> шага (1) упадёт по PK, а `UPDATE user_settings` — по PK строки настроек. Если зашли — процедура
+> другая (сносить заведённое или писать её заново), и эта не годится. Обратное тоже верно и
+> полезно: `ensurePersonalGraph` ИДЕМПОТЕНТЕН (`ON CONFLICT DO NOTHING` на обеих вставках), так
+> что граф и грант, заведённые этим скриптом, первый вход не сломают.
+
 ```bash
 psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 <<'SQL'
 \set old '<старый-uuid>'
@@ -1276,13 +1294,54 @@ SQL
 > `graphs.id`, а `graph_members` проверяется отложенным constraint-триггером на `COMMIT` — поэтому
 > «сначала граф, потом грант» внутри одной транзакции законно, а «строки раньше графа» — нет.
 
-> **Идентификаторы, выведенные из СТАРОГО ключа, остаются старыми — и это допустимо.** Формулы
-> `uuidv5` глобального треда, тредов сущностей и audit-id пачек стоят на ключе графа (PRD 01 §4.5,
-> §5.4). После перевода строк их id остаются посчитанными от старого ключа. Ничего не ломается: id
-> стабильны и уникальны, строки читаются, RLS смотрит на колонку `graph_id`, а не на формулу.
-> Единственное следствие — `ensureGlobalThread` нового графа посчитает новый id и заведёт **второй**
-> глобальный тред; старый остаётся читаемым тредом сущности-без-сущности. Если это мешает, тред
-> переносится отдельным решением, а не этим скриптом.
+> **⚠️ Идентификаторы, выведенные из СТАРОГО ключа, ЛОМАЮТ приложение — перевода строк мало.**
+> Формулы `uuidv5` глобального треда, тредов сущностей, сид-сущностей мира, садовника и audit-id
+> пачек стоят на КЛЮЧЕ ГРАФА (PRD 01 §4.5, §5.4). После перевода строк их id остаются посчитанными
+> от старого ключа, и код, который считает id от нового, этих строк не находит. Оба следствия
+> ПРОВЕРЕНЫ (чтение кода + проба на живой базе в транзакции с откатом), а не выведены:
+>
+> 1. **Чат отвечает 500, а не заводит «второй тред».** `apps/server/src/chat/threads.ts` делает
+>    `INSERT … ON CONFLICT DO NOTHING` **без цели конфликта** и следом `SELECT … WHERE id = <новый
+>    id>`; при нуле строк — `throw`. Переведённый глобальный тред уже занимает слот частичной
+>    уникальности `chat_threads_global_uniq (graph_id) WHERE entity_id IS NULL`, поэтому вставка с
+>    новым id гасится молча (`INSERT 0 0`), SELECT пуст → исключение. То же у каждого треда
+>    сущности, который открывали до перепривязки (`chat_threads_entity_uniq`). Сверх того
+>    `entity-read.ts` и `routines/lifecycle.ts` ищут тред и заметки прогонов по той же формуле —
+>    история под старым id невидима ещё до попытки завести тред.
+> 2. **Первый заход нового аккаунта ДУБЛИРУЕТ мир.** `seedOwnerWorld` зовётся на КАЖДОМ заходе и
+>    отличает «уже есть» пробой по PK, а `seedCategoryId`/`seedSmartListId`/`seedRoutineId`/
+>    `worldBatchId` считаются от ключа графа. Пробы от нового ключа ни одну переведённую строку не
+>    найдут → в графе появятся ВТОРЫЕ 18 сущностей мира и второй садовник.
+>
+> **Рабочий путь для тредов — перекеить их ТОЙ ЖЕ транзакцией** (прогнано на живой базе: результат
+> побайтно совпал с тем, что считает `globalThreadId`/`entityThreadId`; история сообщений цела).
+> FK `chat_messages → chat_threads` не `ON UPDATE CASCADE`, поэтому он на время правки
+> откладывается:
+>
+> ```sql
+> -- ВНУТРИ той же транзакции, ПОСЛЕ четырнадцати UPDATE выше
+> \set ns 'cb339e97-82d7-4d16-91c6-942d42df7054'  -- ORBIS_NAMESPACE (packages/shared/src/ids.ts)
+> ALTER TABLE chat_messages ALTER CONSTRAINT chat_messages_thread_id_chat_threads_id_fk DEFERRABLE;
+> SET CONSTRAINTS chat_messages_thread_id_chat_threads_id_fk DEFERRED;
+> UPDATE chat_messages m SET thread_id = CASE WHEN t.entity_id IS NULL
+>     THEN extensions.uuid_generate_v5(:'ns'::uuid, lower(t.graph_id::text) || ':global-thread')
+>     ELSE extensions.uuid_generate_v5(:'ns'::uuid, lower(t.graph_id::text) || ':entity-thread:' || lower(t.entity_id::text)) END
+>   FROM chat_threads t WHERE m.thread_id = t.id AND t.graph_id = :'new';
+> UPDATE chat_threads SET id = CASE WHEN entity_id IS NULL
+>     THEN extensions.uuid_generate_v5(:'ns'::uuid, lower(graph_id::text) || ':global-thread')
+>     ELSE extensions.uuid_generate_v5(:'ns'::uuid, lower(graph_id::text) || ':entity-thread:' || lower(entity_id::text)) END
+>   WHERE graph_id = :'new';
+> SET CONSTRAINTS ALL IMMEDIATE;
+> ALTER TABLE chat_messages ALTER CONSTRAINT chat_messages_thread_id_chat_threads_id_fk NOT DEFERRABLE;
+> ```
+>
+> **Для мира и садовника такого пути здесь НЕТ, и это названо вслух.** Перекей сущности задевает
+> пять ссылающихся таблиц (`relations.source_id/target_id`, `entity_origins`, `entity_versions`,
+> `chat_threads.entity_id`, `envelope_spent_cache.envelope_id`) плюс пины в `user_settings` и
+> ссылки на id внутри `chat_messages.metadata` — это отдельная операция со своей репетицией, а не
+> строка в этом скрипте. Пока она не написана, дублирование мира при первом заходе — ИЗВЕСТНЫЙ
+> дефект процедуры: либо снести дубли после захода (у них новые id и нулевые связи), либо не
+> заводить нового аккаунта в приложении до решения. `03-pending.md` §2.2а держит этот долг.
 
 > **Старый граф НЕ удаляется.** На него ссылаются погашенные `agent_grants` (перепривязывать их
 > нельзя — см. ниже), и `ON DELETE NO ACTION` не даст его снести, пока они есть. Он остаётся пустым
@@ -1360,8 +1419,21 @@ entities | {postgres=arwdDxtm/postgres,anon=Dxtm/postgres,
 объявлена `NOINHERIT`), то есть опирается ровно на те гранты, которых после restore нет.
 `orbis_app` собственных прав на большинство таблиц не имеет вовсе — в их ACL его нет; он назван поимённо ровно у шести: `agent_grants`, `oauth_clients`, `entity_versions`, `user_settings` (только `SELECT`), `envelope_spent_cache` и `graph_members` (только `SELECT`).
 
-Поэтому после restore, **до** `db:prepare`, выдать гранты заново — это те же строки, что
-в миграциях, дословно:
+Поэтому после restore гранты выдаются заново — это те же строки, что в миграциях, дословно.
+**Порядок шагов: `setup-db.ts` → блок грантов → `db:prepare`.** Не наоборот: роль `orbis_app`
+создаёт именно `scripts/setup-db.ts`, а он — ПЕРВЫЙ шаг `db:prepare` (`package.json`:
+`setup-db && db:migrate && seed-registries && test:rls`). Цель восстановления по §«Куда
+восстанавливаем» — ЧИСТАЯ БД нового проекта, где роли ещё нет, поэтому блок, поставленный до
+`setup-db.ts`, падает на третьей строке (`role "orbis_app" does not exist`) — и падает, уже
+применив первые две: heredoc идёт без `BEGIN`, каждая строка коммитится сама. `setup-db.ts`
+идемпотентен (проба по `pg_roles`), поэтому лишним первым шагом он не будет:
+
+```bash
+set -a && . ./apps/server/.env && set +a
+bun scripts/setup-db.ts          # создаёт роль orbis_app и членство в authenticated
+```
+
+Затем — сам блок грантов:
 
 ```bash
 psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 <<'SQL'
@@ -1386,10 +1458,10 @@ SQL
 `ON ALL TABLES` выдан роли `authenticated`, а `orbis_app` — её `NOINHERIT`-член и своих прав
 оттуда не получает; без них тик планировщика и метеринг упрутся в `42501` до всякой политики.
 
-Затем `bun run db:prepare` против целевой БД — он создаёт роль `orbis_app` и членство
-в `authenticated` (`scripts/setup-db.ts`) и завершается RLS-тестом (`plan(158)`).
-Тест остаётся страховкой: если гранты забыть, он упадёт — но искать причину надо здесь,
-а не в RLS.
+Затем `bun run db:prepare` против целевой БД — он прогоняет миграции, сев реестров и
+завершается RLS-тестом (`plan(160)`); его первый шаг `setup-db.ts` к этому моменту уже исполнен
+выше и повторяется вхолостую. Тест остаётся страховкой: если гранты забыть, он упадёт — но
+искать причину надо здесь, а не в RLS.
 
 На **чистую** базу (не restore, а пустой проект) это не распространяется: там журнала нет,
 миграции применяются целиком вместе со своими `GRANT`, и ручной шаг не нужен. Нужен

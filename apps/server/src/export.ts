@@ -54,7 +54,7 @@ export interface OrbisExport {
   chatThreads: WireThread[];
   chatMessages: WireChatMessage[];
   userSettings: WireUserSettings | null;
-  /** Только строки владельца (graph_id = актор); форма — декларация реестра (§А2-1). */
+  /** Только строки ТЕКУЩЕГО ГРАФА (`graph_id` — граф, не аккаунт); форма — декларация реестра (§А2-1). */
   propertyDefinitions: PropertyDefinition[];
   aspectDefinitions: AspectDefinition[];
   relationRoleDefinitions: RelationRoleDefinition[];

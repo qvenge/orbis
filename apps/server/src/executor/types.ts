@@ -1,6 +1,6 @@
 // apps/server/src/executor/types.ts
 // Точные сигнатуры executor'а (контракт Task 9; на них встают Task 10–15 и весь 1b).
-import type { GraphId } from '@orbis/shared';
+import type { AccountId, GraphId } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
 import type { Identity } from '../identity';
 
@@ -252,7 +252,17 @@ export interface ActionRecord {
     | 'module_set'
     | 'batch';
   entity_id: string | null;
-  actor_user_id: string;
+  /**
+   * АККАУНТ-актор (`AccountId`, не `GraphId`) — «кто действует», а не «в чьих данных».
+   *
+   * Тип ужесточён финальным ревью ветки: пока здесь стоял голый `string`, строка
+   * `actor_user_id: req.identity.graph` компилировалась молча, и мутация «расширить
+   * `Identity.actor` до `AccountId | GraphId`» три сайта записи журнала не красила вовсе.
+   * Колонка БД при этом остаётся голым `uuid` (Р-КГ-5: бренды на колонки не навешиваются) —
+   * брендирован ТИП ЗАПИСИ, то есть то, что собирает исполнитель, а не то, что лежит в базе;
+   * чтение обратно из jsonb (`findByAuditId`) проходит границу и брендируется парсером.
+   */
+  actor_user_id: AccountId;
   actor_kind: ActorKind;
   source: MutationSource;
   /**

@@ -13,6 +13,7 @@ import { attachToolName, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   accountOf,
+  addMember,
   appDb,
   freshGraph,
   personal,
@@ -146,14 +147,21 @@ describe('кеш эффективных определений (§А10-1)', () =
     // значениями — она в Г-3 доступна только на чтение через `withIdentity` (RLS ещё
     // старая, поэтому читаем не строки графа, а сам факт попадания в кеш).
     const graph = await freshGraph();
-    const second = await freshGraph(); // второй АККАУНТ; его личный граф тут не при чём
+    const second = accountOf(await freshGraph()); // второй АККАУНТ; его личный граф тут не при чём
+    // ГРАНТ ВТОРОМУ АКТОРУ — не формальность. Ключ кеша это `<граф>:<версия реестра>:<...>`, а
+    // версию читает `readRegistryVersions` ПОД RLS: не-член графа видит ноль строк и получает
+    // версию 0. Пока у свежего графа версия и так 0, попадание в кеш случалось само собой —
+    // измерено фикс-волной: с `bumpOwnerRegistryVersion` перед первым чтением и БЕЗ гранта
+    // кейс краснел (член видит версию 1, чужак — 0, ключи разные, промах). Значит пин
+    // подтверждал не «ключ — граф», а «у обоих версия нулевая».
+    await addMember(graph, second, 'operator');
+    // Версия графа НЕ нулевая — иначе оба актора сходятся на ней по совпадению.
+    await withIdentity(db, personal(graph), (tx) => bumpOwnerRegistryVersion(tx, graph));
     await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
     const hits = registryCacheStats().hits;
     // Тот же ГРАФ, другой АКТОР: ключ кеша не изменился — попадание, а не промах.
-    await withIdentity(
-      db,
-      identityOfGrant({ accountId: accountOf(second), graphId: graph }),
-      (tx) => effectiveRegistry(tx, graph),
+    await withIdentity(db, identityOfGrant({ accountId: second, graphId: graph }), (tx) =>
+      effectiveRegistry(tx, graph),
     );
     expect(registryCacheStats().hits).toBe(hits + 1);
   });

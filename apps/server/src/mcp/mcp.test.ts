@@ -11,7 +11,15 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  accountOf,
+  adminDb,
+  appDb,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -566,7 +574,7 @@ describe('/mcp tools/call → dispatchTool (§9.3)', () => {
     expect(action).toBeDefined();
     expect(action?.actor_kind).toBe('agent');
     expect(action?.source).toBe('mcp');
-    expect(action?.actor_user_id).toBe(owner);
+    expect(action?.actor_user_id).toBe(accountOf(owner));
     // С2: «агент вообще» → конкретный грант. Владелец по записи журнала видит, КАКОЙ
     // из подключённых агентов это сделал, и может отозвать именно его. id гранта тест
     // берёт тем же путём, что и транспорт (/mcp → verifyBearer), а не отдельным знанием.

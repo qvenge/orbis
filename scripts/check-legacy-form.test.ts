@@ -383,6 +383,21 @@ const SAMPLES: ReadonlyArray<{
       'const g2 = Object.assign({}, who, { graph: other });',
     ],
   },
+  {
+    id: 'brand-cast',
+    lines: [
+      // По строке на каждую форму записи приведения — выпадет альтернатива, счёт разойдётся.
+      'const a = x as GraphId;',
+      'const b = x as AccountId;',
+      'const c = x as unknown as Identity;',
+      'const d = who.actor as string as GraphId;',
+      // Отмывка через границу: аргумент — поле пары, а не переменная из внешнего мира.
+      'const e = parseGraphId(who.actor);',
+      'const f = parseAccountId(who.graph);',
+    ],
+    // Литерал пары в образцах `brand-cast` не пишется — иначе он засчитался бы второму маркеру
+    // и пин «каждый маркер ловит ТОЛЬКО свой файл» перестал бы быть различающим.
+  },
 ];
 
 test('позитивный контроль: у каждого маркера есть образец', () => {
@@ -459,6 +474,7 @@ test('имена маркеров — договор: на них ссылают
     'exclude-blocked-literal',
     'owner-key',
     'identity-pair',
+    'brand-cast',
   ]);
 });
 
