@@ -155,8 +155,9 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
     //
     // Само свойство пинится ниже ТОЧНЫМ равенством типов, а не присваиваемостью: расширение
     // поля до союза присваиваемость сохранило бы, а равенство ломает. Плюс третий рубеж —
-    // прод-код: та же мутация даёт TS2345 в десяти файлах (`send-message`, `executor`,
-    // `import/review`, `mcp/server`, `routines/lifecycle`, `seed/personal-graph` …).
+    // прод-код: та же мутация даёт 15 ошибок (13 из них TS2345) в 9 файлах, из которых СЕМЬ
+    // продуктовых — `ai/send-message`, `executor/executor`, `import/review`, `mcp/server`,
+    // `routines/lifecycle`, `seed/personal-graph`, `tools/dispatch` (пересчитано замером).
     const actorIsExactlyAccountId: Exact<Identity['actor'], AccountId> = true;
     const graphIsExactlyGraphId: Exact<Identity['graph'], GraphId> = true;
     expect([actorIsExactlyAccountId, graphIsExactlyGraphId]).toEqual([true, true]);
