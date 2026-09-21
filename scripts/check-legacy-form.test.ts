@@ -375,6 +375,12 @@ const SAMPLES: ReadonlyArray<{
       'const b = { graph: g, actor: acc };',
       'const c = { actor: acc, graph };',
       'const d = withIdentity(db, { actor: x, graph: y }, fn);',
+      // ПРОИЗВОДНАЯ пара: спред тип ловит (приватное поле его не переживает), а
+      // `Object.assign` — НЕТ (пересечение типов приватное поле сохраняет), и там маркер
+      // единственный барьер. Обе формы пинятся строками, иначе выпавшая альтернатива молчит.
+      'const e = { ...who, graph: other };',
+      'const f = { ...who, actor: someone };',
+      'const g2 = Object.assign({}, who, { graph: other });',
     ],
   },
 ];

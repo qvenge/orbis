@@ -1,11 +1,20 @@
 // apps/server/src/db/with-identity.test.ts
 import { afterAll, describe, expect, test } from 'bun:test';
+import type { AccountId, GraphId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { accountOf, appDb, mintGraph, personal, requireEnv } from '../../test/helpers';
 import { type Identity, identityOfGrant } from '../identity';
 import { withIdentity } from './with-identity';
 
 requireEnv(); // бросает с внятным сообщением, если DATABASE_URL/DATABASE_URL_ADMIN не заданы
+
+/**
+ * ТОЧНОЕ равенство типов (взаимная присваиваемость), а не присваиваемость в одну сторону.
+ * Разница и есть смысл: расширение `AccountId` до `AccountId | GraphId` присваиваемость
+ * сохраняет — такой пин промолчал бы, — а равенство даёт `false`, и константа ниже перестаёт
+ * компилироваться. Кортежи `[A]`/`[B]` гасят дистрибутивность условного типа по союзам.
+ */
+type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 describe('withIdentity (RLS-механика, findings B7)', () => {
   const { db, client } = appDb();
@@ -133,12 +142,24 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
     expect(rows[0]).toEqual({ uid: userB, graph: userA });
   });
 
-  test('сигнатура: один id вместо пары не компилируется (спека Ш-2)', () => {
-    // @ts-expect-error — GraphId вместо Identity
+  test('сигнатура: один id вместо пары не компилируется, поля пары — ровно свои типы (Ш-2)', () => {
+    // @ts-expect-error — GraphId вместо Identity: ослабь второй параметр до `Identity | GraphId`,
+    // и директива станет неиспользуемой (TS2578). Это её мутационная проверка.
     void (() => withIdentity(db, userA, async () => 1));
-    // @ts-expect-error — актор обязан быть AccountId, граф на его месте — ошибка типа
-    void (() => withIdentity(db, { actor: userA, graph: userA }, async () => 1));
-    expect(true).toBe(true);
+
+    // ВТОРАЯ директива снята НАМЕРЕННО. Она стояла на литерале `{ actor: userA, graph: userA }`
+    // и обещала пинить «актор обязан быть AccountId», но после замка типа (Р-ИГ-12) литерал
+    // красен по ДРУГОЙ причине — у него нет приватного поля, — и расширение `Identity.actor`
+    // до `AccountId | GraphId` директиву неиспользуемой уже НЕ делало (измерено ре-ревью).
+    // Пин, который не краснеет на снятии своей гарантии, — не пин.
+    //
+    // Само свойство пинится ниже ТОЧНЫМ равенством типов, а не присваиваемостью: расширение
+    // поля до союза присваиваемость сохранило бы, а равенство ломает. Плюс третий рубеж —
+    // прод-код: та же мутация даёт TS2345 в десяти файлах (`send-message`, `executor`,
+    // `import/review`, `mcp/server`, `routines/lifecycle`, `seed/personal-graph` …).
+    const actorIsExactlyAccountId: Exact<Identity['actor'], AccountId> = true;
+    const graphIsExactlyGraphId: Exact<Identity['graph'], GraphId> = true;
+    expect([actorIsExactlyAccountId, graphIsExactlyGraphId]).toEqual([true, true]);
   });
 
   afterAll(async () => {
