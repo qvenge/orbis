@@ -26,9 +26,13 @@ function ownerMemberRow(graph: GraphId, account: AccountId): typeof graphMembers
  *
  * Принимает ПАРУ, а не один id (D44): у графа и аккаунта здесь разные колонки — `id`/`graph_id`
  * против `owner_ref`/`account_id`/`issued_by`, — и склеить их значением можно только через
- * резолвер `identityOfPerson`. Тождество `id = owner_ref` приезжает ИЗ НЕГО, а держит его CHECK
- * `graphs_personal_identity`: пара с `graph ≠ actor` (Bearer, тик) отсюда даст `23514`, а не
- * молчаливый «личный граф» с чужим `owner_ref`. Второго места тождества id в коде нет.
+ * резолвер `identityOfPerson`. Второго места тождества id в коде нет.
+ *
+ * Пара с `graph ≠ actor` (Bearer, тик) отсюда даёт ГРОМКИЙ отказ, а не молчаливый «личный граф»
+ * с чужим `owner_ref`, — и первым срабатывает не CHECK, а RLS: INSERT-политика
+ * `person_creates_own_graph` (0020) требует `id = auth.uid() AND owner_ref = auth.uid()`, то есть
+ * под ролью `authenticated` приходит **42501** (проверено в psql). CHECK `graphs_personal_identity`
+ * стоит вторым рубежом — он ловит тот же случай на админских и ops-путях, где политики нет.
  *
  * Идёт под ролью `authenticated` с `sub` = аккаунт: INSERT-политики 0020 пускают ровно эту
  * пару строк — личный граф самого себя. БЕЗ `RETURNING`: пока нет строки членства, только что

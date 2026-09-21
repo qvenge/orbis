@@ -15,7 +15,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { agentGrants, oauthClients } from '../db/schema';
-import { identityOfPerson, parseAccountId } from '../identity';
+import { identityOfGrant, identityOfPerson, parseAccountId } from '../identity';
 import {
   createAuthorizationCode,
   exchangeAuthorizationCode,
@@ -586,7 +586,7 @@ test('грант выписывает только держатель owner: у 
   const A = await freshGraph();
   const B = await freshGraph();
   await addMember(A, accountOf(B), 'operator'); // аккаунт Б — ОПЕРАТОР в графе А, не владелец
-  const bInA = { actor: accountOf(B), graph: A };
+  const bInA = identityOfGrant({ accountId: accountOf(B), graphId: A });
   const { challenge } = pkce();
   const clientId = await seedClient('operator-client');
 

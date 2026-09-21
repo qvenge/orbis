@@ -21,6 +21,7 @@ import {
 } from '../../test/helpers';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
+import { identityOfGrant } from '../identity';
 import { appRouter } from '../router';
 import { buildToolDefs } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
@@ -149,8 +150,10 @@ describe('кеш эффективных определений (§А10-1)', () =
     await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
     const hits = registryCacheStats().hits;
     // Тот же ГРАФ, другой АКТОР: ключ кеша не изменился — попадание, а не промах.
-    await withIdentity(db, { actor: accountOf(second), graph }, (tx) =>
-      effectiveRegistry(tx, graph),
+    await withIdentity(
+      db,
+      identityOfGrant({ accountId: accountOf(second), graphId: graph }),
+      (tx) => effectiveRegistry(tx, graph),
     );
     expect(registryCacheStats().hits).toBe(hits + 1);
   });

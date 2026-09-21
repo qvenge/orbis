@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
+import { identityOfGrant } from '../src/identity';
 import { accountOf, addMember, adminDb, appDb, freshGraph, personal, truncateAll } from './helpers';
 
 const { db, client } = appDb();
@@ -51,7 +52,7 @@ beforeAll(async () => {
   });
   if (!created.ok) throw new Error(`фикстура не создана: ${created.error.message}`);
   const rowOfA = (created.results[0] as { id: string }).id;
-  const bInA = { actor: accountOf(B), graph: A };
+  const bInA = identityOfGrant({ accountId: accountOf(B), graphId: A });
 
   // (1) Б в графе А: чтение, запись, журнал
   seen.bReadsA = await capture(

@@ -9,7 +9,7 @@ import type { Tx } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { resolvePropertyRef } from '../src/executor/props';
 import type { ExecuteRequest, ExecuteResult, ExecutorDeps } from '../src/executor/types';
-import { type Identity, parseAccountId, parseGraphId } from '../src/identity';
+import { type Identity, identityOfPerson, parseAccountId, parseGraphId } from '../src/identity';
 import { effectiveRegistry } from '../src/registry/cache';
 import type { RegistrySnapshot } from '../src/registry/load';
 import { bumpOwnerRegistryVersion } from '../src/registry/version';
@@ -92,9 +92,15 @@ export function accountOf(graph: GraphId): AccountId {
   return parseAccountId(graph);
 }
 
-/** Пара «человек в своём личном графе» — чем в тестах был голый id владельца. */
+/**
+ * Пара «человек в своём личном графе» — чем в тестах был голый id владельца.
+ *
+ * Идёт через РЕЗОЛВЕР 1, а не собирает литерал: снаружи `identity.ts` пару не собрать вовсе
+ * (замок типа, Р-ИГ-11), и своего конструктора у обвязки быть не должно — экспортированный
+ * конструктор был бы той же дыркой, только с подписью.
+ */
 export function personal(graph: GraphId): Identity {
-  return { actor: accountOf(graph), graph };
+  return identityOfPerson(accountOf(graph));
 }
 
 /** Фикстура «граф ≠ аккаунт»: второй аккаунт получает грант в чужом графе (админ-DSN; у authenticated такого пути нет). */

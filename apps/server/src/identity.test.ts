@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, truncateAll } from '../test/helpers';
 import {
+  type Identity,
   identitiesForScheduler,
   identityOfGrant,
   identityOfPerson,
@@ -36,13 +37,34 @@ test('резолвер 1 (JWT): граф человека — его личны�
 
 test('резолвер 2 (Bearer): оба id — из строки гранта, и они НЕ обязаны совпадать', () => {
   const who = identityOfGrant({ accountId: parseAccountId(ACCOUNT), graphId: parseGraphId(GRAPH) });
-  expect(who).toEqual({ actor: ACCOUNT, graph: GRAPH });
+  // Сверяется ФОРМА целиком (а не поле за полем), но обе стороны — обычные объекты: с замком
+  // типа (Р-ИГ-11) литерал `Identity` собрать нельзя, и `toEqual(<литерал>)` на `Identity` больше
+  // не компилируется. В рантайме поле-бренд фантомное, поэтому сверка остаётся полной.
+  expect({ actor: who.actor, graph: who.graph }).toEqual({ actor: ACCOUNT, graph: GRAPH });
 });
 
 beforeAll(truncateAll);
 afterAll(async () => {
   await truncateAll();
   await client.end(); // незакрытый пул держит прогон
+});
+
+test('замок типа: пару нельзя собрать литералом снаружи резолверов (Р-ИГ-11)', () => {
+  // Смысл пина: до Р-ИГ-11 литерал с ВЕРНЫМИ брендами полей был законной парой — не приведением,
+  // и компилятор его пропускал (мутация MR2 ре-ревью). Держал его только построчный греп-гейт,
+  // слепой к многострочной записи (Ф-Г-50): biome её не схлопывает — измерено. Теперь обе формы
+  // отбивает тип, а гейт остаётся вторым барьером.
+  // @ts-expect-error — однострочный литерал: поля верных брендов, но нет приватного поля-замка
+  const oneLine: Identity = { actor: ACCOUNT, graph: GRAPH };
+  // @ts-expect-error — ТА ЖЕ сборка, разложенная на строки: греп её не видит, тип видит
+  const multiLine: Identity = {
+    actor: ACCOUNT,
+    graph: GRAPH,
+  };
+  void oneLine;
+  void multiLine;
+  // Законный путь — резолвер; он же доказывает, что пин запрещает именно ЛИТЕРАЛ, а не форму.
+  expect(identityOfGrant({ accountId: ACCOUNT, graphId: GRAPH }).graph).toBe(GRAPH);
 });
 
 test('резолвер 3 (тик): пара берётся из graph_members, а не из равенства id', async () => {

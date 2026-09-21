@@ -2,7 +2,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { accountOf, appDb, mintGraph, personal, requireEnv } from '../../test/helpers';
-import type { Identity } from '../identity';
+import { type Identity, identityOfGrant } from '../identity';
 import { withIdentity } from './with-identity';
 
 requireEnv(); // бросает с внятным сообщением, если DATABASE_URL/DATABASE_URL_ADMIN не заданы
@@ -123,7 +123,9 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
   });
 
   test('актор и граф — разные значения claims: sub = актор, graph = граф', async () => {
-    const who = { actor: accountOf(userB), graph: userA };
+    // Через резолвер 2: актор действует в графе, где у него грант, — ровно этот смысл.
+    // Собрать пару литералом снаружи `identity.ts` нельзя (замок типа, Р-ИГ-11).
+    const who = identityOfGrant({ accountId: accountOf(userB), graphId: userA });
     const rows = await withIdentity(db, who, (tx) =>
       tx.execute(sql`SELECT auth.uid()::text AS uid,
       (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'graph') AS graph`),
