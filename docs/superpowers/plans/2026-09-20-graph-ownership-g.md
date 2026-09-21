@@ -3202,7 +3202,10 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep
 cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && git grep -anP '[oO]wner_?[Ii]d' -- docs/prd docs/implementation
 cd /Users/birzhan/projects/orbis/.claude/worktrees/graph-ownership-g && bun run test && bun run lint && bun run typecheck && bun scripts/check-legacy-form.ts --gate
 ```
-  Ожидание: первая — ПУСТО (спека Ш-4); вторая — только исторические записи: `04-decision-log.md` D11 (`:104`), D34, D39,
+  Ожидание: первая — **ноль ЖИВЫХ строк**; единственное законное совпадение — текст самой записи D44,
+  которая цитирует заменяемый принцип дословно по §7 спеки (правка 21.09 по исполнению Г-5, Р-ИГ-15:
+  спека требует и «ноль в PRD», и «§7 ДОСЛОВНО», а §7 этот принцип называет — записи решений живут по
+  тому же правилу, что и во второй команде). Вторая — только исторические записи: `04-decision-log.md` D11 (`:104`), D34, D39,
   D43 (записи принятых решений не переписываются), новая запись D44 (называет заменяемое имя), `03-pending.md` (строка
   решения В-Г-1) и абзацы ранбука, цитирующие СТАРУЮ ошибку с `relations`/`chat_messages` дословно; любая ДРУГАЯ строка —
   живой док со старым именем: дочинить. Третья — EXIT=0. Два коммита: `feat(ops): версия клиента 0.2.0 с пином, операции dump
