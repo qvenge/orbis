@@ -251,8 +251,10 @@ describe('reset-world — состав пересева на живой базе
           VALUES (${clientId}, 'тестовый клиент', ARRAY['https://example.invalid/cb'])`,
     );
     await admin.execute(
-      sql`INSERT INTO agent_grants (id, graph_id, client_id, kind, label, scope)
-          VALUES (${newId()}::uuid, ${owner}::uuid, ${clientId}, 'oauth', 'проба', 'full')`,
+      // `issued_by` — NOT NULL с 0021: у личного графа выдавший аккаунт и граф — один uuid.
+      sql`INSERT INTO agent_grants (id, graph_id, client_id, kind, label, scope, issued_by)
+          VALUES (${newId()}::uuid, ${owner}::uuid, ${clientId}, 'oauth', 'проба', 'full',
+                  ${owner}::uuid)`,
     );
     await admin.execute(
       sql`INSERT INTO ai_usage (graph_id, date, model, input_tokens, output_tokens, request_count)

@@ -247,7 +247,7 @@ function toRoutineRow(row: RawRow): RoutineRow {
  * (`@>`), а не разбор `->>`-полей: форма запроса одна на все чтения свойств.
  *
  * ПРО ИНДЕКС — ЧЕСТНО (замер 2026-08-27, `perf/explain.test.ts`). GIN `entities_props_gin`
- * это условие ПОД РОЛЬЮ ПРИЛОЖЕНИЯ НЕ БЕРЁТ: политика RLS `owner_owns_row` — security qual,
+ * это условие ПОД РОЛЬЮ ПРИЛОЖЕНИЯ НЕ БЕРЁТ: политика RLS `current_graph_select` — security qual,
  * а `jsonb_contains` не leakproof, поэтому планировщик обязан применить политику раньше и
  * уходит в Bitmap Heap Scan по `entities_graph_updated` с фильтром по куче. Под админским
  * подключением (сиды, скрипты, `ops.ts`) тот же запрос индекс берёт. Прежняя формулировка

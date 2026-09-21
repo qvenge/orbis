@@ -2813,9 +2813,10 @@ async function prepareOriginCreate(ctx: ExecCtx, rawInput: unknown): Promise<Pre
   const id = newId(); // id строки — серверный, в контракт операции не входит
   const now = ctx.clock();
 
-  // Стадий 3–4 нет намеренно: владение целевой сущностью проверяет RLS-политика
-  // owner_owns_row_and_entity (миграция 0002), а в batch импорта сущность создаётся
-  // ПРЕДЫДУЩЕЙ операцией того же batch — на момент prepare её ещё нет в БД.
+  // Стадий 3–4 нет намеренно: принадлежность целевой сущности проверяет RLS-политика
+  // `current_graph_insert` на `entity_origins` (0021): её WITH CHECK сверяет граф родителя
+  // — тот же шов, что завела 0002, теперь на ключе графа. А в batch импорта сущность
+  // создаётся ПРЕДЫДУЩЕЙ операцией того же batch — на момент prepare её ещё нет в БД.
   const journal: JournalPlan = {
     type: 'origin_created',
     entityId: input.entity_id,

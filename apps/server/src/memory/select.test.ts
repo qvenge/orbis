@@ -202,7 +202,7 @@ test('SQL-предикат области и клиентский ruleAppliesTo 
  * по `aspects` стояло `Index Cond` у `entities_aspects_gin`. Пробу сняли — она отвечала не
  * на тот вопрос. EXPLAIN снимался под АДМИН-соединением с дописанным `graph_id = '…'`, то
  * есть RLS ИМИТИРОВАЛАСЬ обычным предикатом; а под ролью приложения тот же `graph_id`
- * приходит security qual'ом политики `owner_owns_row`, и containment (не leakproof)
+ * приходит security qual'ом политики `current_graph_select`, и containment (не leakproof)
  * индексным условием стать не может в принципе. Боевой путь — именно роль приложения:
  * все три потребителя селектора идут через `withIdentity`.
  *

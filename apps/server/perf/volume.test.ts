@@ -446,7 +446,7 @@ async function corpusShareOfEntities(): Promise<number> {
  *
  * Что держится на ВСЕХ долях — два утверждения, и оба про RLS, а не про cost-модель:
  *   1. `usable === true` — индекс запросу подходит (при `enable_seqscan = off` берётся всегда);
- *   2. `chosen === usableWithoutRls` — политика `owner_owns_row` выбор по этому индексу НЕ меняет.
+ *   2. `chosen === usableWithoutRls` — политика `current_graph_select` выбор по этому индексу НЕ меняет.
  * Второе — содержательное трёхзначное утверждение файла и НЕ тавтология: у `entities_aspects_gin`
  * (форма движка) и у `relations_source_role` оно ЛОЖНО, и оба пинятся строкой рядом.
  */
@@ -503,7 +503,7 @@ function engineAspectEnvelopesQuery(period: { start: string; end: string }): SQL
  * `notRecurringTemplateSql` (`aggregates.ts:119`) — остаётся ПРИВАТНОЙ функцией оракула
  * (РП-4/Р-К-38), поэтому в копию не переносится и никуда не экспортируется.
  *
- * ГЛАВНАЯ ЦЕНА ЭТОГО ЗАПРОСА ПОД РОЛЬЮ — не индекс, а политика. `owner_owns_both_ends`
+ * ГЛАВНАЯ ЦЕНА ЭТОГО ЗАПРОСА ПОД РОЛЬЮ — не индекс, а политика. `current_graph_select` на `relations`
  * (`0001`) исполняется ДВУМЯ hashed SubPlan'ами, и каждый — Seq Scan по `entities` на 23 712
  * строк (живой EXPLAIN 09.09). Сам доступ к `relations` при этом Index Only Scan по `rel_uniq`;
  * то есть выбор индекса здесь уже оптимален, а платит запрос за проверку обоих концов ребра.
@@ -794,7 +794,7 @@ test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ форм
   // Приложение после Б-1 ходит `aspects @> ARRAY['orbis/budget']`, а это ровно та операция,
   // которую GIN обслуживает: под АДМИНОМ план берёт `entities_aspects_gin` (480 строк, 26
   // heap-блоков против Seq Scan по 23 712). Под ролью — нет, и причина названа в
-  // `explain.test.ts:27-38`: политика `owner_owns_row` приходит security qual'ом, а
+  // `explain.test.ts:27-38`: политика `current_graph_select` приходит security qual'ом, а
   // `arraycontains` не leakproof (`pg_proc.proleakproof = false`), поэтому индексным условием
   // containment стать не может в принципе. То есть «сперва форма предиката, потом индекс»
   // приложению НИЧЕГО не даёт — форма уже правильная, не пускает модель доступа. Тем же мерилом
@@ -854,7 +854,7 @@ test('EXPLAIN под ролью: привязки конвертов берут 
   // ВЕРДИКТ снят прогоном 09.09 и записан как есть (Р-К-41).
   //
   // `relations_source_role` (source_id, role) под ролью НЕ выбирается — и не потому, что запрос
-  // идёт по куче: политика `owner_owns_both_ends` спрашивает ОБА конца ребра, поэтому плану
+  // идёт по куче: политика `current_graph_select` на `relations` спрашивает ОБА конца ребра, поэтому плану
   // нужен ещё и `target_id`. Его несёт `rel_uniq` (source_id, target_id, role) — и выигрывает
   // Index Only Scan'ом, без единого похода в кучу. Под админ-DSN политики нет, `target_id`
   // не нужен, и берётся `relations_source_role`.

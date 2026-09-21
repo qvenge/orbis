@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(125);
+SELECT plan(148);
 
 -- Графы фикстур (0020): с FK на graphs владельца «из воздуха» не бывает. Весь файл — одна транзакция
 -- с ROLLBACK, отложенные триггеры И-1 до проверки не доходят — гранты заведены ради политик.
@@ -15,6 +15,21 @@ INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by) VALU
    '00000000-0000-4000-8000-00000000000a', 'owner', '00000000-0000-4000-8000-00000000000a'),
   ('00000000-0000-7000-8000-0000000000bc', '00000000-0000-4000-8000-00000000000b',
    '00000000-0000-4000-8000-00000000000b', 'owner', '00000000-0000-4000-8000-00000000000b');
+
+-- Фикстуры «актор ≠ граф» (0021): Е — operator, Ж — observer, З — ОТОЗВАННЫЙ operator графа А; у Е есть свой личный граф.
+INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
+  ('00000000-0000-4000-8000-00000000000e', 'person', '00000000-0000-4000-8000-00000000000e');
+INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by, revoked_at) VALUES
+  ('00000000-0000-7000-8000-0000000000e9', '00000000-0000-4000-8000-00000000000e',
+   '00000000-0000-4000-8000-00000000000e', 'owner', '00000000-0000-4000-8000-00000000000e', NULL),
+  ('00000000-0000-7000-8000-0000000000ea', '00000000-0000-4000-8000-00000000000a',
+   '00000000-0000-4000-8000-00000000000e', 'operator', '00000000-0000-4000-8000-00000000000a', NULL),
+  ('00000000-0000-7000-8000-0000000000fa', '00000000-0000-4000-8000-00000000000a',
+   '00000000-0000-4000-8000-00000000000f', 'observer', '00000000-0000-4000-8000-00000000000a', NULL),
+  ('00000000-0000-7000-8000-00000000001b', '00000000-0000-4000-8000-00000000000a',
+   '00000000-0000-4000-8000-00000000001a', 'operator', '00000000-0000-4000-8000-00000000000a', now());
+INSERT INTO entities (id, graph_id, title) VALUES
+  ('00000000-0000-7000-8000-0000000000e1', '00000000-0000-4000-8000-00000000000e', 'Е: запись личного графа');
 
 -- Фикстуры под ролью с BYPASSRLS (обходит RLS; postgres здесь НЕ суперпользователь)
 INSERT INTO entities (id, graph_id, title) VALUES
@@ -41,11 +56,14 @@ INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id) VAL
    '00000000-0000-7000-8000-0000000000b1', 'telegram', 'ext-b');
 INSERT INTO oauth_clients (client_id, client_name, redirect_uris) VALUES
   ('pgtap-client', 'Claude Code', ARRAY['http://localhost:8080/callback']);
-INSERT INTO agent_grants (id, graph_id, client_id, kind, label, access_hash) VALUES
+-- `issued_by` с миграции 0021 — NOT NULL (аккаунт, выдавший грант). У личного графа id аккаунта
+-- и id графа совпадают, поэтому здесь это тот же uuid; без колонки файл оборвался бы на 23502
+-- при ON_ERROR_STOP — ещё до первой проверки.
+INSERT INTO agent_grants (id, graph_id, client_id, kind, label, access_hash, issued_by) VALUES
   ('00000000-0000-7000-8000-0000000000a7', '00000000-0000-4000-8000-00000000000a',
-   'pgtap-client', 'oauth', 'Claude Code', 'hash-a'),
+   'pgtap-client', 'oauth', 'Claude Code', 'hash-a', '00000000-0000-4000-8000-00000000000a'),
   ('00000000-0000-7000-8000-0000000000b7', '00000000-0000-4000-8000-00000000000b',
-   'pgtap-client', 'oauth', 'Claude Code', 'hash-b');
+   'pgtap-client', 'oauth', 'Claude Code', 'hash-b', '00000000-0000-4000-8000-00000000000b');
 -- Закреплённые версии тела (ADE-срез 1, С11) — по одной у A и у B: без строки B
 -- проверка «A видит ровно свою» была бы ложно-зелёной и при сломанном RLS.
 -- body_doc не задаём: версия, снятая с ещё не сконвертированного тела, — законный случай.
@@ -136,7 +154,7 @@ SELECT is(
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
-  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT results_eq('SELECT count(*)::int FROM entities', ARRAY[1], 'A видит ровно одну (свою) сущность');
@@ -265,15 +283,18 @@ SELECT results_eq('SELECT count(*)::int FROM agent_grants', ARRAY[1],
 SELECT results_eq(
   $$SELECT count(*)::int FROM agent_grants WHERE graph_id = '00000000-0000-4000-8000-00000000000b'$$,
   ARRAY[0], 'чужой грант невидим');
+-- `issued_by` заполнен НАРОЧНО: без него с 0021 строка упала бы на NOT NULL (23502), и пин
+-- перестал бы различать механизм — отказ обязан приходить от политики, а не от колонки.
 SELECT throws_ok(
-  $$INSERT INTO agent_grants (id, graph_id, kind, label)
+  $$INSERT INTO agent_grants (id, graph_id, kind, label, issued_by)
     VALUES ('00000000-0000-7000-8000-0000000000c7',
-            '00000000-0000-4000-8000-00000000000b', 'pat', 'подлог')$$,
+            '00000000-0000-4000-8000-00000000000b', 'pat', 'подлог',
+            '00000000-0000-4000-8000-00000000000a')$$,
   '42501', NULL, 'грант с чужим graph_id отклоняется WITH CHECK');
 
 -- Как пользователь B: чужой тред закрыт на чтение и вставку
 SELECT set_config('request.jwt.claims',
-  '{"sub":"00000000-0000-4000-8000-00000000000b","role":"authenticated"}', true);
+  '{"sub":"00000000-0000-4000-8000-00000000000b","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000b"}', true);
 SELECT results_eq('SELECT count(*)::int FROM chat_messages', ARRAY[0], 'B не видит сообщений A');
 SELECT throws_ok(
   $$INSERT INTO chat_messages (id, thread_id, role, content)
@@ -345,7 +366,7 @@ RESET ROLE;
 -- И под живым владельцем тоже: клиенты DCR ничьи, владелец видит их только через свой
 -- грант — политики для authenticated на этой таблице нет по замыслу (0005).
 SELECT set_config('request.jwt.claims',
-  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
 SET LOCAL ROLE authenticated;
 SELECT results_eq('SELECT count(*)::int FROM oauth_clients', ARRAY[0],
   'oauth_clients: даже с GRANT''ом владелец видит 0 строк');
@@ -359,7 +380,7 @@ SELECT cmp_ok((SELECT count(*)::int FROM entities), '>=', 3, 'админ вид�
 -- request.jwt.claims живёт до конца транзакции — без явной установки проверки
 -- ушли бы под админа, который RLS обходит, и были бы ложно-зелёными.
 SELECT set_config('request.jwt.claims',
-  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
 SET LOCAL ROLE authenticated;
 SELECT results_eq('SELECT count(*)::int FROM entity_versions', ARRAY[1],
   'entity_versions: A видит ровно свою версию');
@@ -437,7 +458,7 @@ SELECT ok(has_table_privilege('orbis_app', 'public.user_settings', 'SELECT'),
 -- живёт до конца транзакции — без явной установки проверки ушли бы под роль, которая RLS
 -- обходит, и были бы ложно-зелёными.
 SELECT set_config('request.jwt.claims',
-  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
 SET LOCAL ROLE authenticated;
 
 -- Группа 12: property_definitions
@@ -621,7 +642,7 @@ DELETE FROM action_definitions WHERE id = 'pgtap/a2';
 SELECT results_eq($$SELECT count(*)::int FROM action_definitions WHERE id = 'pgtap/a2'$$, ARRAY[0],
   'action_definitions: свою строку владелец удаляет (delete_own)');
 
--- Группа 17: registry_deltas — таблица чисто владельца (owner_owns_row FOR ALL), встроенных
+-- Группа 17: registry_deltas — таблица чисто графа (четыре политики current_graph_*), встроенных
 -- дельт не бывает по определению.
 SELECT results_eq('SELECT count(*)::int FROM registry_deltas', ARRAY[1],
   'registry_deltas: A видит ровно свою дельту');
@@ -648,7 +669,7 @@ SELECT throws_ok(
   '42501', NULL,
     'registry_system: вторая строка под authenticated отклоняется (политики INSERT нет)');
 
--- Группа 19: envelope_spent_cache — таблица чисто владельца (owner_owns_row FOR ALL, 0018),
+-- Группа 19: envelope_spent_cache — таблица чисто графа (четыре политики current_graph_*, 0021),
 -- встроенных строк кэша не бывает по определению.
 SELECT results_eq('SELECT count(*)::int FROM envelope_spent_cache', ARRAY[1],
   'envelope_spent_cache: A видит ровно свою строку кэша');
@@ -662,8 +683,8 @@ SELECT lives_ok(
     VALUES ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000a',
             '2026-09-02', 1, 0, 1)$$,
   'envelope_spent_cache: INSERT своей строки проходит');
--- Политика `owner_owns_row` объявлена FOR ALL, но пин на INSERT/SELECT про UPDATE и DELETE не
--- говорит НИЧЕГО: `FOR ALL` можно однажды разрезать на команды и потерять половину, не уронив
+-- Политика на каждую команду своя (0021), и пин на INSERT/SELECT про UPDATE и DELETE не
+-- говорит НИЧЕГО: покомандную четвёрку можно однажды недосоздать и потерять половину, не уронив
 -- ни одного теста. Чужая строка обязана давать НОЛЬ задетых (её прячет USING), своя — одну.
 SELECT results_eq(
   $$WITH u AS (UPDATE envelope_spent_cache SET spent = 999
@@ -739,7 +760,7 @@ SELECT lives_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
   ('00000000-0000-4000-8000-0000000000d3', 'organization', NULL)$$,
   'organization с NULL в owner_ref зарезервирован для ступени 2');
 SELECT set_config('request.jwt.claims',
-  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
 SET LOCAL ROLE authenticated;
 SELECT results_eq('SELECT count(*)::int FROM graphs', ARRAY[1], 'A видит ровно свой граф');
 SELECT results_eq($$SELECT count(*)::int FROM graphs WHERE id = '00000000-0000-4000-8000-00000000000b'$$,
@@ -750,7 +771,7 @@ WITH d AS (DELETE FROM graphs RETURNING 1)
 SELECT is((SELECT count(*)::int FROM d), 0, 'И-2: даже с правом DELETE граф не удалить — политики нет');
 RESET ROLE;
 SELECT set_config('request.jwt.claims',
-  '{"sub":"00000000-0000-4000-8000-00000000000c","role":"authenticated"}', true);
+  '{"sub":"00000000-0000-4000-8000-00000000000c","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000c"}', true);
 SET LOCAL ROLE authenticated;
 SELECT throws_ok($$INSERT INTO graphs (id, owner_kind, owner_ref) VALUES
   ('00000000-0000-4000-8000-0000000000d4', 'person', '00000000-0000-4000-8000-0000000000d4')$$,
@@ -800,6 +821,107 @@ SELECT ok(has_table_privilege('orbis_app', 'public.graph_members', 'SELECT'),
   'orbis_app читает graph_members (без гранта — 42501 до всякой политики)');
 -- Пиним НАЛИЧИЕ нужного права; отсутствие лишних не пиним (правило :411-415) — запрет записи под
 -- orbis_app держит поведением серверный тест db/graphs-policies.test.ts.
+
+-- ── Группа 23: актор ≠ граф — «текущий граф ∧ членство» (спека §3.5–§3.6) ───────────────
+RESET ROLE;
+-- Е — operator графа А; текущий граф — А
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000e","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq($$SELECT count(*)::int FROM entities WHERE id = '00000000-0000-7000-8000-0000000000a1'$$,
+  ARRAY[1], 'operator читает строки текущего графа');
+SELECT results_eq($$SELECT count(*)::int FROM entities WHERE id = '00000000-0000-7000-8000-0000000000e1'$$,
+  ARRAY[0], 'строки СВОЕГО личного графа в чужом текущем графе не видны: «все мои графы» умолчанием не бывает');
+SELECT lives_ok($$INSERT INTO entities (id, graph_id, title) VALUES
+  ('00000000-0000-7000-8000-0000000000e2', '00000000-0000-4000-8000-00000000000a', 'Е пишет в граф А')$$,
+  'operator пишет в текущий граф');
+SELECT throws_ok($$INSERT INTO entities (id, graph_id, title) VALUES
+  ('00000000-0000-7000-8000-0000000000e3', '00000000-0000-4000-8000-00000000000e', 'мимо текущего графа')$$,
+  '42501', NULL, 'запись в НЕтекущий граф — отказ, даже если грант в нём есть');
+SELECT throws_ok($$INSERT INTO agent_grants (id, graph_id, issued_by, kind, label, access_hash) VALUES
+  ('00000000-0000-7000-8000-0000000000e7', '00000000-0000-4000-8000-00000000000a',
+   '00000000-0000-4000-8000-00000000000e', 'pat', 'агент оператора', 'hash-e')$$,
+  '42501', NULL, 'грант агенту выписывает только держатель гранта owner (иначе operator выдал бы full)');
+-- Ж — observer графа А
+RESET ROLE;
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000f","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq($$SELECT count(*)::int FROM entities WHERE id = '00000000-0000-7000-8000-0000000000a1'$$,
+  ARRAY[1], 'observer читает');
+SELECT throws_ok($$INSERT INTO entities (id, graph_id, title) VALUES
+  ('00000000-0000-7000-8000-0000000000f2', '00000000-0000-4000-8000-00000000000a', 'observer пишет')$$,
+  '42501', NULL, 'observer не вставляет');
+WITH u AS (UPDATE entities SET title = 'перехват' WHERE id = '00000000-0000-7000-8000-0000000000a1' RETURNING 1)
+SELECT is((SELECT count(*)::int FROM u), 0, 'observer не правит: UPDATE не задевает ни одной строки');
+WITH d AS (DELETE FROM entities WHERE id = '00000000-0000-7000-8000-0000000000a1' RETURNING 1)
+SELECT is((SELECT count(*)::int FROM d), 0, 'observer не удаляет: политика записи стоит и на DELETE');
+-- Б — без гранта в графе А; З — с отозванным
+RESET ROLE;
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000b","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT count(*)::int FROM entities', ARRAY[0], 'текущий граф без гранта — пусто');
+RESET ROLE;
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000001a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT count(*)::int FROM entities', ARRAY[0], 'отозванный грант — пусто (revoked_at IS NULL в функциях)');
+-- А без текущего графа: fail-closed, кроме встроенных строк реестров
+RESET ROLE;
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT count(*)::int FROM entities', ARRAY[0], 'текущий граф не выставлен — пусто, даже у владельца');
+SELECT results_eq($$SELECT count(*)::int FROM aspect_definitions WHERE id = 'orbis/pgtap-probe'$$,
+  ARRAY[1], '…кроме встроенных строк реестров: стартовая проверка дрейфа читает их без идентичности');
+SELECT results_eq($$SELECT count(*)::int FROM property_definitions WHERE id = 'pgtap/a'$$,
+  ARRAY[0], 'своя строка реестра без текущего графа не видна');
+-- А — owner в своём графе: грант агенту выписывается
+RESET ROLE;
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000a"}', true);
+SET LOCAL ROLE authenticated;
+SELECT lives_ok($$INSERT INTO agent_grants (id, graph_id, issued_by, kind, label, access_hash) VALUES
+  ('00000000-0000-7000-8000-0000000000a0', '00000000-0000-4000-8000-00000000000a',
+   '00000000-0000-4000-8000-00000000000a', 'pat', 'агент владельца', 'hash-a0')$$,
+  'держатель гранта owner выписывает грант агенту');
+-- Межграфовая строгость: Е в СВОЁМ графе цепляет строки к сущности графа А (в нём у Е грант есть!)
+RESET ROLE;
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000e","role":"authenticated","graph":"00000000-0000-4000-8000-00000000000e"}', true);
+SET LOCAL ROLE authenticated;
+SELECT throws_ok($$INSERT INTO chat_threads (id, graph_id, entity_id) VALUES
+  ('00000000-0000-7000-8000-0000000000e4', '00000000-0000-4000-8000-00000000000e',
+   '00000000-0000-7000-8000-0000000000a1')$$,
+  '42501', NULL, 'тред графа Е на сущности графа А — отказ (давняя дыра chat_threads.entity_id закрыта)');
+SELECT throws_ok($$INSERT INTO envelope_spent_cache (envelope_id, graph_id, as_of, spent, owner_version, system_version) VALUES
+  ('00000000-0000-7000-8000-0000000000a1', '00000000-0000-4000-8000-00000000000e', '2026-09-02', 1, 0, 1)$$,
+  '42501', NULL, 'кэш графа Е на конверте графа А — отказ (вторая дыра того же класса)');
+SELECT throws_ok($$INSERT INTO relations (id, source_id, target_id, role) VALUES
+  ('00000000-0000-7000-8000-0000000000e5', '00000000-0000-7000-8000-0000000000e1',
+   '00000000-0000-7000-8000-0000000000a1', 'mention')$$,
+  '42501', NULL, 'связь между графами — отказ: оба конца в одном текущем графе до ступени 2');
+SELECT throws_ok($$INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id, actor_kind) VALUES
+  ('00000000-0000-7000-8000-0000000000e8', '00000000-0000-4000-8000-00000000000e',
+   '00000000-0000-7000-8000-0000000000a1', 'чужое тело', 'т', '00000000-0000-4000-8000-00000000000e', 'owner')$$,
+  '42501', NULL, 'версия графа Е на сущности графа А — отказ (строгость 0011 сохранена)');
+SELECT throws_ok($$INSERT INTO entity_origins (id, graph_id, entity_id, namespace, external_id) VALUES
+  ('00000000-0000-7000-8000-0000000000e6', '00000000-0000-4000-8000-00000000000e',
+   '00000000-0000-7000-8000-0000000000a1', 'telegram', 'ext-e')$$,
+  '42501', NULL, 'provenance графа Е на сущности графа А — отказ (строгость 0002 сохранена)');
+-- Структурные пины
+RESET ROLE;
+SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname IN ('current_graph_id','actor_reads_current_graph','actor_writes_current_graph','actor_owns_current_graph')
+    AND NOT p.prosecdef AND p.proconfig @> ARRAY['search_path=""']),
+  4, 'четыре функции политик — SECURITY INVOKER с пустым search_path: обхода RLS нет (0013:7-8)');
+SELECT is((SELECT count(*)::int FROM pg_policies WHERE schemaname = 'public'
+    AND tablename NOT IN ('graphs','graph_members')
+    AND (coalesce(qual, '') LIKE '%auth.uid()%' OR coalesce(with_check, '') LIKE '%auth.uid()%')),
+  0, 'ни одна политика строк не сравнивает ключ с auth.uid(): вечного доступа по равенству id нет');
+SELECT col_not_null('public', 'agent_grants', 'issued_by', 'у гранта агента всегда есть выдавший аккаунт');
 
 SELECT finish();
 ROLLBACK;

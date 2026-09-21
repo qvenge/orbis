@@ -33,7 +33,7 @@ import { MEMORY_ASPECT, MEMORY_KIND, RULE_SCOPE } from './rules';
  *
  * ПРО ИНДЕКС — ЧЕСТНО, И ЭТО ВАЖНЕЕ ФОРМЫ. Под ролью приложения GIN на `entities`
  * НЕДОСТИЖИМ — ни этот предикат, ни любой другой containment его не возьмут. Причина не в
- * селективности и не в объёме: политика `owner_owns_row` (0001) это security qual, а
+ * селективности и не в объёме: политика `current_graph_select` (0021) это security qual, а
  * `arraycontains` не leakproof (`pg_proc.proleakproof = false`), и PostgreSQL обязан
  * проверить security qual раньше индексного условия — значит не-leakproof предикат
  * индексным условием стать не может в принципе. Все три потребителя селектора ходят через

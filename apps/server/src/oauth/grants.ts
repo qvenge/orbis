@@ -133,9 +133,6 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
     });
   const row = rows[0];
   if (!row) return null;
-  // issued_by NULLABLE до миграции 0021 (Р-КГ-2): грант без выдавшего аккаунта — не «актор = граф»,
-  // а отказ (fail-closed). После 0021 ветка недостижима и снимается задачей Г-4.
-  if (row.issuedBy === null) return null;
   // Каст, а не разбор: колонка `scope` — text с DEFAULT 'full', перечисление живёт одним
   // списком в @orbis/shared (GRANT_SCOPES), а пишут в неё выдача кода и issuePatGrant —
   // значениями этого же списка. Откат на 'full' при незнакомом значении был бы здесь

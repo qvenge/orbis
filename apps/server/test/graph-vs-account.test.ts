@@ -2,10 +2,19 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
+import { makeChatJournalSink } from '../src/executor/journal';
 import { identityOfGrant } from '../src/identity';
 import { accountOf, addMember, adminDb, appDb, freshGraph, personal, truncateAll } from './helpers';
 
 const { db, client } = appDb();
+/**
+ * Боевой синк журнала, а не умолчание исполнителя. Без `deps.sink` работает `NOOP_SINK`
+ * (`executor.ts:383`): стадии 6–7 считаются, но в `chat_threads`/`chat_messages` не пишется
+ * НИЧЕГО — сюжет «журнал пишет актора Б в треде графа А» был бы ложным пином (пустая строка
+ * против пустой). С боевым синком тот же сюжет заодно проверяет новые политики производных
+ * таблиц: глобальный тред графа А заводит А, а сообщение в него дописывает оператор Б.
+ */
+const sink = makeChatJournalSink();
 
 /** Код ошибки Postgres — у drizzle он лежит либо в `code`, либо в `cause.code`. */
 const pgCode = (e: unknown): string =>
@@ -44,12 +53,16 @@ beforeAll(async () => {
   await addMember(A, accountOf(B), 'operator'); // аккаунт Б — оператор в личном графе А
   seen.graphA = A;
   seen.accountB = accountOf(B);
-  const created = await execute(db, {
-    identity: personal(A),
-    actorKind: 'owner',
-    source: 'ui',
-    operations: [{ tool: 'entity_create', input: { title: 'запись графа А', tags: [] } }],
-  });
+  const created = await execute(
+    db,
+    {
+      identity: personal(A),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_create', input: { title: 'запись графа А', tags: [] } }],
+    },
+    { sink },
+  );
   if (!created.ok) throw new Error(`фикстура не создана: ${created.error.message}`);
   const rowOfA = (created.results[0] as { id: string }).id;
   const bInA = identityOfGrant({ accountId: accountOf(B), graphId: A });
@@ -68,12 +81,16 @@ beforeAll(async () => {
   );
   seen.bWriteInA = await capture(
     async () => {
-      const written = await execute(db, {
-        identity: bInA,
-        actorKind: 'owner',
-        source: 'ui',
-        operations: [{ tool: 'entity_create', input: { title: 'запись Б в графе А', tags: [] } }],
-      });
+      const written = await execute(
+        db,
+        {
+          identity: bInA,
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [{ tool: 'entity_create', input: { title: 'запись Б в графе А', tags: [] } }],
+        },
+        { sink },
+      );
       return written.ok ? 'ok' : written.error.code;
     },
     (code) => code,
@@ -100,12 +117,16 @@ beforeAll(async () => {
   // (3) мутация строки по id в НЕТЕКУЩЕМ графе
   seen.bUpdatesAById = await capture(
     async () => {
-      const foreign = await execute(db, {
-        identity: personal(B),
-        actorKind: 'owner',
-        source: 'ui',
-        operations: [{ tool: 'entity_update', input: { id: rowOfA, title: 'перехват' } }],
-      });
+      const foreign = await execute(
+        db,
+        {
+          identity: personal(B),
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [{ tool: 'entity_update', input: { id: rowOfA, title: 'перехват' } }],
+        },
+        { sink },
+      );
       return foreign.ok ? 'ok' : foreign.error.code;
     },
     (code) => code,
@@ -133,9 +154,9 @@ afterAll(async () => {
 });
 
 describe('граф ≠ аккаунт (спека §3.5; гейт миграции 0021)', () => {
-  // ПОМЕТКА Г-3 → Г-4: под старыми политиками `graph_id = auth.uid()` пара {actor: Б, graph: А}
-  // упирается в RLS. Зелёным сюжет становится с миграцией 0021 — тогда пометка снимается.
-  test.failing('под {actor: Б, graph: А} чтение и запись проходят, журнал пишет актора Б в треде графа А', () => {
+  // Сюжет зелен с миграции 0021: политика читает ТЕКУЩИЙ граф из claims и грант актора в нём,
+  // а не равенство `graph_id = auth.uid()`. До 0021 пара {actor: Б, graph: А} упиралась в RLS.
+  test('под {actor: Б, graph: А} чтение и запись проходят, журнал пишет актора Б в треде графа А', () => {
     expect(seen.bReadsA).toBe(1);
     expect(seen.bWriteInA).toBe('ok');
     expect(seen.journalActor).toBe(seen.accountB);
@@ -147,8 +168,9 @@ describe('граф ≠ аккаунт (спека §3.5; гейт миграци
   test('мутация строки по id в нетекущем графе — отказ', () => {
     expect(seen.bUpdatesAById).toBe('NOT_FOUND');
   });
-  // ПОМЕТКА Г-3 → Г-4: старые политики читают только `sub` и отдают строки без текущего графа.
-  test.failing('чтение без текущего графа — пусто (fail-closed)', () => {
+  // Fail-closed с миграции 0021: без ключа `graph` обе половины предиката ложны. Старые
+  // политики читали только `sub` и отдавали строки без текущего графа вовсе.
+  test('чтение без текущего графа — пусто (fail-closed)', () => {
     expect(seen.withoutGraph).toBe(0);
   });
 });

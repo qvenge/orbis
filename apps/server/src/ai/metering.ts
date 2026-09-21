@@ -2,7 +2,7 @@
 // Метеринг LLM-вызовов (§4.7 ai_usage, §8): upsert-инкремент строки
 // (graph_id, date, model). Решение 8 плана 1b: запись — ВНЕ tx executor'а/цикла,
 // отдельной короткой транзакцией ПОСЛЕ tool-цикла, суммой всех шагов.
-// Таблица под RLS (owner_owns_row) — пишем под withIdentity владельца.
+// Таблица под RLS (current_graph_insert: текущий граф ∧ грант) — пишем под withIdentity пары.
 // День — календарный в UTC (§4.7); clock инжектируется тестами.
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';

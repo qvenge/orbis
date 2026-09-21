@@ -329,9 +329,8 @@ export const agentGrants = pgTable(
     graphId: uuid('graph_id')
       .notNull()
       .references(() => graphs.id, { onDelete: 'no action' }),
-    // Аккаунт, выдавший грант (D44, спека §3.4–§3.5): актор путей без живого человека. NULLABLE до
-    // миграции 0021 — писатели появляются задачей Г-3, NOT NULL ставит Г-4 (Р-КГ-2).
-    issuedBy: uuid('issued_by'),
+    // Аккаунт, выдавший грант (D44): актор путей без живого человека; NOT NULL с миграции 0021.
+    issuedBy: uuid('issued_by').notNull(),
     // NULL у PAT: у headless-доступа нет зарегистрированного клиента
     clientId: text('client_id').references(() => oauthClients.clientId, { onDelete: 'cascade' }),
     kind: text('kind').notNull(), // oauth | pat
