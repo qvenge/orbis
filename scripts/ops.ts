@@ -535,6 +535,56 @@ async function ping(): Promise<number> {
 }
 
 /**
+ * Дамп прода в локальный каталог — вход репетиции миграций на настоящих данных (срез Г, D44).
+ * Только чтение: обёртка над scripts/backup.sh (тот же pg_dump, что у ночного backup.yml), секрет —
+ * из Ключницы и в вывод не попадает. Артефакт backup.yml зашифрован ключом владельца и без него
+ * не читается, поэтому санкционированный путь к плейн-дампу — здесь. В файле ЛИЧНЫЕ ДАННЫЕ:
+ * каталог обязан быть вне git, файл удаляется сразу после репетиции.
+ */
+async function dumpOp(args: string[]): Promise<number> {
+  const dir = args[0];
+  if (dir === undefined) {
+    console.error('ops dump: укажи каталог ВНЕ git: bun scripts/ops.ts dump <каталог>');
+    return 2;
+  }
+  const proc = Bun.spawnSync(['bash', 'scripts/backup.sh'], {
+    env: { ...process.env, ADMIN_DSN: readDsn(), BACKUP_DIR: dir },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  console.log(redact(proc.stdout.toString()).trim());
+  if (proc.exitCode !== 0) console.error(redact(proc.stderr.toString()).trim());
+  return proc.exitCode ?? 1;
+}
+
+/** Только чтение: состояние владения после миграций 0019–0021 — графы, членство, гранты агентов. */
+async function graphsCensus(): Promise<number> {
+  return withDb(async (sql) => {
+    const [g] = await sql<{ n: number; person: number }[]>`
+      SELECT count(*)::int AS n, count(*) FILTER (WHERE owner_kind = 'person')::int AS person FROM graphs`;
+    const [ownerless] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM graphs g WHERE NOT EXISTS (
+        SELECT 1 FROM graph_members m
+        WHERE m.graph_id = g.id AND m.grant_kind = 'owner' AND m.revoked_at IS NULL)`;
+    const members = await sql<{ grant_kind: string; active: number; revoked: number }[]>`
+      SELECT grant_kind, count(*) FILTER (WHERE revoked_at IS NULL)::int AS active,
+             count(*) FILTER (WHERE revoked_at IS NOT NULL)::int AS revoked
+      FROM graph_members GROUP BY 1 ORDER BY 1`;
+    const [grants] = await sql<{ n: number; no_issuer: number }[]>`
+      SELECT count(*)::int AS n, count(*) FILTER (WHERE issued_by IS NULL)::int AS no_issuer FROM agent_grants`;
+    const [settings] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM user_settings`;
+    console.log(
+      `графов: ${g?.n} (личных ${g?.person}); без действующего гранта owner: ${ownerless?.n}`,
+    );
+    for (const m of members)
+      console.log(`членство ${m.grant_kind}: действующих ${m.active}, отозванных ${m.revoked}`);
+    console.log(`грантов агентов: ${grants?.n}; без issued_by: ${grants?.no_issuer}`);
+    console.log(`строк user_settings (графы с пройденным онбордингом): ${settings?.n}`);
+    return ownerless?.n === 0 && grants?.no_issuer === 0 ? 0 : 1;
+  });
+}
+
+/**
  * Выпуск headless-токена внешнего агента на ПРОДЕ (§9.3, D34).
  *
  * Зачем операция здесь, а не только в scripts/issue-pat.ts: до переезда PAT в таблицу
@@ -644,6 +694,14 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
       'пересеять пять реестров. Требует --confirm <PROD_REF> и --i-understand RESET',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
+  dump: {
+    run: dumpOp,
+    help: 'только чтение: плейн-дамп прода в <каталог> вне git (личные данные — удалить после репетиции)',
+  },
+  graphs: {
+    run: graphsCensus,
+    help: 'только чтение: графы, членство, гранты агентов; код 1 — есть граф без owner или грант без issued_by',
+  },
   'issue-pat': {
     run: issuePat,
     help: `headless-токен агента: ${PAT_USAGE} (печатает секрет ОДИН раз)`,

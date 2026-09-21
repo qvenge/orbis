@@ -18,9 +18,9 @@ test('trpc.ping.useQuery резолвит против мок-линка', async
 });
 
 test('trpcHeaders всегда несёт версию, а Bearer только при наличии токена', () => {
-  expect(trpcHeaders(() => null)).toEqual({ 'x-orbis-client-version': '0.1.0' });
+  expect(trpcHeaders(() => null)).toEqual({ 'x-orbis-client-version': '0.2.0' });
   expect(trpcHeaders(() => 'abc')).toEqual({
     authorization: 'Bearer abc',
-    'x-orbis-client-version': '0.1.0',
+    'x-orbis-client-version': '0.2.0',
   });
 });

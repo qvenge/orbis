@@ -155,8 +155,8 @@ test('PAT-запрос без заголовка версии проходит v
 });
 
 test('заголовок версии клиента пробрасывается; отсутствует → null', async () => {
-  const withHeader = await createContext(makeReq({ [CLIENT_VERSION_HEADER]: '0.1.0' }));
-  expect(withHeader.clientVersion).toBe('0.1.0');
+  const withHeader = await createContext(makeReq({ [CLIENT_VERSION_HEADER]: '0.2.0' }));
+  expect(withHeader.clientVersion).toBe('0.2.0');
   const without = await createContext(makeReq());
   expect(without.clientVersion).toBeNull();
 });

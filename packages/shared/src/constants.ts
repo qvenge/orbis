@@ -1,6 +1,8 @@
 // §9.1: совместимость клиента (Task 14) — клиент старше минимальной версии
 // получает PRECONDITION_FAILED с cause { code: 'CLIENT_OUTDATED', min }.
-export const MIN_COMPATIBLE_CLIENT_VERSION = '0.1.0';
+// 0.2.0 — срез Г (D44): ключ провода стал `graphId`; клиент 0.1.x держит старое имя поля
+// и потому обязан получить 412 CLIENT_OUTDATED, а не тихо сломаться на несуществующем ключе.
+export const MIN_COMPATIBLE_CLIENT_VERSION = '0.2.0';
 export const CLIENT_VERSION_HEADER = 'x-orbis-client-version';
 
 // §7.7/§9.2 (carried-решение плана 1b): максимум вызовов провайдера в одном
