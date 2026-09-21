@@ -93,7 +93,7 @@ curl -fsS https://<prod-host>/ | head -c 200   # index.html веб-клиент�
 >
 > Второе наблюдение называет модель поимённо — строка в `ai_usage`. Метеринг пишет туда
 > `provider.modelId` (`ai/send-message.ts`: `makeAiDeps` → `ai/metering.ts`:
-> `recordUsage`), колонка называется `model`, ключ строки — `(owner_id, date, model)`,
+> `recordUsage`), колонка называется `model`, ключ строки — `(graph_id, date, model)`,
 > где `date` — календарный день в UTC. Для дефолта OpenAI там будет `gpt-5.5`
 > (`DEFAULT_OPENAI_MODEL`), для Anthropic — `claude-sonnet-5`. Строка пишется ТОЛЬКО при
 > `requestCount > 0`, то есть после успешного ответа провайдера, — отсюда её
@@ -645,7 +645,7 @@ containment по jsonb, который под RLS не берёт GIN-индек
    дельт, которых уже нет, и карточка, чьё «Принять» применяло бы дельту снесённой строки.
 2. **Граф и журнал владельцев** — `entities`, `relations`, `chat_threads`, `chat_messages`,
    `entity_origins`, `entity_versions`.
-3. **Пользовательские строки реестров** (`owner_id IS NOT NULL`) — встроенные не трогаются,
+3. **Пользовательские строки реестров** (`graph_id IS NOT NULL`) — встроенные не трогаются,
    их пересеет следующий шаг.
 4. **Версия реестра владельца** (`user_settings.registry_version`) возвращается в **0**:
    пользовательских определений больше нет, и ноль — это и есть их исходное состояние.
@@ -1201,8 +1201,8 @@ psql 'postgresql://postgres.<TARGET_REF>:<pwd>@<POOLER_HOST>:5432/postgres' \
   -v ON_ERROR_STOP=1 -f orbis-backup-<ts>.sql
 ```
 
-Проверка после восстановления — все **18** таблиц прод-схемы на месте (одиннадцать исходных плюс
-семь таблиц реформы свойств, D43):
+Проверка после восстановления — все **21** таблица прод-схемы на месте (одиннадцать исходных,
+восемь таблиц реформы свойств (D43), две — владения (D44)):
 
 ```bash
 psql "$ADMIN_DSN" -c "\dt public.*"
@@ -1210,79 +1210,116 @@ psql "$ADMIN_DSN" -c "\dt public.*"
 #           chat_threads, chat_messages, ai_usage, entity_origins,
 #           oauth_clients, agent_grants, entity_versions,
 #           property_definitions, relation_role_definitions, contract_definitions,
-#           subscription_definitions, action_definitions, registry_deltas, registry_system
+#           subscription_definitions, action_definitions, registry_deltas, registry_system,
+#           envelope_spent_cache, graphs, graph_members
 ```
 
 > **`registry_system` восстановится с нулевой версией**, если дамп снят до сева, — тогда после
 > восстановления нужен `bun scripts/ops.ts seed-registries`, иначе `check` и `/health` покажут
 > дрейф на пустом реестре.
 
-**Владелец получит НОВЫЙ UUID.** `owner_id` логически ссылается на `auth.users` (FK нет —
-схемой auth владеет Supabase), а дамп её не содержит: после регистрации в новом проекте
-RLS спрячет все восстановленные строки — база выглядит пустой при полных таблицах.
-Перепривязать нужно **тринадцать** таблиц. Колонка `owner_id` есть у **четырнадцати**
-(`entities`, `aspect_definitions`, `user_settings`, `chat_threads`, `ai_usage`,
-`entity_origins`, `entity_versions`, `agent_grants` и шесть таблиц реформы:
-`property_definitions`, `relation_role_definitions`, `contract_definitions`,
-`subscription_definitions`, `action_definitions`, `registry_deltas`), но `agent_grants` в скрипт
-намеренно не входит — почему, сказано сразу после запроса. `user_settings.owner_id` — PK, поэтому
-строки нового пользователя не должны существовать; у `aspect_definitions` и **у всех пяти
-реестров определений** встроенные записи несут `owner_id IS NULL` и условием
-`WHERE owner_id = :'old'` не задеваются — переезжают только строки, заведённые владельцем.
-`registry_system` перепривязки не требует: у неё нет `owner_id`, это одна глобальная строка.
+**Владелец получит НОВЫЙ UUID, и со срезом Г это больше не «переписать колонку».** `graph_id`
+ссылается на `graphs.id` настоящим внешним ключом (`ON DELETE NO ACTION`, миграция `0020`), а у
+личного графа стоит CHECK тождества `id = owner_ref = id аккаунта` (PRD 01 §4.10, D44). Поэтому
+«перепривязать строки на новый uuid» в лоб не проходит: FK не пустит строки в несуществующий граф,
+а CHECK не пустит старый граф под новый id. Процедура другая: **завести личный граф нового аккаунта
+вместе с его грантом `owner` и перевести в него строки четырнадцати таблиц**. Дамп `auth.users` не
+содержит (схемой auth владеет Supabase), поэтому без этого шага RLS спрячет всё восстановленное —
+база выглядит пустой при полных таблицах.
+
+Колонка `graph_id` есть у **пятнадцати** таблиц (`entities`, `aspect_definitions`, `user_settings`,
+`chat_threads`, `ai_usage`, `entity_origins`, `entity_versions`, `envelope_spent_cache`,
+`agent_grants` и шесть таблиц реформы: `property_definitions`, `relation_role_definitions`,
+`contract_definitions`, `subscription_definitions`, `action_definitions`, `registry_deltas`), но
+`agent_grants` в скрипт намеренно не входит — почему, сказано сразу после запроса.
+`user_settings.graph_id` — PK, поэтому строки нового графа не должны существовать; у
+`aspect_definitions` и **у всех пяти реестров определений** встроенные записи несут
+`graph_id IS NULL` и условием `WHERE graph_id = :'old'` не задеваются — переезжают только строки,
+заведённые в графе. `registry_system` перепривязки не требует: у неё нет `graph_id`, это одна
+глобальная строка. Строку членства СТАРОГО графа не трогаем — почему, сказано ниже.
 
 ```bash
 psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 <<'SQL'
 \set old '<старый-uuid>'
 \set new '<новый-uuid-из Authentication → Users>'
 BEGIN;
-UPDATE entities           SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE aspect_definitions SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE user_settings      SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE chat_threads       SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE ai_usage           SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE entity_origins     SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE entity_versions    SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE property_definitions      SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE relation_role_definitions SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE contract_definitions      SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE subscription_definitions  SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE action_definitions        SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE registry_deltas           SET owner_id = :'new' WHERE owner_id = :'old';
+-- (1) личный граф нового аккаунта и его грант owner — одной транзакцией (И-1 проверяется на COMMIT)
+INSERT INTO graphs (id, owner_kind, owner_ref) VALUES (:'new', 'person', :'new');
+INSERT INTO graph_members (id, graph_id, account_id, grant_kind, issued_by)
+  VALUES (gen_random_uuid(), :'new', :'new', 'owner', :'new');
+-- (2) строки четырнадцати таблиц — в новый граф (agent_grants намеренно нет: см. ниже)
+UPDATE entities                  SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE aspect_definitions        SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE user_settings             SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE chat_threads              SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE ai_usage                  SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE entity_origins            SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE entity_versions           SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE envelope_spent_cache      SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE property_definitions      SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE relation_role_definitions SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE contract_definitions      SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE subscription_definitions  SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE action_definitions        SET graph_id = :'new' WHERE graph_id = :'old';
+UPDATE registry_deltas           SET graph_id = :'new' WHERE graph_id = :'old';
 COMMIT;
 SQL
 ```
 
-> **`registry_deltas` в списке не для полноты.** У неё `owner_id NOT NULL` — таблица чисто
-> владельческая, и пропустив её, получаем персональные правки реестра, ушедшие под RLS: владелец
-> молча вернётся к системным определениям, не увидев ни ошибки, ни своих подписей. Пять реестров
-> определений рядом с ней перепривязывают **только** свои строки владельца — встроенных
-> (`owner_id IS NULL`) условие не касается.
+> **Текст прогнан, а не выведен.** Блок исполнен на восстановленной базе в транзакции, где `COMMIT`
+> заменён на `SET CONSTRAINTS ALL IMMEDIATE; ROLLBACK;` — отложенный триггер И-1 при этом срабатывает
+> до отката, то есть проверяется не только синтаксис, но и инвариант «у графа есть действующий
+> `owner`». EXIT=0 и есть доказательство исполнимости. Это прямой урок абзаца ниже: текст, не
+> прогнанный ни разу, лжёт молча.
 
-> **`entity_versions` в списке не для полноты.** Таблица закреплённых версий тела
-> (PRD 01 §4.15) несёт собственный `owner_id` и живёт под собственной RLS: пропустив её,
-> получаем целые строки, которых владелец не видит, — то есть «версии пропали» при
-> восстановленных телах. Колонка `actor_user_id` там же — историческая атрибуция «кто
-> закрепил»; RLS её не касается, и перепривязывать её не обязательно.
+> **Порядок внутри транзакции обязателен.** Граф и грант вставляются ПЕРВЫМИ: FK строк ссылается на
+> `graphs.id`, а `graph_members` проверяется отложенным constraint-триггером на `COMMIT` — поэтому
+> «сначала граф, потом грант» внутри одной транзакции законно, а «строки раньше графа» — нет.
 
-> **Чего в этом списке нет и почему — проверено пробой, а не выведено из PRD.** Прежняя
-> версия блока звала `UPDATE relations SET owner_id` и `UPDATE chat_messages SET owner_id`,
-> а такой колонки у обеих таблиц **нет**: владение там резолвится транзитивно — у `relations`
-> через обе связанные `entities`, у `chat_messages` через `chat_threads.owner_id` (PRD 01
-> §4.10). PostgreSQL отвечает на них `column "owner_id" does not exist`, а с
-> `ON_ERROR_STOP=1` psql обрывается на втором `UPDATE` **до `COMMIT`** — то есть скрипт
-> не перепривязывал НИЧЕГО, молча и посреди восстановления после аварии. Зеркальная
-> половина той же ошибки: `entity_origins` с настоящей колонкой `owner_id` в списке
-> отсутствовал, и provenance импорта остался бы на старом владельце, уйдя под RLS, —
-> дедуп повторного импорта (§4.8) перестал бы срабатывать. Перепривязывать `relations`
-> и `chat_messages` не нужно и не надо: они поедут за родителями сами.
+> **Идентификаторы, выведенные из СТАРОГО ключа, остаются старыми — и это допустимо.** Формулы
+> `uuidv5` глобального треда, тредов сущностей и audit-id пачек стоят на ключе графа (PRD 01 §4.5,
+> §5.4). После перевода строк их id остаются посчитанными от старого ключа. Ничего не ломается: id
+> стабильны и уникальны, строки читаются, RLS смотрит на колонку `graph_id`, а не на формулу.
+> Единственное следствие — `ensureGlobalThread` нового графа посчитает новый id и заведёт **второй**
+> глобальный тред; старый остаётся читаемым тредом сущности-без-сущности. Если это мешает, тред
+> переносится отдельным решением, а не этим скриптом.
+
+> **Старый граф НЕ удаляется.** На него ссылаются погашенные `agent_grants` (перепривязывать их
+> нельзя — см. ниже), и `ON DELETE NO ACTION` не даст его снести, пока они есть. Он остаётся пустым
+> надгробием со своим грантом `owner` — И-1 на нём продолжает выполняться, и это дешевле, чем
+> разбирать ссылки.
+
+> **`registry_deltas` в списке не для полноты.** У неё `graph_id NOT NULL` — таблица чисто графовая,
+> и пропустив её, получаем персональные правки реестра, ушедшие под RLS: владелец молча вернётся к
+> системным определениям, не увидев ни ошибки, ни своих подписей. Пять реестров определений рядом с
+> ней перепривязывают **только** свои строки — встроенных (`graph_id IS NULL`) условие не касается.
+
+> **`entity_versions` и `envelope_spent_cache` в списке не для полноты.** Таблица закреплённых версий
+> тела (PRD 01 §4.15) несёт собственный `graph_id` и живёт под собственной RLS: пропустив её,
+> получаем целые строки, которых владелец не видит, — то есть «версии пропали» при восстановленных
+> телах. То же у кеша `spent` по конвертам: оставленный в старом графе, он уйдёт под RLS, и экран
+> Бюджета покажет нули при живых транзакциях. Колонка `actor_user_id` в `entity_versions` —
+> историческая атрибуция «кто закрепил»; это **аккаунт**, а не граф, RLS её не касается, и
+> перепривязывать её не обязательно.
+
+> **Чего в этом списке нет и почему — проверено пробой, а не выведено из PRD.** Прежняя версия блока
+> звала `UPDATE relations SET owner_id` и `UPDATE chat_messages SET owner_id`, а колонки владения у
+> обеих таблиц **нет** — ни под старым именем, ни под новым: владение там резолвится транзитивно — у
+> `relations` через обе связанные `entities`, у `chat_messages` через тред (`chat_threads.graph_id`,
+> PRD 01 §4.10). PostgreSQL отвечал на них `column "owner_id" does not exist` (сегодня ответил бы
+> `column "graph_id" does not exist` — ошибка ровно та же), а с `ON_ERROR_STOP=1` psql обрывается на
+> втором `UPDATE` **до `COMMIT`** — то есть скрипт не перепривязывал НИЧЕГО, молча и посреди
+> восстановления после аварии. Зеркальная половина той же ошибки: `entity_origins` с настоящей
+> колонкой владения в списке отсутствовал, и provenance импорта остался бы на старом графе, уйдя под
+> RLS, — дедуп повторного импорта (§4.8) перестал бы срабатывать. Перепривязывать `relations` и
+> `chat_messages` не нужно и не надо: они поедут за родителями сами.
 
 **Доступы агентов после восстановления — выдать заново, а не перепривязывать.** Таблица
-`agent_grants` (§3) тоже несёт `owner_id` и тоже попадает в дамп, но перепривязка ей
+`agent_grants` (§3) тоже несёт `graph_id` и тоже попадает в дамп, но перепривязка ей
 противопоказана: сырые токены у агентов на руках, их `sha256` в восстановленных строках
-совпадёт, и `UPDATE owner_id` **воскресил бы** доступ, выданный в другом проекте, — включая
+совпадёт, и `UPDATE graph_id` **воскресил бы** доступ, выданный в другом проекте, — включая
 тот, который к моменту аварии могли отозвать. Оставленная как есть строка тоже плоха, но
-иначе: аутентификация пройдёт по старому `owner_id`, агент получит **пустой граф** вместо
+иначе: аутентификация пройдёт по старому `graph_id`, агент получит **пустой граф** вместо
 отказа — тихая поломка, которую легко принять за потерю данных. Поэтому — погасить всё
 и подключиться заново (§3.1 для браузерного входа, §3.2 для headless):
 
@@ -1313,13 +1350,15 @@ entities | {postgres=arwdDxtm/postgres,anon=Dxtm/postgres,
 ```
 
 `authenticated=arwdDxtm` здесь — не от default ACL, а от явных `GRANT` в миграциях:
-`0001_rls_and_indexes.sql:95,97` (схема + DML на все таблицы) и `0005_oauth_rls.sql:47,49`
-(две таблицы §9.3). Их и не станет после restore.
+`0001_rls_and_indexes.sql:95,97` (схема + DML на все таблицы), `0005_oauth_rls.sql:47,49`
+(две таблицы §9.3), `0011_ade_versions_rls.sql:35,41`, `0013_routine_scheduler_rls.sql:35`,
+`0014_registries.sql:260-266`, `0018_spent_cache_modules.sql:37,41` и — со срезом Г —
+`0020_graphs_members.sql:166,168,170` (`REVOKE` плюс два гранта). Их и не станет после restore.
 
 Цена — не «частично не работает», а **не работает вообще**: приложение ходит в данные
 через `SET LOCAL ROLE authenticated` (`db/with-identity.ts:23`, роль `orbis_app`
 объявлена `NOINHERIT`), то есть опирается ровно на те гранты, которых после restore нет.
-`orbis_app` собственных прав на восемь старых таблиц не имеет вовсе — в их ACL его нет.
+`orbis_app` собственных прав на большинство таблиц не имеет вовсе — в их ACL его нет; он назван поимённо ровно у шести: `agent_grants`, `oauth_clients`, `entity_versions`, `user_settings` (только `SELECT`), `envelope_spent_cache` и `graph_members` (только `SELECT`).
 
 Поэтому после restore, **до** `db:prepare`, выдать гранты заново — это те же строки, что
 в миграциях, дословно:
@@ -1328,12 +1367,27 @@ entities | {postgres=arwdDxtm/postgres,anon=Dxtm/postgres,
 psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 <<'SQL'
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON agent_grants, oauth_clients TO orbis_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON agent_grants, oauth_clients TO orbis_app;   -- 0005:47
+GRANT SELECT, INSERT, UPDATE, DELETE ON entity_versions TO orbis_app;               -- 0011:41
+GRANT SELECT ON user_settings TO orbis_app;                                         -- 0013:35
+GRANT SELECT, INSERT, UPDATE, DELETE ON envelope_spent_cache TO orbis_app;          -- 0018:41
+-- ПОСЛЕ строки ON ALL TABLES — владение (0020): у authenticated ровно SELECT и INSERT
+REVOKE ALL ON graphs, graph_members FROM anon, authenticated;
+GRANT SELECT, INSERT ON graphs, graph_members TO authenticated;
+GRANT SELECT ON graph_members TO orbis_app;
 SQL
 ```
 
+**Порядок строк здесь несущий.** `ON ALL TABLES` раздаёт DML на всё, что уже есть в схеме, —
+включая `graphs` и `graph_members`. Поставив его ПОСЛЕ блока владения, мы молча вернули бы
+`authenticated` право UPDATE и DELETE на графы и членство, то есть отдали бы аккаунту самовыдачу
+членства в любой граф (PRD 01 §4.10: политик UPDATE/DELETE у этих двух таблиц нет **намеренно**,
+и `REVOKE` — вторая половина того же запрета). Пер-табличные гранты `orbis_app` тоже обязательны:
+`ON ALL TABLES` выдан роли `authenticated`, а `orbis_app` — её `NOINHERIT`-член и своих прав
+оттуда не получает; без них тик планировщика и метеринг упрутся в `42501` до всякой политики.
+
 Затем `bun run db:prepare` против целевой БД — он создаёт роль `orbis_app` и членство
-в `authenticated` (`scripts/setup-db.ts`) и завершается RLS-тестом (40 pgTAP-проверок).
+в `authenticated` (`scripts/setup-db.ts`) и завершается RLS-тестом (`plan(158)`).
 Тест остаётся страховкой: если гранты забыть, он упадёт — но искать причину надо здесь,
 а не в RLS.
 

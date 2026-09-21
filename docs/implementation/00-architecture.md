@@ -7,7 +7,7 @@
 | Класс документа | Implementation-архитектура — обновляется при изменении контрактов PRD, а не при рефакторинге кода |
 | Источник контрактов | `docs/prd/` (00–04), прежде всего `01-architecture.md` |
 
-Этот документ показывает **структуру реализации** v3.1: карту модулей монорепо, правила направления зависимостей, потоки мутаций и чтения, ключевые sequence-диаграммы и ER-схему девятнадцати таблиц. Он не дублирует PRD — каждая диаграмма цитирует конкретную секцию `docs/prd/01-architecture.md` как источник контракта и не вводит механизмов, которых там нет. Если деталь реализации не зафиксирована в PRD (например, конкретный формат ключа клиентского кэша), она здесь остаётся на уровне роли, а не выдуманной специфики.
+Этот документ показывает **структуру реализации** v3.1: карту модулей монорепо, правила направления зависимостей, потоки мутаций и чтения, ключевые sequence-диаграммы и ER-схему двадцати одной таблицы. Он не дублирует PRD — каждая диаграмма цитирует конкретную секцию `docs/prd/01-architecture.md` как источник контракта и не вводит механизмов, которых там нет. Если деталь реализации не зафиксирована в PRD (например, конкретный формат ключа клиентского кэша), она здесь остаётся на уровне роли, а не выдуманной специфики.
 
 Границу детализации см. в §6.
 
@@ -349,17 +349,17 @@ sequenceDiagram
 
 ## §5. ER-схема
 
-**Девятнадцать таблиц** — состав и колонки скопированы из PRD 01 §4 без добавлений и без пропусков; версионных или репликационных служебных полей на сущностях нет, владение — `owner_id` (PRD 01 §4.10). Восемь исходных пришли с Task 1; `oauth_clients` и `agent_grants` (PRD 01 §4.13–§4.14) — со слайсом 4b: состояние доступа внешних агентов, без которого не бывает ни одноразового кода, ни отзыва (04-decision-log D34); `entity_versions` (PRD 01 §4.15) — с ADE-срезом 1: закреплённые владельцем версии тела (04-decision-log D37); `envelope_spent_cache` (PRD 01 §3.5, §Б5-5) — материализация `spent` по конверту, приехала со срезом Б-1 (миграция `0018`). Сплошной истории правок здесь нет и не появится — снимок делает человек.
+**Двадцать одна таблица** — состав и колонки скопированы из PRD 01 §4 без добавлений и без пропусков; версионных или репликационных служебных полей на сущностях нет, владение — `graph_id` (PRD 01 §4.10, 04-decision-log D44). Восемь исходных пришли с Task 1; `oauth_clients` и `agent_grants` (PRD 01 §4.13–§4.14) — со слайсом 4b: состояние доступа внешних агентов, без которого не бывает ни одноразового кода, ни отзыва (04-decision-log D34); `entity_versions` (PRD 01 §4.15) — с ADE-срезом 1: закреплённые владельцем версии тела (04-decision-log D37); `envelope_spent_cache` (PRD 01 §3.5, §Б5-5) — материализация `spent` по конверту, приехала со срезом Б-1 (миграция `0018`); **`graphs` и `graph_members`** (PRD 01 §4.10) — со срезом Г: сами графы и гранты аккаунтов на них (04-decision-log D44, миграция `0020`). Сплошной истории правок здесь нет и не появится — снимок делает человек.
 
 **Семь последних пришли с реформой свойств** (PRD 01 §4.16, 04-decision-log D43): шесть реестров структуры — `property_definitions`, `relation_role_definitions`, `contract_definitions`, `subscription_definitions`, `action_definitions` и переделанный `aspect_definitions` — плюс журнал персональных правок `registry_deltas` и однострочная таблица версии system-реестра `registry_system`. Три из шести (`contract_definitions`, `subscription_definitions`, `action_definitions`) в срезе А были **созданы пустыми**. Две из трёх засеяны срезом Б-1 (6 контрактов, 2 подписки); `action_definitions` остаётся пустой до среза Б-2 и на диаграмме показана потому, что таблица существует в схеме, а не потому, что в ней что-то есть.
 
-Реформа при этом не только добавила: у `entities` **сняты** `meta` и старая jsonb-карта аспектов, у `relations` — `relation_type`, у `aspect_definitions` — колонка `schema` (JSON Schema стала генерируемой производной набора свойств). Ниже — состояние **после** миграции `0017`.
+Реформа при этом не только добавила: у `entities` **сняты** `meta` и старая jsonb-карта аспектов, у `relations` — `relation_type`, у `aspect_definitions` — колонка `schema` (JSON Schema стала генерируемой производной набора свойств). Ниже — состояние **после** миграции `0021`.
 
 ```mermaid
 erDiagram
     entities {
         uuid id PK
-        uuid owner_id
+        uuid graph_id
         text title
         text emoji
         text body
@@ -387,7 +387,7 @@ erDiagram
 
     property_definitions {
         text id
-        uuid owner_id
+        uuid graph_id
         text key
         jsonb label
         jsonb description
@@ -404,7 +404,7 @@ erDiagram
 
     aspect_definitions {
         text id
-        uuid owner_id
+        uuid graph_id
         text key
         jsonb label
         jsonb description
@@ -422,7 +422,7 @@ erDiagram
 
     relation_role_definitions {
         text id
-        uuid owner_id
+        uuid graph_id
         text key
         jsonb label
         jsonb description
@@ -438,7 +438,7 @@ erDiagram
 
     contract_definitions {
         text id
-        uuid owner_id
+        uuid graph_id
         text key
         jsonb label
         jsonb description
@@ -454,7 +454,7 @@ erDiagram
 
     subscription_definitions {
         text id
-        uuid owner_id
+        uuid graph_id
         text surface
         jsonb definition
         text module
@@ -464,7 +464,7 @@ erDiagram
 
     action_definitions {
         text id
-        uuid owner_id
+        uuid graph_id
         text key
         jsonb label
         jsonb description
@@ -480,7 +480,7 @@ erDiagram
 
     registry_deltas {
         uuid id PK
-        uuid owner_id
+        uuid graph_id
         text target_kind
         text target_id
         integer base_version
@@ -495,7 +495,7 @@ erDiagram
     }
 
     user_settings {
-        uuid owner_id PK
+        uuid graph_id PK
         text plan
         text timezone
         text defaultCurrency
@@ -511,7 +511,7 @@ erDiagram
 
     envelope_spent_cache {
         uuid envelope_id PK
-        uuid owner_id
+        uuid graph_id
         date as_of PK
         numeric spent
         integer owner_version
@@ -521,7 +521,7 @@ erDiagram
 
     chat_threads {
         uuid id PK
-        uuid owner_id
+        uuid graph_id
         uuid entity_id FK
         text title
         boolean archived
@@ -539,7 +539,7 @@ erDiagram
     }
 
     ai_usage {
-        uuid owner_id PK
+        uuid graph_id PK
         date date PK
         text model PK
         bigint input_tokens
@@ -549,7 +549,7 @@ erDiagram
 
     entity_origins {
         uuid id PK
-        uuid owner_id
+        uuid graph_id
         uuid entity_id FK
         text namespace
         text external_id
@@ -558,7 +558,7 @@ erDiagram
 
     entity_versions {
         uuid id PK
-        uuid owner_id
+        uuid graph_id
         uuid entity_id FK
         text label
         text body
@@ -577,7 +577,7 @@ erDiagram
 
     agent_grants {
         uuid id PK
-        uuid owner_id
+        uuid graph_id
         text client_id FK
         text kind
         text label
@@ -597,6 +597,23 @@ erDiagram
         timestamptz revoked_at
     }
 
+    graphs {
+        uuid id PK
+        text owner_kind
+        uuid owner_ref
+        timestamptz created_at
+    }
+
+    graph_members {
+        uuid id PK
+        uuid graph_id FK
+        uuid account_id
+        text grant_kind
+        timestamptz issued_at
+        uuid issued_by
+        timestamptz revoked_at
+    }
+
     entities ||--o{ relations : "source_id"
     entities ||--o{ relations : "target_id"
     entities ||--o{ entity_origins : "entity_id"
@@ -604,21 +621,37 @@ erDiagram
     entities |o--o| chat_threads : "entity_id (nullable, глобальный тред = NULL)"
     chat_threads ||--o{ chat_messages : "thread_id"
     oauth_clients |o--o{ agent_grants : "client_id (nullable, у PAT — NULL)"
+    graphs ||--o{ entities : "graph_id"
+    graphs ||--o{ chat_threads : "graph_id"
+    graphs ||--o{ entity_versions : "graph_id"
+    graphs ||--o{ entity_origins : "graph_id"
+    graphs ||--o{ ai_usage : "graph_id"
+    graphs ||--o| user_settings : "graph_id (PK — не более одной строки на граф)"
+    graphs ||--o{ agent_grants : "graph_id"
+    graphs ||--o{ envelope_spent_cache : "graph_id"
+    graphs ||--o{ registry_deltas : "graph_id"
+    graphs ||--o{ property_definitions : "graph_id"
+    graphs ||--o{ aspect_definitions : "graph_id"
+    graphs ||--o{ relation_role_definitions : "graph_id"
+    graphs ||--o{ contract_definitions : "graph_id"
+    graphs ||--o{ subscription_definitions : "graph_id"
+    graphs ||--o{ action_definitions : "graph_id"
+    graphs ||--o{ graph_members : "graph_id"
 ```
 
-**Почему у реестров нет ни одной линии связи.** Ссылки на строки реестров — не внешние ключи, а **идентификаторы внутри значений**: `entities.props` адресует свойства ключами карты, `entities.aspects` — списком id, `relations.role` — текстом id роли, `aspect_definitions.properties` — списком `{propertyId, required, rank}` внутри jsonb. FK тут нет намеренно: встроенная строка и строка владельца лежат в одной таблице под двумя partial unique index, и составной ключ «(id, owner_id или NULL)» внешним ключом не выражается. Целостность держат валидатор записи (неизвестный id свойства — отказ) и правило «строки реестров физически не удаляются, только `deprecated`/`merged`» (PRD 01 §4.16). Та же причина у `registry_deltas`: `target_id` указывает на строку любого из шести реестров, а `target_kind` говорит, какого именно, — полиморфная ссылка, которой FK не бывает.
+**Почему у реестров нет ни одной линии связи.** Ссылки на строки реестров — не внешние ключи, а **идентификаторы внутри значений**: `entities.props` адресует свойства ключами карты, `entities.aspects` — списком id, `relations.role` — текстом id роли, `aspect_definitions.properties` — списком `{propertyId, required, rank}` внутри jsonb. FK тут нет намеренно: встроенная строка и строка графа лежат в одной таблице под двумя partial unique index, и составной ключ «(id, graph_id или NULL)» внешним ключом не выражается. Целостность держат валидатор записи (неизвестный id свойства — отказ) и правило «строки реестров физически не удаляются, только `deprecated`/`merged`» (PRD 01 §4.16). Та же причина у `registry_deltas`: `target_id` указывает на строку любого из шести реестров, а `target_kind` говорит, какого именно, — полиморфная ссылка, которой FK не бывает.
 
 Примечания к схеме:
 
-- `aspect_definitions.id` не является surrogate PK: уникальность обеспечивают два partial unique index — `UNIQUE (id) WHERE owner_id IS NULL` для встроенных аспектов и `UNIQUE (owner_id, id)` для кастомных (PRD 01 §4.3). На диаграмме `id` намеренно не помечен `PK`. **Тот же приём — у всех шести реестров** (PRD 01 §4.9, §4.16), поэтому `id` не помечен `PK` ни у одного из них; у `property_definitions` сверх этого есть такая же пара индексов по `key` — машинная ручка обязана быть однозначной в видимости владельца. `registry_deltas` и `registry_system` — обычные таблицы с настоящим PK, поэтому у них он проставлен.
+- `aspect_definitions.id` не является surrogate PK: уникальность обеспечивают два partial unique index — `UNIQUE (id) WHERE graph_id IS NULL` для встроенных аспектов и `UNIQUE (graph_id, id)` для кастомных (PRD 01 §4.3). На диаграмме `id` намеренно не помечен `PK`. **Тот же приём — у всех шести реестров** (PRD 01 §4.9, §4.16), поэтому `id` не помечен `PK` ни у одного из них; у `property_definitions` сверх этого есть такая же пара индексов по `key` — машинная ручка обязана быть однозначной в видимости графа. `registry_deltas` и `registry_system` — обычные таблицы с настоящим PK, поэтому у них он проставлен.
 - `registry_system` — **одна строка на всю базу** (`CHECK id = 1`): версия system-реестра и время последнего сева. Владельца у неё нет, читать её может кто угодно, писать — только сид под service-role (PRD 01 §4.10). Вторая половина версии живёт колонкой `user_settings.registry_version` и двигается любой мутацией реестров владельца **в той же транзакции** — по паре этих чисел построен ключ кеша эффективных определений (PRD 01 §4.16).
 - **`entities.props` и `entities.aspects` — не денормализация, а носитель значений** (PRD 01 §2.1): плоская карта «id свойства → значение» и список id аспектов. Прежние `meta` (мешок AI-извлечённого) и jsonb-карта «аспект → поля» сняты миграцией `0017` вместе с их GIN-индексами. `query_refs` — второй индекс тела рядом с `body_refs`: кого **адресуют** запросы этого тела; по нему операция слияния свойств находит тела, которые надо переписать.
 - **`relations.role` — единственная истина ребра** (PRD 01 §4.2): прежняя колонка `relation_type` снята миграцией `0017`, а `rel_uniq` пересобран на `(source_id, target_id, role)` — пара сущностей может нести рёбра разных ролей. `relations.meta` остаётся **системным** полем (признак неявной связи из body, id свойства у зеркала ссылочного значения) и пользователю не открывается: свойств на рёбрах в v1 нет.
-- `ai_usage` — составной первичный ключ `(owner_id, date, model)`, без собственного суррогатного `id` (PRD 01 §4.7).
+- `ai_usage` — составной первичный ключ `(graph_id, date, model)`, без собственного суррогатного `id` (PRD 01 §4.7); расход пишется **на граф**, а тариф — на аккаунт (D44).
 - `chat_threads.entity_id` — nullable: `NULL` означает глобальный тред пользователя (мессенджер-модель), не связанный ни с одной сущностью; связь `entities |o--o| chat_threads` на диаграмме относится только к тредам сущностей — не более одного треда на сущность (PRD 01 §4.5).
 - Типы `text_array` на диаграмме соответствуют Postgres `text[]` (ограничение синтаксиса Mermaid ER на символы в имени типа); `date`, `jsonb`, `bigint`, `boolean`, `timestamptz` — типы колонок как в PRD 01 §4.
-- Владение — `owner_id` на каждой таблице, где оно применимо (кроме `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads`, `registry_system`, у которой владельца нет по построению — она одна на базу, — и `oauth_clients`, у которой владельца нет вовсе: регистрация клиента происходит до согласия владельца — RLS-политика PRD 01 §4.10). У пяти реестров определений `owner_id` **nullable**, и это несёт смысл: `NULL` — встроенная строка, приехавшая сидом из кода и читаемая всеми; не-`NULL` — строка владельца. У `registry_deltas` он `NOT NULL` — дельта без владельца бессмысленна.
-- `entity_versions` — снимок **тела** сущности, а не самой сущности: `body` (markdown-проекция) хранится всегда, `body_doc` — только если документ у записи на момент снимка уже был. `ON DELETE cascade` намеренный: снимок без своей записи ничего не значит. Владение прямое, по `owner_id`, как у `entity_origins`; на записи RLS дополнительно требует владения самой сущностью (PRD 01 §4.10, §4.15).
+- Владение — `graph_id` на каждой таблице, где оно применимо (кроме `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads`, `registry_system`, у которой владельца нет по построению — она одна на базу, — и `oauth_clients`, у которой графа нет вовсе: регистрация клиента происходит до согласия — RLS-политика PRD 01 §4.10). У шести реестров определений `graph_id` **nullable**, и это несёт смысл: `NULL` — встроенная строка, приехавшая сидом из кода и читаемая всеми (и читаемая **без текущего графа**, иначе стартовая проверка дрейфа объявила бы дрейф); не-`NULL` — строка графа. У `registry_deltas` он `NOT NULL` — дельта без графа бессмысленна. Сам `graph_id` — FK на `graphs.id` (`ON DELETE NO ACTION`, миграция `0020`), а владелец графа лежит записью в `graphs.owner_kind` / `owner_ref`: человек или организация (D44). Таблицы `graphs` и `graph_members` **переживают пересев мира** (`reset-world`) — сносится содержимое графов, а не сами графы и гранты.
+- `entity_versions` — снимок **тела** сущности, а не самой сущности: `body` (markdown-проекция) хранится всегда, `body_doc` — только если документ у записи на момент снимка уже был. `ON DELETE cascade` намеренный: снимок без своей записи ничего не значит. Владение прямое, по `graph_id`, как у `entity_origins`; на записи RLS дополнительно требует, чтобы сама сущность лежала в том же графе (PRD 01 §4.10, §4.15).
 - `agent_grants` и `oauth_clients` в графе сущностей не участвуют: они не связаны с `entities` ни одной ссылкой и не подлежат Undo — это состояние доступа, а не пользовательские данные. Хеши токенов (`code_hash`, `access_hash`, `refresh_hash`, `prev_refresh_hash`) — единственная форма, в которой токен попадает в базу; сырых значений схема не хранит нигде (PRD 01 §4.14).
 
 ---
