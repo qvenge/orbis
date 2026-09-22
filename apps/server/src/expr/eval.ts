@@ -325,16 +325,16 @@ function ev(node: ExprNode, scope: ExprEvalScope, depth: number): ExprValue {
     return guarded(
       'date_diff',
       () =>
-        epochDays(toParts(calendarHead(dateTextOf(to, 'date_diff')))) -
-        epochDays(toParts(calendarHead(dateTextOf(from, 'date_diff')))),
+        epochDays(toParts(calendarHead(dateTextOf(to, 'date_diff'), scope.timeZone))) -
+        epochDays(toParts(calendarHead(dateTextOf(from, 'date_diff'), scope.timeZone))),
     );
   }
   if ('days_inclusive' in node) {
     const [from, to] = pair(node.days_inclusive, scope, depth, 'days_inclusive');
     return guarded('days_inclusive', () =>
       daysInclusive(
-        calendarHead(dateTextOf(from, 'days_inclusive')),
-        calendarHead(dateTextOf(to, 'days_inclusive')),
+        calendarHead(dateTextOf(from, 'days_inclusive'), scope.timeZone),
+        calendarHead(dateTextOf(to, 'days_inclusive'), scope.timeZone),
       ),
     );
   }
@@ -346,6 +346,9 @@ function ev(node: ExprNode, scope: ExprEvalScope, depth: number): ExprValue {
 
 /** Текст, который выглядит как число: только по НЕМУ включается численное сравнение. */
 const NUMERIC_TEXT_RE = /^-?\d+(?:\.\d+)?$/;
+/** Форма ISO-значения: ДЕНЬ (`YYYY-MM-DD`) и МОМЕНТ (`YYYY-MM-DDT…`) — по ним `compare` и `calendarHead` различают род (Р-33). */
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MOMENT_RE = /^\d{4}-\d{2}-\d{2}T/;
 
 function numericLike(value: ExprValue): value is string | number {
   return typeof value === 'number' || (typeof value === 'string' && NUMERIC_TEXT_RE.test(value));
@@ -371,14 +374,18 @@ function cmpText(a: string, b: string): -1 | 0 | 1 {
  *     остатка в Б-1 нет: единственный текст ведомости — `deref(category).title`, и он идёт в ключ
  *     порядка, а не в `=`.
  *
- * ВТОРОЙ НАЗВАННЫЙ ОСТАТОК — ТАЙМЗОНА (Ф-Б1-19). Момент сравнивается по СЫРОМУ тексту, то есть у
- * '…Z' — по дню UTC, тогда как чекер обещает «момент читается в таймзоне владельца», а SQL-бэкенд
- * после задачи 6 приводит `AT TIME ZONE`. В декларациях Б-1 этого случая нет: `date`⟷`timestamp`
- * сравнивают правила Agenda (их считает SQL), а ведомость Budget сравнивает даты с датами
- * (`period_start`/`period_end`/`$today` — все `date`). Приводить время здесь без потребителя значило
- * бы завести в горячем цикле третье правило часовых поясов; остаток — в реестр задачи 19.
+ * ТАЙМЗОНА (Р-33, закрывает остаток Ф-Б1-19 / Б-1 36 и 82). ДЕНЬ ПРОТИВ МОМЕНТА сравнивается по дню
+ * момента у ВЛАДЕЛЬЦА, когда область несёт его зону (`scope.timeZone`): чекер обещает «момент
+ * читается в таймзоне владельца», SQL-бэкенд приводит `AT TIME ZONE`, и правило записи «событие
+ * сегодня» (Б-2) обязано ответить так же, как список. Без зоны — прежнее сравнение сырого текста
+ * (чистые тесты и области, которым зона не нужна).
  */
-function compare(op: '=' | '!=' | '>' | '<' | '>=' | '<=', a: ExprValue, b: ExprValue): boolean {
+function compare(
+  op: '=' | '!=' | '>' | '<' | '>=' | '<=',
+  a: ExprValue,
+  b: ExprValue,
+  timeZone?: string,
+): boolean {
   if (a === null || b === null) return false;
   if (Array.isArray(a) || Array.isArray(b))
     fail('EXPR_VALUE', `список в позиции сравнения '${op}'`);
@@ -386,6 +393,14 @@ function compare(op: '=' | '!=' | '>' | '<' | '>=' | '<=', a: ExprValue, b: Expr
     if (op === '=') return a === b;
     if (op === '!=') return a !== b;
     return fail('EXPR_VALUE', `порядковое сравнение '${op}' над булевым значением`);
+  }
+  // ДЕНЬ ПРОТИВ МОМЕНТА (Р-33): к дню приводится МОМЕНТ, а не наоборот — ровно как в SQL
+  // (`kindL === 'date' && kindR === 'timestamp'` → `localDateSql(r)`). Род берётся из ФОРМЫ значения,
+  // а не из реестра: доступа к видам свойств у области нет по построению (тот же довод, что у
+  // численного сравнения выше), а форма ISO различает день и момент однозначно.
+  if (timeZone !== undefined && typeof a === 'string' && typeof b === 'string') {
+    if (DATE_ONLY_RE.test(a) && MOMENT_RE.test(b)) b = calendarHead(b, timeZone);
+    else if (MOMENT_RE.test(a) && DATE_ONLY_RE.test(b)) a = calendarHead(a, timeZone);
   }
   const sign =
     numericLike(a) && numericLike(b)
@@ -429,7 +444,7 @@ function applyOp(
     case '>=':
     case '<=': {
       const [left, right] = binary(op, args);
-      return compare(op, ev(left, scope, d), ev(right, scope, d));
+      return compare(op, ev(left, scope, d), ev(right, scope, d), scope.timeZone);
     }
     case 'and':
     case 'or': {
@@ -610,15 +625,20 @@ function dateTextOf(value: ExprValue, what: string): string {
 }
 
 /**
- * Календарный день у даты и у момента — одни и те же первые десять символов (`date.ts`).
+ * Календарный день значения. У ДАТЫ это она сама; у МОМЕНТА — день его собственного смещения, а при
+ * известной зоне владельца (Р-33) — день его стеночных часов, тем же приёмом, что `AT TIME ZONE` у
+ * SQL-бэкенда (`expr/compile.ts`, `localDateSql`).
  *
- * У момента это день ЕГО СОБСТВЕННОГО смещения: '2026-05-15T23:30:00Z' даёт 15 мая, хотя у владельца
- * в +03:00 это уже 16-е. Тот же названный остаток, что у `compare` выше (Ф-Б1-19): в декларациях Б-1
- * календарная арифметика зовётся только над `date` (окна Budget — `period_start`/`period_end`/`$today`),
- * а SQL-бэкенд свою ветку момент⟷дата переводит на `AT TIME ZONE` задачей 6. Остаток — задача 19.
+ * ЧЕТВЁРТАЯ копия приёма «момент → день владельца» в дереве (`localDay` Agenda, `wallClockIn`
+ * материализации, `localDateSql` компилятора) — названный остаток, а не недосмотр: импорт
+ * `recurring/materialize` в горячий интерпретатор притащил бы модуль материализации ради строки Intl.
  */
-function calendarHead(value: string): string {
-  return value.slice(0, 10);
+function calendarHead(value: string, timeZone?: string): string {
+  if (timeZone === undefined || !MOMENT_RE.test(value)) return value.slice(0, 10);
+  const at = new Date(value);
+  return Number.isNaN(at.getTime())
+    ? value.slice(0, 10)
+    : new Intl.DateTimeFormat('en-CA', { timeZone }).format(at);
 }
 
 /**
@@ -643,6 +663,8 @@ function addDuration(value: string, duration: string): string {
     });
   }
   const shift = 7 * Number(weeks?.slice(0, -1) ?? 0) + Number(days?.slice(0, -1) ?? 0);
+  // Зона владельца сюда НЕ передаётся (Р-33): сдвигается голова, а хвост смещения остаётся как был —
+  // приведи голову к дню владельца, момент разъехался бы со своим же хвостом.
   const head = calendarHead(value);
   return guarded('date_add', () => `${addDays(head, shift)}${value.slice(10)}`);
 }
