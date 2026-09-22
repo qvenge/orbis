@@ -290,3 +290,42 @@ describe('гейт вехи I: инвариант только декларац�
     expect([before, after, again]).toEqual([false, true, false]);
   });
 });
+
+/**
+ * ЗАГОТОВКА греп-доказательства вехи I «кода под инвариант нет» — исполняет ЗАДАЧА 5.
+ *
+ * Пути — дословно семь из `GATE_GREP_PATHSPEC` (`fixtures/gate-aspects.ts:27-35`), подмножество
+ * `SEARCH_PATHSPEC` (`scripts/check-legacy-form.ts:67-76`): списки обязаны совпадать, иначе
+ * «доказано» задачей 5 и «проверено» сторожем Б-1 меряют разное.
+ *
+ * Команда (из корня worktree):
+ *   git grep -n -a -P -e 'assertFinancialInvariant|assertFinancial\b|applyTaskCompletion|financialRecurringNeedsDerivedFrom|hasScheduleRecurrence|hasIncomingDerivedFrom|declaredDerivedFromTargets' -- \
+ *     'apps/server/src' 'apps/server/test' 'apps/server/perf' 'packages/shared/src' 'apps/web/src' 'scripts' ':!*.snap'
+ *
+ * Ожидание СЕГОДНЯ (веха 0): совпадения в `apps/server/src/executor/{normalize,executor,props}.ts`
+ * плюс этот файл. Ожидание задачи 5: только этот файл и строки-объяснения снятого кода.
+ */
+/** Имена кода под инварианты §А7-2 — СЕМЬ (Р-К-50а): пять из каркаса плюс `assertFinancial\b` и
+ *  `hasScheduleRecurrence`, которые сносит тот же коммит задачи 4; без них функция, вернувшаяся под
+ *  коротким именем, гейтом не ловилась бы. `assertFinancial\b` не совпадает с
+ *  `assertFinancialInvariant` (дальше буква), поэтому перечислены оба. */
+export const GATE_B2_GREP_NAMES = [
+  'assertFinancialInvariant',
+  'assertFinancial\\b',
+  'applyTaskCompletion',
+  'financialRecurringNeedsDerivedFrom',
+  'hasScheduleRecurrence',
+  'hasIncomingDerivedFrom',
+  'declaredDerivedFromTargets',
+] as const;
+export const GATE_B2_GREP_PATTERN = GATE_B2_GREP_NAMES.join('|');
+export const GATE_B2_GREP_PATHSPEC = [
+  'apps/server/src',
+  'apps/server/test',
+  'apps/server/perf',
+  'packages/shared/src',
+  'apps/web/src',
+  'scripts',
+  ':!*.snap',
+] as const;
+export const GATE_B2_GREP_ALLOWED = ['apps/server/test/gate-b2.test.ts'] as const;
