@@ -20,7 +20,9 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { execute } from '../executor/executor';
-import type { ExecuteResult, JournalSink, WireEntity } from '../executor/types';
+import { makeChatJournalSink } from '../executor/journal';
+import type { ExecuteOk, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
+import { undoAction } from '../executor/undo';
 
 requireEnv();
 
@@ -186,5 +188,73 @@ describe('параметры движка лениво — {param: default_curre
     expect(absent.props['orbis/currency']).toBe('RUB');
     const given = entityOf(await w.mk({ 'orbis/currency': 'USD' }));
     expect(given.props['orbis/currency']).toBe('USD');
+  });
+});
+
+describe('режим отката — по ЭКЗЕМПЛЯРУ правила, а не по шаблону (Р-И-2)', () => {
+  // Состояние «до» операции нарушает правило: запись заведена ДО того, как правило легло в реестр
+  // (иначе исполнитель такую запись не пропустил бы вовсе). Операция — законное снятие свойства;
+  // её откат восстанавливает нарушающее состояние, и вердикт решает поле `undo` экземпляра.
+  const forbidVoidMoment = (undo: 'check' | 'skip'): RuleDefinitionInput => ({
+    id: `gate_fin_void_moment_${undo}`,
+    template: 'forbidden_when',
+    undo,
+    when: { op: '=', args: [{ prop: GATE_PROPS.finState }, { const: 'void' }] },
+    params: { property: GATE_PROPS.finWhen },
+  });
+  async function undoOfUnset(undo: 'check' | 'skip'): Promise<ExecuteResult> {
+    const w = await worldWith(GATE_FIN_ASPECT);
+    const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'void', [GATE_PROPS.finWhen]: AT }));
+    await seedCustomAspect(w.graph, { ...GATE_FIN_ASPECT, rules: [forbidVoidMoment(undo)] });
+    const sink = makeChatJournalSink(); // undo ищет действие в журнале — NOOP_SINK ему не годится
+    const unset = await w.run('entity_update', { id: row.id, unset: [GATE_PROPS.finWhen] }, sink);
+    expect(refusalOf(unset)).toBe('ok'); // после снятия правило не нарушено
+    return undoAction(db, { identity: personal(w.graph), actionId: (unset as ExecuteOk).actionId });
+  }
+  test("undo: 'skip' — откат в нарушающее состояние проходит", async () => {
+    const undone = await undoOfUnset('skip');
+    expect(refusalOf(undone)).toBe('ok');
+    expect(entityOf(undone).props[GATE_PROPS.finWhen]).toBe(AT);
+  });
+  test("undo: 'check' — тот же откат отклонён INVARIANT с id правила", async () => {
+    expect(refusalOf(await undoOfUnset('check'))).toBe('INVARIANT/gate_fin_void_moment_check');
+  });
+});
+
+describe('fail-closed: область «контракт» и шаблон unique_among (Р-25, РЧ-3-2)', () => {
+  test('scope {contract}: на записи-члене — VALIDATION RULE_SCOPE_UNSUPPORTED, на нечлене — молчит', async () => {
+    const w = await worldWith({
+      ...GATE_FIN_ASPECT,
+      rules: [
+        {
+          id: 'gate_fin_contract_scope',
+          template: 'requires_when',
+          undo: 'check',
+          scope: { contract: 'orbis/completable' },
+          params: { property: GATE_PROPS.finWhen },
+        },
+      ],
+    });
+    expect(refusalOf(await w.mk({ [GATE_PROPS.finState]: 'todo' }))).toBe(
+      'VALIDATION/RULE_SCOPE_UNSUPPORTED',
+    );
+    // Нечлен контракта (категория мира заведена так же — `worldWith`) правило не касается.
+    expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
+  });
+  test('unique_among до задачи 12: включённое правило — отказ RULE_TEMPLATE_UNSUPPORTED, а не пропуск', async () => {
+    const w = await worldWith({
+      ...GATE_FIN_ASPECT,
+      rules: [
+        {
+          id: 'gate_fin_unique_amount',
+          template: 'unique_among',
+          undo: 'check',
+          params: { properties: [GATE_PROPS.finAmount] },
+        },
+      ],
+    });
+    expect(refusalOf(await w.mk({}))).toBe('VALIDATION/RULE_TEMPLATE_UNSUPPORTED');
+    // Запись без аспекта-носителя области правило не касается.
+    expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
   });
 });
