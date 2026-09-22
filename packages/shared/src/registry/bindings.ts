@@ -627,3 +627,48 @@ export function bindingIndexOf(reg: {
     },
   };
 }
+
+/**
+ * Класс записи под контрактом (§Б2-2) — для потребителей, которым нужен КЛАСС, а не элемент строки
+ * списка: движок правил (`on_enter_class`, `class(X)` в `when`) и классификатор Б-2.
+ *
+ * Почему не `row.ts:classOf` (Р-К-19): та отвечает про строку списка и вариантов `present`/`absent`
+ * json-слота не разбирает вовсе (её докблок говорит это прямо), а форма её проекции — эталон снимка
+ * поверхностей (§1.9 Б-1): правка ради правил пересдала бы `surfaces.json` без изменения смысла.
+ *
+ * Победитель — первая по `rank` аспекта привязка контракта, СТОЯЩАЯ на записи; порядок задан явно, а
+ * не унаследован от индекса, по тому же доводу, что у `bindingsOn` строки. `null` — контракт не
+ * реализован либо значение слота ни одному классу не отнесено: это ОТСУТСТВИЕ, а не отказ, и
+ * `class(X) in [...]` на нечлене — ложь (§Б3-4).
+ */
+export function entityClassOf(
+  idx: BindingIndex,
+  entity: { aspects: readonly string[]; props: Record<string, unknown> },
+  contract: string,
+  aspectRank: (aspectId: string) => number,
+): string | null {
+  const on = new Set(entity.aspects);
+  const ordered = idx
+    .byContract(contract)
+    .filter((b) => on.has(b.aspectId))
+    .slice()
+    .sort(
+      (a, b) =>
+        aspectRank(a.aspectId) - aspectRank(b.aspectId) || (a.aspectId < b.aspectId ? -1 : 1),
+    );
+  for (const binding of ordered) {
+    for (const [slot, byVariant] of binding.classOfVariant) {
+      const propertyId = binding.bind[slot];
+      const raw = propertyId === undefined ? binding.fixed[slot] : entity.props[propertyId];
+      const present = raw !== undefined && raw !== null;
+      // json-слот (Р-К-3): класс задаёт САМО НАЛИЧИЕ; спрашивать у объекта текст значения
+      // бессмысленно — `String({})` дал бы `[object Object]` и не нашёлся бы ни в одной карте.
+      const byPresence = byVariant.get(present ? 'present' : 'absent');
+      if (byPresence !== undefined) return byPresence;
+      if (!present) continue;
+      const cls = byVariant.get(String(raw));
+      if (cls !== undefined) return cls;
+    }
+  }
+  return null;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AspectDeltaVariants } from './bindings';
-import { bindingIndexOf, checkClassMap, checkImplements } from './bindings';
+import { bindingIndexOf, checkClassMap, checkImplements, entityClassOf } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from './index';
 import type { AspectDefinition, PropertyDefinition } from './property-type';
@@ -799,5 +799,38 @@ describe('checkClassMap: вариант дельты без отнесения �
     expect(
       codes({ selectOptions: { 'user/net-takogo': { add: [{ key: 'a', label: {}, rank: 1 }] } } }),
     ).toEqual([['UNKNOWN_PROPERTY', undefined]]);
+  });
+});
+
+const REG = {
+  aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+  contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+};
+const rank = (id: string) => REG.aspects.get(id)?.rank ?? Number.MAX_SAFE_INTEGER;
+
+describe('entityClassOf: класс записи под контрактом (§Б2-2, Р-И-6)', () => {
+  const idx = bindingIndexOf(REG);
+  const cls = (aspects: string[], props: Record<string, unknown>, contract: string) =>
+    entityClassOf(idx, { aspects, props }, contract, rank);
+  test('select-слот: вариант отнесён к классу', () => {
+    expect(cls(['orbis/task'], { 'orbis/task_status': 'done' }, 'orbis/completable')).toBe('done');
+    expect(cls(['orbis/task'], { 'orbis/task_status': 'waiting' }, 'orbis/completable')).toBe(
+      'active',
+    );
+  });
+  test('json-слот: класс задаёт САМО НАЛИЧИЕ значения (Р-К-3)', () => {
+    expect(
+      cls(['orbis/schedule'], { 'orbis/recurrence': { freq: 'monthly' } }, 'orbis/recurrence'),
+    ).toBe('template');
+    expect(cls(['orbis/schedule'], {}, 'orbis/recurrence')).toBe('instance');
+    // Две привязки одного контракта: выигрывает первая по rank аспекта (schedule, :48).
+    expect(
+      cls(['orbis/financial', 'orbis/schedule'], { 'orbis/recurrence': {} }, 'orbis/recurrence'),
+    ).toBe('template');
+  });
+  test('привязка без value_map класса не даёт; нечлен контракта — null, а не отказ', () => {
+    // financial реализует recurrence только константой origin_role (builtin-aspects.ts:179)
+    expect(cls(['orbis/financial'], { 'orbis/recurring': true }, 'orbis/recurrence')).toBeNull();
+    expect(cls(['orbis/note'], {}, 'orbis/completable')).toBeNull();
   });
 });
