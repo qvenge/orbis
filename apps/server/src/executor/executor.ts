@@ -3823,7 +3823,8 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
             input.registry.length +
             input.progress.length +
             input.bodies.length +
-            (input.deltas?.length ?? 0),
+            (input.deltas?.length ?? 0) +
+            (input.binds?.length ?? 0),
         },
       };
     },
