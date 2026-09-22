@@ -149,7 +149,11 @@ export async function seedTestWorld(graphId: GraphId): Promise<TestWorld> {
       aspects: ['orbis/budget'],
       props: {
         'orbis/finance_category': id('category'),
-        'orbis/limit': '20000.00',
+        // ЛИМИТ 30000, А НЕ 20000: хук привязывает к конверту ВСЕ четыре расхода мира
+        // (5000 + 9000 + 12000 + 340 = 26340), и при 20000 остаток был бы −6340 — правила 4 и 9
+        // оказались бы ложны на каждой записи, то есть непроверяемы. При 30000 остаток 3660:
+        // мелкий расход в него укладывается (позитив), крупный 12000 — нет (негатив).
+        'orbis/limit': '30000.00',
         'orbis/period_start': `${month}-01`,
         'orbis/period_end': periodEnd,
       },

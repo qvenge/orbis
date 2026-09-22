@@ -192,5 +192,52 @@ describe('мир §С8-26', () => {
           r.target_id === world.smallSpendId,
       ),
     ).toBe(true);
+    // ОСТАТОК КОНВЕРТА СЧИТАЕТСЯ ЧИСЛОМ, А НЕ ОБЕЩАЕТСЯ КОММЕНТАРИЕМ (Ф-Б2-10). Хук привязывает
+    // к конверту ВСЕ четыре расхода мира, и при прежнем лимите 20000 остаток был отрицателен —
+    // `remaining >= amount` правила 4 и `amount <= remaining` правила 9 были ложны на каждой
+    // записи, а мир молча обещал обратное. Предикат — тот же, что у агрегата
+    // (`budget/aggregates.ts` spentByEnvelope): сумма привязанных `expense`, не шаблонов
+    // повторения, не плановых, с `occurred_on <= today`. Арифметика — в numeric постгреса, а не
+    // в JS: decimal здесь строка (§Б3), и сравнивать его через float нельзя.
+    const [budget] = (await withIdentity(db, personal(owner), (tx) =>
+      tx.execute(sql`
+        WITH spent AS (
+          SELECT coalesce(sum((e.props->>'orbis/amount')::numeric), 0) AS total
+            FROM relations r
+            JOIN entities e ON e.id = r.target_id
+           WHERE r.role = 'envelope-binding' AND r.source_id = ${world.envelopeId}::uuid
+             AND e.graph_id = ${owner}::uuid AND NOT e.archived
+             AND 'orbis/financial' = ANY(e.aspects)
+             AND NOT ('orbis/schedule' = ANY(e.aspects) AND e.props->'orbis/recurrence' IS NOT NULL)
+             AND e.props->>'orbis/direction' = 'expense'
+             AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
+             AND (e.props->>'orbis/occurred_on') <= ${world.today}
+        )
+        SELECT ((env.props->>'orbis/limit')::numeric - spent.total)::text AS remaining,
+               (small.props->>'orbis/amount') AS small_amount,
+               (big.props->>'orbis/amount') AS big_amount,
+               ((env.props->>'orbis/limit')::numeric - spent.total)
+                 >= (small.props->>'orbis/amount')::numeric AS small_fits,
+               ((env.props->>'orbis/limit')::numeric - spent.total)
+                 < (big.props->>'orbis/amount')::numeric AS big_over
+          FROM spent, entities env, entities small, entities big
+         WHERE env.id = ${world.envelopeId}::uuid
+           AND small.id = ${world.smallSpendId}::uuid
+           AND big.id = ${world.bigSpendId}::uuid`),
+    )) as unknown as Array<{
+      remaining: string;
+      small_amount: string;
+      big_amount: string;
+      small_fits: boolean;
+      big_over: boolean;
+    }>;
+    // Пин стережёт ОБЕ стороны: позитив правил 4 и 9 на мелком расходе и их негатив на крупном —
+    // правило, истинное на каждой записи, приёмку §С8-26 не прошло бы.
+    expect(
+      `остаток ${budget?.remaining}: мелкий ${budget?.small_amount} входит — ${budget?.small_fits}`,
+    ).toBe(`остаток ${budget?.remaining}: мелкий ${budget?.small_amount} входит — true`);
+    expect(
+      `остаток ${budget?.remaining}: крупный ${budget?.big_amount} не входит — ${budget?.big_over}`,
+    ).toBe(`остаток ${budget?.remaining}: крупный ${budget?.big_amount} не входит — true`);
   });
 });
