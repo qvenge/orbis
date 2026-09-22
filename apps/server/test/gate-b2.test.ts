@@ -11,10 +11,12 @@
 // поглощаться, зелёный перестаёт валить сьют. Поэтому походы собраны в `beforeAll`, тела читают итог.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { RuleDefinitionInput } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import type { StructuredError } from '../src/errors';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../src/executor/types';
 import { GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS } from './fixtures/gate-aspects';
 import {
+  adminDb,
   appDb,
   type CustomAspectSpec,
   executeWithFixtureCategories as execute,
@@ -119,6 +121,39 @@ const GATE_PLAIN_RULED: CustomAspectSpec = { ...GATE_PLAIN_ASPECT, rules: [RULE_
 
 let ownRules: Collected<{ refused: StructuredError; closed: WireEntity; reopened: WireEntity }>;
 
+/**
+ * Переключить `enabled` у системной строки правила и сдвинуть системную версию реестра — иначе снимок
+ * останется в процессном кеше на прежнем ключе (`registry/cache.ts`), и «выключили» никто не увидит.
+ */
+async function setSystemRuleEnabled(
+  aspectId: string,
+  ruleId: string,
+  enabled: boolean,
+): Promise<void> {
+  const { db: adb, client: ac } = adminDb();
+  try {
+    const rows = (await adb.execute(sql`
+      UPDATE aspect_definitions SET rules = (
+        SELECT jsonb_agg(
+          CASE WHEN r->>'id' = ${ruleId}
+               THEN jsonb_set(r, '{enabled}', ${JSON.stringify(enabled)}::jsonb)
+               ELSE r END)
+        FROM jsonb_array_elements(rules) AS r)
+      WHERE id = ${aspectId} AND graph_id IS NULL
+      RETURNING id`)) as unknown as unknown[];
+    if (rows.length !== 1) throw new Error(`системной строки ${aspectId} нет — сид не прошёл`);
+    await adb.execute(sql`UPDATE registry_system SET version = version + 1 WHERE id = 1`);
+  } finally {
+    await ac.end();
+  }
+}
+/** Попытка завести встроенную трату без `occurred_on`: `true` — инвариант молчит, `false` — отказал. */
+const finAttempt = async (title: string): Promise<boolean> =>
+  (await run('entity_create', { title, tags: [], props: FIN_PROPS, aspects: ['orbis/financial'] }))
+    .ok;
+
+let disabled: Collected<{ before: boolean; after: boolean; again: boolean }>;
+
 beforeAll(async () => {
   await truncateAll();
   ownCategoryId = (await mk({ title: 'Категория гейта Б-2', aspects: ['orbis/category'] })).id;
@@ -183,6 +218,21 @@ beforeAll(async () => {
     const reopened = await setProps(item.id, plain, { [GATE_PROPS.plainState]: 'open' });
     return { refused, closed, reopened };
   });
+
+  // Сценарий 4 — мутация гейта: системная строка правила с `enabled: false` выключает инвариант.
+  disabled = await collect(async () => {
+    const before = await finAttempt('Мутация гейта: до выключения');
+    await setSystemRuleEnabled('orbis/financial', 'financial_requires_occurred_on', false);
+    let after: boolean;
+    try {
+      after = await finAttempt('Мутация гейта: строка выключена');
+    } finally {
+      // Возврат — в finally: строка одна на всю локальную базу, и оставить её выключенной значит
+      // уронить каждый следующий сьют, который трогает финансы.
+      await setSystemRuleEnabled('orbis/financial', 'financial_requires_occurred_on', true);
+    }
+    return { before, after, again: await finAttempt('Мутация гейта: строка возвращена') };
+  });
 });
 
 describe('гейт вехи I: инвариант только декларацией', () => {
@@ -230,5 +280,13 @@ describe('гейт вехи I: инвариант только декларац�
     expect((refused.details as Record<string, unknown>).invariant).toBe('gate_own_requires_moment');
     expect(closed.props[GATE_PROPS.plainAt]).toBe(closed.updatedAt);
     expect(GATE_PROPS.plainAt in reopened.props).toBe(false);
+  });
+
+  // Зеленит задача 4. ГЛАВНАЯ мутационная проверка гейта: без неё «инвариант работает» доказывало бы
+  // лишь то, что где-то есть код с тем же поведением. Выключили строку — пропал отказ, значит отказ и
+  // правда читает строку, а не ветку кода.
+  test.failing('4. строка с enabled:false выключает инвариант, возврат включает обратно', () => {
+    const { before, after, again } = taken(disabled, 'выключение системной строки правила');
+    expect([before, after, again]).toEqual([false, true, false]);
   });
 });
