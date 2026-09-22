@@ -3571,8 +3571,13 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
         'user/call-undo',
       )?.implements[0]?.bind;
     expect(await bindOf()).toEqual({ moment: 'user/at-u2', deadline: 'user/due-u' });
+    // Счётчик переписанных держателей симметричен: слияние и его откат называют одну привязку.
+    expect((merged.results[0] as { rewrittenQueries: number }).rewrittenQueries).toBe(1);
     const undone = await undoAction(db, { identity: personal(owner), actionId: merged.actionId });
     expect(undone.ok).toBe(true);
+    expect(
+      (ok(undone).results[0] as { rewrittenQueries: number } | undefined)?.rewrittenQueries,
+    ).toBe(1);
     expect(await bindOf()).toEqual({ moment: 'user/at-u', deadline: 'user/due-u' });
   });
 });
