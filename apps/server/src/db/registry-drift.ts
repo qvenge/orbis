@@ -60,18 +60,25 @@ import type { Db } from './client';
  * есть» перестало быть достаточным ответом — испорченный набор классов валидировал бы данные молча.
  * У ПОДПИСОК столбцы названы поимённо по той же причине: с Б-1 они сеются и сверяются наравне с
  * остальными четырьмя. У ДЕЙСТВИЙ (§Б6, не в Б-1) по-прежнему только id: встроенных строк у них нет.
+ *
+ * `rules` трёх реестров-носителей (§Б4-1) и `exclusive_classes` контрактов (Р-И-38) — столбцы сверки с
+ * 0022: сидовое правило, испорченное в базе, валидировало бы данные молча, а поднятый или снятый флаг
+ * исключительности менял бы однозначность карты значений. Столбец назван И здесь, И в ожидании
+ * (`expected*` в `aspect-registry.ts`): сверка идёт по ключам ожидания, и одна половина пары без другой —
+ * мёртвая проверка.
  */
 export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
   properties: `SELECT id, key, label, description, type, status, storage, scope,
-                      merged_into, module, rank, flags
+                      merged_into, module, rank, flags, rules
                FROM property_definitions WHERE graph_id IS NULL`,
   aspects: `SELECT id, key, label, description, properties, ai_instructions, tag_mappings,
-                   implements, aggregations, view_config, module, service, rank
+                   implements, aggregations, view_config, module, service, rank, rules
             FROM aspect_definitions WHERE graph_id IS NULL`,
   roles: `SELECT id, key, label, description, source_label, target_label, hierarchical,
-                 constraints, "symmetric", module, rank
+                 constraints, "symmetric", module, rank, rules
           FROM relation_role_definitions WHERE graph_id IS NULL`,
-  contracts: `SELECT id, key, label, description, kind, slots, classes, sets, facts, module, rank
+  contracts: `SELECT id, key, label, description, kind, slots, classes, sets, facts,
+                     exclusive_classes, module, rank
               FROM contract_definitions WHERE graph_id IS NULL`,
   subscriptions: `SELECT id, surface, definition, module, rank
                   FROM subscription_definitions WHERE graph_id IS NULL`,

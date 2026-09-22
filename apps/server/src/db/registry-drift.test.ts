@@ -210,6 +210,35 @@ test('контракты: незнакомая system-строка — extra, и
   expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
 });
 
+test('правило, дописанное в system-строку руками, — drifted по столбцу rules', async () => {
+  try {
+    await admin.db.execute(sql`UPDATE property_definitions
+      SET rules = '[{"id":"взлом","template":"requires_when","enabled":true,"undo":"check",
+                     "params":{"property":"orbis/occurred_on"}}]'::jsonb
+      WHERE id = 'orbis/occurred_on'`);
+    expect((await checkRegistryDrift(db)).properties.drifted).toEqual([
+      { id: 'orbis/occurred_on', what: ['rules'] },
+    ]);
+  } finally {
+    await restoreRegistries();
+  }
+  expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
+});
+
+test('exclusive_classes, поднятый в system-строке руками, — drifted по столбцу (Р-К-92)', async () => {
+  try {
+    await admin.db.execute(
+      sql`UPDATE contract_definitions SET exclusive_classes = true WHERE id = 'orbis/completable'`,
+    );
+    expect((await checkRegistryDrift(db)).contracts.drifted).toEqual([
+      { id: 'orbis/completable', what: ['exclusive_classes'] },
+    ]);
+  } finally {
+    await restoreRegistries();
+  }
+  expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
+});
+
 // Кастомные строки эталона в коде не имеют — дрейфом они не бывают ни в какую сторону.
 test('кастомные строки владельца сверку не трогают', async () => {
   const owner = await freshGraph();

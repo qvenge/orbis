@@ -114,6 +114,11 @@ export function registryDriftReport(drift: RegistryDrift): string[] {
  * сверялись только `schema` и `ai_instructions`): с реформой label/description — не
  * косметика, а данные, которые уезжают в описание параметра тула и в каталог промпта, то
  * есть управляют поведением модели ровно так же, как схема.
+ *
+ * `rules` и `exclusive_classes` — тоже не косметика: испорченное сидовое правило валидировало бы
+ * данные молча, а снятый флаг исключительности делал бы карту значений неоднозначной (тот же довод,
+ * что у набора классов контракта). Колонку сверки обязано назвать ОЖИДАНИЕ, а не только запрос:
+ * `diffOne` ходит по ключам ожидания, и столбец, добавленный лишь в SELECT, не сверялся бы вовсе.
  */
 function expectedProperties(): Map<string, Record<string, unknown>> {
   return new Map(
@@ -131,6 +136,7 @@ function expectedProperties(): Map<string, Record<string, unknown>> {
         module: p.module,
         rank: p.rank,
         flags: p.flags,
+        rules: p.rules,
       },
     ]),
   );
@@ -153,6 +159,7 @@ function expectedAspects(): Map<string, Record<string, unknown>> {
         module: a.module,
         service: a.service,
         rank: a.rank,
+        rules: a.rules,
       },
     ]),
   );
@@ -173,6 +180,7 @@ function expectedRoles(): Map<string, Record<string, unknown>> {
         symmetric: r.symmetric,
         module: r.module,
         rank: r.rank,
+        rules: r.rules,
       },
     ]),
   );
@@ -196,6 +204,7 @@ function expectedContracts(): Map<string, Record<string, unknown>> {
         classes: c.classes,
         sets: c.sets,
         facts: c.facts,
+        exclusive_classes: c.exclusive_classes,
         module: c.module,
         rank: c.rank,
       },

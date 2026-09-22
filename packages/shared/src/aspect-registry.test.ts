@@ -38,6 +38,7 @@ function seeded(): RegistryDbRows {
       module: p.module,
       rank: p.rank,
       flags: p.flags,
+      rules: p.rules,
     })),
     aspects: BUILTIN_ASPECT_DEFS.map((a) => ({
       id: a.id,
@@ -53,6 +54,7 @@ function seeded(): RegistryDbRows {
       module: a.module,
       service: a.service,
       rank: a.rank,
+      rules: a.rules,
     })),
     roles: BUILTIN_RELATION_ROLE_META.map((r) => ({
       id: r.id,
@@ -66,6 +68,7 @@ function seeded(): RegistryDbRows {
       symmetric: r.symmetric,
       module: r.module,
       rank: r.rank,
+      rules: r.rules,
     })),
     contracts: BUILTIN_CONTRACT_DEFS.map((c) => ({
       id: c.id,
@@ -77,6 +80,7 @@ function seeded(): RegistryDbRows {
       classes: c.classes,
       sets: c.sets,
       facts: c.facts,
+      exclusive_classes: c.exclusive_classes,
       module: c.module,
       rank: c.rank, // ключи — имена КОЛОНОК, как их отдаёт SELECT дрейфа
     })),
@@ -245,6 +249,26 @@ test('контракт с подменённым набором — drifted по
   );
   expect(diffBuiltinRegistries(rows).contracts.drifted).toEqual([
     { id: 'orbis/completable', what: ['sets'] },
+  ]);
+});
+
+test('rules — столбец сверки: испорченное сидовое правило не валидирует данные молча', () => {
+  const rows = seeded();
+  rows.aspects = rows.aspects.map((a) =>
+    a.id === 'orbis/financial' ? { ...a, rules: [{ id: 'взлом', template: 'requires_when' }] } : a,
+  );
+  expect(diffBuiltinRegistries(rows).aspects.drifted).toEqual([
+    { id: 'orbis/financial', what: ['rules'] },
+  ]);
+});
+
+test('exclusive_classes — столбец сверки: снятый флаг сделал бы карту значений неоднозначной молча', () => {
+  const rows = seeded();
+  rows.contracts = rows.contracts.map((c) =>
+    c.id === 'orbis/completable' ? { ...c, exclusive_classes: true } : c,
+  );
+  expect(diffBuiltinRegistries(rows).contracts.drifted).toEqual([
+    { id: 'orbis/completable', what: ['exclusive_classes'] },
   ]);
 });
 
