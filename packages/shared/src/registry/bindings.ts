@@ -284,6 +284,17 @@ function checkVariants(
     if (variants === null) continue;
     const domain = new Set(variants.map(String));
     for (const variant of variants) {
+      // `present`/`absent` — маркеры присутствия json-слота (Р-К-3, `variantsOf`); у select-слота
+      // такой КЛЮЧ варианта сделал бы отнесение двусмысленным: `entityClassOf` не отличил бы
+      // вариант `absent` от отсутствующего значения. Ключ законен у свойства вообще
+      // (`types.ts`, слаг) и запрещён ровно здесь — на слоте-статусе.
+      if (prop?.type.kind === 'select' && (variant === 'present' || variant === 'absent')) {
+        out.push({
+          code: 'VARIANT_UNMAPPED',
+          details: { ...base, slot: decl.name, propertyId, variant, reason: 'reserved' },
+        });
+        continue;
+      }
       if (!known.has(String(variant))) {
         out.push({
           code: 'VARIANT_UNMAPPED',
@@ -429,6 +440,15 @@ export function checkClassMap(
       const def = reg.contracts.get(contract);
       const classes = new Set(def?.kind === 'slots' ? def.classes.map((c) => c.key) : []);
       for (const option of added) {
+        // Тот же резерв ключей, что у `checkVariants` (`reason: 'reserved'`): дельта — второй путь
+        // появления варианта на select-слоте-статусе, и без этой ветки она обходила бы резерв.
+        if (option.key === 'present' || option.key === 'absent') {
+          issues.push({
+            code: 'VARIANT_UNMAPPED',
+            details: { propertyId, variant: option.key, contract, slot, reason: 'reserved' },
+          });
+          continue;
+        }
         const hit = entries.find(
           (e) => e.contract === contract && e.slot === slot && String(e.variant) === option.key,
         );
@@ -661,13 +681,20 @@ export function entityClassOf(
       const propertyId = binding.bind[slot];
       const raw = propertyId === undefined ? binding.fixed[slot] : entity.props[propertyId];
       const present = raw !== undefined && raw !== null;
-      // json-слот (Р-К-3): класс задаёт САМО НАЛИЧИЕ; спрашивать у объекта текст значения
-      // бессмысленно — `String({})` дал бы `[object Object]` и не нашёлся бы ни в одной карте.
+      // СНАЧАЛА точное значение, маркеры присутствия — только фолбэк. Обратный порядок расходился
+      // бы с SQL-бэкендом (`compileClassMembership` решает по РОДУ свойства, а не по имени
+      // варианта): select с вариантом `present` у значения `late` дал бы класс варианта `present`.
+      // Остаточную двусмысленность (select-вариант `absent` у отсутствующего значения) закрывает
+      // валидатор привязки: ключи `present`/`absent` у select-слота-статуса зарезервированы
+      // (`checkVariants`, `reason: 'reserved'`).
+      if (present) {
+        const cls = byVariant.get(String(raw));
+        if (cls !== undefined) return cls;
+      }
+      // json-слот (Р-К-3): класс задаёт САМО НАЛИЧИЕ; текст объекта (`String({})` —
+      // `[object Object]`) в карту не попадает по построению, и ответ даёт маркер.
       const byPresence = byVariant.get(present ? 'present' : 'absent');
       if (byPresence !== undefined) return byPresence;
-      if (!present) continue;
-      const cls = byVariant.get(String(raw));
-      if (cls !== undefined) return cls;
     }
   }
   return null;

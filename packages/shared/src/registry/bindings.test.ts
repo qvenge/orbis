@@ -834,3 +834,83 @@ describe('entityClassOf: класс записи под контрактом (§
     expect(cls(['orbis/note'], {}, 'orbis/completable')).toBeNull();
   });
 });
+
+describe('entityClassOf: точное значение раньше маркеров присутствия (ревью задачи 3, FABLE I-1)', () => {
+  // Аспект владельца «Посещение»: select `present|absent|late` на слоте-статусе. Маркеры
+  // присутствия json-слота здесь — ОБЫЧНЫЕ ключи вариантов, и класс обязан решаться по значению,
+  // как у SQL-бэкенда (`compileClassMembership` смотрит на род свойства, а не на имя варианта).
+  const TASK_STATUS = BUILTIN_PROPERTY_META.find(
+    (p) => p.id === 'orbis/task_status',
+  ) as PropertyDefinition;
+  const opt = (key: string, rank: number) => ({ key, label: { ru: key }, rank });
+  const ATTEND = {
+    ...TASK_STATUS,
+    id: 'user/attendance',
+    key: 'user/attendance',
+    graphId: '00000000-0000-4000-8000-000000000001',
+    type: { kind: 'select', options: [opt('present', 1), opt('absent', 2), opt('late', 3)] },
+  } as PropertyDefinition;
+  const IMPL = [
+    {
+      contract: 'orbis/completable',
+      bind: { status: ATTEND.id },
+      value_map: [
+        { slot: 'status', variant: 'present', class: 'done' },
+        { slot: 'status', variant: 'absent', class: 'cancelled' },
+        { slot: 'status', variant: 'late', class: 'active' },
+      ],
+    },
+  ];
+  test('select-вариант `late` даёт класс СВОЕГО варианта, а не маркера `present`', () => {
+    const idx = probeIndex([ATTEND.id], IMPL);
+    const at = (value: string) =>
+      entityClassOf(
+        idx,
+        { aspects: ['user/probe'], props: { [ATTEND.id]: value } },
+        'orbis/completable',
+        () => 1,
+      );
+    expect([at('late'), at('present'), at('absent')]).toEqual(['active', 'done', 'cancelled']);
+  });
+  test('валидатор привязки: ключи present/absent у select-слота-статуса зарезервированы', () => {
+    const withAttend = {
+      properties: new Map([...reg.properties, [ATTEND.id, ATTEND]]),
+      contracts: reg.contracts,
+    };
+    const reserved = checkImplements(probe([ATTEND.id], IMPL), withAttend)
+      .filter((i) => i.details.reason === 'reserved')
+      .map((i) => [i.code, i.details.variant]);
+    expect(reserved).toEqual([
+      ['VARIANT_UNMAPPED', 'present'],
+      ['VARIANT_UNMAPPED', 'absent'],
+    ]);
+  });
+  test('дельта вариантов — тот же резерв: добавленный `absent` у слота-статуса отвергнут', () => {
+    const REG3 = {
+      properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+      aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+      contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+    };
+    const TASK = REG3.aspects.get('orbis/task') as AspectDefinition;
+    const issues = checkClassMap(
+      {
+        selectOptions: { 'orbis/task_status': { add: [opt('absent', 99)] } },
+        classMap: {
+          'orbis/task_status': [
+            {
+              contract: 'orbis/completable',
+              slot: 'status',
+              variant: 'absent',
+              class: 'cancelled',
+            },
+          ],
+        },
+      },
+      TASK,
+      REG3,
+    );
+    expect(issues.map((i) => [i.code, i.details.reason])).toEqual([
+      ['VARIANT_UNMAPPED', 'reserved'],
+    ]);
+  });
+});
