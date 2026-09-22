@@ -31,8 +31,9 @@
 **Стек:** Bun 1.2.7, Hono, tRPC 11, drizzle-orm/postgres (Supabase Postgres 17, RLS, pgTAP), zod + ajv,
 React 19 + TanStack Query (web не трогается), `bun:test` (server/shared), biome.
 
-**Спека:** `docs/superpowers/specs/2026-08-26-properties-reform-design.md` — **ревизия 4** (D43; `main 36060b2`); план написан по
-**ревизии 5** — эрраты (а)–(ж) из «Решений владельца» ниже, вносит владелец одним коммитом до старта ветки.
+**Спека:** `docs/superpowers/specs/2026-08-26-properties-reform-design.md` — **ревизия 5** (D43; внесена владельцем 20.09 — `main cb6afc6`, запушена; перечень правок — `revision-5-edits.md` леджера);
+адреса строк спеки в черновиках сняты на `36060b2`: на HEAD сдвиг **+7 ниже `:60`** и **+8 ниже `:427`** (семь строк таблицы ревизий и строка
+`orbis/delegable` в §Б1-2) — искать по номеру решения (§Б4-1, §С8-15…), не по строке.
 Рамка исполнения: `docs/superpowers/specs/2026-09-14-properties-reform-b2-frame.md` (§7 рулинги Р-1…Р-34, §8 решения
 владельца В-1…В-11 от 14–16.09). План решения спеки НЕ пересматривает; противоречие документов решается в пользу
 спеки, затем рамки. Реестр интерфейсов между задачами — `.superpowers/sdd/2026-09-14-properties-reform-b2/plan-interfaces.md`
@@ -48,13 +49,15 @@ React 19 + TanStack Query (web не трогается), `bun:test` (server/shar
 План написан **поверх** среза Г (спека `docs/superpowers/specs/2026-09-19-graph-ownership-unit-design.md` §8; план
 `docs/superpowers/plans/2026-09-20-graph-ownership-g.md`): ключ строк `graph_id`/`graphId`, идентичность транзакции ТОЛЬКО парой
 `Identity { actor: AccountId; graph: GraphId }` (`withIdentity(db, who, fn)`, `ExecuteRequest.identity`, `ToolCallCtx.identity`), тестовые
-хелперы `mintGraph()`/`freshGraph()`/`ensureGraphs()`/`accountOf(g)`, миграции Г — `0019`/`0020`/`0021`, поэтому миграция Б-2 —
-**`0022_rules_actions`**, резерв **`0023`**; pgTAP после Г-4 — `plan(143)`. Переводная таблица и правила замен — `facts.md` Р-К-90.
-Адреса `file:line` разведки сняты на `36060b2` (код до Г): переименование строк не сдвигает, но Г-2…Г-4 меняют `with-identity.ts`,
-`context.ts`, `onboarding.ts`, `test/helpers.ts`, миграции и pgTAP — задача 0a переснимает адреса по `handoff-b2.md` леджера Г
-(`.superpowers/sdd/2026-09-20-graph-ownership/`) и держит сторож «остатков старых имён в плане нет».
+хелперы `mintGraph()`/`freshGraph()`/`ensureGraphs()`/`accountOf(g)`/`personal(g)`/`addMember(g, account, kind)`, миграции Г — `0019`/`0020`/`0021`,
+поэтому миграция Б-2 — **`0022_rules_actions`** (снимок-основа `meta/0021_snapshot.json`), резерв **`0023`**, третья (`0024`) = СТОП; pgTAP после Г —
+**`plan(160)`** (`rls.pgtap.sql:6`; политик 77, таблиц под ENABLE+FORCE 21). Переводная таблица и правила замен — `facts.md` Р-К-90; итог сверки с HEAD — Р-К-93.
+**Срез Г ИСПОЛНЕН и в проде 21.09.2026** (`main 024782d`; `handoff-b2.md` леджера Г — `.superpowers/sdd/2026-09-20-graph-ownership/`, 10 разделов).
+Адреса `file:line` черновиков сняты на `36060b2` и **переснесены на `024782d` 21.09** по содержимому строк (216 сдвигов механически, 31 — вручную там,
+где строку изменило переименование Г); задача 0a шаг 1а держит сторож «остатков старых имён нет» и сверяет остаток по `handoff-b2.md`.
+Правило сниппетов (handoff §4): ключ строк, реестра, замка и формул — `identity.graph`; `sub`, `actor_user_id` журнала, субъект entitlements — `identity.actor`.
 
-## Что установила разведка HEAD (14.09.2026, `main 3cd0ecd`; код тот же на `36060b2` — до среза Г, см. предпосылку выше)
+## Что установила разведка HEAD (14.09.2026, `main 3cd0ecd`; адреса переснесены на `024782d` после среза Г 21.09 — см. предпосылку выше)
 
 Шесть читателей и шесть опровергателей (Opus 5), критик (Fable 5.1), дочитка пути отложенной единицы (Opus 5),
 опровергатель рамки (Opus 5): ≈ 800 утверждений, ≈ 70 опровергнуто; в рамку вошло то, что меняет состав, — §4
@@ -122,8 +125,8 @@ registry,docs}.md`, `recon-b2-gap-pending.md`; опровержения — `ver
 
 ## Глобальные ограничения
 
-- **Ветка `properties-reform-b2` от свежего `origin/main` — ПОСЛЕ мержа среза Г (Г-5; хеш — `handoff-b2.md` леджера Г) и коммита
-  ревизии 5 спеки (В-П-1), работа только в
+- **Ветка `properties-reform-b2` от свежего `origin/main` — обе предпосылки выполнены: срез Г в `main` с 21.09 (`024782d`), ревизия 5
+  спеки внесена 20.09 (`cb6afc6`); работа только в
   worktree** (`.claude/worktrees/properties-reform-b2`); основное дерево не трогать (владелец пушит параллельно);
   свой `bun install`; корневой `.env` копировать из `apps/server/.env`; абсолютные пути — только внутрь worktree;
   параллельные имплементеры в одном дереве запрещены; **серверные сьюты делят одну локальную БД — один прогон
@@ -132,10 +135,12 @@ registry,docs}.md`, `recon-b2-gap-pending.md`; опровержения — `ver
   экран, не берутся. Web-сьют и сборка гоняются в гейте вехи только как регрессия (ничего не должно измениться).
 - **Миграции — Р-18.** Одна `0022` (задача 2): `rules jsonb NOT NULL DEFAULT '[]'` у `property_definitions`,
   `aspect_definitions`, `relation_role_definitions`; у `action_definitions` — `rank integer NOT NULL`, `status text
-  NOT NULL DEFAULT 'active'` (`active|deprecated`), `"over" jsonb NULL` (Q map-действия), частичная уникальность `key` по владельцу; `0023` — резерв; третья =
-  СТОП и доклад владельцу. Номера — после миграций среза Г (`0019`–`0021`, Р-К-90). Каталог `apps/server/src/db/migrations`, рукописный SQL по образцу `0018_spent_cache_modules.sql`,
+  NOT NULL DEFAULT 'active'` (`active|deprecated`), `"over" jsonb NULL` (Q map-действия), частичная уникальность `key` по владельцу; `0023` — резерв; третья (`0024`) =
+  СТОП и доклад владельцу. Снимок-основа — `meta/0021_snapshot.json`. **Ловушка счёта (Ф-Г-27):** файлов миграций на диске 21, записей
+  журнала 20 (`0008` не существует, `0012_drop_body_before_doc.sql` не зарегистрирован) — сверять «файлы == журнал» нельзя, пины прод-шага —
+  по журналу (после Г — 20, после Б-2 — 21). Номера — после миграций среза Г (`0019`–`0021`, Р-К-90). Каталог `apps/server/src/db/migrations`, рукописный SQL по образцу `0018_spent_cache_modules.sql`,
   регистрация в `meta/_journal.json`; pgTAP-группы существующих таблиц не меняются (колонки, не таблицы); `truncateAll`
-  и `GRAPH_TABLES` без правок. Локальная база с нуля — `bunx supabase db reset && bun run db:prepare`.
+  и `WORLD_TABLES` (бывшая `GRAPH_TABLES`, приватная; `truncateAll` сносит мир и членство, но восстанавливает личности процесса — Р-ИГ-6) без правок. Локальная база с нуля — `bunx supabase db reset && bun run db:prepare`.
 - **Пересев реестров** — после каждой правки сидов: `bun run db:prepare`; до пересева красные `seed-registries.test.ts`,
   `registry-drift.test.ts` — не поломка имплементера. На проде — только задача 20.
 - **Мутации графа и реестров — только через исполнитель** (`execute()`) и тулы `REGISTRY_TOOLS`; прямые записи в БД —
@@ -152,13 +157,15 @@ registry,docs}.md`, `recon-b2-gap-pending.md`; опровержения — `ver
 - **Никаких `TODO`/«потом»** внутри задач; «остаток C» и named-future — только с записью «почему кодом» в докблоке;
   докблоки «до Б-2» снимаются задачами, которые кладут замену, и ловятся греп-гейтом задачи 18.
 - **TDD.** Полный прогон — `bun run test` из корня (голый `bun test` ЗАВИСАЕТ); `bun run lint`, `bun run typecheck` —
-  отдельными вызовами; `bun run test:rls` (pgTAP) — после миграции 0022; `bun run test:perf` — отдельно;
-  `bun run test:perf:volume` — гейт задачи 11 (снимки движка) и среза; `bun scripts/check-legacy-form.ts --gate` — в
-  CI. Точечный прогон: `cd apps/server && bun test src/path/file.test.ts`; shared — `cd packages/shared && bun test <файл>`.
+  отдельными вызовами; `bun run test:rls` (pgTAP) — после миграции 0022; **перф-прогоны — в фиксированном порядке** `test:perf:volume` →
+  `test:perf:explain` → `test:perf:graph` ×3 → `test:perf` (Ф-Г-75: это условие сопоставимости, иначе вердикты `explain` едут; `test:perf:graph`
+  флакует у порога — критерий Р-ИГ-2); `test:perf:volume` — гейт задачи 11 (снимки движка) и среза; `bun scripts/check-legacy-form.ts --gate` — в
+  CI. **Ловушки Bun (Ф-Г-34/35):** тела `describe` исполняются НЕ при сборе файла — до первого хука успевает только первое; хук, повешенный
+  из импортируемой библиотеки, исполняется ровно один раз — в области первого импортёра. Точечный прогон: `cd apps/server && bun test src/path/file.test.ts`; shared — `cd packages/shared && bun test <файл>`.
   `test.failing` в Bun 1.2.7 — только с синхронным телом (ОВ-Б1-1).
 - **Golden-снимки и пины пересдаются руками** (автообновления нет): `tool-registry.json` — 44 → 46 (`run_action`,
   `action_planner_postpone_overdue`, 7) → 49 (`budget_rollover`, `action_set`, `action_remove`, 10) → 51 (`rule_set`, `rule_remove`, 16);
-  пин состава `tools/registry.test.ts:152` и литеральный список писателей `:789-806` — теми же задачами; `errors.test.ts` пины
+  пин состава `tools/registry.test.ts:154` и литеральный список писателей `:791-808` — теми же задачами; `errors.test.ts` пины
   19 → 26 и 27 → 34 (0b); `seed-registries.test.ts:79-86` — «действия: ровно `BUILTIN_ACTION_DEFS`» (6); `registry-drift.ts` —
   `rules` ×3 (2), колонки действий (6); новые golden: корпус близнецов инвариантов (4), golden действий (9), снимки движка бюджета (11);
   `validator-verdicts.json` не трогается.
@@ -169,9 +176,20 @@ registry,docs}.md`, `recon-b2-gap-pending.md`; опровержения — `ver
 - **Ревью-пакет и учёт ревью** — по `docs/superpowers/templates/orchestrator-prompt.md` (экземпляр в леджере);
   мутационная проверка деливеребла ревьюером обязательна; раздел отчёта имплементера «Пины и мутации» обязателен.
 
-- **Идентичность — только парой (срез Г, Р-К-90).** В новом коде и тестах — `Identity { actor, graph }`; ключ строк — `graphId`/`graph_id`;
-  `withIdentity(db, { actor: accountOf(g), graph: g }, …)` в тестах, `ctx.identity.graph`/`.actor` в коде; `mintGraph()` вместо `freshUserId()`.
-  Сторож задачи 0a: греп `ownerId|owner_id|actorUserId|freshUserId` по плану и новому коду — ноль.
+- **Идентичность — только парой (срез Г, Р-К-90/Р-К-93; API дословно — `handoff-b2.md` §4).** `Identity` — ЗАКРЫТЫЙ класс
+  (`apps/server/src/identity.ts`): пару нельзя собрать литералом, спредом или приведением — только резолверами `identityOfPerson(sub)`,
+  `identityOfGrant({ accountId, graphId })`, `identitiesForScheduler(db)`; `withIdentity(db, who, fn)` проверяет бренд первой строкой
+  (`isIdentity`). В тестах — `personal(g)` из `apps/server/test/helpers.ts` («человек в своём личном графе» — через резолвер 1),
+  «актор в чужом графе» — `identityOfGrant` + `addMember(graph, account, kind)`; `mintGraph()`/`freshGraph()` вместо `freshUserId()`;
+  `accountOf(g)` — только там, где нужен сам аккаунт (`actor_user_id` журнала, `sub`). В коде — `ctx.identity.graph` (ключ строк, реестра,
+  замка, формул) и `ctx.identity.actor` (журнал, entitlements). **Типы в сигнатурах — брендовые**: ключ графа — `GraphId`, аккаунт —
+  `AccountId` (`import type { GraphId } from '@orbis/shared'`; `packages/shared/src/ids.ts`); параметр `graphId: string` на HEAD не
+  скомпилируется (TS2345 у `effectiveRegistry`, `bumpOwnerRegistryVersion`, `loadRegistryRows`, `lockOwnerBudget`, `ownerTimeZone`,
+  `personal`), а «естественная» починка `as GraphId` роняет гейт `brand-cast` — тестовые id рождаются только `mintGraph()`/`freshGraph()`. Гейт `identity-pair` ловит и спред со словом `graph`/`actor`
+  внутри литерала (`{ ...batch.graph(), … }`) и хвостовой комментарий с парой на строке кода — в новом коде такие формы не писать. **Три CI-гейта имён** (`scripts/check-legacy-form.ts`, pathspec — код, не
+  `docs/`): `owner-key` (`[oO]wner_?[Ii]d` — ноль навсегда), `identity-pair` (пара `{actor, graph}` руками), `brand-cast` (`as GraphId` /
+  `as AccountId` / `as unknown as Identity` вне `identity.ts`) — сниппет с любой из форм уронит CI. Сторож задачи 0a: греп
+  `ownerId|owner_id|actorUserId|freshUserId` по плану и новому коду — ноль.
 
 ## Карта файлов
 
@@ -204,15 +222,15 @@ registry,docs}.md`, `recon-b2-gap-pending.md`; опровержения — `ver
 **Зачем:** срез мержится в `main` после каждой закрытой задачи (РП-2), поэтому автодеплой Render обязан быть
 выключен ДО первого мержа: миграция `0022` и сиды строк правил и действий идут на прод руками задачей 20, а с
 включённым автодеплоем первый же мерж выкатил бы код, читающий колонку `rules`, на базу без неё. Тем же заходом
-статус D43 приводится к ревизии 4 спеки, а срез получает воспроизводимую базовую линию (счётчики сьютов, pgTAP,
+статус D43 приводится к ревизии 5 спеки, а срез получает воспроизводимую базовую линию (счётчики сьютов, pgTAP,
 семь медиан перфа) и обвязку леджера — без неё «стало хуже» на вехе I не отличить от «так и было». Задача не
 пишет ни строки продуктового кода: она доказывает, что дерево, база и прод приведены в известное состояние.
 
 **Файлы:**
 - Изменить (в ОСНОВНОМ дереве `/Users/birzhan/projects/orbis`, ветка `main`): `render.yaml` — вставка строки
   `autoDeploy: false` после `:12` `    branch: main` (ключа `autoDeploy` в файле сегодня НЕТ, `:13` —
-  `dockerfilePath: ./Dockerfile`); `docs/prd/04-decision-log.md:449` (номер ревизии спеки в строке «Решение»
-  D43) и `:450` (хвост строки «Статус» D43).
+  `dockerfilePath: ./Dockerfile`); `docs/prd/04-decision-log.md:450` (номер ревизии спеки в строке «Решение»
+  D43) и `:451` (хвост строки «Статус» D43).
 - Создать (леджер `.superpowers/sdd/2026-09-14-properties-reform-b2/`, вне git — `.gitignore:24`):
   `orchestrator-prompt.md`, `make-brief.sh`, `make-review-pack.sh`.
 - Дописать: `progress.md` и `facts.md` того же леджера — оба УЖЕ существуют (заведены разведкой 14.09;
@@ -220,20 +238,20 @@ registry,docs}.md`, `recon-b2-gap-pending.md`; опровержения — `ver
 - Тест: собственных тестов нет; мерка задачи — прогоны базовой линии (шаги 9–10) с EXIT=0.
 - НЕ трогать: `docs/superpowers/templates/orchestrator-prompt.md` (общий шаблон; улучшения — отдельным
   docs-коммитом, шапка `:5-7`) · `docs/implementation/02-ops-runbook.md` (чек-лист прод-процедуры — задача 20) ·
-  `docs/prd/04-decision-log.md:447` и п. (12) строки `:449` («20 канонических отказов» → 21 — задача 18, у неё
+  `docs/prd/04-decision-log.md:448` и п. (12) строки `:450` («20 канонических отказов» → 21 — задача 18, у неё
   весь §С10) · `.superpowers/sdd/2026-09-02-properties-reform-b1/` (леджер Б-1 — источник копий, только чтение).
 
 **Интерфейсы:**
 
-*Consumes* (открыто на `main 36060b2`):
+*Consumes* (открыто на `main 36060b2`, адреса переснесены на `024782d` после Г; `rls.pgtap.sql:6` и `package.json` — по HEAD):
 ```
 render.yaml:6-14  services / - type: web / name: orbis / runtime: docker / plan: free / region: frankfurt /
                   branch: main / dockerfilePath: ./Dockerfile / healthCheckPath: /health
 git log --oneline -3 -- render.yaml → 30b22db (возврат Б-1) · 773a925 (ВЫКЛЮЧЕНИЕ Б-1 — образец вставки) · d219d20
-package.json:13 "test" · :14 "test:rls" · :16 "db:prepare" · :17 "test:perf" · :21 "test:perf:volume"
+package.json:13 "test" · :14 "test:rls" · :16 "db:prepare" · :17 "test:perf" · :18 "test:perf:graph" · :19 "test:perf:explain" · :20 "test:perf:volume"
 apps/server/package.json:8 "test": "bun test src test/"      (каталог perf/ в маску НЕ входит)
-apps/server/test/rls/rls.pgtap.sql:6  SELECT plan(143);
-apps/server/perf/perf.test.ts:113-122  BUDGETS_MS — семь порогов 60/60/300/120/120/150/120 мс
+apps/server/test/rls/rls.pgtap.sql:6  SELECT plan(160);
+apps/server/perf/perf.test.ts:121-130  BUDGETS_MS — семь порогов 60/60/300/120/120/150/120 мс
 .gitignore:3 `.env` · :10 `.claude/` · :24 `.superpowers/`
 docs/superpowers/templates/orchestrator-prompt.md — 66 строк, плейсхолдеры :12, :15, :21, :26, :33, :58, :63
 .superpowers/sdd/2026-09-02-properties-reform-b1/make-brief.sh — 27 строк (правятся :2, :6, :7, :14)
@@ -243,7 +261,7 @@ mcp__render__get_service / list_deploys — workspaceId tea-d93srfq8qa3s73bdfka0
 
 *Produces:* ветка `properties-reform-b2` от `origin/main` (≥ `36060b2`, ПОСЛЕ двух docs-коммитов этой задачи) ·
 worktree `/Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2` (свой `bun install`, свой `.env`) ·
-прод Render с `autoDeploy: "no"` (возврат — задача 20) · `docs/prd/04-decision-log.md` под ревизию 4 со статусом
+прод Render с `autoDeploy: "no"` (возврат — задача 20) · `docs/prd/04-decision-log.md` под ревизию 5 со статусом
 «срез Б-2 «ядро» — в работе» · `<леджер>/progress.md` — запись «main@до Б-2» с базовой линией ·
 `<леджер>/facts.md` — Ф-Б2-1…Ф-Б2-4 · `<леджер>/orchestrator-prompt.md`, `make-brief.sh`, `make-review-pack.sh`.
 
@@ -267,16 +285,17 @@ cd /Users/birzhan/projects/orbis && grep -n autoDeploy render.yaml || echo 'auto
 ```
 cd /Users/birzhan/projects/orbis && ls apps/server/src/db/migrations/0019_graph_key_rename.sql apps/server/src/db/migrations/0020_graphs_members.sql apps/server/src/db/migrations/0021_graph_rls.sql
 cd /Users/birzhan/projects/orbis && grep -c '"idx": 21' apps/server/src/db/migrations/meta/_journal.json && ls apps/server/src/db/migrations/meta/0021_snapshot.json
-cd /Users/birzhan/projects/orbis && test -f .superpowers/sdd/2026-09-20-graph-ownership/handoff-b2.md && sed -n 1,80p .superpowers/sdd/2026-09-20-graph-ownership/handoff-b2.md
+cd /Users/birzhan/projects/orbis && test -f .superpowers/sdd/2026-09-20-graph-ownership/handoff-b2.md && sed -n 1,120p .superpowers/sdd/2026-09-20-graph-ownership/handoff-b2.md
 cd /Users/birzhan/projects/orbis && git grep -nE '\bownerId\b|\bowner_id\b|\bfreshUserId\b' -- apps/server/src packages/shared/src apps/server/test ':!apps/server/src/db/migrations' | wc -l
-cd /Users/birzhan/projects/orbis && grep -nE '\bownerId\b|\bowner_id\b|actorUserId|freshUserId|plan\(97\)|\b0019\b' docs/superpowers/plans/2026-09-14-properties-reform-b2.md | grep -vE 'Р-К-90|Предпосылка|graph_key_rename|0019/0020/0021|`0019`' 
+cd /Users/birzhan/projects/orbis && grep -nE '\bownerId\b|\bowner_id\b|actorUserId|freshUserId|plan\(97\)|\b0019\b' docs/superpowers/plans/2026-09-14-properties-reform-b2.md | grep -vE 'Р-К-90|Р-К-93|Предпосылка|graph_key_rename|0019/0020/0021|`0019`|вместо `freshUserId|Сторож задачи 0a|по плану и новому коду|grep -nE' 
 ```
-  Ожидание: три файла миграций Г и снимок `0021` есть, в журнале запись `idx: 21`; `handoff-b2.md` существует — его таблицы
-  (имена хелперов `mintGraph`/`freshGraph`/`ensureGraphs`/`accountOf`, форма `Identity`, число pgTAP, сдвиги адресов
-  `with-identity.ts`/`context.ts`/`onboarding.ts`/`test/helpers.ts`) сверяются с `facts.md` Р-К-90 — расхождения записать в `progress.md`
-  таблицей «имя в плане → имя на HEAD» и применить к брифам при диспатче (адреса плана — ориентир, искать по имени); греп старых имён по
-  коду — **0** (иначе срез Г не домержен — СТОП); греп по плану — **пусто** (сторож «остатков старых имён нет»). Если pgTAP после Г
-  не `plan(143)` — число из `handoff-b2.md` заменяет пин в задачах 2 и 20 (записать в `progress.md`); так же переснять число
+  Ожидание: три файла миграций Г и снимок `0021` есть, в журнале запись `idx: 21` (записей 20 — файлов на диске 21, Ф-Г-27); `handoff-b2.md`
+  существует (≈100 строк, разделы 1–10) — его разделы 2–6 (миграции, pgTAP `plan(160)`, API идентичности, тестовая обвязка, гейты имён) сверяются
+  с `facts.md` Р-К-90/Р-К-93 и с ограничениями каркаса: план уже переведён на HEAD `024782d` 21.09, поэтому ожидание — расхождений нет;
+  если `origin/main` ушёл дальше `024782d` — снять `git diff --stat 024782d..origin/main -- apps/server/src apps/server/test packages/shared/src`
+  и переснять адреса задетых файлов (адреса плана — ориентир, искать по имени), расхождения — в `progress.md` таблицей «имя в плане →
+  имя на HEAD»; греп старых имён по коду — **0** (иначе срез Г не домержен — СТОП); греп по плану — **пусто** (сторож «остатков старых имён
+  нет»). Если pgTAP не `plan(160)` — число с HEAD заменяет пин в задачах 2 и 20 (записать в `progress.md`); так же переснять число
   «в журнале N» прод-миграций (ожидание задачи 20: после Г — 20, после Б-2 — 21). Коммита нет.
 
 - [ ] **Шаг 2: `render.yaml` — автодеплой off (РП-1).** Вставить строкой 13, сразу после `:12` `    branch: main`
@@ -287,16 +306,16 @@ cd /Users/birzhan/projects/orbis && grep -nE '\bownerId\b|\bowner_id\b|actorUser
   Проверка: `cd /Users/birzhan/projects/orbis && sed -n '11,15p' render.yaml` — строка стоит между `branch: main`
   и `dockerfilePath: ./Dockerfile`.
 
-- [ ] **Шаг 3: `docs/prd/04-decision-log.md` — D43 под ревизию 4.** Две точечные замены; оба якоря встречаются
+- [ ] **Шаг 3: `docs/prd/04-decision-log.md` — D43 под ревизию 5.** Две точечные замены; оба якоря встречаются
   в файле ровно один раз (`grep -c` даёт 1 на каждый):
-  1. `:449` → `(ревизия 3) целиком` заменить на `(ревизия 4) целиком`. Остальные три вхождения «ревизия 3» в
-     `:449`/`:450` НЕ трогаются — они описывают историю (снятый гейт П5, §С8-18 первой вехой Б-1) и верны.
-  2. `:450` — дописать в САМЫЙ конец строки «Статус», после существующего хвоста
+  1. `:450` → `(ревизия 3) целиком` заменить на `(ревизия 5) целиком`. Остальные три вхождения «ревизия 3» в
+     `:450`/`:451` НЕ трогаются — они описывают историю (снятый гейт П5, §С8-18 первой вехой Б-1) и верны.
+  2. `:451` — дописать в САМЫЙ конец строки «Статус», после существующего хвоста
      `Отчёт §С1-4 — \`scripts/coverage-report.ts\`, три корзины 452 / 178 / 12 из 642.`:
 ```text
- **Часть Б, срез Б-2 «ядро» — в работе** (план `docs/superpowers/plans/2026-09-14-properties-reform-b2.md`, рамка `docs/superpowers/specs/2026-09-14-properties-reform-b2-frame.md`; спека — ревизия 4 от 2026-09-16 по решениям владельца В-1…В-11): каталог правил строками реестра, действия и `run_action`, уровень по резолвленным шагам, `assign_level` как приёмка выразимости, 21 канонический отказ с мутационной проверкой двумя жанрами; гейт вехи I — два доменных инварианта §А7-2 живут строками сида, код снесён, `enabled:false` выключает.
+ **Часть Б, срез Б-2 «ядро» — в работе** (план `docs/superpowers/plans/2026-09-14-properties-reform-b2.md`, рамка `docs/superpowers/specs/2026-09-14-properties-reform-b2-frame.md`; спека — ревизия 5 от 2026-09-20 по решениям владельца В-1…В-11 и В-П-1…В-П-8): каталог правил строками реестра, действия и `run_action`, уровень по резолвленным шагам, `assign_level` как приёмка выразимости, 21 канонический отказ с мутационной проверкой двумя жанрами; гейт вехи I — два доменных инварианта §А7-2 живут строками сида, код снесён, `enabled:false` выключает.
 ```
-  Проверка: `grep -c 'ревизия 4' docs/prd/04-decision-log.md` → **2**;
+  Проверка: `grep -c '(ревизия 5) целиком' docs/prd/04-decision-log.md` → **1**; `grep -c 'срез Б-2 «ядро» — в работе' docs/prd/04-decision-log.md` → **1**;
   `grep -c '(ревизия 3) целиком' docs/prd/04-decision-log.md` → **0**.
 
 - [ ] **Шаг 4: два docs-коммита ПРЯМО В `main` и пуш.** Правила ветки на них не распространяются: автодеплой
@@ -304,7 +323,7 @@ cd /Users/birzhan/projects/orbis && grep -nE '\bownerId\b|\bowner_id\b|actorUser
   вперёд на `render.yaml` и первый же ff-мерж упрётся в разошедшийся `main` (урок среза А).
 ```
 cd /Users/birzhan/projects/orbis && git add render.yaml && git commit -m "$(printf 'ops(render): автодеплой сервиса orbis выключен на время среза Б-2 реформы свойств (D43, РП-1)\n\nБ-2 мержится в main после каждой закрытой задачи (постоянное распоряжение владельца, РП-2), а\nмиграция 0022 (колонка rules у трёх реестров, поля action_definitions) и сид строк правил и\nдействий идут на прод руками прод-процедурой закрытия (задача 20). С включённым автодеплоем\nпервый же мерж выкатил бы код, читающий rules, на базу без этой колонки. Возврат — отдельным\ndocs-коммитом задачи 20 (образец 30b22db). Сам этот коммит вызовет безвредный деплой текущего\nmain: код тот же, что в проде.\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>')"
-cd /Users/birzhan/projects/orbis && git add docs/prd/04-decision-log.md && git commit -m "$(printf 'docs(prd): D43 под ревизию 4 спеки — срез Б-2 «ядро» в работе\n\nСтрока решения называет актуальную ревизию спеки (4 от 2026-09-16, решения владельца В-1…В-11),\nстатус — начатый срез с адресами плана и рамки. Числа приёмки («20 канонических отказов», п. 12)\nне трогаются: их правит задача 18 одним проходом по §С10.\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>')"
+cd /Users/birzhan/projects/orbis && git add docs/prd/04-decision-log.md && git commit -m "$(printf 'docs(prd): D43 под ревизию 5 спеки — срез Б-2 «ядро» в работе\n\nСтрока решения называет актуальную ревизию спеки (4 от 2026-09-16, решения владельца В-1…В-11),\nстатус — начатый срез с адресами плана и рамки. Числа приёмки («20 канонических отказов», п. 12)\nне трогаются: их правит задача 18 одним проходом по §С10.\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>')"
 cd /Users/birzhan/projects/orbis && git push origin main && git rev-parse origin/main
 ```
   Ожидание: два коммита (`render.yaml | 1 +` и `1 file changed`), push принят.
@@ -344,9 +363,9 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && grep 
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bunx supabase status
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bunx supabase db reset && bun run db:prepare
 ```
-  Стек не поднят — `bunx supabase start`, затем повторить. Ожидание `db:prepare`: EXIT=0, миграции 0014–0018
+  Стек не поднят — `bunx supabase start`, затем повторить. Ожидание `db:prepare`: EXIT=0, миграции 0014–0021
   накачены с нуля, сид реестров печатает свои числа (записать фактические — ориентир для пересевов задач 2, 4,
-  6, 13, 14, 16), в хвосте `test:rls` — `plan(143)` без строки «Looks like you planned».
+  6, 13, 14, 16), в хвосте `test:rls` — `plan(160)` без строки «Looks like you planned».
 
 - [ ] **Шаг 9: базовая линия — полный сьют.** Голый `bun test` ЗАВИСАЕТ; серверные сьюты делят одну БД — прогон
   один за раз.
@@ -355,7 +374,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun r
 ```
   Ожидание EXIT=0. **Числа берутся из ЭТОГО прогона и записываются в `progress.md` как базовая линия среза** —
   подставлять их в план заранее нельзя (прогона на HEAD при написании плана не было). Ориентир порядка величин
-  — итог Б-1 (`progress.md:1605-1606` леджера Б-1): shared 505, server 2677, web 1188 (+1 skip), scripts 57.
+  — итог среза Г (`handoff-b2.md` §7 леджера Г): shared 505, server 2715, web 1188 (+1 skip), scripts 59.
   Расхождение больше пары десятков тестов разбирается до продолжения, а не списывается на дрейф. Известный
   класс флака: `scheduler.test.ts` и `executor/relations.test.ts` падают по таймауту 5000 мс при загруженной
   машине — при таком падении перепрогнать точечно
@@ -368,11 +387,16 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun r
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run lint
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run typecheck
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:rls
-cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:volume
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:explain
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:graph
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:graph
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:graph
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun scripts/check-legacy-form.ts --gate
 ```
-  Ожидание: все шесть EXIT=0 (typecheck — три пакета). `test:perf` печатает семь медиан — записать: это ориентир
+  Ожидание: все десять EXIT=0 (typecheck — три пакета; перф-прогоны — строго в этом порядке, Ф-Г-75: `volume` → `explain` → `graph` ×3 →
+  `perf`, иначе вердикты `explain` едут; `test:perf:graph` флакует у порога — критерий Р-ИГ-2). `test:perf` печатает семь медиан — записать: это ориентир
   гейтов задач 7 и 11 против порогов `BUDGETS_MS`. `test:perf:volume` даёт числа, против которых задача 11
   меряет «движок == снимок», — записать тоже. Греп-гейт уже падающий в CI, базовая линия обязана быть 0, иначе
   ветка стартует с красного.
@@ -380,8 +404,10 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun s
 - [ ] **Шаг 11: записать базовую линию в леджер.** В `progress.md` — запись «### Задача 0a закрыта (дата,
   время), main@до Б-2 = `<хеш второго docs-коммита>`»: хеши обоих коммитов, база ветки, EXIT'ы и счётчики всех
   прогонов шагов 8–10, семь медиан, числа сева реестров. В `facts.md`, раздел «Ф-Б2 — факты исполнения»:
-  - **Ф-Б2-1. Базовая линия среза** — фактические числа шагов 9–10 плюс `plan(143)`; ориентир Б-1 (505 / 2677 /
-    1188+1 / 57) назван ориентиром, а не ожиданием.
+  - **Ф-Б2-1. Базовая линия среза** — фактические числа шагов 9–10 плюс `plan(160)`; ориентир после Г (`handoff-b2.md` §7: shared 505 /
+    server 2715 / web 1188+1 / scripts 59; pgTAP 160 ok; семь медиан `test:perf`, мс: list50 11,7 · badge 9,3 · budget.overview 63,1 ·
+    agenda:horizon 24,0 · backlinks 19,2 · fastpath:create 44,7 · goal.progress 22,9; сид реестров: свойств 77, ролей 11, аспектов 13,
+    контрактов 6, подписок 2) назван ориентиром, а не ожиданием.
   - **Ф-Б2-2. Порядок 0a:** docs-коммиты в `main` ДО создания ветки; ветка отрезается от `origin/main` после
     пуша. Цена ошибки — невозможный ff-мерж и лишний merge-коммит.
   - **Ф-Б2-3. Автодеплой:** дата, id деплоя, ответ `get_service` (`autoDeploy: "no"`); перечитывать перед каждым
@@ -397,12 +423,12 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun s
     `/Users/birzhan/projects/orbis`;
   - `:15` `{{путь к плану}} (main {{хеш}} или новее)` → `docs/superpowers/plans/2026-09-14-properties-reform-b2.md`
     (main — хеш второго docs-коммита шага 4 или новее);
-  - `:21` `{{номер первой задачи}}` → `0b`; условие старта → «Сейчас; вопросы В-П-1…В-П-6 плана исполняй по
-    умолчаниям»;
-  - `:26` `{{Вопросы владельцу В-…}}` → «В-П-1 (эрраты формы ревизии 5), В-П-2 (`$now` против
-    `orbis/updated_at`), В-П-3 (`default(currency)` строкой), В-П-4 (правило 10 на `orbis/routine`), В-П-5
-    (живой смоук `--dry-run`), В-П-6 (сид рутины «Перенос остатков» онбордингом)» — все шесть перечислены явно,
-    иначе оркестратор, читающий только промпт, остановится ждать владельца;
+  - `:21` `{{номер первой задачи}}` → `0b`; условие старта → «Сейчас; вопросы В-П-1…В-П-8 решены владельцем 16–20.09 —
+    исполняй по разделу плана «Решения владельца»»;
+  - `:26` `{{Вопросы владельцу В-…}}` → «Открытых вопросов нет: В-П-1…В-П-8 решены владельцем 16–20.09 (раздел плана
+    «Решения владельца»: ревизия 5 спеки внесена 20.09 `cb6afc6`, `updated_at` вместо `$now`, `default(currency)` строкой, правило 10 на
+    `orbis/routine` до V2, смоук `--dry-run`, рутина «Перенос остатков» онбордингом, режим `act`, `waiting_for` парой правил + контракт
+    делегирования 14а)» — сказано явно, иначе оркестратор, читающий только промпт, остановится ждать владельца;
   - `:33` `{{путь к леджеру}}` → `.superpowers/sdd/2026-09-14-properties-reform-b2`;
   - `:58` `{{номер контрольной задачи}}` → `5` (гейт вехи I); `:63` `{{диапазон}}` → «0a–20»;
     `{{диапазон приёмки}}` → «§С8 24, 25, 26, 27, 29 и §С2-2».
@@ -448,7 +474,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && git s
   и снять с ветки, иначе задача 20 получит конфликт на возврате автодеплоя. Отчёт `task-0a-report.md` в леджере:
   хеши обоих коммитов `main`, база ветки, ответ `get_service`, EXIT'ы и счётчики всех прогонов, семь медиан,
   числа `test:perf:volume` и сева реестров, список созданных файлов леджера, расхождения с ожиданиями (в первую
-  очередь счётчики сьютов против ориентира Б-1) и рулинги, если пришлось решать.
+  очередь счётчики сьютов против ориентира после Г — §7 хендоффа) и рулинги, если пришлось решать.
 
 
 
@@ -480,7 +506,7 @@ shared, потому что бросать его будет тайп-чекер
 
 **Интерфейсы:**
 
-*Consumes* (открыто на `main 36060b2`, дословно):
+*Consumes* (открыто на `main 36060b2`, дословно; адреса переснесены на `024782d`):
 ```ts
 // packages/shared/src/expr/codes.ts:10-18
 export const EXPR_TYPE = 'EXPR_TYPE';
@@ -768,7 +794,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && git c
   `packages/shared/src/registry/rule-type.test.ts`, `packages/shared/src/registry/rule-fixtures.ts`,
   `packages/shared/src/registry/rule-fixtures.test.ts`, `apps/server/src/policy/assign-level.test.ts`.
 - Изменить: `packages/shared/src/registry/index.ts` (две строки барреля);
-  `apps/server/test/gate-c8-18.test.ts` — тест «в репозитории не осталось ни одной пометки» (`:70-76`)
+  `apps/server/test/gate-c8-18.test.ts` — тест «в репозитории не осталось ни одной пометки» (`:80-89`)
   переводится со сравнения с пустым списком на список разрешённых файлов.
 - Test: `apps/server/src/registry/refusals.test.ts` (21 строка, шесть помечены),
   `packages/shared/src/registry/{rule-type,rule-fixtures}.test.ts` (зелёные),
@@ -778,11 +804,11 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && git c
 
 **Интерфейсы.**
 
-Consumes (сверено на `36060b2`; адреса — ориентир, искать грепом по имени):
+Consumes (сверено на `36060b2`, адреса переснесены на `024782d` — ориентир, искать грепом по имени):
 ```ts
 // apps/server/src/errors.ts   class ExecError { readonly code: ExecErrorCode; readonly details?: unknown } :89
 //   ExecErrorCode :36-87 — после 0b 26 имён (§1.1)
-// apps/server/src/executor/types.ts  ExecuteRequest :50-74 · ExecuteResult :76-88 (error.code — string!)
+// apps/server/src/executor/types.ts  ExecuteRequest :52-81 · ExecuteResult :83-95 (error.code — string!)
 // apps/server/src/executor/executor.ts  execute(db, req, deps?): Promise<ExecuteResult>
 // apps/server/src/registry/deps-graph.ts  dependencyGraph(reg, usages) :105 · assertAcyclicGraph(graph) :181
 //   (REGISTRY_CYCLE бросается :195-199)
@@ -791,21 +817,21 @@ Consumes (сверено на `36060b2`; адреса — ориентир, ис
 //   ступени: SURFACE_UNKNOWN :229 · SECOND_LANGUAGE :237 · SUBSCRIPTION_RAW_REF :597/:615 ·
 //            EXPR_TYPE :684 · EXPR_RECURSION :724
 //   resolveSlotOnEntity(idx, entity, contract, slot, prefer) :756 → SLOT_AMBIGUOUS :783 (докблок :742-755)
-// apps/server/src/subscriptions/agenda.ts  rowOf :228-250 дописывает `subscription` и перебрасывает
+// apps/server/src/subscriptions/agenda.ts  rowOf :229-251 дописывает `subscription` и перебрасывает
 // packages/shared/src/query/parse-ast.ts  parseQueryAst(text, reg) :1156 → QUERY_MULTI_ROLE :697, QUERY_JOIN :724
 // packages/shared/src/query/ast-fixtures.ts  INEXPRESSIBLE_QUERY_TEXTS :619-622 — тексты порч
 // packages/shared/src/expr/fixtures.ts  ExprFixture :19-24, EXPR_FIXTURES :83 (образец «корпус данными»),
 //   фикстура EXPR_NOT_TOTAL :190-198 · expr/ast.ts  exprNodeSchema, EXPR_OPS :47-63, EXPR_CTX :69
 // @orbis/shared: AGENDA_DEF, BUDGET_DEF, BUILTIN_{ASPECT_DEFS,CONTRACT_DEFS,PROPERTY_META,RELATION_ROLE_META},
 //   EXPR_TYPE, EXPR_NOT_TOTAL, EXPR_RECURSION, SECOND_LANGUAGE, PATTERN_NOT_REGULAR
-// apps/server/test/helpers.ts  appDb :25 · adminDb :30 · mintGraph :39 · requireEnv :15 · truncateAll :50 ·
-//   seedCustomAspect :151 · fixtures/gate-aspects.ts  GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS
-// apps/server/test/gate-c8-18.test.ts  gitGrep :57-66 · Collected/collect/taken :172-194 (образец сбора)
-// apps/server/src/subscriptions/registry.test.ts  snapshot() :49-60 · row() :69-79 · refusal() :92-101
-// apps/server/src/registry/ops.test.ts  входы отказов: SCOPE_NOT_STATIC :453 · PATTERN_NOT_REGULAR :508 ·
-//   BIND_TYPE :920 · VARIANT_UNMAPPED :3678, позитив classMap :3605, состав `user/gig` :881-893
-// apps/server/src/executor/ancestors.test.ts:332 (COMPUTED_WRITE) · relations.test.ts:695-732 (ROLE_SYSTEM_ONLY) ·
-//   registry/modules.test.ts:445-560 (MODULE_DISABLED тремя путями)
+// apps/server/test/helpers.ts  appDb :27 · adminDb :32 · mintGraph :73 · freshGraph :84 · personal :102 · requireEnv :17 · truncateAll :163 ·
+//   seedCustomAspect :303 · fixtures/gate-aspects.ts  GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS
+// apps/server/test/gate-c8-18.test.ts  gitGrep :67-76 · Collected/collect/taken :185-207 (образец сбора)
+// apps/server/src/subscriptions/registry.test.ts  snapshot() :50-61 · row() :70-80 · refusal() :93-102
+// apps/server/src/registry/ops.test.ts  входы отказов: SCOPE_NOT_STATIC :456 · PATTERN_NOT_REGULAR :511 ·
+//   BIND_TYPE :963 · VARIANT_UNMAPPED :3814, позитив classMap :3741, состав `user/gig` :922-934
+// apps/server/src/executor/ancestors.test.ts:337 (COMPUTED_WRITE) · relations.test.ts:696-733 (ROLE_SYSTEM_ONLY) ·
+//   registry/modules.test.ts:461-576 (MODULE_DISABLED тремя путями)
 // apps/server/src/registry/validator-golden.test.ts  пины :130-133, :148 · мутационный тест :249-277
 ```
 
@@ -840,7 +866,7 @@ export function codeOfResult(r: ExecuteResult): ExecErrorCode; export function o
 ---
 
 - [ ] **Шаг 1: сторож пометок — со списка «пусто» на список разрешённых файлов.**
-  Сегодня `gate-c8-18.test.ts:70-76` утверждает, что `gitGrep` по `apps`/`packages`/`scripts` даёт
+  Сегодня `gate-c8-18.test.ts:80-89` утверждает, что `gitGrep` по `apps`/`packages`/`scripts` даёт
   ПУСТОЙ список. Первая же пометка задачи 0c красит этот тест, и красным он останется до задачи 17 —
   то есть весь срез. Сторож переводится на ИМЕНОВАННЫЙ список, который каждая закрывающая задача
   укорачивает; пустой список = прежнее «ноль».
@@ -935,8 +961,8 @@ export interface RefusalRow {
 interface RefusalWorld {
   db: Db; close: () => Promise<void>;
   reg: RegistrySnapshot;                    // встроенные словари без строк владельца
-  owner: string;                            // строки-декларации и данные, кроме 21
-  moduleOwner: string;                      // строка 21: выключенный модуль испортил бы соседей
+  owner: GraphId;                            // строки-декларации и данные, кроме 21
+  moduleOwner: GraphId;                      // строка 21: выключенный модуль испортил бы соседей
   moduleCategoryId: string; moduleNoteId: string;
   ambiguousId: string;                      // две привязки слота `moment` (строка 10)
   envelopeId: string; txnId: string;        // пара под системную роль (строка 13)
@@ -949,7 +975,7 @@ const world = (): RefusalWorld => {
   return W;
 };
 
-/** Снимок «как из БД» без строк владельца — образец `subscriptions/registry.test.ts:49-60`. */
+/** Снимок «как из БД» без строк владельца — образец `subscriptions/registry.test.ts:50-61`. */
 const builtinSnapshot = (): RegistrySnapshot => ({
   properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
   aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
@@ -957,7 +983,7 @@ const builtinSnapshot = (): RegistrySnapshot => ({
   contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
   subscriptions: new Map(), ownerVersion: 1, systemVersion: 1,
 });
-/** Строка подписки вокруг декларации — образец `subscriptions/registry.test.ts:69-79`. */
+/** Строка подписки вокруг декларации — образец `subscriptions/registry.test.ts:70-80`. */
 const subRow = (definition: unknown, over: Partial<SubscriptionRow> = {}): SubscriptionRow =>
   ({ id: 'orbis/agenda', graphId: null, surface: 'planner/agenda', definition,
      module: null, rank: 1, ...over }) as SubscriptionRow;
@@ -972,7 +998,7 @@ export async function codeOfAsync(fn: () => Promise<unknown>): Promise<ExecError
   try { await fn(); } catch (e) { if (e instanceof ExecError) return e.code; throw e; }
   throw new Error('ожидался отказ, его не было — строка корпуса перестала быть отказом');
 }
-/** `ExecuteErr.error.code` объявлен `string` (`types.ts:85`) — каст ОДИН здесь, а не в каждой строке. */
+/** `ExecuteErr.error.code` объявлен `string` (`types.ts:92`) — каст ОДИН здесь, а не в каждой строке. */
 export function codeOfResult(r: ExecuteResult): ExecErrorCode {
   if (r.ok) throw new Error('ожидался отказ исполнителя, операция прошла');
   return r.error.code as ExecErrorCode;
@@ -982,8 +1008,8 @@ export function okOfResult(r: ExecuteResult): ExecuteOk {
   return r;
 }
 /** Одна операция = один `execute`: отказ обязан называть СВОЮ операцию, а не «пачка упала». */
-const run = (owner: string, tool: string, input: unknown): Promise<ExecuteResult> =>
-  execute(world().db, { identity: { actor: accountOf(owner), graph: owner }, actorKind: 'owner', source: 'ui',
+const run = (owner: GraphId, tool: string, input: unknown): Promise<ExecuteResult> =>
+  execute(world().db, { identity: personal(owner), actorKind: 'owner', source: 'ui',
     operations: [{ tool, input }] });
 export const REFUSAL_ROWS: readonly RefusalRow[] = [];   // наполняется шагами 4–9
 export async function prepareRefusals(): Promise<void> { /* сев мира — шаги 6–8 */ }
@@ -1080,7 +1106,7 @@ const ROW_5: RefusalRow = {
 
 - [ ] **Шаг 6: строки 8, 9, 12, 14 — декларация ЧЕРЕЗ ДВЕРЬ ЗАПИСИ.**
   §С1-2 определяет фикстуру как «декларацию, которую валидатор обязан отвергнуть **при записи**», а
-  бросающие места этих четырёх (`registry/ops.ts:171`, `:252`, `:1795`, `:1802`) стоят внутри
+  бросающие места этих четырёх (`registry/ops.ts:172`, `:253`, `:1796`, `:1803`) стоят внутри
   неэкспортированных функций — дверь одна, исполнитель. Полностью выписана строка 12:
 ```ts
 const movingScope = { filter: { and: [ { aspect: 'orbis/task' },
@@ -1112,7 +1138,7 @@ const ROW_12: RefusalRow = {
 
   `prepareRefusals` сеет для этого владельца аспект `user/gig` операцией `aspect_create` с составом
   `[{propertyId:'orbis/start_at',required:true},{propertyId:'orbis/location',required:false},
-  {propertyId:'orbis/task_status',required:false}]` (образец `ops.test.ts:881-893`): аспект обязан
+  {propertyId:'orbis/task_status',required:false}]` (образец `ops.test.ts:922-934`): аспект обязан
   НОСИТЬ всё, что биндит, иначе `checkImplements` ответит `UNKNOWN_PROPERTY/not_carried`.
 
 - [ ] **Шаг 7: строки 2, 13, 21 — жанр «данные».**
@@ -1143,7 +1169,7 @@ const ROW_13: RefusalRow = {
   | 21 | `MODULE_DISABLED` | `entity_create {title:'Корпус: ядро', tags:[]}` от `moduleOwner` (запись ядра при выключенном модуле законна, §С8-22) | `entity_create` с `aspects:['orbis/financial']` и `props` `{'orbis/amount':'340.00','orbis/direction':'expense','orbis/finance_category': moduleCategoryId,'orbis/occurred_on': today}` | (а) `attach_orbis_category {entity_id: moduleNoteId, data:{'orbis/icon':'🍏'}}`; (б) `entity_update {id: moduleNoteId, aspects:{attach:['orbis/category']}}` |
 
   `prepareRefusals` для `moduleOwner`: завести категорию и заметку ДО выключения, затем
-  `execute(db, {identity: { actor: accountOf(moduleOwner), graph: moduleOwner }, actorKind:'owner', source:'ui', operations:[{tool:'module_set',
+  `execute(db, {identity: personal(moduleOwner), actorKind:'owner', source:'ui', operations:[{tool:'module_set',
   input:{module:'finance', enabled:false}}]})` — та же операция, что у `user.setModuleEnabled`
   (`routers/user.ts:100-110`, схема `shared/registry/modules.ts:194`). Для `owner`: категория,
   конверт (`orbis/budget` на текущий месяц), транзакция (`orbis/financial`) — хук бюджета ставит
@@ -1155,8 +1181,8 @@ const ROW_13: RefusalRow = {
   `GATE_PLAIN_ASPECT` реализует `orbis/when.moment` через `user/gp_at`, `orbis/schedule` — через
   `orbis/start_at`; обе на одной записи ВНУТРИ окна дают отказ движка.
 ```ts
-const agendaOf = (owner: string) => createCallerFactory(appRouter)({
-  identity: { actor: accountOf(owner), graph: owner }, actorKind: 'owner', db: world().db, clientVersion: null }).agenda.list({ days: 8 });
+const agendaOf = (owner: GraphId) => createCallerFactory(appRouter)({
+  identity: personal(owner), actorKind: 'owner', db: world().db, clientVersion: null }).agenda.list({ days: 8 });
 const ROW_10: RefusalRow = {
   row: 10, codes: ['SLOT_AMBIGUOUS'], genre: 'data',
   positive: async () => { await agendaOf(world().owner); },   // конфликтная запись ещё ЗА окном
@@ -1227,7 +1253,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await closeRefusals(); });
 
-/** Развернуть собранное СИНХРОННО; ошибку перебрасывает КАК ЕСТЬ (образец `gate-c8-18.test.ts:190`). */
+/** Развернуть собранное СИНХРОННО; ошибку перебрасывает КАК ЕСТЬ (образец `gate-c8-18.test.ts:203`). */
 const taken = (v: unknown): unknown => {
   if (v !== null && typeof v === 'object' && 'err' in (v as object)) throw (v as { err: unknown }).err;
   return (v as { ok: unknown }).ok;
@@ -1502,8 +1528,8 @@ describe('§С8-26: приёмка выразимости assign_level', () => {
 **Файлы:**
 - Создать: `apps/server/test/fixtures/test-seed.ts` (`TEST_CONTACT_ASPECT`, `TEST_CALL_ASPECT`,
   `TEST_ROLE_PARTICIPANT`, `TestWorld`, `seedTestWorld`).
-- Изменить: `apps/server/test/helpers.ts` — `CustomAspectSpec` (`:106-133`, поле `rules?`),
-  `seedCustomAspect` (`:151-219`: добивка колонки `rules` вторым запросом), новые `CustomRoleSpec` и
+- Изменить: `apps/server/test/helpers.ts` — `CustomAspectSpec` (`:258-285`, поле `rules?`),
+  `seedCustomAspect` (`:303-371`: добивка колонки `rules` вторым запросом), новые `CustomRoleSpec` и
   `seedCustomRole` рядом с `seedCustomAspect`.
 - Test: `apps/server/test/test-seed.test.ts` (проба хелперов и мира — обычные тесты, БЕЗ пометок).
 - НЕ трогать: `apps/server/test/fixtures/gate-aspects.ts` (гейт вехи I реюзает фикстуры Б-1 —
@@ -1512,29 +1538,29 @@ describe('§С8-26: приёмка выразимости assign_level', () => {
 
 **Интерфейсы.**
 
-Consumes (сверено на `36060b2`, копировать дословно):
+Consumes (сверено на `36060b2`, адреса переснесены на `024782d`; копировать дословно):
 ```ts
 // apps/server/test/helpers.ts
-export interface CustomAspectProperty { key: string; type: PropertyType; required?: boolean }   // :95-105
+export interface CustomAspectProperty { key: string; type: PropertyType; required?: boolean }   // :247-257
 export interface CustomAspectSpec { key: string; label: LocalizedText;
   properties: CustomAspectProperty[]; description?: LocalizedText; aiInstructions?: string;
   tagMappings?: string[]; implements?: unknown[]; carries?: readonly string[];
-  module?: string | null }                                                                       // :106-133
-export async function seedCustomAspect(graphId: string, spec: CustomAspectSpec): Promise<void>;  // :151
-//   INSERT property_definitions :159-168 · INSERT aspect_definitions :184-203 ·
-//   bumpOwnerRegistryVersion(db, graphId) :214 · pgTextArray :225
-//   adminDb :30 · appDb :25 · mintGraph :39 · requireEnv :15 · truncateAll :50
-// apps/server/src/db/seed-registries.ts :120-135 — INSERT ролей ДОСЛОВНО (двенадцать колонок)
+  module?: string | null }                                                                       // :258-285
+export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec): Promise<void>;  // :303
+//   INSERT property_definitions :311-320 · INSERT aspect_definitions :336-355 ·
+//   bumpOwnerRegistryVersion(db, mintGraph(graphId)) :366 · pgTextArray :377
+//   adminDb :32 · appDb :27 · mintGraph :73 · freshGraph :84 · personal :102 · requireEnv :17 · truncateAll :163
+// apps/server/src/db/seed-registries.ts :121-136 — INSERT ролей ДОСЛОВНО (двенадцать колонок)
 // apps/server/src/registry/version.ts  bumpOwnerRegistryVersion(db, graphId): Promise<number>
 // apps/server/src/executor/executor.ts  execute(db, req: ExecuteRequest, deps?): Promise<ExecuteResult>
-// apps/server/src/db/schema.ts  relationRoleDefinitions :419-448 (индексы `_builtin_uniq`/`_custom_uniq` :443-447)
+// apps/server/src/db/schema.ts  relationRoleDefinitions :436-465 (индексы `_builtin_uniq`/`_custom_uniq` :460-464)
 // packages/shared/src/registry/property-type.ts  NAMESPACED_KEY_RE :62 · RELATION_ROLE_KEY_RE :69 ·
 //   relationRoleDefinitionSchema :228-263 (constraints.strict :242-251, symmetric z.literal(false) :259)
 // packages/shared/src/registry/{rule-type,rule-fixtures}.ts (0c)  RuleDefinitionInput, TEST_IMPORT_ROUTINE_ID
-// apps/server/test/fixtures/gate-aspects.ts  seedGateWorld :259-365 — образец «мир через исполнитель»;
-//   ref.target как Q-AST — `{ kind: 'ref', target: { filter: { aspect: 'orbis/category' } } }` :89-92
-// apps/server/src/seed/gardener.ts  GARDENER_PROPS :76-82 — проверенная форма свойств рутины
-// @orbis/shared  addDays (date.ts), ORBIS_NAMESPACE (ids.ts:5); `import { v5 as uuidv5 } from 'uuid'`
+// apps/server/test/fixtures/gate-aspects.ts  seedGateWorld :261-367 — образец «мир через исполнитель»;
+//   ref.target как Q-AST — `{ kind: 'ref', target: { filter: { aspect: 'orbis/category' } } }` :91-94
+// apps/server/src/seed/gardener.ts  GARDENER_PROPS :77-83 — проверенная форма свойств рутины
+// @orbis/shared  addDays (date.ts), ORBIS_NAMESPACE (ids.ts:16); `import { v5 as uuidv5 } from 'uuid'`
 ```
 
 Produces:
@@ -1544,7 +1570,7 @@ export interface CustomAspectSpec { /* … */ rules?: RuleDefinitionInput[] }
 export interface CustomRoleSpec { key: string; label: LocalizedText; sourceLabel: LocalizedText;
   targetLabel: LocalizedText; hierarchical?: boolean;
   constraints?: Record<string, unknown>; module?: string | null; rules?: RuleDefinitionInput[] }
-export async function seedCustomRole(graphId: string, spec: CustomRoleSpec): Promise<void>;
+export async function seedCustomRole(graphId: GraphId, spec: CustomRoleSpec): Promise<void>;
 // apps/server/test/fixtures/test-seed.ts
 export const TEST_CONTACT_KEY = 'test/contact';
 export const TEST_CALL_KEY = 'test/call';
@@ -1556,7 +1582,7 @@ export const TEST_ROLE_PARTICIPANT: CustomRoleSpec;
 export interface TestWorld { today; month; categoryId; envelopeId; agreementId; contactFamilyId;
   contactCourierId; contactStrangerId; prepaymentId; bigSpendId; smallSpendId; callCourierId;
   callStrangerId; eventSoloId; eventSharedId; taskId; routineId: string }
-export async function seedTestWorld(graphId: string): Promise<TestWorld>;
+export async function seedTestWorld(graphId: GraphId): Promise<TestWorld>;
 ```
 
 ---
@@ -1570,7 +1596,7 @@ export async function seedTestWorld(graphId: string): Promise<TestWorld>;
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
-import { appDb, mintGraph, requireEnv, seedCustomAspect, seedCustomRole, truncateAll } from './helpers';
+import { appDb, mintGraph, personal, requireEnv, seedCustomAspect, seedCustomRole, truncateAll } from './helpers';
 import { TEST_ROLE_PARTICIPANT, TEST_ROLE_PARTICIPANT_KEY } from './fixtures/test-seed';
 
 requireEnv();
@@ -1581,7 +1607,7 @@ describe('хелпер сева роли владельца', () => {
   test('seedCustomRole кладёт строку роли и она видна снимком реестра владельца', async () => {
     const user = mintGraph();
     await seedCustomRole(user, TEST_ROLE_PARTICIPANT);
-    const reg = await withIdentity(db, { actor: accountOf(user), graph: user }, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     const role = reg.roles.get(TEST_ROLE_PARTICIPANT_KEY);
     expect(role?.graphId).toBe(user);
     // `created_by: 'any'` — не деталь: `'system'` закрыл бы путь тула кодом ROLE_SYSTEM_ONLY, и
@@ -1594,7 +1620,7 @@ describe('хелпер сева роли владельца', () => {
     await seedCustomRole(user, TEST_ROLE_PARTICIPANT);
     await seedCustomRole(user, { ...TEST_ROLE_PARTICIPANT, label: { ru: 'Участник встречи' },
       constraints: { created_by: 'any', acyclic: true } });
-    const reg = await withIdentity(db, { actor: accountOf(user), graph: user }, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     expect(reg.roles.get(TEST_ROLE_PARTICIPANT_KEY)?.label).toEqual({ ru: 'Участник встречи' });
     expect(reg.roles.get(TEST_ROLE_PARTICIPANT_KEY)?.constraints).toEqual(
       { created_by: 'any', acyclic: true });
@@ -1605,7 +1631,7 @@ describe('хелпер сева роли владельца', () => {
   (`helpers.ts`), и модуля `./fixtures/test-seed` нет. Отдельно красный `bun run typecheck`.
 
 - [ ] **Шаг 2: реализация — `CustomRoleSpec` и `seedCustomRole`.**
-  В `apps/server/test/helpers.ts` сразу за `pgTextArray` (`:225-231`):
+  В `apps/server/test/helpers.ts` сразу за `pgTextArray` (`:377-383`):
 ```ts
 /**
  * Своя роль связи владельца — фикстура §С8-26 (роль `participant`).
@@ -1629,7 +1655,7 @@ export interface CustomRoleSpec {
 /** `rank` роли владельца — константа: нормативного порядка у них нет, а число в реестре обязано быть. */
 const CUSTOM_ROLE_RANK = 100;
 
-export async function seedCustomRole(graphId: string, spec: CustomRoleSpec): Promise<void> {
+export async function seedCustomRole(graphId: GraphId, spec: CustomRoleSpec): Promise<void> {
   const { db, client } = adminDb();
   try {
     await db.execute(sql`
@@ -1701,7 +1727,7 @@ describe('правила в строке аспекта (§Б4-1) пишутся
   содержательным без единой правки.
 
 - [ ] **Шаг 4: реализация — `rules?` у `CustomAspectSpec` и добивка колонки.**
-  В `CustomAspectSpec` сразу за `module?: string | null` (`:132`):
+  В `CustomAspectSpec` сразу за `module?: string | null` (`:284`):
 ```ts
   /**
    * Правила каталога на строке аспекта (§Б4-1). Колонка `rules` появляется миграцией 0022
@@ -1717,13 +1743,13 @@ describe('правила в строке аспекта (§Б4-1) пишутся
   Рядом с `pgTextArray` — общий писатель для обоих хелперов:
 ```ts
 /** Добивка колонки `rules` (§Б4-1) у строки реестра владельца — см. докблок `CustomAspectSpec.rules`. */
-async function writeRegistryRules(db: Db, graphId: string, table: 'aspect_definitions' | 'relation_role_definitions',
+async function writeRegistryRules(db: Db, graphId: GraphId, table: 'aspect_definitions' | 'relation_role_definitions',
   id: string, rules: RuleDefinitionInput[]): Promise<void> {
   await db.execute(sql`UPDATE ${sql.raw(table)} SET rules = ${JSON.stringify(rules)}::jsonb
     WHERE graph_id = ${graphId} AND id = ${id}`);
 }
 ```
-  В `seedCustomAspect` — вызов между INSERT'ом аспекта (`:203`) и `bumpOwnerRegistryVersion` (`:214`):
+  В `seedCustomAspect` — вызов между INSERT'ом аспекта (`:335-355`) и `bumpOwnerRegistryVersion` (`:366`):
 ```ts
     if (spec.rules !== undefined) {
       await writeRegistryRules(db, graphId, 'aspect_definitions', spec.key, spec.rules);
@@ -1742,7 +1768,7 @@ describe('словарь §С8-26: два аспекта test/* и четыре 
     const user = mintGraph();
     await seedCustomAspect(user, TEST_CONTACT_ASPECT);
     await seedCustomAspect(user, TEST_CALL_ASPECT);
-    const reg = await withIdentity(db, { actor: accountOf(user), graph: user }, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     for (const id of Object.values(TEST_PROPS)) expect(reg.properties.has(id)).toBe(true);
     // Род `ref` — не украшение: `deref` чекера требует базы рода `ref` (`expr/check.ts:491-494`),
     // и без него правила 1, 2, 5, 7 §Б4-5 не прошли бы валидатор ни при каком сиде.
@@ -1772,7 +1798,7 @@ describe('словарь §С8-26: два аспекта test/* и четыре 
 import { addDays, ORBIS_NAMESPACE, TEST_IMPORT_ROUTINE_ID } from '@orbis/shared';
 import { v5 as uuidv5 } from 'uuid';
 import { execute } from '../../src/executor/executor';
-import { appDb, type CustomAspectSpec, type CustomRoleSpec } from '../helpers';
+import { type CustomAspectSpec, type CustomRoleSpec, appDb, personal } from '../helpers';
 
 export const TEST_CONTACT_KEY = 'test/contact';
 export const TEST_CALL_KEY = 'test/call';
@@ -1834,7 +1860,7 @@ describe('мир §С8-26', () => {
     world = await seedTestWorld(owner);
   });
   test('в мире есть цели всех одиннадцати правил §Б4-5', async () => {
-    const rows = (await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) =>
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
       tx.execute(sql`SELECT id FROM entities WHERE graph_id = ${owner}::uuid`),
     )) as unknown as Array<{ id: string }>;
     const ids = new Set(rows.map((r) => r.id));
@@ -1868,10 +1894,10 @@ export interface TestWorld {
 }
 
 /** id сущности мира — uuidv5 от владельца и слага: воспроизводим без обращения к БД. */
-const testEntityId = (graphId: string, slug: string): string =>
+const testEntityId = (graphId: GraphId, slug: string): string =>
   uuidv5(`${graphId.toLowerCase()}:test-seed-world:${slug}`, ORBIS_NAMESPACE);
 
-export async function seedTestWorld(graphId: string): Promise<TestWorld> {
+export async function seedTestWorld(graphId: GraphId): Promise<TestWorld> {
   const { db, client } = appDb();
   try {
     const id = (slug: string) => testEntityId(graphId, slug);
@@ -1884,7 +1910,7 @@ export async function seedTestWorld(graphId: string): Promise<TestWorld> {
 
     /** Одна операция = один `execute`: отказ обязан называть СВОЮ операцию, а не «пачка упала». */
     const run = async (tool: string, input: Record<string, unknown>): Promise<void> => {
-      const r = await execute(db, { identity: { actor: accountOf(graphId), graph: graphId }, actorKind: 'owner', source: 'ui',
+      const r = await execute(db, { identity: personal(graphId), actorKind: 'owner', source: 'ui',
         operations: [{ tool, input }] });
       if (!r.ok) throw new Error(`мир §С8-26 ${tool} ${String(input.id ?? '')}: ${r.error.code} — ${r.error.message}`);
     };
@@ -1984,7 +2010,7 @@ export async function seedTestWorld(graphId: string): Promise<TestWorld> {
   класс чтения (`deref`, ребро, привязка конверта):
 ```ts
   test('deref правил 1/5/7 находит цель: у звонка есть живой звонящий с тегами и полями', async () => {
-    const rows = (await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => tx.execute(
+    const rows = (await withIdentity(db, personal(owner), (tx) => tx.execute(
       sql`SELECT c.tags AS tags, c.props ->> ${TEST_PROPS.contactKind} AS kind
             FROM entities e JOIN entities c ON c.id = (e.props ->> ${TEST_PROPS.caller})::uuid
            WHERE e.id = ${world.callCourierId}::uuid`),
@@ -1994,7 +2020,7 @@ export async function seedTestWorld(graphId: string): Promise<TestWorld> {
     expect(world.routineId).toBe(TEST_IMPORT_ROUTINE_ID);
   });
   test('рёбра: participant ВХОДИТ в событие (Р-И-7), envelope-binding поставил хук', async () => {
-    const rows = (await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => tx.execute(
+    const rows = (await withIdentity(db, personal(owner), (tx) => tx.execute(
       sql`SELECT role, source_id, target_id FROM relations WHERE graph_id = ${owner}::uuid
             AND role IN (${TEST_ROLE_PARTICIPANT_KEY}, 'envelope-binding')`),
     )) as unknown as Array<{ role: string; source_id: string; target_id: string }>;
@@ -2037,7 +2063,7 @@ export async function seedTestWorld(graphId: string): Promise<TestWorld> {
 - Создать: `apps/server/test/gate-b2.test.ts` (обвязка сбора, четыре помеченных теста, контрольный зелёный,
   заготовка греп-доказательства).
 - Изменить: `apps/server/test/pending-marks.ts` (заведён 0c, Р-К-32) — одна строка `'apps/server/test/gate-b2.test.ts'` в
-  `PENDING_MARK_FILES`; сторож `gate-c8-18.test.ts:70-76` не трогать (он уже сверяется с этим списком на равенство).
+  `PENDING_MARK_FILES`; сторож `gate-c8-18.test.ts:80-89` не трогать (он уже сверяется с этим списком на равенство).
 - НЕ трогать: `apps/server/test/fixtures/gate-aspects.ts` (фикстуры Б-1 реюзаются КАК ЕСТЬ — Р-К-10; правила
   навешиваются производными копиями в новом файле, иначе поедут снимок `test/golden/surfaces.json` и сам гейт
   §С8-18) · `apps/server/test/helpers.ts` (`CustomAspectSpec.rules?` заводит задача 0d) ·
@@ -2047,30 +2073,30 @@ export async function seedTestWorld(graphId: string): Promise<TestWorld> {
 
 **Интерфейсы:**
 
-*Consumes* (сверено на `main 36060b2`):
+*Consumes* (сверено на `main 36060b2`, адреса переснесены на `024782d`):
 ```ts
-// apps/server/test/helpers.ts — requireEnv() :15 · appDb() :25 · adminDb() :29 · mintGraph() :40 ·
-//   truncateAll() :50 (`registry_system` она НЕ трогает — :63-65) · CustomAspectSpec :106-133 ·
-//   seedCustomAspect(graphId, spec) :151 ·
-//   executeWithFixtureCategories(db, req, deps?) :431 — сама заводит цель под `orbis/finance_category`
-//   (карта FIXTURE_REF_TARGET_ASPECT :366-373); `user/gf_category` в карте НЕТ, категорию заводит сам тест.
-// apps/server/test/fixtures/gate-aspects.ts — GATE_PROPS :56-65 (finWhen:'user/gf_when', plainAt:'user/gp_at') ·
-//   GATE_GREP_PATHSPEC (семь путей) :25-33 · GATE_FIN_ASPECT :72-137 (gf_when — timestamp, НЕ required :106;
-//   gf_date — required :94) · GATE_PLAIN_ASPECT :139-171 (gp_state → orbis/completable, closed→done :158-167;
-//   gp_at — timestamp, НЕ required :156)
-// apps/server/test/gate-c8-18.test.ts — образец: :15-19 правило «синхронное тело» · :51-67 repoRoot/gitGrep ·
-//   :69-95 два сторожа-грепа · :172-194 Collected/collect/taken · :217-236 beforeAll со сбором исходов
+// apps/server/test/helpers.ts — requireEnv() :17 · appDb() :27 · adminDb() :31 · mintGraph() :73 · freshGraph() :84 · personal() :102 ·
+//   truncateAll() :163 (`registry_system` она НЕ трогает — :211-213) · CustomAspectSpec :258-285 ·
+//   seedCustomAspect(graphId, spec) :303 ·
+//   executeWithFixtureCategories(db, req, deps?) :583 — сама заводит цель под `orbis/finance_category`
+//   (карта FIXTURE_REF_TARGET_ASPECT :518-525); `user/gf_category` в карте НЕТ, категорию заводит сам тест.
+// apps/server/test/fixtures/gate-aspects.ts — GATE_PROPS :58-67 (finWhen:'user/gf_when', plainAt:'user/gp_at') ·
+//   GATE_GREP_PATHSPEC (семь путей) :27-35 · GATE_FIN_ASPECT :74-139 (gf_when — timestamp, НЕ required :108;
+//   gf_date — required :96) · GATE_PLAIN_ASPECT :141-173 (gp_state → orbis/completable, closed→done :160-169;
+//   gp_at — timestamp, НЕ required :158)
+// apps/server/test/gate-c8-18.test.ts — образец: :15-19 правило «синхронное тело» · :61-77 repoRoot/gitGrep ·
+//   :79-108 два сторожа-грепа · :185-207 Collected/collect/taken · :230-249 beforeAll со сбором исходов
 export interface WireEntity { id; …; props: Record<string, unknown>; aspects: string[];
-  createdAt: string; updatedAt: string; archived: boolean }               // executor/types.ts:102-125
+  createdAt: string; updatedAt: string; archived: boolean }               // executor/types.ts:109-132
 export function applyTaskCompletion(prev: EntityState, next: EntityState, now: Date): void   // normalize.ts:40-49
 export function assertFinancialInvariant(state: EntityState, hasIncomingDerivedFrom = false): void // :151-168
 //   :165 details {invariant:'financial_requires_occurred_on'} · :158 {invariant:'financial_recurring_requires_recurrence'}
 export function financialRecurringNeedsDerivedFrom(state: EntityState): boolean              // normalize.ts:137-140
-function monotonicUpdatedAt(now, prev): Date  // executor.ts:1642-1644 — max(clock(), prev+1мс); докблок :1636-1640:
+function monotonicUpdatedAt(now, prev): Date  // executor.ts:1641-1643 — max(clock(), prev+1мс); докблок :1635-1639:
 //   «доменные таймстампы (completed_at и т.п.) остаются на чистом clock()» — красное место теста 2.
-//   hasIncomingDerivedFrom — executor.ts:1617
-// apps/server/src/executor/executor.test.ts — близнецы: :201-220 «financial без occurred_on → INVARIANT» ·
-//   :335-363 «{status:done} … completed_at … уход чистит» · :604-637 «attach … completed_at» · :60-74 req/firstEntity
+//   hasIncomingDerivedFrom — executor.ts:1616
+// apps/server/src/executor/executor.test.ts — близнецы: :203-222 «financial без occurred_on → INVARIANT» ·
+//   :337-365 «{status:done} … completed_at … уход чистит» · :606-639 «attach … completed_at» · :62-76 req/firstEntity
 // packages/shared/src/registry/builtin-aspects.ts:138-151 — `orbis/occurred_on` в аспекте НЕобязателен,
 //   докблок :143-144: «условная обязательность типом не выражается — до правила requires_when её держит код»
 // packages/shared/src/registry/rule-type.ts [СОЗДАЁТ ЗАДАЧА 0c] — `RuleDefinitionInput` (§1.3 реестра).
@@ -2087,7 +2113,7 @@ function monotonicUpdatedAt(now, prev): Date  // executor.ts:1642-1644 — max(c
 
 ---
 
-- [ ] **Шаг 1: сторож «ноль пометок» Б-1 получает список файлов Б-2.** `gate-c8-18.test.ts:70-76` сегодня
+- [ ] **Шаг 1: сторож «ноль пометок» Б-1 получает список файлов Б-2.** `gate-c8-18.test.ts:80-89` сегодня
   требует, чтобы пометок в `apps`/`packages`/`scripts` не осталось ни одной. Срез Б-2 заводит их снова (0c —
   корпус отказов и `assign_level`, 0e — гейт), и без правки сторож красен с первой же пометки, то есть базовая
   линия ломается на вехе 0. Файл `apps/server/test/pending-marks.ts` со списком `PENDING_MARK_FILES` (две строки) и новое тело сторожа
@@ -2167,7 +2193,7 @@ const FIN_PROPS = { 'orbis/amount': '340.00', 'orbis/direction': 'expense', 'orb
 let ownCategoryId = '';
 
 function req(tool: string, input: unknown): ExecuteRequest {
-  return { identity: { actor: accountOf(owner), graph: owner }, actorKind: 'owner', source: 'fast_path', operations: [{ tool, input }], clock: () => T0 };
+  return { identity: personal(owner), actorKind: 'owner', source: 'fast_path', operations: [{ tool, input }], clock: () => T0 };
 }
 const run = (tool: string, input: Record<string, unknown>) => execute(db, req(tool, input));
 function entityOf(r: { ok: boolean }): WireEntity {
@@ -2266,7 +2292,7 @@ describe('гейт вехи I: инвариант только декларац�
   // Зеленит задача 4 (строка `task_completed_at` + снос `applyTaskCompletion`). Значение правила —
   // `{prop:'orbis/updated_at'}` (Р-И-3/Р-К-2: «момент этой записи» выразим существующей core-проекцией,
   // `$now` в язык не заводится). Сегодня код пишет чистый `clock()` (докблок `monotonicUpdatedAt`,
-  // `executor.ts:1636-1640`), а `updated_at` апдейта в тот же тик равен `clock() + 1 мс` — тест красен
+  // `executor.ts:1635-1639`), а `updated_at` апдейта в тот же тик равен `clock() + 1 мс` — тест красен
   // ровно на этой миллисекунде, и она и есть вся разница между кодом и декларацией.
   test.failing('2. on_enter_class строкой сида: completed_at равен updated_at записи, уход снимает', () => {
     const { done, back } = taken(sysTransition, 'задача в done и обратно');
@@ -2282,7 +2308,7 @@ describe('гейт вехи I: инвариант только декларац�
   копии фикстур Б-1 (Р-К-10: второй набор «финансовый + завершаемый аспект владельца» не заводится); владелец
   у теста свой, поэтому строки `user/gate-*` этого владельца не задевают ни гейт §С8-18, ни снимок
   `test/golden/surfaces.json`. **Дисциплина токенов:** id правил не содержат `gf_`/`gp_`/`gate-fin`/`gate-plain`
-  — иначе совпадёт греп токенов гейта Б-1 (`gate-c8-18.test.ts:78-94`, разрешённые файлы `gate-aspects.ts:45-49`).
+  — иначе совпадёт греп токенов гейта Б-1 (`gate-c8-18.test.ts:91-107`, разрешённые файлы `gate-aspects.ts:47-51`).
 ```ts
 /** `requires_when` на аспекте владельца: расход обязан нести момент. Свойство-цель — `gf_when`
  *  (timestamp, НЕ обязательное в аспекте): будь оно обязательным, запись отверг бы валидатор значений
@@ -2296,7 +2322,7 @@ const RULE_OWN_REQUIRES_MOMENT: RuleDefinitionInput = {
   params: { property: GATE_PROPS.finWhen },
 };
 /** `on_enter_class` на аспекте владельца: вход слота `status` контракта завершаемости в класс `done`
- *  (вариант `closed` отображён в него привязкой `gate-aspects.ts:158-167`) ставит момент, уход снимает. */
+ *  (вариант `closed` отображён в него привязкой `gate-aspects.ts:160-169`) ставит момент, уход снимает. */
 const RULE_OWN_CLOSED_AT: RuleDefinitionInput = {
   id: 'gate_own_closed_at',
   template: 'on_enter_class',
@@ -2358,7 +2384,7 @@ let ownRules: Collected<{ refused: StructuredError; closed: WireEntity; reopened
 
 - [ ] **Шаг 7: пометка №4 — `enabled: false` выключает инвариант.** Рычаг в Б-2 тестовый (строки системные,
   дельт правил встроенных строк нет — Р-2, вердикт опровергателя рамки, п. 4), поэтому выключатель — админский
-  UPDATE, и он ОБЯЗАН вернуть строку: `registry_system` переживает `truncateAll` (`helpers.ts:63-65`), и
+  UPDATE, и он ОБЯЗАН вернуть строку: `registry_system` переживает `truncateAll` (`helpers.ts:211-213`), и
   оставленное `enabled: false` сломало бы все остальные сьюты.
 ```ts
 /**
@@ -2429,7 +2455,7 @@ let disabled: Collected<{ before: boolean; after: boolean; again: boolean }>;
 /**
  * ЗАГОТОВКА греп-доказательства вехи I «кода под инвариант нет» — исполняет ЗАДАЧА 5.
  *
- * Пути — дословно семь из `GATE_GREP_PATHSPEC` (`fixtures/gate-aspects.ts:25-33`), подмножество
+ * Пути — дословно семь из `GATE_GREP_PATHSPEC` (`fixtures/gate-aspects.ts:27-35`), подмножество
  * `SEARCH_PATHSPEC` (`scripts/check-legacy-form.ts:67-76`): списки обязаны совпадать, иначе
  * «доказано» задачей 5 и «проверено» сторожем Б-1 меряют разное.
  *
@@ -2512,16 +2538,16 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun s
 после `normalizeExpr` `:116`) + `normalize.test.ts` · `apps/server/src/registry/deps-graph.ts` —
 `DependencyEdgeKind` (`:29`), докблок `DependencyUsages` (`:42-53`; мёртвая ссылка `collectQueryHolders`
 `:48`), докблок и тело `dependencyGraph` (`:86-146`), докблок `assertAcyclicGraph` (`:160-176`) +
-`deps-graph.test.ts` · `apps/server/src/registry/ops.ts` — докблок держателей (`:820-846`),
-`PropertyHolder` (`:847-853`), `collectPropertyHolders` (`:931-976`), цикл держателей `mergeProperty`
-(`:1465-1510`), докблок `assertImplements` (`:2388-2400`) + `ops.test.ts` ·
+`deps-graph.test.ts` · `apps/server/src/registry/ops.ts` — докблок держателей (`:821-847`),
+`PropertyHolder` (`:848-854`), `collectPropertyHolders` (`:932-977`), цикл держателей `mergeProperty`
+(`:1466-1511`), докблок `assertImplements` (`:2389-2401`) + `ops.test.ts` ·
 `apps/server/test/fixtures/refusals.ts` (строки 19 и 20 — снятие `red`).
 *Не трогать*: `apps/web` (Р-23); `registry/load.ts`, `db/schema.ts`, миграции — задача 2; дельты правил и
 тулы записи — 16; движок C/T — 3.
 
 **Интерфейсы**
 
-*Consumes* (сверено на `36060b2` дословно):
+*Consumes* (сверено на `36060b2` дословно, адреса переснесены на `024782d`):
 ```ts
 // 0b: DEREF_IN_CONSTRAINT, ExprCheckCode, ExprCheckError, EXPR_TYPE, SECOND_LANGUAGE (shared expr/codes.ts);
 //     ExecErrorCode += 'RULE_CONFLICT' | 'UNIQUE_ON_MANY' | typeof DEREF_IN_CONSTRAINT (apps/server/src/errors.ts)
@@ -2540,14 +2566,14 @@ export function assertSubscription(row, scope): SubscriptionDefinition;       //
 export type DependencyEdgeKind = 'aspect'|'scope'|'ref.target'|'query'|'merged_into';               // deps-graph.ts:29
 export function dependencyGraph(reg: RegistrySnapshot, usages: DependencyUsages): DependencyGraph;  // :105
 export function assertAcyclicGraph(graph: DependencyGraph): void;                                   // :181
-export interface PropertyHolder { kind: 'registry'|'progress_source'|'body'|'delta'; id: string; properties: string[] } // ops.ts:847-853
-export async function collectPropertyHolders(tx: Tx, graphId: string): Promise<PropertyHolder[]>;   // ops.ts:931
-export async function mergeProperty(tx: Tx, graphId: string, input: { source: string; into: string }): Promise<MergeResult>; // ops.ts:1367
-export interface RegistrySnapshot extends RegistryDictionaries { ownerVersion: number; systemVersion: number }  // registry/load.ts:93
-export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedRegistriesResult>;   // db/seed-registries.ts:98
+export interface PropertyHolder { kind: 'registry'|'progress_source'|'body'|'delta'; id: string; properties: string[] } // ops.ts:848-854
+export async function collectPropertyHolders(tx: Tx, graphId: GraphId): Promise<PropertyHolder[]>;   // ops.ts:932
+export async function mergeProperty(tx: Tx, graphId: GraphId, input: { source: string; into: string }): Promise<MergeResult>; // ops.ts:1368
+export interface RegistrySnapshot extends RegistryDictionaries { ownerVersion: number; systemVersion: number }  // registry/load.ts:94
+export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedRegistriesResult>;   // db/seed-registries.ts:99
 BUILTIN_{PROPERTY_META,ASPECT_DEFS,RELATION_ROLE_META,CONTRACT_DEFS};                                // @orbis/shared
-// образцы: мемо по снимку `INDEX_BY_SNAPSHOT` (subscriptions/budget.ts:146-153); снимок без БД `snapshot()`
-// (deps-graph.test.ts:12-33); сев привязки `seedCustomAspect` (apps/server/test/helpers.ts:151)
+// образцы: мемо по снимку `INDEX_BY_SNAPSHOT` (subscriptions/budget.ts:147-154); снимок без БД `snapshot()`
+// (deps-graph.test.ts:12-33); сев привязки `seedCustomAspect` (apps/server/test/helpers.ts:303)
 ```
 *Produces* (имена — закон §1.4; «сверх реестра» — то, чего §1.4 не называет):
 ```ts
@@ -3298,7 +3324,7 @@ export function assertBuiltinRules(): void {
     // `registry-drift` по форме, только по содержимому — здесь оно и проверяется. Разобранный перечень
     // (`rulesOf`) здесь достаточен: неразобравшееся правило до снимка не доезжает вовсе — строку реестра
     // `load.ts` читает `.parse`'ом и падает на ней раньше (задача 2).
-    const reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     for (const { rule, carrier } of rulesOf(reg)) {
       expect(() => assertRule(rule, { reg, carrier, systemSeed: true })).not.toThrow();
     }
@@ -3340,7 +3366,7 @@ test('RULE_FIXTURES: вердикт валидатора совпадает с �
   Коммит: `git commit -- apps/server/src/registry apps/server/test/fixtures/refusals.ts -m "feat(server): фикстуры каталога правил зелены у валидатора; строки 19 и 20 корпуса отказов закрыты (§С8-24/25)"`
 
 - [ ] **Шаг 16: красный — пятый род держателя `'bind'` и слияние.** В `apps/server/src/registry/ops.test.ts`,
-  новый describe рядом с «`collectPropertyHolders`: род `body`» (`:3335`):
+  новый describe рядом с «`collectPropertyHolders`: род `body`» (`:3440`):
 ```ts
 describe('collectPropertyHolders: род `bind` — привязки аспектов владельца (остатки 50/51)', () => {
   test('property_merge переписывает bind — привязка не повисает на поглощённом', async () => {
@@ -3348,10 +3374,10 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
     await seedCustomAspect(owner, { key: 'user/call', label: { ru: 'Звонок' },
       properties: [{ key: 'at', type: { kind: 'timestamp' } }, { key: 'at2', type: { kind: 'timestamp' } }],
       implements: [{ contract: 'orbis/when', bind: { moment: 'user/at' }, value_map: [], fixed: {} }] });
-    const holders = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => collectPropertyHolders(tx, owner));
+    const holders = await withIdentity(db, personal(owner), (tx) => collectPropertyHolders(tx, owner));
     expect(holders.filter((h) => h.kind === 'bind').map((h) => [h.id, h.properties])).toEqual([['user/call', ['user/at']]]);
-    await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }));
-    const reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
+    await withIdentity(db, personal(owner), (tx) => mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }));
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
     expect(reg.aspects.get('user/call')?.implements[0]?.bind).toEqual({ moment: 'user/at2' });
   });
 });
@@ -3376,7 +3402,7 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
     if (names.size > 0) out.push({ kind: 'bind', id: r.id as string, properties: [...names] });
   }
 ```
-  В `mergeProperty` — ветвью цикла держателей, перед последней (`body`, `:1510`):
+  В `mergeProperty` — ветвью цикла держателей, перед последней (`body`, `:1511`):
 ```ts
     if (holder.kind === 'bind') {
       const rows = (await tx.execute(sql`
@@ -3398,9 +3424,9 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
 ```
   `MergeInverse` растёт полем `binds: Array<{ id: string; implements: AspectImplements[] }>`; откат
   `property_merge_undo` возвращает прежний jsonb тем же UPDATE (образец — ветка `deltas`). Докблок
-  держателей (`:820-846`): перечень родов становится пятью (зеркало-ребро роли `ref` остаётся вне перечня —
+  держателей (`:821-847`): перечень родов становится пятью (зеркало-ребро роли `ref` остаётся вне перечня —
   оно ищется одним UPDATE), последняя фраза уточняется: `bind` — пятый (эта задача), правило — шестой
-  (задача 16). Докблок `assertImplements` (`:2388-2400`): абзац «`property_merge` не видит привязок вовсе»
+  (задача 16). Докблок `assertImplements` (`:2389-2401`): абзац «`property_merge` не видит привязок вовсе»
   переписывается — слияние их переписывает, а отказ остаётся сторожем для привязок, поглощённых ДО этой
   задачи, и для ручных вставок. Прогон → PASS. Коммит:
   `git commit -- apps/server/src/registry/ops.ts apps/server/src/registry/ops.test.ts -m "feat(server): пятый род держателя — bind привязок; property_merge переписывает привязки (остатки 50/51)"`
@@ -3438,9 +3464,9 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
 
 *Create*: `apps/server/src/db/migrations/0022_rules_actions.sql`, `…/migrations/meta/0022_snapshot.json`
 (генерируется), запись `idx: 22` в `…/migrations/meta/_journal.json`.
-*Modify*: `apps/server/src/db/schema.ts` — `aspectDefinitions` (`:143-176`), `propertyDefinitions`
-(`:367-416`), `relationRoleDefinitions` (`:419-448`), `contractDefinitions` (`:461-485`),
-`actionDefinitions` (`:508-531`) ·
+*Modify*: `apps/server/src/db/schema.ts` — `aspectDefinitions` (`:146-179`), `propertyDefinitions`
+(`:384-433`), `relationRoleDefinitions` (`:436-465`), `contractDefinitions` (`:478-502`),
+`actionDefinitions` (`:525-548`) ·
 `packages/shared/src/registry/property-type.ts` — `propertyDefinitionSchema` (`:84-113`),
 `aspectDefinitionSchema` (`:179-225`), `relationRoleDefinitionSchema` (`:228-263`) +
 `property-type.test.ts` · `packages/shared/src/registry/contract-type.ts` — `contractSlotsSchema`
@@ -3448,20 +3474,20 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
 `packages/shared/src/aspect-registry.ts` — `expectedProperties` (`:118`),
 `expectedAspects` (`:139`), `expectedRoles` (`:161`), `expectedContracts` (`:186-204`) +
 `aspect-registry.test.ts` (`seeded()` `:26-90`, контракты `:70-82`) ·
-`apps/server/src/registry/load.ts` — четыре SELECT (`:131-155`), вторичный `, id` четырёх словарей
-(`:136,142,148,153`), четыре маппера (`:163-250`) · `load.test.ts` ·
+`apps/server/src/registry/load.ts` — четыре SELECT (`:132-156`), вторичный `, id` четырёх словарей
+(`:137,143,149,154`), четыре маппера (`:164-251`) · `load.test.ts` ·
 `apps/server/src/db/registry-drift.ts` (`:64-79`) + `registry-drift.test.ts` ·
-`apps/server/src/db/seed-registries.ts` — четыре INSERT (`:104-178`), `readSystemDefinitions` (`:228-241`) ·
+`apps/server/src/db/seed-registries.ts` — четыре INSERT (`:105-179`), `readSystemDefinitions` (`:229-242`) ·
 `apps/server/src/routers/registry.test.ts` · при покраснении — `apps/server/perf/volume.test.ts`
-(`:831-873`, пин `relations_source_role`).
+(`:835-877`, пин `relations_source_role`).
 *Не трогать*: `apps/web` (Р-23); докблок `loadRegistryRows` «Реестров пять» (`:130`) и
 `REGISTRY_DRIFT_QUERIES.actions` — задача 6; `export.ts` и `routers/registry.ts` — правила уезжают внутри
-строк сами; `test/rls/rls.pgtap.sql` — группы таблиц не меняются (колонки, не таблицы), `plan(143)`
-остаётся; `truncateAll`/`GRAPH_TABLES`/`DEFINITION_TABLES` — состав таблиц тот же.
+строк сами; `test/rls/rls.pgtap.sql` — группы таблиц не меняются (колонки, не таблицы), `plan(160)`
+остаётся; `truncateAll`/`WORLD_TABLES`/`DEFINITION_TABLES` — состав таблиц тот же.
 
 **Интерфейсы**
 
-*Consumes* (сверено на `36060b2` дословно):
+*Consumes* (сверено на `36060b2` дословно, адреса переснесены на `024782d`):
 ```ts
 // 0c: ruleDefinitionSchema, RuleDefinition (packages/shared/src/registry/rule-type.ts, §1.3) — файл создан
 //     задачей 0c и экспортирован из `registry/index.ts`; он импортирует `../expr/ast` НАПРЯМУЮ (как
@@ -3469,19 +3495,19 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
 export const propertyDefinitionSchema, aspectDefinitionSchema, relationRoleDefinitionSchema; // property-type.ts:84,179,228
 export const contractSlotsSchema, contractFactsSchema, contractDefinitionSchema;             // contract-type.ts:69,79,89
 //   (обе ветки `.strict()`, союз по `kind`; у facts-ветки слоты/классы/наборы объявлены `z.null().default(null)`)
-export interface RegistryDictionaries { properties; aspects; roles; contracts; subscriptions }  // registry/load.ts:85-91
-export async function loadRegistryRows(tx: Tx, graphId: string): Promise<RegistryDictionaries>; // :127
+export interface RegistryDictionaries { properties; aspects; roles; contracts; subscriptions }  // registry/load.ts:86-92
+export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<RegistryDictionaries>; // :128
 export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string>;                              // db/registry-drift.ts:64
 export function diffBuiltinRegistries(rows: RegistryDbRows): RegistryDrift;                     // aspect-registry.ts:273
-export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedRegistriesResult>; // db/seed-registries.ts:98
-export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinitions>;             // :228
-export function applyDeltas(system: RegistrySnapshot, deltas: RegistryDeltaRow[]): RegistrySnapshot; // deltas.ts:265 (правки не требует — спред `{...base}`)
+export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedRegistriesResult>; // db/seed-registries.ts:99
+export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinitions>;             // :229
+export function applyDeltas(system: RegistrySnapshot, deltas: RegistryDeltaRow[]): RegistrySnapshot; // deltas.ts:266 (правки не требует — спред `{...base}`)
 BUILTIN_{PROPERTY_META,ASPECT_DEFS,RELATION_ROLE_META,CONTRACT_DEFS}; // @orbis/shared — все четыре собираются через `.parse`
 // 14а (Р-И-38, §1.16): читатель флага — валидатор привязок (`CLASS_NOT_EXCLUSIVE`) и строка `orbis/delegable`
 //     с `exclusive_classes: true`; задача 2 даёт им только колонку и дорогу до снимка (Р-К-92 п.2)
 // образцы: рукописная миграция `0018_spent_cache_modules.sql` (шапка :1-7 — бюджет среза);
 // expect-обёртка вопросов drizzle-kit — `.superpowers/sdd/2026-08-26-properties-reform-a/drizzle-generate.exp`;
-// пин доли корпуса как ИНВАРИАНТА — `expectRlsNeutral` (apps/server/perf/volume.test.ts:451-455, Ф-Б1-48а)
+// пин доли корпуса как ИНВАРИАНТА — `expectRlsNeutral` (apps/server/perf/volume.test.ts:453-457, Ф-Б1-48а)
 ```
 *Produces*:
 ```sql
@@ -3619,7 +3645,7 @@ test('снимок несёт rules строк-носителей: своё пр
                              WHERE graph_id = ${owner}::uuid AND id = 'user/probe'`);
     await bumpOwnerRegistryVersion(admin, owner);
   } finally { await client.end(); }
-  const reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   expect(reg.aspects.get('user/probe')?.rules).toEqual([rule]);
   // Встроенные строки пока без правил — первые две кладёт задача 4.
   expect(reg.aspects.get('orbis/financial')?.rules).toEqual([]);
@@ -3640,21 +3666,21 @@ test('снимок несёт rules строк-носителей: своё пр
     // NOT NULL DEFAULT '[]': строки, посеянные до 0022, читаются пустым списком, а не NULL'ом.
     rules: jsonb('rules').notNull().default([]),
 ```
-  в `contractDefinitions` (`:461-477`) — после `facts` (Р-К-92 п.2; читателя заводит задача 14а):
+  в `contractDefinitions` (`:478-494`) — после `facts` (Р-К-92 п.2; читателя заводит задача 14а):
 ```ts
     // Р-И-38: один вариант на класс — запись классом однозначна; флаг читает валидатор привязок.
     exclusiveClasses: boolean('exclusive_classes').notNull().default(false),
 ```
   и в `actionDefinitions` (§Б6-1, читателей заводит задача 6 — колонки кладутся ОДНОЙ миграцией среза):
 ```ts
-    rank: integer('rank').notNull().default(0),          // единственный реестр без rank (§Б6-1, export.ts:69-75)
+    rank: integer('rank').notNull().default(0),          // единственный реестр без rank (§Б6-1, export.ts:74-80)
     status: text('status').notNull().default('active'),  // §С3: deprecate вместо удаления (§А10-3)
     over: jsonb('over'),                                 // §Б6-3: Q map-действия; у одиночного его нет
 ```
   плюс в массив `(t) => [...]` действий:
 ```ts
     // Имя тула действия собирается из `key` (аналог attach_*): два действия с одним ключом дали бы
-    // неразрешимое имя. Уникальность частичная — как у `key` свойств (schema.ts:409-412).
+    // неразрешимое имя. Уникальность частичная — как у `key` свойств (schema.ts:426-429).
     uniqueIndex('action_definitions_builtin_key').on(t.key).where(sql`${t.graphId} IS NULL`),
     uniqueIndex('action_definitions_custom_key').on(t.graphId, t.key).where(sql`${t.graphId} IS NOT NULL`),
     check('action_definitions_status', sql`${t.status} IN ('active','deprecated')`),
@@ -3686,7 +3712,7 @@ ALTER TABLE "relation_role_definitions" ADD COLUMN "rules" jsonb DEFAULT '[]'::j
 -- Колонка, а не константа в коде: снимок собирается ИЗ СТРОК, и флаг из кода терялся бы на пересеве
 -- (Р-К-92 п.2). DEFAULT false безопасен: у шести засеянных контрактов исключительности нет.
 ALTER TABLE "contract_definitions" ADD COLUMN "exclusive_classes" boolean DEFAULT false NOT NULL;--> statement-breakpoint
--- rank: действия — единственный реестр без него, а по нему сортирует экспорт (export.ts:69-75) и
+-- rank: действия — единственный реестр без него, а по нему сортирует экспорт (export.ts:74-80) и
 -- каталог промпта. DEFAULT 0 безопасен: таблица пуста и в проде (§А12-1).
 ALTER TABLE "action_definitions" ADD COLUMN "rank" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 -- status: §С3 обещает действию deprecate, а §А10-3 запрещает удалять строку реестра физически.
@@ -3698,10 +3724,10 @@ ALTER TABLE "action_definitions" ADD CONSTRAINT "action_definitions_status" CHEC
 CREATE UNIQUE INDEX "action_definitions_builtin_key" ON "action_definitions" ("key") WHERE "graph_id" IS NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "action_definitions_custom_key" ON "action_definitions" ("graph_id","key") WHERE "graph_id" IS NOT NULL;
 ```
-  Затем `registry/load.ts`: в три SELECT дописать `rules` (свойства `:134`, аспекты `:140`, роли `:146`),
+  Затем `registry/load.ts`: в три SELECT дописать `rules` (свойства `:136`, аспекты `:142`, роли `:148`),
   в три `…Schema.parse({…})` — `rules: r.rules` последней строкой. Тем же шагом — четвёртый SELECT,
-  контрактов (`:151-155`): строка колонок `SELECT id, graph_id, key, label, description, kind, slots,
-  classes, sets, facts, module, rank` дополняется `, exclusive_classes`, а маппер (`:231-250`) — строкой
+  контрактов (`:152-156`): строка колонок `SELECT id, graph_id, key, label, description, kind, slots,
+  classes, sets, facts, module, rank` дополняется `, exclusive_classes`, а маппер (`:232-251`) — строкой
 ```ts
         exclusive_classes: r.exclusive_classes,   // после `facts: r.facts`
 ```
@@ -3714,7 +3740,7 @@ CREATE UNIQUE INDEX "action_definitions_custom_key" ON "action_definitions" ("gr
 - [ ] **Шаг 5: `bun run test:rls` — pgTAP не трогается.** Группы 12–16 (`:431-610`) перечисляют колонки
   ЯВНО в INSERT'ах, и ни `rules`, ни `exclusive_classes` среди них нет — NOT NULL DEFAULT покрывает обе
   без правок (группа 14, `contract_definitions` `:508-543`, пишет семь колонок), состав таблиц не менялся,
-  значит `plan(143)` (`:6`) остаётся. Прогон `bun run test:rls` → PASS; число в `plan(...)` не трогать
+  значит `plan(160)` (`:6`) остаётся. Прогон `bun run test:rls` → PASS; число в `plan(...)` не трогать
   (сдвиг здесь означал бы, что миграция всё-таки завела таблицу).
   Коммит: `git commit -- apps/server/src/db/schema.ts apps/server/src/db/migrations apps/server/src/registry/load.ts apps/server/src/registry/load.test.ts -m "feat(server): миграция 0022 — rules ×3, exclusive_classes контракта и форма строки действия; правила доезжают до снимка (Р-18, Р-К-92)"`
 
@@ -3831,7 +3857,7 @@ test('сид кладёт exclusive_classes контрактов — значе�
   Числа `SNAPSHOT` (`:56-59`: 77/11/13/6) НЕ меняются — строк реестров столько же, правила внутри строк.
 
 - [ ] **Шаг 9: зелёный — четыре INSERT и `readSystemDefinitions`.** `db/seed-registries.ts`: в каждый из
-  трёх upsert'ов носителей (`:104`, `:121`, `:137`) — колонка в списке, `${sql.json(j(p.rules))}` в VALUES
+  трёх upsert'ов носителей (`:105`, `:122`, `:138`) — колонка в списке, `${sql.json(j(p.rules))}` в VALUES
   и `rules = EXCLUDED.rules` в `DO UPDATE SET`. В upsert контрактов (`:157-178`) — `exclusive_classes` в
   списке колонок, `${c.exclusive_classes}` в VALUES (плоский boolean, не `sql.json`: колонка `boolean`, а
   не jsonb) и `exclusive_classes = EXCLUDED.exclusive_classes` в `DO UPDATE SET`. Правило списка одно на
@@ -3848,15 +3874,15 @@ cd apps/server && bun test test/seed-registries.test.ts src/db/registry-drift.te
 ```
   → PASS. Коммит: `git commit -- apps/server/src/db/seed-registries.ts apps/server/test/seed-registries.test.ts -m "feat(server): сид пишет rules трёх реестров и exclusive_classes контрактов; обе колонки — в стороне «до» слияния"`
 
-- [ ] **Шаг 9а: хелпер сева аспектов пишет `rules` всегда (Р-К-77).** `apps/server/test/helpers.ts`, `seedCustomAspect` (INSERT `:183-203`): 0d
+- [ ] **Шаг 9а: хелпер сева аспектов пишет `rules` всегда (Р-К-77).** `apps/server/test/helpers.ts`, `seedCustomAspect` (INSERT `:335-355`): 0d
   завёл две формы INSERT — с колонкой `rules` только при заданном `spec.rules` (колонки до 0022 не было). Теперь колонка есть: оставить ОДНУ
   форму с `rules` всегда (`sql.json(spec.rules ?? [])`), вторую снять; иначе повторный сев того же аспекта не чистит прежние правила.
   Прогон: `cd apps/server && bun test test/test-seed.test.ts test/gate-b2.test.ts` → PASS (гейт по-прежнему красен ровно в четырёх
   помеченных сценариях). Коммит: `test(helpers): seedCustomAspect пишет rules безусловно — колонка есть с 0022 (Р-К-77)`.
 
 - [ ] **Шаг 10: `registry.effective` и экспорт — правила едут сами.** Правок кода не требуют, и это
-  утверждение, а не надежда: ручка отдаёт `byRank(reg.aspects)` целиком (`routers/registry.ts:212-224`),
-  а `ownRows` экспорта (`export.ts:69-75`) — строки снимка как есть, поэтому новое поле схемы доезжает до
+  утверждение, а не надежда: ручка отдаёт `byRank(reg.aspects)` целиком (`routers/registry.ts:210-222`),
+  а `ownRows` экспорта (`export.ts:74-80`) — строки снимка как есть, поэтому новое поле схемы доезжает до
   клиента и в дамп тем же путём, что `module` в Б-1. Проверяется явно — в `routers/registry.test.ts`, в
   describe «registry.effective», одной строкой к существующему тесту счётчиков:
 ```ts
@@ -3865,13 +3891,13 @@ cd apps/server && bun test test/seed-registries.test.ts src/db/registry-drift.te
     // Тем же путём едет флаг контракта: клиенту он понадобится для записи классом (§1.16, срез страниц).
     expect(reg.contracts.every((c) => typeof c.exclusive_classes === 'boolean')).toBe(true);
 ```
-  `export.test.ts` правок не требует: `propertyDefinitionSchema.parse(row)).toEqual(row)` (`:143-150`)
+  `export.test.ts` правок не требует: `propertyDefinitionSchema.parse(row)).toEqual(row)` (`:144-151`)
   остаётся зелёным — у строки из снимка `rules` уже `[]`, и `.parse` идемпотентен. Прогон
   `cd apps/server && bun test src/routers/registry.test.ts src/export.test.ts` → PASS.
 
-- [ ] **Шаг 11: остаток 54 — вторичный `ORDER BY id` у четырёх словарей.** `registry/load.ts:136,142,148,153`
-  — `ORDER BY graph_id NULLS FIRST` → `ORDER BY graph_id NULLS FIRST, id` (у подписок `:158` он уже есть).
-  Комментарий (`:159-161`) переписать: оговорка «остальные словари — Deferred 11-m-load-order» снимается,
+- [ ] **Шаг 11: остаток 54 — вторичный `ORDER BY id` у четырёх словарей.** `registry/load.ts:137,143,149,154`
+  — `ORDER BY graph_id NULLS FIRST` → `ORDER BY graph_id NULLS FIRST, id` (у подписок `:159` он уже есть).
+  Комментарий (`:160-162`) переписать: оговорка «остальные словари — Deferred 11-m-load-order» снимается,
   остаётся довод — без вторичного ключа порядок словаря повторял физический порядок строк и менялся после
   пересева/UPDATE (пин `load.test.ts` краснел в полном прогоне и был зелен поодиночке). Перекрытие «своя
   строка бьёт встроенную» этим не трогается: `graph_id NULLS FIRST` остаётся первым ключом.
@@ -3884,10 +3910,10 @@ cd apps/server && bun test src/registry/load.test.ts src/registry/cache.test.ts
   ПЕРВЫМ после свежего `db:prepare` (Ф-Б1-14: доля корпуса в `entities` меняет вердикт планировщика).
   **Если зелен** — остаток 87 не задет 0022, ничего не правится, в отчёт идёт строка «прогнан, зелен,
   доля N %». **Если красен** — пин `expectVerdict(..., 'chosen=false usable=false admin=true')`
-  (`volume.test.ts:857-864`, литерал `:863`) переводится в ИНВАРИАНТ по образцу Ф-Б1-48а: замер на восьми долях
-  (`test:perf` до и после `test:perf:volume`), в тесте остаётся `expectRlsNeutral` (`:451-455`) плюс
+  (`volume.test.ts:861-868`, литерал `:867`) переводится в ИНВАРИАНТ по образцу Ф-Б1-48а: замер на восьми долях
+  (`test:perf` до и после `test:perf:volume`), в тесте остаётся `expectRlsNeutral` (`:453-457`) плюс
   печать измеренной доли, а трёхфлаговый пин уезжает в докблок как «снято тогда-то при доле N %».
-  Вердикт `rel_uniq` (`:866-873`) при этом не трогается — он `chosen=true` на всех долях. Решение и числа —
+  Вердикт `rel_uniq` (`:870-877`) при этом не трогается — он `chosen=true` на всех долях. Решение и числа —
   в отчёт задачи и в `facts.md` (Ф-Б2-…).
 
 - [ ] **Шаг 13: полный прогон и закрытие.** Последовательно — серверные сьюты делят одну локальную БД:
@@ -3936,10 +3962,10 @@ bun run test:rls
 `:597-629`, `resolveBinding` `:550-584`, `variantsOf` `:178-184`) и `bindings.test.ts`;
 `apps/server/src/expr/eval.ts` (`ExprEvalScope` `:35-73`, ветки `ev` `:195-219`, `hasValue` `:435-445`,
 `calendarHead` `:486-488`, `compare` `:282-309`, `applyOp 'in'` `:361-368`) и `eval.test.ts`;
-`apps/server/src/executor/executor.ts` (шесть врезок: `prepareEntityCreate :1701-1706` и `:1767`,
-`prepareEntityUpdate :2002-2022` и `:2047`, `prepareAttach :2308-2310` и `:2337`; подъём
-`monotonicUpdatedAt` `:2089`, `:2368` выше T-правил); `apps/server/src/subscriptions/budget.ts`
-(`runLedgers :1115-1134`, `LedgerArgs :111-114`, два конструктора области `:833-844`, `:1267-1275`).
+`apps/server/src/executor/executor.ts` (шесть врезок: `prepareEntityCreate :1700-1705` и `:1766`,
+`prepareEntityUpdate :2001-2021` и `:2046`, `prepareAttach :2307-2309` и `:2336`; подъём
+`monotonicUpdatedAt` `:2088`, `:2367` выше T-правил); `apps/server/src/subscriptions/budget.ts`
+(`runLedgers :1116-1135`, `LedgerArgs :112-115`, два конструктора области `:834-845`, `:1268-1276`).
 
 *Test (регрессия):* `subscriptions/budget.test.ts`, `executor/executor.test.ts`,
 `executor/batch.test.ts`, `packages/shared/src/registry/row.test.ts`.
@@ -3972,11 +3998,11 @@ export function effectiveRuleScope(rule: RuleDefinition, carrier: RuleCarrier): 
 // задача 0d — helpers.ts: CustomAspectSpec += rules?: RuleDefinitionInput[]; seedCustomAspect(graphId, spec)
 // HEAD, дословно: props.ts:30 EntityState {props; aspects}; :40 PropsPatch; :87 applyPropsPatch;
 //   :234 touchedProperties(patch): Set<string>; :413 carrierAspects(reg, propertyId): string[];
-//   executor.ts:199 ExecCtx; :356-378 class BatchState; :1642 monotonicUpdatedAt(now, prev): Date;
+//   executor.ts:200 ExecCtx; :357-379 class BatchState; :1641 monotonicUpdatedAt(now, prev): Date;
 //   relations.ts:30 RelationKey {sourceId; targetId; role}; :45 VirtualGraphEffects {created; deleted; titleOf?};
-//   binding.ts:43 defaultCurrencyOf(tx, graphId): Promise<string> (фолбэк 'RUB' :40);
+//   binding.ts:44 defaultCurrencyOf(tx, graphId): Promise<string> (фолбэк 'RUB' :41);
 //   budget.ts:128 propertyDefaultsOf(reg): ReadonlyMap<string, ExprScalar>; :676 propsForEval (образец);
-//   context.ts:41 ownerTimeZone(tx, graphId); :58 todayInTimeZone(tz, now?);
+//   context.ts:42 ownerTimeZone(tx, graphId); :59 todayInTimeZone(tz, now?);
 //   compile.ts:452-454 localDateSql (эталон «момент → день владельца» в SQL); :456 compileExprPredicate;
 //   test/fixtures/gate-aspects.ts: GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS, GATE_FIN_KEY, GATE_PLAIN_KEY
 ```
@@ -3988,7 +4014,7 @@ export function entityClassOf(idx: BindingIndex,
   entity: { aspects: readonly string[]; props: Record<string, unknown> },
   contract: string, aspectRank: (aspectId: string) => number): string | null;
 // apps/server/src/expr/eval.ts — поля области (все необязательные) и факт ребра
-export interface ExprEvalScope { /* …HEAD… */ timeZone?: string; self?: string; owner?: string;
+export interface ExprEvalScope { /* …HEAD… */ timeZone?: string; self?: string; owner?: GraphId;
   aspects?: readonly string[];
   reg?: { aspects: ReadonlyMap<string, AspectDefinition>; contracts: ReadonlyMap<string, ContractDefinition> };
   relations?: readonly RelationFact[];
@@ -4001,7 +4027,7 @@ export function present(raw: unknown): boolean;
 export interface EntityScopeInput { reg: RegistrySnapshot; state: EntityState;
   core: { id: string; title: string | null; archived: boolean; createdAt: Date; updatedAt: Date };
   today: string; timeZone: string; relations: readonly RelationFact[];
-  params?: Record<string, ExprScalar>; owner: string;
+  params?: Record<string, ExprScalar>; owner: GraphId;
   sensitivity?: readonly string[]; touched?: readonly string[];
   aggVia?: ReadonlyMap<string, Readonly<Record<string, ExprScalar>>>;
   deref?: (id: string) => Record<string, unknown> | null }
@@ -4011,7 +4037,7 @@ export async function relationFactsOf(tx: Tx, entityId: string, roles: ReadonlyS
   batch?: VirtualGraphEffects & { declaredDerivedFromTargets?: ReadonlySet<string> }): Promise<RelationFact[]>;
 // apps/server/src/rules/engine.ts
 export interface RuleWriteInput {
-  ctx: { tx: Tx; registry: RegistrySnapshot; graphId: string; clock: () => Date;
+  ctx: { tx: Tx; registry: RegistrySnapshot; graphId: GraphId; clock: () => Date;
          mechanism: MutationMechanism; internalUndo: boolean };
   entityId: string; before: EntityState; state: EntityState; patch: PropsPatch;
   core: EntityScopeInput['core']; batch?: BatchState }
@@ -4259,19 +4285,19 @@ beforeAll(async () => {            // одна сущность на момен�
   await truncateAll();
   for (const c of CASES) {
     if (ids.has(c.at)) continue;
-    const r = await execute(db, { identity: { actor: accountOf(owner), graph: owner }, actorKind: 'owner', source: 'ui',
+    const r = await execute(db, { identity: personal(owner), actorKind: 'owner', source: 'ui',
       operations: [{ tool: 'entity_create', input: { title: 'Событие у границы суток', tags: [],
         aspects: ['orbis/schedule'], props: { 'orbis/start_at': c.at } } }] });
     if (!r.ok) throw new Error(`фикстура паритета: ${r.error.code}`);
     ids.set(c.at, (r.results[0] as WireEntity).id);
   }
-  reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
+  reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
 });
 for (const c of CASES) {
   test(`${c.tz} ${c.at} против ${c.today} → ${c.expected}`, async () => {
     const cctx: CompileCtx = { graphId: owner, today: c.today, timeZone: c.tz, reg, thisEntityId: null };
     const predicate = compileExprPredicate(EXPR, { cctx, row: sql.raw('e') });
-    const rows = (await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => tx.execute(
+    const rows = (await withIdentity(db, personal(owner), (tx) => tx.execute(
       sql`SELECT e.id FROM entities e WHERE e.id = ${ids.get(c.at)}::uuid AND ${predicate}`,
     ))) as unknown as Array<{ id: string }>;
     const ts = evalExpr(EXPR, { params: {}, aggs: {}, phase: null, today: c.today, timeZone: c.tz,
@@ -4394,7 +4420,7 @@ export async function relationFactsOf(tx, entityId, roles, batch?): Promise<Rela
       live.push({ role: v.role, sourceId: v.sourceId, alive: true });
     }
   }
-  // Узкий пре-пасс пачки (`declaredDerivedFromTargets`, `executor.ts:361-365`): связи, объявленные
+  // Узкий пре-пасс пачки (`declaredDerivedFromTargets`, `executor.ts:362-366`): связи, объявленные
   // ЛЮБОЙ операцией, в том числе ещё не подготовленной, — пачка атомарна, и правило легитимируется
   // связью независимо от её позиции. Задача 4 заменит узкий набор общим списком объявленных.
   if (batch?.declaredDerivedFromTargets?.has(entityId) === true && roles.has(ROLE_INSTANCE_OF)
@@ -4474,7 +4500,7 @@ const CLOCK_BY_TX = new WeakMap<object, Promise<{ today: string; timeZone: strin
 - [ ] **Шаг 13: зелёный — T-правила.** В том же файле:
 ```ts
 /** T-правила (§Б4-3): `on_enter_class` и `default`. Под внутренним undo НЕ исполняются вовсе — как
- *  `applyTaskCompletion` сегодня (`executor.ts:2001`): откат восстанавливает зафиксированное
+ *  `applyTaskCompletion` сегодня (`executor.ts:2000`): откат восстанавливает зафиксированное
  *  состояние, и «поправить» его значило бы разойтись с журналом (Р-И-2). */
 export async function applyTransitionRules(input: RuleWriteInput): Promise<void> {
   if (input.ctx.internalUndo) return;
@@ -4560,7 +4586,7 @@ function enteredBy(enter, state: EntityState, idx: BindingIndex, rank): boolean 
   доезжает — его отверг чекер задачи 1 (Р-К-24). Фикстура: правило
   `{template:'default', params:{property:'orbis/currency', value:{param:'default_currency'}}}` на
   `{ ...GATE_FIN_ASPECT, carries: ['orbis/currency'], rules: [...] }`: запись без валюты получает `RUB`
-  (`FALLBACK_CURRENCY` `binding.ts:40`), запись с валютой её сохраняет.
+  (`FALLBACK_CURRENCY` `binding.ts:41`), запись с валютой её сохраняет.
   Прогон: `bun test src/rules/engine.test.ts` → **PASS**.
   Коммит: `feat(rules): параметры движка читаются лениво — {param: default_currency} (Р-И-18)`.
 
@@ -4622,10 +4648,10 @@ prev) === now`), в тестах с поддельными часами она �
 *Modify:*
 - `packages/shared/src/registry/builtin-aspects.ts` — `rules: BUILTIN_RULES_BY_CARRIER[entry.id] ?? []` в `BUILTIN_ASPECT_DEFS` (`:476-488`).
 - `apps/server/src/executor/normalize.ts` — снос `applyTaskCompletion` (`:40-49`), `TASK_STATUS`/`COMPLETED_AT` (`:52-53`), `hasScheduleRecurrence` (`:126-130`), `financialRecurringNeedsDerivedFrom` (`:137-140`), `assertFinancialInvariant` (`:151-168`), констант `RECURRENCE`/`RECURRING`/`OCCURRED_ON` (`:55-57`).
-- `apps/server/src/executor/executor.ts` — снос `assertFinancial` (`:1604-1615`), `hasIncomingDerivedFrom` (`:1617-1634`), `collectDeclaredDerivedFrom` (`:749-762`), поля `BatchState.declaredDerivedFromTargets` (`:361-369`); шесть вызовов (`:1701-1703`, `:1767`, `:2002-2004`, `:2047`, `:2308`, `:2337`) и импорты (`:145-152`).
+- `apps/server/src/executor/executor.ts` — снос `assertFinancial` (`:1603-1614`), `hasIncomingDerivedFrom` (`:1616-1633`), `collectDeclaredDerivedFrom` (`:748-761`), поля `BatchState.declaredDerivedFromTargets` (`:362-370`); шесть вызовов (`:1700-1702`, `:1766`, `:2001-2003`, `:2046`, `:2307`, `:2336`) и импорты (`:146-153`).
 - `apps/server/src/rules/scope.ts` — `relationFactsOf` читает объявленные пачкой связи из `created` (задача 3, шаг 11).
 - `apps/server/src/executor/props.ts:117-127` — докблок `stateDelta` («`applyTaskCompletion` дописывает…» — функции больше нет).
-- Близнецы: `apps/server/src/executor/executor.test.ts:349, 623`, `apps/server/src/agent-loop/verbs.test.ts:970`, `apps/server/src/executor/batch.test.ts:362-405`, `apps/server/src/executor/relations.test.ts:620-637`, `apps/server/src/budget/binding.test.ts`, `apps/server/src/executor/ancestors.test.ts`.
+- Близнецы: `apps/server/src/executor/executor.test.ts:351, 623`, `apps/server/src/agent-loop/verbs.test.ts:978`, `apps/server/src/executor/batch.test.ts:363-406`, `apps/server/src/executor/relations.test.ts:621-638`, `apps/server/src/budget/binding.test.ts`, `apps/server/src/executor/ancestors.test.ts`.
 
 *НЕ трогать:* `apps/server/test/gate-b2.test.ts` (пометки снимает задача 5 — Р-К-9/РП-7), `normalize.ts` в части `dropStaleCarryover`/`ENVELOPE_IDENTITY` (задача 12), `assertAssignment`/`assertRunSubject`/`ruleViolations` (задача 14), `validator-verdicts.json`, `apps/web` (Р-23).
 
@@ -4648,8 +4674,8 @@ export type RuleDefinitionInput = z.input<typeof ruleDefinitionSchema>;
 // executor/normalize.ts:40 applyTaskCompletion(prev, next, now): void
 // executor/normalize.ts:151 assertFinancialInvariant(state, hasIncomingDerivedFrom = false): void
 // executor/normalize.ts:137 financialRecurringNeedsDerivedFrom(state): boolean
-// executor/executor.ts:1604 assertFinancial(ctx, entityId, state, batch?): Promise<void>
-// executor/executor.ts:750 collectDeclaredDerivedFrom(ops): Set<string>
+// executor/executor.ts:1603 assertFinancial(ctx, entityId, state, batch?): Promise<void>
+// executor/executor.ts:749 collectDeclaredDerivedFrom(ops): Set<string>
 // executor/relations.ts:42 VirtualRelationCreate = RelationKey {sourceId; targetId; role}
 // registry/validator-golden.test.ts:49-77 EXPECTED_DIFFS, :164-200 прогон — ФОРМА корпуса
 // packages/shared/src/registry/builtin-aspects.ts:476-488 BUILTIN_ASPECT_DEFS (сборка строк)
@@ -4774,7 +4800,7 @@ describe('golden «сущность → вердикт» доменных инв
  *
  * Значения — форма ВХОДА (`RuleDefinitionInput`): `enabled` и `undo` схема доводит умолчаниями,
  * но `undo` у C-правил написан ЯВНО, потому что отнесение к откату — решение по ЭКЗЕМПЛЯРУ
- * (Р-И-2), а не умолчание: сегодня `assertFinancial` идёт и под откатом (`executor.ts:2047`),
+ * (Р-И-2), а не умолчание: сегодня `assertFinancial` идёт и под откатом (`executor.ts:2046`),
  * в отличие от соседей по стадии 4.
  */
 export const RULE_FINANCIAL_REQUIRES_OCCURRED_ON: RuleDefinitionInput = {
@@ -4840,9 +4866,9 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   меняются. Откат правок, `bun run db:prepare`. Исход — в отчёт, раздел «Пины и мутации». Коммита нет.
 
 - [ ] **Шаг 6: снос `assertFinancial` и `hasIncomingDerivedFrom`.** Удалить три вызова
-  (`executor.ts:1767`, `:2047`, `:2337`) и обе функции (`:1604-1634`); `assertConstraintRules` остаётся
+  (`executor.ts:1766`, `:2046`, `:2336`) и обе функции (`:1603-1633`); `assertConstraintRules` остаётся
   на всех трёх путях одна. Импорты `assertFinancialInvariant`/`financialRecurringNeedsDerivedFrom`
-  (`:146`, `:148`) и `ROLE_INSTANCE_OF`, если он остался без читателей в файле, снять.
+  (`:147`, `:149`) и `ROLE_INSTANCE_OF`, если он остался без читателей в файле, снять.
   Прогон: `cd apps/server && bun test src/registry/invariants-golden.test.ts src/executor/executor.test.ts
   src/executor/relations.test.ts` → **PASS**: записи 1, 3, 5 по-прежнему `reject` с теми же
   `invariant`, записи 2, 4, 6, 7 — `ok`. Красная запись 6 или 7 значит, что `relationFactsOf` не увидел
@@ -4869,10 +4895,10 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   специального `if (aspectId === 'orbis/task')` больше нет вовсе: условие входа в класс у движка
   одно на все три пути (Р-И-14).
   Близнецы (у каждого — причина, а не «поправил число»):
-  - `executor.test.ts:349` — `expect(task['orbis/completed_at']).toBe(eDone.updatedAt)`; комментарий:
+  - `executor.test.ts:351` — `expect(task['orbis/completed_at']).toBe(eDone.updatedAt)`; комментарий:
     «штамп записи, а не `clock()`: у правки в тот же тик `monotonicUpdatedAt` даёт `T0+1ms` (§5.2)»;
-  - `executor.test.ts:623` — то же на attach-пути (`e1.updatedAt`);
-  - `verbs.test.ts:970` — `expect(task['orbis/completed_at']).toBe((await rowOf(ticketId)).updatedAt)`:
+  - `executor.test.ts:625` — то же на attach-пути (`e1.updatedAt`);
+  - `verbs.test.ts:978` — `expect(task['orbis/completed_at']).toBe((await rowOf(ticketId)).updatedAt)`:
     тикет правился часами реального времени, а глагол идёт с поддельным `T2`, и штамп строки берёт
     максимум (§5.2) — сравнение с `iso(T2)` было верно только про `clock()`;
   - корпус: у записей 9 и 11 `writes.completed_at` становится `$updatedAt`, `expectedDiff:
@@ -4885,8 +4911,11 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
 - [ ] **Шаг 9: общий пре-пасс пачки вместо узкого набора.** В `executor.ts`: `collectDeclaredDerivedFrom`
   → `collectDeclaredRelations(ops): VirtualRelationCreate[]` (тот же разбор `relationCreateInternalInput`,
   но без фильтра по роли), `BatchState.declaredDerivedFromTargets` → `readonly declaredRelations`,
-  конструктор и вызов `:663` — по нему; врезки движка передают
-  `batch === undefined ? undefined : { ...batch.graph(), created: batch.declaredRelations }`.
+  конструктор и вызов `:664` — по нему; врезки движка передают
+  `batch === undefined ? undefined : withCreated(batch.graph(), batch.declaredRelations)`, где рядом приватный помощник
+  `const withCreated = (effects: VirtualGraphEffects, created: readonly VirtualRelationCreate[]) => ({ ...effects, created });` —
+  спред `{ ...batch.graph(), … }` дословно роняет CI-гейт `identity-pair` (альтернатива 2 его регекса — спред с словом `graph`,
+  `scripts/check-legacy-form.ts`), а имя `effects` под регекс не попадает.
   Докблок поля переписывается: «связи, объявленные ЛЮБОЙ операцией пачки: пачка атомарна, и правило
   легитимируется связью независимо от позиции — `batch.createdRelations` наполняется по мере
   подготовки и для операции №1 был бы пуст». В `rules/scope.ts` снять ветку
@@ -4943,9 +4972,9 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
 *Consumes:*
 ```ts
 // apps/server/test/gate-b2.test.ts (0e) — четыре сценария вехи I
-// apps/server/test/gate-c8-18.test.ts:53-68 repoRoot()/gitGrep(pattern, pathspec) — образец и
+// apps/server/test/gate-c8-18.test.ts:63-78 repoRoot()/gitGrep(pattern, pathspec) — образец и
 //   единственный способ звать git из сьюта (коды 0/1 — ответ, >1 — ошибка, а не «чисто»)
-// apps/server/test/fixtures/gate-aspects.ts:25-49 GATE_GREP_PATHSPEC, GATE_GREP_ALLOWED — образец
+// apps/server/test/fixtures/gate-aspects.ts:27-51 GATE_GREP_PATHSPEC, GATE_GREP_ALLOWED — образец
 //   «пути и разрешённые файлы одним источником для теста, команды и отчёта»
 // scripts/check-legacy-form.ts:67-76 SEARCH_PATHSPEC; :109 COMMENT_ONLY_LINE (правило «строка,
 //   которая ЦЕЛИКОМ комментарий, — объяснение снятого, а не использование формы»)
@@ -5116,23 +5145,23 @@ git log --oneline -S'declaredDerivedFromTargets'     <sha-0e>..HEAD -- apps pack
   `apps/server/src/registry/actions.ts`; `apps/server/src/registry/actions.test.ts`;
   `apps/server/test/fixtures/action-seed.ts`.
 - **Modify:**
-  - `scripts/ops.ts:598, :603` — help прод-операций: «действия — только по id» и «upsert пяти реестров» → «шести реестров, действия по `key`» (Р-К-83; задача 18 проверяет грепом).
+  - `scripts/ops.ts:669, :674` — help прод-операций: «действия — только по id» и «upsert пяти реестров» → «шести реестров, действия по `key`» (Р-К-83; задача 18 проверяет грепом).
   - `packages/shared/src/registry/tool-schema.ts` — `actionToolName` рядом с `attachToolName` (`:33`).
   - `packages/shared/src/registry/index.ts` — реэкспорт `action-type`/`builtin-actions` (баррель пакета).
-  - `apps/server/src/registry/load.ts` — `RegistryDictionaries` (`:85-91`), шестой SELECT и маппер
-    (`loadRegistryRows` `:127-264`).
+  - `apps/server/src/registry/load.ts` — `RegistryDictionaries` (`:86-92`), шестой SELECT и маппер
+    (`loadRegistryRows` `:128-265`).
   - `apps/server/src/db/registry-drift.ts` — `REGISTRY_DRIFT_QUERIES.actions` (`:78`, сейчас `SELECT id`).
   - `packages/shared/src/aspect-registry.ts` — `expectedActions()` вместо `EMPTY_EXPECTATION` (`:218-225`) и
     `EXPECTATIONS.actions` (`:233`): пустое ожидание объявляет посеянные действия `extra`, то есть `/health` и
     `ops.ts check` краснеют на ЗДОРОВОМ проде, а испорченные `steps` не сверяются вовсе.
-  - `apps/server/src/db/seed-registries.ts` — `SeedRegistriesResult` (`:69-84`), цикл
-    `BUILTIN_ACTION_DEFS` в `seedRegistries` (после цикла подписок `:178-187`), `seedRegistriesReport` (`:452`).
-  - `apps/server/src/registry/deltas.ts` — `actionDeltaSchema` рядом с `propertyDeltaSchema` (`:135-141`),
-    `RegistryDelta` (`:170`), `DELTA_SCHEMA.action` (`:496-503`), ветка `action` в `applyDeltas` (`:265-350`).
+  - `apps/server/src/db/seed-registries.ts` — `SeedRegistriesResult` (`:70-85`), цикл
+    `BUILTIN_ACTION_DEFS` в `seedRegistries` (после цикла подписок `:179-188`), `seedRegistriesReport` (`:453`).
+  - `apps/server/src/registry/deltas.ts` — `actionDeltaSchema` рядом с `propertyDeltaSchema` (`:136-142`),
+    `RegistryDelta` (`:171`), `DELTA_SCHEMA.action` (`:497-504`), ветка `action` в `applyDeltas` (`:266-351`).
 - **Test:** `apps/server/test/seed-registries.test.ts` (`:78-86` — пин «действия — БЕЗ system-строк» →
   «ровно `BUILTIN_ACTION_DEFS`»); `packages/shared/src/aspect-registry.test.ts` (`seeded()` `:26-92`, пин
-  «свежий пересев ПЯТИ реестров» `:119`); `apps/server/src/db/registry-drift.test.ts` (`:80-92` состав,
-  `:188-209` «действия пусты»); `apps/server/test/fixtures/refusals.ts` (строки 3/15/18 — снять `red`).
+  «свежий пересев ПЯТИ реестров» `:119`); `apps/server/src/db/registry-drift.test.ts` (`:82-94` состав,
+  `:190-211` «действия пусты»); `apps/server/test/fixtures/refusals.ts` (строки 3/15/18 — снять `red`).
 - **НЕ трогать:** `apps/server/src/db/migrations/*` (0022 — задача 2; эта задача пишет в уже существующие
   колонки); `apps/server/src/tools/*` (задача 7); `apps/server/src/policy/*` (7, 10, 15);
   `apps/server/test/golden/tool-registry.json` (44 → 46 — задача 7); `apps/web` (Р-23);
@@ -5140,7 +5169,7 @@ git log --oneline -S'declaredDerivedFromTargets'     <sha-0e>..HEAD -- apps pack
 
 **Интерфейсы:**
 
-*Consumes* (дословно с HEAD `36060b2`):
+*Consumes* (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93)):
 
 ```ts
 // packages/shared/src/registry/types.ts:20-34
@@ -5169,11 +5198,11 @@ export function assertExprChecked(expr: unknown, scope: ExprScope): ExprType;
 export interface ExprScope { reg: {properties; contracts}; contract?; params?; aggs?; phases?; allowSensitivity?; allowDeref? }
 // apps/server/src/policy/confirmation.ts:667
 export function grantsRoutineAutonomy(tool: string, input: unknown): boolean;
-// apps/server/src/registry/load.ts:85-97
+// apps/server/src/registry/load.ts:86-98
 export interface RegistryDictionaries { properties; aspects; roles; contracts; subscriptions }
 export interface RegistrySnapshot extends RegistryDictionaries { ownerVersion: number; systemVersion: number }
-// apps/server/src/registry/cache.ts:114
-export async function effectiveRegistry(tx: Tx, graphId: string): Promise<RegistrySnapshot>;
+// apps/server/src/registry/cache.ts:119
+export async function effectiveRegistry(tx: Tx, graphId: GraphId): Promise<RegistrySnapshot>;
 // packages/shared/src/aspect-registry.ts
 export const REGISTRY_KINDS = ['properties','aspects','roles','contracts','subscriptions','actions'] as const; // :42-49 — род уже есть
 export function canonicalJson(value: unknown): string;                                      // :25
@@ -5426,7 +5455,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
 
   /**
    * План → факт (§Б6-5, Финансы). Пречеки сегодняшнего `confirmPurchase`
-   * (`budget/plan-to-fact.ts:77-96`) переписаны предикатом E целиком: принадлежность
+   * (`budget/plan-to-fact.ts:78-97`) переписаны предикатом E целиком: принадлежность
    * аспекту выражается КЛАССОМ контракта (В-1 §4-В), проба порождения — `has_relation`
    * (Е-1, `expr/compile.ts:499` — бэкенд есть).
    */
@@ -5517,7 +5546,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
   ```ts
   import { afterAll, beforeAll, expect, test } from 'bun:test';
   import { BUILTIN_ACTION_DEFS } from '@orbis/shared';
-  import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+  import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
   import { withIdentity } from '../db/with-identity';
   import type { RegistrySnapshot } from './load';
   import { effectiveRegistry } from './cache';
@@ -5530,7 +5559,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
 
   beforeAll(async () => {
     await truncateAll();
-    reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
+    reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   });
   afterAll(async () => { await client.end(); });
 
@@ -5543,10 +5572,10 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
   Прогон: `cd apps/server && bun test src/registry/actions.test.ts` → **FAIL**: `Cannot find module './actions'`.
 
   **Почему валидатор зовётся в тесте, а не в сиде.** Прецедент один на реестр: `assertSubscription`
-  не зовётся в `db/seed-registries.ts` НИ РАЗУ — только на записи владельца (`registry/ops.ts:2079, :2209,
-  :2277`), а системные декларации сторожит тест (`builtin-subscriptions.test.ts`). Причина техническая и
+  не зовётся в `db/seed-registries.ts` НИ РАЗУ — только на записи владельца (`registry/ops.ts:2080, :2210,
+  :2278`), а системные декларации сторожит тест (`builtin-subscriptions.test.ts`). Причина техническая и
   названа вслух: сид работает сырым `postgres.js`-подключением и снимка реестра (`RegistrySnapshot`) не
-  имеет — `SystemDefinitions` (`deltas.ts:221-226`) ролей не содержит, а `assertAction` читает привязки.
+  имеет — `SystemDefinitions` (`deltas.ts:222-227`) ролей не содержит, а `assertAction` читает привязки.
   Этот тест и есть гейт сида: он краснеет до `db:prepare` и в CI.
 
 - [ ] **Шаг 8: зелёный — ступени 1–5 `assertAction`.** `apps/server/src/registry/actions.ts` (новый):
@@ -5581,7 +5610,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
   // Типы языка E — из его подпути, как у `subscriptions/registry.ts:20-26` (баррель реестра
   // их не реэкспортирует, и второй адрес для одного типа заводить незачем).
   import type { ExprNode, ExprScope, ExprType } from '@orbis/shared/expr';
-  // Q map-действия: тип дерева и узла фильтра — подпуть запросов (`tools/dispatch.ts:34-41`).
+  // Q map-действия: тип дерева и узла фильтра — подпуть запросов (`tools/dispatch.ts:35-42`).
   import type { QueryAst, QueryFilterNode } from '@orbis/shared/query';
   import { z } from 'zod';
   import { ExecError } from '../errors';
@@ -5926,7 +5955,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
   /**
    * ЕСТЬ ЛИ У ШАГА INVERSE (Р-10, §Б6-4). Таблица СТАТИЧЕСКАЯ, потому что до исполнения
    * прочитать обратимость неоткуда: `registryPlan` отдаёт `inverse: []`, а наполняется он
-   * ВНУТРИ `apply` и УСЛОВНО (`executor.ts:3496-3501` — только `if (before !== undefined)`).
+   * ВНУТРИ `apply` и УСЛОВНО (`executor.ts:3501-3506` — только `if (before !== undefined)`).
    * Отсюда правило худшего случая: условное — необратимо.
    */
   export function stepReversible(tool: string): boolean {
@@ -5971,7 +6000,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
    * Подпись, описание, `rank` и `offered_by` — нет: правка подписи чужого действия это
    * ДЕЛЬТА (§С3), и она не имеет права протухлять уже поставленную единицу.
    *
-   * Хеш считается ЗДЕСЬ, а не `unitHash`-ом (`policy/pending.ts:235`): импорт из политики в
+   * Хеш считается ЗДЕСЬ, а не `unitHash`-ом (`policy/pending.ts:242`): импорт из политики в
    * реестр замкнул бы дугу «реестр → политика → реестр». Канон один и тот же — `canonicalJson`
    * из shared (`aspect-registry.ts:13`), — поэтому два хеша одной формы совпадают по построению.
    */
@@ -6057,7 +6086,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
   приходят в `extra` (`actions: EMPTY_EXPECTATION` `:233`), `steps` не сверяется вовсе.
 
 - [ ] **Шаг 15: зелёный — SELECT, маппер, дрейф.** `apps/server/src/registry/load.ts`:
-  - `RegistryDictionaries` (`:85-91`) += `actions: Map<string, ActionDefinition>;` с комментарием
+  - `RegistryDictionaries` (`:86-92`) += `actions: Map<string, ActionDefinition>;` с комментарием
     «§Б6-1: шестой род реестра — действия; колонки `over`/`rank`/`status` завела 0022».
   - в `loadRegistryRows` после SELECT подписок:
     ```ts
@@ -6069,7 +6098,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
       ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
     ```
     (`"over"` в кавычках — OVER оконных функций зарезервировано; тот же приём, что у `"symmetric"`
-    `:145`. Вторичный `, id` — по доводу подписок `:158-161`.)
+    `:146`. Вторичный `, id` — по доводу подписок `:159-162`.)
   - маппер рядом с подписками:
     ```ts
     const actions = new Map<string, ActionDefinition>();
@@ -6086,7 +6115,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
     }
     ```
     и `return { properties, aspects, roles, contracts, subscriptions, actions };`
-  - шапка `:129-130` — «Реестров пять» → «Реестров шесть».
+  - шапка `:130-131` — «Реестров пять» → «Реестров шесть».
   - `apps/server/src/db/registry-drift.ts:78` — вместо `SELECT id`:
     ```ts
     actions: `SELECT id, key, label, description, params, precondition, "over", steps,
@@ -6140,7 +6169,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
   Прогон: **всё ещё FAIL** — строк в БД нет (сида не было). Это ожидаемо: сид — следующий шаг.
 
 - [ ] **Шаг 16: зелёный — сид действий и пересев.** `apps/server/src/db/seed-registries.ts`:
-  - `SeedRegistriesResult` (`:69-84`): поле `contracts` докблок оставить, поле
+  - `SeedRegistriesResult` (`:70-85`): поле `contracts` докблок оставить, поле
     ```ts
     /** §Б6-5: встроенные действия модулей — строка реестра, а не код. */
     actions: number;
@@ -6218,10 +6247,10 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
   });
   ```
   Там же правятся два существующих ожидания «действий нет»:
-  - `:80-92` («засеянные реестры: расхождений нет») — тело не меняется: с `expectedActions()` посеянные
+  - `:82-94` («засеянные реестры: расхождений нет») — тело не меняется: с `expectedActions()` посеянные
     действия дают `empty` сами; правится только ничего не утверждающий комментарий, если он есть;
-  - `:188-209` — заголовок «…; действия пусты» → «…; лишнее действие — extra»: вставка `orbis/close`
-    (`:197-200`) и `expect(drift.actions.extra).toEqual(['orbis/close'])` (`:204`) остаются верны, а слово
+  - `:190-211` — заголовок «…; действия пусты» → «…; лишнее действие — extra»: вставка `orbis/close`
+    (`:199-202`) и `expect(drift.actions.extra).toEqual(['orbis/close'])` (`:206`) остаются верны, а слово
     «пусты» стало неправдой. В список колонок `INSERT` дописываются `key`-совместимые значения и `steps`:
     ```sql
     INSERT INTO action_definitions (id, graph_id, key, label, description, steps)
@@ -6231,13 +6260,13 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
     `steps` нужен не дрейфу, а СНИМКУ: с этой задачи `loadRegistryRows` разбирает
     `action_definitions` строгой схемой (`steps.min(1)`), и system-строка с `steps: NULL`, живущая
     внутри `try`, уронила бы любой `effectiveRegistry`, случившийся в том же окне. Колонка nullable
-    (`schema.ts:517`), поэтому прежний INSERT проходил — и тем громче упал бы снимок.
+    (`schema.ts:534`), поэтому прежний INSERT проходил — и тем громче упал бы снимок.
   Прогон: `cd apps/server && bun test test/seed-registries.test.ts src/db/registry-drift.test.ts src/db/reset-world.test.ts`
-  → **PASS** (`reset-world.test.ts:428` «чистый check» зеленеет тем же `expectedActions()`).
+  → **PASS** (`reset-world.test.ts:445` «чистый check» зеленеет тем же `expectedActions()`).
   Коммит: `feat(registry): шестой словарь снимка, дрейф действий по колонкам и сид двух действий (§Б6-1/§Б6-5)`
 
 - [ ] **Шаг 18: дельта подписи действия (§С3).** `apps/server/src/registry/deltas.ts`:
-  - рядом с `propertyDeltaSchema` (`:135-141`):
+  - рядом с `propertyDeltaSchema` (`:136-142`):
     ```ts
     /**
      * Дельта действия — ТОЛЬКО подпись и смысл (§Б6-5 дословно: «правка чужого действия —
@@ -6250,9 +6279,9 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
       .strict();
     export type ActionDelta = z.infer<typeof actionDeltaSchema>;
     ```
-  - `RegistryDelta` (`:170`) += `| ActionDelta` (форма совпадает с `PropertyDelta`, но союз
+  - `RegistryDelta` (`:171`) += `| ActionDelta` (форма совпадает с `PropertyDelta`, но союз
     перечисляет РОДА, а не формы — см. докблок `relationDeleteInput` о тождестве форм).
-  - `DELTA_SCHEMA` (`:496-503`): `action: actionDeltaSchema,`
+  - `DELTA_SCHEMA` (`:497-504`): `action: actionDeltaSchema,`
   - ветка в `applyDeltas` (после ветки `subscription`):
     ```ts
     if (row.targetKind === 'action') {
@@ -6364,7 +6393,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
 действие — `isBatch:false`, map — `isBatch:true, batchSize`; отсюда §С2-2 «шаг вне `allowed_tools` актора →
 отказ». Третья: закрыт риск О7 опровержения — тул с новым именем сегодня получает `reconfigures:'none'`
 хвостом `reconfiguresOf` (`confirmation.ts:465-471`) и проезжает в `execute` МОЛЧА; инвариант
-`registry.test.ts:814-822` действий не видит. Четвёртая: маска модулей получает 12-ю точку (Р-20), а
+`registry.test.ts:816-824` действий не видит. Четвёртая: маска модулей получает 12-ю точку (Р-20), а
 `batch_execute` — кап 100 (Р-11, В-9).
 
 Отложенная единица действия и «Устарело» — задача 8 (здесь `run_action` фона на небезопасном уровне
@@ -6381,28 +6410,28 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
     `factsFromOperations`; `heaviestReconfigures` (`:205-211`) → `export`.
   - `apps/server/src/policy/sensitivity.ts` — `TOOL_SENSITIVITY`, параметр `extra` у
     `sensitivityFactsOf` (`:31-41`).
-  - `apps/server/src/executor/types.ts` — `ExecuteRequest` (`:50-74`) += `action?`, `actionLabel?`;
-    `ActionRecord['type']` (`:219-246`) += `'action'`; поля `action_id?`, `module?` рядом с `run_id`
-    (`:253-262`).
-  - `apps/server/src/executor/executor.ts` — сборка `action` batch-пути (`:702-716`) и карточка (`:722`).
-  - `apps/server/src/tools/registry.ts` — `batchExecuteJsonSchema` (`:643-662`) `maxItems`;
-    `CORE_TOOLS` (`:1024`) += деф `run_action`; `actionToolDefs` рядом с `attachToolDef` (`:1237-1256`);
-    `buildToolDefs` (`:1272-1294`).
+  - `apps/server/src/executor/types.ts` — `ExecuteRequest` (`:52-81`) += `action?`, `actionLabel?`;
+    `ActionRecord['type']` (`:226-253`) += `'action'`; поля `action_id?`, `module?` рядом с `run_id`
+    (`:270-279`).
+  - `apps/server/src/executor/executor.ts` — сборка `action` batch-пути (`:703-717`) и карточка (`:723`).
+  - `apps/server/src/tools/registry.ts` — `batchExecuteJsonSchema` (`:644-663`) `maxItems`;
+    `CORE_TOOLS` (`:1025`) += деф `run_action`; `actionToolDefs` рядом с `attachToolDef` (`:1238-1257`);
+    `buildToolDefs` (`:1273-1295`).
   - `packages/shared/src/registry/modules.ts` — `moduleOfTool` (`:152-166`): ветка `action_*`.
   - `packages/shared/src/contracts/tools.ts` — `batchExecuteInput.operations` (`:314-323`) `.max(BATCH_CAP_DEFAULT)`.
   - `apps/server/src/tools/dispatch.ts` — переезд четырёх приватных в `dispatch-common.ts`
-    (`sink` `:135`, `errorResult` `:489-491`, `levelGate` `:551-566`, `parseEnvelope` `:3194-3207`) и
-    типов `ToolCallCtx` (`:137-177`), `ToolDispatchResult` (`:179-193`) с реэкспортом оттуда; ветка
-    `run_action`/`action_*` в `dispatchTool` (перед `runMutation`, по образцу `thread_post` `:343-369`);
-    помощники `actionKeyOfTool`/`stripSelf`; `assertBatchToolsKnown` (`:2945-2970`);
-    `DeferredRow` (`:1441`) → импорт типа.
-  - `apps/server/src/routines/propose.ts` — `:71` `type ExecOperation` → `export type ExecOperation`
-    (одно слово; Р-К-28); `TargetRow` (`:523-528`) → `export` и += `title`/`archived`/`createdAt`,
-    те же три поля в `select` `loadTargets` (`:567-572`) и в `rows.set` (`:581-585`) — сигнатура
+    (`sink` `:137`, `errorResult` `:492-494`, `levelGate` `:554-569`, `parseEnvelope` `:3200-3213`) и
+    типов `ToolCallCtx` (`:139-180`), `ToolDispatchResult` (`:182-196`) с реэкспортом оттуда; ветка
+    `run_action`/`action_*` в `dispatchTool` (перед `runMutation`, по образцу `thread_post` `:346-372`);
+    помощники `actionKeyOfTool`/`stripSelf`; `assertBatchToolsKnown` (`:2951-2976`);
+    `DeferredRow` (`:1445`) → импорт типа.
+  - `apps/server/src/routines/propose.ts` — `:72` `type ExecOperation` → `export type ExecOperation`
+    (одно слово; Р-К-28); `TargetRow` (`:524-529`) → `export` и += `title`/`archived`/`createdAt`,
+    те же три поля в `select` `loadTargets` (`:568-573`) и в `rows.set` (`:582-586`) — сигнатура
     `loadTargets` не меняется (Р-К-30).
-  - `apps/server/src/ai/escalation.ts` — проба `scanFinancialUpdates` (`:216-219`): третий тип.
-- **Test:** `apps/server/src/tools/registry.test.ts` (`:151` заголовок и состав, `:172-181` пины,
-  `:515-573` парность zod↔JSON Schema, `:813-822` инвариант писателей);
+  - `apps/server/src/ai/escalation.ts` — проба `scanFinancialUpdates` (`:218-221`): третий тип.
+- **Test:** `apps/server/src/tools/registry.test.ts` (`:153` заголовок и состав, `:174-183` пины,
+  `:517-575` парность zod↔JSON Schema, `:815-824` инвариант писателей);
   `apps/server/test/golden/tool-registry.json` (44 → 46);
   `apps/server/src/policy/confirmation.test.ts` (уровень по шагам);
   `apps/server/src/tools/dispatch.test.ts` (`MODULE_DISABLED`, `RUN_ACTION_IN_BATCH`, кап пачки).
@@ -6412,7 +6441,7 @@ export const ACTION_FIXTURES: readonly { name: string; decl: unknown; verdict: {
 
 **Интерфейсы:**
 
-*Consumes* (дословно с HEAD `36060b2`; помеченное — задачи 3 и 6):
+*Consumes* (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93); помеченное — задачи 3 и 6):
 
 ```ts
 // задача 6 — packages/shared/src/registry/{action-type,builtin-actions,tool-schema}.ts
@@ -6431,13 +6460,13 @@ export async function relationFactsOf(tx, entityId, roles, batch?): Promise<Rela
 export function relationRolesUsed(rules): Set<string>;                 // здесь не нужен: роли берём из precondition
 // apps/server/src/expr/eval.ts:166
 export function evalExpr(expr: ExprNode, scope: ExprEvalScope): ExprValue;
-// apps/server/src/query/compile-ast.ts:87-96, :848
-export interface CompileCtx { graphId: string; today: string; timeZone: string; reg: RegistrySnapshot; thisEntityId?: string | null }
+// apps/server/src/query/compile-ast.ts:90-99, :851
+export interface CompileCtx { graphId: GraphId; today: string; timeZone: string; reg: RegistrySnapshot; thisEntityId?: string | null }
 export function compileWhere(ast: QueryAst, ctx: CompileCtx): SQL;
-// apps/server/src/query/context.ts:41, :52
-export async function ownerTimeZone(tx: Tx, graphId: string): Promise<string>;
+// apps/server/src/query/context.ts:42, :53
+export async function ownerTimeZone(tx: Tx, graphId: GraphId): Promise<string>;
 export function todayInTimeZone(timeZone: string, now?: Date): string;
-// apps/server/src/routines/propose.ts:544, :637
+// apps/server/src/routines/propose.ts:545, :638
 export async function loadTargets(tx, graphId, parsed): Promise<{ reg: RegistrySnapshot; rows: Map<string, TargetRow> } | { error: ToolDispatchResult }>;
 export function buildUpdate(reg, index, input: Record<string, unknown>, current: TargetRow): { op: { tool: string; input: Record<string, unknown> } } | { error: ToolDispatchResult };
 // apps/server/src/policy/confirmation.ts
@@ -6447,17 +6476,17 @@ export function grantsRoutineAutonomy(tool: string, input: unknown): boolean;   
 // apps/server/src/policy/sensitivity.ts:31
 export function sensitivityFactsOf(reg, facts: Pick<ToolCallFacts,'tool'|'reconfigures'|'grantsAutonomy'|'archives'>): readonly SensitivityFact[];
 // apps/server/src/tools/registry.ts
-export function routineToolAllowed(def: Pick<OrbisToolDef,'name'|'kind'>, routine: RoutineRef): boolean;   // :188
-export const WORKER_SCOPE_TOOLS: ReadonlySet<string>;                                      // :112
-export function buildToolDefs(reg: RegistrySnapshot, disabled?: readonly string[]): OrbisToolDef[];        // :1272
-export interface OrbisToolDef { name; description; inputJsonSchema; kind; internalOnly?; aspectId?; agentOnly?; routineOnly?; fullScopeOnly? } // :42-95
+export function routineToolAllowed(def: Pick<OrbisToolDef,'name'|'kind'>, routine: RoutineRef): boolean;   // :189
+export const WORKER_SCOPE_TOOLS: ReadonlySet<string>;                                      // :113
+export function buildToolDefs(reg: RegistrySnapshot, disabled?: readonly string[]): OrbisToolDef[];        // :1273
+export interface OrbisToolDef { name; description; inputJsonSchema; kind; internalOnly?; aspectId?; agentOnly?; routineOnly?; fullScopeOnly? } // :43-96
 // packages/shared/src/registry/modules.ts:141,:152
 export function isModuleEnabled(module, disabled): boolean;
 export function moduleOfTool(name: string, reg: { aspects: ReadonlyMap<string, AspectDefinition> }): ModuleId | null;
 // apps/server/src/executor/{executor,types}.ts
 export async function execute(db: Db, req: ExecuteRequest, deps?: ExecutorDeps): Promise<ExecuteResult>;   // :470
 export interface ExecuteRequest { identity: Identity /* Г-3 */; actorKind; source; mechanism?; threadId?; operations; batchId?; clock?; actorGrantId?; runId?; editedFrom? }
-// apps/server/src/policy/pending.ts:334
+// apps/server/src/policy/pending.ts:341
 export async function createPending(tx: Tx, args: CreatePendingArgs): Promise<{ pendingId: string; card: Card }>;
 ```
 
@@ -6465,17 +6494,17 @@ export async function createPending(tx: Tx, args: CreatePendingArgs): Promise<{ 
 
 ```ts
 // apps/server/src/actions/resolve.ts [новое]
-export type { ExecOperation } from '../routines/propose';   // Р-К-28: источник один — `propose.ts:71` получает `export`
+export type { ExecOperation } from '../routines/propose';   // Р-К-28: источник один — `propose.ts:72` получает `export`
 export interface DeferredRow { field: string; before?: string; after: string }
 export interface RunActionInput { action: string; self?: string; params?: Record<string, unknown>; batch_id?: string }
 export const runActionInput: z.ZodType<RunActionInput>;
 export interface ResolvedAction { decl: ActionDefinition; targets: readonly string[]; operations: ExecOperation[]; hash: string; summary: string; rows: DeferredRow[] }
-export async function resolveAction(tx: Tx, reg: RegistrySnapshot, graphId: string, input: RunActionInput, args: { today: string; timeZone: string }): Promise<ResolvedAction>;
+export async function resolveAction(tx: Tx, reg: RegistrySnapshot, graphId: GraphId, input: RunActionInput, args: { today: string; timeZone: string }): Promise<ResolvedAction>;
 export function actionSummary(decl: ActionDefinition, n: number): string;
 // apps/server/src/tools/dispatch-common.ts [новое] — переезд БЕЗ изменения тел (см. шаг 4а)
-export type ToolDispatchResult = …;                       // дословно dispatch.ts:179-193
-export interface ToolCallCtx { … }                        // дословно dispatch.ts:137-177
-export const sink: JournalSink;                           // makeChatJournalSink(), dispatch.ts:135
+export type ToolDispatchResult = …;                       // дословно dispatch.ts:182-196
+export interface ToolCallCtx { … }                        // дословно dispatch.ts:139-180
+export const sink: JournalSink;                           // makeChatJournalSink(), dispatch.ts:137
 export function errorResult(code: string, message: string, details?: unknown): ToolDispatchResult;
 export function levelGate(level: ConfirmationLevel, tool: string, forbiddenMessage?: string): ToolDispatchResult | null;
 export function parseEnvelope<S extends z.ZodTypeAny>(schema: S, input: unknown, tool: string): z.infer<S>;
@@ -6601,8 +6630,8 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
 
 - [ ] **Шаг 4а: общее дно диспатча — `dispatch-common.ts` (переезд без изменения тел).**
   Ветка действия живёт в своём доме (`actions/run.ts`), а зовёт четыре ПРИВАТНЫХ помощника
-  `dispatch.ts`: `sink` (`:135`), `errorResult` (`:489-491`), `levelGate` (`:551-566`),
-  `parseEnvelope` (`:3194-3207`). Экспортировать их из `dispatch.ts` нельзя: `dispatchTool` зовёт
+  `dispatch.ts`: `sink` (`:137`), `errorResult` (`:492-494`), `levelGate` (`:554-569`),
+  `parseEnvelope` (`:3200-3213`). Экспортировать их из `dispatch.ts` нельзя: `dispatchTool` зовёт
   `runAction`, и обратный импорт замкнул бы `dispatch ⇄ actions/run` **по значению** — а `sink` —
   модульная константа, то есть порядок инициализации стал бы наблюдаемым (`undefined` у того, кто
   загрузился первым). Хуки Р-К-67 закрывают одну дугу (`deferRoutineUnit` приходит параметром), эти
@@ -6625,15 +6654,16 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   import { ExecError } from '../errors';
   import { makeChatJournalSink } from '../executor/journal';
   import type { ActorKind } from '../executor/types';
+  import type { Identity } from '../identity';
   import type { GrantRef } from '../oauth/grants';
   import type { ConfirmationLevel } from '../policy/confirmation';
   import type { z } from 'zod';
   import type { Card, RoutineRef } from './registry';
 
   export interface ToolCallCtx {
-    /* …дословно dispatch.ts:137-177, включая докблоки полей source/entitlements/grant/routine… */
+    /* …дословно dispatch.ts:139-180, включая докблоки полей source/entitlements/grant/routine… */
     db: Db;
-    identity: Identity;   // Г-3: { actor: AccountId; graph: GraphId }
+    identity: Identity;   // Г-3: пара актор+граф, закрытый класс
     actorKind: ActorKind;
     source: 'chat' | 'mcp' | 'routine';
     threadId?: string;
@@ -6646,7 +6676,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   }
 
   export type ToolDispatchResult =
-    | { status: 'ok'; result: unknown; card?: Card; actionId?: string }   /* …докблок :183-189… */
+    | { status: 'ok'; result: unknown; card?: Card; actionId?: string }   /* …докблок :186-192… */
     | { status: 'pending_confirmation'; pendingId: string; card: Card }
     | { status: 'error'; error: { code: string; message: string; details?: unknown } };
 
@@ -6657,7 +6687,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     return { status: 'error', error: { code, message, details } };
   }
 
-  /** §7.10: маппинг уровня в ранний отказ (докблок `dispatch.ts:542-550` переезжает целиком). */
+  /** §7.10: маппинг уровня в ранний отказ (докблок `dispatch.ts:545-553` переезжает целиком). */
   export function levelGate(
     level: ConfirmationLevel,
     tool: string,
@@ -6689,8 +6719,8 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     return parsed.data;
   }
   ```
-  `apps/server/src/tools/dispatch.ts`: шесть объявлений (`:135`, `:137-177`, `:179-193`, `:489-491`,
-  `:542-566`, `:3193-3207`) удаляются, вместо них — импорт и реэкспорт первой строкой после блока импортов:
+  `apps/server/src/tools/dispatch.ts`: шесть объявлений (`:137`, `:139-180`, `:182-196`, `:492-494`,
+  `:545-569`, `:3199-3213`) удаляются, вместо них — импорт и реэкспорт первой строкой после блока импортов:
   ```ts
   import {
     errorResult,
@@ -6705,8 +6735,8 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   // оставляет их нетронутыми: переезд не обязан стоить девяти диффов.
   export type { ToolCallCtx, ToolDispatchResult };
   ```
-  Осиротевшие импорты `makeChatJournalSink` (`:69`), `EntitlementResolver` (`:60`), `GrantRef` (`:73`),
-  `Card` (`:116`) снимаются из `dispatch.ts`, если после переезда их не осталось потребителей
+  Осиротевшие импорты `makeChatJournalSink` (`:70`), `EntitlementResolver` (`:61`), `GrantRef` (`:74`),
+  `Card` (`:117`) снимаются из `dispatch.ts`, если после переезда их не осталось потребителей
   (`bun run lint` назовёт каждый поимённо).
   Прогон: `cd apps/server && bun test src/tools/dispatch.test.ts src/tools/registry.test.ts` → **PASS**
   (ни одного изменения поведения); `bun run typecheck` из корня → **PASS**;
@@ -6716,14 +6746,14 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
 - [ ] **Шаг 5: красный — резолв одиночного действия.** `apps/server/src/actions/resolve.test.ts` (новый):
   ```ts
   import { afterAll, beforeAll, expect, test } from 'bun:test';
-  import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+  import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
   import { withIdentity } from '../db/with-identity';
   import { effectiveRegistry } from '../registry/cache';
   import { resolveAction } from './resolve';
   // world: одна финансовая запись planned=true (создаётся execute'ом в beforeAll)
 
   test('plan-to-fact: одна цель, шаг с подстановками и CAS-пунктами по тронутым свойствам', async () => {
-    const r = await withIdentity(db, { actor: accountOf(owner), graph: owner }, async (tx) =>
+    const r = await withIdentity(db, personal(owner), async (tx) =>
       resolveAction(tx, await effectiveRegistry(tx, owner), owner,
         { action: 'finance/plan-to-fact', self: plannedId, params: { occurred_on: '2026-09-16' } },
         { today: '2026-09-16', timeZone: 'Europe/Moscow' }));
@@ -6732,7 +6762,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     const op = r.operations[0]!;
     expect(op.tool).toBe('entity_update');
     expect(op.input.props).toEqual({ 'orbis/planned': false, 'orbis/occurred_on': '2026-09-16' });
-    // CAS: «было» снято с той же прочитанной строки (§А7-3, buildUpdate propose.ts:637)
+    // CAS: «было» снято с той же прочитанной строки (§А7-3, buildUpdate propose.ts:638)
     expect(op.input.precondition).toEqual([
       { property: 'orbis/planned', in: [true] },
       { property: 'orbis/occurred_on', absent: true },
@@ -6748,12 +6778,12 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
 
 - [ ] **Шаг 6: зелёный — `actions/resolve.ts`, одиночная ветка.**
   Сначала — цель читается ЦЕЛИКОМ. `EntityScopeInput.core` (задача 3, §1.5) требует
-  `{id, title, archived, createdAt, updatedAt}`, а `TargetRow` (`routines/propose.ts:523-528`) несёт
-  только `props`/`aspects`/`updatedAt`: её SELECT (`:567-572`) просит четыре колонки. Без `archived`
+  `{id, title, archived, createdAt, updatedAt}`, а `TargetRow` (`routines/propose.ts:524-529`) несёт
+  только `props`/`aspects`/`updatedAt`: её SELECT (`:568-573`) просит четыре колонки. Без `archived`
   предусловие `plan-to-fact` (`not(orbis/archived = true)`, core-проекция §А1-3) не вычислимо вовсе.
   Правка — три колонки, сигнатура `loadTargets` не меняется (Р-К-30):
   ```ts
-  // routines/propose.ts:523-528 — `export` тоже новый: тип нужен `coreOf` в `resolve.ts`
+  // routines/propose.ts:524-529 — `export` тоже новый: тип нужен `coreOf` в `resolve.ts`
   export interface TargetRow {
     /** Новая правда значений (§А1-1) — по ней снимаются предусловия: их единица теперь свойство. */
     props: Record<string, unknown>;
@@ -6779,9 +6809,9 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   //
   // ПОЧЕМУ ОТДЕЛЬНЫЙ ДОМ, А НЕ СТРОКА `MUTATION_ENVELOPES`. `precondition` живёт ТОЛЬКО в
   // exec-надмножестве (`contracts/tools.ts:268-275`), через конверты диспатча не проходит по
-  // построению (`dispatch.ts:2982`; PRD `01-architecture.md:1304`), а `prepareOp` отверг бы
-  // незнакомый тул (`executor.ts:954`). Образец сборки exec-формы с предусловиями — тот же,
-  // которым пользуется отложка: `loadTargets` + `buildUpdate` (`routines/propose.ts:544,:637`);
+  // построению (`dispatch.ts:2988`; PRD `01-architecture.md:1321`), а `prepareOp` отверг бы
+  // незнакомый тул (`executor.ts:953`). Образец сборки exec-формы с предусловиями — тот же,
+  // которым пользуется отложка: `loadTargets` + `buildUpdate` (`routines/propose.ts:545,:638`);
   // третьей пары «прочитать цель и снять предусловия» в сервере быть не должно.
   //
   // `$expr` РЕЗОЛВИТСЯ ДО ПЕРВОГО ШАГА И ИЗ СОСТОЯНИЯ НА МОМЕНТ CAS (§Б6-3 дословно):
@@ -6793,6 +6823,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     effectiveLabel,
     type PropertyType,
   } from '@orbis/shared';
+  import type { GraphId } from '@orbis/shared';
   import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
   import { OWNER_LOCALE, type QueryAst } from '@orbis/shared/query';
   import { sql } from 'drizzle-orm';
@@ -6806,14 +6837,14 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   import { literalFormViolation } from '../registry/validate-props';
   import {
     buildUpdate,
-    type ExecOperation,                                       // Р-К-28: `propose.ts:71` получает `export`
+    type ExecOperation,                                       // Р-К-28: `propose.ts:72` получает `export`
     loadTargets,
     type TargetRow,                                           // Р-К-30: тремя колонками шире
   } from '../routines/propose';
   import { type EntityScopeInput, entityEvalScope, relationFactsOf } from '../rules/scope'; // задача 3
 
   export type { ExecOperation };
-  /** Строка карточки «было → станет» — та же форма, что у отложенной единицы (`dispatch.ts:1441`). */
+  /** Строка карточки «было → станет» — та же форма, что у отложенной единицы (`dispatch.ts:1445`). */
   export interface DeferredRow { field: string; before?: string; after: string }
 
   export const runActionInput = z
@@ -6841,7 +6872,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   }
 
   export async function resolveAction(
-    tx: Tx, reg: RegistrySnapshot, graphId: string, input: RunActionInput,
+    tx: Tx, reg: RegistrySnapshot, graphId: GraphId, input: RunActionInput,
     args: { today: string; timeZone: string },
   ): Promise<ResolvedAction> {
     const decl = reg.actions.get(input.action)
@@ -6875,7 +6906,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
       });
       if (decl.precondition !== null && evalExpr(decl.precondition, scope) !== true) {
         // §Б6-4: «нарушено — честный отказ, не двойное исполнение». Форма отказа та же, что
-        // у CAS исполнителя (`executor.ts:1578-1596`) — читатели уже умеют её разбирать.
+        // у CAS исполнителя (`executor.ts:1577-1595`) — читатели уже умеют её разбирать.
         throw new ExecError('CONFLICT', `действие «${decl.key}»: предусловие не выполнено`,
           { reason: 'precondition_failed', action: decl.id, id });
       }
@@ -6891,7 +6922,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   /**
    * Подстановка: обход шаблона, замена каждой обёртки `{$expr}` значением. Дальше —
    * `buildUpdate` для `entity_update` (CAS-пункты по ТРОНУТЫМ свойствам, §А7-3) и сырой
-   * конверт для остальных трёх тулов: у создания и рёбер предусловий нет (`propose.ts:203-206`).
+   * конверт для остальных трёх тулов: у создания и рёбер предусловий нет (`propose.ts:204-207`).
    */
   function buildStep(reg, index, step, ctx, current): { op: ExecOperation; rows: DeferredRow[] } {
     const input = substitute(step.input, ctx) as Record<string, unknown>;
@@ -7019,7 +7050,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   ```ts
   /**
    * МНОЖЕСТВО ЦЕЛЕЙ map-действия. Компилятор запросов — ТОТ ЖЕ, что у `entity_query` и у
-   * `ref.target` (`compileWhere`, `query/compile-ast.ts:848`): второй способ прочитать Q
+   * `ref.target` (`compileWhere`, `query/compile-ast.ts:851`): второй способ прочитать Q
    * отвечал бы на `class=` и умолчание архивности иначе, чем сам язык.
    *
    * `ORDER BY e.id` — порядок ОПРЕДЕЛЁН, а не «как вернула база»: операции уезжают в одну
@@ -7055,7 +7086,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     const action = await lastAction(db, owner);
     expect([action.type, action.action_id, action.module]).toEqual(['action', 'finance/plan-to-fact', 'finance']);
     expect(cardTitle(action)).toBe('Действие «План → факт»');
-    // Ключей нет, когда их не задали (контейнмент-проба jsonb — докблок types.ts:258-275)
+    // Ключей нет, когда их не задали (контейнмент-проба jsonb — докблок types.ts:275-292)
     const plain = await executePlainBatch();
     expect('action_id' in plain).toBe(false);
     expect(plain.type).toBe('batch');
@@ -7078,7 +7109,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   //   автором-приложением; entity_id: null по тому же доводу, что у batch»)
   // ActionRecord += action_id?: string; module?: string;   (рядом с run_id, тем же докблоком)
   ```
-  `apps/server/src/executor/executor.ts:702-716`:
+  `apps/server/src/executor/executor.ts:703-717`:
   ```ts
       const action: ActionRecord = {
         id: batchId,
@@ -7098,7 +7129,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   ```
   Прогон: тот же → **PASS**.
 
-- [ ] **Шаг 11: зелёный — третий тип в пробе перекатегоризации.** `apps/server/src/ai/escalation.ts:216-219`:
+- [ ] **Шаг 11: зелёный — третий тип в пробе перекатегоризации.** `apps/server/src/ai/escalation.ts:218-221`:
   ```ts
     const matches = sql.join(
       targets.flatMap((category) => [
@@ -7119,8 +7150,8 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   Коммит: `feat(executor): строка журнала type=action с автором-приложением и третий тип в пробе эскалации (§Б6-4)`
 
 - [ ] **Шаг 12: красный — реестр тулов знает `run_action` и публикует действия.** `apps/server/src/tools/registry.test.ts`:
-  - `:151` заголовок → `13 core + 1 run_action + 12 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 46`;
-  - в `CORE_NAMES` (`:126-138`) добавить `'run_action'` с комментарием «§Б6-6: один тул-каталог на все действия»;
+  - `:153` заголовок → `13 core + 1 run_action + 12 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 46`;
+  - в `CORE_NAMES` (`:128-140`) добавить `'run_action'` с комментарием «§Б6-6: один тул-каталог на все действия»;
   - новые тесты:
   ```ts
   test('действие с offered_by.llm публикуется своим тулом; без него — только через run_action (§Б6-6)', async () => {
@@ -7159,7 +7190,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     return null;
   }
   ```
-  `apps/server/src/tools/registry.ts` — деф каталога в `CORE_TOOLS` (рядом с `undo_last` `:1150`):
+  `apps/server/src/tools/registry.ts` — деф каталога в `CORE_TOOLS` (рядом с `undo_last` `:1151`):
   ```ts
     {
       name: 'run_action',
@@ -7170,7 +7201,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
       inputJsonSchema: runActionJsonSchema,
       kind: 'mutate',
       // Скоуп решают ШАГИ (§Б6-2), а не имя: вычисляемого флага у дефа нет, и он не нужен —
-      // общее правило скоупа (`dispatch.ts:255-268`) закрывает фону любую мутацию вне
+      // общее правило скоупа (`dispatch.ts:258-271`) закрывает фону любую мутацию вне
       // WORKER_SCOPE_TOOLS, а пошаговый гейт в runAction — вторая линия.
       fullScopeOnly: false,
     },
@@ -7194,7 +7225,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
    * построению» (§Б6-6 дословно).
    *
    * Порядок — `rank`, тай-брейк `key.localeCompare`: тот же довод, что у `attachable`
-   * (`:1280-1281`) — эталон реестра сравнивается как СПИСОК.
+   * (`:1284-1285`) — эталон реестра сравнивается как СПИСОК.
    */
   export function actionToolDefs(reg: RegistrySnapshot, disabled: readonly string[] = []): OrbisToolDef[] {
     return [...reg.actions.values()]
@@ -7217,7 +7248,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
       }));
   }
   ```
-  `buildToolDefs` (`:1292-1293`):
+  `buildToolDefs` (`:1296-1297`):
   ```ts
       .filter((d) => isModuleEnabled(moduleOfTool(d.name, reg), disabled))
       .concat(attachable.map((a) => attachToolDef(a, reg)))
@@ -7254,12 +7285,12 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   cat > dump-golden.tmp.ts <<'TS'
   import { withIdentity } from './src/db/with-identity';
   import { buildToolRegistry } from './src/tools/registry';
-  import { appDb, mintGraph, requireEnv, truncateAll } from './test/helpers';
+  import { appDb, mintGraph, personal, requireEnv, truncateAll } from './test/helpers';
   requireEnv();
   const { db, client } = appDb();
   const owner = mintGraph();
   await truncateAll();                      // чистый сид: 13 аспектов + 2 действия (задача 6)
-  const defs = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => buildToolRegistry(tx, owner));
+  const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
   await Bun.write('test/golden/tool-registry.json',
     `${JSON.stringify(defs.map((d) => ({ name: d.name, description: d.description,
       inputJsonSchema: d.inputJsonSchema })), null, 2)}\n`);
@@ -7280,8 +7311,8 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   подсмотрел через подменённый модуль.
   ```ts
   test('уровень одиночного действия — по свёртке шагов; факт декларации доезжает в sensitivity', async () => {
-    const reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
-    const resolved = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) =>
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    const resolved = await withIdentity(db, personal(owner), (tx) =>
       resolveAction(tx, reg, owner, { action: 'finance/plan-to-fact', self: plannedId, params: { occurred_on: '2026-09-16' } },
         { today: '2026-09-16', timeZone: 'Europe/Moscow' }));
     const facts = actionCallFacts(reg, resolved.decl, resolved.operations, resolved.targets,
@@ -7298,8 +7329,8 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     expect([action.type, action.action_id]).toEqual(['action', 'finance/plan-to-fact']);
   });
   test('map с 11 целями → isBatch:true и explicit-confirmation по ряду 5 таблицы §7.10', async () => {
-    const reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
-    const resolved = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) =>
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    const resolved = await withIdentity(db, personal(owner), (tx) =>
       resolveAction(tx, reg, owner, { action: 'planner/postpone_overdue', params: { to: '2026-09-30' } },
         { today: '2026-09-16', timeZone: 'Europe/Moscow' }));
     expect(resolved.targets).toHaveLength(11);
@@ -7328,13 +7359,13 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
 - [ ] **Шаг 16: зелёный — `actions/run.ts` и ветка диспатча.** Новый файл:
   ```ts
   // ИСПОЛНЕНИЕ ДЕЙСТВИЯ (§Б6-2/§Б6-4) — своя ветка `dispatchTool`, как `thread_post`
-  // (`dispatch.ts:343`) и `orbis_propose` (`:435`), и по той же причине: конверт с
-  // предусловиями через `MUTATION_ENVELOPES` не проходит по построению (`:2982`).
+  // (`dispatch.ts:346`) и `orbis_propose` (`:438`), и по той же причине: конверт с
+  // предусловиями через `MUTATION_ENVELOPES` не проходит по построению (`:2988`).
   //
   // ГЕЙТЫ — ПО КАЖДОМУ ШАГУ (§Б6-2 дословно: «действие доступно актору, только если каждый
   // его резолвленный шаг прошёл бы гейты этого актора»). Имя действия ими не проверяется
   // вовсе: гейт по внешнему имени — ровно та дыра, из-за которой `batch_execute` закрыт
-  // рутине наглухо (`tools/registry.ts:197-199`).
+  // рутине наглухо (`tools/registry.ts:198-200`).
   /** Р-К-67: `deferRoutineUnit` живёт в `dispatch.ts` и приватна; сюда она приходит параметром, чтобы
    *  `actions/run.ts` не импортировал `tools/dispatch.ts` значением (цикл). Задача 8 зовёт `hooks.defer`. */
   export interface RunActionHooks { defer: (tool: 'run_action', payload: unknown) => Promise<ToolDispatchResult> }
@@ -7392,7 +7423,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
       // (`hooks` уже в сигнатуре — здесь параметр объявлен, но до задачи 8 не используется).
       // §Б6-2 велит здесь отложенную единицу D42; её кладёт ЗАДАЧА 8 (Р-И-31, третья ветка
       // `snapshotDeferredUnit`). До неё — fail-closed тем же текстом, что инвариант 5
-      // (`dispatch.ts:1015-1021`): фон, которому нечего ни исполнить, ни отложить, обязан
+      // (`dispatch.ts:1019-1025`): фон, которому нечего ни исполнить, ни отложить, обязан
       // получить отказ, а не тишину.
       return errorResult('FORBIDDEN_LEVEL',
         `в фоне действие «${decl.key}» на уровне «${level}» не исполняется (V1.10; отложенная единица — §Б6-2)`,
@@ -7401,7 +7432,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
 
     if (level === 'explicit-confirmation') {
       // Форма единицы — `batch_execute` с резолвленными операциями (Р-8): её умеет исполнить
-      // `approvePending` уже сегодня (`policy/pending.ts:656-679, :792-813`). Ключи `action`
+      // `approvePending` уже сегодня (`policy/pending.ts:663-686, :799-820`). Ключи `action`
       // (`action_id` + хеш декларации) и проверку «Устарело» добавляет ЗАДАЧА 8 — без них
       // единица исполнится как обычная пачка, что верно, но не проверит протухание.
       const batchId = parsed.batch_id ?? newId();
@@ -7471,7 +7502,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   `resolveAction`, `runActionInput` — из `./resolve`; `createPending` — из `../policy/pending`;
   `execute` — из `../executor/executor`; `newId`, `effectiveLabel`, `isModuleEnabled` — из
   `@orbis/shared`; `OWNER_LOCALE` — из `@orbis/shared/query`.
-  `apps/server/src/tools/dispatch.ts` — ветка ПЕРЕД `runMutation` (`:451`), по образцу `thread_post`:
+  `apps/server/src/tools/dispatch.ts` — ветка ПЕРЕД `runMutation` (`:454`), по образцу `thread_post`:
   ```ts
       if (pre.def.name === 'run_action' || pre.def.name.startsWith('action_')) {
         // Тул действия — то же исполнение, что каталог: имя лишь адресует декларацию
@@ -7517,7 +7548,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     return rest;
   }
   ```
-  `dispatch.ts:1441` — `type DeferredRow = …` → `import type { DeferredRow } from '../actions/resolve';`
+  `dispatch.ts:1445` — `type DeferredRow = …` → `import type { DeferredRow } from '../actions/resolve';`
   (тип-импорт, рантайм-цикла не создаёт; вторая копия формы разошлась бы с карточкой действия).
   Прогон: `cd apps/server && bun test src/actions/run.test.ts` → **PASS** (4 теста).
   Коммит: `feat(actions): run_action своей веткой диспатча — гейты по шагам, уровень по свёртке, маска модулей (§Б6-2, Р-20)`
@@ -7530,7 +7561,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
     expect(out).toMatchObject({ status: 'error', error: { code: 'VALIDATION', details: { reason: 'RUN_ACTION_IN_BATCH' } } });
   });
   ```
-  `assertBatchToolsKnown` (`:2945-2970`), первой строкой цикла:
+  `assertBatchToolsKnown` (`:2970-2995`), первой строкой цикла:
   ```ts
       if (op.tool === 'run_action' || op.tool.startsWith('action_')) {
         // Р-К-16: обёртка над обёрткой. `ACTION_NESTED` — про ДЕКЛАРАЦИЮ (§Б6-3), здесь речь
@@ -7569,7 +7600,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
         // не задеты: кап стоит на КОНВЕРТЕ ТУЛА, то есть на том, что присылает модель.
         .max(BATCH_CAP_DEFAULT),
   ```
-  `apps/server/src/tools/registry.ts:643-662` — `operations` += `maxItems: BATCH_CAP_DEFAULT` и в
+  `apps/server/src/tools/registry.ts:644-663` — `operations` += `maxItems: BATCH_CAP_DEFAULT` и в
   `description` дописать «не более 100 операций».
   Отказ приходит из `parseEnvelope` в `assertBatchToolsKnown` — `VALIDATION` с zod-issues, то есть ДО
   политики; отдельной ветки не нужно, но `reason:'BATCH_TOO_LONG'` дописывается там же первой пробой длины:
@@ -7585,7 +7616,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   Коммит: `feat(tools): кап 100 на batch_execute одной константой — zod, JSON Schema и отказ до политики (В-9, Р-11)`
 
 - [ ] **Шаг 19: инвариант «каждый писатель виден классификатору» расширен на действия.**
-  `apps/server/src/tools/registry.test.ts:813-822` — рядом с существующим тестом:
+  `apps/server/src/tools/registry.test.ts:815-824` — рядом с существующим тестом:
   ```ts
   test('уровень действия считается по ШАГАМ, а не по имени (§Б6-2, риск О7)', async () => {
     const defs = await registryFor(userB);
@@ -7597,7 +7628,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
       expect([name, reconfiguresOf(name, {}), REGISTRY_TOOL_NAMES.has(name)]).toEqual([name, 'none', false]);
     }
     // А свёртка по шагам сидовых деклараций — НЕ пуста: `plan-to-fact` несёт факт денег.
-    const reg = await withIdentity(db, { actor: accountOf(userB), graph: userB }, (tx) => effectiveRegistry(tx, userB));
+    const reg = await withIdentity(db, personal(userB), (tx) => effectiveRegistry(tx, userB));
     const p2f = reg.actions.get('finance/plan-to-fact')!;
     expect([...sensitivityFactsOf(reg, { tool: 'run_action', reconfigures: 'none', grantsAutonomy: false, archives: false },
       [...p2f.sensitivity, ...p2f.steps.flatMap((s) => stepFactsOf(reg, s))])]).toEqual(['touches_money']);
@@ -7613,7 +7644,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
   числом `return` в снятых телах. Греп-проба цикла: `grep -rn "from './dispatch'" apps/server/src/tools/dispatch-common.ts`
   и `grep -rn "from '../tools/dispatch'" apps/server/src/actions/` → пусто.
   Раздел отчёта «Пины и мутации»: (а) эталон тулов 44 → 46 — diff проверен построчно; (б) пин состава
-  `registry.test.ts:151` и `CORE_NAMES`; (в) мутационные пробы деливеребла: снять `isBatch:true` у map →
+  `registry.test.ts:153` и `CORE_NAMES`; (в) мутационные пробы деливеребла: снять `isBatch:true` у map →
   краснеет ряд 5; подменить `stepDef` именем действия вместо шага → краснеет §С2-2; убрать строку
   `probe('action', …)` → краснеет тест эскалации; снять `.max` у `operations` → краснеет парность;
   вернуть `coreOf` на `archived: false` литералом → краснеет предусловие `plan-to-fact` на архивной цели;
@@ -7626,7 +7657,7 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
 
 Действие, которому политика дала `explicit-confirmation`, доезжает до владельца **тем же носителем**, что и всё
 отложенное: `{tool:'batch_execute', input:{batch_id, operations}}` — форма уже есть, распаковывается
-`toOperations` (`policy/pending.ts:656-679`) и исполняется ОДНИМ `execute` с `batchId: pendingId` (`:793-834`),
+`toOperations` (`policy/pending.ts:663-686`) и исполняется ОДНИМ `execute` с `batchId: pendingId` (`:800-841`),
 то есть §Б6-4 («шаги одной транзакцией, одна строка журнала, один inverse, replay») для отложенного действия
 работает механикой, которая в проде. Нового три вещи. (1) Два условных ключа `metadata.pending` — `action_id`
 и хеш декларации: без них «Принять» через сутки исполняет резолв по снятым строкам (остаток 48 для действий).
@@ -7643,48 +7674,48 @@ export function actionToolDefs(reg: RegistrySnapshot, disabled?: readonly string
 **Файлы:**
 
 - **Create:** нет.
-- **Modify:** `apps/server/src/policy/pending.ts` (`pendingRecord :94-203` — поля рядом с `run_id :133-139`;
-  `CreatePendingCommon :258-289`; запись `metadata.pending :380-405`; `approvePending :766-867`; новые
-  `ACTION_STALE_TEXT`/`actionStateOf` рядом с `REJECT_CONTENT :583-596`);
-  `apps/server/src/tools/dispatch.ts` (`runUndoLast :674-727`; `Resolution :470-487`; вызов `:329`;
-  `deferRoutineUnit :1472-1554` — разворот порядка (остаётся приватной — Р-К-67); `snapshotDeferredUnit :1585-1683`);
+- **Modify:** `apps/server/src/policy/pending.ts` (`pendingRecord :96-205` — поля рядом с `run_id :135-141`;
+  `CreatePendingCommon :265-296`; запись `metadata.pending :387-412`; `approvePending :773-874`; новые
+  `ACTION_STALE_TEXT`/`actionStateOf` рядом с `REJECT_CONTENT :590-603`);
+  `apps/server/src/tools/dispatch.ts` (`runUndoLast :678-731`; `Resolution :473-490`; вызов `:332`;
+  `deferRoutineUnit :1476-1560` — разворот порядка (остаётся приватной — Р-К-67); `snapshotDeferredUnit :1591-1689`);
   `apps/server/src/policy/confirmation.ts` (`reconfiguresByTool :311-388`; докблок `reconfiguresOf :452-461`);
-  `apps/server/src/executor/undo.ts` (`peekLastUndoable` после `findLastUndoable :69-90`);
+  `apps/server/src/executor/undo.ts` (`peekLastUndoable` после `findLastUndoable :70-91`);
   `apps/server/src/actions/run.ts` (задача 7 — ветки `explicit-confirmation` и `source:'routine'`).
-- **Test:** `apps/server/src/tools/dispatch.test.ts` — два `describe` после `:4288` (обвязка файла: `ctxFor
-  :68`, `seedEntity :80`, `messagesIn :92`, `propsOfRowA :107`, `titleOfRowA :115`, `agentLoopHelpers :39`;
-  образец мира отложки — `describe :3979-4080`); `apps/server/src/tools/registry.test.ts` (`:782-812`).
+- **Test:** `apps/server/src/tools/dispatch.test.ts` — два `describe` после `:4315` (обвязка файла: `ctxFor
+  :72`, `seedEntity :84`, `messagesIn :96`, `propsOfRowA :111`, `titleOfRowA :119`, `agentLoopHelpers :43`;
+  образец мира отложки — `describe :4004-4105`); `apps/server/src/tools/registry.test.ts` (`:784-814`).
 - **НЕ трогать:** `apps/web/**` (Р-23); `executor/executor.ts` (журнал действия — задача 7); `RejectReason`
-  (`pending.ts:582`) — причина `'stale'` уже есть, добавляется пятый писатель, enum не растёт;
-  `routines/lifecycle.ts` — «Принять» единицы идёт через `approvePending` (`:2303`), второго дома «Устарело»
+  (`pending.ts:589`) — причина `'stale'` уже есть, добавляется пятый писатель, enum не растёт;
+  `routines/lifecycle.ts` — «Принять» единицы идёт через `approvePending` (`:2318`), второго дома «Устарело»
   не заводим (шаг 9 это доказывает).
 
 **Интерфейсы:**
 
-*Consumes* (дословно с HEAD `36060b2`, кроме помеченных задачами 6/7):
+*Consumes* (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93), кроме помеченных задачами 6/7):
 
 ```ts
 // policy/pending.ts
-export function deferDedupeKey(runId: string, tool: string, input: unknown): string;                    // :254
-export type RejectReason = 'owner' | 'superseded' | 'stale' | 'edited';                                 // :582
-export async function rejectPendingTx(tx: Tx, args: RejectPendingArgs): Promise<RejectPendingTxResult>; // :935
-export async function createPending(tx: Tx, args: CreatePendingArgs): Promise<{ pendingId: string; card: Card }>; // :334
-export async function approvePending(db: Db, args: { graphId: string; pendingId: string; clock?: () => Date }): Promise<ExecuteResult>; // :766
+export function deferDedupeKey(runId: string, tool: string, input: unknown): string;                    // :261
+export type RejectReason = 'owner' | 'superseded' | 'stale' | 'edited';                                 // :589
+export async function rejectPendingTx(tx: Tx, args: RejectPendingArgs): Promise<RejectPendingTxResult>; // :943
+export async function createPending(tx: Tx, args: CreatePendingArgs): Promise<{ pendingId: string; card: Card }>; // :341
+export async function approvePending(db: Db, args: { graphId: GraphId; pendingId: string; clock?: () => Date }): Promise<ExecuteResult>; // :773
 // tools/dispatch.ts
-type DeferredRow = { field: string; before?: string; after: string };                                   // :1440
+type DeferredRow = { field: string; before?: string; after: string };                                   // :1444
 async function snapshotDeferredUnit(tx, graphId, tool, payload):
-  Promise<{ input: unknown; summary: string; rows: DeferredRow[] } | { error: ToolDispatchResult }>;    // :1585
-async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult>;              // :674
+  Promise<{ input: unknown; summary: string; rows: DeferredRow[] } | { error: ToolDispatchResult }>;    // :1591
+async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult>;              // :678
 // executor/undo.ts
-async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined>;                              // :69 (приватная)
-export async function undoAction(db, args: { identity: Identity; actionId: string }): Promise<ExecuteResult>; // :176
-export async function undoLast(db, args: { identity: Identity }): Promise<UndoLastResult>;             // :229
+async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined>;                              // :70 (приватная)
+export async function undoAction(db, args: { identity: Identity; actionId: string }): Promise<ExecuteResult>; // :177
+export async function undoLast(db, args: { identity: Identity }): Promise<UndoLastResult>;             // :230
 // policy/confirmation.ts :102 classifyToolCall(facts), :454 reconfiguresOf(tool, input),
 //   :36-63 ToolCallFacts { tool; kind; known; actorKind; explicitCommand; archives; isBatch; batchSize?;
 //                          grantsAutonomy; reconfigures; sensitivity }
 // policy/sensitivity.ts :31 sensitivityFactsOf(reg, facts, extra?) — `extra` добавляет задача 7
-// registry/cache.ts :114 effectiveRegistry(tx, graphId); budget/aggregates.ts :140 localTodayTx(tx, graphId, clock?);
-// query/context.ts :41 ownerTimeZone(tx, graphId)
+// registry/cache.ts :119 effectiveRegistry(tx, graphId); budget/aggregates.ts :142 localTodayTx(tx, graphId, clock?);
+// query/context.ts :42 ownerTimeZone(tx, graphId)
 // задача 6: actionHash(decl): string (registry/actions.ts); RegistrySnapshot.actions: Map<string, ActionDefinition>;
 //           ActionDefinition.status: 'active'|'deprecated'; .module: string|null; .label: LocalizedText
 // задача 7: resolveAction(tx, reg, graphId, input, { today, timeZone }): Promise<ResolvedAction>;
@@ -7707,13 +7738,13 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
 
 ---
 
-- [ ] **Шаг 1: обвязка нового `describe` (без тестов).** В `dispatch.test.ts` после `:4288`:
+- [ ] **Шаг 1: обвязка нового `describe` (без тестов).** В `dispatch.test.ts` после `:4315`:
   ```ts
   describe('отложенная единица ДЕЙСТВИЯ и «Устарело» (Р-8, §Б6-7)', () => {
     const { routineCtx, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
     const TOOLS = ['run_action', 'entity_update']; // гейт задачи 7 проверяет и вызов, и ШАГИ
 
-    async function actionCtx(owner: string) {
+    async function actionCtx(owner: GraphId) {
       const routineId = await seedRoutine(owner, {
         title: 'Разбор просроченного',
         routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': TOOLS },
@@ -7723,10 +7754,10 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
         clock: () => T0,
         routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(TOOLS) },
       });
-      return { ctx, runId, threadId: await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => ensureEntityThread(tx, owner, routineId)) };
+      return { ctx, runId, threadId: await withIdentity(db, personal(owner), (tx) => ensureEntityThread(tx, owner, routineId)) };
     }
     /** N просроченных задач — цели map-действия считает его `over`. */
-    async function seedOverdue(owner: string, n: number): Promise<string[]> {
+    async function seedOverdue(owner: GraphId, n: number): Promise<string[]> {
       const out: string[] = [];
       for (let i = 1; i <= n; i += 1) {
         const e = await seedEntity(owner, { title: `Просрочено ${i}`, tags: [], aspects: ['orbis/task'],
@@ -7737,14 +7768,14 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
     }
     const postpone = (ctx: ToolCallCtx) =>
       dispatchTool(ctx, 'run_action', { action: 'planner/postpone_overdue', params: { to: '2026-09-01' } });
-    const unitsIn = async (owner: string, threadId: string) =>
+    const unitsIn = async (owner: GraphId, threadId: string) =>
       (await messagesIn(owner, threadId)).filter((m) => (m.metadata as { pending?: unknown }).pending !== undefined);
     /** Админский UPDATE строки действия: писатель (`action_set`/`action_remove`) — задача 10, а предмет
      *  теста — ЧТЕНИЕ строки на «Принять», и подменять его писателем нельзя. */
-    async function patchAction(owner: string, patch: ReturnType<typeof sql>): Promise<void> {
+    async function patchAction(owner: GraphId, patch: ReturnType<typeof sql>): Promise<void> {
       const { db: admin, client: ac } = adminDb();
       try { await admin.execute(patch); } finally { await ac.end(); }
-      await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => bumpOwnerRegistryVersion(tx, owner));
+      await withIdentity(db, personal(owner), (tx) => bumpOwnerRegistryVersion(tx, owner));
     }
   });
   ```
@@ -7772,7 +7803,7 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
   });
   ```
   Прогон: `cd apps/server && bun test src/tools/dispatch.test.ts` → **FAIL**: `FORBIDDEN_LEVEL` —
-  `snapshotDeferredUnit` знает две формы, третью отвергает (`dispatch.ts:1596-1604`).
+  `snapshotDeferredUnit` знает две формы, третью отвергает (`dispatch.ts:1602-1610`).
 
 - [ ] **Шаг 3: зелёный (1/3) — три условных ключа записи.** `policy/pending.ts`, в `pendingRecord` рядом с
   `run_id`:
@@ -7802,7 +7833,7 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
   Прогон: `cd apps/server && bun test src/policy/pending.test.ts` → **PASS** (ключи условны — форма прежних
   записей не изменилась).
 
-- [ ] **Шаг 4: зелёный (2/3) — третья ветка снимка.** `dispatch.ts`, `snapshotDeferredUnit` (`:1585`): тип
+- [ ] **Шаг 4: зелёный (2/3) — третья ветка снимка.** `dispatch.ts`, `snapshotDeferredUnit` (`:1591`): тип
   возврата получает `action?: { id: string; hash: string }`, а перед проверкой `tool !== 'entity_update'`:
   ```ts
     // ТРЕТЬЯ ФОРМА — ДЕЙСТВИЕ (Р-8). Резолв делает ту же работу, что `loadTargets`+`buildUpdate` ниже,
@@ -7944,10 +7975,10 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
   /**
    * Свежесть строки действия на «Принять» (§Б6-7). Дом один: через `approvePending` идут ВСЕ пути
    * исполнения сохранённого payload'а — кнопка владельца, «Принять» единицы и «Принять все»
-   * (`routines/lifecycle.ts:2303`). `null` — единица не от действия: ключа нет, проверять нечего.
+   * (`routines/lifecycle.ts:2318`). `null` — единица не от действия: ключа нет, проверять нечего.
    */
   async function actionStateOf(
-    tx: Tx, graphId: string, pending: PendingRecord,
+    tx: Tx, graphId: GraphId, pending: PendingRecord,
   ): Promise<{ stale: string } | { decl: ActionDefinition } | null> {
     const actionId = pending.action_id;
     if (actionId === undefined) return null;
@@ -7958,12 +7989,12 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
     return { decl };
   }
   ```
-  В `approvePending` (`:768-790`) — после `assertNotQuestion`, ДО fast-path `isRejected`:
+  В `approvePending` (`:773-795`) — после `assertNotQuestion`, ДО fast-path `isRejected`:
   ```ts
       const act = await actionStateOf(tx, args.graphId, msg.pending);
       if (act !== null && 'stale' in act) {
         // ГАШЕНИЕ ПИШЕТСЯ ЭТОЙ ЖЕ ТРАНЗАКЦИЕЙ, А ОТКАЗ БРОСАЕТСЯ ПОСЛЕ ЕЁ КОММИТА. Бросок ВНУТРИ
-        // откатил бы и запись гашения (`:1004-1008` дословно) — владелец получил бы отказ поверх
+        // откатил бы и запись гашения (`:1011-1015` дословно) — владелец получил бы отказ поверх
         // ОТКРЫТОЙ карточки с кнопкой, которая не сработает уже никогда. `rejectPendingTx` берёт
         // advisory-замок сам и под ним перечитывает «уже исполнено» и «уже отклонён»; прочитанное выше
         // — append-only метаданные и снимок реестра, write-skew ими не выражается.
@@ -7982,8 +8013,8 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
     }
     const pending = found.msg.pending;
   ```
-  и механическая замена ниже по телу: `found.pending.` → `pending.` (восемь вхождений `:806-820`, `:849`),
-  `found.threadId` → `found.msg.threadId` (`:819`).
+  и механическая замена ниже по телу: `found.pending.` → `pending.` (восемь вхождений `:811-825`, `:855`),
+  `found.threadId` → `found.msg.threadId` (`:824`).
   Прогон: `cd apps/server && bun test src/tools/dispatch.test.ts src/policy/pending.test.ts` → **PASS**.
 
 - [ ] **Шаг 9: «Устарело» по ХЕШУ, а не только по снятию.** Тот же сценарий, но вместо `status` правится
@@ -7996,7 +8027,7 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
   ```ts
   test('decideDeferredUnit поверх снятой декларации → already/rejected, исключения нет', async () => {
     /* … сид и снятие, как в шаге 7 … */
-    // Путь с экрана пачки идёт через `approvePending` (`lifecycle.ts:2303`), значит своей ветки
+    // Путь с экрана пачки идёт через `approvePending` (`lifecycle.ts:2318`), значит своей ветки
     // «Устарело» ему не нужно: отказ — не расхождение предусловий (`divergenceOf` → null), а судьба у
     // единицы уже есть, и `unitFate` отвечает `already`.
     expect(await decideDeferredUnit({ db }, { graphId: owner, pendingId: unit.pendingId, decision: 'approve' }))
@@ -8026,25 +8057,25 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
   describe('undo_last через классификатор §7.10 (В-8, Р-31)', () => {
     /** Своё свойство и слияние, подтверждённое владельцем: `property_merge` — `behavior-delta`
      *  (§С2-1 ряд 2), из чата он идёт карточкой, и владелец её принимает. */
-    async function mergedWorld(owner: string): Promise<string> {
+    async function mergedWorld(owner: GraphId): Promise<string> {
       await seedCustomAspect(owner, { key: 'user/undo-merge', label: { ru: 'Слияние', en: 'Merge' },
         aiInstructions: 'x',
         properties: [{ key: 'a', type: { kind: 'text' } }, { key: 'b', type: { kind: 'text' } }] });
-      const asked = await dispatchTool(ctxFor({ identity: { actor: accountOf(owner), graph: owner } }), 'property_merge',
+      const asked = await dispatchTool(ctxFor({ identity: personal(owner) }), 'property_merge',
         { source: 'user/b', into: 'user/a' });
       if (asked.status !== 'pending_confirmation') throw new Error('слияние не спросило');
       const merged = await approvePending(db, { graphId: owner, pendingId: asked.pendingId });
       if (!merged.ok) throw new Error(merged.error.message);
       return merged.actionId;
     }
-    const mergedIntoOf = async (owner: string) =>
-      (await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => tx.select({ m: propertyDefinitions.mergedInto })
+    const mergedIntoOf = async (owner: GraphId) =>
+      (await withIdentity(db, personal(owner), (tx) => tx.select({ m: propertyDefinitions.mergedInto })
         .from(propertyDefinitions).where(eq(propertyDefinitions.id, 'user/b'))))[0]?.m;
 
     test('откат подтверждённого property_merge → pending_confirmation, словарь НЕ возвращён молча', async () => {
       const owner = mintGraph();
       await mergedWorld(owner);
-      const undone = await dispatchTool(ctxFor({ identity: { actor: accountOf(owner), graph: owner } }), 'undo_last', {});
+      const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
       expect(undone.status).toBe('pending_confirmation');
       if (undone.status !== 'pending_confirmation') return;
       expect(String((undone.card as { summary?: string }).summary)).toContain('Откат');
@@ -8069,11 +8100,11 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
     case 'module_set':
       return 'behavior-delta';
   ```
-  Абзац «ЧЕГО ЭТОТ ПЕРЕЧЕНЬ НЕ ЗАКРЫВАЕТ … `undo_last`» (`:452-461`) переписывается на «закрыт В-8».
+  Абзац «ЧЕГО ЭТОТ ПЕРЕЧЕНЬ НЕ ЗАКРЫВАЕТ … `undo_last`» (`:453-462`) переписывается на «закрыт В-8».
   Прогон: `cd apps/server && bun test src/policy/confirmation.test.ts src/tools/registry.test.ts` → **PASS**
-  (пины `registry.test.ts:814-822` считают только ДОСТИЖИМЫХ писателей — внутренних имён среди них нет).
+  (пины `registry.test.ts:816-824` считают только ДОСТИЖИМЫХ писателей — внутренних имён среди них нет).
 
-- [ ] **Шаг 14: зелёный (2/3) — `peekLastUndoable`.** `executor/undo.ts`, после `findLastUndoable` (`:90`):
+- [ ] **Шаг 14: зелёный (2/3) — `peekLastUndoable`.** `executor/undo.ts`, после `findLastUndoable` (`:91`):
   ```ts
   /**
    * То же «последнее неотменённое», но БЕЗ применения (В-8): политике §7.10 нужно посмотреть на обратные
@@ -8090,7 +8121,7 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
   ```
 
 - [ ] **Шаг 15: зелёный (3/3) — `runUndoLast` через классификатор.** `dispatch.ts`: ветка `Resolution` получает
-  снимок (`{ kind: 'undo_last'; reg: RegistrySnapshot }`; в pre-блоке `:329` — `return { kind: 'undo_last', reg
+  снимок (`{ kind: 'undo_last'; reg: RegistrySnapshot }`; в pre-блоке `:332` — `return { kind: 'undo_last', reg
   }`), вызов — `runUndoLast(ctx, input, pre.reg)`; тело после гейта `source/actorKind`:
   ```ts
     // ОТКАТ — ТОТ ЖЕ «РЕЗОЛВЛЕННЫЙ НАБОР ШАГОВ», ЧТО И ДЕЙСТВИЕ (В-8, Р-31): обратные операции известны
@@ -8152,7 +8183,7 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
 - [ ] **Шаг 17: правка графа откатывается по-прежнему молча, и пин инварианта.** Тест в том же `describe`:
   `entity_update` заголовка из чата → `undo_last` → `status: 'ok'`, `undone: true`, `titleOfRowA` вернулся
   (цена В-8 ограничена реестром — «побочный эффект принят», рамка В-8). Плюс в `tools/registry.test.ts`,
-  в тест `:782-812` после списка `writers`:
+  в тест `:784-814` после списка `writers`:
   ```ts
     // В-8: четыре ВНУТРЕННИЕ операции реестра снаружи недостижимы, но встречаются классификатору
     // свёрткой `action.inverse` в `undo_last`. Молчаливое `'none'` у любой — та самая дыра.
@@ -8178,7 +8209,7 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
 §С8-27 требует не «тесты на действия», а **доказательство эквивалентности**: сегодняшний код и декларация
 действия обязаны давать один и тот же результат — состояние графа и строку журнала с нормализованными id.
 Пока такого доказательства нет ни у одного пути (`recon-b2-actions.md` §5: «Golden §С8-27 „байт-в-байт“ —
-нет»), а `confirmPurchase` (`budget/plan-to-fact.ts:42-122`) — единственный в сервере готовый «действие,
+нет»), а `confirmPurchase` (`budget/plan-to-fact.ts:43-123`) — единственный в сервере готовый «действие,
 написанное кодом»: фаза чтения с пятью пречеками и один `entity_update`, к которому бюджет-хук A4 дописывает
 переселект конверта в тот же action. Он и есть эталон.
 
@@ -8194,10 +8225,10 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
 
 - **Create:** `apps/server/test/golden/actions.json`; `apps/server/src/actions/golden.test.ts`.
 - **Modify:**
-  - `apps/server/src/budget/plan-to-fact.ts` — тело `confirmPurchase` (`:42-122`) и шапка модуля (`:1-14`);
+  - `apps/server/src/budget/plan-to-fact.ts` — тело `confirmPurchase` (`:43-123`) и шапка модуля (`:1-14`);
     экспорт и сигнатура сохраняются.
-  - `apps/server/src/budget/plan-to-fact.test.ts` — шапка (`:1-7`) и пять отказных тестов (`:241`, `:268`,
-    `:301`, `:342`, `:373`, `:386` — шесть вызовов, пять поводов: «чужая» и «не-financial» сходятся).
+  - `apps/server/src/budget/plan-to-fact.test.ts` — шапка (`:1-7`) и пять отказных тестов (`:243`, `:270`,
+    `:303`, `:344`, `:375`, `:388` — шесть вызовов, пять поводов: «чужая» и «не-financial» сходятся).
 - **Test:** новый `apps/server/src/actions/golden.test.ts`; правки `plan-to-fact.test.ts` (десять тестов —
   пять остаются дословно, пять правятся по таблице шага 11).
 - **НЕ трогать:** `apps/server/src/routers/budget.ts:100-113` (ручка `budget.confirmPurchase` и её разбор
@@ -8208,11 +8239,11 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
 
 **Интерфейсы:**
 
-*Consumes* (дословно с HEAD `36060b2`, кроме помеченных задачами 6/7):
+*Consumes* (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93), кроме помеченных задачами 6/7):
 
 ```ts
 // apps/server/src/budget/plan-to-fact.ts
-export async function confirmPurchase(db: Db, who: Identity, input: ConfirmPurchaseInput): Promise<ConfirmPurchaseResult>; // :42; после Г-3 — пара
+export async function confirmPurchase(db: Db, who: Identity, input: ConfirmPurchaseInput): Promise<ConfirmPurchaseResult>; // :43; после Г-3 — пара
 // packages/shared/src/contracts/budget.ts
 export const confirmPurchaseInput = z.object({ entityId: z.string().uuid(), occurredOn: dateString, batchId: z.string().uuid() }).strict(); // :158
 export type ConfirmPurchaseResult = { actionId: string; idempotentReplay: boolean };            // :206
@@ -8220,20 +8251,20 @@ export type ConfirmPurchaseResult = { actionId: string; idempotentReplay: boolea
 export interface EntityState { props: Record<string, unknown>; aspects: string[] }              // :30
 export function stateDelta(from: EntityState, to: EntityState): StateDelta;                     // :142
 // apps/server/src/executor/undo.ts
-export async function undoAction(db: Db, args: { identity: Identity; actionId: string }): Promise<ExecuteResult>; // :176
+export async function undoAction(db: Db, args: { identity: Identity; actionId: string }): Promise<ExecuteResult>; // :177
 // apps/server/src/executor/journal.ts
-export function makeChatJournalSink(): JournalSink;                                             // :80 (findByAuditId :128)
+export function makeChatJournalSink(): JournalSink;                                             // :81 (findByAuditId :129)
 // apps/server/src/executor/types.ts
-export interface ActionRecord { id; type; entity_id; actor_user_id; actor_kind; source; mechanism; actor_grant_id?; run_id?; edited_from?; operations; inverse } // :185-278
-export interface ActionCard { tool: string; entity_id: string | null; title: string }           // :281
-// apps/server/src/executor/executor.ts — batch: action.id === batchId, card.title `batch: операций — N` (:702-716)
+export interface ActionRecord { id; type; entity_id; actor_user_id; actor_kind; source; mechanism; actor_grant_id?; run_id?; edited_from?; operations; inverse } // :192-295
+export interface ActionCard { tool: string; entity_id: string | null; title: string }           // :298
+// apps/server/src/executor/executor.ts — batch: action.id === batchId, card.title `batch: операций — N` (:703-717)
 // apps/server/test/helpers.ts
-export function executeWithFixtureCategories(db, req, deps?): Promise<ExecuteResult>;           // :431
-export function mintGraph(): string; export async function truncateAll(): Promise<void>; export function adminDb(); export function appDb();
+export function executeWithFixtureCategories(db, req, deps?): Promise<ExecuteResult>;           // :583
+export function mintGraph(): GraphId; export async function truncateAll(): Promise<void>; export function adminDb(); export function appDb();
 // packages/shared/src/ids.ts
-export const ORBIS_NAMESPACE = 'cb339e97-82d7-4d16-91c6-942d42df7054';                          // :5
-export function batchAuditMessageId(graphId: string, batchId: string): string;
-// образец нормализации — apps/server/test/surfaces.ts:334-365 (`UUID_RE`, `MASKED_KEYS`, `namesOf`, `stabilize`)
+export const ORBIS_NAMESPACE = 'cb339e97-82d7-4d16-91c6-942d42df7054';                          // :16
+export function batchAuditMessageId(graphId: GraphId, batchId: string): string;
+// образец нормализации — apps/server/test/surfaces.ts:345-376 (`UUID_RE`, `MASKED_KEYS`, `namesOf`, `stabilize`)
 // образец закрытого списка расхождений — apps/server/src/registry/validator-golden.test.ts:49-77 (`EXPECTED_DIFFS`)
 // образец процедуры пересдачи эталона — apps/server/src/tools/registry-golden.test.ts:11-20
 // задача 6 — BUILTIN_ACTION_DEFS: 'finance/plan-to-fact' (precondition из пяти конъюнктов, шаг entity_update),
@@ -8269,15 +8300,15 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   //
   // ПОЧЕМУ ДВА ВЛАДЕЛЬЦА, А НЕ ОДИН. Сравниваются ДВА ПРОГОНА одной фикстуры, и оба пишут в граф;
   // на одном владельце второй прогон видел бы последствия первого. Мир поэтому сеется дважды, у
-  // двух владельцев, id — `uuidv5` от владельца и слага (образец `test/surfaces.ts:70`), а снимок
+  // двух владельцев, id — `uuidv5` от владельца и слага (образец `test/surfaces.ts:76`), а снимок
   // стабилизируется: id мира → слаг, graphId и оба таймстампа → метка рода. Только после этого две
   // половины вообще сравнимы.
   import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-  import { batchAuditMessageId, canonicalJson, ORBIS_NAMESPACE } from '@orbis/shared';
+  import { type GraphId, ORBIS_NAMESPACE, batchAuditMessageId, canonicalJson } from '@orbis/shared';
   import { sql } from 'drizzle-orm';
   import { v5 as uuidv5 } from 'uuid';
   import GOLDEN from '../../test/golden/actions.json';
-  import { appDb, executeWithFixtureCategories as execute, requireEnv, truncateAll } from '../../test/helpers';
+  import { appDb, executeWithFixtureCategories as execute, personal, requireEnv, truncateAll } from '../../test/helpers';
   import { withIdentity } from '../db/with-identity';
   import { makeChatJournalSink } from '../executor/journal';
   import type { ActionCard, ActionRecord } from '../executor/types';
@@ -8291,11 +8322,11 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
     legacy: uuidv5('actions-golden:legacy', ORBIS_NAMESPACE),
     action: uuidv5('actions-golden:action', ORBIS_NAMESPACE),
   } as const;
-  /** id мира — от владельца и слага: воспроизводим без обращения к БД (`surfaces.ts:70`). */
-  const worldId = (owner: string, slug: string): string =>
+  /** id мира — от владельца и слага: воспроизводим без обращения к БД (`surfaces.ts:76`). */
+  const worldId = (owner: GraphId, slug: string): string =>
     uuidv5(`${owner.toLowerCase()}:actions-golden:${slug}`, ORBIS_NAMESPACE);
-  /** batch одного прогона — тоже от владельца: `action.id === batchId` (executor.ts:700). */
-  const batchOf = (owner: string, slug: string): string => worldId(owner, `batch:${slug}`);
+  /** batch одного прогона — тоже от владельца: `action.id === batchId` (executor.ts:701). */
+  const batchOf = (owner: GraphId, slug: string): string => worldId(owner, `batch:${slug}`);
 
   interface GoldenState {
     id: string; title: string; archived: boolean;
@@ -8305,12 +8336,12 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   }
 
   const SLUGS = ['envelope-july', 'envelope-aug', 'purchase', 'task-1', 'task-2', 'task-3'] as const;
-  // `UUID_RE`, `MASKED_KEYS`, `namesOf`, `stabilize` — КОПИЯ `apps/server/test/surfaces.ts:334-365`
+  // `UUID_RE`, `MASKED_KEYS`, `namesOf`, `stabilize` — КОПИЯ `apps/server/test/surfaces.ts:345-376`
   // (тот же довод «маска, съевшая лишнее, и есть способ, которым эталон перестаёт что-то значить»),
   // с двумя правками: `MASKED_KEYS` += `graph_id`/`actor_user_id` (строка журнала несёт их snake_case),
   // а словарь имён строится из `SLUGS` этой фикстуры и `batchOf` плюс `owner → '<owner>'`.
   const MASKED_KEYS = new Set(['graphId', 'graph_id', 'actor_user_id', 'createdAt', 'updatedAt']);
-  function namesOf(owner: string): ReadonlyMap<string, string> {
+  function namesOf(owner: GraphId): ReadonlyMap<string, string> {
     const m = new Map<string, string>([[owner.toLowerCase(), '<owner>']]);
     for (const s of SLUGS) {
       m.set(worldId(owner, s).toLowerCase(), `@${s}`);
@@ -8319,8 +8350,8 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
     return m;
   }
 
-  async function snapshotWorld(owner: string, slugs: readonly string[]): Promise<GoldenState[]> {
-    return await withIdentity(db, { actor: accountOf(owner), graph: owner }, async (tx) => {
+  async function snapshotWorld(owner: GraphId, slugs: readonly string[]): Promise<GoldenState[]> {
+    return await withIdentity(db, personal(owner), async (tx) => {
       const out: GoldenState[] = [];
       for (const slug of slugs) {
         const id = worldId(owner, slug);
@@ -8340,8 +8371,8 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   }
 
   /** Строка журнала по детерминированному PK audit-сообщения (§7.8). */
-  async function journalOf(owner: string, batchId: string): Promise<{ action: ActionRecord; card: ActionCard }> {
-    const found = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) =>
+  async function journalOf(owner: GraphId, batchId: string): Promise<{ action: ActionRecord; card: ActionCard }> {
+    const found = await withIdentity(db, personal(owner), (tx) =>
       sink.findByAuditId(tx, batchAuditMessageId(owner, batchId)),
     );
     if (found === undefined) throw new Error(`audit-сообщение ${batchId} не найдено`);
@@ -8379,7 +8410,7 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   test('снятие эталона: confirmPurchase сегодняшним кодом', async () => {
     const before = await snapshotWorld(OWNER.legacy, ['envelope-july', 'envelope-aug', 'purchase']);
     const batchId = batchOf(OWNER.legacy, 'purchase');
-    const r = await confirmPurchase(db, { actor: accountOf(OWNER.legacy), graph: OWNER.legacy }, {
+    const r = await confirmPurchase(db, personal(OWNER.legacy), {
       entityId: worldId(OWNER.legacy, 'purchase'), occurredOn: '2026-08-10', batchId,
     });
     expect(r.idempotentReplay).toBe(false);
@@ -8420,14 +8451,14 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
 - [ ] **Шаг 5: красный — декларация против эталона.** Вторая половина `beforeAll`: тот же вызов на
   `OWNER.action`, но конвейером действий —
   ```ts
-  const resolved = await withIdentity(db, { actor: accountOf(OWNER.action), graph: OWNER.action }, async (tx) =>
+  const resolved = await withIdentity(db, personal(OWNER.action), async (tx) =>
     resolveAction(tx, await effectiveRegistry(tx, OWNER.action), OWNER.action,
       { action: 'finance/plan-to-fact', self: worldId(OWNER.action, 'purchase'),
         params: { occurred_on: '2026-08-10' }, batch_id: batchOf(OWNER.action, 'purchase') },
       { today: '2026-08-10', timeZone: 'Europe/Moscow' }),
   );
   const r = await execute(db, {
-    identity: { actor: accountOf(OWNER.action), graph: OWNER.action }, actorKind: 'owner', source: 'ui',
+    identity: personal(OWNER.action), actorKind: 'owner', source: 'ui',
     batchId: batchOf(OWNER.action, 'purchase'), operations: resolved.operations,
     action: { id: resolved.decl.id, module: resolved.decl.module },
     actionLabel: resolved.decl.label.ru,
@@ -8493,7 +8524,7 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   ```ts
   /**
    * ПЯТЬ ТЕКСТОВ СХЛОПЫВАЮТСЯ В ОДИН — это законное расхождение, а не потеря. У кода пять отказов
-   * `INVARIANT {invariant:'not_planned_purchase'}` с разными текстами (`plan-to-fact.ts:77-96`); у
+   * `INVARIANT {invariant:'not_planned_purchase'}` с разными текстами (`plan-to-fact.ts:78-97`); у
    * действия предусловие ОДНО (§Б6-1 даёт декларации ровно одно `precondition`), и его ложность —
    * один `CONFLICT precondition_failed`. Конъюнкты при этом сохранены все пять и проверяются
    * поимённо — ниже, каждый своей порчей.
@@ -8534,7 +8565,7 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   test('apply → undoAction → состояние «до» байт-в-байт: обратимость §Б6-4 на map-действии', async () => {
     // `undoAction`, а не `undoLast`: цель названа по id (проверяется обратимость ДЕЙСТВИЯ, а не
     // поиск последнего), и путь тот же — внутренний режим, один tx, undo-сообщение вместо action.
-    const undone = await undoAction(db, { identity: { actor: accountOf(OWNER.tasks), graph: OWNER.tasks }, actionId: JOURNAL.tasks.action.id });
+    const undone = await undoAction(db, { identity: personal(OWNER.tasks), actionId: JOURNAL.tasks.action.id });
     expect(undone.ok).toBe(true);
     const back = await snapshotWorld(OWNER.tasks, ['task-1', 'task-2', 'task-3']);
     const names = namesOf(OWNER.tasks);
@@ -8562,7 +8593,7 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
    * ПОРЯДОК «replay-детект ПЕРЕД резолвом» СОХРАНЁН И ОН НЕСУЩИЙ: у повтора того же `batchId`
    * предусловие ложно по построению (`planned` уже `false`), и резолв ответил бы «переводить
    * нечего» на собственном прошлом переходе. Сегодняшний код обходит это тем же способом
-   * (`:49-53`), и менять поведение повтора эта задача не вправе — §С8-27 требует равенства.
+   * (`:50-54`), и менять поведение повтора эта задача не вправе — §С8-27 требует равенства.
    */
   export async function confirmPurchase(
     db: Db, who: Identity, input: ConfirmPurchaseInput,   // Г-3: пара от tRPC-контекста
@@ -8627,20 +8658,20 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   `confirmPurchase` равен эталону») теперь гоняет уже НОВОЕ тело против снимка СТАРОГО — его докблок
   переписывается на это одной строкой.
 
-- [ ] **Шаг 11: правка `plan-to-fact.test.ts`.** Десять тестов (`:158-415`); меняются пять, остальные —
+- [ ] **Шаг 11: правка `plan-to-fact.test.ts`.** Десять тестов (`:160-422`); меняются пять, остальные —
   дословно:
   | тест | было | стало | почему |
   |---|---|---|---|
-  | `:159` перевод ставит факт и конверт по фактической дате | — | без правок | поведение равно (golden) |
-  | `:195` Undo восстанавливает всё целиком | — | без правок | `inverse` тот же |
-  | `:221` повтор batchId → replay | — | без правок | replay-детект сохранён |
-  | `:241` уже-факт | `UNPROCESSABLE_CONTENT` | без правок | `asLegacyRefusal` держит код |
-  | `:268` архивная | `+ message: stringContaining('разархивируйте')` | `stringContaining('архивна')` | пять текстов схлопнулись в один (шаг 10) |
-  | `:301` recurring-инстанс | `UNPROCESSABLE_CONTENT` | без правок | код держится |
-  | `:342` шаблон recurring | `UNPROCESSABLE_CONTENT` | без правок | код держится |
-  | `:373` не-financial | `UNPROCESSABLE_CONTENT` | без правок | код держится |
-  | `:386` чужая сущность (RLS) | `UNPROCESSABLE_CONTENT` | без правок | `NOT_FOUND` резолва переведён |
-  | `:403` агенту FORBIDDEN | — | без правок | гейт ручки не трогаем |
+  | `:161` перевод ставит факт и конверт по фактической дате | — | без правок | поведение равно (golden) |
+  | `:197` Undo восстанавливает всё целиком | — | без правок | `inverse` тот же |
+  | `:223` повтор batchId → replay | — | без правок | replay-детект сохранён |
+  | `:243` уже-факт | `UNPROCESSABLE_CONTENT` | без правок | `asLegacyRefusal` держит код |
+  | `:270` архивная | `+ message: stringContaining('разархивируйте')` | `stringContaining('архивна')` | пять текстов схлопнулись в один (шаг 10) |
+  | `:303` recurring-инстанс | `UNPROCESSABLE_CONTENT` | без правок | код держится |
+  | `:344` шаблон recurring | `UNPROCESSABLE_CONTENT` | без правок | код держится |
+  | `:375` не-financial | `UNPROCESSABLE_CONTENT` | без правок | код держится |
+  | `:388` чужая сущность (RLS) | `UNPROCESSABLE_CONTENT` | без правок | `NOT_FOUND` резолва переведён |
+  | `:405` агенту FORBIDDEN | — | без правок | гейт ручки не трогаем |
   Плюс шапка файла (`:1-7`) получает абзац: «тело переехало в декларацию `finance/plan-to-fact` (§Б6-1); здесь
   проверяется РУЧКА — вход, идемпотентность и код отказа, который экран читает (Р-23). Эквивалентность коду
   доказывает `src/actions/golden.test.ts` (§С8-27)». Плюс один новый тест — «пять поводов дают ОДИН текст:
@@ -8667,7 +8698,7 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   «**Остаток Б-2 (кодом, адресат — срез страниц):** рутина не может ПРЕДЛОЖИТЬ действие.
   `PROPOSAL_ALLOWED_TOOLS` (`packages/shared/src/contracts/agent-loop.ts:388-393`) — закрытый список из
   четырёх core-мутаций, `proposeOperation` — `z.enum` по нему (`:401-403`), сервер валидирует каждую операцию
-  строгой схемой её тула (`routines/propose.ts:149-162`). Довод докблока `:384-386` (форма предложения не
+  строгой схемой её тула (`routines/propose.ts:150-163`). Довод докблока `:385-387` (форма предложения не
   должна зависеть от реестра владельца и обязана пережить его правку) встаёт и перед действием: строка
   действия может смениться, пока предложение лежит в треде. Б-2 путь НЕ открывает; act-рутина зовёт
   `run_action` напрямую и получает отложенную единицу (задача 8) — этого хватает. Запись обязана попасть в
@@ -8696,32 +8727,32 @@ export interface ResolvedAction { decl: ActionDefinition; targets: readonly stri
   дефы перед закрывающей `];` `REGISTRY_TOOLS` (`:687`); `REGISTRY_TOOL_ENVELOPES` (`:693-706`). Образцы —
   `subscriptionSetInput :466-473`, `subscriptionDefinitionJsonSchema :478-496` («описание прозой»).
 - **Modify:** `apps/server/src/registry/ops.ts` — `readActionRow`/`setOwnAction`/`deprecateOwnAction` за
-  `removeOwnSubscription` (`:2288-2293`); образец — `setOwnSubscription :2257-2286`.
-- **Modify:** `apps/server/src/executor/executor.ts` — два ряда `prepareOp` после `:944`;
-  `prepareActionSet`/`prepareActionRemove` после `prepareContractSetsDeltaRemove` (`:3708-3731`); образцы —
-  `prepareSubscriptionSet :3520-3600`, фабрика `registryPlan :3228`, докблок «inverse дописывается в apply» `:3214-3227`.
-- **Modify:** `apps/server/src/executor/types.ts:216-240` (`ActionRecord['type']` += два).
+  `removeOwnSubscription` (`:2289-2294`); образец — `setOwnSubscription :2258-2287`.
+- **Modify:** `apps/server/src/executor/executor.ts` — два ряда `prepareOp` после `:943`;
+  `prepareActionSet`/`prepareActionRemove` после `prepareContractSetsDeltaRemove` (`:3717-3744`); образцы —
+  `prepareSubscriptionSet :3525-3605`, фабрика `registryPlan :3228`, докблок «inverse дописывается в apply» `:3214-3227`.
+- **Modify:** `apps/server/src/executor/types.ts:223-247` (`ActionRecord['type']` += два).
 - **Modify:** `apps/server/src/policy/confirmation.ts` — `reconfiguresByTool` (`:312-441`, ряд подписок `:370-384`),
   переход 10 докблока `:391-441`.
-- **Modify:** `apps/server/src/tools/dispatch.ts` — `registryOperationSummary` (`:1361-1437`),
-  `snapshotRegistryUnit` (`:1755-1923`), ветка `budget_rollover` рядом с `thread_post` (`:343-369`).
-- **Modify:** `apps/server/src/policy/pending.ts` — ветка перед `const operations = toOperations(...)` (`:791`).
+- **Modify:** `apps/server/src/tools/dispatch.ts` — `registryOperationSummary` (`:1365-1441`),
+  `snapshotRegistryUnit` (`:1761-1929`), ветка `budget_rollover` рядом с `thread_post` (`:346-372`).
+- **Modify:** `apps/server/src/policy/pending.ts` — ветка перед `const operations = toOperations(...)` (`:798`).
 - **Modify:** `apps/server/src/policy/sensitivity.ts` (`TOOL_SENSITIVITY` — таблицу и параметр `extra` заводит
   ЗАДАЧА 7 по Р-И-33; здесь она наполняется первой строкой).
-- **Modify:** `apps/server/src/tools/registry.ts` — `rolloverJsonSchema` рядом с `budgetStatusJsonSchema` (`:679-690`),
-  деф в `CORE_TOOLS` за `budget_status` (`:1100-1108`).
-- **Modify:** `packages/shared/src/registry/modules.ts:77`; `apps/server/src/budget/aggregates.ts:951-955, 1030-1036`;
-  `apps/server/src/seed/onboarding.ts:108-118`; `apps/server/src/routers/registry.ts:208-212`.
-- **Test:** `apps/server/src/registry/ops.test.ts`, `apps/server/src/tools/registry.test.ts` (`:151-183` состав,
-  `:218-247` пин `fullScopeOnly`, `:782-812` писатели), `apps/server/src/policy/confirmation.test.ts` (ряд
+- **Modify:** `apps/server/src/tools/registry.ts` — `rolloverJsonSchema` рядом с `budgetStatusJsonSchema` (`:680-691`),
+  деф в `CORE_TOOLS` за `budget_status` (`:1101-1109`).
+- **Modify:** `packages/shared/src/registry/modules.ts:77`; `apps/server/src/budget/aggregates.ts:959-963, 1030-1036`;
+  `apps/server/src/seed/onboarding.ts:111-121`; `apps/server/src/routers/registry.ts:206-210`.
+- **Test:** `apps/server/src/registry/ops.test.ts`, `apps/server/src/tools/registry.test.ts` (`:153-185` состав,
+  `:220-249` пин `fullScopeOnly`, `:784-814` писатели), `apps/server/src/policy/confirmation.test.ts` (ряд
   `behavior-delta` и литеральный список `REGISTRY_TOOL_NAMES` `:1087-1105`), `apps/server/src/tools/dispatch.test.ts`,
   `apps/server/src/routers/registry.test.ts`, `apps/server/test/golden/tool-registry.json` (46 → 49).
 - **НЕ трогать:** `apps/web` (Р-23) — кнопка `RolloverScreen.tsx` продолжает звать ту же ручку `budget.rollover`;
   `packages/shared/src/contracts/budget.ts` (`rolloverInput` — общий контракт ручки и тула); ветку `run_action`
-  `snapshotDeferredUnit` (дом — задача 8); `MUTATION_ENVELOPES` (`dispatch.ts:2980-2988`) — `budget_rollover`
+  `snapshotDeferredUnit` (дом — задача 8); `MUTATION_ENVELOPES` (`dispatch.ts:2986-2994`) — `budget_rollover`
   исполняется МИМО исполнителя, конверта реестра у него нет.
 
-**Интерфейсы — Consumes** (дословно с HEAD `36060b2`; из задач 6/7 — помечено):
+**Интерфейсы — Consumes** (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93); из задач 6/7 — помечено):
 ```ts
 // packages/shared/src/registry/action-type.ts [ЗАДАЧА 6]
 export const actionDefinitionSchema: z.ZodObject</* id, graphId, key, label, description, params, precondition,
@@ -8736,33 +8767,33 @@ export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[
 export function sensitivityFactsOf(reg: RegistrySnapshot,
   facts: Pick<ToolCallFacts,'tool'|'reconfigures'|'grantsAutonomy'|'archives'>,
   extra?: readonly SensitivityFact[]): readonly SensitivityFact[];
-// apps/server/src/registry/ops.ts — приватные в файле: probeSnapshot :2102, loadRegistryRows, currentRegistry :81
-export async function bumpOwnerRegistryVersion(tx, graphId): Promise<…>;                  // registry/version.ts:116
+// apps/server/src/registry/ops.ts — приватные в файле: probeSnapshot :2103, loadRegistryRows, currentRegistry :82
+export async function bumpOwnerRegistryVersion(tx, graphId): Promise<…>;                  // registry/version.ts:117
 // apps/server/src/executor/executor.ts
 function registryPlan(type: ActionRecord['type'], tool: string, title: string): JournalPlan;          // :3228
-function parseEnvelope<S extends z.ZodTypeAny>(schema: S, input: unknown, tool: string): z.infer<S>;   // :874
+function parseEnvelope<S extends z.ZodTypeAny>(schema: S, input: unknown, tool: string): z.infer<S>;   // :974
 export const REGISTRY_OPS: ReadonlySet<string>;      // :3134-3142 — ПРОИЗВОДНОЕ от REGISTRY_TOOL_NAMES
 // apps/server/src/tools/registry.ts
 export interface OrbisToolDef { name: string; description: string; inputJsonSchema: Record<string, unknown>;
   kind: 'read'|'mutate'; internalOnly?: boolean; aspectId?: string; agentOnly?: boolean;
-  routineOnly?: boolean; fullScopeOnly?: boolean }                                          // :42-95
-export function routineToolAllowed(def: Pick<OrbisToolDef,'name'|'kind'>, r: RoutineRef): boolean; // :188-209
+  routineOnly?: boolean; fullScopeOnly?: boolean }                                          // :43-96
+export function routineToolAllowed(def: Pick<OrbisToolDef,'name'|'kind'>, r: RoutineRef): boolean; // :189-210
 // apps/server/src/tools/dispatch.ts
-function levelGate(level: ConfirmationLevel, tool: string, forbiddenMessage?: string): ToolDispatchResult|null; // :551
-export function registryOperationSummary(reg, tool: string, payload: Record<string, unknown>): string;          // :1361
+function levelGate(level: ConfirmationLevel, tool: string, forbiddenMessage?: string): ToolDispatchResult|null; // :554
+export function registryOperationSummary(reg, tool: string, payload: Record<string, unknown>): string;          // :1365
 export async function snapshotRegistryUnit(tx, graphId, tool, payload):
-  Promise<{ input: unknown; summary: string; rows: DeferredRow[] }>;                                            // :1755
-export interface ToolCallCtx { db; identity: Identity /* Г-3: actor + graph */; actorKind; source: 'chat'|'mcp'|'routine'; threadId?;
-  explicitCommand: boolean; clock?; grant?: GrantRef; routine?: RoutineRef; runId? }                            // :137-177
-// apps/server/src/policy/pending.ts: createPending(tx, args) :334 ; approvePending(db, args) :766 ;
-//   toOperations :656-679 (форм две: 'batch_execute' → env.data.operations, иначе один элемент)
+  Promise<{ input: unknown; summary: string; rows: DeferredRow[] }>;                                            // :1761
+export interface ToolCallCtx { db; identity: Identity /* Г-3: пара */; actorKind; source: 'chat'|'mcp'|'routine'; threadId?;
+  explicitCommand: boolean; clock?; grant?: GrantRef; routine?: RoutineRef; runId? }                            // :139-180
+// apps/server/src/policy/pending.ts: createPending(tx, args) :341 ; approvePending(db, args) :773 ;
+//   toOperations :663-686 (форм две: 'batch_execute' → env.data.operations, иначе один элемент)
 // packages/shared/src/contracts/budget.ts:126-141
 export const rolloverInput = z.object({ month: monthString,
   rows: z.array(z.object({ categoryId: z.string().uuid(), limit: nonNegativeDecimal, carryover: decimal })
     .strict()).min(1), batchId: z.string().uuid() }).strict();
-// apps/server/src/budget/aggregates.ts:951 — rolloverCreate(db, who: Identity, input): Promise<RolloverResult>;   // после Г-3 — пара
-//   ExecuteRequest :1029-1036 (actorKind 'owner', source 'ui', mechanism 'rule')
-// apps/server/src/seed/gardener.ts: seedRoutineId(graphId, slug) :57 ; seedGardener(db, graphId, clock?) :160-202
+// apps/server/src/budget/aggregates.ts:959 — rolloverCreate(db, who: Identity, input): Promise<RolloverResult>;   // после Г-3 — пара
+//   ExecuteRequest :1037-1044 (actorKind 'owner', source 'ui', mechanism 'rule')
+// apps/server/src/seed/gardener.ts: seedRoutineId(graphId, slug) :57 ; seedGardener(db, who: Identity, clock?) :161-203
 // packages/shared/src/registry/builtin-properties.ts:1006-1027 — `orbis/routine_days`: select many, варианты
 //   mo|tu|we|th|fr|sa|su (дня МЕСЯЦА нет); builtin-aspects.ts:448-458 — свойство необязательно, «без свойства = каждый день»
 ```
@@ -8774,7 +8805,7 @@ export const actionSetInput; export type ActionSetInput;      // Р-И-34
 export const actionRemoveInput; export type ActionRemoveInput;
 // REGISTRY_TOOLS += 2 дефа (kind:'mutate', fullScopeOnly:true); NAMES/ENVELOPES растут сами
 // apps/server/src/registry/ops.ts
-export interface ActionRow { id: string; graphId: string|null; key: string; label: LocalizedText;
+export interface ActionRow { id: string; graphId: GraphId|null; key: string; label: LocalizedText;
   description: LocalizedText; params: unknown; precondition: unknown; over: unknown; steps: unknown;
   sensitivity: string[]; offeredBy: unknown; module: string|null; batchCap: number|null;
   status: 'active'|'deprecated'; rank: number }
@@ -8803,12 +8834,12 @@ export async function seedRolloverRoutine(db, who: Identity, clock?): Promise<{ 
 1. **`action_remove` = deprecate, строка остаётся** (§А10-3, Р-И-34). Inverse заведения — `action_remove`, а не снос:
    внутренней операции `action_row_restore` (как у аспектов) НЕ заводим — у действия нет «массива целиком», который
    `set` заменял бы необратимо, а второе внутреннее имя стоило бы строки в пине писателей.
-2. **`id` действия владельца = его `key`** (как у аспекта, `createAspect ops.ts:2480-2487`): `key` — адрес, которым
+2. **`id` действия владельца = его `key`** (как у аспекта, `createAspect ops.ts:2481-2488`): `key` — адрес, которым
    его зовут `run_action` и тул `action_<key>` (Р-И-28); суффикс разведения подменил бы уже названный адрес.
-3. **`OWN_ACTION_RANK = 1000`** — буква в букву `OWN_SUBSCRIPTION_RANK` (`executor.ts:3601-3602`): сиды занимают
+3. **`OWN_ACTION_RANK = 1000`** — буква в букву `OWN_SUBSCRIPTION_RANK` (`executor.ts:3609-3610`): сиды занимают
    1..N, своё встаёт за ними, порядок тулов `action_*` детерминирован.
 4. **`budget_rollover` — своя ветка `dispatchTool`, не строка `MUTATION_ENVELOPES`:** `rolloverCreate` сам открывает
-   транзакции и сам зовёт `execute`, а `prepareOp` его имени не знает (`executor.ts:954`). Приём — как `thread_post`.
+   транзакции и сам зовёт `execute`, а `prepareOp` его имени не знает (`executor.ts:953`). Приём — как `thread_post`.
 5. **Поле входа — `batchId`:** конверт тула — ТОТ ЖЕ `rolloverInput`, которым пользуется ручка и web; вторая форма
    имени завела бы второе описание одного входа.
 6. **`module` своего действия — `null`, и это не «поле забыли».** Колонка `module` размечает строки реестров
@@ -8822,7 +8853,7 @@ export async function seedRolloverRoutine(db, who: Identity, clock?): Promise<{ 
 ---
 
 - [ ] **Шаг 1: красный — три имени в реестре тулов.** В `tools/registry.test.ts` в describe «buildToolRegistry:
-  состав» рядом с `:151`:
+  состав» рядом с `:153`:
 ```ts
 test('два тула действий и инструмент переноса: mutate, конверт и схема по соседству', async () => {
   const defs = await registryFor(userB);
@@ -8916,13 +8947,13 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
   test('setOwnAction пишет строку, поднимает версию и проверяет декларацию ДО записи', async () => {
     const owner = mintGraph();
     await seedOwnerGraph(db, owner);
-    const before = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => readRegistryVersions(tx, owner));
-    const saved = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => setOwnAction(tx, owner, DECL));
+    const before = await withIdentity(db, personal(owner), (tx) => readRegistryVersions(tx, owner));
+    const saved = await withIdentity(db, personal(owner), (tx) => setOwnAction(tx, owner, DECL));
     expect([saved.id, saved.key, saved.status]).toEqual(['user/close-month', 'user/close-month', 'active']);
-    expect((await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => readRegistryVersions(tx, owner))).ownerVersion)
+    expect((await withIdentity(db, personal(owner), (tx) => readRegistryVersions(tx, owner))).ownerVersion)
       .toBeGreaterThan(before.ownerVersion);
     // Смысл проверяется на ЗАПИСИ, а не на чтении (Р-И-7): шаг с чужим тулом до строки не доезжает.
-    await expect(withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) =>
+    await expect(withIdentity(db, personal(owner), (tx) =>
       setOwnAction(tx, owner, { ...DECL, steps: [{ tool: 'budget_status', input: {} }] }),
     )).rejects.toMatchObject({ details: { reason: 'ACTION_STEP_TOOL' } });
   });
@@ -8930,16 +8961,16 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
   test('namespace: orbis/… своей строкой не занимается', async () => {
     const owner = mintGraph();
     await seedOwnerGraph(db, owner);
-    await expect(withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => setOwnAction(tx, owner, { ...DECL, key: 'orbis/close-month' })))
+    await expect(withIdentity(db, personal(owner), (tx) => setOwnAction(tx, owner, { ...DECL, key: 'orbis/close-month' })))
       .rejects.toMatchObject({ details: { reason: 'ACTION_NAMESPACE' } });
   });
 
   test('deprecateOwnAction помечает строку, но НЕ удаляет её (§А10-3)', async () => {
     const owner = mintGraph();
     await seedOwnerGraph(db, owner);
-    await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => setOwnAction(tx, owner, DECL));
-    await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => deprecateOwnAction(tx, owner, 'user/close-month'));
-    expect((await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => readActionRow(tx, owner, 'user/close-month')))?.status)
+    await withIdentity(db, personal(owner), (tx) => setOwnAction(tx, owner, DECL));
+    await withIdentity(db, personal(owner), (tx) => deprecateOwnAction(tx, owner, 'user/close-month'));
+    expect((await withIdentity(db, personal(owner), (tx) => readActionRow(tx, owner, 'user/close-month')))?.status)
       .toBe('deprecated');
   });
 });
@@ -8947,10 +8978,10 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
   `cd apps/server && bun test src/registry/ops.test.ts` → **FAIL**: `setOwnAction` не экспортируется.
 
 - [ ] **Шаг 5: `readActionRow`/`setOwnAction`/`deprecateOwnAction`.** В `registry/ops.ts` за
-  `removeOwnSubscription` (`:2293`):
+  `removeOwnSubscription` (`:2294`):
 ```ts
 /** ПОЛНАЯ строка `action_definitions` владельца — в той же форме, что `SubscriptionRow` выше. */
-export async function readActionRow(tx: Tx, graphId: string, idOrKey: string): Promise<ActionRow | undefined> {
+export async function readActionRow(tx: Tx, graphId: GraphId, idOrKey: string): Promise<ActionRow | undefined> {
   const rows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, params, precondition, "over", steps, sensitivity,
            offered_by, module, batch_cap, status, rank
@@ -8965,7 +8996,7 @@ export async function readActionRow(tx: Tx, graphId: string, idOrKey: string): P
  * Смысл декларации проверяется ЗДЕСЬ, до записи (Р-И-7): на записи владелец видит отказ и может его
  * исправить, на чтении — только запертый снимок реестра.
  */
-export async function setOwnAction(tx: Tx, graphId: string, decl: ActionSetInput): Promise<ActionDefinition> {
+export async function setOwnAction(tx: Tx, graphId: GraphId, decl: ActionSetInput): Promise<ActionDefinition> {
   if (!decl.key.startsWith('user/')) {
     throw new ExecError('VALIDATION', `свои действия живут в namespace user/ — «${decl.key}» занимает чужой (§Б6-1)`,
       { reason: 'ACTION_NAMESPACE', action: decl.key });
@@ -9006,7 +9037,7 @@ const OWN_ACTION_RANK = 1000;
  * снос сделал бы историю нечитаемой (§А10-3). Системную строку этим путём не тронуть: условие по
  * `graph_id` отсекает её, а гейт адреса стоит в `prepareActionRemove`.
  */
-export async function deprecateOwnAction(tx: Tx, graphId: string, actionId: string): Promise<void> {
+export async function deprecateOwnAction(tx: Tx, graphId: GraphId, actionId: string): Promise<void> {
   await tx.execute(sql`UPDATE action_definitions SET status = 'deprecated'
                         WHERE graph_id = ${graphId}::uuid AND id = ${actionId}`);
   await bumpOwnerRegistryVersion(tx, graphId);
@@ -9014,8 +9045,8 @@ export async function deprecateOwnAction(tx: Tx, graphId: string, actionId: stri
 ```
   `cd apps/server && bun test src/registry/ops.test.ts` → **PASS**.
 
-- [ ] **Шаг 6: тип строки журнала.** В `executor/types.ts` после `'contract_sets_delta_removed'` (`:240`) —
-  два варианта плюс абзац докблока по образцу `:216-218`:
+- [ ] **Шаг 6: тип строки журнала.** В `executor/types.ts` после `'contract_sets_delta_removed'` (`:247`) —
+  два варианта плюс абзац докблока по образцу `:223-225`:
 ```ts
     // action_set / action_removed — операции реестра ДЕЙСТВИЙ (§Б6-1, §С3). `entity_id: null` по тому
     // же доводу, что у реестровых операций выше: меняется устройство системы, а не запись графа.
@@ -9031,11 +9062,11 @@ export async function deprecateOwnAction(tx: Tx, graphId: string, actionId: stri
 test('action_set идёт планом исполнителя; обратное к заведению — снятие, а не снос строки', async () => {
   const owner = mintGraph();
   await seedOwnerGraph(db, owner);
-  const r = await execute(db, { identity: { actor: accountOf(owner), graph: owner }, actorKind: 'owner', source: 'ui',
+  const r = await execute(db, { identity: personal(owner), actorKind: 'owner', source: 'ui',
     operations: [{ tool: 'action_set', input: DECL }] });
   expect(r.ok).toBe(true);
-  await undoAction(db, { identity: { actor: accountOf(owner), graph: owner }, actionId: (r as { actionId: string }).actionId });
-  const row = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => readActionRow(tx, owner, 'user/close-month'));
+  await undoAction(db, { identity: personal(owner), actionId: (r as { actionId: string }).actionId });
+  const row = await withIdentity(db, personal(owner), (tx) => readActionRow(tx, owner, 'user/close-month'));
   // §А10-3: строка остаётся, но уходит из предложений и из реестра тулов (решение 1).
   expect(row?.status).toBe('deprecated');
 });
@@ -9043,7 +9074,7 @@ test('action_set идёт планом исполнителя; обратное 
   `cd apps/server && bun test src/registry/ops.test.ts` → **FAIL**: `неизвестный тул «action_set»`.
 
 - [ ] **Шаг 8: `prepareActionSet`/`prepareActionRemove` и ряды `prepareOp`.** В `executor.ts` после
-  `prepareContractSetsDeltaRemove` (`:3731`):
+  `prepareContractSetsDeltaRemove` (`:3744`):
 ```ts
 /**
  * Заведение и переписывание СВОЕЙ строки действия (§Б6-1, §С3). Ветки по адресу здесь нет, в отличие
@@ -9103,7 +9134,7 @@ function actionDeclOf(row: ActionRow): Record<string, unknown> {
   return decl;
 }
 ```
-  два ряда в `prepareOp` после `:944`:
+  два ряда в `prepareOp` после `:943`:
   `if (tool === 'action_set') return prepareActionSet(ctx, input);`
   `if (tool === 'action_remove') return prepareActionRemove(ctx, input);`
   `cd apps/server && bun test src/registry/ops.test.ts` → **PASS**.
@@ -9130,7 +9161,7 @@ test('§С2-1: тулы действий — behavior-delta ПО ТУЛУ, дл�
   `cd apps/server && bun test src/policy/confirmation.test.ts` → **PASS**.
 
 - [ ] **Шаг 10: сводка и снимок отложенной единицы.** В `dispatch.ts` — резолвер рядом с `contractName`
-  (`:1379-1383`) и две ветки `registryOperationSummary` перед хвостом (`:1432`):
+  (`:1383-1387`) и две ветки `registryOperationSummary` перед хвостом (`:1436`):
 ```ts
   const actionName = (address: unknown): string => {
     if (typeof address !== 'string') return String(address);
@@ -9144,7 +9175,7 @@ test('§С2-1: тулы действий — behavior-delta ПО ТУЛУ, дл�
     case 'action_remove':
       return `Снятие действия «${actionName(payload.action)}»`;
 ```
-  и ветка `snapshotRegistryUnit` перед хвостом (`:1916`):
+  и ветка `snapshotRegistryUnit` перед хвостом (`:1922`):
 ```ts
     case 'action_set':
     case 'action_remove': {
@@ -9162,12 +9193,12 @@ test('§С2-1: тулы действий — behavior-delta ПО ТУЛУ, дл�
       };
     }
 ```
-  Хвостовые докблоки `:1433-1437` и `:1917-1920` — «двенадцать» → «четырнадцать». Тесты в `dispatch.test.ts`:
+  Хвостовые докблоки `:1437-1441` и `:1923-1926` — «двенадцать» → «четырнадцать». Тесты в `dispatch.test.ts`:
   две фразы в golden фраз (`payloads`) и карточка единицы `action_set` от рутины.
   `cd apps/server && bun test src/tools/dispatch.test.ts` → **PASS**.
 
 - [ ] **Шаг 11: ручки-зеркала и коммит половины «тулы действий».** В `routers/registry.ts` перед `effective:`
-  (`:212`):
+  (`:210`):
 ```ts
   setAction: ownerOnlyProcedure.input(actionSetInput)
     .mutation(({ ctx, input }) => registryMutation('action_set')(ctx, input)),
@@ -9195,7 +9226,7 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     const owner = mintGraph();
     const { month, rows } = await prevMonthEnvelopes(owner);      // фикстура: конверт прошлого месяца
     const out = await dispatchTool(
-      { db, identity: { actor: accountOf(owner), graph: owner }, actorKind: 'owner', source: 'chat', explicitCommand: true },
+      { db, identity: personal(owner), actorKind: 'owner', source: 'chat', explicitCommand: true },
       'budget_rollover', { month, rows, batchId: newId() },
     );
     expect(out.status).toBe('ok');
@@ -9207,7 +9238,7 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
   test('внутри batch_execute не исполняется: исполнитель такого тула не знает', async () => {
     const owner = mintGraph();
     const out = await dispatchTool(
-      { db, identity: { actor: accountOf(owner), graph: owner }, actorKind: 'owner', source: 'chat', explicitCommand: true },
+      { db, identity: personal(owner), actorKind: 'owner', source: 'chat', explicitCommand: true },
       'batch_execute', { batch_id: newId(), operations: [{ tool: 'budget_rollover', input: {} }] },
     );
     expect(out).toMatchObject({ status: 'error', error: { code: 'VALIDATION' } });
@@ -9217,7 +9248,7 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
   `cd apps/server && bun test src/tools/dispatch.test.ts` → **FAIL**: тула `budget_rollover` в реестре нет.
 
 - [ ] **Шаг 13: деф, схема, манифест, факт чувствительности.** В `tools/registry.ts` после
-  `budgetStatusJsonSchema` (`:690`):
+  `budgetStatusJsonSchema` (`:691`):
 ```ts
 const rolloverJsonSchema = {
   type: 'object',
@@ -9235,7 +9266,7 @@ const rolloverJsonSchema = {
   additionalProperties: false,
 };
 ```
-  деф в `CORE_TOOLS` за `budget_status` (`:1108`):
+  деф в `CORE_TOOLS` за `budget_status` (`:1109`):
 ```ts
   {
     // §Б6-5 ревизии 4 (В-4): у переноса ДВА дома — правило-носитель параметров (§Б4-3, задача 13) и
@@ -9265,11 +9296,11 @@ export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[
 ```
 
 - [ ] **Шаг 14: ветка диспатча, исполнение единицы, атрибуция `rolloverCreate`.** В `dispatch.ts` после ветки
-  `thread_post` (`:369`):
+  `thread_post` (`:372`):
 ```ts
     if (pre.def.name === 'budget_rollover') {
       // СВОЯ ВЕТКА, а не строка `MUTATION_ENVELOPES` (решение 4): `rolloverCreate` сам открывает
-      // транзакции и сам зовёт `execute`, а `prepareOp` его имени не знает (`executor.ts:954`).
+      // транзакции и сам зовёт `execute`, а `prepareOp` его имени не знает (`executor.ts:953`).
       // Конверт разбирается ДО классификации — §7.10 дословно.
       const parsed = parseEnvelope(rolloverInput, input, 'budget_rollover');
       const facts = {
@@ -9312,7 +9343,7 @@ export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[
       return { status: 'ok', result: r };
     }
 ```
-  в `snapshotDeferredUnit` (`dispatch.ts:1585-1600`) — ветка ПОСЛЕ ветки `run_action` задачи 8 и до `if (tool !== 'entity_update' …)`:
+  в `snapshotDeferredUnit` (`dispatch.ts:1591-1606`) — ветка ПОСЛЕ ветки `run_action` задачи 8 и до `if (tool !== 'entity_update' …)`:
 ```ts
   if (tool === 'budget_rollover') {
     // Р-К-39: снимать предусловия переносу нечего — конверты нового месяца ещё не существуют, а
@@ -9326,7 +9357,7 @@ export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[
   }
 ```
   (имена полей строки — по `rolloverInput` `contracts/budget.ts:126-141`: имплементер сверяет `categoryId`/`limit` с фактическими ключами схемы и
-  не меняет их); в `policy/pending.ts` ПЕРЕД `const operations = toOperations(found.pending)` (`:791`):
+  не меняет их); в `policy/pending.ts` ПЕРЕД `const operations = toOperations(found.pending)` (`:798`):
 ```ts
     // ПЕРЕНОС ИСПОЛНЯЕТСЯ СВОИМ КОДОМ, а не пачкой операций: `toOperations` собирает ExecuteRequest, а
     // `rolloverCreate` строит его САМ — по одной `entity_create` на строку, с `mechanism: 'rule'` и
@@ -9341,7 +9372,7 @@ export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[
       return { ok: true, actionId: r.actionId, results: [], idempotentReplay: r.idempotentReplay };
     }
 ```
-  и `rolloverCreate` (`aggregates.ts:951-955`, `:1029-1036`):
+  и `rolloverCreate` (`aggregates.ts:959-963`, `:1037-1044`):
 ```ts
 export async function rolloverCreate(
   db: Db, who: Identity, input: RolloverInput,   // Г-3: пара от резолвера; graphId = who.graph
@@ -9363,7 +9394,7 @@ export async function rolloverCreate(
   `cd apps/server && bun test src/tools/dispatch.test.ts src/budget/rollover.test.ts` → **PASS**.
 
 - [ ] **Шаг 15: красный — сид рутины.** `apps/server/src/seed/rollover-routine.test.ts` по образцу
-  `seed/gardener.test.ts:165-241`:
+  `seed/gardener.test.ts:168-244`:
 ```ts
 describe('сид рутины «Перенос остатков» (В-4, Р-29)', () => {
   test('онбординг сеет ОДНУ рутину с детерминированным id; повтор не плодит вторую', async () => {
@@ -9371,7 +9402,7 @@ describe('сид рутины «Перенос остатков» (В-4, Р-29)'
     expect(await callerFor(owner).user.seedOnboarding()).toEqual({ seeded: true });
     const id = seedRoutineId(owner, ROLLOVER_ROUTINE_SLUG);
     expect(await routineTitles(owner)).toContain(ROLLOVER_ROUTINE_TITLE);
-    expect(await seedRolloverRoutine(db, { actor: accountOf(owner), graph: owner })).toEqual({ seeded: false, id });
+    expect(await seedRolloverRoutine(db, personal(owner))).toEqual({ seeded: false, id });
   });
 
   test('доверенность: белый список РОВНО budget_rollover, стадия active', async () => {
@@ -9397,7 +9428,7 @@ describe('сид рутины «Перенос остатков» (В-4, Р-29)'
     const allowed = (mode: 'propose' | 'act') =>
       routineToolAllowed({ name: 'budget_rollover', kind: 'mutate' },
         { id: 'r', mode, allowedTools: new Set(['budget_rollover']) } as RoutineRef);
-    // В режиме `propose` рутине из мутаций доступен РОВНО `orbis_propose` (`tools/registry.ts:206-208`),
+    // В режиме `propose` рутине из мутаций доступен РОВНО `orbis_propose` (`tools/registry.ts:207-209`),
     // а тот принимает только правки графа (`contracts/agent-loop.ts:388-393`) — довод Р-16-1 садовника.
     // Пин фиксирует ФАКТ кода, из которого следует режим сида (Р-К-38, В-П-7).
     expect([allowed('propose'), allowed('act')]).toEqual([false, true]);
@@ -9406,7 +9437,7 @@ describe('сид рутины «Перенос остатков» (В-4, Р-29)'
 ```
   `cd apps/server && bun test src/seed/rollover-routine.test.ts` → **FAIL**: модуля `seed/rollover-routine` нет.
 
-- [ ] **Шаг 16: сид рутины.** `apps/server/src/seed/rollover-routine.ts` — по образцу `seed/gardener.ts:160-202`
+- [ ] **Шаг 16: сид рутины.** `apps/server/src/seed/rollover-routine.ts` — по образцу `seed/gardener.ts:161-203`
   дословно (проба по PK, `execute` своей транзакцией, `source:'system'`, `mechanism:'seed'`, без синка):
 ```ts
 export const ROLLOVER_ROUTINE_SLUG = 'budget-rollover';
@@ -9471,7 +9502,7 @@ export async function seedRolloverRoutine(
   return { seeded: true, id };
 }
 ```
-  и вызов в `seedOwner` (`onboarding.ts:117`) сразу за `seedGardener`:
+  и вызов в `seedOwner` (`onboarding.ts:120`) сразу за `seedGardener`:
 ```ts
   await seedGardener(db, graphId, clock);
   // Рутина модуля Финансы (В-4): та же проба по PK и та же роль досева, что у садовника.
@@ -9487,14 +9518,14 @@ export async function seedRolloverRoutine(
   1. `apps/server/test/golden/tool-registry.json` — **46 → 49** (Р-К-8): `action_set`, `action_remove`,
      `budget_rollover`. Руками по рецепту `registry-golden.test.ts:17-21` (`buildToolRegistry` на чистом сиде →
      `JSON.stringify(snap, null, 2)` → `bunx biome check --write`).
-  2. `tools/registry.test.ts:151` — заголовок пересчитывается ПОСЛАГАЕМО, а не подгоняется под итог:
+  2. `tools/registry.test.ts:153` — заголовок пересчитывается ПОСЛАГАЕМО, а не подгоняется под итог:
      было «13 core + 12 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 44»
      (13+12+5+1+1+12 = 44); задача 7 положила `run_action` в `CORE_TOOLS` и один тул действия
      (`action_planner_postpone_overdue`) — «14 core + … + 1 тул действия = 46»; эта задача кладёт
      `budget_rollover` в `CORE_TOOLS` и два тула в `REGISTRY_TOOLS` — **«15 core + 14 реестровых + 5 глаголов +
      orbis_propose + orbis_ask + 12 attach_* + 1 тул действия = 49»** (15+14+5+1+1+12+1 = 49, цепочка Р-К-8).
      `defs.length === TOOL_REGISTRY_GOLDEN.length` не трогается (число производное от эталона).
-  3. `tools/registry.test.ts:789-806` — литеральный список писателей 16 → 18 имён (`action_remove`, `action_set`
+  3. `tools/registry.test.ts:791-808` — литеральный список писателей 16 → 18 имён (`action_remove`, `action_set`
      первыми по алфавиту); счётчик `EXECUTOR_SRC.match(/registryPlan\(/g)` сойдётся сам (`writers.size + 1`).
   4. `apps/server/src/policy/confirmation.test.ts:1087-1105` (Р-К-64) — тест «перечень тулов реестра берётся у
      реестра, а не переписан здесь литералами»: литеральный список `REGISTRY_TOOL_NAMES` 12 → **14**, строка
@@ -9521,9 +9552,9 @@ export async function seedRolloverRoutine(
 ```
      Цикл ниже (`:1105-1107`, «ни у одного имени ответ не `none`») правки не требует — его закрывает ряд
      `behavior-delta` шага 9; но без пересдачи списка сьют краснеет РАНЬШЕ цикла, на этом `toEqual`.
-  5. `apps/server/src/tools/registry.test.ts:218-247` — тест `fullScopeOnly`. Заголовок «у property_catalog и
+  5. `apps/server/src/tools/registry.test.ts:220-249` — тест `fullScopeOnly`. Заголовок «у property_catalog и
      двенадцати тулов реестра (§А9-4) — и ни у кого больше» → «у property_catalog, budget_rollover и
-     четырнадцати тулов реестра …»; докблок «ЧЕСТНО О СИЛЕ ЭТОГО ПИНА» (`:224-228`) — «у двенадцати реестровых
+     четырнадцати тулов реестра …»; докблок «ЧЕСТНО О СИЛЕ ЭТОГО ПИНА» (`:226-230`) — «у двенадцати реестровых
      тулов» → «у четырнадцати». Список упорядочен ПОЗИЦИЕЙ в `buildToolDefs` (`CORE_TOOLS`, затем
      `REGISTRY_TOOLS`), а не алфавитом: `budget_rollover` встаёт ПЕРЕД `property_catalog` (деф шага 13 стоит за
      `budget_status`, то есть выше каталога), а два тула действий — в хвосте реестровых:
@@ -9547,14 +9578,14 @@ export async function seedRolloverRoutine(
       'action_remove',
     ]);
 ```
-     Последняя строка теста (`:249`: `for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind)
+     Последняя строка теста (`:251`: `for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind)
      .toBe('mutate')`) правки не требует — оба новых тула `mutate`. **Список сверить с HEAD ВЕТКИ, а не с
      `36060b2`:** задача 7 кладёт `run_action` с `fullScopeOnly: false` (Р-И-26 — скоуп решают шаги) и тул
      действия `action_planner_postpone_overdue`, чей флаг вычисляется по шагам; если её деф окажется
      `fullScopeOnly: true`, имя уже будет в списке и второй раз его добавлять не нужно.
-  6. Сьюты, считающие рутины владельца после ОНБОРДИНГА (их теперь две): `seed/gardener.test.ts:171-172` —
-     `expect(first).toHaveLength(1)` → отбор строки по `seedRoutineId(owner, GARDENER_SLUG)`; `:191`, `:200-202`
-     — там же. Фикстуры на `seedOwnerGraph` НЕ задеты: рутины сеет `seedOwner` (докблок `onboarding.ts:120-128`) —
+  6. Сьюты, считающие рутины владельца после ОНБОРДИНГА (их теперь две): `seed/gardener.test.ts:174-175` —
+     `expect(first).toHaveLength(1)` → отбор строки по `seedRoutineId(owner, GARDENER_SLUG)`; `:194`, `:203-205`
+     — там же. Фикстуры на `seedOwnerGraph` НЕ задеты: рутины сеет `seedOwner` (докблок `onboarding.ts:123-131`) —
      проверить грепом `seedOnboarding()` по тестам.
   `bun run test` из корня → **PASS**; `bun run lint`, `bun run typecheck` → **PASS**.
 
@@ -9590,61 +9621,61 @@ git commit -- apps/server/src/tools/registry.ts apps/server/src/tools/dispatch.t
   Record<month, BudgetOverview>}`, §1.14), `apps/server/src/test/overview-golden.ts` (нормализатор и загрузчик —
   дом в `src/test/`, потому что читают его И обычный сьют, И `perf/`, как `volume-fixture.ts`),
   `apps/server/src/subscriptions/budget-golden.test.ts` (СВОЙ мир с прибитым «сегодня» — решение 6).
-- **Modify:** `apps/server/src/budget/aggregates.ts` — шапка `:1-9`; снос `computeOverview` (`:426-620`) и
-  помощников: `propsOf :101-118`, `notRecurringTemplateSql :119-136`, `spentByEnvelope :204-236`,
-  `categoryEdges :251-269`, `descendantsOf :270-285`, `RawEnvelope :286-297`, `rawEnvelopeOf :298-329`,
-  `phaseOf :330-339`, `statusOf :340-373`, `isAlert :374-382`, `countAlerts :383-389`,
-  `rawEnvelopesOfMonth :390-420`; `rolloverPreview :789-931` — на движок.
+- **Modify:** `apps/server/src/budget/aggregates.ts` — шапка `:1-9`; снос `computeOverview` (`:428-622`) и
+  помощников: `propsOf :103-120`, `notRecurringTemplateSql :121-138`, `spentByEnvelope :206-238`,
+  `categoryEdges :253-271`, `descendantsOf :272-287`, `RawEnvelope :288-299`, `rawEnvelopeOf :300-331`,
+  `phaseOf :332-341`, `statusOf :342-375`, `isAlert :376-384`, `countAlerts :385-391`,
+  `rawEnvelopesOfMonth :392-422`; `rolloverPreview :797-939` — на движок.
 - **Modify:** `apps/server/src/subscriptions/budget.ts` — шапка `:5-9` (строка «оракул живёт рядом до Б-2»);
-  новый экспорт `monthLedgersOf` рядом с `budgetAlertCountOf` (`:1417-1429`).
-- **Modify:** `apps/server/src/subscriptions/budget.test.ts` — шапка `:1-7`; импорт `:28`; пять сверок с оракулом
-  (`:320`, `:483`, `:596`, `:694-702`, `:834-839`).
-- **Modify:** `apps/server/perf/volume.test.ts` — шапка `:7`, импорт `:51`, `overviewPairOn :192-208`,
-  `measureInterleavedP95 :310-345`, сторож корпуса `:523-530`, базовая линия `:601-616`, гейт §С8-15 `:617-684`,
-  пин порогов `:686-696`, сверка-замер `:698-…`; `VOLUME_BUDGETS :107`, `Measured :109-112`,
+  новый экспорт `monthLedgersOf` рядом с `budgetAlertCountOf` (`:1418-1430`).
+- **Modify:** `apps/server/src/subscriptions/budget.test.ts` — шапка `:1-7`; импорт `:31`; пять сверок с оракулом
+  (`:323`, `:486`, `:599`, `:697-705`, `:837-842`).
+- **Modify:** `apps/server/perf/volume.test.ts` — шапка `:7`, импорт `:51`, `overviewPairOn :194-210`,
+  `measureInterleavedP95 :312-347`, сторож корпуса `:525-532`, базовая линия `:603-618`, гейт §С8-15 `:619-686`,
+  пин порогов `:688-698`, сверка-замер `:700-…`; `VOLUME_BUDGETS :107`, `Measured :109-112`,
   `gateViolations :115-130`.
 - **Modify:** `apps/server/src/test/volume-fixture.ts:14-17` (правило потребителям).
-- **Modify:** `apps/server/src/budget/rollover.test.ts` — восемь тестов превью (`:179-334`).
+- **Modify:** `apps/server/src/budget/rollover.test.ts` — восемь тестов превью (`:180-335`).
 - **Modify:** `packages/shared/src/registry/modules.ts:92-96` (`codeRemainder` минус строка оракула),
-  `packages/shared/src/registry/subscription-fixtures.ts:64-66` (докблок), `apps/server/test/surfaces.ts:403-406`
+  `packages/shared/src/registry/subscription-fixtures.ts:64-66` (докблок), `apps/server/test/surfaces.ts:414-417`
   (комментарий — импорта оракула там нет).
 - **НЕ трогать:** `apps/server/src/budget/categories.ts` (общее чтение обоих движков — с уходом оракула остаётся
   единственным читателем и правок не требует, Р-32); `envelopeForCategoryOf`/`categoryTrendOf` и пять боевых
-  обёрток `aggregates.ts:647-749` (уже на движке с задачи 9 Б-1); `rolloverCreate` (её актор — задача 10, её
+  обёрток `aggregates.ts:649-757` (уже на движке с задачи 9 Б-1); `rolloverCreate` (её актор — задача 10, её
   читатель декларации — задача 13); PRD-адреса `03-budget.md:133`, `:161`, `01-architecture.md` — их правит
   ЗАДАЧА 18; `apps/web` (Р-23).
 
-**Интерфейсы — Consumes** (дословно с HEAD `36060b2`):
+**Интерфейсы — Consumes** (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93)):
 ```ts
 // apps/server/src/subscriptions/budget.ts
-export const BUDGET_SUBSCRIPTION_ID = 'orbis/budget-overview';                                     // :76
-export interface BudgetArgs { month: string; today: string; /* … */ }                              // :95-110
-export async function budgetOverviewOf(tx: Tx, graphId: string, args: BudgetArgs,
-  def: BudgetSubscription, reg: RegistrySnapshot): Promise<BudgetOverview>;                        // :1352
-export async function budgetAlertCountOf(tx, graphId, args, def, reg): Promise<number>;            // :1417
+export const BUDGET_SUBSCRIPTION_ID = 'orbis/budget-overview';                                     // :77
+export interface BudgetArgs { month: string; today: string; /* … */ }                              // :96-111
+export async function budgetOverviewOf(tx: Tx, graphId: GraphId, args: BudgetArgs,
+  def: BudgetSubscription, reg: RegistrySnapshot): Promise<BudgetOverview>;                        // :1353
+export async function budgetAlertCountOf(tx, graphId, args, def, reg): Promise<number>;            // :1418
 export async function envelopeForCategoryOf(tx, graphId,
-  args: { categoryId: string; date: string; today: string }, def, reg): Promise<EnvelopeStatus|null>; // :1454
-// приватные в файле: runLedgers(tx, graphId, args, def, reg, narrow?) :1116 ;
-//   LedgerNarrowing {category?, envelope?, period?, rollup?} :1095-1105 ; rollup дерева :1198-1218 ;
-//   cardKey(def, e, cats) ; wireEnvelope(e, cats) ; budgetSurfaceOff(tx, graphId) :1333 ;
+  args: { categoryId: string; date: string; today: string }, def, reg): Promise<EnvelopeStatus|null>; // :1455
+// приватные в файле: runLedgers(tx, graphId, args, def, reg, narrow?) :1117 ;
+//   LedgerNarrowing {category?, envelope?, period?, rollup?} :1096-1106 ; rollup дерева :1199-1219 ;
+//   cardKey(def, e, cats) ; wireEnvelope(e, cats) ; budgetSurfaceOff(tx, graphId) :1334 ;
 //   periodLedgerNames(def) ; monthRangeOf(month)
 // apps/server/src/budget/aggregates.ts
-export async function localTodayTx(tx: Tx, graphId: string, clock?: Clock): Promise<string>;       // :140
+export async function localTodayTx(tx: Tx, graphId: GraphId, clock?: Clock): Promise<string>;       // :142
 export async function rolloverPreview(db: Db, who: Identity, month: string, clock?: Clock):   // Г-3: пара
-  Promise<RolloverPreview>;                                                                        // :789
-// приватные: monthRange :167 ; shiftMonth :175 ; categoryOr :237 ; decCeilToHundred :757
-// чтение декларации переноса — образец `rolloverCreate` :981-1000: builtinSubscription(
+  Promise<RolloverPreview>;                                                                        // :797
+// приватные: monthRange :169 ; shiftMonth :177 ; categoryOr :239 ; decCeilToHundred :765
+// чтение декларации переноса — образец `rolloverCreate` :989-1008: builtinSubscription(
 //   effectiveRegistry(tx, graphId), BUDGET_SUBSCRIPTION_ID).rollover ; отказы
-//   ROLLOVER_SOURCE_UNSUPPORTED :987-993, ROLLOVER_CARRY_UNSUPPORTED :995-999
+//   ROLLOVER_SOURCE_UNSUPPORTED :995-1001, ROLLOVER_CARRY_UNSUPPORTED :1003-1007
 // packages/shared/src/contracts/budget.ts:37-77 — EnvelopeStatus {envelope, category, spent,
 //   effectiveLimit, remaining, dailyPace, phase}; BudgetOverview {period, balance, envelopes,
 //   comingUp, planned, unbudgeted, alertCount}; :104-121 RolloverPreviewRow/RolloverPreview
 // packages/shared/src/registry/subscription-type.ts:155-161 — rollover: {source:'exact_calendar_month',
 //   carry:{agg:string}}; значение сида — subscription-fixtures.ts:266 ({agg:'remaining'})
 // @orbis/shared: canonicalJson (сверка по канонической форме — jsonb порядка ключей не хранит)
-// apps/server/src/test/volume-fixture.ts:36-45 — VOLUME_OWNER_ID, VOLUME_TODAY, VOLUME_LAST_MONTH,
+// apps/server/src/test/volume-fixture.ts:43-52 — VOLUME_OWNER_ID, VOLUME_TODAY, VOLUME_LAST_MONTH,
 //   VOLUME_MONTHS = 12, VOLUME_ENVELOPES_PER_MONTH = 40, VOLUME_ENVELOPES = 480
-// apps/server/perf/volume.test.ts:636 — volumeMonth(k) ; :107 VOLUME_BUDGETS {overviewP95Ms:500, ratioToOracle:2}
+// apps/server/perf/volume.test.ts:638 — volumeMonth(k) ; :107 VOLUME_BUDGETS {overviewP95Ms:500, ratioToOracle:2}
 ```
 
 **Интерфейсы — Produces:**
@@ -9656,7 +9687,7 @@ export interface MonthLedgers {
   /** Ведомость периода «траты без живого конверта» (§2.3 шаг 5), категория → сумма. */
   unbudgeted: ReadonlyMap<string, string>;
 }
-export async function monthLedgersOf(tx: Tx, graphId: string, args: BudgetArgs,
+export async function monthLedgersOf(tx: Tx, graphId: GraphId, args: BudgetArgs,
   def: BudgetSubscription, reg: RegistrySnapshot): Promise<MonthLedgers>;
 // apps/server/src/test/overview-golden.ts
 export function normalizeOverview(ov: BudgetOverview): unknown;   // uuid → uuid-N, штампы времени → '<ts>'
@@ -9677,23 +9708,23 @@ export const BUDGET_ENGINE_GOLDEN: BudgetEngineGolden;            // import из
    `volume` — `perf/volume.test.ts` (вне CI, `bun run test:perf:volume`). Второго файла не заводим: «эталон
    вывода движка» — одно понятие, и разложив его по двум местам, мы получили бы две пересдачи на одну правку.
 3. **`rolloverPreview` берёт СЫРЫЕ величины конверта, а не выдачу карточки.** `budgetOverviewOf` отдаёт
-   `EnvelopeStatus` ПОСЛЕ агрегации дерева §2.10 (`runLedgers :1198-1218`), а сегодняшний предпросмотр считает
+   `EnvelopeStatus` ПОСЛЕ агрегации дерева §2.10 (`runLedgers :1199-1219`), а сегодняшний предпросмотр считает
    `remaining` по `rawEnvelopeOf` — без rollup. Перенос на выдачу карточки удвоил бы `carryover` родителя
    (остаток детей переехал бы и в конверт родителя, и в конверты детей) — это ошибка в деньгах, поэтому
    читателем становится новый узкий экспорт `monthLedgersOf` (`runLedgers` с `rollup: false` — тем же приёмом,
-   что `budgetAlertCountOf`, докблок `:1412-1416`). Расхождение с буквой §1.13 реестра интерфейсов
+   что `budgetAlertCountOf`, докблок `:1413-1417`). Расхождение с буквой §1.13 реестра интерфейсов
    («`budgetOverviewOf(prevMonth)`») — Р-К-42.
 4. **Категории «с тратами, но без конверта» остаются собственным запросом предпросмотра.** Движок `unbudgeted`
    считает «движение без ЖИВОГО ребра `envelope-binding`» (`subscription-fixtures.ts:193-205`:
    `unbound_via` + `alive: true`), а предпросмотру нужно «у категории нет конверта, пересекающего прошлый
-   месяц» (`aggregates.ts:864-895`) — множества разные, и подмена молча изменила бы состав строк превью. Из
+   месяц» (`aggregates.ts:872-903`) — множества разные, и подмена молча изменила бы состав строк превью. Из
    движка берутся только `carryover`/`prevSpent`/`suggestedLimit`; `notRecurringTemplateSql` переезжает вместе
    с этим запросом внутрь `rolloverPreview` (он не оракул, а общий предикат «не шаблон повторения»).
 5. **`carry.agg` читается из декларации ПОДПИСКИ, как у `rolloverCreate`** (Р-32 «тем же путём»). Задача 13
    переключит обоих читателей на `rolloverRuleOf(reg)` строки-носителя — это помечено докблоком, а не
    отложенной правкой.
 6. **Половина `fixtures` снимается на СВОЁМ мире с прибитым «сегодня», а не на живой фикстуре
-   `budget.test.ts`.** Её мир привязан к СИСТЕМНЫМ часам (`budget.test.ts:57, 89, 92`: `today` из
+   `budget.test.ts`.** Её мир привязан к СИСТЕМНЫМ часам (`budget.test.ts:60, 89, 92`: `today` из
    `Intl.DateTimeFormat`, `curMonth = today.slice(0,7)`), то есть `period`, `phase` и `dailyPace` в выводе
    меняются каждую полночь и каждое первое число — байт-в-байт снимок на нём протухал бы сам, как протухал бы
    корпус volume без `VOLUME_TODAY` (докблок `volume-fixture.ts:14-17`). Поэтому `budget-golden.test.ts` сеет
@@ -9728,7 +9759,7 @@ test('§С8-15: движок на юнит-фикстурах равен сни�
 });
 
 test('снимок не выродился: конверты, ведомости периода и списки в нём есть', () => {
-  // Сторож той же породы, что `perf/volume.test.ts:670-672`: сверка с пустым объектом зелена всегда.
+  // Сторож той же породы, что `perf/volume.test.ts:672-674`: сверка с пустым объектом зелена всегда.
   const cur = GOLDEN.fixtures['2026-02'] as { envelopes: unknown[]; unbudgeted: unknown[]; alertCount: number };
   expect(cur.envelopes.length).toBeGreaterThan(3);
   expect(cur.unbudgeted.length).toBeGreaterThan(0);
@@ -9791,8 +9822,8 @@ test.only('ПЕРЕСДАЧА: снимок снимается движком и
   → **PASS** (два теста шага 1).
 
 - [ ] **Шаг 3: половина `volume` снимка — 12 месяцев корпуса, с последней сверкой там же.** В
-  `perf/volume.test.ts`, в describe «§С8-15» (`:617-684`), тест «12 месяцев × 40 конвертов» временно печатает
-  нормализованный вывод движка рядом со сверкой с оракулом (сверка уже есть — `:645-670`), вывод кладётся в
+  `perf/volume.test.ts`, в describe «§С8-15» (`:619-686`), тест «12 месяцев × 40 конвертов» временно печатает
+  нормализованный вывод движка рядом со сверкой с оракулом (сверка уже есть — `:647-672`), вывод кладётся в
   ключ `volume` того же файла (месяц → снимок; ключи — `volumeMonth(k)`).
   `bun run test:perf:volume` → **PASS**; файл `budget-engine.json` получает 12 записей `volume`.
   Сторож непустоты остаётся прежним (`expect(a.envelopes.length).toBe(VOLUME_ENVELOPES_PER_MONTH)` `:671`) —
@@ -9811,29 +9842,29 @@ git commit -- apps/server/test/golden/budget-engine.json apps/server/src/test/ov
 ```ts
 test('ПЕРЕЕЗД: превью на движке даёт то же, что на сырых помощниках, и читает carry.agg декларации', async () => {
   const { owner, month } = await worldWithPrevEnvelopes();      // фикстура describe'а превью
-  const before = await rolloverPreview(db, { actor: accountOf(owner), graph: owner }, month);
+  const before = await rolloverPreview(db, personal(owner), month);
   // Мутационная проверка (§С8-15 того же жанра, что `warn_at 0.99` у движка): ответ обязан ЗАВИСЕТЬ
   // от декларации — подвинь `carry.agg` на неопубликованную величину, и превью откажет, а не смолчит.
-  const def = await withIdentity(db, { actor: accountOf(owner), graph: owner }, async (tx) =>
+  const def = await withIdentity(db, personal(owner), async (tx) =>
     builtinSubscription(await effectiveRegistry(tx, owner), BUDGET_SUBSCRIPTION_ID) as BudgetSubscription);
   try {
-    await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => setSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID, {
+    await withIdentity(db, personal(owner), (tx) => setSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID, {
       definition: { ...def, rollover: { source: 'exact_calendar_month', carry: { agg: 'spent' } } },
     }));
-    await expect(rolloverPreview(db, { actor: accountOf(owner), graph: owner }, month)).rejects.toMatchObject({
+    await expect(rolloverPreview(db, personal(owner), month)).rejects.toMatchObject({
       details: { reason: 'ROLLOVER_CARRY_UNSUPPORTED' },
     });
   } finally {
-    await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => removeSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID));
+    await withIdentity(db, personal(owner), (tx) => removeSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID));
   }
-  expect(await rolloverPreview(db, { actor: accountOf(owner), graph: owner }, month)).toEqual(before);
+  expect(await rolloverPreview(db, personal(owner), month)).toEqual(before);
 });
 
 test('родитель с детьми: carryover — СВОЙ остаток конверта, без агрегации дерева (§2.10)', async () => {
   // Пин решения 3 и цена ошибки: возьми превью значения КАРТОЧКИ, и остаток детей переехал бы и в
   // конверт родителя, и в конверты детей — удвоение денег на первом же переносе.
   const { owner, month, parentCat } = await worldWithCategoryTree();   // родитель 10000/0, ребёнок 5000/1000
-  const rows = (await rolloverPreview(db, { actor: accountOf(owner), graph: owner }, month)).rows;
+  const rows = (await rolloverPreview(db, personal(owner), month)).rows;
   expect(rows.find((r) => r.categoryId === parentCat)?.carryover).toBe('10000.00');   // не '14000.00'
 });
 ```
@@ -9841,7 +9872,7 @@ test('родитель с детьми: carryover — СВОЙ остаток к
   (`ROLLOVER_CARRY_UNSUPPORTED` не бросается).
 
 - [ ] **Шаг 6: узкий читатель движка `monthLedgersOf`.** В `subscriptions/budget.ts` рядом с `budgetAlertCountOf`
-  (`:1429`):
+  (`:1430`):
 ```ts
 /**
  * ВЕДОМОСТИ МЕСЯЦА БЕЗ АГРЕГАЦИИ ДЕРЕВА (§2.10) — читателю, которому нужны СВОИ величины конверта, а
@@ -9852,7 +9883,7 @@ test('родитель с детьми: carryover — СВОЙ остаток к
  * бы в конверт родителя и в конверты детей одновременно, то есть удвоил бы деньги (Р-32, решение 3).
  */
 export async function monthLedgersOf(
-  tx: Tx, graphId: string, args: BudgetArgs, def: BudgetSubscription, reg: RegistrySnapshot,
+  tx: Tx, graphId: GraphId, args: BudgetArgs, def: BudgetSubscription, reg: RegistrySnapshot,
 ): Promise<MonthLedgers> {
   if (await budgetSurfaceOff(tx, graphId)) return { envelopes: [], unbudgeted: new Map() };
   const { raws, sums } = await runLedgers(tx, graphId, args, def, reg, { rollup: false });
@@ -9871,7 +9902,7 @@ export async function monthLedgersOf(
 ```
   + экспорт интерфейса `MonthLedgers` (форма — в блоке Produces). `cd apps/server && bun run typecheck` → **PASS**.
 
-- [ ] **Шаг 7: `rolloverPreview` на движок.** В `aggregates.ts` заменить чтение сырых конвертов (`:808-857`) на
+- [ ] **Шаг 7: `rolloverPreview` на движок.** В `aggregates.ts` заменить чтение сырых конвертов (`:816-865`) на
   движок, сохранив всё остальное тело:
 ```ts
   const graphId = who.graph;
@@ -9928,8 +9959,8 @@ export async function monthLedgersOf(
     }
     const hasHistory = prevEnvs.length > 0;
 ```
-  `successors` (`:821-828`), `spendingRows` (`:864-895`, решение 4), `hasHistory`-ветка, `needsSetup`, `catMap` и
-  сортировка строк (`:897-930`) остаются как есть; `notRecurringTemplateSql` (`:119-136`) переезжает файлом ниже,
+  `successors` (`:829-836`), `spendingRows` (`:872-903`, решение 4), `hasHistory`-ветка, `needsSetup`, `catMap` и
+  сортировка строк (`:905-938`) остаются как есть; `notRecurringTemplateSql` (`:121-138`) переезжает файлом ниже,
   к `rolloverPreview`, с докблоком «общий предикат „не шаблон повторения“, не оракул».
   `cd apps/server && bun test src/budget/rollover.test.ts` → **PASS** (все 8 превью + 2 новых + 6 создания).
 
@@ -9941,7 +9972,7 @@ git commit -- apps/server/src/subscriptions/budget.ts apps/server/src/budget/agg
   «Б-2 задача 11 (ход 2): предпросмотр переноса — на движок ведомостей без агрегации дерева; параметры перехода
   читаются из декларации тем же путём, что у `rolloverCreate` (Р-32)» + `Co-Authored-By: …`
 
-- [ ] **Шаг 9: снос оракула и девяти помощников.** В `aggregates.ts` удалить `computeOverview` (`:426-620`) и всё,
+- [ ] **Шаг 9: снос оракула и девяти помощников.** В `aggregates.ts` удалить `computeOverview` (`:428-622`) и всё,
   что после этого остаётся без вызывающих (перечень проверен грепом на HEAD; после шага 7 у каждого — ноль
   боевых читателей): `rawEnvelopesOfMonth`, `rawEnvelopeOf`, `spentByEnvelope`, `statusOf`, `phaseOf`, `isAlert`,
   `countAlerts`, `descendantsOf`, `categoryEdges`, `propsOf`, интерфейс `RawEnvelope`. Остаются и НЕ трогаются:
@@ -9954,17 +9985,17 @@ git commit -- apps/server/src/subscriptions/budget.ts apps/server/src/budget/agg
   `perf/volume.test.ts` — шаги 10–11.
 
 - [ ] **Шаг 10: пять сверок `budget.test.ts` — со снимка на себя.** В `subscriptions/budget.test.ts`:
-  - `:311-324` «фаза 1 отдаёт ровно те конверты, что видит оракул» → «фаза 1 отдаёт ровно те конверты, что
+  - `:314-327` «фаза 1 отдаёт ровно те конверты, что видит оракул» → «фаза 1 отдаёт ровно те конверты, что
     попадают в карточку»: правая часть — `budgetOverviewOf` в ТОЙ ЖЕ tx вместо `computeOverview`
     (`expect(rows.map((r) => r.id).sort()).toEqual(mine.envelopes.map((e) => e.envelope.id).sort())`).
     Тест был и остаётся про ФАЗУ 1 плана §Б5-3 (селектор источника), а не про вторую реализацию.
-  - `:480-491` «ведомость spent совпадает с оракулом по каждому конверту» → пин значений `spent` по конвертам
-    фикстуры литералами (они уже есть в соседнем тесте `:493-500`: `2680.00`, `500.00`) — тест перестаёт быть
+  - `:483-494` «ведомость spent совпадает с оракулом по каждому конверту» → пин значений `spent` по конвертам
+    фикстуры литералами (они уже есть в соседнем тесте `:496-503`: `2680.00`, `500.00`) — тест перестаёт быть
     сверкой двух реализаций и становится пином ведомости.
-  - `:594-603` «порядок карточек поэлементно как у оракула» → пин КЛЮЧА, а не второй реализации: список
+  - `:597-606` «порядок карточек поэлементно как у оракула» → пин КЛЮЧА, а не второй реализации: список
     `mine.envelopes.map((e) => e.category.title)` сверяется с отсортированным по
     `title\u0000period_start\u0000id` — ровно та формула, что стоит в декларации (`order_by` §Б5-4).
-  - `:694-702` «НОЛЬ РАСХОЖДЕНИЙ: budgetOverviewOf ≡ computeOverview» — СНИМАЕТСЯ целиком: его место занял
+  - `:697-705` «НОЛЬ РАСХОЖДЕНИЙ: budgetOverviewOf ≡ computeOverview» — СНИМАЕТСЯ целиком: его место занял
     гейт «движок == снимок» шага 1 (`budget-golden.test.ts`), и держать два прогона одного гейта незачем.
     Здесь остаётся соседняя мутационная проверка `:704-722` («`warn_at 0.99` дельтой МЕНЯЕТ alertCount») —
     она и есть доказательство, что ответ зависит от декларации, а не от кода.
@@ -9978,20 +10009,20 @@ git commit -- apps/server/src/subscriptions/budget.ts apps/server/src/budget/agg
 - [ ] **Шаг 11: `perf/volume.test.ts` — гейт на снимок, базовая линия на движок.**
   - `:107` `VOLUME_BUDGETS = { overviewP95Ms: 500 }` — `ratioToOracle` уходит вместе с оракулом (В-10: сравнивать
     не с чем); `Measured` (`:109-112`) сжимается до `{ engineP95: number }`; `gateViolations` (`:115-130`) теряет
-    вторую половину; пин порогов `:690` `'500/2'` → `'500'`, мутационная проверка `:694-695` — `toHaveLength(1)`
+    вторую половину; пин порогов `:692` `'500/2'` → `'500'`, мутационная проверка `:696-697` — `toHaveLength(1)`
     на `engineP95: 600` и `[]` на `150`.
-  - `overviewPairOn` (`:192-208`) → `overviewOn(tx, month)`: только движок.
-  - `measureInterleavedP95` (`:310-345`) → `measureP95` движка: чередование заводилось ради честного сравнения
-    ДВУХ программ (докблок `:305-312`), и с одной оно теряет предмет; докблок переписывается на «дрейф машины
-    снимается прогревом и медианой», холодный прогон печатается отдельно (как `:601-609`).
-  - `:523-530` сторож корпуса — `budgetOverviewOf` вместо `computeOverview` (реестр и подписка уже сняты в
+  - `overviewPairOn` (`:194-210`) → `overviewOn(tx, month)`: только движок.
+  - `measureInterleavedP95` (`:312-347`) → `measureP95` движка: чередование заводилось ради честного сравнения
+    ДВУХ программ (докблок `:307-314`), и с одной оно теряет предмет; докблок переписывается на «дрейф машины
+    снимается прогревом и медианой», холодный прогон печатается отдельно (как `:603-611`).
+  - `:525-532` сторож корпуса — `budgetOverviewOf` вместо `computeOverview` (реестр и подписка уже сняты в
     `beforeAll`).
-  - `:601-616` базовая линия p95 — на движке; заголовок «p95 computeOverview» → «p95 budgetOverviewOf».
-  - `:617-684` гейт §С8-15: вместо `const a = await computeOverview(...)` — сверка холодного и тёплого прогонов
+  - `:603-618` базовая линия p95 — на движке; заголовок «p95 computeOverview» → «p95 budgetOverviewOf».
+  - `:619-686` гейт §С8-15: вместо `const a = await computeOverview(...)` — сверка холодного и тёплого прогонов
     движка со СНИМКОМ `GOLDEN.volume[month]` через `normalizeOverview`; двухпроходность (холодный ≡ тёплый) и
-    явный снос `envelope_spent_cache` остаются — они про кэш §Б5-5, а не про оракул; сторож `:671-672` и пин
-    наполнения кэша `:677-683` не трогаются.
-  - `:698-…` «сверка и замер — на одной транзакции» → «замер и сверка со снимком на одной транзакции».
+    явный снос `envelope_spent_cache` остаются — они про кэш §Б5-5, а не про оракул; сторож `:673-674` и пин
+    наполнения кэша `:679-685` не трогаются.
+  - `:700-…` «сверка и замер — на одной транзакции» → «замер и сверка со снимком на одной транзакции».
   - Шапка `:7` и импорт `:51`.
   `bun run test:perf:volume` → **PASS** (гейт зелёный на снимке, p95 печатается).
 
@@ -10004,7 +10035,7 @@ git commit -- apps/server/src/subscriptions/budget.ts apps/server/src/budget/agg
   - `apps/server/src/test/volume-fixture.ts:14-17` — правило потребителям: `computeOverview(tx, …, VOLUME_TODAY)`
     → `budgetOverviewOf(tx, …, { month, today: VOLUME_TODAY }, def, reg)`; довод про `budgetOverview(db, …)` на
     системных часах остаётся дословно.
-  - `apps/server/test/surfaces.ts:403-406` — фраза «`computeOverview` остаётся вторым мнением сверки (РП-4)»
+  - `apps/server/test/surfaces.ts:414-417` — фраза «`computeOverview` остаётся вторым мнением сверки (РП-4)»
     снимается; остаётся «снимок читает то, что читает прод».
   - `packages/shared/src/registry/subscription-fixtures.ts:64-66` — «когда норматив впервые поехал … на сверку
     §С8-15 с оракулом (`budget/aggregates.ts`, `computeOverview`)» → «… на сверку §С8-15 (оракул снесён в Б-2,
@@ -10051,20 +10082,20 @@ FROM` по каждому названному свойству. Экземпл�
 `BUILTIN_RULES_BY_CARRIER`); `apps/server/src/registry/rules.ts` (`assertRule` — ветка `unique_among`:
 `UNIQUE_ON_MANY`, область-аспект); `apps/server/src/rules/engine.ts` (`ruleLockKey`, `assertUniqueAmong`, диспетчер
 `assertConstraintRules`); `apps/server/src/executor/executor.ts` (`lockUniqueAmongRules` рядом с
-`lockBudgetContour` `:905-913`; снос трёх вызовов `assertEnvelopeUnique` — create `:1783-1790`, update `:2069-2085`,
-attach `:2349-2357`; C-вызов на разархивации); `apps/server/src/budget/binding.ts` (снос `assertEnvelopeUnique`
-`:709-765`, `envelopeCombinationMatches` `:653-667`, `EnvelopeRowLike` `:644-651`; докблок `lockOwnerBudget`
-`:669-691` переписан); `apps/server/src/executor/normalize.ts` (снос `ENVELOPE_IDENTITY` `:63-68`;
+`lockBudgetContour` `:904-912`; снос трёх вызовов `assertEnvelopeUnique` — create `:1782-1789`, update `:2068-2084`,
+attach `:2348-2356`; C-вызов на разархивации); `apps/server/src/budget/binding.ts` (снос `assertEnvelopeUnique`
+`:710-766`, `envelopeCombinationMatches` `:654-668`, `EnvelopeRowLike` `:645-652`; докблок `lockOwnerBudget`
+`:670-692` переписан); `apps/server/src/executor/normalize.ts` (снос `ENVELOPE_IDENTITY` `:63-68`;
 `dropStaleCarryover` `:102-113` получает `reg` первым аргументом).
 
 *Test:* `apps/server/src/registry/rules.test.ts` (`UNIQUE_ON_MANY`); `apps/server/src/rules/engine.test.ts`
-(generic-фикстуры §С8-25 на своём аспекте); `apps/server/src/budget/binding.test.ts` (`:676-830` — близнецы,
-плюс новая характеризация разархивации); `apps/server/src/budget/currency-normalize.test.ts` (`:130-330` —
+(generic-фикстуры §С8-25 на своём аспекте); `apps/server/src/budget/binding.test.ts` (`:679-833` — близнецы,
+плюс новая характеризация разархивации); `apps/server/src/budget/currency-normalize.test.ts` (`:137-337` —
 регрессия, правок не требует); `apps/server/test/fixtures/refusals.ts` (строка 11 — снять `red`);
 `apps/server/src/registry/refusals.test.ts` (прогон строки 11).
 
 *НЕ трогать:* `apps/web` (Р-23); ключ `lockOwnerBudget` (`<owner>:envelope_unique`) и его вызовы
-`executor.ts:913`, `subscriptions/budget.ts:492` — это замок КОНТУРА, а не правила; `validator-verdicts.json`;
+`executor.ts:912`, `subscriptions/budget.ts:493` — это замок КОНТУРА, а не правила; `validator-verdicts.json`;
 `test/golden/invariants-verdicts.json` (корпус близнецов доменных инвариантов задачи 4 пополняет задача 14,
 здесь коды и `details.invariant` не меняются).
 
@@ -10084,7 +10115,7 @@ export type RuleDefinitionInput = z.input<typeof ruleDefinitionSchema>;
 export const RULE_ID_RE = /^[a-z][a-z0-9_-]*$/;
 // задача 3 — apps/server/src/rules/engine.ts
 export interface RuleWriteInput {
-  ctx: { tx: Tx; registry: RegistrySnapshot; graphId: string; clock: () => Date; mechanism: MutationMechanism; internalUndo: boolean };
+  ctx: { tx: Tx; registry: RegistrySnapshot; graphId: GraphId; clock: () => Date; mechanism: MutationMechanism; internalUndo: boolean };
   entityId: string;
   before: EntityState; state: EntityState; patch: PropsPatch;
   core: { id: string; title: string | null; archived: boolean; createdAt: Date; updatedAt: Date };
@@ -10095,11 +10126,11 @@ export function applicableRules(reg: RegistrySnapshot, kind: 'transition' | 'con
 // HEAD, дословно:
 // apps/server/src/executor/props.ts:30  export interface EntityState { props: Record<string, unknown>; aspects: string[] }
 // apps/server/src/executor/props.ts:234 export function touchedProperties(patch: PropsPatch): Set<string>
-// apps/server/src/executor/executor.ts:355 class BatchState { readonly entities = new Map<string, EntityRow>(); … }
-// apps/server/src/budget/binding.ts:687  export async function lockOwnerBudget(tx: Tx, graphId: string): Promise<void>
-// apps/server/src/executor/executor.ts:905 async function lockBudgetContour(tx, reg, graphId, ops): Promise<void>
-// apps/server/src/executor/executor.ts:807 function touchesBudgetContour(reg: RegistrySnapshot, op: {tool: string; input: unknown}): boolean
-// apps/server/test/helpers.ts:151 export async function seedCustomAspect(graphId: string, spec: CustomAspectSpec): Promise<void>
+// apps/server/src/executor/executor.ts:356 class BatchState { readonly entities = new Map<string, EntityRow>(); … }
+// apps/server/src/budget/binding.ts:688  export async function lockOwnerBudget(tx: Tx, graphId: GraphId): Promise<void>
+// apps/server/src/executor/executor.ts:904 async function lockBudgetContour(tx, reg, graphId, ops): Promise<void>
+// apps/server/src/executor/executor.ts:806 function touchesBudgetContour(reg: RegistrySnapshot, op: {tool: string; input: unknown}): boolean
+// apps/server/test/helpers.ts:303 export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec): Promise<void>
 //   (0d: CustomAspectSpec.rules?: RuleDefinitionInput[] — INSERT колонки `rules`)
 // packages/shared/src/registry/types.ts:101-105 listConfig = { cardinality: z.enum(['one','many']).optional(), maxItems, minItems }
 // packages/shared/src/registry/builtin-properties.ts:563 orbis/aliases — { kind:'text', cardinality:'many', maxItems:50 }
@@ -10113,10 +10144,10 @@ export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput;   // id 'duplicate_envel
 // BUILTIN_RULES_BY_CARRIER['orbis/budget'] += RULE_ENVELOPE_UNIQUE
 // apps/server/src/rules/engine.ts
 /** Ключ транзакционного замка правила (Р-И-15): один инвариант — одна очередь владельца. */
-export function ruleLockKey(graphId: string, ruleId: string): string;
+export function ruleLockKey(graphId: GraphId, ruleId: string): string;
 // apps/server/src/executor/executor.ts
 // lockUniqueAmongRules(tx, reg, graphId, ops) — пред-стадийный захват замков всех `unique_among`,
-//   чьи аспект-носитель или свойства названы во входе (порядок «advisory → строки», докблок :870-881)
+//   чьи аспект-носитель или свойства названы во входе (порядок «advisory → строки», докблок :869-880)
 // apps/server/src/executor/normalize.ts
 export function envelopeIdentityOf(reg: RegistrySnapshot): readonly string[];
 export function dropStaleCarryover(reg: RegistrySnapshot, prev: EntityState, next: EntityState, touched: ReadonlySet<string>): void;
@@ -10128,7 +10159,7 @@ export function dropStaleCarryover(reg: RegistrySnapshot, prev: EntityState, nex
   строке — то есть объявил бы дублем то, что дублем не является. Цена: у сегодняшней четвёрки (четыре текстовых
   свойства) выдача та же; «отсутствует» и «лежит json-null» перестают быть одним (сегодня `->>` даёт NULL в обоих
   случаях) — боевого пути к json-null у этих свойств нет, стадия 2 его отвергает.
-- **РЧ-12-2. Замки `unique_among` берутся ДО стадий, рядом с замком бюджет-контура.** Докблок `executor.ts:870-881`
+- **РЧ-12-2. Замки `unique_among` берутся ДО стадий, рядом с замком бюджет-контура.** Докблок `executor.ts:869-880`
   называет норматив: порядок захвата глобальный — «advisory → строки»; сегодня его держит `lockBudgetContour`,
   а `assertEnvelopeUnique` берёт ТОТ ЖЕ замок повторно и потому бесплатно. У generic-правила ключ свой, и взятый на
   стадии 4 (то есть ПОСЛЕ `SELECT … FOR UPDATE` правимой строки) он вернул бы ровно тот цикл ожидания, ради
@@ -10263,7 +10294,7 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
     const r = err(
       await execute(
         db,
-        { identity: { actor: accountOf(user), graph: user }, actorKind: 'owner', source: 'chat', batchId: newId(),
+        { identity: personal(user), actorKind: 'owner', source: 'chat', batchId: newId(),
           operations: [
             { tool: 'entity_create', input: slot('P9', 1) },
             { tool: 'entity_create', input: slot('P9', 1) },
@@ -10297,7 +10328,7 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
  * держит пред-стадийный проход исполнителя (`lockUniqueAmongRules`) — см. докблок `executor.ts` о
  * глобальном порядке «advisory → строки».
  */
-export function ruleLockKey(graphId: string, ruleId: string): string {
+export function ruleLockKey(graphId: GraphId, ruleId: string): string {
   return `${graphId}:rule:${ruleId}`;
 }
 
@@ -10389,7 +10420,7 @@ async function assertUniqueAmong(
   замка порядок захвата ещё не тот (шаг 5), но одиночные негатив/позитив/архивация — **PASS**.
 
 - [ ] **Шаг 5: пред-стадийный замок правил уникальности.** В `apps/server/src/executor/executor.ts` рядом с
-  `lockBudgetContour` (`:905-913`):
+  `lockBudgetContour` (`:904-912`):
 ```ts
 /**
  * Замки правил `unique_among` — ДО стадий, по тому же нормативу, что и бюджет-контур (докблок выше):
@@ -10403,7 +10434,7 @@ async function assertUniqueAmong(
  */
 function uniqueRuleKeysOf(
   reg: RegistrySnapshot,
-  graphId: string,
+  graphId: GraphId,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): string[] {
   const keys = new Set<string>();
@@ -10421,7 +10452,7 @@ function uniqueRuleKeysOf(
 async function lockUniqueAmongRules(
   tx: Tx,
   reg: RegistrySnapshot,
-  graphId: string,
+  graphId: GraphId,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
   for (const key of uniqueRuleKeysOf(reg, graphId, ops)) {
@@ -10429,7 +10460,7 @@ async function lockUniqueAmongRules(
   }
 }
 ```
-  `namesAspectOrProperty` — вынесенная половина `touchesBudgetContour` (`:826-863`): разворот `batch_execute`,
+  `namesAspectOrProperty` — вынесенная половина `touchesBudgetContour` (`:825-862`): разворот `batch_execute`,
   `entity_update` с `archived !== undefined` → true, затем `props`/`unset` через `resolvePropertyRef` и обе формы
   `aspects` (список create и `{attach, detach}` update). `touchesBudgetContour` переписать на неё же, передав
   контурные свойства и аспекты, — вторая копия обхода входа здесь и была бы тем расхождением, от которого лечим.
@@ -10442,11 +10473,11 @@ async function lockUniqueAmongRules(
   Коммит: `feat(server): движок правил — unique_among generic (замок по id правила, виртуальные строки пачки)`
 
 - [ ] **Шаг 6: характеризация разархивации — ДО сноса кода.** В `apps/server/src/budget/binding.test.ts`, в
-  `describe` уникальности (`:678`), дописать:
+  `describe` уникальности (`:681`), дописать:
 ```ts
   // Разархивация возвращает конверт в множество неархивных — и обязана споткнуться о занятую
   // комбинацию. Вход БЕЗ props: гейт этой проверки сегодня стоит ВНЕ `hasPropsInput` (executor.ts
-  // :2069-2073), и врезка движка, сделанная только внутри него, потеряла бы этот путь молча.
+  // :2068-2072), и врезка движка, сделанная только внутри него, потеряла бы этот путь молча.
   test('разархивация в занятую комбинацию → duplicate_envelope (вход без props)', async () => {
     const u = mintGraph();
     const c = newId();
@@ -10473,7 +10504,7 @@ async function lockUniqueAmongRules(
  * `id` = прежний код отказа (Р-К-1): `details.invariant` движка равен id правила, поэтому близнецы
  * бюджета продолжают сверять то же слово, а владелец, заведший своё правило, получит своё.
  * `undo: 'check'` — отнесение по ЭКЗЕМПЛЯРУ (Р-И-2), и это СМЕНА поведения по слову владельца (16.09, В-П-1а):
- * сегодня `assertEnvelopeUnique` под внутренним откатом не зовётся (`executor.ts:2070`), и откат удаления конверта
+ * сегодня `assertEnvelopeUnique` под внутренним откатом не зовётся (`executor.ts:2069`), и откат удаления конверта
  * при уже созданном дубле давал бы два живых конверта на одну категорию и период. Для денег строже: откат при
  * дубле отклоняется `INVARIANT duplicate_envelope`, владелец сначала убирает новый конверт. Единственное правило
  * сида с `check` среди «льготных» — грант и субъект прогона остаются `skip`, как сегодня.
@@ -10501,9 +10532,9 @@ export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput = {
   Коммит: `feat(shared): строка каталога duplicate_envelope — уникальность конверта параметрами правила`
 
 - [ ] **Шаг 8: снос `assertEnvelopeUnique` с трёх путей.** В `apps/server/src/executor/executor.ts`:
-  - create (`:1782-1791`) — удалить блок `if (state.aspects.includes('orbis/budget')) { await assertEnvelopeUnique(…) }`;
-  - attach (`:2348-2357`) — удалить блок `if (aspectId === 'orbis/budget') { await assertEnvelopeUnique(…) }`;
-  - update (`:2069-2085`) — заменить блок на C-вызов ровно для пути БЕЗ правки свойств:
+  - create (`:1781-1790`) — удалить блок `if (state.aspects.includes('orbis/budget')) { await assertEnvelopeUnique(…) }`;
+  - attach (`:2347-2356`) — удалить блок `if (aspectId === 'orbis/budget') { await assertEnvelopeUnique(…) }`;
+  - update (`:2068-2084`) — заменить блок на C-вызов ровно для пути БЕЗ правки свойств:
 ```ts
   // Разархивация возвращает запись в множество «неархивных», по которому считает `unique_among`
   // (§Б4-3), а вход при этом может не нести ни одного свойства — тогда C-правила выше (внутри
@@ -10532,13 +10563,13 @@ export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput = {
     });
   }
 ```
-  Импорт `assertEnvelopeUnique` из `executor.ts:44` снять.
+  Импорт `assertEnvelopeUnique` из `executor.ts:45` снять.
   `cd apps/server && bun test src/budget/binding.test.ts src/budget/currency-normalize.test.ts src/budget/binding-batch.test.ts` → **PASS**
   (все близнецы — на `details.invariant === 'duplicate_envelope'`, текста отказа они не сверяют).
 
 - [ ] **Шаг 9: снос кода уникальности из Финансов.** В `apps/server/src/budget/binding.ts` удалить
-  `assertEnvelopeUnique` (`:709-765`), `envelopeCombinationMatches` (`:653-667`) и `EnvelopeRowLike` (`:636-651`).
-  Докблок `lockOwnerBudget` (`:669-691`) переписать: снять абзац «Тот же ключ, что у уникальности» и дописать —
+  `assertEnvelopeUnique` (`:710-766`), `envelopeCombinationMatches` (`:654-668`) и `EnvelopeRowLike` (`:637-652`).
+  Докблок `lockOwnerBudget` (`:670-692`) переписать: снять абзац «Тот же ключ, что у уникальности» и дописать —
 ```
  * ЧТО ИЗМЕНИЛОСЬ В Б-2. Уникальность конверта уехала в строку каталога (`duplicate_envelope`,
  * шаблон `unique_among`), и свой замок она берёт по своему ключу `<владелец>:rule:<id>`. Этот
@@ -10555,7 +10586,7 @@ export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput = {
   test('идентичность конверта берётся из параметров правила, а не из копии списка', async () => {
     // Вторая копия четвёрки (ENVELOPE_IDENTITY) снята: список — это params правила
     // `duplicate_envelope`. Тест сверяет ИМЕННО связь читателя с реестром.
-    const reg = await withIdentity(db, { actor: accountOf(user), graph: user }, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     expect(envelopeIdentityOf(reg)).toEqual([
       'orbis/finance_category', 'orbis/currency', 'orbis/period_start', 'orbis/period_end',
     ]);
@@ -10598,7 +10629,7 @@ export function dropStaleCarryover(
   if (identityChanged) delete next.props[CARRYOVER];
 }
 ```
-  Единственный вызывающий — `normalizeEnvelopeProps` (`executor.ts:2503-2516`): `dropStaleCarryover(ctx.registry,
+  Единственный вызывающий — `normalizeEnvelopeProps` (`executor.ts:2502-2515`): `dropStaleCarryover(ctx.registry,
   before, state, touchedProperties(patch))`.
   `cd apps/server && bun test src/budget/binding.test.ts src/budget/aggregates.test.ts` → **PASS**.
   Коммит: `refactor(server): идентичность конверта — параметры правила duplicate_envelope, вторая копия четвёрки снята`
@@ -10661,7 +10692,7 @@ test('откат удаления конверта при уже созданн�
   const a = await createEnvelope(owner, { category: K, period: P, limit: '100.00' });
   const del = await execute(db, req(owner, 'entity_update', { id: a, archived: true }));
   await createEnvelope(owner, { category: K, period: P, limit: '200.00' });
-  const undo = await undoAction(db, { identity: { actor: accountOf(owner), graph: owner }, actionId: del.actionId });
+  const undo = await undoAction(db, { identity: personal(owner), actionId: del.actionId });
   expect(undo.ok).toBe(false);
   expect(undo.error).toMatchObject({ code: 'INVARIANT', details: { invariant: 'duplicate_envelope' } });
   // Мутация: `undo: 'skip'` в RULE_ENVELOPE_UNIQUE → откат проходит и конвертов на K/P два — тест краснеет.
@@ -10698,27 +10729,27 @@ test('откат удаления конверта при уже созданн�
 `packages/shared/src/registry/subscription-fixtures.ts` (`:266`); `packages/shared/src/registry/property-type.ts`
 (докблок `constraints` `:237-241`); `apps/server/src/subscriptions/registry.ts` (`:523` — снять проверку
 `rollover.carry.agg`); `apps/server/src/registry/rules.ts` (`assertRule` — ветка `rollover`:
-`RULE_ROLLOVER_AGG_UNPUBLISHED`); `apps/server/src/executor/ancestors.ts` (`:8-13` докблок; `:38-39`, `:46`, `:57` —
+`RULE_ROLLOVER_AGG_UNPUBLISHED`); `apps/server/src/executor/ancestors.ts` (`:8-13` докблок; `:39-40`, `:47`, `:58` —
 константы → параметры строки; сигнатура `recomputeProjectAncestors`); `apps/server/src/executor/executor.ts`
-(`ancestorRootsOnProjectChange` `:2441-2449` + два вызова `:2254`, `:2415`; вызов `assertRoleConstraints` `:2560-2565`
-получает состояния концов); `apps/server/src/recurring/materialize.ts` (шапка; `:34`, `:44`, `:57-61`, `:85-92`,
-`:102-109` — константы → параметры; `:188-200` `materializationWindow` третьим аргументом; `:312-323` кламп внутрь
-цикла; `:326-357` снимок реестра в фазе чтения; `:487-531` `instanceOps` — `inherit`/`own`/`origin_role`);
-`apps/server/src/recurring/with-materialization.ts` (`:53`); `apps/server/src/registry/ref.ts` (`:23-31` докблок;
+(`ancestorRootsOnProjectChange` `:2440-2448` + два вызова `:2253`, `:2414`; вызов `assertRoleConstraints` `:2559-2564`
+получает состояния концов); `apps/server/src/recurring/materialize.ts` (шапка; `:35`, `:45`, `:58-62`, `:86-93`,
+`:103-110` — константы → параметры; `:189-201` `materializationWindow` третьим аргументом; `:314-325` кламп внутрь
+цикла; `:328-359` снимок реестра в фазе чтения; `:489-533` `instanceOps` — `inherit`/`own`/`origin_role`);
+`apps/server/src/recurring/with-materialization.ts` (`:55`); `apps/server/src/registry/ref.ts` (`:23-31` докблок;
 `:264-267` `isMirroredRef`; `:352-405` `syncRefMirror` — ключ меты из строки); `apps/server/src/budget/aggregates.ts`
-(`:981-1000` — `builtinSubscription(...).rollover` → `rolloverRuleOf(reg)`; `rolloverPreview` — тот же читатель);
+(`:989-1008` — `builtinSubscription(...).rollover` → `rolloverRuleOf(reg)`; `rolloverPreview` — тот же читатель);
 `apps/server/src/executor/relations.ts` (`assertRoleConstraints` `:84-128` + `assertEndContracts`).
 
 *Test:* `apps/server/src/rules/carriers.test.ts` (новый); `apps/server/src/executor/ancestors.test.ts`;
-`apps/server/src/recurring/materialize.test.ts` (`:207`, `:228`, `:627-640`, `:779-810`);
+`apps/server/src/recurring/materialize.test.ts` (`:209`, `:230`, `:629-642`, `:781-812`);
 `apps/server/src/registry/ref.test.ts`; `apps/server/src/budget/rollover.test.ts`;
-`apps/server/src/subscriptions/budget.test.ts` (`:941-985`); `apps/server/src/executor/relations.test.ts`;
+`apps/server/src/subscriptions/budget.test.ts` (`:944-988`); `apps/server/src/executor/relations.test.ts`;
 `apps/server/test/seed-registries.test.ts`, `apps/server/src/registry/load.test.ts` (пересев).
 
-*НЕ трогать:* `apps/web` (Р-23); `HORIZON_DAYS` подписки Budget (`subscriptions/budget.ts:86`, читатели `:837`,
-`:1249`, `aggregates.ts:451`, `:632`) — это окно ВЕДОМОСТИ, а не горизонт ПОРОЖДЕНИЯ, совпадение значений случайно
-(Р-14); `recurringInstanceId`/`materializeBatchId` (`ids.ts:188`) — на них держится идемпотентность, параметром они
-не становятся; `MAX_ATTEMPTS` (`materialize.ts:64`) — движковое; `role.constraints` (значения ограничений остаются
+*НЕ трогать:* `apps/web` (Р-23); `HORIZON_DAYS` подписки Budget (`subscriptions/budget.ts:87`, читатели `:838`,
+`:1250`, `aggregates.ts:453`, `:634`) — это окно ВЕДОМОСТИ, а не горизонт ПОРОЖДЕНИЯ, совпадение значений случайно
+(Р-14); `recurringInstanceId`/`materializeBatchId` (`ids.ts:199`) — на них держится идемпотентность, параметром они
+не становятся; `MAX_ATTEMPTS` (`materialize.ts:65`) — движковое; `role.constraints` (значения ограничений остаются
 там, строка-метка их не дублирует).
 
 **Интерфейсы:**
@@ -10737,20 +10768,20 @@ export function entityClassOf(
   aspectRank: (aspectId: string) => number,
 ): string | null;
 // HEAD, дословно:
-// apps/server/src/registry/load.ts:93   export interface RegistrySnapshot extends RegistryDictionaries { ownerVersion; systemVersion }
-// apps/server/src/registry/cache.ts:114 export async function effectiveRegistry(tx: Tx, graphId: string): Promise<RegistrySnapshot>
+// apps/server/src/registry/load.ts:94   export interface RegistrySnapshot extends RegistryDictionaries { ownerVersion; systemVersion }
+// apps/server/src/registry/cache.ts:119 export async function effectiveRegistry(tx: Tx, graphId: GraphId): Promise<RegistrySnapshot>
 // apps/server/src/registry/roles.ts:65  export function hierarchicalRoles(reg: RegistrySnapshot): string[]
-// apps/server/src/executor/ancestors.ts:78 export async function recomputeProjectAncestors(tx, graphId, changedTargetIds: string[], reg): Promise<{recomputed:number}>
+// apps/server/src/executor/ancestors.ts:79 export async function recomputeProjectAncestors(tx, graphId, changedTargetIds: string[], reg): Promise<{recomputed:number}>
 // apps/server/src/executor/relations.ts:84 export async function assertRoleConstraints(tx, reg, key: RelationKey, effects: VirtualGraphEffects|undefined, ctx: {graphId; mechanism; undoReplay; op:'create'|'delete'}): Promise<void>
-// apps/server/src/executor/executor.ts:2460 async function loadBothEndsForUpdate(ctx, key, batch): Promise<{source: EntityRow; target: EntityRow}>
-// apps/server/src/executor/executor.ts:2487 function stateOf(row: EntityRow): EntityState
-// apps/server/src/recurring/materialize.ts:188 export function materializationWindow(ast: QueryAst, today: string): {from:string;to:string}|null
-// apps/server/src/recurring/materialize.ts:312 export async function materializeInstances(deps: MaterializeDeps): Promise<{created:number}>
+// apps/server/src/executor/executor.ts:2459 async function loadBothEndsForUpdate(ctx, key, batch): Promise<{source: EntityRow; target: EntityRow}>
+// apps/server/src/executor/executor.ts:2486 function stateOf(row: EntityRow): EntityState
+// apps/server/src/recurring/materialize.ts:189 export function materializationWindow(ast: QueryAst, today: string): {from:string;to:string}|null
+// apps/server/src/recurring/materialize.ts:314 export async function materializeInstances(deps: MaterializeDeps): Promise<{created:number}>
 // apps/server/src/registry/ref.ts:264 function isMirroredRef(reg: RegistrySnapshot, propertyId: string): boolean
-// apps/server/src/budget/aggregates.ts:951 export async function rolloverCreate(db, graphId, input: RolloverInput): Promise<RolloverResult>
+// apps/server/src/budget/aggregates.ts:959 export async function rolloverCreate(db, graphId, input: RolloverInput): Promise<RolloverResult>
 // packages/shared/src/registry/property-type.ts:214 aspectDefinitionSchema.aggregations: Record<string, {published: boolean}>
 // packages/shared/src/registry/builtin-roles.ts:81/:93/:106 constraints envelope-binding / category-parent / dependency
-// packages/shared/src/constants.ts:111 ROLE_INSTANCE_OF = 'instance-of'; :144 RULE_NEAREST_ANCESTOR = 'nearest_ancestor'
+// packages/shared/src/constants.ts:113 ROLE_INSTANCE_OF = 'instance-of'; :146 RULE_NEAREST_ANCESTOR = 'nearest_ancestor'
 // apps/server/src/policy/sensitivity.ts:50-70 checkedAgainstDictionary — образец `Error` сборки на отсутствующем словаре
 ```
 
@@ -10786,11 +10817,11 @@ export function materializationWindow(ast: QueryAst, today: string, params: Mate
   реэкспортирует: реэкспорт — второй адрес имени.
 - **РЧ-13-2. `own` материализации применяется по НОСИТЕЛЮ свойства.** Схема даёт плоскую карту
   `own: {propertyId → 'instance_date' | boolean | string}`, а сегодня три собственных свойства инстанса ставятся
-  ТОЛЬКО внутри ветки «шаблон финансовый» (`materialize.ts:503-508`). Условие воспроизводится реестром: запись
+  ТОЛЬКО внутри ветки «шаблон финансовый» (`materialize.ts:505-510`). Условие воспроизводится реестром: запись
   применяется, если среди аспектов инстанса есть тот, что ОБЪЯВЛЯЕТ это свойство. Цена: ноль — поведение
   тождественно; выгода — `own` не требует второй карты «по аспектам».
 - **РЧ-13-3. Кламп окна считается внутри цикла по шаблонам** (Р-И-17): снимок реестра читается в фазе чтения
-  (`:328`, рядом с шаблонами и таймзоной), а окно правила — там, где известно, чьё правило применять. Сегодня
+  (`:330`, рядом с шаблонами и таймзоной), а окно правила — там, где известно, чьё правило применять. Сегодня
   значение одно на владельца, и повторный расчёт — две арифметики дат на шаблон; цена названа вслух, выгода —
   правило носителя может стать не одним, и точка клампа переезжать не будет.
 - **РЧ-13-4. Метки `acyclic`/`target_max_incoming` — строки БЕЗ параметров.** Значения ограничений остаются в
@@ -10816,7 +10847,7 @@ import { materializeRuleOf, mirrorRuleOf, nearestAncestorRuleOf, rolloverRuleOf 
 describe('строки-носители параметров (§Б4-3, Р-14)', () => {
   let reg: Awaited<ReturnType<typeof effectiveRegistry>>;
   beforeAll(async () => {
-    reg = await withIdentity(db, { actor: accountOf(user), graph: user }, (tx) => effectiveRegistry(tx, user));
+    reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
   });
 
   test('nearest_ancestor: цели и кап глубины — из строки на orbis/project', () => {
@@ -10931,15 +10962,15 @@ export function rolloverRuleOf(reg: RegistrySnapshot): Extract<RuleDefinition, {
 ```ts
 /**
  * Параметры движка предков (`executor/ancestors.ts`). Id совпадает с `RULE_NEAREST_ANCESTOR`
- * (`constants.ts:144`): это же имя стоит во `flags.computed.rule` обоих вычисляемых свойств и в
+ * (`constants.ts:146`): это же имя стоит во `flags.computed.rule` обоих вычисляемых свойств и в
  * системной строке журнала «пересчитано N по правилу X» — с этой строкой оба адреса впервые
  * указывают на СУЩЕСТВУЮЩУЮ запись реестра, а не на слово.
  */
 export const RULE_NEAREST_ANCESTOR_ROW: RuleDefinitionInput = {
   id: RULE_NEAREST_ANCESTOR, template: 'nearest_ancestor', undo: 'skip',
   params: {
-    targets: { parent: 'orbis/parent_project', root: 'orbis/root_project' }, // ancestors.ts:38-39
-    depth_cap: 32,                                                            // ancestors.ts:57
+    targets: { parent: 'orbis/parent_project', root: 'orbis/root_project' }, // ancestors.ts:39-40
+    depth_cap: 32,                                                            // ancestors.ts:58
   },
 };
 
@@ -10947,18 +10978,18 @@ export const RULE_NEAREST_ANCESTOR_ROW: RuleDefinitionInput = {
 export const RULE_MATERIALIZE: RuleDefinitionInput = {
   id: 'materialize', template: 'materialize', undo: 'skip',
   params: {
-    horizon_days: 14,                                                         // materialize.ts:34
-    retro_days: 92,                                                           // materialize.ts:44
-    trigger_properties: ['orbis/start_at', 'orbis/due_date', 'orbis/occurred_on'], // :57-61
+    horizon_days: 14,                                                         // materialize.ts:35
+    retro_days: 92,                                                           // materialize.ts:45
+    trigger_properties: ['orbis/start_at', 'orbis/due_date', 'orbis/occurred_on'], // :58-62
     inherit: {
       'orbis/schedule': ['orbis/start_at', 'orbis/end_at', 'orbis/duration_min',
-                         'orbis/all_day', 'orbis/location', 'orbis/timezone'],     // :85-92
+                         'orbis/all_day', 'orbis/location', 'orbis/timezone'],     // :86-93
       'orbis/financial': ['orbis/amount', 'orbis/currency', 'orbis/direction',
                           'orbis/finance_category', 'orbis/payment_method',
-                          'orbis/counterparty'],                                   // :102-109
+                          'orbis/counterparty'],                                   // :103-110
     },
-    own: { 'orbis/occurred_on': 'instance_date', 'orbis/planned': true, 'orbis/recurring': true }, // :503-508
-    origin_role: ROLE_INSTANCE_OF,                                            // :527
+    own: { 'orbis/occurred_on': 'instance_date', 'orbis/planned': true, 'orbis/recurring': true }, // :505-510
+    origin_role: ROLE_INSTANCE_OF,                                            // :529
   },
 };
 
@@ -11047,7 +11078,7 @@ if (rule.template === 'rollover') {
 
 - [ ] **Шаг 6: `rollover` уезжает из схемы подписки.** Снять поле `rollover` (`subscription-type.ts:155-161`),
   значение фикстуры (`subscription-fixtures.ts:266`) и проверку `known(def.rollover.carry.agg, …)`
-  (`subscriptions/registry.ts:523`). В `apps/server/src/budget/aggregates.ts` (`:981-1000`) заменить чтение:
+  (`subscriptions/registry.ts:523`). В `apps/server/src/budget/aggregates.ts` (`:989-1008`) заменить чтение:
 ```ts
     // Р-13: параметры перехода — СТРОКА каталога на аспекте `orbis/budget`, а не поле подписки.
     // Снимок читается тут же, в фазе чтения той же tx: второй источник декларации разошёлся бы с тем
@@ -11056,15 +11087,15 @@ if (rule.template === 'rollover') {
     const roll = rolloverRuleOf(await effectiveRegistry(tx, graphId)).params;
 ```
   (ветки `ROLLOVER_SOURCE_UNSUPPORTED`/`ROLLOVER_CARRY_UNSUPPORTED` ниже — дословно как были).
-  Тем же шагом — `rolloverPreview` (`:789-931`): если задача 11 оставила там временную ссылку на
+  Тем же шагом — `rolloverPreview` (`:797-939`): если задача 11 оставила там временную ссылку на
   `builtinSubscription(...).rollover`, перевести её на `rolloverRuleOf(reg)` (греп
   `git grep -n "\.rollover" -- apps/server/src` → должен остаться пуст).
   `bun run db:prepare` (схема подписки изменилась — строка сида переписывается).
-  `cd apps/server && bun test src/budget/rollover.test.ts src/subscriptions/` → **FAIL**: `budget.test.ts:941-985`
+  `cd apps/server && bun test src/budget/rollover.test.ts src/subscriptions/` → **FAIL**: `budget.test.ts:944-988`
   правит `rollover` дельтой подписки, которой больше нет.
 
 - [ ] **Шаг 7: близнец переноса — на строку правила.** В `apps/server/src/subscriptions/budget.test.ts` переписать
-  `describe` (`:941-985`):
+  `describe` (`:944-988`):
 ```ts
 /**
  * Админская подмена СИСТЕМНОЙ строки правила: тулы записи правил приезжают задачей 16, а проверить
@@ -11092,7 +11123,7 @@ export async function withRule<T>(aspectId: string, rules: unknown[], fn: () => 
 }
 
 // Заголовок describe: «rollover: параметры перехода — из строки каталога (Р-13)».
-// Первая половина теста (границы месяца из `exact_calendar_month`, строки :942-960) НЕ меняется:
+// Первая половина теста (границы месяца из `exact_calendar_month`, строки :945-963) НЕ меняется:
 // она про исполнение, а не про дом параметров. Заменяется вторая — та, что правила декларацию:
     // Строка каталога называет ВЫРАЗИМУЮ валидатором, но НЕИСПОЛНИМУЮ движком величину (`spent`
     // публикуется аспектом, значит `assertRule` её примет) — движок обязан отказать, а не «как раньше».
@@ -11115,7 +11146,7 @@ export async function withRule<T>(aspectId: string, rules: unknown[], fn: () => 
 ```ts
   test('цели и кап приезжают из строки правила, а не из констант файла', async () => {
     // Выключенная строка — Error сборки: пересчёт по числам, которых нет в реестре, запрещён.
-    const reg = await withIdentity(db, { actor: accountOf(user), graph: user }, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     expect(nearestAncestorRuleOf(reg).rule.params.targets.parent).toBe('orbis/parent_project');
     const empty = { ...reg, aspects: new Map() } as typeof reg;
     await expect(recomputeProjectAncestors(/* tx */ null as never, user, ['x'], empty)).rejects.toThrow(/nearest_ancestor/);
@@ -11124,7 +11155,7 @@ export async function withRule<T>(aspectId: string, rules: unknown[], fn: () => 
   `cd apps/server && bun test src/executor/ancestors.test.ts` → **FAIL**: `nearestAncestorRuleOf` в движке не зовётся.
 
 - [ ] **Шаг 9: движок предков — на параметры строки.** В `apps/server/src/executor/ancestors.ts` снять
-  `PROP_PARENT_PROJECT`/`PROP_ROOT_PROJECT` (`:38-39`), `PROJECT_ASPECT` (`:46`), `DEPTH_CAP` (`:57`); в теле
+  `PROP_PARENT_PROJECT`/`PROP_ROOT_PROJECT` (`:39-40`), `PROJECT_ASPECT` (`:47`), `DEPTH_CAP` (`:58`); в теле
   `recomputeProjectAncestors` первой строкой:
 ```ts
   // Параметры — из строки каталога на аспекте-носителе (§Б4-3, Р-14): движок остался кодом, числа
@@ -11143,14 +11174,14 @@ export async function withRule<T>(aspectId: string, rules: unknown[], fn: () => 
 // `flags.computed.rule` обоих свойств и в системной строке журнала о пересчёте. Строки нет или она
 // выключена — `Error` сборки: считать по числам, которых нет в реестре, движок не вправе.
 ```
-  В `apps/server/src/executor/executor.ts` `ancestorRootsOnProjectChange` (`:2441-2449`) получает `reg` первым
-  аргументом и читает `nearestAncestorRuleOf(reg).aspectId` вместо `PROJECT_ASPECT`; два вызова (`:2254`, `:2415`)
-  — `ancestorRootsOnProjectChange(ctx.registry, …)`. Импорт `PROJECT_ASPECT` (`:132`) снять.
+  В `apps/server/src/executor/executor.ts` `ancestorRootsOnProjectChange` (`:2440-2448`) получает `reg` первым
+  аргументом и читает `nearestAncestorRuleOf(reg).aspectId` вместо `PROJECT_ASPECT`; два вызова (`:2253`, `:2414`)
+  — `ancestorRootsOnProjectChange(ctx.registry, …)`. Импорт `PROJECT_ASPECT` (`:133`) снять.
   `cd apps/server && bun test src/executor/ancestors.test.ts src/executor/relations.test.ts` → **PASS**.
   Коммит: `refactor(server): движок предков читает цели, носителя и кап из строки каталога`
 
 - [ ] **Шаг 10: красный — материализация читает строку.** В `apps/server/src/recurring/materialize.test.ts`
-  поправить хелпер окна (`:627-640`) на третий аргумент и дописать тест:
+  поправить хелпер окна (`:629-642`) на третий аргумент и дописать тест:
 ```ts
   // Горизонт и триггеры — параметры правила; хелпер берёт их из снимка, а не из константы файла.
   const win = (q: string) => materializationWindow(parse(q), today, MATERIALIZE_PARAMS);
@@ -11165,11 +11196,11 @@ export async function withRule<T>(aspectId: string, rules: unknown[], fn: () => 
   `cd apps/server && bun test src/recurring/materialize.test.ts` → **FAIL**: у `materializationWindow` два аргумента.
 
 - [ ] **Шаг 11: движок материализации — на параметры строки.** В `apps/server/src/recurring/materialize.ts`:
-  - снять `HORIZON_DAYS` (`:34`), `RETRO_DAYS` (`:44`), `MATERIALIZABLE_PROPERTIES` (`:57-61`),
-    `INHERITED_SCHEDULE_PROPERTIES` (`:85-92`), `INHERITED_FINANCIAL_PROPERTIES` (`:102-109`);
+  - снять `HORIZON_DAYS` (`:35`), `RETRO_DAYS` (`:45`), `MATERIALIZABLE_PROPERTIES` (`:58-62`),
+    `INHERITED_SCHEDULE_PROPERTIES` (`:86-93`), `INHERITED_FINANCIAL_PROPERTIES` (`:103-110`);
   - `materializationWindow(ast, today, params: MaterializeParams)` — `MATERIALIZABLE_PROPERTIES.has(node.prop)` →
     `params.trigger_properties.includes(node.prop)`, `horizon()` → `addDays(today, params.horizon_days)`;
-  - в `materializeInstances` снять кламп `:317-323`, а фазу чтения (`:326-351`) расширить снимком:
+  - в `materializeInstances` снять кламп `:319-325`, а фазу чтения (`:328-353`) расширить снимком:
 ```ts
   // `who: Identity` — параметр `materializeInstances` после Г-3 (пара от резолвера); graphId = who.graph
   const { templates, userTimezone, reg } = await withIdentity(db, who, async (tx) => {
@@ -11194,7 +11225,7 @@ export async function withRule<T>(aspectId: string, rules: unknown[], fn: () => 
 ```
   - `SCHEDULE_ASPECT` в SELECT шаблонов — `aspectId` носителя правила; `'orbis/recurrence'` остаётся константой
     движка с докблоком «признак шаблона — свойство-маркер, а не параметр: без него материализовать нечего»;
-  - `instanceScheduleProps` и `instanceOps` (`:487-531`) — на `rule.params`:
+  - `instanceScheduleProps` и `instanceOps` (`:489-533`) — на `rule.params`:
 ```ts
 /** Наследуемые свойства — ЯВНЫЙ перечень строки правила, по аспекту-источнику (§Б4-3, inv §6 п.3). */
 function inheritedProps(rule: MaterializeRule, templateProps: Record<string, unknown>, aspects: readonly string[]) {
@@ -11227,12 +11258,12 @@ function ownProps(reg: RegistrySnapshot, rule: MaterializeRule, aspects: readonl
 ```
     в `instanceOps` набор аспектов инстанса — `[aspectId, ...Object.keys(rule.params.inherit).filter((a) => a !== aspectId && template.aspects.includes(a))]`,
     роль ребра — `rule.params.origin_role` вместо `ROLE_INSTANCE_OF`.
-  - в `with-materialization.ts:53` — `materializationWindow(ast, cctx.today, materializeRuleOf(cctx.reg).params)`.
+  - в `with-materialization.ts:55` — `materializationWindow(ast, cctx.today, materializeRuleOf(cctx.reg).params)`.
   Шапку файла дописать: «ЗДЕСЬ — КОД ДВИЖКА; горизонт, ретро-пол, триггеры, перечни наследования, свои свойства
   инстанса и роль ребра — строка каталога `materialize` на `orbis/schedule`. Вторая копия числа 14
-  (`subscriptions/budget.ts:86`) — окно ВЕДОМОСТИ, а не горизонт ПОРОЖДЕНИЯ: совпадение значений случайно, сливать
+  (`subscriptions/budget.ts:87`) — окно ВЕДОМОСТИ, а не горизонт ПОРОЖДЕНИЯ: совпадение значений случайно, сливать
   их нельзя (Р-14)».
-  `cd apps/server && bun test src/recurring/` → **PASS** (включая `:207` горизонт, `:228` ретро-пол, `:779-810`).
+  `cd apps/server && bun test src/recurring/` → **PASS** (включая `:208` горизонт, `:229` ретро-пол, `:780-811`).
   Коммит: `refactor(server): движок материализации читает горизонт, перечни и роль из строки каталога`
 
 - [ ] **Шаг 12: зеркало ссылки — на параметры строки.** В `apps/server/src/registry/ref.ts`:
@@ -11256,7 +11287,7 @@ function isMirroredRef(reg: RegistrySnapshot, propertyId: string, rule: MirrorRu
   Тест в `apps/server/src/registry/ref.test.ts`:
 ```ts
   test('вычисляемые ссылки зеркалом не дублируются — условие приезжает строкой правила', async () => {
-    const reg = await withIdentity(db, { actor: accountOf(user), graph: user }, (tx) => effectiveRegistry(tx, user));
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     expect(mirrorRuleOf(reg).params.skip_computed).toBe(true);
     // orbis/parent_project — ref с flags.computed: ребра роли `ref` у него быть не должно
     const rows = await adminRows(sql`SELECT count(*)::int AS n FROM relations
@@ -11349,7 +11380,7 @@ function bindingIndexFor(reg: RegistrySnapshot): BindingIndex {
 ```
   `assertRoleConstraints` — `ctx` получает `ends?: { source: EntityState; target: EntityState }`. Поле
   НЕОБЯЗАТЕЛЬНО намеренно: путь удаления концы читает не всегда (`routineEnds` там условен,
-  `executor.ts:2714`), а контракты на удалении и не проверяются. После гейта `created_by` и
+  `executor.ts:2713`), а контракты на удалении и не проверяются. После гейта `created_by` и
   `if (ctx.op === 'delete') return;` первой проверкой:
 ```ts
   // Создание обязано назвать концы: без них контракт проверять нечем, а молча пропустить проверку —
@@ -11360,9 +11391,9 @@ function bindingIndexFor(reg: RegistrySnapshot): BindingIndex {
   assertEndContracts(reg, key, def, ctx.ends);
 ```
   (раньше `acyclic`: «конец не того рода» — более ранний и более точный ответ, чем «замкнулся бы цикл»).
-  В `apps/server/src/executor/executor.ts` вызов создания (`:2560-2565`) дополняется
+  В `apps/server/src/executor/executor.ts` вызов создания (`:2559-2564`) дополняется
   `ends: { source: stateOf(source), target: stateOf(target) }` (обе строки уже прочитаны
-  `loadBothEndsForUpdate` `:2546`); вызов удаления (`:2722-2726`) не меняется.
+  `loadBothEndsForUpdate` `:2545`); вызов удаления (`:2721-2725`) не меняется.
   `cd apps/server && bun test src/executor/relations.test.ts` → **PASS** (все 30+ прежних тестов и три новых).
   Коммит: `feat(server): контракты концов ребра проверяются на записи — INVARIANT relation_contract`
 
@@ -11425,11 +11456,11 @@ function bindingIndexFor(reg: RegistrySnapshot): BindingIndex {
 `packages/shared/src/registry/builtin-contracts.ts` (`CONTRACT_IDS` `:15-22`, седьмая запись `ENTRIES`
 перед `:234`, докблоки `:1-5` и `:236`); `packages/shared/src/registry/builtin-aspects.ts` (`implements` аспекта
 `orbis/task` `:108-122`); `apps/server/src/agent-loop/constants.ts` (два адреса); `apps/server/src/agent-loop/queries.ts`
-(`TicketProps` `:66-74` — `interface` → `type`, Р-К-92 (6)); `apps/server/src/agent-loop/verbs.ts`
-(`CLAIMABLE_STATUSES` `:165`, `myQueue` `:406-448`, `claimTask` `:450-…`, `CloseRunArgs` `:807-841`,
-`closeRun` `:851-993`, `checkpoint` `:995-1044`, `finish` `:1046-1089`);
-`apps/server/src/agent-loop/sweep.ts` (`SweepArgs` `:27-34`, `sweepStaleRuns` `:78-…`, тикетная половина
-`:164-182`, проза `:95`); `apps/server/src/routers/agent-run.ts` (`answerCheckpoint` `:60-…`: предпроверка
+(`TicketProps` `:67-75` — `interface` → `type`, Р-К-92 (6)); `apps/server/src/agent-loop/verbs.ts`
+(`CLAIMABLE_STATUSES` `:167`, `myQueue` `:408-450`, `claimTask` `:452-…`, `CloseRunArgs` `:809-843`,
+`closeRun` `:853-995`, `checkpoint` `:997-1046`, `finish` `:1048-1091`);
+`apps/server/src/agent-loop/sweep.ts` (`SweepArgs` `:28-36`, `sweepStaleRuns` `:80-…`, тикетная половина
+`:166-184`, проза `:97`); `apps/server/src/routers/agent-run.ts` (`answerCheckpoint` `:60-…`: предпроверка
 `:67-101`, тикетная операция `:146-162`, проза `:90`, `:156`);
 `packages/shared/src/contracts/agent-loop.ts` (ОДИН докблок `QueueTicket.claimable` `:277`; форма ответа
 не меняется).
@@ -11437,8 +11468,8 @@ function bindingIndexFor(reg: RegistrySnapshot): BindingIndex {
 *Test (правка ожиданий):* `contract-type.test.ts` (ЧУЖОЙ пин задачи 2 «все контракты несут
 `exclusive_classes: false`» — переписывается в шаге 8), `bindings.test.ts`, `builtin.test.ts` (снимок `B2`
 `:142-170`; пин контрактов `:686-701`), `apps/server/test/seed-registries.test.ts` (`:59` `toBe(6)` →
-`toBe(7)`), `apps/server/src/registry/load.test.ts` (только ЗАГОЛОВОК `:163` «шесть встроенных» → «семь»;
-сам пин `:165` выводится из `CONTRACT_IDS` и остаётся зелёным). Без единой правки, но прогоняются после
+`toBe(7)`), `apps/server/src/registry/load.test.ts` (только ЗАГОЛОВОК `:169` «шесть встроенных» → «семь»;
+сам пин `:171` выводится из `CONTRACT_IDS` и остаётся зелёным). Без единой правки, но прогоняются после
 пересева: `apps/server/src/db/registry-drift.test.ts` (ожидание контрактов выводится из
 `BUILTIN_CONTRACT_DEFS` — седьмая строка приезжает в него сама).
 
@@ -11482,19 +11513,19 @@ export function entityClassOf(idx: BindingIndex, entity: { aspects: readonly str
 //   краснеет от строки `orbis/delegable`, переписывается в шаге 8 (I-1)
 // задача 2 (0022_rules_actions, Р-К-92 (2)) — колонка контракта и вся её обвязка ЧУЖИЕ:
 //   ALTER TABLE contract_definitions ADD COLUMN exclusive_classes boolean NOT NULL DEFAULT false;
-//   schema.ts (contractDefinitions :461-485), SELECT load.ts:149-153 + сборка :231-249,
-//   registry-drift.ts:74-75, seed-registries.ts:157-174 (колонка в INSERT/DO UPDATE),
+//   schema.ts (contractDefinitions :478-502), SELECT load.ts:150-154 + сборка :232-250,
+//   registry-drift.ts:74-75, seed-registries.ts:158-175 (колонка в INSERT/DO UPDATE),
 //   aspect-registry.ts expectedContracts :185-203. 14а колонку только НАПОЛНЯЕТ строкой контракта.
-// apps/server/src/registry/load.ts:93 RegistrySnapshot extends RegistryDictionaries
-// apps/server/src/registry/cache.ts:114 effectiveRegistry(tx: Tx, graph: GraphId): Promise<RegistrySnapshot>  [после Г — Р-К-90]
-// apps/server/src/registry/ops.ts:1788 execErrorOfImplementsIssue(issue, extra) — неизвестный код → ExecError('VALIDATION', …, {reason: issue.code}) (:1807-1812)
-// apps/server/src/agent-loop/queries.ts:147 TicketRow {id; title; props: TicketProps; aspects: string[]; updatedAt};
-//   :267 assignedTickets(tx, grantId); :469 ticketOfRun(tx, runId)
-// apps/server/src/agent-loop/verbs.ts:82 VerbCtx { db; identity; subject; clock; sink }  [после Г — Г-3 :439]
+// apps/server/src/registry/load.ts:94 RegistrySnapshot extends RegistryDictionaries
+// apps/server/src/registry/cache.ts:119 effectiveRegistry(tx: Tx, graph: GraphId): Promise<RegistrySnapshot>  [после Г — Р-К-90]
+// apps/server/src/registry/ops.ts:1789 execErrorOfImplementsIssue(issue, extra) — неизвестный код → ExecError('VALIDATION', …, {reason: issue.code}) (:1808-1813)
+// apps/server/src/agent-loop/queries.ts:148 TicketRow {id; title; props: TicketProps; aspects: string[]; updatedAt};
+//   :268 assignedTickets(tx, grantId); :470 ticketOfRun(tx, runId)
+// apps/server/src/agent-loop/verbs.ts:83 VerbCtx { db; identity; subject; clock; sink }  [после Г — Г-3 :441]
 // packages/shared/src/contracts/tools.ts:165 entityUpdatePreconditionItem = {property; in: unknown[]} | {property; absent: true}
 // packages/shared/src/contracts/agent-loop.ts:29 TASK_STATUSES; :368 FinishResult.ticket_status?: 'waiting'|'done'
-// apps/server/test/gate-c8-18.test.ts:51-66 repoRoot(), gitGrep(pattern, pathspec) — образец сторожа
-// apps/server/src/subscriptions/budget.ts:146-153 мемо индекса привязок по снимку — образец
+// apps/server/test/gate-c8-18.test.ts:61-76 repoRoot(), gitGrep(pattern, pathspec) — образец сторожа
+// apps/server/src/subscriptions/budget.ts:147-154 мемо индекса привязок по снимку — образец
 // план Б-1 :12653-12670 — порядок «drizzle-kit generate → тело SQL руками»
 ```
 
@@ -11532,7 +11563,7 @@ export const TICKET_ASPECT = 'orbis/task';
   невнимательности оставить без класса — запись с ним просто не член контракта (§Б2-3); у прочих
   контрактов полнота остаётся строгой.
 - **РЧ-14а-2. Пятый класс `new` — под `inbox` [Р-К-92 (1), эррата Р-И-38 внесена в §1.16].** `CLAIMABLE_STATUSES` на
-  HEAD — `['inbox','planned']` (`verbs.ts:165`), а `inbox` — умолчание статуса задачи
+  HEAD — `['inbox','planned']` (`verbs.ts:167`), а `inbox` — умолчание статуса задачи
   (`builtin-aspects.ts:104`, aiInstructions). При четырёх классах «взять в работу» выражается только
   классом `queued` = `planned`, и назначенный агенту тикет в `inbox` молча перестал бы быть claimable —
   регрессия, которой владелец не просил. Класс `new` с единственным вариантом `inbox` сохраняет поведение
@@ -11547,14 +11578,14 @@ export const TICKET_ASPECT = 'orbis/task';
   снимок, собранный мимо валидатора (прямой сид, фикстура). Цена: ноль.
 - **РЧ-14а-5. Седьмой код `ImplementsIssue` — `CLASS_NOT_EXCLUSIVE`, а не седьмой `reason`.**
   `bindings.ts:97` отказал седьмому коду там, где речь об одном и том же («такого контракта для привязки
-  нет»); здесь нарушена форма карты, а не адрес. `execErrorOfImplementsIssue` (`ops.ts:1807-1812`)
+  нет»); здесь нарушена форма карты, а не адрес. `execErrorOfImplementsIssue` (`ops.ts:1808-1813`)
   переводит неизвестный код в `VALIDATION` с `reason: issue.code` — ровно в `VALIDATION
   reason:'CLASS_NOT_EXCLUSIVE'` Р-И-38, без единой правки перевода. Цена: одна ветка union.
 - **РЧ-14а-6. Контракт приписан седьмым (rank 7), а не вставлен к ядру.** `rank` выводится из позиции
   (`builtin-contracts.ts:237-243`), вставка «к четырём ядровым» сдвинула бы ранги обоих контрактов
   Финансов без изменения смысла — лишний дрейф на пересеве. Цена: порядок списка больше не читается как
   «сначала ядро, потом модули»; сказано докблоком шапки.
-- **РЧ-14а-7. Признак носителя (Р9) встроен в `entityClassOf`.** `verbs.ts:968-971` сверяет
+- **РЧ-14а-7. Признак носителя (Р9) встроен в `entityClassOf`.** `verbs.ts:970-973` сверяет
   `ticketWire.aspects.includes('orbis/task')` перед чтением статуса; `entityClassOf` берёт только привязки
   аспектов, СТОЯЩИХ на записи, поэтому снятый аспект даёт `null` — тот же исход одним чтением. Цена: ноль,
   довод Р9 переезжает в комментарий.
@@ -11742,7 +11773,7 @@ function classesWithTwoVariants(known: ReadonlyMap<string, string>): Map<string,
 /**
  * Вариант, уже занимающий класс в этом слоте у любого носителя свойства; `undefined` — класс свободен.
  * Обход по ВСЕМ носителям, а не по аспекту-цели: дельта дописывает отнесение в `value_map` каждой
- * привязки, связывающей свойство с этим слотом (`deltas.ts:448-470`), — значит и нарушить
+ * привязки, связывающей свойство с этим слотом (`deltas.ts:449-471`), — значит и нарушить
  * исключительность она может у любого из них.
  */
 function classTakenBy(
@@ -11977,14 +12008,14 @@ test('exclusive_classes: схема даёт boolean каждому контра
     привязка проходит гейт записи `checkImplements`» — зелено ровно благодаря шагу 3;
   - `cd apps/server && bun test src/query src/subscriptions src/expr src/tools/registry.test.ts` → PASS.
     ЧТО ДОКАЗЫВАЕТСЯ: седьмой контракт и третья привязка задачи никого не сдвинули. Разбор: все читатели
-    индекса спрашивают КОНКРЕТНЫЙ контракт (`expr/compile.ts:527,638`, `subscriptions/agenda.ts:74`,
-    `subscriptions/registry.ts:765`, `subscriptions/budget.ts:182,345,659`, `budget/contour.ts:69,81`,
+    индекса спрашивают КОНКРЕТНЫЙ контракт (`expr/compile.ts:527,638`, `subscriptions/agenda.ts:75`,
+    `subscriptions/registry.ts:765`, `subscriptions/budget.ts:183,345,659`, `budget/contour.ts:69,81`,
     `row.ts:101`), а таблица строки M14 перечисляет контракты поимённо (`row.ts:21-32` — делегируемости
     в ней нет);
   - `bun run db:prepare` ИЗ КОРНЯ репозитория (скрипт корневой — `package.json:16`; последним шагом он
-    сам зовёт `bun run test:rls`): сид сообщает `contracts: 7`, pgTAP `plan(143)` зелён — колонка пришла
-    с `0022` с DEFAULT, а INSERT'ы pgTAP перечисляют колонки поимённо (`rls.pgtap.sql:76,79,82,514,519`);
-  - заголовок `load.test.ts:163` «снимок несёт словарь контрактов: ШЕСТЬ встроенных…» — заменить на
+    сам зовёт `bun run test:rls`): сид сообщает `contracts: 7`, pgTAP `plan(160)` зелён — колонка пришла
+    с `0022` с DEFAULT, а INSERT'ы pgTAP перечисляют колонки поимённо (`rls.pgtap.sql:120,123,126,562,567,572`);
+  - заголовок `load.test.ts:169` «снимок несёт словарь контрактов: ШЕСТЬ встроенных…» — заменить на
     «семь»: сам пин выводится из `CONTRACT_IDS` и остаётся зелёным, но текст разошёлся бы с данными;
   - `cd apps/server && bun test test/seed-registries.test.ts src/registry/load.test.ts src/db/registry-drift.test.ts` → PASS.
   Коммит: `git commit -- packages/shared/src/registry/builtin-contracts.ts packages/shared/src/registry/builtin-aspects.ts packages/shared/src/registry/builtin.test.ts packages/shared/src/registry/bindings.test.ts apps/server/test/seed-registries.test.ts`
@@ -12058,7 +12089,7 @@ import type { RegistrySnapshot } from './load';
 const STATUS_SLOT = 'status';
 
 /**
- * Индекс привязок — МЕМО ПО СНИМКУ (образец и довод — `subscriptions/budget.ts:146-153`): очередь
+ * Индекс привязок — МЕМО ПО СНИМКУ (образец и довод — `subscriptions/budget.ts:147-154`): очередь
  * исполнителя спрашивает класс на каждый тикет, а `bindingIndexOf` пересобирает индекс с нуля. Ключ —
  * сам снимок: `effectiveRegistry` отдаёт кешированный объект, новая версия реестра — новый объект.
  * ЧЕТВЁРТАЯ копия этого мемо в репозитории (`row.ts:66-72`, `budget.ts:146-153`, `expr/eval.ts`
@@ -12122,7 +12153,7 @@ export function classPrecondition(
   `feat(server): помощники записи классом — statusPatch, classPrecondition, classOfEntity (Р-И-39)`.
 
 - [ ] **Шаг 12: красный — греп-сторож трёх файлов.** Новый `apps/server/test/gate-delegable.test.ts`
-  (образец `repoRoot`/`gitGrep` — `test/gate-c8-18.test.ts:51-66`; шаблон пишется литералом, а не
+  (образец `repoRoot`/`gitGrep` — `test/gate-c8-18.test.ts:61-76`; шаблон пишется литералом, а не
   собирается: pathspec — ровно три файла, и сам сторож в него не входит):
 ```ts
 // apps/server/test/gate-delegable.test.ts
@@ -12193,9 +12224,9 @@ export const TICKET_ASPECT = 'orbis/task';
   привязки идут через локальный `Record<string, unknown>` (ниже и в шаге 15).
   В `verbs.ts` импорты += `{ bindingsOfSnapshot, classOfEntity, classPrecondition, statusPatch }` из
   `../registry/class-write`, `{ propertyOfSlot }` из `@orbis/shared`, `{ DELEGABLE_CONTRACT, TICKET_ASPECT }`
-  из `./constants`, `type { RegistrySnapshot }` из `../registry/load` (`effectiveRegistry` уже импортирован — `verbs.ts:48`;
-  `:614` — его единственное использование на HEAD). Далее:
-  - `:163-165`:
+  из `./constants`, `type { RegistrySnapshot }` из `../registry/load` (`effectiveRegistry` уже импортирован — `verbs.ts:49`;
+  `:616` — его единственное использование на HEAD). Далее:
+  - `:165-167`:
 ```ts
 /**
  * Классы, из которых тикет можно взять в работу (единственное место правила). КЛАССЫ, а не значения:
@@ -12203,12 +12234,12 @@ export const TICKET_ASPECT = 'orbis/task';
  */
 const CLAIMABLE_CLASSES: readonly string[] = ['new', 'queued'];
 ```
-  - `myQueue` (`:419-441`): в начало колбэка `withIdentity` —
+  - `myQueue` (`:421-443`): в начало колбэка `withIdentity` —
 ```ts
     const reg = await effectiveRegistry(tx, ctx.identity.graph);
     const statusProperty = propertyOfSlot(bindingsOfSnapshot(reg), TICKET_ASPECT, DELEGABLE_CONTRACT, 'status');
 ```
-    `:424` → чтение по адресу из привязки — через `Record<string, unknown>` (иначе TS7053):
+    `:426` → чтение по адресу из привязки — через `Record<string, unknown>` (иначе TS7053):
 ```ts
       // `task` — это `row.props` (`TicketProps`): у него известные ключи, а адрес слота приезжает
       // СТРОКОЙ, и индексация им по узкому типу не типизируется ни при `interface`, ни при `type`.
@@ -12220,8 +12251,8 @@ const CLAIMABLE_CLASSES: readonly string[] = ['new', 'queued'];
       // Ответ агенту несёт ЗНАЧЕНИЕ (он читает его глазами), а решение «брать или нет» — КЛАСС.
       const cls = classOfEntity(reg, row, DELEGABLE_CONTRACT);
 ```
-    и `:433` → `claimable: cls !== null && CLAIMABLE_CLASSES.includes(cls),`.
-  - `claimTask` (`:459`): тикет и снимок одним походом —
+    и `:435` → `claimable: cls !== null && CLAIMABLE_CLASSES.includes(cls),`.
+  - `claimTask` (`:461`): тикет и снимок одним походом —
 ```ts
   const found = await withIdentity(ctx.db, ctx.identity, async (tx) => ({
     ticket: await ticketById(tx, input.ticket_id),
@@ -12229,7 +12260,7 @@ const CLAIMABLE_CLASSES: readonly string[] = ['new', 'queued'];
   }));
   const ticket = found.ticket;
 ```
-    предусловие и патч (`:483-489`):
+    предусловие и патч (`:485-491`):
 ```ts
         precondition: [
           classPrecondition(found.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, CLAIMABLE_CLASSES),
@@ -12238,11 +12269,11 @@ const CLAIMABLE_CLASSES: readonly string[] = ['new', 'queued'];
         ],
         props: statusPatch(found.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'in_progress'),
 ```
-    (проза `:481` «не могут оба увидеть `planned`» → «…оба увидеть тикет в классе очереди».)
-  - `CloseRunArgs` (`:838-841`): `ticketUpdate?: (ticket: TicketRow, reg: RegistrySnapshot) => TicketUpdate;`
+    (проза `:483` «не могут оба увидеть `planned`» → «…оба увидеть тикет в классе очереди».)
+  - `CloseRunArgs` (`:840-843`): `ticketUpdate?: (ticket: TicketRow, reg: RegistrySnapshot) => TicketUpdate;`
     и `expected?: readonly TaskStatus[]` → `expectedClasses?: readonly string[];` («КЛАССЫ тикета,
     допустимые в ответе: иное = сохранённый ответ чужого вызова»).
-  - `closeRun` (`:864-880`) и fail-closed чтение снимка рядом с `iso` (`:167`):
+  - `closeRun` (`:866-882`) и fail-closed чтение снимка рядом с `iso` (`:169`):
 ```ts
   let ticket: TicketRow | null = null;
   let ticketUpdate: TicketUpdate | null = null;
@@ -12265,9 +12296,9 @@ function regOf(reg: RegistrySnapshot | null): RegistrySnapshot {
   return reg;
 }
 ```
-  - предусловие тикета (`:909-915`): первый пункт →
+  - предусловие тикета (`:911-917`): первый пункт →
     `classPrecondition(regOf(reg), TICKET_ASPECT, DELEGABLE_CONTRACT, ['in_progress']),`.
-  - хвост (`:966-987`):
+  - хвост (`:968-989`):
 ```ts
   const ticketWire = wireEntityAt(r.results, 1);
   // Признак носителя (Р9) встроен в чтение класса: у записи без аспекта `orbis/task` привязки
@@ -12288,7 +12319,7 @@ function regOf(reg: RegistrySnapshot | null): RegistrySnapshot {
     action_id: r.actionId,
   };
 ```
-  - `checkpoint` (`:1020-1024`):
+  - `checkpoint` (`:1022-1026`):
 ```ts
     ticketUpdate: (_ticket, reg) => ({
       props: {
@@ -12298,7 +12329,7 @@ function regOf(reg: RegistrySnapshot | null): RegistrySnapshot {
     }),
     expectedClasses: ['waiting'],
 ```
-  - `finish` (`:1063-1077`):
+  - `finish` (`:1065-1079`):
 ```ts
     ticketUpdate: (ticket, reg) =>
       ticket.aspects.includes('orbis/assignment') && ticket.props['orbis/may_close'] === true
@@ -12318,20 +12349,20 @@ function regOf(reg: RegistrySnapshot | null): RegistrySnapshot {
     expectedClasses: ['waiting', 'done'],
 ```
   Прогоны: `cd apps/server && bun test test/gate-delegable.test.ts` → первый тест ЗЕЛЁН, второй и третий
-  красны; `bun test src/agent-loop/verbs.test.ts` → **PASS БЕЗ ПРАВКИ ОЖИДАНИЙ** (в т.ч. `:124` «claimable
-  только inbox|planned» и `:139` «waiting/done не claimable») — это и есть доказательство сохранности
+  красны; `bun test src/agent-loop/verbs.test.ts` → **PASS БЕЗ ПРАВКИ ОЖИДАНИЙ** (в т.ч. `:132` «claimable
+  только inbox|planned» и `:147` «waiting/done не claimable») — это и есть доказательство сохранности
   поведения; `bunx tsc --noEmit` → PASS.
   Коммит: `git commit -- apps/server/src/agent-loop/verbs.ts apps/server/src/agent-loop/constants.ts apps/server/src/agent-loop/queries.ts apps/server/test/gate-delegable.test.ts`
   `refactor(server): глаголы исполнителя читают и пишут класс контракта делегирования (Р-И-39)`.
 
 - [ ] **Шаг 14: зелёный (2/3) — подметание.** В `sweep.ts` импорты те же четыре (плюс `effectiveRegistry`
-  из `../registry/cache`). Перед циклом по `stale` (`:85`):
+  из `../registry/cache`). Перед циклом по `stale` (`:87`):
 ```ts
   // Снимок реестра — ОДИН на подметание: адрес свойства и варианты классов внутри прохода не меняются,
   // а поход за ним в каждой итерации стоил бы транзакцию на каждый брошенный прогон.
   const reg = await withIdentity(db, args.identity, (tx) => effectiveRegistry(tx, args.identity.graph));
 ```
-  Тикетная половина (`:164-182`):
+  Тикетная половина (`:166-184`):
 ```ts
     // Тикет чинится, только если он ДЕЙСТВИТЕЛЬНО висит в работе: владелец мог вернуть его руками, и
     // переписывать его состояние задним числом сервер права не имеет.
@@ -12361,7 +12392,7 @@ function regOf(reg: RegistrySnapshot | null): RegistrySnapshot {
       });
     }
 ```
-  (проза `:95` «верни в planned при живом прогоне A» → «верни в очередь…» — иначе сторож краснеет на
+  (проза `:97` «верни в planned при живом прогоне A» → «верни в очередь…» — иначе сторож краснеет на
   комментарии.)
   Прогоны: `bun test test/gate-delegable.test.ts` → два зелены, третий красен;
   `bun test src/agent-loop/sweep.test.ts` → **PASS без правки ожиданий**; `bunx tsc --noEmit` → PASS.
@@ -12412,7 +12443,7 @@ function regOf(reg: RegistrySnapshot | null): RegistrySnapshot {
 ```
   (проза `:90` «вернул тикет в planned» и `:156` «вопрос рядом с `planned`» → «в очередь».)
   Прогоны: `bun test test/gate-delegable.test.ts` → **все четыре зелены**;
-  `bun test src/routers/agent-run.test.ts` → **PASS без правки ожиданий** (в т.ч. `:113-116`
+  `bun test src/routers/agent-run.test.ts` → **PASS без правки ожиданий** (в т.ч. `:120-123`
   `'orbis/task_status': 'planned'` — литерал ЗНАЧЕНИЯ в тесте законен: тест проверяет, что легло в базу);
   `bunx tsc --noEmit` → PASS.
   Коммит: `git commit -- apps/server/src/routers/agent-run.ts`
@@ -12463,7 +12494,7 @@ bun run test
   +4 `gate-delegable.test.ts`; ЧИСЛО тестов `contract-type.test.ts` НЕ меняется — чужой пин задачи 2
   переписан на месте (шаг 8). Пины: `seed-registries.test.ts` `contracts 6 → 7`, `builtin.test.ts`
   ранги `[1..7]`, `contract-type.test.ts` «все `false`» → «исключительность ровно у делегируемости»,
-  заголовок `load.test.ts:163` «шесть» → «семь». Три сьюта переведённых файлов (`verbs.test.ts`, `sweep.test.ts`,
+  заголовок `load.test.ts:169` «шесть» → «семь». Три сьюта переведённых файлов (`verbs.test.ts`, `sweep.test.ts`,
   `agent-run.test.ts`) — зелены БЕЗ правки ожиданий; в отчёт задачи это заносится отдельной строкой как
   главное свидетельство сохранности поведения.
   Коммит (если есть правки линтера): `git commit -- <пути>`
@@ -12505,20 +12536,20 @@ INVARIANT`, стадия 2 → стадия 4) — законное расхож
 (`orbis/rule_pattern` `:611-620` — граница формы); `packages/shared/src/expr/normalize.ts` (`paramNamesInExpr` рядом
 с `propertyNamesInExpr` задачи 1); `apps/server/src/rules/engine.ts` (ленивое наполнение `RULE_PARAMS`);
 `apps/server/src/executor/invariants.ts` (`assertAssignment` `:65-97` → `assertGrantAlive`; снос `assertRunSubject`
-`:99-129`); `apps/server/src/executor/executor.ts` (вызовы `:1769`, `:1771`, `:2052-2054`, `:2058-2060`, `:2340-2342`,
-`:2346`; `normalizeEnvelopeProps` `:2493-2516` — половина); `apps/server/src/executor/aspects-validate.ts` (`:45-52`
+`:99-129`); `apps/server/src/executor/executor.ts` (вызовы `:1768`, `:1770`, `:2050-2052`, `:2056-2058`, `:2338-2340`,
+`:2345`; `normalizeEnvelopeProps` `:2492-2515` — половина); `apps/server/src/executor/aspects-validate.ts` (`:45-52`
 — второй список; `describe` `:91-102`); `apps/server/src/memory/rules.ts` (снос `ruleViolations` `:128-143` и типа
-`MemoryRuleViolation` `:98-100`); `apps/server/src/budget/binding.ts` (снос `normalizeEnvelopeCurrency` `:162-179`);
+`MemoryRuleViolation` `:98-100`); `apps/server/src/budget/binding.ts` (снос `normalizeEnvelopeCurrency` `:163-180`);
 `apps/server/src/routers/agent-run.ts`, `apps/server/src/agent-loop/verbs.ts`, `apps/server/src/agent-loop/sweep.ts`
 (все три — снять `unset: ['orbis/waiting_for']`; статус эти файлы после 14а уже пишут `statusPatch`/`classPrecondition`);
 `apps/server/test/golden/invariants-verdicts.json` + `apps/server/src/registry/invariants-golden.test.ts` (корпус
 близнецов задачи 4 пополняется); `apps/server/test/golden/tool-registry.json` (схема одного свойства).
 
-*Test:* `apps/server/src/executor/executor.test.ts` (`:1850-1955` — XOR прогона);
-`apps/server/src/executor/props.test.ts` (`:1616-1748` — правило памяти на всех трёх путях);
+*Test:* `apps/server/src/executor/executor.test.ts` (`:1852-1957` — XOR прогона);
+`apps/server/src/executor/props.test.ts` (`:1617-1749` — правило памяти на всех трёх путях);
 `apps/server/src/memory/rules.test.ts` (`:49-105` — снять `describe` вместе с функцией);
 `apps/server/src/executor/aspects-validate.test.ts`; `apps/server/src/budget/currency-normalize.test.ts`;
-`apps/server/src/routers/agent-run.test.ts` (`:95-171`); `apps/server/src/agent-loop/verbs.test.ts` (`:867-975`);
+`apps/server/src/routers/agent-run.test.ts` (`:102-178`); `apps/server/src/agent-loop/verbs.test.ts` (`:875-983`);
 `apps/server/src/agent-loop/sweep.test.ts` (`:84-120`); `apps/server/src/rules/engine.test.ts` (фикстуры §С8-25).
 
 *НЕ трогать:* `apps/web` — обе клиентские копии `unset: ['orbis/waiting_for']`
@@ -12560,12 +12591,12 @@ export function classPrecondition(reg: RegistrySnapshot, aspectId: string, contr
 // HEAD, дословно:
 // packages/shared/src/expr/ast.ts:145  | { class: { contract: string } }   // узел класса — ОБЪЕКТ, не строка
 // packages/shared/src/expr/ast.ts:223  z.object({ class: z.object({ contract: N }).strict() }).strict()
-// apps/server/src/executor/invariants.ts:65  export async function assertAssignment(tx: Tx, graphId: string, next: EntityState): Promise<void>
+// apps/server/src/executor/invariants.ts:65  export async function assertAssignment(tx: Tx, graphId: GraphId, next: EntityState): Promise<void>
 // apps/server/src/executor/invariants.ts:114 export function assertRunSubject(next: EntityState): void
 // apps/server/src/memory/rules.ts:128        export function ruleViolations(state: {props; aspects}): MemoryRuleViolation[]
 // apps/server/src/executor/aspects-validate.ts:40 export function assertEntityProps(reg, state, touched?): void
-// apps/server/src/budget/binding.ts:43       export async function defaultCurrencyOf(tx: Tx, graphId: string): Promise<string>
-// apps/server/src/budget/binding.ts:171      export async function normalizeEnvelopeCurrency(tx, graphId, props): Promise<void>
+// apps/server/src/budget/binding.ts:44       export async function defaultCurrencyOf(tx: Tx, graphId: GraphId): Promise<string>
+// apps/server/src/budget/binding.ts:172      export async function normalizeEnvelopeCurrency(tx, graphId, props): Promise<void>
 // packages/shared/src/registry/builtin-aspects.ts:117 у контракта `orbis/completable` вариант `waiting` → класс
 //   `active` (своего класса под ожидание там нет — потому В-П-8 и завёл контракт делегирования, задача 14а)
 // packages/shared/src/registry/builtin-properties.ts:726 orbis/executor — select human|agent
@@ -12590,7 +12621,7 @@ export const RULE_ENVELOPE_CURRENCY_DEFAULT: RuleDefinitionInput;     // default
 export function paramNamesInExpr(node: ExprNode): Set<string>;        // имена `{param}` — для ленивых RULE_PARAMS
 // apps/server/src/executor/invariants.ts
 /** Живость гранта (ссылка в `agent_grants`) — именованный остаток кодом (Р-К-17). */
-export async function assertGrantAlive(tx: Tx, graphId: string, next: EntityState): Promise<void>;
+export async function assertGrantAlive(tx: Tx, graphId: GraphId, next: EntityState): Promise<void>;
 ```
 
 **Рулинги черновика** (в пределах спеки; цена названа):
@@ -12616,7 +12647,7 @@ export async function assertGrantAlive(tx: Tx, graphId: string, next: EntityStat
   перечислено в `EXPECTED_DIFFS`; golden тулов пересдаётся (схема свойства уезжает в `attach_orbis_memory`),
   ЧИСЛО тулов не меняется.
 - **РЧ-14-3. `default` валюты применяется, когда свойства НЕТ в состоянии после патча.** `normalizeEnvelopeCurrency`
-  подставляет умолчание и при явном `null` (`binding.ts:177`), но боевого пути к `null` у `orbis/currency` нет:
+  подставляет умолчание и при явном `null` (`binding.ts:178`), но боевого пути к `null` у `orbis/currency` нет:
   стадия 2 отвергает нестроковое значение текстового свойства, а грепом `'orbis/currency': null` по `apps` не
   находится ни одного вхождения. Цена: одна ветка «или null» не переносится; названа в докблоке.
 - **РЧ-14-4. `RULE_PARAMS` наполняются лениво — по ссылкам `{param}` в ПРИМЕНИМЫХ правилах.** Иначе каждая запись
@@ -12629,12 +12660,12 @@ export async function assertGrantAlive(tx: Tx, graphId: string, next: EntityStat
   (класс тикета читается контрактом делегирования задачи 14а; литералов статусов в тесте нет — статус ставится
   `statusPatch`, как это делают глаголы). Хелперов сьюта у этого файла нет — задача 3 писала фикстуры движка без
   графовых обёрток, — поэтому они заводятся здесь, ОДИН раз на файл, формой соседних сьютов
-  (`executor/props.test.ts:101-125`, `budget/binding.test.ts:51-73`) с идентичностью ПАРОЙ (Г-3):
+  (`executor/props.test.ts:102-126`, `budget/binding.test.ts:54-76`) с идентичностью ПАРОЙ (Г-3):
 ```ts
 /** Идентичность = пара (актор, граф); в тестах личный граф резолвится близнецом `accountOf` (Г-3). */
-const who = (g: string): Identity => ({ actor: accountOf(g), graph: g });
+const who = (g: GraphId): Identity => (personal(g));
 
-function req(g: string, tool: string, input: unknown, over: Partial<ExecuteRequest> = {}): ExecuteRequest {
+function req(g: GraphId, tool: string, input: unknown, over: Partial<ExecuteRequest> = {}): ExecuteRequest {
   return { identity: who(g), actorKind: 'owner', source: 'chat', operations: [{ tool, input }], ...over };
 }
 function ok(r: ExecuteResult): ExecuteOk {
@@ -12649,7 +12680,7 @@ function entityOf(r: ExecuteResult): WireEntity {
   return ok(r).results[0] as WireEntity;
 }
 /** Колонки строки как они легли в БД (не wire-форма — именно колонки). */
-async function rowOf(g: string, id: string): Promise<{ props: Record<string, unknown>; aspects: string[] }> {
+async function rowOf(g: GraphId, id: string): Promise<{ props: Record<string, unknown>; aspects: string[] }> {
   const rows = await withIdentity(db, who(g), (tx) =>
     tx.select({ props: entities.props, aspects: entities.aspects }).from(entities).where(eq(entities.id, id)));
   const row = rows[0];
@@ -12657,7 +12688,7 @@ async function rowOf(g: string, id: string): Promise<{ props: Record<string, unk
   return { props: row.props as Record<string, unknown>, aspects: row.aspects };
 }
 /** Снимок реестра графа — той же функцией и на той же форме идентичности, что боевые читатели. */
-const snapshot = (g: string) => withIdentity(db, who(g), (tx) => effectiveRegistry(tx, g));
+const snapshot = (g: GraphId) => withIdentity(db, who(g), (tx) => effectiveRegistry(tx, g));
 
 describe('waiting_for живёт только в ожидании (В-П-8 (в), две строки на orbis/task)', () => {
   const graph = mintGraph();
@@ -12802,11 +12833,11 @@ export const RULE_TASK_WAITING_ONLY: RuleDefinitionInput = {
 
 - [ ] **Шаг 4: переписать два теста на артефактном состоянии.** Посылка «тикет в работе с хвостом `waiting_for`»
   больше не существует — такую запись отклоняет правило. В `apps/server/src/agent-loop/verbs.test.ts`
-  (`:954-971`) заменить подготовку и утверждение:
+  (`:962-979`) заменить подготовку и утверждение:
 ```ts
   // Снимок реестра для `statusPatch` — своей обёртки у этого сьюта нет; форма идентичности — пара (Г-3).
-  const snapshot = (g: string) =>
-    withIdentity(db, { actor: accountOf(g), graph: g }, (tx) => effectiveRegistry(tx, g));
+  const snapshot = (g: GraphId) =>
+    withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
 
   test('orbis_finish с may_close=true: тикет done, completed_at проставлен сервером, вопрос снят правилом', async () => {
     const { ticketId, runId } = await claimed('Работа с правом закрытия', true);
@@ -12852,7 +12883,7 @@ export const RULE_TASK_WAITING_ONLY: RuleDefinitionInput = {
   инвариант держат ДАННЫЕ, и каждая строка отвечает за свою половину.
 
 - [ ] **Шаг 5: красный — XOR субъекта прогона парой правил.** В `apps/server/src/executor/executor.test.ts`
-  переписать ожидания `:1850-1955` (четыре места): `expect(r.error.code).toBe('VALIDATION')` и
+  переписать ожидания `:1852-1957` (четыре места): `expect(r.error.code).toBe('VALIDATION')` и
   `(details as {reason?: string}).reason).toBe('run_subject')` → на новую пару:
 ```ts
     // Один отказ распался на два (§4-Б-9 рамки): «нужен субъект» и «субъектов два» — разные
@@ -12872,7 +12903,7 @@ export const RULE_TASK_WAITING_ONLY: RuleDefinitionInput = {
  * есть» вместе дают XOR, и обе половины выразимы существующим каноном (`has`, `not` — §Б3-5).
  * Цена названа вслух: один отказ стал двумя — с двумя текстами, каждый из которых точнее прежнего.
  * `id` первой — прежний `run_subject` (Р-К-1): по нему сверялись клиенты `details.reason`.
- * `undo: 'skip'` — сегодня `assertRunSubject` под внутренним откатом не зовётся (`executor.ts:2058`).
+ * `undo: 'skip'` — сегодня `assertRunSubject` под внутренним откатом не зовётся (`executor.ts:2057`).
  */
 export const RULE_RUN_SUBJECT_REQUIRED: RuleDefinitionInput = {
   id: 'run_subject', template: 'requires_when', undo: 'skip',
@@ -12886,7 +12917,7 @@ export const RULE_RUN_SUBJECT_FORBIDDEN: RuleDefinitionInput = {
 };
 ```
   (носитель — `'orbis/agent-run'` в `BUILTIN_RULES_BY_CARRIER`). Снять `assertRunSubject` вместе с докблоком
-  (`invariants.ts:99-129`) и три вызова (`executor.ts:1771`, `:2057-2060`, `:2346`).
+  (`invariants.ts:99-129`) и три вызова (`executor.ts:1770`, `:2056-2059`, `:2345`).
   `bun run db:prepare`; `cd apps/server && bun test src/executor/executor.test.ts` → **PASS**.
   Коммит: `refactor(server,shared): XOR субъекта прогона — пара строк каталога, код снесён`
 
@@ -12932,7 +12963,7 @@ describe('grant ⇔ executor=agent: условие — правилами, жи�
  *
  * Сравнение ТОТАЛЬНО (§Б3-4): отсутствующий `orbis/executor` читается как «не agent», и потому
  * `not(executor = 'agent')` покрывает сегодняшнюю ветку «executor не назван, а грант лежит».
- * `undo: 'skip'` — `assertAssignment` под внутренним откатом не зовётся (`executor.ts:2052`).
+ * `undo: 'skip'` — `assertAssignment` под внутренним откатом не зовётся (`executor.ts:2051`).
  */
 export const RULE_ASSIGNMENT_GRANT_REQUIRED: RuleDefinitionInput = {
   id: 'assignment_grant_required', template: 'requires_when', undo: 'skip',
@@ -12957,7 +12988,7 @@ export const RULE_ASSIGNMENT_GRANT_FORBIDDEN: RuleDefinitionInput = {
  * Чужой и несуществующий грант неразличимы намеренно (единый NOT_FOUND) — иначе назначение стало бы
  * оракулом чужих grant_id.
  */
-export async function assertGrantAlive(tx: Tx, graphId: string, next: EntityState): Promise<void> {
+export async function assertGrantAlive(tx: Tx, graphId: GraphId, next: EntityState): Promise<void> {
   if (!next.aspects.includes('orbis/assignment')) return;
   if (next.props['orbis/executor'] !== 'agent') return;
   const grantId = next.props['orbis/grant'];
@@ -12973,13 +13004,13 @@ export async function assertGrantAlive(tx: Tx, graphId: string, next: EntityStat
   }
 }
 ```
-  Три вызова (`executor.ts:1769`, `:2052-2054`, `:2341`) — `assertGrantAlive(ctx.tx, ctx.req.identity.graph, state)`
+  Три вызова (`executor.ts:1768`, `:2050-2052`, `:2340`) — `assertGrantAlive(ctx.tx, ctx.req.identity.graph, state)`
   с прежними гейтами.
   `bun run db:prepare`; `cd apps/server && bun test src/executor/executor.test.ts` → **PASS**.
   Коммит: `refactor(server,shared): условие гранта назначения — строками каталога, живость гранта остаётся кодом`
 
 - [ ] **Шаг 9: красный — правило памяти строками.** В `apps/server/src/executor/props.test.ts` переписать шесть
-  ожиданий `describe` (`:1616-1748`):
+  ожиданий `describe` (`:1617-1749`):
 ```ts
     // Стадия сместилась со 2-й на 4-ю, код — с VALIDATION на INVARIANT (Р-К-11): условная
     // обязательность больше не второй список валидатора, а строка каталога.
@@ -13050,11 +13081,11 @@ export const RULE_MEMORY_RULE_TARGET: RuleDefinitionInput = {
 - [ ] **Шаг 11: golden тулов — схема одного свойства.** Пересдать `apps/server/test/golden/tool-registry.json`:
   в `attach_orbis_memory` (и в дефах, где перечислено `orbis/rule_pattern`) у схемы свойства появляются
   `"minLength": 1` и `"pattern": "\\S"`. ЧИСЛО тулов не меняется (цепочка Р-К-8 не задета) — пин состава
-  `tools/registry.test.ts:152` не трогается.
+  `tools/registry.test.ts:154` не трогается.
   `cd apps/server && bun test src/tools/registry.test.ts` → **PASS**.
 
 - [ ] **Шаг 12: красный — умолчание валюты правилом.** В `apps/server/src/budget/currency-normalize.test.ts`
-  дописать к существующему `describe` (`:92`):
+  дописать к существующему `describe` (`:99`):
 ```ts
   test('умолчание кладёт ПРАВИЛО каталога: выключенная строка оставляет конверт без валюты', async () => {
     // Мутационная проба деливеребла: инвариант держат ДАННЫЕ. Строка возвращается в `finally`.
@@ -13118,8 +13149,8 @@ async function ruleParamsOf(
   return params;
 }
 ```
-  Снести `normalizeEnvelopeCurrency` вместе с докблоком (`binding.ts:162-179`) и свести `normalizeEnvelopeProps`
-  (`executor.ts:2493-2516`) к прямому вызову остатка:
+  Снести `normalizeEnvelopeCurrency` вместе с докблоком (`binding.ts:163-180`) и свести `normalizeEnvelopeProps`
+  (`executor.ts:2492-2515`) к прямому вызову остатка:
 ```ts
   // Половина этой функции уехала в строку каталога `envelope_currency_default`; остался
   // `dropStaleCarryover` — именованный остаток (Р-К-4): «снять перенос при смене идентичности» —
@@ -13127,7 +13158,7 @@ async function ruleParamsOf(
   // T-правил, потому что валюта входит в идентичность конверта.
   dropStaleCarryover(ctx.registry, before, state, touchedProperties(patch));
 ```
-  (три вызова `:1706`, `:2020-2022`, `:2309` становятся синхронными; обёртка `normalizeEnvelopeProps` снимается).
+  (три вызова `:1705`, `:2019-2021`, `:2308` становятся синхронными; обёртка `normalizeEnvelopeProps` снимается).
   `bun run db:prepare`; `cd apps/server && bun test src/budget/` → **PASS**.
   Коммит: `refactor(server,shared): умолчание валюты конверта — строка каталога с параметром движка`
 
@@ -13198,14 +13229,14 @@ const EXPECTED_DIFFS: Record<string, { legacy: string; next: string; records: nu
 
 Задача закрывает приёмку §С8-26: одиннадцать правил делегирования «дня мечты» (§Б4-5, вместе с правилом 11 владельца —
 В-3) проходят валидатор и дают **ожидаемые уровни** на фикстурах синтетического сида. Доказывается ровно
-**выразимость**, а не подключение: §Б4-3 (`:489`) и §С2-1 (`:1538`) четырежды говорят, что правила данными в живом
+**выразимость**, а не подключение: §Б4-3 (`:497`) и §С2-1 (`:1546`) четырежды говорят, что правила данными в живом
 конвейере §7.10 — V2 (О1 `verify-b2-policy.md`), поэтому `policy/confirmation.ts` и `tools/dispatch.ts` эта задача не
 трогает вовсе — ни одной новой строки в живом пути. Язык растёт ровно на две названные формы (Р-26 `empty`, Р-28
 `$touched`) по принципу расширения §Б3-2а: «пусто» комбинацией не выразимо (пять отрицаний означают «нет этих пяти»),
 «что вызов меняет» — тоже. Сложение уровня с таблицей §7.10 живёт в **оценочной области фикстур**: `assignLevelOf`
-считает «строже побеждает» (В-2д) и упирается в **пол** (Р-27, §С2-1 `:1540`) — ряды 1/4/6 таблицы и объектный пре-чек
+считает «строже побеждает» (В-2д) и упирается в **пол** (Р-27, §С2-1 `:1554`) — ряды 1/4/6 таблицы и объектный пре-чек
 фона правилом не пробиваются. Попутно снимается остаток 40 (Р-24): у Budget появляется `prefer`, и `SLOT_AMBIGUOUS`
-(`subscriptions/budget.ts:662`) перестаёт быть тупиком, из которого владельцу нечем выйти.
+(`subscriptions/budget.ts:663`) перестаёт быть тупиком, из которого владельцу нечем выйти.
 
 Что задача НЕ делает: не пишет строк правил в сид (правила приёмки живут фикстурой `ASSIGN_LEVEL_RULES`, `test/*` в
 живой путь не идут — `ownRegistryAddress` считает их чужими, `confirmation.ts:260-263`), не заводит Е-6 (`$after` —
@@ -13231,8 +13262,8 @@ const EXPECTED_DIFFS: Record<string, { legacy: string; next: string; records: nu
     `sources.envelope` (`:60-71`), образец — Agenda `:30`, `:41`;
   - `packages/shared/src/registry/subscription-fixtures.ts:91-101` — `prefer: []` явно (норматив пишет умолчания явно,
     шапка `:10-13`; `BUDGET_DEF` — он же сид `builtin-subscriptions.ts:20`);
-  - `apps/server/src/subscriptions/budget.ts` — `bindingForEntity` (`:653-668`) получает `prefer` и экспорт; пять
-    вызывающих (`:1032`, `:1051`, `:1177`, `:1302`, `:1373`);
+  - `apps/server/src/subscriptions/budget.ts` — `bindingForEntity` (`:654-669`) получает `prefer` и экспорт; пять
+    вызывающих (`:1033`, `:1052`, `:1178`, `:1303`, `:1374`);
   - `packages/shared/src/registry/index.ts` — строка реэкспорта `rule-fixtures`/`rule-type`, если 0c её не положил
     (рядом с `subscription-fixtures` `:18`).
 - **Test:** `packages/shared/src/expr/{ast,check,print}.test.ts`, `apps/server/src/expr/{eval,compile}.test.ts`,
@@ -13240,14 +13271,14 @@ const EXPECTED_DIFFS: Record<string, { legacy: string; next: string; records: nu
   `apps/server/src/subscriptions/budget.test.ts` (два теста `prefer`).
 - **НЕ трогать:** `apps/server/src/policy/confirmation.ts` (живой конвейер §7.10 — V2, В-2/Р-27: пол стоит РЯДОМ, а не
   внутри `classifyToolCall`), `apps/server/src/tools/dispatch.ts`, `apps/server/src/policy/sensitivity.ts`,
-  `apps/web` (Р-23), `apps/server/src/subscriptions/agenda.ts` (`prefer` Повестки уже есть, `:239`),
+  `apps/web` (Р-23), `apps/server/src/subscriptions/agenda.ts` (`prefer` Повестки уже есть, `:240`),
   `packages/shared/src/expr/normalize.ts` — **проверено**: общая ветка `{op}` (`:86`) нормализует аргументы любого
   оператора, своей ветки `empty` не нужно; `{ctx}` имён реестра не несёт (`:105-107`),
   `apps/server/src/registry/rules.ts` (валидатор — задача 1; здесь только вызывается).
 
 **Интерфейсы.**
 
-_Consumes_ (сигнатуры дословно с HEAD `36060b2`, кроме помеченного «задача N» — договор реестра §1):
+_Consumes_ (сигнатуры дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93), кроме помеченного «задача N» — договор реестра §1):
 ```ts
 // packages/shared/src/expr/ast.ts
 export const EXPR_OPS = ['=','!=','>','<','>=','<=','+','-','*','/','and','or','not','in','if'] as const; // 15 на HEAD
@@ -13276,8 +13307,8 @@ export interface ToolCallFacts { tool; kind; known; actorKind; explicitCommand; 
   batchSize?; grantsAutonomy; reconfigures; sensitivity: readonly SensitivityFact[] }                     // :36-64
 export function classifyToolCall(facts: ToolCallFacts): ConfirmationLevel;                                // :102-121
 // apps/server/src/executor/types.ts
-export type ActorKind = 'owner'|'ai'|'agent';                                                             // :5
-export type MutationSource = 'chat'|'fast_path'|'quick_capture'|'mcp'|'ui'|'system'|'routine';            // :16-24
+export type ActorKind = 'owner'|'ai'|'agent';                                                             // :7
+export type MutationSource = 'chat'|'fast_path'|'quick_capture'|'mcp'|'ui'|'system'|'routine';            // :18-26
 // apps/server/src/subscriptions/registry.ts — образец правила выбора (НЕ переиспользуется: см. «Открытые вопросы»)
 export function resolveSlotOnEntity(idx, entity: SlotHost, contract, slot, prefer: readonly string[]): {aspectId; value}|null; // :756-790
 // @orbis/shared — задачи 0c/1/2/3 (договор реестра §1.3, §1.4, §1.5, §1.15)
@@ -13289,7 +13320,7 @@ export function rulesOf(reg: RegistrySnapshot): readonly { rule: RuleDefinition;
 export function effectiveRuleScope(rule: RuleDefinition, carrier: RuleCarrier): RuleScope;
 export function entityEvalScope(input: EntityScopeInput): ExprEvalScope;               // apps/server/src/rules/scope.ts
 export interface RelationFact { role: string; sourceId: string; alive: boolean }
-export async function seedTestWorld(graphId: string): Promise<TestWorld>;             // apps/server/test/fixtures/test-seed.ts (0d); результат здесь не нужен
+export async function seedTestWorld(graphId: GraphId): Promise<TestWorld>;             // apps/server/test/fixtures/test-seed.ts (0d); результат здесь не нужен
 export const TEST_IMPORT_ROUTINE_ID: string;                                          // uuidv5, правило 6
 ```
 
@@ -13495,7 +13526,7 @@ describe('evalExpr: empty и $touched (оценочная область кла�
   → **PASS**. **Коммит:** `feat(expr): интерпретатор — empty и контекст $touched оценочной области (Р-26, Р-28)`.
 
 - [ ] **Шаг 9: красный тест — SQL-бэкенд.** `apps/server/src/expr/compile.test.ts`, новый describe (обвязка
-  `CTX`/`ROW`/`sqlOf`/`refusal` — `:62-81`):
+  `CTX`/`ROW`/`sqlOf`/`refusal` — `:63-82`):
 ```ts
 describe('SQL-бэкенд: empty над списком, контексты классификатора', () => {
   test('empty списочного свойства — длина массива jsonb; отсутствие ключа даёт «пусто»', () => {
@@ -13591,7 +13622,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { ASSIGN_LEVEL_RULES, RULE_LEVEL_TO_CONFIRMATION, type RuleLevel,
   ruleDefinitionSchema } from '@orbis/shared';
-import { appDb, mintGraph, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { seedTestWorld, TEST_IMPORT_ROUTINE_ID } from '../../test/fixtures/test-seed';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
@@ -13697,7 +13728,7 @@ function withRules(base: RegistrySnapshot): RegistrySnapshot {
 beforeAll(async () => {
   await truncateAll();
   await seedTestWorld(owner);
-  reg = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => effectiveRegistry(tx, owner));
+  reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   regWithRules = withRules(reg);
   verdicts = ASSIGN_LEVEL_RULES.map(({ carrier, rule }) => {
     try { assertRule(rule, { reg: regWithRules, carrier, systemSeed: false }); return { ok: true as const }; }
@@ -13933,7 +13964,7 @@ export function assignLevelOf(
 - [ ] **Шаг 17: сторож «правила приёмки не уехали в живой путь».** Тем же файлом — тест, который держит границу
   В-2/Р-27 (иначе следующая задача незаметно пристыкует фикстуры к §7.10):
 ```ts
-// Греп из теста — образец `test/gate-c8-18.test.ts:52-64`: корень репозитория берётся у git, потому
+// Греп из теста — образец `test/gate-c8-18.test.ts:62-74`: корень репозитория берётся у git, потому
 // что `bun test` идёт из `apps/server`, а pathspec отсчитывается от cwd.
 test('живой конвейер §7.10 правил не знает: assignLevelOf зовут только приёмка и её тест', () => {
   const root = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).stdout.trim();
@@ -13946,7 +13977,7 @@ test('живой конвейер §7.10 правил не знает: assignLev
 
 - [ ] **Шаг 18: красный тест — `prefer` у Budget (остаток 40, Р-24).** `apps/server/src/subscriptions/budget.test.ts`,
   новый describe (чистый, БД не нужна — снимок собирается в памяти; образец подмены снимком —
-  `expr/compile.test.ts:112-117`):
+  `expr/compile.test.ts:113-118`):
 ```ts
 describe('SLOT_AMBIGUOUS у Budget: без prefer — отказ, с prefer — детерминированный выбор (остаток 40)', () => {
   const TWIN = 'user/second-budget';
@@ -13960,7 +13991,7 @@ describe('SLOT_AMBIGUOUS у Budget: без prefer — отказ, с prefer — 
     return { ...base, aspects };
   };
   test('без prefer — отказ с аспектами в details; с prefer — первый совпавший', async () => {
-    await engineOn(userA, async ({ cctx, def }) => {                 // обвязка сьюта — :286-305
+    await engineOn(userA, async ({ cctx, def }) => {                 // обвязка сьюта — :287-306
       const two = { ...cctx, reg: twoEnvelopeAspects(cctx.reg) };
       let caught: ExecError | null = null;
       try { bindingForEntity(two, 'orbis/envelope', ON, []); } catch (e) { caught = e as ExecError; }
@@ -13975,7 +14006,7 @@ describe('SLOT_AMBIGUOUS у Budget: без prefer — отказ, с prefer — 
       expect(def.sources.movement.prefer).toEqual([]); }); });
 });
 ```
-  (`bindingForEntity` дописывается в существующий импорт `from './budget'` — `budget.test.ts:44-50`.)
+  (`bindingForEntity` дописывается в существующий импорт `from './budget'` — `budget.test.ts:47-53`.)
   Плюс в `packages/shared/src/registry/subscription-type.test.ts` (`:37`) — `BUDGET_DEF` с `prefer` парсится, и
   `sources.movement.prefer`/`sources.envelope.prefer` — массивы. `cd apps/server && bun test src/subscriptions/budget.test.ts`
   → **FAIL**: `bindingForEntity` не экспортирована и пятого параметра не имеет.
@@ -13984,7 +14015,7 @@ describe('SLOT_AMBIGUOUS у Budget: без prefer — отказ, с prefer — 
   и `sources.envelope` (`:60-71`) — `prefer: z.array(z.string()).default([]),` с комментарием «§С8-21: чей аспект
   считать, когда контракт реализуют два, — решает ДЕКЛАРАЦИЯ; образец — `show.prefer` Повестки (`:30`)».
   `subscription-fixtures.ts:92` и `:93-100` — `prefer: []` явно (норматив пишет умолчания явно, шапка `:10-13`).
-  `subscriptions/budget.ts` — `bindingForEntity` (`:653-668`) становится экспортируемой и получает четвёртый
+  `subscriptions/budget.ts` — `bindingForEntity` (`:654-669`) становится экспортируемой и получает четвёртый
   параметр (докблок дополняется: «`prefer` — тот же порядок-приоритет, что у `resolveSlotOnEntity`
   (`subscriptions/registry.ts:774-779`): первый совпавший, а не «самый ранний по rank». Экспорт — ради пина остатка 40:
   рубеж, который никто не проверил, — это рубеж, которого нет»):
@@ -14045,37 +14076,37 @@ export function bindingForEntity(
 от рутины — отложенная единица, в карточке которой владелец видит ТЕКСТ условия, а не JSON.
 
 **Файлы:**
-- **Modify:** `apps/server/src/registry/deltas.ts` — `aspectDeltaSchema` (`:82-121`), `propertyDeltaSchema`
-  (`:135-141`), ветки `applyDeltas` `property` (`:283-293`) и `aspect` (`:406-…`), `RegistryConflict`
-  (`:538-560`), докблок `:686-688`, `threeWayMerge` (`:690-…`, ветка аспекта и `:794`)
-- **Modify:** `apps/server/src/registry/merge-conflict.ts` — `driftConflictDecidable` (`:57`),
-  `createDriftConflictUnits` (`:73`, гвард `:88`), новая `RULE_MERGE_EFFECT`
-- **Modify:** `apps/server/src/registry/ops.ts` — `PropertyHolder` (`:847-853`), `propertyNamesInDelta`
-  (`:911`), `collectPropertyHolders` (`:931-976`), `rewriteDelta` (`:1071`), `MergeInverse` (`:1112-1160`),
-  цикл держателей `mergeProperty` (`:1464-1560`), `undoMerge` (`:1685-1770`), `setAspectDelta` (`:1840-1902`),
-  докблок `:2389-2391`; новые операции — рядом с `setOwnSubscription` (`:2258-2287`)
+- **Modify:** `apps/server/src/registry/deltas.ts` — `aspectDeltaSchema` (`:83-122`), `propertyDeltaSchema`
+  (`:136-142`), ветки `applyDeltas` `property` (`:284-294`) и `aspect` (`:407-…`), `RegistryConflict`
+  (`:539-561`), докблок `:687-689`, `threeWayMerge` (`:691-…`, ветка аспекта и `:795`)
+- **Modify:** `apps/server/src/registry/merge-conflict.ts` — `driftConflictDecidable` (`:58`),
+  `createDriftConflictUnits` (`:74`, гвард `:89`), новая `RULE_MERGE_EFFECT`
+- **Modify:** `apps/server/src/registry/ops.ts` — `PropertyHolder` (`:848-854`), `propertyNamesInDelta`
+  (`:912`), `collectPropertyHolders` (`:932-977`), `rewriteDelta` (`:1072`), `MergeInverse` (`:1113-1161`),
+  цикл держателей `mergeProperty` (`:1465-1561`), `undoMerge` (`:1686-1771`), `setAspectDelta` (`:1841-1903`),
+  докблок `:2390-2392`; новые операции — рядом с `setOwnSubscription` (`:2259-2288`)
 - **Modify:** `apps/server/src/tools/registry-tools.ts` — шапка (`:2-25`), конверты и JSON Schema после `:561`,
   дефы `REGISTRY_TOOLS` (`:569-686`), `REGISTRY_TOOL_ENVELOPES` (`:693-706`)
-- **Modify:** `apps/server/src/executor/executor.ts` — ряды `prepareOp` (`:941-944`), `prepareRuleSet`/
-  `prepareRuleRemove` после `prepareContractSetsDeltaRemove` (`:3708-3743`); `executor/types.ts:219-246` (`ActionRecord['type']` + докблок)
+- **Modify:** `apps/server/src/executor/executor.ts` — ряды `prepareOp` (`:940-943`), `prepareRuleSet`/
+  `prepareRuleRemove` после `prepareContractSetsDeltaRemove` (`:3717-3756`); `executor/types.ts:226-253` (`ActionRecord['type']` + докблок)
 - **Modify:** `apps/server/src/policy/confirmation.ts:376-384` (`reconfiguresByTool`), докблок `:400-452`
-- **Modify:** `apps/server/src/tools/dispatch.ts` — `registryOperationSummary` (`:1361-1438`),
-  `snapshotRegistryUnit` (`:1755-1923`) и его ветка `action_set` (положена задачей 10), помощник
-  `ruleCardText` рядом с `rowValue` (`:1936`)
-- **Modify:** `apps/server/src/routers/registry.ts:24-30`, `:208-210`; `packages/shared/src/expr/print.ts:12-16`
+- **Modify:** `apps/server/src/tools/dispatch.ts` — `registryOperationSummary` (`:1365-1442`),
+  `snapshotRegistryUnit` (`:1761-1929`) и его ветка `action_set` (положена задачей 10), помощник
+  `ruleCardText` рядом с `rowValue` (`:1942`)
+- **Modify:** `apps/server/src/routers/registry.ts:24-31`, `:206-208`; `packages/shared/src/expr/print.ts:12-16`
   — докблок (`ParseRegistry.contracts` ЕСТЬ, `query/parse-ast.ts:79`); вывод печати НЕ меняется
 - **Test:** `apps/server/src/registry/{deltas,ops}.test.ts`, `apps/server/src/db/registry-drift.test.ts`,
-  `apps/server/src/tools/registry.test.ts:151, :219-247, :789-806`,
+  `apps/server/src/tools/registry.test.ts:153, :221-249, :791-808`,
   `apps/server/src/policy/confirmation.test.ts:1087-1105`, `apps/server/src/tools/dispatch.test.ts`,
-  `apps/server/src/routers/registry.test.ts`, `apps/server/src/mcp/mcp.test.ts:452-468, :773-786`,
+  `apps/server/src/routers/registry.test.ts`, `apps/server/src/mcp/mcp.test.ts:460-476, :781-794`,
   `apps/server/test/golden/tool-registry.json` (49 → 51)
 - **НЕ трогать:** `apps/web` (Р-23); тройная копия `FACTS_EXPR` (`builtin-contracts.ts:169-192`,
-  `expr/fixtures.ts:56-68`, `expr/compile.test.ts:88`); `relation_role`/`action` в `DELTA_SCHEMA` (`:501-502`)
+  `expr/fixtures.ts:56-68`, `expr/compile.test.ts:89`); `relation_role`/`action` в `DELTA_SCHEMA` (`:502-503`)
   остаются `null`; вывод `printExpr` (пины `print.test.ts:13,33,39,47`); `validator-verdicts.json`.
 
 **Интерфейсы:**
 
-*Consumes (дословно с HEAD `36060b2`; `[N]` — задача-производитель):*
+*Consumes (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93); `[N]` — задача-производитель):*
 ```ts
 // packages/shared [0c/1 и HEAD]
 export const RULE_TEMPLATES: readonly RuleTemplate[];   export const RULE_ID_RE: RegExp;
@@ -14095,18 +14126,18 @@ export function applyDeltas(system: RegistrySnapshot, deltas: RegistryDeltaRow[]
 export function threeWayMerge(prevSystem: SystemDefinitions, nextSystem: SystemDefinitions,
   row: RegistryDeltaRow): { merged: RegistryDelta; conflicts: RegistryConflict[] };                   // :690
 export function registryConflictLine(c: RegistryConflict): string;                                    // :642
-export function parseRegistryOfSnapshot(reg: RegistrySnapshot): ParseRegistry;               // cache.ts:171
+export function parseRegistryOfSnapshot(reg: RegistrySnapshot): ParseRegistry;               // cache.ts:176
 export interface PropertyHolder { kind: 'registry'|'progress_source'|'body'|'delta'|'bind';
-  id: string; properties: string[] }                                                    // ops.ts:847, [1]
-export async function collectPropertyHolders(tx: Tx, graphId: string): Promise<PropertyHolder[]>;  // :931
-export async function setAspectDelta(tx, graphId, aspectId: string, delta: AspectDelta): Promise<void>; // :1840
-export async function bumpOwnerRegistryVersion(tx, graphId): Promise<…>;                 // version.ts:116
+  id: string; properties: string[] }                                                    // ops.ts:848, [1]
+export async function collectPropertyHolders(tx: Tx, graphId: GraphId): Promise<PropertyHolder[]>;  // :932
+export async function setAspectDelta(tx, graphId, aspectId: string, delta: AspectDelta): Promise<void>; // :1841
+export async function bumpOwnerRegistryVersion(tx, graphId): Promise<…>;                 // version.ts:117
 export function resolvePropertyRef(reg: RegistrySnapshot, keyOrId): PropertyDefinition | undefined; // props.ts:277
-// приватные ops.ts: writeDeltaRow(tx, graphId, targetKind, targetId, delta, rows, check?) :1919,
-//   readDeltaRow :1953, removeDeltaRow :1965, probeSnapshot :2101, rewriteAst :1344, rewriteDelta :1071
-// executor.ts: parseEnvelope :874, registryPlan(type, tool, title) :3228, REGISTRY_OPS :3134 (производное
+// приватные ops.ts: writeDeltaRow(tx, graphId, targetKind, targetId, delta, rows, check?) :1920,
+//   readDeltaRow :1954, removeDeltaRow :1966, probeSnapshot :2102, rewriteAst :1345, rewriteDelta :1072
+// executor.ts: parseEnvelope :873, registryPlan(type, tool, title) :3228, REGISTRY_OPS :3134 (производное
 //   от REGISTRY_TOOL_NAMES); registry-tools.ts: REGISTRY_TOOLS :569, REGISTRY_TOOL_ENVELOPES :693;
-//   dispatch.ts: registryOperationSummary :1361, snapshotRegistryUnit :1755, rowValue :1936
+//   dispatch.ts: registryOperationSummary :1365, snapshotRegistryUnit :1761, rowValue :1942
 ```
 
 *Produces (имена — договор плана; менять нельзя):*
@@ -14115,13 +14146,13 @@ export function resolvePropertyRef(reg: RegistrySnapshot, keyOrId): PropertyDefi
 export interface RegistryConflict { kind: …|'rule-conflict'; rule?: { mine: string; theirs: string } }
 export const RULE_MERGE_EFFECT: string;                                          // merge-conflict.ts
 // registry/ops.ts
-export async function setOwnRule(tx: Tx, graphId: string, target: RuleCarrier,
+export async function setOwnRule(tx: Tx, graphId: GraphId, target: RuleCarrier,
   rule: RuleDefinitionInput): Promise<{ carrier: RuleCarrier; rule: RuleDefinition }>;
-export async function removeOwnRule(tx: Tx, graphId: string, target: RuleCarrier,
+export async function removeOwnRule(tx: Tx, graphId: GraphId, target: RuleCarrier,
   ruleId: string): Promise<RuleDefinition | null>;
-export async function setRuleDelta(tx: Tx, graphId: string, target: RuleCarrier,
+export async function setRuleDelta(tx: Tx, graphId: GraphId, target: RuleCarrier,
   rule: RuleDefinitionInput): Promise<void>;
-export async function disableSystemRuleDelta(tx: Tx, graphId: string, target: RuleCarrier,
+export async function disableSystemRuleDelta(tx: Tx, graphId: GraphId, target: RuleCarrier,
   ruleId: string): Promise<void>;
 export function rewriteRuleAddresses(rule: RuleDefinition, from: ReadonlySet<string>, to: string): RuleDefinition;
 // PropertyHolder.kind += 'rule'; PropertyHolder.carrier?: 'aspect'|'property'|'role'
@@ -14209,7 +14240,7 @@ describe('правила в дельте: эффективный список и
     rulesDisabled: z.array(z.string().regex(RULE_ID_RE)).optional(),
 ```
   Помощник и вызов `rules: effectiveRules(base.rules, delta)` в обеих ветках `applyDeltas`
-  (`properties.set(...)` `:284-292`, `aspects.set(...)` `:406-…`):
+  (`properties.set(...)` `:285-293`, `aspects.set(...)` `:407-…`):
 ```ts
 /** Эффективные правила: системные МИНУС отключённые ПЛЮС правила владельца (Р-2а). Складывается ЗДЕСЬ и
  *  нигде больше — движок читает `row.rules` и про дельты не знает; второй экземпляр ответил бы иначе. */
@@ -14263,7 +14294,7 @@ function mergeRules(baseRules: readonly RuleDefinition[],
   переименовывается («`set-merge` единиц не заводит, `rule-conflict` — заводит») и дополняется
   `expect(driftConflictDecidable([{ kind:'rule-conflict', targetKind:'aspect', targetId:'orbis/task',
   rule:{ mine:'a', theirs:'b' }, detail:'' }])).toHaveLength(1)`. В `db/registry-drift.test.ts` рядом с
-  тестом `variant-merge` (`:340-420`):
+  тестом `variant-merge` (`:343-423`):
 ```ts
   test('rule-conflict → единица пачки: «Принять» отключает СИСТЕМНОЕ правило и возвращает своё', async () => {
     const owner = mintGraph();
@@ -14271,10 +14302,10 @@ function mergeRules(baseRules: readonly RuleDefinition[],
       targetId: 'orbis/task', rule: { mine: 'my_completed_at', theirs: 'task_completed_at' },
       detail: 'обновление завело правило' }];
     const merged = { rules: [MY_RULE], rulesDisabled: ['my_completed_at'] };  // MY_RULE — id my_completed_at
-    const ids = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => createDriftConflictUnits(tx,
+    const ids = await withIdentity(db, personal(owner), (tx) => createDriftConflictUnits(tx,
       { graphId: owner, systemVersion: 7, deltaRowId: newId(), merged, conflicts }));
     expect(ids).toHaveLength(1);
-    const rows = (await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => tx.execute(
+    const rows = (await withIdentity(db, personal(owner), (tx) => tx.execute(
       sql`SELECT content, metadata FROM chat_messages WHERE id = ${ids[0]}::uuid`,
     ))) as unknown as Array<{ content: string; metadata: Record<string, unknown> }>;
     const pending = (rows[0]?.metadata as { pending: Record<string, unknown> }).pending;
@@ -14291,14 +14322,14 @@ function mergeRules(baseRules: readonly RuleDefinition[],
 
 - [ ] **Шаг 5: `driftConflictDecidable` и ветка `createDriftConflictUnits`.** В `merge-conflict.ts` —
   `export const RULE_MERGE_EFFECT = 'Принять — отключить системное правило и вернуть ваше. Отклонить —
-  оставить ваше выключенным.';` (константой, по доводу `DRIFT_MERGE_EFFECT` `:24-34`).
+  оставить ваше выключенным.';` (константой, по доводу `DRIFT_MERGE_EFFECT` `:25-35`).
   `driftConflictDecidable` получает второй ряд `(c.kind === 'rule-conflict' && c.rule !== undefined)` и абзац
   докблока: «у конфликта правил выбор ЕСТЬ — система и владелец пишут одно и то же, и кто из двоих прав,
   знает только владелец». В `createDriftConflictUnits` — ветка по роду: нагрузка строится из `merged` заменой
   одного id в `rulesDisabled` (`rule.mine` уходит, `rule.theirs` приходит), `dedupeKey` =
   `drift-rule-conflict:${deltaRowId}:${systemVersion}:${rule.mine}`, `summary` = «Обновление завело правило
   «theirs», которое спорит с вашим «mine» (<targetId>). ${RULE_MERGE_EFFECT}». Гвард
-  `conflict.targetKind !== 'aspect'` (`:88`) ОСТАЁТСЯ и получает вторую фразу: у конфликта на встроенном
+  `conflict.targetKind !== 'aspect'` (`:89`) ОСТАЁТСЯ и получает вторую фразу: у конфликта на встроенном
   СВОЙСТВЕ тула разрешения в Б-2 нет (нужен обмен двух id ОДНОЙ дельтой, а `rule_set` пишет одно правило) —
   владелец получает заметку, это записанный остаток среза. Прогон: тот же → **PASS**.
   Коммит: `конфликт правил на пересеве — единица пачки D42 с обменом отключений (§А3-3)`.
@@ -14312,7 +14343,7 @@ describe('правила владельца: своя строка, дельта
   const OWN = 'user/rule-carrier';
   const rule = { id: 'needs_due', template: 'requires_when' as const, params: { property: 'orbis/due_date' },
     when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] } };
-  const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> => withIdentity(db, { actor: accountOf(owner), graph: owner }, fn);
+  const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> => withIdentity(db, personal(owner), fn);
   const regNow = () => inTx((tx) => effectiveRegistry(tx, owner));
   const SYS = BUILTIN_RULES_BY_CARRIER['orbis/task']?.find((r) => r.id === 'task_completed_at');
   beforeAll(() => seedCustomAspect(owner, { key: OWN, label: { ru: 'Носитель' },
@@ -14357,13 +14388,13 @@ describe('правила владельца: своя строка, дельта
   Прогон: `cd apps/server && bun test src/registry/ops.test.ts` → **FAIL**: `setOwnRule is not a function`.
 
 - [ ] **Шаг 7: `setOwnRule`/`removeOwnRule` — UPDATE колонки `rules`.** В `ops.ts` рядом с
-  `setOwnSubscription` (`:2258`); порядок — образца: снимок-проба С ДЕЛЬТАМИ → валидатор → запись → версия.
+  `setOwnSubscription` (`:2259`); порядок — образца: снимок-проба С ДЕЛЬТАМИ → валидатор → запись → версия.
 ```ts
 /** Таблица-носитель по роду цели: правила живут в трёх реестрах (§Б4-1), а запрос обязан быть один. */
 const RULE_TABLE = { aspect: sql`aspect_definitions`, property: sql`property_definitions`,
   role: sql`relation_role_definitions` } as const;
 /** Правила строки ВЛАДЕЛЬЦА; `null` — своей строки по адресу нет, значит цель встроенная. */
-async function readOwnRules(tx: Tx, graphId: string, t: RuleCarrier): Promise<RuleDefinition[] | null> {
+async function readOwnRules(tx: Tx, graphId: GraphId, t: RuleCarrier): Promise<RuleDefinition[] | null> {
   const rows = (await tx.execute(sql`SELECT rules FROM ${RULE_TABLE[t.kind]}
      WHERE graph_id = ${graphId}::uuid AND (id = ${t.id} OR key = ${t.id})`)) as unknown as RawRow[];
   return rows[0] === undefined ? null : ((rows[0].rules ?? []) as RuleDefinition[]);
@@ -14371,7 +14402,7 @@ async function readOwnRules(tx: Tx, graphId: string, t: RuleCarrier): Promise<Ru
 /** Строка словаря по id ИЛИ key; своя перекрывает встроенную. Обобщение `resolvePropertyRef` (`props.ts:277`)
  *  на три словаря: адрес правила владелец и модель называют тем именем, которым видели строку (Р3), и правило
  *  резолва обязано быть ОДНО — второй экземпляр разошёлся бы с ним на первой же коллизии key. */
-function byIdOrKey<T extends { id: string; key: string; graphId: string | null }>(
+function byIdOrKey<T extends { id: string; key: string; graphId: GraphId | null }>(
   dict: ReadonlyMap<string, T>, address: string): T | undefined {
   let byKey: T | undefined;
   for (const def of dict.values()) {
@@ -14401,7 +14432,7 @@ function withCarrierRules(reg: RegistrySnapshot, t: RuleCarrier, rules: RuleDefi
 
 /** UPDATE колонки `rules` своей строки и версия — ОДНОЙ транзакцией (§А10-1, инвариант кеша
  *  `registry/cache.ts:45-48`): иначе процесс на той же базе продолжил бы отдавать снимок без правила. */
-async function writeOwnRules(tx: Tx, graphId: string, t: RuleCarrier, rules: RuleDefinition[]): Promise<void> {
+async function writeOwnRules(tx: Tx, graphId: GraphId, t: RuleCarrier, rules: RuleDefinition[]): Promise<void> {
   await tx.execute(sql`UPDATE ${RULE_TABLE[t.kind]} SET rules = ${JSON.stringify(rules)}::jsonb
      WHERE graph_id = ${graphId}::uuid AND (id = ${t.id} OR key = ${t.id})`);
   await bumpOwnerRegistryVersion(tx, graphId);
@@ -14409,7 +14440,7 @@ async function writeOwnRules(tx: Tx, graphId: string, t: RuleCarrier, rules: Rul
 
 /** Правило на СВОЕЙ строке (§Б4-1): UPDATE колонки `rules` заменой по id (§С3 «правит заменой»). Смысл
  *  проверяется ДО записи (Р-И-7): на записи владелец видит отказ, на чтении — запертый реестр. */
-export async function setOwnRule(tx: Tx, graphId: string, target: RuleCarrier,
+export async function setOwnRule(tx: Tx, graphId: GraphId, target: RuleCarrier,
   rule: RuleDefinitionInput): Promise<{ carrier: RuleCarrier; rule: RuleDefinition }> {
   const current = await readOwnRules(tx, graphId, target);
   if (current === null) throw new ExecError('NOT_FOUND', `своей строки ${target.id} нет`, { target });
@@ -14422,13 +14453,13 @@ export async function setOwnRule(tx: Tx, graphId: string, target: RuleCarrier,
 }
 /** Снятие своего правила: тот же `writeOwnRules` со списком БЕЗ него. Возвращает снятое — им наполняется
  *  inverse журнала (§С3 «правит заменой» ⇒ обратное к снятию это возврат ТОЙ ЖЕ декларации). */
-export async function removeOwnRule(tx: Tx, graphId: string, target: RuleCarrier,
+export async function removeOwnRule(tx: Tx, graphId: GraphId, target: RuleCarrier,
   ruleId: string): Promise<RuleDefinition | null> {
   const current = await readOwnRules(tx, graphId, target);
   if (current === null) throw new ExecError('NOT_FOUND', `своей строки ${target.id} нет`, { target });
   const gone = current.find((r) => r.id === ruleId);
   // ПРАВИЛА С ТАКИМ id НЕ БЫЛО — УСПЕХ БЕЗ ЗАПИСИ, а не отказ (Ф-Б1-56, прецедент
-  // `prepareSubscriptionRemove` `executor.ts:3624-3630`): состояние на выходе у обоих исходов одно
+  // `prepareSubscriptionRemove` `executor.ts:3629-3635`): состояние на выходе у обоих исходов одно
   // («правила нет»), а владельцу, сказавшему «убери», отказ «а его и не было» ничего не сообщает.
   // `null` наверх означает пустой inverse — откат такого action'а не-операция, а не воскрешение из ничего.
   if (gone === undefined) return null;
@@ -14445,7 +14476,7 @@ export async function removeOwnRule(tx: Tx, graphId: string, target: RuleCarrier
  *  Правило с id СИСТЕМНОГО правила носителя означает «ВКЛЮЧИТЬ ОБРАТНО» (§Б4-4: системное владелец не правит,
  *  только отключает) и принимается лишь при совпадении декларации; иначе — `RULE_SYSTEM_IMMUTABLE`. Это же
  *  обратная операция к `rule_remove` системного правила: без неё «отключить» было бы необратимо (§С3). */
-export async function setRuleDelta(tx: Tx, graphId: string, target: RuleCarrier,
+export async function setRuleDelta(tx: Tx, graphId: GraphId, target: RuleCarrier,
   rule: RuleDefinitionInput): Promise<void> {
   if (target.kind === 'role') {
     throw new ExecError('VALIDATION', `правила на встроенных ролях правит только сид (§Б4-1)`,
@@ -14472,7 +14503,7 @@ export async function setRuleDelta(tx: Tx, graphId: string, target: RuleCarrier,
  *  Два признака одного состояния не заводятся: строка своего правила — это сама дельта, и «отключить» её
  *  значило бы хранить выключенное дважды. Правила с таким id на носителе нет вовсе — `NOT_FOUND`: молчаливый
  *  успех оставил бы владельца с «отключил, а оно работает». */
-export async function disableSystemRuleDelta(tx: Tx, graphId: string, target: RuleCarrier,
+export async function disableSystemRuleDelta(tx: Tx, graphId: GraphId, target: RuleCarrier,
   ruleId: string): Promise<void> {
   if (target.kind === 'role') {
     throw new ExecError('VALIDATION', `правила на встроенных ролях правит только сид (§Б4-1)`,
@@ -14501,7 +14532,7 @@ export async function disableSystemRuleDelta(tx: Tx, graphId: string, target: Ru
  *  писателя не было вовсе — `writeDeltaRow` (`:1919`, «безусловность держит уже не их, а ЧЕТВЁРТЫЙ род») со
  *  своим `check`: смысл проверяется на ЗАПИСИ (Р-И-7), потому что `applyDeltas` правило принимает молча, и
  *  неверное запирало бы записи владельца на КАЖДОЙ мутации, а не на этой. */
-async function writeRuleDelta(tx: Tx, graphId: string, target: RuleCarrier,
+async function writeRuleDelta(tx: Tx, graphId: GraphId, target: RuleCarrier,
   delta: { rules?: RuleDefinition[]; rulesDisabled?: string[] },
   rows: RegistryDictionaries): Promise<void> {
   // ПУСТАЯ дельта правил = ОТСУТСТВИЕ настройки, и строка снимается: пустышка висела бы со своим
@@ -14533,9 +14564,9 @@ async function writeRuleDelta(tx: Tx, graphId: string, target: RuleCarrier,
   Прогон: `cd apps/server && bun test src/registry/ops.test.ts` → **PASS**.
   Коммит: `операции правил: своя строка, дельта встроенного аспекта и свойства, отказ на встроенной роли (В-6)`.
 
-- [ ] **Шаг 9: красный — пины состава реестра тулов.** `tools/registry.test.ts:151` — заголовок (49 → 51) и
-  цикл `for (const name of ['rule_set', 'rule_remove']) expect(names).toContain(name);`; `:219-247` — список
-  `fullScopeOnly` дополняется двумя именами В КОНЦЕ (порядок — как в `REGISTRY_TOOLS`); `:789-806` —
+- [ ] **Шаг 9: красный — пины состава реестра тулов.** `tools/registry.test.ts:153` — заголовок (49 → 51) и
+  цикл `for (const name of ['rule_set', 'rule_remove']) expect(names).toContain(name);`; `:221-249` — список
+  `fullScopeOnly` дополняется двумя именами В КОНЦЕ (порядок — как в `REGISTRY_TOOLS`); `:791-808` —
   литеральный отсортированный список писателей растёт до 20 (`rule_remove`, `rule_set` по алфавиту).
   `policy/confirmation.test.ts:1087-1105` — пин `[...REGISTRY_TOOL_NAMES].sort()` 14 → 16 и комментарий
   «Шестнадцать: пять среза А + три задачи 15 + четыре задачи 16 Б-1 + два действий (10) + два правил (16)».
@@ -14589,7 +14620,7 @@ const ruleSetJsonSchema = {
   Прогон: `cd apps/server && bun test src/tools/registry.test.ts` → состав **PASS**, писатели **FAIL**.
 
 - [ ] **Шаг 11: `prepareRuleSet`/`prepareRuleRemove` и тип журнала.** В `executor.ts` — два ряда `prepareOp`
-  (`:943`) и две функции по образцу `prepareSubscriptionSet` (`:3520-3600`):
+  (`:942`) и две функции по образцу `prepareSubscriptionSet` (`:3525-3605`):
   `registryPlan('rule_set', 'rule_set', \`Правило «${input.rule.id}»\`)` и
   `registryPlan('rule_removed', 'rule_remove', \`Правило «${input.rule}» снято\`)`. `apply` резолвит носителя
   по снимку (`reg.aspects` / `resolvePropertyRef` / `reg.roles`; адрес — key либо id) и ветвится:
@@ -14603,7 +14634,7 @@ const ruleSetJsonSchema = {
         : { op: 'rule_set', payload: { target: input.target, rule: before } });
 ```
   У `rule_remove` СИСТЕМНОГО правила `before` — системная декларация из снимка, и inverse — `rule_set` с ней
-  (ветка «включить обратно» шага 8). `ActionRecord['type']` (`types.ts:219-246`) += `'rule_set' |
+  (ветка «включить обратно» шага 8). `ActionRecord['type']` (`types.ts:226-253`) += `'rule_set' |
   'rule_removed'`, докблок дополняется абзацем «операции КАТАЛОГА ПРАВИЛ (§Б4-1): `entity_id: null` по тому
   же доводу, что у реестровых — меняется устройство системы, а не запись графа». Прогон:
   `cd apps/server && bun test src/tools/registry.test.ts` → **PASS** (писателей 20, счётчик `registryPlan(`
@@ -14611,7 +14642,7 @@ const ruleSetJsonSchema = {
   `тулы rule_set/rule_remove: конверты, JSON Schema со схемой E, планы исполнителя (§Б4-1, Р-21, остаток 80)`.
 
 - [ ] **Шаг 12: красный — живой путь от рутины и из чата.** В `dispatch.test.ts` рядом с тестами задачи 16
-  Б-1 (`:4889-4995`):
+  Б-1 (`:4928-5034`):
 ```ts
   const RULE_CALL = { target: { aspect: 'orbis/task' },
     rule: { id: 'urgent_needs_due', template: 'requires_when', params: { property: 'orbis/due_date' },
@@ -14635,8 +14666,8 @@ const ruleSetJsonSchema = {
 
   test('тот же rule_set из ЧАТА → карточка-запрос с фразой, а не с именем тула', async () => {
     const owner = mintGraph();
-    const threadId = await withIdentity(db, { actor: accountOf(owner), graph: owner }, (tx) => ensureGlobalThread(tx, owner));
-    const r = await dispatchTool(ctxFor({ identity: { actor: accountOf(owner), graph: owner }, threadId }), 'rule_set', RULE_CALL);
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ identity: personal(owner), threadId }), 'rule_set', RULE_CALL);
     if (r.status !== 'pending_confirmation' || r.card.kind !== 'confirmation_card') {
       throw new Error('ожидалась карточка-запрос');
     }
@@ -14654,7 +14685,7 @@ const ruleSetJsonSchema = {
   — то есть закрыло бы ровно тот путь, ради которого В-6 и завёл дельты правил»; докблок `:400-452` — переход
   12 и счёт имён. В `dispatch.ts` `registryOperationSummary` — две ветки (`Правило «<id>» на аспекте
   «<label>»` / `Правило «<id>» снято с аспекта «<label>»`; адрес разбирается тем же `aspectName`/
-  `propertyName`, у роли — `reg.roles.get(...)`), и рядом с `rowValue` (`:1936`):
+  `propertyName`, у роли — `reg.roles.get(...)`), и рядом с `rowValue` (`:1942`):
 ```ts
 /** ПРАВИЛО ЧЕЛОВЕКУ — ТЕКСТОМ, А НЕ ДЕРЕВОМ (остаток Б-1 №79). Карточка мерит правку декларации строкой, а
  *  `{"op":"=","args":[{"prop":"orbis/priority"},…]}` владелец не прочитает — «Принять» он жал бы вслепую.
@@ -14675,7 +14706,7 @@ function ruleCardText(rule: RuleDefinition, reg: ParseRegistry): string {
   `{ field: 'rule', before?: ruleCardText(before, parseReg), after: tool === 'rule_set'
   ? ruleCardText(next, parseReg) : DEFERRED_UNSET_VALUE }`; разбор входа — мягкий
   `ruleDefinitionSchema.safeParse` (на снимке конверт ещё не валидирован — приём `subscription_set`
-  `:1871-1876`), не разобралось — `rowValue(payload.rule)`; хвостовой докблок (`:1915-1920`) — «доходят все
+  `:1877-1882`), не разобралось — `rowValue(payload.rule)`; хвостовой докблок (`:1921-1926`) — «доходят все
   ШЕСТНАДЦАТЬ». Тем же коммитом — ветка `action_set` (положена задачей 10): строка `precondition` печатается
   `printExpr(decl.precondition, parseReg)`, а не `rowValue`. Докблок `expr/print.ts:12-16` правится: «у
   `ParseRegistry` словаря контрактов нет» — неправда (`query/parse-ast.ts:79`); вывод `class(<id>)` остаётся
@@ -14683,14 +14714,14 @@ function ruleCardText(rule: RuleDefinition, reg: ParseRegistry): string {
   Прогон: `cd apps/server && bun test src/tools/dispatch.test.ts src/policy/confirmation.test.ts` → **PASS**.
   Коммит: `карточка правила: ряд behavior-delta, фраза сводки и текст E в строках «было → станет» (Р-21, остаток 79)`.
 
-- [ ] **Шаг 14: ручки-зеркала, golden 51 и пины MCP.** В `routers/registry.ts` — импорт конвертов (`:24-30`)
-  и две процедуры после `removeContractSetsDelta` (`:208`): `setRule: ownerOnlyProcedure.input(ruleSetInput)
+- [ ] **Шаг 14: ручки-зеркала, golden 51 и пины MCP.** В `routers/registry.ts` — импорт конвертов (`:24-31`)
+  и две процедуры после `removeContractSetsDelta` (`:206`): `setRule: ownerOnlyProcedure.input(ruleSetInput)
   .mutation(({ ctx, input }) => registryMutation('rule_set')(ctx, input))` и `removeRule` тем же образцом;
   в `routers/registry.test.ts` — тест по образцу соседних зеркал (ручка кладёт правило и двигает
   `registry.effective.version`). Затем `buildToolRegistry` на чистом сиде → `test/golden/tool-registry.json`
   (51 запись; пересдача руками по инструкции шапки `registry-golden.test.ts:17-21`, потом
   `bunx biome check --write` по файлу) и имена `rule_set`/`rule_remove` в оба литеральных списка
-  `mcp/mcp.test.ts` (`:452-468` «полному гранту адресованы», `:773-786` «фону закрыты»). Прогон:
+  `mcp/mcp.test.ts` (`:460-476` «полному гранту адресованы», `:781-794` «фону закрыты»). Прогон:
   `cd apps/server && bun test src/routers/registry.test.ts src/tools/registry-golden.test.ts src/mcp/mcp.test.ts`
   → **PASS**. Коммит: `ручки setRule/removeRule, эталон реестра тулов 49 → 51, пины MCP`.
 
@@ -14746,7 +14777,7 @@ function propertyNamesInRule(rule: RuleDefinition, out: Set<string>): void {
 
 /** Переписать имя свойства в правиле — РОВНО по тем местам, что читает `propertyNamesInRule`: разъехавшись,
  *  эти двое дали бы держателя, найденного и не переписанного, то есть правило, указывающее на поглощённое
- *  свойство навсегда. Выражения переписывает `rewriteAst` (ключи `prop`/`has`/`field`, `:1344`); цель —
+ *  свойство навсегда. Выражения переписывает `rewriteAst` (ключи `prop`/`has`/`field`, `:1345`); цель —
  *  ИДЕНТИФИКАТОР (§А5-7: «в дереве лежат id»), потому что правило хранит канон, а движок ищет свойство по id. */
 export function rewriteRuleAddresses(rule: RuleDefinition, from: ReadonlySet<string>, to: string): RuleDefinition {
   const one = (v: unknown): unknown => (typeof v === 'string' && from.has(v) ? to : v);
@@ -14766,7 +14797,7 @@ export function rewriteRuleAddresses(rule: RuleDefinition, from: ReadonlySet<str
   if ('inherit' in p) p.inherit = obj(p.inherit, (m) =>
     Object.fromEntries(Object.entries(m).map(([aspectId, ids]) => [aspectId, list(ids)])));
   // Ключи карты `own` — адреса свойств; СТОЛКНОВЕНИЕ (настроены обе строки) разрешается в пользу ЦЕЛИ —
-  // то же правило, что у `renameKeys` в `rewriteDelta` (`:1071`): запись цели относится к тому, что живёт.
+  // то же правило, что у `renameKeys` в `rewriteDelta` (`:1072`): запись цели относится к тому, что живёт.
   if ('own' in p) p.own = obj(p.own, (m) => {
     const next: Record<string, unknown> = {};
     for (const [id, v] of Object.entries(m)) if (!from.has(id)) next[id] = v;
@@ -14778,15 +14809,15 @@ export function rewriteRuleAddresses(rule: RuleDefinition, from: ReadonlySet<str
 }
 ```
   `collectPropertyHolders` — пятый SELECT: три таблицы носителей владельца с `rules <> '[]'::jsonb`,
-  `carrier` по таблице. ДЕЛЬТЫ остаются четвёртым родом: `propertyNamesInDelta` (`:911`) дополняется обходом
-  `d.rules` тем же `propertyNamesInRule`, `rewriteDelta` (`:1071`) — веткой
+  `carrier` по таблице. ДЕЛЬТЫ остаются четвёртым родом: `propertyNamesInDelta` (`:912`) дополняется обходом
+  `d.rules` тем же `propertyNamesInRule`, `rewriteDelta` (`:1072`) — веткой
   `rules: d.rules.map((r) => rewriteRuleAddresses(r, from, to))`; так правило дельты переписывается ТЕМ ЖЕ
   UPDATE и уже попадает в `MergeInverse.deltas` — второго писателя одной строки не заводится. В
   `mergeProperty` — ветка `holder.kind === 'rule'`: SELECT `rules` строки `FOR UPDATE`,
   `rules.push({ carrier, id, rules })` в inverse, UPDATE переписанным списком. `MergeInverse` +=
   `rules?: Array<{ carrier; id; rules: unknown }>` — поле НЕОБЯЗАТЕЛЬНОЕ и читается защитно
-  (`Array.isArray`), довод `mirrors?` (`:1150-1160`): журнал append-only. `undoMerge` — цикл возврата рядом
-  с `deltaRows` (`:1745`). Счёт родов правится в докблоке `deps-graph.ts:48` и в `ops.ts:2389-2391`.
+  (`Array.isArray`), довод `mirrors?` (`:1151-1161`): журнал append-only. `undoMerge` — цикл возврата рядом
+  с `deltaRows` (`:1746`). Счёт родов правится в докблоке `deps-graph.ts:48` и в `ops.ts:2390-2392`.
   Прогон: тот же → **PASS**. Коммит:
   `слияние свойств переписывает адреса в правилах — шестой род держателя (Р-И-23)`.
 
@@ -14795,7 +14826,7 @@ export function rewriteRuleAddresses(rule: RuleDefinition, from: ReadonlySet<str
   в `ops.test.ts` «правила владельца переживают пересев» — поставить правило дельтой, прогнать
   `seedRegistries` + `mergeRegistryDeltas` (образец `db/registry-drift.test.ts`), прочитать снимок: правило
   на месте, `base_version` дельты переехал. Затем из корня: `bun run test`, `bun run lint`,
-  `bun run typecheck`. Раздел отчёта «Пины и мутации»: golden 51, `registry.test.ts:151/:219/:789`,
+  `bun run typecheck`. Раздел отчёта «Пины и мутации»: golden 51, `registry.test.ts:153/:221/:791`,
   `confirmation.test.ts` пин имён, `mcp.test.ts` два списка; мутационные пробы деливеребла — (1) снять
   `case 'rule_set'` из `reconfiguresByTool` → красный dispatch-тест рутины; (2) вернуть `effectiveRules` к
   `base.rules` → красный тест эффективного списка; (3) убрать `rule-conflict` из `driftConflictDecidable` →
@@ -15078,45 +15109,45 @@ for (const r of REFUSAL_ROWS) {
 `remainders-b1.md`), плюс именованные остатки правила 5 §С1-4 (Р-К-17) и обновлённый `docs/implementation/03-pending.md`.
 
 PRD ложится ТЕМ ЖЕ коммитом, что закрытие среза (`prd-promises-b1.md:3-5`), карта реализации — тем же коммитом,
-что PRD (`docs/implementation/00-architecture.md:630`).
+что PRD (`docs/implementation/00-architecture.md:663`).
 
 **Файлы:**
 - **Создать:** `<леджер>/ledger/prd-promises-b2.md`; `<леджер>/ledger/remainders-b2.md`
   (`<леджер>` = `/Users/birzhan/projects/orbis/.superpowers/sdd/2026-09-14-properties-reform-b2`).
 - **Изменить (гейт):** `scripts/check-legacy-form.ts` — шесть маркеров перед закрывающей `];` массива
-  `LEGACY_MARKERS` (`:285`), при нужде записи в `ALLOWLIST` перед `];` (`:479`);
-  `scripts/check-legacy-form.test.ts` — `SAMPLES` (шесть записей перед `];` `:359`), список имён в тесте
-  «имена маркеров — договор» (`:414-434`), проба по рабочему дереву в конец файла (образец `CLOSED_AFTER_B1`
-  `:538-569`).
-- **Изменить (PRD):** `docs/prd/01-architecture.md` — `:191`, `:314`, `:422`, `:462`, `:559`, `:580`, `:820`,
-  `:824`, `:1045`, `:1079`, `:1081`, `:1215`, `:1290-1300` (две строки таблицы §9.2), `:1298`, `:1320`, `:1324`,
-  `:1326`, `:1408`, `:1428`, `:1494`, `:1531`, `:1535`, `:1538`; `docs/prd/00-product.md:268` (+ новая строка
+  `LEGACY_MARKERS` (`:374`), при нужде записи в `ALLOWLIST` перед `];` (`:612`);
+  `scripts/check-legacy-form.test.ts` — `SAMPLES` (шесть записей перед `];` `:409`), список имён в тесте
+  «имена маркеров — договор» (`:464-487`), проба по рабочему дереву в конец файла (образец `CLOSED_AFTER_B1`
+  `:591-622`).
+- **Изменить (PRD):** `docs/prd/01-architecture.md` — `:191`, `:314`, `:422`, `:462`, `:559`, `:580`, `:837`,
+  `:841`, `:1062`, `:1096`, `:1098`, `:1232`, `:1307-1317` (две строки таблицы §9.2), `:1315`, `:1337`, `:1341`,
+  `:1343`, `:1425`, `:1445`, `:1511`, `:1548`, `:1552`, `:1555`; `docs/prd/00-product.md:278` (+ новая строка
   глоссария «Правило» перед ней); `docs/prd/03-budget.md:133`, `:161`; `docs/prd/02-core-os.md:556`;
-  `docs/prd/04-decision-log.md:449`, `:450`.
+  `docs/prd/04-decision-log.md:450`, `:451`.
 - **Изменить (карта реализации):** `docs/implementation/00-architecture.md:32-52` (перечень модулей `apps/server`),
   `:123` (стадии executor'а), `:354` (какие реестры засеяны), ER-блоки `:388-403` `property_definitions`,
   `:405-421` `aspect_definitions`, `:423-437` `relation_role_definitions`, `:465-479` `action_definitions`;
-  `docs/implementation/02-ops-runbook.md:127` (какая таблица остаётся пустой), вставка строки релиза после `:276`,
-  новый чек-лист деплоя Б-2 после `:873` (после чек-листа Б-1, перед `:875`);
+  `docs/implementation/02-ops-runbook.md:127` (какая таблица остаётся пустой), вставка строки релиза после `:286`,
+  новый чек-лист деплоя Б-2 после `:883` (после чек-листа Б-1, перед `:885`);
   `docs/implementation/03-pending.md` — §1 (п. 7, п. 8), §2.2.
-- **НЕ трогать:** `docs/prd/01-architecture.md:835` и `:837` (`status`/`scope` строки свойства — компиляция
+- **НЕ трогать:** `docs/prd/01-architecture.md:852` и `:854` (`status`/`scope` строки свойства — компиляция
   `scope` в SQL в Б-2 не входит, §3 рамки; строка идёт в реестр обещаний как «остаётся верным» — открытый
-  вопрос 1 ниже); `docs/implementation/02-ops-runbook.md:947` (историческая часть чек-листа среза А —
+  вопрос 1 ниже); `docs/implementation/02-ops-runbook.md:957` (историческая часть чек-листа среза А —
   `:129-130` прямо запрещает переписывать историю); `packages/shared/src/registry/modules.ts:93-96`
   (`codeRemainder` оракула снимает задача 11 — здесь только греп-проверка); спека и рамка (правит владелец
   ревизией); `apps/web` (Р-23).
 
 **Интерфейсы:**
 
-*Consumes (дословно с HEAD `36060b2`):*
+*Consumes (дословно с `36060b2`; адреса переснесены на `024782d` (Р-К-93)):*
 ```ts
 // scripts/check-legacy-form.ts
 export const SEARCH_PATHSPEC: readonly string[];                                          // :67
 export type LegacyMarker = { readonly id: string; readonly pattern: string; readonly exclude?: readonly RegExp[] };
 const COMMENT_ONLY_LINE = /^\s*(?:\/\/|\*|\/\*|--).*$/;                                   // :109 (не экспортирован)
-export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker>;                                 // :111-285 (17 маркеров)
+export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker>;                                 // :111-374 (17 маркеров)
 export type AllowEntry = { readonly path: string; readonly markers?: readonly string[]; readonly reason: string };
-export const ALLOWLIST: ReadonlyArray<AllowEntry>;                                        // :347-479
+export const ALLOWLIST: ReadonlyArray<AllowEntry>;                                        // :436-612
 export function scanMarker(marker: LegacyMarker, cwd: string): MarkerReport;
 export function scan(cwd: string): MarkerReport[];
 // режимы: без флага — отчёт, код 0; `--gate` — код 1 вне allowlist; код 2 — отказ окружения
@@ -15125,11 +15156,11 @@ export function scan(cwd: string): MarkerReport[];
 `:3-8`, строка «Итого строк: N. Из них задача 19 несёт правку: M» `:10-15`, шапка таблицы `:17`, «Примечания к
 строкам» `:45`, блок «Не тронуто намеренно» `:67-69`); `…-b1/ledger/remainders-b1.md` — образец реестра
 остатков (шапка `:1-16` с правилом колонки «кому», «Итого строк: N» с разбивкой, пометка `[ИО-N]` правила 5
-§С1-4; восемь разделов, шапка `| # | Остаток | Источник | Кому | Что перерешать |`); спека — §С10 `:1677-1695`
-(строки Б-2 `:1684`, `:1686`, `:1687`, `:1688`, `:1690`), §С8 24–29 `:1648-1654`, §С9 пп. 4–7 `:1674-1676`,
-§С1-4 «правило 5» (именованный остаток с записанной границей) `:655-657`; носитель числа тулов —
+§С1-4; восемь разделов, шапка `| # | Остаток | Источник | Кому | Что перерешать |`); спека — §С10 `:1685-1703`
+(строки Б-2 `:1684`, `:1686`, `:1695`, `:1696`, `:1698`), §С8 24–29 `:1656-1662`, §С9 пп. 4–7 `:1680-1683`,
+§С1-4 «правило 5» (именованный остаток с записанной границей) `:663-665`; носитель числа тулов —
 `apps/server/test/golden/tool-registry.json` (44 → 51 после задачи 16); правило поставки карты —
-`docs/implementation/00-architecture.md:630`.
+`docs/implementation/00-architecture.md:663`.
 
 *Produces:* шесть новых маркеров греп-гейта — **имена договорные**, на них ссылается задача 19:
 `'shim-task-completion'`, `'shim-financial-invariant'`, `'shim-envelope-unique'`, `'oracle-compute-overview'`,
@@ -15141,7 +15172,7 @@ export function scan(cwd: string): MarkerReport[];
 ---
 
 - [ ] **Шаг 1: красный тест шести маркеров.** В `scripts/check-legacy-form.test.ts` дописать шесть записей
-в конец массива `SAMPLES` (перед `];` на `:359`):
+в конец массива `SAMPLES` (перед `];` на `:409`):
 ```ts
   // --- Носители интервала Б-1→Б-2 (§С8-24, рамка Б2.13) -------------------------------------
   { id: 'shim-task-completion', lines: ['applyTaskCompletion(before, state, now);'] },
@@ -15165,14 +15196,14 @@ export function scan(cwd: string): MarkerReport[];
   { id: 'oracle-docblock-b2', lines: ["const a = 'Р-К-5: оракул сверки живёт до Б-2';"] },
   { id: 'engine-code-docblock', lines: ['// ЗДЕСЬ — КОД ДВИЖКА, а не декларация правила'] },
 ```
-и в тесте «имена маркеров — договор» (`:414-434`) после `'exclude-blocked-literal',` дописать шесть имён в
+и в тесте «имена маркеров — договор» (`:464-487`) после `'exclude-blocked-literal',` дописать шесть имён в
 том же порядке: `'shim-task-completion'`, `'shim-financial-invariant'`, `'shim-envelope-unique'`,
 `'oracle-compute-overview'`, `'oracle-docblock-b2'`, `'engine-code-docblock'`.
 Прогон: `cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun test scripts/check-legacy-form.test.ts`.
-Ожидаемо **FAIL** трёх тестов: `:361` «у каждого маркера есть образец» (списки разошлись), `:366` (образцы
-никем не ловятся), `:414` (имена не совпали) — причина одна: маркеров в `LEGACY_MARKERS` ещё нет.
+Ожидаемо **FAIL** трёх тестов: `:411` «у каждого маркера есть образец» (списки разошлись), `:416` (образцы
+никем не ловятся), `:464` (имена не совпали) — причина одна: маркеров в `LEGACY_MARKERS` ещё нет.
 
-- [ ] **Шаг 2: шесть маркеров.** В `scripts/check-legacy-form.ts` перед закрывающей `];` (`:285`):
+- [ ] **Шаг 2: шесть маркеров.** В `scripts/check-legacy-form.ts` перед закрывающей `];` (`:374`):
 ```ts
   // --- Носители интервала Б-1→Б-2 (§А7-2, §С8-24; рамка Б2.4, Б2.13) -----------------------
   // Четыре первых ловят ИМЯ, ВЕРНУВШЕЕСЯ В КОД: инварианты §А7-2 переехали строками реестра
@@ -15225,14 +15256,14 @@ export function scan(cwd: string): MarkerReport[];
 
 
 - [ ] **Шаг 3: прогон гейта по рабочему дереву и разбор остатков.** `bun scripts/check-legacy-form.ts`
-(режим отчёта, код 0) — прочитать строки шести новых маркеров. Контрольные списки на HEAD `36060b2`
+(режим отчёта, код 0) — прочитать строки шести новых маркеров. Контрольные списки на HEAD `36060b2` (адреса переснесены на `024782d`)
 (греп-проверено; к этому шагу они обязаны быть пусты — их снесли задачи 4, 11, 12): `applyTaskCompletion` —
-`executor/executor.ts:145,1702,2003,2308`, `executor/normalize.ts:40` (`props.ts:122` — комментарий, снимается
-`COMMENT_ONLY_LINE`); `assertFinancialInvariant` — `executor/executor.ts:146,1614`, `normalize.ts:151`;
-`assertEnvelopeUnique` — `budget/binding.ts:709`, `executor/executor.ts:44,1784,2079,2351` (`binding.ts:671`,
-`executor.ts:875,880`, `normalize.ts:61`, `binding.test.ts:1156` — комментарии); `computeOverview` —
-`budget/aggregates.ts:443`, `perf/volume.test.ts:51,200,326,527,601,606,651`,
-`subscriptions/budget.test.ts:28,320,483,596,694,697,729,834`; `оракул сверки живёт до Б-2` —
+`executor/executor.ts:146,1702,2003,2308`, `executor/normalize.ts:40` (`props.ts:122` — комментарий, снимается
+`COMMENT_ONLY_LINE`); `assertFinancialInvariant` — `executor/executor.ts:147,1614`, `normalize.ts:151`;
+`assertEnvelopeUnique` — `budget/binding.ts:710`, `executor/executor.ts:45,1784,2079,2351` (`binding.ts:672`,
+`executor.ts:874,880`, `normalize.ts:61`, `binding.test.ts:1159` — комментарии); `computeOverview` —
+`budget/aggregates.ts:445`, `perf/volume.test.ts:51,200,326,527,601,606,651`,
+`subscriptions/budget.test.ts:31,320,483,596,694,697,729,834`; `оракул сверки живёт до Б-2` —
 `packages/shared/src/registry/modules.ts:95`; `ЗДЕСЬ — КОД ДВИЖКА` — `executor/ancestors.ts:8`.
 Фактическую выдачу записать в `progress.md` — она вход шагов 4 и 5. Непустой маркер разбирать поимённо: живое
 имя в боевом коде — незакрытая задача-носитель (докладывать координатору, не лечить allowlist'ом);
@@ -15243,11 +15274,11 @@ export function scan(cwd: string): MarkerReport[];
 же шагом (те же файлы, тот же коммит) переписать докблоки, которые маркерами не ловятся, но врут так же — греп
 `git grep -n -a -F -e 'до Б-2' -e 'до среза Б-2' -e 'срез Б-2' -e 'срезе Б-2' -e 'среза Б-2' -- apps packages scripts`,
 контрольный список на HEAD (шесть из шести):
-- `budget/aggregates.ts:428,433` — докблок именованного остатка над `computeOverview` (уходит вместе с функцией
+- `budget/aggregates.ts:430,433` — докблок именованного остатка над `computeOverview` (уходит вместе с функцией
   задачей 11; пережил снос — удалить);
 - `subscriptions/budget.ts:5` — «Оракул … живёт рядом до Б-2 (Р-К-5)» → «Оракул снесён срезом Б-2 (Р-32):
   эталон §С8-15 — golden-снимки движка `test/golden/budget-engine.json`»;
-- `db/schema.ts:454` — «`action_definitions` — до среза Б-2. Пустая таблица заводилась здесь…» →
+- `db/schema.ts:471` — «`action_definitions` — до среза Б-2. Пустая таблица заводилась здесь…» →
   «`action_definitions` засеяна срезом Б-2 (два встроенных действия); колонки `rank`/`status`/`over` и
   уникальность `key` пришли миграцией 0022»;
 - `shared/registry/builtin-roles.ts:14` и `shared/registry/property-type.ts:241` — «`source_contract`/
@@ -15270,14 +15301,14 @@ git grep -n -a -P -e 'оракул сверки живёт до Б-2|ЗДЕСЬ 
 - [ ] **Шаг 5: allowlist — только там, где совпадение законно.** Состав — по факту шага 3, не по
 предположению. Ожидание: записей НЕ требуется — четыре именных маркера дают ноль, два маркера-утверждения
 находят только сам гейт (он снят `ALLOWLIST` по всем маркерам записью без списка). Показал греп замороженный
-вход (например, копию имени в `perf/`) — завести запись перед `];` (`:479`) по образцу записи `perf.test.ts`
-Б-1: `path`, `markers: ['<id>']`, `reason`; без причины запись не заводится (тест `:456`). Боевого кода среди
+вход (например, копию имени в `perf/`) — завести запись перед `];` (`:612`) по образцу записи `perf.test.ts`
+Б-1: `path`, `markers: ['<id>']`, `reason`; без причины запись не заводится (тест `:509`). Боевого кода среди
 записей быть не может: живое имя в боевом коде — незакрытая задача.
 Прогон: `bun test scripts/check-legacy-form.test.ts` и `bun scripts/check-legacy-form.ts --gate` — **PASS / 0**.
 
 
 - [ ] **Шаг 6: проба по рабочему дереву — закрытая дверь, а не счётчик.** В конец
-`scripts/check-legacy-form.test.ts` дописать (образец — `CLOSED_AFTER_B1` `:538-569`):
+`scripts/check-legacy-form.test.ts` дописать (образец — `CLOSED_AFTER_B1` `:591-622`):
 ```ts
 /**
  * ЧЕТВЁРТАЯ проба ПО РАБОЧЕМУ ДЕРЕВУ, и исключение из правила шапки — по тому же доводу, что у
@@ -15334,29 +15365,29 @@ test('кода под два инварианта гейта вехи I в де�
 утверждение либо верно на `<хеш HEAD ветки>`, либо есть в этой таблице»), строка «**Итого строк: N. Из них
 задача 18 несёт правку: M**», таблица
 `| # | § PRD | Утверждение PRD (состояние ПОСЛЕ среза Б-2) | Задача-носитель | Адрес правки |`,
-раздел «Примечания к строкам» и блок «**Не тронуто намеренно**». Состав (адреса греп-проверены на `36060b2`;
+раздел «Примечания к строкам» и блок «**Не тронуто намеренно**». Состав (адреса греп-проверены на `36060b2` и переснесены на `024782d`;
 перед правкой перечитать — план опровергаем):
 
 | # | Адрес | Утверждение после Б-2 | Носитель |
 |---|---|---|---|
 | 1 | `01-architecture.md:191` | Условный `default` правилом каталога живой; `completed_at` держит строка `on_enter_class`, а не код | 3, 4, 14 |
-| 2 | `01-architecture.md:314`, `:820`, `:824` | Засеяны **шесть** реестров; `action_definitions` — два встроенных действия; расхождение «пять против шести» снято | 2, 6 |
+| 2 | `01-architecture.md:314`, `:837`, `:841` | Засеяны **шесть** реестров; `action_definitions` — два встроенных действия; расхождение «пять против шести» снято | 2, 6 |
 | 3 | `01-architecture.md:422` | Условная обязательность `orbis/grant` — пара правил на `orbis/assignment`; кодом остаётся только живость гранта | 14 |
 | 4 | `01-architecture.md:462` | XOR субъекта прогона — пара `requires_when`/`forbidden_when` на `orbis/agent-run`, не тринадцатый шаблон | 14 |
 | 5 | `01-architecture.md:559`, `:580` | `target_contract` роли `ticket` РАБОТАЕТ (читатель на записи ребра); вторая партия инвариантов переехала в правила | 13, 14 |
-| 6 | `01-architecture.md:1045` | Правила каталога — живой потребитель канона §6.3; `scope` в SQL по-прежнему не компилируется | 1, 3, 12–16 |
-| 7 | `01-architecture.md:1079`, `:1081` | Промпт-индекс и перезамер бюджетов слоёв — «страницы, срез 1», не «часть Б» | **18** (переадресация) |
-| 8 | `01-architecture.md:1215` | Полная версия §7.10 — срез **Б-2**: уровень по резолвленным шагам; правила `assign_level` проверены на выразимость, живой конвейер — V2 | 7, 15 |
-| 9 | `01-architecture.md:1290-1300`, `:1320`, `:1324`, `:1326` | Реестр — **51 тул** (15 core, 16 реестровых, 5 глаголов, `orbis_ask`/`orbis_propose`, 12 `attach_*`, 1 `action_*`); MCP `full` — **46**, `worker` — **9**; `run_action` живой, вторая ось роста названа | 7, 10, 16 (golden), **18** (текст и числа) |
-| 10 | `01-architecture.md:1298` | Сужение выдачи `property_catalog` фильтром `contract` — «страницы, срез 1» (генератор промпта), не Б-2 | **18** (переадресация) |
-| 11 | `01-architecture.md:1408`, `:1428` | Правило 6 §10 («≥ 2 или generic») исполняется каталогом из 12 шаблонов: `assertRule` отказывает шаблону без носителя | 1, 12–14, **18** (текст) |
-| 12 | `01-architecture.md:1494` | Остальные экраны переезжают срезом «страницы, срез 1» (в Б-2 экранных остатков нет) | **18** (переадресация, рулинг 13.09) |
-| 13 | `01-architecture.md:1531`, `:1535`, `:1538` | §13: 21 строка отказов с мутационной проверкой двумя жанрами; golden на каждый шаблон T и на действие | 17, 9, 11, **18** (текст) |
-| 14 | `00-product.md:268` + новая строка глоссария | «Действие» реализовано; в глоссарий добавлено «Правило» | 6, 7, **18** |
+| 6 | `01-architecture.md:1062` | Правила каталога — живой потребитель канона §6.3; `scope` в SQL по-прежнему не компилируется | 1, 3, 12–16 |
+| 7 | `01-architecture.md:1096`, `:1098` | Промпт-индекс и перезамер бюджетов слоёв — «страницы, срез 1», не «часть Б» | **18** (переадресация) |
+| 8 | `01-architecture.md:1232` | Полная версия §7.10 — срез **Б-2**: уровень по резолвленным шагам; правила `assign_level` проверены на выразимость, живой конвейер — V2 | 7, 15 |
+| 9 | `01-architecture.md:1307-1317`, `:1337`, `:1341`, `:1343` | Реестр — **51 тул** (15 core, 16 реестровых, 5 глаголов, `orbis_ask`/`orbis_propose`, 12 `attach_*`, 1 `action_*`); MCP `full` — **46**, `worker` — **9**; `run_action` живой, вторая ось роста названа | 7, 10, 16 (golden), **18** (текст и числа) |
+| 10 | `01-architecture.md:1315` | Сужение выдачи `property_catalog` фильтром `contract` — «страницы, срез 1» (генератор промпта), не Б-2 | **18** (переадресация) |
+| 11 | `01-architecture.md:1425`, `:1445` | Правило 6 §10 («≥ 2 или generic») исполняется каталогом из 12 шаблонов: `assertRule` отказывает шаблону без носителя | 1, 12–14, **18** (текст) |
+| 12 | `01-architecture.md:1511` | Остальные экраны переезжают срезом «страницы, срез 1» (в Б-2 экранных остатков нет) | **18** (переадресация, рулинг 13.09) |
+| 13 | `01-architecture.md:1548`, `:1552`, `:1555` | §13: 21 строка отказов с мутационной проверкой двумя жанрами; golden на каждый шаблон T и на действие | 17, 9, 11, **18** (текст) |
+| 14 | `00-product.md:278` + новая строка глоссария | «Действие» реализовано; в глоссарий добавлено «Правило» | 6, 7, **18** |
 | 15 | `03-budget.md:133`, `:161` | `orbis/carryover` пишет правило `rollover` (строка реестра); Rollover-флоу = рутина «Перенос остатков» в режиме «предлагать» + тул `budget_rollover` | 10, 13 |
 | 16 | `02-core-os.md:556` | Переключение статуса строкой списка — «страницы, срез 1», а не Б-2 | **18** (переадресация) |
-| 17 | `04-decision-log.md:449` | D43 положение 12: **21** каноническая строка отказов (24 имени), не 20 | **18** (эррата числа) |
-| 18 | `04-decision-log.md:450` | Статус D43: срез Б-2 реализован (18 — «реализован», 20 — «и в проде») | **18**, 20 |
+| 17 | `04-decision-log.md:450` | D43 положение 12: **21** каноническая строка отказов (24 имени), не 20 | **18** (эррата числа) |
+| 18 | `04-decision-log.md:451` | Статус D43: срез Б-2 реализован (18 — «реализован», 20 — «и в проде») | **18**, 20 |
 | 19 | `implementation/00-architecture.md:32-52`, `:123`, `:354`, ER-блоки | Модули `rules`/`actions` названы; T-правила до стадии 2, C-правила на стадии 4; засеяны шесть реестров; в ER есть `rules` ×3 и `rank`/`status`/`over` | 2, 3, 6, **18** |
 | 20 | `implementation/02-ops-runbook.md:127`, строка релиза, чек-лист | Пустых реестров нет; строка релиза Б-2 и чек-лист «Деплой реформы свойств (D43, срез Б-2)» существуют | **18**, 20 (факты прогона) |
 
@@ -15400,7 +15431,7 @@ test('кода под два инварианта гейта вехи I в де�
   называет метками и исполняет прежним кодом ролей — второй формы у них не заводится.»
 Проверка: `grep -n 'не проверяется до Б-2\|часть Б, вместе с языком' docs/prd/01-architecture.md` — пусто.
 
-- [ ] **Шаг 9: PRD 01-architecture — §6.3, §7.10, §9.2 и §10 (§С10 строки `РЕФ:1684`, `:1686`, `:1687`, `:1688`).**
+- [ ] **Шаг 9: PRD 01-architecture — §6.3, §7.10, §9.2 и §10 (§С10 строки `РЕФ:1692`, `:1694`, `:1695`, `:1688`).**
 - `:1045` (§6.3) → «Ещё один потребитель назван решением, но кода не имеет: **область показа свойства**
   (`scope`, §4.16) — значение хранится и читается графом зависимостей, но в SQL не компилируется. **Правила
   каталога** исполнены срезом Б-2: двенадцать шаблонов §4.16 живут строками реестра на своих носителях,
@@ -15443,27 +15474,27 @@ test('кода под два инварианта гейта вехи I в де�
 Проверка: `grep -c 'Двенадцать тулов мутации реестра\|44 тула' docs/prd/01-architecture.md` — **0**.
 
 - [ ] **Шаг 10: PRD 01-architecture §11.4, §13 и переадресация в «страницы, срез 1».**
-- `:1079` — хвост «на действующей линейке v5 он не переснимался — перезамер идёт вместе с закрытием среза.» →
+- `:1096` — хвост «на действующей линейке v5 он не переснимался — перезамер идёт вместе с закрытием среза.» →
   «…на действующей линейке v6 он не переснимался — перезамер бюджетов идёт вместе со срезом «страницы, срез 1»
   (там же переезжает промпт-индекс); ожидающие проверки собраны в `docs/implementation/03-pending.md` §1.»;
-- `:1081` — «(часть Б; в срезе А промпт остаётся статическим текстом линейки v5)» → «(промпт-индекс — **первая
+- `:1098` — «(часть Б; в срезе А промпт остаётся статическим текстом линейки v5)» → «(промпт-индекс — **первая
   задача среза «страницы, срез 1»**, §С9 п. 5 спеки реформы ревизии 4; сегодня промпт остаётся статическим
   текстом линейки v6)»;
-- `:1298` — «…сужение появится отдельным шагом (Б-2)» → «…сужение появится вместе с генератором промпта и
+- `:1315` — «…сужение появится отдельным шагом (Б-2)» → «…сужение появится вместе с генератором промпта и
   индексом каталога — первая задача среза «страницы, срез 1»»;
-- `:1494` — хвост «остальные экраны переезжают срезами Б-2/Б-3.» → «остальные экраны переезжают срезом
+- `:1511` — хвост «остальные экраны переезжают срезами Б-2/Б-3.» → «остальные экраны переезжают срезом
   «страницы, срез 1»: рулинг владельца 2026-09-13 — в срезе Б-2 экранных остатков нет, те же экраны там
   собираются из блоков над подписками, и делать это дважды нельзя.»;
-- `:1531` → «Новые пункты приехали с реформой (D43) и исполнены срезами А, Б-1 и Б-2 — каталог правил,
+- `:1548` → «Новые пункты приехали с реформой (D43) и исполнены срезами А, Б-1 и Б-2 — каталог правил,
   действия, канонические отказы; где норма ещё ждёт своего среза, сказано прямо.»;
-- `:1535` (п. 10) — со слов «**Полный набор — часть Б**» → «**Полный набор — 21 каноническая строка отказов /
+- `:1552` (п. 10) — со слов «**Полный набор — часть Б**» → «**Полный набор — 21 каноническая строка отказов /
   24 имени кода**, исполнен срезом Б-2: у каждой строки позитивная фикстура, вход-отказ и мутационная
   проверка, прогон 21/21 двумя жанрами входа — испорченная декларация (17 строк) и запись данных (4 строки).
   Срез А завёл шесть, срез Б-1 — отказы тайп-чекера E (`EXPR_TYPE`, `EXPR_NOT_TOTAL`, `EXPR_RECURSION`),
   вторую формулу строкой (`SECOND_LANGUAGE`), `SLOT_AMBIGUOUS`, `SURFACE_UNKNOWN` и `MODULE_DISABLED`; срез
   Б-2 — `RULE_CONFLICT`, `DEREF_IN_CONSTRAINT`, `UNIQUE_ON_MANY`, `ACTION_NESTED`, `ACTION_BRANCH`,
   `BATCH_UNBOUNDED`, `SENSITIVITY_UNDERDECLARED`.»;
-- `:1538` (п. 13) — хвост «остальные шаблоны — вместе с каталогом правил (часть Б).» → «срез Б-2 добавил
+- `:1555` (п. 13) — хвост «остальные шаблоны — вместе с каталогом правил (часть Б).» → «срез Б-2 добавил
   golden на каждый шаблон T каталога (`on_enter_class`, `default`, `nearest_ancestor`, `materialize`,
   `mirror_relation`, `rollover`) и на действие: `plan-to-fact` и `postpone_overdue` — «применить → отменить →
   байт-в-байт» по снимку состояния и строке журнала с нормализованными id.»
@@ -15471,10 +15502,10 @@ test('кода под два инварианта гейта вехи I в де�
 строк; оставшиеся — только те, что относятся к срезу «страницы, срез 1» и к остатку бывшего Б-3.
 
 - [ ] **Шаг 11: PRD 00-product, 03-budget, 02-core-os.**
-- `00-product.md:268` — хвост «**Часть Б; в срезе А таблица создана пустой**» → «Заводится записью в реестре,
+- `00-product.md:278` — хвост «**Часть Б; в срезе А таблица создана пустой**» → «Заводится записью в реестре,
   а не кодом: строка `action_definitions`, тул `run_action`, уровень подтверждения — по резолвленным шагам.
   **Реализовано срезом Б-2**; встроенных действия два — «план → факт» (Финансы) и «отложить просроченные»
-  (Планировщик)»; ПЕРЕД этой строкой (после `:267` «Подписка») вставить строку глоссария (§С10 `РЕФ:1693`):
+  (Планировщик)»; ПЕРЕД этой строкой (после `:277` «Подписка») вставить строку глоссария (§С10 `РЕФ:1693`):
 ```
 | **Правило** | Именованное ограничение или преобразование записи, объявленное строкой реестра на её носителе (свойстве, аспекте, роли рёбер): «обязательно при условии», «запрещено при условии», «при входе в класс — проставить», «по умолчанию», «уникально среди». Двенадцать шаблонов каталога (01-architecture §4.16); исполняет их движок на трёх путях записи, а «отключить» — одно поле строки. **Реализовано срезом Б-2** |
 ```
@@ -15494,11 +15525,11 @@ test('кода под два инварианта гейта вехи I в де�
 Коммит шагов 8–11: `docs(prd): §С10 в объёме Б-2 — правила каталога, действия и run_action, 51 тул, глоссарий, §13 пп. 10/13`.
 
 - [ ] **Шаг 12: D43 — исход среза.** `docs/prd/04-decision-log.md`.
-(а) `:449`, положение 12: «20 канонических отказов с мутационной проверкой» → «**21** каноническая строка
+(а) `:450`, положение 12: «20 канонических отказов с мутационной проверкой» → «**21** каноническая строка
 отказов (24 имени кода) с мутационной проверкой двумя жанрами входа». Проверка ДО правки:
 `grep -c '20 канонических отказов с мутационной проверкой' docs/prd/04-decision-log.md` — ровно `1`; если `0`
 — формулировка уже правлена, доложить координатору и не переписывать чужую строку.
-(б) `:450`, строка `- **Статус:**`. К этому шагу строка кончается предложением задачи 0a («**часть Б: срез
+(б) `:451`, строка `- **Статус:**`. К этому шагу строка кончается предложением задачи 0a («**часть Б: срез
 Б-2 «ядро» — в работе** …»). Проверка ДО правки:
 `grep -c 'срез Б-2 «ядро» — в работе' docs/prd/04-decision-log.md` — ровно `1`; `0` → задача 0a не
 отработала, доложить и не править. Две правки внутри строки:
@@ -15516,7 +15547,7 @@ test('кода под два инварианта гейта вехи I в де�
 Коммит: `docs(prd): D43 — исход среза Б-2 в статусе решения; 21 каноническая строка отказов`.
 
 - [ ] **Шаг 13: карта реализации.** `docs/implementation/00-architecture.md` — правится ТЕМ ЖЕ коммитом, что
-PRD (правило `:630`):
+PRD (правило `:663`):
 - `:32-52` (перечень `apps/server`) — после «executor — семистадийный конвейер мутаций (PRD 01 §9.2)»
   дописать «, **движок правил каталога** — применение шаблонов `requires_when`/`forbidden_when`/
   `on_enter_class`/`default`/`unique_among` на трёх путях записи (PRD 01 §4.16) [D43], **actions** — резолв
@@ -15548,13 +15579,13 @@ PRD (правило `:630`):
 - `:127` — «(последние три БЫЛИ созданы пустыми в срезе А; контракты и подписки засеяны срезом Б-1, пустой
   остаётся только таблица действий)» → «(последние три БЫЛИ созданы пустыми в срезе А; контракты и подписки
   засеяны срезом Б-1, действия — срезом Б-2; пустых реестров больше нет)»;
-- после `:276` добавить строку таблицы: «| **Реформа свойств (D43, срез Б-2)** | **Сид правил и действий** —
+- после `:286` добавить строку таблицы: «| **Реформа свойств (D43, срез Б-2)** | **Сид правил и действий** —
   строки правил внутри трёх реестров-носителей плюс два встроенных действия — и **одна миграция** (`0022`:
   колонка `rules` у трёх таблиц реестров, `rank`/`status`/`over` и уникальность `key` у `action_definitions`).
   Пересев **ОБЯЗАТЕЛЕН** и аддитивен: `reset-world` НЕ нужен. Рутина «Перенос остатков» сеется **онбордингом
   при первом заходе владельца**, прод-командой не сеется. Автодеплой Render выключен 0-серией среза и
   возвращается закрытием. Порядок целиком — чек-лист «Деплой реформы свойств (D43, срез Б-2)» ниже |»;
-- новым разделом ПОСЛЕ чек-листа Б-1 (он идёт с `:795` до `:873`), перед `:875`:
+- новым разделом ПОСЛЕ чек-листа Б-1 (он идёт с `:805` до `:883`), перед `:885`:
   `#### Деплой реформы свойств (D43, срез Б-2): порядок шагов` — по образцу Б-1, теми же десятью шагами
   (`(0)` автодеплой выключен → `(1)` `ping` → `(2)` `check` с ОЖИДАЕМЫМ дрейфом → `(3)` `backup.yml` →
   `(4)` `migrate` (`0022`) → `(5)` `seed-registries` → `(6)` `check` = ok → `(7)` ручной деплой + Restart →
@@ -15575,21 +15606,21 @@ PRD (правило `:630`):
 Коммит шагов 13–14: `docs(implementation): карта реализации и runbook — движок правил, шесть засеянных реестров, чек-лист деплоя Б-2`.
 
 - [ ] **Шаг 15: `docs/implementation/03-pending.md`.**
-(а) §1: п. 7 — адрес носителя `01-architecture.md:1077` → `:1079` («перезамер бюджетов промпта»; на `:1077` —
+(а) §1: п. 7 — адрес носителя `01-architecture.md:1094` → `:1096` («перезамер бюджетов промпта»; на `:1094` —
 строка таблицы слоя 5, эррата реестра); п. 8 «§С8-30 — **только после среза Б-3**» → «**только после среза
 «страницы, срез 1»** (генератор промпта + индекс `property_catalog` — первая задача среза)»; в конец §1 —
 абзац: «**Приёмка среза Б-2 (§С8 пп. 24, 25, 26, 27, 29 и §С2-2) ключа НЕ требует** и закрыта без него: корпус
 отказов, фикстуры каталога, одиннадцать правил делегирования на синтетическом сиде и golden действий — тесты.
 Единственное место среза, упирающееся в кредиты, — живой смоук провайдера в прод-процедуре (задача 20): он идёт
 `--dry-run`, как в Б-1 (В-П-5).»
-(б) §2.2 — строка `~~выбор среза~~` (`:60`) уже вычеркнута ревизией 4 и дописи не требует (открытый вопрос 3).
-Дописать пять строк по открытым вопросам плана Б-2, исполненным по умолчаниям: **В-П-1** (ревизия 5 спеки —
-пять эррат формы: поле `undo`, форма события `on_enter_class`, `actor: routine`, второй экземпляр
-`forbidden_when`, `batch_cap` у map-действия; источники — `facts.md` Р-К-3/5/6/7/14), **В-П-2** (`$now` против
+(б) §2.2 — строка `~~выбор среза~~` (`:60`) уже вычеркнута ревизией 4 и дописи не требует (открытый вопрос 3); строка
+`~~Б-2 В-П-1…8~~` (`:62`, добавлена ревизией 5 спеки 20.09 — восемь эррат формы внесены, `cb6afc6`) обещает «подробные строки по
+умолчаниям допишет задача доков среза Б-2» — в самой строке обещание снять (заменить на «см. четыре строки ниже»), а под ней дописать
+четыре строки по вопросам, исполненным по умолчаниям: **В-П-2** (`$now` против
 `{prop:'orbis/updated_at'}` — исполнено `updated_at`, Р-К-2), **В-П-3** (`default(currency)` строкой сида —
 переведён, задача 14), **В-П-4** (правило 10 §Б4-5 на аспекте `orbis/routine` — Р-К-20), **В-П-6** (рутина
 «Перенос остатков» сеется онбордингом, не прод-командой). Форма строки — как у соседних: «что сделано без вас /
-что решить / источник».
+что решить / источник»; номера строк `03-pending.md` — ориентир (искать по тексту `Б-2 В-П-1…8`).
 (в) Отметить закрытыми: `Б-1 В-П-4` (пин `relations_source_role`, остаток 87 — исход по факту задачи 2) и
 `Б-1 ОВ-3` в части «схема `phases` списком» (остаётся у владельца, срезом Б-2 не берётся).
 Коммит: `docs(implementation): реестр отложенного — приёмка Б-2 без ключа, вопросы плана Б-2, переадресация §С8-30`.
@@ -15671,7 +15702,7 @@ bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts
   маппинга — грепы `^## Вехи и прогоняемые проверки` `:48` и `^## Самопроверка плана` `:50`; блок ограничений —
   греп `^## Глобальные ограничения` `:56`. `<леджер>/make-brief.sh` — `PLAN` `:6`, `LED` `:7`, те же грепы
   `:9`, `:24`. `docs/superpowers/templates/orchestrator-prompt.md` (разделы «РЕВЬЮ-ПАКЕТ», «ГЕЙТЫ И УЧЁТ»);
-  экземпляр `<леджер>/orchestrator-prompt.md` (0a). План Б-2 (аргумент), спека ревизии 4 (власть), рамка, леджер
+  экземпляр `<леджер>/orchestrator-prompt.md` (0a). План Б-2 (аргумент), спека ревизии 5 (власть; `cb6afc6`), рамка, леджер
   (`progress.md`, `facts.md` Р-К-1…24, `plan-interfaces.md` Р-И-1…37); деливереблы задач 0a–18 целиком.
 - **Produces:** `BASE_B2` — sha `main` ДО среза (шаг 1, из записи 0a в `progress.md`);
   `final/final-review-pack.md`; пять `final/area-B<n>.diff` (`-U6`) с разбиением **без пропусков и пересечений**;
@@ -15683,7 +15714,7 @@ bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts
 
 - [ ] **Шаг 1: база диффа и инвентарь ветки.** База — `main` **до** среза, а не коммит 0a: docs-коммит 0a
   (`render.yaml` `autoDeploy: false`, статус D43 «в работе») — часть среза и обязан попасть в дифф; значение
-  записано 0a в `progress.md` как «main@до Б-2» (ожидается `36060b2`). Отдельными вызовами Bash (`cd` в каждом —
+  записано 0a в `progress.md` как «main@до Б-2» (ожидается не ниже `024782d` — HEAD после среза Г и ревизии 5; на 21.09 — `c2c484c`). Отдельными вызовами Bash (`cd` в каждом —
   cwd сбрасывается): `git fetch origin && git status --porcelain`;
   `git log --oneline <BASE_B2>..HEAD > $LED/final/commits.txt`;
   `git diff --stat <BASE_B2>..HEAD > $LED/final/stat.txt`;
@@ -15739,13 +15770,14 @@ wc -l $LED/final/area-B*.diff
 - [ ] **Шаг 5: `final/final-review-pack.md`** — шесть разделов по образцу
   `.superpowers/sdd/2026-09-02-properties-reform-b1/final/final-review-pack.md`:
   **(1) шапка** — диапазон `<BASE_B2>`…`<HEAD>`, числа из `stat.txt`, worktree для чтения, **власть** — спека
-  ревизии 4 (§А7-2, §Б3-2а, §Б4, §Б6, §Б8, §С1-2, §С2-1/2, §С3, §С8 24–29, §С9), **аргумент** — план Б-2
+  ревизии 5 (§А7-2, §Б1-1/2 `orbis/delegable`, §Б2-2/4 запись классом, §Б3-2а, §Б4, §Б6, §Б8, §С1-2, §С2-1/2, §С3, §С8 24–29, §С9) и спека
+  среза Г (§3.5 идентичность парой, D44), **аргумент** — план Б-2
   (маппинги приёмки и отказов), рамка §7/§8, леджер (`progress.md`, `facts.md`, `plan-interfaces.md`,
   `final/ledger-index.txt`).
   **(2) «Что уже проверено поштучно — НЕ повторять»:** гейт fable на каждой из задач 0a–18 с мутационной
   проверкой деливеребла и разделом «что должно было измениться, но не изменилось»; счётчики финального
-  прогона (server/shared/web/scripts, lint, typecheck, `test:rls`, `test:perf`, `test:perf:volume`,
-  `check-legacy-form --gate`, web build, `check-lazy-chunks`); гейт вехи I (задача 5) с греп-доказательством.
+  прогона (server/shared/web/scripts, lint, typecheck, `test:rls`, `test:perf:volume` → `test:perf:explain` → `test:perf:graph` ×3 →
+  `test:perf` в порядке Ф-Г-75, `check-legacy-form --gate` с тремя гейтами имён среза Г, web build, `check-lazy-chunks`); гейт вехи I (задача 5) с греп-доказательством.
   **(3) «Что НЕ проверялось поштучно — ЗДЕСЬ ценность»** (в Б-1 раздел дал находки, которых 20 гейтов не
   увидели) — шесть сквозных осей: **(а) одно правило от декларации до отказа** — строка сида (4) →
   `assertRule` над probe-снимком (1) → колонка `rules` и снимок (2) → `applicableRules`/`assertConstraintRules`
@@ -15763,7 +15795,14 @@ wc -l $LED/final/area-B*.diff
   `run_action`/`action_*` и не обошёлся хвостом `reconfigures: 'none'`, маска модулей — 12-я точка;
   **(е) снос кода: заменитель ЭКВИВАЛЕНТЕН или просто зелен** — четыре сноса (оракул 11;
   `applyTaskCompletion`/`assertFinancialInvariant` 4; `assertEnvelopeUnique` 12; `assertRunSubject` и половина
-  `assertAssignment` 14): где корпус близнецов, что в `EXPECTED_DIFFS` (Р-К-11) и почему расхождение законно.
+  `assertAssignment` 14): где корпус близнецов, что в `EXPECTED_DIFFS` (Р-К-11) и почему расхождение законно; **(ж) идентичность
+  парой после среза Г (`handoff-b2.md` §4/§9)** — id графа и id актора не смешаны: ключ строк, реестра, замка и формул — `identity.graph`,
+  `actor_user_id` журнала, `sub` и субъект entitlements — `identity.actor`; `withIdentity` — только парой из резолверов (`personal`/`identityOfGrant`
+  в тестах), ни одной пары руками и ни одного приведения `as GraphId`/`as AccountId` вне `identity.ts` (гейты `identity-pair`/`brand-cast` — 0
+  не только в CI, но и глазами: `scripts/` вне tsconfig); серверные функции, которым нужен актор (строка журнала, entitlements, действие
+  от рутины, `undoLast`, `seedRolloverRoutine`), получают `who: Identity`; функции над данными графа (`assertRule`, `resolveAction`,
+  `statusPatch`, `effectiveRegistry`, `setOwnAction`) — `graphId: GraphId`, и это правильно (handoff §4); смешение ролей двух id — находка,
+  а не «нет пары».
 
   **(4) таблица «Области и файлы диффов (-U6)»** — пять строк с числами шага 4 + ссылки на `commits.txt`,
   `stat.txt`, `files-all.txt`.
@@ -15778,7 +15817,7 @@ wc -l $LED/final/area-B*.diff
   — V2 (здесь только выразимость); `{contract}` в `scope` принимается формой и отказывает на исполнении
   (`RULE_SCOPE_UNSUPPORTED`, Р-И-13) — fail-closed, а не дыра; `PROPOSAL_ALLOWED_TOOLS` закрыт четырьмя;
   web-копии `waiting_for` живы (Р-23); кредиты исчерпаны с 02.09 — живой смоук `--dry-run` (В-П-5); `0023` —
-  резерв, третья миграция = СТОП.
+  резерв, третья миграция (`0024`) = СТОП.
 
 
 - [ ] **Шаг 6: пять fable-читателей параллельно.** Каждому — путь к `final-review-pack.md`, свой
@@ -15849,17 +15888,21 @@ wc -l $LED/final/area-B*.diff
   ЗАВИСАЕТ — только `bun run test`:
 ```
 cd $WT && bun run test:perf:volume
+cd $WT && bun run test:perf:explain
+cd $WT && bun run test:perf:graph
+cd $WT && bun run test:perf:graph
+cd $WT && bun run test:perf:graph
+cd $WT && bun run test:perf
 cd $WT && bun run test
 cd $WT && bun run lint
 cd $WT && bun run typecheck
 cd $WT && bun run test:rls
 cd $WT && bun scripts/check-legacy-form.ts --gate
-cd $WT && bun run test:perf
-cd $WT && bun run test:perf:explain
 cd $WT && bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts
 ```
+  Перф-прогоны — строго в порядке `volume` → `explain` → `graph` ×3 → `perf` (Ф-Г-75; `graph` флакует у порога — критерий Р-ИГ-2).
   Хвост со счётчиками и кодами возврата — `final/tail-fixwave.txt` (`TEST_EXIT`, `LINT_EXIT`, `TYPECHECK_EXIT`,
-  `GATE_EXIT`, `EXPLAIN_EXIT`, `LOAD` до и после). Ожидание: все нули, счётчики не ниже базовой линии вехи III;
+  `GATE_EXIT`, `EXPLAIN_EXIT`, `GRAPH_EXIT` ×3, `LOAD` до и после). Ожидание: все нули, счётчики не ниже базовой линии вехи III;
   `test:rls` — pgTAP после `0022`; `--gate` = 0 с шестью маркерами задачи 18. Падение web с «Unhandled Errors»
   при зелёных тестах — класс «флак web» (повтор); серверные таймауты 5000 мс под нагрузкой — класс «хрупкие
   конкурентные» (точечный прогон).
@@ -15903,7 +15946,7 @@ cd $WT && bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts
 **Файлы:**
 - **Изменить** (ОСНОВНОЕ дерево `R = /Users/birzhan/projects/orbis`, ветка `main`, docs-коммитами):
   `render.yaml` — снять строку `autoDeploy: false`, вставленную 0a между `branch: main` (`:12`) и
-  `dockerfilePath` (образец обратного коммита Б-1 — `30b22db`); `docs/prd/04-decision-log.md:450` — строка
+  `dockerfilePath` (образец обратного коммита Б-1 — `30b22db`); `docs/prd/04-decision-log.md:451` — строка
   `- **Статус:**` записи D43: дописать «и в проде».
 - **Создать** (леджер `LED = $R/.superpowers/sdd/2026-09-14-properties-reform-b2`, вне git — `.gitignore:24`):
   `step-prod-b2.md` (сценарий, снимается ПЕРЕД первой командой; образец — `…-b1/step-prod-b1.md`, 41 строка),
@@ -15915,23 +15958,24 @@ cd $WT && bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts
   дату/хеш/номер деплоя, если 18 оставила плейсхолдеры.
 
 **Интерфейсы:**
-- **Consumes** (дословно, HEAD `36060b2`; перед первой командой перечитать — код уехал задачами 1–19):
+- **Consumes** (дословно, HEAD `36060b2`, адреса переснесены на `024782d`; перед первой командой перечитать — код уехал задачами 1–19):
 ```ts
 // scripts/ops.ts
-function readDsn(): string                           // :73 — security find-generic-password -a orbis -s orbis-prod-admin -w (:74-82); значение не логируется (redact :96)
-async function check(): Promise<number>              // :134 — REPEATABLE READ READ ONLY, шесть родов REGISTRY_KINDS + предпросмотр конфликтов; печать «✓/✗ <род>: строк N, расхождений M» :179-181, дельты :184-187, хвост :189-194; возврат 1 при дрейфе ИЛИ конфликтах :202
-async function appliedCount(sql): Promise<number>    // :210 — count(*) FROM drizzle.__drizzle_migrations; MIGRATIONS_FOLDER :207
-async function migrateOp(): Promise<number>          // :241 — «migrate: применено N (в журнале M)» либо «новых миграций нет (в журнале M)»
-async function seedRegistriesOp(): Promise<number>   // :256 — тот же сид, что scripts/seed-registries.ts, но с секретом из Ключницы (докблок :255)
-async function censusBodies(): Promise<number>       // :479 — «роль: … (BYPASSRLS: да)», «тел всего: N» :493
-async function ping(): Promise<number>               // :526 — SELECT version()
-const OPS = { … }                                    // :595-629 — ДЕСЯТЬ операций: check :596, migrate :600, seed-registries :601, coverage :605, census :606, audit-bodies, backfill-body-doc, reset-world :620 (в Б-2 НЕ применяется), ping :624, issue-pat :625 — произвольного SELECT среди них НЕТ
+function readDsn(): string                           // :74 — security find-generic-password -a orbis -s orbis-prod-admin -w (:75-83); значение не логируется (redact :97)
+async function check(): Promise<number>              // :135 — REPEATABLE READ READ ONLY, шесть родов REGISTRY_KINDS + предпросмотр конфликтов; печать «✓/✗ <род>: строк N, расхождений M» :180-182, дельты :185-188, хвост :190-195; возврат 1 при дрейфе ИЛИ конфликтах :203
+async function appliedCount(sql): Promise<number>    // :211 — count(*) FROM drizzle.__drizzle_migrations; MIGRATIONS_FOLDER :208
+async function migrateOp(): Promise<number>          // :242 — «migrate: применено N (в журнале M)» либо «новых миграций нет (в журнале M)»
+async function seedRegistriesOp(): Promise<number>   // :257 — тот же сид, что scripts/seed-registries.ts, но с секретом из Ключницы (докблок :256)
+async function censusBodies(): Promise<number>       // :482 — «роль: … (BYPASSRLS: да)», «тел всего: N» :496
+async function ping(): Promise<number>               // :529 — SELECT version()
+const OPS = { … }                                    // :666-710 — ДВЕНАДЦАТЬ операций: check :667, migrate :671, seed-registries :672, coverage :676, census :677, audit-bodies :681, backfill-body-doc :685, reset-world :689 (в Б-2 НЕ применяется), ping :696, dump :697 и graphs :701 (только чтение, срез Г), issue-pat :705 — произвольного SELECT среди них НЕТ
 // apps/server/src/app.ts — GET /health :216-228: { status:'ok' } + registryDrift (только при 'unknown'/'drift') + routineScheduler
-// apps/server/src/seed/onboarding.ts — seedOwner(db, graphId, clock) :108-119: мир → настройки → seedGardener; задача 10 добавляет туда seedRolloverRoutine
-// apps/server/src/seed/gardener.ts — seedGardener :160-201: проба по PK `SELECT 1 FROM entities WHERE id = seedRoutineId(owner, slug)` :165-169, затем execute с mechanism:'seed'
+// apps/server/src/seed/onboarding.ts — seedOwner(db, who: Identity, clock) :111-122: мир → настройки → seedGardener; задача 10 добавляет туда seedRolloverRoutine
+// apps/server/src/seed/gardener.ts — seedGardener(db, who: Identity, clock?) :161-203: проба по PK `SELECT 1 FROM entities WHERE id = seedRoutineId(who.graph, GARDENER_SLUG)` :166-170, затем execute с mechanism:'seed'
+// версия клиента 0.2.0 (срез Г; пин «APP ≥ MIN» — `scripts/client-version.test.ts`) — Б-2 её НЕ меняет; `ops.ts` +2 операции только-чтения `dump <каталог>`/`graphs` (Г-5) — в прод-процедуре Б-2 не нужны; ранбук §4.3 (перепривязка владельца) переписан Г — вне чек-листа Б-2
 ```
   Прочее: `.github/workflows/backup.yml:12` `workflow_dispatch: {}`, дамп шифруется `BACKUP_PUBLIC_KEY` (`:43`),
-  артефакт `orbis-db-backup` (`:94`), retention 30 дней. `render.yaml:8` `name: orbis`, `:12` `branch: main`,
+  артефакт `orbis-db-backup` (`:95`), retention 30 дней. `render.yaml:8` `name: orbis`, `:12` `branch: main`,
   `:14` `healthCheckPath: /health`, `:19` `PROD_REF = ceovqtdibalxnqkgedrl` (нужен ТОЛЬКО `reset-world` — в Б-2
   не нужен), url `https://orbis-64q4.onrender.com`. Render (из `…-b1/step-prod-b1.md:14`; **перепроверить**
   `mcp__render__list_services`): workspaceId `tea-d93srfq8qa3s73bdfka0`, сервис `orbis` =
@@ -15975,18 +16019,22 @@ cd /Users/birzhan/projects/orbis && git log --oneline properties-reform-b2..orig
 - [ ] **Шаг 3: гейт «CI на `main` зелёный».** `cd $R && gh run list --branch main --limit 3` — последний прогон
   на текущем `HEAD` `main` `success`. Красный CI — СТОП: на прод едет только зелёное в CI (§С9 п. 6, урок D42).
 
-- [ ] **Шаг 4: гейт «локально зелено всё, включая то, чего нет в CI».** Шесть вызовов из `W` (он равен `main`
+- [ ] **Шаг 4: гейт «локально зелено всё, включая то, чего нет в CI».** Десять вызовов из `W` (он равен `main`
   по шагу 2; серверные сьюты делят одну БД — один прогон за раз), **объёмный сьют ПЕРВЫМ** (Ф-Б1-14/64: пин
-  `relations_source_role` хрупок к доле корпуса в `entities`):
+  `relations_source_role` хрупок к доле корпуса в `entities`), перф-прогоны — в порядке `volume` → `explain` → `graph` ×3 → `perf` (Ф-Г-75):
 ```
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:volume
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:explain
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:graph
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:graph
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf:graph
+cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:rls
-cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run test:perf
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun scripts/check-legacy-form.ts --gate
 cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun run --filter @orbis/web build && bun scripts/check-lazy-chunks.ts
 ```
-  Ожидание: EXIT 0 ×6; `test:rls` — pgTAP после `0022` (колонки, не таблицы: план pgTAP не двигался);
+  Ожидание: EXIT 0 ×10; `test:rls` — pgTAP после `0022` (колонки, не таблицы: `plan(160)` не двигался);
   `test:perf:volume` — гейт §С8-15 в новой редакции «движок == снимок» (оракула больше нет, задача 11);
   `--gate` = 0 совпадений с шестью маркерами задачи 18. Числа — сразу в `progress.md`: они идут в колонку
   «Исход» приёмки. Прогон шага 11 задачи 19 засчитывается, если HEAD `main` с тех пор не двигался, — тогда
@@ -15997,19 +16045,19 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && bun r
   СТОП: фикс идёт коммитом в `main` и возвращает процедуру на шаг 3.
 
 - [ ] **Шаг 6: предпроверка прод-скрипта — сид и его help знают ШЕСТЬ реестров.** Прод-операция, которая врёт
-  про свой состав, хуже отсутствующей. На HEAD `ops.ts:603` говорит «upsert **пяти** реестров: свойства, роли,
-  аспекты, контракты, подписки», `:598` — «шесть родов; **действия — только по id**»; Б-2 сеет действия и
+  про свой состав, хуже отсутствующей. На HEAD `scripts/ops.ts:674` говорит «upsert **пяти** реестров: свойства, роли,
+  аспекты, контракты, подписки», `:669` — «шесть родов; **действия — только по id**»; Б-2 сеет действия и
   сверяет их по колонкам. Правку делает задача 6; здесь — проверка, что доехала:
 ```
-cd /Users/birzhan/projects/orbis && grep -n "help:" scripts/ops.ts | head -12
+cd /Users/birzhan/projects/orbis && grep -n "help:" scripts/ops.ts | head -14
 cd /Users/birzhan/projects/orbis && grep -n "BUILTIN_ACTION_DEFS\|action_definitions" apps/server/src/db/seed-registries.ts | head -20
 ```
-  Ожидание: `:603` называет действия, `:598` не содержит «только по id», `seedRegistriesReport` печатает
+  Ожидание: `:674` называет действия, `:669` не содержит «только по id», `seedRegistriesReport` печатает
   счётчик действий. Не правлен — СТОП: правка одной строкой докатывается в `main` ДО прод-команд.
 
 - [ ] **Шаг 7: `ping` — связность прода.** Голым вызовом (ловушка 2): `bun scripts/ops.ts ping`.
   Ожидание: `PostgreSQL 17.x …`, EXIT 0. «Секрет `orbis-prod-admin` не найден в Ключнице» — DSN не положен
-  (`ops.ts:85-90` печатает как; `security add-generic-password` выполняет **владелец**, не ассистент).
+  (`scripts/ops.ts:87-92` печатает как; `security add-generic-password` выполняет **владелец**, не ассистент).
 
 - [ ] **Шаг 8: `check` ДО процедуры — снять картину дрейфа поимённо.** `bun scripts/ops.ts check`.
   Ожидание (НЕ отказ, EXIT 1 закономерен): **`✗ properties`, `✗ aspects`, `✗ roles` — строки «расходятся»**, а
@@ -16020,7 +16068,7 @@ cd /Users/birzhan/projects/orbis && grep -n "BUILTIN_ACTION_DEFS\|action_definit
   (`finance/plan-to-fact`, `planner/postpone_overdue` — `missing`). Если задача 13 сняла `rollover` из схемы
   подписки Budget, `✗ subscriptions` даст одну расходящуюся строку — это ожидаемо и обязано стоять в
   `step-prod-b2.md` ЗАРАНЕЕ, а не объясняться постфактум. Дельты — `конфликтов слияния 0`. Вывод целиком в
-  `progress.md`. **Любое расхождение рода `extra`** — СТОП: пересев лишние строки не убирает (`ops.ts:191-192`).
+  `progress.md`. **Любое расхождение рода `extra`** — СТОП: пересев лишние строки не убирает (`scripts/ops.ts:193-194`).
   Чистый `check` здесь — тоже СТОП: значит сид уже прогнали.
 
 - [ ] **Шаг 9: `census` ДО.** `bun scripts/ops.ts census` — `роль: postgres (BYPASSRLS: да)`, `тел всего: N`;
@@ -16052,7 +16100,7 @@ cd /Users/birzhan/projects/orbis/.claude/worktrees/properties-reform-b2 && ORBIS
   Ожидание: `свойств 77, ролей 11, аспектов 13, контрактов 6, подписок 2, действий 2; версия system-реестров
   N+1; дельт слито 0`. Числа строк — те же, что в Б-1 (`77/11/13/6/2`): правила лежат ВНУТРИ строк, счёт строк
   не меняется; расхождение — не отказ, но требует объяснения в отчёте. `КОНФЛИКТЫ СЛИЯНИЯ` быть не должно;
-  появились — они уже разрешены сидом и лежат системной заметкой в глобальном треде (`ops.ts:195-200`), записать
+  появились — они уже разрешены сидом и лежат системной заметкой в глобальном треде (`scripts/ops.ts:197-202`), записать
   поимённо. **Почему сид, а не `reset-world`:** пустая колонка `rules` у встроенных строк — дрейф определения,
   а не мира; пересев реестра его лечит, граф, журнал и настройки остаются нетронутыми.
 
@@ -16105,7 +16153,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" && git push origin mai
   | правило-переход | `mcp__orbis__entity_update`: задача → `done`, затем обратно в `active` | `orbis/completed_at` проставлен правилом `task_completed_at` и снят при уходе |
   | действие | `mcp__orbis__run_action` `action: 'finance/plan-to-fact'`, `self` = планируемая транзакция, `params.occurred_on` | `orbis/planned: false` и дата — одним действием; карточка «Действие «План → факт»»; `undo_last` откатывает |
   | уровень по шагам | то же действие от рутины либо через чат | уровень посчитан по шагам (`touches_money` декларации), а не по имени тула |
-  | тулы реестра | список тулов MCP-клиента | **46** тулов в скоупе `full` (реестр — 51: минус 3 `internalOnly`, минус 2 `routineOnly`; `mcp/server.ts:79-81`); `run_action` и `action_planner_postpone_overdue` присутствуют |
+  | тулы реестра | список тулов MCP-клиента | **46** тулов в скоупе `full` (реестр — 51: минус 3 `internalOnly`, минус 2 `routineOnly`; `mcp/server.ts:84-86`); `run_action` и `action_planner_postpone_overdue` присутствуют |
   | `/health` | `curl` | `status: ok`, без `registryDrift` |
   Сценарии, требующие чата с моделью, при отсутствии кредитов помечаются «НЕ ВЫПОЛНЕН по кредитам» — MCP-путь
   заменяет их лишь частично, и это записывается честно. **Модуль Финансы на проде НЕ выключать** (web-половина
@@ -16138,7 +16186,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" && git push origin mai
   Пункт, чей носитель красный или невыполним (кредиты), пишется как **НЕ ВЫПОЛНЕН** с причиной и уходит в
   остатки владельцу — «зелёный по умолчанию» здесь запрещён (урок §С8-12 среза А).
 
-- [ ] **Шаг 20: статус D43.** `docs/prd/04-decision-log.md`, строка `- **Статус:**` записи D43 (`:450` на
+- [ ] **Шаг 20: статус D43.** `docs/prd/04-decision-log.md`, строка `- **Статус:**` записи D43 (`:451` на
   HEAD; искать `grep -n '^- \*\*Статус:\*\* принята владельцем 2026-08-26'`). Проверка ДО правки:
   `grep -c 'срез Б-2 «ядро» реализован' docs/prd/04-decision-log.md` = **1** (правка задачи 18); `0` — доложить
   координатору и не править. Дописать в конец предложения задачи 18:
@@ -16161,8 +16209,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" && git push origin mai
   нумерованным списком из `ledger/remainders-b2.md` (задача 18); заведомо в нём: кредиты провайдеров (живой
   смоук и сценарии «через AI»); шесть именованных остатков правила 5 §С1-4 (Р-К-17); `assign_level` в живом
   конвейере — V2; Е-6 `$after` — именованный остаток §С11; рутина не может предложить действие
-  (`PROPOSAL_ALLOWED_TOOLS`); web-копии `waiting_for` — «страницы, срез 1»; пять эррат формы под ревизию 5
-  спеки (В-П-1). **(4) Уроки сессии** — что поймало финальное ревью и не поймали поштучные гейты, какие ловушки
+  (`PROPOSAL_ALLOWED_TOOLS`); web-копии `waiting_for` — «страницы, срез 1» (ревизия 5 спеки с восемью эрратами формы
+  внесена 20.09, `cb6afc6`, — не остаток). **(4) Уроки сессии** — что поймало финальное ревью и не поймали поштучные гейты, какие ловушки
   обвязки повторились, какие рулинги пришлось выдать на ходу.
 
 - [ ] **Шаг 22: уборка и доклад.** Worktree снимается, ветка ОСТАЁТСЯ (на её SHA ссылается весь леджер):
@@ -16240,17 +16288,28 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" && git push origin mai
   честность»): 6 Important, 7 Minor; ложных находок — 0. Все закрыты до сдачи плана: код дописан авторами кластеров в свои задачи
   (`rulesFieldOf` через `safeParse`, `checkExprAgainst` для литерала `default`, область правила записи `derefDenied` у всех шаблонов кроме
   `assign_level`, `expectedActions()` в дрейфе, `dispatch-common.ts` без цикла импортов, `TargetRow` += `title/archived/created_at`,
-  `actionCallFacts` вместо шпионов, пересдачи `confirmation.test.ts:1087-1105`/`registry.test.ts:219-247`, тела шести функций задачи 16,
+  `actionCallFacts` вместо шпионов, пересдачи `confirmation.test.ts:1087-1105`/`registry.test.ts:221-249`, тела шести функций задачи 16,
   каталог §Б6-6 в описании `run_action`, семь имён грепа гейта из 0e, `offered_by[].when` как E-позиция); текст — координатором
   (порядок 0b → 0c → 0d → 0e и 13 → 14, DDL `over`, В-П-1(е) §С8-15, 46 тулов у MCP `full`, маппинг §С8-25). Отчёты —
   `review-plan-fable.md`, `review-plan-opus.md`; рулинги — Р-К-86…Р-К-89.
 - **Правка 20.09 (решения владельца В-П-1…8 и предпосылка среза Г).** Леджер переведён поверх среза Г механически и проверен
-  грепом (миграция `0022`/резерв `0023`, `plan(143)`, `graph_id`/`graphId`, пара `Identity` в `withIdentity`/`ExecuteRequest`/`ToolCallCtx`,
-  `mintGraph`/`accountOf` в тестах; серверные функции получают `who: Identity` параметром) — Р-К-90; остаточный греп старых имён по
+  грепом (миграция `0022`/резерв `0023`, `plan(160)`, `graph_id`/`graphId`, пара `Identity` в `withIdentity`/`ExecuteRequest`/`ToolCallCtx`,
+  `mintGraph`/`personal` в тестах; серверные функции получают `who: Identity` параметром) — Р-К-90; остаточный греп старых имён по
   плану — ноль, сторож в задаче 0a (шаг 1а). Добавлена задача 14а (контракт делегирования и запись классом — Р-И-38/39), задача 14
   переписана под пару правил `waiting_for` и снос трёх копий, задача 12 — `undo: 'check'` у конверта с тестом отката при дубле,
   раздел «Вопросы владельцу» заменён «Решениями владельца». Числа §С8/шаблонов/кодов после правки перепроверены скриптом при сборке.
-- **Известные ограничения плана.** Численные базовые линии (сьюты, p95, числа сида) не проставлены — фиксируются прогоном в 0a;
+- **Правка 21.09 (срез Г исполнен, `handoff-b2.md` леджера Г).** Адреса `file:line` переснесены на `024782d` по содержимому строк
+  (скрипт сопоставления 36060b2 → HEAD: 216 сдвигов механически, 31 адрес вручную — строки, изменённые переименованием); литералы пары
+  `{ actor: accountOf(g), graph: g }` (74) заменены `personal(g)` (класс `Identity` закрыт — Р-ИГ-11), `plan(143)` → `plan(160)` (9), базовая
+  линия после Г вписана в 0a ориентиром, перф-прогоны в 0a/19/20 выстроены в порядок Ф-Г-75, в ограничения добавлены три CI-гейта имён,
+  ловушки Bun, `0024` = СТОП, `WORLD_TABLES`; финальное ревью (19) получило линзу «id графа и id актора не смешаны; `withIdentity` — только
+  парой». Спека — ревизия 5 (`cb6afc6`), адреса спеки в черновиках — по номерам решений. Рулинг — Р-К-93. Точечное ревью Fable
+  (`review-plan-fable-3.md`, 21.09): I-1 — типы ключа графа в сигнатурах `string` → `GraphId` (68 строк, импорты в сниппетах); I-2 — «голые»
+  адреса `:NNN` под заголовком файла (681 сдвиг скриптом по содержимому строк + ручные по строкам с переименованием); M-1…M-9 (D43 под
+  ревизию 5, хендофф 98 строк, базовая линия после Г, миграции до `0021`, база финального диффа ≥ `024782d`, линза (ж) без ложной
+  находки, `WORLD_TABLES`, комментарии-пары под гейт `identity-pair`, §9 хендоффа в задаче 20) — закрыты.
+- **Известные ограничения плана.** Численные базовые линии (сьюты, p95, числа сида) — ориентир после Г из `handoff-b2.md` §7, точные
+  числа фиксируются прогоном в 0a;
   состав дрейфа на проде дописывается по факту задачи 13 (Р-К-85); все три серверные копии `unset waiting_for` снимаются парой правил (В-П-8 (в), задачи 14а/14);
   половина §С8-15 «≤ 2× оракула» уходит с оракулом (Р-К-44, эррата спеки в В-П-1).
-- **Объём:** 26 задач (0a–0e, 1–14, 14а, 15–20), 410 шагов TDD, 366 блоков кода; строк в разделах задач — 15967 (самые крупные: 7 — 1268, 6 — 1262, 14a — 1077, 1 — 929, 10 — 896).
+- **Объём:** 26 задач (0a–0e, 1–14, 14а, 15–20), 410 шагов TDD, 366 блоков кода; строк в разделах задач — 15997 (самые крупные: 7 — 1270, 6 — 1262, 14a — 1077, 1 — 929, 10 — 896).
