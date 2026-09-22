@@ -2,7 +2,8 @@
 // ГЕЙТ ВЕХИ I среза Б-2 (рамка §1, §А7-2): два доменных инварианта живут СТРОКАМИ СИДА каталога правил,
 // код обоих снесён, тот же шаблон на аспекте владельца даёт то же поведение без строки кода под него, а
 // строка с `enabled: false` инвариант выключает. Четыре утверждения ниже помечены и сегодня ложны; все
-// четыре зеленит задача 4 (строки сида + снос кода), пометки снимает задача 5.
+// четыре зеленит задача 4 (строки сида + снос кода; сценарий 3 — паритетом с системным близнецом, хотя
+// строки владельца движок обслуживает уже с задачи 3 — см. его комментарий), пометки снимает задача 5.
 //
 // ПОМЕТКА НИГДЕ НЕ НАЗВАНА ПОЛНЫМ ИМЕНЕМ в прозе: сторож «пометок вне списка нет» (`gate-c8-18.test.ts`)
 // ищет это имя по `apps`/`packages`/`scripts`, и строка с ним сделала бы сторожа вечно красным.
@@ -14,7 +15,12 @@ import type { RuleDefinitionInput } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { StructuredError } from '../src/errors';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../src/executor/types';
-import { GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS } from './fixtures/gate-aspects';
+import {
+  GATE_FIN_ASPECT,
+  GATE_GREP_PATHSPEC,
+  GATE_PLAIN_ASPECT,
+  GATE_PROPS,
+} from './fixtures/gate-aspects';
 import {
   adminDb,
   appDb,
@@ -145,24 +151,45 @@ async function readSystemRules(aspectId: string): Promise<string> {
  * останется в процессном кеше на прежнем ключе (`registry/cache.ts`), и правку никто не увидит.
  * Версия двигается в ОБА направления: и на выключении, и на возврате.
  */
-async function writeSystemRules(aspectId: string, value: SQL): Promise<void> {
+async function writeSystemRules(
+  aspectId: string,
+  value: SQL,
+  requiredRule?: string,
+): Promise<void> {
+  // `requiredRule` — строка обязана НЕСТИ это правило: иначе UPDATE не трогает ничего, и отказ говорит
+  // причину словами, а не выключает несуществующее правило молча (тест 4 тогда красен «ни о чём»).
+  const guard =
+    requiredRule === undefined
+      ? sql``
+      : sql` AND rules @> jsonb_build_array(jsonb_build_object('id', ${requiredRule}::text))`;
   const { db: adb, client: ac } = adminDb();
   try {
     const rows = (await adb.execute(sql`UPDATE aspect_definitions SET rules = ${value}
-      WHERE id = ${aspectId} AND graph_id IS NULL RETURNING id`)) as unknown as unknown[];
-    if (rows.length !== 1) throw new Error(`системной строки ${aspectId} нет — сид не прошёл`);
+      WHERE id = ${aspectId} AND graph_id IS NULL${guard} RETURNING id`)) as unknown as unknown[];
+    if (rows.length !== 1) {
+      throw new Error(
+        requiredRule === undefined
+          ? `системной строки ${aspectId} нет — сид не прошёл`
+          : `правила ${requiredRule} в системной строке ${aspectId} нет — строк сида задачи 4 ещё нет`,
+      );
+    }
     await adb.execute(sql`UPDATE registry_system SET version = version + 1 WHERE id = 1`);
   } finally {
     await ac.end();
   }
 }
-/** Выключить одно правило системной строки (`enabled: false`), остальные правила строки — как лежат. */
+/**
+ * Выключить одно правило системной строки (`enabled: false`), остальные правила строки — как лежат.
+ * `COALESCE`: после 0022 и до сида задачи 4 у строки `rules = '[]'`, и `jsonb_agg` по пустому набору
+ * дал бы NULL — непрозрачный отказ NOT NULL вместо «правила нет» (его и так отсекает `requiredRule`).
+ */
 const disableSystemRule = (aspectId: string, ruleId: string): Promise<void> =>
   writeSystemRules(
     aspectId,
-    sql`(SELECT jsonb_agg(
+    sql`COALESCE((SELECT jsonb_agg(
            CASE WHEN r->>'id' = ${ruleId} THEN jsonb_set(r, '{enabled}', 'false'::jsonb) ELSE r END)
-         FROM jsonb_array_elements(rules) AS r)`,
+         FROM jsonb_array_elements(rules) AS r), '[]'::jsonb)`,
+    ruleId,
   );
 /**
  * Вернуть системную строку к снимку `readSystemRules` КАК БЫЛА. Не «включить обратно»: `jsonb_set(…, true)`
@@ -298,12 +325,21 @@ describe('гейт вехи I: инвариант только декларац�
     expect('orbis/completed_at' in back.props).toBe(false);
   });
 
-  // Зеленит задача 4: движок читает строки владельца так же, как системные. Сегодня красен на самом
-  // севе — `seedCustomAspect` со `spec.rules` пишет колонку `rules`, которой до 0022 нет. В этом и смысл
-  // гейта: аспект владельца получает доменный инвариант ДЕКЛАРАЦИЕЙ, кода под `user/gate-*` не будет.
+  // Зеленит задача 4 — НЕ задача 3, хотя движок задачи 3 уже исполняет строки правил владельца
+  // (C-правило даёт INVARIANT с `invariant` = id строки, T-правило ставит и снимает момент). Рамка §1
+  // требует ТОТ ЖЕ отказ, что у системного близнеца, а системный отказ до задачи 4 ещё идёт из кода
+  // (`normalize.ts`) и несёт один ключ `invariant`: множество ключей `details` и `rule_template` у двух
+  // отказов расходятся, и паритет ложен, пока строка сида не заменит код (Ф-Б2-13). Сегодня тест красен
+  // раньше — на самом севе: `seedCustomAspect` со `spec.rules` пишет колонку `rules`, которой до 0022 нет.
+  // В этом и смысл гейта: аспект владельца получает доменный инвариант ДЕКЛАРАЦИЕЙ, кода под
+  // `user/gate-*` не будет.
   test.failing('3. те же два шаблона на аспектах владельца работают без строки кода под них', () => {
     const { refused, closed, reopened } = taken(ownRules, 'аспекты владельца со строками правил');
     expect(refused.code).toBe('INVARIANT');
+    const own = refused.details as Record<string, unknown>;
+    const sys = taken(sysRequires, 'financial без occurred_on').details as Record<string, unknown>;
+    expect(Object.keys(own).sort()).toEqual(Object.keys(sys).sort());
+    expect(own.rule_template).toBe(sys.rule_template);
     expect((refused.details as Record<string, unknown>).invariant).toBe('gate_own_requires_moment');
     expect(closed.props[GATE_PROPS.plainAt]).toBe(closed.updatedAt);
     expect(GATE_PROPS.plainAt in reopened.props).toBe(false);
@@ -321,9 +357,10 @@ describe('гейт вехи I: инвариант только декларац�
 /**
  * ЗАГОТОВКА греп-доказательства вехи I «кода под инвариант нет» — исполняет ЗАДАЧА 5.
  *
- * Пути — дословно семь из `GATE_GREP_PATHSPEC` (`fixtures/gate-aspects.ts:27-35`), подмножество
- * `SEARCH_PATHSPEC` (`scripts/check-legacy-form.ts:67-76`): списки обязаны совпадать, иначе
- * «доказано» задачей 5 и «проверено» сторожем Б-1 меряют разное.
+ * Пути — САМ `GATE_GREP_PATHSPEC` (`fixtures/gate-aspects.ts:27-35`), а не его копия; он же —
+ * подмножество `SEARCH_PATHSPEC` (`scripts/check-legacy-form.ts:67-76`). Списки обязаны совпадать, иначе
+ * «доказано» задачей 5 и «проверено» сторожем Б-1 меряют разное, — поэтому совпадение держит ссылка, а
+ * не аккуратность переписчика.
  *
  * Команда (из корня worktree):
  *   git grep -n -a -P -e 'assertFinancialInvariant|assertFinancial\b|applyTaskCompletion|financialRecurringNeedsDerivedFrom|hasScheduleRecurrence|hasIncomingDerivedFrom|declaredDerivedFromTargets' -- \
@@ -346,13 +383,7 @@ export const GATE_B2_GREP_NAMES = [
   'declaredDerivedFromTargets',
 ] as const;
 export const GATE_B2_GREP_PATTERN = GATE_B2_GREP_NAMES.join('|');
-export const GATE_B2_GREP_PATHSPEC = [
-  'apps/server/src',
-  'apps/server/test',
-  'apps/server/perf',
-  'packages/shared/src',
-  'apps/web/src',
-  'scripts',
-  ':!*.snap',
-] as const;
-export const GATE_B2_GREP_ALLOWED = ['apps/server/test/gate-b2.test.ts'] as const;
+export const GATE_B2_GREP_PATHSPEC: readonly string[] = GATE_GREP_PATHSPEC;
+/** Тип — `readonly string[]`, как у `SEARCH_PATHSPEC`, а не кортеж литералов: задача 5 спрашивает
+ *  `GATE_B2_GREP_ALLOWED.includes(path)` с `path: string`, и у кортежа это TS2345. */
+export const GATE_B2_GREP_ALLOWED: readonly string[] = ['apps/server/test/gate-b2.test.ts'];
