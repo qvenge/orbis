@@ -349,6 +349,23 @@ const NUMERIC_TEXT_RE = /^-?\d+(?:\.\d+)?$/;
 /** Форма ISO-значения: ДЕНЬ (`YYYY-MM-DD`) и МОМЕНТ (`YYYY-MM-DDT…`) — по ним `compare` и `calendarHead` различают род (Р-33). */
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MOMENT_RE = /^\d{4}-\d{2}-\d{2}T/;
+/**
+ * Момент С ЯВНЫМ смещением (`Z` или `±hh:mm`) — только такой однозначно переводится в инстант:
+ * `new Date('…T10:00:00')` без смещения читается в зоне ПРОЦЕССА, и ответ зависел бы от машины.
+ * Схема значения `timestamp` смещение требует (`value-schema.ts`), `orbis/updated_at` области —
+ * всегда `…Z`; момент без смещения (литерал формулы) остаётся при прежнем текстовом правиле.
+ */
+const MOMENT_WITH_OFFSET_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** Знак сравнения двух МОМЕНТОВ по инстанту; `undefined` — пара не из двух моментов со смещением. */
+function instantSign(a: string, b: string): -1 | 0 | 1 | undefined {
+  if (!MOMENT_WITH_OFFSET_RE.test(a) || !MOMENT_WITH_OFFSET_RE.test(b)) return undefined;
+  const ia = Date.parse(a);
+  const ib = Date.parse(b);
+  if (Number.isNaN(ia) || Number.isNaN(ib)) return undefined;
+  return ia < ib ? -1 : ia > ib ? 1 : 0;
+}
 
 function numericLike(value: ExprValue): value is string | number {
   return typeof value === 'number' || (typeof value === 'string' && NUMERIC_TEXT_RE.test(value));
@@ -402,10 +419,15 @@ function compare(
     if (DATE_ONLY_RE.test(a) && MOMENT_RE.test(b)) b = calendarHead(b, timeZone);
     else if (MOMENT_RE.test(a) && DATE_ONLY_RE.test(b)) a = calendarHead(a, timeZone);
   }
+  // МОМЕНТ ПРОТИВ МОМЕНТА — по инстанту, а не текстом: `…T10:00:00.001Z` позже, чем
+  // `…T12:00:00+03:00` (09:00Z), хотя текстом «меньше». SQL сравнивает `timestamptz` так же, а T/C-правила
+  // сравнивают `{prop:'orbis/updated_at'}` (всегда `Z`) с моментами, которые хранятся как пришли.
+  const instant = typeof a === 'string' && typeof b === 'string' ? instantSign(a, b) : undefined;
   const sign =
-    numericLike(a) && numericLike(b)
+    instant ??
+    (numericLike(a) && numericLike(b)
       ? guarded(`сравнение '${op}'`, () => decCmp(String(a), String(b)))
-      : cmpText(String(a), String(b));
+      : cmpText(String(a), String(b)));
   switch (op) {
     case '=':
       return sign === 0;
@@ -479,14 +501,24 @@ function applyOp(
       // `Object.hasOwn` — имя набора приходит из декларации, и цепочка прототипа не должна
       // отвечать за `constructor` (тот же довод, что у `contractSetKind`).
       if ('class' in left && 'const' in right && typeof right.const === 'string') {
-        const sets = scope.reg?.contracts.get(left.class.contract)?.sets;
+        const where = { contract: left.class.contract, set: right.const };
+        if (scope.reg === undefined) {
+          return fail(
+            'EXPR_BACKEND_UNSUPPORTED',
+            `имя набора '${right.const}': в этой области нет реестра контрактов, набор не разрешить`,
+            where,
+          );
+        }
+        const sets = scope.reg.contracts.get(left.class.contract)?.sets;
         const set =
           sets != null && Object.hasOwn(sets, right.const) ? sets[right.const] : undefined;
         if (!Array.isArray(set)) {
           return fail(
             'EXPR_BACKEND_UNSUPPORTED',
-            `набор '${right.const}' задан не перечислением классов`,
-            { contract: left.class.contract, set: right.const },
+            set === undefined
+              ? `набора '${right.const}' у контракта ${left.class.contract} нет`
+              : `набор '${right.const}' задан предикатом — его считает SQL-бэкенд`,
+            where,
           );
         }
         const cls = ev(left, scope, d);
@@ -634,7 +666,8 @@ function dateTextOf(value: ExprValue, what: string): string {
  * `recurring/materialize` в горячий интерпретатор притащил бы модуль материализации ради строки Intl.
  */
 function calendarHead(value: string, timeZone?: string): string {
-  if (timeZone === undefined || !MOMENT_RE.test(value)) return value.slice(0, 10);
+  // Без смещения момент не переводится однозначно (`MOMENT_WITH_OFFSET_RE`) — день его головы.
+  if (timeZone === undefined || !MOMENT_WITH_OFFSET_RE.test(value)) return value.slice(0, 10);
   const at = new Date(value);
   return Number.isNaN(at.getTime())
     ? value.slice(0, 10)

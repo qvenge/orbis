@@ -748,3 +748,44 @@ describe('область ЗАПИСИ: класс, рёбра, величины 
     expect(reasonOf(() => evalExpr({ prop: 'orbis/recurrence' }, s))).toBe('VALIDATION/EXPR_VALUE');
   });
 });
+
+describe('зона владельца в календаре и сравнение моментов (ревью задачи 3)', () => {
+  // Момент 23:30Z 15 мая — в Бангкоке (+07) это уже 16-е. Без зоны — день собственного смещения.
+  const AT = { const: '2026-05-15T23:30:00Z' } as const;
+  const DAY = { const: '2026-05-16' } as const;
+  const bkk = scopeOf({ timeZone: 'Asia/Bangkok' });
+  test('date_diff: день момента — в зоне владельца (Р-33), без зоны — день смещения', () => {
+    expect(evalExpr({ date_diff: [AT, DAY] }, bkk)).toBe(0);
+    expect(evalExpr({ date_diff: [AT, DAY] }, scopeOf())).toBe(1);
+  });
+  test('days_inclusive: то же приведение с обеих сторон', () => {
+    expect(evalExpr({ days_inclusive: [AT, DAY] }, bkk)).toBe(1);
+    expect(evalExpr({ days_inclusive: [AT, DAY] }, scopeOf())).toBe(2);
+  });
+  test('момент против момента — по инстанту, а не текстом (разные смещения)', () => {
+    const later = { const: '2026-07-04T10:00:00.001Z' } as const;
+    const earlier = { const: '2026-07-04T12:00:00+03:00' } as const; // 09:00Z
+    expect(evalExpr({ op: '>', args: [later, earlier] }, scopeOf())).toBe(true);
+    expect(
+      evalExpr(
+        {
+          op: '=',
+          args: [{ const: '2026-07-04T10:00:00Z' }, { const: '2026-07-04T13:00:00+03:00' }],
+        },
+        scopeOf(),
+      ),
+    ).toBe(true);
+  });
+  test('имя набора без реестра в области — отказ называет причину честно', () => {
+    let message = '';
+    try {
+      evalExpr(
+        { op: 'in', args: [{ class: { contract: 'orbis/completable' } }, { const: 'open' }] },
+        scopeOf(),
+      );
+    } catch (e) {
+      message = e instanceof ExecError ? e.message : String(e);
+    }
+    expect(message).toContain('нет реестра контрактов');
+  });
+});
