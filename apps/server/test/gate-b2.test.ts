@@ -11,7 +11,7 @@
 // поглощаться, зелёный перестаёт валить сьют. Поэтому походы собраны в `beforeAll`, тела читают итог.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { RuleDefinitionInput } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
+import { type SQL, sql } from 'drizzle-orm';
 import type { StructuredError } from '../src/errors';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../src/executor/types';
 import { GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS } from './fixtures/gate-aspects';
@@ -122,31 +122,55 @@ const GATE_PLAIN_RULED: CustomAspectSpec = { ...GATE_PLAIN_ASPECT, rules: [RULE_
 let ownRules: Collected<{ refused: StructuredError; closed: WireEntity; reopened: WireEntity }>;
 
 /**
- * Переключить `enabled` у системной строки правила и сдвинуть системную версию реестра — иначе снимок
- * останется в процессном кеше на прежнем ключе (`registry/cache.ts`), и «выключили» никто не увидит.
+ * Снимок колонки `rules` системной строки аспекта — ТЕКСТОМ jsonb, а не разобранным значением: текст
+ * канонический, и запись его обратно (`restoreSystemRules`) возвращает строку ровно такой, какой её
+ * положил сид, без круга через JS (числа, порядок ключей) и без лишних ключей.
  */
-async function setSystemRuleEnabled(
-  aspectId: string,
-  ruleId: string,
-  enabled: boolean,
-): Promise<void> {
+async function readSystemRules(aspectId: string): Promise<string> {
   const { db: adb, client: ac } = adminDb();
   try {
-    const rows = (await adb.execute(sql`
-      UPDATE aspect_definitions SET rules = (
-        SELECT jsonb_agg(
-          CASE WHEN r->>'id' = ${ruleId}
-               THEN jsonb_set(r, '{enabled}', ${JSON.stringify(enabled)}::jsonb)
-               ELSE r END)
-        FROM jsonb_array_elements(rules) AS r)
-      WHERE id = ${aspectId} AND graph_id IS NULL
-      RETURNING id`)) as unknown as unknown[];
+    const rows = (await adb.execute(sql`SELECT rules::text AS rules FROM aspect_definitions
+      WHERE id = ${aspectId} AND graph_id IS NULL`)) as unknown as Array<{ rules: string }>;
+    const row = rows[0];
+    if (rows.length !== 1 || row === undefined) {
+      throw new Error(`системной строки ${aspectId} нет — сид не прошёл`);
+    }
+    return row.rules;
+  } finally {
+    await ac.end();
+  }
+}
+/**
+ * Переписать колонку `rules` системной строки и сдвинуть системную версию реестра — иначе снимок
+ * останется в процессном кеше на прежнем ключе (`registry/cache.ts`), и правку никто не увидит.
+ * Версия двигается в ОБА направления: и на выключении, и на возврате.
+ */
+async function writeSystemRules(aspectId: string, value: SQL): Promise<void> {
+  const { db: adb, client: ac } = adminDb();
+  try {
+    const rows = (await adb.execute(sql`UPDATE aspect_definitions SET rules = ${value}
+      WHERE id = ${aspectId} AND graph_id IS NULL RETURNING id`)) as unknown as unknown[];
     if (rows.length !== 1) throw new Error(`системной строки ${aspectId} нет — сид не прошёл`);
     await adb.execute(sql`UPDATE registry_system SET version = version + 1 WHERE id = 1`);
   } finally {
     await ac.end();
   }
 }
+/** Выключить одно правило системной строки (`enabled: false`), остальные правила строки — как лежат. */
+const disableSystemRule = (aspectId: string, ruleId: string): Promise<void> =>
+  writeSystemRules(
+    aspectId,
+    sql`(SELECT jsonb_agg(
+           CASE WHEN r->>'id' = ${ruleId} THEN jsonb_set(r, '{enabled}', 'false'::jsonb) ELSE r END)
+         FROM jsonb_array_elements(rules) AS r)`,
+  );
+/**
+ * Вернуть системную строку к снимку `readSystemRules` КАК БЫЛА. Не «включить обратно»: `jsonb_set(…, true)`
+ * оставил бы явный `enabled: true` там, где сид его не писал, и строка разошлась бы с сидом — сверка
+ * дрейфа реестра и сид-тесты, идущие в том же процессе после этого файла, увидели бы чужую правку.
+ */
+const restoreSystemRules = (aspectId: string, snapshot: string): Promise<void> =>
+  writeSystemRules(aspectId, sql`${snapshot}::jsonb`);
 /** Попытка завести встроенную трату без `occurred_on`: `true` — инвариант молчит, `false` — отказал. */
 const finAttempt = async (title: string): Promise<boolean> =>
   (await run('entity_create', { title, tags: [], props: FIN_PROPS, aspects: ['orbis/financial'] }))
@@ -222,14 +246,17 @@ beforeAll(async () => {
   // Сценарий 4 — мутация гейта: системная строка правила с `enabled: false` выключает инвариант.
   disabled = await collect(async () => {
     const before = await finAttempt('Мутация гейта: до выключения');
-    await setSystemRuleEnabled('orbis/financial', 'financial_requires_occurred_on', false);
+    // Снимок ДО правки: вернуть строку обязаны ровно такой, какой её положил сид (см. `restoreSystemRules`).
+    const snapshot = await readSystemRules('orbis/financial');
     let after: boolean;
     try {
+      await disableSystemRule('orbis/financial', 'financial_requires_occurred_on');
       after = await finAttempt('Мутация гейта: строка выключена');
     } finally {
-      // Возврат — в finally: строка одна на всю локальную базу, и оставить её выключенной значит
-      // уронить каждый следующий сьют, который трогает финансы.
-      await setSystemRuleEnabled('orbis/financial', 'financial_requires_occurred_on', true);
+      // Возврат — в finally и ПОСЛЕ снимка, даже если выключение упало на полпути: строка одна на всю
+      // локальную базу, и оставить её выключенной (или с чужим видом) значит уронить каждый следующий
+      // сьют, который трогает финансы или сверяет реестр с сидом.
+      await restoreSystemRules('orbis/financial', snapshot);
     }
     return { before, after, again: await finAttempt('Мутация гейта: строка возвращена') };
   });
