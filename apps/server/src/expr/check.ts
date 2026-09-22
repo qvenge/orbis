@@ -22,6 +22,7 @@
  */
 import {
   checkExpr,
+  checkExprAgainst,
   EXPR_TREE_DEPTH_CAP,
   ExprCheckError,
   type ExprScope,
@@ -30,7 +31,13 @@ import {
 } from '@orbis/shared/expr';
 import { ExecError } from '../errors';
 
-export function assertExprChecked(expr: unknown, scope: ExprScope): ExprType {
+/**
+ * `want` — ожидаемый тип ПОЗИЦИИ (значение T-правила против типа свойства-цели, §Б4-3): с ним корневой
+ * литерал приводится к позиции (`checkExprAgainst`), как литерал внутри бинарного оператора — к соседу.
+ * Параметр необязательный, а не вторая дверь: гейт записи E один (довод шапки — «ВХОД-ДЕРЕВА 6»), и
+ * вызывающие без позиции (предикаты наборов, подписки) не меняются.
+ */
+export function assertExprChecked(expr: unknown, scope: ExprScope, want?: ExprType): ExprType {
   if (exprTreeExceedsDepth(expr, EXPR_TREE_DEPTH_CAP)) {
     throw new ExecError(
       'VALIDATION',
@@ -39,7 +46,7 @@ export function assertExprChecked(expr: unknown, scope: ExprScope): ExprType {
     );
   }
   try {
-    return checkExpr(expr, scope);
+    return want === undefined ? checkExpr(expr, scope) : checkExprAgainst(expr, scope, want);
   } catch (e) {
     // Чекер живёт в shared и про сервер не знает: он бросает СВОЙ класс, а `execute` ловит
     // только `ExecError` — без перевода отказ приезжал бы пятисоткой (образец перевода

@@ -11,14 +11,23 @@
  * разобранным у читателей (`rulesFieldOf`).
  */
 import {
+  RULE_PARAMS,
   type RuleCarrier,
   type RuleDefinition,
   type RuleScope,
   type RuleTemplate,
   ruleDefinitionSchema,
 } from '@orbis/shared';
-import { SECOND_LANGUAGE } from '@orbis/shared/expr';
+import {
+  EXPR_TYPE,
+  type ExprScope,
+  type ExprType,
+  exprTypeOfKind,
+  SECOND_LANGUAGE,
+} from '@orbis/shared/expr';
 import { ExecError } from '../errors';
+import { assertExprChecked } from '../expr/check';
+import type { ExprSite } from '../subscriptions/registry';
 import type { RegistrySnapshot } from './load';
 
 export type { RuleCarrier } from '@orbis/shared'; // Р-К-53: форма { kind: 'aspect'|'property'|'role'; id } объявлена в rule-type.ts (0c)
@@ -307,8 +316,116 @@ function assertReferences(rule: RuleDefinition, { reg, carrier }: RuleCheckScope
       return; // ролевые метки и assign_level параметров-ссылок не несут
   }
 }
-function assertExprTypes(_rule: RuleDefinition, _scope: RuleCheckScope): void {
-  return;
+/**
+ * Параметры движка правил, доступные `{param}` (Р-И-18). Словарь ЗАКРЫТ: набор имён задаёт движок, а не
+ * декларация, и ссылка на чужое имя — `EXPR_TYPE` чекера с путём (Р-К-24), своего кода у неё нет.
+ * Значение — тот же словарь `RULE_PARAMS` shared, что читает движок, а не второй список: два перечня
+ * параметров разошлись бы на первом же новом имени, и чекер принимал бы `{param}`, которого движок не знает.
+ */
+export const RULE_PARAM_TYPES: Readonly<Record<string, ExprType>> = RULE_PARAMS;
+/**
+ * ОБЛАСТЬ ВЫРАЖЕНИЙ ПРАВИЛА — ДВА рода, а не три (Р-К-13): `assign_level` говорит о ВЫЗОВЕ, и ему видны
+ * словарь фактов и сосед; ВСЕ остальные — правила ЗАПИСИ, и читают они только свою запись.
+ *
+ * Почему T-правила попадают в тот же род, что C, и с тем же флагом. `allowDeref:false` закрывает только
+ * `deref`: `agg_via` чекер отказывает ИСКЛЮЧИТЕЛЬНО по `derefDenied` (ветка `agg_via` в `typeOf`), — то
+ * есть T-область на `allowDeref:false` пропускала бы чтение опубликованной величины соседа, а Р-К-13
+ * закрывает в C/T обоих. Довод один на оба рода: запись чужого состояния в своё через чёрный ход есть тот
+ * же чёрный ход, что чтение его в предикате (§Б3-3). Код отказа при этом остаётся `DEREF_IN_CONSTRAINT`, и
+ * слово «constraint» здесь читается как ПРАВИЛО ЗАПИСИ, а не как его C-половина: словарь §С1-2 закрыт, и
+ * пятнадцатый код ради того же запрета с другой стороны не заводится.
+ *
+ * Контракта в области НЕТ ни у одного рода (Р-22): состояние цели читается `{prop}`, а `{slot}` здесь —
+ * честный `EXPR_TYPE`.
+ */
+export function ruleExprScope(
+  rule: RuleDefinition,
+  _reg: RegistrySnapshot,
+): Omit<ExprScope, 'reg'> {
+  if (rule.template === 'assign_level') {
+    return { allowDeref: true, allowSensitivity: true, params: {} };
+  }
+  return { derefDenied: true, params: RULE_PARAM_TYPES };
+}
+/**
+ * E-ПОЗИЦИИ ПРАВИЛА одним перечнем — аналог `exprSitesOf` подписок и по той же причине: обход нужен трижды
+ * (строка в E-позиции, типы, зависимости графа). `path` несёт НОСИТЕЛЯ: в одном снимке правила лежат на
+ * десятках строк, и «в позиции when» без адреса строки не адресует ничего.
+ */
+export function ruleExprSitesOf(
+  rule: RuleDefinition,
+  reg: RegistrySnapshot,
+  carrier: RuleCarrier,
+): readonly ExprSite[] {
+  const scope = ruleExprScope(rule, reg);
+  const head = `${carrier.kind}:${carrier.id}.rules.${rule.id}`;
+  const out: ExprSite[] = [];
+  if (rule.when !== undefined) {
+    out.push({ path: `${head}.when`, value: rule.when, scope, expect: ['boolean'] });
+  }
+  const target =
+    rule.template === 'default'
+      ? { property: rule.params.property, value: rule.params.value, at: 'params.value' }
+      : rule.template === 'on_enter_class' && rule.params.set !== undefined
+        ? {
+            property: rule.params.set.property,
+            value: rule.params.set.value,
+            at: 'params.set.value',
+          }
+        : undefined;
+  if (target !== undefined) {
+    const def = reg.properties.get(target.property);
+    // json-свойству скалярного значения не назначить (§6.4) — отказ именной, а не «тип не сошёлся».
+    if (def === undefined || def.type.kind === 'json') {
+      bad(
+        'RULE_VALUE_TYPE',
+        rule.id,
+        `свойству ${target.property} нельзя проставить значение выражением`,
+        { property: target.property },
+      );
+    }
+    out.push({
+      path: `${head}.${target.at}`,
+      value: target.value,
+      scope,
+      expect: [exprTypeOfKind(def.type.kind).kind],
+    });
+  }
+  return out;
+}
+/**
+ * (7) ТИПЫ ВЫРАЖЕНИЙ в области правила — через единственный гейт записи E (`assertExprChecked`): там же
+ * кап глубины дерева и перевод `ExprCheckError` → `ExecError` тем же кодом (`DEREF_IN_CONSTRAINT`,
+ * `EXPR_TYPE`, …). `when` — boolean; значение T-правила — типа свойства-цели.
+ */
+function assertExprTypes(rule: RuleDefinition, { reg, carrier }: RuleCheckScope): void {
+  for (const site of ruleExprSitesOf(rule, reg, carrier)) {
+    // У ОБЕИХ позиций правила `expect` — ровно один kind, и он же ожидаемый тип позиции: по нему
+    // приводится корневой литерал (`{const:'0.00'}` в позиции decimal). Форма `ExprSite` при этом не
+    // меняется — она общая с подписками, где `expect` перечисляет альтернативы и приведения не нужно.
+    const want = site.expect?.length === 1 ? ({ kind: site.expect[0] } as ExprType) : undefined;
+    const type = assertExprChecked(site.value, { reg, ...site.scope }, want);
+    if (site.expect === null || site.expect.includes(type.kind)) continue;
+    if (site.path.endsWith('.when')) {
+      throw new ExecError(
+        EXPR_TYPE,
+        `${rule.id}: в позиции ${site.path} ожидался ${site.expect.join('|')}, получен ${type.kind}`,
+        { rule: rule.id, path: site.path, expected: site.expect.join('|'), actual: type.kind },
+      );
+    }
+    // Тип ЗНАЧЕНИЯ T-правила — свой словарный отказ: «ожидался decimal» без имени свойства читается как
+    // ошибка чекера, а это ошибка ПРАВИЛА.
+    bad(
+      'RULE_VALUE_TYPE',
+      rule.id,
+      `значение правила ${rule.id} не сходится с типом свойства-цели`,
+      {
+        path: site.path,
+        expected: site.expect.join('|'),
+        actual: type.kind,
+      },
+    );
+  }
 }
 function assertLevelScoped(_rule: RuleDefinition): void {
   return;

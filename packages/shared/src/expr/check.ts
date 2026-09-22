@@ -655,6 +655,27 @@ function typeOf(
  *  5. типы — обходом.
  */
 export function checkExpr(expr: unknown, scope: ExprScope): ExprType {
+  return typedOfExpr(expr, scope).type;
+}
+
+/**
+ * Тип выражения В ОЖИДАЕМОЙ ПОЗИЦИИ — с тем же приведением литерала (`coerce`), что у бинарных операторов.
+ * Нужен там, где ожидаемый тип задаёт не сосед по узлу, а ПОЗИЦИЯ: значение T-правила против типа
+ * свойства-цели (§Б4-3). Без него корневой `{const:'0.00'}` в позиции decimal типизировался бы `text`
+ * (литерал видит соседа только внутри `op`), и законная строка сида отказывала бы при сохранении.
+ * Возвращает приведённый тип, если он сошёлся, и СВОЙ — если нет: вердикт «сошлось» принимает вызывающий,
+ * которому нужен ещё и `actual` для отказа.
+ */
+export function checkExprAgainst(expr: unknown, scope: ExprScope, want: ExprType): ExprType {
+  const typed = typedOfExpr(expr, scope);
+  return coerce(typed, want)?.type ?? typed.type;
+}
+
+/**
+ * Общее тело `checkExpr` и `checkExprAgainst` — гейты (порядок — докблок `checkExpr`) и обход. Отдаёт
+ * `Typed`, а не `ExprType`: приведению по позиции нужен сам литерал, который наружу не уезжает.
+ */
+function typedOfExpr(expr: unknown, scope: ExprScope): Typed {
   if (typeof expr === 'string') return bad(SECOND_LANGUAGE, [], 'JSON-AST §Б3-5', expr);
   if (hasSelfReference(expr)) return bad(EXPR_RECURSION, [], 'дерево без самоссылки');
   if (exprTreeExceedsDepth(expr, EXPR_TREE_DEPTH_CAP)) {
@@ -669,5 +690,5 @@ export function checkExpr(expr: unknown, scope: ExprScope): ExprType {
       JSON.stringify(parsed.error.issues[0]?.path ?? []),
     );
   }
-  return typeOf(parsed.data, scope, [], new Set()).type;
+  return typeOf(parsed.data, scope, [], new Set());
 }
