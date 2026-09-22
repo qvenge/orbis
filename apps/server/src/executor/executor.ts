@@ -354,7 +354,7 @@ interface PreparedOp {
  * поэтому эффекты операций 1..N−1 (созданные/изменённые сущности, созданные/удалённые
  * связи) накапливаются здесь и видны стадиям 3–4 операции N.
  */
-class BatchState {
+export class BatchState {
   /** Строки сущностей ПОСЛЕ эффектов предыдущих операций batch (created/updated/attach). */
   readonly entities = new Map<string, EntityRow>();
   readonly createdRelations: VirtualRelationCreate[] = [];

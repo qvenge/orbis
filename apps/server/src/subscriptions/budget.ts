@@ -152,7 +152,7 @@ export function propertyDefaultsOf(
  * `effectiveRegistry` отдаёт кешированный объект, и новая версия реестра — это новый объект.
  */
 const INDEX_BY_SNAPSHOT = new WeakMap<object, BindingIndex>();
-function bindingsOf(reg: RegistrySnapshot): BindingIndex {
+export function bindingsOf(reg: RegistrySnapshot): BindingIndex {
   const cached = INDEX_BY_SNAPSHOT.get(reg);
   if (cached !== undefined) return cached;
   const built = bindingIndexOf({ aspects: reg.aspects, contracts: reg.contracts });
