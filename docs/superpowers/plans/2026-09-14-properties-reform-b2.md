@@ -10195,7 +10195,7 @@ export function dropStaleCarryover(reg: RegistrySnapshot, prev: EntityState, nex
 
 ---
 
-- [ ] **Шаг 1: красный — `UNIQUE_ON_MANY` в валидаторе.** В `apps/server/src/registry/rules.test.ts` дописать:
+- [x] **Шаг 1: красный — `UNIQUE_ON_MANY` в валидаторе.** **[ИСПОЛНЕНО ЗАДАЧЕЙ 1 — Ф-Б2-14: раннер корпуса 0c помечает строку целиком, и как только `assertRule` (задача 1) принял позитив `unique_among`, строка 11 не могла остаться полуоткрытой; декларативная половина шаблона переехала в задачу 1. Здесь — только проверить, что тест/код/фикстура на месте, и НЕ дублировать.]** В `apps/server/src/registry/rules.test.ts` дописать:
 ```ts
 describe('assertRule: unique_among (§Б4-3, строка 11 §С1-2)', () => {
   const carrier = { kind: 'aspect', id: 'orbis/budget' } as const;
@@ -10232,7 +10232,7 @@ describe('assertRule: unique_among (§Б4-3, строка 11 §С1-2)', () => {
   `cd apps/server && bun test src/registry/rules.test.ts` → **FAIL**: `UNIQUE_ON_MANY` валидатором не бросается,
   правило на свойстве принимается.
 
-- [ ] **Шаг 2: ветка `unique_among` в `assertRule`.** В `apps/server/src/registry/rules.ts`, в ступень «совместимость
+- [x] **Шаг 2: ветка `unique_among` в `assertRule`.** **[ИСПОЛНЕНО ЗАДАЧЕЙ 1 — Ф-Б2-14: раннер корпуса 0c помечает строку целиком, и как только `assertRule` (задача 1) принял позитив `unique_among`, строка 11 не могла остаться полуоткрытой; декларативная половина шаблона переехала в задачу 1. Здесь — только проверить, что тест/код/фикстура на месте, и НЕ дублировать.]** В `apps/server/src/registry/rules.ts`, в ступень «совместимость
   шаблон ↔ носитель → ссылки params» (порядок Р-И-21) дописать:
 ```ts
 /**
@@ -10654,7 +10654,7 @@ export function dropStaleCarryover(
   `cd apps/server && bun test src/budget/binding.test.ts src/budget/aggregates.test.ts` → **PASS**.
   Коммит: `refactor(server): идентичность конверта — параметры правила duplicate_envelope, вторая копия четвёрки снята`
 
-- [ ] **Шаг 12: строка 11 корпуса — зелёная.** В `apps/server/test/fixtures/refusals.ts` у строки 11 снять
+- [x] **Шаг 12: строка 11 корпуса — зелёная.** **[ИСПОЛНЕНО ЗАДАЧЕЙ 1 — Ф-Б2-14: раннер корпуса 0c помечает строку целиком, и как только `assertRule` (задача 1) принял позитив `unique_among`, строка 11 не могла остаться полуоткрытой; декларативная половина шаблона переехала в задачу 1. Здесь — только проверить, что тест/код/фикстура на месте, и НЕ дублировать.]** В `apps/server/test/fixtures/refusals.ts` у строки 11 снять
   `red: true` и наполнить тела (жанр `declaration` — валидатор деклараций):
 ```ts
   {
@@ -10682,7 +10682,7 @@ export function dropStaleCarryover(
   и 19/20 (задача 1, если ещё не закрыты).
   Коммит: `test(server): строка 11 корпуса отказов — UNIQUE_ON_MANY зелёная с двумя мутациями`
 
-- [ ] **Шаг 13: фикстуры §С8-25 на шаблон.** В `packages/shared/src/registry/rule-fixtures.ts` (0c) у `RULE_FIXTURES`
+- [x] **Шаг 13: фикстуры §С8-25 на шаблон.** **[ИСПОЛНЕНО ЗАДАЧЕЙ 1 — Ф-Б2-14: раннер корпуса 0c помечает строку целиком, и как только `assertRule` (задача 1) принял позитив `unique_among`, строка 11 не могла остаться полуоткрытой; декларативная половина шаблона переехала в задачу 1. Здесь — только проверить, что тест/код/фикстура на месте, и НЕ дублировать.]** В `packages/shared/src/registry/rule-fixtures.ts` (0c) у `RULE_FIXTURES`
   проверить пару для `unique_among`: позитив — набор из двух `one`-свойств; негатив — `{ok:false, code:'UNIQUE_ON_MANY'}`
   на `orbis/aliases`. Если 0c положил заглушку — заменить на эти две строки (имена фикстур не менять).
   `cd packages/shared && bun test src/registry/rule-fixtures.test.ts` → **PASS**;
@@ -16278,7 +16278,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" && git push origin mai
 |---|---|---|
 | `RULE_CONFLICT` | `assertRule` — два писателя одного (свойство, событие) | 1 |
 | `DEREF_IN_CONSTRAINT` | чекер E в области C-правила записи (флаг `derefDenied`) | 1 |
-| `UNIQUE_ON_MANY` | `assertRule` для `unique_among` по свойству `cardinality: many` | 12 |
+| `UNIQUE_ON_MANY` | `assertRule` для `unique_among` по свойству `cardinality: many` | 1 (перенос из 12, Ф-Б2-14) |
 | `ACTION_NESTED`, `ACTION_BRANCH` | `assertAction` | 6 |
 | `BATCH_UNBOUNDED` | `assertAction` (map-действие без капа) | 6 |
 | `SENSITIVITY_UNDERDECLARED` | `assertAction` (статическая таблица «тул шага → факты»); инвариант на исполнении | 6, 7 |
