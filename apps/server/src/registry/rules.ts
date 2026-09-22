@@ -275,6 +275,18 @@ function assertEnterEvent(
       { contract: enter.contract, slot: enter.slot, in: enter.in },
     );
   }
+  // Слот события обязан быть СТАТУСОМ: класс записи под контрактом считается по слоту-статусу
+  // (§Б2-2, `entityClassOf`), и событие на прочем слоте движок молча считал бы по классу статуса —
+  // адрес правила врал бы о том, что оно слушает. Код — тот же, что у соседних отказов адреса
+  // события; уточнение — полем `cause` (приём `ops.ts`: `reason` + `cause`).
+  if (!slot.status) {
+    bad(
+      'RULE_UNKNOWN_CONTRACT_SLOT',
+      rule.id,
+      `событие правила ${rule.id}: слот ${enter.contract}.${enter.slot} — не статус, класса у него нет`,
+      { contract: enter.contract, slot: enter.slot, in: enter.in, cause: 'not_status' },
+    );
+  }
 }
 /**
  * (6) ССЫЛКИ ПАРАМЕТРОВ — поимённо по путям шаблона, без обхода дерева (принцип `assertReferences`

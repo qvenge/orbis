@@ -156,6 +156,23 @@ describe('assertRule: ссылки параметров разрешаются �
       ).toBe('RULE_UNKNOWN_CONTRACT_SLOT');
     }
   });
+  test('событие on_enter_class: слот обязан быть статусом — иначе cause not_status (ревью FABLE M-2)', () => {
+    const onMoney = (slot: string) => ({
+      id: 'money_enter',
+      template: 'on_enter_class',
+      params: {
+        enter: { contract: 'orbis/money-movement', slot, in: ['outflow'] },
+        on_leave: { unset: ['orbis/planned'] },
+      },
+    });
+    // Позитивный контроль: слот-статус контракта денег — `direction`.
+    expect(check(FIN, onMoney('direction')).template).toBe('on_enter_class');
+    const e = err(() => check(FIN, onMoney('amount')));
+    expect([reasonOf(e), (e.details as { cause?: unknown }).cause]).toEqual([
+      'RULE_UNKNOWN_CONTRACT_SLOT',
+      'not_status',
+    ]);
+  });
   test('rollover: carry.agg — только ОПУБЛИКОВАННАЯ величина носителя (Р-И-16)', () => {
     const BUD: RuleCarrier = { kind: 'aspect', id: 'orbis/budget' };
     expect(check(BUD, ROLL('remaining')).template).toBe('rollover');
