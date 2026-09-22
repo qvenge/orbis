@@ -167,3 +167,24 @@ describe('requires_when — C-правило на трёх путях запис
     expect(refusalOf(passed)).toBe('ok');
   });
 });
+
+describe('параметры движка лениво — {param: default_currency} (Р-И-18)', () => {
+  const CURRENCY_DEFAULT: RuleDefinitionInput = {
+    id: 'gate_fin_currency_default',
+    template: 'default',
+    undo: 'check',
+    params: { property: 'orbis/currency', value: { param: 'default_currency' } },
+  };
+  test('запись без валюты получает валюту владельца, запись с валютой её сохраняет', async () => {
+    const w = await worldWith({
+      ...GATE_FIN_ASPECT,
+      carries: ['orbis/currency'],
+      rules: [CURRENCY_DEFAULT],
+    });
+    // Строки `user_settings` у графа теста нет — `defaultCurrencyOf` отдаёт фолбэк схемы.
+    const absent = entityOf(await w.mk({}));
+    expect(absent.props['orbis/currency']).toBe('RUB');
+    const given = entityOf(await w.mk({ 'orbis/currency': 'USD' }));
+    expect(given.props['orbis/currency']).toBe('USD');
+  });
+});
