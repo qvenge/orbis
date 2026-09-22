@@ -3508,22 +3508,33 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
       properties: [
         { key: 'at', type: { kind: 'timestamp' } },
         { key: 'at2', type: { kind: 'timestamp' } },
+        { key: 'due', type: { kind: 'date' } },
       ],
+      // ДВА связанных слота: слияние переписывает ТОЛЬКО слот источника — `deadline` на чужом свойстве
+      // обязан пережить слияние нетронутым (переписать «все слоты держателя» — порча чужой привязки).
       implements: [
-        { contract: 'orbis/when', bind: { moment: 'user/at' }, value_map: [], fixed: {} },
+        {
+          contract: 'orbis/when',
+          bind: { moment: 'user/at', deadline: 'user/due' },
+          value_map: [],
+          fixed: {},
+        },
       ],
     });
     const holders = await withIdentity(db, personal(owner), (tx) =>
       collectPropertyHolders(tx, owner),
     );
     expect(holders.filter((h) => h.kind === 'bind').map((h) => [h.id, h.properties])).toEqual([
-      ['user/call', ['user/at']],
+      ['user/call', ['user/at', 'user/due']],
     ]);
     await withIdentity(db, personal(owner), (tx) =>
       mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }),
     );
     const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
-    expect(reg.aspects.get('user/call')?.implements[0]?.bind).toEqual({ moment: 'user/at2' });
+    expect(reg.aspects.get('user/call')?.implements[0]?.bind).toEqual({
+      moment: 'user/at2',
+      deadline: 'user/due',
+    });
   });
 
   test('откат слияния возвращает привязку на источник — тем же путём, что откат владельца', async () => {
@@ -3537,9 +3548,15 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
       properties: [
         { key: 'at-u', type: { kind: 'timestamp' } },
         { key: 'at-u2', type: { kind: 'timestamp' } },
+        { key: 'due-u', type: { kind: 'date' } },
       ],
       implements: [
-        { contract: 'orbis/when', bind: { moment: 'user/at-u' }, value_map: [], fixed: {} },
+        {
+          contract: 'orbis/when',
+          bind: { moment: 'user/at-u', deadline: 'user/due-u' },
+          value_map: [],
+          fixed: {},
+        },
       ],
     });
     const merged = ok(
@@ -3553,10 +3570,10 @@ describe('collectPropertyHolders: род `bind` — привязки аспек�
       (await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner))).aspects.get(
         'user/call-undo',
       )?.implements[0]?.bind;
-    expect(await bindOf()).toEqual({ moment: 'user/at-u2' });
+    expect(await bindOf()).toEqual({ moment: 'user/at-u2', deadline: 'user/due-u' });
     const undone = await undoAction(db, { identity: personal(owner), actionId: merged.actionId });
     expect(undone.ok).toBe(true);
-    expect(await bindOf()).toEqual({ moment: 'user/at-u' });
+    expect(await bindOf()).toEqual({ moment: 'user/at-u', deadline: 'user/due-u' });
   });
 });
 

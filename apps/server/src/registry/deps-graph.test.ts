@@ -178,6 +178,28 @@ describe('dependencyGraph / dependantsOf (§А3-5)', () => {
     expect(edges([{ ...writer, enabled: false }])).toEqual([]); // выключенное правило рёбер не даёт
   });
 
+  test('снятие при уходе — тоже запись: ребро от on_leave.unset к свойству события (Р-К-55)', () => {
+    // Ровно тот `waiting_for`, ради которого Р-К-55 заведён: без этого ребра круг «default `task_status`
+    // по `waiting_for` + уход из `waiting` снимает `waiting_for`» графу не виден.
+    const task = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task');
+    const leaver = {
+      id: 'w',
+      template: 'on_enter_class',
+      enabled: true,
+      undo: 'check',
+      params: {
+        enter: { property: 'orbis/task_status', in: ['waiting'] },
+        on_leave: { unset: ['orbis/waiting_for'] },
+      },
+    };
+    const edges = dependencyGraph(snapshot({ aspects: [{ ...task, rules: [leaver] }] }), {
+      queryRefs: new Map(),
+    })
+      .edges.filter((e) => e.kind === 'rule')
+      .map((e) => `${e.from}→${e.to}`);
+    expect(edges).toEqual(['orbis/waiting_for→orbis/task_status']);
+  });
+
   test('имя держателя, которого нет в реестре, узлом не становится (опечатка ≠ зависимость)', () => {
     const holder = '33333333-3333-4333-8333-333333333333';
     const graph = dependencyGraph(snapshot(), {
