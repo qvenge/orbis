@@ -8,7 +8,12 @@
 // Токены гейта в этом файле не пишутся ни в коде, ни в заголовках (сторож `gate-c8-18.test.ts` смотрит
 // всё под `src/`): свойства адресуются только ключами `GATE_PROPS.*`.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { attachToolName, type GraphId, type RuleDefinitionInput } from '@orbis/shared';
+import {
+  attachToolName,
+  type GraphId,
+  ROLE_DEPENDENCY,
+  type RuleDefinitionInput,
+} from '@orbis/shared';
 import { GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS } from '../../test/fixtures/gate-aspects';
 import {
   appDb,
@@ -256,5 +261,273 @@ describe('fail-closed: область «контракт» и шаблон uniqu
     expect(refusalOf(await w.mk({}))).toBe('VALIDATION/RULE_TEMPLATE_UNSUPPORTED');
     // Запись без аспекта-носителя области правило не касается.
     expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
+  });
+});
+
+describe('forbidden_when — свойство запрещено при истинном условии (§Б4-3)', () => {
+  const RULE_VOID_NO_MOMENT: RuleDefinitionInput = {
+    id: 'gate_fin_forbidden_when',
+    template: 'forbidden_when',
+    undo: 'check',
+    when: { op: '=', args: [{ prop: GATE_PROPS.finState }, { const: 'void' }] },
+    params: { property: GATE_PROPS.finWhen },
+  };
+  let w: World;
+  beforeAll(async () => {
+    w = await worldWith({ ...GATE_FIN_ASPECT, rules: [RULE_VOID_NO_MOMENT] });
+  });
+  test('условие истинно и свойство есть — отказ с id правила; без свойства — проходит', async () => {
+    const bad = await w.mk({ [GATE_PROPS.finState]: 'void', [GATE_PROPS.finWhen]: AT });
+    expect(refusalOf(bad)).toBe('INVARIANT/gate_fin_forbidden_when');
+    expect(bad.ok ? null : (bad.error.details as { rule_template?: string }).rule_template).toBe(
+      'forbidden_when',
+    );
+    const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'void' }));
+    expect(row.props[GATE_PROPS.finWhen]).toBeUndefined();
+  });
+  test('условие ложно — свойство законно', async () => {
+    const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'todo', [GATE_PROPS.finWhen]: AT }));
+    expect(row.props[GATE_PROPS.finWhen]).toBe(AT);
+  });
+});
+
+/** Строка владельца «запись закрыта» по КЛАССУ: вход в done ставит момент закрытия, уход снимает. */
+const RULE_PLAIN_CLOSED_AT: RuleDefinitionInput = {
+  id: 'gate_plain_closed_at',
+  template: 'on_enter_class',
+  undo: 'check',
+  params: {
+    enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+    set: { property: GATE_PROPS.plainAt, value: { prop: 'orbis/updated_at' } },
+    on_leave: { unset: [GATE_PROPS.plainAt] },
+  },
+};
+
+describe('on_enter_class по КЛАССУ — T-правило на трёх путях записи', () => {
+  let w: World;
+  const item = (state: string) =>
+    w.run('entity_create', {
+      title: 'Дело владельца',
+      tags: [],
+      aspects: [PLAIN],
+      props: { [GATE_PROPS.plainState]: state },
+    });
+  const setState = (id: string, state: string) =>
+    w.run('entity_update', { id, props: { [GATE_PROPS.plainState]: state } });
+  beforeAll(async () => {
+    w = await worldWith({ ...GATE_PLAIN_ASPECT, rules: [RULE_PLAIN_CLOSED_AT] });
+  });
+
+  test('update: open→closed ставит момент = штамп записи, closed→open снимает (on_leave)', async () => {
+    const opened = entityOf(await item('open'));
+    expect(opened.props[GATE_PROPS.plainAt]).toBeUndefined(); // в класс не входила
+    const closed = entityOf(await setState(opened.id, 'closed'));
+    // Штамп записи на update — `monotonicUpdatedAt`: при одном тике часов это T0+1ms, а не T0
+    // (Р-И-3) — сравнение идёт со штампом СТРОКИ, а не с часами теста.
+    expect(closed.updatedAt).not.toBe(T0.toISOString());
+    expect(closed.props[GATE_PROPS.plainAt]).toBe(closed.updatedAt);
+    const reopened = entityOf(await setState(opened.id, 'open'));
+    expect(reopened.props[GATE_PROPS.plainAt]).toBeUndefined();
+  });
+
+  test('create: запись, рождённая в классе, входит в него на создании', async () => {
+    const row = entityOf(await item('closed'));
+    expect(row.props[GATE_PROPS.plainAt]).toBe(row.updatedAt);
+  });
+
+  test('attach: навешивание аспекта в классе done — тот же переход', async () => {
+    const bare = entityOf(await w.run('entity_create', { title: 'Голая запись', tags: [] }));
+    const row = entityOf(
+      await w.run(attachToolName(PLAIN), {
+        entity_id: bare.id,
+        data: { [GATE_PROPS.plainState]: 'closed' },
+      }),
+    );
+    expect(row.props[GATE_PROPS.plainAt]).toBe(row.updatedAt);
+  });
+
+  test('значение, пришедшее патчем, правило не перетирает (РЧ-3-3)', async () => {
+    const opened = entityOf(await item('open'));
+    const closed = entityOf(
+      await w.run('entity_update', {
+        id: opened.id,
+        props: { [GATE_PROPS.plainState]: 'closed', [GATE_PROPS.plainAt]: AT },
+      }),
+    );
+    expect(closed.props[GATE_PROPS.plainAt]).toBe(AT);
+  });
+});
+
+describe('порядок T-правил на одном переходе: уход раньше входа (рулинг 1-3)', () => {
+  // Пара, которую ключ `RULE_CONFLICT` не ловит: «set при входе в done» и «unset при уходе из active»
+  // ОДНОГО свойства — обе срабатывают на переходе active→done. id подобраны так, что обход единым
+  // списком по (носитель, id) исполнил бы set ПЕРВЫМ, а unset — следом и стёр бы его.
+  const ENTER_DONE_SETS: RuleDefinitionInput = {
+    id: 'a_enter_done_sets',
+    template: 'on_enter_class',
+    undo: 'check',
+    params: {
+      enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+      set: { property: GATE_PROPS.plainAt, value: { prop: 'orbis/updated_at' } },
+    },
+  };
+  const LEAVE_ACTIVE_UNSETS: RuleDefinitionInput = {
+    id: 'b_leave_active_unsets',
+    template: 'on_enter_class',
+    undo: 'check',
+    params: {
+      enter: { contract: 'orbis/completable', slot: 'status', in: ['active'] },
+      on_leave: { unset: [GATE_PROPS.plainAt] },
+    },
+  };
+  test('переход active→done: свойство установлено — вход побеждает уход', async () => {
+    const w = await worldWith({
+      ...GATE_PLAIN_ASPECT,
+      rules: [ENTER_DONE_SETS, LEAVE_ACTIVE_UNSETS],
+    });
+    const opened = entityOf(
+      await w.run('entity_create', {
+        title: 'Дело на переходе',
+        tags: [],
+        aspects: [PLAIN],
+        props: { [GATE_PROPS.plainState]: 'open' },
+      }),
+    );
+    const closed = entityOf(
+      await w.run('entity_update', {
+        id: opened.id,
+        props: { [GATE_PROPS.plainState]: 'closed' },
+      }),
+    );
+    expect(closed.props[GATE_PROPS.plainAt]).toBe(closed.updatedAt);
+  });
+});
+
+describe('on_enter_class по ЗНАЧЕНИЮ свойства (форма {property, in}, Р-И-37)', () => {
+  const RULE_BY_VALUE: RuleDefinitionInput = {
+    id: 'gate_plain_closed_by_value',
+    template: 'on_enter_class',
+    undo: 'check',
+    params: {
+      enter: { property: GATE_PROPS.plainState, in: ['closed'] },
+      set: { property: GATE_PROPS.plainAt, value: { prop: 'orbis/updated_at' } },
+      on_leave: { unset: [GATE_PROPS.plainAt] },
+    },
+  };
+  test('значение вошло в список — свойство поставлено; не вошло — нет; ушло — снято', async () => {
+    const w = await worldWith({ ...GATE_PLAIN_ASPECT, rules: [RULE_BY_VALUE] });
+    const mkItem = (state: string) =>
+      w.run('entity_create', {
+        title: 'Дело по значению',
+        tags: [],
+        aspects: [PLAIN],
+        props: { [GATE_PROPS.plainState]: state },
+      });
+    const closed = entityOf(await mkItem('closed'));
+    expect(closed.props[GATE_PROPS.plainAt]).toBe(closed.updatedAt);
+    const opened = entityOf(await mkItem('open'));
+    expect(opened.props[GATE_PROPS.plainAt]).toBeUndefined();
+    const reopened = entityOf(
+      await w.run('entity_update', { id: closed.id, props: { [GATE_PROPS.plainState]: 'open' } }),
+    );
+    expect(reopened.props[GATE_PROPS.plainAt]).toBeUndefined();
+  });
+});
+
+describe('on_enter_class с when — срабатывает только на подмножестве (§С8-25)', () => {
+  const RULE_BIG_DONE: RuleDefinitionInput = {
+    id: 'gate_fin_big_done_at',
+    template: 'on_enter_class',
+    undo: 'check',
+    when: { op: '>', args: [{ prop: GATE_PROPS.finAmount }, { const: '1000' }] },
+    params: {
+      enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+      set: { property: GATE_PROPS.finWhen, value: { prop: 'orbis/updated_at' } },
+    },
+  };
+  test('две записи входят в done, момент получает только крупная', async () => {
+    const w = await worldWith({ ...GATE_FIN_ASPECT, rules: [RULE_BIG_DONE] });
+    const big = entityOf(
+      await w.mk({ [GATE_PROPS.finAmount]: '1500.00', [GATE_PROPS.finState]: 'done' }),
+    );
+    const small = entityOf(
+      await w.mk({ [GATE_PROPS.finAmount]: '340.00', [GATE_PROPS.finState]: 'done' }),
+    );
+    expect(big.props[GATE_PROPS.finWhen]).toBe(big.updatedAt);
+    expect(small.props[GATE_PROPS.finWhen]).toBeUndefined();
+  });
+});
+
+describe('default — умолчание записи без when и с when (§Б4-3)', () => {
+  const STATE_DEFAULT: RuleDefinitionInput = {
+    id: 'gate_fin_state_default',
+    template: 'default',
+    undo: 'check',
+    params: { property: GATE_PROPS.finState, value: { const: 'todo' } },
+  };
+  const INFLOW_MOMENT_DEFAULT: RuleDefinitionInput = {
+    id: 'gate_fin_inflow_moment',
+    template: 'default',
+    undo: 'check',
+    when: { op: '=', args: [{ prop: GATE_PROPS.finDirection }, { const: 'in' }] },
+    params: { property: GATE_PROPS.finWhen, value: { prop: 'orbis/updated_at' } },
+  };
+  let w: World;
+  beforeAll(async () => {
+    w = await worldWith({ ...GATE_FIN_ASPECT, rules: [STATE_DEFAULT, INFLOW_MOMENT_DEFAULT] });
+  });
+  test('без when: отсутствующее свойство получает значение, присутствующее — сохраняется', async () => {
+    const absent = entityOf(await w.mk({}));
+    expect(absent.props[GATE_PROPS.finState]).toBe('todo');
+    const given = entityOf(await w.mk({ [GATE_PROPS.finState]: 'done' }));
+    expect(given.props[GATE_PROPS.finState]).toBe('done');
+  });
+  test('без when: и на update — свойство, снятое патчем, возвращается умолчанием', async () => {
+    const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'done' }));
+    const after = entityOf(
+      await w.run('entity_update', { id: row.id, unset: [GATE_PROPS.finState] }),
+    );
+    expect(after.props[GATE_PROPS.finState]).toBe('todo');
+  });
+  test('с when: умолчание только там, где условие истинно', async () => {
+    const inflow = entityOf(await w.mk({ [GATE_PROPS.finDirection]: 'in' }));
+    expect(inflow.props[GATE_PROPS.finWhen]).toBe(inflow.updatedAt);
+    const outflow = entityOf(await w.mk({ [GATE_PROPS.finDirection]: 'out' }));
+    expect(outflow.props[GATE_PROPS.finWhen]).toBeUndefined();
+  });
+});
+
+describe('has_relation в when — рёбра $self предзагружены до вычисления (Р-И-7)', () => {
+  // Правило читает входящее ребро роли: запись, которую что-то блокирует, обязана нести момент.
+  const RULE_BLOCKED_NEEDS_MOMENT: RuleDefinitionInput = {
+    id: 'gate_plain_blocked_moment',
+    template: 'requires_when',
+    undo: 'check',
+    when: { has_relation: { role: ROLE_DEPENDENCY, alive: true } },
+    params: { property: GATE_PROPS.plainAt },
+  };
+  test('без входящего ребра — проходит; с живым блокером — отказ; блокер в архиве — снова проходит', async () => {
+    const w = await worldWith({ ...GATE_PLAIN_ASPECT, rules: [RULE_BLOCKED_NEEDS_MOMENT] });
+    const target = entityOf(
+      await w.run('entity_create', {
+        title: 'Заблокированное дело',
+        tags: [],
+        aspects: [PLAIN],
+        props: { [GATE_PROPS.plainState]: 'open' },
+      }),
+    );
+    const blocker = entityOf(await w.run('entity_create', { title: 'Блокер', tags: [] }));
+    const touch = () =>
+      w.run('entity_update', { id: target.id, props: { [GATE_PROPS.plainState]: 'open' } });
+    expect(refusalOf(await touch())).toBe('ok');
+    const edge = await w.run('relation_create', {
+      source_id: blocker.id,
+      target_id: target.id,
+      role: ROLE_DEPENDENCY,
+    });
+    expect(refusalOf(edge)).toBe('ok');
+    expect(refusalOf(await touch())).toBe('INVARIANT/gate_plain_blocked_moment');
+    expect(refusalOf(await w.run('entity_update', { id: blocker.id, archived: true }))).toBe('ok');
+    expect(refusalOf(await touch())).toBe('ok'); // `alive` — «источник не архивен»
   });
 });
