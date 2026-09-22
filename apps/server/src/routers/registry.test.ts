@@ -56,6 +56,10 @@ describe('registry.effective (§А9-2)', () => {
       'orbis/money-movement',
       'orbis/envelope',
     ]);
+    // Поле схемы строки доезжает до клиента САМО (как `module` в Б-1) — новой ручки правила не требуют.
+    expect(reg.aspects.every((a) => Array.isArray(a.rules))).toBe(true);
+    // Тем же путём едет флаг контракта: клиенту он понадобится для записи классом (§1.16, срез страниц).
+    expect(reg.contracts.every((c) => typeof c.exclusive_classes === 'boolean')).toBe(true);
   });
 
   test('label и description едут ПОЛНЫМИ per-locale картами — локаль выбирает клиент', async () => {
