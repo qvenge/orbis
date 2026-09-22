@@ -6,6 +6,7 @@
 // typecheck прошёл бы.
 import { expect, test } from 'bun:test';
 import {
+  DEREF_IN_CONSTRAINT,
   EXPR_NOT_TOTAL,
   EXPR_RECURSION,
   EXPR_TYPE,
@@ -45,6 +46,14 @@ const EXPECTED: Record<ExecErrorCode, TRPCError['code']> = {
   [EXPR_NOT_TOTAL]: 'BAD_REQUEST',
   [EXPR_RECURSION]: 'BAD_REQUEST',
   [SECOND_LANGUAGE]: 'BAD_REQUEST',
+  // --- Б-2: правила, действия ---
+  ACTION_NESTED: 'BAD_REQUEST',
+  ACTION_BRANCH: 'BAD_REQUEST',
+  UNIQUE_ON_MANY: 'BAD_REQUEST',
+  SENSITIVITY_UNDERDECLARED: 'BAD_REQUEST',
+  BATCH_UNBOUNDED: 'BAD_REQUEST',
+  RULE_CONFLICT: 'BAD_REQUEST',
+  [DEREF_IN_CONSTRAINT]: 'BAD_REQUEST',
 };
 
 test('каждый код ExecError переводится в обещанный код tRPC', () => {
@@ -54,10 +63,11 @@ test('каждый код ExecError переводится в обещанный
   }
 });
 
-// Девятнадцать кодов реформы (§С8, рулинг Р-П-6; десять из них — срез Б-1). Перечислены
-// здесь ЯВНО, а не выведены из EXPECTED: без явного списка забытый в union'е код так же
-// молча отсутствовал бы и в ожидании — тест проверял бы сам себя.
-test('коды реформы свойств заведены все девятнадцать', () => {
+// Двадцать шесть кодов реформы (§С1-2: 21 строка / 24 имени плюс REGISTRY_LIMIT и REGISTRY_CONFLICT,
+// которых в §С1-2 нет; десять из них завёл срез Б-1, семь — срез Б-2). Перечислены здесь ЯВНО, а не
+// выведены из EXPECTED: без явного списка забытый в union'е код так же молча отсутствовал бы и в
+// ожидании — тест проверял бы сам себя.
+test('коды реформы свойств заведены все двадцать шесть', () => {
   const reform = [
     'COMPUTED_WRITE',
     'ROLE_SYSTEM_ONLY',
@@ -78,10 +88,46 @@ test('коды реформы свойств заведены все девят�
     EXPR_NOT_TOTAL,
     EXPR_RECURSION,
     SECOND_LANGUAGE,
+    'ACTION_NESTED',
+    'ACTION_BRANCH',
+    'UNIQUE_ON_MANY',
+    'SENSITIVITY_UNDERDECLARED',
+    'BATCH_UNBOUNDED',
+    'RULE_CONFLICT',
+    DEREF_IN_CONSTRAINT,
   ];
-  expect(reform.length).toBe(19);
+  expect(reform.length).toBe(26);
   for (const code of reform) expect(Object.keys(EXPECTED)).toContain(code);
-  expect(Object.keys(EXPECTED).length).toBe(27);
+  expect(Object.keys(EXPECTED).length).toBe(34);
+});
+
+// Р-И-10: имя `DEREF_IN_CONSTRAINT` приходит из shared, как четыре кода E и PATTERN_NOT_REGULAR, —
+// бросает его тайп-чекер, до сервера не знающий. Второго определения быть не должно: одно из двух
+// однажды переименуют, и отказ перестанет ловиться маппингом.
+test('DEREF_IN_CONSTRAINT берётся из shared и переводится в 400', () => {
+  expect(DEREF_IN_CONSTRAINT).toBe('DEREF_IN_CONSTRAINT');
+  expect(execErrorToTRPC(new ExecError(DEREF_IN_CONSTRAINT, 'deref в C-правиле')).code).toBe(
+    'BAD_REQUEST',
+  );
+});
+
+// Почему у всех семи 400, а не 422/403: каждый из них — отказ ДЕКЛАРАЦИИ (правила, действия), написанной
+// так, что система её не принимает; другими данными он не снимается, автор обязан переписать декларацию.
+// 422 (INVARIANT) остаётся за нарушением инварианта ЗАПИСИ, 403 — за запретом по объекту (MODULE_DISABLED).
+test('шесть кодов Б-2 сервера — 400 каждый', () => {
+  for (const code of [
+    'ACTION_NESTED',
+    'ACTION_BRANCH',
+    'UNIQUE_ON_MANY',
+    'SENSITIVITY_UNDERDECLARED',
+    'BATCH_UNBOUNDED',
+    'RULE_CONFLICT',
+  ] as const) {
+    expect({ code, trpc: execErrorToTRPC(new ExecError(code, 'декларация')).code }).toEqual({
+      code,
+      trpc: 'BAD_REQUEST',
+    });
+  }
 });
 
 // Р-И-1: имена кодов чекера E живут в shared константами (их бросает `ExprCheckError`, до

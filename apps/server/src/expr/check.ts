@@ -43,8 +43,8 @@ export function assertExprChecked(expr: unknown, scope: ExprScope): ExprType {
   } catch (e) {
     // Чекер живёт в shared и про сервер не знает: он бросает СВОЙ класс, а `execute` ловит
     // только `ExecError` — без перевода отказ приезжал бы пятисоткой (образец перевода
-    // `PatternNotRegularError` в `registry/ops.ts`). Код тот же: четыре константы E —
-    // члены `ExecErrorCode` (задача 1).
+    // `PatternNotRegularError` в `registry/ops.ts`). Код тот же: пять констант E — члены
+    // `ExecErrorCode` (четыре — задача 1 Б-1, `DEREF_IN_CONSTRAINT` — задача 0b Б-2).
     if (e instanceof ExprCheckError) {
       throw new ExecError(e.code, e.message, {
         path: e.path,

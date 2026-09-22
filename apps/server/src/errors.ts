@@ -19,12 +19,15 @@
 //
 // Тем же правилом срез Б-1 заводит свои десять одним коммитом (Р-И-1, задача 1): бросающие
 // места приезжают задачами 2–18, а таблица кодов остаётся одна.
+// Тем же правилом срез Б-2 заводит свои семь одним коммитом (Р-И-11, задача 0b): бросающие
+// места приезжают задачами 1, 6, 7 и 12, а таблица кодов остаётся одна.
 //
 // Часть кодов приходит из `@orbis/shared`, а не объявляется здесь литералом: их бросает код,
 // который живёт в shared и про сервер не знает (`assertPatternRegular` — §А2-2, `ExprCheckError`
 // — §Б3), а имя кода обязано быть одно на оба пакета. Импортируется КОНСТАНТА, `typeof` которой
 // и есть строковый литеральный тип, — так исчерпывающая проверка `Record` продолжает работать.
 import {
+  DEREF_IN_CONSTRAINT,
   EXPR_NOT_TOTAL,
   EXPR_RECURSION,
   EXPR_TYPE,
@@ -84,7 +87,32 @@ export type ExecErrorCode =
   | typeof EXPR_TYPE
   | typeof EXPR_NOT_TOTAL
   | typeof EXPR_RECURSION
-  | typeof SECOND_LANGUAGE;
+  | typeof SECOND_LANGUAGE
+  // --- Срез Б-2: правила, действия ---
+  /** §Б6-3: шаг действия зовёт действие (`run_action` либо `action_*`).
+   *  `details: {action, step, tool}`. Бросает `assertAction` (задача 6). */
+  | 'ACTION_NESTED'
+  /** §Б6-3: условие или альтернатива на УРОВНЕ шага (ключи `when`/`if`/`else`/`unless`); `if` внутри
+   *  E-выражения шага законен — ветвление запрещено у последовательности, а не у формулы.
+   *  `details: {action, step, key}`. Бросает `assertAction` (задача 6). */
+  | 'ACTION_BRANCH'
+  /** §Б4-3: `unique_among` объявлен по свойству с `cardinality: many` — «уникальность» множества
+   *  значений неопределена. `details: {rule, property}`. Бросает `assertRule` (задача 12). */
+  | 'UNIQUE_ON_MANY'
+  /** §Б6-1: шаг действия несёт факт чувствительности, которого декларация не объявила, — уровень
+   *  подтверждения считался бы по неполному набору фактов. `details: {action, step, fact}`.
+   *  Бросает `assertAction` (задача 6), тот же инвариант проверяется на исполнении (задача 7). */
+  | 'SENSITIVITY_UNDERDECLARED'
+  /** §Б6-3: map-действие (`over`) без капа `batch_cap` — пачка неизвестного размера.
+   *  `details: {action}`. Бросает `assertAction` (задача 6). */
+  | 'BATCH_UNBOUNDED'
+  /** §Б4 конфлюэнтность: два ВКЛЮЧЁННЫХ правила пишут одно (свойство, событие). Это не цикл, поэтому
+   *  не `REGISTRY_CYCLE` (§С1-2, строка 19). `details: {rule, other, event, property}`.
+   *  Бросает `assertRule` (задача 1). */
+  | 'RULE_CONFLICT'
+  /** §Б3-3: `deref` в C-области правила записи — имя из shared (см. докблок выше), бросает чекер E по
+   *  флагу области `derefDenied`. `details: {path, rule?, template}` (задача 1). */
+  | typeof DEREF_IN_CONSTRAINT;
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -154,6 +182,17 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   // 403 — запрет по ОБЪЕКТУ, а не по форме запроса: модуль выключен, и повторять вызов с
   // другим текстом бессмысленно (§Б8-3; тот же довод, что у COMPUTED_WRITE).
   MODULE_DISABLED: 'FORBIDDEN',
+  // --- Срез Б-2: правила, действия ---
+  // 400 у всех семи: отвергается ДЕКЛАРАЦИЯ — правило или действие написаны так, что система их не
+  // принимает, и другими данными отказ не снимается (тот же довод, что у кодов Б-1). 422 осталось бы
+  // за нарушением инварианта ЗАПИСИ, а здесь запись ещё и не начиналась.
+  ACTION_NESTED: 'BAD_REQUEST',
+  ACTION_BRANCH: 'BAD_REQUEST',
+  UNIQUE_ON_MANY: 'BAD_REQUEST',
+  SENSITIVITY_UNDERDECLARED: 'BAD_REQUEST',
+  BATCH_UNBOUNDED: 'BAD_REQUEST',
+  RULE_CONFLICT: 'BAD_REQUEST',
+  [DEREF_IN_CONSTRAINT]: 'BAD_REQUEST',
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {
