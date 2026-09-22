@@ -10,6 +10,7 @@ services:
     plan: free
     region: frankfurt
     branch: main
+    autoDeploy: false # выключен на время среза Б-2 реформы свойств (D43, РП-1 плана): миграция 0022 и сид строк правил/действий идут руками ДО выкатки кода, а мерж в main после каждой задачи иначе выкатывал бы полсреза на прод с базой без колонки rules; вернуть прод-процедурой закрытия (задача 20)
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
