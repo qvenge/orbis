@@ -301,6 +301,55 @@ describe('assign_level и конфлюэнтность §Б4', () => {
     expect(err(() => check(TASK, byClass('t_a'), [byClass('t_b')])).code).toBe('RULE_CONFLICT');
     expect(err(() => check(TASK, byValue('w_a'), [byValue('w_b')])).code).toBe('RULE_CONFLICT');
     expect(check(TASK, byClass('t_a'), [byValue('w_a')]).id).toBe('t_a');
+    // Имя теста стережётся ЭТОЙ парой: тот же класс и то же свойство, но одно правило пишет при ВХОДЕ, а
+    // другое снимает при УХОДЕ — события разные, писатели не спорят. Ключ ухода, склеенный с ключом входа,
+    // дал бы здесь ложный RULE_CONFLICT (мутация `leave|` → `enter|`).
+    expect(
+      check(TASK, byClass('t_a'), [
+        {
+          id: 't_b',
+          template: 'on_enter_class',
+          params: {
+            enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+            on_leave: { unset: ['orbis/completed_at'] },
+          },
+        },
+      ]).id,
+    ).toBe('t_a');
+  });
+  test('ключ события — по КАЖДОМУ элементу in: перестановка и пересечение классов — RULE_CONFLICT (Ф-Б2-15)', () => {
+    // `in` — множество: оба правила пишут `completed_at` на переходе `active→done`, и порядок записи
+    // списка или его лишний элемент приоритета между ними не вводят.
+    const writer = (id: string, classes: string[]) => ({
+      id,
+      template: 'on_enter_class',
+      params: {
+        enter: { contract: 'orbis/completable', slot: 'status', in: classes },
+        set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+      },
+    });
+    expect(
+      err(() =>
+        check(TASK, writer('p_a', ['done', 'cancelled']), [writer('p_b', ['cancelled', 'done'])]),
+      ).code,
+    ).toBe('RULE_CONFLICT');
+    expect(
+      err(() => check(TASK, writer('x_a', ['done']), [writer('x_b', ['done', 'cancelled'])])).code,
+    ).toBe('RULE_CONFLICT');
+    // Непересекающиеся классы — разные события, конфликта нет.
+    expect(check(TASK, writer('d_a', ['done']), [writer('d_b', ['cancelled'])]).id).toBe('d_a');
+  });
+  test('повтор внутри одного правила — не второй писатель: unset [x, x] принимается', () => {
+    expect(
+      check(TASK, {
+        id: 'w_dup',
+        template: 'on_enter_class',
+        params: {
+          enter: { property: 'orbis/task_status', in: ['waiting', 'waiting'] },
+          on_leave: { unset: ['orbis/waiting_for', 'orbis/waiting_for'] },
+        },
+      }).id,
+    ).toBe('w_dup');
   });
   test('RULE_CONFLICT: details.rule — ПРОВЕРЯЕМОЕ правило, other — его пара, при любом порядке в снимке', () => {
     // Проверяется ВТОРОЕ по порядку снимка: первым на носителе лежит `cur_b`, и отказ, собранный

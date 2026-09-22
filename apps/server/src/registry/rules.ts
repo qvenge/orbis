@@ -495,34 +495,40 @@ function assertLevelScoped(rule: RuleDefinition): void {
     );
   }
 }
-/** Голова ключа события — ОБЕ формы (Р-И-37/Р-К-5): вход класса слота и вход значения свойства. */
-const enterHead = (e: RuleEnterEvent): string =>
-  'property' in e
-    ? `prop:${e.property}=${e.in.join(',')}`
-    : `${e.contract}.${e.slot}=${e.in.join(',')}`;
 /**
- * КЛЮЧ ПИСАТЕЛЯ: (событие, свойство-цель). Читатели (`requires_when`, `forbidden_when`, `unique_among`,
+ * Головы ключа события — ПО ОДНОЙ НА КАЖДЫЙ элемент `in`, для ОБЕИХ форм (Р-И-37/Р-К-5): вход класса слота
+ * и вход значения свойства. Событие — «класс (значение) до ∉ `in`, после ∈ `in`», то есть `in` — МНОЖЕСТВО, и
+ * ключ по склеенному списку был бы ключом по записи, а не по смыслу: `['done','cancelled']` против
+ * `['cancelled','done']` (перестановка) и `['done']` против `['done','cancelled']` (пересечение) — два писателя
+ * на одном переходе `active→done`, которых такой ключ не видел, и движок молча выбрал бы победителя (§Б4,
+ * Ф-Б2-15). Значение формы по значению печатается JSON'ом: `true` и `'true'` — разные значения свойства.
+ */
+const enterHeads = (e: RuleEnterEvent): string[] =>
+  'property' in e
+    ? e.in.map((v) => `prop:${e.property}=${JSON.stringify(v)}`)
+    : e.in.map((k) => `${e.contract}.${e.slot}=${k}`);
+/**
+ * КЛЮЧИ ПИСАТЕЛЯ: (событие, свойство-цель). Читатели (`requires_when`, `forbidden_when`, `unique_among`,
  * ролевые метки, `assign_level`) ключей не дают — двум предикатам спорить не о чем, оба обязаны выполниться.
- * `default` пишет при отсутствии значения, событие у него одно на свойство; `on_enter_class` даёт ключ на
- * вход и по ключу на каждое снимаемое свойство ухода.
+ * `default` пишет при отсутствии значения, событие у него одно на свойство; `on_enter_class` даёт по ключу
+ * на каждый элемент `in` — на вход (`set`) и на каждое снимаемое свойство ухода (`on_leave.unset`).
+ *
+ * Ключи ОДНОГО правила дедуплицируются: повтор в `in` или в `unset` — не второй писатель, и правило не
+ * должно спорить само с собой (`RULE_CONFLICT {rule:'w', other:'w'}` был бы отказом без выхода).
  */
 function eventKeys(rule: RuleDefinition): Array<{ event: string; property: string }> {
   if (rule.template === 'default') {
     return [{ event: `create|${rule.params.property}`, property: rule.params.property }];
   }
   if (rule.template !== 'on_enter_class') return [];
-  const head = enterHead(rule.params.enter);
-  const out: Array<{ event: string; property: string }> = [];
-  if (rule.params.set !== undefined) {
-    out.push({
-      event: `enter|${head}|${rule.params.set.property}`,
-      property: rule.params.set.property,
-    });
+  const keys = new Map<string, string>();
+  for (const head of enterHeads(rule.params.enter)) {
+    if (rule.params.set !== undefined) {
+      keys.set(`enter|${head}|${rule.params.set.property}`, rule.params.set.property);
+    }
+    for (const p of rule.params.on_leave?.unset ?? []) keys.set(`leave|${head}|${p}`, p);
   }
-  for (const p of rule.params.on_leave?.unset ?? []) {
-    out.push({ event: `leave|${head}|${p}`, property: p });
-  }
-  return out;
+  return [...keys].map(([event, property]) => ({ event, property }));
 }
 /**
  * ДВА ПИСАТЕЛЯ ОДНОГО (свойство, событие) — отказ, а не приоритет (§Б4 конфлюэнтность, spec:503): явного
