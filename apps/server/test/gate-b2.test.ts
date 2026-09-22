@@ -11,7 +11,7 @@
 // поглощаться, зелёный перестаёт валить сьют. Поэтому походы собраны в `beforeAll`, тела читают итог.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { StructuredError } from '../src/errors';
-import type { ExecuteOk, ExecuteRequest, WireEntity } from '../src/executor/types';
+import type { ExecuteRequest, ExecuteResult, WireEntity } from '../src/executor/types';
 import {
   appDb,
   executeWithFixtureCategories as execute,
@@ -52,13 +52,13 @@ function req(tool: string, input: unknown): ExecuteRequest {
   };
 }
 const run = (tool: string, input: Record<string, unknown>) => execute(db, req(tool, input));
-function entityOf(r: { ok: boolean }): WireEntity {
+function entityOf(r: ExecuteResult): WireEntity {
   if (!r.ok) throw new Error(`ожидался успех исполнителя, пришёл отказ: ${JSON.stringify(r)}`);
-  return (r as ExecuteOk).results[0] as WireEntity;
+  return r.results[0] as WireEntity;
 }
-function errorOf(r: { ok: boolean }): StructuredError {
+function errorOf(r: ExecuteResult): StructuredError {
   if (r.ok) throw new Error('ожидался отказ исполнителя, пришёл успех');
-  return (r as { error: StructuredError }).error;
+  return r.error;
 }
 const mk = async (input: Record<string, unknown>): Promise<WireEntity> =>
   entityOf(await run('entity_create', { tags: [], ...input }));
