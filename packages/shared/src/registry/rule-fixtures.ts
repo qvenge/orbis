@@ -344,11 +344,14 @@ export const RULE_FIXTURES: readonly RuleFixture[] = [
         },
       },
       {
+        // Второе правило пары — ТАКОЕ ЖЕ законное, как первое: момент записи — core-проекция
+        // `orbis/updated_at` (Р-К-2), а не `$today` — тот дал бы date в позиции timestamp, и пара
+        // называла бы конфликт только в одном порядке проверки (второе отказало бы RULE_VALUE_TYPE).
         id: 'fx_conflict_second',
         template: 'on_enter_class',
         params: {
           enter: ENTER_DONE,
-          set: { property: 'orbis/completed_at', value: { ctx: '$today' } },
+          set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
         },
       },
     ],

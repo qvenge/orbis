@@ -24,8 +24,8 @@
 // 16 · SECOND_LANGUAGE           · assertSubscription                          · декларация
 // 17 · SURFACE_UNKNOWN           · assertSubscription                          · декларация
 // 18 · BATCH_UNBOUNDED           · assertAction (задача 6)                     · декларация [red]
-// 19 · RULE_CONFLICT             · assertRule (задача 1)                       · декларация [red]
-// 20 · DEREF_IN_CONSTRAINT       · assertRule → чекер E (задача 1)             · декларация [red]
+// 19 · RULE_CONFLICT             · assertRule                                  · декларация
+// 20 · DEREF_IN_CONSTRAINT       · assertRule → чекер E                        · декларация
 // 21 · MODULE_DISABLED           · execute entity_create                       · данные
 import {
   AGENDA_DEF,
@@ -832,7 +832,7 @@ const ROW_10: RefusalRow = {
   ],
 };
 
-// ───────── красные строки 3/15/18 (валидатора действий нет) и 19/20 (снимает шаг 15 задачи 1); строка 11 закрыта ─────────
+// ───────── красные строки 3/15/18 (валидатора действий ещё нет) и закрытые задачей 1 строки 11/19/20 ─────────
 
 /**
  * Валидатор БУДУЩЕЙ задачи — сегодня это только валидатор действий (задача 6); правила строки
@@ -1076,7 +1076,6 @@ const ROW_19: RefusalRow = {
   row: 19,
   codes: ['RULE_CONFLICT'],
   genre: 'declaration',
-  red: true,
   positive: async () => {
     assertRule(enterDone, conflictScope('orbis/task', [enterDone]));
   },
@@ -1106,7 +1105,6 @@ const ROW_20: RefusalRow = {
   row: 20,
   codes: ['DEREF_IN_CONSTRAINT'],
   genre: 'declaration',
-  red: true,
   positive: async () => {
     assertRule(
       {

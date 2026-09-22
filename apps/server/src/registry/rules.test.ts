@@ -7,6 +7,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  RULE_FIXTURES,
   type RuleDefinition,
   type RuleDefinitionInput,
   ruleDefinitionSchema,
@@ -405,5 +406,38 @@ describe('врезка на записи реестра (Р-3)', () => {
       expect(() => assertRule(rule, { reg, carrier, systemSeed: true })).not.toThrow();
     }
     expect(() => assertAcyclicGraph(dependencyGraph(reg, { queryRefs: new Map() }))).not.toThrow();
+  });
+});
+
+describe('корпус RULE_FIXTURES (§С8-25, половина «валидатор»)', () => {
+  test('RULE_FIXTURES: вердикт валидатора совпадает с объявленным, все 12 шаблонов покрыты', () => {
+    // ИМЕННЫЕ фикстуры кодов (`RULE_CONFLICT`) кладут в `rule` ПАРУ правил МАССИВОМ: конфликт — свойство
+    // СНИМКА, а не одной декларации, и одним объектом он невыразим. Первое идёт под проверку, остальные —
+    // соседями по строке-носителю. Счёт шаблонов — только по не-массивным: поля `template` на верхнем
+    // уровне у пары нет вовсе, и `undefined` раздул бы множество до тринадцати (тем же признаком такие
+    // фикстуры исключает из счёта форм `ruleFormsOf`, 0c).
+    expect(
+      new Set(
+        RULE_FIXTURES.filter((f) => !Array.isArray(f.rule)).map(
+          (f) => (f.rule as { template: string }).template,
+        ),
+      ).size,
+    ).toBe(12);
+    for (const f of RULE_FIXTURES) {
+      const c = f.carrier as RuleCarrier;
+      const [head, ...rest] = Array.isArray(f.rule) ? f.rule : [f.rule];
+      if (f.verdict.ok) {
+        expect([f.name, check(c, head, rest).id]).toEqual([f.name, (head as { id: string }).id]);
+        continue;
+      }
+      const e = err(() => check(c, head, rest));
+      // `reason` сверяется, только когда фикстура его объявила: у словарного `VALIDATION` код один на
+      // дюжину причин, и вердикт «VALIDATION» без причины подтвердил бы ЛЮБОЙ отказ валидатора.
+      expect([f.name, e.code, f.verdict.reason === undefined ? undefined : reasonOf(e)]).toEqual([
+        f.name,
+        f.verdict.code,
+        f.verdict.reason,
+      ]);
+    }
   });
 });
