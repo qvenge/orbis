@@ -382,7 +382,7 @@ describe('EXPR_FIXTURES — корпус приёмки §С8-28', () => {
     }
   });
 
-  test('полнота: у каждой из 17 форм есть позитив и негатив, у каждого из 4 кодов — фикстура', () => {
+  test('полнота: у каждой из 17 форм есть позитив и негатив, у каждого из 5 кодов — фикстура', () => {
     for (const form of EXPR_FORMS) {
       const w = EXPR_FIXTURES.filter(
         (f) =>
@@ -399,7 +399,13 @@ describe('EXPR_FIXTURES — корпус приёмки §С8-28', () => {
         `негатив для ${form}`,
       ).toBe(true);
     }
-    for (const code of [EXPR_TYPE, EXPR_NOT_TOTAL, EXPR_RECURSION, SECOND_LANGUAGE]) {
+    for (const code of [
+      EXPR_TYPE,
+      EXPR_NOT_TOTAL,
+      EXPR_RECURSION,
+      SECOND_LANGUAGE,
+      DEREF_IN_CONSTRAINT,
+    ]) {
       expect(
         EXPR_FIXTURES.some((f) => !f.verdict.ok && f.verdict.code === code),
         code,

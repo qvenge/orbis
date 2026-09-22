@@ -4,17 +4,24 @@
  * фикстур обязаны различаться) и валидатор подписок сервера (задача 5).
  *
  * Мерка полноты — не «сколько фикстур», а «у каждой из 17 форм узла есть и позитив, и негатив,
- * и у каждого из четырёх кодов отказа есть фикстура»; проверяет её сам тест через
- * `exprFormsOf`. Поэтому строки ниже идут ПО ФОРМАМ в порядке `EXPR_FORMS`, а четыре именные
- * стоят в конце: две — про коды, которых формой не выразить, две — эталонные выражения спеки
- * целиком (набор `facts` §Б5-4 и `daily_pace` §Б5-4), на которых меряется и глубина дерева.
+ * и у каждого из пяти кодов отказа есть фикстура»; проверяет её сам тест через
+ * `exprFormsOf`. Поэтому строки ниже идут ПО ФОРМАМ в порядке `EXPR_FORMS`, а пять именных
+ * стоят в конце: три — про коды, которых формой не выразить (у `DEREF_IN_CONSTRAINT` форма
+ * узла обычная, код даёт ОБЛАСТЬ правила записи), две — эталонные выражения спеки целиком
+ * (набор `facts` §Б5-4 и `daily_pace` §Б5-4), на которых меряется и глубина дерева.
  *
  * Область («scope») пишется без `reg`: словари подставляет читатель — так корпус не тянет за
  * собой встроенные реестры и остаётся данными, а не сборкой.
  */
 import type { ExprScope, ExprType } from './check';
 import type { ExprCheckCode } from './codes';
-import { EXPR_NOT_TOTAL, EXPR_RECURSION, EXPR_TYPE, SECOND_LANGUAGE } from './codes';
+import {
+  DEREF_IN_CONSTRAINT,
+  EXPR_NOT_TOTAL,
+  EXPR_RECURSION,
+  EXPR_TYPE,
+  SECOND_LANGUAGE,
+} from './codes';
 
 export interface ExprFixture {
   name: string;
@@ -347,6 +354,18 @@ export const EXPR_FIXTURES: readonly ExprFixture[] = [
     expr: selfReferencing(),
     scope: {},
     verdict: no(EXPR_RECURSION),
+  },
+  {
+    // Область C-правила записи (§Б3-3, приёмка §С8-29, Р-К-33): то же выражение, что у позитива
+    // формы `deref`, но правило записи читает только свою запись. Флаг области сильнее
+    // разрешения — `allowDeref: true` рядом его не открывает, код свой, а не `EXPR_TYPE`.
+    name: 'правило записи: deref в предикате C-правила',
+    expr: {
+      op: '=',
+      args: [{ deref: { prop: 'orbis/finance_category', read: 'orbis/title' } }, { const: 'Еда' }],
+    },
+    scope: { derefDenied: true, allowDeref: true },
+    verdict: no(DEREF_IN_CONSTRAINT),
   },
   { name: 'facts money-movement целиком', expr: FACTS_EXPR, scope: MONEY, verdict: BOOLEAN },
   {
