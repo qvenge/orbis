@@ -9,6 +9,7 @@ import {
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   BUILTIN_SUBSCRIPTION_DEFS,
+  ruleDefinitionSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
@@ -163,6 +164,104 @@ describe('сид пяти реестров', () => {
       )) as unknown as unknown[];
       expect(badProps).toEqual([]);
     } finally {
+      await client.end();
+    }
+  });
+
+  test('сид кладёт rules всех трёх носителей: колонка ПИШЕТСЯ и её содержимое — правила каталога', async () => {
+    const { db, client } = adminDb();
+    try {
+      // Пин БЕЗ СЧЁТА: «строк с непустым `rules` ноль» верно ровно до задачи 4 и краснело бы у неё, у 12,
+      // 13 и 14 — то есть был бы пином календаря, а не инварианта. Инвариант же держится на всём срезе:
+      // у каждой системной строки колонка — МАССИВ, и каждый его элемент разбирается формой правила.
+      for (const table of [
+        'property_definitions',
+        'aspect_definitions',
+        'relation_role_definitions',
+      ]) {
+        const rows = (await db.execute(sql`SELECT id, rules FROM ${sql.raw(table)}
+          WHERE graph_id IS NULL ORDER BY id`)) as unknown as { id: string; rules: unknown }[];
+        for (const r of rows) {
+          expect([table, r.id, Array.isArray(r.rules)]).toEqual([table, r.id, true]);
+          for (const rule of r.rules as unknown[]) {
+            const parsed = ruleDefinitionSchema.safeParse(rule);
+            expect(`${r.id}: ${parsed.success}`).toBe(`${r.id}: true`);
+          }
+        }
+      }
+      // Ручная порча перетирается пересевом — иначе «сид положил» и «в базе лежит» разошлись бы молча.
+      // Сверка — с КОДОМ, а не с литералом `[]`: после задачи 4 у `orbis/task` появится правило, и литерал
+      // пришлось бы пересдавать четырежды за срез. `graph_id IS NULL` — чтобы не задеть свою строку-
+      // перекрытие владельца с тем же id, если её оставил соседний сьют (сид её не чинит).
+      await db.execute(
+        sql`UPDATE aspect_definitions SET rules = '[{"id":"x"}]'::jsonb
+            WHERE id = 'orbis/task' AND graph_id IS NULL`,
+      );
+      // Подключение — по образцу пересева под живой дельтой (ниже в этом describe).
+      const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+      try {
+        await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      } finally {
+        await raw.end();
+      }
+      const after = (await db.execute(
+        sql`SELECT rules FROM aspect_definitions WHERE id = 'orbis/task' AND graph_id IS NULL`,
+      )) as unknown as { rules: unknown }[];
+      expect(after[0]?.rules).toEqual(
+        BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task')?.rules,
+      );
+    } finally {
+      // Сеть безопасности (как `restoreRegistries` в registry-drift.test.ts): если пересев порчу НЕ
+      // перетёр, тест уже красен, но `[{"id":"x"}]` в system-строке уронил бы строгий разбор снимка
+      // (`registry/load.ts`) у ВСЕХ следующих сьютов прогона — отказ обязан остаться локальным.
+      const codeRules = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task')?.rules ?? [];
+      await db.execute(
+        sql`UPDATE aspect_definitions SET rules = ${JSON.stringify(codeRules)}::jsonb
+            WHERE id = 'orbis/task' AND graph_id IS NULL`,
+      );
+      await client.end();
+    }
+  });
+
+  test('сид кладёт exclusive_classes контрактов — значением из кода, а не умолчанием колонки (Р-К-92)', async () => {
+    const { db, client } = adminDb();
+    try {
+      // Сверка построчная и С КОДОМ: `orbis/delegable` задачи 14а приедет с `true`, и пин «у всех false»
+      // покраснел бы у неё — при том что ловить он обязан ровно обратное: расхождение базы с кодом.
+      const rows = (await db.execute(sql`SELECT id, exclusive_classes FROM contract_definitions
+        WHERE graph_id IS NULL ORDER BY id`)) as unknown as {
+        id: string;
+        // `unknown`, а не `boolean`: значение из базы и есть предмет проверки, а ожидание — `Map.get`.
+        exclusive_classes: unknown;
+      }[];
+      const inCode = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c.exclusive_classes]));
+      for (const r of rows) expect([r.id, r.exclusive_classes]).toEqual([r.id, inCode.get(r.id)]);
+      // Ручная порча перетирается пересевом — иначе флаг из кода терялся бы молча.
+      await db.execute(
+        sql`UPDATE contract_definitions SET exclusive_classes = true
+            WHERE id = 'orbis/completable' AND graph_id IS NULL`,
+      );
+      const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+      try {
+        await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      } finally {
+        await raw.end();
+      }
+      const after = (await db.execute(
+        sql`SELECT exclusive_classes FROM contract_definitions
+            WHERE id = 'orbis/completable' AND graph_id IS NULL`,
+      )) as unknown as { exclusive_classes: unknown }[];
+      expect(after[0]?.exclusive_classes).toBe(inCode.get('orbis/completable'));
+    } finally {
+      // Сеть безопасности: поднятый флаг, не перетёртый пересевом, иначе пережил бы этот тест и
+      // дал бы дрейф `exclusive_classes` каждому следующему сьюту прогона.
+      const code = BUILTIN_CONTRACT_DEFS.find(
+        (c) => c.id === 'orbis/completable',
+      )?.exclusive_classes;
+      await db.execute(
+        sql`UPDATE contract_definitions SET exclusive_classes = ${code ?? false}
+            WHERE id = 'orbis/completable' AND graph_id IS NULL`,
+      );
       await client.end();
     }
   });

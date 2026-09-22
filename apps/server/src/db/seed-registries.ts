@@ -102,77 +102,90 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
   // в своей таблице и пересевом не трогаются.
   const prevSystem = await readSystemDefinitions(sql);
 
+  // `rules` (§Б4-1, 0022) — в списке колонок И в `DO UPDATE SET` у всех трёх носителей: колонка, которую
+  // вход умеет задавать, обязана обновляться, иначе порча в базе или правило прошлого релиза
+  // переживали бы пересев молча (тот же довод, что у `seedCustomAspect`).
   for (const p of BUILTIN_PROPERTY_META) {
     await sql`
       INSERT INTO property_definitions
         (id, graph_id, key, label, description, type, status, storage, scope,
-         merged_into, module, rank, flags)
+         merged_into, module, rank, flags, rules)
       VALUES
         (${p.id}, NULL, ${p.key}, ${sql.json(j(p.label))}, ${sql.json(j(p.description))},
          ${sql.json(j(p.type))}, ${p.status}, ${p.storage},
          ${p.scope === null ? null : sql.json(j(p.scope))},
-         ${p.mergedInto}, ${p.module}, ${p.rank}, ${sql.json(j(p.flags))})
+         ${p.mergedInto}, ${p.module}, ${p.rank}, ${sql.json(j(p.flags))},
+         ${sql.json(j(p.rules))})
       ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         type = EXCLUDED.type, status = EXCLUDED.status, storage = EXCLUDED.storage,
         scope = EXCLUDED.scope, merged_into = EXCLUDED.merged_into,
-        module = EXCLUDED.module, rank = EXCLUDED.rank, flags = EXCLUDED.flags`;
+        module = EXCLUDED.module, rank = EXCLUDED.rank, flags = EXCLUDED.flags,
+        rules = EXCLUDED.rules`;
   }
 
   for (const r of BUILTIN_RELATION_ROLE_META) {
     await sql`
       INSERT INTO relation_role_definitions
         (id, graph_id, key, label, description, source_label, target_label,
-         hierarchical, constraints, "symmetric", module, rank)
+         hierarchical, constraints, "symmetric", module, rank, rules)
       VALUES
         (${r.id}, NULL, ${r.key}, ${sql.json(j(r.label))}, ${sql.json(j(r.description))},
          ${sql.json(j(r.sourceLabel))}, ${sql.json(j(r.targetLabel))},
-         ${r.hierarchical}, ${sql.json(j(r.constraints))}, ${r.symmetric}, ${r.module}, ${r.rank})
+         ${r.hierarchical}, ${sql.json(j(r.constraints))}, ${r.symmetric}, ${r.module}, ${r.rank},
+         ${sql.json(j(r.rules))})
       ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         source_label = EXCLUDED.source_label, target_label = EXCLUDED.target_label,
         hierarchical = EXCLUDED.hierarchical, constraints = EXCLUDED.constraints,
-        "symmetric" = EXCLUDED."symmetric", module = EXCLUDED.module, rank = EXCLUDED.rank`;
+        "symmetric" = EXCLUDED."symmetric", module = EXCLUDED.module, rank = EXCLUDED.rank,
+        rules = EXCLUDED.rules`;
   }
 
   for (const a of BUILTIN_ASPECT_DEFS) {
     await sql`
       INSERT INTO aspect_definitions
         (id, graph_id, key, label, description, properties, implements, aggregations,
-         ai_instructions, tag_mappings, view_config, module, service, rank)
+         ai_instructions, tag_mappings, view_config, module, service, rank, rules)
       VALUES
         (${a.id}, NULL, ${a.key}, ${sql.json(j(a.label))}, ${sql.json(j(a.description))},
          ${sql.json(j(a.properties))}, ${sql.json(j(a.implements))},
          ${sql.json(j(a.aggregations))},
          ${a.aiInstructions}, ${a.tagMappings}, ${sql.json(j(a.viewConfig))},
-         ${a.module}, ${a.service}, ${a.rank})
+         ${a.module}, ${a.service}, ${a.rank}, ${sql.json(j(a.rules))})
       ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, implements = EXCLUDED.implements,
         aggregations = EXCLUDED.aggregations,
         ai_instructions = EXCLUDED.ai_instructions,
         tag_mappings = EXCLUDED.tag_mappings, view_config = EXCLUDED.view_config,
-        module = EXCLUDED.module, service = EXCLUDED.service, rank = EXCLUDED.rank`;
+        module = EXCLUDED.module, service = EXCLUDED.service, rank = EXCLUDED.rank,
+        rules = EXCLUDED.rules`;
   }
 
   for (const c of BUILTIN_CONTRACT_DEFS) {
     // SQL NULL, а не `sql.json(null)`: колонки nullable, форму различает `kind` (CHECK schema.ts),
     // и jsonb-значение `null` сделало бы «слотов нет» неотличимым от «слоты — литеральный null».
     // Тот же приём, что у `scope` свойства выше.
+    // `exclusive_classes` — плоский boolean, а не `sql.json`: колонка `boolean NOT NULL`, не jsonb.
+    // В `DO UPDATE SET` он едет по правилу всех четырёх upsert'ов: колонка, которую вход умеет
+    // задавать, обязана обновляться, иначе повторный сев сохранял бы значение прошлого релиза.
     await sql`
       INSERT INTO contract_definitions
-        (id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank)
+        (id, graph_id, key, label, description, kind, slots, classes, sets, facts,
+         exclusive_classes, module, rank)
       VALUES
         (${c.id}, NULL, ${c.key}, ${sql.json(j(c.label))}, ${sql.json(j(c.description))}, ${c.kind},
          ${c.slots === null ? null : sql.json(j(c.slots))},
          ${c.classes === null ? null : sql.json(j(c.classes))},
          ${c.sets === null ? null : sql.json(j(c.sets))},
          ${c.facts === null ? null : sql.json(j(c.facts))},
-         ${c.module}, ${c.rank})
+         ${c.exclusive_classes}, ${c.module}, ${c.rank})
       ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         kind = EXCLUDED.kind, slots = EXCLUDED.slots, classes = EXCLUDED.classes,
-        sets = EXCLUDED.sets, facts = EXCLUDED.facts, module = EXCLUDED.module, rank = EXCLUDED.rank`;
+        sets = EXCLUDED.sets, facts = EXCLUDED.facts, exclusive_classes = EXCLUDED.exclusive_classes,
+        module = EXCLUDED.module, rank = EXCLUDED.rank`;
   }
 
   // §Б5-1: декларация поверхности — СТРОКА РЕЕСТРА, а не литерал в коде движка. Дельта
@@ -225,18 +238,24 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
  * для своего рода, а докблок §А3-3 прямо разрешает ошибаться «в сторону лишнего конфликта».
  * `registry/load.ts` при этом остаётся строгим: fail-closed на чтении — сознательный выбор, и
  * лечит его именно этот сид.
+ *
+ * Сторона «до» обязана быть ПОЛНОЙ строкой: `rules` свойств и аспектов и `exclusive_classes`
+ * контрактов (0022) читаются здесь наравне с прочими колонками. Без `rules` слияние (задача 16)
+ * видело бы «система добавила правило» на каждом пересеве, без флага — читало бы его как снятый.
+ * Роли здесь не читаются: стороны слияния для ролей `SystemDefinitions` не несёт (`registry/deltas.ts`).
  */
 export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinitions> {
   const propertyRows = await sql<Record<string, unknown>[]>`
     SELECT id, graph_id, key, label, description, type, status, storage, scope,
-           merged_into, module, rank, flags
+           merged_into, module, rank, flags, rules
     FROM property_definitions WHERE graph_id IS NULL`;
   const aspectRows = await sql<Record<string, unknown>[]>`
     SELECT id, graph_id, key, label, description, properties, ai_instructions, tag_mappings,
-           implements, aggregations, view_config, module, service, rank
+           implements, aggregations, view_config, module, service, rank, rules
     FROM aspect_definitions WHERE graph_id IS NULL`;
   const contractRows = await sql<Record<string, unknown>[]>`
-    SELECT id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank
+    SELECT id, graph_id, key, label, description, kind, slots, classes, sets, facts,
+           exclusive_classes, module, rank
     FROM contract_definitions WHERE graph_id IS NULL`;
   const subscriptionRows = await sql<Record<string, unknown>[]>`
     SELECT id, graph_id, surface, definition, module, rank
@@ -257,6 +276,7 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
       module: r.module,
       rank: r.rank,
       flags: r.flags,
+      rules: r.rules,
     });
     if (parsed.success) properties.set(r.id as string, parsed.data);
   }
@@ -278,6 +298,7 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
       module: r.module,
       service: r.service,
       rank: r.rank,
+      rules: r.rules,
     });
     if (parsed.success) aspects.set(r.id as string, parsed.data);
   }
@@ -294,6 +315,7 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
       classes: r.classes,
       sets: r.sets,
       facts: r.facts,
+      exclusive_classes: r.exclusive_classes,
       module: r.module,
       rank: r.rank,
     });
