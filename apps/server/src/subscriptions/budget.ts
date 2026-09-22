@@ -68,7 +68,7 @@ import { ExecError } from '../errors';
 import { compileClassMembership, compileContractPredicate } from '../expr/compile';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
-import { DEFAULT_TIMEZONE } from '../query/context';
+import { ownerTimeZone } from '../query/context';
 import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf } from '../registry/modules';
 import { toWireEntity } from '../wire';
@@ -112,6 +112,13 @@ export interface BudgetArgs {
 export interface LedgerArgs extends BudgetArgs {
   defaultCurrency: string;
   defaults: ReadonlyMap<string, ExprScalar>;
+  /**
+   * Зона владельца — Р-33; до Б-2 компилятор ведомостей стоял на `DEFAULT_TIMEZONE`, то есть считал
+   * дни чужой зоной. Читает `runLedgers` (`ownerTimeZone`) и кладёт ОДНО значение и в `cctx.timeZone`
+   * (SQL-бэкенд, `AT TIME ZONE`), и сюда — в оба конструктора области интерпретатора: две зоны у
+   * одной ведомости развели бы день момента в SQL и в TS (паритет — `expr/parity.test.ts`).
+   */
+  timeZone: string;
 }
 
 export interface LedgerPlan {
@@ -843,6 +850,7 @@ function envelopeLedgers(
     binding,
     today: args.today,
     defaults: args.defaults,
+    timeZone: args.timeZone,
   };
   scope.phase = phaseOf(def, scope);
   scope.aggs[PHASE_KEY] = scope.phase;
@@ -1121,10 +1129,11 @@ async function runLedgers(
   reg: RegistrySnapshot,
   narrow: LedgerNarrowing = {},
 ): Promise<LedgerRun> {
+  const timeZone = await ownerTimeZone(tx, graphId);
   const cctx: CompileCtx = {
     graphId,
     today: args.today,
-    timeZone: DEFAULT_TIMEZONE,
+    timeZone,
     reg,
     thisEntityId: null,
   };
@@ -1132,6 +1141,7 @@ async function runLedgers(
     ...args,
     defaultCurrency: await defaultCurrencyOf(tx, graphId),
     defaults: propertyDefaultsOf(reg),
+    timeZone,
   };
   const envContract = def.sources.envelope.contract;
 
@@ -1272,6 +1282,7 @@ async function runList(
       props: {},
       today: args.today,
       defaults: args.defaults,
+      timeZone: args.timeZone,
     };
     const date = slotExpr('date', mv, cctx, e);
     where.push(

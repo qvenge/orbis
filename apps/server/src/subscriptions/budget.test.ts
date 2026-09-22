@@ -318,6 +318,7 @@ describe('двухфазный план §Б5-3', () => {
         today,
         defaultCurrency: 'RUB',
         defaults: propertyDefaultsOf(cctx.reg),
+        timeZone: cctx.timeZone,
       });
       const rows = (await tx.execute(plan.sources.envelopeIds)) as unknown as Array<{ id: string }>;
       const oracle = await computeOverview(tx, userA, curMonth, today);
@@ -334,6 +335,7 @@ describe('двухфазный план §Б5-3', () => {
         today,
         defaultCurrency: 'RUB',
         defaults: propertyDefaultsOf(cctx.reg),
+        timeZone: cctx.timeZone,
       });
       // Текст ГОТОВОГО фрагмента — тем же диалектом, что и golden компилятора Q
       // (`query/compile-ast.test.ts`): своя склейка `queryChunks` показывала бы не тот SQL,
@@ -399,6 +401,7 @@ describe('область `where` ведомости и списка (B3 I-1)', (
             today,
             defaultCurrency: 'RUB',
             defaults: propertyDefaultsOf(cctx.reg),
+            timeZone: cctx.timeZone,
           }).aggregates.get('spent') as SQL,
         ).sql;
         expect(text).toContain("'orbis/amount'"); // слот дошёл до SQL, а не отказал
@@ -423,6 +426,7 @@ describe('область `where` ведомости и списка (B3 I-1)', (
         today,
         defaultCurrency: 'RUB',
         defaults: propertyDefaultsOf(cctx.reg),
+        timeZone: cctx.timeZone,
       };
       const ids = (
         (await tx.execute(planLedgers(def, cctx, args).sources.envelopeIds)) as unknown as Array<{
