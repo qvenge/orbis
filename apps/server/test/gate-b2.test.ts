@@ -139,4 +139,15 @@ describe('гейт вехи I: инвариант только декларац�
     expect(d.property).toBe('orbis/occurred_on');
     expect(d.scope).toEqual({ aspect: 'orbis/financial' });
   });
+
+  // Зеленит задача 4 (строка `task_completed_at` + снос `applyTaskCompletion`). Значение правила —
+  // `{prop:'orbis/updated_at'}` (Р-И-3/Р-К-2: «момент этой записи» выразим существующей core-проекцией,
+  // `$now` в язык не заводится). Сегодня код пишет чистый `clock()` (докблок `monotonicUpdatedAt`,
+  // `executor.ts:1635-1639`), а `updated_at` апдейта в тот же тик равен `clock() + 1 мс` — тест красен
+  // ровно на этой миллисекунде, и она и есть вся разница между кодом и декларацией.
+  test.failing('2. on_enter_class строкой сида: completed_at равен updated_at записи, уход снимает', () => {
+    const { done, back } = taken(sysTransition, 'задача в done и обратно');
+    expect(done.props['orbis/completed_at']).toBe(done.updatedAt);
+    expect('orbis/completed_at' in back.props).toBe(false);
+  });
 });
