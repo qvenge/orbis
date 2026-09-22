@@ -146,9 +146,7 @@ import {
 } from './invariants';
 import {
   applyTaskCompletion,
-  assertFinancialInvariant,
   dropStaleCarryover,
-  financialRecurringNeedsDerivedFrom,
   hasBodyInInput,
   needsProjectSeed,
   normalizeTags,
@@ -1598,43 +1596,6 @@ function assertPrecondition(
 }
 
 /**
- * Financial-инвариант §3.3 с derived_from-веткой: наличие входящей derived_from
- * резолвится только когда от него зависит валидность (recurring=true без recurrence) —
- * из связей, объявленных тем же batch, либо из БД (минус удаляемые batch'ем).
- */
-async function assertFinancial(
-  ctx: ExecCtx,
-  entityId: string,
-  state: EntityState,
-  batch?: BatchState,
-): Promise<void> {
-  let hasDerivedFrom = false;
-  if (financialRecurringNeedsDerivedFrom(state)) {
-    hasDerivedFrom = await hasIncomingDerivedFrom(ctx, entityId, batch);
-  }
-  assertFinancialInvariant(state, hasDerivedFrom);
-}
-
-async function hasIncomingDerivedFrom(
-  ctx: ExecCtx,
-  entityId: string,
-  batch?: BatchState,
-): Promise<boolean> {
-  if (batch?.declaredDerivedFromTargets.has(entityId)) return true;
-  const rows = await ctx.tx
-    .select({ sourceId: relations.sourceId })
-    .from(relations)
-    .where(and(eq(relations.targetId, entityId), eq(relations.role, ROLE_INSTANCE_OF)));
-  const deleted = batch?.deletedRelations ?? [];
-  return rows.some(
-    (r) =>
-      !deleted.some(
-        (d) => d.sourceId === r.sourceId && d.targetId === entityId && d.role === ROLE_INSTANCE_OF,
-      ),
-  );
-}
-
-/**
  * Монотонный updated_at (§5.2): clock() с ms-точностью не различает два апдейта в один
  * тик — optimistic-check body пропускал бы stale-правку. Токен конкурентности всегда
  * строго растёт: max(clock(), prev + 1ms). Доменные таймстампы (completed_at и т.п.)
@@ -1793,11 +1754,10 @@ async function prepareEntityCreate(
     }
   }
 
-  // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи
-  await assertFinancial(ctx, id, state, batch);
-  // Каталог правил (§Б4-3) — стадия 4, рядом со старой проверкой. Порядок «старая первой»
-  // намеренный (Р-К-18): до задачи 4 тексты отказов близнецов не меняются, а двойная проверка
-  // доказывает, что данные дают тот же вердикт, что код. Старый вызов сносит задача 4.
+  // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи.
+  // Каталог правил (§Б4-3): условные ограничения записи — строками реестра (§А7-2, задача 4). Инвариант
+  // «не-шаблон `orbis/financial` несёт `occurred_on`» и его пара про `recurring` живут ДАННЫМИ
+  // (`builtin-rules.ts`): `enabled: false` на строке выключает их, кода под них нет.
   await assertConstraintRules({
     ctx: ruleCtxOf(ctx),
     entityId: id,
@@ -2109,8 +2069,6 @@ async function prepareEntityUpdate(
       state,
       ctx.internalUndo === undefined ? touchedProperties(propsPatch) : new Set<string>(),
     );
-    // Стадия 4: инвариант §3.3 над финальным состоянием (ловит и detach orbis/schedule)
-    await assertFinancial(ctx, input.id, state, batch);
     // Живой грант в назначении (С4/С7) — только когда назначение ЗАТРОНУТО патчем.
     // Проверять его на каждой правке нельзя: отзыв гранта иначе замораживал бы тикет
     // целиком (даже переименование), а отзыв закрывает доступ агенту, а не сущность.
@@ -2137,9 +2095,10 @@ async function prepareEntityUpdate(
   // (рулинг Ф-Б2-17, уточнён рулингом 3-4). Область правила объявляет core-проекции (`orbis/archived`,
   // `orbis/title`, `orbis/updated_at` — `CORE_PROJECTION` в `rules/scope.ts`), и включённое правило с
   // `when` по ним не молчит на архивации или переименовании (Р-И-13). Тот же вынос из ветки, что у
-  // единственного старого инварианта над `archived` — уникальности конверта ниже. Старая проверка
-  // (`assertFinancial`) по-прежнему идёт ПЕРВОЙ на правке свойств (Р-К-18); под внутренним undo движок
-  // решает по ЭКЗЕМПЛЯРУ правила (`undo: check|skip`, Р-И-2).
+  // единственного старого инварианта над `archived` — уникальности конверта ниже. Инвариант §3.3
+  // (`financial_*`) — строка каталога и проверяется здесь же, над финальным состоянием (ловит и detach
+  // `orbis/schedule`); под внутренним undo движок решает по ЭКЗЕМПЛЯРУ правила (`undo: check|skip`,
+  // Р-И-2).
   //   • Правка СО свойствами — все применимые C-правила (паритет со старым кодом).
   //   • Правка БЕЗ свойств — только правила, чей набор чтения пересекает РЕАЛЬНО изменённые поля ядра
   //     (`touchedCore`, `coreFieldsChanged`): свойства не менялись, и вердикт прочих правил прежний.
@@ -2458,8 +2417,7 @@ async function prepareAttach(
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
   assertEntityProps(ctx.registry, state, touchedProperties(propsPatch));
 
-  await assertFinancial(ctx, input.entity_id, state, batch);
-  // Каталог правил (§Б4-3) — рядом со старой проверкой, тот же довод, что на create (Р-К-18).
+  // Каталог правил (§Б4-3) — третий путь появления аспекта, тот же довод, что на create.
   await assertConstraintRules({
     ctx: ruleCtxOf(ctx),
     entityId: input.entity_id,
