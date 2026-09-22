@@ -289,13 +289,9 @@ export interface CustomAspectSpec {
   /** Модуль аспекта (§Б8-2): нужен снимкам состояния «модуль выключен» (задача 18). */
   module?: string | null;
   /**
-   * Правила каталога на строке аспекта (§Б4-1). Колонка `rules` появляется миграцией 0022
-   * (задача 2), и записывать её БЕЗУСЛОВНО нельзя: до вехи I каждый сев фикстуры упал бы на
-   * несуществующей колонке. Поэтому вторая форма записи — отдельный UPDATE, который выполняется
-   * ТОЛЬКО когда поле задано, а до задачи 2 его не задаёт никто.
-   *
-   * ЗАДАЧЕ 2: добавив колонку, снять условие и писать `spec.rules ?? []` ВСЕГДА — иначе повторный
-   * сев того же ключа без правил сохранит правила первого сева (ловушка Р12 Б-1).
+   * Правила каталога на строке аспекта (§Б4-1). Колонка `rules` есть с миграции 0022, и хелпер
+   * пишет её ВСЕГДА (`spec.rules ?? []`) — в INSERT и в `DO UPDATE SET`: иначе повторный сев того
+   * же ключа без правил сохранил бы правила первого сева (ловушка Р12 Б-1, Р-К-77).
    */
   rules?: RuleDefinitionInput[];
 }
@@ -351,7 +347,7 @@ export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec)
     await db.execute(sql`
       INSERT INTO aspect_definitions
         (id, graph_id, key, label, description, properties, implements,
-         ai_instructions, tag_mappings, view_config, module, service, rank)
+         ai_instructions, tag_mappings, view_config, module, service, rank, rules)
       VALUES (${spec.key}, ${graphId}, ${spec.key},
               ${JSON.stringify(spec.label)}::jsonb,
               ${JSON.stringify(spec.description ?? spec.label)}::jsonb,
@@ -359,20 +355,16 @@ export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec)
               ${spec.aiInstructions ?? null},
               ${sql.raw(pgTextArray(spec.tagMappings ?? []))},
               ${JSON.stringify({ keyFields: refs.map((r) => r.propertyId) })}::jsonb,
-              ${spec.module ?? null}, false, 0)
-      -- В DO UPDATE SET едут все три колонки (implements, tag_mappings, module), а не одна
-      -- новая: правило списка — «колонка, которую вход умеет задавать, обязана обновляться».
+              ${spec.module ?? null}, false, 0, ${JSON.stringify(spec.rules ?? [])}::jsonb)
+      -- В DO UPDATE SET едут все четыре колонки (implements, tag_mappings, module, rules), а не
+      -- одна новая: правило списка — «колонка, которую вход умеет задавать, обязана обновляться».
       -- Половинчатый список и есть тот дефект, из-за которого повторный сев того же ключа
-      -- молча сохранял бы привязки первого сева (Р12).
+      -- молча сохранял бы привязки или правила первого сева (Р12, Р-К-77).
       ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO UPDATE SET
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, implements = EXCLUDED.implements,
         ai_instructions = EXCLUDED.ai_instructions, tag_mappings = EXCLUDED.tag_mappings,
-        module = EXCLUDED.module, view_config = EXCLUDED.view_config`);
-
-    if (spec.rules !== undefined) {
-      await writeRegistryRules(db, graphId, 'aspect_definitions', spec.key, spec.rules);
-    }
+        module = EXCLUDED.module, view_config = EXCLUDED.view_config, rules = EXCLUDED.rules`);
 
     // Реестр владельца изменился — версия обязана сдвинуться (§А10-1), иначе снимок в
     // кеше процесса останется без этого аспекта.
@@ -399,18 +391,6 @@ function pgTextArray(values: string[]): string {
   return `ARRAY[${values.map((v) => `'${v.replaceAll("'", "''")}'`).join(',')}]::text[]`;
 }
 
-/** Добивка колонки `rules` (§Б4-1) у строки реестра владельца — см. докблок `CustomAspectSpec.rules`. */
-async function writeRegistryRules(
-  db: Db,
-  graphId: GraphId,
-  table: 'aspect_definitions' | 'relation_role_definitions',
-  id: string,
-  rules: RuleDefinitionInput[],
-): Promise<void> {
-  await db.execute(sql`UPDATE ${sql.raw(table)} SET rules = ${JSON.stringify(rules)}::jsonb
-    WHERE graph_id = ${graphId} AND id = ${id}`);
-}
-
 /**
  * Своя роль связи владельца — фикстура §С8-26 (роль `participant`).
  *
@@ -430,7 +410,7 @@ export interface CustomRoleSpec {
   /** §А4-2: `target_max_incoming` / `acyclic` / `source_contract` / `target_contract` / `created_by`. */
   constraints?: Record<string, unknown>;
   module?: string | null;
-  /** Правила каталога (§Б4-1); колонка `rules` появляется в 0022 — пишется только когда задано. */
+  /** Правила каталога (§Б4-1); колонка `rules` есть с 0022 — пишется ВСЕГДА, как у аспекта (Р-К-77). */
   rules?: RuleDefinitionInput[];
 }
 
@@ -443,7 +423,7 @@ export async function seedCustomRole(graphId: GraphId, spec: CustomRoleSpec): Pr
     await db.execute(sql`
       INSERT INTO relation_role_definitions
         (id, graph_id, key, label, description, source_label, target_label,
-         hierarchical, constraints, "symmetric", module, rank)
+         hierarchical, constraints, "symmetric", module, rank, rules)
       VALUES (${spec.key}, ${graphId}, ${spec.key},
               ${JSON.stringify(spec.label)}::jsonb,
               ${JSON.stringify({ ru: `Роль ${spec.key} (фикстура §С8-26)` })}::jsonb,
@@ -451,7 +431,8 @@ export async function seedCustomRole(graphId: GraphId, spec: CustomRoleSpec): Pr
               ${JSON.stringify(spec.targetLabel)}::jsonb,
               ${spec.hierarchical ?? false},
               ${JSON.stringify(spec.constraints ?? {})}::jsonb,
-              false, ${spec.module ?? null}, ${CUSTOM_ROLE_RANK})
+              false, ${spec.module ?? null}, ${CUSTOM_ROLE_RANK},
+              ${JSON.stringify(spec.rules ?? [])}::jsonb)
       -- Тот же список, что у сида: колонка, которую вход умеет задавать, обязана обновляться
       -- (Р12 Б-1). Колонка symmetric не обновляется: схема разрешает только false (обратные
       -- кавычки внутри SQL-комментария закрыли бы шаблонную строку — их здесь быть не может).
@@ -459,10 +440,9 @@ export async function seedCustomRole(graphId: GraphId, spec: CustomRoleSpec): Pr
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         source_label = EXCLUDED.source_label, target_label = EXCLUDED.target_label,
         hierarchical = EXCLUDED.hierarchical, constraints = EXCLUDED.constraints,
-        module = EXCLUDED.module, rank = EXCLUDED.rank`);
-    if (spec.rules !== undefined) {
-      await writeRegistryRules(db, graphId, 'relation_role_definitions', spec.key, spec.rules);
-    }
+        module = EXCLUDED.module, rank = EXCLUDED.rank, rules = EXCLUDED.rules`);
+    // Реестр владельца изменился — версия обязана сдвинуться (§А10-1), иначе прогретый снимок в
+    // кеше процесса останется без роли (пин — test-seed.test.ts, «прогретый снимок видит роль»).
     await bumpOwnerRegistryVersion(db, graphId);
   } finally {
     await client.end();

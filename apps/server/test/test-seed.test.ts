@@ -3,9 +3,8 @@
 // заведены ФИКСТУРОЙ (не сидом: `test/*` — строки владельца, системными им быть нельзя — иначе они
 // уехали бы в дрейф `registry-drift.ts`, который читает `WHERE graph_id IS NULL`).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { TEST_IMPORT_ROUTINE_ID } from '@orbis/shared';
+import { type GraphId, TEST_IMPORT_ROUTINE_ID } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import type { Db } from '../src/db/client';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
 import {
@@ -37,13 +36,6 @@ afterAll(async () => {
   await client.end();
 });
 
-/** Есть ли уже колонка `rules` у строки аспекта: до миграции 0022 (задача 2) её нет. */
-async function hasRulesColumn(adb: Db): Promise<boolean> {
-  const rows = (await adb.execute(sql`SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'aspect_definitions' AND column_name = 'rules'`)) as unknown as unknown[];
-  return rows.length > 0;
-}
-
 describe('хелпер сева роли владельца', () => {
   test('seedCustomRole кладёт строку роли и она видна снимком реестра владельца', async () => {
     const user = await freshGraph();
@@ -55,6 +47,16 @@ describe('хелпер сева роли владельца', () => {
     // мир §С8-26 не смог бы поставить ребро `participant` владельческой операцией (дочитка §3).
     expect(role?.constraints).toEqual({ created_by: 'any' });
     expect(role?.symmetric).toBe(false);
+  });
+  test('seedCustomRole двигает версию реестра: прогретый снимок видит роль (§А10-1)', async () => {
+    const user = await freshGraph();
+    // Снимок ПРОГРЕТ до сева: ключ кеша — версии владельца и системы (`registry/cache.ts`), и без
+    // сдвига версии хелпером следующий вызов отдал бы этот же снимок — без роли, молча.
+    const before = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+    expect(before.roles.has(TEST_ROLE_PARTICIPANT_KEY)).toBe(false);
+    await seedCustomRole(user, TEST_ROLE_PARTICIPANT);
+    const after = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+    expect(after.roles.get(TEST_ROLE_PARTICIPANT_KEY)?.graphId).toBe(user);
   });
   test('повторный сев ПЕРЕЗАПИСЫВАЕТ подписи и ограничения (ловушка ON CONFLICT, Р12 Б-1)', async () => {
     const user = await freshGraph();
@@ -73,44 +75,60 @@ describe('хелпер сева роли владельца', () => {
   });
 });
 
-describe('правила в строке аспекта (§Б4-1) пишутся хелпером', () => {
-  // ДВЕ формы записи, и обе обязательны: до миграции 0022 колонки `rules` НЕТ, и хелпер, пишущий
-  // её всегда, уронил бы каждый сев вехи 0. Поэтому вторая форма — добивка отдельным UPDATE,
-  // выполняемая ТОЛЬКО когда `spec.rules` задан.
-  test('rules не задан → колонки не касаемся; задан → лежит в строке', async () => {
+describe('правила в строке-носителе (§Б4-1) пишутся хелпером', () => {
+  // ОДНА форма записи (Р-К-77): колонка `rules` есть с 0022, и хелпер пишет её ВСЕГДА — `spec.rules ?? []`
+  // в INSERT и в `DO UPDATE SET`. Вторая половина каждой пробы — повторный сев БЕЗ правил: условная
+  // запись («только когда задано») сохранила бы правила первого сева молча (ловушка Р12 Б-1).
+  async function storedRuleIds(
+    table: string,
+    graph: GraphId,
+    id: string,
+  ): Promise<string[] | undefined> {
+    const { db: adb, client: ac } = adminDb();
+    try {
+      const rows = (await adb.execute(sql`SELECT rules FROM ${sql.raw(table)}
+        WHERE graph_id = ${graph} AND id = ${id}`)) as unknown as Array<{
+        rules: Array<{ id: string }>;
+      }>;
+      return rows[0]?.rules.map((r) => r.id);
+    } finally {
+      await ac.end();
+    }
+  }
+
+  test('аспект: rules задан → лежит в строке; повторный сев без rules → список пуст', async () => {
     const user = await freshGraph();
     const spec = {
       key: 'test/rules-probe',
       label: { ru: 'Проба правил' },
       properties: [{ key: 'rp_flag', type: { kind: 'boolean' } as const }],
     };
-    // Первая форма проверяется СЕГОДНЯ и именно тем, что не падает: колонки `rules` в базе нет,
-    // и сев без правил обязан её не касаться.
-    await seedCustomAspect(user, spec); // без `rules` — до 0022 это единственный путь
-    const { db: adb, client: ac } = adminDb();
-    try {
-      // Колонка приезжает миграцией 0022 (задача 2). До неё проба честно объявляет, чего ждёт, и
-      // пропускается: пометка ожидаемого провала жила бы здесь до вехи I и размывала бы список
-      // `PENDING_MARK_FILES`, который сторож сверяет поимённо. Сев С ПРАВИЛАМИ стоит ПОСЛЕ
-      // условия, а не до него: он и есть тот самый UPDATE по несуществующей колонке (Р-К-77).
-      if (!(await hasRulesColumn(adb))) {
-        expect(await hasRulesColumn(adb)).toBe(false); // утверждение, а не тишина
-        return;
-      }
-      await seedCustomAspect(user, {
-        ...spec,
-        rules: [
-          { id: 'rp_requires', template: 'requires_when', params: { property: 'test/rp_flag' } },
-        ],
-      });
-      const rows = (await adb.execute(sql`SELECT rules FROM aspect_definitions
-        WHERE graph_id = ${user} AND id = 'test/rules-probe'`)) as unknown as Array<{
-        rules: Array<{ id: string }>;
-      }>;
-      expect(rows[0]?.rules.map((r) => r.id)).toEqual(['rp_requires']);
-    } finally {
-      await ac.end();
-    }
+    await seedCustomAspect(user, {
+      ...spec,
+      rules: [
+        { id: 'rp_requires', template: 'requires_when', params: { property: 'test/rp_flag' } },
+      ],
+    });
+    expect(await storedRuleIds('aspect_definitions', user, 'test/rules-probe')).toEqual([
+      'rp_requires',
+    ]);
+    await seedCustomAspect(user, spec);
+    expect(await storedRuleIds('aspect_definitions', user, 'test/rules-probe')).toEqual([]);
+  });
+
+  test('роль: rules задан → лежит в строке; повторный сев без rules → список пуст', async () => {
+    const user = await freshGraph();
+    await seedCustomRole(user, {
+      ...TEST_ROLE_PARTICIPANT,
+      rules: [{ id: 'rp_acyclic', template: 'acyclic', params: {} }],
+    });
+    expect(
+      await storedRuleIds('relation_role_definitions', user, TEST_ROLE_PARTICIPANT_KEY),
+    ).toEqual(['rp_acyclic']);
+    await seedCustomRole(user, TEST_ROLE_PARTICIPANT);
+    expect(
+      await storedRuleIds('relation_role_definitions', user, TEST_ROLE_PARTICIPANT_KEY),
+    ).toEqual([]);
   });
 });
 
