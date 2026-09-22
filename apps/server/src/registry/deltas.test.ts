@@ -101,6 +101,7 @@ function selectProperty(
     module: null,
     rank: 900,
     flags: {},
+    rules: [], // §Б4-1: поле строки-носителя — литерал без схемы обязан назвать его сам
   };
 }
 

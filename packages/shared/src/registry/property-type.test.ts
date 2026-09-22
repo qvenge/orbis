@@ -3,7 +3,9 @@
 // словаря kind, строгость форм и паспорт RE2 у паттернов (без него сгенерированная схема
 // не компилируется у внешнего потребителя — причина `strict:false` D29, §А2-2).
 import { expect, test } from 'bun:test';
+import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_PROPERTY_META } from './builtin-properties';
+import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import {
   aspectDefinitionSchema,
   assertPatternRegular,
@@ -262,4 +264,68 @@ test('§А2-1: scope свойства — статический Q-AST, а не 
   expect(ok({ filter: null, dropme: 1 })).toBe(false);
   // Умолчание сохранилось: поле необязательно и по умолчанию пусто.
   expect(propertyDefinitionSchema.parse(base).scope).toBeNull();
+});
+
+// Три минимальные строки-носителя: остальные поля схем имеют умолчания (`label`/`description` —
+// константы файла выше). У свойства `status` умолчания нет (enum без `.default`) — он назван явно.
+const HEAD = { graphId: null, label, description, rank: 1 };
+const ROWS = [
+  [
+    'property',
+    propertyDefinitionSchema,
+    { ...HEAD, id: 'user/p', key: 'user/p', type: { kind: 'text' }, status: 'active' },
+  ],
+  [
+    'aspect',
+    aspectDefinitionSchema,
+    {
+      ...HEAD,
+      id: 'user/a',
+      key: 'user/a',
+      properties: [],
+      aiInstructions: null,
+      tagMappings: [],
+      viewConfig: { keyFields: [] },
+      module: null,
+      service: false,
+    },
+  ],
+  [
+    'role',
+    relationRoleDefinitionSchema,
+    {
+      ...HEAD,
+      id: 'link',
+      key: 'link',
+      sourceLabel: label,
+      targetLabel: label,
+      hierarchical: false,
+      module: null,
+    },
+  ],
+] as const;
+
+test('rules — поле КАЖДОЙ строки-носителя (§Б4-1): умолчание [], форма — ruleDefinitionSchema', () => {
+  const rule = {
+    id: 'probe',
+    template: 'requires_when',
+    params: { property: 'orbis/occurred_on' },
+  };
+  for (const [name, schema, row] of ROWS) {
+    expect([name, schema.parse(row).rules]).toEqual([name, []]); // строка, посеянная до 0022
+    const parsed = schema.parse({ ...row, rules: [rule] });
+    expect([name, parsed.rules[0]?.enabled, parsed.rules[0]?.undo]).toEqual([name, true, 'check']);
+    // Строгость общая: правило, не разобравшееся схемой, не уезжает в jsonb молча.
+    expect(schema.safeParse({ ...row, rules: [{ ...rule, template: 'нет' }] }).success).toBe(false);
+  }
+});
+
+test('BUILTIN_* собираются схемой и потому несут rules: [] (сидов правил пока нет)', () => {
+  for (const d of [
+    ...BUILTIN_PROPERTY_META,
+    ...BUILTIN_ASPECT_DEFS,
+    ...BUILTIN_RELATION_ROLE_META,
+  ]) {
+    expect([d.id, d.rules]).toEqual([d.id, []]);
+  }
 });
