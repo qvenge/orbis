@@ -738,4 +738,13 @@ describe('область ЗАПИСИ: класс, рёбра, величины 
       expect(reasonOf(() => evalExpr(node, scope))).toBe('VALIDATION/EXPR_BACKEND_UNSUPPORTED');
     }
   });
+  test('has над json-свойством — присутствие, а не разбор значения (Р-К-12)', () => {
+    const s = scopeOf({ props: { 'orbis/recurrence': { freq: 'monthly' } } });
+    expect(evalExpr({ has: 'orbis/recurrence' }, s)).toBe(true);
+    expect(
+      evalExpr({ has: 'orbis/recurrence' }, scopeOf({ props: { 'orbis/recurrence': null } })),
+    ).toBe(false);
+    // Значение json в ПОЗИЦИИ ЗНАЧЕНИЯ по-прежнему отказ: `scalarOf` не трогаем (Р-И-5).
+    expect(reasonOf(() => evalExpr({ prop: 'orbis/recurrence' }, s))).toBe('VALIDATION/EXPR_VALUE');
+  });
 });

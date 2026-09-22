@@ -540,6 +540,18 @@ function truthy(value: ExprValue): boolean {
 }
 
 /**
+ * Присутствие по Р-К-12: `undefined`/`null` — нет, всё остальное (в том числе json-объект, пустая
+ * строка, `false`) — есть. ОДНО правило на движок правил и интерпретатор (§Б3-4): им живут `has(p)`
+ * здесь, `requires_when`/`forbidden_when`, «свойство ещё не задано» у `on_enter_class.set` и
+ * `default` в `rules/engine.ts`. ЭКСПОРТИРУЕТСЯ ровно поэтому: вторая копия трёх строк развела бы
+ * ответ `has(p)` в `when` правила и проверку самого правила над тем же свойством — то есть ровно тот
+ * класс расхождения, ради которого правило присутствия делают одним.
+ */
+export function present(raw: unknown): boolean {
+  return raw !== undefined && raw !== null;
+}
+
+/**
  * `has` берёт имя И как слот (когда область с контрактом его реализует), И как id свойства: §Б3-5
  * пишет `{has: <prop-id>}`, а декларация подписки §Б5-4 живёт в слотах (`if(has(carryover), …)`).
  * Разные имена для одного вопроса развели бы декларацию и правило.
@@ -547,18 +559,23 @@ function truthy(value: ExprValue): boolean {
  * Умолчание реестра здесь НЕ применяется — спрашивают про записанное значение: `orbis/planned`
  * объявлен `default: false`, на записи не материализуется, и комментарий реестра
  * (`registry/types.ts`) требует ровно этого — «иначе `has(orbis/planned)` стал бы истинным у
- * каждой транзакции». Проверка `scalarOf` остаётся: json-объект в позиции значения — отказ, а не «есть».
+ * каждой транзакции».
+ *
+ * Почему без `scalarOf` (Р-К-12, Р-И-5): `has` спрашивает о ПРИСУТСТВИИ, а не о значении. До Б-2
+ * значение гналось через `scalarOf`, и `has(orbis/recurrence)` над json-объектом падал `EXPR_VALUE` —
+ * то есть правило «шаблон повторения требует маркера» было невыразимо, хотя наличие json-значения
+ * однозначно. Разбор значения остаётся там, где значение ЧИТАЮТ (`prop`, `slot`, `deref`): json в
+ * позиции значения по-прежнему отказ.
  */
 function hasValue(name: string, scope: ExprEvalScope): boolean {
   const binding = scope.binding;
   if (binding !== undefined) {
     const propertyId = own(binding.bind, name);
-    if (propertyId !== undefined)
-      return scalarOf(own(scope.props, propertyId), `слота '${name}'`) !== null;
+    if (propertyId !== undefined) return present(own(scope.props, propertyId));
     // fixed — значение самой декларации, оно есть всегда
     if (Object.hasOwn(binding.fixed, name)) return true;
   }
-  return scalarOf(own(scope.props, name), `свойства '${name}'`) !== null;
+  return present(own(scope.props, name));
 }
 
 /**
