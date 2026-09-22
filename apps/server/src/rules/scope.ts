@@ -131,16 +131,33 @@ export function ruleParamsUsed(rules: readonly RuleDefinition[]): Set<string> {
 }
 
 /**
+ * Состояние пачки, которое видит сборщик рёбер: виртуальные рёбра (`created`/`deleted`), узкий пре-пасс
+ * `declaredDerivedFromTargets` и архивность строк, уже тронутых пачкой (`archivedOf` — `undefined`,
+ * если пачка строку не трогала). Необязательные члены — расширение формы §1.5, а не замена: вызов без
+ * пачки и вызов с одними рёбрами остаются законными.
+ */
+export type RelationBatchView = VirtualGraphEffects & {
+  declaredDerivedFromTargets?: ReadonlySet<string>;
+  archivedOf?: (entityId: string) => boolean | undefined;
+};
+
+/**
  * Входящие рёбра `$self` нужных ролей: БД ∪ объявленные пачкой − удалённые пачкой (Р-И-7).
  * `alive` — «источник не архивен»; считать его лениво нельзя — интерпретатор синхронный (Р-4).
+ *
+ * Архивность источника берётся из ПАЧКИ раньше, чем из БД: эффекты операций 1..N−1 пачки обязаны
+ * быть видны операции N (договор `BatchState`), и пачка «архивировать блокер; тронуть цель» обязана
+ * дать тот же вердикт, что те же операции по очереди. У виртуального ребра приоритет тот же:
+ * источник, тронутый пачкой, — по пачке (созданный пачкой лежит там же), нетронутый — по строке БД.
  */
 export async function relationFactsOf(
   tx: Tx,
   entityId: string,
   roles: ReadonlySet<string>,
-  batch?: VirtualGraphEffects & { declaredDerivedFromTargets?: ReadonlySet<string> },
+  batch?: RelationBatchView,
 ): Promise<RelationFact[]> {
   if (roles.size === 0) return []; // ни одного запроса, если правила рёбер не читают
+  const archivedIn = (sourceId: string): boolean | undefined => batch?.archivedOf?.(sourceId);
   const rows = await tx
     .select({ role: relations.role, sourceId: relations.sourceId, archived: entities.archived })
     .from(relations)
@@ -154,18 +171,40 @@ export async function relationFactsOf(
           (d) => d.sourceId === r.sourceId && d.targetId === entityId && d.role === r.role,
         ),
     )
-    .map((r) => ({ role: r.role, sourceId: r.sourceId, alive: !r.archived }));
-  for (const v of batch?.created ?? []) {
-    if (v.targetId !== entityId || !roles.has(v.role)) continue;
-    // Виртуальное ребро создаётся ЖИВЫМ: архивацию источника пачка делает отдельной операцией,
-    // и её эффект приезжает сюда чтением строки — этой строки у неё ещё нет.
-    if (!live.some((f) => f.role === v.role && f.sourceId === v.sourceId)) {
-      live.push({ role: v.role, sourceId: v.sourceId, alive: true });
-    }
+    .map((r) => ({
+      role: r.role,
+      sourceId: r.sourceId,
+      alive: !(archivedIn(r.sourceId) ?? r.archived),
+    }));
+  const virtual = (batch?.created ?? []).filter(
+    (v) =>
+      v.targetId === entityId &&
+      roles.has(v.role) &&
+      !live.some((f) => f.role === v.role && f.sourceId === v.sourceId),
+  );
+  // Источники виртуальных рёбер, которых пачка не трогала, — одним запросом и только если такие есть.
+  const untouched = [
+    ...new Set(virtual.map((v) => v.sourceId).filter((id) => archivedIn(id) === undefined)),
+  ];
+  const dbArchived = new Map<string, boolean>();
+  if (untouched.length > 0) {
+    const sources = await tx
+      .select({ id: entities.id, archived: entities.archived })
+      .from(entities)
+      .where(inArray(entities.id, untouched));
+    for (const row of sources) dbArchived.set(row.id, row.archived);
+  }
+  for (const v of virtual) {
+    live.push({
+      role: v.role,
+      sourceId: v.sourceId,
+      alive: !(archivedIn(v.sourceId) ?? dbArchived.get(v.sourceId) ?? false),
+    });
   }
   // Узкий пре-пасс пачки (`declaredDerivedFromTargets`, `BatchState` исполнителя): связи, объявленные
   // ЛЮБОЙ операцией, в том числе ещё не подготовленной, — пачка атомарна, и правило легитимируется
-  // связью независимо от её позиции. Задача 4 заменит узкий набор общим списком объявленных.
+  // связью независимо от её позиции. Источник такой связи ещё не известен (операция не подготовлена),
+  // поэтому факт — «живое ребро роли»; задача 4 заменит узкий набор общим списком объявленных.
   if (
     batch?.declaredDerivedFromTargets?.has(entityId) === true &&
     roles.has(ROLE_INSTANCE_OF) &&

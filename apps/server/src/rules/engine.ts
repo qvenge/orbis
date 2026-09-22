@@ -76,6 +76,14 @@ const CONSTRAINT_TEMPLATES: ReadonlySet<string> = new Set([
  * Область `{contract}` формой принимается, а исполняется в V2 (Р-25): встреченное включённое правило
  * такой области на записи-члене контракта — ОТКАЗ, а не пропуск; правило, которое нельзя применить,
  * молчать не должно. На нечлене оно молчит законно: область его не касается.
+ *
+ * Область `{role}` у шаблона записи (C/T) — тоже отказ `RULE_SCOPE_UNSUPPORTED`: валидатор задачи 1
+ * такую пару принимает (ступени области и носителя смотрят каждая своё), а у записи СУЩНОСТИ роли нет
+ * — роль описывает ребро. Какой записи правило «касалось бы», решает его НОСИТЕЛЬ — строка, в которой
+ * оно написано: аспект стоит на записи либо свойство на ней есть или его несёт её аспект (та же мерка,
+ * что у области `{property}`). Носитель-роль у C/T законным путём недостижим (`RULE_TEMPLATE_CARRIER`
+ * задачи 1); доедь он ручной строкой — отказ при первой же встрече на любой записи: касательства
+ * такой строки к записи не определить, а молчать ей нельзя.
  */
 export function applicableRules(
   reg: RegistrySnapshot,
@@ -95,7 +103,12 @@ export function applicableRules(
         continue;
       }
     } else if ('role' in scope) {
-      continue; // ролевые шаблоны на записи сущности не живут
+      if (!carrierTouches(reg, carrier, state)) continue;
+      throw new ExecError(
+        'VALIDATION',
+        `область правила «роль» у шаблона записи не исполняется: правило «${rule.id}» описывает ребро, а не запись`,
+        { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, role: scope.role },
+      );
     } else if (
       bindingsOf(reg)
         .byContract(scope.contract)
@@ -112,6 +125,18 @@ export function applicableRules(
     out.push({ rule, carrier });
   }
   return out;
+}
+
+/** Касается ли носитель правила записи (для области, которая сама этого не решает, — `{role}`). */
+function carrierTouches(reg: RegistrySnapshot, carrier: RuleCarrier, state: EntityState): boolean {
+  if (carrier.kind === 'aspect') return state.aspects.includes(carrier.id);
+  if (carrier.kind === 'property') {
+    return (
+      carrier.id in state.props ||
+      carrierAspects(reg, carrier.id).some((a) => state.aspects.includes(a))
+    );
+  }
+  return true;
 }
 
 /**
@@ -170,6 +195,8 @@ async function writeScope(
           created: batch.createdRelations,
           deleted: batch.deletedRelations,
           declaredDerivedFromTargets: batch.declaredDerivedFromTargets,
+          // Строки, тронутые пачкой (create/update/attach кладут их в `BatchState.entities`).
+          archivedOf: (id) => batch.entities.get(id)?.archived,
         },
   );
   const params = await ruleParamsOf(input, rules);
@@ -205,7 +232,12 @@ function refusalText(
  * близнецы кода и строки сида совпадают по нему без второго словаря.
  */
 export async function assertConstraintRules(input: RuleWriteInput): Promise<void> {
-  const rules = applicableRules(input.ctx.registry, 'constraint', input.state);
+  // Порядок — по (носитель, id правила), как у T: при двух нарушенных правилах на разных носителях
+  // `details.invariant` отказа обязан быть одним и тем же при любом порядке строк реестра, а порядок
+  // `rulesOf` — это порядок строк снимка, который внутри половины реестра не гарантирован.
+  const rules = [...applicableRules(input.ctx.registry, 'constraint', input.state)].sort(
+    byCarrierThenId,
+  );
   // Отнесение к откату — по ЭКЗЕМПЛЯРУ, а не по шаблону (Р-И-2, рамка §1: льгота несимметрична):
   // `undo: 'skip'` пропускает откат, чьё восстановленное состояние правило нарушает; `check` — нет.
   const live = rules.filter(({ rule }) => !input.ctx.internalUndo || rule.undo === 'check');
@@ -240,6 +272,12 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
 /**
  * Событие входа — две формы (Р-И-37): класс слота контракта либо ЗНАЧЕНИЕ свойства (состояния, у
  * которого своего класса нет, — `waiting` внутри класса `active`).
+ *
+ * `slot` формы `{contract, slot, in}` здесь ИНФОРМАЦИОННЫЙ: класс записи под контрактом один
+ * (`entityClassOf`, §Б2-2), и слот-статус, по которому он считается, у каждого встроенного контракта
+ * ровно один; валидатор задачи 1 требует, чтобы названный слот был статусом (`not_status`).
+ * Контракт с ДВУМЯ слотами-статусами — именованный остаток: схема контракта его не запрещает, и
+ * событие такого контракта смотрело бы на класс первого слота с картой, а не на названный.
  */
 function enteredBy(
   enter: EnterEvent,
@@ -280,6 +318,12 @@ function byCarrierThenId(a: Applicable, b: Applicable): number {
  *
  * События (было/стало) снимаются для ВСЕХ правил до первой правки — фазы не влияют на то, какие
  * правила сработали; `when` и значения считаются над одним состоянием «после патча» (`writeScope`).
+ *
+ * ИМЕНОВАННЫЙ ОСТАТОК — снятие аспекта-носителя. Правило с областью-аспект применимо к состоянию
+ * ПОСЛЕ патча, поэтому при `aspects.detach` носителя его `on_leave` (и C-правила того же носителя)
+ * не исполняются, а значения по Р9 detach переживают. Паритет со старым кодом: `applyTaskCompletion`
+ * гейтится тем же `state.aspects.includes('orbis/task')`; область снята — правило её больше не
+ * касается (задача 14 знает это для `waiting_for`).
  */
 export async function applyTransitionRules(input: RuleWriteInput): Promise<void> {
   if (input.ctx.internalUndo) return;
@@ -317,7 +361,9 @@ export async function applyTransitionRules(input: RuleWriteInput): Promise<void>
     const set = rule.params.set;
     if (set === undefined || !whenHolds(rule, scope)) continue;
     // «Ещё не задано» — то же присутствие, что у `has` (РЧ-3-3) и у `applyTaskCompletion`:
-    // значение, пришедшее патчем, правило не перетирает.
+    // значение, пришедшее патчем, правило не перетирает — ЕСЛИ уход другого класса (фаза 1) его
+    // не снял. Снятие уходом смотрит на состояние, а не на патч: паритет со старым кодом
+    // (`applyTaskCompletion` снимает `completed_at` при уходе из done, что бы ни принёс патч).
     if (!present(input.state.props[set.property]))
       assignPresent(input.state, set.property, evalExpr(set.value, scope));
   }

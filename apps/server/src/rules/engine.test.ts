@@ -11,11 +11,14 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   attachToolName,
   type GraphId,
+  newId,
   ROLE_DEPENDENCY,
   type RuleDefinitionInput,
 } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import { GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS } from '../../test/fixtures/gate-aspects';
 import {
+  adminDb,
   appDb,
   type CustomAspectSpec,
   freshGraph,
@@ -24,10 +27,14 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
+import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
+import { effectiveRegistry } from '../registry/cache';
+import { assertConstraintRules } from './engine';
 
 requireEnv();
 
@@ -529,5 +536,310 @@ describe('has_relation в when — рёбра $self предзагружены �
     expect(refusalOf(await touch())).toBe('INVARIANT/gate_plain_blocked_moment');
     expect(refusalOf(await w.run('entity_update', { id: blocker.id, archived: true }))).toBe('ok');
     expect(refusalOf(await touch())).toBe('ok'); // `alive` — «источник не архивен»
+  });
+});
+
+// ─────────────────────────── фикс-раунд 1 ревью задачи 3 ───────────────────────────
+
+/** Пачка операций одним вызовом исполнителя (§7.8): эффекты 1..N−1 видны операции N. */
+function batchOf(w: World, operations: Array<{ tool: string; input: Record<string, unknown> }>) {
+  return execute(db, {
+    identity: personal(w.graph),
+    actorKind: 'owner',
+    source: 'ui',
+    operations,
+    batchId: newId(),
+    clock: () => T0,
+  });
+}
+
+describe('рёбра и архивность из ПАЧКИ в has_relation (Р-И-7, ревью I-1b/I-3)', () => {
+  const RULE_BLOCKED: RuleDefinitionInput = {
+    id: 'gate_plain_blocked_in_batch',
+    template: 'requires_when',
+    undo: 'check',
+    when: { has_relation: { role: ROLE_DEPENDENCY, alive: true } },
+    params: { property: GATE_PROPS.plainAt },
+  };
+  let w: World;
+  const edge = (source: string, target: string) => ({
+    source_id: source,
+    target_id: target,
+    role: ROLE_DEPENDENCY,
+  });
+  const touch = (id: string) => ({
+    tool: 'entity_update',
+    input: { id, props: { [GATE_PROPS.plainState]: 'open' } },
+  });
+  async function pair(): Promise<{ target: string; blocker: string }> {
+    const target = entityOf(
+      await w.run('entity_create', {
+        title: 'Цель',
+        tags: [],
+        aspects: [PLAIN],
+        props: { [GATE_PROPS.plainState]: 'open' },
+      }),
+    ).id;
+    const blocker = entityOf(await w.run('entity_create', { title: 'Блокер', tags: [] })).id;
+    return { target, blocker };
+  }
+  beforeAll(async () => {
+    w = await worldWith({ ...GATE_PLAIN_ASPECT, rules: [RULE_BLOCKED] });
+  });
+
+  test('пачка [relation_create, entity_update] — ребро пачки видно, отказ', async () => {
+    const { target, blocker } = await pair();
+    const r = await batchOf(w, [
+      { tool: 'relation_create', input: edge(blocker, target) },
+      touch(target),
+    ]);
+    expect(refusalOf(r)).toBe('INVARIANT/gate_plain_blocked_in_batch');
+  });
+  test('пачка [relation_delete, entity_update] — удалённое пачкой ребро не видно, проходит', async () => {
+    const { target, blocker } = await pair();
+    expect(refusalOf(await w.run('relation_create', edge(blocker, target)))).toBe('ok');
+    const r = await batchOf(w, [
+      { tool: 'relation_delete', input: edge(blocker, target) },
+      touch(target),
+    ]);
+    expect(refusalOf(r)).toBe('ok');
+  });
+  test('пачка «архивировать блокер; тронуть цель» — тот же вердикт, что по очереди (проходит)', async () => {
+    const { target, blocker } = await pair();
+    expect(refusalOf(await w.run('relation_create', edge(blocker, target)))).toBe('ok');
+    const r = await batchOf(w, [
+      { tool: 'entity_update', input: { id: blocker, archived: true } },
+      touch(target),
+    ]);
+    expect(refusalOf(r)).toBe('ok');
+  });
+  test('виртуальное ребро от архивного источника — alive по строке источника, проходит', async () => {
+    const { target, blocker } = await pair();
+    expect(refusalOf(await w.run('entity_update', { id: blocker, archived: true }))).toBe('ok');
+    const r = await batchOf(w, [
+      { tool: 'relation_create', input: edge(blocker, target) },
+      touch(target),
+    ]);
+    expect(refusalOf(r)).toBe('ok');
+  });
+  test('пачка «разархивировать блокер; тронуть цель» — живое ребро видно, отказ', async () => {
+    const { target, blocker } = await pair();
+    expect(refusalOf(await w.run('relation_create', edge(blocker, target)))).toBe('ok');
+    expect(refusalOf(await w.run('entity_update', { id: blocker, archived: true }))).toBe('ok');
+    const r = await batchOf(w, [
+      { tool: 'entity_update', input: { id: blocker, archived: false } },
+      touch(target),
+    ]);
+    expect(refusalOf(r)).toBe('INVARIANT/gate_plain_blocked_in_batch');
+  });
+});
+
+describe('фазы T: default после входа и ухода (ревью I-1c)', () => {
+  const AT_DEFAULT = '2026-01-01T00:00:00.000Z';
+  const DEFAULT_AT: RuleDefinitionInput = {
+    id: 'gate_plain_default_at',
+    template: 'default',
+    undo: 'check',
+    params: { property: GATE_PROPS.plainAt, value: { const: AT_DEFAULT } },
+  };
+  const create = (w: World, state: string) =>
+    w.run('entity_create', {
+      title: 'Дело с умолчанием',
+      tags: [],
+      aspects: [PLAIN],
+      props: { [GATE_PROPS.plainState]: state },
+    });
+  test('default + set входа на одном свойстве — побеждает set входа', async () => {
+    const w = await worldWith({ ...GATE_PLAIN_ASPECT, rules: [RULE_PLAIN_CLOSED_AT, DEFAULT_AT] });
+    const row = entityOf(await create(w, 'closed'));
+    expect(row.props[GATE_PROPS.plainAt]).toBe(row.updatedAt);
+  });
+  test('default + on_leave.unset — после ухода умолчание возвращает значение', async () => {
+    const LEAVE_DONE_UNSETS: RuleDefinitionInput = {
+      id: 'gate_plain_leave_done',
+      template: 'on_enter_class',
+      undo: 'check',
+      params: {
+        enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+        on_leave: { unset: [GATE_PROPS.plainAt] },
+      },
+    };
+    const w = await worldWith({ ...GATE_PLAIN_ASPECT, rules: [LEAVE_DONE_UNSETS, DEFAULT_AT] });
+    const closed = entityOf(await create(w, 'closed'));
+    const reopened = entityOf(
+      await w.run('entity_update', { id: closed.id, props: { [GATE_PROPS.plainState]: 'open' } }),
+    );
+    expect(reopened.props[GATE_PROPS.plainAt]).toBe(AT_DEFAULT);
+  });
+});
+
+describe('присутствие одним правилом в движке (РЧ-3-3, ревью I-1d)', () => {
+  test('значение T-правила «отсутствие» свойство не ставит — ни null, ни отказа', async () => {
+    const SET_FROM_ABSENT: RuleDefinitionInput = {
+      id: 'gate_plain_set_from_absent',
+      template: 'on_enter_class',
+      undo: 'check',
+      params: {
+        enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+        // Свойство, которого у записи нет: выражение даёт отсутствие.
+        set: { property: GATE_PROPS.plainAt, value: { prop: GATE_PROPS.finWhen } },
+      },
+    };
+    const w = await worldWith({ ...GATE_PLAIN_ASPECT, rules: [SET_FROM_ABSENT] });
+    const row = entityOf(
+      await w.run('entity_create', {
+        title: 'Дело без источника значения',
+        tags: [],
+        aspects: [PLAIN],
+        props: { [GATE_PROPS.plainState]: 'closed' },
+      }),
+    );
+    expect(Object.hasOwn(row.props, GATE_PROPS.plainAt)).toBe(false);
+  });
+  test('null в props — «нет» у requires_when (движок напрямую: исполнитель null не пропускает)', async () => {
+    const w = await worldWith({ ...GATE_FIN_ASPECT, rules: [RULE_WHEN_DONE] });
+    const outcome = await withIdentity(db, personal(w.graph), async (tx) => {
+      const registry = await effectiveRegistry(tx, w.graph);
+      const id = newId();
+      try {
+        await assertConstraintRules({
+          ctx: {
+            tx,
+            registry,
+            graphId: w.graph,
+            clock: () => T0,
+            mechanism: 'user',
+            internalUndo: false,
+          },
+          entityId: id,
+          before: { props: {}, aspects: [] },
+          state: {
+            props: { [GATE_PROPS.finState]: 'done', [GATE_PROPS.finWhen]: null },
+            aspects: [FIN],
+          },
+          patch: {},
+          core: { id, title: 'Прямой вызов', archived: false, createdAt: T0, updatedAt: T0 },
+        });
+        return 'ok';
+      } catch (e) {
+        if (!(e instanceof ExecError)) throw e;
+        return `${e.code}/${(e.details as { invariant?: string }).invariant}`;
+      }
+    });
+    expect(outcome).toBe('INVARIANT/gate_fin_requires_when');
+  });
+});
+
+describe('C-правила на ЛЮБОМ entity_update — и без props (рулинг Ф-Б2-17, ревью I-2)', () => {
+  const archivedIs = (v: boolean) =>
+    ({ op: '=', args: [{ prop: 'orbis/archived' }, { const: v }] }) as const;
+  test('forbidden_when по orbis/archived: архивация без props — отказ; без свойства — проходит', async () => {
+    const FORBID_ARCHIVED_MOMENT: RuleDefinitionInput = {
+      id: 'gate_fin_archived_no_moment',
+      template: 'forbidden_when',
+      undo: 'check',
+      when: archivedIs(true),
+      params: { property: GATE_PROPS.finWhen },
+    };
+    const w = await worldWith({ ...GATE_FIN_ASPECT, rules: [FORBID_ARCHIVED_MOMENT] });
+    const withMoment = entityOf(await w.mk({ [GATE_PROPS.finWhen]: AT }));
+    expect(refusalOf(await w.run('entity_update', { id: withMoment.id, archived: true }))).toBe(
+      'INVARIANT/gate_fin_archived_no_moment',
+    );
+    const bare = entityOf(await w.mk({}));
+    expect(refusalOf(await w.run('entity_update', { id: bare.id, archived: true }))).toBe('ok');
+  });
+  test('requires_when по orbis/archived: разархивация без props — отказ; со свойством — проходит', async () => {
+    const w = await worldWith(GATE_FIN_ASPECT);
+    const row = entityOf(await w.mk({}));
+    expect(refusalOf(await w.run('entity_update', { id: row.id, archived: true }))).toBe('ok');
+    await seedCustomAspect(w.graph, {
+      ...GATE_FIN_ASPECT,
+      rules: [
+        {
+          id: 'gate_fin_live_needs_moment',
+          template: 'requires_when',
+          undo: 'check',
+          when: archivedIs(false),
+          params: { property: GATE_PROPS.finWhen },
+        },
+      ],
+    });
+    expect(refusalOf(await w.run('entity_update', { id: row.id, archived: false }))).toBe(
+      'INVARIANT/gate_fin_live_needs_moment',
+    );
+    expect(
+      refusalOf(
+        await w.run('entity_update', {
+          id: row.id,
+          archived: false,
+          props: { [GATE_PROPS.finWhen]: AT },
+        }),
+      ),
+    ).toBe('ok');
+  });
+});
+
+describe('fail-closed: область {role} у шаблона записи (ревью I-4)', () => {
+  test('носитель на записи — VALIDATION RULE_SCOPE_UNSUPPORTED; запись без носителя — молчит', async () => {
+    const w = await worldWith({
+      ...GATE_FIN_ASPECT,
+      rules: [
+        {
+          id: 'gate_fin_role_scope',
+          template: 'requires_when',
+          undo: 'check',
+          scope: { role: ROLE_DEPENDENCY },
+          params: { property: GATE_PROPS.finWhen },
+        },
+      ],
+    });
+    expect(refusalOf(await w.mk({}))).toBe('VALIDATION/RULE_SCOPE_UNSUPPORTED');
+    expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
+  });
+});
+
+describe('C-правила обходятся детерминированно — по (носитель, id) (ревью FABLE M-1)', () => {
+  test('нарушены правило аспекта и правило свойства — отказ называет правило первого по id носителя', async () => {
+    // Порядок `rulesOf` — «сначала все аспекты, потом свойства», и внутри половины — по id строки.
+    // Носитель-свойство `aux/marker` по id РАНЬШЕ носителя-аспекта траты, но в `rulesOf` идёт ПОЗЖЕ:
+    // без сортировки по (носитель, id) отказ назвал бы правило аспекта.
+    const holder: CustomAspectSpec = {
+      key: 'aux/holder',
+      label: { ru: 'Держатель метки' },
+      properties: [{ key: 'marker', type: { kind: 'text' } }],
+    };
+    const w = await worldWith(holder);
+    const { db: adb, client: ac } = adminDb();
+    try {
+      // Правило на строке СВОЙСТВА: хелпер сева пишет `rules` только аспекту, поэтому — прямой
+      // записью фикстуры в строку владельца (версия реестра сдвигается севом аспекта ниже).
+      await adb.execute(
+        sql`UPDATE property_definitions SET rules = ${JSON.stringify([
+          {
+            id: 'b_marker_requires_moment',
+            template: 'requires_when',
+            undo: 'check',
+            params: { property: GATE_PROPS.finWhen },
+          },
+        ])}::jsonb WHERE graph_id = ${w.graph} AND id = 'aux/marker'`,
+      );
+    } finally {
+      await ac.end();
+    }
+    await seedCustomAspect(w.graph, {
+      ...GATE_FIN_ASPECT,
+      rules: [
+        {
+          id: 'z_fin_requires_moment',
+          template: 'requires_when',
+          undo: 'check',
+          params: { property: GATE_PROPS.finWhen },
+        },
+      ],
+    });
+    expect('aux/marker' < FIN).toBe(true); // предпосылка: носитель-свойство раньше по id
+    const r = await w.mk({ 'aux/marker': 'm' }, { aspects: [FIN, 'aux/holder'] });
+    expect(refusalOf(r)).toBe('INVARIANT/b_marker_requires_moment');
   });
 });
