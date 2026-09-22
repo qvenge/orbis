@@ -169,6 +169,25 @@ describe('сид пяти реестров', () => {
     }
   });
 
+  /** По системной строке на таблицу-носитель: таблица, id и правила этой строки В КОДЕ (эталон пересева). */
+  const SPOILED = [
+    [
+      'property_definitions',
+      'orbis/occurred_on',
+      BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/occurred_on')?.rules ?? [],
+    ],
+    [
+      'relation_role_definitions',
+      'ref',
+      BUILTIN_RELATION_ROLE_META.find((r) => r.id === 'ref')?.rules ?? [],
+    ],
+    [
+      'aspect_definitions',
+      'orbis/task',
+      BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task')?.rules ?? [],
+    ],
+  ] as const;
+
   test('сид кладёт rules всех трёх носителей: колонка ПИШЕТСЯ и её содержимое — правила каталога', async () => {
     const { db, client } = adminDb();
     try {
@@ -191,13 +210,17 @@ describe('сид пяти реестров', () => {
         }
       }
       // Ручная порча перетирается пересевом — иначе «сид положил» и «в базе лежит» разошлись бы молча.
+      // Порча — по строке в КАЖДОЙ таблице-носителе: у каждой свой upsert и свой `DO UPDATE SET`, и строка
+      // `rules = EXCLUDED.rules`, потерянная у одного из трёх, иначе не краснила бы ничего (ревью задачи 2).
       // Сверка — с КОДОМ, а не с литералом `[]`: после задачи 4 у `orbis/task` появится правило, и литерал
       // пришлось бы пересдавать четырежды за срез. `graph_id IS NULL` — чтобы не задеть свою строку-
       // перекрытие владельца с тем же id, если её оставил соседний сьют (сид её не чинит).
-      await db.execute(
-        sql`UPDATE aspect_definitions SET rules = '[{"id":"x"}]'::jsonb
-            WHERE id = 'orbis/task' AND graph_id IS NULL`,
-      );
+      for (const [table, id] of SPOILED) {
+        await db.execute(
+          sql`UPDATE ${sql.raw(table)} SET rules = '[{"id":"x"}]'::jsonb
+              WHERE id = ${id} AND graph_id IS NULL`,
+        );
+      }
       // Подключение — по образцу пересева под живой дельтой (ниже в этом describe).
       const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
       try {
@@ -205,21 +228,22 @@ describe('сид пяти реестров', () => {
       } finally {
         await raw.end();
       }
-      const after = (await db.execute(
-        sql`SELECT rules FROM aspect_definitions WHERE id = 'orbis/task' AND graph_id IS NULL`,
-      )) as unknown as { rules: unknown }[];
-      expect(after[0]?.rules).toEqual(
-        BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task')?.rules,
-      );
+      for (const [table, id, code] of SPOILED) {
+        const after = (await db.execute(
+          sql`SELECT rules FROM ${sql.raw(table)} WHERE id = ${id} AND graph_id IS NULL`,
+        )) as unknown as { rules: unknown }[];
+        expect([table, id, after[0]?.rules]).toEqual([table, id, code]);
+      }
     } finally {
       // Сеть безопасности (как `restoreRegistries` в registry-drift.test.ts): если пересев порчу НЕ
       // перетёр, тест уже красен, но `[{"id":"x"}]` в system-строке уронил бы строгий разбор снимка
       // (`registry/load.ts`) у ВСЕХ следующих сьютов прогона — отказ обязан остаться локальным.
-      const codeRules = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task')?.rules ?? [];
-      await db.execute(
-        sql`UPDATE aspect_definitions SET rules = ${JSON.stringify(codeRules)}::jsonb
-            WHERE id = 'orbis/task' AND graph_id IS NULL`,
-      );
+      for (const [table, id, code] of SPOILED) {
+        await db.execute(
+          sql`UPDATE ${sql.raw(table)} SET rules = ${JSON.stringify(code)}::jsonb
+              WHERE id = ${id} AND graph_id IS NULL`,
+        );
+      }
       await client.end();
     }
   });

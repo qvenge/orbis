@@ -210,14 +210,23 @@ test('контракты: незнакомая system-строка — extra, и
   expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
 });
 
-test('правило, дописанное в system-строку руками, — drifted по столбцу rules', async () => {
+test('правило, дописанное в system-строку руками, — drifted по столбцу rules у каждого из трёх носителей', async () => {
+  // По строке в КАЖДОЙ таблице-носителе: у каждой свой запрос (`REGISTRY_DRIFT_QUERIES`) и своё ожидание,
+  // и половина пары, потерянная у одного реестра, сделала бы немой порчу именно его правил.
+  const rule = `[{"id":"взлом","template":"requires_when","enabled":true,"undo":"check",
+                  "params":{"property":"orbis/occurred_on"}}]`;
   try {
-    await admin.db.execute(sql`UPDATE property_definitions
-      SET rules = '[{"id":"взлом","template":"requires_when","enabled":true,"undo":"check",
-                     "params":{"property":"orbis/occurred_on"}}]'::jsonb
-      WHERE id = 'orbis/occurred_on'`);
-    expect((await checkRegistryDrift(db)).properties.drifted).toEqual([
-      { id: 'orbis/occurred_on', what: ['rules'] },
+    await admin.db.execute(sql`UPDATE property_definitions SET rules = ${rule}::jsonb
+      WHERE id = 'orbis/occurred_on' AND graph_id IS NULL`);
+    await admin.db.execute(sql`UPDATE aspect_definitions SET rules = ${rule}::jsonb
+      WHERE id = 'orbis/financial' AND graph_id IS NULL`);
+    await admin.db.execute(sql`UPDATE relation_role_definitions SET rules = ${rule}::jsonb
+      WHERE id = 'ref' AND graph_id IS NULL`);
+    const drift = await checkRegistryDrift(db);
+    expect([drift.properties.drifted, drift.aspects.drifted, drift.roles.drifted]).toEqual([
+      [{ id: 'orbis/occurred_on', what: ['rules'] }],
+      [{ id: 'orbis/financial', what: ['rules'] }],
+      [{ id: 'ref', what: ['rules'] }],
     ]);
   } finally {
     await restoreRegistries();

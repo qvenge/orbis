@@ -252,14 +252,18 @@ test('контракт с подменённым набором — drifted по
   ]);
 });
 
-test('rules — столбец сверки: испорченное сидовое правило не валидирует данные молча', () => {
+// По носителю на КАЖДЫЙ реестр, а не один: у каждого своё ожидание (`expected*`), и снятая из любого
+// из трёх строка `rules` сделала бы порчу правила этого реестра немой — в `/health` и в `ops.ts check`.
+test.each([
+  ['aspects', 'orbis/financial'],
+  ['properties', 'orbis/occurred_on'],
+  ['roles', 'ref'],
+] as const)('rules — столбец сверки (%s): испорченное сидовое правило не валидирует данные молча', (kind, id) => {
   const rows = seeded();
-  rows.aspects = rows.aspects.map((a) =>
-    a.id === 'orbis/financial' ? { ...a, rules: [{ id: 'взлом', template: 'requires_when' }] } : a,
+  rows[kind] = rows[kind].map((r) =>
+    r.id === id ? { ...r, rules: [{ id: 'взлом', template: 'requires_when' }] } : r,
   );
-  expect(diffBuiltinRegistries(rows).aspects.drifted).toEqual([
-    { id: 'orbis/financial', what: ['rules'] },
-  ]);
+  expect(diffBuiltinRegistries(rows)[kind].drifted).toEqual([{ id, what: ['rules'] }]);
 });
 
 test('exclusive_classes — столбец сверки: снятый флаг сделал бы карту значений неоднозначной молча', () => {
