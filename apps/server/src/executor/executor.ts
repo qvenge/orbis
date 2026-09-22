@@ -106,6 +106,7 @@ import {
   type RefPropChange,
   syncRefMirror,
 } from '../registry/ref';
+import { assertConstraintRules, type RuleWriteInput } from '../rules/engine';
 import { projectBodyTemplate } from '../seed/project-body';
 import {
   budgetContourFor,
@@ -1642,6 +1643,21 @@ function monotonicUpdatedAt(now: Date, prev: Date): Date {
   return now.getTime() > prev.getTime() ? now : new Date(prev.getTime() + 1);
 }
 
+/**
+ * Контекст движка правил (`rules/engine.ts`) из контекста операции — ОДНА сборка на шесть врезок
+ * (C и T на трёх путях записи): шесть литералов по месту разошлись бы на первом новом поле.
+ */
+function ruleCtxOf(ctx: ExecCtx): RuleWriteInput['ctx'] {
+  return {
+    tx: ctx.tx,
+    registry: ctx.registry,
+    graphId: ctx.req.identity.graph,
+    clock: ctx.clock,
+    mechanism: ctx.mechanism,
+    internalUndo: ctx.internalUndo !== undefined,
+  };
+}
+
 /** Код/constraint ошибки PG: drizzle может обернуть причину драйвера в цепочку .cause. */
 export function pgErrorInfo(e: unknown): { code?: string; constraint?: string } {
   let cur: unknown = e;
@@ -1764,6 +1780,18 @@ async function prepareEntityCreate(
 
   // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи
   await assertFinancial(ctx, id, state, batch);
+  // Каталог правил (§Б4-3) — стадия 4, рядом со старой проверкой. Порядок «старая первой»
+  // намеренный (Р-К-18): до задачи 4 тексты отказов близнецов не меняются, а двойная проверка
+  // доказывает, что данные дают тот же вердикт, что код. Старый вызов сносит задача 4.
+  await assertConstraintRules({
+    ctx: ruleCtxOf(ctx),
+    entityId: id,
+    before,
+    state,
+    patch: propsPatch,
+    core: { id, title: input.title, archived: false, createdAt: now, updatedAt: now },
+    batch,
+  });
   // Живой грант в назначении (С4/С7): у create «затронуто» всё, что пришло во входе
   await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
   // Ровно один субъект у прогона (V1.4) — тем же путём, что и назначение
@@ -2044,6 +2072,24 @@ async function prepareEntityUpdate(
     );
     // Стадия 4: инвариант §3.3 над финальным состоянием (ловит и detach orbis/schedule)
     await assertFinancial(ctx, input.id, state, batch);
+    // Каталог правил (§Б4-3) — рядом со старой проверкой, тот же довод, что на create (Р-К-18).
+    // Под внутренним undo движок сам решает по ЭКЗЕМПЛЯРУ правила (`undo: check|skip`, Р-И-2) —
+    // как `assertFinancial` выше, врезка стоит вне ветки `internalUndo === undefined`.
+    await assertConstraintRules({
+      ctx: ruleCtxOf(ctx),
+      entityId: input.id,
+      before,
+      state,
+      patch: propsPatch,
+      core: {
+        id: input.id,
+        title: input.title ?? current.title,
+        archived: input.archived ?? current.archived,
+        createdAt: current.createdAt,
+        updatedAt: monotonicUpdatedAt(now, current.updatedAt),
+      },
+      batch,
+    });
     // Живой грант в назначении (С4/С7) — только когда назначение ЗАТРОНУТО патчем.
     // Проверять его на каждой правке нельзя: отзыв гранта иначе замораживал бы тикет
     // целиком (даже переименование), а отзыв закрывает доступ агенту, а не сущность.
@@ -2334,6 +2380,22 @@ async function prepareAttach(
   assertEntityProps(ctx.registry, state, touchedProperties(propsPatch));
 
   await assertFinancial(ctx, input.entity_id, state, batch);
+  // Каталог правил (§Б4-3) — рядом со старой проверкой, тот же довод, что на create (Р-К-18).
+  await assertConstraintRules({
+    ctx: ruleCtxOf(ctx),
+    entityId: input.entity_id,
+    before,
+    state,
+    patch: propsPatch,
+    core: {
+      id: input.entity_id,
+      title: current.title,
+      archived: current.archived,
+      createdAt: current.createdAt,
+      updatedAt: monotonicUpdatedAt(now, current.updatedAt),
+    },
+    batch,
+  });
   // Живой грант в назначении (С4/С7): attach — третий путь появления аспекта, и обходить
   // им инвариант нельзя (тот же довод, что у «одного budget-parent» ниже)
   if (aspectId === 'orbis/assignment') {
