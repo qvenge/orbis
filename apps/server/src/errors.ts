@@ -97,7 +97,7 @@ export type ExecErrorCode =
    *  `details: {action, step, key}`. Бросает `assertAction` (задача 6). */
   | 'ACTION_BRANCH'
   /** §Б4-3: `unique_among` объявлен по свойству с `cardinality: many` — «уникальность» множества
-   *  значений неопределена. `details: {rule, property}`. Бросает `assertRule` (задача 12). */
+   *  значений неопределена. `details: {rule, property}`. Бросает `assertRule` (задача 1 — перенос из 12, Ф-Б2-14). */
   | 'UNIQUE_ON_MANY'
   /** §Б6-1: шаг действия несёт факт чувствительности, которого декларация не объявила, — уровень
    *  подтверждения считался бы по неполному набору фактов. `details: {action, step, fact}`.
