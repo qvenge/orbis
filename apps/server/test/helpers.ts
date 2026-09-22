@@ -1,6 +1,12 @@
 // apps/server/test/helpers.ts
 import { beforeAll } from 'bun:test';
-import type { AccountId, GraphId, LocalizedText, PropertyType } from '@orbis/shared';
+import type {
+  AccountId,
+  GraphId,
+  LocalizedText,
+  PropertyType,
+  RuleDefinitionInput,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { type Db, makeDb } from '../src/db/client';
 import { DEFINITION_TABLES } from '../src/db/reset-world';
@@ -282,6 +288,16 @@ export interface CustomAspectSpec {
   carries?: readonly string[];
   /** Модуль аспекта (§Б8-2): нужен снимкам состояния «модуль выключен» (задача 18). */
   module?: string | null;
+  /**
+   * Правила каталога на строке аспекта (§Б4-1). Колонка `rules` появляется миграцией 0022
+   * (задача 2), и записывать её БЕЗУСЛОВНО нельзя: до вехи I каждый сев фикстуры упал бы на
+   * несуществующей колонке. Поэтому вторая форма записи — отдельный UPDATE, который выполняется
+   * ТОЛЬКО когда поле задано, а до задачи 2 его не задаёт никто.
+   *
+   * ЗАДАЧЕ 2: добавив колонку, снять условие и писать `spec.rules ?? []` ВСЕГДА — иначе повторный
+   * сев того же ключа без правил сохранит правила первого сева (ловушка Р12 Б-1).
+   */
+  rules?: RuleDefinitionInput[];
 }
 
 /**
@@ -354,6 +370,10 @@ export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec)
         ai_instructions = EXCLUDED.ai_instructions, tag_mappings = EXCLUDED.tag_mappings,
         module = EXCLUDED.module, view_config = EXCLUDED.view_config`);
 
+    if (spec.rules !== undefined) {
+      await writeRegistryRules(db, graphId, 'aspect_definitions', spec.key, spec.rules);
+    }
+
     // Реестр владельца изменился — версия обязана сдвинуться (§А10-1), иначе снимок в
     // кеше процесса останется без этого аспекта.
     //
@@ -377,6 +397,76 @@ export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec)
 function pgTextArray(values: string[]): string {
   if (values.length === 0) return `'{}'::text[]`;
   return `ARRAY[${values.map((v) => `'${v.replaceAll("'", "''")}'`).join(',')}]::text[]`;
+}
+
+/** Добивка колонки `rules` (§Б4-1) у строки реестра владельца — см. докблок `CustomAspectSpec.rules`. */
+async function writeRegistryRules(
+  db: Db,
+  graphId: GraphId,
+  table: 'aspect_definitions' | 'relation_role_definitions',
+  id: string,
+  rules: RuleDefinitionInput[],
+): Promise<void> {
+  await db.execute(sql`UPDATE ${sql.raw(table)} SET rules = ${JSON.stringify(rules)}::jsonb
+    WHERE graph_id = ${graphId} AND id = ${id}`);
+}
+
+/**
+ * Своя роль связи владельца — фикстура §С8-26 (роль `participant`).
+ *
+ * Хелпера до сих пор не было: единственный писатель ролей — системный сид
+ * (`db/seed-registries.ts`), а тула заведения роли владельцем нет вовсе (v1.5, Ч7); повторять
+ * двенадцать колонок по месту значило бы завести второй, расходящийся с сидом, образец.
+ * `graph_id` — ВЛАДЕЛЕЦ, а не NULL: строка с NULL уехала бы в сверку дрейфа
+ * (`registry-drift.ts` читает `WHERE graph_id IS NULL`) и `ops.ts check` показывал бы лишнюю роль.
+ */
+export interface CustomRoleSpec {
+  /** key роли, он же id: `participant` (RELATION_ROLE_KEY_RE). */
+  key: string;
+  label: LocalizedText;
+  sourceLabel: LocalizedText;
+  targetLabel: LocalizedText;
+  hierarchical?: boolean;
+  /** §А4-2: `target_max_incoming` / `acyclic` / `source_contract` / `target_contract` / `created_by`. */
+  constraints?: Record<string, unknown>;
+  module?: string | null;
+  /** Правила каталога (§Б4-1); колонка `rules` появляется в 0022 — пишется только когда задано. */
+  rules?: RuleDefinitionInput[];
+}
+
+/** `rank` роли владельца — константа: нормативного порядка у них нет, а число в реестре обязано быть. */
+const CUSTOM_ROLE_RANK = 100;
+
+export async function seedCustomRole(graphId: GraphId, spec: CustomRoleSpec): Promise<void> {
+  const { db, client } = adminDb();
+  try {
+    await db.execute(sql`
+      INSERT INTO relation_role_definitions
+        (id, graph_id, key, label, description, source_label, target_label,
+         hierarchical, constraints, "symmetric", module, rank)
+      VALUES (${spec.key}, ${graphId}, ${spec.key},
+              ${JSON.stringify(spec.label)}::jsonb,
+              ${JSON.stringify({ ru: `Роль ${spec.key} (фикстура §С8-26)` })}::jsonb,
+              ${JSON.stringify(spec.sourceLabel)}::jsonb,
+              ${JSON.stringify(spec.targetLabel)}::jsonb,
+              ${spec.hierarchical ?? false},
+              ${JSON.stringify(spec.constraints ?? {})}::jsonb,
+              false, ${spec.module ?? null}, ${CUSTOM_ROLE_RANK})
+      -- Тот же список, что у сида: колонка, которую вход умеет задавать, обязана обновляться
+      -- (Р12 Б-1). Колонка symmetric не обновляется: схема разрешает только false (обратные
+      -- кавычки внутри SQL-комментария закрыли бы шаблонную строку — их здесь быть не может).
+      ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL DO UPDATE SET
+        key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
+        source_label = EXCLUDED.source_label, target_label = EXCLUDED.target_label,
+        hierarchical = EXCLUDED.hierarchical, constraints = EXCLUDED.constraints,
+        module = EXCLUDED.module, rank = EXCLUDED.rank`);
+    if (spec.rules !== undefined) {
+      await writeRegistryRules(db, graphId, 'relation_role_definitions', spec.key, spec.rules);
+    }
+    await bumpOwnerRegistryVersion(db, graphId);
+  } finally {
+    await client.end();
+  }
 }
 
 /** Колонки значений строки `entities` — то, чем фикстура с прямым INSERT говорит о свойствах. */
