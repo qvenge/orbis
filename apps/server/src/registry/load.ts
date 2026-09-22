@@ -131,24 +131,25 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
   // порядок с `SET LOCAL`. Реестров пять, каждый — один индексный проход.
   const propertyRows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, type, status, storage,
-           scope, merged_into, module, rank, flags
+           scope, merged_into, module, rank, flags, rules
     FROM property_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
     ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
   const aspectRows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, properties, ai_instructions,
-           tag_mappings, implements, aggregations, view_config, module, service, rank
+           tag_mappings, implements, aggregations, view_config, module, service, rank, rules
     FROM aspect_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
     ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
   const roleRows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, source_label, target_label,
-           hierarchical, constraints, "symmetric", module, rank
+           hierarchical, constraints, "symmetric", module, rank, rules
     FROM relation_role_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
     ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
   const contractRows = (await tx.execute(sql`
-    SELECT id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank
+    SELECT id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank,
+           exclusive_classes
     FROM contract_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
     ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
@@ -179,6 +180,7 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
         module: r.module,
         rank: r.rank,
         flags: r.flags,
+        rules: r.rules,
       }),
     );
   }
@@ -204,6 +206,7 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
         module: r.module,
         service: r.service,
         rank: r.rank,
+        rules: r.rules,
       }),
     );
   }
@@ -225,6 +228,7 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
         symmetric: r.symmetric,
         module: r.module,
         rank: r.rank,
+        rules: r.rules,
       }),
     );
   }
@@ -244,6 +248,9 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
         classes: r.classes,
         sets: r.sets,
         facts: r.facts,
+        // snake_case, как колонка и декларация сида (§1.16): camelCase-полей у контракта нет вовсе.
+        // Ветвления по `kind` нет — поле принимают обе ветки схемы (у facts оно `z.literal(false)`).
+        exclusive_classes: r.exclusive_classes,
         module: r.module,
         rank: r.rank,
       }),

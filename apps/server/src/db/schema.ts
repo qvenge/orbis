@@ -164,6 +164,9 @@ export const aspectDefinitions = pgTable(
     tagMappings: text('tag_mappings').array().notNull().default(sql`'{}'`),
     aggregations: jsonb('aggregations').default({}),
     viewConfig: jsonb('view_config').default({}),
+    // §Б4-1: правила каталога — jsonb СТРОКИ-НОСИТЕЛЯ, не таблица (правило умирает с владельцем).
+    // NOT NULL DEFAULT '[]': строки, посеянные до 0022, читаются пустым списком, а не NULL'ом.
+    rules: jsonb('rules').notNull().default([]),
     module: text('module'), // модуль-владелец; NULL = ядро (§А2-1, №14/№15)
     // §А3-1/Р-П-5: служебность — колонка реестра, а не список в коде (сегодня их три копии).
     service: boolean('service').notNull().default(false),
@@ -412,6 +415,9 @@ export const propertyDefinitions = pgTable(
     rank: integer('rank').notNull(),
     // model_writable / system_writable / computed — §А2-1, гейт §А2-5.
     flags: jsonb('flags').notNull().default({}),
+    // §Б4-1: правила каталога — jsonb СТРОКИ-НОСИТЕЛЯ, не таблица (правило умирает с владельцем).
+    // NOT NULL DEFAULT '[]': строки, посеянные до 0022, читаются пустым списком, а не NULL'ом.
+    rules: jsonb('rules').notNull().default([]),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -450,6 +456,9 @@ export const relationRoleDefinitions = pgTable(
     // target_max_incoming / acyclic / source_contract / target_contract / created_by.
     // В срезе А поля ЛЕЖАТ: target_max_incoming включает Задача 7a, контрактные — часть Б.
     constraints: jsonb('constraints').notNull().default({}),
+    // §Б4-1: правила каталога — jsonb СТРОКИ-НОСИТЕЛЯ, не таблица (правило умирает с владельцем).
+    // NOT NULL DEFAULT '[]': строки, посеянные до 0022, читаются пустым списком, а не NULL'ом.
+    rules: jsonb('rules').notNull().default([]),
     // named-future Ч10-С2: колонка описана, поведение не реализуется до второго кейса.
     symmetric: boolean('symmetric').notNull().default(false),
     module: text('module'),
@@ -488,6 +497,8 @@ export const contractDefinitions = pgTable(
     classes: jsonb('classes'), // [{key, label}] — классы значений слота-статуса
     sets: jsonb('sets'), // {имя: [классы] | E-предикат по слотам}
     facts: jsonb('facts'), // словарь фактов чувствительности (kind = 'facts')
+    // Р-И-38: один вариант на класс — запись классом однозначна; флаг читает валидатор привязок.
+    exclusiveClasses: boolean('exclusive_classes').notNull().default(false),
     module: text('module'),
     rank: integer('rank').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -521,7 +532,11 @@ export const subscriptionDefinitions = pgTable(
   ],
 );
 
-/** §Б6-1: реестр действий. ПУСТАЯ в срезе А (§А12-1) — см. contract_definitions. */
+/**
+ * §Б6-1: реестр действий. ПУСТАЯ в срезе А (§А12-1) — см. contract_definitions. Форму строки
+ * достраивает 0022 (`rank`, `status`, `over` и частичная уникальность `key` — Р-18: колонки кладутся
+ * ОДНОЙ миграцией среза Б-2, хотя читатели у них появятся позже); сид и словарь снимка — задача 6.
+ */
 export const actionDefinitions = pgTable(
   'action_definitions',
   {
@@ -537,6 +552,9 @@ export const actionDefinitions = pgTable(
     offeredBy: jsonb('offered_by'), // где предлагается (поверхности, контракты)
     module: text('module'),
     batchCap: integer('batch_cap'), // кап на применение к результатам Q (§Б6-3)
+    rank: integer('rank').notNull().default(0), // единственный реестр без rank (§Б6-1, export.ts:74-80)
+    status: text('status').notNull().default('active'), // §С3: deprecate вместо удаления (§А10-3)
+    over: jsonb('over'), // §Б6-3: Q map-действия; у одиночного его нет
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -544,6 +562,13 @@ export const actionDefinitions = pgTable(
     uniqueIndex('action_definitions_custom_uniq')
       .on(t.graphId, t.id)
       .where(sql`${t.graphId} IS NOT NULL`),
+    // Имя тула действия собирается из `key` (аналог attach_*): два действия с одним ключом дали бы
+    // неразрешимое имя. Уникальность частичная — как у `key` свойств (индексы `*_key` выше).
+    uniqueIndex('action_definitions_builtin_key').on(t.key).where(sql`${t.graphId} IS NULL`),
+    uniqueIndex('action_definitions_custom_key')
+      .on(t.graphId, t.key)
+      .where(sql`${t.graphId} IS NOT NULL`),
+    check('action_definitions_status', sql`${t.status} IN ('active','deprecated')`),
   ],
 );
 

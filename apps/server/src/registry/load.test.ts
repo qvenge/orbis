@@ -8,6 +8,7 @@ import {
   BUILTIN_SUBSCRIPTION_DEFS,
   CONTRACT_IDS,
   RELATION_ROLE_IDS,
+  type RuleDefinition,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -197,4 +198,33 @@ test('словарь подписок несёт обе засеянные: ст
     'finance',
     null,
   ]);
+});
+
+test('снимок несёт rules строк-носителей: своё правило доезжает разобранным, чужое не видно', async () => {
+  const rule: RuleDefinition = {
+    id: 'own_probe',
+    template: 'requires_when',
+    enabled: true,
+    undo: 'check',
+    params: { property: 'orbis/occurred_on' },
+  };
+  const { db: admin, client } = adminDb();
+  try {
+    await admin.execute(sql`UPDATE aspect_definitions SET rules = ${JSON.stringify([rule])}::jsonb
+                             WHERE graph_id = ${owner}::uuid AND id = 'user/sleep-log'`);
+    await bumpOwnerRegistryVersion(admin, owner);
+  } finally {
+    await client.end();
+  }
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  expect(reg.aspects.get('user/sleep-log')?.rules).toEqual([rule]);
+  // Аспект чужого графа (`beforeAll`) в снимок владельца не попадает вместе со своими правилами.
+  expect(reg.aspects.has('user/mood')).toBe(false);
+  // Встроенные строки пока без правил — первые две кладёт задача 4.
+  expect(reg.aspects.get('orbis/financial')?.rules).toEqual([]);
+  expect(reg.properties.get('orbis/occurred_on')?.rules).toEqual([]);
+  expect(reg.roles.get('ref')?.rules).toEqual([]);
+  // Тем же DDL — флаг контракта (Р-К-92 п.2): в снимке он ЕСТЬ уже здесь, `true` появится с
+  // `orbis/delegable` задачи 14а. Без колонки в SELECT флаг терялся бы на пересеве молча.
+  expect(reg.contracts.get('orbis/completable')?.exclusive_classes).toBe(false);
 });
