@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { FIXTURE_PARSE_REGISTRY, FIXTURE_USER_PROPERTY_ID } from '../query/ast-fixtures';
 import { BUILTIN_CONTRACT_DEFS } from '../registry/builtin-contracts';
 import type { ContractDefinition } from '../registry/contract-type';
-import { normalizeExpr } from './normalize';
+import { normalizeExpr, propertyNamesInExpr } from './normalize';
 
 /**
  * Реестр нормализации = реестр разбора Q ПЛЮС словарь контрактов: у `ParseRegistry`
@@ -71,5 +71,30 @@ describe('normalizeExpr', () => {
     });
     // {slot} НЕ нормализуется: имя слота — имя внутри контракта, а не запись реестра.
     expect(normalizeExpr({ slot: 'amount' } as never, NORM_REG)).toEqual({ slot: 'amount' });
+  });
+});
+
+describe('propertyNamesInExpr — вход графа зависимостей правил (Р-И-22, §Б4)', () => {
+  test('propertyNamesInExpr: prop, has и база deref — id, которые выражение ЧИТАЕТ', () => {
+    const node = {
+      op: 'and',
+      args: [
+        { op: '=', args: [{ prop: 'orbis/recurring' }, { const: true }] },
+        { has: 'orbis/occurred_on' },
+        { deref: { prop: 'orbis/finance_category', read: 'orbis/title' } },
+        { slot: 'amount' },
+        { ctx: '$today' },
+        { agg_via: { role: 'ref', name: 'x' } },
+      ],
+    };
+    expect([...propertyNamesInExpr(node)].sort()).toEqual([
+      'orbis/finance_category',
+      'orbis/occurred_on',
+      'orbis/recurring',
+    ]);
+    expect([...propertyNamesInExpr({ deref: { slot: 'category', read: 'orbis/limit' } })]).toEqual(
+      [],
+    );
+    expect([...propertyNamesInExpr(null)]).toEqual([]);
   });
 });

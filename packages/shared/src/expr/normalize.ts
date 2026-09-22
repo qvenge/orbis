@@ -117,3 +117,32 @@ export function normalizeExpr(expr: ExprNode, reg: ExprNormalizeRegistry): ExprN
   if (exprTreeExceedsDepth(expr, EXPR_TREE_DEPTH_CAP)) return expr;
   return normalizeNode(expr, reg);
 }
+
+/**
+ * ИМЕНА СВОЙСТВ, КОТОРЫЕ ВЫРАЖЕНИЕ ЧИТАЕТ — вход графа зависимостей правил (Р-И-22, §Б4). Три формы и ровно
+ * три: `{prop}`, `{has}` и БАЗА разыменования `{deref:{prop}}`. `deref.read` не входит намеренно — это
+ * свойство ЧУЖОЙ записи, и ребро «моё свойство зависит от него» означало бы стратификацию по графу
+ * сущностей, которой у реестра нет. `{slot}`/`{agg}`/`{agg_via}`/`{phase}`/`{param}`/`{ctx}` — имена ВНУТРИ
+ * контракта или ведомости, строк реестра они не адресуют. Обход ИТЕРАТИВНЫЙ: дерево приезжает из jsonb, и
+ * рекурсия была бы вторым местом, чья прочность держится на чужом капе глубины.
+ */
+export function propertyNamesInExpr(node: unknown): Set<string> {
+  const out = new Set<string>();
+  const stack: unknown[] = [node];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (typeof cur !== 'object' || cur === null) continue;
+    if (Array.isArray(cur)) {
+      for (const child of cur) stack.push(child);
+      continue;
+    }
+    const rec = cur as Record<string, unknown>;
+    if (typeof rec.prop === 'string') out.add(rec.prop);
+    if (typeof rec.has === 'string') out.add(rec.has);
+    const deref = rec.deref as { prop?: unknown } | undefined;
+    if (deref !== undefined && typeof deref.prop === 'string') out.add(deref.prop);
+    // Внутрь `deref` не спускаемся: единственное, что там ещё есть, — `read` чужой записи.
+    for (const [key, child] of Object.entries(rec)) if (key !== 'deref') stack.push(child);
+  }
+  return out;
+}
