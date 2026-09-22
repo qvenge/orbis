@@ -16,7 +16,7 @@
 //  8 · VARIANT_UNMAPPED          · execute aspect_delta_set                    · декларация
 //  9 · BIND_TYPE                 · execute aspect_implements_set               · декларация
 // 10 · SLOT_AMBIGUOUS            · движок Agenda → resolveSlotOnEntity         · данные
-// 11 · UNIQUE_ON_MANY            · assertRule (задача 12)                      · декларация [red]
+// 11 · UNIQUE_ON_MANY            · assertRule                                  · декларация
 // 12 · SCOPE_NOT_STATIC          · execute property_create                     · декларация
 // 13 · ROLE_SYSTEM_ONLY          · execute relation_create                     · данные
 // 14 · PATTERN_NOT_REGULAR       · execute property_create                     · декларация
@@ -49,6 +49,7 @@ import { execute } from '../../src/executor/executor';
 import type { ExecuteOk, ExecuteResult } from '../../src/executor/types';
 import { assertAcyclicGraph, dependencyGraph } from '../../src/registry/deps-graph';
 import type { RegistrySnapshot, SubscriptionRow } from '../../src/registry/load';
+import { assertRule } from '../../src/registry/rules';
 import { appRouter } from '../../src/router';
 import { assertSubscription } from '../../src/subscriptions/registry';
 import { createCallerFactory } from '../../src/trpc';
@@ -831,17 +832,18 @@ const ROW_10: RefusalRow = {
   ],
 };
 
-// ───────────────── шесть красных строк 3/11/15/18/19/20: валидаторов ещё нет ─────────────────
+// ───────── красные строки 3/15/18 (валидатора действий нет) и 19/20 (снимает шаг 15 задачи 1); строка 11 закрыта ─────────
 
 /**
- * Валидатор БУДУЩЕЙ задачи.
+ * Валидатор БУДУЩЕЙ задачи — сегодня это только валидатор действий (задача 6); правила строки
+ * 11/19/20 зовут `assertRule` прямым импортом: модуль `registry/rules.ts` есть с задачи 1.
  *
- * Спецификатор ВЫЧИСЛЯЕМЫЙ, и это не стиль: литеральный `import('../../src/registry/rules')`
+ * Спецификатор ВЫЧИСЛЯЕМЫЙ, и это не стиль: литеральный `import('../../src/registry/actions')`
  * уронил бы `bun run typecheck` на несуществующем модуле (TS резолвит только литеральные
  * спецификаторы), а веха 0 обязана закрываться красными ТЕСТАМИ, а не красными типами.
  */
 async function futureValidator(
-  file: 'rules' | 'actions',
+  file: 'actions',
   name: string,
 ): Promise<(...a: unknown[]) => unknown> {
   const mod = (await import(`${import.meta.dir}/../../src/registry/${file}`)) as Record<
@@ -861,7 +863,7 @@ const ruleScope = (kind: 'aspect' | 'property' | 'role', id: string) => ({
 const actionScope = () => ({ reg: world().reg, systemSeed: true });
 /** Отказ БУДУЩЕГО валидатора: сам он синхронен, а добыча функции — поход в модуль. */
 const futureCode = async (
-  file: 'rules' | 'actions',
+  file: 'actions',
   name: string,
   arg: unknown,
   scope: unknown,
@@ -870,7 +872,7 @@ const futureCode = async (
   return codeOfSync(() => assertIt(arg, scope));
 };
 const futureOk = async (
-  file: 'rules' | 'actions',
+  file: 'actions',
   name: string,
   arg: unknown,
   scope: unknown,
@@ -923,46 +925,60 @@ const ROW_3: RefusalRow = {
   ],
 };
 
-const uniqueAmong = (properties: readonly string[]) => ({
-  id: 'corpus_unique',
+/** Строка 11: правило `unique_among` над свойствами — локальная фабрика (перенос из задачи 12, Ф-Б2-14). */
+const uniqueAmongFixture = (properties: readonly string[]) => ({
+  id: 'r11',
   template: 'unique_among',
   params: { properties: [...properties] },
+});
+/** Снимок мира корпуса и аспект-носитель правила — `assertRule` синхронен, снимок уже собран. */
+const aspectScope = (id: string) => ({
+  reg: world().reg,
+  carrier: { kind: 'aspect' as const, id },
+  systemSeed: false,
 });
 const ROW_11: RefusalRow = {
   row: 11,
   codes: ['UNIQUE_ON_MANY'],
   genre: 'declaration',
-  red: true,
-  positive: async () =>
-    futureOk(
-      'rules',
-      'assertRule',
-      uniqueAmong([
-        'orbis/finance_category',
-        'orbis/currency',
-        'orbis/period_start',
-        'orbis/period_end',
-      ]),
-      ruleScope('aspect', 'orbis/budget'),
-    ),
+  // Позитив и порча идут через ТОТ ЖЕ `assertRule`, что и боевая запись строки реестра:
+  // корпус проверяет валидатор, а не свою копию его правил.
+  positive: async () => {
+    assertRule(uniqueAmongFixture(['orbis/period_start']), aspectScope('orbis/budget'));
+  },
   refuse: async () =>
-    futureCode(
-      'rules',
-      'assertRule',
-      uniqueAmong(['orbis/aliases']),
-      ruleScope('aspect', 'orbis/category'),
+    codeOfSync(() =>
+      assertRule(uniqueAmongFixture(['orbis/aliases']), aspectScope('orbis/category')),
     ),
   spoils: [
     {
-      // Второго `many`-свойства на `orbis/category` в словаре нет, поэтому пара берётся у
-      // `orbis/routine` — порча про РОД свойства, а не про его место в списке.
+      name: 'списочное свойство вторым в наборе',
+      run: async () =>
+        codeOfSync(() =>
+          assertRule(
+            uniqueAmongFixture(['orbis/title', 'orbis/aliases']),
+            aspectScope('orbis/category'),
+          ),
+        ),
+    },
+    {
+      name: 'набор из одного списочного свойства',
+      run: async () =>
+        codeOfSync(() =>
+          assertRule(uniqueAmongFixture(['orbis/aliases']), aspectScope('orbis/category')),
+        ),
+    },
+    {
+      // Порча 0c (Ф-Б2-8): второго `many`-свойства на `orbis/category` в словаре нет, поэтому пара
+      // берётся у `orbis/routine` — отказ про РОД свойства (`select` many тоже список), а не про
+      // одно имя `orbis/aliases`.
       name: 'второе many-свойство в том же списке — отказ про род, а не про первое имя',
       run: async () =>
-        futureCode(
-          'rules',
-          'assertRule',
-          uniqueAmong(['orbis/routine_days', 'orbis/allowed_tools']),
-          ruleScope('aspect', 'orbis/routine'),
+        codeOfSync(() =>
+          assertRule(
+            uniqueAmongFixture(['orbis/routine_days', 'orbis/allowed_tools']),
+            aspectScope('orbis/routine'),
+          ),
         ),
     },
   ],
@@ -1042,7 +1058,7 @@ const defaultCurrency = (id: string) => ({
 /**
  * Снимок-проба с ЧУЖИМИ правилами на носителе: `RULE_CONFLICT` — свойство ПАРЫ, и одного правила
  * на входе валидатору мало. Поле `rules` приезжает к строкам задачей 2, поэтому проба ставит его
- * структурно (`rulesFieldOf`, Р-К-52) — так же, как его будет читать валидатор задачи 1.
+ * структурно (`rulesFieldOf`, Р-К-52) — так же, как его читает валидатор (`rulesOf`).
  */
 const regWithRules = (aspectId: string, rules: readonly unknown[]): RegistrySnapshot => {
   const reg = builtinSnapshot();
@@ -1053,7 +1069,7 @@ const regWithRules = (aspectId: string, rules: readonly unknown[]): RegistrySnap
 };
 const conflictScope = (aspectId: string, rules: readonly unknown[]) => ({
   reg: regWithRules(aspectId, rules),
-  carrier: { kind: 'aspect', id: aspectId },
+  carrier: { kind: 'aspect' as const, id: aspectId },
   systemSeed: true,
 });
 const ROW_19: RefusalRow = {
@@ -1061,16 +1077,12 @@ const ROW_19: RefusalRow = {
   codes: ['RULE_CONFLICT'],
   genre: 'declaration',
   red: true,
-  positive: async () =>
-    futureOk('rules', 'assertRule', enterDone, conflictScope('orbis/task', [enterDone])),
+  positive: async () => {
+    assertRule(enterDone, conflictScope('orbis/task', [enterDone]));
+  },
   refuse: async () => {
     const other = { ...enterDone, id: 'corpus_task_completed_at_twin' };
-    return futureCode(
-      'rules',
-      'assertRule',
-      other,
-      conflictScope('orbis/task', [enterDone, other]),
-    );
+    return codeOfSync(() => assertRule(other, conflictScope('orbis/task', [enterDone, other])));
   },
   spoils: [
     {
@@ -1080,12 +1092,7 @@ const ROW_19: RefusalRow = {
       run: async () => {
         const first = defaultCurrency('corpus_currency_first');
         const second = defaultCurrency('corpus_currency_second');
-        return futureCode(
-          'rules',
-          'assertRule',
-          second,
-          conflictScope('orbis/budget', [first, second]),
-        );
+        return codeOfSync(() => assertRule(second, conflictScope('orbis/budget', [first, second])));
       },
     },
   ],
@@ -1100,10 +1107,8 @@ const ROW_20: RefusalRow = {
   codes: ['DEREF_IN_CONSTRAINT'],
   genre: 'declaration',
   red: true,
-  positive: async () =>
-    futureOk(
-      'rules',
-      'assertRule',
+  positive: async () => {
+    assertRule(
       {
         id: 'corpus_requires_occurred_on',
         template: 'requires_when',
@@ -1114,32 +1119,33 @@ const ROW_20: RefusalRow = {
         params: { property: 'orbis/occurred_on' },
       },
       ruleScope('aspect', 'orbis/financial'),
-    ),
+    );
+  },
   refuse: async () =>
-    futureCode(
-      'rules',
-      'assertRule',
-      {
-        id: 'corpus_deref_when',
-        template: 'requires_when',
-        when: DEREF_CATEGORY_TITLE,
-        params: { property: 'orbis/occurred_on' },
-      },
-      ruleScope('aspect', 'orbis/financial'),
+    codeOfSync(() =>
+      assertRule(
+        {
+          id: 'corpus_deref_when',
+          template: 'requires_when',
+          when: DEREF_CATEGORY_TITLE,
+          params: { property: 'orbis/occurred_on' },
+        },
+        ruleScope('aspect', 'orbis/financial'),
+      ),
     ),
   spoils: [
     {
       name: 'тот же deref в значении T-правила — область C, а не позиция `when`',
       run: async () =>
-        futureCode(
-          'rules',
-          'assertRule',
-          {
-            id: 'corpus_deref_value',
-            template: 'default',
-            params: { property: 'orbis/currency', value: DEREF_CATEGORY_TITLE },
-          },
-          ruleScope('aspect', 'orbis/financial'),
+        codeOfSync(() =>
+          assertRule(
+            {
+              id: 'corpus_deref_value',
+              template: 'default',
+              params: { property: 'orbis/currency', value: DEREF_CATEGORY_TITLE },
+            },
+            ruleScope('aspect', 'orbis/financial'),
+          ),
         ),
     },
   ],

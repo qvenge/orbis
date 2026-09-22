@@ -227,6 +227,17 @@ export function assertRule(raw: unknown, scope: RuleCheckScope): RuleDefinition 
       },
     );
   }
+  // `unique_among` уникален СРЕДИ носителей (§Б4-3): множество, внутри которого набор уникален, задаёт
+  // аспект, и правило без области-аспекта искало бы дубль среди всех записей владельца. Носитель-свойство
+  // законен (таблица выше), но область тогда обязана быть названа явно — `scope: {aspect}` (РЧ-12-3).
+  if (rule.template === 'unique_among' && !('aspect' in s)) {
+    bad(
+      'RULE_TEMPLATE_CARRIER',
+      rule.id,
+      `правилу «${rule.id}» нужна область-аспект: ${rule.template} уникален СРЕДИ носителей (§Б4-3)`,
+      { template: rule.template, scope: s },
+    );
+  }
   assertReferences(rule, scope); // (6)
   assertExprTypes(rule, scope); // (7)
   assertLevelScoped(rule); // (8)
@@ -275,9 +286,21 @@ function assertReferences(rule: RuleDefinition, { reg, carrier }: RuleCheckScope
     case 'default':
       propertyOf(reg, rule, rule.params.property);
       return;
-    // `UNIQUE_ON_MANY` (свойство `cardinality: many`) — задача 12, вместе с движком шаблона.
     case 'unique_among':
-      for (const p of rule.params.properties) propertyOf(reg, rule, p);
+      // СПИСОЧНОЕ свойство (`cardinality: many`) в наборе запрещено кодом §С1-2 `UNIQUE_ON_MANY`: у
+      // списка нет «того же значения» — сравнение зависело бы от порядка элементов, то есть правило
+      // либо не срабатывало бы никогда, либо срабатывало бы на перестановке. Статическая проверка по
+      // типу — ступень ссылок, а не движка (перенос из задачи 12, рулинг Ф-Б2-14).
+      for (const p of rule.params.properties) {
+        const def = propertyOf(reg, rule, p);
+        if ('cardinality' in def.type && def.type.cardinality === 'many') {
+          throw new ExecError(
+            'UNIQUE_ON_MANY',
+            `свойство «${p}» — список (cardinality: many), и «то же значение» у него не определено: набор уникальности его не принимает (§Б4-3)`,
+            { rule: rule.id, property: p },
+          );
+        }
+      }
       return;
     case 'on_enter_class':
       assertEnterEvent(reg, rule, rule.params.enter);

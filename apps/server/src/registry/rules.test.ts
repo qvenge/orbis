@@ -328,6 +328,43 @@ describe('assign_level и конфлюэнтность §Б4', () => {
   });
 });
 
+describe('assertRule: unique_among (§Б4-3, строка 11 §С1-2)', () => {
+  // Перенос из задачи 12 (рулинг Ф-Б2-14): снимок — проба `probe`, отказ — `err` этого файла.
+  const carrier = { kind: 'aspect', id: 'orbis/budget' } as const;
+  test('набор из свойств cardinality one принимается', () => {
+    const rule = check(carrier, {
+      id: 'u_ok',
+      template: 'unique_among',
+      params: { properties: ['orbis/period_start', 'orbis/currency'] },
+    });
+    expect(rule.template).toBe('unique_among');
+  });
+  test('свойство cardinality many в наборе → UNIQUE_ON_MANY с адресом свойства', () => {
+    // `orbis/aliases` — text[] (`cardinality: many`, builtin-properties.ts): «то же значение» у
+    // списка не определено, и правило, принявшее его, молча не сработало бы ни разу.
+    const e = err(() =>
+      check(
+        { kind: 'aspect', id: 'orbis/category' },
+        { id: 'u_many', template: 'unique_among', params: { properties: ['orbis/aliases'] } },
+      ),
+    );
+    expect(e.code).toBe('UNIQUE_ON_MANY');
+    expect(e.details).toMatchObject({ rule: 'u_many', property: 'orbis/aliases' });
+  });
+  test('правило на СВОЙСТВЕ без явного scope.aspect → RULE_TEMPLATE_CARRIER', () => {
+    const e = err(() =>
+      check(
+        { kind: 'property', id: 'orbis/period_start' },
+        { id: 'u_prop', template: 'unique_among', params: { properties: ['orbis/period_start'] } },
+      ),
+    );
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'RULE_TEMPLATE_CARRIER',
+    ]);
+  });
+});
+
 describe('врезка на записи реестра (Р-3)', () => {
   const ping = {
     id: 'ping',
