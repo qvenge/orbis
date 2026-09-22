@@ -780,6 +780,44 @@ describe('C-правила на ЛЮБОМ entity_update — и без props (р
   });
 });
 
+describe('правка без свойств — только C-правила, читающие изменённое ядро (рулинг 3-4)', () => {
+  test('запись-нарушительница: правка тела, эмодзи и заголовка проходит, если правило ядро не читает', async () => {
+    const w = await worldWith(GATE_FIN_ASPECT);
+    // Нарушение «задним числом»: запись в done без момента заведена ДО правила.
+    const row = entityOf(await w.mk({ [GATE_PROPS.finState]: 'done' }));
+    await seedCustomAspect(w.graph, { ...GATE_FIN_ASPECT, rules: [RULE_WHEN_DONE] });
+    const body = await w.run('entity_update', {
+      id: row.id,
+      body: 'Заметка к трате',
+      expectedUpdatedAt: row.updatedAt,
+    });
+    expect(refusalOf(body)).toBe('ok');
+    expect(refusalOf(await w.run('entity_update', { id: row.id, emoji: '💸' }))).toBe('ok');
+    expect(refusalOf(await w.run('entity_update', { id: row.id, title: 'Новое имя' }))).toBe('ok');
+    // Правка СВОЙСТВ — все применимые правила, как у старого кода: нарушение называется.
+    expect(
+      refusalOf(
+        await w.run('entity_update', { id: row.id, props: { [GATE_PROPS.finAmount]: '1.00' } }),
+      ),
+    ).toBe('INVARIANT/gate_fin_requires_when');
+  });
+  test('правило, читающее orbis/title, проверяется на переименовании', async () => {
+    const FORBID_BY_TITLE: RuleDefinitionInput = {
+      id: 'gate_fin_title_no_moment',
+      template: 'forbidden_when',
+      undo: 'check',
+      when: { op: '=', args: [{ prop: 'orbis/title' }, { const: 'Без момента' }] },
+      params: { property: GATE_PROPS.finWhen },
+    };
+    const w = await worldWith({ ...GATE_FIN_ASPECT, rules: [FORBID_BY_TITLE] });
+    const row = entityOf(await w.mk({ [GATE_PROPS.finWhen]: AT }));
+    expect(refusalOf(await w.run('entity_update', { id: row.id, title: 'Без момента' }))).toBe(
+      'INVARIANT/gate_fin_title_no_moment',
+    );
+    expect(refusalOf(await w.run('entity_update', { id: row.id, title: 'С моментом' }))).toBe('ok');
+  });
+});
+
 describe('fail-closed: область {role} у шаблона записи (ревью I-4)', () => {
   test('носитель на записи — VALIDATION RULE_SCOPE_UNSUPPORTED; запись без носителя — молчит', async () => {
     const w = await worldWith({

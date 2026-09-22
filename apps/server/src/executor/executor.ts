@@ -107,6 +107,7 @@ import {
   syncRefMirror,
 } from '../registry/ref';
 import { applyTransitionRules, assertConstraintRules, type RuleWriteInput } from '../rules/engine';
+import { coreFieldsChanged } from '../rules/scope';
 import { projectBodyTemplate } from '../seed/project-body';
 import {
   budgetContourFor,
@@ -2133,15 +2134,32 @@ async function prepareEntityUpdate(
   }
 
   // Каталог правил (§Б4-3), C-правила — на ЛЮБОМ `entity_update`, а не только на правке свойств
-  // (рулинг Ф-Б2-17). Область правила объявляет core-проекции (`orbis/archived`, `orbis/title`,
-  // `orbis/updated_at` — `rules/scope.ts`), и включённое правило с `when` по ним не молчит на
-  // архивации или переименовании (Р-И-13). Без `props` состояние — `before`, а `core` уже новое
-  // (`archived`/`title` входа). Тот же вынос из ветки, что у единственного старого инварианта над
-  // `archived` — уникальности конверта ниже. Старая проверка (`assertFinancial`) по-прежнему идёт
-  // ПЕРВОЙ на правке свойств (Р-К-18). Под внутренним undo движок решает по ЭКЗЕМПЛЯРУ правила
-  // (`undo: check|skip`, Р-И-2). Цена: запись, нарушающая правило, добавленное позже, не
-  // архивируется и не переименовывается без правки нарушения — ровно как сегодня не проходит и
-  // любая правка её свойств.
+  // (рулинг Ф-Б2-17, уточнён рулингом 3-4). Область правила объявляет core-проекции (`orbis/archived`,
+  // `orbis/title`, `orbis/updated_at` — `CORE_PROJECTION` в `rules/scope.ts`), и включённое правило с
+  // `when` по ним не молчит на архивации или переименовании (Р-И-13). Тот же вынос из ветки, что у
+  // единственного старого инварианта над `archived` — уникальности конверта ниже. Старая проверка
+  // (`assertFinancial`) по-прежнему идёт ПЕРВОЙ на правке свойств (Р-К-18); под внутренним undo движок
+  // решает по ЭКЗЕМПЛЯРУ правила (`undo: check|skip`, Р-И-2).
+  //   • Правка СО свойствами — все применимые C-правила (паритет со старым кодом).
+  //   • Правка БЕЗ свойств — только правила, чей набор чтения пересекает РЕАЛЬНО изменённые поля ядра
+  //     (`touchedCore`, `coreFieldsChanged`): свойства не менялись, и вердикт прочих правил прежний.
+  // Цена принципа: запись, нарушающая правило, добавленное позже, не архивируется (и не
+  // переименовывается) без правки нарушения, если правило читает `archived` (`title`); правка тела и
+  // эмодзи в области правила не объявлена и не проверяет ничего, так что автосохранение редактора у
+  // такой записи не падает. `updated_at` меняется на каждой записи — правило, читающее штамп,
+  // проверяется на любой правке, включая тело.
+  const touchedCore = hasPropsInput(input)
+    ? undefined
+    : coreFieldsChanged(
+        {
+          id: input.id,
+          title: current.title,
+          archived: current.archived,
+          createdAt: current.createdAt,
+          updatedAt: current.updatedAt,
+        },
+        core,
+      );
   await assertConstraintRules({
     ctx: ruleCtxOf(ctx),
     entityId: input.id,
@@ -2150,6 +2168,7 @@ async function prepareEntityUpdate(
     patch: propsPatch,
     core,
     batch,
+    touchedCore,
   });
 
   // Уникальность конверта (03-budget §2.1) над ФИНАЛЬНЫМ состоянием: и правка

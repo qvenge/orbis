@@ -21,7 +21,7 @@ import {
   type RuleCarrier,
   type RuleDefinition,
 } from '@orbis/shared';
-import type { ExprScalar } from '@orbis/shared/expr';
+import { type ExprScalar, propertyNamesInExpr } from '@orbis/shared/expr';
 import { defaultCurrencyOf } from '../budget/binding';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -34,6 +34,7 @@ import type { RegistrySnapshot } from '../registry/load';
 import { effectiveRuleScope, rulesOf } from '../registry/rules';
 import { bindingsOf } from '../subscriptions/budget';
 import {
+  CORE_PROJECTION,
   type EntityScopeInput,
   entityEvalScope,
   relationFactsOf,
@@ -58,6 +59,13 @@ export interface RuleWriteInput {
   /** Колонки ядра; `updatedAt` — ТОТ штамп, что запишется этой операцией (Р-И-3). */
   core: EntityScopeInput['core'];
   batch?: BatchState;
+  /**
+   * Только правка БЕЗ свойств (`entity_update` ядра, рулинг 3-4): изменённые поля ядра
+   * (`coreFieldsChanged`). Заданное поле сужает C-правила до тех, чей набор чтения его пересекает;
+   * отсутствие — все применимые (правка свойств, create, attach). Необязательный член — расширение
+   * формы §1.5, прежние вызовы законны.
+   */
+  touchedCore?: ReadonlySet<string>;
 }
 
 type Applicable = { rule: RuleDefinition; carrier: RuleCarrier };
@@ -240,7 +248,14 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
   );
   // Отнесение к откату — по ЭКЗЕМПЛЯРУ, а не по шаблону (Р-И-2, рамка §1: льгота несимметрична):
   // `undo: 'skip'` пропускает откат, чьё восстановленное состояние правило нарушает; `check` — нет.
-  const live = rules.filter(({ rule }) => !input.ctx.internalUndo || rule.undo === 'check');
+  // Правка без свойств (рулинг 3-4) — только правила, чей набор чтения пересекает изменённые поля ядра:
+  // состояние свойств не менялось, и вердикт остальных правил тот же, что до правки.
+  const touchedCore = input.touchedCore;
+  const live = rules.filter(
+    ({ rule }) =>
+      (!input.ctx.internalUndo || rule.undo === 'check') &&
+      (touchedCore === undefined || [...ruleReadSet(rule)].some((p) => touchedCore.has(p))),
+  );
   if (live.length === 0) return;
   const scope = await writeScope(
     input,
@@ -267,6 +282,24 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
       scope: effectiveRuleScope(rule, carrier),
     });
   }
+}
+
+/**
+ * НАБОР ЧТЕНИЯ C-правила — свойства (и core-проекции), от которых зависит его вердикт: имена в `when`
+ * (`propertyNamesInExpr` — `{prop}`, `{has}`, база `{deref}`) плюс параметр-свойство шаблона. У
+ * `unique_among` — его набор и НЕЯВНЫЙ `orbis/archived`: уникальность «среди неархивных» (задача 12),
+ * и разархивация возвращает запись в множество, где дубль возможен. По набору отбираются правила
+ * правки без свойств: правило, которое ядро не читает, её вердикта не меняет.
+ */
+function ruleReadSet(rule: RuleDefinition): Set<string> {
+  const names = rule.when === undefined ? new Set<string>() : propertyNamesInExpr(rule.when);
+  if (rule.template === 'requires_when' || rule.template === 'forbidden_when') {
+    names.add(rule.params.property);
+  } else if (rule.template === 'unique_among') {
+    for (const p of rule.params.properties) names.add(p);
+    names.add(CORE_PROJECTION.archived);
+  }
+  return names;
 }
 
 /**

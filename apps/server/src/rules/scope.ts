@@ -40,6 +40,35 @@ export interface EntityScopeInput {
 }
 
 /**
+ * Core-проекции области записи — id, под которыми колонки ядра видны правилу (`{prop:'orbis/title'}`).
+ * ОДИН список на сборщик области и на отбор C-правил правки без свойств (`coreFieldsChanged`):
+ * второй перечень разошёлся бы с первым на первой новой проекции.
+ */
+export const CORE_PROJECTION = {
+  title: 'orbis/title',
+  archived: 'orbis/archived',
+  createdAt: 'orbis/created_at',
+  updatedAt: 'orbis/updated_at',
+} as const;
+
+/**
+ * Поля ядра, которые правка РЕАЛЬНО меняет, — ровно те, что область правила объявляет
+ * (`CORE_PROJECTION`). Тело и эмодзи в области не объявлены, и их правка не меняет здесь ничего.
+ * `updated_at` меняется на каждой записи (монотонный штамп §5.2 строго растёт), `created_at` — никогда.
+ */
+export function coreFieldsChanged(
+  prev: EntityScopeInput['core'],
+  next: EntityScopeInput['core'],
+): Set<string> {
+  const out = new Set<string>();
+  if (prev.title !== next.title) out.add(CORE_PROJECTION.title);
+  if (prev.archived !== next.archived) out.add(CORE_PROJECTION.archived);
+  if (prev.createdAt.getTime() !== next.createdAt.getTime()) out.add(CORE_PROJECTION.createdAt);
+  if (prev.updatedAt.getTime() !== next.updatedAt.getTime()) out.add(CORE_PROJECTION.updatedAt);
+  return out;
+}
+
+/**
  * Умолчания чтения — МЕМО по снимку: карта строится обходом ВСЕХ свойств реестра, а правила
  * спрашивают её на каждой операции (тот же приём, что `bindingsOf` движка ведомостей).
  */
@@ -60,10 +89,10 @@ export function entityEvalScope(input: EntityScopeInput): ExprEvalScope {
     // правило пишет `{prop:'orbis/updated_at'}` (Р-И-3), и второго адреса у штампа записи нет.
     props: {
       ...input.state.props,
-      'orbis/title': core.title,
-      'orbis/archived': core.archived,
-      'orbis/created_at': core.createdAt.toISOString(),
-      'orbis/updated_at': core.updatedAt.toISOString(),
+      [CORE_PROJECTION.title]: core.title,
+      [CORE_PROJECTION.archived]: core.archived,
+      [CORE_PROJECTION.createdAt]: core.createdAt.toISOString(),
+      [CORE_PROJECTION.updatedAt]: core.updatedAt.toISOString(),
     },
     defaults,
     today: input.today,
