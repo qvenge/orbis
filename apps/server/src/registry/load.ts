@@ -134,33 +134,34 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
            scope, merged_into, module, rank, flags, rules
     FROM property_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
-    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
+    ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
   const aspectRows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, properties, ai_instructions,
            tag_mappings, implements, aggregations, view_config, module, service, rank, rules
     FROM aspect_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
-    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
+    ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
   const roleRows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, source_label, target_label,
            hierarchical, constraints, "symmetric", module, rank, rules
     FROM relation_role_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
-    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
+    ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
   const contractRows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank,
            exclusive_classes
     FROM contract_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
-    ORDER BY graph_id NULLS FIRST`)) as unknown as Row[];
+    ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
   const subscriptionRows = (await tx.execute(sql`
     SELECT id, graph_id, surface, definition, module, rank
     FROM subscription_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
     ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
-  // `, id` — порядок словаря подписок в снимке детерминирован: без вторичного ключа он повторял физический
-  // порядок строк и менялся после пересева/UPDATE (пин `load.test.ts` «словарь подписок несёт обе засеянные»
-  // краснел в полном прогоне задачи 11 и был зелен поодиночке). Остальные словари — Deferred 11-m-load-order.
+  // `, id` у всех пяти словарей — порядок словаря в снимке детерминирован: без вторичного ключа он повторял
+  // физический порядок строк и менялся после пересева/UPDATE (пин `load.test.ts` «словарь подписок несёт обе
+  // засеянные» краснел в полном прогоне и был зелен поодиночке). Перекрытие «своя строка бьёт встроенную»
+  // этим не трогается: `graph_id NULLS FIRST` остаётся ПЕРВЫМ ключом, `id` лишь упорядочивает внутри рода.
 
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
