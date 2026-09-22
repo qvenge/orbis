@@ -365,8 +365,12 @@
       },
       "legacyVerdict": "reject",
       "legacyCode": "VALIDATION",
-      "verdict": "reject",
-      "code": "VALIDATION"
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": "$updatedAt"
+      },
+      "expectedDiff": "T_SET_NULL_IS_ABSENT"
     }
   ]
 }

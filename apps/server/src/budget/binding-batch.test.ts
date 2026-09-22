@@ -437,11 +437,15 @@ describe('число обращений к селектору не растёт 
       expect(await budgetParents(txnIds[0] as string)).toEqual([envelopeId]);
       expect(await budgetParents(txnIds[N - 1] as string)).toEqual([envelopeId]);
 
-      // K — константа, не зависящая от N (сегодня 1/1/1: три запроса на весь batch)
+      // K — константа, не зависящая от N (сегодня 1/1/5 на весь batch). Класс `currency` ловит ЛЮБОЕ
+      // чтение `user_settings`: версия реестра, выключенные модули, валюта по умолчанию, зона хука — и
+      // с задачи 4 зона владельца у движка правил (мемо `CLOCK_BY_TX` — одно чтение на транзакцию):
+      // системные строки `orbis/financial` применимы к каждой транзакции пачки. Граница класса поэтому
+      // K + 1 — сдвиг на одно чтение за транзакцию, а не за запись; рост с N пин по-прежнему ловит.
       const K = 4;
       expect(counts.selector).toBeLessThanOrEqual(K);
       expect(counts.parents).toBeLessThanOrEqual(K);
-      expect(counts.currency).toBeLessThanOrEqual(K);
+      expect(counts.currency).toBeLessThanOrEqual(K + 1);
       // Счётчик действительно ловит эти чтения (иначе «≤ K» выполнялось бы вхолостую)
       expect(counts.selector).toBeGreaterThan(0);
       expect(counts.parents).toBeGreaterThan(0);

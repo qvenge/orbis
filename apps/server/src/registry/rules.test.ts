@@ -7,6 +7,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
+  BUILTIN_RULES_BY_CARRIER,
   RULE_FIXTURES,
   type RuleDefinition,
   type RuleDefinitionInput,
@@ -56,6 +57,23 @@ function probe(carrier: RuleCarrier, rules: readonly unknown[]): RegistrySnapsho
     systemVersion: 1,
   };
 }
+/**
+ * Снимок встроенных словарей ИЗ КОДА — тот же, что собирает `assertBuiltinRules`: по нему считается
+ * пин числа системных правил (m-5).
+ */
+function codeSnapshot(): RegistrySnapshot {
+  return {
+    properties: new Map(BUILTIN_PROPERTY_META.map((d) => [d.id, d])),
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((d) => [d.id, d])),
+    roles: new Map(BUILTIN_RELATION_ROLE_META.map((d) => [d.id, d])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((d) => [d.id, d])),
+    subscriptions: new Map(),
+    ownerVersion: 0,
+    systemVersion: 0,
+  };
+}
+/** Системных строк каталога правил — три (задача 4: два инварианта §А7-2, из них financial — парой). */
+const BUILTIN_RULE_COUNT = 3;
 const FIN: RuleCarrier = { kind: 'aspect', id: 'orbis/financial' };
 const TASK: RuleCarrier = { kind: 'aspect', id: 'orbis/task' };
 /** Код И `details.reason`: словарный VALIDATION без причины не адресует ничего. */
@@ -458,8 +476,22 @@ describe('врезка на записи реестра (Р-3)', () => {
       reasonOf(err(() => assertRulesOfRow(probe(FIN, [OCCURRED, { ...OCCURRED }]), FIN, true))),
     ).toBe('RULE_ID_TAKEN');
   });
-  test('assertBuiltinRules зелен на сегодняшнем сиде (правил в коде пока ноль)', () => {
+  test('assertBuiltinRules зелен на сиде с системными строками правил (задача 4)', () => {
     expect(() => assertBuiltinRules()).not.toThrow();
+  });
+  test('счёт системных правил: снимок из кода несёт ровно строки BUILTIN_RULES_BY_CARRIER (m-5)', () => {
+    // Литерал, а не только равенство двух производных: снимок из кода собирается из той же карты, и
+    // без числа молча пропавшая строка карты прошла бы оба счёта вдвоём. Равенство ловит обратное —
+    // правило, доехавшее до снимка мимо карты (строкой в `builtin-*.ts`), или карту, которую сид
+    // перестал читать.
+    const declared = Object.values(BUILTIN_RULES_BY_CARRIER).flat();
+    expect(declared.length).toBe(BUILTIN_RULE_COUNT);
+    // Порядок `rulesOf` — порядок строк снимка, а не карты: сравнивается МНОЖЕСТВО id.
+    expect(
+      rulesOf(codeSnapshot())
+        .map(({ rule }) => rule.id)
+        .sort(),
+    ).toEqual(declared.map((r) => r.id).sort());
   });
   test('живой снимок после db:prepare: каждое правило каждой системной строки проходит assertRule', async () => {
     // Сторож того, что БАЗА совпадает с кодом и после пересева: дрейф строк правил (`rules` — jsonb) не ловится
@@ -468,6 +500,9 @@ describe('врезка на записи реестра (Р-3)', () => {
     // `load.ts` читает `.parse`'ом и падает на ней раньше (задача 2).
     const owner = await freshGraph();
     const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    // Свежий граф строк владельца не несёт — в снимке ровно системные правила, и их счёт обязан
+    // совпасть с картой (m-5): база, не пересеянная после правки сида, красит этот пин.
+    expect(rulesOf(reg).length).toBe(BUILTIN_RULE_COUNT);
     for (const { rule, carrier } of rulesOf(reg)) {
       expect(() => assertRule(rule, { reg, carrier, systemSeed: true })).not.toThrow();
     }

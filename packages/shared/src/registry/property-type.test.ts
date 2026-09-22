@@ -6,6 +6,7 @@ import { expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_PROPERTY_META } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
+import { BUILTIN_RULES_BY_CARRIER } from './builtin-rules';
 import {
   aspectDefinitionSchema,
   assertPatternRegular,
@@ -13,6 +14,7 @@ import {
   propertyDefinitionSchema,
   relationRoleDefinitionSchema,
 } from './property-type';
+import { ruleDefinitionSchema } from './rule-type';
 import { PROPERTY_KINDS, type PropertyKind, propertyTypeSchema } from './types';
 
 /** Минимальный валидный конфиг каждого kind: ветка союза есть — конфиг разбирается. */
@@ -320,12 +322,17 @@ test('rules — поле КАЖДОЙ строки-носителя (§Б4-1): �
   }
 });
 
-test('BUILTIN_* собираются схемой и потому несут rules: [] (сидов правил пока нет)', () => {
+test('BUILTIN_* собираются схемой: rules — ровно системные строки карты, разобранные схемой (задача 4)', () => {
+  // Свойства и роли системных правил пока не несут (задачи 12–14 кладут свои); аспекты — ровно то,
+  // что объявлено в `BUILTIN_RULES_BY_CARRIER`, доведённое умолчаниями схемы (`enabled`, `undo`).
   for (const d of [
     ...BUILTIN_PROPERTY_META,
     ...BUILTIN_ASPECT_DEFS,
     ...BUILTIN_RELATION_ROLE_META,
   ]) {
-    expect([d.id, d.rules]).toEqual([d.id, []]);
+    const declared = (BUILTIN_RULES_BY_CARRIER[d.id] ?? []).map((r) =>
+      ruleDefinitionSchema.parse(r),
+    );
+    expect([d.id, d.rules]).toEqual([d.id, declared]);
   }
 });

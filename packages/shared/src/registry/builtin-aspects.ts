@@ -32,6 +32,7 @@
 import type { z } from 'zod';
 import type { AspectId } from '../constants';
 import { BUILTIN_ASPECT_IDS } from '../constants';
+import { BUILTIN_RULES_BY_CARRIER } from './builtin-rules';
 import { type AspectDefinition, aspectDefinitionSchema } from './property-type';
 
 type AspectEntry = Omit<
@@ -484,6 +485,9 @@ export const BUILTIN_ASPECT_DEFS: readonly AspectDefinition[] = ENTRIES.map((ent
       rank: order + 1,
     })),
     rank: index + 1,
+    // Системные строки каталога правил (§Б4-1): инвариант живёт ДАННЫМИ строки-носителя, и сид
+    // пишет их той же строкой, что и её свойства.
+    rules: BUILTIN_RULES_BY_CARRIER[entry.id] ?? [],
   }),
 );
 

@@ -165,11 +165,25 @@ describe('dependencyGraph / dependantsOf (§А3-5)', () => {
       params: { property: 'orbis/occurred_on' },
       when: { has: 'orbis/recurring' },
     };
-    const edges = (rules: unknown[]) =>
+    const ruleEdges = (rules: unknown[]) =>
       dependencyGraph(snapshot({ aspects: [{ ...fin, rules }] }), { queryRefs: new Map() })
         .edges.filter((e) => e.kind === 'rule')
-        .map((e) => `${e.from}→${e.to}`)
+        .map((e) => `${e.from}→${e.to}`);
+    // Фон снимка — рёбра системных правил ПРОЧИХ строк (с задачи 4 — `task_completed_at` на
+    // `orbis/task`): утверждение про рёбра правила под тестом, поэтому фон (та же строка без правил)
+    // вычитается как мультимножество, а не прячется фильтром по имени.
+    const background = ruleEdges([]);
+    const edges = (rules: unknown[]) => {
+      const rest = [...background];
+      return ruleEdges(rules)
+        .filter((edge) => {
+          const at = rest.indexOf(edge);
+          if (at < 0) return true;
+          rest.splice(at, 1);
+          return false;
+        })
         .sort();
+    };
     expect(edges([writer])).toEqual([
       'orbis/currency→orbis/counterparty',
       'orbis/currency→orbis/recurring',

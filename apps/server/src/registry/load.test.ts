@@ -3,6 +3,7 @@
 // обе версии. Дельты — Задача 14.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
+  BUILTIN_ASPECT_DEFS,
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
   BUILTIN_SUBSCRIPTION_DEFS,
@@ -221,8 +222,16 @@ test('снимок несёт rules строк-носителей: своё пр
   expect(reg.aspects.get('user/sleep-log')?.rules).toEqual([rule]);
   // Аспект чужого графа (`beforeAll`) в снимок владельца не попадает вместе со своими правилами.
   expect(reg.aspects.has('user/mood')).toBe(false);
-  // Встроенные строки пока без правил — первые две кладёт задача 4.
-  expect(reg.aspects.get('orbis/financial')?.rules).toEqual([]);
+  // Встроенные строки несут системные правила задачи 4 — ровно в той форме, в какой их собирает код
+  // (`BUILTIN_ASPECT_DEFS`: вход `BUILTIN_RULES_BY_CARRIER`, доведённый умолчаниями схемы): сид пишет
+  // колонку, снимок её разбирает, и круг «код → БД → снимок» ничего не теряет и не добавляет.
+  const finDef = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/financial');
+  if (finDef === undefined) throw new Error('встроенного orbis/financial в коде нет');
+  expect(reg.aspects.get('orbis/financial')?.rules).toEqual(finDef.rules);
+  expect(reg.aspects.get('orbis/financial')?.rules.map((r) => r.id)).toEqual([
+    'financial_requires_occurred_on',
+    'financial_recurring_requires_recurrence',
+  ]);
   expect(reg.properties.get('orbis/occurred_on')?.rules).toEqual([]);
   expect(reg.roles.get('ref')?.rules).toEqual([]);
   // Тем же DDL — флаг контракта (Р-К-92 п.2): в снимке он ЕСТЬ уже здесь, `true` появится с
