@@ -7,6 +7,7 @@ import { BUILTIN_PROPERTY_META } from '../registry/builtin-properties';
 import { EXPR_FORMS, EXPR_TREE_DEPTH_CAP, type ExprNode, exprFormsOf } from './ast';
 import { checkExpr, type ExprScope, exprTypeOfKind } from './check';
 import {
+  DEREF_IN_CONSTRAINT,
   EXPR_NOT_TOTAL,
   EXPR_RECURSION,
   EXPR_TYPE,
@@ -351,6 +352,18 @@ describe('тайп-чекер §С8-28: область, $sensitivity и реку
     expect(
       refusal(() => checkExpr({ class: { contract: 'orbis/sensitivity' } }, scope())).code,
     ).toBe(EXPR_TYPE);
+  });
+
+  test('derefDenied: deref отвечает своим кодом §С8-29, agg_via — запретом по типу', () => {
+    const D = { deref: { prop: 'orbis/finance_category', read: 'orbis/title' } };
+    const AGG = { agg_via: { role: 'envelope-binding', name: 'remaining' } };
+    expect(refusal(() => checkExpr(D, scope({ derefDenied: true, allowDeref: true }))).code).toBe(
+      DEREF_IN_CONSTRAINT,
+    );
+    expect(refusal(() => checkExpr(AGG, scope({ derefDenied: true }))).code).toBe(EXPR_TYPE);
+    expect(checkExpr(D, scope({ allowDeref: true }))).toEqual({ kind: 'text' }); // D/V — без изменений
+    expect(refusal(() => checkExpr(D, scope())).code).toBe(EXPR_TYPE);
+    expect(checkExpr(AGG, scope())).toEqual({ kind: 'decimal' });
   });
 
   test('самоссылка невыразима: циклическая структура — EXPR_RECURSION, а не зависание', () => {
