@@ -127,4 +127,16 @@ describe('гейт вехи I: инвариант только декларац�
     expect(typeof done.props['orbis/completed_at']).toBe('string');
     expect('orbis/completed_at' in back.props).toBe(false);
   });
+
+  // Зеленит задача 4 (строка `financial_requires_occurred_on` + снос `assertFinancialInvariant`). Ключ
+  // `invariant` совпадает и сегодня: по Р-К-1 id системной строки РАВЕН прежнему коду отказа, на нём и
+  // сходятся близнецы. Красным тест делают три ключа, которых функция (`normalize.ts:162-166`) не кладёт
+  // и положить не может: они описывают ДЕКЛАРАЦИЮ, и источник у них один — `assertConstraintRules` (§1.5).
+  test.failing('1. requires_when строкой сида: отказ несёт шаблон, свойство и область правила', () => {
+    const d = taken(sysRequires, 'financial без occurred_on').details as Record<string, unknown>;
+    expect(d.invariant).toBe('financial_requires_occurred_on');
+    expect(d.rule_template).toBe('requires_when');
+    expect(d.property).toBe('orbis/occurred_on');
+    expect(d.scope).toEqual({ aspect: 'orbis/financial' });
+  });
 });
