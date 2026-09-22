@@ -1,12 +1,14 @@
 // apps/server/src/executor/normalize.ts
-// Доменные нормализации стадии 4 (§2.1, §3.2, §3.3, §4.1, §9.2) — переписанные на `props`
+// Доменные нормализации стадии 4 (§2.1, §3.2, §4.1, §9.2) — переписанные на `props`
 // (§А7-2: доменные инварианты части А остаются кодом, но адресуют свойства по id).
 //
 // Слияние состояния отсюда УШЛО: `mergeAspects` заменил `applyPropsPatch` (props.ts) —
 // единица слияния стала свойством, а не полем внутри аспект-ключа. Здесь остались ровно
 // доменные правила, каждое из которых спрашивает у состояния две вещи: несёт ли сущность
 // аспект (список `aspects[]`) и какое у неё значение свойства (`props` по id).
-import { ExecError } from './errors';
+//
+// Условный `occurred_on` и `recurring` уехали строками каталога (§Б4-3, задача 4); здесь остались
+// нормализации, которым правила не нужны.
 import type { EntityState } from './props';
 
 /** Теги нормализуются в нижний регистр и дедуплицируются (порядок первого вхождения). */
@@ -52,9 +54,6 @@ export function applyTaskCompletion(prev: EntityState, next: EntityState, now: D
 export const TASK_STATUS = 'orbis/task_status';
 export const COMPLETED_AT = 'orbis/completed_at';
 const CARRYOVER = 'orbis/carryover';
-const RECURRENCE = 'orbis/recurrence';
-const RECURRING = 'orbis/recurring';
-const OCCURRED_ON = 'orbis/occurred_on';
 
 /**
  * Свойства, задающие ИДЕНТИЧНОСТЬ конверта (03-budget §2.1): по этой четвёрке он уникален,
@@ -115,56 +114,6 @@ export function dropStaleCarryover(
 /** Значения идентичности конверта — скаляры (uuid, код валюты, даты); сравнение по канону. */
 function sameScalar(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
-}
-
-/**
- * `orbis/recurrence` на сущности, НЕСУЩЕЙ `orbis/schedule`, — признак шаблона повторения
- * (§3.1). Аспект в условии обязателен, а не избыточен: значение свойства переживает снятие
- * аспекта (Р9), и без проверки списка снятое расписание продолжало бы делать транзакцию
- * шаблоном — то есть отвязывало бы её от конверта навсегда.
- */
-function hasScheduleRecurrence(state: EntityState): boolean {
-  if (!state.aspects.includes('orbis/schedule')) return false;
-  const recurrence = state.props[RECURRENCE];
-  return typeof recurrence === 'object' && recurrence !== null;
-}
-
-/**
- * true, если валидность зависит от входящей derived_from-связи (§3.3): `orbis/recurring`
- * без recurrence легален только на инстансе шаблона. Наличие связи резолвит вызывающая
- * сторона (executor) — БД плюс связи, создаваемые тем же batch.
- */
-export function financialRecurringNeedsDerivedFrom(state: EntityState): boolean {
-  if (!state.aspects.includes('orbis/financial')) return false;
-  return state.props[RECURRING] === true && !hasScheduleRecurrence(state);
-}
-
-/**
- * Financial-инвариант §3.3 над ФИНАЛЬНЫМ состоянием сущности:
- * - `orbis/recurring` = true валиден при `orbis/recurrence` на той же сущности (шаблон)
- *   ИЛИ при входящей derived_from-связи (инстанс шаблона);
- * - не-шаблон обязан иметь `orbis/occurred_on`.
- *
- * Молчит, если сущность не несёт `orbis/financial`: инвариант — про транзакцию, а не про
- * значение суммы, оставшееся на записи после снятия аспекта (Р9).
- */
-export function assertFinancialInvariant(state: EntityState, hasIncomingDerivedFrom = false): void {
-  if (!state.aspects.includes('orbis/financial')) return;
-  if (state.props[RECURRING] === true) {
-    if (!hasScheduleRecurrence(state) && !hasIncomingDerivedFrom) {
-      throw new ExecError(
-        'INVARIANT',
-        'orbis/financial.recurring=true валиден только на шаблоне с orbis/schedule.recurrence или на инстансе с входящей derived_from (§3.3)',
-        { invariant: 'financial_recurring_requires_recurrence' },
-      );
-    }
-  } else if (state.props[OCCURRED_ON] === undefined) {
-    throw new ExecError(
-      'INVARIANT',
-      'orbis/financial без recurring обязан иметь occurred_on (§3.3)',
-      { invariant: 'financial_requires_occurred_on' },
-    );
-  }
 }
 
 /**
