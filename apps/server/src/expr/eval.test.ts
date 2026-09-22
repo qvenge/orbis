@@ -4,7 +4,13 @@
 // `budget/aggregates.ts` (:342, :363, :365-368, :390-392), они переписаны здесь дословно, а не
 // импортированы: `aggregates.ts` тянет за собой db/client и executor, а сверять надо АРИФМЕТИКУ.
 import { describe, expect, test } from 'bun:test';
-import { BUDGET_DEF, daysInclusive, type ResolvedBinding } from '@orbis/shared';
+import {
+  BUDGET_DEF,
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
+  daysInclusive,
+  type ResolvedBinding,
+} from '@orbis/shared';
 import {
   EXPR_TREE_DEPTH_CAP,
   type ExprNode,
@@ -13,6 +19,7 @@ import {
 } from '@orbis/shared/expr';
 import { decAdd, decCmp, decDivBy, decMulInt, decSub } from '../budget/decimal';
 import { ExecError } from '../errors';
+import { parseGraphId } from '../identity';
 import { type ExprEvalScope, evalExpr } from './eval';
 
 const TODAY = '2026-05-15';
@@ -679,5 +686,56 @@ describe('evalExpr: deref — одношаговое разыменование 
     expect(
       reasonOf(() => evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, noReader)),
     ).toBe('VALIDATION/EXPR_SCOPE');
+  });
+});
+
+const SELF = '00000000-0000-7000-8000-00000000e001';
+const SRC = '00000000-0000-7000-8000-00000000e002';
+const OWNER = parseGraphId('00000000-0000-7000-8000-0000000000a1');
+
+describe('область ЗАПИСИ: класс, рёбра, величины соседа, личность (Р-И-4)', () => {
+  const REG = {
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+  };
+  const s = scopeOf({
+    props: { 'orbis/task_status': 'done' },
+    aspects: ['orbis/task'],
+    reg: REG,
+    self: SELF,
+    owner: OWNER,
+    relations: [{ role: 'instance-of', sourceId: SRC, alive: true }],
+    aggVia: new Map([['envelope-binding', { remaining: '660.00' }]]),
+  });
+  const cls = { class: { contract: 'orbis/completable' } } as const;
+  test('class: значение, членство в списке классов и в ИМЕНИ набора (§Б1-1)', () => {
+    expect(evalExpr(cls, s)).toBe('done');
+    expect(evalExpr({ op: 'in', args: [cls, { const: ['done'] }] }, s)).toBe(true);
+    expect(evalExpr({ op: 'in', args: [cls, { const: 'closed' }] }, s)).toBe(true);
+    expect(evalExpr({ op: 'in', args: [cls, { const: 'open' }] }, s)).toBe(false);
+  });
+  test('has_relation, agg_via, $self/$owner — из предзагруженных полей области', () => {
+    expect(evalExpr({ has_relation: { role: 'instance-of' } }, s)).toBe(true);
+    expect(evalExpr({ has_relation: { role: 'instance-of', alive: false } }, s)).toBe(false);
+    expect(evalExpr({ has_relation: { role: 'subitem' } }, s)).toBe(false);
+    expect(evalExpr({ agg_via: { role: 'envelope-binding', name: 'remaining' } }, s)).toBe(
+      '660.00',
+    );
+    expect(evalExpr({ ctx: '$self' }, s)).toBe(SELF);
+    expect(evalExpr({ ctx: '$owner' }, s)).toBe(OWNER);
+  });
+  test('без поля области — прежний отказ бэкенда, а не пустота (§С8-3)', () => {
+    const bare = scopeOf({ props: {} });
+    // in_set — именованный остаток (Р-К-17): дальний конец с предикатом считает SQL-бэкенд.
+    const cases: ReadonlyArray<readonly [ExprNode, ExprEvalScope]> = [
+      [cls, bare],
+      [{ has_relation: { role: 'instance-of' } }, bare],
+      [{ ctx: '$sensitivity' }, bare],
+      [{ agg_via: { role: 'x', name: 'y' } }, bare],
+      [{ has_relation: { role: 'r', in_set: { contract: 'orbis/completable', set: 'open' } } }, s],
+    ];
+    for (const [node, scope] of cases) {
+      expect(reasonOf(() => evalExpr(node, scope))).toBe('VALIDATION/EXPR_BACKEND_UNSUPPORTED');
+    }
   });
 });

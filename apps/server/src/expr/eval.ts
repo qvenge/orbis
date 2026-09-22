@@ -13,15 +13,31 @@
 // «невыразимое — ошибка, а не пустота»):
 //   считает    — const, duration, prop, slot, param, ctx:$today, agg, phase, has, deref, op×15,
 //                date_diff, days_inclusive, date_add дневной гранулярности;
-//   отказывает — class, has_relation, agg_via (нужен граф: у области ведомости ровно одна привязка
-//                своего контракта, а класс сущности резолвится по привязкам ВСЕХ её аспектов —
-//                второй ответчик разошёлся бы с `compileClassMembership` на сущности с двумя
-//                аспектами), ctx:$owner/$self/$sensitivity (личность и чувствительность — области
-//                правил и классификатора, у ведомости их нет: см. форму ExprEvalScope), date_add с
+//   считает В ОБЛАСТИ ЗАПИСИ (Б-2, Р-4) — class, has_relation, agg_via, ctx:$self/$owner/$sensitivity:
+//                их читатели ПРЕДЗАГРУЖЕНЫ в поля области (`aspects`+`reg`, `relations`, `aggVia`,
+//                `self`/`owner`/`sensitivity`) сборщиком `rules/scope.ts:entityEvalScope`, потому что
+//                интерпретатор синхронный и в граф сам не ходит;
+//   отказывает — те же формы там, где область их читателя НЕ несёт (ведомость Budget: у неё ровно
+//                одна привязка своего контракта, а класс сущности резолвится по привязкам ВСЕХ её
+//                аспектов — второй ответчик разошёлся бы с `compileClassMembership`; личности и
+//                чувствительности у ведомости нет), `has_relation.in_set` и предикатный набор
+//                справа от `in` (дальний конец и предикат — дело SQL-бэкенда, Р-К-17), date_add с
 //                годами/месяцами/временем суток (кламп «31 января + 1 месяц» — правило, у которого
 //                в Б-1 нет ни одного потребителя-декларации: окна Budget задаются параметрами
 //                period_start/period_end/horizon_end, Р-К-4; в SQL кламп делает сам Postgres).
-import { addDays, daysInclusive, epochDays, type ResolvedBinding, toParts } from '@orbis/shared';
+import {
+  type AspectDefinition,
+  addDays,
+  type BindingIndex,
+  bindingIndexOf,
+  type ContractDefinition,
+  daysInclusive,
+  entityClassOf,
+  epochDays,
+  type GraphId,
+  type ResolvedBinding,
+  toParts,
+} from '@orbis/shared';
 import {
   EXPR_DURATION_RE,
   EXPR_TREE_DEPTH_CAP,
@@ -70,6 +86,45 @@ export interface ExprEvalScope {
   today: string;
   /** Одношаговое чтение цели `ref` (§Б3-3): props цели + core-id + `tags`; нет цели → null. */
   deref?: (id: string) => Record<string, unknown> | null;
+  /**
+   * IANA-зона владельца (Р-33): день МОМЕНТА в `calendarHead` и в сравнении день⟷момент берётся по
+   * его стеночным часам у владельца — тем же приёмом, что `AT TIME ZONE` у SQL-бэкенда. Без неё —
+   * прежнее поведение (день собственного смещения момента). Наполняют движок ведомостей
+   * (`runLedgers` → конструкторы области `subscriptions/budget.ts`) и `rules/scope.ts:entityEvalScope`.
+   */
+  timeZone?: string;
+  /** Область ЗАПИСИ (Р-И-4): id самой записи — `$self`. Наполняет `entityEvalScope`. */
+  self?: string;
+  /** Область записи: граф владельца — `$owner`. Наполняет `entityEvalScope` из `ctx.identity.graph`. */
+  owner?: GraphId;
+  /** Область записи: аспекты `$self` — без них (и без `reg`) класс записи неизвестен. Наполняет `entityEvalScope`. */
+  aspects?: readonly string[];
+  /** Область записи: аспекты и контракты снимка для `class` и имён наборов. Наполняет `entityEvalScope`. */
+  reg?: {
+    aspects: ReadonlyMap<string, AspectDefinition>;
+    contracts: ReadonlyMap<string, ContractDefinition>;
+  };
+  /**
+   * Область записи: ПРЕДЗАГРУЖЕННЫЕ входящие рёбра `$self` ролей, которые читают правила (Р-И-7) —
+   * БД ∪ объявленные пачкой − удалённые пачкой. Наполняет `rules/scope.ts:relationFactsOf`.
+   */
+  relations?: readonly RelationFact[];
+  /**
+   * Опубликованные величины соседей: роль → имя → значение (Е-2, Р-И-4). Живого читателя в Б-2 нет
+   * (V2, Р-К-17): наполняют тесты и будущий движок; без карты `agg_via` — отказ бэкенда.
+   */
+  aggVia?: ReadonlyMap<string, Readonly<Record<string, ExprScalar>>>;
+  /** Только область классификатора `assign_level` (задача 15): факты чувствительности вызова. */
+  sensitivity?: readonly string[];
+  /** Только область классификатора `assign_level` (задача 15): тронутые свойства вызова. */
+  touched?: readonly string[];
+}
+
+/** Входящее ребро `$self` роли `role` от `sourceId`; `alive` — источник не архивен (Р-И-7). */
+export interface RelationFact {
+  role: string;
+  sourceId: string;
+  alive: boolean;
 }
 
 export type ExprValue = string | number | boolean | null | readonly string[];
@@ -163,6 +218,20 @@ function slotValue(slot: string, scope: ExprEvalScope): ExprValue {
   return null; // §Б2-3: необязательный слот можно не связывать — это отсутствие, а не отказ
 }
 
+/**
+ * Индекс привязок — МЕМО по объекту реестра области: тот же приём и довод, что у `bindingsOf`
+ * движка ведомостей — `bindingIndexOf` пересобирает индекс с нуля, а `class` спрашивают на каждой
+ * записи каждой операции.
+ */
+const INDEX_BY_REG = new WeakMap<object, BindingIndex>();
+function indexOf(reg: NonNullable<ExprEvalScope['reg']>): BindingIndex {
+  const cached = INDEX_BY_REG.get(reg);
+  if (cached !== undefined) return cached;
+  const built = bindingIndexOf(reg);
+  INDEX_BY_REG.set(reg, built);
+  return built;
+}
+
 export function evalExpr(expr: ExprNode, scope: ExprEvalScope): ExprValue {
   return ev(expr, scope, 0);
 }
@@ -194,28 +263,58 @@ function ev(node: ExprNode, scope: ExprEvalScope, depth: number): ExprValue {
   if ('phase' in node) return scope.phase === node.phase;
   if ('ctx' in node) {
     if (node.ctx === '$today') return scope.today;
-    return fail('EXPR_BACKEND_UNSUPPORTED', `контекст '${node.ctx}' бэкенду формул недоступен`, {
+    if (node.ctx === '$self' && scope.self !== undefined) return scope.self;
+    if (node.ctx === '$owner' && scope.owner !== undefined) return scope.owner;
+    if (node.ctx === '$sensitivity' && scope.sensitivity !== undefined) return scope.sensitivity;
+    // `$touched` — задача 15 вместе с `assign_level`: контекста в EXPR_CTX ещё нет.
+    return fail('EXPR_BACKEND_UNSUPPORTED', `контекст '${node.ctx}' в этой области недоступен`, {
       ctx: node.ctx,
     });
   }
   if ('class' in node) {
-    return fail(
-      'EXPR_BACKEND_UNSUPPORTED',
-      'класс сущности считает предикатный бэкенд (compileClassMembership)',
-      { contract: node.class.contract },
+    const reg = scope.reg;
+    if (reg === undefined || scope.aspects === undefined) {
+      return fail(
+        'EXPR_BACKEND_UNSUPPORTED',
+        'класс записи: области без реестра и аспектов он неизвестен',
+        { contract: node.class.contract },
+      );
+    }
+    return entityClassOf(
+      indexOf(reg),
+      { aspects: scope.aspects, props: scope.props },
+      node.class.contract,
+      (id) => reg.aspects.get(id)?.rank ?? Number.MAX_SAFE_INTEGER,
     );
   }
   if ('has_relation' in node) {
-    return fail('EXPR_BACKEND_UNSUPPORTED', 'наличие ребра считает предикатный бэкенд', {
-      role: node.has_relation.role,
-    });
+    const rel = node.has_relation;
+    // Дальний конец с предикатом потребовал бы второго чтения сущности — правилам Б-2 он не нужен,
+    // и это ИМЕНОВАННЫЙ остаток (Р-К-17), а не забытая ветка.
+    if (rel.in_set !== undefined) {
+      return fail('EXPR_BACKEND_UNSUPPORTED', 'has_relation.in_set считает предикатный бэкенд', {
+        role: rel.role,
+      });
+    }
+    if (scope.relations === undefined) {
+      return fail(
+        'EXPR_BACKEND_UNSUPPORTED',
+        'наличие ребра: предзагруженных рёбер в области нет',
+        { role: rel.role },
+      );
+    }
+    return scope.relations.some(
+      (r) => r.role === rel.role && (rel.alive === undefined || r.alive === rel.alive),
+    );
   }
   if ('agg_via' in node) {
-    return fail(
-      'EXPR_BACKEND_UNSUPPORTED',
-      'Е-2 (agg_via) — опубликованные величины соседа, бэкенд в Б-2',
-      { role: node.agg_via.role, name: node.agg_via.name },
-    );
+    const byRole = scope.aggVia?.get(node.agg_via.role);
+    if (byRole === undefined) {
+      return fail('EXPR_BACKEND_UNSUPPORTED', 'Е-2 (agg_via): карты величин соседа в области нет', {
+        ...node.agg_via,
+      });
+    }
+    return own(byRole, node.agg_via.name) ?? null;
   }
   if ('date_add' in node) {
     const [value, duration] = pair(node.date_add, scope, depth, 'date_add');
@@ -360,6 +459,24 @@ function applyOp(
     }
     case 'in': {
       const [left, right] = binary(op, args);
+      // Класс слева и ИМЯ НАБОРА справа (§Б1-1): набор живёт в контракте, а не в выражении.
+      // Предикатный набор чистой функцией не вычисляется — честный отказ бэкенда (Р-К-17).
+      // `Object.hasOwn` — имя набора приходит из декларации, и цепочка прототипа не должна
+      // отвечать за `constructor` (тот же довод, что у `contractSetKind`).
+      if ('class' in left && 'const' in right && typeof right.const === 'string') {
+        const sets = scope.reg?.contracts.get(left.class.contract)?.sets;
+        const set =
+          sets != null && Object.hasOwn(sets, right.const) ? sets[right.const] : undefined;
+        if (!Array.isArray(set)) {
+          return fail(
+            'EXPR_BACKEND_UNSUPPORTED',
+            `набор '${right.const}' задан не перечислением классов`,
+            { contract: left.class.contract, set: right.const },
+          );
+        }
+        const cls = ev(left, scope, d);
+        return cls !== null && set.includes(String(cls));
+      }
       const value = ev(left, scope, d);
       const list = ev(right, scope, d);
       if (value === null) return false; // §Б3-4: членство отсутствующего — ложь
