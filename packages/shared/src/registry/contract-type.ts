@@ -74,6 +74,15 @@ export const contractSlotsSchema = z
     classes: z.array(contractClassSchema).default([]),
     sets: z.record(z.string().regex(SLOT_KEY_RE, 'имя набора'), contractSetSchema).default({}),
     facts: z.null().default(null),
+    /**
+     * Р-И-38: ОДИН ВАРИАНТ НА КЛАСС — запись классом однозначна. Флаг читает валидатор привязок
+     * (`checkImplements`/`checkClassMap`, задача 14а): при нём карта, где два варианта попали в один
+     * класс, отвергается (`VALIDATION reason:'CLASS_NOT_EXCLUSIVE'`), зато полнота отнесения вариантов
+     * не требуется — вариант вне классов законен (`cancelled` у задачи). Поле СТРОКИ, а не константа в
+     * коде: снимок собирается из строк, и флаг, живущий в коде, терялся бы на пересеве (Р-К-92 п.2).
+     * `.default(false)` держит форму для шести контрактов, посеянных до 0022.
+     */
+    exclusive_classes: z.boolean().default(false),
   })
   .strict();
 export const contractFactsSchema = z
@@ -83,6 +92,14 @@ export const contractFactsSchema = z
     slots: z.null().default(null),
     classes: z.null().default(null),
     sets: z.null().default(null),
+    /**
+     * У словаря фактов классов нет, и флаг про них здесь бессмыслен. Но объявлен он не `z.null()`, как
+     * соседние `slots`/`classes`/`sets`: те лежат в NULLABLE колонках, а `exclusive_classes` — `boolean
+     * NOT NULL DEFAULT false`, и «нет значения» в ней невыразимо. `z.literal(false)` и есть запрет:
+     * `{kind:'facts', exclusive_classes:true}` не разберётся, то есть объявить исключительность там,
+     * где классов нет, нельзя — при том что строка из SELECT разбирается без ветвления у маппера.
+     */
+    exclusive_classes: z.literal(false).default(false),
     facts: z.array(contractClassSchema).min(1),
   })
   .strict();

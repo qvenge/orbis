@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { BUILTIN_CONTRACT_DEFS } from './builtin-contracts';
 import { contractDefinitionSchema, contractSetKind } from './contract-type';
 import { SLOT_KEY_RE } from './property-type';
 
@@ -92,4 +93,38 @@ test('contractSetKind: имя из цепочки прототипа набор�
     'unknown',
     'unknown',
   ]);
+});
+
+test('exclusive_classes: у slots-ветки умолчание false, у facts-ветки true невыразим (Р-И-38)', () => {
+  expect(contractDefinitionSchema.parse(ROW).exclusive_classes).toBe(false); // строка, посеянная до 0022
+  expect(
+    contractDefinitionSchema.parse({ ...ROW, exclusive_classes: true }).exclusive_classes,
+  ).toBe(true);
+  const FACTS = {
+    id: 'orbis/f',
+    graphId: null,
+    key: 'orbis/f',
+    label: { ru: 'Ф' },
+    description: { ru: 'Ф' },
+    kind: 'facts',
+    facts: [{ key: 'external', label: { ru: 'Внешнее' } }],
+    module: null,
+    rank: 2,
+  };
+  // У словаря фактов классов нет вовсе — флаг ПРО КЛАССЫ там не объявляется, но поле обязано разбираться:
+  // колонка NOT NULL, и SELECT отдаёт её всем строкам без разбора ветки.
+  expect(contractDefinitionSchema.parse(FACTS).exclusive_classes).toBe(false);
+  expect(contractDefinitionSchema.safeParse({ ...FACTS, exclusive_classes: true }).success).toBe(
+    false,
+  );
+});
+
+test('BUILTIN_CONTRACT_DEFS собираются схемой: флаг есть у каждого, у словаря фактов — всегда false', () => {
+  // Пин БЕЗ «у всех false»: задача 14а сеет `orbis/delegable` с `true`, и такой пин покраснел бы у неё —
+  // то есть был бы пином календаря. Инвариант же держится всегда: поле разобрано у КАЖДОЙ строки, а там,
+  // где классов нет по построению (`kind:'facts'`), исключительность невыразима (шаг 2б, `z.literal(false)`).
+  for (const c of BUILTIN_CONTRACT_DEFS) {
+    expect([c.id, typeof c.exclusive_classes]).toEqual([c.id, 'boolean']);
+    if (c.kind === 'facts') expect([c.id, c.exclusive_classes]).toEqual([c.id, false]);
+  }
 });
