@@ -194,8 +194,9 @@
       "verdict": "ok",
       "writes": {
         "$updatedAt": "2026-07-04T10:00:00.001Z",
-        "orbis/completed_at": "2026-07-04T10:00:00.000Z"
-      }
+        "orbis/completed_at": "$updatedAt"
+      },
+      "expectedDiff": "COMPLETED_AT_IS_WRITE_STAMP"
     },
     {
       "name": "task уходит из done",
@@ -234,8 +235,9 @@
       "verdict": "ok",
       "writes": {
         "$updatedAt": "2026-07-04T10:00:00.001Z",
-        "orbis/completed_at": "2026-07-04T10:00:00.000Z"
-      }
+        "orbis/completed_at": "$updatedAt"
+      },
+      "expectedDiff": "COMPLETED_AT_IS_WRITE_STAMP"
     },
     {
       "name": "recurring с ребром чужой роли в той же пачке",

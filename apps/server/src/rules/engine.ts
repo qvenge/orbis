@@ -6,9 +6,10 @@
  * встроенные строки и строки владельца он исполняет одинаково, и это и есть обещание §А7-2 «инвариант —
  * декларацией, а не кодом».
  *
- * Врезан в исполнитель на ТРЁХ путях записи (create / update / attach) РЯДОМ со старым кодом
- * инвариантов (РП-4, Р-К-18): до задачи 4 системных строк нет, и движок исполняет только правила
- * аспектов владельца и тестов; снос кода и строки сида — задача 4.
+ * Врезан в исполнитель на ТРЁХ путях записи (create / update / attach). С задачи 4 он — ЕДИНСТВЕННЫЙ
+ * исполнитель двух доменных инвариантов §А7-2: системные строки `builtin-rules.ts` (financial —
+ * `requires_when`/`forbidden_when`, task — `on_enter_class`) заменили код, стоявший рядом с движком
+ * на время двойной проверки (Р-К-18); корпус близнецов — `registry/invariants-golden.test.ts`.
  *
  * `unique_among` входит в род `constraint`, но исполняется с задачи 12 (РЧ-3-2): встреченное включённое
  * правило этого шаблона — отказ `RULE_TEMPLATE_UNSUPPORTED`, а не пропуск. Правило, которое нельзя
@@ -53,7 +54,7 @@ export interface RuleWriteInput {
   };
   entityId: string;
   before: EntityState;
-  /** Состояние ПОСЛЕ патча; T-правила мутируют его `props` на месте (как `applyTaskCompletion`). */
+  /** Состояние ПОСЛЕ патча; T-правила мутируют его `props` на месте. */
   state: EntityState;
   patch: PropsPatch;
   /** Колонки ядра; `updatedAt` — ТОТ штамп, что запишется этой операцией (Р-И-3). */
@@ -334,7 +335,8 @@ function byCarrierThenId(a: Applicable, b: Applicable): number {
 
 /**
  * T-правила (§Б4-3): `on_enter_class` и `default`. Под внутренним undo НЕ исполняются вовсе — как
- * `applyTaskCompletion` сегодня (ветка `internalUndo === undefined` в `prepareEntityUpdate`): откат
+ * и снятый задачей 4 код штампа завершения (ветка `internalUndo === undefined` в
+ * `prepareEntityUpdate`): откат
  * восстанавливает зафиксированное состояние, и «поправить» его значило бы разойтись с журналом (Р-И-2).
  *
  * ТРИ ФАЗЫ, И ПОРЯДОК ФАЗ — РЕШЕНИЕ, а не удобство (рулинг 1-3 координатора):
@@ -354,8 +356,8 @@ function byCarrierThenId(a: Applicable, b: Applicable): number {
  *
  * ИМЕНОВАННЫЙ ОСТАТОК — снятие аспекта-носителя. Правило с областью-аспект применимо к состоянию
  * ПОСЛЕ патча, поэтому при `aspects.detach` носителя его `on_leave` (и C-правила того же носителя)
- * не исполняются, а значения по Р9 detach переживают. Паритет со старым кодом: `applyTaskCompletion`
- * гейтится тем же `state.aspects.includes('orbis/task')`; область снята — правило её больше не
+ * не исполняются, а значения по Р9 detach переживают. Паритет со снятым кодом: `applyTaskCompletion`
+ * гейтился тем же `state.aspects.includes('orbis/task')`; область снята — правило её больше не
  * касается (задача 14 знает это для `waiting_for`).
  */
 export async function applyTransitionRules(input: RuleWriteInput): Promise<void> {
@@ -393,10 +395,13 @@ export async function applyTransitionRules(input: RuleWriteInput): Promise<void>
   for (const rule of entering) {
     const set = rule.params.set;
     if (set === undefined || !whenHolds(rule, scope)) continue;
-    // «Ещё не задано» — то же присутствие, что у `has` (РЧ-3-3) и у `applyTaskCompletion`:
-    // значение, пришедшее патчем, правило не перетирает — ЕСЛИ уход другого класса (фаза 1) его
-    // не снял. Снятие уходом смотрит на состояние, а не на патч: паритет со старым кодом
-    // (`applyTaskCompletion` снимает `completed_at` при уходе из done, что бы ни принёс патч).
+    // «Ещё не задано» — то же присутствие, что у `has` (РЧ-3-3): `undefined` и `null` — нет.
+    // Значение, пришедшее патчем, правило не перетирает — ЕСЛИ уход другого класса (фаза 1) его
+    // не снял. Снятый код штампа спрашивал `=== undefined`, и явный `null` во входе оставался до
+    // стадии 2 (отказ `TYPE`); правило ставит на его место штамп — единственное расхождение
+    // присутствия, закрытый список корпуса близнецов (`T_SET_NULL_IS_ABSENT`). Снятие уходом
+    // смотрит на состояние, а не на патч: паритет со снятым кодом (он снимал `completed_at` при
+    // уходе из done, что бы ни принёс патч).
     if (!present(input.state.props[set.property]))
       assignPresent(input.state, set.property, evalExpr(set.value, scope));
   }

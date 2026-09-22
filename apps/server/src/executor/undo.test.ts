@@ -210,7 +210,8 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
     const e = created.results[0] as WireEntity;
 
     // Правка ДВУХ свойств одного аспекта: третьего (due_date) патч не касается вовсе,
-    // а completed_at дописывает нормализация §3.2 — и она обязана попасть в откат
+    // а completed_at дописывает правило каталога `task_completed_at` (§3.2) — и оно обязано
+    // попасть в откат
     const updated = ok(
       await execute(
         db,
@@ -244,7 +245,8 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
           props: {
             'orbis/task_status': 'done',
             'orbis/priority': 'high',
-            'orbis/completed_at': T.toISOString(),
+            // Штамп записи, а не `clock()` (Р-И-3): правка в тот же тик, что create, — `T+1ms` (§5.2).
+            'orbis/completed_at': (updated.results[0] as WireEntity).updatedAt,
           },
         },
       },

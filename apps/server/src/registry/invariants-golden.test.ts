@@ -108,6 +108,11 @@ const EXPECTED_DIFFS: Record<string, { records: number }> = {
   // create, update и attach — `VALIDATION` у обоих). Прецедент той же семантики в старом коде —
   // подстановка валюты конверта «NULL → умолчание» до валидации.
   T_SET_NULL_IS_ABSENT: { records: 1 },
+  // Р-И-3 (Р-К-2): значение `on_enter_class` — `{prop:'orbis/updated_at'}`, штамп, который ляжет в
+  // колонку этой же операцией; снятый код писал чистый `clock()`. В проде разницы нет (у живого хода
+  // часов `monotonicUpdatedAt(now, prev) === now`); с поддельными часами правка и attach в тот же тик
+  // дают штамп `T0+1ms` (§5.2). Create в done расхождения не даёт: у него штамп и есть `now`.
+  COMPLETED_AT_IS_WRITE_STAMP: { records: 2 },
 };
 
 /**

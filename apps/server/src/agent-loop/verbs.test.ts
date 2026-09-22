@@ -8,6 +8,7 @@ import type {
   CheckpointResult,
   ClaimTaskResult,
   FinishResult,
+  GraphId,
   MyQueueResult,
   RunStepResult,
 } from '@orbis/shared';
@@ -22,7 +23,8 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { chatMessages } from '../db/schema';
+import { chatMessages, entities } from '../db/schema';
+import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { answerPendingQuestion } from '../policy/pending';
@@ -47,6 +49,16 @@ const {
   worker,
   workerGrant,
 } = agentLoopHelpers(db);
+
+/** Штамп строки (`updated_at`) — ISO, как его видит правило (`{prop:'orbis/updated_at'}`, Р-И-3). */
+async function rowOf(graph: GraphId, id: string): Promise<{ updatedAt: string }> {
+  const rows = await withIdentity(db, personal(graph), (tx) =>
+    tx.select({ updatedAt: entities.updatedAt }).from(entities).where(eq(entities.id, id)),
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error(`сущность ${id} не найдена`);
+  return { updatedAt: row.updatedAt.toISOString() };
+}
 
 function okResult<T>(r: Awaited<ReturnType<typeof dispatchTool>>): T {
   if (r.status !== 'ok') throw new Error(`ожидался ok, получено: ${JSON.stringify(r)}`);
@@ -974,8 +986,11 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
 
     const task = (await propsOf(owner, ticketId)) as AnyRecord;
     expect(task['orbis/task_status']).toBe('done');
-    // completed_at ставит сам executor (§3.2) — глагол его не подставляет
-    expect(task['orbis/completed_at']).toBe(iso(T2));
+    // completed_at ставит сам исполнитель — строкой каталога `task_completed_at` (§3.2), глагол его
+    // не подставляет. Значение — штамп строки: тикет правился часами реального времени, а глагол
+    // идёт с поддельным `T2`, и штамп берёт максимум (§5.2) — сравнение с `iso(T2)` было верно
+    // только про `clock()` (Р-И-3).
+    expect(task['orbis/completed_at']).toBe((await rowOf(owner, ticketId)).updatedAt);
     expect(task['orbis/waiting_for']).toBeUndefined();
 
     const run = (await propsOf(owner, runId)) as AnyRecord;

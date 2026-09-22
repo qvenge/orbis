@@ -144,14 +144,7 @@ import {
   assertRunSubject,
   resolveEntityTitles,
 } from './invariants';
-import {
-  applyTaskCompletion,
-  dropStaleCarryover,
-  hasBodyInInput,
-  needsProjectSeed,
-  normalizeTags,
-  TASK_STATUS,
-} from './normalize';
+import { dropStaleCarryover, hasBodyInInput, needsProjectSeed, normalizeTags } from './normalize';
 import {
   applyPropsPatch,
   assertPropsWritable,
@@ -1598,10 +1591,11 @@ function assertPrecondition(
 /**
  * Монотонный updated_at (§5.2): clock() с ms-точностью не различает два апдейта в один
  * тик — optimistic-check body пропускал бы stale-правку. Токен конкурентности всегда
- * строго растёт: max(clock(), prev + 1ms). Доменные таймстампы (completed_at и т.п.)
- * остаются на чистом clock().
+ * строго растёт: max(clock(), prev + 1ms).
  * Считается ДО T-правил: `{prop:'orbis/updated_at'}` правила обязан видеть тот же штамп, что ляжет в
- * колонку (Р-И-3).
+ * колонку (Р-И-3). Штамп завершения задачи (`orbis/completed_at`, строка каталога
+ * `task_completed_at`) — именно он, а не чистый clock(): в проде они совпадают (живые часы идут
+ * вперёд), а у правки в тот же тик штамп — `prev + 1ms`, и «момент завершения = момент записи».
  */
 function monotonicUpdatedAt(now: Date, prev: Date): Date {
   return now.getTime() > prev.getTime() ? now : new Date(prev.getTime() + 1);
@@ -1675,17 +1669,13 @@ async function prepareEntityCreate(
   const before: EntityState = { props: {}, aspects: [] };
   const propsPatch = propsPatchFromInput(ctx.registry, input);
   const state = applyPropsPatch(before, propsPatch);
-  // §3.2: create сразу в done без completed_at → проставить clock() (до стадии 2,
-  // чтобы валидировалось финальное сохраняемое значение)
-  if (touchedProperties(propsPatch).has(TASK_STATUS) && state.aspects.includes('orbis/task')) {
-    applyTaskCompletion(before, state, now);
-  }
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency ДО валидации,
   // проверки уникальности §2.1 и записи — комбинация всегда каноничная
   await normalizeEnvelopeProps(ctx, before, state, propsPatch);
-  // T-правила каталога (§Б4-3) — там же, где `applyTaskCompletion`: до routine-запрета и стадии 2,
-  // чтобы валидировалось финальное сохраняемое значение. Рядом со старым кодом (Р-К-18); у create
-  // штамп записи — `now` (он же ляжет в `values.updatedAt`).
+  // T-правила каталога (§Б4-3) — до routine-запрета и стадии 2, чтобы валидировалось финальное
+  // сохраняемое значение. Переход задачи в done (§3.2: create сразу в done ставит `completed_at`) —
+  // строка каталога `task_completed_at`, кода под него нет; у create штамп записи — `now` (он же
+  // ляжет в `values.updatedAt`).
   await applyTransitionRules({
     ctx: ruleCtxOf(ctx),
     entityId: id,
@@ -2010,9 +2000,6 @@ async function prepareEntityUpdate(
 
   if (hasPropsInput(input)) {
     if (ctx.internalUndo === undefined) {
-      if (touchedProperties(propsPatch).has(TASK_STATUS) && state.aspects.includes('orbis/task')) {
-        applyTaskCompletion(before, state, now);
-      }
       // Нормализация валюты конверта (бэклог A7): патч мог снять currency или добавить
       // orbis/budget без неё — NULL не пишем, подставляем defaultCurrency ДО валидации и
       // проверки уникальности §2.1. Внутренний undo восстанавливает состояние verbatim.
@@ -2031,12 +2018,14 @@ async function prepareEntityUpdate(
       if (touched.includes('orbis/budget')) {
         await normalizeEnvelopeProps(ctx, before, state, propsPatch);
       }
-      // T-правила каталога (§Б4-3) — рядом с `applyTaskCompletion` и под той же веткой: внутренний
-      // undo восстанавливает зафиксированное состояние, и переходы его не «поправляют» (Р-И-2).
+      // T-правила каталога (§Б4-3) — под веткой «правка свойств вне внутреннего undo»: undo
+      // восстанавливает зафиксированное состояние, и переходы его не «поправляют» (Р-И-2). Переход
+      // задачи в done и из него (§3.2) — строка каталога `task_completed_at`.
       // Правка ТОЛЬКО ядра (`archived`/`title` без `props`) T-правила не исполняет — именованный
       // остаток, а не забытая ветка: T живёт переходами класса и значений свойств, а правка ядра
       // ни класса, ни значений не меняет, так что событий входа/ухода у неё нет. Остаётся `default`
-      // и `when` по core-проекции — они ждут первой правки свойств записи (как `applyTaskCompletion`).
+      // и `when` по core-проекции — они ждут первой правки свойств записи (как ждал и снятый код
+      // штампа завершения).
       await applyTransitionRules({
         ctx: ruleCtxOf(ctx),
         entityId: input.id,
@@ -2377,11 +2366,11 @@ async function prepareAttach(
   // восстанавливает зафиксированное состояние дословно.
   propsPatch.replaced = writableOnly(ctx.registry, ctx.mechanism, propsPatch.replaced);
   const state = applyPropsPatch(before, propsPatch);
-  if (aspectId === 'orbis/task') applyTaskCompletion(before, state, now); // §3.2 и для attach
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути
   await normalizeEnvelopeProps(ctx, before, state, propsPatch);
   // T-правила каталога (§Б4-3): attach — третий путь появления аспекта, и переходы на нём те же,
-  // что на create/update (рядом со старым кодом, Р-К-18).
+  // что на create/update. Особой ветки «навешивают `orbis/task`» больше нет: условие входа в класс
+  // у движка одно на все три пути (Р-И-14).
   await applyTransitionRules({
     ctx: ruleCtxOf(ctx),
     entityId: input.entity_id,

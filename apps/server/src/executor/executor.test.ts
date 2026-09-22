@@ -348,7 +348,9 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
     const task = propsOfAspect(eDone, 'orbis/task');
     expect(task['orbis/task_status']).toBe('done');
     expect(task['orbis/priority']).toBe('high'); // сохранился
-    expect(task['orbis/completed_at']).toBe(T0.toISOString()); // проставлен clock() (§3.2)
+    // Штамп записи, а не `clock()`: у правки в тот же тик `monotonicUpdatedAt` даёт `T0+1ms` (§5.2),
+    // и строка каталога `task_completed_at` пишет `{prop:'orbis/updated_at'}` (Р-И-3).
+    expect(task['orbis/completed_at']).toBe(eDone.updatedAt);
 
     // откат из done → completed_at очищен
     const back = await execute(
@@ -622,10 +624,12 @@ describe('executor: RLS и attach', () => {
     );
     const e1 = firstEntity(good);
     expect(propsOfAspect(e1, 'orbis/task')['orbis/task_status']).toBe('done');
-    expect(propsOfAspect(e1, 'orbis/task')['orbis/completed_at']).toBe(T0.toISOString()); // done при attach
+    // done при attach — штамп записи, а не `clock()`: та же строка каталога и тот же довод, что у
+    // правки (Р-И-3; attach в тот же тик — `T0+1ms`, §5.2).
+    expect(propsOfAspect(e1, 'orbis/task')['orbis/completed_at']).toBe(e1.updatedAt);
     // inverse — дельта состояний (§А7-4): снятие ровно тех свойств, что attach добавил,
-    // плюс detach аспекта, которого не было. `completed_at` проставила нормализация §3.2,
-    // мимо входа тула, — и она обязана быть в откате наравне со статусом
+    // плюс detach аспекта, которого не было. `completed_at` проставило правило каталога
+    // (`on_enter_class`), мимо входа тула, — и оно обязано быть в откате наравне со статусом
     expect(first(sink.entries).action.inverse).toEqual([
       {
         op: 'entity_update',

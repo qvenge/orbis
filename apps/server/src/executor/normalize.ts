@@ -1,5 +1,5 @@
 // apps/server/src/executor/normalize.ts
-// Доменные нормализации стадии 4 (§2.1, §3.2, §4.1, §9.2) — переписанные на `props`
+// Доменные нормализации стадии 4 (§2.1, §4.1, §9.2) — переписанные на `props`
 // (§А7-2: доменные инварианты части А остаются кодом, но адресуют свойства по id).
 //
 // Слияние состояния отсюда УШЛО: `mergeAspects` заменил `applyPropsPatch` (props.ts) —
@@ -7,8 +7,8 @@
 // доменные правила, каждое из которых спрашивает у состояния две вещи: несёт ли сущность
 // аспект (список `aspects[]`) и какое у неё значение свойства (`props` по id).
 //
-// Условный `occurred_on` и `recurring` уехали строками каталога (§Б4-3, задача 4); здесь остались
-// нормализации, которым правила не нужны.
+// Условный `occurred_on` и `recurring` уехали строками каталога (§Б4-3, задача 4), туда же — штамп
+// завершения задачи (§3.2, `on_enter_class`); здесь остались нормализации, которым правила не нужны.
 import type { EntityState } from './props';
 
 /** Теги нормализуются в нижний регистр и дедуплицируются (порядок первого вхождения). */
@@ -29,30 +29,7 @@ export function extractBodyRefs(body: string): string[] {
   return [...refs];
 }
 
-/**
- * Переходы `orbis/task_status` ↔ `orbis/completed_at` (§3.2) над РЕЗУЛЬТАТОМ слияния:
- * переход в done без переданной даты — проставить clock(); уход из done — очистить дату.
- * Мутирует `next.props`.
- *
- * Зовётся ровно тогда, когда патч ТРОНУЛ статус (и сущность несёт `orbis/task`). Прежний
- * гейт был «патч тронул аспект задачи»; он шире, но разницы не даёт: при неизменном статусе
- * оба условия перехода ложны по построению. Узкий гейт при этом честнее называет, от чего
- * зависит правило.
- */
-export function applyTaskCompletion(prev: EntityState, next: EntityState, now: Date): void {
-  const prevStatus = prev.props[TASK_STATUS];
-  const nextStatus = next.props[TASK_STATUS];
-  if (nextStatus === 'done' && prevStatus !== 'done' && next.props[COMPLETED_AT] === undefined) {
-    next.props[COMPLETED_AT] = now.toISOString();
-  }
-  if (prevStatus === 'done' && nextStatus !== 'done') {
-    delete next.props[COMPLETED_AT];
-  }
-}
-
 /** id свойств, которые доменные нормализации адресуют по имени (§А8). */
-export const TASK_STATUS = 'orbis/task_status';
-export const COMPLETED_AT = 'orbis/completed_at';
 const CARRYOVER = 'orbis/carryover';
 
 /**
