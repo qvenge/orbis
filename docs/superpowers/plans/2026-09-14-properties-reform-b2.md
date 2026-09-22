@@ -2378,6 +2378,13 @@ let ownRules: Collected<{ refused: StructuredError; closed: WireEntity; reopened
   test.failing('3. те же два шаблона на аспектах владельца работают без строки кода под них', () => {
     const { refused, closed, reopened } = taken(ownRules, 'аспекты владельца со строками правил');
     expect(refused.code).toBe('INVARIANT');
+    // Паритет с системным близнецом (Ф-Б2-13, ревью 0e I-1): движок задачи 3 уже обслуживает строку владельца,
+    // а системный отказ до задачи 4 идёт из кода и несёт один `invariant` — без этих строк сценарий зеленел бы
+    // задачей 3 и под пометкой валил бы её сьют. «Тот же отказ» рамки §1 — буквально.
+    const sys = taken(sysRequires, 'financial без occurred_on').details as Record<string, unknown>;
+    const own = refused.details as Record<string, unknown>;
+    expect(Object.keys(own).sort()).toEqual(Object.keys(sys).sort());
+    expect(own.rule_template).toBe(sys.rule_template);
     expect((refused.details as Record<string, unknown>).invariant).toBe('gate_own_requires_moment');
     expect(closed.props[GATE_PROPS.plainAt]).toBe(closed.updatedAt);
     expect(GATE_PROPS.plainAt in reopened.props).toBe(false);
@@ -2391,6 +2398,10 @@ let ownRules: Collected<{ refused: StructuredError; closed: WireEntity; reopened
   дельт правил встроенных строк нет — Р-2, вердикт опровергателя рамки, п. 4), поэтому выключатель — админский
   UPDATE, и он ОБЯЗАН вернуть строку: `registry_system` переживает `truncateAll` (`helpers.ts:211-213`), и
   оставленное `enabled: false` сломало бы все остальные сьюты.
+  **Эррата исполнения 0e (рулинг 0e-1, ревью 0e M-1):** возврат — побайтным снимком исходного `rules` (снять ДО
+  выключения, записать обратно в `finally`), а не `jsonb_set(…'true')`: явный `enabled: true` у строки сида после
+  задачи 4 дал бы дрейф реестра; на пустом `rules` (после 0022, до сида задачи 4) — `COALESCE(jsonb_agg(…), '[]')` и
+  внятный отказ «правила нет в системной строке». Сниппет ниже — исходная форма плана.
 ```ts
 /**
  * Переключить `enabled` у системной строки правила и сдвинуть системную версию реестра — иначе снимок
@@ -2477,9 +2488,10 @@ let disabled: Collected<{ before: boolean; after: boolean; again: boolean }>;
 export const GATE_B2_GREP_NAMES = ['assertFinancialInvariant', 'assertFinancial\\b', 'applyTaskCompletion',
   'financialRecurringNeedsDerivedFrom', 'hasScheduleRecurrence', 'hasIncomingDerivedFrom', 'declaredDerivedFromTargets'] as const;
 export const GATE_B2_GREP_PATTERN = GATE_B2_GREP_NAMES.join('|');
-export const GATE_B2_GREP_PATHSPEC = ['apps/server/src', 'apps/server/test', 'apps/server/perf',
-  'packages/shared/src', 'apps/web/src', 'scripts', ':!*.snap'] as const;
-export const GATE_B2_GREP_ALLOWED = ['apps/server/test/gate-b2.test.ts'] as const;
+// Эррата исполнения 0e (ревью 0e M-2/M-3): пути — ТОТ ЖЕ список, что у сторожа Б-1 (импорт `GATE_GREP_PATHSPEC`
+// из `./fixtures/gate-aspects`, не копия); разрешённые файлы — `readonly string[]`, иначе `.includes(path)` задачи 5 — TS2345.
+export const GATE_B2_GREP_PATHSPEC = GATE_GREP_PATHSPEC;
+export const GATE_B2_GREP_ALLOWED: readonly string[] = ['apps/server/test/gate-b2.test.ts'];
 ```
   Снять базу сравнения для задачи 5 (список совпадений и их число — в `<леджер>/gate-b2-baseline.md`):
 ```
@@ -4951,7 +4963,10 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   запись с аспектом `orbis/financial` (роль приходит из `when` правила). Если замер сдвинулся заметно —
   число и вывод в отчёт; лечение (сужение набора ролей по разрешимости `when`) — предмет отдельного
   решения координатора, а не молчаливой правки здесь.
-  Коммит (если правки были) и протокол закрытия: `git fetch` → rebase → push ветки → CI → ff-push в `main`.
+  Коммит (если правки были). **Протокол закрытия — БЕЗ ff-push в `main` (Ф-Б2-13, ревью 0e):** после этой задачи
+  четыре сценария `gate-b2.test.ts` зелены ПОД пометками, и сьют сервера красен ровно ими — четыре «marked as failing
+  but passed» (шаг 11: это доказательство, не поломка). Задачи 4 и 5 уходят в `main` ОДНИМ мержем после зелёного CI
+  задачи 5; ветку можно пушить ради остального CI — красных сверх этих четырёх быть не должно.
 
 
 
@@ -5024,7 +5039,7 @@ export const PENDING_MARK_FILES: readonly string[] = [
   Коммит (объединённый с шагом 2): `test(gate): веха I — четыре сценария гейта зелёные без пометок; gate-b2 снят из PENDING_MARK_FILES`.
 
 - [ ] **Шаг 4: мутационная проверка сторожа (без неё он — зелёный кирпич).** Вернуть пометку ИМЕННОМУ
-  сценарию гейта: `perl -0pi -e 's/^  test\((\x27инвариант financial живёт строкой)/  test.failing($1/m'
+  сценарию гейта (имя сценария 1 файла 0e — эррата ревью 0e M-4; прежний образец целил в несуществующее имя и молча не срабатывал): `perl -0pi -e 's/^  test\((\x271\. requires_when строкой сида)/  test.failing($1/m'
   apps/server/test/gate-b2.test.ts` (именно именному, а не «первому `test(` файла»: у сторожей греп-доказательства (шаг 5) тело
   синхронное, пометка соблюдалась бы, провал был бы поглощён и мутация показала бы PASS — ревью 0d Б-1, Minor-1; `-0` читает файл одной записью, `/m` держит `^` на начале
   строки, без `/g` — только первое вхождение). `sed -i '' '0,/re/'` здесь НЕ годится: адрес `0,/re/`
@@ -5119,7 +5134,7 @@ git log --oneline -S'declaredDerivedFromTargets'     <sha-0e>..HEAD -- apps pack
   `test(gate): веха I закрыта — два инварианта §А7-2 живут строками сида, кода под них нет (§А7-2, §С8-25)`
   с `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Отчёт и `progress.md` — вторым коммитом
   по леджеру. Затем протокол: `git fetch` → rebase на чистом дереве → push ветки → CI зелёный →
-  ff-push в `main` (автодеплой выключен, РП-1). В `progress.md` — строка вехи: исход четырёх сценариев,
+  ff-push в `main` (автодеплой выключен, РП-1) — одним мержем вместе с коммитами задачи 4 (Ф-Б2-13). В `progress.md` — строка вехи: исход четырёх сценариев,
   число совпадений грепа, ссылка на `milestone-I-report.md`.
 
 
