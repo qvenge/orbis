@@ -808,7 +808,7 @@ export async function updateProperty(
  * Q-AST не содержит. Из-за этого слияние оставляло аспект стоять на поглощённой строке, а
  * физическое удаление §А10-3 роняло строку из-под живой ссылки.
  *
- * ЧЕТЫРЕ РОДА, и это ПОЛНЫЙ перечень для среза А:
+ * ПЯТЬ РОДОВ — четыре среза А и пятый среза Б-2:
  *  - `registry` — `scope` и `ref.target` СВОЕЙ строки реестра (дерево, адрес — id);
  *  - `progress_source` — значение свойства `orbis/progress_source` на записи (§А5-2;
  *    дерево, адрес — id);
@@ -829,25 +829,30 @@ export async function updateProperty(
  *  - `delta` — строка `registry_deltas` (§А3-2). Дерева не несёт вовсе, но адресует
  *    свойства шестью полями: `properties.add[].propertyId`, `properties.hide[]`,
  *    `properties.relaxRequired[]`, КЛЮЧИ `properties.rank{}`, КЛЮЧИ `selectOptions{}`
- *    и КЛЮЧИ `classMap{}`.
+ *    и КЛЮЧИ `classMap{}`;
+ *  - `bind` — привязка СВОЕГО аспекта к контракту (§Б2-1): ЗНАЧЕНИЯ `implements[].bind` — id
+ *    свойств (к id их приводит `normalizeBindAddresses`). `fixed` сюда не входит: там значение
+ *    слота, а не адрес свойства. До среза Б-2 привязку не видел никто, и после слияния она
+ *    указывала на поглощённое свойство (остатки Б-1 50/51).
  *
- * ПЯТЫЙ ДЕРЖАТЕЛЬ СУЩЕСТВУЕТ И ЖИВЁТ ВНЕ ЭТОГО ПЕРЕЧНЯ — зеркало-ребро роли `ref`,
+ * ЕЩЁ ОДИН ДЕРЖАТЕЛЬ СУЩЕСТВУЕТ И ЖИВЁТ ВНЕ ЭТОГО ПЕРЕЧНЯ — зеркало-ребро роли `ref`,
  * подписанное `relations.meta.property` (§А6-2). Слияние переписывает его подпись само
- * (`mergeProperty`, блок «ПЯТЫЙ РОД ДЕРЖАТЕЛЯ»), а сюда оно не заведено НАМЕРЕННО: этот же
+ * (`mergeProperty`, блок «ЗЕРКАЛО-РЕБРО»), а сюда оно не заведено НАМЕРЕННО: этот же
  * список кормит `propertyUsage` («на строке ничего не держится») и граф зависимостей, и
  * ребро в нём поменяло бы семантику удаления и восстановления строки — производная реестра
  * стала бы поводом запретить операцию над самим реестром. Читателю, сверяющему перечень:
- * четыре рода — это ДЕРЖАТЕЛИ, которых надо ИСКАТЬ; зеркало ищется одним UPDATE по подписи.
+ * пять родов — это ДЕРЖАТЕЛИ, которых надо ИСКАТЬ; зеркало ищется одним UPDATE по подписи.
  *
  * ПРИЗНАК, ПО КОТОРОМУ СЛЕДУЮЩИЙ ЧИТАТЕЛЬ ПОЙМЁТ, ЧТО ПЕРЕЧЕНЬ УСТАРЕЛ: появилось место,
  * хранящее идентификатор свойства (в колонке, в jsonb, в тексте) и переживающее операции
- * над реестром. Подписка и правило части Б — ровно такие; они и будут шестым и седьмым.
+ * над реестром. `bind` — пятый род (срез Б-2, задача 1); правило каталога на строке владельца —
+ * шестой (задача 16, вместе с тулами записи правил).
  * Проверяется это не памятью, а согласием двух половин: `registry/deps-graph.ts` строит
  * рёбра по ТОМУ ЖЕ множеству мест, и разойтись им нельзя.
  */
 export interface PropertyHolder {
-  kind: 'registry' | 'progress_source' | 'body' | 'delta';
-  /** id строки реестра, id сущности либо id строки `registry_deltas`. */
+  kind: 'registry' | 'progress_source' | 'body' | 'delta' | 'bind';
+  /** id строки реестра, id сущности, id строки `registry_deltas` либо id своего аспекта (`bind`). */
   id: string;
   /** id и key свойств, названные этим держателем. */
   properties: string[];
@@ -973,6 +978,22 @@ export async function collectPropertyHolders(tx: Tx, graphId: GraphId): Promise<
     const names = new Set<string>();
     propertyNamesInDelta(r.delta, names);
     if (names.size > 0) out.push({ kind: 'delta', id: r.id as string, properties: [...names] });
+  }
+
+  // ПЯТЫЙ РОД (§Б2-1, остаток 51 Б-1): привязка аспекта владельца адресует свойство ЗНАЧЕНИЕМ `bind` — тем
+  // же id, что лежит в `props`. До этой задачи перечень её не видел, и цена была названа вслух докблоком
+  // `assertImplements`: после слияния привязка продолжала указывать на поглощённое свойство, значения
+  // которого уже переехали, — аспект тихо выпадал из Повестки и Бюджета, а повторная запись той же привязки
+  // отказывала `UNKNOWN_PROPERTY/merged`. `fixed` сюда не входит: там ЗНАЧЕНИЕ слота, а не адрес свойства.
+  const bindRows = (await tx.execute(sql`
+    SELECT id, implements FROM aspect_definitions
+    WHERE graph_id = ${graphId}::uuid AND implements <> '[]'::jsonb`)) as unknown as RawRow[];
+  for (const r of bindRows) {
+    const names = new Set<string>();
+    for (const b of (r.implements ?? []) as AspectImplements[]) {
+      for (const p of Object.values(b.bind ?? {})) names.add(p);
+    }
+    if (names.size > 0) out.push({ kind: 'bind', id: r.id as string, properties: [...names] });
   }
   return out;
 }
@@ -1152,12 +1173,19 @@ export interface MergeInverse {
    * Зеркала-рёбра (§А6-2), чью подпись `meta.property` слияние перевело на цель.
    *
    * Поле НЕОБЯЗАТЕЛЬНОЕ по той же причине, по которой защитно разбирается `deltas`: журнал
-   * append-only, и у слияний, записанных до появления пятого рода держателей, ключа нет.
+   * append-only, и у слияний, записанных до того, как слияние начало переподписывать зеркала,
+   * ключа нет.
    * Хранится СПИСОК id, а не «все рёбра с подписью цели»: откат обязан вернуть подпись
    * ровно тем рёбрам, которые её потеряли, и не отобрать её у зеркал, законно
    * принадлежавших цели ещё до слияния.
    */
   mirrors?: string[];
+  /**
+   * Свои аспекты, чьи привязки (`implements[].bind`) слияние перевело на цель: прежний `implements`
+   * ЦЕЛИКОМ — откат присваивает абсолютное значение, как у дельт. Поле НЕОБЯЗАТЕЛЬНОЕ по той же причине,
+   * что `mirrors`: журнал append-only, и слияния, записанные до пятого рода держателей, ключа не несут.
+   */
+  binds?: Array<{ id: string; implements: AspectImplements[] }>;
 }
 
 export interface MergeResult {
@@ -1408,7 +1436,7 @@ export async function mergeProperty(
     into: r.had_into === true ? r.old_into : null,
   }));
 
-  // ПЯТЫЙ РОД ДЕРЖАТЕЛЯ (§А6-2): зеркало-ребро роли `ref` подписывает себя `meta.property`
+  // ЗЕРКАЛО-РЕБРО — ДЕРЖАТЕЛЬ ВНЕ ПЕРЕЧНЯ (§А6-2): ребро роли `ref` подписывает себя `meta.property`
   // = ИДЕНТИФИКАТОРОМ свойства (`registry/ref.ts`, фаза 2), и подпись переживает слияние
   // ровно так же, как переживал бы её ключ в `props`. Не переписать её — значит вывести
   // ребро из самопочинки НАВСЕГДА: `syncRefMirror` снимает устаревшие зеркала только по
@@ -1461,6 +1489,7 @@ export async function mergeProperty(
   const progress: MergeInverse['progress'] = [];
   const bodies: MergeInverse['bodies'] = [];
   const deltas: MergeInverse['deltas'] = [];
+  const binds: NonNullable<MergeInverse['binds']> = [];
 
   for (const holder of holders) {
     if (holder.kind === 'registry') {
@@ -1507,6 +1536,27 @@ export async function mergeProperty(
           rewriteDelta(row.delta, names, astTarget),
         )}::jsonb
          WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}::uuid`);
+      continue;
+    }
+    if (holder.kind === 'bind') {
+      const rows = (await tx.execute(sql`
+        SELECT implements FROM aspect_definitions
+         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id} FOR UPDATE`)) as unknown as RawRow[];
+      const row = rows[0];
+      if (row === undefined) continue;
+      const before = (row.implements ?? []) as AspectImplements[];
+      binds.push({ id: holder.id, implements: before });
+      // Цель — `astTarget` (id), как у дерева: `bind` адресует свойство ИДЕНТИФИКАТОРОМ
+      // (`normalizeBindAddresses` приводит вход к нему), а не ключом, как текст блока.
+      const next = before.map((b) => ({
+        ...b,
+        bind: Object.fromEntries(
+          Object.entries(b.bind).map(([slot, id]) => [slot, names.has(id) ? astTarget : id]),
+        ),
+      }));
+      await tx.execute(sql`
+        UPDATE aspect_definitions SET implements = ${JSON.stringify(next)}::jsonb
+         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}`);
       continue;
     }
     const rows = (await tx.execute(sql`
@@ -1601,7 +1651,8 @@ export async function mergeProperty(
 
   return {
     rewrittenEntities: values.length,
-    rewrittenQueries: registry.length + progress.length + bodies.length + deltas.length,
+    rewrittenQueries:
+      registry.length + progress.length + bodies.length + deltas.length + binds.length,
     inverse: {
       source: source.id,
       into: into.id,
@@ -1613,6 +1664,7 @@ export async function mergeProperty(
       bodies,
       deltas,
       mirrors,
+      binds,
     },
   };
 }
@@ -1746,6 +1798,14 @@ export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Pro
     await tx.execute(sql`
       UPDATE registry_deltas SET delta = ${JSON.stringify(d.delta)}::jsonb
        WHERE graph_id = ${graphId}::uuid AND id = ${d.id}::uuid`);
+  }
+  // Привязки своих аспектов — прежний `implements` целиком, тем же UPDATE, что писало слияние; ключ
+  // читается защитно, как `iv.deltas` и `iv.mirrors` (см. `MergeInverse.binds`).
+  const bindRows = Array.isArray(iv.binds) ? iv.binds : [];
+  for (const b of bindRows) {
+    await tx.execute(sql`
+      UPDATE aspect_definitions SET implements = ${JSON.stringify(b.implements)}::jsonb
+       WHERE graph_id = ${graphId}::uuid AND id = ${b.id}`);
   }
   // Зеркала (§А6-2) — обратная переподпись ровно по списку из inverse (см. `MergeInverse.mirrors`).
   const mirrorIds = Array.isArray(iv.mirrors) ? iv.mirrors : [];
@@ -2387,14 +2447,15 @@ function aspectDefinitionOf(row: AspectRow, graphId: GraphId): AspectDefinition 
  * фикстурой или прошлой версией кода, не должна делать неисполнимой правку соседней.
  *
  * ПОГЛОЩЁННОЕ СЛИЯНИЕМ СВОЙСТВО В СЛОТЕ — ОТКАЗ, И ЭТО ПРОВЕРКА СЕРВЕРА, А НЕ SHARED.
- * `property_merge` не видит привязок вовсе (`collectPropertyHolders` знает четыре рода
- * держателей — `scope`/`ref.target`, `progress_source`, текст запроса в теле и дельты, — а
- * состава аспекта и его `bind` среди них нет), поэтому после слияния `src → into` привязка
- * носителя продолжает указывать на `src`. Строка `src` при этом ЖИВА (`status: deprecated`,
- * `merged_into` — §А10-2), и `checkImplements` замечания не даёт: свойство и есть, и носится.
- * Молча это означало бы слот, в котором значений уже нет (они переехали в `into`), — то есть
- * аспект, тихо выпавший из Повестки и Бюджета. Из двух исходов выбран громкий: повторная
- * запись такой привязки отказывает, а исправляется она одним движением — привязать `into`.
+ * С среза Б-2 `property_merge` привязки ПЕРЕПИСЫВАЕТ (`bind` — пятый род держателей
+ * `collectPropertyHolders`), и живым слиянием поглощённое свойство в слот больше не попадает.
+ * Отказ остаётся сторожем двух путей, которых слияние не касается: привязок, поглощённых ДО
+ * этого (слияние записано кодом, где пятого рода ещё не было), и ручных вставок мимо тулов.
+ * Строка `src` в таком слоте ЖИВА (`status: deprecated`, `merged_into` — §А10-2), и
+ * `checkImplements` замечания не даёт: свойство и есть, и носится. Молча это означало бы слот,
+ * в котором значений уже нет (они переехали в `into`), — то есть аспект, тихо выпавший из
+ * Повестки и Бюджета. Из двух исходов выбран громкий: повторная запись такой привязки
+ * отказывает, а исправляется она одним движением — привязать `into`.
  * Словарь замечаний при этом НЕ расширяется (Р-К-34, пин «словарь полон» задачи 13): отказ
  * говорит `reason: 'UNKNOWN_PROPERTY'` с уточнением `cause: 'merged'` — ровно та же пара
  * «код + уточнение», что кладёт `execErrorOfImplementsIssue`.

@@ -49,6 +49,7 @@ import {
   collectPropertyHolders,
   execErrorOfImplementsIssue,
   lockOwnerRegistry,
+  mergeProperty,
   readContractDelta,
   readSubscriptionRow,
   removeContractDelta,
@@ -1024,8 +1025,8 @@ describe('aspect_implements_set / aspect_implements_remove (§Б2-1)', () => {
   });
 
   test('поглощённое слиянием свойство в слоте — отказ, а не молчаливая привязка к пустому', async () => {
-    // ВИСЯЧИЙ `bind` ПОСЛЕ `property_merge`: слияние привязок не видит вовсе
-    // (`collectPropertyHolders` знает четыре рода держателей, состава аспекта среди них нет),
+    // ПРИВЯЗКА НА ПОГЛОЩЁННОЕ, ЗАПИСАННАЯ ПОСЛЕ `property_merge`: существующие привязки слияние
+    // переписывает само (`bind` — пятый род держателей, срез Б-2), но новая запись — другая дверь,
     // а строка source остаётся живой (`deprecated` + `merged_into`) — значит `checkImplements`
     // на неё замечания не даёт. Отказ ставит сервер, и он же называет выход.
     const src = ok(
@@ -3495,6 +3496,67 @@ describe('collectPropertyHolders: род `body` — по индексу query_re
       collectPropertyHolders(tx, dark),
     );
     expect(holders.filter((h) => h.kind === 'body').map((h) => h.id)).not.toContain(hidden);
+  });
+});
+
+describe('collectPropertyHolders: род `bind` — привязки аспектов владельца (остатки 50/51)', () => {
+  test('property_merge переписывает bind — привязка не повисает на поглощённом', async () => {
+    const owner = await freshGraph();
+    await seedCustomAspect(owner, {
+      key: 'user/call',
+      label: { ru: 'Звонок' },
+      properties: [
+        { key: 'at', type: { kind: 'timestamp' } },
+        { key: 'at2', type: { kind: 'timestamp' } },
+      ],
+      implements: [
+        { contract: 'orbis/when', bind: { moment: 'user/at' }, value_map: [], fixed: {} },
+      ],
+    });
+    const holders = await withIdentity(db, personal(owner), (tx) =>
+      collectPropertyHolders(tx, owner),
+    );
+    expect(holders.filter((h) => h.kind === 'bind').map((h) => [h.id, h.properties])).toEqual([
+      ['user/call', ['user/at']],
+    ]);
+    await withIdentity(db, personal(owner), (tx) =>
+      mergeProperty(tx, owner, { source: 'user/at', into: 'user/at2' }),
+    );
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    expect(reg.aspects.get('user/call')?.implements[0]?.bind).toEqual({ moment: 'user/at2' });
+  });
+
+  test('откат слияния возвращает привязку на источник — тем же путём, что откат владельца', async () => {
+    // Через исполнитель и `undoAction`, а не прямым `undoMerge`: откат приезжает из журнала и
+    // разбирается строгой схемой входа `property_merge_undo` — поле, которого схема не знает,
+    // сделало бы неоткатываемым КАЖДОЕ слияние, а не только слияние с привязками.
+    const owner = await freshGraph();
+    await seedCustomAspect(owner, {
+      key: 'user/call-undo',
+      label: { ru: 'Звонок (откат)' },
+      properties: [
+        { key: 'at-u', type: { kind: 'timestamp' } },
+        { key: 'at-u2', type: { kind: 'timestamp' } },
+      ],
+      implements: [
+        { contract: 'orbis/when', bind: { moment: 'user/at-u' }, value_map: [], fixed: {} },
+      ],
+    });
+    const merged = ok(
+      await run(
+        'property_merge',
+        { source: 'user/at-u', into: 'user/at-u2' },
+        { identity: personal(owner) },
+      ),
+    );
+    const bindOf = async () =>
+      (await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner))).aspects.get(
+        'user/call-undo',
+      )?.implements[0]?.bind;
+    expect(await bindOf()).toEqual({ moment: 'user/at-u2' });
+    const undone = await undoAction(db, { identity: personal(owner), actionId: merged.actionId });
+    expect(undone.ok).toBe(true);
+    expect(await bindOf()).toEqual({ moment: 'user/at-u' });
   });
 });
 
