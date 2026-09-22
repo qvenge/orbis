@@ -106,7 +106,7 @@ import {
   type RefPropChange,
   syncRefMirror,
 } from '../registry/ref';
-import { assertConstraintRules, type RuleWriteInput } from '../rules/engine';
+import { applyTransitionRules, assertConstraintRules, type RuleWriteInput } from '../rules/engine';
 import { projectBodyTemplate } from '../seed/project-body';
 import {
   budgetContourFor,
@@ -1638,6 +1638,8 @@ async function hasIncomingDerivedFrom(
  * тик — optimistic-check body пропускал бы stale-правку. Токен конкурентности всегда
  * строго растёт: max(clock(), prev + 1ms). Доменные таймстампы (completed_at и т.п.)
  * остаются на чистом clock().
+ * Считается ДО T-правил: `{prop:'orbis/updated_at'}` правила обязан видеть тот же штамп, что ляжет в
+ * колонку (Р-И-3).
  */
 function monotonicUpdatedAt(now: Date, prev: Date): Date {
   return now.getTime() > prev.getTime() ? now : new Date(prev.getTime() + 1);
@@ -1719,6 +1721,18 @@ async function prepareEntityCreate(
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency ДО валидации,
   // проверки уникальности §2.1 и записи — комбинация всегда каноничная
   await normalizeEnvelopeProps(ctx, before, state, propsPatch);
+  // T-правила каталога (§Б4-3) — там же, где `applyTaskCompletion`: до routine-запрета и стадии 2,
+  // чтобы валидировалось финальное сохраняемое значение. Рядом со старым кодом (Р-К-18); у create
+  // штамп записи — `now` (он же ляжет в `values.updatedAt`).
+  await applyTransitionRules({
+    ctx: ruleCtxOf(ctx),
+    entityId: id,
+    before,
+    state,
+    patch: propsPatch,
+    core: { id, title: input.title, archived: false, createdAt: now, updatedAt: now },
+    batch,
+  });
 
   // Запрет по объекту для источника routine (V1.10) — ПЕРВЫМ из отказов: он про то, кому
   // вообще нельзя трогать этот объект, и не зависит ни от формы значения, ни от флагов
@@ -1981,6 +1995,15 @@ async function prepareEntityUpdate(
   }
 
   const now = ctx.clock();
+  // Штамп записи — ДО T-правил (Р-И-3): правило видит тот же `updatedAt`, что ляжет в колонку.
+  const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
+  const core = {
+    id: input.id,
+    title: input.title ?? current.title,
+    archived: input.archived ?? current.archived,
+    createdAt: current.createdAt,
+    updatedAt,
+  };
 
   // Слияние свойств (§А7-1) + переходы §3.2; стадия 2 валидирует РЕЗУЛЬТАТ, не патч
   let state = before;
@@ -2047,6 +2070,17 @@ async function prepareEntityUpdate(
       if (touched.includes('orbis/budget')) {
         await normalizeEnvelopeProps(ctx, before, state, propsPatch);
       }
+      // T-правила каталога (§Б4-3) — рядом с `applyTaskCompletion` и под той же веткой: внутренний
+      // undo восстанавливает зафиксированное состояние, и переходы его не «поправляют» (Р-И-2).
+      await applyTransitionRules({
+        ctx: ruleCtxOf(ctx),
+        entityId: input.id,
+        before,
+        state,
+        patch: propsPatch,
+        core,
+        batch,
+      });
       // Гейт §Б8-3: только ПОЯВИВШИЕСЯ аспекты — правка суммы существующей транзакции
       // выключенного модуля разрешена (§Б8-3: скрытое ≠ удалённое), а появление нового
       // аспекта модуля через `entity_update` — тот же обход, что через attach.
@@ -2081,13 +2115,7 @@ async function prepareEntityUpdate(
       before,
       state,
       patch: propsPatch,
-      core: {
-        id: input.id,
-        title: input.title ?? current.title,
-        archived: input.archived ?? current.archived,
-        createdAt: current.createdAt,
-        updatedAt: monotonicUpdatedAt(now, current.updatedAt),
-      },
+      core,
       batch,
     });
     // Живой грант в назначении (С4/С7) — только когда назначение ЗАТРОНУТО патчем.
@@ -2131,7 +2159,7 @@ async function prepareEntityUpdate(
 
   // Стадия 4: нормализации патча + гейт; changed — «как исполнено», prior — для inverse
   // updated_at проставляется сервером всегда и строго растёт (monotonicUpdatedAt, §5.2)
-  const patch: EntityPatch = { updatedAt: monotonicUpdatedAt(now, current.updatedAt) };
+  const patch: EntityPatch = { updatedAt };
   const changed: Record<string, unknown> = {};
   const prior: Record<string, unknown> = {};
   if (input.title !== undefined) {
@@ -2337,6 +2365,15 @@ async function prepareAttach(
 
   const now = ctx.clock();
   const before = stateOf(current);
+  // Штамп записи — ДО T-правил (Р-И-3): правило видит тот же `updatedAt`, что ляжет в колонку.
+  const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
+  const core = {
+    id: input.entity_id,
+    title: current.title,
+    archived: current.archived,
+    createdAt: current.createdAt,
+    updatedAt,
+  };
 
   // attach ставит носитель ЦЕЛИКОМ: свойство аспекта, не пришедшее в `data`, снимается —
   // ровно то, что делала подмена аспект-ключа в старой форме. `data` адресуется КЛЮЧАМИ
@@ -2353,6 +2390,17 @@ async function prepareAttach(
   if (aspectId === 'orbis/task') applyTaskCompletion(before, state, now); // §3.2 и для attach
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути
   await normalizeEnvelopeProps(ctx, before, state, propsPatch);
+  // T-правила каталога (§Б4-3): attach — третий путь появления аспекта, и переходы на нём те же,
+  // что на create/update (рядом со старым кодом, Р-К-18).
+  await applyTransitionRules({
+    ctx: ruleCtxOf(ctx),
+    entityId: input.entity_id,
+    before,
+    state,
+    patch: propsPatch,
+    core,
+    batch,
+  });
 
   // Стадия 4, первый рубеж: запрет по объекту для источника routine (V1.10) — attach это
   // третий путь появления аспекта, им рутина заводилась бы на готовой сущности мимо
@@ -2387,13 +2435,7 @@ async function prepareAttach(
     before,
     state,
     patch: propsPatch,
-    core: {
-      id: input.entity_id,
-      title: current.title,
-      archived: current.archived,
-      createdAt: current.createdAt,
-      updatedAt: monotonicUpdatedAt(now, current.updatedAt),
-    },
+    core,
     batch,
   });
   // Живой грант в назначении (С4/С7): attach — третий путь появления аспекта, и обходить
@@ -2425,8 +2467,7 @@ async function prepareAttach(
     ? bodyFieldsFromMarkdown(projectBodyTemplate(input.entity_id), ctx.registry)
     : undefined;
 
-  // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2)
-  const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
+  // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2) — посчитан выше, до T-правил
   // Патч attach узкий: свойства с аспектами и updated_at, а поля тела — ТОЛЬКО при засеве
   const patch: EntityPatch = {
     props: state.props,
