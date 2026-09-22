@@ -10,14 +10,18 @@
 // макрозадачу (любой поход в БД — она), и ломаются ОБЕ половины гарантии — красный перестаёт
 // поглощаться, зелёный перестаёт валить сьют. Поэтому походы собраны в `beforeAll`, тела читают итог.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { RuleDefinitionInput } from '@orbis/shared';
 import type { StructuredError } from '../src/errors';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../src/executor/types';
+import { GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS } from './fixtures/gate-aspects';
 import {
   appDb,
+  type CustomAspectSpec,
   executeWithFixtureCategories as execute,
   mintGraph,
   personal,
   requireEnv,
+  seedCustomAspect,
   truncateAll,
 } from './helpers';
 
@@ -86,6 +90,35 @@ function taken<T>(r: Collected<T> | undefined, what: string): T {
 let sysRequires: Collected<StructuredError>;
 let sysTransition: Collected<{ done: WireEntity; back: WireEntity }>;
 
+/** `requires_when` на аспекте владельца: расход обязан нести момент. Свойство-цель —
+ *  `GATE_PROPS.finWhen` (timestamp, НЕ обязательное в аспекте): будь оно обязательным, запись
+ *  отверг бы валидатор значений стадией 2, и тест зеленел бы, ничего не сказав о правиле. Ровно так
+ *  же устроен и встроенный экземпляр: `orbis/occurred_on` в аспекте необязателен
+ *  (`builtin-aspects.ts:143-145`). */
+const RULE_OWN_REQUIRES_MOMENT: RuleDefinitionInput = {
+  id: 'gate_own_requires_moment',
+  template: 'requires_when',
+  undo: 'check',
+  when: { op: '=', args: [{ prop: GATE_PROPS.finDirection }, { const: 'out' }] },
+  params: { property: GATE_PROPS.finWhen },
+};
+/** `on_enter_class` на аспекте владельца: вход слота `status` контракта завершаемости в класс `done`
+ *  (вариант `closed` отображён в него привязкой `gate-aspects.ts:160-169`) ставит момент, уход снимает. */
+const RULE_OWN_CLOSED_AT: RuleDefinitionInput = {
+  id: 'gate_own_closed_at',
+  template: 'on_enter_class',
+  undo: 'check',
+  params: {
+    enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+    set: { property: GATE_PROPS.plainAt, value: { prop: 'orbis/updated_at' } },
+    on_leave: { unset: [GATE_PROPS.plainAt] },
+  },
+};
+const GATE_FIN_RULED: CustomAspectSpec = { ...GATE_FIN_ASPECT, rules: [RULE_OWN_REQUIRES_MOMENT] };
+const GATE_PLAIN_RULED: CustomAspectSpec = { ...GATE_PLAIN_ASPECT, rules: [RULE_OWN_CLOSED_AT] };
+
+let ownRules: Collected<{ refused: StructuredError; closed: WireEntity; reopened: WireEntity }>;
+
 beforeAll(async () => {
   await truncateAll();
   ownCategoryId = (await mk({ title: 'Категория гейта Б-2', aspects: ['orbis/category'] })).id;
@@ -112,6 +145,43 @@ beforeAll(async () => {
     const done = await setProps(t.id, 'orbis/task', { 'orbis/task_status': 'done' });
     const back = await setProps(t.id, 'orbis/task', { 'orbis/task_status': 'planned' });
     return { done, back };
+  });
+
+  // Сценарий 3 — те же два шаблона на аспектах владельца. Сев ТОЖЕ внутри `collect`: до миграции
+  // 0022 колонки `rules` нет, и незавёрнутый `seedCustomAspect` уронил бы весь файл вместе с
+  // контрольным тестом.
+  const seeded = await collect(async () => {
+    await seedCustomAspect(owner, GATE_FIN_RULED);
+    await seedCustomAspect(owner, GATE_PLAIN_RULED);
+  });
+  ownRules = await collect(async () => {
+    taken(seeded, 'сев аспектов владельца со строками правил');
+    // Расход СО всеми обязательными полями аспекта, но БЕЗ `GATE_PROPS.finWhen` — упереться он
+    // обязан в правило.
+    const ownFin = {
+      [GATE_PROPS.finAmount]: '340.00',
+      [GATE_PROPS.finDirection]: 'out',
+      [GATE_PROPS.finCategory]: ownCategoryId,
+      [GATE_PROPS.finDate]: '2026-07-04',
+    };
+    const fin = GATE_FIN_RULED.key;
+    const plain = GATE_PLAIN_RULED.key;
+    const refused = errorOf(
+      await run('entity_create', {
+        title: 'Трата гейта Б-2',
+        tags: [],
+        aspects: [fin],
+        props: ownFin,
+      }),
+    );
+    const item = await mk({
+      title: 'Дело гейта Б-2',
+      aspects: [plain],
+      props: { [GATE_PROPS.plainState]: 'open' },
+    });
+    const closed = await setProps(item.id, plain, { [GATE_PROPS.plainState]: 'closed' });
+    const reopened = await setProps(item.id, plain, { [GATE_PROPS.plainState]: 'open' });
+    return { refused, closed, reopened };
   });
 });
 
@@ -149,5 +219,16 @@ describe('гейт вехи I: инвариант только декларац�
     const { done, back } = taken(sysTransition, 'задача в done и обратно');
     expect(done.props['orbis/completed_at']).toBe(done.updatedAt);
     expect('orbis/completed_at' in back.props).toBe(false);
+  });
+
+  // Зеленит задача 4: движок читает строки владельца так же, как системные. Сегодня красен на самом
+  // севе — `seedCustomAspect` со `spec.rules` пишет колонку `rules`, которой до 0022 нет. В этом и смысл
+  // гейта: аспект владельца получает доменный инвариант ДЕКЛАРАЦИЕЙ, кода под `user/gate-*` не будет.
+  test.failing('3. те же два шаблона на аспектах владельца работают без строки кода под них', () => {
+    const { refused, closed, reopened } = taken(ownRules, 'аспекты владельца со строками правил');
+    expect(refused.code).toBe('INVARIANT');
+    expect((refused.details as Record<string, unknown>).invariant).toBe('gate_own_requires_moment');
+    expect(closed.props[GATE_PROPS.plainAt]).toBe(closed.updatedAt);
+    expect(GATE_PROPS.plainAt in reopened.props).toBe(false);
   });
 });
