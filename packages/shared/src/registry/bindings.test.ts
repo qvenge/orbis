@@ -823,6 +823,11 @@ describe('entityClassOf: класс записи под контрактом (§
       cls(['orbis/schedule'], { 'orbis/recurrence': { freq: 'monthly' } }, 'orbis/recurrence'),
     ).toBe('template');
     expect(cls(['orbis/schedule'], {}, 'orbis/recurrence')).toBe('instance');
+    // Строка "absent" в json-свойстве — «значение ЕСТЬ»: класс решает присутствие, а не текст
+    // (паритет с SQL `props ? id`; ре-ревью фикса задачи 3, Minor-1).
+    expect(cls(['orbis/schedule'], { 'orbis/recurrence': 'absent' }, 'orbis/recurrence')).toBe(
+      'template',
+    );
     // Две привязки одного контракта: выигрывает первая по rank аспекта (schedule, :48).
     expect(
       cls(['orbis/financial', 'orbis/schedule'], { 'orbis/recurrence': {} }, 'orbis/recurrence'),
@@ -835,10 +840,10 @@ describe('entityClassOf: класс записи под контрактом (§
   });
 });
 
-describe('entityClassOf: точное значение раньше маркеров присутствия (ревью задачи 3, FABLE I-1)', () => {
-  // Аспект владельца «Посещение»: select `present|absent|late` на слоте-статусе. Маркеры
-  // присутствия json-слота здесь — ОБЫЧНЫЕ ключи вариантов, и класс обязан решаться по значению,
-  // как у SQL-бэкенда (`compileClassMembership` смотрит на род свойства, а не на имя варианта).
+describe('entityClassOf и резерв маркеров: select — по значению, json — по присутствию (ревью задачи 3)', () => {
+  // Аспект владельца «Посещение»: select на слоте-статусе. Ключи `present`/`absent` у такого слота
+  // зарезервированы валидатором (FABLE I-1): привязку с ними не записать, и маркеры в карте остаются
+  // признаком json-слота. Класс select-слота — по ТОЧНОМУ значению, как у SQL-бэкенда.
   const TASK_STATUS = BUILTIN_PROPERTY_META.find(
     (p) => p.id === 'orbis/task_status',
   ) as PropertyDefinition;
@@ -861,16 +866,34 @@ describe('entityClassOf: точное значение раньше маркер
       ],
     },
   ];
-  test('select-вариант `late` даёт класс СВОЕГО варианта, а не маркера `present`', () => {
-    const idx = probeIndex([ATTEND.id], IMPL);
-    const at = (value: string) =>
+  test('select-слот без маркеров — класс СВОЕГО варианта по точному значению', () => {
+    const idx = probeIndex(
+      [ATTEND.id],
+      [
+        {
+          contract: 'orbis/completable',
+          bind: { status: ATTEND.id },
+          value_map: [
+            { slot: 'status', variant: 'here', class: 'done' },
+            { slot: 'status', variant: 'gone', class: 'cancelled' },
+            { slot: 'status', variant: 'late', class: 'active' },
+          ],
+        },
+      ],
+    );
+    const at = (value: string | undefined) =>
       entityClassOf(
         idx,
-        { aspects: ['user/probe'], props: { [ATTEND.id]: value } },
+        { aspects: ['user/probe'], props: value === undefined ? {} : { [ATTEND.id]: value } },
         'orbis/completable',
         () => 1,
       );
-    expect([at('late'), at('present'), at('absent')]).toEqual(['active', 'done', 'cancelled']);
+    expect([at('late'), at('here'), at('gone'), at(undefined)]).toEqual([
+      'active',
+      'done',
+      'cancelled',
+      null,
+    ]);
   });
   test('валидатор привязки: ключи present/absent у select-слота-статуса зарезервированы', () => {
     const withAttend = {

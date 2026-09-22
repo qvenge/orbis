@@ -681,20 +681,20 @@ export function entityClassOf(
       const propertyId = binding.bind[slot];
       const raw = propertyId === undefined ? binding.fixed[slot] : entity.props[propertyId];
       const present = raw !== undefined && raw !== null;
-      // СНАЧАЛА точное значение, маркеры присутствия — только фолбэк. Обратный порядок расходился
-      // бы с SQL-бэкендом (`compileClassMembership` решает по РОДУ свойства, а не по имени
-      // варианта): select с вариантом `present` у значения `late` дал бы класс варианта `present`.
-      // Остаточную двусмысленность (select-вариант `absent` у отсутствующего значения) закрывает
-      // валидатор привязки: ключи `present`/`absent` у select-слота-статуса зарезервированы
-      // (`checkVariants`, `reason: 'reserved'`).
-      if (present) {
-        const cls = byVariant.get(String(raw));
-        if (cls !== undefined) return cls;
+      // Род слота решает ПРАВИЛО класса — как у SQL-бэкенда (`compileClassMembership` смотрит на род
+      // свойства, а не на имя варианта). После резерва ключей (`checkVariants`, `reason: 'reserved'`)
+      // маркеры `present`/`absent` в карте бывают только у json-слота (Р-К-3): там класс решает ТОЛЬКО
+      // присутствие — строковое значение `"absent"` у json-свойства остаётся «есть», как `props ? id`
+      // в SQL. У прочих слотов маркеров нет, и класс — по точному значению (select с вариантом `late`
+      // не спутается с маркером `present`).
+      if (byVariant.has('present') || byVariant.has('absent')) {
+        const byPresence = byVariant.get(present ? 'present' : 'absent');
+        if (byPresence !== undefined) return byPresence;
+        continue;
       }
-      // json-слот (Р-К-3): класс задаёт САМО НАЛИЧИЕ; текст объекта (`String({})` —
-      // `[object Object]`) в карту не попадает по построению, и ответ даёт маркер.
-      const byPresence = byVariant.get(present ? 'present' : 'absent');
-      if (byPresence !== undefined) return byPresence;
+      if (!present) continue;
+      const cls = byVariant.get(String(raw));
+      if (cls !== undefined) return cls;
     }
   }
   return null;
