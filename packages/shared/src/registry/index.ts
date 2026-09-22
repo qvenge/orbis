@@ -6,6 +6,9 @@ export * from './builtin-aspects';
 export * from './builtin-contracts';
 export * from './builtin-properties';
 export * from './builtin-roles';
+// Системные строки каталога правил (§Б4-1) — три литерала без `parse` на загрузке; их берут сид
+// (`builtin-aspects.ts`) и сьюты приёмки.
+export * from './builtin-rules';
 export * from './builtin-subscriptions';
 export * from './contract-type';
 // Словарь модулей и поверхностей (§Б5-1, §Б8-1): по нему отказывает `SURFACE_UNKNOWN` и по нему же
