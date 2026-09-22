@@ -9,11 +9,12 @@ import {
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   BUILTIN_SUBSCRIPTION_DEFS,
+  type RuleDefinition,
   ruleDefinitionSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
-import { seedRegistries } from '../src/db/seed-registries';
+import { readSystemDefinitions, seedRegistries } from '../src/db/seed-registries';
 import { withIdentity } from '../src/db/with-identity';
 import { effectiveRegistry } from '../src/registry/cache';
 import { adminDb, appDb, freshGraph, personal, requireEnv } from './helpers';
@@ -262,6 +263,48 @@ describe('сид пяти реестров', () => {
         sql`UPDATE contract_definitions SET exclusive_classes = ${code ?? false}
             WHERE id = 'orbis/completable' AND graph_id IS NULL`,
       );
+      await client.end();
+    }
+  });
+
+  // Сторона «до» слияния — ПОЛНАЯ строка (§А3-3): без `rules` задача 16 видела бы «система добавила правило» на
+  // каждом пересеве, без флага — читала бы его как снятый. Сегодня системных правил нет и флаг у всех `false`,
+  // поэтому снятая из SELECT колонка дала бы ровно умолчания схемы — значения здесь те, которых умолчание не даёт.
+  test('сторона «до» слияния читает rules и exclusive_classes из базы, а не умолчанием схемы', async () => {
+    const { db, client } = adminDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const rule: RuleDefinition = {
+      id: 'before_probe',
+      template: 'requires_when',
+      enabled: true,
+      undo: 'check',
+      params: { property: 'orbis/occurred_on' },
+    };
+    try {
+      await db.execute(sql`UPDATE aspect_definitions SET rules = ${JSON.stringify([rule])}::jsonb
+        WHERE id = 'orbis/task' AND graph_id IS NULL`);
+      await db.execute(sql`UPDATE property_definitions SET rules = ${JSON.stringify([rule])}::jsonb
+        WHERE id = 'orbis/occurred_on' AND graph_id IS NULL`);
+      await db.execute(sql`UPDATE contract_definitions SET exclusive_classes = true
+        WHERE id = 'orbis/completable' AND graph_id IS NULL`);
+      const before = await readSystemDefinitions(raw);
+      expect(before.aspects.get('orbis/task')?.rules).toEqual([rule]);
+      expect(before.properties.get('orbis/occurred_on')?.rules).toEqual([rule]);
+      expect(before.contracts.get('orbis/completable')?.exclusive_classes).toBe(true);
+    } finally {
+      // Возврат к КОДУ прямыми UPDATE, а не пересевом: пересев слил бы чужие дельты против этой порчи.
+      const code = (id: string) => BUILTIN_ASPECT_DEFS.find((a) => a.id === id)?.rules ?? [];
+      const propCode = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/occurred_on')?.rules ?? [];
+      const flag = BUILTIN_CONTRACT_DEFS.find(
+        (c) => c.id === 'orbis/completable',
+      )?.exclusive_classes;
+      await db.execute(sql`UPDATE aspect_definitions SET rules = ${JSON.stringify(code('orbis/task'))}::jsonb
+        WHERE id = 'orbis/task' AND graph_id IS NULL`);
+      await db.execute(sql`UPDATE property_definitions SET rules = ${JSON.stringify(propCode)}::jsonb
+        WHERE id = 'orbis/occurred_on' AND graph_id IS NULL`);
+      await db.execute(sql`UPDATE contract_definitions SET exclusive_classes = ${flag ?? false}
+        WHERE id = 'orbis/completable' AND graph_id IS NULL`);
+      await raw.end();
       await client.end();
     }
   });

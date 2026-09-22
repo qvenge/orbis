@@ -19,6 +19,7 @@ import {
   personal,
   requireEnv,
   seedCustomAspect,
+  seedCustomRole,
   truncateAll,
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
@@ -227,4 +228,61 @@ test('снимок несёт rules строк-носителей: своё пр
   // Тем же DDL — флаг контракта (Р-К-92 п.2): в снимке он ЕСТЬ уже здесь, `true` появится с
   // `orbis/delegable` задачи 14а. Без колонки в SELECT флаг терялся бы на пересеве молча.
   expect(reg.contracts.get('orbis/completable')?.exclusive_classes).toBe(false);
+});
+
+/**
+ * Пин КАЖДОГО из четырёх SELECT, а не одного: тест выше держит `rules` аспекта непустым значением, но
+ * у свойств, ролей и контрактов в снимке сегодня только умолчания схемы (`[]` и `false`) — снятая из
+ * SELECT или маппера колонка дала бы ровно их же, и дорога рвалась бы молча. Поэтому здесь у каждого
+ * носителя значение, которого умолчание НЕ даёт: правило у своего свойства и своей роли владельца и
+ * `exclusive_classes: true` у своей строки контракта, перекрывающей встроенную (ORDER BY graph_id).
+ */
+test('поле доезжает из КАЖДОГО SELECT: rules свойства и роли, exclusive_classes контракта владельца', async () => {
+  const propertyRule: RuleDefinition = {
+    id: 'own_property_probe',
+    template: 'requires_when',
+    enabled: true,
+    undo: 'check',
+    params: { property: 'user/hours' },
+  };
+  const roleRule: RuleDefinition = {
+    id: 'own_role_probe',
+    template: 'acyclic',
+    enabled: true,
+    undo: 'check',
+    params: {},
+  };
+  await seedCustomRole(owner, {
+    key: 'user/probe-role',
+    label: { ru: 'Проба' },
+    sourceLabel: { ru: 'Откуда' },
+    targetLabel: { ru: 'Куда' },
+    rules: [roleRule],
+  });
+  const { db: admin, client } = adminDb();
+  try {
+    await admin.execute(sql`UPDATE property_definitions
+      SET rules = ${JSON.stringify([propertyRule])}::jsonb
+      WHERE graph_id = ${owner}::uuid AND id = 'user/hours'`);
+    await admin.execute(sql`
+      INSERT INTO contract_definitions
+        (id, graph_id, key, label, description, kind, slots, classes, sets, facts, module, rank,
+         exclusive_classes)
+      SELECT id, ${owner}::uuid, key, label, description, kind, slots, classes, sets, facts, module,
+             rank, true
+      FROM contract_definitions WHERE graph_id IS NULL AND id = 'orbis/completable'`);
+    await bumpOwnerRegistryVersion(admin, owner);
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    expect(reg.properties.get('user/hours')?.rules).toEqual([propertyRule]);
+    expect(reg.roles.get('user/probe-role')?.rules).toEqual([roleRule]);
+    expect(reg.contracts.get('orbis/completable')?.graphId).toBe(owner);
+    expect(reg.contracts.get('orbis/completable')?.exclusive_classes).toBe(true);
+  } finally {
+    await admin.execute(sql`DELETE FROM contract_definitions WHERE graph_id = ${owner}::uuid`);
+    await admin.execute(sql`DELETE FROM relation_role_definitions WHERE graph_id = ${owner}::uuid`);
+    await admin.execute(sql`UPDATE property_definitions SET rules = '[]'::jsonb
+                            WHERE graph_id = ${owner}::uuid AND id = 'user/hours'`);
+    await bumpOwnerRegistryVersion(admin, owner);
+    await client.end();
+  }
 });
