@@ -11,6 +11,10 @@
  * разобранным у читателей (`rulesFieldOf`).
  */
 import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
   RULE_PARAMS,
   type RuleCarrier,
   type RuleDefinition,
@@ -28,6 +32,7 @@ import {
 import { ExecError } from '../errors';
 import { assertExprChecked } from '../expr/check';
 import type { ExprSite } from '../subscriptions/registry';
+import { assertAcyclicGraph, dependencyGraph } from './deps-graph';
 import type { RegistrySnapshot } from './load';
 
 export type { RuleCarrier } from '@orbis/shared'; // Р-К-53: форма { kind: 'aspect'|'property'|'role'; id } объявлена в rule-type.ts (0c)
@@ -533,4 +538,53 @@ function assertNoConflict(rule: RuleDefinition, reg: RegistrySnapshot): void {
     `правила «${c.a}» и «${c.b}» пишут ${c.property} на одном событии — приоритета между ними нет`,
     { rule: rule.id, other: c.a === rule.id ? c.b : c.a, event: c.event, property: c.property },
   );
+}
+
+/**
+ * ВРЕЗКА НА ЗАПИСИ (Р-3, §Б4): все правила тронутой строки — валидатором, затем ацикличность ВСЕГО графа по
+ * снимку-пробе. Порядок именно такой: цикл выразим только парой по отдельности законных правил, и
+ * спрашивать о нём раньше формы значило бы отвечать «круг» на опечатку. `queryRefs` пуст намеренно —
+ * держатели запросов к правилам отношения не имеют, а поход за ними в БД сделал бы функцию асинхронной.
+ * Зовут: тест системных строк (`assertBuiltinRules` ниже — тот же порядок над снимком из кода) и тулы
+ * `rule_set`/`rule_remove` над `probeSnapshot` (задача 16).
+ */
+export function assertRulesOfRow(
+  reg: RegistrySnapshot,
+  carrier: RuleCarrier,
+  systemSeed: boolean,
+): void {
+  const dict =
+    carrier.kind === 'aspect'
+      ? reg.aspects
+      : carrier.kind === 'property'
+        ? reg.properties
+        : reg.roles;
+  // СЫРЫЕ элементы, а не разобранные: форму называет `assertRule`, и врезка, читающая через
+  // `rulesFieldOf`, пропустила бы неразобравшееся правило молча — ровно то, что она обязана ловить.
+  for (const raw of rawRulesOf(dict.get(carrier.id))) assertRule(raw, { reg, carrier, systemSeed });
+  assertAcyclicGraph(dependencyGraph(reg, { queryRefs: new Map() }));
+}
+/**
+ * ПРАВИЛА СИДА — ТЕМ ЖЕ ВАЛИДАТОРОМ, ЧТО ПРАВИЛА ВЛАДЕЛЬЦА: системная строка, посеянная с конфликтом,
+ * валидировала бы данные молча у всех владельцев сразу. Проба собирается из КОДА (`BUILTIN_*`) — сид на то
+ * и сид, что база после него обязана совпасть с кодом. Зовёт её ТЕСТ (`rules.test.ts`), а не сид
+ * (Р-К-26): сид ходит сырым postgres.js, снимка у него нет, и прецедент прямой — `assertSubscription` в
+ * сиде тоже не зовётся; цена — сид с конфликтом красен тестом в CI, а не на `db:prepare`. Правил в коде
+ * пока ноль (первые кладёт задача 4); сторож заведён вместе с валидатором по доводу `assertAcyclicGraph`:
+ * заводить его вместе с тем, что он сторожит, — заводить его после первой аварии.
+ */
+export function assertBuiltinRules(): void {
+  const reg: RegistrySnapshot = {
+    properties: new Map(BUILTIN_PROPERTY_META.map((d) => [d.id, d])),
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((d) => [d.id, d])),
+    roles: new Map(BUILTIN_RELATION_ROLE_META.map((d) => [d.id, d])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((d) => [d.id, d])),
+    subscriptions: new Map(), // правила подписок не адресуют — словарь врезке не нужен
+    ownerVersion: 0,
+    systemVersion: 0,
+  };
+  for (const { carrier, row } of carrierRows(reg)) {
+    for (const raw of rawRulesOf(row)) assertRule(raw, { reg, carrier, systemSeed: true });
+  }
+  assertAcyclicGraph(dependencyGraph(reg, { queryRefs: new Map() }));
 }

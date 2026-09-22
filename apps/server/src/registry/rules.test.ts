@@ -1,7 +1,7 @@
 // apps/server/src/registry/rules.test.ts
 // Валидатор декларации правила (§Б4-1/3, Р-И-21) — юнитом по снимку-пробе: правило кладётся на
 // строку-носитель встроенного словаря так, как его увидит читатель ПОСЛЕ записи.
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
@@ -12,9 +12,28 @@ import {
   ruleDefinitionSchema,
 } from '@orbis/shared';
 import { DEREF_IN_CONSTRAINT, SECOND_LANGUAGE } from '@orbis/shared/expr';
+import { appDb, freshGraph, personal, requireEnv } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
+import { effectiveRegistry } from './cache';
+import { assertAcyclicGraph, dependencyGraph } from './deps-graph';
 import type { RegistrySnapshot } from './load';
-import { assertRule, type RuleCarrier, ruleConflictsOf } from './rules';
+import {
+  assertBuiltinRules,
+  assertRule,
+  assertRulesOfRow,
+  type RuleCarrier,
+  ruleConflictsOf,
+  rulesOf,
+} from './rules';
+
+// Юниты файла БД не трогают; база нужна ОДНОМУ тесту — сторожу системных строк над живым снимком
+// после `db:prepare` (Р-К-26).
+requireEnv();
+const { db, client } = appDb();
+afterAll(async () => {
+  await client.end();
+});
 
 /** Снимок встроенных словарей, где у названной строки лежат эти правила (форма колонки задачи 2). */
 function probe(carrier: RuleCarrier, rules: readonly unknown[]): RegistrySnapshot {
@@ -306,5 +325,48 @@ describe('assign_level и конфлюэнтность §Б4', () => {
     expect(ruleConflictsOf(rows)).toEqual([
       { a: 'cur_a', b: 'cur_b', event: 'create|orbis/currency', property: 'orbis/currency' },
     ]);
+  });
+});
+
+describe('врезка на записи реестра (Р-3)', () => {
+  const ping = {
+    id: 'ping',
+    template: 'default',
+    params: { property: 'orbis/counterparty', value: { prop: 'orbis/payment_method' } },
+  };
+  const pong = {
+    id: 'pong',
+    template: 'default',
+    params: { property: 'orbis/payment_method', value: { prop: 'orbis/counterparty' } },
+  };
+  test('круг «свойство → правило → свойство» — REGISTRY_CYCLE с путём', () => {
+    const reg = probe(FIN, [ping, pong]);
+    expect(() => assertRule(ping, { reg, carrier: FIN, systemSeed: true })).not.toThrow();
+    const e = err(() => assertRulesOfRow(reg, FIN, true));
+    expect([e.code, (e.details as { cycle: string[] }).cycle.length > 1]).toEqual([
+      'REGISTRY_CYCLE',
+      true,
+    ]);
+  });
+  test('assertRulesOfRow проверяет ВСЕ правила строки', () => {
+    expect(() => assertRulesOfRow(probe(FIN, [OCCURRED]), FIN, true)).not.toThrow();
+    expect(
+      reasonOf(err(() => assertRulesOfRow(probe(FIN, [OCCURRED, { ...OCCURRED }]), FIN, true))),
+    ).toBe('RULE_ID_TAKEN');
+  });
+  test('assertBuiltinRules зелен на сегодняшнем сиде (правил в коде пока ноль)', () => {
+    expect(() => assertBuiltinRules()).not.toThrow();
+  });
+  test('живой снимок после db:prepare: каждое правило каждой системной строки проходит assertRule', async () => {
+    // Сторож того, что БАЗА совпадает с кодом и после пересева: дрейф строк правил (`rules` — jsonb) не ловится
+    // `registry-drift` по форме, только по содержимому — здесь оно и проверяется. Разобранный перечень
+    // (`rulesOf`) здесь достаточен: неразобравшееся правило до снимка не доезжает вовсе — строку реестра
+    // `load.ts` читает `.parse`'ом и падает на ней раньше (задача 2).
+    const owner = await freshGraph();
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    for (const { rule, carrier } of rulesOf(reg)) {
+      expect(() => assertRule(rule, { reg, carrier, systemSeed: true })).not.toThrow();
+    }
+    expect(() => assertAcyclicGraph(dependencyGraph(reg, { queryRefs: new Map() }))).not.toThrow();
   });
 });

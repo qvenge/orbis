@@ -147,6 +147,37 @@ describe('dependencyGraph / dependantsOf (§А3-5)', () => {
     ).not.toThrow();
   });
 
+  test('шестой род ребра: писатель зависит от читаемого (Р-И-22, §Б4)', () => {
+    const fin = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/financial');
+    const writer = {
+      id: 'cur',
+      template: 'default',
+      enabled: true,
+      undo: 'check',
+      params: { property: 'orbis/currency', value: { prop: 'orbis/counterparty' } },
+      when: { op: '=', args: [{ prop: 'orbis/recurring' }, { const: true }] },
+    };
+    const reader = {
+      id: 'r',
+      template: 'requires_when',
+      enabled: true,
+      undo: 'check',
+      params: { property: 'orbis/occurred_on' },
+      when: { has: 'orbis/recurring' },
+    };
+    const edges = (rules: unknown[]) =>
+      dependencyGraph(snapshot({ aspects: [{ ...fin, rules }] }), { queryRefs: new Map() })
+        .edges.filter((e) => e.kind === 'rule')
+        .map((e) => `${e.from}→${e.to}`)
+        .sort();
+    expect(edges([writer])).toEqual([
+      'orbis/currency→orbis/counterparty',
+      'orbis/currency→orbis/recurring',
+    ]);
+    expect(edges([reader])).toEqual([]); // предикат не пишет — стратифицировать нечего
+    expect(edges([{ ...writer, enabled: false }])).toEqual([]); // выключенное правило рёбер не даёт
+  });
+
   test('имя держателя, которого нет в реестре, узлом не становится (опечатка ≠ зависимость)', () => {
     const holder = '33333333-3333-4333-8333-333333333333';
     const graph = dependencyGraph(snapshot(), {
