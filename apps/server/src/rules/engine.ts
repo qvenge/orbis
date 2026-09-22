@@ -201,9 +201,12 @@ async function writeScope(
     batch === undefined
       ? undefined
       : {
-          created: batch.createdRelations,
+          // Объявленные ЛЮБОЙ операцией пачки, а не подготовленные к этой (РЧ-4-1, Р-К-46): пачка
+          // атомарна, и `createdRelations` для операции №1 был бы пуст, хотя ребро, которое её
+          // легитимирует, объявлено операцией №2. Каждое подготовленное ребро пачки объявлено ею же,
+          // так что `declaredRelations` — надмножество `createdRelations`.
+          created: batch.declaredRelations,
           deleted: batch.deletedRelations,
-          declaredDerivedFromTargets: batch.declaredDerivedFromTargets,
           // Строки, тронутые пачкой (create/update/attach кладут их в `BatchState.entities`).
           archivedOf: (id) => batch.entities.get(id)?.archived,
         },

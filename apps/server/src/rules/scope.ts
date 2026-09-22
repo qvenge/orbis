@@ -9,7 +9,7 @@
  * классификатора, у будущего V2) разошёлся бы с этим на первом же новом поле — и одно и то же `when`
  * отвечало бы по-разному в зависимости от того, кто спросил.
  */
-import { type GraphId, ROLE_INSTANCE_OF, type RuleDefinition } from '@orbis/shared';
+import type { GraphId, RuleDefinition } from '@orbis/shared';
 import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
 import { and, eq, inArray } from 'drizzle-orm';
 import { entities, relations } from '../db/schema';
@@ -160,19 +160,24 @@ export function ruleParamsUsed(rules: readonly RuleDefinition[]): Set<string> {
 }
 
 /**
- * Состояние пачки, которое видит сборщик рёбер: виртуальные рёбра (`created`/`deleted`), узкий пре-пасс
- * `declaredDerivedFromTargets` и архивность строк, уже тронутых пачкой (`archivedOf` — `undefined`,
- * если пачка строку не трогала). Необязательные члены — расширение формы §1.5, а не замена: вызов без
- * пачки и вызов с одними рёбрами остаются законными.
+ * Состояние пачки, которое видит сборщик рёбер: виртуальные рёбра (`created` — объявленные ЛЮБОЙ
+ * операцией пачки, любой роли: общий пре-пасс исполнителя, Р-К-46; `deleted`) и архивность строк, уже
+ * тронутых пачкой (`archivedOf` — `undefined`, если пачка строку не трогала). Необязательный член —
+ * расширение формы §1.5, а не замена: вызов без пачки и вызов с одними рёбрами остаются законными.
  */
 export type RelationBatchView = VirtualGraphEffects & {
-  declaredDerivedFromTargets?: ReadonlySet<string>;
   archivedOf?: (entityId: string) => boolean | undefined;
 };
 
 /**
  * Входящие рёбра `$self` нужных ролей: БД ∪ объявленные пачкой − удалённые пачкой (Р-И-7).
  * `alive` — «источник не архивен»; считать его лениво нельзя — интерпретатор синхронный (Р-4).
+ *
+ * ИМЕНОВАННОЕ ОГРАНИЧЕНИЕ — рёбра читаются только НА ЗАПИСИ ЦЕЛИ. `relation_create`/`relation_delete`
+ * C-правила записи-цели не перепроверяют: снятие ребра `instance-of` у экземпляра с `recurring: true`
+ * нарушение `financial_recurring_requires_recurrence` не ловит, пока цель не правят. Паритет со
+ * снятым кодом инварианта (он тоже спрашивал рёбра только на записи сущности); перепроверка целей на
+ * записи ребра — отдельное решение, не перевод.
  *
  * Архивность источника берётся из ПАЧКИ раньше, чем из БД: эффекты операций 1..N−1 пачки обязаны
  * быть видны операции N (договор `BatchState`), и пачка «архивировать блокер; тронуть цель» обязана
@@ -229,17 +234,6 @@ export async function relationFactsOf(
       sourceId: v.sourceId,
       alive: !(archivedIn(v.sourceId) ?? dbArchived.get(v.sourceId) ?? false),
     });
-  }
-  // Узкий пре-пасс пачки (`declaredDerivedFromTargets`, `BatchState` исполнителя): связи, объявленные
-  // ЛЮБОЙ операцией, в том числе ещё не подготовленной, — пачка атомарна, и правило легитимируется
-  // связью независимо от её позиции. Источник такой связи ещё не известен (операция не подготовлена),
-  // поэтому факт — «живое ребро роли»; задача 4 заменит узкий набор общим списком объявленных.
-  if (
-    batch?.declaredDerivedFromTargets?.has(entityId) === true &&
-    roles.has(ROLE_INSTANCE_OF) &&
-    !live.some((f) => f.role === ROLE_INSTANCE_OF)
-  ) {
-    live.push({ role: ROLE_INSTANCE_OF, sourceId: entityId, alive: true });
   }
   return live;
 }

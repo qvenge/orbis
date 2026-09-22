@@ -21,7 +21,6 @@ import {
   type GraphId,
   newId,
   type PreconditionMismatch,
-  ROLE_INSTANCE_OF,
   RULE_NEAREST_ANCESTOR,
   relationCreateInput,
   relationDeleteInput,
@@ -353,13 +352,17 @@ export class BatchState {
   readonly createdRelations: VirtualRelationCreate[] = [];
   readonly deletedRelations: RelationKey[] = [];
   /**
-   * target'ы связей роли `instance-of`, объявленных ЛЮБОЙ операцией batch: batch атомарен,
-   * поэтому financial-инвариант (§3.3) легитимируется связью независимо от её позиции.
+   * Связи, объявленные ЛЮБОЙ операцией пачки (РЧ-4-1, Р-К-46): пачка атомарна, и правило
+   * легитимируется связью независимо от позиции — `createdRelations` наполняется по мере подготовки
+   * и для операции №1 был бы пуст. Движок правил видит их полем `created` (`rules/engine.ts`,
+   * `writeScope`), по ВСЕМ ролям: какие роли спросить, решает `when` правила, а не пре-пасс.
+   * Удаление той же пачкой объявленного ею ребра объявления не отменяет — паритет с прежним узким
+   * пре-пассом роли `instance-of`, который объявленную цель считал легитимной при любом соседстве.
    */
-  readonly declaredDerivedFromTargets: ReadonlySet<string>;
+  readonly declaredRelations: readonly VirtualRelationCreate[];
 
-  constructor(declaredDerivedFromTargets: ReadonlySet<string>) {
-    this.declaredDerivedFromTargets = declaredDerivedFromTargets;
+  constructor(declaredRelations: readonly VirtualRelationCreate[]) {
+    this.declaredRelations = declaredRelations;
   }
 
   graph(): VirtualGraphEffects {
@@ -654,7 +657,7 @@ async function executeBatch(
         }
       }
 
-      const batch = new BatchState(collectDeclaredDerivedFrom(ops));
+      const batch = new BatchState(collectDeclaredRelations(ops));
 
       // Стадии 1–4 ВСЕХ операций над виртуальным состоянием — до первой записи (§7.8)
       const plans: PreparedOp[] = [];
@@ -738,19 +741,28 @@ function replayFromAudit(batchId: string, saved: JournalWrite): ExecuteResult {
   };
 }
 
-/** target'ы роли `instance-of` из envelope'ов relation_create — по ВСЕМ операциям batch (§3.3). */
-function collectDeclaredDerivedFrom(ops: Array<{ tool: string; input: unknown }>): Set<string> {
-  const targets = new Set<string>();
+/**
+ * Связи из конвертов `relation_create` — по ВСЕМ операциям пачки и ЛЮБОЙ роли (РЧ-4-1). Разбор тот
+ * же, что у подготовки операции; конверт, не разобравшийся здесь, отвергнет сама его операция.
+ */
+function collectDeclaredRelations(
+  ops: Array<{ tool: string; input: unknown }>,
+): VirtualRelationCreate[] {
+  const declared: VirtualRelationCreate[] = [];
   for (const op of ops) {
     if (op.tool !== 'relation_create') continue;
     // Внутренняя форма шире публичной (meta опциональна): для публичных input'ов
     // различий нет, а inverse-операции undo несут meta — пре-пасс не должен их терять
     const parsed = relationCreateInternalInput.safeParse(op.input);
-    if (parsed.success && parsed.data.role === ROLE_INSTANCE_OF) {
-      targets.add(parsed.data.target_id);
+    if (parsed.success) {
+      declared.push({
+        sourceId: parsed.data.source_id,
+        targetId: parsed.data.target_id,
+        role: parsed.data.role,
+      });
     }
   }
-  return targets;
+  return declared;
 }
 
 /**

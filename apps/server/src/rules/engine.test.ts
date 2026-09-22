@@ -595,6 +595,16 @@ describe('рёбра и архивность из ПАЧКИ в has_relation (Р
     ]);
     expect(refusalOf(r)).toBe('INVARIANT/gate_plain_blocked_in_batch');
   });
+  test('пачка [entity_update, relation_create] — ребро, объявленное ПОЗЖЕ, видно любой роли (РЧ-4-1), отказ', async () => {
+    // Общий пре-пасс задачи 4: пачка атомарна, и ребро легитимирует (или обязывает) запись независимо
+    // от позиции — не только `instance-of`, которую знал узкий пре-пасс, а любая роль, названная `when`.
+    const { target, blocker } = await pair();
+    const r = await batchOf(w, [
+      touch(target),
+      { tool: 'relation_create', input: edge(blocker, target) },
+    ]);
+    expect(refusalOf(r)).toBe('INVARIANT/gate_plain_blocked_in_batch');
+  });
   test('пачка [relation_delete, entity_update] — удалённое пачкой ребро не видно, проходит', async () => {
     const { target, blocker } = await pair();
     expect(refusalOf(await w.run('relation_create', edge(blocker, target)))).toBe('ok');
