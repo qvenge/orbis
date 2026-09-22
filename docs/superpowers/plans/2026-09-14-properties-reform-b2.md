@@ -1925,7 +1925,7 @@ export async function seedTestWorld(graphId: GraphId): Promise<TestWorld> {
     //    даёт только настоящая привязка — её ставит хук бюджета на создании транзакции.
     await entity('category', 'Категория приёмки', { aspects: ['orbis/category'] });
     await entity('envelope', 'Конверт приёмки', { aspects: ['orbis/budget'], props: {
-      'orbis/finance_category': id('category'), 'orbis/limit': '20000.00',
+      'orbis/finance_category': id('category'), 'orbis/limit': '30000.00', // Ф-Б2-10: при 20000 хук привязывает все четыре расхода (5000+9000+12000+340) и remaining = −6340 — правила 4/9 без единого истинного случая; при 30000 remaining = 3660 ≥ 340 (позитив 4/9 на small-spend), 12000 > 3660 (негатив 4 на big-spend), 12000 > 10000 (позитив 3)
       'orbis/period_start': `${month}-01`, 'orbis/period_end': periodEnd } });
 
     // 2. Три контакта: семья (правило 1), курьер (5), незнакомый (7).
