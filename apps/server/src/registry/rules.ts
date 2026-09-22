@@ -394,6 +394,31 @@ export function ruleExprSitesOf(
   return out;
 }
 /**
+ * Гейт E в позиции правила — отказ чекера получает АДРЕС ПРАВИЛА. Сам гейт кладёт в `details` только путь
+ * ВНУТРИ выражения (`['args','0']`), а в снимке правила лежат на десятках строк: без `rule`, `template` и
+ * `site` (носитель + позиция) «deref в args.0» не адресует ничего. Форма `DEREF_IN_CONSTRAINT`
+ * `{path, rule?, template}` — договор докблока члена `ExecErrorCode` (0b), и держит её это место: код и
+ * текст отказа не меняются, `details` только дополняются.
+ */
+function checkedAt(
+  rule: RuleDefinition,
+  reg: RegistrySnapshot,
+  site: ExprSite,
+  want: ExprType | undefined,
+): ExprType {
+  try {
+    return assertExprChecked(site.value, { reg, ...site.scope }, want);
+  } catch (e) {
+    if (!(e instanceof ExecError)) throw e;
+    throw new ExecError(e.code, e.message, {
+      ...(e.details as Record<string, unknown> | undefined),
+      rule: rule.id,
+      template: rule.template,
+      site: site.path,
+    });
+  }
+}
+/**
  * (7) ТИПЫ ВЫРАЖЕНИЙ в области правила — через единственный гейт записи E (`assertExprChecked`): там же
  * кап глубины дерева и перевод `ExprCheckError` → `ExecError` тем же кодом (`DEREF_IN_CONSTRAINT`,
  * `EXPR_TYPE`, …). `when` — boolean; значение T-правила — типа свойства-цели.
@@ -404,7 +429,7 @@ function assertExprTypes(rule: RuleDefinition, { reg, carrier }: RuleCheckScope)
     // приводится корневой литерал (`{const:'0.00'}` в позиции decimal). Форма `ExprSite` при этом не
     // меняется — она общая с подписками, где `expect` перечисляет альтернативы и приведения не нужно.
     const want = site.expect?.length === 1 ? ({ kind: site.expect[0] } as ExprType) : undefined;
-    const type = assertExprChecked(site.value, { reg, ...site.scope }, want);
+    const type = checkedAt(rule, reg, site, want);
     if (site.expect === null || site.expect.includes(type.kind)) continue;
     if (site.path.endsWith('.when')) {
       throw new ExecError(
@@ -427,9 +452,85 @@ function assertExprTypes(rule: RuleDefinition, { reg, carrier }: RuleCheckScope)
     );
   }
 }
-function assertLevelScoped(_rule: RuleDefinition): void {
-  return;
+/**
+ * ПОНИЖАЮЩЕЕ ПРАВИЛО ОБЯЗАНО НАЗЫВАТЬ АКТОРА (Р-27, В-2). «Понижающее» в Б-2 — ровно `level:'silent'`: ниже
+ * любого ряда таблицы, дающего подтверждение, только «исполнить молча», а `show`/`discuss` против таблицы
+ * могут быть и повышением (сложение — V2). Без актора правило сняло бы подтверждение и у AI, и у фона.
+ */
+function assertLevelScoped(rule: RuleDefinition): void {
+  if (rule.template === 'assign_level' && rule.level === 'silent' && rule.actor === undefined) {
+    bad(
+      'RULE_LOWERING_UNSCOPED',
+      rule.id,
+      `правило ${rule.id} понижает уровень до «исполнить молча», не называя актора`,
+      { level: rule.level },
+    );
+  }
 }
-function assertNoConflict(_rule: RuleDefinition, _reg: RegistrySnapshot): void {
-  return;
+/** Голова ключа события — ОБЕ формы (Р-И-37/Р-К-5): вход класса слота и вход значения свойства. */
+const enterHead = (e: RuleEnterEvent): string =>
+  'property' in e
+    ? `prop:${e.property}=${e.in.join(',')}`
+    : `${e.contract}.${e.slot}=${e.in.join(',')}`;
+/**
+ * КЛЮЧ ПИСАТЕЛЯ: (событие, свойство-цель). Читатели (`requires_when`, `forbidden_when`, `unique_among`,
+ * ролевые метки, `assign_level`) ключей не дают — двум предикатам спорить не о чем, оба обязаны выполниться.
+ * `default` пишет при отсутствии значения, событие у него одно на свойство; `on_enter_class` даёт ключ на
+ * вход и по ключу на каждое снимаемое свойство ухода.
+ */
+function eventKeys(rule: RuleDefinition): Array<{ event: string; property: string }> {
+  if (rule.template === 'default') {
+    return [{ event: `create|${rule.params.property}`, property: rule.params.property }];
+  }
+  if (rule.template !== 'on_enter_class') return [];
+  const head = enterHead(rule.params.enter);
+  const out: Array<{ event: string; property: string }> = [];
+  if (rule.params.set !== undefined) {
+    out.push({
+      event: `enter|${head}|${rule.params.set.property}`,
+      property: rule.params.set.property,
+    });
+  }
+  for (const p of rule.params.on_leave?.unset ?? []) {
+    out.push({ event: `leave|${head}|${p}`, property: p });
+  }
+  return out;
+}
+/**
+ * ДВА ПИСАТЕЛЯ ОДНОГО (свойство, событие) — отказ, а не приоритет (§Б4 конфлюэнтность, spec:503): явного
+ * приоритета не существует, желание двух писателей — сигнал слить правила либо развести свойства. Это НЕ
+ * цикл, поэтому код свой, а не `REGISTRY_CYCLE` (М6 ревью спеки). Выключенные не считаются: «отключить»
+ * (§Б4-4) и есть выход из конфликта — конфликтуй оно, выхода бы не было.
+ */
+export function ruleConflictsOf(
+  rules: readonly RuleDefinition[],
+): Array<{ a: string; b: string; event: string; property: string }> {
+  const seen = new Map<string, string>();
+  const out: Array<{ a: string; b: string; event: string; property: string }> = [];
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+    for (const { event, property } of eventKeys(rule)) {
+      const prev = seen.get(event);
+      if (prev === undefined) {
+        seen.set(event, rule.id);
+        continue;
+      }
+      out.push({ a: prev, b: rule.id, event, property });
+    }
+  }
+  return out;
+}
+/** (9) Конфликт, в котором участвует ИМЕННО это правило: чужой конфликт снимка — не его отказ. */
+function assertNoConflict(rule: RuleDefinition, reg: RegistrySnapshot): void {
+  const c = ruleConflictsOf(rulesOf(reg).map((r) => r.rule)).find(
+    (x) => x.a === rule.id || x.b === rule.id,
+  );
+  if (c === undefined) return;
+  // `rule` — ПРОВЕРЯЕМОЕ правило, `other` — его пара, в каком бы порядке они ни лежали в снимке: читатель
+  // отказа спрашивает «что не так с моим правилом», и порядок обхода носителей ответом не является.
+  throw new ExecError(
+    'RULE_CONFLICT',
+    `правила «${c.a}» и «${c.b}» пишут ${c.property} на одном событии — приоритета между ними нет`,
+    { rule: rule.id, other: c.a === rule.id ? c.b : c.a, event: c.event, property: c.property },
+  );
 }

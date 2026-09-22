@@ -9,11 +9,12 @@ import {
   BUILTIN_RELATION_ROLE_META,
   type RuleDefinition,
   type RuleDefinitionInput,
+  ruleDefinitionSchema,
 } from '@orbis/shared';
 import { DEREF_IN_CONSTRAINT, SECOND_LANGUAGE } from '@orbis/shared/expr';
 import { ExecError } from '../errors';
 import type { RegistrySnapshot } from './load';
-import { assertRule, type RuleCarrier } from './rules';
+import { assertRule, type RuleCarrier, ruleConflictsOf } from './rules';
 
 /** Снимок встроенных словарей, где у названной строки лежат эти правила (форма колонки задачи 2). */
 function probe(carrier: RuleCarrier, rules: readonly unknown[]): RegistrySnapshot {
@@ -193,6 +194,17 @@ describe('область E правила (§Б3-3, приёмка §С8-29)', (
       ).template,
     ).toBe('default');
   });
+  test('отказ чекера несёт адрес правила: rule, template и site — договор details DEREF_IN_CONSTRAINT (0b)', () => {
+    const e = err(() =>
+      check(FIN, { ...OCCURRED, when: { op: '=', args: [D, { const: 'Еда' }] } }),
+    );
+    expect(e.details).toMatchObject({
+      path: ['args', '0'],
+      rule: 'fin_occurred',
+      template: 'requires_when',
+      site: 'aspect:orbis/financial.rules.fin_occurred.when',
+    });
+  });
   test('T-область закрыта для чужого состояния так же, как C (Р-К-13)', () => {
     const def = (value: unknown) => ({
       id: 'amt',
@@ -207,5 +219,92 @@ describe('область E правила (§Б3-3, приёмка §С8-29)', (
     expect(
       err(() => check(FIN, def({ agg_via: { role: 'envelope-binding', name: 'remaining' } }))).code,
     ).toBe('EXPR_TYPE');
+  });
+});
+
+describe('assign_level и конфлюэнтность §Б4', () => {
+  const low = (over: Record<string, unknown> = {}) => ({
+    id: 'low',
+    template: 'assign_level',
+    params: {},
+    level: 'silent',
+    when: { op: '=', args: [{ prop: 'orbis/recurring' }, { const: true }] },
+    ...over,
+  });
+  const dflt = (id: string, property: string) => ({
+    id,
+    template: 'default',
+    params: { property, value: { const: 'RUB' } },
+  });
+  const byClass = (id: string) => ({
+    id,
+    template: 'on_enter_class',
+    params: {
+      enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+      set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+    },
+  });
+  const byValue = (id: string) => ({
+    id,
+    template: 'on_enter_class',
+    params: {
+      enter: { property: 'orbis/task_status', in: ['waiting'] },
+      on_leave: { unset: ['orbis/waiting_for'] },
+    },
+  });
+
+  test('понижающее без актора — RULE_LOWERING_UNSCOPED (Р-27)', () => {
+    expect(reasonOf(err(() => check(FIN, low())))).toBe('RULE_LOWERING_UNSCOPED');
+    expect(levelOf(check(FIN, low({ actor: 'owner' })))).toBe('silent');
+    expect(
+      levelOf(check(FIN, low({ actor: { routine: '11111111-1111-4111-8111-111111111111' } }))),
+    ).toBe('silent');
+    expect(levelOf(check(FIN, low({ level: 'never' })))).toBe('never'); // повышающее актора не требует
+  });
+  test('два default на одно свойство — RULE_CONFLICT; на разные — нет; выключенное не спорит (§Б4-4)', () => {
+    // `dflt` пишется БЕЗ `enabled` — так его пишет владелец и так лежит input-форма сида: читатель
+    // снимка обязан достроить умолчание схемы, иначе `!rule.enabled` пропустил бы оба правила молча.
+    expect(
+      err(() => check(FIN, dflt('cur_a', 'orbis/currency'), [dflt('cur_b', 'orbis/currency')]))
+        .code,
+    ).toBe('RULE_CONFLICT');
+    expect(
+      check(FIN, dflt('cur_a', 'orbis/currency'), [dflt('cp_b', 'orbis/counterparty')]).id,
+    ).toBe('cur_a');
+    expect(
+      check(FIN, dflt('cur_a', 'orbis/currency'), [
+        { ...dflt('cur_b', 'orbis/currency'), enabled: false },
+      ]).id,
+    ).toBe('cur_a');
+  });
+  test('on_enter_class: ключуются ОБЕ формы события, вход и уход — разные ключи (Р-К-5)', () => {
+    expect(err(() => check(TASK, byClass('t_a'), [byClass('t_b')])).code).toBe('RULE_CONFLICT');
+    expect(err(() => check(TASK, byValue('w_a'), [byValue('w_b')])).code).toBe('RULE_CONFLICT');
+    expect(check(TASK, byClass('t_a'), [byValue('w_a')]).id).toBe('t_a');
+  });
+  test('RULE_CONFLICT: details.rule — ПРОВЕРЯЕМОЕ правило, other — его пара, при любом порядке в снимке', () => {
+    // Проверяется ВТОРОЕ по порядку снимка: первым на носителе лежит `cur_b`, и отказ, собранный
+    // «по порядку обхода», назвал бы проверяемым чужое правило.
+    const e = err(() =>
+      assertRule(dflt('cur_a', 'orbis/currency'), {
+        reg: probe(FIN, [dflt('cur_b', 'orbis/currency'), dflt('cur_a', 'orbis/currency')]),
+        carrier: FIN,
+        systemSeed: true,
+      }),
+    );
+    expect(e.details).toEqual({
+      rule: 'cur_a',
+      other: 'cur_b',
+      event: 'create|orbis/currency',
+      property: 'orbis/currency',
+    });
+  });
+  test('ruleConflictsOf — чистая функция: её же зовёт слияние дельт (задача 16)', () => {
+    const rows = [dflt('cur_a', 'orbis/currency'), dflt('cur_b', 'orbis/currency')].map((r) =>
+      ruleDefinitionSchema.parse(r),
+    );
+    expect(ruleConflictsOf(rows)).toEqual([
+      { a: 'cur_a', b: 'cur_b', event: 'create|orbis/currency', property: 'orbis/currency' },
+    ]);
   });
 });
