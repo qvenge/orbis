@@ -464,6 +464,63 @@ function expectVerdict(v: Verdict, expected: string): void {
 }
 
 /**
+ * Карта видимости `relations` — ПОД АДМИН-DSN, как доля корпуса выше: это факт о таблице, а не о
+ * модели доступа. `relallvisible / relpages` — то самое число, по которому планировщик оценивает
+ * Index Only Scan, и именно оно решает, какой из двух индексов-близнецов обслужит привязки (докблок
+ * `expectTwinServes`). Печатается рядом с вердиктом как объяснение, гейтом не является.
+ */
+async function relationsVisibility(): Promise<string> {
+  const admin = adminDb();
+  try {
+    const rows = (await admin.db.execute(sql`
+      SELECT relallvisible, relpages FROM pg_class WHERE oid = 'relations'::regclass`)) as unknown as Array<{
+      relallvisible: number;
+      relpages: number;
+    }>;
+    return `${rows[0]?.relallvisible}/${rows[0]?.relpages}`;
+  } finally {
+    await admin.client.end();
+  }
+}
+
+/**
+ * Пин ИНВАРИАНТА для пары индексов-БЛИЗНЕЦОВ с префиксом `source_id` — `relations_source_role`
+ * (source_id, role) и `rel_uniq` (source_id, target_id, role); остаток 87 Б-1, снят задачей 2 Б-2.
+ *
+ * Какой из двух выберет планировщик под ролью, решает НЕ доля корпуса и НЕ код, а КАРТА ВИДИМОСТИ
+ * `relations`: политика `current_graph_select` (0021) спрашивает оба конца ребра, и `rel_uniq`, несущий
+ * `target_id` в самом индексе, выигрывает Index Only Scan'ом — но только когда страницы помечены
+ * all-visible, то есть после VACUUM. Замер 23.09 (задача 2 Б-2), восемь долей корпуса в `entities`
+ * (100 / 90 / 80 / 70 / 60 / 50 / 40 / 31 %: копии строк под чужим графом + `ANALYZE` + EXPLAIN +
+ * `ROLLBACK`), два состояния таблицы:
+ *   - прогретый корпус, `relallvisible` 261/265 (как 09.09 в Б-1) — на всех восьми долях
+ *     `relations_source_role: chosen=false usable=false admin=true`, `rel_uniq: chosen=true usable=true
+ *     admin=false`; это и был прежний трёхфлаговый пин обоих;
+ *   - свежий сев корпуса до первого VACUUM, `relallvisible` 0/262 — на всех восьми долях
+ *     `relations_source_role: chosen=true usable=true admin=false`, `rel_uniq: chosen=false usable=false
+ *     admin=false`, а под админ-DSN — Seq Scan по `relations`.
+ * Доля не сдвинула вердикт ни в одной точке; карта видимости перевернула его в каждой. Свежий сев — не
+ * экзотика: корпус сносит любой `truncateAll`, и следующий `test:perf:volume` сеет заново, а успеет ли
+ * autovacuum пройти `relations` до EXPLAIN (≈50 с после сева), решает случай — так пин и покраснел
+ * 23.09 в предписанном порядке («volume ПЕРВЫМ», autovacuum `relations` — через 3 с ПОСЛЕ прогона).
+ *
+ * Что держится в ОБОИХ состояниях — одно утверждение о пути приложения: под ролью привязки конвертов
+ * обслуживает индекс (хотя бы один из близнецов), и Seq Scan по `relations` в плане роли нет. Ровно
+ * этот вопрос и задавал вход Р-14 («проиндексирован ли запрос»); имя близнеца — функция VACUUM, и
+ * пинить его — пинить календарь автовакуума. Тот же приём, что множество близнецов у обхода
+ * `descendants_of` в `explain.test.ts` (Ф-Г-62).
+ */
+function expectTwinServes(twins: readonly Verdict[], rolePlan: string): void {
+  const served = twins.filter((v) => v.chosen).map((v) => v.index);
+  const seqOnRelations = /"Node Type":\s*"Seq Scan"[^}]*?"Relation Name":\s*"relations"/.test(
+    rolePlan,
+  );
+  expect(`индексом=${served.length > 0} seq-scan-relations=${seqOnRelations}`).toBe(
+    'индексом=true seq-scan-relations=false',
+  );
+}
+
+/**
  * Конверты месяца — запрос СПИСАН с `aggregates.ts:398-414` (`rawEnvelopesOfMonth` приватна, а
  * экспортировать её ради EXPLAIN значило бы править оракул — РП-4 запрещает). Копия привязана к
  * оригиналу сторожем в тесте: она обязана вернуть ровно те же сорок конвертов месяца.
@@ -832,7 +889,7 @@ test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ форм
   );
 }, 300_000);
 
-test('EXPLAIN под ролью: привязки конвертов берут rel_uniq, а не relations_source_role', async () => {
+test('EXPLAIN под ролью: привязки конвертов обслуживает индекс-близнец, а не Seq Scan по relations', async () => {
   const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) => envelopeIdsOf(tx));
   const q = bindingsOfEnvelopesQuery(ids);
   const { total, probeBound } = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
@@ -851,30 +908,31 @@ test('EXPLAIN под ролью: привязки конвертов берут 
   });
   // Сторож копии: столько же, сколько насеяла 0c.
   expect(total - probeBound).toBe(fixture.bindings);
-  // ВЕРДИКТ снят прогоном 09.09 и записан как есть (Р-К-41).
+  // Вердикты ОБОИХ близнецов снимаются и печатаются (сводка ниже пинит их список), но гейтом служит
+  // инвариант `expectTwinServes`, а не строка трёх флагов: какой из двух берёт план роли, решает
+  // карта видимости `relations` (VACUUM после сева), и она печатается рядом как объяснение.
   //
-  // `relations_source_role` (source_id, role) под ролью НЕ выбирается — и не потому, что запрос
-  // идёт по куче: политика `current_graph_select` на `relations` спрашивает ОБА конца ребра, поэтому плану
-  // нужен ещё и `target_id`. Его несёт `rel_uniq` (source_id, target_id, role) — и выигрывает
-  // Index Only Scan'ом, без единого похода в кучу. Под админ-DSN политики нет, `target_id`
-  // не нужен, и берётся `relations_source_role`.
-  expectVerdict(
+  // Прежний ответ входа Р-14 «`relations_source_role` для пути приложения — кандидат в лишние» замер
+  // 23.09 опроверг: на свежезасеянной таблице путь роли обслуживает именно он, а `rel_uniq` не
+  // пригоден вовсе. Лишним по этому запросу не оказался ни один из двух.
+  const visibility = await relationsVisibility();
+  const twins = [
     await verdictFor(
       'relations_source_role',
       q,
-      `привязки 480 конвертов, роль ${ROLE_ENVELOPE_BINDING}`,
+      `привязки 480 конвертов, роль ${ROLE_ENVELOPE_BINDING}; relallvisible ${visibility}`,
     ),
-    'chosen=false usable=false admin=true',
+    await verdictFor(
+      'rel_uniq',
+      q,
+      `он же — уникальный (source_id, target_id, role); relallvisible ${visibility}`,
+    ),
+  ];
+  console.log(
+    `explain: карта видимости relations ${visibility} (relallvisible/relpages) — она выбирает ` +
+      'близнеца, пином не является (остаток 87)',
   );
-  // Четвёртый вердикт — не украшение: без него сводка сказала бы «приложением не используется»
-  // и читалась бы как «запрос не проиндексирован», тогда как он обслужен полностью, просто
-  // другим индексом. Именно это и есть ответ входа Р-14 про `relations`: заводить индекс не
-  // нужно, а `relations_source_role` для пути приложения — кандидат в лишние (вопрос Б-2, не
-  // Б-1: миграции среза исчерпаны 0018, Р-И-23).
-  expectVerdict(
-    await verdictFor('rel_uniq', q, 'он же — уникальный (source_id, target_id, role)'),
-    'chosen=true usable=true admin=false',
-  );
+  expectTwinServes(twins, await planOf(q, false));
 }, 300_000);
 
 test('сводка EXPLAIN напечатана по всем снятым вердиктам', () => {
