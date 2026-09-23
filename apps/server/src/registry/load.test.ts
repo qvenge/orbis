@@ -7,6 +7,7 @@ import {
   BUILTIN_ASPECT_DEFS,
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
   BUILTIN_SUBSCRIPTION_DEFS,
   CONTRACT_IDS,
   RELATION_ROLE_IDS,
@@ -276,7 +277,11 @@ test('снимок несёт rules строк-носителей: своё пр
     'financial_recurring_requires_recurrence',
   ]);
   expect(reg.properties.get('orbis/occurred_on')?.rules).toEqual([]);
-  expect(reg.roles.get('ref')?.rules).toEqual([]);
+  // Роль несёт строку каталога (задача 13): параметры зеркала ссылки — той же формой, что в коде.
+  const refDef = BUILTIN_RELATION_ROLE_META.find((r) => r.id === 'ref');
+  if (refDef === undefined) throw new Error('встроенной роли ref в коде нет');
+  expect(reg.roles.get('ref')?.rules).toEqual(refDef.rules);
+  expect(reg.roles.get('ref')?.rules.map((r) => r.id)).toEqual(['mirror_ref']);
   // Тем же DDL — флаг контракта (Р-К-92 п.2): в снимке он ЕСТЬ уже здесь, `true` появится с
   // `orbis/delegable` задачи 14а. Без колонки в SELECT флаг терялся бы на пересеве молча.
   expect(reg.contracts.get('orbis/completable')?.exclusive_classes).toBe(false);

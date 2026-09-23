@@ -75,10 +75,12 @@ function codeSnapshot(): RegistrySnapshot {
   };
 }
 /**
- * Системных строк каталога правил — четыре: задача 4 — два инварианта §А7-2 (financial — парой),
- * задача 12 — уникальность конверта (`duplicate_envelope`).
+ * Системных строк каталога правил — одиннадцать: задача 4 — два инварианта §А7-2 (financial — парой)
+ * и переход `task_completed_at`, задача 12 — уникальность конверта (`duplicate_envelope`), задача 13 —
+ * четыре носителя параметров движков (`nearest_ancestor`, `materialize`, `mirror_ref`,
+ * `budget_rollover`) и три метки ролевых ограничений (`acyclic` ×2, `target_max_incoming`).
  */
-const BUILTIN_RULE_COUNT = 4;
+const BUILTIN_RULE_COUNT = 11;
 const FIN: RuleCarrier = { kind: 'aspect', id: 'orbis/financial' };
 const TASK: RuleCarrier = { kind: 'aspect', id: 'orbis/task' };
 /** Код И `details.reason`: словарный VALIDATION без причины не адресует ничего. */
@@ -104,8 +106,10 @@ const OCCURRED: RuleDefinitionInput = {
   params: { property: 'orbis/occurred_on' },
   when: { op: 'not', args: [{ op: '=', args: [{ prop: 'orbis/recurring' }, { const: true }] }] },
 };
+// id — СВОЙ, не `mirror_ref`: с задачи 13 системная строка роли `ref` носит именно его, и проба на чужом
+// носителе упёрлась бы в `RULE_ID_TAKEN` раньше, чем в проверяемую ступень носителя.
 const MIRROR = {
-  id: 'mirror_ref',
+  id: 'fx_mirror',
   template: 'mirror_relation',
   params: { meta_key: 'property', skip_computed: true },
 };

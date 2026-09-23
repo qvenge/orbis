@@ -1,3 +1,4 @@
+import { ROLE_INSTANCE_OF, RULE_NEAREST_ANCESTOR } from '../constants';
 import type { RuleDefinitionInput } from './rule-type';
 
 /**
@@ -93,12 +94,121 @@ export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput = {
   },
 };
 
-/** Ключ — id строки-носителя; сиды берут `BUILTIN_RULES_BY_CARRIER[id] ?? []`. */
+/**
+ * Параметры движка предков (`executor/ancestors.ts`). Id совпадает с `RULE_NEAREST_ANCESTOR`
+ * (`constants.ts:146`): это же имя стоит во `flags.computed.rule` обоих вычисляемых свойств и в
+ * системной строке журнала «пересчитано N по правилу X» — с этой строкой оба адреса впервые
+ * указывают на СУЩЕСТВУЮЩУЮ запись реестра, а не на слово.
+ */
+export const RULE_NEAREST_ANCESTOR_ROW: RuleDefinitionInput = {
+  id: RULE_NEAREST_ANCESTOR,
+  template: 'nearest_ancestor',
+  undo: 'skip',
+  params: {
+    targets: { parent: 'orbis/parent_project', root: 'orbis/root_project' },
+    depth_cap: 32,
+  },
+};
+
+/**
+ * Параметры движка материализации (`recurring/materialize.ts`), перечни — ЯВНЫЕ (§Б4-3, inv §6 п.3).
+ * Значения перенесены из констант движка дословно; их доводы переехали вместе с ними:
+ *  - `horizon_days` — горизонт порождения §5.4; `retro_days` — ретро-пол (квартал): без него окно
+ *    «2020..today» синхронно материализовало бы годы инстансов (решение B5). Окно ВЕДОМОСТИ бюджета
+ *    (`subscriptions/budget.ts`, тоже 14) — другая величина, совпадение случайно (Р-14);
+ *  - `trigger_properties` — три, а не два: на `orbis/due_date` стоят «Сегодня» и «Ближайшие 7 дней»;
+ *  - `inherit` — закрытые перечни (Р-28): в новой форме «всё, что было» — это ВСЕ `props` строки, и
+ *    копирование по остаточному принципу порождало бы инстансы с чужими свойствами. `orbis/recurrence`
+ *    не наследуется (инстанс, унёсший правило, сам стал бы шаблоном, §3.3), `orbis/bank_txn_id` — тоже
+ *    (тождество ОДНОЙ строки выписки: дедуп импорта счёл бы повтором каждый инстанс);
+ *  - `own` — свои значения инстанса (дата инстанса, `planned`, `recurring` — §5.4/§3.3); кладутся на
+ *    инстанс, если его аспекты объявляют свойство (РЧ-13-2).
+ */
+export const RULE_MATERIALIZE: RuleDefinitionInput = {
+  id: 'materialize',
+  template: 'materialize',
+  undo: 'skip',
+  params: {
+    horizon_days: 14,
+    retro_days: 92,
+    trigger_properties: ['orbis/start_at', 'orbis/due_date', 'orbis/occurred_on'],
+    inherit: {
+      'orbis/schedule': [
+        'orbis/start_at',
+        'orbis/end_at',
+        'orbis/duration_min',
+        'orbis/all_day',
+        'orbis/location',
+        'orbis/timezone',
+      ],
+      'orbis/financial': [
+        'orbis/amount',
+        'orbis/currency',
+        'orbis/direction',
+        'orbis/finance_category',
+        'orbis/payment_method',
+        'orbis/counterparty',
+      ],
+    },
+    own: { 'orbis/occurred_on': 'instance_date', 'orbis/planned': true, 'orbis/recurring': true },
+    origin_role: ROLE_INSTANCE_OF,
+  },
+};
+
+/** Зеркало ссылки (§А6-2): ключ подписи в `meta` ребра и пропуск вычисляемых ссылок (Р-11-2). */
+export const RULE_MIRROR_REF: RuleDefinitionInput = {
+  id: 'mirror_ref',
+  template: 'mirror_relation',
+  undo: 'skip',
+  params: { meta_key: 'property', skip_computed: true },
+};
+
+/** Переход периода (§3.5): параметры переноса. Дом у них теперь один — здесь, а не в схеме подписки (Р-К-9). */
+export const RULE_ROLLOVER: RuleDefinitionInput = {
+  id: 'budget_rollover',
+  template: 'rollover',
+  undo: 'skip',
+  params: { source: 'exact_calendar_month', carry: { agg: 'remaining' } },
+};
+
+// Метки каталога на ролях: ПАРАМЕТРОВ нет — значения живут в `role.constraints` и работают с среза А
+// (`executor/relations.ts`). Строка нужна каталогу (§Б4-3 перечисляет двенадцать шаблонов), а второе
+// место для значения завело бы ровно ту копию знания, которую реформа снимает (РЧ-13-4).
+export const RULE_DEPENDENCY_ACYCLIC: RuleDefinitionInput = {
+  id: 'dependency_acyclic',
+  template: 'acyclic',
+  undo: 'skip',
+  params: {},
+};
+export const RULE_CATEGORY_PARENT_ACYCLIC: RuleDefinitionInput = {
+  id: 'category_parent_acyclic',
+  template: 'acyclic',
+  undo: 'skip',
+  params: {},
+};
+export const RULE_ENVELOPE_BINDING_MAX_INCOMING: RuleDefinitionInput = {
+  id: 'envelope_binding_max_incoming',
+  template: 'target_max_incoming',
+  undo: 'skip',
+  params: {},
+};
+
+/**
+ * Ключ — id строки-носителя; сиды берут `BUILTIN_RULES_BY_CARRIER[id] ?? []`. Аспекты и роли делят
+ * одну карту: id роли (`ref`, `dependency`) — слаг без пространства имён, id аспекта — `orbis/…`, и
+ * столкнуться им не на чем.
+ */
 export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefinitionInput[]>> = {
   'orbis/financial': [
     RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
     RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   ],
   'orbis/task': [RULE_TASK_COMPLETED_AT],
-  'orbis/budget': [RULE_ENVELOPE_UNIQUE],
+  'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER],
+  'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
+  'orbis/schedule': [RULE_MATERIALIZE],
+  ref: [RULE_MIRROR_REF],
+  dependency: [RULE_DEPENDENCY_ACYCLIC],
+  'category-parent': [RULE_CATEGORY_PARENT_ACYCLIC],
+  'envelope-binding': [RULE_ENVELOPE_BINDING_MAX_INCOMING],
 };

@@ -6,19 +6,19 @@
  * внутри целого», «тикет проекта», «прогон исполнителя», «транзакция в конверте», «дерево
  * категорий» — раньше их различали по аспектам концов, то есть догадкой.
  *
- * Ограничения среза А РАБОТАЮТ, а не лежат: `target_max_incoming` (переезд доменного
- * инварианта «один budget-parent» из кода в реестр) и `acyclic` включены Задачей 7a и
- * пиннятся `executor/relations.test.ts`; `acyclic` у `category-parent` — при этом НОВОЕ
- * поведение: до реформы циклы в дереве категорий не запрещались ничем, кроме visited-set в
- * агрегатах. Контракты приехали срезом Б-1 (`contract_definitions` засеян), но
- * `source_contract`/`target_contract` по-прежнему НЕ проверяются: их проверка — срез Б-2,
- * вместе с правилами каталога. Причина другая, чем была в срезе А: не «контрактов нет», а
- * «читателя ограничения ещё не написали».
+ * Ограничения среза А РАБОТАЮТ: `target_max_incoming` и `acyclic` включены Задачей 7a и пиннятся
+ * `executor/relations.test.ts` (`acyclic` у `category-parent` — НОВОЕ с реформы поведение: до неё
+ * циклы в дереве категорий не запрещались ничем, кроме visited-set в агрегатах). С Б-2 у каждого из
+ * них есть СТРОКА КАТАЛОГА на той же роли — метка без параметров: каталог перечисляет двенадцать
+ * шаблонов (§Б4-3), а значение ограничения остаётся здесь, в `constraints`, одним экземпляром.
+ * `source_contract`/`target_contract` по-прежнему НЕ проверяются: контракты засеяны срезом Б-1, а
+ * читателя ограничения на записи ребра ещё не написали.
  *
  * `rank` — позиция в `RELATION_ROLE_IDS`, см. шапку `builtin-properties.ts`.
  */
 import type { z } from 'zod';
 import { HIERARCHICAL_ROLE_IDS, RELATION_ROLE_IDS, type RelationRoleId } from '../constants';
+import { BUILTIN_RULES_BY_CARRIER } from './builtin-rules';
 import { type RelationRoleDefinition, relationRoleDefinitionSchema } from './property-type';
 
 type RoleEntry = Omit<
@@ -181,6 +181,9 @@ export const BUILTIN_RELATION_ROLE_META: readonly RelationRoleDefinition[] = ENT
       // они не должны.
       hierarchical: HIERARCHICAL.has(entry.id),
       rank: index + 1,
+      // Строки каталога на ролях (§Б4-1) — тем же путём, что у аспектов (`builtin-aspects.ts`):
+      // метки `acyclic`/`target_max_incoming` и параметры зеркала ссылки (`mirror_relation`).
+      rules: BUILTIN_RULES_BY_CARRIER[entry.id] ?? [],
     }),
 );
 
