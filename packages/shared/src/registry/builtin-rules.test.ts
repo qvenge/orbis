@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import {
+  BUILTIN_RULE_REQUIRES,
   BUILTIN_RULES_BY_CARRIER,
   RULE_ASSIGNMENT_GRANT_FORBIDDEN,
   RULE_ASSIGNMENT_GRANT_REQUIRED,
@@ -116,5 +117,20 @@ describe('системные строки каталога правил (§Б4-1
       'check',
       undefined,
     ]);
+  });
+
+  test('зависимости включённости называют существующие правила ОДНОГО носителя (Fable M-2 задачи 14)', () => {
+    // Сторож записи (`registry/ops.ts`) спрашивает пару по снимку: имя, которого в каталоге нет, делало
+    // бы зависимость вечно невыполненной (запись правил падала бы), а пара на двух носителях — не пара.
+    const carrierOf = new Map(
+      Object.entries(BUILTIN_RULES_BY_CARRIER).flatMap(([c, rules]) => rules.map((r) => [r.id, c])),
+    );
+    expect(Object.keys(BUILTIN_RULE_REQUIRES)).toEqual(['waiting_for_only_when_waiting']);
+    for (const [rule, needs] of Object.entries(BUILTIN_RULE_REQUIRES)) {
+      for (const need of needs) {
+        expect([rule, carrierOf.get(need)]).toEqual([rule, carrierOf.get(rule)]);
+      }
+    }
+    expect(BUILTIN_RULE_REQUIRES[RULE_TASK_WAITING_ONLY.id]).toEqual([RULE_TASK_WAITING_FOR.id]);
   });
 });

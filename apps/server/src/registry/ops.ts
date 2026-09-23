@@ -35,6 +35,8 @@ import {
   aspectDefinitionSchema,
   assertPatternRegular,
   attachToolName,
+  BUILTIN_RULE_REQUIRES,
+  canonicalJson,
   checkClassMap,
   checkImplements,
   exclusiveClassIssues,
@@ -48,6 +50,10 @@ import {
   type PropertyType,
   propertyDefinitionSchema,
   ROLE_REF,
+  type RuleCarrier,
+  type RuleDefinition,
+  type RuleDefinitionInput,
+  ruleDefinitionSchema,
   type SubscriptionDefinition,
 } from '@orbis/shared';
 import {
@@ -59,7 +65,12 @@ import {
   readBodyDoc,
   serializeBody,
 } from '@orbis/shared/doc';
-import { type ExprNormalizeRegistry, touchedAddressOf } from '@orbis/shared/expr';
+import {
+  type ExprNode,
+  type ExprNormalizeRegistry,
+  normalizeExpr,
+  touchedAddressOf,
+} from '@orbis/shared/expr';
 import {
   assertStaticQuery,
   maskQuotedValues,
@@ -78,6 +89,8 @@ import { ExecError } from '../errors';
 // Резолвер адреса свойства — ОДИН на исполнитель и на реестр: второй экземпляр правила «своя
 // строка перекрывает встроенную» разъехался бы с первым ровно там, где владелец завёл свою.
 import { resolvePropertyRef } from '../executor/props';
+// Цикла нет: `rules/carriers` берёт из реестра только `rules.ts` и тип снимка.
+import { assertEngineCarriersKept } from '../rules/carriers';
 // Цикла нет: валидатор берёт из `registry/load` только тип строки.
 import { assertSubscription, normalizeSubscriptionExprs } from '../subscriptions/registry';
 // Только тип: вход операции `setOwnAction` — вход тула (эррата реестра §1.10); рантайм-ребра нет.
@@ -93,11 +106,13 @@ import {
   aspectDeltaSchema,
   type ContractDelta,
   contractDeltaSchema,
+  type PropertyDelta,
   type RegistryDelta,
   type RegistryDeltaTargetKind,
   type SubscriptionDelta,
   subscriptionDeltaSchema,
 } from './deltas';
+import { assertAcyclicGraph, dependencyGraph } from './deps-graph';
 import {
   loadRegistryDeltas,
   loadRegistryRows,
@@ -105,6 +120,7 @@ import {
   type RegistrySnapshot,
   type SubscriptionRow,
 } from './load';
+import { assertRule, rulesOf } from './rules';
 // Стадия 2 исполнителя — та же функция на двери `action_set` (литералы шагов, перенос задачи 6).
 import { validateEntityProps } from './validate-props';
 import { bumpOwnerRegistryVersion, readRegistryVersions } from './version';
@@ -297,6 +313,15 @@ export interface PropertyRow {
   module: string | null;
   rank: number;
   flags: Record<string, unknown>;
+  /**
+   * Правила каталога на строке (§Б4-1, колонка 0022) — ради ОДНОГО пути: откат, заново вставляющий
+   * удалённую строку (отклонённое `proposed`, §А10-3), без поля положил бы `rules = '[]'` и молча стёр
+   * правила, заведённые `rule_set` (перенос П-1 задачи 2). Необязательное: журнал append-only, и строки,
+   * записанные в inverse до задачи 16, поля не несут (правил тогда не писал никто — `[]` и был ответ).
+   * При upsert'е поверх ЖИВОЙ строки колонка НЕ перезаписывается (`insertRow`): правило меняет только
+   * `rule_set`/`rule_remove` со своим inverse, и откат `property_update` не вправе откатить чужую правку.
+   */
+  rules?: RuleDefinition[];
   createdAt: string;
 }
 
@@ -318,6 +343,7 @@ function toPropertyRow(r: RawRow): PropertyRow {
     module: (r.module ?? null) as string | null,
     rank: Number(r.rank),
     flags: (r.flags ?? {}) as Record<string, unknown>,
+    rules: (r.rules ?? []) as RuleDefinition[],
     createdAt:
       (r.created_at as Date | string) instanceof Date
         ? (r.created_at as Date).toISOString()
@@ -326,7 +352,7 @@ function toPropertyRow(r: RawRow): PropertyRow {
 }
 
 const ROW_COLUMNS = sql`id, key, label, description, type, status, storage, scope,
-                        merged_into, module, rank, flags, created_at`;
+                        merged_into, module, rank, flags, rules, created_at`;
 
 /**
  * СВОЯ строка свойства владельца — вход всех правок. `graph_id = …` в запросе стоит рядом с
@@ -487,16 +513,19 @@ async function insertRow(
             scope = EXCLUDED.scope, merged_into = EXCLUDED.merged_into,
             module = EXCLUDED.module, rank = EXCLUDED.rank, flags = EXCLUDED.flags`
     : sql``;
+  // `rules` едет в INSERT (повторная вставка удалённой строки возвращает её правила), но НЕ в
+  // `DO UPDATE SET` выше: у живой строки правила правит только `rule_set`/`rule_remove` (докблок поля).
   await tx.execute(sql`
     INSERT INTO property_definitions
       (id, graph_id, key, label, description, type, status, storage, scope, merged_into,
-       module, rank, flags, created_at)
+       module, rank, flags, rules, created_at)
     VALUES (${row.id}, ${graphId}::uuid, ${row.key}, ${JSON.stringify(row.label)}::jsonb,
             ${JSON.stringify(row.description)}::jsonb, ${JSON.stringify(row.type)}::jsonb,
             ${row.status}, ${row.storage},
             ${row.scope === null ? null : JSON.stringify(row.scope)}::jsonb,
             ${row.mergedInto}, ${row.module}, ${row.rank},
-            ${JSON.stringify(row.flags)}::jsonb, ${row.createdAt}::timestamptz)
+            ${JSON.stringify(row.flags)}::jsonb, ${JSON.stringify(row.rules ?? [])}::jsonb,
+            ${row.createdAt}::timestamptz)
     ${conflict}`);
 }
 
@@ -676,6 +705,7 @@ export async function createProperty(
     module: input.module ?? null,
     rank,
     flags: {},
+    rules: [],
     createdAt: new Date().toISOString(),
   };
   await assertRegistryStaysReadable(tx, graphId, row.id, row);
@@ -2015,6 +2045,20 @@ export async function setAspectDelta(
     touched.has(String(i.details.propertyId)),
   );
   if (exclusive !== undefined) throw execErrorOfImplementsIssue(exclusive, { aspect: aspectId });
+  // ПРАВИЛА ДЕЛЬТЫ (§Б4-1, В-6) — ЗДЕСЬ, а не у `rule_set`: сюда приходят И тул `aspect_delta_set`, И
+  // единица разрешения конфликта правил (`merge-conflict.ts`), И `setRuleDelta`; второй экземпляр
+  // валидатора разошёлся бы с этим на первой же новой проверке. Снимок «до» — те же строки с живыми
+  // дельтами: сторожа носителей и пар меряют СДВИГ, а не состояние.
+  assertDeltaRulesWrite(
+    applyDeltas(
+      { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
+      existing,
+    ),
+    applied,
+    { kind: 'aspect', id: aspectId },
+    normalized,
+    target.rules,
+  );
 
   await tx.execute(sql`
     INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
@@ -2417,6 +2461,580 @@ export async function removeOwnSubscription(tx: Tx, graphId: GraphId, id: string
 }
 
 // ---------------------------------------------------------------------------
+// Правила каталога владельца (§Б4-1, §С3 строка «Правило», В-6, Р-2, Р-2а)
+// ---------------------------------------------------------------------------
+
+/** Таблица-носитель по роду цели: правила живут в трёх реестрах (§Б4-1), а запрос обязан быть один. */
+const RULE_TABLE = {
+  aspect: sql`aspect_definitions`,
+  property: sql`property_definitions`,
+  role: sql`relation_role_definitions`,
+} as const;
+
+/**
+ * Правила СВОЕЙ строки и её id; `null` — своей строки по адресу нет, значит цель встроенная. Адрес —
+ * id ИЛИ key: у своего свойства это разные строки (Р3), и перекрыть одно другим у владельца нечем
+ * (оба уникальны среди его строк, а key без слэша не бывает).
+ */
+async function readOwnRules(
+  tx: Tx,
+  graphId: GraphId,
+  t: RuleCarrier,
+): Promise<{ id: string; rules: RuleDefinition[] } | null> {
+  const rows = (await tx.execute(sql`SELECT id, rules FROM ${RULE_TABLE[t.kind]}
+     WHERE graph_id = ${graphId}::uuid AND (id = ${t.id} OR key = ${t.id})`)) as unknown as RawRow[];
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : { id: row.id as string, rules: (row.rules ?? []) as RuleDefinition[] };
+}
+
+/**
+ * Строка словаря по id ИЛИ key; своя перекрывает встроенную. Обобщение `resolvePropertyRef`
+ * (`executor/props.ts`) на аспекты, роли и контракты: адрес правила владелец и модель называют тем
+ * именем, которым видели строку (Р3), и правило резолва обязано быть ОДНО — второй экземпляр разошёлся
+ * бы с ним на первой же коллизии key.
+ */
+function byIdOrKey<T extends { id: string; key: string; graphId: string | null }>(
+  dict: ReadonlyMap<string, T>,
+  address: string,
+): T | undefined {
+  let byKey: T | undefined;
+  for (const def of dict.values()) {
+    if (def.key !== address) continue;
+    if (byKey === undefined || (byKey.graphId === null && def.graphId !== null)) byKey = def;
+  }
+  return byKey ?? dict.get(address);
+}
+
+/**
+ * Копия снимка с подменённым списком правил носителя — «как читалось бы после правки» (вход `assertRule`:
+ * конфликт и цикл видны только на ПОЛНОМ списке строки, не на одном правиле). Снимок не мутируется.
+ * Элементы могут быть СЫРЫМИ (вход тула): форму называет `assertRule`, а читатели снимка (`rulesOf`)
+ * разбирают мягко.
+ */
+function withCarrierRules(
+  reg: RegistrySnapshot,
+  t: RuleCarrier,
+  rules: readonly unknown[],
+): RegistrySnapshot {
+  const next = rules as RuleDefinition[];
+  if (t.kind === 'aspect') {
+    const def = byIdOrKey(reg.aspects, t.id);
+    if (def === undefined)
+      throw new ExecError('NOT_FOUND', `аспекта ${t.id} нет в реестре`, { target: t });
+    return { ...reg, aspects: new Map(reg.aspects).set(def.id, { ...def, rules: next }) };
+  }
+  if (t.kind === 'property') {
+    const def = resolvePropertyRef(reg, t.id);
+    if (def === undefined)
+      throw new ExecError('NOT_FOUND', `свойства ${t.id} нет в реестре`, { target: t });
+    return { ...reg, properties: new Map(reg.properties).set(def.id, { ...def, rules: next }) };
+  }
+  const def = byIdOrKey(reg.roles, t.id);
+  if (def === undefined)
+    throw new ExecError('NOT_FOUND', `роли ${t.id} нет в реестре`, { target: t });
+  return { ...reg, roles: new Map(reg.roles).set(def.id, { ...def, rules: next }) };
+}
+
+/**
+ * АДРЕСА СВОЙСТВ В ПРАВИЛЕ — ОДИН ОБХОД НА ТРИ ВОПРОСА: «что правило называет» (перечень держателей,
+ * `propertyNamesInRule`), «переписать при слиянии» (`rewriteRuleAddresses`) и «привести к id на записи»
+ * (`normalizeRule`). Три обхода разъехались бы — ровно так уже случилось с дельтой, которую видел граф
+ * и не видело слияние.
+ *
+ * Обход по ФОРМЕ шаблонов, а не рекурсией по ключу `prop`: адреса параметров лежат ГОЛЫМИ строками
+ * (`params.property`, `params.set.property`, `params.enter.property`, `params.properties[]`,
+ * `params.on_leave.unset[]`, область `scope.property`), и рекурсия прошла бы мимо них, а выражения
+ * (`when`, `params.value`, `params.set.value`) — наоборот, только деревом. Формы шаблонов-носителей
+ * (`targets`, `trigger_properties`, `inherit`, КЛЮЧИ `own`) читаются ЗДЕСЬ ЖЕ: каталог пускает их и на
+ * свой аспект владельца, а держатель, не видящий адреса, который каталог адресует, — ровно та молчаливая
+ * дыра слияния, от которой заведён весь перечень. Вход бывает СЫРЫМ (jsonb реестра, вход тула), поэтому
+ * каждое место читается защитно — формы тут никто не обещал.
+ */
+function mapRuleAddresses(
+  rule: RuleDefinition,
+  addr: (address: string) => string,
+  expr: (value: unknown) => unknown,
+): RuleDefinition {
+  const one = (v: unknown): unknown => (typeof v === 'string' ? addr(v) : v);
+  const list = (v: unknown): unknown => (Array.isArray(v) ? v.map(one) : v);
+  const obj = (v: unknown, fn: (o: Record<string, unknown>) => unknown): unknown =>
+    typeof v === 'object' && v !== null && !Array.isArray(v) ? fn(v as Record<string, unknown>) : v;
+  const raw = rule as unknown as Record<string, unknown>;
+  const p = { ...((raw.params ?? {}) as Record<string, unknown>) };
+  if ('property' in p) p.property = one(p.property);
+  if ('properties' in p) p.properties = list(p.properties);
+  if ('value' in p) p.value = expr(p.value);
+  if ('trigger_properties' in p) p.trigger_properties = list(p.trigger_properties);
+  if ('set' in p) {
+    p.set = obj(p.set, (x) => ({
+      ...x,
+      ...('property' in x && { property: one(x.property) }),
+      ...('value' in x && { value: expr(x.value) }),
+    }));
+  }
+  if ('enter' in p) {
+    p.enter = obj(p.enter, (x) => ({
+      ...x,
+      ...('property' in x && { property: one(x.property) }),
+    }));
+  }
+  if ('on_leave' in p) {
+    p.on_leave = obj(p.on_leave, (x) => ({ ...x, ...('unset' in x && { unset: list(x.unset) }) }));
+  }
+  if ('targets' in p) {
+    p.targets = obj(p.targets, (x) => ({
+      ...x,
+      ...('parent' in x && { parent: one(x.parent) }),
+      ...('root' in x && { root: one(x.root) }),
+    }));
+  }
+  if ('inherit' in p) {
+    p.inherit = obj(p.inherit, (m) =>
+      Object.fromEntries(Object.entries(m).map(([aspectId, ids]) => [aspectId, list(ids)])),
+    );
+  }
+  // Ключи карты `own` — адреса свойств. СТОЛКНОВЕНИЕ (после переименования два ключа сошлись в один)
+  // разрешается в пользу ключа, который УЖЕ был целью, — правило `renameKeys` у `rewriteDelta`: запись
+  // цели относится к тому, что живёт.
+  if ('own' in p) {
+    p.own = obj(p.own, (m) => {
+      const next: Record<string, unknown> = {};
+      for (const [id, v] of Object.entries(m)) if (addr(id) === id) next[id] = v;
+      for (const [id, v] of Object.entries(m)) {
+        const to = addr(id);
+        if (to !== id && next[to] === undefined) next[to] = v;
+      }
+      return next;
+    });
+  }
+  const scope = obj(raw.scope, (x) => ('property' in x ? { ...x, property: one(x.property) } : x));
+  return {
+    ...raw,
+    ...('when' in raw && raw.when !== undefined && { when: expr(raw.when) }),
+    ...(raw.scope !== undefined && { scope }),
+    params: p,
+  } as unknown as RuleDefinition;
+}
+
+/**
+ * Переписать имя свойства в правиле — РОВНО по тем местам, что читает `propertyNamesInRule` (один
+ * обход): разъехавшись, эти двое дали бы держателя, найденного и не переписанного, то есть правило,
+ * указывающее на поглощённое свойство навсегда. Выражения переписывает `rewriteAst` (ключи
+ * `prop`/`has`/`field` и член `$touched`, Ф-Б2-26); цель — ИДЕНТИФИКАТОР (§А5-7: «в дереве лежат id»),
+ * потому что правило хранит канон, а движок ищет свойство по id.
+ */
+export function rewriteRuleAddresses(
+  rule: RuleDefinition,
+  from: ReadonlySet<string>,
+  to: string,
+): RuleDefinition {
+  return mapRuleAddresses(
+    rule,
+    (a) => (from.has(a) ? to : a),
+    (e) => rewriteAst(e, from, to),
+  );
+}
+
+/**
+ * ИМЕНА → ИДЕНТИФИКАТОРЫ ДО ЗАПИСИ (§А5-2): модели и владельцу поверхности говорят KEY
+ * (`property_catalog`), а у своего свойства id — uuid (Р3), и без резолва первое же своё свойство в
+ * правиле получало бы «нет такого свойства». Тот же обход, что у слияния, плюс `normalizeExpr` для
+ * выражений (роли `has_relation`, контракты `class`, база и чтение `deref`) и адрес области. Неизвестное
+ * имя остаётся как есть — отказ называет валидатор (довод `normalizeExpr`). Нормализуется только
+ * РАЗОБРАННОЕ правило: сырой вход с испорченным деревом уронил бы обход `TypeError`'ом, а форму
+ * называет `assertRule`.
+ */
+function normalizeRuleInput(raw: unknown, reg: RegistrySnapshot): unknown {
+  const parsed = ruleDefinitionSchema.safeParse(raw);
+  if (!parsed.success) return raw;
+  const exprReg = exprNormalizeRegistryOf(reg);
+  const rule = mapRuleAddresses(
+    parsed.data,
+    (a) => resolvePropertyRef(reg, a)?.id ?? a,
+    (e) => normalizeExpr(e as ExprNode, exprReg),
+  );
+  const s = rule.scope;
+  if (s === undefined || 'property' in s) return rule;
+  const scope =
+    'aspect' in s
+      ? { aspect: byIdOrKey(reg.aspects, s.aspect)?.id ?? s.aspect }
+      : 'role' in s
+        ? { role: byIdOrKey(reg.roles, s.role)?.id ?? s.role }
+        : { contract: byIdOrKey(reg.contracts, s.contract)?.id ?? s.contract };
+  return { ...rule, scope };
+}
+
+/** Разобранное правило ЛИБО отказ валидатора: zod-ошибка без перевода уехала бы пятисоткой. */
+function parsedRuleOrRefusal(
+  raw: unknown,
+  reg: RegistrySnapshot,
+  carrier: RuleCarrier,
+): RuleDefinition {
+  const r = ruleDefinitionSchema.safeParse(raw);
+  // Неразобравшееся называет валидатор: строка в E-позиции — `SECOND_LANGUAGE`, прочее — `RULE_MALFORMED`.
+  return r.success ? r.data : assertRule(raw, { reg, carrier, systemSeed: false });
+}
+
+/**
+ * ЗАВИСИМОСТИ ВКЛЮЧЁННОСТИ СИСТЕМНЫХ ПРАВИЛ (Fable M-2 задачи 14): правило из `BUILTIN_RULE_REQUIRES`
+ * включённым без своих опор быть не может — пара «чего ждём» иначе ломает ответ на чекпойнт агент-лупа
+ * (уход из ожидания без снятия вопроса → `INVARIANT`). Мерка — сдвиг (довод `assertEngineCarriersKept`):
+ * отказ получает запись, которая пару РАЗРЫВАЕТ, а не та, что застала её разорванной.
+ */
+function assertRulePairsKept(before: RegistrySnapshot, after: RegistrySnapshot): void {
+  const enabledIn = (reg: RegistrySnapshot) =>
+    new Set(
+      rulesOf(reg)
+        .filter((r) => r.rule.enabled)
+        .map((r) => r.rule.id),
+    );
+  const was = enabledIn(before);
+  const now = enabledIn(after);
+  for (const [rule, needs] of Object.entries(BUILTIN_RULE_REQUIRES)) {
+    const missing = needs.filter((n) => !now.has(n));
+    if (!now.has(rule) || missing.length === 0) continue;
+    if (was.has(rule) && needs.some((n) => !was.has(n))) continue;
+    throw new ExecError(
+      'VALIDATION',
+      `правило «${rule}» держится на «${missing.join('», «')}»: без него запрет оставил бы запись, которую нельзя вывести из состояния, — сперва отключите «${rule}» (включать — в обратном порядке)`,
+      { reason: 'RULE_PAIR_REQUIRED', rule, requires: missing },
+    );
+  }
+}
+
+/**
+ * ИНВАРИАНТЫ СНИМКА ПОСЛЕ ПРАВКИ ПРАВИЛ — общие для всех писателей правил владельца: круг
+ * «свойство → правило → свойство» (свойство ВСЕГО графа, `REGISTRY_CYCLE` — врезка Р-3), строки-носители
+ * движков (эррата Ф-Б2-24) и пары включённости (Fable M-2 задачи 14).
+ */
+function assertRuleInvariants(before: RegistrySnapshot, after: RegistrySnapshot): void {
+  assertAcyclicGraph(dependencyGraph(after, { queryRefs: new Map() }));
+  assertEngineCarriersKept(before, after);
+  assertRulePairsKept(before, after);
+}
+
+/**
+ * ПРАВИЛА В ДЕЛЬТЕ НОСИТЕЛЯ — проверка на записи (Р-И-7: `applyDeltas` правило принимает молча, и
+ * неверное запирало бы записи владельца на КАЖДОЙ мутации, а не на этой). Зовётся ТОЛЬКО когда
+ * эффективный список носителя сменился: правка иконки аспекта не обязана перепроверять правила,
+ * которые приняли раньше (устаревшее правило назовёт следующая правка самих правил).
+ *
+ * Своё правило с id СИСТЕМНОГО — отказ `RULE_SYSTEM_IMMUTABLE`: вместе с отключением системного оно
+ * было бы правкой системного правила мимо запрета §Б4-4. Отключение id, которого у носителя нет, —
+ * `NOT_FOUND`: молчаливый успех оставил бы владельца с «отключил, а оно работает» (опечатка в id).
+ */
+function assertDeltaRulesWrite(
+  before: RegistrySnapshot,
+  after: RegistrySnapshot,
+  carrier: RuleCarrier,
+  delta: { rules?: RuleDefinition[]; rulesDisabled?: string[] },
+  systemRules: readonly RuleDefinition[],
+): void {
+  const system = new Set(systemRules.map((r) => r.id));
+  const own = delta.rules ?? [];
+  // Отключение неизвестного id эффективного списка НЕ меняет — поэтому проверяется ДО выхода по
+  // «список тот же», иначе опечатка проходила бы молча.
+  for (const id of delta.rulesDisabled ?? []) {
+    if (!system.has(id) && !own.some((r) => r.id === id)) {
+      throw new ExecError('NOT_FOUND', `правила «${id}» на ${carrier.id} нет — отключать нечего`, {
+        target: carrier,
+        rule: id,
+      });
+    }
+  }
+  const rulesAt = (r: RegistrySnapshot) =>
+    (carrier.kind === 'aspect' ? r.aspects : r.properties).get(carrier.id)?.rules ?? [];
+  if (canonicalJson(rulesAt(before)) === canonicalJson(rulesAt(after))) return;
+  for (const rule of own) {
+    if (system.has(rule.id)) {
+      throw new ExecError(
+        'VALIDATION',
+        `системное правило «${rule.id}» правится только релизом — его можно отключить (§Б4-4)`,
+        { reason: 'RULE_SYSTEM_IMMUTABLE', rule: rule.id },
+      );
+    }
+    assertRule(rule, { reg: after, carrier, systemSeed: false });
+  }
+  assertRuleInvariants(before, after);
+}
+
+/**
+ * UPDATE колонки `rules` своей строки и версия — ОДНОЙ транзакцией (§А10-1, инвариант кеша
+ * `registry/cache.ts`): иначе процесс на той же базе продолжил бы отдавать снимок без правила.
+ */
+async function writeOwnRules(
+  tx: Tx,
+  graphId: GraphId,
+  t: RuleCarrier,
+  rules: RuleDefinition[],
+): Promise<void> {
+  await tx.execute(sql`UPDATE ${RULE_TABLE[t.kind]} SET rules = ${JSON.stringify(rules)}::jsonb
+     WHERE graph_id = ${graphId}::uuid AND id = ${t.id}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
+}
+
+/**
+ * Правило на СВОЕЙ строке (§Б4-1): UPDATE колонки `rules` заменой по id (§С3 «правит заменой»). Смысл
+ * проверяется ДО записи (Р-И-7): на записи владелец видит отказ, на чтении — запертый реестр. Порядок —
+ * образца `setOwnSubscription`: снимок-проба С ДЕЛЬТАМИ → нормализация адресов → валидатор → инварианты
+ * снимка → запись → версия.
+ */
+export async function setOwnRule(
+  tx: Tx,
+  graphId: GraphId,
+  target: RuleCarrier,
+  rule: RuleDefinitionInput,
+): Promise<{ carrier: RuleCarrier; rule: RuleDefinition }> {
+  const own = await readOwnRules(tx, graphId, target);
+  if (own === null) throw new ExecError('NOT_FOUND', `своей строки ${target.id} нет`, { target });
+  const carrier: RuleCarrier = { kind: target.kind, id: own.id };
+  const before = await probeSnapshot(tx, graphId, await loadRegistryRows(tx, graphId));
+  const candidate = normalizeRuleInput(rule, before);
+  const id = (candidate as { id?: unknown }).id;
+  const rest = own.rules.filter((r) => r.id !== id);
+  const after = withCarrierRules(before, carrier, [...rest, candidate]);
+  const parsed = assertRule(candidate, { carrier, systemSeed: false, reg: after });
+  assertRuleInvariants(before, after);
+  await writeOwnRules(tx, graphId, carrier, [...rest, parsed]);
+  return { carrier, rule: parsed };
+}
+
+/**
+ * Снятие своего правила: тот же `writeOwnRules` со списком БЕЗ него. Возвращает снятое — им наполняется
+ * inverse журнала (§С3 «правит заменой» ⇒ обратное к снятию это возврат ТОЙ ЖЕ декларации).
+ */
+export async function removeOwnRule(
+  tx: Tx,
+  graphId: GraphId,
+  target: RuleCarrier,
+  ruleId: string,
+): Promise<RuleDefinition | null> {
+  const own = await readOwnRules(tx, graphId, target);
+  if (own === null) throw new ExecError('NOT_FOUND', `своей строки ${target.id} нет`, { target });
+  const gone = own.rules.find((r) => r.id === ruleId);
+  // ПРАВИЛА С ТАКИМ id НЕ БЫЛО — УСПЕХ БЕЗ ЗАПИСИ, а не отказ (Ф-Б1-56, прецедент
+  // `prepareSubscriptionRemove`): состояние на выходе у обоих исходов одно («правила нет»), а владельцу,
+  // сказавшему «убери», отказ «а его и не было» ничего не сообщает. `null` наверх означает пустой
+  // inverse — откат такого action'а не-операция, а не воскрешение из ничего.
+  if (gone === undefined) return null;
+  const carrier: RuleCarrier = { kind: target.kind, id: own.id };
+  const kept = own.rules.filter((r) => r.id !== ruleId);
+  const before = await probeSnapshot(tx, graphId, await loadRegistryRows(tx, graphId));
+  assertRuleInvariants(before, withCarrierRules(before, carrier, kept));
+  await writeOwnRules(tx, graphId, carrier, kept);
+  return gone;
+}
+
+/** Носитель, у которого есть дельта: роль её не имеет (Р-2), и тип это выражает, а не проверка. */
+type DeltaRuleCarrier = { kind: 'aspect' | 'property'; id: string };
+
+/** Отказ на встроенной роли — один текст на оба писателя дельты правил. */
+function refuseSystemRole(target: RuleCarrier): never {
+  throw new ExecError('VALIDATION', 'правила на встроенных ролях правит только сид (§Б4-1)', {
+    reason: 'RULE_TARGET_SYSTEM_ROLE',
+    role: target.id,
+  });
+}
+
+/** Дельта правил без пустых полей: пустой `rulesDisabled` — отсутствие настройки, а не настройка. */
+function compactRuleDelta<T extends { rules?: RuleDefinition[]; rulesDisabled?: string[] }>(
+  d: T,
+): T {
+  const { rules, rulesDisabled, ...rest } = d;
+  return {
+    ...rest,
+    ...(rules !== undefined && rules.length > 0 && { rules }),
+    ...(rulesDisabled !== undefined && rulesDisabled.length > 0 && { rulesDisabled }),
+  } as T;
+}
+
+/**
+ * Правило владельца поверх ВСТРОЕННОЙ строки — дельтой (В-6, Р-2). Роли исключены: схемы дельты роли нет
+ * (`DELTA_SCHEMA.relation_role = null`), и молчать нельзя — владелец увидел бы «не применилось» без причины.
+ * Правило с id СИСТЕМНОГО правила носителя означает «ВКЛЮЧИТЬ ОБРАТНО» (§Б4-4: системное владелец не правит,
+ * только отключает) и принимается лишь при совпадении декларации; иначе — `RULE_SYSTEM_IMMUTABLE`. Это же
+ * обратная операция к `rule_remove` системного правила: без неё «отключить» было бы необратимо (§С3).
+ * Своё правило, записанное заново, снимает и своё отключение (его кладёт пересев, `mergeRules`): «завести
+ * заново» значит «пусть работает», и конфликт с системным назовёт валидатор.
+ */
+export async function setRuleDelta(
+  tx: Tx,
+  graphId: GraphId,
+  target: RuleCarrier,
+  rule: RuleDefinitionInput,
+): Promise<void> {
+  if (target.kind === 'role') refuseSystemRole(target);
+  const carrier: DeltaRuleCarrier = { kind: target.kind, id: target.id };
+  const rows = await loadRegistryRows(tx, graphId);
+  const base = (target.kind === 'aspect' ? rows.aspects : rows.properties).get(target.id)?.rules;
+  if (base === undefined) {
+    throw new ExecError('NOT_FOUND', `строки ${target.id} нет в реестре`, { target });
+  }
+  const prev = ((await readDeltaRow(tx, graphId, carrier.kind, carrier.id)) ?? {}) as {
+    rules?: RuleDefinition[];
+    rulesDisabled?: string[];
+  };
+  const before = await probeSnapshot(tx, graphId, rows);
+  const parsed = parsedRuleOrRefusal(normalizeRuleInput(rule, before), before, target);
+  const system = base.find((r) => r.id === parsed.id);
+  if (system !== undefined && canonicalJson(parsed) !== canonicalJson(system)) {
+    throw new ExecError(
+      'VALIDATION',
+      `системное правило «${system.id}» правится только релизом — его можно отключить (§Б4-4)`,
+      { reason: 'RULE_SYSTEM_IMMUTABLE', rule: system.id },
+    );
+  }
+  // Проверка САМОГО правила — до записи дельты и с теми же кодами, что у своей строки (`RULE_*`):
+  // запись дельты аспекта сперва нормализует адреса и назвала бы опечатку в свойстве правила отказом
+  // ДЕЛЬТЫ. Полный вердикт (инварианты, чужие правила носителя) — у `writeRuleDelta` ниже.
+  const current = (target.kind === 'aspect' ? before.aspects : before.properties).get(target.id);
+  assertRule(parsed, {
+    carrier: target,
+    systemSeed: false,
+    reg: withCarrierRules(before, target, [
+      ...(current?.rules ?? []).filter((r) => r.id !== parsed.id),
+      parsed,
+    ]),
+  });
+  const disabled = (prev.rulesDisabled ?? []).filter((id) => id !== parsed.id);
+  const next =
+    system !== undefined
+      ? { ...prev, rulesDisabled: disabled }
+      : {
+          ...prev,
+          rules: [...(prev.rules ?? []).filter((r) => r.id !== parsed.id), parsed],
+          rulesDisabled: disabled,
+        };
+  await writeRuleDelta(tx, graphId, carrier, compactRuleDelta(next), rows);
+}
+
+/**
+ * «Отключить» (§С3, Р-2а): СВОЁ правило дельты снимается из `rules`, СИСТЕМНОЕ уходит в `rulesDisabled`.
+ * Два признака одного состояния не заводятся: строка своего правила — это сама дельта, и «отключить» её
+ * значило бы хранить выключенное дважды. Правила с таким id на носителе нет вовсе — `NOT_FOUND`: молчаливый
+ * успех оставил бы владельца с «отключил, а оно работает».
+ */
+export async function disableSystemRuleDelta(
+  tx: Tx,
+  graphId: GraphId,
+  target: RuleCarrier,
+  ruleId: string,
+): Promise<void> {
+  if (target.kind === 'role') refuseSystemRole(target);
+  const carrier: DeltaRuleCarrier = { kind: target.kind, id: target.id };
+  const rows = await loadRegistryRows(tx, graphId);
+  const base = (target.kind === 'aspect' ? rows.aspects : rows.properties).get(target.id)?.rules;
+  if (base === undefined) {
+    throw new ExecError('NOT_FOUND', `строки ${target.id} нет в реестре`, { target });
+  }
+  const prev = ((await readDeltaRow(tx, graphId, carrier.kind, carrier.id)) ?? {}) as {
+    rules?: RuleDefinition[];
+    rulesDisabled?: string[];
+  };
+  if ((prev.rules ?? []).some((r) => r.id === ruleId)) {
+    await writeRuleDelta(
+      tx,
+      graphId,
+      carrier,
+      compactRuleDelta({
+        ...prev,
+        rules: (prev.rules ?? []).filter((r) => r.id !== ruleId),
+        rulesDisabled: (prev.rulesDisabled ?? []).filter((id) => id !== ruleId),
+      }),
+      rows,
+    );
+    return;
+  }
+  if (!base.some((r) => r.id === ruleId)) {
+    throw new ExecError('NOT_FOUND', `правила «${ruleId}» на ${target.id} нет`, {
+      target,
+      rule: ruleId,
+    });
+  }
+  await writeRuleDelta(
+    tx,
+    graphId,
+    carrier,
+    { ...prev, rulesDisabled: [...new Set([...(prev.rulesDisabled ?? []), ruleId])] },
+    rows,
+  );
+}
+
+/**
+ * Запись дельты правил, общая для двух родов. У АСПЕКТА — через `setAspectDelta`: там уже стоят
+ * нормализация адресов свойств, `checkClassMap`, проба применимости и проверка правил дельты
+ * (`assertDeltaRulesWrite`), и второй писатель дельты аспекта разошёлся бы с ней на первой же новой
+ * проверке. У СВОЙСТВА писателя не было вовсе — `writeDeltaRow` («безусловность держит уже не их, а
+ * ЧЕТВЁРТЫЙ род») с той же проверкой правил в `check`.
+ */
+async function writeRuleDelta(
+  tx: Tx,
+  graphId: GraphId,
+  target: DeltaRuleCarrier,
+  delta: { rules?: RuleDefinition[]; rulesDisabled?: string[] },
+  rows: RegistryDictionaries,
+): Promise<void> {
+  // ПУСТАЯ дельта правил = ОТСУТСТВИЕ настройки, и строка снимается: пустышка висела бы со своим
+  // `base_version`, а пересев сливал бы её вхолостую и двигал версию владельца на каждом деплое.
+  // Только когда в дельте НЕТ ничего кроме правил: у аспекта та же строка несёт состав, иконку и варианты.
+  // Снятие возвращает носитель к СИСТЕМНОМУ списку, а он проверен сидом (`assertBuiltinRules`).
+  if (
+    Object.keys(delta).every((k) => k === 'rules' || k === 'rulesDisabled') &&
+    (delta.rules ?? []).length === 0 &&
+    (delta.rulesDisabled ?? []).length === 0
+  ) {
+    await removeDeltaRow(tx, graphId, target.kind, target.id);
+    return;
+  }
+  if (target.kind === 'aspect') {
+    await setAspectDelta(tx, graphId, target.id, delta as AspectDelta);
+    return;
+  }
+  const before = await probeSnapshot(tx, graphId, rows);
+  const systemRules = rows.properties.get(target.id)?.rules ?? [];
+  await writeDeltaRow(tx, graphId, 'property', target.id, delta as PropertyDelta, rows, (probe) =>
+    assertDeltaRulesWrite(before, probe, target, delta, systemRules),
+  );
+}
+
+/** Адрес цели правила во входе тула — ровно одна из трёх форм (`ruleTargetSchema`). */
+export type RuleTargetAddress = { aspect: string } | { property: string } | { role: string };
+
+/**
+ * Цель правила по адресу — СВЕЖИМ снимком этой транзакции (`currentRegistry`), а не снимком исполнителя:
+ * тот снят до стадий, и свой аспект, заведённый предыдущей операцией пачки, в нём отсутствует. Ответ —
+ * носитель с КАНОНИЧЕСКИМ id, признак «своя строка» (ветка своя строка ∨ дельта встроенной ∨ отказ на
+ * встроенной роли, Р-21) и эффективные правила носителя (прежняя декларация для inverse).
+ */
+export async function resolveRuleTarget(
+  tx: Tx,
+  graphId: GraphId,
+  target: RuleTargetAddress,
+): Promise<{ carrier: RuleCarrier; own: boolean; rules: readonly RuleDefinition[] }> {
+  const reg = await currentRegistry(tx, graphId);
+  const [kind, address] =
+    'aspect' in target
+      ? (['aspect', target.aspect] as const)
+      : 'property' in target
+        ? (['property', target.property] as const)
+        : (['role', target.role] as const);
+  const def =
+    kind === 'aspect'
+      ? byIdOrKey(reg.aspects, address)
+      : kind === 'property'
+        ? resolvePropertyRef(reg, address)
+        : byIdOrKey(reg.roles, address);
+  if (def === undefined) {
+    throw new ExecError('NOT_FOUND', `носителя правила ${kind}:${address} нет в реестре`, {
+      target,
+    });
+  }
+  return { carrier: { kind, id: def.id }, own: def.graphId !== null, rules: def.rules };
+}
+
+// ---------------------------------------------------------------------------
 // Своё действие владельца (§Б6-1, §С3 строка «Действие»)
 // ---------------------------------------------------------------------------
 
@@ -2661,11 +3279,13 @@ export interface AspectRow {
   module: string | null;
   service: boolean;
   rank: number;
+  /** Правила каталога на строке — тот же довод и та же необязательность, что у `PropertyRow.rules`. */
+  rules?: RuleDefinition[];
   createdAt: string;
 }
 
 const ASPECT_ROW_COLUMNS = sql`id, graph_id, key, label, description, properties, implements,
-  ai_instructions, tag_mappings, view_config, module, service, rank, created_at`;
+  ai_instructions, tag_mappings, view_config, module, service, rank, rules, created_at`;
 
 function toAspectRow(r: RawRow): AspectRow {
   return {
@@ -2681,6 +3301,7 @@ function toAspectRow(r: RawRow): AspectRow {
     module: (r.module ?? null) as string | null,
     service: r.service as boolean,
     rank: Number(r.rank),
+    rules: (r.rules ?? []) as RuleDefinition[],
     createdAt:
       (r.created_at as Date | string) instanceof Date
         ? (r.created_at as Date).toISOString()
@@ -2923,6 +3544,7 @@ export async function createAspect(
     module: null,
     service: false,
     rank: Math.max(0, ...[...reg.aspects.values()].map((a) => a.rank)) + 1,
+    rules: [],
     createdAt: new Date().toISOString(),
   };
   assertImplements(row, graphId, reg);
@@ -3048,16 +3670,17 @@ async function insertAspectRow(
             view_config = EXCLUDED.view_config, module = EXCLUDED.module,
             service = EXCLUDED.service, rank = EXCLUDED.rank`
     : sql``;
+  // `rules` — в INSERT, но не в `DO UPDATE SET`: довод `insertRow` свойств (перенос П-1 задачи 2).
   await tx.execute(sql`
     INSERT INTO aspect_definitions
       (id, graph_id, key, label, description, properties, implements, ai_instructions,
-       tag_mappings, view_config, module, service, rank, created_at)
+       tag_mappings, view_config, module, service, rank, rules, created_at)
     VALUES (${row.id}, ${graphId}::uuid, ${row.key}, ${JSON.stringify(row.label)}::jsonb,
             ${JSON.stringify(row.description)}::jsonb, ${JSON.stringify(row.properties)}::jsonb,
             ${JSON.stringify(row.implements)}::jsonb, ${row.aiInstructions},
             ${row.tagMappings.length === 0 ? sql`ARRAY[]::text[]` : textArray(row.tagMappings)},
             ${JSON.stringify(row.viewConfig)}::jsonb, ${row.module}, ${row.service},
-            ${row.rank}, ${row.createdAt}::timestamptz)
+            ${row.rank}, ${JSON.stringify(row.rules ?? [])}::jsonb, ${row.createdAt}::timestamptz)
     ${conflict}`);
 }
 

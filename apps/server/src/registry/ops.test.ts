@@ -9,10 +9,13 @@ import {
   type AgendaSubscription,
   addDays,
   BUDGET_DEF,
+  BUILTIN_RULES_BY_CARRIER,
   BUILTIN_SUBSCRIPTION_DEFS,
   type BudgetSubscription,
   newId,
+  type RuleDefinitionInput,
   rowProjectionOf,
+  ruleDefinitionSchema,
   type SubscriptionDefinition,
 } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
@@ -31,7 +34,7 @@ import {
 import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
-import type { ExecError } from '../errors';
+import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
@@ -49,18 +52,25 @@ import type { SubscriptionRow } from './load';
 import {
   collectPropertyHolders,
   deprecateOwnAction,
+  disableSystemRuleDelta,
   execErrorOfImplementsIssue,
   lockOwnerRegistry,
   mergeProperty,
   readActionRow,
   readContractDelta,
+  readOwnAspect,
   readSubscriptionRow,
   removeContractDelta,
+  removeOwnRule,
   removeOwnSubscription,
+  restoreAspectRow,
   rewriteAst,
+  setAspectDelta,
   setContractDelta,
   setOwnAction,
+  setOwnRule,
   setOwnSubscription,
+  setRuleDelta,
   setSubscriptionDelta,
 } from './ops';
 import { readRegistryVersions } from './version';
@@ -4492,5 +4502,426 @@ describe('rewriteAst: адреса свойств при слиянии (§А10-
         { has: 'user/new_date' },
       ],
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Правила владельца (§Б4-1, В-6, Р-2, Р-2а) — задача 16
+// ---------------------------------------------------------------------------
+
+/** Код отказа операции реестра и его причина: `rejects.toThrow` причину не показывает. */
+async function refusalOf(p: Promise<unknown>): Promise<{ code: string; reason?: string }> {
+  try {
+    await p;
+  } catch (e) {
+    if (!(e instanceof ExecError)) throw e;
+    return { code: e.code, reason: (e.details as { reason?: string } | undefined)?.reason };
+  }
+  throw new Error('ожидался отказ, его не было');
+}
+
+describe('правила владельца: своя строка, дельта встроенной, встроенная роль (§Б4-1, В-6)', () => {
+  const OWN = 'user/rule-carrier';
+  const rule = {
+    id: 'needs_due',
+    template: 'requires_when' as const,
+    params: { property: 'orbis/due_date' },
+    when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+  };
+  const inTx = <T>(g: GraphId, fn: (tx: Tx) => Promise<T>): Promise<T> =>
+    withIdentity(db, personal(g), fn);
+  const regNow = (g: GraphId) => inTx(g, (tx) => effectiveRegistry(tx, g));
+  const taskRules = async (g: GraphId) =>
+    (await regNow(g)).aspects.get('orbis/task')?.rules.map((r) => r.id) ?? [];
+  const SYS = BUILTIN_RULES_BY_CARRIER['orbis/task']?.find((r) => r.id === 'task_completed_at');
+  const withOwnAspect = async (): Promise<GraphId> => {
+    const g = await freshGraph();
+    await seedCustomAspect(g, {
+      key: OWN,
+      label: { ru: 'Носитель' },
+      properties: [{ key: 'flag', type: { kind: 'boolean' } }],
+    });
+    return g;
+  };
+
+  test('своя строка: правило в колонке rules, версия двигается, повтор — ЗАМЕНА по id (§С3)', async () => {
+    const g = await withOwnAspect();
+    const before = await inTx(g, (tx) => readRegistryVersions(tx, g));
+    await inTx(g, (tx) => setOwnRule(tx, g, { kind: 'aspect', id: OWN }, rule));
+    expect((await inTx(g, (tx) => readRegistryVersions(tx, g))).ownerVersion).toBe(
+      before.ownerVersion + 1,
+    );
+    await inTx(g, (tx) =>
+      setOwnRule(tx, g, { kind: 'aspect', id: OWN }, { ...rule, enabled: false }),
+    );
+    const kept = (await regNow(g)).aspects.get(OWN)?.rules;
+    expect(kept?.map((r) => r.id)).toEqual(['needs_due']);
+    expect(kept?.[0]?.enabled).toBe(false);
+    expect(
+      await inTx(g, (tx) => removeOwnRule(tx, g, { kind: 'aspect', id: OWN }, 'needs_due')),
+    ).not.toBeNull();
+    expect((await regNow(g)).aspects.get(OWN)?.rules).toEqual([]);
+    // Снятие того, чего нет, — успех без записи (Ф-Б1-56): `null` наверх — пустой inverse.
+    expect(
+      await inTx(g, (tx) => removeOwnRule(tx, g, { kind: 'aspect', id: OWN }, 'needs_due')),
+    ).toBeNull();
+  });
+
+  test('встроенные аспект и свойство: правило едет ДЕЛЬТОЙ и видно снимком', async () => {
+    const g = await freshGraph();
+    await inTx(g, (tx) => setRuleDelta(tx, g, { kind: 'aspect', id: 'orbis/task' }, rule));
+    expect(await taskRules(g)).toContain('needs_due');
+    const onProp = { ...rule, id: 'needs_priority', params: { property: 'orbis/priority' } };
+    await inTx(g, (tx) => setRuleDelta(tx, g, { kind: 'property', id: 'orbis/due_date' }, onProp));
+    expect((await regNow(g)).properties.get('orbis/due_date')?.rules.map((r) => r.id)).toEqual([
+      'needs_priority',
+    ]);
+    // Снятие своего правила дельты уносит и строку дельты, если в ней не осталось ничего.
+    await inTx(g, (tx) =>
+      disableSystemRuleDelta(tx, g, { kind: 'property', id: 'orbis/due_date' }, 'needs_priority'),
+    );
+    const left = (await inTx(g, (tx) =>
+      tx.execute(sql`SELECT count(*)::int AS n FROM registry_deltas
+                     WHERE graph_id = ${g}::uuid AND target_kind = 'property'`),
+    )) as unknown as Array<{ n: number }>;
+    expect(left[0]?.n).toBe(0);
+  });
+
+  test('«отключить» системное — дельта, отменяемая ТОЙ ЖЕ декларацией; правка его — отказ (Р-2а, §Б4-4)', async () => {
+    const g = await freshGraph();
+    const task = { kind: 'aspect' as const, id: 'orbis/task' };
+    await inTx(g, (tx) => disableSystemRuleDelta(tx, g, task, 'task_completed_at'));
+    expect(await taskRules(g)).not.toContain('task_completed_at');
+    await inTx(g, (tx) => setRuleDelta(tx, g, task, SYS as RuleDefinitionInput));
+    expect(await taskRules(g)).toContain('task_completed_at');
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setRuleDelta(tx, g, task, { ...(SYS as RuleDefinitionInput), enabled: false }),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_SYSTEM_IMMUTABLE' });
+    // Отключение id, которого у носителя нет, — NOT_FOUND, а не молчаливый успех.
+    expect(
+      (await refusalOf(inTx(g, (tx) => disableSystemRuleDelta(tx, g, task, 'no_such_rule')))).code,
+    ).toBe('NOT_FOUND');
+  });
+
+  test('встроенная роль — отказ RULE_TARGET_SYSTEM_ROLE (схемы дельты роли нет, Р-2)', async () => {
+    const g = await freshGraph();
+    expect(
+      await refusalOf(
+        inTx(g, (tx) => setRuleDelta(tx, g, { kind: 'role', id: 'dependency' }, rule)),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_TARGET_SYSTEM_ROLE' });
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          disableSystemRuleDelta(tx, g, { kind: 'role', id: 'dependency' }, 'dependency_acyclic'),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_TARGET_SYSTEM_ROLE' });
+  });
+
+  test('два писателя одного события — RULE_CONFLICT; после отключения системного своё принимается', async () => {
+    const g = await freshGraph();
+    const task = { kind: 'aspect' as const, id: 'orbis/task' };
+    const mine = { ...(SYS as RuleDefinitionInput), id: 'my_completed_at' };
+    expect((await refusalOf(inTx(g, (tx) => setRuleDelta(tx, g, task, mine)))).code).toBe(
+      'RULE_CONFLICT',
+    );
+    await inTx(g, (tx) => disableSystemRuleDelta(tx, g, task, 'task_completed_at'));
+    await inTx(g, (tx) => setRuleDelta(tx, g, task, mine));
+    expect(await taskRules(g)).toContain('my_completed_at');
+  });
+
+  test('дверь aspect_delta_set: своё правило с id системного и отключение несуществующего — отказ', async () => {
+    const g = await freshGraph();
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setAspectDelta(tx, g, 'orbis/task', {
+            rules: [
+              ruleDefinitionSchema.parse({ ...(SYS as RuleDefinitionInput), enabled: false }),
+            ],
+            rulesDisabled: ['task_completed_at'],
+          }),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_SYSTEM_IMMUTABLE' });
+    expect(
+      (
+        await refusalOf(
+          inTx(g, (tx) => setAspectDelta(tx, g, 'orbis/task', { rulesDisabled: ['typo_rule'] })),
+        )
+      ).code,
+    ).toBe('NOT_FOUND');
+  });
+
+  test('имя своего свойства в правиле — ключом на входе, ИДЕНТИФИКАТОРОМ в строке (§А5-2)', async () => {
+    const g = await withOwnAspect();
+    const created = ok(
+      await run(
+        'property_create',
+        {
+          key: 'user/effort',
+          label: { ru: 'Усилие' },
+          description: { ru: 'Сколько сил' },
+          type: { kind: 'number' },
+          status: 'active',
+        },
+        { identity: personal(g) },
+      ),
+    ).results[0] as { property: string; key: string };
+    expect(created.property).not.toBe('user/effort'); // у своего свойства id — uuid (Р3)
+    await inTx(g, (tx) =>
+      setOwnRule(
+        tx,
+        g,
+        { kind: 'aspect', id: OWN },
+        {
+          id: 'effort_needs_due',
+          template: 'requires_when',
+          params: { property: 'orbis/due_date' },
+          when: { has: 'user/effort' },
+        },
+      ),
+    );
+    expect((await regNow(g)).aspects.get(OWN)?.rules[0]?.when).toEqual({ has: created.property });
+  });
+});
+
+describe('строки-носители движков и граница C-6 на записи правил (эррата Ф-Б2-24)', () => {
+  const inTx = <T>(g: GraphId, fn: (tx: Tx) => Promise<T>): Promise<T> =>
+    withIdentity(db, personal(g), fn);
+
+  test('выключить носитель параметров движка нельзя — ни rule_remove, ни дельтой (RULE_CARRIER_REQUIRED)', async () => {
+    const g = await freshGraph();
+    for (const [aspect, id] of [
+      ['orbis/project', 'nearest_ancestor'],
+      ['orbis/schedule', 'materialize'],
+      ['orbis/budget', 'budget_rollover'],
+    ] as const) {
+      expect(
+        await refusalOf(
+          inTx(g, (tx) => disableSystemRuleDelta(tx, g, { kind: 'aspect', id: aspect }, id)),
+        ),
+      ).toEqual({ code: 'VALIDATION', reason: 'RULE_CARRIER_REQUIRED' });
+      expect(
+        await refusalOf(inTx(g, (tx) => setAspectDelta(tx, g, aspect, { rulesDisabled: [id] }))),
+      ).toEqual({ code: 'VALIDATION', reason: 'RULE_CARRIER_REQUIRED' });
+    }
+  });
+
+  test('заменить носитель — RULE_SYSTEM_IMMUTABLE; вторая включённая строка шаблона — RULE_CARRIER_DUPLICATE', async () => {
+    const g = await freshGraph();
+    const sys = BUILTIN_RULES_BY_CARRIER['orbis/project']?.[0] as RuleDefinitionInput;
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setRuleDelta(tx, g, { kind: 'aspect', id: 'orbis/project' }, {
+            ...sys,
+            params: {
+              targets: { parent: 'orbis/parent_project', root: 'orbis/root_project' },
+              depth_cap: 8,
+            },
+          } as RuleDefinitionInput),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_SYSTEM_IMMUTABLE' });
+    await seedCustomAspect(g, {
+      key: 'user/tree',
+      label: { ru: 'Дерево' },
+      properties: [{ key: 'depth', type: { kind: 'number' } }],
+    });
+    const second = {
+      id: 'my_ancestors',
+      template: 'nearest_ancestor' as const,
+      params: {
+        targets: { parent: 'orbis/parent_project', root: 'orbis/root_project' },
+        depth_cap: 8,
+      },
+    };
+    expect(
+      await refusalOf(
+        inTx(g, (tx) => setOwnRule(tx, g, { kind: 'aspect', id: 'user/tree' }, second)),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_CARRIER_DUPLICATE' });
+    // Выключенная вторая строка законна: читатель движка её не видит.
+    await inTx(g, (tx) =>
+      setOwnRule(tx, g, { kind: 'aspect', id: 'user/tree' }, { ...second, enabled: false }),
+    );
+  });
+
+  test('уникальность конверта (duplicate_envelope) выключать МОЖНО — она не носитель движка (Ф-Б2-21)', async () => {
+    const g = await freshGraph();
+    await inTx(g, (tx) =>
+      disableSystemRuleDelta(tx, g, { kind: 'aspect', id: 'orbis/budget' }, 'duplicate_envelope'),
+    );
+    const reg = await inTx(g, (tx) => effectiveRegistry(tx, g));
+    expect(reg.aspects.get('orbis/budget')?.rules.map((r) => r.id)).not.toContain(
+      'duplicate_envelope',
+    );
+  });
+
+  test('C-6: ограничение владельца с has_relation по роли владельца — отказ; по системной — законно', async () => {
+    const g = await freshGraph();
+    const blocked = {
+      id: 'blocked_needs_due',
+      template: 'forbidden_when' as const,
+      params: { property: 'orbis/due_date' },
+      when: { has_relation: { role: 'dependency' } },
+    };
+    expect(
+      await refusalOf(
+        inTx(g, (tx) => setRuleDelta(tx, g, { kind: 'aspect', id: 'orbis/task' }, blocked)),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_RELATION_UNCHECKED' });
+    // Роль `instance-of` ставит только сервер (`created_by: system`) — граница не пробивается.
+    await inTx(g, (tx) =>
+      setRuleDelta(
+        tx,
+        g,
+        { kind: 'aspect', id: 'orbis/task' },
+        {
+          ...blocked,
+          id: 'instance_needs_due',
+          when: { has_relation: { role: 'instance-of' } },
+        },
+      ),
+    );
+    // Переход читать рёбра может: он не делает запись нарушенной, а срабатывает на следующем событии.
+    await inTx(g, (tx) =>
+      setRuleDelta(
+        tx,
+        g,
+        { kind: 'aspect', id: 'orbis/task' },
+        {
+          id: 'blocked_default_due',
+          template: 'default',
+          params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+          when: { has_relation: { role: 'dependency' } },
+        },
+      ),
+    );
+  });
+
+  test('пара «чего ждём»: уборку не выключить при включённом запрете; порядок — сперва запрет (Fable M-2)', async () => {
+    const g = await freshGraph();
+    const task = { kind: 'aspect' as const, id: 'orbis/task' };
+    expect(
+      await refusalOf(inTx(g, (tx) => disableSystemRuleDelta(tx, g, task, 'waiting_for'))),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_PAIR_REQUIRED' });
+    await inTx(g, (tx) => disableSystemRuleDelta(tx, g, task, 'waiting_for_only_when_waiting'));
+    await inTx(g, (tx) => disableSystemRuleDelta(tx, g, task, 'waiting_for'));
+    const only = BUILTIN_RULES_BY_CARRIER['orbis/task']?.find(
+      (r) => r.id === 'waiting_for_only_when_waiting',
+    ) as RuleDefinitionInput;
+    const cleanup = BUILTIN_RULES_BY_CARRIER['orbis/task']?.find(
+      (r) => r.id === 'waiting_for',
+    ) as RuleDefinitionInput;
+    // Включать — в обратном порядке: запрет без уборки тоже разрывает пару.
+    expect(await refusalOf(inTx(g, (tx) => setRuleDelta(tx, g, task, only)))).toEqual({
+      code: 'VALIDATION',
+      reason: 'RULE_PAIR_REQUIRED',
+    });
+    await inTx(g, (tx) => setRuleDelta(tx, g, task, cleanup));
+    await inTx(g, (tx) => setRuleDelta(tx, g, task, only));
+  });
+});
+
+describe('правила в строках и откатах: колонка rules переживает снос и возврат строки (перенос П-1)', () => {
+  test('rule_set на своём proposed → отклонение сносит строку → откат возвращает её С правилами', async () => {
+    const g = await freshGraph();
+    const created = ok(
+      await run(
+        'property_create',
+        {
+          key: 'user/maybe',
+          label: { ru: 'Может быть' },
+          description: { ru: 'Предложение' },
+          type: { kind: 'boolean' },
+          status: 'proposed',
+        },
+        { identity: personal(g) },
+      ),
+    ).results[0] as { property: string };
+    const onRow = {
+      id: 'maybe_needs_due',
+      template: 'requires_when' as const,
+      params: { property: 'orbis/due_date' },
+    };
+    await withIdentity(db, personal(g), (tx) =>
+      setOwnRule(tx, g, { kind: 'property', id: created.property }, onRow),
+    );
+    const rejected = ok(
+      await run(
+        'property_update',
+        { id: created.property, status: 'deprecated' },
+        { identity: personal(g) },
+      ),
+    );
+    const gone = (await withIdentity(db, personal(g), (tx) =>
+      tx.execute(
+        sql`SELECT id FROM property_definitions WHERE graph_id = ${g}::uuid AND id = ${created.property}`,
+      ),
+    )) as unknown as unknown[];
+    expect(gone).toHaveLength(0); // §А10-3: неиспользованное предложение удалено физически
+    expect((await undoAction(db, { identity: personal(g), actionId: rejected.actionId })).ok).toBe(
+      true,
+    );
+    const reg = await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+    expect(reg.properties.get(created.property)?.rules.map((r) => r.id)).toEqual([
+      'maybe_needs_due',
+    ]);
+  });
+
+  test('строка аспекта: снос и возврат через restoreAspectRow несут правила', async () => {
+    const g = await freshGraph();
+    await seedCustomAspect(g, {
+      key: 'user/restorable',
+      label: { ru: 'Возвращаемый' },
+      properties: [{ key: 'mark', type: { kind: 'boolean' } }],
+      rules: [
+        { id: 'mark_needs_due', template: 'requires_when', params: { property: 'orbis/due_date' } },
+      ],
+    });
+    const row = await withIdentity(db, personal(g), (tx) =>
+      readOwnAspect(tx, g, 'user/restorable'),
+    );
+    expect(row?.rules?.map((r) => r.id)).toEqual(['mark_needs_due']);
+    await withIdentity(db, personal(g), (tx) => restoreAspectRow(tx, g, 'user/restorable', null));
+    await withIdentity(db, personal(g), (tx) =>
+      restoreAspectRow(tx, g, 'user/restorable', row ?? null),
+    );
+    const reg = await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+    expect(reg.aspects.get('user/restorable')?.rules.map((r) => r.id)).toEqual(['mark_needs_due']);
+  });
+
+  test('upsert отката поверх ЖИВОЙ строки правил не трогает: их меняет только rule_set', async () => {
+    const g = await freshGraph();
+    await seedCustomAspect(g, {
+      key: 'user/live',
+      label: { ru: 'Живой' },
+      properties: [{ key: 'live_mark', type: { kind: 'boolean' } }],
+    });
+    const stale = await withIdentity(db, personal(g), (tx) => readOwnAspect(tx, g, 'user/live'));
+    await withIdentity(db, personal(g), (tx) =>
+      setOwnRule(
+        tx,
+        g,
+        { kind: 'aspect', id: 'user/live' },
+        {
+          id: 'live_needs_due',
+          template: 'requires_when',
+          params: { property: 'orbis/due_date' },
+        },
+      ),
+    );
+    await withIdentity(db, personal(g), (tx) =>
+      restoreAspectRow(tx, g, 'user/live', stale ?? null),
+    );
+    const reg = await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+    expect(reg.aspects.get('user/live')?.rules.map((r) => r.id)).toEqual(['live_needs_due']);
   });
 });

@@ -43,7 +43,7 @@ import type { MutationMechanism } from '../executor/types';
 import { type ExprEvalScope, evalExpr, present } from '../expr/eval';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import type { RegistrySnapshot } from '../registry/load';
-import { effectiveRuleScope, rulesOf } from '../registry/rules';
+import { CONSTRAINT_TEMPLATE_LIST, effectiveRuleScope, rulesOf } from '../registry/rules';
 import { bindingsOf } from '../subscriptions/budget';
 import {
   CORE_PROJECTION,
@@ -89,8 +89,9 @@ const TRANSITION_TEMPLATES: ReadonlySet<string> = new Set(['on_enter_class', 'de
  * Род `constraint` — литеральным кортежем, а не голым множеством строк: из него выводится тип
  * `ConstraintRule`, по которому диспетчер `assertConstraintRules` исчерпывает шаблоны `never`-веткой.
  * Шаблон, дописанный сюда без ветки диспетчера, — ошибка компиляции, а не молчаливый пропуск.
+ * Сам кортеж живёт у валидатора (`registry/rules.ts`): его спрашивает и граница C-6 на записи правила,
+ * и два списка одного рода разошлись бы на первом же новом шаблоне.
  */
-const CONSTRAINT_TEMPLATE_LIST = ['requires_when', 'forbidden_when', 'unique_among'] as const;
 type ConstraintRule = Extract<
   RuleDefinition,
   { template: (typeof CONSTRAINT_TEMPLATE_LIST)[number] }

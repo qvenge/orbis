@@ -117,6 +117,16 @@ export function rulesOf(
   RULES_BY_SNAPSHOT.set(reg, out);
   return out;
 }
+/**
+ * Род `constraint` каталога (§Б4-3, C — ограничения записи): кортеж один на движок (`rules/engine.ts`
+ * выводит из него тип диспетчера) и на границу C-6 валидатора ниже.
+ */
+export const CONSTRAINT_TEMPLATE_LIST = [
+  'requires_when',
+  'forbidden_when',
+  'unique_among',
+] as const;
+
 /** Умолчание области — строка-носитель (§Б4-1): правило без `scope` живёт там, где написано. */
 export function effectiveRuleScope(rule: RuleDefinition, carrier: RuleCarrier): RuleScope {
   if (rule.scope !== undefined) return rule.scope;
@@ -175,7 +185,7 @@ function rawExprSites(raw: unknown): Array<{ path: string; value: unknown }> {
  * ДО разбора формы; (2) форма; (3) тождество; (4) область резолвится; (5) шаблон против носителя;
  * (6) ссылки параметров — поимённо, без обхода дерева; (7) типы выражений в области правила — здесь же
  * гейт глубины E (`assertExprChecked`); (8) понижающий уровень называет актора; (9) два писателя одного
- * события. Круг «свойство → правило → свойство» — свойство ВСЕГО графа, его спрашивает врезка
+ * события; (10) у правила ВЛАДЕЛЬЦА — граница C-6 (ограничение не читает пользовательские рёбра). Круг «свойство → правило → свойство» — свойство ВСЕГО графа, его спрашивает врезка
  * `assertRulesOfRow` после валидатора.
  */
 export function assertRule(raw: unknown, scope: RuleCheckScope): RuleDefinition {
@@ -256,7 +266,52 @@ export function assertRule(raw: unknown, scope: RuleCheckScope): RuleDefinition 
   assertExprTypes(rule, scope); // (7)
   assertLevelScoped(rule); // (8)
   assertNoConflict(rule, reg); // (9)
+  if (!scope.systemSeed) assertRelationReadsGuarded(rule, reg); // (10)
   return rule;
+}
+
+/**
+ * (10) ГРАНИЦА C-6 — ТОЛЬКО У ПРАВИЛ ВЛАДЕЛЬЦА. Ограничение (род `constraint`) может читать рёбра своей
+ * записи узлом `has_relation`, а правила записи спрашивает только запись САМОЙ сущности
+ * (create/update/attach): `relation_create`/`relation_delete` C-правила концов не перепроверяют
+ * (`executor/relations.ts`, докблок `assertRoleConstraints`). Ребро роли, которую ставит и снимает
+ * сам владелец (`created_by` не `system`), меняло бы вердикт конца мимо проверки — запись оставалась бы
+ * нарушенной до следующей своей правки и там «застревала» бы отказом.
+ *
+ * Выбран ОТКАЗ при записи, а не перепроверка на рёберных тулах: перепроверка — это вызов движка правил
+ * по двум концам внутри рёберных стадий (новая стадия исполнителя, её замки и её цена на каждом ребре),
+ * а отказ закрывает дыру целиком там, где она открывалась, — у писателя правил владельца (задача 16).
+ * Системную строку граница не касается: `financial_recurring_requires_recurrence` читает `instance-of`
+ * (`created_by: system`), пользовательский путь к ребру закрыт гейтом с обеих сторон, а сид —
+ * `systemSeed: true`. Переходы и `assign_level` рёбра читать МОГУТ: они не делают запись нарушенной —
+ * переход сработает на следующем событии, уровень спрашивается на вызове. Роль, которой нет в реестре,
+ * считается пользовательской (fail-closed); до этой ступени её не пропустил бы чекер E.
+ */
+function assertRelationReadsGuarded(rule: RuleDefinition, reg: RegistrySnapshot): void {
+  if (!(CONSTRAINT_TEMPLATE_LIST as readonly string[]).includes(rule.template)) return;
+  const stack: unknown[] = [rule.when];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (typeof node !== 'object' || node === null) continue;
+    if (Array.isArray(node)) {
+      for (const child of node) stack.push(child);
+      continue;
+    }
+    const rec = node as Record<string, unknown>;
+    const h = rec.has_relation as { role?: unknown } | undefined;
+    if (h !== undefined && typeof h.role === 'string') {
+      const role = h.role;
+      if (reg.roles.get(role)?.constraints.created_by !== 'system') {
+        bad(
+          'RULE_RELATION_UNCHECKED',
+          rule.id,
+          `правило «${rule.id}» читает рёбра роли «${role}» (has_relation), а их ставит и снимает сам владелец: рёберные тулы правила записи концов не перепроверяют, и ребро оставило бы запись нарушенной до её следующей правки — такое условие выражается переходом или уровнем подтверждения, не ограничением`,
+          { template: rule.template, role },
+        );
+      }
+    }
+    for (const child of Object.values(rec)) stack.push(child);
+  }
 }
 
 /** Свойство реестра по id — либо `RULE_UNKNOWN_PROPERTY` с адресом. */
