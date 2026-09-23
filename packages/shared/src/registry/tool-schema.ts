@@ -34,6 +34,17 @@ export function attachToolName(aspectKey: string): string {
   return `attach_${aspectKey.replaceAll('/', '_').replaceAll('-', '_')}`;
 }
 
+/**
+ * Имя тула действия по его КЛЮЧУ (§Б6-6): `planner/postpone_overdue` →
+ * `action_planner_postpone_overdue`. Правило нормализации — то же, что у `attachToolName`,
+ * и по той же причине: имя уезжает провайдеру LLM, где законны только `[a-z0-9_]`
+ * (пин `registry.test.ts` «имена тулов без /»). Обратного преобразования нет —
+ * нормализация необратима, и действие по имени тула ищут перебором реестра.
+ */
+export function actionToolName(key: string): string {
+  return `action_${key.replaceAll('/', '_').replaceAll('-', '_')}`;
+}
+
 /** Минимум реестра, нужный генератору: словарь свойств по id. */
 export interface ToolSchemaRegistry {
   properties: Map<string, PropertyDefinition>;

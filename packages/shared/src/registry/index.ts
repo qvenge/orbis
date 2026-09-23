@@ -4,6 +4,11 @@
 // Форма декларации действия (§Б6-1): строгая схема строки `action_definitions` и её словари.
 export * from './action-type';
 export * from './bindings';
+// Встроенные действия модулей (§Б6-5): ДВЕ декларации, разобранные схемой на загрузке модуля —
+// разбор здесь законен, в отличие от `query/ast-fixtures.ts`: декларации маленькие, их читают
+// сид, сверка дрейфа (`aspect-registry.ts`) и сьюты, а форма «как на чтении из БД» обязана
+// совпасть у всех троих (умолчания проставляет та же схема).
+export * from './builtin-actions';
 export * from './builtin-aspects';
 export * from './builtin-contracts';
 export * from './builtin-properties';

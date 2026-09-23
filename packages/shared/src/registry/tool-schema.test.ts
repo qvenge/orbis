@@ -5,7 +5,12 @@ import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_PROPERTY_META } from './builtin-properties';
 import { type AspectDefinition, writableFromTool } from './property-type';
-import { aspectToolJsonSchema, attachToolName, type ToolSchemaRegistry } from './tool-schema';
+import {
+  actionToolName,
+  aspectToolJsonSchema,
+  attachToolName,
+  type ToolSchemaRegistry,
+} from './tool-schema';
 import { X_ORBIS_TYPE } from './value-schema';
 
 const reg: ToolSchemaRegistry = {
@@ -34,6 +39,11 @@ describe('attachToolName (§А9-1)', () => {
     expect(attachToolName('orbis/agent-run')).toBe('attach_orbis_agent_run');
     expect(attachToolName('user/sleep-log')).toBe('attach_user_sleep_log');
     for (const a of BUILTIN_ASPECT_DEFS) expect(attachToolName(a.key)).toMatch(/^[a-z0-9_]+$/);
+  });
+  test('actionToolName: «/» и «-» → «_», как у attachToolName (§Б6-6)', () => {
+    expect(actionToolName('planner/postpone_overdue')).toBe('action_planner_postpone_overdue');
+    expect(actionToolName('user/close-week')).toBe('action_user_close_week');
+    expect(actionToolName('finance/plan-to-fact')).toMatch(/^[a-z0-9_]+$/);
   });
 });
 
