@@ -9,7 +9,6 @@ import type { GraphId } from '@orbis/shared';
 import { eq, type SQL, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { ExecError } from '../errors';
 import type { WireEntity } from '../executor/types';
 import {
   type BudgetContour,
@@ -26,16 +25,14 @@ import {
 } from './contour';
 
 /**
- * Id свойств, которые этот модуль читает в JS (§А1-1, таблица §А8).
+ * Id свойства, которое этот модуль читает в JS (§А1-1, таблица §А8); прочие три свойства
+ * четвёрки конверта ушли отсюда вместе с кодом уникальности (Б-2, задача 12 — строка каталога).
  *
  * Константами, а не литералами по месту: чтение по НЕСУЩЕСТВУЮЩЕМУ id даёт `undefined`, а не
  * ошибку, и опечатка проявилась бы не отказом, а тихим «конверт не выбрался» — то есть
  * Unbudgeted вместо привязки. Компилятор литерал не стережёт, константу — стережёт.
  */
 const PROP_CURRENCY = 'orbis/currency';
-const PROP_FINANCE_CATEGORY = 'orbis/finance_category';
-const PROP_PERIOD_START = 'orbis/period_start';
-const PROP_PERIOD_END = 'orbis/period_end';
 
 /** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */
 const FALLBACK_CURRENCY = 'RUB';
@@ -588,9 +585,8 @@ export async function rebindForEnvelope(
   // ребро висеть на чужом периоде. Привязка без обоих слотов пропускается: комбинации из неё
   // всё равно не выйдет (`combinationOf` вернёт null), а ветка отобрала бы лишние строки.
   // «Не шаблон повторения» (§2.8) — из контура (`templateSql`): та же ПАРА условий («аспект
-  // приложен И маркер задан»), что была литералом. Общий дом у неё теперь есть, но ТОЛЬКО для
-  // пишущей половины: оракул остаётся при своей копии `notRecurringTemplateSql` по РП-4, и это
-  // записано, а не забыто.
+  // приложен И маркер задан»), что была литералом. Общий дом у неё — контур; копия
+  // `notRecurringTemplateSql`, которую держал оракул по РП-4, ушла вместе с ним (задача 11 Б-2).
   const e = sql.raw('e');
   const branches: SQL[] = [];
   for (const b of contour.movement.bindings) {
@@ -636,48 +632,21 @@ export async function rebindForEnvelope(
 }
 
 /**
- * Минимальная форма строки сущности для проверки уникальности (виртуальные строки batch).
- *
- * Имена полей обязаны совпадать с колонками `EntityRow`: сюда приезжают ВИРТУАЛЬНЫЕ строки
- * batch'а как есть, и поле под чужим именем молча приехало бы `undefined` — предикат вернул
- * бы false на каждой строке, а компилятор бы промолчал.
- */
-interface EnvelopeRowLike {
-  id: string;
-  archived: boolean;
-  /** Список интерпретаций (§А1-1): без `orbis/budget` строка конвертом не считается. */
-  aspects: string[];
-  /** Значения по id свойства (§А1-1). */
-  props: unknown;
-}
-
-function envelopeCombinationMatches(
-  row: EnvelopeRowLike,
-  key: { categoryRef: string; currency: string | null; periodStart: string; periodEnd: string },
-): boolean {
-  if (!row.aspects.includes('orbis/budget')) return false;
-  const props = row.props as Record<string, unknown> | null;
-  if (props === null || props === undefined) return false;
-  const currency = typeof props[PROP_CURRENCY] === 'string' ? props[PROP_CURRENCY] : null;
-  return (
-    props[PROP_FINANCE_CATEGORY] === key.categoryRef &&
-    currency === key.currency &&
-    props[PROP_PERIOD_START] === key.periodStart &&
-    props[PROP_PERIOD_END] === key.periodEnd
-  );
-}
-
-/**
- * Транзакционный замок бюджета владельца — ОДИН ключ на два инварианта (уборочная фаза,
- * E9). Держали его только записи конвертов (`assertEnvelopeUnique`), а привязка транзакции
- * к конверту шла без замка: конкурентные «create транзакции ∥ create конверта» дают
- * write-skew — селектор §2.3 одной транзакции не видит незакоммиченный конверт другой,
- * и запись остаётся Unbudgeted, хотя конверт «уже есть».
- *
- * Тот же ключ, что у уникальности, — намеренно: оба инварианта про набор конвертов
- * владельца, и разные ключи развели бы их по разным очередям, оставив ту же щель.
+ * Транзакционный замок бюджет-контура владельца (уборочная фаза, E9). Когда-то его держали только
+ * записи конвертов, а привязка транзакции к конверту шла без замка: конкурентные «create
+ * транзакции ∥ create конверта» дают write-skew — селектор §2.3 одной транзакции не видит
+ * незакоммиченный конверт другой, и запись остаётся Unbudgeted, хотя конверт «уже есть».
  * Лок реентерабелен (повторный захват в той же транзакции бесплатен), поэтому batch,
  * который и привязывает, и создаёт конверты, берёт его один раз.
+ *
+ * ЧТО ИЗМЕНИЛОСЬ В Б-2. Уникальность конверта уехала в строку каталога (`duplicate_envelope`,
+ * шаблон `unique_among`), и свой замок она берёт по своему ключу `<владелец>:rule:<id>`. Этот
+ * замок остался у КОНТУРА: он про «набор конвертов владельца и привязки к ним», и его берут
+ * исполнитель до стадий (`lockBudgetContour`) и движок подписки. Оба ключа берутся ДО строковых
+ * блокировок и в одном порядке (контур, затем правила) — цикла ожидания между ними нет. Имя ключа
+ * (`envelope_unique`) — историческое: до Б-2 его делила с контуром уникальность конверта. По смыслу
+ * переименование ничего не дало бы, а тронуло бы пин порядка замков (`registry/ops.test.ts`), —
+ * ключ оставлен как есть.
  *
  * Имя ключа — СВОЙ литерал, а не id роли `envelope-binding`, и это не небрежность.
  * `assertAcyclic` (`executor/relations.ts`) занимает под свои замки ровно пространство имён
@@ -689,78 +658,4 @@ export async function lockOwnerBudget(tx: Tx, graph: GraphId): Promise<void> {
   await tx.execute(
     sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${graph}:envelope_unique`}, 0))`,
   );
-}
-
-/**
- * Уникальность конверта (03-budget §2.1): не более одного НЕАРХИВНОГО конверта на
- * точную комбинацию (category_ref, currency, period_start, period_end); currency
- * сравнивается как хранится (NULL и явная валюта — разные комбинации, §2.1 «точная»),
- * но новые записи NULL не несут: normalizeEnvelopeCurrency (бэклог A7) подставляет
- * явную defaultCurrency ДО этой проверки; NULL возможен только в legacy-строках.
- * Вызывается стадией 4 (prepare) create/update/attach orbis/budget — до первой записи.
- *
- * Advisory-lock по владельцу сериализует конкурентные записи конвертов: без него две
- * транзакции, создающие одинаковую комбинацию, не видят незакоммиченные строки друг
- * друга (write-skew, как assertAcyclicBlocks). Лок реентерабелен для batch.
- *
- * virtualEntities — строки, созданные/изменённые предыдущими операциями того же batch
- * (§7.8): их эффекты ещё не в БД, но обязаны быть видимы; их же id исключаются из
- * SQL-результата (виртуальная версия строки авторитетна — могла архивироваться).
- */
-export async function assertEnvelopeUnique(
-  tx: Tx,
-  args: {
-    graphId: GraphId;
-    entityId: string;
-    props: Record<string, unknown>;
-    virtualEntities?: ReadonlyMap<string, EnvelopeRowLike>;
-  },
-): Promise<void> {
-  const { graphId, entityId, props, virtualEntities } = args;
-  const categoryRef = props[PROP_FINANCE_CATEGORY];
-  const periodStart = props[PROP_PERIOD_START];
-  const periodEnd = props[PROP_PERIOD_END];
-  if (
-    typeof categoryRef !== 'string' ||
-    typeof periodStart !== 'string' ||
-    typeof periodEnd !== 'string'
-  ) {
-    return; // структурно битые данные отклонит валидация схемы (стадия 2)
-  }
-  const key = {
-    categoryRef,
-    currency: typeof props[PROP_CURRENCY] === 'string' ? (props[PROP_CURRENCY] as string) : null,
-    periodStart,
-    periodEnd,
-  };
-
-  await lockOwnerBudget(tx, graphId);
-
-  const rows = (await tx.execute(sql`
-    SELECT id FROM entities
-    WHERE graph_id = ${graphId} AND NOT archived AND id <> ${entityId}
-      AND 'orbis/budget' = ANY(aspects)
-      AND props->>'orbis/finance_category' = ${key.categoryRef}
-      AND (props->>'orbis/currency') IS NOT DISTINCT FROM ${key.currency}
-      AND props->>'orbis/period_start' = ${key.periodStart}
-      AND props->>'orbis/period_end' = ${key.periodEnd}
-    LIMIT 2
-  `)) as unknown as Array<{ id: string }>;
-
-  let existing = rows.map((r) => r.id).find((id) => !virtualEntities?.has(id));
-  if (existing === undefined && virtualEntities !== undefined) {
-    for (const row of virtualEntities.values()) {
-      if (row.id !== entityId && !row.archived && envelopeCombinationMatches(row, key)) {
-        existing = row.id;
-        break;
-      }
-    }
-  }
-  if (existing !== undefined) {
-    throw new ExecError(
-      'INVARIANT',
-      'конверт на эту точную комбинацию (категория, валюта, период) уже существует (03-budget §2.1); правьте существующий или архивируйте его',
-      { invariant: 'duplicate_envelope', existingId: existing, ...key },
-    );
-  }
 }

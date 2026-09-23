@@ -41,7 +41,6 @@ import { OWNER_LOCALE } from '@orbis/shared/query';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
-  assertEnvelopeUnique,
   BindingReads,
   type BindingTarget,
   type BudgetOpDesc,
@@ -952,19 +951,6 @@ function isAspectsPatchInput(value: object): value is { attach?: string[]; detac
 }
 
 /**
- * Замок бюджет-контура владельца ПЕРВЫМ statement'ом транзакции исполнителя (E9 + фикс-раунд).
- *
- * Порядок захвата обязан быть глобальным «advisory → строки». Раньше замок брался внутри
- * applyBudgetFollowUps, то есть уже ПОСЛЕ `SELECT … FOR UPDATE` строки правимой сущности,
- * а встречный путь (создание/правка конверта) берёт тот же замок в `assertEnvelopeUnique`
- * на стадии prepare — ДО своих строковых блокировок. Два порядка на один замок — цикл
- * ожидания: PostgreSQL разорвал бы его отказом одной транзакции по дедлоку. Здесь замок
- * берётся до стадий, поэтому обе стороны выстраиваются в одну очередь.
- *
- * Реентерабельность делает повторный захват в `assertEnvelopeUnique` бесплатным — снимать
- * его там не нужно (и нельзя: конверты пишутся и путями, которые сюда не заходят).
- */
-/**
  * Трогает ли вызов реестр владельца — тот же приём, что у бюджет-контура: вложенный batch
  * разворачивается, потому что замок берётся ДО стадий и про его содержимое знает только
  * форма входа.
@@ -988,6 +974,21 @@ async function lockRegistry(
   if (ops.some(touchesRegistry)) await lockOwnerRegistry(tx, graphId);
 }
 
+/**
+ * Замок бюджет-контура владельца ПЕРВЫМ statement'ом транзакции исполнителя (E9 + фикс-раунд).
+ *
+ * Порядок захвата обязан быть глобальным «advisory → строки». Раньше замок брался внутри
+ * applyBudgetFollowUps, то есть уже ПОСЛЕ `SELECT … FOR UPDATE` строки правимой сущности,
+ * а встречный путь (создание/правка конверта) брал тот же замок на стадии prepare — ДО своих
+ * строковых блокировок. Два порядка на один замок — цикл ожидания: PostgreSQL разорвал бы его
+ * отказом одной транзакции по дедлоку. Здесь замок берётся до стадий, поэтому обе стороны
+ * выстраиваются в одну очередь.
+ *
+ * С задачи 12 Б-2 уникальность конверта — строка каталога (`duplicate_envelope`), и её замок —
+ * свой ключ правила (`lockUniqueAmongRules` ниже; порядок «контур → правила»). Этот замок остался
+ * у КОНТУРА — «набор конвертов владельца и привязки к ним»: его берут исполнитель здесь и движок
+ * подписки (`subscriptions/budget.ts`), оба до строковых блокировок.
+ */
 async function lockBudgetContour(
   tx: Tx,
   reg: RegistrySnapshot,
@@ -1919,15 +1920,6 @@ async function prepareEntityCreate(
       ctx.registry,
     ));
   }
-  // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
-  if (state.aspects.includes('orbis/budget')) {
-    await assertEnvelopeUnique(ctx.tx, {
-      graphId: ctx.req.identity.graph,
-      entityId: id,
-      props: state.props,
-      virtualEntities: batch?.entities,
-    });
-  }
   gateEntitlements(ctx, 'entity_create');
 
   const values = {
@@ -2231,8 +2223,9 @@ async function prepareEntityUpdate(
   // Каталог правил (§Б4-3), C-правила — на ЛЮБОМ `entity_update`, а не только на правке свойств
   // (рулинг Ф-Б2-17, уточнён рулингом 3-4). Область правила объявляет core-проекции (`orbis/archived`,
   // `orbis/title`, `orbis/updated_at` — `CORE_PROJECTION` в `rules/scope.ts`), и включённое правило с
-  // `when` по ним не молчит на архивации или переименовании (Р-И-13). Тот же вынос из ветки, что у
-  // единственного старого инварианта над `archived` — уникальности конверта ниже. Инвариант §3.3
+  // `when` по ним не молчит на архивации или переименовании (Р-И-13). Здесь же — уникальность конверта
+  // (`duplicate_envelope`, шаблон `unique_among`): неявный `orbis/archived` её набора чтения ловит
+  // разархивацию без свойств, для которой снятый код держал отдельный блок. Инвариант §3.3
   // (`financial_*`) — строка каталога и проверяется здесь же, над финальным состоянием (ловит и detach
   // `orbis/schedule`); под внутренним undo движок решает по ЭКЗЕМПЛЯРУ правила (`undo: check|skip`,
   // Р-И-2).
@@ -2266,23 +2259,6 @@ async function prepareEntityUpdate(
     batch,
     touchedCore,
   });
-
-  // Уникальность конверта (03-budget §2.1) над ФИНАЛЬНЫМ состоянием: и правка
-  // комбинации, и разархивация (archived=false возвращает конверт в множество
-  // неархивных) не должны создавать дубль. Внутренний undo восстанавливает
-  // зафиксированное состояние — не проверяется (как прочие инварианты выше).
-  if (
-    ctx.internalUndo === undefined &&
-    state.aspects.includes('orbis/budget') &&
-    (touched.includes('orbis/budget') || (input.archived === false && current.archived))
-  ) {
-    await assertEnvelopeUnique(ctx.tx, {
-      graphId: ctx.req.identity.graph,
-      entityId: input.id,
-      props: state.props,
-      virtualEntities: batch?.entities,
-    });
-  }
 
   // Стадия 4: нормализации патча + гейт; changed — «как исполнено», prior — для inverse
   // updated_at проставляется сервером всегда и строго растёт (monotonicUpdatedAt, §5.2)
@@ -2575,15 +2551,6 @@ async function prepareAttach(
   assertRunSubject(state);
   // Ретроспективной проверки «одного budget-parent» на attach-пути больше нет — см. довод
   // на пути entity_update: с 0017 привязка выражена ролью, и attach рёбер не создаёт.
-  if (aspectId === 'orbis/budget') {
-    // Уникальность конверта (03-budget §2.1) — attach-путь той же комбинации
-    await assertEnvelopeUnique(ctx.tx, {
-      graphId: ctx.req.identity.graph,
-      entityId: input.entity_id,
-      props: state.props,
-      virtualEntities: batch?.entities,
-    });
-  }
   gateEntitlements(ctx, tool);
 
   // Заготовка тела проекта (С10): attach — третий путь появления orbis/project наравне с
