@@ -161,6 +161,24 @@ export const EXPR_FIXTURES: readonly ExprFixture[] = [
     scope: {},
     verdict: no(EXPR_TYPE),
   },
+  {
+    name: 'ctx: $touched — список id свойств вызова (Е-5)',
+    expr: { op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] },
+    scope: { allowSensitivity: true },
+    verdict: BOOLEAN,
+  },
+  {
+    name: 'ctx: $touched вне assign_level',
+    expr: { ctx: '$touched' },
+    scope: {},
+    verdict: no(EXPR_TYPE),
+  },
+  {
+    name: 'ctx: в $touched адресуется id свойства, а не что попало',
+    expr: { op: 'in', args: [{ const: 'нет-свойства' }, { ctx: '$touched' }] },
+    scope: { allowSensitivity: true },
+    verdict: no(EXPR_TYPE),
+  },
   // agg
   {
     name: 'agg: величина той же ведомости',
@@ -262,6 +280,25 @@ export const EXPR_FIXTURES: readonly ExprFixture[] = [
       ],
     },
     scope: {},
+    verdict: no(EXPR_TYPE),
+  },
+  // op: empty (Р-26)
+  {
+    name: 'op: empty над словарём фактов — «фактов чувствительности нет»',
+    expr: { op: 'empty', args: [{ ctx: '$sensitivity' }] },
+    scope: { allowSensitivity: true },
+    verdict: BOOLEAN,
+  },
+  {
+    name: 'op: empty над тегами цели — «тегов нет»',
+    expr: { op: 'empty', args: [{ deref: { slot: 'category', read: 'tags' } }] },
+    scope: { contract: 'orbis/envelope', allowDeref: true },
+    verdict: BOOLEAN,
+  },
+  {
+    name: 'op: empty над скаляром — не список и не словарь',
+    expr: { op: 'empty', args: [{ slot: 'amount' }] },
+    scope: MONEY,
     verdict: no(EXPR_TYPE),
   },
   // has
