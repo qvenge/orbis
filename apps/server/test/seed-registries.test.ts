@@ -17,6 +17,7 @@ import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { readSystemDefinitions, seedRegistries } from '../src/db/seed-registries';
 import { withIdentity } from '../src/db/with-identity';
+import { approvePending } from '../src/policy/pending';
 import { effectiveRegistry } from '../src/registry/cache';
 import { adminDb, appDb, freshGraph, personal, requireEnv } from './helpers';
 
@@ -498,6 +499,122 @@ describe('сид шести реестров', () => {
       await client.end();
     }
   }, 30_000);
+
+  /**
+   * ПРАВИЛА ВЛАДЕЛЬЦА ПЕРЕЖИВАЮТ ПЕРЕСЕВ (задача 16, §А3-3, Р-И-35) — боевым путём сида. Своё правило
+   * дельты и отключение системного едут через слияние как есть; `base_version` переезжает на новую
+   * системную версию, а эффективный снимок владельца после пересева их по-прежнему несёт.
+   */
+  test('правила владельца переживают пересев: своё правило и отключение системного на месте', async () => {
+    const { db, client } = adminDb();
+    const app = appDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const owner = await freshGraph();
+    const mine = {
+      id: 'my_task_needs_due',
+      template: 'requires_when',
+      params: { property: 'orbis/due_date' },
+      when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+      enabled: true,
+      undo: 'check',
+    };
+    try {
+      await db.execute(sql`TRUNCATE registry_deltas`);
+      const baseVersion = await systemVersion(db);
+      await db.execute(sql`
+        INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+        VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', ${baseVersion},
+                ${JSON.stringify({ rules: [mine], rulesDisabled: ['task_completed_at'] })}::jsonb)`);
+      const result = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      expect(result.mergedDeltas).toBe(1);
+      expect(result.conflicts).toEqual([]);
+      const rows = (await db.execute(
+        sql`SELECT delta, base_version FROM registry_deltas WHERE graph_id = ${owner}::uuid`,
+      )) as unknown as { delta: unknown; base_version: number }[];
+      expect(rows[0]?.delta).toEqual({ rules: [mine], rulesDisabled: ['task_completed_at'] });
+      expect(rows[0]?.base_version).toBe(result.version);
+      const reg = await withIdentity(app.db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+      const ids = reg.aspects.get('orbis/task')?.rules.map((r) => r.id) ?? [];
+      expect(ids).toContain('my_task_needs_due');
+      expect(ids).not.toContain('task_completed_at');
+    } finally {
+      await db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
+      await raw.end();
+      await app.client.end();
+      await client.end();
+    }
+  }, 30_000);
+
+  /**
+   * НОВОЕ СИСТЕМНОЕ ПРАВИЛО-КОНКУРЕНТ НА ПЕРЕСЕВЕ (Р-И-35) — боевым путём целиком: дрейф «до» (в базе у
+   * `orbis/task` нет `task_completed_at`), своё правило пишет то же (`orbis/completed_at` при входе в
+   * `done`), пересев приносит системное из кода. Своё ОТКЛЮЧАЕТСЯ (не снимается), владелец получает
+   * заметку и единицу пачки; «Принять» меняет отключения местами обычным конвейером.
+   */
+  test('пересев завёл системное правило-конкурента: своё отключено, единица пачки, «Принять» меняет местами', async () => {
+    const { db, client } = adminDb();
+    const app = appDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const owner = await freshGraph();
+    const mine = {
+      id: 'my_completed_at',
+      template: 'on_enter_class',
+      params: {
+        enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+        set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+      },
+      enabled: true,
+      undo: 'check',
+    };
+    try {
+      await db.execute(sql`TRUNCATE registry_deltas`);
+      await db.execute(sql`
+        UPDATE aspect_definitions
+           SET rules = (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM jsonb_array_elements(rules) e
+                         WHERE e->>'id' <> 'task_completed_at')
+         WHERE id = 'orbis/task' AND graph_id IS NULL`);
+      const baseVersion = await systemVersion(db);
+      await db.execute(sql`
+        INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+        VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', ${baseVersion},
+                ${JSON.stringify({ rules: [mine] })}::jsonb)`);
+      const result = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      expect(result.conflicts.map((c) => [c.kind, c.rule])).toEqual([
+        ['rule-conflict', { mine: 'my_completed_at', theirs: 'task_completed_at' }],
+      ]);
+      const rows = (await db.execute(
+        sql`SELECT delta FROM registry_deltas WHERE graph_id = ${owner}::uuid`,
+      )) as unknown as { delta: unknown }[];
+      // Декларация осталась, исполнение выключено: «отключить», а не «стереть» (§С3).
+      expect(rows[0]?.delta).toEqual({ rules: [mine], rulesDisabled: ['my_completed_at'] });
+      const pending = (await db.execute(
+        sql`SELECT id, metadata FROM chat_messages m
+             WHERE m.thread_id IN (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)
+               AND metadata ? 'pending'`,
+      )) as unknown as { id: string; metadata: { pending: { tool: string } } }[];
+      expect(pending.map((p) => p.metadata.pending.tool)).toEqual(['aspect_delta_set']);
+      const approved = await approvePending(app.db, {
+        identity: personal(owner),
+        pendingId: pending[0]?.id as string,
+      });
+      expect(approved.ok).toBe(true);
+      const reg = await withIdentity(app.db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+      const ids = reg.aspects.get('orbis/task')?.rules.map((r) => r.id) ?? [];
+      expect(ids).toContain('my_completed_at');
+      expect(ids).not.toContain('task_completed_at');
+    } finally {
+      await db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
+        (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
+      // Системная строка обязана вернуться к коду при любом исходе теста (сид выше её уже починил;
+      // упавший ДО сида тест оставил бы дрейф — чинится повтором сида).
+      await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      await raw.end();
+      await app.client.end();
+      await client.end();
+    }
+  }, 60_000);
 
   /**
    * СЛИЯНИЕ ОБЯЗАНО ОСТАВЛЯТЬ ДЕЛЬТУ ПРИМЕНИМОЙ (ре-ревью фикс-раунда 1, Important-A) —
