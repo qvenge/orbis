@@ -15,6 +15,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   canonicalJson,
   entityUpdateExecInput,
@@ -35,6 +37,7 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { DELEGABLE_CONTRACT, TICKET_ASPECT } from '../agent-loop/constants';
 import { runStillMine, subjectProperty } from '../agent-loop/verbs';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -42,6 +45,7 @@ import { readEntity } from '../entity-read';
 import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
 import { compileQueryAst } from '../query/compile-ast';
 import { effectiveRegistry } from '../registry/cache';
+import { classPrecondition } from '../registry/class-write';
 import type { RegistrySnapshot } from '../registry/load';
 import type { PropsViolation } from '../registry/validate-props';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -1543,8 +1547,33 @@ describe('golden-близнец писателей предусловий (§А7
     // бы подгонкой, а сканировать идентификаторы подряд — ложными срабатываниями: `property:`
     // встречается и в НОТАХ расхождения предложения, где `BODY_NOTE_PROPERTY` — синтетический
     // маркер (`orbis/body`), а не свойство реестра.
-    expect(named.size).toBeGreaterThanOrEqual(9);
+    // Порог 8, а не 9, с задачи 14а: адрес СОСТОЯНИЯ ТИКЕТА больше не литерал ни в одном писателе —
+    // его отдаёт генератор `classPrecondition` (запись классом, Р-И-39) по привязке делегируемости.
+    // Проверяется он отдельной строкой ниже, тем же приёмом, что константа рутины.
+    expect(named.size).toBeGreaterThanOrEqual(8);
     expect([...named].filter((id) => !known.has(id))).toEqual([]);
+
+    // Адрес, названный ГЕНЕРАТОРОМ: вызов на встроенном реестре отдаёт свойство из словаря, а стоит
+    // генератор ровно в четырёх местах, где до задачи 14а был литерал статуса тикета (захват и
+    // закрытие прогона — глаголы, подметание, ответ на чекпойнт).
+    const builtinReg = {
+      aspects: new Map(BUILTIN_ASPECT_DEFS.map((x) => [x.id, x])),
+      contracts: new Map(BUILTIN_CONTRACT_DEFS.map((x) => [x.id, x])),
+    } as unknown as RegistrySnapshot;
+    expect(
+      known.has(
+        classPrecondition(builtinReg, TICKET_ASPECT, DELEGABLE_CONTRACT, ['in_progress']).property,
+      ),
+    ).toBe(true);
+    const byClass = sources.flatMap(({ path, lines }) =>
+      lines.filter((line) => /\bclassPrecondition\(/.test(line)).map(() => path),
+    );
+    expect(byClass.sort()).toEqual([
+      'agent-loop/sweep.ts',
+      'agent-loop/verbs.ts',
+      'agent-loop/verbs.ts',
+      'routers/agent-run.ts',
+    ]);
 
     // Десятый адрес — тот самый, названный константой. Проверяется СИЛЬНЕЕ литерала: сама
     // константа пиннится к реестру в `confirmation.test.ts`, а здесь закреплено, что писатель

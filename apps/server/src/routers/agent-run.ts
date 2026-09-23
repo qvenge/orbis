@@ -7,8 +7,9 @@
 // Все три — ownerOnly: это поверхность ЧЕЛОВЕКА. Исполнителю здесь делать нечего — его
 // путь идёт через /mcp и глаголы (verbs.ts), а ответ на собственный вопрос агентом был бы
 // подменой того самого решения, ради которого чекпойнт и останавливает работу.
-import { newId } from '@orbis/shared';
+import { newId, propertyOfSlot } from '@orbis/shared';
 import { z } from 'zod';
+import { DELEGABLE_CONTRACT, TICKET_ASPECT } from '../agent-loop/constants';
 import { runById, runsOfTicket, ticketOfRun } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
 import { sweepStaleRuns } from '../agent-loop/sweep';
@@ -17,6 +18,13 @@ import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
+import { effectiveRegistry } from '../registry/cache';
+import {
+  bindingsOfSnapshot,
+  classOfEntity,
+  classPrecondition,
+  statusPatch,
+} from '../registry/class-write';
 import { ownerOnlyProcedure, router } from '../trpc';
 import type { WireRollbackResult } from '../wire';
 
@@ -64,7 +72,10 @@ export const agentRunRouter = router({
         // Предпроверка под RLS — ради ВНЯТНОГО отказа: гонку закрывают предусловия ниже,
         // но без чтения человек получал бы на неверную пару id безымянный CONFLICT
         // предусловия вместо «прогон не принадлежит этому тикету».
-        const outcome = await withIdentity(ctx.db, ctx.identity, async (tx) => {
+        const pre = await withIdentity(ctx.db, ctx.identity, async (tx) => {
+          // Снимок реестра — тем же походом: состояние тикета читается и пишется КЛАССОМ, и
+          // перевести класс в значение без снимка нечем.
+          const reg = await effectiveRegistry(tx, ctx.identity.graph);
           const run = await runById(tx, input.runId);
           // Чужой и несуществующий под RLS неразличимы — единый NOT_FOUND
           if (run === null) {
@@ -77,17 +88,22 @@ export const agentRunRouter = router({
               ticketId: input.ticketId,
             });
           }
-          // Признак носителя стоит в SQL `ticketOfRun` (`'orbis/task' = ANY(e.aspects)`),
-          // поэтому статус читается прямо из свойств строки.
-          if (ticket.props['orbis/task_status'] !== 'waiting') {
+          // Признак носителя стоит в SQL `ticketOfRun` (`'orbis/task' = ANY(e.aspects)`), а состояние
+          // читается КЛАССОМ: какой вариант статуса значит «ждёт», решает привязка.
+          if (classOfEntity(reg, ticket, DELEGABLE_CONTRACT) !== 'waiting') {
             throw new ExecError('CONFLICT', 'тикет не ждёт ответа — отвечать не на что', {
               ticketId: input.ticketId,
-              status: ticket.props['orbis/task_status'],
+              // В details едет ЗНАЧЕНИЕ: человек в карточке отказа читает то, что лежит в базе.
+              // Чтение по адресу из привязки — через `Record<string, unknown>`: строковый ключ по
+              // узкому `TicketProps` даёт TS7053 при `strict`/`noUncheckedIndexedAccess`.
+              status: (ticket.props as Record<string, unknown>)[
+                propertyOfSlot(bindingsOfSnapshot(reg), TICKET_ASPECT, DELEGABLE_CONTRACT, 'status')
+              ],
             });
           }
           // Отвечают ПОСЛЕДНЕМУ прогону тикета. Все прошлые прогоны терминальны, и
           // предусловие исхода их пропускает: устаревший экран (или чужой вызов API) с
-          // прежним runId положил бы ответ в старый прогон, вернул тикет в planned — а
+          // прежним runId положил бы ответ в старый прогон, вернул тикет в очередь — а
           // вопрос текущего прогона остался бы без ответа, и агент прочитал бы в истории
           // чужую реплику. Порядок — тот же created_at ASC, что у экрана истории.
           const runs = await runsOfTicket(tx, input.ticketId);
@@ -98,14 +114,14 @@ export const agentRunRouter = router({
               lastRunId: runs.at(-1)?.id,
             });
           }
-          return run.props['orbis/run_outcome'];
+          return { outcome: run.props['orbis/run_outcome'], reg };
         });
         // Открытый ВОПРОС ответ закрывает: исход `checkpoint` → `answered` (V1, D38) — иначе
         // отвеченный прогон вечно сидел бы в блоке «Ждут ответа» списка «Рутины» и в его
         // бейдже (запрос `outcome=checkpoint` по всем прогонам; отсечь тикетные грамматика
         // не умеет). Ответ на уже законченный прогон (`finished`/`abandoned` — человек ответил
         // после итога или подметания) исход не переписывает: он не был вопросом.
-        const answersQuestion = outcome === 'checkpoint';
+        const answersQuestion = pre.outcome === 'checkpoint';
 
         const r = await execute(
           ctx.db,
@@ -151,12 +167,22 @@ export const agentRunRouter = router({
                   id: input.ticketId,
                   // Тикет всё ещё ждёт: между чтением и записью на него мог ответить
                   // второй экран владельца, и второй ответ поверх первого затёр бы его
-                  precondition: [{ property: 'orbis/task_status', in: ['waiting'] }],
-                  // Уходя из waiting — снимаем waiting_for (конвенция среза, как в
-                  // подметании и итоге): вопрос рядом с `planned` читался бы как открытый.
-                  // Снятие — ЯВНЫЙ `unset`: `null` в новой форме законное значение (§А1-1)
-                  props: { 'orbis/task_status': 'planned' },
-                  unset: ['orbis/waiting_for'],
+                  precondition: [
+                    classPrecondition(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, ['waiting']),
+                  ],
+                  // Ответ возвращает тикет в очередь; уходя из ожидания — снимаем «чего ждём»
+                  // (конвенция среза, как в подметании и итоге): вопрос рядом с тикетом в
+                  // очереди читался бы как открытый. Снятие — ЯВНЫЙ `unset`: `null` в новой
+                  // форме законное значение (§А1-1). Снос строки — задача 14 (В-П-8).
+                  props: statusPatch(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued'),
+                  unset: [
+                    propertyOfSlot(
+                      bindingsOfSnapshot(pre.reg),
+                      TICKET_ASPECT,
+                      DELEGABLE_CONTRACT,
+                      'waiting_for',
+                    ),
+                  ],
                 },
               },
             ],
