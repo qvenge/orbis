@@ -1438,6 +1438,43 @@ export async function budgetAlertCountOf(
   return countAlerts(def, run.raws);
 }
 
+export interface MonthLedgers {
+  /** Ведомости конвертов месяца БЕЗ агрегации дерева (§2.10) — СВОИ величины конверта. */
+  envelopes: readonly EnvelopeStatus[];
+  /** Ведомость периода «траты без живого конверта» (§2.3 шаг 5), категория → сумма. */
+  unbudgeted: ReadonlyMap<string, string>;
+}
+
+/**
+ * ВЕДОМОСТИ МЕСЯЦА БЕЗ АГРЕГАЦИИ ДЕРЕВА (§2.10) — читателю, которому нужны СВОИ величины конверта, а
+ * не сумма поддерева. Тот же вход и тот же движок, что у карточки; отличие ровно одно — `rollup: false`,
+ * как у бейджа (`budgetAlertCountOf` выше, докблок «порог считает `on_raw`»).
+ *
+ * Первый потребитель — предпросмотр переноса (§3.5): остаток родителя, посчитанный ПО ДЕРЕВУ, переехал
+ * бы в конверт родителя и в конверты детей одновременно, то есть удвоил бы деньги (Р-32, решение 3).
+ */
+export async function monthLedgersOf(
+  tx: Tx,
+  graphId: GraphId,
+  args: BudgetArgs,
+  def: BudgetSubscription,
+  reg: RegistrySnapshot,
+): Promise<MonthLedgers> {
+  if (await budgetSurfaceOff(tx, graphId)) return { envelopes: [], unbudgeted: new Map() };
+  const { raws, sums } = await runLedgers(tx, graphId, args, def, reg, { rollup: false });
+  const cats = await categoriesById(tx, [...new Set(raws.map((e) => e.categoryRef))]);
+  const { unbudgeted: unbudgetedName } = periodLedgerNames(def);
+  return {
+    // Порядок — ТОТ ЖЕ ключ карточки (`cardKey`), что у Overview: два порядка на один список
+    // разъехались бы на первой правке `order_by` декларации.
+    envelopes: raws
+      .map((e) => ({ e, key: cardKey(def, e, cats) }))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+      .map(({ e }) => wireEnvelope(e, cats)),
+    unbudgeted: sums.get(unbudgetedName) ?? new Map<string, string>(),
+  };
+}
+
 /** Тул `budget_status` (§4.3): Overview + классификация ВСЕХ категорий владельца. */
 export async function budgetStatusOf(
   tx: Tx,

@@ -5,8 +5,10 @@
 // `orbis/budget-overview`; `computeOverview` и его помощники остаются рядом ВТОРЫМ МНЕНИЕМ, на
 // котором доказывается «ноль расхождений» — двумя реализациями на ОДНОЙ транзакции. Снос оракула —
 // Б-2 (Р-К-5): убери его до перф-гейта задачи 12, и сверять станет не с чем.
-// `rolloverPreview` и `rolloverCreate` на движок НЕ переводятся: переход §3.5 — правило (Р12), а не
-// ведомость; декларация несёт лишь его параметры, и их читает `rolloverCreate`.
+// Переход §3.5 — правило (Р12), а не ведомость; декларация несёт лишь его параметры, и их читают
+// оба читателя перехода — `rolloverCreate` и `rolloverPreview`. Величины прошлого месяца превью с
+// задачи 11 Б-2 берёт у движка (`monthLedgersOf`, ведомости без агрегации дерева), а не у сырых
+// помощников ниже.
 //
 // Агрегаты Budget (Task A6, 03-budget §2, §3.1) — вычисления НА ЛЕТУ поверх графа:
 // spent не хранится (§2.2, глобальное ограничение «никаких материализованных
@@ -64,6 +66,7 @@ import {
   categoryTrendOf,
   envelopeForCategoryOf,
   HORIZON_DAYS,
+  monthLedgersOf,
 } from '../subscriptions/budget';
 import { builtinSubscription } from '../subscriptions/registry';
 import { toWireEntity } from '../wire';
@@ -108,24 +111,6 @@ type EntityRow = typeof entities.$inferSelect;
  */
 function propsOf(row: EntityRow, aspectId: string): Record<string, unknown> {
   return row.aspects.includes(aspectId) ? (row.props as Record<string, unknown>) : {};
-}
-
-/**
- * SQL-условие «сущность НЕ шаблон повторения» (§2.8).
- *
- * Помощник, а не строка по месту, потому что в новой форме это уже не одна проверка на
- * NULL, а ПАРА «аспект приложен И свойство задано»: потерять вторую половину при переписи —
- * ровно один невнимательный copy-paste, а цена — шаблон, посчитанный вместе со своими
- * инстансами, то есть двойной расход у владельца. В этом файле условие пишет только он —
- * все ПЯТЬ мест (spent конверта, баланс, Unbudgeted, planned, траты превью rollover) зовут
- * его. Шестое место того же условия — `rebindForEnvelope` в `binding.ts`; общего дома у них
- * нет, потому что `aggregates.ts` импортирует `binding.ts`, а не наоборот.
- *
- * Аргументы — выражения колонок, а не имя алиаса: половина мест это сырой SQL с алиасом
- * (`e.aspects`), половина — drizzle-условия над `entities`, и строкой обе формы не выразить.
- */
-function notRecurringTemplateSql(aspectsCol: SQL | AnyColumn, propsCol: SQL | AnyColumn): SQL {
-  return sql`NOT ('orbis/schedule' = ANY(${aspectsCol}) AND ${propsCol}->'orbis/recurrence' IS NOT NULL)`;
 }
 
 // Горизонт Coming up и материализации живёт ОДНИМ экземпляром в движке подписки
@@ -780,6 +765,25 @@ function decCeilToHundred(amount: string): string {
 }
 
 /**
+ * SQL-условие «сущность НЕ шаблон повторения» (§2.8) — общий предикат, а не принадлежность второй
+ * реализации Overview: его зовут траты превью переноса ниже (`rolloverPreview`, запрос категорий с
+ * тратами без конверта — решение 4 задачи 11 Б-2) и, до сноса ходом 3 той же задачи, она.
+ *
+ * Помощник, а не строка по месту, потому что в новой форме это уже не одна проверка на
+ * NULL, а ПАРА «аспект приложен И свойство задано»: потерять вторую половину при переписи —
+ * ровно один невнимательный copy-paste, а цена — шаблон, посчитанный вместе со своими
+ * инстансами, то есть двойной расход у владельца. Второе место того же условия —
+ * `rebindForEnvelope` в `binding.ts`; общего дома у них нет, потому что `aggregates.ts`
+ * импортирует `binding.ts`, а не наоборот.
+ *
+ * Аргументы — выражения колонок, а не имя алиаса: половина мест это сырой SQL с алиасом
+ * (`e.aspects`), половина — drizzle-условия над `entities`, и строкой обе формы не выразить.
+ */
+function notRecurringTemplateSql(aspectsCol: SQL | AnyColumn, propsCol: SQL | AnyColumn): SQL {
+  return sql`NOT ('orbis/schedule' = ANY(${aspectsCol}) AND ${propsCol}->'orbis/recurrence' IS NOT NULL)`;
+}
+
+/**
  * Превью rollover для целевого месяца month (§3.5): что переносить из прошлого
  * календарного месяца.
  *
@@ -799,6 +803,14 @@ function decCeilToHundred(amount: string): string {
  *   suggestedLimit = spent, округлённый вверх до 100.
  * - needsSetup — «первый месяц без истории» (§3.5): месячных конвертов прошлого месяца
  *   нет вовсе (rows пуст), но траты были — AI должен спрашивать, а не предлагать.
+ *
+ * ЧИТАТЕЛЬ — ДВИЖОК ВЕДОМОСТЕЙ (задача 11 Б-2, Р-32): величины конвертов прошлого месяца
+ * (`spent`, `remaining`) приходят из `monthLedgersOf` — тех же ведомостей декларации, что у
+ * карточки, но БЕЗ агрегации дерева §2.10: остаток родителя по дереву переехал бы и в его
+ * конверт, и в конверты детей (решение 3, Р-К-42). Запрос «категории с тратами без конверта»
+ * остаётся своим (решение 4): ведомость движка `unbudgeted` считает «движение без ЖИВОГО ребра
+ * привязки», а превью нужно «у категории нет конверта, пересекающего прошлый месяц» — множества
+ * разные, и подмена молча изменила бы состав строк.
  */
 export async function rolloverPreview(
   db: Db,
@@ -806,46 +818,62 @@ export async function rolloverPreview(
   month: string,
   clock: Clock = SYSTEM_CLOCK,
 ): Promise<RolloverPreview> {
+  const graphId = who.graph;
   return withIdentity(db, who, async (tx) => {
-    const today = await localTodayTx(tx, who.graph, clock);
-    const defCur = await defaultCurrencyOf(tx, who.graph);
-    const prevRange = monthRange(shiftMonth(month, -1));
+    const today = await localTodayTx(tx, graphId, clock);
+    const defCur = await defaultCurrencyOf(tx, graphId);
+    const prev = shiftMonth(month, -1);
+    const prevRange = monthRange(prev);
     const targetRange = monthRange(month);
 
-    // Месячные конверты прошлого календарного месяца (только defaultCurrency)
-    const prevEnvs = await tx
-      .select()
-      .from(entities)
-      .where(
-        and(
-          eq(entities.graphId, who.graph),
-          eq(entities.archived, false),
-          sql`'orbis/budget' = ANY(${entities.aspects})`,
-          sql`${entities.props}->>'orbis/period_start' = ${prevRange.start}`,
-          sql`${entities.props}->>'orbis/period_end' = ${prevRange.end}`,
-          sql`coalesce(${entities.props}->>'orbis/currency', ${defCur}) = ${defCur}`,
-        ),
+    // ПАРАМЕТРЫ ПЕРЕХОДА — ИЗ ДЕКЛАРАЦИИ, тем же путём, что у `rolloverCreate` (Р-32, Р12). Снимок
+    // читается ТУТ ЖЕ, а не приходит параметром: второй источник разошёлся бы с тем реестром, по
+    // которому исполнитель проверит запись. Молчаливая деградация запрещена — невыразимый параметр
+    // это отказ, а не «как раньше»: здесь она стоит владельцу денег на счёте.
+    // ЗАДАЧА 13 переключит обоих читателей на `rolloverRuleOf(reg)` строки-носителя (Р-13, Р-К-9).
+    const reg = await effectiveRegistry(tx, graphId);
+    const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
+    const roll = def.rollover;
+    if (roll.source !== 'exact_calendar_month') {
+      throw new ExecError(
+        'VALIDATION',
+        `правило переноса умеет только календарный месяц, а декларация просит «${roll.source}» (§3.5)`,
+        { reason: 'ROLLOVER_SOURCE_UNSUPPORTED', source: roll.source },
       );
+    }
+    if (roll.carry.agg !== 'remaining') {
+      throw new ExecError(
+        'VALIDATION',
+        `правило переноса переносит остаток, а декларация просит ведомость «${roll.carry.agg}» (§3.5)`,
+        { reason: 'ROLLOVER_CARRY_UNSUPPORTED', agg: roll.carry.agg },
+      );
+    }
+
+    // Ведомости ПРОШЛОГО месяца движком, БЕЗ агрегации дерева (решение 3).
+    const ledgers = await monthLedgersOf(tx, graphId, { month: prev, today }, def, reg);
+    // Источник — только МЕСЯЧНЫЙ конверт прошлого месяца: движок отдаёт все, пересекающие месяц
+    // (включая произвольные §2.9), а §3.5 их не переносит. Отбор — по точным границам месяца и по
+    // валюте по умолчанию (§5), как было у сырого запроса.
+    const prevEnvs = ledgers.envelopes.filter((st) => {
+      const p = st.envelope.props as Record<string, unknown>;
+      return (
+        String(p['orbis/period_start']) === prevRange.start &&
+        String(p['orbis/period_end']) === prevRange.end &&
+        String(p['orbis/currency'] ?? defCur) === defCur
+      );
+    });
 
     // Категории с конвертом-преемником: месячный конверт целевого месяца (defaultCurrency)
     const succRows = (await tx.execute(sql`
       SELECT DISTINCT props->>'orbis/finance_category' AS category_id
       FROM entities
-      WHERE graph_id = ${who.graph} AND NOT archived
+      WHERE graph_id = ${graphId} AND NOT archived
         AND 'orbis/budget' = ANY(aspects)
         AND props->>'orbis/period_start' = ${targetRange.start}
         AND props->>'orbis/period_end' = ${targetRange.end}
         AND coalesce(props->>'orbis/currency', ${defCur}) = ${defCur}
     `)) as unknown as Array<{ category_id: string }>;
     const successors = new Set(succRows.map((r) => r.category_id));
-
-    const spentMap = await spentByEnvelope(
-      tx,
-      who.graph,
-      prevEnvs.map((r) => r.id),
-      today,
-      defCur,
-    );
 
     // Агрегация по категории: prevSpent, carryover (= remaining §2.6), limit прошлого
     interface CatAgg {
@@ -854,19 +882,24 @@ export async function rolloverPreview(
       suggestedLimit: string;
     }
     const byCat = new Map<string, CatAgg>();
-    for (const row of prevEnvs) {
-      const raw = rawEnvelopeOf(row, spentMap, defCur);
-      if (raw === null || successors.has(raw.categoryRef)) continue;
-      const remaining = decSub(raw.effectiveLimit, raw.spent);
-      const limit = decAdd(String(raw.props['orbis/limit']), '0'); // нормализация к канону
-      const acc = byCat.get(raw.categoryRef);
+    for (const st of prevEnvs) {
+      if (successors.has(st.category.id)) continue;
+      // `carry.agg` = имя ведомости декларации; сегодня опубликован ровно `remaining` (проверено
+      // выше), и он же поле статуса — вторая карта «имя → поле» была бы второй правдой.
+      const carry = st.remaining;
+      // нормализация к канону
+      const limit = decAdd(
+        String((st.envelope.props as Record<string, unknown>)['orbis/limit']),
+        '0',
+      );
+      const acc = byCat.get(st.category.id);
       byCat.set(
-        raw.categoryRef,
+        st.category.id,
         acc === undefined
-          ? { spent: raw.spent, carryover: remaining, suggestedLimit: limit }
+          ? { spent: st.spent, carryover: carry, suggestedLimit: limit }
           : {
-              spent: decAdd(acc.spent, raw.spent),
-              carryover: decAdd(acc.carryover, remaining),
+              spent: decAdd(acc.spent, st.spent),
+              carryover: decAdd(acc.carryover, carry),
               suggestedLimit: decAdd(acc.suggestedLimit, limit),
             },
       );
@@ -883,7 +916,7 @@ export async function rolloverPreview(
       SELECT e.props->>'orbis/finance_category' AS category_id,
              sum((e.props->>'orbis/amount')::numeric)::text AS total
       FROM entities e
-      WHERE e.graph_id = ${who.graph} AND NOT e.archived
+      WHERE e.graph_id = ${graphId} AND NOT e.archived
         AND 'orbis/financial' = ANY(e.aspects)
         AND e.props->>'orbis/finance_category' IS NOT NULL
         AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
@@ -895,7 +928,7 @@ export async function rolloverPreview(
         AND coalesce(e.props->>'orbis/currency', ${defCur}) = ${defCur}
         AND NOT EXISTS (
           SELECT 1 FROM entities env
-          WHERE env.graph_id = ${who.graph} AND NOT env.archived
+          WHERE env.graph_id = ${graphId} AND NOT env.archived
             AND 'orbis/budget' = ANY(env.aspects)
             AND env.props->>'orbis/finance_category' = e.props->>'orbis/finance_category'
             AND coalesce(env.props->>'orbis/currency', ${defCur}) = ${defCur}

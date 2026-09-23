@@ -7,16 +7,22 @@
 // needsSetup — «первый месяц без истории» (§3.5); мутация rollover — идемпотентна по
 // batchId, атомарна (INVARIANT всего batch), Undo сносит все конверты одним action.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GraphId } from '@orbis/shared';
-import { newId } from '@orbis/shared';
+import type { BudgetSubscription, GraphId } from '@orbis/shared';
+import { newId, ROLE_CATEGORY_PARENT } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
+import { effectiveRegistry } from '../registry/cache';
+import { removeSubscriptionDelta, setSubscriptionDelta } from '../registry/ops';
 import { appRouter } from '../router';
+import { BUDGET_SUBSCRIPTION_ID } from '../subscriptions/budget';
+import { builtinSubscription } from '../subscriptions/registry';
 import { createCallerFactory } from '../trpc';
+import { rolloverPreview } from './aggregates';
 
 requireEnv();
 
@@ -178,6 +184,98 @@ async function actionMessageCount(actionId: string): Promise<number> {
 }
 
 describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
+  /**
+   * Мир с историей прошлого месяца: профицит с перенесённым остатком, перерасход и категория с
+   * тратами без конверта — все три ветки строки превью (остаток, отрицательный остаток, «траты без
+   * конверта»). Цель — текущий месяц, источник — прошлый (закрытый).
+   */
+  async function worldWithPrevEnvelopes(): Promise<{ owner: GraphId; month: string }> {
+    const owner = await freshGraph();
+    const catFood = await createCategory(owner, 'Еда', '🍔');
+    const catFun = await createCategory(owner, 'Развлечения', '🎉');
+    const catTaxi = await createCategory(owner, 'Такси', '🚕');
+    const catCoffee = await createCategory(owner, 'Кофейни', '☕');
+    await createEnvelope(owner, catFood, prevStart, prevEnd, '30000.00');
+    await createTxn(owner, catFood, '28800.00', `${prev}-05`);
+    await createEnvelope(owner, catFun, prevStart, prevEnd, '10000.00', {
+      'orbis/carryover': '500.00',
+    });
+    await createTxn(owner, catFun, '400.00', `${prev}-10`);
+    await createEnvelope(owner, catTaxi, prevStart, prevEnd, '9000.00');
+    await createTxn(owner, catTaxi, '10100.00', `${prev}-15`);
+    await createTxn(owner, catCoffee, '3841.50', `${prev}-07`);
+    return { owner, month: target };
+  }
+
+  /**
+   * Дерево категорий §2.10 с конвертами прошлого месяца у ОБОИХ концов: родитель 10000/0, ребёнок
+   * 5000/1000. Карточка Overview родителя показала бы 15000/1000 (остаток 14000) — превью обязано
+   * взять СВОЙ остаток родителя.
+   */
+  async function worldWithCategoryTree(): Promise<{
+    owner: GraphId;
+    month: string;
+    parentCat: string;
+    childCat: string;
+  }> {
+    const owner = await freshGraph();
+    const parentCat = await createCategory(owner, 'Хобби', '🎨');
+    const childCat = await createCategory(owner, 'Хобби — кино', '🎬');
+    await exec(owner, 'relation_create', {
+      source_id: parentCat,
+      target_id: childCat,
+      role: ROLE_CATEGORY_PARENT,
+    });
+    await createEnvelope(owner, parentCat, prevStart, prevEnd, '10000.00');
+    await createEnvelope(owner, childCat, prevStart, prevEnd, '5000.00');
+    await createTxn(owner, childCat, '1000.00', `${prev}-12`);
+    return { owner, month: target, parentCat, childCat };
+  }
+
+  test('ПЕРЕЕЗД: превью на движке даёт то же, что на сырых помощниках, и читает carry.agg декларации', async () => {
+    const { owner, month } = await worldWithPrevEnvelopes(); // фикстура describe'а превью
+    const before = await rolloverPreview(db, personal(owner), month);
+    // Мутационная проверка (§С8-15 того же жанра, что `warn_at 0.99` у движка): ответ обязан ЗАВИСЕТЬ
+    // от декларации — подвинь `carry.agg` на неопубликованную величину, и превью откажет, а не смолчит.
+    const def = await withIdentity(
+      db,
+      personal(owner),
+      async (tx) =>
+        builtinSubscription(
+          await effectiveRegistry(tx, owner),
+          BUDGET_SUBSCRIPTION_ID,
+        ) as BudgetSubscription,
+    );
+    try {
+      await withIdentity(db, personal(owner), (tx) =>
+        setSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID, {
+          definition: {
+            ...def,
+            rollover: { source: 'exact_calendar_month', carry: { agg: 'spent' } },
+          },
+        }),
+      );
+      await expect(rolloverPreview(db, personal(owner), month)).rejects.toMatchObject({
+        details: { reason: 'ROLLOVER_CARRY_UNSUPPORTED' },
+      });
+    } finally {
+      await withIdentity(db, personal(owner), (tx) =>
+        removeSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID),
+      );
+    }
+    expect(await rolloverPreview(db, personal(owner), month)).toEqual(before);
+  });
+
+  test('родитель с детьми: carryover — СВОЙ остаток конверта, без агрегации дерева (§2.10)', async () => {
+    // Пин решения 3 и цена ошибки: возьми превью значения КАРТОЧКИ, и остаток детей переехал бы и в
+    // конверт родителя, и в конверты детей — удвоение денег на первом же переносе.
+    const { owner, month, parentCat, childCat } = await worldWithCategoryTree(); // родитель 10000/0, ребёнок 5000/1000
+    const rows = (await rolloverPreview(db, personal(owner), month)).rows;
+    expect(rows.find((r) => r.categoryId === parentCat)?.carryover).toBe('10000.00'); // не '14000.00'
+    expect(rows.find((r) => r.categoryId === parentCat)?.prevSpent).toBe('0.00'); // не '1000.00'
+    expect(rows.find((r) => r.categoryId === childCat)?.carryover).toBe('4000.00');
+  });
+
   test('профицит → положительный carryover; carryover прошлого конверта входит в remaining; suggestedLimit = limit прошлого', async () => {
     const user = await freshGraph();
     const catFood = await createCategory(user, 'Еда', '🍔');
