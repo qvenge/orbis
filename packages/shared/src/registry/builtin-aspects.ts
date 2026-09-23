@@ -121,6 +121,20 @@ const ENTRIES: readonly AspectEntry[] = [
         ],
       },
       { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' } },
+      // §Б2-1 (task, делегируемость): те же шесть вариантов ложатся на ПЯТЬ однозначных классов — по
+      // одному варианту на класс. `cancelled` не отнесён намеренно: отменённая задача не состояние
+      // делегирования, и её класс — `null` (§Б2-3).
+      {
+        contract: 'orbis/delegable',
+        bind: { status: 'orbis/task_status', waiting_for: 'orbis/waiting_for' },
+        value_map: [
+          { slot: 'status', variant: 'inbox', class: 'new' },
+          { slot: 'status', variant: 'planned', class: 'queued' },
+          { slot: 'status', variant: 'in_progress', class: 'in_progress' },
+          { slot: 'status', variant: 'waiting', class: 'waiting' },
+          { slot: 'status', variant: 'done', class: 'done' },
+        ],
+      },
     ],
     viewConfig: {
       keyFields: ['orbis/task_status', 'orbis/due_date', 'orbis/priority'],

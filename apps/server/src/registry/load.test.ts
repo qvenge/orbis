@@ -171,7 +171,7 @@ test('версии: системная — из registry_system, владель�
   expect(withSettings.systemVersion).toBe(noSettings.systemVersion);
 });
 
-test('снимок несёт словарь контрактов: шесть встроенных, форма разобрана схемой', async () => {
+test('снимок несёт словарь контрактов: семь встроенных, форма разобрана схемой', async () => {
   const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   expect([...reg.contracts.keys()].sort()).toEqual([...CONTRACT_IDS].sort());
   expect(reg.contracts.get('orbis/completable')?.sets).toEqual({

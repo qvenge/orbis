@@ -41,7 +41,11 @@ test('аспекты каталога — декларации реестра, �
   // §Б2-1: привязки приезжают клиенту в составе декларации. Проба именно здесь, а не в типах:
   // `registryReply` отдаёт `unknown` (`test/registry.ts:40`), и разъехавшаяся фикстура
   // typecheck'ом НЕ ловится — дыра была бы молчаливой.
-  expect(task?.implements.map((b) => b.contract)).toEqual(['orbis/completable', 'orbis/when']);
+  expect(task?.implements.map((b) => b.contract)).toEqual([
+    'orbis/completable',
+    'orbis/when',
+    'orbis/delegable',
+  ]);
   expect(task?.implements[0]?.value_map.find((m) => m.variant === 'done')?.class).toBe('done');
   expect(task?.viewConfig.keyFields).toContain('orbis/task_status');
   expect(task).not.toHaveProperty('schema');

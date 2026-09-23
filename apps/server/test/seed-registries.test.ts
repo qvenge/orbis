@@ -39,7 +39,7 @@ async function systemVersion(db: ReturnType<typeof adminDb>['db']): Promise<numb
 }
 
 describe('сид шести реестров', () => {
-  test('состав system-строк = ровно BUILTIN_* (77 свойств, 11 ролей, 13 аспектов, 6 контрактов)', async () => {
+  test('состав system-строк = ровно BUILTIN_* (77 свойств, 11 ролей, 13 аспектов, 7 контрактов)', async () => {
     const { db, client } = adminDb();
     try {
       expect(await ids(db, 'property_definitions')).toEqual(
@@ -59,7 +59,7 @@ describe('сид шести реестров', () => {
       expect(BUILTIN_PROPERTY_META.length).toBe(77);
       expect(BUILTIN_RELATION_ROLE_META.length).toBe(11);
       expect(BUILTIN_ASPECT_DEFS.length).toBe(13);
-      expect(BUILTIN_CONTRACT_DEFS.length).toBe(6);
+      expect(BUILTIN_CONTRACT_DEFS.length).toBe(7);
     } finally {
       await client.end();
     }
@@ -137,9 +137,10 @@ describe('сид шести реестров', () => {
         sql`SELECT count(*)::int AS n FROM aspect_definitions a, jsonb_array_elements(a.implements) b
             WHERE a.graph_id IS NULL`,
       )) as unknown as { n: number }[];
-      // Семь привязок §Б2-1: две у orbis/schedule, две у orbis/task, две у orbis/financial и
-      // одна у orbis/budget. Число названо отдельно от состава (состав пинит снимок B2 в shared).
-      expect(count?.n).toBe(7);
+      // Восемь привязок §Б2-1: две у orbis/schedule, три у orbis/task (третья — делегируемость,
+      // задача 14а), две у orbis/financial и одна у orbis/budget. Число названо отдельно от состава
+      // (состав пинит снимок B2 в shared).
+      expect(count?.n).toBe(8);
       // FK на jsonb не поставить, а `checkImplements` живёт в shared и базы не видит.
       const dangling = (await db.execute(
         sql`SELECT a.id AS aspect_id, b.value->>'contract' AS contract_id
@@ -642,7 +643,7 @@ describe('сид шести реестров', () => {
         properties: 77,
         roles: 11,
         aspects: 13,
-        contracts: 6,
+        contracts: 7,
         subscriptions: 2,
         actions: 2,
         version: before + 1,

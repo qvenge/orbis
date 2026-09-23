@@ -1,7 +1,11 @@
 /**
- * Встроенные контракты §Б1-2 — шесть: четыре ядра и два модуля Финансы. `orbis/progress` и
+ * Встроенные контракты §Б1-2 — семь: пять ядра и два модуля Финансы. `orbis/progress` и
  * `orbis/categorizable` сюда НЕ входят (В-2 §8). `CONTRACT_IDS` — множество валидации
  * `registry_ref{target: contract}` и одновременно нормативный ПОРЯДОК: `rank` — позиция в нём.
+ * Делегируемость (`orbis/delegable`, ядро) приписана СЕДЬМОЙ, а не вставлена к ядру: `rank` —
+ * позиция в списке, и вставка в середину сдвинула бы ранги обоих контрактов Финансов без
+ * изменения смысла (РЧ-14а-6). Порядок списка поэтому больше не читается как «сначала ядро,
+ * потом модули» — ядро отличает `module: null`, а не место.
  */
 import type { z } from 'zod';
 import {
@@ -19,6 +23,7 @@ export const CONTRACT_IDS = [
   'orbis/sensitivity',
   'orbis/money-movement',
   'orbis/envelope',
+  'orbis/delegable',
 ] as const;
 export type ContractId = (typeof CONTRACT_IDS)[number];
 
@@ -109,8 +114,13 @@ const ENTRIES: readonly (SlotsEntry | FactsEntry)[] = [
       en: 'A recurrence template and its instances: the marker and the origin edge role.',
     },
     slots: [
-      // any_of(boolean|json): слот реализуют ОБА — `financial.recurring` (boolean) и
-      // `schedule.recurrence` (json, наличие = шаблон), рамка §4-5.
+      // any_of(boolean|json) по рамке §4-5 — слот готов принять и boolean, и json. СЕГОДНЯ его
+      // связывает ТОЛЬКО `schedule.recurrence` (json, наличие = шаблон); `orbis/financial` слот НЕ
+      // привязывает (Р-К-30, докблок его `implements` в `builtin-aspects.ts`). И привязывать нельзя:
+      // `orbis/recurring = true` стоит и на каждом материализованном инстансе, связка
+      // `template_marker → orbis/recurring` сделала бы такие движения классом `template`, и правило
+      // `financial_recurring_requires_recurrence` (`builtin-rules.ts`, конъюнкт
+      // `not(class in [template])`) перестало бы срабатывать ровно там, где нужно.
       s(
         'template_marker',
         anyOf('boolean', 'json'),
@@ -231,9 +241,42 @@ const ENTRIES: readonly (SlotsEntry | FactsEntry)[] = [
     ],
     module: 'finance',
   },
+
+  {
+    id: 'orbis/delegable',
+    kind: 'slots',
+    label: { ru: 'Делегируемость', en: 'Delegable' },
+    description: {
+      ru: 'Состояния тикета делегирования: новое, в очереди, в работе, ждёт, сделано; чего ждём.',
+      en: 'Delegation ticket states: new, queued, in progress, waiting, done; and what it waits for.',
+    },
+    // `waiting_for` — СЛОТ, а не свойство в коде: «чего ждём» пишут и читают три серверных пути, и
+    // адрес у них обязан быть один — тот, что объявила привязка (§Б2-1).
+    slots: [
+      s('status', k('select'), true, 'Состояние', 'State', true),
+      s('waiting_for', k('text'), false, 'Чего ждём', 'Waiting for'),
+    ],
+    classes: [
+      c('new', 'Новый', 'New'),
+      c('queued', 'В очереди', 'Queued'),
+      c('in_progress', 'В работе', 'In progress'),
+      c('waiting', 'Ждёт', 'Waiting'),
+      c('done', 'Сделано', 'Done'),
+    ],
+    sets: { open: ['new', 'queued', 'in_progress', 'waiting'], closed: ['done'] },
+    // ВЗАИМНАЯ ОДНОЗНАЧНОСТЬ — ради записи классом (Р-И-38/39): глаголы, подметание и ручка ответа
+    // называют класс, а значение берут у привязки. Без флага карта с двумя вариантами в одном классе
+    // прошла бы валидатор, и «поставь класс» стало бы молчаливым выбором из двух. В базу поле едет
+    // колонкой `contract_definitions.exclusive_classes` (задача 2, `0022_rules_actions`, Р-К-92).
+    exclusive_classes: true,
+    module: null,
+  },
 ];
 
-/** Шесть встроенных контрактов §Б1-2 в нормативном порядке `CONTRACT_IDS`. */
+/**
+ * Семь встроенных контрактов §Б1-2 в нормативном порядке `CONTRACT_IDS`: пять ядра и два модуля
+ * Финансы; делегируемость — седьмой (РЧ-14а-6, довод в шапке файла).
+ */
 export const BUILTIN_CONTRACT_DEFS: readonly ContractDefinition[] = ENTRIES.map((entry, index) =>
   contractDefinitionSchema.parse({
     ...entry,

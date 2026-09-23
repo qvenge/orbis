@@ -167,6 +167,18 @@ const B2: Partial<Record<AspectId, readonly unknown[]>> = {
       ],
     },
     { contract: 'orbis/when', bind: { deadline: 'orbis/due_date' }, value_map: [], fixed: {} },
+    {
+      contract: 'orbis/delegable',
+      bind: { status: 'orbis/task_status', waiting_for: 'orbis/waiting_for' },
+      fixed: {},
+      value_map: [
+        { slot: 'status', variant: 'inbox', class: 'new' },
+        { slot: 'status', variant: 'planned', class: 'queued' },
+        { slot: 'status', variant: 'in_progress', class: 'in_progress' },
+        { slot: 'status', variant: 'waiting', class: 'waiting' },
+        { slot: 'status', variant: 'done', class: 'done' },
+      ],
+    },
   ],
   'orbis/financial': [
     {
@@ -683,7 +695,7 @@ function slotSig(id: string): string[] {
 }
 const cById = new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c]));
 
-test('BUILTIN_CONTRACT_DEFS — шесть контрактов §Б1-2 в нормативном порядке', () => {
+test('BUILTIN_CONTRACT_DEFS — семь контрактов §Б1-2 в нормативном порядке', () => {
   // progress и categorizable в Б-1 НЕ сеются (В-2 §8): контракт без потребителя нечем проверить.
   expect([...CONTRACT_IDS]).toEqual([
     'orbis/completable',
@@ -692,9 +704,10 @@ test('BUILTIN_CONTRACT_DEFS — шесть контрактов §Б1-2 в но�
     'orbis/sensitivity',
     'orbis/money-movement',
     'orbis/envelope',
+    'orbis/delegable',
   ]);
   expect(BUILTIN_CONTRACT_DEFS.map((c) => c.id)).toEqual([...CONTRACT_IDS]);
-  expect(BUILTIN_CONTRACT_DEFS.map((c) => c.rank)).toEqual([1, 2, 3, 4, 5, 6]);
+  expect(BUILTIN_CONTRACT_DEFS.map((c) => c.rank)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   expect(BUILTIN_CONTRACT_DEFS.every((c) => c.graphId === null && c.key === c.id)).toBe(true);
   // module NULL = ядро (§Б8-2): выключение Финансов не вправе унести грамматику.
   expect(Object.fromEntries(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c.module]))).toEqual({
@@ -704,7 +717,29 @@ test('BUILTIN_CONTRACT_DEFS — шесть контрактов §Б1-2 в но�
     'orbis/sensitivity': null,
     'orbis/money-movement': 'finance',
     'orbis/envelope': 'finance',
+    'orbis/delegable': null,
   });
+});
+
+test('orbis/delegable: классы однозначны, cancelled вне состояний делегирования (Р-И-38)', () => {
+  const def = cById.get('orbis/delegable');
+  expect(def?.kind === 'slots' && def.exclusive_classes).toBe(true);
+  expect(slotSig('orbis/delegable')).toEqual(['status:select:req:status', 'waiting_for:text:opt']);
+  expect(def?.kind === 'slots' ? def.classes.map((c) => c.key) : []).toEqual([
+    'new',
+    'queued',
+    'in_progress',
+    'waiting',
+    'done',
+  ]);
+  expect(def?.kind === 'slots' ? def.sets : {}).toEqual({
+    open: ['new', 'queued', 'in_progress', 'waiting'],
+    closed: ['done'],
+  });
+  // `cancelled` НЕ отнесён: отменённая задача не состояние делегирования, класс по ней — `null`.
+  const task = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task');
+  const del = task?.implements.find((b) => b.contract === 'orbis/delegable');
+  expect(del?.value_map.map((m) => m.variant)).not.toContain('cancelled');
 });
 
 test('слоты, классы и наборы — дословно §Б1-2', () => {

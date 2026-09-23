@@ -900,67 +900,20 @@ describe('checkClassMap: вариант дельты без отнесения �
     ).toEqual([['UNKNOWN_PROPERTY', undefined]]);
   });
 
-  // ПРОБА исключительного контракта: строки делегируемости ещё нет — её кладёт шаг 9 задачи 14а и
-  // тогда же заменяет пробу встроенным контрактом. Задача носит `orbis/task_status` слотом-статусом
-  // ДВУХ контрактов: завершаемости (полнота строгая) и пробы (exclusive).
-  const EXCL = contractDefinitionSchema.parse({
-    id: 'orbis/probe-excl',
-    graphId: null,
-    key: 'orbis/probe-excl',
-    label: { ru: 'Проба' },
-    description: { ru: 'Проба' },
-    kind: 'slots',
-    slots: [
-      {
-        name: 'status',
-        type: { kind: 'select' },
-        required: true,
-        label: { ru: 'С' },
-        status: true,
-      },
-    ],
-    classes: ['queued', 'waiting', 'done'].map((key) => ({ key, label: { ru: key } })),
-    sets: {},
-    exclusive_classes: true,
-    module: null,
-    rank: 99,
-  });
-  const TASK_X: AspectDefinition = {
-    ...TASK,
-    implements: [
-      ...TASK.implements,
-      aspectImplementsSchema.parse({
-        contract: 'orbis/probe-excl',
-        bind: { status: 'orbis/task_status' },
-        value_map: ['queued', 'waiting', 'done'].map((cls) => ({
-          slot: 'status',
-          variant: cls === 'queued' ? 'planned' : cls,
-          class: cls,
-        })),
-      }),
-    ],
-  };
-  const REG_X = {
-    ...REG,
-    contracts: new Map([...REG.contracts, [EXCL.id, EXCL]]),
-    aspects: new Map([...REG.aspects, [TASK_X.id, TASK_X]]),
-  };
-  const codesX = (d: Parameters<typeof checkClassMap>[0]) =>
-    checkClassMap(d, TASK_X, REG_X).map((i) => [i.code, i.details.reason]);
-
   test('exclusive-контракт: свой вариант дельтой отнесения НЕ требует', () => {
-    // Отнести обязаны к завершаемости (полнота строгая), к исключительному контракту — нет.
-    expect(codesX({ selectOptions: ADD, classMap: map('active') })).toEqual([]);
+    // После задачи 14а `orbis/task_status` стоит в слоте-статусе ДВУХ контрактов: завершаемости
+    // (полнота строгая) и делегируемости (exclusive). Отнести обязаны к первому, ко второму — нет.
+    expect(codes({ selectOptions: ADD, classMap: map('active') })).toEqual([]);
   });
 
   test('exclusive-контракт: отнесение в ЗАНЯТЫЙ класс — CLASS_NOT_EXCLUSIVE', () => {
     const classMap = {
       'orbis/task_status': [
         ...map('active')['orbis/task_status'],
-        { contract: 'orbis/probe-excl', slot: 'status', variant: 'in_review', class: 'waiting' },
+        { contract: 'orbis/delegable', slot: 'status', variant: 'in_review', class: 'waiting' },
       ],
     };
-    expect(codesX({ selectOptions: ADD, classMap })).toEqual([['CLASS_NOT_EXCLUSIVE', undefined]]);
+    expect(codes({ selectOptions: ADD, classMap })).toEqual([['CLASS_NOT_EXCLUSIVE', undefined]]);
   });
 });
 
@@ -1094,8 +1047,12 @@ describe('entityClassOf и резерв маркеров: select — по зна
       TASK,
       REG3,
     );
-    expect(issues.map((i) => [i.code, i.details.reason])).toEqual([
-      ['VARIANT_UNMAPPED', 'reserved'],
+    // Резерв называется У КАЖДОГО слота-статуса, где стоит свойство: с задачи 14а `orbis/task_status`
+    // несут два контракта, и у исключительного резерв не обходится снятой полнотой (проверка резерва
+    // идёт раньше `exclusive && hit === undefined`).
+    expect(issues.map((i) => [i.code, i.details.reason, i.details.contract])).toEqual([
+      ['VARIANT_UNMAPPED', 'reserved', 'orbis/completable'],
+      ['VARIANT_UNMAPPED', 'reserved', 'orbis/delegable'],
     ]);
   });
 });

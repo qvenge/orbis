@@ -119,12 +119,20 @@ test('exclusive_classes: у slots-ветки умолчание false, у facts-
   );
 });
 
-test('BUILTIN_CONTRACT_DEFS собираются схемой: флаг есть у каждого, у словаря фактов — всегда false', () => {
-  // Пин БЕЗ «у всех false»: задача 14а сеет `orbis/delegable` с `true`, и такой пин покраснел бы у неё —
-  // то есть был бы пином календаря. Инвариант же держится всегда: поле разобрано у КАЖДОЙ строки, а там,
-  // где классов нет по построению (`kind:'facts'`), исключительность невыразима (шаг 2б, `z.literal(false)`).
+test('exclusive_classes: схема даёт boolean каждому контракту, исключительность — ровно у делегируемости', () => {
+  // Прежний пин держал только форму («флаг есть у каждого, у фактов — false») и строку
+  // `orbis/delegable` не видел вовсе (Р-К-92). Ответ «кто exclusive» берётся У САМОЙ ДЕКЛАРАЦИИ:
+  // второй список разъехался бы с реестром молча.
+  const exclusiveOf = (id: string) =>
+    BUILTIN_CONTRACT_DEFS.find((c) => c.id === id)?.exclusive_classes;
   for (const c of BUILTIN_CONTRACT_DEFS) {
     expect([c.id, typeof c.exclusive_classes]).toEqual([c.id, 'boolean']);
+    // Там, где классов нет по построению (`kind:'facts'`), исключительность невыразима (`z.literal(false)`).
     if (c.kind === 'facts') expect([c.id, c.exclusive_classes]).toEqual([c.id, false]);
   }
+  expect(BUILTIN_CONTRACT_DEFS.filter((c) => c.exclusive_classes).map((c) => c.id)).toEqual([
+    'orbis/delegable',
+  ]);
+  expect(exclusiveOf('orbis/completable')).toBe(false); // класс `active` собирает четыре варианта
+  expect(exclusiveOf('orbis/delegable')).toBe(true);
 });
