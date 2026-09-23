@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import {
   BUILTIN_RULES_BY_CARRIER,
+  RULE_ENVELOPE_UNIQUE,
   RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
   RULE_TASK_COMPLETED_AT,
@@ -24,6 +25,7 @@ describe('системные строки каталога правил (§Б4-1
       'financial_requires_occurred_on',
       'financial_recurring_requires_recurrence',
       'task_completed_at',
+      'duplicate_envelope',
     ]);
   });
 
@@ -40,11 +42,13 @@ describe('системные строки каталога правил (§Б4-1
 
   test('откат: C-строки названы `check` ЯВНО, T-строка берёт умолчание (Р-И-2)', () => {
     // Явное `undo` у C-строк — решение по экземпляру, а не умолчание: снятое схемой поле молча
-    // сменило бы политику отката инварианта.
+    // сменило бы политику отката инварианта. У конверта `check` — слово владельца (В-П-1а): откат
+    // при уже созданном дубле отклоняется.
     expect([
       RULE_FINANCIAL_REQUIRES_OCCURRED_ON.undo,
       RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE.undo,
       RULE_TASK_COMPLETED_AT.undo,
-    ]).toEqual(['check', 'check', undefined]);
+      RULE_ENVELOPE_UNIQUE.undo,
+    ]).toEqual(['check', 'check', undefined, 'check']);
   });
 });

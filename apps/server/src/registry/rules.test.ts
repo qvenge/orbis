@@ -74,8 +74,11 @@ function codeSnapshot(): RegistrySnapshot {
     systemVersion: 0,
   };
 }
-/** Системных строк каталога правил — три (задача 4: два инварианта §А7-2, из них financial — парой). */
-const BUILTIN_RULE_COUNT = 3;
+/**
+ * Системных строк каталога правил — четыре: задача 4 — два инварианта §А7-2 (financial — парой),
+ * задача 12 — уникальность конверта (`duplicate_envelope`).
+ */
+const BUILTIN_RULE_COUNT = 4;
 const FIN: RuleCarrier = { kind: 'aspect', id: 'orbis/financial' };
 const TASK: RuleCarrier = { kind: 'aspect', id: 'orbis/task' };
 /** Код И `details.reason`: словарный VALIDATION без причины не адресует ничего. */

@@ -66,6 +66,33 @@ export const RULE_TASK_COMPLETED_AT: RuleDefinitionInput = {
   },
 };
 
+/**
+ * Уникальность конверта (03-budget §2.1) — СТРОКА каталога, а не код Финансов.
+ *
+ * `id` = прежний код отказа (Р-К-1): `details.invariant` движка равен id правила, поэтому близнецы
+ * бюджета продолжают сверять то же слово, а владелец, заведший своё правило, получит своё.
+ * `undo: 'check'` — отнесение по ЭКЗЕМПЛЯРУ (Р-И-2), и это СМЕНА поведения по слову владельца (16.09,
+ * В-П-1а): снятый код уникальности под внутренним откатом не звался, и откат удаления конверта при уже
+ * созданном дубле давал бы два живых конверта на одну категорию и период. Для денег строже: откат при
+ * дубле отклоняется `INVARIANT duplicate_envelope`, владелец сначала убирает новый конверт. Из трёх
+ * «льготных» инвариантов (прежний код каждого под откатом не звался) строгим становится только этот:
+ * грант и субъект прогона под откатом не проверяются и дальше (§А7-2 ревизии 5 — их строки `skip`).
+ * Четвёрка — тот же порядок, что был в коде: она же читается `dropStaleCarryover` как «идентичность».
+ */
+export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput = {
+  id: 'duplicate_envelope',
+  template: 'unique_among',
+  undo: 'check',
+  params: {
+    properties: [
+      'orbis/finance_category',
+      'orbis/currency',
+      'orbis/period_start',
+      'orbis/period_end',
+    ],
+  },
+};
+
 /** Ключ — id строки-носителя; сиды берут `BUILTIN_RULES_BY_CARRIER[id] ?? []`. */
 export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefinitionInput[]>> = {
   'orbis/financial': [
@@ -73,4 +100,5 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
     RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   ],
   'orbis/task': [RULE_TASK_COMPLETED_AT],
+  'orbis/budget': [RULE_ENVELOPE_UNIQUE],
 };
