@@ -11,15 +11,20 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   type PropertyDefinition,
+  ruleDefinitionSchema,
 } from '@orbis/shared';
 import { ExecError } from '../errors';
 import {
+  type AspectDelta,
   applyDeltas,
   baseSystemFor,
   type ContractDelta,
+  type PropertyDelta,
   previewMergeConflicts,
   RELAXABLE_REQUIRED_PROPERTY_IDS,
+  type RegistryConflict,
   type RegistryDeltaRow,
+  registryConflictLine,
   relaxWhitelistViolations,
   type SubscriptionDelta,
   type SystemDefinitions,
@@ -963,6 +968,169 @@ describe('дельта контракта setsDelta и подписки definiti
       applyDeltas(snapshotWith(), [row('subscription', 'user/нет', { definition: AGENDA_DEF })])
         .subscriptions.size,
     ).toBe(0);
+  });
+});
+
+describe('правила в дельте: эффективный список и слияние (§Б4-1, В-6, Р-2/Р-2а)', () => {
+  const mine = ruleDefinitionSchema.parse({
+    id: 'my_task_needs_due',
+    template: 'requires_when',
+    params: { property: 'orbis/due_date' },
+    when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+  });
+  const system = ruleDefinitionSchema.parse({
+    id: 'task_completed_at',
+    template: 'on_enter_class',
+    params: {
+      enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+      set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+    },
+  });
+  /** Снимок, у которого на аспекте `orbis/task` стоят РОВНО эти системные правила. */
+  const withSystemRule = (rules = [system]): RegistrySnapshot => {
+    const snap = snapshotWith();
+    const task = snap.aspects.get('orbis/task');
+    if (task === undefined) throw new Error('в снимке нет orbis/task');
+    snap.aspects.set('orbis/task', { ...task, rules });
+    return snap;
+  };
+  const idsOf = (r: RegistrySnapshot) => r.aspects.get('orbis/task')?.rules.map((x) => x.id);
+
+  test('правило дельты добавляется к системным, отключённое уходит; без дельты список системный', () => {
+    expect(idsOf(applyDeltas(withSystemRule(), []))).toEqual(['task_completed_at']);
+    expect(
+      idsOf(
+        applyDeltas(withSystemRule(), [
+          row('aspect', 'orbis/task', { rules: [mine], rulesDisabled: ['task_completed_at'] }),
+        ]),
+      ),
+    ).toEqual(['my_task_needs_due']);
+  });
+
+  test('отключение действует и на СВОЁ правило дельты: так пересев выключает проигравшее (Р-И-35)', () => {
+    expect(
+      idsOf(
+        applyDeltas(withSystemRule(), [
+          row('aspect', 'orbis/task', { rules: [mine], rulesDisabled: ['my_task_needs_due'] }),
+        ]),
+      ),
+    ).toEqual(['task_completed_at']);
+  });
+
+  test('правило на ВСТРОЕННОМ СВОЙСТВЕ едет дельтой свойства (у рода property писателя до Б-2 не было)', () => {
+    const out = applyDeltas(snapshotWith(), [row('property', 'orbis/due_date', { rules: [mine] })]);
+    expect(out.properties.get('orbis/due_date')?.rules.map((r) => r.id)).toEqual([
+      'my_task_needs_due',
+    ]);
+  });
+
+  test('правило владельца переживает пересев как есть', () => {
+    const prev = systemOf(withSystemRule());
+    const m = threeWayMerge(prev, prev, row('aspect', 'orbis/task', { rules: [mine] }));
+    expect(m.conflicts).toEqual([]);
+    expect((m.merged as AspectDelta).rules?.map((r) => r.id)).toEqual(['my_task_needs_due']);
+  });
+
+  test('система завела правило-конкурента → правило владельца ОТКЛЮЧЕНО, конфликт rule-conflict', () => {
+    // Оба пишут `orbis/completed_at` при входе в класс `done`: ключ (событие, свойство-цель) общий.
+    const m = threeWayMerge(
+      systemOf(withSystemRule([])),
+      systemOf(withSystemRule([{ ...system, id: 'task_completed_at_v2' }])),
+      row('aspect', 'orbis/task', { rules: [{ ...system, id: 'my_completed_at' }] }),
+    );
+    expect(m.conflicts.map((c) => c.kind)).toEqual(['rule-conflict']);
+    expect(m.conflicts[0]?.rule).toEqual({
+      mine: 'my_completed_at',
+      theirs: 'task_completed_at_v2',
+    });
+    // Декларация ОСТАЁТСЯ, отключение — отдельным полем: «отключить», а не «стереть» (§С3).
+    expect((m.merged as AspectDelta).rules?.map((r) => r.id)).toEqual(['my_completed_at']);
+    expect((m.merged as AspectDelta).rulesDisabled).toEqual(['my_completed_at']);
+    expect(registryConflictLine(m.conflicts[0] as RegistryConflict)).toContain(
+      'rule-conflict aspect/orbis/task',
+    );
+  });
+
+  test('отключённое пересевом своё правило ОСТАЁТСЯ отключённым на следующем пересеве — без второго конфликта', () => {
+    // Висячим считается id, которого нет НИ в системе, НИ среди своих правил: своё отключённое
+    // правило висячим не является, и снять его отключение молча значило бы вернуть в работу
+    // второго писателя того же свойства.
+    const next = systemOf(withSystemRule([{ ...system, id: 'task_completed_at_v2' }]));
+    const m = threeWayMerge(
+      next,
+      next,
+      row('aspect', 'orbis/task', {
+        rules: [{ ...system, id: 'my_completed_at' }],
+        rulesDisabled: ['my_completed_at'],
+      }),
+    );
+    expect(m.conflicts).toEqual([]);
+    expect((m.merged as AspectDelta).rulesDisabled).toEqual(['my_completed_at']);
+  });
+
+  test('система завела правило с ТЕМ ЖЕ id: совпало целиком — своё снимается молча, иначе — снято с заметкой', () => {
+    const same = threeWayMerge(
+      systemOf(withSystemRule([])),
+      systemOf(withSystemRule([mine])),
+      row('aspect', 'orbis/task', { rules: [mine] }),
+    );
+    expect(same).toEqual({ merged: {}, conflicts: [] });
+    const other = threeWayMerge(
+      systemOf(withSystemRule([])),
+      systemOf(
+        withSystemRule([
+          ruleDefinitionSchema.parse({
+            id: 'my_task_needs_due',
+            template: 'requires_when',
+            params: { property: 'orbis/priority' },
+          }),
+        ]),
+      ),
+      row('aspect', 'orbis/task', { rules: [mine] }),
+    );
+    expect(other.merged).toEqual({});
+    // Единицы у такого конфликта нет (поля `rule` нет): обмен отключений по одному id невыразим.
+    expect(other.conflicts.map((c) => [c.kind, c.rule])).toEqual([['rule-conflict', undefined]]);
+  });
+
+  test('отключение правила, которого в системе больше нет, снимается молча', () => {
+    // «Нет в системе» — пустой список правил носителя в НОВОЙ системе: встроенный снимок теста
+    // несёт системные правила задачи (`BUILTIN_ASPECT_DEFS`), и `snapshotWith()` здесь не годится.
+    const m = threeWayMerge(
+      systemOf(withSystemRule()),
+      systemOf(withSystemRule([])),
+      row('aspect', 'orbis/task', { rulesDisabled: ['task_completed_at'] }),
+    );
+    expect(m.conflicts).toEqual([]);
+    expect((m.merged as AspectDelta).rulesDisabled).toBeUndefined();
+  });
+
+  test('дельта свойства сливается тем же правилом: подпись сохраняется, конкурент выключает своё', () => {
+    const writer = ruleDefinitionSchema.parse({
+      id: 'my_due_default',
+      template: 'default',
+      params: { property: 'orbis/due_date', value: { prop: 'orbis/start_at' } },
+    });
+    const prop = (rules: (typeof writer)[]) => {
+      const snap = snapshotWith();
+      const due = snap.properties.get('orbis/due_date');
+      if (due === undefined) throw new Error('в снимке нет orbis/due_date');
+      snap.properties.set('orbis/due_date', { ...due, rules });
+      return systemOf(snap);
+    };
+    const m = threeWayMerge(
+      prop([]),
+      prop([{ ...writer, id: 'due_default_v2' }]),
+      row('property', 'orbis/due_date', { label: { ru: 'Крайний срок' }, rules: [writer] }),
+    );
+    expect(m.conflicts.map((c) => [c.kind, c.targetKind, c.rule])).toEqual([
+      ['rule-conflict', 'property', { mine: 'my_due_default', theirs: 'due_default_v2' }],
+    ]);
+    expect(m.merged as PropertyDelta).toEqual({
+      label: { ru: 'Крайний срок' },
+      rules: [writer],
+      rulesDisabled: ['my_due_default'],
+    });
   });
 });
 

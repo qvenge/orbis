@@ -30,6 +30,9 @@ import {
   type LocalizedText,
   localizedTextSchema,
   type PropertyDefinition,
+  RULE_ID_RE,
+  type RuleDefinition,
+  ruleDefinitionSchema,
   type SelectOption,
   SLOT_KEY_RE,
   selectOptionSchema,
@@ -40,6 +43,8 @@ import { z } from 'zod';
 import { ExecError } from '../errors';
 // Только тип — рантайм-цикла с `load.ts` (тот берёт отсюда тип строки дельты) нет.
 import type { RegistrySnapshot, SubscriptionRow } from './load';
+// Цикла нет: `rules.ts` отсюда не импортирует ничего, а из `load.ts` берёт только тип снимка.
+import { ruleConflictsOf } from './rules';
 
 /** Цели дельты — те же шесть, что перечисляет CHECK-ограничение `registry_deltas` (0014). */
 export const REGISTRY_DELTA_TARGET_KINDS = [
@@ -125,19 +130,35 @@ export const aspectDeltaSchema = z
         ),
       )
       .optional(),
+    /** Правила владельца поверх ВСТРОЕННОЙ строки (§Б4-1, В-6): системную строку правит только сид, а форк
+     *  аспекта увёл бы данные (§А3-5). Роли полей не получают — схемы дельты роли нет вовсе (Р-2). */
+    rules: z.array(ruleDefinitionSchema).optional(),
+    /** Отключённые правила носителя (§С3 «удалить = отключить», §Б4-4, Р-2а). Владелец кладёт сюда id
+     *  СИСТЕМНОГО правила (своё правило дельты он снимает из `rules`, а не отключением — строка его и есть);
+     *  id СВОЕГО правила сюда кладёт только пересев, выключая проигравшее в конфликте с новым системным
+     *  (`mergeRules`, Р-И-35): декларация остаётся, исполнение — нет, и единица пачки меняет их местами. */
+    rulesDisabled: z.array(z.string().regex(RULE_ID_RE)).optional(),
   })
   .strict();
 export type AspectDelta = z.infer<typeof aspectDeltaSchema>;
 
 /**
- * Дельта свойства — только подпись и смысл (Р19 заметок: «переопределение подписи
- * встроенного»). Тип, key, `scope` и флаги сюда не входят: смена типа — это форк свойства
- * (§А3-5), а не дельта, и данные под ней не переезжают.
+ * Дельта свойства — подпись и смысл (Р19 заметок: «переопределение подписи встроенного») и, с
+ * Б-2, правила владельца поверх встроенной строки (§Б4-1, В-6). Тип, key, `scope` и флаги сюда не
+ * входят: смена типа — это форк свойства (§А3-5), а не дельта, и данные под ней не переезжают.
  */
 export const propertyDeltaSchema = z
   .object({
     label: localizedTextSchema.optional(),
     description: localizedTextSchema.optional(),
+    /** Правила владельца поверх ВСТРОЕННОЙ строки (§Б4-1, В-6): системную строку правит только сид, а форк
+     *  аспекта увёл бы данные (§А3-5). Роли полей не получают — схемы дельты роли нет вовсе (Р-2). */
+    rules: z.array(ruleDefinitionSchema).optional(),
+    /** Отключённые правила носителя (§С3 «удалить = отключить», §Б4-4, Р-2а). Владелец кладёт сюда id
+     *  СИСТЕМНОГО правила (своё правило дельты он снимает из `rules`, а не отключением — строка его и есть);
+     *  id СВОЕГО правила сюда кладёт только пересев, выключая проигравшее в конфликте с новым системным
+     *  (`mergeRules`, Р-И-35): декларация остаётся, исполнение — нет, и единица пачки меняет их местами. */
+    rulesDisabled: z.array(z.string().regex(RULE_ID_RE)).optional(),
   })
   .strict();
 export type PropertyDelta = z.infer<typeof propertyDeltaSchema>;
@@ -272,6 +293,19 @@ function refsOf(aspect: AspectDefinition): AspectDefinition['properties'] {
 }
 
 /**
+ * Эффективные правила: системные ПЛЮС правила владельца МИНУС отключённые (Р-2а). Складывается ЗДЕСЬ и
+ * нигде больше — движок читает `row.rules` и про дельты не знает; второй экземпляр ответил бы иначе.
+ * Отключение режет ОБА источника: владелец отключает системное, пересев — своё проигравшее (`mergeRules`).
+ */
+function effectiveRules(
+  base: readonly RuleDefinition[],
+  delta: { rules?: RuleDefinition[]; rulesDisabled?: string[] },
+): RuleDefinition[] {
+  const off = new Set(delta.rulesDisabled ?? []);
+  return [...base, ...(delta.rules ?? [])].filter((r) => !off.has(r.id));
+}
+
+/**
  * Система ⊕ дельты владельца = ЭФФЕКТИВНОЕ определение (§А3-2).
  *
  * Порядок применения детерминирован — дельты сортируются по `(target_kind, target_id)`, а
@@ -307,6 +341,7 @@ export function applyDeltas(
         ...base,
         ...(delta.label !== undefined && { label: delta.label }),
         ...(delta.description !== undefined && { description: delta.description }),
+        rules: effectiveRules(base.rules ?? [], delta),
       });
       continue;
     }
@@ -446,6 +481,7 @@ export function applyDeltas(
       properties: nextRefs,
       viewConfig:
         delta.icon === undefined ? base.viewConfig : { ...base.viewConfig, icon: delta.icon },
+      rules: effectiveRules(base.rules ?? [], delta),
     });
 
     for (const [propertyId, patch] of Object.entries(delta.selectOptions ?? {})) {
@@ -569,7 +605,12 @@ function parseDelta(row: RegistryDeltaRow): RegistryDelta {
  * деплойного слияния его нет (находка 46).
  */
 export interface RegistryConflict {
-  kind: 'variant-merge' | 'hidden-required' | 'set-merge' | 'subscription-rebased';
+  kind:
+    | 'variant-merge'
+    | 'hidden-required'
+    | 'set-merge'
+    | 'subscription-rebased'
+    | 'rule-conflict';
   targetKind: RegistryDeltaTargetKind;
   targetId: string;
   propertyId?: string;
@@ -590,6 +631,15 @@ export interface RegistryConflict {
    * не заводится.
    */
   option?: { mine: string; theirs: string };
+  /**
+   * Пара правил — только у `rule-conflict`, где выбор ЕСТЬ (§А3-3, Р-И-35): новое системное правило и
+   * правило владельца пишут одно (событие, свойство), и слияние выключило своё. Поле СТРУКТУРНО, потому
+   * что по нему собирается единица пачки (довод `option` выше): «Принять» = обмен отключений (`mine`
+   * включается, `theirs` выключается), и имя правила из `detail` регуляркой не достают. У конфликта по
+   * совпавшему ID поля нет: обмен отключений по одному id невыразим (отключение режет оба источника), и
+   * по отсутствию поля единица не заводится — владелец получает заметку.
+   */
+  rule?: { mine: string; theirs: string };
 }
 
 /**
@@ -717,8 +767,12 @@ function requiredIn(aspect: AspectDefinition | undefined, propertyId: string): b
  *   что она главнее, а потому, что противоположный выбор — это молчаливо неработающая
  *   запись.
  *
- * Дельта, чья цель — не аспект, конфликтов дать не может: `PropertyDelta` состоит из
- * label/description, а у них правило одно и молчаливое.
+ * - правило владельца, которому новая система завела КОНКУРЕНТА (два писателя одного (событие,
+ *   свойство)), — КОНФЛИКТ `rule-conflict`, и своё правило ОТКЛЮЧАЕТСЯ (`mergeRules` ниже).
+ *
+ * Дельта СВОЙСТВА с Б-2 тоже способна дать конфликт — но только этот, правил (`rules` поверх встроенной
+ * строки, В-6): подпись и смысл у неё сливаются молча, как и у аспекта. Дельта действия — подпись и смысл
+ * и ничего больше, конфликтов у неё нет.
  */
 export function threeWayMerge(
   prevSystem: SystemDefinitions,
@@ -827,6 +881,15 @@ export function threeWayMerge(
     }
     return { merged: delta, conflicts };
   }
+  if (row.targetKind === 'property') {
+    const delta = parseDelta(row) as PropertyDelta;
+    const { rules: _rules, rulesDisabled: _off, ...rest } = delta;
+    const baseRules = nextSystem.properties.get(row.targetId)?.rules ?? [];
+    return {
+      merged: { ...rest, ...mergeRules(baseRules, delta, 'property', row.targetId, conflicts) },
+      conflicts,
+    };
+  }
   if (row.targetKind !== 'aspect') return { merged: parseDelta(row), conflicts };
 
   const delta = parseDelta(row) as AspectDelta;
@@ -927,6 +990,76 @@ export function threeWayMerge(
     ...(Object.keys(properties).length > 0 && { properties }),
     ...(Object.keys(selectOptions).length > 0 && { selectOptions }),
     ...(Object.keys(classMap).length > 0 && { classMap }),
+    // (4) Правила владельца против правил НОВОЙ системы (§А3-3, Р-И-35).
+    ...mergeRules(nextAspect?.rules ?? [], delta, 'aspect', row.targetId, conflicts),
   };
   return { merged, conflicts };
+}
+
+/**
+ * ПРАВИЛА ВЛАДЕЛЬЦА ПРИ ПЕРЕСЕВЕ (§А3-3, Р-И-35). Правило живёт, пока новая система не завела
+ * КОНФЛЮЭНТНО несовместимое (§Б4: два писателя одного (свойство, событие)). Тогда правило владельца
+ * ОТКЛЮЧАЕТСЯ, а не снимается: снятие потеряло бы декларацию, а живой конфликт отдал бы движку двух
+ * писателей одного свойства — запись, исход которой зависит от порядка. Fail-closed на ЧТЕНИИ невозможен
+ * (Р-И-7), значит конфликт разрешается здесь, на пересеве, один раз.
+ *
+ * ВИСЯЧЕЕ `rulesDisabled` — id, которого нет НИ в новой системе, НИ среди своих правил дельты: отключать
+ * нечего, и оно снимается молча. Своё правило, отключённое прошлым пересевом, висячим НЕ является: снять
+ * его отключение значило бы молча вернуть в работу второго писателя — ровно то, от чего отключение и
+ * защищало (и следующий пересев завёл бы тот же конфликт второй единицей пачки).
+ *
+ * СОВПАВШИЙ ID. Система завела правило с id правила владельца. Одинаковое целиком — система догнала
+ * владельца, своё снимается молча (довод блока (1) `threeWayMerge` про `properties.add`). Разное —
+ * своё снимается с заметкой: id — адрес правила в журнале, в отказе и в «отключить», и двум правилам
+ * с одним адресом не ужиться (отключение по id выключило бы оба).
+ */
+function mergeRules(
+  baseRules: readonly RuleDefinition[],
+  delta: { rules?: RuleDefinition[]; rulesDisabled?: string[] },
+  targetKind: RegistryDeltaTargetKind,
+  targetId: string,
+  conflicts: RegistryConflict[],
+): { rules?: RuleDefinition[]; rulesDisabled?: string[] } {
+  const system = new Map(baseRules.map((r) => [r.id, r]));
+  const kept: RuleDefinition[] = [];
+  for (const own of delta.rules ?? []) {
+    const twin = system.get(own.id);
+    if (twin === undefined) {
+      kept.push(own);
+      continue;
+    }
+    if (canonicalJson(twin) === canonicalJson(own)) continue;
+    conflicts.push({
+      kind: 'rule-conflict',
+      targetKind,
+      targetId,
+      detail:
+        `обновление завело системное правило с тем же именем «${own.id}» — ваше снято ` +
+        `(два правила с одним именем не различить ни в журнале, ни в «отключить»)`,
+    });
+  }
+  const known = new Set([...system.keys(), ...kept.map((r) => r.id)]);
+  const disabled = (delta.rulesDisabled ?? []).filter((id) => known.has(id));
+  const live = baseRules.filter((r) => !disabled.includes(r.id));
+  for (const own of kept) {
+    // Уже отключённое своё не спорит ни с кем: оно не исполняется.
+    if (disabled.includes(own.id)) continue;
+    const clash = ruleConflictsOf([...live, own]).find((c) => c.a === own.id || c.b === own.id);
+    if (clash === undefined) continue;
+    const theirs = clash.a === own.id ? clash.b : clash.a;
+    disabled.push(own.id);
+    conflicts.push({
+      kind: 'rule-conflict',
+      targetKind,
+      targetId,
+      rule: { mine: own.id, theirs },
+      detail:
+        `обновление завело правило «${theirs}», которое пишет то же (${clash.event} → ` +
+        `${clash.property}), что ваше «${own.id}» — ваше отключено`,
+    });
+  }
+  return {
+    ...(kept.length > 0 && { rules: kept }),
+    ...(disabled.length > 0 && { rulesDisabled: disabled }),
+  };
 }
