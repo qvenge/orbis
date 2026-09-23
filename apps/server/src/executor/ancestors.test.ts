@@ -23,6 +23,8 @@ import {
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
+import { nearestAncestorRuleOf } from '../rules/carriers';
+import { recomputeProjectAncestors } from './ancestors';
 import { makeChatJournalSink } from './journal';
 import type {
   ActionOperation,
@@ -377,4 +379,16 @@ test('чужое поддерево пересчёт не трогает (RLS)',
     tx.execute(sql`SELECT count(*)::int AS n FROM entities WHERE props ? 'orbis/parent_project'`),
   );
   expect((rows as unknown as Array<{ n: number }>)[0]?.n).toBe(0);
+});
+
+test('цели и кап приезжают из строки правила, а не из констант файла', async () => {
+  // Выключенная строка — Error сборки: пересчёт по числам, которых нет в реестре, запрещён.
+  const user = await freshGraph();
+  const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+  expect(nearestAncestorRuleOf(reg).rule.params.targets.parent).toBe('orbis/parent_project');
+  const empty = { ...reg, aspects: new Map() } as typeof reg;
+  // `tx` не нужен и не должен понадобиться: читатель строки — первая строка движка, до любого SQL.
+  await expect(recomputeProjectAncestors(null as never, user, ['x'], empty)).rejects.toThrow(
+    /nearest_ancestor/,
+  );
 });

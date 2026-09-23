@@ -110,6 +110,7 @@ import {
   syncRefMirror,
 } from '../registry/ref';
 import { effectiveRuleScope, rulesOf } from '../registry/rules';
+import { nearestAncestorRuleOf } from '../rules/carriers';
 import {
   applyTransitionRules,
   assertConstraintRules,
@@ -143,7 +144,7 @@ import {
 } from '../tools/registry-tools';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
-import { PROJECT_ASPECT, recomputeProjectAncestors } from './ancestors';
+import { recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
 import { bodyFieldsFromMarkdown } from './body-fields';
 import { ExecError } from './errors';
@@ -2499,7 +2500,7 @@ async function prepareEntityUpdate(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
-    ...ancestorRootsOnProjectChange(input.id, before, state),
+    ...ancestorRootsOnProjectChange(ctx.registry, input.id, before, state),
     // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
     ...refWriteOf(ctx, input.id, before, state, propsPatch),
     // «Стала архивной», а не «архивна»: повторная архивация уже архивной цели источников не
@@ -2679,7 +2680,7 @@ async function prepareAttach(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
-    ...ancestorRootsOnProjectChange(input.entity_id, before, state),
+    ...ancestorRootsOnProjectChange(ctx.registry, input.entity_id, before, state),
     // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
     ...refWriteOf(ctx, input.entity_id, before, state, propsPatch),
     // Стадия 5
@@ -2706,12 +2707,16 @@ async function prepareAttach(
  * свой корень само.
  */
 function ancestorRootsOnProjectChange(
+  reg: RegistrySnapshot,
   entityId: string,
   before: EntityState,
   after: EntityState,
 ): { ancestorRoots?: string[] } {
-  const was = before.aspects.includes(PROJECT_ASPECT);
-  const is = after.aspects.includes(PROJECT_ASPECT);
+  // Аспект-проект — НОСИТЕЛЬ строки правила (`nearestAncestorRuleOf`), тот же, по которому движок
+  // ищет предков: условие запуска и условие обхода читают один адрес реестра, а не две копии литерала.
+  const project = nearestAncestorRuleOf(reg).aspectId;
+  const was = before.aspects.includes(project);
+  const is = after.aspects.includes(project);
   return was === is ? {} : { ancestorRoots: [entityId] };
 }
 

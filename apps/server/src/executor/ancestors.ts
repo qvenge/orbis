@@ -5,12 +5,12 @@
 // заменяет ручную денормализацию `orbis/agent-run.project_id`, которую писал ровно один
 // глагол и которая молча врала при любом переносе поддерева.
 //
-// ЗДЕСЬ — КОД ДВИЖКА, а не декларация правила: СТРОКА правила в реестре каталога появляется
-// только в части Б (Б-2), и до неё имя правила живёт в коде — во флаге `flags.computed.rule`
-// встроенных свойств и в системной строке журнала о пересчёте. Обе стороны берут его из
-// ОДНОЙ константы `RULE_NEAREST_ANCESTOR` (`@orbis/shared`, `constants.ts`): она видна и
-// пакету реестра, и серверу, поэтому переименование правит оба места разом. Что константа
-// доехала до строки реестра в БД, проверяет отдельный тест — сид между ними ещё стоит.
+// ЗДЕСЬ — КОД ДВИЖКА; ПАРАМЕТРЫ — СТРОКА КАТАЛОГА (Б-2). Пара целевых свойств, аспект-носитель и
+// кап глубины приезжают строкой правила `nearest_ancestor` на `orbis/project`
+// (`rules/carriers.ts`, `nearestAncestorRuleOf`). Имя правила по-прежнему одно —
+// `RULE_NEAREST_ANCESTOR` (`@orbis/shared`, `constants.ts`): оно же id строки, оно же стоит во
+// `flags.computed.rule` обоих свойств и в системной строке журнала о пересчёте. Строки нет или она
+// выключена — `Error` сборки: считать по числам, которых нет в реестре, движок не вправе.
 //
 // ТРИ ОТСТУПЛЕНИЯ ОТ ОБЫЧНОГО ПУТИ ЗАПИСИ, каждое — норматив, а не сокращение:
 //
@@ -35,27 +35,7 @@ import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
 import { hierarchicalRoles } from '../registry/roles';
-
-export const PROP_PARENT_PROJECT = 'orbis/parent_project';
-export const PROP_ROOT_PROJECT = 'orbis/root_project';
-
-/**
- * Аспект, наличие которого делает сущность проектом для этого правила. Экспортирован ради
- * executor'а: он же решает, что навешивание/снятие ИМЕННО ЭТОГО аспекта запускает пересчёт,
- * и вторая копия литерала развела бы условие запуска с условием обхода.
- */
-export const PROJECT_ASPECT = 'orbis/project';
-
-/**
- * Кап глубины обхода — и вниз по поддереву, и вверх по предкам.
- *
- * Он не про производительность, а про ЗАВЕРШАЕМОСТЬ: ацикличность в реестре объявлена
- * только у `category-parent` и `dependency` (§А4-2), то есть цикл из `subitem` владелец
- * построить может, и обход без капа висел бы на нём. 32 — заведомо больше любой живой
- * иерархии; глубже кап молча обрезает, и это честнее отказа: правка ребра не обязана
- * падать из-за формы графа, которую сам же граф и разрешает.
- */
-const DEPTH_CAP = 32;
+import { nearestAncestorRuleOf } from '../rules/carriers';
 
 /**
  * Пересчёт `orbis/parent_project`/`orbis/root_project` для поддеревьев затронутых целей.
@@ -82,6 +62,20 @@ export async function recomputeProjectAncestors(
   changedTargetIds: string[],
   reg: RegistrySnapshot,
 ): Promise<{ recomputed: number }> {
+  // Параметры — из строки каталога на аспекте-носителе (§Б4-3, Р-14): движок остался кодом, числа
+  // и адреса свойств ушли в реестр. Роли по-прежнему из снимка (`hierarchical`) — они и раньше
+  // читались оттуда, и второй формой в params им быть незачем. Читается ПЕРВОЙ строкой, до выхода
+  // «пересчитывать нечего»: снятая строка обязана отказывать на любом вызове, а не только на том,
+  // где нашлось что пересчитать.
+  //
+  // Кап глубины — и вниз по поддереву, и вверх по предкам — не про производительность, а про
+  // ЗАВЕРШАЕМОСТЬ: ацикличность объявлена только у `category-parent` и `dependency` (§А4-2), цикл
+  // из `subitem` владелец построить может, и обход без капа висел бы на нём. Глубже кап молча
+  // обрезает, и это честнее отказа: правка ребра не обязана падать из-за формы графа, которую сам
+  // же граф и разрешает.
+  const { rule, aspectId: PROJECT } = nearestAncestorRuleOf(reg);
+  const { parent: PARENT, root: ROOT } = rule.params.targets;
+  const depthCap = rule.params.depth_cap;
   const roots = [...new Set(changedTargetIds)];
   const roles = hierarchicalRoles(reg);
   if (roots.length === 0 || roles.length === 0) return { recomputed: 0 };
@@ -103,7 +97,7 @@ export async function recomputeProjectAncestors(
         SELECT r.target_id, d.depth + 1
           FROM down d
           JOIN relations r ON r.source_id = d.id AND r.role IN (${roleList})
-         WHERE d.depth < ${DEPTH_CAP}
+         WHERE d.depth < ${depthCap}
     ),
     -- Ромб в иерархии даёт один и тот же узел на разной глубине: множество поддерева
     -- обязано быть множеством, иначе строка обновлялась бы дважды и считалась дважды.
@@ -114,13 +108,13 @@ export async function recomputeProjectAncestors(
         SELECT u.start_id, r.source_id, u.depth + 1
           FROM up u
           JOIN relations r ON r.target_id = u.id AND r.role IN (${roleList})
-         WHERE u.depth < ${DEPTH_CAP}
+         WHERE u.depth < ${depthCap}
     ),
     -- Кандидаты в предки: только ВЫШЕ самой сущности (depth > 0) — проект не предок себе.
     proj AS (
       SELECT u.start_id, u.depth, e.id AS project_id, e.created_at
         FROM up u JOIN entities e ON e.id = u.id
-       WHERE u.depth > 0 AND ${PROJECT_ASPECT}::text = ANY(e.aspects)
+       WHERE u.depth > 0 AND ${PROJECT}::text = ANY(e.aspects)
     ),
     -- Родителей у иерархической роли может быть несколько, поэтому «ближайший» и «корневой»
     -- доопределены детерминированно: сначала глубина, потом старшинство записи. Молча
@@ -167,19 +161,19 @@ export async function recomputeProjectAncestors(
         LEFT JOIN picked p ON p.start_id = s.id
     )
     UPDATE entities e
-       SET props = (e.props - ${PROP_PARENT_PROJECT}::text - ${PROP_ROOT_PROJECT}::text)
+       SET props = (e.props - ${PARENT}::text - ${ROOT}::text)
                  || CASE WHEN c.parent_project IS NULL THEN '{}'::jsonb
-                         ELSE jsonb_build_object(${PROP_PARENT_PROJECT}::text,
+                         ELSE jsonb_build_object(${PARENT}::text,
                                                  to_jsonb(c.parent_project::text)) END
                  || CASE WHEN c.root_project IS NULL THEN '{}'::jsonb
-                         ELSE jsonb_build_object(${PROP_ROOT_PROJECT}::text,
+                         ELSE jsonb_build_object(${ROOT}::text,
                                                  to_jsonb(c.root_project::text)) END
       FROM computed c
      WHERE e.id = c.id
        -- Строки с неизменившимся значением не трогаем вовсе: пересчёт поддерева обязан
        -- быть дешёвым на «перетащили одну задачу», а не переписывать всё поддерево целиком.
-       AND (e.props->>${PROP_PARENT_PROJECT}::text IS DISTINCT FROM c.parent_project::text
-         OR e.props->>${PROP_ROOT_PROJECT}::text IS DISTINCT FROM c.root_project::text)
+       AND (e.props->>${PARENT}::text IS DISTINCT FROM c.parent_project::text
+         OR e.props->>${ROOT}::text IS DISTINCT FROM c.root_project::text)
     RETURNING e.id`)) as unknown as Array<{ id: string }>;
 
   return { recomputed: rows.length };
