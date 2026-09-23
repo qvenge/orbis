@@ -209,13 +209,11 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
                   [waitingFor]: note,
                 },
               }
-            : // Эффекта не было — безопасно перезапустить; чужой хвост ожидания снимаем
-              // ЯВНЫМ `unset` (`null` в новой форме — законное значение, а не распоряжение
-              // стереть, §А1-1). Снос этой строки — задача 14 (В-П-8).
-              {
-                props: statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued'),
-                unset: [waitingFor],
-              }),
+            : // Эффекта не было — безопасно перезапустить.
+              // `waiting_for` снимает ПРАВИЛО каталога `waiting_for` при уходе из класса `waiting`,
+              // а держит его там `waiting_for_only_when_waiting`: вопрос вне ожидания невозможен, и
+              // подчищать тут нечего (§Б4-3, В-П-8). Статус ставится классом — `statusPatch` (14а).
+              { props: statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued') }),
         },
       });
     }

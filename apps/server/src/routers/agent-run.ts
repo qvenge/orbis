@@ -170,14 +170,12 @@ export const agentRunRouter = router({
                   precondition: [
                     classPrecondition(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, ['waiting']),
                   ],
-                  // Ответ возвращает тикет в очередь; уходя из ожидания — снимаем «чего ждём»
-                  // (конвенция среза, как в подметании и итоге): вопрос рядом с тикетом в
-                  // очереди читался бы как открытый. Снятие — ЯВНЫЙ `unset`: `null` в новой
-                  // форме законное значение (§А1-1). Снос строки — задача 14 (В-П-8).
+                  // Ответ возвращает тикет в очередь.
+                  // `waiting_for` снимает ПРАВИЛО каталога `waiting_for` при уходе из класса
+                  // `waiting`, а держит его там `waiting_for_only_when_waiting`: вопрос вне
+                  // ожидания невозможен, и подчищать тут нечего (§Б4-3, В-П-8). Статус ставится
+                  // классом — `statusPatch` (14а).
                   props: statusPatch(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued'),
-                  unset: [
-                    slotPropertyOf(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for'),
-                  ],
                 },
               },
             ],

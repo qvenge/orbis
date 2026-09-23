@@ -823,13 +823,11 @@ async function hasOpenUnits(ctx: VerbCtx, runId: string): Promise<boolean> {
 
 /** Патч тикета вместе с его собственными предусловиями (у итога — право на `done`). */
 interface TicketUpdate {
-  /** Значения по id свойств (§А1-1). */
-  props: Record<string, unknown>;
   /**
-   * ЯВНОЕ снятие свойства. Отдельным списком, а не `null` в `props`: `null` в новой форме
-   * — законное значение json-свойства, а не распоряжение стереть (контракт `entityPropsPatch`).
+   * Значения по id свойств (§А1-1). Канала `unset` у патча тикета нет: единственным его писателем
+   * было снятие «чего ждём» на итоге, а с задачи 14 это работа правила каталога `waiting_for`.
    */
-  unset?: string[];
+  props: Record<string, unknown>;
   /** Сверх общего «тикет ещё в работе». */
   precondition?: EntityUpdatePreconditionItem[];
 }
@@ -953,7 +951,6 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
           ...(ticketUpdate.precondition ?? []),
         ],
         props: ticketUpdate.props,
-        ...(ticketUpdate.unset !== undefined && { unset: ticketUpdate.unset }),
       },
     });
   }
@@ -1110,11 +1107,9 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
             // нашим чтением и записью, и тогда `done` стал бы решением агента, а не его.
             precondition: [{ property: 'orbis/may_close', in: [true] }],
             props: statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'done'),
-            // Уходя из ожидания — снимаем «чего ждём» (конвенция среза, как в подметании): вопрос
-            // прошлого чекпойнта рядом с `done` читался бы как незакрытый. Снос этой строки делает
-            // ЗАДАЧА 14 (В-П-8): правило `on_leave` закрывает уход, `forbidden_when` — саму
-            // возможность хвоста.
-            unset: [slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for')],
+            // `waiting_for` снимает ПРАВИЛО каталога `waiting_for` при уходе из класса `waiting`, а
+            // держит его там `waiting_for_only_when_waiting`: вопрос вне ожидания невозможен, и
+            // подчищать тут нечего (§Б4-3, В-П-8). Статус ставится классом — `statusPatch` (14а).
           }
         : {
             props: {
