@@ -23,6 +23,7 @@ import {
   type MyQueueResult,
   myQueueInput,
   newId,
+  propertyOfSlot,
   type QueueTicket,
   ROLE_RUN,
   type RunStepInput,
@@ -47,9 +48,17 @@ import type { Identity } from '../identity';
 import type { GrantRef } from '../oauth/grants';
 import { listRunUnits } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
+import {
+  bindingsOfSnapshot,
+  classOfEntity,
+  classPrecondition,
+  statusPatch,
+} from '../registry/class-write';
+import type { RegistrySnapshot } from '../registry/load';
 import type { ToolDispatchResult } from '../tools/dispatch';
 import type { AGENT_VERB_NAMES } from '../tools/registry';
 import { toLlmEntity } from '../wire';
+import { DELEGABLE_CONTRACT, TICKET_ASPECT } from './constants';
 import {
   assignedTickets,
   parentProject,
@@ -163,11 +172,20 @@ function narrow<S extends z.ZodTypeAny>(schema: S, input: unknown, tool: string)
   return parsed.data;
 }
 
-/** Статусы, из которых тикет можно взять в работу (единственное место правила). */
-const CLAIMABLE_STATUSES: readonly TaskStatus[] = ['inbox', 'planned'];
+/**
+ * Классы, из которых тикет можно взять в работу (единственное место правила). КЛАССЫ, а не значения:
+ * какой вариант статуса им соответствует, решает привязка аспекта — данные, а не выкатка.
+ */
+const CLAIMABLE_CLASSES: readonly string[] = ['new', 'queued'];
 
 function iso(d: Date): string {
   return d.toISOString();
+}
+
+/** Снимок грантовой половины. `null` недостижим: снимок и тикет кладутся одним походом. */
+function regOf(reg: RegistrySnapshot | null): RegistrySnapshot {
+  if (reg === null) throw new Error('closeRun: тикет есть, а снимка реестра нет');
+  return reg;
 }
 
 /**
@@ -417,21 +435,33 @@ async function myQueue(ctx: VerbCtx, grant: GrantRef): Promise<ToolDispatchResul
   });
 
   const tickets = await withIdentity(ctx.db, ctx.identity, async (tx) => {
+    const reg = await effectiveRegistry(tx, ctx.identity.graph);
+    const statusProperty = propertyOfSlot(
+      bindingsOfSnapshot(reg),
+      TICKET_ASPECT,
+      DELEGABLE_CONTRACT,
+      'status',
+    );
     const rows = await assignedTickets(tx, grant.id);
     const out: QueueTicket[] = [];
     for (const row of rows) {
       // Признак носителя стоит в SQL выборки (`assignedTickets`), поэтому здесь читаются
       // просто свойства строки.
       const task = row.props;
-      const status = task['orbis/task_status'] as TaskStatus;
+      // `task` — это `row.props` (`TicketProps`): у него известные ключи, а адрес слота приезжает
+      // СТРОКОЙ, и индексация им по узкому типу не типизируется ни при `interface`, ни при `type`.
+      const props: Record<string, unknown> = task;
+      const status = props[statusProperty] as TaskStatus;
       const project = await parentProject(tx, row.id);
       const runs = await runsOfParent(tx, row.id);
       const last = runs.at(-1);
+      // Ответ агенту несёт ЗНАЧЕНИЕ (он читает его глазами), а решение «брать или нет» — КЛАСС.
+      const cls = classOfEntity(reg, row, DELEGABLE_CONTRACT);
       out.push({
         id: row.id,
         title: row.title,
         status,
-        claimable: CLAIMABLE_STATUSES.includes(status),
+        claimable: cls !== null && CLAIMABLE_CLASSES.includes(cls),
         ...(typeof task['orbis/priority'] === 'string' && { priority: task['orbis/priority'] }),
         ...(typeof task['orbis/due_date'] === 'string' && { due_date: task['orbis/due_date'] }),
         ...(project !== null && { project: { id: project.id, title: project.title } }),
@@ -454,7 +484,12 @@ async function claimTask(
   grant: GrantRef,
   input: ClaimTaskInput,
 ): Promise<ToolDispatchResult> {
-  const ticket = await withIdentity(ctx.db, ctx.identity, (tx) => ticketById(tx, input.ticket_id));
+  // Тикет и снимок реестра — одним походом: снимок нужен предусловию и патчу захвата.
+  const found = await withIdentity(ctx.db, ctx.identity, async (tx) => ({
+    ticket: await ticketById(tx, input.ticket_id),
+    reg: await effectiveRegistry(tx, ctx.identity.graph),
+  }));
+  const ticket = found.ticket;
   // Чужой и несуществующий тикет под RLS неразличимы намеренно: исполнителю не с чего
   // узнавать, что за пределами его назначений вообще что-то есть.
   if (ticket === null) {
@@ -480,14 +515,14 @@ async function claimTask(
         // Захват — CAS-расширение стадий 4–5 (С7): «тикет всё ещё свободен И всё ещё
         // назначен ЭТОМУ гранту» проверяется по строке под FOR UPDATE и применяется той
         // же транзакцией. Отсюда инвариант 1: два конкурентных захвата не могут оба
-        // увидеть `planned`. Три условия, а не одно: отобрать чужой тикет так же
+        // увидеть тикет в классе очереди. Три условия, а не одно: отобрать чужой тикет так же
         // недопустимо, как перехватить уже начатый.
         precondition: [
-          { property: 'orbis/task_status', in: [...CLAIMABLE_STATUSES] },
+          classPrecondition(found.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, CLAIMABLE_CLASSES),
           { property: 'orbis/executor', in: ['agent'] },
           { property: 'orbis/grant', in: [grant.id] },
         ],
-        props: { 'orbis/task_status': 'in_progress' },
+        props: statusPatch(found.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'in_progress'),
       },
     },
     {
@@ -833,9 +868,9 @@ interface CloseRunArgs {
    * грантового субъекта и не нужно рутинному: прогон рутины — её дитя (V1.4), тикета у
    * него нет, и тикетная логика его не видит.
    */
-  ticketUpdate?: (ticket: TicketRow) => TicketUpdate;
-  /** Статусы тикета, допустимые в ответе: иное = сохранённый ответ чужого вызова. */
-  expected?: readonly TaskStatus[];
+  ticketUpdate?: (ticket: TicketRow, reg: RegistrySnapshot) => TicketUpdate;
+  /** КЛАССЫ тикета, допустимые в ответе: иное = сохранённый ответ чужого вызова. */
+  expectedClasses?: readonly string[];
 }
 
 /**
@@ -864,8 +899,16 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   // порядке. Родитель рутинного прогона — сама рутина (связь parent), а не тикет.
   let ticket: TicketRow | null = null;
   let ticketUpdate: TicketUpdate | null = null;
+  let reg: RegistrySnapshot | null = null;
   if (ctx.subject.kind === 'grant') {
-    ticket = await withIdentity(ctx.db, ctx.identity, (tx) => ticketOfRun(tx, run.id));
+    // Снимок реестра — тем же походом, что тикет: тикетная половина пишет и сверяет КЛАСС, а
+    // перевести класс в значение без снимка нечем.
+    const found = await withIdentity(ctx.db, ctx.identity, async (tx) => ({
+      ticket: await ticketOfRun(tx, run.id),
+      reg: await effectiveRegistry(tx, ctx.identity.graph),
+    }));
+    ticket = found.ticket;
+    reg = found.reg;
     // Прогон-сирота: закрывать нечего и некуда отчитываться. Случай не гипотетический —
     // связь мог снять владелец, — и молча закрыть один прогон было бы хуже отказа.
     if (ticket === null) {
@@ -878,7 +921,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
         run_id: run.id,
       });
     }
-    ticketUpdate = args.ticketUpdate(ticket);
+    ticketUpdate = args.ticketUpdate(ticket, found.reg);
   }
 
   const now = ctx.clock();
@@ -910,7 +953,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
         // `may_close` (С8), и без этой сверки право закрытия бралось бы из ЧУЖОГО
         // назначения. Пара условий, как в захвате: «мой» и «свободен» — разные вопросы.
         precondition: [
-          { property: 'orbis/task_status', in: ['in_progress'] },
+          classPrecondition(regOf(reg), TICKET_ASPECT, DELEGABLE_CONTRACT, ['in_progress']),
           { property: 'orbis/executor', in: ['agent'] },
           { property: 'orbis/grant', in: [ctx.subject.grant.id] },
           ...(ticketUpdate.precondition ?? []),
@@ -966,16 +1009,15 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   }
 
   const ticketWire = wireEntityAt(r.results, 1);
-  // Признак носителя (Р9): статус читается как СТАТУС ЗАДАЧИ только пока аспект на месте.
-  const status =
-    ticketWire?.aspects.includes('orbis/task') === true
-      ? ticketWire.props['orbis/task_status']
-      : undefined;
+  // Признак носителя (Р9) встроен в чтение класса: у записи без аспекта `orbis/task` привязки
+  // делегируемости не видно, и класс — `null`, то есть тот же несовпавший ответ (РЧ-14а-7).
+  const cls =
+    ticketWire === null ? null : classOfEntity(regOf(reg), ticketWire, DELEGABLE_CONTRACT);
   if (
     ticketWire === null ||
     ticketWire.id !== ticket.id ||
-    typeof status !== 'string' ||
-    !((args.expected ?? []) as readonly string[]).includes(status)
+    cls === null ||
+    !(args.expectedClasses ?? []).includes(cls)
   ) {
     return replayMismatch(args.verb, batchId);
   }
@@ -983,7 +1025,8 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   const result: FinishResult = {
     run_id: runWire.id,
     ticket_id: ticketWire.id,
-    ticket_status: status === 'done' ? 'done' : 'waiting',
+    // Ответ глагола говорит ИМЕНАМИ КЛАССОВ (`waiting`/`done` — они же ключи контракта).
+    ticket_status: cls === 'done' ? 'done' : 'waiting',
     action_id: r.actionId,
   };
   return ok(result);
@@ -1020,13 +1063,17 @@ async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDis
       // Актор патча при этом прежний (`{ai, system}`, `actorOf`) — инвариант §9.6.
       ...(undecided && { 'orbis/undecided': true }),
     }),
-    ticketUpdate: () => ({
-      props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': input.question },
+    ticketUpdate: (_ticket, reg) => ({
+      props: {
+        ...statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting'),
+        [propertyOfSlot(bindingsOfSnapshot(reg), TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for')]:
+          input.question,
+      },
     }),
-    expected: ['waiting'],
+    expectedClasses: ['waiting'],
   });
   // Ответ — CheckpointResult, сужение FinishResult: `ticket_status` у чекпойнта всегда
-  // 'waiting', и closeRun уже сверил его со списком `expected`. У рутинного прогона
+  // 'waiting', и closeRun уже сверил его класс со списком `expectedClasses`. У рутинного прогона
   // тикета нет вовсе — тогда сужать нечего, ключи о тикете в ответе не появляются.
   if (out.status === 'ok') {
     const fin = out.result as FinishResult;
@@ -1058,7 +1105,7 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
       'orbis/run_outcome': 'finished',
       'orbis/run_report': input.report,
     }),
-    ticketUpdate: (ticket) =>
+    ticketUpdate: (ticket, reg) =>
       // Отсутствие may_close = запрет (С8): ajv default'ов не применяет, и «не сказано» —
       // это «нельзя», а не «можно». Признак носителя обязателен и здесь: `ticketOfRun`
       // требует лишь `orbis/task`, а `orbis/may_close` переживает снятие аспекта
@@ -1069,13 +1116,32 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
             // Право сверяется ещё раз под замком: владелец мог снять may_close между
             // нашим чтением и записью, и тогда `done` стал бы решением агента, а не его.
             precondition: [{ property: 'orbis/may_close', in: [true] }],
-            // Уходя из waiting — снимаем waiting_for (конвенция среза, как в подметании):
-            // вопрос прошлого чекпойнта рядом с `done` читался бы как незакрытый.
-            props: { 'orbis/task_status': 'done' },
-            unset: ['orbis/waiting_for'],
+            props: statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'done'),
+            // Уходя из ожидания — снимаем «чего ждём» (конвенция среза, как в подметании): вопрос
+            // прошлого чекпойнта рядом с `done` читался бы как незакрытый. Снос этой строки делает
+            // ЗАДАЧА 14 (В-П-8): правило `on_leave` закрывает уход, `forbidden_when` — саму
+            // возможность хвоста.
+            unset: [
+              propertyOfSlot(
+                bindingsOfSnapshot(reg),
+                TICKET_ASPECT,
+                DELEGABLE_CONTRACT,
+                'waiting_for',
+              ),
+            ],
           }
-        : { props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': input.report } },
-    expected: ['waiting', 'done'],
+        : {
+            props: {
+              ...statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting'),
+              [propertyOfSlot(
+                bindingsOfSnapshot(reg),
+                TICKET_ASPECT,
+                DELEGABLE_CONTRACT,
+                'waiting_for',
+              )]: input.report,
+            },
+          },
+    expectedClasses: ['waiting', 'done'],
   });
 }
 

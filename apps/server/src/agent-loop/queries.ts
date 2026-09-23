@@ -63,8 +63,17 @@ export interface RoutineProps {
   'orbis/allowed_tools'?: string[];
 }
 
-/** Значения ТИКЕТА, которые читает круг исполнителя: задача плюс назначение (§А8). */
-export interface TicketProps {
+/**
+ * Значения ТИКЕТА, которые читает круг исполнителя: задача плюс назначение (§А8).
+ *
+ * ТИП, а не интерфейс (Р-К-92 (6)): строку тикета передают в `classOfEntity` как
+ * `{ props: Record<string, unknown> }`, а неявную индексную сигнатуру при присваивании получает
+ * ТОЛЬКО псевдоним типа — интерфейс к `Record<string, unknown>` не присваивается вовсе. Чтение по
+ * адресу из привязки это НЕ разрешает: при `strict`/`noUncheckedIndexedAccess` индексация строкой
+ * по узкому типу даёт TS7053 и у типа, и у интерфейса, — такие чтения идут через локальный
+ * `Record<string, unknown>`.
+ */
+export type TicketProps = {
   'orbis/task_status'?: string;
   'orbis/priority'?: string;
   'orbis/due_date'?: string;
@@ -72,7 +81,7 @@ export interface TicketProps {
   'orbis/grant'?: string;
   'orbis/assignee'?: string;
   'orbis/may_close'?: boolean;
-}
+};
 
 /**
  * Проба назначения гранту в форме containment по `props` (§А1-1).
