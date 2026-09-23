@@ -42,14 +42,17 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { runActionInput } from '../actions/resolve';
 import { aspectDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { REGISTRY_OPS } from '../executor/executor';
 import { reconfiguresOf } from '../policy/confirmation';
+import { effectiveRegistry } from '../registry/cache';
 import { propertyCatalogInput } from './property-catalog';
 import {
   AGENT_VERB_NAMES,
   ASK_TOOL,
+  buildToolDefs,
   buildToolRegistry,
   importCsvStartInput,
   type OrbisToolDef,
@@ -109,6 +112,16 @@ function registryFor(userId: GraphId): Promise<OrbisToolDef[]> {
   return withIdentity(db, personal(userId), (tx) => buildToolRegistry(tx, userId));
 }
 
+/**
+ * Реестр при ЗАДАННОЙ маске модулей — синхронной сборкой из снимка, мимо `user_settings`:
+ * вопрос теста — что сборка делает с маской, а не как маска хранится (`registry/modules.test.ts`).
+ */
+function registryWithDisabled(userId: GraphId, disabled: readonly string[]) {
+  return withIdentity(db, personal(userId), async (tx) =>
+    buildToolDefs(await effectiveRegistry(tx, userId), disabled),
+  );
+}
+
 function defOf(defs: OrbisToolDef[], name: string): OrbisToolDef {
   const def = defs.find((d) => d.name === name);
   if (!def) throw new Error(`тул «${name}» не найден в реестре`);
@@ -138,6 +151,7 @@ const CORE_NAMES = [
   'property_catalog', // §А9-3: путь модели к свойствам без attach_*-тула; fullScopeOnly
   'import_csv_start', // C4c: вход в импорт из чата (03-budget §3.4), internalOnly
   'undo_last', // хвост V1 (Д-1): «отмени последнее» словами в чате (§7.8), internalOnly
+  'run_action', // §Б6-6: один тул-каталог на все действия
 ] as const;
 
 /**
@@ -151,7 +165,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 13 core + 12 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 44', async () => {
+  test('builtin-реестр (userB без кастомных): 13 core + 1 run_action + 12 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 46', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -170,7 +184,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
     // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
     // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
-    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 44 тула, пиннит `registry-golden`.
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 46 тулов, пиннит `registry-golden`.
     for (const name of [
       'subscription_set',
       'subscription_remove',
@@ -191,6 +205,38 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     expect(names).toContain('attach_orbis_project');
     expect(names).toContain('attach_orbis_repo');
     expect(names).toContain('attach_orbis_assignment');
+  });
+
+  test('действие с offered_by.llm публикуется своим тулом; без него — только через run_action (§Б6-6)', async () => {
+    const names = (await registryFor(userB)).map((d) => d.name);
+    expect(names).toContain('action_planner_postpone_overdue');
+    expect(names).not.toContain('action_finance_plan_to_fact');
+    expect(names).toContain('run_action');
+    // Вход тула действия — плоский: параметры декларации, у одиночного ещё `self`; у пакетного
+    // `self` нет вовсе — цели даёт его запрос.
+    const postpone = defOf(await registryFor(userB), 'action_planner_postpone_overdue');
+    expect(postpone.kind).toBe('mutate');
+    expect(Object.keys(postpone.inputJsonSchema.properties as Record<string, unknown>)).toEqual([
+      'to',
+    ]);
+    expect(postpone.inputJsonSchema.required).toEqual(['to']);
+    expect(postpone.inputJsonSchema.additionalProperties).toBe(false);
+  });
+
+  test('тул действия выключенного модуля из реестра уходит (Р-20, 12-я точка маски)', async () => {
+    const names = (await registryWithDisabled(userB, ['planner'])).map((d) => d.name);
+    expect(names).not.toContain('action_planner_postpone_overdue');
+    expect(names).toContain('run_action'); // сам каталог — ядро, не модуль
+  });
+
+  test('описание run_action перечисляет оба сидовых действия; при выключенном finance строка plan-to-fact из каталога исчезает (Р-К-86)', async () => {
+    const all = defOf(await registryFor(userB), 'run_action').description;
+    expect(all).toContain('finance/plan-to-fact — ');
+    expect(all).toContain('planner/postpone_overdue — ');
+    expect(all).toContain('(пакетное: цели даёт запрос действия)');
+    const masked = defOf(await registryWithDisabled(userB, ['finance']), 'run_action').description;
+    expect(masked).not.toContain('finance/plan-to-fact');
+    expect(masked).toContain('planner/postpone_overdue — ');
   });
 
   test('имена тулов без «/» (и вообще только [a-z0-9_])', async () => {
@@ -554,6 +600,9 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     // Вопрос пачки (D42 ОЧ.5). Запись сюда — РУЧНАЯ, и это единственная дыра теста:
     // он итерируется по карте, и забытый тул не проверяется молча
     orbis_ask: askInput,
+    // Каталог действий (§Б6-6): конверт живёт в `actions/resolve.ts`, схема модели — в реестре.
+    // Описание у схемы расширяется каталогом (Р-К-86), ключи и required — нет.
+    run_action: runActionInput,
   };
 
   test('каждый ключ zod-схемы есть в JSON Schema и наоборот; required = не-optional ключи zod', async () => {

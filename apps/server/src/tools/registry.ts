@@ -15,7 +15,9 @@
 // (`test/golden/tool-registry.json`, `registry-golden.test.ts`).
 
 import {
+  type ActionParam,
   type AspectDefinition,
+  actionToolName,
   aspectToolJsonSchema,
   attachToolName,
   BUILTIN_RELATION_ROLE_META,
@@ -24,6 +26,7 @@ import {
   isModuleEnabled,
   moduleOfTool,
   PROPOSAL_ALLOWED_TOOLS,
+  propertyLiteralJsonSchema,
   QUESTION_MAX,
   QUESTION_OPTION_MAX,
   QUESTION_OPTIONS_MAX,
@@ -34,6 +37,7 @@ import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aspectDefinitions } from '../db/schema';
 import type { Tx } from '../db/with-identity';
+import { paramLiteralType } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf } from '../registry/modules';
@@ -662,6 +666,23 @@ const batchExecuteJsonSchema = {
   additionalProperties: false,
 };
 
+/**
+ * Каталог действий (§Б6-6): конверт `runActionInput` (`actions/resolve.ts`), парность ключей и
+ * required сторожит `registry.test.ts`. `params` — объект без схемы: какие ключи законны, решает
+ * декларация действия, и отказ `ACTION_PARAMS` называет поле поимённо.
+ */
+const runActionJsonSchema = {
+  type: 'object',
+  properties: {
+    action: { type: 'string', description: 'ключ действия (`<модуль>/<имя>` либо `user/<имя>`)' },
+    self: { type: 'string', format: 'uuid', description: 'сущность-цель одиночного действия' },
+    params: { type: 'object', description: 'объявленные параметры действия' },
+    batch_id: { type: 'string', format: 'uuid', description: 'идемпотентность повтора' },
+  },
+  required: ['action'],
+  additionalProperties: false,
+};
+
 const userQueryJsonSchema = {
   type: 'object',
   properties: {
@@ -1156,6 +1177,19 @@ const CORE_TOOLS: OrbisToolDef[] = [
     internalOnly: true,
   },
   {
+    name: 'run_action',
+    description:
+      'Исполнить действие реестра по его ключу (§Б6-6): один вызов — резолвленная пачка шагов, одна строка журнала, один откат. ' +
+      'Каталог доступных действий — ниже в этом описании (собирается из реестра, Р-К-86); `self` — сущность, к которой применяется одиночное действие, ' +
+      '`params` — объявленные параметры действия. Пакетные действия (`over`) `self` не принимают: цели даёт их собственный запрос.',
+    inputJsonSchema: runActionJsonSchema,
+    kind: 'mutate',
+    // Скоуп решают ШАГИ (§Б6-2), а не имя: вычисляемого флага у дефа нет, и он не нужен —
+    // общее правило скоупа (`dispatchTool`, гейт гранта) закрывает фону любую мутацию вне
+    // WORKER_SCOPE_TOOLS, а пошаговый гейт в `runAction` — вторая линия.
+    fullScopeOnly: false,
+  },
+  {
     name: 'thread_post',
     description: 'Сообщение в тред сущности (заметка о ходе/результате работы). Не мутирует граф.',
     inputJsonSchema: threadPostJsonSchema,
@@ -1256,6 +1290,83 @@ function attachToolDef(aspect: AspectDefinition, reg: RegistrySnapshot): OrbisTo
   };
 }
 
+// ---------------------------------------------------------------------------
+// Тулы действий (§Б6-6): action_* из реестра действий и каталог в описании run_action
+// ---------------------------------------------------------------------------
+
+/**
+ * Тулы опубликованных действий (§Б6-6): только `offered_by.llm === true`. Остальные доступны
+ * через `run_action` — «выбор из сотен тулов деградирует, рост капается по построению» (§Б6-6
+ * дословно).
+ *
+ * Порядок — `rank`, тай-брейк `key.localeCompare`: тот же довод, что у `attachable`
+ * (`buildToolDefs`) — эталон реестра сравнивается как СПИСОК.
+ *
+ * Вход — плоский: `self` у одиночного действия плюс объявленные параметры; диспатч разбирает
+ * его обратно на `{self, params}` (`stripSelf`, `tools/dispatch.ts`). У пакетного `self` нет:
+ * цели даёт его запрос, и показанный модели `self` обещал бы правку одной записи.
+ */
+export function actionToolDefs(
+  reg: RegistrySnapshot,
+  disabled: readonly string[] = [],
+): OrbisToolDef[] {
+  return activeActions(reg, disabled)
+    .filter((a) => a.offered_by.some((o) => o.llm === true))
+    .map((a) => ({
+      name: actionToolName(a.key),
+      description: effectiveLabel(a.description, OWNER_LOCALE) || '',
+      inputJsonSchema: {
+        type: 'object',
+        properties: {
+          ...(a.over === null ? { self: { type: 'string', format: 'uuid' } } : {}),
+          ...Object.fromEntries(a.params.map((p) => [p.name, paramJsonSchema(p)])),
+        },
+        required: a.params.filter((p) => p.required).map((p) => p.name),
+        additionalProperties: false,
+      },
+      kind: 'mutate' as const,
+    }));
+}
+
+/**
+ * Каталог §Б6-6: описание `run_action` + строка на каждое активное действие включённого модуля
+ * (Р-К-86). Модель видит, какие действия существуют, не получая по тулу на каждое; действия
+ * выключенных модулей в каталог не попадают (§Б8-3).
+ */
+export function withActionCatalog(
+  def: OrbisToolDef,
+  reg: RegistrySnapshot,
+  disabled: readonly string[],
+): OrbisToolDef {
+  const rows = activeActions(reg, disabled).map(
+    (a) =>
+      `${a.key} — ${effectiveLabel(a.description, OWNER_LOCALE)}${a.over !== null ? ' (пакетное: цели даёт запрос действия)' : ''}`,
+  );
+  const catalog =
+    rows.length === 0 ? 'Доступных действий нет.' : `Доступные действия:\n${rows.join('\n')}`;
+  return { ...def, description: `${def.description}\n${catalog}` };
+}
+
+/** Активные действия включённых модулей в порядке показа — один отбор на тулы и каталог. */
+function activeActions(reg: RegistrySnapshot, disabled: readonly string[]) {
+  return [...reg.actions.values()]
+    .filter((a) => a.status === 'active' && isModuleEnabled(a.module, disabled))
+    .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
+}
+
+/**
+ * JSON Schema параметра действия: род — тем же литералом, каким значение сверит резолв
+ * (`paramLiteralType`), параметр-контракт — uuid сущности-реализации (§Б6-1).
+ */
+function paramJsonSchema(p: ActionParam): Record<string, unknown> {
+  if ('kind' in p.type) return propertyLiteralJsonSchema(paramLiteralType(p.type.kind));
+  return {
+    type: 'string',
+    format: 'uuid',
+    description: `сущность, реализующая контракт «${p.type.contract}»`,
+  };
+}
+
 /**
  * Сборка реестра из снимка реестров (синхронная часть — для dispatch).
  *
@@ -1280,18 +1391,26 @@ export function buildToolDefs(
     // вместе с модулем. Умолчание `disabled = []` оставляет прежний вызов побайтно тем же.
     .filter((a) => isModuleEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
-  return [
-    ...CORE_TOOLS,
-    // Тулы реестра (§А10-2) — отдельным набором, а не строками в CORE_TOOLS: у них общий
-    // признак `fullScopeOnly` и общая судьба (гейт уровня §7.10 — Задача 16), и набор,
-    // который можно назвать одним именем, дешевле пяти разбросанных дефов.
-    ...REGISTRY_TOOLS,
-    ...AGENT_VERB_TOOLS,
-    PROPOSE_TOOL,
-    ASK_TOOL,
-  ]
-    .filter((d) => isModuleEnabled(moduleOfTool(d.name, reg), disabled))
-    .concat(attachable.map((a) => attachToolDef(a, reg)));
+  return (
+    [
+      ...CORE_TOOLS,
+      // Тулы реестра (§А10-2) — отдельным набором, а не строками в CORE_TOOLS: у них общий
+      // признак `fullScopeOnly` и общая судьба (гейт уровня §7.10 — Задача 16), и набор,
+      // который можно назвать одним именем, дешевле пяти разбросанных дефов.
+      ...REGISTRY_TOOLS,
+      ...AGENT_VERB_TOOLS,
+      PROPOSE_TOOL,
+      ASK_TOOL,
+    ]
+      .filter((d) => isModuleEnabled(moduleOfTool(d.name, reg), disabled))
+      .concat(attachable.map((a) => attachToolDef(a, reg)))
+      // Действия — ПОСЛЕ attach_*: эталон реестра сравнивается списком, и место новой группы в
+      // нём фиксируется здесь один раз (§Б6-6).
+      .concat(actionToolDefs(reg, disabled))
+      // §Б6-6 «run_action(id, params) с каталогом (описание из description)»: каталог живёт в
+      // ОПИСАНИИ тула и строится из снимка (Р-К-86).
+      .map((d) => (d.name === 'run_action' ? withActionCatalog(d, reg, disabled) : d))
+  );
 }
 
 /**

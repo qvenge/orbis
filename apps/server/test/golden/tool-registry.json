@@ -741,6 +741,35 @@
     }
   },
   {
+    "name": "run_action",
+    "description": "Исполнить действие реестра по его ключу (§Б6-6): один вызов — резолвленная пачка шагов, одна строка журнала, один откат. Каталог доступных действий — ниже в этом описании (собирается из реестра, Р-К-86); `self` — сущность, к которой применяется одиночное действие, `params` — объявленные параметры действия. Пакетные действия (`over`) `self` не принимают: цели даёт их собственный запрос.\nДоступные действия:\nfinance/plan-to-fact — Отметить запланированное движение денег как случившееся: снять признак плана и проставить дату.\nplanner/postpone_overdue — Перенести срок всех просроченных открытых задач на указанную дату. (пакетное: цели даёт запрос действия)",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "ключ действия (`<модуль>/<имя>` либо `user/<имя>`)"
+        },
+        "self": {
+          "type": "string",
+          "format": "uuid",
+          "description": "сущность-цель одиночного действия"
+        },
+        "params": {
+          "type": "object",
+          "description": "объявленные параметры действия"
+        },
+        "batch_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "идемпотентность повтора"
+        }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "thread_post",
     "description": "Сообщение в тред сущности (заметка о ходе/результате работы). Не мутирует граф.",
     "inputJsonSchema": {
@@ -4371,6 +4400,24 @@
         }
       },
       "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "action_planner_postpone_overdue",
+    "description": "Перенести срок всех просроченных открытых задач на указанную дату.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "x-orbis-type": {
+            "kind": "date"
+          }
+        }
+      },
+      "required": ["to"],
       "additionalProperties": false
     }
   }

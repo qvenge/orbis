@@ -514,9 +514,10 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 44 − 3 internalOnly − 2 routineOnly = 39
+      // builtin-набор: 46 − 3 internalOnly − 2 routineOnly = 41 (задача 7 Б-2: +run_action и
+      // +action_planner_postpone_overdue — оба публичны, скоуп им решают шаги, а не флаг)
       expect(tools).toHaveLength(publicDefs.length);
-      expect(tools).toHaveLength(39);
+      expect(tools).toHaveLength(41);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();

@@ -24,6 +24,8 @@ import {
   exprMarkerSchema,
   MODULE_IDS,
   type PropertyDefinition,
+  type PropertyKind,
+  type PropertyType,
   relationCreateInput,
   relationDeleteInput,
   type SensitivityFact,
@@ -766,6 +768,20 @@ function paramExprType(key: string, p: ActionParam): ExprType {
     );
   }
   return exprTypeOfKind(p.type.kind);
+}
+
+/**
+ * Тип ЛИТЕРАЛА параметра по его РОДУ — для сверки значения вызова (`actions/resolve.ts`) и для
+ * JSON Schema тула действия (`tools/registry.ts`, `actionToolDefs`). Одна функция на двух
+ * читателей: схема, показанная модели, и проверка значения обязаны отвечать одинаково.
+ *
+ * У параметра нет конфига рода (вариантов у `select`, цели у `ref`) — только `kind` (§Б6-1),
+ * поэтому `select` читается как текст: схема `select` без вариантов не собирается вовсе
+ * (`elementSchema` читает `options`) — то же отображение, что у `paramExprType` выше. Остальным
+ * родам конфиг для формы не нужен; `json` до вызова не доезжает — его отвергает `assertAction`.
+ */
+export function paramLiteralType(kind: PropertyKind): PropertyType {
+  return (kind === 'select' ? { kind: 'text' } : { kind }) as PropertyType;
 }
 
 export function actionExprScope(

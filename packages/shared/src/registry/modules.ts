@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AspectDefinition } from './property-type';
-import { attachToolName } from './tool-schema';
+import { actionToolName, attachToolName } from './tool-schema';
 
 // СЛОВАРЬ МОДУЛЕЙ И ПОВЕРХНОСТЕЙ (§Б5-1, §Б8-1; форма имени — ревизия 3).
 // Имя — `<модуль>/<поверхность>`, и модуль подписки читается ИЗ ИМЕНИ: второй источник ответа «чья
@@ -146,18 +146,30 @@ export function isModuleEnabled(
 }
 
 /**
- * Модуль тула: `attach_*` — по колонке `module` его АСПЕКТА, core-тул — по манифесту.
- * Тула вне обоих источников (ядро) здесь нет по построению — ответ `null`.
+ * Модуль тула: `attach_*` — по колонке `module` его АСПЕКТА, `action_*` — по колонке `module`
+ * его ДЕЙСТВИЯ (§Б6-6, Р-20: двенадцатая точка маски), core-тул — по манифесту. Тула вне всех
+ * источников (ядро) здесь нет по построению — ответ `null`.
  */
 export function moduleOfTool(
   name: string,
-  reg: { aspects: ReadonlyMap<string, AspectDefinition> },
+  reg: {
+    aspects: ReadonlyMap<string, AspectDefinition>;
+    /** §Б6-6: действия публикуются тулами `action_*`; модуль читается из ИХ строки. */
+    actions?: ReadonlyMap<string, { key: string; module: string | null }>;
+  },
 ): ModuleId | null {
   // attach_* адресуется КЛЮЧОМ аспекта, и обратная нормализация имени невозможна («-» и «/»
   // склеиваются в «_» — докблок `attachToolName`), поэтому идём вперёд от ключей.
   if (name.startsWith('attach_')) {
     for (const a of reg.aspects.values()) {
       if (attachToolName(a.key) === name) return MODULE_IDS.find((m) => m === a.module) ?? null;
+    }
+    return null;
+  }
+  if (name.startsWith('action_')) {
+    // Вперёд от ключей — по тому же доводу, что у attach_*: нормализация имени необратима.
+    for (const a of reg.actions?.values() ?? []) {
+      if (actionToolName(a.key) === name) return MODULE_IDS.find((m) => m === a.module) ?? null;
     }
     return null;
   }

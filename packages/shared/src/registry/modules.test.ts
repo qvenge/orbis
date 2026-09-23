@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { BUILTIN_ACTION_DEFS } from './builtin-actions';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import {
   isModuleEnabled,
@@ -70,6 +71,19 @@ describe('манифест модуля (§Б8-1): состав вне реес�
     expect(moduleOfTool('attach_orbis_note', reg)).toBe(null); // ядро: у `orbis/note` в builtin-aspects.ts поля module нет
     expect(moduleOfTool('budget_status', reg)).toBe('finance');
     expect(moduleOfTool('entity_create', reg)).toBe(null);
+  });
+
+  test('moduleOfTool: action_* — по module действия, вперёд от ключей (§Б6-6, Р-20)', () => {
+    const reg = {
+      aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+      actions: new Map(BUILTIN_ACTION_DEFS.map((a) => [a.id, a])),
+    };
+    expect(moduleOfTool('action_planner_postpone_overdue', reg)).toBe('planner');
+    expect(moduleOfTool('action_finance_plan_to_fact', reg)).toBe('finance');
+    // Имени нет среди действий снимка — ядро/неизвестное, а не чужой модуль по префиксу имени.
+    expect(moduleOfTool('action_finance_выдумка', reg)).toBe(null);
+    // Снимок без словаря действий (сегодняшние вызыватели `moduleOfTool`) — тот же `null`.
+    expect(moduleOfTool('action_planner_postpone_overdue', { aspects: reg.aspects })).toBe(null);
   });
 
   test('modulePromptFragments и setModuleEnabledInput', () => {

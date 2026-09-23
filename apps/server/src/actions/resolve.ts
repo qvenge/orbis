@@ -17,8 +17,6 @@ import {
   BATCH_CAP_DEFAULT,
   effectiveLabel,
   type GraphId,
-  type PropertyKind,
-  type PropertyType,
 } from '@orbis/shared';
 import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
 import { OWNER_LOCALE } from '@orbis/shared/query';
@@ -28,7 +26,7 @@ import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { type CompileCtx, compileWhere } from '../query/compile-ast';
-import { actionHash } from '../registry/actions';
+import { actionHash, paramLiteralType } from '../registry/actions';
 import type { RegistrySnapshot } from '../registry/load';
 import { literalFormViolation } from '../registry/validate-props';
 import { buildUpdate, type ExecOperation, loadTargets, type TargetRow } from '../routines/propose';
@@ -400,16 +398,6 @@ function checkedParams(
     out[name] = value as ExprScalar;
   }
   return out;
-}
-
-/**
- * Тип литерала по РОДУ параметра. У параметра нет конфига рода (вариантов у `select`, цели у
- * `ref`) — только `kind` (§Б6-1), поэтому `select` сверяется как текст: схема `select` без
- * вариантов не собирается вовсе (`elementSchema` читает `options`). Остальные рода конфига для
- * формы не требуют; `json` до вызова не доезжает — его отвергает `assertAction` (§6.4).
- */
-function paramLiteralType(kind: PropertyKind): PropertyType {
-  return (kind === 'select' ? { kind: 'text' } : { kind }) as PropertyType;
 }
 
 /** У одиночного действия цель приходит вызовом: множества у него нет по построению (§Б6-3). */
