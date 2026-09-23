@@ -528,3 +528,50 @@ describe('паритет гейта записи и SQL-бэкенда (B2 I-2)'
     ).toMatchObject({ code: 'VALIDATION', reason: 'EXPR_SHAPE' });
   });
 });
+
+describe('SQL-бэкенд: empty над списком, контексты классификатора', () => {
+  test('empty списочного свойства — длина массива jsonb; отсутствие ключа даёт «пусто»', () => {
+    expect(
+      sqlOf(
+        compileExprPredicate(
+          { op: 'empty', args: [{ prop: 'orbis/aliases' }] },
+          { cctx: CTX, row: ROW },
+        ),
+      ),
+    ).toBe(`coalesce(jsonb_array_length(e.props->'orbis/aliases'), 0) = 0`);
+  });
+  test('empty над НЕ списком и над core-проекцией — EXPR_SHAPE, а не пустой предикат', () => {
+    expect(
+      refusal(() =>
+        compileExprPredicate(
+          { op: 'empty', args: [{ prop: 'orbis/amount' }] },
+          { cctx: CTX, row: ROW },
+        ),
+      ).reason,
+    ).toBe('EXPR_SHAPE');
+    expect(
+      refusal(() =>
+        compileExprPredicate(
+          { op: 'empty', args: [{ prop: 'orbis/title' }] },
+          { cctx: CTX, row: ROW },
+        ),
+      ).reason,
+    ).toBe('EXPR_SHAPE');
+  });
+  test('контексты классификатора бэкенду наборов недоступны — оба ИМЕНЕМ', () => {
+    for (const ctx of ['$sensitivity', '$touched'] as const) {
+      const r = refusal(() =>
+        compileExprPredicate({ op: 'empty', args: [{ ctx }] }, { cctx: CTX, row: ROW }),
+      );
+      expect(r.reason).toBe('EXPR_BACKEND_UNSUPPORTED');
+      expect((r.details as { form?: string }).form).toBe(ctx);
+    }
+  });
+  test('empty слота — только в области с контрактом (слот без привязки не адресуем)', () => {
+    expect(
+      refusal(() =>
+        compileExprPredicate({ op: 'empty', args: [{ slot: 'tags' }] }, { cctx: CTX, row: ROW }),
+      ).reason,
+    ).toBe('EXPR_SHAPE');
+  });
+});

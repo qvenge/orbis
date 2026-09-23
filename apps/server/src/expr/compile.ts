@@ -4,8 +4,8 @@
  *
  * Он отвечает на ОДИН вопрос: «подходит ли строка `entities` под это выражение». Поэтому
  * здесь живут только те формы, у которых есть предикатный смысл (сравнения, булева логика,
- * членство в наборе, наличие значения, входящее ребро), а величины и арифметика отказывают
- * НАЗВАННО (`EXPR_BACKEND_UNSUPPORTED`): «нет у этого бэкенда» — не то же самое, что «ложно»,
+ * членство в наборе, наличие значения, пустота списка, входящее ребро), а величины и
+ * арифметика отказывают НАЗВАННО (`EXPR_BACKEND_UNSUPPORTED`): «нет у этого бэкенда» — не то же самое, что «ложно»,
  * и молчаливое `true` спрятало бы дефект декларации на годы (§С8-3).
  *
  * ПРИЁМЫ БЕРУТСЯ У КОМПИЛЯТОРА Q, а не пишутся заново (`lit`, `castedExpr`, `negated`,
@@ -22,6 +22,7 @@
 import {
   bindingIndexOf,
   type ContractDefinition,
+  isListPropertyType,
   type PropertyDefinition,
   type ResolvedBinding,
 } from '@orbis/shared';
@@ -257,7 +258,9 @@ function valueSql(node: ExprNode, scope: ExprCompileScope): SQL {
     // `uuid = text` и отвечал 42883 — ошибкой запроса НА ЧТЕНИИ вместо структурного отказа.
     if (node.ctx === '$self') return sql`${scope.row}.id::text`;
     if (node.ctx === '$owner') return sql`${scope.cctx.graphId}`;
-    return unsupported('$sensitivity');
+    // `$sensitivity` и `$touched` — контексты классификатора (§Б3-2а Е-4/Е-5): у него SQL-бэкенда
+    // нет вовсе, и отказ называет СВОЙ контекст, а не соседа.
+    return unsupported(node.ctx);
   }
   if ('date_add' in node) {
     const shift = node.date_add[1];
@@ -341,6 +344,37 @@ function hasPredicate(name: string, scope: ExprCompileScope): SQL {
     );
   }
   return propertyPresenceSql(prop, scope.row);
+}
+
+/**
+ * «Список пуст» (Р-26). Длина СЫРОГО jsonb-массива, а не `castedExpr`: `->>` отдал бы текст
+ * массива, и «пусто» пришлось бы сравнивать со строкой `'[]'` — вторая мерка пустоты.
+ * `coalesce(…, 0)`: отсутствующий ключ — это «пусто», ровно как у интерпретатора (`applyOp`).
+ * Словарь фактов и `$touched` сюда не доходят — их отвергает `valueSql` как контексты
+ * классификатора, у которого SQL-бэкенда нет вовсе (§Б3-2а Е-4/Е-5).
+ */
+function emptyPredicate(node: ExprNode, scope: ExprCompileScope): SQL {
+  let prop: PropertyDefinition | undefined;
+  if ('prop' in node) prop = scope.cctx.reg.properties.get(node.prop);
+  else if ('slot' in node) {
+    const s = slotScopeOf(scope, 'empty');
+    const id = s.binding.bind[node.slot];
+    prop = id === undefined ? undefined : propertyOf(id, s, node.slot);
+  } else {
+    // ctx / agg_via / deref: отказ обязан назвать СВОЮ причину (`$touched` — контекст
+    // классификатора, а не «не список»), и его уже умеет `valueSql` — зовём его ради отказа.
+    valueSql(node, scope);
+  }
+  if (prop === undefined) {
+    return fail('EXPR_SHAPE', 'empty: аргумент не адресует свойство реестра', { form: 'empty' });
+  }
+  if (prop.storage === 'core' || !isListPropertyType(prop.type)) {
+    return fail('EXPR_SHAPE', `empty: свойство '${prop.id}' — не список`, {
+      form: 'empty',
+      property: prop.id,
+    });
+  }
+  return sql`coalesce(jsonb_array_length(${scope.row}.props->${lit(prop.id)}), 0) = 0`;
 }
 
 /**
@@ -463,6 +497,7 @@ export function compileExprPredicate(expr: ExprNode, scope: ExprCompileScope): S
     // значением давала бы NULL и молча выпадала из выдачи.
     if (expr.op === 'not') return negated(compileExprPredicate(expr.args[0] as ExprNode, scope));
     if (expr.op === 'in') return inPredicate(expr.args, scope);
+    if (expr.op === 'empty') return emptyPredicate(expr.args[0] as ExprNode, scope);
     // `if` — член канона §Б3-5, и чекер типизирует его булевым: плечи компилируются теми же
     // предикатами, условие — тоже. Плечо `{const:null}` отвергает ветка `const` ниже
     // (`EXPR_SHAPE`): «необязательное» в предикатной позиции у бэкенда смысла не имеет.
