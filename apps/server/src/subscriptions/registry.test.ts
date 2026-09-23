@@ -237,6 +237,30 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
       'SUBSCRIPTION_PREFER_UNBOUND',
     );
   });
+  test('prefer Budget: аспекта нет — UNKNOWN_ASPECT, контракт секции не реализует — PREFER_UNBOUND', () => {
+    const withPrefer = (movement: string[], envelope: string[]) => ({
+      ...BUDGET_DEF,
+      sources: {
+        movement: { ...BUDGET_DEF.sources.movement, prefer: movement },
+        envelope: { ...BUDGET_DEF.sources.envelope, prefer: envelope },
+      },
+    });
+    const at = { surface: 'finance/budget-overview' };
+    expect(
+      refusal(() => assertSubscription(row(withPrefer(['user/нет'], []), at), seed)).reason,
+    ).toBe('SUBSCRIPTION_UNKNOWN_ASPECT');
+    // Конверт в перечне ДВИЖЕНИЯ — приоритет, который никогда не сработает (Р-24, паритет с Повесткой).
+    const unbound = failure(() =>
+      assertSubscription(row(withPrefer(['orbis/budget'], []), at), seed),
+    );
+    expect((unbound.details as { reason?: string; path?: string }).reason).toBe(
+      'SUBSCRIPTION_PREFER_UNBOUND',
+    );
+    expect((unbound.details as { path?: string }).path).toBe('sources.movement.prefer');
+    expect(
+      assertSubscription(row(withPrefer(['orbis/financial'], ['orbis/budget']), at), seed).engine,
+    ).toBe('budget');
+  });
   test('prefer с реализующим аспектом законен — единственное место ссылки на аспект (§Б5-2)', () => {
     const def = { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, prefer: ['orbis/schedule'] } };
     expect(assertSubscription(row(def), seed).engine).toBe('agenda');

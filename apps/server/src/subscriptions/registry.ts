@@ -456,6 +456,26 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
   );
   assertRole(reg, id, def.sources.envelope.binding_role);
   assertRole(reg, id, def.rollup.role);
+  // `prefer` секций источника (остаток 40, Р-24) — та же двойная проверка, что у Повестки выше:
+  // аспекта нет — отказ; аспект не реализует контракт секции — мёртвая строка, приоритет, который
+  // никогда не сработает, а SLOT_AMBIGUOUS у записи с двумя привязками продолжит падать.
+  for (const [path, section] of [
+    ['sources.movement.prefer', def.sources.movement],
+    ['sources.envelope.prefer', def.sources.envelope],
+  ] as const) {
+    for (const a of section.prefer) {
+      if (!reg.aspects.has(a)) {
+        bad('SUBSCRIPTION_UNKNOWN_ASPECT', id, `аспекта ${a} нет`, { aspect: a, path });
+      }
+      if (!idx.byContract(section.contract).some((b) => b.aspectId === a)) {
+        bad('SUBSCRIPTION_PREFER_UNBOUND', id, `${a} не реализует контракт секции ${path}`, {
+          aspect: a,
+          path,
+          contract: section.contract,
+        });
+      }
+    }
+  }
   // Ключ `active` обязателен: прочие фазы — условия, активная — ОСТАТОК; без неё `if(phase=active, …)`
   // в daily_pace молча считался бы всегда null.
   if (!phaseKeys.has('active'))
