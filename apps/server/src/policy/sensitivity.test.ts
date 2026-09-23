@@ -124,7 +124,11 @@ describe('факты как данные: словарь из контракта
         'changes_registry',
       ]),
     ]).toEqual(['changes_registry']);
-    // Таблица тулов не-исполнителя пуста до задачи 10 — и это НАЗВАНО, а не забыто.
-    expect(Object.keys(TOOL_SENSITIVITY)).toEqual([]);
+    // Таблица тулов не-исполнителя: первая строка — перенос остатков (задача 10 Б-2). Тул идёт мимо
+    // свёртки по операциям, и факт денег обязан приехать из таблицы, а не из типов вызова.
+    expect(Object.keys(TOOL_SENSITIVITY)).toEqual(['budget_rollover']);
+    expect([...sensitivityFactsOf(snapshot(), call({ tool: 'budget_rollover' }))]).toEqual([
+      'touches_money',
+    ]);
   });
 });

@@ -31,11 +31,13 @@ const SENSITIVITY_CONTRACT = 'orbis/sensitivity' satisfies ContractId;
 
 /**
  * ФАКТЫ ТУЛОВ НЕ-ИСПОЛНИТЕЛЯ (Р-К-23): тул, который не разложен на операции графа и потому
- * свёрткой не описывается. Пуст до задачи 10, где сюда приезжает `budget_rollover:
- * ['touches_money']`. Пустая таблица названа вслух, потому что её отсутствие читалось бы
- * как «таких тулов не бывает».
+ * свёрткой не описывается. `budget_rollover` идёт мимо свёртки по операциям (`rolloverCreate`
+ * открывает свои транзакции и сам собирает `ExecuteRequest`), значит «деньги тронуты»
+ * объявляется здесь таблицей, а не выводится.
  */
-export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[]>> = {};
+export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[]>> = {
+  budget_rollover: ['touches_money'],
+};
 
 /**
  * Имена фактов вызова. `extra` — факты, которые знает только вызывающий (§Б6-1: декларация

@@ -47,6 +47,7 @@ import {
   QUESTION_OPTIONS_MAX,
   questionStaleMessageId,
   rejectMessageId,
+  rolloverInput,
 } from '@orbis/shared';
 import type { ExprScalar } from '@orbis/shared/expr';
 import { OWNER_LOCALE } from '@orbis/shared/query';
@@ -55,6 +56,8 @@ import { z } from 'zod';
 import { actionDateArgs, recheckPrecondition } from '../actions/precondition';
 import type { DeferredRow } from '../actions/resolve';
 import { escalateAfterMutation } from '../ai/escalation';
+// Цикла нет: агрегаты бюджета в политику не заходят (их зовут роутер бюджета, диспатч и эта ветка).
+import { rolloverCreate } from '../budget/aggregates';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
@@ -957,6 +960,11 @@ export async function approvePending(
     // пометки `needs-review` — ровно то, что сделал бы прямой `undo_last` на уровне `execute`.
     const undoOf = pending.undo_of;
     if (undoOf !== undefined) return await approveUndoUnit(db, args, undoOf);
+    // ПЕРЕНОС ИСПОЛНЯЕТСЯ СВОИМ КОДОМ, а не пачкой операций (задача 10 Б-2, Р-К-39): `toOperations`
+    // собирает ExecuteRequest, а `rolloverCreate` строит его САМ — по одной `entity_create` на строку,
+    // с `mechanism: 'rule'` и пречеком преемников. Без этой ветки единица упёрлась бы в «неизвестный
+    // тул» стадии 1, уже будучи принятой владельцем.
+    if (pending.tool === 'budget_rollover') return await approveRolloverUnit(db, args, found.msg);
     // Вне tx проверок: execute открывает собственный withIdentity-tx (вложить нельзя).
     // Чтение pending отдельным tx безопасно: journal append-only, metadata неизменяема
     // (§4.6). audit — в тред карточки-запроса; атрибуция — исходный актор (§7.8)
@@ -1057,6 +1065,58 @@ export async function approvePending(
     }
     throw e;
   }
+}
+
+/**
+ * «Принять» единицы переноса остатков (`budget_rollover`, задача 10 Б-2) — та же судьба, что у
+ * пачки, другим исполнением: `rolloverCreate` вместо `execute` сохранённых операций.
+ *
+ * `batchId` ПЕРЕНОСА = pendingId, а не id исходного вызова, и это не косметика. Судьба единицы
+ * («Принята») читается по audit-сообщению с PK `batchAuditMessageId(graph, pendingId)` (`isExecuted`,
+ * `listRunUnits`) — ровно так, как у пачки, которой `approvePending` передаёт `batchId: pendingId`.
+ * С id вызова перенос исполнялся бы, а единица навсегда оставалась бы «открытой»: «Принять все»
+ * жевало бы её снова, сверка `undecided` не снимала бы флажок. Идемпотентность повтора держится тем же
+ * ключом: `rolloverCreate` отвечает replay'ем по audit-сообщению этого batchId.
+ *
+ * Замок и «не отклонена» — в audit-транзакции (`beforeStages`), тем же швом, что у пачки. Атрибуция —
+ * исходный актор (§7.8): рутина остаётся рутиной, чат — чатом; системная единица исполняется от
+ * владельца (довод — в `approvePending`).
+ */
+async function approveRolloverUnit(
+  db: Db,
+  args: { identity: Identity; pendingId: string; clock?: () => Date },
+  msg: { pending: PendingRecord; threadId: string },
+): Promise<ExecuteResult> {
+  const pending = msg.pending;
+  const input = rolloverInput.parse(pending.input);
+  const r = await rolloverCreate(
+    db,
+    args.identity,
+    { ...input, batchId: args.pendingId },
+    {
+      actorKind: pending.actor_kind === 'system' ? 'owner' : pending.actor_kind,
+      source: pending.source === 'system' ? 'ui' : pending.source,
+      threadId: msg.threadId,
+      ...(pending.run_id !== undefined && { runId: pending.run_id }),
+      ...(pending.actor_grant_id !== undefined && { actorGrantId: pending.actor_grant_id }),
+    },
+    async (tx) => {
+      await acquirePendingLock(tx, args.pendingId);
+      if (await isRejected(tx, args.pendingId)) {
+        throw new ExecError(
+          'VALIDATION',
+          `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
+          { pendingId: args.pendingId },
+        );
+      }
+    },
+  );
+  return {
+    ok: true,
+    actionId: r.actionId,
+    results: r.envelopeIds,
+    idempotentReplay: r.idempotentReplay,
+  };
 }
 
 /**

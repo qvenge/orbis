@@ -74,7 +74,7 @@ const FINANCE_FRAGMENTS = [
 export const MODULE_MANIFESTS: Readonly<Record<ModuleId, ModuleManifest>> = {
   finance: {
     id: 'finance',
-    tools: ['budget_status', 'import_csv_start'],
+    tools: ['budget_status', 'budget_rollover', 'import_csv_start'],
     promptFragments: FINANCE_FRAGMENTS,
     surfaces: ['finance/budget-overview'],
     codeRemainder: [

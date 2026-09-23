@@ -107,11 +107,16 @@ async function mergedIntoOf(owner: GraphId, id: string): Promise<unknown> {
   return rows[0]?.merged_into ?? null;
 }
 
-/** Сущности владельца с аспектом рутины — «сколько садовников в графе» спрашиваем у графа. */
+/**
+ * Садовники владельца — «сколько садовников в графе» спрашиваем у графа. С задачи 10 Б-2 онбординг
+ * сеет ДВЕ рутины (садовник и «Перенос остатков», `seed/rollover-routine.ts`), поэтому отбор — по
+ * детерминированному id садовника, а не по аспекту: иначе счёт мерил бы соседнюю рутину.
+ */
 async function routineRows(owner: GraphId): Promise<Array<{ id: string; title: string }>> {
   return (await withIdentity(db, personal(owner), (tx) =>
     tx.execute(sql`SELECT id, title FROM entities
                     WHERE graph_id = ${owner}::uuid AND aspects @> ARRAY['orbis/routine']::text[]
+                      AND id = ${seedRoutineId(owner, GARDENER_SLUG)}::uuid
                     ORDER BY created_at`),
   )) as unknown as Array<{ id: string; title: string }>;
 }

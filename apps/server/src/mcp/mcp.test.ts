@@ -433,7 +433,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 10 публичных core + 14 реестровых + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 11 публичных core + 14 реестровых + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -451,6 +451,8 @@ describe('/mcp tools/list (§9.2)', () => {
         'relation_delete',
         'batch_execute',
         'budget_status',
+        // §Б6-5 ревизии 4 (задача 10 Б-2): инструмент Финансов — полному гранту, как чату владельца.
+        'budget_rollover',
         // §А9-3: каталог свойств публикуется полному доступу — это чтение реестра,
         // и внешнему агенту с `full` он адресован так же, как чату владельца.
         'property_catalog',
@@ -517,11 +519,11 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 48 − 3 internalOnly − 2 routineOnly = 43 (задача 7 Б-2: +run_action и
+      // builtin-набор: 49 − 3 internalOnly − 2 routineOnly = 44 (задача 7 Б-2: +run_action и
       // +action_planner_postpone_overdue — оба публичны, скоуп им решают шаги, а не флаг; задача 10
-      // Б-2: +action_set, +action_remove — публичны полному гранту, как остальные тулы реестра)
+      // Б-2: +action_set, +action_remove, +budget_rollover — публичны полному гранту)
       expect(tools).toHaveLength(publicDefs.length);
-      expect(tools).toHaveLength(43);
+      expect(tools).toHaveLength(44);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();
@@ -783,6 +785,8 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
         // §А9-4/РП-14: `fullScopeOnly` — исключение из «чтения открыты все». Каталог
         // свойств это карта поверхности ВЛАДЕЛЬЦА, фону она не адресована.
         'property_catalog',
+        // Перенос остатков — карта денег владельца целиком (задача 10 Б-2): фону не адресован.
+        'budget_rollover',
         // Тем же признаком закрыты четырнадцать тулов реестра: фоновый исполнитель работает над
         // ЗАДАЧЕЙ владельца, а не над устройством его системы (§А9-4).
         'property_create',

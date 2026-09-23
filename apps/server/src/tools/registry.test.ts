@@ -23,6 +23,7 @@ import {
   entityUpdateInput,
   finishInput,
   isActionToolName,
+  MODULE_MANIFESTS,
   myQueueInput,
   proposeInput,
   relationCreateInput,
@@ -156,6 +157,7 @@ const CORE_NAMES = [
   'import_csv_start', // C4c: вход в импорт из чата (03-budget §3.4), internalOnly
   'undo_last', // хвост V1 (Д-1): «отмени последнее» словами в чате (§7.8), internalOnly
   'run_action', // §Б6-6: один тул-каталог на все действия
+  'budget_rollover', // §Б6-5 ревизии 4 (задача 10 Б-2): инструмент модуля Финансы; fullScopeOnly
 ] as const;
 
 /**
@@ -169,7 +171,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 13 core + 1 run_action + 12 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 46', async () => {
+  test('builtin-реестр (userB без кастомных): 14 core + 1 run_action + 14 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 49', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -188,18 +190,40 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
     // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
     // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
-    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 46 тулов, пиннит `registry-golden`.
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 49 тулов, пиннит `registry-golden`.
     for (const name of [
       'subscription_set',
       'subscription_remove',
       'contract_sets_delta_set',
       'contract_sets_delta_remove',
+      'action_set',
+      'action_remove',
     ]) {
       expect(names).toContain(name);
     }
     expect(defs.length).toBe(TOOL_REGISTRY_GOLDEN.length);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  test('два тула действий и инструмент переноса: mutate, конверт и схема по соседству', async () => {
+    const defs = await registryFor(userB);
+    for (const name of ['action_set', 'action_remove']) {
+      const def = defOf(defs, name);
+      expect([name, def.kind, def.fullScopeOnly]).toEqual([name, 'mutate', true]);
+      // Парность двух представлений реестровых тулов держит СОСЕДСТВО строк (докблок registry-tools.ts).
+      expect(REGISTRY_TOOL_ENVELOPES[name]).toBeDefined();
+      expect((def.inputJsonSchema as { additionalProperties?: boolean }).additionalProperties).toBe(
+        false,
+      );
+    }
+    const roll = defOf(defs, 'budget_rollover');
+    expect([roll.kind, roll.fullScopeOnly]).toEqual(['mutate', true]);
+    // Инструмент МОДУЛЯ, а не ядра: с выключенными Финансами его в реестре нет (§Б8-3).
+    expect(MODULE_MANIFESTS.finance.tools).toContain('budget_rollover');
+    expect((await registryWithDisabled(userB, ['finance'])).map((d) => d.name)).not.toContain(
+      'budget_rollover',
+    );
   });
 
   test('служебный orbis/agent-run — БЕЗ attach_*-тула, остальные аспекты среза — с ним', async () => {
@@ -284,14 +308,14 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('fullScopeOnly: true у property_catalog и двенадцати тулов реестра (§А9-4) — и ни у кого больше', async () => {
+  test('fullScopeOnly: true у property_catalog, budget_rollover и четырнадцати тулов реестра (§А9-4) — и ни у кого больше', async () => {
     // У каталога признак нужен именно потому, что тул ЧИТАЮЩИЙ: правило «чтения открыты
     // все» его бы пропустило, и `worker` получил бы карту поверхности владельца целиком.
     // У тулов реестра он отвечает на другой вопрос — кому этот тул вообще адресован:
     // мутации фону закрывает и `WORKER_SCOPE_TOOLS`, а устройство системы владельца —
     // не то, над чем фоновый исполнитель работает (§А9-4, РП-14).
     //
-    // ЧЕСТНО О СИЛЕ ЭТОГО ПИНА: у двенадцати реестровых тулов флаг сегодня НЕ НЕСУЩИЙ — снятие
+    // ЧЕСТНО О СИЛЕ ЭТОГО ПИНА: у четырнадцати реестровых тулов флаг сегодня НЕ НЕСУЩИЙ — снятие
     // его не меняет ни списка, ни вызова (мутационная проба Задачи 15), потому что оба
     // гейта отказывают им уже по правилу «мутация не из `WORKER_SCOPE_TOOLS`». Это пин
     // ОБЪЯВЛЕНИЯ, а не поведения, и он станет несущим у первого ЧИТАЮЩЕГО тула реестра —
@@ -300,6 +324,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Порядок — тот, в котором тулы стоят в реестре (`buildToolDefs`), и он наблюдаем:
     // по нему же снят эталон снимка.
     expect(defs.filter((d) => d.fullScopeOnly === true).map((d) => d.name)).toEqual([
+      'budget_rollover',
       'property_catalog',
       'property_create',
       'property_update',
@@ -313,6 +338,8 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
       'subscription_remove',
       'contract_sets_delta_set',
       'contract_sets_delta_remove',
+      'action_set',
+      'action_remove',
     ]);
     expect(defOf(defs, 'property_catalog').kind).toBe('read');
     for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind).toBe('mutate');
@@ -865,13 +892,16 @@ describe('§С8-23: инвариант против fail-open — писател
   );
 
   test('писатели реестра разобраны, и КАЖДЫЙ берёт замок реестра', () => {
-    // Двенадцать публичных тулов реестра плюс ЧЕТЫРЕ внутренние операции
+    // Четырнадцать публичных тулов реестра плюс ЧЕТЫРЕ внутренние операции
     // (`property_row_restore`, `property_merge_undo`, `aspect_row_restore`, `module_set`):
     // первые три зовёт только undo, четвёртую — ручка владельца; снаружи ни одна не достижима.
     // У подписок и наборов своей обратной операции нет: обратное к `subscription_set` — снова
     // `subscription_set` (прежняя декларация), к `contract_sets_delta_set` —
-    // `contract_sets_delta_remove` (задача 16), и внутренних имён ей заводить не пришлось.
+    // `contract_sets_delta_remove` (задача 16), и внутренних имён ей заводить не пришлось. У тулов
+    // действий (задача 10 Б-2) — тоже: обратное к заведению — снятие, к снятию — прежняя декларация.
     expect([...writers].sort()).toEqual([
+      'action_remove',
+      'action_set',
       'aspect_create',
       'aspect_delta_remove',
       'aspect_delta_set',

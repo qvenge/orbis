@@ -683,6 +683,50 @@
     }
   },
   {
+    "name": "budget_rollover",
+    "description": "Перенести остатки бюджета в новый месяц: завести конверты целевого месяца с лимитами и перенесённым остатком. Сперва посмотри предпросмотр переноса, покажи владельцу суммы и только потом зови — действие пишет деньги и создаёт сразу все конверты одной группой. Повторный вызов с тем же batchId безопасен.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "month": {
+          "type": "string",
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+          "description": "ЦЕЛЕВОЙ месяц YYYY-MM — тот, в котором заводятся конверты"
+        },
+        "rows": {
+          "type": "array",
+          "minItems": 1,
+          "description": "по строке на категорию: limit — лимит нового конверта, carryover — остаток прошлого (может быть отрицательным). Значения бери из предпросмотра переноса, а не считай сам",
+          "items": {
+            "type": "object",
+            "required": ["categoryId", "limit", "carryover"],
+            "additionalProperties": false,
+            "properties": {
+              "categoryId": {
+                "type": "string",
+                "description": "id категории"
+              },
+              "limit": {
+                "type": "string",
+                "description": "decimal-строка, не число"
+              },
+              "carryover": {
+                "type": "string",
+                "description": "decimal-строка; отрицательный остаток урезает новый период"
+              }
+            }
+          }
+        },
+        "batchId": {
+          "type": "string",
+          "description": "id вызова: повтор с тем же значением безопасен — конверты не создаются второй раз"
+        }
+      },
+      "required": ["month", "rows", "batchId"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "property_catalog",
     "description": "Каталог свойств: чем вообще можно описывать записи. Ищи здесь, когда нужного поля нет ни в одном attach_*-туле — свободные свойства и предложенные (proposed) видны только отсюда. Возвращает key (им и пиши значение в props), подпись, смысл, тип с вариантами, аспекты-носители и сколько записей это свойство уже заполнили. Фильтры: q (слово), aspect, module, status, orphans (свойства без носителя и без значений), olderThanDays (заведённые раньше чем N дней назад).",
     "inputJsonSchema": {
@@ -2099,6 +2143,90 @@
         }
       },
       "required": ["contract"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "action_set",
+    "description": "Завести или переписать СВОЁ действие — именованную последовательность правок, которую владелец зовёт одним словом («закрыть месяц», «отложить просроченные»). Шаги проверяются целиком ДО записи: чужой тул шага, вложенное действие, пакет без капа и незаявленный факт чувствительности — отказ. У встроенного действия правится только подпись (дельта), шаги — форком.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "адрес: свои действия живут в namespace user/ (user/close-month); он же имя тула action_user_close_month"
+        },
+        "label": {
+          "type": "object",
+          "description": "подпись по локалям, например {\"ru\":\"Усилие\",\"en\":\"Effort\"}",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "object",
+          "description": "что действие делает — по нему владелец решает, звать ли его",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "параметры вызова: [{\"name\":\"to\",\"type\":{\"kind\":\"date\"},\"required\":true}]; на них ссылаются шаги через {\"$expr\":{\"param\":\"to\"}}. Объявленный и не использованный параметр — отказ"
+        },
+        "precondition": {
+          "type": "object",
+          "description": "предикат допустимости ДЕРЕВОМ языка E (строка в позиции выражения отвергается): где он ложен, действие не предлагается и не исполняется"
+        },
+        "over": {
+          "type": "object",
+          "description": "запрос-цель ПАКЕТНОГО действия (§Б6-3): шаги применяются к каждой найденной записи. Есть over — batch_cap обязателен; нет over — batch_cap запрещён, цель берётся из self"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "шаги: [{\"tool\":\"entity_update\",\"input\":{…}}]. Тулы шага — entity_create, entity_update, relation_create, relation_delete, attach_<аспект>. Вложенное действие запрещено; ветвления на уровне шага нет — условие живёт внутри выражения (if)"
+        },
+        "sensitivity": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "факты чувствительности словаря orbis/sensitivity: объявить нужно ВСЕ, что производят шаги, иначе отказ"
+        },
+        "offered_by": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "где предлагается: [{\"llm\":true}] — отдельным тулом модели; {\"surface\":\"…\"} — кнопкой поверхности"
+        },
+        "batch_cap": {
+          "type": "integer",
+          "description": "предел числа записей пакетного действия (сиды пишут 100)"
+        }
+      },
+      "required": ["key", "label", "description", "steps"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "action_remove",
+    "description": "Пометить своё действие устаревшим: оно уходит из предложений и из реестра тулов, новые вызовы отказывают. Строка остаётся — журнал прошлых применений обязан оставаться читаемым.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "адрес действия (key или id). Оно помечается «Устарело»: строка остаётся, новые вызовы отказывают, отложенные единицы снимаются"
+        }
+      },
+      "required": ["action"],
       "additionalProperties": false
     }
   },

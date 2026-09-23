@@ -39,6 +39,7 @@ import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { reconfiguresOf } from '../policy/confirmation';
 import { approvePending, rejectPending } from '../policy/pending';
+import { TOOL_SENSITIVITY } from '../policy/sensitivity';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -5020,9 +5021,11 @@ describe('§С8-23: множество фактов считается на КА
   const empty = SRC.match(/sensitivity: \[\]/g) ?? [];
 
   // Пятый конструктор — `runUndoLast` (В-8, задача 8): свёртка обратных операций спрашивает
-  // таблицу тем же резолвером по снимку, пустого литерала у неё нет.
-  test('пять конструкторов: четыре считают факты по снимку, один (!known) — пустое множество', () => {
-    expect([sites.length, resolved.length, empty.length]).toEqual([5, 4, 1]);
+  // таблицу тем же резолвером по снимку, пустого литерала у неё нет. Шестой — `runBudgetRollover`
+  // (задача 10 Б-2): инструмент Финансов идёт мимо свёртки по операциям, и факт денег ему даёт
+  // таблица `TOOL_SENSITIVITY` — через тот же резолвер, а не пустым литералом.
+  test('шесть конструкторов: пять считают факты по снимку, один (!known) — пустое множество', () => {
+    expect([sites.length, resolved.length, empty.length]).toEqual([6, 5, 1]);
   });
 });
 
@@ -6315,5 +6318,192 @@ describe('batch_execute: действие внутри и предел длин�
       operations: Array.from({ length: 100 }, () => noopOp()),
     });
     expect(atCap.status).toBe('pending_confirmation');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// budget_rollover — инструмент модуля Финансы (задача 10 Б-2: §Б6-5 ревизии 4, В-4, Р-К-39)
+// ---------------------------------------------------------------------------
+
+describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент модуля Финансы', () => {
+  const { routineCtx, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+  // Месяцы — далеко от «сегодня»: преемник-блокер `rolloverCreate` ищет конверты ЦЕЛЕВОГО месяца, и
+  // соседние сьюты своими конвертами текущего месяца мешать не должны.
+  const TARGET = '2032-03';
+  const PREV_START = '2032-02-01';
+  const PREV_END = '2032-02-29';
+
+  /**
+   * Фикстура: категории владельца и конверт прошлого месяца на первую — то, из чего предпросмотр
+   * переноса собирает строки. Строки конверта целевого месяца возвращаются готовыми.
+   */
+  async function prevMonthEnvelopes(owner: GraphId, n = 1) {
+    const rows: Array<{ categoryId: string; limit: string; carryover: string }> = [];
+    for (let i = 0; i < n; i += 1) {
+      const category = await seedEntity(owner, {
+        title: `Категория ${i + 1}`,
+        tags: [],
+        props: { 'orbis/icon': '🍔' },
+        aspects: ['orbis/category'],
+      });
+      if (i === 0) {
+        await seedEntity(owner, {
+          title: 'Конверт прошлого месяца',
+          tags: [],
+          props: {
+            'orbis/finance_category': category.id,
+            'orbis/limit': '5000.00',
+            'orbis/period_start': PREV_START,
+            'orbis/period_end': PREV_END,
+          },
+          aspects: ['orbis/budget'],
+        });
+      }
+      rows.push({ categoryId: category.id, limit: '5000.00', carryover: '0.00' });
+    }
+    return { month: TARGET, rows };
+  }
+
+  async function envelopesOf(owner: GraphId): Promise<number> {
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
+      tx.execute(sql`SELECT count(*)::int AS n FROM entities
+                      WHERE graph_id = ${owner}::uuid AND 'orbis/budget' = ANY(aspects)
+                        AND props->>'orbis/period_start' = ${`${TARGET}-01`}`),
+    )) as unknown as Array<{ n: number }>;
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  async function journalOf(owner: GraphId, actionId: string): Promise<ActionRecord | undefined> {
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
+      tx.execute(sql`SELECT metadata FROM chat_messages
+                      WHERE metadata @> ${JSON.stringify({ actions: [{ id: actionId }] })}::jsonb`),
+    )) as unknown as Array<{ metadata: { actions: ActionRecord[] } }>;
+    return rows[0]?.metadata.actions[0];
+  }
+
+  test('вызов владельца создаёт конверты тем же кодом, что кнопка, и несёт факт touches_money', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const { month, rows } = await prevMonthEnvelopes(owner); // фикстура: конверт прошлого месяца
+    const out = await dispatchTool(
+      {
+        db,
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'chat',
+        explicitCommand: true,
+        threadId,
+      },
+      'budget_rollover',
+      { month, rows, batchId: newId() },
+    );
+    expect(out.status).toBe('ok');
+    // Факты объявлены ТАБЛИЦЕЙ тулов не-исполнителя (Р-К-23), а не выведены из операций:
+    // `rolloverCreate` идёт мимо свёртки по операциям.
+    expect(TOOL_SENSITIVITY.budget_rollover).toEqual(['touches_money']);
+    expect(await envelopesOf(owner)).toBe(1);
+    // АТРИБУЦИЯ — вызыватель, а не «владелец на экране Rollover»: канал чата и его тред (§7.8).
+    if (out.status !== 'ok') return;
+    const result = out.result as { actionId: string; envelopeIds: string[] };
+    expect(result.envelopeIds).toHaveLength(1);
+    const action = await journalOf(owner, result.actionId);
+    expect([action?.source, action?.actor_kind, action?.mechanism]).toEqual([
+      'chat',
+      'owner',
+      'rule',
+    ]);
+    const inThread = (await messagesIn(owner, threadId)).some((m) =>
+      JSON.stringify(m.metadata).includes(result.actionId),
+    );
+    expect(inThread).toBe(true);
+  });
+
+  test('внутри batch_execute не исполняется: исполнитель такого тула не знает', async () => {
+    const owner = await freshGraph();
+    const out = await dispatchTool(
+      { db, identity: personal(owner), actorKind: 'owner', source: 'chat', explicitCommand: true },
+      'batch_execute',
+      { batch_id: newId(), operations: [{ tool: 'budget_rollover', input: {} }] },
+    );
+    expect(out).toMatchObject({ status: 'error', error: { code: 'VALIDATION' } });
+  });
+
+  test('больше 10 конвертов из чата — карточка-запрос; до «Принять» не создано ничего, после — вся группа (§7.10)', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const { month, rows } = await prevMonthEnvelopes(owner, 11);
+    const ctx = ctxFor({ identity: personal(owner), threadId });
+    const out = await dispatchTool(ctx, 'budget_rollover', { month, rows, batchId: newId() });
+    if (out.status !== 'pending_confirmation' || out.card.kind !== 'confirmation_card') {
+      throw new Error(`ожидалась карточка-запрос, пришло ${JSON.stringify(out)}`);
+    }
+    expect(out.card.summary).toBe(`Перенос остатков на ${TARGET}: конвертов — 11`);
+    expect(await envelopesOf(owner)).toBe(0);
+    const approved = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: out.pendingId,
+    });
+    expect(approved.ok).toBe(true);
+    expect(await envelopesOf(owner)).toBe(11);
+    // Исполнение — от ИСХОДНОГО актора (§7.8): модель попросила, владелец подтвердил.
+    if (!approved.ok) return;
+    const action = await journalOf(owner, approved.actionId);
+    expect([action?.source, action?.actor_kind]).toEqual(['chat', 'ai']);
+  });
+
+  test('рутина в режиме act с budget_rollover в белом списке — ОТЛОЖЕННАЯ единица даже на малом переносе (Р-К-39)', async () => {
+    const owner = await freshGraph();
+    const allowed = ['budget_rollover'];
+    const routineId = await seedRoutine(owner, {
+      title: 'Перенос остатков',
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': allowed },
+    });
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-09-01T09:00' });
+    const ctx = routineCtx(owner, 'act', allowed, {
+      clock: () => T0,
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(allowed) },
+    });
+    const { month, rows } = await prevMonthEnvelopes(owner);
+    const out = await dispatchTool(ctx, 'budget_rollover', { month, rows, batchId: newId() });
+    if (out.status !== 'pending_confirmation' || out.card.kind !== 'deferred_action_card') {
+      throw new Error(`ожидалась отложенная единица, пришло ${JSON.stringify(out)}`);
+    }
+    expect(out.card.summary).toBe(`Перенос остатков на ${TARGET}: конвертов — 1`);
+    expect(out.card.rows).toEqual([{ field: String(rows[0]?.categoryId), after: '5000.00' }]);
+    expect(await envelopesOf(owner)).toBe(0);
+    // Режим propose тула не видит вовсе — гейт режима отвечает до всякой отложки.
+    const propose = routineCtx(owner, 'propose', allowed, { clock: () => T0 });
+    const denied = await dispatchTool(propose, 'budget_rollover', {
+      month,
+      rows,
+      batchId: newId(),
+    });
+    expectError(denied, 'FORBIDDEN_LEVEL');
+  });
+
+  test('выключены Финансы — тула нет в реестре, вызов по имени — MODULE_DISABLED (§Б8-3)', async () => {
+    const owner = await freshGraph();
+    const { month, rows } = await prevMonthEnvelopes(owner);
+    const off = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled: false } }],
+    });
+    expect(off.ok).toBe(true);
+    const names = (
+      await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner))
+    ).map((d) => d.name);
+    expect(names).not.toContain('budget_rollover');
+    const out = await dispatchTool(ctxFor({ identity: personal(owner) }), 'budget_rollover', {
+      month,
+      rows,
+      batchId: newId(),
+    });
+    expect(out).toMatchObject({
+      status: 'error',
+      error: { code: 'MODULE_DISABLED', details: { tool: 'budget_rollover', module: 'finance' } },
+    });
+    expect(await envelopesOf(owner)).toBe(0);
   });
 });

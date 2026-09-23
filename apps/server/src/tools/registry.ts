@@ -720,6 +720,47 @@ const budgetStatusJsonSchema = {
   additionalProperties: false,
 };
 
+/**
+ * Вход `budget_rollover` — ТОТ ЖЕ `rolloverInput`, что у ручки `budget.rollover` и web (решение 5
+ * задачи 10, Р-К-41): поле идентификатора вызова — `batchId`, и второй формы имени нет.
+ */
+const rolloverJsonSchema = {
+  type: 'object',
+  properties: {
+    month: {
+      type: 'string',
+      pattern: '^\\d{4}-(0[1-9]|1[0-2])$',
+      description: 'ЦЕЛЕВОЙ месяц YYYY-MM — тот, в котором заводятся конверты',
+    },
+    rows: {
+      type: 'array',
+      minItems: 1,
+      description:
+        'по строке на категорию: limit — лимит нового конверта, carryover — остаток прошлого (может быть отрицательным). Значения бери из предпросмотра переноса, а не считай сам',
+      items: {
+        type: 'object',
+        required: ['categoryId', 'limit', 'carryover'],
+        additionalProperties: false,
+        properties: {
+          categoryId: { type: 'string', description: 'id категории' },
+          limit: { type: 'string', description: 'decimal-строка, не число' },
+          carryover: {
+            type: 'string',
+            description: 'decimal-строка; отрицательный остаток урезает новый период',
+          },
+        },
+      },
+    },
+    batchId: {
+      type: 'string',
+      description:
+        'id вызова: повтор с тем же значением безопасен — конверты не создаются второй раз',
+    },
+  },
+  required: ['month', 'rows', 'batchId'],
+  additionalProperties: false,
+};
+
 const importCsvStartJsonSchema = {
   type: 'object',
   properties: {},
@@ -1137,6 +1178,21 @@ const CORE_TOOLS: OrbisToolDef[] = [
       'Готовые агрегаты бюджета месяца (03-budget): конверты (spent/effectiveLimit/remaining/dailyPace), баланс периода, comingUp (recurring-инстансы на 14 дней), planned (ручные запланированные покупки), unbudgeted и spend_class категорий. Используй для финансовых вопросов («что по бюджету?», «могу позволить X?», остатки конвертов). planned и comingUp уже включают будущие recurring-оттоки — НЕ суммируй recurring отдельно (двойной вычет).',
     inputJsonSchema: budgetStatusJsonSchema,
     kind: 'read',
+  },
+  {
+    // §Б6-5 ревизии 4 (В-4): у переноса ДВА дома — правило-носитель параметров (§Б4-3, задача 13) и
+    // вот этот инструмент. Отдельного триггера «конец периода» в ядре нет: автоматизация во времени
+    // одна — рутины и планировщик (сид рутины «Перенос остатков», `seed/rollover-routine.ts`).
+    name: 'budget_rollover',
+    description:
+      'Перенести остатки бюджета в новый месяц: завести конверты целевого месяца с лимитами и ' +
+      'перенесённым остатком. Сперва посмотри предпросмотр переноса, покажи владельцу суммы и только ' +
+      'потом зови — действие пишет деньги и создаёт сразу все конверты одной группой. Повторный вызов ' +
+      'с тем же batchId безопасен.',
+    inputJsonSchema: rolloverJsonSchema,
+    kind: 'mutate',
+    // Карта денег владельца целиком — фону с суженным грантом не адресована (§А9-4).
+    fullScopeOnly: true,
   },
   {
     // §А9-3: единственный путь модели к свойствам БЕЗ attach_*-тула — к свободным (их не

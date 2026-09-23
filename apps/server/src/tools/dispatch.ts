@@ -31,8 +31,10 @@ import {
   newId,
   pendingMessageId,
   proposeInput,
+  type RolloverInput,
   relationCreateInput,
   relationDeleteInput,
+  rolloverInput,
   type SurfaceName,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
@@ -63,7 +65,7 @@ import {
   runAgentVerb,
 } from '../agent-loop/verbs';
 import { escalateAfterMutation } from '../ai/escalation';
-import { budgetStatus } from '../budget/aggregates';
+import { budgetStatus, rolloverCreate } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
@@ -335,6 +337,12 @@ export async function dispatchTool(
       }
       return await runThreadPost(ctx, parsed);
     }
+    if (pre.def.name === 'budget_rollover') {
+      // СВОЯ ВЕТКА, а не строка `MUTATION_ENVELOPES` (решение 4 задачи 10): `rolloverCreate` сам
+      // открывает транзакции и сам зовёт `execute`, а `prepareOp` его имени не знает. Конверт
+      // разбирается ДО классификации — §7.10 дословно.
+      return await runBudgetRollover(ctx, pre.def, pre.reg, input);
+    }
     if (isAgentVerb(pre.def.name)) {
       // Ветка глаголов стоит СТРОГО ДО runMutation: у них нет envelope в
       // MUTATION_ENVELOPES, а validateMutationEnvelope без схемы бросает голый Error —
@@ -456,6 +464,91 @@ export async function dispatchTool(
     }
     throw e;
   }
+}
+
+/**
+ * ИНСТРУМЕНТ МОДУЛЯ ФИНАНСЫ `budget_rollover` (§Б6-5 ревизии 4, В-4, Р-29): тот же `rolloverCreate`,
+ * что у кнопки экрана, но с вызывателем и атрибуцией (`actorKind`/`source`/`threadId`/`runId`).
+ *
+ * ФАКТЫ ВЫЗОВА — ГРУППА, а не одиночная мутация: конвертов ровно столько, сколько строк, и масштаб
+ * обязан быть виден таблице §7.10 тем же входом, что у `batch_execute` (> 10 — подтверждение).
+ * Факт денег приезжает ТАБЛИЦЕЙ тулов не-исполнителя (`TOOL_SENSITIVITY`, Р-К-23): свёртка по
+ * операциям его не увидит — операций у вызова нет, их строит `rolloverCreate`.
+ *
+ * ФОН НИКОГДА НЕ ИСПОЛНЯЕТ ПЕРЕНОС САМ (Р-К-39) — ни на `preview` (≤ 10 строк), ни на
+ * `explicit-confirmation`. Единица D42 и есть «предпросмотр и „да“» из В-4; без этой ветки малый
+ * перенос из фона получал бы `FORBIDDEN_LEVEL` (инвариант 5), а `defersUnit` его не откладывает
+ * (`reconfigures: 'none'`). Объектного пре-чека (`routineDeferForbidden`) у переноса нет по
+ * построению: он заводит конверты, а не трогает рутины, прогоны или назначенные тикеты.
+ */
+async function runBudgetRollover(
+  ctx: ToolCallCtx,
+  def: OrbisToolDef,
+  reg: RegistrySnapshot,
+  input: unknown,
+): Promise<ToolDispatchResult> {
+  const parsed = parseEnvelope(rolloverInput, input, 'budget_rollover');
+  const facts = {
+    tool: 'budget_rollover',
+    kind: 'mutate' as const,
+    known: true,
+    archives: false,
+    isBatch: true,
+    batchSize: parsed.rows.length,
+    grantsAutonomy: false,
+    reconfigures: 'none' as const,
+  };
+  const level = classifyToolCall({
+    ...facts,
+    actorKind: ctx.actorKind,
+    explicitCommand: ctx.explicitCommand,
+    sensitivity: sensitivityFactsOf(reg, facts),
+  });
+  // Р-К-39: фон откладывает ЛЮБОЙ уровень — до гейта уровня, см. докблок.
+  if (ctx.source === 'routine') {
+    return await deferRoutineUnit(ctx, def, 'budget_rollover', parsed);
+  }
+  const gated = levelGate(level, def.name);
+  if (gated !== null) return gated;
+  if (level === 'explicit-confirmation') {
+    // Тот же контракт, что у прочих мутаций: до «Принять» не записано ничего, а сохранённый
+    // payload исполняет `approvePending` (ветка `budget_rollover` там же). Дедуп — по `batchId`
+    // вызова: ретрай того же вызова не плодит вторую карточку.
+    const pending = await withIdentity(ctx.db, ctx.identity, (tx) =>
+      createPending(tx, {
+        threadId: ctx.threadId,
+        actor: {
+          graphId: ctx.identity.graph,
+          kind: ctx.actorKind,
+          source: ctx.source,
+          grantId: ctx.grant?.id,
+          runId: ctx.runId,
+        },
+        tool: 'budget_rollover',
+        input: parsed,
+        level,
+        dedupeKey: parsed.batchId,
+        summary: rolloverSummary(parsed),
+        clock: ctx.clock,
+      }),
+    );
+    return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
+  }
+  // `execute` и `preview` — один путь: «покажи, не делая» у переноса нет (конверты создаются одной
+  // группой, и diff карточки здесь — сам результат).
+  const r = await rolloverCreate(ctx.db, ctx.identity, parsed, {
+    actorKind: ctx.actorKind,
+    source: ctx.source,
+    threadId: ctx.threadId,
+    runId: ctx.runId,
+    actorGrantId: ctx.grant?.id,
+  });
+  return { status: 'ok', result: r };
+}
+
+/** Сводка переноса — одна на карточку чата и отложенную единицу: владелец видит одну фразу. */
+function rolloverSummary(input: RolloverInput): string {
+  return `Перенос остатков на ${input.month}: конвертов — ${input.rows.length}`;
 }
 
 type Resolution =
@@ -1709,7 +1802,10 @@ function intentOf(operations: readonly ExecOperation[]): ExecOperation[] {
  * `clock` — часы вызова: «сегодня» date-токенов Q обязано совпасть с тем, по которому `runAction`
  * посчитал уровень.
  *
- * Формы, кроме `entity_update`, реестра и действия, — fail-closed отказ. Сегодня они недостижимы
+ * ЧЕТВЁРТАЯ ФОРМА — ПЕРЕНОС ОСТАТКОВ (`budget_rollover`, задача 10 Б-2, Р-К-39): payload — разобранный
+ * конверт, строки карточки — по конверту на строку; исполняет его `approvePending` своей веткой.
+ *
+ * Формы, кроме `entity_update`, реестра, действия и переноса, — fail-closed отказ. Сегодня они недостижимы
  * (уровень выше `execute` прочим даёт только выдача автономии, а её снимает объектный пре-чек),
  * но если таблица §7.10 однажды поменяется, лучше прежний отказ, чем единица, которой нечем ни
  * протухнуть, ни объяснить владельцу, что она сделает, — ровно то, чего велел не допускать
@@ -1762,6 +1858,17 @@ async function snapshotDeferredUnit(
         targets: resolved.targets,
         params: resolved.params,
       },
+    };
+  }
+  if (tool === 'budget_rollover') {
+    // Р-К-39: снимать предусловия переносу нечего — конверты нового месяца ещё не существуют, а
+    // преемников пречекает сам `rolloverCreate` при «Принять». Карточка показывает, ЧТО будет создано:
+    // по строке на конверт — категория и лимит.
+    const parsed = rolloverInput.parse(payload);
+    return {
+      input: parsed,
+      summary: rolloverSummary(parsed),
+      rows: parsed.rows.map((r) => ({ field: r.categoryId, after: String(r.limit) })),
     };
   }
   if (tool !== 'entity_update' || !isRecord(payload)) {

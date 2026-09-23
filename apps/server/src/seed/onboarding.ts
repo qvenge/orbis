@@ -34,6 +34,7 @@ import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { seedGardener } from './gardener';
 import { ensurePersonalGraph } from './personal-graph';
+import { seedRolloverRoutine } from './rollover-routine';
 import {
   ROUTINES_BATCH_QUERY,
   SEED_HORIZON_LISTS,
@@ -92,8 +93,9 @@ export interface SeedResult {
  *      (`seed/world.ts`, рулинг Р-17-1: с «Пересева мира» прямых вставок графа больше нет);
  *   2. настройки и глобальный тред — своей транзакцией (`seedOnboarding`): это не сущности
  *      графа, и у исполнителя их нет;
- *   3. садовник словаря (§А2-7, Р17) — ОТДЕЛЬНОЙ транзакцией через исполнитель, потому что
- *      он несёт доверенность рутины и обязан пройти валидатор реестра (см. `seed/gardener.ts`).
+ *   3. садовник словаря (§А2-7, Р17) и рутина «Перенос остатков» модуля Финансы (В-4, задача 10
+ *      Б-2) — ОТДЕЛЬНЫМИ транзакциями через исполнитель, потому что каждая несёт доверенность
+ *      рутины и обязана пройти валидатор реестра (см. `seed/gardener.ts`, `seed/rollover-routine.ts`).
  *
  * ПОЧЕМУ ТРИ ТРАНЗАКЦИИ, А НЕ ОДНА. `seedOnboarding` первым делом берёт `FOR UPDATE` на
  * строке настроек, а `execute` открывает СВОЮ транзакцию на другом соединении: вложив второе
@@ -115,14 +117,17 @@ export async function seedOwner(
 ): Promise<SeedResult> {
   // ПОРЯДОК: мир → настройки → садовник; довод по первой стрелке — в `seedOwnerGraph`.
   const result = await seedOwnerGraph(db, who, clock);
-  // Садовник — 19-я сущность мира и ЕДИНСТВЕННАЯ, которую сеют всегда: у неё своя проба по
-  // PK и своя роль досева для владельцев, засиденных до V1 (см. `seed/gardener.ts`).
+  // Садовник — 19-я сущность мира: у неё своя проба по PK и своя роль досева для владельцев,
+  // засиденных до V1 (см. `seed/gardener.ts`).
   await seedGardener(db, who, clock);
+  // Рутина модуля Финансы (В-4, задача 10 Б-2): та же проба по PK и та же роль досева, что у
+  // садовника, — 20-я сущность мира.
+  await seedRolloverRoutine(db, who, clock);
   return result;
 }
 
 /**
- * Мир и настройки владельца БЕЗ садовника — 18 сущностей вместо 19.
+ * Мир и настройки владельца БЕЗ рутин (садовника и переноса остатков) — 18 сущностей вместо 20.
  *
  * ЗАЧЕМ ОТДЕЛЬНЫЙ ВХОД. С переездом графа в `seed/world.ts` «засеять владельца» перестало
  * помещаться в одну транзакцию: `execute` открывает свою (Р-17-1), а `seedOnboarding`

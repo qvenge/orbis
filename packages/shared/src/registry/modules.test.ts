@@ -45,9 +45,11 @@ describe('манифест модуля (§Б8-1): состав вне реес�
     }
   });
 
-  test('Финансы: два тула, одна поверхность, три промпт-фрагмента', () => {
+  test('Финансы: три тула, одна поверхность, три промпт-фрагмента', () => {
     const fin = MODULE_MANIFESTS.finance;
-    expect([...fin.tools].sort()).toEqual(['budget_status', 'import_csv_start']);
+    // `budget_rollover` — инструмент МОДУЛЯ (задача 10 Б-2, §Б6-5 ревизии 4): выключены Финансы —
+    // нет и переноса остатков.
+    expect([...fin.tools].sort()).toEqual(['budget_rollover', 'budget_status', 'import_csv_start']);
     expect(fin.surfaces).toEqual(['finance/budget-overview']);
     expect(fin.promptFragments.map((f) => f.id)).toEqual([
       'finance/amounts',

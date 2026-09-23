@@ -225,7 +225,8 @@ describe('reset-world — состав пересева на живой базе
   beforeAll(async () => {
     await truncateAll();
 
-    // Мир владельца — боевым путём: 19 сущностей через исполнитель, настройки, глобальный тред.
+    // Мир владельца — боевым путём: 20 сущностей через исполнитель (18 мира + две рутины: садовник и
+    // «Перенос остатков»), настройки, глобальный тред.
     await seedOwner(app, personal(owner));
 
     // Собственное свойство владельца в реестре + дельта поверх системного аспекта: ровно то,
@@ -320,7 +321,7 @@ describe('reset-world — состав пересева на живой базе
 
   test('после пересева: мир пуст, графы целы, реестры только системные, версии на месте, доступы целы', async () => {
     // Предусловие, без которого зелень ничего не значит: сносить было ЧТО.
-    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 2);
     expect(await count('registry_deltas')).toBe(1);
     expect(await count('property_definitions', 'graph_id IS NOT NULL')).toBe(1);
     expect(await count('aspect_definitions', 'graph_id IS NOT NULL')).toBe(1);
@@ -344,7 +345,7 @@ describe('reset-world — состав пересева на живой базе
     }
 
     // Отчёт называет снесённое поимённо — по нему оператор сверяет масштаб.
-    expect(report.world.entities).toBe(SEED_WORLD_SIZE + 1);
+    expect(report.world.entities).toBe(SEED_WORLD_SIZE + 2);
     expect(report.world.relations).toBe(1);
     expect(report.world.chat_messages).toBe(1);
     expect(report.world.entity_origins).toBe(1);
@@ -413,7 +414,7 @@ describe('reset-world — состав пересева на живой базе
     // `seeded: false` — строка настроек на месте, онбординг «уже был». Мир при этом посеян:
     // ответ про фазу настроек, а не про граф (см. докблок `seedOwner`).
     expect(again.seeded).toBe(false);
-    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 2);
 
     // Пины сходятся сами: id мира детерминированы от owner + слаг, и после пересева
     // возвращаются те же. Проверяется НЕ формула, а то, что каждая закреплённая сущность
@@ -429,7 +430,7 @@ describe('reset-world — состав пересева на живой базе
 
     // Повторный заход ничего не удваивает — идемпотентность держит проба по PK, а не guard.
     await seedOwner(app, personal(owner));
-    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 1);
+    expect(await count('entities', `graph_id = '${owner}'`)).toBe(SEED_WORLD_SIZE + 2);
   });
 
   test('после пересева `check` чист: дрейфа реестров нет, конфликтов слияния нет', async () => {

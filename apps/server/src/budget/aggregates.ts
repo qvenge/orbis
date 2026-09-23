@@ -44,7 +44,13 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ExecuteRequest, WireEntity } from '../executor/types';
+import type {
+  ActorKind,
+  ExecuteRequest,
+  ExecutorDeps,
+  MutationSource,
+  WireEntity,
+} from '../executor/types';
 import type { Identity } from '../identity';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { materializeInstances } from '../recurring/materialize';
@@ -960,6 +966,25 @@ export async function rolloverCreate(
   db: Db,
   who: Identity,
   input: RolloverInput,
+  /**
+   * Кто и откуда зовёт (§7.8): с задачи 10 Б-2 у переноса три вызывателя — кнопка экрана Rollover,
+   * тул `budget_rollover` (рука в чате, внешний агент) и «Принять» отложенной единицы рутины. Журнал
+   * обязан называть настоящего — иначе перенос, предложенный рутиной, читался бы в ленте правкой
+   * владельца на экране. Умолчание — прежний путь кнопки: владелец на экране Rollover.
+   */
+  actor?: {
+    actorKind: ActorKind;
+    source: MutationSource;
+    threadId?: string;
+    runId?: string;
+    actorGrantId?: string;
+  },
+  /**
+   * Шов сериализации «Принять» (`approvePending`): замок единицы и перепроверка «не отклонена» —
+   * В ТОЙ ЖЕ транзакции, что audit-сообщение, как у пачки (`ExecutorDeps.beforeStages`). Без него
+   * конкурентные «Принять» и «Отклонить» проходили бы свои проверки до чужого коммита (write-skew).
+   */
+  beforeStages?: ExecutorDeps['beforeStages'],
 ): Promise<RolloverResult> {
   const seen = new Set<string>();
   for (const row of input.rows) {
@@ -1037,8 +1062,12 @@ export async function rolloverCreate(
 
   const request: ExecuteRequest = {
     identity: who,
-    actorKind: 'owner',
-    source: 'ui', // подтверждённое действие владельца на экране Rollover (§3.5)
+    // Умолчание — подтверждённое действие владельца на экране Rollover (§3.5).
+    actorKind: actor?.actorKind ?? 'owner',
+    source: actor?.source ?? 'ui',
+    ...(actor?.threadId !== undefined && { threadId: actor.threadId }),
+    ...(actor?.runId !== undefined && { runId: actor.runId }),
+    ...(actor?.actorGrantId !== undefined && { actorGrantId: actor.actorGrantId }),
     // Механизм — правило каталога (§А4-4): перенос остатка пишет `orbis/carryover`, и
     // только правилу rollover это разрешено (§А2-5).
     mechanism: 'rule',
@@ -1064,7 +1093,10 @@ export async function rolloverCreate(
       };
     }),
   };
-  const r = await execute(db, request, { sink: rolloverSink });
+  const r = await execute(db, request, {
+    sink: rolloverSink,
+    ...(beforeStages !== undefined && { beforeStages }),
+  });
   if (!r.ok) {
     throw new ExecError(r.error.code as ExecErrorCode, r.error.message, r.error.details);
   }
