@@ -19,6 +19,7 @@ import {
 import { withIdentity } from '../db/with-identity';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { classifyToolCall } from '../policy/confirmation';
+import { approvePending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import { setModuleDisabled } from '../registry/modules';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
@@ -454,4 +455,43 @@ test('факты шагов доезжают в sensitivity, даже когда
     explicitCommand: false,
   });
   expect([...facts.sensitivity]).toEqual(['touches_money']);
+});
+
+test('карточка подтверждения длиннее капа пачки — BATCH_TOO_LONG до постановки (В-9, Р-11)', async () => {
+  // Пакет из 11 целей × 10 шагов = 110 операций: уровень — подтверждение (масштаб), а конверт
+  // единицы `batch_execute` держит кап 100 — такую карточку `approvePending` не принял бы никогда.
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  const postpone = snap.actions.get('planner/postpone_overdue');
+  if (postpone === undefined) throw new Error('сидового действия нет в снимке');
+  const decl = synthetic({
+    params: postpone.params,
+    over: postpone.over,
+    batch_cap: 100,
+    steps: Array.from({ length: 10 }, () => postpone.steps[0] as ActionDefinition['steps'][number]),
+  });
+  const out = await runAction(
+    aiCtx(),
+    withAction(snap, decl),
+    [],
+    decl.key,
+    { params: { to: '2026-09-30' } },
+    NO_DEFER,
+  );
+  expect(out).toMatchObject({
+    status: 'error',
+    error: { code: 'VALIDATION', details: { reason: 'BATCH_TOO_LONG', cap: 100, found: 110 } },
+  });
+});
+
+test('карточка действия исполнима approvePending уже сегодня: 11 целей — одной пачкой', async () => {
+  // Последний в файле: принятие переносит сроки, и просроченных после него не остаётся.
+  const out = await dispatchTool(aiCtx(), 'action_planner_postpone_overdue', { to: '2026-09-30' });
+  if (out.status !== 'pending_confirmation') throw new Error(`ожидалась карточка: ${out.status}`);
+  const applied = await approvePending(db, { identity: personal(owner), pendingId: out.pendingId });
+  expect(applied.ok).toBe(true);
+  const moved = await withIdentity(db, personal(owner), (tx) =>
+    tx.execute(sql`SELECT count(*)::int AS n FROM entities
+      WHERE props->>'orbis/due_date' = '2026-09-30'`),
+  );
+  expect(moved[0]?.n).toBe(11);
 });

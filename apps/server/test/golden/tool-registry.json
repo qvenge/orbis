@@ -622,6 +622,7 @@
         "operations": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 100,
           "items": {
             "type": "object",
             "properties": {
@@ -635,7 +636,7 @@
             "required": ["tool", "input"],
             "additionalProperties": false
           },
-          "description": "мутирующие core- и attach_*-тулы, кроме самого batch_execute; порядок значим — весь batch валидируется до начала и выполняется одной транзакцией"
+          "description": "мутирующие core- и attach_*-тулы, кроме самого batch_execute; порядок значим — весь batch валидируется до начала и выполняется одной транзакцией; не более 100 операций"
         }
       },
       "required": ["batch_id", "operations"],

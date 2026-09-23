@@ -11,7 +11,13 @@
 //
 // ИМПОРТЫ — ИЗ ОБЩЕГО ДНА, а не из `tools/dispatch.ts`: `dispatchTool` зовёт `runAction`, и
 // обратный импорт по значению замкнул бы цикл (Р-К-67, Р-К-87).
-import { type ActionDefinition, effectiveLabel, isModuleEnabled, newId } from '@orbis/shared';
+import {
+  type ActionDefinition,
+  BATCH_CAP_DEFAULT,
+  effectiveLabel,
+  isModuleEnabled,
+  newId,
+} from '@orbis/shared';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -121,6 +127,23 @@ export async function runAction(
   const level = classifyToolCall(facts);
   const gated = levelGate(level, `run_action:${decl.key}`);
   if (gated !== null) return gated;
+
+  if (level === 'explicit-confirmation' && operations.length > BATCH_CAP_DEFAULT) {
+    // Единица подтверждения — конверт `batch_execute` (Р-8), а его длину держит тот же кап, что
+    // у пачки модели (В-9, Р-11): `approvePending` разбирает сохранённую карточку той же схемой
+    // (`toOperations`). Карточка длиннее капа не исполнилась бы на «Принять» никогда — честный
+    // отказ ДО постановки дешевле карточки, которую нельзя принять.
+    return errorResult(
+      'VALIDATION',
+      `действие «${decl.key}»: операций ${operations.length}, предел карточки подтверждения ${BATCH_CAP_DEFAULT} (В-9)`,
+      {
+        reason: 'BATCH_TOO_LONG',
+        action: decl.id,
+        cap: BATCH_CAP_DEFAULT,
+        found: operations.length,
+      },
+    );
+  }
 
   if (ctx.source === 'routine' && level !== 'execute') {
     // Р-К-29/Р-К-67: ЗАДАЧА 8 заменяет этот блок вызовом `hooks.defer('run_action', parsed)`.

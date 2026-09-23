@@ -20,6 +20,7 @@ import {
   actionToolName,
   aspectToolJsonSchema,
   attachToolName,
+  BATCH_CAP_DEFAULT,
   BUILTIN_RELATION_ROLE_META,
   effectiveLabel,
   type GraphId,
@@ -652,6 +653,8 @@ const batchExecuteJsonSchema = {
     operations: {
       type: 'array',
       minItems: 1,
+      // В-9: та же константа, что `.max` zod-конверта (Р-11) — парность пиннит registry.test.ts
+      maxItems: BATCH_CAP_DEFAULT,
       items: {
         type: 'object',
         properties: { tool: { type: 'string' }, input: { type: 'object' } },
@@ -659,7 +662,7 @@ const batchExecuteJsonSchema = {
         additionalProperties: false,
       },
       description:
-        'мутирующие core- и attach_*-тулы, кроме самого batch_execute; порядок значим — весь batch валидируется до начала и выполняется одной транзакцией',
+        'мутирующие core- и attach_*-тулы, кроме самого batch_execute; порядок значим — весь batch валидируется до начала и выполняется одной транзакцией; не более 100 операций',
     },
   },
   required: ['batch_id', 'operations'],

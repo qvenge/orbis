@@ -5481,3 +5481,57 @@ describe('общее дно диспатча: помощники перееха�
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Действие в пачке и кап пачки (задача 7: Р-К-16; Р-11, В-9)
+// ---------------------------------------------------------------------------
+
+describe('batch_execute: действие внутри и предел длины', () => {
+  /** Операция, которая сама по себе валидна: отказ обязан прийти от гейта пачки, а не от неё. */
+  const noopOp = () => ({ tool: 'entity_create', input: { title: 'шум', tags: [] } });
+
+  test('run_action внутри batch_execute — VALIDATION RUN_ACTION_IN_BATCH, не «неизвестный тул»', async () => {
+    const out = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [{ tool: 'run_action', input: { action: 'finance/plan-to-fact' } }],
+    });
+    expect(out).toMatchObject({
+      status: 'error',
+      error: {
+        code: 'VALIDATION',
+        details: { reason: 'RUN_ACTION_IN_BATCH', index: 0, tool: 'run_action' },
+      },
+    });
+    // Тул действия — тот же отказ: имя лишь адресует декларацию (§Б6-6).
+    const tool = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        noopOp(),
+        { tool: 'action_planner_postpone_overdue', input: { to: '2026-09-30' } },
+      ],
+    });
+    expect(tool).toMatchObject({
+      status: 'error',
+      error: { code: 'VALIDATION', details: { reason: 'RUN_ACTION_IN_BATCH', index: 1 } },
+    });
+  });
+
+  test('пачка длиннее 100 отвергается ДО политики: BATCH_TOO_LONG (В-9)', async () => {
+    const out = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: Array.from({ length: 101 }, () => noopOp()),
+    });
+    expect(out).toMatchObject({
+      status: 'error',
+      error: { code: 'VALIDATION', details: { reason: 'BATCH_TOO_LONG', cap: 100, found: 101 } },
+    });
+    expect(out.status === 'error' ? out.error.message : '').toContain('batch_execute');
+    // Ровно на пределе — не отказ капа (101-я операция и есть граница, а не 100-я): пачка
+    // из 100 проходит гейт длины и получает уровень политики (> 10 → подтверждение).
+    const atCap = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: Array.from({ length: 100 }, () => noopOp()),
+    });
+    expect(atCap.status).toBe('pending_confirmation');
+  });
+});

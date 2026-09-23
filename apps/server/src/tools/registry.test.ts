@@ -8,6 +8,7 @@ import {
   askInput,
   attachAspectInput,
   attachToolName,
+  BATCH_CAP_DEFAULT,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -620,6 +621,19 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
       // strict-режим zod ↔ additionalProperties: false
       expect({ tool, ap: jsonSchema.additionalProperties }).toEqual({ tool, ap: false });
     }
+  });
+
+  test('кап пачки одинаков в zod и в JSON Schema (одна константа, Р-11)', async () => {
+    const schema = defOf(await registryFor(userB), 'batch_execute').inputJsonSchema;
+    const operations = (schema.properties as Record<string, Record<string, unknown>>).operations;
+    expect(operations?.maxItems).toBe(BATCH_CAP_DEFAULT);
+    const noop = () => ({ tool: 'entity_create', input: { title: 'x', tags: [] } });
+    const batch = (n: number) => ({
+      batch_id: '019e4466-aaaa-7e07-b5d4-64be9721da51',
+      operations: Array.from({ length: n }, noop),
+    });
+    expect(batchExecuteInput.safeParse(batch(BATCH_CAP_DEFAULT)).success).toBe(true);
+    expect(batchExecuteInput.safeParse(batch(BATCH_CAP_DEFAULT + 1)).success).toBe(false);
   });
 
   test('attach_*: top-level ключи JSON Schema = ключи attachAspectInput (envelope §9.2)', async () => {

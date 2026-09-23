@@ -14,6 +14,7 @@ import {
   actionToolName,
   askInput,
   attachAspectInput,
+  BATCH_CAP_DEFAULT,
   type BatchExecuteInput,
   batchExecuteInput,
   budgetStatusInput,
@@ -2911,8 +2912,30 @@ function assertBatchToolsKnown(
   reg: RegistrySnapshot,
   disabled: readonly string[],
 ): BatchExecuteInput {
+  // В-9: длина — ПЕРВОЙ пробой, до разбора конверта: у отказа капа свой `reason`, а zod-issues
+  // схемы (`.max`) назвали бы его безлико «массив слишком длинный». Отказ — ДО политики, то есть
+  // пачка на 101 операцию не становится карточкой подтверждения.
+  const length = isRecord(input) && Array.isArray(input.operations) ? input.operations.length : 0;
+  if (length > BATCH_CAP_DEFAULT) {
+    throw new ExecError(
+      'VALIDATION',
+      `batch_execute: операций ${length}, предел ${BATCH_CAP_DEFAULT} (В-9)`,
+      { reason: 'BATCH_TOO_LONG', cap: BATCH_CAP_DEFAULT, found: length },
+    );
+  }
   const parsed = parseEnvelope(batchExecuteInput, input, 'batch_execute');
   for (const [index, op] of parsed.operations.entries()) {
+    if (op.tool === 'run_action' || op.tool.startsWith('action_')) {
+      // Р-К-16: обёртка над обёрткой. `ACTION_NESTED` — про ДЕКЛАРАЦИЮ (§Б6-3), здесь речь о
+      // вызове, поэтому свой `reason`: пачка действий не имеет ни общего inverse, ни общего
+      // уровня, а гейты §Б6-2 считаются по шагам ОДНОГО действия. Проба стоит ПЕРВОЙ строкой
+      // цикла: `run_action` — известный реестру тул, и гейт «известен ли» его пропустил бы.
+      throw new ExecError(
+        'VALIDATION',
+        `batch_execute: действие «${op.tool}» в пачке не исполняется`,
+        { index, tool: op.tool, reason: 'RUN_ACTION_IN_BATCH' },
+      );
+    }
     if (known.has(op.tool)) continue;
     // Та же вторая линия, что у одиночного вызова (Ф-Б1-57в): пачка не вправе отвечать про
     // скрытый маской тул иначе, чем одиночный вызов того же тула.
