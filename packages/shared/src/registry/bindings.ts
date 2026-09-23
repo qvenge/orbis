@@ -721,6 +721,77 @@ export function bindingIndexOf(reg: {
   };
 }
 
+/** Привязка аспекта к контракту в индексе; `undefined` — аспект этот контракт не реализует. */
+function bindingOn(
+  idx: BindingIndex,
+  aspectId: string,
+  contract: string,
+): ResolvedBinding | undefined {
+  return idx.byAspect(aspectId).find((b) => b.contract === contract);
+}
+
+/**
+ * Свойство, стоящее в слоте контракта у этого аспекта (§Б2-1) — дом ОДНОГО вопроса: «куда писать» и
+ * «откуда читать» это один адрес, и литерал в коде был бы копией строки реестра в файле, который
+ * выкатывается отдельно от базы.
+ *
+ * Бросает, а не возвращает `undefined`: зовущий СОБИРАЕТСЯ писать, и «свойства нет» для него не
+ * развилка, а сломанный снимок (слот закрыт константой либо не связан). Молчаливый `undefined` уехал
+ * бы ключом `"undefined"` в `props` — то есть порчей данных.
+ */
+export function propertyOfSlot(
+  idx: BindingIndex,
+  aspectId: string,
+  contract: string,
+  slot: string,
+): string {
+  const at = idx.slotOf(aspectId, contract, slot);
+  if (at === undefined || !('prop' in at)) {
+    throw new Error(
+      `propertyOfSlot: слот ${slot} контракта ${contract} у аспекта ${aspectId} не занят свойством`,
+    );
+  }
+  return at.prop;
+}
+
+/**
+ * ЕДИНСТВЕННЫЙ вариант, которым аспект выражает класс контракта (Р-И-39) — вторая половина записи
+ * классом: код называет класс, значение берётся у привязки.
+ *
+ * Однозначность проверяется по ДАННЫМ индекса, а не по флагу `exclusive_classes` (РЧ-14а-4): флаг
+ * живёт в декларации контракта, которой у индекса нет, а «в классе ровно один вариант» — то же
+ * утверждение, проверяемое ещё и для снимков, собранных мимо валидатора.
+ *
+ * Обход по СЛОТАМ (`variantsOfClass` — слот → класс → варианты): слот-статус у контракта один, и
+ * первый найденный класс и есть ответ. Контракт с двумя слотами-статусами к записи классом не готов —
+ * такой понадобится, когда появится; сегодня его нет ни одного.
+ */
+export function variantOfClass(
+  idx: BindingIndex,
+  aspectId: string,
+  contract: string,
+  cls: string,
+): string | boolean {
+  const binding = bindingOn(idx, aspectId, contract);
+  if (binding === undefined) {
+    throw new Error(`variantOfClass: аспект ${aspectId} не реализует контракт ${contract}`);
+  }
+  for (const byClass of binding.variantsOfClass.values()) {
+    const variants = byClass.get(cls);
+    if (variants === undefined) continue;
+    if (variants.length !== 1) {
+      throw new Error(
+        `variantOfClass: класс ${cls} контракта ${contract} у аспекта ${aspectId} выражают ` +
+          `${variants.length} вариантов — контракт не объявлен exclusive_classes`,
+      );
+    }
+    return variants[0] as string | boolean;
+  }
+  throw new Error(
+    `variantOfClass: класс ${cls} контракта ${contract} не отнесён ни одному варианту у аспекта ${aspectId}`,
+  );
+}
+
 /**
  * Класс записи под контрактом (§Б2-2) — для потребителей, которым нужен КЛАСС, а не элемент строки
  * списка: движок правил (`on_enter_class`, `class(X)` в `when`) и классификатор Б-2.

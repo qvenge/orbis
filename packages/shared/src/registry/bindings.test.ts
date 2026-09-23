@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { AspectDeltaVariants } from './bindings';
-import { bindingIndexOf, checkClassMap, checkImplements, entityClassOf } from './bindings';
+import {
+  bindingIndexOf,
+  checkClassMap,
+  checkImplements,
+  entityClassOf,
+  propertyOfSlot,
+  variantOfClass,
+} from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { contractDefinitionSchema } from './contract-type';
 import { BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from './index';
@@ -1090,5 +1097,40 @@ describe('entityClassOf и резерв маркеров: select — по зна
     expect(issues.map((i) => [i.code, i.details.reason])).toEqual([
       ['VARIANT_UNMAPPED', 'reserved'],
     ]);
+  });
+});
+
+describe('запись классом: propertyOfSlot и variantOfClass (Р-И-39)', () => {
+  const idx = bindingIndexOf({
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+  });
+  test('свойство за слотом — id из bind, а не из кода', () => {
+    expect(propertyOfSlot(idx, 'orbis/task', 'orbis/when', 'deadline')).toBe('orbis/due_date');
+  });
+  test('слот под КОНСТАНТОЙ свойства не имеет — Error сборки, а не молчаливый undefined', () => {
+    // `origin_role` расписания закрыт `fixed: {origin_role:'instance-of'}` — писать в него нечего.
+    expect(() => propertyOfSlot(idx, 'orbis/schedule', 'orbis/recurrence', 'origin_role')).toThrow(
+      /не занят свойством/,
+    );
+  });
+  test('единственный вариант класса; класс с двумя вариантами — Error', () => {
+    // `orbis/completable` НЕ exclusive: класс `active` собирает четыре варианта задачи — однозначного
+    // ответа у него нет, и запись классом по нему обязана падать, а не выбирать наугад.
+    expect(() => variantOfClass(idx, 'orbis/task', 'orbis/completable', 'active')).toThrow(
+      /4 вариант/,
+    );
+    expect(variantOfClass(idx, 'orbis/task', 'orbis/completable', 'done')).toBe('done');
+    expect(variantOfClass(idx, 'orbis/schedule', 'orbis/recurrence', 'template')).toBe('present');
+  });
+  test('класса нет в карте — Error', () => {
+    expect(() => variantOfClass(idx, 'orbis/task', 'orbis/completable', 'queued')).toThrow(
+      /не отнесён ни одному варианту/,
+    );
+  });
+  test('аспект контракта не реализует — Error с обоими адресами', () => {
+    expect(() => variantOfClass(idx, 'orbis/note', 'orbis/completable', 'done')).toThrow(
+      /orbis\/note/,
+    );
   });
 });
