@@ -48,6 +48,8 @@ import { aspectDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { REGISTRY_OPS } from '../executor/executor';
 import { reconfiguresOf } from '../policy/confirmation';
+import { sensitivityFactsOf } from '../policy/sensitivity';
+import { stepFactsOf } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
 import { propertyCatalogInput } from './property-catalog';
 import {
@@ -884,6 +886,39 @@ describe('§С8-23: инвариант против fail-open — писател
     expect(reachable.sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
     // Падение НАЗЫВАЕТ имена — чинить вслепую не придётся.
     expect(reachable.filter((n) => reconfiguresOf(n, {}) === 'none')).toEqual([]);
+  });
+
+  test('уровень действия считается по ШАГАМ, а не по имени (§Б6-2, риск О7)', async () => {
+    const defs = await registryFor(userB);
+    const actionTools = defs
+      .filter((d) => d.name === 'run_action' || d.name.startsWith('action_'))
+      .map((d) => d.name);
+    expect(actionTools.length).toBeGreaterThan(0);
+    expect(actionTools).toEqual(['run_action', 'action_planner_postpone_overdue']);
+    // Хвост `reconfiguresOf` отвечает им `'none'` — и это ЗАКОННО ровно потому, что ответ по
+    // имени у них и не спрашивается: ни одно из имён не значится среди писателей реестра, а
+    // уровень считает ветка действия по резолвленным шагам (`actionCallFacts`, `actions/run.ts`;
+    // проба «архивация выражением → подтверждение» — `actions/run.test.ts`).
+    for (const name of actionTools) {
+      expect([name, reconfiguresOf(name, {}), REGISTRY_TOOL_NAMES.has(name)]).toEqual([
+        name,
+        'none',
+        false,
+      ]);
+    }
+    // А свёртка по шагам сидовых деклараций — НЕ пуста: `plan-to-fact` несёт факт денег.
+    const reg = await withIdentity(db, personal(userB), (tx) => effectiveRegistry(tx, userB));
+    const p2f = reg.actions.get('finance/plan-to-fact');
+    if (p2f === undefined) throw new Error('сидового plan-to-fact нет в снимке');
+    expect([
+      ...sensitivityFactsOf(
+        reg,
+        { tool: 'run_action', reconfigures: 'none', grantsAutonomy: false, archives: false },
+        [...p2f.sensitivity, ...p2f.steps.flatMap((s) => stepFactsOf(reg, s))],
+      ),
+    ]).toEqual(['touches_money']);
+    // И факт шага — не эхо декларации: без объявленного факта шаг производит его сам.
+    expect(p2f.steps.flatMap((s) => stepFactsOf(reg, s))).toEqual(['touches_money']);
   });
 
   test('видимый классификатору мутирующий тул фону не адресован (ось worker, §А9-4)', async () => {
