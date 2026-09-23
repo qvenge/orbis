@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   AGENDA_DEF,
   BUDGET_DEF,
+  BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -44,6 +45,11 @@ function snapshotWith(overrides: PropertyDefinition[] = []): RegistrySnapshot {
     ownerVersion: 1,
     systemVersion: 1,
   };
+}
+
+/** Тот же снимок с посеянными действиями (§Б6-5) — цель дельты подписи §С3. */
+function snapshotWithAction(): RegistrySnapshot {
+  return { ...snapshotWith(), actions: new Map(BUILTIN_ACTION_DEFS.map((a) => [a.id, a])) };
 }
 
 /** Есть ли такое определение вовсе: `undefined` тут — дефект фикстуры, а не ветка пробы. */
@@ -296,13 +302,39 @@ describe('applyDeltas: система ⊕ дельта (§А3-2)', () => {
     ).toEqual({ code: 'VALIDATION', reason: 'DELTA_MALFORMED' });
   });
 
-  test('цели без тулов записи (relation_role, action) — VALIDATION', () => {
-    for (const kind of ['relation_role', 'action'] as const) {
-      expect(refusal(() => applyDeltas(snapshotWith(), [row(kind, 'subitem', {})]))).toEqual({
-        code: 'VALIDATION',
-        reason: 'DELTA_TARGET_UNSUPPORTED',
-      });
-    }
+  // Действие вышло из этого списка с Б-2 (§С3): его дельта — подпись и смысл. Роль рёбер осталась.
+  test('цель без формы дельты (relation_role) — VALIDATION', () => {
+    expect(
+      refusal(() => applyDeltas(snapshotWith(), [row('relation_role', 'subitem', {})])),
+    ).toEqual({
+      code: 'VALIDATION',
+      reason: 'DELTA_TARGET_UNSUPPORTED',
+    });
+  });
+
+  test('дельта действия меняет подпись и не трогает шаги (§С3)', () => {
+    const before = snapshotWithAction();
+    const after = applyDeltas(before, [
+      row('action', 'planner/postpone_overdue', { label: { ru: 'Перенести', en: 'Move' } }),
+    ]);
+    const steps = before.actions.get('planner/postpone_overdue')?.steps ?? [];
+    expect(steps.length).toBe(1); // проба не вырождена: сравниваются настоящие шаги, а не пустота
+    expect(after.actions.get('planner/postpone_overdue')?.label.ru).toBe('Перенести');
+    expect(after.actions.get('planner/postpone_overdue')?.steps).toEqual(steps);
+    // Входной снимок не мутирован: он живёт в процессном кеше дольше вызова.
+    expect(before.actions.get('planner/postpone_overdue')?.label.ru).toBe('Отложить просроченные');
+  });
+
+  // §Б6-5 дословно: «правка чужого действия — дельта label; шаги встроенных — форк». Шаги в дельте —
+  // не «применить половину», а отказ формы: форма дельты закрыта (`.strict()`).
+  test('дельта действия со шагами — DELTA_MALFORMED, а не молча применённая правка', () => {
+    expect(
+      refusal(() =>
+        applyDeltas(snapshotWithAction(), [
+          row('action', 'planner/postpone_overdue', { steps: [] }),
+        ]),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'DELTA_MALFORMED' });
   });
 
   test('дельта на определение, которого нет (выключенный модуль), пропускается без отказа', () => {

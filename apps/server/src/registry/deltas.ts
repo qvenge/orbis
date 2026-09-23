@@ -13,7 +13,8 @@
 // ЧТО ДЕЛЬТА МОЖЕТ (§А3-2, закрытый список — всё остальное форма просто не разберёт):
 // подпись и смысл (label/description), иконку аспекта, состав свойств аспекта (добавить,
 // скрыть, переставить), ослабление обязательности по белому списку и добавленные варианты
-// `select`. Тип и key встроенного она не меняет — на них стоят данные и адреса Q-AST.
+// `select`. Тип и key встроенного она не меняет — на них стоят данные и адреса Q-AST. У действия
+// (§С3, Б-2) — только подпись и смысл: шаги встроенного меняет форк, а не дельта.
 //
 // ОТКАЗ ЗДЕСЬ — FAIL-CLOSED, как и у разбора самих строк реестра (`load.ts`): дельта,
 // которая не складывается с системой, ломает чтение реестра целиком, а не «применяется
@@ -142,6 +143,17 @@ export const propertyDeltaSchema = z
 export type PropertyDelta = z.infer<typeof propertyDeltaSchema>;
 
 /**
+ * Дельта действия — ТОЛЬКО подпись и смысл (§Б6-5 дословно: «правка чужого действия —
+ * дельта label; шаги встроенных — форк»). Шаги, предусловие и кап сюда не входят: правка
+ * шагов чужого действия меняет то, ЧТО оно делает, а не то, как оно названо, и переживать
+ * пересев такой дельте нечем.
+ */
+export const actionDeltaSchema = z
+  .object({ label: localizedTextSchema.optional(), description: localizedTextSchema.optional() })
+  .strict();
+export type ActionDelta = z.infer<typeof actionDeltaSchema>;
+
+/**
  * Дельта контракта — ТОЛЬКО пользовательские наборы (§Б5-2): встроенный контракт есть API модуля, и
  * правка его слотов и классов сменила бы смысл уже записанных данных. Имя, занятое встроенным набором,
  * отвергается, а не «перекрывает»: перекрытие значило бы, что фильтр `class=…:closed` у двух владельцев
@@ -168,7 +180,14 @@ export const subscriptionDeltaSchema = z
   .strict();
 export type SubscriptionDelta = z.infer<typeof subscriptionDeltaSchema>;
 
-export type RegistryDelta = AspectDelta | PropertyDelta | ContractDelta | SubscriptionDelta;
+// Союз перечисляет РОДА, а не формы: `ActionDelta` совпадает с `PropertyDelta` по форме, но это
+// другая цель (см. докблок `relationDeleteInput` о тождестве форм).
+export type RegistryDelta =
+  | AspectDelta
+  | PropertyDelta
+  | ContractDelta
+  | SubscriptionDelta
+  | ActionDelta;
 
 /**
  * БЕЛЫЙ СПИСОК ОСЛАБЛЕНИЯ ОБЯЗАТЕЛЬНОСТИ (§А3-2: «по явному списку мест, где код
@@ -272,6 +291,7 @@ export function applyDeltas(
   const aspects = new Map(system.aspects);
   const contracts = new Map(system.contracts);
   const subscriptions = new Map(system.subscriptions);
+  const actions = new Map(system.actions);
   const ordered = [...deltas].sort(
     (a, b) => a.targetKind.localeCompare(b.targetKind) || a.targetId.localeCompare(b.targetId),
   );
@@ -346,8 +366,20 @@ export function applyDeltas(
       subscriptions.set(row.targetId, { ...base, definition: delta.definition });
       continue;
     }
+    if (row.targetKind === 'action') {
+      // §С3: подпись и смысл встроенного действия; шаги форма дельты не пропускает (`.strict()`).
+      const base = actions.get(row.targetId);
+      if (base === undefined) continue;
+      const delta = parseDelta(row) as ActionDelta;
+      actions.set(row.targetId, {
+        ...base,
+        ...(delta.label !== undefined && { label: delta.label }),
+        ...(delta.description !== undefined && { description: delta.description }),
+      });
+      continue;
+    }
     if (row.targetKind !== 'aspect') {
-      // relation_role/action: тула записи у этих родов нет — строка появляется только ручной
+      // relation_role: тула записи у этого рода нет — строка появляется только ручной
       // правкой базы, и молчать нельзя: владелец увидел бы «настройка не применилась» без
       // единого следа причины.
       throw deltaError(
@@ -487,7 +519,7 @@ export function applyDeltas(
     }
   }
 
-  return { ...system, properties, aspects, contracts, subscriptions };
+  return { ...system, properties, aspects, contracts, subscriptions, actions };
 }
 
 /**
@@ -500,14 +532,14 @@ const DELTA_SCHEMA: Record<RegistryDeltaTargetKind, z.ZodTypeAny | null> = {
   contract: contractDeltaSchema,
   subscription: subscriptionDeltaSchema,
   relation_role: null,
-  action: null,
+  action: actionDeltaSchema,
 };
 
 /** Разбор `delta` строки по её `target_kind`; форма закрыта (`.strict()`). */
 function parseDelta(row: RegistryDeltaRow): RegistryDelta {
   const schema = DELTA_SCHEMA[row.targetKind];
-  // Тула записи у этих родов нет — строка появляется только ручной правкой базы, и молчать нельзя:
-  // владелец увидел бы «настройка не применилась» без единого следа причины.
+  // Формы дельты у этого рода (`relation_role`) нет — строка появляется только ручной правкой базы, и
+  // молчать нельзя: владелец увидел бы «настройка не применилась» без единого следа причины.
   if (schema === null) {
     throw deltaError(
       'DELTA_TARGET_UNSUPPORTED',
