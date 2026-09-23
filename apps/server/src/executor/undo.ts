@@ -91,6 +91,20 @@ async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
 }
 
 /**
+ * То же «последнее неотменённое», но БЕЗ применения (В-8): политике §7.10 нужно посмотреть на обратные
+ * операции, чтобы назначить уровень, а применять их до решения владельца она не вправе. Обёртка, а не
+ * экспорт `findLastUndoable`, — чтобы у сканирующего запроса остался ОДИН дом: правило «последнее
+ * ВИДИМОЕ действие владельца» не должно иметь второй копии в диспатче.
+ */
+export async function peekLastUndoable(
+  db: Db,
+  who: Identity,
+): Promise<{ action: ActionRecord; title: string } | undefined> {
+  const found = await withIdentity(db, who, (tx) => findLastUndoable(tx));
+  return found === undefined ? undefined : { action: found.action, title: found.title };
+}
+
+/**
  * Применение inverse найденного действия: операции журнала — это тулы executor'а,
  * поэтому просто прогоняем их конвейером во внутреннем режиме. Multi-op inverse
  * (batch-действие) идёт batch-путём с техническим batchId — атомарность §7.8;

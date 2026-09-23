@@ -74,18 +74,20 @@ import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
 import type { JournalSink, JournalWrite, WireEntity } from '../executor/types';
-import { undoLast } from '../executor/undo';
+import { peekLastUndoable, undoAction } from '../executor/undo';
 import {
   AUTONOMY_PROPERTIES,
   autonomyArmed,
   type ConfirmationLevel,
   classifyToolCall,
   entityUpdatePreviewDiff,
+  factsFromOperations,
   factsFromToolCall,
   grantsRoutineAutonomy,
   ROUTINE_MODE_PROPERTY,
   ROUTINE_STAGE_PROPERTY,
   ROUTINE_TOOLS_PROPERTY,
+  type ToolCallFacts,
 } from '../policy/confirmation';
 import {
   type CreatePendingArgs,
@@ -255,9 +257,10 @@ export async function dispatchTool(
       // user_query — тот же хук материализации §5.4, что entity_query (обязательство
       // ревью A3): агрегат окна дат обязан видеть свеже-материализованные инстансы
       if (def.name === 'user_query') return { kind: 'user_query' };
-      // undo_last — вне pre-tx: undoLast применяет inverse через executor в СОБСТВЕННОМ tx
-      // (internal-режим, §7.8) и не проходит ни политику §7.10, ни runMutation — см. runUndoLast
-      if (def.name === 'undo_last') return { kind: 'undo_last' };
+      // undo_last — вне pre-tx: откат применяет inverse через executor в СОБСТВЕННОМ tx
+      // (internal-режим, §7.8). Мимо runMutation, но НЕ мимо политики §7.10 (В-8): снимок
+      // реестра уезжает с ним — по нему считаются факты чувствительности свёртки inverse
+      if (def.name === 'undo_last') return { kind: 'undo_last', reg };
       if (def.kind === 'read')
         return { kind: 'done', out: await runRead(tx, ctx, reg, def.name, input) };
       return {
@@ -303,7 +306,7 @@ export async function dispatchTool(
     if (pre.kind === 'entity_query') return await runEntityQuery(ctx, input);
     if (pre.kind === 'budget_status') return await runBudgetStatus(ctx, input);
     if (pre.kind === 'user_query') return await runUserQuery(ctx, input);
-    if (pre.kind === 'undo_last') return await runUndoLast(ctx, input);
+    if (pre.kind === 'undo_last') return await runUndoLast(ctx, input, pre.reg);
     if (pre.def.name === 'thread_post') {
       // §7.10 распространяется и на thread_post (kind='mutate' в реестре — ради
       // политики): по MVP-таблице одиночная не-архивирующая мутация → execute, но
@@ -460,7 +463,8 @@ type Resolution =
   | { kind: 'entity_query' } // исполняется вне pre-tx — хук материализации §5.4
   | { kind: 'user_query' } // вне pre-tx — тот же хук материализации §5.4 (ревью A3)
   | { kind: 'budget_status' } // вне pre-tx — конвейер §2.8 (postDue + материализация)
-  | { kind: 'undo_last' } // вне pre-tx — undoLast открывает собственный tx (§7.8)
+  // вне pre-tx — откат открывает собственный tx (§7.8); снимок — для фактов свёртки inverse (В-8)
+  | { kind: 'undo_last'; reg: RegistrySnapshot }
   | {
       kind: 'mutate';
       def: OrbisToolDef;
@@ -632,14 +636,18 @@ function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
 }
 
 /**
- * undo_last (хвост V1, Д-1): «отмени последнее» словами в чате. Обёртка над `undoLast`
- * §7.8 — снимает последнее видимое действие журнала владельца, кем бы оно ни было сделано.
+ * undo_last (хвост V1, Д-1): «отмени последнее» словами в чате. Снимает последнее видимое действие
+ * журнала владельца (§7.8), кем бы оно ни было сделано.
  *
- * Мимо политики §7.10 и runMutation НАМЕРЕННО: undo — не мутация графа по существу, а
- * снятие уже подтверждённой (владельцем или его же просьбой) правки; свой action он не
- * порождает (undo неотменяем), поэтому `actionId` в ToolDispatchResult не отдаётся —
- * тот означает «undo-адресуемое действие», а тут его нет. Владелец же может отменить
- * ту же правку кнопкой на карточке — тул лишь даёт модели тот же рычаг по его слову.
+ * ЧЕРЕЗ ПОЛИТИКУ §7.10, А НЕ МИМО (В-8, Р-31). Откат — тот же «резолвленный набор шагов», что и
+ * действие: обратные операции известны ДО исполнения (`action.inverse` журнала), значит их можно
+ * свернуть в факты той же `factsFromOperations` и спросить уровень у таблицы. Прежде ветка шла мимо
+ * политики целиком, и подтверждённое карточкой слияние свойств (как и разоружение рутины)
+ * откатывалось моделью молча. Теперь откат правки реестра или доверенности — карточка
+ * «Откат: «…»» (второе «да» владельца, рамка В-8), а откат правки графа — по-прежнему молча.
+ *
+ * Мимо runMutation — по-прежнему: undo не порождает своего action (undo неотменяем), поэтому
+ * `actionId` в ToolDispatchResult не отдаётся — тот означает «undo-адресуемое действие», а тут его нет.
  *
  * Только `source: 'chat'` и актор `ai` (реестр закрывает MCP через internalOnly, рутину —
  * через ROUTINE_CLOSED_TOOLS; здесь — вторая линия, fail-closed): за чатом стоит владелец,
@@ -649,7 +657,11 @@ function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
  * «Отменять нечего» — штатный ok-ответ модели, а не error_card в ленту: для владельца это
  * не сбой, а ответ на вопрос.
  */
-async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
+async function runUndoLast(
+  ctx: ToolCallCtx,
+  input: unknown,
+  reg: RegistrySnapshot,
+): Promise<ToolDispatchResult> {
   parseEnvelope(undoLastInput, input, 'undo_last');
   if (ctx.source !== 'chat' || ctx.actorKind !== 'ai') {
     return errorResult(
@@ -658,25 +670,75 @@ async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispat
       { tool: 'undo_last', source: ctx.source, actorKind: ctx.actorKind },
     );
   }
-  const r = await undoLast(ctx.db, { identity: ctx.identity });
+  // ОТКАТ — ТОТ ЖЕ «РЕЗОЛВЛЕННЫЙ НАБОР ШАГОВ», ЧТО И ДЕЙСТВИЕ (В-8, Р-31): обратные операции известны
+  // ДО исполнения (`action.inverse` журнала), значит их можно свернуть в факты той же функцией, что и
+  // шаги действия, и спросить уровень у таблицы §7.10. Прежде ветка шла мимо политики целиком.
+  const peeked = await peekLastUndoable(ctx.db, ctx.identity);
+  if (peeked === undefined) {
+    return {
+      status: 'ok',
+      result: { undone: false, note: 'отменять нечего: неотменённых действий в журнале нет' },
+    };
+  }
+  const operations = peeked.action.inverse.map((iv) => ({ tool: iv.op, input: iv.payload }));
+  const facts: Omit<ToolCallFacts, 'sensitivity'> = {
+    ...factsFromOperations(operations),
+    tool: 'undo_last',
+    kind: 'mutate',
+    known: true,
+    // `isBatch: false` — «пачка» это ВЫЗОВ `batch_execute`, а не число операций внутри одного
+    // намерения (О7 `verify-b2-policy.md`). Иначе откат из двух операций получил бы `preview`, то
+    // есть применился бы, — притом что ради вопроса сюда и пришли.
+    isBatch: false,
+    // АРХИВАЦИЯ ОТКАТОМ — НЕ ПОВОД ДЛЯ КАРТОЧКИ. Обратная операция создания записи — её архивация
+    // (`executor.ts`, inverse `entity_create`), и ряд «archives → подтверждение» делал бы карточкой
+    // САМЫЙ частый откат чата («запиши обед 340» → «отмени»). Ряд стережёт мягкое удаление по
+    // инициативе модели; откат же возвращает состояние ДО действия, которое владелец только что
+    // попросил снять. Рамка В-8 приняла побочный эффект только для реестра («второе «да» после
+    // подтверждённой правки реестра»), откат правки графа остаётся молчаливым — таким же, каким он
+    // был до В-8. Перенастройка и доверенность считаются честно: их откат — карточка.
+    archives: false,
+    actorKind: ctx.actorKind,
+    explicitCommand: ctx.explicitCommand,
+  };
+  const level = classifyToolCall({ ...facts, sensitivity: sensitivityFactsOf(reg, facts) });
+  // ПОЛ Р-27 здесь НЕ складывается, и это не заглушка: в Б-2 правила `assign_level` живут фикстурами
+  // приёмки §С8-26 и в живой конвейер §7.10 не включены (О1 `verify-b2-policy.md`) — понижать уровень
+  // нечему, а без понижения `stricter(таблица, пол)` равен таблице. Задача 15 кладёт `floorLevel` для
+  // `assignLevelOf` и этой строки не трогает.
+  if (level === 'explicit-confirmation') {
+    const pending = await withIdentity(ctx.db, ctx.identity, (tx) =>
+      createPending(tx, {
+        threadId: ctx.threadId,
+        actor: { graphId: ctx.identity.graph, kind: ctx.actorKind, source: ctx.source },
+        tool: 'batch_execute',
+        // Payload несёт обратные операции — чтобы карточка и лента говорили, ЧТО откатывается;
+        // исполняет его не `execute`, а `undoAction` по ключу `undo_of` (Р-К-21).
+        input: { batch_id: newId(), operations },
+        summary: `Откат: «${peeked.title}»`,
+        undoOf: peeked.action.id,
+        level,
+        clock: ctx.clock,
+      }),
+    );
+    return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
+  }
+  // ОТКАТЫВАЕТСЯ ИМЕННО ТО, ЧТО КЛАССИФИЦИРОВАНО, — по id, а не «снова последнее». Между пробой и
+  // применением в журнал могло лечь новое действие (владелец правит с другого экрана), и `undoLast`
+  // снял бы уже его — мимо уровня, посчитанного для другого inverse: ровно та дыра, ради которой
+  // проба и заведена.
+  const r = await undoAction(ctx.db, { identity: ctx.identity, actionId: peeked.action.id });
   if (r.ok) {
     return {
       status: 'ok',
       result: {
         undone: true,
-        actionId: r.undone.actionId,
-        type: r.undone.type,
-        ...(r.undone.entityId !== null && { entityId: r.undone.entityId }),
-        title: r.undone.title,
+        actionId: peeked.action.id,
+        type: peeked.action.type,
+        ...(peeked.action.entity_id !== null && { entityId: peeked.action.entity_id }),
+        title: peeked.title,
         note: 'действие отменено; сообщи пользователю, что именно откачено',
       },
-    };
-  }
-  const details = r.error.details as { reason?: string } | undefined;
-  if (r.error.code === 'NOT_FOUND' && details?.reason === 'nothing_to_undo') {
-    return {
-      status: 'ok',
-      result: { undone: false, note: 'отменять нечего: неотменённых действий в журнале нет' },
     };
   }
   return { status: 'error', error: r.error };

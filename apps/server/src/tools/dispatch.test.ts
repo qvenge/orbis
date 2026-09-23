@@ -31,7 +31,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
-import { chatMessages, entities } from '../db/schema';
+import { chatMessages, entities, propertyDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
@@ -4694,6 +4694,115 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     });
     expect(again).toMatchObject({ ok: true, idempotentReplay: true });
   });
+
+  test('одобренная единица ложится в журнал строкой type:action с action_id и module, один inverse на одиннадцать целей (§Б6-4)', async () => {
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    const unit = await postpone(ctx);
+    if (unit.status !== 'pending_confirmation') throw new Error('единица не поставлена');
+    const r = await approvePending(db, { identity: personal(owner), pendingId: unit.pendingId });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Автор-приложение — как у исполненного сразу: `type:'action'`, `action_id`, `module`
+    const action = (await messagesIn(owner, threadId))
+      .flatMap((m) => (m.metadata as { actions?: ActionRecord[] }).actions ?? [])
+      .find((a) => a.id === r.actionId);
+    expect([action?.type, action?.action_id, action?.module]).toEqual([
+      'action',
+      'planner/postpone_overdue',
+      'planner',
+    ]);
+    expect(action?.inverse).toHaveLength(11);
+    for (const id of ids) {
+      expect((await propsOfRowA(id, owner))['orbis/due_date']).toBe('2026-09-01');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// undo_last через классификатор §7.10 (задача 8 Б-2: В-8, Р-31)
+// ---------------------------------------------------------------------------
+
+describe('undo_last через классификатор §7.10 (В-8, Р-31)', () => {
+  /** Своё свойство и слияние, подтверждённое владельцем: `property_merge` — `behavior-delta`
+   *  (§С2-1 ряд 2), из чата он идёт карточкой, и владелец её принимает. */
+  async function mergedWorld(owner: GraphId): Promise<string> {
+    await seedCustomAspect(owner, {
+      key: 'user/undo-merge',
+      label: { ru: 'Слияние', en: 'Merge' },
+      aiInstructions: 'x',
+      properties: [
+        { key: 'a', type: { kind: 'text' } },
+        { key: 'b', type: { kind: 'text' } },
+      ],
+    });
+    const asked = await dispatchTool(ctxFor({ identity: personal(owner) }), 'property_merge', {
+      source: 'user/b',
+      into: 'user/a',
+    });
+    if (asked.status !== 'pending_confirmation') throw new Error('слияние не спросило');
+    const merged = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: asked.pendingId,
+    });
+    if (!merged.ok) throw new Error(merged.error.message);
+    return merged.actionId;
+  }
+  const mergedIntoOf = async (owner: GraphId) =>
+    (
+      await withIdentity(db, personal(owner), (tx) =>
+        tx
+          .select({ m: propertyDefinitions.mergedInto })
+          .from(propertyDefinitions)
+          .where(eq(propertyDefinitions.id, 'user/b')),
+      )
+    )[0]?.m;
+
+  test('откат подтверждённого property_merge → pending_confirmation, словарь НЕ возвращён молча', async () => {
+    const owner = await freshGraph();
+    await mergedWorld(owner);
+    const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    expect(undone.status).toBe('pending_confirmation');
+    if (undone.status !== 'pending_confirmation') return;
+    expect(String((undone.card as { summary?: string }).summary)).toContain('Откат');
+    expect(await mergedIntoOf(owner)).toBe('user/a'); // слияние на месте: откат не применён
+  });
+
+  test('«Принять» карточку отката → откат исполнен undo, а не пачкой: actionId — ОТМЕНЁННОГО слияния, словарь вернулся', async () => {
+    const owner = await freshGraph();
+    const mergeActionId = await mergedWorld(owner);
+    const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    if (undone.status !== 'pending_confirmation') throw new Error(`не карточка: ${undone.status}`);
+    const applied = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: undone.pendingId,
+    });
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) return;
+    // undo своего action не порождает (§7.8): в ответе — id того, что отменено
+    expect(applied.actionId).toBe(mergeActionId);
+    expect(await mergedIntoOf(owner)).toBeNull();
+    // …и отменённое больше не «последнее»: второй undo_last слияние не находит
+    const again = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    expect(again.status).toBe('ok');
+  });
+
+  test('откат правки графа из чата — по-прежнему молча: ok, undone, заголовок вернулся', async () => {
+    // Цена В-8 ограничена реестром и доверенностью («побочный эффект принят», рамка В-8)
+    const owner = await freshGraph();
+    const target = await seedEntity(owner, { title: 'До правки', tags: [] });
+    const edited = await dispatchTool(ctxFor({ identity: personal(owner) }), 'entity_update', {
+      id: target.id,
+      title: 'После правки',
+    });
+    expect(edited.status).toBe('ok');
+    const r = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect((r.result as { undone?: boolean }).undone).toBe(true);
+    expect(await titleOfRowA(target.id, owner)).toBe('До правки');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4722,8 +4831,10 @@ describe('§С8-23: множество фактов считается на КА
   const resolved = SRC.match(/sensitivity: sensitivityFactsOf\(/g) ?? [];
   const empty = SRC.match(/sensitivity: \[\]/g) ?? [];
 
-  test('четыре конструктора: три считают факты по снимку, один (!known) — пустое множество', () => {
-    expect([sites.length, resolved.length, empty.length]).toEqual([4, 3, 1]);
+  // Пятый конструктор — `runUndoLast` (В-8, задача 8): свёртка обратных операций спрашивает
+  // таблицу тем же резолвером по снимку, пустого литерала у неё нет.
+  test('пять конструкторов: четыре считают факты по снимку, один (!known) — пустое множество', () => {
+    expect([sites.length, resolved.length, empty.length]).toEqual([5, 4, 1]);
   });
 });
 

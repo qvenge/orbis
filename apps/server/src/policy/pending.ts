@@ -38,6 +38,7 @@ import {
   batchAuditMessageId,
   batchExecuteInput,
   canonicalJson,
+  effectiveLabel,
   type GraphId,
   newId,
   pendingMessageId,
@@ -48,6 +49,7 @@ import {
   rejectMessageId,
 } from '@orbis/shared';
 import type { ExprScalar } from '@orbis/shared/expr';
+import { OWNER_LOCALE } from '@orbis/shared/query';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { actionDateArgs, recheckPrecondition } from '../actions/precondition';
@@ -62,6 +64,7 @@ import { ExecError, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, ExecuteResult } from '../executor/types';
+import { undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { actionHash } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
@@ -164,6 +167,12 @@ const pendingRecord = z
      */
     action_targets: z.array(z.string().uuid()).optional(),
     action_params: z.record(z.unknown()).optional(),
+    /**
+     * Действие журнала, которое эта единица ОТКАТЫВАЕТ (В-8, Р-31). Ключ — разделитель двух путей
+     * исполнения: с ним approve зовёт `undoAction` (внутренний режим), без него — `execute` payload'а.
+     * Через `execute` откат породил бы новый action и сам стал бы отменяемым (Р-К-21).
+     */
+    undo_of: z.string().uuid().optional(),
     /**
      * Предложение, из правки которого это рождено (Ш1.5): владелец поправил значения ДО
      * принятия, исходное погашено причиной `edited`, а рядом легло вот это. Тот же приём,
@@ -350,6 +359,13 @@ interface CreatePendingCommon {
     targets: readonly string[];
     params: Readonly<Record<string, unknown>>;
   };
+  /**
+   * Действие журнала, которое единица ОТКАТЫВАЕТ (В-8, Р-31): с ключом approve исполняет её
+   * `undoAction` (внутренний режим), а не `execute` payload'а — иначе откат породил бы новый action
+   * и сам стал бы отменяемым (Р-К-21). Payload при этом несёт обратные операции — чтобы карточка и
+   * лента говорили, ЧТО откатывается.
+   */
+  undoOf?: string;
 }
 
 /**
@@ -473,6 +489,9 @@ export async function createPending(
           action_targets: [...args.action.targets],
           action_params: args.action.params,
         }),
+        // И для отката (В-8): ключ есть только у карточки `undo_last`, и по нему approve
+        // исполняет её откатом, а не пачкой
+        ...(args.undoOf !== undefined && { undo_of: args.undoOf }),
         created_at: createdAt.toISOString(),
       },
       cards: [card],
@@ -930,6 +949,14 @@ export async function approvePending(
     }
     const pending = found.msg.pending;
     const live = found.live;
+    // ОТКАТ ИСПОЛНЯЕТ UNDO, А НЕ ПАЧКА (Р-К-21, В-8). `execute` обратных операций породил бы НОВЫЙ
+    // action, то есть сам откат стал бы отменяемым, а отменённое действие осталось бы в журнале
+    // неотменённым — «отмени последнее» второй раз вернуло бы всё обратно. Внутренний режим
+    // (`undoAction` → `applyUndo`) вместо action пишет {type:'undo', undoes} тем же tx и снимает
+    // пометки `needs-review` — ровно то, что сделал бы прямой `undo_last` на уровне `execute`.
+    const undoOf = pending.undo_of;
+    if (undoOf !== undefined)
+      return await undoAction(db, { identity: args.identity, actionId: undoOf });
     // Вне tx проверок: execute открывает собственный withIdentity-tx (вложить нельзя).
     // Чтение pending отдельным tx безопасно: journal append-only, metadata неизменяема
     // (§4.6). audit — в тред карточки-запроса; атрибуция — исходный актор (§7.8)
@@ -959,6 +986,13 @@ export async function approvePending(
         threadId: found.msg.threadId,
         operations,
         batchId: args.pendingId,
+        // Автор-приложение §Б6-4: одобренное действие ложится строкой `type:'action'` с `action_id` и
+        // `module` — как исполненное сразу (`runAction`, та же подпись `effectiveLabel`, Р-К-70).
+        // Декларация перечитана в tx №1, второго чтения реестра нет.
+        ...(live !== undefined && {
+          action: { id: live.decl.id, module: live.decl.module },
+          actionLabel: effectiveLabel(live.decl.label, OWNER_LOCALE),
+        }),
         clock: args.clock,
       },
       {

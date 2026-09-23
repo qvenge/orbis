@@ -889,6 +889,16 @@ describe('§С8-23: инвариант против fail-open — писател
       'subscription_remove',
       'subscription_set',
     ]);
+    // В-8: четыре ВНУТРЕННИЕ операции реестра снаружи недостижимы, но встречаются классификатору
+    // свёрткой `action.inverse` в `undo_last`. Молчаливое `'none'` у любой — та самая дыра.
+    for (const op of [
+      'property_row_restore',
+      'property_merge_undo',
+      'aspect_row_restore',
+      'module_set',
+    ]) {
+      expect([op, reconfiguresOf(op, {})]).toEqual([op, 'behavior-delta']);
+    }
     // Писатель без замка встал бы в очередь позже конкурента, уже держащего бюджетный, —
     // ровно тот цикл ожидания, ради которого порядок «реестр → бюджет → строки» и заведён.
     expect([...writers].filter((n) => !REGISTRY_OPS.has(n))).toEqual([]);
