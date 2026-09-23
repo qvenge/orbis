@@ -153,7 +153,6 @@ import {
   assertModuleEnabled,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
-  assertRunSubject,
   resolveEntityTitles,
 } from './invariants';
 import { dropStaleCarryover, hasBodyInInput, needsProjectSeed, normalizeTags } from './normalize';
@@ -1981,8 +1980,6 @@ async function prepareEntityCreate(
   });
   // Живой грант в назначении (С4/С7): у create «затронуто» всё, что пришло во входе
   await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
-  // Ровно один субъект у прогона (V1.4) — тем же путём, что и назначение
-  assertRunSubject(state);
   // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
@@ -2277,12 +2274,6 @@ async function prepareEntityUpdate(
     // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
     if (ctx.internalUndo === undefined && touched.includes('orbis/assignment')) {
       await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
-    }
-    // Ровно один субъект у прогона (V1.4) — только когда патч ЗАТРОНУЛ прогон: слияние
-    // дописывает свойства к уже навешенному аспекту, то есть второй субъект приезжает
-    // именно этим путём. Внутренний undo восстанавливает зафиксированное — не проверяется.
-    if (ctx.internalUndo === undefined && touched.includes('orbis/agent-run')) {
-      assertRunSubject(state);
     }
     // РЕТРОСПЕКТИВНОЙ проверки «одного budget-parent» здесь БОЛЬШЕ НЕТ. Она ловила класс,
     // который создавала снятая колонка: «X стал конвертом» задним числом превращало все его
@@ -2618,10 +2609,6 @@ async function prepareAttach(
   if (aspectId === 'orbis/assignment') {
     await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
   }
-  // Ровно один субъект у прогона (V1.4): attach заменяет аспект ЦЕЛИКОМ, поэтому им можно
-  // и потерять субъект, и добавить второй. Гейта по aspectId нет — проверка сама молчит,
-  // когда прогона в итоговой карте не оказалось.
-  assertRunSubject(state);
   // Ретроспективной проверки «одного budget-parent» на attach-пути больше нет — см. довод
   // на пути entity_update: с 0017 привязка выражена ролью, и attach рёбер не создаёт.
   gateEntitlements(ctx, tool);

@@ -120,6 +120,31 @@ export const RULE_TASK_WAITING_ONLY: RuleDefinitionInput = {
 };
 
 /**
+ * Ровно один субъект у прогона (§А7-2, V1.4) — ПАРОЙ шаблонов, а не тринадцатым шаблоном
+ * `exactly_one_of` (§4-Б-9 рамки): «нужен грант, когда рутины нет» и «грант запрещён, когда рутина
+ * есть» вместе дают XOR, и обе половины выразимы существующим каноном (`has`, `not` — §Б3-5).
+ * Цена названа вслух: один отказ стал двумя — с двумя текстами, каждый из которых точнее прежнего.
+ * `id` первой — прежний `run_subject` (Р-К-1): по нему сверялись клиенты `details.reason`.
+ * `undo: 'skip'` — снятый код субъекта прогона под внутренним откатом не звался (ветка правки
+ * исполнителя гейтилась `internalUndo === undefined`); §А7-2 ревизии 5 оставляет эту льготу.
+ * Носитель `orbis/grant` слит у прогона и назначения (В1): на прогоне он и есть «субъект-грант».
+ */
+export const RULE_RUN_SUBJECT_REQUIRED: RuleDefinitionInput = {
+  id: 'run_subject',
+  template: 'requires_when',
+  undo: 'skip',
+  when: { op: 'not', args: [{ has: 'orbis/run_routine' }] },
+  params: { property: 'orbis/grant' },
+};
+export const RULE_RUN_SUBJECT_FORBIDDEN: RuleDefinitionInput = {
+  id: 'run_subject_forbidden',
+  template: 'forbidden_when',
+  undo: 'skip',
+  when: { has: 'orbis/run_routine' },
+  params: { property: 'orbis/grant' },
+};
+
+/**
  * Уникальность конверта (03-budget §2.1) — СТРОКА каталога, а не код Финансов.
  *
  * `id` = прежний код отказа (Р-К-1): `details.invariant` движка равен id правила, поэтому близнецы
@@ -261,6 +286,7 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   ],
   'orbis/task': [RULE_TASK_COMPLETED_AT, RULE_TASK_WAITING_FOR, RULE_TASK_WAITING_ONLY],
   'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER],
+  'orbis/agent-run': [RULE_RUN_SUBJECT_REQUIRED, RULE_RUN_SUBJECT_FORBIDDEN],
   'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
   'orbis/schedule': [RULE_MATERIALIZE],
   ref: [RULE_MIRROR_REF],

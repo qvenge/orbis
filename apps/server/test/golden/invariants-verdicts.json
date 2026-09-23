@@ -749,7 +749,9 @@
       "legacyVerdict": "reject",
       "legacyCode": "VALIDATION",
       "verdict": "reject",
-      "code": "VALIDATION"
+      "code": "INVARIANT",
+      "invariant": "run_subject",
+      "expectedDiff": "RUN_SUBJECT_SPLIT"
     },
     {
       "name": "прогон с двумя субъектами",
@@ -768,7 +770,9 @@
       "legacyVerdict": "reject",
       "legacyCode": "VALIDATION",
       "verdict": "reject",
-      "code": "VALIDATION"
+      "code": "INVARIANT",
+      "invariant": "run_subject_forbidden",
+      "expectedDiff": "RUN_SUBJECT_SPLIT"
     },
     {
       "name": "прогон рутины: только routine",

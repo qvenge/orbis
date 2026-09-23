@@ -915,7 +915,8 @@ describe('затронутые аспекты считаются по свойс
   test('правка слитого свойства новой формой доносит инвариант до аспекта, который во входе не назван', async () => {
     // `orbis/grant` слито у назначения и прогона (В1). Патч новой формы называет СВОЙСТВО и
     // не называет ни одного аспекта — но прогон он затрагивает, и XOR субъекта (V1.4)
-    // обязан сработать: иначе в строке окажутся оба субъекта сразу.
+    // обязан сработать: иначе в строке окажутся оба субъекта сразу. С задачи 14 XOR — строки
+    // каталога, и C-правила зовутся на КАЖДОЙ правке свойств, а не по признаку «затронут аспект».
     const routineId = newId();
     const created = entityOf(
       await run(
@@ -944,8 +945,11 @@ describe('затронутые аспекты считаются по свойс
     );
     expect(r.ok).toBe(false);
     if (r.ok) return;
-    expect(r.error.code).toBe('VALIDATION');
-    expect((r.error.details as { reason?: string }).reason).toBe('run_subject');
+    // Второй субъект — строка каталога `run_subject_forbidden` (задача 14, пара вместо одной функции).
+    expect([r.error.code, (r.error.details as { invariant?: string }).invariant]).toEqual([
+      'INVARIANT',
+      'run_subject_forbidden',
+    ]);
 
     // Ничего не записано: субъект по-прежнему один
     const row = await rowOf(created.id);

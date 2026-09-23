@@ -218,8 +218,9 @@ describe('валидация записи по реестру свойств (§
       step_count: 0,
       steps: [],
     };
-    // Рутинный прогон гранта не имеет вовсе. «Ровно одно из grant_id/routine_id» реестр не
-    // выражает (это не форма, а домен) — его держит assertRunSubject в executor'е.
+    // Рутинный прогон гранта не имеет вовсе. «Ровно одно из grant_id/routine_id» реестр свойств
+    // не выражает (это не форма, а домен) — его держит пара строк каталога правил
+    // (`run_subject`/`run_subject_forbidden`), стадия 4 исполнителя.
     expect(accepts('orbis/agent-run', { ...base, routine_id: NIL_ROUTINE })).toBe(true);
     expect(accepts('orbis/agent-run', { ...base })).toBe(true);
     expect(accepts('orbis/agent-run', { ...base, routine_id: 'не-uuid' })).toBe(false);

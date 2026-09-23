@@ -1853,7 +1853,7 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     ...subject,
   });
 
-  test('agent-run с routine_id и без grant_id — принимается; с обоими или без обоих — VALIDATION reason run_subject', async () => {
+  test('agent-run с routine_id и без grant_id — принимается; с обоими — INVARIANT run_subject_forbidden, без обоих — INVARIANT run_subject', async () => {
     const ok = await execute(
       db,
       req(
@@ -1885,9 +1885,13 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
       ),
     );
     expect(both.ok).toBe(false);
+    // Один отказ распался на два (§4-Б-9 рамки): «нужен субъект» и «субъектов два» — разные
+    // правила с разными текстами, и это ровно то, что даёт каталог вместо одной функции.
     if (!both.ok) {
-      expect(both.error.code).toBe('VALIDATION');
-      expect((both.error.details as { reason?: string }).reason).toBe('run_subject');
+      expect([both.error.code, (both.error.details as { invariant?: string }).invariant]).toEqual([
+        'INVARIANT',
+        'run_subject_forbidden',
+      ]);
     }
 
     const none = await execute(
@@ -1900,8 +1904,10 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     );
     expect(none.ok).toBe(false);
     if (!none.ok) {
-      expect(none.error.code).toBe('VALIDATION');
-      expect((none.error.details as { reason?: string }).reason).toBe('run_subject');
+      expect([none.error.code, (none.error.details as { invariant?: string }).invariant]).toEqual([
+        'INVARIANT',
+        'run_subject',
+      ]);
     }
   });
 
@@ -1937,8 +1943,10 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     );
     expect(upd.ok).toBe(false);
     if (!upd.ok) {
-      expect(upd.error.code).toBe('VALIDATION');
-      expect((upd.error.details as { reason?: string }).reason).toBe('run_subject');
+      expect([upd.error.code, (upd.error.details as { invariant?: string }).invariant]).toEqual([
+        'INVARIANT',
+        'run_subject_forbidden',
+      ]);
     }
 
     // attach — третий путь появления аспекта: замена целиком, субъекта не осталось.
@@ -1952,8 +1960,10 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     );
     expect(att.ok).toBe(false);
     if (!att.ok) {
-      expect(att.error.code).toBe('VALIDATION');
-      expect((att.error.details as { reason?: string }).reason).toBe('run_subject');
+      expect([att.error.code, (att.error.details as { invariant?: string }).invariant]).toEqual([
+        'INVARIANT',
+        'run_subject',
+      ]);
     }
 
     // Правка, не трогающая субъект, идёт как раньше: шаги прогона пишутся именно так
