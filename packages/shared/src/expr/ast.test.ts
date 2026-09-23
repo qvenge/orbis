@@ -48,12 +48,14 @@ const FORM_PROBE: Record<ExprForm, unknown> = {
 };
 
 describe('канон §Б3-5', () => {
-  test('канон §Б3-5: 15 операторов и 17 ветвей узла = 16 форм канона + {slot}', () => {
+  test('канон §Б3-5: 16 операторов и 17 ветвей узла = 16 форм канона + {slot}', () => {
     // «24» решения владельца В-1 — счёт 9 значений + 15 операторов, а не число веток схемы (О5 plan-verify).
-    expect(EXPR_OPS.length).toBe(15);
-    expect(new Set(EXPR_OPS).size).toBe(15);
+    // `empty` (Р-26, ревизия 4) — ОПЕРАТОР, а не форма узла: счёт ветвей не меняется.
+    expect(EXPR_OPS.length).toBe(16);
+    expect(new Set(EXPR_OPS).size).toBe(16);
+    expect(EXPR_OPS).toContain('empty');
     expect(EXPR_FORMS.length).toBe(17);
-    expect(EXPR_CTX).toEqual(['$today', '$owner', '$self', '$sensitivity']);
+    expect(EXPR_CTX).toEqual(['$today', '$owner', '$self', '$sensitivity', '$touched']);
   });
 
   test('кап дерева E — СВОЙ; предикат считает по сырому значению', () => {
@@ -109,6 +111,18 @@ describe('JSON Schema языка E', () => {
   // `$defs` в draft-07 формально не ключевое слово, а `$ref: '#/$defs/node'` — обычный
   // JSON-указатель, и резолвится он у любого потребителя.
   const validate = new Ajv({ strict: false, allErrors: true }).compile(exprJsonSchema);
+
+  test('арность empty — в СХЕМЕ: ровно один аргумент', () => {
+    expect(exprNodeSchema.safeParse({ op: 'empty', args: [{ ctx: '$sensitivity' }] }).success).toBe(
+      true,
+    );
+    expect(exprNodeSchema.safeParse({ op: 'empty', args: [] }).success).toBe(false);
+    expect(
+      exprNodeSchema.safeParse({ op: 'empty', args: [{ const: true }, { const: true }] }).success,
+    ).toBe(false);
+    expect(validate({ op: 'empty', args: [{ ctx: '$touched' }] })).toBe(true);
+    expect(validate({ op: 'empty', args: [] })).toBe(false);
+  });
 
   test('exprJsonSchema валидирует пробы всех форм и отвергает узлы вне канона', () => {
     for (const f of EXPR_FORMS) {

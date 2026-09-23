@@ -40,9 +40,13 @@ export function exprTreeExceedsDepth(value: unknown, cap: number): boolean {
 }
 
 /**
- * Операторы §Б3-5 — РОВНО 15. Арность каждого — часть формы, а не проверка чекера: вход
+ * Операторы §Б3-5 — РОВНО 16. Арность каждого — часть формы, а не проверка чекера: вход
  * `expr:` тула владельца идёт мимо тайп-чекера ровно так же, как `ast:` у Q, и `{op:'not'}`
  * с двумя аргументами обязан отвергаться схемой (§С8-3 «невыразимое — ошибка, а не пустота»).
+ *
+ * Шестнадцатый — `empty` (Р-26, принцип расширения §Б3-2а): «пусто» комбинацией прочих не
+ * выразимо — пять отрицаний `not (x in …)` означают «нет этих пяти», а не «нет ничего».
+ * `empty` — оператор, а не форма: ветвей узла по-прежнему 17.
  */
 export const EXPR_OPS = [
   '=',
@@ -60,14 +64,16 @@ export const EXPR_OPS = [
   'not',
   'in',
   'if',
+  'empty',
 ] as const;
 export type ExprOp = (typeof EXPR_OPS)[number];
 
 /**
- * Контекстные величины §Б3-5. `$sensitivity` стоит особняком: он законен ТОЛЬКО в области с
- * `allowSensitivity` (правило `assign_level`, Б-2) — см. `checkExpr`.
+ * Контекстные величины §Б3-5. `$sensitivity` и `$touched` законны ТОЛЬКО в области
+ * `allowSensitivity` — правило `assign_level`, §Б3-2а Е-4/Е-5 (см. `checkExpr`): словарь фактов
+ * вызова и список свойств, которые вызов трогает, есть у классификатора и больше ни у кого.
  */
-export const EXPR_CTX = ['$today', '$owner', '$self', '$sensitivity'] as const;
+export const EXPR_CTX = ['$today', '$owner', '$self', '$sensitivity', '$touched'] as const;
 export type ExprCtx = (typeof EXPR_CTX)[number];
 
 /**
@@ -169,8 +175,8 @@ const constValueSchema = z.union([
  * и исчерпывает стек раньше любого условия внутри схемы. Глубину стережёт
  * `exprTreeExceedsDepth` — явным обходом и ДО zod (см. `checkExpr` и `assertExprChecked`).
  *
- * АРНОСТЬ — ЧАСТЬ ФОРМЫ, и потому `{op}` разложен на четыре ветки: `not` — один аргумент,
- * `if` — ровно три, `and`/`or` — два и больше, прочие одиннадцать — ровно два. Приём тот же,
+ * АРНОСТЬ — ЧАСТЬ ФОРМЫ, и потому `{op}` разложен на пять веток: `not` и `empty` — один
+ * аргумент, `if` — ровно три, `and`/`or` — два и больше, прочие одиннадцать — ровно два. Приём тот же,
  * каким форма `rel` в Q связана с `kind` (докблок `query/ast-json-schema.ts`): необязательные
  * поля вместо веток пропустили бы `{op:'not', args:[a,b]}` мимо разбора прямо в компилятор.
  */
@@ -201,6 +207,8 @@ export const exprNodeSchema: z.ZodType<ExprNode, z.ZodTypeDef, unknown> = z.lazy
         })
         .strict(),
       z.object({ op: z.literal('not'), args: z.tuple([exprNodeSchema]) }).strict(),
+      // `empty` (Р-26) — унарный, как `not`: арность держит форма, а не чекер (§С8-3).
+      z.object({ op: z.literal('empty'), args: z.tuple([exprNodeSchema]) }).strict(),
       z
         .object({
           op: z.literal('if'),

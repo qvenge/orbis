@@ -29,7 +29,7 @@ function node(properties: Record<string, unknown>, required: string[]): Record<s
 
 /**
  * Ветка оператора. Арность — ЧАСТЬ ФОРМЫ (см. докблок `exprNodeSchema`), поэтому операторы
- * разложены по веткам с разными границами `args`, а не собраны в один `enum` из пятнадцати.
+ * разложены по веткам с разными границами `args`, а не собраны в один `enum` из шестнадцати.
  */
 function opNode(
   ops: readonly ExprOp[],
@@ -84,6 +84,7 @@ export const exprJsonSchema: Record<string, unknown> = {
         ),
         opNode(['=', '!=', '>', '<', '>=', '<=', '+', '-', '*', '/', 'in'], 2, 2),
         opNode(['not'], 1, 1),
+        opNode(['empty'], 1, 1),
         opNode(['if'], 3, 3),
         opNode(['and', 'or'], 2),
         node({ has: NAME }, ['has']),

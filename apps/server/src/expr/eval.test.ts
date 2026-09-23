@@ -789,3 +789,39 @@ describe('зона владельца в календаре и сравнени�
     expect(message).toContain('нет реестра контрактов');
   });
 });
+
+describe('evalExpr: empty и $touched (оценочная область классификатора)', () => {
+  test('empty: пустой список — истина, непустой — ложь, отсутствие — истина', () => {
+    const s = scopeOf({
+      props: { 'orbis/aliases': [], 'orbis/allowed_tools': ['budget_rollover'] },
+    });
+    expect(evalExpr({ op: 'empty', args: [{ prop: 'orbis/aliases' }] }, s)).toBe(true);
+    expect(evalExpr({ op: 'empty', args: [{ prop: 'orbis/allowed_tools' }] }, s)).toBe(false);
+    // Отсутствующее значение — «пусто»: то же решение, что у чекера (тотальность §Б3-4).
+    expect(evalExpr({ op: 'empty', args: [{ prop: 'orbis/aliases' }] }, scopeOf())).toBe(true);
+  });
+  test('empty над скаляром — EXPR_VALUE: чекер такого не пропустит, но бэкенд не молчит', () => {
+    expect(
+      reasonOf(() =>
+        evalExpr(
+          { op: 'empty', args: [{ prop: 'orbis/amount' }] },
+          scopeOf({ props: { 'orbis/amount': '10.00' } }),
+        ),
+      ),
+    ).toBe('VALIDATION/EXPR_VALUE');
+  });
+  test('$sensitivity и $touched — из области; empty и in над ними', () => {
+    const s = scopeOf({ sensitivity: [], touched: ['orbis/due_date'] });
+    expect(evalExpr({ op: 'empty', args: [{ ctx: '$sensitivity' }] }, s)).toBe(true);
+    expect(
+      evalExpr({ op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] }, s),
+    ).toBe(true);
+    expect(
+      evalExpr({ op: 'in', args: [{ const: 'orbis/priority' }, { ctx: '$touched' }] }, s),
+    ).toBe(false);
+    // Области нет — структурный отказ, а не пустой список: «невыразимое — отказ» (§С8-3).
+    expect(reasonOf(() => evalExpr({ ctx: '$touched' }, scopeOf()))).toBe(
+      'VALIDATION/EXPR_BACKEND_UNSUPPORTED',
+    );
+  });
+});

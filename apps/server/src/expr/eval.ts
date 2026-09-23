@@ -11,12 +11,13 @@
 //
 // ЧТО ЭТОТ БЭКЕНД СЧИТАЕТ, А ЧТО ОТДАЁТ ДРУГОМУ — часть контракта, а не умолчание (§С8-3
 // «невыразимое — ошибка, а не пустота»):
-//   считает    — const, duration, prop, slot, param, ctx:$today, agg, phase, has, deref, op×15,
+//   считает    — const, duration, prop, slot, param, ctx:$today, agg, phase, has, deref, op×16,
 //                date_diff, days_inclusive, date_add дневной гранулярности;
-//   считает В ОБЛАСТИ ЗАПИСИ (Б-2, Р-4) — class, has_relation, agg_via, ctx:$self/$owner/$sensitivity:
-//                их читатели ПРЕДЗАГРУЖЕНЫ в поля области (`aspects`+`reg`, `relations`, `aggVia`,
-//                `self`/`owner`/`sensitivity`) сборщиком `rules/scope.ts:entityEvalScope`, потому что
-//                интерпретатор синхронный и в граф сам не ходит;
+//   считает В ОБЛАСТИ ЗАПИСИ (Б-2, Р-4) — class, has_relation, agg_via, ctx:$self/$owner/$sensitivity/
+//                $touched: их читатели ПРЕДЗАГРУЖЕНЫ в поля области (`aspects`+`reg`, `relations`,
+//                `aggVia`, `self`/`owner`/`sensitivity`/`touched`) сборщиком
+//                `rules/scope.ts:entityEvalScope` (факты вызова — `policy/assign-level.ts`), потому
+//                что интерпретатор синхронный и в граф сам не ходит;
 //   отказывает — те же формы там, где область их читателя НЕ несёт (ведомость Budget: у неё ровно
 //                одна привязка своего контракта, а класс сущности резолвится по привязкам ВСЕХ её
 //                аспектов — второй ответчик разошёлся бы с `compileClassMembership`; личности и
@@ -266,7 +267,15 @@ function ev(node: ExprNode, scope: ExprEvalScope, depth: number): ExprValue {
     if (node.ctx === '$self' && scope.self !== undefined) return scope.self;
     if (node.ctx === '$owner' && scope.owner !== undefined) return scope.owner;
     if (node.ctx === '$sensitivity' && scope.sensitivity !== undefined) return scope.sensitivity;
-    // `$touched` — задача 15 вместе с `assign_level`: контекста в EXPR_CTX ещё нет.
+    if (node.ctx === '$touched') {
+      return scope.touched === undefined
+        ? fail(
+            'EXPR_BACKEND_UNSUPPORTED',
+            'контекст $touched — только оценочная область классификатора',
+            { ctx: node.ctx },
+          )
+        : [...scope.touched];
+    }
     return fail('EXPR_BACKEND_UNSUPPORTED', `контекст '${node.ctx}' в этой области недоступен`, {
       ctx: node.ctx,
     });
@@ -545,9 +554,18 @@ function applyOp(
       const [left, right] = binary(op, args);
       return arith(op, ev(left, scope, d), ev(right, scope, d));
     }
+    case 'empty': {
+      if (args.length !== 1) fail('EXPR_VALUE', `оператор 'empty' ожидает ровно один аргумент`);
+      const v = ev(args[0] as ExprNode, scope, d);
+      // Отсутствие списка — «пусто» (тотальность §Б3-4); скаляр сюда доехать не должен — его
+      // ловит чекер, и молчаливое `false` спрятало бы дефект декларации.
+      if (v === null) return true;
+      if (Array.isArray(v)) return v.length === 0;
+      return fail('EXPR_VALUE', `'empty' над не-списком: ${JSON.stringify(v)}`);
+    }
     default: {
-      // Все пятнадцать операторов `EXPR_OPS` разобраны выше, и это утверждение держит `never`:
-      // появится шестнадцатый — красным станет typecheck, а не рантайм у владельца. Ветка не
+      // Все шестнадцать операторов `EXPR_OPS` разобраны выше, и это утверждение держит `never`:
+      // появится семнадцатый — красным станет typecheck, а не рантайм у владельца. Ветка не
       // «каркас, который допишут»: недостижимая форма узла — дефект вызывающего, EXPR_VALUE.
       const unreachable: never = op;
       return fail('EXPR_VALUE', `оператора нет в языке E: ${String(unreachable)}`, { op });
