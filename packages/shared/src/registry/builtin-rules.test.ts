@@ -13,6 +13,8 @@ import {
   RULE_ENVELOPE_UNIQUE,
   RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
+  RULE_MEMORY_RULE_PATTERN,
+  RULE_MEMORY_RULE_TARGET,
   RULE_RUN_SUBJECT_FORBIDDEN,
   RULE_RUN_SUBJECT_REQUIRED,
   RULE_TASK_COMPLETED_AT,
@@ -45,6 +47,9 @@ describe('системные строки каталога правил (§Б4-1
       'assignment_grant_forbidden',
       'run_subject',
       'run_subject_forbidden',
+      // …и форма правила памяти: две условные обязательности (область — признак в props).
+      'memory_rule_pattern',
+      'memory_rule_target',
       'nearest_ancestor',
       'materialize',
       'mirror_ref',
@@ -77,7 +82,8 @@ describe('системные строки каталога правил (§Б4-1
     // Явное `undo` у C-строк — решение по экземпляру, а не умолчание: снятое схемой поле молча
     // сменило бы политику отката инварианта. У конверта `check` — слово владельца (В-П-1а): откат
     // при уже созданном дубле отклоняется; субъект прогона и грант назначения — `skip` (§А7-2
-    // ревизии 5: снятый код под откатом не звался).
+    // ревизии 5: снятый код под откатом не звался); форма правила памяти — `check` (снятый код стоял
+    // в стадии 2, а она под откатом исполняется).
     expect([
       RULE_FINANCIAL_REQUIRES_OCCURRED_ON.undo,
       RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE.undo,
@@ -89,6 +95,8 @@ describe('системные строки каталога правил (§Б4-1
       RULE_RUN_SUBJECT_FORBIDDEN.undo,
       RULE_ASSIGNMENT_GRANT_REQUIRED.undo,
       RULE_ASSIGNMENT_GRANT_FORBIDDEN.undo,
+      RULE_MEMORY_RULE_PATTERN.undo,
+      RULE_MEMORY_RULE_TARGET.undo,
     ]).toEqual([
       'check',
       'check',
@@ -100,6 +108,8 @@ describe('системные строки каталога правил (§Б4-1
       'skip',
       'skip',
       'skip',
+      'check',
+      'check',
     ]);
   });
 });

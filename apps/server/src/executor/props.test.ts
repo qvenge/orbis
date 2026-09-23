@@ -1641,14 +1641,22 @@ describe('golden-близнец писателей предусловий (§А7
  * НИ ОДНИМ детерминированным путём (быстрый ввод, резолв импорта, гейт эскалации). Класс
  * закрывается здесь — на записи, а не показом значка.
  *
- * Пробы стоят на ВСЕХ ТРЁХ путях записи по тому же доводу, что у core-проекций: гейт живёт в
- * общей стадии 2 (`assertEntityProps`), но «общая» — это утверждение о конвейере, и
- * проверяется оно только тем, что каждый путь до неё реально доходит. Цель ВНЕ множества
+ * Пробы стоят на ВСЕХ ТРЁХ путях записи по тому же доводу, что у core-проекций: с задачи 14 гейт —
+ * две строки каталога (`memory_rule_pattern`, `memory_rule_target`, стадия 4 исполнителя), но
+ * «общая стадия» — это утверждение о конвейере, и проверяется оно только тем, что каждый путь до неё
+ * реально доходит. Пустой и пробельный образец — граница ТИПА `orbis/rule_pattern` (РЧ-14-2), стадия
+ * 2. Цель ВНЕ множества
  * категорий закрыта другим механизмом и проверяется у него (`registry/ref.test.ts`,
  * `REF_TARGET`): это работа валидатора ссылок по `target` свойства, а не формы правила.
  */
 describe('правило памяти без образца — отказ на всех путях записи (В7, §А8)', () => {
   const RULE_TARGET_CATEGORY = '019e4466-dddd-7e07-b5d4-64be9721da54';
+
+  /** Отказ строки каталога: код и id правила одной парой (Р-К-1). */
+  function ruleRefusal(r: ExecuteResult): [string, string | undefined] {
+    if (r.ok) throw new Error('ожидался отказ');
+    return [r.error.code, (r.error.details as { invariant?: string }).invariant];
+  }
 
   function ruleProps(over: Record<string, unknown> = {}): Record<string, unknown> {
     return {
@@ -1677,7 +1685,7 @@ describe('правило памяти без образца — отказ на 
     expect(Object.keys(row.props)).not.toContain('orbis/title');
   });
 
-  test('entity_create: правило без orbis/rule_pattern → VALIDATION, строки нет', async () => {
+  test('entity_create: правило без orbis/rule_pattern → INVARIANT, строки нет', async () => {
     const entityId = newId();
     const props = ruleProps();
     delete props['orbis/rule_pattern'];
@@ -1688,11 +1696,12 @@ describe('правило памяти без образца — отказ на 
       props,
       aspects: ['orbis/memory'],
     });
+    // Стадия сместилась со 2-й на 4-ю, код — с VALIDATION на INVARIANT (Р-К-11): условная
+    // обязательность больше не второй список валидатора, а строка каталога.
     expect(denied.ok).toBe(false);
     if (denied.ok) return;
-    expect(denied.error.code).toBe('VALIDATION');
-    expect(violationsOf(denied)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
-    // Отказ НАЗЫВАЕТ ВЫХОД — иначе автор записи уйдёт искать обходной путь.
+    expect(ruleRefusal(denied)).toEqual(['INVARIANT', 'memory_rule_pattern']);
+    // Отказ по-прежнему НАЗЫВАЕТ ВЫХОД — иначе автор записи уйдёт искать обходной путь.
     expect(denied.error.message).toContain('orbis/rule_pattern');
     const rows = await withIdentity(db, personal(owner), (tx) =>
       tx.select({ id: entities.id }).from(entities).where(eq(entities.id, entityId)),
@@ -1700,7 +1709,7 @@ describe('правило памяти без образца — отказ на 
     expect(rows.length).toBe(0);
   });
 
-  test('entity_create: денежное правило без orbis/rule_target → VALIDATION (подставлять нечего)', async () => {
+  test('entity_create: денежное правило без orbis/rule_target → INVARIANT (подставлять нечего)', async () => {
     const props = ruleProps();
     delete props['orbis/rule_target'];
     const denied = await run('entity_create', {
@@ -1709,13 +1718,11 @@ describe('правило памяти без образца — отказ на 
       props,
       aspects: ['orbis/memory'],
     });
-    expect(violationsOf(denied)).toContainEqual({
-      code: 'RULE_WITHOUT_TARGET',
-      scope: 'orbis/money-movement',
-    });
+    expect(ruleRefusal(denied)).toEqual(['INVARIANT', 'memory_rule_target']);
+    expect(denied.ok ? '' : denied.error.message).toContain('orbis/rule_target');
   });
 
-  test('entity_update: снятие образца у живого правила → VALIDATION, значение остаётся', async () => {
+  test('entity_update: снятие образца у живого правила → INVARIANT, значение остаётся', async () => {
     const e = entityOf(
       await run('entity_create', {
         title: 'пятерочка → Продукты',
@@ -1725,7 +1732,7 @@ describe('правило памяти без образца — отказ на 
       }),
     );
     const denied = await run('entity_update', { id: e.id, unset: ['orbis/rule_pattern'] });
-    expect(violationsOf(denied)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+    expect(ruleRefusal(denied)).toEqual(['INVARIANT', 'memory_rule_pattern']);
     expect((await rowOf(e.id)).props['orbis/rule_pattern']).toBe('пятерочка');
 
     // ВТОРАЯ ФОРМА ТОГО ЖЕ НАМЕРЕНИЯ: не «снять образец», а «стать правилом» уже после
@@ -1737,7 +1744,7 @@ describe('правило памяти без образца — отказ на 
       props: { 'orbis/memory_kind': 'rule' },
       aspects: { attach: ['orbis/memory'] },
     });
-    expect(violationsOf(becameRule)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+    expect(ruleRefusal(becameRule)).toEqual(['INVARIANT', 'memory_rule_pattern']);
   });
 
   test('attach_orbis_memory: третий путь закрыт тем же кодом', async () => {
@@ -1746,7 +1753,7 @@ describe('правило памяти без образца — отказ на 
       entity_id: e.id,
       data: { 'orbis/memory_kind': 'rule' },
     });
-    expect(violationsOf(denied)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+    expect(ruleRefusal(denied)).toEqual(['INVARIANT', 'memory_rule_pattern']);
 
     // attach ЗАМЕНЯЕТ носитель целиком — и этим же может СНЯТЬ образец у готового правила:
     // не назвал в `data` — значит снять. Путь закрыт тем же гейтом по итоговому состоянию.
@@ -1762,8 +1769,62 @@ describe('правило памяти без образца — отказ на 
       entity_id: rule.id,
       data: { 'orbis/memory_kind': 'rule' },
     });
-    expect(violationsOf(wiped)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+    expect(ruleRefusal(wiped)).toEqual(['INVARIANT', 'memory_rule_pattern']);
     expect((await rowOf(rule.id)).props['orbis/rule_pattern']).toBe('пятерочка');
+  });
+
+  test('образец из одних пробелов образцом не считается — это ГРАНИЦА ТИПА, а не правило', async () => {
+    const denied = await run('entity_create', {
+      title: 'Пробелы вместо образца',
+      tags: [],
+      props: ruleProps({ 'orbis/rule_pattern': '   ' }),
+      aspects: ['orbis/memory'],
+    });
+    expect(denied.ok).toBe(false);
+    if (denied.ok) return;
+    expect(denied.error.code).toBe('VALIDATION');
+    expect(violationsOf(denied)).toContainEqual(
+      expect.objectContaining({ code: 'TYPE', propertyId: 'orbis/rule_pattern' }),
+    );
+    // Пустая строка — та же граница (`minLength: 1`), а не «значения нет» для правила.
+    const empty = await run('entity_create', {
+      title: 'Пустой образец',
+      tags: [],
+      props: ruleProps({ 'orbis/rule_pattern': '' }),
+      aspects: ['orbis/memory'],
+    });
+    expect(violationsOf(empty)).toContainEqual(
+      expect.objectContaining({ code: 'TYPE', propertyId: 'orbis/rule_pattern' }),
+    );
+  });
+
+  test('снятие аспекта памяти правило не отключает: признак — в props (область-свойство, паритет Р9)', async () => {
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'пятерочка → Продукты',
+        tags: [],
+        props: ruleProps(),
+        aspects: ['orbis/memory'],
+      }),
+    );
+    entityOf(await run('entity_update', { id: e.id, aspects: { detach: ['orbis/memory'] } }));
+    const denied = await run('entity_update', { id: e.id, unset: ['orbis/rule_pattern'] });
+    expect(ruleRefusal(denied)).toEqual(['INVARIANT', 'memory_rule_pattern']);
+  });
+
+  test('глобальное правило без цели законно: его читает только память промпта', async () => {
+    const props = ruleProps();
+    delete props['orbis/rule_scope'];
+    delete props['orbis/rule_target'];
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'пятерочка',
+        tags: [],
+        props,
+        aspects: ['orbis/memory'],
+      }),
+    );
+    expect((await rowOf(e.id)).props['orbis/rule_target']).toBeUndefined();
   });
 
   // Половина «факта» обязана остаться свободной: у факта образца не бывает, и гейт,

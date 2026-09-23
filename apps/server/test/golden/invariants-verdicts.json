@@ -838,8 +838,9 @@
       "legacyCode": "VALIDATION",
       "legacyViolation": "RULE_WITHOUT_PATTERN",
       "verdict": "reject",
-      "code": "VALIDATION",
-      "violation": "RULE_WITHOUT_PATTERN"
+      "code": "INVARIANT",
+      "invariant": "memory_rule_pattern",
+      "expectedDiff": "MEMORY_RULE_FORM"
     },
     {
       "name": "денежное правило памяти без цели",
@@ -854,8 +855,9 @@
       "legacyCode": "VALIDATION",
       "legacyViolation": "RULE_WITHOUT_TARGET",
       "verdict": "reject",
-      "code": "VALIDATION",
-      "violation": "RULE_WITHOUT_TARGET"
+      "code": "INVARIANT",
+      "invariant": "memory_rule_target",
+      "expectedDiff": "MEMORY_RULE_FORM"
     },
     {
       "name": "полное правило памяти",
@@ -911,7 +913,8 @@
       "legacyViolation": "RULE_WITHOUT_PATTERN",
       "verdict": "reject",
       "code": "VALIDATION",
-      "violation": "RULE_WITHOUT_PATTERN"
+      "violation": "TYPE",
+      "expectedDiff": "MEMORY_PATTERN_BLANK"
     },
     {
       "name": "правило памяти теряет образец после снятия аспекта памяти",
@@ -937,8 +940,9 @@
       "legacyCode": "VALIDATION",
       "legacyViolation": "RULE_WITHOUT_PATTERN",
       "verdict": "reject",
-      "code": "VALIDATION",
-      "violation": "RULE_WITHOUT_PATTERN"
+      "code": "INVARIANT",
+      "invariant": "memory_rule_pattern",
+      "expectedDiff": "MEMORY_RULE_FORM"
     },
     {
       "name": "конверт без валюты",

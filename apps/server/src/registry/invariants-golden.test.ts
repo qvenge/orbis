@@ -211,6 +211,16 @@ const EXPECTED_DIFFS: Record<string, { records: number }> = {
   // расхождением НЕ является: она осталась кодом (`assertGrantAlive`), и запись «отозванный грант»
   // совпадает со старым вердиктом.
   ASSIGNMENT_GRANT_CONDITION: { records: 2 },
+  // Задача 14: форма правила памяти была ВТОРЫМ списком стадии 2 (`VALIDATION`, нарушения
+  // `RULE_WITHOUT_PATTERN`/`RULE_WITHOUT_TARGET`) и стала двумя строками каталога стадии 4
+  // (`memory_rule_pattern`/`memory_rule_target` — `INVARIANT` с id правила). Третья запись — снятый
+  // аспект памяти: область строк — признак в `props` (`scope: {property: 'orbis/memory_kind'}`), и
+  // отказ остаётся отказом, как у снятого кода, смотревшего только на `props` (Р9).
+  MEMORY_RULE_FORM: { records: 3 },
+  // РЧ-14-2: пробельный образец остаётся `VALIDATION`, но нарушением ТИПА `orbis/rule_pattern`
+  // (`minLength: 1`, `pattern: '\S'` — граница формы), а не `RULE_WITHOUT_PATTERN`: код тот же, имя
+  // нарушения другое (`violation` записи).
+  MEMORY_PATTERN_BLANK: { records: 1 },
 };
 
 /**

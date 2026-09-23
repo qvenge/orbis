@@ -3134,8 +3134,12 @@
             },
             "orbis/rule_pattern": {
               "type": "string",
+              "pattern": "\\S",
+              "minLength": 1,
               "x-orbis-type": {
-                "kind": "text"
+                "kind": "text",
+                "pattern": "\\S",
+                "minLength": 1
               },
               "description": "Образец — Текст, по которому правило узнаёт ввод"
             },

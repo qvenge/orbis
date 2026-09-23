@@ -897,7 +897,8 @@ const A8_TYPES: Record<string, string> = {
   'orbis/spend_class': 'select{options:2}|finance',
   'orbis/memory_kind': 'select{options:2}|memory',
   'orbis/rule_scope': 'registry_ref{target:contract}|memory',
-  'orbis/rule_pattern': 'text|memory',
+  // Граница формы образца правила памяти (РЧ-14-2, задача 14): пустой и пробельный образец — `TYPE`.
+  'orbis/rule_pattern': 'text{minLength:1,pattern:\\S}|memory',
   'orbis/rule_target': 'ref{target:{"filter":{"aspect":"orbis/category"}}}|memory',
   'orbis/progress_source': 'json{schema:json-schema}|goals',
   'orbis/target_value': 'decimal{exclusiveMin:0}|goals',
@@ -964,7 +965,8 @@ test('тип и модуль каждого свойства — по колон
       `${property.id}: ${A8_TYPES[property.id] ?? '<нет в снимке §А8>'}`,
     );
   }
-  // Шесть полей, где сегодня стоит `min(1)` (РП-8/Р-17), плюс длина валюты §А8.
+  // Шесть полей, где сегодня стоит `min(1)` (РП-8/Р-17), плюс длина валюты §А8, плюс граница
+  // образца правила памяти (задача 14, РЧ-14-2).
   const withMinLength = BUILTIN_PROPERTY_META.filter(
     (p) => p.type.kind === 'text' && p.type.minLength !== undefined,
   ).map((p) => p.id);
@@ -976,6 +978,7 @@ test('тип и модуль каждого свойства — по колон
       'orbis/currency',
       'orbis/default_branch',
       'orbis/repo_url',
+      'orbis/rule_pattern',
       'orbis/unit',
     ].sort(),
   );

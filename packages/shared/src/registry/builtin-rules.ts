@@ -172,6 +172,40 @@ export const RULE_RUN_SUBJECT_FORBIDDEN: RuleDefinitionInput = {
 };
 
 /**
+ * Форма правила памяти (В7, §А8) — ТРЕТИЙ экземпляр `requires_when`, который докблок снятого второго
+ * списка стадии 2 обещал каталогу дословно: «условные ограничения выражает `requires_when` части Б».
+ * Признак берётся из `props` (`orbis/memory_kind`), а не из списка аспектов: снятие аспекта памяти
+ * значения не уносит (Р9), и правило, у которого носитель снят, обязано отвечать так же. Потому область —
+ * СВОЙСТВО-признак (`scope: {property}`), а не аспект-носитель по умолчанию: область-аспект перестала бы
+ * касаться записи на `detach`, а снятый код смотрел только на `props` (паритет, корпус близнецов).
+ * `undo: 'check'` — снятый код стоял в стадии 2, а она под внутренним откатом исполняется.
+ * Пустой и пробельный образец — не этой строки дело: это граница ТИПА `orbis/rule_pattern` (РЧ-14-2).
+ */
+export const RULE_MEMORY_RULE_PATTERN: RuleDefinitionInput = {
+  id: 'memory_rule_pattern',
+  template: 'requires_when',
+  scope: { property: 'orbis/memory_kind' },
+  undo: 'check',
+  when: { op: '=', args: [{ prop: 'orbis/memory_kind' }, { const: 'rule' }] },
+  params: { property: 'orbis/rule_pattern' },
+};
+/** Денежному правилу нечего подставлять без цели: оба потребителя области ставят категорию ссылкой. */
+export const RULE_MEMORY_RULE_TARGET: RuleDefinitionInput = {
+  id: 'memory_rule_target',
+  template: 'requires_when',
+  scope: { property: 'orbis/memory_kind' },
+  undo: 'check',
+  when: {
+    op: 'and',
+    args: [
+      { op: '=', args: [{ prop: 'orbis/memory_kind' }, { const: 'rule' }] },
+      { op: '=', args: [{ prop: 'orbis/rule_scope' }, { const: 'orbis/money-movement' }] },
+    ],
+  },
+  params: { property: 'orbis/rule_target' },
+};
+
+/**
  * Уникальность конверта (03-budget §2.1) — СТРОКА каталога, а не код Финансов.
  *
  * `id` = прежний код отказа (Р-К-1): `details.invariant` движка равен id правила, поэтому близнецы
@@ -315,6 +349,7 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER],
   'orbis/assignment': [RULE_ASSIGNMENT_GRANT_REQUIRED, RULE_ASSIGNMENT_GRANT_FORBIDDEN],
   'orbis/agent-run': [RULE_RUN_SUBJECT_REQUIRED, RULE_RUN_SUBJECT_FORBIDDEN],
+  'orbis/memory': [RULE_MEMORY_RULE_PATTERN, RULE_MEMORY_RULE_TARGET],
   'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
   'orbis/schedule': [RULE_MATERIALIZE],
   ref: [RULE_MIRROR_REF],
