@@ -441,6 +441,18 @@ describe('assertRule: unique_among (§Б4-3, строка 11 §С1-2)', () => {
     expect(e.code).toBe('UNIQUE_ON_MANY');
     expect(e.details).toMatchObject({ rule: 'u_many', property: 'orbis/aliases' });
   });
+  test('when у unique_among → VALIDATION RULE_WHEN_UNSUPPORTED (рулинг 12-3)', () => {
+    // Условие сделало бы вердикт зависимым от порядка записей: подмножество — это область-аспект.
+    const e = err(() =>
+      check(carrier, {
+        id: 'u_when',
+        template: 'unique_among',
+        when: { op: '=', args: [{ prop: 'orbis/currency' }, { const: 'RUB' }] },
+        params: { properties: ['orbis/period_start'] },
+      }),
+    );
+    expect([e.code, reasonOf(e)]).toEqual(['VALIDATION', 'RULE_WHEN_UNSUPPORTED']);
+  });
   test('json-свойство в наборе принимается: значение — один документ (рулинг 12-1)', () => {
     // `orbis/recurrence` — `kind: 'json'` без `cardinality`: равенство jsonb у документа определено,
     // и `UNIQUE_ON_MANY` о нём не говорит — он только про списки `cardinality: many`.

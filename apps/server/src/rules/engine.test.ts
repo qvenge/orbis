@@ -1177,7 +1177,9 @@ describe('unique_among: края шаблона (задача 12)', () => {
     expect(refusalOf(r)).toBe('INVARIANT/badge_unique');
   });
 
-  test('when: правило проверяет только запись, где условие истинно; множество сравнения — область', async () => {
+  test('when у ручной строки мимо валидатора не читается — правило исполняется безусловно (рулинг 12-3)', async () => {
+    // Валидатор такую строку отвергает (`RULE_WHEN_UNSUPPORTED`); доехавшая сырой, она исполняется
+    // строже объявленного: пропуск по условию и был бы зависящим от порядка записей вердиктом.
     const w = await worldWith({
       ...SLOT_SPEC,
       rules: [
@@ -1190,14 +1192,11 @@ describe('unique_among: края шаблона (задача 12)', () => {
         },
       ],
     });
-    // Условие ложно — дубль номера не проверяется.
     expect(refusalOf(await w.run('entity_create', slot('L1', 3)))).toBe('ok');
-    expect(refusalOf(await w.run('entity_create', slot('L2', 3)))).toBe('ok');
-    // Условие истинно — номер 3 занят записями области, пусть и не-VIP.
-    expect(refusalOf(await w.run('entity_create', slot('VIP', 3)))).toBe(
+    // Условие ложно, а дубль номера всё равно отклонён.
+    expect(refusalOf(await w.run('entity_create', slot('L2', 3)))).toBe(
       'INVARIANT/slot_vip_number_unique',
     );
-    expect(refusalOf(await w.run('entity_create', slot('VIP', 4)))).toBe('ok');
   });
 
   test('область без аспекта (ручная строка мимо валидатора) — VALIDATION RULE_SCOPE_UNSUPPORTED, а не пропуск', async () => {

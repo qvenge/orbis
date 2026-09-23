@@ -253,8 +253,8 @@ function refusalText(
 
 /**
  * C-правила (§Б4-3): `requires_when` — условие истинно И свойства нет → отказ; `forbidden_when` —
- * условие истинно И свойство есть → отказ; `unique_among` — условие истинно И набор свойств занят
- * другой неархивной записью области → отказ. Отказ — `INVARIANT` с `details.invariant = rule.id`
+ * условие истинно И свойство есть → отказ; `unique_among` — набор свойств занят другой неархивной
+ * записью области → отказ (условия у него нет). Отказ — `INVARIANT` с `details.invariant = rule.id`
  * (Р-К-1): близнецы кода и строки сида совпадают по нему без второго словаря.
  */
 export async function assertConstraintRules(input: RuleWriteInput): Promise<void> {
@@ -283,9 +283,11 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
     // Недостижимо: `applicableRules` отобрал род `constraint`. Сужение нужно типу — ниже шаблоны рода
     // исчерпываются `never`-веткой.
     if (!isConstraintRule(rule)) continue;
-    if (!whenHolds(rule, scope)) continue;
     switch (rule.template) {
       case 'unique_among': {
+        // `when` здесь не читается: у `unique_among` его отвергает валидатор (`RULE_WHEN_UNSUPPORTED`,
+        // рулинг 12-3). Ручная строка с условием мимо валидатора исполняется БЕЗУСЛОВНО — строже
+        // объявленного, а не мягче: пропуск по условию и был бы тем зависящим от порядка вердиктом.
         const ruleScope = effectiveRuleScope(rule, carrier);
         // Область без аспекта валидатор не пропускает (`assertRule`, РЧ-12-3) — ветка достижима
         // только ручной строкой. Fail-closed: правило, которое не знает своего множества, обязано
@@ -302,6 +304,7 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
       }
       case 'requires_when':
       case 'forbidden_when': {
+        if (!whenHolds(rule, scope)) continue;
         const has = present(input.state.props[rule.params.property]);
         if (rule.template === 'requires_when' ? has : !has) continue;
         throw new ExecError('INVARIANT', refusalText(rule), {
@@ -355,9 +358,8 @@ function sameRuleValue(a: unknown, b: unknown): boolean {
  * не по тексту: `->>` привёл бы число `10` и строку `"10"` к одному; «нет значения» — такая же часть
  * комбинации, как и значение.
  *
- * `when` правила (проверено диспетчером выше) решает, КАКУЮ запись правило проверяет, — как у соседей по
- * роду; множество, среди которого ищется дубль, задаёт ОБЛАСТЬ. Условие E над чужими строками в SQL не
- * вычислить, и «уникален среди записей, где условие истинно» выражается своим аспектом-областью.
+ * Условия `when` у шаблона нет (рулинг 12-3, отказ валидатора): множество, среди которого ищется дубль,
+ * задаёт ОБЛАСТЬ, и «уникален среди записей, где условие истинно» выражается своим аспектом-областью.
  *
  * Архивность САМОЙ записи при правке свойств не смотрится (РЧ-12-4) — поведение снятого кода
  * уникальности конверта: правка архивной записи в комбинацию, занятую живой, отклоняется. Одно

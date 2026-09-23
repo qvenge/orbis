@@ -240,6 +240,18 @@ export function assertRule(raw: unknown, scope: RuleCheckScope): RuleDefinition 
       { template: rule.template, scope: s },
     );
   }
+  // `when` у `unique_among` отвергается (рулинг 12-3): §Б4-3 — функциональная зависимость «среди
+  // неархивных владельца», а условие сделало бы вердикт зависимым от порядка записей (запись, где
+  // условие ложно, занимает набор; где истинно — упирается). Подмножество выражается областью-аспектом.
+  // Причина своя, `RULE_WHEN_UNSUPPORTED`: ни одна из прежних не про «условие не допускается шаблоном».
+  if (rule.template === 'unique_among' && rule.when !== undefined) {
+    bad(
+      'RULE_WHEN_UNSUPPORTED',
+      rule.id,
+      `правило «${rule.id}»: у ${rule.template} условия when нет — набор уникален среди ВСЕХ неархивных записей области, подмножество задаётся аспектом-областью (§Б4-3)`,
+      { template: rule.template },
+    );
+  }
   assertReferences(rule, scope); // (6)
   assertExprTypes(rule, scope); // (7)
   assertLevelScoped(rule); // (8)

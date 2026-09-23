@@ -196,6 +196,18 @@ export const RULE_FIXTURES: readonly RuleFixture[] = [
     },
     'UNIQUE_ON_MANY',
   ),
+  neg(
+    'unique_among: с условием when — вердикт зависел бы от порядка записей (рулинг 12-3)',
+    ASPECT('orbis/budget'),
+    {
+      id: 'fx_unique_with_when',
+      template: 'unique_among',
+      when: NOT_RECURRING,
+      params: { properties: ['orbis/period_start'] },
+    },
+    'VALIDATION',
+    'RULE_WHEN_UNSUPPORTED',
+  ),
   // target_max_incoming
   pos('target_max_incoming: метка каталога на роли привязки к конверту', ROLE('envelope-binding'), {
     id: 'fx_envelope_binding_max',
