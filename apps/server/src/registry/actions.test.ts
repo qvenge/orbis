@@ -96,6 +96,8 @@ test('вход шага разбирается конвертом его тул�
     steps: [{ tool: 'entity_update', input: { id: { $expr: { ctx: '$self' } }, banana: 1 } }],
   };
   expect(() => assertAction(bogus, { reg, systemSeed: true })).toThrow(/шаг 1/);
+  // Причина, а не только текст: «шаг 1» есть и в отказе ACTION_STEP_TOOL, и сообщение одно не различает.
+  expect(verdict(bogus)).toEqual({ code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' });
 });
 
 test('{param} неизвестного имени — EXPR_TYPE чекера (Р-К-24, отдельного кода нет)', () => {
@@ -231,4 +233,60 @@ test('корпус деклараций действий: каждый вход 
     f.verdict.ok ? { ok: true } : { ok: false, code: f.verdict.code, reason: f.verdict.reason },
   ]);
   expect(got).toEqual(want);
+});
+
+// Ступень 2: строка в E-позиции — второй язык, и отказ называет его ДО разбора формы (иначе схема
+// сказала бы безликое ACTION_MALFORMED про «не тот тип», не назвав, что автор написал формулу текстом).
+test('строка в E-позиции — SECOND_LANGUAGE, а не отказ формы (§Б3, ступень 2)', () => {
+  expect(verdict({ ...builtin(0), precondition: 'orbis/planned = true' })).toEqual({
+    code: 'SECOND_LANGUAGE',
+    reason: undefined,
+  });
+  const textMarker = {
+    ...builtin(1),
+    steps: [
+      {
+        tool: 'entity_update',
+        input: { id: { $expr: { ctx: '$self' } }, props: { 'orbis/due_date': { $expr: 'to' } } },
+      },
+    ],
+  };
+  expect(verdict(textMarker)).toEqual({ code: 'SECOND_LANGUAGE', reason: undefined });
+});
+
+// Ступень 4: системная строка живёт в namespace СВОЕГО модуля, своя — только в `user/`; ключ
+// встроенного действия владельцу не достаётся (иначе следующий пересев столкнулся бы с его строкой).
+test('namespace ключа по писателю и занятый ключ — ACTION_NAMESPACE / ACTION_KEY_TAKEN (ступень 4)', () => {
+  const own = (decl: unknown) => {
+    try {
+      assertAction(decl, { reg, systemSeed: false });
+      return 'ok';
+    } catch (e) {
+      const err = e as { code?: string; details?: { reason?: string } };
+      return { code: String(err.code), reason: err.details?.reason };
+    }
+  };
+  const ns = { code: 'VALIDATION', reason: 'ACTION_NAMESPACE' };
+  expect(own({ ...builtin(1), key: 'planner/mine', id: 'planner/mine' })).toEqual(ns);
+  expect(verdict({ ...builtin(1), key: 'user/mine', id: 'user/mine', module: null })).toEqual(ns);
+  expect(
+    verdict({ ...builtin(1), key: 'planner/mine', id: 'planner/mine', module: 'finance' }),
+  ).toEqual(ns);
+  expect(
+    own({ ...builtin(1), key: 'user/mine', id: 'user/mine', graphId: null, module: null }),
+  ).toBe('ok');
+  expect(verdict({ ...builtin(1), id: 'planner/twin' })).toEqual({
+    code: 'VALIDATION',
+    reason: 'ACTION_KEY_TAKEN',
+  });
+});
+
+// Ступень 8: предикат — boolean. Тотальное, но не булево выражение в `precondition` или в
+// `offered_by[].when` — отказ с причиной, а не «истинно, если непусто».
+test('precondition и offered_by.when не предикатом — ACTION_PRECONDITION_TYPE (ступень 8)', () => {
+  const reason = { code: 'VALIDATION', reason: 'ACTION_PRECONDITION_TYPE' };
+  expect(verdict({ ...builtin(0), precondition: { const: 1 } })).toEqual(reason);
+  expect(verdict({ ...builtin(1), offered_by: [{ llm: true, when: { ctx: '$today' } }] })).toEqual(
+    reason,
+  );
 });

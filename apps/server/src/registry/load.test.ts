@@ -213,6 +213,38 @@ test('снимок несёт шестой словарь: действия по
   expect(reg.actions.get('planner/postpone_overdue')?.over).not.toBeNull();
 });
 
+// Колонки 0014 `params`/`sensitivity`/`offered_by` nullable БЕЗ default, у схемы же умолчание `[]`:
+// строка с NULL в них (прежний писатель, ручная правка) обязана доехать до снимка умолчаниями, а не
+// уронить разбор реестра владельца целиком (довод `aggregations` аспекта, `load.ts`).
+test('своё действие с NULL в params/sensitivity/offered_by доезжает умолчаниями схемы', async () => {
+  const { db: admin, client } = adminDb();
+  try {
+    await admin.execute(sql`
+      INSERT INTO action_definitions (id, graph_id, key, label, description, steps, rank)
+      VALUES ('user/bare', ${owner}::uuid, 'user/bare', '{"ru":"Голое"}'::jsonb,
+              '{"ru":"Голое"}'::jsonb, '[{"tool":"entity_update","input":{}}]'::jsonb, 900)`);
+    await bumpOwnerRegistryVersion(admin, owner);
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    const bare = reg.actions.get('user/bare');
+    expect([bare?.params, bare?.sensitivity, bare?.offered_by]).toEqual([[], [], []]);
+    expect([bare?.graphId, bare?.over, bare?.batch_cap, bare?.status]).toEqual([
+      owner,
+      null,
+      null,
+      'active',
+    ]);
+    // Своё действие чужого графа в снимок не попадает (RLS и условие по графу в SELECT).
+    const other = await withIdentity(db, personal(stranger), (tx) =>
+      effectiveRegistry(tx, stranger),
+    );
+    expect(other.actions.has('user/bare')).toBe(false);
+  } finally {
+    await admin.execute(sql`DELETE FROM action_definitions WHERE graph_id = ${owner}::uuid`);
+    await bumpOwnerRegistryVersion(admin, owner);
+    await client.end();
+  }
+});
+
 test('снимок несёт rules строк-носителей: своё правило доезжает разобранным, чужое не видно', async () => {
   const rule: RuleDefinition = {
     id: 'own_probe',
