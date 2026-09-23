@@ -830,6 +830,30 @@ describe('уникальность конверта: (category_ref, currency, pe
     );
     expect(after[0]?.n).toBe(sinkEntriesBefore[0]?.n);
   });
+
+  // Разархивация возвращает конверт в множество неархивных — и обязана споткнуться о занятую
+  // комбинацию. Вход БЕЗ props: проверка обязана жить вне ветки «правка свойств», и путь, где она
+  // проверялась бы только при `hasPropsInput`, потерял бы этот случай молча.
+  test('разархивация в занятую комбинацию → duplicate_envelope (вход без props)', async () => {
+    const u = await freshGraph();
+    const c = newId();
+    const { entity: first } = await createEntity(u, {
+      title: 'Июль',
+      props: budgetProps(c, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
+    });
+    ok(await execute(db, req(u, 'entity_update', { id: first.id, archived: true }), { sink }));
+    await createEntity(u, {
+      title: 'Июль заново',
+      props: budgetProps(c, '2026-07-01', '2026-07-31'),
+      aspects: ['orbis/budget'],
+    });
+    const r = err(
+      await execute(db, req(u, 'entity_update', { id: first.id, archived: false }), { sink }),
+    );
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('duplicate_envelope');
+  });
 });
 
 // ---------------------------------------------------------------------------
