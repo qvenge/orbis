@@ -14,6 +14,7 @@
 // мутационная проверка сторожа пометок (задача 5, шаг 4) возвращает пометку именному сценарию, и на
 // асинхронном теле она молча не сработала бы. Поэтому походы собраны в `beforeAll`, тела читают итог.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import type { RuleDefinitionInput } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { StructuredError } from '../src/errors';
@@ -293,6 +294,34 @@ beforeAll(async () => {
   });
 });
 
+/** Корень репозитория: `bun test` идёт из `apps/server`, а pathspec'ы git отсчитываются от cwd.
+ *  `repoRoot`/`gitGrep` — тот же способ звать git из сьюта, что в `gate-c8-18.test.ts`; копия, а не
+ *  импорт: импорт соседнего файла тестов зарегистрировал бы его тесты второй раз в этом прогоне. */
+function repoRoot(): string {
+  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`gate-b2: git rev-parse упал: ${r.stderr}`);
+  return r.stdout.trim();
+}
+function gitGrep(pattern: string, pathspec: readonly string[]): string[] {
+  const r = spawnSync('git', ['grep', '-n', '-a', '-P', '-e', pattern, '--', ...pathspec], {
+    cwd: repoRoot(),
+    encoding: 'utf8',
+  });
+  // 0 — есть совпадения, 1 — нет, >1 — ошибка (нет PCRE2). Ошибку нельзя принять за «чисто»:
+  // молчащий гейт хуже отсутствующего (тот же разбор — `check-legacy-form.ts`, разбор кода выхода).
+  if (r.status !== null && r.status > 1)
+    throw new Error(`gate-b2: git grep код ${r.status}: ${r.stderr}`);
+  return r.stdout.split('\n').filter((l) => l.length > 0);
+}
+
+// `GATE_B2_GREP_NAMES` (семь имён), `GATE_B2_GREP_PATTERN`, `GATE_B2_GREP_PATHSPEC`, `GATE_B2_GREP_ALLOWED`
+// объявлены задачей 0e в конце ЭТОГО файла — здесь только правило комментария.
+/** Где имена снесённого законны: сам гейт (он их НАЗЫВАЕТ — в этом его работа) и строки-комментарии,
+ *  объясняющие снятое. Правило комментария — то же и по тому же доводу, что у `COMMENT_ONLY_LINE`
+ *  (`scripts/check-legacy-form.ts`): объяснять удалённое надо ТАМ, ГДЕ ЕГО БОЛЬШЕ НЕТ, а запрет
+ *  называть снятое по имени сделал бы докблоки лживыми. Имя, вернувшееся В КОД, маркер ловит. */
+const COMMENT_ONLY_LINE = /^\s*(?:\/\/|\*|\/\*|--)/;
+
 describe('гейт вехи I: инвариант только декларацией', () => {
   // ЗЕЛЁНЫЙ И ДО, И ПОСЛЕ ВЕХИ I — сторож против тавтологии: пока сценарии ниже были помечены, снеси
   // задача 4 код, а строка сида промолчи, помеченные тесты остались бы красными (то есть «пройденными»),
@@ -305,6 +334,21 @@ describe('гейт вехи I: инвариант только декларац�
     const { done, back } = taken(sysTransition, 'задача в done и обратно');
     expect(typeof done.props['orbis/completed_at']).toBe('string');
     expect('orbis/completed_at' in back.props).toBe(false);
+  });
+
+  // Греп-доказательство вехи I (задача 5) — СТОРОЖЕМ в сьюте, а не разовой командой: имя снесённого
+  // кода, вернувшееся в код, краснит прогон с адресом строки. Тело синхронное, как у сценариев.
+  test('кода под два инварианта §А7-2 в дереве нет: только гейт и объяснения снятого', () => {
+    const hits = gitGrep(GATE_B2_GREP_PATTERN, [...GATE_B2_GREP_PATHSPEC]); // те же пути, что у команды 0e
+    const offenders = hits.filter((line) => {
+      const path = line.slice(0, line.indexOf(':'));
+      if (GATE_B2_GREP_ALLOWED.includes(path)) return false;
+      return !COMMENT_ONLY_LINE.test(line.slice(line.indexOf(':', line.indexOf(':') + 1) + 1));
+    });
+    expect(offenders).toEqual([]);
+    // Гейт обязан совпасть ВСЕГДА: пустой результат значил бы, что шаблон собран неверно и «ноль
+    // совпадений» получен не потому, что кода нет.
+    expect(hits.some((l) => l.startsWith('apps/server/test/gate-b2.test.ts:'))).toBe(true);
   });
 
   // Зазеленила задача 4 (строка `financial_requires_occurred_on` + снос `assertFinancialInvariant`). Ключ
@@ -362,19 +406,21 @@ describe('гейт вехи I: инвариант только декларац�
 });
 
 /**
- * ЗАГОТОВКА греп-доказательства вехи I «кода под инвариант нет» — исполняет ЗАДАЧА 5.
+ * Греп-доказательство вехи I «кода под инвариант нет» — заготовка задачи 0e; исполняет его тест
+ * «кода под два инварианта §А7-2 в дереве нет…» в describe выше (задача 5).
  *
- * Пути — САМ `GATE_GREP_PATHSPEC` (`fixtures/gate-aspects.ts:27-35`), а не его копия; он же —
- * подмножество `SEARCH_PATHSPEC` (`scripts/check-legacy-form.ts:67-76`). Списки обязаны совпадать, иначе
+ * Пути — САМ `GATE_GREP_PATHSPEC` (`fixtures/gate-aspects.ts`), а не его копия; он же —
+ * подмножество `SEARCH_PATHSPEC` (`scripts/check-legacy-form.ts`). Списки обязаны совпадать, иначе
  * «доказано» задачей 5 и «проверено» сторожем Б-1 меряют разное, — поэтому совпадение держит ссылка, а
- * не аккуратность переписчика.
+ * не аккуратность переписчика. Пути в команде ниже — развёртка той же ссылки для человека; тест читает
+ * ссылку.
  *
  * Команда (из корня worktree):
  *   git grep -n -a -P -e 'assertFinancialInvariant|assertFinancial\b|applyTaskCompletion|financialRecurringNeedsDerivedFrom|hasScheduleRecurrence|hasIncomingDerivedFrom|declaredDerivedFromTargets' -- \
  *     'apps/server/src' 'apps/server/test' 'apps/server/perf' 'packages/shared/src' 'apps/web/src' 'scripts' ':!*.snap'
  *
- * Ожидание СЕГОДНЯ (веха 0): совпадения в `apps/server/src/executor/{normalize,executor,props}.ts`
- * плюс этот файл. Ожидание задачи 5: только этот файл и строки-объяснения снятого кода.
+ * До задачи 4 (веха 0) совпадения стояли и в коде — `apps/server/src/executor/{normalize,executor,props}.ts`.
+ * После вехи I — только этот файл и строки-комментарии, объясняющие снятое (правило `COMMENT_ONLY_LINE`).
  */
 /** Имена кода под инварианты §А7-2 — СЕМЬ (Р-К-50а): пять из каркаса плюс `assertFinancial\b` и
  *  `hasScheduleRecurrence`, которые сносит тот же коммит задачи 4; без них функция, вернувшаяся под
