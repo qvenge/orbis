@@ -29,7 +29,7 @@ import {
 } from '../../test/helpers';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
-import { execute, uniqueRuleKeysOf } from '../executor/executor';
+import { execute, targetEntityIdsOf, uniqueRuleKeysOf } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
@@ -1106,6 +1106,15 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
       }),
     ).toEqual([key]);
     expect(keysOf('entity_update', { id, title: 'Переименование' })).toEqual([]);
+    // Та же правка, но аспект области уже стоит на записи (прочитан до стадий), — ключ берётся.
+    expect(
+      uniqueRuleKeysOf(
+        reg,
+        w.graph,
+        [{ tool: 'entity_update', input: { id, title: 'Переименование' } }],
+        new Set([UNIQUE_ASPECT]),
+      ),
+    ).toEqual([key]);
     expect(keysOf('entity_create', { title: 'Просто запись', tags: [] })).toEqual([]);
     // Выключенное правило (§Б4-4) замка не берёт: исполнять его нечему.
     const row = reg.aspects.get(UNIQUE_ASPECT);
@@ -1191,6 +1200,112 @@ describe('unique_among: несущие строки ветки (ревью I-1)'
     };
     expect(refusalOf(await w.run('entity_create', noNumber))).toBe('ok');
     expect(refusalOf(await w.run('entity_create', noNumber))).toBe('INVARIANT/slot_unique');
+  });
+
+  /** Ключ взят ДО стадий: граница — чтение `disabled_modules` при сборке `ExecCtx`. Строковая блокировка
+   *  правимой записи (`loadEntityForUpdate … FOR UPDATE`, стадия 3) идёт ПОСЛЕ неё, а в лог `tx.execute`
+   *  сама не попадает (select-билдер), — поэтому граница стадий и есть проверка «до FOR UPDATE». */
+  const takenBeforeStages = (lines: string[], key: string) => {
+    const lockAt = lines.findIndex((l) => l.includes(key));
+    const stagesAt = lines.findIndex((l) => l.includes('disabled_modules'));
+    return [lockAt >= 0, stagesAt >= 0, lockAt < stagesAt];
+  };
+  const updateLogged = async (graph: GraphId, input: Record<string, unknown>) => {
+    const log: string[] = [];
+    const r = await execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_update', input }],
+        clock: () => T0,
+      },
+      { beforeStages: sqlLog(log) },
+    );
+    return { r, log };
+  };
+
+  test('S6 правка постороннего свойства носителя: ключ правила взят ДО стадий по аспектам записи (рулинг 12-2)', async () => {
+    const w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const a = entityOf(await w.run('entity_create', slot('S6', 6)));
+    const { r, log } = await updateLogged(w.graph, { id: a.id, props: { 'user/note': 'm' } });
+    expect(refusalOf(r)).toBe('ok');
+    expect(takenBeforeStages(log, `${w.graph}:rule:slot_unique`)).toEqual([true, true, true]);
+  });
+
+  test('S7 конверт: правка свойства вне контура — ключ duplicate_envelope ДО стадий, то есть до FOR UPDATE (рулинг 12-2)', async () => {
+    // Встречная сторона — создание транзакции в категории конверта: она называет валюту и категорию,
+    // берёт ключ правила до стадий и ждёт строку конверта FK-проверкой ребра привязки. Возьми эта правка
+    // ключ только на стадии 4 (после FOR UPDATE конверта) — цикл ожидания.
+    const w = await worldWith(SLOT_SPEC);
+    const env = entityOf(
+      await w.run('entity_create', {
+        title: 'Июль',
+        tags: [],
+        aspects: ['orbis/budget'],
+        props: {
+          'orbis/finance_category': w.categoryId,
+          'orbis/limit': '100.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2026-07-01',
+          'orbis/period_end': '2026-07-31',
+        },
+      }),
+    );
+    const { r, log } = await updateLogged(w.graph, {
+      id: env.id,
+      props: { 'orbis/location': 'дом' },
+    });
+    expect(refusalOf(r)).toBe('ok');
+    expect(takenBeforeStages(log, `${w.graph}:rule:duplicate_envelope`)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  test('движок сам берёт замок правила до поиска дубля — страховка путей мимо пред-стадийного прохода', async () => {
+    const w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const log: string[] = [];
+    await withIdentity(db, personal(w.graph), async (tx) => {
+      await sqlLog(log)(tx);
+      const registry = await effectiveRegistry(tx, w.graph);
+      const id = newId();
+      await assertConstraintRules({
+        ctx: {
+          tx,
+          registry,
+          graphId: w.graph,
+          clock: () => T0,
+          mechanism: 'user',
+          internalUndo: false,
+        },
+        entityId: id,
+        before: { props: {}, aspects: [] },
+        state: { props: { 'user/level': 'D', 'user/number': 1 }, aspects: [UNIQUE_ASPECT] },
+        patch: {},
+        core: { id, title: 'Прямой вызов', archived: false, createdAt: T0, updatedAt: T0 },
+      });
+    });
+    const lockAt = log.findIndex((l) => l.includes(`${w.graph}:rule:slot_unique`));
+    const searchAt = log.findIndex((l) => l.includes('IS NOT DISTINCT FROM'));
+    expect([lockAt >= 0, searchAt >= 0, lockAt < searchAt]).toEqual([true, true, true]);
+  });
+
+  test('цели пред-стадийного чтения аспектов: id правки, entity_id навешивания, разворот пачки; не-uuid — мимо', () => {
+    const [a, b, c] = [newId(), newId(), newId()];
+    const ids = targetEntityIdsOf([
+      { tool: 'entity_update', input: { id: a, title: 'x' } },
+      { tool: attachToolName(UNIQUE_ASPECT), input: { entity_id: b, data: {} } },
+      {
+        tool: 'batch_execute',
+        input: { operations: [{ tool: 'entity_update', input: { id: c } }] },
+      },
+      { tool: 'entity_update', input: { id: 'не-uuid' } },
+      { tool: 'entity_create', input: { id: newId(), title: 'новая', tags: [] } },
+    ]);
+    expect([...ids].sort()).toEqual([a, b, c].sort());
   });
 
   test('порядок пред-стадийных замков «контур → правила» на обоих путях (создание конверта)', async () => {

@@ -999,24 +999,38 @@ async function lockBudgetContour(
 }
 
 /**
+ * Включённые правила `unique_among` снимка, у которых есть область-аспект: только их замки и берёт
+ * пред-стадийный проход. Правило без области-аспекта движок отвергает (`RULE_SCOPE_UNSUPPORTED`) —
+ * замок ему не нужен.
+ */
+function lockableUniqueRules(
+  reg: RegistrySnapshot,
+): Array<{ id: string; aspect: string; properties: readonly string[] }> {
+  const out: Array<{ id: string; aspect: string; properties: readonly string[] }> = [];
+  for (const { rule, carrier } of rulesOf(reg)) {
+    if (rule.template !== 'unique_among' || !rule.enabled) continue;
+    const scope = effectiveRuleScope(rule, carrier);
+    if ('aspect' in scope)
+      out.push({ id: rule.id, aspect: scope.aspect, properties: rule.params.properties });
+  }
+  return out;
+}
+
+/**
  * Ключи замков правил `unique_among`, которые операции пачки обязаны взять ДО стадий, — по тому же
  * нормативу, что и бюджет-контур (докблок выше): порядок захвата глобален — «advisory → строки».
  * Возьми правило свой замок только на стадии 4, он оказался бы ПОЗЖЕ `SELECT … FOR UPDATE` правимой
- * строки, а встречная операция берёт его до своих строковых блокировок — два порядка на один замок
- * дают цикл ожидания.
+ * строки, а любая встречная операция, взявшая его до своих строковых блокировок и ждущая эту строку
+ * (правка той же записи, ребро к ней с FK-проверкой `FOR KEY SHARE`), замкнула бы цикл ожидания.
  *
- * Отбор — по ФОРМЕ ВХОДА, как у контура (общий обход `namesAspectOrProperty`): назван ли аспект
- * области правила либо хоть одно свойство его набора. Точность в сторону «лишний раз взяли»
- * некритична: замок владельческий, реентерабельный и дешёвый. Порядок — по ключу, чтобы два
- * конкурента с разными наборами правил не встали крест-накрест.
- *
- * ИМЕНОВАННЫЙ ОСТАТОК, почему форма, а не состояние: правку записи-носителя, не называющую ни аспекта,
- * ни свойства набора (постороннее свойство, `run_action`), форма не выдаёт — движок проверит правило
- * и возьмёт замок сам (`assertUniqueAmong`), уже после строковой блокировки. Цикл тогда возможен лишь
- * со встречной правкой ТОЙ ЖЕ записи, меняющей набор, и PostgreSQL разорвёт его отказом одной из двух —
- * инвариант при этом держится. Узнать аспекты записи до стадий значило бы читать строку раньше замка,
- * то есть заводить второй проход по базе. У конверта щели нет: каждое его свойство — в бюджет-контуре,
- * и контурный замок, взятый обеими сторонами первым, выстраивает их в одну очередь.
+ * Правило берётся, если выполнено одно из двух:
+ *  • ФОРМА ВХОДА называет аспект области либо свойство набора (общий обход `namesAspectOrProperty`) —
+ *    так видны create, навешивание аспекта и правка набора, в том числе ещё не существующих записей;
+ *  • аспект области УЖЕ стоит на записи, которую операция правит (`targetAspects` — аспекты
+ *    существующих целей `entity_update`/`attach_*`, прочитанные до стадий, см. `lockUniqueAmongRules`):
+ *    правка любого свойства носителя проходит C-врезку, и отбор по одной форме её бы не увидел.
+ * Точность в сторону «лишний раз взяли» некритична: замок владельческий, реентерабельный и дешёвый.
+ * Порядок — по ключу, чтобы два конкурента с разными наборами правил не встали крест-накрест.
  *
  * ЭКСПОРТИРОВАН РАДИ ТЕСТА — по тому же доводу, что `touchesBudgetContour`: провал отбора виден не
  * отказом, а циклом ожидания под конкуренцией.
@@ -1025,29 +1039,87 @@ export function uniqueRuleKeysOf(
   reg: RegistrySnapshot,
   graphId: GraphId,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
+  targetAspects: ReadonlySet<string> = new Set(),
 ): string[] {
   const keys = new Set<string>();
-  for (const { rule, carrier } of rulesOf(reg)) {
-    if (rule.template !== 'unique_among' || !rule.enabled) continue;
-    const scope = effectiveRuleScope(rule, carrier);
-    // Правило без области-аспекта движок отвергает (`RULE_SCOPE_UNSUPPORTED`) — замок ему не нужен.
-    if (!('aspect' in scope)) continue;
-    const aspectIds = new Set([scope.aspect]);
-    const propertyIds = new Set(rule.params.properties);
-    if (ops.some((op) => namesAspectOrProperty(reg, op, aspectIds, propertyIds))) {
+  for (const rule of lockableUniqueRules(reg)) {
+    const aspectIds = new Set([rule.aspect]);
+    const propertyIds = new Set(rule.properties);
+    if (
+      targetAspects.has(rule.aspect) ||
+      ops.some((op) => namesAspectOrProperty(reg, op, aspectIds, propertyIds))
+    ) {
       keys.add(ruleLockKey(graphId, rule.id));
     }
   }
   return [...keys].sort();
 }
 
+/**
+ * id СУЩЕСТВУЮЩИХ записей, которые операции правят через C-врезку движка правил: `entity_update` (`id`)
+ * и `attach_*` (`entity_id`); вложенный `batch_execute` разворачивается. Других путей к C-врезке по
+ * существующей записи у исполнителя нет (create пишет новую — её видит форма входа). Только
+ * канонические uuid: вход ещё не разобран (стадия 1 впереди), и строка, не похожая на uuid, уронила бы
+ * SELECT приведением типа вместо честного отказа своей стадии.
+ */
+export function targetEntityIdsOf(ops: ReadonlyArray<{ tool: string; input: unknown }>): string[] {
+  const ids = new Set<string>();
+  const walk = (op: { tool: string; input: unknown }): void => {
+    if (op.tool === 'batch_execute') {
+      const env = op.input as { operations?: Array<{ tool: string; input: unknown }> } | null;
+      for (const inner of env?.operations ?? []) walk(inner);
+      return;
+    }
+    const input = op.input as { id?: unknown; entity_id?: unknown } | null;
+    if (input === null || typeof input !== 'object') return;
+    const id =
+      op.tool === 'entity_update'
+        ? input.id
+        : op.tool.startsWith('attach_')
+          ? input.entity_id
+          : undefined;
+    if (typeof id === 'string' && UUID_RE.test(id)) ids.add(id);
+  };
+  for (const op of ops) walk(op);
+  return [...ids];
+}
+
+/**
+ * Пред-стадийный захват замков правил уникальности (РЧ-12-2, рулинг 12-2 фикс-раунда задачи 12).
+ *
+ * Аспекты целевых записей читаются ОДНИМ `SELECT` без блокировки — и только когда форма входа выдала
+ * не все правила снимка (иначе читать нечего): обычное чтение MVCC строковых замков не ждёт, то есть в
+ * цикл ожидания войти не может. Цена — один PK-SELECT на вызов с правкой существующих записей.
+ *
+ * ИМЕНОВАННЫЙ ОСТАТОК (точный сценарий): аспект области навешивает конкурент МЕЖДУ этим чтением и
+ * `FOR UPDATE` правимой строки. Чтение его не видит, пред-стадийного ключа нет; после строковой
+ * блокировки запись уже с аспектом, и замок берёт движок (`assertUniqueAmong`) на стадии 4 — к этому
+ * моменту навесивший закоммичен и свой замок отпустил. Цикл возможен, только если ТРЕТЬЯ транзакция
+ * успела взять замок правила до стадий и ждёт эту же строку; PostgreSQL разорвёт его отказом одной из
+ * двух (40P01), инвариант при этом держится (замок взят до поиска дубля). Закрыть это можно лишь
+ * повторным чтением под замком — второй проход по базе ради тройной гонки не оправдан.
+ */
 async function lockUniqueAmongRules(
   tx: Tx,
   reg: RegistrySnapshot,
   graphId: GraphId,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
-  for (const key of uniqueRuleKeysOf(reg, graphId, ops)) {
+  let keys = uniqueRuleKeysOf(reg, graphId, ops);
+  if (keys.length < lockableUniqueRules(reg).length) {
+    const ids = targetEntityIdsOf(ops);
+    if (ids.length > 0) {
+      const rows = (await tx.execute(sql`
+        SELECT DISTINCT unnest(aspects) AS aspect FROM entities
+         WHERE graph_id = ${graphId} AND id IN (${sql.join(
+           ids.map((id) => sql`${id}`),
+           sql`, `,
+         )})
+      `)) as unknown as Array<{ aspect: string }>;
+      keys = uniqueRuleKeysOf(reg, graphId, ops, new Set(rows.map((r) => r.aspect)));
+    }
+  }
+  for (const key of keys) {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
   }
 }
