@@ -335,16 +335,17 @@ export const RULE_FIXTURES: readonly RuleFixture[] = [
     'RULE_ROLLOVER_AGG_UNPUBLISHED',
   ),
   // assign_level
-  // `when` позитива написан формой, которая в языке E УЖЕ ЕСТЬ (`$sensitivity`): позитивы этого
-  // словаря пиннятся разбором схемы, а `$touched` §Б4-5 приезжает в E задачей 15 — до неё он
-  // живёт только в `ASSIGN_LEVEL_RULES` ниже, где схемой никто не разбирает.
-  pos('assign_level: внешнее письмо от рутины — показать владельцу', ASPECT('orbis/task'), {
-    id: 'fx_assign_show_external',
+  // Позитив — форма правила 11 §Б4-5 (`"<id>" in $touched`, Е-5): контекст приехал в язык E
+  // задачей 15 (Р-28), и словарь, чьи позитивы пиннятся разбором схемы, держит его с того же
+  // коммита (перенос Ф-Б2-8; до него позитив стоял на `$sensitivity`). Негатив — та же запись с
+  // одной порчей: уровень понижен до `silent`, а актора, к которому понижение обращено, нет.
+  pos('assign_level: перенос срока задачи рутиной — показать владельцу', ASPECT('orbis/task'), {
+    id: 'fx_assign_show_due_moved',
     template: 'assign_level',
     params: {},
     level: 'show',
     actor: 'routine',
-    when: { op: 'in', args: [{ const: 'external' }, { ctx: '$sensitivity' }] },
+    when: { op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] },
   }),
   neg(
     'assign_level: понижение до silent без актора — правило без адресата',
@@ -354,7 +355,7 @@ export const RULE_FIXTURES: readonly RuleFixture[] = [
       template: 'assign_level',
       params: {},
       level: 'silent',
-      when: { op: 'in', args: [{ const: 'external' }, { ctx: '$sensitivity' }] },
+      when: { op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] },
     },
     'VALIDATION',
     'RULE_LOWERING_UNSCOPED',
@@ -439,10 +440,11 @@ const AL = (n: string, name: string, carrier: RuleCarrier, rule: RuleDefinitionI
  * ОДИННАДЦАТЬ ПРАВИЛ §Б4-5 КАНОНОМ (§С8-26) — тринадцатью записями: правила 8 и 10 разложены на
  * два каждое (Р-5, Р-К-76), потому что отбирают их снаружи — по связи и по актору.
  *
- * ЗДЕСЬ ОНИ ЛЕЖАТ ДАННЫМИ, И СХЕМОЙ ИХ НИКТО НЕ РАЗБИРАЕТ. Формы `empty` (правило 6) и `$touched`
- * (правило 11) приезжают в язык E задачей 15 (Р-26, Р-28), и `ruleDefinitionSchema.parse` на всех
- * тринадцати — её дело; до неё пиннится СОСТАВ. Писать правила сейчас в уже существующих формах
- * значило бы подогнать приёмку выразительности под сегодняшний язык, то есть отменить её.
+ * Формы `empty` (правило 6) и `$touched` (правило 11) приехали в язык E задачей 15 (Р-26, Р-28) —
+ * ровно под эти правила, а не наоборот: писать их в формах, которые язык знал раньше, значило бы
+ * подогнать приёмку выразительности под сегодняшний язык, то есть отменить её. Разбор схемой
+ * пиннится здесь же (`rule-fixtures.test.ts`), валидатор и ожидаемые уровни — оценочной областью
+ * сервера (`policy/assign-level.test.ts`).
  */
 export const ASSIGN_LEVEL_RULES = [
   AL('1', 'семья звонит — молча', ASPECT('test/call'), {

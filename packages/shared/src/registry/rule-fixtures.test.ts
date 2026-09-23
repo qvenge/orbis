@@ -33,6 +33,12 @@ describe('§С8-26: одиннадцать правил §Б4-5 каноном',
     expect(new Set(ASSIGN_LEVEL_RULES.map((r) => r.rule.id)).size).toBe(13);
   });
 
+  test('каждое правило §Б4-5 разбирается схемой формы — язык E вырос на empty и $touched', () => {
+    for (const r of ASSIGN_LEVEL_RULES) {
+      expect(`${r.n}: ${ruleDefinitionSchema.safeParse(r.rule).success}`).toBe(`${r.n}: true`);
+    }
+  });
+
   test('каждое правило §Б4-5 — шаблона assign_level и с обязательным when', () => {
     for (const r of ASSIGN_LEVEL_RULES) {
       expect(`${r.n}: ${r.rule.template}/${r.rule.when === undefined}`).toBe(
