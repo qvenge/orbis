@@ -24,7 +24,11 @@ export interface ImplementsIssue {
     | 'UNKNOWN_CONTRACT'
     | 'UNKNOWN_SLOT'
     | 'UNKNOWN_PROPERTY'
-    | 'REQUIRED_SLOT_UNBOUND';
+    | 'REQUIRED_SLOT_UNBOUND'
+    // Седьмой КОД, а не седьмой `reason` (РЧ-14а-5): нарушена форма карты — два варианта в одном
+    // классе исключительного контракта, — а не адрес привязки. `execErrorOfImplementsIssue`
+    // переводит незнакомый код в `VALIDATION` с `reason: issue.code` без правки перевода.
+    | 'CLASS_NOT_EXCLUSIVE';
   details: Record<string, unknown>;
 }
 
@@ -171,7 +175,8 @@ export function checkImplements(
 }
 
 /**
- * Варианты слота-статуса (§Б2-2): отнесены ВСЕ, и только существующие. Р-К-3: у json-свойства
+ * Варианты слота-статуса (§Б2-2): отнесены ВСЕ, и только существующие (у контракта с
+ * `exclusive_classes` — наоборот: не больше одного варианта на класс, полнота снята, РЧ-14а-1). Р-К-3: у json-свойства
  * вариантов в значении нет — статус даёт САМО НАЛИЧИЕ (`orbis/recurrence` есть → шаблон), и
  * отнесение пишется маркерами `present`/`absent`; у boolean — литералы; у select — ключи.
  */
@@ -181,6 +186,21 @@ function variantsOf(prop: PropertyDefinition): readonly (string | boolean)[] | n
   if (t.kind === 'boolean') return [true, false];
   if (t.kind === 'json') return ['present', 'absent'];
   return null; // тип без вариантов на слоте-статусе — это BIND_TYPE, названный выше
+}
+
+/** Классы, на которые в ОДНОМ слоте указывают два и более варианта. Ключ карты — текст варианта. */
+function classesWithTwoVariants(known: ReadonlyMap<string, string>): Map<string, string[]> {
+  const byClass = new Map<string, string[]>();
+  for (const [variant, cls] of known) {
+    const list = byClass.get(cls);
+    if (list === undefined) byClass.set(cls, [variant]);
+    else list.push(variant);
+  }
+  for (const [cls, variants] of [...byClass]) {
+    if (variants.length < 2) byClass.delete(cls);
+    else variants.sort(); // замечание не зависит от порядка строк карты
+  }
+  return byClass;
 }
 
 function checkVariants(
@@ -256,6 +276,16 @@ function checkVariants(
   for (const decl of contract.slots) {
     if (!decl.status) continue;
     const known = mapped.get(decl.name) ?? new Map<string, string>();
+    // ИСКЛЮЧИТЕЛЬНОСТЬ (Р-И-38): обещание контракта проверяется у КАЖДОЙ реализации, включая
+    // привязку с константой `fixed` — вариантов там и так один, но карта могла назвать чужие.
+    if (contract.exclusive_classes) {
+      for (const [cls, variants] of classesWithTwoVariants(known)) {
+        out.push({
+          code: 'CLASS_NOT_EXCLUSIVE',
+          details: { ...base, slot: decl.name, class: cls, variants },
+        });
+      }
+    }
     const propertyId = binding.bind[decl.name];
     if (propertyId === undefined) {
       const fixed = binding.fixed[decl.name];
@@ -295,13 +325,18 @@ function checkVariants(
         });
         continue;
       }
-      if (!known.has(String(variant))) {
+      // ПОЛНОТА — только у контракта БЕЗ исключительности (РЧ-14а-1). У exclusive-контракта вариант
+      // без класса — норма формы: он не состояние этого контракта (§Б2-3). Требовать полноту здесь
+      // значило бы запретить её саму: свободных классов нет, и любое отнесение шестого варианта
+      // немедленно давало бы CLASS_NOT_EXCLUSIVE. Резерв ключей выше остаётся безусловным.
+      if (!contract.exclusive_classes && !known.has(String(variant))) {
         out.push({
           code: 'VARIANT_UNMAPPED',
           details: { ...base, slot: decl.name, propertyId, variant, reason: 'unmapped' },
         });
       }
     }
+    // Отнесение несуществующего варианта — мусор в `value_map` при любом контракте: безусловно.
     for (const variant of known.keys()) {
       if (!domain.has(variant)) {
         out.push({

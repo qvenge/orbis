@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { AspectDeltaVariants } from './bindings';
 import { bindingIndexOf, checkClassMap, checkImplements, entityClassOf } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
+import { contractDefinitionSchema } from './contract-type';
 import { BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from './index';
 import type { AspectDefinition, PropertyDefinition } from './property-type';
 import { aspectDefinitionSchema, aspectImplementsSchema } from './property-type';
@@ -274,6 +275,97 @@ test('VARIANT_UNMAPPED: слот-статус, закрытый констант
       probe(['orbis/due_date'], [{ contract: 'orbis/when', bind: { deadline: 'orbis/due_date' } }]),
     ),
   ).toEqual([]);
+});
+
+describe('exclusive_classes: один вариант на класс, вариант без класса законен (Р-И-38)', () => {
+  // Контракт-проба: слоты как у делегируемости, но свой id — встроенные строки здесь не трогаем.
+  const EXCL = {
+    id: 'orbis/probe-excl',
+    graphId: null,
+    key: 'orbis/probe-excl',
+    label: { ru: 'Проба' },
+    description: { ru: 'Проба' },
+    kind: 'slots' as const,
+    slots: [
+      {
+        name: 'status',
+        type: { kind: 'select' },
+        required: true,
+        label: { ru: 'С' },
+        status: true,
+      },
+    ],
+    classes: [
+      { key: 'queued', label: { ru: 'В очереди' } },
+      { key: 'done', label: { ru: 'Сделано' } },
+    ],
+    sets: {},
+    exclusive_classes: true,
+    module: null,
+    rank: 99,
+  };
+  const regExcl = {
+    properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+    contracts: new Map(
+      [...BUILTIN_CONTRACT_DEFS, contractDefinitionSchema.parse(EXCL)].map((c) => [c.id, c]),
+    ),
+  };
+  const bound = (value_map: unknown[]) =>
+    checkImplements(
+      probe(
+        ['orbis/task_status'],
+        [{ contract: 'orbis/probe-excl', bind: { status: 'orbis/task_status' }, value_map }],
+      ),
+      regExcl,
+    );
+
+  test('варианты без класса замечанием НЕ считаются (вне состояний контракта)', () => {
+    expect(
+      bound([
+        { slot: 'status', variant: 'planned', class: 'queued' },
+        { slot: 'status', variant: 'done', class: 'done' },
+      ]),
+    ).toEqual([]);
+  });
+
+  test('два варианта в одном классе — CLASS_NOT_EXCLUSIVE с перечнем вариантов', () => {
+    expect(
+      bound([
+        { slot: 'status', variant: 'planned', class: 'queued' },
+        { slot: 'status', variant: 'inbox', class: 'queued' },
+        { slot: 'status', variant: 'done', class: 'done' },
+      ]),
+    ).toEqual([
+      {
+        code: 'CLASS_NOT_EXCLUSIVE',
+        details: {
+          aspect: 'user/probe',
+          contract: 'orbis/probe-excl',
+          slot: 'status',
+          class: 'queued',
+          variants: ['inbox', 'planned'],
+        },
+      },
+    ]);
+  });
+
+  test('полнота у НЕ-exclusive контракта осталась строгой (регрессия §Б2-2)', () => {
+    expect(
+      checkImplements(
+        probe(
+          ['orbis/task_status'],
+          [
+            {
+              contract: 'orbis/completable',
+              bind: { status: 'orbis/task_status' },
+              value_map: [{ slot: 'status', variant: 'done', class: 'done' }],
+            },
+          ],
+        ),
+        reg,
+      ).map((i) => i.details.reason),
+    ).toEqual(['unmapped', 'unmapped', 'unmapped', 'unmapped', 'unmapped']);
+  });
 });
 
 const idx = () =>
