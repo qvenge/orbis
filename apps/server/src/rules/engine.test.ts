@@ -15,7 +15,7 @@ import {
   ROLE_DEPENDENCY,
   type RuleDefinitionInput,
 } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { GATE_FIN_ASPECT, GATE_PLAIN_ASPECT, GATE_PROPS } from '../../test/fixtures/gate-aspects';
 import {
   adminDb,
@@ -27,6 +27,7 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute, targetEntityIdsOf, uniqueRuleKeysOf } from '../executor/executor';
@@ -34,6 +35,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
+import { statusPatch } from '../registry/class-write';
 import type { RegistrySnapshot } from '../registry/load';
 import { assertConstraintRules } from './engine';
 
@@ -1489,5 +1491,189 @@ describe('unique_among: края шаблона (задача 12)', () => {
     );
     // Запись без свойства области правило не касается.
     expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
+  });
+});
+
+/**
+ * «Чего ждём» (В-П-8 (в), §Б4-3): две строки каталога на `orbis/task` — `waiting_for` (`on_enter_class`
+ * контрактной формой, `on_leave.unset`) и `waiting_for_only_when_waiting` (`forbidden_when` вне класса
+ * `waiting` контракта `orbis/delegable`). Статус пишется КЛАССОМ (`statusPatch`, как глаголы после
+ * задачи 14а): литералов вариантов в сценариях нет, кроме `cancelled` — у него класса нет вовсе.
+ */
+describe('waiting_for живёт только в ожидании (В-П-8 (в), две строки на orbis/task)', () => {
+  let graph: GraphId;
+  const sink = makeChatJournalSink();
+  beforeAll(async () => {
+    graph = await freshGraph();
+  });
+  const run = (tool: string, input: Record<string, unknown>) =>
+    execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'chat',
+        operations: [{ tool, input }],
+      },
+      { sink },
+    );
+  /** Снимок реестра графа — той же функцией и на той же форме идентичности, что боевые читатели. */
+  const snapshot = () => withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
+  const patch = async (cls: string) =>
+    statusPatch(await snapshot(), 'orbis/task', 'orbis/delegable', cls);
+  /** Колонки строки как они легли в БД (не wire-форма — именно колонки). */
+  async function row(id: string): Promise<{ props: Record<string, unknown>; aspects: string[] }> {
+    const rows = await withIdentity(db, personal(graph), (tx) =>
+      tx
+        .select({ props: entities.props, aspects: entities.aspects })
+        .from(entities)
+        .where(eq(entities.id, id)),
+    );
+    const found = rows[0];
+    if (found === undefined) throw new Error(`строка ${id} не найдена`);
+    return { props: found.props as Record<string, unknown>, aspects: found.aspects };
+  }
+  const ticket = async (cls: string, waitingFor?: string) =>
+    entityOf(
+      await run('entity_create', {
+        title: 'Тикет',
+        tags: [],
+        aspects: ['orbis/task'],
+        props: {
+          ...(await patch(cls)),
+          ...(waitingFor !== undefined && { 'orbis/waiting_for': waitingFor }),
+        },
+      }),
+    );
+
+  test('уход из waiting снимает вопрос — правило on_leave, путь update', async () => {
+    const t = await ticket('waiting', 'нужен доступ к репозиторию');
+    entityOf(await run('entity_update', { id: t.id, props: await patch('queued') }));
+    expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
+  });
+
+  test('ПОРЯДОК ДВИЖКА: waiting → done проходит БЕЗ явного unset', async () => {
+    // T-правило (`on_leave`) снимает поле до стадии 2, C-правило (`forbidden_when`) смотрит на
+    // состояние стадии 4 — и видит запись уже без вопроса. Ровно поэтому глаголы больше не
+    // дописывают `unset`: если бы порядок был обратным, законный переход отклонялся бы.
+    const t = await ticket('waiting', 'ждём ответа владельца');
+    entityOf(await run('entity_update', { id: t.id, props: await patch('done') }));
+    const stored = await row(t.id);
+    expect(stored.props['orbis/waiting_for']).toBeUndefined();
+    expect(stored.props['orbis/completed_at']).toBeDefined(); // правило задачи 4 тем же переходом
+  });
+
+  test('пока тикет ждёт — вопрос живёт', async () => {
+    const t = await ticket('waiting', 'ждём счёт');
+    entityOf(await run('entity_update', { id: t.id, props: { 'orbis/priority': 'high' } }));
+    expect((await row(t.id)).props['orbis/waiting_for']).toBe('ждём счёт');
+  });
+
+  test('вход в waiting вопрос не трогает: у правила нет `set`', async () => {
+    const t = await ticket('queued');
+    entityOf(
+      await run('entity_update', {
+        id: t.id,
+        props: { ...(await patch('waiting')), 'orbis/waiting_for': 'вопрос' },
+      }),
+    );
+    expect((await row(t.id)).props['orbis/waiting_for']).toBe('вопрос');
+  });
+
+  test('вопрос вне ожидания НЕВОЗМОЖЕН: create → INVARIANT waiting_for_only_when_waiting', async () => {
+    const r = await run('entity_create', {
+      title: 'Тикет с чужим хвостом',
+      tags: [],
+      aspects: ['orbis/task'],
+      props: { ...(await patch('in_progress')), 'orbis/waiting_for': 'хвост прошлого чекпойнта' },
+    });
+    expect(refusalOf(r)).toBe('INVARIANT/waiting_for_only_when_waiting');
+  });
+
+  test('дописать вопрос тикету в работе тоже нельзя — путь update', async () => {
+    const t = await ticket('in_progress');
+    const r = await run('entity_update', { id: t.id, props: { 'orbis/waiting_for': 'хвост' } });
+    expect(refusalOf(r)).toBe('INVARIANT/waiting_for_only_when_waiting');
+    expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
+  });
+
+  test('attach — третий путь: замена носителя целиком уводит из ожидания и снимает вопрос', async () => {
+    const t = await ticket('waiting', 'хвост');
+    entityOf(await run('attach_orbis_task', { entity_id: t.id, data: await patch('done') }));
+    expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
+  });
+
+  test('attach с вопросом в data при уходе из ожидания: уход снимает и пришедшее (правило, не замена носителя)', async () => {
+    // Первый attach-тест зелен и без правил: не названное в `data` свойство снимает сама замена
+    // носителя. Здесь вопрос НАЗВАН — снять его может только `on_leave` (фаза 1 смотрит на
+    // состояние, а не на патч); без правила `forbidden_when` отклонил бы запись, без обоих — хвост лёг бы.
+    const t = await ticket('waiting', 'старый вопрос');
+    entityOf(
+      await run('attach_orbis_task', {
+        entity_id: t.id,
+        data: { ...(await patch('done')), 'orbis/waiting_for': 'старый вопрос' },
+      }),
+    );
+    expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
+  });
+
+  test('единственный вариант вне классов (cancelled) вопроса не терпит', async () => {
+    // `cancelled` — ЕДИНСТВЕННЫЙ вариант статуса вне карты классов `orbis/delegable` (Р-К-92 (1);
+    // `inbox` относится к классу `new`): `entityClassOf` → null, `class ∈ waiting` ложно, и запись
+    // с вопросом отклоняется — fail-closed по построению. Статус тут пишется литералом намеренно:
+    // класса у него нет, и `statusPatch` его назвать не может.
+    const r = await run('entity_create', {
+      title: 'Отменён с вопросом',
+      tags: [],
+      aspects: ['orbis/task'],
+      props: { 'orbis/task_status': 'cancelled', 'orbis/waiting_for': 'хвост' },
+    });
+    expect(refusalOf(r)).toBe('INVARIANT/waiting_for_only_when_waiting');
+  });
+
+  /**
+   * СНЯТИЕ НОСИТЕЛЯ — ИМЕНОВАННЫЙ ОСТАТОК (перенос C-3 второй линзы вехи I). Обе строки живут в
+   * области-аспекте `orbis/task`: после `aspects.detach` они записи не касаются, `on_leave` не
+   * исполняется, и вопрос переживает снятие вместе со статусом (Р9). Повторное навешивание правкой
+   * в статус вне ожидания — отказ ЭТОЙ ЖЕ записи с именем свойства (а не молчаливый хвост), навешивание
+   * тулом `attach_orbis_task` — замена носителя целиком, вопрос уходит.
+   */
+  test('detach orbis/task у ждущего тикета: вопрос переживает снятие, правка записи без аспекта проходит', async () => {
+    const t = await ticket('waiting', 'вопрос до снятия');
+    entityOf(await run('entity_update', { id: t.id, aspects: { detach: ['orbis/task'] } }));
+    entityOf(await run('entity_update', { id: t.id, props: { 'orbis/priority': 'high' } }));
+    const stored = await row(t.id);
+    expect(stored.aspects).not.toContain('orbis/task');
+    expect(stored.props['orbis/waiting_for']).toBe('вопрос до снятия');
+  });
+
+  test('повторное навешивание правкой в статус вне ожидания: без unset — INVARIANT с именем свойства, с unset — проходит', async () => {
+    const t = await ticket('waiting', 'вопрос до снятия');
+    entityOf(await run('entity_update', { id: t.id, aspects: { detach: ['orbis/task'] } }));
+    const reattach = {
+      id: t.id,
+      aspects: { attach: ['orbis/task'] },
+      props: await patch('queued'),
+    };
+    const denied = await run('entity_update', reattach);
+    expect(refusalOf(denied)).toBe('INVARIANT/waiting_for_only_when_waiting');
+    // Отказ НАЗЫВАЕТ ВЫХОД: свойство-цель в тексте, `unset` той же записью снимает хвост.
+    expect(denied.ok ? '' : denied.error.message).toContain('orbis/waiting_for');
+    entityOf(await run('entity_update', { ...reattach, unset: ['orbis/waiting_for'] }));
+    expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
+  });
+
+  test('повторное навешивание без смены статуса — тикет снова ждёт, и вопрос законен', async () => {
+    const t = await ticket('waiting', 'вопрос до снятия');
+    entityOf(await run('entity_update', { id: t.id, aspects: { detach: ['orbis/task'] } }));
+    entityOf(await run('entity_update', { id: t.id, aspects: { attach: ['orbis/task'] } }));
+    expect((await row(t.id)).props['orbis/waiting_for']).toBe('вопрос до снятия');
+  });
+
+  test('повторное навешивание attach-тулом в статус вне ожидания: носитель заменён целиком, вопроса нет', async () => {
+    const t = await ticket('waiting', 'вопрос до снятия');
+    entityOf(await run('entity_update', { id: t.id, aspects: { detach: ['orbis/task'] } }));
+    entityOf(await run('attach_orbis_task', { entity_id: t.id, data: await patch('queued') }));
+    expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
   });
 });

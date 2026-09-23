@@ -39,7 +39,6 @@ async function seedRun(
   args: {
     grantId: string;
     ticketStatus: string;
-    ticketWaitingFor?: string;
     lastStepMinutesAgo: number;
     stepSummary: string;
     external: boolean;
@@ -50,7 +49,6 @@ async function seedRun(
     tags: [],
     props: {
       'orbis/task_status': args.ticketStatus,
-      ...(args.ticketWaitingFor !== undefined && { 'orbis/waiting_for': args.ticketWaitingFor }),
       'orbis/executor': 'agent',
       'orbis/grant': args.grantId,
     },
@@ -86,10 +84,11 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
   test('прогон без шагов дольше порога: без external → тикет planned, прогон abandoned; с external → тикет waiting с waiting_for о разборе', async () => {
     const owner = await freshGraph();
     const grantId = await workerGrant(owner, 'подметание');
+    // Хвоста `waiting_for` у тикета в работе нет и быть не может (`waiting_for_only_when_waiting`):
+    // прежняя фикстура «сервер подчистит старый хвост» сеется исполнителем и теперь им отклоняется.
     const clean = await seedRun(owner, {
       grantId,
       ticketStatus: 'in_progress',
-      ticketWaitingFor: 'старый хвост',
       lastStepMinutesAgo: 31,
       stepSummary: 'Прочитал тикет',
       external: false,
@@ -110,9 +109,11 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     });
     expect(swept).toBe(2);
 
-    // Без эффекта — безопасно перезапустить: planned, хвост waiting_for снят
+    // Без эффекта — безопасно перезапустить: planned
     const cleanTask = (await propsOf(owner, clean.ticketId)) as AnyRecord;
     expect(cleanTask['orbis/task_status']).toBe('planned');
+    // Поля нет и быть не может — `waiting_for_only_when_waiting`; подметание его не снимает, а
+    // никогда и не видит.
     expect(cleanTask['orbis/waiting_for']).toBeUndefined();
 
     // Эффект был — человек разбирает остатки: waiting + описание в waiting_for

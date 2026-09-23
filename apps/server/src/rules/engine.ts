@@ -521,7 +521,12 @@ function byCarrierThenId(a: Applicable, b: Applicable): number {
  * ПОСЛЕ патча, поэтому при `aspects.detach` носителя его `on_leave` (и C-правила того же носителя)
  * не исполняются, а значения по Р9 detach переживают. Паритет со снятым кодом: `applyTaskCompletion`
  * гейтился тем же `state.aspects.includes('orbis/task')`; область снята — правило её больше не
- * касается (задача 14 знает это для `waiting_for`).
+ * касается. Для пары «чего ждём» (задача 14, перенос C-3) решение то же, и цена названа: вопрос и
+ * статус переживают снятие `orbis/task`, а повторное навешивание ПРАВКОЙ в статус вне ожидания
+ * отклоняется `waiting_for_only_when_waiting` той же записью (до записи привязки нет — класса нет —
+ * ухода нет) с именем свойства в тексте; выход — `unset` в той же правке, а `attach_orbis_task`
+ * заменяет носитель целиком. Исполнять `on_leave` на снятии значило бы стирать значения на `detach`
+ * вопреки Р9 — и у `task_completed_at` тоже, чего снятый код не делал.
  */
 export async function applyTransitionRules(input: RuleWriteInput): Promise<void> {
   if (input.ctx.internalUndo) return;

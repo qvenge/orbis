@@ -28,6 +28,8 @@ import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { answerPendingQuestion } from '../policy/pending';
+import { effectiveRegistry } from '../registry/cache';
+import { statusPatch } from '../registry/class-write';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
@@ -1009,11 +1011,23 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     });
   });
 
-  test('orbis_finish с may_close=true: тикет done, completed_at проставлен сервером, waiting_for снят', async () => {
+  /** Снимок реестра для `statusPatch` — своей обёртки у этого сьюта нет; форма идентичности — пара (Г-3). */
+  const snapshot = (g: GraphId) => withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+
+  test('orbis_finish с may_close=true: тикет done, completed_at проставлен сервером, вопрос снят правилом', async () => {
     const { ticketId, runId } = await claimed('Работа с правом закрытия', true);
-    // Хвост от прошлого ожидания владельца: уходя из waiting, глагол обязан его снять —
-    // иначе рядом с `done` висел бы незакрытый вопрос
-    await patchTask(ticketId, { 'orbis/waiting_for': 'старый вопрос с чекпойнта' });
+    // Хвост прошлого ожидания ставится ТАМ, ГДЕ он законен: тикет переводится в `waiting` с вопросом
+    // (это и делает `orbis_checkpoint`). Прежняя посылка «вопрос на тикете в работе» невозможна —
+    // её отклоняет `waiting_for_only_when_waiting`, и тест на неё ниже. Итог принимается только у
+    // тикета в работе (предусловие `closeRun`), поэтому владелец возвращает его в работу — и вопрос
+    // снимает уже ЭТОТ переход (правило `waiting` на уходе), а глаголу подчищать нечего.
+    const reg = await snapshot(owner);
+    await patchTask(ticketId, {
+      ...statusPatch(reg, 'orbis/task', 'orbis/delegable', 'waiting'),
+      'orbis/waiting_for': 'старый вопрос с чекпойнта',
+    });
+    await patchTask(ticketId, statusPatch(reg, 'orbis/task', 'orbis/delegable', 'in_progress'));
+    expect(((await propsOf(owner, ticketId)) as AnyRecord)['orbis/waiting_for']).toBeUndefined();
     const f = okResult<FinishResult>(
       await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
         run_id: runId,
@@ -1029,11 +1043,19 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     // идёт с поддельным `T2`, и штамп берёт максимум (§5.2) — сравнение с `iso(T2)` было верно
     // только про `clock()` (Р-И-3).
     expect(task['orbis/completed_at']).toBe((await rowOf(owner, ticketId)).updatedAt);
+    // Поле снято ПРАВИЛОМ каталога `waiting_for` на уходе из класса `waiting`, а не глаголом.
     expect(task['orbis/waiting_for']).toBeUndefined();
 
     const run = (await propsOf(owner, runId)) as AnyRecord;
     expect(run['orbis/run_outcome']).toBe('finished');
     expect(run['orbis/run_report']).toBe('Готово, тикет можно закрывать.');
+  });
+
+  test('вопрос тикету в работе записать нельзя — INVARIANT, а не «подчистим потом»', async () => {
+    const { ticketId } = await claimed('Работа без вопроса', true);
+    await expect(patchTask(ticketId, { 'orbis/waiting_for': 'хвост' })).rejects.toThrow(
+      /INVARIANT.*waiting_for_only_when_waiting/,
+    );
   });
 
   // Проба расхождением колонок (§А1-1): аспект НАЗНАЧЕНИЯ снят, `orbis/may_close: true` в

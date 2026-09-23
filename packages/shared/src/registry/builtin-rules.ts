@@ -68,6 +68,58 @@ export const RULE_TASK_COMPLETED_AT: RuleDefinitionInput = {
 };
 
 /**
+ * Вопрос владельцу живёт ровно столько, сколько тикет ждёт, — ПЕРВАЯ половина (§Б4-3, `on_enter_class`).
+ *
+ * Событие — КОНТРАКТНОЙ формой (решение владельца 20.09): у контракта делегирования `orbis/delegable`
+ * есть собственный класс `waiting`, и правило говорит о СОСТОЯНИИ тикета, а не о варианте свойства.
+ * Литерала `'waiting'` в правиле нет: класс — понятие контракта, вариант решает привязка, и владелец,
+ * переименовавший вариант, правило не ломает (довод В-П-8: значения живут в базе, код требует выкатки).
+ * `set` у правила нет намеренно: вопрос пишет тот, кто его задал (глагол `orbis_checkpoint`, подметание,
+ * владелец), а правило отвечает за уборку при уходе.
+ *
+ * Снятие аспекта `orbis/task` уходом НЕ считается (именованный остаток движка, `applyTransitionRules`):
+ * область правила — аспект, после `detach` правило записи не касается, и вопрос переживает снятие
+ * вместе со статусом (Р9). Повторное навешивание правкой в статус вне ожидания отклоняет вторая строка
+ * пары — той же записью и с именем свойства; `attach_orbis_task` заменяет носитель целиком.
+ */
+export const RULE_TASK_WAITING_FOR: RuleDefinitionInput = {
+  id: 'waiting_for',
+  template: 'on_enter_class',
+  params: {
+    enter: { contract: 'orbis/delegable', slot: 'status', in: ['waiting'] },
+    on_leave: { unset: ['orbis/waiting_for'] },
+  },
+};
+
+/**
+ * ВТОРАЯ половина (В-П-8, вариант (в)): «чего ждём» законно ТОЛЬКО в состоянии «ждёт».
+ *
+ * Одного `on_leave` не хватает: он ловит уход ИЗ ожидания, а хвост мог появиться и мимо него — записью
+ * вопроса тикету в работе. Эта строка закрывает причину, а не следствие: состояние «вопрос есть, а
+ * тикет не ждёт» становится НЕВОЗМОЖНЫМ, и три серверные копии `unset` умирают как уборка того, чего
+ * не бывает. Классов у контракта ПЯТЬ (`new`, `queued`, `in_progress`, `waiting`, `done` — Р-К-92 (1)),
+ * и ни один из четырёх остальных под `class ∈ waiting` не подходит; единственный вариант ВНЕ классов —
+ * `cancelled` (`entityClassOf` даёт `null`), и там вопрос тоже запрещён — fail-closed по построению.
+ *
+ * Узел класса — объект `{class:{contract}}` (`expr/ast.ts:145`), список классов — `{const:[…]}`.
+ * `undo: 'check'` — отнесение по экземпляру (Р-И-2): состояние невозможно, и откат восстанавливает только
+ * то, что было законно записано; снятый код (три копии `unset` на выходах глаголов) под откатом не звался
+ * вовсе, но и инварианта не держал — льготы переносить не с чего.
+ */
+export const RULE_TASK_WAITING_ONLY: RuleDefinitionInput = {
+  id: 'waiting_for_only_when_waiting',
+  template: 'forbidden_when',
+  undo: 'check',
+  when: {
+    op: 'not',
+    args: [
+      { op: 'in', args: [{ class: { contract: 'orbis/delegable' } }, { const: ['waiting'] }] },
+    ],
+  },
+  params: { property: 'orbis/waiting_for' },
+};
+
+/**
  * Уникальность конверта (03-budget §2.1) — СТРОКА каталога, а не код Финансов.
  *
  * `id` = прежний код отказа (Р-К-1): `details.invariant` движка равен id правила, поэтому близнецы
@@ -207,7 +259,7 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
     RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
     RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   ],
-  'orbis/task': [RULE_TASK_COMPLETED_AT],
+  'orbis/task': [RULE_TASK_COMPLETED_AT, RULE_TASK_WAITING_FOR, RULE_TASK_WAITING_ONLY],
   'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER],
   'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
   'orbis/schedule': [RULE_MATERIALIZE],

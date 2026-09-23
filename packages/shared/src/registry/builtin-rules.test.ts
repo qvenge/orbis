@@ -12,6 +12,8 @@ import {
   RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
   RULE_TASK_COMPLETED_AT,
+  RULE_TASK_WAITING_FOR,
+  RULE_TASK_WAITING_ONLY,
 } from './builtin-rules';
 import { ruleDefinitionSchema } from './rule-type';
 
@@ -26,6 +28,9 @@ describe('системные строки каталога правил (§Б4-1
       'financial_requires_occurred_on',
       'financial_recurring_requires_recurrence',
       'task_completed_at',
+      // Задача 14: «чего ждём» — пара строк по классу `waiting` контракта делегирования (В-П-8 (в)).
+      'waiting_for',
+      'waiting_for_only_when_waiting',
       'duplicate_envelope',
       // Задача 13: носители параметров движков. `nearest_ancestor` — то же имя, что во
       // `flags.computed.rule` вычисляемых свойств и в журнале пересчёта (`RULE_NEAREST_ANCESTOR`).
@@ -67,6 +72,8 @@ describe('системные строки каталога правил (§Б4-1
       RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE.undo,
       RULE_TASK_COMPLETED_AT.undo,
       RULE_ENVELOPE_UNIQUE.undo,
-    ]).toEqual(['check', 'check', undefined, 'check']);
+      RULE_TASK_WAITING_FOR.undo,
+      RULE_TASK_WAITING_ONLY.undo,
+    ]).toEqual(['check', 'check', undefined, 'check', undefined, 'check']);
   });
 });

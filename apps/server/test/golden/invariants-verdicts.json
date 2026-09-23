@@ -1051,12 +1051,10 @@
         "orbis/completed_at": null,
         "orbis/waiting_for": "хвост"
       },
-      "verdict": "ok",
-      "writes": {
-        "$updatedAt": "2026-07-04T10:00:00.000Z",
-        "orbis/completed_at": null,
-        "orbis/waiting_for": "хвост"
-      }
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "waiting_for_only_when_waiting",
+      "expectedDiff": "WAITING_FOR_ONLY_WHEN_WAITING"
     },
     {
       "name": "вопрос у отменённого тикета (вариант вне классов делегируемости)",
@@ -1073,12 +1071,10 @@
         "orbis/completed_at": null,
         "orbis/waiting_for": "хвост"
       },
-      "verdict": "ok",
-      "writes": {
-        "$updatedAt": "2026-07-04T10:00:00.000Z",
-        "orbis/completed_at": null,
-        "orbis/waiting_for": "хвост"
-      }
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "waiting_for_only_when_waiting",
+      "expectedDiff": "WAITING_FOR_ONLY_WHEN_WAITING"
     },
     {
       "name": "тикет уходит из ожидания правкой",
@@ -1102,8 +1098,9 @@
       "writes": {
         "$updatedAt": "2026-07-04T10:00:00.001Z",
         "orbis/completed_at": null,
-        "orbis/waiting_for": "вопрос"
-      }
+        "orbis/waiting_for": null
+      },
+      "expectedDiff": "WAITING_FOR_UNSET_ON_LEAVE"
     },
     {
       "name": "тикет: waiting → done правкой без unset",
@@ -1127,8 +1124,9 @@
       "writes": {
         "$updatedAt": "2026-07-04T10:00:00.001Z",
         "orbis/completed_at": "$updatedAt",
-        "orbis/waiting_for": "вопрос"
-      }
+        "orbis/waiting_for": null
+      },
+      "expectedDiff": "WAITING_FOR_UNSET_ON_LEAVE"
     },
     {
       "name": "тикет с вопросом повторно навешивается правкой в planned (вопрос пережил снятие)",
@@ -1160,12 +1158,10 @@
         "orbis/completed_at": null,
         "orbis/waiting_for": "вопрос"
       },
-      "verdict": "ok",
-      "writes": {
-        "$updatedAt": "2026-07-04T10:00:00.002Z",
-        "orbis/completed_at": null,
-        "orbis/waiting_for": "вопрос"
-      }
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "waiting_for_only_when_waiting",
+      "expectedDiff": "WAITING_FOR_REATTACH_OUTSIDE_WAITING"
     },
     {
       "name": "тикет с вопросом повторно навешивается attach-тулом в planned",
@@ -1252,12 +1248,10 @@
         "orbis/completed_at": null,
         "orbis/waiting_for": "хвост"
       },
-      "verdict": "ok",
-      "writes": {
-        "$updatedAt": "2026-07-04T10:00:00.001Z",
-        "orbis/completed_at": null,
-        "orbis/waiting_for": "хвост"
-      }
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "waiting_for_only_when_waiting",
+      "expectedDiff": "C_RULES_ON_EVERY_PROPS_EDIT"
     }
   ]
 }
