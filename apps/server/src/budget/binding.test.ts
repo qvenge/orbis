@@ -4,7 +4,7 @@
 // создании/правке/архивации конверта, уникальность конверта. Реальная БД под
 // withIdentity (RLS enforced), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GraphId } from '@orbis/shared';
+import type { GraphId, RuleDefinition } from '@orbis/shared';
 import { newId, ROLE_ENVELOPE_BINDING } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { GATE_FIN_ASPECT, GATE_FIN_KEY, GATE_PROPS } from '../../test/fixtures/gate-aspects';
@@ -24,6 +24,7 @@ import {
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
+import { dropStaleCarryover, envelopeIdentityOf } from '../executor/normalize';
 import type {
   ActionRecord,
   ExecuteErr,
@@ -34,6 +35,7 @@ import type {
 } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import { budgetContourFor } from '../subscriptions/budget';
 import { selectEnvelope } from './binding';
 import { propOfSlot, SLOT_CATEGORY, SLOT_CURRENCY, SLOT_DATE } from './contour';
@@ -853,6 +855,64 @@ describe('уникальность конверта: (category_ref, currency, pe
     );
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('duplicate_envelope');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Идентичность конверта — параметры строки `duplicate_envelope` (задача 12 Б-2): вторая копия
+// четвёрки (`ENVELOPE_IDENTITY` в `executor/normalize.ts`) снята, `dropStaleCarryover` читает реестр.
+// ---------------------------------------------------------------------------
+describe('идентичность конверта — из параметров правила (задача 12)', () => {
+  test('идентичность конверта берётся из параметров правила, а не из копии списка', async () => {
+    // Тест сверяет ИМЕННО связь читателя с реестром: список — это params правила
+    // `duplicate_envelope` живого снимка после пересева.
+    const user = await freshGraph();
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+    expect(envelopeIdentityOf(reg)).toEqual([
+      'orbis/finance_category',
+      'orbis/currency',
+      'orbis/period_start',
+      'orbis/period_end',
+    ]);
+  });
+
+  test('dropStaleCarryover следует за параметрами: сузь набор правила — смена валюты перенос не снимет', async () => {
+    const user = await freshGraph();
+    const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+    const budget = reg.aspects.get('orbis/budget');
+    if (budget === undefined) throw new Error('в снимке нет orbis/budget');
+    const withRule = (patch: (r: RuleDefinition) => RuleDefinition): RegistrySnapshot => ({
+      ...reg,
+      aspects: new Map(reg.aspects).set('orbis/budget', {
+        ...budget,
+        rules: (budget.rules ?? []).map((r) => (r.id === 'duplicate_envelope' ? patch(r) : r)),
+      }),
+    });
+    const narrowed = withRule((r) =>
+      r.template === 'unique_among' ? { ...r, params: { properties: ['orbis/period_start'] } } : r,
+    );
+    const disabled = withRule((r) => ({ ...r, enabled: false }));
+    const prev = {
+      aspects: ['orbis/budget'],
+      props: {
+        'orbis/finance_category': newId(),
+        'orbis/currency': 'RUB',
+        'orbis/period_start': '2026-07-01',
+        'orbis/period_end': '2026-07-31',
+        'orbis/carryover': '10.00',
+      },
+    };
+    const afterCurrencyChange = (snapshot: RegistrySnapshot) => {
+      const next = {
+        aspects: [...prev.aspects],
+        props: { ...prev.props, 'orbis/currency': 'USD' },
+      };
+      dropStaleCarryover(snapshot, prev, next, new Set(['orbis/currency']));
+      return next.props['orbis/carryover'];
+    };
+    expect(afterCurrencyChange(reg)).toBeUndefined(); // валюта — в четвёрке правила: перенос снят
+    expect(afterCurrencyChange(narrowed)).toBe('10.00'); // в наборе только период: идентичность та же
+    expect(afterCurrencyChange(disabled)).toBe('10.00'); // правило выключено — идентичности нет
   });
 });
 

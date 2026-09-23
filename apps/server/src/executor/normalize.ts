@@ -8,7 +8,12 @@
 // аспект (список `aspects[]`) и какое у неё значение свойства (`props` по id).
 //
 // Условный `occurred_on` и `recurring` уехали строками каталога (§Б4-3, задача 4), туда же — штамп
-// завершения задачи (§3.2, `on_enter_class`); здесь остались нормализации, которым правила не нужны.
+// завершения задачи (§3.2, `on_enter_class`); здесь остались нормализации, которые шаблоном каталога
+// не выражаются. Снятие устаревшего переноса (`dropStaleCarryover`) — именованный остаток §А7-2 кодом,
+// но идентичность конверта оно читает у правила `duplicate_envelope`, а не держит своей копией.
+import { RULE_ENVELOPE_UNIQUE } from '@orbis/shared';
+import type { RegistrySnapshot } from '../registry/load';
+import { rulesOf } from '../registry/rules';
 import type { EntityState } from './props';
 
 /** Теги нормализуются в нижний регистр и дедуплицируются (порядок первого вхождения). */
@@ -33,15 +38,26 @@ export function extractBodyRefs(body: string): string[] {
 const CARRYOVER = 'orbis/carryover';
 
 /**
- * Свойства, задающие ИДЕНТИЧНОСТЬ конверта (03-budget §2.1): по этой четвёрке он уникален,
- * по ней же его находят транзакции. Список тот же, что у `assertEnvelopeUnique`.
+ * Свойства, задающие ИДЕНТИЧНОСТЬ конверта, — параметры строки каталога `duplicate_envelope`
+ * (шаблон `unique_among`, носитель `orbis/budget`): по чему конверт уникален, по тому он и
+ * опознаётся. Вторая копия четвёрки (она жила здесь константой) снята — расходиться с правилом ей
+ * больше негде.
+ *
+ * Правило ищется по ID, а не «первое `unique_among` на конверте»: id уникален на весь снимок
+ * (`RULE_ID_TAKEN`), а второе правило уникальности, которое владелец вправе добавить конверту дельтой
+ * (§Б4-1), идентичность подменять не должно — порядок строк снимка случаен.
+ *
+ * Правила нет или оно выключено (§Б4-4: «отключить» — право владельца) → идентичности НЕТ, и
+ * снимать перенос не по чему: функция отдаёт пустой список. Это не fail-closed-послабление, а прямое
+ * следствие смысла: «устарел ли перенос» — вопрос о смене идентичности, а она задана правилом.
  */
-const ENVELOPE_IDENTITY = [
-  'orbis/finance_category',
-  'orbis/currency',
-  'orbis/period_start',
-  'orbis/period_end',
-] as const;
+export function envelopeIdentityOf(reg: RegistrySnapshot): readonly string[] {
+  for (const { rule } of rulesOf(reg)) {
+    if (rule.id !== RULE_ENVELOPE_UNIQUE.id) continue;
+    return rule.template === 'unique_among' && rule.enabled ? rule.params.properties : [];
+  }
+  return [];
+}
 
 /**
  * Перенос остатка (`orbis/carryover`) не переживает смену идентичности конверта.
@@ -72,17 +88,21 @@ const ENVELOPE_IDENTITY = [
  * (сменить валюту и вернуть обратно — правило сработает на первом шаге); это законно по
  * 03-budget §3.5 (обнулять переносы — его право), а undo возвращает значение.
  *
+ * Что такое «идентичность», решает реестр — `envelopeIdentityOf(reg)`: набор правила уникальности
+ * конверта. Правило выключено — идентичности нет, и перенос не снимается ничем, кроме патча.
+ *
  * Мутирует `next.props`. Внутренний undo его не зовёт: тот восстанавливает зафиксированное
  * состояние дословно, и «поправить» откат значило бы разойтись с журналом.
  */
 export function dropStaleCarryover(
+  reg: RegistrySnapshot,
   prev: EntityState,
   next: EntityState,
   touched: ReadonlySet<string>,
 ): void {
   if (!next.aspects.includes('orbis/budget')) return;
   if (next.props[CARRYOVER] === undefined || touched.has(CARRYOVER)) return;
-  const identityChanged = ENVELOPE_IDENTITY.some(
+  const identityChanged = envelopeIdentityOf(reg).some(
     (id) => !sameScalar(prev.props[id], next.props[id]),
   );
   if (identityChanged) delete next.props[CARRYOVER];

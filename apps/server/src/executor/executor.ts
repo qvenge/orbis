@@ -2707,7 +2707,7 @@ async function normalizeEnvelopeProps(
   // но только тот, которого патч не касался (см. dropStaleCarryover). Считается ПОСЛЕ
   // подстановки валюты: она входит в идентичность, и до подстановки «валюты не было →
   // стала RUB» читалось бы как смена конверта.
-  dropStaleCarryover(before, state, touchedProperties(patch));
+  dropStaleCarryover(ctx.registry, before, state, touchedProperties(patch));
 }
 
 async function prepareRelationCreate(
