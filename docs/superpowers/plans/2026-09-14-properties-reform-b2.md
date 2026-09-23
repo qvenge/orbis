@@ -7925,6 +7925,14 @@ async function deferRoutineUnit(ctx: ToolCallCtx, def: OrbisToolDef, tool: strin
   заменить одной строкой: `if (ctx.source === 'routine' && level !== 'execute') return await hooks.defer('run_action', parsed);`
   — `hooks: RunActionHooks` уже в сигнатуре `runAction` (задача 7, Р-К-67), диспатч передаёт
   `{ defer: (tool, p) => deferRoutineUnit(ctx, pre.def, tool, p) }`; импорта `tools/dispatch` в `run.ts` нет, цикла нет.
+  **Эррата Ф-Б2-18 (ревью задачи 7, обе линзы):** ПЕРЕД `hooks.defer` — пре-чек `routineDeferForbidden` по РЕЗОЛВЛЕННЫМ
+  операциям и фактам `actionCallFacts` (у `runMutation` он стоит отдельно и раньше отложки; `deferRoutineUnit` его не содержит):
+  отказ тем же `FORBIDDEN_LEVEL reason:'routine_untouchable'`, единицы нет. Тест: act-рутина откладывает `postpone_overdue`, в Q —
+  просроченный назначенный тикет (`orbis/task` + `orbis/assignment`) → отказ до отложки (стадия 4 на «Принять» правку `due_date`
+  пропустила бы — назначение не в `touched`). Плюс: сводка карточки explicit действия называет повод (автономия по резолвленным
+  операциям, «архивирует N записей» по `facts.archives`, масштаб), строки `resolved.rows` — в карточку (чат и отложенная);
+  на «Принять» предусловие действия перевычисляется (CAS держит только тронутые свойства); скрытый кап `batch_cap × шагов > 100`
+  через `toOperations` — отказ до постановки.
   Прогон: `cd apps/server && bun test src/tools/dispatch.test.ts` → **PASS** (шаг 2 зелёный).
   Коммит: `feat(pending): отложенная единица действия формой batch_execute с action_id и хешом (Р-8)`
 
