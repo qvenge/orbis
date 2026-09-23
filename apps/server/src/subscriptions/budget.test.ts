@@ -1184,5 +1184,16 @@ describe('prefer во всех половинах Budget (Ф-Б2-25): списо
       both({ ...common, 'orbis/occurred_on': today }, '10.00', '30.00'),
     );
     expect(envById(await overviewOf(g, curMonth), twinEnv.id).spent).toBe('730.00');
+
+    // Предпочтённый аспект без суммы НЕ проваливается к соседу по рангу: у JS-чтения выбранная
+    // привязка одна (строка списка показала бы «0»), и SQL обязан считать так же, а не взять
+    // `orbis/amount` встроенного аспекта (CASE по наличию аспекта, а не COALESCE).
+    await exec(g, 'entity_create', {
+      title: 'Двойная трата без суммы двойника',
+      tags: [],
+      aspects: ['orbis/financial', TWIN_MV],
+      props: { 'orbis/amount': '5.00', ...common, 'orbis/occurred_on': today },
+    });
+    expect(envById(await overviewOf(g, curMonth), twinEnv.id).spent).toBe('730.00');
   });
 });
