@@ -66,6 +66,7 @@ import {
   POSTPONE,
   SENSITIVITY_UNDERDECLARED,
   SENSITIVITY_UNDERDECLARED_ATTACH,
+  UNSET_BY_EXPR_UNDERDECLARED,
 } from './action-seed';
 import { GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS } from './gate-aspects';
 
@@ -983,6 +984,11 @@ const ROW_15: RefusalRow = {
       // Фикс-раунд 1 (I-1): второй факт, который производит графовый шаг, — доверенность рутины.
       name: 'шаг взводит рутину, grants_autonomy не объявлен',
       run: async () => codeOfSync(() => assertAction(GRANTS_AUTONOMY_UNDERDECLARED, actionScope())),
+    },
+    {
+      // Фикс-раунд 2 (N-1): снятие выражением на месте всего `unset` — худший случай, а не «ничего».
+      name: 'весь unset выражением — снятие неизвестного, факты не объявлены',
+      run: async () => codeOfSync(() => assertAction(UNSET_BY_EXPR_UNDERDECLARED, actionScope())),
     },
   ],
 };

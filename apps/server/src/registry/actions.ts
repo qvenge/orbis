@@ -366,9 +366,12 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
  *    `entity_create` и `attach_orbis_routine`, кладущие «вооружённый» набор.
  *
  * ХУДШИЙ СЛУЧАЙ ДЛЯ ПОДСТАНОВКИ (Р-9). Значение `{$expr}` до исполнения неизвестно: маркер в позиции
- * доверенности у create/attach читается как «вооружает» (`act`, непустой список), маркер в `unset` —
- * как снятие НЕИЗВЕСТНОГО свойства, то есть и денежного, и доверенности. У update сама правка ключа
- * доверенности — уже выдача, там худший случай совпадает с буквальным.
+ * доверенности у create/attach читается как «вооружает» (`act`, непустой список). Маркер в `unset` — И
+ * на месте элемента (`unset: [{$expr}]`), И на месте ВСЕГО списка (`unset: {$expr}`, тип позиции
+ * `list<text>`, конверт его пропускает) — снятие НЕИЗВЕСТНЫХ свойств, то есть и денежного, и
+ * доверенности. Читать `unset` только как массив нельзя: маркер-список проходил бы мимо обоих
+ * фактов (фикс-раунд 2, N-1). У update сама правка ключа доверенности — уже выдача, там худший
+ * случай совпадает с буквальным.
  *
  * Адрес свойства во входе — КЛЮЧ (`props`, `unset`, `data` у `attach_*`), привязка же хранит id;
  * перевод — тем же `resolvePropertyRef`, каким исполнитель резолвит патч: у своих свойств key и id
@@ -392,7 +395,7 @@ export function stepFactsOf(reg: RegistrySnapshot, step: ActionStep): readonly S
     ...Object.keys(recordOf(input.data)),
   ];
   const written = addressed.map((k) => resolvePropertyRef(reg, k)?.id ?? k);
-  const unsetUnknown = unset.some(isMarker);
+  const unsetUnknown = isMarker(input.unset) || unset.some(isMarker);
   const out: SensitivityFact[] = [];
   if (unsetUnknown || written.some((p) => money.has(p))) out.push('touches_money');
   if (unsetUnknown || grantsRoutineAutonomy(step.tool, worstCaseAutonomy(step.tool, input))) {
@@ -527,7 +530,7 @@ function* rawExprSites(rawRec: Record<string, unknown> | undefined): Generator<[
     const s = step as Record<string, unknown> | null;
     if (s === null || typeof s !== 'object') continue;
     for (const site of markerSitesOf(s.input)) {
-      yield [`steps.${index}.input.${site.segs.join('.')}.$expr`, site.node];
+      yield [`${inputPath(index, site.segs)}.$expr`, site.node];
     }
   }
 }
@@ -558,6 +561,11 @@ const ENVELOPE_FIELD_TYPES: Readonly<Record<string, ExprType>> = {
   detach: LIST_TEXT,
 };
 const PROPERTY_BAGS: ReadonlySet<string> = new Set(['props', 'data']);
+
+/** Адрес позиции во входе шага: маркер в КОРНЕ `input` — сам `steps.N.input`, без висящей точки. */
+function inputPath(index: number, segs: readonly string[]): string {
+  return segs.length === 0 ? `steps.${index}.input` : `steps.${index}.input.${segs.join('.')}`;
+}
 
 /** Маркер `{$expr}` шаблона входа: путь сегментами от корня `input`, сам маркер и его выражение. */
 interface MarkerSite {
@@ -673,7 +681,7 @@ function assertStepValues(
   reg: RegistrySnapshot,
   exprScope: Omit<ExprScope, 'reg'>,
 ): void {
-  const path = (segs: readonly string[]) => `steps.${index}.input.${segs.join('.')}`;
+  const path = (segs: readonly string[]) => inputPath(index, segs);
   const refuse = (segs: readonly string[], message: string, details: Record<string, unknown>) =>
     bad(
       'ACTION_VALUE_TYPE',

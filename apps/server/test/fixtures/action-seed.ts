@@ -94,6 +94,25 @@ export const GRANTS_AUTONOMY_UNDERDECLARED = {
     },
   ],
 };
+/**
+ * Снятие выражением на месте ВСЕГО `unset` (фикс-раунд 2, N-1): тип позиции `list<text>`, конверт
+ * такой вход пропускает, а какие свойства снимутся — до прогона неизвестно. Худший случай Р-9: и
+ * деньги, и доверенность рутины; декларация без фактов — недообъявлена.
+ */
+export const UNSET_BY_EXPR_UNDERDECLARED = {
+  ...GRANTS_AUTONOMY_UNDERDECLARED,
+  key: 'planner/unset-by-expr',
+  id: 'planner/unset-by-expr',
+  steps: [
+    {
+      tool: 'entity_update',
+      input: {
+        id: { $expr: { ctx: '$self' } },
+        unset: { $expr: { const: ['orbis/allowed_tools'] } },
+      },
+    },
+  ],
+};
 /** Тип подстановки не сходится со свойством-целью: date-параметр в boolean `orbis/planned` (I-2). */
 export const ACTION_VALUE_TYPE_MISMATCH = {
   ...P2F,
@@ -220,6 +239,21 @@ export const ACTION_FIXTURES: readonly {
       key: 'planner/arm-declared',
       id: 'planner/arm-declared',
       sensitivity: ['grants_autonomy'],
+    },
+    verdict: { ok: true },
+  },
+  {
+    name: 'весь unset выражением, факты не объявлены',
+    decl: UNSET_BY_EXPR_UNDERDECLARED,
+    verdict: { ok: false, code: 'SENSITIVITY_UNDERDECLARED' },
+  },
+  {
+    name: 'весь unset выражением, оба факта объявлены (позитив)',
+    decl: {
+      ...UNSET_BY_EXPR_UNDERDECLARED,
+      key: 'planner/unset-declared',
+      id: 'planner/unset-declared',
+      sensitivity: ['touches_money', 'grants_autonomy'],
     },
     verdict: { ok: true },
   },

@@ -9,8 +9,13 @@ import {
   actionDefinitionSchema,
   actionToolName,
   BUILTIN_ACTION_DEFS,
+  type SensitivityFact,
 } from '@orbis/shared';
-import { ACTION_FIXTURES, GRANTS_AUTONOMY_UNDERDECLARED } from '../../test/fixtures/action-seed';
+import {
+  ACTION_FIXTURES,
+  GRANTS_AUTONOMY_UNDERDECLARED,
+  UNSET_BY_EXPR_UNDERDECLARED,
+} from '../../test/fixtures/action-seed';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 // Имена реестровых тулов читаются, а не правятся (tools/* — задача 7): пин рулинга 6-1 обязан
@@ -453,4 +458,30 @@ test('маркер {$expr} с соседним ключом — ACTION_STEP_INPU
     ],
   };
   expect(verdict(junk)).toEqual({ code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' });
+});
+
+// ─────────────── фикс-раунд 2 гейта задачи 6 (N-1) ───────────────
+
+// N-1: маркер на месте ВСЕГО `unset` проходит конверт (позиция `list<text>`, заглушка `[]`), и
+// чтение `unset` только как массива теряло оба факта — `SENSITIVITY_UNDERDECLARED` обходился и по
+// деньгам, и по доверенности. Правило — худший случай Р-9, как у маркера-элемента.
+test('весь unset выражением — снятие неизвестного: оба факта, иначе SENSITIVITY_UNDERDECLARED (N-1)', () => {
+  const facts = (unset: unknown) => [
+    ...stepFactsOf(reg, stepOf('entity_update', { id: SELF, unset })),
+  ];
+  const both: SensitivityFact[] = ['touches_money', 'grants_autonomy'];
+  expect(facts({ $expr: { const: ['orbis/allowed_tools'] } })).toEqual(both);
+  expect(facts({ $expr: { const: ['orbis/amount'] } })).toEqual(both);
+  expect(facts([{ $expr: { const: 'orbis/amount' } }])).toEqual(both);
+  // Пробы ре-ревью дословно: без фактов в декларации — отказ, с обоими — позитив.
+  const underdeclared = { code: 'SENSITIVITY_UNDERDECLARED', reason: undefined };
+  expect(verdict(UNSET_BY_EXPR_UNDERDECLARED)).toEqual(underdeclared);
+  const money = {
+    ...UNSET_BY_EXPR_UNDERDECLARED,
+    steps: [
+      { tool: 'entity_update', input: { id: SELF, unset: { $expr: { const: ['orbis/amount'] } } } },
+    ],
+  };
+  expect(verdict(money)).toEqual(underdeclared);
+  expect(verdict({ ...money, sensitivity: ['touches_money', 'grants_autonomy'] })).toBe('ok');
 });
