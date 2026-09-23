@@ -1,14 +1,12 @@
 // apps/server/src/budget/aggregates.ts
-// ЧИТАЮЩАЯ ЧАСТЬ ЭТОГО ФАЙЛА — ОРАКУЛ СВЕРКИ §С8-15, а не путь прода. Пять обёрток ниже
-// (`budgetOverview`, `budgetAlertCount`, `budgetStatus`, `envelopeForCategory`, `categoryTrend`)
-// с задачи 9 считают ДВИЖКОМ ПОДПИСКИ (`subscriptions/budget.ts`) по декларации
-// `orbis/budget-overview`; `computeOverview` и его помощники остаются рядом ВТОРЫМ МНЕНИЕМ, на
-// котором доказывается «ноль расхождений» — двумя реализациями на ОДНОЙ транзакции. Снос оракула —
-// Б-2 (Р-К-5): убери его до перф-гейта задачи 12, и сверять станет не с чем.
+// ОБЁРТКИ КОНВЕЙЕРА §2.8 НАД ДВИЖКОМ ПОДПИСКИ И ПЕРЕХОД §3.5; второй реализации Overview больше нет
+// (Б-2, Р-32). Пять обёрток ниже (`budgetOverview`, `budgetAlertCount`, `budgetStatus`,
+// `envelopeForCategory`, `categoryTrend`) считают ДВИЖКОМ ПОДПИСКИ (`subscriptions/budget.ts`) по
+// декларации `orbis/budget-overview`; эталон его вывода — снимок `test/golden/budget-engine.json`
+// (§С8-15 «движок == снимок»), и пересдаётся он ЯВНО, разбором расхождения.
 // Переход §3.5 — правило (Р12), а не ведомость; декларация несёт лишь его параметры, и их читают
-// оба читателя перехода — `rolloverCreate` и `rolloverPreview`. Величины прошлого месяца превью с
-// задачи 11 Б-2 берёт у движка (`monthLedgersOf`, ведомости без агрегации дерева), а не у сырых
-// помощников ниже.
+// оба читателя перехода — `rolloverCreate` и `rolloverPreview`. Величины прошлого месяца превью
+// берёт у движка (`monthLedgersOf`, ведомости без агрегации дерева).
 //
 // Агрегаты Budget (Task A6, 03-budget §2, §3.1) — вычисления НА ЛЕТУ поверх графа:
 // spent не хранится (§2.2, глобальное ограничение «никаких материализованных
@@ -29,19 +27,15 @@ import {
   type BudgetSubscription,
   batchAuditMessageId,
   type CategoryTrendPoint,
-  daysInclusive,
   type EnvelopeStatus,
   type GraphId,
-  ROLE_CATEGORY_PARENT,
-  ROLE_ENVELOPE_BINDING,
-  ROLE_INSTANCE_OF,
   type RolloverInput,
   type RolloverPreview,
   type RolloverResult,
 } from '@orbis/shared';
-import { type AnyColumn, and, eq, type SQL, sql } from 'drizzle-orm';
+import { type AnyColumn, eq, type SQL, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { entities, userSettings } from '../db/schema';
+import { userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
@@ -69,49 +63,12 @@ import {
   monthLedgersOf,
 } from '../subscriptions/budget';
 import { builtinSubscription } from '../subscriptions/registry';
-import { toWireEntity } from '../wire';
 import { defaultCurrencyOf } from './binding';
-// Карточки категорий живут в общем доме `budget/categories.ts`: их читают ОБА движка Финансов
-// (оракул и подписка), и две копии разошлись бы иконкой — сверка §С8-15 приняла бы это за
-// расхождение движков. Там же `ownerCategories`: его зовёт движок подписки (`budgetStatusOf`).
+// Карточки категорий живут в общем доме `budget/categories.ts`: их читают движок подписки и
+// переход §3.5 здесь (титулы строк превью и конвертов-преемников), и две копии разошлись бы иконкой.
+// Там же `ownerCategories`: его зовёт движок подписки (`budgetStatusOf`).
 import { type CategoryInfo, categoriesById } from './categories';
-import { decAdd, decCmp, decDivBy, decMulInt, decSub } from './decimal';
-
-// «Конверт-родитель» в агрегатах — РОВНО роль `envelope-binding`, и с 0017 это относится ко
-// всем её читателям сразу: к хуку привязки (`budgetParentsOfMany`), к обоим агрегатам здесь
-// (`spentByEnvelope` и unbudgeted) и к карточке импорта (`unbudgetedOf`).
-//
-// До 0017 множество было ШИРЕ одной роли (`legacyParentRolesSql()`, интервал 7a→0017, §13.7):
-// уникальность `rel_uniq` стояла на ПРОЕКЦИИ роли в снятую колонку `relation_type`, поэтому
-// рядом со связью роли владельца (`subitem` от конверта к транзакции) хук не мог поставить
-// свою `envelope-binding` — и, не считай агрегат такую связь расходом, владелец увидел бы
-// трату в списке, но не в карточке конверта. С уникальностью по `(source, target, role)`
-// такого запрета больше нет: привязка ставится своей ролью всегда, и расширенное множество
-// стало бы вторым мнением о том, что уже сказано ролью (урок C1 Задачи 7a — расхождение
-// множества у двух читателей стоило владельцу двойного счёта денег).
-//
-// Фильтр архива у читателей по-прежнему РАЗНЫЙ (здесь `NOT e.archived` на цели у
-// `spentByEnvelope` и `NOT p.archived` на конверте у unbudgeted, у хука — никакого): это
-// до-реформенное расхождение, запаркованное осознанно (отчёт Задачи 7b §6), и сужение
-// множества ролей его не трогает.
-
-type EntityRow = typeof entities.$inferSelect;
-
-/**
- * Значения строки (§А1-1) — но ТОЛЬКО если аспект-носитель приложен.
- *
- * Признак аспекта здесь не перестраховка, а точный перевод старой формы. Старая карта
- * складывала значение ПОД аспект, поэтому снятие аспекта уносило его из неё целиком; в
- * `props` значение при снятии ОСТАЁТСЯ (Р9: аспект — не владелец поля). Читатель без этого
- * признака считал бы деньги на записи, которая транзакцией быть перестала, — путь живой,
- * его исполняет `unbindOps` (detach `orbis/financial`).
- *
- * Та же оговорка стоит в SQL этого файла: там признак пишется как
- * `'<аспект>' = ANY(<алиас>.aspects)` в WHERE.
- */
-function propsOf(row: EntityRow, aspectId: string): Record<string, unknown> {
-  return row.aspects.includes(aspectId) ? (row.props as Record<string, unknown>) : {};
-}
+import { decAdd } from './decimal';
 
 // Горизонт Coming up и материализации живёт ОДНИМ экземпляром в движке подписки
 // (`subscriptions/budget.ts`, `HORIZON_DAYS`): он подставляет его декларации параметром
@@ -173,441 +130,8 @@ function shiftMonth(month: string, delta: number): string {
   return `${yy}-${mm}`;
 }
 
-// `daysInclusive` живёт в `@orbis/shared` (`date.ts`): календарная арифметика монорепо одна (Р-И-15).
-// Своя копия на `Date.UTC` расходилась бы с civil-алгоритмом на переполнении месяца (докблок `date.ts`).
-
-// ---------------------------------------------------------------------------
-// SQL-блоки агрегатов
-// ---------------------------------------------------------------------------
-
-/**
- * spent ВСЕХ конвертов набора одним запросом (§2.2, бриф A6 — без N+1): факт-расходы
- * (planned=false) детей по relation parent, occurred_on ≤ сегодня, валюта транзакции
- * (coalesce с defaultCurrency) = валюте СВОЕГО конверта (join env — конверты набора
- * могут быть в разных валютах; чужая валюта в spent не входит, §5). Шаблоны recurring
- * (orbis/recurrence) — не операции (§2.8): висящая parent-связь на шаблон
- * (легаси-данные, ручной relation_create) не должна давать двойной счёт с инстансами.
- *
- * У источника (`env`) признак «это конверт» НЕ проверяется — как и до перевода: набор
- * `envelopeIds` вызывающий уже отобрал по аспекту бюджета, и вторая проверка была бы
- * тавтологией. С 0017 она стала тавтологией и по второму основанию: роль
- * `envelope-binding` системная (`created_by: 'system'`), и ставит её только бюджет-хук —
- * от конверта.
- */
-async function spentByEnvelope(
-  tx: Tx,
-  graphId: GraphId,
-  envelopeIds: string[],
-  today: string,
-  defaultCurrency: string,
-): Promise<Map<string, string>> {
-  if (envelopeIds.length === 0) return new Map();
-  const ids = sql.join(
-    envelopeIds.map((id) => sql`${id}`),
-    sql`, `,
-  );
-  const rows = (await tx.execute(sql`
-    SELECT r.source_id AS envelope_id,
-           coalesce(sum((e.props->>'orbis/amount')::numeric), 0)::text AS spent
-    FROM relations r
-    JOIN entities env ON env.id = r.source_id
-    JOIN entities e   ON e.id = r.target_id
-    WHERE r.role = ${ROLE_ENVELOPE_BINDING}
-      AND r.source_id IN (${ids})
-      AND e.graph_id = ${graphId} AND NOT e.archived
-      AND 'orbis/financial' = ANY(e.aspects)
-      AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
-      AND e.props->>'orbis/direction' = 'expense'
-      AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
-      AND (e.props->>'orbis/occurred_on') <= ${today}
-      AND coalesce(e.props->>'orbis/currency', ${defaultCurrency})
-          = coalesce(env.props->>'orbis/currency', ${defaultCurrency})
-    GROUP BY r.source_id
-  `)) as unknown as Array<{ envelope_id: string; spent: string }>;
-  return new Map(rows.map((r) => [r.envelope_id, r.spent]));
-}
-
 function categoryOr(map: Map<string, CategoryInfo>, id: string): CategoryInfo {
   return map.get(id) ?? { id, title: '', icon: null, color: null, spendClass: null };
-}
-
-/**
- * Рёбра дерева категорий (§2.10) — связи роли `category-parent` между category-сущностями.
- *
- * ЗДЕСЬ РОЛЬ СУЖАЕТ, и это названная перемена, а не перевод один-в-один. До реформы дерево
- * категорий собирала любая связь, проецирующаяся в старый `parent`: «часть внутри целого»
- * между двумя категориями считалась деревом наравне с настоящим родством. Реформа завела
- * роли ровно затем, чтобы эти смыслы не путались (§А4-3), и дерево категорий теперь ровно
- * одно — то, которое владелец назвал деревом. Связь `subitem` между категориями остаётся
- * связью, но агрегат родительской карточки её не собирает.
- */
-async function categoryEdges(tx: Tx, graphId: GraphId): Promise<Map<string, string[]>> {
-  const rows = (await tx.execute(sql`
-    SELECT r.source_id, r.target_id FROM relations r
-    JOIN entities s ON s.id = r.source_id
-    JOIN entities t ON t.id = r.target_id
-    WHERE r.role = ${ROLE_CATEGORY_PARENT}
-      AND s.graph_id = ${graphId}
-      AND 'orbis/category' = ANY(s.aspects) AND 'orbis/category' = ANY(t.aspects)
-  `)) as unknown as Array<{ source_id: string; target_id: string }>;
-  const children = new Map<string, string[]>();
-  for (const r of rows) {
-    const list = children.get(r.source_id) ?? [];
-    list.push(r.target_id);
-    children.set(r.source_id, list);
-  }
-  return children;
-}
-
-/** Все потомки категории (рекурсивно, §2.10); visited-set страхует от циклов в данных. */
-function descendantsOf(children: Map<string, string[]>, root: string): Set<string> {
-  const out = new Set<string>();
-  const stack = [...(children.get(root) ?? [])];
-  while (stack.length > 0) {
-    const id = stack.pop() as string;
-    if (out.has(id)) continue;
-    out.add(id);
-    stack.push(...(children.get(id) ?? []));
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Статус конверта (формулы §2.4, фазы §2.9)
-// ---------------------------------------------------------------------------
-
-interface RawEnvelope {
-  row: EntityRow;
-  /** Свойства конверта (§А1-1) — источник limit для тренда и превью rollover. */
-  props: Record<string, unknown>;
-  categoryRef: string;
-  periodStart: string;
-  periodEnd: string;
-  currency: string; // coalesce(budget.currency, defaultCurrency) — валютная граница агрегатов (§5)
-  spent: string; // сырой (без агрегации иерархии) — для alertCount §6.1
-  effectiveLimit: string;
-}
-
-function rawEnvelopeOf(
-  row: EntityRow,
-  spentMap: Map<string, string>,
-  defaultCurrency: string,
-): RawEnvelope | null {
-  const props = propsOf(row, 'orbis/budget');
-  const categoryRef = props['orbis/finance_category'];
-  const periodStart = props['orbis/period_start'];
-  const periodEnd = props['orbis/period_end'];
-  const limit = props['orbis/limit'];
-  if (
-    typeof categoryRef !== 'string' ||
-    typeof periodStart !== 'string' ||
-    typeof periodEnd !== 'string' ||
-    typeof limit !== 'string'
-  ) {
-    return null; // структурно битый конверт не роняет Overview (валидность держит executor)
-  }
-  const carryover = props['orbis/carryover'];
-  const currency = props['orbis/currency'];
-  return {
-    row,
-    props,
-    categoryRef,
-    periodStart,
-    periodEnd,
-    currency: typeof currency === 'string' ? currency : defaultCurrency,
-    spent: decAdd(spentMap.get(row.id) ?? '0', '0'), // нормализация к канону "0.00"
-    effectiveLimit: decAdd(limit, typeof carryover === 'string' ? carryover : '0'),
-  };
-}
-
-function phaseOf(raw: RawEnvelope, today: string): EnvelopeStatus['phase'] {
-  if (today < raw.periodStart) return 'upcoming';
-  if (today > raw.periodEnd) return 'closed';
-  return 'active';
-}
-
-/**
- * Статус конверта из (возможно агрегированных §2.10) spent/effectiveLimit:
- * dailyPace — ТОЛЬКО в активной фазе и при remaining ≥ 0 (§2.4 «—/день», §2.9а/б).
- */
-function statusOf(
-  raw: RawEnvelope,
-  category: CategoryInfo,
-  spent: string,
-  effectiveLimit: string,
-  today: string,
-): EnvelopeStatus {
-  const remaining = decSub(effectiveLimit, spent);
-  const phase = phaseOf(raw, today);
-  const dailyPace =
-    phase === 'active' && decCmp(remaining, '0') >= 0
-      ? decDivBy(remaining, daysInclusive(today, raw.periodEnd))
-      : null;
-  return {
-    envelope: toWireEntity(raw.row),
-    category: {
-      id: category.id,
-      title: category.title,
-      icon: category.icon,
-      color: category.color,
-    },
-    spent,
-    effectiveLimit,
-    remaining,
-    dailyPace,
-    phase,
-  };
-}
-
-/**
- * Порог бейджа §6.1: spent >= 85% × effectiveLimit ⇔ 20·spent >= 17·effectiveLimit.
- * Граница ВКЛЮЧИТЕЛЬНО (sign-off владельца 2026-07-23): совпадает с ⚠-порогом
- * карточки конверта (§3.1) — ровно-85% конверт и оранжевый, и в бейдже.
- */
-function isAlert(spent: string, effectiveLimit: string): boolean {
-  return decCmp(decMulInt(spent, 20), decMulInt(effectiveLimit, 17)) >= 0;
-}
-
-/**
- * Бейдж §6.1: конверты spent >= 85% × effectiveLimit — по СЫРЫМ значениям конверта
- * (бейдж считает конверты, а не карточки-агрегаты §2.10); в фазе upcoming пороги
- * не применяются (§2.9а). Единственное место формулы порога для overview и alertCount.
- */
-function countAlerts(raws: RawEnvelope[], today: string): number {
-  return raws.filter(
-    (raw) => phaseOf(raw, today) !== 'upcoming' && isAlert(raw.spent, raw.effectiveLimit),
-  ).length;
-}
-
-/** Сырые конверты, пересекающие месяц (месячные + произвольные §2.9), со spent §2.2. */
-async function rawEnvelopesOfMonth(
-  tx: Tx,
-  graphId: GraphId,
-  month: string,
-  today: string,
-  defCur: string,
-): Promise<RawEnvelope[]> {
-  const { start, end } = monthRange(month);
-  const envRows = await tx
-    .select()
-    .from(entities)
-    .where(
-      and(
-        eq(entities.graphId, graphId),
-        eq(entities.archived, false),
-        sql`'orbis/budget' = ANY(${entities.aspects})`,
-        sql`${entities.props}->>'orbis/period_start' <= ${end}`,
-        sql`${entities.props}->>'orbis/period_end' >= ${start}`,
-      ),
-    );
-  const spentMap = await spentByEnvelope(
-    tx,
-    graphId,
-    envRows.map((r) => r.id),
-    today,
-    defCur,
-  );
-  return envRows
-    .map((row) => rawEnvelopeOf(row, spentMap, defCur))
-    .filter((r): r is RawEnvelope => r !== null);
-}
-
-// ---------------------------------------------------------------------------
-// Overview (§3.1) — агрегаты одного withIdentity-tx
-// ---------------------------------------------------------------------------
-
-/**
- * ИМЕНОВАННЫЙ ОСТАТОК СРЕЗА Б-1 (правило 5 §С1-4): вторая реализация Overview живёт рядом с
- * подпиской СОЗНАТЕЛЬНО и до среза Б-2.
- *
- * Почему кодом. Приёмка §С8-15 требует «ноль расхождений» движка подписки с сегодняшним
- * Overview по 480 конвертам и всем ведомостям, а перф-гейт §С8-15 — «p95 ≤ 2× оракула в ТОМ ЖЕ
- * прогоне»: число из другого прогона на другой машине сравнивать нечестно. Обе проверки требуют
- * обе реализации рядом; снос оракула обессмысливает перф-сверку среза Б-2, которой не с чем
- * будет сравниться. Дата смерти — Б-2 (решение РП-4 плана, рулинг Р-К-5; владелец может снести
- * раньше — вопрос В-П-2).
- *
- * Overview месяца НА ГОТОВОЙ tx. Экспортируется ради двух потребителей вне роутера: снимка
- * поверхностей (`test/surfaces.ts`) и перф-сверки движка (задачи 9/12) — обеим нужны две
- * реализации на ОДНОЙ транзакции, иначе сравнивались бы два состояния графа. Боевые обёртки
- * (`budgetOverview`, `budgetAlertCount`, `budgetStatus`) с задачи 9 идут через движок подписки,
- * а не сюда; `budgetOverview` остаётся путём с конвейером `preparePeriod`.
- */
-export async function computeOverview(
-  tx: Tx,
-  graphId: GraphId,
-  month: string,
-  today: string,
-): Promise<BudgetOverview> {
-  const defCur = await defaultCurrencyOf(tx, graphId);
-  const { start, end } = monthRange(month);
-  const horizon = addDays(today, HORIZON_DAYS);
-
-  // Конверты, пересекающие месяц (месячные + произвольные §2.9)
-  const raws = await rawEnvelopesOfMonth(tx, graphId, month, today, defCur);
-
-  // Баланс периода (§2.5): факты в [start;end] и ≤ сегодня, валюта периода = дефолтная;
-  // шаблоны recurring (свойство orbis/recurrence) — не операции, исключены
-  const balanceRows = (await tx.execute(sql`
-    SELECT e.props->>'orbis/direction' AS direction,
-           coalesce(sum((e.props->>'orbis/amount')::numeric), 0)::text AS total
-    FROM entities e
-    WHERE e.graph_id = ${graphId} AND NOT e.archived
-      AND 'orbis/financial' = ANY(e.aspects)
-      AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
-      AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
-      AND e.props->>'orbis/occurred_on' >= ${start}
-      AND e.props->>'orbis/occurred_on' <= ${end}
-      AND e.props->>'orbis/occurred_on' <= ${today}
-      AND coalesce(e.props->>'orbis/currency', ${defCur}) = ${defCur}
-    GROUP BY 1
-  `)) as unknown as Array<{ direction: string; total: string }>;
-  const income = decAdd(balanceRows.find((r) => r.direction === 'income')?.total ?? '0', '0');
-  const expense = decAdd(balanceRows.find((r) => r.direction === 'expense')?.total ?? '0', '0');
-
-  // Unbudgeted (§2.3 шаг 5, §3.1): фактические расходы периода БЕЗ budget-parent,
-  // группировка по category_ref; чужая валюта в агрегат не входит (§5)
-  const unbudgetedRows = (await tx.execute(sql`
-    SELECT e.props->>'orbis/finance_category' AS category_id,
-           sum((e.props->>'orbis/amount')::numeric)::text AS total
-    FROM entities e
-    WHERE e.graph_id = ${graphId} AND NOT e.archived
-      AND 'orbis/financial' = ANY(e.aspects)
-      AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
-      AND e.props->>'orbis/direction' = 'expense'
-      AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
-      AND e.props->>'orbis/occurred_on' >= ${start}
-      AND e.props->>'orbis/occurred_on' <= ${end}
-      AND e.props->>'orbis/occurred_on' <= ${today}
-      AND coalesce(e.props->>'orbis/currency', ${defCur}) = ${defCur}
-      AND NOT EXISTS (
-        SELECT 1 FROM relations r
-        JOIN entities p ON p.id = r.source_id
-        WHERE r.target_id = e.id AND r.role = ${ROLE_ENVELOPE_BINDING}
-          AND 'orbis/budget' = ANY(p.aspects) AND NOT p.archived
-      )
-    GROUP BY 1
-    ORDER BY 1
-  `)) as unknown as Array<{ category_id: string; total: string }>;
-
-  // Coming up (§2.8): материализованные recurring-инстансы (роль `instance-of` — дискриминатор)
-  // с planned=true на 14 дней; due-инстансы сегодняшнего дня уже переведены postDue
-  const comingRows = await tx
-    .select()
-    .from(entities)
-    .where(
-      and(
-        eq(entities.graphId, graphId),
-        eq(entities.archived, false),
-        sql`'orbis/financial' = ANY(${entities.aspects})`,
-        sql`coalesce((${entities.props}->>'orbis/planned')::boolean, false)`,
-        sql`${entities.props}->>'orbis/occurred_on' >= ${today}`,
-        sql`${entities.props}->>'orbis/occurred_on' <= ${horizon}`,
-        sql`EXISTS (SELECT 1 FROM relations r
-                    WHERE r.target_id = ${entities.id} AND r.role = ${ROLE_INSTANCE_OF})`,
-      ),
-    );
-
-  // Planned (§2.7): ручные запланированные покупки — planned=true БЕЗ связи `instance-of`
-  // (и не шаблоны); окном месяца не режутся — это список намерений, не агрегат периода
-  const plannedRows = await tx
-    .select()
-    .from(entities)
-    .where(
-      and(
-        eq(entities.graphId, graphId),
-        eq(entities.archived, false),
-        sql`'orbis/financial' = ANY(${entities.aspects})`,
-        sql`coalesce((${entities.props}->>'orbis/planned')::boolean, false)`,
-        sql`${entities.props}->>'orbis/direction' = 'expense'`,
-        notRecurringTemplateSql(entities.aspects, entities.props),
-        sql`NOT EXISTS (SELECT 1 FROM relations r
-                        WHERE r.target_id = ${entities.id} AND r.role = ${ROLE_INSTANCE_OF})`,
-      ),
-    );
-
-  // Карточки категорий одним запросом: конверты + planned + unbudgeted
-  const categoryIds = new Set<string>();
-  for (const raw of raws) categoryIds.add(raw.categoryRef);
-  for (const row of plannedRows) {
-    const ref = propsOf(row, 'orbis/financial')['orbis/finance_category'];
-    if (typeof ref === 'string') categoryIds.add(ref);
-  }
-  for (const r of unbudgetedRows) categoryIds.add(r.category_id);
-  const catMap = await categoriesById(tx, [...categoryIds]);
-
-  // Иерархия §2.10: карточка конверта родительской категории показывает СУММАРНЫЕ
-  // spent/effectiveLimit своих конвертов и конвертов всех дочерних категорий набора.
-  // Агрегация — поверх СЫРЫХ значений (потомки рекурсивно все, двойного счёта нет)
-  // и ТОЛЬКО в валюте родительского конверта (fix round: чужая валюта не искажает
-  // агрегаты, §5 — суммировать RUB- и USD-строки без конверсии нельзя).
-  const edges = await categoryEdges(tx, graphId);
-  const statuses = raws.map((raw) => {
-    let spent = raw.spent;
-    let effectiveLimit = raw.effectiveLimit;
-    const descendants = descendantsOf(edges, raw.categoryRef);
-    if (descendants.size > 0) {
-      for (const other of raws) {
-        if (
-          other !== raw &&
-          descendants.has(other.categoryRef) &&
-          other.currency === raw.currency
-        ) {
-          spent = decAdd(spent, other.spent);
-          effectiveLimit = decAdd(effectiveLimit, other.effectiveLimit);
-        }
-      }
-    }
-    return statusOf(raw, categoryOr(catMap, raw.categoryRef), spent, effectiveLimit, today);
-  });
-
-  // Детерминированный порядок карточек: категория → период → id
-  const sortKey = new Map(
-    raws.map((raw) => [
-      raw.row.id,
-      `${categoryOr(catMap, raw.categoryRef).title}\u0000${raw.periodStart}\u0000${raw.row.id}`,
-    ]),
-  );
-  statuses.sort((a, b) => {
-    const ka = sortKey.get(a.envelope.id) ?? '';
-    const kb = sortKey.get(b.envelope.id) ?? '';
-    return ka < kb ? -1 : ka > kb ? 1 : 0;
-  });
-
-  // Бейдж §6.1 — общий countAlerts (единая формула с budget.alertCount)
-  const alertCount = countAlerts(raws, today);
-
-  const finOf = (row: EntityRow) => propsOf(row, 'orbis/financial');
-  const dateIdSort = (a: EntityRow, b: EntityRow) => {
-    const ka = `${String(finOf(a)['orbis/occurred_on'] ?? '')}\u0000${a.id}`;
-    const kb = `${String(finOf(b)['orbis/occurred_on'] ?? '')}\u0000${b.id}`;
-    return ka < kb ? -1 : ka > kb ? 1 : 0;
-  };
-
-  return {
-    period: { start, end },
-    balance: { income, expense, balance: decSub(income, expense) },
-    envelopes: statuses,
-    comingUp: [...comingRows].sort(dateIdSort).map((row) => ({
-      entity: toWireEntity(row),
-      occurredOn: String(finOf(row)['orbis/occurred_on'] ?? ''),
-      amount: String(finOf(row)['orbis/amount'] ?? '0'),
-      direction: String(finOf(row)['orbis/direction'] ?? ''),
-    })),
-    planned: [...plannedRows].sort(dateIdSort).map((row) => ({
-      entity: toWireEntity(row),
-      amount: String(finOf(row)['orbis/amount'] ?? '0'),
-      categoryTitle: categoryOr(catMap, String(finOf(row)['orbis/finance_category'] ?? '')).title,
-    })),
-    unbudgeted: unbudgetedRows.map((r) => {
-      const c = categoryOr(catMap, r.category_id);
-      return {
-        category: { id: c.id, title: c.title, icon: c.icon },
-        total: decAdd(r.total, '0'),
-      };
-    }),
-    alertCount,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -766,8 +290,8 @@ function decCeilToHundred(amount: string): string {
 
 /**
  * SQL-условие «сущность НЕ шаблон повторения» (§2.8) — общий предикат, а не принадлежность второй
- * реализации Overview: его зовут траты превью переноса ниже (`rolloverPreview`, запрос категорий с
- * тратами без конверта — решение 4 задачи 11 Б-2) и, до сноса ходом 3 той же задачи, она.
+ * реализации Overview (снесена в Б-2, Р-32): его зовут траты превью переноса ниже
+ * (`rolloverPreview`, запрос категорий с тратами без конверта — решение 4 задачи 11 Б-2).
  *
  * Помощник, а не строка по месту, потому что в новой форме это уже не одна проверка на
  * NULL, а ПАРА «аспект приложен И свойство задано»: потерять вторую половину при переписи —

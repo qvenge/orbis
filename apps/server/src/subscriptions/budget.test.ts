@@ -1,9 +1,10 @@
 // apps/server/src/subscriptions/budget.test.ts
-// Движок ведомостей Budget (§Б5-4) против ОРАКУЛА `computeOverview` (§С8-15, Р-К-5): обе реализации
-// считают ОДНУ И ТУ ЖЕ tx, поэтому расхождение здесь — расхождение движков, а не данных.
+// Движок ведомостей Budget (§Б5-4): пины величин, порядка, фаз и порога на живой фикстуре плюс
+// мутационные проверки «ответ зависит от декларации, а не от кода». Второй реализации Overview нет с
+// Б-2 (Р-32): «ноль расхождений» §С8-15 держит снимок вывода движка (`budget-golden.test.ts`, свой мир
+// с прибитым «сегодня»), а этот сьют — пины литералами.
 //
-// Мир — КОПИЯ фикстуры `budget/aggregates.test.ts`: её пины и есть ожидания этого файла, а сверка
-// «ноль расхождений» имеет смысл только на том мире, на котором оракул уже пропинен. Копия, а не
+// Мир — КОПИЯ фикстуры `budget/aggregates.test.ts`: её пины и есть ожидания этого файла. Копия, а не
 // импорт: тест-файл импортировать нельзя — его тесты зарегистрировались бы в этом сьюте.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
@@ -11,7 +12,6 @@ import {
   type BudgetOverview,
   type BudgetSubscription,
   bindingIndexOf,
-  canonicalJson,
   newId,
   ROLE_ENVELOPE_BINDING,
   ROLE_INSTANCE_OF,
@@ -28,7 +28,7 @@ import {
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
-import { budgetOverview, computeOverview, rolloverCreate } from '../budget/aggregates';
+import { budgetOverview, rolloverCreate } from '../budget/aggregates';
 import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import type { ExecError } from '../errors';
@@ -276,7 +276,7 @@ beforeAll(async () => {
   });
   // Конвейер §2.8 (postDue + материализация окна) движку НЕ принадлежит — он живёт в обёртке
   // (§Б5-4 про ведомости, не про материализацию). Инстансы Coming up кладёт он, и без этих двух
-  // прогонов список был бы пуст у ОБЕИХ реализаций — сверка вышла бы на пустоте.
+  // прогонов список был бы пуст, и пины списков проверяли бы пустоту.
   await budgetOverview(db, personal(userA), curMonth);
   await budgetOverview(db, personal(userA), curMonth);
   // @ts-expect-error bun-types 1.2.7 не объявляет второй аргумент beforeAll — таймаут
@@ -311,8 +311,10 @@ const overviewOf = (user: GraphId, month: string) =>
   engineOn(user, ({ tx, reg, def }) => budgetOverviewOf(tx, user, { month, today }, def, reg));
 
 describe('двухфазный план §Б5-3', () => {
-  test('фаза 1 отдаёт ровно те конверты, что видит оракул', async () => {
-    await engineOn(userA, async ({ tx, def, cctx }) => {
+  test('фаза 1 отдаёт ровно те конверты, что попадают в карточку', async () => {
+    // Тест про ФАЗУ 1 плана §Б5-3 (селектор источника): её id и есть множество карточек Overview,
+    // и расхождение значило бы, что фаза 2 считает не те конверты, которые владелец видит.
+    await engineOn(userA, async ({ tx, reg, def, cctx }) => {
       const plan = planLedgers(def, cctx, {
         month: curMonth,
         today,
@@ -321,10 +323,10 @@ describe('двухфазный план §Б5-3', () => {
         timeZone: cctx.timeZone,
       });
       const rows = (await tx.execute(plan.sources.envelopeIds)) as unknown as Array<{ id: string }>;
-      const oracle = await computeOverview(tx, userA, curMonth, today);
-      expect(rows.map((r) => r.id).sort()).toEqual(
-        oracle.envelopes.map((e) => e.envelope.id).sort(),
-      );
+      const mine = await budgetOverviewOf(tx, userA, { month: curMonth, today }, def, reg);
+      expect(rows.map((r) => r.id).sort()).toEqual(mine.envelopes.map((e) => e.envelope.id).sort());
+      // Сторож: сверка идёт по конвертам месяца, а не по пустоте.
+      expect(rows.length).toBe(7);
     });
   });
 
@@ -485,17 +487,20 @@ describe('область `where` ведомости и списка (B3 I-1)', (
 });
 
 describe('ведомость spent (§2.2, П2 №1)', () => {
-  test('совпадает с оракулом по каждому конверту на одной tx', async () => {
-    await engineOn(userA, async ({ tx, reg, def }) => {
-      const oracle = await computeOverview(tx, userA, curMonth, today);
-      const mine = await budgetOverviewOf(tx, userA, { month: curMonth, today }, def, reg);
-      for (const st of oracle.envelopes) {
-        expect([st.envelope.id, envById(mine, st.envelope.id).spent]).toEqual([
-          st.envelope.id,
-          st.spent,
-        ]);
-      }
-    });
+  test('пин ведомости по каждому конверту месяца литералом (карточка — после rollup §2.10)', async () => {
+    // Был сверкой двух реализаций; стал пином ведомости: значения посчитаны по фикстуре руками.
+    const mine = await overviewOf(userA, curMonth);
+    expect(new Map(mine.envelopes.map((e) => [e.envelope.id, e.spent]))).toEqual(
+      new Map([
+        [envFood, '2680.00'], // 340 + 2340
+        [envUsd, '500.00'],
+        [envHousing, '900.00'],
+        [envEnt, '150.00'],
+        [envParent, '1000.00'], // свой 0 + дочерний RUB 1000
+        [envChild, '1000.00'],
+        [envChildUsd, '100.00'],
+      ]),
+    );
   });
 
   test('доход в spent не входит (класс outflow); чужая валюта — тоже (same_as_envelope)', async () => {
@@ -598,14 +603,22 @@ describe('rollup дерева, порядок карточек, алерты', (
     expect(envById(mine, envChildUsd).spent).toBe('100.00');
   });
 
-  test('порядок карточек = deref(category).title → period_start → id, поэлементно как у оракула', async () => {
-    await engineOn(userA, async ({ tx, reg, def }) => {
-      const oracle = await computeOverview(tx, userA, curMonth, today);
-      const mine = await budgetOverviewOf(tx, userA, { month: curMonth, today }, def, reg);
-      expect(mine.envelopes.map((e) => e.envelope.id)).toEqual(
-        oracle.envelopes.map((e) => e.envelope.id),
-      );
-    });
+  test('порядок карточек = deref(category).title → period_start → id поэлементно (ключ `order_by`)', async () => {
+    // Пин КЛЮЧА, а не второй реализации: ровно та формула, что стоит в декларации (§Б5-4).
+    const mine = await overviewOf(userA, curMonth);
+    const keyOf = (e: BudgetOverview['envelopes'][number]) =>
+      [
+        e.category.title,
+        String((e.envelope.props as Record<string, unknown>)['orbis/period_start']),
+        e.envelope.id,
+      ].join('\u0000');
+    const sorted = [...mine.envelopes].sort((a, b) =>
+      keyOf(a) < keyOf(b) ? -1 : keyOf(a) > keyOf(b) ? 1 : 0,
+    );
+    expect(mine.envelopes.map((e) => e.envelope.id)).toEqual(sorted.map((e) => e.envelope.id));
+    // Сторож третьей части ключа: у RUB- и USD-конверта «Еды» заголовок и начало периода общие,
+    // и порядок между ними решает `id` — без такой пары пин не видел бы потерю хвоста ключа.
+    expect(mine.envelopes.filter((e) => e.category.title === 'Еда')).toHaveLength(2);
   });
 
   test('warn_at 0.85 ВКЛЮЧИТЕЛЬНО: конверт ровно 85 % в бейдже', async () => {
@@ -672,7 +685,7 @@ describe('умолчания реестра в интерпретаторе E (�
   });
 });
 
-describe('списки и сверка с оракулом', () => {
+describe('списки (§Б5-4) и мутационная проверка порога', () => {
   test('coming_up — инстансы (ребро instance-of, side target) окна [today; horizon_end]', async () => {
     const mine = await overviewOf(userA, curMonth);
     // Еженедельный Netflix с завтра: два инстанса попадают в горизонт 14 дней, третий — нет.
@@ -698,19 +711,9 @@ describe('списки и сверка с оракулом', () => {
     expect(mine.planned.some((p) => coming.has(p.entity.id))).toBe(false);
   });
 
-  test('НОЛЬ РАСХОЖДЕНИЙ: budgetOverviewOf ≡ computeOverview на одной tx', async () => {
-    for (const month of [curMonth, nextMonth, '2026-05', '2026-03']) {
-      await engineOn(userA, async ({ tx, reg, def }) => {
-        const oracle = await computeOverview(tx, userA, month, today);
-        const mine = await budgetOverviewOf(tx, userA, { month, today }, def, reg);
-        expect([month, canonicalJson(mine)]).toEqual([month, canonicalJson(oracle)]);
-      });
-    }
-  });
-
   test('мутационная проверка: warn_at "0.99" дельтой владельца МЕНЯЕТ alertCount', async () => {
-    // Сверка «оба дают одно и то же» тавтологична, пока не показано, что ответ ЗАВИСИТ от
-    // декларации: подвинь порог — и движок обязан разойтись с оракулом, у которого порог в коде.
+    // Снимок (`budget-golden.test.ts`) доказывает «движок равен себе вчерашнему», но не то, что ответ
+    // ЗАВИСИТ от декларации: подвинь порог — и бейдж обязан измениться, потому что порог в декларации.
     const def = await engineOn(userA, async ({ def: d }) => d);
     const tighter = { ...def, alerts: { ...def.alerts, warn_at: '0.99' } };
     try {
@@ -730,16 +733,24 @@ describe('списки и сверка с оракулом', () => {
 });
 
 describe('четыре читателя движка помимо карточки', () => {
-  test('alertCount движка = alertCount оракула на всех четырёх месяцах фикстуры', async () => {
+  test('бейдж (`budgetAlertCountOf`) = alertCount карточки на всех четырёх месяцах фикстуры', async () => {
+    // Два читателя одного порога идут РАЗНЫМИ сужениями `runLedgers` (бейдж — без ведомостей периода
+    // и дерева, Ф-Б1-39), и расхождение бейджа с карточкой владелец видит как враньё интерфейса
+    // (§6.1 vs §3.1). Литералы порога — в тестах «warn_at 0.85» и «on_raw» выше.
+    const counts: Array<[string, number, number]> = [];
     for (const month of [curMonth, nextMonth, '2026-05', '2026-03']) {
       await engineOn(userA, async ({ tx, reg, def }) => {
-        const oracle = await computeOverview(tx, userA, month, today);
-        expect([month, await budgetAlertCountOf(tx, userA, { month, today }, def, reg)]).toEqual([
+        const card = await budgetOverviewOf(tx, userA, { month, today }, def, reg);
+        counts.push([
           month,
-          oracle.alertCount,
+          await budgetAlertCountOf(tx, userA, { month, today }, def, reg),
+          card.alertCount,
         ]);
       });
     }
+    expect(counts.map(([m, badge]) => [m, badge])).toEqual(counts.map(([m, , card]) => [m, card]));
+    // Сторож: хотя бы один месяц с ненулевым бейджем — иначе равенство выполнялось бы на нулях.
+    expect(counts.some(([, badge]) => badge > 0)).toBe(true);
   });
 
   test('envelopeForCategory: конверт валюты по умолчанию, значения СЫРЫЕ (без rollup)', async () => {
@@ -834,13 +845,10 @@ describe('«живой конверт» §Б5-4 №5: alive: true (Important-1 �
     return { user, cat, env: env.id };
   }
 
-  test('ребро на АРХИВНЫЙ конверт не прячет трату от Unbudgeted — у ОБЕИХ реализаций', async () => {
+  test('ребро на АРХИВНЫЙ конверт не прячет трату от Unbudgeted', async () => {
     const { user, cat } = await archivedWithEdge('food', '777.00');
-    // Обе реализации на ОДНОЙ tx: расхождение здесь было бы расхождением движков, а не данных.
     await engineOn(user, async ({ tx, reg, def }) => {
-      const oracle = await computeOverview(tx, user, curMonth, today);
       const mine = await budgetOverviewOf(tx, user, { month: curMonth, today }, def, reg);
-      expect(canonicalJson(mine)).toEqual(canonicalJson(oracle));
       expect(mine.envelopes).toHaveLength(0); // архивный конверт карточки не даёт
       expect(mine.unbudgeted.map((u) => [u.category.id, u.total])).toEqual([[cat, '777.00']]);
     });

@@ -90,10 +90,6 @@ export const MODULE_MANIFESTS: Readonly<Record<ModuleId, ModuleManifest>> = {
         where: 'packages/shared/src/fast-path/index.ts',
         why: 'клиентский fast-path денег — код-остаток клиента, гейтится web (Б-3)',
       },
-      {
-        where: 'apps/server/src/budget/aggregates.ts — computeOverview',
-        why: 'Р-К-5: оракул сверки живёт до Б-2',
-      },
     ],
   },
   // Остальные четыре: реестровый состав уже размечен колонкой `module`, непустых фрагментов

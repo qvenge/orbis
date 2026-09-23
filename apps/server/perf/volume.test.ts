@@ -4,41 +4,36 @@
 // же доводу, что `test:perf:graph`: сев идёт десятки секунд, а под параллельной нагрузкой полного
 // прогона медианы уезжают в разы (шапка `perf/perf.test.ts:1-25`).
 // В вехе 0 здесь два сторожа (корпус наполнен; проход селектора равен бюджет-хуку) и БАЗОВАЯ
-// ЛИНИЯ p95 `computeOverview` под ролью приложения; задача 9 добавила сверку «ноль расхождений»
-// (холодный ≡ тёплый ≡ оракул), задача 12 — ГЕЙТ §С8-15 (p95 движка ≤ 2× оракула и ≤ 500 мс на
-// ПРОГРЕТОМ корпусе; холодный записывается, порога не несёт) и трёхзначные EXPLAIN-вердикты по
-// горячим запросам Budget под ролью приложения (§С8-10, Р-14).
+// ЛИНИЯ p95 Overview под ролью приложения; задача 9 Б-1 добавила сверку «ноль расхождений»
+// (холодный ≡ тёплый), задача 12 Б-1 — ГЕЙТ §С8-15 (p95 движка ≤ 500 мс на ПРОГРЕТОМ корпусе;
+// холодный записывается, порога не несёт) и трёхзначные EXPLAIN-вердикты по горячим запросам
+// Budget под ролью приложения (§С8-10, Р-14). С Б-2 второй реализации Overview нет (Р-32, В-10):
+// «ноль расхождений» — сверка обоих путей движка со СНИМКОМ `test/golden/budget-engine.json`
+// (половина `volume`), а половина гейта «≤ 2× второй реализации» ушла вместе с ней — сравнивать
+// не с чем (Р-К-44); остаётся абсолютный порог.
 //
-// ЗАМЕР 08–09.09.2026, машина: Intel Core i7-9750H @ 2,6 ГГц (12 потоков), 16 ГБ, Darwin 25.2.0,
-// локальный Supabase в Docker; прогоны последовательные, ничего параллельного. Корпус:
-// 23 712 сущностей / 480 конвертов / 16 211 привязок (счёт — из `ensureVolumeFixture`, не из
-// головы); сев 76…99 с, прогон файла 39…50 с при реюзе, 124…136 с со свежим севом.
+// ЗАМЕР, машина: Intel Core i7-9750H @ 2,6 ГГц (12 потоков), 16 ГБ, Darwin 25.2.0, локальный
+// Supabase в Docker; прогоны последовательные, ничего параллельного. Корпус: 23 712 сущностей /
+// 480 конвертов / 16 211 привязок (счёт — из `ensureVolumeFixture`, не из головы); сев 76…99 с,
+// прогон файла 39…50 с при реюзе, 124…136 с со свежим севом.
 //
-// ЗДЕСЬ ДИАПАЗОН ПО ВСЕМ ПРОГОНАМ, А НЕ ТОЧКА, и это не осторожность, а замер: первый же
-// независимый прогон (гейт-ревью 09.09) вышел за записанную тогда полосу — оракул p95 291,9 при
-// записанных 173…251. Причина в форме статистики, а не в коде: p95 при n = 20 — ВТОРОЙ максимум
-// выборки, и двух выбросов стенда хватает, чтобы сдвинуть его на десятки процентов при
-// неподвижной медиане. Поэтому медиана стоит рядом с каждым p95.
+// ЗДЕСЬ ДИАПАЗОН ПО ВСЕМ ПРОГОНАМ, А НЕ ТОЧКА, и это не осторожность, а замер: p95 при n = 20 —
+// ВТОРОЙ максимум выборки, и двух выбросов стенда хватает, чтобы сдвинуть его на десятки
+// процентов при неподвижной медиане. Поэтому медиана стоит рядом с каждым p95, а гейтовая серия
+// — N = 40 (Ф-Б1-47; p95 = 38-й из 40, третий сверху).
+//   overview:engine:warm  p95 255…340 мс (медиана 224…276) — прогоны 08.09–23.09 (Б-1, вехи Б-2)
+//   overview:engine:cold  p95 308…499 мс (медиана 294…407) — движок без кэша spent, порога нет
+//   spent-cache:invalidate480 медиана 6,7…10,4 мс           — цена сноса 480 строк кэша
+// Верх обоих диапазонов — пять прогонов 23.09 (задача 11 Б-2) под фоновой нагрузкой машины
+// (load average 3,5…4,4): warm 273…340, cold 397…499.
+// Числа гейтовой серии прогонов Б-1 и вех Б-2 сняты в чередующейся форме замера (две программы
+// вызов за вызовом); с одной программой серия идёт подряд, и дрейф машины снимает прогрев кэша и
+// медиана рядом с p95.
 //
-// ГЕЙТОВЫЕ СЕРИИ — с 09.09 чередующиеся, N = 40 на сторону (Ф-Б1-47; p95 = 38-й из 40, третий
-// сверху). Семь прогонов новой формы (пять имплементера 09.09 03:xx + два ре-ревью 03:3x–03:5x):
-//   overview:oracle:warm  p95 210…258 мс (медиана 202…206)
-//   overview:engine:warm  p95 255…293 мс (медиана 241…242)
-//   отношение движок/оракул 1,01…1,36× при пороге 2× (ре-ревью независимо: 1,17× сев, 1,06× реюз)
-// ПРЕЖНЯЯ форма (две серии подряд по 20; девять прогонов 08–09.09) давала НА ТОМ ЖЕ КОДЕ
-// отношение 0,97…1,77×, и разброс шёл от ОРАКУЛА (p95 173…292 при медиане 169…228), а не от
-// движка (p95 265…330 при медиане 241…267): чередование убирает дрейф стенда между сериями.
-//
-// НЕГЕЙТОВЫЕ строки (по-прежнему n = 20, порога не несут):
-//   overview:engine:cold      p95 308…461 мс (медиана 294…392) — движок без кэша spent
-//   spent-cache:invalidate480 медиана 7,2…9,6 мс                — цена сноса 480 строк кэша
-//   volume:overview (0c)      p95 199…289 мс                    — базовая линия задачи 0c
-//
-// ОБА порога §С8-15 ДОСТИГНУТЫ во ВСЕХ прогонах обеих форм. Числа — этой машины и этого корпуса,
-// а не гарантия: увидел хуже записанного — РАСШИРЬ диапазон, а не молчи (дисциплина
-// `perf.test.ts:100-107`, `graph.test.ts:74-88`). Пороги при этом не трогать ни при каких числах:
-// они дословно из спеки, и подкрутка под результат — первое, что ловит тест «пороги дословно из
-// спеки».
+// ПОРОГ §С8-15 ДОСТИГНУТ во ВСЕХ прогонах. Числа — этой машины и этого корпуса, а не гарантия:
+// увидел хуже записанного — РАСШИРЬ диапазон, а не молчи (дисциплина `perf.test.ts:100-107`,
+// `graph.test.ts:74-88`). Порог при этом не трогать ни при каких числах: он дословно из спеки, и
+// подкрутка под результат — первое, что ловит тест «пороги дословно из спеки».
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   type BudgetOverview,
@@ -48,7 +43,6 @@ import {
   ROLE_ENVELOPE_BINDING,
 } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
-import { computeOverview } from '../src/budget/aggregates';
 import { selectEnvelopes } from '../src/budget/binding';
 import { invalidateSpentCache } from '../src/budget/spent-cache';
 import { type Tx, withIdentity } from '../src/db/with-identity';
@@ -92,12 +86,13 @@ const P95_RUNS = 20;
 const GATE_P95_RUNS = 40;
 
 /**
- * Пороги §С8-15 — ДОСЛОВНО из спеки, а не «то, что получилось» (образец `graph.test.ts:63-69`).
+ * Порог §С8-15 — ДОСЛОВНО из спеки, а не «то, что получилось» (образец `graph.test.ts:63-69`).
  *
- * Второй важнее первого: «≤ 500 мс» ловит абсолютную негодность, «≤ 2× оракула» — регрессию
- * относительно сегодняшнего кода, то есть отвечает на вопрос среза «декларация вместо кода не
- * сделала хуже в разы». Оракул мерится ТЕМ ЖЕ прогоном на той же машине (Р-И-26); базовая линия
- * 0c — ориентир, не порог.
+ * «≤ 500 мс» ловит абсолютную негодность. Вторая половина приёмки — «≤ 2× второй реализации в ТОМ
+ * ЖЕ прогоне» — ушла вместе со второй реализацией (Р-32, Р-К-44): сравнивать не с чем, а
+ * относительный порог «не хуже прошлого прогона» потребовал бы истории замеров, которой в срезе
+ * нет. Регрессию ВЫВОДА держит снимок (`test/golden/budget-engine.json`), регрессию ВРЕМЕНИ —
+ * абсолютный порог и диапазон в шапке.
  *
  * Ориентир пробы П2 (`.superpowers/probe/p2/bench-B-indexed.txt`, RUNS=100 WARMUP=20,
  * ИНДЕКСИРОВАННЫЙ прогон — называть обязательно): 272,9 / 231,6 / 174,5 мс; без экспрессионных
@@ -105,27 +100,17 @@ const GATE_P95_RUNS = 40;
  * (миграция среза одна — 0018, Р-И-23), поэтому запас до 500 мс здесь меньше, чем был у пробы;
  * измеренный вход для решения об индексе дают вердикты EXPLAIN ниже.
  */
-const VOLUME_BUDGETS = { overviewP95Ms: 500, ratioToOracle: 2 } as const;
+const VOLUME_BUDGETS = { overviewP95Ms: 500 } as const;
 
 interface Measured {
-  oracleP95: number;
   engineP95: number;
 }
 
 /** Нарушители — СПИСКОМ, а не первым упавшим (образец `graph.test.ts:265/:289`). */
-function gateViolations(
-  m: Measured,
-  budgets: { overviewP95Ms: number; ratioToOracle: number },
-): string[] {
+function gateViolations(m: Measured, budgets: { overviewP95Ms: number }): string[] {
   const out: string[] = [];
   if (m.engineP95 > budgets.overviewP95Ms) {
     out.push(`overview:engine=${m.engineP95.toFixed(0)}ms > ${budgets.overviewP95Ms}ms`);
-  }
-  const ceiling = m.oracleP95 * budgets.ratioToOracle;
-  if (m.engineP95 > ceiling) {
-    out.push(
-      `overview:engine=${m.engineP95.toFixed(0)}ms > ${budgets.ratioToOracle}× оракула (${ceiling.toFixed(0)}ms)`,
-    );
   }
   return out;
 }
@@ -165,7 +150,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Пробы сторожа — не часть корпуса: без уборки счётчик кеша разъедется и следующий прогон
-  // пересеет 23 712 строк. Рёбра и версии уходят каскадом FK (`schema.ts:108/:111/:276-278`),
+  // пересеет 23 712 строк. Сам тест сторожа убирает их за собой (`finally`); здесь — страховка на
+  // случай, если он упал раньше уборки. Рёбра и версии уходят каскадом FK (`schema.ts:108/:111/:276-278`),
   // а вот строки `envelope_spent_cache` КОНВЕРТОВ, в которые пробы попали, — не уходят: их
   // сносит `cleanupVolumeProbes` (Ф-Б1-44). Уборка тут админ-SQL, то есть мимо исполнителя,
   // и кэш о ней узнать неоткуда.
@@ -193,60 +179,60 @@ async function envelopeIdsOf(tx: Tx): Promise<string[]> {
 }
 
 /**
- * Обе реализации — на ОДНОЙ tx и с одним `today`. Реестр и подписка берутся из `beforeAll`.
- * Конвейер §2.8 (`preparePeriod`, `aggregates.ts:614`) не зовётся, и это видно по его сигнатуре:
- * он принимает `Db`, а не `Tx`, и зовётся ДО `withIdentity` (`:643` против `:645`), потому что
- * внутри гоняет `postDueInstances`/`materializeInstances` через `execute()` — в своих
- * транзакциях. Внутрь одной tx он не влезает, к подписке отношения не имеет, а корпус 0c статичен.
+ * Движок на готовой tx с одним `today`. Реестр и подписка берутся из `beforeAll`.
+ * Конвейер §2.8 (`preparePeriod` в `aggregates.ts`) не зовётся, и это видно по его сигнатуре:
+ * он принимает `Db`, а не `Tx`, и зовётся ДО `withIdentity`, потому что внутри гоняет
+ * `postDueInstances`/`materializeInstances` через `execute()` — в своих транзакциях. Внутрь одной
+ * tx он не влезает, к подписке отношения не имеет, а корпус 0c статичен.
  */
-async function overviewPairOn(tx: Tx, month: string) {
-  const oracle = await computeOverview(tx, VOLUME_OWNER_ID, month, VOLUME_TODAY);
-  const engine = await budgetOverviewOf(
-    tx,
-    VOLUME_OWNER_ID,
-    { month, today: VOLUME_TODAY },
-    budgetDef,
-    reg,
-  );
-  return { oracle, engine };
+function overviewOn(tx: Tx, month: string): Promise<BudgetOverview> {
+  return budgetOverviewOf(tx, VOLUME_OWNER_ID, { month, today: VOLUME_TODAY }, budgetDef, reg);
 }
 
+type VolumeSnapshot = { envelopes: Array<Record<string, unknown>> } & Record<string, unknown>;
+
 /**
- * Расхождения — ПОИМЁННО: «не равны» на сорока конвертах и шести ведомостях не говорит, ЧТО
- * разъехалось, а §С8-15 требует ноль расхождений «по всем 480 конвертам и всем ведомостям».
+ * Расхождения со снимком — ПОИМЁННО: «не равны» на сорока конвертах и шести ведомостях не говорит,
+ * ЧТО разъехалось, а §С8-15 требует ноль расхождений «по всем 480 конвертам и всем ведомостям».
+ * Конверты сверяются ПО ПОЗИЦИИ: порядок карточек — часть снимка (`normalizeOverview` нумерует id
+ * по первой встрече), и переставленные конверты — расхождение, а не совпадение по множеству.
  * Сравнение через `canonicalJson` (`aspect-registry.ts:25`): jsonb не хранит порядок ключей, и
  * наивный `JSON.stringify` объявил бы расхождением любое значение, прошедшее через БД.
  */
-function divergencesOf(oracle: BudgetOverview, engine: BudgetOverview, month: string): string[] {
+function divergencesOf(expected: unknown, actual: unknown, month: string): string[] {
+  const exp = expected as VolumeSnapshot;
+  const act = actual as VolumeSnapshot;
   const out: string[] = [];
-  const rest = new Map(engine.envelopes.map((e) => [e.envelope.id, e]));
-  for (const o of oracle.envelopes) {
-    const e = rest.get(o.envelope.id);
-    if (!e) {
-      out.push(`${month} ${o.envelope.id}: конверта нет в выдаче движка`);
+  const n = Math.max(exp.envelopes.length, act.envelopes.length);
+  for (let i = 0; i < n; i++) {
+    const e = exp.envelopes[i];
+    const a = act.envelopes[i];
+    if (e === undefined || a === undefined) {
+      out.push(
+        `${month} конверт #${i}: ${e === undefined ? 'лишний в выдаче движка' : 'нет в выдаче движка'}`,
+      );
       continue;
     }
-    rest.delete(o.envelope.id);
-    for (const f of ['spent', 'effectiveLimit', 'remaining', 'dailyPace', 'phase'] as const) {
-      if (canonicalJson(o[f]) !== canonicalJson(e[f])) {
+    for (const f of [
+      'envelope',
+      'category',
+      'spent',
+      'effectiveLimit',
+      'remaining',
+      'dailyPace',
+      'phase',
+    ]) {
+      if (canonicalJson(e[f]) !== canonicalJson(a[f])) {
         out.push(
-          `${month} ${o.envelope.id}.${f}: оракул ${canonicalJson(o[f])} ≠ движок ${canonicalJson(e[f])}`,
+          `${month} конверт #${i}.${f}: снимок ${canonicalJson(e[f])} ≠ движок ${canonicalJson(a[f])}`,
         );
       }
     }
   }
-  for (const id of rest.keys()) out.push(`${month} ${id}: лишний конверт в выдаче движка`);
-  for (const l of [
-    'period',
-    'balance',
-    'comingUp',
-    'planned',
-    'unbudgeted',
-    'alertCount',
-  ] as const) {
-    if (canonicalJson(oracle[l]) !== canonicalJson(engine[l])) {
+  for (const l of ['period', 'balance', 'comingUp', 'planned', 'unbudgeted', 'alertCount']) {
+    if (canonicalJson(exp[l]) !== canonicalJson(act[l])) {
       out.push(
-        `${month} ведомость ${l}: оракул ${canonicalJson(oracle[l])} ≠ движок ${canonicalJson(engine[l])}`,
+        `${month} ведомость ${l}: снимок ${canonicalJson(exp[l])} ≠ движок ${canonicalJson(act[l])}`,
       );
     }
   }
@@ -286,73 +272,26 @@ async function warmSpentCache(envelopeIds: readonly string[]): Promise<void> {
 }
 
 /**
- * p95 — nearest-rank ⌈0,95·n⌉ и тот же формат печати, что у `measureP95` (`src/test/perf.ts:55-74`).
- * Своя копия нужна ровно из-за чередования ниже: `measureP95` ведёт СВОЙ цикл вокруг ОДНОЙ
- * функции, а гейту нужен один цикл с двумя секундомерами внутри одной транзакции.
+ * Замер движка на ПРОГРЕТОМ корпусе — серия подряд внутри ОДНОЙ открытой tx.
+ *
+ * Прежде гейт мерил две программы ЧЕРЕДУЯСЬ, вызов за вызовом (Ф-Б1-47): относительный порог
+ * иначе мерил дрейф стенда между двумя сериями не меньше, чем разницу реализаций. С одной
+ * программой чередование теряет предмет; дрейф машины снимается прогревом (кэш `spent` и его
+ * статистика — `warmSpentCache`; первый вызов серии печатается отдельным числом и в p95 не входит,
+ * Р8) и медианой, которая печатается рядом с каждым p95.
+ *
+ * Мерится ЧИСТАЯ работа движка внутри уже открытой tx: `BEGIN`/`SET LOCAL ROLE`/`COMMIT` в замер
+ * не входят (тот же довод, что у приёмки §С8-16: «замер — чтение внутри открытой tx»), — так число
+ * сопоставимо с сериями прежней формы, где секундомер тоже стоял внутри транзакции.
  */
-function reportP95(label: string, samples: readonly number[]): number {
-  const sorted = [...samples].sort((a, b) => a - b);
-  const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1] as number;
-  const median = sorted[Math.floor(sorted.length / 2)] as number;
-  console.log(
-    `perf: ${label} p95=${p95.toFixed(1)}ms median=${median.toFixed(1)}ms runs=${samples.length}` +
-      ` samples=[${samples.map((x) => x.toFixed(1)).join(', ')}]`,
-  );
-  return p95;
-}
-
-/**
- * Оракул и движок мерятся ЧЕРЕДУЯСЬ — вызов за вызовом в одной транзакции (Ф-Б1-47), а не двумя
- * сериями подряд.
- *
- * Довод — из девяти прогонов прежней формы (те же, что в шапке): p95 ОРАКУЛА гулял 173…292 мс при медиане 169…228, и
- * отношение движок/оракул выходило 0,97…1,77× НА ОДНОМ И ТОМ ЖЕ коде. То есть относительный порог
- * мерил дрейф стенда между двумя сериями не меньше, чем разницу двух реализаций. Чередование
- * ставит обе программы в одни и те же миллисекунды машины; порог §С8-15 при этом не тронут —
- * лечится ФОРМА замера, а не число.
- *
- * Порядок ВНУТРИ пары тоже чередуется: на чётной итерации первым идёт оракул, на нечётной —
- * движок. Иначе второй вызов пары систематически получал бы от первого прогретый буферный пул, и
- * чередование сняло бы дрейф машины ценой новой, зато постоянной форы одной из сторон.
- *
- * Мерится ЧИСТАЯ работа обеих реализаций внутри уже открытой tx: `BEGIN`/`SET LOCAL ROLE`/`COMMIT`
- * в замер не входят — они одинаковы для обеих и к сравнению двух программ отношения не имеют
- * (тот же довод, что у приёмки §С8-16: «замер — чтение внутри открытой tx»).
- */
-async function measureInterleavedP95(runs: number): Promise<Measured> {
-  const oracle: number[] = [];
-  const engine: number[] = [];
-  for (let i = 0; i < runs; i++) {
-    await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
-      const tickOracle = async () => {
-        const t0 = performance.now();
-        await computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY);
-        oracle.push(performance.now() - t0);
-      };
-      const tickEngine = async () => {
-        const t0 = performance.now();
-        await budgetOverviewOf(
-          tx,
-          VOLUME_OWNER_ID,
-          { month: VOLUME_LAST_MONTH, today: VOLUME_TODAY },
-          budgetDef,
-          reg,
-        );
-        engine.push(performance.now() - t0);
-      };
-      if (i % 2 === 0) {
-        await tickOracle();
-        await tickEngine();
-      } else {
-        await tickEngine();
-        await tickOracle();
-      }
-    });
-  }
-  return {
-    oracleP95: reportP95('overview:oracle:warm', oracle),
-    engineP95: reportP95('overview:engine:warm', engine),
-  };
+async function measureWarmP95(runs: number): Promise<Measured> {
+  return withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
+    const run = () => overviewOn(tx, VOLUME_LAST_MONTH);
+    const t0 = performance.now();
+    await run();
+    console.log(`perf: overview:engine:warm:first ${(performance.now() - t0).toFixed(1)}ms`);
+    return { engineP95: await measureP95('overview:engine:warm', runs, run) };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -522,9 +461,11 @@ function expectTwinServes(twins: readonly Verdict[], rolePlan: string): void {
 }
 
 /**
- * Конверты месяца — запрос СПИСАН с `aggregates.ts:398-414` (`rawEnvelopesOfMonth` приватна, а
- * экспортировать её ради EXPLAIN значило бы править оракул — РП-4 запрещает). Копия привязана к
- * оригиналу сторожем в тесте: она обязана вернуть ровно те же сорок конвертов месяца.
+ * Конверты месяца ФОРМОЙ СЫРОГО SQL — `'orbis/budget' = ANY(aspects)`. Ею по-прежнему пишут сырые
+ * запросы Финансов мимо движка (преемники и траты без конверта в `rolloverPreview`, пречек
+ * `rolloverCreate`, селектор `binding.ts`); прежде ею же отбирала конверты месяца вторая
+ * реализация Overview, снесённая в Б-2 (Р-32), — вердикт по форме остаётся входом решения об
+ * индексах. Сторож в тесте держит состав: копия обязана вернуть ровно сорок конвертов месяца.
  */
 function envelopesOfMonthQuery(period: { start: string; end: string }): SQL {
   return sql`SELECT id FROM entities
@@ -541,7 +482,7 @@ function envelopesOfMonthQuery(period: { start: string; end: string }): SQL {
  * `query/compile-ast.ts:130`), и этой ФОРМОЙ предиката аспекта приложение ходит после Б-1
  * (`subscriptions/budget.ts:308-310`). Копия несёт только предикат аспекта — без проверок обязательных
  * слотов `compileContractPredicate`, так что это вердикт о форме, не о боевом запросе целиком (дрейф
- * оригинала — остаток 12-m-3; сторож «те же 40 конвертов» держит состав). Разница с формой оракула не косметическая: `@>` — операция,
+ * оригинала — остаток 12-m-3; сторож «те же 40 конвертов» держит состав). Разница с формой сырого SQL не косметическая: `@>` — операция,
  * которую GIN по массиву обслуживает, а `= ANY(…)` — scalar-array-op, и её не обслуживает никто.
  * Без вердикта по ЭТОЙ форме вход решения об индексах говорил бы о запросе, которого в бою нет.
  */
@@ -554,12 +495,11 @@ function engineAspectEnvelopesQuery(period: { start: string; end: string }): SQL
 }
 
 /**
- * Доступ к `relations` в `spentByEnvelope` (`aggregates.ts:215-232`) — ровно два предиката, и
- * они решают выбор индекса: роль и `source_id IN (…)`. Фильтры по `entities` не переносятся
- * намеренно: выбор индекса ПО `relations` они не меняют, а джойн с `entities` и предикат
- * шаблонности сделали бы вердикт вердиктом о ДРУГОМ запросе. Сам предикат —
- * `notRecurringTemplateSql` (`aggregates.ts:119`) — остаётся ПРИВАТНОЙ функцией оракула
- * (РП-4/Р-К-38), поэтому в копию не переносится и никуда не экспортируется.
+ * Доступ к `relations` у ведомости `spent` движка (`sumLedgerSql`, ветка `bound_via`,
+ * `subscriptions/budget.ts`) — ровно два предиката, и они решают выбор индекса: роль и множество
+ * `source_id` (у движка `= ANY($ids)`, здесь `IN (…)` — для выбора индекса по `relations` это одно
+ * условие). Фильтры по `entities` не переносятся намеренно: выбор индекса ПО `relations` они не
+ * меняют, а джойн с `entities` и предикаты класса сделали бы вердикт вердиктом о ДРУГОМ запросе.
  *
  * ГЛАВНАЯ ЦЕНА ЭТОГО ЗАПРОСА ПОД РОЛЬЮ — не индекс, а политика. `current_graph_select` на `relations`
  * (`0021`) исполняется ДВУМЯ hashed SubPlan'ами, и каждый — Seq Scan по `entities` на 23 712
@@ -583,8 +523,9 @@ function bindingsOfEnvelopesQuery(envelopeIds: readonly string[]): SQL {
 test('корпус наполнен: гейт меряет данные, а не пустой граф', async () => {
   expect(fixture.envelopes).toBe(VOLUME_ENVELOPES);
   expect(fixture.bindings).toBeGreaterThanOrEqual(VOLUME_MIN_BINDINGS);
+  // Реестр и подписка уже сняты в `beforeAll` — тот же вход, что у замера.
   const overview = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
-    computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY),
+    overviewOn(tx, VOLUME_LAST_MONTH),
   );
   expect(overview.envelopes).toHaveLength(VOLUME_ENVELOPES_PER_MONTH);
   // траты доехали до конвертов — иначе spent мерил бы пустоту (сторож `perf.test.ts:222`)
@@ -605,6 +546,24 @@ test('корпус: 480 конвертов видны под ролью прил
 
 test('Р-К-2: сто движений через исполнитель дают те же привязки, что проход селектора', async () => {
   const probes = volumeProbes();
+  try {
+    await probeBindingsMatchSelector(probes);
+  } finally {
+    // УБОРКА СРАЗУ, а не в `afterAll`: пробы меняют `spent`, баланс и Unbudgeted корпуса, а снимок
+    // `test/golden/budget-engine.json` снят с корпуса БЕЗ них. Порядок тестов файла снимку не
+    // принадлежит (в Bun 1.2.7 тест из `describe` этого файла идёт РАНЬШЕ верхнеуровневых — замер
+    // 23.09, родня Ф-Г-34), и доживи пробы до замера — сверка «меряется тот Overview, что в снимке»
+    // сравнивала бы со снимком другой мир (так и покраснела на первом прогоне хода 3).
+    const admin = adminDb();
+    try {
+      await cleanupVolumeProbes(admin.db);
+    } finally {
+      await admin.client.end();
+    }
+  }
+}, 300_000);
+
+async function probeBindingsMatchSelector(probes: ReturnType<typeof volumeProbes>): Promise<void> {
   // 1. Что говорит проход фикстуры — тем же селектором и по тому же `volumeCombination`,
   //    которым сеялись 16 000+ привязок корпуса.
   const expected = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
@@ -656,28 +615,31 @@ test('Р-К-2: сто движений через исполнитель даю�
   const bound = [...actual.values()].filter((v) => v !== null).length;
   expect(bound).toBeGreaterThan(50);
   expect(bound).toBeLessThan(probes.length);
-}, 300_000);
+}
 
-test('базовая линия: p95 computeOverview под ролью приложения (порога нет — он в задаче 12)', async () => {
+test('базовая линия: p95 budgetOverviewOf под ролью приложения (порога нет — он в перф-гейте ниже)', async () => {
   // Под ролью, а не под админ-DSN: под админом план другой (Р-9a-3, `perf/explain.test.ts`), и
-  // число было бы честным, но не про тот путь, каким ходит владелец.
+  // число было бы честным, но не про тот путь, каким ходит владелец. Меряется вместе с открытием
+  // транзакции — так ходит прод; кэш `spent` здесь в том состоянии, в каком его оставил сев.
   const run = () =>
-    withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
-      computeOverview(tx, VOLUME_OWNER_ID, VOLUME_LAST_MONTH, VOLUME_TODAY),
-    );
+    withIdentity(db, personal(VOLUME_OWNER_ID), (tx) => overviewOn(tx, VOLUME_LAST_MONTH));
   const t0 = performance.now();
   await run(); // холодный прогон печатается отдельным числом (Р8), в p95 не входит
   console.log(`perf: volume:overview:cold ${(performance.now() - t0).toFixed(1)}ms`);
   const p95 = await measureP95('volume:overview', P95_RUNS, run);
   console.log(
-    `perf: базовая линия Overview на 20k — p95 ${p95.toFixed(0)} мс (порог ставит задача 12)`,
+    `perf: базовая линия Overview на 20k — p95 ${p95.toFixed(0)} мс (порог — в перф-гейте §С8-15)`,
   );
   expect(p95).toBeGreaterThan(0);
 }, 900_000);
 
 describe('§С8-15: Budget из подписки на синтетике 20k×40×12 — ноль расхождений', () => {
   /**
-   * Сверка ДВУХПРОХОДНАЯ (Ф-Б1-44): холодный путь движка ≡ тёплый ≡ оракул.
+   * Сверка ДВУХПРОХОДНАЯ (Ф-Б1-44): холодный путь движка ≡ тёплый ≡ снимок.
+   *
+   * Снимок — половина `volume` файла `test/golden/budget-engine.json` (Р-32, В-10): снят движком и в
+   * том же шаге последний раз сверен со второй реализацией Overview, после чего она снесена.
+   * Пересдача — ЯВНАЯ, разбором расхождения, а не записью того, что вышло.
    *
    * Одного прохода мало с тех пор, как ведомость `spent` материализуется (§Б5-5). На свежем
    * севе КАЖДЫЙ конверт читается ровно один раз (у месяца свои сорок), то есть один проход
@@ -690,7 +652,7 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
    * второй обязан вернуть то же самое из строк. Разъедься они — виноват кэш, и это видно
    * прямо здесь, а не на следующем прогоне.
    */
-  test('12 месяцев × 40 конвертов: холодный ≡ тёплый ≡ оракул', async () => {
+  test('12 месяцев × 40 конвертов: холодный ≡ тёплый ≡ снимок', async () => {
     const admin = adminDb();
     try {
       await admin.db.execute(
@@ -701,7 +663,6 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
     }
     const coldDiffs: string[] = [];
     const warmDiffs: string[] = [];
-    const snapshotDiffs: string[] = [];
     for (let k = 0; k < VOLUME_MONTHS; k += 1) {
       const month = volumeMonth(k);
       await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
@@ -709,7 +670,6 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
         const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
         // Часы корпуса ПРИБИТЫ (`VOLUME_TODAY`): даты синтетики выведены из них, и с системным
         // «сегодня» корпус протухал бы каждую полночь.
-        const a = await computeOverview(tx, VOLUME_OWNER_ID, month, VOLUME_TODAY);
         const cold = await budgetOverviewOf(
           tx,
           VOLUME_OWNER_ID,
@@ -726,24 +686,15 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
           def,
           reg,
         );
-        const oracle = canonicalJson(a);
-        if (canonicalJson(cold) !== oracle) coldDiffs.push(month);
-        if (canonicalJson(warm) !== oracle) warmDiffs.push(month);
-        // Снимок `test/golden/budget-engine.json` (половина `volume`) снят этим же тестом и в том же
-        // шаге сверен с оракулом (Р-32, ход 1): с ним сверяются оба пути движка.
         const snapshot = canonicalJson(BUDGET_ENGINE_GOLDEN.volume[month]);
-        if (canonicalJson(volumeSnapshotOf(cold)) !== snapshot) snapshotDiffs.push(`${month}:cold`);
-        if (canonicalJson(volumeSnapshotOf(warm)) !== snapshot) snapshotDiffs.push(`${month}:warm`);
+        if (canonicalJson(volumeSnapshotOf(cold)) !== snapshot) coldDiffs.push(month);
+        if (canonicalJson(volumeSnapshotOf(warm)) !== snapshot) warmDiffs.push(month);
         // Сторож: сверка идёт по ДАННЫМ, а не по пустоте — число из корпуса, не литералом.
-        expect(a.envelopes.length).toBe(VOLUME_ENVELOPES_PER_MONTH);
+        expect(cold.envelopes.length).toBe(VOLUME_ENVELOPES_PER_MONTH);
       });
     }
     // Списки нарушителей, а не первый упавший; порознь — чтобы было видно, ЧЕЙ путь разошёлся.
-    expect({ cold: coldDiffs, warm: warmDiffs, snapshot: snapshotDiffs }).toEqual({
-      cold: [],
-      warm: [],
-      snapshot: [],
-    });
+    expect({ cold: coldDiffs, warm: warmDiffs }).toEqual({ cold: [], warm: [] });
     // И кэш действительно наполнился: иначе «тёплый» был бы вторым холодным, а сверка —
     // тавтологией «движок равен себе».
     const rows = (await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
@@ -756,52 +707,48 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
 
 test('гейт §С8-15: пороги дословно из спеки и они действительно гейтят', () => {
   // Порог, подкрученный под результат, — самый дешёвый способ сделать гейт зелёным, поэтому
-  // оба числа пинятся строкой: правка любого из них красит этот тест первым.
-  expect(`${VOLUME_BUDGETS.overviewP95Ms}/${VOLUME_BUDGETS.ratioToOracle}`).toBe('500/2');
+  // число пинится строкой: его правка красит этот тест первым. Половина «≤ 2×» ушла вместе со
+  // второй реализацией (Р-К-44) — пин держит и то, что она не вернулась молча.
+  expect(Object.values(VOLUME_BUDGETS).join('/')).toBe('500');
   // Мутационная проверка: без неё `expect(...).toEqual([])` в гейте был бы истинен и у функции,
   // которая ВСЕГДА возвращает пустой список, — дефект, из-за которого три проверки
   // `explain.test.ts` оказались тавтологиями (докблок `expectVerdict` там же).
-  expect(gateViolations({ oracleP95: 100, engineP95: 600 }, VOLUME_BUDGETS)).toHaveLength(2);
-  expect(gateViolations({ oracleP95: 100, engineP95: 150 }, VOLUME_BUDGETS)).toEqual([]);
+  expect(gateViolations({ engineP95: 600 }, VOLUME_BUDGETS)).toHaveLength(1);
+  expect(gateViolations({ engineP95: 150 }, VOLUME_BUDGETS)).toEqual([]);
 });
 
-test('сверка и замер — на одной транзакции: движок и оракул дают один Overview', async () => {
+test('замер и сверка со снимком на одной транзакции: меряется тот Overview, что в снимке', async () => {
   // Полная сверка (12 месяцев × 40 конвертов, все ведомости) стоит выше и отвечает за §С8-15
-  // «ноль расхождений». Эта отвечает за смысл ЧИСЛА: без неё p95 сравнивал бы две программы,
-  // про равенство которых известно из соседнего теста, — а он мог отработать на другой tx и
-  // при другом состоянии кэша spent.
-  const diffs = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
-    const { oracle, engine } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
-    return divergencesOf(oracle, engine, VOLUME_LAST_MONTH);
-  });
+  // «ноль расхождений». Эта отвечает за смысл ЧИСЛА: без неё p95 мерил бы программу, про
+  // правильность которой известно из соседнего теста, — а он мог отработать на другой tx и при
+  // другом состоянии кэша spent. Расхождения — поимённо (`divergencesOf`).
+  const diffs = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) =>
+    divergencesOf(
+      BUDGET_ENGINE_GOLDEN.volume[VOLUME_LAST_MONTH],
+      volumeSnapshotOf(await overviewOn(tx, VOLUME_LAST_MONTH)),
+      VOLUME_LAST_MONTH,
+    ),
+  );
   expect(diffs).toEqual([]);
 }, 300_000);
 
-test('перф-гейт §С8-15: p95 движка ≤ 2× оракула и ≤ 500 мс на прогретом корпусе', async () => {
+test('перф-гейт §С8-15: p95 движка ≤ 500 мс на прогретом корпусе', async () => {
   const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) => envelopeIdsOf(tx));
   await warmSpentCache(ids);
 
-  const { oracleP95, engineP95 } = await measureInterleavedP95(GATE_P95_RUNS);
+  const { engineP95 } = await measureWarmP95(GATE_P95_RUNS);
 
   // Строка порога печатается на КАЖДОМ прогоне и для достигнутого тоже: «достигнут» — такой же
-  // факт замера, как «не достигнут» (образец `graph.test.ts:270-279`).
-  for (const [key, ceil] of [
-    // Подписи строятся ИЗ порогов, а не пишутся числом второй раз: разъехавшаяся подпись
-    // («≤ 500 мс» при пороге 100) — первое, что видит читатель лога, и она бы врала.
-    [`overview:engine ≤ ${VOLUME_BUDGETS.overviewP95Ms} мс`, VOLUME_BUDGETS.overviewP95Ms],
-    [
-      `overview:engine ≤ ${VOLUME_BUDGETS.ratioToOracle}× оракула`,
-      oracleP95 * VOLUME_BUDGETS.ratioToOracle,
-    ],
-  ] as const) {
-    console.log(
-      `perf: ${key} — порог §С8-15 ${ceil.toFixed(0)} мс ${
-        engineP95 <= ceil ? 'ДОСТИГНУТ' : 'НЕ достигнут'
-      } (p95 = ${engineP95.toFixed(0)} мс, оракул ${oracleP95.toFixed(0)} мс,` +
-        ` отношение ${(engineP95 / oracleP95).toFixed(2)}×)`,
-    );
-  }
-  expect(gateViolations({ oracleP95, engineP95 }, VOLUME_BUDGETS)).toEqual([]);
+  // факт замера, как «не достигнут» (образец `graph.test.ts:270-279`). Подпись строится ИЗ порога,
+  // а не пишется числом второй раз: разъехавшаяся подпись («≤ 500 мс» при пороге 100) — первое,
+  // что видит читатель лога, и она бы врала.
+  const ceil = VOLUME_BUDGETS.overviewP95Ms;
+  console.log(
+    `perf: overview:engine ≤ ${ceil} мс — порог §С8-15 ${
+      engineP95 <= ceil ? 'ДОСТИГНУТ' : 'НЕ достигнут'
+    } (p95 = ${engineP95.toFixed(0)} мс)`,
+  );
+  expect(gateViolations({ engineP95 }, VOLUME_BUDGETS)).toEqual([]);
 }, 900_000);
 
 test('холодный корпус: p95 без кэша spent записывается (порога не несёт)', async () => {
@@ -835,12 +782,12 @@ test('холодный корпус: p95 без кэша spent записыва�
 
 test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ формах, btree по владельцу RLS-нейтрален', async () => {
   const period = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
-    const { oracle } = await overviewPairOn(tx, VOLUME_LAST_MONTH);
-    return oracle.period; // границы месяца считает сам оракул — копии календаря нет
+    // границы месяца считает сам движок — копии календаря нет
+    return (await overviewOn(tx, VOLUME_LAST_MONTH)).period;
   });
   const q = envelopesOfMonthQuery(period);
-  // Сторож копии: запрос списан с `aggregates.ts:398-414` и без этой строки мог бы разъехаться
-  // с боевым молча — тогда вердикт был бы вердиктом о другом запросе.
+  // Сторож копии: без этой строки запрос мог бы разъехаться с множеством конвертов месяца молча —
+  // тогда вердикт был бы вердиктом о другом запросе.
   const ids = await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => [
     ...((await tx.execute(q)) as unknown as Array<{ id: string }>),
   ]);
@@ -848,12 +795,16 @@ test('EXPLAIN под ролью: GIN недостижим в ОБЕИХ форм
 
   // ВЕРДИКТ снят прогоном 09.09 и записан как есть (Р-К-41: пин, а не предсказание).
   //
-  // Форма ОРАКУЛА (`= ANY(aspects)`): chosen=false usable=false admin=FALSE. Третий флаг здесь
+  // Форма СЫРОГО SQL (`= ANY(aspects)`): chosen=false usable=false admin=FALSE. Третий флаг здесь
   // важнее двух первых — недостижимость НЕ про RLS: `'orbis/budget' = ANY(aspects)` это
   // scalar-array-op, а GIN по массиву обслуживает операции вхождения (`@>`, `&&`). Эту форму не
   // берёт никто и ни под какой ролью, и `enable_seqscan = off` её не спасает.
   expectVerdict(
-    await verdictFor('entities_aspects_gin', q, 'конверты месяца, форма ОРАКУЛА (= ANY(aspects))'),
+    await verdictFor(
+      'entities_aspects_gin',
+      q,
+      'конверты месяца, форма СЫРОГО SQL (= ANY(aspects))',
+    ),
     'chosen=false usable=false admin=false',
   );
 
@@ -907,7 +858,8 @@ test('EXPLAIN под ролью: привязки конвертов обслу�
     const rows = (await tx.execute(q)) as unknown as Array<{ count: string }>;
     // Пробы сторожа Р-К-2 создаёт соседний тест ЧЕРЕЗ ИСПОЛНИТЕЛЬ, и бюджет-хук привязывает их
     // к тем же конвертам корпуса — их вклад считается отдельно, иначе сторож копии сравнивал бы
-    // счёт корпуса со счётом «корпус плюс пробы» и краснел бы на полном прогоне.
+    // счёт корпуса со счётом «корпус плюс пробы». Тест сторожа убирает их за собой, так что вклад
+    // обычно ноль; счёт остаётся страховкой от прогона, упавшего до уборки.
     const probes = (await tx.execute(sql`
       SELECT count(*)::text AS count FROM relations r
        WHERE r.role = ${ROLE_ENVELOPE_BINDING}
@@ -949,7 +901,7 @@ test('EXPLAIN под ролью: привязки конвертов обслу�
 test('сводка EXPLAIN напечатана по всем снятым вердиктам', () => {
   // Список пинится целиком: вердикт, выпавший из прогона (тест переименовали, вызов потеряли),
   // иначе исчез бы из сводки молча, а сводка — это ВЕСЬ отчёт задачи об индексах.
-  // `entities_aspects_gin` стоит ДВАЖДЫ намеренно: две формы одного отбора (оракула и движка)
+  // `entities_aspects_gin` стоит ДВАЖДЫ намеренно: две формы одного отбора (сырого SQL и движка)
   // дают РАЗНЫЕ вердикты, и именно эта пара — главный вход решения (Ф-Б1-48б).
   expect(verdicts.map((v) => v.index).sort()).toEqual(
     [
