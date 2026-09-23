@@ -28,10 +28,12 @@ import {
   mintGraph,
   personal,
   requireEnv,
+  seedCustomAspect,
   truncateAll,
   withRule,
 } from '../../test/helpers';
 import { budgetOverview, rolloverCreate } from '../budget/aggregates';
+import { bindingFor, budgetContourOf } from '../budget/contour';
 import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import type { ExecError } from '../errors';
@@ -1027,11 +1029,160 @@ describe('SLOT_AMBIGUOUS у Budget: без prefer — отказ, с prefer — 
       expect(bindingForEntity(two, 'orbis/envelope', ON, ['orbis/budget'])?.aspectId).toBe(
         'orbis/budget',
       );
+      // Перечень из ДВУХ в порядке ПРОТИВ ранга (у TWIN ранг 900): решает порядок перечня, а не
+      // ранг среди перечисленных (Ф-Б2-25) — и у движка, и у хука записи.
+      const both = [TWIN, 'orbis/budget'];
+      expect(bindingForEntity(two, 'orbis/envelope', ON, both)?.aspectId).toBe(TWIN);
+      const side = budgetContourOf(
+        {
+          ...def,
+          sources: { ...def.sources, envelope: { ...def.sources.envelope, prefer: both } },
+        },
+        two.reg,
+      ).envelope;
+      expect(bindingFor(side, ON)?.aspectId).toBe(TWIN);
+      expect(bindingFor({ ...side, prefer: [] }, ON)?.aspectId).toBe('orbis/budget');
       // Аспект из prefer, которого у записи нет, выбора не делает — отказ остаётся.
       expect(() => bindingForEntity(two, 'orbis/envelope', ON, ['orbis/note'])).toThrow();
       // Перечень приезжает из ДЕКЛАРАЦИИ, а не из кода движка (Р-24).
       expect(def.sources.envelope.prefer).toEqual([]);
       expect(def.sources.movement.prefer).toEqual([]);
     });
+  });
+});
+
+describe('prefer во всех половинах Budget (Ф-Б2-25): список, лимит и spent — из предпочтённого аспекта', () => {
+  const TWIN_MV = 'user/twin-money';
+  const TWIN_ENV = 'user/twin-envelope';
+  /**
+   * Двойники встроенных аспектов с РАНГОМ 900 — позже `orbis/financial`/`orbis/budget` в индексе
+   * привязок, поэтому перечень, ставящий их первыми, идёт ПРОТИВ ранга. Свои у двойника движения —
+   * сумма и КАТЕГОРИЯ: по категории хук выбирает конверт, и разные значения у двух аспектов делают
+   * выбор хука наблюдаемым; прочие слоты — те же свойства, что у встроенного.
+   */
+  const TWIN_MV_ASPECT = {
+    key: TWIN_MV,
+    label: { ru: 'Двойник движения', en: 'Movement twin' },
+    rank: 900,
+    properties: [
+      { key: 'twin_amount', type: { kind: 'decimal' as const } },
+      {
+        key: 'twin_category',
+        type: { kind: 'ref' as const, target: { filter: { aspect: 'orbis/category' } } },
+      },
+    ],
+    carries: ['orbis/direction', 'orbis/occurred_on', 'orbis/currency', 'orbis/planned'],
+    implements: [
+      {
+        contract: 'orbis/money-movement',
+        bind: {
+          amount: 'user/twin_amount',
+          direction: 'orbis/direction',
+          category: 'user/twin_category',
+          date: 'orbis/occurred_on',
+          currency: 'orbis/currency',
+          planned: 'orbis/planned',
+        },
+        value_map: [
+          { slot: 'direction', variant: 'expense', class: 'outflow' },
+          { slot: 'direction', variant: 'income', class: 'inflow' },
+        ],
+      },
+    ],
+  };
+  const TWIN_ENV_ASPECT = {
+    key: TWIN_ENV,
+    label: { ru: 'Двойник конверта', en: 'Envelope twin' },
+    rank: 900,
+    properties: [{ key: 'twin_limit', type: { kind: 'decimal' as const } }],
+    carries: ['orbis/finance_category', 'orbis/currency', 'orbis/period_start', 'orbis/period_end'],
+    implements: [
+      {
+        contract: 'orbis/envelope',
+        bind: {
+          category: 'orbis/finance_category',
+          limit: 'user/twin_limit',
+          currency: 'orbis/currency',
+          period_start: 'orbis/period_start',
+          period_end: 'orbis/period_end',
+        },
+      },
+    ],
+  };
+  const both = (over: Record<string, unknown>, amount: string, twinAmount: string) => ({
+    title: `Двойная трата ${twinAmount}`,
+    tags: [],
+    aspects: ['orbis/financial', TWIN_MV],
+    props: { 'orbis/amount': amount, 'user/twin_amount': twinAmount, ...over },
+  });
+
+  test('без prefer — SLOT_AMBIGUOUS; с prefer против ранга — все величины из одного аспекта', async () => {
+    const g = await freshGraph();
+    await seedOwnerGraph(db, personal(g));
+    await seedCustomAspect(g, TWIN_MV_ASPECT);
+    await seedCustomAspect(g, TWIN_ENV_ASPECT);
+    const food = seedCategoryId(g, 'food');
+    const transport = seedCategoryId(g, 'transport');
+    // Конверт-двойник — категории ДВОЙНИКА движения; конверт еды — категории встроенного аспекта.
+    const twinEnv = await exec(g, 'entity_create', {
+      ...envelope(transport, cmStart, cmEnd, '1000.00', { 'user/twin_limit': '5000.00' }),
+      aspects: ['orbis/budget', TWIN_ENV],
+    });
+    const foodEnv = await exec(g, 'entity_create', envelope(food, cmStart, cmEnd, '2000.00'));
+
+    let caught: ExecError | null = null;
+    try {
+      await overviewOf(g, curMonth);
+    } catch (e) {
+      caught = e as ExecError;
+    }
+    expect(caught?.code).toBe('SLOT_AMBIGUOUS');
+
+    const def = await withIdentity(db, personal(g), async (tx) =>
+      builtinSubscription(await effectiveRegistry(tx, g), BUDGET_SUBSCRIPTION_ID),
+    );
+    const d = def as BudgetSubscription;
+    await withIdentity(db, personal(g), (tx) =>
+      setSubscriptionDelta(tx, g, BUDGET_SUBSCRIPTION_ID, {
+        definition: {
+          ...d,
+          sources: {
+            movement: { ...d.sources.movement, prefer: [TWIN_MV, 'orbis/financial'] },
+            envelope: { ...d.sources.envelope, prefer: [TWIN_ENV, 'orbis/budget'] },
+          },
+        },
+      }),
+    );
+    const common = {
+      'orbis/direction': 'expense',
+      'orbis/finance_category': food,
+      'user/twin_category': transport,
+    };
+    await exec(
+      g,
+      'entity_create',
+      both({ ...common, 'orbis/occurred_on': today }, '100.00', '700.00'),
+    );
+    const planned = await exec(
+      g,
+      'entity_create',
+      both({ ...common, 'orbis/occurred_on': today, 'orbis/planned': true }, '50.00', '300.00'),
+    );
+
+    const first = await overviewOf(g, curMonth);
+    // Лимит — JS-чтение конверта (`bindingForEntity`), spent — SQL-ведомость (`slotExpr`), конверт —
+    // выбор хука (`bindingFor`): все три обязаны смотреть в двойника.
+    expect(envById(first, twinEnv.id).effectiveLimit).toBe('5000.00');
+    expect(envById(first, twinEnv.id).spent).toBe('700.00');
+    expect(envById(first, foodEnv.id).spent).toBe('0.00');
+    expect(first.planned.find((p) => p.entity.id === planned.id)?.amount).toBe('300.00');
+
+    // Инкремент кэша `spent` новой тратой — третий путь того же слота (`spentContributionOf`).
+    await exec(
+      g,
+      'entity_create',
+      both({ ...common, 'orbis/occurred_on': today }, '10.00', '30.00'),
+    );
+    expect(envById(await overviewOf(g, curMonth), twinEnv.id).spent).toBe('730.00');
   });
 });

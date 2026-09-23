@@ -185,19 +185,41 @@ function shiftMonthOf(month: string, delta: number): string {
  * валюта), поэтому приём свой, но каст — общий: `castedExpr` того же реестра, что у Q (второй
  * экземпляр каста разошёлся бы с Q на первой правке типа). Порядок привязок — из `byContract`
  * (ранг аспекта): он уезжает в SQL, значит обязан быть одним и тем же в каждом процессе.
+ *
+ * `prefer` — перечень секции подписки (Ф-Б2-25), тот же, что получает `bindingForEntity`: SQL-половина
+ * движка и JS-половина обязаны читать слот ОДНОГО аспекта, иначе строка списка и лимит карточки шли бы
+ * из предпочтённого аспекта, а `spent` — из первого по рангу. Поэтому перечень — не «ещё одна ступень
+ * COALESCE», а `CASE` по НАЛИЧИЮ аспекта: запись, несущая предпочтённый аспект, берёт ЕГО значение, даже
+ * пустое (у `bindingForEntity` так же — выбранная привязка не проваливается к соседу). Остальные привязки
+ * — прежним COALESCE по рангу в ветке `ELSE`. Пустой перечень — прежний текст SQL байт в байт.
  */
-function slotExpr(slot: string, contract: string, cctx: CompileCtx, row: SQL): SQL {
-  const parts: SQL[] = [];
-  for (const b of bindingsOf(cctx.reg).byContract(contract)) {
+function slotExpr(
+  slot: string,
+  contract: string,
+  cctx: CompileCtx,
+  row: SQL,
+  prefer: readonly string[],
+): SQL {
+  const bindings = bindingsOf(cctx.reg).byContract(contract);
+  const slotValueSql = (b: ResolvedBinding): SQL | undefined => {
     const propertyId = b.bind[slot];
     const type = propertyId === undefined ? undefined : cctx.reg.properties.get(propertyId)?.type;
     const fixed = b.fixed[slot];
-    const value =
-      propertyId !== undefined && type !== undefined
-        ? castedExpr(sql`${row}.props->>${propertyId}`, type)
-        : fixed !== undefined
-          ? sql`${String(fixed)}`
-          : undefined;
+    return propertyId !== undefined && type !== undefined
+      ? castedExpr(sql`${row}.props->>${propertyId}`, type)
+      : fixed !== undefined
+        ? sql`${String(fixed)}`
+        : undefined;
+  };
+  const preferred: ResolvedBinding[] = [];
+  for (const aspectId of prefer) {
+    const b = bindings.find((x) => x.aspectId === aspectId);
+    if (b !== undefined && !preferred.includes(b)) preferred.push(b);
+  }
+  const parts: SQL[] = [];
+  for (const b of bindings) {
+    if (preferred.includes(b)) continue;
+    const value = slotValueSql(b);
     // §Б2-3: привязка без этого слота просто не участвует — это законная частичная привязка.
     if (value !== undefined) {
       parts.push(sql`CASE WHEN ${row}.aspects @> ARRAY[${b.aspectId}]::text[] THEN ${value} END`);
@@ -205,8 +227,18 @@ function slotExpr(slot: string, contract: string, cctx: CompileCtx, row: SQL): S
   }
   // Слот не связан НИ ОДНОЙ привязкой — значения нет, и это NULL, а не отказ: на этом стоит гейт
   // §С8-18 (у аспекта гейта нет ни `currency`, ни `planned`).
-  if (parts.length === 0) return sql`NULL`;
-  return parts.length === 1 ? (parts[0] as SQL) : sql`COALESCE(${sql.join(parts, sql`, `)})`;
+  const byRank =
+    parts.length === 0
+      ? sql`NULL`
+      : parts.length === 1
+        ? (parts[0] as SQL)
+        : sql`COALESCE(${sql.join(parts, sql`, `)})`;
+  if (preferred.length === 0) return byRank;
+  const arms = preferred.map(
+    (b) =>
+      sql`WHEN ${row}.aspects @> ARRAY[${b.aspectId}]::text[] THEN ${slotValueSql(b) ?? sql`NULL`}`,
+  );
+  return sql`CASE ${sql.join(arms, sql` `)} ELSE ${byRank} END`;
 }
 
 /** `ARRAY[$1, $2, …]::uuid[]` — сырое `= ANY($1::uuid[])` с JS-массивом драйвер роняет
@@ -239,9 +271,10 @@ function sumLedgerSql(
   const e = sql.raw('e');
   const mv = def.sources.movement.contract;
   const env = def.sources.envelope.contract;
-  const cur = (row: SQL, contract: string) =>
-    sql`coalesce(${slotExpr('currency', contract, cctx, row)}, ${args.defaultCurrency})`;
-  const value = sql`(${slotExpr(agg.of.slot, mv, cctx, e)})::numeric`;
+  const mvPrefer = def.sources.movement.prefer;
+  const cur = (row: SQL, contract: string, prefer: readonly string[]) =>
+    sql`coalesce(${slotExpr('currency', contract, cctx, row, prefer)}, ${args.defaultCurrency})`;
+  const value = sql`(${slotExpr(agg.of.slot, mv, cctx, e, mvPrefer)})::numeric`;
   const where: SQL[] = [sql`e.graph_id = ${cctx.graphId}`, sql`NOT e.archived`, movement];
   if (agg.where !== undefined) {
     where.push(compileContractPredicate(mv, agg.where, cctx, e));
@@ -251,17 +284,17 @@ function sumLedgerSql(
     // (`date <= $today`), и второй экземпляр того же условия был бы вторым мнением о том, что
     // такое факт, — ровно урок C1 задачи 7a.
     const { start, end } = monthRangeOf(args.month);
-    const date = slotExpr('date', mv, cctx, e);
+    const date = slotExpr('date', mv, cctx, e, mvPrefer);
     where.push(sql`${date} >= ${start}`, sql`${date} <= ${end}`);
   }
   if (agg.currency === 'owner_default_only')
-    where.push(sql`${cur(e, mv)} = ${args.defaultCurrency}`);
+    where.push(sql`${cur(e, mv, mvPrefer)} = ${args.defaultCurrency}`);
   if (agg.bound_via !== undefined) {
     return sql`SELECT r.source_id AS key, coalesce(sum(${value}), 0)::text AS total
       FROM relations r JOIN entities env ON env.id = r.source_id JOIN entities e ON e.id = r.target_id
       WHERE r.role = ${agg.bound_via} AND r.source_id = ANY(${uuidArray(envelopeIds)})
         AND ${sql.join(where, sql` AND `)}
-        AND ${cur(e, mv)} = ${cur(sql.raw('env'), env)}
+        AND ${cur(e, mv, mvPrefer)} = ${cur(sql.raw('env'), env, def.sources.envelope.prefer)}
       GROUP BY r.source_id`;
   }
   if (agg.unbound_via !== undefined) {
@@ -274,7 +307,8 @@ function sumLedgerSql(
         AND ${compileContractPredicate(env, { const: true }, cctx, sql.raw('p'))}
         ${agg.alive ? sql` AND NOT p.archived` : sql``})`);
   }
-  const key = agg.group_by === undefined ? sql`''` : slotExpr(agg.group_by.slot, mv, cctx, e);
+  const key =
+    agg.group_by === undefined ? sql`''` : slotExpr(agg.group_by.slot, mv, cctx, e, mvPrefer);
   return sql`SELECT ${key} AS key, coalesce(sum(${value}), 0)::text AS total FROM entities e
              WHERE ${sql.join(where, sql` AND `)} GROUP BY 1 ORDER BY 1`;
 }
@@ -623,6 +657,7 @@ export async function spentContributionOf(
   const agg = def.aggregates[contour.aggregate];
   if (agg === undefined || agg.kind !== 'sum') return null;
   const mv = def.sources.movement.contract;
+  const mvPrefer = def.sources.movement.prefer;
   const envContract = def.sources.envelope.contract;
   const e = sql.raw('e');
   const env = sql.raw('env');
@@ -634,12 +669,12 @@ export async function spentContributionOf(
     where.push(compileContractPredicate(mv, agg.where, cctx, e));
   }
   if (agg.currency === 'same_as_envelope') {
-    where.push(sql`coalesce(${slotExpr('currency', mv, cctx, e)}, ${args.defaultCurrency})
-        = coalesce(${slotExpr('currency', envContract, cctx, env)}, ${args.defaultCurrency})`);
+    where.push(sql`coalesce(${slotExpr('currency', mv, cctx, e, mvPrefer)}, ${args.defaultCurrency})
+        = coalesce(${slotExpr('currency', envContract, cctx, env, def.sources.envelope.prefer)}, ${args.defaultCurrency})`);
   }
   const rows = (await tx.execute(sql`
-    SELECT (${slotExpr(agg.of.slot, mv, cctx, e)})::numeric::text AS amount,
-           (${slotExpr('date', mv, cctx, e)})::text AS as_of
+    SELECT (${slotExpr(agg.of.slot, mv, cctx, e, mvPrefer)})::numeric::text AS amount,
+           (${slotExpr('date', mv, cctx, e, mvPrefer)})::text AS as_of
     FROM entities e, entities env
     WHERE e.id = ${args.entityId} AND env.id = ${args.envelopeId}
       AND e.graph_id = ${graphId} AND NOT e.archived
@@ -1301,7 +1336,7 @@ async function runList(
       defaults: args.defaults,
       timeZone: args.timeZone,
     };
-    const date = slotExpr('date', mv, cctx, e);
+    const date = slotExpr('date', mv, cctx, e, def.sources.movement.prefer);
     where.push(
       sql`${date} >= ${String(evalExpr(list.window.from, scope))}`,
       sql`${date} <= ${String(evalExpr(list.window.to, scope))}`,

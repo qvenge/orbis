@@ -35,6 +35,8 @@ export interface ContourSide {
   /** Порядок — порядок индекса привязок: от него зависят и выбор интерпретации, и текст SQL. */
   bindings: readonly ResolvedBinding[];
   aspects: ReadonlySet<string>;
+  /** `sources.<сторона>.prefer` декларации (Ф-Б2-25): перечень сильнее порядка индекса. */
+  prefer: readonly string[];
 }
 
 export interface BudgetContour {
@@ -48,7 +50,7 @@ export interface BudgetContour {
   aspects: ReadonlySet<string>;
 }
 
-const EMPTY_SIDE: ContourSide = { contract: '', bindings: [], aspects: new Set() };
+const EMPTY_SIDE: ContourSide = { contract: '', bindings: [], aspects: new Set(), prefer: [] };
 
 /**
  * Контур ВЫКЛЮЧЕН: декларации подписки в снимке нет. Хук тогда не поднимается вовсе — ровно
@@ -65,12 +67,12 @@ export const EMPTY_CONTOUR: BudgetContour = {
 
 export function budgetContourOf(def: BudgetSubscription, reg: RegistrySnapshot): BudgetContour {
   const idx = bindingIndexOf({ aspects: reg.aspects, contracts: reg.contracts });
-  const sideOfContract = (contract: string): ContourSide => {
+  const sideOfContract = (contract: string, prefer: readonly string[]): ContourSide => {
     const bindings = idx.byContract(contract);
-    return { contract, bindings, aspects: new Set(bindings.map((b) => b.aspectId)) };
+    return { contract, bindings, aspects: new Set(bindings.map((b) => b.aspectId)), prefer };
   };
-  const movement = sideOfContract(def.sources.movement.contract);
-  const envelope = sideOfContract(def.sources.envelope.contract);
+  const movement = sideOfContract(def.sources.movement.contract, def.sources.movement.prefer);
+  const envelope = sideOfContract(def.sources.envelope.contract, def.sources.envelope.prefer);
   return {
     movement,
     envelope,
@@ -96,15 +98,25 @@ export function carriesSide(side: ContourSide, aspects: readonly string[]): bool
 }
 
 /**
- * Первая привязка стороны, чей аспект строка НЕСЁТ. Порядок — индекса привязок, а НЕ
- * `aspects[]` строки: две интерпретации одного контракта на одной сущности (§С8-21) обязаны
- * давать один и тот же ответ независимо от порядка навешивания. Отказом это не считается —
- * §С8-21 правило ЧТЕНИЯ, и уронить им запись владельца хук не вправе.
+ * Первая привязка стороны, чей аспект строка НЕСЁТ. Порядок — перечень `prefer` декларации, затем
+ * индекс привязок, а НЕ `aspects[]` строки: две интерпретации одного контракта на одной сущности
+ * (§С8-21) обязаны давать один и тот же ответ независимо от порядка навешивания. Отказом это не
+ * считается — §С8-21 правило ЧТЕНИЯ, и уронить им запись владельца хук не вправе.
+ *
+ * Перечень читается и здесь, а не только движком (Ф-Б2-25): ребро конверта ставится по категории,
+ * валюте и дате ЭТОЙ привязки, а движок считает сумму привязкой из перечня (`bindingForEntity`,
+ * `slotExpr`). Хук, выбирающий по рангу, при разных свойствах категории у двух аспектов привязал бы
+ * трату к конверту не той категории — сумма попала бы не в ту карточку.
  */
 export function bindingFor(
   side: ContourSide,
   aspects: readonly string[],
 ): ResolvedBinding | undefined {
+  for (const aspectId of side.prefer) {
+    if (!aspects.includes(aspectId)) continue;
+    const hit = side.bindings.find((b) => b.aspectId === aspectId);
+    if (hit !== undefined) return hit;
+  }
   return side.bindings.find((b) => aspects.includes(b.aspectId));
 }
 

@@ -337,6 +337,12 @@ export interface CustomAspectSpec {
    * же ключа без правил сохранил бы правила первого сева (ловушка Р12 Б-1, Р-К-77).
    */
   rules?: RuleDefinitionInput[];
+  /**
+   * Ранг аспекта (умолчание 0 — прежнее поведение). Нужен там, где фикстура меряет ПОРЯДОК привязок:
+   * индекс привязок сортирует аспекты по рангу (`bindingIndexOf`), и перечень `prefer` подписки
+   * проверяется только против ранга, который с ним НЕ совпадает (Ф-Б2-25).
+   */
+  rank?: number;
 }
 
 /**
@@ -398,8 +404,8 @@ export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec)
               ${spec.aiInstructions ?? null},
               ${sql.raw(pgTextArray(spec.tagMappings ?? []))},
               ${JSON.stringify({ keyFields: refs.map((r) => r.propertyId) })}::jsonb,
-              ${spec.module ?? null}, false, 0, ${JSON.stringify(spec.rules ?? [])}::jsonb)
-      -- В DO UPDATE SET едут все четыре колонки (implements, tag_mappings, module, rules), а не
+              ${spec.module ?? null}, false, ${spec.rank ?? 0}, ${JSON.stringify(spec.rules ?? [])}::jsonb)
+      -- В DO UPDATE SET едут все пять колонок (implements, tag_mappings, module, rules, rank), а не
       -- одна новая: правило списка — «колонка, которую вход умеет задавать, обязана обновляться».
       -- Половинчатый список и есть тот дефект, из-за которого повторный сев того же ключа
       -- молча сохранял бы привязки или правила первого сева (Р12, Р-К-77).
@@ -407,7 +413,8 @@ export async function seedCustomAspect(graphId: GraphId, spec: CustomAspectSpec)
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, implements = EXCLUDED.implements,
         ai_instructions = EXCLUDED.ai_instructions, tag_mappings = EXCLUDED.tag_mappings,
-        module = EXCLUDED.module, view_config = EXCLUDED.view_config, rules = EXCLUDED.rules`);
+        module = EXCLUDED.module, view_config = EXCLUDED.view_config, rules = EXCLUDED.rules,
+        rank = EXCLUDED.rank`);
 
     // Реестр владельца изменился — версия обязана сдвинуться (§А10-1), иначе снимок в
     // кеше процесса останется без этого аспекта.
