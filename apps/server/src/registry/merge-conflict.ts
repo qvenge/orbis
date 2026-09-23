@@ -37,6 +37,14 @@ export const DRIFT_MERGE_EFFECT =
   'Принять — снять ваш вариант из настройки; записи, у которых уже стоит старый вариант, ' +
   'останутся с ним, и их придётся перевести вручную. Отклонить — оставить оба варианта.';
 
+/**
+ * ЧТО ДЕЛАЕТ «ПРИНЯТЬ» у единицы конфликта ПРАВИЛ (§А3-3, Р-И-35) — константой по тому же доводу, что
+ * `DRIFT_MERGE_EFFECT`: тест сверяет сводку карточки с ней, а поведение approve — отдельной ассерцией
+ * (`db/registry-drift.test.ts`), и разъехаться обещанию с исполнением нечем.
+ */
+export const RULE_MERGE_EFFECT =
+  'Принять — отключить системное правило и вернуть ваше. Отклонить — оставить ваше выключенным.';
+
 // ---------------------------------------------------------------------------
 // Конфликты трёхстороннего слияния на пересеве (§А3-3) → единицы пачки
 // ---------------------------------------------------------------------------
@@ -54,9 +62,18 @@ export const DRIFT_MERGE_EFFECT =
  * пользовательский, и оба оставлены — «слить их может только владелец». Вот это и есть
  * единица: «Принять» = слить (пользовательский вариант снимается, записи указывают на
  * системный ключ), «Отклонить» = оставить оба.
+ *
+ * Второй ряд — конфликт ПРАВИЛ (Р-И-35): у него выбор тоже ЕСТЬ — система и владелец пишут одно и то же,
+ * и кто из двоих прав, знает только владелец. Слияние уже выключило своё (иначе движку достались бы два
+ * писателя одного свойства), «Принять» меняет отключения местами, «Отклонить» оставляет как есть. Ряд без
+ * пары правил (совпавший id — поле `rule` не заведено) единицей не становится: обмена там нет.
  */
 export function driftConflictDecidable(conflicts: readonly RegistryConflict[]): RegistryConflict[] {
-  return conflicts.filter((c) => c.kind === 'variant-merge' && c.option !== undefined);
+  return conflicts.filter(
+    (c) =>
+      (c.kind === 'variant-merge' && c.option !== undefined) ||
+      (c.kind === 'rule-conflict' && c.rule !== undefined),
+  );
 }
 
 /**
@@ -86,7 +103,14 @@ export async function createDriftConflictUnits(
     // Нагрузка единицы — `aspect_delta_set`; у конфликтов контракта и подписки тула разрешения в
     // Б-1 ещё нет (задача 16), и карточка вела бы к кнопке без исполнителя. Гвард стоит и ради
     // каста ниже: `merged as AspectDelta` на дельте контракта читал бы чужую форму.
+    // У конфликта ПРАВИЛ на встроенном СВОЙСТВЕ тула разрешения в Б-2 тоже нет: нужен обмен двух id
+    // ОДНОЙ дельтой свойства, а `rule_set`/`rule_remove` пишут по одному правилу за вызов (второй вызов
+    // проверяется уже против первого). Владелец получает заметку — это записанный остаток среза.
     if (conflict.targetKind !== 'aspect') continue;
+    if (conflict.kind === 'rule-conflict') {
+      out.push(await createRuleConflictUnit(tx, args, conflict));
+      continue;
+    }
     const option = conflict.option;
     const propertyId = conflict.propertyId;
     if (option === undefined || propertyId === undefined) continue;
@@ -131,4 +155,33 @@ export async function createDriftConflictUnits(
     out.push(id);
   }
   return out;
+}
+
+/**
+ * Единица конфликта правил: нагрузка — `aspect_delta_set` с ТОЙ ЖЕ слитой дельтой и ОДНОЙ заменой в
+ * `rulesDisabled` (`mine` уходит, `theirs` приходит). Второго пути записи нет по доводу
+ * `createDriftConflictUnits`: «Принять» идёт обычным конвейером и проходит проверки записи правил
+ * (`setAspectDelta` — валидатор, ацикличность, строки-носители движков).
+ */
+async function createRuleConflictUnit(
+  tx: Tx,
+  args: { graphId: GraphId; systemVersion: number; deltaRowId: string; merged: RegistryDelta },
+  conflict: RegistryConflict,
+): Promise<string> {
+  const rule = conflict.rule as { mine: string; theirs: string };
+  const merged = args.merged as AspectDelta;
+  const rulesDisabled = [
+    ...new Set([...(merged.rulesDisabled ?? []).filter((id) => id !== rule.mine), rule.theirs]),
+  ];
+  const { id } = await createSystemPending(tx, {
+    graphId: args.graphId,
+    tool: 'aspect_delta_set',
+    input: { aspect: conflict.targetId, delta: { ...merged, rulesDisabled } },
+    summary:
+      `Обновление завело правило «${rule.theirs}», которое спорит с вашим «${rule.mine}» ` +
+      `(${conflict.targetId}). ${RULE_MERGE_EFFECT}`,
+    // Детерминированный ключ — довод единицы варианта: пересев считает конфликты на каждом прогоне.
+    dedupeKey: `drift-rule-conflict:${args.deltaRowId}:${args.systemVersion}:${rule.mine}`,
+  });
+  return id;
 }

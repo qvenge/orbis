@@ -692,7 +692,7 @@ describe('threeWayMerge: система поехала под живой дел�
     expect(merged.engine === 'agenda' ? merged.show.limit : null).toBe(50);
   });
 
-  test('новые рода конфликта единиц пачки не заводят — решать пока нечем', () => {
+  test('`set-merge` единиц не заводит, `rule-conflict` — заводит', () => {
     expect(
       driftConflictDecidable([
         {
@@ -701,6 +701,23 @@ describe('threeWayMerge: система поехала под живой дел�
           targetId: 'orbis/completable',
           detail: '',
         },
+      ]),
+    ).toEqual([]);
+    expect(
+      driftConflictDecidable([
+        {
+          kind: 'rule-conflict',
+          targetKind: 'aspect',
+          targetId: 'orbis/task',
+          rule: { mine: 'a', theirs: 'b' },
+          detail: '',
+        },
+      ]),
+    ).toHaveLength(1);
+    // Конфликт по совпавшему id (поля `rule` нет) — только заметка: выбора у владельца там нет.
+    expect(
+      driftConflictDecidable([
+        { kind: 'rule-conflict', targetKind: 'aspect', targetId: 'orbis/task', detail: '' },
       ]),
     ).toEqual([]);
   });

@@ -20,8 +20,17 @@ import {
 import { withIdentity } from '../db/with-identity';
 import { approvePending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
-import { type RegistryDeltaRow, threeWayMerge, UNKNOWN_PREV_SYSTEM } from '../registry/deltas';
-import { createDriftConflictUnits, DRIFT_MERGE_EFFECT } from '../registry/merge-conflict';
+import {
+  type RegistryConflict,
+  type RegistryDeltaRow,
+  threeWayMerge,
+  UNKNOWN_PREV_SYSTEM,
+} from '../registry/deltas';
+import {
+  createDriftConflictUnits,
+  DRIFT_MERGE_EFFECT,
+  RULE_MERGE_EFFECT,
+} from '../registry/merge-conflict';
 import {
   checkRegistryDrift,
   REGISTRY_DELTAS_QUERY,
@@ -510,5 +519,83 @@ describe('конфликты пересева становятся единиц�
       tx.execute(sql`SELECT props FROM entities WHERE id = ${withOldVariant}::uuid`),
     )) as unknown as Array<{ props: Record<string, unknown> }>;
     expect(stillOld[0]?.props).toMatchObject({ 'orbis/content_type': 'md' });
+  });
+
+  /** Своё правило, которое пересев выключил: пишет то же, что системное `task_completed_at`. */
+  const MY_RULE = {
+    id: 'my_completed_at',
+    template: 'on_enter_class' as const,
+    params: {
+      enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+      set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+    },
+  };
+
+  test('rule-conflict → единица пачки: «Принять» отключает СИСТЕМНОЕ правило и возвращает своё', async () => {
+    const graph = await freshGraph();
+    const conflicts: RegistryConflict[] = [
+      {
+        kind: 'rule-conflict',
+        targetKind: 'aspect',
+        targetId: 'orbis/task',
+        rule: { mine: 'my_completed_at', theirs: 'task_completed_at' },
+        detail: 'обновление завело правило',
+      },
+    ];
+    const merged = { rules: [MY_RULE], rulesDisabled: ['my_completed_at'] };
+    const ids = await withIdentity(db, personal(graph), (tx) =>
+      createDriftConflictUnits(tx, {
+        graphId: graph,
+        systemVersion: 7,
+        deltaRowId: newId(),
+        merged: merged as never,
+        conflicts,
+      }),
+    );
+    expect(ids).toHaveLength(1);
+    const rows = (await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(sql`SELECT content, metadata FROM chat_messages WHERE id = ${ids[0]}::uuid`),
+    )) as unknown as Array<{ content: string; metadata: Record<string, unknown> }>;
+    const pending = (rows[0]?.metadata as { pending: Record<string, unknown> }).pending;
+    expect(pending.tool).toBe('aspect_delta_set');
+    const input = pending.input as { aspect: string; delta: { rulesDisabled: string[] } };
+    expect(input.aspect).toBe('orbis/task');
+    // Обмен ровно один: моё правило включается, системное-конкурент отключается.
+    expect(input.delta.rulesDisabled).toEqual(['task_completed_at']);
+    expect(String(rows[0]?.content)).toContain(RULE_MERGE_EFFECT);
+
+    // «Принять» — обычный конвейер (`approvePending` → `execute` → `setAspectDelta`): своего пути
+    // записи у конфликта нет, и эффективный список меняется ровно обменом.
+    const approved = await approvePending(db, {
+      identity: personal(graph),
+      pendingId: ids[0] as string,
+    });
+    expect(approved.ok).toBe(true);
+    const reg = await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
+    const live = reg.aspects.get('orbis/task')?.rules.map((r) => r.id) ?? [];
+    expect(live).toContain('my_completed_at');
+    expect(live).not.toContain('task_completed_at');
+  });
+
+  test('rule-conflict на ВСТРОЕННОМ СВОЙСТВЕ единицы не заводит — только заметка (записанный остаток)', async () => {
+    const graph = await freshGraph();
+    const ids = await withIdentity(db, personal(graph), (tx) =>
+      createDriftConflictUnits(tx, {
+        graphId: graph,
+        systemVersion: 7,
+        deltaRowId: newId(),
+        merged: { rules: [], rulesDisabled: ['x'] } as never,
+        conflicts: [
+          {
+            kind: 'rule-conflict',
+            targetKind: 'property',
+            targetId: 'orbis/due_date',
+            rule: { mine: 'x', theirs: 'y' },
+            detail: '',
+          },
+        ],
+      }),
+    );
+    expect(ids).toEqual([]);
   });
 });
