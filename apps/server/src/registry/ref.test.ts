@@ -41,6 +41,7 @@ const GOLDEN_REG: RegistrySnapshot = {
   roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
   contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
   subscriptions: new Map(),
+  actions: new Map(),
   ownerVersion: 0,
   systemVersion: 1,
 };

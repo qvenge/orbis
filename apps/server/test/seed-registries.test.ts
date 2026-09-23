@@ -1,9 +1,10 @@
 // apps/server/test/seed-registries.test.ts
-// Приёмка сида ПЯТИ реестров (§А12-1 п.1, §Б1-1, §Б5-1) против ЖИВОЙ базы: состав system-строк,
-// пустота действий и монотонность версии. Чистые проверки формы деклараций живут в
+// Приёмка сида ШЕСТИ реестров (§А12-1 п.1, §Б1-1, §Б5-1, §Б6-5) против ЖИВОЙ базы: состав
+// system-строк и монотонность версии. Чистые проверки формы деклараций живут в
 // packages/shared/src/registry/builtin.test.ts — здесь только то, что видно лишь в БД.
 import { describe, expect, test } from 'bun:test';
 import {
+  BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -37,7 +38,7 @@ async function systemVersion(db: ReturnType<typeof adminDb>['db']): Promise<numb
   return row.version;
 }
 
-describe('сид пяти реестров', () => {
+describe('сид шести реестров', () => {
   test('состав system-строк = ровно BUILTIN_* (77 свойств, 11 ролей, 13 аспектов, 6 контрактов)', async () => {
     const { db, client } = adminDb();
     try {
@@ -76,12 +77,15 @@ describe('сид пяти реестров', () => {
     }
   });
 
-  // Действия — §Б6, не в Б-1. До них любая system-строка здесь означает, что сид положили
-  // раньше времени. Подписки из этого пина ушли: их сеет задача 6 (Agenda), см. тест выше.
-  test('действия — БЕЗ system-строк', async () => {
+  // Действия сеются с Б-2 (§Б6-5). Счётчик отдельно от состава — подмена набора равной
+  // мощности прошла бы проверку состава молча (тот же довод, что у свойств выше).
+  test('сид действий: ровно BUILTIN_ACTION_DEFS', async () => {
     const { db, client } = adminDb();
     try {
-      expect(await ids(db, 'action_definitions')).toEqual([]);
+      expect(await ids(db, 'action_definitions')).toEqual(
+        [...BUILTIN_ACTION_DEFS.map((a) => a.id)].sort(),
+      );
+      expect(BUILTIN_ACTION_DEFS.length).toBe(2);
     } finally {
       await client.end();
     }
@@ -640,6 +644,7 @@ describe('сид пяти реестров', () => {
         aspects: 13,
         contracts: 6,
         subscriptions: 2,
+        actions: 2,
         version: before + 1,
         mergedDeltas: 0,
         conflicts: [],

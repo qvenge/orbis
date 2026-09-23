@@ -3,6 +3,7 @@
 // обе версии. Дельты — Задача 14.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
+  BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
@@ -200,6 +201,16 @@ test('словарь подписок несёт обе засеянные: ст
     'finance',
     null,
   ]);
+});
+
+// §Б6-1: шестой род реестра. Состав — по СИДУ, порядок — ключом читателя (`ORDER BY graph_id NULLS
+// FIRST, id`), тот же довод, что у подписок выше. `batch_cap` и `over` — колонки 0022: без них в
+// SELECT пакетное действие доезжало бы одиночным, и кап Р-К-14 молча пропадал.
+test('снимок несёт шестой словарь: действия по id, форма разобрана схемой', async () => {
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  expect([...reg.actions.keys()].sort()).toEqual(BUILTIN_ACTION_DEFS.map((a) => a.id).sort());
+  expect(reg.actions.get('planner/postpone_overdue')?.batch_cap).toBe(100);
+  expect(reg.actions.get('planner/postpone_overdue')?.over).not.toBeNull();
 });
 
 test('снимок несёт rules строк-носителей: своё правило доезжает разобранным, чужое не видно', async () => {

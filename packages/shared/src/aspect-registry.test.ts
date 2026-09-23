@@ -12,6 +12,7 @@ import {
 } from './aspect-registry';
 import { BUILTIN_ASPECT_IDS } from './constants';
 import {
+  BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -91,7 +92,22 @@ function seeded(): RegistryDbRows {
       module: s.module,
       rank: s.rank,
     })),
-    actions: [],
+    actions: BUILTIN_ACTION_DEFS.map((a) => ({
+      id: a.id,
+      key: a.key,
+      label: a.label,
+      description: a.description,
+      params: a.params,
+      precondition: a.precondition,
+      over: a.over,
+      steps: a.steps,
+      sensitivity: a.sensitivity,
+      offered_by: a.offered_by,
+      module: a.module,
+      batch_cap: a.batch_cap,
+      status: a.status,
+      rank: a.rank,
+    })),
   };
 }
 
@@ -119,7 +135,7 @@ test('canonicalJson: порядок МАССИВА значим (enum/required �
   expect(canonicalJson({ required: ['a', 'b'] })).not.toBe(canonicalJson({ required: ['b', 'a'] }));
 });
 
-test('свежий пересев ПЯТИ реестров — расхождений нет; действия пусты', () => {
+test('свежий пересев ШЕСТИ реестров — расхождений нет (действия сеются с Б-2)', () => {
   const drift = diffBuiltinRegistries(seeded());
   expect(drift).toEqual({
     properties: EMPTY,
@@ -131,6 +147,30 @@ test('свежий пересев ПЯТИ реестров — расхожде
   });
   expect(hasRegistryDrift(drift)).toBe(false);
   expect(registryDriftIds(drift)).toEqual([]);
+});
+
+// Ловушка релиза, ради которой сверка и существует: шаги — это ТО, ЧТО ДЕЙСТВИЕ ДЕЛАЕТ.
+// Разъехавшийся `steps` в проде исполнял бы не то, что написано в коде, и молча.
+test('действия: разошлись steps — drifted с именем СТОЛБЦА', () => {
+  const rows = seeded();
+  rows.actions = rows.actions.map((r) =>
+    r.id === 'finance/plan-to-fact' ? { ...r, steps: [] } : r,
+  );
+  const drift = diffBuiltinRegistries(rows);
+  expect(drift.actions.drifted).toEqual([{ id: 'finance/plan-to-fact', what: ['steps'] }]);
+  expect(hasRegistryDrift(drift)).toBe(true);
+  expect(registryDriftIds(drift)).toEqual(['actions:finance/plan-to-fact steps']);
+});
+
+test('действия: нет строки — missing; лишняя system-строка — extra (Р-23)', () => {
+  const rows = seeded();
+  rows.actions = [
+    ...rows.actions.filter((r) => r.id !== 'planner/postpone_overdue'),
+    { id: 'user/zzz', key: 'user/zzz', label: {}, description: {}, steps: [], rank: 0 },
+  ];
+  const drift = diffBuiltinRegistries(rows);
+  expect(drift.actions.missing).toEqual(['planner/postpone_overdue']);
+  expect(drift.actions.extra).toEqual(['user/zzz']);
 });
 
 test('строка прошла через jsonb (ключи переставлены) — это НЕ дрейф', () => {
@@ -225,12 +265,12 @@ test('роли: разошёлся source_label — дрейф с именем �
   expect(registryDriftIds(drift)).toEqual(['roles:envelope-binding source_label']);
 });
 
-// §Б1-1: контракты сеются с Б-1 и сверяются ПО КОЛОНКАМ; действия ещё пусты — там любая
-// system-строка по-прежнему лишняя.
-test('контракты: незнакомая строка — extra, пропавшая — missing; действия пусты', () => {
+// §Б1-1: контракты сеются с Б-1 и сверяются ПО КОЛОНКАМ. Действия сеются с Б-2 (§Б6-5): незнакомая
+// system-строка ДОПИСЫВАЕТСЯ к посеянным, а не заменяет их — иначе проба мерила бы «двух нет».
+test('контракты: незнакомая строка — extra, пропавшая — missing; лишнее действие — extra', () => {
   const rows = seeded();
   rows.contracts = [...rows.contracts.filter((c) => c.id !== 'orbis/when'), { id: 'orbis/zzz' }];
-  rows.actions = [{ id: 'orbis/close' }];
+  rows.actions = [...rows.actions, { id: 'orbis/close' }];
   const drift = diffBuiltinRegistries(rows);
   expect(drift.contracts).toEqual({ missing: ['orbis/when'], drifted: [], extra: ['orbis/zzz'] });
   expect(drift.actions).toEqual({ missing: [], drifted: [], extra: ['orbis/close'] });
@@ -282,7 +322,7 @@ test('registryDriftIds: плоский список для /health называ�
   // Строка-обрубок с ЗАСЕЯННЫМ id — это расхождение колонок, а не «лишняя»: id подписки в
   // коде есть, и вердикт обязан назвать столбцы, иначе владелец не узнает, что пересеять.
   rows.subscriptions = [{ id: 'orbis/agenda' }];
-  rows.actions = [{ id: 'orbis/close' }];
+  rows.actions = [...rows.actions, { id: 'orbis/close' }];
   expect(registryDriftIds(diffBuiltinRegistries(rows))).toEqual([
     'properties:orbis/task_status нет',
     // Вторая встроенная подписка (задача 9) в подменённых строках отсутствует ЦЕЛИКОМ — и это

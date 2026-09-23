@@ -59,7 +59,8 @@ import type { Db } from './client';
  * У КОНТРАКТОВ столбцы перечислены поимённо, как у трёх реестров среза А: с Б-1 они сеются, и «строка
  * есть» перестало быть достаточным ответом — испорченный набор классов валидировал бы данные молча.
  * У ПОДПИСОК столбцы названы поимённо по той же причине: с Б-1 они сеются и сверяются наравне с
- * остальными четырьмя. У ДЕЙСТВИЙ (§Б6, не в Б-1) по-прежнему только id: встроенных строк у них нет.
+ * остальными четырьмя. У ДЕЙСТВИЙ столбцы названы поимённо с Б-2: они сеются (§Б6-5), и испорченный шаг
+ * исполнялся бы молча. `"over"` в кавычках — OVER оконных функций зарезервировано, как SYMMETRIC.
  *
  * `rules` трёх реестров-носителей (§Б4-1) и `exclusive_classes` контрактов (Р-И-38) — столбцы сверки с
  * 0022: сидовое правило, испорченное в базе, валидировало бы данные молча, а поднятый или снятый флаг
@@ -82,7 +83,9 @@ export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
               FROM contract_definitions WHERE graph_id IS NULL`,
   subscriptions: `SELECT id, surface, definition, module, rank
                   FROM subscription_definitions WHERE graph_id IS NULL`,
-  actions: `SELECT id FROM action_definitions WHERE graph_id IS NULL`,
+  actions: `SELECT id, key, label, description, params, precondition, "over", steps,
+                   sensitivity, offered_by, module, batch_cap, status, rank
+            FROM action_definitions WHERE graph_id IS NULL`,
 };
 
 /**

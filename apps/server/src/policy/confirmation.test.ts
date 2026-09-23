@@ -152,6 +152,7 @@ const EMPTY_REGISTRY: RegistrySnapshot = {
   roles: new Map(),
   contracts: new Map(),
   subscriptions: new Map(),
+  actions: new Map(),
   ownerVersion: 0,
   systemVersion: 0,
 };

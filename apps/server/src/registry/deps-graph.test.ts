@@ -28,6 +28,7 @@ function snapshot(
     roles: new Map(),
     contracts: new Map(),
     subscriptions: new Map(),
+    actions: new Map(),
     ownerVersion: 1,
     systemVersion: 1,
   };

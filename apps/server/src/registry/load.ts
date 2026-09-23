@@ -51,7 +51,9 @@
 // означал бы, что пересев, изменивший контракт, запирает владельца снаружи графа, — а починить
 // это ему нечем, потому что чинится оно тоже через реестр.
 import {
+  type ActionDefinition,
   type AspectDefinition,
+  actionDefinitionSchema,
   aspectDefinitionSchema,
   type ContractDefinition,
   contractDefinitionSchema,
@@ -82,13 +84,15 @@ export interface SubscriptionRow {
   rank: number;
 }
 
-/** Пять словарей реестра без версии — то, что даёт сырое чтение строк. */
+/** Шесть словарей реестра без версии — то, что даёт сырое чтение строк. */
 export interface RegistryDictionaries {
   properties: Map<string, PropertyDefinition>;
   aspects: Map<string, AspectDefinition>;
   roles: Map<string, RelationRoleDefinition>;
   contracts: Map<string, ContractDefinition>;
   subscriptions: Map<string, SubscriptionRow>;
+  /** §Б6-1: шестой род реестра — действия; колонки `over`/`rank`/`status` завела 0022. */
+  actions: Map<string, ActionDefinition>;
 }
 
 export interface RegistrySnapshot extends RegistryDictionaries {
@@ -128,7 +132,7 @@ interface Row {
 export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<RegistryDictionaries> {
   // Запросы идут ПОСЛЕДОВАТЕЛЬНО, а не Promise.all: транзакция живёт на одном соединении,
   // и параллельные запросы по нему сериализуются в лучшем случае, а в худшем — путают
-  // порядок с `SET LOCAL`. Реестров пять, каждый — один индексный проход.
+  // порядок с `SET LOCAL`. Реестров шесть, каждый — один индексный проход.
   const propertyRows = (await tx.execute(sql`
     SELECT id, graph_id, key, label, description, type, status, storage,
            scope, merged_into, module, rank, flags, rules
@@ -158,7 +162,15 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
     FROM subscription_definitions
     WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
     ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
-  // `, id` у всех пяти словарей — порядок словаря в снимке детерминирован: без вторичного ключа он повторял
+  // `"over"` в кавычках: OVER оконных функций — зарезервированное слово SQL (тот же приём, что у
+  // `"symmetric"` ролей выше).
+  const actionRows = (await tx.execute(sql`
+    SELECT id, graph_id, key, label, description, params, precondition, "over", steps,
+           sensitivity, offered_by, module, batch_cap, status, rank
+    FROM action_definitions
+    WHERE graph_id IS NULL OR graph_id = ${graphId}::uuid
+    ORDER BY graph_id NULLS FIRST, id`)) as unknown as Row[];
+  // `, id` у всех шести словарей — порядок словаря в снимке детерминирован: без вторичного ключа он повторял
   // физический порядок строк и менялся после пересева/UPDATE (пин `load.test.ts` «словарь подписок несёт обе
   // засеянные» краснел в полном прогоне и был зелен поодиночке). Перекрытие «своя строка бьёт встроенную»
   // этим не трогается: `graph_id NULLS FIRST` остаётся ПЕРВЫМ ключом, `id` лишь упорядочивает внутри рода.
@@ -270,7 +282,39 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
     });
   }
 
-  return { properties, aspects, roles, contracts, subscriptions };
+  // ДЕЙСТВИЯ РАЗБИРАЮТСЯ ТОЛЬКО ПО ФОРМЕ — по доводу подписок (шапка файла): смысл (шаги по
+  // конверту тула, типы E, чувствительность) проверяет `assertAction` на записи.
+  //
+  // `params`/`sensitivity`/`offered_by` — колонки 0014 nullable БЕЗ default, а у схемы у них есть
+  // умолчание `[]`. zod подставляет его только вместо `undefined`, и строка с явным NULL иначе
+  // уронила бы разбор снимка НА ЧТЕНИИ, то есть заперла бы владельца снаружи его реестра, —
+  // тот же приём, что у `aggregations` аспекта выше. `steps` так не выравнивается намеренно:
+  // действие без шагов — не действие, и умолчания у него нет.
+  const actions = new Map<string, ActionDefinition>();
+  for (const r of actionRows) {
+    actions.set(
+      r.id as string,
+      actionDefinitionSchema.parse({
+        id: r.id,
+        graphId: r.graph_id,
+        key: r.key,
+        label: r.label,
+        description: r.description,
+        params: r.params ?? undefined,
+        precondition: r.precondition,
+        over: r.over,
+        steps: r.steps,
+        sensitivity: r.sensitivity ?? undefined,
+        offered_by: r.offered_by ?? undefined,
+        module: r.module,
+        batch_cap: r.batch_cap,
+        status: r.status,
+        rank: r.rank,
+      }),
+    );
+  }
+
+  return { properties, aspects, roles, contracts, subscriptions, actions };
 }
 
 /**

@@ -13,7 +13,7 @@
 // Использование:
 //   bun scripts/ops.ts check           # только чтение: расхождение реестров с кодом
 //   bun scripts/ops.ts migrate         # накатить неприменённые миграции схемы
-//   bun scripts/ops.ts seed-registries # upsert пяти реестров: свойства, роли, аспекты, контракты, подписки
+//   bun scripts/ops.ts seed-registries # upsert шести реестров: свойства, роли, аспекты, контракты, подписки, действия
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
@@ -109,7 +109,7 @@ async function withDb<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
 }
 
 /**
- * Сверяет встроенные строки ПЯТИ реестров и таблицы действий в проде с кодом (§А12-1 п.4).
+ * Сверяет встроенные строки ШЕСТИ реестров в проде с кодом (§А12-1 п.4); действия — по колонкам с Б-2.
  *
  * И само сравнение (`diffBuiltinRegistries`, включая канонизацию JSON — jsonb не хранит
  * порядок ключей), и ТЕКСТЫ ЗАПРОСОВ (`REGISTRY_DRIFT_QUERIES`) общие со стартовой
@@ -666,12 +666,12 @@ async function issuePat(args: string[]): Promise<number> {
 const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: string }> = {
   check: {
     run: check,
-    help: 'только чтение: расхождение реестров прода с кодом (шесть родов; действия — только по id)',
+    help: 'только чтение: расхождение реестров прода с кодом (шесть родов; действия — по колонкам, id = key)',
   },
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-registries': {
     run: seedRegistriesOp,
-    help: 'upsert пяти реестров: свойства, роли, аспекты, контракты, подписки (идемпотентно)',
+    help: 'upsert шести реестров: свойства, роли, аспекты, контракты, подписки, действия (id = key; идемпотентно)',
   },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
   census: {

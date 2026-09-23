@@ -11,6 +11,7 @@
 // единственная форма встроенных аспектов — `BUILTIN_ASPECT_DEFS`
 // (`registry/builtin-aspects.ts`). Перекрёстная сверка двух записей (`registry/builtin.test.ts`)
 // ушла вместе со второй записью — сверять стало не с чем, и это цель, а не потеря.
+import { BUILTIN_ACTION_DEFS } from './registry/builtin-actions';
 import { BUILTIN_ASPECT_DEFS } from './registry/builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS } from './registry/builtin-contracts';
 import { BUILTIN_PROPERTY_META } from './registry/builtin-properties';
@@ -228,10 +229,38 @@ function expectedSubscriptions(): Map<string, Record<string, unknown>> {
 }
 
 /**
- * Ожидание для реестра, который ещё пуст: действия (§Б6, не в Б-1). Любая system-строка здесь
- * означает, что сид положили раньше времени. Подписки из этого списка ушли — их сеет Б-1.
+ * Ожидание для действий (§Б6-1). Столбцы — те же, что читает SELECT дрейфа
+ * (`apps/server/src/db/registry-drift.ts`), и `precondition`/`over` бывают SQL NULL у
+ * одиночного действия: выравнивание `?? null` с обеих сторон в `diffOne` это выдерживает,
+ * и «предусловия нет» не читается расхождением.
+ *
+ * До Б-2 здесь стояло пустое ожидание, и оно было верно РОВНО пока таблица пуста: с
+ * первой посеянной строкой пустота объявляет сид дрейфом (`extra`), то есть `/health`
+ * и `ops.ts check` показывают расхождение на здоровом проде — а испорченные `steps`,
+ * то есть ТО, ЧТО ДЕЙСТВИЕ ДЕЛАЕТ, не сверяются ни с чем.
  */
-const EMPTY_EXPECTATION = (): Map<string, Record<string, unknown>> => new Map();
+function expectedActions(): Map<string, Record<string, unknown>> {
+  return new Map(
+    BUILTIN_ACTION_DEFS.map((a) => [
+      a.id,
+      {
+        key: a.key,
+        label: a.label,
+        description: a.description,
+        params: a.params,
+        precondition: a.precondition,
+        over: a.over,
+        steps: a.steps,
+        sensitivity: a.sensitivity,
+        offered_by: a.offered_by,
+        module: a.module,
+        batch_cap: a.batch_cap,
+        status: a.status,
+        rank: a.rank,
+      },
+    ]),
+  );
+}
 
 const EXPECTATIONS: Record<RegistryKind, () => Map<string, Record<string, unknown>>> = {
   properties: expectedProperties,
@@ -239,7 +268,7 @@ const EXPECTATIONS: Record<RegistryKind, () => Map<string, Record<string, unknow
   roles: expectedRoles,
   contracts: expectedContracts,
   subscriptions: expectedSubscriptions,
-  actions: EMPTY_EXPECTATION,
+  actions: expectedActions,
 };
 
 function diffOne(

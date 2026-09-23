@@ -53,6 +53,7 @@ function probe(carrier: RuleCarrier, rules: readonly unknown[]): RegistrySnapsho
     roles,
     contracts: new Map(BUILTIN_CONTRACT_DEFS.map((d) => [d.id, d])),
     subscriptions: new Map(),
+    actions: new Map(),
     ownerVersion: 1,
     systemVersion: 1,
   };
@@ -68,6 +69,7 @@ function codeSnapshot(): RegistrySnapshot {
     roles: new Map(BUILTIN_RELATION_ROLE_META.map((d) => [d.id, d])),
     contracts: new Map(BUILTIN_CONTRACT_DEFS.map((d) => [d.id, d])),
     subscriptions: new Map(),
+    actions: new Map(),
     ownerVersion: 0,
     systemVersion: 0,
   };

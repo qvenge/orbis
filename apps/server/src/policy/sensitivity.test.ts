@@ -17,6 +17,7 @@ function snapshot(
     aspects: new Map(),
     roles: new Map(),
     subscriptions: new Map(),
+    actions: new Map(),
     contracts: new Map(contracts.map((d) => [d.id, d])),
     ownerVersion: 1,
     systemVersion: 1,

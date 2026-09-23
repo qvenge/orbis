@@ -623,6 +623,7 @@ export function assertBuiltinRules(): void {
     roles: new Map(BUILTIN_RELATION_ROLE_META.map((d) => [d.id, d])),
     contracts: new Map(BUILTIN_CONTRACT_DEFS.map((d) => [d.id, d])),
     subscriptions: new Map(), // правила подписок не адресуют — словарь врезке не нужен
+    actions: new Map(), // и действий тоже: носители правил — свойства, аспекты и роли
     ownerVersion: 0,
     systemVersion: 0,
   };

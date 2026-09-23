@@ -186,8 +186,9 @@ test('лишняя system-строка свойства — extra, а не ти�
   }
 });
 
-// §Б1-1: контракты сеются с Б-1 и сверяются по колонкам; подписки и действия ещё пусты.
-test('контракты: незнакомая system-строка — extra, испорченная — drifted; действия пусты', async () => {
+// §Б1-1: контракты сеются с Б-1 и сверяются по колонкам. Действия сеются с Б-2 (§Б6-5): незнакомая
+// system-строка рядом с посеянными — extra.
+test('контракты: незнакомая system-строка — extra, испорченная — drifted; лишнее действие — extra', async () => {
   try {
     await admin.db.execute(
       sql`INSERT INTO contract_definitions (id, graph_id, key, label, description, kind, rank)
@@ -196,14 +197,38 @@ test('контракты: незнакомая system-строка — extra, и
     await admin.db.execute(
       sql`UPDATE contract_definitions SET module = 'взлом' WHERE id = 'orbis/when'`,
     );
+    // `steps` нужен не дрейфу, а СНИМКУ: с Б-2 `loadRegistryRows` разбирает `action_definitions`
+    // строгой схемой (`steps.min(1)`), и system-строка с `steps: NULL`, живущая внутри `try`, уронила
+    // бы любой `effectiveRegistry`, случившийся в том же окне. Колонка nullable, поэтому прежний
+    // INSERT проходил — и тем громче упал бы снимок.
     await admin.db.execute(
-      sql`INSERT INTO action_definitions (id, graph_id, key, label, description)
-          VALUES ('orbis/close', NULL, 'orbis/close', '{"ru":"З"}'::jsonb, '{"ru":"З"}'::jsonb)`,
+      sql`INSERT INTO action_definitions (id, graph_id, key, label, description, steps)
+          VALUES ('orbis/close', NULL, 'orbis/close', '{"ru":"З"}'::jsonb, '{"ru":"З"}'::jsonb,
+                  '[{"tool":"entity_update","input":{}}]'::jsonb)`,
     );
     const drift = await checkRegistryDrift(db);
     expect(drift.contracts.extra).toEqual(['orbis/zzz']);
     expect(drift.contracts.drifted).toEqual([{ id: 'orbis/when', what: ['module'] }]);
     expect(drift.actions.extra).toEqual(['orbis/close']);
+  } finally {
+    await restoreRegistries();
+  }
+  expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
+});
+
+// Ловушка релиза на ЖИВОЙ базе: колонки действий читаются под ролью приложения (забытый
+// GRANT дал бы 42501 ещё до всякой политики), а испорченный `steps` обязан быть назван
+// столбцом, а не «строка не та».
+test('действия: посеянные — без дрейфа; правка steps в БД — drifted по столбцу steps', async () => {
+  try {
+    await admin.db.execute(
+      sql`UPDATE action_definitions SET steps = '[]'::jsonb WHERE id = 'finance/plan-to-fact'`,
+    );
+    const drift = await checkRegistryDrift(db);
+    expect(drift.actions.drifted).toEqual([{ id: 'finance/plan-to-fact', what: ['steps'] }]);
+    expect(drift.actions.missing).toEqual([]);
+    expect(drift.actions.extra).toEqual([]);
+    expect(hasRegistryDrift(drift)).toBe(true);
   } finally {
     await restoreRegistries();
   }

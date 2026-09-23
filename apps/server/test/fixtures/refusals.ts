@@ -31,6 +31,7 @@ import {
   AGENDA_DEF,
   addDays,
   BUDGET_DEF,
+  BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -102,6 +103,9 @@ const builtinSnapshot = (): RegistrySnapshot => ({
   roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
   contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
   subscriptions: new Map(),
+  // Действия — посеянные (§Б6-5): `assertAction` читает словарь ради уникальности `key`, и снимок «как
+  // из БД» без них разрешил бы корпусу занять ключ встроенного действия.
+  actions: new Map(BUILTIN_ACTION_DEFS.map((a) => [a.id, a])),
   ownerVersion: 1,
   systemVersion: 1,
 });

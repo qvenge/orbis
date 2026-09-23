@@ -1,9 +1,9 @@
 // apps/server/src/db/seed-registries.ts
 //
-// Сид ПЯТИ реестров: свойства (§А2-1), роли рёбер (§А4-2), аспекты (§А3-1), контракты
-// (§Б1-1) и подписки (§Б5-1: `orbis/agenda` — задача 6, `orbis/budget-overview` — задача 9).
-// Прежнее условие П5 ревизией 3 снято, поэтому ПУСТОЙ остаётся одна таблица — действия
-// (§Б6, не в Б-1).
+// Сид ШЕСТИ реестров: свойства (§А2-1), роли рёбер (§А4-2), аспекты (§А3-1), контракты
+// (§Б1-1), подписки (§Б5-1: `orbis/agenda` — задача 6, `orbis/budget-overview` — задача 9) и
+// действия (§Б6-5, срез Б-2: `finance/plan-to-fact`, `planner/postpone_overdue`). Пустых
+// таблиц реестров больше нет.
 //
 // Почему модуль, а не два скрипта: сид запускается двумя путями — `bun run db:prepare`
 // (локально и в CI, через `scripts/seed-registries.ts`) и `bun scripts/ops.ts
@@ -26,6 +26,7 @@
 import {
   type AspectDefinition,
   aspectDefinitionSchema,
+  BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
@@ -71,10 +72,12 @@ export interface SeedRegistriesResult {
   properties: number;
   roles: number;
   aspects: number;
-  /** §Б1-1: контракты сеются с Б-1; действия (§Б6) — ещё нет. */
+  /** §Б1-1: контракты сеются с Б-1. */
   contracts: number;
   /** §Б5-1: встроенные подписки — поверхности читают декларацию из реестра, не из кода. */
   subscriptions: number;
+  /** §Б6-5: встроенные действия модулей — строка реестра, а не код. */
+  actions: number;
   /** Версия system-реестров ПОСЛЕ сида — она же ключ инвалидации кешей (§А10-1). */
   version: number;
   /** Дельт, пересчитанных трёхсторонним слиянием под новую системную версию (§А3-3). */
@@ -84,8 +87,8 @@ export interface SeedRegistriesResult {
 }
 
 /**
- * Пишет встроенные строки ПЯТИ реестров (свойства, роли, аспекты, контракты, подписки) и двигает
- * глобальную версию. Шестой род — действия (§Б6) — не сеется: встроенных строк у него нет.
+ * Пишет встроенные строки ШЕСТИ реестров (свойства, роли, аспекты, контракты, подписки,
+ * действия) и двигает глобальную версию.
  *
  * `sql` — админское подключение: RLS запрещает запись строк с `graph_id IS NULL` любой
  * роли, кроме обходящей политики.
@@ -200,6 +203,33 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
         module = EXCLUDED.module, rank = EXCLUDED.rank`;
   }
 
+  // §Б6-5 «создание = запись»: действие модуля живёт строкой, и реестр тулов подхватывает
+  // его без кода (§Б6-6, задача 7). Конфликт — тем же частичным индексом, что у пяти
+  // остальных реестров. `precondition`/`over` — SQL NULL, а не `sql.json(null)`: тот же довод,
+  // что у `slots` контракта выше — jsonb-значение `null` сделало бы «предусловия нет»
+  // неотличимым от литерального null. `"over"` в кавычках — OVER зарезервировано, как SYMMETRIC.
+  // Валидатор `assertAction` здесь НЕ зовётся — снимка реестра у сырого подключения нет;
+  // гейт сида — тест `registry/actions.test.ts` (прецедент `assertSubscription`).
+  for (const a of BUILTIN_ACTION_DEFS) {
+    await sql`
+      INSERT INTO action_definitions
+        (id, graph_id, key, label, description, params, precondition, "over", steps,
+         sensitivity, offered_by, module, batch_cap, status, rank)
+      VALUES
+        (${a.id}, NULL, ${a.key}, ${sql.json(j(a.label))}, ${sql.json(j(a.description))},
+         ${sql.json(j(a.params))},
+         ${a.precondition === null ? null : sql.json(j(a.precondition))},
+         ${a.over === null ? null : sql.json(j(a.over))},
+         ${sql.json(j(a.steps))}, ${sql.json(j(a.sensitivity))}, ${sql.json(j(a.offered_by))},
+         ${a.module}, ${a.batch_cap}, ${a.status}, ${a.rank})
+      ON CONFLICT (id) WHERE graph_id IS NULL DO UPDATE SET
+        key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
+        params = EXCLUDED.params, precondition = EXCLUDED.precondition, "over" = EXCLUDED."over",
+        steps = EXCLUDED.steps, sensitivity = EXCLUDED.sensitivity,
+        offered_by = EXCLUDED.offered_by, module = EXCLUDED.module,
+        batch_cap = EXCLUDED.batch_cap, status = EXCLUDED.status, rank = EXCLUDED.rank`;
+  }
+
   // Версия двигается ПОСЛЕ строк и всегда — даже когда ни одна строка фактически не
   // изменилась. Так «сид был» отличимо от «сида не было» одним числом, а кеши, ключуемые
   // версией, гарантированно переживают пересев (§А10-1); угадывать «а изменилось ли
@@ -221,6 +251,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
     aspects: BUILTIN_ASPECT_DEFS.length,
     contracts: BUILTIN_CONTRACT_DEFS.length,
     subscriptions: BUILTIN_SUBSCRIPTION_DEFS.length,
+    actions: BUILTIN_ACTION_DEFS.length,
     version: row.version,
     mergedDeltas: merge.merged,
     conflicts: merge.conflicts,
@@ -475,7 +506,7 @@ export async function mergeRegistryDeltas(
 export function seedRegistriesReport(r: SeedRegistriesResult): string[] {
   return [
     `seed-registries: свойств ${r.properties}, ролей ${r.roles}, аспектов ${r.aspects}, ` +
-      `контрактов ${r.contracts}, подписок ${r.subscriptions}; ` +
+      `контрактов ${r.contracts}, подписок ${r.subscriptions}, действий ${r.actions}; ` +
       `версия system-реестров ${r.version}; дельт слито ${r.mergedDeltas}`,
     ...(r.conflicts.length === 0
       ? []

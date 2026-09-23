@@ -56,6 +56,7 @@ function snapshot(): RegistrySnapshot {
     roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
     contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
     subscriptions: new Map(),
+    actions: new Map(),
     ownerVersion: 1,
     systemVersion: 1,
   };

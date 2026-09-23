@@ -5205,6 +5205,7 @@ describe('сводка мутации реестра: правила, а не с
         },
       ]),
     ),
+    actions: new Map(),
     ownerVersion: 1,
     systemVersion: 1,
   };
