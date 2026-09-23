@@ -7,8 +7,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type GraphId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
-import { type RoutineRow, routineById } from '../agent-loop/queries';
+import { activeRoutines, type RoutineRow, routineById } from '../agent-loop/queries';
 import { withIdentity } from '../db/with-identity';
+import { execute } from '../executor/executor';
 import type { ActionRecord } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMResponse } from '../llm/types';
@@ -71,15 +72,20 @@ describe('сид рутины «Перенос остатков» (В-4, Р-29)'
     );
   });
 
-  test('доверенность: белый список РОВНО budget_rollover, стадия active', async () => {
+  test('доверенность: белый список РОВНО budget_rollover; стадия paused — включает владелец (рулинг 10-1)', async () => {
     const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
     const props = await propsOf(owner, seedRoutineId(owner, ROLLOVER_ROUTINE_SLUG));
     // «Ровно один тул» — утверждение о ПРАВАХ: равенство списку, а не toContain.
     expect(props['orbis/allowed_tools']).toEqual([...ROLLOVER_ROUTINE_ALLOWED_TOOLS]);
     expect(props['orbis/allowed_tools']).toEqual(['budget_rollover']);
-    expect(props['orbis/routine_stage']).toBe('active');
+    // ПАУЗА ПО УМОЛЧАНИЮ: месячного расписания у рутины нет, ежедневный ход — ≈29 вызовов модели в
+    // месяц ради одного полезного, и этот расход включает владелец, а не сид.
+    expect(props['orbis/routine_stage']).toBe('paused');
     expect(props['orbis/routine_mode']).toBe('act'); // Р-К-38, В-П-7
+    // …и планировщик её НЕ видит: активные рутины он отбирает по стадии (`activeRoutines`).
+    const active = await withIdentity(db, personal(owner), (tx) => activeRoutines(tx));
+    expect(active.map((r) => r.id)).not.toContain(seedRoutineId(owner, ROLLOVER_ROUTINE_SLUG));
   });
 
   test('день месяца расписанием НЕ выражается — правило живёт в теле инструкции', () => {
@@ -88,6 +94,14 @@ describe('сид рутины «Перенос остатков» (В-4, Р-29)'
     // ежедневное, а «только первого числа» говорит тело.
     expect(ROLLOVER_ROUTINE_PROPS['orbis/routine_days']).toBeUndefined();
     expect(ROLLOVER_ROUTINE_BODY).toContain('первое число месяца');
+  });
+
+  test('тело опирается на то, что у модели есть: budget_status и budget_rollover, без предпросмотра (рулинг 10-1)', () => {
+    // Тула предпросмотра переноса у модели нет и до конца Б-2 не будет: тело, которое на него
+    // ссылается, делало бы шаг невыполнимым каждый месяц.
+    expect(ROLLOVER_ROUTINE_BODY).not.toContain('предпросмотр');
+    expect(ROLLOVER_ROUTINE_BODY).toContain('budget_status');
+    expect(ROLLOVER_ROUTINE_BODY).toContain('budget_rollover');
   });
 
   test('гейт режима: тул проходит ровно в режиме act (Р-К-38)', () => {
@@ -136,23 +150,37 @@ async function envelopesOf(owner: GraphId, periodStart: string): Promise<number>
   return Number(rows[0]?.n ?? 0);
 }
 
-async function anyCategory(owner: GraphId): Promise<string> {
+async function anyCategory(owner: GraphId): Promise<{ id: string; title: string }> {
   const rows = (await withIdentity(db, personal(owner), (tx) =>
-    tx.execute(sql`SELECT id FROM entities
+    tx.execute(sql`SELECT id, title FROM entities
                     WHERE graph_id = ${owner}::uuid AND 'orbis/category' = ANY(aspects)
                     ORDER BY id LIMIT 1`),
-  )) as unknown as Array<{ id: string }>;
-  const id = rows[0]?.id;
-  if (id === undefined) throw new Error('у владельца нет категорий — онбординг не отработал');
-  return id;
+  )) as unknown as Array<{ id: string; title: string }>;
+  const row = rows[0];
+  if (row === undefined) throw new Error('у владельца нет категорий — онбординг не отработал');
+  return row;
 }
 
 describe('прогон рутины «Перенос остатков» (Р-К-38, Р-К-39)', () => {
   test('вызов budget_rollover из прогона — ОТЛОЖЕННАЯ единица; конвертов нет до «Принять», после — есть, с атрибуцией прогона', async () => {
     const owner = await freshGraph();
     await callerFor(owner).user.seedOnboarding();
-    const categoryId = await anyCategory(owner);
+    const category = await anyCategory(owner);
+    const categoryId = category.id;
     const routineId = seedRoutineId(owner, ROLLOVER_ROUTINE_SLUG);
+    // Рутина сеется на паузе (рулинг 10-1) — владелец включает её сам, тем же путём, что экран рутин.
+    const on = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: routineId, props: { 'orbis/routine_stage': 'active' } },
+        },
+      ],
+    });
+    if (!on.ok) throw new Error(`включение рутины: ${on.error.code} ${on.error.message}`);
     const bucket = '2026-09-01T09:00';
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
     const routine = await withIdentity(db, personal(owner), (tx) => routineById(tx, routineId));
@@ -187,7 +215,9 @@ describe('прогон рутины «Перенос остатков» (Р-К-3
     expect(unit.card).toMatchObject({
       kind: 'deferred_action_card',
       summary: `Перенос остатков на ${month}: конвертов — 1`,
-      rows: [{ field: categoryId, after: '5000.00' }],
+      // Карточка согласия на деньги показывает деньги (фикс-раунд 1, I-4): имя категории, лимит и
+      // перенос, а не сырой uuid.
+      rows: [{ field: category.title, after: 'лимит 5000.00 · перенос 120.00' }],
     });
     const approved = await approvePending(db, {
       identity: personal(owner),

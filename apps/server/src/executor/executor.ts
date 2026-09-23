@@ -3892,9 +3892,9 @@ async function prepareContractSetsDeltaRemove(
 
 /**
  * Заведение и переписывание СВОЕЙ строки действия (§Б6-1, §С3). Ветки по адресу здесь нет, в отличие
- * от `prepareSubscriptionSet`: дельта действия умеет ровно подпись (`actionDeltaSchema`, задача 6), а
- * шаги встроенного правятся ФОРКОМ — своей строкой с другим key (§Б6-5). Адрес встроенного действия
- * отвергает сама операция (`setOwnAction`, `ACTION_TARGET_SYSTEM`).
+ * от `prepareSubscriptionSet`: дельту действия (`actionDeltaSchema`, задача 6 — только хранение) не
+ * пишет ни один тул, а другие шаги у встроенного — это ФОРК, своя строка с другим key (§Б6-5). Адрес
+ * встроенного действия отвергает сама операция (`setOwnAction`, `ACTION_TARGET_SYSTEM`).
  */
 async function prepareActionSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
   const input = parseEnvelope(actionSetInput, rawInput, 'action_set');
@@ -3963,6 +3963,11 @@ async function prepareActionRemove(_ctx: ExecCtx, rawInput: unknown): Promise<Pr
         });
       }
       await deprecateOwnAction(applyCtx.tx, graphId, before.id);
+      // Заголовок журнала — ПОДПИСЬ действия, а не адрес (фикс-раунд 1, m-3): в списке «отмени
+      // последнее» владелец узнаёт «Закрыть месяц», а не `user/close-month`. Подпись известна только
+      // здесь, после чтения строки, — журнал пишется ПОСЛЕ `apply` (см. докблок `registryPlan`), и
+      // замена заголовка до записи безопасна по тому же доводу, что дописывание inverse.
+      journal.title = `Действие «${effectiveLabel(before.label, OWNER_LOCALE)}» снято`;
       journal.operations.push({ op: 'action_remove', payload: { ...input } });
       // Повторное снятие уже снятого — успех с пустым inverse (образец `prepareSubscriptionRemove`).
       if (before.status === 'active') {

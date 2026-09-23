@@ -66,6 +66,7 @@ import {
 } from '../agent-loop/verbs';
 import { escalateAfterMutation } from '../ai/escalation';
 import { budgetStatus, rolloverCreate } from '../budget/aggregates';
+import { categoriesById } from '../budget/categories';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
@@ -514,7 +515,7 @@ async function runBudgetRollover(
     // Тот же контракт, что у прочих мутаций: до «Принять» не записано ничего, а сохранённый
     // payload исполняет `approvePending` (ветка `budget_rollover` там же). Дедуп — по `batchId`
     // вызова: ретрай того же вызова не плодит вторую карточку.
-    const pending = await withIdentity(ctx.db, ctx.identity, (tx) =>
+    const pending = await withIdentity(ctx.db, ctx.identity, async (tx) =>
       createPending(tx, {
         threadId: ctx.threadId,
         actor: {
@@ -529,13 +530,19 @@ async function runBudgetRollover(
         level,
         dedupeKey: parsed.batchId,
         summary: rolloverSummary(parsed),
+        // Строки — те же, что у отложенной единицы: владелец подтверждает СУММЫ, а не число конвертов.
+        rows: await rolloverRows(tx, parsed),
         clock: ctx.clock,
       }),
     );
     return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
   }
-  // `execute` и `preview` — один путь: «покажи, не делая» у переноса нет (конверты создаются одной
-  // группой, и diff карточки здесь — сам результат).
+  // `execute` и `preview` исполняются одним путём: «покажи, не делая» у переноса нет — конверты
+  // создаются одной группой. Но `preview` по §7.10 — «исполнено И ПОКАЗАНО» (фикс-раунд 1, I-3):
+  // без карточки и верхнего `actionId` ответ чата (`ai/send-message.ts`) не показал бы ни карточку,
+  // ни действие в сводке с откатом, и запись денег моделью шла бы по факту уровнем `execute`, молча.
+  // Форма карточки — та же, что у preview пачки в `runMutation`: у группы пополевого diff'а нет, её
+  // содержание — масштаб, и сводка его называет.
   const r = await rolloverCreate(ctx.db, ctx.identity, parsed, {
     actorKind: ctx.actorKind,
     source: ctx.source,
@@ -543,12 +550,40 @@ async function runBudgetRollover(
     runId: ctx.runId,
     actorGrantId: ctx.grant?.id,
   });
-  return { status: 'ok', result: r };
+  const card: Card | undefined =
+    level === 'preview'
+      ? { kind: 'confirmation_card', mode: 'preview', summary: rolloverSummary(parsed) }
+      : undefined;
+  return {
+    status: 'ok',
+    result: r,
+    // Повтор batchId ничего не применял — действия для отката нет (как у `runAction`/`runMutation`).
+    ...(r.idempotentReplay ? {} : { actionId: r.actionId }),
+    ...(card !== undefined && { card }),
+  };
 }
 
 /** Сводка переноса — одна на карточку чата и отложенную единицу: владелец видит одну фразу. */
 function rolloverSummary(input: RolloverInput): string {
   return `Перенос остатков на ${input.month}: конвертов — ${input.rows.length}`;
+}
+
+/**
+ * Строки карточки переноса (фикс-раунд 1, I-4) — одна на конверт: ИМЯ категории и обе суммы, лимит и
+ * перенос. Перенос — то, что владелец, собственно, подтверждает (может быть и отрицательным), и
+ * карточка без него была бы согласием на деньги, которых не видно. Имя читается тем же `tx`, что
+ * ставит единицу; категорию, которой нет (удалена между вызовом и постановкой), честно называет её
+ * адрес — отказ за неё даст пречек `rolloverCreate` при «Принять».
+ */
+async function rolloverRows(tx: Tx, input: RolloverInput): Promise<DeferredRow[]> {
+  const categories = await categoriesById(
+    tx,
+    input.rows.map((r) => r.categoryId),
+  );
+  return input.rows.map((r) => ({
+    field: categories.get(r.categoryId)?.title || r.categoryId,
+    after: `лимит ${r.limit} · перенос ${r.carryover}`,
+  }));
 }
 
 type Resolution =
@@ -1481,6 +1516,10 @@ const SURFACE_LABEL: Record<string, string> = {
  *     на карточку группы целиком, а не на реестровую половину: сегодня она молчит и об
  *     остальных операциях тоже, и чинить надо либо всё, либо ничего.
  *
+ * Пятое место сборки в диспатче — `confirmation_card` mode `preview` ПЕРЕНОСА ОСТАТКОВ
+ * (`runBudgetRollover`, фикс-раунд 1 задачи 10) — мутацию реестра не несёт и эту функцию не зовёт:
+ * у него своя сводка (`rolloverSummary`). В пине мест сборки оно стоит пятой строкой.
+ *
  * Владелец видит их в одной ленте, и разные обозначения одного и того же действия читались
  * бы как разные действия — тот же довод, по которому у строки снятия свойства литерал общий
  * с предложением рутины. Перечень пиннится НЕ грепом по вызовам этой функции: дефект уже
@@ -1863,12 +1902,12 @@ async function snapshotDeferredUnit(
   if (tool === 'budget_rollover') {
     // Р-К-39: снимать предусловия переносу нечего — конверты нового месяца ещё не существуют, а
     // преемников пречекает сам `rolloverCreate` при «Принять». Карточка показывает, ЧТО будет создано:
-    // по строке на конверт — категория и лимит.
+    // по строке на конверт — категория, лимит и перенос (`rolloverRows`).
     const parsed = rolloverInput.parse(payload);
     return {
       input: parsed,
       summary: rolloverSummary(parsed),
-      rows: parsed.rows.map((r) => ({ field: r.categoryId, after: String(r.limit) })),
+      rows: await rolloverRows(tx, parsed),
     };
   }
   if (tool !== 'entity_update' || !isRecord(payload)) {

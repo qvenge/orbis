@@ -1368,6 +1368,10 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
       'VALIDATION',
       'ACTION_TARGET_SYSTEM',
     ]);
+    // Отказ не обещает правку подписи «дельтой»: тула, пишущего дельту действия, нет (фикс-раунд 1,
+    // m-1), — выход назван тот, что есть: своя копия с ключом user/….
+    expect(set.message).not.toContain('дельт');
+    expect(set.message).toContain('user/');
     const remove = err(await runAs('action_remove', { action: 'planner/postpone_overdue' }));
     expect([remove.code, (remove.details as { reason?: string }).reason]).toEqual([
       'VALIDATION',
@@ -1466,6 +1470,29 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
         ],
       }),
     ).toEqual(['VALIDATION', 'EXPR_TOO_DEEP']);
+  });
+
+  test('заголовок журнала снятия — ПОДПИСЬ действия, а не ключ (фикс-раунд 1, m-3)', async () => {
+    const owner = await freshGraph();
+    const runAs = (tool: string, input: unknown) =>
+      execute(
+        db,
+        {
+          identity: personal(owner),
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [{ tool, input }],
+        },
+        { sink },
+      );
+    ok(await runAs('action_set', DECL));
+    const removed = ok(await runAs('action_remove', { action: 'user/close-month' }));
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
+      tx.execute(sql`SELECT metadata FROM chat_messages
+                      WHERE metadata @> ${JSON.stringify({ actions: [{ id: removed.actionId }] })}::jsonb`),
+    )) as unknown as Array<{ metadata: { cards?: Array<{ title?: string }> } }>;
+    // «Отмени последнее» показывает владельцу то, что он узнаёт, — подпись, а не адрес.
+    expect(rows[0]?.metadata.cards?.[0]?.title).toBe('Действие «Закрыть месяц» снято');
   });
 
   test('перезаведение СНЯТОГО действия и откат: строка возвращается снятой и с прежними шагами', async () => {

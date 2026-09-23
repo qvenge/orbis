@@ -217,6 +217,9 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
         false,
       );
     }
+    // Описание не обещает правку подписи встроенного действия «дельтой»: тула, пишущего дельту
+    // действия, нет (фикс-раунд 1, m-1).
+    expect(defOf(defs, 'action_set').description).not.toContain('дельт');
     const roll = defOf(defs, 'budget_rollover');
     expect([roll.kind, roll.fullScopeOnly]).toEqual(['mutate', true]);
     // Инструмент МОДУЛЯ, а не ядра: с выключенными Финансами его в реестре нет (§Б8-3).

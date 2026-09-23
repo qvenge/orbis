@@ -6163,7 +6163,7 @@ describe('сводка мутации реестра: правила, а не с
    * (член union'а, написанный с запятой, станет красным и потребует взгляда), а не в сторону
    * пропуска — то есть fail-closed, как и положено охране.
    */
-  test('места сборки карточек — перечень закрыт по всему apps/server/src: четыре, и три из четырёх идут через сводку', () => {
+  test('места сборки карточек — перечень закрыт по всему apps/server/src: пять, и три из пяти идут через сводку реестра', () => {
     const CARD = /kind:\s*'(confirmation_card|deferred_action_card)'\s*(?!;)/;
     const isComment = (line: string): boolean =>
       line.trimStart().startsWith('*') || line.trimStart().startsWith('//');
@@ -6190,6 +6190,9 @@ describe('сводка мутации реестра: правила, а не с
       //    её содержание и есть масштаб (решение, разобранное в докблоке сводки);
       // 1. preview ОДИНОЧНОГО вызова — зовёт сводку
       'tools/dispatch.ts → confirmation_card',
+      'tools/dispatch.ts → confirmation_card',
+      // 5. preview ПЕРЕНОСА ОСТАТКОВ (`runBudgetRollover`, фикс-раунд 1 задачи 10) — мутации реестра
+      //    не несёт, своя сводка `rolloverSummary`
       'tools/dispatch.ts → confirmation_card',
       // 3. отложенная единица пачки D42 — зовёт сводку через snapshotRegistryUnit
       'tools/dispatch.ts → deferred_action_card',
@@ -6406,6 +6409,8 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
     if (out.status !== 'ok') return;
     const result = out.result as { actionId: string; envelopeIds: string[] };
     expect(result.envelopeIds).toHaveLength(1);
+    // Верхний `actionId` — по нему ответ чата кладёт действие в сводку с откатом (фикс-раунд 1, I-3).
+    expect(out.actionId).toBe(result.actionId);
     const action = await journalOf(owner, result.actionId);
     expect([action?.source, action?.actor_kind, action?.mechanism]).toEqual([
       'chat',
@@ -6416,6 +6421,57 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
       JSON.stringify(m.metadata).includes(result.actionId),
     );
     expect(inThread).toBe(true);
+  });
+
+  test('AI, ≤ 10 строк → исполнено, в ответе actionId и preview-карточка: preview — «исполнено И показано» (фикс-раунд 1, I-3)', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const { month, rows } = await prevMonthEnvelopes(owner, 2);
+    const batchId = newId();
+    const out = await dispatchTool(
+      ctxFor({ identity: personal(owner), threadId }),
+      'budget_rollover',
+      {
+        month,
+        rows,
+        batchId,
+      },
+    );
+    if (out.status !== 'ok') throw new Error(`ожидалось исполнение, пришло ${JSON.stringify(out)}`);
+    expect(await envelopesOf(owner)).toBe(2);
+    const result = out.result as { actionId: string };
+    // Без этих двух полей `ai/send-message.ts` не показал бы ни карточку, ни чип отката — и запись
+    // денег моделью по факту шла бы уровнем `execute`, молча.
+    expect(out.actionId).toBe(result.actionId);
+    expect(out.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'preview',
+      summary: `Перенос остатков на ${TARGET}: конвертов — 2`,
+    });
+    // Повтор того же batchId ничего не применял — отката у него нет, `actionId` в ответе нет.
+    const again = await dispatchTool(
+      ctxFor({ identity: personal(owner), threadId }),
+      'budget_rollover',
+      {
+        month,
+        rows,
+        batchId,
+      },
+    );
+    expect(again.status).toBe('ok');
+    if (again.status !== 'ok') return;
+    expect(again.actionId).toBeUndefined();
+    expect(await envelopesOf(owner)).toBe(2);
+  });
+
+  test('описание тула не ссылается на предпросмотр, которого у модели нет (рулинг 10-1)', async () => {
+    const owner = await freshGraph();
+    const def = (
+      await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner))
+    ).find((d) => d.name === 'budget_rollover');
+    expect(def?.description).not.toContain('предпросмотр');
+    expect(JSON.stringify(def?.inputJsonSchema)).not.toContain('предпросмотр');
+    expect(def?.description).toContain('budget_status');
   });
 
   test('внутри batch_execute не исполняется: исполнитель такого тула не знает', async () => {
@@ -6438,6 +6494,12 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
       throw new Error(`ожидалась карточка-запрос, пришло ${JSON.stringify(out)}`);
     }
     expect(out.card.summary).toBe(`Перенос остатков на ${TARGET}: конвертов — 11`);
+    // Карточка-запрос несёт СУММЫ по каждому конверту, а не одно число конвертов (фикс-раунд 1, I-4).
+    expect(out.card.rows).toHaveLength(11);
+    expect(out.card.rows?.[0]).toEqual({
+      field: 'Категория 1',
+      after: 'лимит 5000.00 · перенос 0.00',
+    });
     expect(await envelopesOf(owner)).toBe(0);
     const approved = await approvePending(db, {
       identity: personal(owner),
@@ -6469,7 +6531,10 @@ describe('budget_rollover (§Б6-5 ревизии 4, В-4): инструмент
       throw new Error(`ожидалась отложенная единица, пришло ${JSON.stringify(out)}`);
     }
     expect(out.card.summary).toBe(`Перенос остатков на ${TARGET}: конвертов — 1`);
-    expect(out.card.rows).toEqual([{ field: String(rows[0]?.categoryId), after: '5000.00' }]);
+    // Имя категории и обе суммы — лимит и перенос (фикс-раунд 1, I-4), а не сырой uuid и один лимит.
+    expect(out.card.rows).toEqual([
+      { field: 'Категория 1', after: 'лимит 5000.00 · перенос 0.00' },
+    ]);
     expect(await envelopesOf(owner)).toBe(0);
     // Режим propose тула не видит вовсе — гейт режима отвечает до всякой отложки.
     const propose = routineCtx(owner, 'propose', allowed, { clock: () => T0 });
