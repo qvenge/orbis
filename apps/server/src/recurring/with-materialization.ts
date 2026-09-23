@@ -9,6 +9,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import type { Identity } from '../identity';
 import type { CompileCtx } from '../query/compile-ast';
 import { queryContext } from '../query/context';
+import { materializeRuleOf } from '../rules/carriers';
 import { materializationWindow, materializeInstances } from './materialize';
 
 export interface QueryWithMaterializationOpts<T> {
@@ -30,7 +31,8 @@ export interface QueryWithMaterializationOpts<T> {
  * транзакциями (executor открывает собственные tx; вложенность в живой tx истощала бы пул
  * соединений), затем исполнение вторым tx.
  *
- * ТРИГГЕРОВ ТРИ, а не два: Задача 9b добавила к `orbis/start_at`/`orbis/occurred_on` ещё и
+ * ТРИГГЕРОВ ТРИ, а не два (перечень — `trigger_properties` строки каталога `materialize`): Задача 9b
+ * добавила к `orbis/start_at`/`orbis/occurred_on` ещё и
  * `orbis/due_date` — на нём стоят списки «Сегодня», «Ближайшие 7 дней» и «Позже», и без
  * него повторяющаяся задача со сроком в них просто не появлялась. Цена названа вслух:
  * запрос со сроком теперь ВСЕГДА идёт двумя транзакциями вместо одной (фаза 1 — контекст и
@@ -52,7 +54,9 @@ export async function queryWithMaterialization<T>(
   const phase1 = await withIdentity(db, identity, async (tx): Promise<Phase1> => {
     const cctx = await queryContext(tx, identity.graph, opts.thisEntityId);
     const ast = opts.parse(cctx);
-    const window = materializationWindow(ast, cctx.today);
+    // Триггеры и горизонт — параметры строки `materialize` из того же снимка, по которому запрос
+    // разобран и будет исполнен (`cctx.reg`): второй снимок разошёлся бы с первым.
+    const window = materializationWindow(ast, cctx.today, materializeRuleOf(cctx.reg).rule.params);
     if (window) return { kind: 'materialize', window, ast, cctx };
     return { kind: 'done', result: await opts.run(tx, ast, cctx) };
   });

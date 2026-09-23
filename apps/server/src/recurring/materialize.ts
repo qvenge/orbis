@@ -7,12 +7,18 @@
 // (source='system'), по одному batch на шаблон с детерминированным batch_id: повтор
 // того же окна идемпотентен и по SELECT-предпроверке, и по audit-PK batch (§7.8),
 // а конфликт PK сущности у конкурентов резолвится перечитыванием (retry ниже).
+//
+// ЗДЕСЬ — КОД ДВИЖКА; горизонт, ретро-пол, триггеры, перечни наследования, свои свойства инстанса и
+// роль ребра — строка каталога `materialize` на `orbis/schedule` (`builtin-rules.ts`,
+// `materializeRuleOf`; доводы значений — в докблоке строки). Вторая копия числа 14
+// (`subscriptions/budget.ts`) — окно ВЕДОМОСТИ, а не горизонт ПОРОЖДЕНИЯ: совпадение значений
+// случайно, сливать их нельзя (Р-14). Строки нет или она выключена — `Error` сборки
+// (Р-И-17): порождать инстансы по числам, которых нет в реестре, движок не вправе.
 import {
   addDays,
   expandRecurrence,
   materializeBatchId,
   type RecurrenceRule,
-  ROLE_INSTANCE_OF,
   recurringInstanceId,
 } from '@orbis/shared';
 import type {
@@ -30,36 +36,19 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { Identity } from '../identity';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
-
-/** Горизонт материализации: не дальше 14 дней вперёд от сегодня (§5.4). */
-const HORIZON_DAYS = 14;
-
-/**
- * Ретро-пол материализации: не глубже 92 дней (квартал) назад от сегодня.
- * Абсолютные диапазоны дат в грамматике (B5) сделали выразимым окно «2020..today» —
- * без пола такой запрос синхронно материализовал бы годы инстансов, а post-due
- * следом переписал бы spent исторических месяцев. Квартал покрывает легитимный
- * кейс «не открывал приложение месяц». Кап — решение контролёра B5,
- * sign-off владельца — на финале фазы B.
- */
-const RETRO_DAYS = 92;
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
+import { type MaterializeParams, type MaterializeRule, materializeRuleOf } from '../rules/carriers';
 
 /** Формат даты окна/фильтра — только структура; арифметика живёт в @orbis/shared addDays. */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Свойства-триггеры хука (§А5-2: в дереве лежат id, не имена полей). Три, а не два:
- * `orbis/due_date` добавлен Задачей 9b — списки «Сегодня», «Ближайшие 7 дней» и «Позже»
- * отбирают recurring-задачи именно по сроку, и без него материализация под них не
- * запускалась вовсе (окно давал только соседний `start_at`, которого у задачи может не
- * быть). Список — константа кода: это свойство ИСПОЛНЕНИЯ (что мы умеем порождать лениво),
- * а не свойство запроса.
+ * Признак ШАБЛОНА — свойство-маркер `orbis/recurrence`, а не параметр строки: без правила повторения
+ * материализовать нечего, и «шаблон без правила» движок не умеет в принципе. Остаётся константой
+ * движка (как `MAX_ATTEMPTS`), в отличие от перечней строки каталога.
  */
-const MATERIALIZABLE_PROPERTIES = new Set([
-  'orbis/start_at',
-  'orbis/due_date',
-  'orbis/occurred_on',
-]);
+const RECURRENCE = 'orbis/recurrence';
 
 /** Попыток на шаблон при гонке конкурентных материализаций пересекающихся окон. */
 const MAX_ATTEMPTS = 3;
@@ -69,48 +58,6 @@ const MAX_ATTEMPTS = 3;
 const sink = makeChatJournalSink();
 
 type TemplateRow = typeof entities.$inferSelect;
-
-/**
- * ЯВНЫЙ перечень наследуемых инстансом свойств РАСПИСАНИЯ (Р-28) — весь аспект
- * `orbis/schedule` без `orbis/recurrence`: правило повторения принадлежит шаблону, и
- * инстанс, унёсший его с собой, сам стал бы шаблоном (§3.3).
- *
- * Перечень, а не «всё, что было минус одно», потому что в новой форме «всё, что было» —
- * это ВСЕ `props` строки: у шаблона-задачи там лежат `orbis/task_status` и `orbis/priority`,
- * у шаблона-транзакции — `orbis/bank_txn_id`. Копирование по остаточному принципу молча
- * порождало бы инстансы с чужими свойствами; закрытый список делает наследование решением.
- *
- * `orbis/start_at` и `orbis/end_at` в перечне ЕСТЬ, но копируются не как есть: их
- * пересчитывает `instanceScheduleProps` — дата инстанса со временем суток шаблона.
- */
-const INHERITED_SCHEDULE_PROPERTIES: readonly string[] = [
-  'orbis/start_at',
-  'orbis/end_at',
-  'orbis/duration_min',
-  'orbis/all_day',
-  'orbis/location',
-  'orbis/timezone',
-];
-
-/**
- * ЯВНЫЙ перечень наследуемых инстансом свойств ФИНАНСОВ (Р-28). Шесть, а не десять:
- *  • `orbis/occurred_on`, `orbis/planned`, `orbis/recurring` инстанс получает СВОИ
- *    (дата инстанса, `true`, `true` — §5.4/§3.3), а не шаблонные;
- *  • `orbis/bank_txn_id` не наследуется вовсе: это тождество ОДНОЙ строки банковской
- *    выписки, и общий идентификатор у всех инстансов объявил бы их одной операцией —
- *    дедуп импорта (§3.4.1 п.3) считал бы повтором каждую.
- */
-const INHERITED_FINANCIAL_PROPERTIES: readonly string[] = [
-  'orbis/amount',
-  'orbis/currency',
-  'orbis/direction',
-  'orbis/finance_category',
-  'orbis/payment_method',
-  'orbis/counterparty',
-];
-
-const SCHEDULE_ASPECT = 'orbis/schedule';
-const FINANCIAL_ASPECT = 'orbis/financial';
 
 // Стеночные часы владельца — экспортированы: планировщик рутин (routines/schedule.ts)
 // считает бакеты 'YYYY-MM-DDTЧЧ:ММ' в таймзоне владельца теми же двумя функциями, что
@@ -175,9 +122,13 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
  * Правила по узлам: относительный токен разворачивается в свой диапазон (`overdue` и
  * прочий «открытый низ» — только сегодня и будущее: прошлое лениво не порождаем),
  * литеральная 'YYYY-MM-DD' — окно этого дня, `range` — [from; to] с подстановкой открытой
- * границы (низ — сегодня, верх — горизонт +14д), `gt`/`lt` — от следующего дня и до дня
- * перед. Несколько условий объединяются в [min from; max to]; горизонт +14д и ретро-пол
- * −92д (RETRO_DAYS) обрезает `materializeInstances` — окно здесь не клампится.
+ * границы (низ — сегодня, верх — горизонт правила), `gt`/`lt` — от следующего дня и до дня
+ * перед. Несколько условий объединяются в [min from; max to]; горизонт и ретро-пол строки
+ * `materialize` обрезает `materializeInstances` — окно здесь не клампится.
+ *
+ * Триггеры и горизонт — ПАРАМЕТРЫ строки каталога (`params`: `trigger_properties`,
+ * `horizon_days`), третьим аргументом, а не константы файла: функция чистая и снимка не читает,
+ * параметры ей отдаёт вызывающий из того же снимка, по которому исполняет запрос.
  *
  * ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ ПЛОСКОГО ОБХОДА, который был до Задачи 9b, — двумя местами, и оба
  * РАСШИРЯЮТ окно, а не сужают (то есть могут породить лишние инстансы, но не спрятать
@@ -189,6 +140,7 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
 export function materializationWindow(
   ast: QueryAst,
   today: string,
+  params: MaterializeParams,
 ): { from: string; to: string } | null {
   let from: string | null = null;
   let to: string | null = null;
@@ -196,7 +148,7 @@ export function materializationWindow(
     from = from === null || f < from ? f : from;
     to = to === null || t > to ? t : to;
   };
-  const horizon = () => addDays(today, HORIZON_DAYS);
+  const horizon = () => addDays(today, params.horizon_days);
 
   /** Диапазон, который токен задаёт САМ ПО СЕБЕ (позиция равенства). */
   const tokenWindow = (token: QueryDateToken): { from: string; to: string } => {
@@ -223,7 +175,7 @@ export function materializationWindow(
   };
 
   const visitProp = (node: { prop: string; op: string; value: unknown }): void => {
-    if (!MATERIALIZABLE_PROPERTIES.has(node.prop)) return;
+    if (!params.trigger_properties.includes(node.prop)) return;
     const value = node.value;
     switch (node.op) {
       case 'eq': {
@@ -244,7 +196,7 @@ export function materializationWindow(
         return;
       }
       case 'gt': {
-        // Строго после X; верх не ограничен → горизонт +14д от сегодня.
+        // Строго после X; верх не ограничен → горизонт правила от сегодня.
         const day = boundDay(value as QueryBound);
         if (day !== null) widen(addDays(day, 1), horizon());
         return;
@@ -300,13 +252,14 @@ export interface MaterializeDeps {
   /** Окно запроса, 'YYYY-MM-DD' включительно с обеих сторон. */
   from: string;
   to: string;
-  /** «Сегодня» в таймзоне пользователя (queryContext) — якорь горизонта +14д. */
+  /** «Сегодня» в таймзоне пользователя (queryContext) — якорь горизонта и ретро-пола правила. */
   today: string;
 }
 
 /**
  * Материализует инстансы всех recurring-шаблонов владельца в окне
- * [from; min(to, today+14d)] (§5.4). Идемпотентна: существующие детерминированные id
+ * [max(from, today−retro); min(to, today+horizon)] (§5.4; числа — строка `materialize`).
+ * Идемпотентна: существующие детерминированные id
  * пропускаются (SELECT id = ANY перед вставкой), повтор окна — replay batch по audit-PK,
  * гонка конкурентов — retry с перечитыванием. Битый шаблон (кривое recurrence-правило,
  * невалидные данные) пропускается, не роняя запрос вызывающего.
@@ -316,60 +269,92 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
   if (!DATE_RE.test(deps.from) || !DATE_RE.test(deps.to)) {
     throw new RangeError(`Некорректное окно материализации: [${deps.from}; ${deps.to}]`);
   }
-  // Окно = [from; to] ∩ [today−92д; today+14д]: верх — горизонт §5.4, низ — ретро-пол
-  // (см. RETRO_DAYS; кламп здесь — единая точка для всех вызывающих, включая budget-роутер)
-  const horizon = addDays(today, HORIZON_DAYS);
-  const retroFloor = addDays(today, -RETRO_DAYS);
-  const to = deps.to < horizon ? deps.to : horizon;
-  const from = deps.from > retroFloor ? deps.from : retroFloor;
-  if (to < from) return { created: 0 };
-
-  // Фаза чтения (короткий tx под RLS): шаблоны владельца + его таймзона.
+  // Фаза чтения (короткий tx под RLS): снимок реестра, шаблоны владельца, его таймзона.
   // Шаблон = неархивная сущность с orbis/schedule.recurrence (§3.1); financial без
   // recurrence шаблоном не является и сюда не попадает (§3.3 — пропуск по построению).
-  const { templates, userTimezone } = await withIdentity(db, identity, async (tx) => {
-    const rows = await tx
-      .select()
-      .from(entities)
-      .where(
-        and(
-          eq(entities.archived, false),
-          // Признак носителя обязателен (Р9): `orbis/recurrence` остаётся в `props` и
-          // после снятия аспекта расписания, а из старой карты уходил вместе с ним.
-          // Без него сущность, расписания лишившаяся, продолжала бы плодить инстансы.
-          sql`${SCHEDULE_ASPECT} = ANY(${entities.aspects})`,
-          sql`${entities.props} -> 'orbis/recurrence' IS NOT NULL`,
-        ),
-      );
-    const settings = await tx
-      .select({ timezone: userSettings.timezone })
-      .from(userSettings)
-      .where(eq(userSettings.graphId, identity.graph));
-    const stored = settings[0]?.timezone ?? DEFAULT_TIMEZONE;
-    return {
-      templates: rows,
-      userTimezone: isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE,
-    };
-  });
+  const { templates, userTimezone, reg, rule, carrier } = await withIdentity(
+    db,
+    identity,
+    async (tx) => {
+      // Снимок берётся ТОЙ ЖЕ фазой чтения, что шаблоны: разойдись он с ними, и инстансы рождались
+      // бы по одному реестру, а проверялись исполнителем по другому. Носитель правила нужен уже
+      // SELECT'у шаблонов — поэтому читатель строки стоит здесь, а не после фазы.
+      const snapshot = await effectiveRegistry(tx, identity.graph);
+      const { rule: found, aspectId } = materializeRuleOf(snapshot);
+      const rows = await tx
+        .select()
+        .from(entities)
+        .where(
+          and(
+            eq(entities.archived, false),
+            // Признак носителя обязателен (Р9): `orbis/recurrence` остаётся в `props` и
+            // после снятия аспекта расписания, а из старой карты уходил вместе с ним.
+            // Без него сущность, расписания лишившаяся, продолжала бы плодить инстансы.
+            sql`${aspectId} = ANY(${entities.aspects})`,
+            sql`${entities.props} -> ${RECURRENCE} IS NOT NULL`,
+          ),
+        );
+      const settings = await tx
+        .select({ timezone: userSettings.timezone })
+        .from(userSettings)
+        .where(eq(userSettings.graphId, identity.graph));
+      const stored = settings[0]?.timezone ?? DEFAULT_TIMEZONE;
+      return {
+        templates: rows,
+        userTimezone: isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE,
+        reg: snapshot,
+        rule: found,
+        carrier: aspectId,
+      };
+    },
+  );
 
   let created = 0;
   for (const template of templates) {
-    created += await materializeTemplate(db, identity, template, userTimezone, from, to);
+    // Окно = [from; to] ∩ [today−retro; today+horizon]: верх — горизонт §5.4, низ — ретро-пол
+    // (кламп — единая точка для всех вызывающих, включая budget-роутер). Кламп ЗДЕСЬ, а не до фазы
+    // чтения: горизонт — параметр ПРАВИЛА, и до снимка неизвестно, чьё правило применять к этому
+    // шаблону (Р-14, РЧ-13-3). Цена названа: сегодня правило одно на граф, и повторный расчёт — две
+    // арифметики дат на шаблон; выгода — носитель правила может стать не одним, а точка клампа
+    // переезжать не будет.
+    const horizon = addDays(today, rule.params.horizon_days);
+    const retroFloor = addDays(today, -rule.params.retro_days);
+    const to = deps.to < horizon ? deps.to : horizon;
+    const from = deps.from > retroFloor ? deps.from : retroFloor;
+    if (to < from) continue;
+    created += await materializeTemplate(
+      db,
+      identity,
+      { reg, rule, carrier },
+      template,
+      userTimezone,
+      from,
+      to,
+    );
   }
   return { created };
+}
+
+/** Правило материализации одним аргументом: снимок, строка и её носитель — из одной фазы чтения. */
+interface MaterializeCtx {
+  reg: RegistrySnapshot;
+  rule: MaterializeRule;
+  /** Носитель строки — аспект, который делает запись шаблоном и который получает каждый инстанс. */
+  carrier: string;
 }
 
 /** Материализация одного шаблона; возвращает число созданных инстансов. */
 async function materializeTemplate(
   db: Db,
   who: Identity,
+  mctx: MaterializeCtx,
   template: TemplateRow,
   userTimezone: string,
   from: string,
   to: string,
 ): Promise<number> {
   // Признак носителя здесь не повторяется: строки отобрал SELECT выше, где
-  // `'orbis/schedule' = ANY(aspects)` уже стоит, — вторая проверка была бы тавтологией.
+  // `<носитель> = ANY(aspects)` уже стоит, — вторая проверка была бы тавтологией.
   const props = template.props as Record<string, unknown>;
   const startAt = props['orbis/start_at'];
   if (typeof startAt !== 'string') return 0;
@@ -386,7 +371,7 @@ async function materializeTemplate(
 
   let dates: string[];
   try {
-    dates = expandRecurrence(props['orbis/recurrence'] as RecurrenceRule, wall.date, from, to);
+    dates = expandRecurrence(props[RECURRENCE] as RecurrenceRule, wall.date, from, to);
   } catch (e) {
     // Битое правило (RangeError, fail-fast A2): пропускаем ШАБЛОН, а не роняем весь
     // запрос вызывающего — остальные шаблоны материализуются (закреплено тестом).
@@ -424,7 +409,7 @@ async function materializeTemplate(
 
     // Один batch на шаблон: create+relation каждой даты; derived_from в том же batch
     // легитимирует financial-инвариант инстанса (recurring=true без recurrence, §3.3)
-    const operations = missing.flatMap((date) => instanceOps(template, timezone, wall, date));
+    const operations = missing.flatMap((date) => instanceOps(mctx, template, timezone, wall, date));
     const r = await execute(
       db,
       {
@@ -455,38 +440,76 @@ async function materializeTemplate(
   return 0;
 }
 
-/**
- * Свойства расписания инстанса: перечень Р-28 из свойств шаблона, где `orbis/start_at` —
- * дата инстанса со временем суток шаблона (в его таймзоне), а `orbis/end_at` сдвинут той
- * же длительностью. `orbis/recurrence` в перечень не входит и потому не переносится.
- *
- * Ветки «иначе» у `end_at` НЕТ, и это точный перевод, а не пропуск: до реформы весь аспект
- * копировался спредом ДО проверки типа, поэтому нестроковый `end_at` уезжал в инстанс как
- * есть, а пересчёт и удаление касались только строкового. Перечень выше копирует его тем
- * же образом; трогать значение, которого прежний код не трогал, значило бы поменять
- * поведение на пути, куда боевая запись не доходит (ajv отвергает нестроковый timestamp).
- */
-function instanceScheduleProps(
-  props: Record<string, unknown>,
-  start: Date,
+/** Наследуемые свойства — ЯВНЫЙ перечень строки правила, по аспекту-источнику (§Б4-3, inv §6 п.3). */
+function inheritedProps(
+  rule: MaterializeRule,
+  templateProps: Record<string, unknown>,
+  aspects: readonly string[],
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const propertyId of INHERITED_SCHEDULE_PROPERTIES) {
-    if (Object.hasOwn(props, propertyId)) out[propertyId] = props[propertyId];
-  }
-  out['orbis/start_at'] = start.toISOString();
-  const endAt = props['orbis/end_at'];
-  if (typeof endAt === 'string') {
-    const templStart = new Date(props['orbis/start_at'] as string).getTime();
-    const templEnd = new Date(endAt).getTime();
-    if (Number.isNaN(templEnd)) delete out['orbis/end_at'];
-    else out['orbis/end_at'] = new Date(start.getTime() + (templEnd - templStart)).toISOString();
+  for (const [aspectId, ids] of Object.entries(rule.params.inherit)) {
+    if (!aspects.includes(aspectId)) continue;
+    for (const propertyId of ids) {
+      if (Object.hasOwn(templateProps, propertyId)) out[propertyId] = templateProps[propertyId];
+    }
   }
   return out;
 }
 
-/** Пара операций batch для одной даты: entity_create инстанса + derived_from шаблон→инстанс. */
+/**
+ * Время инстанса: `orbis/start_at` — дата инстанса со временем суток шаблона (в его таймзоне), а
+ * `orbis/end_at` сдвинут той же длительностью. Это КОД движка, а не параметр: «дата инстанса с
+ * временем шаблона» — само определение порождения, и перечень наследования его не выражает.
+ *
+ * Ветки «иначе» у `end_at` НЕТ, и это точный перевод, а не пропуск: до реформы весь аспект
+ * копировался спредом ДО проверки типа, поэтому нестроковый `end_at` уезжал в инстанс как
+ * есть, а пересчёт и удаление касались только строкового. Перечень копирует его тем же
+ * образом; трогать значение, которого прежний код не трогал, значило бы поменять поведение на
+ * пути, куда боевая запись не доходит (ajv отвергает нестроковый timestamp). Сдвигается только
+ * УНАСЛЕДОВАННЫЙ `end_at`: строка, снявшая его с перечня, не получит его обратно пересчётом.
+ */
+function shiftToInstance(
+  props: Record<string, unknown>,
+  templateProps: Record<string, unknown>,
+  start: Date,
+): void {
+  props['orbis/start_at'] = start.toISOString();
+  const endAt = props['orbis/end_at'];
+  if (typeof endAt === 'string') {
+    const templStart = new Date(templateProps['orbis/start_at'] as string).getTime();
+    const templEnd = new Date(endAt).getTime();
+    if (Number.isNaN(templEnd)) delete props['orbis/end_at'];
+    else props['orbis/end_at'] = new Date(start.getTime() + (templEnd - templStart)).toISOString();
+  }
+}
+
+/**
+ * СВОИ свойства инстанса (`own`): применяются к тем записям, чьи аспекты ОБЪЯВЛЯЮТ это свойство
+ * (РЧ-13-2) — ровно то условие, которое прежде было выражено веткой «шаблон финансовый»
+ * (`orbis/occurred_on`, `orbis/planned`, `orbis/recurring` объявляет `orbis/financial`). Носителя
+ * называет реестр, поэтому второй карты «по аспектам» у параметра не нужно.
+ * `'instance_date'` — маркер «дата этого инстанса», остальные значения кладутся как есть.
+ */
+function ownProps(
+  reg: RegistrySnapshot,
+  rule: MaterializeRule,
+  aspects: readonly string[],
+  date: string,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [propertyId, spec] of Object.entries(rule.params.own)) {
+    const carried = aspects.some((a) =>
+      (reg.aspects.get(a)?.properties ?? []).some((p) => p.propertyId === propertyId),
+    );
+    if (!carried) continue;
+    out[propertyId] = spec === 'instance_date' ? date : spec;
+  }
+  return out;
+}
+
+/** Пара операций batch для одной даты: entity_create инстанса + ребро роли происхождения шаблон→инстанс. */
 function instanceOps(
+  { reg, rule, carrier }: MaterializeCtx,
   template: TemplateRow,
   timezone: string,
   wall: WallClock,
@@ -496,20 +519,23 @@ function instanceOps(
   const start = instantOfLocal(date, wall.time, timezone);
   const templateProps = template.props as Record<string, unknown>;
 
-  const props: Record<string, unknown> = instanceScheduleProps(templateProps, start);
-  const aspects: string[] = [SCHEDULE_ASPECT];
-  if (template.aspects.includes(FINANCIAL_ASPECT)) {
-    for (const propertyId of INHERITED_FINANCIAL_PROPERTIES) {
-      if (Object.hasOwn(templateProps, propertyId)) props[propertyId] = templateProps[propertyId];
-    }
-    // §5.4/§3.3: occurred_on = дата инстанса, planned=true (до перехода в факт),
-    // recurring=true (инстанс шаблона); к конверту инстанс авто-привязывается бюджет-
-    // хуком executor'а уже при создании (A4, 03-budget §2.3) — planned не входит в spent
-    props['orbis/occurred_on'] = date;
-    props['orbis/planned'] = true;
-    props['orbis/recurring'] = true;
-    aspects.push(FINANCIAL_ASPECT);
-  }
+  // Аспекты инстанса: носитель правила плюс те аспекты-источники наследования, что стоят на
+  // шаблоне. Порядок — ранг реестра, а не порядок ключей `inherit`: строка лежит в jsonb, и Postgres
+  // переупорядочивает ключи объекта — порядок аспектов инстанса зависел бы от длины их id.
+  const rank = (a: string) => reg.aspects.get(a)?.rank ?? Number.MAX_SAFE_INTEGER;
+  const aspects = [
+    carrier,
+    ...Object.keys(rule.params.inherit)
+      .filter((a) => a !== carrier && template.aspects.includes(a))
+      .sort((a, b) => rank(a) - rank(b)),
+  ];
+
+  const props = inheritedProps(rule, templateProps, aspects);
+  shiftToInstance(props, templateProps, start);
+  // §5.4/§3.3: свои значения инстанса — дата, planned=true (до перехода в факт), recurring=true;
+  // к конверту финансовый инстанс авто-привязывается бюджет-хуком executor'а уже при создании
+  // (A4, 03-budget §2.3) — planned не входит в spent.
+  Object.assign(props, ownProps(reg, rule, aspects, date));
 
   // Внутренняя форма создания (§А1-1): плоские `props` плюс СПИСОК аспектов.
   const input: Record<string, unknown> = {
@@ -524,9 +550,10 @@ function instanceOps(
   return [
     { tool: 'entity_create', input },
     {
-      // РП-5: направление как у прежнего `derived_from` — источник ШАБЛОН, цель экземпляр
+      // РП-5: направление как у прежнего `derived_from` — источник ШАБЛОН, цель экземпляр; роль —
+      // `origin_role` строки (слот происхождения контракта повторяемости).
       tool: 'relation_create',
-      input: { source_id: template.id, target_id: id, role: ROLE_INSTANCE_OF },
+      input: { source_id: template.id, target_id: id, role: rule.params.origin_role },
     },
   ];
 }

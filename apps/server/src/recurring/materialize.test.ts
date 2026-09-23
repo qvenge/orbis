@@ -11,7 +11,9 @@ import {
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   ROLE_INSTANCE_OF,
+  RULE_MATERIALIZE,
   recurringInstanceId,
+  ruleDefinitionSchema,
 } from '@orbis/shared';
 import { parseQueryAst, type QueryFilterNode, toParseRegistry } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -23,10 +25,12 @@ import {
   rawEntityRow,
   requireEnv,
   truncateAll,
+  withRule,
 } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
+import type { MaterializeParams } from '../rules/carriers';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 import { materializationWindow, materializeInstances } from './materialize';
@@ -225,6 +229,86 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const beyond = await ownEntities(owner, [recurringInstanceId(templateId, '2026-07-16')]);
     expect(beyond.length).toBe(0);
+  });
+
+  test('горизонт и ретро-пол — параметры СТРОКИ правила: подмена строки двигает оба края окна', async () => {
+    // Кламп стоит в цикле по шаблонам и читает строку того же снимка (РЧ-13-3): тест держит именно
+    // это — константа движка на месте параметра дала бы здесь 15 инстансов вместо пяти.
+    const owner = await freshGraph();
+    const templateId = await createTemplate(owner, {
+      title: 'Ежедневное (короткий горизонт)',
+      props: dailyScheduleProps('2026-06-01'),
+      aspects: ['orbis/schedule'],
+    });
+    const base = ruleDefinitionSchema.parse(RULE_MATERIALIZE);
+    if (base.template !== 'materialize') throw new Error('RULE_MATERIALIZE — не materialize');
+    const r = await withRule(
+      'orbis/schedule',
+      [{ ...RULE_MATERIALIZE, params: { ...base.params, horizon_days: 3, retro_days: 1 } }],
+      () =>
+        materializeInstances({
+          db,
+          identity: personal(owner),
+          from: '2026-06-01',
+          to: '2026-07-31',
+          today: '2026-07-01',
+        }),
+    );
+    // [today−1; today+3] = 06-30..07-04 — пять дат
+    expect(r.created).toBe(5);
+    const edge = await ownEntities(owner, [
+      recurringInstanceId(templateId, '2026-06-29'),
+      recurringInstanceId(templateId, '2026-06-30'),
+      recurringInstanceId(templateId, '2026-07-04'),
+      recurringInstanceId(templateId, '2026-07-05'),
+    ]);
+    expect(edge.map((row) => row.id).sort()).toEqual(
+      [
+        recurringInstanceId(templateId, '2026-06-30'),
+        recurringInstanceId(templateId, '2026-07-04'),
+      ].sort(),
+    );
+  });
+
+  test('перечень наследования — параметр СТРОКИ: свойство, снятое с перечня, инстанс не получает', async () => {
+    const owner = await freshGraph();
+    const templateId = await createTemplate(owner, {
+      title: 'Пробежка в парке',
+      props: { ...dailyScheduleProps('2026-07-01'), 'orbis/location': 'Парк' },
+      aspects: ['orbis/schedule'],
+    });
+    const base = ruleDefinitionSchema.parse(RULE_MATERIALIZE);
+    if (base.template !== 'materialize') throw new Error('RULE_MATERIALIZE — не materialize');
+    const schedule = (base.params.inherit['orbis/schedule'] ?? []).filter(
+      (id) => id !== 'orbis/location',
+    );
+    await withRule(
+      'orbis/schedule',
+      [
+        {
+          ...RULE_MATERIALIZE,
+          params: {
+            ...base.params,
+            inherit: { ...base.params.inherit, 'orbis/schedule': schedule },
+          },
+        },
+      ],
+      () =>
+        materializeInstances({
+          db,
+          identity: personal(owner),
+          from: '2026-07-01',
+          to: '2026-07-01',
+          today: '2026-07-01',
+        }),
+    );
+    const [row] = await ownEntities(owner, [recurringInstanceId(templateId, '2026-07-01')]);
+    if (row === undefined) throw new Error('инстанс не создан');
+    // Константа движка на месте перечня унесла бы `orbis/location` в инстанс.
+    expect(Object.keys(row.props as Record<string, unknown>).sort()).toEqual([
+      'orbis/start_at',
+      'orbis/timezone',
+    ]);
   });
 
   test('нижняя граница окна клампится today−92д (fix round B5): запрос 2020..today не тащит годы истории', async () => {
@@ -585,13 +669,40 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
     },
     'ru',
   );
+  /**
+   * Горизонт и триггеры — параметры правила; хелпер берёт их из СИСТЕМНОЙ строки сида
+   * (`RULE_MATERIALIZE`, доведённой схемой), а не из константы файла: числа окон ниже (горизонт
+   * +14д) пиннят ровно ту строку, что сеется в базу.
+   */
+  const parsedRow = ruleDefinitionSchema.parse(RULE_MATERIALIZE);
+  if (parsedRow.template !== 'materialize') throw new Error('RULE_MATERIALIZE — не materialize');
+  const MATERIALIZE_PARAMS: MaterializeParams = parsedRow.params;
   const win = (query: string) => {
     const parsed = parseQueryAst(query, REG);
     if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
-    return materializationWindow(parsed.ast, today);
+    return materializationWindow(parsed.ast, today, MATERIALIZE_PARAMS);
   };
   /** Окно по готовому дереву — там, где текст плоской грамматики его не выражает (§А5-3д). */
-  const winAst = (filter: QueryFilterNode) => materializationWindow({ filter }, today);
+  const winAst = (filter: QueryFilterNode) =>
+    materializationWindow({ filter }, today, MATERIALIZE_PARAMS);
+
+  test('горизонт правила меняет окно: 30 дней вместо 14', () => {
+    const parsed = parseQueryAst('orbis/due_date>2026-07-01', REG);
+    if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+    const w = materializationWindow(parsed.ast, today, { ...MATERIALIZE_PARAMS, horizon_days: 30 });
+    expect(w).toEqual({ from: '2026-07-02', to: addDays(today, 30) });
+  });
+
+  test('триггер — перечень правила: свойство вне перечня окна не даёт', () => {
+    const parsed = parseQueryAst('orbis/due_date=today', REG);
+    if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+    expect(
+      materializationWindow(parsed.ast, today, {
+        ...MATERIALIZE_PARAMS,
+        trigger_properties: ['orbis/start_at'],
+      }),
+    ).toBeNull();
+  });
 
   test('запрос без date/timestamp-условий — окна нет', () => {
     expect(win('aspect=orbis/task, orbis/task_status=inbox')).toBeNull();
