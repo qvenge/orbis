@@ -58,6 +58,7 @@ import { effectiveRegistry } from '../src/registry/cache';
 import type { RegistrySnapshot } from '../src/registry/load';
 import { BUDGET_SUBSCRIPTION_ID, budgetOverviewOf } from '../src/subscriptions/budget';
 import { builtinSubscription } from '../src/subscriptions/registry';
+import { BUDGET_ENGINE_GOLDEN, volumeSnapshotOf } from '../src/test/overview-golden';
 import { measureMedian, measureP95 } from '../src/test/perf';
 import {
   cleanupVolumeProbes,
@@ -700,6 +701,7 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
     }
     const coldDiffs: string[] = [];
     const warmDiffs: string[] = [];
+    const snapshotDiffs: string[] = [];
     for (let k = 0; k < VOLUME_MONTHS; k += 1) {
       const month = volumeMonth(k);
       await withIdentity(db, personal(VOLUME_OWNER_ID), async (tx) => {
@@ -727,12 +729,21 @@ describe('§С8-15: Budget из подписки на синтетике 20k×40
         const oracle = canonicalJson(a);
         if (canonicalJson(cold) !== oracle) coldDiffs.push(month);
         if (canonicalJson(warm) !== oracle) warmDiffs.push(month);
+        // Снимок `test/golden/budget-engine.json` (половина `volume`) снят этим же тестом и в том же
+        // шаге сверен с оракулом (Р-32, ход 1): с ним сверяются оба пути движка.
+        const snapshot = canonicalJson(BUDGET_ENGINE_GOLDEN.volume[month]);
+        if (canonicalJson(volumeSnapshotOf(cold)) !== snapshot) snapshotDiffs.push(`${month}:cold`);
+        if (canonicalJson(volumeSnapshotOf(warm)) !== snapshot) snapshotDiffs.push(`${month}:warm`);
         // Сторож: сверка идёт по ДАННЫМ, а не по пустоте — число из корпуса, не литералом.
         expect(a.envelopes.length).toBe(VOLUME_ENVELOPES_PER_MONTH);
       });
     }
     // Списки нарушителей, а не первый упавший; порознь — чтобы было видно, ЧЕЙ путь разошёлся.
-    expect({ cold: coldDiffs, warm: warmDiffs }).toEqual({ cold: [], warm: [] });
+    expect({ cold: coldDiffs, warm: warmDiffs, snapshot: snapshotDiffs }).toEqual({
+      cold: [],
+      warm: [],
+      snapshot: [],
+    });
     // И кэш действительно наполнился: иначе «тёплый» был бы вторым холодным, а сверка —
     // тавтологией «движок равен себе».
     const rows = (await withIdentity(db, personal(VOLUME_OWNER_ID), (tx) =>
