@@ -20,12 +20,14 @@
 import {
   type BindingIndex,
   canonicalJson,
+  effectiveLabel,
   entityClassOf,
   type GraphId,
   type RuleCarrier,
   type RuleDefinition,
 } from '@orbis/shared';
 import { type ExprScalar, propertyNamesInExpr } from '@orbis/shared/expr';
+import { OWNER_LOCALE } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { defaultCurrencyOf } from '../budget/binding';
 import type { Tx } from '../db/with-identity';
@@ -398,30 +400,49 @@ async function assertUniqueAmong(
     }),
     sql` AND `,
   );
+  // Строки, тронутые пачкой, исключаются В САМОМ SQL, а не фильтром выдачи: с `LIMIT` фильтр после
+  // выборки мог бы отбросить все попавшие в неё строки пачки и не увидеть живой дубль за ними.
+  const batchIds = batch === undefined ? [] : [...batch.entities.keys()];
+  const notInBatch =
+    batchIds.length === 0
+      ? sql``
+      : sql`AND id NOT IN (${sql.join(
+          batchIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})`;
   const rows = (await ctx.tx.execute(sql`
-    SELECT id FROM entities
+    SELECT id, title FROM entities
      WHERE graph_id = ${ctx.graphId} AND NOT archived AND id <> ${entityId}
        AND ${aspectId} = ANY(aspects)
+       ${notInBatch}
        AND ${match}
-     LIMIT 2
-  `)) as unknown as Array<{ id: string }>;
+     LIMIT 1
+  `)) as unknown as Array<{ id: string; title: string }>;
 
-  let existing = rows.map((r) => r.id).find((id) => batch?.entities.has(id) !== true);
+  let existing: { id: string; title: string } | undefined = rows[0];
   if (existing === undefined && batch !== undefined) {
     for (const row of batch.entities.values()) {
       if (row.id === entityId || row.archived || !row.aspects.includes(aspectId)) continue;
       const props = (row.props ?? {}) as Record<string, unknown>;
       if (properties.every((p) => sameRuleValue(props[p], values[p]))) {
-        existing = row.id;
+        existing = { id: row.id, title: row.title };
         break;
       }
     }
   }
   if (existing === undefined) return;
+  // Текст отказа читает человек (экран показывает `message` тостом) — подписи свойств из реестра, а
+  // не сырые id; `details` остаются машинными.
+  const labels = properties.map((propertyId) => {
+    const def = ctx.registry.properties.get(propertyId);
+    return def === undefined ? propertyId : effectiveLabel(def.label, OWNER_LOCALE);
+  });
+  const holder =
+    existing.title === '' ? 'неархивная запись' : `неархивная запись «${existing.title}»`;
   throw new ExecError(
     'INVARIANT',
-    `набор свойств (${properties.join(', ')}) уже занят другой неархивной записью — правило «${rule.id}» (§Б4-3); правьте существующую или архивируйте её`,
-    { invariant: rule.id, rule_template: 'unique_among', existingId: existing, values },
+    `уже есть ${holder} с тем же набором (${labels.join(', ')}) — правило «${rule.id}» (§Б4-3); правьте существующую или архивируйте её`,
+    { invariant: rule.id, rule_template: 'unique_among', existingId: existing.id, values },
   );
 }
 

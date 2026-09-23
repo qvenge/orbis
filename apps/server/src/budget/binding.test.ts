@@ -704,6 +704,11 @@ describe('уникальность конверта: (category_ref, currency, pe
     );
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('duplicate_envelope');
+    // Текст отказа экран показывает тостом: подписи свойств и заголовок занявшего конверта, без id.
+    expect(r.error.message).toContain(
+      'уже есть неархивная запись «Оригинал» с тем же набором (Категория, Валюта, Начало периода, Конец периода)',
+    );
+    expect(r.error.message).not.toContain('orbis/');
   });
 
   test('другая комбинация (иной период / иная явная currency) — разрешена', async () => {

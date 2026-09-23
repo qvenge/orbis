@@ -973,6 +973,10 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
       existingId: first.id,
       values: { 'user/level': 'P4', 'user/number': 1 },
     });
+    // Подписи свойств — из реестра (у свойств фикстуры подпись = локальное имя), а не сырые id.
+    expect(r.ok ? null : r.error.message).toContain(
+      'уже есть неархивная запись «P4-1» с тем же набором (level, number)',
+    );
   });
 
   test('виртуальные строки пачки видны: два create одного набора в одном batch → отказ до первой записи', async () => {
@@ -1118,6 +1122,34 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
 });
 
 describe('unique_among: края шаблона (задача 12)', () => {
+  test('живой дубль за строками пачки виден: строки пачки исключаются в SQL, а не фильтром выдачи (ревью M-2)', async () => {
+    // Три записи одного набора заведены ДО правила. Пачка архивирует две первые и заводит четвёртую:
+    // третья жива, и отказ обязан её найти, сколько бы строк пачки ни попало в выборку первыми.
+    const w = await worldWith(SLOT_SPEC);
+    const a = entityOf(await w.run('entity_create', slot('M2', 1)));
+    const b = entityOf(await w.run('entity_create', slot('M2', 1)));
+    const c = entityOf(await w.run('entity_create', slot('M2', 1)));
+    await seedCustomAspect(w.graph, { ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const r = await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        operations: [
+          { tool: 'entity_update', input: { id: a.id, archived: true } },
+          { tool: 'entity_update', input: { id: b.id, archived: true } },
+          { tool: 'entity_create', input: slot('M2', 1) },
+        ],
+        clock: () => T0,
+      },
+      {},
+    );
+    expect(refusalOf(r)).toBe('INVARIANT/slot_unique');
+    expect(r.ok ? null : (r.error.details as { existingId?: string }).existingId).toBe(c.id);
+  });
+
   test('архивация БЕЗ свойств не проверяется: дубли, заведённые до правила, архивируются', async () => {
     // Правило ложится ПОВЕРХ данных, где набор уже занят дважды. Проверь правило архивацию — не
     // архивировалась бы ни одна из двух: каждой мешала бы другая (паритет со снятым кодом конверта).
