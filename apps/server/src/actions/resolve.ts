@@ -25,13 +25,19 @@ import { z } from 'zod';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
+import { BULK_THRESHOLD, factsFromOperations } from '../policy/confirmation';
 import { type CompileCtx, compileWhere } from '../query/compile-ast';
 import { actionHash, paramLiteralType } from '../registry/actions';
 import type { RegistrySnapshot } from '../registry/load';
 import { literalFormViolation } from '../registry/validate-props';
 import { buildUpdate, type ExecOperation, loadTargets, type TargetRow } from '../routines/propose';
-import { type EntityScopeInput, entityEvalScope, relationFactsOf } from '../rules/scope';
-import type { ToolDispatchResult } from '../tools/dispatch-common';
+import { errorResult, type ToolDispatchResult } from '../tools/dispatch-common';
+import {
+  type ActionDateArgs,
+  assertPreconditionHolds,
+  relationRolesOf,
+  targetScope,
+} from './precondition';
 
 export type { ExecOperation };
 
@@ -59,6 +65,11 @@ export interface ResolvedAction {
   decl: ActionDefinition;
   /** `[self]` либо результат `over` (кап проверен), порядок по id. */
   targets: readonly string[];
+  /**
+   * Параметры вызова ПОСЛЕ сверки с декларацией (`checkedParams`): по ним «Принять» отложенной
+   * единицы перевычисляет предусловие (эррата Ф-Б2-18) — те же, что видела подстановка шагов.
+   */
+  params: Record<string, ExprScalar>;
   /** exec-форма с CAS (`buildUpdate`) — то, что уедет в `execute` / pending. */
   operations: ExecOperation[];
   hash: string;
@@ -66,10 +77,66 @@ export interface ResolvedAction {
   rows: DeferredRow[];
 }
 
-/** Подпись действия владельцу; у пакетного — с числом целей. */
-export function actionSummary(decl: ActionDefinition, n: number): string {
+/**
+ * Подпись действия владельцу; у пакетного — с числом целей, и — если есть — с ПОВОДОМ
+ * подтверждения (эррата Ф-Б2-18). Единственный сборщик текста единицы (Р-К-66): карточка чата и
+ * отложенная единица берут `resolved.summary`, и разойтись им нечем.
+ */
+export function actionSummary(
+  decl: ActionDefinition,
+  n: number,
+  reasons: readonly string[] = [],
+): string {
   const label = effectiveLabel(decl.label, OWNER_LOCALE);
-  return n === 1 ? `Действие «${label}»` : `Действие «${label}» — ${n} ${entitiesNoun(n)}`;
+  const base = n === 1 ? `Действие «${label}»` : `Действие «${label}» — ${n} ${entitiesNoun(n)}`;
+  return reasons.length === 0 ? base : `${base} (повод: ${reasons.join('; ')})`;
+}
+
+/**
+ * ПОВОДЫ ПОДТВЕРЖДЕНИЯ — то, что в резолвленных шагах поднимает уровень по таблице §7.10, словами
+ * владельца (эррата Ф-Б2-18). Без них карточка говорила «Действие «X» — 11 записей» и молчала о
+ * том, ЧЕГО ради её спрашивают: владелец, подтверждающий пакет, в котором три шага архивируют,
+ * обязан видеть «архивирует 3 записи», а не догадываться по подписи.
+ *
+ * Считается по РЕЗОЛВЛЕННЫМ операциям той же свёрткой, что и уровень (`factsFromOperations`):
+ * архивацию выражением (`{$expr}` → `true`) видит только резолв, декларация её не выдаёт. Порог
+ * масштаба — та же константа, что у ряда таблицы (`BULK_THRESHOLD`), а не второе число.
+ *
+ * Поводы по актору не ветвятся (автономия владельцу уровня не поднимает): они описывают, ЧТО
+ * делают шаги, а не почему подняла таблица, — и владелец в карточке видит правду о шагах в
+ * любом случае. Перенастройки реестра здесь нет: шаги действия — графовые тулы (§Б6-3,
+ * `ACTION_STEP_TOOL`), реестр ими не достаётся.
+ */
+function confirmationReasons(
+  decl: ActionDefinition,
+  targets: readonly string[],
+  operations: readonly ExecOperation[],
+): string[] {
+  const reasons: string[] = [];
+  if (factsFromOperations(operations).grantsAutonomy) reasons.push('выдаёт рутине автономию');
+  const archived = operations.filter((op) => op.input.archived === true).length;
+  if (archived > 0) reasons.push(`архивирует ${archived} ${entitiesNoun(archived)}`);
+  if (decl.over !== null && targets.length > BULK_THRESHOLD) {
+    reasons.push(`больше ${BULK_THRESHOLD} записей за раз`);
+  }
+  return reasons;
+}
+
+/**
+ * КАП ЕДИНИЦЫ ПОДТВЕРЖДЕНИЯ (В-9, Р-11) — скрытая половина капа действия. `batch_cap` считает ЦЕЛИ,
+ * а носитель единицы — конверт `batch_execute` — держит ОПЕРАЦИИ: целей × шагов. `approvePending`
+ * разбирает сохранённую карточку той же схемой (`toOperations`), и карточка длиннее ста не
+ * исполнилась бы на «Принять» никогда. Честный отказ ДО постановки дешевле карточки, которую нельзя
+ * принять. Функция одна на оба места постановки — чат (`runAction`) и отложку фона
+ * (`snapshotDeferredUnit`, второй резолв), — чтобы отказ был один и тот же.
+ */
+export function unitCapExceeded(decl: ActionDefinition, found: number): ToolDispatchResult | null {
+  if (found <= BATCH_CAP_DEFAULT) return null;
+  return errorResult(
+    'VALIDATION',
+    `действие «${decl.key}»: операций ${found}, предел карточки подтверждения ${BATCH_CAP_DEFAULT} (В-9)`,
+    { reason: 'BATCH_TOO_LONG', action: decl.id, cap: BATCH_CAP_DEFAULT, found },
+  );
 }
 
 /**
@@ -114,7 +181,7 @@ export async function resolveAction(
   reg: RegistrySnapshot,
   graphId: GraphId,
   input: RunActionInput,
-  args: { today: string; timeZone: string },
+  args: ActionDateArgs,
 ): Promise<ResolvedAction> {
   const decl = lookupAction(reg, input.action);
   const params = checkedParams(decl, input.params ?? {});
@@ -142,27 +209,18 @@ export async function resolveAction(
     if (current === undefined) {
       throw new ExecError('NOT_FOUND', 'цель действия не найдена', { action: decl.id, id });
     }
-    const scope = entityEvalScope({
+    // Область и предусловие — из общего дома (`./precondition`): «Принять» отложенной единицы
+    // считает их тем же кодом, и два момента одного вопроса разойтись не могут.
+    const scope = await targetScope(tx, {
       reg,
-      state: { props: current.props, aspects: current.aspects },
-      core: coreOf(current, id),
-      today: args.today,
-      timeZone: args.timeZone,
-      relations: await relationFactsOf(tx, id, roles),
-      owner: graphId,
-      // Параметры видны и предусловию: та же область, что у подстановки шагов, — иначе
-      // `{param}` в предусловии отвечал бы EXPR_SCOPE там, где чекер декларации его пропустил.
+      graphId,
+      id,
+      row: current,
+      roles,
       params,
+      dates: args,
     });
-    if (decl.precondition !== null && evalExpr(decl.precondition, scope) !== true) {
-      // §Б6-4: «нарушено — честный отказ, не двойное исполнение». Форма отказа та же, что у CAS
-      // исполнителя (`assertPrecondition`, `executor.ts`) — читатели уже умеют её разбирать.
-      throw new ExecError('CONFLICT', `действие «${decl.key}»: предусловие не выполнено`, {
-        reason: 'precondition_failed',
-        action: decl.id,
-        id,
-      });
-    }
+    assertPreconditionHolds(decl, scope, id);
     for (const [index, step] of decl.steps.entries()) {
       raw.push({
         index,
@@ -203,9 +261,10 @@ export async function resolveAction(
   return {
     decl,
     targets,
+    params,
     operations,
     hash: actionHash(decl),
-    summary: actionSummary(decl, targets.length),
+    summary: actionSummary(decl, targets.length, confirmationReasons(decl, targets, operations)),
     rows: cardRows,
   };
 }
@@ -273,42 +332,6 @@ function substitute(value: unknown, scope: ExprEvalScope): unknown {
   return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, substitute(v, scope)]));
 }
 
-/** Core-часть области вычисления: `TargetRow` расширена тремя колонками (Р-К-30). */
-function coreOf(row: TargetRow, id: string): EntityScopeInput['core'] {
-  return {
-    id,
-    title: row.title,
-    archived: row.archived,
-    createdAt: row.createdAt,
-    // Действие НИЧЕГО не штампует: `updatedAt` здесь — тот, что лежит в строке СЕЙЧАС. Момент
-    // записи штампует исполнитель (`monotonicUpdatedAt`), и подставлять сюда «будущее» значило
-    // бы дать предусловию читать время, которого ещё нет.
-    updatedAt: row.updatedAt,
-  };
-}
-
-/**
- * Роли, которые читает `precondition`: их рёбра предзагружаются ДО вычисления (интерпретатор
- * синхронен — Р-И-4). Обход дерева, а не `relationRolesUsed` правил (`rules/scope.ts`): та
- * принимает список ПРАВИЛ, а здесь одно выражение.
- */
-function relationRolesOf(node: ExprNode | null): Set<string> {
-  const out = new Set<string>();
-  const walk = (v: unknown): void => {
-    if (Array.isArray(v)) {
-      for (const item of v) walk(item);
-      return;
-    }
-    if (typeof v !== 'object' || v === null) return;
-    const o = v as Record<string, unknown>;
-    const hr = o.has_relation as { role?: unknown } | undefined;
-    if (hr !== undefined && typeof hr.role === 'string') out.add(hr.role);
-    for (const x of Object.values(o)) walk(x);
-  };
-  walk(node);
-  return out;
-}
-
 /**
  * МНОЖЕСТВО ЦЕЛЕЙ map-действия. Компилятор запросов — ТОТ ЖЕ, что у `entity_query` и у
  * `ref.target` (`compileWhere`, `query/compile-ast.ts`): второй способ прочитать Q отвечал бы на
@@ -330,7 +353,7 @@ async function queryTargets(
   graphId: GraphId,
   decl: ActionDefinition,
   self: string | undefined,
-  args: { today: string; timeZone: string },
+  args: ActionDateArgs,
 ): Promise<string[]> {
   if (self !== undefined) {
     throw new ExecError(

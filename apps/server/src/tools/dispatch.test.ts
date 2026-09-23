@@ -2,7 +2,7 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 // Политика §7.10 подключена (Task 5): уровень мутации назначает classifyToolCall
 // (policy/confirmation, юнит-тесты там же); здесь — поведение уровней через dispatch.
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
@@ -4301,6 +4301,188 @@ describe('отложка небезопасного действия рутин�
     // Дедуп ключуется batch_id: две одиночные архивации без него — две РАЗНЫЕ карточки
     const pendings = await pendingsIn(owner, threadId);
     expect(pendings).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Отложенная единица ДЕЙСТВИЯ и «Устарело» (задача 8 Б-2: Р-8, §Б6-7, эррата Ф-Б2-18)
+// ---------------------------------------------------------------------------
+
+describe('отложенная единица ДЕЙСТВИЯ и «Устарело» (Р-8, §Б6-7)', () => {
+  const { routineCtx, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+  const TOOLS = ['run_action', 'entity_update']; // гейт задачи 7 проверяет и вызов, и ШАГИ
+
+  async function actionCtx(owner: GraphId) {
+    const routineId = await seedRoutine(owner, {
+      title: 'Разбор просроченного',
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': TOOLS },
+    });
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-21T07:00' });
+    const ctx = routineCtx(owner, 'act', TOOLS, {
+      clock: () => T0,
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(TOOLS) },
+    });
+    return {
+      ctx,
+      runId,
+      threadId: await withIdentity(db, personal(owner), (tx) =>
+        ensureEntityThread(tx, owner, routineId),
+      ),
+    };
+  }
+  /** N просроченных задач — цели map-действия считает его `over`. */
+  async function seedOverdue(owner: GraphId, n: number): Promise<string[]> {
+    const out: string[] = [];
+    for (let i = 1; i <= n; i += 1) {
+      const e = await seedEntity(owner, {
+        title: `Просрочено ${i}`,
+        tags: [],
+        aspects: ['orbis/task'],
+        props: {
+          'orbis/task_status': 'inbox',
+          'orbis/due_date': `2026-06-${String(i).padStart(2, '0')}`,
+        },
+      });
+      out.push(e.id);
+    }
+    return out;
+  }
+  const postpone = (ctx: ToolCallCtx) =>
+    dispatchTool(ctx, 'run_action', {
+      action: 'planner/postpone_overdue',
+      params: { to: '2026-09-01' },
+    });
+  const unitsIn = async (owner: GraphId, threadId: string) =>
+    (await messagesIn(owner, threadId)).filter(
+      (m) => (m.metadata as { pending?: unknown }).pending !== undefined,
+    );
+
+  /**
+   * Исходная СИСТЕМНАЯ строка действия. `patchAction` правит её для всей базы (`graph_id IS NULL`),
+   * и следующий тест — а за ним следующий файл (`registry-drift`, пересев) — обязан застать её
+   * прежней: иначе снятое здесь действие оставалось бы снятым у всех до `db:prepare`.
+   */
+  type ActionColumns = {
+    steps: unknown;
+    sensitivity: unknown;
+    status: string;
+    precondition: unknown;
+  };
+  let original: ActionColumns | undefined;
+  let patched = false;
+  beforeAll(async () => {
+    const { db: admin, client: ac } = adminDb();
+    try {
+      const rows = await admin.execute(sql`SELECT steps, sensitivity, status, precondition
+        FROM action_definitions WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`);
+      original = rows[0] as ActionColumns | undefined;
+    } finally {
+      await ac.end();
+    }
+    if (original === undefined) throw new Error('сидового действия нет в базе — нужен db:prepare');
+  });
+  afterEach(async () => {
+    if (!patched || original === undefined) return;
+    const { db: admin, client: ac } = adminDb();
+    try {
+      await admin.execute(sql`UPDATE action_definitions SET
+        steps = ${JSON.stringify(original.steps)}::jsonb,
+        sensitivity = ${JSON.stringify(original.sensitivity)}::jsonb,
+        status = ${original.status},
+        precondition = ${original.precondition === null ? null : JSON.stringify(original.precondition)}::jsonb
+        WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`);
+    } finally {
+      await ac.end();
+    }
+    patched = false;
+  });
+  /** Админский UPDATE строки действия: писатель (`action_set`/`action_remove`) — задача 10, а предмет
+   *  теста — ЧТЕНИЕ строки на «Принять», и подменять его писателем нельзя. */
+  async function patchAction(owner: GraphId, patch: ReturnType<typeof sql>): Promise<void> {
+    patched = true;
+    const { db: admin, client: ac } = adminDb();
+    try {
+      await admin.execute(patch);
+    } finally {
+      await ac.end();
+    }
+    await withIdentity(db, personal(owner), (tx) => bumpOwnerRegistryVersion(tx, owner));
+  }
+
+  test('одиннадцать целей → единица формой batch_execute с action_id и хешом декларации', async () => {
+    const owner = await freshGraph();
+    const { ctx, runId, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    expect((await postpone(ctx)).status).toBe('pending_confirmation');
+
+    const units = await unitsIn(owner, threadId);
+    expect(units).toHaveLength(1);
+    const rec = (units[0]?.metadata as { pending: Record<string, unknown> }).pending;
+    // Носитель — ВТОРАЯ существующая форма payload'а, а не новая (Р-8)
+    expect([rec.tool, rec.kind, rec.run_id]).toEqual(['batch_execute', 'action', runId]);
+    const input = rec.input as { batch_id: string; operations: Array<{ tool: string }> };
+    expect(input.operations).toHaveLength(11);
+    expect([...new Set(input.operations.map((op) => op.tool))]).toEqual(['entity_update']);
+    // Декларация — ДВА ключа: «какое действие» и «та ли это декларация» (§Б6-7)
+    expect(rec.action_id).toBe('planner/postpone_overdue');
+    expect(typeof rec.action_hash).toBe('string');
+    expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01'); // §7.8: следа нет
+  });
+
+  test('карточка единицы называет повод и несёт строки «было → станет» резолва; запись — цели и параметры для «Принять» (эррата Ф-Б2-18)', async () => {
+    const owner = await freshGraph();
+    const { ctx, runId, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    const r = await postpone(ctx);
+    if (r.status !== 'pending_confirmation') throw new Error(`единица не поставлена: ${r.status}`);
+    if (r.card.kind !== 'deferred_action_card') throw new Error(`не та карточка: ${r.card.kind}`);
+    // Повод — масштаб (ряд §7.10 «больше 10»), а не одна подпись действия
+    expect(r.card.summary).toBe(
+      'Действие «Отложить просроченные» — 11 записей (повод: больше 10 записей за раз)',
+    );
+    expect(r.card.runId).toBe(runId);
+    expect(r.card.rows).toHaveLength(11);
+    expect(r.card.rows[0]).toEqual({
+      field: 'orbis/due_date',
+      before: '2026-06-01',
+      after: '2026-09-01',
+    });
+    const [unit] = await unitsIn(owner, threadId);
+    expect(unit?.content).toBe(`Отложено до решения: ${r.card.summary}`);
+    const rec = (unit?.metadata as { pending: Record<string, unknown> }).pending;
+    // Цели — снимок резолва по id; параметры — ПОСЛЕ сверки с декларацией
+    expect(rec.action_targets).toEqual([...ids].sort());
+    expect(rec.action_params).toEqual({ to: '2026-09-01' });
+  });
+
+  test('в Q назначенный тикет → FORBIDDEN_LEVEL routine_untouchable ДО отложки, единицы нет (эррата Ф-Б2-18)', async () => {
+    // Стадия 4 исполнителя на «Принять» правку `due_date` пропустила бы: назначение ловится
+    // только по `touched`, а шаг его не трогает. Пре-чек фона смотрит на СОСТОЯНИЕ цели.
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    await seedOverdue(owner, 11);
+    const assigned = await seedEntity(owner, {
+      title: 'Назначенный просроченный',
+      tags: [],
+      aspects: ['orbis/task', 'orbis/assignment'],
+      props: {
+        'orbis/task_status': 'inbox',
+        'orbis/due_date': '2026-06-20',
+        'orbis/executor': 'human',
+        'orbis/assignee': 'Пётр',
+      },
+    });
+    const r = await postpone(ctx);
+    expectError(r, 'FORBIDDEN_LEVEL');
+    if (r.status === 'error') {
+      expect(r.error.details).toMatchObject({
+        reason: 'routine_untouchable',
+        action: 'planner/postpone_overdue',
+      });
+      expect(r.error.message).toContain('рутина не может менять рутины, прогоны и назначения');
+    }
+    expect(await unitsIn(owner, threadId)).toHaveLength(0);
+    expect((await propsOfRowA(assigned.id, owner))['orbis/due_date']).toBe('2026-06-20');
   });
 });
 

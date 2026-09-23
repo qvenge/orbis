@@ -41,7 +41,7 @@
 // получать отложенную единицу (пин живьём — `dispatch.test.ts`, «НЕ запрет (Р9)»).
 //
 // Правило живёт в `policy/confirmation.ts` (`reconfiguresByTool` + ряды 4a/4b), запрет фону —
-// в `tools/dispatch.ts` (`routineDeferForbidden`); приёмка §С8-11 — тест на каждый ряд.
+// в `tools/dispatch-common.ts` (`routineDeferForbidden`); приёмка §С8-11 — тест на каждый ряд.
 import {
   aspectImplementsSchema,
   localizedTextSchema,

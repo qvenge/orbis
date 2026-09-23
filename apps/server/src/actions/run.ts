@@ -11,37 +11,38 @@
 //
 // ИМПОРТЫ — ИЗ ОБЩЕГО ДНА, а не из `tools/dispatch.ts`: `dispatchTool` зовёт `runAction`, и
 // обратный импорт по значению замкнул бы цикл (Р-К-67, Р-К-87).
-import {
-  type ActionDefinition,
-  BATCH_CAP_DEFAULT,
-  effectiveLabel,
-  isModuleEnabled,
-  newId,
-} from '@orbis/shared';
+import { type ActionDefinition, effectiveLabel, isModuleEnabled, newId } from '@orbis/shared';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { classifyToolCall, factsFromOperations, type ToolCallFacts } from '../policy/confirmation';
 import { createPending } from '../policy/pending';
 import { sensitivityFactsOf } from '../policy/sensitivity';
-import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { stepFactsOf } from '../registry/actions';
 import type { RegistrySnapshot } from '../registry/load';
 import {
   errorResult,
   levelGate,
   parseEnvelope,
+  routineDeferForbidden,
   sink,
   type ToolCallCtx,
   type ToolDispatchResult,
 } from '../tools/dispatch-common';
 import { buildToolDefs, routineToolAllowed, WORKER_SCOPE_TOOLS } from '../tools/registry';
-import { type ExecOperation, lookupAction, resolveAction, runActionInput } from './resolve';
+import { actionDateArgs } from './precondition';
+import {
+  type ExecOperation,
+  lookupAction,
+  resolveAction,
+  runActionInput,
+  unitCapExceeded,
+} from './resolve';
 
 /**
  * Р-К-67: `deferRoutineUnit` живёт в `tools/dispatch.ts` и приватна; сюда она приходит
- * параметром, чтобы `actions/run.ts` не импортировал диспатч значением (цикл). Задача 8 зовёт
- * `hooks.defer` из ветки фона ниже.
+ * параметром, чтобы `actions/run.ts` не импортировал диспатч значением (цикл). Её зовёт ветка
+ * фона ниже — после объектного пре-чека (эррата Ф-Б2-18).
  */
 export interface RunActionHooks {
   defer: (tool: 'run_action', payload: unknown) => Promise<ToolDispatchResult>;
@@ -53,9 +54,7 @@ export async function runAction(
   disabled: readonly string[],
   actionRef: string,
   input: unknown,
-  // Параметр объявлен ради сигнатуры Р-К-67: до задачи 8 ветка фона отказывает fail-closed и
-  // `defer` не зовёт (Р-К-29).
-  _hooks: RunActionHooks,
+  hooks: RunActionHooks,
 ): Promise<ToolDispatchResult> {
   // Вход `run_action` приезжает конвертом тула, вход `action_*` — уже разобранным на
   // `{self, params}` веткой диспатча; обе формы сводятся к одному строгому конверту здесь.
@@ -112,13 +111,15 @@ export async function runAction(
     }
   }
 
-  const resolved = await withIdentity(ctx.db, ctx.identity, async (tx) => {
-    const timeZone = await ownerTimeZone(tx, ctx.identity.graph);
-    return resolveAction(tx, reg, ctx.identity.graph, parsed, {
-      today: todayInTimeZone(timeZone, ctx.clock?.() ?? new Date()),
-      timeZone,
-    });
-  });
+  const resolved = await withIdentity(ctx.db, ctx.identity, async (tx) =>
+    resolveAction(
+      tx,
+      reg,
+      ctx.identity.graph,
+      parsed,
+      await actionDateArgs(tx, ctx.identity.graph, ctx.clock),
+    ),
+  );
   const { decl, operations, targets } = resolved;
   if (operations.length === 0) {
     // Пакетному действию нечего делать (запрос не нашёл ни одной цели): исполнять пустую пачку
@@ -131,41 +132,50 @@ export async function runAction(
   const gated = levelGate(level, `run_action:${decl.key}`);
   if (gated !== null) return gated;
 
-  if (level === 'explicit-confirmation' && operations.length > BATCH_CAP_DEFAULT) {
-    // Единица подтверждения — конверт `batch_execute` (Р-8), а его длину держит тот же кап, что
-    // у пачки модели (В-9, Р-11): `approvePending` разбирает сохранённую карточку той же схемой
-    // (`toOperations`). Карточка длиннее капа не исполнилась бы на «Принять» никогда — честный
-    // отказ ДО постановки дешевле карточки, которую нельзя принять.
-    return errorResult(
-      'VALIDATION',
-      `действие «${decl.key}»: операций ${operations.length}, предел карточки подтверждения ${BATCH_CAP_DEFAULT} (В-9)`,
-      {
-        reason: 'BATCH_TOO_LONG',
-        action: decl.id,
-        cap: BATCH_CAP_DEFAULT,
-        found: operations.length,
-      },
-    );
+  // Фону, которому некому ни показать, ни подтвердить в моменте, любой уровень выше `execute`
+  // становится ОТЛОЖЕННОЙ ЕДИНИЦЕЙ D42 (§Б6-2): `preview` пакета здесь не исполняется — «покажи,
+  // сделав» без владельца перед экраном было бы молчаливым исполнением. Карточку группы у
+  // действия есть чем собрать (носитель — `batch_execute`, Р-8), поэтому довод инварианта 5
+  // «одиночное — потому что группу нечем показать» к действию не относится.
+  const defers = ctx.source === 'routine' && level !== 'execute';
+
+  if (level === 'explicit-confirmation' || defers) {
+    // Скрытый кап единицы (`batch_cap × шагов`, В-9): отказ ДО постановки и до пре-чека —
+    // карточка, которую `approvePending` не разберёт никогда, не должна родиться ни в чате, ни в
+    // пачке.
+    const tooLong = unitCapExceeded(decl, operations.length);
+    if (tooLong !== null) return tooLong;
   }
 
-  if (ctx.source === 'routine' && level !== 'execute') {
-    // Р-К-29/Р-К-67: ЗАДАЧА 8 заменяет этот блок вызовом `hooks.defer('run_action', parsed)`.
-    // §Б6-2 велит здесь отложенную единицу D42; её кладёт задача 8 (Р-И-31, третья ветка
-    // `snapshotDeferredUnit`). До неё — fail-closed ТЕМ ЖЕ ТЕКСТОМ, что инвариант 5
-    // (`runMutation`, `tools/dispatch.ts`): фон, которому нечего ни исполнить, ни отложить,
-    // обязан получить отказ, а не тишину, — и тот же отказ, что у любого другого пути фона.
-    return errorResult(
-      'FORBIDDEN_LEVEL',
-      `в фоне откладывается только одиночное небезопасное действие — уровень «${level}» не исполняется и не откладывается (V1.10)`,
-      { tool: 'run_action', level, action: decl.id },
-    );
+  if (defers) {
+    // ОБЪЕКТНЫЙ ПРЕ-ЧЕК ПЕРЕД ОТЛОЖКОЙ (эррата Ф-Б2-18) — тот же рубеж и тот же отказ, что у
+    // `runMutation`: запрещённое по объекту фон не откладывает никогда. Без него рутина клала бы в
+    // пачку действие над назначенным тикетом, и «Принять» его провезло бы: стадия 4 исполнителя
+    // ловит назначение только по `touched`, а правка `due_date` назначения не трогает. Пре-чек
+    // смотрит на РЕЗОЛВЛЕННЫЕ операции и факты уровня — то, что действительно исполнится.
+    //
+    // Правки инструкции act-рутины (`instructionOf`) у действия не бывает по построению: цель-рутину
+    // отвергает резолв (`ACTION_TARGET_FORBIDDEN`), а заводить рутины шагами запрещает
+    // `assertAction` (Ф-Б2-18 (а)), — поэтому список пуст, а не «не посчитан».
+    const forbidden = await routineDeferForbidden(ctx, operations, facts, []);
+    if (forbidden !== null) {
+      return errorResult('FORBIDDEN_LEVEL', forbidden, {
+        tool: 'run_action',
+        action: decl.id,
+        level,
+        reason: 'routine_untouchable',
+      });
+    }
+    // Р-К-67: единицу кладёт `deferRoutineUnit` диспатча — тот же дом, что у правки графа и
+    // реестра (проба по PK, кап пачки, тред рутины); здесь нет ни одной её строки.
+    return await hooks.defer('run_action', parsed);
   }
 
   if (level === 'explicit-confirmation') {
-    // Форма единицы — `batch_execute` с резолвленными операциями (Р-8): её умеет исполнить
-    // `approvePending` уже сегодня (`toOperations`, `policy/pending.ts`). Ключи `action`
-    // (`action_id` + хеш декларации) и проверку «Устарело» добавляет ЗАДАЧА 8 — без них единица
-    // исполнится как обычная пачка, что верно, но не проверит протухание.
+    // Форма единицы — `batch_execute` с резолвленными операциями (Р-8): её исполняет
+    // `approvePending` одним `execute`. Пара `action` (id, хеш декларации, цели, параметры) —
+    // чтобы «Принять» поверх снятой или правленой декларации ответило «Устарело» (§Б6-7) и
+    // перевычислило предусловие (эррата Ф-Б2-18), как у отложенной единицы.
     const batchId = parsed.batch_id ?? newId();
     const pending = await withIdentity(ctx.db, ctx.identity, (tx) =>
       createPending(tx, {
@@ -184,6 +194,16 @@ export async function runAction(
         level,
         // Дедуп по batch_id вызова: ретрай того же вызова не плодит вторую карточку.
         dedupeKey: batchId,
+        action: {
+          id: decl.id,
+          hash: resolved.hash,
+          targets: resolved.targets,
+          params: resolved.params,
+        },
+        // Строки «было → станет» — в карточку, как у отложенной (эррата Ф-Б2-18): владелец
+        // подтверждает пакет, глядя на то, ЧТО изменится, а не на одну подпись. Карточку
+        // собирает `createPending` — место сборки карточки-запроса одно.
+        rows: resolved.rows,
         clock: ctx.clock,
       }),
     );

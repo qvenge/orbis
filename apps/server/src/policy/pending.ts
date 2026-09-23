@@ -48,6 +48,7 @@ import {
 } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import type { DeferredRow } from '../actions/resolve';
 import { escalateAfterMutation } from '../ai/escalation';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
@@ -139,6 +140,24 @@ const pendingRecord = z
      * UI и MCP — там прогона нет; у записей до этой работы его тоже не было.
      */
     run_id: z.string().uuid().optional(),
+    /**
+     * Действие (§Б6-7): id строки `action_definitions` и хеш её ДЕКЛАРАЦИИ на момент постановки.
+     * Условная запись — тот же приём и довод, что у `run_id`: у чата, предложений и единиц правки графа
+     * ключей нет, и их записи остаются байт-в-байт прежними. Пара, а не одно поле: id отвечает «какое
+     * действие», хеш — «та ли декларация»; версии строки у `action_definitions` нет, а §Б6-7 требует
+     * сравнения ДЕКЛАРАЦИЙ — правка шагов без смены id обязана гасить единицу как и снятие строки.
+     */
+    action_id: z.string().min(1).optional(),
+    action_hash: z.string().min(1).optional(),
+    /**
+     * Цели и параметры резолва на момент постановки (эррата Ф-Б2-18): по ним «Принять»
+     * ПЕРЕВЫЧИСЛЯЕТ предусловие действия (`actions/precondition.ts`). CAS операций держит только
+     * тронутые шагами свойства, а предусловие читает и нетронутое (архив, рёбра, «сегодня») — без
+     * этой пары перечитать его было бы не по чему: целей в операциях не видно (шаг вправе править не
+     * цель), а параметров в них нет вовсе. Пишутся только вместе с `action_id`.
+     */
+    action_targets: z.array(z.string().uuid()).optional(),
+    action_params: z.record(z.unknown()).optional(),
     /**
      * Предложение, из правки которого это рождено (Ш1.5): владелец поправил значения ДО
      * принятия, исходное погашено причиной `edited`, а рядом легло вот это. Тот же приём,
@@ -294,6 +313,24 @@ interface CreatePendingCommon {
    * рутины — не подтверждение чата: его строка в ленте называет само событие.
    */
   content?: string;
+  /**
+   * Строки «было → станет» для карточки-запроса по умолчанию (эррата Ф-Б2-18): у карточки ДЕЙСТВИЯ
+   * владелец обязан видеть, ЧТО изменится на каждой цели, а не одну подпись. Карточка собирается
+   * здесь, а не у вызывающего, — место сборки карточки-запроса одно (пин мест сборки,
+   * `tools/dispatch.test.ts`). С `card` не сочетается: своя карточка несёт свои строки.
+   */
+  rows?: DeferredRow[];
+  /**
+   * Действие (§Б6-7), из резолва которого собран payload: id строки `action_definitions` и хеш её
+   * декларации — «какое действие» и «та ли декларация»; цели и параметры — чтобы «Принять»
+   * перевычислило предусловие (эррата Ф-Б2-18). Условная запись — у прочих вызывателей ключей нет.
+   */
+  action?: {
+    id: string;
+    hash: string;
+    targets: readonly string[];
+    params: Readonly<Record<string, unknown>>;
+  };
 }
 
 /**
@@ -372,6 +409,7 @@ export async function createPending(
     mode: 'explicit',
     pendingId,
     summary,
+    ...(args.rows !== undefined && { rows: args.rows }),
   };
   const createdAt = (args.clock ?? (() => new Date()))();
   // Идемпотентность по pendingId: при dedupeKey (batch_id) повтор того же batch даёт тот
@@ -408,6 +446,14 @@ export async function createPending(
         // И для правки (Ш1.5): ключ есть только у правленого предложения, и его отсутствие
         // у всех прочих — то, что делает пробу «дитя этого предложения» точной
         ...(args.actor.editedFrom !== undefined && { edited_from: args.actor.editedFrom }),
+        // И для действия (§Б6-7): четыре ключа есть только у единицы, собранной резолвом
+        // действия, — по ним «Принять» сверяет декларацию и перевычисляет предусловие
+        ...(args.action !== undefined && {
+          action_id: args.action.id,
+          action_hash: args.action.hash,
+          action_targets: [...args.action.targets],
+          action_params: args.action.params,
+        }),
         created_at: createdAt.toISOString(),
       },
       cards: [card],

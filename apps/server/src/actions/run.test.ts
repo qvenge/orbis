@@ -212,12 +212,37 @@ test('map с 11 целями → isBatch:true и explicit-confirmation по ря
   const out = await dispatchTool(aiCtx(), 'action_planner_postpone_overdue', { to: '2026-09-30' });
   expect(out.status).toBe('pending_confirmation');
   if (out.status !== 'pending_confirmation') return;
-  // Карточка называет ДЕЙСТВИЕ и его масштаб, а не «batch_execute»: владелец подтверждает группу.
+  // Карточка называет ДЕЙСТВИЕ, его масштаб и ПОВОД подтверждения, а не «batch_execute»:
+  // владелец подтверждает группу (эррата Ф-Б2-18).
   expect(out.card).toMatchObject({
     kind: 'confirmation_card',
     mode: 'explicit',
-    summary: 'Действие «Отложить просроченные» — 11 записей',
+    pendingId: out.pendingId,
+    summary: 'Действие «Отложить просроченные» — 11 записей (повод: больше 10 записей за раз)',
   });
+  // Строки «было → станет» резолва — в карточку чата тоже, по строке на цель.
+  if (out.card.kind !== 'confirmation_card') throw new Error('не та карточка');
+  expect(out.card.rows).toHaveLength(11);
+  expect(out.card.rows?.[0]).toEqual({
+    field: 'orbis/due_date',
+    before: '2026-09-01',
+    after: '2026-09-30',
+  });
+  // Запись несёт декларацию (§Б6-7) и цели с параметрами для перепроверки предусловия.
+  const rec = (
+    await withIdentity(db, personal(owner), (tx) =>
+      tx.execute(
+        sql`SELECT metadata->'pending' AS p FROM chat_messages WHERE id = ${out.pendingId}`,
+      ),
+    )
+  )[0]?.p as Record<string, unknown>;
+  expect([rec.tool, rec.action_id, typeof rec.action_hash]).toEqual([
+    'batch_execute',
+    'planner/postpone_overdue',
+    'string',
+  ]);
+  expect(rec.action_targets).toEqual([...resolved.targets]);
+  expect(rec.action_params).toEqual({ to: '2026-09-30' });
   // Ничего не записано: сроки на месте до решения владельца.
   expect(
     (
@@ -265,7 +290,7 @@ test('§С2-2: шаг вне allowed_tools act-рутины → FORBIDDEN_LEVEL,
   expect((await propsOf(plannedKept))['orbis/planned']).toBe(true);
 });
 
-test('act-рутина с открытыми шагами исполняет одиночное действие; пакет на explicit — fail-closed до задачи 8', async () => {
+test('act-рутина с открытыми шагами исполняет одиночное действие; пакет на explicit — в hooks.defer с разобранным конвертом (Р-К-67)', async () => {
   const allowed = ['entity_update', 'run_action', 'action_planner_postpone_overdue'];
   const ok = await dispatchTool(
     routineCtx({ mode: 'act', allowedTools: allowed }),
@@ -274,23 +299,32 @@ test('act-рутина с открытыми шагами исполняет о�
   );
   expect(ok.status).toBe('ok');
   expect((await propsOf(plannedByRoutine))['orbis/planned']).toBe(false);
-  // Пакет из 11 — explicit-confirmation; фону здесь велена отложенная единица D42, и её кладёт
-  // задача 8. До неё — отказ тем же текстом, что инвариант 5, а не тишина (Р-К-29).
-  const batch = await dispatchTool(
+  // Пакет из 11 — explicit-confirmation; фону велена отложенная единица D42 (§Б6-2), и кладёт её
+  // `deferRoutineUnit` диспатча через хук. Здесь — что ветка зовёт хук РОВНО одним вызовом и с
+  // разобранным конвертом; сама единица с живой рутиной — `tools/dispatch.test.ts`
+  // («отложенная единица ДЕЙСТВИЯ»).
+  const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  const calls: Array<{ tool: string; payload: unknown }> = [];
+  const deferred = await runAction(
     routineCtx({ mode: 'act', allowedTools: allowed }),
-    'action_planner_postpone_overdue',
-    { to: '2026-09-30' },
-  );
-  expect(batch).toMatchObject({
-    status: 'error',
-    error: {
-      code: 'FORBIDDEN_LEVEL',
-      // Текст — дословно инвариант 5 (`runMutation`): фон получает один отказ на все пути.
-      message:
-        'в фоне откладывается только одиночное небезопасное действие — уровень «explicit-confirmation» не исполняется и не откладывается (V1.10)',
-      details: { action: 'planner/postpone_overdue', level: 'explicit-confirmation' },
+    reg,
+    [],
+    'planner/postpone_overdue',
+    { params: { to: '2026-09-30' } },
+    {
+      defer: async (tool, payload) => {
+        calls.push({ tool, payload });
+        return { status: 'error', error: { code: 'DEFERRED', message: 'хук позван' } };
+      },
     },
-  });
+  );
+  expect(deferred).toMatchObject({ status: 'error', error: { code: 'DEFERRED' } });
+  expect(calls).toEqual([
+    {
+      tool: 'run_action',
+      payload: { action: 'planner/postpone_overdue', params: { to: '2026-09-30' } },
+    },
+  ]);
 });
 
 test('скоуп worker: шаг вне WORKER_SCOPE_TOOLS → FORBIDDEN_LEVEL и во второй линии (runAction)', async () => {
@@ -471,6 +505,32 @@ test('карточка подтверждения длиннее капа пач
   });
   const out = await runAction(
     aiCtx(),
+    withAction(snap, decl),
+    [],
+    decl.key,
+    { params: { to: '2026-09-30' } },
+    NO_DEFER,
+  );
+  expect(out).toMatchObject({
+    status: 'error',
+    error: { code: 'VALIDATION', details: { reason: 'BATCH_TOO_LONG', cap: 100, found: 110 } },
+  });
+});
+
+test('фон: единица длиннее капа — BATCH_TOO_LONG ДО пре-чека и отложки, хук не зовётся (эррата Ф-Б2-18)', async () => {
+  // Тот же пакет 11 × 10 = 110 операций, но из прогона: единица легла бы в пачку, и «Принять»
+  // не разобрало бы её никогда (`toOperations` держит кап сто).
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  const postpone = snap.actions.get('planner/postpone_overdue');
+  if (postpone === undefined) throw new Error('сидового действия нет в снимке');
+  const decl = synthetic({
+    params: postpone.params,
+    over: postpone.over,
+    batch_cap: 100,
+    steps: Array.from({ length: 10 }, () => postpone.steps[0] as ActionDefinition['steps'][number]),
+  });
+  const out = await runAction(
+    routineCtx({ mode: 'act', allowedTools: ['entity_update', 'run_action'] }),
     withAction(snap, decl),
     [],
     decl.key,

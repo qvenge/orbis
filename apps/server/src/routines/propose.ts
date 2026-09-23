@@ -32,11 +32,12 @@ import {
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import { readTargetRows } from '../actions/precondition';
 import { runById } from '../agent-loop/queries';
 import { closeRoutineRun } from '../agent-loop/verbs';
 import { ensureEntityThread } from '../chat/threads';
-import { chatMessages, entities } from '../db/schema';
+import { chatMessages } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import { carrierAspects, resolvePropertyRef } from '../executor/props';
@@ -572,36 +573,12 @@ export async function loadTargets(
       wanted.push({ index, tool: op.tool, id: op.input.target_id as string });
     }
   }
-  const rows = new Map<string, TargetRow>();
-  if (wanted.length === 0) return { reg, rows };
-
-  const found = await tx
-    .select({
-      id: entities.id,
-      props: entities.props,
-      aspects: entities.aspects,
-      updatedAt: entities.updatedAt,
-      title: entities.title,
-      archived: entities.archived,
-      createdAt: entities.createdAt,
-    })
-    .from(entities)
-    .where(
-      inArray(
-        entities.id,
-        wanted.map((w) => w.id),
-      ),
-    );
-  for (const row of found) {
-    rows.set(row.id, {
-      props: row.props as Record<string, unknown>,
-      aspects: row.aspects,
-      updatedAt: row.updatedAt,
-      title: row.title,
-      archived: row.archived,
-      createdAt: row.createdAt,
-    });
-  }
+  // Чтение строк — общее с перепроверкой предусловия действия на «Принять»
+  // (`actions/precondition.ts`, эррата Ф-Б2-18): один набор колонок на оба момента.
+  const rows = await readTargetRows(
+    tx,
+    wanted.map((w) => w.id),
+  );
 
   for (const w of wanted) {
     const row = rows.get(w.id);

@@ -64,6 +64,13 @@ export interface ToolCallFacts {
 }
 
 /**
+ * Порог ряда масштаба §7.10 («пачка больше десяти — обсудить»). ОДНО число на таблицу и на повод в
+ * карточке действия (`actions/resolve.ts`, эррата Ф-Б2-18): карточка, называющая «больше 10 записей
+ * за раз», обязана говорить о том же пороге, по которому таблица её и подняла.
+ */
+export const BULK_THRESHOLD = 10;
+
+/**
  * Классификатор §7.10 — таблица правил MVP, первое совпадение сверху (порядок значим):
  *
  * | Условие                             | Уровень                | Обоснование §7.10 |
@@ -105,12 +112,12 @@ export function classifyToolCall(facts: ToolCallFacts): ConfirmationLevel {
   if (facts.archives && !facts.explicitCommand) return 'explicit-confirmation';
   // 4a (§С2-1 ряды 2 и 3): «молчаливых мутаций реестра не существует ни для какого актора».
   // Запрет по объекту для ФОНА — не здесь: классификатор по актору и источнику сознательно
-  // не ветвится, и `system-object` он поднимает до подтверждения, а `tools/dispatch.ts`
+  // не ветвится, и `system-object` он поднимает до подтверждения, а `tools/dispatch-common.ts`
   // (`routineDeferForbidden`) превращает это подтверждение в отказ для прогона.
   if (facts.reconfigures === 'behavior-delta' || facts.reconfigures === 'system-object') {
     return 'explicit-confirmation';
   }
-  if (facts.isBatch && facts.batchSize !== undefined && facts.batchSize > 10) {
+  if (facts.isBatch && facts.batchSize !== undefined && facts.batchSize > BULK_THRESHOLD) {
     return 'explicit-confirmation';
   }
   if (facts.grantsAutonomy && facts.actorKind !== 'owner') return 'explicit-confirmation';
@@ -367,7 +374,7 @@ function reconfiguresByTool(
       // перенастройку поведения, а не пропуск для всего, что приехало в том же объекте: с
       // проверкой «есть такой ключ» рутина добавляла бы к переименованию встроенного аспекта
       // поле, которое ничего не меняет, и запрет по объекту превращался бы в отложенную
-      // единицу — `routineDeferForbidden` (`tools/dispatch.ts`) фону `system-object` не
+      // единицу — `routineDeferForbidden` (`tools/dispatch-common.ts`) фону `system-object` не
       // откладывает, а `behavior-delta` откладывает, и «Принять все» снимало бы замок мимоходом.
       // Непустота меряется СОДЕРЖИМЫМ (`carriesVariants`): `{selectOptions: {}}`,
       // `{selectOptions: {'orbis/task_status': {}}}` и `{classMap: {'orbis/task_status': []}}` —

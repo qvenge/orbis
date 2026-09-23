@@ -46,7 +46,14 @@ import {
 } from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
-import type { DeferredRow } from '../actions/resolve';
+import { actionDateArgs } from '../actions/precondition';
+import {
+  type DeferredRow,
+  type ExecOperation,
+  resolveAction,
+  runActionInput,
+  unitCapExceeded,
+} from '../actions/resolve';
 import { runAction } from '../actions/run';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
 import {
@@ -65,7 +72,6 @@ import { IMPORT_CSV_KEY, ROUTINES_MAX_KEY, resolveEntitlement } from '../entitle
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
 import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
 import type { JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { undoLast } from '../executor/undo';
@@ -77,12 +83,17 @@ import {
   entityUpdatePreviewDiff,
   factsFromToolCall,
   grantsRoutineAutonomy,
-  type Reconfigures,
   ROUTINE_MODE_PROPERTY,
   ROUTINE_STAGE_PROPERTY,
   ROUTINE_TOOLS_PROPERTY,
 } from '../policy/confirmation';
-import { createPending, deferDedupeKey, listRunUnits, operationsNoun } from '../policy/pending';
+import {
+  type CreatePendingArgs,
+  createPending,
+  deferDedupeKey,
+  listRunUnits,
+  operationsNoun,
+} from '../policy/pending';
 import { sensitivityFactsOf } from '../policy/sensitivity';
 import {
   type CompileCtx,
@@ -111,6 +122,7 @@ import {
   errorResult,
   levelGate,
   parseEnvelope,
+  routineDeferForbidden,
   sink,
   type ToolCallCtx,
   type ToolDispatchResult,
@@ -135,6 +147,9 @@ import { REGISTRY_TOOL_ENVELOPES, REGISTRY_TOOL_NAMES } from './registry-tools';
 // `mcp/server.ts`, `routines/{propose,ask,runner}.ts`) и десяток тестов — реэкспорт оставляет их
 // нетронутыми: переезд не обязан стоить полутора десятков диффов.
 export type { ToolCallCtx, ToolDispatchResult };
+// Объектный пре-чек фона переехал в общее дно (эррата Ф-Б2-18: его зовут ДВЕ ветки — `runMutation`
+// и `runAction`); реэкспорт — по той же причине, что у типов выше: его импортируют тесты диспатча.
+export { routineDeferForbidden };
 
 /** Резолв имени в глагол исполнителя (§9.3) — набор имён живёт в реестре, не здесь. */
 function isAgentVerb(name: string): name is AgentVerbName {
@@ -1416,17 +1431,24 @@ const DEFERRED_UNSET_VALUE = '—';
  * работает дальше, а сам вызов ложится единицей пачки в тред РУТИНЫ — туда, где владелец
  * читает её историю и её предложения.
  *
- * ПОРЯДОК ШАГОВ ЗНАЧИМ и не переставляется: проба существования по PK → есть запись, значит
- * это РЕТРАЙ (капом он не отвергается) → иначе счёт открытых единиц → кап → снятие
- * предусловий → запись. Наивный порядок «кап → запись» отверг бы повтор ДЕСЯТОЙ единицы:
- * модель, повторившая шаг после сетевого чиха, получила бы «пачка полна» на том, что уже
- * стоит в пачке, и стала бы чинить не то.
+ * ПОРЯДОК: СНИМОК → ключ личности → проба по PK → счёт открытых → кап → запись. Проба перед капом
+ * (ретрай ДЕСЯТОЙ единицы не отвергается «пачка полна»), снимок — перед ключом, потому что у ДЕЙСТВИЯ
+ * личность считается по РЕЗОЛВЛЕННОМУ (Р-8): `{action, params}` дают один хеш на два разных резолва, и
+ * владелец подтверждал бы чужой набор шагов по старым строкам.
+ * ЛИЧНОСТЬ ЕДИНИЦЫ ПРАВКИ ГРАФА — по-прежнему от ИСХОДНОГО payload'а модели: ретрай модели побайтово
+ * тот же, а предусловия ВТОРОГО снятия могли бы уже отличаться (владелец успел тронуть цель) — и один
+ * и тот же шаг дал бы владельцу вторую карточку. В `createPending` при этом едет input С
+ * предусловиями: на «Принять» исполняется именно он.
+ * ЛИЧНОСТЬ ЕДИНИЦЫ ДЕЙСТВИЯ — резолвленные операции БЕЗ CAS-снимка плюс пара «какое действие / та ли
+ * декларация» (Р-К-68): другое множество целей, другие «станет» или правленая декларация — другая
+ * единица, а ретрай по цели, которую владелец успел тронуть, — та же, с ПЕРВЫМ снимком (тот же
+ * довод ОЧ.13, что у правки графа). Молчаливого подтверждения чужого резолва этим не открывается:
+ * тронутое свойство ловит CAS первого снимка, нетронутое, но читаемое предусловием, — его
+ * перевычисление на «Принять» (эррата Ф-Б2-18).
  *
- * ЛИЧНОСТЬ ЕДИНИЦЫ СЧИТАЕТСЯ ОТ ИСХОДНОГО PAYLOAD'А МОДЕЛИ (tool + envelope-input), а не от
- * того, что уедет в запись: ретрай модели побайтово тот же, а предусловия ВТОРОГО снятия
- * могли бы уже отличаться (владелец успел тронуть цель) — и один и тот же шаг дал бы
- * владельцу вторую карточку. В `createPending` при этом едет input С предусловиями: на
- * «Принять» исполняется именно он.
+ * СНИМОК ДО ПРОБЫ И У ПРАВКИ ГРАФА — цена одного порядка на все роды: ретрай единицы, чью цель
+ * владелец успел архивировать или удалить, получает отказ снимка (`already_archived`/NOT_FOUND), а не
+ * сохранённую карточку, — которую «Принять» всё равно погасило бы расхождением предусловий.
  *
  * ВСЁ — В ОДНОЙ ТРАНЗАКЦИИ ВЛАДЕЛЬЦА, и это контракт, а не удобство: `listRunUnits` требует
  * `withIdentity` ТОГО ЖЕ владельца (иначе судьбы молча читаются как `open`, и кап считал бы
@@ -1450,11 +1472,23 @@ async function deferRoutineUnit(
       { tool: def.name },
     );
   }
-  const dedupeKey = deferDedupeKey(runId, tool, payload);
-  const pendingId = pendingMessageId(ctx.identity.graph, dedupeKey);
-
   return await withIdentity(ctx.db, ctx.identity, async (tx): Promise<ToolDispatchResult> => {
-    // 1. Проба существования по PK (образец — `routines/propose.ts`): `createPending`
+    // 1. Предусловия и «было» — ЗДЕСЬ и больше не переснимаются (ОЧ.13, §9.4)
+    const snapshot = await snapshotDeferredUnit(tx, ctx.identity.graph, tool, payload, ctx.clock);
+    if ('error' in snapshot) return snapshot.error;
+    // 2. Личность. `batch_id` в ключ НЕ входит: он минтится на каждом снимке заново, и ретрай
+    // получал бы новый pendingId ВСЕГДА — то есть дедупа не было бы вовсе.
+    const dedupeKey =
+      snapshot.action === undefined
+        ? deferDedupeKey(runId, tool, payload)
+        : deferDedupeKey(runId, 'batch_execute', {
+            operations: intentOf((snapshot.input as { operations: ExecOperation[] }).operations),
+            action_id: snapshot.action.id,
+            action_hash: snapshot.action.hash,
+          });
+    const pendingId = pendingMessageId(ctx.identity.graph, dedupeKey);
+
+    // 3. Проба существования по PK (образец — `routines/propose.ts`): `createPending`
     // идемпотентен, но «завёл» и «нашёл» он не различает, а кап различать обязан.
     const found = await tx
       .select({ metadata: chatMessages.metadata })
@@ -1474,7 +1508,7 @@ async function deferRoutineUnit(
       return { status: 'pending_confirmation', pendingId, card: stored };
     }
 
-    // 2. Кап единиц на прогон (ОЧ.10) — по ОТКРЫТЫМ: решённая владельцем освобождает место.
+    // 4. Кап единиц на прогон (ОЧ.10) — по ОТКРЫТЫМ: решённая владельцем освобождает место.
     // Отказ структурный, чтобы модель скорректировалась (§9.9); молчаливое усечение
     // означало бы «сделано» для модели и «не было» для владельца.
     const open = (await listRunUnits(tx, ctx.identity.graph, runId)).filter(
@@ -1487,20 +1521,19 @@ async function deferRoutineUnit(
       });
     }
 
-    // 3. Предусловия и «было» снимаются ЗДЕСЬ и больше не переснимаются (ОЧ.13, §9.4)
-    const snapshot = await snapshotDeferredUnit(tx, ctx.identity.graph, tool, payload);
-    if ('error' in snapshot) return snapshot.error;
-
     const pending = await createPending(tx, {
       // Тред РУТИНЫ, а не тред вызова (V1.6): единица — событие рутины, и читается она там
       // же, где вся её остальная переписка с владельцем.
       threadId: await ensureEntityThread(tx, ctx.identity.graph, routine.id),
       actor: { graphId: ctx.identity.graph, kind: ctx.actorKind, source: 'routine', runId },
-      tool,
+      // Носитель действия — ВТОРАЯ существующая форма payload'а (`batch_execute`), а не новая
+      // (Р-8): её уже умеют исполнить `approvePending` и «Принять все».
+      tool: snapshot.action === undefined ? tool : 'batch_execute',
       input: snapshot.input,
       level: 'explicit-confirmation',
       dedupeKey,
       kind: 'action',
+      ...(snapshot.action !== undefined && { action: snapshot.action }),
       card: {
         kind: 'deferred_action_card',
         pendingId,
@@ -1515,6 +1548,19 @@ async function deferRoutineUnit(
       clock: ctx.clock,
     });
     return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
+  });
+}
+
+/**
+ * Намерение операции — она сама БЕЗ CAS-снимка (`precondition`, `expectedUpdatedAt`): личность
+ * единицы действия (Р-К-68). Снимок описывает, ЧТО БЫЛО у цели в момент постановки, а не что
+ * единица сделает; включи его в ключ — и ретрай по цели, которую владелец успел тронуть, родил бы
+ * вторую карточку того же намерения рядом с первой, заведомо устаревшей.
+ */
+function intentOf(operations: readonly ExecOperation[]): ExecOperation[] {
+  return operations.map(({ tool, input }) => {
+    const { precondition: _precondition, expectedUpdatedAt: _expected, ...rest } = input;
+    return { tool, input: rest };
   });
 }
 
@@ -1541,9 +1587,14 @@ async function deferRoutineUnit(
  * `input.aspects`, — предусловия по колонке там нет, и карточка архивации показывала бы
  * владельцу одно «станет».
  *
- * Формы, кроме `entity_update`, — fail-closed отказ. Сегодня они недостижимы (уровень выше
- * `execute` прочим даёт только выдача автономии, а её снимает объектный пре-чек), но если
- * таблица §7.10 однажды поменяется, лучше прежний отказ, чем единица, которой нечем ни
+ * ТРЕТЬЯ ФОРМА — ДЕЙСТВИЕ (Р-8, `run_action`): payload — разобранный конверт вызова, на выходе —
+ * `{batch_id, operations}` резолва и пара `action` для записи (id, хеш декларации, цели и параметры).
+ * `clock` — часы вызова: «сегодня» date-токенов Q обязано совпасть с тем, по которому `runAction`
+ * посчитал уровень.
+ *
+ * Формы, кроме `entity_update`, реестра и действия, — fail-closed отказ. Сегодня они недостижимы
+ * (уровень выше `execute` прочим даёт только выдача автономии, а её снимает объектный пре-чек),
+ * но если таблица §7.10 однажды поменяется, лучше прежний отказ, чем единица, которой нечем ни
  * протухнуть, ни объяснить владельцу, что она сделает, — ровно то, чего велел не допускать
  * блокер Б3 ревью спеки.
  */
@@ -1552,11 +1603,49 @@ async function snapshotDeferredUnit(
   graphId: GraphId,
   tool: string,
   payload: unknown,
+  clock?: () => Date,
 ): Promise<
-  { input: unknown; summary: string; rows: DeferredRow[] } | { error: ToolDispatchResult }
+  | {
+      input: unknown;
+      summary: string;
+      rows: DeferredRow[];
+      action?: NonNullable<CreatePendingArgs['action']>;
+    }
+  | { error: ToolDispatchResult }
 > {
   if (REGISTRY_TOOL_NAMES.has(tool) && isRecord(payload)) {
     return await snapshotRegistryUnit(tx, graphId, tool, payload);
+  }
+  // ТРЕТЬЯ ФОРМА — ДЕЙСТВИЕ (Р-8). Резолв делает ту же работу, что `loadTargets`+`buildUpdate` ниже,
+  // только по всем шагам и целям `over`: на выходе exec-форма с CAS-пунктами — ровно то, что approve
+  // исполнит одним `execute`. Своей копии резолва тут нет намеренно: разъехавшись, она дала бы
+  // карточке одни операции, а исполнению другие. Цена названа: резолв случается ВТОРОЙ раз (первый —
+  // в `runAction`, где им считался уровень) — плата за разворот порядка в `deferRoutineUnit`.
+  if (tool === 'run_action' && isRecord(payload)) {
+    const reg = await effectiveRegistry(tx, graphId);
+    const resolved = await resolveAction(
+      tx,
+      reg,
+      graphId,
+      parseEnvelope(runActionInput, payload, 'run_action'),
+      await actionDateArgs(tx, graphId, clock),
+    );
+    // Второй резолв мог найти больше целей, чем первый (между ними прошло время): кап единицы
+    // сверяется и здесь, иначе карточка длиннее капа не исполнилась бы на «Принять» никогда.
+    const tooLong = unitCapExceeded(resolved.decl, resolved.operations.length);
+    if (tooLong !== null) return { error: tooLong };
+    return {
+      // `batch_id` технический: идемпотентность approve ключуется pendingId, а не им (§7.8).
+      input: { batch_id: newId(), operations: resolved.operations },
+      summary: resolved.summary,
+      rows: resolved.rows,
+      action: {
+        id: resolved.decl.id,
+        hash: resolved.hash,
+        targets: resolved.targets,
+        params: resolved.params,
+      },
+    };
   }
   if (tool !== 'entity_update' || !isRecord(payload)) {
     return {
@@ -2663,138 +2752,6 @@ function propsAfterPatch(
  */
 function sameAutonomyValue(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-}
-
-/**
- * Аспект назначения — четвёртый запретный объект рутины рядом с `ROUTINE_UNTOUCHABLE_OBJECTS`:
- * раздавать исполнителю работу — не то же самое, что править рутину, но запрещено рутине по
- * той же причине.
- *
- * Зеркало executor'а здесь НЕПОЛНОЕ, и намеренно (рулинг Р4-1, разбор — в доке пре-чека
- * ниже): стадия 4 (`assertRoutineUntouchable`, `executor/invariants.ts`) запрещает рутине
- * ТРОГАТЬ аспект назначения (`touched`), а пре-чек запрещает трогать сущность, у которой он
- * уже есть. Буква спеки среза (ОЧ.4, §9.1) требует второго; расхождение названо и вынесено
- * владельцу как остаток.
- */
-const ASSIGNMENT_ASPECT = 'orbis/assignment';
-
-/**
- * Объектный пре-чек рутинной мутации (D42 ОЧ.4, инвариант 1 среза): `null` — откладывать
- * можно, строка — человекочитаемая причина отказа АГЕНТУ, здесь и сейчас.
- *
- * Зачем отдельный рубеж, когда те же запреты держит стадия 4 executor'а: отложенная карточка
- * исполняется не в момент постановки, а когда владелец нажмёт «Принять» — и отказ прилетел бы
- * ЕМУ, хотя виноват не он (тот же довод, что у пре-чека предложения, `routines/propose.ts`).
- * Карточка, которую executor гарантированно убьёт, не должна рождаться.
- *
- * НО ПО НАЗНАЧЕНИЮ ЭТА ВЕТКА СТРОЖЕ EXECUTOR'А, и это решено сознательно (рулинг координатора
- * Р4-1). Стадия 4 ловит назначение только по `touched` (`executor/invariants.ts`) — то есть
- * рутина вправе править СВОЙ назначенный тикет, и «архивировать назначенный тикет» на
- * «Принять» прошло бы. Пре-чек же смотрит на СОСТОЯНИЕ цели и отказывает. Так написана буква
- * спеки среза (ОЧ.4 и §9.1 говорят дважды: «цель в `ROUTINE_UNTOUCHABLE_OBJECTS` ∪
- * `orbis/assignment`»), и для фонового актора выбран fail-closed: отказ виден агенту явно, он
- * о нём доложит, цена узкая, откат — одна строка.
- *
- * Первые ТРИ проверки — не про executor вовсе, а про пачку: «Принять все» одним нажатием
- * сняло бы замок мимоходом, если бы выдача автономии, правка инструкции act-рутины или
- * перенастройка системного объекта реестра (§С2-1 ряд 3, Задача 16) умели откладываться.
- * Такое рутина обязана либо делать в лицо владельцу (чат, где он тут же смотрит на карточку),
- * либо не делать. У третьей проверки есть и вторая половина, которой нет у первых двух: у
- * операций реестра запрета по объекту НА СТАДИИ 4 нет вовсе — `assertRoutineUntouchable`
- * стережёт аспекты ЗАПИСЕЙ, а не строки реестра, — то есть здесь это не зеркало, а
- * единственный рубеж. Тем важнее, что уровень до него доводит: `system-object` поднимает ряд
- * 4a до `explicit-confirmation`, и `level !== 'execute'` выполняется всегда.
- *
- * Порядок проверок значим: у операции может сойтись сразу несколько поводов (правка `mode`
- * ЧУЖОЙ рутины — это и автономия, и запретная цель), и назвать агенту надо самый содержательный
- * из них, иначе он будет чинить не то.
- *
- * Цели читаются одним SELECT по id — тем же способом и в том же месте конвейера, что и
- * пробой носителя выше (своей транзакции пре-чек не заводит, RLS —
- * под `withIdentity` актора). Containment тут не нужен: у пре-чека на руках готовые id, а
- * запретных аспектов четыре — читается СПИСОК `aspects[]`, то есть ровно то, чем аспект
- * теперь и является (§А1-1).
- *
- * Пре-чек разбирает ВСЕ формы операции, включая те, до которых таблица §7.10 сегодня его не
- * доводит (связи и attach классифицируются как `execute`, batch рутине закрыт совсем): он —
- * зеркало запрета по объекту, и зеркало, отражающее половину, разошлось бы со стадией 4
- * молча, стоит таблице уровней однажды поменяться. По той же причине функция экспортирована —
- * ровно как `routineGate` выше: рубеж, который никто не проверил, — это рубеж, которого нет.
- */
-export async function routineDeferForbidden(
-  ctx: ToolCallCtx,
-  ops: ReadonlyArray<{ tool: string; input: unknown }>,
-  facts: { grantsAutonomy: boolean; reconfigures: Reconfigures },
-  instructionOf: readonly string[],
-): Promise<string | null> {
-  if (facts.grantsAutonomy) {
-    return 'выдача автономии рутине из фона не откладывается: право писать в граф без спроса даёт только владелец и только глядя на карточку (V1.10)';
-  }
-  if (instructionOf.length > 0) {
-    return `правка инструкции act-рутины из фона не откладывается: «${instructionOf.join('», «')}» (V1.10)`;
-  }
-  // ТРЕТИЙ ПОВОД — ЗАПРЕТ ПО ОБЪЕКТУ РЕЕСТРА (§С2-1 ряд 3). Встроенное свойство, встроенный
-  // аспект, ПРИВЯЗКА встроенного аспекта (`implements`, Б-1) и роли `created_by: system` фон
-  // не перенастраивает НИКОГДА — ни сейчас, ни отложенной единицей. Подписки и наборы сюда
-  // НЕ попадают: их ряд задаёт тул (`behavior-delta`, Р9), и фон предлагает их владельцу
-  // штатной единицей пачки — иначе законный путь садовника §Б5-2 был бы закрыт наглухо.
-  // Довод тот же, что у двух поводов выше: «Принять все» одним нажатием сняло бы замок
-  // мимоходом, а анти-цель 3 (§С2-3) запрещает рутине «тихо перенастроить, что видит
-  // владелец». Свои строки владельца сюда не попадают — их правка откладывается штатно.
-  //
-  // ВЫХОД У АГЕНТА ЕСТЬ, и отказ его называет: `orbis_ask`/`orbis_checkpoint` открыты рутине
-  // В ЛЮБОМ РЕЖИМЕ (`ROUTINE_BASE_TOOLS`, `tools/registry.ts`) — фон говорит владельцу, чего
-  // хочет, и тот делает это сам либо подтверждает в чате. Отказ без выхода был бы ловушкой.
-  if (facts.reconfigures === 'system-object') {
-    return 'перенастройка системного объекта (встроенное свойство, встроенный аспект, привязка встроенного аспекта) из фона не откладывается: устройство системы меняет владелец, а не прогон (§С2-1). Скажите ему об этом — orbis_ask открыт в любом режиме';
-  }
-
-  // Цель правки и конец связи — разные множества запретных аспектов, и это не небрежность:
-  // executor запрещает связь только по рутине и прогону (`assertRoutineRelationUntouchable`),
-  // а назначенный тикет связями обвешивать не мешает. Пре-чек зеркалит его ровно, иначе он
-  // отказывал бы в том, что на «Принять» прошло бы.
-  const entityTargets: string[] = [];
-  const relationEnds: string[] = [];
-  for (const op of ops) {
-    if (!isRecord(op.input)) continue;
-    if (op.tool === 'entity_update') {
-      if (typeof op.input.id === 'string') entityTargets.push(op.input.id);
-    } else if (op.tool === 'relation_create' || op.tool === 'relation_delete') {
-      for (const end of [op.input.source_id, op.input.target_id]) {
-        if (typeof end === 'string') relationEnds.push(end);
-      }
-    } else if (op.tool.startsWith('attach_')) {
-      // attach — третий путь появления аспекта на ЖИВОЙ сущности; `entity_create` целей
-      // в БД не имеет вовсе, его запретные формы ловит проверка автономии выше и стадия 4
-      if (typeof op.input.entity_id === 'string') entityTargets.push(op.input.entity_id);
-    }
-  }
-  const ids = [...new Set([...entityTargets, ...relationEnds])];
-  if (ids.length === 0) return null;
-
-  const rows = await withIdentity(ctx.db, ctx.identity, (tx) =>
-    tx
-      .select({ id: entities.id, aspects: entities.aspects })
-      .from(entities)
-      .where(inArray(entities.id, ids)),
-  );
-  const aspectsById = new Map(rows.map((r) => [r.id, r.aspects]));
-  // Невидимой цели (её нет или она чужая) пре-чек не касается: NOT_FOUND — честный ответ
-  // исполнения, и подменять его отказом по объекту значило бы разглашать, что строка есть.
-  const untouchable = (id: string): boolean => {
-    const aspects = aspectsById.get(id);
-    return aspects !== undefined && ROUTINE_UNTOUCHABLE_OBJECTS.some((a) => aspects.includes(a));
-  };
-
-  for (const id of entityTargets) {
-    if (untouchable(id) || aspectsById.get(id)?.includes(ASSIGNMENT_ASPECT) === true) {
-      return routineUntouchableError().message;
-    }
-  }
-  for (const id of relationEnds) {
-    if (untouchable(id)) return routineUntouchableError().message;
-  }
-  return null;
 }
 
 /**
