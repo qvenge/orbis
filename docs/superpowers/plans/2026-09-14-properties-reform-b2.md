@@ -10623,7 +10623,7 @@ export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput = {
 ```
   `cd apps/server && bun test src/budget/binding.test.ts` → **FAIL**: `envelopeIdentityOf` не экспортирован.
 
-- [ ] **Шаг 11: `dropStaleCarryover` — на параметры правила.** В `apps/server/src/executor/normalize.ts` удалить
+- [ ] **Шаг 11: `dropStaleCarryover` — на параметры правила.** **[ЭРРАТА Ф-Б2-21 (гейт задачи 12, I-2): идентичность конверта читается из params строки `duplicate_envelope` НЕЗАВИСИМО от `enabled` — выключение уникальности (§Б4-4) не выключает снятие устаревшего переноса (иначе перенос переживает смену периода/валюты и молча завышает лимит); строки нет — `Error` сборки (образец Р-И-17), а не молчаливое `[]`. Докблок и код ниже в части `!rule.enabled` / «правила нет или оно выключено → идентичности НЕТ» — отменены.]** В `apps/server/src/executor/normalize.ts` удалить
   `ENVELOPE_IDENTITY` (`:63-68`) и дописать:
 ```ts
 /**
