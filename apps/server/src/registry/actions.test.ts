@@ -6,16 +6,17 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import {
   type ActionDefinition,
   type ActionStep,
+  actionDefinitionSchema,
   actionToolName,
   BUILTIN_ACTION_DEFS,
 } from '@orbis/shared';
-import { ACTION_FIXTURES } from '../../test/fixtures/action-seed';
+import { ACTION_FIXTURES, GRANTS_AUTONOMY_UNDERDECLARED } from '../../test/fixtures/action-seed';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 // Имена реестровых тулов читаются, а не правятся (tools/* — задача 7): пин рулинга 6-1 обязан
 // видеть и тулы, которые заведут следующие задачи, а не список, переписанный сюда руками.
 import { REGISTRY_TOOL_NAMES } from '../tools/registry-tools';
-import { actionHash, assertAction, stepFactsOf, stepReversible } from './actions';
+import { actionExprScope, actionHash, assertAction, stepFactsOf, stepReversible } from './actions';
 import { effectiveRegistry } from './cache';
 import type { RegistrySnapshot } from './load';
 
@@ -289,4 +290,167 @@ test('precondition и offered_by.when не предикатом — ACTION_PRECO
   expect(verdict({ ...builtin(1), offered_by: [{ llm: true, when: { ctx: '$today' } }] })).toEqual(
     reason,
   );
+});
+
+// ─────────────── фикс-раунд 1 гейта задачи 6 (I-1, I-2 + m-1, I-3, m-2) ───────────────
+
+const SELF = { $expr: { ctx: '$self' } };
+const VALUE_TYPE = { code: 'VALIDATION', reason: 'ACTION_VALUE_TYPE' };
+const stepOf = (tool: string, input: Record<string, unknown>): ActionStep => ({ tool, input });
+
+// I-1 (Р-И-25): доверенность рутины — факт шага ТЕМ ЖЕ предикатом, что поднимает уровень у политики.
+test('шаг, правящий доверенность рутины, несёт grants_autonomy; подстановка — худший случай (Р-9)', () => {
+  const facts = (tool: string, input: Record<string, unknown>) => [
+    ...stepFactsOf(reg, stepOf(tool, input)),
+  ];
+  expect(facts('entity_update', { id: SELF, props: { 'orbis/routine_mode': 'act' } })).toEqual([
+    'grants_autonomy',
+  ]);
+  expect(facts('entity_update', { id: SELF, unset: ['orbis/allowed_tools'] })).toEqual([
+    'grants_autonomy',
+  ]);
+  expect(
+    facts('attach_orbis_routine', { entity_id: SELF, data: { 'orbis/routine_mode': 'act' } }),
+  ).toEqual(['grants_autonomy']);
+  // Контроль: набор без доверенности (`propose`, белого списка нет) — не выдача, факт не «всегда».
+  expect(
+    facts('attach_orbis_routine', { entity_id: SELF, data: { 'orbis/routine_mode': 'propose' } }),
+  ).toEqual([]);
+  // Набор кладётся целиком, значение подстановки до прогона неизвестно — «вооружает».
+  expect(
+    facts('attach_orbis_routine', {
+      entity_id: SELF,
+      data: { 'orbis/routine_mode': { $expr: { param: 'mode' } } },
+    }),
+  ).toEqual(['grants_autonomy']);
+  expect(
+    facts('entity_create', {
+      title: 'Рутина',
+      tags: [],
+      props: { 'orbis/allowed_tools': { $expr: { param: 'tools' } } },
+    }),
+  ).toEqual(['grants_autonomy']);
+  // Подстановка в `unset` — снятие НЕИЗВЕСТНОГО свойства: и деньги, и доверенность.
+  expect(facts('entity_update', { id: SELF, unset: [{ $expr: { param: 'which' } }] })).toEqual([
+    'touches_money',
+    'grants_autonomy',
+  ]);
+});
+
+test('действие, взводящее рутину, обязано объявить grants_autonomy — SENSITIVITY_UNDERDECLARED', () => {
+  expect(verdict(GRANTS_AUTONOMY_UNDERDECLARED)).toEqual({
+    code: 'SENSITIVITY_UNDERDECLARED',
+    reason: undefined,
+  });
+  expect(verdict({ ...GRANTS_AUTONOMY_UNDERDECLARED, sensitivity: ['grants_autonomy'] })).toBe(
+    'ok',
+  );
+});
+
+// I-2 (§1.6, ступень 8): `{$expr}` — выражение ТИПА СВОЕЙ ПОЗИЦИИ; четыре пробы гейта дословно.
+test('{$expr} против типа позиции: date→boolean, boolean→decimal, number→id, свойства нет — ACTION_VALUE_TYPE', () => {
+  const on = { $expr: { param: 'occurred_on' } };
+  const withInput = (input: Record<string, unknown>) => ({
+    ...builtin(0),
+    steps: [{ tool: 'entity_update', input }],
+  });
+  expect(verdict(withInput({ id: SELF, props: { 'orbis/planned': on } }))).toEqual(VALUE_TYPE);
+  expect(
+    verdict(
+      withInput({
+        id: SELF,
+        props: { 'orbis/amount': { $expr: { const: true } }, 'orbis/occurred_on': on },
+      }),
+    ),
+  ).toEqual(VALUE_TYPE);
+  expect(
+    verdict(withInput({ id: { $expr: { const: 5 } }, props: { 'orbis/occurred_on': on } })),
+  ).toEqual(VALUE_TYPE);
+  expect(
+    verdict(withInput({ id: SELF, props: { 'orbis/nope': 1, 'orbis/occurred_on': on } })),
+  ).toEqual(VALUE_TYPE);
+  // json-свойству выражения не положено: у вложенного объекта нет скалярного значения (§6.4).
+  expect(
+    verdict(
+      withInput({
+        id: SELF,
+        props: { 'orbis/progress_source': { $expr: { const: 'x' } }, 'orbis/occurred_on': on },
+      }),
+    ),
+  ).toEqual(VALUE_TYPE);
+  // Контроль: decimal-литерал строкой в decimal-позиции законен — приведение по позиции, как у правил.
+  expect(
+    verdict(
+      withInput({
+        id: SELF,
+        props: { 'orbis/amount': { $expr: { const: '1.00' } }, 'orbis/occurred_on': on },
+      }),
+    ),
+  ).toBe('ok');
+});
+
+// m-1: заглушка ступени 7 — по типу позиции. Прежний uuid давал ложный отказ формы у `archived`.
+test('archived из boolean-параметра — законно; из date-параметра — ACTION_VALUE_TYPE (m-1)', () => {
+  const archivedFrom = (v: unknown) => [
+    { tool: 'entity_update', input: { id: SELF, archived: v } },
+  ];
+  expect(
+    verdict({
+      ...builtin(1),
+      params: [{ name: 'flag', type: { kind: 'boolean' } }],
+      steps: archivedFrom({ $expr: { param: 'flag' } }),
+    }),
+  ).toBe('ok');
+  expect(verdict({ ...builtin(1), steps: archivedFrom({ $expr: { param: 'to' } }) })).toEqual(
+    VALUE_TYPE,
+  );
+});
+
+// I-3: тип `{param}` — тем же `exprTypeOfKind`, что у `{prop}` (Produces-интерфейс задачи 7).
+test('тип параметра — родом свойства: select сравним с select-свойством; json-параметр — отказ формы', () => {
+  const p = builtin(1);
+  const withSelect = {
+    ...p,
+    params: [...p.params, { name: 'st', type: { kind: 'select' } }],
+    precondition: { op: '=', args: [{ prop: 'orbis/task_status' }, { param: 'st' }] },
+  };
+  expect(verdict(withSelect)).toBe('ok');
+  const decl = actionDefinitionSchema.parse({
+    ...p,
+    params: [
+      { name: 'to', type: { kind: 'date' } },
+      { name: 'st', type: { kind: 'select' } },
+      { name: 'at', type: { kind: 'time' } },
+      { name: 'who', type: { contract: 'orbis/completable' } },
+    ],
+  });
+  expect(actionExprScope(decl, reg).params).toEqual({
+    to: { kind: 'date' },
+    st: { kind: 'text' },
+    at: { kind: 'text' },
+    who: { kind: 'text' },
+  });
+  expect(
+    verdict({ ...p, params: [...p.params, { name: 'blob', type: { kind: 'json' } }] }),
+  ).toEqual({
+    code: 'VALIDATION',
+    reason: 'ACTION_MALFORMED',
+  });
+});
+
+// m-2: маркер строгий на боевом пути — сосед у `$expr` не теряется молча.
+test('маркер {$expr} с соседним ключом — ACTION_STEP_INPUT (m-2)', () => {
+  const junk = {
+    ...builtin(0),
+    steps: [
+      {
+        tool: 'entity_update',
+        input: {
+          id: { $expr: { ctx: '$self' }, junk: 1 },
+          props: { 'orbis/occurred_on': { $expr: { param: 'occurred_on' } } },
+        },
+      },
+    ],
+  };
+  expect(verdict(junk)).toEqual({ code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' });
 });

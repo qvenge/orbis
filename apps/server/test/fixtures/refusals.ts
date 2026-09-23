@@ -61,6 +61,7 @@ import {
   ACTION_NESTED,
   ACTION_NESTED_BY_TOOL,
   BATCH_UNBOUNDED,
+  GRANTS_AUTONOMY_UNDERDECLARED,
   P2F,
   POSTPONE,
   SENSITIVITY_UNDERDECLARED,
@@ -977,6 +978,11 @@ const ROW_15: RefusalRow = {
       name: 'факт снят у шага attach_* — деньги в data ключами свойств',
       run: async () =>
         codeOfSync(() => assertAction(SENSITIVITY_UNDERDECLARED_ATTACH, actionScope())),
+    },
+    {
+      // Фикс-раунд 1 (I-1): второй факт, который производит графовый шаг, — доверенность рутины.
+      name: 'шаг взводит рутину, grants_autonomy не объявлен',
+      run: async () => codeOfSync(() => assertAction(GRANTS_AUTONOMY_UNDERDECLARED, actionScope())),
     },
   ],
 };

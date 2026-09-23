@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import {
   ACTION_STEP_TOOLS,
   type ActionDefinition,
+  type ActionParam,
   type ActionStep,
   actionDefinitionSchema,
   attachAspectInput,
@@ -20,20 +21,38 @@ import {
   canonicalJson,
   entityCreateInput,
   entityUpdateInput,
+  exprMarkerSchema,
   MODULE_IDS,
+  type PropertyDefinition,
   relationCreateInput,
   relationDeleteInput,
   type SensitivityFact,
 } from '@orbis/shared';
 // Типы языка E — из его подпути, как у `subscriptions/registry.ts` (баррель реестра их не
 // реэкспортирует, и второй адрес для одного типа заводить незачем).
-import type { ExprScope, ExprType } from '@orbis/shared/expr';
-// Q map-действия: тип дерева и узла фильтра — подпуть запросов (как у `tools/dispatch.ts`).
-import type { QueryAst, QueryFilterNode } from '@orbis/shared/query';
+import {
+  EXPR_TREE_DEPTH_CAP,
+  type ExprScope,
+  type ExprType,
+  exprTreeExceedsDepth,
+  exprTypeOfKind,
+} from '@orbis/shared/expr';
+// Q map-действия: тип дерева и узла фильтра — подпуть запросов (как у `tools/dispatch.ts`); оттуда же
+// «списочность» свойства — решение языка, общее с чекером E (`typedOfProp`).
+import { isListPropertyType, type QueryAst, type QueryFilterNode } from '@orbis/shared/query';
 import { z } from 'zod';
 import { ExecError } from '../errors';
 import { resolvePropertyRef } from '../executor/props';
 import { assertExprChecked } from '../expr/check';
+// Предикат доверенности рутины — ОДИН на политику и валидатор (Р-И-25): факт `grants_autonomy`
+// шага обязан считаться тем же правилом, каким классификатор поднимает уровень вызова, иначе
+// декларация могла бы «не объявить» то, что политика на прогоне всё равно увидит. Импорт —
+// чтение: `confirmation.ts` тянет только `tools/registry-tools` → `registry/deltas`, цикла нет.
+import {
+  AUTONOMY_PROPERTIES,
+  grantsRoutineAutonomy,
+  ROUTINE_MODE_PROPERTY,
+} from '../policy/confirmation';
 import type { RegistrySnapshot } from './load';
 
 export interface ActionCheckScope {
@@ -112,6 +131,10 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
     });
   }
   const decl = parsed.data;
+  // Тип параметра — тоже форма: json-параметру нечем стать в выражении (у вложенного объекта нет
+  // скалярного значения, §6.4), и сказать это нужно ЗДЕСЬ, по имени параметра, а не безымянным
+  // `EXPR_TYPE` при первом `{param}` — или вовсе никогда, если параметр никто не читает.
+  for (const p of decl.params) paramExprType(decl.key, p);
 
   // (4) Namespace ключа — по тому, кто пишет. Системная строка адресуется модулем, своя —
   // `user/`: иначе владелец занял бы имя модуля, и следующий пересев столкнулся бы с ним.
@@ -195,9 +218,30 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
   // (7) Форма входа шага — КОНВЕРТ ТУЛА, в котором любое значение может быть `{$expr}`.
   // Вторая zod-модель конвертов здесь была бы вторым описанием тула и разъехалась бы с
   // `contracts/tools.ts` при первом же новом поле; поэтому маркеры ВЫРЕЗАЮТСЯ, а «дырка»
-  // затыкается заглушкой, и дальше работает НАСТОЯЩИЙ конверт.
+  // затыкается заглушкой ТИПА ПОЗИЦИИ, и дальше работает НАСТОЯЩИЙ конверт.
   for (const [index, step] of decl.steps.entries()) {
-    const probe = stepTemplateSchema(step.tool).safeParse(stripMarkers(step.input));
+    // Маркер строгий (`exprMarkerSchema`): сосед у `$expr` не «лишний ключ, который никто не
+    // прочтёт», а данные, молча выпавшие из шаблона, — и автор уверен, что их записал.
+    for (const site of markerSitesOf(step.input)) {
+      // Слишком глубокое дерево схеме не отдаётся (`z.lazy` исчерпал бы стек до всякого условия):
+      // его называет гейт глубины ступени 8 (`EXPR_TOO_DEEP`).
+      if (exprTreeExceedsDepth(site.node, EXPR_TREE_DEPTH_CAP)) continue;
+      const marker = exprMarkerSchema.safeParse(site.marker);
+      if (!marker.success) {
+        bad(
+          'ACTION_STEP_INPUT',
+          decl.key,
+          `действие «${decl.key}»: шаг ${index + 1}, позиция ${site.segs.join('.')} — маркер {$expr} не разобран`,
+          {
+            step: index,
+            tool: step.tool,
+            path: site.segs.join('.'),
+            issues: marker.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+          },
+        );
+      }
+    }
+    const probe = stepTemplateSchema(step.tool).safeParse(stripMarkers(step.input, []));
     if (!probe.success) {
       bad(
         'ACTION_STEP_INPUT',
@@ -228,16 +272,25 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
       );
     }
   }
-  for (const [path, node] of rawExprSites(decl as unknown as Record<string, unknown>)) {
-    if (path === 'precondition') continue;
-    const t = assertExprChecked(node, { ...exprScope, reg: scope.reg });
-    // `offered_by[].when` — предикат (§Б6-6), как и `precondition`; `{$expr}` шага — любой тотальный тип.
-    if (path.startsWith('offered_by.') && t.kind !== 'boolean') {
+  // `offered_by[].when` — предикат (§Б6-6), как и `precondition`.
+  for (const [index, offer] of decl.offered_by.entries()) {
+    if (offer.when === undefined) continue;
+    const path = `offered_by.${index}.when`;
+    const t = assertExprChecked(offer.when, { ...exprScope, reg: scope.reg });
+    if (t.kind !== 'boolean') {
       bad('ACTION_PRECONDITION_TYPE', decl.key, `${path} действия «${decl.key}» — не предикат`, {
         actual: t.kind,
         path,
       });
     }
+  }
+  // `{$expr}` шага — выражение ТИПА СВОЕЙ ПОЗИЦИИ (§1.6 реестра интерфейсов, ступень 8): значение
+  // свойства — типа свойства-цели, поле конверта — типа поля. Без этого запись действия проходила
+  // бы, а дальше одно из двух: несовместимый тип валит КАЖДЫЙ прогон (действие вечно сломано,
+  // тул LLM падает на каждом вызове), а строковый (decimal или date в `text`) не ловится нигде и
+  // молча пишется текстом навсегда.
+  for (const [index, step] of decl.steps.entries()) {
+    assertStepValues(decl.key, index, step, scope.reg, exprScope);
   }
 
   // (9) Р-34 (урок остатка 39): параметр, который никто не читает, — обещание поверхности,
@@ -301,40 +354,79 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
 }
 
 /**
- * ФАКТЫ ЧУВСТВИТЕЛЬНОСТИ ШАГА — СТАТИЧЕСКАЯ ТАБЛИЦА (Р-9) с одной динамикой: `touches_money`
- * читается из ПРИВЯЗОК, а не из списка имён свойств. Список «какие свойства про деньги»
- * жил бы вторым мнением рядом с контрактом `orbis/money-movement`, и разошёлся бы с ним у
- * первого же своего денежного аспекта владельца (§Б2-1: принадлежность — привязкой).
+ * ФАКТЫ ЧУВСТВИТЕЛЬНОСТИ ШАГА — СТАТИЧЕСКАЯ ТАБЛИЦА (Р-9, Р-И-25) по шаблону входа, до исполнения.
+ * Графовые тулы производят ДВА факта:
+ *  - `touches_money` — шаг пишет свойство, привязанное к слоту `orbis/money-movement`. Читается из
+ *    ПРИВЯЗОК, а не из списка имён свойств: список «какие свойства про деньги» жил бы вторым мнением
+ *    рядом с контрактом и разошёлся бы с ним у первого же своего денежного аспекта владельца
+ *    (§Б2-1: принадлежность — привязкой);
+ *  - `grants_autonomy` — шаг правит доверенность рутины. Предикат — `grantsRoutineAutonomy`
+ *    политики, тот же, которым классификатор поднимает уровень вызова (`policy/confirmation.ts`):
+ *    `entity_update`, называющий `orbis/routine_mode`/`orbis/allowed_tools` в `props` или `unset`;
+ *    `entity_create` и `attach_orbis_routine`, кладущие «вооружённый» набор.
+ *
+ * ХУДШИЙ СЛУЧАЙ ДЛЯ ПОДСТАНОВКИ (Р-9). Значение `{$expr}` до исполнения неизвестно: маркер в позиции
+ * доверенности у create/attach читается как «вооружает» (`act`, непустой список), маркер в `unset` —
+ * как снятие НЕИЗВЕСТНОГО свойства, то есть и денежного, и доверенности. У update сама правка ключа
+ * доверенности — уже выдача, там худший случай совпадает с буквальным.
  *
  * Адрес свойства во входе — КЛЮЧ (`props`, `unset`, `data` у `attach_*`), привязка же хранит id;
  * перевод — тем же `resolvePropertyRef`, каким исполнитель резолвит патч: у своих свойств key и id
  * расходятся, и второе правило перевода здесь разошлось бы с исполнителем на первом же из них.
  *
- * Остальные четыре факта графовые тулы не производят: `changes_registry` и `grants_autonomy`
- * считает классификатор по свёртке операций (`policy/sensitivity.ts`), а `external`
- * и `irreversible` в v1 объявляются только декларацией — производителя у них нет.
+ * Остальных трёх фактов графовые тулы не производят: `changes_registry` — факт реестровых тулов
+ * (классификатор, `policy/sensitivity.ts`), а `external` и `irreversible` в v1 объявляются только
+ * декларацией — производителя у них нет.
  */
 export function stepFactsOf(reg: RegistrySnapshot, step: ActionStep): readonly SensitivityFact[] {
   const money = new Set<string>();
   for (const b of bindingIndexOf(reg).byContract('orbis/money-movement')) {
     for (const propertyId of Object.values(b.bind)) money.add(propertyId);
   }
-  const record = (v: unknown): Record<string, unknown> =>
-    typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
   const input = step.input;
+  const unset = Array.isArray(input.unset) ? (input.unset as unknown[]) : [];
   const addressed = [
-    ...Object.keys(record(input.props)),
-    ...(Array.isArray(input.unset) ? input.unset.filter((k) => typeof k === 'string') : []),
+    ...Object.keys(recordOf(input.props)),
+    ...unset.filter((k): k is string => typeof k === 'string'),
     // attach_* пишет набор аспекта целиком — `data` адресуется КЛЮЧАМИ свойств (§А9-1).
-    ...Object.keys(record(input.data)),
+    ...Object.keys(recordOf(input.data)),
   ];
   const written = addressed.map((k) => resolvePropertyRef(reg, k)?.id ?? k);
+  const unsetUnknown = unset.some(isMarker);
   const out: SensitivityFact[] = [];
-  if (written.some((p) => money.has(p))) out.push('touches_money');
+  if (unsetUnknown || written.some((p) => money.has(p))) out.push('touches_money');
+  if (unsetUnknown || grantsRoutineAutonomy(step.tool, worstCaseAutonomy(step.tool, input))) {
+    out.push('grants_autonomy');
+  }
   // §Б6-4: необратимый шаг обязан объявиться ДО исполнения. Все шаги v1 обратимы по таблице
   // ниже, поэтому `irreversible` здесь не производится — ветка появится вместе с первым
   // необратимым тулом шага (её отсутствие сторожит `stepReversible`).
   return out;
+}
+
+/**
+ * Шаблон входа, в котором маркер позиции доверенности заменён «вооружающим» значением — худший
+ * случай Р-9 для наборов, которые create и attach кладут ЦЕЛИКОМ (`autonomyArmed` смотрит на
+ * значение). У update предикату значим ключ, а не значение, — вход отдаётся как есть.
+ */
+function worstCaseAutonomy(tool: string, input: Record<string, unknown>): Record<string, unknown> {
+  const bag = tool === 'entity_create' ? 'props' : tool.startsWith('attach_') ? 'data' : undefined;
+  if (bag === undefined) return input;
+  const values = { ...recordOf(input[bag]) };
+  for (const p of AUTONOMY_PROPERTIES) {
+    if (!isMarker(values[p])) continue;
+    values[p] = p === ROUTINE_MODE_PROPERTY ? 'act' : ['<$expr>'];
+  }
+  return { ...input, [bag]: values };
+}
+
+function recordOf(v: unknown): Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+function isMarker(v: unknown): boolean {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) && Object.hasOwn(v, '$expr');
 }
 
 /**
@@ -434,37 +526,110 @@ function* rawExprSites(rawRec: Record<string, unknown> | undefined): Generator<[
   for (const [index, step] of steps.entries()) {
     const s = step as Record<string, unknown> | null;
     if (s === null || typeof s !== 'object') continue;
-    yield* walkMarkers(s.input, `steps.${index}.input`);
+    for (const site of markerSitesOf(s.input)) {
+      yield [`steps.${index}.input.${site.segs.join('.')}.$expr`, site.node];
+    }
   }
 }
-function* walkMarkers(value: unknown, path: string): Generator<[string, unknown]> {
+
+const TEXT: ExprType = { kind: 'text' };
+const LIST_TEXT: ExprType = { kind: 'list', of: TEXT };
+/**
+ * ТИП ПОЛЯ КОНВЕРТА шагов v1 — то, чем обязан стать `{$expr}` в этой позиции. Мешки свойств
+ * (`props`, `data`) сюда не входят: их тип даёт реестр по ключу. Поля-id — `text` (uuid — строка,
+ * и `$self` чекер типизирует так же); `expectedUpdatedAt` — момент; списки адресов (`tags`, `unset`,
+ * `aspects` создания и `attach`/`detach` правки) — `list<text>`, их элемент — `text`.
+ */
+const ENVELOPE_FIELD_TYPES: Readonly<Record<string, ExprType>> = {
+  id: TEXT,
+  entity_id: TEXT,
+  source_id: TEXT,
+  target_id: TEXT,
+  role: TEXT,
+  title: TEXT,
+  emoji: TEXT,
+  body: TEXT,
+  archived: { kind: 'boolean' },
+  expectedUpdatedAt: { kind: 'timestamp' },
+  tags: LIST_TEXT,
+  unset: LIST_TEXT,
+  aspects: LIST_TEXT,
+  attach: LIST_TEXT,
+  detach: LIST_TEXT,
+};
+const PROPERTY_BAGS: ReadonlySet<string> = new Set(['props', 'data']);
+
+/** Маркер `{$expr}` шаблона входа: путь сегментами от корня `input`, сам маркер и его выражение. */
+interface MarkerSite {
+  segs: readonly string[];
+  marker: Record<string, unknown>;
+  node: unknown;
+}
+function* markerSitesOf(value: unknown, segs: readonly string[] = []): Generator<MarkerSite> {
   if (Array.isArray(value)) {
-    for (const [i, v] of value.entries()) yield* walkMarkers(v, `${path}.${i}`);
+    for (const [i, v] of value.entries()) yield* markerSitesOf(v, [...segs, String(i)]);
     return;
   }
   if (typeof value !== 'object' || value === null) return;
   const obj = value as Record<string, unknown>;
   if (Object.hasOwn(obj, '$expr')) {
-    yield [`${path}.$expr`, obj.$expr];
+    yield { segs, marker: obj, node: obj.$expr };
     return;
   }
-  for (const [k, v] of Object.entries(obj)) yield* walkMarkers(v, `${path}.${k}`);
+  for (const [k, v] of Object.entries(obj)) yield* markerSitesOf(v, [...segs, k]);
+}
+
+/** Тип поля конверта по пути; `undefined` — у позиции своего типа нет. Мешки свойств — не здесь. */
+function envelopeTypeAt(segs: readonly string[]): ExprType | undefined {
+  const last = segs[segs.length - 1];
+  if (last === undefined) return undefined;
+  const isIndex = /^\d+$/.test(last);
+  const field = isIndex ? segs[segs.length - 2] : last;
+  const type = field === undefined ? undefined : ENVELOPE_FIELD_TYPES[field];
+  if (type === undefined || !isIndex) return type;
+  return type.kind === 'list' ? type.of : undefined;
 }
 
 /**
- * Конверт тула с «дырками» под подстановку: маркер `{$expr}` заменяется на значение,
- * которое конверт заведомо примет в позициях шагов v1 (конверты значений свойств —
- * `z.unknown()`, у `id`/`entity_id`/`source_id`/`target_id` — uuid, у `title` — непустая
- * строка): валидный uuid-плейсхолдер. Проверяется ФОРМА конверта, а типы выражений —
- * ступенью 8; смешивать их нельзя: тип подстановки zod не знает.
+ * Заглушка под тип позиции — значение, которое конверт заведомо примет там, где стоял маркер:
+ * uuid для полей-id и текста, `true` для `archived`, момент для `expectedUpdatedAt`, `[]` для
+ * списков. Одна заглушка на всё (uuid) давала ложный `ACTION_STEP_INPUT` у `archived` из параметра
+ * (m-1 гейта). Значения свойств в конверте — `z.unknown()`, им подходит любая.
  */
 const MARKER_UUID = '00000000-0000-4000-8000-000000000000';
-function stripMarkers(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripMarkers);
+function stubOf(type: ExprType | undefined): unknown {
+  switch (type?.kind) {
+    case 'boolean':
+      return true;
+    case 'timestamp':
+      return '2000-01-01T00:00:00.000Z';
+    case 'date':
+      return '2000-01-01';
+    case 'number':
+      return 0;
+    case 'decimal':
+      return '0';
+    case 'list':
+      return [];
+    default:
+      return MARKER_UUID;
+  }
+}
+/**
+ * Конверт тула с «дырками» под подстановку: маркер `{$expr}` заменяется заглушкой типа позиции.
+ * Проверяется ФОРМА конверта, а типы выражений — ступенью 8; смешивать их нельзя: тип подстановки
+ * zod не знает.
+ */
+function stripMarkers(value: unknown, segs: readonly string[]): unknown {
+  if (Array.isArray(value)) return value.map((v, i) => stripMarkers(v, [...segs, String(i)]));
   if (typeof value !== 'object' || value === null) return value;
   const obj = value as Record<string, unknown>;
-  if (Object.hasOwn(obj, '$expr')) return MARKER_UUID;
-  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, stripMarkers(v)]));
+  if (Object.hasOwn(obj, '$expr')) {
+    return stubOf(PROPERTY_BAGS.has(segs[0] ?? '') ? undefined : envelopeTypeAt(segs));
+  }
+  return Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => [k, stripMarkers(v, [...segs, k])]),
+  );
 }
 function stepTemplateSchema(tool: string): z.ZodTypeAny {
   if (tool.startsWith('attach_')) return attachAspectInput;
@@ -477,14 +642,130 @@ function stepTemplateSchema(tool: string): z.ZodTypeAny {
   return byTool[tool] ?? z.never();
 }
 
+/** Печать типа для текста отказа: читателем будет человек в карточке. */
+function typeLabel(type: ExprType): string {
+  if (type.kind === 'list') return `list<${typeLabel(type.of)}>`;
+  if (type.kind === 'class') return `class<${type.contract}>`;
+  return type.kind;
+}
+function sameType(a: ExprType, b: ExprType): boolean {
+  if (a.kind === 'list' && b.kind === 'list') return sameType(a.of, b.of);
+  if (a.kind === 'class' && b.kind === 'class') return a.contract === b.contract;
+  return a.kind === b.kind;
+}
+/** Тип значения свойства-цели: список — для `cardinality: many`, элемент — его скаляр (как `typedOfProp`). */
+function propertyValueType(def: PropertyDefinition, element: boolean): ExprType {
+  const base = exprTypeOfKind(def.type.kind);
+  return isListPropertyType(def.type) && !element ? { kind: 'list', of: base } : base;
+}
+
+/**
+ * СТУПЕНЬ 8 ДЛЯ ШАГА: адреса свойств существуют, каждый `{$expr}` — типа своей позиции (§1.6).
+ * Отказ — `VALIDATION reason: 'ACTION_VALUE_TYPE'` по образцу `RULE_VALUE_TYPE` правил: «ожидался
+ * decimal» без адреса читается как ошибка чекера, а это ошибка ДЕЙСТВИЯ. Тем же именем назван и
+ * адрес свойства, которого нет в реестре, и json-свойство под выражением — `assertRule` сводит оба
+ * случая к одной причине по тому же доводу: значению некуда лечь.
+ */
+function assertStepValues(
+  key: string,
+  index: number,
+  step: ActionStep,
+  reg: RegistrySnapshot,
+  exprScope: Omit<ExprScope, 'reg'>,
+): void {
+  const path = (segs: readonly string[]) => `steps.${index}.input.${segs.join('.')}`;
+  const refuse = (segs: readonly string[], message: string, details: Record<string, unknown>) =>
+    bad(
+      'ACTION_VALUE_TYPE',
+      key,
+      `действие «${key}»: шаг ${index + 1}, ${path(segs)} — ${message}`,
+      {
+        step: index,
+        path: path(segs),
+        ...details,
+      },
+    );
+  // (а) Адреса свойств — литералы: ключи мешков и имена в `unset`. Свойства, которого нет, шаг не
+  // запишет никогда, и сказать это надо при записи действия, а не на каждом его прогоне.
+  for (const bag of PROPERTY_BAGS) {
+    for (const k of Object.keys(recordOf(step.input[bag]))) {
+      if (resolvePropertyRef(reg, k) === undefined) {
+        refuse([bag, k], `свойства «${k}» в реестре нет`, { property: k });
+      }
+    }
+  }
+  const unset = Array.isArray(step.input.unset) ? (step.input.unset as unknown[]) : [];
+  for (const [i, k] of unset.entries()) {
+    if (typeof k === 'string' && resolvePropertyRef(reg, k) === undefined) {
+      refuse(['unset', String(i)], `свойства «${k}» в реестре нет`, { property: k });
+    }
+  }
+  // (б) Каждый маркер — против типа своей позиции.
+  for (const site of markerSitesOf(step.input)) {
+    const [head, propertyKey] = site.segs;
+    let want: ExprType | undefined;
+    if (head !== undefined && PROPERTY_BAGS.has(head) && propertyKey !== undefined) {
+      const def = resolvePropertyRef(reg, propertyKey) as PropertyDefinition;
+      if (def.type.kind === 'json') {
+        // У вложенного объекта нет скалярного значения (§6.4) — ни целиком, ни по частям.
+        refuse(site.segs, `свойству json нельзя проставить значение выражением`, {
+          property: propertyKey,
+        });
+      }
+      const element = site.segs.length === 3 && isListPropertyType(def.type);
+      if (site.segs.length > 3 || (site.segs.length === 3 && !element)) {
+        refuse(
+          site.segs,
+          `подстановка внутри значения свойства «${propertyKey}» — не позиция значения`,
+          {
+            property: propertyKey,
+          },
+        );
+      }
+      want = propertyValueType(def, element);
+    } else {
+      want = envelopeTypeAt(site.segs);
+    }
+    const got = assertExprChecked(site.node, { ...exprScope, reg }, want);
+    if (want !== undefined && !sameType(got, want)) {
+      refuse(
+        site.segs,
+        `выражение типа ${typeLabel(got)} не сходится с типом позиции ${typeLabel(want)}`,
+        {
+          expected: typeLabel(want),
+          actual: typeLabel(got),
+        },
+      );
+    }
+  }
+}
+
+/**
+ * Тип `{param}` в выражениях действия — ТЕМ ЖЕ отображением рода, что у `{prop}` (`exprTypeOfKind`):
+ * `select`/`time`/`ref`/`grant`/`registry_ref` — текст. Прежнее `{kind: p.type.kind}` с приведением
+ * давало несуществующие `ExprType` (`{kind:'select'}`) и ложный `EXPR_TYPE` на сравнении параметра со
+ * свойством того же рода. Параметр-контракт — uuid сущности-реализации, текст. json-параметр — отказ
+ * формы: подставить вложенный объект в выражение нечем (§6.4).
+ */
+function paramExprType(key: string, p: ActionParam): ExprType {
+  if (!('kind' in p.type)) return TEXT;
+  if (p.type.kind === 'json') {
+    bad(
+      'ACTION_MALFORMED',
+      key,
+      `параметр «${p.name}» действия «${key}» типа json: у вложенного объекта нет скалярного значения — в выражение его не подставить (§6.4)`,
+      { param: p.name, kind: p.type.kind },
+    );
+  }
+  return exprTypeOfKind(p.type.kind);
+}
+
 export function actionExprScope(
   decl: ActionDefinition,
   _reg: RegistrySnapshot,
 ): Omit<ExprScope, 'reg'> {
   const params: Record<string, ExprType> = {};
-  for (const p of decl.params) {
-    params[p.name] = 'kind' in p.type ? ({ kind: p.type.kind } as ExprType) : { kind: 'text' };
-  }
+  for (const p of decl.params) params[p.name] = paramExprType(decl.key, p);
   // `allowDeref: true` — действие читает ЦЕЛЬ, а не пишет чужое (§Б3-3 запрещает deref в
   // C-правилах записи, а не в подстановках). `contract` не задан: слотов у действия нет области.
   return { params, allowDeref: true };

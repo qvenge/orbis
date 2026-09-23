@@ -73,6 +73,57 @@ export const SENSITIVITY_UNDERDECLARED_ATTACH = {
     },
   ],
 };
+/**
+ * Шаг ВЗВОДИТ РУТИНУ (`orbis/routine_mode: act`), а декларация `grants_autonomy` не объявила
+ * (фикс-раунд 1, I-1): факт шага считается тем же `grantsRoutineAutonomy`, что поднимает уровень
+ * вызова у политики (Р-И-25).
+ */
+export const GRANTS_AUTONOMY_UNDERDECLARED = {
+  ...POSTPONE,
+  key: 'planner/arm-routine',
+  id: 'planner/arm-routine',
+  params: [],
+  over: null,
+  batch_cap: null,
+  offered_by: [],
+  sensitivity: [],
+  steps: [
+    {
+      tool: 'entity_update',
+      input: { id: { $expr: { ctx: '$self' } }, props: { 'orbis/routine_mode': 'act' } },
+    },
+  ],
+};
+/** Тип подстановки не сходится со свойством-целью: date-параметр в boolean `orbis/planned` (I-2). */
+export const ACTION_VALUE_TYPE_MISMATCH = {
+  ...P2F,
+  key: 'finance/value-type',
+  id: 'finance/value-type',
+  steps: [
+    {
+      tool: 'entity_update',
+      input: {
+        id: { $expr: { ctx: '$self' } },
+        props: { 'orbis/planned': { $expr: { param: 'occurred_on' } } },
+      },
+    },
+  ],
+};
+/** Шаг пишет свойство, которого в реестре нет (I-2): записать его не выйдет ни на одном прогоне. */
+export const ACTION_VALUE_UNKNOWN_PROPERTY = {
+  ...P2F,
+  key: 'finance/unknown-property',
+  id: 'finance/unknown-property',
+  steps: [
+    {
+      tool: 'entity_update',
+      input: {
+        id: { $expr: { ctx: '$self' } },
+        props: { 'orbis/nope': 1, 'orbis/occurred_on': { $expr: { param: 'occurred_on' } } },
+      },
+    },
+  ],
+};
 export const ACTION_PARAM_UNUSED = {
   ...POSTPONE,
   key: 'planner/unused',
@@ -156,5 +207,58 @@ export const ACTION_FIXTURES: readonly {
     name: 'реестровый тул действий в шаге',
     decl: ACTION_STEP_REGISTRY_ACTION_TOOL,
     verdict: { ok: false, code: 'VALIDATION', reason: 'ACTION_STEP_TOOL' },
+  },
+  {
+    name: 'шаг взводит рутину, grants_autonomy не объявлен',
+    decl: GRANTS_AUTONOMY_UNDERDECLARED,
+    verdict: { ok: false, code: 'SENSITIVITY_UNDERDECLARED' },
+  },
+  {
+    name: 'шаг взводит рутину, grants_autonomy объявлен (позитив)',
+    decl: {
+      ...GRANTS_AUTONOMY_UNDERDECLARED,
+      key: 'planner/arm-declared',
+      id: 'planner/arm-declared',
+      sensitivity: ['grants_autonomy'],
+    },
+    verdict: { ok: true },
+  },
+  {
+    name: 'тип подстановки не сходится со свойством',
+    decl: ACTION_VALUE_TYPE_MISMATCH,
+    verdict: { ok: false, code: 'VALIDATION', reason: 'ACTION_VALUE_TYPE' },
+  },
+  {
+    name: 'свойства шага нет в реестре',
+    decl: ACTION_VALUE_UNKNOWN_PROPERTY,
+    verdict: { ok: false, code: 'VALIDATION', reason: 'ACTION_VALUE_TYPE' },
+  },
+  {
+    name: 'json-параметр',
+    decl: {
+      ...POSTPONE,
+      key: 'planner/json-param',
+      id: 'planner/json-param',
+      params: [...POSTPONE.params, { name: 'blob', type: { kind: 'json' }, required: true }],
+    },
+    verdict: { ok: false, code: 'VALIDATION', reason: 'ACTION_MALFORMED' },
+  },
+  {
+    name: 'маркер {$expr} с соседним ключом',
+    decl: {
+      ...P2F,
+      key: 'finance/junk-marker',
+      id: 'finance/junk-marker',
+      steps: [
+        {
+          tool: 'entity_update',
+          input: {
+            id: { $expr: { ctx: '$self' }, junk: 1 },
+            props: { 'orbis/occurred_on': { $expr: { param: 'occurred_on' } } },
+          },
+        },
+      ],
+    },
+    verdict: { ok: false, code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' },
   },
 ];
