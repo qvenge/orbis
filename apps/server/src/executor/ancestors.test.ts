@@ -392,3 +392,57 @@ test('цели и кап приезжают из строки правила, а
     /nearest_ancestor/,
   );
 });
+
+test('кап глубины и аспект-носитель — параметры строки: снимок с иной строкой считает иначе', async () => {
+  // Пара к пробе выше: там — что читатель зовётся, здесь — что движок ИСПОЛЬЗУЕТ прочитанное.
+  // Константа файла на месте параметра дала бы здесь прежний ответ на обе подмены.
+  const user = await freshGraph();
+  const p = await project(user, 'Проект');
+  const a = await createEntity(user, { title: 'A' });
+  const b = await createEntity(user, { title: 'B' });
+  await relate(user, a.id, b.id, 'subitem');
+  await relate(user, p.id, a.id, 'subitem');
+  expect(await ancestorsOf(user, b.id)).toEqual({ parent: p.id, root: p.id });
+
+  await withIdentity(db, personal(user), async (tx) => {
+    const reg = await effectiveRegistry(tx, user);
+    const projectRow = reg.aspects.get('orbis/project');
+    const goalRow = reg.aspects.get('orbis/goal');
+    if (projectRow === undefined || goalRow === undefined)
+      throw new Error('встроенных аспектов нет');
+    const row = projectRow.rules.find((r) => r.template === 'nearest_ancestor');
+    if (row === undefined || row.template !== 'nearest_ancestor') throw new Error('строки нет');
+    // (1) Кап 1: от A вниз — только B (глубина 1), от B вверх — только A: проекта B больше не видит.
+    const capped = {
+      ...reg,
+      aspects: new Map([
+        ...reg.aspects,
+        [
+          'orbis/project',
+          {
+            ...projectRow,
+            rules: [{ ...row, params: { ...row.params, depth_cap: 1 } }],
+          },
+        ],
+      ]),
+    } as typeof reg;
+    await recomputeProjectAncestors(tx, user, [a.id], capped);
+    const afterCap = await tx.select().from(entities).where(eq(entities.id, b.id));
+    expect((afterCap[0]?.props as Record<string, unknown>)['orbis/parent_project']).toBeUndefined();
+    const aAfterCap = await tx.select().from(entities).where(eq(entities.id, a.id));
+    // A — в пределах капа: проект у него остаётся (кап обрезает глубже, а не всё подряд).
+    expect((aAfterCap[0]?.props as Record<string, unknown>)['orbis/parent_project']).toBe(p.id);
+    // (2) Строка переехала на `orbis/goal`: проектом для движка стала цель, а не запись с
+    // `orbis/project` — у A предка больше нет.
+    const moved = {
+      ...reg,
+      aspects: new Map([
+        ...reg.aspects,
+        ['orbis/project', { ...projectRow, rules: [] }],
+        ['orbis/goal', { ...goalRow, rules: [row] }],
+      ]),
+    } as typeof reg;
+    await recomputeProjectAncestors(tx, user, [p.id], moved);
+  });
+  expect(await ancestorsOf(user, a.id)).toEqual({ parent: undefined, root: undefined });
+});
