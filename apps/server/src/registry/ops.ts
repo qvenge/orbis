@@ -104,6 +104,7 @@ import { parseRegistryOfSnapshot } from './cache';
 import {
   type AspectDelta,
   applyDeltas,
+  aspectDeltaAfterRemove,
   aspectDeltaSchema,
   type ContractDelta,
   contractDeltaSchema,
@@ -2186,11 +2187,21 @@ export async function setAspectDelta(
   await bumpOwnerRegistryVersion(tx, graphId);
 }
 
-/** Снятие дельты: аспект возвращается к системному определению (§А3-2). */
+/** Снятие дельты: аспект возвращается к системному определению (§А3-2) — кроме правил (Ф-Б2-29). */
 export async function removeAspectDelta(tx: Tx, graphId: GraphId, aspectId: string): Promise<void> {
-  await tx.execute(sql`
-    DELETE FROM registry_deltas
-     WHERE graph_id = ${graphId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}`);
+  // ПОЛЯ ПРАВИЛ ОСТАЮТСЯ (Ф-Б2-29): снимается настройка аспекта — подпись, состав, варианты, отнесения, —
+  // а правила аспекта правят только `rule_set`/`rule_remove`. Эффективный список правил от этого не
+  // меняется, и проверок правил строке «только правила» не нужно: она их уже прошла.
+  const kept = aspectDeltaAfterRemove(await readAspectDelta(tx, graphId, aspectId));
+  if (kept === null) {
+    await tx.execute(sql`
+      DELETE FROM registry_deltas
+       WHERE graph_id = ${graphId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}`);
+  } else {
+    await tx.execute(sql`
+      UPDATE registry_deltas SET delta = ${JSON.stringify(kept)}::jsonb
+       WHERE graph_id = ${graphId}::uuid AND target_kind = 'aspect' AND target_id = ${aspectId}`);
+  }
   await bumpOwnerRegistryVersion(tx, graphId);
 }
 

@@ -113,6 +113,7 @@ import {
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
+import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
 import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf } from '../registry/modules';
 
@@ -2162,6 +2163,13 @@ export async function snapshotRegistryUnit(
     case 'aspect_delta_set':
     case 'aspect_delta_remove': {
       const before = await readAspectDelta(tx, graphId, String(payload.aspect));
+      // «СТАНЕТ» — ТО, ЧТО ЛЯЖЕТ В СТРОКУ, а не вход: поля правил переносятся (`aspectDeltaAfterSet`) и
+      // переживают снятие (`aspectDeltaAfterRemove`), и карточка, показывающая вход, врала бы владельцу о
+      // потере правил, которой не будет (гейт 16 m-3). Те же функции, что у исполнителя.
+      const after =
+        tool === 'aspect_delta_set'
+          ? aspectDeltaAfterSet(before, (payload.delta ?? {}) as AspectDelta)
+          : aspectDeltaAfterRemove(before);
       return {
         input: payload,
         summary,
@@ -2169,7 +2177,7 @@ export async function snapshotRegistryUnit(
           {
             field: 'delta',
             ...(before !== null && { before: rowValue(before) }),
-            after: tool === 'aspect_delta_set' ? rowValue(payload.delta) : DEFERRED_UNSET_VALUE,
+            after: after === null ? DEFERRED_UNSET_VALUE : rowValue(after),
           },
         ],
       };

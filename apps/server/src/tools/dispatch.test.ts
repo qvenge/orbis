@@ -42,6 +42,7 @@ import { approvePending, rejectPending } from '../policy/pending';
 import { TOOL_SENSITIVITY } from '../policy/sensitivity';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
+import { disableSystemRuleDelta } from '../registry/ops';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
 import { decideDeferredUnit } from '../routines/lifecycle';
@@ -5851,6 +5852,36 @@ describe('§С2-1: мутации реестра — уровень подтве
     }
     expect(r.card.summary).toContain('правила «urgent_needs_due»');
     expect(await deltaRowsOf(owner)).toBe(0);
+  });
+
+  test('карточка aspect_delta_set/remove: «станет» — то, что ляжет в строку, с перенесёнными правилами (m-3)', async () => {
+    const owner = await freshGraph();
+    await withIdentity(db, personal(owner), (tx) =>
+      disableSystemRuleDelta(tx, owner, { kind: 'aspect', id: 'orbis/task' }, 'task_completed_at'),
+    );
+    const set = await withIdentity(db, personal(owner), (tx) =>
+      snapshotRegistryUnit(tx, owner, 'aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: { icon: '📌' },
+      }),
+    );
+    expect(set.rows).toEqual([
+      {
+        field: 'delta',
+        before: '{"rulesDisabled":["task_completed_at"]}',
+        after: '{"icon":"📌","rulesDisabled":["task_completed_at"]}',
+      },
+    ]);
+    const removal = await withIdentity(db, personal(owner), (tx) =>
+      snapshotRegistryUnit(tx, owner, 'aspect_delta_remove', { aspect: 'orbis/task' }),
+    );
+    expect(removal.rows).toEqual([
+      {
+        field: 'delta',
+        before: '{"rulesDisabled":["task_completed_at"]}',
+        after: '{"rulesDisabled":["task_completed_at"]}',
+      },
+    ]);
   });
 
   test('action_set: предусловие в строке «было → станет» — ТЕКСТОМ E, а не деревом (остаток 79)', async () => {

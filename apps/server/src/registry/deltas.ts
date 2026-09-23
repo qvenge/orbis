@@ -293,6 +293,38 @@ function refsOf(aspect: AspectDefinition): AspectDefinition['properties'] {
 }
 
 /**
+ * ДЕЛЬТА АСПЕКТА, КОТОРУЮ ЗАПИШЕТ `aspect_delta_set` (Ф-Б2-27 (г)): поля правил, НЕ названные во входе,
+ * переносятся из прежней дельты — правила аспекта правят `rule_set`/`rule_remove`, а полная замена
+ * дельты иначе снимала бы свои правила и включала отключённые системные без слова в вызове. Названное
+ * поле (в том числе пустым) — замена. Одна функция на исполнителя и на карточку (`snapshotRegistryUnit`):
+ * «станет» в карточке обязано быть тем, что ляжет в строку, иначе владелец видит потерю, которой не будет.
+ */
+export function aspectDeltaAfterSet(before: AspectDelta | null, input: AspectDelta): AspectDelta {
+  return {
+    ...input,
+    ...(!('rules' in input) && before?.rules !== undefined && { rules: before.rules }),
+    ...(!('rulesDisabled' in input) &&
+      before?.rulesDisabled !== undefined && { rulesDisabled: before.rulesDisabled }),
+  };
+}
+
+/**
+ * ЧТО ОСТАНЕТСЯ ПОСЛЕ `aspect_delta_remove` (Ф-Б2-29): непустые поля правил — правила аспекта правят
+ * только `rule_set`/`rule_remove`, и снятие «настройки иконки» не вправе снять свои правила и включить
+ * обратно отключённые системные. `null` — правил в дельте нет, строка снимается целиком. Одна функция на
+ * операцию (`registry/ops.ts`) и карточку.
+ */
+export function aspectDeltaAfterRemove(before: AspectDelta | null): AspectDelta | null {
+  const rules = before?.rules ?? [];
+  const rulesDisabled = before?.rulesDisabled ?? [];
+  if (rules.length === 0 && rulesDisabled.length === 0) return null;
+  return {
+    ...(rules.length > 0 && { rules }),
+    ...(rulesDisabled.length > 0 && { rulesDisabled }),
+  };
+}
+
+/**
  * Эффективные правила: системные ПЛЮС правила владельца МИНУС отключённые (Р-2а). Складывается ЗДЕСЬ и
  * нигде больше — движок читает `row.rules` и про дельты не знает; второй экземпляр ответил бы иначе.
  * Отключение режет ОБА источника: владелец отключает системное, пересев — своё проигравшее (`mergeRules`).

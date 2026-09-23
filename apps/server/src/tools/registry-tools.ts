@@ -937,7 +937,9 @@ export const REGISTRY_TOOLS: OrbisToolDef[] = [
   },
   {
     name: 'aspect_delta_remove',
-    description: 'Снять настройку аспекта: он возвращается к системному определению.',
+    description:
+      'Снять настройку аспекта: он возвращается к системному определению. Правила аспекта (свои и ' +
+      'отключения системных) остаются — их правят rule_set/rule_remove.',
     inputJsonSchema: aspectDeltaRemoveJsonSchema,
     kind: 'mutate',
     fullScopeOnly: true,

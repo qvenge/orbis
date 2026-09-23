@@ -4975,6 +4975,22 @@ describe('rule_set / rule_remove через исполнитель: журнал
         { identity: personal(g) },
       ),
     );
+    // Своё правило дельты — второе поле, которое перенос обязан сохранить (гейт 16 m-2).
+    ok(
+      await run(
+        'rule_set',
+        {
+          target: { aspect: 'orbis/task' },
+          rule: {
+            id: 'carried_needs_due',
+            template: 'requires_when',
+            params: { property: 'orbis/due_date' },
+            when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
     ok(
       await run(
         'aspect_delta_set',
@@ -4982,8 +4998,9 @@ describe('rule_set / rule_remove через исполнитель: журнал
         { identity: personal(g) },
       ),
     );
-    // Правка иконки не включила обратно отключённое системное правило.
+    // Правка иконки не включила обратно отключённое системное правило и не сняла своё.
     expect(await taskRulesOf(g)).not.toContain('task_completed_at');
+    expect(await taskRulesOf(g)).toContain('carried_needs_due');
     ok(
       await run(
         'aspect_delta_set',
@@ -5437,5 +5454,80 @@ describe('фикс-раунд 1 задачи 16: двери записи пра�
     ).toEqual({ code: 'VALIDATION', reason: 'RULE_TEMPLATE_CARRIER' });
     expect(await inTx(g, (tx) => removeOwnRule(tx, g, role, 'mentor_acyclic'))).not.toBeNull();
     expect((await regOf(g)).roles.get('mentor')?.rules).toEqual([]);
+  });
+});
+
+describe('фикс-раунд 1 задачи 16: снятие настройки аспекта сохраняет правила (Ф-Б2-29)', () => {
+  const rulesAt = async (g: GraphId, carrier: 'aspects' | 'properties', id: string) =>
+    (await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g)))[carrier]
+      .get(id)
+      ?.rules.map((r) => r.id) ?? [];
+
+  test('P6: aspect_delta_remove снимает настройку, но не включает отключённое системное и не снимает своё', async () => {
+    const g = await freshGraph();
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/budget', delta: { icon: '💰' } },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/budget' }, rule: 'envelope_currency_default' },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'rule_set',
+        {
+          target: { property: 'orbis/currency' },
+          rule: {
+            id: 'my_currency_default',
+            template: 'default',
+            params: { property: 'orbis/currency', value: { param: 'default_currency' } },
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
+    const removed = ok(
+      await run('aspect_delta_remove', { aspect: 'orbis/budget' }, { identity: personal(g) }),
+    );
+    expect(await rulesAt(g, 'aspects', 'orbis/budget')).not.toContain('envelope_currency_default');
+    expect(await rulesAt(g, 'properties', 'orbis/currency')).toEqual(['my_currency_default']);
+    const reg = await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+    expect(reg.aspects.get('orbis/budget')?.viewConfig.icon).not.toBe('💰');
+    const row = (await withIdentity(db, personal(g), (tx) =>
+      tx.execute(sql`SELECT delta FROM registry_deltas
+                     WHERE graph_id = ${g}::uuid AND target_kind = 'aspect' AND target_id = 'orbis/budget'`),
+    )) as unknown as Array<{ delta: unknown }>;
+    expect(row[0]?.delta).toEqual({ rulesDisabled: ['envelope_currency_default'] });
+    // Откат снятия возвращает настройку целиком (обратное — прежняя дельта).
+    expect((await undoAction(db, { identity: personal(g), actionId: removed.actionId })).ok).toBe(
+      true,
+    );
+    const back = await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+    expect(back.aspects.get('orbis/budget')?.viewConfig.icon).toBe('💰');
+  });
+
+  test('откат ПЕРВОЙ настройки, которая сама назвала правила, снимает и правила, и строку', async () => {
+    const g = await freshGraph();
+    const set = ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '📌', rulesDisabled: ['task_completed_at'] } },
+        { identity: personal(g) },
+      ),
+    );
+    expect(await rulesAt(g, 'aspects', 'orbis/task')).not.toContain('task_completed_at');
+    expect((await undoAction(db, { identity: personal(g), actionId: set.actionId })).ok).toBe(true);
+    expect(await rulesAt(g, 'aspects', 'orbis/task')).toContain('task_completed_at');
+    const left = (await withIdentity(db, personal(g), (tx) =>
+      tx.execute(sql`SELECT count(*)::int AS n FROM registry_deltas WHERE graph_id = ${g}::uuid`),
+    )) as unknown as Array<{ n: number }>;
+    expect(left[0]?.n).toBe(0);
   });
 });

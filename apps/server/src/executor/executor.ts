@@ -63,6 +63,7 @@ import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
+import { aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
 import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf, setModuleDisabled } from '../registry/modules';
 import {
@@ -3670,28 +3671,34 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const before = await readAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
-      // ПОЛЯ ПРАВИЛ ЭТОТ ТУЛ НЕ СТИРАЕТ МОЛЧА (задача 16). Дельта аспекта — полная замена, а правила
-      // владельца поверх встроенного аспекта кладёт в ту же строку `rule_set`/`rule_remove` (В-6): правка
-      // иконки, не назвавшая `rules`/`rulesDisabled`, иначе снимала бы свои правила и включала обратно
-      // отключённые системные — без единого слова в вызове. Поле, НАЗВАННОЕ во входе (в том числе
-      // пустым), — замена: так пишет единица разрешения конфликта правил (`merge-conflict.ts`).
-      // Перенос — здесь, а не в `setAspectDelta`: тот же писатель зовётся из `writeRuleDelta`, где
-      // отсутствие поля и есть «правил не осталось».
-      const delta = {
-        ...input.delta,
-        ...(!('rules' in input.delta) && before?.rules !== undefined && { rules: before.rules }),
-        ...(!('rulesDisabled' in input.delta) &&
-          before?.rulesDisabled !== undefined && { rulesDisabled: before.rulesDisabled }),
-      };
+      // ПОЛЯ ПРАВИЛ ЭТОТ ТУЛ НЕ СТИРАЕТ МОЛЧА (Ф-Б2-27 (г), `aspectDeltaAfterSet`): не названные во входе
+      // `rules`/`rulesDisabled` переносятся из прежней дельты, названное поле — замена (так пишет единица
+      // разрешения конфликта правил). Перенос — здесь, а не в `setAspectDelta`: тот же писатель зовётся из
+      // `writeRuleDelta`, где отсутствие поля и есть «правил не осталось».
+      const delta = aspectDeltaAfterSet(before, input.delta);
       await setAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect, delta);
       journal.operations.push({ op: 'aspect_delta_set', payload: { ...input } });
-      // Отмена настройки — это ПРЕЖНЯЯ настройка, а если её не было — снятие. Обе формы
-      // выражаются существующими операциями: своей обратной у дельты нет и не нужно.
-      journal.inverse.push(
-        before === null
-          ? { op: 'aspect_delta_remove', payload: { aspect: input.aspect } }
-          : { op: 'aspect_delta_set', payload: { aspect: input.aspect, delta: before } },
-      );
+      // Отмена настройки — это ПРЕЖНЯЯ настройка, а если её не было — снятие. Снятие правила аспекта
+      // оставляет (Ф-Б2-29), поэтому у первой настройки, которая САМА назвала правила, обратное — две
+      // операции: сперва обнулить поля правил, затем снять строку. Записываются они в порядке, ОБРАТНОМ
+      // применению (довод `prepareActionSet`: журнал разворачивает inverse плана).
+      const ownRuleFields = aspectDeltaAfterRemove(delta) !== null;
+      if (before !== null) {
+        journal.inverse.push({
+          op: 'aspect_delta_set',
+          payload: { aspect: input.aspect, delta: before },
+        });
+      } else if (ownRuleFields) {
+        journal.inverse.push(
+          { op: 'aspect_delta_remove', payload: { aspect: input.aspect } },
+          {
+            op: 'aspect_delta_set',
+            payload: { aspect: input.aspect, delta: { rules: [], rulesDisabled: [] } },
+          },
+        );
+      } else {
+        journal.inverse.push({ op: 'aspect_delta_remove', payload: { aspect: input.aspect } });
+      }
       return { result: { aspect: input.aspect } };
     },
   };
