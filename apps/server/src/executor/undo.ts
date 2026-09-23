@@ -14,7 +14,14 @@ import type { Identity } from '../identity';
 import { unmarkRefSources } from '../registry/ref';
 import { ExecError } from './errors';
 import { execute } from './executor';
-import type { ActionRecord, ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult } from './types';
+import type {
+  ActionRecord,
+  ExecuteErr,
+  ExecuteOk,
+  ExecuteRequest,
+  ExecuteResult,
+  ExecutorDeps,
+} from './types';
 
 interface FoundAction {
   threadId: string;
@@ -138,7 +145,12 @@ function markedRefSources(action: ActionRecord): string[] {
   return out;
 }
 
-async function applyUndo(db: Db, who: Identity, found: FoundAction): Promise<ExecuteResult> {
+async function applyUndo(
+  db: Db,
+  who: Identity,
+  found: FoundAction,
+  beforeStages?: ExecutorDeps['beforeStages'],
+): Promise<ExecuteResult> {
   const { action, threadId } = found;
   if (action.inverse.length === 0) {
     // Недостижимо для действий executor'а (inverse всегда непуст); страховка формата
@@ -155,6 +167,9 @@ async function applyUndo(db: Db, who: Identity, found: FoundAction): Promise<Exe
     batchId: action.inverse.length > 1 ? newId() : undefined,
   };
   const result = await execute(db, req, {
+    // Шов сериализации карточки отката (`approvePending`, ключ `undo_of`): замок единицы и
+    // перепроверка «не отклонена» — в ТОЙ ЖЕ транзакции, что undo-сообщение (см. `undoAction`).
+    ...(beforeStages !== undefined && { beforeStages }),
     internalUndo: {
       // Вызывается ПОСЛЕ применения inverse В ТОМ ЖЕ tx — атомарность undo (§7.8)
       async writeUndoMessage(tx) {
@@ -187,10 +202,18 @@ async function applyUndo(db: Db, who: Identity, found: FoundAction): Promise<Exe
   return result.ok ? { ...result, actionId: action.id } : result;
 }
 
-/** Отмена конкретного действия по id из журнала (§7.8). */
+/**
+ * Отмена конкретного действия по id из журнала (§7.8).
+ *
+ * `beforeStages` — ровно тот же шов, что у `approvePending` для пачки (`ExecutorDeps`): карточка
+ * отката (`undo_of`, В-8) исполняется здесь, а не `execute` payload'а, и без шва её «Принять» и
+ * «Отклонить» не делили бы замок единицы — владелец мог получить в ленте «отменено» и «отклонено»
+ * разом (фикс-раунд 1 задачи 8, I-3). Других потребителей у параметра нет.
+ */
 export async function undoAction(
   db: Db,
   args: { identity: Identity; actionId: string },
+  deps: { beforeStages?: ExecutorDeps['beforeStages'] } = {},
 ): Promise<ExecuteResult> {
   try {
     const found = await withIdentity(db, args.identity, async (tx) => {
@@ -210,7 +233,7 @@ export async function undoAction(
       }
       return msg;
     });
-    return await applyUndo(db, args.identity, found);
+    return await applyUndo(db, args.identity, found, deps.beforeStages);
   } catch (e) {
     if (e instanceof ExecError) {
       return { ok: false, error: { code: e.code, message: e.message, details: e.details } };

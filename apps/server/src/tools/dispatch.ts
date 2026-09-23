@@ -73,7 +73,7 @@ import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
-import type { JournalSink, JournalWrite, WireEntity } from '../executor/types';
+import type { ActionRecord, JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { peekLastUndoable, undoAction } from '../executor/undo';
 import {
   AUTONOMY_PROPERTIES,
@@ -643,8 +643,10 @@ function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
  * действие: обратные операции известны ДО исполнения (`action.inverse` журнала), значит их можно
  * свернуть в факты той же `factsFromOperations` и спросить уровень у таблицы. Прежде ветка шла мимо
  * политики целиком, и подтверждённое карточкой слияние свойств (как и разоружение рутины)
- * откатывалось моделью молча. Теперь откат правки реестра или доверенности — карточка
- * «Откат: «…»» (второе «да» владельца, рамка В-8), а откат правки графа — по-прежнему молча.
+ * откатывалось моделью молча. Теперь откат правки реестра, доверенности, РАЗОРУЖЕНИЯ через носитель
+ * (архивация act-рутины, снятие её аспекта — скан `autonomyChangedByCarrier`, тот же, что у
+ * `runMutation`) и правки инструкции act-рутины — карточка «Откат: …» (второе «да» владельца, рамка
+ * В-8), а откат прочей правки графа — по-прежнему молча.
  *
  * Мимо runMutation — по-прежнему: undo не порождает своего action (undo неотменяем), поэтому
  * `actionId` в ToolDispatchResult не отдаётся — тот означает «undo-адресуемое действие», а тут его нет.
@@ -701,21 +703,34 @@ async function runUndoLast(
     actorKind: ctx.actorKind,
     explicitCommand: ctx.explicitCommand,
   };
-  const level = classifyToolCall({ ...facts, sensitivity: sensitivityFactsOf(reg, facts) });
+  const classified = classifyToolCall({ ...facts, sensitivity: sensitivityFactsOf(reg, facts) });
   // ПОЛ Р-27 здесь НЕ складывается, и это не заглушка: в Б-2 правила `assign_level` живут фикстурами
   // приёмки §С8-26 и в живой конвейер §7.10 не включены (О1 `verify-b2-policy.md`) — понижать уровень
   // нечему, а без понижения `stricter(таблица, пол)` равен таблице. Задача 15 кладёт `floorLevel` для
   // `assignLevelOf` и этой строки не трогает.
+  //
+  // СКАН НОСИТЕЛЯ — ТОТ ЖЕ, ЧТО У `runMutation` (Р-12-2/3/5, C1b-1; фикс-раунд 1 задачи 8, I-1).
+  // Свёртка фактов видит доверенность только в ПАТЧЕ, а откат подтверждённого разоружения
+  // носителем — это `{archived:false}` или `{aspects:{attach:['orbis/routine']}}` без единого
+  // свойства доверенности: таблица отвечает `execute`, и рутина снова в отборе и в режиме act без
+  // карточки. Оживление и разоружение видно только разницей с текущим состоянием — её и считает
+  // скан; правку инструкции act-рутины он же. Актор здесь всегда `ai` (гейт выше), поэтому скан
+  // безусловен — владельческой льготы `runMutation` у отката нет.
+  const scan = await autonomyChangedByCarrier(ctx, operations);
+  const instructionOf = instructionTouchesOf(scan);
+  const level: ConfirmationLevel =
+    instructionOf.length > 0 || scan.changes.size > 0 ? 'explicit-confirmation' : classified;
   if (level === 'explicit-confirmation') {
-    const pending = await withIdentity(ctx.db, ctx.identity, (tx) =>
+    const pending = await withIdentity(ctx.db, ctx.identity, async (tx) =>
       createPending(tx, {
         threadId: ctx.threadId,
         actor: { graphId: ctx.identity.graph, kind: ctx.actorKind, source: ctx.source },
         tool: 'batch_execute',
-        // Payload несёт обратные операции — чтобы карточка и лента говорили, ЧТО откатывается;
-        // исполняет его не `execute`, а `undoAction` по ключу `undo_of` (Р-К-21).
+        // Payload несёт обратные операции — то, что `undoAction` применит; исполняет его не
+        // `execute`, а `undoAction` по ключу `undo_of` (Р-К-21). ЧТО откатывается, владельцу
+        // называет сводка ниже, а не payload: веб его не рисует.
         input: { batch_id: newId(), operations },
-        summary: `Откат: «${peeked.title}»`,
+        summary: await undoSummary(tx, reg, peeked, operations, facts, scan, instructionOf),
         undoOf: peeked.action.id,
         level,
         clock: ctx.clock,
@@ -742,6 +757,48 @@ async function runUndoLast(
     };
   }
   return { status: 'error', error: r.error };
+}
+
+/**
+ * СВОДКА КАРТОЧКИ ОТКАТА (В-8; фикс-раунд 1 задачи 8, I-2) — ЧТО откатывается, словами владельца.
+ *
+ * Заголовок журнала для этого не годится: всякая правка реестра от AI идёт карточкой и исполняется
+ * `approvePending` пачкой, а заголовок пачки — «batch: операций — N» (`executor.ts`), то есть
+ * главный сценарий В-8 (откат подтверждённого слияния) показывал владельцу «Откат: «batch:
+ * операций — 1»» — второе «да» вслепую.
+ *
+ * Поводы складываются, а не вытесняют друг друга (довод тот же, что у сводки `runMutation`):
+ * - правка реестра — по ПРЯМЫМ операциям отменяемого действия, той же `registryOperationSummary`,
+ *   что называет их на карточке-запросе: владелец узнаёт то, что сам подтверждал;
+ * - доверенность и оживление — `autonomySummary` по ОБРАТНЫМ операциям и скану: итог отката;
+ * - правка инструкции act-рутины — фразы `runMutation`.
+ * Заголовок журнала — запасной вариант, когда ни одного повода не названо (сегодня недостижимо:
+ * карточку поднимают только эти поводы).
+ */
+async function undoSummary(
+  tx: Tx,
+  reg: RegistrySnapshot,
+  peeked: { action: ActionRecord; title: string },
+  inverse: ReadonlyArray<{ tool: string; input: unknown }>,
+  facts: Pick<ToolCallFacts, 'grantsAutonomy'>,
+  scan: CarrierScan,
+  instructionOf: readonly InstructionTouch[],
+): Promise<string> {
+  const parts = [
+    ...new Set(
+      peeked.action.operations
+        .filter((op) => REGISTRY_TOOL_NAMES.has(op.op))
+        .map((op) => registryOperationSummary(reg, op.op, op.payload)),
+    ),
+  ];
+  if (facts.grantsAutonomy || scan.changes.size > 0) {
+    parts.push(await autonomySummary(tx, inverse, scan));
+  }
+  parts.push(...instructionPhrases(instructionOf));
+  // Фразы-поводы пишутся с заглавной (они же — целые сводки карточки-запроса); после «Откат:» —
+  // строчной, иначе сводка читалась бы как два предложения.
+  const lower = (phrase: string): string => `${phrase.charAt(0).toLowerCase()}${phrase.slice(1)}`;
+  return `Откат: ${parts.length === 0 ? `«${peeked.title}»` : parts.map(lower).join('; ')}`;
 }
 
 /**
@@ -981,14 +1038,7 @@ async function runMutation(
   // не знал — переезд на пооперационный ответ принёс их вместе с точностью момента.
   // Единица фразы — пара «повод + рутина»: одна и та же рутина законно попадает и в `edit`, и
   // в `becomes`, и это два разных события для владельца.
-  const instructionOf = [
-    ...new Map(
-      [...scan.instructionAtOp.values()].map((touch) => [
-        `${touch.reason}\u0000${touch.title}`,
-        touch,
-      ]),
-    ).values(),
-  ];
+  const instructionOf = instructionTouchesOf(scan);
   const level: ConfirmationLevel =
     instructionOf.length > 0 || disarmed.size > 0 ? 'explicit-confirmation' : classified;
 
@@ -1117,16 +1167,7 @@ async function runMutation(
       // Правку и СТАНОВЛЕНИЕ владельцу надо назвать по-разному: «правка» про запись, текста
       // которой этот вызов не касался, была бы неправдой — её тело написали раньше и молча,
       // а этот вызов делает его инструкцией.
-      for (const reason of ['edit', 'becomes'] as const) {
-        const titles = instructionOf.filter((touch) => touch.reason === reason);
-        if (titles.length === 0) continue;
-        const names = titles.map((touch) => touch.title).join('», «');
-        summaryParts.push(
-          reason === 'edit'
-            ? `Инструкция act-рутины: правка «${names}»`
-            : `Инструкция act-рутины: тело «${names}» становится инструкцией`,
-        );
-      }
+      summaryParts.push(...instructionPhrases(instructionOf));
       // МАСШТАБ ПАЧКИ НЕ ТЕРЯЕТСЯ ВМЕСТЕ С ФОЛБЭКОМ — и приписка стоит на ВСЕЙ сводке, а не
       // на одном поводе. Собранная сводка вытесняет `pendingSummary` целиком, а тот у батча
       // говорил «N операций»: владелец, подтверждающий что угодно внутри пачки из
@@ -2653,6 +2694,44 @@ interface TargetState {
 interface InstructionTouch {
   title: string;
   reason: 'edit' | 'becomes';
+}
+
+/**
+ * Касания инструкции act-рутины из скана — БЕЗ ДУБЛЕЙ. Скан отвечает ПО ОПЕРАЦИЯМ, а фраза говорит
+ * О РУТИНЕ, и две операции одной пачки, правящие текст одной рутины, давали «правка «X», «X»».
+ * Единица — пара «повод + рутина»: одна и та же рутина законно попадает и в `edit`, и в `becomes`,
+ * и это два разных события для владельца. Один дом на два читателя — `runMutation` и откат
+ * (`runUndoLast`, В-8): фраза карточки у них одна.
+ */
+function instructionTouchesOf(scan: CarrierScan): InstructionTouch[] {
+  return [
+    ...new Map(
+      [...scan.instructionAtOp.values()].map((touch) => [
+        `${touch.reason}\u0000${touch.title}`,
+        touch,
+      ]),
+    ).values(),
+  ];
+}
+
+/**
+ * Фразы карточки о правке инструкции act-рутины. Правку и СТАНОВЛЕНИЕ владельцу надо назвать
+ * по-разному: «правка» про запись, текста которой этот вызов не касался, была бы неправдой — её
+ * тело написали раньше и молча, а этот вызов делает его инструкцией.
+ */
+function instructionPhrases(touches: readonly InstructionTouch[]): string[] {
+  const out: string[] = [];
+  for (const reason of ['edit', 'becomes'] as const) {
+    const titles = touches.filter((touch) => touch.reason === reason);
+    if (titles.length === 0) continue;
+    const names = titles.map((touch) => touch.title).join('», «');
+    out.push(
+      reason === 'edit'
+        ? `Инструкция act-рутины: правка «${names}»`
+        : `Инструкция act-рутины: тело «${names}» становится инструкцией`,
+    );
+  }
+  return out;
 }
 
 /**

@@ -37,7 +37,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { reconfiguresOf } from '../policy/confirmation';
-import { approvePending } from '../policy/pending';
+import { approvePending, rejectPending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -4765,7 +4765,9 @@ describe('undo_last через классификатор §7.10 (В-8, Р-31)',
     const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
     expect(undone.status).toBe('pending_confirmation');
     if (undone.status !== 'pending_confirmation') return;
-    expect(String((undone.card as { summary?: string }).summary)).toContain('Откат');
+    // Карточка называет, ЧТО откатывается, — прямой операцией отменяемого действия той же фразой,
+    // что у карточки-запроса слияния, а не заголовком журнала пачки «batch: операций — 1» (I-2)
+    expect((undone.card as { summary?: string }).summary).toBe('Откат: слияние свойств: «b» → «a»');
     expect(await mergedIntoOf(owner)).toBe('user/a'); // слияние на месте: откат не применён
   });
 
@@ -4786,6 +4788,142 @@ describe('undo_last через классификатор §7.10 (В-8, Р-31)',
     // …и отменённое больше не «последнее»: второй undo_last слияние не находит
     const again = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
     expect(again.status).toBe('ok');
+  });
+
+  test('«Принять» → «Отклонить» карточку отката → «уже исполнено», в ленте нет «отклонено»; повторное «Принять» → replay (I-3)', async () => {
+    const owner = await freshGraph();
+    const mergeActionId = await mergedWorld(owner);
+    const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    if (undone.status !== 'pending_confirmation') throw new Error(`не карточка: ${undone.status}`);
+    const applied = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: undone.pendingId,
+    });
+    expect(applied.ok).toBe(true);
+
+    const rejected = await rejectPending(db, {
+      identity: personal(owner),
+      pendingId: undone.pendingId,
+    });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.error.code).toBe('VALIDATION');
+      expect(rejected.error.message).toContain('уже исполнено');
+    }
+    const fates = await withIdentity(db, personal(owner), (tx) =>
+      tx.execute(sql`SELECT 1 FROM chat_messages
+        WHERE metadata @> ${JSON.stringify({ type: 'confirmation_rejected', rejects: undone.pendingId })}::jsonb`),
+    );
+    expect(fates).toHaveLength(0);
+
+    // Повтор «Принять» — replay исполненного, а не «отклонено» и не «уже отменено»
+    const again = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: undone.pendingId,
+    });
+    expect(again).toMatchObject({ ok: true, actionId: mergeActionId, idempotentReplay: true });
+    expect(await mergedIntoOf(owner)).toBeNull();
+  });
+
+  test('«Отклонить» → «Принять» карточку отката → «отклонено», откат не применён (I-3)', async () => {
+    const owner = await freshGraph();
+    await mergedWorld(owner);
+    const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+    if (undone.status !== 'pending_confirmation') throw new Error(`не карточка: ${undone.status}`);
+    const rejected = await rejectPending(db, {
+      identity: personal(owner),
+      pendingId: undone.pendingId,
+    });
+    expect(rejected.ok).toBe(true);
+    const applied = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: undone.pendingId,
+    });
+    expect(applied.ok).toBe(false);
+    if (!applied.ok) expect(applied.error.message).toContain('отклонено');
+    expect(await mergedIntoOf(owner)).toBe('user/a');
+  });
+
+  test('гонка «Принять» ∥ «Отклонить» карточки отката: ровно один выигрывает, никогда оба (I-3, замок единицы)', async () => {
+    // Без замка единицы в транзакции undo-сообщения обе стороны проходили бы свои проверки до
+    // чужого коммита: откат исполнен И «отклонено» записано разом.
+    const iterations = 12;
+    let bothOk = 0;
+    for (let i = 0; i < iterations; i += 1) {
+      const owner = await freshGraph();
+      await mergedWorld(owner);
+      const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
+      if (undone.status !== 'pending_confirmation')
+        throw new Error(`не карточка: ${undone.status}`);
+      const [a, r] = await Promise.all([
+        approvePending(db, { identity: personal(owner), pendingId: undone.pendingId }),
+        rejectPending(db, { identity: personal(owner), pendingId: undone.pendingId }),
+      ]);
+      if (a.ok && r.ok) {
+        bothOk += 1;
+        continue;
+      }
+      // Исход согласован с фактом: откат применён ⇔ «Принять» выиграло
+      expect(await mergedIntoOf(owner)).toBe(a.ok ? null : 'user/a');
+    }
+    expect(bothOk).toBe(0);
+  });
+
+  test('откат подтверждённой архивации act-рутины → карточка, рутина НЕ оживает молча (I-1, проба A)', async () => {
+    const owner = await freshGraph();
+    const { seedRoutine } = agentLoopHelpers(db);
+    const routineId = await seedRoutine(owner, {
+      title: 'Боевая рутина',
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
+    });
+    const chat = ctxFor({ identity: personal(owner) });
+    const asked = await dispatchTool(chat, 'entity_update', { id: routineId, archived: true });
+    if (asked.status !== 'pending_confirmation')
+      throw new Error(`архивация не спросила: ${asked.status}`);
+    const archived = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: asked.pendingId,
+    });
+    expect(archived.ok).toBe(true);
+
+    // Обратная операция — `{archived:false}` без единого свойства доверенности: форма чиста, а
+    // рутина вернулась бы в отбор вооружённой. Видит это только скан носителя.
+    const undone = await dispatchTool(chat, 'undo_last', {});
+    expect(undone.status).toBe('pending_confirmation');
+    if (undone.status !== 'pending_confirmation') return;
+    expect((undone.card as { summary?: string }).summary).toContain('«Боевая рутина»');
+    expect(
+      (
+        await withIdentity(db, personal(owner), (tx) =>
+          tx.select({ a: entities.archived }).from(entities).where(eq(entities.id, routineId)),
+        )
+      )[0]?.a,
+    ).toBe(true);
+  });
+
+  test('откат подтверждённого снятия носителя act-рутины → карточка, носитель НЕ возвращён молча (I-1, проба B)', async () => {
+    const owner = await freshGraph();
+    const { seedRoutine } = agentLoopHelpers(db);
+    const routineId = await seedRoutine(owner, {
+      title: 'Вооружённая рутина',
+      routine: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
+    });
+    const chat = ctxFor({ identity: personal(owner) });
+    const asked = await dispatchTool(chat, 'entity_update', {
+      id: routineId,
+      aspects: { detach: ['orbis/routine'] },
+    });
+    if (asked.status !== 'pending_confirmation')
+      throw new Error(`снятие не спросило: ${asked.status}`);
+    const detached = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: asked.pendingId,
+    });
+    expect(detached.ok).toBe(true);
+
+    const undone = await dispatchTool(chat, 'undo_last', {});
+    expect(undone.status).toBe('pending_confirmation');
+    expect(await aspectsOfRowA(routineId, owner)).not.toContain('orbis/routine');
   });
 
   test('откат правки графа из чата — по-прежнему молча: ok, undone, заголовок вернулся', async () => {

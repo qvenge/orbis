@@ -64,7 +64,7 @@ import { ExecError, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, ExecuteResult } from '../executor/types';
-import { undoAction } from '../executor/undo';
+import { isUndone, undoAction } from '../executor/undo';
 import type { Identity } from '../identity';
 import { actionHash } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
@@ -362,8 +362,9 @@ interface CreatePendingCommon {
   /**
    * Действие журнала, которое единица ОТКАТЫВАЕТ (В-8, Р-31): с ключом approve исполняет её
    * `undoAction` (внутренний режим), а не `execute` payload'а — иначе откат породил бы новый action
-   * и сам стал бы отменяемым (Р-К-21). Payload при этом несёт обратные операции — чтобы карточка и
-   * лента говорили, ЧТО откатывается.
+   * и сам стал бы отменяемым (Р-К-21). Payload при этом несёт обратные операции — то, что
+   * `undoAction` применит; ЧТО откатывается, владельцу называет сводка карточки (`undoSummary`,
+   * `tools/dispatch.ts`), а не payload — его веб не рисует.
    */
   undoOf?: string;
 }
@@ -955,8 +956,7 @@ export async function approvePending(
     // (`undoAction` → `applyUndo`) вместо action пишет {type:'undo', undoes} тем же tx и снимает
     // пометки `needs-review` — ровно то, что сделал бы прямой `undo_last` на уровне `execute`.
     const undoOf = pending.undo_of;
-    if (undoOf !== undefined)
-      return await undoAction(db, { identity: args.identity, actionId: undoOf });
+    if (undoOf !== undefined) return await approveUndoUnit(db, args, undoOf);
     // Вне tx проверок: execute открывает собственный withIdentity-tx (вложить нельзя).
     // Чтение pending отдельным tx безопасно: journal append-only, metadata неизменяема
     // (§4.6). audit — в тред карточки-запроса; атрибуция — исходный актор (§7.8)
@@ -1060,6 +1060,51 @@ export async function approvePending(
 }
 
 /**
+ * «Принять» карточки отката (`undo_of`, В-8) — та же судьба, что у пачки, другим исполнением
+ * (фикс-раунд 1 задачи 8, I-3).
+ *
+ * ЗАМОК ЕДИНИЦЫ И «НЕ ОТКЛОНЕНА» — В ТРАНЗАКЦИИ UNDO-СООБЩЕНИЯ (шов `beforeStages` у `undoAction`),
+ * ровно как у пачки в audit-tx: иначе параллельные «Принять» и «Отклонить» проходили бы свои
+ * проверки до чужого коммита (write-skew, докблок `approvePending`). Исполненность отката для
+ * `rejectPendingTx` — undo-сообщение по отменяемому действию (`isUndone`), audit у отката нет.
+ *
+ * ПОВТОР — replay, а не отказ: если отменяемое действие уже отменено (этой же карточкой раньше или
+ * параллельным нажатием), «Принять» отвечает успехом с id отменённого действия и
+ * `idempotentReplay`, как повтор пачки по audit. Проверка — ПОСЛЕ неудачи и отдельной транзакцией:
+ * проигравшая гонка узнаёт о чужом коммите только так, а отказ «отклонено» с undo-сообщением не
+ * совпадает никогда (под замком одно исключает другое).
+ */
+async function approveUndoUnit(
+  db: Db,
+  args: { identity: Identity; pendingId: string },
+  undoOf: string,
+): Promise<ExecuteResult> {
+  // Отказ «отклонено» под замком — не повод для replay, даже если действие успели отменить другим
+  // путём: судьба карточки уже записана, и она — «отклонено».
+  let rejected = false;
+  const r = await undoAction(
+    db,
+    { identity: args.identity, actionId: undoOf },
+    {
+      beforeStages: async (tx) => {
+        await acquirePendingLock(tx, args.pendingId);
+        if (await isRejected(tx, args.pendingId)) {
+          rejected = true;
+          throw new ExecError(
+            'VALIDATION',
+            `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
+            { pendingId: args.pendingId },
+          );
+        }
+      },
+    },
+  );
+  if (r.ok || rejected) return r;
+  const undone = await withIdentity(db, args.identity, (tx) => isUndone(tx, undoOf));
+  return undone ? { ok: true, actionId: undoOf, results: [], idempotentReplay: true } : r;
+}
+
+/**
  * Аргументы отклонения — общие у tx-формы и обёртки.
  *
  * `text` (D42 С6 ревью) — своя строка ленты для ЕДИНИЦЫ пачки: «Отложенное действие
@@ -1151,6 +1196,18 @@ export async function rejectPendingTx(
       'VALIDATION',
       `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
       { pendingId: args.pendingId, auditId },
+    );
+  }
+  // Карточка отката (`undo_of`, В-8) исполняется `undoAction`, и audit-сообщения по ней нет:
+  // исполненность — undo-сообщение по отменяемому действию. Без этой проверки «Отклонить» после
+  // «Принять» писало бы «отклонено» рядом с «отменено» (фикс-раунд 1 задачи 8, I-3). Читается
+  // под тем же замком: «Принять» отката держит его в транзакции undo-сообщения (`approveUndoUnit`).
+  const undoOf = msg.pending.undo_of;
+  if (undoOf !== undefined && (await isUndone(tx, undoOf))) {
+    throw new ExecError(
+      'VALIDATION',
+      `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
+      { pendingId: args.pendingId, undoes: undoOf },
     );
   }
   const already = await rejectedReason(tx, args.pendingId);
