@@ -1,12 +1,17 @@
 // apps/server/src/tools/registry-tools.ts
 //
-// ДВЕНАДЦАТЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2, §Б2-1, §Б5-1, §Б1-1): завести своё
+// ЧЕТЫРНАДЦАТЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2, §Б2-1, §Б5-1, §Б1-1, §Б6-1): завести своё
 // свойство, поправить его, слить два в одно, поставить и снять дельту аспекта, завести СВОЙ
 // аспект и переписать либо снять его привязки к контрактам, настроить и снять подписку
-// поверхности, добавить и снять свои именованные наборы контракта. Это первая поверхность,
-// которой владелец и модель МЕНЯЮТ САМУ СИСТЕМУ, а не данные в ней.
+// поверхности, добавить и снять свои именованные наборы контракта, завести своё действие и
+// снять его. Это первая поверхность, которой владелец и модель МЕНЯЮТ САМУ СИСТЕМУ, а не
+// данные в ней.
 //
-// Семь последних заводит срез Б-1. Аспект перестал быть только «набором полей»: привязка
+// Два последних (`action_set`/`action_remove`) заводит срез Б-2 (задача 10): действие — то, что
+// система ДЕЛАЕТ по одному слову владельца, и завести его — такая же перенастройка поведения,
+// как подписка; ряд политики им задаёт ТУЛ (`behavior-delta`), как подпискам и наборам ниже.
+//
+// Семь перед ними заводит срез Б-1. Аспект перестал быть только «набором полей»: привязка
 // (`implements`) включает его в Повестку, Бюджет и строку списка ДЕКЛАРАЦИЕЙ, без строки
 // кода (§Б2-1). Подписка отвечает на второй вопрос той же декларативности — ЧЕМ поверхность
 // наполняется (§Б5-1), а дельта наборов даёт декларациям имя для состава классов вместо
@@ -19,12 +24,12 @@
 // приходится сторожить отдельным тестом; у новых тулов сторожить нечего, потому что оба
 // представления стоят в одном файле друг под другом.
 //
-// `fullScopeOnly: true` У ВСЕХ ДВЕНАДЦАТИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
+// `fullScopeOnly: true` У ВСЕХ ЧЕТЫРНАДЦАТИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
 // не адресован вовсе: он работает над ЗАДАЧЕЙ владельца, а не над устройством его системы.
 // Флаг — не «мутации фону закрыты» (это и так держит `WORKER_SCOPE_TOOLS`), а ответ на
 // другой вопрос: кому этот тул вообще предназначен.
 //
-// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ДВЕНАДЦАТИ НАЗНАЧАЕТ §7.10, И ВХОДОВ У НЕГО ДВА (§С2-1):
+// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ЧЕТЫРНАДЦАТИ НАЗНАЧАЕТ §7.10, И ВХОДОВ У НЕГО ДВА (§С2-1):
 // ПО ОБЪЕКТУ — у восьми тулов свойств и аспектов: своя строка владельца от AI — `preview`
 // (исполнено и показано карточкой), перенастройка поведения — `explicit-confirmation` для
 // любого актора, а от рутины та же операция становится отложенной единицей пачки D42;
@@ -34,23 +39,31 @@
 // `aspect_delta_set` — СОДЕРЖИМОЕ правки (`behaviorOnlyDelta`: дельта, несущая только состав
 // вариантов и их отнесение к классам, идёт рядом по тулу даже поверх встроенного аспекта).
 //
-// ПО ТУЛУ — у четырёх тулов подписок и наборов (Р9 рамки Б-1): ряд им задаёт ИМЯ, а не адрес,
-// и все четыре — `behavior-delta` ВСЕГДА, включая дельту поверх встроенного контракта и
-// настройку системной подписки. Иначе садовник §Б5-2, добавляющий владельцу набор поверх
+// ПО ТУЛУ — у четырёх тулов подписок и наборов (Р9 рамки Б-1) и двух тулов действий (задача 10
+// Б-2): ряд им задаёт ИМЯ, а не адрес, и все шесть — `behavior-delta` ВСЕГДА, включая дельту
+// поверх встроенного контракта и настройку системной подписки. Иначе садовник §Б5-2,
+// добавляющий владельцу набор поверх
 // `orbis/completable`, упирался бы в запрет по объекту на ЗАКОННОМ пути — а он обязан
 // получать отложенную единицу (пин живьём — `dispatch.test.ts`, «НЕ запрет (Р9)»).
 //
 // Правило живёт в `policy/confirmation.ts` (`reconfiguresByTool` + ряды 4a/4b), запрет фону —
 // в `tools/dispatch-common.ts` (`routineDeferForbidden`); приёмка §С8-11 — тест на каждый ряд.
 import {
+  actionDefinitionSchema,
   aspectImplementsSchema,
   localizedTextSchema,
   PROPERTY_KINDS,
   SURFACES,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
-import { queryAstJsonSchema } from '@orbis/shared/query';
+import { EXPR_TREE_DEPTH_CAP, exprTreeExceedsDepth } from '@orbis/shared/expr';
+import {
+  QUERY_TREE_DEPTH_CAP,
+  queryAstJsonSchema,
+  queryTreeExceedsDepth,
+} from '@orbis/shared/query';
 import { z } from 'zod';
+import { ExecError } from '../errors';
 import { aspectDeltaSchema, contractDeltaSchema } from '../registry/deltas';
 import type { OrbisToolDef } from './registry';
 
@@ -560,11 +573,191 @@ const contractSetsDeltaRemoveJsonSchema = {
   additionalProperties: false,
 } as const;
 
+// --- action_set / action_remove (§Б6-1, §С3 строка «Действие») ------------------------------
+
 /**
- * Дефы двенадцати тулов. Порядок — тот, в котором их видит модель и эталон снимка
+ * Кап вложенности ВХОДА ШАГА действия, в уровнях JSON от корня `input`. Своего числа здесь нет —
+ * он ВЫВЕДЕН: самое глубокое законное значение шага — значение свойства в мешке (`props`/`data`),
+ * и его кап — `QUERY_TREE_DEPTH_CAP`, считая от самого значения (ВХОД-ДЕРЕВА 3,
+ * `registry/validate-props.ts`: «значение с Q-AST внутри»). Корень входа и мешок добавляют ровно
+ * два уровня; всё прочее в конверте шага (адреса, списки ключей) мельче на порядки. Маркер
+ * `{$expr}` меряется НЕ этим капом, а своим (`EXPR_TREE_DEPTH_CAP`) — дерево внутри маркера
+ * другое, и число в отказе обязано быть тем, которое считает код.
+ */
+const ACTION_STEP_INPUT_DEPTH_CAP = QUERY_TREE_DEPTH_CAP + 2;
+
+/** Отказ гейта глубины: VALIDATION с ПРИЧИНОЙ и адресом позиции — модель правит ровно её. */
+function tooDeep(reason: string, where: string, cap: number, what: string): never {
+  throw new ExecError(
+    'VALIDATION',
+    `action_set: ${where} — ${what} вложено глубже ${cap} уровней; такая декларация разворачивалась бы на каждом чтении реестра`,
+    { tool: 'action_set', reason, where, cap },
+  );
+}
+
+/**
+ * Глубина входа шага: итеративный обход СЫРОГО значения со своим стеком (довод
+ * `queryTreeExceedsDepth` — рекурсивный обход исчерпал бы стек ровно на том входе, ради которого
+ * его зовут). Маркер `{$expr}` не обходится вглубь — его дерево меряет кап E.
+ */
+function assertStepInputDepth(input: unknown, index: number): void {
+  const stack: Array<[unknown, number, string]> = [[input, 1, `steps.${index}.input`]];
+  while (stack.length > 0) {
+    const [node, depth, path] = stack.pop() as [unknown, number, string];
+    if (typeof node !== 'object' || node === null) continue;
+    if (!Array.isArray(node) && Object.hasOwn(node, '$expr')) {
+      const expr = (node as { $expr: unknown }).$expr;
+      if (exprTreeExceedsDepth(expr, EXPR_TREE_DEPTH_CAP)) {
+        tooDeep('EXPR_TOO_DEEP', `${path}.$expr`, EXPR_TREE_DEPTH_CAP, 'выражение');
+      }
+      continue;
+    }
+    if (depth > ACTION_STEP_INPUT_DEPTH_CAP) {
+      tooDeep('VALUE_TOO_DEEP', path, ACTION_STEP_INPUT_DEPTH_CAP, 'вход шага');
+    }
+    const entries = Array.isArray(node)
+      ? node.map((v, i) => [String(i), v] as const)
+      : Object.entries(node);
+    for (const [k, v] of entries) stack.push([v, depth + 1, `${path}.${k}`]);
+  }
+}
+
+/**
+ * ГЕЙТ ГЛУБИНЫ ДЕКЛАРАЦИИ — ДО СХЕМЫ (m-4 гейта задачи 6). Порядок здесь и есть суть, тот же довод,
+ * что у `assertQueryTreeDepth` тула запроса и `assertRegistryQuery` реестра: `precondition` и
+ * `offered_by[].when` разбираются рекурсивной `exprNodeSchema`, `over` — рекурсивной
+ * `queryAstSchema` (обе через `z.lazy`), и на глубоком входе `safeParse` исчерпывает стек ВНУТРИ
+ * собственного разбора — `RangeError`, а не `ZodError`, то есть пятисотка вместо отказа. Входы шагов
+ * схема не рекурсирует (`z.record(z.unknown())`), но их обходит `assertAction` рекурсивными
+ * генераторами маркеров — и там на глубоком литерале стек кончился бы тем же образом.
+ *
+ * ДВЕРЬ ОДНА НА ВСЕ ПУТИ ВХОДА, потому что стоит в самой схеме конверта (`z.preprocess` — единственное
+ * место zod, которое работает раньше разбора, образец — `querySignature` роутера `entity`): диспатч
+ * (`validateMutationEnvelope`), пачка (`validateBatchOperations`), стадия 1 исполнителя
+ * (`parseEnvelope`) и ручка владельца (`registry.setAction`) разбирают вход ОДНОЙ схемой. Отказ —
+ * `ExecError` броском: zod его не ловит, и он доезжает до вызывающего структурным `VALIDATION`.
+ *
+ * РАЗМЕРА ЗДЕСЬ НЕТ, и это не пропуск: ширина входа ограничена платформенным body-limit (`/trpc`,
+ * `/mcp`), а длина обхода линейна по ней — стек кончается только от ГЛУБИНЫ. Кап числа шагов тоже не
+ * заводится: действие на исполнении пачкой длиннее ста операций законно (кап единицы подтверждения
+ * `unitCapExceeded` стоит только на пути карточки), и такой кап был бы новым правилом, а не гейтом.
+ */
+function assertActionInputDepth(raw: unknown): void {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return;
+  const rec = raw as Record<string, unknown>;
+  if (exprTreeExceedsDepth(rec.precondition, EXPR_TREE_DEPTH_CAP)) {
+    tooDeep('EXPR_TOO_DEEP', 'precondition', EXPR_TREE_DEPTH_CAP, 'выражение');
+  }
+  if (queryTreeExceedsDepth(rec.over, QUERY_TREE_DEPTH_CAP)) {
+    tooDeep('QUERY_TOO_DEEP', 'over', QUERY_TREE_DEPTH_CAP, 'дерево запроса');
+  }
+  const offers = Array.isArray(rec.offered_by) ? (rec.offered_by as unknown[]) : [];
+  for (const [index, offer] of offers.entries()) {
+    const when =
+      typeof offer === 'object' && offer !== null ? (offer as { when?: unknown }).when : undefined;
+    if (exprTreeExceedsDepth(when, EXPR_TREE_DEPTH_CAP)) {
+      tooDeep('EXPR_TOO_DEEP', `offered_by.${index}.when`, EXPR_TREE_DEPTH_CAP, 'выражение');
+    }
+  }
+  const steps = Array.isArray(rec.steps) ? (rec.steps as unknown[]) : [];
+  for (const [index, step] of steps.entries()) {
+    if (typeof step === 'object' && step !== null) {
+      assertStepInputDepth((step as { input?: unknown }).input, index);
+    }
+  }
+}
+
+/** Вход = ДЕКЛАРАЦИЯ без служебных полей строки (Р-И-34): `id` = `key` (решение 2), `graphId` — из
+ *  актора, `status` двигает только `action_remove`, `rank` назначает операция, `module` размечает
+ *  СИСТЕМНЫЕ строки (§Б8-1) и у своей пуст. Гейт глубины — перед схемой (см. выше). */
+export const actionSetInput = z.preprocess((raw) => {
+  assertActionInputDepth(raw);
+  return raw;
+}, actionDefinitionSchema
+  .omit({ id: true, graphId: true, status: true, rank: true, module: true })
+  .strict());
+export type ActionSetInput = z.infer<typeof actionSetInput>;
+export const actionRemoveInput = z.object({ action: z.string().min(1) }).strict();
+export type ActionRemoveInput = z.infer<typeof actionRemoveInput>;
+
+/** `steps`/`params`/`precondition`/`over` описаны модели ПРОЗОЙ — тот же приём и довод, что у
+ *  `subscriptionDefinitionJsonSchema` выше: разложить союз шагов и дерево E механически нечем, а
+ *  руками — значило бы завести ВТОРОЕ описание действия рядом с реестром. Форму проверяет
+ *  `assertAction` на записи и отвечает точным `reason`. */
+const actionSetJsonSchema = {
+  type: 'object',
+  properties: {
+    key: {
+      type: 'string',
+      description:
+        'адрес: свои действия живут в namespace user/ (user/close-month); он же имя тула action_user_close_month',
+    },
+    label: localizedJsonSchema,
+    description: {
+      ...localizedJsonSchema,
+      description: 'что действие делает — по нему владелец решает, звать ли его',
+    },
+    params: {
+      type: 'array',
+      items: { type: 'object' },
+      description:
+        'параметры вызова: [{"name":"to","type":{"kind":"date"},"required":true}]; на них ссылаются шаги через {"$expr":{"param":"to"}}. Объявленный и не использованный параметр — отказ',
+    },
+    precondition: {
+      type: 'object',
+      description:
+        'предикат допустимости ДЕРЕВОМ языка E (строка в позиции выражения отвергается): где он ложен, действие не предлагается и не исполняется',
+    },
+    over: {
+      type: 'object',
+      description:
+        'запрос-цель ПАКЕТНОГО действия (§Б6-3): шаги применяются к каждой найденной записи. Есть over — batch_cap обязателен; нет over — batch_cap запрещён, цель берётся из self',
+    },
+    steps: {
+      type: 'array',
+      items: { type: 'object' },
+      description:
+        'шаги: [{"tool":"entity_update","input":{…}}]. Тулы шага — entity_create, entity_update, relation_create, relation_delete, attach_<аспект>. Вложенное действие запрещено; ветвления на уровне шага нет — условие живёт внутри выражения (if)',
+    },
+    sensitivity: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'факты чувствительности словаря orbis/sensitivity: объявить нужно ВСЕ, что производят шаги, иначе отказ',
+    },
+    offered_by: {
+      type: 'array',
+      items: { type: 'object' },
+      description:
+        'где предлагается: [{"llm":true}] — отдельным тулом модели; {"surface":"…"} — кнопкой поверхности',
+    },
+    batch_cap: {
+      type: 'integer',
+      description: 'предел числа записей пакетного действия (сиды пишут 100)',
+    },
+  },
+  required: ['key', 'label', 'description', 'steps'],
+  additionalProperties: false,
+} as const;
+
+const actionRemoveJsonSchema = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      description:
+        'адрес действия (key или id). Оно помечается «Устарело»: строка остаётся, новые вызовы отказывают, отложенные единицы снимаются',
+    },
+  },
+  required: ['action'],
+  additionalProperties: false,
+} as const;
+
+/**
+ * Дефы четырнадцати тулов. Порядок — тот, в котором их видит модель и эталон снимка
  * (`test/golden/tool-registry.json`): создание свойства, правка, слияние, дельта аспекта,
  * снятие дельты, заведение своего аспекта и две операции его привязок, настройка подписки и
- * её снятие, дельта наборов контракта и её снятие.
+ * её снятие, дельта наборов контракта и её снятие, заведение своего действия и его снятие.
  */
 export const REGISTRY_TOOLS: OrbisToolDef[] = [
   {
@@ -684,12 +877,32 @@ export const REGISTRY_TOOLS: OrbisToolDef[] = [
     kind: 'mutate',
     fullScopeOnly: true,
   },
+  {
+    name: 'action_set',
+    description:
+      'Завести или переписать СВОЁ действие — именованную последовательность правок, которую ' +
+      'владелец зовёт одним словом («закрыть месяц», «отложить просроченные»). Шаги проверяются ' +
+      'целиком ДО записи: чужой тул шага, вложенное действие, пакет без капа и незаявленный факт ' +
+      'чувствительности — отказ. У встроенного действия правится только подпись (дельта), шаги — форком.',
+    inputJsonSchema: actionSetJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
+  {
+    name: 'action_remove',
+    description:
+      'Пометить своё действие устаревшим: оно уходит из предложений и из реестра тулов, новые ' +
+      'вызовы отказывают. Строка остаётся — журнал прошлых применений обязан оставаться читаемым.',
+    inputJsonSchema: actionRemoveJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
 ];
 
-/** Имена двенадцати тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
+/** Имена четырнадцати тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
 export const REGISTRY_TOOL_NAMES: ReadonlySet<string> = new Set(REGISTRY_TOOLS.map((d) => d.name));
 
-/** Envelope-схемы двенадцати тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
+/** Envelope-схемы четырнадцати тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
 export const REGISTRY_TOOL_ENVELOPES: Record<string, z.ZodTypeAny> = {
   property_create: propertyCreateInput,
   property_update: propertyUpdateInput,
@@ -703,4 +916,6 @@ export const REGISTRY_TOOL_ENVELOPES: Record<string, z.ZodTypeAny> = {
   subscription_remove: subscriptionRemoveInput,
   contract_sets_delta_set: contractSetsDeltaSetInput,
   contract_sets_delta_remove: contractSetsDeltaRemoveInput,
+  action_set: actionSetInput,
+  action_remove: actionRemoveInput,
 };

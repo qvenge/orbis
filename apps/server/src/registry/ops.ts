@@ -28,6 +28,7 @@
 // (`lockOwnerRegistry`, `executor/executor.ts` — первым statement'ом, до бюджетного).
 // Своего замка они не берут: два места, знающие порядок захвата, — это и есть дедлок.
 import {
+  type ActionDefinition,
   type AspectDefinition,
   type AspectImplements,
   type AspectPropertyRef,
@@ -78,6 +79,12 @@ import { ExecError } from '../errors';
 import { resolvePropertyRef } from '../executor/props';
 // Цикла нет: валидатор берёт из `registry/load` только тип строки.
 import { assertSubscription, normalizeSubscriptionExprs } from '../subscriptions/registry';
+// Только тип: вход операции `setOwnAction` — вход тула (эррата реестра §1.10); рантайм-ребра нет.
+import type { ActionSetInput } from '../tools/registry-tools';
+// Цикла нет (перенос задачи 6, риск «actions → confirmation → registry-tools → … → actions»):
+// `actions.ts` тянет `policy/confirmation` → `tools/registry-tools` → `registry/deltas`, и ни один из
+// них в `registry/ops` не заходит; `registry-tools` импортирует отсюда только тип.
+import { assertAction } from './actions';
 import { parseRegistryOfSnapshot } from './cache';
 import {
   type AspectDelta,
@@ -97,6 +104,8 @@ import {
   type RegistrySnapshot,
   type SubscriptionRow,
 } from './load';
+// Стадия 2 исполнителя — та же функция на двери `action_set` (литералы шагов, перенос задачи 6).
+import { validateEntityProps } from './validate-props';
 import { bumpOwnerRegistryVersion, readRegistryVersions } from './version';
 
 /**
@@ -2372,6 +2381,222 @@ export async function setOwnSubscription(
 export async function removeOwnSubscription(tx: Tx, graphId: GraphId, id: string): Promise<void> {
   await tx.execute(sql`
     DELETE FROM subscription_definitions WHERE graph_id = ${graphId}::uuid AND id = ${id}`);
+  await bumpOwnerRegistryVersion(tx, graphId);
+}
+
+// ---------------------------------------------------------------------------
+// Своё действие владельца (§Б6-1, §С3 строка «Действие»)
+// ---------------------------------------------------------------------------
+
+/**
+ * ПОЛНАЯ строка `action_definitions` владельца — в той же форме, что `SubscriptionRow` выше:
+ * обратная операция `action_set` обязана вернуть декларацию такой, какой она была.
+ */
+export interface ActionRow {
+  id: string;
+  /** Граф строки как он лежит в колонке — голой строкой, как у `SubscriptionRow`: бренд графа
+   *  рождает только резолвер, а приведение колонки к нему — ровно форма, которую ловит гейт. */
+  graphId: string | null;
+  key: string;
+  label: LocalizedText;
+  description: LocalizedText;
+  params: unknown;
+  precondition: unknown;
+  over: unknown;
+  steps: unknown;
+  sensitivity: string[];
+  offeredBy: unknown;
+  module: string | null;
+  batchCap: number | null;
+  status: 'active' | 'deprecated';
+  rank: number;
+}
+
+function toActionRow(r: RawRow): ActionRow {
+  return {
+    id: r.id as string,
+    graphId: (r.graph_id ?? null) as string | null,
+    key: r.key as string,
+    label: r.label as LocalizedText,
+    description: r.description as LocalizedText,
+    // Колонки 0014 nullable БЕЗ default — умолчания те же, что у схемы на чтении (`registry/load.ts`).
+    params: r.params ?? [],
+    precondition: r.precondition ?? null,
+    over: r.over ?? null,
+    steps: r.steps,
+    sensitivity: (r.sensitivity ?? []) as string[],
+    offeredBy: r.offered_by ?? [],
+    module: (r.module ?? null) as string | null,
+    batchCap: r.batch_cap === null || r.batch_cap === undefined ? null : Number(r.batch_cap),
+    status: r.status as ActionRow['status'],
+    rank: Number(r.rank),
+  };
+}
+
+/** СВОЯ строка действия по id ИЛИ key (у своей они совпадают — решение 2 задачи 10). */
+export async function readActionRow(
+  tx: Tx,
+  graphId: GraphId,
+  idOrKey: string,
+): Promise<ActionRow | undefined> {
+  const rows = (await tx.execute(sql`
+    SELECT id, graph_id, key, label, description, params, precondition, "over", steps, sensitivity,
+           offered_by, module, batch_cap, status, rank
+      FROM action_definitions
+     WHERE graph_id = ${graphId}::uuid AND (id = ${idOrKey} OR key = ${idOrKey})
+     LIMIT 1`)) as unknown as RawRow[];
+  return rows[0] === undefined ? undefined : toActionRow(rows[0]);
+}
+
+/**
+ * Есть ли СИСТЕМНОЕ действие по этому адресу (Р-К-40). Системные строки у всех графов общие
+ * (`graph_id IS NULL`), поэтому проба — без графа.
+ */
+export async function systemActionAt(tx: Tx, idOrKey: string): Promise<string | undefined> {
+  const rows = (await tx.execute(sql`
+    SELECT id FROM action_definitions
+     WHERE graph_id IS NULL AND (id = ${idOrKey} OR key = ${idOrKey}) LIMIT 1`)) as unknown as Array<{
+    id: string;
+  }>;
+  return rows[0]?.id;
+}
+
+/** Ранг своего действия: системные сиды занимают 1..N (§Б6-1), своё встаёт за ними. */
+const OWN_ACTION_RANK = 1000;
+
+/**
+ * Своё действие владельца (§Б6-1). Namespace — тот же гейт и тот же довод, что у подписок и свойств:
+ * `orbis/…` завтра посеет релиз, и своя строка МОЛЧА перекрыла бы системную.
+ * Смысл декларации проверяется ЗДЕСЬ, до записи (Р-И-7): на записи владелец видит отказ и может его
+ * исправить, на чтении — только запертый снимок реестра.
+ *
+ * ВХОД ОПЕРАЦИИ = ВХОД ТУЛА (эррата реестра §1.10, бриф задачи 10): служебные поля строки операция
+ * проставляет сама и отдаёт РАЗОБРАННУЮ `ActionDefinition`.
+ */
+export async function setOwnAction(
+  tx: Tx,
+  graphId: GraphId,
+  decl: ActionSetInput,
+): Promise<ActionDefinition> {
+  // ВСТРОЕННОЕ ДЕЙСТВИЕ ЭТИМ ПУТЁМ НЕ ПРАВИТСЯ (Р-К-40): его подпись — дельта (§С3), шаги — форк
+  // своей строкой с другим key (§Б6-5). Проба стоит ДО namespace, потому что причина у отказа своя:
+  // «чужой namespace» сказал бы владельцу не то, что он сделал, — он адресовал встроенное действие.
+  const system = await systemActionAt(tx, decl.key);
+  if (system !== undefined) {
+    throw new ExecError(
+      'VALIDATION',
+      `действие «${decl.key}» встроенное: его подпись правится дельтой, а шаги — своей копией с ключом user/… (§Б6-5)`,
+      { reason: 'ACTION_TARGET_SYSTEM', action: system },
+    );
+  }
+  if (!decl.key.startsWith('user/')) {
+    throw new ExecError(
+      'VALIDATION',
+      `свои действия живут в namespace user/ — «${decl.key}» занимает чужой (§Б6-1)`,
+      { reason: 'ACTION_NAMESPACE', action: decl.key },
+    );
+  }
+  const current = await readActionRow(tx, graphId, decl.key);
+  // СНИМОК С ДЕЛЬТАМИ, а не сырые строки: шаг действия вправе ссылаться на СВОЙ аспект и своё
+  // свойство — они живут дельтой, и без неё та же декларация получала бы UNKNOWN_PROPERTY.
+  const probe = await probeSnapshot(tx, graphId, await loadRegistryRows(tx, graphId));
+  const checked = assertAction(
+    // Служебные поля строки проставляет ОПЕРАЦИЯ, а не вызывающий: `id` = `key` (решение 2),
+    // `graphId` — граф владельца (m-3: своя строка без графа читалась бы системной),
+    // `module: null` (решение 6), `status` и `rank` — решения 1 и 3.
+    {
+      ...decl,
+      id: decl.key,
+      graphId,
+      module: null,
+      status: 'active',
+      rank: current?.rank ?? OWN_ACTION_RANK,
+    },
+    { reg: probe, systemSeed: false },
+  );
+  assertStepLiterals(probe, checked);
+  await tx.execute(sql`
+    INSERT INTO action_definitions (id, graph_id, key, label, description, params, precondition, "over",
+                                    steps, sensitivity, offered_by, module, batch_cap, status, rank)
+    VALUES (${checked.id}, ${graphId}::uuid, ${checked.key},
+            ${JSON.stringify(checked.label)}::jsonb, ${JSON.stringify(checked.description)}::jsonb,
+            ${JSON.stringify(checked.params)}::jsonb, ${JSON.stringify(checked.precondition)}::jsonb,
+            ${JSON.stringify(checked.over)}::jsonb, ${JSON.stringify(checked.steps)}::jsonb,
+            ${JSON.stringify(checked.sensitivity)}::jsonb, ${JSON.stringify(checked.offered_by)}::jsonb,
+            ${checked.module}, ${checked.batch_cap}, ${checked.status}, ${checked.rank})
+    ON CONFLICT (graph_id, id) WHERE graph_id IS NOT NULL
+      DO UPDATE SET key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
+                    params = EXCLUDED.params, precondition = EXCLUDED.precondition, "over" = EXCLUDED."over",
+                    steps = EXCLUDED.steps, sensitivity = EXCLUDED.sensitivity, offered_by = EXCLUDED.offered_by,
+                    batch_cap = EXCLUDED.batch_cap, status = EXCLUDED.status, rank = EXCLUDED.rank`);
+  await bumpOwnerRegistryVersion(tx, graphId);
+  return checked;
+}
+
+/**
+ * ЛИТЕРАЛЫ ЗНАЧЕНИЙ ШАГОВ — ПО ТИПУ СВОЙСТВА-ЦЕЛИ, ТЕМ ЖЕ СРЕДСТВОМ, ЧТО ИСПОЛНИТЕЛЬ (перенос задачи 6).
+ * Ступень 8 `assertAction` сверяет с типом позиции только `{$expr}`; литерал (`'orbis/planned': 'да'`)
+ * она пропускает, и такое действие записывалось бы, а падало на КАЖДОМ прогоне стадией 2 исполнителя
+ * (`validateEntityProps`) — вечно сломанное действие, отказ которого владелец увидит не там, где
+ * ошибся. Проверка здесь — та же функция стадии 2 (второго описания типа значения не заводится), по
+ * значениям, которые шаг пишет БУКВАЛЬНО: `props` графовых тулов и `data` у `attach_*`.
+ *
+ * ЗНАЧЕНИЕ С МАРКЕРОМ ВНУТРИ (`['a', {$expr}]` у списка) ПРОПУСКАЕТСЯ ЦЕЛИКОМ: стадия 2 судит значение
+ * свойства целиком, а до подстановки его нет; элементы-маркеры уже сверила ступень 8. Живёт здесь,
+ * а не в `assertAction`, по доводу двери: валидатору декларации ajv-стадия исполнителя чужая, и
+ * системные сиды её тоже не проходят — их значения стерегут тесты сида.
+ */
+function assertStepLiterals(reg: RegistrySnapshot, decl: ActionDefinition): void {
+  const hasMarker = (value: unknown): boolean => {
+    // Глубина уже ограничена гейтом двери (`tools/registry-tools.ts`), рекурсия здесь безопасна.
+    if (Array.isArray(value)) return value.some(hasMarker);
+    if (typeof value !== 'object' || value === null) return false;
+    return Object.hasOwn(value, '$expr') || Object.values(value).some(hasMarker);
+  };
+  for (const [index, step] of decl.steps.entries()) {
+    for (const bag of ['props', 'data'] as const) {
+      const raw = step.input[bag];
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+      const literal: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (hasMarker(value)) continue;
+        // Адрес уже проверен ступенью 8 (`ACTION_VALUE_TYPE` на отсутствующем свойстве).
+        literal[resolvePropertyRef(reg, key)?.id ?? key] = value;
+      }
+      const violations = validateEntityProps(
+        reg,
+        { props: literal, aspects: [] },
+        new Set(Object.keys(literal)),
+      );
+      if (violations.length > 0) {
+        throw new ExecError(
+          'VALIDATION',
+          `действие «${decl.key}»: шаг ${index + 1}, steps.${index}.input.${bag} — значение не проходит тип свойства`,
+          {
+            reason: 'ACTION_VALUE_TYPE',
+            action: decl.key,
+            step: index,
+            path: `steps.${index}.input.${bag}`,
+            violations,
+          },
+        );
+      }
+    }
+  }
+}
+
+/**
+ * «Устарело» (§Б6-7, §С3): строка ОСТАЁТСЯ — журнал прошлых применений ссылается на неё по id, и
+ * снос сделал бы историю нечитаемой (§А10-3). Системную строку этим путём не тронуть: условие по
+ * `graph_id` отсекает её, а гейт адреса стоит в `prepareActionRemove`.
+ */
+export async function deprecateOwnAction(
+  tx: Tx,
+  graphId: GraphId,
+  actionId: string,
+): Promise<void> {
+  await tx.execute(sql`UPDATE action_definitions SET status = 'deprecated'
+                        WHERE graph_id = ${graphId}::uuid AND id = ${actionId}`);
   await bumpOwnerRegistryVersion(tx, graphId);
 }
 

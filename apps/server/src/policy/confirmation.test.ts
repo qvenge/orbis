@@ -699,6 +699,22 @@ describe('§С2-1: перенастраивает поверхность или 
     }
   });
 
+  test('§С2-1: тулы действий — behavior-delta ПО ТУЛУ, для любого актора', () => {
+    expect(reconfiguresOf('action_set', { key: 'user/close-month' })).toBe('behavior-delta');
+    // Адрес не решает: встроенный key даёт тот же ряд.
+    expect(reconfiguresOf('action_remove', { action: 'finance/plan-to-fact' })).toBe(
+      'behavior-delta',
+    );
+    // …и до уровня ряд доходит тем же подъёмом 4a, что у подписок: владельцу тоже карточка.
+    for (const actorKind of ['ai', 'agent', 'owner'] as const) {
+      expect([
+        actorKind,
+        levelFor('action_set', { key: 'user/close-month' }, actorKind),
+        levelFor('action_remove', { action: 'user/close-month' }, actorKind),
+      ]).toEqual([actorKind, 'explicit-confirmation', 'explicit-confirmation']);
+    }
+  });
+
   test('подписки и наборы: explicit-confirmation для ЛЮБОГО актора, включая владельца', () => {
     // Случаи — из той же таблицы задачи 14, а не вторым списком: разъехавшись, список ряда и
     // список уровня врали бы порознь и молча. Ряд 4a (`confirmation.ts:100`) поднимает
@@ -1115,8 +1131,10 @@ describe('§С2-1: перенастраивает поверхность или 
   test('перечень тулов реестра берётся у реестра, а не переписан здесь литералами', () => {
     // Тринадцатый тул реестра, заведённый без правки `reconfiguresOf`, получит `system-object`
     // (fail-closed ветка switch'а), а не молчаливое `none`, — и упадёт вот на этой строке.
-    // Двенадцать: пять среза А + три задачи 15 + четыре здесь.
+    // Четырнадцать: пять среза А + три задачи 15 Б-1 + четыре задачи 16 Б-1 + два задачи 10 Б-2.
     expect([...REGISTRY_TOOL_NAMES].sort()).toEqual([
+      'action_remove',
+      'action_set',
       'aspect_create',
       'aspect_delta_remove',
       'aspect_delta_set',

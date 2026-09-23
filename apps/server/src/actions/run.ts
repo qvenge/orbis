@@ -13,6 +13,8 @@
 // обратный импорт по значению замкнул бы цикл (Р-К-67, Р-К-87).
 import { type ActionDefinition, effectiveLabel, isModuleEnabled, newId } from '@orbis/shared';
 import { OWNER_LOCALE } from '@orbis/shared/query';
+// Цикла нет: эскалация читает журнал и чат, в диспатч и сюда не заходит (зовёт её и `dispatch.ts`).
+import { escalateAfterMutation } from '../ai/escalation';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { classifyToolCall, factsFromOperations, type ToolCallFacts } from '../policy/confirmation';
@@ -230,6 +232,20 @@ export async function runAction(
     { sink },
   );
   if (!r.ok) return { status: 'error', error: r.error };
+  // ЭСКАЛАЦИЯ ПОВТОРНЫХ ИСПРАВЛЕНИЙ (K7, §7.8) — тем же приёмом и на том же месте, что у
+  // `runMutation` (`tools/dispatch.ts`): после исполнения, отдельной транзакцией, только для чата
+  // (за чатом стоит владелец, чьи правки категории и считаются «исправлениями»). Без неё смена
+  // категории ДЕЙСТВИЕМ шла бы мимо предложения правила памяти (эррата Ф-Б2-18 (в)): журнал её уже
+  // видит (`type:'action'` в пробе скана), а триггера не было. Повтор batch_id (`idempotentReplay`)
+  // ничего не применял — эскалировать нечего. Ошибку эскалация логирует сама и не пробрасывает:
+  // правки уже закоммичены. Путь карточки (`explicit-confirmation`) эскалирует `approvePending`.
+  if (ctx.source === 'chat' && !r.idempotentReplay) {
+    await escalateAfterMutation(ctx.db, {
+      identity: ctx.identity,
+      actionId: r.actionId,
+      operations,
+    });
+  }
   return {
     status: 'ok',
     result: r.results,

@@ -155,6 +155,21 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
       },
     );
   }
+  // ЧЬЯ СТРОКА — ТОТ ЖЕ ВОПРОС, ЧТО NAMESPACE (m-3 гейта задачи 6): строка с `graph_id NULL` — это
+  // СИСТЕМНАЯ строка для всех графов (`loadRegistryRows` отдаёт её каждому, `ORDER BY graph_id NULLS
+  // FIRST`), а строка владельца несёт его граф. Своё действие без графа легло бы в словарь всех
+  // владельцев сразу, а сид с графом — одному; писатель и строка обязаны сходиться. Дверь `action_set`
+  // проставляет граф владельца сама (`setOwnAction`), здесь — защёлка на любой будущий писатель.
+  if (scope.systemSeed !== (decl.graphId === null)) {
+    bad(
+      'ACTION_NAMESPACE',
+      decl.key,
+      scope.systemSeed
+        ? `системное действие «${decl.key}» не может принадлежать графу ${decl.graphId}`
+        : `своё действие «${decl.key}» без графа-владельца читалось бы системным`,
+      { graphId: decl.graphId },
+    );
+  }
   const taken = [...scope.reg.actions.values()].find((a) => a.key === decl.key && a.id !== decl.id);
   if (taken !== undefined) {
     bad('ACTION_KEY_TAKEN', decl.key, `ключ «${decl.key}» уже занят действием ${taken.id}`, {
@@ -162,7 +177,8 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
     });
   }
   // Словарь `reason` тулов действий (задача 10, Р-К-40): `ACTION_TARGET_SYSTEM` — `action_set`/`action_remove` адресуют
-  // системную строку (по образцу `RULE_TARGET_SYSTEM_ROLE`); «своего действия нет» — `NOT_FOUND`. Здесь не бросается.
+  // системную строку (по образцу `RULE_TARGET_SYSTEM_ROLE`); «своего действия нет» — `NOT_FOUND`. Здесь не бросается:
+  // адрес системной строки знает дверь (`setOwnAction`, `prepareActionRemove`), а не валидатор декларации.
 
   // (5) Шаги: только графовые тулы с inverse (Р-10); действие действие не зовёт.
   for (const [index, step] of decl.steps.entries()) {

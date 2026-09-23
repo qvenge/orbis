@@ -68,15 +68,18 @@ import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf, setModuleDisabled } from '../registry/modules';
 import {
+  type ActionRow,
   type AspectRow,
   type CreateAspectInput,
   type CreatePropertyInput,
   createAspect,
   createProperty,
+  deprecateOwnAction,
   lockOwnerRegistry,
   type MergeInverse,
   mergeProperty,
   type PropertyRow,
+  readActionRow,
   readAspectDelta,
   readContractDelta,
   readOwnAspect,
@@ -93,8 +96,10 @@ import {
   setAspectDelta,
   setAspectImplements,
   setContractDelta,
+  setOwnAction,
   setOwnSubscription,
   setSubscriptionDelta,
+  systemActionAt,
   undoMerge,
   updateProperty,
 } from '../registry/ops';
@@ -115,6 +120,8 @@ import {
   spentContributionOf,
 } from '../subscriptions/budget';
 import {
+  actionRemoveInput,
+  actionSetInput,
   aspectCreateInput,
   aspectDeltaRemoveInput,
   aspectDeltaSetInput,
@@ -280,6 +287,8 @@ export type WireRegistryResult =
   // §Б1-1): та же форма ответа, что у свойства и аспекта, и по той же причине.
   | { subscription: string }
   | { contract: string }
+  // Своё действие (§Б6-1, задача 10 Б-2) — адрес строки `action_definitions`, тем же доводом.
+  | { action: string }
   // Переключение модуля (§Б8-1 №28): ни строка реестра, ни запись графа — состояние
   // ВЛАДЕЛЬЦА. Форма несёт обе половины входа, потому что ответ ручки читает UI.
   | { module: string; enabled: boolean };
@@ -981,6 +990,8 @@ async function prepareOp(
   if (tool === 'subscription_remove') return prepareSubscriptionRemove(ctx, input);
   if (tool === 'contract_sets_delta_set') return prepareContractSetsDeltaSet(ctx, input);
   if (tool === 'contract_sets_delta_remove') return prepareContractSetsDeltaRemove(ctx, input);
+  if (tool === 'action_set') return prepareActionSet(ctx, input);
+  if (tool === 'action_remove') return prepareActionRemove(ctx, input);
   if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
   if (tool === 'module_set') return prepareModuleSet(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
@@ -3876,6 +3887,108 @@ async function prepareContractSetsDeltaRemove(
       }
       return { result: { contract: input.contract } };
     },
+  };
+}
+
+/**
+ * Заведение и переписывание СВОЕЙ строки действия (§Б6-1, §С3). Ветки по адресу здесь нет, в отличие
+ * от `prepareSubscriptionSet`: дельта действия умеет ровно подпись (`actionDeltaSchema`, задача 6), а
+ * шаги встроенного правятся ФОРКОМ — своей строкой с другим key (§Б6-5). Адрес встроенного действия
+ * отвергает сама операция (`setOwnAction`, `ACTION_TARGET_SYSTEM`).
+ */
+async function prepareActionSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(actionSetInput, rawInput, 'action_set');
+  const journal = registryPlan(
+    'action_set',
+    'action_set',
+    `Настройка действия «${effectiveLabel(input.label as Record<string, string>, OWNER_LOCALE)}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const graphId = applyCtx.req.identity.graph;
+      const before = await readActionRow(applyCtx.tx, graphId, input.key);
+      await setOwnAction(applyCtx.tx, graphId, input);
+      journal.operations.push({ op: 'action_set', payload: { ...input } });
+      if (before === undefined) {
+        // Строки не было — обратное к заведению это СНЯТИЕ, а не снос (§А10-3, решение 1).
+        journal.inverse.push({ op: 'action_remove', payload: { action: input.key } });
+      } else if (before.status === 'active') {
+        journal.inverse.push({ op: 'action_set', payload: actionDeclOf(before) });
+      } else {
+        // ПЕРЕЗАВЕДЕНИЕ СНЯТОГО: `action_set` возвращает строку в работу (`status: 'active'`), и
+        // обратное к нему — ДВЕ операции: прежняя декларация, затем снова «Устарело». Одной
+        // `action_set` откат оставил бы действие живым — владелец отменил бы правку, а снятое
+        // действие вернулось бы в предложения. Записываются они в порядке, ОБРАТНОМ применению:
+        // журнал разворачивает inverse каждого плана (`aggregateInverse`), и undo применит сперва
+        // прежнюю декларацию, затем снятие.
+        journal.inverse.push(
+          { op: 'action_remove', payload: { action: input.key } },
+          { op: 'action_set', payload: actionDeclOf(before) },
+        );
+      }
+      return { result: { action: input.key } };
+    },
+  };
+}
+
+/** Снятие = «Устарело» (§Б6-7): строка остаётся, обратное — та же декларация со статусом active. */
+async function prepareActionRemove(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(actionRemoveInput, rawInput, 'action_remove');
+  const journal = registryPlan(
+    'action_removed',
+    'action_remove',
+    `Действие «${input.action}» снято`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const graphId = applyCtx.req.identity.graph;
+      const before = await readActionRow(applyCtx.tx, graphId, input.action);
+      if (before === undefined) {
+        // ДВА РАЗНЫХ ОТКАЗА, как велит словарь Р-К-40: адрес СИСТЕМНОЙ строки — `VALIDATION`
+        // `ACTION_TARGET_SYSTEM` (по мерке `RULE_TARGET_SYSTEM_ROLE`: снятие чужой строки невыразимо,
+        // а молчаливый успех соврал бы владельцу об исполнении); адрес, которого нет вовсе, —
+        // `NOT_FOUND`. Слив их в один, владелец не узнал бы, опечатался он или просит невозможного.
+        const system = await systemActionAt(applyCtx.tx, input.action);
+        if (system !== undefined) {
+          throw new ExecError(
+            'VALIDATION',
+            `действие «${input.action}» встроенное — снять можно только своё (§Б6-7)`,
+            { reason: 'ACTION_TARGET_SYSTEM', action: system },
+          );
+        }
+        throw new ExecError('NOT_FOUND', `своего действия ${input.action} нет в реестре`, {
+          action: input.action,
+        });
+      }
+      await deprecateOwnAction(applyCtx.tx, graphId, before.id);
+      journal.operations.push({ op: 'action_remove', payload: { ...input } });
+      // Повторное снятие уже снятого — успех с пустым inverse (образец `prepareSubscriptionRemove`).
+      if (before.status === 'active') {
+        journal.inverse.push({ op: 'action_set', payload: actionDeclOf(before) });
+      }
+      return { result: { action: before.id } };
+    },
+  };
+}
+
+/**
+ * Строка → конверт `action_set`: служебные поля строки в конверт не входят (решение 1). Имена полей —
+ * имена КОНВЕРТА (`offered_by`, `batch_cap`), а не строки: inverse исполняется тем же `actionSetInput`.
+ */
+function actionDeclOf(row: ActionRow): Record<string, unknown> {
+  return {
+    key: row.key,
+    label: row.label,
+    description: row.description,
+    params: row.params,
+    precondition: row.precondition,
+    over: row.over,
+    steps: row.steps,
+    sensitivity: row.sensitivity,
+    offered_by: row.offeredBy,
+    batch_cap: row.batchCap,
   };
 }
 

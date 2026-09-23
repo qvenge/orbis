@@ -766,6 +766,53 @@ describe('эскалация повторных исправлений кате�
     expect((cards[0] as { ruleText: string }).ruleText).toBe('пятерочка → Развлечения');
   });
 
+  test('22b. смена категории ДЕЙСТВИЕМ из чата запускает предложение правила памяти (K7, Ф-Б2-18 (в))', async () => {
+    // Прямой путь `run_action` исполняется своей веткой (`actions/run.ts`), мимо `runMutation`, у
+    // которого эскалация стоит после `execute`. Сидовые действия категорию не меняют, поэтому
+    // действие объявлено тулом `action_set` — той же дверью, что у владельца.
+    const { user, food, fun } = await freshOwner();
+    const declared = await execute(
+      db,
+      req(user, [
+        {
+          tool: 'action_set',
+          input: {
+            key: 'user/recategorize',
+            label: { ru: 'Перенести в категорию' },
+            description: { ru: 'Сменить категорию транзакции.' },
+            params: [{ name: 'to', type: { kind: 'text' } }],
+            steps: [
+              {
+                tool: 'entity_update',
+                input: {
+                  id: { $expr: { ctx: '$self' } },
+                  props: { 'orbis/finance_category': { $expr: { param: 'to' } } },
+                },
+              },
+            ],
+            sensitivity: ['touches_money'],
+          },
+        },
+      ]),
+    );
+    ok(declared);
+    const viaAction = async (txnId: string) => {
+      const r = await dispatchTool(chatCtx(user), 'run_action', {
+        action: 'user/recategorize',
+        self: txnId,
+        params: { to: fun },
+      });
+      if (r.status !== 'ok') throw new Error(`run_action: ${JSON.stringify(r)}`);
+    };
+    await viaAction(await createTxn(user, 'ПЯТЕРОЧКА 843', food));
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]); // одного мало
+
+    await viaAction(await createTxn(user, 'Пятёрочка', food));
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards.length).toBe(1);
+    expect((cards[0] as { ruleText: string }).ruleText).toBe('пятерочка → Развлечения');
+  });
+
   test('23. падение эскалации не ломает ответ тула (чат-путь, K7)', async () => {
     const { user, food, fun } = await freshOwner();
     await recategorizeViaChat(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);

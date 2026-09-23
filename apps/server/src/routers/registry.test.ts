@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
+import { OWN_ACTION_DECL } from '../../test/fixtures/action-seed';
 import {
   adminDb,
   appDb,
@@ -157,6 +158,51 @@ describe('registry.effective (§А9-2)', () => {
     // Встроенных 13 (пин выше); своя строка добавляется рядом, а не перекрывает.
     expect(reg.aspects.length).toBe(14);
     expect(reg.aspects.find((a) => a.id === 'user/diary')?.label.ru).toBe('Дневник');
+  });
+});
+
+describe('registry.setAction / removeAction — зеркала тулов действий (задача 10, §Б6-1)', () => {
+  test('ручка заводит действие и поднимает registry_version; снятие помечает строку, не удаляя', async () => {
+    const who = await freshGraph();
+    const caller = callerFor(who);
+    const before = (await caller.registry.effective()).version;
+    expect(await caller.registry.setAction(OWN_ACTION_DECL)).toEqual({
+      action: 'user/close-month',
+    });
+    const after = (await caller.registry.effective()).version;
+    // Половина владельца сдвинулась: кеш снимка перечитается (§А10-1).
+    expect(after).not.toBe(before);
+    expect(await caller.registry.removeAction({ action: 'user/close-month' })).toEqual({
+      action: 'user/close-month',
+    });
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = (await admin.execute(sql`SELECT status FROM action_definitions
+        WHERE graph_id = ${who}::uuid AND key = 'user/close-month'`)) as unknown as Array<{
+        status: string;
+      }>;
+      expect(rows.map((r) => r.status)).toEqual(['deprecated']);
+    } finally {
+      await adminClient.end();
+    }
+  });
+
+  test('не-владелец — отказ FORBIDDEN до исполнителя (ownerOnlyProcedure)', async () => {
+    const who = await freshGraph();
+    const agent = createCaller({
+      identity: personal(who),
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+    });
+    await expect(agent.registry.setAction(OWN_ACTION_DECL)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(agent.registry.removeAction({ action: 'user/close-month' })).rejects.toMatchObject(
+      {
+        code: 'FORBIDDEN',
+      },
+    );
   });
 });
 

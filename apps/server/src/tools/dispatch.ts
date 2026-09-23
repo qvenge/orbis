@@ -110,6 +110,7 @@ import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf } from '../registry/modules';
 
 import {
+  readActionRow,
   readAspectDelta,
   readContractDelta,
   readOwnAspect,
@@ -1463,6 +1464,14 @@ export function registryOperationSummary(
     const def = reg.contracts.get(address);
     return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
   };
+  // Действие адресуется id ИЛИ key (`action_remove` принимает оба): у своей строки они совпадают, у
+  // встроенной — нет, и фраза обязана узнать обе формы адреса.
+  const actionName = (address: unknown): string => {
+    if (typeof address !== 'string') return String(address);
+    const def =
+      reg.actions.get(address) ?? [...reg.actions.values()].find((a) => a.key === address);
+    return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
+  };
   // Поверхность у `subscription_remove` в конверте не приезжает — её знает сама подписка;
   // фолбэк на id держит фразу читаемой на подписке, которой в снимке ещё нет.
   const surfaceName = (payload: Record<string, unknown>): string => {
@@ -1510,11 +1519,16 @@ export function registryOperationSummary(
       return `Настройка наборов контракта «${contractName(payload.contract)}»`;
     case 'contract_sets_delta_remove':
       return `Сброс наборов контракта «${contractName(payload.contract)}»`;
+    case 'action_set':
+      // Строки может ещё не быть — подпись берётся из ВЫЗОВА, как у `aspect_create`; ключ на подхвате.
+      return `Настройка действия «${named(payload.label, payload.key)}»`;
+    case 'action_remove':
+      return `Снятие действия «${actionName(payload.action)}»`;
   }
   // Недостижимо: зовётся под `REGISTRY_TOOL_NAMES` (три места: сводка pending-единицы, батч-разбор и
   // `snapshotRegistryUnit` — имена вместо номеров строк, они съезжают), и switch
-  // перечисляет все двенадцать имён Б-1 — семь из них войдут в реестр тулов задачами 15/16, а
-  // фраза стоит раньше тула намеренно (без неё `pendingSummary` показал бы владельцу голое имя).
+  // перечисляет все четырнадцать имён — двенадцать Б-1 и два тула действий Б-2 (задача 10); фраза
+  // стоит раньше тула намеренно (без неё `pendingSummary` показал бы владельцу голое имя).
   return tool;
 }
 
@@ -2070,12 +2084,39 @@ export async function snapshotRegistryUnit(
         ],
       };
     }
+    case 'action_set':
+    case 'action_remove': {
+      const before = await readActionRow(tx, graphId, String(payload.key ?? payload.action));
+      return {
+        // Адрес действия — его key, освобождения ключа у него нет (в отличие от свойств, `freeKey`):
+        // нормализовать нечего, единица несёт конверт как есть.
+        input: payload,
+        summary,
+        rows:
+          tool === 'action_set'
+            ? [
+                {
+                  field: 'steps',
+                  ...(before !== undefined && { before: rowValue(before.steps) }),
+                  after: rowValue(payload.steps),
+                },
+              ]
+            : [
+                {
+                  field: 'status',
+                  ...(before !== undefined && { before: before.status }),
+                  after: 'deprecated',
+                },
+              ],
+      };
+    }
   }
-  // Сюда доходят все ДВЕНАДЦАТЬ тулов реестра — пять среза А (с Р-24-7 в том числе
+  // Сюда доходят все ЧЕТЫРНАДЦАТЬ тулов реестра — пять среза А (с Р-24-7 в том числе
   // `property_create`: `preview` своей строки от рутины откладывается, а не отклоняется), три
-  // тула аспектов и привязок (задача 15) и четыре тула подписок и наборов (задача 16): у
-  // каждого своя ветка выше. Fail-closed остаётся на случай ТРИНАДЦАТОГО: родовая строка
-  // показывает владельцу конверт целиком — хуже адресной, но не молчание.
+  // тула аспектов и привязок (задача 15), четыре тула подписок и наборов (задача 16) и два тула
+  // действий (задача 10 Б-2): у каждого своя ветка выше. Fail-closed остаётся на случай
+  // ПЯТНАДЦАТОГО: родовая строка показывает владельцу конверт целиком — хуже адресной, но не
+  // молчание.
   return { input: payload, summary, rows: [{ field: tool, after: rowValue(payload) }] };
 }
 

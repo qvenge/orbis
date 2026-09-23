@@ -17,6 +17,7 @@ import {
 } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
+import { OWN_ACTION_DECL as DECL } from '../../test/fixtures/action-seed';
 import {
   adminDb,
   appDb,
@@ -47,14 +48,17 @@ import { effectiveRegistry } from './cache';
 import type { SubscriptionRow } from './load';
 import {
   collectPropertyHolders,
+  deprecateOwnAction,
   execErrorOfImplementsIssue,
   lockOwnerRegistry,
   mergeProperty,
+  readActionRow,
   readContractDelta,
   readSubscriptionRow,
   removeContractDelta,
   removeOwnSubscription,
   setContractDelta,
+  setOwnAction,
   setOwnSubscription,
   setSubscriptionDelta,
 } from './ops';
@@ -1251,6 +1255,256 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
       before.ownerVersion + 1,
     );
     expect(await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda'))).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Своё действие владельца: action_set / action_remove (задача 10 Б-2, §Б6-1, §С3)
+// ---------------------------------------------------------------------------
+
+describe('реестр действий владельца (§Б6-1, §С3)', () => {
+  test('setOwnAction пишет строку, поднимает версию и проверяет декларацию ДО записи', async () => {
+    const owner = await freshGraph();
+    await seedOwnerGraph(db, personal(owner));
+    const before = await withIdentity(db, personal(owner), (tx) => readRegistryVersions(tx, owner));
+    const saved = await withIdentity(db, personal(owner), (tx) => setOwnAction(tx, owner, DECL));
+    expect([saved.id, saved.key, saved.status]).toEqual([
+      'user/close-month',
+      'user/close-month',
+      'active',
+    ]);
+    expect(
+      (await withIdentity(db, personal(owner), (tx) => readRegistryVersions(tx, owner)))
+        .ownerVersion,
+    ).toBeGreaterThan(before.ownerVersion);
+    // Смысл проверяется на ЗАПИСИ, а не на чтении (Р-И-7): шаг с чужим тулом до строки не доезжает.
+    await expect(
+      withIdentity(db, personal(owner), (tx) =>
+        setOwnAction(tx, owner, { ...DECL, steps: [{ tool: 'budget_status', input: {} }] }),
+      ),
+    ).rejects.toMatchObject({ details: { reason: 'ACTION_STEP_TOOL' } });
+  });
+
+  test('namespace: orbis/… своей строкой не занимается', async () => {
+    const owner = await freshGraph();
+    await seedOwnerGraph(db, personal(owner));
+    await expect(
+      withIdentity(db, personal(owner), (tx) =>
+        setOwnAction(tx, owner, { ...DECL, key: 'orbis/close-month' }),
+      ),
+    ).rejects.toMatchObject({ details: { reason: 'ACTION_NAMESPACE' } });
+  });
+
+  test('deprecateOwnAction помечает строку, но НЕ удаляет её (§А10-3)', async () => {
+    const owner = await freshGraph();
+    await seedOwnerGraph(db, personal(owner));
+    await withIdentity(db, personal(owner), (tx) => setOwnAction(tx, owner, DECL));
+    await withIdentity(db, personal(owner), (tx) =>
+      deprecateOwnAction(tx, owner, 'user/close-month'),
+    );
+    expect(
+      (
+        await withIdentity(db, personal(owner), (tx) =>
+          readActionRow(tx, owner, 'user/close-month'),
+        )
+      )?.status,
+    ).toBe('deprecated');
+  });
+
+  test('action_set идёт планом исполнителя; обратное к заведению — снятие, а не снос строки', async () => {
+    const owner = await freshGraph();
+    await seedOwnerGraph(db, personal(owner));
+    // Синк — боевой: без записи в журнал откатывать нечего (NOOP-синк исполнителя журнала не пишет).
+    const r = await execute(
+      db,
+      {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'action_set', input: DECL }],
+      },
+      { sink },
+    );
+    expect(r.ok).toBe(true);
+    await undoAction(db, {
+      identity: personal(owner),
+      actionId: (r as { actionId: string }).actionId,
+    });
+    const row = await withIdentity(db, personal(owner), (tx) =>
+      readActionRow(tx, owner, 'user/close-month'),
+    );
+    // §А10-3: строка остаётся, но уходит из предложений и из реестра тулов (решение 1).
+    expect(row?.status).toBe('deprecated');
+  });
+
+  test('строка владельца несёт ЕГО граф (m-3), а снимок читает её рядом с сидами', async () => {
+    const owner = await freshGraph();
+    await withIdentity(db, personal(owner), (tx) => setOwnAction(tx, owner, DECL));
+    const row = await withIdentity(db, personal(owner), (tx) =>
+      readActionRow(tx, owner, 'user/close-month'),
+    );
+    expect([row?.graphId, row?.module, row?.rank]).toEqual([owner, null, 1000]);
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    expect(reg.actions.get('user/close-month')?.graphId).toBe(owner);
+    // Чужой граф своей строки не видит: RLS + условие по графу.
+    const stranger = await freshGraph();
+    const foreign = await withIdentity(db, personal(stranger), (tx) =>
+      effectiveRegistry(tx, stranger),
+    );
+    expect(foreign.actions.has('user/close-month')).toBe(false);
+  });
+
+  test('встроенное действие: action_set и action_remove — ACTION_TARGET_SYSTEM; чужой адрес — NOT_FOUND (Р-К-40)', async () => {
+    const owner = await freshGraph();
+    const runAs = (tool: string, input: unknown) =>
+      execute(db, {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      });
+    const set = err(await runAs('action_set', { ...DECL, key: 'finance/plan-to-fact' }));
+    expect([set.code, (set.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'ACTION_TARGET_SYSTEM',
+    ]);
+    const remove = err(await runAs('action_remove', { action: 'planner/postpone_overdue' }));
+    expect([remove.code, (remove.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'ACTION_TARGET_SYSTEM',
+    ]);
+    // Системная строка не тронута: снятие чужого невыразимо, а не «тихо не случилось».
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    expect(reg.actions.get('planner/postpone_overdue')?.status).toBe('active');
+    expect(err(await runAs('action_remove', { action: 'user/nothing-here' })).code).toBe(
+      'NOT_FOUND',
+    );
+  });
+
+  test('литерал шага сверяется с типом свойства той же стадией 2, что у исполнителя (перенос задачи 6)', async () => {
+    const owner = await freshGraph();
+    const withProps = (props: Record<string, unknown>) => ({
+      ...DECL,
+      key: 'user/literal',
+      params: [],
+      steps: [{ tool: 'entity_update', input: { id: { $expr: { ctx: '$self' } }, props } }],
+    });
+    const bad = await withIdentity(db, personal(owner), (tx) =>
+      setOwnAction(tx, owner, withProps({ 'orbis/due_date': 'послезавтра' })),
+    ).then(
+      () => null,
+      (e: ExecError) => e,
+    );
+    expect([bad?.code, (bad?.details as { reason?: string })?.reason]).toEqual([
+      'VALIDATION',
+      'ACTION_VALUE_TYPE',
+    ]);
+    expect(
+      await withIdentity(db, personal(owner), (tx) => readActionRow(tx, owner, 'user/literal')),
+    ).toBeUndefined();
+    // Законный литерал того же свойства — проходит: сверка по ТИПУ, а не запрет литералов.
+    const good = await withIdentity(db, personal(owner), (tx) =>
+      setOwnAction(tx, owner, withProps({ 'orbis/due_date': '2026-10-01' })),
+    );
+    expect(good.key).toBe('user/literal');
+  });
+
+  test('гейт глубины ДО схемы: глубокое дерево — структурный отказ, а не RangeError (m-4 гейта задачи 6)', async () => {
+    const owner = await freshGraph();
+    const deep = (n: number, leaf: unknown): unknown => {
+      let node: unknown = leaf;
+      for (let i = 0; i < n; i += 1) node = { op: 'not', args: [node] };
+      return node;
+    };
+    const runAs = (input: unknown) =>
+      execute(db, {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'action_set', input }],
+      });
+    const reasonOf = async (input: unknown) => {
+      const e = err(await runAs(input));
+      return [e.code, (e.details as { reason?: string }).reason];
+    };
+    const FAR = 20_000;
+    expect(await reasonOf({ ...DECL, precondition: deep(FAR, { const: true }) })).toEqual([
+      'VALIDATION',
+      'EXPR_TOO_DEEP',
+    ]);
+    let over: unknown = { aspect: 'orbis/task' };
+    for (let i = 0; i < FAR; i += 1) over = { not: over };
+    expect(await reasonOf({ ...DECL, over: { filter: over }, batch_cap: 10 })).toEqual([
+      'VALIDATION',
+      'QUERY_TOO_DEEP',
+    ]);
+    let literal: unknown = 1;
+    for (let i = 0; i < FAR; i += 1) literal = { x: literal };
+    expect(
+      await reasonOf({
+        ...DECL,
+        params: [],
+        steps: [
+          {
+            tool: 'entity_update',
+            input: { id: { $expr: { ctx: '$self' } }, props: { 'orbis/progress_source': literal } },
+          },
+        ],
+      }),
+    ).toEqual(['VALIDATION', 'VALUE_TOO_DEEP']);
+    expect(
+      await reasonOf({
+        ...DECL,
+        steps: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: { $expr: { ctx: '$self' } },
+              props: { 'orbis/due_date': { $expr: deep(FAR, { param: 'on' }) } },
+            },
+          },
+        ],
+      }),
+    ).toEqual(['VALIDATION', 'EXPR_TOO_DEEP']);
+  });
+
+  test('перезаведение СНЯТОГО действия и откат: строка возвращается снятой и с прежними шагами', async () => {
+    const owner = await freshGraph();
+    const runAs = (tool: string, input: unknown) =>
+      execute(
+        db,
+        {
+          identity: personal(owner),
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [{ tool, input }],
+        },
+        { sink },
+      );
+    ok(await runAs('action_set', DECL));
+    ok(await runAs('action_remove', { action: 'user/close-month' }));
+    const revived = ok(
+      await runAs('action_set', {
+        ...DECL,
+        steps: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: { $expr: { ctx: '$self' } },
+              emoji: '📅',
+              props: { 'orbis/due_date': { $expr: { param: 'on' } } },
+            },
+          },
+        ],
+      }),
+    );
+    const row = () =>
+      withIdentity(db, personal(owner), (tx) => readActionRow(tx, owner, 'user/close-month'));
+    expect((await row())?.status).toBe('active');
+    ok(await undoAction(db, { identity: personal(owner), actionId: revived.actionId }));
+    const back = await row();
+    expect(back?.status).toBe('deprecated');
+    expect(back?.steps).toEqual(DECL.steps);
   });
 });
 

@@ -17,6 +17,7 @@ import {
   type PropertyDefinition,
 } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
+import { OWN_ACTION_DECL } from '../../test/fixtures/action-seed';
 import {
   accountOf,
   adminDb,
@@ -5723,6 +5724,70 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(await deltaRowsOf(owner)).toBe(0);
   });
 
+  /** Своя строка действия — по колонкам, мимо снимка: «реестр не тронут» доказывает база. */
+  async function actionRowOf(owner: GraphId, key: string): Promise<{ status: string } | undefined> {
+    const rows = (await withIdentity(db, personal(owner), (tx) =>
+      tx.execute(sql`SELECT status FROM action_definitions
+                      WHERE graph_id = ${owner}::uuid AND key = ${key}`),
+    )) as unknown as Array<{ status: string }>;
+    return rows[0];
+  }
+
+  test('action_set от рутины → отложенная единица с карточкой «Настройка действия», реестр не тронут (задача 10)', async () => {
+    // Ряд `behavior-delta` ПО ТУЛУ (§С2-1): у рутины это отложенная единица, а не запрет по объекту и
+    // не молчаливая запись — действие, пишущее деньги, не заведётся фоном без «да» владельца.
+    const owner = await freshGraph();
+    const { ctx, runId, routineId, threadId } = await gardener(owner, ['action_set']);
+    const r = await dispatchTool(ctx, 'action_set', OWN_ACTION_DECL);
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error(`ожидалась отложенная единица, пришло ${JSON.stringify(r)}`);
+    }
+    // «Было» нет: строки ещё нет — ветка снимка `action_set` читает её и честно не находит.
+    expect(r.card).toEqual({
+      kind: 'deferred_action_card',
+      pendingId: r.pendingId,
+      runId,
+      routineId,
+      summary: 'Настройка действия «Закрыть месяц»',
+      rows: [{ field: 'steps', after: expect.stringContaining('entity_update') }],
+    });
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+    expect(await actionRowOf(owner, 'user/close-month')).toBeUndefined();
+    // «Принять» доводит путь до строки — тем же исполнителем, под замком реестра.
+    const approved = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: r.pendingId,
+    });
+    expect(approved.ok).toBe(true);
+    expect(await actionRowOf(owner, 'user/close-month')).toEqual({ status: 'active' });
+    // Снятие того же от рутины — тоже единица, с «было» из строки.
+    const { ctx: ctx2 } = await gardener(owner, ['action_remove']);
+    const removal = await dispatchTool(ctx2, 'action_remove', { action: 'user/close-month' });
+    if (removal.status !== 'pending_confirmation' || removal.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица снятия');
+    }
+    expect(removal.card.summary).toBe('Снятие действия «Закрыть месяц»');
+    expect(removal.card.rows).toEqual([{ field: 'status', before: 'active', after: 'deprecated' }]);
+    expect(await actionRowOf(owner, 'user/close-month')).toEqual({ status: 'active' });
+  });
+
+  test('action_set из ЧАТА → карточка-запрос с фразой; от владельца тоже подтверждение (ряд 4a)', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    for (const actorKind of ['ai', 'owner'] as const) {
+      const r = await dispatchTool(
+        ctxFor({ identity: personal(owner), threadId, actorKind }),
+        'action_set',
+        OWN_ACTION_DECL,
+      );
+      if (r.status !== 'pending_confirmation' || r.card.kind !== 'confirmation_card') {
+        throw new Error(`ожидалась карточка-запрос (${actorKind})`);
+      }
+      expect(r.card.summary).toBe('Настройка действия «Закрыть месяц»');
+    }
+    expect(await actionRowOf(owner, 'user/close-month')).toBeUndefined();
+  });
+
   test('MCP-агент с полным грантом отвечает так же, как чат: правила §7.10 едины (§9.3)', async () => {
     // Классификатор по `source` не ветвится намеренно — внешний агент не должен получать
     // более широкие права, придя другим транспортом. Пин на обоих концах шкалы.
@@ -5944,6 +6009,10 @@ describe('сводка мутации реестра: правила, а не с
         setsDelta: { my_open: ['active'] },
       },
       contract_sets_delta_remove: { contract: 'orbis/completable' },
+      // Строки действия в снимке `REG` нет (его `actions` пуст): `action_set` берёт подпись из
+      // ВЫЗОВА, `action_remove` честно отдаёт адрес.
+      action_set: { key: 'user/close-month', label: { ru: 'Закрыть месяц' } },
+      action_remove: { action: 'user/close-month' },
     };
     expect(Object.keys(payloads).sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
 
@@ -5973,6 +6042,8 @@ describe('сводка мутации реестра: правила, а не с
       subscription_remove: 'Сброс подписки «Повестка»',
       contract_sets_delta_set: 'Настройка наборов контракта «Завершаемость»',
       contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
+      action_set: 'Настройка действия «Закрыть месяц»',
+      action_remove: 'Снятие действия «user/close-month»',
     });
 
     for (const [tool, phrase] of Object.entries(phrases)) {
@@ -6206,17 +6277,25 @@ describe('batch_execute: действие внутри и предел длин�
     });
   });
 
-  test('реестровое имя action_set в пачке — «неизвестный тул», а не RUN_ACTION_IN_BATCH (М-4)', async () => {
+  test('реестровое имя action_set в пачке — реестровая операция, а не RUN_ACTION_IN_BATCH (М-4)', async () => {
     // Имя тула действия — общим предикатом (`isActionToolName`), не префиксом: реестровые
-    // `action_set`/`action_remove` задачи 10 вызовом действия не являются.
+    // `action_set`/`action_remove` вызовом действия не являются. До задачи 10 имени в реестре не
+    // было, и пачка отвечала «неизвестный тул»; с задачей 10 оно известно — и разбирается СВОИМ
+    // конвертом (пустой вход — отказ формы), а не гейтом вложенных действий.
     const out = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
       operations: [{ tool: 'action_set', input: {} }],
     });
     expect(out).toMatchObject({ status: 'error', error: { code: 'VALIDATION' } });
     if (out.status !== 'error') return;
-    expect(out.error.message).toBe('batch_execute: неизвестный тул операции «action_set»');
+    expect(out.error.message).toBe('batch_execute: невалидный input операции «action_set»');
     expect((out.error.details as { reason?: string }).reason).toBeUndefined();
+    // Законный конверт в пачке — перенастройка реестра, то есть карточка (ряд 4a), а не отказ.
+    const valid = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [{ tool: 'action_set', input: OWN_ACTION_DECL }],
+    });
+    expect(valid.status).toBe('pending_confirmation');
   });
 
   test('пачка длиннее 100 отвергается ДО политики: BATCH_TOO_LONG (В-9)', async () => {

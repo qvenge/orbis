@@ -278,9 +278,18 @@ test('namespace ключа по писателю и занятый ключ — 
   expect(
     verdict({ ...builtin(1), key: 'planner/mine', id: 'planner/mine', module: 'finance' }),
   ).toEqual(ns);
+  // Своя строка несёт ГРАФ владельца (m-3 гейта задачи 6, перенос в задачу 10): без графа она
+  // читалась бы системной для всех владельцев сразу — отказ; с графом — законна.
   expect(
     own({ ...builtin(1), key: 'user/mine', id: 'user/mine', graphId: null, module: null }),
+  ).toEqual(ns);
+  expect(
+    own({ ...builtin(1), key: 'user/mine', id: 'user/mine', graphId: owner, module: null }),
   ).toBe('ok');
+  // …и обратная сторона той же связки: системный сид с графом — не системный.
+  expect(
+    verdict({ ...builtin(1), key: 'planner/mine', id: 'planner/mine', graphId: owner }),
+  ).toEqual(ns);
   expect(verdict({ ...builtin(1), id: 'planner/twin' })).toEqual({
     code: 'VALIDATION',
     reason: 'ACTION_KEY_TAKEN',

@@ -8,6 +8,7 @@
  * декларации: корпус проверяет валидатор на том, что реально уезжает в базу, а не на своей копии.
  */
 import { type ActionDefinition, actionToolName, BUILTIN_ACTION_DEFS } from '@orbis/shared';
+import type { ActionSetInput } from '../../src/tools/registry-tools';
 
 /** Сидовая декларация по ключу; её отсутствие — дефект фикстуры, а не ветка пробы. */
 function builtin(key: string): ActionDefinition {
@@ -296,3 +297,33 @@ export const ACTION_FIXTURES: readonly {
     verdict: { ok: false, code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' },
   },
 ];
+
+/**
+ * СВОЯ ДЕКЛАРАЦИЯ ВЛАДЕЛЬЦА — вход тула `action_set` (задача 10: §Б6-1, Р-И-34). Форма — ВХОД ТУЛА, а
+ * не строка реестра: `id`/`graphId`/`status`/`rank`/`module` проставляет операция (`setOwnAction`), и
+ * фикстура, несущая их, проверяла бы не ту дверь. Одиночное действие над `$self`: срок задачи
+ * переезжает на дату параметра — ни денег, ни доверенности, то есть позитив без побочных фактов.
+ */
+export const OWN_ACTION_DECL: ActionSetInput = {
+  key: 'user/close-month',
+  label: { ru: 'Закрыть месяц', en: 'Close month' },
+  description: {
+    ru: 'Перенести срок задачи на первое число следующего месяца.',
+    en: 'Move the task due date to the first day of the next month.',
+  },
+  params: [{ name: 'on', type: { kind: 'date' }, required: true }],
+  precondition: null,
+  over: null,
+  steps: [
+    {
+      tool: 'entity_update',
+      input: {
+        id: { $expr: { ctx: '$self' } },
+        props: { 'orbis/due_date': { $expr: { param: 'on' } } },
+      },
+    },
+  ],
+  sensitivity: [],
+  offered_by: [],
+  batch_cap: null,
+};
