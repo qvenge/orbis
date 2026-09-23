@@ -8,14 +8,16 @@
 // того же окна идемпотентен и по SELECT-предпроверке, и по audit-PK batch (§7.8),
 // а конфликт PK сущности у конкурентов резолвится перечитыванием (retry ниже).
 //
-// ЗДЕСЬ — КОД ДВИЖКА; горизонт, ретро-пол, триггеры, перечни наследования, свои свойства инстанса и
-// роль ребра — строка каталога `materialize` на `orbis/schedule` (`builtin-rules.ts`,
-// `materializeRuleOf`; доводы значений — в докблоке строки). Вторая копия числа 14
+// Движок порождения — код, а его параметры — строка каталога (с Б-2): горизонт, ретро-пол,
+// триггеры, перечни наследования, свои свойства инстанса и роль ребра — строка `materialize` на
+// `orbis/schedule` (`builtin-rules.ts`, `materializeRuleOf`; доводы значений — в докблоке строки).
+// Вторая копия числа 14
 // (`subscriptions/budget.ts`) — окно ВЕДОМОСТИ, а не горизонт ПОРОЖДЕНИЯ: совпадение значений
 // случайно, сливать их нельзя (Р-14). Строки нет или она выключена — `Error` сборки
 // (Р-И-17): порождать инстансы по числам, которых нет в реестре, движок не вправе.
 import {
   addDays,
+  BUILTIN_ASPECT_DEFS,
   expandRecurrence,
   materializeBatchId,
   type RecurrenceRule,
@@ -484,10 +486,33 @@ function shiftToInstance(
 }
 
 /**
- * СВОИ свойства инстанса (`own`): применяются к тем записям, чьи аспекты ОБЪЯВЛЯЮТ это свойство
- * (РЧ-13-2) — ровно то условие, которое прежде было выражено веткой «шаблон финансовый»
- * (`orbis/occurred_on`, `orbis/planned`, `orbis/recurring` объявляет `orbis/financial`). Носителя
- * называет реестр, поэтому второй карты «по аспектам» у параметра не нужно.
+ * Состав аспекта для `own` — СИСТЕМНЫЙ (рулинг Ф-Б2-22), а не эффективный: дельта показа `hide`
+ * («скрыть поле, данные остаются», §А3-5) выкидывает свойство из `reg.aspects…properties` снимка, и
+ * мерка по снимку отменила бы `planned` у инстанса финансового шаблона — «отсутствие = факт», будущий
+ * регулярный платёж сразу в spent. Носимость здесь — ОБЪЯВЛЕНИЕ аспекта, а не его показ.
+ *
+ * Системная строка встроенного аспекта — это и есть `BUILTIN_ASPECT_DEFS` (сид пишет её оттуда, дрейф
+ * `registry-drift` пиннит равенство базы коду), то есть второй копии списка не заводится. Снимок её не
+ * несёт (он уже сложен с дельтами), а сырое чтение строк (`loadRegistryRows`) — адрес кеша и операций
+ * реестра, и третий его читатель ради одного вопроса стоил бы четырёх SELECT'ов на материализацию.
+ * Аспект владельца (сида у него нет) меряется своей строкой снимка: аспекты инстанса — носитель и
+ * источники `inherit` системной строки, то есть встроенные, пока правила не пишет владелец (задача 16).
+ */
+const SYSTEM_ASPECT_PROPERTIES: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  BUILTIN_ASPECT_DEFS.map((a) => [a.id, new Set(a.properties.map((p) => p.propertyId))]),
+);
+function declaresProperty(reg: RegistrySnapshot, aspectId: string, propertyId: string): boolean {
+  const system = SYSTEM_ASPECT_PROPERTIES.get(aspectId);
+  if (system !== undefined) return system.has(propertyId);
+  return (reg.aspects.get(aspectId)?.properties ?? []).some((p) => p.propertyId === propertyId);
+}
+
+/**
+ * СВОИ свойства инстанса (`own`, `RULE_MATERIALIZE.own`): применяются к тем записям, чьи аспекты
+ * ОБЪЯВЛЯЮТ это свойство (РЧ-13-2) — ровно то условие, которое прежде было выражено веткой «шаблон
+ * финансовый» (`orbis/occurred_on`, `orbis/planned`, `orbis/recurring` объявляет `orbis/financial`).
+ * Носителя называет реестр, поэтому второй карты «по аспектам» у параметра не нужно; объявление
+ * читается по системному составу (`declaresProperty`).
  * `'instance_date'` — маркер «дата этого инстанса», остальные значения кладутся как есть.
  */
 function ownProps(
@@ -498,10 +523,7 @@ function ownProps(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [propertyId, spec] of Object.entries(rule.params.own)) {
-    const carried = aspects.some((a) =>
-      (reg.aspects.get(a)?.properties ?? []).some((p) => p.propertyId === propertyId),
-    );
-    if (!carried) continue;
+    if (!aspects.some((a) => declaresProperty(reg, a, propertyId))) continue;
     out[propertyId] = spec === 'instance_date' ? date : spec;
   }
   return out;

@@ -29,6 +29,7 @@ import {
 } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { setAspectDelta } from '../registry/ops';
 import { appRouter } from '../router';
 import type { MaterializeParams } from '../rules/carriers';
 import { dispatchTool } from '../tools/dispatch';
@@ -311,6 +312,41 @@ describe('materializeInstances (01 §5.4)', () => {
     ]);
   });
 
+  test('носитель — аспект СТРОКИ: строка на orbis/note делает шаблоном запись с note, и её аспект получает инстанс', async () => {
+    // Носитель читается дважды — SELECT шаблонов и первый аспект инстанса; литерал `orbis/schedule` на
+    // любом из двух мест дал бы здесь другой ответ.
+    const owner = await freshGraph();
+    const scheduleOnly = await createTemplate(owner, {
+      title: 'Только расписание',
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule'],
+    });
+    const withNote = await createTemplate(owner, {
+      title: 'Расписание с заметкой',
+      props: dailyScheduleProps('2026-07-01'),
+      aspects: ['orbis/schedule', 'orbis/note'],
+    });
+    const r = await withRule('orbis/schedule', [], () =>
+      withRule('orbis/note', [RULE_MATERIALIZE], () =>
+        materializeInstances({
+          db,
+          identity: personal(owner),
+          from: '2026-07-01',
+          to: '2026-07-01',
+          today: '2026-07-01',
+        }),
+      ),
+    );
+    expect(r.created).toBe(1);
+    const rows = await ownEntities(owner, [
+      recurringInstanceId(scheduleOnly, '2026-07-01'),
+      recurringInstanceId(withNote, '2026-07-01'),
+    ]);
+    expect(rows.map((row) => [row.id, [...row.aspects]])).toEqual([
+      [recurringInstanceId(withNote, '2026-07-01'), ['orbis/note', 'orbis/schedule']],
+    ]);
+  });
+
   test('нижняя граница окна клампится today−92д (fix round B5): запрос 2020..today не тащит годы истории', async () => {
     const owner = await freshGraph();
     // Месячный шаблон с 2020-01-01: без клампа окно 2020..today синхронно
@@ -345,6 +381,44 @@ describe('materializeInstances (01 §5.4)', () => {
       ['2020-01-01', '2026-03-01'].map((d) => recurringInstanceId(templateId, d)),
     );
     expect(older.length).toBe(0); // глубже ретро-пола — не материализуется
+  });
+
+  test('своё инстанса — по СИСТЕМНОМУ составу аспекта: скрытый показ `planned` не отменяет план (Ф-Б2-22)', async () => {
+    // Дельта показа `hide` — «скрыть поле, данные остаются» (§А3-5). Меряй `own` эффективным составом,
+    // и инстанс финансового шаблона родился бы без `planned` → «отсутствие = факт» → будущий регулярный
+    // платёж сразу в spent. Носимость для `own` — объявление аспекта, а не его показ.
+    const owner = await freshGraph();
+    await withIdentity(db, personal(owner), (tx) =>
+      setAspectDelta(tx, owner, 'orbis/financial', { properties: { hide: ['orbis/planned'] } }),
+    );
+    const templateId = await createTemplate(owner, {
+      title: 'Абонемент',
+      props: {
+        ...dailyScheduleProps('2026-07-01'),
+        'orbis/amount': '990.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': crypto.randomUUID(),
+        'orbis/recurring': true,
+      },
+      aspects: ['orbis/schedule', 'orbis/financial'],
+    });
+    const r = await materializeInstances({
+      db,
+      identity: personal(owner),
+      from: '2026-07-01',
+      to: '2026-07-01',
+      today: '2026-07-01',
+    });
+    expect(r.created).toBe(1);
+    const [row] = await ownEntities(owner, [recurringInstanceId(templateId, '2026-07-01')]);
+    if (row === undefined) throw new Error('инстанс не создан');
+    const props = row.props as Record<string, unknown>;
+    expect([props['orbis/planned'], props['orbis/recurring'], props['orbis/occurred_on']]).toEqual([
+      true,
+      true,
+      '2026-07-01',
+    ]);
   });
 
   test('financial-шаблон: инстансы с occurred_on=дата, planned=true, recurring=true (§3.3)', async () => {
@@ -841,6 +915,38 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     // count тем же окном видит те же строки (материализация уже идемпотентна)
     const { count } = await caller.entity.count({ query: 'orbis/start_at=next_7d' });
     expect(count).toBe(9);
+  });
+
+  test('окно запроса — по триггерам СТРОКИ правила: свойство, снятое с перечня, материализацию не будит', async () => {
+    // Пин читателя строки на пути запроса (`queryWithMaterialization`): триггеры из литерала на месте
+    // параметров материализовали бы и под урезанной строкой.
+    const owner = await freshGraph();
+    const caller = callerFor(owner);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
+      new Date(),
+    );
+    const templateId = await createTemplate(owner, {
+      title: 'Созвон без триггера',
+      props: dailyScheduleProps(today),
+      aspects: ['orbis/schedule'],
+    });
+    const base = ruleDefinitionSchema.parse(RULE_MATERIALIZE);
+    if (base.template !== 'materialize') throw new Error('RULE_MATERIALIZE — не materialize');
+    const narrowed = await withRule(
+      'orbis/schedule',
+      [
+        {
+          ...RULE_MATERIALIZE,
+          params: { ...base.params, trigger_properties: ['orbis/due_date', 'orbis/occurred_on'] },
+        },
+      ],
+      () => caller.entity.query({ query: 'orbis/start_at=next_7d' }),
+    );
+    expect(narrowed.map((e) => e.id)).toEqual([templateId]); // только шаблон
+    expect((await derivedFrom(owner, templateId)).length).toBe(0);
+    // Позитивный контроль: та же выдача под строкой сида материализует окно.
+    const full = await caller.entity.query({ query: 'orbis/start_at=next_7d' });
+    expect(full.length).toBe(9);
   });
 
   test('запрос без date-полей не материализует (ноль инстансов, ноль лишней работы)', async () => {

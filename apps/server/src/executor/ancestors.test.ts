@@ -10,7 +10,7 @@
 // действительно что-то пересчитал.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { newId, RULE_NEAREST_ANCESTOR } from '@orbis/shared';
+import { newId, RULE_NEAREST_ANCESTOR, RULE_NEAREST_ANCESTOR_ROW } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import {
   appDb,
@@ -19,6 +19,7 @@ import {
   personal,
   requireEnv,
   truncateAll,
+  withRule,
 } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -445,4 +446,31 @@ test('кап глубины и аспект-носитель — парамет�
     await recomputeProjectAncestors(tx, user, [p.id], moved);
   });
   expect(await ancestorsOf(user, a.id)).toEqual({ parent: undefined, root: undefined });
+});
+
+test('условие запуска пересчёта — носитель СТРОКИ: навеска аспекта-носителя пересчитывает поддерево', async () => {
+  // Пин исполнителя (`ancestorRootsOnProjectChange`), а не движка: строка перенесена на `orbis/note`, и
+  // «стал проектом» теперь значит «навесили note». Литерал `orbis/project` в условии запуска оставил бы
+  // ребёнка без предка — пересчёт не позвали бы вовсе.
+  const user = await freshGraph();
+  const parent = await createEntity(user, { title: 'Будущий носитель' });
+  const child = await createEntity(user, { title: 'Ребёнок' });
+  await withRule('orbis/project', [], () =>
+    withRule('orbis/note', [RULE_NEAREST_ANCESTOR_ROW], async () => {
+      await relate(user, parent.id, child.id, 'subitem');
+      expect(await ancestorsOf(user, child.id)).toEqual({ parent: undefined, root: undefined });
+      const sink = new InMemoryJournalSink();
+      ok(
+        await execute(
+          db,
+          req(user, 'entity_update', { id: parent.id, aspects: { attach: ['orbis/note'] } }),
+          { sink },
+        ),
+      );
+      expect(recomputeOps(sink)).toEqual([
+        { op: 'props_recomputed', payload: { rule: 'nearest_ancestor', recomputed: 1 } },
+      ]);
+    }),
+  );
+  expect(await ancestorsOf(user, child.id)).toEqual({ parent: parent.id, root: parent.id });
 });
