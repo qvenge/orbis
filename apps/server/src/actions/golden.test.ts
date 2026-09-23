@@ -16,10 +16,10 @@
 // ничего не защищает.
 //
 // ПОЧЕМУ ДВА ВЛАДЕЛЬЦА, А НЕ ОДИН. Сравниваются ДВА ПРОГОНА одной фикстуры, и оба пишут в граф;
-// на одном владельце второй прогон видел бы последствия первого. Мир поэтому сеется дважды, у
-// двух владельцев, id — `uuidv5` от владельца и слага (образец `test/surfaces.ts:76`), а снимок
-// стабилизируется: id мира → слаг, graphId и оба таймстампа → метка рода. Только после этого две
-// половины вообще сравнимы.
+// на одном владельце второй прогон видел бы последствия первого. Мир поэтому сеется на каждую
+// половину у своего владельца (код, декларация, вызов из чата, мир map-действия), id — `uuidv5`
+// от владельца и слага (образец `test/surfaces.ts:76`), а снимок стабилизируется: id мира → слаг,
+// graphId и оба таймстампа → метка рода. Только после этого половины вообще сравнимы.
 //
 // ПОЧЕМУ ВЛАДЕЛЬЦЫ — КОНСТАНТЫ, А НЕ `freshGraph()`. Порядок в снимке местами решает uuid:
 // входящие рёбра сортируются по `source_id`, цели map-действия — по `e.id` (`queryTargets`,
@@ -239,9 +239,10 @@ type Journal = { action: ActionRecord; card: ActionCard };
 type Half = keyof typeof OWNER;
 
 /**
- * Снимки, собранные `beforeAll` ПОСЛЕ сева и прогона всех половин: тела тестов читают собранное,
- * походов в БД в телах нет (образец `test/gate-c8-18.test.ts`). Заполняются ровно одним
- * `beforeAll` файла.
+ * Снимки, собранные `beforeAll` ПОСЛЕ сева и прогона всех половин: тела тестов СВЕРКИ читают
+ * собранное, походов в БД в них нет (образец `test/gate-c8-18.test.ts`). Заполняются ровно одним
+ * `beforeAll` файла. В БД из тела ходят только таблица пречеков (свои порченые миры) и откат —
+ * у них предмет проверки и есть поход.
  */
 const BEFORE: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [], tasks: [] };
 const AFTER: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [], tasks: [] };
@@ -350,7 +351,7 @@ function expectJournalWithinDiffs(mineRaw: Journal, names: ReadonlyMap<string, s
 
 /**
  * ПЯТЬ ТЕКСТОВ СХЛОПЫВАЮТСЯ В ОДИН — это законное расхождение, а не потеря. У кода пять отказов
- * `INVARIANT {invariant:'not_planned_purchase'}` с разными текстами (`plan-to-fact.ts:78-97`); у
+ * `INVARIANT {invariant:'not_planned_purchase'}` с разными текстами (тело `confirmPurchase` до Б2.10); у
  * действия предусловие ОДНО (§Б6-1 даёт декларации ровно одно `precondition`), и его ложность —
  * один `CONFLICT precondition_failed`. Конъюнкты при этом сохранены все пять и проверяются
  * поимённо — ниже, каждый своей порчей.
@@ -565,11 +566,13 @@ afterAll(async () => {
 
 describe('§С8-27 plan-to-fact: код и декларация дают один результат', () => {
   test('сегодняшний confirmPurchase равен эталону (регрессия)', () => {
+    // С Б2.10 тело `confirmPurchase` — конвейер действий, а эталон снят со СТАРОГО тела и не
+    // пересдавался: состояние обязано совпасть побайтно, строка журнала — ровно на четыре §Б6-4.
     const g = caseOf('plan-to-fact/legacy');
     const names = namesOf(OWNER.legacy);
     expect(canonicalJson(stabilize(BEFORE.legacy, names))).toBe(canonicalJson(g.before));
     expect(canonicalJson(stabilize(AFTER.legacy, names))).toBe(canonicalJson(g.after));
-    expect(canonicalJson(stabilize(journal('legacy'), names))).toBe(canonicalJson(g.journal));
+    expectJournalWithinDiffs(journal('legacy'), names);
   });
 
   test('run_action на той же фикстуре: состояние байт-в-байт, журнал — с точностью до четырёх расхождений §Б6-4', () => {
@@ -690,4 +693,16 @@ describe('§С8-27 postpone_overdue: map-действие по Q', () => {
     const undo = await undoRecordOf(OWNER.tasks, journal('tasks').action.id);
     expect(canonicalJson({ undo: stabilize(undo, names) })).toBe(canonicalJson(g.journal));
   });
+});
+
+test('состав эталона — пин литералом: случаев три, расхождений журнала четыре, конъюнктов пять', () => {
+  // Точный пин, а не «не меньше»: с порогом любую неудобную запись можно молча удалить, и
+  // красным это не станет (тот же довод, что у `validator-golden.test.ts` COVERAGE).
+  expect((GOLDEN as { cases: Array<{ name: string }> }).cases.map((c) => c.name).sort()).toEqual([
+    'plan-to-fact/legacy',
+    'postpone_overdue/apply',
+    'postpone_overdue/undo',
+  ]);
+  expect(Object.keys(EXPECTED_DIFFS)).toHaveLength(4);
+  expect(PRECONDITION_CONJUNCTS).toHaveLength(5);
 });

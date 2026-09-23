@@ -5,6 +5,10 @@
 // Undo восстанавливает план и прежнюю привязку целиком; отказ INVARIANT, если сущность
 // не ручная planned-покупка (уже факт / нет financial / шаблон recurring / инстанс с
 // derived_from). Идемпотентность повтора по batchId (§7.8).
+//
+// Тело переехало в декларацию `finance/plan-to-fact` (§Б6-1); здесь проверяется РУЧКА — вход,
+// идемпотентность и код отказа, который экран читает (Р-23). Эквивалентность коду доказывает
+// `src/actions/golden.test.ts` (§С8-27).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
 import { newId, recurringInstanceId } from '@orbis/shared';
@@ -294,7 +298,8 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       }),
     ).rejects.toMatchObject({
       code: 'UNPROCESSABLE_CONTENT',
-      message: expect.stringContaining('разархивируйте'),
+      // Пять поводов — один текст (предусловие действия одно, §Б6-1): повод назван в перечне.
+      message: expect.stringContaining('архивна'),
     });
     // не тронута: осталась архивным планом
     expect((await propsOf(planned.id))['orbis/planned']).toBe(true);
@@ -367,8 +372,9 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       }),
     ).rejects.toMatchObject({
       code: 'UNPROCESSABLE_CONTENT',
-      // ссылка на §2.8 (recurring-конвейер), а не §2.9 (фазы конверта) — опечатка ревью
-      message: expect.stringContaining('(§2.8)'),
+      // Пять поводов — один текст (предусловие действия одно, §Б6-1): прежняя отсылка к §2.8
+      // жила в собственном тексте этого пречека, общий текст называет повод перечнем.
+      message: expect.stringContaining('шаблон'),
     });
   });
 
@@ -400,6 +406,40 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       }),
     ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' });
     expect((await propsOf(purchase))['orbis/planned']).toBe(true);
+  });
+
+  test('пять поводов дают ОДИН текст: таблица §С8-27', async () => {
+    // У кода было пять текстов отказа, у декларации предусловие одно (§Б6-1) — и текст ручки
+    // один на все поводы. Два РАЗНЫХ повода (архивная и уже-факт) обязаны дать одно `message`:
+    // иначе ручка различала бы конъюнкты, которых конвейер не различает, то есть врала бы.
+    const user = await freshGraph();
+    const cat = newId();
+    const archived = await createPlanned(user, cat, PLANNED_ON);
+    await exec(user, 'entity_update', { id: archived, archived: true });
+    const fact = await exec(user, 'entity_create', {
+      title: 'Уже куплено',
+      tags: [],
+      props: {
+        'orbis/amount': '8000.00',
+        'orbis/currency': 'RUB',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': cat,
+        'orbis/occurred_on': ACTUAL_ON,
+        'orbis/planned': false,
+      },
+      aspects: ['orbis/financial'],
+    });
+    const refusal = (entityId: string) =>
+      ownerCaller(user)
+        .budget.confirmPurchase({ entityId, occurredOn: ACTUAL_ON, batchId: newId() })
+        .then(
+          () => ({ code: 'нет отказа', message: '' }),
+          (e: { code?: unknown; message?: unknown }) => ({ code: e.code, message: e.message }),
+        );
+    const byArchived = await refusal(archived);
+    const byFact = await refusal(fact.id);
+    expect(byArchived.code).toBe('UNPROCESSABLE_CONTENT');
+    expect(byFact).toEqual(byArchived);
   });
 
   test('мутация — поверхность владельца: агенту FORBIDDEN (§9.3)', async () => {
