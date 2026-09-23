@@ -915,7 +915,7 @@ describe('идентичность конверта — из параметро�
     ]);
   });
 
-  test('dropStaleCarryover следует за параметрами: сузь набор правила — смена валюты перенос не снимет', async () => {
+  test('dropStaleCarryover следует за параметрами строки, а не за её тумблером (рулинг Ф-Б2-21)', async () => {
     const user = await freshGraph();
     const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     const budget = reg.aspects.get('orbis/budget');
@@ -931,6 +931,13 @@ describe('идентичность конверта — из параметро�
       r.template === 'unique_among' ? { ...r, params: { properties: ['orbis/period_start'] } } : r,
     );
     const disabled = withRule((r) => ({ ...r, enabled: false }));
+    const missing: RegistrySnapshot = {
+      ...reg,
+      aspects: new Map(reg.aspects).set('orbis/budget', {
+        ...budget,
+        rules: (budget.rules ?? []).filter((r) => r.id !== 'duplicate_envelope'),
+      }),
+    };
     const prev = {
       aspects: ['orbis/budget'],
       props: {
@@ -951,7 +958,11 @@ describe('идентичность конверта — из параметро�
     };
     expect(afterCurrencyChange(reg)).toBeUndefined(); // валюта — в четвёрке правила: перенос снят
     expect(afterCurrencyChange(narrowed)).toBe('10.00'); // в наборе только период: идентичность та же
-    expect(afterCurrencyChange(disabled)).toBe('10.00'); // правило выключено — идентичности нет
+    // Выключенное правило (два конверта на комбинацию разрешены) идентичность не отменяет: перенос июля
+    // при смене валюты или периода всё равно снимается — иначе лимит завышен молча (03-budget §2.6).
+    expect(afterCurrencyChange(disabled)).toBeUndefined();
+    // Строки нет вовсе — ошибка сборки (несделанный пересев), а не молчаливое «идентичности нет».
+    expect(() => afterCurrencyChange(missing)).toThrow('duplicate_envelope');
   });
 });
 
