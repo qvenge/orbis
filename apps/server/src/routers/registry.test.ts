@@ -13,6 +13,7 @@ import {
   mintGraph,
   personal,
   requireEnv,
+  seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
 import { bumpOwnerRegistryVersion } from '../registry/version';
@@ -312,5 +313,37 @@ describe('registry.dependants: честные зависимости (§А3-5, �
     });
     const answer = await dep.registry.dependants({ property: propId });
     expect(answer.dependants).toEqual(['orbis/note']);
+  });
+});
+
+describe('registry.dependants: правило своей строки — держатель свойства (шестой род, задача 16)', () => {
+  test('свой аспект, чьё правило читает свойство, которого аспект не объявляет, в ответе есть', async () => {
+    // Рёбра аспекта (`aspect.properties`) это свойство не покрывают — держатель рода `rule` единственный
+    // источник факта; его имена складываются по id держателя вместе с `bind` того же аспекта.
+    const who = await freshGraph();
+    const caller = callerFor(who);
+    const read = (await caller.registry.createProperty({
+      key: 'user/read-by-rule',
+      label: { ru: 'Читается правилом' },
+      description: { ru: 'Правило аспекта его читает' },
+      type: { kind: 'boolean' },
+      status: 'active',
+    })) as { property: string };
+    await seedCustomAspect(who, {
+      key: 'user/rule-holder',
+      label: { ru: 'Держатель правила' },
+      properties: [{ key: 'holder-mark', type: { kind: 'boolean' } }],
+    });
+    await caller.registry.setRule({
+      target: { aspect: 'user/rule-holder' },
+      rule: {
+        id: 'holder_needs_due',
+        template: 'requires_when',
+        params: { property: 'orbis/due_date' },
+        when: { has: 'user/read-by-rule' },
+      },
+    });
+    const { dependants } = await caller.registry.dependants({ property: read.property });
+    expect(dependants).toContain('user/rule-holder');
   });
 });

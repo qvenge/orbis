@@ -3470,6 +3470,19 @@ const propertyMergeUndoInput = z
     binds: z
       .array(z.object({ id: z.string().min(1), implements: z.array(z.unknown()) }).strict())
       .optional(),
+    // И шестой род (задача 16 Б-2, Р-И-23) — прежние `rules` своих строк-носителей: откат присваивает
+    // список целиком и не толкует его (форма правил старше любой сегодняшней схемы).
+    rules: z
+      .array(
+        z
+          .object({
+            carrier: z.enum(['aspect', 'property', 'role']),
+            id: z.string().min(1),
+            rules: z.unknown(),
+          })
+          .strict(),
+      )
+      .optional(),
   })
   .strict();
 
@@ -4249,7 +4262,8 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
             input.progress.length +
             input.bodies.length +
             (input.deltas?.length ?? 0) +
-            (input.binds?.length ?? 0),
+            (input.binds?.length ?? 0) +
+            (input.rules?.length ?? 0),
         },
       };
     },

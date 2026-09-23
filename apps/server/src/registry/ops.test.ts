@@ -5041,3 +5041,148 @@ describe('rule_set / rule_remove через исполнитель: журнал
     ok(await task());
   });
 });
+
+describe('шестой род держателя: property_merge переписывает адреса в правилах (Р-И-23)', () => {
+  const regOf = (g: GraphId) => withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+  /** Свой аспект с двумя однотипными свойствами — источник и цель слияния. */
+  const world = async (key: string) => {
+    const g = await freshGraph();
+    await seedCustomAspect(g, {
+      key,
+      label: { ru: 'Носитель правил' },
+      properties: [
+        { key: `${key.split('/')[1]}-src`, type: { kind: 'date' } },
+        { key: `${key.split('/')[1]}-into`, type: { kind: 'date' } },
+      ],
+    });
+    return {
+      g,
+      source: `user/${key.split('/')[1]}-src`,
+      into: `user/${key.split('/')[1]}-into`,
+    };
+  };
+
+  test('слияние свойств переписывает адреса в правилах, откат возвращает прежние', async () => {
+    const OWN = 'user/merge-rules';
+    const { g, source, into } = await world(OWN);
+    await withIdentity(db, personal(g), (tx) =>
+      setOwnRule(
+        tx,
+        g,
+        { kind: 'aspect', id: OWN },
+        {
+          id: 'needs_source',
+          template: 'requires_when',
+          params: { property: source },
+          when: { op: 'not', args: [{ has: source }] },
+          scope: { property: source },
+        },
+      ),
+    );
+    const holders = await withIdentity(db, personal(g), (tx) => collectPropertyHolders(tx, g));
+    expect(holders.filter((h) => h.kind === 'rule')).toEqual([
+      { kind: 'rule', id: OWN, properties: [source], carrier: 'aspect' },
+    ]);
+    const merged = ok(await run('property_merge', { source, into }, { identity: personal(g) }));
+    const after = (await regOf(g)).aspects.get(OWN)?.rules[0];
+    expect(after?.params).toEqual({ property: into });
+    expect(JSON.stringify(after?.when)).toContain(into);
+    expect(JSON.stringify(after?.when)).not.toContain(source);
+    // Область `{property}` — тоже адрес свойства: не переписанная, она смотрела бы на пустую строку.
+    expect(after?.scope).toEqual({ property: into });
+    expect((merged.results[0] as { rewrittenQueries: number }).rewrittenQueries).toBe(1);
+    // Откат — через журнал и строгую схему `property_merge_undo` (ключ `rules` обязан её пройти).
+    expect((await undoAction(db, { identity: personal(g), actionId: merged.actionId })).ok).toBe(
+      true,
+    );
+    const back = (await regOf(g)).aspects.get(OWN)?.rules[0];
+    expect(back?.params).toEqual({ property: source });
+    expect(back?.scope).toEqual({ property: source });
+  });
+
+  test('член $touched в assign_level — адрес свойства: держатель его видит, слияние переписывает (Ф-Б2-26)', async () => {
+    const OWN = 'user/merge-touched';
+    const { g, source, into } = await world(OWN);
+    await withIdentity(db, personal(g), (tx) =>
+      setOwnRule(
+        tx,
+        g,
+        { kind: 'aspect', id: OWN },
+        {
+          id: 'show_when_src_touched',
+          template: 'assign_level',
+          params: {},
+          level: 'show',
+          when: { op: 'in', args: [{ const: source }, { ctx: '$touched' }] },
+        },
+      ),
+    );
+    const holders = await withIdentity(db, personal(g), (tx) => collectPropertyHolders(tx, g));
+    expect(holders.find((h) => h.kind === 'rule')?.properties).toEqual([source]);
+    await withIdentity(db, personal(g), (tx) => mergeProperty(tx, g, { source, into }));
+    expect((await regOf(g)).aspects.get(OWN)?.rules[0]?.when).toEqual({
+      op: 'in',
+      args: [{ const: into }, { ctx: '$touched' }],
+    });
+  });
+
+  test('правило ДЕЛЬТЫ встроенного аспекта переписывается четвёртым родом — тем же UPDATE дельты', async () => {
+    const { g, source, into } = await world('user/merge-delta');
+    await withIdentity(db, personal(g), (tx) =>
+      setRuleDelta(
+        tx,
+        g,
+        { kind: 'aspect', id: 'orbis/task' },
+        {
+          id: 'task_needs_src',
+          template: 'requires_when',
+          params: { property: 'orbis/due_date' },
+          when: { has: source },
+        },
+      ),
+    );
+    const holders = await withIdentity(db, personal(g), (tx) => collectPropertyHolders(tx, g));
+    expect(holders.find((h) => h.kind === 'delta')?.properties).toContain(source);
+    const merged = ok(await run('property_merge', { source, into }, { identity: personal(g) }));
+    const ruleOf = async () =>
+      (await regOf(g)).aspects.get('orbis/task')?.rules.find((r) => r.id === 'task_needs_src');
+    expect((await ruleOf())?.when).toEqual({ has: into });
+    expect((await undoAction(db, { identity: personal(g), actionId: merged.actionId })).ok).toBe(
+      true,
+    );
+    expect((await ruleOf())?.when).toEqual({ has: source });
+  });
+
+  test('слияние, сводящее два умолчания в одного писателя, — отказ REGISTRY_CONFLICT, ничего не применено', async () => {
+    const OWN = 'user/merge-clash';
+    const { g, source, into } = await world(OWN);
+    for (const [id, property] of [
+      ['default_src', source],
+      ['default_into', into],
+    ] as const) {
+      await withIdentity(db, personal(g), (tx) =>
+        setOwnRule(
+          tx,
+          g,
+          { kind: 'aspect', id: OWN },
+          {
+            id,
+            template: 'default',
+            params: { property, value: { const: '2026-12-31' } },
+          },
+        ),
+      );
+    }
+    const refused = err(await run('property_merge', { source, into }, { identity: personal(g) }));
+    expect([refused.code, (refused.details as { reason?: string }).reason]).toEqual([
+      'REGISTRY_CONFLICT',
+      'MERGE_RULES_CONFLICT',
+    ]);
+    // Откат транзакции целиком: правила стоят на прежних адресах.
+    expect(
+      (await regOf(g)).aspects
+        .get(OWN)
+        ?.rules.map((r) => (r.params as { property: string }).property),
+    ).toEqual([source, into]);
+  });
+});

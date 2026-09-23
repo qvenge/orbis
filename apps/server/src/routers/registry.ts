@@ -152,9 +152,15 @@ export const registryRouter = router({
         const holders = (await collectPropertyHolders(tx, ctx.identity.graph)).filter(
           (h) => h.kind !== 'delta',
         );
-        const graph = dependencyGraph(reg, {
-          queryRefs: new Map(holders.map((h) => [h.id, h.properties])),
-        });
+        // ИМЕНА СКЛАДЫВАЮТСЯ ПО id ДЕРЖАТЕЛЯ, а не перезаписываются: у своего аспекта один id на ДВА
+        // рода (`bind` и `rule`, задача 16), и карта «id → имена» из пар молча оставила бы последний.
+        // Правила ДЕЛЬТЫ встроенной строки уходят вместе с держателем-дельтой (довод выше): это
+        // названная граница ручки — «правило владельца поверх встроенного аспекта стоит на свойстве»
+        // она не называет, пока аспект сам свойство не объявляет (слиянию и пробе §А10-3 дельта видна).
+        const queryRefs = new Map<string, string[]>();
+        for (const h of holders)
+          queryRefs.set(h.id, [...(queryRefs.get(h.id) ?? []), ...h.properties]);
+        const graph = dependencyGraph(reg, { queryRefs });
         // Адрес резолвится тем же правилом, что на границе тулов: владелец спрашивает тем
         // именем, которым видел, — ключом в тексте запроса или id в дереве.
         const property =

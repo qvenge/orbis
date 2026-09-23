@@ -69,6 +69,7 @@ import {
   type ExprNode,
   type ExprNormalizeRegistry,
   normalizeExpr,
+  propertyNamesInExpr,
   touchedAddressOf,
 } from '@orbis/shared/expr';
 import {
@@ -120,7 +121,7 @@ import {
   type RegistrySnapshot,
   type SubscriptionRow,
 } from './load';
-import { assertRule, rulesOf } from './rules';
+import { assertRule, ruleConflictsOf, rulesOf } from './rules';
 // Стадия 2 исполнителя — та же функция на двери `action_set` (литералы шагов, перенос задачи 6).
 import { validateEntityProps } from './validate-props';
 import { bumpOwnerRegistryVersion, readRegistryVersions } from './version';
@@ -848,8 +849,8 @@ export async function updateProperty(
  * Q-AST не содержит. Из-за этого слияние оставляло аспект стоять на поглощённой строке, а
  * физическое удаление §А10-3 роняло строку из-под живой ссылки.
  *
- * ПЯТЬ РОДОВ ИСКОМЫХ ДЕРЖАТЕЛЕЙ — четыре среза А и пятый среза Б-2 (полный ли это перечень — см. ниже
- * «держатели вне перечня»: нет, не полный):
+ * ШЕСТЬ РОДОВ ИСКОМЫХ ДЕРЖАТЕЛЕЙ — четыре среза А, пятый и шестой среза Б-2 (полный ли это перечень —
+ * см. ниже «держатели вне перечня»: нет, не полный):
  *  - `registry` — `scope` и `ref.target` СВОЕЙ строки реестра (дерево, адрес — id);
  *  - `progress_source` — значение свойства `orbis/progress_source` на записи (§А5-2;
  *    дерево, адрес — id);
@@ -874,7 +875,11 @@ export async function updateProperty(
  *  - `bind` — привязка СВОЕГО аспекта к контракту (§Б2-1): ЗНАЧЕНИЯ `implements[].bind` — id
  *    свойств (к id их приводит `normalizeBindAddresses`). `fixed` сюда не входит: там значение
  *    слота, а не адрес свойства. До среза Б-2 привязку не видел никто, и после слияния она
- *    указывала на поглощённое свойство (остаток Б-1 50 и `bind`-половина остатка 51).
+ *    указывала на поглощённое свойство (остаток Б-1 50 и `bind`-половина остатка 51);
+ *  - `rule` — правило каталога на СВОЕЙ строке-носителе (свойство, аспект, роль; §Б4-1, Р-И-23): адреса
+ *    параметров голыми строками, выражения деревом и область `scope.property` — перечень мест у
+ *    `mapRuleAddresses`. Правила ДЕЛЬТЫ встроенной строки (В-6) — не шестой род, а четвёртый: они
+ *    лежат в той же строке `registry_deltas` и переписываются тем же UPDATE (`rewriteDelta`).
  *
  * ДЕРЖАТЕЛИ ВНЕ ПЕРЕЧНЯ — их ТРИ, и у каждого своё «почему».
  *
@@ -903,7 +908,7 @@ export async function updateProperty(
  * хранящее идентификатор свойства (в колонке, в jsonb, в тексте) и переживающее операции
  * над реестром, — и оно не названо ни в перечне, ни среди держателей вне его. `bind` — пятый род
  * (срез Б-2, задача 1); правило каталога на строке владельца — шестой (задача 16, вместе с тулами
- * записи правил).
+ * записи правил `rule_set`/`rule_remove`).
  *
  * Граф зависимостей получает этот перечень через ручку `registry.dependants` (`routers/registry.ts`):
  * все держатели, кроме дельт (их зависимость уже сложена в снимок ребром `aspect`), уходят в
@@ -913,12 +918,28 @@ export async function updateProperty(
  * аспекта граф при этом видит — ребром `aspect` из снимка; не видит его только слияние.
  */
 export interface PropertyHolder {
-  kind: 'registry' | 'progress_source' | 'body' | 'delta' | 'bind';
-  /** id строки реестра, id сущности, id строки `registry_deltas` либо id своего аспекта (`bind`). */
+  kind: 'registry' | 'progress_source' | 'body' | 'delta' | 'bind' | 'rule';
+  /**
+   * id строки реестра, id сущности, id строки `registry_deltas`, id своего аспекта (`bind`) либо id
+   * своей строки-носителя правил (`rule`).
+   */
   id: string;
   /** id и key свойств, названные этим держателем. */
   properties: string[];
+  /**
+   * Только у рода `rule`: в КАКОЙ из трёх таблиц-носителей строка. Правила живут в свойствах, аспектах и
+   * ролях (§Б4-1), и один `id` без рода адресовал бы три таблицы сразу.
+   */
+  carrier?: 'aspect' | 'property' | 'role';
 }
+
+/** Таблица-носитель по роду цели: правила живут в трёх реестрах (§Б4-1), а запрос обязан быть один;
+ * её же обходит шестой род держателей (`collectPropertyHolders`). */
+const RULE_TABLE = {
+  aspect: sql`aspect_definitions`,
+  property: sql`property_definitions`,
+  role: sql`relation_role_definitions`,
+} as const;
 
 const PROGRESS_SOURCE = 'orbis/progress_source';
 
@@ -975,7 +996,11 @@ function rewriteQueryTextKeys(text: string, from: ReadonlySet<string>, to: strin
   return out + text.slice(cut);
 }
 
-/** Имена свойств, названные ДЕЛЬТОЙ аспекта: шесть полей, перечисленных у `PropertyHolder`. */
+/**
+ * Имена свойств, названные ДЕЛЬТОЙ: шесть полей аспекта, перечисленных у `PropertyHolder`, и — с Б-2 —
+ * правила дельты (`rules`, у аспекта и у свойства; В-6) тем же обходом, что шестой род держателя.
+ * `rulesDisabled` адресов свойств не несёт: там id правил.
+ */
 function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
   if (typeof delta !== 'object' || delta === null) return;
   const d = delta as AspectDelta;
@@ -985,6 +1010,7 @@ function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
   for (const id of Object.keys(d.properties?.rank ?? {})) out.add(id);
   for (const id of Object.keys(d.selectOptions ?? {})) out.add(id);
   for (const id of Object.keys(d.classMap ?? {})) out.add(id);
+  for (const rule of Array.isArray(d.rules) ? d.rules : []) propertyNamesInRule(rule, out);
 }
 
 /**
@@ -1057,6 +1083,24 @@ export async function collectPropertyHolders(tx: Tx, graphId: GraphId): Promise<
     }
     if (names.size > 0) out.push({ kind: 'bind', id: r.id as string, properties: [...names] });
   }
+
+  // ШЕСТОЙ РОД (§Б4-1, Р-И-23): правила каталога на СВОИХ строках трёх реестров-носителей. Встроенные
+  // строки владельцу не принадлежат (их правила правит сид, а правила владельца поверх них — дельта,
+  // четвёртый род выше), поэтому только `graph_id = владелец`.
+  for (const [carrier, table] of Object.entries(RULE_TABLE) as Array<
+    ['aspect' | 'property' | 'role', SQL]
+  >) {
+    const ruleRows = (await tx.execute(sql`
+      SELECT id, rules FROM ${table}
+      WHERE graph_id = ${graphId}::uuid AND rules <> '[]'::jsonb`)) as unknown as RawRow[];
+    for (const r of ruleRows) {
+      const names = new Set<string>();
+      for (const rule of (r.rules ?? []) as unknown[]) propertyNamesInRule(rule, names);
+      if (names.size > 0) {
+        out.push({ kind: 'rule', id: r.id as string, properties: [...names], carrier });
+      }
+    }
+  }
   return out;
 }
 
@@ -1120,8 +1164,23 @@ async function assertMergeLeftRegistryReadable(
   into: string,
 ): Promise<void> {
   try {
-    await currentRegistry(tx, graphId);
+    const reg = await currentRegistry(tx, graphId);
+    // ПРАВИЛА ПОСЛЕ ПЕРЕПИСЫВАНИЯ (шестой род, Р-И-23): слияние сводит два адреса в один, и правила,
+    // по отдельности законные (умолчание на источнике и умолчание на цели), становятся двумя писателями
+    // одного свойства — `applyDeltas` этого не видит, а движок исполнял бы их в порядке обхода. Круг
+    // «свойство → правило → свойство» тем же способом спрашивает граф (`REGISTRY_CYCLE` уходит в catch).
+    const clash = ruleConflictsOf(rulesOf(reg).map((r) => r.rule))[0];
+    if (clash !== undefined) {
+      throw new ExecError(
+        'REGISTRY_CONFLICT',
+        `слияние ${source} → ${into} свело правила «${clash.a}» и «${clash.b}» на одно свойство ` +
+          `(${clash.property}) — разберите правила до слияния`,
+        { reason: 'MERGE_RULES_CONFLICT', source, into, rules: [clash.a, clash.b] },
+      );
+    }
+    assertAcyclicGraph(dependencyGraph(reg, { queryRefs: new Map() }));
   } catch (e) {
+    if (e instanceof ExecError && e.code === 'REGISTRY_CONFLICT') throw e;
     if (e instanceof ExecError) {
       throw new ExecError(
         'REGISTRY_CONFLICT',
@@ -1185,6 +1244,9 @@ function rewriteDelta(delta: unknown, from: ReadonlySet<string>, to: string): un
     ...(nextProperties !== undefined && { properties: nextProperties }),
     ...(d.selectOptions !== undefined && { selectOptions: renameKeys(d.selectOptions) }),
     ...(d.classMap !== undefined && { classMap: renameKeys(d.classMap) }),
+    // Правила дельты — тем же UPDATE, что остальная дельта: второго писателя одной строки не заводится,
+    // и прежнее значение уже лежит в `MergeInverse.deltas` целиком.
+    ...(Array.isArray(d.rules) && { rules: d.rules.map((r) => rewriteRuleAddresses(r, from, to)) }),
   };
 }
 
@@ -1248,6 +1310,12 @@ export interface MergeInverse {
    * что `mirrors`: журнал append-only, и слияния, записанные до пятого рода держателей, ключа не несут.
    */
   binds?: Array<{ id: string; implements: AspectImplements[] }>;
+  /**
+   * Свои строки-носители правил (шестой род, Р-И-23), чьи правила слияние переписало: прежний список
+   * `rules` ЦЕЛИКОМ — откат присваивает абсолютное значение. Поле НЕОБЯЗАТЕЛЬНОЕ по доводу `mirrors`:
+   * журнал append-only, и слияния, записанные до шестого рода, ключа не несут.
+   */
+  rules?: Array<{ carrier: 'aspect' | 'property' | 'role'; id: string; rules: unknown }>;
 }
 
 export interface MergeResult {
@@ -1572,6 +1640,7 @@ export async function mergeProperty(
   const bodies: MergeInverse['bodies'] = [];
   const deltas: MergeInverse['deltas'] = [];
   const binds: NonNullable<MergeInverse['binds']> = [];
+  const ruleRows: NonNullable<MergeInverse['rules']> = [];
 
   for (const holder of holders) {
     if (holder.kind === 'registry') {
@@ -1618,6 +1687,23 @@ export async function mergeProperty(
           rewriteDelta(row.delta, names, astTarget),
         )}::jsonb
          WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}::uuid`);
+      continue;
+    }
+    if (holder.kind === 'rule') {
+      // Шестой род (Р-И-23): строка-носитель своих правил. Цель — `astTarget` (id): правило хранит
+      // канон, движок ищет свойство по id (докблок `rewriteRuleAddresses`).
+      const carrier = holder.carrier ?? 'aspect';
+      const rows = (await tx.execute(sql`
+        SELECT rules FROM ${RULE_TABLE[carrier]}
+         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id} FOR UPDATE`)) as unknown as RawRow[];
+      const row = rows[0];
+      if (row === undefined) continue;
+      const before = (row.rules ?? []) as RuleDefinition[];
+      ruleRows.push({ carrier, id: holder.id, rules: before });
+      const next = before.map((r) => rewriteRuleAddresses(r, names, astTarget));
+      await tx.execute(sql`
+        UPDATE ${RULE_TABLE[carrier]} SET rules = ${JSON.stringify(next)}::jsonb
+         WHERE graph_id = ${graphId}::uuid AND id = ${holder.id}`);
       continue;
     }
     if (holder.kind === 'bind') {
@@ -1734,7 +1820,12 @@ export async function mergeProperty(
   return {
     rewrittenEntities: values.length,
     rewrittenQueries:
-      registry.length + progress.length + bodies.length + deltas.length + binds.length,
+      registry.length +
+      progress.length +
+      bodies.length +
+      deltas.length +
+      binds.length +
+      ruleRows.length,
     inverse: {
       source: source.id,
       into: into.id,
@@ -1747,6 +1838,7 @@ export async function mergeProperty(
       deltas,
       mirrors,
       binds,
+      rules: ruleRows,
     },
   };
 }
@@ -1888,6 +1980,14 @@ export async function undoMerge(tx: Tx, graphId: GraphId, iv: MergeInverse): Pro
     await tx.execute(sql`
       UPDATE aspect_definitions SET implements = ${JSON.stringify(b.implements)}::jsonb
        WHERE graph_id = ${graphId}::uuid AND id = ${b.id}`);
+  }
+  // Правила своих строк-носителей — прежний список целиком (шестой род, `MergeInverse.rules`); ключ
+  // читается защитно, как у `binds`.
+  const ruleRowsBack = Array.isArray(iv.rules) ? iv.rules : [];
+  for (const r of ruleRowsBack) {
+    await tx.execute(sql`
+      UPDATE ${RULE_TABLE[r.carrier]} SET rules = ${JSON.stringify(r.rules ?? [])}::jsonb
+       WHERE graph_id = ${graphId}::uuid AND id = ${r.id}`);
   }
   // Зеркала (§А6-2) — обратная переподпись ровно по списку из inverse (см. `MergeInverse.mirrors`).
   const mirrorIds = Array.isArray(iv.mirrors) ? iv.mirrors : [];
@@ -2464,13 +2564,6 @@ export async function removeOwnSubscription(tx: Tx, graphId: GraphId, id: string
 // Правила каталога владельца (§Б4-1, §С3 строка «Правило», В-6, Р-2, Р-2а)
 // ---------------------------------------------------------------------------
 
-/** Таблица-носитель по роду цели: правила живут в трёх реестрах (§Б4-1), а запрос обязан быть один. */
-const RULE_TABLE = {
-  aspect: sql`aspect_definitions`,
-  property: sql`property_definitions`,
-  role: sql`relation_role_definitions`,
-} as const;
-
 /**
  * Правила СВОЕЙ строки и её id; `null` — своей строки по адресу нет, значит цель встроенная. Адрес —
  * id ИЛИ key: у своего свойства это разные строки (Р3), и перекрыть одно другим у владельца нечем
@@ -2616,6 +2709,22 @@ function mapRuleAddresses(
     ...(raw.scope !== undefined && { scope }),
     params: p,
   } as unknown as RuleDefinition;
+}
+
+/** Имена свойств, названные ПРАВИЛОМ (шестой род держателя и адреса правил в дельте) — см. обход выше. */
+function propertyNamesInRule(rule: unknown, out: Set<string>): void {
+  if (typeof rule !== 'object' || rule === null) return;
+  mapRuleAddresses(
+    rule as RuleDefinition,
+    (a) => {
+      out.add(a);
+      return a;
+    },
+    (e) => {
+      for (const name of propertyNamesInExpr(e)) out.add(name);
+      return e;
+    },
+  );
 }
 
 /**
