@@ -4329,3 +4329,138 @@ describe('execErrorOfImplementsIssue: код замечания не теряе�
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Задача 14а, фикс-раунд 1: исключительность делегируемости у писателей дельт и привязок
+// ---------------------------------------------------------------------------
+
+describe('exclusive_classes у писателей: дельта и привязка не кладут второй вариант в класс (Р-И-38)', () => {
+  /** Одна операция реестра владельцем графа `g` — путь tRPC-ручки и тула. */
+  const runIn = (g: GraphId, tool: string, input: unknown): Promise<ExecuteResult> =>
+    execute(
+      db,
+      { identity: personal(g), actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  const STAGE = {
+    kind: 'select',
+    options: ['a', 'b', 'c'].map((key, i) => ({ key, label: { ru: key }, rank: i + 1 })),
+  } as const;
+  /** Свой аспект, связанный с делегируемостью ЧАСТИЧНОЙ картой (законно, РЧ-14а-1): занят один `done`. */
+  async function seedDelegableCarrier(g: GraphId): Promise<void> {
+    await seedCustomAspect(g, {
+      key: 'user/deleg',
+      label: { ru: 'Поручение' },
+      properties: [{ key: 'stage', type: STAGE }],
+      implements: [
+        {
+          contract: 'orbis/delegable',
+          bind: { status: 'user/stage' },
+          value_map: [{ slot: 'status', variant: 'a', class: 'done' }],
+          fixed: {},
+        },
+      ],
+    });
+  }
+  const toQueued = (variant: string) => ({
+    classMap: {
+      'user/stage': [{ contract: 'orbis/delegable', slot: 'status', variant, class: 'queued' }],
+    },
+  });
+
+  test('aspect_delta_set: встроенный cancelled в занятый класс — VALIDATION CLASS_NOT_EXCLUSIVE, дельты нет', async () => {
+    // Сценарий ревью (I-1): до фикса строка проходила, `applyDeltas` дописывал `cancelled → queued`,
+    // и захват, чекпойнт, итог, подметание и ответ на чекпойнт падали на неоднозначном классе.
+    const g = await freshGraph();
+    const e = err(
+      await runIn(g, 'aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: {
+          classMap: {
+            'orbis/task_status': [
+              {
+                contract: 'orbis/delegable',
+                slot: 'status',
+                variant: 'cancelled',
+                class: 'queued',
+              },
+            ],
+          },
+        },
+      }),
+    );
+    // Перевод кода в VALIDATION (`execErrorOfImplementsIssue`, РЧ-14а-5) — теперь пиннится вызовом.
+    expect(e.code).toBe('VALIDATION');
+    expect(e.details).toMatchObject({
+      reason: 'CLASS_NOT_EXCLUSIVE',
+      contract: 'orbis/delegable',
+      class: 'queued',
+      variants: ['cancelled', 'planned'],
+    });
+    const reg = await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+    const delegable = reg.aspects
+      .get('orbis/task')
+      ?.implements.find((b) => b.contract === 'orbis/delegable');
+    expect(delegable?.value_map.filter((m) => m.class === 'queued').map((m) => m.variant)).toEqual([
+      'planned',
+    ]);
+  });
+
+  test('две дельты РАЗНЫХ аспектов в один свободный класс — вторую ловит проба итоговой карты', async () => {
+    // `checkClassMap` видит одну дельту против строк БЕЗ дельт: каждая строка по отдельности
+    // законна. Складываются они только в слитом снимке — там и стоит проверка писателя.
+    const g = await freshGraph();
+    await seedDelegableCarrier(g);
+    ok(await runIn(g, 'aspect_delta_set', { aspect: 'orbis/note', delta: toQueued('b') }));
+    const e = err(
+      await runIn(g, 'aspect_delta_set', { aspect: 'orbis/task', delta: toQueued('c') }),
+    );
+    expect(e.code).toBe('VALIDATION');
+    expect(e.details).toMatchObject({
+      reason: 'CLASS_NOT_EXCLUSIVE',
+      aspect: 'user/deleg',
+      propertyId: 'user/stage',
+      class: 'queued',
+      variants: ['b', 'c'],
+    });
+  });
+
+  test('aspect_implements_set поверх живой дельты: второй вариант класса — отказ, свободный класс — законно', async () => {
+    // Новая привязка сама по себе исключительна (`checkImplements` чист), но дельта владельца
+    // дописывает в неё своё отнесение (`applyDeltas` — во все привязки свойства к слоту).
+    const g = await freshGraph();
+    await seedDelegableCarrier(g);
+    await seedCustomAspect(g, {
+      key: 'user/deleg2',
+      label: { ru: 'Второй носитель' },
+      properties: [{ key: 'memo', type: { kind: 'text' } }],
+      carries: ['user/stage'],
+    });
+    ok(await runIn(g, 'aspect_delta_set', { aspect: 'orbis/note', delta: toQueued('b') }));
+    const binding = (variant: string, cls: string) => ({
+      aspect: 'user/deleg2',
+      implements: [
+        {
+          contract: 'orbis/delegable',
+          bind: { status: 'user/stage' },
+          value_map: [{ slot: 'status', variant, class: cls }],
+        },
+      ],
+    });
+    const e = err(await runIn(g, 'aspect_implements_set', binding('c', 'queued')));
+    expect(e.code).toBe('VALIDATION');
+    expect(e.details).toMatchObject({
+      reason: 'CLASS_NOT_EXCLUSIVE',
+      aspect: 'user/deleg2',
+      class: 'queued',
+      variants: ['b', 'c'],
+    });
+    // Позитивный контроль: свободный класс — привязка ложится, дельта дописывает своё рядом.
+    ok(await runIn(g, 'aspect_implements_set', binding('c', 'new')));
+    const reg = await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g));
+    expect(reg.aspects.get('user/deleg2')?.implements[0]?.value_map).toEqual([
+      { slot: 'status', variant: 'c', class: 'new' },
+      { slot: 'status', variant: 'b', class: 'queued' },
+    ]);
+  });
+});

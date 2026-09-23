@@ -37,6 +37,7 @@ import {
   attachToolName,
   checkClassMap,
   checkImplements,
+  exclusiveClassIssues,
   type GraphId,
   type ImplementsIssue,
   type LocalizedText,
@@ -1986,10 +1987,21 @@ export async function setAspectDelta(
   ];
   // Отказ `applyDeltas` — уже ExecError с точной причиной (DELTA_PROPERTY_PRESENT,
   // REQUIRED_NOT_RELAXABLE, …); перехватывать и переименовывать его нечем и незачем.
-  applyDeltas(
+  const applied = applyDeltas(
     { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
     probe,
   );
+  // ИСКЛЮЧИТЕЛЬНОСТЬ НА ИТОГОВОЙ КАРТЕ (Р-И-38, фикс-раунд 1 задачи 14а). `checkClassMap` выше
+  // видит эту дельту против строк БЕЗ дельт; отнесение ПРОШЛОЙ дельты другого аспекта в тот же
+  // класс он не видит — а `applyDeltas` сложит обе в `value_map` каждой привязки свойства к слоту,
+  // и запись классом (`variantOfClass`) станет неоднозначной. Проверяются только свойства ЭТОЙ
+  // карты: чужая испорченная строка (фикстура, прошлая версия кода) не должна делать неисполнимой
+  // правку соседней — довод `assertImplements`.
+  const touched = new Set(Object.keys(normalized.classMap ?? {}));
+  const exclusive = exclusiveClassIssues(applied).find((i) =>
+    touched.has(String(i.details.propertyId)),
+  );
+  if (exclusive !== undefined) throw execErrorOfImplementsIssue(exclusive, { aspect: aspectId });
 
   await tx.execute(sql`
     INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
@@ -2744,6 +2756,26 @@ function assertImplements(next: AspectRow, graphId: GraphId, reg: RegistrySnapsh
 }
 
 /**
+ * ИСКЛЮЧИТЕЛЬНОСТЬ НА ИТОГОВОЙ КАРТЕ после записи строки аспекта (Р-И-38, фикс-раунд 1 задачи 14а).
+ *
+ * `checkImplements` видит только карту самой строки, а живые дельты владельца дописывают в неё свои
+ * отнесения (`applyDeltas`, блок «КАРТА КЛАССОВ ⊕ ПРИВЯЗКИ» — во ВСЕ привязки свойства к слоту):
+ * старая дельта с `b → queued` поверх новой привязки с `c → queued` — два варианта одного класса,
+ * которых ни одна из двух проверок по отдельности не видит. Складывается ровно то, что сложит
+ * читатель: строки владельца с подставленной строкой плюс все его дельты. Проверяется только эта
+ * строка — довод `assertImplements`.
+ */
+async function assertExclusiveWithDeltas(tx: Tx, graphId: GraphId, row: AspectRow): Promise<void> {
+  if (row.implements.length === 0) return;
+  const rows = await loadRegistryRows(tx, graphId);
+  const aspects = new Map(rows.aspects);
+  aspects.set(row.id, aspectDefinitionOf(row, graphId));
+  const probe = await probeSnapshot(tx, graphId, { ...rows, aspects });
+  const issue = exclusiveClassIssues(probe).find((i) => i.details.aspect === row.id);
+  if (issue !== undefined) throw execErrorOfImplementsIssue(issue, { aspect: row.id });
+}
+
+/**
  * АДРЕСА СВОЙСТВ В `bind` — К id, тем же резолвом, что состав аспекта (`resolvePropertyRef`).
  *
  * Один тул не вправе принимать адрес двумя правилами. `properties[].propertyId` резолвился, а
@@ -2881,6 +2913,7 @@ export async function createAspect(
     createdAt: new Date().toISOString(),
   };
   assertImplements(row, graphId, reg);
+  await assertExclusiveWithDeltas(tx, graphId, row);
   await insertAspectRow(tx, graphId, row);
   await bumpOwnerRegistryVersion(tx, graphId);
   return { id: row.id };
@@ -2916,6 +2949,7 @@ export async function setAspectImplements(
   const reg = await currentRegistry(tx, graphId);
   const next = normalizeBindAddresses(bindings, reg);
   assertImplements({ ...row, implements: next }, graphId, reg);
+  await assertExclusiveWithDeltas(tx, graphId, { ...row, implements: next });
   await tx.execute(sql`
     UPDATE aspect_definitions SET implements = ${JSON.stringify(next)}::jsonb
      WHERE graph_id = ${graphId}::uuid AND id = ${row.id}`);
