@@ -1,9 +1,11 @@
 // apps/server/src/registry/invariants-golden.test.ts
 // ПРИЁМКА §С8-1, ВТОРАЯ ПОЛОВИНА: golden-корпус «сущность → вердикт» ДОМЕННЫХ ИНВАРИАНТОВ (§А7-2).
-// Реестровую половину (`validateEntityProps`) держит `validator-golden.test.ts`; здесь — два
-// инварианта, которые Б-2 переносит из кода в строки каталога правил: «не-шаблон `orbis/financial`
-// обязан нести `occurred_on`» (+ его пара про `recurring`) и «вход задачи в `done` ставит
-// `completed_at`, уход — снимает». Каждая запись корпуса прогоняется ЖИВЫМ исполнителем (`execute`) с
+// Реестровую половину (`validateEntityProps`) держит `validator-golden.test.ts`; здесь — инварианты,
+// которые Б-2 переносит из кода в строки каталога правил: «не-шаблон `orbis/financial` обязан нести
+// `occurred_on`» (+ его пара про `recurring`) и «вход задачи в `done` ставит `completed_at`, уход —
+// снимает» (задача 4), а с задачи 14 — остальные §А7-2: условие гранта назначения, субъект прогона,
+// форма правила памяти, умолчание валюты конверта и «чего ждём» (`waiting_for` только в ожидании).
+// Каждая запись корпуса прогоняется ЖИВЫМ исполнителем (`execute`) с
 // фиксированными часами, а вердикт СТАРОГО кода лежит рядом замороженным литералом `legacy*`.
 //
 // ПОЧЕМУ СТАРЫЙ ВЕРДИКТ ЗАМОРОЖЕН. Порядок §А7-2 — «тесты-близнецы и golden-корпус на старом и новом
@@ -19,8 +21,8 @@
 // ЗАПИСАННОЕ ЗНАЧЕНИЕ — ТОЖЕ ВЕРДИКТ (РЧ-4-2). Половина инвариантов — T-правило, и `ok` о нём не
 // говорит ничего: запись обязана нести ещё и то, что исполнитель дописал МИМО входа. `writes` —
 // `orbis/completed_at` (нормализован: равен штампу строки — `'$updatedAt'`, нет значения — `null`,
-// иначе литерал) плюс сам штамп строки под ключом `$updatedAt`. Часы фиксированы (`T0`), id не
-// пишутся.
+// иначе литерал) плюс сам штамп строки под ключом `$updatedAt` и свойства `watch` записи (`waiting_for`,
+// `currency` — задача 14). Часы фиксированы (`T0`), id не пишутся; гранты — метками `$grant`.
 //
 // КАК ПЕРЕСДАВАТЬ. `legacy*` не трогается НИКОГДА — он про мёртвый код. Меняется только живой
 // вердикт: посчитать прогоном, вписать и ОБЪЯСНИТЬ каждое расхождение со старым причиной из закрытого
@@ -41,6 +43,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
+import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
 
 requireEnv();
 const { db, client } = appDb();
@@ -95,6 +98,31 @@ interface GoldenRecord {
   rowWithout?: string[];
   /** Второй ход shape update — правка ЯДРА без свойств (`archived`/`title`), рулинг 3-4. */
   core?: { archived?: boolean; title?: string };
+  /**
+   * Нарушитель с ЛИШНИМ значением: после первого хода эти свойства кладутся строке прямой записью
+   * (админ-DSN) — пара к `rowWithout` для инвариантов вида «свойство запрещено» (хвост, заведённый до
+   * правила).
+   */
+  rowWith?: Record<string, unknown>;
+  /**
+   * Механизм обоих ходов записи. Прогон пишет глагол исполнителя (§А4-4): его свойства
+   * `system_writable` (§А2-5), и владельческий механизм получил бы `COMPUTED_WRITE` раньше инварианта.
+   */
+  mechanism?: 'verb';
+  /**
+   * Свойства, которые исполнитель дописывает или снимает МИМО входа, сверх общего `completed_at`
+   * (РЧ-4-2), — у ЭТОЙ записи: `waiting_for` (снятие уходом из ожидания), `currency` (умолчание
+   * конверта). Список на запись, а не общий: общий добавил бы ключ в замороженные `legacyWrites`
+   * прежних записей, а их трогать нельзя.
+   */
+  watch?: string[];
+  /**
+   * Код ПЕРВОГО нарушения стадии 2 (`details.violations[0].code`) — различает два `VALIDATION` с
+   * разными причинами (граница типа против условия формы, РЧ-14-2). Сверяется только у записей, где
+   * он снят старым кодом: прежние записи его не несут и не должны.
+   */
+  legacyViolation?: string;
+  violation?: string;
   /** Замороженный вердикт СТАРОГО кода (снят шагом 2, пересчитать нечем). */
   legacyVerdict: Verdict;
   legacyCode?: string;
@@ -114,6 +142,7 @@ interface Outcome {
   code?: string;
   invariant?: string;
   writes?: Record<string, string | null>;
+  violation?: string;
 }
 
 /**
@@ -164,9 +193,17 @@ const EXPECTED_DIFFS: Record<string, { records: number }> = {
  * `orbis/task` на двух путях (I-1) и ребро, созданное и снятое пачкой (I-2). `legacy*` новых записей
  * снят старым кодом (исходники `c1d40fe` и сид без правил) тем же прогоном, что воспроизвёл замороженные
  * `legacy*` первых восемнадцати побайтно.
+ *
+ * Двадцать восемь — задача 14 (остальные инварианты §А7-2): назначение (шесть — обе половины условия,
+ * два законных позитива, отозванный грант, нарушитель под посторонней правкой), субъект прогона
+ * (четыре), форма правила памяти (шесть — включая пробельный образец и снятый аспект памяти), умолчание
+ * валюты конверта (три) и «чего ждём» (девять — включая снятие и повторное навешивание `orbis/task`).
+ * `legacy*` сняты ЖИВЫМ старым кодом на базе задачи (`ce9f4d5`: `assertAssignment`, `assertRunSubject`,
+ * `ruleViolations`, `normalizeEnvelopeCurrency` и три копии `unset` ещё в дереве) ДО первой правки
+ * инвариантов — тем же прогоном, в котором прежние двадцать восемь записей совпали побайтно.
  */
-const CORPUS_SIZE = 28;
-const NEGATIVE_RECORDS = 13;
+const CORPUS_SIZE = 56;
+const NEGATIVE_RECORDS = 22;
 
 // `as unknown` — TS выводит из литерального JSON союз объектов с `field?: undefined`, несравнимый с
 // объявленной формой; форму и состав корпуса стережёт тест состава, а не компилятор.
@@ -207,9 +244,9 @@ function entityOf(r: ExecuteResult, what: string): WireEntity {
 }
 
 /** Литерал записанного значения: равен штампу строки — `'$updatedAt'`, нет — `null`. */
-function writesOf(e: WireEntity): Record<string, string | null> {
+function writesOf(e: WireEntity, watch: readonly string[] = []): Record<string, string | null> {
   const out: Record<string, string | null> = { $updatedAt: e.updatedAt };
-  for (const propertyId of WRITTEN_PAST_INPUT) {
+  for (const propertyId of [...WRITTEN_PAST_INPUT, ...watch]) {
     const value = e.props[propertyId];
     out[propertyId] =
       value === undefined ? null : value === e.updatedAt ? '$updatedAt' : String(value);
@@ -217,15 +254,40 @@ function writesOf(e: WireEntity): Record<string, string | null> {
   return out;
 }
 /** Исход хода; `at` — номер операции пачки, чью запись читать (у одиночного хода — 0). */
-function outcomeOf(r: ExecuteResult, at = 0): Outcome {
-  if (r.ok) return { verdict: 'ok', writes: writesOf(r.results[at] as WireEntity) };
+function outcomeOf(r: ExecuteResult, at = 0, watch: readonly string[] = []): Outcome {
+  if (r.ok) return { verdict: 'ok', writes: writesOf(r.results[at] as WireEntity, watch) };
   const details = (r.error.details ?? {}) as Record<string, unknown>;
   const invariant = typeof details.invariant === 'string' ? details.invariant : undefined;
+  const first = Array.isArray(details.violations)
+    ? (details.violations[0] as { code?: unknown } | undefined)
+    : undefined;
   return {
     verdict: 'reject',
     code: r.error.code,
     ...(invariant !== undefined && { invariant }),
+    ...(typeof first?.code === 'string' && { violation: first.code }),
   };
+}
+
+/**
+ * Живые гранты владельца корпуса: `orbis/grant` назначения обязан указывать на НЕОТОЗВАННЫЙ грант
+ * (`assertGrantAlive`, Р-К-17), и литерала uuid для него в корпусе быть не может. Записи несут метки
+ * `"$grant"` (живой) и `"$revokedGrant"` (отозванный) — их подставляет `resolved` перед ходом.
+ */
+const GRANTS = { live: '', revoked: '' };
+async function issueGrant(label: string): Promise<string> {
+  const token = await issuePatGrant(db, { identity: personal(owner), label });
+  const identity = await verifyBearer(db, token);
+  if (identity === null) throw new Error(`грант «${label}» не выдан`);
+  return identity.grantId;
+}
+function resolved<T>(value: T): T {
+  if (value === undefined) return value;
+  return JSON.parse(
+    JSON.stringify(value)
+      .replaceAll('"$grant"', JSON.stringify(GRANTS.live))
+      .replaceAll('"$revokedGrant"', JSON.stringify(GRANTS.revoked)),
+  ) as T;
 }
 
 async function template(name: string): Promise<string> {
@@ -257,17 +319,36 @@ async function stripRow(entityId: string, propertyIds: readonly string[]): Promi
   }
 }
 
+/** Строка с лишними свойствами — прямой записью (хвост, заведённый до правила). */
+async function stuffRow(entityId: string, props: Record<string, unknown>): Promise<void> {
+  const { db: adb, client: ac } = adminDb();
+  try {
+    await adb.execute(
+      sql`UPDATE entities SET props = props || ${JSON.stringify(props)}::jsonb WHERE id = ${entityId}::uuid`,
+    );
+  } finally {
+    await ac.end();
+  }
+}
+
 /** Прогон одной записи по её пути; первый ход фикстуры обязан пройти. */
-async function take(record: GoldenRecord): Promise<Outcome> {
+async function take(raw: GoldenRecord): Promise<Outcome> {
+  const record = resolved(raw);
   const title = record.name;
+  const watch = record.watch ?? [];
+  /** Ход записи — механизмом записи (`mechanism`), если он назван; обвязка (шаблоны, рёбра) — своим. */
+  const go = (tool: string, input: unknown) =>
+    run(tool, input, record.mechanism === undefined ? {} : { mechanism: record.mechanism });
   if (record.shape === 'create') {
     return outcomeOf(
-      await run('entity_create', {
+      await go('entity_create', {
         title,
         tags: [],
         props: record.props,
         aspects: record.aspects,
       }),
+      0,
+      watch,
     );
   }
   if (record.shape === 'batch') {
@@ -286,10 +367,12 @@ async function take(record: GoldenRecord): Promise<Outcome> {
     }
     return outcomeOf(
       await execute(db, req(operations, { batchId: newId(), mechanism: 'seed', source: 'chat' })),
+      0,
+      watch,
     );
   }
   const first = entityOf(
-    await run('entity_create', {
+    await go('entity_create', {
       title,
       tags: [],
       props: record.props,
@@ -298,7 +381,7 @@ async function take(record: GoldenRecord): Promise<Outcome> {
     title,
   );
   for (const step of record.setup ?? []) {
-    entityOf(await run('entity_update', { id: first.id, ...step }), `${title}: обстановка`);
+    entityOf(await go('entity_update', { id: first.id, ...step }), `${title}: обстановка`);
   }
   /** Рёбра из БД, которые снимает сама пачка второго хода (`deletedBy: 'batch'`). */
   const deletedInBatch: Array<Record<string, string>> = [];
@@ -310,13 +393,16 @@ async function take(record: GoldenRecord): Promise<Outcome> {
     if (rel.deletedBy === 'batch') deletedInBatch.push(edge);
   }
   if (record.rowWithout !== undefined) await stripRow(first.id, record.rowWithout);
+  if (record.rowWith !== undefined) await stuffRow(first.id, record.rowWith);
   if (record.shape === 'attach') {
     const aspect = record.aspects[0];
     if (aspect === undefined || record.aspects.length !== 1) {
       throw new Error(`запись «${title}»: attach навешивает ровно один аспект`);
     }
     return outcomeOf(
-      await run(attachToolName(aspect), { entity_id: first.id, data: record.patch ?? {} }),
+      await go(attachToolName(aspect), { entity_id: first.id, data: record.patch ?? {} }),
+      0,
+      watch,
     );
   }
   const move = {
@@ -325,7 +411,7 @@ async function take(record: GoldenRecord): Promise<Outcome> {
     ...record.core,
     ...record.update,
   };
-  if (deletedInBatch.length === 0) return outcomeOf(await run('entity_update', move));
+  if (deletedInBatch.length === 0) return outcomeOf(await go('entity_update', move), 0, watch);
   const operations: ExecuteRequest['operations'] = [
     ...deletedInBatch.map((input) => ({ tool: 'relation_delete', input })),
     { tool: 'entity_update', input: move },
@@ -333,6 +419,7 @@ async function take(record: GoldenRecord): Promise<Outcome> {
   return outcomeOf(
     await execute(db, req(operations, { batchId: newId(), mechanism: 'seed', source: 'chat' })),
     operations.length - 1,
+    watch,
   );
 }
 
@@ -345,6 +432,9 @@ function taken(name: string): Outcome {
 
 beforeAll(async () => {
   await truncateAll();
+  GRANTS.live = await issueGrant('корпус инвариантов: живой');
+  GRANTS.revoked = await issueGrant('корпус инвариантов: отозванный');
+  await revokeGrant(db, { graphId: owner, grantId: GRANTS.revoked });
   for (const record of records) collected.set(record.name, await take(record));
 });
 
@@ -362,10 +452,16 @@ describe('golden «сущность → вердикт» доменных инв
       if (canonicalJson(live.writes ?? null) !== canonicalJson(record.writes ?? null)) {
         wrong.push(`${record.name}: записано ${canonicalJson(live.writes ?? null)}`);
       }
+      // Код нарушения стадии 2 — только у записей, где его снял старый код (`legacyViolation`).
+      const tracksViolation = record.legacyViolation !== undefined;
+      if (tracksViolation && live.violation !== record.violation) {
+        wrong.push(`${record.name}: нарушение ${live.violation ?? '-'}`);
+      }
       const same =
         record.legacyVerdict === record.verdict &&
         record.legacyCode === record.code &&
         record.legacyInvariant === record.invariant &&
+        (!tracksViolation || record.legacyViolation === record.violation) &&
         canonicalJson(record.legacyWrites ?? null) === canonicalJson(record.writes ?? null);
       if (!same && record.expectedDiff === undefined) {
         wrong.push(`${record.name}: расхождение без expectedDiff`);

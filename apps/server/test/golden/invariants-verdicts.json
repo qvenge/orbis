@@ -629,6 +629,635 @@
       "code": "INVARIANT",
       "invariant": "financial_recurring_requires_recurrence",
       "expectedDiff": "BATCH_DELETE_SUBTRACTS_DECLARED"
+    },
+    {
+      "name": "назначение: executor=agent без гранта",
+      "shape": "create",
+      "aspects": ["orbis/task", "orbis/assignment"],
+      "props": {
+        "orbis/task_status": "inbox",
+        "orbis/executor": "agent"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "verdict": "reject",
+      "code": "VALIDATION"
+    },
+    {
+      "name": "назначение: executor=human с грантом",
+      "shape": "create",
+      "aspects": ["orbis/task", "orbis/assignment"],
+      "props": {
+        "orbis/task_status": "inbox",
+        "orbis/executor": "human",
+        "orbis/grant": "$grant"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "verdict": "reject",
+      "code": "VALIDATION"
+    },
+    {
+      "name": "назначение: executor=agent с живым грантом",
+      "shape": "create",
+      "aspects": ["orbis/task", "orbis/assignment"],
+      "props": {
+        "orbis/task_status": "inbox",
+        "orbis/executor": "agent",
+        "orbis/grant": "$grant"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "назначение: executor=human без гранта",
+      "shape": "create",
+      "aspects": ["orbis/task", "orbis/assignment"],
+      "props": {
+        "orbis/task_status": "inbox",
+        "orbis/executor": "human"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "назначение: executor=agent с отозванным грантом",
+      "shape": "create",
+      "aspects": ["orbis/task", "orbis/assignment"],
+      "props": {
+        "orbis/task_status": "inbox",
+        "orbis/executor": "agent",
+        "orbis/grant": "$revokedGrant"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "NOT_FOUND",
+      "verdict": "reject",
+      "code": "NOT_FOUND"
+    },
+    {
+      "name": "назначение-нарушитель (грант снят до правила) правится посторонним свойством",
+      "shape": "update",
+      "aspects": ["orbis/task", "orbis/assignment"],
+      "props": {
+        "orbis/task_status": "inbox",
+        "orbis/executor": "agent",
+        "orbis/grant": "$grant"
+      },
+      "rowWithout": ["orbis/grant"],
+      "patch": {
+        "orbis/priority": "high"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "прогон без субъекта",
+      "shape": "create",
+      "aspects": ["orbis/agent-run"],
+      "mechanism": "verb",
+      "props": {
+        "orbis/run_outcome": "running",
+        "orbis/run_started_at": "2026-07-04T09:00:00.000Z",
+        "orbis/last_step_at": "2026-07-04T09:00:00.000Z",
+        "orbis/step_count": 0,
+        "orbis/run_steps": []
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "verdict": "reject",
+      "code": "VALIDATION"
+    },
+    {
+      "name": "прогон с двумя субъектами",
+      "shape": "create",
+      "aspects": ["orbis/agent-run"],
+      "mechanism": "verb",
+      "props": {
+        "orbis/run_outcome": "running",
+        "orbis/run_started_at": "2026-07-04T09:00:00.000Z",
+        "orbis/last_step_at": "2026-07-04T09:00:00.000Z",
+        "orbis/step_count": 0,
+        "orbis/run_steps": [],
+        "orbis/grant": "019e4466-aaaa-7e07-b5d4-64be9721da60",
+        "orbis/run_routine": "019e4466-aaaa-7e07-b5d4-64be9721da61"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "verdict": "reject",
+      "code": "VALIDATION"
+    },
+    {
+      "name": "прогон рутины: только routine",
+      "shape": "create",
+      "aspects": ["orbis/agent-run"],
+      "mechanism": "verb",
+      "props": {
+        "orbis/run_outcome": "running",
+        "orbis/run_started_at": "2026-07-04T09:00:00.000Z",
+        "orbis/last_step_at": "2026-07-04T09:00:00.000Z",
+        "orbis/step_count": 0,
+        "orbis/run_steps": [],
+        "orbis/run_routine": "019e4466-aaaa-7e07-b5d4-64be9721da62"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "прогон по тикету: только грант",
+      "shape": "create",
+      "aspects": ["orbis/agent-run"],
+      "mechanism": "verb",
+      "props": {
+        "orbis/run_outcome": "running",
+        "orbis/run_started_at": "2026-07-04T09:00:00.000Z",
+        "orbis/last_step_at": "2026-07-04T09:00:00.000Z",
+        "orbis/step_count": 0,
+        "orbis/run_steps": [],
+        "orbis/grant": "019e4466-aaaa-7e07-b5d4-64be9721da63"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "правило памяти без образца",
+      "shape": "create",
+      "aspects": ["orbis/memory"],
+      "props": {
+        "orbis/memory_kind": "rule",
+        "orbis/rule_scope": "orbis/money-movement",
+        "orbis/rule_target": "019e4466-b4b4-7e07-b5d4-64be9721da51"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "legacyViolation": "RULE_WITHOUT_PATTERN",
+      "verdict": "reject",
+      "code": "VALIDATION",
+      "violation": "RULE_WITHOUT_PATTERN"
+    },
+    {
+      "name": "денежное правило памяти без цели",
+      "shape": "create",
+      "aspects": ["orbis/memory"],
+      "props": {
+        "orbis/memory_kind": "rule",
+        "orbis/rule_pattern": "пятерочка",
+        "orbis/rule_scope": "orbis/money-movement"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "legacyViolation": "RULE_WITHOUT_TARGET",
+      "verdict": "reject",
+      "code": "VALIDATION",
+      "violation": "RULE_WITHOUT_TARGET"
+    },
+    {
+      "name": "полное правило памяти",
+      "shape": "create",
+      "aspects": ["orbis/memory"],
+      "props": {
+        "orbis/memory_kind": "rule",
+        "orbis/rule_pattern": "пятерочка",
+        "orbis/rule_scope": "orbis/money-movement",
+        "orbis/rule_target": "019e4466-b4b4-7e07-b5d4-64be9721da51"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "факт памяти без образца",
+      "shape": "create",
+      "aspects": ["orbis/memory"],
+      "props": {
+        "orbis/memory_kind": "fact"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "правило памяти с образцом из пробелов",
+      "shape": "create",
+      "aspects": ["orbis/memory"],
+      "props": {
+        "orbis/memory_kind": "rule",
+        "orbis/rule_pattern": "   ",
+        "orbis/rule_scope": "orbis/money-movement",
+        "orbis/rule_target": "019e4466-b4b4-7e07-b5d4-64be9721da51"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "legacyViolation": "RULE_WITHOUT_PATTERN",
+      "verdict": "reject",
+      "code": "VALIDATION",
+      "violation": "RULE_WITHOUT_PATTERN"
+    },
+    {
+      "name": "правило памяти теряет образец после снятия аспекта памяти",
+      "shape": "update",
+      "aspects": ["orbis/memory"],
+      "props": {
+        "orbis/memory_kind": "rule",
+        "orbis/rule_pattern": "пятерочка",
+        "orbis/rule_scope": "orbis/money-movement",
+        "orbis/rule_target": "019e4466-b4b4-7e07-b5d4-64be9721da51"
+      },
+      "setup": [
+        {
+          "aspects": {
+            "detach": ["orbis/memory"]
+          }
+        }
+      ],
+      "update": {
+        "unset": ["orbis/rule_pattern"]
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "legacyViolation": "RULE_WITHOUT_PATTERN",
+      "verdict": "reject",
+      "code": "VALIDATION",
+      "violation": "RULE_WITHOUT_PATTERN"
+    },
+    {
+      "name": "конверт без валюты",
+      "shape": "create",
+      "aspects": ["orbis/budget"],
+      "watch": ["orbis/currency"],
+      "props": {
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/limit": "10000.00",
+        "orbis/period_start": "2026-01-01",
+        "orbis/period_end": "2026-01-31"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/currency": "RUB"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/currency": "RUB"
+      }
+    },
+    {
+      "name": "конверт: валюта снята правкой",
+      "shape": "update",
+      "aspects": ["orbis/budget"],
+      "watch": ["orbis/currency"],
+      "props": {
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/limit": "10000.00",
+        "orbis/period_start": "2026-02-01",
+        "orbis/period_end": "2026-02-28",
+        "orbis/currency": "EUR"
+      },
+      "update": {
+        "unset": ["orbis/currency"]
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": "RUB"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": "RUB"
+      }
+    },
+    {
+      "name": "конверт без валюты (снята до правила) правится свойством другого аспекта",
+      "shape": "update",
+      "aspects": ["orbis/budget", "orbis/task"],
+      "watch": ["orbis/currency"],
+      "props": {
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/limit": "10000.00",
+        "orbis/period_start": "2026-03-01",
+        "orbis/period_end": "2026-03-31",
+        "orbis/task_status": "inbox"
+      },
+      "rowWithout": ["orbis/currency"],
+      "patch": {
+        "orbis/priority": "high"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": null
+      }
+    },
+    {
+      "name": "тикет ждёт с вопросом",
+      "shape": "create",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "waiting",
+        "orbis/waiting_for": "вопрос"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      }
+    },
+    {
+      "name": "вопрос у тикета в работе",
+      "shape": "create",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "in_progress",
+        "orbis/waiting_for": "хвост"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "хвост"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "хвост"
+      }
+    },
+    {
+      "name": "вопрос у отменённого тикета (вариант вне классов делегируемости)",
+      "shape": "create",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "cancelled",
+        "orbis/waiting_for": "хвост"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "хвост"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "хвост"
+      }
+    },
+    {
+      "name": "тикет уходит из ожидания правкой",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "waiting",
+        "orbis/waiting_for": "вопрос"
+      },
+      "patch": {
+        "orbis/task_status": "planned"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      }
+    },
+    {
+      "name": "тикет: waiting → done правкой без unset",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "waiting",
+        "orbis/waiting_for": "вопрос"
+      },
+      "patch": {
+        "orbis/task_status": "done"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": "$updatedAt",
+        "orbis/waiting_for": "вопрос"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": "$updatedAt",
+        "orbis/waiting_for": "вопрос"
+      }
+    },
+    {
+      "name": "тикет с вопросом повторно навешивается правкой в planned (вопрос пережил снятие)",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "waiting",
+        "orbis/waiting_for": "вопрос"
+      },
+      "setup": [
+        {
+          "aspects": {
+            "detach": ["orbis/task"]
+          }
+        }
+      ],
+      "patch": {
+        "orbis/task_status": "planned"
+      },
+      "update": {
+        "aspects": {
+          "attach": ["orbis/task"]
+        }
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.002Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.002Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      }
+    },
+    {
+      "name": "тикет с вопросом повторно навешивается attach-тулом в planned",
+      "shape": "attach",
+      "aspects": ["orbis/task"],
+      "firstAspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "waiting",
+        "orbis/waiting_for": "вопрос"
+      },
+      "setup": [
+        {
+          "aspects": {
+            "detach": ["orbis/task"]
+          }
+        }
+      ],
+      "patch": {
+        "orbis/task_status": "planned"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.002Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.002Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": null
+      }
+    },
+    {
+      "name": "запись со снятым аспектом задачи и вопросом правится",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "waiting",
+        "orbis/waiting_for": "вопрос"
+      },
+      "setup": [
+        {
+          "aspects": {
+            "detach": ["orbis/task"]
+          }
+        }
+      ],
+      "patch": {
+        "orbis/priority": "high"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.002Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.002Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "вопрос"
+      }
+    },
+    {
+      "name": "тикет в работе с хвостом (записан до правила) правится посторонним свойством",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "watch": ["orbis/waiting_for"],
+      "props": {
+        "orbis/task_status": "in_progress"
+      },
+      "rowWith": {
+        "orbis/waiting_for": "хвост"
+      },
+      "patch": {
+        "orbis/priority": "high"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "хвост"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/waiting_for": "хвост"
+      }
     }
   ]
 }
