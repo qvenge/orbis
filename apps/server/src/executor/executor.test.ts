@@ -679,7 +679,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     return { body: r.entity.body, bodyDoc: r.entity.bodyDoc ?? null };
   }
 
-  test('20. executor=agent без grant_id → VALIDATION; с чужим/отозванным грантом → NOT_FOUND', async () => {
+  test('20. executor=agent без grant_id → INVARIANT assignment_grant_required; с чужим/отозванным грантом → NOT_FOUND', async () => {
     const id = newId();
     const bad = await execute(
       db,
@@ -692,7 +692,13 @@ describe('ADE-срез 1: инварианты назначения и засе�
       }),
     );
     expect(bad.ok).toBe(false);
-    if (!bad.ok) expect(bad.error.code).toBe('VALIDATION');
+    // Условие над `props` — строка каталога (§А7-2, наполовину): стадия 4, `INVARIANT` с id правила.
+    if (!bad.ok) {
+      expect([bad.error.code, (bad.error.details as { invariant?: string }).invariant]).toEqual([
+        'INVARIANT',
+        'assignment_grant_required',
+      ]);
+    }
 
     const foreign = await execute(
       db,
@@ -713,7 +719,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     expect(await countEntities(id)).toBe(0); // отказ стадии 4 — до первой записи
   });
 
-  test('21. executor=agent с живым грантом владельца — ок; executor=human с grant_id → VALIDATION; отзыв гранта закрывает назначение', async () => {
+  test('21. executor=agent с живым грантом владельца — ок; executor=human с grant_id → INVARIANT assignment_grant_forbidden; отзыв гранта закрывает назначение', async () => {
     const token = await issuePatGrant(db, { identity: personal(userA), label: 'исполнитель' });
     const identity = await verifyBearer(db, token);
     expect(identity).not.toBeNull();
@@ -750,7 +756,11 @@ describe('ADE-срез 1: инварианты назначения и засе�
       }),
     );
     expect(human.ok).toBe(false);
-    if (!human.ok) expect(human.error.code).toBe('VALIDATION');
+    if (!human.ok) {
+      expect([human.error.code, (human.error.details as { invariant?: string }).invariant]).toEqual(
+        ['INVARIANT', 'assignment_grant_forbidden'],
+      );
+    }
 
     // Тот же инвариант на update-пути: чужой грант в merge аспектов отклоняется
     const plain = firstEntity(
@@ -1980,6 +1990,53 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
       ),
     );
     expect(step.ok).toBe(true);
+  });
+});
+
+describe('grant ⇔ executor=agent: условие — правилами, живость — кодом (§А7-2, наполовину)', () => {
+  let grantId = '';
+  beforeAll(async () => {
+    const token = await issuePatGrant(db, {
+      identity: personal(userA),
+      label: 'назначение: пара правил',
+    });
+    grantId = (await verifyBearer(db, token))?.grantId ?? '';
+  });
+  const assignment = (props: Record<string, unknown>) =>
+    execute(
+      db,
+      req('entity_create', {
+        title: 'Назначение',
+        tags: [],
+        aspects: ['orbis/assignment'],
+        props,
+      }),
+    );
+  const refusal = (r: Awaited<ReturnType<typeof assignment>>) =>
+    r.ok ? ['ok'] : [r.error.code, (r.error.details as { invariant?: string }).invariant];
+
+  test('executor=agent без гранта → INVARIANT assignment_grant_required', async () => {
+    expect(refusal(await assignment({ 'orbis/executor': 'agent' }))).toEqual([
+      'INVARIANT',
+      'assignment_grant_required',
+    ]);
+  });
+  test('executor=human с грантом → INVARIANT assignment_grant_forbidden', async () => {
+    expect(
+      refusal(await assignment({ 'orbis/executor': 'human', 'orbis/grant': grantId })),
+    ).toEqual(['INVARIANT', 'assignment_grant_forbidden']);
+  });
+  test('оба законных позитива: agent с живым грантом, human без гранта', async () => {
+    expect(
+      refusal(await assignment({ 'orbis/executor': 'agent', 'orbis/grant': grantId })),
+    ).toEqual(['ok']);
+    expect(refusal(await assignment({ 'orbis/executor': 'human' }))).toEqual(['ok']);
+  });
+  test('живость гранта осталась КОДОМ: отозванный грант → NOT_FOUND, а не отказ правила', async () => {
+    await revokeGrant(db, { graphId: userA, grantId });
+    const r = await assignment({ 'orbis/executor': 'agent', 'orbis/grant': grantId });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('NOT_FOUND');
   });
 });
 

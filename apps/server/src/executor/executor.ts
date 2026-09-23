@@ -149,7 +149,7 @@ import { assertEntityProps } from './aspects-validate';
 import { bodyFieldsFromMarkdown } from './body-fields';
 import { ExecError } from './errors';
 import {
-  assertAssignment,
+  assertGrantAlive,
   assertModuleEnabled,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
@@ -1978,8 +1978,9 @@ async function prepareEntityCreate(
     core: { id, title: input.title, archived: false, createdAt: now, updatedAt: now },
     batch,
   });
-  // Живой грант в назначении (С4/С7): у create «затронуто» всё, что пришло во входе
-  await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
+  // Живость гранта в назначении (С4/С7, Р-К-17) — ссылочный пречек кодом; условие «грант ⇔
+  // executor=agent» проверили строки каталога выше. У create «затронуто» всё, что пришло во входе.
+  await assertGrantAlive(ctx.tx, ctx.req.identity.graph, state);
   // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
@@ -2268,12 +2269,13 @@ async function prepareEntityUpdate(
       state,
       ctx.internalUndo === undefined ? touchedProperties(propsPatch) : new Set<string>(),
     );
-    // Живой грант в назначении (С4/С7) — только когда назначение ЗАТРОНУТО патчем.
-    // Проверять его на каждой правке нельзя: отзыв гранта иначе замораживал бы тикет
+    // Живость гранта в назначении (С4/С7, Р-К-17) — только когда назначение ЗАТРОНУТО патчем.
+    // Проверять её на каждой правке нельзя: отзыв гранта иначе замораживал бы тикет
     // целиком (даже переименование), а отзыв закрывает доступ агенту, а не сущность.
-    // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
+    // Внутренний undo восстанавливает зафиксированное состояние — не проверяется. Условие
+    // «грант ⇔ executor=agent» — строки каталога, их зовёт C-врезка ниже на каждой правке.
     if (ctx.internalUndo === undefined && touched.includes('orbis/assignment')) {
-      await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
+      await assertGrantAlive(ctx.tx, ctx.req.identity.graph, state);
     }
     // РЕТРОСПЕКТИВНОЙ проверки «одного budget-parent» здесь БОЛЬШЕ НЕТ. Она ловила класс,
     // который создавала снятая колонка: «X стал конвертом» задним числом превращало все его
@@ -2604,10 +2606,10 @@ async function prepareAttach(
     core,
     batch,
   });
-  // Живой грант в назначении (С4/С7): attach — третий путь появления аспекта, и обходить
-  // им инвариант нельзя (тот же довод, что у «одного budget-parent» ниже)
+  // Живость гранта в назначении (С4/С7, Р-К-17): attach — третий путь появления аспекта, и
+  // обходить им пречек нельзя (тот же довод, что у «одного budget-parent» ниже)
   if (aspectId === 'orbis/assignment') {
-    await assertAssignment(ctx.tx, ctx.req.identity.graph, state);
+    await assertGrantAlive(ctx.tx, ctx.req.identity.graph, state);
   }
   // Ретроспективной проверки «одного budget-parent» на attach-пути больше нет — см. довод
   // на пути entity_update: с 0017 привязка выражена ролью, и attach рёбер не создаёт.

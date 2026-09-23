@@ -393,7 +393,9 @@ const ENTRIES: readonly AspectEntry[] = [
     },
     properties: [
       ['orbis/executor', true],
-      // Условная обязательность «executor=agent ⇒ grant» — инвариант-код части А (§А7-2).
+      // Условная обязательность «executor=agent ⇒ grant» типом не выражается: её держат строки
+      // каталога `assignment_grant_required`/`_forbidden` (`builtin-rules.ts`), живость гранта —
+      // пречек `assertGrantAlive` исполнителя (§А7-2, Р-К-17).
       ['orbis/grant', false],
       ['orbis/assignee', false],
       ['orbis/may_close', false],

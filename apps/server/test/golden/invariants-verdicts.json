@@ -641,7 +641,9 @@
       "legacyVerdict": "reject",
       "legacyCode": "VALIDATION",
       "verdict": "reject",
-      "code": "VALIDATION"
+      "code": "INVARIANT",
+      "invariant": "assignment_grant_required",
+      "expectedDiff": "ASSIGNMENT_GRANT_CONDITION"
     },
     {
       "name": "назначение: executor=human с грантом",
@@ -655,7 +657,9 @@
       "legacyVerdict": "reject",
       "legacyCode": "VALIDATION",
       "verdict": "reject",
-      "code": "VALIDATION"
+      "code": "INVARIANT",
+      "invariant": "assignment_grant_forbidden",
+      "expectedDiff": "ASSIGNMENT_GRANT_CONDITION"
     },
     {
       "name": "назначение: executor=agent с живым грантом",
@@ -728,11 +732,10 @@
         "$updatedAt": "2026-07-04T10:00:00.001Z",
         "orbis/completed_at": null
       },
-      "verdict": "ok",
-      "writes": {
-        "$updatedAt": "2026-07-04T10:00:00.001Z",
-        "orbis/completed_at": null
-      }
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "assignment_grant_required",
+      "expectedDiff": "C_RULES_ON_EVERY_PROPS_EDIT"
     },
     {
       "name": "прогон без субъекта",

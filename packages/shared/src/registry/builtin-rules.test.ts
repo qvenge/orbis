@@ -8,6 +8,8 @@ import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import {
   BUILTIN_RULES_BY_CARRIER,
+  RULE_ASSIGNMENT_GRANT_FORBIDDEN,
+  RULE_ASSIGNMENT_GRANT_REQUIRED,
   RULE_ENVELOPE_UNIQUE,
   RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
@@ -37,7 +39,10 @@ describe('системные строки каталога правил (§Б4-1
       // Задача 13: носители параметров движков. `nearest_ancestor` — то же имя, что во
       // `flags.computed.rule` вычисляемых свойств и в журнале пересчёта (`RULE_NEAREST_ANCESTOR`).
       'budget_rollover',
-      // Задача 14: XOR субъекта прогона — парой (§4-Б-9 рамки: тринадцатый шаблон не заводится).
+      // Задача 14: условие гранта назначения (живость гранта — кодом, Р-К-17) и XOR субъекта
+      // прогона — парами (§4-Б-9 рамки: тринадцатый шаблон не заводится).
+      'assignment_grant_required',
+      'assignment_grant_forbidden',
       'run_subject',
       'run_subject_forbidden',
       'nearest_ancestor',
@@ -71,8 +76,8 @@ describe('системные строки каталога правил (§Б4-1
   test('откат: C-строки названы ЯВНО, T-строки берут умолчание (Р-И-2)', () => {
     // Явное `undo` у C-строк — решение по экземпляру, а не умолчание: снятое схемой поле молча
     // сменило бы политику отката инварианта. У конверта `check` — слово владельца (В-П-1а): откат
-    // при уже созданном дубле отклоняется; субъект прогона — `skip` (§А7-2 ревизии 5: снятый код
-    // под откатом не звался).
+    // при уже созданном дубле отклоняется; субъект прогона и грант назначения — `skip` (§А7-2
+    // ревизии 5: снятый код под откатом не звался).
     expect([
       RULE_FINANCIAL_REQUIRES_OCCURRED_ON.undo,
       RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE.undo,
@@ -82,6 +87,19 @@ describe('системные строки каталога правил (§Б4-1
       RULE_TASK_WAITING_ONLY.undo,
       RULE_RUN_SUBJECT_REQUIRED.undo,
       RULE_RUN_SUBJECT_FORBIDDEN.undo,
-    ]).toEqual(['check', 'check', undefined, 'check', undefined, 'check', 'skip', 'skip']);
+      RULE_ASSIGNMENT_GRANT_REQUIRED.undo,
+      RULE_ASSIGNMENT_GRANT_FORBIDDEN.undo,
+    ]).toEqual([
+      'check',
+      'check',
+      undefined,
+      'check',
+      undefined,
+      'check',
+      'skip',
+      'skip',
+      'skip',
+      'skip',
+    ]);
   });
 });

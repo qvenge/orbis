@@ -174,8 +174,9 @@ describe('валидация записи по реестру свойств (§
   });
 
   test('orbis/assignment: uuid-формат grant_id доезжает до валидатора, may_close без default', () => {
-    // Инвариант «executor=agent ⇒ grant_id живого гранта владельца» держит assertAssignment,
-    // но САМ формат обязан жить в реестре: иначе прод примет строку-мусор в grant_id.
+    // Инвариант «executor=agent ⇒ grant_id живого гранта владельца» держат пара строк каталога
+    // (условие) и `assertGrantAlive` (живость), но САМ формат обязан жить в реестре: иначе прод
+    // примет строку-мусор в grant_id.
     expect(
       accepts('orbis/assignment', {
         executor: 'agent',

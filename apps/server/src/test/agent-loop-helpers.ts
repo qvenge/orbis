@@ -179,7 +179,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
   }
 
   /**
-   * Грант выдаётся штатным путём: инвариант assertAssignment требует ЖИВОГО гранта
+   * Грант выдаётся штатным путём: пречек assertGrantAlive требует ЖИВОГО гранта
    * владельца, а вставка строки руками обходила бы ровно тот код, которым скоуп пишется.
    */
   async function workerGrant(owner: GraphId, label: string): Promise<string> {

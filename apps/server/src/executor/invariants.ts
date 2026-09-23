@@ -44,54 +44,42 @@ export async function resolveEntityTitles(
 }
 
 /**
- * Живой грант в назначении (С4/С7): `orbis/assignment` с `executor=agent` обязан указывать
- * на НЕОТОЗВАННЫЙ грант ВЛАДЕЛЬЦА сущности. Схема аспекта этого не выражает: `grant_id` лежит
- * в jsonb, внешнего ключа туда нет, а `.refine` зода исчезает при генерации JSON Schema — ajv
- * (стадия 2) проверяет только форму uuid. Поэтому связь «назначение → грант» держит executor,
- * и это единственное место, где она держится: обойти его нечем — мутации графа идут только
- * здесь.
+ * ЖИВОСТЬ ГРАНТА — ИМЕНОВАННЫЙ ОСТАТОК КОДОМ (Р-К-17, правило 5 §С1-4). Условие «какие значения
+ * допустимы вместе» уехало в пару строк каталога (`assignment_grant_required`/`_forbidden`), а здесь
+ * остался единственный вопрос, которого язык E не задаёт: существует ли названный грант и не отозван ли
+ * он. Это ссылочный пречек (§А6-4), а не предикат над записью: `grant_id` лежит в jsonb, внешнего ключа
+ * туда нет, и связь «назначение → грант» держит исполнитель — обойти его нечем, мутации графа идут
+ * только здесь.
  *
- * Проверяется в МОМЕНТ установки назначения, а не при каждой правке сущности: отзыв гранта
- * закрывает доступ агенту (verifyBearer), но не обязан замораживать уже назначенные тикеты —
- * иначе после отзыва их нельзя было бы даже переименовать. Вызывающая сторона зовёт эту
- * проверку ровно тогда, когда аспект назначения появляется или меняется.
+ * Зовётся ровно тогда, когда назначение затронуто патчем: отзыв гранта закрывает доступ агенту
+ * (verifyBearer), но не обязан замораживать уже назначенные тикеты — иначе после отзыва их нельзя было
+ * бы даже переименовать.
  *
  * Чтение agent_grants идёт под `SET LOCAL ROLE authenticated` (withIdentity): политика
- * current_graph_select показывает только строки текущего графа, но условие на graph_id всё равно
- * оставлено явным — оно же служит фильтром «грант чужой» на любых иных ролях.
- * Чужой и несуществующий грант неразличимы намеренно (единый NOT_FOUND, как у сущностей):
- * иначе назначение стало бы оракулом чужих grant_id.
+ * current_graph_select показывает только строки текущего графа, но условие на graph_id оставлено явным —
+ * оно же служит фильтром «грант чужой» на любых иных ролях. Чужой и несуществующий грант неразличимы
+ * намеренно (единый NOT_FOUND) — иначе назначение стало бы оракулом чужих grant_id.
  */
-export async function assertAssignment(tx: Tx, graphId: GraphId, next: EntityState): Promise<void> {
+export async function assertGrantAlive(tx: Tx, graphId: GraphId, next: EntityState): Promise<void> {
   if (!next.aspects.includes('orbis/assignment')) return;
-  const executor = next.props['orbis/executor'];
+  if (next.props['orbis/executor'] !== 'agent') return;
   const grantId = next.props['orbis/grant'];
-  if (executor === 'agent') {
-    if (typeof grantId !== 'string') {
-      throw new ExecError('VALIDATION', 'назначение агенту требует grant_id', {
-        aspect: 'orbis/assignment',
-      });
-    }
-    const rows = await tx
-      .select({ id: agentGrants.id })
-      .from(agentGrants)
-      .where(
-        and(
-          eq(agentGrants.id, grantId),
-          eq(agentGrants.graphId, graphId),
-          isNull(agentGrants.revokedAt),
-        ),
-      );
-    if (rows.length === 0) {
-      throw new ExecError('NOT_FOUND', 'грант исполнителя не найден или отозван', {
-        grant_id: grantId,
-      });
-    }
-  } else if (grantId !== undefined) {
-    // executor=human с грантом — не «лишнее поле», а рассогласование: тикет читался бы как
-    // назначенный агенту одним кодом и человеку другим.
-    throw new ExecError('VALIDATION', 'grant_id допустим только при executor=agent', {
-      aspect: 'orbis/assignment',
+  // «Грант обязателен при executor=agent» — работа правила `assignment_grant_required`, и до сюда
+  // запись без гранта не доходит; ветка оставлена нестрогой, чтобы порядок проверок был свободен.
+  if (typeof grantId !== 'string') return;
+  const rows = await tx
+    .select({ id: agentGrants.id })
+    .from(agentGrants)
+    .where(
+      and(
+        eq(agentGrants.id, grantId),
+        eq(agentGrants.graphId, graphId),
+        isNull(agentGrants.revokedAt),
+      ),
+    );
+  if (rows.length === 0) {
+    throw new ExecError('NOT_FOUND', 'грант исполнителя не найден или отозван', {
+      grant_id: grantId,
     });
   }
 }
@@ -130,7 +118,7 @@ function isUntouchableObject(aspects: readonly string[] | undefined): boolean {
  * задевает.
  *
  * Точка проверки — стадия 4 executor'а, после чтения строки под `FOR UPDATE` и ДО первой
- * записи, рядом с `assertAssignment`. Это единственный рубеж, который нельзя обойти: гейт
+ * записи, рядом с `assertGrantAlive`. Это единственный рубеж, который нельзя обойти: гейт
  * режима в dispatch (V1.2) видит только имя тула, а `orbis_propose` — только форму
  * предложения; обе проверки — до конвейера, а мутации графа идут только здесь.
  *

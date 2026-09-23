@@ -1451,7 +1451,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
 
   beforeAll(async () => {
     // Грант выдаётся штатным путём (Задача 8 научила issuePatGrant области): инвариант
-    // assertAssignment требует ЖИВОГО гранта владельца, а вставка строки руками обходила
+    // assertGrantAlive требует ЖИВОГО гранта владельца, а вставка строки руками обходила
     // бы ровно тот код, которым скоуп теперь и записывается.
     const token = await issuePatGrant(db, {
       identity: personal(owner),

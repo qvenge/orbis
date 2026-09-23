@@ -200,11 +200,17 @@ const EXPECTED_DIFFS: Record<string, { records: number }> = {
   // спрашивал инвариант по признаку пути (`touched.includes('orbis/assignment')` у назначения), а хвоста
   // `waiting_for` не держал вовсе. Правка только ЯДРА (заголовок, архив) нарушения не поднимает: ей
   // достаются лишь правила, читающие изменённое ядро (рулинг 3-4).
-  C_RULES_ON_EVERY_PROPS_EDIT: { records: 1 },
+  C_RULES_ON_EVERY_PROPS_EDIT: { records: 2 },
   // §4-Б-9 рамки, задача 14: снятый код субъекта прогона бросал ОДИН `VALIDATION reason:'run_subject'`
   // на обе половины XOR; каталог различает «нужен субъект» (`run_subject`) и «субъектов два»
   // (`run_subject_forbidden`) — `INVARIANT` стадии 4 с id правила.
   RUN_SUBJECT_SPLIT: { records: 2 },
+  // §А7-2 ревизии 4 (наполовину), задача 14: снятый код назначения бросал `VALIDATION` на обе половины
+  // условия над `props` («agent без гранта», «грант при не-agent»); теперь это строки каталога
+  // `assignment_grant_required`/`_forbidden` — `INVARIANT` стадии 4. Живость гранта (`NOT_FOUND`)
+  // расхождением НЕ является: она осталась кодом (`assertGrantAlive`), и запись «отозванный грант»
+  // совпадает со старым вердиктом.
+  ASSIGNMENT_GRANT_CONDITION: { records: 2 },
 };
 
 /**
@@ -230,7 +236,7 @@ const EXPECTED_DIFFS: Record<string, { records: number }> = {
  * инвариантов — тем же прогоном, в котором прежние двадцать восемь записей совпали побайтно.
  */
 const CORPUS_SIZE = 56;
-const NEGATIVE_RECORDS = 26;
+const NEGATIVE_RECORDS = 27;
 
 // `as unknown` — TS выводит из литерального JSON союз объектов с `field?: undefined`, несравнимый с
 // объявленной формой; форму и состав корпуса стережёт тест состава, а не компилятор.

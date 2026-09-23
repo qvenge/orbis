@@ -120,6 +120,33 @@ export const RULE_TASK_WAITING_ONLY: RuleDefinitionInput = {
 };
 
 /**
+ * `grant ⇔ executor=agent` переводится НАПОЛОВИНУ (§А7-2 ревизии 4): условие над `props` — строками,
+ * живость гранта (`agent_grants.revoked_at IS NULL`) остаётся кодом (`assertGrantAlive`, Р-К-17).
+ * `orbis/grant` — тип `grant`, не `ref`, `deref` к нему неприменим (чекер E пускает `deref` только по
+ * `ref`), узла «грант жив» в каноне нет, и спека держит ссылочный пречек отдельным механизмом (§А6-4).
+ *
+ * Сравнение ТОТАЛЬНО (§Б3-4): отсутствующий `orbis/executor` читается как «не agent», и потому
+ * `not(executor = 'agent')` покрывает и ветку «executor не назван, а грант лежит» (её, впрочем,
+ * раньше отвечает стадия 2: `orbis/executor` обязателен у назначения).
+ * `undo: 'skip'` — снятый код назначения под внутренним откатом не звался (ветка правки гейтилась
+ * `internalUndo === undefined`); §А7-2 ревизии 5 оставляет эту льготу.
+ */
+export const RULE_ASSIGNMENT_GRANT_REQUIRED: RuleDefinitionInput = {
+  id: 'assignment_grant_required',
+  template: 'requires_when',
+  undo: 'skip',
+  when: { op: '=', args: [{ prop: 'orbis/executor' }, { const: 'agent' }] },
+  params: { property: 'orbis/grant' },
+};
+export const RULE_ASSIGNMENT_GRANT_FORBIDDEN: RuleDefinitionInput = {
+  id: 'assignment_grant_forbidden',
+  template: 'forbidden_when',
+  undo: 'skip',
+  when: { op: 'not', args: [{ op: '=', args: [{ prop: 'orbis/executor' }, { const: 'agent' }] }] },
+  params: { property: 'orbis/grant' },
+};
+
+/**
  * Ровно один субъект у прогона (§А7-2, V1.4) — ПАРОЙ шаблонов, а не тринадцатым шаблоном
  * `exactly_one_of` (§4-Б-9 рамки): «нужен грант, когда рутины нет» и «грант запрещён, когда рутина
  * есть» вместе дают XOR, и обе половины выразимы существующим каноном (`has`, `not` — §Б3-5).
@@ -286,6 +313,7 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   ],
   'orbis/task': [RULE_TASK_COMPLETED_AT, RULE_TASK_WAITING_FOR, RULE_TASK_WAITING_ONLY],
   'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER],
+  'orbis/assignment': [RULE_ASSIGNMENT_GRANT_REQUIRED, RULE_ASSIGNMENT_GRANT_FORBIDDEN],
   'orbis/agent-run': [RULE_RUN_SUBJECT_REQUIRED, RULE_RUN_SUBJECT_FORBIDDEN],
   'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
   'orbis/schedule': [RULE_MATERIALIZE],

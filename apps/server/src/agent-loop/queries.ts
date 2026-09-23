@@ -87,7 +87,7 @@ export type TicketProps = {
  * Проба назначения гранту в форме containment по `props` (§А1-1).
  *
  * `executor: 'agent'` в пробе не декоративен: при `executor='human'` grant_id запрещён
- * инвариантом (assertAssignment), но проба обязана быть точной сама по себе — назначение
+ * строкой каталога `assignment_grant_forbidden`, но проба обязана быть точной сама по себе — назначение
  * человеку не даёт прав никакому гранту.
  */
 function assignedToGrant(grantId: string): string {
