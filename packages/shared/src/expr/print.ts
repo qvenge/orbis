@@ -21,6 +21,7 @@
  */
 import type { ParseRegistry } from '../query/parse-ast';
 import type { ExprNode } from './ast';
+import { touchedAddressOf } from './normalize';
 
 /** Имя записи реестра ключом; неизвестный адрес печатается как есть — отказ не наше дело. */
 function propertyName(id: string, reg: ParseRegistry): string {
@@ -68,7 +69,14 @@ function print(node: ExprNode, reg: ParseRegistry, bare: boolean): string {
   if (node.op === 'not') return `not (${print(args[0] as ExprNode, reg, false)})`;
   if (node.op === 'empty') return call('empty', args, reg);
   if (node.op === 'if') return call('if', args, reg);
-  const text = `${print(args[0] as ExprNode, reg, false)} ${node.op} ${print(args[1] as ExprNode, reg, false)}`;
+  // Член `$touched` — АДРЕС свойства (Ф-Б2-26), и печатается он ключом, как `{prop}`: иначе
+  // своё свойство в диффе Ш1 читалось бы uuid'ом.
+  const touched = touchedAddressOf(node);
+  const left =
+    touched === undefined
+      ? print(args[0] as ExprNode, reg, false)
+      : JSON.stringify(propertyName(touched, reg));
+  const text = `${left} ${node.op} ${print(args[1] as ExprNode, reg, false)}`;
   return bare ? text : `(${text})`;
 }
 

@@ -57,6 +57,7 @@ import {
   readSubscriptionRow,
   removeContractDelta,
   removeOwnSubscription,
+  rewriteAst,
   setContractDelta,
   setOwnAction,
   setOwnSubscription,
@@ -4462,5 +4463,34 @@ describe('exclusive_classes у писателей: дельта и привяз�
       { slot: 'status', variant: 'c', class: 'new' },
       { slot: 'status', variant: 'b', class: 'queued' },
     ]);
+  });
+});
+
+describe('rewriteAst: адреса свойств при слиянии (§А10-2, Ф-Б2-26)', () => {
+  test('член $touched переписывается как адрес; константа по значению — нет', () => {
+    const from = new Set(['user/old_date', '019d48ea-4188-7c02-8e96-1f00000000aa']);
+    const before = {
+      op: 'and',
+      args: [
+        { op: 'in', args: [{ const: 'user/old_date' }, { ctx: '$touched' }] },
+        {
+          op: 'in',
+          args: [{ const: '019d48ea-4188-7c02-8e96-1f00000000aa' }, { ctx: '$touched' }],
+        },
+        { op: 'in', args: [{ const: 'user/old_date' }, { const: ['user/old_date'] }] },
+        { op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] },
+        { has: 'user/old_date' },
+      ],
+    };
+    expect(rewriteAst(before, from, 'user/new_date')).toEqual({
+      op: 'and',
+      args: [
+        { op: 'in', args: [{ const: 'user/new_date' }, { ctx: '$touched' }] },
+        { op: 'in', args: [{ const: 'user/new_date' }, { ctx: '$touched' }] },
+        { op: 'in', args: [{ const: 'user/old_date' }, { const: ['user/old_date'] }] },
+        { op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] },
+        { has: 'user/new_date' },
+      ],
+    });
   });
 });

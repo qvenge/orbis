@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import { FIXTURE_PARSE_REGISTRY, FIXTURE_USER_PROPERTY_ID } from '../query/ast-fixtures';
 import { BUILTIN_CONTRACT_DEFS } from '../registry/builtin-contracts';
 import type { ContractDefinition } from '../registry/contract-type';
+import type { ExprNode } from './ast';
 import { normalizeExpr, propertyNamesInExpr } from './normalize';
 
 /**
@@ -72,6 +73,29 @@ describe('normalizeExpr', () => {
     // {slot} НЕ нормализуется: имя слота — имя внутри контракта, а не запись реестра.
     expect(normalizeExpr({ slot: 'amount' } as never, NORM_REG)).toEqual({ slot: 'amount' });
   });
+
+  test('член $touched — АДРЕС свойства: key → id, как у {has} (Ф-Б2-26)', () => {
+    const touched = (name: string): ExprNode => ({
+      op: 'in',
+      args: [{ const: name }, { ctx: '$touched' }],
+    });
+    expect(normalizeExpr(touched('user/effort_points'), NORM_REG)).toEqual(
+      touched(FIXTURE_USER_PROPERTY_ID),
+    );
+    // Внутри составного выражения — тот же резолв: адрес не зависит от глубины.
+    expect(normalizeExpr({ op: 'not', args: [touched('user/effort_points')] }, NORM_REG)).toEqual({
+      op: 'not',
+      args: [touched(FIXTURE_USER_PROPERTY_ID)],
+    });
+    // Прочие `{const}` — значения: тот же текст в членстве по списку не резолвится.
+    const byValue: ExprNode = {
+      op: 'in',
+      args: [{ const: 'user/effort_points' }, { const: ['user/effort_points'] }],
+    };
+    expect(normalizeExpr(byValue, NORM_REG)).toEqual(byValue);
+    // Неизвестное имя остаётся как есть — отказ называет чекер (`touchedMembership`).
+    expect(normalizeExpr(touched('нет-такого'), NORM_REG)).toEqual(touched('нет-такого'));
+  });
 });
 
 describe('propertyNamesInExpr — вход графа зависимостей правил (Р-И-22, §Б4)', () => {
@@ -96,5 +120,17 @@ describe('propertyNamesInExpr — вход графа зависимостей �
       [],
     );
     expect([...propertyNamesInExpr(null)]).toEqual([]);
+  });
+
+  test('propertyNamesInExpr: член $touched — адрес, константа по значению — нет (Ф-Б2-26)', () => {
+    const node = {
+      op: 'and',
+      args: [
+        { op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] },
+        { op: 'in', args: [{ const: 'orbis/priority' }, { const: ['orbis/priority'] }] },
+        { op: 'in', args: [{ const: 'external' }, { ctx: '$sensitivity' }] },
+      ],
+    };
+    expect([...propertyNamesInExpr(node)]).toEqual(['orbis/due_date']);
   });
 });

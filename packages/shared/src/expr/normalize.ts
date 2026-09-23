@@ -47,8 +47,35 @@ function property(name: string, reg: ExprNormalizeRegistry): string {
   return resolvePropertyFieldId(name, reg) ?? name;
 }
 
+/**
+ * АДРЕС СВОЙСТВА В ФОРМЕ `"<id>" in $touched` (Е-5, Ф-Б2-26) — литерал слева от контекста, иначе
+ * `undefined`. Это единственная `{const}` языка E, которая НЕ значение, а адрес строки реестра:
+ * `$touched` — множество id свойств, которые трогает вызов, и сравнивать с ним имеет смысл только
+ * адрес (чекер требует литерал из реестра — `touchedMembership`). Поэтому читатели имён реестра —
+ * нормализация (key → id), перечень держателей (`propertyNamesInExpr`), печать (id → key) и
+ * переписывание адресов при слиянии свойств (`rewriteAst` сервера) — обязаны видеть его наравне с
+ * `{prop}`/`{has}`: иначе своё свойство, названное ключом, отказывало бы `EXPR_TYPE`, а правило на
+ * поглощённом свойстве молча перестало бы срабатывать. Вход — сырой JSON: форма нужна и там, где
+ * дерево ещё не разобрано схемой (jsonb реестра).
+ */
+export function touchedAddressOf(node: unknown): string | undefined {
+  if (typeof node !== 'object' || node === null) return undefined;
+  const rec = node as { op?: unknown; args?: unknown };
+  if (rec.op !== 'in' || !Array.isArray(rec.args) || rec.args.length !== 2) return undefined;
+  const [left, right] = rec.args as [unknown, unknown];
+  if (typeof right !== 'object' || right === null) return undefined;
+  if ((right as { ctx?: unknown }).ctx !== '$touched') return undefined;
+  if (typeof left !== 'object' || left === null) return undefined;
+  const value = (left as { const?: unknown }).const;
+  return typeof value === 'string' ? value : undefined;
+}
+
 function normalizeNode(node: ExprNode, reg: ExprNormalizeRegistry): ExprNode {
   if ('prop' in node) return { prop: property(node.prop, reg) };
+  const touched = touchedAddressOf(node);
+  if (touched !== undefined) {
+    return { op: 'in', args: [{ const: property(touched, reg) }, { ctx: '$touched' }] };
+  }
   // `has` адресует свойство ЛИБО слот контракта: у слота записи в реестре нет, и резолв
   // вернёт имя нетронутым — второй ветки под это не нужно.
   if ('has' in node) return { has: property(node.has, reg) };
@@ -103,7 +130,8 @@ function normalizeNode(node: ExprNode, reg: ExprNormalizeRegistry): ExprNode {
     };
   }
   // {const}, {duration}, {slot}, {param}, {ctx}, {agg}, {phase}, {agg_via} имён реестра не
-  // несут: слот, параметр, величина и фаза — имена ВНУТРИ контракта или ведомости.
+  // несут: слот, параметр, величина и фаза — имена ВНУТРИ контракта или ведомости. Единственная
+  // `{const}`-адрес — член `$touched` — разобрана выше (`touchedAddressOf`).
   return node;
 }
 
@@ -119,8 +147,10 @@ export function normalizeExpr(expr: ExprNode, reg: ExprNormalizeRegistry): ExprN
 }
 
 /**
- * ИМЕНА СВОЙСТВ, КОТОРЫЕ ВЫРАЖЕНИЕ ЧИТАЕТ — вход графа зависимостей правил (Р-И-22, §Б4). Три формы и ровно
- * три: `{prop}`, `{has}` и БАЗА разыменования `{deref:{prop}}`. `deref.read` не входит намеренно — это
+ * ИМЕНА СВОЙСТВ, КОТОРЫЕ ВЫРАЖЕНИЕ АДРЕСУЕТ — вход графа зависимостей правил (Р-И-22, §Б4) и перечня
+ * держателей (задача 16). Четыре формы и ровно четыре: `{prop}`, `{has}`, БАЗА разыменования
+ * `{deref:{prop}}` и литерал-член `$touched` (`"<id>" in $touched`, Ф-Б2-26 — см. `touchedAddressOf`;
+ * графу он рёбер не даёт: `assign_level` ничего не пишет). `deref.read` не входит намеренно — это
  * свойство ЧУЖОЙ записи, и ребро «моё свойство зависит от него» означало бы стратификацию по графу
  * сущностей, которой у реестра нет. `{slot}`/`{agg}`/`{agg_via}`/`{phase}`/`{param}`/`{ctx}` — имена ВНУТРИ
  * контракта или ведомости, строк реестра они не адресуют. Обход ИТЕРАТИВНЫЙ: дерево приезжает из jsonb, и
@@ -139,6 +169,8 @@ export function propertyNamesInExpr(node: unknown): Set<string> {
     const rec = cur as Record<string, unknown>;
     if (typeof rec.prop === 'string') out.add(rec.prop);
     if (typeof rec.has === 'string') out.add(rec.has);
+    const touched = touchedAddressOf(rec);
+    if (touched !== undefined) out.add(touched);
     const deref = rec.deref as { prop?: unknown } | undefined;
     if (deref !== undefined && typeof deref.prop === 'string') out.add(deref.prop);
     // Внутрь `deref` не спускаемся: единственное, что там ещё есть, — `read` чужой записи.

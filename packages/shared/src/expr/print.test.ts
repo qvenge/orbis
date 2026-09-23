@@ -3,7 +3,7 @@
 // слипшиеся тексты прятали бы её. Обратимость печатью НЕ обещана (текст — сахар Р18,
 // парсера текста в Б-1 нет), поэтому здесь проверяется читаемость и РАЗЛИЧИМОСТЬ.
 import { describe, expect, test } from 'bun:test';
-import { FIXTURE_PARSE_REGISTRY } from '../query/ast-fixtures';
+import { FIXTURE_PARSE_REGISTRY, FIXTURE_USER_PROPERTY_ID } from '../query/ast-fixtures';
 import { EXPR_FIXTURES } from './fixtures';
 import { printExpr } from './print';
 
@@ -59,5 +59,12 @@ describe('printExpr', () => {
         FIXTURE_PARSE_REGISTRY,
       ),
     ).toBe('("orbis/due_date" in $touched)');
+    // Член $touched — адрес (Ф-Б2-26): своё свойство печатается КЛЮЧОМ, а не uuid'ом.
+    expect(
+      printExpr(
+        { op: 'in', args: [{ const: FIXTURE_USER_PROPERTY_ID }, { ctx: '$touched' }] } as never,
+        FIXTURE_PARSE_REGISTRY,
+      ),
+    ).toBe('("user/effort_points" in $touched)');
   });
 });

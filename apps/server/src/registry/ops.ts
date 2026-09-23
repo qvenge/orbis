@@ -59,7 +59,7 @@ import {
   readBodyDoc,
   serializeBody,
 } from '@orbis/shared/doc';
-import type { ExprNormalizeRegistry } from '@orbis/shared/expr';
+import { type ExprNormalizeRegistry, touchedAddressOf } from '@orbis/shared/expr';
 import {
   assertStaticQuery,
   maskQuotedValues,
@@ -1401,10 +1401,23 @@ function uuidArray(ids: readonly string[]): SQL {
   )}]::uuid[]`;
 }
 
-/** Переписать имена свойств внутри произвольного JSON-дерева (`prop`/`has`/`field`). */
-function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unknown {
+/**
+ * Переписать имена свойств внутри произвольного JSON-дерева: `prop`/`has`/`field` и литерал-член
+ * `$touched` языка E (`"<id>" in $touched`, Ф-Б2-26) — единственная `{const}`, которая адрес, а не
+ * значение (`touchedAddressOf`). Прочие `{const}` не трогаются: `"orbis/x" in ["orbis/x"]` — сравнение
+ * значений, и переписать его значило бы поменять смысл данных владельца.
+ *
+ * Экспорт — ради пина: держателей с E-правилами у слияния пока нет (правила на строках реестра —
+ * держатель задачи 16), и без прямого теста ветка `$touched` ждала бы первого потребителя
+ * непроверенной.
+ */
+export function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unknown {
   if (Array.isArray(value)) return value.map((v) => rewriteAst(v, from, to));
   if (typeof value !== 'object' || value === null) return value;
+  const touched = touchedAddressOf(value);
+  if (touched !== undefined && from.has(touched)) {
+    return { ...(value as Record<string, unknown>), args: [{ const: to }, { ctx: '$touched' }] };
+  }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     out[k] =
