@@ -605,6 +605,17 @@ describe('рёбра и архивность из ПАЧКИ в has_relation (Р
     ]);
     expect(refusalOf(r)).toBe('INVARIANT/gate_plain_blocked_in_batch');
   });
+  test('пачка [relation_create X, relation_delete X, entity_update] — созданное и снятое пачкой ребро не видно, проходит (рулинг 4-6)', async () => {
+    // Итог пачки по рёбрам — «БД ∪ виртуальные − удалённые» (Р-И-7): ребро, которое пачка сама создала
+    // и сама же сняла, в графе после коммита не живёт, и правило его видеть не должно.
+    const { target, blocker } = await pair();
+    const r = await batchOf(w, [
+      { tool: 'relation_create', input: edge(blocker, target) },
+      { tool: 'relation_delete', input: edge(blocker, target) },
+      touch(target),
+    ]);
+    expect(refusalOf(r)).toBe('ok');
+  });
   test('пачка [relation_delete, entity_update] — удалённое пачкой ребро не видно, проходит', async () => {
     const { target, blocker } = await pair();
     expect(refusalOf(await w.run('relation_create', edge(blocker, target)))).toBe('ok');

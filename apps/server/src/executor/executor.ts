@@ -356,8 +356,8 @@ export class BatchState {
    * легитимируется связью независимо от позиции — `createdRelations` наполняется по мере подготовки
    * и для операции №1 был бы пуст. Движок правил видит их полем `created` (`rules/engine.ts`,
    * `writeScope`), по ВСЕМ ролям: какие роли спросить, решает `when` правила, а не пре-пасс.
-   * Удаление той же пачкой объявленного ею ребра объявления не отменяет — паритет с прежним узким
-   * пре-пассом роли `instance-of`, который объявленную цель считал легитимной при любом соседстве.
+   * Это ИТОГ пачки по рёбрам, которые она создаёт: ребро, созданное и той же пачкой удалённое, сюда не
+   * входит (Р-И-7 «БД ∪ виртуальные − удалённые», рулинг 4-6) — см. `collectDeclaredRelations`.
    */
   readonly declaredRelations: readonly VirtualRelationCreate[];
 
@@ -742,24 +742,47 @@ function replayFromAudit(batchId: string, saved: JournalWrite): ExecuteResult {
 }
 
 /**
- * Связи из конвертов `relation_create` — по ВСЕМ операциям пачки и ЛЮБОЙ роли (РЧ-4-1). Разбор тот
- * же, что у подготовки операции; конверт, не разобравшийся здесь, отвергнет сама его операция.
+ * Рёбра, которые пачка СОЗДАЁТ в итоге, — по ВСЕМ операциям и ЛЮБОЙ роли (РЧ-4-1). Разбор тот же,
+ * что у подготовки операции; конверт, не разобравшийся здесь, отвергнет сама его операция.
+ *
+ * ПОЧЕМУ ОБХОД ПО ПОРЯДКУ, А НЕ СПИСОК ВСЕХ `relation_create` (рулинг 4-6). Пачка атомарна, и правило
+ * обязано видеть граф, который она оставит после себя: `relation_create` кладёт ключ (источник, цель,
+ * роль), а `relation_delete` с тем же ключом снимает объявленный РАНЕЕ. Статический список держал бы
+ * видимым ребро, которое пачка создала и сама же удалила, — у правила с `has_relation` это ложный отказ,
+ * а у правила владельца с `not has_relation` — обход: «создать ребро, удалить ребро, записать
+ * нарушение» проходил бы, и после коммита граф нарушал бы инвариант. Независимость СОЗДАНИЯ от
+ * позиции сохранена: ребро, объявленное операцией №2 и не снятое, видно операции №1.
+ * Удаление ребра, которого пачка не объявляла (ребро БД), здесь не учитывается — его вычитает
+ * `deletedRelations` по мере подготовки, как прежде (Р-И-7). Прежний узкий пре-пасс (`instance-of`)
+ * удалённое пачкой не вычитал — это единственное изменение вердикта против него (корпус близнецов,
+ * `BATCH_DELETE_SUBTRACTS_DECLARED`).
  */
 function collectDeclaredRelations(
   ops: Array<{ tool: string; input: unknown }>,
 ): VirtualRelationCreate[] {
-  const declared: VirtualRelationCreate[] = [];
+  let declared: VirtualRelationCreate[] = [];
   for (const op of ops) {
-    if (op.tool !== 'relation_create') continue;
-    // Внутренняя форма шире публичной (meta опциональна): для публичных input'ов
-    // различий нет, а inverse-операции undo несут meta — пре-пасс не должен их терять
-    const parsed = relationCreateInternalInput.safeParse(op.input);
-    if (parsed.success) {
-      declared.push({
-        sourceId: parsed.data.source_id,
-        targetId: parsed.data.target_id,
-        role: parsed.data.role,
-      });
+    if (op.tool === 'relation_create') {
+      // Внутренняя форма шире публичной (meta опциональна): для публичных input'ов
+      // различий нет, а inverse-операции undo несут meta — пре-пасс не должен их терять
+      const parsed = relationCreateInternalInput.safeParse(op.input);
+      if (parsed.success) {
+        declared.push({
+          sourceId: parsed.data.source_id,
+          targetId: parsed.data.target_id,
+          role: parsed.data.role,
+        });
+      }
+    } else if (op.tool === 'relation_delete') {
+      const parsed = relationDeleteInput.safeParse(op.input);
+      if (parsed.success) {
+        const key: RelationKey = {
+          sourceId: parsed.data.source_id,
+          targetId: parsed.data.target_id,
+          role: parsed.data.role,
+        };
+        declared = declared.filter((d) => !sameRelationKey(d, key));
+      }
     }
   }
   return declared;
