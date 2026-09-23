@@ -8,9 +8,11 @@
 //
 // ПОЧЕМУ СТАРЫЙ ВЕРДИКТ ЗАМОРОЖЕН. Порядок §А7-2 — «тесты-близнецы и golden-корпус на старом и новом
 // валидаторе ДО замены»: корпус снят старым кодом (`assertFinancialInvariant`, `applyTaskCompletion`)
-// ОДИН раз, до первой правки инвариантов, и записан литералом. Код снесён той же задачей — пересчитать
-// `legacy*` больше нечем, и это намеренно: значение, которое нельзя пересчитать, нельзя и молча
-// подогнать под новый результат. Живой вердикт (`verdict`/`code`/`invariant`/`writes`) считается
+// до первой правки инвариантов и записан литералом. Код снесён той же задачей — `legacy*` в дереве
+// пересчитать нечем, и это намеренно: значение, которое нельзя пересчитать, нельзя и молча подогнать
+// под новый результат. Записи, добавленные ревью после сноса, сняты тем же старым кодом, временно
+// возвращённым из базы задачи (`c1d40fe`, сид без правил), — тот же прогон побайтно воспроизвёл
+// замороженные `legacy*` прежних записей. Живой вердикт (`verdict`/`code`/`invariant`/`writes`) считается
 // прогоном и обязан совпасть с записанным АБСОЛЮТНО — иначе два одинаково сломанных пути прошли бы
 // приёмку вдвоём.
 //
@@ -62,9 +64,29 @@ interface GoldenRecord {
   /**
    * Связи. У `update` — существуют ДО второго хода (источник «template» заводит фикстура, ребро —
    * исполнитель механизмом `seed`: роль `instance-of` — `created_by: system`); у `batch` — объявлены
-   * той же пачкой ПОСЛЕ `entity_create`.
+   * той же пачкой ПОСЛЕ `entity_create`. `sourceArchived` — шаблон-источник убран в архив до записи.
+   * `deletedBy: 'batch'` — ребро снимает та же пачка, что пишет запись: у `batch` — после объявления
+   * (создано и удалено пачкой), у `update` второй ход становится пачкой `[relation_delete, entity_update]`
+   * (ребро из БД снято более ранней операцией пачки).
    */
-  relations?: Array<{ role: string; from: 'template' }>;
+  relations?: Array<{
+    role: string;
+    from: 'template';
+    sourceArchived?: boolean;
+    deletedBy?: 'batch';
+  }>;
+  /**
+   * Аспекты ПЕРВОГО хода, когда они не те, что у записи: у `attach` по умолчанию `[]`, у `update` —
+   * `aspects`. Нужны записи «повторное навешивание»: запись рождается с аспектом, фикстура его снимает.
+   */
+  firstAspects?: string[];
+  /**
+   * Правки исполнителем между первым и вторым ходом — входы `entity_update` без `id` (снять свойство,
+   * снять аспект). Каждая обязана пройти: это обстановка, а не вердикт.
+   */
+  setup?: Array<Record<string, unknown>>;
+  /** Поля второго хода `entity_update` сверх свойств и ядра — `aspects: {attach|detach}`. */
+  update?: Record<string, unknown>;
   /**
    * Нарушитель, записанный ДО правила: после первого хода эти свойства снимаются у строки прямой
    * записью в БД (админ-DSN) — так в графе оказывается запись, которую исполнитель сегодня завести
@@ -106,25 +128,45 @@ const EXPECTED_DIFFS: Record<string, { records: number }> = {
   // штамп записи. Достижимо ТОЛЬКО явным `null` во входе и только у T-правил: они идут до стадии 2, а
   // C-правила — стадией 4, куда `null` не доезжает ни одним путём (записи «occurred_on: null» на
   // create, update и attach — `VALIDATION` у обоих). Прецедент той же семантики в старом коде —
-  // подстановка валюты конверта «NULL → умолчание» до валидации.
-  T_SET_NULL_IS_ABSENT: { records: 1 },
+  // подстановка валюты конверта «NULL → умолчание» до валидации. Две записи: create и update (рулинг
+  // 4-1 гейта принял причину).
+  T_SET_NULL_IS_ABSENT: { records: 2 },
   // Р-И-3 (Р-К-2): значение `on_enter_class` — `{prop:'orbis/updated_at'}`, штамп, который ляжет в
   // колонку этой же операцией; снятый код писал чистый `clock()`. В проде разницы нет (у живого хода
   // часов `monotonicUpdatedAt(now, prev) === now`); с поддельными часами правка и attach в тот же тик
   // дают штамп `T0+1ms` (§5.2). Create в done расхождения не даёт: у него штамп и есть `now`.
   COMPLETED_AT_IS_WRITE_STAMP: { records: 2 },
+  // Р-И-14, Р-И-37 (рулинг 4-5): событие `on_enter_class` — ВХОД В КЛАСС, одинаковый на трёх путях;
+  // класс считается по `entityClassOf` до и после записи. Повторное навешивание `orbis/task` на запись,
+  // у которой `task_status: done` пережил снятие аспекта (Р9), а `completed_at` нет, — вход: до записи
+  // привязки нет и класса нет, после — `done`; правило ставит штамп. Снятый код его не ставил по
+  // признакам пути, а не по смыслу: у update закрыт гейт «патч тронул `task_status`», у attach —
+  // `prevStatus === 'done'` по уцелевшему значению. Записи — update (`aspects.attach`) и
+  // `attach_orbis_task`.
+  ENTER_IS_CLASS_EVENT: { records: 2 },
+  // Р-И-7 «БД ∪ виртуальные − удалённые», Р-К-46 (рулинг 4-6): итог пачки по рёбрам не содержит ребра,
+  // которое пачка создала и сама же сняла, — после коммита его в графе нет. Старый узкий пре-пасс
+  // (`instance-of`) удалённое пачкой не вычитал и легитимировал `recurring` ребром, которого не
+  // осталось.
+  BATCH_DELETE_SUBTRACTS_DECLARED: { records: 1 },
 };
 
 /**
  * Состав — два числа точные (равенство, а не порог: молча выкинутая запись обязана красить приёмку).
  * Одиннадцать записей — таблица задачи 4 (по две на каждую ветку инварианта и по одной на путь записи
- * штампа); семь сверху — переносы ревью задачи 3: пачка с ребром ЧУЖОЙ роли (общий пре-пасс по ролям
+ * штампа); семь — переносы ревью задачи 3: пачка с ребром ЧУЖОЙ роли (общий пре-пасс по ролям
  * не должен легитимировать `recurring`), нарушитель под правкой ядра и под правкой свойства (C-правила
  * на `entity_update` — Ф-Б2-17, рулинг 3-4) и четыре пробы явного `null` на трёх путях записи (движок
- * считает `null` отсутствием, старый код — `=== undefined`).
+ * считает `null` отсутствием, старый код — `=== undefined`); десять — фикс-раунд 1 гейта задачи 4:
+ * ветки, эквивалентные старому коду только по чтению (`schedule` без `recurrence`, `recurring: false`,
+ * снятие `orbis/schedule` правкой, ребро БД, снятое ранней операцией пачки, архивный источник
+ * `instance-of`, явный `completed_at` при входе в `done`, `null` на update), повторное навешивание
+ * `orbis/task` на двух путях (I-1) и ребро, созданное и снятое пачкой (I-2). `legacy*` новых записей
+ * снят старым кодом (исходники `c1d40fe` и сид без правил) тем же прогоном, что воспроизвёл замороженные
+ * `legacy*` первых восемнадцати побайтно.
  */
-const CORPUS_SIZE = 18;
-const NEGATIVE_RECORDS = 8;
+const CORPUS_SIZE = 28;
+const NEGATIVE_RECORDS = 13;
 
 // `as unknown` — TS выводит из литерального JSON союз объектов с `field?: undefined`, несравнимый с
 // объявленной формой; форму и состав корпуса стережёт тест состава, а не компилятор.
@@ -174,8 +216,9 @@ function writesOf(e: WireEntity): Record<string, string | null> {
   }
   return out;
 }
-function outcomeOf(r: ExecuteResult): Outcome {
-  if (r.ok) return { verdict: 'ok', writes: writesOf(r.results[0] as WireEntity) };
+/** Исход хода; `at` — номер операции пачки, чью запись читать (у одиночного хода — 0). */
+function outcomeOf(r: ExecuteResult, at = 0): Outcome {
+  if (r.ok) return { verdict: 'ok', writes: writesOf(r.results[at] as WireEntity) };
   const details = (r.error.details ?? {}) as Record<string, unknown>;
   const invariant = typeof details.invariant === 'string' ? details.invariant : undefined;
   return {
@@ -193,6 +236,11 @@ async function template(name: string): Promise<string> {
     aspects: ['orbis/financial', 'orbis/schedule'],
   });
   return entityOf(created, `шаблон для «${name}»`).id;
+}
+
+/** Источник ребра — в архив (правка ядра исполнителем): ребро живёт, источник не `alive`. */
+async function archive(id: string, what: string): Promise<void> {
+  entityOf(await run('entity_update', { id, archived: true }), `архив: ${what}`);
 }
 
 /** Строка без названных свойств — прямой записью (нарушитель, заведённый до правила). */
@@ -231,10 +279,10 @@ async function take(record: GoldenRecord): Promise<Outcome> {
       },
     ];
     for (const rel of record.relations ?? []) {
-      operations.push({
-        tool: 'relation_create',
-        input: { source_id: await template(title), target_id: id, role: rel.role },
-      });
+      const edge = { source_id: await template(title), target_id: id, role: rel.role };
+      if (rel.sourceArchived === true) await archive(edge.source_id, title);
+      operations.push({ tool: 'relation_create', input: edge });
+      if (rel.deletedBy === 'batch') operations.push({ tool: 'relation_delete', input: edge });
     }
     return outcomeOf(
       await execute(db, req(operations, { batchId: newId(), mechanism: 'seed', source: 'chat' })),
@@ -245,17 +293,21 @@ async function take(record: GoldenRecord): Promise<Outcome> {
       title,
       tags: [],
       props: record.props,
-      aspects: record.shape === 'attach' ? [] : record.aspects,
+      aspects: record.firstAspects ?? (record.shape === 'attach' ? [] : record.aspects),
     }),
     title,
   );
+  for (const step of record.setup ?? []) {
+    entityOf(await run('entity_update', { id: first.id, ...step }), `${title}: обстановка`);
+  }
+  /** Рёбра из БД, которые снимает сама пачка второго хода (`deletedBy: 'batch'`). */
+  const deletedInBatch: Array<Record<string, string>> = [];
   for (const rel of record.relations ?? []) {
-    const linked = await run(
-      'relation_create',
-      { source_id: await template(title), target_id: first.id, role: rel.role },
-      { mechanism: 'seed' },
-    );
+    const edge = { source_id: await template(title), target_id: first.id, role: rel.role };
+    const linked = await run('relation_create', edge, { mechanism: 'seed' });
     if (!linked.ok) throw new Error(`фикстура «${title}»: ребро ${JSON.stringify(linked.error)}`);
+    if (rel.sourceArchived === true) await archive(edge.source_id, title);
+    if (rel.deletedBy === 'batch') deletedInBatch.push(edge);
   }
   if (record.rowWithout !== undefined) await stripRow(first.id, record.rowWithout);
   if (record.shape === 'attach') {
@@ -267,12 +319,20 @@ async function take(record: GoldenRecord): Promise<Outcome> {
       await run(attachToolName(aspect), { entity_id: first.id, data: record.patch ?? {} }),
     );
   }
+  const move = {
+    id: first.id,
+    ...(record.patch !== undefined && { props: record.patch }),
+    ...record.core,
+    ...record.update,
+  };
+  if (deletedInBatch.length === 0) return outcomeOf(await run('entity_update', move));
+  const operations: ExecuteRequest['operations'] = [
+    ...deletedInBatch.map((input) => ({ tool: 'relation_delete', input })),
+    { tool: 'entity_update', input: move },
+  ];
   return outcomeOf(
-    await run('entity_update', {
-      id: first.id,
-      ...(record.patch !== undefined && { props: record.patch }),
-      ...record.core,
-    }),
+    await execute(db, req(operations, { batchId: newId(), mechanism: 'seed', source: 'chat' })),
+    operations.length - 1,
   );
 }
 

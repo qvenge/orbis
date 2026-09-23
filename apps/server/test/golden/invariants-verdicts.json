@@ -373,6 +373,262 @@
         "orbis/completed_at": "$updatedAt"
       },
       "expectedDiff": "T_SET_NULL_IS_ABSENT"
+    },
+    {
+      "name": "financial recurring на schedule без recurrence",
+      "shape": "create",
+      "aspects": ["orbis/financial", "orbis/schedule"],
+      "props": {
+        "orbis/amount": "340.00",
+        "orbis/direction": "expense",
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/recurring": true,
+        "orbis/start_at": "2026-07-01T10:00:00+03:00"
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "INVARIANT",
+      "legacyInvariant": "financial_recurring_requires_recurrence",
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "financial_recurring_requires_recurrence"
+    },
+    {
+      "name": "financial recurring: false без occurred_on",
+      "shape": "create",
+      "aspects": ["orbis/financial"],
+      "props": {
+        "orbis/amount": "340.00",
+        "orbis/direction": "expense",
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/recurring": false
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "INVARIANT",
+      "legacyInvariant": "financial_requires_occurred_on",
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "financial_requires_occurred_on"
+    },
+    {
+      "name": "financial-шаблон теряет orbis/schedule правкой",
+      "shape": "update",
+      "aspects": ["orbis/financial", "orbis/schedule"],
+      "props": {
+        "orbis/amount": "340.00",
+        "orbis/direction": "expense",
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/recurring": true,
+        "orbis/recurrence": {
+          "freq": "monthly",
+          "interval": 1
+        },
+        "orbis/start_at": "2026-07-01T10:00:00+03:00"
+      },
+      "update": {
+        "aspects": {
+          "detach": ["orbis/schedule"]
+        }
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "INVARIANT",
+      "legacyInvariant": "financial_recurring_requires_recurrence",
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "financial_recurring_requires_recurrence"
+    },
+    {
+      "name": "recurring: ребро instance-of из БД снято ранней операцией пачки",
+      "shape": "update",
+      "aspects": ["orbis/financial"],
+      "props": {
+        "orbis/amount": "500.00",
+        "orbis/direction": "expense",
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/occurred_on": "2026-07-04"
+      },
+      "relations": [
+        {
+          "role": "instance-of",
+          "from": "template",
+          "deletedBy": "batch"
+        }
+      ],
+      "patch": {
+        "orbis/recurring": true
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "INVARIANT",
+      "legacyInvariant": "financial_recurring_requires_recurrence",
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "financial_recurring_requires_recurrence"
+    },
+    {
+      "name": "recurring с instance-of из БД от архивного шаблона",
+      "shape": "update",
+      "aspects": ["orbis/financial"],
+      "props": {
+        "orbis/amount": "500.00",
+        "orbis/direction": "expense",
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/occurred_on": "2026-07-04"
+      },
+      "relations": [
+        {
+          "role": "instance-of",
+          "from": "template",
+          "sourceArchived": true
+        }
+      ],
+      "patch": {
+        "orbis/recurring": true
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null
+      }
+    },
+    {
+      "name": "task входит в done с явным completed_at",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "props": {
+        "orbis/task_status": "inbox"
+      },
+      "patch": {
+        "orbis/task_status": "done",
+        "orbis/completed_at": "2026-07-01T09:00:00.000Z"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": "2026-07-01T09:00:00.000Z"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": "2026-07-01T09:00:00.000Z"
+      }
+    },
+    {
+      "name": "task входит в done правкой с completed_at: null",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "props": {
+        "orbis/task_status": "inbox"
+      },
+      "patch": {
+        "orbis/task_status": "done",
+        "orbis/completed_at": null
+      },
+      "legacyVerdict": "reject",
+      "legacyCode": "VALIDATION",
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": "$updatedAt"
+      },
+      "expectedDiff": "T_SET_NULL_IS_ABSENT"
+    },
+    {
+      "name": "task повторно навешивается правкой: done пережил снятие без completed_at",
+      "shape": "update",
+      "aspects": ["orbis/task"],
+      "props": {
+        "orbis/task_status": "done"
+      },
+      "setup": [
+        {
+          "unset": ["orbis/completed_at"]
+        },
+        {
+          "aspects": {
+            "detach": ["orbis/task"]
+          }
+        }
+      ],
+      "update": {
+        "aspects": {
+          "attach": ["orbis/task"]
+        }
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.003Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.003Z",
+        "orbis/completed_at": "$updatedAt"
+      },
+      "expectedDiff": "ENTER_IS_CLASS_EVENT"
+    },
+    {
+      "name": "task повторно навешивается attach-тулом: done пережил снятие без completed_at",
+      "shape": "attach",
+      "aspects": ["orbis/task"],
+      "firstAspects": ["orbis/task"],
+      "props": {
+        "orbis/task_status": "done"
+      },
+      "setup": [
+        {
+          "unset": ["orbis/completed_at"]
+        },
+        {
+          "aspects": {
+            "detach": ["orbis/task"]
+          }
+        }
+      ],
+      "patch": {
+        "orbis/task_status": "done"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.003Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.003Z",
+        "orbis/completed_at": "$updatedAt"
+      },
+      "expectedDiff": "ENTER_IS_CLASS_EVENT"
+    },
+    {
+      "name": "recurring с instance-of, созданным и удалённым той же пачкой",
+      "shape": "batch",
+      "aspects": ["orbis/financial"],
+      "props": {
+        "orbis/amount": "500.00",
+        "orbis/direction": "expense",
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/recurring": true
+      },
+      "relations": [
+        {
+          "role": "instance-of",
+          "from": "template",
+          "deletedBy": "batch"
+        }
+      ],
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.000Z",
+        "orbis/completed_at": null
+      },
+      "verdict": "reject",
+      "code": "INVARIANT",
+      "invariant": "financial_recurring_requires_recurrence",
+      "expectedDiff": "BATCH_DELETE_SUBTRACTS_DECLARED"
     }
   ]
 }
