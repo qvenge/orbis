@@ -440,6 +440,12 @@ const AL = (n: string, name: string, carrier: RuleCarrier, rule: RuleDefinitionI
  * ОДИННАДЦАТЬ ПРАВИЛ §Б4-5 КАНОНОМ (§С8-26) — тринадцатью записями: правила 8 и 10 разложены на
  * два каждое (Р-5, Р-К-76), потому что отбирают их снаружи — по связи и по актору.
  *
+ * ПОНИЖАЮЩИЕ правила (`silent`) называют актора, к которому понижение обращено (Р-27: без него —
+ * `RULE_LOWERING_UNSCOPED` валидатора). У правил 1, 4, 5, 8a это `'ai'`: в «дне мечты» звонок
+ * соединяет, счёт оплачивает, курьера отправляет и встречу переносит ассистент. Таблица §Б4-5
+ * называет актора только там, где он — часть смысла правила (6, 10, 11), а без адресата
+ * понижение валидатор не примет; правило 6 адресовано рутине импорта по uuid.
+ *
  * Формы `empty` (правило 6) и `$touched` (правило 11) приехали в язык E задачей 15 (Р-26, Р-28) —
  * ровно под эти правила, а не наоборот: писать их в формах, которые язык знал раньше, значило бы
  * подогнать приёмку выразительности под сегодняшний язык, то есть отменить её. Разбор схемой
@@ -452,6 +458,7 @@ export const ASSIGN_LEVEL_RULES = [
     template: 'assign_level',
     params: {},
     level: 'silent',
+    actor: 'ai',
     when: {
       op: 'in',
       args: [{ const: 'семья' }, { deref: { prop: 'test/caller', read: 'tags' } }],
@@ -494,6 +501,7 @@ export const ASSIGN_LEVEL_RULES = [
     template: 'assign_level',
     params: {},
     level: 'silent',
+    actor: 'ai',
     when: {
       op: 'and',
       args: [
@@ -513,6 +521,7 @@ export const ASSIGN_LEVEL_RULES = [
     template: 'assign_level',
     params: {},
     level: 'silent',
+    actor: 'ai',
     when: {
       op: '=',
       args: [{ deref: { prop: 'test/caller', read: 'test/contact_kind' } }, { const: 'courier' }],
@@ -547,6 +556,7 @@ export const ASSIGN_LEVEL_RULES = [
     template: 'assign_level',
     params: {},
     level: 'silent',
+    actor: 'ai',
     when: { op: 'not', args: [{ has_relation: { role: 'participant' } }] },
   }),
   AL('8b', 'встреча с участниками — покажи', ASPECT('orbis/schedule'), {
