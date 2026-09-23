@@ -4993,6 +4993,31 @@ describe('rule_set / rule_remove через исполнитель: журнал
     expect(await taskRulesOf(g)).toContain('task_completed_at');
   });
 
+  test('гейт глубины E у rule_set — ДО схемы: глубокое условие — структурный отказ, а не RangeError', async () => {
+    const g = await freshGraph();
+    let when: unknown = { has: 'orbis/due_date' };
+    for (let i = 0; i < 20_000; i += 1) when = { op: 'not', args: [when] };
+    const e = err(
+      await run(
+        'rule_set',
+        {
+          target: { aspect: 'orbis/task' },
+          rule: {
+            id: 'deep',
+            template: 'requires_when',
+            params: { property: 'orbis/due_date' },
+            when,
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
+    expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'EXPR_TOO_DEEP',
+    ]);
+  });
+
   test('встроенная роль через тул — отказ RULE_TARGET_SYSTEM_ROLE; неизвестный носитель — NOT_FOUND', async () => {
     const g = await freshGraph();
     const role = err(

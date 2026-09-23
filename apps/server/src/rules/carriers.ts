@@ -85,12 +85,11 @@ export function assertEngineCarriersKept(before: RegistrySnapshot, after: Regist
   }
 }
 
-function singleRuleOf<T extends RuleTemplate>(
+function singleRuleOf<T extends keyof typeof ENGINE_CARRIER_TEMPLATES>(
   reg: RegistrySnapshot,
   template: T,
-  carrierKind: 'aspect' | 'role',
 ): { rule: Extract<RuleDefinition, { template: T }>; carrierId: string } {
-  const found = enabledCarrierRows(reg, template, carrierKind);
+  const found = enabledCarrierRows(reg, template, ENGINE_CARRIER_TEMPLATES[template]);
   const [hit, ...rest] = found;
   if (hit === undefined) {
     throw new Error(
@@ -108,19 +107,19 @@ function singleRuleOf<T extends RuleTemplate>(
 }
 
 export function nearestAncestorRuleOf(reg: RegistrySnapshot): CarrierRule<'nearest_ancestor'> {
-  const { rule, carrierId } = singleRuleOf(reg, 'nearest_ancestor', 'aspect');
+  const { rule, carrierId } = singleRuleOf(reg, 'nearest_ancestor');
   return { rule, aspectId: carrierId };
 }
 export function materializeRuleOf(reg: RegistrySnapshot): CarrierRule<'materialize'> {
-  const { rule, carrierId } = singleRuleOf(reg, 'materialize', 'aspect');
+  const { rule, carrierId } = singleRuleOf(reg, 'materialize');
   return { rule, aspectId: carrierId };
 }
 /** Носитель — РОЛЬ `ref`: зеркало производно от роли ребра, а не от аспекта записи (§А6-2). */
 export function mirrorRuleOf(reg: RegistrySnapshot): MirrorRule {
-  return singleRuleOf(reg, 'mirror_relation', 'role').rule;
+  return singleRuleOf(reg, 'mirror_relation').rule;
 }
 export function rolloverRuleOf(
   reg: RegistrySnapshot,
 ): Extract<RuleDefinition, { template: 'rollover' }> {
-  return singleRuleOf(reg, 'rollover', 'aspect').rule;
+  return singleRuleOf(reg, 'rollover').rule;
 }
