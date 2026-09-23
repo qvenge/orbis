@@ -377,7 +377,7 @@ describe('§С8-18, пишущая половина: ребро envelope-binding
     // (а) хука (`bindingOps` на самом движении), а не ребиндинг конверта, — проверяется
     // именно она. Валюты у движения нет: аспект гейта слот `currency` не привязывает, и
     // комбинация обязана взять дефолтную валюту владельца, как у транзакции без
-    // `orbis/currency` (конверту её подставит `normalizeEnvelopeCurrency`).
+    // `orbis/currency` (конверту её подставит строка каталога `envelope_currency_default`).
     const movement = await mk('Трата пишущей половины', {
       aspects: [GATE_FIN_KEY],
       props: {

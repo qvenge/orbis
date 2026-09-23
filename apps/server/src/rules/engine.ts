@@ -182,7 +182,25 @@ function ownerClockOf(ctx: RuleWriteInput['ctx']): Promise<{ today: string; time
 }
 
 /**
- * Параметры движка (`RULE_PARAMS`) — ЛЕНИВО (Р-И-18): читается только названный правилом параметр.
+ * Валюта владельца — МЕМО по транзакции (перенос m-4 задачи 4), тот же приём, что у дня и зоны выше:
+ * пачка импорта в сотни конвертов платила бы SELECT'ом по `user_settings` за каждый. Настройки
+ * владельца внутри транзакции исполнителя не меняются — их пишет другая ручка.
+ */
+const CURRENCY_BY_TX = new WeakMap<object, Promise<string>>();
+function ownerCurrencyOf(ctx: RuleWriteInput['ctx']): Promise<string> {
+  let cached = CURRENCY_BY_TX.get(ctx.tx);
+  if (cached === undefined) {
+    cached = defaultCurrencyOf(ctx.tx, ctx.graphId);
+    CURRENCY_BY_TX.set(ctx.tx, cached);
+  }
+  return cached;
+}
+
+/**
+ * Параметры движка (`RULE_PARAMS`) наполняются ЛЕНИВО (Р-И-18, РЧ-14-4): за умолчанием валюты идёт
+ * запрос в `user_settings`, и платить им на каждой записи любой сущности ради одного правила на одном
+ * аспекте нельзя. Спрашиваем ровно те имена, которые читают ПРИМЕНИМЫЕ правила этой записи
+ * (`ruleParamsUsed` — обход E-позиций правил), и не чаще раза на транзакцию.
  * Имя вне `RULE_PARAMS` сюда не доезжает — его отверг чекер задачи 1 (Р-К-24); а доедь оно ручной
  * порчей строки, интерпретатор ответит `EXPR_SCOPE` («параметра нет в области»), а не пустотой.
  */
@@ -192,7 +210,7 @@ async function ruleParamsOf(
 ): Promise<Record<string, ExprScalar>> {
   const params: Record<string, ExprScalar> = {};
   if (ruleParamsUsed(rules).has('default_currency')) {
-    params.default_currency = await defaultCurrencyOf(input.ctx.tx, input.ctx.graphId);
+    params.default_currency = await ownerCurrencyOf(input.ctx);
   }
   return params;
 }
@@ -573,8 +591,9 @@ export async function applyTransitionRules(input: RuleWriteInput): Promise<void>
     if (!present(input.state.props[set.property]))
       assignPresent(input.state, set.property, evalExpr(set.value, scope));
   }
-  // Фаза 3 — умолчания. Применяются на ВСЕХ трёх путях, когда свойства нет после патча, — как
-  // `normalizeEnvelopeCurrency` сегодня, а не только на create (§1.5).
+  // Фаза 3 — умолчания. Применяются на ВСЕХ трёх путях, когда свойства нет после патча, а не только
+  // на create (§1.5): единственный серверный экземпляр — валюта конверта (`envelope_currency_default`,
+  // задача 14), и на update он срабатывает на ЛЮБОЙ правке свойств, в том числе после `unset`.
   for (const rule of defaults) {
     if (present(input.state.props[rule.params.property])) continue;
     if (!whenHolds(rule, scope)) continue;

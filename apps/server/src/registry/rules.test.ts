@@ -75,16 +75,16 @@ function codeSnapshot(): RegistrySnapshot {
   };
 }
 /**
- * Системных строк каталога правил — девятнадцать: задача 4 — два инварианта §А7-2 (financial — парой)
+ * Системных строк каталога правил — двадцать: задача 4 — два инварианта §А7-2 (financial — парой)
  * и переход `task_completed_at`, задача 12 — уникальность конверта (`duplicate_envelope`), задача 13 —
  * четыре носителя параметров движков (`nearest_ancestor`, `materialize`, `mirror_ref`,
  * `budget_rollover`) и три метки ролевых ограничений (`acyclic` ×2, `target_max_incoming`), задача 14 —
  * «чего ждём» парой (`waiting_for`, `waiting_for_only_when_waiting`), субъект прогона парой
  * (`run_subject`, `run_subject_forbidden`), условие гранта назначения парой
- * (`assignment_grant_required`, `assignment_grant_forbidden`) и форма правила памяти
- * (`memory_rule_pattern`, `memory_rule_target`).
+ * (`assignment_grant_required`, `assignment_grant_forbidden`), форма правила памяти
+ * (`memory_rule_pattern`, `memory_rule_target`) и умолчание валюты конверта (`envelope_currency_default`).
  */
-const BUILTIN_RULE_COUNT = 19;
+const BUILTIN_RULE_COUNT = 20;
 const FIN: RuleCarrier = { kind: 'aspect', id: 'orbis/financial' };
 const TASK: RuleCarrier = { kind: 'aspect', id: 'orbis/task' };
 /** Код И `details.reason`: словарный VALIDATION без причины не адресует ничего. */
@@ -332,18 +332,29 @@ describe('assign_level и конфлюэнтность §Б4', () => {
   test('два default на одно свойство — RULE_CONFLICT; на разные — нет; выключенное не спорит (§Б4-4)', () => {
     // `dflt` пишется БЕЗ `enabled` — так его пишет владелец и так лежит input-форма сида: читатель
     // снимка обязан достроить умолчание схемы, иначе `!rule.enabled` пропустил бы оба правила молча.
+    // Свойство — `orbis/payment_method`, а не валюта: у `orbis/currency` с задачи 14 есть системный
+    // писатель того же события (`envelope_currency_default` на конверте), и пара правил владельца
+    // спорила бы уже с ним — это отдельный пин ниже.
     expect(
-      err(() => check(FIN, dflt('cur_a', 'orbis/currency'), [dflt('cur_b', 'orbis/currency')]))
-        .code,
+      err(() =>
+        check(FIN, dflt('pm_a', 'orbis/payment_method'), [dflt('pm_b', 'orbis/payment_method')]),
+      ).code,
     ).toBe('RULE_CONFLICT');
     expect(
-      check(FIN, dflt('cur_a', 'orbis/currency'), [dflt('cp_b', 'orbis/counterparty')]).id,
-    ).toBe('cur_a');
+      check(FIN, dflt('pm_a', 'orbis/payment_method'), [dflt('cp_b', 'orbis/counterparty')]).id,
+    ).toBe('pm_a');
     expect(
-      check(FIN, dflt('cur_a', 'orbis/currency'), [
-        { ...dflt('cur_b', 'orbis/currency'), enabled: false },
+      check(FIN, dflt('pm_a', 'orbis/payment_method'), [
+        { ...dflt('pm_b', 'orbis/payment_method'), enabled: false },
       ]).id,
-    ).toBe('cur_a');
+    ).toBe('pm_a');
+  });
+  test('своё умолчание валюты спорит с системной строкой конверта — ключ события общий на весь снимок', () => {
+    const e = err(() => check(FIN, dflt('cur_a', 'orbis/currency'), []));
+    expect([e.code, (e.details as { other?: string }).other]).toEqual([
+      'RULE_CONFLICT',
+      'envelope_currency_default',
+    ]);
   });
   test('on_enter_class: ключуются ОБЕ формы события, вход и уход — разные ключи (Р-К-5)', () => {
     expect(err(() => check(TASK, byClass('t_a'), [byClass('t_b')])).code).toBe('RULE_CONFLICT');

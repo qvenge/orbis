@@ -24,16 +24,6 @@ import {
   templateSql,
 } from './contour';
 
-/**
- * Id свойства, которое этот модуль читает в JS (§А1-1, таблица §А8); прочие три свойства
- * четвёрки конверта ушли отсюда вместе с кодом уникальности (Б-2, задача 12 — строка каталога).
- *
- * Константами, а не литералами по месту: чтение по НЕСУЩЕСТВУЮЩЕМУ id даёт `undefined`, а не
- * ошибку, и опечатка проявилась бы не отказом, а тихим «конверт не выбрался» — то есть
- * Unbudgeted вместо привязки. Компилятор литерал не стережёт, константу — стережёт.
- */
-const PROP_CURRENCY = 'orbis/currency';
-
 /** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */
 const FALLBACK_CURRENCY = 'RUB';
 
@@ -154,26 +144,6 @@ export async function selectEnvelope(
     ],
   });
   return picked.get(SINGLE_KEY) ?? null;
-}
-
-/**
- * Нормализация валюты конверта (бэклог A7, §2.1): отсутствующее/NULL свойство
- * `orbis/currency` заменяется явной user_settings.defaultCurrency — на СЕРВЕРЕ,
- * до проверки уникальности §2.1 и записи. Все пути записи конверта (UI, LLM/MCP,
- * rollover, будущий импорт) дают каноничную комбинацию с явной валютой, поэтому
- * «конверт без currency» и «конверт с явной defaultCurrency» — один дубль, а не
- * две разные комбинации (TOCTOU NULL-currency-преемника закрыт по построению).
- * Значения иных типов не трогаем — их отклонит валидация схемы (стадия 2).
- * Мутирует props.
- */
-export async function normalizeEnvelopeCurrency(
-  tx: Tx,
-  graphId: GraphId,
-  props: Record<string, unknown>,
-): Promise<void> {
-  if (props[PROP_CURRENCY] === undefined || props[PROP_CURRENCY] === null) {
-    props[PROP_CURRENCY] = await defaultCurrencyOf(tx, graphId);
-  }
 }
 
 /**

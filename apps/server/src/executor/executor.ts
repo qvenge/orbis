@@ -47,7 +47,6 @@ import {
   bindingOps,
   bindingTargetOf,
   lockOwnerBudget,
-  normalizeEnvelopeCurrency,
   rebindForEnvelope,
   unbindOps,
 } from '../budget/binding';
@@ -1890,13 +1889,11 @@ async function prepareEntityCreate(
   const before: EntityState = { props: {}, aspects: [] };
   const propsPatch = propsPatchFromInput(ctx.registry, input);
   const state = applyPropsPatch(before, propsPatch);
-  // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency ДО валидации,
-  // проверки уникальности §2.1 и записи — комбинация всегда каноничная
-  await normalizeEnvelopeProps(ctx, before, state, propsPatch);
   // T-правила каталога (§Б4-3) — до routine-запрета и стадии 2, чтобы валидировалось финальное
   // сохраняемое значение. Переход задачи в done (§3.2: create сразу в done ставит `completed_at`) —
   // строка каталога `task_completed_at`, кода под него нет; у create штамп записи — `now` (он же
-  // ляжет в `values.updatedAt`).
+  // ляжет в `values.updatedAt`). Умолчание валюты конверта (бэклог A7) — строка
+  // `envelope_currency_default`: подстановка ДО валидации, уникальности §2.1 и записи.
   await applyTransitionRules({
     ctx: ruleCtxOf(ctx),
     entityId: id,
@@ -1906,6 +1903,7 @@ async function prepareEntityCreate(
     core: { id, title: input.title, archived: false, createdAt: now, updatedAt: now },
     batch,
   });
+  dropStaleCarryover(ctx.registry, before, state, touchedProperties(propsPatch));
 
   // Запрет по объекту для источника routine (V1.10) — ПЕРВЫМ из отказов: он про то, кому
   // вообще нельзя трогать этот объект, и не зависит ни от формы значения, ни от флагов
@@ -2211,24 +2209,6 @@ async function prepareEntityUpdate(
 
   if (hasPropsInput(input)) {
     if (ctx.internalUndo === undefined) {
-      // Нормализация валюты конверта (бэклог A7): патч мог снять currency или добавить
-      // orbis/budget без неё — NULL не пишем, подставляем defaultCurrency ДО валидации и
-      // проверки уникальности §2.1. Внутренний undo восстанавливает состояние verbatim.
-      //
-      // УГОЛ, КОТОРЫЙ БЫЛ И ЗАКРЫТ ЗАДАЧЕЙ 6, — оставлен здесь как объяснение, а не как долг.
-      // Подстановка материализует умолчание в `orbis/currency`, а оно СЛИТО у транзакции и
-      // конверта (В1): у financial-записи без валюты патч, добавляющий аспект конверта, кладёт
-      // умолчание владельца в общее свойство. Пока inverse считался по ПАТЧУ, откат этого не
-      // видел (в `touched` был только `orbis/budget`) и оставлял валюту на записи. С §А7-4
-      // единица отката — СВОЙСТВО, и inverse считает `stateDelta` по состояниям «до/после»
-      // (пиннит `undo.test.ts`, «умолчание валюты»), поэтому угол закрыт по построению.
-      //
-      // Трение с РП-9 («default не материализуется на записи») тоже названо вслух: здесь
-      // материализация ПРЕДНАМЕРЕННА — валюта входит в ключ уникальности конверта (§2.1),
-      // и NULL в нём сделал бы два конверта на одну комбинацию неразличимыми.
-      if (touched.includes('orbis/budget')) {
-        await normalizeEnvelopeProps(ctx, before, state, propsPatch);
-      }
       // T-правила каталога (§Б4-3) — под веткой «правка свойств вне внутреннего undo»: undo
       // восстанавливает зафиксированное состояние, и переходы его не «поправляют» (Р-И-2). Переход
       // задачи в done и из него (§3.2) — строка каталога `task_completed_at`.
@@ -2246,6 +2226,29 @@ async function prepareEntityUpdate(
         core,
         batch,
       });
+      // Умолчание валюты конверта (бэклог A7) — строка каталога `envelope_currency_default` в фазе
+      // `default` T-правил выше: патч мог снять currency или добавить orbis/budget без неё — NULL не
+      // пишем, умолчание владельца подставлено ДО валидации и уникальности §2.1. Внутренний undo
+      // восстанавливает состояние verbatim и T-правил не исполняет.
+      //
+      // УГОЛ, КОТОРЫЙ БЫЛ И ЗАКРЫТ ЗАДАЧЕЙ 6, — оставлен здесь как объяснение, а не как долг.
+      // Подстановка материализует умолчание в `orbis/currency`, а оно СЛИТО у транзакции и
+      // конверта (В1): у financial-записи без валюты патч, добавляющий аспект конверта, кладёт
+      // умолчание владельца в общее свойство. С §А7-4 единица отката — СВОЙСТВО, и inverse считает
+      // `stateDelta` по состояниям «до/после» (пиннит `undo.test.ts`, «умолчание валюты»), поэтому
+      // угол закрыт по построению.
+      //
+      // Трение с РП-9 («default не материализуется на записи») названо вслух: здесь материализация
+      // ПРЕДНАМЕРЕННА — валюта входит в ключ уникальности конверта (§2.1), и NULL в нём сделал бы два
+      // конверта на одну комбинацию неразличимыми.
+      //
+      // Перенос остатка не переживает смену идентичности конверта (`dropStaleCarryover` — именованный
+      // остаток, Р-К-4) — ПОСЛЕ T-правил: валюта входит в идентичность, и до подстановки «валюту сняли
+      // → умолчание вернуло её» читалось бы как смена конверта. Гейта «патч тронул конверт» у остатка
+      // больше нет: умолчание теперь срабатывает и на посторонней правке, и вопрос «сменилась ли
+      // идентичность этой записью» обязан следовать за ним туда же (функция чистая и сама молчит без
+      // аспекта, без переноса и при переносе, названном патчем).
+      dropStaleCarryover(ctx.registry, before, state, touchedProperties(propsPatch));
       // Гейт §Б8-3: только ПОЯВИВШИЕСЯ аспекты — правка суммы существующей транзакции
       // выключенного модуля разрешена (§Б8-3: скрытое ≠ удалённое), а появление нового
       // аспекта модуля через `entity_update` — тот же обход, что через attach.
@@ -2556,11 +2559,10 @@ async function prepareAttach(
   // восстанавливает зафиксированное состояние дословно.
   propsPatch.replaced = writableOnly(ctx.registry, ctx.mechanism, propsPatch.replaced);
   const state = applyPropsPatch(before, propsPatch);
-  // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути
-  await normalizeEnvelopeProps(ctx, before, state, propsPatch);
   // T-правила каталога (§Б4-3): attach — третий путь появления аспекта, и переходы на нём те же,
   // что на create/update. Особой ветки «навешивают `orbis/task`» больше нет: условие входа в класс
-  // у движка одно на все три пути (Р-И-14).
+  // у движка одно на все три пути (Р-И-14). Умолчание валюты конверта — там же (строка
+  // `envelope_currency_default`), перенос остатка — после него (см. путь entity_update).
   await applyTransitionRules({
     ctx: ruleCtxOf(ctx),
     entityId: input.entity_id,
@@ -2570,6 +2572,7 @@ async function prepareAttach(
     core,
     batch,
   });
+  dropStaleCarryover(ctx.registry, before, state, touchedProperties(propsPatch));
 
   // Стадия 4, первый рубеж: запрет по объекту для источника routine (V1.10) — attach это
   // третий путь появления аспекта, им рутина заводилась бы на готовой сущности мимо
@@ -2749,31 +2752,6 @@ function roleTitle(ctx: ExecCtx, role: string): string {
 /** Новая правда строки (§А1-1) как её видят слияние и доменные инварианты. */
 function stateOf(row: EntityRow): EntityState {
   return { props: row.props as Record<string, unknown>, aspects: row.aspects };
-}
-
-/**
- * Валюта конверта по умолчанию (бэклог A7) — ЧЕРЕЗ функцию бюджета: умолчание владельца
- * обязано жить в одном месте, а не в двух копиях запроса к настройкам. Подставляется прямо
- * в `props`: с переводом бюджета на новую форму (Задача 10a) промежуточный объект «поле
- * старой карты» стал лишним звеном, которое умело только разъехаться с колонкой.
- *
- * `orbis/currency` слито у транзакции и конверта (В1), поэтому подстановка идёт только когда
- * значения нет вовсе: у записи, которая одновременно транзакция и конверт, валюта одна, и
- * перезаписывать её умолчанием значило бы менять сумму транзакции задним числом.
- */
-async function normalizeEnvelopeProps(
-  ctx: ExecCtx,
-  before: EntityState,
-  state: EntityState,
-  patch: PropsPatch,
-): Promise<void> {
-  if (!state.aspects.includes('orbis/budget')) return;
-  await normalizeEnvelopeCurrency(ctx.tx, ctx.req.identity.graph, state.props);
-  // Перенос прошлого периода не переживает смену идентичности конверта (03-budget §2.6) —
-  // но только тот, которого патч не касался (см. dropStaleCarryover). Считается ПОСЛЕ
-  // подстановки валюты: она входит в идентичность, и до подстановки «валюты не было →
-  // стала RUB» читалось бы как смена конверта.
-  dropStaleCarryover(ctx.registry, before, state, touchedProperties(patch));
 }
 
 async function prepareRelationCreate(

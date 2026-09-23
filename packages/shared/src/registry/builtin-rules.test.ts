@@ -10,6 +10,7 @@ import {
   BUILTIN_RULES_BY_CARRIER,
   RULE_ASSIGNMENT_GRANT_FORBIDDEN,
   RULE_ASSIGNMENT_GRANT_REQUIRED,
+  RULE_ENVELOPE_CURRENCY_DEFAULT,
   RULE_ENVELOPE_UNIQUE,
   RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
@@ -41,6 +42,8 @@ describe('системные строки каталога правил (§Б4-1
       // Задача 13: носители параметров движков. `nearest_ancestor` — то же имя, что во
       // `flags.computed.rule` вычисляемых свойств и в журнале пересчёта (`RULE_NEAREST_ANCESTOR`).
       'budget_rollover',
+      // Задача 14: умолчание валюты конверта (`default` с `{param}`, В-П-3) — третья строка конверта.
+      'envelope_currency_default',
       // Задача 14: условие гранта назначения (живость гранта — кодом, Р-К-17) и XOR субъекта
       // прогона — парами (§4-Б-9 рамки: тринадцатый шаблон не заводится).
       'assignment_grant_required',
@@ -97,6 +100,7 @@ describe('системные строки каталога правил (§Б4-1
       RULE_ASSIGNMENT_GRANT_FORBIDDEN.undo,
       RULE_MEMORY_RULE_PATTERN.undo,
       RULE_MEMORY_RULE_TARGET.undo,
+      RULE_ENVELOPE_CURRENCY_DEFAULT.undo,
     ]).toEqual([
       'check',
       'check',
@@ -110,6 +114,7 @@ describe('системные строки каталога правил (§Б4-1
       'skip',
       'check',
       'check',
+      undefined,
     ]);
   });
 });

@@ -1022,8 +1022,9 @@
       "writes": {
         "$updatedAt": "2026-07-04T10:00:00.001Z",
         "orbis/completed_at": null,
-        "orbis/currency": null
-      }
+        "orbis/currency": "RUB"
+      },
+      "expectedDiff": "DEFAULT_ON_EVERY_PROPS_EDIT"
     },
     {
       "name": "тикет ждёт с вопросом",
@@ -1263,6 +1264,74 @@
       "code": "INVARIANT",
       "invariant": "waiting_for_only_when_waiting",
       "expectedDiff": "C_RULES_ON_EVERY_PROPS_EDIT"
+    },
+    {
+      "name": "конверт без валюты с переносом (валюта снята до правила) правится свойством другого аспекта",
+      "shape": "update",
+      "aspects": ["orbis/budget", "orbis/task"],
+      "watch": ["orbis/currency", "orbis/carryover"],
+      "props": {
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/limit": "10000.00",
+        "orbis/period_start": "2026-04-01",
+        "orbis/period_end": "2026-04-30",
+        "orbis/task_status": "inbox"
+      },
+      "rowWithout": ["orbis/currency"],
+      "patch": {
+        "orbis/priority": "high"
+      },
+      "rowWith": {
+        "orbis/carryover": "500.00"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": null,
+        "orbis/carryover": "500.00"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": "RUB",
+        "orbis/carryover": null
+      },
+      "expectedDiff": "DEFAULT_ON_EVERY_PROPS_EDIT"
+    },
+    {
+      "name": "конверт с переносом: валюта владельца снята правкой — умолчание возвращает её, перенос живёт",
+      "shape": "update",
+      "aspects": ["orbis/budget"],
+      "watch": ["orbis/currency", "orbis/carryover"],
+      "props": {
+        "orbis/finance_category": "019e4466-b4b4-7e07-b5d4-64be9721da51",
+        "orbis/limit": "10000.00",
+        "orbis/period_start": "2026-05-01",
+        "orbis/period_end": "2026-05-31",
+        "orbis/currency": "RUB"
+      },
+      "update": {
+        "unset": ["orbis/currency"]
+      },
+      "rowWith": {
+        "orbis/carryover": "500.00"
+      },
+      "legacyVerdict": "ok",
+      "legacyWrites": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": "RUB",
+        "orbis/carryover": "500.00"
+      },
+      "verdict": "ok",
+      "writes": {
+        "$updatedAt": "2026-07-04T10:00:00.001Z",
+        "orbis/completed_at": null,
+        "orbis/currency": "RUB",
+        "orbis/carryover": "500.00"
+      }
     }
   ]
 }

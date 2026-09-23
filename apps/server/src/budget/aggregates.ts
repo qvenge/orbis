@@ -532,8 +532,8 @@ export async function rolloverPreview(
  *   комбинацию ТОЧНО и NULL-currency-преемника не увидел бы. Пречек идёт после
  *   replay-детекта (повтор batchId обязан вернуться replay'ем, а не упасть на
  *   собственноручно созданных преемниках). Щель «NULL-преемник появился между
- *   пречеком и batch» закрыта нормализацией NULL→defaultCurrency (бэклог A7,
- *   normalizeEnvelopeCurrency): новые записи NULL не несут, точную комбинацию
+ *   пречеком и batch» закрыта умолчанием валюты конверта (бэклог A7, строка каталога
+ *   `envelope_currency_default`): новые записи NULL не несут, точную комбинацию
  *   закрывает advisory-lock §2.1.
  */
 export async function rolloverCreate(

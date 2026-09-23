@@ -233,6 +233,28 @@ export const RULE_ENVELOPE_UNIQUE: RuleDefinitionInput = {
 };
 
 /**
+ * Умолчание валюты конверта (§Б4-3, строка `default`; Р-И-18). Значение — ПАРАМЕТР движка правил
+ * (`{param: 'default_currency'}`), а не литерал: умолчание живёт в настройках владельца, и вписать его
+ * в строку сида значило бы завести вторую правду о валюте.
+ *
+ * Валюта входит в набор уникальности конверта (правило `duplicate_envelope`), поэтому подстановка
+ * ПРЕДНАМЕРЕННА и идёт до C-правил: «конверт без валюты» и «конверт с явной валютой владельца» — один
+ * дубль, а не две комбинации. Второй серверный экземпляр шаблона (`occurred_on = today`) НЕ заводится:
+ * умолчание даты — удобство ввода клиента, а не правило домена (В-5).
+ *
+ * Подставляется, когда свойства НЕТ в состоянии после патча, — на всех трёх путях и на ЛЮБОЙ правке
+ * свойств конверта (фаза `default` движка), в том числе после явного `unset` (рулинг 3-2: свойство с
+ * умолчанием очистить нельзя — вопрос владельцу). Снятый код подставлял ещё и при явном `null`
+ * (РЧ-14-3): боевого пути к `null` у текстового `orbis/currency` нет — стадия 2 отвергает нестроковое
+ * значение, и ветка не переносится; движок видит `null` отсутствием (РЧ-3-3) и подставит тоже.
+ */
+export const RULE_ENVELOPE_CURRENCY_DEFAULT: RuleDefinitionInput = {
+  id: 'envelope_currency_default',
+  template: 'default',
+  params: { property: 'orbis/currency', value: { param: 'default_currency' } },
+};
+
+/**
  * Параметры движка предков (`executor/ancestors.ts`). Id совпадает с `RULE_NEAREST_ANCESTOR`
  * (`constants.ts:146`): это же имя стоит во `flags.computed.rule` обоих вычисляемых свойств и в
  * системной строке журнала «пересчитано N по правилу X» — с этой строкой оба адреса впервые
@@ -346,7 +368,7 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
     RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   ],
   'orbis/task': [RULE_TASK_COMPLETED_AT, RULE_TASK_WAITING_FOR, RULE_TASK_WAITING_ONLY],
-  'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER],
+  'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER, RULE_ENVELOPE_CURRENCY_DEFAULT],
   'orbis/assignment': [RULE_ASSIGNMENT_GRANT_REQUIRED, RULE_ASSIGNMENT_GRANT_FORBIDDEN],
   'orbis/agent-run': [RULE_RUN_SUBJECT_REQUIRED, RULE_RUN_SUBJECT_FORBIDDEN],
   'orbis/memory': [RULE_MEMORY_RULE_PATTERN, RULE_MEMORY_RULE_TARGET],
