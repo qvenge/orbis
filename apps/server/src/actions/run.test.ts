@@ -517,21 +517,35 @@ test('карточка подтверждения длиннее капа пач
   });
 });
 
-test('фон: единица длиннее капа — BATCH_TOO_LONG ДО пре-чека и отложки, хук не зовётся (эррата Ф-Б2-18)', async () => {
-  // Тот же пакет 11 × 10 = 110 операций, но из прогона: единица легла бы в пачку, и «Принять»
-  // не разобрало бы её никогда (`toOperations` держит кап сто).
+test('фон: единица длиннее капа — BATCH_TOO_LONG ДО пре-чека и отложки, и на уровне preview тоже (эррата Ф-Б2-18)', async () => {
+  // Десять целей × одиннадцать шагов = 110 операций. Уровень по таблице — `preview` (пакет не
+  // больше десяти), но фону он тоже даёт единицу (§Б6-2), и её конверт держит кап сто: такую
+  // карточку «Принять» не разобрало бы никогда. Хук отложки не зовётся (`NO_DEFER` ответил бы X).
   const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   const postpone = snap.actions.get('planner/postpone_overdue');
   if (postpone === undefined) throw new Error('сидового действия нет в снимке');
   const decl = synthetic({
     params: postpone.params,
-    over: postpone.over,
+    over: {
+      filter: {
+        and: [{ aspect: 'orbis/task' }, { prop: 'orbis/due_date', op: 'lt', value: '2026-09-11' }],
+      },
+    },
     batch_cap: 100,
-    steps: Array.from({ length: 10 }, () => postpone.steps[0] as ActionDefinition['steps'][number]),
+    steps: Array.from({ length: 11 }, () => postpone.steps[0] as ActionDefinition['steps'][number]),
   });
+  const reg = withAction(snap, decl);
+  const resolved = await withIdentity(db, personal(owner), (tx) =>
+    resolveAction(tx, reg, owner, { action: decl.key, params: { to: '2026-09-30' } }, ARGS),
+  );
+  const facts = actionCallFacts(reg, decl, resolved.operations, resolved.targets, {
+    actorKind: 'ai',
+    explicitCommand: false,
+  });
+  expect([resolved.targets.length, classifyToolCall(facts)]).toEqual([10, 'preview']);
   const out = await runAction(
     routineCtx({ mode: 'act', allowedTools: ['entity_update', 'run_action'] }),
-    withAction(snap, decl),
+    reg,
     [],
     decl.key,
     { params: { to: '2026-09-30' } },
