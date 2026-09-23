@@ -52,7 +52,8 @@ import {
   snapshotRegistryUnit,
   type ToolCallCtx,
 } from './dispatch';
-import { buildToolRegistry, type RoutineRef } from './registry';
+import { errorResult, levelGate, parseEnvelope } from './dispatch-common';
+import { buildToolRegistry, type RoutineRef, threadPostInput } from './registry';
 import { REGISTRY_TOOL_NAMES } from './registry-tools';
 
 requireEnv();
@@ -5436,5 +5437,47 @@ describe('сводка мутации реестра: правила, а не с
     expect(CARD.test("      kind: 'confirmation_card' as const,")).toBe(true);
     expect(CARD.test("      kind: 'confirmation_card';")).toBe(false); // ОБЪЯВЛЕНИЕ типа
     expect(CARD.test("      kind: 'entity_card',")).toBe(false); // чужой род карточки
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Общее дно диспатча (`dispatch-common.ts`, задача 7 шаг 4а): переезд без изменения тел
+// ---------------------------------------------------------------------------
+
+describe('общее дно диспатча: помощники переехали дословно', () => {
+  test('неизвестный тул — тот же отказ целиком: код, текст вызывающего и details', async () => {
+    const r = await dispatchTool(ctxFor(), 'entity_delete', { id: newId() });
+    expect(r).toEqual({
+      status: 'error',
+      error: {
+        code: 'FORBIDDEN_LEVEL',
+        message: 'неизвестный тул «entity_delete» — вызов запрещён (§7.10)',
+        details: { tool: 'entity_delete' },
+      },
+    });
+  });
+
+  test('levelGate: запасной текст, пропуск не-отказных уровней; parseEnvelope — VALIDATION с issues', () => {
+    // Запасной текст `levelGate` живым путём недостижим (известный тул таблица §7.10 до
+    // `forbidden` не доводит), поэтому он пиннится прямо: подмена тела при переезде обязана
+    // покраснеть здесь, а не остаться невидимой до первого нового ряда таблицы.
+    expect(levelGate('forbidden', 'run_action:x/y')).toEqual({
+      status: 'error',
+      error: {
+        code: 'FORBIDDEN_LEVEL',
+        message: 'вызов тула «run_action:x/y» запрещён политикой подтверждений (§7.10)',
+        details: { tool: 'run_action:x/y' },
+      },
+    });
+    for (const level of ['execute', 'preview', 'explicit-confirmation'] as const) {
+      expect([level, levelGate(level, 'entity_update')]).toEqual([level, null]);
+    }
+    expect(errorResult('X', 'текст')).toEqual({
+      status: 'error',
+      error: { code: 'X', message: 'текст', details: undefined },
+    });
+    expect(() => parseEnvelope(threadPostInput, { мусор: 1 }, 'thread_post')).toThrow(
+      'невалидный input тула «thread_post»',
+    );
   });
 });

@@ -54,25 +54,16 @@ import { escalateAfterMutation } from '../ai/escalation';
 import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
-import type { Db } from '../db/client';
 import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
-import {
-  type EntitlementResolver,
-  IMPORT_CSV_KEY,
-  ROUTINES_MAX_KEY,
-  resolveEntitlement,
-} from '../entitlements';
+import { IMPORT_CSV_KEY, ROUTINES_MAX_KEY, resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
-import { makeChatJournalSink } from '../executor/journal';
 import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
-import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
+import type { JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { undoLast } from '../executor/undo';
-import type { Identity } from '../identity';
-import type { GrantRef } from '../oauth/grants';
 import {
   AUTONOMY_PROPERTIES,
   autonomyArmed,
@@ -111,6 +102,14 @@ import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
 import { rawValueRefs } from '../subscriptions/registry';
 import { toLlmEntity, toWireEntityFromSql } from '../wire';
+import {
+  errorResult,
+  levelGate,
+  parseEnvelope,
+  sink,
+  type ToolCallCtx,
+  type ToolDispatchResult,
+} from './dispatch-common';
 import { propertyCatalogInput, runPropertyCatalog } from './property-catalog';
 import {
   AGENT_VERB_NAMES,
@@ -118,7 +117,6 @@ import {
   type Card,
   importCsvStartInput,
   type OrbisToolDef,
-  type RoutineRef,
   routineToolAllowed,
   type ThreadPostInput,
   threadPostInput,
@@ -128,72 +126,15 @@ import {
 } from './registry';
 import { REGISTRY_TOOL_ENVELOPES, REGISTRY_TOOL_NAMES } from './registry-tools';
 
+// Эти два типа импортируют ИЗ `dispatch.ts` пять боевых файлов (`agent-loop/verbs.ts`,
+// `mcp/server.ts`, `routines/{propose,ask,runner}.ts`) и десяток тестов — реэкспорт оставляет их
+// нетронутыми: переезд не обязан стоить полутора десятков диффов.
+export type { ToolCallCtx, ToolDispatchResult };
+
 /** Резолв имени в глагол исполнителя (§9.3) — набор имён живёт в реестре, не здесь. */
 function isAgentVerb(name: string): name is AgentVerbName {
   return (AGENT_VERB_NAMES as readonly string[]).includes(name);
 }
-
-// Боевой синк — один инстанс на модуль (состояния не хранит), как в роутерах 1a.
-const sink = makeChatJournalSink();
-
-export interface ToolCallCtx {
-  db: Db;
-  /** Пара «актор + текущий граф» (D44) — едет в ExecuteRequest как есть. */
-  identity: Identity;
-  actorKind: ActorKind; // 'owner' | 'ai' | 'agent'; в ExecuteRequest идёт как есть
-  /**
-   * Поверхность вызова. 'routine' (V1.5) — внутренний исполнитель в прогоне рутины:
-   * не 'chat', потому что за прогоном не стоит владелец, который только что попросил,
-   * и правки рутины он обязан отличать в ленте.
-   */
-  source: 'chat' | 'mcp' | 'routine';
-  threadId?: string; // тред диалога — туда лягут audit-сообщения
-  explicitCommand: boolean; // вход политики §7.10; в 1b всегда false
-  clock?: () => Date;
-  /**
-   * Резолвер §8 — инжектируемый шов (как ImportDeps.entitlements у роутера импорта и
-   * McpDeps.entitlements у MCP-сервера): по умолчанию боевой resolveEntitlement.
-   * Без него денайл-путь гейтов внутри диспатча был бы непокрываем тестом.
-   */
-  entitlements?: EntitlementResolver;
-  /**
-   * Грант, от имени которого идёт вызов (С2). Есть ТОЛЬКО у MCP: чат и UI — поверхности
-   * самого владельца, гранта за ними нет, и отсутствие ключа здесь означает именно это,
-   * а не «грант неизвестен». Отсюда идентичность едет в ExecuteRequest.actorGrantId и
-   * дальше в запись журнала (§7.8).
-   */
-  grant?: GrantRef;
-  /**
-   * Рутина и её прогон, от имени которых идёт вызов (V1.10) — ровно то же место в
-   * контексте, что `grant` у внешнего исполнителя: субъект, которому адресован доступ.
-   * Есть ТОЛЬКО у `source: 'routine'`; отсутствие ключа при таком source — не «рутина
-   * неизвестна», а поломка вызывающего, и гейт ниже трактует это fail-closed.
-   */
-  routine?: RoutineRef;
-  /**
-   * Прогон, в рамках которого идёт вызов (V1.5) — вторая половина атрибуции рядом с
-   * грантом: source говорит «рутина», это поле — КАКОЙ её прогон. Доезжает до action
-   * журнала как run_id, до pending-записи как run_id и до поста в треде. Ключа нет у
-   * обычного чата и MCP-вызова вне прогона.
-   */
-  runId?: string;
-}
-
-export type ToolDispatchResult =
-  | {
-      status: 'ok';
-      result: unknown;
-      card?: Card;
-      /**
-       * id action'а журнала §7.8 (undo-адресуемый) — только у мутаций через executor
-       * и только когда действие реально журналировалось (идемпотентный replay ничего
-       * не журналил — как undoActionId карточки). Потребитель — actions-резюме
-       * ai.sendMessage (Task 9) для мгновенного UI-обновления.
-       */
-      actionId?: string;
-    }
-  | { status: 'pending_confirmation'; pendingId: string; card: Card } // §7.10 explicit-confirmation (Task 6)
-  | { status: 'error'; error: { code: string; message: string; details?: unknown } };
 
 export async function dispatchTool(
   ctx: ToolCallCtx,
@@ -489,10 +430,6 @@ type Resolution =
       disabled: readonly string[];
     };
 
-function errorResult(code: string, message: string, details?: unknown): ToolDispatchResult {
-  return { status: 'error', error: { code, message, details } };
-}
-
 /**
  * Гейты рутины pre-блока (V1.10, инварианты 4–5) — обе стороны одной границы, поэтому
  * одной функцией: тул, адресованный ТОЛЬКО рутине, не отдаётся никому другому, а рутине
@@ -535,35 +472,6 @@ export function routineGate(
     `тул «${def.name}» недоступен рутине в режиме «${routine.mode}» (V1.10)`,
     { tool: def.name, mode: routine.mode },
   );
-}
-
-/**
- * §7.10: маппинг уровня в ранний отказ; null — уровень не отказной: execute/preview
- * исполняются, explicit-confirmation обрабатывает вызывающий (runMutation →
- * createPending, policy/pending). forbidden → FORBIDDEN_LEVEL (403 маппингом errors.ts).
- *
- * КОНТРАКТ PENDING (fix round Task 5 → Task 6): сюда уровень приходит только ПОСЛЕ
- * envelope-валидации input'а (validateMutationEnvelope / validateBatchOperations в
- * runMutation) — pending создаётся из envelope-валидированного payload'а. Полная
- * провалидированность (стадии 2–4 конвейера §9.2: aspects-схемы реестра,
- * expectedUpdatedAt/§5.2, доменные инварианты над текущим состоянием) — обязанность
- * РЕВАЛИДАЦИИ APPROVE (полный конвейер executor'а, см. policy/pending.ts): dry-run
- * при создании не спасал бы от изменения состояния за время ожидания — ревалидация
- * на approve обязательна в любом случае, двойная валидация избыточна.
- */
-function levelGate(
-  level: ConfirmationLevel,
-  tool: string,
-  forbiddenMessage?: string,
-): ToolDispatchResult | null {
-  if (level === 'forbidden') {
-    return errorResult(
-      'FORBIDDEN_LEVEL',
-      forbiddenMessage ?? `вызов тула «${tool}» запрещён политикой подтверждений (§7.10)`,
-      { tool },
-    );
-  }
-  return null;
 }
 
 /**
@@ -3194,22 +3102,6 @@ function assertQueryTreeDepth(input: unknown): void {
       `столько не нужно ни одному осмысленному запросу`,
     { tool: 'entity_query', reason: 'QUERY_TOO_DEEP', cap: QUERY_TREE_DEPTH_CAP },
   );
-}
-
-/** Структурная валидация envelope read-тулов и thread_post (мутации валидирует executor). */
-function parseEnvelope<S extends z.ZodTypeAny>(
-  schema: S,
-  input: unknown,
-  tool: string,
-): z.infer<S> {
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) {
-    throw new ExecError('VALIDATION', `невалидный input тула «${tool}»`, {
-      tool,
-      issues: parsed.error.issues,
-    });
-  }
-  return parsed.data;
 }
 
 /**
