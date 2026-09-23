@@ -900,6 +900,8 @@ const SLOT_SPEC: CustomAspectSpec = {
   properties: [
     { key: 'level', type: { kind: 'text' } },
     { key: 'number', type: { kind: 'number' } },
+    // Вне набора правила: правка такого свойства записи-носителя — отдельный путь (S1, S6 ревью).
+    { key: 'note', type: { kind: 'text' } },
   ],
 };
 const RULE_SLOT_UNIQUE: RuleDefinitionInput = {
@@ -1118,6 +1120,129 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
     expect(
       uniqueRuleKeysOf(off, w.graph, [{ tool: 'entity_create', input: slot('K', 1) }]),
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Несущие строки ветки `unique_among` — по сценарию на строку (ревью задачи 12, I-1; сценарии S1–S5 зонда
+// гейта). Каждая строка `assertUniqueAmong` красит свой тест при мутации (список — в отчёте имплементера).
+// ---------------------------------------------------------------------------
+describe('unique_among: несущие строки ветки (ревью I-1)', () => {
+  const batchOf = (graph: GraphId, operations: Array<{ tool: string; input: unknown }>) =>
+    execute(
+      db,
+      {
+        identity: personal(graph),
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        operations,
+        clock: () => T0,
+      },
+      {},
+    );
+
+  test('S1 пачка «создай и сразу поправь»: виртуальный обход не считает дублем саму запись', async () => {
+    const w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const id = newId();
+    const r = await batchOf(w.graph, [
+      { tool: 'entity_create', input: { ...slot('S1', 1), id } },
+      { tool: 'entity_update', input: { id, props: { 'user/note': 'x' } } },
+    ]);
+    expect(refusalOf(r)).toBe('ok');
+  });
+
+  test('S2 пачка «заархивируй старую и заведи новую на тот же набор»: набор свободен', async () => {
+    const w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const a = entityOf(await w.run('entity_create', slot('S2', 2)));
+    const r = await batchOf(w.graph, [
+      { tool: 'entity_update', input: { id: a.id, archived: true } },
+      { tool: 'entity_create', input: slot('S2', 2) },
+    ]);
+    expect(refusalOf(r)).toBe('ok');
+  });
+
+  test('S3 запись, с которой снят аспект области (значения пережили detach, Р9), набор не занимает', async () => {
+    const w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const a = entityOf(await w.run('entity_create', slot('S3', 3)));
+    expect(
+      refusalOf(await w.run('entity_update', { id: a.id, aspects: { detach: [UNIQUE_ASPECT] } })),
+    ).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', slot('S3', 3)))).toBe('ok');
+  });
+
+  test('S4 пачка «сними аспект и заведи новую на тот же набор»: виртуальная строка без аспекта не дубль', async () => {
+    const w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const a = entityOf(await w.run('entity_create', slot('S4', 4)));
+    const r = await batchOf(w.graph, [
+      { tool: 'entity_update', input: { id: a.id, aspects: { detach: [UNIQUE_ASPECT] } } },
+      { tool: 'entity_create', input: slot('S4', 4) },
+    ]);
+    expect(refusalOf(r)).toBe('ok');
+  });
+
+  test('S5 «нет значения» — часть набора (РЧ-12-1): две записи без номера на одном уровне — дубль', async () => {
+    const w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    const noNumber = {
+      title: 'S5',
+      tags: [],
+      aspects: [UNIQUE_ASPECT],
+      props: { 'user/level': 'S5' },
+    };
+    expect(refusalOf(await w.run('entity_create', noNumber))).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', noNumber))).toBe('INVARIANT/slot_unique');
+  });
+
+  test('порядок пред-стадийных замков «контур → правила» на обоих путях (создание конверта)', async () => {
+    // Обратный порядок у одной из сторон дал бы цикл между двумя advisory-замками: создание конверта
+    // брало бы правило → контур, а правка лимита конверта — контур → правило.
+    const w = await worldWith(SLOT_SPEC);
+    const envelope = (start: string, end: string) => ({
+      title: 'Конверт',
+      tags: [],
+      aspects: ['orbis/budget'],
+      props: {
+        'orbis/finance_category': w.categoryId,
+        'orbis/limit': '100.00',
+        'orbis/currency': 'RUB',
+        'orbis/period_start': start,
+        'orbis/period_end': end,
+      },
+    });
+    const order = (lines: string[]) => {
+      const contourAt = lines.findIndex((l) => l.includes(`${w.graph}:envelope_unique`));
+      const ruleAt = lines.findIndex((l) => l.includes(`${w.graph}:rule:duplicate_envelope`));
+      return [contourAt >= 0, ruleAt >= 0, contourAt < ruleAt];
+    };
+    const single: string[] = [];
+    const r1 = await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_create', input: envelope('2026-07-01', '2026-07-31') }],
+        clock: () => T0,
+      },
+      { beforeStages: sqlLog(single) },
+    );
+    expect(refusalOf(r1)).toBe('ok');
+    expect(order(single)).toEqual([true, true, true]);
+    const inBatch: string[] = [];
+    const r2 = await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        operations: [{ tool: 'entity_create', input: envelope('2026-08-01', '2026-08-31') }],
+        clock: () => T0,
+      },
+      { beforeStages: sqlLog(inBatch) },
+    );
+    expect(refusalOf(r2)).toBe('ok');
+    expect(order(inBatch)).toEqual([true, true, true]);
   });
 });
 
