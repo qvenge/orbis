@@ -277,7 +277,11 @@ export interface QueueTicket {
   status: TaskStatus;
   priority?: string;
   due_date?: string;
-  /** Можно ли брать в работу прямо сейчас: статус ∈ {inbox, planned}. */
+  /**
+   * Можно ли брать в работу прямо сейчас: класс тикета под `orbis/delegable` ∈ {new, queued}.
+   * Решает КЛАСС, а не значение `status` рядом: какой вариант статуса значит «новый» и «в очереди»,
+   * говорит привязка `orbis/task` (сегодня `inbox` и `planned`) — данные реестра, а не этот тип.
+   */
   claimable: boolean;
   project?: { id: string; title: string };
   last_run?: RunSummary;
