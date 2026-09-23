@@ -1,0 +1,185 @@
+{
+  "cases": [
+    {
+      "name": "plan-to-fact/legacy",
+      "action": "finance/plan-to-fact",
+      "params": {
+        "occurred_on": "2026-08-10"
+      },
+      "before": [
+        {
+          "id": "@envelope-july",
+          "title": "Конверт 2026-07-01",
+          "archived": false,
+          "aspects": ["orbis/budget"],
+          "props": {
+            "orbis/limit": "30000.00",
+            "orbis/currency": "RUB",
+            "orbis/period_end": "2026-07-31",
+            "orbis/period_start": "2026-07-01",
+            "orbis/finance_category": "@category"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@envelope-aug",
+          "title": "Конверт 2026-08-01",
+          "archived": false,
+          "aspects": ["orbis/budget"],
+          "props": {
+            "orbis/limit": "30000.00",
+            "orbis/currency": "RUB",
+            "orbis/period_end": "2026-08-31",
+            "orbis/period_start": "2026-08-01",
+            "orbis/finance_category": "@category"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@purchase",
+          "title": "Купить кроссовки",
+          "archived": false,
+          "aspects": ["orbis/financial"],
+          "props": {
+            "orbis/amount": "8000.00",
+            "orbis/planned": true,
+            "orbis/currency": "RUB",
+            "orbis/direction": "expense",
+            "orbis/occurred_on": "2026-07-15",
+            "orbis/finance_category": "@category"
+          },
+          "incoming": [
+            {
+              "role": "envelope-binding",
+              "source": "@envelope-july"
+            }
+          ]
+        }
+      ],
+      "after": [
+        {
+          "id": "@envelope-july",
+          "title": "Конверт 2026-07-01",
+          "archived": false,
+          "aspects": ["orbis/budget"],
+          "props": {
+            "orbis/limit": "30000.00",
+            "orbis/currency": "RUB",
+            "orbis/period_end": "2026-07-31",
+            "orbis/period_start": "2026-07-01",
+            "orbis/finance_category": "@category"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@envelope-aug",
+          "title": "Конверт 2026-08-01",
+          "archived": false,
+          "aspects": ["orbis/budget"],
+          "props": {
+            "orbis/limit": "30000.00",
+            "orbis/currency": "RUB",
+            "orbis/period_end": "2026-08-31",
+            "orbis/period_start": "2026-08-01",
+            "orbis/finance_category": "@category"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@purchase",
+          "title": "Купить кроссовки",
+          "archived": false,
+          "aspects": ["orbis/financial"],
+          "props": {
+            "orbis/amount": "8000.00",
+            "orbis/planned": false,
+            "orbis/currency": "RUB",
+            "orbis/direction": "expense",
+            "orbis/occurred_on": "2026-08-10",
+            "orbis/finance_category": "@category"
+          },
+          "incoming": [
+            {
+              "role": "envelope-binding",
+              "source": "@envelope-aug"
+            }
+          ]
+        }
+      ],
+      "journal": {
+        "action": {
+          "id": "@batch:purchase",
+          "type": "batch",
+          "source": "ui",
+          "inverse": [
+            {
+              "op": "relation_delete",
+              "payload": {
+                "role": "envelope-binding",
+                "source_id": "@envelope-aug",
+                "target_id": "@purchase"
+              }
+            },
+            {
+              "op": "relation_create",
+              "payload": {
+                "meta": {},
+                "role": "envelope-binding",
+                "source_id": "@envelope-july",
+                "target_id": "@purchase"
+              }
+            },
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@purchase",
+                "props": {
+                  "orbis/planned": true,
+                  "orbis/occurred_on": "2026-07-15"
+                }
+              }
+            }
+          ],
+          "entity_id": null,
+          "mechanism": "user",
+          "actor_kind": "owner",
+          "operations": [
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@purchase",
+                "props": {
+                  "orbis/planned": false,
+                  "orbis/occurred_on": "2026-08-10"
+                }
+              }
+            },
+            {
+              "op": "relation_delete",
+              "payload": {
+                "role": "envelope-binding",
+                "source_id": "@envelope-july",
+                "target_id": "@purchase"
+              }
+            },
+            {
+              "op": "relation_create",
+              "payload": {
+                "id": "<uuid>",
+                "role": "envelope-binding",
+                "source_id": "@envelope-aug",
+                "target_id": "@purchase"
+              }
+            }
+          ],
+          "actor_user_id": "<actor_user_id>"
+        },
+        "card": {
+          "tool": "batch_execute",
+          "title": "batch: операций — 1",
+          "entity_id": null
+        }
+      }
+    }
+  ]
+}
