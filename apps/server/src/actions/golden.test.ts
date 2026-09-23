@@ -28,13 +28,22 @@
 // `uuidv5` законна как константа (Ф-Б2-9): строку графа доводит до базы `truncateAll()` в
 // `beforeAll`.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { batchAuditMessageId, canonicalJson, type GraphId, ORBIS_NAMESPACE } from '@orbis/shared';
+import {
+  BUILTIN_ACTION_DEFS,
+  batchAuditMessageId,
+  canonicalJson,
+  type GraphId,
+  newId,
+  ORBIS_NAMESPACE,
+  recurringInstanceId,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
 import GOLDEN from '../../test/golden/actions.json';
 import {
   appDb,
   executeWithFixtureCategories as execute,
+  freshGraph,
   mintGraph,
   personal,
   requireEnv,
@@ -43,10 +52,14 @@ import {
 import { confirmPurchase } from '../budget/plan-to-fact';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ActionCard, ActionRecord } from '../executor/types';
+import { stateDelta } from '../executor/props';
+import type { ActionCard, ActionRecord, WireEntity } from '../executor/types';
+import { classifyToolCall } from '../policy/confirmation';
+import { materializeInstances } from '../recurring/materialize';
 import { effectiveRegistry } from '../registry/cache';
-import { dispatchTool } from '../tools/dispatch';
+import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { resolveAction } from './resolve';
+import { actionCallFacts } from './run';
 
 requireEnv();
 const { db, client } = appDb();
@@ -54,12 +67,14 @@ const sink = makeChatJournalSink();
 
 /**
  * Владельцы половин: `legacy` — сегодняшний код, `action` — декларация конвейером (`resolveAction`
- * + `execute`), `dispatch` — та же декларация вызовом `run_action` из чата.
+ * + `execute`), `dispatch` — та же декларация вызовом `run_action` из чата; `tasks` — мир
+ * map-действия `postpone_overdue` (свой владелец: откат пакета не должен видеть переводов покупки).
  */
 const OWNER = {
   legacy: mintGraph(uuidv5('actions-golden:legacy', ORBIS_NAMESPACE)),
   action: mintGraph(uuidv5('actions-golden:action', ORBIS_NAMESPACE)),
   dispatch: mintGraph(uuidv5('actions-golden:dispatch', ORBIS_NAMESPACE)),
+  tasks: mintGraph(uuidv5('actions-golden:tasks', ORBIS_NAMESPACE)),
 } as const;
 /** id мира — от владельца и слага: воспроизводим без обращения к БД (`surfaces.ts:76`). */
 const worldId = (owner: GraphId, slug: string): string =>
@@ -84,6 +99,11 @@ const SLUGS = ['envelope-july', 'envelope-aug', 'purchase', 'task-1', 'task-2', 
  * имени он лёг бы в эталон безымянным `<uuid>`.
  */
 const CATEGORY = 'category';
+/**
+ * Слаги пачек, у которых нет «своей» строки мира: `postpone` — вызов map-действия по трём задачам.
+ * Пачки одиночных вызовов названы слагом цели (`@batch:purchase`).
+ */
+const BATCH_SLUGS = ['postpone'] as const;
 // `UUID_RE`, `MASKED_KEYS`, `namesOf`, `stabilize` — КОПИЯ `apps/server/test/surfaces.ts:345-376`
 // (тот же довод «маска, съевшая лишнее, и есть способ, которым эталон перестаёт что-то значить»),
 // с двумя правками: `MASKED_KEYS` += `graph_id`/`actor_user_id` (строка журнала несёт их snake_case),
@@ -97,6 +117,7 @@ function namesOf(owner: GraphId): ReadonlyMap<string, string> {
     m.set(worldId(owner, s).toLowerCase(), `@${s}`);
     m.set(batchOf(owner, s).toLowerCase(), `@batch:${s}`);
   }
+  for (const s of BATCH_SLUGS) m.set(batchOf(owner, s).toLowerCase(), `@batch:${s}`);
   return m;
 }
 
@@ -221,8 +242,10 @@ type Half = keyof typeof OWNER;
  * походов в БД в телах нет (образец `test/gate-c8-18.test.ts`). Заполняются ровно одним
  * `beforeAll` файла.
  */
-const BEFORE: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [] };
-const AFTER: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [] };
+const BEFORE: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [], tasks: [] };
+const AFTER: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [], tasks: [] };
+/** Уровень §7.10 вызова `postpone_overdue` — пиннится отдельным `expect` (шаг 8). */
+let tasksLevel: string | undefined;
 const JOURNALS = new Map<Half, Journal>();
 const journal = (half: Half): Journal => {
   const found = JOURNALS.get(half);
@@ -235,6 +258,19 @@ const PURCHASE_WORLD = ['envelope-july', 'envelope-aug', 'purchase'] as const;
 const OCCURRED_ON = '2026-08-10';
 /** Полдень по Москве (зона владельца по умолчанию): «сегодня» вызова из чата — ровно OCCURRED_ON. */
 const NOW = new Date(`${OCCURRED_ON}T09:00:00.000Z`);
+/** Задачи map-действия: просрочены к OCCURRED_ON (сроки 2026-06-01…03), перенос — на эту дату. */
+const TASKS_WORLD = ['task-1', 'task-2', 'task-3'] as const;
+const POSTPONE_TO = '2026-09-01';
+
+/** Контекст вызова из чата от владельца — поверхность модели (`run_action`). */
+const chatCtx = (owner: GraphId): ToolCallCtx => ({
+  db,
+  identity: personal(owner),
+  actorKind: 'owner',
+  source: 'chat',
+  explicitCommand: false,
+  clock: () => NOW,
+});
 
 /**
  * Законные расхождения строки журнала (§Б6-4 ревизии 4). Список ЗАКРЫТ: расширять его можно
@@ -311,6 +347,119 @@ function expectJournalWithinDiffs(mineRaw: Journal, names: ReadonlyMap<string, s
   expect(canonicalJson(mine)).toBe(canonicalJson(golden));
 }
 
+/**
+ * ПЯТЬ ТЕКСТОВ СХЛОПЫВАЮТСЯ В ОДИН — это законное расхождение, а не потеря. У кода пять отказов
+ * `INVARIANT {invariant:'not_planned_purchase'}` с разными текстами (`plan-to-fact.ts:78-97`); у
+ * действия предусловие ОДНО (§Б6-1 даёт декларации ровно одно `precondition`), и его ложность —
+ * один `CONFLICT precondition_failed`. Конъюнкты при этом сохранены все пять и проверяются
+ * поимённо — ниже, каждый своей порчей.
+ *
+ * ДВА ПЕРЕВОДА АДРЕСАЦИИ названы отдельно: «есть аспект `orbis/financial`» выражается КОНТРАКТОМ
+ * (`class(orbis/money-movement) ∈ {outflow, inflow}`) — формы «принадлежность аспекту» в языке E
+ * нет вовсе (`verify-b2-actions.md` «(г)»); «аспект `orbis/schedule` ∧ есть `orbis/recurrence`» —
+ * классом `template` контракта `orbis/recurrence` (та же эквивалентность, что уже принята
+ * Р-И-20 для задачи 4).
+ */
+const PRECONDITION_CONJUNCTS = [
+  ['не-financial', 'class(orbis/money-movement) ∈ {outflow, inflow}'],
+  ['архивная', 'not(orbis/archived = true)'],
+  ['шаблон recurring', 'not(class(orbis/recurrence) ∈ {template})'],
+  ['recurring-инстанс', 'not(has_relation(instance-of))'],
+  ['уже факт', 'orbis/planned = true'],
+] as const;
+
+/** Создание в порченом мире — тем же исполнителем, что сев, id выбирает сервер. */
+async function createIn(owner: GraphId, input: Record<string, unknown>): Promise<string> {
+  const r = await execute(db, {
+    identity: personal(owner),
+    actorKind: 'owner',
+    source: 'ui',
+    operations: [{ tool: 'entity_create', input: { tags: [], ...input } }],
+  });
+  if (!r.ok) throw new Error(`порча: ${r.error.code} — ${r.error.message}`);
+  return (r.results[0] as WireEntity).id;
+}
+const plannedInput = (planned: boolean) => ({
+  title: 'Купить кроссовки',
+  props: {
+    'orbis/amount': '8000.00',
+    'orbis/currency': 'RUB',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': newId(),
+    'orbis/occurred_on': '2026-07-15',
+    'orbis/planned': planned,
+  },
+  aspects: ['orbis/financial'],
+});
+const templateInput = (planned: boolean) => ({
+  title: 'Подписка',
+  props: {
+    ...(planned && { 'orbis/planned': true }),
+    'orbis/start_at': '2026-07-15T09:00:00+03:00',
+    'orbis/timezone': 'Europe/Moscow',
+    'orbis/recurrence': { freq: 'daily', interval: 1 },
+    'orbis/amount': '500.00',
+    'orbis/currency': 'RUB',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': newId(),
+    'orbis/recurring': true,
+  },
+  aspects: ['orbis/schedule', 'orbis/financial'],
+});
+
+/**
+ * Порча на каждый конъюнкт. Четыре мира ложны РОВНО по своему конъюнкту (остальные четыре
+ * истинны — проверено вычислением конъюнктов по одному при сборке таблицы): поэтому выпавший из
+ * сида пречек красит (а) своей строкой. Исключение одно и оно по построению: `orbis/planned`
+ * живёт только в `orbis/financial`, и у не-financial записи ложен ещё и конъюнкт «уже факт».
+ * Выпадение `class(orbis/money-movement)` строка «не-financial» поэтому не ловит — его ловит пин
+ * счёта конъюнктов сида (в). Шаблон повторения сеется с `orbis/planned: true` ровно ради
+ * изоляции: без него у шаблона ложен и «уже факт».
+ */
+const SPOILED_WORLD: Record<
+  (typeof PRECONDITION_CONJUNCTS)[number][0],
+  (owner: GraphId) => Promise<string>
+> = {
+  'не-financial': (owner) => createIn(owner, { title: 'Заметка' }),
+  архивная: async (owner) => {
+    const id = await createIn(owner, plannedInput(true));
+    const r = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id, archived: true } }],
+    });
+    if (!r.ok) throw new Error(`архивация: ${r.error.code} — ${r.error.message}`);
+    return id;
+  },
+  'шаблон recurring': (owner) => createIn(owner, templateInput(true)),
+  'recurring-инстанс': async (owner) => {
+    const template = await createIn(owner, templateInput(false));
+    await materializeInstances({
+      db,
+      identity: personal(owner),
+      from: '2026-07-15',
+      to: '2026-07-15',
+      today: '2026-07-15',
+    });
+    return recurringInstanceId(template, '2026-07-15');
+  },
+  'уже факт': (owner) => createIn(owner, plannedInput(false)),
+};
+
+/** Состояние записи — мерка `stateDelta` (канон значений, а не ссылочное равенство). */
+async function stateOf(
+  owner: GraphId,
+  id: string,
+): Promise<{ props: Record<string, unknown>; aspects: string[] }> {
+  const rows = await withIdentity(db, personal(owner), (tx) =>
+    tx.execute(sql`SELECT props, aspects FROM entities WHERE id = ${id}`),
+  );
+  const row = rows[0] as { props: Record<string, unknown>; aspects: string[] } | undefined;
+  if (row === undefined) throw new Error(`записи ${id} нет`);
+  return { props: row.props, aspects: row.aspects };
+}
+
 beforeAll(async () => {
   await truncateAll();
   for (const owner of Object.values(OWNER)) await seedWorld(owner);
@@ -363,26 +512,37 @@ beforeAll(async () => {
 
   // Половина `dispatch`: `run_action` из чата от владельца — поверхность модели.
   BEFORE.dispatch = await snapshotWorld(OWNER.dispatch, PURCHASE_WORLD);
-  const out = await dispatchTool(
-    {
-      db,
-      identity: personal(OWNER.dispatch),
-      actorKind: 'owner',
-      source: 'chat',
-      explicitCommand: false,
-      clock: () => NOW,
-    },
-    'run_action',
-    {
-      action: 'finance/plan-to-fact',
-      self: worldId(OWNER.dispatch, 'purchase'),
-      params: { occurred_on: OCCURRED_ON },
-      batch_id: batchOf(OWNER.dispatch, 'purchase'),
-    },
-  );
+  const out = await dispatchTool(chatCtx(OWNER.dispatch), 'run_action', {
+    action: 'finance/plan-to-fact',
+    self: worldId(OWNER.dispatch, 'purchase'),
+    params: { occurred_on: OCCURRED_ON },
+    batch_id: batchOf(OWNER.dispatch, 'purchase'),
+  });
   if (out.status !== 'ok') throw new Error(`половина dispatch: ${JSON.stringify(out)}`);
   AFTER.dispatch = await snapshotWorld(OWNER.dispatch, PURCHASE_WORLD);
   JOURNALS.set('dispatch', await journalOf(OWNER.dispatch, batchOf(OWNER.dispatch, 'purchase')));
+
+  // Мир `tasks`: map-действие по Q из чата. Уровень считается той же чистой функцией, что у
+  // диспатча (`actionCallFacts`), по резолву на те же «сегодня» — до исполнения.
+  BEFORE.tasks = await snapshotWorld(OWNER.tasks, TASKS_WORLD);
+  const call = { action: 'planner/postpone_overdue', params: { to: POSTPONE_TO } };
+  tasksLevel = await withIdentity(db, personal(OWNER.tasks), async (tx) => {
+    const reg = await effectiveRegistry(tx, OWNER.tasks);
+    const r = await resolveAction(tx, reg, OWNER.tasks, call, {
+      today: OCCURRED_ON,
+      timeZone: 'Europe/Moscow',
+    });
+    return classifyToolCall(
+      actionCallFacts(reg, r.decl, r.operations, r.targets, chatCtx(OWNER.tasks)),
+    );
+  });
+  const postponed = await dispatchTool(chatCtx(OWNER.tasks), 'run_action', {
+    ...call,
+    batch_id: batchOf(OWNER.tasks, 'postpone'),
+  });
+  if (postponed.status !== 'ok') throw new Error(`мир tasks: ${JSON.stringify(postponed)}`);
+  AFTER.tasks = await snapshotWorld(OWNER.tasks, TASKS_WORLD);
+  JOURNALS.set('tasks', await journalOf(OWNER.tasks, batchOf(OWNER.tasks, 'postpone')));
 });
 
 afterAll(async () => {
@@ -425,5 +585,65 @@ describe('§С8-27 plan-to-fact: код и декларация дают оди�
     expect(stabilize(journal('dispatch').action.operations, names)).toEqual(
       stabilize(journal('action').action.operations, namesOf(OWNER.action)),
     );
+  });
+
+  test('пять пречеков кода → один CONFLICT precondition_failed; состояние порченого мира не тронуто', async () => {
+    // (в) Конъюнктов в таблице пять — и столько же в сиде: выпавший при правке сида пречек
+    // красит (а) своей порчей, а этот пин — счётом.
+    expect(PRECONDITION_CONJUNCTS).toHaveLength(5);
+    const seeded = BUILTIN_ACTION_DEFS.find((d) => d.id === 'finance/plan-to-fact');
+    expect((seeded?.precondition as { op?: string; args?: unknown[] } | null)?.op).toBe('and');
+    expect((seeded?.precondition as { args?: unknown[] } | null)?.args).toHaveLength(
+      PRECONDITION_CONJUNCTS.length,
+    );
+    for (const [spoil, conjunct] of PRECONDITION_CONJUNCTS) {
+      const owner = await freshGraph();
+      const id = await SPOILED_WORLD[spoil](owner);
+      const before = await stateOf(owner, id);
+      // (а) Отказ — от РЕЗОЛВА, до исполнителя: ложное предусловие операций не собирает.
+      const refused = await withIdentity(db, personal(owner), async (tx) =>
+        resolveAction(
+          tx,
+          await effectiveRegistry(tx, owner),
+          owner,
+          { action: 'finance/plan-to-fact', self: id, params: { occurred_on: OCCURRED_ON } },
+          { today: OCCURRED_ON, timeZone: 'Europe/Moscow' },
+        ).then(
+          () => ({ code: 'нет отказа', reason: undefined }),
+          (e: unknown) => ({
+            code: (e as { code?: unknown }).code,
+            reason: (e as { details?: { reason?: unknown } }).details?.reason,
+          }),
+        ),
+      );
+      expect([spoil, conjunct, refused]).toEqual([
+        spoil,
+        conjunct,
+        { code: 'CONFLICT', reason: 'precondition_failed' },
+      ]);
+      // (б) Состояние после отказа равно состоянию до — той же меркой, что журнал.
+      expect([spoil, stateDelta(before, await stateOf(owner, id))]).toEqual([spoil, {}]);
+    }
+  });
+});
+
+describe('§С8-27 postpone_overdue: map-действие по Q', () => {
+  test('снимок состояния и строки журнала равен эталону; уровень трёх целей — preview', () => {
+    const g = caseOf('postpone_overdue/apply');
+    const names = namesOf(OWNER.tasks);
+    // Три цели < 10 → ряд «batch» таблицы §7.10 даёт `preview`: действие ИСПОЛНЯЕТСЯ, а не
+    // ложится карточкой — иначе снимать было бы нечего.
+    expect(tasksLevel).toBe('preview');
+    expect(canonicalJson(stabilize(BEFORE.tasks, names))).toBe(canonicalJson(g.before));
+    expect(canonicalJson(stabilize(AFTER.tasks, names))).toBe(canonicalJson(g.after));
+    expect(canonicalJson(stabilize(journal('tasks'), names))).toBe(canonicalJson(g.journal));
+    // Читаемо, а не только побайтно: ОДНА строка `action` на пачку, три операции и три обратные.
+    const { action } = journal('tasks');
+    expect([action.type, action.action_id, action.module]).toEqual([
+      'action',
+      'planner/postpone_overdue',
+      'planner',
+    ]);
+    expect([action.operations.length, action.inverse.length]).toEqual([3, 3]);
   });
 });

@@ -180,6 +180,159 @@
           "entity_id": null
         }
       }
+    },
+    {
+      "name": "postpone_overdue/apply",
+      "action": "planner/postpone_overdue",
+      "params": {
+        "to": "2026-09-01"
+      },
+      "before": [
+        {
+          "id": "@task-1",
+          "title": "Задача 1",
+          "archived": false,
+          "aspects": ["orbis/task"],
+          "props": {
+            "orbis/due_date": "2026-06-01",
+            "orbis/task_status": "inbox"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@task-2",
+          "title": "Задача 2",
+          "archived": false,
+          "aspects": ["orbis/task"],
+          "props": {
+            "orbis/due_date": "2026-06-02",
+            "orbis/task_status": "inbox"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@task-3",
+          "title": "Задача 3",
+          "archived": false,
+          "aspects": ["orbis/task"],
+          "props": {
+            "orbis/due_date": "2026-06-03",
+            "orbis/task_status": "inbox"
+          },
+          "incoming": []
+        }
+      ],
+      "after": [
+        {
+          "id": "@task-1",
+          "title": "Задача 1",
+          "archived": false,
+          "aspects": ["orbis/task"],
+          "props": {
+            "orbis/due_date": "2026-09-01",
+            "orbis/task_status": "inbox"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@task-2",
+          "title": "Задача 2",
+          "archived": false,
+          "aspects": ["orbis/task"],
+          "props": {
+            "orbis/due_date": "2026-09-01",
+            "orbis/task_status": "inbox"
+          },
+          "incoming": []
+        },
+        {
+          "id": "@task-3",
+          "title": "Задача 3",
+          "archived": false,
+          "aspects": ["orbis/task"],
+          "props": {
+            "orbis/due_date": "2026-09-01",
+            "orbis/task_status": "inbox"
+          },
+          "incoming": []
+        }
+      ],
+      "journal": {
+        "action": {
+          "id": "@batch:postpone",
+          "type": "action",
+          "module": "planner",
+          "source": "chat",
+          "inverse": [
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@task-1",
+                "props": {
+                  "orbis/due_date": "2026-06-01"
+                }
+              }
+            },
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@task-3",
+                "props": {
+                  "orbis/due_date": "2026-06-03"
+                }
+              }
+            },
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@task-2",
+                "props": {
+                  "orbis/due_date": "2026-06-02"
+                }
+              }
+            }
+          ],
+          "action_id": "planner/postpone_overdue",
+          "entity_id": null,
+          "mechanism": "user",
+          "actor_kind": "owner",
+          "operations": [
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@task-2",
+                "props": {
+                  "orbis/due_date": "2026-09-01"
+                }
+              }
+            },
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@task-3",
+                "props": {
+                  "orbis/due_date": "2026-09-01"
+                }
+              }
+            },
+            {
+              "op": "entity_update",
+              "payload": {
+                "id": "@task-1",
+                "props": {
+                  "orbis/due_date": "2026-09-01"
+                }
+              }
+            }
+          ],
+          "actor_user_id": "<actor_user_id>"
+        },
+        "card": {
+          "tool": "batch_execute",
+          "title": "Действие «Отложить просроченные»",
+          "entity_id": null
+        }
+      }
     }
   ]
 }
