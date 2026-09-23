@@ -1617,6 +1617,23 @@ describe('waiting_for живёт только в ожидании (В-П-8 (в),
     expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
   });
 
+  test("undo: 'check' — точечный откат, возвращающий вопрос тикету, ушедшему из ожидания, отклонён", async () => {
+    // Режим отката строки — решение по экземпляру (Р-И-2): `check` у `waiting_for_only_when_waiting`.
+    // Действие A снимает вопрос у ждущего тикета, действие B уводит тикет в работу (дельты по вопросу
+    // у B нет). Точечный откат A восстанавливает вопрос у тикета в работе — «вопрос вне ожидания»,
+    // и откат отклоняется; с `skip` хвост лёг бы.
+    const t = await ticket('waiting', 'вопрос до отката');
+    const a = await run('entity_update', { id: t.id, unset: ['orbis/waiting_for'] });
+    expect(refusalOf(a)).toBe('ok');
+    entityOf(await run('entity_update', { id: t.id, props: await patch('in_progress') }));
+    const undone = await undoAction(db, {
+      identity: personal(graph),
+      actionId: (a as ExecuteOk).actionId,
+    });
+    expect(refusalOf(undone)).toBe('INVARIANT/waiting_for_only_when_waiting');
+    expect((await row(t.id)).props['orbis/waiting_for']).toBeUndefined();
+  });
+
   test('единственный вариант вне классов (cancelled) вопроса не терпит', async () => {
     // `cancelled` — ЕДИНСТВЕННЫЙ вариант статуса вне карты классов `orbis/delegable` (Р-К-92 (1);
     // `inbox` относится к классу `new`): `entityClassOf` → null, `class ∈ waiting` ложно, и запись
