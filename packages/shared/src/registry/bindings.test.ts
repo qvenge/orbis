@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import type { AspectDeltaVariants } from './bindings';
 import {
   bindingIndexOf,
+  ClassWriteError,
   checkClassMap,
   checkImplements,
   entityClassOf,
+  exclusiveClassIssues,
   propertyOfSlot,
   variantOfClass,
 } from './bindings';
@@ -915,6 +917,147 @@ describe('checkClassMap: вариант дельты без отнесения �
     };
     expect(codes({ selectOptions: ADD, classMap })).toEqual([['CLASS_NOT_EXCLUSIVE', undefined]]);
   });
+
+  // ФИКС-РАУНД 1 задачи 14а (I-1 обоих ревью): исключительность проверяется у КАЖДОЙ строки карты,
+  // а не только у варианта, который добавляет та же дельта. Снятая полнота (РЧ-14а-1) оставляет
+  // встроенный `cancelled` без класса делегируемости, и `applyDeltas` дописал бы отнесение —
+  // у класса стало бы два варианта, и запись классом (`variantOfClass`) перестала бы отвечать.
+  test('СУЩЕСТВУЮЩИЙ вариант без selectOptions в занятый класс — CLASS_NOT_EXCLUSIVE', () => {
+    const row = (cls: string) => ({
+      classMap: {
+        'orbis/task_status': [
+          { contract: 'orbis/delegable', slot: 'status', variant: 'cancelled', class: cls },
+        ],
+      },
+    });
+    expect(checkClassMap(row('queued'), TASK, REG)).toEqual([
+      {
+        code: 'CLASS_NOT_EXCLUSIVE',
+        details: {
+          propertyId: 'orbis/task_status',
+          contract: 'orbis/delegable',
+          slot: 'status',
+          class: 'queued',
+          variants: ['cancelled', 'planned'],
+        },
+      },
+    ]);
+    expect(codes(row('done'))).toEqual([['CLASS_NOT_EXCLUSIVE', undefined]]);
+    // Повтор УЖЕ стоящего отнесения карту не меняет — и замечанием не считается.
+    expect(
+      codes({
+        classMap: {
+          'orbis/task_status': [
+            { contract: 'orbis/delegable', slot: 'status', variant: 'planned', class: 'queued' },
+          ],
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  test('ДВЕ строки одной дельты в один СВОБОДНЫЙ класс — CLASS_NOT_EXCLUSIVE (M-2)', () => {
+    // Свой аспект владельца с частичной картой (законно по РЧ-14а-1): у делегируемости занят только
+    // `done`, класс `queued` свободен. Одна строка в него законна, две разных — нет: `classTakenBy`
+    // смотрит в реестр, а соседнюю строку той же дельты там не найти.
+    const OWN = {
+      ...(REG.properties.get('orbis/task_status') as PropertyDefinition),
+      id: '019e4466-4444-7e07-b5d4-64be9721da04',
+      key: 'user/gig-stage',
+      graphId: '00000000-0000-4000-8000-000000000001',
+    };
+    const carrier: AspectDefinition = {
+      ...NOTE,
+      id: 'user/gig',
+      key: 'user/gig',
+      graphId: OWN.graphId,
+      properties: [{ propertyId: OWN.id, required: false, rank: 1 }],
+      implements: [
+        {
+          contract: 'orbis/delegable',
+          bind: { status: OWN.id },
+          value_map: [{ slot: 'status', variant: 'done', class: 'done' }],
+          fixed: {},
+        },
+      ],
+    };
+    const reg = {
+      properties: new Map([...REG.properties, [OWN.id, OWN]]),
+      contracts: REG.contracts,
+      aspects: new Map([...REG.aspects, [carrier.id, carrier]]),
+    };
+    const into = (...variants: string[]) => ({
+      classMap: {
+        [OWN.id]: variants.map((variant) => ({
+          contract: 'orbis/delegable',
+          slot: 'status',
+          variant,
+          class: 'queued',
+        })),
+      },
+    });
+    expect(checkClassMap(into('planned'), carrier, reg)).toEqual([]);
+    expect(checkClassMap(into('planned', 'inbox'), carrier, reg)).toEqual([
+      {
+        code: 'CLASS_NOT_EXCLUSIVE',
+        details: {
+          propertyId: OWN.id,
+          contract: 'orbis/delegable',
+          slot: 'status',
+          class: 'queued',
+          variants: ['inbox', 'planned'],
+        },
+      },
+    ]);
+  });
+});
+
+describe('exclusiveClassIssues: исключительность на ИТОГОВОЙ карте (фикс-раунд 1 задачи 14а)', () => {
+  const REG_ALL = {
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+  };
+  test('встроенный реестр чист; второй вариант в классе делегируемости — замечание с адресом', () => {
+    expect(exclusiveClassIssues(REG_ALL)).toEqual([]);
+    const task = REG_ALL.aspects.get('orbis/task') as AspectDefinition;
+    const broken: AspectDefinition = {
+      ...task,
+      implements: task.implements.map((b) =>
+        b.contract !== 'orbis/delegable'
+          ? b
+          : {
+              ...b,
+              value_map: [
+                ...b.value_map,
+                { slot: 'status', variant: 'cancelled', class: 'queued' },
+              ],
+            },
+      ),
+    };
+    expect(
+      exclusiveClassIssues({
+        ...REG_ALL,
+        aspects: new Map([...REG_ALL.aspects, [task.id, broken]]),
+      }),
+    ).toEqual([
+      {
+        code: 'CLASS_NOT_EXCLUSIVE',
+        details: {
+          aspect: 'orbis/task',
+          contract: 'orbis/delegable',
+          slot: 'status',
+          propertyId: 'orbis/task_status',
+          class: 'queued',
+          variants: ['cancelled', 'planned'],
+        },
+      },
+    ]);
+  });
+  test('НЕ-exclusive контракт не проверяется: четыре варианта в `active` завершаемости — норма', () => {
+    // Встроенная завершаемость и есть такой случай; проверка выше чиста именно поэтому.
+    const task = REG_ALL.aspects.get('orbis/task') as AspectDefinition;
+    const completable = task.implements.find((b) => b.contract === 'orbis/completable');
+    expect(completable?.value_map.filter((m) => m.class === 'active')).toHaveLength(4);
+  });
 });
 
 const REG = {
@@ -1089,5 +1232,36 @@ describe('запись классом: propertyOfSlot и variantOfClass (Р-И-3
     expect(() => variantOfClass(idx, 'orbis/note', 'orbis/completable', 'done')).toThrow(
       /orbis\/note/,
     );
+  });
+  test('отказ — ClassWriteError с кодом закрытого словаря, а не голый Error (фикс-раунд 1, M-1)', () => {
+    // Сервер переводит его в структурный `VALIDATION` (`registry/class-write.ts`); голый `Error`
+    // доехал бы до агента и владельца пятисотой.
+    const thrown = (fn: () => unknown): ClassWriteError => {
+      try {
+        fn();
+      } catch (e) {
+        if (e instanceof ClassWriteError) return e;
+        throw e;
+      }
+      throw new Error('ожидался ClassWriteError');
+    };
+    const ambiguous = thrown(() =>
+      variantOfClass(idx, 'orbis/task', 'orbis/completable', 'active'),
+    );
+    expect([ambiguous.code, ambiguous.details.class]).toEqual(['CLASS_NOT_EXCLUSIVE', 'active']);
+    expect(ambiguous.details.variants).toEqual(['inbox', 'planned', 'in_progress', 'waiting']);
+    // Текст честен и для НАРУШЕННОЙ исключительности у exclusive-контракта (гейт m2): он говорит
+    // про неоднозначность данных, а не «контракт не объявлен exclusive_classes».
+    expect(ambiguous.message).toContain('неоднозначна');
+    expect(ambiguous.message).not.toContain('не объявлен');
+    expect(
+      thrown(() => variantOfClass(idx, 'orbis/task', 'orbis/completable', 'queued')).code,
+    ).toBe('VARIANT_UNMAPPED');
+    expect(thrown(() => variantOfClass(idx, 'orbis/note', 'orbis/completable', 'done')).code).toBe(
+      'UNKNOWN_CONTRACT',
+    );
+    expect(
+      thrown(() => propertyOfSlot(idx, 'orbis/schedule', 'orbis/recurrence', 'origin_role')).code,
+    ).toBe('UNKNOWN_SLOT');
   });
 });

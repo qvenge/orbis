@@ -413,7 +413,8 @@ function statusSlotsOf(
 
 /**
  * Вариант, уже занимающий класс в этом слоте у любого носителя свойства; `undefined` — класс свободен.
- * Обход по ВСЕМ носителям, а не по аспекту-цели: дельта дописывает отнесение в `value_map` каждой
+ * `reg` — строки БЕЗ дельт: отнесения прошлых дельт владельца видит только проба итоговой карты
+ * (`exclusiveClassIssues`). Обход по ВСЕМ носителям, а не по аспекту-цели: дельта дописывает отнесение в `value_map` каждой
  * привязки, связывающей свойство с этим слотом (`deltas.ts`, `applyDeltas`, блок «КАРТА КЛАССОВ ⊕
  * ПРИВЯЗКИ»), — значит и нарушить исключительность она может у любого из них.
  */
@@ -531,17 +532,10 @@ export function checkClassMap(
               reason: hit === undefined ? 'unmapped' : 'unknown_class',
             },
           });
-          continue;
         }
-        // Отнесение ДАНО и класс существует: у exclusive-контракта он обязан быть свободен, иначе
-        // `variantOfClass` перестал бы отвечать однозначно и «поставь класс» стало бы молчаливым
-        // выбором из двух значений.
-        if (exclusive && classTakenBy(propertyId, contract, slot, hit.class, reg) !== undefined) {
-          issues.push({
-            code: 'CLASS_NOT_EXCLUSIVE',
-            details: { propertyId, contract, slot, class: hit.class, variant: option.key },
-          });
-        }
+        // Отнесение ДАНО и класс существует. Исключительность здесь НЕ проверяется: она — свойство
+        // КАРТЫ, а не добавленного варианта, и её дом — второй обход ниже, по всем строкам
+        // `classMap` (иначе отнесение СУЩЕСТВУЮЩЕГО варианта без `selectOptions` её обходило).
       }
     }
   }
@@ -558,6 +552,11 @@ export function checkClassMap(
   for (const [propertyId, entries] of Object.entries(delta.classMap ?? {})) {
     const slots = statusSlotsOf(propertyId, reg);
     const domain = variantDomainOf(propertyId, delta, reg);
+    // Отнесения в классы exclusive-контракта: (контракт, слот, класс) → варианты этой дельты.
+    const claims = new Map<
+      string,
+      { contract: string; slot: string; cls: string; variants: Set<string> }
+    >();
     for (const entry of entries) {
       const contract = reg.contracts.get(entry.contract);
       if (contract === undefined || contract.kind === 'facts') {
@@ -600,10 +599,101 @@ export function checkClassMap(
             reason: 'unknown_variant',
           },
         });
+        continue;
       }
+      // Строка законна по адресу и варианту — у exclusive-контракта копим её для проверки класса.
+      // Класс не из контракта сюда не идёт: «два варианта в несуществующем классе» назвало бы
+      // неисключительностью то, что на деле опечатка в имени класса.
+      if (contract.exclusive_classes && contract.classes.some((c) => c.key === entry.class)) {
+        const key = `${entry.contract} ${entry.slot} ${entry.class}`;
+        const claim = claims.get(key) ?? {
+          contract: entry.contract,
+          slot: entry.slot,
+          cls: entry.class,
+          variants: new Set<string>(),
+        };
+        claim.variants.add(String(entry.variant));
+        claims.set(key, claim);
+      }
+    }
+    // ИСКЛЮЧИТЕЛЬНОСТЬ (Р-И-38) — у КАЖДОЙ строки карты, а не только у варианта, который добавляет
+    // эта же дельта (фикс-раунд 1 задачи 14а). Снятая полнота (РЧ-14а-1) оставляет СУЩЕСТВУЮЩИЕ
+    // варианты без класса (`cancelled` у делегируемости), и `applyDeltas` дописал бы отнесение в
+    // `value_map`: у класса стало бы два варианта, а запись классом (`variantOfClass`) — неоднозначной.
+    // Два источника второго варианта: пара, уже стоящая у носителя (`classTakenBy`), и соседняя строка
+    // той же дельты — в реестре её ещё нет. Повтор уже стоящей пары — один вариант, не замечание.
+    // Отнесения ИЗ ДРУГИХ дельт владельца здесь не видны (`reg` — строки без дельт): их ловит проба
+    // итоговой карты у писателя (`exclusiveClassIssues` в `setAspectDelta`).
+    for (const claim of claims.values()) {
+      const variants = new Set(claim.variants);
+      const taken = classTakenBy(propertyId, claim.contract, claim.slot, claim.cls, reg);
+      if (taken !== undefined) variants.add(taken);
+      if (variants.size < 2) continue;
+      issues.push({
+        code: 'CLASS_NOT_EXCLUSIVE',
+        details: {
+          propertyId,
+          contract: claim.contract,
+          slot: claim.slot,
+          class: claim.cls,
+          variants: [...variants].sort(),
+        },
+      });
     }
   }
   return issues;
+}
+
+/**
+ * ИСКЛЮЧИТЕЛЬНОСТЬ НА ИТОГОВОЙ КАРТЕ (Р-И-38): классы exclusive-контракта, которые в СЛИТОМ снимке
+ * (строки реестра ⊕ все дельты владельца) выражают два и более варианта. Одно замечание на
+ * (аспект, контракт, слот, класс).
+ *
+ * Зачем в дополнение к `checkClassMap`: тот видит одну дельту против строк БЕЗ дельт, а
+ * `applyDeltas` дописывает отнесение каждой дельты в `value_map` ВСЕХ привязок свойства к слоту —
+ * две дельты разных аспектов (или новая привязка поверх старой дельты) складываются во второй
+ * вариант класса только в слитом снимке. Писатель зовёт это на ПРОБЕ `applyDeltas`, до записи.
+ *
+ * Слот, закрытый константой (`fixed`), дельтой не дополняется и здесь не проверяется: карту его
+ * держит `checkVariants` на записи привязки.
+ */
+export function exclusiveClassIssues(reg: {
+  aspects: ReadonlyMap<string, AspectDefinition>;
+  contracts: ReadonlyMap<string, ContractDefinition>;
+}): ImplementsIssue[] {
+  const out: ImplementsIssue[] = [];
+  for (const aspect of reg.aspects.values()) {
+    for (const binding of aspect.implements) {
+      const contract = reg.contracts.get(binding.contract);
+      if (contract === undefined || contract.kind !== 'slots' || !contract.exclusive_classes) {
+        continue;
+      }
+      for (const decl of contract.slots) {
+        const propertyId = binding.bind[decl.name];
+        if (!decl.status || propertyId === undefined) continue;
+        const known = new Map<string, string>();
+        for (const vm of binding.value_map) {
+          if (vm.slot === decl.name && !known.has(String(vm.variant))) {
+            known.set(String(vm.variant), vm.class);
+          }
+        }
+        for (const [cls, variants] of classesWithTwoVariants(known)) {
+          out.push({
+            code: 'CLASS_NOT_EXCLUSIVE',
+            details: {
+              aspect: aspect.id,
+              contract: contract.id,
+              slot: decl.name,
+              propertyId,
+              class: cls,
+              variants,
+            },
+          });
+        }
+      }
+    }
+  }
+  return out;
 }
 
 export interface ResolvedBinding {
@@ -721,6 +811,27 @@ export function bindingIndexOf(reg: {
   };
 }
 
+/**
+ * Отказ записи классом: снимок не даёт однозначного адреса или значения. Свой класс, а не `Error`
+ * (фикс-раунд 1 задачи 14а): shared про `ExecError` не знает (шапка файла), а сервер обязан отдать
+ * агенту и владельцу СТРУКТУРНЫЙ отказ, не 500, — `registry/class-write.ts` переводит его в
+ * `VALIDATION` с `reason: code`. Образец — `ExprCheckError`/`PatternNotRegularError`.
+ *
+ * Код — из закрытого словаря `ImplementsIssue` (Р-К-34): то же нарушение, что валидатор ловит на
+ * записи, только увиденное на чтении — у снимка, собранного мимо валидатора (прямой сид, фикстура,
+ * код, выкаченный раньше пересева). Уточнение — в `details.cause`, как у `execErrorOfImplementsIssue`.
+ */
+export class ClassWriteError extends Error {
+  readonly code: ImplementsIssue['code'];
+  readonly details: Record<string, unknown>;
+  constructor(code: ImplementsIssue['code'], message: string, details: Record<string, unknown>) {
+    super(message);
+    this.name = 'ClassWriteError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
 /** Привязка аспекта к контракту в индексе; `undefined` — аспект этот контракт не реализует. */
 function bindingOn(
   idx: BindingIndex,
@@ -747,8 +858,15 @@ export function propertyOfSlot(
 ): string {
   const at = idx.slotOf(aspectId, contract, slot);
   if (at === undefined || !('prop' in at)) {
-    throw new Error(
+    throw new ClassWriteError(
+      'UNKNOWN_SLOT',
       `propertyOfSlot: слот ${slot} контракта ${contract} у аспекта ${aspectId} не занят свойством`,
+      {
+        aspect: aspectId,
+        contract,
+        slot,
+        cause: at === undefined ? 'not_bound' : 'fixed',
+      },
     );
   }
   return at.prop;
@@ -774,21 +892,33 @@ export function variantOfClass(
 ): string | boolean {
   const binding = bindingOn(idx, aspectId, contract);
   if (binding === undefined) {
-    throw new Error(`variantOfClass: аспект ${aspectId} не реализует контракт ${contract}`);
+    throw new ClassWriteError(
+      'UNKNOWN_CONTRACT',
+      `variantOfClass: аспект ${aspectId} не реализует контракт ${contract}`,
+      { aspect: aspectId, contract, cause: 'not_implemented' },
+    );
   }
-  for (const byClass of binding.variantsOfClass.values()) {
+  for (const [slot, byClass] of binding.variantsOfClass) {
     const variants = byClass.get(cls);
     if (variants === undefined) continue;
     if (variants.length !== 1) {
-      throw new Error(
-        `variantOfClass: класс ${cls} контракта ${contract} у аспекта ${aspectId} выражают ` +
-          `${variants.length} вариантов — контракт не объявлен exclusive_classes`,
+      // Текст говорит про ДАННЫЕ, а не про флаг (гейт m2): однозначность проверяется по карте
+      // (РЧ-14а-4), и у exclusive-контракта второй вариант — нарушение данных (снимок мимо
+      // валидатора), а у прочих — класс, по которому писать нельзя вовсе. Чинить в обоих случаях
+      // одно: карту привязки.
+      throw new ClassWriteError(
+        'CLASS_NOT_EXCLUSIVE',
+        `variantOfClass: запись классом неоднозначна — класс ${cls} контракта ${contract} у аспекта ` +
+          `${aspectId} выражают ${variants.length} вариантов (${variants.map(String).join(', ')})`,
+        { aspect: aspectId, contract, slot, class: cls, variants: [...variants] },
       );
     }
     return variants[0] as string | boolean;
   }
-  throw new Error(
+  throw new ClassWriteError(
+    'VARIANT_UNMAPPED',
     `variantOfClass: класс ${cls} контракта ${contract} не отнесён ни одному варианту у аспекта ${aspectId}`,
+    { aspect: aspectId, contract, class: cls, cause: 'class_unmapped' },
   );
 }
 
