@@ -3,13 +3,18 @@
 // которым считается `touches_money`, и словарь действий, по которому проверяется занятость `key`,
 // приезжают из сида, а не из литерала теста.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { actionToolName, BUILTIN_ACTION_DEFS } from '@orbis/shared';
+import {
+  type ActionDefinition,
+  type ActionStep,
+  actionToolName,
+  BUILTIN_ACTION_DEFS,
+} from '@orbis/shared';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 // Имена реестровых тулов читаются, а не правятся (tools/* — задача 7): пин рулинга 6-1 обязан
 // видеть и тулы, которые заведут следующие задачи, а не список, переписанный сюда руками.
 import { REGISTRY_TOOL_NAMES } from '../tools/registry-tools';
-import { assertAction } from './actions';
+import { actionHash, assertAction, stepFactsOf, stepReversible } from './actions';
 import { effectiveRegistry } from './cache';
 import type { RegistrySnapshot } from './load';
 
@@ -31,6 +36,18 @@ test('оба сидовых действия проходят валидатор
     expect(() => assertAction(decl, { reg, systemSeed: true })).not.toThrow();
   }
 });
+
+/** Встроенная декларация по позиции; её отсутствие — дефект фикстуры, а не ветка пробы. */
+function builtin(i: 0 | 1): ActionDefinition {
+  const d = BUILTIN_ACTION_DEFS[i];
+  if (d === undefined) throw new Error(`нет встроенного действия №${i}`);
+  return d;
+}
+function firstStep(d: ActionDefinition): ActionStep {
+  const step = d.steps[0];
+  if (step === undefined) throw new Error(`у действия ${d.key} нет шагов`);
+  return step;
+}
 
 /** Код и причина отказа: коды §С1-2 закрыты (errors.ts), причина VALIDATION едет в details. */
 function verdict(decl: unknown): { code: string; reason?: string } | 'ok' {
@@ -126,4 +143,78 @@ test('ни один тул REGISTRY_TOOLS в шаге не читается вл
       { code: 'VALIDATION', reason: 'ACTION_STEP_TOOL' },
     ]);
   }
+});
+
+test('объявленный параметр, который не читает ни precondition, ни шаг, — ACTION_PARAM_UNUSED (Р-34)', () => {
+  const bogus = {
+    ...BUILTIN_ACTION_DEFS[1],
+    params: [
+      { name: 'to', type: { kind: 'date' } },
+      { name: 'reason', type: { kind: 'text' } },
+    ],
+  };
+  expect(() => assertAction(bogus, { reg, systemSeed: true })).toThrow(/reason/);
+  expect(verdict(bogus)).toEqual({ code: 'VALIDATION', reason: 'ACTION_PARAM_UNUSED' });
+});
+
+// Р-34, обход по E-позициям: `{param}` ВНУТРИ литерала json-значения — данные, а не чтение
+// параметра. Второй обход сырого дерева засчитал бы его и пропустил неиспользуемый параметр.
+test('{param} внутри литерала json-значения параметр не «читает» (Р-34)', () => {
+  const bogus = {
+    ...BUILTIN_ACTION_DEFS[1],
+    steps: [
+      {
+        tool: 'entity_update',
+        input: {
+          id: { $expr: { ctx: '$self' } },
+          props: { 'orbis/progress_source': { param: 'to' } },
+        },
+      },
+    ],
+  };
+  expect(verdict(bogus)).toEqual({ code: 'VALIDATION', reason: 'ACTION_PARAM_UNUSED' });
+});
+
+test('шаг, пишущий свойство слота money-movement, несёт touches_money; декларация обязана его объявить', () => {
+  expect([...stepFactsOf(reg, firstStep(builtin(0)))]).toEqual(['touches_money']);
+  expect([...stepFactsOf(reg, firstStep(builtin(1)))]).toEqual([]);
+  const under = { ...BUILTIN_ACTION_DEFS[0], sensitivity: [] };
+  expect(() => assertAction(under, { reg, systemSeed: true })).toThrow(/touches_money/);
+});
+
+// `attach_*` пишет набор аспекта КЛЮЧАМИ свойств в `data` (§А9-1): факт шага обязан считаться и там.
+test('attach_* с денежным свойством в data — тот же touches_money (§А9-1)', () => {
+  const attach = {
+    tool: 'attach_orbis_financial',
+    input: { entity_id: { $expr: { ctx: '$self' } }, data: { 'orbis/amount': '1.00' } },
+  };
+  expect([...stepFactsOf(reg, attach)]).toEqual(['touches_money']);
+  const under = {
+    ...BUILTIN_ACTION_DEFS[0],
+    sensitivity: [],
+    params: [],
+    precondition: null,
+    steps: [attach],
+  };
+  expect(verdict(under)).toEqual({ code: 'SENSITIVITY_UNDERDECLARED', reason: undefined });
+});
+
+test('обратимость шага — статическая таблица; условные случаи необратимы (Р-10)', () => {
+  for (const tool of [
+    'entity_create',
+    'entity_update',
+    'relation_create',
+    'relation_delete',
+    'attach_orbis_task',
+  ]) {
+    expect([tool, stepReversible(tool)]).toEqual([tool, true]);
+  }
+  expect(stepReversible('property_update')).toBe(false);
+});
+
+test('actionHash: подпись и rank личности не меняют, шаги и кап — меняют (§Б6-7)', () => {
+  const a = builtin(1);
+  expect(actionHash({ ...a, label: { ru: 'Другая', en: 'Other' }, rank: 9 })).toBe(actionHash(a));
+  expect(actionHash({ ...a, batch_cap: 5 })).not.toBe(actionHash(a));
+  expect(actionHash({ ...a, steps: [] })).not.toBe(actionHash(a));
 });

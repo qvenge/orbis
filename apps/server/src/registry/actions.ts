@@ -8,17 +8,22 @@
 //  2) строка в E-позиции — ДО разбора формы (`SECOND_LANGUAGE`, как у подписок);
 //  3) форма; 4) ключ и namespace; 5) шаги; 6) кап и `over`; 7) шаблон входа шага;
 //  8) типы E; 9) неиспользуемый параметр; 10) чувствительность.
+import { createHash } from 'node:crypto';
 import {
   ACTION_STEP_TOOLS,
   type ActionDefinition,
+  type ActionStep,
   actionDefinitionSchema,
   attachAspectInput,
   attachToolName,
+  bindingIndexOf,
+  canonicalJson,
   entityCreateInput,
   entityUpdateInput,
   MODULE_IDS,
   relationCreateInput,
   relationDeleteInput,
+  type SensitivityFact,
 } from '@orbis/shared';
 // Типы языка E — из его подпути, как у `subscriptions/registry.ts` (баррель реестра их не
 // реэкспортирует, и второй адрес для одного типа заводить незачем).
@@ -27,6 +32,7 @@ import type { ExprScope, ExprType } from '@orbis/shared/expr';
 import type { QueryAst, QueryFilterNode } from '@orbis/shared/query';
 import { z } from 'zod';
 import { ExecError } from '../errors';
+import { resolvePropertyRef } from '../executor/props';
 import { assertExprChecked } from '../expr/check';
 import type { RegistrySnapshot } from './load';
 
@@ -234,7 +240,134 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
     }
   }
 
+  // (9) Р-34 (урок остатка 39): параметр, который никто не читает, — обещание поверхности,
+  // которое некому исполнить. Обход по УЖЕ разобранным E-позициям: второй обход сырого
+  // дерева нашёл бы `{param}` и внутри литерала json-значения, где это просто данные.
+  const used = new Set<string>();
+  const collect = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const n of node) collect(n);
+      return;
+    }
+    if (typeof node !== 'object' || node === null) return;
+    const o = node as Record<string, unknown>;
+    if (typeof o.param === 'string') used.add(o.param);
+    for (const v of Object.values(o)) collect(v);
+  };
+  if (decl.precondition !== null) collect(decl.precondition);
+  for (const [path, node] of rawExprSites(decl as unknown as Record<string, unknown>)) {
+    if (path !== 'precondition') collect(node);
+  }
+  const unused = decl.params.map((p) => p.name).filter((n) => !used.has(n));
+  if (unused.length > 0) {
+    bad(
+      'ACTION_PARAM_UNUSED',
+      decl.key,
+      `действие «${decl.key}»: параметр(ы) ${unused.join(', ')} не читает ни precondition, ни один шаг (Р-34)`,
+      { params: unused },
+    );
+  }
+
+  // (10) §Б6-1 дословно: декларация факты может только ДОБАВЛЯТЬ; шаг с фактом выше
+  // задекларированных — отказ. Сравнение по множеству, а не по длине: лишний объявленный
+  // факт законен (он поднимает уровень, а не опускает).
+  const declared = new Set<string>(decl.sensitivity);
+  for (const [index, step] of decl.steps.entries()) {
+    for (const fact of stepFactsOf(scope.reg, step)) {
+      if (!declared.has(fact)) {
+        throw new ExecError(
+          'SENSITIVITY_UNDERDECLARED',
+          `действие «${decl.key}»: шаг ${index + 1} несёт факт «${fact}», которого декларация не объявила (§Б6-1)`,
+          { action: decl.key, step: index, fact },
+        );
+      }
+    }
+    // Сегодня недостижимо: ступень 5 пускает ровно тулы, которые таблица ниже считает обратимыми.
+    // Стоит здесь как защёлка на день, когда словарь шагов вырастет, а таблица — нет (§Б6-4).
+    if (!stepReversible(step.tool)) {
+      bad(
+        'ACTION_STEP_TOOL',
+        decl.key,
+        `действие «${decl.key}»: у шага ${index + 1} нет inverse (§Б6-4)`,
+        {
+          step: index,
+          tool: step.tool,
+        },
+      );
+    }
+  }
+
   return decl;
+}
+
+/**
+ * ФАКТЫ ЧУВСТВИТЕЛЬНОСТИ ШАГА — СТАТИЧЕСКАЯ ТАБЛИЦА (Р-9) с одной динамикой: `touches_money`
+ * читается из ПРИВЯЗОК, а не из списка имён свойств. Список «какие свойства про деньги»
+ * жил бы вторым мнением рядом с контрактом `orbis/money-movement`, и разошёлся бы с ним у
+ * первого же своего денежного аспекта владельца (§Б2-1: принадлежность — привязкой).
+ *
+ * Адрес свойства во входе — КЛЮЧ (`props`, `unset`, `data` у `attach_*`), привязка же хранит id;
+ * перевод — тем же `resolvePropertyRef`, каким исполнитель резолвит патч: у своих свойств key и id
+ * расходятся, и второе правило перевода здесь разошлось бы с исполнителем на первом же из них.
+ *
+ * Остальные четыре факта графовые тулы не производят: `changes_registry` и `grants_autonomy`
+ * считает классификатор по свёртке операций (`policy/sensitivity.ts`), а `external`
+ * и `irreversible` в v1 объявляются только декларацией — производителя у них нет.
+ */
+export function stepFactsOf(reg: RegistrySnapshot, step: ActionStep): readonly SensitivityFact[] {
+  const money = new Set<string>();
+  for (const b of bindingIndexOf(reg).byContract('orbis/money-movement')) {
+    for (const propertyId of Object.values(b.bind)) money.add(propertyId);
+  }
+  const record = (v: unknown): Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  const input = step.input;
+  const addressed = [
+    ...Object.keys(record(input.props)),
+    ...(Array.isArray(input.unset) ? input.unset.filter((k) => typeof k === 'string') : []),
+    // attach_* пишет набор аспекта целиком — `data` адресуется КЛЮЧАМИ свойств (§А9-1).
+    ...Object.keys(record(input.data)),
+  ];
+  const written = addressed.map((k) => resolvePropertyRef(reg, k)?.id ?? k);
+  const out: SensitivityFact[] = [];
+  if (written.some((p) => money.has(p))) out.push('touches_money');
+  // §Б6-4: необратимый шаг обязан объявиться ДО исполнения. Все шаги v1 обратимы по таблице
+  // ниже, поэтому `irreversible` здесь не производится — ветка появится вместе с первым
+  // необратимым тулом шага (её отсутствие сторожит `stepReversible`).
+  return out;
+}
+
+/**
+ * ЕСТЬ ЛИ У ШАГА INVERSE (Р-10, §Б6-4). Таблица СТАТИЧЕСКАЯ, потому что до исполнения
+ * прочитать обратимость неоткуда: `registryPlan` отдаёт `inverse: []`, а наполняется он
+ * ВНУТРИ `apply` и УСЛОВНО (`executor.ts` — только `if (before !== undefined)`).
+ * Отсюда правило худшего случая: условное — необратимо.
+ */
+export function stepReversible(tool: string): boolean {
+  return (ACTION_STEP_TOOLS as readonly string[]).includes(tool) || tool.startsWith('attach_');
+}
+
+/**
+ * ЛИЧНОСТЬ ДЕКЛАРАЦИИ (Р-И-31): версии у строки `action_definitions` нет, и «Устарело»
+ * отложенной единицы (§Б6-7, задача 8) сверяет именно хеш. В хеш входит ТО, ЧТО МЕНЯЕТ
+ * ИСПОЛНЕНИЕ: шаги, параметры, предусловие, множество целей, кап и объявленные факты.
+ * Подпись, описание, `rank` и `offered_by` — нет: правка подписи чужого действия это
+ * ДЕЛЬТА (§С3), и она не имеет права протухлять уже поставленную единицу.
+ *
+ * Хеш считается ЗДЕСЬ, а не `unitHash`-ом (`policy/pending.ts`): импорт из политики в
+ * реестр замкнул бы дугу «реестр → политика → реестр». Канон один и тот же — `canonicalJson`
+ * из shared (`aspect-registry.ts`), — поэтому два хеша одной формы совпадают по построению.
+ */
+export function actionHash(decl: ActionDefinition): string {
+  const identity = {
+    steps: decl.steps,
+    params: decl.params,
+    precondition: decl.precondition,
+    over: decl.over,
+    sensitivity: decl.sensitivity,
+    batch_cap: decl.batch_cap,
+  };
+  return createHash('sha256').update(canonicalJson(identity), 'utf8').digest('hex');
 }
 
 /** Аспект по имени `attach_*`-тула — перебором реестра (нормализация имени необратима). */
