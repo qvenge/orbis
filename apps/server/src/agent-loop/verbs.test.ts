@@ -196,6 +196,44 @@ describe('orbis_my_queue: очередь исполнителя (§9.3, С7)', (
       'VALIDATION',
     );
   });
+
+  test('тикет в inbox claimable и берётся в работу; cancelled — вне делегирования (задача 14а)', async () => {
+    // Класс `new` делегируемости держит `inbox` — умолчание статуса задачи: без него назначенный
+    // агенту тикет из входящих молча перестал бы быть claimable (РЧ-14а-2). До задачи 14а этого
+    // пина не было вовсе: из перечня `['inbox','planned']` можно было выкинуть `inbox` при
+    // зелёном сьюте. `cancelled` не отнесён ни одному классу — не член контракта (РЧ-14а-3).
+    const seedTicket = async (title: string, status: string) =>
+      (
+        await seedEntity(owner, {
+          title,
+          tags: [],
+          props: { 'orbis/task_status': status, 'orbis/executor': 'agent', 'orbis/grant': grantId },
+          aspects: ['orbis/task', 'orbis/assignment'],
+        })
+      ).id;
+    const inbox = await seedTicket('Из входящих', 'inbox');
+    const cancelled = await seedTicket('Отменён', 'cancelled');
+    const q = okResult<MyQueueResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_my_queue', {}),
+    );
+    const byId = new Map(q.tickets.map((t) => [t.id, t]));
+    expect([byId.get(inbox)?.status, byId.get(inbox)?.claimable]).toEqual(['inbox', true]);
+    expect([byId.get(cancelled)?.status, byId.get(cancelled)?.claimable]).toEqual([
+      'cancelled',
+      false,
+    ]);
+    const c = okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: inbox }),
+    );
+    expect(c.ticket.props['orbis/task_status']).toBe('in_progress');
+    // Предусловие захвата собрано из тех же классов: отменённый тикет оно не пропускает.
+    expect(
+      errorCode(
+        await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: cancelled }),
+      ),
+    ).toBe('CONFLICT');
+    expect((await propsOf(owner, cancelled))['orbis/task_status']).toBe('cancelled');
+  });
 });
 
 // ---------------------------------------------------------------------------
