@@ -25,6 +25,7 @@ import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/type
 import { undoAction } from '../executor/undo';
 import { parseGraphId } from '../identity';
 import type { CompileCtx } from '../query/compile-ast';
+import { mirrorRuleOf } from '../rules/carriers';
 import { effectiveRegistry } from './cache';
 import type { RegistrySnapshot } from './load';
 import { changedRefProps, refTargetMembershipSql, syncRefMirror } from './ref';
@@ -815,8 +816,8 @@ test('ref: конец-ПРОИЗВОДИТЕЛЬ Р-11-2 — changedRefProps н�
 test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисляемое свойство не отражает даже по прямому списку', async () => {
   // Через исполнитель вычисляемое свойство до писателя не доходит (список отбирает
   // `changedRefProps`), поэтому список тут рукописный. Гейт писателя недостижим боевым
-  // путём СЕГОДНЯ, но он связывает будущего производителя списка (правило `mirror_relation`
-  // строкой реестра, часть Б) — и без этой пробы был бы украшением.
+  // путём СЕГОДНЯ, но он связывает любого будущего производителя списка — и без этой пробы
+  // был бы украшением.
   const user = await freshGraph();
   const { project, txn, category } = await txnUnderProject(user);
   await withIdentity(db, personal(user), async (tx) => {
@@ -825,6 +826,78 @@ test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисля�
   });
   expect(await refEdges(user, txn)).toEqual([
     { target: category, property: 'orbis/finance_category' },
+  ]);
+});
+
+/** Снимок, где строка `mirror_relation` роли `ref` несёт ДРУГИЕ параметры — проба «движок читает строку». */
+function withMirrorParams(
+  reg: RegistrySnapshot,
+  params: { meta_key: string; skip_computed: boolean },
+): RegistrySnapshot {
+  const ref = reg.roles.get('ref');
+  if (ref === undefined) throw new Error('роли ref в снимке нет');
+  const rules = ref.rules.map((r) => (r.template === 'mirror_relation' ? { ...r, params } : r));
+  return { ...reg, roles: new Map([...reg.roles, ['ref', { ...ref, rules }]]) };
+}
+
+test('вычисляемые ссылки зеркалом не дублируются — условие приезжает строкой правила', async () => {
+  const user = await freshGraph();
+  const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
+  expect(mirrorRuleOf(reg).params.skip_computed).toBe(true);
+  // orbis/parent_project — ref с flags.computed: ребра роли `ref` у него быть не должно
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = (await admin.execute(sql`SELECT count(*)::int AS n FROM relations
+      WHERE role = 'ref' AND meta->>'property' = 'orbis/parent_project'`)) as unknown as Array<{
+      n: number;
+    }>;
+    expect(rows[0]?.n).toBe(0);
+  } finally {
+    await adminClient.end();
+  }
+});
+
+test('ref: skip_computed — параметр строки: строка без пропуска отдаёт и вычисляемые ссылки', () => {
+  // Пара к пробе производителя выше: там строка сида (`skip_computed: true`), здесь — та же строка
+  // с другим значением. Условие, зашитое в код, дало бы один ответ на обе.
+  const project = '019e4466-dddd-7e07-b5d4-64be9721da51';
+  const before = {};
+  const after = { 'orbis/parent_project': project, 'orbis/root_project': project };
+  const touched = new Set(['orbis/parent_project']);
+  const probe = withMirrorParams(GOLDEN_REG, { meta_key: 'property', skip_computed: false });
+  expect(changedRefProps(probe, before, after, touched).map((c) => c.propertyId)).toEqual([
+    'orbis/parent_project',
+    'orbis/root_project',
+  ]);
+  expect(changedRefProps(GOLDEN_REG, before, after, touched)).toEqual([]);
+});
+
+test('ref: ключ подписи в meta — параметр строки: писатель кладёт подпись под meta_key строки', async () => {
+  const user = await freshGraph();
+  const { txn, category } = await txnUnderProject(user);
+  const metas = await withIdentity(db, personal(user), async (tx) => {
+    const probe = withMirrorParams(await effectiveRegistry(tx, user), {
+      meta_key: 'mirror_probe',
+      skip_computed: true,
+    });
+    // Ребро с прежним ключом писатель с другим ключом не видит вовсе (сверка идёт по подписи), и
+    // вставка упёрлась бы в `rel_uniq` пары: снимаем его, чтобы увидеть, ЧТО кладёт писатель.
+    await tx.execute(sql`DELETE FROM relations WHERE source_id = ${txn}::uuid AND role = 'ref'`);
+    await syncRefMirror(
+      tx,
+      user,
+      txn,
+      [{ propertyId: 'orbis/finance_category', after: category }],
+      probe,
+    );
+    return (await tx.execute(sql`SELECT target_id, meta FROM relations
+      WHERE source_id = ${txn}::uuid AND role = 'ref'`)) as unknown as Array<{
+      target_id: string;
+      meta: unknown;
+    }>;
+  });
+  expect(metas).toEqual([
+    { target_id: category, meta: { mirror_probe: 'orbis/finance_category' } },
   ]);
 });
 

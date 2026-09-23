@@ -7,8 +7,9 @@
 //     статическим Q-AST, и проверять принадлежность обязан тот же компилятор, что исполняет
 //     запросы владельца (`query/compile-ast.ts`): вторая реализация «что такое категория»
 //     разошлась бы с первой ровно там, где владелец завёл свою строку реестра.
-//  2. ЗЕРКАЛО-РЕБРО (§А6-2). Значение ссылки дублируется ребром роли `ref` с
-//     `meta.property` — чтобы «кто ссылается на эту категорию» считалось обходом графа по
+//  2. ЗЕРКАЛО-РЕБРО (§А6-2). Значение ссылки дублируется ребром роли `ref` с подписью свойства
+//     в `meta` (ключ — `meta_key` строки каталога, `property`) — чтобы «кто ссылается на эту
+//     категорию» считалось обходом графа по
 //     индексу `(target_id, role)`, а не сканом `props->>` по всем сущностям владельца.
 //     Ребро ПРОИЗВОДНО: расхождение чинится сверкой с `props`, а не наоборот (правило 3 §10).
 //  3. АРХИВАЦИЯ ЦЕЛИ (§А6-3). Ссылки остаются, источники получают тег `needs-review`.
@@ -21,8 +22,10 @@
 // затронуто патчем»), и переносить его сюда значило бы разводить одно правило по двум домам.
 //
 // ПОЧЕМУ ЗАПИСЬ ЗЕРКАЛА ИДЁТ ПРЯМЫМ SQL, А НЕ ОПЕРАЦИЕЙ `relation_create` ИСПОЛНИТЕЛЯ.
-// Механизм этой записи — `rule` (§А4-4, правило `mirror_relation`; строкой реестра оно
-// станет в части Б, до неё живёт кодом), и гейт `created_by: system` роли `ref` её пропустил
+// Механизм этой записи — `rule` (§А4-4, правило `mirror_relation`). Строка реестра ЕСТЬ
+// (`mirror_ref` на роли `ref`, `rules/carriers.ts` — `mirrorRuleOf`: ключ подписи в `meta` и пропуск
+// вычисляемых ссылок); здесь — движок. Строки нет или она выключена — `Error` сборки, а не молчаливое
+// «зеркал нет» (Р-И-17). Гейт `created_by: system` роли `ref` запись пропустил
 // бы. Дело не в гейте, а в ЖУРНАЛЕ: у операции исполнителя есть inverse, и ребро попало бы в
 // откат ДВАЖДЫ — один раз как `relation_create`/`relation_delete`, второй раз как следствие
 // восстановленного свойства (единица отката — свойство, §А7-4). Два отката одного факта
@@ -35,6 +38,7 @@ import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { type CompileCtx, compileWhere } from '../query/compile-ast';
+import { type MirrorRule, mirrorRuleOf } from '../rules/carriers';
 import type { RegistrySnapshot } from './load';
 
 /**
@@ -261,9 +265,12 @@ export interface RefPropChange {
  * Один предикат на обоих концах — у производителя списка (`changedRefProps`) и у писателя
  * (`syncRefMirror`): второй экземпляр правила и был бы тем расхождением, которое он запрещает.
  */
-function isMirroredRef(reg: RegistrySnapshot, propertyId: string): boolean {
+function isMirroredRef(reg: RegistrySnapshot, propertyId: string, rule: MirrorRule): boolean {
   const def = reg.properties.get(propertyId);
-  return def?.type.kind === 'ref' && def.flags.computed === undefined;
+  if (def?.type.kind !== 'ref') return false;
+  // `skip_computed` строки каталога говорит, что вычисляемые ссылки зеркалом не дублируются
+  // (Р-11-2, довод — выше); второго мнения об этом в коде больше нет.
+  return rule.params.skip_computed ? def.flags.computed === undefined : true;
 }
 
 /**
@@ -295,10 +302,11 @@ export function changedRefProps(
   after: Record<string, unknown>,
   touched: ReadonlySet<string>,
 ): RefPropChange[] {
+  const rule = mirrorRuleOf(reg);
   const all: RefPropChange[] = [];
   let hasWork = false;
   for (const propertyId of new Set([...Object.keys(before), ...Object.keys(after), ...touched])) {
-    if (!isMirroredRef(reg, propertyId)) continue;
+    if (!isMirroredRef(reg, propertyId, rule)) continue;
     const wasIds = refIds(before[propertyId]);
     const nowIds = refIds(after[propertyId]);
     const same = wasIds.length === nowIds.length && wasIds.every((id, i) => id === nowIds[i]);
@@ -317,7 +325,7 @@ export function changedRefProps(
  * состоянии не пишет ничего.
  *
  * ГРАНИЦА САМОПОЧИНКИ, названная точно. Снимок `existing` берётся не по всем зеркалам
- * сущности, а по подписям ИЗ `changed` (`meta->>'property' = ANY(properties)`), а `changed`
+ * сущности, а по подписям ИЗ `changed` (`meta->>meta_key = ANY(properties)`), а `changed`
  * после Р-11-2 несёт только ОТРАЖАЕМЫЕ свойства. Значит расхождение чинится ВНУТРИ
  * отражаемого множества, и ребро, подписанное свойством вне него — нессылочным или
  * вычисляемым, — этот механизм не видит вовсе: ни удалить, ни учесть в фазе 2.
@@ -345,7 +353,8 @@ export function changedRefProps(
  * у пересчёта предков (`executor/ancestors.ts`), — под админским подключением (сиды,
  * скрипты) политик нет вовсе, а ребро, поставленное на чужую сущность, увидеть было бы негде.
  *
- * `reg` спрашивается ради ОДНОГО вопроса — отражается ли это свойство ребром (`isMirroredRef`):
+ * `reg` спрашивается ради ДВУХ вопросов строки `mirror_relation` — отражается ли это свойство ребром
+ * (`isMirroredRef`) и под каким ключом `meta` ребро несёт подпись (`meta_key`):
  * ребро роли `ref` по нессылочному свойству было бы фактом, которого в реестре нет, а по
  * вычисляемому — вторым представлением иерархии (Р-11-2).
  */
@@ -356,16 +365,20 @@ export async function syncRefMirror(
   changed: readonly RefPropChange[],
   reg: RegistrySnapshot,
 ): Promise<void> {
-  const wanted = changed.filter((c) => isMirroredRef(reg, c.propertyId));
+  const rule = mirrorRuleOf(reg);
+  // Ключ подписи свойства в `meta` ребра — параметр строки каталога, а не литерал: писатель и
+  // сверка обязаны говорить одним ключом, и держит его одна строка реестра.
+  const key = rule.params.meta_key;
+  const wanted = changed.filter((c) => isMirroredRef(reg, c.propertyId, rule));
   if (wanted.length === 0) return;
   const properties = wanted.map((c) => c.propertyId);
 
   // Один снимок зеркал сущности на обе фазы: их единицы, а по одному SELECT на свойство
   // платила бы каждая правка транзакции.
   const existing = (await tx.execute(sql`
-    SELECT target_id, meta->>'property' AS property FROM relations
+    SELECT target_id, meta->>${key}::text AS property FROM relations
      WHERE source_id = ${entityId}::uuid AND role = ${ROLE_REF}
-       AND meta->>'property' = ANY(${textArray(properties)})`)) as unknown as Array<{
+       AND meta->>${key}::text = ANY(${textArray(properties)})`)) as unknown as Array<{
     target_id: string;
     property: string;
   }>;
@@ -377,7 +390,7 @@ export async function syncRefMirror(
     await tx.execute(sql`
       DELETE FROM relations
        WHERE source_id = ${entityId}::uuid AND role = ${ROLE_REF}
-         AND (target_id, meta->>'property') IN (${sql.join(
+         AND (target_id, meta->>${key}::text) IN (${sql.join(
            stale.map((r) => sql`(${r.target_id}::uuid, ${r.property})`),
            sql`, `,
          )})
@@ -396,7 +409,7 @@ export async function syncRefMirror(
       await tx.execute(sql`
         INSERT INTO relations (id, source_id, target_id, role, meta, created_at, updated_at)
         SELECT ${newId()}::uuid, ${entityId}::uuid, ${targetId}::uuid, ${ROLE_REF},
-               jsonb_build_object('property', ${propertyId}::text), now(), now()
+               jsonb_build_object(${key}::text, ${propertyId}::text), now(), now()
          WHERE EXISTS (SELECT 1 FROM entities e
                         WHERE e.id = ${entityId}::uuid AND e.graph_id = ${graphId}::uuid)
         ON CONFLICT DO NOTHING`);
