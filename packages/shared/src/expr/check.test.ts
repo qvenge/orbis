@@ -373,6 +373,53 @@ describe('тайп-чекер §С8-28: область, $sensitivity и реку
   });
 });
 
+describe('тайп-чекер: empty (Р-26) и $touched (Р-28)', () => {
+  const S = scope({ allowSensitivity: true });
+  test('empty — над list и над словарём фактов; результат тотальный', () => {
+    expect(checkExpr({ op: 'empty', args: [{ ctx: '$sensitivity' }] }, S)).toEqual({
+      kind: 'boolean',
+    });
+    expect(checkExpr({ op: 'empty', args: [{ ctx: '$touched' }] }, S)).toEqual({ kind: 'boolean' });
+    expect(checkExpr({ op: 'empty', args: [{ prop: 'orbis/aliases' }] }, scope())).toEqual({
+      kind: 'boolean',
+    });
+    // Цель deref может быть архивна — список НЕОБЯЗАТЕЛЕН, но «пусто ли он» ответ имеет всегда.
+    expect(
+      checkExpr(
+        { op: 'empty', args: [{ deref: { slot: 'category', read: 'tags' } }] },
+        scope({ contract: 'orbis/envelope', allowDeref: true }),
+      ),
+    ).toEqual({ kind: 'boolean' });
+  });
+  test('empty над скаляром — EXPR_TYPE с путём до аргумента', () => {
+    const r = refusal(() => checkExpr({ op: 'empty', args: [{ slot: 'amount' }] }, MONEY));
+    expect(r.code).toBe(EXPR_TYPE);
+    expect(r.path).toBe('args.0');
+  });
+  test('$touched вне assign_level — EXPR_TYPE (та же дверь, что у $sensitivity)', () => {
+    expect(refusal(() => checkExpr({ ctx: '$touched' }, scope())).code).toBe(EXPR_TYPE);
+    expect(
+      refusal(() => checkExpr({ op: 'empty', args: [{ ctx: '$touched' }] }, scope())).code,
+    ).toBe(EXPR_TYPE);
+  });
+  test('"<id>" in $touched: слева ЛИТЕРАЛ и он сверяется с реестром свойств', () => {
+    expect(
+      checkExpr({ op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] }, S),
+    ).toEqual({ kind: 'boolean' });
+    expect(
+      refusal(() =>
+        checkExpr({ op: 'in', args: [{ const: 'нет-свойства' }, { ctx: '$touched' }] }, S),
+      ).code,
+    ).toBe(EXPR_TYPE);
+    // Не литерал слева — членство неизвестного в неизвестном: опечатку так не поймать.
+    expect(
+      refusal(() =>
+        checkExpr({ op: 'in', args: [{ prop: 'orbis/title' }, { ctx: '$touched' }] }, S),
+      ).code,
+    ).toBe(EXPR_TYPE);
+  });
+});
+
 describe('EXPR_FIXTURES — корпус приёмки §С8-28', () => {
   test('каждая фикстура даёт объявленный вердикт', () => {
     for (const f of EXPR_FIXTURES) {

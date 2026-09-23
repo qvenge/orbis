@@ -66,7 +66,10 @@ export interface ExprScope {
   /** Величины той же ведомости, уже вычисленные к этому месту (§Б3-2). */
   aggs?: Readonly<Record<string, ExprType>>;
   phases?: readonly string[];
-  /** Только правило `assign_level` (Б-2); иначе `{ctx:'$sensitivity'}` → EXPR_TYPE. */
+  /**
+   * Только правило `assign_level` (Б-2); иначе `{ctx:'$sensitivity'}` и `{ctx:'$touched'}` —
+   * EXPR_TYPE: одна дверь на оба контекста классификатора (§Б3-2а Е-4/Е-5).
+   */
   allowSensitivity?: boolean;
   /**
    * D/V — да; прочие области — нет (`EXPR_TYPE`). Область правила записи закрывает `deref`
@@ -387,6 +390,20 @@ function factMembership(left: Typed, s: ExprScope, path: readonly string[]): Typ
   return BOOL;
 }
 
+/** Ветка `in` по списку затронутых свойств (Е-5). Слева — ЛИТЕРАЛ id свойства реестра: иначе
+ *  опечатка в адресе прошла бы валидатор и правило не сработало бы ни разу, не сказав ни слова. */
+function touchedMembership(left: Typed, s: ExprScope, path: readonly string[]): Typed {
+  if (typeof left.literal !== 'string' || !s.reg.properties.has(left.literal)) {
+    return bad(
+      EXPR_TYPE,
+      path,
+      'id свойства реестра',
+      typeof left.literal === 'string' ? left.literal : label(left.type),
+    );
+  }
+  return BOOL;
+}
+
 function dateNode(
   form: 'date_add' | 'date_diff' | 'days_inclusive',
   args: readonly ExprNode[],
@@ -422,6 +439,16 @@ function opNodeType(
 ): Typed {
   const args = node.args;
   const at = (i: number): string[] => [...path, 'args', String(i)];
+  if (node.op === 'empty') {
+    const arg = typeOf(args[0] as ExprNode, s, at(0), present);
+    // Список и словарь фактов — ровно те два рода, у которых «пусто» есть (§Б3-5 ревизии 4).
+    if (arg.type.kind !== 'list' && arg.type.kind !== 'sensitivity') {
+      return bad(EXPR_TYPE, at(0), 'список либо словарь фактов', label(arg.type));
+    }
+    // Результат ТОТАЛЕН даже над необязательным списком: отсутствие списка — это «пусто»,
+    // а не «неизвестно» (тот же выбор, что у `in` с отсутствующим слева — §Б3-4).
+    return BOOL;
+  }
   if (node.op === 'and' || node.op === 'or' || node.op === 'not') {
     for (const [i, arg] of args.entries()) {
       const t = typeOf(arg, s, at(i), present);
@@ -466,6 +493,8 @@ function opNodeType(
     }
     const right = typeOf(args[1] as ExprNode, s, at(1), present);
     if (right.type.kind === 'sensitivity') return factMembership(left, s, path);
+    const rhs = args[1] as ExprNode;
+    if ('ctx' in rhs && rhs.ctx === '$touched') return touchedMembership(left, s, at(0));
     // Е-3: `deref(...).tags in [...]` и вообще «текст в списке текстов».
     if (right.type.kind === 'list' && coerce(left, right.type.of) !== undefined) return BOOL;
     return bad(
@@ -571,6 +600,15 @@ function typeOf(
         return bad(EXPR_TYPE, path, 'область правила assign_level', '$sensitivity');
       }
       return { type: { kind: 'sensitivity' }, optional: false };
+    }
+    if (node.ctx === '$touched') {
+      // Е-5 (Р-28): список id свойств, которые вызов ТРОГАЕТ. Дверь та же, что у `$sensitivity`
+      // (`allowSensitivity` — «область классификатора»), второго флага не заводится: у обоих
+      // контекстов один потребитель и одно место запрета (§Б3-2а).
+      if (s.allowSensitivity !== true) {
+        return bad(EXPR_TYPE, path, 'область правила assign_level', '$touched');
+      }
+      return { type: { kind: 'list', of: { kind: 'text' } }, optional: false };
     }
     // `$owner` и `$self` — идентификаторы: сравнивать их можно только с текстом.
     return { type: { kind: 'text' }, optional: false };
