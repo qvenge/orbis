@@ -1,6 +1,7 @@
 // apps/server/src/memory/rules.test.ts
 // Правило памяти в свойствах (В7, §А8): подпись и образец из заголовка транзакции. Всё
-// чистое — базы здесь нет. Fail-closed формы правила (образец и цель обязательны у правила) —
+// чистое — базы здесь нет. Fail-closed формы правила (образец — у любого правила, цель — у денежного,
+// `rule_scope = orbis/money-movement`) —
 // строки каталога `memory_rule_pattern`/`memory_rule_target` и граница типа `orbis/rule_pattern`,
 // их пробы на трёх путях записи — `executor/props.test.ts` («правило памяти без образца…»);
 // отбор — `memory/select.test.ts`.
