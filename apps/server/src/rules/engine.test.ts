@@ -29,11 +29,12 @@ import {
 } from '../../test/helpers';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
-import { execute } from '../executor/executor';
+import { execute, uniqueRuleKeysOf } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteOk, ExecuteResult, JournalSink, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import { assertConstraintRules } from './engine';
 
 requireEnv();
@@ -1073,6 +1074,46 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
       { beforeStages: sqlLog(plain) },
     );
     expect(plain.some((line) => line.includes(':rule:'))).toBe(false);
+  });
+
+  test('отбор замков по форме входа: аспект, свойство набора, archived, attach — да; постороннее — нет', async () => {
+    // Провал отбора виден не отказом, а циклом ожидания под конкуренцией, — формы пиннятся прямо.
+    const reg = await withIdentity(db, personal(w.graph), (tx) => effectiveRegistry(tx, w.graph));
+    const key = `${w.graph}:rule:slot_unique`;
+    const keysOf = (tool: string, input: unknown) =>
+      uniqueRuleKeysOf(reg, w.graph, [{ tool, input }]);
+    const id = newId();
+    expect(keysOf('entity_create', slot('K', 1))).toEqual([key]); // список аспектов create
+    expect(keysOf('entity_update', { id, props: { 'user/number': 2 } })).toEqual([key]);
+    expect(keysOf('entity_update', { id, unset: ['user/level'] })).toEqual([key]);
+    // `archived` — замки ВСЕХ правил уникальности, включая системное конверта: какие у записи аспекты,
+    // по входу не видно (тот же довод, что у контура).
+    expect(keysOf('entity_update', { id, archived: false })).toEqual([
+      `${w.graph}:rule:duplicate_envelope`,
+      key,
+    ]);
+    expect(keysOf('entity_update', { id, aspects: { detach: [UNIQUE_ASPECT] } })).toEqual([key]);
+    expect(keysOf(attachToolName(UNIQUE_ASPECT), { entity_id: id, data: {} })).toEqual([key]);
+    expect(
+      keysOf('batch_execute', {
+        operations: [{ tool: 'entity_update', input: { id, props: { 'user/level': 'x' } } }],
+      }),
+    ).toEqual([key]);
+    expect(keysOf('entity_update', { id, title: 'Переименование' })).toEqual([]);
+    expect(keysOf('entity_create', { title: 'Просто запись', tags: [] })).toEqual([]);
+    // Выключенное правило (§Б4-4) замка не берёт: исполнять его нечему.
+    const row = reg.aspects.get(UNIQUE_ASPECT);
+    if (row === undefined) throw new Error(`в снимке нет ${UNIQUE_ASPECT}`);
+    const off: RegistrySnapshot = {
+      ...reg,
+      aspects: new Map(reg.aspects).set(UNIQUE_ASPECT, {
+        ...row,
+        rules: (row.rules ?? []).map((r) => ({ ...r, enabled: false })),
+      }),
+    };
+    expect(
+      uniqueRuleKeysOf(off, w.graph, [{ tool: 'entity_create', input: slot('K', 1) }]),
+    ).toEqual([]);
   });
 });
 
