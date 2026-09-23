@@ -152,11 +152,41 @@ export const RULE_FIXTURES: readonly RuleFixture[] = [
     'VALIDATION',
     'RULE_UNKNOWN_CONTRACT_SLOT',
   ),
+  // on_enter_class — вторая форма события (по ЗНАЧЕНИЮ свойства, Р-И-37): у состояния своего класса
+  // может не быть (аспекты владельца), и событие адресует вариант напрямую. Задача 14 — §С8-25 требует
+  // обе формы у валидатора.
+  pos('on_enter_class по значению: уход из варианта waiting снимает вопрос', ASPECT('orbis/task'), {
+    id: 'fx_task_waiting_by_value',
+    template: 'on_enter_class',
+    params: {
+      enter: { property: 'orbis/task_status', in: ['waiting'] },
+      on_leave: { unset: ['orbis/waiting_for'] },
+    },
+  }),
+  neg(
+    'on_enter_class по значению: свойства события нет в реестре',
+    ASPECT('orbis/task'),
+    {
+      id: 'fx_task_unknown_event_property',
+      template: 'on_enter_class',
+      params: {
+        enter: { property: 'orbis/нет-такого', in: ['waiting'] },
+        on_leave: { unset: ['orbis/waiting_for'] },
+      },
+    },
+    'VALIDATION',
+    'RULE_UNKNOWN_PROPERTY',
+  ),
   // default
   pos('default: валюта конверта — из параметра движка', ASPECT('orbis/budget'), {
     id: 'fx_envelope_currency',
     template: 'default',
     params: { property: 'orbis/currency', value: { param: 'default_currency' } },
+  }),
+  pos('default: литерал того же рода, что свойство', ASPECT('orbis/budget'), {
+    id: 'fx_envelope_currency_literal',
+    template: 'default',
+    params: { property: 'orbis/currency', value: { const: 'RUB' } },
   }),
   neg(
     'default: текст в позиции decimal — значение не того рода, что свойство',
