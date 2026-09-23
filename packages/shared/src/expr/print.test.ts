@@ -48,4 +48,16 @@ describe('printExpr', () => {
     );
     expect(new Set(texts).size).toBe(texts.length);
   });
+
+  test('empty печатается вызовом, контекст — как есть (дифф Ш1 читает текст)', () => {
+    expect(
+      printExpr({ op: 'empty', args: [{ ctx: '$sensitivity' }] } as never, FIXTURE_PARSE_REGISTRY),
+    ).toBe('empty($sensitivity)');
+    expect(
+      printExpr(
+        { op: 'in', args: [{ const: 'orbis/due_date' }, { ctx: '$touched' }] } as never,
+        FIXTURE_PARSE_REGISTRY,
+      ),
+    ).toBe('("orbis/due_date" in $touched)');
+  });
 });

@@ -66,6 +66,7 @@ function print(node: ExprNode, reg: ParseRegistry, bare: boolean): string {
     return `(${args.map((a) => print(a, reg, true)).join(` ${node.op} `)})`;
   }
   if (node.op === 'not') return `not (${print(args[0] as ExprNode, reg, false)})`;
+  if (node.op === 'empty') return call('empty', args, reg);
   if (node.op === 'if') return call('if', args, reg);
   const text = `${print(args[0] as ExprNode, reg, false)} ${node.op} ${print(args[1] as ExprNode, reg, false)}`;
   return bare ? text : `(${text})`;
