@@ -323,7 +323,7 @@ test('bindingIndexOf: карта классов в обе стороны и об
   ]);
   // Json-слот (Р-К-3): вариант — наличие ключа, носитель среди встроенных — только orbis/schedule.
   // Boolean-литерал в обратной карте покрыт синтетической привязкой теста шага 7 (Р-К-30: у
-  // orbis/financial маркера шаблона нет — `orbis/recurring = true` стоит и на инстансах, materialize.ts:503).
+  // orbis/financial маркера шаблона нет — `orbis/recurring = true` стоит и на инстансах, `RULE_MATERIALIZE.own`).
   const rec = idx()
     .byAspect('orbis/schedule')
     .find((b) => b.contract === 'orbis/recurrence');

@@ -1482,6 +1482,13 @@ export async function mergeProperty(
   //
   // `updated_at` ребра не двигаем — по тому же доводу, что у `markRefSourcesNeedsReview`:
   // это производная реестра, а не правка владельца.
+  //
+  // КЛЮЧ ПОДПИСИ — ЛИТЕРАЛ `property`, и это названный остаток, а не второе мнение: параметр
+  // `meta_key` строки `mirror_ref` (Б-2) читает только писатель зеркала (`syncRefMirror`), а ключ
+  // заморожен ДАННЫМИ — им подписаны все уже лежащие рёбра, и смена `meta_key` была бы миграцией
+  // рёбер, а не правкой параметра. Значение строки пиннит `rules/carriers.test.ts`
+  // (`meta_key: 'property'`); этот писатель, backlinks (`entity-read.ts`) и сводка импорта
+  // (`import/review.ts`) обязаны совпадать с ним.
   const mirrorRows = (await tx.execute(sql`
     UPDATE relations r
        SET meta = jsonb_set(r.meta, '{property}', to_jsonb(${into.id}::text))

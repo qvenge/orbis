@@ -535,6 +535,8 @@ async function unbudgetedOf(
     entityIds.map((id) => sql`${id}`),
     sql`, `,
   );
+  // Подпись зеркала — литерал `property`: параметр `meta_key` строки `mirror_ref` читает только писатель
+  // зеркала, ключ заморожен лежащими рёбрами (остаток назван у переподписи слияния, `registry/ops.ts`).
   const rows = await withIdentity(db, who, async (tx) => {
     return (await tx.execute(sql`
       SELECT ref.target_id AS category_ref,

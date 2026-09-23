@@ -189,7 +189,7 @@ const B2: Partial<Record<AspectId, readonly unknown[]>> = {
       ],
     },
     // Р-К-30: маркера шаблона у финансов НЕТ — `orbis/recurring = true` стоит и на каждом инстансе
-    // (materialize.ts:503, normalize.ts:152-160); класс `template` финансовой сущности не присваивается,
+    // (`RULE_MATERIALIZE.own` в builtin-rules.ts, normalize.ts:152-160); класс `template` финансовой сущности не присваивается,
     // `instance-of` закрыт константой. Иначе набор `facts` выбросил бы из spent все проведённые инстансы.
     // Отступление от текста ревизии 3 §Б1-2 (`orbis/recurring` как маркер шаблона) по коду — вопрос
     // владельцу В-П-6; план исполняется по умолчанию (Р-К-30).

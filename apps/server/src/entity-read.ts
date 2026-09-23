@@ -211,7 +211,9 @@ export async function readEntity(
         -- между той же парой концов. Свёртки, как у rel_side выше, здесь не требуется —
         -- источник, сославшийся на нас двумя разными свойствами, делит ОДНО ребро (подпись
         -- лежит в meta, вне ключа уникальности; см. syncRefMirror — фаза 2 считает
-        -- remaining по ЦЕЛИ ровно поэтому).
+        -- remaining по ЦЕЛИ ровно поэтому). Ключ подписи — литерал property: параметр meta_key
+        -- строки mirror_ref читает только писатель зеркала, ключ заморожен лежащими рёбрами
+        -- (остаток назван у переподписи слияния, registry/ops.ts).
         SELECT source_id AS id, meta->>'property' AS property FROM relations
           WHERE target_id = ${row.id} AND role = ${ROLE_REF}
       ), ids AS (

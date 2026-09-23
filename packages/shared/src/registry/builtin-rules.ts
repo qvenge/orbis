@@ -155,7 +155,11 @@ export const RULE_MATERIALIZE: RuleDefinitionInput = {
   },
 };
 
-/** Зеркало ссылки (§А6-2): ключ подписи в `meta` ребра и пропуск вычисляемых ссылок (Р-11-2). */
+/**
+ * Зеркало ссылки (§А6-2): ключ подписи в `meta` ребра и пропуск вычисляемых ссылок (Р-11-2).
+ * `meta_key` заморожен данными: им подписаны лежащие рёбра, и читает его только писатель зеркала
+ * (`syncRefMirror`); переподпись слияния и два SQL-читателя держат литерал (остаток — `registry/ops.ts`).
+ */
 export const RULE_MIRROR_REF: RuleDefinitionInput = {
   id: 'mirror_ref',
   template: 'mirror_relation',

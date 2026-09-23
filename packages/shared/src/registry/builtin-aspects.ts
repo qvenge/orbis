@@ -157,7 +157,7 @@ const ENTRIES: readonly AspectEntry[] = [
     // inv §3). Имена вариантов `orbis/direction` и имена классов НЕ совпадают — отображение живёт
     // в декларации, а не в коде движка. Вторая привязка — только `fixed.origin_role` (Р-К-30:
     // маркера шаблона у финансов нет — `orbis/recurring = true` стоит и на каждом материализованном
-    // инстансе, `materialize.ts:503`, и класс `template` выбросил бы инстансы из набора `facts`).
+    // инстансе, `RULE_MATERIALIZE.own` в `builtin-rules.ts`, и класс `template` выбросил бы инстансы из набора `facts`).
     implements: [
       {
         contract: 'orbis/money-movement',

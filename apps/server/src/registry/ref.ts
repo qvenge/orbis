@@ -366,8 +366,10 @@ export async function syncRefMirror(
   reg: RegistrySnapshot,
 ): Promise<void> {
   const rule = mirrorRuleOf(reg);
-  // Ключ подписи свойства в `meta` ребра — параметр строки каталога, а не литерал: писатель и
-  // сверка обязаны говорить одним ключом, и держит его одна строка реестра.
+  // Ключ подписи свойства в `meta` ребра — параметр строки каталога: писатель и сверка ЭТОЙ функции
+  // говорят одним ключом из одной строки. Прочие адреса подписи (переподпись слияния `registry/ops.ts`,
+  // backlinks `entity-read.ts`, сводка импорта `import/review.ts`) держат литерал `property` — ключ
+  // заморожен уже лежащими рёбрами, остаток назван у переподписи слияния.
   const key = rule.params.meta_key;
   const wanted = changed.filter((c) => isMirroredRef(reg, c.propertyId, rule));
   if (wanted.length === 0) return;
