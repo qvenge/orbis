@@ -698,7 +698,8 @@ async function executeBatch(
       // порядке исполнения (§7.8). PK audit-сообщения — batchAuditMessageId.
       const action: ActionRecord = {
         id: batchId,
-        type: 'batch',
+        // §Б6-4: строка действия отличима от голой пачки ТИПОМ, а не догадкой по metadata.
+        type: req.action !== undefined ? 'action' : 'batch',
         entity_id: null,
         actor_user_id: req.identity.actor,
         actor_kind: req.actorKind,
@@ -708,6 +709,8 @@ async function executeBatch(
         ...(req.actorGrantId !== undefined && { actor_grant_id: req.actorGrantId }),
         ...(req.runId !== undefined && { run_id: req.runId }),
         ...(req.editedFrom !== undefined && { edited_from: req.editedFrom }),
+        ...(req.action !== undefined && { action_id: req.action.id }),
+        ...(req.action?.module != null && { module: req.action.module }),
         operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps, ...refOps],
         inverse: aggregateInverse(allPlans),
       };
@@ -716,7 +719,16 @@ async function executeBatch(
         graphId: req.identity.graph,
         threadId: req.threadId,
         action,
-        card: { tool: 'batch_execute', entity_id: null, title: `batch: операций — ${ops.length}` },
+        card: {
+          tool: 'batch_execute',
+          entity_id: null,
+          // Карточка называет ДЕЙСТВИЕ, а не счёт операций: владелец просил «План → факт», и
+          // «batch: операций — 1» в ленте не ответило бы, что именно случилось.
+          title:
+            req.action !== undefined && req.actionLabel !== undefined
+              ? `Действие «${req.actionLabel}»`
+              : `batch: операций — ${ops.length}`,
+        },
         results,
       });
       return { ok: true as const, actionId: batchId, results, idempotentReplay: false };

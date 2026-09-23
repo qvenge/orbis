@@ -2415,3 +2415,75 @@ describe('V1: источник routine не трогает рутины и на�
     expect(byUi.ok).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Строка журнала действия (§Б6-4, задача 7): резолвленная пачка с автором-приложением
+// ---------------------------------------------------------------------------
+
+describe('журнал действия: type=action, action_id и module (§Б6-4)', () => {
+  test('execute с action: одна строка журнала type=action с action_id и module, карточка — подписью', async () => {
+    const sink = new InMemoryJournalSink();
+    const target = firstEntity(
+      await execute(db, req('entity_create', { title: 'Цель действия', tags: [] }), { sink }),
+    );
+    const batchId = newId();
+    const r = await execute(
+      db,
+      {
+        ...req('entity_update', { id: target.id, title: 'После действия' }),
+        batchId,
+        action: { id: 'finance/plan-to-fact', module: 'finance' },
+        actionLabel: 'План → факт',
+      },
+      { sink },
+    );
+    expect(r.ok).toBe(true);
+    const written = sink.entries.at(-1);
+    if (written === undefined) throw new Error('журнал пуст');
+    const action = written.action;
+    expect([action.id, action.type, action.action_id, action.module]).toEqual([
+      batchId,
+      'action',
+      'finance/plan-to-fact',
+      'finance',
+    ]);
+    // entity_id: null по тому же доводу, что у batch: у группы шагов одной сущности-адреса нет
+    expect(action.entity_id).toBeNull();
+    expect(action.inverse).toHaveLength(1);
+    expect(written.card.title).toBe('Действие «План → факт»');
+
+    // Ключей нет, когда их не задали (контейнмент-проба jsonb — докблок ActionRecord)
+    const plainR = await execute(
+      db,
+      { ...req('entity_update', { id: target.id, title: 'Голая пачка' }), batchId: newId() },
+      { sink },
+    );
+    expect(plainR.ok).toBe(true);
+    const plain = sink.entries.at(-1);
+    if (plain === undefined) throw new Error('журнал пуст');
+    expect('action_id' in plain.action).toBe(false);
+    expect('module' in plain.action).toBe(false);
+    expect(plain.action.type).toBe('batch');
+    expect(plain.card.title).toBe('batch: операций — 1');
+
+    // Действие ядра (модуля нет): `action_id` есть, `module` — нет ключа, а не null
+    const coreR = await execute(
+      db,
+      {
+        ...req('entity_update', { id: target.id, title: 'Действие ядра' }),
+        batchId: newId(),
+        action: { id: 'user/свое', module: null },
+        actionLabel: 'Своё',
+      },
+      { sink },
+    );
+    expect(coreR.ok).toBe(true);
+    const core = sink.entries.at(-1);
+    if (core === undefined) throw new Error('журнал пуст');
+    expect([core.action.type, core.action.action_id, 'module' in core.action]).toEqual([
+      'action',
+      'user/свое',
+      false,
+    ]);
+  });
+});

@@ -123,8 +123,8 @@ function categoryInInput(input: Record<string, unknown>): string | undefined {
 
 /**
  * Пары (прежняя, новая) категории из ОДНОГО action журнала. Решение K5: одинаково
- * разбираются оба типа — 'entity_updated' (одна операция) и 'batch' (плоский
- * operations, агрегированный inverse, entity_id=null); пары сшиваются по payload.id.
+ * разбираются все три типа — 'entity_updated' (одна операция), 'batch' и 'action' (§Б6-4;
+ * плоский operations, агрегированный inverse, entity_id=null); пары сшиваются по payload.id.
  * entity_create в batch отсеивается сам: его inverse — архивация, без свойств.
  * Опора на форму journal-payload'а executor'а (executor.ts prepareEntityUpdate): обе
  * половины записи — дельты состояний, и категория лежит в них плоским свойством (§А7-4).
@@ -218,6 +218,11 @@ export async function scanFinancialUpdates(
     targets.flatMap((category) => [
       sql`m.metadata @> ${probe('entity_updated', category)}::jsonb`,
       sql`m.metadata @> ${probe('batch', category)}::jsonb`,
+      // §Б6-4: действие — третья форма записи той же правки. Без этой строки смена категории
+      // действием не попадала бы в скан перекатегоризации МОЛЧА (О4 опровержения
+      // `verify-b2-actions`): дизъюнкция литеральных проб исчерпывающая, и новый тип в неё не
+      // попадает сам.
+      sql`m.metadata @> ${probe('action', category)}::jsonb`,
     ]),
     sql` OR `,
   );

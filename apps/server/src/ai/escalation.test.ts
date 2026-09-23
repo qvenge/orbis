@@ -414,6 +414,37 @@ describe('эскалация повторных исправлений кате�
     expect((await cardsOf(user, 'memory_rule_suggestion')).length).toBe(1);
   });
 
+  test('8b. правка категории ДЕЙСТВИЕМ попадает в скан — третий тип строки журнала (§Б6-4)', async () => {
+    // Действие исполняется пачкой с автором-приложением, и его строка журнала — `type:'action'`,
+    // а не `batch` (`executor.ts`, batch-путь). Проба скана — дизъюнкция ЛИТЕРАЛЬНЫХ типов, и
+    // новый тип в неё сам не попадает: без третьей пробы смена категории действием выпадала
+    // бы из подсчёта исправлений молча (О4 опровержения `verify-b2-actions`).
+    const { user, food, fun } = await freshOwner();
+    const viaBatch = await createTxn(user, 'ПЯТЕРОЧКА 843', food);
+    const viaAction = await createTxn(user, 'Пятёрочка', food);
+    const recategorizeAs = (id: string, action?: ExecuteRequest['action']) =>
+      execute(
+        db,
+        {
+          ...req(user, [
+            { tool: 'entity_update', input: { id, props: { 'orbis/finance_category': fun } } },
+          ]),
+          batchId: newId(),
+          ...(action !== undefined && { action, actionLabel: 'Перенести в категорию' }),
+        },
+        { sink },
+      );
+    const batch = ok(await recategorizeAs(viaBatch));
+    const action = ok(
+      await recategorizeAs(viaAction, { id: 'finance/recategorize', module: 'finance' }),
+    );
+    expect((await actionById(action.actionId)).type).toBe('action');
+    // Та же операция под двумя типами — то же число совпадений: скан видит обе строки.
+    expect((await scanActions(user, [fun])).map((a) => a.id).sort()).toEqual(
+      [batch.actionId, action.actionId].sort(),
+    );
+  });
+
   test('9. падение эскалации не откатывает саму правку категории (K7)', async () => {
     const { user, food, fun } = await freshOwner();
     await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
