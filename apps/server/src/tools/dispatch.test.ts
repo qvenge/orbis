@@ -42,6 +42,7 @@ import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
+import { decideDeferredUnit } from '../routines/lifecycle';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { createCallerFactory } from '../trpc';
 import {
@@ -4483,6 +4484,215 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     }
     expect(await unitsIn(owner, threadId)).toHaveLength(0);
     expect((await propsOfRowA(assigned.id, owner))['orbis/due_date']).toBe('2026-06-20');
+  });
+
+  test('ретрай того же вызова на нетронутых целях → тот же pendingId, второй карточки нет', async () => {
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    await seedOverdue(owner, 11);
+    const first = await postpone(ctx);
+    // Тот же вызов с ПЕРЕСТАВЛЕННЫМИ ключами: личность — от каноникализованного, не от текста JSON
+    const again = await dispatchTool(ctx, 'run_action', {
+      params: { to: '2026-09-01' },
+      action: 'planner/postpone_overdue',
+    });
+    if (first.status !== 'pending_confirmation' || again.status !== 'pending_confirmation')
+      throw new Error('нет единиц');
+    expect(again.pendingId).toBe(first.pendingId);
+    expect(await unitsIn(owner, threadId)).toHaveLength(1);
+  });
+
+  test('изменённая строка действия → ДРУГАЯ единица: личность по резолвленному, не по {action, params}', async () => {
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    await seedOverdue(owner, 11);
+    const first = await postpone(ctx);
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions
+      SET steps = jsonb_set(steps, '{0,input,props,orbis/priority}', '"low"'::jsonb)
+      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+    );
+    const second = await postpone(ctx);
+    if (first.status !== 'pending_confirmation' || second.status !== 'pending_confirmation')
+      throw new Error('нет единиц');
+    expect(second.pendingId).not.toBe(first.pendingId);
+    expect(await unitsIn(owner, threadId)).toHaveLength(2);
+  });
+
+  test('ретрай ПОСЛЕ правки цели владельцем → тот же pendingId и ПЕРВЫЙ снимок: CAS-снимок в личность не входит (Р-К-68)', async () => {
+    // Другое «было» у тронутой цели — не другое намерение: карточка уже стоит, и «Принять» её
+    // честно погасит расхождением предусловий (ОЧ.13). Вторая карточка того же намерения рядом с
+    // заведомо устаревшей первой — шум в пачке, а не защита.
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    const first = await postpone(ctx);
+    const own = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: ids[2], props: { 'orbis/due_date': '2026-06-25' } } },
+      ],
+    });
+    expect(own.ok).toBe(true);
+    const again = await postpone(ctx);
+    if (first.status !== 'pending_confirmation' || again.status !== 'pending_confirmation')
+      throw new Error('нет единиц');
+    expect(again.pendingId).toBe(first.pendingId);
+    expect(again.card).toEqual(first.card);
+    const units = await unitsIn(owner, threadId);
+    expect(units).toHaveLength(1);
+    const ops = (
+      (units[0]?.metadata as { pending: { input: { operations: Array<{ input: unknown }> } } })
+        .pending.input.operations[2]?.input as { precondition?: unknown }
+    ).precondition;
+    // Снимок — ПЕРВОЙ постановки: «было» 2026-06-03, а не сегодняшнее 2026-06-25
+    expect(ops).toEqual([{ property: 'orbis/due_date', in: ['2026-06-03'] }]);
+  });
+
+  test('«Принять» поверх снятой декларации → ACTION_STALE, карточка погашена reason stale, граф не тронут', async () => {
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    const unit = await postpone(ctx);
+    if (unit.status !== 'pending_confirmation') throw new Error('единица не поставлена');
+    // `action_remove` (задача 10) = deprecate строки (§А10-3) — эмулируем его ЭФФЕКТ
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions SET status = 'deprecated'
+      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+    );
+
+    const r = await approvePending(db, { identity: personal(owner), pendingId: unit.pendingId });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect([r.error.code, (r.error.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'ACTION_STALE',
+    ]);
+    // Карточка ПОГАШЕНА, а не оставлена открытой: применимой она уже не станет
+    const rejected = (await messagesIn(owner, threadId)).find(
+      (m) => (m.metadata as { type?: string }).type === 'confirmation_rejected',
+    );
+    expect((rejected?.metadata as { reason?: string }).reason).toBe('stale');
+    expect(rejected?.content).toBe('Отложенное действие устарело: декларация изменена или снята');
+    expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01');
+  });
+
+  test('«Принять» поверх ИЗМЕНЁННОЙ декларации (хеш, строка active) → тот же ACTION_STALE, граф не тронут', async () => {
+    const owner = await freshGraph();
+    const { ctx, threadId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    const unit = await postpone(ctx);
+    if (unit.status !== 'pending_confirmation') throw new Error('единица не поставлена');
+    // Правка без снятия: `actionHash` (Р-И-31) берёт `sensitivity`, строка остаётся active
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions SET sensitivity = '["touches_money"]'::jsonb
+      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+    );
+
+    const r = await approvePending(db, { identity: personal(owner), pendingId: unit.pendingId });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect([r.error.code, (r.error.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'ACTION_STALE',
+    ]);
+    const rejected = (await messagesIn(owner, threadId)).find(
+      (m) => (m.metadata as { type?: string }).type === 'confirmation_rejected',
+    );
+    expect((rejected?.metadata as { reason?: string }).reason).toBe('stale');
+    expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01');
+  });
+
+  test('decideDeferredUnit поверх снятой декларации → already/rejected, исключения нет', async () => {
+    const owner = await freshGraph();
+    const { ctx } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    const unit = await postpone(ctx);
+    if (unit.status !== 'pending_confirmation') throw new Error('единица не поставлена');
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions SET status = 'deprecated'
+      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+    );
+    // Путь с экрана пачки идёт через `approvePending` (`lifecycle.ts`, `approveUnit`), значит своей
+    // ветки «Устарело» ему не нужно: отказ — не расхождение предусловий (`divergenceOf` → null), а
+    // судьба у единицы уже есть, и `unitFate` отвечает `already`.
+    expect(
+      await decideDeferredUnit(
+        { db, clock: () => T0 },
+        { identity: personal(owner), pendingId: unit.pendingId, decision: 'approve' },
+      ),
+    ).toEqual({ status: 'already', fate: 'rejected' });
+    expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01');
+  });
+
+  test('«Принять» перевычисляет предусловие: цель архивирована после постановки → CONFLICT precondition_failed, ничего не записано (эррата Ф-Б2-18)', async () => {
+    // Предусловие «не в архиве» читает свойство, которого шаги НЕ трогают: CAS операций (он — по
+    // `due_date`) архивацию цели не видит, и без перевычисления «Принять» перенесло бы срок
+    // архивной записи.
+    const owner = await freshGraph();
+    const { ctx } = await actionCtx(owner);
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions SET precondition =
+      '{"op":"not","args":[{"op":"=","args":[{"prop":"orbis/archived"},{"const":true}]}]}'::jsonb
+      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+    );
+    const ids = await seedOverdue(owner, 11);
+    const unit = await postpone(ctx);
+    if (unit.status !== 'pending_confirmation')
+      throw new Error(`единица не поставлена: ${unit.status}`);
+    const own = await execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id: ids[4], archived: true } }],
+    });
+    expect(own.ok).toBe(true);
+
+    const r = await approvePending(db, { identity: personal(owner), pendingId: unit.pendingId });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('CONFLICT');
+    expect(r.error.details).toMatchObject({
+      reason: 'precondition_failed',
+      action: 'planner/postpone_overdue',
+      id: ids[4],
+    });
+    // Атомарно: ни одна из одиннадцати не сдвинута
+    for (const id of ids) {
+      expect((await propsOfRowA(id, owner))['orbis/due_date']).not.toBe('2026-09-01');
+    }
+  });
+
+  test('повторное «Принять» исполненной единицы после снятия декларации → replay, а не «Устарело»', async () => {
+    // Исполненную единицу гасить нечем (отклонить исполненное нельзя), а её повтор — replay
+    // сохранённого результата (§7.8): свежесть декларации спрашивается только до исполнения.
+    const owner = await freshGraph();
+    const { ctx } = await actionCtx(owner);
+    await seedOverdue(owner, 11);
+    const unit = await postpone(ctx);
+    if (unit.status !== 'pending_confirmation') throw new Error('единица не поставлена');
+    const applied = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: unit.pendingId,
+    });
+    expect(applied.ok).toBe(true);
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions SET status = 'deprecated'
+      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+    );
+    const again = await approvePending(db, {
+      identity: personal(owner),
+      pendingId: unit.pendingId,
+    });
+    expect(again).toMatchObject({ ok: true, idempotentReplay: true });
   });
 });
 

@@ -33,6 +33,7 @@
 // сквозь одобрение — работает единицам как есть, ради чего носитель и переиспользован.
 import { createHash } from 'node:crypto';
 import {
+  type ActionDefinition,
   answerMessageId,
   batchAuditMessageId,
   batchExecuteInput,
@@ -46,8 +47,10 @@ import {
   questionStaleMessageId,
   rejectMessageId,
 } from '@orbis/shared';
+import type { ExprScalar } from '@orbis/shared/expr';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { actionDateArgs, recheckPrecondition } from '../actions/precondition';
 import type { DeferredRow } from '../actions/resolve';
 import { escalateAfterMutation } from '../ai/escalation';
 import { appendMessageIdempotent } from '../chat/messages';
@@ -60,6 +63,9 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, ExecuteResult } from '../executor/types';
 import type { Identity } from '../identity';
+import { actionHash } from '../registry/actions';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import type { Card } from '../tools/registry';
 import type { ConfirmationLevel } from './confirmation';
 
@@ -221,6 +227,19 @@ const pendingRecord = z
     if (rec.options !== undefined) forbid('options', kindName);
     if (rec.tool === undefined) require('tool', kindName);
     if (rec.input === undefined) require('input', kindName);
+    // Ключи действия — ЧЕТВЁРКОЙ или никак (§Б6-7, эррата Ф-Б2-18): `action_id` без хеша не дал
+    // бы сверить декларацию, без целей и параметров — перевычислить предусловие, и «Принять»
+    // молча исполнило бы то, что обязано было проверить. Единственный писатель кладёт их вместе
+    // (`createPending`), так что половинчатая запись — повреждение, а не старая форма.
+    const actionKeys = [
+      ['action_id', rec.action_id],
+      ['action_hash', rec.action_hash],
+      ['action_targets', rec.action_targets],
+      ['action_params', rec.action_params],
+    ] as const;
+    if (actionKeys.some(([, v]) => v !== undefined)) {
+      for (const [path, value] of actionKeys) if (value === undefined) require(path, kindName);
+    }
   });
 
 export type PendingRecord = z.infer<typeof pendingRecord>;
@@ -648,6 +667,46 @@ const REJECT_CONTENT: Record<RejectReason, string> = {
   edited: 'Предложение заменено правкой владельца',
 };
 
+/** Текст §Б6-7 — СВОЙ, а не `REJECT_CONTENT.stale` («состояние изменилось»): изменилась ДЕКЛАРАЦИЯ,
+ *  и владелец, читающий ленту через сутки, обязан различать поводы (причина — тот же enum). */
+const ACTION_STALE_TEXT = 'Отложенное действие устарело: декларация изменена или снята';
+
+/**
+ * Свежесть строки действия на «Принять» (§Б6-7). Дом один: через `approvePending` идут ВСЕ пути
+ * исполнения сохранённого payload'а — кнопка владельца, «Принять» единицы и «Принять все»
+ * (`routines/lifecycle.ts`, `approveUnit`). `null` — единица не от действия: ключа нет, проверять
+ * нечего. Живая декларация возвращается вместе со снимком реестра, по которому она сверена: им же
+ * перевычисляется предусловие (эррата Ф-Б2-18) — второго чтения реестра нет.
+ */
+async function actionStateOf(
+  tx: Tx,
+  graphId: GraphId,
+  pending: PendingRecord,
+): Promise<{ stale: string } | { decl: ActionDefinition; reg: RegistrySnapshot } | null> {
+  const actionId = pending.action_id;
+  if (actionId === undefined) return null;
+  const reg = await effectiveRegistry(tx, graphId);
+  const decl = reg.actions.get(actionId);
+  if (decl === undefined) return { stale: 'строки больше нет' };
+  if (decl.status === 'deprecated') return { stale: 'действие снято' };
+  if (actionHash(decl) !== pending.action_hash) return { stale: 'декларация изменена' };
+  return { decl, reg };
+}
+
+/**
+ * Исполнена ли единица — audit-сообщение по детерминированному PK (§7.8). Спрашивается ДО проверок
+ * свежести действия: исполненную единицу «Принять» повторяет replay'ем сохранённого результата, и ни
+ * снятая после исполнения декларация, ни ставшее ложным предусловие (его сделало ложным само
+ * исполнение) не вправе подменить replay отказом.
+ */
+async function isExecuted(tx: Tx, graphId: GraphId, pendingId: string): Promise<boolean> {
+  const rows = await tx
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(eq(chatMessages.id, batchAuditMessageId(graphId, pendingId)));
+  return rows.length > 0;
+}
+
 /**
  * Причина отказа pending'а, если он отклонён; undefined — не отклонён.
  *
@@ -820,6 +879,7 @@ export async function approvePending(
   db: Db,
   args: { identity: Identity; pendingId: string; clock?: () => Date },
 ): Promise<ExecuteResult> {
+  const graphId = args.identity.graph;
   try {
     const found = await withIdentity(db, args.identity, async (tx) => {
       const msg = await findPendingMessage(tx, args.pendingId);
@@ -829,6 +889,25 @@ export async function approvePending(
         });
       }
       assertNotQuestion(msg.pending); // род записи неизменяем — перепроверять под замком нечего
+      // «УСТАРЕЛО» (§Б6-7) — только у НЕисполненной единицы: исполненную повторяет replay (см.
+      // `isExecuted`), и гасить её нечем — отклонить исполненное нельзя.
+      const act = (await isExecuted(tx, graphId, args.pendingId))
+        ? null
+        : await actionStateOf(tx, graphId, msg.pending);
+      if (act !== null && 'stale' in act) {
+        // ГАШЕНИЕ ПИШЕТСЯ ЭТОЙ ЖЕ ТРАНЗАКЦИЕЙ, А ОТКАЗ БРОСАЕТСЯ ПОСЛЕ ЕЁ КОММИТА. Бросок ВНУТРИ
+        // откатил бы и запись гашения (Р-К-65) — владелец получил бы отказ поверх ОТКРЫТОЙ
+        // карточки с кнопкой, которая не сработает уже никогда. `rejectPendingTx` берёт
+        // advisory-замок сам и под ним перечитывает «уже исполнено» и «уже отклонён»; прочитанное
+        // выше — append-only метаданные и снимок реестра, write-skew ими не выражается.
+        await rejectPendingTx(tx, {
+          identity: args.identity,
+          pendingId: args.pendingId,
+          reason: 'stale',
+          text: ACTION_STALE_TEXT,
+        });
+        return { msg, stale: act.stale, live: undefined };
+      }
       if (await isRejected(tx, args.pendingId)) {
         throw new ExecError(
           'VALIDATION',
@@ -836,12 +915,25 @@ export async function approvePending(
           { pendingId: args.pendingId },
         );
       }
-      return msg;
+      return { msg, stale: null, live: act ?? undefined };
     });
+    if (found.stale !== null) {
+      throw new ExecError(
+        'VALIDATION',
+        `действие устарело — единица снята (§Б6-7): ${found.stale}`,
+        {
+          reason: 'ACTION_STALE',
+          pendingId: args.pendingId,
+          action: found.msg.pending.action_id,
+        },
+      );
+    }
+    const pending = found.msg.pending;
+    const live = found.live;
     // Вне tx проверок: execute открывает собственный withIdentity-tx (вложить нельзя).
     // Чтение pending отдельным tx безопасно: journal append-only, metadata неизменяема
     // (§4.6). audit — в тред карточки-запроса; атрибуция — исходный актор (§7.8)
-    const operations = toOperations(found.pending);
+    const operations = toOperations(pending);
     const r = await execute(
       db,
       {
@@ -853,18 +945,18 @@ export async function approvePending(
         // (`chat/messages.ts` прячет системный audit) и мимо «отмени последнее»
         // (`findLastUndoable` пропускает `source='system'`) — то есть владелец не смог бы
         // отменить то, что сам и подтвердил.
-        actorKind: found.pending.actor_kind === 'system' ? 'owner' : found.pending.actor_kind,
-        source: found.pending.source === 'system' ? 'ui' : found.pending.source,
+        actorKind: pending.actor_kind === 'system' ? 'owner' : pending.actor_kind,
+        source: pending.source === 'system' ? 'ui' : pending.source,
         // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
         // журнале §7.8 видно, КАКОЙ доступ этот план попросил
-        actorGrantId: found.pending.actor_grant_id,
+        actorGrantId: pending.actor_grant_id,
         // Прогон рутины — та же логика, что с грантом (V1.6): предложение одобрил
         // владелец, но сделала правку рутина, и по run_id её найдёт откат прогона
-        runId: found.pending.run_id,
+        runId: pending.run_id,
         // И правка владельца (Ш1.5, В-1): применено не то, что предложила рутина, а
         // правленое — журнал §7.8 обязан хранить, ЧТО именно эта правка заменила
-        editedFrom: found.pending.edited_from,
-        threadId: found.threadId,
+        editedFrom: pending.edited_from,
+        threadId: found.msg.threadId,
         operations,
         batchId: args.pendingId,
         clock: args.clock,
@@ -881,6 +973,20 @@ export async function approvePending(
               `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
               { pendingId: args.pendingId },
             );
+          }
+          // ПРЕДУСЛОВИЕ ДЕЙСТВИЯ ПЕРЕВЫЧИСЛЯЕТСЯ (эррата Ф-Б2-18) — под тем же замком и В ТОЙ ЖЕ
+          // транзакции, что исполнение: CAS операций держит только тронутые шагами свойства, а
+          // предусловие читает и нетронутое (архив, рёбра, «сегодня»). Исполненную единицу не
+          // трогаем — её отвечает replay, а предусловие ложно как раз потому, что она исполнена.
+          if (live !== undefined && !(await isExecuted(tx, graphId, args.pendingId))) {
+            await recheckPrecondition(tx, {
+              reg: live.reg,
+              graphId,
+              decl: live.decl,
+              targets: pending.action_targets ?? [],
+              params: (pending.action_params ?? {}) as Record<string, ExprScalar>,
+              dates: await actionDateArgs(tx, graphId, args.clock),
+            });
           }
         },
       },
@@ -903,7 +1009,7 @@ export async function approvePending(
     // Задвоения нет — из диспатча этот payload не исполняется вовсе; повторный approve
     // отсекается idempotentReplay (журналировать нечего). Ошибку эскалация логирует
     // внутри и не пробрасывает: правки уже закоммичены.
-    if (r.ok && !r.idempotentReplay && found.pending.source === 'chat') {
+    if (r.ok && !r.idempotentReplay && pending.source === 'chat') {
       await escalateAfterMutation(db, {
         identity: args.identity,
         actionId: r.actionId,
