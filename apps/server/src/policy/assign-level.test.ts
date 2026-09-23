@@ -4,6 +4,7 @@
 // `assignLevelOf` зовётся только отсюда. Пол понижения (Р-27) пиннится здесь же — он и есть та
 // граница, которую правило владельца пробить не вправе.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import {
   ASSIGN_LEVEL_RULES,
   type GraphId,
@@ -361,5 +362,42 @@ describe('§С8-26: одиннадцать правил дают ожидаем�
       candidates: 0,
     });
     expect(verdict).toEqual({ level: 'execute', candidates: [], floored: false });
+  });
+});
+
+describe('граница В-2/Р-27: правила приёмки не уехали в живой путь', () => {
+  // Греп из теста — образец `test/gate-c8-18.test.ts`: корень репозитория берётся у git, потому
+  // что `bun test` идёт из `apps/server`, а pathspec отсчитывается от cwd. Видит ТОЛЬКО
+  // отслеживаемые файлы (Ф-Б2-11) — новый вызывающий краснеет здесь после `git add`, то есть в CI.
+  //
+  // Ищется ИМПОРТ модуля и ВЫЗОВ функции, а не голое имя: имя законно стоит в комментариях, которые
+  // эту границу и описывают (`floor.ts`, а `tools/dispatch.ts` называет его, объясняя, почему пол в
+  // живом конвейере не складывается), — сторож по имени ловил бы собственное объяснение.
+  test('живой конвейер §7.10 правил не знает: assignLevelOf зовут только приёмка и её тест', () => {
+    const root = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+    }).stdout.trim();
+    const r = spawnSync(
+      'git',
+      [
+        'grep',
+        '-l',
+        '-E',
+        '-e',
+        'assignLevelOf *\\(',
+        '-e',
+        "/assign-level'",
+        '--',
+        'apps/server/src',
+        'apps/web/src',
+      ],
+      { cwd: root, encoding: 'utf8' },
+    );
+    // 0 — есть совпадения, 1 — нет, >1 — ошибка git: молчащий сторож хуже отсутствующего.
+    expect(r.status === 0 || r.status === 1, r.stderr).toBe(true);
+    expect(r.stdout.trim().split('\n').sort()).toEqual([
+      'apps/server/src/policy/assign-level.test.ts',
+      'apps/server/src/policy/assign-level.ts',
+    ]);
   });
 });
