@@ -11,6 +11,7 @@
 // тред); (4) thread_post — отдельная ветка мимо executor (см. runThreadPost), но тоже
 // через классификатор §7.10.
 import {
+  actionToolName,
   askInput,
   attachAspectInput,
   type BatchExecuteInput,
@@ -43,6 +44,8 @@ import {
 } from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
+import type { DeferredRow } from '../actions/resolve';
+import { runAction } from '../actions/run';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
 import {
   AGENT_VERB_ENVELOPES,
@@ -392,6 +395,29 @@ export async function dispatchTool(
       // отработали выше; envelope разбирается здесь, как у глаголов.
       return await runAsk(ctx, parseEnvelope(askInput, input, pre.def.name));
     }
+    if (pre.def.name === 'run_action' || pre.def.name.startsWith('action_')) {
+      // Тул действия — то же исполнение, что каталог: имя лишь адресует декларацию (§Б6-6).
+      // Ветка стоит ДО runMutation по той же причине, что у предложения: конверт с
+      // предусловиями через `MUTATION_ENVELOPES` не проходит, а гейты и уровень у действия
+      // считаются по резолвленным шагам (§Б6-2, `actions/run.ts`). Резолв имени `action_*` →
+      // ключ — перебором реестра по той же причине, что у `attach_*` (нормализация необратима).
+      const key = pre.def.name === 'run_action' ? null : actionKeyOfTool(pre.reg, pre.def.name);
+      if (pre.def.name !== 'run_action' && key === null) {
+        // Недостижимо: имя пришло из `buildToolDefs`, который собрал его из того же снимка.
+        // Fail-closed на случай, если сборка дефа и резолв однажды разойдутся.
+        return errorResult('NOT_FOUND', `действия тула «${pre.def.name}» нет в реестре`, {
+          tool: pre.def.name,
+        });
+      }
+      const ref = key ?? (isRecord(input) ? String(input.action ?? '') : '');
+      const payload =
+        pre.def.name === 'run_action'
+          ? input
+          : { self: isRecord(input) ? input.self : undefined, params: stripSelf(input) };
+      return await runAction(ctx, pre.reg, pre.disabled, ref, payload, {
+        defer: (tool, p) => deferRoutineUnit(ctx, pre.def, tool, p), // Р-К-67
+      });
+    }
     return await runMutation(
       ctx,
       pre.def,
@@ -429,6 +455,29 @@ type Resolution =
       /** Маска модулей вызова (§Б8-3) — вторая линия отказа для операций внутри пачки. */
       disabled: readonly string[];
     };
+
+/**
+ * Действие по имени его тула (§Б6-6). Перебором реестра, а не разбором строки: нормализация
+ * `actionToolName` необратима («/» и «-» склеиваются в «_», докблок `tool-schema.ts`), и два разных
+ * ключа могут дать одно имя. `null` — имени нет среди действий снимка: ветка отвечает `NOT_FOUND`,
+ * а не молча пустой строкой.
+ */
+function actionKeyOfTool(reg: RegistrySnapshot, name: string): string | null {
+  for (const a of reg.actions.values()) if (actionToolName(a.key) === name) return a.key;
+  return null;
+}
+
+/**
+ * Вход тула действия — плоский: `self` (у одиночного) плюс объявленные параметры. Разбираем его на
+ * две части, потому что `runActionInput` строгий: `self` — своё поле конверта, всё остальное —
+ * `params`. Копия, а не `delete`: вход приезжает из конверта тула, и второй читатель увидел бы его
+ * уже изменённым.
+ */
+function stripSelf(input: unknown): Record<string, unknown> {
+  if (!isRecord(input)) return {};
+  const { self: _self, ...rest } = input;
+  return rest;
+}
 
 /**
  * Гейты рутины pre-блока (V1.10, инварианты 4–5) — обе стороны одной границы, поэтому
@@ -1349,8 +1398,8 @@ export function registryOperationSummary(
   return tool;
 }
 
-/** Строка карточки отложенного действия — «было → станет» по одному полю (ОЧ.13). */
-type DeferredRow = { field: string; before?: string; after: string };
+// Строка карточки отложенного действия — «было → станет» по одному полю (ОЧ.13). Форма ОДНА с
+// карточкой действия (`actions/resolve.ts`): тип-импорт, рантайм-цикла не создаёт.
 
 /**
  * «Станет» у строки СНЯТИЯ свойства в карточке отложенной единицы. Тот же литерал, что у
