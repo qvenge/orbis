@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS, BUILTIN_CONTRACT_DEFS, BUILTIN_PROPERTY_META } from '@orbis/shared';
-import { classOfEntity, classPrecondition, statusPatch } from './class-write';
+import { ExecError } from '../errors';
+import { classOfEntity, classPrecondition, slotPropertyOf, statusPatch } from './class-write';
 import type { RegistrySnapshot } from './load';
 
 /** Снимок из встроенных строк: функции чистые, база им не нужна. */
@@ -75,5 +76,76 @@ describe('запись классом: помощники сервера (Р-И-
       'todo',
     ]);
     expect(classOfEntity(reg2, TICKET('todo'), 'orbis/delegable')).toBe('queued');
+  });
+
+  test('сломанный снимок — структурный VALIDATION, а не голый Error (фикс-раунд 1, M-1)', () => {
+    // Снимок «мимо валидатора» (прямой сид, фикстура, код раньше пересева): у класса `queued` два
+    // варианта, у второго двойника привязки делегируемости нет вовсе. Глаголы, подметание и ручка
+    // ответа отдают такой отказ агенту и владельцу кодом, а не пятисотой.
+    const task = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task');
+    const withMap = (fn: (b: NonNullable<typeof task>['implements'][number]) => unknown) =>
+      ({
+        ...REG,
+        aspects: new Map([
+          ...REG.aspects,
+          ['orbis/task', { ...task, implements: task?.implements.flatMap((b) => fn(b) ?? []) }],
+        ]),
+      }) as RegistrySnapshot;
+    const ambiguous = withMap((b) =>
+      b.contract !== 'orbis/delegable'
+        ? b
+        : {
+            ...b,
+            value_map: [...b.value_map, { slot: 'status', variant: 'cancelled', class: 'queued' }],
+          },
+    );
+    const noDelegable = withMap((b) => (b.contract === 'orbis/delegable' ? undefined : b));
+    const refusal = (fn: () => unknown): { code: string; details: Record<string, unknown> } => {
+      try {
+        fn();
+      } catch (e) {
+        if (e instanceof ExecError)
+          return { code: e.code, details: e.details as Record<string, unknown> };
+        throw e;
+      }
+      throw new Error('ожидался отказ');
+    };
+    expect(
+      refusal(() => statusPatch(ambiguous, 'orbis/task', 'orbis/delegable', 'queued')),
+    ).toEqual({
+      code: 'VALIDATION',
+      details: {
+        reason: 'CLASS_NOT_EXCLUSIVE',
+        aspect: 'orbis/task',
+        contract: 'orbis/delegable',
+        slot: 'status',
+        class: 'queued',
+        variants: ['planned', 'cancelled'],
+      },
+    });
+    expect(
+      refusal(() =>
+        classPrecondition(ambiguous, 'orbis/task', 'orbis/delegable', ['new', 'queued']),
+      ).details.reason,
+    ).toBe('CLASS_NOT_EXCLUSIVE');
+    // Незатронутый класс того же снимка пишется как прежде: отказ — у класса, не у снимка целиком.
+    expect(statusPatch(ambiguous, 'orbis/task', 'orbis/delegable', 'waiting')).toEqual({
+      'orbis/task_status': 'waiting',
+    });
+    expect(
+      refusal(() => slotPropertyOf(noDelegable, 'orbis/task', 'orbis/delegable', 'waiting_for')),
+    ).toEqual({
+      code: 'VALIDATION',
+      details: {
+        reason: 'UNKNOWN_SLOT',
+        aspect: 'orbis/task',
+        contract: 'orbis/delegable',
+        slot: 'waiting_for',
+        cause: 'not_bound',
+      },
+    });
+    expect(slotPropertyOf(REG, 'orbis/task', 'orbis/delegable', 'waiting_for')).toBe(
+      'orbis/waiting_for',
+    );
   });
 });

@@ -23,7 +23,6 @@ import {
   type MyQueueResult,
   myQueueInput,
   newId,
-  propertyOfSlot,
   type QueueTicket,
   ROLE_RUN,
   type RunStepInput,
@@ -49,9 +48,9 @@ import type { GrantRef } from '../oauth/grants';
 import { listRunUnits } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import {
-  bindingsOfSnapshot,
   classOfEntity,
   classPrecondition,
+  slotPropertyOf,
   statusPatch,
 } from '../registry/class-write';
 import type { RegistrySnapshot } from '../registry/load';
@@ -436,12 +435,7 @@ async function myQueue(ctx: VerbCtx, grant: GrantRef): Promise<ToolDispatchResul
 
   const tickets = await withIdentity(ctx.db, ctx.identity, async (tx) => {
     const reg = await effectiveRegistry(tx, ctx.identity.graph);
-    const statusProperty = propertyOfSlot(
-      bindingsOfSnapshot(reg),
-      TICKET_ASPECT,
-      DELEGABLE_CONTRACT,
-      'status',
-    );
+    const statusProperty = slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'status');
     const rows = await assignedTickets(tx, grant.id);
     const out: QueueTicket[] = [];
     for (const row of rows) {
@@ -1066,8 +1060,7 @@ async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDis
     ticketUpdate: (_ticket, reg) => ({
       props: {
         ...statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting'),
-        [propertyOfSlot(bindingsOfSnapshot(reg), TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for')]:
-          input.question,
+        [slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for')]: input.question,
       },
     }),
     expectedClasses: ['waiting'],
@@ -1121,24 +1114,12 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
             // прошлого чекпойнта рядом с `done` читался бы как незакрытый. Снос этой строки делает
             // ЗАДАЧА 14 (В-П-8): правило `on_leave` закрывает уход, `forbidden_when` — саму
             // возможность хвоста.
-            unset: [
-              propertyOfSlot(
-                bindingsOfSnapshot(reg),
-                TICKET_ASPECT,
-                DELEGABLE_CONTRACT,
-                'waiting_for',
-              ),
-            ],
+            unset: [slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for')],
           }
         : {
             props: {
               ...statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting'),
-              [propertyOfSlot(
-                bindingsOfSnapshot(reg),
-                TICKET_ASPECT,
-                DELEGABLE_CONTRACT,
-                'waiting_for',
-              )]: input.report,
+              [slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for')]: input.report,
             },
           },
     expectedClasses: ['waiting', 'done'],

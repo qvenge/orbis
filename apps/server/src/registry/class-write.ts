@@ -6,10 +6,12 @@
 import {
   type BindingIndex,
   bindingIndexOf,
+  ClassWriteError,
   entityClassOf,
   propertyOfSlot,
   variantOfClass,
 } from '@orbis/shared';
+import { ExecError } from '../errors';
 import type { RegistrySnapshot } from './load';
 
 /** Имя слота-статуса — норматив §Б1-1: классы вешаются на него и только на него. */
@@ -34,6 +36,39 @@ export function bindingsOfSnapshot(reg: RegistrySnapshot): BindingIndex {
   const built = bindingIndexOf({ aspects: reg.aspects, contracts: reg.contracts });
   INDEX_BY_SNAPSHOT.set(reg, built);
   return built;
+}
+
+/**
+ * Отказ записи классом — СТРУКТУРНЫЙ (фикс-раунд 1 задачи 14а, M-1). Shared бросает
+ * `ClassWriteError` (про `ExecError` он не знает), а здесь он становится `VALIDATION` с
+ * `reason: <код словаря ImplementsIssue>` — тем же переводом, что у `execErrorOfImplementsIssue`
+ * для незнакомого кода. Без перевода сломанный снимок (два варианта в классе, привязки нет —
+ * снимок собран мимо валидатора или код выкачен раньше пересева) доезжал бы до агента и владельца
+ * пятисотой: диспатч и роутер структурно отдают только `ExecError`.
+ */
+function structured<T>(write: () => T): T {
+  try {
+    return write();
+  } catch (e) {
+    if (e instanceof ClassWriteError) {
+      throw new ExecError('VALIDATION', e.message, { reason: e.code, ...e.details });
+    }
+    throw e;
+  }
+}
+
+/**
+ * Свойство в слоте контракта у аспекта — адрес «куда писать» (`propertyOfSlot`) со структурным
+ * отказом. Потребители берут адрес ЗДЕСЬ, а не у shared напрямую: иначе отказ сломанного снимка
+ * уходил бы мимо перевода в `VALIDATION`.
+ */
+export function slotPropertyOf(
+  reg: RegistrySnapshot,
+  aspectId: string,
+  contract: string,
+  slot: string,
+): string {
+  return structured(() => propertyOfSlot(bindingsOfSnapshot(reg), aspectId, contract, slot));
 }
 
 /**
@@ -67,14 +102,14 @@ export function statusPatch(
   cls: string,
 ): Record<string, string | boolean> {
   const idx = bindingsOfSnapshot(reg);
-  return {
+  return structured(() => ({
     [propertyOfSlot(idx, aspectId, contract, STATUS_SLOT)]: variantOfClass(
       idx,
       aspectId,
       contract,
       cls,
     ),
-  };
+  }));
 }
 
 /**
@@ -90,8 +125,8 @@ export function classPrecondition(
   classes: readonly string[],
 ): { property: string; in: (string | boolean)[] } {
   const idx = bindingsOfSnapshot(reg);
-  return {
+  return structured(() => ({
     property: propertyOfSlot(idx, aspectId, contract, STATUS_SLOT),
     in: classes.map((cls) => variantOfClass(idx, aspectId, contract, cls)),
-  };
+  }));
 }

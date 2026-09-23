@@ -7,7 +7,7 @@
 // Все три — ownerOnly: это поверхность ЧЕЛОВЕКА. Исполнителю здесь делать нечего — его
 // путь идёт через /mcp и глаголы (verbs.ts), а ответ на собственный вопрос агентом был бы
 // подменой того самого решения, ради которого чекпойнт и останавливает работу.
-import { newId, propertyOfSlot } from '@orbis/shared';
+import { newId } from '@orbis/shared';
 import { z } from 'zod';
 import { DELEGABLE_CONTRACT, TICKET_ASPECT } from '../agent-loop/constants';
 import { runById, runsOfTicket, ticketOfRun } from '../agent-loop/queries';
@@ -20,9 +20,9 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
 import { effectiveRegistry } from '../registry/cache';
 import {
-  bindingsOfSnapshot,
   classOfEntity,
   classPrecondition,
+  slotPropertyOf,
   statusPatch,
 } from '../registry/class-write';
 import { ownerOnlyProcedure, router } from '../trpc';
@@ -97,7 +97,7 @@ export const agentRunRouter = router({
               // Чтение по адресу из привязки — через `Record<string, unknown>`: строковый ключ по
               // узкому `TicketProps` даёт TS7053 при `strict`/`noUncheckedIndexedAccess`.
               status: (ticket.props as Record<string, unknown>)[
-                propertyOfSlot(bindingsOfSnapshot(reg), TICKET_ASPECT, DELEGABLE_CONTRACT, 'status')
+                slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'status')
               ],
             });
           }
@@ -176,12 +176,7 @@ export const agentRunRouter = router({
                   // форме законное значение (§А1-1). Снос строки — задача 14 (В-П-8).
                   props: statusPatch(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued'),
                   unset: [
-                    propertyOfSlot(
-                      bindingsOfSnapshot(pre.reg),
-                      TICKET_ASPECT,
-                      DELEGABLE_CONTRACT,
-                      'waiting_for',
-                    ),
+                    slotPropertyOf(pre.reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for'),
                   ],
                 },
               },

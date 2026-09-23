@@ -10,7 +10,7 @@
 // экраны проекта/тикета (Задача 13). Отдельного фонового процесса нет намеренно —
 // инвариант «тикет не висит in_progress навсегда» не должен зависеть ни от расписания,
 // ни от того, что какой-то агент однажды позовёт очередь.
-import { newId, propertyOfSlot } from '@orbis/shared';
+import { newId } from '@orbis/shared';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
@@ -21,11 +21,12 @@ import type { Identity } from '../identity';
 import { listRunUnits } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import {
-  bindingsOfSnapshot,
   classOfEntity,
   classPrecondition,
+  slotPropertyOf,
   statusPatch,
 } from '../registry/class-write';
+import type { RegistrySnapshot } from '../registry/load';
 import { DELEGABLE_CONTRACT, RUN_STALE_AFTER_MS, TICKET_ASPECT } from './constants';
 import { type RunRow, runsOfParent, staleRuns, ticketOfRun } from './queries';
 
@@ -92,20 +93,19 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
   const before = new Date(now.getTime() - staleAfterMs);
 
   const stale = await withIdentity(db, args.identity, (tx) => staleRuns(tx, before));
-  // Подметать нечего — и снимок реестра не нужен: подметание зовётся на КАЖДОЕ чтение очереди, и
-  // лишняя транзакция за снимком легла бы на самый частый путь ради пустого цикла.
-  if (stale.length === 0) return { swept: 0 };
-  // Снимок реестра — ОДИН на подметание: адрес свойства и варианты классов внутри прохода не меняются,
-  // а поход за ним в каждой итерации стоил бы транзакцию на каждый брошенный прогон.
-  const reg = await withIdentity(db, args.identity, (tx) =>
-    effectiveRegistry(tx, args.identity.graph),
-  );
-  const waitingFor = propertyOfSlot(
-    bindingsOfSnapshot(reg),
-    TICKET_ASPECT,
-    DELEGABLE_CONTRACT,
-    'waiting_for',
-  );
+  // Снимок реестра — ЛЕНИВО и один на подметание. Лениво (фикс-раунд 1 задачи 14а, гейт m1): он нужен
+  // только тикетной половине — рутинные прогоны от привязки делегируемости не зависят, и код,
+  // выкаченный раньше пересева (в снимке ещё нет `orbis/delegable`), не вправе останавливать их
+  // подметание планировщиком; заодно пустое подметание — самый частый путь, через каждую очередь, —
+  // за снимком не ходит. Один: адрес свойства и варианты классов внутри прохода не меняются, а поход
+  // в каждой итерации стоил бы транзакцию на каждый брошенный прогон.
+  let snapshot: RegistrySnapshot | undefined;
+  const registry = async (): Promise<RegistrySnapshot> => {
+    snapshot ??= await withIdentity(db, args.identity, (tx) =>
+      effectiveRegistry(tx, args.identity.graph),
+    );
+    return snapshot;
+  };
   let swept = 0;
   for (const run of stale) {
     // Субъект прогона (V1.4) решает и исход, и то, есть ли вообще тикетная половина:
@@ -186,11 +186,13 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
 
     // Тикет чинится, только если он ДЕЙСТВИТЕЛЬНО висит в работе: владелец мог вернуть
     // его руками, и переписывать его состояние задним числом сервер права не имеет.
+    const reg = ticket !== null && isLastRun ? await registry() : undefined;
     if (
       ticket !== null &&
-      isLastRun &&
+      reg !== undefined &&
       classOfEntity(reg, ticket, DELEGABLE_CONTRACT) === 'in_progress'
     ) {
+      const waitingFor = slotPropertyOf(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting_for');
       operations.push({
         tool: 'entity_update',
         input: {

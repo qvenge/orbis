@@ -1,11 +1,13 @@
 // Подметание брошенных прогонов (С6, инвариант 6): живая БД, executor без моков.
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GraphId, MyQueueResult } from '@orbis/shared';
-import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { BUILTIN_ASPECT_DEFS, type GraphId, type MyQueueResult } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { listRunUnits } from '../policy/pending';
+import { bumpOwnerRegistryVersion } from '../registry/version';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import { RUN_STALE_AFTER_MS } from './constants';
@@ -460,5 +462,101 @@ describe('sweepStaleRuns: пачка переживает смерть проц�
     // снимало бы флажок вместо действия владельца
     const action = (await actionsOf(owner)).find((a) => a.run_id === runId);
     expect(action?.source).toBe('system');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Задача 14а, фикс-раунд 1: подметание и снимок реестра «мимо валидатора»
+// ---------------------------------------------------------------------------
+
+/**
+ * Своя строка `orbis/task` владельца ПОВЕРХ встроенной (её читатель предпочитает системной — тот же
+ * приём, что в `routers/registry.test.ts`) с заданными привязками. Фикстура «мимо валидатора»:
+ * так выглядит снимок, в котором кода больше, чем строк реестра (выкатка раньше пересева), или
+ * карта, испорченная прямым сидом.
+ */
+async function overrideTaskImplements(owner: GraphId, bindings: unknown[]): Promise<void> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    await admin.execute(sql`
+      INSERT INTO aspect_definitions
+        (id, graph_id, key, label, description, properties, implements, ai_instructions,
+         tag_mappings, view_config, module, service, rank)
+      SELECT id, ${owner}::uuid, key, label, description, properties,
+             ${JSON.stringify(bindings)}::jsonb, ai_instructions, tag_mappings, view_config,
+             module, service, rank
+        FROM aspect_definitions WHERE id = 'orbis/task' AND graph_id IS NULL`);
+    await bumpOwnerRegistryVersion(admin, owner);
+  } finally {
+    await adminClient.end();
+  }
+}
+const TASK_BINDINGS = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/task')?.implements ?? [];
+
+describe('sweepStaleRuns и снимок реестра (задача 14а, фикс-раунд 1)', () => {
+  test('рутинные прогоны метутся и без привязки делегируемости: снимок нужен только тикетной половине', async () => {
+    // Гейт m1: до фикса снимок и адрес «чего ждём» считались на ЛЮБОМ непустом подметании, и код,
+    // выкаченный раньше пересева, останавливал планировщику подметание рутин броском.
+    const owner = await freshGraph();
+    const routineId = await seedRoutine(owner, { title: 'Рутина без делегируемости в снимке' });
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      startedAt: new Date(T0.getTime() - 41 * MINUTE),
+      lastStepAt: new Date(T0.getTime() - 31 * MINUTE),
+    });
+    await overrideTaskImplements(
+      owner,
+      TASK_BINDINGS.filter((b) => b.contract !== 'orbis/delegable'),
+    );
+
+    const { swept } = await sweepStaleRuns(db, {
+      identity: personal(owner),
+      actorKind: 'ai',
+      clock: () => T0,
+    });
+    expect(swept).toBe(1);
+    expect((await propsOf(owner, runId))['orbis/run_outcome']).toBe('failed');
+  });
+
+  test('неоднозначный класс в снимке — orbis_my_queue отвечает структурным VALIDATION, а не пятисотой', async () => {
+    // Fable M-1: у класса `queued` два варианта (карта испорчена мимо валидатора). Подметание
+    // зовётся первым делом в очереди, и возврат тикета в очередь обязан отказать КОДОМ — агент
+    // видит причину, а не безымянную ошибку сервера. Catch-all вокруг подметания нет намеренно.
+    const owner = await freshGraph();
+    const grantId = await workerGrant(owner, 'очередь на испорченном снимке');
+    const stale = await seedRun(owner, {
+      grantId,
+      ticketStatus: 'in_progress',
+      lastStepMinutesAgo: 31,
+      stepSummary: 'Начал и пропал',
+      external: false,
+    });
+    await overrideTaskImplements(
+      owner,
+      TASK_BINDINGS.map((b) =>
+        b.contract !== 'orbis/delegable'
+          ? b
+          : {
+              ...b,
+              value_map: [
+                ...b.value_map,
+                { slot: 'status', variant: 'cancelled', class: 'queued' },
+              ],
+            },
+      ),
+    );
+
+    const r = await dispatchTool(worker(owner, grantId), 'orbis_my_queue', {});
+    expect(r.status).toBe('error');
+    if (r.status !== 'error') return;
+    expect(r.error.code).toBe('VALIDATION');
+    expect(r.error.details).toMatchObject({
+      reason: 'CLASS_NOT_EXCLUSIVE',
+      contract: 'orbis/delegable',
+      class: 'queued',
+    });
+    // Отказ — ДО записи: тикет не тронут, прогон не подметён.
+    expect((await propsOf(owner, stale.ticketId))['orbis/task_status']).toBe('in_progress');
+    expect((await propsOf(owner, stale.runId))['orbis/run_outcome']).toBe('running');
   });
 });
