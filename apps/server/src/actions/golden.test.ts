@@ -44,15 +44,22 @@ import { confirmPurchase } from '../budget/plan-to-fact';
 import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionCard, ActionRecord } from '../executor/types';
+import { effectiveRegistry } from '../registry/cache';
+import { dispatchTool } from '../tools/dispatch';
+import { resolveAction } from './resolve';
 
 requireEnv();
 const { db, client } = appDb();
 const sink = makeChatJournalSink();
 
-/** Владельцы двух половин: `legacy` — сегодняшний код, `action` — декларация. */
+/**
+ * Владельцы половин: `legacy` — сегодняшний код, `action` — декларация конвейером (`resolveAction`
+ * + `execute`), `dispatch` — та же декларация вызовом `run_action` из чата.
+ */
 const OWNER = {
   legacy: mintGraph(uuidv5('actions-golden:legacy', ORBIS_NAMESPACE)),
   action: mintGraph(uuidv5('actions-golden:action', ORBIS_NAMESPACE)),
+  dispatch: mintGraph(uuidv5('actions-golden:dispatch', ORBIS_NAMESPACE)),
 } as const;
 /** id мира — от владельца и слага: воспроизводим без обращения к БД (`surfaces.ts:76`). */
 const worldId = (owner: GraphId, slug: string): string =>
@@ -206,21 +213,107 @@ async function seedWorld(owner: GraphId): Promise<void> {
   }
 }
 
+type Journal = { action: ActionRecord; card: ActionCard };
+type Half = keyof typeof OWNER;
+
 /**
- * Снимки, собранные `beforeAll` ПОСЛЕ сева и прогона: тела тестов читают собранное, походов в БД
- * в телах нет (образец `test/gate-c8-18.test.ts`). Заполняются ровно одним `beforeAll` файла.
+ * Снимки, собранные `beforeAll` ПОСЛЕ сева и прогона всех половин: тела тестов читают собранное,
+ * походов в БД в телах нет (образец `test/gate-c8-18.test.ts`). Заполняются ровно одним
+ * `beforeAll` файла.
  */
-const BEFORE = { legacy: [] as GoldenState[] };
-const AFTER = { legacy: [] as GoldenState[] };
-const JOURNAL = { legacy: undefined as { action: ActionRecord; card: ActionCard } | undefined };
+const BEFORE: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [] };
+const AFTER: Record<Half, GoldenState[]> = { legacy: [], action: [], dispatch: [] };
+const JOURNALS = new Map<Half, Journal>();
+const journal = (half: Half): Journal => {
+  const found = JOURNALS.get(half);
+  if (found === undefined) throw new Error(`строка журнала половины ${half} не собрана`);
+  return found;
+};
 
 /** Снимаемые строки случая `plan-to-fact`: покупка и оба конверта (переселект виден по рёбрам). */
 const PURCHASE_WORLD = ['envelope-july', 'envelope-aug', 'purchase'] as const;
 const OCCURRED_ON = '2026-08-10';
+/** Полдень по Москве (зона владельца по умолчанию): «сегодня» вызова из чата — ровно OCCURRED_ON. */
+const NOW = new Date(`${OCCURRED_ON}T09:00:00.000Z`);
+
+/**
+ * Законные расхождения строки журнала (§Б6-4 ревизии 4). Список ЗАКРЫТ: расширять его можно
+ * только доказанным фактом спеки, а не наблюдением «тест покраснел». Состояние графа расхождений
+ * не имеет ВОВСЕ — в этом и весь смысл приёмки.
+ */
+const EXPECTED_DIFFS: Record<string, string> = {
+  'action.type': '§Б6-4: строка действия — `action`, а не `batch`',
+  'action.action_id': '§Б6-4: новый условный ключ — какое действие исполнено',
+  'action.module': '§Б6-4: автор-приложение (концепция страниц §7)',
+  'card.title': '§Б6-4: «Действие «…»» вместо «batch: операций — N»',
+};
+/**
+ * Значения четырёх расхождений — пин литералом. `applyDiff` отвечает только «разошлось ли», а
+ * расхождение «не в ту сторону» (`module: 'planner'`, чужая подпись) тоже разошлось бы.
+ */
+const DIFF_VALUES = {
+  'action.type': 'action',
+  'action.action_id': 'finance/plan-to-fact',
+  'action.module': 'finance',
+  'card.title': 'Действие «План → факт»',
+} as const;
+
+/**
+ * Переносит ЭТО и только это поле из нового снимка в эталонный; `true` — если значение
+ * действительно разошлось (расхождение, которого нет, — тоже дефект: список перестал что-то
+ * значить). Отсутствие ключа — такое же значение, как любое другое: у голой пачки `action_id`
+ * нет вовсе, и появление ключа и есть расхождение.
+ */
+function applyDiff(
+  golden: Record<string, unknown>,
+  path: string,
+  mine: Record<string, unknown>,
+): boolean {
+  const keys = path.split('.');
+  const last = keys.pop();
+  if (last === undefined) throw new Error(`пустой путь расхождения: ${path}`);
+  let g = golden;
+  let m = mine;
+  for (const k of keys) {
+    g = g[k] as Record<string, unknown>;
+    m = m[k] as Record<string, unknown>;
+  }
+  const differs =
+    Object.hasOwn(g, last) !== Object.hasOwn(m, last) ||
+    canonicalJson(g[last] ?? null) !== canonicalJson(m[last] ?? null);
+  if (Object.hasOwn(m, last)) g[last] = m[last];
+  else delete g[last];
+  return differs;
+}
+
+/** Значение по пути `a.b` — для пина `DIFF_VALUES`. */
+function at(value: Record<string, unknown>, path: string): unknown {
+  return path
+    .split('.')
+    .reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], value);
+}
+
+/**
+ * ЖУРНАЛ ДЕКЛАРАЦИИ ПРОТИВ ЭТАЛОНА КОДА: каждое из четырёх расхождений обязано быть (и иметь
+ * своё значение), после их переноса строки равны побайтно. Пятое расхождение (`operations`,
+ * `inverse`, `mechanism`, `entity_id`, `source`) валит последний `expect` и разбирается, а не
+ * дописывается в список.
+ */
+function expectJournalWithinDiffs(mineRaw: Journal, names: ReadonlyMap<string, string>): void {
+  const mine = stabilize(mineRaw, names) as Record<string, unknown>;
+  const golden = structuredClone(caseOf('plan-to-fact/legacy').journal) as Record<string, unknown>;
+  for (const [path, why] of Object.entries(EXPECTED_DIFFS)) {
+    expect([path, why, applyDiff(golden, path, mine)]).toEqual([path, why, true]);
+  }
+  for (const [path, value] of Object.entries(DIFF_VALUES)) {
+    expect([path, at(mine, path)]).toEqual([path, value]);
+  }
+  expect(canonicalJson(mine)).toBe(canonicalJson(golden));
+}
 
 beforeAll(async () => {
   await truncateAll();
-  for (const owner of [OWNER.legacy, OWNER.action]) await seedWorld(owner);
+  for (const owner of Object.values(OWNER)) await seedWorld(owner);
 
   // Половина `legacy`: `confirmPurchase` — тот путь, которым ручка `budget.confirmPurchase`
   // переводит покупку сегодня.
@@ -232,7 +325,64 @@ beforeAll(async () => {
   });
   if (legacy.idempotentReplay) throw new Error('половина legacy: неожиданный replay');
   AFTER.legacy = await snapshotWorld(OWNER.legacy, PURCHASE_WORLD);
-  JOURNAL.legacy = await journalOf(OWNER.legacy, batchOf(OWNER.legacy, 'purchase'));
+  JOURNALS.set('legacy', await journalOf(OWNER.legacy, batchOf(OWNER.legacy, 'purchase')));
+
+  // Половина `action`: тот же вызов конвейером действий — резолв декларации и один `execute`
+  // с атрибуцией ручки (`source:'ui'`, владелец).
+  BEFORE.action = await snapshotWorld(OWNER.action, PURCHASE_WORLD);
+  const resolved = await withIdentity(db, personal(OWNER.action), async (tx) =>
+    resolveAction(
+      tx,
+      await effectiveRegistry(tx, OWNER.action),
+      OWNER.action,
+      {
+        action: 'finance/plan-to-fact',
+        self: worldId(OWNER.action, 'purchase'),
+        params: { occurred_on: OCCURRED_ON },
+        batch_id: batchOf(OWNER.action, 'purchase'),
+      },
+      { today: OCCURRED_ON, timeZone: 'Europe/Moscow' },
+    ),
+  );
+  const r = await execute(
+    db,
+    {
+      identity: personal(OWNER.action),
+      actorKind: 'owner',
+      source: 'ui',
+      batchId: batchOf(OWNER.action, 'purchase'),
+      operations: resolved.operations,
+      action: { id: resolved.decl.id, module: resolved.decl.module },
+      actionLabel: resolved.decl.label.ru,
+    },
+    { sink },
+  );
+  if (!r.ok) throw new Error(`половина action: ${r.error.code} — ${r.error.message}`);
+  AFTER.action = await snapshotWorld(OWNER.action, PURCHASE_WORLD);
+  JOURNALS.set('action', await journalOf(OWNER.action, batchOf(OWNER.action, 'purchase')));
+
+  // Половина `dispatch`: `run_action` из чата от владельца — поверхность модели.
+  BEFORE.dispatch = await snapshotWorld(OWNER.dispatch, PURCHASE_WORLD);
+  const out = await dispatchTool(
+    {
+      db,
+      identity: personal(OWNER.dispatch),
+      actorKind: 'owner',
+      source: 'chat',
+      explicitCommand: false,
+      clock: () => NOW,
+    },
+    'run_action',
+    {
+      action: 'finance/plan-to-fact',
+      self: worldId(OWNER.dispatch, 'purchase'),
+      params: { occurred_on: OCCURRED_ON },
+      batch_id: batchOf(OWNER.dispatch, 'purchase'),
+    },
+  );
+  if (out.status !== 'ok') throw new Error(`половина dispatch: ${JSON.stringify(out)}`);
+  AFTER.dispatch = await snapshotWorld(OWNER.dispatch, PURCHASE_WORLD);
+  JOURNALS.set('dispatch', await journalOf(OWNER.dispatch, batchOf(OWNER.dispatch, 'purchase')));
 });
 
 afterAll(async () => {
@@ -245,6 +395,35 @@ describe('§С8-27 plan-to-fact: код и декларация дают оди�
     const names = namesOf(OWNER.legacy);
     expect(canonicalJson(stabilize(BEFORE.legacy, names))).toBe(canonicalJson(g.before));
     expect(canonicalJson(stabilize(AFTER.legacy, names))).toBe(canonicalJson(g.after));
-    expect(canonicalJson(stabilize(JOURNAL.legacy, names))).toBe(canonicalJson(g.journal));
+    expect(canonicalJson(stabilize(journal('legacy'), names))).toBe(canonicalJson(g.journal));
+  });
+
+  test('run_action на той же фикстуре: состояние байт-в-байт, журнал — с точностью до четырёх расхождений §Б6-4', () => {
+    const g = caseOf('plan-to-fact/legacy');
+    const names = namesOf(OWNER.action);
+    // СОСТОЯНИЕ — БЕЗ ВСЯКИХ ПОБЛАЖЕК: и props, и переселект конверта бюджет-хуком A4 (`incoming`)
+    expect(canonicalJson(stabilize(BEFORE.action, names))).toBe(canonicalJson(g.before));
+    expect(canonicalJson(stabilize(AFTER.action, names))).toBe(canonicalJson(g.after));
+    // ЖУРНАЛ — с закрытым списком: §Б6-4 ревизии 4 меняет строку НАМЕРЕННО и ровно в четырёх местах
+    expectJournalWithinDiffs(journal('action'), names);
+  });
+
+  test('вызов через dispatchTool: состояние то же; атрибуция журнала — вызывающего, а не декларации', () => {
+    // Состояние графа от поверхности вызова не зависит; зависит только атрибуция §7.8, и она
+    // обязана отличаться — иначе журнал врал бы, кто это сделал.
+    const names = namesOf(OWNER.dispatch);
+    expect(canonicalJson(stabilize(BEFORE.dispatch, names))).toBe(
+      canonicalJson(caseOf('plan-to-fact/legacy').before),
+    );
+    expect(canonicalJson(stabilize(AFTER.dispatch, names))).toBe(
+      canonicalJson(caseOf('plan-to-fact/legacy').after),
+    );
+    // Атрибуция — ЕДИНСТВЕННОЕ, что отличает путь диспатча от ручки: `source` ставит вызывающий
+    expect(journal('dispatch').action.source).toBe('chat');
+    expect(journal('dispatch').action.type).toBe('action');
+    // Операции сравниваются стабилизированными: у половин разные владельцы, значит и разные id.
+    expect(stabilize(journal('dispatch').action.operations, names)).toEqual(
+      stabilize(journal('action').action.operations, namesOf(OWNER.action)),
+    );
   });
 });
