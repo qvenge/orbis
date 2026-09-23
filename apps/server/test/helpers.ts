@@ -249,6 +249,46 @@ export async function bumpRegistryVersion(graphId: GraphId): Promise<number> {
   }
 }
 
+/**
+ * Админская подмена СИСТЕМНОЙ строки правил аспекта на время `fn` (Р-К-80): тулы записи правил
+ * приезжают задачей 16, а проверить «невыразимый параметр строки — отказ движка» надо раньше. Версия
+ * системного реестра двигается вручную и при подмене, и при возврате — иначе снимок в кеше процесса
+ * остался бы прежним (§А10-1), и тест проверял бы не ту строку, которую положил.
+ *
+ * ОДИН дом хелпера: задача 14 импортирует его отсюда же. Строка возвращается КАК БЫЛА (снимок `rules`
+ * до подмены), а не пересевом: пересев из теста — второй механизм, которого в бою нет. Системной
+ * строки нет — отказ словами: UPDATE по несуществующему id не тронул бы ничего, и тест зеленел бы
+ * «ни о чём».
+ */
+export async function withRule<T>(
+  aspectId: string,
+  rules: unknown[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const { db: admin, client } = adminDb();
+  try {
+    const prev = (await admin.execute(
+      sql`SELECT rules FROM aspect_definitions WHERE id = ${aspectId} AND graph_id IS NULL`,
+    )) as unknown as Array<{ rules: unknown }>;
+    if (prev.length !== 1) {
+      throw new Error(`системной строки ${aspectId} нет — сид не прошёл (bun run db:prepare)`);
+    }
+    const set = async (value: unknown) => {
+      await admin.execute(sql`UPDATE aspect_definitions SET rules = ${JSON.stringify(value)}::jsonb
+                               WHERE id = ${aspectId} AND graph_id IS NULL`);
+      await admin.execute(sql`UPDATE registry_system SET version = version + 1 WHERE id = 1`);
+    };
+    try {
+      await set(rules);
+      return await fn();
+    } finally {
+      await set(prev[0]?.rules ?? []);
+    }
+  } finally {
+    await client.end();
+  }
+}
+
 /** Одно свойство кастомного аспекта: локальное имя поля + тип из словаря §А2-2. */
 export interface CustomAspectProperty {
   /**

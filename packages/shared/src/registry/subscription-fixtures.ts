@@ -264,5 +264,4 @@ export const BUDGET_DEF: BudgetSubscription = {
       { core: 'id' },
     ],
   },
-  rollover: { source: 'exact_calendar_month', carry: { agg: 'remaining' } },
 };

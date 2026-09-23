@@ -15,6 +15,8 @@ import {
   newId,
   ROLE_ENVELOPE_BINDING,
   ROLE_INSTANCE_OF,
+  RULE_ENVELOPE_UNIQUE,
+  RULE_ROLLOVER,
 } from '@orbis/shared';
 import type { ExprNode } from '@orbis/shared/expr';
 import { eq, type SQL, sql } from 'drizzle-orm';
@@ -27,6 +29,7 @@ import {
   personal,
   requireEnv,
   truncateAll,
+  withRule,
 } from '../../test/helpers';
 import { budgetOverview, rolloverCreate } from '../budget/aggregates';
 import { entities } from '../db/schema';
@@ -953,7 +956,7 @@ describe('семена карточки после rollup (Minor-1 гейта)',
   });
 });
 
-describe('rollover: параметры перехода — из декларации (Р12)', () => {
+describe('rollover: параметры перехода — из строки каталога (Р-13)', () => {
   test('exact_calendar_month даёт границы месяца; чужой carry — структурный отказ', async () => {
     const user = await freshGraph();
     await seedOwnerGraph(db, personal(user));
@@ -973,28 +976,26 @@ describe('rollover: параметры перехода — из деклара�
     expect(props['orbis/period_start']).toBe(`${nextMonth}-01`); // exact_calendar_month
     expect(props['orbis/period_end']).toBe(lastDayOf(nextMonth));
 
-    // Дельта владельца называет НЕВЫРАЗИМЫЙ параметр переноса. Правило обязано отказать, а не
-    // перенести «как раньше»: тихая деградация здесь стоит владельцу денег на счёте.
-    const def = await engineOn(user, async ({ def: d }) => d);
-    await withIdentity(db, personal(user), (tx) =>
-      setSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID, {
-        definition: { ...def, rollover: { ...def.rollover, carry: { agg: 'spent' } } },
-      }),
+    // Строка каталога называет ВЫРАЗИМУЮ валидатором, но НЕИСПОЛНИМУЮ движком величину (`spent`
+    // публикуется аспектом, значит `assertRule` её примет) — движок обязан отказать, а не перенести
+    // «как раньше»: тихая деградация здесь стоит владельцу денег на счёте.
+    await withRule(
+      'orbis/budget',
+      [
+        RULE_ENVELOPE_UNIQUE,
+        { ...RULE_ROLLOVER, params: { source: 'exact_calendar_month', carry: { agg: 'spent' } } },
+      ],
+      async () => {
+        const e = (await rolloverCreate(db, personal(user), {
+          month: shiftMonth(nextMonth, 1),
+          batchId: newId(),
+          rows: [{ categoryId: cat, limit: '1000.00', carryover: '0.00' }],
+        }).catch((x) => x)) as ExecError;
+        expect([e.code, (e.details as { reason?: string }).reason]).toEqual([
+          'VALIDATION',
+          'ROLLOVER_CARRY_UNSUPPORTED',
+        ]);
+      },
     );
-    try {
-      const err = (await rolloverCreate(db, personal(user), {
-        month: shiftMonth(nextMonth, 1),
-        batchId: newId(),
-        rows: [{ categoryId: cat, limit: '1000.00', carryover: '0.00' }],
-      }).catch((e) => e)) as ExecError;
-      expect([err.code, (err.details as { reason?: string }).reason]).toEqual([
-        'VALIDATION',
-        'ROLLOVER_CARRY_UNSUPPORTED',
-      ]);
-    } finally {
-      await withIdentity(db, personal(user), (tx) =>
-        removeSubscriptionDelta(tx, user, BUDGET_SUBSCRIPTION_ID),
-      );
-    }
   });
 });

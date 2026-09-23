@@ -499,7 +499,6 @@ describe('однозначность порога и границы словар
         d.aggregates.left = d.aggregates.remaining as never;
         delete d.aggregates.remaining;
         delete d.aggregates.daily_pace;
-        d.rollover.carry.agg = 'left';
       },
       'SUBSCRIPTION_WIRE_AGG_MISSING',
     ],

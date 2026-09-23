@@ -520,7 +520,6 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
   for (const p of def.alerts.skip_phases) {
     known(p, phaseKeys, 'SUBSCRIPTION_UNKNOWN_PHASE', 'alerts.skip_phases');
   }
-  known(def.rollover.carry.agg, aggNames, 'SUBSCRIPTION_UNKNOWN_AGG', 'rollover.carry.agg');
   for (const [n, agg] of Object.entries(def.aggregates)) {
     if (agg.kind !== 'sum') continue;
     known(agg.of.slot, mSlots, 'SUBSCRIPTION_UNKNOWN_SLOT', `aggregates.${n}.of.slot`);

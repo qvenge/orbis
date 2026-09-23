@@ -152,13 +152,9 @@ export const budgetSubscriptionSchema = z
         ),
       })
       .strict(),
-    // Р12: перенос читается кодом `rolloverCreate` как параметры, а не исполняется движком.
-    rollover: z
-      .object({
-        source: z.literal('exact_calendar_month'),
-        carry: z.object({ agg: z.string() }).strict(),
-      })
-      .strict(),
+    // Параметров перехода периода (§3.5) здесь НЕТ с Б-2 (Р-К-9): они — строка каталога `rollover` на
+    // аспекте `orbis/budget` (`builtin-rules.ts`, `RULE_ROLLOVER`). Два дома у одной вещи разошлись бы:
+    // подписка — про ведомости, а переход — правило, которое их читает.
   })
   .strict();
 

@@ -52,6 +52,8 @@ import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { materializeInstances } from '../recurring/materialize';
 import { postDueInstances } from '../recurring/post-due';
 import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
+import { rolloverRuleOf } from '../rules/carriers';
 import {
   BUDGET_SUBSCRIPTION_ID,
   budgetAlertCountOf,
@@ -308,6 +310,37 @@ function notRecurringTemplateSql(aspectsCol: SQL | AnyColumn, propsCol: SQL | An
 }
 
 /**
+ * ПАРАМЕТРЫ ПЕРЕХОДА ПЕРИОДА (§3.5) — строка каталога `rollover` на `orbis/budget` (Р-13, Р-К-9):
+ * правило остаётся КОДОМ (§Б4-3 — это не агрегат), а реестр несёт его параметры. Дом у них один —
+ * строка каталога (`rolloverRuleOf`); из схемы подписки Budget поле снято, двух домов у одной вещи
+ * не бывает.
+ *
+ * Молчаливая деградация по-прежнему запрещена: невыразимый параметр — отказ, а не «как раньше»,
+ * потому что здесь она стоит владельцу денег на счёте. Валидатор правил (`RULE_ROLLOVER_AGG_UNPUBLISHED`)
+ * пропустит любую ОПУБЛИКОВАННУЮ величину (`spent` тоже), а движок умеет переносить только остаток —
+ * этот зазор и закрывает отказ ниже. Строки нет или она выключена — `Error` сборки у читателя (Р-И-17).
+ * Один на оба пути (`rolloverPreview`, `rolloverCreate`): разойдись проверки, превью обещало бы перенос,
+ * который создание отвергнет.
+ */
+function assertRolloverExecutable(reg: RegistrySnapshot): void {
+  const roll = rolloverRuleOf(reg).params;
+  if (roll.source !== 'exact_calendar_month') {
+    throw new ExecError(
+      'VALIDATION',
+      `правило переноса умеет только календарный месяц, а декларация просит «${roll.source}» (§3.5)`,
+      { reason: 'ROLLOVER_SOURCE_UNSUPPORTED', source: roll.source },
+    );
+  }
+  if (roll.carry.agg !== 'remaining') {
+    throw new ExecError(
+      'VALIDATION',
+      `правило переноса переносит остаток, а декларация просит ведомость «${roll.carry.agg}» (§3.5)`,
+      { reason: 'ROLLOVER_CARRY_UNSUPPORTED', agg: roll.carry.agg },
+    );
+  }
+}
+
+/**
  * Превью rollover для целевого месяца month (§3.5): что переносить из прошлого
  * календарного месяца.
  *
@@ -350,28 +383,12 @@ export async function rolloverPreview(
     const prevRange = monthRange(prev);
     const targetRange = monthRange(month);
 
-    // ПАРАМЕТРЫ ПЕРЕХОДА — ИЗ ДЕКЛАРАЦИИ, тем же путём, что у `rolloverCreate` (Р-32, Р12). Снимок
-    // читается ТУТ ЖЕ, а не приходит параметром: второй источник разошёлся бы с тем реестром, по
-    // которому исполнитель проверит запись. Молчаливая деградация запрещена — невыразимый параметр
-    // это отказ, а не «как раньше»: здесь она стоит владельцу денег на счёте.
-    // ЗАДАЧА 13 переключит обоих читателей на `rolloverRuleOf(reg)` строки-носителя (Р-13, Р-К-9).
+    // ПАРАМЕТРЫ ПЕРЕХОДА — СТРОКА каталога, тем же путём, что у `rolloverCreate` (`assertRolloverExecutable`).
+    // Снимок читается ТУТ ЖЕ, а не приходит параметром: второй источник разошёлся бы с тем реестром,
+    // по которому исполнитель проверит запись.
     const reg = await effectiveRegistry(tx, graphId);
+    assertRolloverExecutable(reg);
     const def = builtinSubscription(reg, BUDGET_SUBSCRIPTION_ID) as BudgetSubscription;
-    const roll = def.rollover;
-    if (roll.source !== 'exact_calendar_month') {
-      throw new ExecError(
-        'VALIDATION',
-        `правило переноса умеет только календарный месяц, а декларация просит «${roll.source}» (§3.5)`,
-        { reason: 'ROLLOVER_SOURCE_UNSUPPORTED', source: roll.source },
-      );
-    }
-    if (roll.carry.agg !== 'remaining') {
-      throw new ExecError(
-        'VALIDATION',
-        `правило переноса переносит остаток, а декларация просит ведомость «${roll.carry.agg}» (§3.5)`,
-        { reason: 'ROLLOVER_CARRY_UNSUPPORTED', agg: roll.carry.agg },
-      );
-    }
 
     // Ведомости ПРОШЛОГО месяца движком, БЕЗ агрегации дерева (решение 3).
     const ledgers = await monthLedgersOf(tx, graphId, { month: prev, today }, def, reg);
@@ -563,31 +580,10 @@ export async function rolloverCreate(
   const { defCur, catMap } = await withIdentity(db, who, async (tx) => {
     const replay = (await rolloverSink.findByAuditId(tx, auditId)) !== undefined;
     const currency = await defaultCurrencyOf(tx, who.graph);
-    // Р12: правило перехода остаётся КОДОМ (§Б4-3 — это не агрегат), а декларация несёт его
-    // ПАРАМЕТРЫ. Снимок читается ТУТ ЖЕ, а не приходит параметром: фаза чтения уже держит tx, и
-    // второй источник декларации разошёлся бы с тем реестром, по которому исполнитель проверит
-    // запись. Молчаливая деградация запрещена: невыразимый параметр — отказ, а не «как раньше»,
-    // потому что здесь она стоит владельцу денег на счёте.
-    const roll = (
-      builtinSubscription(
-        await effectiveRegistry(tx, who.graph),
-        BUDGET_SUBSCRIPTION_ID,
-      ) as BudgetSubscription
-    ).rollover;
-    if (roll.source !== 'exact_calendar_month') {
-      throw new ExecError(
-        'VALIDATION',
-        `правило переноса умеет только календарный месяц, а декларация просит «${roll.source}» (§3.5)`,
-        { reason: 'ROLLOVER_SOURCE_UNSUPPORTED', source: roll.source },
-      );
-    }
-    if (roll.carry.agg !== 'remaining') {
-      throw new ExecError(
-        'VALIDATION',
-        `правило переноса переносит остаток, а декларация просит ведомость «${roll.carry.agg}» (§3.5)`,
-        { reason: 'ROLLOVER_CARRY_UNSUPPORTED', agg: roll.carry.agg },
-      );
-    }
+    // Р-13: параметры перехода — СТРОКА каталога на аспекте `orbis/budget`, а не поле подписки.
+    // Снимок читается тут же, в фазе чтения той же tx: второй источник декларации разошёлся бы с тем
+    // реестром, по которому исполнитель проверит запись.
+    assertRolloverExecutable(await effectiveRegistry(tx, who.graph));
     if (!replay) {
       const list = sql.join(
         categoryIds.map((id) => sql`${id}`),

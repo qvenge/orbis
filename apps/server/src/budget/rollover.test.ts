@@ -7,20 +7,23 @@
 // needsSetup — «первый месяц без истории» (§3.5); мутация rollover — идемпотентна по
 // batchId, атомарна (INVARIANT всего batch), Undo сносит все конверты одним action.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { BudgetSubscription, GraphId } from '@orbis/shared';
-import { newId, ROLE_CATEGORY_PARENT } from '@orbis/shared';
+import type { GraphId } from '@orbis/shared';
+import { newId, ROLE_CATEGORY_PARENT, RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
-import { withIdentity } from '../db/with-identity';
+import {
+  adminDb,
+  appDb,
+  freshGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+  withRule,
+} from '../../test/helpers';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
-import { effectiveRegistry } from '../registry/cache';
-import { removeSubscriptionDelta, setSubscriptionDelta } from '../registry/ops';
 import { appRouter } from '../router';
-import { BUDGET_SUBSCRIPTION_ID } from '../subscriptions/budget';
-import { builtinSubscription } from '../subscriptions/registry';
 import { createCallerFactory } from '../trpc';
 import { rolloverPreview } from './aggregates';
 
@@ -232,37 +235,24 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
     return { owner, month: target, parentCat, childCat };
   }
 
-  test('ПЕРЕЕЗД: превью на движке даёт то же, что на сырых помощниках, и читает carry.agg декларации', async () => {
+  test('ПЕРЕЕЗД: превью на движке даёт то же, что на сырых помощниках, и читает carry.agg строки каталога', async () => {
     const { owner, month } = await worldWithPrevEnvelopes(); // фикстура describe'а превью
     const before = await rolloverPreview(db, personal(owner), month);
     // Мутационная проверка (§С8-15 того же жанра, что `warn_at 0.99` у движка): ответ обязан ЗАВИСЕТЬ
-    // от декларации — подвинь `carry.agg` на неопубликованную величину, и превью откажет, а не смолчит.
-    const def = await withIdentity(
-      db,
-      personal(owner),
-      async (tx) =>
-        builtinSubscription(
-          await effectiveRegistry(tx, owner),
-          BUDGET_SUBSCRIPTION_ID,
-        ) as BudgetSubscription,
+    // от строки каталога (Р-13) — подвинь `carry.agg` на величину, которую движок не переносит, и
+    // превью откажет, а не смолчит.
+    await withRule(
+      'orbis/budget',
+      [
+        RULE_ENVELOPE_UNIQUE,
+        { ...RULE_ROLLOVER, params: { source: 'exact_calendar_month', carry: { agg: 'spent' } } },
+      ],
+      async () => {
+        await expect(rolloverPreview(db, personal(owner), month)).rejects.toMatchObject({
+          details: { reason: 'ROLLOVER_CARRY_UNSUPPORTED' },
+        });
+      },
     );
-    try {
-      await withIdentity(db, personal(owner), (tx) =>
-        setSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID, {
-          definition: {
-            ...def,
-            rollover: { source: 'exact_calendar_month', carry: { agg: 'spent' } },
-          },
-        }),
-      );
-      await expect(rolloverPreview(db, personal(owner), month)).rejects.toMatchObject({
-        details: { reason: 'ROLLOVER_CARRY_UNSUPPORTED' },
-      });
-    } finally {
-      await withIdentity(db, personal(owner), (tx) =>
-        removeSubscriptionDelta(tx, owner, BUDGET_SUBSCRIPTION_ID),
-      );
-    }
     expect(await rolloverPreview(db, personal(owner), month)).toEqual(before);
   });
 
