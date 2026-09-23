@@ -4844,30 +4844,79 @@ describe('undo_last через классификатор §7.10 (В-8, Р-31)',
     expect(await mergedIntoOf(owner)).toBe('user/a');
   });
 
-  test('гонка «Принять» ∥ «Отклонить» карточки отката: ровно один выигрывает, никогда оба (I-3, замок единицы)', async () => {
-    // Без замка единицы в транзакции undo-сообщения обе стороны проходили бы свои проверки до
-    // чужого коммита: откат исполнен И «отклонено» записано разом.
-    const iterations = 12;
-    let bothOk = 0;
-    for (let i = 0; i < iterations; i += 1) {
+  test(
+    'гонка «Принять» ∥ «Отклонить» карточки отката: ровно один выигрывает, никогда оба (I-3, замок единицы)',
+    async () => {
+      // Без замка единицы в транзакции undo-сообщения обе стороны проходили бы свои проверки до
+      // чужого коммита: откат исполнен И «отклонено» записано разом.
+      //
+      // ОДИН мир на все итерации (фикс-раунд 2): аспект с парой свойств на итерацию сеется одним
+      // вызовом, и каждая итерация сливает СВОЮ пару — `undo_last` берёт последнее неотменённое,
+      // то есть слияние этой итерации. Прежде каждая итерация заводила граф и аспект заново
+      // (админское соединение на итерацию), и 12 итераций не укладывались в 5 с на машине CI.
+      const iterations = 12;
       const owner = await freshGraph();
-      await mergedWorld(owner);
-      const undone = await dispatchTool(ctxFor({ identity: personal(owner) }), 'undo_last', {});
-      if (undone.status !== 'pending_confirmation')
-        throw new Error(`не карточка: ${undone.status}`);
-      const [a, r] = await Promise.all([
-        approvePending(db, { identity: personal(owner), pendingId: undone.pendingId }),
-        rejectPending(db, { identity: personal(owner), pendingId: undone.pendingId }),
-      ]);
-      if (a.ok && r.ok) {
-        bothOk += 1;
-        continue;
+      await seedCustomAspect(owner, {
+        key: 'user/undo-race',
+        label: { ru: 'Гонка отката', en: 'Undo race' },
+        aiInstructions: 'x',
+        properties: Array.from({ length: iterations }, (_, i) => [
+          { key: `s${i}`, type: { kind: 'text' as const } },
+          { key: `t${i}`, type: { kind: 'text' as const } },
+        ]).flat(),
+      });
+      const chat = ctxFor({ identity: personal(owner) });
+      const mergedIntoOfPair = async (i: number) =>
+        (
+          await withIdentity(db, personal(owner), (tx) =>
+            tx
+              .select({ m: propertyDefinitions.mergedInto })
+              .from(propertyDefinitions)
+              .where(eq(propertyDefinitions.id, `user/s${i}`)),
+          )
+        )[0]?.m;
+      let bothOk = 0;
+      for (let i = 0; i < iterations; i += 1) {
+        const asked = await dispatchTool(chat, 'property_merge', {
+          source: `user/s${i}`,
+          into: `user/t${i}`,
+        });
+        if (asked.status !== 'pending_confirmation') throw new Error('слияние не спросило');
+        const merged = await approvePending(db, {
+          identity: personal(owner),
+          pendingId: asked.pendingId,
+        });
+        if (!merged.ok) throw new Error(merged.error.message);
+        const undone = await dispatchTool(chat, 'undo_last', {});
+        if (undone.status !== 'pending_confirmation')
+          throw new Error(`не карточка: ${undone.status}`);
+        // Старт «Отклонить» сдвигается на 0–3 мс по итерациям. Семантика пина та же — оба вызова
+        // идут параллельно, и под замком согласован ЛЮБОЙ порядок, — а сдвиг раскладывает
+        // итерации по разным точкам длинного конвейера «Принять» (tx проверок → чтение журнала →
+        // tx undo-сообщения): без замка срыв ловится в той итерации, где «Отклонить» коммитится
+        // между проверкой «не отклонена» и undo-сообщением, и на машине с другими таймингами
+        // хотя бы один сдвиг туда попадает.
+        const lag = i % 4;
+        const [a, r] = await Promise.all([
+          approvePending(db, { identity: personal(owner), pendingId: undone.pendingId }),
+          (async () => {
+            if (lag > 0) await Bun.sleep(lag);
+            return rejectPending(db, { identity: personal(owner), pendingId: undone.pendingId });
+          })(),
+        ]);
+        if (a.ok && r.ok) {
+          bothOk += 1;
+          continue;
+        }
+        // Исход согласован с фактом: откат применён ⇔ «Принять» выиграло
+        expect(await mergedIntoOfPair(i)).toBe(a.ok ? null : `user/t${i}`);
       }
-      // Исход согласован с фактом: откат применён ⇔ «Принять» выиграло
-      expect(await mergedIntoOf(owner)).toBe(a.ok ? null : 'user/a');
-    }
-    expect(bothOk).toBe(0);
-  });
+      expect(bothOk).toBe(0);
+    },
+    // Явный таймаут: 12 итераций по три-четыре вызова конвейера — это секунды, а не миллисекунды,
+    // и умолчание bun (5 с) на машине CI не хватало (CI 35828437013).
+    { timeout: 60_000 },
+  );
 
   test('откат подтверждённой архивации act-рутины → карточка, рутина НЕ оживает молча (I-1, проба A)', async () => {
     const owner = await freshGraph();
