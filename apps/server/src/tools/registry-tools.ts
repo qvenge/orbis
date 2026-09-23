@@ -231,8 +231,8 @@ const aspectDeltaJsonSchema = {
   description:
     'настройка поверх системного определения: label, description, icon, ' +
     'properties.add/hide/relaxRequired/rank, selectOptions.<свойство>.add, ' +
-    'classMap.<свойство> — отнесение КАЖДОГО добавленного варианта к классу контракта ' +
-    '(без него вариант отвергается)',
+    'classMap.<свойство> — отнесение добавленного варианта к классу контракта ' +
+    '(без него вариант отвергается — кроме контракта с исключительными классами)',
   properties: {
     label: localizedJsonSchema,
     description: localizedJsonSchema,
@@ -294,7 +294,10 @@ const aspectDeltaJsonSchema = {
         '{"orbis/task_status":[{"contract":"orbis/completable","slot":"status",' +
         '"variant":"in_review","class":"active"}]}. ОБЯЗАТЕЛЕН для каждого варианта из ' +
         'selectOptions.add у свойства, связанного со слотом-статусом контракта (§Б2-2) — иначе отказ ' +
-        'VARIANT_UNMAPPED; у свойства вне привязок (orbis/priority) не нужен',
+        'VARIANT_UNMAPPED. Исключение — контракт с исключительными классами (orbis/delegable): там ' +
+        'отнесение не обязательно, но занять можно только СВОБОДНЫЙ класс (иначе CLASS_NOT_EXCLUSIVE), ' +
+        'а вариант без отнесения остаётся вне его состояний. У свойства вне привязок (orbis/priority) ' +
+        'не нужен',
       additionalProperties: {
         type: 'array',
         items: {
@@ -926,7 +929,8 @@ export const REGISTRY_TOOLS: OrbisToolDef[] = [
     description:
       'Настроить встроенный аспект под владельца: переименовать, сменить иконку, добавить или ' +
       'скрыть свойство, переставить порядок, добавить вариант select. Само системное ' +
-      'определение не меняется — настройка живёт поверх него и переживает обновления.',
+      'определение не меняется — настройка живёт поверх него и переживает обновления. Правила ' +
+      'аспекта правят rule_set/rule_remove — эта настройка их сохраняет.',
     inputJsonSchema: aspectDeltaSetJsonSchema,
     kind: 'mutate',
     fullScopeOnly: true,

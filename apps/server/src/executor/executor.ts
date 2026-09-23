@@ -3669,7 +3669,20 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const before = await readAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
-      await setAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect, input.delta);
+      // ПОЛЯ ПРАВИЛ ЭТОТ ТУЛ НЕ СТИРАЕТ МОЛЧА (задача 16). Дельта аспекта — полная замена, а правила
+      // владельца поверх встроенного аспекта кладёт в ту же строку `rule_set`/`rule_remove` (В-6): правка
+      // иконки, не назвавшая `rules`/`rulesDisabled`, иначе снимала бы свои правила и включала обратно
+      // отключённые системные — без единого слова в вызове. Поле, НАЗВАННОЕ во входе (в том числе
+      // пустым), — замена: так пишет единица разрешения конфликта правил (`merge-conflict.ts`).
+      // Перенос — здесь, а не в `setAspectDelta`: тот же писатель зовётся из `writeRuleDelta`, где
+      // отсутствие поля и есть «правил не осталось».
+      const delta = {
+        ...input.delta,
+        ...(!('rules' in input.delta) && before?.rules !== undefined && { rules: before.rules }),
+        ...(!('rulesDisabled' in input.delta) &&
+          before?.rulesDisabled !== undefined && { rulesDisabled: before.rulesDisabled }),
+      };
+      await setAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect, delta);
       journal.operations.push({ op: 'aspect_delta_set', payload: { ...input } });
       // Отмена настройки — это ПРЕЖНЯЯ настройка, а если её не было — снятие. Обе формы
       // выражаются существующими операциями: своей обратной у дельты нет и не нужно.

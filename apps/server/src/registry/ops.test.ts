@@ -4965,6 +4965,34 @@ describe('rule_set / rule_remove через исполнитель: журнал
     expect(await taskRulesOf(g)).toContain('task_completed_at');
   });
 
+  test('aspect_delta_set не стирает правила молча: без полей правил — перенос, названное поле — замена', async () => {
+    const g = await freshGraph();
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '📌' } },
+        { identity: personal(g) },
+      ),
+    );
+    // Правка иконки не включила обратно отключённое системное правило.
+    expect(await taskRulesOf(g)).not.toContain('task_completed_at');
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '📌', rulesDisabled: [] } },
+        { identity: personal(g) },
+      ),
+    );
+    expect(await taskRulesOf(g)).toContain('task_completed_at');
+  });
+
   test('встроенная роль через тул — отказ RULE_TARGET_SYSTEM_ROLE; неизвестный носитель — NOT_FOUND', async () => {
     const g = await freshGraph();
     const role = err(
