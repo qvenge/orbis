@@ -412,6 +412,29 @@ function statusSlotsOf(
 }
 
 /**
+ * Вариант, уже занимающий класс в этом слоте у любого носителя свойства; `undefined` — класс свободен.
+ * Обход по ВСЕМ носителям, а не по аспекту-цели: дельта дописывает отнесение в `value_map` каждой
+ * привязки, связывающей свойство с этим слотом (`deltas.ts`, `applyDeltas`, блок «КАРТА КЛАССОВ ⊕
+ * ПРИВЯЗКИ»), — значит и нарушить исключительность она может у любого из них.
+ */
+function classTakenBy(
+  propertyId: string,
+  contract: string,
+  slot: string,
+  cls: string,
+  reg: { aspects: ReadonlyMap<string, AspectDefinition> },
+): string | undefined {
+  for (const aspect of reg.aspects.values()) {
+    for (const binding of aspect.implements) {
+      if (binding.contract !== contract || binding.bind[slot] !== propertyId) continue;
+      const hit = binding.value_map.find((m) => m.slot === slot && m.class === cls);
+      if (hit !== undefined) return String(hit.variant);
+    }
+  }
+  return undefined;
+}
+
+/**
  * Варианты, которые карта ВПРАВЕ отнести: добавляемые этой же дельтой плюс собственные варианты
  * свойства. Второе — не послабление: свой вариант владелец мог завести прошлой дельтой, а класс
  * назначить сегодня, и требовать повторного `selectOptions.add` значило бы отказ на законном жесте.
@@ -433,7 +456,8 @@ function variantDomainOf(
 /**
  * ПОЛНОТА ОТНЕСЕНИЯ ВАРИАНТОВ ДЕЛЬТЫ (§Б2-2, fail-closed): вариант, добавленный дельтой к
  * свойству-слоту-статусу, принимается ТОЛЬКО вместе с отнесением к классу КАЖДОГО контракта, где
- * этот слот участвует.
+ * этот слот участвует — кроме контракта с `exclusive_classes`: там отнесение не обязательно, но
+ * данное обязано занять СВОБОДНЫЙ класс (РЧ-14а-1, `CLASS_NOT_EXCLUSIVE`).
  *
  * Почему «каждого контракта», а не «контракта аспекта-цели»: `selectOptions` адресует СВОЙСТВО, и
  * вариант приезжает в его тип — то есть ко всем носителям сразу. Проверка по одному аспекту
@@ -474,6 +498,7 @@ export function checkClassMap(
     for (const { contract, slot } of statusSlotsOf(propertyId, reg)) {
       const def = reg.contracts.get(contract);
       const classes = new Set(def?.kind === 'slots' ? def.classes.map((c) => c.key) : []);
+      const exclusive = def?.kind === 'slots' && def.exclusive_classes;
       for (const option of added) {
         // Тот же резерв ключей, что у `checkVariants` (`reason: 'reserved'`): дельта — второй путь
         // появления варианта на select-слоте-статусе, и без этой ветки она обходила бы резерв.
@@ -487,6 +512,9 @@ export function checkClassMap(
         const hit = entries.find(
           (e) => e.contract === contract && e.slot === slot && String(e.variant) === option.key,
         );
+        // ИСКЛЮЧИТЕЛЬНОСТЬ ВМЕСТО ПОЛНОТЫ (РЧ-14а-1): свободных классов у такого контракта нет по
+        // построению, и требовать отнесения значило бы запретить владельцу свои варианты статуса.
+        if (exclusive && hit === undefined) continue;
         // Отнесение к классу, которого у контракта нет, — то же «вариант не отнесён»: фильтры
         // набора его не найдут, а владелец уверен, что назначил.
         if (hit === undefined || !classes.has(hit.class)) {
@@ -502,6 +530,16 @@ export function checkClassMap(
               // и «отнесён в класс, которого у контракта нет» — разные починки у владельца.
               reason: hit === undefined ? 'unmapped' : 'unknown_class',
             },
+          });
+          continue;
+        }
+        // Отнесение ДАНО и класс существует: у exclusive-контракта он обязан быть свободен, иначе
+        // `variantOfClass` перестал бы отвечать однозначно и «поставь класс» стало бы молчаливым
+        // выбором из двух значений.
+        if (exclusive && classTakenBy(propertyId, contract, slot, hit.class, reg) !== undefined) {
+          issues.push({
+            code: 'CLASS_NOT_EXCLUSIVE',
+            details: { propertyId, contract, slot, class: hit.class, variant: option.key },
           });
         }
       }

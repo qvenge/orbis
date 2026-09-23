@@ -892,6 +892,69 @@ describe('checkClassMap: вариант дельты без отнесения �
       codes({ selectOptions: { 'user/net-takogo': { add: [{ key: 'a', label: {}, rank: 1 }] } } }),
     ).toEqual([['UNKNOWN_PROPERTY', undefined]]);
   });
+
+  // ПРОБА исключительного контракта: строки делегируемости ещё нет — её кладёт шаг 9 задачи 14а и
+  // тогда же заменяет пробу встроенным контрактом. Задача носит `orbis/task_status` слотом-статусом
+  // ДВУХ контрактов: завершаемости (полнота строгая) и пробы (exclusive).
+  const EXCL = contractDefinitionSchema.parse({
+    id: 'orbis/probe-excl',
+    graphId: null,
+    key: 'orbis/probe-excl',
+    label: { ru: 'Проба' },
+    description: { ru: 'Проба' },
+    kind: 'slots',
+    slots: [
+      {
+        name: 'status',
+        type: { kind: 'select' },
+        required: true,
+        label: { ru: 'С' },
+        status: true,
+      },
+    ],
+    classes: ['queued', 'waiting', 'done'].map((key) => ({ key, label: { ru: key } })),
+    sets: {},
+    exclusive_classes: true,
+    module: null,
+    rank: 99,
+  });
+  const TASK_X: AspectDefinition = {
+    ...TASK,
+    implements: [
+      ...TASK.implements,
+      aspectImplementsSchema.parse({
+        contract: 'orbis/probe-excl',
+        bind: { status: 'orbis/task_status' },
+        value_map: ['queued', 'waiting', 'done'].map((cls) => ({
+          slot: 'status',
+          variant: cls === 'queued' ? 'planned' : cls,
+          class: cls,
+        })),
+      }),
+    ],
+  };
+  const REG_X = {
+    ...REG,
+    contracts: new Map([...REG.contracts, [EXCL.id, EXCL]]),
+    aspects: new Map([...REG.aspects, [TASK_X.id, TASK_X]]),
+  };
+  const codesX = (d: Parameters<typeof checkClassMap>[0]) =>
+    checkClassMap(d, TASK_X, REG_X).map((i) => [i.code, i.details.reason]);
+
+  test('exclusive-контракт: свой вариант дельтой отнесения НЕ требует', () => {
+    // Отнести обязаны к завершаемости (полнота строгая), к исключительному контракту — нет.
+    expect(codesX({ selectOptions: ADD, classMap: map('active') })).toEqual([]);
+  });
+
+  test('exclusive-контракт: отнесение в ЗАНЯТЫЙ класс — CLASS_NOT_EXCLUSIVE', () => {
+    const classMap = {
+      'orbis/task_status': [
+        ...map('active')['orbis/task_status'],
+        { contract: 'orbis/probe-excl', slot: 'status', variant: 'in_review', class: 'waiting' },
+      ],
+    };
+    expect(codesX({ selectOptions: ADD, classMap })).toEqual([['CLASS_NOT_EXCLUSIVE', undefined]]);
+  });
 });
 
 const REG = {
