@@ -5,15 +5,18 @@
 // ветка `instance-of` financial-инварианта (§3.3) и ограничение интервала 7a→0017.
 // Реальная БД под withIdentity (RLS enforced), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { GraphId } from '@orbis/shared';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
   executeWithFixtureCategories as execute,
+  freshGraph,
   mintGraph,
   personal,
   requireEnv,
+  seedCustomRole,
   truncateAll,
 } from '../../test/helpers';
 import type {
@@ -852,7 +855,12 @@ describe('уникальность связи — по РОЛИ (contract-миг
    */
   test('21. subitem + ticket на одной паре — ОБЕ законны (ключ уникальности — роль)', async () => {
     const project = await createEntity({ title: 'Проект' });
-    const child = await createEntity({ title: 'Ребёнок' });
+    // Цель тикета — завершаемая (`target_contract` роли `ticket`, проверяется с Б-2): ребёнок — задача.
+    const child = await createEntity({
+      title: 'Ребёнок',
+      aspects: ['orbis/task'],
+      props: { 'orbis/task_status': 'inbox' },
+    });
     ok(await createRelation(project.id, child.id, 'subitem'));
     ok(await createRelation(project.id, child.id, 'ticket'));
     expect(await relCount(project.id, child.id, 'subitem')).toBe(1);
@@ -937,5 +945,155 @@ describe('конверт-родитель = роль envelope-binding (§4.2/§1
     // Без этой строки «инвариант считает одно, деньги другое» осталось бы непроверенным
     // (урок C1 Задачи 7a).
     expect(await budgetParentsOf(txn.id)).toEqual([env2.id]);
+  });
+});
+
+describe('source_contract / target_contract роли (§А4-2, ИО-7)', () => {
+  let user: GraphId;
+  const as = (): Partial<ExecuteRequest> => ({ identity: personal(user) });
+  beforeAll(async () => {
+    user = await freshGraph();
+    // Роль владельца с требованием к цели: «конец обязан реализовывать контракт завершаемости».
+    await seedCustomRole(user, {
+      key: 'user/blocks-task',
+      label: { ru: 'Блокирует задачу' },
+      sourceLabel: { ru: 'Блокирующее' },
+      targetLabel: { ru: 'Задача' },
+      constraints: { target_contract: 'orbis/completable', created_by: 'any' },
+    });
+    // Требование к ИСТОЧНИКУ — второй конец проверяется тем же читателем, не только цель.
+    await seedCustomRole(user, {
+      key: 'user/task-blocks',
+      label: { ru: 'Задача блокирует' },
+      sourceLabel: { ru: 'Задача' },
+      targetLabel: { ru: 'Заблокированное' },
+      constraints: { source_contract: 'orbis/completable', created_by: 'any' },
+    });
+    // Контракт БЕЗ слота-статуса (`orbis/envelope`): у него нет классов, и «реализует» здесь значит
+    // «несёт привязку», а не «класс вычислился».
+    await seedCustomRole(user, {
+      key: 'user/counts-envelope',
+      label: { ru: 'Учитывает конверт' },
+      sourceLabel: { ru: 'Учитывающее' },
+      targetLabel: { ru: 'Конверт' },
+      constraints: { target_contract: 'orbis/envelope', created_by: 'any' },
+    });
+  });
+  const task = (title: string) =>
+    createEntity({ title, aspects: ['orbis/task'], props: { 'orbis/task_status': 'inbox' } }, as());
+
+  test('цель реализует контракт — ребро создаётся', async () => {
+    const a = await createEntity({ title: 'Причина' }, as());
+    const t = await task('Задача');
+    ok(await createRelation(a.id, t.id, 'user/blocks-task', as()));
+  });
+
+  test('цель контракта не реализует → INVARIANT relation_contract с концом и контрактом', async () => {
+    const a = await createEntity({ title: 'Причина 2' }, as());
+    const n = await createEntity({ title: 'Заметка' }, as());
+    const r = err(await createRelation(a.id, n.id, 'user/blocks-task', as()));
+    expect(r.error.code).toBe('INVARIANT');
+    expect(r.error.details).toMatchObject({
+      invariant: 'relation_contract',
+      role: 'user/blocks-task',
+      end: 'target',
+      contract: 'orbis/completable',
+      id: n.id,
+    });
+    expect(await relCount(a.id, n.id, 'user/blocks-task')).toBe(0);
+  });
+
+  test('источник контракта не реализует → INVARIANT relation_contract, end: source', async () => {
+    const n = await createEntity({ title: 'Не задача' }, as());
+    const b = await createEntity({ title: 'Заблокированное' }, as());
+    const r = err(await createRelation(n.id, b.id, 'user/task-blocks', as()));
+    expect(r.error.details).toMatchObject({
+      invariant: 'relation_contract',
+      end: 'source',
+      contract: 'orbis/completable',
+      id: n.id,
+    });
+    const t = await task('Задача-источник');
+    ok(await createRelation(t.id, b.id, 'user/task-blocks', as()));
+  });
+
+  test('контракт без слота-статуса: конец с привязкой проходит, без неё — отказ', async () => {
+    const a = await createEntity({ title: 'Учитывающее' }, as());
+    const env = await createEntity(
+      { title: 'Конверт', props: budgetProps(), aspects: ['orbis/budget'] },
+      as(),
+    );
+    ok(await createRelation(a.id, env.id, 'user/counts-envelope', as()));
+    const n = await createEntity({ title: 'Не конверт' }, as());
+    const r = err(await createRelation(a.id, n.id, 'user/counts-envelope', as()));
+    expect(r.error.details).toMatchObject({ invariant: 'relation_contract', end: 'target' });
+  });
+
+  test('конец, созданный той же пачкой, судится по своему состоянию в пачке', async () => {
+    // `loadBothEndsForUpdate` отдаёт виртуальную строку пачки: задача, заведённая операцией №1,
+    // реализует контракт для ребра операции №2 — второго чтения базы у читателя нет.
+    const a = await createEntity({ title: 'Причина 4' }, as());
+    const id = newId();
+    const r = await execute(db, {
+      ...req('entity_create', {}),
+      identity: personal(user),
+      batchId: newId(),
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            id,
+            title: 'Задача пачки',
+            tags: [],
+            aspects: ['orbis/task'],
+            props: { 'orbis/task_status': 'inbox' },
+          },
+        },
+        {
+          tool: 'relation_create',
+          input: { source_id: a.id, target_id: id, role: 'user/blocks-task' },
+        },
+      ],
+    });
+    ok(r);
+    expect(await relCount(a.id, id, 'user/blocks-task')).toBe(1);
+  });
+
+  test('на УДАЛЕНИИ контракт не проверяется: снять ребро можно и после снятия аспекта', async () => {
+    const a = await createEntity({ title: 'Причина 3' }, as());
+    const t = await task('Задача 3');
+    ok(await createRelation(a.id, t.id, 'user/blocks-task', as()));
+    ok(
+      await execute(
+        db,
+        req('entity_update', { id: t.id, aspects: { detach: ['orbis/task'] } }, as()),
+      ),
+    );
+    ok(
+      await execute(
+        db,
+        req(
+          'relation_delete',
+          { source_id: a.id, target_id: t.id, role: 'user/blocks-task' },
+          as(),
+        ),
+      ),
+    );
+  });
+
+  test('системная роль ticket: цель тикета обязана быть завершаемой (§А4-3)', async () => {
+    // Единственная системная роль с контрактом конца: с Б-2 её `target_contract` — отказ записи,
+    // а не лежащее поле.
+    const project = await createEntity({ title: 'Проект' }, as());
+    const note = await createEntity({ title: 'Заметка вместо тикета' }, as());
+    const r = err(await createRelation(project.id, note.id, 'ticket', as()));
+    expect(r.error.details).toMatchObject({
+      invariant: 'relation_contract',
+      role: 'ticket',
+      end: 'target',
+      contract: 'orbis/completable',
+    });
+    const t = await task('Тикет');
+    ok(await createRelation(project.id, t.id, 'ticket', as()));
   });
 });

@@ -454,7 +454,8 @@ export const relationRoleDefinitions = pgTable(
     // разворачивает в role IN (…) по этому признаку (Ч10-С1).
     hierarchical: boolean('hierarchical').notNull().default(false),
     // target_max_incoming / acyclic / source_contract / target_contract / created_by.
-    // В срезе А поля ЛЕЖАТ: target_max_incoming включает Задача 7a, контрактные — часть Б.
+    // Работают все: target_max_incoming/acyclic — с Задачи 7a, контрактные — с Б-2
+    // (`executor/relations.ts`, `assertEndContracts`).
     constraints: jsonb('constraints').notNull().default({}),
     // §Б4-1: правила каталога — jsonb СТРОКИ-НОСИТЕЛЯ, не таблица (правило умирает с владельцем).
     // NOT NULL DEFAULT '[]': строки, посеянные до 0022, читаются пустым списком, а не NULL'ом.

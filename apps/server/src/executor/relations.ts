@@ -1,6 +1,7 @@
 // apps/server/src/executor/relations.ts
 // Ролевой слой графа связей (§А4-3): идентичность ребра, виртуальные эффекты batch и
-// GENERIC-ограничения реестра ролей — `acyclic`, `target_max_incoming`, `created_by`.
+// GENERIC-ограничения реестра ролей — `acyclic`, `target_max_incoming`, `created_by` и (с Б-2)
+// контракты концов `source_contract`/`target_contract`.
 //
 // Почему отдельный модуль. До реформы каждое ограничение графа было ОТДЕЛЬНЫМ доменным
 // правилом с зашитым значением типа: «ацикличность blocks», «один budget-parent». Роль
@@ -19,8 +20,10 @@ import type { GraphId, RelationRoleDefinition } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
+import { bindingsOf } from '../subscriptions/budget';
 import { ExecError } from './errors';
 import { resolveEntityTitles } from './invariants';
+import type { EntityState } from './props';
 import type { MutationMechanism } from './types';
 
 /**
@@ -76,7 +79,19 @@ function roleName(def: RelationRoleDefinition | undefined, role: string): string
  *
  * На удалении проверяется ТОЛЬКО гейт: ацикличность снятие ребра нарушить не может, а
  * `target_max_incoming` на существующем ребре пришлось бы читать «есть ли у цели ещё столько
- * же» — вопрос, к удалению отношения не имеющий.
+ * же» — вопрос, к удалению отношения не имеющий. Контракты концов — тоже только на создании
+ * (РЧ-13-5, см. `assertEndContracts`).
+ *
+ * C-ПРАВИЛА КОНЦОВ РЁБЕРНЫЕ ТУЛЫ НЕ ПЕРЕПРОВЕРЯЮТ — и это названная граница, а не пропуск. Шаблон
+ * рода `constraint` читает рёбра СВОЕЙ записи узлом `has_relation` в `when` (системная строка
+ * `financial_recurring_requires_recurrence` — входящее `instance-of`), и постановка/снятие ребра
+ * способны сменить его вердикт у конца; но правила записи спрашивает только запись самой сущности
+ * (create/update/attach, `assertConstraintRules`). Системную строку это не пробивает: `instance-of` —
+ * `created_by: system`, пользовательский путь закрыт гейтом ниже с обеих сторон, а материализация
+ * ставит ребро той же пачкой, что и экземпляр (движок видит его в `declaredRelations`). Правило
+ * владельца с `has_relation` по роли `created_by: any` (запись правил владельцем — тулы задачи 16)
+ * этой границей не защищено: ребро, меняющее вердикт конца, ляжет, а отказ придёт на следующей правке
+ * самой записи.
  *
  * `ctx` собран в объект, а не разложен по позиционным аргументам, ровно потому, что все его
  * поля отвечают на один вопрос — «от чьего имени и что именно пишется».
@@ -98,6 +113,12 @@ export async function assertRoleConstraints(
     undoReplay: boolean;
     /** Какая половина: создание проверяет все ограничения, удаление — только гейт. */
     op: 'create' | 'delete';
+    /**
+     * Состояния концов, уже взятых исполнителем под `FOR UPDATE` (`loadBothEndsForUpdate`) — вход
+     * контрактов концов. НЕОБЯЗАТЕЛЬНО намеренно: путь удаления концы читает не всегда (только для
+     * источника routine), а контракты на удалении и не проверяются; создание обязано их передать.
+     */
+    ends?: { source: EntityState; target: EntityState };
   },
 ): Promise<void> {
   const def = reg.roles.get(key.role);
@@ -117,6 +138,16 @@ export async function assertRoleConstraints(
 
   if (ctx.op === 'delete') return;
 
+  // Создание обязано назвать концы: без них контракт проверять нечем, а молча пропустить проверку —
+  // значит вернуть объявленную, но неисполняемую форму (ровно то, от чего лечим). Раньше `acyclic`:
+  // «конец не того рода» — более ранний и более точный ответ, чем «замкнулся бы цикл».
+  if (ctx.ends === undefined) {
+    throw new Error(
+      'assertRoleConstraints(op: create) без состояний концов: вызывающий обязан их передать',
+    );
+  }
+  assertEndContracts(reg, key, def, ctx.ends);
+
   if (def.constraints.acyclic === true) {
     await assertAcyclic(tx, ctx.graphId, key, def, effects);
   }
@@ -124,6 +155,55 @@ export async function assertRoleConstraints(
   const max = def.constraints.target_max_incoming;
   if (max !== undefined) {
     await assertTargetMaxIncoming(tx, key, def, max, effects);
+  }
+}
+
+/**
+ * Контракты концов (§А4-2, `source_contract`/`target_contract`): конец ребра обязан РЕАЛИЗОВЫВАТЬ
+ * названный контракт — то есть нести аспект, чья привязка этот контракт реализует (§Б2-1). Та же
+ * мерка членства, что у области правила `{contract}` в движке (`rules/engine.ts`). Поля объявлены
+ * схемой с среза А и до Б-2 не проверялись никем.
+ *
+ * Членство — по ПРИВЯЗКЕ, а не по вычисленному классу (`entityClassOf`): класс считается только у
+ * контракта со слотом-статусом и только при заполненном статусе, и мерка «класс не null» отказывала бы
+ * концу, который контракт РЕАЛИЗУЕТ, — у `orbis/envelope` слота-статуса нет вовсе, и ребро на конверт
+ * было бы невыразимо ни для одной роли.
+ *
+ * Состояния концов — те, что исполнитель уже держит под `FOR UPDATE` (`loadBothEndsForUpdate`, с учётом
+ * пачки): второе чтение тех же строк дало бы другую правду в той же транзакции. Только на создании
+ * (РЧ-13-5): «реализует ли конец контракт» — вопрос ко вставке, а на удалении он запер бы владельцу
+ * уборку графа после снятия аспекта. Из системных ролей контракт объявляет `ticket` (цель —
+ * `orbis/completable`).
+ */
+function assertEndContracts(
+  reg: RegistrySnapshot,
+  key: RelationKey,
+  def: RelationRoleDefinition,
+  ends: { source: EntityState; target: EntityState },
+): void {
+  for (const end of ['source', 'target'] as const) {
+    const contract =
+      end === 'source' ? def.constraints.source_contract : def.constraints.target_contract;
+    if (contract === undefined) continue;
+    const aspects = ends[end].aspects;
+    if (
+      bindingsOf(reg)
+        .byContract(contract)
+        .some((b) => aspects.includes(b.aspectId))
+    ) {
+      continue;
+    }
+    throw new ExecError(
+      'INVARIANT',
+      `${end === 'source' ? 'источник' : 'цель'} связи роли «${roleName(def, key.role)}» обязан реализовывать контракт «${contract}» (§А4-2)`,
+      {
+        invariant: 'relation_contract',
+        role: key.role,
+        end,
+        contract,
+        id: end === 'source' ? key.sourceId : key.targetId,
+      },
+    );
   }
 }
 

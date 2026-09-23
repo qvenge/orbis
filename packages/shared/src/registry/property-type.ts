@@ -258,8 +258,10 @@ export const relationRoleDefinitionSchema = z
     targetLabel: localizedTextSchema,
     hierarchical: z.boolean(),
     // Generic-ограничения §А4-2. `target_max_incoming` включила Задача 7a среза А;
-    // `source_contract`/`target_contract` ЛЕЖАТ и после Б-1 — контракты засеяны, а их
-    // проверка на записи ребра — срез Б-2 (вместе с правилами каталога).
+    // `source_contract`/`target_contract` ПРОВЕРЯЮТСЯ с среза Б-2 (`executor/relations.ts`,
+    // `assertEndContracts`) — конец ребра обязан реализовывать контракт (нести привязку к нему).
+    // Строки каталога на ролях (`acyclic`, `target_max_incoming`, `mirror_relation`) — метки и
+    // параметры движков: значение ограничения живёт здесь одним экземпляром.
     constraints: z
       .object({
         target_max_incoming: z.number().int().min(1).optional(),
