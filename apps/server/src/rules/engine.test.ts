@@ -27,7 +27,7 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
-import { withIdentity } from '../db/with-identity';
+import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -233,7 +233,7 @@ describe('режим отката — по ЭКЗЕМПЛЯРУ правила, 
   });
 });
 
-describe('fail-closed: область «контракт» и шаблон unique_among (Р-25, РЧ-3-2)', () => {
+describe('fail-closed: область «контракт» (Р-25)', () => {
   test('scope {contract}: на записи-члене — VALIDATION RULE_SCOPE_UNSUPPORTED, на нечлене — молчит', async () => {
     const w = await worldWith({
       ...GATE_FIN_ASPECT,
@@ -251,22 +251,6 @@ describe('fail-closed: область «контракт» и шаблон uniqu
       'VALIDATION/RULE_SCOPE_UNSUPPORTED',
     );
     // Нечлен контракта (категория мира заведена так же — `worldWith`) правило не касается.
-    expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
-  });
-  test('unique_among до задачи 12: включённое правило — отказ RULE_TEMPLATE_UNSUPPORTED, а не пропуск', async () => {
-    const w = await worldWith({
-      ...GATE_FIN_ASPECT,
-      rules: [
-        {
-          id: 'gate_fin_unique_amount',
-          template: 'unique_among',
-          undo: 'check',
-          params: { properties: [GATE_PROPS.finAmount] },
-        },
-      ],
-    });
-    expect(refusalOf(await w.mk({}))).toBe('VALIDATION/RULE_TEMPLATE_UNSUPPORTED');
-    // Запись без аспекта-носителя области правило не касается.
     expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
   });
 });
@@ -900,5 +884,298 @@ describe('C-правила обходятся детерминированно �
     expect('aux/marker' < FIN).toBe(true); // предпосылка: носитель-свойство раньше по id
     const r = await w.mk({ 'aux/marker': 'm' }, { aspects: [FIN, 'aux/holder'] });
     expect(refusalOf(r)).toBe('INVARIANT/b_marker_requires_moment');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// unique_among — generic на СВОЁМ аспекте (§Б4-3, §С8-25; задача 12)
+// ---------------------------------------------------------------------------
+// Свой аспект владельца, а не конверт: правило обязано работать там, где о нём не знает ни строки
+// кода Финансов. Строка правила приезжает вместе с аспектом (0d: `CustomAspectSpec.rules`).
+const UNIQUE_ASPECT = 'user/parking-slot';
+const SLOT_SPEC: CustomAspectSpec = {
+  key: UNIQUE_ASPECT,
+  label: { ru: 'Парковочное место' },
+  properties: [
+    { key: 'level', type: { kind: 'text' } },
+    { key: 'number', type: { kind: 'number' } },
+  ],
+};
+const RULE_SLOT_UNIQUE: RuleDefinitionInput = {
+  id: 'slot_unique',
+  template: 'unique_among',
+  undo: 'skip',
+  params: { properties: ['user/level', 'user/number'] },
+};
+const slot = (level: string, n: number) => ({
+  title: `${level}-${n}`,
+  tags: [],
+  aspects: [UNIQUE_ASPECT],
+  props: { 'user/level': level, 'user/number': n },
+});
+
+async function entityCount(graph: GraphId): Promise<number> {
+  const { db: adb, client: ac } = adminDb();
+  try {
+    const rows = (await adb.execute(
+      sql`SELECT count(*)::int AS n FROM entities WHERE graph_id = ${graph}`,
+    )) as unknown as Array<{ n: number }>;
+    return rows[0]?.n ?? -1;
+  } finally {
+    await ac.end();
+  }
+}
+
+/**
+ * SQL-лог транзакции исполнителя — приём `registry/ops.test.ts` («порядок замков»): подмена
+ * `tx.execute` в `beforeStages`, единственном шве ДО первого чтения состояния и до пред-стадийных
+ * замков.
+ */
+function sqlLog(log: string[]): (tx: Tx) => Promise<void> {
+  return async (tx: Tx) => {
+    const target = tx as unknown as {
+      execute: (q: unknown) => Promise<unknown>;
+      dialect: { sqlToQuery: (q: unknown) => { sql: string; params: unknown[] } };
+    };
+    const original = target.execute.bind(target);
+    target.execute = (q: unknown) => {
+      try {
+        const { sql: text, params } = target.dialect.sqlToQuery(q);
+        log.push(`${text} :: ${JSON.stringify(params)}`);
+      } catch {
+        log.push('<не разобрано>');
+      }
+      return original(q);
+    };
+  };
+}
+
+describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
+  let w: World;
+  beforeAll(async () => {
+    w = await worldWith({ ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+  });
+
+  test('позитив: разные наборы живут рядом', async () => {
+    expect(refusalOf(await w.run('entity_create', slot('P1', 7)))).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', slot('P2', 7)))).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', slot('P1', 8)))).toBe('ok');
+  });
+
+  test('негатив: тот же набор → INVARIANT с id правила, значениями и занявшей записью', async () => {
+    const first = entityOf(await w.run('entity_create', slot('P4', 1)));
+    const r = await w.run('entity_create', slot('P4', 1));
+    expect(r.ok ? null : r.error.code).toBe('INVARIANT');
+    expect(r.ok ? null : r.error.details).toMatchObject({
+      invariant: 'slot_unique',
+      rule_template: 'unique_among',
+      existingId: first.id,
+      values: { 'user/level': 'P4', 'user/number': 1 },
+    });
+  });
+
+  test('виртуальные строки пачки видны: два create одного набора в одном batch → отказ до первой записи', async () => {
+    const before = await entityCount(w.graph);
+    const r = await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        operations: [
+          { tool: 'entity_create', input: slot('P9', 1) },
+          { tool: 'entity_create', input: slot('P9', 1) },
+        ],
+        clock: () => T0,
+      },
+      {},
+    );
+    expect(refusalOf(r)).toBe('INVARIANT/slot_unique');
+    expect(await entityCount(w.graph)).toBe(before);
+  });
+
+  test('архивная соседка набор освобождает (§Б4-3 «среди неархивных»)', async () => {
+    const e = entityOf(await w.run('entity_create', slot('P3', 3)));
+    expect(refusalOf(await w.run('entity_update', { id: e.id, archived: true }))).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', slot('P3', 3)))).toBe('ok');
+  });
+
+  test('разархивация в занятую комбинацию — отказ; вход без props (неявный orbis/archived набора чтения)', async () => {
+    const a = entityOf(await w.run('entity_create', slot('P5', 5)));
+    expect(refusalOf(await w.run('entity_update', { id: a.id, archived: true }))).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', slot('P5', 5)))).toBe('ok');
+    expect(refusalOf(await w.run('entity_update', { id: a.id, archived: false }))).toBe(
+      'INVARIANT/slot_unique',
+    );
+  });
+
+  test('правка свойств АРХИВНОЙ записи в занятую комбинацию отклоняется (РЧ-12-4)', async () => {
+    entityOf(await w.run('entity_create', slot('P7', 7)));
+    const b = entityOf(await w.run('entity_create', slot('P7', 8)));
+    expect(refusalOf(await w.run('entity_update', { id: b.id, archived: true }))).toBe('ok');
+    expect(refusalOf(await w.run('entity_update', { id: b.id, props: { 'user/number': 7 } }))).toBe(
+      'INVARIANT/slot_unique',
+    );
+  });
+
+  test('замок правила берётся ДО стадий — порядок «advisory → строки» (РЧ-12-2)', async () => {
+    const log: string[] = [];
+    const r = await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_create', input: slot('P6', 1) }],
+        clock: () => T0,
+      },
+      { beforeStages: sqlLog(log) },
+    );
+    expect(refusalOf(r)).toBe('ok');
+    // Граница стадий — первое чтение после пред-стадийных замков: `disabled_modules` в `ExecCtx`.
+    const beforeStages = (lines: string[]) => {
+      const lockAt = lines.findIndex((line) => line.includes(`${w.graph}:rule:slot_unique`));
+      const stagesAt = lines.findIndex((line) => line.includes('disabled_modules'));
+      return [lockAt >= 0, stagesAt >= 0, lockAt < stagesAt];
+    };
+    expect(beforeStages(log)).toEqual([true, true, true]);
+
+    // Путь пачки — свой вызов пред-стадийного прохода, и пиннится отдельно.
+    const batchLog: string[] = [];
+    const rb = await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        operations: [{ tool: 'entity_create', input: slot('P6', 2) }],
+        clock: () => T0,
+      },
+      { beforeStages: sqlLog(batchLog) },
+    );
+    expect(refusalOf(rb)).toBe('ok');
+    expect(beforeStages(batchLog)).toEqual([true, true, true]);
+
+    // Вход, не называющий ни аспекта, ни свойства набора, замка правила не берёт: иначе правило одного
+    // аспекта сериализовало бы все записи владельца.
+    const plain: string[] = [];
+    await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'entity_create', input: { title: 'Просто запись', tags: [] } }],
+        clock: () => T0,
+      },
+      { beforeStages: sqlLog(plain) },
+    );
+    expect(plain.some((line) => line.includes(':rule:'))).toBe(false);
+  });
+});
+
+describe('unique_among: края шаблона (задача 12)', () => {
+  test('архивация БЕЗ свойств не проверяется: дубли, заведённые до правила, архивируются', async () => {
+    // Правило ложится ПОВЕРХ данных, где набор уже занят дважды. Проверь правило архивацию — не
+    // архивировалась бы ни одна из двух: каждой мешала бы другая (паритет со снятым кодом конверта).
+    const w = await worldWith(SLOT_SPEC);
+    const a = entityOf(await w.run('entity_create', slot('D1', 1)));
+    entityOf(await w.run('entity_create', slot('D1', 1)));
+    await seedCustomAspect(w.graph, { ...SLOT_SPEC, rules: [RULE_SLOT_UNIQUE] });
+    expect(refusalOf(await w.run('entity_update', { id: a.id, archived: true }))).toBe('ok');
+    // Вторая осталась живой — набор занят, новая запись того же набора отклоняется.
+    expect(refusalOf(await w.run('entity_create', slot('D1', 1)))).toBe('INVARIANT/slot_unique');
+  });
+
+  test('json-свойство в наборе: равенство jsonb — порядок ключей не различает (рулинг 12-1)', async () => {
+    const badge: CustomAspectSpec = {
+      key: 'user/badge',
+      label: { ru: 'Пропуск' },
+      properties: [{ key: 'code', type: { kind: 'json' } }],
+    };
+    const w = await worldWith({
+      ...badge,
+      rules: [
+        {
+          id: 'badge_unique',
+          template: 'unique_among',
+          undo: 'check',
+          params: { properties: ['user/code'] },
+        },
+      ],
+    });
+    const badgeOf = (code: Record<string, unknown>) => ({
+      title: 'Пропуск',
+      tags: [],
+      aspects: ['user/badge'],
+      props: { 'user/code': code },
+    });
+    // База: jsonb сам не хранит порядок ключей.
+    expect(refusalOf(await w.run('entity_create', badgeOf({ x: 1, y: 2 })))).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', badgeOf({ y: 2, x: 1 })))).toBe(
+      'INVARIANT/badge_unique',
+    );
+    // Пачка: виртуальная строка сравнивается тем же равенством, что и строка из базы.
+    const r = await execute(
+      db,
+      {
+        identity: personal(w.graph),
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        operations: [
+          { tool: 'entity_create', input: badgeOf({ a: 1, b: 2 }) },
+          { tool: 'entity_create', input: badgeOf({ b: 2, a: 1 }) },
+        ],
+        clock: () => T0,
+      },
+      {},
+    );
+    expect(refusalOf(r)).toBe('INVARIANT/badge_unique');
+  });
+
+  test('when: правило проверяет только запись, где условие истинно; множество сравнения — область', async () => {
+    const w = await worldWith({
+      ...SLOT_SPEC,
+      rules: [
+        {
+          id: 'slot_vip_number_unique',
+          template: 'unique_among',
+          undo: 'check',
+          when: { op: '=', args: [{ prop: 'user/level' }, { const: 'VIP' }] },
+          params: { properties: ['user/number'] },
+        },
+      ],
+    });
+    // Условие ложно — дубль номера не проверяется.
+    expect(refusalOf(await w.run('entity_create', slot('L1', 3)))).toBe('ok');
+    expect(refusalOf(await w.run('entity_create', slot('L2', 3)))).toBe('ok');
+    // Условие истинно — номер 3 занят записями области, пусть и не-VIP.
+    expect(refusalOf(await w.run('entity_create', slot('VIP', 3)))).toBe(
+      'INVARIANT/slot_vip_number_unique',
+    );
+    expect(refusalOf(await w.run('entity_create', slot('VIP', 4)))).toBe('ok');
+  });
+
+  test('область без аспекта (ручная строка мимо валидатора) — VALIDATION RULE_SCOPE_UNSUPPORTED, а не пропуск', async () => {
+    const w = await worldWith({
+      ...SLOT_SPEC,
+      rules: [
+        {
+          id: 'slot_unique_by_property',
+          template: 'unique_among',
+          undo: 'check',
+          scope: { property: 'user/level' },
+          params: { properties: ['user/level'] },
+        },
+      ],
+    });
+    expect(refusalOf(await w.run('entity_create', slot('S1', 1)))).toBe(
+      'VALIDATION/RULE_SCOPE_UNSUPPORTED',
+    );
+    // Запись без свойства области правило не касается.
+    expect(refusalOf(await w.run('entity_create', { title: 'Нечлен', tags: [] }))).toBe('ok');
   });
 });

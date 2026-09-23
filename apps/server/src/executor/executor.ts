@@ -110,7 +110,13 @@ import {
   type RefPropChange,
   syncRefMirror,
 } from '../registry/ref';
-import { applyTransitionRules, assertConstraintRules, type RuleWriteInput } from '../rules/engine';
+import { effectiveRuleScope, rulesOf } from '../registry/rules';
+import {
+  applyTransitionRules,
+  assertConstraintRules,
+  type RuleWriteInput,
+  ruleLockKey,
+} from '../rules/engine';
 import { coreFieldsChanged } from '../rules/scope';
 import { projectBodyTemplate } from '../seed/project-body';
 import {
@@ -500,8 +506,10 @@ export async function execute(
       // Замок РЕЕСТРА — ПЕРВЫЙ из двух (см. lockOwnerRegistry): порядок «реестр → бюджет»
       // глобален, и переставить его местами значит завести цикл ожидания.
       await lockRegistry(tx, req.identity.graph, [single]);
-      // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
+      // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour),
+      // за ним замки правил уникальности (см. lockUniqueAmongRules): порядок «контур → правила»
       await lockBudgetContour(tx, registry, req.identity.graph, [single]);
+      await lockUniqueAmongRules(tx, registry, req.identity.graph, [single]);
       const ctx: ExecCtx = {
         tx,
         registry,
@@ -634,8 +642,10 @@ async function executeBatch(
       const registry = await effectiveRegistry(tx, req.identity.graph);
       // Замок РЕЕСТРА — ПЕРВЫЙ из двух, тем же порядком, что и на одиночном пути
       await lockRegistry(tx, req.identity.graph, ops);
-      // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
+      // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour),
+      // за ним замки правил уникальности — тем же порядком, что на одиночном пути
       await lockBudgetContour(tx, registry, req.identity.graph, ops);
+      await lockUniqueAmongRules(tx, registry, req.identity.graph, ops);
       const ctx: ExecCtx = {
         tx,
         registry,
@@ -854,24 +864,51 @@ export function touchesBudgetContour(
   reg: RegistrySnapshot,
   op: { tool: string; input: unknown },
 ): boolean {
-  // Контур мемоизирован по снимку (`budgetContourFor`), поэтому рекурсия в `batch_execute`
-  // ниже — и импорт в сотни операций — платят за его сборку ровно один раз на транзакцию.
-  const contour = budgetContourFor(reg);
-  if (op.tool.startsWith('attach_')) {
-    const aspectId = resolveAttachAspect(reg, op.tool);
-    if (aspectId !== undefined && contour.aspects.has(aspectId)) {
-      return true;
-    }
-  }
   // `property_merge` переписывает `props` ВСЕХ носителей свойства одним UPDATE в CTE
-  // (`registry/ops.ts`) — без per-entity операций и без бюджет-хука. Ни один из предикатов
-  // ниже его не видит (вход — `{source, into}`), а переписать он может ровно `orbis/amount`
-  // или `orbis/finance_category`. Точность в сторону «лишний раз взяли» здесь не критична:
-  // замок владельческий, реентерабельный и дешёвый (докблок выше).
+  // (`registry/ops.ts`) — без per-entity операций и без бюджет-хука. Общий обход входа ниже его
+  // не видит (вход — `{source, into}`), а переписать он может ровно `orbis/amount` или
+  // `orbis/finance_category`. Точность в сторону «лишний раз взяли» здесь не критична: замок
+  // владельческий, реентерабельный и дешёвый (докблок выше). Разворот `batch_execute` — здесь же,
+  // а не только в общем обходе: слияние внутри пачки обязано ловиться этой же веткой.
   if (op.tool === 'property_merge' || op.tool === 'property_merge_undo') return true;
   if (op.tool === 'batch_execute') {
     const env = op.input as { operations?: Array<{ tool: string; input: unknown }> } | null;
     return (env?.operations ?? []).some((inner) => touchesBudgetContour(reg, inner));
+  }
+  // Контур мемоизирован по снимку (`budgetContourFor`), поэтому рекурсия в `batch_execute`
+  // выше — и импорт в сотни операций — платят за его сборку ровно один раз на транзакцию.
+  const contour = budgetContourFor(reg);
+  return namesAspectOrProperty(reg, op, contour.aspects, budgetContourProperties(reg, contour));
+}
+
+/**
+ * Называет ли ВХОД операции один из аспектов или одно из свойств — по форме, до стадий разбора.
+ *
+ * Общая половина двух пред-стадийных предикатов: бюджет-контура (`touchesBudgetContour`) и замков
+ * правил уникальности (`uniqueRuleKeysOf`). Обход входа у них один НАМЕРЕННО: вторая копия разошлась
+ * бы с первой ровно в той форме, которую забыли дописать, — и замок молча перестал бы браться (см.
+ * докблок `touchesBudgetContour` о снесённой третьей форме `aspects`).
+ *
+ * Формы: `attach_<аспект>` (аспект — из имени тула), вложенный `batch_execute` (разворот),
+ * `entity_update` с `archived` (архивация меняет и привязку, и принадлежность к множеству
+ * «неархивных», а какие у записи аспекты, по входу не видно), значения `props`/`unset` по id ИЛИ
+ * key свойства и обе формы `aspects` — список навешиваемых у create и `{attach, detach}` у update.
+ */
+function namesAspectOrProperty(
+  reg: RegistrySnapshot,
+  op: { tool: string; input: unknown },
+  aspectIds: ReadonlySet<string>,
+  propertyIds: ReadonlySet<string>,
+): boolean {
+  if (op.tool.startsWith('attach_')) {
+    const aspectId = resolveAttachAspect(reg, op.tool);
+    if (aspectId !== undefined && aspectIds.has(aspectId)) return true;
+  }
+  if (op.tool === 'batch_execute') {
+    const env = op.input as { operations?: Array<{ tool: string; input: unknown }> } | null;
+    return (env?.operations ?? []).some((inner) =>
+      namesAspectOrProperty(reg, inner, aspectIds, propertyIds),
+    );
   }
   const input = op.input as {
     aspects?: unknown;
@@ -882,17 +919,16 @@ export function touchesBudgetContour(
   if (input === null || typeof input !== 'object') return false;
   if (op.tool === 'entity_update' && input.archived !== undefined) return true;
 
-  const contourProps = budgetContourProperties(reg, contour);
-  const touchesProperty = (keyOrId: string): boolean => {
+  const namesProperty = (keyOrId: string): boolean => {
     const def = resolvePropertyRef(reg, keyOrId);
-    return contourProps.has(def?.id ?? keyOrId);
+    return propertyIds.has(def?.id ?? keyOrId);
   };
   if (typeof input.props === 'object' && input.props !== null) {
-    if (Object.keys(input.props).some(touchesProperty)) return true;
+    if (Object.keys(input.props).some(namesProperty)) return true;
   }
   if (
     Array.isArray(input.unset) &&
-    input.unset.some((k) => typeof k === 'string' && touchesProperty(k))
+    input.unset.some((k) => typeof k === 'string' && namesProperty(k))
   ) {
     return true;
   }
@@ -907,7 +943,7 @@ export function touchesBudgetContour(
     : isAspectsPatchInput(aspects)
       ? [...(aspects.attach ?? []), ...(aspects.detach ?? [])]
       : [];
-  return named.some((a) => contour.aspects.has(a));
+  return named.some((a) => aspectIds.has(a));
 }
 
 /** Форма `aspects` во ВХОДЕ-ПАТЧЕ: у неё нет ключей, кроме attach/detach. */
@@ -959,6 +995,60 @@ async function lockBudgetContour(
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
   if (ops.some((op) => touchesBudgetContour(reg, op))) await lockOwnerBudget(tx, graphId);
+}
+
+/**
+ * Ключи замков правил `unique_among`, которые операции пачки обязаны взять ДО стадий, — по тому же
+ * нормативу, что и бюджет-контур (докблок выше): порядок захвата глобален — «advisory → строки».
+ * Возьми правило свой замок только на стадии 4, он оказался бы ПОЗЖЕ `SELECT … FOR UPDATE` правимой
+ * строки, а встречная операция берёт его до своих строковых блокировок — два порядка на один замок
+ * дают цикл ожидания.
+ *
+ * Отбор — по ФОРМЕ ВХОДА, как у контура (общий обход `namesAspectOrProperty`): назван ли аспект
+ * области правила либо хоть одно свойство его набора. Точность в сторону «лишний раз взяли»
+ * некритична: замок владельческий, реентерабельный и дешёвый. Порядок — по ключу, чтобы два
+ * конкурента с разными наборами правил не встали крест-накрест.
+ *
+ * ИМЕНОВАННЫЙ ОСТАТОК, почему форма, а не состояние: правку записи-носителя, не называющую ни аспекта,
+ * ни свойства набора (постороннее свойство, `run_action`), форма не выдаёт — движок проверит правило
+ * и возьмёт замок сам (`assertUniqueAmong`), уже после строковой блокировки. Цикл тогда возможен лишь
+ * со встречной правкой ТОЙ ЖЕ записи, меняющей набор, и PostgreSQL разорвёт его отказом одной из двух —
+ * инвариант при этом держится. Узнать аспекты записи до стадий значило бы читать строку раньше замка,
+ * то есть заводить второй проход по базе. У конверта щели нет: каждое его свойство — в бюджет-контуре,
+ * и контурный замок, взятый обеими сторонами первым, выстраивает их в одну очередь.
+ *
+ * ЭКСПОРТИРОВАН РАДИ ТЕСТА — по тому же доводу, что `touchesBudgetContour`: провал отбора виден не
+ * отказом, а циклом ожидания под конкуренцией.
+ */
+export function uniqueRuleKeysOf(
+  reg: RegistrySnapshot,
+  graphId: GraphId,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+): string[] {
+  const keys = new Set<string>();
+  for (const { rule, carrier } of rulesOf(reg)) {
+    if (rule.template !== 'unique_among' || !rule.enabled) continue;
+    const scope = effectiveRuleScope(rule, carrier);
+    // Правило без области-аспекта движок отвергает (`RULE_SCOPE_UNSUPPORTED`) — замок ему не нужен.
+    if (!('aspect' in scope)) continue;
+    const aspectIds = new Set([scope.aspect]);
+    const propertyIds = new Set(rule.params.properties);
+    if (ops.some((op) => namesAspectOrProperty(reg, op, aspectIds, propertyIds))) {
+      keys.add(ruleLockKey(graphId, rule.id));
+    }
+  }
+  return [...keys].sort();
+}
+
+async function lockUniqueAmongRules(
+  tx: Tx,
+  reg: RegistrySnapshot,
+  graphId: GraphId,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+): Promise<void> {
+  for (const key of uniqueRuleKeysOf(reg, graphId, ops)) {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 // apps/server/src/rules/engine.ts
 /**
- * ДВИЖОК КАТАЛОГА ПРАВИЛ C/T (§Б4-2, §Б4-3) — исполнитель четырёх шаблонов записи сущности по строкам
- * реестра: `requires_when`/`forbidden_when` (C — ограничения, стадия 4 исполнителя) и
+ * ДВИЖОК КАТАЛОГА ПРАВИЛ C/T (§Б4-2, §Б4-3) — исполнитель пяти шаблонов записи сущности по строкам
+ * реестра: `requires_when`/`forbidden_when`/`unique_among` (C — ограничения, стадия 4 исполнителя) и
  * `on_enter_class`/`default` (T — переходы, до стадии 2). Движок не знает ни одного аспекта по имени:
  * встроенные строки и строки владельца он исполняет одинаково, и это и есть обещание §А7-2 «инвариант —
  * декларацией, а не кодом».
@@ -9,20 +9,24 @@
  * Врезан в исполнитель на ТРЁХ путях записи (create / update / attach). С задачи 4 он — ЕДИНСТВЕННЫЙ
  * исполнитель двух доменных инвариантов §А7-2: системные строки `builtin-rules.ts` (financial —
  * `requires_when`/`forbidden_when`, task — `on_enter_class`) заменили код, стоявший рядом с движком
- * на время двойной проверки (Р-К-18); корпус близнецов — `registry/invariants-golden.test.ts`.
+ * на время двойной проверки (Р-К-18); корпус близнецов — `registry/invariants-golden.test.ts`. С задачи
+ * 12 туда же ушла уникальность конверта — строка `duplicate_envelope` шаблона `unique_among`.
  *
- * `unique_among` входит в род `constraint`, но исполняется с задачи 12 (РЧ-3-2): встреченное включённое
- * правило этого шаблона — отказ `RULE_TEMPLATE_UNSUPPORTED`, а не пропуск. Правило, которое нельзя
- * исполнить, молчать не должно (Р-И-13).
+ * Отказ «исполнить нечем» у движка один — `RULE_SCOPE_UNSUPPORTED` (область, которой шаблон записи не
+ * умеет: роль, контракт до V2, `unique_among` без аспекта). Шаблоны рода покрыты ПО ПОСТРОЕНИЮ: диспетчер
+ * C-правил исчерпывает их `never`-веткой, и шаблон, добавленный в род без ветки, не скомпилируется —
+ * отдельной причины «шаблон не исполняется» у движка больше нет.
  */
 import {
   type BindingIndex,
+  canonicalJson,
   entityClassOf,
   type GraphId,
   type RuleCarrier,
   type RuleDefinition,
 } from '@orbis/shared';
 import { type ExprScalar, propertyNamesInExpr } from '@orbis/shared/expr';
+import { sql } from 'drizzle-orm';
 import { defaultCurrencyOf } from '../budget/binding';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -74,11 +78,20 @@ type EnterRule = Extract<RuleDefinition, { template: 'on_enter_class' }>;
 type EnterEvent = EnterRule['params']['enter'];
 
 const TRANSITION_TEMPLATES: ReadonlySet<string> = new Set(['on_enter_class', 'default']);
-const CONSTRAINT_TEMPLATES: ReadonlySet<string> = new Set([
-  'requires_when',
-  'forbidden_when',
-  'unique_among',
-]);
+/**
+ * Род `constraint` — литеральным кортежем, а не голым множеством строк: из него выводится тип
+ * `ConstraintRule`, по которому диспетчер `assertConstraintRules` исчерпывает шаблоны `never`-веткой.
+ * Шаблон, дописанный сюда без ветки диспетчера, — ошибка компиляции, а не молчаливый пропуск.
+ */
+const CONSTRAINT_TEMPLATE_LIST = ['requires_when', 'forbidden_when', 'unique_among'] as const;
+type ConstraintRule = Extract<
+  RuleDefinition,
+  { template: (typeof CONSTRAINT_TEMPLATE_LIST)[number] }
+>;
+const CONSTRAINT_TEMPLATES: ReadonlySet<string> = new Set(CONSTRAINT_TEMPLATE_LIST);
+function isConstraintRule(rule: RuleDefinition): rule is ConstraintRule {
+  return CONSTRAINT_TEMPLATES.has(rule.template);
+}
 
 /**
  * Применимые правила записи (Р-И-13): включённые, шаблон своего рода, область подходит записи.
@@ -240,8 +253,9 @@ function refusalText(
 
 /**
  * C-правила (§Б4-3): `requires_when` — условие истинно И свойства нет → отказ; `forbidden_when` —
- * условие истинно И свойство есть → отказ. Отказ — `INVARIANT` с `details.invariant = rule.id` (Р-К-1):
- * близнецы кода и строки сида совпадают по нему без второго словаря.
+ * условие истинно И свойство есть → отказ; `unique_among` — условие истинно И набор свойств занят
+ * другой неархивной записью области → отказ. Отказ — `INVARIANT` с `details.invariant = rule.id`
+ * (Р-К-1): близнецы кода и строки сида совпадают по нему без второго словаря.
  */
 export async function assertConstraintRules(input: RuleWriteInput): Promise<void> {
   // Порядок — по (носитель, id правила), как у T: при двух нарушенных правилах на разных носителях
@@ -266,33 +280,155 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
     live.map((r) => r.rule),
   );
   for (const { rule, carrier } of live) {
-    if (rule.template === 'unique_among') {
-      // Ветку и строку сида кладёт задача 12; до неё уникальность держит `assertEnvelopeUnique`.
-      // Включённое правило этого шаблона в снимке — дефект, а не повод промолчать (fail-closed).
-      throw new ExecError('VALIDATION', `шаблон «${rule.template}» исполняется с задачи 12`, {
-        reason: 'RULE_TEMPLATE_UNSUPPORTED',
-        rule: rule.id,
-        template: rule.template,
-      });
-    }
-    if (rule.template !== 'requires_when' && rule.template !== 'forbidden_when') continue;
+    // Недостижимо: `applicableRules` отобрал род `constraint`. Сужение нужно типу — ниже шаблоны рода
+    // исчерпываются `never`-веткой.
+    if (!isConstraintRule(rule)) continue;
     if (!whenHolds(rule, scope)) continue;
-    const has = present(input.state.props[rule.params.property]);
-    if (rule.template === 'requires_when' ? has : !has) continue;
-    throw new ExecError('INVARIANT', refusalText(rule), {
-      invariant: rule.id,
-      rule_template: rule.template,
-      property: rule.params.property,
-      scope: effectiveRuleScope(rule, carrier),
-    });
+    switch (rule.template) {
+      case 'unique_among': {
+        const ruleScope = effectiveRuleScope(rule, carrier);
+        // Область без аспекта валидатор не пропускает (`assertRule`, РЧ-12-3) — ветка достижима
+        // только ручной строкой. Fail-closed: правило, которое не знает своего множества, обязано
+        // молчать отказом, а не пропуском (Р-И-13).
+        if (!('aspect' in ruleScope)) {
+          throw new ExecError(
+            'VALIDATION',
+            `правило «${rule.id}» без области-аспекта неисполнимо: ${rule.template} уникален СРЕДИ носителей (§Б4-3)`,
+            { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, scope: ruleScope },
+          );
+        }
+        await assertUniqueAmong(input, rule, ruleScope.aspect);
+        continue;
+      }
+      case 'requires_when':
+      case 'forbidden_when': {
+        const has = present(input.state.props[rule.params.property]);
+        if (rule.template === 'requires_when' ? has : !has) continue;
+        throw new ExecError('INVARIANT', refusalText(rule), {
+          invariant: rule.id,
+          rule_template: rule.template,
+          property: rule.params.property,
+          scope: effectiveRuleScope(rule, carrier),
+        });
+      }
+      default: {
+        // Шаблон рода без ветки — дефект кода, а не отказ владельцу: компилятор его не пропустит.
+        const unhandled: never = rule;
+        throw new Error(`C-шаблон без ветки диспетчера: ${(unhandled as RuleDefinition).template}`);
+      }
+    }
   }
+}
+
+/**
+ * Ключ транзакционного замка правила (Р-И-15): `<владелец>:rule:<id правила>` — один инвариант, одна
+ * очередь владельца.
+ *
+ * Своё пространство имён, не пересекающееся ни с `<владелец>:<роль>` замков ацикличности
+ * (`executor/relations.ts`), ни с `<владелец>:envelope_unique` бюджет-контура (`lockOwnerBudget`): три
+ * очереди отвечают на три разных вопроса, и общий ключ слил бы их в одну без всякой на то причины.
+ * Порядок захвата держит пред-стадийный проход исполнителя (`lockUniqueAmongRules`) — см. докблок
+ * `executor.ts` о глобальном порядке «advisory → строки».
+ */
+export function ruleLockKey(graphId: GraphId, ruleId: string): string {
+  return `${graphId}:rule:${ruleId}`;
+}
+
+/**
+ * Канон значения для сравнения «то же ли» — ТО ЖЕ равенство, что у jsonb в SQL-половине проверки.
+ * ОТСУТСТВИЕ и json-`null` — РАЗНОЕ, ровно как у `props -> 'id'`: у отсутствующего ключа оператор даёт
+ * SQL NULL, у json-null — `'null'::jsonb`. Метка отсутствия — голое слово `absent`, и спутать его со
+ * значением нельзя: канон строки `'absent'` — строка В КАВЫЧКАХ. Ключи объектов сортируются
+ * (`canonicalJson`): jsonb порядка ключей не хранит, и наивный `JSON.stringify` развёл бы виртуальную
+ * строку пачки и ту же строку из базы по json-свойству набора (рулинг 12-1).
+ */
+function ruleValueCanon(value: unknown): string {
+  return value === undefined ? 'absent' : canonicalJson(value);
+}
+function sameRuleValue(a: unknown, b: unknown): boolean {
+  return ruleValueCanon(a) === ruleValueCanon(b);
+}
+
+/**
+ * `unique_among` (§Б4-3): среди НЕАРХИВНЫХ записей владельца, несущих аспект области, нет второй с
+ * тем же набором значений. Сравнение — `IS NOT DISTINCT FROM` по jsonb каждого свойства (РЧ-12-1), а
+ * не по тексту: `->>` привёл бы число `10` и строку `"10"` к одному; «нет значения» — такая же часть
+ * комбинации, как и значение.
+ *
+ * `when` правила (проверено диспетчером выше) решает, КАКУЮ запись правило проверяет, — как у соседей по
+ * роду; множество, среди которого ищется дубль, задаёт ОБЛАСТЬ. Условие E над чужими строками в SQL не
+ * вычислить, и «уникален среди записей, где условие истинно» выражается своим аспектом-областью.
+ *
+ * Архивность САМОЙ записи при правке свойств не смотрится (РЧ-12-4) — поведение снятого
+ * `assertEnvelopeUnique`: правка архивной записи в комбинацию, занятую живой, отклоняется. Одно
+ * исключение, и тоже паритет со снятым кодом: архивация БЕЗ правки свойств (`touchedCore` задан —
+ * рулинг 3-4 — и запись после неё архивна) не проверяется. Она выводит запись ИЗ множества и дубля
+ * создать не может; а проверь её правило — две записи, ставшие дублями до правила (владелец добавил
+ * его поверх данных или включил снова), не архивировались бы ни одна: каждой мешала бы другая.
+ *
+ * Виртуальные строки пачки (§7.8) авторитетнее БД: их эффектов в базе ещё нет, а их же id из
+ * SQL-выдачи исключаются — версия пачки могла и архивировать строку.
+ */
+async function assertUniqueAmong(
+  input: RuleWriteInput,
+  rule: Extract<RuleDefinition, { template: 'unique_among' }>,
+  aspectId: string,
+): Promise<void> {
+  const { ctx, entityId, state, batch } = input;
+  if (input.touchedCore !== undefined && input.core.archived) return;
+  const properties = rule.params.properties;
+  const values: Record<string, unknown> = {};
+  for (const propertyId of properties) values[propertyId] = state.props[propertyId];
+
+  // Замок — реентерабельный повтор: пред-стадийный проход исполнителя уже взял его, если вход
+  // называет аспект или свойство набора (`lockUniqueAmongRules`). Здесь он страхует пути, которых
+  // форма входа не выдала (см. докблок там же): без него две конкурентные записи одного набора не
+  // видели бы незакоммиченных строк друг друга (write-skew).
+  await ctx.tx.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${ruleLockKey(ctx.graphId, rule.id)}, 0))`,
+  );
+
+  const match = sql.join(
+    properties.map((propertyId) => {
+      const value = values[propertyId];
+      const json = value === undefined ? sql`NULL::jsonb` : sql`${JSON.stringify(value)}::jsonb`;
+      return sql`(props -> ${propertyId}) IS NOT DISTINCT FROM ${json}`;
+    }),
+    sql` AND `,
+  );
+  const rows = (await ctx.tx.execute(sql`
+    SELECT id FROM entities
+     WHERE graph_id = ${ctx.graphId} AND NOT archived AND id <> ${entityId}
+       AND ${aspectId} = ANY(aspects)
+       AND ${match}
+     LIMIT 2
+  `)) as unknown as Array<{ id: string }>;
+
+  let existing = rows.map((r) => r.id).find((id) => batch?.entities.has(id) !== true);
+  if (existing === undefined && batch !== undefined) {
+    for (const row of batch.entities.values()) {
+      if (row.id === entityId || row.archived || !row.aspects.includes(aspectId)) continue;
+      const props = (row.props ?? {}) as Record<string, unknown>;
+      if (properties.every((p) => sameRuleValue(props[p], values[p]))) {
+        existing = row.id;
+        break;
+      }
+    }
+  }
+  if (existing === undefined) return;
+  throw new ExecError(
+    'INVARIANT',
+    `набор свойств (${properties.join(', ')}) уже занят другой неархивной записью — правило «${rule.id}» (§Б4-3); правьте существующую или архивируйте её`,
+    { invariant: rule.id, rule_template: 'unique_among', existingId: existing, values },
+  );
 }
 
 /**
  * НАБОР ЧТЕНИЯ C-правила — свойства (и core-проекции), от которых зависит его вердикт: имена в `when`
  * (`propertyNamesInExpr` — `{prop}`, `{has}`, база `{deref}`) плюс параметр-свойство шаблона. У
- * `unique_among` — его набор и НЕЯВНЫЙ `orbis/archived`: уникальность «среди неархивных» (задача 12),
- * и разархивация возвращает запись в множество, где дубль возможен. По набору отбираются правила
+ * `unique_among` — его набор и НЕЯВНЫЙ `orbis/archived`: уникальность «среди неархивных» (§Б4-3),
+ * и разархивация без свойств возвращает запись в множество, где дубль возможен (архивацию без свойств
+ * `assertUniqueAmong` пропускает сам — она из множества выводит). По набору отбираются правила
  * правки без свойств: правило, которое ядро не читает, её вердикта не меняет.
  */
 function ruleReadSet(rule: RuleDefinition): Set<string> {

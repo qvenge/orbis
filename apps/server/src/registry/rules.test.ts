@@ -438,6 +438,15 @@ describe('assertRule: unique_among (§Б4-3, строка 11 §С1-2)', () => {
     expect(e.code).toBe('UNIQUE_ON_MANY');
     expect(e.details).toMatchObject({ rule: 'u_many', property: 'orbis/aliases' });
   });
+  test('json-свойство в наборе принимается: значение — один документ (рулинг 12-1)', () => {
+    // `orbis/recurrence` — `kind: 'json'` без `cardinality`: равенство jsonb у документа определено,
+    // и `UNIQUE_ON_MANY` о нём не говорит — он только про списки `cardinality: many`.
+    const rule = check(
+      { kind: 'aspect', id: 'orbis/schedule' },
+      { id: 'u_json', template: 'unique_among', params: { properties: ['orbis/recurrence'] } },
+    );
+    expect(rule.template).toBe('unique_among');
+  });
   test('правило на СВОЙСТВЕ без явного scope.aspect → RULE_TEMPLATE_CARRIER', () => {
     const e = err(() =>
       check(
