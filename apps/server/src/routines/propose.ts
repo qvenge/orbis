@@ -69,7 +69,7 @@ const OPERATION_SCHEMAS = {
   relation_delete: relationDeleteInput,
 } as const;
 
-type ExecOperation = { tool: string; input: Record<string, unknown> };
+export type ExecOperation = { tool: string; input: Record<string, unknown> };
 
 function err(code: string, message: string, details?: unknown): ToolDispatchResult {
   return { status: 'error', error: { code, message, details } };
@@ -521,12 +521,22 @@ function collides(
   return null;
 }
 
-interface TargetRow {
+export interface TargetRow {
   /** Новая правда значений (§А1-1) — по ней снимаются предусловия: их единица теперь свойство. */
   props: Record<string, unknown>;
   /** Список интерпретаций — он же признак носителя при чтении значений. */
   aspects: string[];
   updatedAt: Date;
+  /**
+   * Core-проекции §А1-3: их читают правила и предусловия действий как обычные свойства
+   * (`orbis/archived` в `precondition` сидового `plan-to-fact`, `actions/resolve.ts`). Три
+   * колонки, а не отдельное чтение: вторая пара «прочитать цель» разъехалась бы с первой
+   * (докблок `loadTargets`). Предложение рутины от них не меняется — `buildUpdate` ходит только
+   * по `props`/`unset`.
+   */
+  title: string | null;
+  archived: boolean;
+  createdAt: Date;
 }
 
 /**
@@ -571,6 +581,9 @@ export async function loadTargets(
       props: entities.props,
       aspects: entities.aspects,
       updatedAt: entities.updatedAt,
+      title: entities.title,
+      archived: entities.archived,
+      createdAt: entities.createdAt,
     })
     .from(entities)
     .where(
@@ -584,6 +597,9 @@ export async function loadTargets(
       props: row.props as Record<string, unknown>,
       aspects: row.aspects,
       updatedAt: row.updatedAt,
+      title: row.title,
+      archived: row.archived,
+      createdAt: row.createdAt,
     });
   }
 
