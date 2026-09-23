@@ -1,7 +1,7 @@
 // Интеграционные тесты реестра LLM/MCP-тулов (§9.2, §7.6): живая БД под withIdentity.
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
 import {
@@ -22,6 +22,7 @@ import {
   entityQueryInput,
   entityUpdateInput,
   finishInput,
+  isActionToolName,
   myQueueInput,
   proposeInput,
   relationCreateInput,
@@ -240,6 +241,23 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     const masked = defOf(await registryWithDisabled(userB, ['finance']), 'run_action').description;
     expect(masked).not.toContain('finance/plan-to-fact');
     expect(masked).toContain('planner/postpone_overdue — ');
+  });
+
+  test('снятое (deprecated) действие не публикуется тулом и не попадает в каталог run_action (М-3)', async () => {
+    const defs = await withIdentity(db, personal(userB), async (tx) => {
+      const reg = await effectiveRegistry(tx, userB);
+      const decl = reg.actions.get('planner/postpone_overdue');
+      if (decl === undefined) throw new Error('сидового действия нет в снимке');
+      const actions = new Map([
+        ...reg.actions,
+        [decl.id, { ...decl, status: 'deprecated' as const }],
+      ]);
+      return buildToolDefs({ ...reg, actions });
+    });
+    expect(defs.map((d) => d.name)).not.toContain('action_planner_postpone_overdue');
+    const catalog = defOf(defs, 'run_action').description;
+    expect(catalog).not.toContain('planner/postpone_overdue');
+    expect(catalog).toContain('finance/plan-to-fact — '); // соседнее активное — на месте
   });
 
   test('имена тулов без «/» (и вообще только [a-z0-9_])', async () => {
@@ -891,7 +909,7 @@ describe('§С8-23: инвариант против fail-open — писател
   test('уровень действия считается по ШАГАМ, а не по имени (§Б6-2, риск О7)', async () => {
     const defs = await registryFor(userB);
     const actionTools = defs
-      .filter((d) => d.name === 'run_action' || d.name.startsWith('action_'))
+      .filter((d) => d.name === 'run_action' || isActionToolName(d.name))
       .map((d) => d.name);
     expect(actionTools.length).toBeGreaterThan(0);
     expect(actionTools).toEqual(['run_action', 'action_planner_postpone_overdue']);
@@ -919,6 +937,32 @@ describe('§С8-23: инвариант против fail-open — писател
     ]).toEqual(['touches_money']);
     // И факт шага — не эхо декларации: без объявленного факта шаг производит его сам.
     expect(p2f.steps.flatMap((s) => stepFactsOf(reg, s))).toEqual(['touches_money']);
+  });
+
+  test('предикат имени тула действия ОДИН: префиксной пробы нигде нет (М-4)', () => {
+    // Префикс захватил бы реестровые `action_set`/`action_remove` (задача 10): вызов ушёл бы в ветку
+    // действия, в пачке — `RUN_ACTION_IN_BATCH`, инвариант выше покраснел бы. Сторож — по исходникам
+    // сервера и shared (включая тесты), строки комментариев не считаются.
+    const probe = /startsWith\(['"]action_/;
+    const roots = [
+      join(import.meta.dir, '..'),
+      join(import.meta.dir, '../../../../packages/shared/src'),
+    ];
+    const hits = roots.flatMap((root) =>
+      (readdirSync(root, { recursive: true }) as string[])
+        .filter((p) => p.endsWith('.ts'))
+        .flatMap((p) =>
+          readFileSync(join(root, p), 'utf8')
+            .split('\n')
+            .filter((line) => !/^\s*(\*|\/\/)/.test(line) && probe.test(line))
+            .map((line) => `${p}: ${line.trim()}`),
+        ),
+    );
+    expect(hits).toEqual([]);
+    // Не вырожденно: проба узнаёт ту форму, которую ищет.
+    // Образец склеен из двух строк, иначе сторож нашёл бы сам себя.
+    expect(probe.test(`name.startsWith(${"'"}action_')`)).toBe(true);
+    expect(isActionToolName('action_set')).toBe(false);
   });
 
   test('видимый классификатору мутирующий тул фону не адресован (ось worker, §А9-4)', async () => {

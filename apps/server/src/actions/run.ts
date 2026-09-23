@@ -87,6 +87,31 @@ export async function runAction(
     );
   }
 
+  // Гейты полномочий — ПО ШАГАМ, и ДО резолва (М-2 гейта): набор тулов шагов статичен (`step.tool`
+  // — имя, а не выражение, и резолв даёт ровно по операции на шаг и цель), поэтому отказ по правам
+  // не зависит от данных — ни предусловие цели, ни пустое множество целей пакета не отвечают актору
+  // без права раньше, чем «нельзя». Деф шага собирается из реестра: `routineToolAllowed` берёт
+  // `{name, kind}`, и подкладывать ему имя ДЕЙСТВИЯ вместо имени ШАГА значило бы проверять не то
+  // (§Б6-2).
+  const defs = buildToolDefs(reg, disabled);
+  for (const tool of new Set(declared.steps.map((step) => step.tool))) {
+    const stepDef = defs.find((d) => d.name === tool) ?? { name: tool, kind: 'mutate' as const };
+    if (ctx.routine !== undefined && !routineToolAllowed(stepDef, ctx.routine)) {
+      return errorResult(
+        'FORBIDDEN_LEVEL',
+        `действие «${declared.key}»: шаг «${tool}» недоступен рутине в режиме «${ctx.routine.mode}» (§Б6-2, §С2-2)`,
+        { action: declared.id, tool, reason: 'action_step_forbidden', mode: ctx.routine.mode },
+      );
+    }
+    if (ctx.grant !== undefined && ctx.grant.scope !== 'full' && !WORKER_SCOPE_TOOLS.has(tool)) {
+      return errorResult(
+        'FORBIDDEN_LEVEL',
+        `действие «${declared.key}»: шаг «${tool}» недоступен скоупу worker (§4.14, §Б6-2)`,
+        { action: declared.id, tool, reason: 'action_step_forbidden', scope: ctx.grant.scope },
+      );
+    }
+  }
+
   const resolved = await withIdentity(ctx.db, ctx.identity, async (tx) => {
     const timeZone = await ownerTimeZone(tx, ctx.identity.graph);
     return resolveAction(tx, reg, ctx.identity.graph, parsed, {
@@ -99,28 +124,6 @@ export async function runAction(
     // Пакетному действию нечего делать (запрос не нашёл ни одной цели): исполнять пустую пачку
     // нечем — исполнитель отверг бы её «batch без операций», а журналировать нечего.
     return { status: 'ok', result: [] };
-  }
-
-  // Гейты полномочий — ПО ШАГАМ. Деф шага собирается из реестра: `routineToolAllowed` берёт
-  // `{name, kind}`, и подкладывать ему имя ДЕЙСТВИЯ вместо имени ШАГА значило бы проверять не то
-  // (§Б6-2). Имена шагов повторяются по целям пакета — проверяется каждое один раз.
-  const defs = buildToolDefs(reg, disabled);
-  for (const tool of new Set(operations.map((op) => op.tool))) {
-    const stepDef = defs.find((d) => d.name === tool) ?? { name: tool, kind: 'mutate' as const };
-    if (ctx.routine !== undefined && !routineToolAllowed(stepDef, ctx.routine)) {
-      return errorResult(
-        'FORBIDDEN_LEVEL',
-        `действие «${decl.key}»: шаг «${tool}» недоступен рутине в режиме «${ctx.routine.mode}» (§Б6-2, §С2-2)`,
-        { action: decl.id, tool, reason: 'action_step_forbidden', mode: ctx.routine.mode },
-      );
-    }
-    if (ctx.grant !== undefined && ctx.grant.scope !== 'full' && !WORKER_SCOPE_TOOLS.has(tool)) {
-      return errorResult(
-        'FORBIDDEN_LEVEL',
-        `действие «${decl.key}»: шаг «${tool}» недоступен скоупу worker (§4.14, §Б6-2)`,
-        { action: decl.id, tool, reason: 'action_step_forbidden', scope: ctx.grant.scope },
-      );
-    }
   }
 
   const facts = actionCallFacts(reg, decl, operations, targets, ctx);

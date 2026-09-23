@@ -5516,6 +5516,19 @@ describe('batch_execute: действие внутри и предел длин�
     });
   });
 
+  test('реестровое имя action_set в пачке — «неизвестный тул», а не RUN_ACTION_IN_BATCH (М-4)', async () => {
+    // Имя тула действия — общим предикатом (`isActionToolName`), не префиксом: реестровые
+    // `action_set`/`action_remove` задачи 10 вызовом действия не являются.
+    const out = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [{ tool: 'action_set', input: {} }],
+    });
+    expect(out).toMatchObject({ status: 'error', error: { code: 'VALIDATION' } });
+    if (out.status !== 'error') return;
+    expect(out.error.message).toBe('batch_execute: неизвестный тул операции «action_set»');
+    expect((out.error.details as { reason?: string }).reason).toBeUndefined();
+  });
+
   test('пачка длиннее 100 отвергается ДО политики: BATCH_TOO_LONG (В-9)', async () => {
     const out = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),

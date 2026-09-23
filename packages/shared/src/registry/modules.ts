@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AspectDefinition } from './property-type';
-import { actionToolName, attachToolName } from './tool-schema';
+import { actionToolName, attachToolName, isActionToolName } from './tool-schema';
 
 // СЛОВАРЬ МОДУЛЕЙ И ПОВЕРХНОСТЕЙ (§Б5-1, §Б8-1; форма имени — ревизия 3).
 // Имя — `<модуль>/<поверхность>`, и модуль подписки читается ИЗ ИМЕНИ: второй источник ответа «чья
@@ -166,8 +166,9 @@ export function moduleOfTool(
     }
     return null;
   }
-  if (name.startsWith('action_')) {
-    // Вперёд от ключей — по тому же доводу, что у attach_*: нормализация имени необратима.
+  if (isActionToolName(name)) {
+    // Вперёд от ключей — по тому же доводу, что у attach_*: нормализация имени необратима. Имя —
+    // общим предикатом, а не префиксом: реестровые `action_set`/`action_remove` (задача 10) — ядро.
     for (const a of reg.actions?.values() ?? []) {
       if (actionToolName(a.key) === name) return MODULE_IDS.find((m) => m === a.module) ?? null;
     }

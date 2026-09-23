@@ -25,6 +25,7 @@ import {
   entityQueryInput,
   entityUpdateInput,
   type GraphId,
+  isActionToolName,
   type ModuleId,
   moduleOfTool,
   newId,
@@ -396,7 +397,7 @@ export async function dispatchTool(
       // отработали выше; envelope разбирается здесь, как у глаголов.
       return await runAsk(ctx, parseEnvelope(askInput, input, pre.def.name));
     }
-    if (pre.def.name === 'run_action' || pre.def.name.startsWith('action_')) {
+    if (pre.def.name === 'run_action' || isActionToolName(pre.def.name)) {
       // Тул действия — то же исполнение, что каталог: имя лишь адресует декларацию (§Б6-6).
       // Ветка стоит ДО runMutation по той же причине, что у предложения: конверт с
       // предусловиями через `MUTATION_ENVELOPES` не проходит, а гейты и уровень у действия
@@ -2925,7 +2926,7 @@ function assertBatchToolsKnown(
   }
   const parsed = parseEnvelope(batchExecuteInput, input, 'batch_execute');
   for (const [index, op] of parsed.operations.entries()) {
-    if (op.tool === 'run_action' || op.tool.startsWith('action_')) {
+    if (op.tool === 'run_action' || isActionToolName(op.tool)) {
       // Р-К-16: обёртка над обёрткой. `ACTION_NESTED` — про ДЕКЛАРАЦИЮ (§Б6-3), здесь речь о
       // вызове, поэтому свой `reason`: пачка действий не имеет ни общего inverse, ни общего
       // уровня, а гейты §Б6-2 считаются по шагам ОДНОГО действия. Проба стоит ПЕРВОЙ строкой

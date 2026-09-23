@@ -92,6 +92,23 @@ export function lookupAction(reg: RegistrySnapshot, ref: string): ActionDefiniti
   return decl;
 }
 
+/**
+ * Резолв вызова действия: декларация → параметры → цели → предусловие по каждой цели →
+ * подстановка → exec-операции с CAS-пунктами.
+ *
+ * ЦЕЛЬ-РУТИНА И ЦЕЛЬ-ПРОГОН ОТВЕРГАЮТСЯ ДЛЯ ЛЮБОГО АКТОРА — это РЕШЕНИЕ, а не побочный эффект
+ * заимствования `loadTargets` (М-5 гейта, Fable M-4 задачи 7). Строки целей и чужих `entity_update`
+ * читаются той же функцией, что у предложений рутины (V1.6, инвариант 6), и её запрет по объекту
+ * (`orbis/routine`, `orbis/agent-run`) действует здесь и для владельца, и для AI в чате. Причина —
+ * та же, по которой `assertAction` не пускает рутины в шаги (ступень 5, `registry/actions.ts`):
+ * у ветки действия нет замков `runMutation` над рутинами (скан носителя и оживления Р-12-2/3/5,
+ * гейт инструкции C1b-1, лимит рутин), и цель-рутина провезла бы их обход одним вызовом. Цена
+ * названа: пакет, чей запрос зацепил рутину (владелец вправе навесить рутину на задачу), падает
+ * целиком, а будущее действие над рутинами (пауза) потребует своей ветки с этими замками. Отказ
+ * говорит на языке ДЕЙСТВИЯ (`ACTION_TARGET_FORBIDDEN`, `refuse` ниже) — текст предложения
+ * («предложить это нельзя») владельцу в чате был бы неправдой; поведение `loadTargets` для
+ * предложений не меняется.
+ */
 export async function resolveAction(
   tx: Tx,
   reg: RegistrySnapshot,
@@ -113,7 +130,7 @@ export async function resolveAction(
     graphId,
     targets.map((id) => ({ tool: 'entity_update', input: { id } })),
   );
-  if ('error' in loaded) refuse(loaded.error);
+  if ('error' in loaded) refuse(decl, loaded.error, (index) => targets[index]);
   const rows = new Map(loaded.rows);
   const roles = relationRolesOf(decl.precondition);
 
@@ -172,7 +189,7 @@ export async function resolveAction(
   }
   if (foreign.length > 0) {
     const more = await loadTargets(tx, graphId, foreign);
-    if ('error' in more) refuse(more.error);
+    if ('error' in more) refuse(decl, more.error, (index) => foreign[index]?.input.id);
     for (const [id, row] of more.rows) rows.set(id, row);
   }
 
@@ -410,11 +427,27 @@ function requireSelf(decl: ActionDefinition, self: string | undefined): string {
 }
 
 /**
- * Отказ `loadTargets` — ТЕМ ЖЕ кодом и текстом (цель не найдена под RLS либо запрещена по объекту),
- * а не подменённым «не найдено»: причина отказа модели нужна настоящая.
+ * Отказ `loadTargets` — ТЕМ ЖЕ родом (цель не найдена под RLS либо запрещена по объекту), а не
+ * подменённым «не найдено»: причина отказа модели нужна настоящая. Запрет по объекту
+ * переводится на язык действия: текст и `reason` у `loadTargets` — предложения рутины
+ * («предложить это нельзя», `proposal_forbidden_target`), и у действия владельца в чате они были бы
+ * неправдой. `idOf` — цель по индексу операции, которую `loadTargets` называет в `details.index`.
  */
-function refuse(out: ToolDispatchResult): never {
+function refuse(
+  decl: ActionDefinition,
+  out: ToolDispatchResult,
+  idOf: (index: number) => unknown,
+): never {
   if (out.status !== 'error') throw new Error('loadTargets: отказ без ошибки');
+  const details = (out.error.details ?? {}) as { reason?: unknown; index?: unknown };
+  if (details.reason === 'proposal_forbidden_target') {
+    const id = typeof details.index === 'number' ? idOf(details.index) : undefined;
+    throw new ExecError(
+      'VALIDATION',
+      `действие «${decl.key}»: цель ${String(id)} — рутина или прогон; их действия не правят (§Б6-3)`,
+      { reason: 'ACTION_TARGET_FORBIDDEN', action: decl.id, id },
+    );
+  }
   throw new ExecError(
     out.error.code === 'NOT_FOUND' ? 'NOT_FOUND' : 'VALIDATION',
     out.error.message,

@@ -495,3 +495,43 @@ test('карточка действия исполнима approvePending уже
   );
   expect(moved[0]?.n).toBe(11);
 });
+
+test('гейт шагов — ДО резолва: рутина без шага в allowed_tools и пустой Q → отказ, а не ok [] (М-2)', async () => {
+  // Пакет, чей запрос пуст (ни одной записи `orbis/goal` у владельца нет): при гейте ПОСЛЕ
+  // резолва ранний `ok []` ответил бы рутине без права раньше, чем «нельзя», — отказ по правам
+  // зависел бы от данных.
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  const postpone = snap.actions.get('planner/postpone_overdue');
+  if (postpone === undefined) throw new Error('сидового действия нет в снимке');
+  const decl = synthetic({
+    params: postpone.params,
+    over: { filter: { aspect: 'orbis/goal' } },
+    batch_cap: 100,
+    steps: postpone.steps,
+  });
+  const out = await runAction(
+    routineCtx({ mode: 'act', allowedTools: ['run_action'] }),
+    withAction(snap, decl),
+    [],
+    decl.key,
+    { params: { to: '2026-09-30' } },
+    NO_DEFER,
+  );
+  expect(out).toMatchObject({
+    status: 'error',
+    error: {
+      code: 'FORBIDDEN_LEVEL',
+      details: { reason: 'action_step_forbidden', tool: 'entity_update' },
+    },
+  });
+  // Контроль: то же действие владельцу — пустой пакет, честный `ok []` без записи.
+  const owned = await runAction(
+    ownerCtx(),
+    withAction(snap, decl),
+    [],
+    decl.key,
+    { params: { to: '2026-09-30' } },
+    NO_DEFER,
+  );
+  expect(owned).toEqual({ status: 'ok', result: [] });
+});

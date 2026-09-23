@@ -485,3 +485,74 @@ test('весь unset выражением — снятие неизвестно�
   expect(verdict(money)).toEqual(underdeclared);
   expect(verdict({ ...money, sensitivity: ['touches_money', 'grants_autonomy'] })).toBe('ok');
 });
+
+// ─────────────── фикс-раунд 1 задачи 7: рутины и прогоны действиями не сценарируются ───────────────
+
+test('шаг, называющий рутину или прогон, — ACTION_STEP_TOOL: attach_*, aspects, aspects.attach|detach, выражение (Fable I-1а, I-4)', () => {
+  const withStep = (step: ActionStep) => ({
+    ...builtin(0),
+    params: [],
+    // Факты объявлены с запасом: отказ обязан прийти от ступени 5, а не от недообъявления.
+    sensitivity: ['touches_money', 'grants_autonomy'],
+    steps: [step],
+  });
+  const REFUSED = { code: 'VALIDATION', reason: 'ACTION_STEP_TOOL' };
+  const expr = { $expr: { const: ['orbis/task'] } };
+  const forms: Array<[string, ActionStep]> = [
+    [
+      'attach_orbis_routine',
+      stepOf('attach_orbis_routine', {
+        entity_id: SELF,
+        data: { 'orbis/routine_mode': 'propose', 'orbis/routine_stage': 'active' },
+      }),
+    ],
+    // Служебный аспект прогона тула модели не даёт, но в реестре он есть — шаг его не назовёт.
+    ['attach_orbis_agent_run', stepOf('attach_orbis_agent_run', { entity_id: SELF, data: {} })],
+    [
+      'entity_create aspects',
+      stepOf('entity_create', {
+        title: 'Рутина',
+        tags: [],
+        aspects: ['orbis/routine'],
+        props: { 'orbis/routine_mode': 'propose' },
+      }),
+    ],
+    [
+      'entity_update aspects.attach',
+      stepOf('entity_update', { id: SELF, aspects: { attach: ['orbis/routine'] } }),
+    ],
+    [
+      'entity_update aspects.detach',
+      stepOf('entity_update', { id: SELF, aspects: { detach: ['orbis/agent-run'] } }),
+    ],
+    ['aspects выражением', stepOf('entity_create', { title: 'x', tags: [], aspects: expr })],
+    ['aspects.attach выражением', stepOf('entity_update', { id: SELF, aspects: { attach: expr } })],
+    [
+      'элемент aspects.attach выражением',
+      stepOf('entity_update', { id: SELF, aspects: { attach: [expr] } }),
+    ],
+  ];
+  for (const [what, step] of forms) {
+    expect([what, verdict(withStep(step))]).toEqual([what, REFUSED]);
+  }
+  // Отказ называет объект, а не только тул.
+  const attach = forms[3]?.[1];
+  if (attach === undefined) throw new Error('формы aspects.attach нет');
+  expect(() => assertAction(withStep(attach), { reg, systemSeed: true })).toThrow(
+    'рутины и прогоны действиями не сценарируются',
+  );
+  // Контроль: чужой аспект в `aspects.attach` ступень 5 пропускает — отказ адресован объекту.
+  expect(
+    verdict(
+      withStep(
+        stepOf('entity_update', {
+          id: SELF,
+          aspects: { attach: ['orbis/task'] },
+          props: { 'orbis/task_status': 'inbox' },
+        }),
+      ),
+    ),
+  ).toBe('ok');
+  // И сидовые действия — прежний вердикт.
+  for (const decl of BUILTIN_ACTION_DEFS) expect(verdict(decl)).toBe('ok');
+});

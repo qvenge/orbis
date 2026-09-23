@@ -84,6 +84,8 @@ describe('манифест модуля (§Б8-1): состав вне реес�
     expect(moduleOfTool('action_finance_выдумка', reg)).toBe(null);
     // Снимок без словаря действий (сегодняшние вызыватели `moduleOfTool`) — тот же `null`.
     expect(moduleOfTool('action_planner_postpone_overdue', { aspects: reg.aspects })).toBe(null);
+    // Реестровый `action_set` (задача 10) — не тул действия: ядро, модуля нет (М-4).
+    expect(moduleOfTool('action_set', reg)).toBe(null);
   });
 
   test('modulePromptFragments и setModuleEnabledInput', () => {

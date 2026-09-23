@@ -22,6 +22,7 @@ import {
   entityCreateInput,
   entityUpdateInput,
   exprMarkerSchema,
+  isActionToolName,
   MODULE_IDS,
   type PropertyDefinition,
   type PropertyKind,
@@ -44,6 +45,7 @@ import {
 import { isListPropertyType, type QueryAst, type QueryFilterNode } from '@orbis/shared/query';
 import { z } from 'zod';
 import { ExecError } from '../errors';
+import { ROUTINE_UNTOUCHABLE_OBJECTS } from '../executor/invariants';
 import { resolvePropertyRef } from '../executor/props';
 import { assertExprChecked } from '../expr/check';
 // Предикат доверенности рутины — ОДИН на политику и валидатор (Р-И-25): факт `grants_autonomy`
@@ -74,21 +76,6 @@ function bad(
 
 /** §Б6-3: условие или альтернатива НА УРОВНЕ ШАГА; E-`if` внутри `input` законен. */
 const BRANCH_KEYS = ['when', 'if', 'else', 'unless'] as const;
-
-/**
- * ОБРАЗ `actionToolName` НАД `ACTION_KEY_RE` — ровно те имена, которые тул действия может носить
- * (рулинг 6-1). Ключ — `<ns>/<slug>`, где ns — `[a-z][a-z0-9-]*` (ни одного `_`), slug —
- * `[a-z][a-z0-9_-]*`; нормализация `actionToolName` («/» и «-» → «_») даёт
- * `action_<ns'>_<slug'>`, и у каждой строки этой регулярки прообраз есть (ns' обратно — «_» → «-»).
- *
- * ПОЧЕМУ НЕ `startsWith('action_')`. Префикс захватил бы реестровые тулы `action_set`/`action_remove`
- * (задача 10) и назвал бы их ВЛОЖЕННОСТЬЮ, хотя это «шаг вне словаря» (§Б6-3, `ACTION_STEP_TOOL`):
- * действие, правящее реестр действий, — не вызов действия. Им регулярка не соответствует по
- * построению — после `action_` у них нет второго сегмента. Перебором словаря действий (а не формой)
- * проверка тоже была бы неверна: шаг, зовущий тул ещё не посеянного действия или самого себя,
- * — та же вложенность, а словарь её не знает.
- */
-const ACTION_TOOL_NAME_RE = /^action_[a-z][a-z0-9_]*_[a-z][a-z0-9_]*$/;
 
 export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefinition {
   const rec = (v: unknown): Record<string, unknown> | undefined =>
@@ -179,7 +166,9 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
 
   // (5) Шаги: только графовые тулы с inverse (Р-10); действие действие не зовёт.
   for (const [index, step] of decl.steps.entries()) {
-    if (step.tool === 'run_action' || ACTION_TOOL_NAME_RE.test(step.tool)) {
+    // Имя тула действия — общим предикатом (`isActionToolName`, shared): префикс захватил бы реестровые
+    // `action_set`/`action_remove`, которые вложенностью не являются (рулинг 6-1).
+    if (step.tool === 'run_action' || isActionToolName(step.tool)) {
       throw new ExecError(
         'ACTION_NESTED',
         `действие «${decl.key}»: шаг ${index + 1} вызывает действие «${step.tool}» — глубина вложенности 0 (§Б6-3)`,
@@ -195,6 +184,17 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
         decl.key,
         `действие «${decl.key}»: шаг ${index + 1} зовёт «${step.tool}» — шаги v1 это ${ACTION_STEP_TOOLS.join(', ')} и attach_<аспект> (§Б6-3)`,
         { step: index, tool: step.tool },
+      );
+    }
+    const scripted = delegationObjectNamedBy(scope.reg, step);
+    if (scripted !== null) {
+      bad(
+        'ACTION_STEP_TOOL',
+        decl.key,
+        scripted === MARKER_ASPECTS
+          ? `действие «${decl.key}»: шаг ${index + 1} задаёт аспекты выражением — худший случай: рутина или прогон; рутины и прогоны действиями не сценарируются (§Б6-3)`
+          : `действие «${decl.key}»: шаг ${index + 1} трогает «${scripted}» — рутины и прогоны действиями не сценарируются (§Б6-3)`,
+        { step: index, tool: step.tool, aspect: scripted },
       );
     }
   }
@@ -465,6 +465,55 @@ export function actionHash(decl: ActionDefinition): string {
     batch_cap: decl.batch_cap,
   };
   return createHash('sha256').update(canonicalJson(identity), 'utf8').digest('hex');
+}
+
+/** Адрес «аспекты заданы выражением» в отказе ступени 5: значение до прогона неизвестно. */
+const MARKER_ASPECTS = '{$expr}';
+
+/**
+ * ОБЪЕКТ МАШИНЕРИИ ДЕЛЕГИРОВАНИЯ, КОТОРЫЙ ШАГ НАЗЫВАЕТ (фикс-раунд 1 задачи 7: Fable I-1(а) + I-4,
+ * гейт I-T10a/I-T10b): рутина или прогон (`ROUTINE_UNTOUCHABLE_OBJECTS` — тот же список, что у запрета
+ * по объекту для фона). `null` — не называет; `MARKER_ASPECTS` — набор аспектов задан выражением, и
+ * худший случай считается названным.
+ *
+ * ПОЧЕМУ СТАТИЧЕСКИЙ ОТКАЗ, А НЕ ПОВТОР ЗАМКОВ НА ИСПОЛНЕНИИ. Для одиночного тула `runMutation`
+ * (`tools/dispatch.ts`) держит четыре замка над рутинами, которых у ветки действия нет: скан
+ * разоружения и оживления через носитель (`autonomyChangedByCarrier`, Р-12-2/3/5 — `attach_orbis_routine`
+ * заменяет набор целиком, `aspects.detach` уносит носитель, `aspects.attach` оживляет запись с
+ * пережившими значениями), гейт инструкции act-рутины (C1b-1) и лимит рутин `gateRoutinesMax` (§8).
+ * Действие исполняется одной пачкой по резолвленным шагам (`actions/run.ts`), и дыры там были бы
+ * ровно те, что закрывали десять фикс-раундов Задачи 12: одна декларация, принятая карточкой однажды,
+ * дальше провозила бы разоружение или новую рутину каждым вызовом `run_action`. Проще и строже — не
+ * пустить такой шаг в декларацию вовсе: рутины и прогоны — предмет РУТИН и владельца, а не действий
+ * (симметрично Р-10 про реестр; анти-цель 3 §С2-3). Цель-рутину у `entity_update` на исполнении
+ * отвергает ещё и `loadTargets` (`actions/resolve.ts`), а эта ступень закрывает формы, где рутина
+ * НАЗВАНА, а не адресована: `attach_*` её аспекта и `aspects`/`aspects.attach`/`aspects.detach`.
+ */
+function delegationObjectNamedBy(reg: RegistrySnapshot, step: ActionStep): string | null {
+  const untouchable = (id: string): boolean =>
+    (ROUTINE_UNTOUCHABLE_OBJECTS as readonly string[]).includes(id);
+  if (step.tool.startsWith('attach_')) {
+    const aspect = attachAspectOf(reg, step.tool);
+    if (aspect !== undefined && untouchable(aspect.id)) return aspect.id;
+  }
+  const aspects = step.input.aspects;
+  if (aspects === undefined) return null;
+  if (isMarker(aspects)) return MARKER_ASPECTS;
+  const lists = Array.isArray(aspects)
+    ? [aspects]
+    : [recordOf(aspects).attach, recordOf(aspects).detach];
+  for (const list of lists) {
+    if (isMarker(list)) return MARKER_ASPECTS;
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (isMarker(item)) return MARKER_ASPECTS;
+      if (typeof item !== 'string') continue;
+      // Аспект во входе — ключ или id (`resolveAttachAspect` исполнителя принимает оба).
+      const id = [...reg.aspects.values()].find((a) => a.key === item)?.id ?? item;
+      if (untouchable(id)) return id;
+    }
+  }
+  return null;
 }
 
 /** Аспект по имени `attach_*`-тула — перебором реестра (нормализация имени необратима). */

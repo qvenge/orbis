@@ -32,6 +32,7 @@ let factId: string;
 let archivedPlannedId: string;
 let overdueA: string;
 let overdueB: string;
+let routineId: string;
 
 async function create(input: Record<string, unknown>): Promise<string> {
   const r = await execute(db, {
@@ -89,6 +90,17 @@ beforeAll(async () => {
   await create(task('Сегодня', 'planned', TODAY));
   await create(task('Будущая', 'inbox', '2026-09-20'));
   await create(task('Сделана', 'done', '2026-09-05'));
+  routineId = await create({
+    title: 'Утренняя сводка',
+    tags: [],
+    aspects: ['orbis/routine'],
+    props: {
+      'orbis/routine_stage': 'active',
+      'orbis/routine_at': '09:00',
+      'orbis/routine_days': ['mo'],
+      'orbis/routine_mode': 'propose',
+    },
+  });
 });
 
 afterAll(async () => {
@@ -207,4 +219,34 @@ test('целей больше batch_cap — BATCH_CAP_EXCEEDED, а не усеч
     code: 'VALIDATION',
     details: { reason: 'BATCH_CAP_EXCEEDED', cap: 1, found: 2 },
   });
+});
+
+test('снятое (deprecated) действие не исполняется — ACTION_DEPRECATED, а не «не найдено» (М-3)', async () => {
+  const deprecated = (reg: RegistrySnapshot): RegistrySnapshot => {
+    const decl = reg.actions.get('finance/plan-to-fact');
+    if (decl === undefined) throw new Error('сидового действия нет в снимке');
+    return {
+      ...reg,
+      actions: new Map([...reg.actions, [decl.id, { ...decl, status: 'deprecated' as const }]]),
+    };
+  };
+  await expect(
+    resolveWith(
+      { action: 'finance/plan-to-fact', self: plannedId, params: { occurred_on: TODAY } },
+      deprecated,
+    ),
+  ).rejects.toMatchObject({
+    code: 'VALIDATION',
+    details: { reason: 'ACTION_DEPRECATED', action: 'finance/plan-to-fact' },
+  });
+});
+
+test('цель-рутина отвергается и владельцу — отказом на языке действия, а не предложения (М-5)', async () => {
+  const refused = resolveFor(routineId);
+  await expect(refused).rejects.toMatchObject({
+    code: 'VALIDATION',
+    details: { reason: 'ACTION_TARGET_FORBIDDEN', action: 'finance/plan-to-fact', id: routineId },
+  });
+  // Текст предложения рутины («предложить это нельзя») владельцу в чате был бы неправдой.
+  await expect(resolveFor(routineId)).rejects.toThrow('рутина или прогон; их действия не правят');
 });

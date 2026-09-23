@@ -9,6 +9,7 @@ import {
   actionToolName,
   aspectToolJsonSchema,
   attachToolName,
+  isActionToolName,
   type ToolSchemaRegistry,
 } from './tool-schema';
 import { X_ORBIS_TYPE } from './value-schema';
@@ -44,6 +45,16 @@ describe('attachToolName (§А9-1)', () => {
     expect(actionToolName('planner/postpone_overdue')).toBe('action_planner_postpone_overdue');
     expect(actionToolName('user/close-week')).toBe('action_user_close_week');
     expect(actionToolName('finance/plan-to-fact')).toMatch(/^[a-z0-9_]+$/);
+  });
+  test('isActionToolName: образ actionToolName, а не префикс — action_set/action_remove не тулы действий (М-4)', () => {
+    for (const key of ['planner/postpone_overdue', 'finance/plan-to-fact', 'user/close-week']) {
+      expect([key, isActionToolName(actionToolName(key))]).toEqual([key, true]);
+    }
+    // Реестровые тулы задачи 10 и каталог — не тулы действий: у первых нет второго сегмента,
+    // второй — ядро и спрашивается по имени отдельно.
+    for (const name of ['action_set', 'action_remove', 'run_action', 'attach_orbis_task']) {
+      expect([name, isActionToolName(name)]).toEqual([name, false]);
+    }
   });
 });
 
