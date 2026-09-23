@@ -101,18 +101,8 @@ function isConstraintRule(rule: RuleDefinition): rule is ConstraintRule {
 }
 
 /**
- * Применимые правила записи (Р-И-13): включённые, шаблон своего рода, область подходит записи.
- * Область `{contract}` формой принимается, а исполняется в V2 (Р-25): встреченное включённое правило
- * такой области на записи-члене контракта — ОТКАЗ, а не пропуск; правило, которое нельзя применить,
- * молчать не должно. На нечлене оно молчит законно: область его не касается.
- *
- * Область `{role}` у шаблона записи (C/T) — тоже отказ `RULE_SCOPE_UNSUPPORTED`: валидатор задачи 1
- * такую пару принимает (ступени области и носителя смотрят каждая своё), а у записи СУЩНОСТИ роли нет
- * — роль описывает ребро. Какой записи правило «касалось бы», решает его НОСИТЕЛЬ — строка, в которой
- * оно написано: аспект стоит на записи либо свойство на ней есть или его несёт её аспект (та же мерка,
- * что у области `{property}`). Носитель-роль у C/T законным путём недостижим (`RULE_TEMPLATE_CARRIER`
- * задачи 1); доедь он ручной строкой — отказ при первой же встрече на любой записи: касательства
- * такой строки к записи не определить, а молчать ей нельзя.
+ * Применимые правила записи (Р-И-13): включённые, шаблон своего рода, область подходит записи —
+ * мерка «подходит» одна на движок и оценочную область `assign_level` (`ruleTouchesRecord`).
  */
 export function applicableRules(
   reg: RegistrySnapshot,
@@ -123,41 +113,68 @@ export function applicableRules(
   const out: Applicable[] = [];
   for (const { rule, carrier } of rulesOf(reg)) {
     if (!rule.enabled || !family.has(rule.template)) continue;
-    const scope = effectiveRuleScope(rule, carrier);
-    if ('aspect' in scope) {
-      if (!state.aspects.includes(scope.aspect)) continue;
-    } else if ('property' in scope) {
-      const carriers = carrierAspects(reg, scope.property);
-      if (!(scope.property in state.props) && !carriers.some((a) => state.aspects.includes(a))) {
-        continue;
-      }
-    } else if ('role' in scope) {
-      if (!carrierTouches(reg, carrier, state)) continue;
-      throw new ExecError(
-        'VALIDATION',
-        `область правила «роль» у шаблона записи не исполняется: правило «${rule.id}» описывает ребро, а не запись`,
-        { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, role: scope.role },
-      );
-    } else if (
-      bindingsOf(reg)
-        .byContract(scope.contract)
-        .some((b) => state.aspects.includes(b.aspectId))
-    ) {
-      throw new ExecError(
-        'VALIDATION',
-        `область правила «контракт» исполняется в V2 (Р-25): правило «${rule.id}» применить нечем`,
-        { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, contract: scope.contract },
-      );
-    } else {
-      continue;
-    }
+    if (!ruleTouchesRecord(reg, rule, carrier, state)) continue;
     out.push({ rule, carrier });
   }
   return out;
 }
 
+/** Запись глазами области правила: её аспекты и значения (у движка — `EntityState`). */
+export interface RecordView {
+  readonly props: Record<string, unknown>;
+  readonly aspects: readonly string[];
+}
+
+/**
+ * КАСАЕТСЯ ЛИ ПРАВИЛО ЭТОЙ ЗАПИСИ (Р-И-13) — ОДНА мерка на движок записи (`applicableRules`) и оценочную
+ * область `assign_level` (`policy/assign-level.ts`): две копии разошлись бы на первой же новой области.
+ * Аспект — стоит на записи; свойство — есть на записи либо его несёт её аспект (`carrierAspects`).
+ *
+ * Область `{contract}` формой принимается, а исполняется в V2 (Р-25): встреченное включённое правило
+ * такой области на записи-члене контракта — ОТКАЗ, а не пропуск; правило, которое нельзя применить,
+ * молчать не должно. На нечлене оно молчит законно: область его не касается.
+ *
+ * Область `{role}` — тоже отказ `RULE_SCOPE_UNSUPPORTED`: валидатор задачи 1 такую пару принимает
+ * (ступени области и носителя смотрят каждая своё), а у записи СУЩНОСТИ роли нет — роль описывает
+ * ребро. Какой записи правило «касалось бы», решает его НОСИТЕЛЬ — строка, в которой оно написано:
+ * аспект стоит на записи либо свойство на ней есть или его несёт её аспект (та же мерка, что у области
+ * `{property}`). Носитель-роль у C/T законным путём недостижим (`RULE_TEMPLATE_CARRIER` задачи 1); у
+ * `assign_level` законен, и такая строка отказывает при первой же встрече на любой записи: касательства
+ * её к записи не определить, а молчать ей нельзя.
+ */
+export function ruleTouchesRecord(
+  reg: RegistrySnapshot,
+  rule: RuleDefinition,
+  carrier: RuleCarrier,
+  state: RecordView,
+): boolean {
+  const scope = effectiveRuleScope(rule, carrier);
+  if ('aspect' in scope) return state.aspects.includes(scope.aspect);
+  if ('property' in scope) {
+    if (scope.property in state.props) return true;
+    return carrierAspects(reg, scope.property).some((a) => state.aspects.includes(a));
+  }
+  if ('role' in scope) {
+    if (!carrierTouches(reg, carrier, state)) return false;
+    throw new ExecError(
+      'VALIDATION',
+      `область правила «роль» на записи не исполняется: правило «${rule.id}» описывает ребро, а не запись`,
+      { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, role: scope.role },
+    );
+  }
+  const member = bindingsOf(reg)
+    .byContract(scope.contract)
+    .some((b) => state.aspects.includes(b.aspectId));
+  if (!member) return false;
+  throw new ExecError(
+    'VALIDATION',
+    `область правила «контракт» исполняется в V2 (Р-25): правило «${rule.id}» применить нечем`,
+    { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, contract: scope.contract },
+  );
+}
+
 /** Касается ли носитель правила записи (для области, которая сама этого не решает, — `{role}`). */
-function carrierTouches(reg: RegistrySnapshot, carrier: RuleCarrier, state: EntityState): boolean {
+function carrierTouches(reg: RegistrySnapshot, carrier: RuleCarrier, state: RecordView): boolean {
   if (carrier.kind === 'aspect') return state.aspects.includes(carrier.id);
   if (carrier.kind === 'property') {
     return (

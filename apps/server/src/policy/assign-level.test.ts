@@ -286,7 +286,7 @@ const SCENARIOS: readonly Scenario[] = [
   },
 ];
 
-function verdictOf(s: Scenario) {
+function verdictOf(s: Scenario, rules: RegistrySnapshot = regWithRules) {
   const facts = FACTS(s.facts);
   const call: AssignLevelCall = {
     actorKind: facts.actorKind,
@@ -307,7 +307,7 @@ function verdictOf(s: Scenario) {
     aggVia: s.aggVia,
     deref: (id) => TARGETS[id] ?? null,
   });
-  return { verdict: assignLevelOf(regWithRules, target, call), table: call.tableLevel };
+  return { verdict: assignLevelOf(rules, target, call), table: call.tableLevel };
 }
 
 describe('§С8-26: одиннадцать правил дают ожидаемые уровни на синтетическом сиде', () => {
@@ -362,6 +362,73 @@ describe('§С8-26: одиннадцать правил дают ожидаем�
       candidates: 0,
     });
     expect(verdict).toEqual({ level: 'execute', candidates: [], floored: false });
+  });
+  test('запрет по объекту держится и без сработавших правил — итог не зависит от их числа', () => {
+    // С кандидатом тот же вызов получает `forbidden` («silent против ряда пола» выше); без кандидатов
+    // наложение обязано дать то же — иначе смысл `level` зависел бы от того, сработало ли правило.
+    const { verdict } = verdictOf({
+      aspects: ['orbis/note'],
+      props: {},
+      call: { objectForbidden: true },
+      level: 'forbidden',
+      candidates: 0,
+    });
+    expect(verdict).toEqual({ level: 'forbidden', candidates: [], floored: true });
+  });
+});
+
+describe('область правила assign_level — мерка движка записи (Р-И-13, `ruleTouchesRecord`)', () => {
+  /** Снимок приёмки плюс одна строка-проба на носителе `orbis/task`; область задаёт поле `scope`. */
+  const withProbe = (scope: Record<string, string>): RegistrySnapshot => {
+    const row = regWithRules.aspects.get('orbis/task');
+    if (row === undefined) throw new Error('фикстура: аспекта orbis/task нет в снимке');
+    const probe = ruleDefinitionSchema.parse({
+      id: 'al_scope_probe',
+      template: 'assign_level',
+      params: {},
+      level: 'discuss',
+      scope,
+      when: { const: true },
+    });
+    const aspects = new Map(regWithRules.aspects);
+    aspects.set('orbis/task', { ...row, rules: [...row.rules, probe] });
+    return { ...regWithRules, aspects };
+  };
+  const at = (aspects: string[], props: Record<string, unknown> = {}): Scenario => ({
+    aspects,
+    props,
+    level: 'execute',
+    candidates: 0,
+  });
+  const probed = (rules: RegistrySnapshot, s: Scenario) =>
+    verdictOf(s, rules).verdict.candidates.map((c) => c.rule);
+  const reasonOf = (fn: () => unknown): string => {
+    try {
+      fn();
+    } catch (e) {
+      return String((e as { details?: { reason?: unknown } }).details?.reason);
+    }
+    return 'нет отказа';
+  };
+
+  test('область-свойство: значение на записи ЛИБО аспект-носитель; иначе правило молчит', () => {
+    const rules = withProbe({ property: 'orbis/due_date' });
+    expect(probed(rules, at(['orbis/note']))).toEqual([]);
+    expect(probed(rules, at(['orbis/note'], { 'orbis/due_date': '2026-10-01' }))).toEqual([
+      'al_scope_probe',
+    ]);
+    // `orbis/task` несёт `orbis/due_date` — носимость решает, даже когда значения нет.
+    expect(probed(rules, at(['orbis/task']))).toEqual(['al_scope_probe']);
+  });
+  test('область роль/контракт: отказ ровно там, где правило касается записи, — не шире', () => {
+    const role = withProbe({ role: 'participant' });
+    expect(probed(role, at(['orbis/note']))).toEqual([]); // носитель на записи не стоит
+    expect(reasonOf(() => verdictOf(at(['orbis/task']), role))).toBe('RULE_SCOPE_UNSUPPORTED');
+    const contract = withProbe({ contract: 'orbis/money-movement' });
+    expect(probed(contract, at(['orbis/note']))).toEqual([]); // не член контракта
+    expect(reasonOf(() => verdictOf(at(['orbis/financial']), contract))).toBe(
+      'RULE_SCOPE_UNSUPPORTED',
+    );
   });
 });
 

@@ -8,14 +8,13 @@
 // СИНХРОНЕН, значит рёбра, опубликованные величины соседей и читатель `deref` собраны до вызова
 // (Р-4). Факты ВЫЗОВА функция вписывает в область сама: «что за запись» знает цель, «что за вызов»
 // — `call`, и два источника одного `$sensitivity` разошлись бы на первом же вызывающем.
-import { RULE_LEVEL_TO_CONFIRMATION, type RuleDefinition, type RuleScope } from '@orbis/shared';
+import { RULE_LEVEL_TO_CONFIRMATION, type RuleDefinition } from '@orbis/shared';
 import type { ExprNode } from '@orbis/shared/expr';
-import { ExecError } from '../errors';
-import { carrierAspects } from '../executor/props';
 import type { ActorKind, MutationSource } from '../executor/types';
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import type { RegistrySnapshot } from '../registry/load';
-import { effectiveRuleScope, rulesOf } from '../registry/rules';
+import { rulesOf } from '../registry/rules';
+import { ruleTouchesRecord } from '../rules/engine';
 import type { ConfirmationLevel, ToolCallFacts } from './confirmation';
 import { floorLevel, stricter } from './floor';
 
@@ -34,11 +33,20 @@ export interface AssignLevelCall {
 }
 
 export interface AssignLevelVerdict {
+  /** Итоговый уровень: правила поверх таблицы, затем пол — В ОБЕИХ ветках (с правилами и без). */
   level: ConfirmationLevel;
-  /** Правило, давшее итоговый уровень, — след §С2-1 «строка журнала несёт rule_id». */
+  /**
+   * Победившее правило (строжайшее из сработавших) — след §С2-1 «строка журнала несёт rule_id». При
+   * `floored: true` его уровень перекрыт полом: итог дал не он, а пол, и след называет правило, которое
+   * владелец увидит «проигнорированным с пометкой» (Р-27).
+   */
   rule?: string;
   candidates: readonly { rule: string; level: ConfirmationLevel }[];
-  /** Итог поднят полом выше уровня победившего правила (Р-27: «игнорирование с пометкой»). */
+  /**
+   * Пол поднял итог выше того, что дали бы правила, а без сработавших правил — таблица (Р-27:
+   * «игнорирование с пометкой»; без правил на практике так срабатывает только запрет по объекту —
+   * ряды 1/4/6 таблица держит не ниже пола сама).
+   */
   floored: boolean;
 }
 
@@ -54,32 +62,6 @@ function actorMatches(rule: AssignLevelRule, call: AssignLevelCall): boolean {
   return call.source === 'routine' && call.routineId === actor.routine;
 }
 
-/**
- * Применимо ли правило к ЭТОЙ записи (Р-И-13). Область-свойство — та же мерка, что у движка правил
- * записи (`applicableRules`): свойство есть на записи либо его несёт её аспект, носители — общей
- * `carrierAspects`. Область «роль»/«контракт» — правило о ребре и о классе без записи-цели: в Б-2
- * не исполняется (Р-25, Р-К-36), и молчать об этом нельзя — включённое правило, которое никогда не
- * сработает, хуже отказа (fail-closed, §С8-3).
- */
-function applies(
-  reg: RegistrySnapshot,
-  scope: RuleScope,
-  target: ExprEvalScope,
-  ruleId: string,
-): boolean {
-  const aspects = target.aspects ?? [];
-  if ('aspect' in scope) return aspects.includes(scope.aspect);
-  if ('property' in scope) {
-    if (Object.hasOwn(target.props, scope.property)) return true;
-    return carrierAspects(reg, scope.property).some((id) => aspects.includes(id));
-  }
-  throw new ExecError(
-    'VALIDATION',
-    `область правила «${'role' in scope ? scope.role : scope.contract}» в Б-2 не исполняется (§Б4-5, Р-25)`,
-    { reason: 'RULE_SCOPE_UNSUPPORTED', rule: ruleId },
-  );
-}
-
 export function assignLevelOf(
   reg: RegistrySnapshot,
   target: ExprEvalScope,
@@ -91,23 +73,36 @@ export function assignLevelOf(
     sensitivity: call.facts.sensitivity,
     touched: call.touched,
   };
+  // Касается ли правило записи — ТА ЖЕ мерка, что у движка правил записи (`ruleTouchesRecord`,
+  // Р-И-13): область «роль»/«контракт» отказывает `RULE_SCOPE_UNSUPPORTED` ровно там, где касается
+  // записи, и молчит там, где не касается (Р-25, Р-К-36).
+  const record = { aspects: target.aspects ?? [], props: target.props };
   const candidates: { rule: string; level: ConfirmationLevel }[] = [];
   for (const { rule, carrier } of rulesOf(reg)) {
     if (rule.template !== 'assign_level' || !rule.enabled) continue;
     if (!actorMatches(rule, call)) continue;
-    if (!applies(reg, effectiveRuleScope(rule, carrier), scope, rule.id)) continue;
+    if (!ruleTouchesRecord(reg, rule, carrier, record)) continue;
     // `when` у `assign_level` обязателен (схема §Б4-1, refine), а `rulesOf` отдаёт только разобранные
     // схемой правила; отказ вычисления — структурный отказ вызова, а не «правило не сработало»:
     // невыразимое не бывает пустотой (§С8-3).
     if (evalExpr(rule.when as ExprNode, scope) !== true) continue;
     candidates.push({ rule: rule.id, level: RULE_LEVEL_TO_CONFIRMATION[rule.level] });
   }
-  if (candidates.length === 0) return { level: call.tableLevel, candidates: [], floored: false };
+  // Пол накладывается и БЕЗ сработавших правил (гейт задачи 15, m-4): запрет по объекту — не уровень
+  // таблицы, а наложение (§Б4-5), и итог, который то несёт его (есть кандидат), то нет (кандидатов
+  // ноль), означал бы разное в зависимости от числа правил. Ряды 1/4/6 таблица и так держит не ниже
+  // пола, поэтому без правил пол меняет итог только запретом по объекту.
+  const floor = floorLevel(call.facts, call.objectForbidden ?? false);
+  const withFloor = (base: ConfirmationLevel): ConfirmationLevel =>
+    floor === null ? base : stricter(base, floor);
+  if (candidates.length === 0) {
+    const level = withFloor(call.tableLevel);
+    return { level, candidates: [], floored: level !== call.tableLevel };
+  }
   // При нескольких сработавших побеждает более строгое (В-2д); порядок `rulesOf` детерминирован —
   // носители в порядке снимка (`load.ts`: `ORDER BY graph_id NULLS FIRST, id`), правила в порядке
   // строки, — поэтому «первое из равных» тоже воспроизводимо.
   const winner = candidates.reduce((a, b) => (stricter(a.level, b.level) === a.level ? a : b));
-  const floor = floorLevel(call.facts, call.objectForbidden ?? false);
-  const level = floor === null ? winner.level : stricter(winner.level, floor);
+  const level = withFloor(winner.level);
   return { level, rule: winner.rule, candidates, floored: level !== winner.level };
 }
