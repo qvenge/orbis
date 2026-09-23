@@ -1,30 +1,43 @@
 // apps/server/src/policy/assign-level.test.ts
-// §С8-26: одиннадцать правил делегирования дают ожидаемые уровни. Сегодня ложно — модуля
-// `policy/assign-level` нет вовсе; пометку снимает задача 15, кладущая оценочную область.
-// Тело СИНХРОННО (ОВ-Б1-1): импорт — в `beforeAll`, тест читает собранное.
-import { beforeAll, describe, expect, test } from 'bun:test';
-import { ASSIGN_LEVEL_RULES } from '@orbis/shared';
+// §С8-26: одиннадцать правил делегирования «дня мечты» (§Б4-5) дают ожидаемые уровни — приёмка
+// ВЫРАЗИМОСТИ, а не подключения: живой конвейер §7.10 правил не знает (V2), и оценочная область
+// `assignLevelOf` зовётся только отсюда. Пол понижения (Р-27) пиннится здесь же — он и есть та
+// граница, которую правило владельца пробить не вправе.
+import { describe, expect, test } from 'bun:test';
+import type { ToolCallFacts } from './confirmation';
+import { floorLevel, LEVEL_ORDER, stricter } from './floor';
 
-let loaded: { ok: unknown } | { err: unknown };
-beforeAll(async () => {
-  try {
-    // Спецификатор ВЫЧИСЛЯЕМЫЙ: литеральный уронил бы `bun run typecheck` на несуществующем
-    // модуле, а веха 0 обязана закрываться красными ТЕСТАМИ, а не красными типами.
-    const mod = (await import(`${import.meta.dir}/assign-level`)) as Record<string, unknown>;
-    loaded =
-      typeof mod.assignLevelOf === 'function'
-        ? { ok: mod.assignLevelOf }
-        : { err: new Error('policy/assign-level: экспорта assignLevelOf нет (задача 15)') };
-  } catch (e) {
-    loaded = { err: e };
-  }
+const FACTS = (over: Partial<ToolCallFacts> = {}): ToolCallFacts => ({
+  tool: 'entity_update',
+  kind: 'mutate',
+  known: true,
+  actorKind: 'ai',
+  explicitCommand: false,
+  archives: false,
+  isBatch: false,
+  grantsAutonomy: false,
+  reconfigures: 'none',
+  sensitivity: [],
+  ...over,
 });
 
-describe('§С8-26: приёмка выразимости assign_level', () => {
-  test.failing('оценочная область считает уровень каждого из одиннадцати правил', () => {
-    if ('err' in loaded) throw loaded.err;
-    // Задача 15 заменит тело: сценарии на `seedTestWorld`, ожидание —
-    // stricter(RULE_LEVEL_TO_CONFIRMATION[level], floorLevel(facts)).
-    expect(ASSIGN_LEVEL_RULES.length).toBe(13);
+describe('пол понижения §С2-1 (Р-27): три ряда таблицы и запрет по объекту', () => {
+  test('порядок строгости — единственный, и он полон', () => {
+    expect(LEVEL_ORDER).toEqual(['execute', 'preview', 'explicit-confirmation', 'forbidden']);
+    expect(stricter('preview', 'execute')).toBe('preview');
+    expect(stricter('explicit-confirmation', 'forbidden')).toBe('forbidden');
+    expect(stricter('preview', 'preview')).toBe('preview');
+  });
+  test('ряды 1/4/6 дают пол, обычная мутация — не даёт', () => {
+    expect(floorLevel(FACTS({ known: false }))).toBe('forbidden');
+    expect(floorLevel(FACTS({ reconfigures: 'behavior-delta' }))).toBe('explicit-confirmation');
+    expect(floorLevel(FACTS({ reconfigures: 'system-object' }))).toBe('explicit-confirmation');
+    expect(floorLevel(FACTS({ grantsAutonomy: true }))).toBe('explicit-confirmation');
+    // Владельцу автономию выдаёт он сам — ряд 6 по актору ветвится (`classifyToolCall`).
+    expect(floorLevel(FACTS({ grantsAutonomy: true, actorKind: 'owner' }))).toBeNull();
+    // Ряд 5 (масштаб) и ряд 3 (архивация) в пол НЕ входят: их правило понижать вправе (В-2).
+    expect(floorLevel(FACTS({ isBatch: true, batchSize: 40 }))).toBeNull();
+    expect(floorLevel(FACTS({ archives: true }))).toBeNull();
+    expect(floorLevel(FACTS(), true)).toBe('forbidden');
   });
 });
