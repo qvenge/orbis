@@ -557,6 +557,28 @@ describe('SQL-бэкенд: empty над списком, контексты кл
         ),
       ).reason,
     ).toBe('EXPR_SHAPE');
+    // `orbis/title` отсекается уже «не списком»; ветку ядра держит СПИСОЧНОЕ core-свойство — его в
+    // реестре сегодня нет, и снимок заводит его синтетически (докблок `emptyPredicate`).
+    const title = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/title') as PropertyDefinition;
+    const coreList: PropertyDefinition = {
+      ...title,
+      id: 'user/core_list',
+      key: 'user/core_list',
+      type: { kind: 'text', cardinality: 'many' },
+    };
+    const withCoreList = ctxOf({
+      reg: snapshot({
+        properties: new Map([...BUILTIN_PROPERTY_META, coreList].map((p) => [p.id, p])),
+      }),
+    });
+    expect(
+      refusal(() =>
+        compileExprPredicate(
+          { op: 'empty', args: [{ prop: 'user/core_list' }] },
+          { cctx: withCoreList, row: ROW },
+        ),
+      ).details,
+    ).toMatchObject({ reason: 'EXPR_SHAPE', property: 'user/core_list' });
   });
   test('контексты классификатора бэкенду наборов недоступны — оба ИМЕНЕМ', () => {
     for (const ctx of ['$sensitivity', '$touched'] as const) {

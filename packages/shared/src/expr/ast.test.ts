@@ -49,8 +49,9 @@ const FORM_PROBE: Record<ExprForm, unknown> = {
 
 describe('канон §Б3-5', () => {
   test('канон §Б3-5: 16 операторов и 17 ветвей узла = 16 форм канона + {slot}', () => {
-    // «24» решения владельца В-1 — счёт 9 значений + 15 операторов, а не число веток схемы (О5 plan-verify).
-    // `empty` (Р-26, ревизия 4) — ОПЕРАТОР, а не форма узла: счёт ветвей не меняется.
+    // Историческое «24» решения владельца В-1 — счёт 9 значений + 15 операторов на момент В-1, а не
+    // число веток схемы (О5 plan-verify). С ревизии 4 операторов 16: `empty` (Р-26) — ОПЕРАТОР, а не
+    // форма узла, поэтому счёт ветвей не меняется.
     expect(EXPR_OPS.length).toBe(16);
     expect(new Set(EXPR_OPS).size).toBe(16);
     expect(EXPR_OPS).toContain('empty');
@@ -122,6 +123,8 @@ describe('JSON Schema языка E', () => {
     ).toBe(false);
     expect(validate({ op: 'empty', args: [{ ctx: '$touched' }] })).toBe(true);
     expect(validate({ op: 'empty', args: [] })).toBe(false);
+    // Верхняя граница — тоже форма: JSON Schema уезжает чужому потребителю, мимо zod.
+    expect(validate({ op: 'empty', args: [{ const: true }, { const: true }] })).toBe(false);
   });
 
   test('exprJsonSchema валидирует пробы всех форм и отвергает узлы вне канона', () => {
