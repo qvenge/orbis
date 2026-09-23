@@ -56,12 +56,20 @@ export const budgetSubscriptionSchema = z
     params: z.array(z.enum(['period_start', 'period_end', 'horizon_end'])),
     sources: z
       .object({
+        // §С8-21: чей аспект считать, когда контракт реализуют два, — решает ДЕКЛАРАЦИЯ; образец —
+        // `show.prefer` Повестки. Порядок перечня и есть приоритет; пустой — выбора нет, и запись с
+        // двумя привязками получает `SLOT_AMBIGUOUS` (молчаливый выбор дал бы лимит не из того аспекта).
         movement: z
-          .object({ contract: z.literal('orbis/money-movement'), counted_set: z.string() })
+          .object({
+            contract: z.literal('orbis/money-movement'),
+            counted_set: z.string(),
+            prefer: z.array(z.string()).default([]),
+          })
           .strict(),
         envelope: z
           .object({
             contract: z.literal('orbis/envelope'),
+            prefer: z.array(z.string()).default([]),
             binding_role: z.string(),
             selector: z
               .object({

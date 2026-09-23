@@ -46,6 +46,7 @@ import { removeSubscriptionDelta, setSubscriptionDelta } from '../registry/ops';
 import { seedCategoryId, seedOwnerGraph } from '../seed/onboarding';
 import {
   BUDGET_SUBSCRIPTION_ID,
+  bindingForEntity,
   budgetAlertCountOf,
   budgetOverviewOf,
   budgetStatusOf,
@@ -997,5 +998,40 @@ describe('rollover: параметры перехода — из строки к
         ]);
       },
     );
+  });
+});
+
+describe('SLOT_AMBIGUOUS у Budget: без prefer — отказ, с prefer — детерминированный выбор (остаток 40)', () => {
+  const TWIN = 'user/second-budget';
+  const ON = ['orbis/budget', TWIN];
+  /** Второй аспект, реализующий ТОТ ЖЕ контракт конверта: две законные по отдельности привязки. */
+  const twoEnvelopeAspects = (base: RegistrySnapshot): RegistrySnapshot => {
+    const budget = base.aspects.get('orbis/budget');
+    if (budget === undefined) throw new Error('фикстура: аспекта orbis/budget нет в снимке');
+    const aspects = new Map(base.aspects);
+    aspects.set(TWIN, { ...budget, id: TWIN, key: TWIN, graphId: userA, rank: 900 });
+    return { ...base, aspects };
+  };
+  test('без prefer — отказ с аспектами в details; с prefer — первый совпавший', async () => {
+    await engineOn(userA, async ({ cctx, def }) => {
+      const two = { ...cctx, reg: twoEnvelopeAspects(cctx.reg) };
+      let caught: ExecError | null = null;
+      try {
+        bindingForEntity(two, 'orbis/envelope', ON, []);
+      } catch (e) {
+        caught = e as ExecError;
+      }
+      expect(caught?.code).toBe('SLOT_AMBIGUOUS');
+      expect((caught?.details as { aspects?: string[] }).aspects).toEqual(ON);
+      expect(bindingForEntity(two, 'orbis/envelope', ON, [TWIN])?.aspectId).toBe(TWIN);
+      expect(bindingForEntity(two, 'orbis/envelope', ON, ['orbis/budget'])?.aspectId).toBe(
+        'orbis/budget',
+      );
+      // Аспект из prefer, которого у записи нет, выбора не делает — отказ остаётся.
+      expect(() => bindingForEntity(two, 'orbis/envelope', ON, ['orbis/note'])).toThrow();
+      // Перечень приезжает из ДЕКЛАРАЦИИ, а не из кода движка (Р-24).
+      expect(def.sources.envelope.prefer).toEqual([]);
+      expect(def.sources.movement.prefer).toEqual([]);
+    });
   });
 });

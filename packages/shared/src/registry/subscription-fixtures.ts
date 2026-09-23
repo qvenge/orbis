@@ -89,9 +89,10 @@ export const BUDGET_DEF: BudgetSubscription = {
   currency_rule: 'owner_default_if_absent',
   params: ['period_start', 'period_end', 'horizon_end'],
   sources: {
-    movement: { contract: 'orbis/money-movement', counted_set: 'facts' },
+    movement: { contract: 'orbis/money-movement', counted_set: 'facts', prefer: [] },
     envelope: {
       contract: 'orbis/envelope',
+      prefer: [],
       binding_role: 'envelope-binding',
       selector: {
         match: ['category', 'currency', 'period'],

@@ -39,6 +39,21 @@ describe('форма подписки: agenda/budget строгая; строк�
       false,
     );
   });
+  test('budget: prefer у movement и envelope — массивы; без них подставляется [] (§С8-21)', () => {
+    const d = budgetSubscriptionSchema.parse(BUDGET_DEF);
+    expect([d.sources.movement.prefer, d.sources.envelope.prefer]).toEqual([[], []]);
+    // Как у Повестки: вход без поля получает умолчание, а эталон пишет его явно.
+    const { prefer: _mp, ...movement } = BUDGET_DEF.sources.movement;
+    const { prefer: _ep, ...envelope } = BUDGET_DEF.sources.envelope;
+    const bare = budgetSubscriptionSchema.parse({ ...BUDGET_DEF, sources: { movement, envelope } });
+    expect([bare.sources.movement.prefer, bare.sources.envelope.prefer]).toEqual([[], []]);
+    expect(
+      budgetSubscriptionSchema.safeParse({
+        ...BUDGET_DEF,
+        sources: { ...BUDGET_DEF.sources, movement: { ...movement, prefer: 'orbis/financial' } },
+      }).success,
+    ).toBe(false);
+  });
   test('порог тревоги — СТРОКА (§Б3-5): число отвергается', () => {
     expect(
       budgetSubscriptionSchema.safeParse({
