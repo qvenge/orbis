@@ -23,7 +23,10 @@ export const RULE_FINANCIAL_REQUIRES_OCCURRED_ON: RuleDefinitionInput = {
  * шаблону выражена КЛАССОМ контракта `orbis/recurrence` (В-1 §4-В): привязка `orbis/schedule`
  * относит наличие `orbis/recurrence` к классу `template`, а отсутствие — к `instance`
  * (`builtin-aspects.ts`, привязка `orbis/recurrence`), и та же проверка «аспект несёт расписание»
- * получается по построению — у записи без `orbis/schedule` привязки нет и класса нет (Р9).
+ * получается по построению — у записи без `orbis/schedule` привязки нет и класса нет (Р9). «По
+ * построению» — у ВСТРОЕННЫХ аспектов: аспект владельца, реализующий `orbis/recurrence` со слотом
+ * `template_marker` и картой `present → template`, тоже делает запись шаблоном и легитимирует
+ * `recurring` без `orbis/schedule` — по §4-В это законно (шаблон — класс контракта, а не аспект).
  */
 export const RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE: RuleDefinitionInput = {
   id: 'financial_recurring_requires_recurrence',

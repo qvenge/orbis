@@ -141,8 +141,8 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/currency', false],
       ['orbis/direction', true],
       ['orbis/finance_category', true],
-      // Условная обязательность (§3.3) типом не выражается (В8): до правила `requires_when`
-      // части Б её держит инвариант-код (§А7-2), потому в реестре поле необязательно.
+      // Условная обязательность (§3.3) типом не выражается (В8): её держит строка каталога
+      // `financial_requires_occurred_on` (`builtin-rules.ts`), потому в реестре поле необязательно.
       ['orbis/occurred_on', false],
       ['orbis/planned', false],
       ['orbis/recurring', false],
