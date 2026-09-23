@@ -1,13 +1,18 @@
 // apps/server/src/tools/registry-tools.ts
 //
-// ЧЕТЫРНАДЦАТЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2, §Б2-1, §Б5-1, §Б1-1, §Б6-1): завести своё
+// ШЕСТНАДЦАТЬ ТУЛОВ РЕЕСТРА (§А10-2, §А2-7, §А3-2, §Б2-1, §Б5-1, §Б1-1, §Б6-1, §Б4-1): завести своё
 // свойство, поправить его, слить два в одно, поставить и снять дельту аспекта, завести СВОЙ
 // аспект и переписать либо снять его привязки к контрактам, настроить и снять подписку
 // поверхности, добавить и снять свои именованные наборы контракта, завести своё действие и
-// снять его. Это первая поверхность, которой владелец и модель МЕНЯЮТ САМУ СИСТЕМУ, а не
-// данные в ней.
+// снять его, завести правило каталога и снять (отключить) его. Это первая поверхность, которой
+// владелец и модель МЕНЯЮТ САМУ СИСТЕМУ, а не данные в ней.
 //
-// Два последних (`action_set`/`action_remove`) заводит срез Б-2 (задача 10): действие — то, что
+// Два последних (`rule_set`/`rule_remove`) заводит задача 16 Б-2: каталог правил (§Б4-3) становится
+// доступен владельцу, а не только сиду. Своя строка правится колонкой `rules`, встроенные аспект и
+// свойство — дельтой (В-6), встроенная роль — отказ (Р-2); ряд политики задаёт ТУЛ (`behavior-delta`,
+// §С2-1 ряд 2 называет правило прямо).
+//
+// Два перед ними (`action_set`/`action_remove`) заводит срез Б-2 (задача 10): действие — то, что
 // система ДЕЛАЕТ по одному слову владельца, и завести его — такая же перенастройка поведения,
 // как подписка; ряд политики им задаёт ТУЛ (`behavior-delta`), как подпискам и наборам ниже.
 //
@@ -24,12 +29,12 @@
 // приходится сторожить отдельным тестом; у новых тулов сторожить нечего, потому что оба
 // представления стоят в одном файле друг под другом.
 //
-// `fullScopeOnly: true` У ВСЕХ ЧЕТЫРНАДЦАТИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
+// `fullScopeOnly: true` У ВСЕХ ШЕСТНАДЦАТИ (§А9-4, РП-14). Фоновому исполнителю (`worker`) реестр
 // не адресован вовсе: он работает над ЗАДАЧЕЙ владельца, а не над устройством его системы.
 // Флаг — не «мутации фону закрыты» (это и так держит `WORKER_SCOPE_TOOLS`), а ответ на
 // другой вопрос: кому этот тул вообще предназначен.
 //
-// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ЧЕТЫРНАДЦАТИ НАЗНАЧАЕТ §7.10, И ВХОДОВ У НЕГО ДВА (§С2-1):
+// УРОВЕНЬ ПОДТВЕРЖДЕНИЯ ЭТИМ ШЕСТНАДЦАТИ НАЗНАЧАЕТ §7.10, И ВХОДОВ У НЕГО ДВА (§С2-1):
 // ПО ОБЪЕКТУ — у восьми тулов свойств и аспектов: своя строка владельца от AI — `preview`
 // (исполнено и показано карточкой), перенастройка поведения — `explicit-confirmation` для
 // любого актора, а от рутины та же операция становится отложенной единицей пачки D42;
@@ -39,9 +44,10 @@
 // `aspect_delta_set` — СОДЕРЖИМОЕ правки (`behaviorOnlyDelta`: дельта, несущая только состав
 // вариантов и их отнесение к классам, идёт рядом по тулу даже поверх встроенного аспекта).
 //
-// ПО ТУЛУ — у четырёх тулов подписок и наборов (Р9 рамки Б-1) и двух тулов действий (задача 10
-// Б-2): ряд им задаёт ИМЯ, а не адрес, и все шесть — `behavior-delta` ВСЕГДА, включая дельту
-// поверх встроенного контракта и настройку системной подписки. Иначе садовник §Б5-2,
+// ПО ТУЛУ — у четырёх тулов подписок и наборов (Р9 рамки Б-1), двух тулов действий (задача 10
+// Б-2) и двух тулов правил (задача 16 Б-2): ряд им задаёт ИМЯ, а не адрес, и все восемь —
+// `behavior-delta` ВСЕГДА, включая дельту поверх встроенного контракта, настройку системной
+// подписки и правило поверх встроенного аспекта. Иначе садовник §Б5-2,
 // добавляющий владельцу набор поверх
 // `orbis/completable`, упирался бы в запрет по объекту на ЗАКОННОМ пути — а он обязан
 // получать отложенную единицу (пин живьём — `dispatch.test.ts`, «НЕ запрет (Р9)»).
@@ -53,10 +59,13 @@ import {
   aspectImplementsSchema,
   localizedTextSchema,
   PROPERTY_KINDS,
+  RULE_ID_RE,
+  RULE_TEMPLATES,
+  ruleDefinitionSchema,
   SURFACES,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
-import { EXPR_TREE_DEPTH_CAP, exprTreeExceedsDepth } from '@orbis/shared/expr';
+import { EXPR_TREE_DEPTH_CAP, exprJsonSchema, exprTreeExceedsDepth } from '@orbis/shared/expr';
 import {
   QUERY_TREE_DEPTH_CAP,
   queryAstJsonSchema,
@@ -753,11 +762,130 @@ const actionRemoveJsonSchema = {
   additionalProperties: false,
 } as const;
 
+// --- rule_set / rule_remove (§Б4-1, §С3 строка «Правило», В-6, Р-21) --------------------------
+
+/** Носитель правила — ровно одна из трёх форм: строка аспекта, свойства или роли (§Б4-1). */
+export const ruleTargetSchema = z.union([
+  z.object({ aspect: z.string().min(1) }).strict(),
+  z.object({ property: z.string().min(1) }).strict(),
+  z.object({ role: z.string().min(1) }).strict(),
+]);
 /**
- * Дефы четырнадцати тулов. Порядок — тот, в котором их видит модель и эталон снимка
+ * ГЕЙТ ГЛУБИНЫ ВЫРАЖЕНИЙ ПРАВИЛА — ДО СХЕМЫ, тем же приёмом и по тому же доводу, что у `action_set`
+ * (`assertActionInputDepth` выше): `ruleDefinitionSchema` разбирает E рекурсивной `exprNodeSchema`
+ * (`z.lazy`), и на глубоком дереве `safeParse` исчерпал бы стек внутри собственного разбора — `RangeError`,
+ * то есть пятисотка вместо отказа. E-позиций у правила три (`when`, `params.value`, `params.set.value`
+ * — перечень `rawExprSites` валидатора); дверь одна на все пути входа, потому что стоит в самой схеме.
+ */
+function assertRuleInputDepth(raw: unknown): void {
+  const rec = (v: unknown): Record<string, unknown> | undefined =>
+    typeof v === 'object' && v !== null && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : undefined;
+  const rule = rec(rec(raw)?.rule);
+  const params = rec(rule?.params);
+  for (const [where, value] of [
+    ['rule.when', rule?.when],
+    ['rule.params.value', params?.value],
+    ['rule.params.set.value', rec(params?.set)?.value],
+  ] as const) {
+    if (exprTreeExceedsDepth(value, EXPR_TREE_DEPTH_CAP)) {
+      throw new ExecError(
+        'VALIDATION',
+        `rule_set: ${where} — выражение вложено глубже ${EXPR_TREE_DEPTH_CAP} уровней; такая декларация разворачивалась бы на каждом чтении реестра`,
+        { tool: 'rule_set', reason: 'EXPR_TOO_DEEP', where, cap: EXPR_TREE_DEPTH_CAP },
+      );
+    }
+  }
+}
+
+export const ruleSetInput = z.preprocess((raw) => {
+  assertRuleInputDepth(raw);
+  return raw;
+}, z.object({ target: ruleTargetSchema, rule: ruleDefinitionSchema }).strict());
+export type RuleSetInput = z.infer<typeof ruleSetInput>;
+export const ruleRemoveInput = z
+  .object({ target: ruleTargetSchema, rule: z.string().regex(RULE_ID_RE) })
+  .strict();
+export type RuleRemoveInput = z.infer<typeof ruleRemoveInput>;
+
+/** Описание носителя модели — одно на оба тула: форма адреса у них общая. */
+const ruleTargetJsonSchema = {
+  type: 'object',
+  description:
+    'носитель: {"aspect":"orbis/task"}, {"property":"orbis/due_date"} либо {"role":"user/…"}. Встроенные ' +
+    'аспект и свойство принимают правило НАСТРОЙКОЙ поверх системной строки; правила встроенных ролей ' +
+    'меняет только релиз.',
+} as const;
+
+/**
+ * `$defs` ЯЗЫКА E ПОДНИМАЮТСЯ В КОРЕНЬ СХЕМЫ ТУЛА — приём и довод `entity_query` (`tools/registry.ts`):
+ * `$ref: '#/$defs/node'` — указатель ОТ КОРНЯ документа, а провайдер ссылок за пределы объекта не резолвит
+ * (D29). Это боевой потребитель `exprJsonSchema`, обещанный §Б3-1 (остаток 80). `params` описаны ПРОЗОЙ:
+ * союз по двенадцати шаблонам, и развернуть его руками значило бы завести второе описание каталога рядом
+ * с `ruleDefinitionSchema` (довод `subscriptionDefinitionJsonSchema` выше).
+ */
+const exprDefs = exprJsonSchema.$defs as Record<string, unknown>;
+const ruleSetJsonSchema = {
+  type: 'object',
+  required: ['target', 'rule'],
+  additionalProperties: false,
+  $defs: exprDefs,
+  properties: {
+    target: ruleTargetJsonSchema,
+    rule: {
+      type: 'object',
+      required: ['id', 'template', 'params'],
+      additionalProperties: true,
+      properties: {
+        id: {
+          type: 'string',
+          pattern: RULE_ID_RE.source,
+          description:
+            'имя правила: по нему оно видно в журнале, в отказе и в жесте «отключить»; существующее — замена',
+        },
+        template: { enum: [...RULE_TEMPLATES], description: 'шаблон каталога §Б4-3' },
+        when: {
+          $ref: '#/$defs/node',
+          description: 'условие ДЕРЕВОМ языка E (строка отвергается); читает только СВОЮ запись',
+        },
+        params: {
+          type: 'object',
+          description:
+            'параметры шаблона: requires_when/forbidden_when — {"property":…}; default — {"property":…,"value":<E>}; ' +
+            'on_enter_class — {"enter":…,"set":…,"on_leave":…}; unique_among — {"properties":[…]}',
+        },
+        enabled: {
+          type: 'boolean',
+          description: 'выключенное правило хранится, но не исполняется (§С3)',
+        },
+        scope: {
+          type: 'object',
+          description:
+            'область; по умолчанию — сама строка-носитель. Область {"contract":…} исполняется только в V2: ' +
+            'правило с ней отказывает КАЖДОЙ записи-члену контракта, пока его не снимут',
+        },
+      },
+    },
+  },
+} as const;
+
+const ruleRemoveJsonSchema = {
+  type: 'object',
+  required: ['target', 'rule'],
+  additionalProperties: false,
+  properties: {
+    target: ruleTargetJsonSchema,
+    rule: { type: 'string', description: 'имя (id) правила на этом носителе' },
+  },
+} as const;
+
+/**
+ * Дефы шестнадцати тулов. Порядок — тот, в котором их видит модель и эталон снимка
  * (`test/golden/tool-registry.json`): создание свойства, правка, слияние, дельта аспекта,
  * снятие дельты, заведение своего аспекта и две операции его привязок, настройка подписки и
- * её снятие, дельта наборов контракта и её снятие, заведение своего действия и его снятие.
+ * её снятие, дельта наборов контракта и её снятие, заведение своего действия и его снятие,
+ * заведение правила и его снятие.
  */
 export const REGISTRY_TOOLS: OrbisToolDef[] = [
   {
@@ -898,12 +1026,30 @@ export const REGISTRY_TOOLS: OrbisToolDef[] = [
     kind: 'mutate',
     fullScopeOnly: true,
   },
+  {
+    name: 'rule_set',
+    description:
+      'Завести или заменить правило на аспекте, свойстве или своей роли: обязательность, запрет, ' +
+      'значение по умолчанию, действие при входе в класс. Правило системного модуля можно только ' +
+      'отключить. Область-контракт исполняется только в V2: такое правило отказывает каждой записи ' +
+      'членов контракта, пока его не снимут.',
+    inputJsonSchema: ruleSetJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
+  {
+    name: 'rule_remove',
+    description: 'Снять своё правило; системное — отключить, строка остаётся и включается обратно.',
+    inputJsonSchema: ruleRemoveJsonSchema,
+    kind: 'mutate',
+    fullScopeOnly: true,
+  },
 ];
 
-/** Имена четырнадцати тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
+/** Имена шестнадцати тулов — гейты и тесты спрашивают их у реестра, а не переписывают литералами. */
 export const REGISTRY_TOOL_NAMES: ReadonlySet<string> = new Set(REGISTRY_TOOLS.map((d) => d.name));
 
-/** Envelope-схемы четырнадцати тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
+/** Envelope-схемы шестнадцати тулов — вход `MUTATION_ENVELOPES` диспатча и стадии 1 исполнителя. */
 export const REGISTRY_TOOL_ENVELOPES: Record<string, z.ZodTypeAny> = {
   property_create: propertyCreateInput,
   property_update: propertyUpdateInput,
@@ -919,4 +1065,6 @@ export const REGISTRY_TOOL_ENVELOPES: Record<string, z.ZodTypeAny> = {
   contract_sets_delta_remove: contractSetsDeltaRemoveInput,
   action_set: actionSetInput,
   action_remove: actionRemoveInput,
+  rule_set: ruleSetInput,
+  rule_remove: ruleRemoveInput,
 };

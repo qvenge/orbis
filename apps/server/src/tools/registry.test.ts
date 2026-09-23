@@ -171,7 +171,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 14 core + 1 run_action + 14 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 49', async () => {
+  test('builtin-реестр (userB без кастомных): 14 core + 1 run_action + 16 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 51', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -190,7 +190,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
     // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
     // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
-    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 49 тулов, пиннит `registry-golden`.
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 51 тул, пиннит `registry-golden`.
     for (const name of [
       'subscription_set',
       'subscription_remove',
@@ -201,6 +201,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     ]) {
       expect(names).toContain(name);
     }
+    for (const name of ['rule_set', 'rule_remove']) expect(names).toContain(name);
     expect(defs.length).toBe(TOOL_REGISTRY_GOLDEN.length);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
@@ -343,6 +344,8 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
       'contract_sets_delta_remove',
       'action_set',
       'action_remove',
+      'rule_set',
+      'rule_remove',
     ]);
     expect(defOf(defs, 'property_catalog').kind).toBe('read');
     for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind).toBe('mutate');
@@ -895,13 +898,15 @@ describe('§С8-23: инвариант против fail-open — писател
   );
 
   test('писатели реестра разобраны, и КАЖДЫЙ берёт замок реестра', () => {
-    // Четырнадцать публичных тулов реестра плюс ЧЕТЫРЕ внутренние операции
+    // Шестнадцать публичных тулов реестра плюс ЧЕТЫРЕ внутренние операции
     // (`property_row_restore`, `property_merge_undo`, `aspect_row_restore`, `module_set`):
     // первые три зовёт только undo, четвёртую — ручка владельца; снаружи ни одна не достижима.
     // У подписок и наборов своей обратной операции нет: обратное к `subscription_set` — снова
     // `subscription_set` (прежняя декларация), к `contract_sets_delta_set` —
     // `contract_sets_delta_remove` (задача 16), и внутренних имён ей заводить не пришлось. У тулов
     // действий (задача 10 Б-2) — тоже: обратное к заведению — снятие, к снятию — прежняя декларация.
+    // У тулов правил (задача 16 Б-2) — так же: обратное к заведению — снятие, к снятию и замене —
+    // `rule_set` с прежней декларацией (у системного правила это «включить обратно»).
     expect([...writers].sort()).toEqual([
       'action_remove',
       'action_set',
@@ -919,6 +924,8 @@ describe('§С8-23: инвариант против fail-open — писател
       'property_merge_undo',
       'property_row_restore',
       'property_update',
+      'rule_remove',
+      'rule_set',
       'subscription_remove',
       'subscription_set',
     ]);

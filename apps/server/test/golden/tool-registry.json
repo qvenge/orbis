@@ -2231,6 +2231,450 @@
     }
   },
   {
+    "name": "rule_set",
+    "description": "Завести или заменить правило на аспекте, свойстве или своей роли: обязательность, запрет, значение по умолчанию, действие при входе в класс. Правило системного модуля можно только отключить. Область-контракт исполняется только в V2: такое правило отказывает каждой записи членов контракта, пока его не снимут.",
+    "inputJsonSchema": {
+      "type": "object",
+      "required": ["target", "rule"],
+      "additionalProperties": false,
+      "$defs": {
+        "node": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "const": {
+                  "anyOf": [
+                    {
+                      "type": ["string", "number", "boolean", "null"]
+                    },
+                    {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": ["const"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "duration": {
+                  "type": "string",
+                  "pattern": "^P(\\d+Y(\\d+M)?(\\d+W)?(\\d+D)?|\\d+M(\\d+W)?(\\d+D)?|\\d+W(\\d+D)?|\\d+D)(T(\\d+H(\\d+M)?(\\d+S)?|\\d+M(\\d+S)?|\\d+S))?$|^PT(\\d+H(\\d+M)?(\\d+S)?|\\d+M(\\d+S)?|\\d+S)$"
+                }
+              },
+              "required": ["duration"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "prop": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["prop"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "slot": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["slot"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "param": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["param"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ctx": {
+                  "enum": ["$today", "$owner", "$self", "$sensitivity", "$touched"]
+                }
+              },
+              "required": ["ctx"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "agg": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["agg"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["phase"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "agg_via": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["role", "name"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["agg_via"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "deref": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "prop": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "read": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["prop", "read"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "slot": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "read": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["slot", "read"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": ["deref"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "enum": ["=", "!=", ">", "<", ">=", "<=", "+", "-", "*", "/", "in"]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "required": ["op", "args"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "enum": ["not"]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              },
+              "required": ["op", "args"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "enum": ["empty"]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 1,
+                  "maxItems": 1
+                }
+              },
+              "required": ["op", "args"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "enum": ["if"]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "required": ["op", "args"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "enum": ["and", "or"]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 2
+                }
+              },
+              "required": ["op", "args"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "has": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["has"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "has_relation": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "in_set": {
+                      "type": "object",
+                      "properties": {
+                        "contract": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "set": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["contract", "set"],
+                      "additionalProperties": false
+                    },
+                    "alive": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["role"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["has_relation"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "class": {
+                  "type": "object",
+                  "properties": {
+                    "contract": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["contract"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["class"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "date_add": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "required": ["date_add"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "date_diff": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "required": ["date_diff"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "days_inclusive": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "required": ["days_inclusive"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "properties": {
+        "target": {
+          "type": "object",
+          "description": "носитель: {\"aspect\":\"orbis/task\"}, {\"property\":\"orbis/due_date\"} либо {\"role\":\"user/…\"}. Встроенные аспект и свойство принимают правило НАСТРОЙКОЙ поверх системной строки; правила встроенных ролей меняет только релиз."
+        },
+        "rule": {
+          "type": "object",
+          "required": ["id", "template", "params"],
+          "additionalProperties": true,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]*$",
+              "description": "имя правила: по нему оно видно в журнале, в отказе и в жесте «отключить»; существующее — замена"
+            },
+            "template": {
+              "enum": [
+                "requires_when",
+                "forbidden_when",
+                "on_enter_class",
+                "default",
+                "unique_among",
+                "target_max_incoming",
+                "acyclic",
+                "mirror_relation",
+                "nearest_ancestor",
+                "materialize",
+                "rollover",
+                "assign_level"
+              ],
+              "description": "шаблон каталога §Б4-3"
+            },
+            "when": {
+              "$ref": "#/$defs/node",
+              "description": "условие ДЕРЕВОМ языка E (строка отвергается); читает только СВОЮ запись"
+            },
+            "params": {
+              "type": "object",
+              "description": "параметры шаблона: requires_when/forbidden_when — {\"property\":…}; default — {\"property\":…,\"value\":<E>}; on_enter_class — {\"enter\":…,\"set\":…,\"on_leave\":…}; unique_among — {\"properties\":[…]}"
+            },
+            "enabled": {
+              "type": "boolean",
+              "description": "выключенное правило хранится, но не исполняется (§С3)"
+            },
+            "scope": {
+              "type": "object",
+              "description": "область; по умолчанию — сама строка-носитель. Область {\"contract\":…} исполняется только в V2: правило с ней отказывает КАЖДОЙ записи-члену контракта, пока его не снимут"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "rule_remove",
+    "description": "Снять своё правило; системное — отключить, строка остаётся и включается обратно.",
+    "inputJsonSchema": {
+      "type": "object",
+      "required": ["target", "rule"],
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "object",
+          "description": "носитель: {\"aspect\":\"orbis/task\"}, {\"property\":\"orbis/due_date\"} либо {\"role\":\"user/…\"}. Встроенные аспект и свойство принимают правило НАСТРОЙКОЙ поверх системной строки; правила встроенных ролей меняет только релиз."
+        },
+        "rule": {
+          "type": "string",
+          "description": "имя (id) правила на этом носителе"
+        }
+      }
+    }
+  },
+  {
     "name": "orbis_my_queue",
     "description": "Что мне назначено: список тикетов этого доступа с их статусом, проектом и сводкой последнего прогона. Брать в работу можно только тикеты с claimable=true (статус inbox или planned) — остальные ждут владельца. По дороге сервер помечает брошенные прогоны (поле swept: сколько подмёл) и возвращает их тикеты в очередь. Начинай круг с этого вызова и бери ОДИН тикет за раз.",
     "inputJsonSchema": {
@@ -3445,11 +3889,11 @@
                                   "type": "object",
                                   "required": ["contract", "set"],
                                   "properties": {
-                                    "contract": {
+                                    "set": {
                                       "type": "string",
                                       "minLength": 1
                                     },
-                                    "set": {
+                                    "contract": {
                                       "type": "string",
                                       "minLength": 1
                                     }
@@ -3935,11 +4379,11 @@
                                       "type": "object",
                                       "required": ["contract", "set"],
                                       "properties": {
-                                        "contract": {
+                                        "set": {
                                           "type": "string",
                                           "minLength": 1
                                         },
-                                        "set": {
+                                        "contract": {
                                           "type": "string",
                                           "minLength": 1
                                         }

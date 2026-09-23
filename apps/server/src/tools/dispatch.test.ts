@@ -5791,6 +5791,82 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(await actionRowOf(owner, 'user/close-month')).toBeUndefined();
   });
 
+  const RULE_CALL = {
+    target: { aspect: 'orbis/task' },
+    rule: {
+      id: 'urgent_needs_due',
+      template: 'requires_when',
+      params: { property: 'orbis/due_date' },
+      when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+    },
+  };
+
+  test('rule_set от рутины → отложенная единица, в строке ТЕКСТ условия, реестр не тронут (задача 16)', async () => {
+    const owner = await freshGraph();
+    const { ctx } = await gardener(owner, ['rule_set']);
+    const r = await dispatchTool(ctx, 'rule_set', RULE_CALL);
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица, а не отказ по объекту');
+    }
+    // Голова фразы — отглагольное существительное (правило `registryOperationSummary`).
+    expect(r.card.summary).toBe('Настройка правила «urgent_needs_due» на аспекте «Задача»');
+    // Остаток 79 живьём: владелец читает УСЛОВИЕ, а не JSON-дерево.
+    expect(r.card.rows[0]?.after).toContain('priority = "high"');
+    expect(r.card.rows[0]?.after).toContain('свойство orbis/due_date');
+    expect(await deltaRowsOf(owner)).toBe(0);
+    await approvePending(db, { identity: personal(owner), pendingId: r.pendingId });
+    expect(await deltaRowsOf(owner)).toBe(1);
+    // Отключение системного правила от рутины — тоже единица, и «было» — его декларация текстом.
+    const { ctx: ctx2 } = await gardener(owner, ['rule_remove']);
+    const off = await dispatchTool(ctx2, 'rule_remove', {
+      target: { aspect: 'orbis/task' },
+      rule: 'task_completed_at',
+    });
+    if (off.status !== 'pending_confirmation' || off.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица снятия');
+    }
+    expect(off.card.summary).toBe('Снятие правила «task_completed_at» с аспекта «Задача»');
+    expect(off.card.rows).toEqual([
+      {
+        field: 'rule',
+        before: expect.stringContaining(
+          'task_completed_at: on_enter_class; свойство orbis/completed_at',
+        ),
+        after: '—',
+      },
+    ]);
+  });
+
+  test('тот же rule_set из ЧАТА → карточка-запрос с фразой, а не с именем тула', async () => {
+    const owner = await freshGraph();
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(
+      ctxFor({ identity: personal(owner), threadId }),
+      'rule_set',
+      RULE_CALL,
+    );
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'confirmation_card') {
+      throw new Error('ожидалась карточка-запрос');
+    }
+    expect(r.card.summary).toContain('правила «urgent_needs_due»');
+    expect(await deltaRowsOf(owner)).toBe(0);
+  });
+
+  test('action_set: предусловие в строке «было → станет» — ТЕКСТОМ E, а не деревом (остаток 79)', async () => {
+    const owner = await freshGraph();
+    const unit = await withIdentity(db, personal(owner), (tx) =>
+      snapshotRegistryUnit(tx, owner, 'action_set', {
+        ...OWN_ACTION_DECL,
+        precondition: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+      }),
+    );
+    expect(unit.rows.find((row) => row.field === 'precondition')).toEqual({
+      field: 'precondition',
+      after: '(orbis/priority = "high")',
+    });
+  });
+
   test('MCP-агент с полным грантом отвечает так же, как чат: правила §7.10 едины (§9.3)', async () => {
     // Классификатор по `source` не ветвится намеренно — внешний агент не должен получать
     // более широкие права, придя другим транспортом. Пин на обоих концах шкалы.
@@ -6016,6 +6092,9 @@ describe('сводка мутации реестра: правила, а не с
       // ВЫЗОВА, `action_remove` честно отдаёт адрес.
       action_set: { key: 'user/close-month', label: { ru: 'Закрыть месяц' } },
       action_remove: { action: 'user/close-month' },
+      // Носитель правила назван ПОДПИСЬЮ строки из снимка (`orbis/task` в `REG` есть).
+      rule_set: { target: { aspect: 'orbis/task' }, rule: { id: 'urgent_needs_due' } },
+      rule_remove: { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
     };
     expect(Object.keys(payloads).sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
 
@@ -6047,6 +6126,8 @@ describe('сводка мутации реестра: правила, а не с
       contract_sets_delta_remove: 'Сброс наборов контракта «Завершаемость»',
       action_set: 'Настройка действия «Закрыть месяц»',
       action_remove: 'Снятие действия «user/close-month»',
+      rule_set: 'Настройка правила «urgent_needs_due» на аспекте «Задача»',
+      rule_remove: 'Снятие правила «task_completed_at» с аспекта «Задача»',
     });
 
     for (const [tool, phrase] of Object.entries(phrases)) {

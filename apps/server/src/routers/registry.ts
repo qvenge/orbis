@@ -40,6 +40,8 @@ import {
   propertyCreateInput,
   propertyMergeInput,
   propertyUpdateInput,
+  ruleRemoveInput,
+  ruleSetInput,
   subscriptionRemoveInput,
   subscriptionSetInput,
 } from '../tools/registry-tools';
@@ -216,6 +218,14 @@ export const registryRouter = router({
   removeAction: ownerOnlyProcedure
     .input(actionRemoveInput)
     .mutation(({ ctx, input }) => registryMutation('action_remove')(ctx, input)),
+
+  setRule: ownerOnlyProcedure
+    .input(ruleSetInput)
+    .mutation(({ ctx, input }) => registryMutation('rule_set')(ctx, input)),
+
+  removeRule: ownerOnlyProcedure
+    .input(ruleRemoveInput)
+    .mutation(({ ctx, input }) => registryMutation('rule_remove')(ctx, input)),
 
   effective: protectedProcedure.query(
     ({ ctx }): Promise<WireRegistry> =>

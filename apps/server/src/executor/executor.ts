@@ -73,6 +73,7 @@ import {
   createAspect,
   createProperty,
   deprecateOwnAction,
+  disableSystemRuleDelta,
   lockOwnerRegistry,
   type MergeInverse,
   mergeProperty,
@@ -87,15 +88,19 @@ import {
   removeAspectDelta,
   removeAspectImplements,
   removeContractDelta,
+  removeOwnRule,
   removeOwnSubscription,
   removeSubscriptionDelta,
+  resolveRuleTarget,
   restoreAspectRow,
   restorePropertyRow,
   setAspectDelta,
   setAspectImplements,
   setContractDelta,
   setOwnAction,
+  setOwnRule,
   setOwnSubscription,
+  setRuleDelta,
   setSubscriptionDelta,
   systemActionAt,
   undoMerge,
@@ -138,6 +143,8 @@ import {
   propertyMergeInput,
   propertyUpdateInput,
   REGISTRY_TOOL_NAMES,
+  ruleRemoveInput,
+  ruleSetInput,
   subscriptionRemoveInput,
   subscriptionSetInput,
 } from '../tools/registry-tools';
@@ -293,6 +300,9 @@ export type WireRegistryResult =
   | { contract: string }
   // Своё действие (§Б6-1, задача 10 Б-2) — адрес строки `action_definitions`, тем же доводом.
   | { action: string }
+  // Правило каталога (§Б4-1, задача 16 Б-2) — его имя и КАНОНИЧЕСКИЙ носитель: адрес во входе бывает
+  // key, а ответ обязан назвать строку, которую операция тронула на самом деле.
+  | { rule: string; carrier: { kind: 'aspect' | 'property' | 'role'; id: string } }
   // Переключение модуля (§Б8-1 №28): ни строка реестра, ни запись графа — состояние
   // ВЛАДЕЛЬЦА. Форма несёт обе половины входа, потому что ответ ручки читает UI.
   | { module: string; enabled: boolean };
@@ -1154,6 +1164,8 @@ async function prepareOp(
   if (tool === 'contract_sets_delta_remove') return prepareContractSetsDeltaRemove(ctx, input);
   if (tool === 'action_set') return prepareActionSet(ctx, input);
   if (tool === 'action_remove') return prepareActionRemove(ctx, input);
+  if (tool === 'rule_set') return prepareRuleSet(ctx, input);
+  if (tool === 'rule_remove') return prepareRuleRemove(ctx, input);
   if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
   if (tool === 'module_set') return prepareModuleSet(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
@@ -3363,7 +3375,7 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
 // ---------------------------------------------------------------------------
 
 /**
- * Имена, при которых транзакция берёт замок реестра. Двенадцать публичных тулов плюс три
+ * Имена, при которых транзакция берёт замок реестра. Шестнадцать публичных тулов плюс три
  * ВНУТРЕННИЕ обратные операции — те же три, что перечислены ниже: их зовёт только undo.ts
  * через `execute` во внутреннем режиме, в `CORE_TOOLS` их нет, и `dispatchTool` их не
  * резолвит (реестр тулов не знает таких имён).
@@ -3991,6 +4003,68 @@ async function prepareContractSetsDeltaRemove(
         });
       }
       return { result: { contract: input.contract } };
+    },
+  };
+}
+
+/**
+ * ПРАВИЛО КАТАЛОГА (§Б4-1, §С3 строка «Правило», Р-21): ветка по НОСИТЕЛЮ, а не по имени тула — своя
+ * строка правится колонкой `rules` (`setOwnRule`), встроенные аспект и свойство — дельтой (`setRuleDelta`,
+ * В-6), встроенная роль — отказ `RULE_TARGET_SYSTEM_ROLE` (Р-2). Один тул на три пути по доводу
+ * `prepareSubscriptionSet`: вопрос владельца один — «пусть это правило действует здесь», и разводить его
+ * по именам значило бы заставлять модель знать устройство хранилища.
+ *
+ * Носитель резолвится СВЕЖИМ снимком транзакции (`resolveRuleTarget`), а не снимком исполнителя: тот
+ * снят до стадий, и свой аспект, заведённый предыдущей операцией пачки, в нём отсутствует.
+ */
+async function prepareRuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(ruleSetInput, rawInput, 'rule_set');
+  const journal = registryPlan('rule_set', 'rule_set', `Правило «${input.rule.id}»`);
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const graphId = applyCtx.req.identity.graph;
+      const target = await resolveRuleTarget(applyCtx.tx, graphId, input.target);
+      const before = target.rules.find((r) => r.id === input.rule.id) ?? null;
+      if (target.own) await setOwnRule(applyCtx.tx, graphId, target.carrier, input.rule);
+      else await setRuleDelta(applyCtx.tx, graphId, target.carrier, input.rule);
+      journal.operations.push({ op: 'rule_set', payload: { ...input } });
+      // ОБРАТНАЯ ОПЕРАЦИЯ — ПРЕЖНЯЯ СТРОКА, а не «удалить»: правило правится ЗАМЕНОЙ (§С3), и откат обязан
+      // вернуть ту декларацию, что стояла. Прежней не было — обратное к заведению это снятие. У ВКЛЮЧЕНИЯ
+      // отключённого системного правила прежней в эффективном списке нет, и снятие его же отключает.
+      journal.inverse.push(
+        before === null
+          ? { op: 'rule_remove', payload: { target: input.target, rule: input.rule.id } }
+          : { op: 'rule_set', payload: { target: input.target, rule: before } },
+      );
+      return { result: { rule: input.rule.id, carrier: target.carrier } };
+    },
+  };
+}
+
+/**
+ * Снятие правила: своё — снимается, системное — ОТКЛЮЧАЕТСЯ дельтой (§С3 «удалить = отключить», Р-2а).
+ * Обратная операция — `rule_set` с прежней декларацией: у системного это ветка «включить обратно»
+ * (`setRuleDelta` принимает декларацию, совпавшую с системной). Правила не было в эффективном списке —
+ * inverse пуст: у своей строки снятие несуществующего — успех без записи (Ф-Б1-56), у уже отключённого
+ * системного — повтор отключения.
+ */
+async function prepareRuleRemove(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(ruleRemoveInput, rawInput, 'rule_remove');
+  const journal = registryPlan('rule_removed', 'rule_remove', `Правило «${input.rule}» снято`);
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const graphId = applyCtx.req.identity.graph;
+      const target = await resolveRuleTarget(applyCtx.tx, graphId, input.target);
+      const before = target.rules.find((r) => r.id === input.rule) ?? null;
+      if (target.own) await removeOwnRule(applyCtx.tx, graphId, target.carrier, input.rule);
+      else await disableSystemRuleDelta(applyCtx.tx, graphId, target.carrier, input.rule);
+      journal.operations.push({ op: 'rule_remove', payload: { ...input } });
+      if (before !== null) {
+        journal.inverse.push({ op: 'rule_set', payload: { target: input.target, rule: before } });
+      }
+      return { result: { rule: input.rule, carrier: target.carrier } };
     },
   };
 }

@@ -32,15 +32,19 @@ import {
   pendingMessageId,
   proposeInput,
   type RolloverInput,
+  type RuleDefinition,
   relationCreateInput,
   relationDeleteInput,
   rolloverInput,
+  ruleDefinitionSchema,
   type SurfaceName,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
+import { exprNodeSchema, printExpr } from '@orbis/shared/expr';
 import {
   normalizeQueryAst,
   OWNER_LOCALE,
+  type ParseRegistry,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   queryTreeExceedsDepth,
@@ -108,7 +112,7 @@ import {
 } from '../query/compile-ast';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
-import { effectiveRegistry } from '../registry/cache';
+import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf } from '../registry/modules';
 
@@ -119,6 +123,7 @@ import {
   readOwnAspect,
   readSubscriptionDelta,
 } from '../registry/ops';
+import { rulesOf } from '../registry/rules';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
@@ -1656,12 +1661,41 @@ export function registryOperationSummary(
       return `Настройка действия «${named(payload.label, payload.key)}»`;
     case 'action_remove':
       return `Снятие действия «${actionName(payload.action)}»`;
+    case 'rule_set':
+    case 'rule_remove': {
+      // Голова — отглагольное существительное, как у всех (правило докблока): «Правило «x» снято»
+      // на карточке-запросе сообщало бы «уже случилось» там, где спрашивают. «Снятие» — и для своего
+      // правила, и для системного (у того это отключение): одна фраза на обе ветки, как `rule_removed`.
+      const id = isRecord(payload.rule) ? payload.rule.id : payload.rule;
+      const where = ruleCarrierPhrase(payload.target, tool === 'rule_set' ? 'on' : 'from');
+      return tool === 'rule_set'
+        ? `Настройка правила «${String(id)}» ${where}`
+        : `Снятие правила «${String(id)}» ${where}`;
+    }
   }
   // Недостижимо: зовётся под `REGISTRY_TOOL_NAMES` (три места: сводка pending-единицы, батч-разбор и
   // `snapshotRegistryUnit` — имена вместо номеров строк, они съезжают), и switch
-  // перечисляет все четырнадцать имён — двенадцать Б-1 и два тула действий Б-2 (задача 10); фраза
-  // стоит раньше тула намеренно (без неё `pendingSummary` показал бы владельцу голое имя).
+  // перечисляет все шестнадцать имён — двенадцать Б-1, два тула действий (задача 10) и два тула правил
+  // (задача 16) Б-2; фраза стоит раньше тула намеренно (без неё `pendingSummary` показал бы владельцу
+  // голое имя).
   return tool;
+
+  /** Носитель правила словами: подпись строки, а не адрес (id своего свойства — uuid, Р3). */
+  function ruleCarrierPhrase(target: unknown, dir: 'on' | 'from'): string {
+    const t = isRecord(target) ? target : {};
+    if (typeof t.aspect === 'string') {
+      return `${dir === 'on' ? 'на аспекте' : 'с аспекта'} «${aspectName(t.aspect)}»`;
+    }
+    if (typeof t.property === 'string') {
+      return `${dir === 'on' ? 'на свойстве' : 'со свойства'} «${propertyName(t.property)}»`;
+    }
+    if (typeof t.role === 'string') {
+      const role = reg.roles.get(t.role);
+      const name = role === undefined ? t.role : effectiveLabel(role.label, OWNER_LOCALE);
+      return `${dir === 'on' ? 'на роли' : 'с роли'} «${name}»`;
+    }
+    return `${dir === 'on' ? 'на' : 'с'} «${rowValue(target)}»`;
+  }
 }
 
 // Строка карточки отложенного действия — «было → станет» по одному полю (ОЧ.13). Форма ОДНА с
@@ -2233,6 +2267,11 @@ export async function snapshotRegistryUnit(
     case 'action_set':
     case 'action_remove': {
       const before = await readActionRow(tx, graphId, String(payload.key ?? payload.action));
+      // ПРЕДУСЛОВИЕ — ТЕКСТОМ E, а не деревом (остаток Б-1 №79, тот же довод, что `ruleCardText`):
+      // строка есть, когда предусловие есть хотя бы с одной стороны; `null` — «условия нет».
+      const parseReg = parseRegistryOfSnapshot(reg);
+      const hadPre = before?.precondition !== undefined && before.precondition !== null;
+      const hasPre = payload.precondition !== undefined && payload.precondition !== null;
       return {
         // Адрес действия — его key, освобождения ключа у него нет (в отличие от свойств, `freeKey`):
         // нормализовать нечего, единица несёт конверт как есть.
@@ -2246,6 +2285,17 @@ export async function snapshotRegistryUnit(
                   ...(before !== undefined && { before: rowValue(before.steps) }),
                   after: rowValue(payload.steps),
                 },
+                ...(hadPre || hasPre
+                  ? [
+                      {
+                        field: 'precondition',
+                        ...(hadPre && { before: exprCardText(before?.precondition, parseReg) }),
+                        after: hasPre
+                          ? exprCardText(payload.precondition, parseReg)
+                          : DEFERRED_UNSET_VALUE,
+                      },
+                    ]
+                  : []),
               ]
             : [
                 {
@@ -2256,14 +2306,68 @@ export async function snapshotRegistryUnit(
               ],
       };
     }
+    case 'rule_set':
+    case 'rule_remove': {
+      const parseReg = parseRegistryOfSnapshot(reg);
+      const id = isRecord(payload.rule) ? payload.rule.id : payload.rule;
+      // «Было» — правило с этим id на ЭТОМ носителе в эффективном списке (система ⊕ дельты): у
+      // включения отключённого системного его там нет, и «было» честно пусто.
+      const carrierIds = ruleCarrierIdsOf(reg, payload.target);
+      const prev = rulesOf(reg).find(
+        (r) => r.rule.id === id && carrierIds.has(`${r.carrier.kind}:${r.carrier.id}`),
+      )?.rule;
+      // МЯГКИЙ разбор (приём `subscription_set` выше): на снимке конверт ещё не валидирован, и
+      // неразобравшееся отвергнет исполнитель — строке снимка о нём сказать нечего, кроме JSON.
+      const next = tool === 'rule_set' ? ruleDefinitionSchema.safeParse(payload.rule) : null;
+      return {
+        // Адрес носителя резолвит исполнитель (`resolveRuleTarget`) в своей транзакции; освобождения
+        // ключа у носителей правил нет — единица несёт конверт как есть.
+        input: payload,
+        summary,
+        rows: [
+          {
+            field: 'rule',
+            ...(prev !== undefined && { before: ruleCardText(prev, parseReg) }),
+            after:
+              tool === 'rule_remove'
+                ? DEFERRED_UNSET_VALUE
+                : next?.success === true
+                  ? ruleCardText(next.data, parseReg)
+                  : rowValue(payload.rule),
+          },
+        ],
+      };
+    }
   }
-  // Сюда доходят все ЧЕТЫРНАДЦАТЬ тулов реестра — пять среза А (с Р-24-7 в том числе
+  // Сюда доходят все ШЕСТНАДЦАТЬ тулов реестра — пять среза А (с Р-24-7 в том числе
   // `property_create`: `preview` своей строки от рутины откладывается, а не отклоняется), три
-  // тула аспектов и привязок (задача 15), четыре тула подписок и наборов (задача 16) и два тула
-  // действий (задача 10 Б-2): у каждого своя ветка выше. Fail-closed остаётся на случай
-  // ПЯТНАДЦАТОГО: родовая строка показывает владельцу конверт целиком — хуже адресной, но не
-  // молчание.
+  // тула аспектов и привязок (задача 15), четыре тула подписок и наборов (задача 16), два тула
+  // действий (задача 10 Б-2) и два тула правил (задача 16 Б-2): у каждого своя ветка выше.
+  // Fail-closed остаётся на случай СЕМНАДЦАТОГО: родовая строка показывает владельцу конверт
+  // целиком — хуже адресной, но не молчание.
   return { input: payload, summary, rows: [{ field: tool, after: rowValue(payload) }] };
+}
+
+/**
+ * Носители правила по адресу конверта — id И key строки (адрес бывает любым из двух, Р3); множество
+ * «род:id» сверяется с носителями `rulesOf`. Неизвестный адрес даёт пустое множество: «было» пусто.
+ */
+function ruleCarrierIdsOf(reg: RegistrySnapshot, target: unknown): Set<string> {
+  const t = isRecord(target) ? target : {};
+  const out = new Set<string>();
+  const add = (
+    kind: string,
+    dict: ReadonlyMap<string, { id: string; key: string }>,
+    a: unknown,
+  ) => {
+    if (typeof a !== 'string') return;
+    for (const def of dict.values())
+      if (def.id === a || def.key === a) out.add(`${kind}:${def.id}`);
+  };
+  add('aspect', reg.aspects, t.aspect);
+  add('property', reg.properties, t.property);
+  add('role', reg.roles, t.role);
+  return out;
 }
 
 /**
@@ -2280,6 +2384,54 @@ const CARD_VALUE_CAP = 200;
 function rowValue(value: unknown): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   return text.length <= CARD_VALUE_CAP ? text : `${text.slice(0, CARD_VALUE_CAP - 1)}…`;
+}
+
+/**
+ * ВЫРАЖЕНИЕ ЧЕЛОВЕКУ — ТЕКСТОМ E (`printExpr`), а не деревом (остаток Б-1 №79). Мягко: на снимке
+ * конверт ещё не валидирован, и дерево, не прошедшее схему, печатается JSON'ом — отвергнет его исполнитель.
+ */
+function exprCardText(value: unknown, reg: ParseRegistry): string {
+  const parsed = exprNodeSchema.safeParse(value);
+  return parsed.success ? rowValue(printExpr(parsed.data, reg)) : rowValue(value);
+}
+
+/**
+ * ПРАВИЛО ЧЕЛОВЕКУ — ТЕКСТОМ, А НЕ ДЕРЕВОМ (остаток Б-1 №79). Карточка мерит правку декларации строкой, а
+ * `{"op":"=","args":[{"prop":"orbis/priority"},…]}` владелец не прочитает — «Принять» он жал бы вслепую.
+ * Имена печатаются КЛЮЧОМ: дифф обязан отличать правку выражения от смены локали. Сверх шаблона и
+ * выражений печатается СВОЙСТВО-ЦЕЛЬ (что станет обязательным, запретным, проставляемым) и набор
+ * уникальности — без них «requires_when; когда …» не говорит, ЧТО именно правило потребует.
+ */
+function ruleCardText(rule: RuleDefinition, reg: ParseRegistry): string {
+  const key = (id: string): string => reg.properties.get(id)?.key ?? id;
+  const p = rule.params as {
+    property?: unknown;
+    properties?: unknown;
+    set?: { property?: unknown };
+  };
+  const target =
+    typeof p.property === 'string'
+      ? p.property
+      : typeof p.set?.property === 'string'
+        ? p.set.property
+        : undefined;
+  const value =
+    rule.template === 'default'
+      ? rule.params.value
+      : rule.template === 'on_enter_class'
+        ? rule.params.set?.value
+        : undefined;
+  const set = Array.isArray(p.properties) ? (p.properties as string[]).map(key) : [];
+  return rowValue(
+    [
+      `${rule.id}: ${rule.template}`,
+      ...(target === undefined ? [] : [`свойство ${key(target)}`]),
+      ...(set.length === 0 ? [] : [`набор ${set.join(', ')}`]),
+      ...(value === undefined ? [] : [`значение ${printExpr(value, reg)}`]),
+      ...(rule.when === undefined ? [] : [`когда ${printExpr(rule.when, reg)}`]),
+      ...(rule.enabled === false ? ['выключено'] : []),
+    ].join('; '),
+  );
 }
 
 /**

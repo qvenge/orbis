@@ -207,6 +207,56 @@ describe('registry.setAction / removeAction — зеркала тулов дей
   });
 });
 
+describe('registry.setRule / removeRule — зеркала тулов правил (задача 16, §Б4-1)', () => {
+  const RULE = {
+    id: 'urgent_needs_due',
+    template: 'requires_when' as const,
+    params: { property: 'orbis/due_date' },
+    when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+  };
+
+  test('ручка кладёт правило поверх встроенного аспекта и двигает registry.effective.version; снятие — назад', async () => {
+    const who = await freshGraph();
+    const caller = callerFor(who);
+    const before = (await caller.registry.effective()).version;
+    expect(await caller.registry.setRule({ target: { aspect: 'orbis/task' }, rule: RULE })).toEqual(
+      {
+        rule: 'urgent_needs_due',
+        carrier: { kind: 'aspect', id: 'orbis/task' },
+      },
+    );
+    const mid = await caller.registry.effective();
+    expect(mid.version).not.toBe(before);
+    expect(mid.aspects.find((x) => x.id === 'orbis/task')?.rules.map((r) => r.id)).toContain(
+      'urgent_needs_due',
+    );
+    await caller.registry.removeRule({
+      target: { aspect: 'orbis/task' },
+      rule: 'urgent_needs_due',
+    });
+    const after = await caller.registry.effective();
+    expect(after.aspects.find((x) => x.id === 'orbis/task')?.rules.map((r) => r.id)).not.toContain(
+      'urgent_needs_due',
+    );
+  });
+
+  test('не-владелец — отказ FORBIDDEN до исполнителя (ownerOnlyProcedure)', async () => {
+    const who = await freshGraph();
+    const agent = createCaller({
+      identity: personal(who),
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+    });
+    await expect(
+      agent.registry.setRule({ target: { aspect: 'orbis/task' }, rule: RULE }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      agent.registry.removeRule({ target: { aspect: 'orbis/task' }, rule: 'urgent_needs_due' }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
 describe('registry.dependants: честные зависимости (§А3-5, §С1-3 п.10)', () => {
   const depOwner = mintGraph();
   const dep = callerFor(depOwner);

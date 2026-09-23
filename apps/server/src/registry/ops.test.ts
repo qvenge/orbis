@@ -4925,3 +4925,119 @@ describe('правила в строках и откатах: колонка rul
     expect(reg.aspects.get('user/live')?.rules.map((r) => r.id)).toEqual(['live_needs_due']);
   });
 });
+
+describe('rule_set / rule_remove через исполнитель: журнал, откат и область-контракт (задача 16)', () => {
+  const taskRulesOf = async (g: GraphId) =>
+    (await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g))).aspects
+      .get('orbis/task')
+      ?.rules.map((r) => r.id) ?? [];
+
+  test('откат rule_set снимает правило; откат rule_remove системного — включает его обратно', async () => {
+    const g = await freshGraph();
+    const set = ok(
+      await run(
+        'rule_set',
+        {
+          target: { aspect: 'orbis/task' },
+          rule: {
+            id: 'urgent_needs_due',
+            template: 'requires_when',
+            params: { property: 'orbis/due_date' },
+            when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
+    expect(await taskRulesOf(g)).toContain('urgent_needs_due');
+    expect((await undoAction(db, { identity: personal(g), actionId: set.actionId })).ok).toBe(true);
+    expect(await taskRulesOf(g)).not.toContain('urgent_needs_due');
+
+    const off = ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    expect(await taskRulesOf(g)).not.toContain('task_completed_at');
+    expect((await undoAction(db, { identity: personal(g), actionId: off.actionId })).ok).toBe(true);
+    expect(await taskRulesOf(g)).toContain('task_completed_at');
+  });
+
+  test('встроенная роль через тул — отказ RULE_TARGET_SYSTEM_ROLE; неизвестный носитель — NOT_FOUND', async () => {
+    const g = await freshGraph();
+    const role = err(
+      await run(
+        'rule_remove',
+        { target: { role: 'dependency' }, rule: 'dependency_acyclic' },
+        { identity: personal(g) },
+      ),
+    );
+    expect([role.code, (role.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'RULE_TARGET_SYSTEM_ROLE',
+    ]);
+    expect(
+      err(
+        await run(
+          'rule_remove',
+          { target: { aspect: 'user/nope' }, rule: 'x' },
+          { identity: personal(g) },
+        ),
+      ).code,
+    ).toBe('NOT_FOUND');
+  });
+
+  test('C-5: правило со scope {contract} роняет КАЖДУЮ запись членов контракта; rule_remove возвращает', async () => {
+    // Область `{contract}` форма принимает, исполнение — V2 (Р-25): движок fail-closed отказывает
+    // записи-члену, а не молчит. Запись правила не запрещена (решение координатора: тест и
+    // предупреждение в описании тула); выход — снять правило, и он обязан работать.
+    const g = await freshGraph();
+    await seedCustomAspect(g, {
+      key: 'user/c5-carrier',
+      label: { ru: 'Носитель C-5' },
+      properties: [{ key: 'c5_mark', type: { kind: 'boolean' } }],
+    });
+    const task = () =>
+      run(
+        'entity_create',
+        {
+          title: 'Задача под правилом контракта',
+          tags: [],
+          aspects: ['orbis/task'],
+          props: { 'orbis/task_status': 'planned' },
+        },
+        { identity: personal(g) },
+      );
+    ok(await task());
+    ok(
+      await run(
+        'rule_set',
+        {
+          target: { aspect: 'user/c5-carrier' },
+          rule: {
+            id: 'c5_contract_rule',
+            template: 'requires_when',
+            params: { property: 'orbis/due_date' },
+            scope: { contract: 'orbis/completable' },
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
+    const refused = err(await task());
+    expect([refused.code, (refused.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'RULE_SCOPE_UNSUPPORTED',
+    ]);
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'user/c5-carrier' }, rule: 'c5_contract_rule' },
+        { identity: personal(g) },
+      ),
+    );
+    ok(await task());
+  });
+});

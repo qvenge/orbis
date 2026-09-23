@@ -715,6 +715,32 @@ describe('§С2-1: перенастраивает поверхность или 
     }
   });
 
+  test('§С2-1: тулы правил — behavior-delta ПО ТУЛУ при ЛЮБОМ адресе носителя (задача 16)', () => {
+    // Адресное правило дало бы `system-object` на правиле поверх встроенного аспекта — закрыло бы путь,
+    // ради которого В-6 завёл дельты правил; ряд 2 §С2-1 называет правило прямо.
+    for (const target of [
+      { aspect: 'orbis/task' },
+      { aspect: 'user/x' },
+      { property: 'orbis/due_date' },
+    ]) {
+      expect([target, reconfiguresOf('rule_set', { target, rule: { id: 'r' } })]).toEqual([
+        target,
+        'behavior-delta',
+      ]);
+      expect([target, reconfiguresOf('rule_remove', { target, rule: 'r' })]).toEqual([
+        target,
+        'behavior-delta',
+      ]);
+    }
+    for (const actorKind of ['ai', 'agent', 'owner'] as const) {
+      expect([
+        actorKind,
+        levelFor('rule_set', { target: { aspect: 'orbis/task' }, rule: { id: 'r' } }, actorKind),
+        levelFor('rule_remove', { target: { aspect: 'orbis/task' }, rule: 'r' }, actorKind),
+      ]).toEqual([actorKind, 'explicit-confirmation', 'explicit-confirmation']);
+    }
+  });
+
   test('подписки и наборы: explicit-confirmation для ЛЮБОГО актора, включая владельца', () => {
     // Случаи — из той же таблицы задачи 14, а не вторым списком: разъехавшись, список ряда и
     // список уровня врали бы порознь и молча. Ряд 4a (`confirmation.ts:100`) поднимает
@@ -1131,7 +1157,7 @@ describe('§С2-1: перенастраивает поверхность или 
   test('перечень тулов реестра берётся у реестра, а не переписан здесь литералами', () => {
     // Тринадцатый тул реестра, заведённый без правки `reconfiguresOf`, получит `system-object`
     // (fail-closed ветка switch'а), а не молчаливое `none`, — и упадёт вот на этой строке.
-    // Четырнадцать: пять среза А + три задачи 15 Б-1 + четыре задачи 16 Б-1 + два задачи 10 Б-2.
+    // Шестнадцать: пять среза А + три задачи 15 Б-1 + четыре задачи 16 Б-1 + два действий (10) + два правил (16).
     expect([...REGISTRY_TOOL_NAMES].sort()).toEqual([
       'action_remove',
       'action_set',
@@ -1145,6 +1171,8 @@ describe('§С2-1: перенастраивает поверхность или 
       'property_create',
       'property_merge',
       'property_update',
+      'rule_remove',
+      'rule_set',
       'subscription_remove',
       'subscription_set',
     ]);
