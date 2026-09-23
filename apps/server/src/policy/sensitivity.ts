@@ -16,11 +16,12 @@
 // вслух, чтобы поле не приняли за забытый вход таблицы §7.10: сегодня уровень его не читает,
 // и это пиннится тришкой в `confirmation.test.ts`.
 //
-// ТРЁХ ОСТАЛЬНЫХ ФАКТОВ СЛОВАРЯ (`touches_money`, `external`, `irreversible`) не производит
-// никто, и это не пропуск: они назначаются ДЕКЛАРАЦИЯМИ действий (`sensitivity` §Б6-1), а
-// `action_definitions` в Б-1 пусты. `archives` в фактах вызова к `irreversible` не сводится —
-// архивация это мягкое удаление, обратимое штатным undo (§7.8), — поэтому вход берётся
-// целиком, а отображения у него нет; появится оно вместе с ярусами Б-2.
+// ТРЁХ ОСТАЛЬНЫХ ФАКТОВ СЛОВАРЯ (`touches_money`, `external`, `irreversible`) ТИПЫ ВЫЗОВА не
+// производят, и это не пропуск: они назначаются ДЕКЛАРАЦИЯМИ действий (`sensitivity` §Б6-1) и
+// выводятся из шагов (`stepFactsOf`, `registry/actions.ts`) — и доезжают сюда параметром
+// `extra` (Р-К-23), а тулы не-исполнителя — таблицей `TOOL_SENSITIVITY` ниже. `archives` в
+// фактах вызова к `irreversible` не сводится — архивация это мягкое удаление, обратимое
+// штатным undo (§7.8), — поэтому вход берётся целиком, а отображения у него нет.
 import type { ContractId, SensitivityFact } from '@orbis/shared';
 import type { RegistrySnapshot } from '../registry/load';
 import type { ToolCallFacts } from './confirmation';
@@ -28,16 +29,36 @@ import type { ToolCallFacts } from './confirmation';
 /** Адрес словаря; `satisfies` не даёт ему разойтись с сидом контрактов (задача 1). */
 const SENSITIVITY_CONTRACT = 'orbis/sensitivity' satisfies ContractId;
 
+/**
+ * ФАКТЫ ТУЛОВ НЕ-ИСПОЛНИТЕЛЯ (Р-К-23): тул, который не разложен на операции графа и потому
+ * свёрткой не описывается. Пуст до задачи 10, где сюда приезжает `budget_rollover:
+ * ['touches_money']`. Пустая таблица названа вслух, потому что её отсутствие читалось бы
+ * как «таких тулов не бывает».
+ */
+export const TOOL_SENSITIVITY: Readonly<Record<string, readonly SensitivityFact[]>> = {};
+
+/**
+ * Имена фактов вызова. `extra` — факты, которые знает только вызывающий (§Б6-1: декларация
+ * действия ∪ факты его резолвленных шагов, `actions/run.ts`); они ОБЪЕДИНЯЮТСЯ с выведенными
+ * из типов, и дубли не задваиваются — правило владельца читает имена, а не счёт.
+ */
 export function sensitivityFactsOf(
   reg: RegistrySnapshot,
   facts: Pick<ToolCallFacts, 'tool' | 'reconfigures' | 'grantsAutonomy' | 'archives'>,
+  extra: readonly SensitivityFact[] = [],
 ): readonly SensitivityFact[] {
-  const produced: SensitivityFact[] = [];
+  const produced = new Set<SensitivityFact>();
   // §С2-1 дословно: «Мутация реестра — категория чувствительности „меняет, что видит и делает
   // владелец“ (факт `changes_registry`)». Все три ненулевых ответа — мутация реестра.
-  if (facts.reconfigures !== 'none') produced.push('changes_registry');
-  if (facts.grantsAutonomy) produced.push('grants_autonomy');
-  return checkedAgainstDictionary(reg, produced, facts.tool);
+  if (facts.reconfigures !== 'none') produced.add('changes_registry');
+  if (facts.grantsAutonomy) produced.add('grants_autonomy');
+  // §Б6-1: «декларация факты может только ДОБАВЛЯТЬ». Вычитания здесь нет и быть не может.
+  // Свой ключ, а не `[tool]`: у `{}` есть `toString`, и имя тула, совпавшее с ключом прототипа,
+  // дало бы здесь функцию вместо списка.
+  const byTool = Object.hasOwn(TOOL_SENSITIVITY, facts.tool) ? TOOL_SENSITIVITY[facts.tool] : [];
+  for (const fact of byTool ?? []) produced.add(fact);
+  for (const fact of extra) produced.add(fact);
+  return checkedAgainstDictionary(reg, [...produced], facts.tool);
 }
 
 /**

@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { BUILTIN_CONTRACT_DEFS, type ContractDefinition, SENSITIVITY_FACTS } from '@orbis/shared';
 import type { RegistrySnapshot } from '../registry/load';
 import type { Reconfigures } from './confirmation';
-import { sensitivityFactsOf } from './sensitivity';
+import { sensitivityFactsOf, TOOL_SENSITIVITY } from './sensitivity';
 
 function snapshot(
   contracts: readonly ContractDefinition[] = BUILTIN_CONTRACT_DEFS,
@@ -112,5 +112,19 @@ describe('факты как данные: словарь из контракта
     expect(SENSITIVITY_FACTS).toHaveLength(5);
     // Архивация фактом не становится ни при каком сочетании: мягкое удаление обратимо.
     expect([...sensitivityFactsOf(snapshot(), call({ archives: true }))]).toEqual([]);
+  });
+
+  test('extra: факты декларации и шагов действия объединяются со словарными (§Б6-1)', () => {
+    expect([
+      ...sensitivityFactsOf(snapshot(), call({ tool: 'run_action' }), ['touches_money']),
+    ]).toEqual(['touches_money']);
+    // Дубли не задваиваются: множество, а не список (правило владельца читает имена, а не счёт).
+    expect([
+      ...sensitivityFactsOf(snapshot(), call({ reconfigures: 'behavior-delta' }), [
+        'changes_registry',
+      ]),
+    ]).toEqual(['changes_registry']);
+    // Таблица тулов не-исполнителя пуста до задачи 10 — и это НАЗВАНО, а не забыто.
+    expect(Object.keys(TOOL_SENSITIVITY)).toEqual([]);
   });
 });

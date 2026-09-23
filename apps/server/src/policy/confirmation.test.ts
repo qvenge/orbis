@@ -17,7 +17,9 @@ import {
   autonomyArmed,
   classifyToolCall,
   entityUpdatePreviewDiff,
+  factsFromOperations,
   factsFromToolCall,
+  heaviestReconfigures,
   type Reconfigures,
   ROUTINE_MODE_PROPERTY,
   ROUTINE_STAGE_PROPERTY,
@@ -293,6 +295,31 @@ describe('factsFromToolCall: извлечение фактов формы выз
     expect(f.isBatch).toBe(false);
     expect(f.batchSize).toBeUndefined();
     expect(f.archives).toBe(false);
+  });
+
+  test('factsFromOperations: свёртка ТИПОВ по операциям, isBatch ставит вызывающий (Р-К-23)', () => {
+    // Оба конца слияния — СВОИ адреса (`user/…`): иначе ряд §С2-1 ответил бы `system-object`
+    // (`reconfiguresByTool`, ветка `property_merge`), и проба свёртки «самый тяжёлый ответ
+    // операций» проверяла бы не behavior-delta, а запрет по объекту.
+    const ops = [
+      { tool: 'entity_update', input: { id: 'x', archived: true } },
+      { tool: 'property_merge', input: { source: 'user/a', into: 'user/b' } },
+    ];
+    const f = factsFromOperations(ops);
+    expect([f.archives, f.reconfigures, f.grantsAutonomy, f.isBatch]).toEqual([
+      true,
+      'behavior-delta',
+      false,
+      false,
+    ]);
+    // batchSize ключа НЕТ: «сколько целей» знает только вызывающий (одиночное действие — одна).
+    expect('batchSize' in f).toBe(false);
+  });
+
+  test('heaviestReconfigures экспортирована и берёт самый тяжёлый ответ', () => {
+    expect(heaviestReconfigures(['none', 'own-property', 'system-object', 'behavior-delta'])).toBe(
+      'system-object',
+    );
   });
 });
 

@@ -147,24 +147,13 @@ export function factsFromToolCall(
   if (def.name === 'batch_execute') {
     const parsed = batchExecuteInput.safeParse(input);
     if (parsed.success) {
+      // `isBatch`/`batchSize` дописываются ИМЕННО ЗДЕСЬ — по имени тула (докблок
+      // `factsFromOperations`): пачка ли это — свойство вызова, а не списка операций.
       return {
         ...base,
-        archives: parsed.data.operations.some((op) => op.input.archived === true),
+        ...factsFromOperations(parsed.data.operations),
         isBatch: true,
         batchSize: parsed.data.operations.length,
-        // ЛЮБАЯ операция batch, выдающая автономию, поднимает уровень всего вызова:
-        // batch исполняется «всё или ничего», подтверждать его тоже приходится целиком
-        grantsAutonomy: parsed.data.operations.some((op) =>
-          grantsRoutineAutonomy(op.tool, op.input),
-        ),
-        // Тем же правилом, что и автономия, и по той же причине: batch исполняется «всё или
-        // ничего», поэтому у пачки берётся САМЫЙ ТЯЖЁЛЫЙ ответ её операций. Реестровые тулы
-        // внутрь batch доезжают (их конверты есть в `MUTATION_ENVELOPES` диспатча), и без
-        // этой свёртки `property_merge`, завёрнутый в пачку из двух операций, получал бы
-        // `preview` — то есть исполнялся бы сразу.
-        reconfigures: heaviestReconfigures(
-          parsed.data.operations.map((op) => reconfiguresOf(op.tool, op.input)),
-        ),
       };
     }
     return {
@@ -191,6 +180,38 @@ export function factsFromToolCall(
 }
 
 /**
+ * СВЁРТКА ФАКТОВ ПО СПИСКУ ОПЕРАЦИЙ — общая половина `batch_execute` и резолвленного
+ * действия (§Б6-2, Р-7). Вынесена из `factsFromToolCall`, а не написана рядом: свёртка
+ * решает, подтверждать ли группу целиком, и вторая её копия разошлась бы с первой на
+ * первом же новом роде операции — молча, потому что обе дают законный ответ.
+ *
+ * Все три факта сворачиваются ОДНИМ правилом «группа исполняется всё или ничего, значит и
+ * подтверждается целиком»: ЛЮБАЯ архивирующая операция — архивация группы, ЛЮБАЯ выдача
+ * автономии — выдача группы, а у перенастройки берётся САМЫЙ ТЯЖЁЛЫЙ ответ операций.
+ * Реестровые тулы внутрь пачки доезжают (их конверты есть в `MUTATION_ENVELOPES` диспатча),
+ * и без этой свёртки `property_merge`, завёрнутый в пачку из двух операций, получал бы
+ * `preview` — то есть исполнялся бы сразу.
+ *
+ * `isBatch` ставит ВЫЗЫВАЮЩИЙ и здесь всегда `false`: «пачка ли это» — свойство ВЫЗОВА,
+ * а не списка операций (О7 опровержения `verify-b2-policy`). У `batch_execute` пачка —
+ * по имени тула, у действия — по наличию `over` (§Б6-3), и ряд 7 таблицы §7.10 от этого
+ * не меняется ни на строку.
+ */
+export function factsFromOperations(
+  operations: ReadonlyArray<{ tool: string; input: unknown }>,
+): Omit<
+  ToolCallFacts,
+  'tool' | 'kind' | 'known' | 'actorKind' | 'explicitCommand' | 'sensitivity'
+> {
+  return {
+    archives: operations.some((op) => isRecord(op.input) && op.input.archived === true),
+    isBatch: false,
+    grantsAutonomy: operations.some((op) => grantsRoutineAutonomy(op.tool, op.input)),
+    reconfigures: heaviestReconfigures(operations.map((op) => reconfiguresOf(op.tool, op.input))),
+  };
+}
+
+/**
  * Порядок тяжести ответов §С2-1 — им сворачивается пачка (batch исполняется целиком).
  * Числа значимы только относительно друг друга: «системный объект тяжелее перенастройки
  * поведения, та тяжелее правки своей строки, та тяжелее ничего».
@@ -202,7 +223,7 @@ const RECONFIGURES_WEIGHT: Record<Reconfigures, number> = {
   'system-object': 3,
 };
 
-function heaviestReconfigures(values: readonly Reconfigures[]): Reconfigures {
+export function heaviestReconfigures(values: readonly Reconfigures[]): Reconfigures {
   let out: Reconfigures = 'none';
   for (const value of values) {
     if (RECONFIGURES_WEIGHT[value] > RECONFIGURES_WEIGHT[out]) out = value;
