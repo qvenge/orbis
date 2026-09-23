@@ -29,6 +29,7 @@ import {
   personal,
   requireEnv,
   seedCustomAspect,
+  seedCustomRole,
   truncateAll,
 } from '../../test/helpers';
 import { entities } from '../db/schema';
@@ -5237,5 +5238,204 @@ describe('шестой род держателя: property_merge перепис�
         .get(OWN)
         ?.rules.map((r) => (r.params as { property: string }).property),
     ).toEqual([source, into]);
+  });
+});
+
+describe('фикс-раунд 1 задачи 16: двери записи правил и сторожа снимка', () => {
+  const inTx = <T>(g: GraphId, fn: (tx: Tx) => Promise<T>): Promise<T> =>
+    withIdentity(db, personal(g), fn);
+  const regOf = (g: GraphId) => inTx(g, (tx) => effectiveRegistry(tx, g));
+  /** Ограничение, читающее рёбра роли, которую ставит сам владелец, — отказ C-6 ловит только `assertRule`. */
+  const C6 = {
+    id: 'blocked_needs_due',
+    template: 'forbidden_when' as const,
+    params: { property: 'orbis/due_date' },
+    when: { has_relation: { role: 'dependency' } },
+  };
+  const ownAspect = async (key: string): Promise<GraphId> => {
+    const g = await freshGraph();
+    await seedCustomAspect(g, {
+      key,
+      label: { ru: 'Свой носитель' },
+      properties: [{ key: `${key.split('/')[1]}-mark`, type: { kind: 'boolean' } }],
+    });
+    return g;
+  };
+
+  test('I-3: подмена носителя движка одной дельтой (выключить системный + своё того же шаблона) — RULE_CARRIER_REPLACED', async () => {
+    const g = await freshGraph();
+    const sys = BUILTIN_RULES_BY_CARRIER['orbis/schedule']?.[0] as RuleDefinitionInput;
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setAspectDelta(tx, g, 'orbis/schedule', {
+            rules: [
+              ruleDefinitionSchema.parse({
+                ...sys,
+                id: 'my_materialize',
+                params: { ...(sys.params as Record<string, unknown>), horizon_days: 100_000 },
+              }),
+            ],
+            rulesDisabled: ['materialize'],
+          }),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_CARRIER_REPLACED' });
+    const reg = await regOf(g);
+    expect(reg.aspects.get('orbis/schedule')?.rules.map((r) => r.id)).toEqual(['materialize']);
+  });
+
+  test('I-5: aspect_delta_set со своими правилами на СВОЁМ аспекте — отказ RULE_DELTA_OWN_ROW (Ф-Б2-30)', async () => {
+    const g = await ownAspect('user/own-delta');
+    const refused = err(
+      await run(
+        'aspect_delta_set',
+        {
+          aspect: 'user/own-delta',
+          delta: {
+            rules: [
+              {
+                id: 'own_delta_rule',
+                template: 'requires_when',
+                params: { property: 'orbis/due_date' },
+              },
+            ],
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
+    expect([refused.code, (refused.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'RULE_DELTA_OWN_ROW',
+    ]);
+    // Путь дельты правил своей строке закрыт и у операций реестра, мимо тула.
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setRuleDelta(
+            tx,
+            g,
+            { kind: 'aspect', id: 'user/own-delta' },
+            {
+              id: 'own_delta_rule',
+              template: 'requires_when',
+              params: { property: 'orbis/due_date' },
+            },
+          ),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_DELTA_OWN_ROW' });
+    // Иконка своего аспекта настройкой — по-прежнему законна: отказ только полям правил.
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'user/own-delta', delta: { icon: '🧭' } },
+        { identity: personal(g) },
+      ),
+    );
+  });
+
+  test('I-4: валидатор правила на пути СВОЕЙ строки — setOwnRule и тул rule_set отказывают C-6', async () => {
+    const g = await ownAspect('user/own-c6');
+    expect(
+      await refusalOf(
+        inTx(g, (tx) => setOwnRule(tx, g, { kind: 'aspect', id: 'user/own-c6' }, C6)),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_RELATION_UNCHECKED' });
+    const viaTool = err(
+      await run(
+        'rule_set',
+        { target: { aspect: 'user/own-c6' }, rule: C6 },
+        { identity: personal(g) },
+      ),
+    );
+    expect([viaTool.code, (viaTool.details as { reason?: string }).reason]).toEqual([
+      'VALIDATION',
+      'RULE_RELATION_UNCHECKED',
+    ]);
+    expect((await regOf(g)).aspects.get('user/own-c6')?.rules).toEqual([]);
+  });
+
+  test('I-4: валидатор правила на ДВЕРИ aspect_delta_set — C-6 отказ, и тогда, когда та же запись правило выключает (m-4)', async () => {
+    const g = await freshGraph();
+    const rule = ruleDefinitionSchema.parse(C6);
+    expect(
+      await refusalOf(inTx(g, (tx) => setAspectDelta(tx, g, 'orbis/task', { rules: [rule] }))),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_RELATION_UNCHECKED' });
+    // Выключенное той же записью правило эффективного списка не меняет — но принятым оно не было никогда.
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setAspectDelta(tx, g, 'orbis/task', { rules: [rule], rulesDisabled: [rule.id] }),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_RELATION_UNCHECKED' });
+  });
+
+  test('I-2: включение системного правила, спорящего с правилом владельца на ДРУГОМ носителе, — RULE_CONFLICT', async () => {
+    const g = await freshGraph();
+    const budget = { kind: 'aspect' as const, id: 'orbis/budget' };
+    await inTx(g, (tx) => disableSystemRuleDelta(tx, g, budget, 'envelope_currency_default'));
+    await inTx(g, (tx) =>
+      setRuleDelta(
+        tx,
+        g,
+        { kind: 'property', id: 'orbis/currency' },
+        {
+          id: 'my_currency_default',
+          template: 'default',
+          params: { property: 'orbis/currency', value: { param: 'default_currency' } },
+        },
+      ),
+    );
+    // Дверь `aspect_delta_set`: названный пустым `rulesDisabled` включает системное обратно.
+    expect(
+      (
+        await refusalOf(
+          inTx(g, (tx) => setAspectDelta(tx, g, 'orbis/budget', { rulesDisabled: [] })),
+        )
+      ).code,
+    ).toBe('RULE_CONFLICT');
+    // Дверь `rule_set` («включить обратно» системное) — тот же отказ.
+    const sys = BUILTIN_RULES_BY_CARRIER['orbis/budget']?.find(
+      (r) => r.id === 'envelope_currency_default',
+    ) as RuleDefinitionInput;
+    expect((await refusalOf(inTx(g, (tx) => setRuleDelta(tx, g, budget, sys)))).code).toBe(
+      'RULE_CONFLICT',
+    );
+    const ids = (await regOf(g)).aspects.get('orbis/budget')?.rules.map((r) => r.id) ?? [];
+    expect(ids).not.toContain('envelope_currency_default');
+  });
+
+  test('m-6: своя роль — носитель правил: метка каталога ставится и снимается; шаблон записи — RULE_TEMPLATE_CARRIER', async () => {
+    const g = await freshGraph();
+    await seedCustomRole(g, {
+      key: 'mentor',
+      label: { ru: 'Наставник' },
+      sourceLabel: { ru: 'наставник' },
+      targetLabel: { ru: 'подопечный' },
+      constraints: { acyclic: true, created_by: 'any' },
+    });
+    const role = { kind: 'role' as const, id: 'mentor' };
+    await inTx(g, (tx) =>
+      setOwnRule(tx, g, role, { id: 'mentor_acyclic', template: 'acyclic', params: {} }),
+    );
+    expect((await regOf(g)).roles.get('mentor')?.rules.map((r) => r.id)).toEqual([
+      'mentor_acyclic',
+    ]);
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setOwnRule(tx, g, role, {
+            id: 'mentor_requires',
+            template: 'requires_when',
+            params: { property: 'orbis/due_date' },
+          }),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_TEMPLATE_CARRIER' });
+    expect(await inTx(g, (tx) => removeOwnRule(tx, g, role, 'mentor_acyclic'))).not.toBeNull();
+    expect((await regOf(g)).roles.get('mentor')?.rules).toEqual([]);
   });
 });

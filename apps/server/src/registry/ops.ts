@@ -2113,6 +2113,20 @@ export async function setAspectDelta(
   // `rows` — это `RegistryDictionaries` (properties/aspects/contracts), ровно тот словарь,
   // который ждёт проверка.
   const target = rows.aspects.get(aspectId) as AspectDefinition;
+  // ПРАВИЛА СВОЕЙ СТРОКИ — ТОЛЬКО В СТРОКЕ (Ф-Б2-30, гейт 16 I-5). Дельта правил — жест поверх ВСТРОЕННОЙ
+  // строки (В-6, Р-2); у своего аспекта второе хранилище своих правил развело бы два ответа на «какие
+  // правила у строки»: `rule_remove` по колонке отвечал бы «снято», а правило из дельты продолжало бы
+  // действовать, и `rulesDisabled` молча гасил бы правила колонки.
+  if (
+    target.graphId !== null &&
+    ((normalized.rules?.length ?? 0) > 0 || (normalized.rulesDisabled?.length ?? 0) > 0)
+  ) {
+    throw new ExecError(
+      'VALIDATION',
+      `${aspectId} — ваш аспект: его правила правятся rule_set/rule_remove, а не настройкой аспекта`,
+      { reason: 'RULE_DELTA_OWN_ROW', aspect: aspectId },
+    );
+  }
   const issue = checkClassMap(normalized, target, rows)[0];
   if (issue !== undefined) throw execErrorOfImplementsIssue(issue, { aspect: aspectId });
   const versions = await readRegistryVersions(tx, graphId);
@@ -2149,6 +2163,8 @@ export async function setAspectDelta(
   // единица разрешения конфликта правил (`merge-conflict.ts`), И `setRuleDelta`; второй экземпляр
   // валидатора разошёлся бы с этим на первой же новой проверке. Снимок «до» — те же строки с живыми
   // дельтами: сторожа носителей и пар меряют СДВИГ, а не состояние.
+  const prevDelta = existing.find((r) => r.targetKind === 'aspect' && r.targetId === aspectId)
+    ?.delta as AspectDelta | undefined;
   assertDeltaRulesWrite(
     applyDeltas(
       { ...rows, ownerVersion: versions.ownerVersion, systemVersion: versions.systemVersion },
@@ -2158,6 +2174,7 @@ export async function setAspectDelta(
     { kind: 'aspect', id: aspectId },
     normalized,
     target.rules,
+    Array.isArray(prevDelta?.rules) ? prevDelta.rules : [],
   );
 
   await tx.execute(sql`
@@ -2813,22 +2830,60 @@ function assertRulePairsKept(before: RegistrySnapshot, after: RegistrySnapshot):
   }
 }
 
+/** Ключ пары-конфликта правил без порядка обхода: «a × b на событии». */
+function conflictKeysOf(
+  reg: RegistrySnapshot,
+): Map<string, { a: string; b: string; event: string; property: string }> {
+  const out = new Map<string, { a: string; b: string; event: string; property: string }>();
+  for (const c of ruleConflictsOf(rulesOf(reg).map((r) => r.rule))) {
+    const [x, y] = [c.a, c.b].sort();
+    out.set(`${x}|${y}|${c.event}`, c);
+  }
+  return out;
+}
+
+/**
+ * НОВЫЕ КОНФЛИКТЫ ПИСАТЕЛЕЙ — ПРИРОСТ, а не наличие (гейт 16 I-2). `assertRule` спрашивает конфликт только
+ * у правила, которое пишется; а запись бывает и ВКЛЮЧЕНИЕМ: снятое отключение системного правила
+ * (`aspect_delta_set` с пустым `rulesDisabled`, снятие строки дельты) оживляет писателя, спорящего с правилом
+ * владельца на ДРУГОМ носителе, — и ни один валидатор отдельного правила этого не видит. Мерка — прирост:
+ * конфликт, уже живший в снимке «до» (пересев, порча руками), не вина этой записи и выхода из него не
+ * закрывает — снять участника всегда можно.
+ */
+function assertNoNewConflicts(before: RegistrySnapshot, after: RegistrySnapshot): void {
+  const was = conflictKeysOf(before);
+  for (const [key, c] of conflictKeysOf(after)) {
+    if (was.has(key)) continue;
+    throw new ExecError(
+      'RULE_CONFLICT',
+      `правила «${c.a}» и «${c.b}» пишут ${c.property} на одном событии — приоритета между ними нет; ` +
+        `правка оживила бы второго писателя`,
+      { rule: c.b, other: c.a, event: c.event, property: c.property },
+    );
+  }
+}
+
 /**
  * ИНВАРИАНТЫ СНИМКА ПОСЛЕ ПРАВКИ ПРАВИЛ — общие для всех писателей правил владельца: круг
- * «свойство → правило → свойство» (свойство ВСЕГО графа, `REGISTRY_CYCLE` — врезка Р-3), строки-носители
- * движков (эррата Ф-Б2-24) и пары включённости (Fable M-2 задачи 14).
+ * «свойство → правило → свойство» (свойство ВСЕГО графа, `REGISTRY_CYCLE` — врезка Р-3), прирост
+ * конфликтов писателей (включение тоже запись), строки-носители движков (эррата Ф-Б2-24) и пары
+ * включённости (Fable M-2 задачи 14).
  */
 function assertRuleInvariants(before: RegistrySnapshot, after: RegistrySnapshot): void {
   assertAcyclicGraph(dependencyGraph(after, { queryRefs: new Map() }));
+  assertNoNewConflicts(before, after);
   assertEngineCarriersKept(before, after);
   assertRulePairsKept(before, after);
 }
 
 /**
  * ПРАВИЛА В ДЕЛЬТЕ НОСИТЕЛЯ — проверка на записи (Р-И-7: `applyDeltas` правило принимает молча, и
- * неверное запирало бы записи владельца на КАЖДОЙ мутации, а не на этой). Зовётся ТОЛЬКО когда
- * эффективный список носителя сменился: правка иконки аспекта не обязана перепроверять правила,
- * которые приняли раньше (устаревшее правило назовёт следующая правка самих правил).
+ * неверное запирало бы записи владельца на КАЖДОЙ мутации, а не на этой). Полный вердикт (инварианты
+ * снимка) — только когда эффективный список носителя сменился: правка иконки аспекта не обязана
+ * перепроверять правила, принятые раньше (устаревшее правило назовёт следующая правка самих правил).
+ * НОВОЕ правило дельты (его не было в прежней дельте, `prevRules`) валидатором проходит ВСЕГДА — и тогда,
+ * когда та же запись его выключает (гейт 16 m-4): выключенное сейчас включат потом, и принятым раньше оно
+ * не было никогда.
  *
  * Своё правило с id СИСТЕМНОГО — отказ `RULE_SYSTEM_IMMUTABLE`: вместе с отключением системного оно
  * было бы правкой системного правила мимо запрета §Б4-4. Отключение id, которого у носителя нет, —
@@ -2840,9 +2895,12 @@ function assertDeltaRulesWrite(
   carrier: RuleCarrier,
   delta: { rules?: RuleDefinition[]; rulesDisabled?: string[] },
   systemRules: readonly RuleDefinition[],
+  prevRules: readonly RuleDefinition[] = [],
 ): void {
   const system = new Set(systemRules.map((r) => r.id));
   const own = delta.rules ?? [];
+  const known = new Set(prevRules.map((r) => canonicalJson(r)));
+  const fresh = own.filter((r) => !known.has(canonicalJson(r)));
   // Отключение неизвестного id эффективного списка НЕ меняет — поэтому проверяется ДО выхода по
   // «список тот же», иначе опечатка проходила бы молча.
   for (const id of delta.rulesDisabled ?? []) {
@@ -2853,17 +2911,24 @@ function assertDeltaRulesWrite(
       });
     }
   }
+  const refuseSystemId = (rule: RuleDefinition) => {
+    if (!system.has(rule.id)) return;
+    throw new ExecError(
+      'VALIDATION',
+      `системное правило «${rule.id}» правится только релизом — его можно отключить (§Б4-4)`,
+      { reason: 'RULE_SYSTEM_IMMUTABLE', rule: rule.id },
+    );
+  };
+  for (const rule of fresh) {
+    refuseSystemId(rule);
+    assertRule(rule, { reg: after, carrier, systemSeed: false });
+  }
   const rulesAt = (r: RegistrySnapshot) =>
     (carrier.kind === 'aspect' ? r.aspects : r.properties).get(carrier.id)?.rules ?? [];
   if (canonicalJson(rulesAt(before)) === canonicalJson(rulesAt(after))) return;
   for (const rule of own) {
-    if (system.has(rule.id)) {
-      throw new ExecError(
-        'VALIDATION',
-        `системное правило «${rule.id}» правится только релизом — его можно отключить (§Б4-4)`,
-        { reason: 'RULE_SYSTEM_IMMUTABLE', rule: rule.id },
-      );
-    }
+    if (fresh.includes(rule)) continue;
+    refuseSystemId(rule);
     assertRule(rule, { reg: after, carrier, systemSeed: false });
   }
   assertRuleInvariants(before, after);
@@ -2936,6 +3001,16 @@ export async function removeOwnRule(
   return gone;
 }
 
+/** Своя строка правит правила колонкой, а не дельтой (Ф-Б2-30) — один отказ на оба писателя дельты правил. */
+function refuseOwnRowDelta(row: { graphId: string | null }, target: RuleCarrier): void {
+  if (row.graphId === null) return;
+  throw new ExecError(
+    'VALIDATION',
+    `${target.id} — ваша строка: её правила правятся колонкой (setOwnRule), а не дельтой`,
+    { reason: 'RULE_DELTA_OWN_ROW', target },
+  );
+}
+
 /** Носитель, у которого есть дельта: роль её не имеет (Р-2), и тип это выражает, а не проверка. */
 type DeltaRuleCarrier = { kind: 'aspect' | 'property'; id: string };
 
@@ -2977,10 +3052,12 @@ export async function setRuleDelta(
   if (target.kind === 'role') refuseSystemRole(target);
   const carrier: DeltaRuleCarrier = { kind: target.kind, id: target.id };
   const rows = await loadRegistryRows(tx, graphId);
-  const base = (target.kind === 'aspect' ? rows.aspects : rows.properties).get(target.id)?.rules;
-  if (base === undefined) {
+  const row = (target.kind === 'aspect' ? rows.aspects : rows.properties).get(target.id);
+  if (row === undefined) {
     throw new ExecError('NOT_FOUND', `строки ${target.id} нет в реестре`, { target });
   }
+  refuseOwnRowDelta(row, target);
+  const base = row.rules;
   const prev = ((await readDeltaRow(tx, graphId, carrier.kind, carrier.id)) ?? {}) as {
     rules?: RuleDefinition[];
     rulesDisabled?: string[];
@@ -3034,10 +3111,12 @@ export async function disableSystemRuleDelta(
   if (target.kind === 'role') refuseSystemRole(target);
   const carrier: DeltaRuleCarrier = { kind: target.kind, id: target.id };
   const rows = await loadRegistryRows(tx, graphId);
-  const base = (target.kind === 'aspect' ? rows.aspects : rows.properties).get(target.id)?.rules;
-  if (base === undefined) {
+  const row = (target.kind === 'aspect' ? rows.aspects : rows.properties).get(target.id);
+  if (row === undefined) {
     throw new ExecError('NOT_FOUND', `строки ${target.id} нет в реестре`, { target });
   }
+  refuseOwnRowDelta(row, target);
+  const base = row.rules;
   const prev = ((await readDeltaRow(tx, graphId, carrier.kind, carrier.id)) ?? {}) as {
     rules?: RuleDefinition[];
     rulesDisabled?: string[];
@@ -3088,12 +3167,18 @@ async function writeRuleDelta(
   // ПУСТАЯ дельта правил = ОТСУТСТВИЕ настройки, и строка снимается: пустышка висела бы со своим
   // `base_version`, а пересев сливал бы её вхолостую и двигал версию владельца на каждом деплое.
   // Только когда в дельте НЕТ ничего кроме правил: у аспекта та же строка несёт состав, иконку и варианты.
-  // Снятие возвращает носитель к СИСТЕМНОМУ списку, а он проверен сидом (`assertBuiltinRules`).
+  // Снятие возвращает носитель к СИСТЕМНОМУ списку — он согласован сам с собой (`assertBuiltinRules`,
+  // тест `rules.test.ts`), но НЕ с правилами владельца на других носителях: включённое обратно системное
+  // правило может спорить с ними (гейт 16 I-2). Поэтому и снятие проходит инварианты снимка.
   if (
     Object.keys(delta).every((k) => k === 'rules' || k === 'rulesDisabled') &&
     (delta.rules ?? []).length === 0 &&
     (delta.rulesDisabled ?? []).length === 0
   ) {
+    assertRuleInvariants(
+      await probeSnapshot(tx, graphId, rows),
+      await probeSnapshot(tx, graphId, rows, { targetKind: target.kind, targetId: target.id }),
+    );
     await removeDeltaRow(tx, graphId, target.kind, target.id);
     return;
   }
@@ -3103,8 +3188,18 @@ async function writeRuleDelta(
   }
   const before = await probeSnapshot(tx, graphId, rows);
   const systemRules = rows.properties.get(target.id)?.rules ?? [];
+  const prev = (await readDeltaRow(tx, graphId, 'property', target.id)) as
+    | PropertyDelta
+    | undefined;
   await writeDeltaRow(tx, graphId, 'property', target.id, delta as PropertyDelta, rows, (probe) =>
-    assertDeltaRulesWrite(before, probe, target, delta, systemRules),
+    assertDeltaRulesWrite(
+      before,
+      probe,
+      target,
+      delta,
+      systemRules,
+      Array.isArray(prev?.rules) ? prev.rules : [],
+    ),
   );
 }
 

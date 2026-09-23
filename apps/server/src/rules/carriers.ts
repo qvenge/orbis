@@ -51,25 +51,32 @@ function enabledCarrierRows<T extends RuleTemplate>(
 }
 
 /**
- * СТОРОЖ ЗАПИСИ ПРАВИЛ ВЛАДЕЛЬЦА (эррата Ф-Б2-24): строка-носитель движка неотключаема и одна. Читатели
- * выше бросают `Error` СБОРКИ без включённой строки и на двух включённых (Р-И-17) — выключение роняет
- * целые пути (без `materialize` — каждый запрос через `queryWithMaterialization`, без `mirror_ref` —
- * каждую запись сущности), и отказ обязан прийти ЗАПИСИ, а не всем читателям после неё.
+ * СТОРОЖ ЗАПИСИ ПРАВИЛ ВЛАДЕЛЬЦА (эррата Ф-Б2-24): строка-носитель движка неотключаема, незаменяема и одна.
+ * Читатели выше бросают `Error` СБОРКИ без включённой строки и на двух включённых (Р-И-17) — выключение
+ * роняет целые пути (без `materialize` — каждый запрос через `queryWithMaterialization`, без `mirror_ref` —
+ * каждую запись сущности), а подмена отдаёт движку параметры владельца (горизонт материализации без
+ * границы, свои `own`/`inherit` — Ф-Б2-22) и навсегда отрезает этого владельца от релизов параметров.
  *
- * Мерка — СДВИГ счёта, а не его значение: отказ получает запись, которая МЕНЯЕТ число включённых строк
- * шаблона и оставляет его не равным одному (1 → 0 — `RULE_CARRIER_REQUIRED`, 1 → 2 — `RULE_CARRIER_DUPLICATE`).
- * Запись, числа не меняющая, не отвечает за чужое состояние (порча базы руками уже роняет читателей), а
- * запись, возвращающая к одному, законна — это починка. Выключать строку уникальности конверта
+ * Мерка — ТОЖДЕСТВО включённых строк шаблона (носитель + id), а не только их счёт (гейт 16 I-3, Fable
+ * I-1): одна дельта `{rules:[своё materialize], rulesDisabled:['materialize']}` держит счёт 1 → 1 и
+ * проходила бы мерку по счёту. Отказ получает запись, которая МЕНЯЕТ набор включённых строк и оставляет его
+ * не единственной прежней строкой: пусто — `RULE_CARRIER_REQUIRED`, больше одной — `RULE_CARRIER_DUPLICATE`,
+ * одна, но другая — `RULE_CARRIER_REPLACED`. Запись, набора не меняющая, не отвечает за чужое состояние
+ * (порча базы руками уже роняет читателей), а запись, которая из испорченного состояния (0 или 2 строки)
+ * возвращает ровно одну, законна — это починка. Выключать строку уникальности конверта
  * (`duplicate_envelope`) законно: она не носитель движка (Ф-Б2-21 — идентичность конверта от `enabled` не
  * зависит), и в карте её нет.
  */
 export function assertEngineCarriersKept(before: RegistrySnapshot, after: RegistrySnapshot): void {
+  const identity = (r: { rule: RuleDefinition; carrier: RuleCarrier }) =>
+    `${r.carrier.kind}:${r.carrier.id}/${r.rule.id}`;
   for (const [template, kind] of Object.entries(ENGINE_CARRIER_TEMPLATES) as Array<
     [RuleTemplate, 'aspect' | 'role']
   >) {
-    const was = enabledCarrierRows(before, template, kind).length;
+    const was = enabledCarrierRows(before, template, kind).map(identity).sort();
     const rows = enabledCarrierRows(after, template, kind);
-    if (rows.length === was || rows.length === 1) continue;
+    const now = rows.map(identity).sort();
+    if (now.join('\n') === was.join('\n')) continue;
     if (rows.length === 0) {
       throw new ExecError(
         'VALIDATION',
@@ -77,10 +84,19 @@ export function assertEngineCarriersKept(before: RegistrySnapshot, after: Regist
         { reason: 'RULE_CARRIER_REQUIRED', template },
       );
     }
+    if (rows.length > 1) {
+      throw new ExecError(
+        'VALIDATION',
+        `вторая включённая строка правила «${template}» (${now.join(', ')}): у движка может быть только один носитель параметров`,
+        { reason: 'RULE_CARRIER_DUPLICATE', template, rules: rows.map((r) => r.rule.id) },
+      );
+    }
+    // Одна строка — законна только как ПРЕЖНЯЯ либо как починка испорченного состояния (было не одна).
+    if (was.length !== 1) continue;
     throw new ExecError(
       'VALIDATION',
-      `вторая включённая строка правила «${template}» (${rows.map((r) => `${r.carrier.id}/${r.rule.id}`).join(', ')}): у движка может быть только один носитель параметров`,
-      { reason: 'RULE_CARRIER_DUPLICATE', template, rules: rows.map((r) => r.rule.id) },
+      `строку правила «${template}» (${was[0]}) нельзя подменить своей (${now[0]}): параметры движка меняет только релиз`,
+      { reason: 'RULE_CARRIER_REPLACED', template, was: was[0], now: now[0] },
     );
   }
 }
