@@ -9,6 +9,7 @@ import {
   actionToolName,
   BUILTIN_ACTION_DEFS,
 } from '@orbis/shared';
+import { ACTION_FIXTURES } from '../../test/fixtures/action-seed';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 // Имена реестровых тулов читаются, а не правятся (tools/* — задача 7): пин рулинга 6-1 обязан
@@ -217,4 +218,17 @@ test('actionHash: подпись и rank личности не меняют, ш�
   expect(actionHash({ ...a, label: { ru: 'Другая', en: 'Other' }, rank: 9 })).toBe(actionHash(a));
   expect(actionHash({ ...a, batch_cap: 5 })).not.toBe(actionHash(a));
   expect(actionHash({ ...a, steps: [] })).not.toBe(actionHash(a));
+});
+
+test('корпус деклараций действий: каждый вход даёт свой вердикт (§С8-24)', () => {
+  // Пара «имя → вердикт» целиком: на расхождении видно, КАКАЯ строка корпуса поехала.
+  const got = ACTION_FIXTURES.map((f) => {
+    const v = verdict(f.decl);
+    return [f.name, v === 'ok' ? { ok: true } : { ok: false, ...v }];
+  });
+  const want = ACTION_FIXTURES.map((f) => [
+    f.name,
+    f.verdict.ok ? { ok: true } : { ok: false, code: f.verdict.code, reason: f.verdict.reason },
+  ]);
+  expect(got).toEqual(want);
 });

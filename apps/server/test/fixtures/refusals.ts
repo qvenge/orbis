@@ -8,7 +8,7 @@
 //  # · код(ы)                    · дверь                                       · жанр
 //  1 · REGISTRY_CYCLE            · assertAcyclicGraph(dependencyGraph)         · декларация
 //  2 · COMPUTED_WRITE            · execute entity_update                       · данные
-//  3 · ACTION_NESTED/BRANCH      · assertAction (задача 6)                     · декларация [red]
+//  3 · ACTION_NESTED/BRANCH      · assertAction (задача 6)                     · декларация
 //  4 · EXPR_RECURSION            · assertSubscription                          · декларация
 //  5 · EXPR_TYPE/EXPR_NOT_TOTAL  · assertSubscription                          · декларация
 //  6 · QUERY_MULTI_ROLE/JOIN     · parseQueryAst                               · декларация
@@ -20,10 +20,10 @@
 // 12 · SCOPE_NOT_STATIC          · execute property_create                     · декларация
 // 13 · ROLE_SYSTEM_ONLY          · execute relation_create                     · данные
 // 14 · PATTERN_NOT_REGULAR       · execute property_create                     · декларация
-// 15 · SENSITIVITY_UNDERDECLARED · assertAction (задача 6)                     · декларация [red]
+// 15 · SENSITIVITY_UNDERDECLARED · assertAction (задача 6)                     · декларация
 // 16 · SECOND_LANGUAGE           · assertSubscription                          · декларация
 // 17 · SURFACE_UNKNOWN           · assertSubscription                          · декларация
-// 18 · BATCH_UNBOUNDED           · assertAction (задача 6)                     · декларация [red]
+// 18 · BATCH_UNBOUNDED           · assertAction (задача 6)                     · декларация
 // 19 · RULE_CONFLICT             · assertRule                                  · декларация
 // 20 · DEREF_IN_CONSTRAINT       · assertRule → чекер E                        · декларация
 // 21 · MODULE_DISABLED           · execute entity_create                       · данные
@@ -48,6 +48,7 @@ import type { Db } from '../../src/db/client';
 import { ExecError, type ExecErrorCode } from '../../src/errors';
 import { execute } from '../../src/executor/executor';
 import type { ExecuteOk, ExecuteResult } from '../../src/executor/types';
+import { assertAction } from '../../src/registry/actions';
 import { assertAcyclicGraph, dependencyGraph } from '../../src/registry/deps-graph';
 import type { RegistrySnapshot, SubscriptionRow } from '../../src/registry/load';
 import { assertRule } from '../../src/registry/rules';
@@ -55,6 +56,16 @@ import { appRouter } from '../../src/router';
 import { assertSubscription } from '../../src/subscriptions/registry';
 import { createCallerFactory } from '../../src/trpc';
 import { appDb, freshGraph, personal, seedCustomAspect, truncateAll } from '../helpers';
+import {
+  ACTION_BRANCH,
+  ACTION_NESTED,
+  ACTION_NESTED_BY_TOOL,
+  BATCH_UNBOUNDED,
+  P2F,
+  POSTPONE,
+  SENSITIVITY_UNDERDECLARED,
+  SENSITIVITY_UNDERDECLARED_ATTACH,
+} from './action-seed';
 import { GATE_PLAIN_ASPECT, GATE_PLAIN_KEY, GATE_PROPS } from './gate-aspects';
 
 export type RefusalGenre = 'declaration' | 'data';
@@ -836,95 +847,41 @@ const ROW_10: RefusalRow = {
   ],
 };
 
-// ───────── красные строки 3/15/18 (валидатора действий ещё нет) и закрытые задачей 1 строки 11/19/20 ─────────
+// ───────── строки 3/15/18 (валидатор действий, задача 6) и строки 11/19/20 (валидатор правил, задача 1) ─────────
 
-/**
- * Валидатор БУДУЩЕЙ задачи — сегодня это только валидатор действий (задача 6); правила строки
- * 11/19/20 зовут `assertRule` прямым импортом: модуль `registry/rules.ts` есть с задачи 1.
- *
- * Спецификатор ВЫЧИСЛЯЕМЫЙ, и это не стиль: литеральный `import('../../src/registry/actions')`
- * уронил бы `bun run typecheck` на несуществующем модуле (TS резолвит только литеральные
- * спецификаторы), а веха 0 обязана закрываться красными ТЕСТАМИ, а не красными типами.
- */
-async function futureValidator(
-  file: 'actions',
-  name: string,
-): Promise<(...a: unknown[]) => unknown> {
-  const mod = (await import(`${import.meta.dir}/../../src/registry/${file}`)) as Record<
-    string,
-    unknown
-  >;
-  const fn = mod[name];
-  if (typeof fn !== 'function')
-    throw new Error(`${file}.ts: экспорта ${name} ещё нет (задача среза)`);
-  return fn as (...a: unknown[]) => unknown;
-}
 const ruleScope = (kind: 'aspect' | 'property' | 'role', id: string) => ({
   reg: world().reg,
   carrier: { kind, id },
   systemSeed: true,
 });
+/**
+ * Область валидатора действий: снимок мира корпуса (встроенные словари + посеянные действия) и
+ * системный сид — корпус меряет сидовые декларации модулей (`finance/…`, `planner/…`), и namespace
+ * `user/` своего действия здесь был бы другой проверкой (ступень 4), а не проверкой строки.
+ */
 const actionScope = () => ({ reg: world().reg, systemSeed: true });
-/** Отказ БУДУЩЕГО валидатора: сам он синхронен, а добыча функции — поход в модуль. */
-const futureCode = async (
-  file: 'actions',
-  name: string,
-  arg: unknown,
-  scope: unknown,
-): Promise<ExecErrorCode> => {
-  const assertIt = await futureValidator(file, name);
-  return codeOfSync(() => assertIt(arg, scope));
-};
-const futureOk = async (
-  file: 'actions',
-  name: string,
-  arg: unknown,
-  scope: unknown,
-): Promise<void> => {
-  const assertIt = await futureValidator(file, name);
-  assertIt(arg, scope);
-};
 
-/** Действие §Б6-1 вокруг одного шага: общая часть позитива и трёх порченых деклараций. */
-const action = (over: Record<string, unknown>): Record<string, unknown> => ({
-  key: 'user/corpus-action',
-  label: { ru: 'Действие корпуса' },
-  description: { ru: 'Декларация действия §Б6-1 для корпуса отказов' },
-  sensitivity: [],
-  steps: [{ tool: 'entity_update', input: { id: '{subject}', props: {} } }],
-  ...over,
-});
+// Позитив, отказ и порчи идут через ТОТ ЖЕ `assertAction`, что и боевая запись строки реестра, и
+// берут декларации корпуса действий (`action-seed.ts`): позитив — сама сидовая декларация, порча —
+// одна правка её же. До задачи 6 здесь стояли формы «на вырост» (`over: {query: …}`, шаг без `$expr`),
+// которых схема §Б6-1 не принимает, — позитив на них падал бы формой, а не валидатором строки.
 const ROW_3: RefusalRow = {
   row: 3,
   codes: ['ACTION_NESTED', 'ACTION_BRANCH'],
   genre: 'declaration',
-  red: true,
-  positive: async () => futureOk('actions', 'assertAction', action({}), actionScope()),
-  refuse: async () =>
-    futureCode(
-      'actions',
-      'assertAction',
-      action({ steps: [{ tool: 'run_action', input: { action: 'finance/plan-to-fact' } }] }),
-      actionScope(),
-    ),
+  positive: async () => {
+    assertAction(P2F, actionScope());
+  },
+  refuse: async () => codeOfSync(() => assertAction(ACTION_NESTED, actionScope())),
   spoils: [
     {
       name: 'ветвление на уровне шага — второе имя строки',
-      run: async () =>
-        futureCode(
-          'actions',
-          'assertAction',
-          action({
-            steps: [
-              {
-                tool: 'entity_update',
-                when: { op: '=', args: [{ prop: 'orbis/recurring' }, { const: true }] },
-                input: { id: '{subject}', props: {} },
-              },
-            ],
-          }),
-          actionScope(),
-        ),
+      run: async () => codeOfSync(() => assertAction(ACTION_BRANCH, actionScope())),
+    },
+    {
+      // Рулинг 6-1: вложенность узнаётся по ФОРМЕ имени тула действия, а не только по `run_action`.
+      name: 'шаг зовёт тул действия action_<ключ> — та же вложенность',
+      run: async () => codeOfSync(() => assertAction(ACTION_NESTED_BY_TOOL, actionScope())),
     },
   ],
 };
@@ -988,59 +945,58 @@ const ROW_11: RefusalRow = {
   ],
 };
 
-const moneyStep = {
-  tool: 'entity_update',
-  input: { id: '{subject}', props: { 'orbis/amount': { const: '1.00' } } },
-};
+// Строка 15: позитив — сидовое `plan-to-fact` (пишет `orbis/planned` и `orbis/occurred_on` — слоты
+// `orbis/money-movement`, факт `touches_money` объявлен) и та же декларация с ЛИШНИМ объявленным фактом:
+// §Б6-1 разрешает декларации факты только добавлять, и «объявил больше» обязано пройти.
 const ROW_15: RefusalRow = {
   row: 15,
   codes: ['SENSITIVITY_UNDERDECLARED'],
   genre: 'declaration',
-  red: true,
-  positive: async () =>
-    futureOk(
-      'actions',
-      'assertAction',
-      action({ sensitivity: ['touches_money'], steps: [moneyStep] }),
+  positive: async () => {
+    assertAction(P2F, actionScope());
+    assertAction(
+      {
+        ...P2F,
+        key: 'finance/loud',
+        id: 'finance/loud',
+        sensitivity: ['touches_money', 'external'],
+      },
       actionScope(),
-    ),
-  refuse: async () =>
-    futureCode(
-      'actions',
-      'assertAction',
-      action({ sensitivity: [], steps: [moneyStep] }),
-      actionScope(),
-    ),
+    );
+  },
+  refuse: async () => codeOfSync(() => assertAction(SENSITIVITY_UNDERDECLARED, actionScope())),
   spoils: [
     {
       name: 'объявлен ДРУГОЙ факт — набор неполон так же, как пустой',
       run: async () =>
-        futureCode(
-          'actions',
-          'assertAction',
-          action({ sensitivity: ['external'], steps: [moneyStep] }),
-          actionScope(),
+        codeOfSync(() =>
+          assertAction({ ...SENSITIVITY_UNDERDECLARED, sensitivity: ['external'] }, actionScope()),
         ),
+    },
+    {
+      name: 'факт снят у шага attach_* — деньги в data ключами свойств',
+      run: async () =>
+        codeOfSync(() => assertAction(SENSITIVITY_UNDERDECLARED_ATTACH, actionScope())),
     },
   ],
 };
 
-const mapAction = (over: Record<string, unknown>) =>
-  action({ over: { query: 'aspect=orbis/task' }, batch_cap: 100, ...over });
+// Строка 18: кап 0 порчей строки быть не может — это отказ ФОРМЫ (`VALIDATION ACTION_MALFORMED`,
+// кап — целое ≥ 1), то есть вердикт другой строки; он пиннится в `registry/actions.test.ts`.
 const ROW_18: RefusalRow = {
   row: 18,
   codes: ['BATCH_UNBOUNDED'],
   genre: 'declaration',
-  red: true,
-  positive: async () => futureOk('actions', 'assertAction', mapAction({}), actionScope()),
-  refuse: async () =>
-    futureCode('actions', 'assertAction', mapAction({ batch_cap: null }), actionScope()),
+  positive: async () => {
+    assertAction(POSTPONE, actionScope());
+  },
+  refuse: async () => codeOfSync(() => assertAction(BATCH_UNBOUNDED, actionScope())),
   spoils: [
     {
       name: 'капа нет вовсе — молчание читается так же, как явный null',
       run: async () => {
-        const { batch_cap: _cap, ...noCap } = mapAction({});
-        return futureCode('actions', 'assertAction', noCap, actionScope());
+        const { batch_cap: _cap, ...noCap } = BATCH_UNBOUNDED;
+        return codeOfSync(() => assertAction(noCap, actionScope()));
       },
     },
   ],
