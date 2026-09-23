@@ -54,6 +54,7 @@ import { withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import { stateDelta } from '../executor/props';
 import type { ActionCard, ActionRecord, WireEntity } from '../executor/types';
+import { undoAction } from '../executor/undo';
 import { classifyToolCall } from '../policy/confirmation';
 import { materializeInstances } from '../recurring/materialize';
 import { effectiveRegistry } from '../registry/cache';
@@ -460,6 +461,19 @@ async function stateOf(
   return { props: row.props, aspects: row.aspects };
 }
 
+/**
+ * Запись отката в журнале — undo-сообщение `{type:'undo', undoes}` (§7.8): нового action откат не
+ * порождает (undo неотменяем), поэтому «строка журнала» случая отката — именно оно.
+ */
+async function undoRecordOf(owner: GraphId, actionId: string): Promise<unknown> {
+  const probe = JSON.stringify({ type: 'undo', undoes: actionId });
+  const rows = await withIdentity(db, personal(owner), (tx) =>
+    tx.execute(sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
+  );
+  if (rows.length !== 1) throw new Error(`undo-сообщений ${actionId}: ${rows.length}, ждали одно`);
+  return rows[0]?.metadata;
+}
+
 beforeAll(async () => {
   await truncateAll();
   for (const owner of Object.values(OWNER)) await seedWorld(owner);
@@ -645,5 +659,35 @@ describe('§С8-27 postpone_overdue: map-действие по Q', () => {
       'planner',
     ]);
     expect([action.operations.length, action.inverse.length]).toEqual([3, 3]);
+  });
+
+  test('apply → undoAction → состояние «до» байт-в-байт: обратимость §Б6-4 на map-действии', async () => {
+    // `undoAction`, а не `undoLast`: цель названа по id (проверяется обратимость ДЕЙСТВИЯ, а не
+    // поиск последнего), и путь тот же — внутренний режим, один tx, undo-сообщение вместо action.
+    const undone = await undoAction(db, {
+      identity: personal(OWNER.tasks),
+      actionId: journal('tasks').action.id,
+    });
+    expect(undone.ok).toBe(true);
+    const back = await snapshotWorld(OWNER.tasks, TASKS_WORLD);
+    const names = namesOf(OWNER.tasks);
+    // Два утверждения, а не одно: равенство эталону «до» (побайтово) и пустая дельта состояния
+    // (`stateDelta` — та же мерка, которой считает журнал: канон значений, а не ссылочное равенство)
+    expect(canonicalJson(stabilize(back, names))).toBe(
+      canonicalJson(caseOf('postpone_overdue/apply').before),
+    );
+    for (let i = 0; i < 3; i += 1) {
+      const from = { props: BEFORE.tasks[i]?.props ?? {}, aspects: BEFORE.tasks[i]?.aspects ?? [] };
+      const to = { props: back[i]?.props ?? {}, aspects: back[i]?.aspects ?? [] };
+      expect([i, stateDelta(from, to)]).toEqual([i, {}]);
+    }
+    // Случай отката в эталоне — зеркало случая исполнения (его «до» — это «после» apply, его
+    // «после» — «до» apply), а запись отката — undo-сообщение, не новая строка action.
+    const g = caseOf('postpone_overdue/undo');
+    expect(canonicalJson(g.before)).toBe(canonicalJson(caseOf('postpone_overdue/apply').after));
+    expect(canonicalJson(g.after)).toBe(canonicalJson(caseOf('postpone_overdue/apply').before));
+    expect(canonicalJson(stabilize(back, names))).toBe(canonicalJson(g.after));
+    const undo = await undoRecordOf(OWNER.tasks, journal('tasks').action.id);
+    expect(canonicalJson({ undo: stabilize(undo, names) })).toBe(canonicalJson(g.journal));
   });
 });
