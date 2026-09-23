@@ -13301,7 +13301,7 @@ const EXPECTED_DIFFS: Record<string, { legacy: string; next: string; records: nu
 - **НЕ трогать:** `apps/server/src/policy/confirmation.ts` (живой конвейер §7.10 — V2, В-2/Р-27: пол стоит РЯДОМ, а не
   внутри `classifyToolCall`), `apps/server/src/tools/dispatch.ts`, `apps/server/src/policy/sensitivity.ts`,
   `apps/web` (Р-23), `apps/server/src/subscriptions/agenda.ts` (`prefer` Повестки уже есть, `:240`),
-  `packages/shared/src/expr/normalize.ts` — **проверено**: общая ветка `{op}` (`:86`) нормализует аргументы любого
+  `packages/shared/src/expr/normalize.ts` — **[ЭРРАТА Ф-Б2-26 (гейт задачи 15, I-2): НЕ проверено — в форме `"<id>" in $touched` имя свойства лежит в `{const}`, и его не видят `normalizeExpr`, `propertyNamesInExpr` и `rewriteAst` (`ops.ts`); константа-член `$touched` нормализуется, читается и переписывается как адрес свойства]** **проверено**: общая ветка `{op}` (`:86`) нормализует аргументы любого
   оператора, своей ветки `empty` не нужно; `{ctx}` имён реестра не несёт (`:105-107`),
   `apps/server/src/registry/rules.ts` (валидатор — задача 1; здесь только вызывается).
 
@@ -14040,7 +14040,7 @@ describe('SLOT_AMBIGUOUS у Budget: без prefer — отказ, с prefer — 
   `sources.movement.prefer`/`sources.envelope.prefer` — массивы. `cd apps/server && bun test src/subscriptions/budget.test.ts`
   → **FAIL**: `bindingForEntity` не экспортирована и пятого параметра не имеет.
 
-- [ ] **Шаг 19: реализация — `prefer` в декларации и в движке.** `subscription-type.ts`: в `sources.movement` (`:57-59`)
+- [ ] **Шаг 19: реализация — `prefer` в декларации и в движке.** **[ЭРРАТА Ф-Б2-25 (гейт задачи 15, I-1): `prefer` обязан действовать и в SQL-ведомостях движка Budget (`slotExpr` → суммы, кэш, окно — `subscriptions/budget.ts`), а не только в JS-выборе привязки: иначе строка и лимит из аспекта владельца, а `spent` — из первой по rank привязки (молчаливое денежное расхождение). Порядок: перечень `prefer`, затем rank; движковый тест на `budgetOverviewOf`.]** `subscription-type.ts`: в `sources.movement` (`:57-59`)
   и `sources.envelope` (`:60-71`) — `prefer: z.array(z.string()).default([]),` с комментарием «§С8-21: чей аспект
   считать, когда контракт реализуют два, — решает ДЕКЛАРАЦИЯ; образец — `show.prefer` Повестки (`:30`)».
   `subscription-fixtures.ts:92` и `:93-100` — `prefer: []` явно (норматив пишет умолчания явно, шапка `:10-13`).
