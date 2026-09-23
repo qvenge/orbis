@@ -10,7 +10,7 @@
 // экраны проекта/тикета (Задача 13). Отдельного фонового процесса нет намеренно —
 // инвариант «тикет не висит in_progress навсегда» не должен зависеть ни от расписания,
 // ни от того, что какой-то агент однажды позовёт очередь.
-import { newId } from '@orbis/shared';
+import { newId, propertyOfSlot } from '@orbis/shared';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
@@ -19,7 +19,14 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind } from '../executor/types';
 import type { Identity } from '../identity';
 import { listRunUnits } from '../policy/pending';
-import { RUN_STALE_AFTER_MS } from './constants';
+import { effectiveRegistry } from '../registry/cache';
+import {
+  bindingsOfSnapshot,
+  classOfEntity,
+  classPrecondition,
+  statusPatch,
+} from '../registry/class-write';
+import { DELEGABLE_CONTRACT, RUN_STALE_AFTER_MS, TICKET_ASPECT } from './constants';
 import { type RunRow, runsOfParent, staleRuns, ticketOfRun } from './queries';
 
 // Боевой синк — один инстанс на модуль (состояния не хранит), как в tools/dispatch.ts.
@@ -85,6 +92,20 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
   const before = new Date(now.getTime() - staleAfterMs);
 
   const stale = await withIdentity(db, args.identity, (tx) => staleRuns(tx, before));
+  // Подметать нечего — и снимок реестра не нужен: подметание зовётся на КАЖДОЕ чтение очереди, и
+  // лишняя транзакция за снимком легла бы на самый частый путь ради пустого цикла.
+  if (stale.length === 0) return { swept: 0 };
+  // Снимок реестра — ОДИН на подметание: адрес свойства и варианты классов внутри прохода не меняются,
+  // а поход за ним в каждой итерации стоил бы транзакцию на каждый брошенный прогон.
+  const reg = await withIdentity(db, args.identity, (tx) =>
+    effectiveRegistry(tx, args.identity.graph),
+  );
+  const waitingFor = propertyOfSlot(
+    bindingsOfSnapshot(reg),
+    TICKET_ASPECT,
+    DELEGABLE_CONTRACT,
+    'waiting_for',
+  );
   let swept = 0;
   for (const run of stale) {
     // Субъект прогона (V1.4) решает и исход, и то, есть ли вообще тикетная половина:
@@ -94,7 +115,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
       ? null
       : await withIdentity(db, args.identity, (tx) => ticketOfRun(tx, run.id));
     // Статус тикета трогает ТОЛЬКО его последний прогон. Двух running-прогонов у тикета
-    // хватает одного ручного жеста владельца («верни в planned» при живом прогоне A →
+    // хватает одного ручного жеста владельца («верни в очередь» при живом прогоне A →
     // захват B), и тогда подметание старого хвоста A выбивало бы из работы тикет, над
     // которым прямо сейчас работает B. Порядок — тот же created_at ASC, что у очереди и
     // экрана истории: «последний» здесь значит то же, что видит человек.
@@ -164,21 +185,35 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
     ];
 
     // Тикет чинится, только если он ДЕЙСТВИТЕЛЬНО висит в работе: владелец мог вернуть
-    // его руками, и переписывать его статус задним числом сервер права не имеет.
-    if (ticket !== null && isLastRun && ticket.props['orbis/task_status'] === 'in_progress') {
+    // его руками, и переписывать его состояние задним числом сервер права не имеет.
+    if (
+      ticket !== null &&
+      isLastRun &&
+      classOfEntity(reg, ticket, DELEGABLE_CONTRACT) === 'in_progress'
+    ) {
       operations.push({
         tool: 'entity_update',
         input: {
           id: ticket.id,
-          precondition: [{ property: 'orbis/task_status', in: ['in_progress'] }],
+          precondition: [
+            classPrecondition(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, ['in_progress']),
+          ],
           ...(hasEffect
-            ? // Эффект был — возврат в planned запрещён (С6): он стёр бы факт, что
+            ? // Эффект был — возврат в очередь запрещён (С6): он стёр бы факт, что
               // работа велась, и следующий агент наткнулся бы на чужую ветку
-              { props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': note } }
-            : // Эффекта не было — безопасно перезапустить; чужой хвост waiting_for
-              // снимаем ЯВНЫМ `unset`: `null` в новой форме — законное значение, а не
-              // распоряжение стереть (§А1-1)
-              { props: { 'orbis/task_status': 'planned' }, unset: ['orbis/waiting_for'] }),
+              {
+                props: {
+                  ...statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'waiting'),
+                  [waitingFor]: note,
+                },
+              }
+            : // Эффекта не было — безопасно перезапустить; чужой хвост ожидания снимаем
+              // ЯВНЫМ `unset` (`null` в новой форме — законное значение, а не распоряжение
+              // стереть, §А1-1). Снос этой строки — задача 14 (В-П-8).
+              {
+                props: statusPatch(reg, TICKET_ASPECT, DELEGABLE_CONTRACT, 'queued'),
+                unset: [waitingFor],
+              }),
         },
       });
     }
