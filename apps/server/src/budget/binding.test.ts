@@ -856,6 +856,40 @@ describe('уникальность конверта: (category_ref, currency, pe
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('duplicate_envelope');
   });
+
+  test('откат удаления конверта при уже созданном дубле отклоняется правилом (undo: check)', async () => {
+    // Решение владельца В-П-1а. Было: конверт A (категория K, период P). Удаляем A (archived) →
+    // создаём B с той же K/P → откатываем удаление A. Снятый код под внутренним откатом не звался, и
+    // откат давал два живых конверта на K/P; строка `duplicate_envelope` с `undo: 'check'` его отклоняет.
+    const owner = await freshGraph();
+    const k = newId();
+    const { entity: a } = await createEntity(owner, {
+      title: 'A',
+      props: budgetProps(k, '2026-07-01', '2026-07-31', { 'orbis/limit': '100.00' }),
+      aspects: ['orbis/budget'],
+    });
+    const del = ok(
+      await execute(db, req(owner, 'entity_update', { id: a.id, archived: true }), { sink }),
+    );
+    await createEntity(owner, {
+      title: 'B',
+      props: budgetProps(k, '2026-07-01', '2026-07-31', { 'orbis/limit': '200.00' }),
+      aspects: ['orbis/budget'],
+    });
+    const undo = await undoAction(db, { identity: personal(owner), actionId: del.actionId });
+    expect(undo.ok).toBe(false);
+    expect(undo.ok ? null : undo.error).toMatchObject({
+      code: 'INVARIANT',
+      details: { invariant: 'duplicate_envelope' },
+    });
+    // Живой конверт на K/P остался один — B; A в архиве.
+    const live = await adminRows(
+      sql`SELECT count(*)::int AS n FROM entities
+          WHERE graph_id = ${owner} AND NOT archived AND 'orbis/budget' = ANY(aspects)
+            AND props->>'orbis/finance_category' = ${k}`,
+    );
+    expect(live[0]?.n).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
