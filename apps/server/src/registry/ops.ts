@@ -2113,7 +2113,11 @@ export async function setAspectDelta(
   // определения. Нормализация — вторая половина того же: дельта хранит канон, а
   // `applyDeltas` ищет свойство в словаре ПО id (`properties.get`), то есть записанный
   // ключом адрес не резолвился бы никогда и молча.
-  const normalized = normalizeDeltaAddresses(parsed.data, rows.properties, aspectId);
+  // Пустые поля правил — отсутствие настройки, а не настройка (`compactRuleDelta`): обратная операция называет
+  // их пустыми, чтобы перенос `aspectDeltaAfterSet` не оставил текущие (N-2), а в строку они не ложатся.
+  const normalized = compactRuleDelta(
+    normalizeDeltaAddresses(parsed.data, rows.properties, aspectId),
+  );
   // ПОЛНОТА ОТНЕСЕНИЯ ВАРИАНТОВ (§Б2-2) — ДО записи, тем же доводом, что и проба применимости
   // ниже: `applyDeltas` вариант примет молча, и запись со свежим статусом выпала бы из всех
   // наборов контракта — из чекбокса строки, из `class=`, из Agenda — без следа причины.
@@ -3029,7 +3033,7 @@ function refuseOwnRowDelta(row: { graphId: string | null }, target: RuleCarrier)
 }
 
 /** Носитель, у которого есть дельта: роль её не имеет (Р-2), и тип это выражает, а не проверка. */
-type DeltaRuleCarrier = { kind: 'aspect' | 'property'; id: string };
+export type DeltaRuleCarrier = { kind: 'aspect' | 'property'; id: string };
 
 /** Отказ на встроенной роли — один текст на оба писателя дельты правил. */
 function refuseSystemRole(target: RuleCarrier): never {
@@ -3217,6 +3221,42 @@ async function writeRuleDelta(
       systemRules,
       Array.isArray(prev?.rules) ? prev.rules : [],
     ),
+  );
+}
+
+/**
+ * Сырая строка дельты носителя-встроенной строки — вход обратной операции `rule_set`/`rule_remove` (фикс-раунд 2
+ * задачи 16, N-1): КАК ЛЕЖИТ, со своими правилами, выключенными пересевом (`rulesDisabled`). Эффективный список
+ * их не содержит, и откат по нему снимал бы декларацию вместо того, чтобы вернуть её выключенной.
+ */
+export async function readRuleDelta(
+  tx: Tx,
+  graphId: GraphId,
+  carrier: DeltaRuleCarrier,
+): Promise<Record<string, unknown> | null> {
+  const delta = await readDeltaRow(tx, graphId, carrier.kind, carrier.id);
+  return delta === undefined || delta === null ? null : (delta as Record<string, unknown>);
+}
+
+/**
+ * ВОЗВРАТ СТРОКИ ДЕЛЬТЫ ПРАВИЛ К ПРЕЖНЕЙ — внутренняя обратная операция `rule_delta_restore` (N-1). Пишет тем же
+ * `writeRuleDelta`, что и прямые операции: у аспекта — через `setAspectDelta` (проверки дельты и правил), у
+ * свойства — `writeDeltaRow` с проверкой правил, `null` — снятие строки с инвариантами снимка. Откат, возвращающий
+ * конфликт или цикл (мир сдвинулся после записи), получает громкий отказ, а не нечитаемый реестр.
+ */
+export async function restoreRuleDelta(
+  tx: Tx,
+  graphId: GraphId,
+  target: DeltaRuleCarrier,
+  delta: Record<string, unknown> | null,
+): Promise<void> {
+  const rows = await loadRegistryRows(tx, graphId);
+  await writeRuleDelta(
+    tx,
+    graphId,
+    target,
+    (delta ?? {}) as { rules?: RuleDefinition[]; rulesDisabled?: string[] },
+    rows,
   );
 }
 

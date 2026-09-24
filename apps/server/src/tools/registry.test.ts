@@ -898,9 +898,9 @@ describe('§С8-23: инвариант против fail-open — писател
   );
 
   test('писатели реестра разобраны, и КАЖДЫЙ берёт замок реестра', () => {
-    // Шестнадцать публичных тулов реестра плюс ЧЕТЫРЕ внутренние операции
-    // (`property_row_restore`, `property_merge_undo`, `aspect_row_restore`, `module_set`):
-    // первые три зовёт только undo, четвёртую — ручка владельца; снаружи ни одна не достижима.
+    // Шестнадцать публичных тулов реестра плюс ПЯТЬ внутренних операций
+    // (`property_row_restore`, `property_merge_undo`, `aspect_row_restore`, `rule_delta_restore`,
+    // `module_set`): первые четыре зовёт только undo, пятую — ручка владельца; снаружи ни одна не достижима.
     // У подписок и наборов своей обратной операции нет: обратное к `subscription_set` — снова
     // `subscription_set` (прежняя декларация), к `contract_sets_delta_set` —
     // `contract_sets_delta_remove` (задача 16), и внутренних имён ей заводить не пришлось. У тулов
@@ -924,6 +924,7 @@ describe('§С8-23: инвариант против fail-open — писател
       'property_merge_undo',
       'property_row_restore',
       'property_update',
+      'rule_delta_restore',
       'rule_remove',
       'rule_set',
       'subscription_remove',

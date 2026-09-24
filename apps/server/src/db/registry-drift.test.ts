@@ -5,7 +5,13 @@
 // приложения NOINHERIT, гранты висят на authenticated), а забытый GRANT новой таблице даёт
 // 42501 ещё до всякой политики.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { type GraphId, hasRegistryDrift, newId } from '@orbis/shared';
+import {
+  canonicalJson,
+  type GraphId,
+  hasRegistryDrift,
+  newId,
+  ruleDefinitionSchema,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -18,6 +24,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
+import { undoAction } from '../executor/undo';
 import { approvePending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import {
@@ -31,7 +38,7 @@ import {
   DRIFT_MERGE_EFFECT,
   RULE_MERGE_EFFECT,
 } from '../registry/merge-conflict';
-import { setRuleDelta } from '../registry/ops';
+import { setAspectDelta, setRuleDelta } from '../registry/ops';
 import {
   checkRegistryDrift,
   REGISTRY_DELTAS_QUERY,
@@ -676,5 +683,104 @@ describe('конфликты пересева становятся единиц�
       { tool: 'rule_remove', input: { target: { aspect: 'orbis/task' }, rule: 'y' } },
       { tool: 'rule_set', input: { target: { property: 'orbis/due_date' }, rule: mine } },
     ]);
+  });
+
+  test('N-1: «Принять» единицы правил → «отмени последнее» → дельты владельца как до «Принять»', async () => {
+    const graph = await freshGraph();
+    const mine = ruleDefinitionSchema.parse({
+      id: 'note_completed_at',
+      template: 'on_enter_class',
+      params: {
+        enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+        set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+      },
+    });
+    const D0 = { rules: [mine], rulesDisabled: ['note_completed_at'] };
+    await putDelta(graph, 'aspect', 'orbis/note', D0);
+    const ids = await withIdentity(db, personal(graph), (tx) =>
+      createDriftConflictUnits(tx, {
+        graphId: graph,
+        systemVersion: 7,
+        deltaRowId: newId(),
+        merged: D0 as never,
+        conflicts: [
+          {
+            kind: 'rule-conflict',
+            targetKind: 'aspect',
+            targetId: 'orbis/note',
+            rule: {
+              mine: 'note_completed_at',
+              theirs: 'task_completed_at',
+              theirsAt: { kind: 'aspect', id: 'orbis/task' },
+            },
+            detail: '',
+          },
+        ],
+      }),
+    );
+    const approved = await approvePending(db, {
+      identity: personal(graph),
+      pendingId: ids[0] as string,
+    });
+    if (!approved.ok) throw new Error(`«Принять» не прошло: ${approved.error.message}`);
+    const deltasOf = async () =>
+      (await admin.db.execute(
+        sql`SELECT target_kind, target_id, delta FROM registry_deltas WHERE graph_id = ${graph}::uuid
+             ORDER BY target_kind, target_id`,
+      )) as unknown as Array<{ target_kind: string; target_id: string; delta: unknown }>;
+    expect((await deltasOf()).map((r) => r.target_id)).toEqual(['orbis/note', 'orbis/task']);
+    const undone = await undoAction(db, { identity: personal(graph), actionId: approved.actionId });
+    expect(undone.ok).toBe(true);
+    // Прежде откат по эффективному списку снимал декларацию своего правила целиком (проба PR1).
+    const rows = await deltasOf();
+    expect(rows.map((r) => [r.target_kind, r.target_id])).toEqual([['aspect', 'orbis/note']]);
+    expect(canonicalJson(rows[0]?.delta)).toBe(canonicalJson(D0));
+    const reg = await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
+    expect(reg.aspects.get('orbis/task')?.rules.map((r) => r.id)).toContain('task_completed_at');
+    expect(reg.aspects.get('orbis/note')?.rules.map((r) => r.id)).toEqual([]);
+  });
+
+  test('m-B: свежесть единицы ВАРИАНТА — правка настройки после пересева гасит её «Устарело»', async () => {
+    const graph = await freshGraph();
+    const merged = {
+      selectOptions: {
+        'orbis/priority': {
+          add: [
+            { key: 'urgent2', label: { ru: 'Срочно' }, rank: 9 },
+            { key: 'other2', label: { ru: 'Другое' }, rank: 10 },
+          ],
+        },
+      },
+    };
+    await putDelta(graph, 'aspect', 'orbis/task', merged);
+    const ids = await withIdentity(db, personal(graph), (tx) =>
+      createDriftConflictUnits(tx, {
+        graphId: graph,
+        systemVersion: 7,
+        deltaRowId: newId(),
+        merged: merged as never,
+        conflicts: [
+          {
+            kind: 'variant-merge',
+            targetKind: 'aspect',
+            targetId: 'orbis/task',
+            propertyId: 'orbis/priority',
+            option: { mine: 'urgent2', theirs: 'high' },
+            detail: '',
+          },
+        ],
+      }),
+    );
+    await withIdentity(db, personal(graph), (tx) =>
+      setAspectDelta(tx, graph, 'orbis/task', { ...merged, icon: '📌' }),
+    );
+    const refused = await approvePending(db, {
+      identity: personal(graph),
+      pendingId: ids[0] as string,
+    });
+    if (refused.ok) throw new Error('ожидалось «Устарело»');
+    expect(refused.error.details).toMatchObject({ reason: 'REGISTRY_UNIT_STALE' });
+    const reg = await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
+    expect(reg.aspects.get('orbis/task')?.viewConfig.icon).toBe('📌');
   });
 });

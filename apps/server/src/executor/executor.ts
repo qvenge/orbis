@@ -84,6 +84,7 @@ import {
   readContractDelta,
   readOwnAspect,
   readOwnProperty,
+  readRuleDelta,
   readSubscriptionDelta,
   readSubscriptionRow,
   removeAspectDelta,
@@ -95,6 +96,7 @@ import {
   resolveRuleTarget,
   restoreAspectRow,
   restorePropertyRow,
+  restoreRuleDelta,
   setAspectDelta,
   setAspectImplements,
   setContractDelta,
@@ -1168,6 +1170,7 @@ async function prepareOp(
   if (tool === 'rule_set') return prepareRuleSet(ctx, input);
   if (tool === 'rule_remove') return prepareRuleRemove(ctx, input);
   if (tool === 'aspect_row_restore') return prepareAspectRowRestore(ctx, input);
+  if (tool === 'rule_delta_restore') return prepareRuleDeltaRestore(ctx, input);
   if (tool === 'module_set') return prepareModuleSet(ctx, input);
   if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
   if (tool === 'property_merge_undo') return preparePropertyMergeUndo(ctx, input);
@@ -3376,8 +3379,8 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
 // ---------------------------------------------------------------------------
 
 /**
- * Имена, при которых транзакция берёт замок реестра. Шестнадцать публичных тулов плюс три
- * ВНУТРЕННИЕ обратные операции — те же три, что перечислены ниже: их зовёт только undo.ts
+ * Имена, при которых транзакция берёт замок реестра. Шестнадцать публичных тулов плюс четыре
+ * ВНУТРЕННИЕ обратные операции — те же четыре, что перечислены ниже: их зовёт только undo.ts
  * через `execute` во внутреннем режиме, в `CORE_TOOLS` их нет, и `dispatchTool` их не
  * резолвит (реестр тулов не знает таких имён), — и переключатель модуля `module_set` (его зовёт
  * ручка владельца; довод — комментарий у имени в списке).
@@ -3394,6 +3397,8 @@ export const REGISTRY_OPS: ReadonlySet<string> = new Set([
   'property_row_restore',
   'property_merge_undo',
   'aspect_row_restore',
+  // Обратная операция тулов правил на встроенной строке (задача 16, N-1) — та же природа, что у трёх выше.
+  'rule_delta_restore',
   // Замок реестра владельца — та же сериализация, что у дельт: маску и снимок читают вместе
   // четыре поверхности, и две параллельные перенастройки владельца незачем пускать внахлёст.
   'module_set',
@@ -3684,9 +3689,18 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
       // применению (довод `prepareActionSet`: журнал разворачивает inverse плана).
       const ownRuleFields = aspectDeltaAfterRemove(delta) !== null;
       if (before !== null) {
+        // Поля правил НАЗВАНЫ явно (прежние — пустые, если их не было; N-2 фикс-раунда 2): иначе перенос
+        // `aspectDeltaAfterSet` оставил бы в строке правила, которые назвала отменяемая настройка.
         journal.inverse.push({
           op: 'aspect_delta_set',
-          payload: { aspect: input.aspect, delta: before },
+          payload: {
+            aspect: input.aspect,
+            delta: {
+              ...before,
+              rules: before.rules ?? [],
+              rulesDisabled: before.rulesDisabled ?? [],
+            },
+          },
         });
       } else if (ownRuleFields) {
         journal.inverse.push(
@@ -4041,6 +4055,89 @@ async function prepareContractSetsDeltaRemove(
   };
 }
 
+/** Прежняя СЫРАЯ дельта носителя-встроенной строки (N-1); у своей строки дельты нет (Ф-Б2-30). */
+async function ruleDeltaBefore(
+  tx: Tx,
+  graphId: GraphId,
+  target: { carrier: { kind: 'aspect' | 'property' | 'role'; id: string }; own: boolean },
+): Promise<Record<string, unknown> | null> {
+  const { kind, id } = target.carrier;
+  if (target.own || kind === 'role') return null;
+  return readRuleDelta(tx, graphId, { kind, id });
+}
+
+/**
+ * ОБРАТНАЯ ОПЕРАЦИЯ ТУЛОВ ПРАВИЛ — одна мерка на `rule_set` и `rule_remove`.
+ *
+ * СВОЯ СТРОКА: правило правится ЗАМЕНОЙ (§С3), и откат возвращает ту декларацию, что стояла (у своей строки
+ * эффективный список и есть колонка — выключенное `enabled:false` в нём лежит). Прежней не было — обратное к
+ * заведению это снятие.
+ *
+ * ВСТРОЕННАЯ СТРОКА: откат — ПРЕЖНЯЯ ДЕЛЬТА ЦЕЛИКОМ (`rule_delta_restore`, фикс-раунд 2 задачи 16, N-1), а не
+ * `rule_set`/`rule_remove` по эффективному списку. Своё правило, выключенное пересевом (`rulesDisabled`,
+ * Р-И-35), в эффективном списке отсутствует — и это ОСНОВНОЙ путь, а не редкий: «Принять» единицы конфликта
+ * правил заводит такое правило заново (`rule_set` в пачке `createRuleConflictUnit`), и «отмени последнее» по
+ * эффективному списку сняло бы декларацию целиком. Прежняя дельта возвращает её выключенной, как лежала;
+ * отключение системного правила откатывается тем же движением.
+ */
+function ruleInverse(
+  address: unknown,
+  target: { carrier: { kind: 'aspect' | 'property' | 'role'; id: string }; own: boolean },
+  prevDelta: Record<string, unknown> | null,
+  ruleId: string,
+  before: unknown,
+): { op: string; payload: Record<string, unknown> } {
+  if (!target.own && target.carrier.kind !== 'role') {
+    return {
+      op: 'rule_delta_restore',
+      payload: { target_kind: target.carrier.kind, target_id: target.carrier.id, delta: prevDelta },
+    };
+  }
+  if (before !== null) return { op: 'rule_set', payload: { target: address, rule: before } };
+  // `rule_set` правила, которого не было: обратное — снятие (у `rule_remove` своей строки без правила
+  // обратного нет вовсе — вызывающий его не пишет).
+  return { op: 'rule_remove', payload: { target: address, rule: ruleId } };
+}
+
+/**
+ * ВНУТРЕННЯЯ обратная операция тулов правил на встроенной строке (N-1): вернуть строку дельты правил носителя
+ * к прежней (`null` — строки не было). Живёт здесь и в реестре тулов не регистрируется — как
+ * `aspect_row_restore`: снаружи недостижима, inverse журнала исполняется через тот же конвейер.
+ */
+const ruleDeltaRestoreInput = z
+  .object({
+    target_kind: z.enum(['aspect', 'property']),
+    target_id: z.string().min(1),
+    delta: z.record(z.unknown()).nullable(),
+  })
+  .strict();
+
+async function prepareRuleDeltaRestore(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(ruleDeltaRestoreInput, rawInput, 'rule_delta_restore');
+  const journal = registryPlan(
+    'rule_delta_restored',
+    'rule_delta_restore',
+    `Возврат правил «${input.target_id}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      await restoreRuleDelta(
+        applyCtx.tx,
+        applyCtx.req.identity.graph,
+        { kind: input.target_kind, id: input.target_id },
+        input.delta,
+      );
+      return {
+        result: {
+          rule: input.target_id,
+          carrier: { kind: input.target_kind, id: input.target_id },
+        },
+      };
+    },
+  };
+}
+
 /**
  * ПРАВИЛО КАТАЛОГА (§Б4-1, §С3 строка «Правило», Р-21): ветка по НОСИТЕЛЮ, а не по имени тула — своя
  * строка правится колонкой `rules` (`setOwnRule`), встроенные аспект и свойство — дельтой (`setRuleDelta`,
@@ -4060,23 +4157,11 @@ async function prepareRuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<Prepare
       const graphId = applyCtx.req.identity.graph;
       const target = await resolveRuleTarget(applyCtx.tx, graphId, input.target);
       const before = target.rules.find((r) => r.id === input.rule.id) ?? null;
+      const prevDelta = await ruleDeltaBefore(applyCtx.tx, graphId, target);
       if (target.own) await setOwnRule(applyCtx.tx, graphId, target.carrier, input.rule);
       else await setRuleDelta(applyCtx.tx, graphId, target.carrier, input.rule);
       journal.operations.push({ op: 'rule_set', payload: { ...input } });
-      // ОБРАТНАЯ ОПЕРАЦИЯ — ПРЕЖНЯЯ СТРОКА, а не «удалить»: правило правится ЗАМЕНОЙ (§С3), и откат обязан
-      // вернуть ту декларацию, что стояла. Прежней не было — обратное к заведению это снятие. У ВКЛЮЧЕНИЯ
-      // отключённого системного правила прежней в эффективном списке нет, и снятие его же отключает.
-      // ОСТАТОК, НАЗВАННЫЙ ВСЛУХ (гейт 16 m-5, Fable M-2): `before` берётся из ЭФФЕКТИВНОГО списка, а своё
-      // правило дельты, которое выключил пересев (`rulesDisabled`, Р-И-35), там отсутствует. `rule_set` такого
-      // правила заводит его заново и включает, а откат — `rule_remove` — снимает декларацию целиком, вместо
-      // того чтобы вернуть её выключенной. Почему так, а не прежней дельтой: у своей строки и у дельты разные
-      // хранилища, и inverse по сырой дельте завёл бы вторую ветку отката ради редкого случая, где владелец
-      // сам и включил правило; цена — после отката правило приходится завести снова.
-      journal.inverse.push(
-        before === null
-          ? { op: 'rule_remove', payload: { target: input.target, rule: input.rule.id } }
-          : { op: 'rule_set', payload: { target: input.target, rule: before } },
-      );
+      journal.inverse.push(ruleInverse(input.target, target, prevDelta, input.rule.id, before));
       return { result: { rule: input.rule.id, carrier: target.carrier } };
     },
   };
@@ -4084,10 +4169,9 @@ async function prepareRuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<Prepare
 
 /**
  * Снятие правила: своё — снимается, системное — ОТКЛЮЧАЕТСЯ дельтой (§С3 «удалить = отключить», Р-2а).
- * Обратная операция — `rule_set` с прежней декларацией: у системного это ветка «включить обратно»
- * (`setRuleDelta` принимает декларацию, совпавшую с системной). Правила не было в эффективном списке —
- * inverse пуст: у своей строки снятие несуществующего — успех без записи (Ф-Б1-56), у уже отключённого
- * системного — повтор отключения.
+ * Обратная операция — `ruleInverse` ниже: у своей строки прежняя декларация `rule_set`'ом (правила не было —
+ * inverse пуст: снятие несуществующего — успех без записи, Ф-Б1-56), у встроенной строки — прежняя дельта
+ * целиком (`rule_delta_restore`).
  */
 async function prepareRuleRemove(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
   const input = parseEnvelope(ruleRemoveInput, rawInput, 'rule_remove');
@@ -4098,11 +4182,13 @@ async function prepareRuleRemove(_ctx: ExecCtx, rawInput: unknown): Promise<Prep
       const graphId = applyCtx.req.identity.graph;
       const target = await resolveRuleTarget(applyCtx.tx, graphId, input.target);
       const before = target.rules.find((r) => r.id === input.rule) ?? null;
+      const prevDelta = await ruleDeltaBefore(applyCtx.tx, graphId, target);
       if (target.own) await removeOwnRule(applyCtx.tx, graphId, target.carrier, input.rule);
       else await disableSystemRuleDelta(applyCtx.tx, graphId, target.carrier, input.rule);
       journal.operations.push({ op: 'rule_remove', payload: { ...input } });
-      if (before !== null) {
-        journal.inverse.push({ op: 'rule_set', payload: { target: input.target, rule: before } });
+      // Своя строка: правила не было — снятие было не-операцией, и обратного нет (Ф-Б1-56).
+      if (!target.own || before !== null) {
+        journal.inverse.push(ruleInverse(input.target, target, prevDelta, input.rule, before));
       }
       return { result: { rule: input.rule, carrier: target.carrier } };
     },

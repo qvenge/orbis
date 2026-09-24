@@ -371,6 +371,7 @@ function reconfiguresByTool(
     case 'property_row_restore':
     case 'property_merge_undo':
     case 'aspect_row_restore':
+    case 'rule_delta_restore':
     case 'module_set':
       return 'behavior-delta';
     case 'aspect_delta_set':
