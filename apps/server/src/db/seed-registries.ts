@@ -36,6 +36,7 @@ import {
   contractDefinitionSchema,
   type PropertyDefinition,
   propertyDefinitionSchema,
+  type RuleDefinition,
   registryMergeNoteId,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
@@ -47,6 +48,7 @@ import { ensureGlobalThread } from '../chat/threads';
 import { parseGraphId } from '../identity';
 import {
   baseSystemFor,
+  OWN_RULE_ROWS_QUERY,
   type OwnRuleRow,
   ownRulesByGraphOf,
   type RegistryConflict,
@@ -59,6 +61,7 @@ import {
 } from '../registry/deltas';
 import type { SubscriptionRow } from '../registry/load';
 import { createDriftConflictUnits } from '../registry/merge-conflict';
+import { ruleConflictsOf } from '../registry/rules';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import * as schema from './schema';
 
@@ -87,6 +90,12 @@ export interface SeedRegistriesResult {
   mergedDeltas: number;
   /** Конфликты слияния — они же содержимое системной заметки владельцу (§А3-3). */
   conflicts: RegistryConflict[];
+  /**
+   * Граница «своя строка × новое системное» (m-A фикс-раунда 2 задачи 16): конфликты и совпавшие id, которые
+   * ЭТОТ пересев завёл против правил своих строк владельцев. Отдельно от `conflicts`: дельты они не трогают,
+   * единиц не заводят — только заметку (`reportOwnRowRuleConflicts`).
+   */
+  ownRowConflicts: RegistryConflict[];
 }
 
 /**
@@ -248,6 +257,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
   }
 
   const merge = await mergeRegistryDeltas(sql, adminDsn, prevSystem, row.version);
+  const ownRowConflicts = await reportOwnRowRuleConflicts(sql, adminDsn, prevSystem, row.version);
   return {
     properties: BUILTIN_PROPERTY_META.length,
     roles: BUILTIN_RELATION_ROLE_META.length,
@@ -258,6 +268,7 @@ export async function seedRegistries(sql: ISql, adminDsn: string): Promise<SeedR
     version: row.version,
     mergedDeltas: merge.merged,
     conflicts: merge.conflicts,
+    ownRowConflicts,
   };
 }
 
@@ -557,6 +568,158 @@ export async function mergeRegistryDeltas(
   return { merged: rows.length, conflicts: all };
 }
 
+/** Правила носителя в системном снимке — у дельты владельца вычитаются его отключения (`rulesDisabled`). */
+function liveSystemRules(
+  system: SystemDefinitions,
+  ownerDeltas: readonly RegistryDeltaRow[],
+): { rule: RuleDefinition; carrier: string }[] {
+  const off = new Map<string, Set<string>>();
+  for (const d of ownerDeltas) {
+    const list = (d.delta as { rulesDisabled?: unknown } | null)?.rulesDisabled;
+    off.set(
+      `${d.targetKind}:${d.targetId}`,
+      new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : []),
+    );
+  }
+  const out: { rule: RuleDefinition; carrier: string }[] = [];
+  for (const [kind, dict] of [
+    ['aspect', system.aspects],
+    ['property', system.properties],
+  ] as const) {
+    for (const [id, def] of dict) {
+      const disabled = off.get(`${kind}:${id}`) ?? new Set<string>();
+      for (const rule of def.rules ?? []) {
+        if (rule.enabled && !disabled.has(rule.id)) out.push({ rule, carrier: `${kind}:${id}` });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * ГРАНИЦА ПЕРЕСЕВА «СВОЯ СТРОКА × НОВОЕ СИСТЕМНОЕ» — ЗАМЕТКОЙ (m-A фикс-раунда 2 задачи 16, Ф-Б2-28).
+ *
+ * Пересев правит ДЕЛЬТЫ; строки определений владельца пишет только исполнитель (глобальное ограничение: прямые
+ * записи сида — только system-строки), поэтому правило своей строки, с которым спорит новое системное правило,
+ * отсюда не выключается. Молчать нельзя: оба правила остаются включены, а движок исполняет писателей по порядку
+ * `(носитель, id)` строкой (`byCarrierThenId`, `rules/engine.ts`) и пишет ТОЛЬКО там, где значения ещё нет, —
+ * побеждает первый. Системные `orbis/*` стоят раньше своих аспектов и ролей `user/*`, и такое своё правило
+ * молча перестаёт действовать на записях, где применимы оба; своё СВОЙСТВО с uuid-id, наоборот, стоит раньше
+ * системного. Совпавший id (новое системное правило с id правила своей строки) правил не ломает, но следующая
+ * правка любой из двух упрётся в `RULE_ID_TAKEN`.
+ *
+ * Отсюда — заметка в глобальный тред владельца (конфликт без единицы: сид не пишет строк владельца, а у
+ * владельца выход есть — `rule_remove` своего или отключение системного проходят, мерка писателей — прирост).
+ * Только НОВОЕ: конфликт или совпадение, которые жили и против прежней системы (`prevSystem`), не
+ * повторяются заметкой на каждом деплое. Идемпотентно по (граф, версия).
+ */
+export async function reportOwnRowRuleConflicts(
+  sql: ISql,
+  adminDsn: string,
+  prevSystem: SystemDefinitions,
+  systemVersion: number,
+): Promise<RegistryConflict[]> {
+  const ownRows = (await sql.unsafe(OWN_RULE_ROWS_QUERY)) as unknown as OwnRuleRow[];
+  if (ownRows.length === 0) return [];
+  const byGraph = ownRulesByGraphOf(ownRows);
+  const graphs = [...byGraph.keys()];
+  const deltasByGraph = new Map<string, RegistryDeltaRow[]>();
+  for (const r of await sql<Record<string, unknown>[]>`
+    SELECT id, graph_id, target_kind, target_id, base_version, delta
+    FROM registry_deltas WHERE graph_id IN ${sql(graphs)}`) {
+    const g = r.graph_id as string;
+    deltasByGraph.set(g, [
+      ...(deltasByGraph.get(g) ?? []),
+      {
+        id: r.id as string,
+        graphId: g,
+        targetKind: r.target_kind as RegistryDeltaTargetKind,
+        targetId: r.target_id as string,
+        baseVersion: r.base_version as number,
+        delta: r.delta,
+      },
+    ]);
+  }
+  const nextSystem = codeSystemDefinitions();
+  const findings = new Map<string, RegistryConflict[]>();
+  for (const [graph, own] of byGraph) {
+    const deltas = deltasByGraph.get(graph) ?? [];
+    const found = (system: SystemDefinitions): Map<string, RegistryConflict> => {
+      const out = new Map<string, RegistryConflict>();
+      const live = liveSystemRules(system, deltas);
+      const systemIds = new Set<string>();
+      for (const dict of [system.aspects, system.properties]) {
+        for (const def of dict.values()) for (const r of def.rules ?? []) systemIds.add(r.id);
+      }
+      const carrierOf = new Map(own.map((o) => [o.rule.id, o.carrier]));
+      const systemRuleIds = new Set(live.map((l) => l.rule.id));
+      for (const c of ruleConflictsOf([
+        ...live.map((l) => l.rule),
+        ...own.map((o) => o.rule).filter((r) => r.enabled),
+      ])) {
+        const mine =
+          carrierOf.has(c.a) && systemRuleIds.has(c.b)
+            ? c.a
+            : carrierOf.has(c.b) && systemRuleIds.has(c.a)
+              ? c.b
+              : undefined;
+        if (mine === undefined) continue;
+        const theirs = mine === c.a ? c.b : c.a;
+        const at = carrierOf.get(mine) as { kind: 'aspect' | 'property' | 'role'; id: string };
+        out.set(`conflict|${mine}|${theirs}|${c.event}`, {
+          kind: 'rule-conflict',
+          targetKind: at.kind === 'role' ? 'relation_role' : at.kind,
+          targetId: at.id,
+          detail:
+            `обновление завело правило «${theirs}», которое пишет то же (${c.event} → ${c.property}), что ` +
+            `правило вашей строки «${mine}»; сид строк владельца не пишет, и оба включены — движок исполнит ` +
+            `первого по порядку носителей. Снимите своё (rule_remove) или отключите системное`,
+        });
+      }
+      for (const o of own) {
+        if (!systemIds.has(o.rule.id)) continue;
+        out.set(`twin|${o.rule.id}`, {
+          kind: 'rule-conflict',
+          targetKind: o.carrier.kind === 'role' ? 'relation_role' : o.carrier.kind,
+          targetId: o.carrier.id,
+          detail:
+            `обновление завело системное правило с тем же именем «${o.rule.id}», что у правила вашей строки: ` +
+            `следующая правка любого из двух упрётся в «имя занято» — переименуйте своё`,
+        });
+      }
+      return out;
+    };
+    const before = found(prevSystem);
+    const fresh = [...found(nextSystem)].filter(([key]) => !before.has(key)).map(([, c]) => c);
+    if (fresh.length > 0) findings.set(graph, fresh);
+  }
+  if (findings.size === 0) return [];
+  const client = postgres(adminDsn, { max: 1 });
+  const db = drizzle(client, { schema });
+  const all: RegistryConflict[] = [];
+  try {
+    for (const [graph, conflicts] of findings) {
+      await db.transaction(async (tx) => {
+        const threadId = await ensureGlobalThread(tx, parseGraphId(graph));
+        await appendMessageIdempotent(tx, {
+          id: registryMergeNoteId(`own-rules:${graph}`, systemVersion),
+          threadId,
+          role: 'system',
+          content: [
+            `Обновление системных правил разошлось с правилами ваших строк (${conflicts.length}):`,
+            ...conflicts.map(registryConflictLine),
+          ].join('\n'),
+          metadata: { type: 'registry-own-rules', systemVersion, conflicts },
+        });
+      });
+      all.push(...conflicts);
+    }
+  } finally {
+    await client.end();
+  }
+  return all;
+}
+
 /** Одна строка отчёта — одинаковая у `db:prepare` и у `ops.ts seed-registries`. */
 export function seedRegistriesReport(r: SeedRegistriesResult): string[] {
   return [
@@ -568,6 +731,12 @@ export function seedRegistriesReport(r: SeedRegistriesResult): string[] {
       : [
           `КОНФЛИКТЫ СЛИЯНИЯ (${r.conflicts.length}) — владельцу отправлена системная заметка:`,
           ...r.conflicts.map(registryConflictLine),
+        ]),
+    ...(r.ownRowConflicts.length === 0
+      ? []
+      : [
+          `ПРАВИЛА СВОИХ СТРОК ПРОТИВ НОВЫХ СИСТЕМНЫХ (${r.ownRowConflicts.length}) — владельцу заметка:`,
+          ...r.ownRowConflicts.map(registryConflictLine),
         ]),
   ];
 }

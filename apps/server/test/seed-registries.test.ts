@@ -20,7 +20,7 @@ import { withIdentity } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { approvePending } from '../src/policy/pending';
 import { effectiveRegistry } from '../src/registry/cache';
-import { adminDb, appDb, freshGraph, personal, requireEnv } from './helpers';
+import { adminDb, appDb, freshGraph, personal, requireEnv, seedCustomAspect } from './helpers';
 
 requireEnv();
 
@@ -735,6 +735,77 @@ describe('сид шести реестров', () => {
   }, 60_000);
 
   /**
+   * ГРАНИЦА «СВОЯ СТРОКА × НОВОЕ СИСТЕМНОЕ» (m-A фикс-раунда 2, Ф-Б2-28): сид строк владельца не пишет, и правило
+   * своей строки он не выключает — но и не молчит. Новый конфликт писателей и совпавший id уходят заметкой в
+   * глобальный тред владельца, единиц нет, строка владельца не тронута; повторный пересев той же системы
+   * заметку не повторяет (сверка с прежней системой).
+   */
+  test('пересев против правил СВОЕЙ строки: заметка о конфликте и о совпавшем id, без единиц и без правки строки', async () => {
+    const { db, client } = adminDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const owner = await freshGraph();
+    const ownRules = [
+      {
+        id: 'legacy_completed_at',
+        template: 'on_enter_class' as const,
+        params: {
+          enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+          set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+        },
+      },
+      {
+        id: 'task_completed_at',
+        template: 'requires_when' as const,
+        params: { property: 'orbis/due_date' },
+      },
+    ];
+    try {
+      await db.execute(sql`
+        UPDATE aspect_definitions
+           SET rules = (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM jsonb_array_elements(rules) e
+                         WHERE e->>'id' <> 'task_completed_at')
+         WHERE id = 'orbis/task' AND graph_id IS NULL`);
+      await seedCustomAspect(owner, {
+        key: 'user/own-writer',
+        label: { ru: 'Свой писатель' },
+        properties: [{ key: 'ow-mark', type: { kind: 'boolean' } }],
+        rules: ownRules,
+      });
+      const result = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      const mine = result.ownRowConflicts.filter((c) => c.targetId === 'user/own-writer');
+      expect(mine.map((c) => [c.kind, c.targetKind, c.rule])).toEqual([
+        ['rule-conflict', 'aspect', undefined],
+        ['rule-conflict', 'aspect', undefined],
+      ]);
+      expect(mine.map((c) => c.detail).join('\n')).toContain('«legacy_completed_at»');
+      expect(mine.map((c) => c.detail).join('\n')).toContain('с тем же именем «task_completed_at»');
+      const notes = (await db.execute(
+        sql`SELECT m.metadata FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+             WHERE t.graph_id = ${owner}::uuid`,
+      )) as unknown as { metadata: Record<string, unknown> }[];
+      expect(notes.map((n) => n.metadata.type)).toEqual(['registry-own-rules']);
+      // Строка владельца не тронута: сид её не пишет.
+      const row = (await db.execute(
+        sql`SELECT rules FROM aspect_definitions WHERE graph_id = ${owner}::uuid AND id = 'user/own-writer'`,
+      )) as unknown as { rules: Array<{ id: string; enabled?: boolean }> }[];
+      expect(row[0]?.rules.map((r) => r.id)).toEqual(['legacy_completed_at', 'task_completed_at']);
+      // Повторный пересев той же системы — без новой заметки.
+      const again = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      expect(again.ownRowConflicts.filter((c) => c.targetId === 'user/own-writer')).toEqual([]);
+    } finally {
+      await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
+        (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
+      await db.execute(
+        sql`UPDATE aspect_definitions SET rules = '[]'::jsonb WHERE graph_id = ${owner}::uuid`,
+      );
+      await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      await raw.end();
+      await client.end();
+    }
+  }, 60_000);
+
+  /**
    * СЛИЯНИЕ ОБЯЗАНО ОСТАВЛЯТЬ ДЕЛЬТУ ПРИМЕНИМОЙ (ре-ревью фикс-раунда 1, Important-A) —
    * проверяется единственным способом, который что-то значит: реестр владельца ЧИТАЕТСЯ
    * после пересева.
@@ -884,6 +955,7 @@ describe('сид шести реестров', () => {
         version: before + 1,
         mergedDeltas: 0,
         conflicts: [],
+        ownRowConflicts: [],
       });
       expect(await systemVersion(db)).toBe(before + 1);
       const afterFirst = await ids(db, 'property_definitions');
