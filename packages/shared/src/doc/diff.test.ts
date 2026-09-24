@@ -559,6 +559,78 @@ describe('query-блок в диффе: текст из `text`, ключ по `a
   // текст привязывается ДВУМЯ реестрами, различающимися подписью, и дифф обязан молчать.
 });
 
+describe('формат v3: контейнеры и атомы в диффе (спека страниц §5.9)', () => {
+  const column = (...content: JSONContent[]): JSONContent => ({ type: 'column', content });
+  const columns = (...cols: JSONContent[]): JSONContent => ({ type: 'columns', content: cols });
+  const tab = (label: string, ...content: JSONContent[]): JSONContent => ({
+    type: 'tab',
+    attrs: { label },
+    content,
+  });
+  const tabs = (...items: JSONContent[]): JSONContent => ({ type: 'tabs', content: items });
+  const card = (aspect: string): JSONContent => ({
+    type: 'aspectCard',
+    attrs: { aspect, text: aspect },
+  });
+
+  test('правка текста в одной колонке — одна единица изменений, соседняя колонка не задета', () => {
+    // По два абзаца в колонке: будь колонка единицей, правка одного абзаца приехала бы заменой
+    // всей колонки вместе с соседним абзацем.
+    const before = doc(
+      columns(
+        column(p('позвонить Ане в десять'), p('забрать посылку')),
+        column(p('купить хлеб и молоко'), p('оплатить связь')),
+      ),
+    );
+    const after = doc(
+      columns(
+        column(p('позвонить Ане в двенадцать'), p('забрать посылку')),
+        column(p('купить хлеб и молоко'), p('оплатить связь')),
+      ),
+    );
+    const units = unitsOf(diffBodyDocs(before, after));
+    expect(units.map((u) => u.kind)).toEqual(['changed', 'same', 'same', 'same']);
+    expect(at(units, 0).before).toBe('позвонить Ане в десять');
+    expect(at(units, 0).after).toBe('позвонить Ане в двенадцать');
+    expect(at(units, 2).after).toBe('купить хлеб и молоко');
+  });
+
+  test('контейнеры прозрачны: колонки не склеиваются в одну единицу', () => {
+    const flat = flattenBlocks(doc(columns(column(p('а')), column(p('б')))));
+    expect(flat.map((b) => [b.kind, b.text])).toEqual([
+      ['paragraph', 'а'],
+      ['paragraph', 'б'],
+    ]);
+  });
+
+  test('переименование вкладки видно единицей-заголовком', () => {
+    const before = doc(tabs(tab('Запись', p('тело')), tab('Тред', p('сообщения'))));
+    const after = doc(tabs(tab('Запись владельца', p('тело')), tab('Тред', p('сообщения'))));
+    const units = unitsOf(diffBodyDocs(before, after));
+    expect(units.map((u) => u.kind)).toEqual(['changed', 'same', 'same', 'same']);
+    expect(at(units, 0).before).toBe('{{tab: Запись}}');
+    expect(at(units, 0).after).toBe('{{tab: Запись владельца}}');
+  });
+
+  test('`{{card: orbis/goal}}` → `{{card: orbis/task}}` — одна единица', () => {
+    const units = unitsOf(
+      diffBodyDocs(doc(p('до'), card('orbis/goal')), doc(p('до'), card('orbis/task'))),
+    );
+    expect(units.map((u) => u.kind)).toEqual(['same', 'changed']);
+    expect(at(units, 1).before).toBe('{{card: orbis/goal}}');
+    expect(at(units, 1).after).toBe('{{card: orbis/task}}');
+  });
+
+  test('смена блока обвязки видна: имя входит в ключ и в текст', () => {
+    const rb = (name: string): JSONContent => ({ type: 'recordBlock', attrs: { name } });
+    const units = unitsOf(
+      diffBodyDocs(doc(rb('title'), rb('tags')), doc(rb('title'), rb('thread'))),
+    );
+    expect(units.filter((u) => u.kind !== 'same')).not.toEqual([]);
+    expect(units[0]).toEqual({ kind: 'same', before: '{{title}}', after: '{{title}}' });
+  });
+});
+
 describe('листовость модуля', () => {
   const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
   /** Разбор — приём `apps/web/src/features/entity-editor/save.test.tsx:1388`: рантайм-импорт

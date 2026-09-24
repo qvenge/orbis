@@ -4,15 +4,20 @@
 import { describe, expect, test } from 'bun:test';
 import { getSchema } from '@tiptap/core';
 import { FIXTURE_PARSE_REGISTRY as REG } from '../query/ast-fixtures';
+import { bindQueryBlocks } from './bind-query';
 import {
   bodyDocError,
   bodyPairFromDoc,
   bodyRefsFromDoc,
   canonicalizeBody,
   parseBody,
+  projectionKeepsEverything,
+  queryRefsFromDoc,
   readBodyDoc,
   serializeBody,
 } from './convert';
+import { blockText } from './diff';
+import { RECORD_BLOCK_NAMES } from './page-grammar';
 import { DOC_EXTENSIONS } from './schema';
 import { DOC_SCHEMA_VERSION } from './types';
 
@@ -1288,5 +1293,328 @@ describe('readBodyDoc (приёмка 11 — теперь с тестом, ре�
       },
     };
     expect(readBodyDoc(withIds, 'другое', REG)).toBe(withIds as never);
+  });
+});
+
+// --- грамматика v3 (спека страниц 1а §5.1–§5.3, §5.8; задача 8) -------------------------------
+//
+// Разбор тела идёт поверх листового препрохода `page-grammar.ts`: контейнеры, блоки обвязки и
+// карточки становятся узлами документа, ошибки препрохода — `rawBlock` с дословным текстом.
+// Проверяется КРУГ «разбор → печать → разбор»: второе дерево обязано совпасть с первым, иначе
+// каждое сохранение через markdown меняло бы документ.
+
+type Node = {
+  type?: string;
+  attrs?: Record<string, unknown>;
+  text?: string;
+  content?: Node[];
+};
+const nodesOf = (md: string): Node[] => (parseBody(md).doc.content ?? []) as Node[];
+/** Круг без потерь: печать разобранного разбирается в то же дерево. Возвращает печать. */
+function roundTrip(md: string): string {
+  const first = parseBody(md);
+  const printed = serializeBody(first);
+  expect(parseBody(printed).doc).toEqual(first.doc);
+  // Печать — неподвижная точка: вторая печать не отличается от первой ни байтом.
+  expect(serializeBody(parseBody(printed))).toBe(printed);
+  return printed;
+}
+const para = (text: string): Node => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+
+/** Канон печати контейнера (Интерфейсы задачи 8): маркер — своей строкой, дети части — через
+ *  пустую строку, между маркером и первым/последним ребёнком пустой строки нет. */
+const COLUMNS_CANON = [
+  '{{columns}}',
+  '{{column}}',
+  'текст',
+  '',
+  '{{query:aspect=orbis/task}}',
+  '{{/column}}',
+  '{{column}}',
+  'вторая колонка',
+  '{{/column}}',
+  '{{/columns}}',
+].join('\n');
+
+/** Шаблон хоста §8.1 спеки — дословно. */
+const HOST_TEMPLATE = `{{title}}
+{{tags}}
+{{tabs}}
+{{tab: Запись}}
+{{card: orbis/goal}}
+{{card: orbis/assignment}}
+{{card: orbis/routine}}
+{{card: orbis/agent-run}}
+{{card: orbis/financial}}
+{{body}}
+{{/tab}}
+{{tab: Детали}}
+{{cards}}
+{{versions}}
+{{subtasks}}
+{{blockers}}
+{{backlinks}}
+{{/tab}}
+{{tab: Тред}}
+{{thread}}
+{{/tab}}
+{{/tabs}}`;
+
+describe('грамматика v3: разбор → печать → разбор', () => {
+  test('колонки: узлы columns → column, канон печати закреплён байт-в-байт', () => {
+    expect(nodesOf(COLUMNS_CANON)).toEqual([
+      {
+        type: 'columns',
+        content: [
+          {
+            type: 'column',
+            content: [
+              para('текст'),
+              { type: 'queryBlock', attrs: { ast: null, text: 'aspect=orbis/task' } },
+            ],
+          },
+          { type: 'column', content: [para('вторая колонка')] },
+        ],
+      },
+    ]);
+    expect(roundTrip(COLUMNS_CANON)).toBe(COLUMNS_CANON);
+    expect(canonicalizeBody(COLUMNS_CANON).body).toBe(COLUMNS_CANON);
+  });
+
+  test('вкладки: подпись вкладки — атрибут label, печать `{{tab: …}}`', () => {
+    const md =
+      '{{tabs}}\n{{tab: План}}\nпункт\n{{/tab}}\n{{tab: Итоги}}\n- раз\n- два\n{{/tab}}\n{{/tabs}}';
+    expect(nodesOf(md)).toEqual([
+      {
+        type: 'tabs',
+        content: [
+          { type: 'tab', attrs: { label: 'План' }, content: [para('пункт')] },
+          {
+            type: 'tab',
+            attrs: { label: 'Итоги' },
+            content: [
+              {
+                type: 'bulletList',
+                content: [
+                  { type: 'listItem', content: [para('раз')] },
+                  { type: 'listItem', content: [para('два')] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(roundTrip(md)).toBe(md);
+  });
+
+  test('каждый блок обвязки — recordBlock со своим именем', () => {
+    for (const name of RECORD_BLOCK_NAMES) {
+      const md = `до\n{{${name}}}\nпосле`;
+      expect(nodesOf(md)).toEqual([
+        para('до'),
+        { type: 'recordBlock', attrs: { name } },
+        para('после'),
+      ]);
+      expect(roundTrip(md)).toBe(`до\n\n{{${name}}}\n\nпосле`);
+    }
+  });
+
+  test('карточка аспекта — aspectCard непривязанной (привязывает bindQueryBlocks)', () => {
+    expect(nodesOf('{{card: orbis/goal}}')).toEqual([
+      { type: 'aspectCard', attrs: { aspect: null, text: 'orbis/goal' } },
+    ]);
+    expect(nodesOf('{{card: "Цель"}}')).toEqual([
+      { type: 'aspectCard', attrs: { aspect: null, text: '"Цель"' } },
+    ]);
+    expect(roundTrip('{{card: orbis/goal}}')).toBe('{{card: orbis/goal}}');
+  });
+
+  test('контейнер в части другого контейнера (глубина 2) — круг без потерь', () => {
+    const md = [
+      '{{columns}}',
+      '{{column}}',
+      '{{tabs}}',
+      '{{tab: А}}',
+      'а',
+      '{{/tab}}',
+      '{{/tabs}}',
+      '{{/column}}',
+      '{{column}}',
+      'б',
+      '{{/column}}',
+      '{{/columns}}',
+    ].join('\n');
+    const [columns] = nodesOf(md);
+    expect(columns?.content?.[0]?.content?.[0]?.type).toBe('tabs');
+    expect(roundTrip(md)).toBe(md);
+  });
+
+  test('шаблон хоста §8.1 целиком: без raw, круг без потерь (С1а-1)', () => {
+    const nodes = nodesOf(HOST_TEMPLATE);
+    expect(JSON.stringify(nodes)).not.toContain('rawBlock');
+    expect(nodes.map((n) => n.type)).toEqual(['recordBlock', 'recordBlock', 'tabs']);
+    const tabs = nodes[2]?.content ?? [];
+    expect(tabs.map((t) => t.attrs?.label)).toEqual(['Запись', 'Детали', 'Тред']);
+    expect((tabs[0]?.content ?? []).map((n) => n.attrs?.text ?? n.attrs?.name)).toEqual([
+      'orbis/goal',
+      'orbis/assignment',
+      'orbis/routine',
+      'orbis/agent-run',
+      'orbis/financial',
+      'body',
+    ]);
+    roundTrip(HOST_TEMPLATE);
+  });
+
+  test('ошибка препрохода → rawBlock с дословным текстом; печать байт-в-байт, круг стабилен', () => {
+    // Незакрытый контейнер забирает текст до конца тела — дословно, без хвостового перевода.
+    const unclosed = '{{columns}}\n{{column}}\nтекст\n';
+    expect(nodesOf(unclosed)).toEqual([
+      { type: 'rawBlock', attrs: { markdown: '{{columns}}\n{{column}}\nтекст' } },
+    ]);
+    expect(roundTrip(unclosed)).toBe('{{columns}}\n{{column}}\nтекст');
+
+    // Часть вне контейнера — только строка маркера; текст ниже остаётся текстом. Пустые строки
+    // между rawBlock и абзацем не растут от круга к кругу (узлы препрохода несут перевод строки).
+    const stray = '{{column}}\nтекст';
+    expect(nodesOf(stray)).toEqual([
+      { type: 'rawBlock', attrs: { markdown: '{{column}}' } },
+      para('текст'),
+    ]);
+    const once = roundTrip(stray);
+    expect(once).toBe('{{column}}\n\nтекст');
+    expect(serializeBody(parseBody(serializeBody(parseBody(once))))).toBe(once);
+
+    // Сломанный контейнер с парным закрытием и текстом после — raw ровно до закрытия.
+    const bad = 'до\n{{columns}}\n{{column}}\nодна\n{{/column}}\n{{/columns}}\nпосле';
+    expect(nodesOf(bad)).toEqual([
+      para('до'),
+      {
+        type: 'rawBlock',
+        attrs: { markdown: '{{columns}}\n{{column}}\nодна\n{{/column}}\n{{/columns}}' },
+      },
+      para('после'),
+    ]);
+    roundTrip(bad);
+  });
+
+  test('часть из одних пробелов — пустой абзац (часть схемы — block+)', () => {
+    const md =
+      '{{columns}}\n{{column}}\n   \n{{/column}}\n{{column}}\nб\n{{/column}}\n{{/columns}}';
+    const [columns] = nodesOf(md);
+    expect(columns?.content?.[0]).toEqual({ type: 'column', content: [{ type: 'paragraph' }] });
+    expect(bodyDocError(parseBody(md))).toBeUndefined();
+    roundTrip(md);
+  });
+
+  test('абзац с текстом маркера печатается с экранированием и остаётся абзацем (Ф-1а-11)', () => {
+    // Такой абзац приходит вставкой в редактор: печатай его дословно — повторный разбор сделал
+    // бы из него блок, и смысл тела сменился бы при первой правке через markdown.
+    for (const text of [
+      '{{title}}',
+      '{{query:aspect=orbis/task}}',
+      '{{card: orbis/goal}}',
+      '{{tab: Запись}}',
+      '{{columns}}',
+      '{{/column}}',
+      '{{/tabs}}',
+    ]) {
+      const doc = { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [para(text)] } };
+      const printed = serializeBody(doc);
+      expect(printed).toBe(`\\${text}`);
+      expect(parseBody(printed).doc).toEqual(doc.doc);
+      expect(bodyPairFromDoc(doc).doc).toBe(doc);
+    }
+    // Маркер на второй строке того же текстового узла и после мягкого переноса — тоже.
+    const multi = { type: 'doc', content: [para('до\n{{tabs}}')] };
+    expect(serializeBody(multi)).toBe('до\n\\{{tabs}}');
+    expect(parseBody(serializeBody(multi)).doc).toEqual(multi);
+    const soft = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'до' },
+            { type: 'hardBreak' },
+            { type: 'text', text: '{{title}}' },
+          ],
+        },
+      ],
+    };
+    expect(parseBody(serializeBody(soft)).doc).toEqual(soft);
+    // Страж от жадности: `{{` посреди строки и незнакомое имя не экранируются.
+    expect(serializeBody({ type: 'doc', content: [para('см. {{title}}')] })).toBe('см. {{title}}');
+    expect(serializeBody({ type: 'doc', content: [para('{{finance/ring}}')] })).toBe(
+      '{{finance/ring}}',
+    );
+  });
+
+  test('ссылка внутри колонки — в bodyRefsFromDoc, блок запроса внутри вкладки — в queryRefsFromDoc', () => {
+    const md = [
+      '{{columns}}',
+      '{{column}}',
+      `см. [[entity:${UUID}]]`,
+      '{{/column}}',
+      '{{column}}',
+      '{{tabs}}',
+      '{{tab: Задачи}}',
+      '{{query:aspect=orbis/task, orbis/task_status=inbox}}',
+      '{{/tab}}',
+      '{{/tabs}}',
+      '{{/column}}',
+      '{{/columns}}',
+    ].join('\n');
+    const doc = bindQueryBlocks(parseBody(md), REG);
+    expect(bodyRefsFromDoc(doc)).toEqual([UUID]);
+    expect(queryRefsFromDoc(doc)).toContain('orbis/task_status');
+  });
+
+  test('\\r\\n и одинокий \\r вокруг контейнера разбираются как \\n', () => {
+    const md =
+      '{{columns}}\n{{column}}\nа\n{{/column}}\n{{column}}\n{{query:aspect=orbis/task,\n  limit=5}}\n{{/column}}\n{{/columns}}\n{{title}}\nхвост';
+    const expected = parseBody(md).doc;
+    expect(JSON.stringify(expected)).toContain('"columns"');
+    expect(parseBody(md.replace(/\n/g, '\r\n')).doc).toEqual(expected);
+    expect(parseBody(md.replace(/\n/g, '\r')).doc).toEqual(expected);
+    // Текст многострочного запроса — без `\r`: через marked он и раньше приходил с `\n`.
+    expect(JSON.stringify(parseBody(md.replace(/\n/g, '\r\n')).doc)).not.toContain('\\r');
+    // M-3: `{{title}}\r{{tags}}\r` — два блока, а не одна строка текста.
+    expect(nodesOf('{{title}}\r{{tags}}\r')).toEqual([
+      { type: 'recordBlock', attrs: { name: 'title' } },
+      { type: 'recordBlock', attrs: { name: 'tags' } },
+    ]);
+  });
+
+  test('`{{query:a}}{{query:b}}` на одной строке: круг стабилен, текст цел', () => {
+    // Остаток строки после `}}` препроход отдаёт текстом, а токенайзер queryBlock marked внутри
+    // текста узнаёт второй блок — прежнее поведение (оно же держит блок в пункте списка).
+    const md = '{{query:aspect=orbis/task}}{{query:aspect=orbis/goal}}';
+    expect(nodesOf(md)).toEqual([
+      { type: 'queryBlock', attrs: { ast: null, text: 'aspect=orbis/task' } },
+      { type: 'queryBlock', attrs: { ast: null, text: 'aspect=orbis/goal' } },
+    ]);
+    expect(roundTrip(md)).toBe('{{query:aspect=orbis/task}}\n\n{{query:aspect=orbis/goal}}');
+  });
+
+  test('маркер с отступом в пункте списка остаётся текстом пункта (как в CommonMark)', () => {
+    // Печать пункта кладёт продолжение абзаца БЕЗ отступа (ленивое продолжение), то есть
+    // маркер встал бы с колонки 0 и при повторном разборе стал бы блоком. Держит экранирование.
+    const md = '- пункт\n  {{title}}';
+    expect(JSON.stringify(nodesOf(md))).not.toContain('recordBlock');
+    expect(roundTrip(md)).toBe('- пункт\n\\{{title}}');
+  });
+
+  test('печатная форма атомов в blockText совпадает с их печатью (иначе страховка уведёт в raw)', () => {
+    for (const atom of [
+      { type: 'recordBlock', attrs: { name: 'title' } },
+      { type: 'aspectCard', attrs: { aspect: 'orbis/goal', text: 'orbis/goal' } },
+      { type: 'aspectCard', attrs: { aspect: null, text: '"Цель"' } },
+    ]) {
+      const doc = { type: 'doc', content: [atom] };
+      expect(serializeBody(doc)).toBe(blockText(atom));
+      expect(projectionKeepsEverything(doc, serializeBody(doc))).toBe(true);
+    }
   });
 });

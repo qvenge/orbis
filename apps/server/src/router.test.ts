@@ -42,6 +42,20 @@ test('клиент старше минимальной версии: PRECONDITIO
   expect(cause?.min).toBe(MIN_COMPATIBLE_CLIENT_VERSION);
 });
 
+test('клиент 0.2.x (до формата тела v3) получает CLIENT_OUTDATED — старая вкладка не пишет v2', async () => {
+  // Фокус ревью п. 5: вкладка, открытая до выкатки v3, несёт 0.2.x и документ v2. Первым её
+  // останавливает этот гейт (412 «обновите»), вторым — гейт версии документа в executor'е.
+  for (const v of ['0.2.0', '0.2.9']) {
+    const caller = appRouter.createCaller({ ...ctx, clientVersion: v });
+    const err = await caller.ping().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
+    expect(((err as TRPCError).cause as { code?: string }).code).toBe('CLIENT_OUTDATED');
+  }
+});
+
 test('устаревший клиент получает отказ версии раньше auth-проверки', async () => {
   const caller = appRouter.createCaller({ ...ctx, clientVersion: '0.0.1' });
   const err = await caller.whoami().then(
@@ -149,8 +163,8 @@ test('равная/новая версия, отсутствие и мусорн
   // эквивалентно отсутствию заголовка: пред-проверка формата не блокирует запрос
   const passing = [
     MIN_COMPATIBLE_CLIENT_VERSION,
-    '0.2.1',
-    '0.2.0',
+    '0.3.1',
+    '0.3.0',
     '1.0.0',
     null,
     '',

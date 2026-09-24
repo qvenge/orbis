@@ -10,8 +10,12 @@ import type { JSONContent } from '@tiptap/core';
  * гейту записи: чтение принимает v1 и конвертирует его по дереву (`upgradeBodyDoc` ниже),
  * запись принимает только текущую версию. Это не оплошность, а следствие того, что конверсия
  * вверх проверяема, а вниз — нет.
+ *
+ * 3 — формат тела v3 (спека страниц 1а §5.9): шесть новых нод — контейнеры `columns`/`column`,
+ * `tabs`/`tab` и блоки обвязки `recordBlock`, `aspectCard`. Старые ноды и их атрибуты не
+ * менялись, поэтому подъём v2 → v3 — один штамп без обхода дерева (`upgradeBodyDoc`).
  */
-export const DOC_SCHEMA_VERSION = 2;
+export const DOC_SCHEMA_VERSION = 3;
 
 /** Хранимая форма `entities.body_doc`. Голый документ не хранится — только с версией. */
 export type BodyDoc = { v: number; doc: JSONContent };
@@ -35,8 +39,11 @@ export type BodyDoc = { v: number; doc: JSONContent };
  */
 export const KNOWN_NODE_TYPES: ReadonlySet<string> = new Set([
   'blockquote',
+  'aspectCard',
   'bulletList',
   'codeBlock',
+  'column',
+  'columns',
   'doc',
   'entityRef',
   'hardBreak',
@@ -47,10 +54,13 @@ export const KNOWN_NODE_TYPES: ReadonlySet<string> = new Set([
   'paragraph',
   'queryBlock',
   'rawBlock',
+  'recordBlock',
+  'tab',
   'table',
   'tableCell',
   'tableHeader',
   'tableRow',
+  'tabs',
   'taskItem',
   'taskList',
   'text',
@@ -84,6 +94,10 @@ export function collectNodeTypes(doc: JSONContent): Set<string> {
  * Конверсия хранимого документа к ТЕКУЩЕЙ версии схемы — по ДЕРЕВУ, а не пересборкой из
  * markdown: пересборка теряет блочные id (UniqueID схеме неизвестен) и часть оформления.
  *
+ * Цепочка по шагам: 1 → 2 → 3. Шаг 2 → 3 не меняет ни одного узла (v3 лишь добавила ноды), и
+ * документ v2 уходит ТЕМ ЖЕ объектом под новым штампом. Без этой ступени каждый хранимый
+ * v2-документ получил бы `null` и пересобрался бы из `body` — с потерей блочных id (Ф-1а-6).
+ *
  * Что делает 1 → 2: переносит содержимое старого атрибута `query` query-блока в новый `text`
  * и ставит `ast: null`, то есть объявляет блок НЕ РАЗОБРАННЫМ. Дерево здесь не собирается
  * намеренно — для разбора нужен реестр (`bindQueryBlocks`), а этот модуль ЛИСТОВОЙ и его
@@ -99,8 +113,11 @@ export function collectNodeTypes(doc: JSONContent): Set<string> {
  */
 export function upgradeBodyDoc(stored: BodyDoc): BodyDoc | null {
   if (stored.v === DOC_SCHEMA_VERSION) return stored;
-  if (stored.v !== 1) return null;
-  return { v: DOC_SCHEMA_VERSION, doc: queryAttrsV1ToV2(stored.doc) };
+  // 2 → 3: узлы v2 все остались в схеме с теми же атрибутами — меняется только штамп.
+  if (stored.v === 2) return { v: DOC_SCHEMA_VERSION, doc: stored.doc };
+  // 1 → 2 → 3: дерево конвертируется один раз (1 → 2), дальше — тот же штамп.
+  if (stored.v === 1) return { v: DOC_SCHEMA_VERSION, doc: queryAttrsV1ToV2(stored.doc) };
+  return null;
 }
 
 /** Обход с СОХРАНЕНИЕМ ИДЕНТИЧНОСТИ: узел пересобирается, только если он сам или потомок изменился. */

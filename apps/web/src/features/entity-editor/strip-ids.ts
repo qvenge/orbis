@@ -26,6 +26,14 @@ export const UNIQUE_ID_TYPES: readonly string[] = [
   'rawBlock',
   'listItem',
   'taskItem',
+  // Формат тела v3 (спека страниц 1а §5.9): контейнеры, их части и блоки обвязки — блоки
+  // документа наравне с прочими, и их id редактор ставит тем же расширением.
+  'columns',
+  'column',
+  'tabs',
+  'tab',
+  'recordBlock',
+  'aspectCard',
 ];
 
 /**
@@ -70,6 +78,9 @@ export const NODE_ATTR_DEFAULTS: Readonly<Record<string, Readonly<Record<string,
   entityRef: { entityId: null, label: null },
   queryBlock: { ast: null, text: '' },
   rawBlock: { markdown: '' },
+  tab: { label: '' },
+  recordBlock: { name: null },
+  aspectCard: { aspect: null, text: '' },
 };
 
 /**

@@ -803,13 +803,15 @@ describe('версия документа сверяется НА ЗАПИСИ (
       message: 'документ другой версии схемы: перезагрузите приложение и повторите правку',
     });
 
-    // Половина ВТОРАЯ: чтение ту же версию ПРИНИМАЕТ и конвертирует по дереву. Строку
+    // Половина ВТОРАЯ: чтение старую версию ПРИНИМАЕТ и конвертирует по дереву. Строку
     // подсаживаем админским DSN — путь записи такую форму уже не пропустит, а в базе она
-    // лежит у каждого тела, сохранённого до выкатки.
+    // лежит у каждого тела, сохранённого до выкатки. Версия — литерал 1, а не «текущая минус
+    // один»: старый атрибут `query` — форма именно v1, и конверсия цепочкой 1 → 2 → 3 обязана
+    // перенести его и на третьей версии схемы (v2-документ сторожит следующий describe).
     await admin.execute(sql`
       UPDATE entities
          SET body_doc = ${JSON.stringify({
-           v: DOC_SCHEMA_VERSION - 1,
+           v: 1,
            doc: {
              type: 'doc',
              content: [
@@ -830,6 +832,154 @@ describe('версия документа сверяется НА ЗАПИСИ (
     expect(block.attrs?.ast).not.toBeNull();
     expect(block.attrs?.id).toBe('блок-1');
     expect(block.attrs?.query).toBeUndefined();
+  });
+});
+
+/**
+ * Формат тела v3 (спека страниц 1а §5.9, задача 8). Гейт записи и пути записи меняются сами —
+ * константой версии; здесь сторожится то, что из этого следует: старая вкладка (документ v2)
+ * получает отказ «перезагрузите» и ничего не портит (Фокус ревью п. 5), новые конструкции
+ * доезжают до обеих форм тела, а хранимые v2-документы читаются v3 без потери блочных id.
+ */
+describe('формат тела v3: гейт версии, контейнеры, подъём v2 → v3', () => {
+  const RELOAD = 'документ другой версии схемы: перезагрузите приложение и повторите правку';
+  const para = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+  /** Документ v3 с колонками и вкладками — ровно то, что пришлёт редактор новой версии. */
+  const V3_DOC = {
+    type: 'doc',
+    content: [
+      {
+        type: 'columns',
+        content: [
+          { type: 'column', content: [para('левая')] },
+          { type: 'column', content: [para('правая')] },
+        ],
+      },
+      {
+        type: 'tabs',
+        content: [
+          { type: 'tab', attrs: { label: 'План' }, content: [para('пункт')] },
+          {
+            type: 'tab',
+            attrs: { label: 'Итоги' },
+            content: [{ type: 'recordBlock', attrs: { name: 'thread' } }],
+          },
+        ],
+      },
+    ],
+  };
+  const V3_CANON = [
+    '{{columns}}',
+    '{{column}}',
+    'левая',
+    '{{/column}}',
+    '{{column}}',
+    'правая',
+    '{{/column}}',
+    '{{/columns}}',
+    '',
+    '{{tabs}}',
+    '{{tab: План}}',
+    'пункт',
+    '{{/tab}}',
+    '{{tab: Итоги}}',
+    '{{thread}}',
+    '{{/tab}}',
+    '{{/tabs}}',
+  ].join('\n');
+
+  test('(а) старая вкладка шлёт документ v2 — VALIDATION «перезагрузите», тело не тронуто', async () => {
+    expect(DOC_SCHEMA_VERSION).toBe(3);
+    const { entity, owner } = await createOne('исходное тело');
+    const r = await execute(
+      db,
+      req(
+        'entity_update',
+        {
+          id: entity.id,
+          bodyDoc: { v: 2, doc: { type: 'doc', content: [para('набрано в старой вкладке')] } },
+          expectedUpdatedAt: entity.updatedAt,
+        },
+        personal(owner),
+      ),
+    );
+    expect(err(r)).toEqual({ code: 'VALIDATION', message: RELOAD });
+    const row = await rowOf(entity.id);
+    expect(row.body).toBe('исходное тело');
+    expect(row.body_doc?.v).toBe(DOC_SCHEMA_VERSION);
+  });
+
+  test('(а) документ v3 с колонками и вкладками принят, body — канон печати', async () => {
+    const { entity, owner } = await createOne();
+    const saved = okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, bodyDoc: { v: 3, doc: V3_DOC }, expectedUpdatedAt: entity.updatedAt },
+          personal(owner),
+        ),
+      ),
+    );
+    expect(saved.body).toBe(V3_CANON);
+    const row = await rowOf(entity.id);
+    expect(row.body).toBe(V3_CANON);
+    // Документ лёг как прислан — не подменён rawBlock'ом страховки.
+    expect(row.body_doc).toEqual({ v: 3, doc: V3_DOC });
+  });
+
+  test('(б) путь модели: body markdown с контейнерами → body_doc с узлами columns/tabs', async () => {
+    const { entity, owner } = await createOne();
+    const saved = okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, body: V3_CANON, expectedUpdatedAt: entity.updatedAt },
+          personal(owner),
+        ),
+      ),
+    );
+    expect(saved.body).toBe(V3_CANON);
+    const row = await rowOf(entity.id);
+    expect(row.body_doc?.v).toBe(DOC_SCHEMA_VERSION);
+    expect((row.body_doc?.doc.content as Array<{ type?: string }>).map((n) => n.type)).toEqual([
+      'columns',
+      'tabs',
+    ]);
+    expect(row.body_doc?.doc).toEqual(V3_DOC);
+  });
+
+  test('(в) readEntity: хранимый v2-документ приезжает v3, блочные id целы', async () => {
+    const { entity, owner } = await createOne('тело');
+    const stored = {
+      v: 2,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: { id: 'блок-1' },
+            content: [{ type: 'text', text: 'снимок' }],
+          },
+          { type: 'queryBlock', attrs: { id: 'блок-2', ast: null, text: 'aspect=orbis/task' } },
+        ],
+      },
+    };
+    await admin.execute(
+      sql`UPDATE entities SET body_doc = ${JSON.stringify(stored)}::jsonb WHERE id = ${entity.id}`,
+    );
+    const read = await withIdentity(db, personal(owner), (tx) =>
+      readEntity(tx, owner, { id: entity.id, include: ['body', 'bodyDoc'] }),
+    );
+    expect(read.entity.bodyDoc?.v).toBe(3);
+    const nodes = ((read.entity.bodyDoc?.doc as { content?: unknown[] } | undefined)?.content ??
+      []) as Array<{ type?: string; attrs?: Record<string, unknown> }>;
+    // Документ НЕ пересобран из body («тело»): иначе здесь был бы один абзац без id.
+    expect(nodes.map((n) => n.type)).toEqual(['paragraph', 'queryBlock']);
+    expect(nodes[0]?.attrs?.id).toBe('блок-1');
+    expect(nodes[1]?.attrs?.id).toBe('блок-2');
+    expect(nodes[1]?.attrs?.ast).not.toBeNull();
   });
 });
 

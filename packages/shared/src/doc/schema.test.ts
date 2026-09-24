@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { getSchema, type JSONContent } from '@tiptap/core';
+import { bodyDocError } from './convert';
 import { DOC_EXTENSIONS } from './schema';
 import { collectNodeTypes, KNOWN_NODE_TYPES } from './types';
 
@@ -100,5 +101,38 @@ describe('листовость types.ts', () => {
     // Положительный контроль: тот же разбор на тяжёлом соседе обязан сработать, иначе пустой
     // список выше означал бы лишь сломанный разбор.
     expect(runtimeImports(read('./convert.ts'))).toContain('@tiptap/core');
+  });
+});
+
+describe('части контейнеров — свои группы схемы (РП-28)', () => {
+  const doc = (...content: JSONContent[]): JSONContent => ({ type: 'doc', content });
+  const p = (text: string): JSONContent => ({
+    type: 'paragraph',
+    content: [{ type: 'text', text }],
+  });
+
+  test('колонка или вкладка прямо в документе — схема отвергает', () => {
+    // Часть вне контейнера печаталась бы маркером без пары, и повторный разбор дал бы плашку
+    // ошибки — то есть документ, который схема приняла, не пережил бы собственной печати.
+    expect(bodyDocError(doc({ type: 'column', content: [p('а')] }))).toBeDefined();
+    expect(
+      bodyDocError(doc({ type: 'tab', attrs: { label: 'А' }, content: [p('а')] })),
+    ).toBeDefined();
+  });
+
+  test('часть не того контейнера — схема отвергает; своя — принимает', () => {
+    const column = { type: 'column', content: [p('а')] };
+    const tab = { type: 'tab', attrs: { label: 'А' }, content: [p('а')] };
+    expect(bodyDocError(doc({ type: 'tabs', content: [column] }))).toBeDefined();
+    expect(bodyDocError(doc({ type: 'columns', content: [tab] }))).toBeDefined();
+    // Положительный контроль: иначе «отвергает» было бы правдой и для сломанной схемы.
+    expect(bodyDocError(doc({ type: 'columns', content: [column, column] }))).toBeUndefined();
+    expect(bodyDocError(doc({ type: 'tabs', content: [tab] }))).toBeUndefined();
+  });
+
+  test('пустая часть схемой отвергается — содержимое части block+', () => {
+    expect(
+      bodyDocError(doc({ type: 'columns', content: [{ type: 'column', content: [] }] })),
+    ).toBeDefined();
   });
 });

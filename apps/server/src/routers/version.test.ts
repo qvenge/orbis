@@ -184,11 +184,13 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     });
     const { db: admin, client: adminClient } = adminDb();
     try {
-      // Снимок ПРОШЛОЙ схемы — с блочным id и со старым атрибутом query-блока: ровно то, что
-      // лежит в `entity_versions` у всех закреплений, сделанных до выкатки.
+      // Снимок ПЕРВОЙ схемы — с блочным id и со старым атрибутом query-блока: ровно то, что
+      // лежит в `entity_versions` у закреплений, сделанных до выкатки v2. Литерал 1, а не
+      // «текущая минус один»: атрибут `query` — форма именно v1, и цепочка 1 → 2 → 3 обязана
+      // перенести его и на третьей версии (v2-снимок сторожит следующий тест).
       await admin.execute(
         sql`UPDATE entities SET body_doc = ${JSON.stringify({
-          v: DOC_SCHEMA_VERSION - 1,
+          v: 1,
           doc: {
             type: 'doc',
             content: [
@@ -228,6 +230,59 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     // …а сам блок привязан к реестру исполнителем на записи.
     expect(nodes[1]?.attrs?.ast).not.toBeNull();
     expect(restored.body).toContain('{{query:aspect=orbis/task}}');
+  });
+
+  test('restore закреплённой v2-версии: документом v3, узлы и блочные id целы (формат v3)', async () => {
+    // Все закрепления до выкатки v3 лежат версией 2. Без ступени v2 → v3 в `upgradeBodyDoc`
+    // `pinnedDoc` вернул бы undefined, и откат молча шёл бы markdown-строкой — с потерей
+    // блочных id и оформления ровно тогда, когда владелец откатывается.
+    const id = newId();
+    await a.entity.create({
+      input: { id, title: 'История v2', tags: [], body: 'тело' },
+      source: 'quick_capture',
+    });
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(
+        sql`UPDATE entities SET body_doc = ${JSON.stringify({
+          v: 2,
+          doc: {
+            type: 'doc',
+            content: [
+              {
+                type: 'paragraph',
+                attrs: { id: 'блок-v2' },
+                content: [{ type: 'text', text: 'снимок v2' }],
+              },
+              {
+                type: 'queryBlock',
+                attrs: { id: 'запрос-v2', ast: null, text: 'aspect=orbis/task' },
+              },
+            ],
+          },
+        })}::jsonb WHERE id = ${id}`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+    const v = await a.version.pin({ entityId: id, label: 'до выкатки v3' });
+    const before = await a.entity.get({ id });
+    await a.entity.update({ id, expectedUpdatedAt: before.entity.updatedAt, body: 'затёрли' });
+    const e2 = await a.entity.get({ id });
+    const restored = await a.version.restore({
+      versionId: v.id,
+      expectedUpdatedAt: e2.entity.updatedAt,
+    });
+    expect(restored.body).toBe('снимок v2\n\n{{query:aspect=orbis/task}}');
+
+    const back = await a.entity.get({ id, include: ['body', 'bodyDoc'] });
+    expect(back.entity.bodyDoc?.v).toBe(3);
+    const nodes = ((back.entity.bodyDoc?.doc as { content?: Node[] } | undefined)?.content ??
+      []) as Node[];
+    expect(nodes.map((n) => n.type)).toEqual(['paragraph', 'queryBlock']);
+    expect(nodes[0]?.attrs?.id).toBe('блок-v2');
+    expect(nodes[1]?.attrs?.id).toBe('запрос-v2');
+    expect(nodes[1]?.attrs?.ast).not.toBeNull();
   });
 
   test('«отмени последнее» после pin удаляет версию (undo как у entity_origin_*)', async () => {

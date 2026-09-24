@@ -5,6 +5,7 @@ import { blockText } from './diff';
 import { OrbisMarkdownManager } from './manager';
 import { withCodeFences } from './nodes/code';
 import { BODY_REF_RE } from './nodes/entity-ref';
+import { type PageNode, parsePageText } from './page-grammar';
 import { DOC_EXTENSIONS } from './schema';
 import { type BodyDoc, DOC_SCHEMA_VERSION, upgradeBodyDoc } from './types';
 
@@ -347,45 +348,129 @@ function lex(markdown: string): { tokens: Tok[]; hasRefDefs: boolean } {
   return { tokens, hasRefDefs: Object.keys(lexer.tokens.links ?? {}).length > 0 };
 }
 
+/**
+ * Кусок markdown без маркеров v3 — ПРЕЖНИМ потокенным путём: лексер отдаёт блоки, каждый
+ * разбирается отдельно, и незнакомый, негодный схеме или потерявший листья блок уходит в raw
+ * ОДИН (вердикт Б1, мера 3). `hasRefDefs` — сигнал наверх: reference-определения делают весь
+ * исходник raw (см. `parseBody`).
+ */
+function parseMarkdownChunk(markdown: string): { content: JSONContent[]; hasRefDefs: boolean } {
+  const { tokens, hasRefDefs } = lex(markdown);
+  const content: JSONContent[] = [];
+  if (hasRefDefs) return { content, hasRefDefs };
+  for (const token of tokens) {
+    if (token.type === 'space') continue;
+    const raw = token.raw.replace(/\n+$/, '');
+    // Второе условие — НЕПРИГОДНОСТЬ ПО СХЕМЕ, найдено пробой (в брифе ревью его нет).
+    // «Знакомый токен» не значит «годный узел»: пустой пункт нумерованного списка (`1.`)
+    // marked отдаёт без абзаца внутри, и парсер строил listItem с `content: []` — документ,
+    // который отвергает СОБСТВЕННАЯ схема. serializeBody на нём БРОСАЛ TypeError из недр
+    // @tiptap/markdown, а с ним бросала и canonicalizeBody: путь модели отвечал отказом,
+    // а бэкфилл — который ошибку конверсии не глотает намеренно — обрывался на такой строке
+    // вместе со всем оставшимся хвостом корпуса. Уводим блок в raw: текст цел до байта,
+    // документ пригоден, канон становится неподвижной точкой.
+    const parsed = blockIsKnown(token) ? (md().parse(raw).content ?? []) : null;
+    // Третье условие — ОБЩИЙ приём против семейства «разбор молча выбросил узел»
+    // (см. blockKeepsItsShape): структурный счёт листьев не зависит от состава текста и
+    // потому снимает класс разом, а не по одной форме за раунд.
+    if (
+      parsed !== null &&
+      (parsed.length === 0 || (fitsSchema(parsed) && blockKeepsItsShape(token, parsed)))
+    ) {
+      content.push(...parsed);
+    } else {
+      content.push(rawNode(raw));
+    }
+  }
+  return { content, hasRefDefs };
+}
+
+/** Сигнал «в куске есть reference-определения»: разбор бросает, `parseBody` ловит и уводит всё
+ *  тело в raw. Свой класс — чтобы в отладке сигнал не путался со сбоем парсера (исход тот же). */
+class RefDefsFound extends Error {}
+
+/**
+ * Узлы препрохода → узлы документа (формат v3, спека страниц 1а §5.2–§5.3, §5.8).
+ *
+ * - `text` — прежним потокенным путём внутри куска. Кусок из одних пробелов узлов не даёт.
+ * - `query` → `queryBlock {ast: null, text}` — непривязанным, как и прежде (`bindQueryBlocks`).
+ * - `record` → `recordBlock`, `card` → `aspectCard {aspect: null, text}`.
+ * - контейнеры — рекурсивно; пустая часть — пустой абзац (часть схемы — `block+`).
+ * - `broken` → `rawBlock` с ДОСЛОВНЫМ текстом. Хвостовые переводы строки срезаны, как у токенов
+ *   выше: `raw` узлов препрохода несёт перевод своей строки, а разделитель между блоками ставит
+ *   печать — иначе каждый круг «разбор → печать» добавлял бы пустую строку.
+ */
+function pageNodesToDoc(nodes: PageNode[]): JSONContent[] {
+  const out: JSONContent[] = [];
+  for (const node of nodes) {
+    switch (node.kind) {
+      case 'text': {
+        if (node.text.trim() === '') break;
+        const chunk = parseMarkdownChunk(node.text);
+        if (chunk.hasRefDefs) throw new RefDefsFound();
+        out.push(...chunk.content);
+        break;
+      }
+      case 'query':
+        out.push({ type: 'queryBlock', attrs: { ast: null, text: node.text } });
+        break;
+      case 'record':
+        out.push({ type: 'recordBlock', attrs: { name: node.name } });
+        break;
+      case 'card':
+        out.push({ type: 'aspectCard', attrs: { aspect: null, text: node.aspect } });
+        break;
+      case 'columns':
+        out.push({
+          type: 'columns',
+          content: node.parts.map((part) => ({ type: 'column', content: partContent(part) })),
+        });
+        break;
+      case 'tabs':
+        out.push({
+          type: 'tabs',
+          content: node.parts.map((part) => ({
+            type: 'tab',
+            attrs: { label: part.label },
+            content: partContent(part.children),
+          })),
+        });
+        break;
+      case 'broken':
+        out.push(rawNode(node.raw.replace(/\n+$/, '')));
+        break;
+    }
+  }
+  return out;
+}
+
+function partContent(children: PageNode[]): JSONContent[] {
+  const content = pageNodesToDoc(children);
+  return content.length > 0 ? content : [{ type: 'paragraph' }];
+}
+
+/**
+ * Разбор тела поверх листового препрохода (`page-grammar.ts`, РП-6): маркеры v3 режутся ДО
+ * markdown-разбора, куски между ними идут прежним потокенным путём.
+ *
+ * Переводы строк нормализуются (`\r\n` и одинокий `\r` → `\n`) ДО препрохода. marked делал
+ * это и раньше, а канон печати и так пишет `\n`; без нормализации одинокий `\r` препроход не
+ * счёл бы концом строки (marked — счёл бы), и `{{title}}\r{{tags}}` разошлось бы в двух
+ * разборах, а текст многострочного запроса хранил бы `\r`, которого через marked не было.
+ */
 export function parseBody(markdown: string): BodyDoc {
   if (markdown.trim() === '') return emptyDoc();
   try {
-    const { tokens, hasRefDefs } = lex(markdown);
-    if (hasRefDefs) {
-      // Reference-определения marked складывает в lexer.tokens.links, и восстановить их форму
-      // нечем — консервативно ВЕСЬ исходник дословно (ловит и сноски GFM из спайка).
-      return rawDoc(markdown);
-    }
-    const content: JSONContent[] = [];
-    for (const token of tokens) {
-      if (token.type === 'space') continue;
-      const raw = token.raw.replace(/\n+$/, '');
-      // Второе условие — НЕПРИГОДНОСТЬ ПО СХЕМЕ, найдено пробой (в брифе ревью его нет).
-      // «Знакомый токен» не значит «годный узел»: пустой пункт нумерованного списка (`1.`)
-      // marked отдаёт без абзаца внутри, и парсер строил listItem с `content: []` — документ,
-      // который отвергает СОБСТВЕННАЯ схема. serializeBody на нём БРОСАЛ TypeError из недр
-      // @tiptap/markdown, а с ним бросала и canonicalizeBody: путь модели отвечал отказом,
-      // а бэкфилл — который ошибку конверсии не глотает намеренно — обрывался на такой строке
-      // вместе со всем оставшимся хвостом корпуса. Уводим блок в raw: текст цел до байта,
-      // документ пригоден, канон становится неподвижной точкой.
-      const parsed = blockIsKnown(token) ? (md().parse(raw).content ?? []) : null;
-      // Третье условие — ОБЩИЙ приём против семейства «разбор молча выбросил узел»
-      // (см. blockKeepsItsShape): структурный счёт листьев не зависит от состава текста и
-      // потому снимает класс разом, а не по одной форме за раунд.
-      if (
-        parsed !== null &&
-        (parsed.length === 0 || (fitsSchema(parsed) && blockKeepsItsShape(token, parsed)))
-      ) {
-        content.push(...parsed);
-      } else {
-        content.push(rawNode(raw));
-      }
-    }
+    const content = pageNodesToDoc(parsePageText(markdown.replace(/\r\n?/g, '\n')));
     return content.length > 0
       ? { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } }
       : emptyDoc();
   } catch {
-    // Парсер не справился вовсе — сохраняем дословно, не теряя ни байта.
+    // Два повода, один исход — весь исходник дословно, не теряя ни байта:
+    //  - `RefDefsFound`: reference-определения marked складывает в lexer.tokens.links, и
+    //    восстановить их форму нечем (ловит и сноски GFM из спайка). Весь, а не кусок:
+    //    определение в одной колонке обслуживает ссылку в другой;
+    //  - парсер не справился вовсе.
     return rawDoc(markdown);
   }
 }

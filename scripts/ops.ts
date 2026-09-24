@@ -17,6 +17,7 @@
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
+//   bun scripts/ops.ts census-v3      # только чтение: что изменит формат тела v3 (станут блоками, display=)
 //   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts reset-world --confirm <PROD_REF> --i-understand RESET  # РАЗРУШАЮЩАЯ (РП-7)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
@@ -46,6 +47,7 @@ import {
   describeRoleAccess,
   drizzleBackfillIo,
 } from '../apps/server/src/db/backfill-body-doc';
+import { type CensusV3Row, censusV3, formatCensusV3 } from '../apps/server/src/db/census-v3';
 import {
   REGISTRY_DELTAS_QUERY,
   REGISTRY_DRIFT_QUERIES,
@@ -514,6 +516,43 @@ async function censusBodies(): Promise<number> {
 }
 
 /**
+ * Перепись корпуса перед форматом тела v3 (спека страниц 1а §5.9, Ф-1а-22) — только чтение.
+ *
+ * Числа — владельцу ДО прода: сколько тел, где строка `{{…}}` станет блоком обвязки, карточкой
+ * или контейнером, сколько получат плашку ошибки разбора и сколько блоков данных начнут
+ * рисоваться таблицей или списком. Это не гейт: текст ни в одном случае не теряется.
+ *
+ * Счёт и порционный цикл — в `apps/server/src/db/census-v3.ts` под тестом без базы; здесь только
+ * обвязка. Тела не печатаются: SELECT берёт `body` ради разбора, а наружу выходят числа и id.
+ * Роль печатается и без BYPASSRLS код 1 — по той же причине, что у `audit-bodies`: под FORCE
+ * RLS такая роль видит ноль строк молча, и нули означали бы «корпус не виден», а не «менять
+ * нечего».
+ */
+async function censusV3Op(): Promise<number> {
+  return withDb(async (sql) => {
+    const who = await describeRoleAccess(drizzle(sql, { schema }));
+    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
+    const r = await censusV3({
+      selectBatch: (limit, afterId) =>
+        sql<CensusV3Row[]>`SELECT id, body, body_doc IS NULL AS "bodyDocNull"
+                           FROM entities
+                           WHERE id > ${afterId}::uuid ORDER BY id LIMIT ${limit}`,
+    });
+    for (const line of formatCensusV3(r)) console.log(line);
+    console.log('\nЭто НЕ гейт: текст цел во всех случаях, меняется вид.');
+    if (!who.bypassRls) {
+      console.error(
+        `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS —` +
+          '\nтакая роль видит НОЛЬ строк, и нули выше означают «корпус НЕ ВИДЕН».' +
+          '\nНужен DSN роли с BYPASSRLS (на Supabase — postgres).',
+      );
+      return 1;
+    }
+    return 0;
+  });
+}
+
+/**
  * «Пересев мира» (РП-7) — единственная РАЗРУШАЮЩАЯ операция белого списка.
  *
  * Состав, порядок и подтверждение живут в `db/reset-world.ts` и покрыты тестами: этот файл
@@ -688,6 +727,10 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   'audit-bodies': {
     run: auditBodiesOp,
     help: 'только чтение: агрегаты по корпусу тел перед конверсией (тела не печатаются)',
+  },
+  'census-v3': {
+    run: censusV3Op,
+    help: 'только чтение: что изменит формат тела v3 — станут блоками, плашки, display=table/list (тела не печатаются)',
   },
   'backfill-body-doc': {
     run: backfillBodyDocOp,

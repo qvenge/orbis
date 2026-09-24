@@ -1,4 +1,5 @@
 import { MarkdownManager } from '@tiptap/markdown';
+import { RECORD_BLOCK_NAMES } from './page-grammar';
 
 /**
  * Подмена для intraword `_` на время экранирования. NUL взят намеренно: CommonMark требует
@@ -34,6 +35,35 @@ function escapeBlockStarter(text: string): string {
   return /^(?:>|#{1,6}(?=\s|$)|[-+](?=[\s-]|$)|=+(?=[ \t]*(?:\n|$)))/.test(text)
     ? `\\${text}`
     : text;
+}
+
+/**
+ * Имена маркеров тела v3 — те, что препроход (`page-grammar.ts`) узнаёт в начале строки. Список
+ * собран из его же экспорта и слов контейнеров, карточки и блока данных: новое имя блока
+ * обвязки попадает сюда само.
+ */
+const MARKER_NAMES = [...RECORD_BLOCK_NAMES, 'columns', 'column', 'tabs', 'tab', 'card', 'query'];
+
+/**
+ * Строка текста, начинающаяся маркером: `{{`, необязательный `/` закрытия, известное имя и `}`
+ * или `:` сразу за ним. Незнакомое имя (`{{finance/ring}}`) и `{{` посреди строки — текст и так
+ * (§5.7), их не трогаем.
+ */
+const MARKER_LINE_RE = new RegExp(`(^|\n)(?=\\{\\{/?(?:${MARKER_NAMES.join('|')})[}:])`, 'g');
+
+/**
+ * Абзац, текст которого — маркер (`{{title}}`, `{{query:…}}`, `{{/column}}`), приходит вставкой
+ * в редактор. Напечатай его дословно — и повторный разбор сделает из него БЛОК, то есть смысл
+ * тела сменится при первой же правке через markdown (Ф-1а-11). Первый `{` такой строки
+ * экранируется: `\{` — законное экранирование CommonMark, разбор вернёт текст `{`, а препроход
+ * и токенайзер `queryBlock` видят строку, начинающуюся с `\`, и маркером её не считают.
+ *
+ * В начале КАЖДОЙ строки узла, а не только в начале узла, как `escapeBlockStarter`: маркер —
+ * целая строка, и текстовый узел с мягким переводом строки (`до\n{{tabs}}`) при печати дал бы
+ * маркер с колонки 0 ровно так же.
+ */
+function escapeMarkerLines(text: string): string {
+  return text.replace(MARKER_LINE_RE, '$1\\');
 }
 
 type TextNodeLike = { marks?: Array<string | { type: string }> };
@@ -76,14 +106,16 @@ export class OrbisMarkdownManager extends MarkdownManager {
       (node.marks ?? []).some((m) => codeTypes.has(typeof m === 'string' ? m : m.type));
     if (isInsideCode) return text;
 
-    return escapeBlockStarter(
-      text
-        .replace(/(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}])/gu, UNDERSCORE_SLOT)
-        .replace(/([\\`*_[\]~])/g, '\\$1')
-        .replaceAll(UNDERSCORE_SLOT, '_')
-        // & кодируем только когда он начинает сущность; < — только перед началом тега
-        .replace(/&(?=[a-zA-Z]+;|#\d+;|#x[0-9a-fA-F]+;)/g, '&amp;')
-        .replace(/<(?=[a-zA-Z/!?])/g, '&lt;'),
+    return escapeMarkerLines(
+      escapeBlockStarter(
+        text
+          .replace(/(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}])/gu, UNDERSCORE_SLOT)
+          .replace(/([\\`*_[\]~])/g, '\\$1')
+          .replaceAll(UNDERSCORE_SLOT, '_')
+          // & кодируем только когда он начинает сущность; < — только перед началом тега
+          .replace(/&(?=[a-zA-Z]+;|#\d+;|#x[0-9a-fA-F]+;)/g, '&amp;')
+          .replace(/<(?=[a-zA-Z/!?])/g, '&lt;'),
+      ),
     );
   }
 }

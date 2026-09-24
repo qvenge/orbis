@@ -7,7 +7,7 @@ import { FIXTURE_PARSE_REGISTRY as REG } from '../query/ast-fixtures';
 import { bindQueryBlocks } from './bind-query';
 import { parseBody, queryRefsFromDoc, readBodyDoc, serializeBody } from './convert';
 import { diffBodyDocs } from './diff';
-import { DOC_SCHEMA_VERSION } from './types';
+import { DOC_SCHEMA_VERSION, upgradeBodyDoc } from './types';
 
 const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
@@ -330,5 +330,109 @@ describe('readBodyDoc: конверсия v1 → v2 по дереву', () => {
   test('пересборка из body тоже привязана: блок из markdown приезжает с ast', () => {
     const got = readBodyDoc(null, '{{query: aspect=orbis/task}}', REG) as unknown as BodyLike;
     expect(block(got).ast).not.toBeNull();
+  });
+});
+
+describe('карточка аспекта: привязка по реестру (спека страниц §5.3)', () => {
+  type CardNode = { type?: string; attrs?: { aspect?: unknown; text?: unknown; id?: unknown } };
+  const card = (md: string): CardNode['attrs'] => {
+    const doc = bindQueryBlocks(parseBody(md), REG);
+    const node = ((doc.doc.content ?? []) as CardNode[]).find((n) => n.type === 'aspectCard');
+    if (node === undefined) throw new Error('в документе нет карточки');
+    return node.attrs;
+  };
+
+  test('ключ аспекта → aspect и текст — ключ', () => {
+    expect(card('{{card: orbis/goal}}')).toEqual({ aspect: 'orbis/goal', text: 'orbis/goal' });
+  });
+
+  test('подпись в кавычках → привязка по подписи, печать — ключом', () => {
+    expect(card('{{card: "Цель"}}')).toEqual({ aspect: 'orbis/goal', text: 'orbis/goal' });
+    const doc = bindQueryBlocks(parseBody('{{card: "Цель"}}'), REG);
+    expect(serializeBody(doc)).toBe('{{card: orbis/goal}}');
+  });
+
+  test('незнакомый аспект → aspect: null, текст как написан', () => {
+    expect(card('{{card: orbis/нет-такого}}')).toEqual({ aspect: null, text: 'orbis/нет-такого' });
+    expect(card('{{card: "Нет такой подписи"}}')).toEqual({
+      aspect: null,
+      text: '"Нет такой подписи"',
+    });
+  });
+
+  test('привязка не трогает чужие атрибуты карточки (блочный id) и узлы без карточек', () => {
+    const input = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'aspectCard', attrs: { id: 'блок-к', aspect: null, text: 'orbis/goal' } },
+        ],
+      },
+    };
+    const bound = bindQueryBlocks(input, REG);
+    expect(bound.doc.content?.[0]?.attrs).toEqual({
+      id: 'блок-к',
+      aspect: 'orbis/goal',
+      text: 'orbis/goal',
+    });
+    const plain = parseBody('просто текст');
+    expect(bindQueryBlocks(plain, REG)).toBe(plain);
+  });
+});
+
+describe('upgradeBodyDoc: цепочка v1 → v2 → v3', () => {
+  const content = [
+    { type: 'paragraph', attrs: { id: 'блок-1' }, content: [{ type: 'text', text: 'привет' }] },
+  ];
+
+  test('v2 → v3 тем же объектом doc: узлы и блочные id не трогаются', () => {
+    const doc = { type: 'doc', content };
+    const got = upgradeBodyDoc({ v: 2, doc });
+    expect(got).toEqual({ v: 3, doc });
+    expect(got?.doc).toBe(doc);
+  });
+
+  test('v1 → v3 через queryAttrsV1ToV2', () => {
+    const got = upgradeBodyDoc({
+      v: 1,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'queryBlock', attrs: { id: 'б', query: ' aspect=orbis/task' } }],
+      },
+    });
+    expect(got?.v).toBe(3);
+    expect(got?.doc.content?.[0]?.attrs).toEqual({
+      id: 'б',
+      ast: null,
+      text: ' aspect=orbis/task',
+    });
+  });
+
+  test('v3 — как есть; v4 и мусор — null', () => {
+    const current = { v: 3, doc: { type: 'doc', content } };
+    expect(upgradeBodyDoc(current)).toBe(current);
+    expect(upgradeBodyDoc({ v: 4, doc: { type: 'doc', content } })).toBeNull();
+    expect(upgradeBodyDoc({ v: 'два' as never, doc: { type: 'doc', content } })).toBeNull();
+    expect(upgradeBodyDoc({ v: 0, doc: { type: 'doc', content } })).toBeNull();
+  });
+
+  test('readBodyDoc: хранимый v2 приезжает v3 и привязанным, блочные id целы', () => {
+    const stored = {
+      v: 2,
+      doc: {
+        type: 'doc',
+        content: [
+          ...content,
+          { type: 'queryBlock', attrs: { id: 'блок-2', ast: null, text: 'aspect=orbis/task' } },
+        ],
+      },
+    };
+    const got = readBodyDoc(stored, 'совсем другое тело', REG);
+    expect(got.v).toBe(DOC_SCHEMA_VERSION);
+    const nodes = (got.doc.content ?? []) as Array<{ attrs?: Record<string, unknown> }>;
+    expect(nodes[0]?.attrs?.id).toBe('блок-1');
+    expect(nodes[1]?.attrs?.id).toBe('блок-2');
+    expect(nodes[1]?.attrs?.ast).not.toBeNull();
   });
 });

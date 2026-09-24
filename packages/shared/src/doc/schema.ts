@@ -5,9 +5,11 @@ import StarterKit from '@tiptap/starter-kit';
 import { OrbisCode } from './nodes/code';
 import { OrbisCodeBlock } from './nodes/code-block';
 import { EntityRef } from './nodes/entity-ref';
+import { Column, Columns, Tab, Tabs } from './nodes/layout';
 import { OrbisListItem } from './nodes/list-item';
 import { QueryBlock } from './nodes/query-block';
 import { RawBlock } from './nodes/raw';
+import { AspectCard, RecordBlock } from './nodes/record-blocks';
 
 /** Белый список протоколов. Сужает ссылки isAllowedUri — опция `protocols` у Tiptap
  *  РАСШИРЯЕТ базовый список, а не сужает (проверено ревью), поэтому её здесь нет. */
@@ -50,4 +52,11 @@ export const DOC_EXTENSIONS: AnyExtension[] = [
   EntityRef,
   QueryBlock,
   RawBlock,
+  // Формат v3 (спека страниц 1а §5.2–§5.3): контейнеры, их части и блоки обвязки записи.
+  Columns,
+  Column,
+  Tabs,
+  Tab,
+  RecordBlock,
+  AspectCard,
 ];

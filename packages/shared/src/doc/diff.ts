@@ -147,9 +147,16 @@ const SIMILARITY_WORD_RE = /[\p{L}\p{N}]+/gu;
  * (`packages/shared/src/doc/schema.ts`, состав `DOC_EXTENSIONS`): три вида списков, таблица и
  * цитата. Цитата прозрачна насквозь — её блоки становятся единицами верхнего уровня.
  *
+ * Контейнеры формата v3 (спека страниц 1а §5.9) — `columns`, `column`, `tabs` и `tab` — тоже
+ * прозрачны: без этого колонки стали бы ОДНОЙ единицей со всем текстом всех колонок
+ * (`unitPieces` спускается по блочным детям), и правка одной строки в колонке приезжала бы
+ * заменой всего контейнера. У `tab` сверх прозрачности есть своя единица-заголовок — см.
+ * `flattenInto`.
+ *
  * Единицы (всё остальное): `paragraph`, `heading`, `codeBlock`, `rawBlock`, `queryBlock`,
- * `horizontalRule`, `listItem`, `taskItem`, `tableRow`. Список ЗАКРЫТЫМ не делается намеренно:
- * нода-новичок схемы должна приезжать единицей сама собой, а не исчезать из диффа молча.
+ * `recordBlock`, `aspectCard`, `horizontalRule`, `listItem`, `taskItem`, `tableRow`. Список
+ * ЗАКРЫТЫМ не делается намеренно: нода-новичок схемы должна приезжать единицей сама собой, а
+ * не исчезать из диффа молча.
  */
 const TRANSPARENT_KINDS: ReadonlySet<string> = new Set([
   'bulletList',
@@ -157,6 +164,10 @@ const TRANSPARENT_KINDS: ReadonlySet<string> = new Set([
   'taskList',
   'table',
   'blockquote',
+  'columns',
+  'column',
+  'tabs',
+  'tab',
 ]);
 
 /**
@@ -185,6 +196,10 @@ const KEY_ATTRS: Readonly<Record<string, readonly string[]>> = {
   taskItem: ['checked'],
   codeBlock: ['language'],
   queryBlock: ['ast'],
+  // Атомы формата v3: их текст — печать маркера, а правда — атрибут. У карточки печать
+  // непривязанного и привязанного аспекта может совпасть, аспект различает их.
+  aspectCard: ['aspect'],
+  recordBlock: ['name'],
 };
 
 /** Блок в плоском виде: тип узла, ключ сопоставления и нормализованный текст для показа. */
@@ -249,6 +264,14 @@ function collectText(node: JSONContent | undefined, out: string[], breakText: st
   // её ЗДЕСЬ из `ast` нечем: печать требует реестра, а этот модуль листовой по закону и ни у
   // одного его вызывателя реестра нет.
   if (node.type === 'queryBlock' && typeof attrs.text === 'string') out.push(attrs.text);
+  // Атомы формата v3 — их ПЕЧАТЬ, байт-в-байт как `renderMarkdown` нод
+  // (`nodes/record-blocks.ts`; импортировать её сюда нельзя — модуль листовой, равенство
+  // сторожит тест). Печать, а не голое имя: страховка записи сверяет этот текст с разбором
+  // проекции, и абзац `{{title}}`, ставший на круге блоком, не должен считаться пропажей.
+  if (node.type === 'recordBlock' && typeof attrs.name === 'string') out.push(`{{${attrs.name}}}`);
+  if (node.type === 'aspectCard' && typeof attrs.text === 'string') {
+    out.push(`{{card: ${attrs.text}}}`);
+  }
   if (breakText !== '' && node.type === 'hardBreak') out.push(breakText);
   for (const child of node.content ?? []) collectText(child, out, breakText);
 }
@@ -331,9 +354,22 @@ export function flattenBlocks(doc: JSONContent): FlatBlock[] {
   return out;
 }
 
+/**
+ * Единица-заголовок вкладки. Вкладка прозрачна, как колонка, но у неё есть свой текст —
+ * подпись, — и без отдельной единицы переименование вкладки было бы невидимо в диффе. Текст —
+ * печать маркера (`{{tab: …}}`, как у атомов): голая подпись «Запись» неотличима от абзаца
+ * с тем же словом.
+ */
+function tabHeading(node: JSONContent): FlatBlock {
+  const label = typeof node.attrs?.label === 'string' ? node.attrs.label.trim() : '';
+  const text = normalizeText(label === '' ? '{{tab}}' : `{{tab: ${label}}}`);
+  return { kind: 'tab', key: keyOf(node, 'tab', text), text };
+}
+
 function flattenInto(node: JSONContent, out: FlatBlock[]): void {
   const kind = node.type;
   if (typeof kind !== 'string') return;
+  if (kind === 'tab') out.push(tabHeading(node));
   if (TRANSPARENT_KINDS.has(kind)) {
     for (const child of node.content ?? []) flattenInto(child, out);
     return;

@@ -21,6 +21,7 @@
  */
 import type { JSONContent } from '@tiptap/core';
 import {
+  effectiveLabel,
   type ParseRegistry,
   parseQueryAst,
   printQueryAst,
@@ -29,6 +30,7 @@ import {
   queryAstSchema,
   queryTreeExceedsDepth,
 } from '../query';
+import type { AspectDefinition } from '../registry/property-type';
 import { QUERY_BLOCK_CLOSE } from './nodes/query-block';
 import type { BodyDoc } from './types';
 
@@ -94,9 +96,42 @@ export function bindAttrs(attrs: Record<string, unknown>, reg: ParseRegistry): Q
 }
 
 /**
- * Блоки документа — привязанными к реестру. Вход не мутируется, и узлы БЕЗ query-блоков
- * возвращаются ТЕМИ ЖЕ объектами: чтение обязано отдавать вход, а не свою копию, иначе
- * блочные id (UniqueID — чужой схеме атрибут) терялись бы на каждом круге.
+ * Аспект по тексту карточки: ключ (`orbis/goal`) или подпись в кавычках (`"Цель"`) — те же две
+ * формы имени, что у `aspect=` в запросе (§А5-3а/б), и то же правило подписи: локаль реестра,
+ * регистр и края не важны. Неоднозначная подпись не угадывается — карточка остаётся непривязанной.
+ */
+function aspectOfCardText(text: string, reg: ParseRegistry): AspectDefinition | undefined {
+  const name = text.trim();
+  const aspects = [...reg.aspects.values()];
+  if (!name.startsWith('"')) return aspects.find((a) => a.key === name);
+  if (name.length < 2 || !name.endsWith('"')) return undefined;
+  const label = name.slice(1, -1).trim().toLowerCase();
+  const found = aspects.filter(
+    (a) => effectiveLabel(a.label, reg.locale).trim().toLowerCase() === label,
+  );
+  return found.length === 1 ? found[0] : undefined;
+}
+
+/**
+ * Привязка карточки аспекта (спека страниц §5.3). Инвариант — как у query-блока: либо
+ * `aspect !== null` и `text` — КЛЮЧ этого аспекта (печать «ключом»), либо `aspect === null` и
+ * `text` — строка как написана. Порядок ветвей — приоритет атрибута над текстом: аспект, уже
+ * записанный id, и есть правда, а текст — его печать.
+ */
+function bindCardAttrs(
+  attrs: Record<string, unknown>,
+  reg: ParseRegistry,
+): { aspect: string | null; text: string } {
+  const text = typeof attrs.text === 'string' ? attrs.text : '';
+  const byId = typeof attrs.aspect === 'string' ? reg.aspects.get(attrs.aspect) : undefined;
+  const aspect = byId ?? aspectOfCardText(text, reg);
+  return aspect === undefined ? { aspect: null, text } : { aspect: aspect.id, text: aspect.key };
+}
+
+/**
+ * Блоки документа — привязанными к реестру: query-блоки и карточки аспектов. Вход не
+ * мутируется, и узлы без них возвращаются ТЕМИ ЖЕ объектами: чтение обязано отдавать вход, а
+ * не свою копию, иначе блочные id (UniqueID — чужой схеме атрибут) терялись бы на каждом круге.
  */
 export function bindQueryBlocks(input: BodyDoc, reg: ParseRegistry): BodyDoc {
   const doc = bindNode(input.doc, reg);
@@ -107,6 +142,10 @@ function bindNode(node: JSONContent, reg: ParseRegistry): JSONContent {
   const content = node.content;
   const nextContent = content?.map((child) => bindNode(child, reg));
   const contentChanged = nextContent?.some((child, i) => child !== content?.[i]) === true;
+  if (node.type === 'aspectCard') {
+    const attrs = (node.attrs ?? {}) as Record<string, unknown>;
+    return { ...node, attrs: { ...attrs, ...bindCardAttrs(attrs, reg) } };
+  }
   if (node.type !== 'queryBlock') {
     return contentChanged ? { ...node, content: nextContent } : node;
   }

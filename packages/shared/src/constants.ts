@@ -2,7 +2,9 @@
 // получает PRECONDITION_FAILED с cause { code: 'CLIENT_OUTDATED', min }.
 // 0.2.0 — срез Г (D44): ключ провода стал `graphId`; клиент 0.1.x держит старое имя поля
 // и потому обязан получить 412 CLIENT_OUTDATED, а не тихо сломаться на несуществующем ключе.
-export const MIN_COMPATIBLE_CLIENT_VERSION = '0.2.0';
+// 0.3.0 — формат тела v3 (страницы 1а, §14 спеки): клиент 0.2.x не знает нод контейнеров и
+// блоков обвязки и сохранял бы документ v2 — сервер отказывает ему 412 до любой процедуры.
+export const MIN_COMPATIBLE_CLIENT_VERSION = '0.3.0';
 export const CLIENT_VERSION_HEADER = 'x-orbis-client-version';
 
 // §7.7/§9.2 (carried-решение плана 1b): максимум вызовов провайдера в одном
