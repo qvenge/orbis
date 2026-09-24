@@ -802,6 +802,26 @@ const ROW_21: RefusalRow = {
           }),
         ),
     },
+    {
+      // ПОРЯДОК ДВЕРЕЙ после переезда инвариантов в правила (задача 17, шаг 6): гейт модуля стоит ДО
+      // C-правил (Р-И-14, стадия 4). Трата без даты операции нарушает ещё и системное
+      // `financial_requires_occurred_on` — сместись дверь, отказ пришёл бы `INVARIANT` правила. При
+      // включённых финансах тот же вход — `INVARIANT` (контроль — `gate-b2.test.ts`, «контроль: инвариант держится»).
+      name: 'трата без даты операции — гейт модуля раньше C-правила о дате',
+      run: async () =>
+        codeOfResult(
+          await run(world().moduleOwner, 'entity_create', {
+            title: 'Корпус: трата без даты при выключенных финансах',
+            tags: [],
+            aspects: ['orbis/financial'],
+            props: {
+              'orbis/amount': '340.00',
+              'orbis/direction': 'expense',
+              'orbis/finance_category': world().moduleCategoryId,
+            },
+          }),
+        ),
+    },
   ],
 };
 
@@ -852,7 +872,41 @@ const ROW_10: RefusalRow = {
   ],
 };
 
-// ───────── строки 3/15/18 (валидатор действий, задача 6) и строки 11/19/20 (валидатор правил, задача 1) ─────────
+/**
+ * Строка 10 — ПОЛНАЯ форма отказа (§1.1, шаг 6 задачи 17): код один не отличил бы «движок отказал» от
+ * «движок отказал, не назвав привязок», а без `aspects` владельцу нечем выбрать `prefer`, без
+ * `subscription` — нечего править. Зовётся ПОСЛЕ строк: запись возвращается в окно (обе привязки на
+ * завтра) — секция окна, слот `orbis/when.moment`. Возвращает details отказа и то, что обязано в них
+ * лежать: вердикт объявлен здесь же, данными, как у строк.
+ */
+export async function slotAmbiguityDetails(): Promise<{ got: unknown; want: unknown }> {
+  await run(world().owner, 'entity_update', {
+    id: world().ambiguousId,
+    props: { [GATE_PROPS.plainAt]: world().tomorrowAt, 'orbis/start_at': world().tomorrowAt },
+  });
+  let got: unknown;
+  try {
+    await agendaOf(world().owner);
+  } catch (e) {
+    const err = e instanceof ExecError ? e : (e as { cause?: unknown } | null)?.cause;
+    if (!(err instanceof ExecError) || err.code !== 'SLOT_AMBIGUOUS') throw e;
+    got = err.details;
+  }
+  if (got === undefined)
+    throw new Error('отказа Повестки не было — запись строки 10 вышла из конфликта');
+  return {
+    got,
+    want: {
+      subscription: 'orbis/agenda',
+      contract: 'orbis/when',
+      slot: 'moment',
+      entityId: world().ambiguousId,
+      aspects: [GATE_PLAIN_KEY, 'orbis/schedule'].sort(),
+    },
+  };
+}
+
+// ─────────────────────── строки 3/15/18: валидатор действий ───────────────────────
 
 /**
  * Область валидатора действий: снимок мира корпуса (встроенные словари + посеянные действия) и
