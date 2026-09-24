@@ -1,0 +1,441 @@
+{
+  "schedule": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/schedule[prop:orbis/start_at,prop:orbis/end_at,prop:orbis/duration_min,prop:orbis/all_day,prop:orbis/recurrence,prop:orbis/location,prop:orbis/timezone]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "task": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "assignment-card",
+          "aspect:orbis/task[prop:orbis/task_status,prop:orbis/priority,prop:orbis/due_date,prop:orbis/completed_at,prop:orbis/effort_min,prop:orbis/waiting_for]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "financial": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/financial[prop:orbis/amount,prop:orbis/currency,prop:orbis/direction,prop:orbis/finance_category,prop:orbis/occurred_on,prop:orbis/planned,prop:orbis/recurring,prop:orbis/payment_method,prop:orbis/counterparty,prop:orbis/bank_txn_id]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "note": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["emoji", "native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/note[prop:orbis/content_type,prop:orbis/pinned]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "budget": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/budget[prop:orbis/finance_category,prop:orbis/limit,prop:orbis/currency,prop:orbis/period_start,prop:orbis/period_end,prop:orbis/carryover]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "category": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["emoji", "native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/category[prop:orbis/icon,prop:orbis/color,prop:orbis/aliases,prop:orbis/spend_class]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "memory": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-memory", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/memory[prop:orbis/memory_kind,prop:orbis/rule_scope,prop:orbis/rule_pattern,prop:orbis/rule_target]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "goal": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "goal-progress", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/goal[prop:orbis/progress_source,prop:orbis/target_value,prop:orbis/current_value,prop:orbis/unit]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "project": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/project[prop:orbis/project_stage]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "repo": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/repo[prop:orbis/repo_url,prop:orbis/default_branch]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "assignment": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": ["assignment-card", "versions-card", "subtask-add", "block-add"]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "agent-run": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "run-feed", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": ["versions-card", "subtask-add", "block-add"]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "routine": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "routine-status", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/routine[prop:orbis/routine_stage,prop:orbis/routine_at,prop:orbis/routine_days,prop:orbis/routine_mode,prop:orbis/allowed_tools]",
+          "versions-card",
+          "subtask-add",
+          "runs-list",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "ticket": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "ticket-waiting", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "assignment-card",
+          "aspect:orbis/task[prop:orbis/task_status,prop:orbis/priority,prop:orbis/due_date,prop:orbis/completed_at,prop:orbis/effort_min,prop:orbis/waiting_for]",
+          "versions-card",
+          "subtask-add",
+          "runs-list",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "recurring-payment": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/schedule[prop:orbis/start_at,prop:orbis/end_at,prop:orbis/duration_min,prop:orbis/all_day,prop:orbis/recurrence,prop:orbis/location,prop:orbis/timezone]",
+          "aspect:orbis/financial[prop:orbis/amount,prop:orbis/currency,prop:orbis/direction,prop:orbis/finance_category,prop:orbis/occurred_on,prop:orbis/planned,prop:orbis/recurring,prop:orbis/payment_method,prop:orbis/counterparty,prop:orbis/bank_txn_id]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "project-task": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "assignment-card",
+          "aspect:orbis/task[prop:orbis/task_status,prop:orbis/priority,prop:orbis/due_date,prop:orbis/completed_at,prop:orbis/effort_min,prop:orbis/waiting_for]",
+          "aspect:orbis/project[prop:orbis/project_stage]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "goal-schedule": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "goal-progress", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "aspect:orbis/schedule[prop:orbis/start_at,prop:orbis/end_at,prop:orbis/duration_min,prop:orbis/all_day,prop:orbis/recurrence,prop:orbis/location,prop:orbis/timezone]",
+          "aspect:orbis/goal[prop:orbis/progress_source,prop:orbis/target_value,prop:orbis/current_value,prop:orbis/unit]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "financial-task": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "assignment-card",
+          "aspect:orbis/task[prop:orbis/task_status,prop:orbis/priority,prop:orbis/due_date,prop:orbis/completed_at,prop:orbis/effort_min,prop:orbis/waiting_for]",
+          "aspect:orbis/financial[prop:orbis/amount,prop:orbis/currency,prop:orbis/direction,prop:orbis/finance_category,prop:orbis/occurred_on,prop:orbis/planned,prop:orbis/recurring,prop:orbis/payment_method,prop:orbis/counterparty,prop:orbis/bank_txn_id]",
+          "versions-card",
+          "subtask-add",
+          "block-add"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "note-plain": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": ["versions-card", "subtask-add", "block-add"]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  },
+  "with-relations": {
+    "aboveTabs": ["detail-menu", "body-notices"],
+    "tabs": [
+      {
+        "label": "Сущность",
+        "parts": ["native-row", "body"]
+      },
+      {
+        "label": "Детали",
+        "parts": [
+          "assignment-card",
+          "aspect:orbis/task[prop:orbis/task_status,prop:orbis/priority,prop:orbis/due_date,prop:orbis/completed_at,prop:orbis/effort_min,prop:orbis/waiting_for]",
+          "versions-card",
+          "subtask",
+          "subtask-add",
+          "block-add",
+          "block-row",
+          "backlink"
+        ]
+      },
+      {
+        "label": "Тред",
+        "parts": []
+      }
+    ]
+  }
+}

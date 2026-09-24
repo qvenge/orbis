@@ -1,0 +1,137 @@
+{
+  "schedule": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "task": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "financial": {
+    "entity.get": 1,
+    "entity.query": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "note": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "budget": {
+    "entity.get": 1,
+    "entity.query": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "category": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "memory": {
+    "entity.get": 1,
+    "entity.query": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "goal": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "project": {
+    "agentRun.sweep": 1,
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "repo": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "assignment": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "agent-run": {
+    "entity.get": 1,
+    "oauth.listGrants": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "routine": {
+    "agentRun.sweep": 1,
+    "entity.get": 1,
+    "entity.query": 1,
+    "registry.effective": 1,
+    "routine.overview": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "ticket": {
+    "agentRun.sweep": 1,
+    "entity.get": 1,
+    "entity.query": 1,
+    "oauth.listGrants": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "recurring-payment": {
+    "entity.get": 1,
+    "entity.query": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "project-task": {
+    "agentRun.sweep": 1,
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "goal-schedule": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "financial-task": {
+    "entity.get": 1,
+    "entity.query": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "note-plain": {
+    "entity.get": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  },
+  "with-relations": {
+    "entity.get": 2,
+    "entity.resolveRefs": 1,
+    "registry.effective": 1,
+    "routine.proposalsForEntity": 1,
+    "user.getSettings": 1
+  }
+}

@@ -1,5 +1,5 @@
 import type { AppRouter } from '@orbis/server/src/router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type DefaultOptions, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
@@ -145,15 +145,21 @@ const unrouted = (value: unknown): boolean =>
  * (три пробы, React 19.2). А `renderWithProviders` ставит над `ui` три обёртки — то есть тест,
  * написавший StrictMode внутри, проверяет ровно то же, что и без него, и зелен при любой
  * реализации. Поэтому StrictMode здесь оборачивает ВСЁ дерево, включая провайдеры.
+ *
+ * `queries` — умолчания запросов поверх `retry: false`. Нужны тесту, который СЧИТАЕТ запросы
+ * экрана (эталон экрана записи, structure-fixtures.ts): без них `staleTime` равен нулю, и
+ * каждый компонент, подписавшийся на уже приехавший ключ позже соседа, перезапрашивает его —
+ * в `calls` появляются повторы, которых продукт (`staleTime` 30 с, trpc.ts) не делает, и их
+ * число зависит от порядка монтирования, а не от экрана.
  */
 export function renderWithProviders(
   ui: ReactNode,
   handler: MockHandler = () => ({}),
-  opts: { strict?: boolean } = {},
+  opts: { strict?: boolean; queries?: DefaultOptions['queries'] } = {},
 ): RenderResult & { calls: { path: string; input: unknown }[] } {
   const calls: { path: string; input: unknown }[] = [];
   const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: { queries: { retry: false, ...opts.queries }, mutations: { retry: false } },
   });
   const client = trpc.createClient({
     links: [
