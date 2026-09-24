@@ -57,7 +57,7 @@ const sink = makeChatJournalSink();
  * переписывать её же руками, раздавать работу исполнителю рутина не вправе, а прогоны —
  * бухгалтерия и ответы владельца, подделывать которые нельзя ни тулом, ни предложением.
  */
-export const FORBIDDEN_ASPECTS = ['orbis/routine', 'orbis/agent-run', 'orbis/assignment'] as const;
+const FORBIDDEN_ASPECTS = ['orbis/routine', 'orbis/agent-run', 'orbis/assignment'] as const;
 
 /** Аспекты, которые делают ЦЕЛЬ операции запретной по БД (сущность уже рутина/прогон). */
 const FORBIDDEN_TARGET_ASPECTS = ['orbis/routine', 'orbis/agent-run'] as const;

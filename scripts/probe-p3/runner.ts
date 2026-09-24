@@ -57,7 +57,6 @@ import type {
   LLMToolDef,
 } from '../../apps/server/src/llm/types.ts';
 import type { RegistrySnapshot } from '../../apps/server/src/registry/load.ts';
-import { FORBIDDEN_ASPECTS, operationAspects } from '../../apps/server/src/routines/propose.ts';
 import { BUDGET_STATUS, seedWorld, type WorldEntity } from './world.ts';
 
 // ---------------------------------------------------------------------------
@@ -120,8 +119,6 @@ export interface TraceCall {
   error?: string;
   /** Шаг пришёл внутри batch_execute / orbis_propose — в счёт шагов цикла не идёт. */
   viaBatch?: boolean;
-  /** Прод отверг бы этот вызов, а заглушка приняла (только orbis_propose; см. `StubExecutor.propose`). */
-  prodRefusal?: string;
 }
 
 export interface TraceTurn {
@@ -327,8 +324,6 @@ export class StubExecutor {
   private readonly attachAspect: Map<string, string>;
   /** Операции последнего batch_execute / orbis_propose — трасса судит о шагах, а не об имени обёртки. */
   subCalls: SubCall[] = [];
-  /** Расхождение с продом у последнего orbis_propose (см. `propose`). */
-  prodRefusal: string | undefined;
 
   constructor(
     readonly reg: RegistrySnapshot,
@@ -539,11 +534,9 @@ export class StubExecutor {
    * модель правку верно, а не скорость владельца; операции идут в трассу как у batch
    * (`viaBatch`), атомарно, со стадией 2 на каждой.
    *
-   * ЧЕГО ЗАГЛУШКА НЕ ПОВТОРЯЕТ — И ГОВОРИТ ОБ ЭТОМ: боевой `runPropose` отвергает предложение,
-   * касающееся аспектов из `FORBIDDEN_ASPECTS` (`routines/propose.ts`, инвариант 6 — в том числе
-   * `orbis/routine`). Сценарий `routine-propose` в канале propose-рутины именно такое
-   * предложение и требует; заглушка его принимает (иначе клетка непроходима в обоих вариантах
-   * и ничего не меряет), а расхождение с продом кладёт в `prodRefusal` вызова — отчёт его видит.
+   * Запрета по объекту боевого `runPropose` (`FORBIDDEN_ASPECTS`: рутины, назначения, прогоны)
+   * заглушка не повторяет: диагностика В-6 предлагает только правку задач, и её предикат о
+   * рутинах не спрашивает.
    */
   private propose(args: Record<string, unknown>): unknown {
     const ops = (Array.isArray(args.operations) ? args.operations : []) as {
@@ -558,17 +551,6 @@ export class StubExecutor {
         `orbis_propose: операция ${String(bad.tool)} не предлагается`,
       );
     }
-    const forbidden = new Set(
-      ops.flatMap((op) =>
-        operationAspects(this.reg, (op.input ?? {}) as Record<string, unknown>).filter((a) =>
-          (FORBIDDEN_ASPECTS as readonly string[]).includes(a),
-        ),
-      ),
-    );
-    this.prodRefusal =
-      forbidden.size === 0
-        ? undefined
-        : `в проде отвергнуто запретом по объекту (routines/propose.ts): ${[...forbidden].join(', ')}`;
     const operations = this.group(ops);
     return { run_id: args.run_id, pending_id: crypto.randomUUID(), operations, replayed: false };
   }
@@ -626,7 +608,6 @@ function record(
   args: Record<string, unknown>,
 ): ToolPayload {
   exec.subCalls = [];
-  exec.prodRefusal = undefined;
   const payload = exec.call(name, args);
   const aspect = exec.aspectOfTool(name);
   trace.calls.push({
@@ -636,7 +617,6 @@ function record(
     queries: collectQueries(exec.parseReg, name, args),
     ...(aspect !== undefined && { aspect }),
     ...(payload.status === 'error' && { error: `${payload.error.code}: ${payload.error.message}` }),
-    ...(exec.prodRefusal !== undefined && { prodRefusal: exec.prodRefusal }),
   });
   for (const sub of GROUP_TOOLS.has(name) ? exec.subCalls : []) {
     const subAspect = exec.aspectOfTool(sub.name);

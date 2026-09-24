@@ -76,18 +76,13 @@ export function seedWorld(extra: readonly WorldEntity[] = []): Map<string, World
 // Триггер канала рутины
 // ---------------------------------------------------------------------------
 
-export const TRIGGER_TITLE = 'Заявки владельца из чата';
+export const TRIGGER_TITLE = 'Перенос просроченных задач';
 
 /**
- * Значения рутины-триггера — её собственное расписание и режим. Режим `propose` (рулинг
- * координатора, фикс-раунд 1 задачи 3, вариант (а)): стенд обязан собрать КАНАЛ PROPOSE-РУТИНЫ
- * — ровно тот, где после индекса инструкций аспектов нет нигде (риск В-6): `attach_*` рутине в
- * `propose` не показаны (`routineToolAllowed`), править она может только предложением
- * (`orbis_propose`). Белого списка у неё нет — в `propose` он не читается.
- *
- * Режим `act` здесь был бы вдвойне неверен: канал показывал бы `ai_instructions` рутины в
- * описании `attach_orbis_routine` (то есть мерил бы не В-6), а якорь с «режим: act»
- * подталкивал бы модель ровно к провалу, который сценарий ловит.
+ * Значения рутины-триггера диагностики В-6 (`DIAGNOSTIC_SCENARIOS`, рулинг координатора (б'),
+ * фикс-раунд 1 задачи 3): режим `propose` — канал, где после индекса инструкций аспектов нет
+ * нигде: `attach_*` рутине в `propose` не показаны (`routineToolAllowed`), править она может только
+ * предложением (`orbis_propose`). Белого списка нет — в `propose` он не читается.
  */
 export const TRIGGER_PROPS: Readonly<Record<string, unknown>> = {
   'orbis/routine_stage': 'active',
@@ -95,21 +90,46 @@ export const TRIGGER_PROPS: Readonly<Record<string, unknown>> = {
   'orbis/routine_mode': 'propose',
 };
 
-/** Тело триггера: реплика сценария дословно, как заявка владельца. */
-export function triggerBody(request: string): string {
-  return `Владелец оставил заявку в чате. Выполни её так, как выполнил бы в разговоре с ним:\n«${request}»`;
-}
-
-export function triggerEntity(id: string, request: string): WorldEntity {
+/** Рутина-триггер: тело — инструкция сценария дословно (у рутины тело И ЕСТЬ задание). */
+export function triggerEntity(id: string, body: string): WorldEntity {
   return {
     id,
     title: TRIGGER_TITLE,
-    body: triggerBody(request),
+    body,
     tags: ['routine'],
     props: structuredClone({ ...TRIGGER_PROPS }),
     aspects: ['orbis/routine'],
   };
 }
+
+/** «Сегодня» стенда датой — то, что диагностика В-6 ждёт в `orbis/due_date` переноса. */
+export const PROBE_TODAY = '2026-08-25';
+export const TASK_OVERDUE = '99999999-9999-4999-8999-999999999991';
+export const TASK_DONE_OVERDUE = '99999999-9999-4999-8999-999999999992';
+
+/**
+ * Мир канала рутины: к базовому — просроченная ОТКРЫТАЯ задача (её переносят) и просроченная
+ * ЗАКРЫТАЯ (её не трогают). Только у диагностики: базовый мир двенадцати сценариев П3 не меняется,
+ * иначе их клетки перестали бы быть сравнимы с П3.
+ */
+export const OVERDUE_TASKS: readonly WorldEntity[] = [
+  {
+    id: TASK_OVERDUE,
+    title: 'Продлить страховку машины',
+    body: '',
+    tags: [],
+    props: { 'orbis/task_status': 'planned', 'orbis/due_date': '2026-08-20' },
+    aspects: ['orbis/task'],
+  },
+  {
+    id: TASK_DONE_OVERDUE,
+    title: 'Сдать показания счётчиков',
+    body: '',
+    tags: [],
+    props: { 'orbis/task_status': 'done', 'orbis/due_date': '2026-08-19' },
+    aspects: ['orbis/task'],
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Ответ budget_status — по действующему контракту тула (`budgetStatusResultSchema`)

@@ -53,7 +53,7 @@ import {
   type RoutineRef,
   routineToolDefs,
 } from '../../apps/server/src/tools/registry.ts';
-import { PROBE_NOW, probeClock, TRIGGER_PROPS, TRIGGER_TITLE, triggerBody } from './world.ts';
+import { PROBE_NOW, probeClock, TRIGGER_PROPS, TRIGGER_TITLE } from './world.ts';
 
 export const VARIANTS = ['index', 'catalog'] as const;
 export type Variant = (typeof VARIANTS)[number];
@@ -212,11 +212,11 @@ export async function probeOwner(db: Db): Promise<ProbeOwner> {
 }
 
 /**
- * Рутина-триггер канала рутины (сценарий `routine-propose`): её тело — реплика сценария, и
+ * Рутина-триггер канала рутины (диагностика В-6): её тело — инструкция сценария, и
  * `buildRoutineContext` ставит её якорем. Заводится исполнителем, как садовник: якорь канал
  * читает из БД (`anchorBlock`), и рутина, которой нет в графе, канал бы не собрала.
  */
-export async function seedTrigger(db: Db, who: Identity, request: string): Promise<string> {
+export async function seedTrigger(db: Db, who: Identity, body: string): Promise<string> {
   const id = seedRoutineId(who.graph, 'probe-p3-trigger');
   const r = await execute(db, {
     identity: who,
@@ -229,7 +229,7 @@ export async function seedTrigger(db: Db, who: Identity, request: string): Promi
         input: {
           id,
           title: TRIGGER_TITLE,
-          body: triggerBody(request),
+          body,
           tags: ['routine'],
           aspects: ['orbis/routine'],
           props: { ...TRIGGER_PROPS },

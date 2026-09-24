@@ -15,7 +15,8 @@
 // РЕЖИМЫ:
 //   bun scripts/probe-p3.ts --dry-run
 //       Готово ли к прогону: на локальной БД заводит владельца стенда, собирает ОБА варианта
-//       обоих каналов для всех 12 сценариев, проверяет мир-заглушку стадией 2. Модель не зовётся.
+//       обоих каналов для всех сценариев, сверяет их с продом, проверяет мир-заглушку стадией 2.
+//       Модель не зовётся.
 //   bun scripts/probe-p3.ts --variant=index|catalog --model=<id> --rep=N --out=<каталог> [id …]
 //       Живой прогон одной клетки матрицы (вариант × модель × повтор): трассы — в
 //       `<каталог>/<вариант>__<модель>__r<N>.json`, по ним — таблица П3 §3 в `<каталог>/report.md`
@@ -24,6 +25,9 @@
 //       Таблица и вердикт по уже снятым трассам — без модели и без БД (пересчёт стоит ноль).
 // Матрица §С8-30: оба варианта × две модели (прод — `DEFAULT_OPENAI_MODEL`, вторая —
 // `gpt-5.4-mini`, как в П3) × повторы 1..3. Провайдер — как у сервера: ORBIS_LLM_PROVIDER и ключ.
+// Сценарии: двенадцать П3 (все — каналом чата, как в П3) — они и только они дают вердикт;
+// плюс диагностика В-6 каналом propose-рутины — отдельной строкой отчёта, коды 0/3 от неё не
+// зависят (`scenarios.ts`, `DIAGNOSTIC_SCENARIOS`).
 //
 // КОДЫ ВЫХОДА (их различает запускающий, не читая исходник):
 //   0 — паритет: на прод-модели индекс ниже каталога не более чем на 2 из 36 (разброс, измеренный
@@ -52,7 +56,13 @@ import { ROUTINE_MAX_STEPS } from '../apps/server/src/routines/constants.ts';
 import { TERMINAL_TOOLS } from '../apps/server/src/routines/runner.ts';
 import { buildToolRegistry, routineToolDefs } from '../apps/server/src/tools/registry.ts';
 import { replay, runScenario, selectProvider, type Trace } from './probe-p3/runner.ts';
-import { commonNotes, SCENARIOS, type Scenario } from './probe-p3/scenarios.ts';
+import {
+  ALL_SCENARIOS,
+  commonNotes,
+  DIAGNOSTIC_SCENARIOS,
+  SCENARIOS,
+  type Scenario,
+} from './probe-p3/scenarios.ts';
 import {
   assembleChannels,
   type Channels,
@@ -66,6 +76,7 @@ import {
 } from './probe-p3/variants.ts';
 import {
   BUDGET_STATUS,
+  OVERDUE_TASKS,
   probeClock,
   seedWorld,
   triggerEntity,
@@ -120,6 +131,39 @@ export function parityVerdict(t: { index: Tally; catalog: Tally }): ParityVerdic
       };
 }
 
+/** Счёт прогонов прод-модели на повторах 1..PARITY_REPS по данному набору сценариев. */
+function prodTally(
+  traces: readonly Trace[],
+  scenarios: readonly Scenario[],
+): Record<Variant, Tally> {
+  const out: Record<Variant, Tally> = {
+    index: { pass: 0, runs: 0 },
+    catalog: { pass: 0, runs: 0 },
+  };
+  for (const t of traces) {
+    const s = scenarios.find((x) => x.id === t.scenario);
+    if (s === undefined || t.error !== undefined) continue; // несостоявшийся прогон — не прогон
+    if (t.model !== PROD_MODEL || t.rep > PARITY_REPS) continue;
+    if (t.variant !== 'index' && t.variant !== 'catalog') continue;
+    out[t.variant].runs += 1;
+    if (s.check(t).pass) out[t.variant].pass += 1;
+  }
+  return out;
+}
+
+/**
+ * Счёт для вердикта §С8-30 — ТОЛЬКО двенадцать сценариев П3: допуск паритета измерен на них.
+ * Диагностика В-6 сюда не входит (докблок `DIAGNOSTIC_SCENARIOS`), и тест держит это правило.
+ */
+export function parityTally(traces: readonly Trace[]): Record<Variant, Tally> {
+  return prodTally(traces, SCENARIOS);
+}
+
+/** Счёт диагностики В-6 — отдельной строкой отчёта, на коды выхода не влияет. */
+export function diagnosticTally(traces: readonly Trace[]): Record<Variant, Tally> {
+  return prodTally(traces, DIAGNOSTIC_SCENARIOS);
+}
+
 // ---------------------------------------------------------------------------
 // Аргументы
 // ---------------------------------------------------------------------------
@@ -150,7 +194,7 @@ function parseArgs(argv: readonly string[]): Args {
   if (!Number.isInteger(rep) || rep < 1)
     throw new Error(`--rep — целое ≥ 1, получено «${value('rep')}»`);
   const only = argv.filter((a) => !a.startsWith('--'));
-  const unknown = only.filter((id) => !SCENARIOS.some((s) => s.id === id));
+  const unknown = only.filter((id) => !ALL_SCENARIOS.some((s) => s.id === id));
   if (unknown.length > 0) throw new Error(`неизвестные сценарии: ${unknown.join(', ')}`);
   return {
     dryRun: argv.includes('--dry-run'),
@@ -167,29 +211,29 @@ function parseArgs(argv: readonly string[]): Args {
 // Сборка каналов на локальной БД — общая у --dry-run и живого прогона
 // ---------------------------------------------------------------------------
 
-const ROUTINE_SCENARIO = SCENARIOS.find((s) => s.channel === 'routine');
+const ROUTINE_SCENARIO = ALL_SCENARIOS.find((s) => s.channel === 'routine');
 
 interface Stand {
   channels: Channels;
   /** Эталон прода, собранный НЕЗАВИСИМО от `assembleChannels`, — им dry-run сверяет стенд. */
   prod: () => Promise<ProdReference>;
-  /** Мир сценария: у канала рутины в нём ещё и рутина-триггер (её id модель видит в якоре). */
+  /** Мир сценария: у канала рутины в нём ещё рутина-триггер (её id модель видит в якоре) и просроченные задачи. */
   worldFor: (s: Scenario) => Map<string, WorldEntity>;
 }
 
 async function withStand<T>(fn: (stand: Stand) => Promise<T>): Promise<T> {
   if (ROUTINE_SCENARIO === undefined) throw new Error('в наборе нет сценария канала рутины');
-  const request = ROUTINE_SCENARIO.turns[0] ?? '';
+  const body = ROUTINE_SCENARIO.turns[0] ?? '';
   const { db, client } = makeDb({ max: 3 });
   try {
     const owner = await probeOwner(db);
-    const triggerId = await seedTrigger(db, owner.who, request);
+    const triggerId = await seedTrigger(db, owner.who, body);
     const channels = await assembleChannels(db, owner, triggerId);
-    const trigger = triggerEntity(triggerId, request);
+    const trigger = triggerEntity(triggerId, body);
     return await fn({
       channels,
       prod: () => prodReference(db, owner, triggerId),
-      worldFor: (s) => seedWorld(s.channel === 'routine' ? [trigger] : []),
+      worldFor: (s) => seedWorld(s.channel === 'routine' ? [trigger, ...OVERDUE_TASKS] : []),
     });
   } finally {
     await client.end();
@@ -280,7 +324,7 @@ async function dryRun(): Promise<number> {
     const prod = await stand.prod();
     console.log(`probe-p3 --dry-run: секция каталога ${bytes(channels.catalogSection)} байт`);
     console.log('сценарий                 канал    index, Б  catalog, Б  тулов');
-    for (const s of SCENARIOS) {
+    for (const s of ALL_SCENARIOS) {
       const ch = channels[s.channel];
       for (const v of VARIANTS) {
         if (!ch.system[v].includes(ASPECT_INDEX_HEADING))
@@ -317,7 +361,7 @@ async function dryRun(): Promise<number> {
         prod.routineTools,
       ),
     );
-    // Сценарий routine-propose меряет В-6: канал propose-рутины, где attach_* не видны вовсе.
+    // Диагностика В-6 меряет канал propose-рутины, где attach_* не видны вовсе.
     if (prod.routineMode !== 'propose') {
       defects.push(
         `рутина-триггер в режиме ${String(prod.routineMode)}, а не propose — В-6 не меряется`,
@@ -327,7 +371,7 @@ async function dryRun(): Promise<number> {
       defects.push('канал propose-рутины видит attach_* — В-6 не меряется');
     }
     if (!channels.routine.tools.some((t) => t.name === 'orbis_propose')) {
-      defects.push('канал рутины не видит orbis_propose — сценарий routine-propose неисполним');
+      defects.push('канал рутины не видит orbis_propose — диагностика В-6 неисполнима');
     }
     if (defects.length > 0) {
       console.error('\nСТЕНД НЕ ГОТОВ:');
@@ -335,7 +379,8 @@ async function dryRun(): Promise<number> {
       return 1;
     }
     console.log(
-      `\nГОТОВО К ПРОГОНУ: ${SCENARIOS.length} сценариев × ${VARIANTS.length} варианта собраны, модель не вызывалась.`,
+      `\nГОТОВО К ПРОГОНУ: ${SCENARIOS.length} сценариев паритета + ${DIAGNOSTIC_SCENARIOS.length} диагностика В-6 × ` +
+        `${VARIANTS.length} варианта собраны, модель не вызывалась.`,
     );
     return 0;
   });
@@ -380,12 +425,8 @@ function report(traces: readonly Trace[]): { markdown: string; verdict: ParityVe
   const key = (t: Trace) => `${t.variant} · ${t.model}`;
   const keys = [...new Set(traces.map(key))].sort();
   const table = new Map<string, Map<string, Cell>>();
-  const prod: Record<Variant, Tally> = {
-    index: { pass: 0, runs: 0 },
-    catalog: { pass: 0, runs: 0 },
-  };
   for (const t of traces) {
-    const s = SCENARIOS.find((x) => x.id === t.scenario);
+    const s = ALL_SCENARIOS.find((x) => x.id === t.scenario);
     if (s === undefined || t.error !== undefined) continue; // несостоявшийся прогон — не прогон
     const v = s.check(t);
     const notes = commonNotes(t);
@@ -416,35 +457,33 @@ function report(traces: readonly Trace[]): { markdown: string; verdict: ParityVe
     c.notConverged += t.turns.filter((x) => !x.converged).length;
     c.inputTokens += t.usage.inputTokens;
     c.outputTokens += t.usage.outputTokens;
-    if (
-      t.model === PROD_MODEL &&
-      t.rep <= PARITY_REPS &&
-      (t.variant === 'index' || t.variant === 'catalog')
-    ) {
-      prod[t.variant].runs += 1;
-      if (v.pass) prod[t.variant].pass += 1;
-    }
   }
-  const verdict = parityVerdict(prod);
+  const verdict = parityVerdict(parityTally(traces));
+  const diag = diagnosticTally(traces);
 
   const md: string[] = ['# §С8-30 — индекс аспектов против полного каталога', ''];
   md.push(`| Сценарий | Нормативный блок | ${keys.join(' | ')} |`);
   md.push(`|---|---|${keys.map(() => '---').join('|')}|`);
   const total = new Map<string, Tally>();
-  for (const s of SCENARIOS) {
+  const row = (s: Scenario, count: boolean) => {
     const cells = keys.map((k) => {
       const c = table.get(s.id)?.get(k);
       if (c === undefined) return '—';
-      const t = total.get(k) ?? { pass: 0, runs: 0 };
-      total.set(k, { pass: t.pass + c.pass, runs: t.runs + c.runs });
+      if (count) {
+        const t = total.get(k) ?? { pass: 0, runs: 0 };
+        total.set(k, { pass: t.pass + c.pass, runs: t.runs + c.runs });
+      }
       const mark = c.pass === c.runs ? 'OK' : c.pass === 0 ? '**FAIL**' : 'флак';
       return `${mark} ${c.pass}/${c.runs}`;
     });
     md.push(`| \`${s.id}\` | ${s.block} | ${cells.join(' | ')} |`);
-  }
+  };
+  for (const s of SCENARIOS) row(s, true);
   md.push(
     `| **ИТОГО** | | ${keys.map((k) => `**${total.get(k)?.pass ?? 0}/${total.get(k)?.runs ?? 0}**`).join(' | ')} |`,
   );
+  // Диагностика — ПОСЛЕ итога и вне его: в паритет П3 она не входит (докблок DIAGNOSTIC_SCENARIOS).
+  for (const s of DIAGNOSTIC_SCENARIOS) row(s, false);
 
   const metrics: [string, (c: Cell) => number][] = [
     ['шагов цикла', (c) => c.steps],
@@ -469,7 +508,7 @@ function report(traces: readonly Trace[]): { markdown: string; verdict: ParityVe
   }
 
   md.push('', '## Причины падений', '');
-  for (const s of SCENARIOS) {
+  for (const s of ALL_SCENARIOS) {
     for (const k of keys) {
       const c = table.get(s.id)?.get(k);
       if (c === undefined || c.fails.length === 0) continue;
@@ -481,6 +520,9 @@ function report(traces: readonly Trace[]): { markdown: string; verdict: ParityVe
     `## Вердикт (прод-модель ${PROD_MODEL}, повторы 1..${PARITY_REPS})`,
     '',
     verdict.text,
+    '',
+    `В-6 (диагностика, в вердикт не входит): index ${diag.index.pass}/${diag.index.runs}, ` +
+      `catalog ${diag.catalog.pass}/${diag.catalog.runs} на прод-модели — базы П3 и допуска по разбросу у неё нет.`,
   );
   return { markdown: md.join('\n'), verdict };
 }
@@ -515,7 +557,8 @@ async function live(args: Args, env: LLMProviderEnv & { DATABASE_URL?: string })
     return 2;
   }
   const provider = choice.provider;
-  const list = args.only.length > 0 ? SCENARIOS.filter((s) => args.only.includes(s.id)) : SCENARIOS;
+  const list =
+    args.only.length > 0 ? ALL_SCENARIOS.filter((s) => args.only.includes(s.id)) : ALL_SCENARIOS;
   mkdirSync(out, { recursive: true });
   const path = join(out, `${variant}__${provider.modelId}__r${args.rep}.json`);
   let saved: TraceFile = {};

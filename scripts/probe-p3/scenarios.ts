@@ -16,7 +16,14 @@
 import type { QueryFilterNode } from '@orbis/shared/query';
 import { SUGGESTION_MAX_LEN, SUGGESTIONS_MAX } from '../../apps/server/src/ai/suggestions.ts';
 import type { Trace } from './runner.ts';
-import { CAT_TRANSPORT, TASK_GIFT, type WorldEntity } from './world.ts';
+import {
+  CAT_TRANSPORT,
+  PROBE_TODAY,
+  TASK_DONE_OVERDUE,
+  TASK_GIFT,
+  TASK_OVERDUE,
+  type WorldEntity,
+} from './world.ts';
 
 export interface Verdict {
   pass: boolean;
@@ -30,8 +37,8 @@ export interface Scenario {
   /** Нормативный блок — столбец таблицы П3 §3. */
   block: string;
   /**
-   * Канал: чат — реплика владельца; рутина — та же реплика телом рутины-триггера в режиме
-   * `propose` (`world.ts`, `triggerBody`), и ход открывает сам канал («Сработала рутина …»).
+   * Канал: чат — реплика владельца; рутина — `turns[0]` становится телом рутины-триггера в
+   * режиме `propose` (`world.ts`), и ход открывает сам канал («Сработала рутина …»).
    */
   channel: 'chat' | 'routine';
   turns: string[];
@@ -106,10 +113,6 @@ export function commonNotes(t: Trace): string[] {
   if (val.length > 0) out.push(`отказов стадии 2: ${val.length} (${val[0]?.error})`);
   const bad = badQueries(t);
   if (bad.length > 0) out.push(`неразбираемых запросов: ${bad.length} («${bad[0]?.text}»)`);
-  // Предложение, которое прод отверг бы, а заглушка приняла (`StubExecutor.propose`): вердикт
-  // сценария им не меняется, но читатель отчёта обязан видеть, что клетка прошла мимо запрета.
-  const refusal = t.calls.find((c) => c.prodRefusal !== undefined)?.prodRefusal;
-  if (refusal !== undefined) out.push(refusal);
   return out;
 }
 
@@ -387,24 +390,12 @@ export const SCENARIOS: Scenario[] = [
       return verdict(fails);
     },
   },
-  /**
-   * МЕРЯЕТ РИСК В-6 — КАНАЛ PROPOSE-РУТИНЫ ПОЛУЧАЕТ ТОЛЬКО ИНДЕКС. Рутина-триггер в режиме
-   * `propose` (`world.ts`, рулинг координатора, фикс-раунд 1 задачи 3): `attach_*` ей не
-   * показаны, и `ai_instructions` аспекта `orbis/routine` («без прямой просьбы — propose»,
-   * «ЧЧ:ММ») в её канале нет НИГДЕ — ни в промпте (индекс), ни в тулах. Вариант `catalog` несёт
-   * их секцией каталога; разница клеток и есть цена В-6. Правка идёт предложением
-   * (`orbis_propose`), заглушка раскрывает его в мир как принятое.
-   *
-   * Названное расхождение с продом: боевой `runPropose` предложение, касающееся `orbis/routine`,
-   * отвергает (инвариант 6). Предикат судит о СОБРАННОЙ модели записи, а не о судьбе
-   * предложения; прошедшая мимо запрета клетка помечается в заметках (`commonNotes`).
-   */
   {
     id: 'routine-propose',
     title:
       'Рутина без просьбы действовать самой — orbis/routine_mode: propose, orbis/routine_at «07:00»',
-    block: 'Инструкции аспекта orbis/routine (слой реестра); канал propose-рутины (В-6)',
-    channel: 'routine',
+    block: 'Инструкции аспекта orbis/routine (слой реестра)',
+    channel: 'chat',
     turns: ['заведи рутину: каждое утро в 7 смотри мои задачи на день и присылай сводку'],
     check: (t) => {
       const fails: string[] = [];
@@ -448,3 +439,62 @@ export const SCENARIOS: Scenario[] = [
     },
   },
 ];
+
+/**
+ * ДИАГНОСТИКА РИСКА В-6 — В ПАРИТЕТ §С8-30 НЕ ВХОДИТ.
+ *
+ * Что меряется. Канал propose-рутины после индекса не несёт ни одной `ai_instructions`: промпт
+ * держит только индекс, а `attach_*`, в описаниях которых инструкции живут, рутине в `propose` не
+ * показаны (`routineToolAllowed`); править она может лишь предложением (`orbis_propose`). Сценарий
+ * берёт законное для `propose` дело на аспекте, чьё правило видно только в описании
+ * `attach_orbis_task`: «явный срок → orbis/due_date (дата, не момент)». Перенос просроченного «на
+ * сегодня» — ровно то место, где модель без правила ставит момент (`…T09:00:00+03:00`), а стадия 2
+ * его отвергает. Вариант `catalog` несёт правило секцией каталога; разница клеток — цена В-6.
+ * Честная оговорка: значения срока модель видит в выдаче `entity_query` (формой `YYYY-MM-DD`), то
+ * есть правило частично выводимо из данных — сценарий меряет, хватает ли этого.
+ *
+ * ПОЧЕМУ НЕ В ПАРИТЕТЕ. Паритет §С8-30 — повтор П3 (12 сценариев, 34/36), и его допуск «не ниже
+ * каталога более чем на 2 из 36» — разброс, ИЗМЕРЕННЫЙ П3 на её сценариях. Этого сценария П3 не
+ * мерила: ни базы, ни допуска по разбросу для него нет, и вердикт по нему был бы числом из
+ * воздуха. Поэтому отчёт показывает его отдельной строкой «В-6 (диагностика)», а коды 0/3 от него
+ * не зависят (`parityTally` считает только `SCENARIOS`).
+ *
+ * Мир: к базовому миру добавлены просроченная открытая задача и просроченная закрытая
+ * (`world.ts`); переносится только первая.
+ */
+export const DIAGNOSTIC_SCENARIOS: Scenario[] = [
+  {
+    id: 'v6-overdue-to-today',
+    title: 'Рутина propose: перенести просроченные открытые задачи на сегодня — срок датой',
+    block: 'В-6 (диагностика): канал propose-рутины без ai_instructions',
+    channel: 'routine',
+    turns: [
+      'Каждое утро переноси мои просроченные незакрытые задачи на сегодня. Закрытые (сделанные и отменённые) не трогай.',
+    ],
+    check: (t) => {
+      const fails: string[] = [];
+      if (!t.calls.some((c) => c.name === 'orbis_propose' && c.error === undefined)) {
+        fails.push('предложение (orbis_propose) не принято');
+      }
+      if (created(t).length > 0) fails.push(`заведены новые сущности (${created(t).length})`);
+      const due = (id: string) => t.entities.find((e) => e.id === id)?.props['orbis/due_date'];
+      if (due(TASK_OVERDUE) !== PROBE_TODAY) {
+        fails.push(
+          `просроченная задача: orbis/due_date=${String(due(TASK_OVERDUE))}, ожидалась дата ${PROBE_TODAY}`,
+        );
+      }
+      if (due(TASK_DONE_OVERDUE) !== '2026-08-19') {
+        fails.push(`закрытая задача перенесена: orbis/due_date=${String(due(TASK_DONE_OVERDUE))}`);
+      }
+      if (due(TASK_GIFT) !== '2026-08-28') {
+        fails.push(`непросроченная задача тронута: orbis/due_date=${String(due(TASK_GIFT))}`);
+      }
+      // Момент вместо даты — ровно нарушение правила аспекта: его ловит стадия 2 заглушки.
+      if (refused(t).length > 0) fails.push(`отказ стадии 2: ${refused(t)[0]?.error}`);
+      return verdict(fails);
+    },
+  },
+];
+
+/** Все сценарии стенда: двенадцать паритетных П3 и диагностика В-6. */
+export const ALL_SCENARIOS: Scenario[] = [...SCENARIOS, ...DIAGNOSTIC_SCENARIOS];
