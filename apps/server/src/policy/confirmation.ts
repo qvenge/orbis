@@ -519,8 +519,8 @@ function reconfiguresByTool(
  * action'ом — и следующий `undo_last` ОТ МОДЕЛИ применял бы его inverse (`property_merge_undo`),
  * возвращая словарь назад без всякой карточки. Теперь обратные операции известны ДО исполнения и
  * сворачиваются в факты той же `factsFromOperations`, что у пачки и действия (`runUndoLast`,
- * `tools/dispatch.ts`); четыре ВНУТРЕННИЕ обратные операции реестра (`property_row_restore`,
- * `property_merge_undo`, `aspect_row_restore`, `module_set`) отвечают здесь `behavior-delta` по
+ * `tools/dispatch.ts`); ВНУТРЕННИЕ операции реестра (`property_row_restore`, `property_merge_undo`,
+ * `aspect_row_restore`, `rule_delta_restore` — обратные, и `module_set`) отвечают здесь `behavior-delta` по
  * тулу, и откат подтверждённой правки реестра становится карточкой — второе «да» владельца
  * (рамка В-8: «побочный эффект принят»). Карточка исполняется `undoAction`, а не пачкой
  * (`approvePending`, ключ `undo_of`). Этот перечень закрывает у отката только перенастройку

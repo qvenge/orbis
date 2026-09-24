@@ -63,7 +63,7 @@ import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
-import { aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
+import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
 import type { RegistrySnapshot } from '../registry/load';
 import { disabledModulesOf, setModuleDisabled } from '../registry/modules';
 import {
@@ -3689,18 +3689,9 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
       // применению (довод `prepareActionSet`: журнал разворачивает inverse плана).
       const ownRuleFields = aspectDeltaAfterRemove(delta) !== null;
       if (before !== null) {
-        // Поля правил НАЗВАНЫ явно (прежние — пустые, если их не было; N-2 фикс-раунда 2): иначе перенос
-        // `aspectDeltaAfterSet` оставил бы в строке правила, которые назвала отменяемая настройка.
         journal.inverse.push({
           op: 'aspect_delta_set',
-          payload: {
-            aspect: input.aspect,
-            delta: {
-              ...before,
-              rules: before.rules ?? [],
-              rulesDisabled: before.rulesDisabled ?? [],
-            },
-          },
+          payload: { aspect: input.aspect, delta: settingsInverse(before, input.delta) },
         });
       } else if (ownRuleFields) {
         journal.inverse.push(
@@ -3732,13 +3723,31 @@ async function prepareAspectDeltaRemove(_ctx: ExecCtx, rawInput: unknown): Promi
       await removeAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
       journal.operations.push({ op: 'aspect_delta_remove', payload: { ...input } });
       if (before !== null) {
+        // Снятие поля правил не трогало (Ф-Б2-29) — и откат их не называет: перенос оставит текущие.
         journal.inverse.push({
           op: 'aspect_delta_set',
-          payload: { aspect: input.aspect, delta: before },
+          payload: { aspect: input.aspect, delta: settingsInverse(before, {}) },
         });
       }
       return { result: { aspect: input.aspect } };
     },
+  };
+}
+
+/**
+ * ОБРАТНАЯ ОПЕРАЦИЯ НАСТРОЙКИ АСПЕКТА — прежняя дельта, но поля правил в ней названы ТОЛЬКО те, что назвал вход
+ * прямой операции (N2-1 фикс-раунда 3). Правила аспекта — отдельный жест (Ф-Б2-27 (г)): настройка, их не
+ * назвавшая, их не меняла, и её откат обязан оставить их как лежат сейчас (перенос `aspectDeltaAfterSet`) —
+ * иначе точечный откат старой настройки снова включил бы системное правило, отключённое владельцем позже.
+ * Названное полем входа — возвращается к прежнему (пустым, если его не было): его и меняла отменяемая
+ * настройка (N-2 фикс-раунда 2).
+ */
+function settingsInverse(before: AspectDelta, input: AspectDelta): AspectDelta {
+  const { rules, rulesDisabled, ...rest } = before;
+  return {
+    ...rest,
+    ...('rules' in input && { rules: rules ?? [] }),
+    ...('rulesDisabled' in input && { rulesDisabled: rulesDisabled ?? [] }),
   };
 }
 

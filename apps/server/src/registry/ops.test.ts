@@ -5641,3 +5641,95 @@ describe('фикс-раунд 2 задачи 16: откаты и снятие п
     );
   });
 });
+
+describe('фикс-раунд 3 задачи 16: откат правила и откат настройки не задевают чужих полей строки (N2-1)', () => {
+  const rowOf = async (g: GraphId) =>
+    (
+      (await withIdentity(db, personal(g), (tx) =>
+        tx.execute(sql`SELECT delta FROM registry_deltas
+                       WHERE graph_id = ${g}::uuid AND target_kind = 'aspect' AND target_id = 'orbis/task'`),
+      )) as unknown as Array<{ delta: unknown }>
+    )[0]?.delta ?? null;
+  const taskRules = async (g: GraphId) =>
+    (await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g))).aspects
+      .get('orbis/task')
+      ?.rules.map((r) => r.id) ?? [];
+
+  test('P1: точечный откат rule_remove после поздней смены иконки — иконка цела, правило включено', async () => {
+    const g = await freshGraph();
+    const removed = ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '📌' } },
+        { identity: personal(g) },
+      ),
+    );
+    expect((await undoAction(db, { identity: personal(g), actionId: removed.actionId })).ok).toBe(
+      true,
+    );
+    expect(await rowOf(g)).toEqual({ icon: '📌' });
+    expect(await taskRules(g)).toContain('task_completed_at');
+  });
+
+  test('P2: точечный откат старой настройки без полей правил — позднее отключение системного правила цело', async () => {
+    const g = await freshGraph();
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '🧭' } },
+        { identity: personal(g) },
+      ),
+    );
+    const second = ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '📌' } },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    expect((await undoAction(db, { identity: personal(g), actionId: second.actionId })).ok).toBe(
+      true,
+    );
+    expect(await rowOf(g)).toEqual({ icon: '🧭', rulesDisabled: ['task_completed_at'] });
+    expect(await taskRules(g)).not.toContain('task_completed_at');
+  });
+
+  test('откат снятия настройки возвращает иконку, не трогая позднего отключения правила', async () => {
+    const g = await freshGraph();
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '🧭' } },
+        { identity: personal(g) },
+      ),
+    );
+    const removal = ok(
+      await run('aspect_delta_remove', { aspect: 'orbis/task' }, { identity: personal(g) }),
+    );
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    expect((await undoAction(db, { identity: personal(g), actionId: removal.actionId })).ok).toBe(
+      true,
+    );
+    expect(await rowOf(g)).toEqual({ icon: '🧭', rulesDisabled: ['task_completed_at'] });
+  });
+});

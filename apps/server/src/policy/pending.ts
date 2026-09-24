@@ -72,6 +72,7 @@ import type { Identity } from '../identity';
 import { actionHash } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
+import { lockOwnerRegistry } from '../registry/ops';
 import type { Card } from '../tools/registry';
 import type { ConfirmationLevel } from './confirmation';
 
@@ -1089,15 +1090,19 @@ export async function approvePending(
               { pendingId: args.pendingId },
             );
           }
-          // СВЕЖЕСТЬ СТРОКИ ДЕЛЬТЫ ЕДИНИЦЫ ПЕРЕСЕВА — АВТОРИТЕТНО ЗДЕСЬ, под замком единицы и в транзакции
-          // исполнения (m-D фикс-раунда 2 задачи 16, прецедент Ф-Б2-18 ниже): сверка в tx №1 — только
-          // быстрый путь с гашением карточки, а правка владельца между двумя транзакциями прошла бы мимо неё.
-          // Здесь гасить нечем — бросок откатывает транзакцию, — поэтому отказ без гашения: следующее
-          // «Принять» увидит расхождение в tx №1 и погасит единицу «Устарело».
+          // СВЕЖЕСТЬ СТРОКИ ДЕЛЬТЫ ЕДИНИЦЫ ПЕРЕСЕВА — АВТОРИТЕТНО ЗДЕСЬ: под замком единицы, в транзакции
+          // исполнения (m-D фикс-раунда 2 задачи 16, прецедент Ф-Б2-18 ниже) и ПОСЛЕ замка реестра владельца
+          // (N2-2 фикс-раунда 3) — писателей строки дельты сериализует именно он: без него незакоммиченная правка
+          // владельца, уже держащая замок, прошла бы мимо SELECT (READ COMMITTED видит старую строку), а единица
+          // исполнилась бы поверх неё. Порядок «единица → реестр» — тот же, что дальше берёт `execute` (замок
+          // транзакционный и реентерабельный). Сверка в tx №1 — быстрый путь с гашением карточки; здесь гасить
+          // нечем — бросок откатывает транзакцию, — поэтому отказ без гашения: следующее «Принять» увидит
+          // расхождение в tx №1 и погасит единицу «Устарело».
           if (
             pending.expected_delta !== undefined &&
             !(await isExecuted(tx, graphId, args.pendingId))
           ) {
+            await lockOwnerRegistry(tx, graphId);
             const stale = await expectedDeltaStaleOf(tx, graphId, pending);
             if (stale !== null) {
               throw new ExecError('VALIDATION', `единица устарела — снята: ${stale}`, {

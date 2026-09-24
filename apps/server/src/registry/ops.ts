@@ -3239,23 +3239,44 @@ export async function readRuleDelta(
 }
 
 /**
- * ВОЗВРАТ СТРОКИ ДЕЛЬТЫ ПРАВИЛ К ПРЕЖНЕЙ — внутренняя обратная операция `rule_delta_restore` (N-1). Пишет тем же
- * `writeRuleDelta`, что и прямые операции: у аспекта — через `setAspectDelta` (проверки дельты и правил), у
- * свойства — `writeDeltaRow` с проверкой правил, `null` — снятие строки с инвариантами снимка. Откат, возвращающий
- * конфликт или цикл (мир сдвинулся после записи), получает громкий отказ, а не нечитаемый реестр.
+ * ВОЗВРАТ ПОЛЕЙ ПРАВИЛ ДЕЛЬТЫ К ПРЕЖНИМ — внутренняя обратная операция `rule_delta_restore` (N-1 фикс-раунда 2,
+ * N2-1 фикс-раунда 3). Возвращаются ТОЛЬКО `rules`/`rulesDisabled`, и поверх ТЕКУЩЕЙ строки: подпись, иконка,
+ * состав, варианты и `classMap` остаются как лежат сейчас. Правило и настройка аспекта — два разных жеста
+ * (Ф-Б2-27 (г), Ф-Б2-29), и точечный откат одного (`ai.undo` по id, откат прогона рутины) не вправе стереть
+ * поздний другой — например, удалить строку с иконкой, поставленной после отключения правила. Строка, где
+ * после возврата не осталось ничего, снимается. Пишет тем же `writeRuleDelta`, что и прямые операции: у
+ * аспекта — через `setAspectDelta` (проверки дельты и правил), у свойства — `writeDeltaRow` с проверкой
+ * правил, пусто — снятие строки с инвариантами снимка. Откат, возвращающий конфликт или цикл (мир сдвинулся
+ * после записи), получает громкий отказ, а не нечитаемый реестр.
  */
 export async function restoreRuleDelta(
   tx: Tx,
   graphId: GraphId,
   target: DeltaRuleCarrier,
-  delta: Record<string, unknown> | null,
+  prev: Record<string, unknown> | null,
 ): Promise<void> {
   const rows = await loadRegistryRows(tx, graphId);
+  // Защита в глубину: обратную операцию пишут только для встроенной строки, но проверка — одна строка.
+  const row = (target.kind === 'aspect' ? rows.aspects : rows.properties).get(target.id);
+  if (row === undefined) {
+    throw new ExecError('NOT_FOUND', `строки ${target.id} нет в реестре`, { target });
+  }
+  refuseOwnRowDelta(row, target);
+  const current = ((await readDeltaRow(tx, graphId, target.kind, target.id)) ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const { rules: _rules, rulesDisabled: _off, ...rest } = current;
+  const back = prev as { rules?: RuleDefinition[]; rulesDisabled?: string[] } | null;
   await writeRuleDelta(
     tx,
     graphId,
     target,
-    (delta ?? {}) as { rules?: RuleDefinition[]; rulesDisabled?: string[] },
+    compactRuleDelta({
+      ...rest,
+      rules: back?.rules ?? [],
+      rulesDisabled: back?.rulesDisabled ?? [],
+    }),
     rows,
   );
 }

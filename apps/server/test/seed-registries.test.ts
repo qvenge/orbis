@@ -758,6 +758,12 @@ describe('сид шести реестров', () => {
         template: 'requires_when' as const,
         params: { property: 'orbis/due_date' },
       },
+      // Совпадение id с правилом системной РОЛИ (N2-4 фикс-раунда 3): роли — и на стороне «до».
+      {
+        id: 'dependency_acyclic',
+        template: 'requires_when' as const,
+        params: { property: 'orbis/priority' },
+      },
     ];
     try {
       await db.execute(sql`
@@ -765,6 +771,8 @@ describe('сид шести реестров', () => {
            SET rules = (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM jsonb_array_elements(rules) e
                          WHERE e->>'id' <> 'task_completed_at')
          WHERE id = 'orbis/task' AND graph_id IS NULL`);
+      await db.execute(sql`
+        UPDATE relation_role_definitions SET rules = '[]'::jsonb WHERE id = 'dependency' AND graph_id IS NULL`);
       await seedCustomAspect(owner, {
         key: 'user/own-writer',
         label: { ru: 'Свой писатель' },
@@ -776,7 +784,11 @@ describe('сид шести реестров', () => {
       expect(mine.map((c) => [c.kind, c.targetKind, c.rule])).toEqual([
         ['rule-conflict', 'aspect', undefined],
         ['rule-conflict', 'aspect', undefined],
+        ['rule-conflict', 'aspect', undefined],
       ]);
+      expect(mine.map((c) => c.detail).join('\n')).toContain(
+        'с тем же именем «dependency_acyclic»',
+      );
       expect(mine.map((c) => c.detail).join('\n')).toContain('«legacy_completed_at»');
       expect(mine.map((c) => c.detail).join('\n')).toContain('с тем же именем «task_completed_at»');
       const notes = (await db.execute(
@@ -788,7 +800,11 @@ describe('сид шести реестров', () => {
       const row = (await db.execute(
         sql`SELECT rules FROM aspect_definitions WHERE graph_id = ${owner}::uuid AND id = 'user/own-writer'`,
       )) as unknown as { rules: Array<{ id: string; enabled?: boolean }> }[];
-      expect(row[0]?.rules.map((r) => r.id)).toEqual(['legacy_completed_at', 'task_completed_at']);
+      expect(row[0]?.rules.map((r) => r.id)).toEqual([
+        'legacy_completed_at',
+        'task_completed_at',
+        'dependency_acyclic',
+      ]);
       // Повторный пересев той же системы — без новой заметки.
       const again = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
       expect(again.ownRowConflicts.filter((c) => c.targetId === 'user/own-writer')).toEqual([]);

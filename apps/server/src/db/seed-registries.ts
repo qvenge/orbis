@@ -38,6 +38,7 @@ import {
   propertyDefinitionSchema,
   type RuleDefinition,
   registryMergeNoteId,
+  ruleDefinitionSchema,
   subscriptionDefinitionSchema,
 } from '@orbis/shared';
 import { sql as drizzleSql } from 'drizzle-orm';
@@ -305,6 +306,11 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
   const subscriptionRows = await sql<Record<string, unknown>[]>`
     SELECT id, graph_id, surface, definition, module, rank
     FROM subscription_definitions WHERE graph_id IS NULL`;
+  // Роли — только правила, ради тождества id (N2-4 фикс-раунда 3): сверка «только новое» у заметки о своих
+  // строках (`reportOwnRowRuleConflicts`) обязана видеть системные правила ролей и на стороне «до», иначе
+  // совпадение id с меткой роли повторялось бы заметкой на каждом деплое.
+  const roleRows = await sql<Record<string, unknown>[]>`
+    SELECT id, rules FROM relation_role_definitions WHERE graph_id IS NULL`;
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
     const parsed = propertyDefinitionSchema.safeParse({
@@ -379,7 +385,16 @@ export async function readSystemDefinitions(sql: ISql): Promise<SystemDefinition
       rank: r.rank as number,
     });
   }
-  return { properties, aspects, contracts, subscriptions };
+  const roles = new Map<string, { rules: RuleDefinition[] }>();
+  for (const r of roleRows) {
+    const rules: RuleDefinition[] = [];
+    for (const raw of Array.isArray(r.rules) ? r.rules : []) {
+      const parsed = ruleDefinitionSchema.safeParse(raw);
+      if (parsed.success) rules.push(parsed.data);
+    }
+    roles.set(r.id as string, { rules });
+  }
+  return { properties, aspects, contracts, subscriptions, roles };
 }
 
 /** Системные определения ИЗ КОДА — сторона «после»; та самая, что упала в базу выше. */
@@ -648,7 +663,7 @@ export async function reportOwnRowRuleConflicts(
       const out = new Map<string, RegistryConflict>();
       const live = liveSystemRules(system, deltas);
       const systemIds = new Set<string>();
-      for (const dict of [system.aspects, system.properties]) {
+      for (const dict of [system.aspects, system.properties, system.roles ?? new Map()]) {
         for (const def of dict.values()) for (const r of def.rules ?? []) systemIds.add(r.id);
       }
       const carrierOf = new Map(own.map((o) => [o.rule.id, o.carrier]));
