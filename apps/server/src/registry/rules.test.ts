@@ -587,3 +587,63 @@ describe('корпус RULE_FIXTURES (§С8-25, половина «валида�
     }
   });
 });
+
+describe('E-3 (б): адрес, поглощённый слиянием, — RULE_UNKNOWN_PROPERTY с cause: merged (финал Б-2, Ф-Б2-32)', () => {
+  const SRC = 'user/e3-src';
+  const INTO = 'user/e3-into';
+  const due = BUILTIN_PROPERTY_META.find((d) => d.id === 'orbis/due_date');
+  /** Проба, где у SRC `merged_into = INTO` (строка жива, §А10-3); правило лежит на `c`. */
+  const mergedProbe = (c: RuleCarrier, rule: unknown): RegistrySnapshot => {
+    const reg = probe(TASK, c.kind === 'aspect' ? [rule] : []);
+    const row = (id: string, over: Record<string, unknown>) =>
+      ({ ...due, id, key: id, graphId: 'g', module: null, rules: [], ...over }) as never;
+    const properties = new Map(reg.properties)
+      .set(
+        SRC,
+        row(SRC, { status: 'deprecated', mergedInto: INTO, rules: c.id === SRC ? [rule] : [] }),
+      )
+      .set(INTO, row(INTO, { status: 'active', mergedInto: null }));
+    return { ...reg, properties };
+  };
+  const verdict = (c: RuleCarrier, rule: unknown) => {
+    const e = err(() =>
+      assertRule(rule, { reg: mergedProbe(c, rule), carrier: c, systemSeed: false }),
+    );
+    const d = e.details as { cause?: string; at?: string };
+    return [reasonOf(e), d.cause, d.at];
+  };
+  const FORBID_DUE = { template: 'forbidden_when', params: { property: 'orbis/due_date' } };
+  const merged = (at: string) => ['RULE_UNKNOWN_PROPERTY', 'merged', at];
+
+  test('параметр, носитель, область, when и член $touched — отказ; цель слияния — принята', () => {
+    expect(
+      verdict(TASK, { id: 'e3_param', template: 'requires_when', params: { property: SRC } }),
+    ).toEqual(merged('параметр'));
+    // Область явная (аспект) — ловит именно ступень носителя, а не умолчательную область.
+    expect(
+      verdict(
+        { kind: 'property', id: SRC },
+        { id: 'e3_carrier', ...FORBID_DUE, scope: { aspect: 'orbis/task' } },
+      ),
+    ).toEqual(merged('носитель'));
+    expect(verdict(TASK, { id: 'e3_scope', ...FORBID_DUE, scope: { property: SRC } })).toEqual(
+      merged('область'),
+    );
+    expect(verdict(TASK, { id: 'e3_when', ...FORBID_DUE, when: { has: SRC } })).toEqual(
+      merged('aspect:orbis/task.rules.e3_when.when'),
+    );
+    expect(
+      verdict(TASK, {
+        id: 'e3_touched',
+        template: 'assign_level',
+        params: {},
+        level: 'show',
+        when: { op: 'in', args: [{ const: SRC }, { ctx: '$touched' }] },
+      }),
+    ).toEqual(merged('aspect:orbis/task.rules.e3_touched.when'));
+    const live = { id: 'e3_ok', template: 'requires_when', params: { property: INTO } };
+    expect(
+      assertRule(live, { reg: mergedProbe(TASK, live), carrier: TASK, systemSeed: false }).id,
+    ).toBe('e3_ok');
+  });
+});

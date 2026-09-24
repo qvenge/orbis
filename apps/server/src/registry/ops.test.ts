@@ -5265,6 +5265,97 @@ describe('шестой род держателя: property_merge перепис�
         ?.rules.map((r) => (r.params as { property: string }).property),
     ).toEqual([source, into]);
   });
+
+  test('E-3: источник слияния — НОСИТЕЛЬ правила: отказ MERGE_SOURCE_RULES (и у выключенного), ничего не применено; снял — слилось', async () => {
+    // Умолчательная область правила — строка-носитель (§Б4-1): после слияния она осталась бы на поглощённой
+    // строке без значений, и правило не касалось бы ни одной записи (`ruleTouchesRecord`), а отчёт — «успех».
+    const { g, source, into } = await world('user/merge-carrier');
+    const RULE = {
+      id: 'src_forbids_due',
+      template: 'forbidden_when',
+      params: { property: 'orbis/due_date' },
+      when: { has: source },
+    };
+    ok(
+      await run(
+        'rule_set',
+        { target: { property: source }, rule: RULE },
+        { identity: personal(g) },
+      ),
+    );
+    const refused = err(await run('property_merge', { source, into }, { identity: personal(g) }));
+    expect([
+      refused.code,
+      (refused.details as { reason?: string }).reason,
+      (refused.details as { rules?: string[] }).rules,
+    ]).toEqual(['REGISTRY_CONFLICT', 'MERGE_SOURCE_RULES', ['src_forbids_due']]);
+    // Ничего не применено: источник не поглощён, правило на нём.
+    const src = (await regOf(g)).properties.get(source);
+    expect([src?.mergedInto, src?.rules.map((r) => r.id)]).toEqual([null, ['src_forbids_due']]);
+    // Выключенное — тоже отказ: включённое потом, оно было бы тем же мёртвым.
+    ok(
+      await run(
+        'rule_set',
+        { target: { property: source }, rule: { ...RULE, enabled: false } },
+        { identity: personal(g) },
+      ),
+    );
+    expect(
+      (
+        err(await run('property_merge', { source, into }, { identity: personal(g) })).details as {
+          reason?: string;
+        }
+      ).reason,
+    ).toBe('MERGE_SOURCE_RULES');
+    // Выход открыт: снять правило — и слияние проходит.
+    ok(
+      await run(
+        'rule_remove',
+        { target: { property: source }, rule: 'src_forbids_due' },
+        { identity: personal(g) },
+      ),
+    );
+    ok(await run('property_merge', { source, into }, { identity: personal(g) }));
+  });
+
+  test('E-3 (б): после слияния правило по адресу поглощённого — отказ RULE_UNKNOWN_PROPERTY/merged (носитель и параметр)', async () => {
+    const OWN = 'user/merge-dead-addr';
+    const { g, source, into } = await world(OWN);
+    ok(await run('property_merge', { source, into }, { identity: personal(g) }));
+    const refusal = async (
+      target: { property: string } | { aspect: string },
+      rule: Record<string, unknown>,
+    ) => {
+      const e = err(await run('rule_set', { target, rule }, { identity: personal(g) }));
+      const d = e.details as { reason?: string; cause?: string };
+      return [e.code, d.reason, d.cause];
+    };
+    // Носитель — поглощённая строка (key резолвится в неё, `resolveRuleTarget`).
+    expect(
+      await refusal(
+        { property: source },
+        { id: 'dead_carrier', template: 'forbidden_when', params: { property: 'orbis/due_date' } },
+      ),
+    ).toEqual(['VALIDATION', 'RULE_UNKNOWN_PROPERTY', 'merged']);
+    // Параметр — поглощённое: требование значения, которое записать нельзя (`DEPRECATED` стадии 2).
+    expect(
+      await refusal(
+        { aspect: OWN },
+        { id: 'dead_param', template: 'requires_when', params: { property: source } },
+      ),
+    ).toEqual(['VALIDATION', 'RULE_UNKNOWN_PROPERTY', 'merged']);
+    // Цель слияния — законна.
+    ok(
+      await run(
+        'rule_set',
+        {
+          target: { aspect: OWN },
+          rule: { id: 'live_param', template: 'requires_when', params: { property: into } },
+        },
+        { identity: personal(g) },
+      ),
+    );
+  });
 });
 
 describe('фикс-раунд 1 задачи 16: двери записи правил и сторожа снимка', () => {

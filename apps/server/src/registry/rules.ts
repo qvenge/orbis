@@ -28,6 +28,7 @@ import {
   type ExprScope,
   type ExprType,
   exprTypeOfKind,
+  propertyNamesInExpr,
   SECOND_LANGUAGE,
 } from '@orbis/shared/expr';
 import { ExecError } from '../errors';
@@ -226,6 +227,9 @@ export function assertRule(raw: unknown, scope: RuleCheckScope): RuleDefinition 
           : reg.contracts.has(s.contract);
   if (!known)
     bad('RULE_SCOPE_UNKNOWN', rule.id, `области правила ${rule.id} нет в реестре`, { scope: s });
+  // (4а) Носитель и область — не поглощённые слиянием (финал Б-2 E-3 (б), `refuseMerged`).
+  if (carrier.kind === 'property') refuseMerged(reg, rule, carrier.id, 'носитель');
+  if ('property' in s) refuseMerged(reg, rule, s.property, 'область');
   if (!CARRIERS_BY_TEMPLATE[rule.template].includes(carrier.kind)) {
     // (5) носитель
     bad(
@@ -314,12 +318,33 @@ function assertRelationReadsGuarded(rule: RuleDefinition, reg: RegistrySnapshot)
   }
 }
 
-/** Свойство реестра по id — либо `RULE_UNKNOWN_PROPERTY` с адресом. */
+/**
+ * АДРЕС, ПОГЛОЩЁННЫЙ СЛИЯНИЕМ, — ОТКАЗ (финал Б-2 E-3 (б), рулинг Ф-Б2-32); мерка и форма — `assertImplements`
+ * (`ops.ts`: `reason` + `cause: 'merged'`). Строка такого свойства жива (§А10-3), но значения переехали в
+ * `merged_into`, а запись нового отвергает стадия 2 (`DEPRECATED`): правило, названное по нему, либо не
+ * касается ни одной записи (носитель, область), либо требует значения, которое записать нельзя
+ * (`requires_when`), либо читает вечное «нет» (`when`). Молчаливого перевода на преемника нет — выбор
+ * `MERGE_ALREADY_MERGED`: владелец видит, во что слито, и называет цель сам. Снятие (`rule_remove`)
+ * валидатор не проходит — выход открыт.
+ */
+function refuseMerged(reg: RegistrySnapshot, rule: RuleDefinition, id: string, at: string): void {
+  // `?? null`: строка пробы из фикстуры может нести поле без умолчания схемы — отсутствие не есть слияние.
+  const successor = reg.properties.get(id)?.mergedInto ?? null;
+  if (successor === null) return;
+  bad(
+    'RULE_UNKNOWN_PROPERTY',
+    rule.id,
+    `свойство «${id}» поглощено слиянием (значения переехали в «${successor}») — в позиции «${at}» правила ${rule.id} назовите «${successor}»`,
+    { property: id, cause: 'merged', successor, at },
+  );
+}
+/** Свойство реестра по id — либо `RULE_UNKNOWN_PROPERTY` с адресом (нет в реестре или поглощено). */
 function propertyOf(reg: RegistrySnapshot, rule: RuleDefinition, id: string) {
   const def = reg.properties.get(id);
   if (def === undefined) {
     bad('RULE_UNKNOWN_PROPERTY', rule.id, `свойства ${id} нет в реестре`, { property: id });
   }
+  refuseMerged(reg, rule, id, 'параметр');
   return def;
 }
 function assertEnterEvent(
@@ -538,6 +563,9 @@ function checkedAt(
  */
 function assertExprTypes(rule: RuleDefinition, { reg, carrier }: RuleCheckScope): void {
   for (const site of ruleExprSitesOf(rule, reg, carrier)) {
+    // Адрес поглощённого в выражении (`{prop}`, `{has}`, база `deref`, член `$touched` — Ф-Б2-26) — отказ
+    // (финал Б-2 E-3 (б)): читать его — читать вечное «нет».
+    for (const name of propertyNamesInExpr(site.value)) refuseMerged(reg, rule, name, site.path);
     // У ОБЕИХ позиций правила `expect` — ровно один kind, и он же ожидаемый тип позиции: по нему
     // приводится корневой литерал (`{const:'0.00'}` в позиции decimal). Форма `ExprSite` при этом не
     // меняется — она общая с подписками, где `expect` перечисляет альтернативы и приведения не нужно.
