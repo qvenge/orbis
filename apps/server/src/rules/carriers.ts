@@ -64,8 +64,9 @@ function enabledCarrierRows<T extends RuleTemplate>(
  * одна, но другая — `RULE_CARRIER_REPLACED`. Запись, набора не меняющая, не отвечает за чужое состояние
  * (порча базы руками уже роняет читателей), а запись, которая из испорченного состояния (0 или 2 строки)
  * возвращает ровно одну, законна — это починка. Выключать строку уникальности конверта
- * (`duplicate_envelope`) законно: она не носитель движка (Ф-Б2-21 — идентичность конверта от `enabled` не
- * зависит), и в карте её нет.
+ * (`duplicate_envelope`) законно: она не носитель движка, и в карте её нет; идентичность конверта читается
+ * из системной строки до дельт (`envelopeIdentityOf`, `RegistrySnapshot.system`) и от отключения не
+ * зависит (Ф-Б2-21, Ф-Б2-31).
  */
 export function assertEngineCarriersKept(before: RegistrySnapshot, after: RegistrySnapshot): void {
   const identity = (r: { rule: RuleDefinition; carrier: RuleCarrier }) =>

@@ -39,6 +39,7 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { envelopeIdentityOf } from '../executor/normalize';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { approvePending } from '../policy/pending';
@@ -4764,6 +4765,13 @@ describe('строки-носители движков и граница C-6 н�
     expect(reg.aspects.get('orbis/budget')?.rules.map((r) => r.id)).not.toContain(
       'duplicate_envelope',
     );
+    // Идентичность конверта читается из системной строки (до дельт) — отключение её не отменяет (Ф-Б2-31).
+    expect(envelopeIdentityOf(reg)).toEqual([
+      'orbis/finance_category',
+      'orbis/currency',
+      'orbis/period_start',
+      'orbis/period_end',
+    ]);
   });
 
   test('C-6: ограничение владельца с has_relation по роли владельца — отказ; по системной — законно', async () => {

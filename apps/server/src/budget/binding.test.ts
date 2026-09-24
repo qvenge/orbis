@@ -915,7 +915,7 @@ describe('идентичность конверта — из параметро�
     ]);
   });
 
-  test('dropStaleCarryover следует за параметрами строки, а не за её тумблером (рулинг Ф-Б2-21)', async () => {
+  test('dropStaleCarryover следует за параметрами строки, а не за её тумблером и не за отключением владельцем (рулинги Ф-Б2-21, Ф-Б2-31)', async () => {
     const user = await freshGraph();
     const reg = await withIdentity(db, personal(user), (tx) => effectiveRegistry(tx, user));
     const budget = reg.aspects.get('orbis/budget');
@@ -960,9 +960,115 @@ describe('идентичность конверта — из параметро�
     expect(afterCurrencyChange(narrowed)).toBe('10.00'); // в наборе только период: идентичность та же
     // Выключенное правило (два конверта на комбинацию разрешены) идентичность не отменяет: перенос июля
     // при смене валюты или периода всё равно снимается — иначе лимит завышен молча (03-budget §2.6).
+    // Это форма релиза (сид с `enabled:false`); форма владельца — `deltaDisabled` ниже.
     expect(afterCurrencyChange(disabled)).toBeUndefined();
     // Строки нет вовсе — ошибка сборки (несделанный пересев), а не молчаливое «идентичности нет».
     expect(() => afterCurrencyChange(missing)).toThrow('duplicate_envelope');
+    // Реальная форма выключения (финал Б-2 E-1): `rule_remove` → `rulesDisabled` вынимает строку из
+    // ЭФФЕКТИВНОГО снимка, системный (`reg.system`, до дельт) её держит — идентичность та же, перенос снят.
+    const deltaDisabled: RegistrySnapshot = { ...missing, system: reg };
+    expect(afterCurrencyChange(deltaDisabled)).toBeUndefined();
+    // Освободившийся id на ДРУГОМ носителе идентичность не подменяет: читается носитель orbis/budget.
+    const periodStart = reg.properties.get('orbis/period_start');
+    if (periodStart === undefined) throw new Error('в снимке нет orbis/period_start');
+    const hijacked: RegistrySnapshot = {
+      ...deltaDisabled,
+      properties: new Map(reg.properties).set('orbis/period_start', {
+        ...periodStart,
+        rules: [
+          {
+            id: 'duplicate_envelope',
+            template: 'unique_among',
+            enabled: true,
+            undo: 'check',
+            scope: { aspect: 'orbis/budget' },
+            params: { properties: ['orbis/finance_category', 'orbis/period_start'] },
+          } as RuleDefinition,
+        ],
+      }),
+    };
+    expect(afterCurrencyChange(hijacked)).toBeUndefined();
+  });
+
+  test('уникальность выключена владельцем (rule_remove) — правка конверта с переносом не падает, перенос по идентичности (финал Б-2 E-1, Ф-Б2-31)', async () => {
+    const owner = await freshGraph();
+    const propsOf = async (id: string) =>
+      (await adminRows(sql`SELECT props FROM entities WHERE id = ${id}`))[0]?.props as Record<
+        string,
+        unknown
+      >;
+    // Законное выключение (§Б4-4): строка не носитель движка (Ф-Б2-24), сторожа записи её пропускают;
+    // дельта `rulesDisabled` вынимает её из ЭФФЕКТИВНОГО снимка (`effectiveRules`).
+    ok(
+      await execute(
+        db,
+        req(
+          owner,
+          'rule_remove',
+          { target: { aspect: 'orbis/budget' }, rule: 'duplicate_envelope' },
+          { source: 'ui' },
+        ),
+        { sink },
+      ),
+    );
+    const k = newId();
+    // Конверт с переносом — как его заводит правило rollover (единственный писатель `orbis/carryover`, §А2-5).
+    const env = ok(
+      await execute(
+        db,
+        req(
+          owner,
+          'entity_create',
+          {
+            title: 'Еда, август (преемник)',
+            tags: [],
+            props: budgetProps(k, '2026-08-01', '2026-08-31', { 'orbis/carryover': '500.00' }),
+            aspects: ['orbis/budget'],
+          },
+          { source: 'ui', mechanism: 'rule' },
+        ),
+        { sink },
+      ),
+    ).results[0] as WireEntity;
+    // Выключение действует: второй конверт на ту же комбинацию проходит.
+    await createEntity(owner, {
+      title: 'Еда, август (второй)',
+      props: budgetProps(k, '2026-08-01', '2026-08-31'),
+      aspects: ['orbis/budget'],
+    });
+
+    // (1) Лимит идентичность не трогает — перенос на месте (до фикса: `Error` из `envelopeIdentityOf` → 500).
+    ok(
+      await execute(
+        db,
+        req(owner, 'entity_update', {
+          id: env.id,
+          props: { 'orbis/limit': '35000.00' },
+          aspects: { attach: ['orbis/budget'] },
+        }),
+        { sink },
+      ),
+    );
+    const kept = await propsOf(env.id);
+    expect(kept['orbis/limit']).toBe('35000.00');
+    expect(kept['orbis/carryover']).toBe('500.00');
+
+    // (2) Смена периода — смена идентичности: перенос августа снимается и при выключенной уникальности
+    // (Ф-Б2-21; 03-budget §2.6 — иначе effective_limit октября завышен молча).
+    ok(
+      await execute(
+        db,
+        req(owner, 'entity_update', {
+          id: env.id,
+          props: { 'orbis/period_start': '2026-10-01', 'orbis/period_end': '2026-10-31' },
+          aspects: { attach: ['orbis/budget'] },
+        }),
+        { sink },
+      ),
+    );
+    const moved = await propsOf(env.id);
+    expect(moved['orbis/period_start']).toBe('2026-10-01');
+    expect(Object.hasOwn(moved, 'orbis/carryover')).toBe(false);
   });
 });
 

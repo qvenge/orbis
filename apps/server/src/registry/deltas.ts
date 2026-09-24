@@ -338,6 +338,8 @@ export function aspectDeltaAfterRemove(before: AspectDelta | null): AspectDelta 
  * Эффективные правила: системные ПЛЮС правила владельца МИНУС отключённые (Р-2а). Складывается ЗДЕСЬ и
  * нигде больше — движок читает `row.rules` и про дельты не знает; второй экземпляр ответил бы иначе.
  * Отключение режет ОБА источника: владелец отключает системное, пересев — своё проигравшее (`mergeRules`).
+ * Вход до дельт `applyDeltas` оставляет в `RegistrySnapshot.system` — для одного читателя, идентичности
+ * конверта (`envelopeIdentityOf`, Ф-Б2-31): отключённая здесь строка там жива.
  */
 function effectiveRules(
   base: readonly RuleDefinition[],
@@ -597,7 +599,15 @@ export function applyDeltas(
     }
   }
 
-  return { ...system, properties, aspects, contracts, subscriptions, actions };
+  return {
+    ...system,
+    properties,
+    aspects,
+    contracts,
+    subscriptions,
+    actions,
+    system: system.system ?? system,
+  };
 }
 
 /**
