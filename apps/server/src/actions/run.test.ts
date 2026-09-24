@@ -17,6 +17,7 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
+import { ExecError } from '../errors';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { classifyToolCall } from '../policy/confirmation';
 import { approvePending } from '../policy/pending';
@@ -676,4 +677,40 @@ test('скоуп worker — тоже по КАЖДОМУ шагу: второй 
     },
   });
   expect((await propsOf(plannedKept))['orbis/planned']).toBe(true);
+});
+
+test('вычисленный вход шага не проходит конверт entity_update — структурный ACTION_STEP_INPUT, а не голый Error (финал Б-2, B3 m3 (б))', async () => {
+  // `title` из `{$expr}` по свойству, которого у цели нет, вычисляется в null: `buildUpdate` бросил бы
+  // голый `Error` (программная ошибка предложения), и ход ушёл бы в 500 мимо `ExecError`.
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  const decl = synthetic({
+    steps: [
+      {
+        tool: 'entity_update',
+        input: {
+          id: { $expr: { ctx: '$self' } },
+          title: { $expr: { prop: 'orbis/counterparty' } },
+        },
+      },
+    ],
+  });
+  let caught: unknown;
+  try {
+    await withIdentity(db, personal(owner), (tx) =>
+      resolveAction(
+        tx,
+        withAction(snap, decl),
+        owner,
+        { action: decl.key, self: plannedKept },
+        ARGS,
+      ),
+    );
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBeInstanceOf(ExecError);
+  expect([(caught as ExecError).code, (caught as ExecError).details]).toMatchObject([
+    'VALIDATION',
+    { reason: 'ACTION_STEP_INPUT', action: decl.id, step: 0 },
+  ]);
 });

@@ -614,12 +614,16 @@ type Resolution =
 
 /**
  * Действие по имени его тула (§Б6-6). Перебором реестра, а не разбором строки: нормализация
- * `actionToolName` необратима («/» и «-» склеиваются в «_», докблок `tool-schema.ts`), и два разных
- * ключа могут дать одно имя. `null` — имени нет среди действий снимка: ветка отвечает `NOT_FOUND`,
+ * `actionToolName` необратима («/» и «-» склеиваются в «_», докблок `tool-schema.ts`). Два ключа с одним
+ * именем тула запись не принимает (`ACTION_KEY_TAKEN cause:'tool_name'`, `assertAction`); снятые
+ * (`deprecated`) пропускаются — тула у них нет (`activeActions`), и защёлка не даёт строке, оставшейся от
+ * прежнего реестра, перехватить имя. `null` — имени нет среди действий снимка: ветка отвечает `NOT_FOUND`,
  * а не молча пустой строкой.
  */
 function actionKeyOfTool(reg: RegistrySnapshot, name: string): string | null {
-  for (const a of reg.actions.values()) if (actionToolName(a.key) === name) return a.key;
+  for (const a of reg.actions.values()) {
+    if (a.status !== 'deprecated' && actionToolName(a.key) === name) return a.key;
+  }
   return null;
 }
 

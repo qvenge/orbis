@@ -16,6 +16,7 @@ import {
   type ActionDefinition,
   BATCH_CAP_DEFAULT,
   effectiveLabel,
+  entityUpdateExecInput,
   type GraphId,
 } from '@orbis/shared';
 import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
@@ -288,6 +289,23 @@ function buildStep(
       step: op.index,
       id: op.input.id,
     });
+  }
+  // Резолвленный вход — exec-конвертом ДО сборки (финал Б-2, B3 m3 (б)): `{$expr}` в `title`/`body`/`archived`
+  // может дать `null` или пустую строку, а `buildUpdate` на невалидной сборке бросает голый `Error` (для
+  // предложения это программная ошибка), который мимо `ExecError` уходил в 500 хода. Данные цели — не
+  // программная ошибка: отказ структурный, с шагом и issues.
+  const shaped = entityUpdateExecInput.safeParse(op.input);
+  if (!shaped.success) {
+    throw new ExecError(
+      'VALIDATION',
+      `действие «${decl.key}»: шаг ${op.index + 1} — вычисленный вход не проходит конверт entity_update`,
+      {
+        reason: 'ACTION_STEP_INPUT',
+        action: decl.id,
+        step: op.index,
+        issues: shaped.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
+      },
+    );
   }
   const built = buildUpdate(reg, op.index, op.input, current);
   if ('error' in built) {

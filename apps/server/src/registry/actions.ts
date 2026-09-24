@@ -15,6 +15,7 @@ import {
   type ActionParam,
   type ActionStep,
   actionDefinitionSchema,
+  actionToolName,
   attachAspectInput,
   attachToolName,
   bindingIndexOf,
@@ -124,6 +125,19 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
   // скалярного значения, §6.4), и сказать это нужно ЗДЕСЬ, по имени параметра, а не безымянным
   // `EXPR_TYPE` при первом `{param}` — или вовсе никогда, если параметр никто не читает.
   for (const p of decl.params) paramExprType(decl.key, p);
+  // Имя `self` у параметра занято конвертом: вход тула действия плоский, и диспатч отрезает `self` как цель
+  // (`stripSelf`, `tools/dispatch.ts`) — параметр с этим именем не доехал бы до действия никогда (финал Б-2,
+  // B3 m1 = B4 M-1). Отказ формы — по имени параметра, как у json-типа выше.
+  for (const p of decl.params) {
+    if (p.name === 'self') {
+      bad(
+        'ACTION_MALFORMED',
+        decl.key,
+        `параметр «self» действия «${decl.key}» занят конвертом тула (цель одиночного действия) — назовите иначе`,
+        { param: p.name },
+      );
+    }
+  }
 
   // (4) Namespace ключа — по тому, кто пишет. Системная строка адресуется модулем, своя —
   // `user/`: иначе владелец занял бы имя модуля, и следующий пересев столкнулся бы с ним.
@@ -175,6 +189,22 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
     bad('ACTION_KEY_TAKEN', decl.key, `ключ «${decl.key}» уже занят действием ${taken.id}`, {
       other: taken.id,
     });
+  }
+  // ИМЯ ТУЛА — тоже ключ (финал Б-2, B3 m1 = B4 M-1; образец `KEY_TAKEN cause:'tool_name'` аспектов, `ops.ts`):
+  // `actionToolName` склеивает «/» и «-» в «_», и `user/pay-rent` рядом с `user/pay_rent` дали бы один тул —
+  // `actionKeyOfTool` вызвал бы первое найденное. Сверка по ВСЕМ строкам снимка, снятые (`deprecated`) тоже:
+  // снятая строка остаётся в реестре и возвращается откатом.
+  const toolName = actionToolName(decl.key);
+  const sameTool = [...scope.reg.actions.values()].find(
+    (a) => a.id !== decl.id && actionToolName(a.key) === toolName,
+  );
+  if (sameTool !== undefined) {
+    bad(
+      'ACTION_KEY_TAKEN',
+      decl.key,
+      `ключ «${decl.key}» даёт то же имя тула ${toolName}, что действие ${sameTool.key}`,
+      { other: sameTool.id, cause: 'tool_name', tool: toolName },
+    );
   }
   // Словарь `reason` тулов действий (задача 10, Р-К-40): `ACTION_TARGET_SYSTEM` — `action_set`/`action_remove` адресуют
   // системную строку (по образцу `RULE_TARGET_SYSTEM_ROLE`); «своего действия нет» — `NOT_FOUND`. Здесь не бросается:
@@ -258,6 +288,22 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
           },
         );
       }
+    }
+    // Снятие аспекта шагом резолв не собирает (`buildUpdate`: «снятие аспекта предложением не
+    // поддерживается» — чужой язык и отказ на каждом прогоне): предусловия «аспект ещё на месте» в форме
+    // пункта по свойству нет. Отказ — на записи декларации (финал Б-2, B3 m3 (а)).
+    const detach = (step.input as { aspects?: { detach?: unknown } } | undefined)?.aspects?.detach;
+    if (
+      step.tool === 'entity_update' &&
+      detach !== undefined &&
+      !(Array.isArray(detach) && detach.length === 0)
+    ) {
+      bad(
+        'ACTION_STEP_INPUT',
+        decl.key,
+        `действие «${decl.key}»: шаг ${index + 1} снимает аспект (aspects.detach) — шаг действия аспект не снимает`,
+        { step: index, tool: step.tool, path: 'aspects.detach' },
+      );
     }
     const probe = stepTemplateSchema(step.tool).safeParse(stripMarkers(step.input, []));
     if (!probe.success) {

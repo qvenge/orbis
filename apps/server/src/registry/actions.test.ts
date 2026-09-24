@@ -597,3 +597,64 @@ test('precondition с предикатным набором или has_relation.
   // Набор СПИСКОМ — законен (им написан и сидовый plan-to-fact).
   expect(verdict(withPre({ op: 'in', args: [MM, { const: 'outflow' }] }))).toBe('ok');
 });
+
+test('имя тула — тоже ключ: «-» и «_» дают один тул → ACTION_KEY_TAKEN cause tool_name, снятые тоже; параметр self — отказ (финал Б-2, B3 m1 = B4 M-1)', () => {
+  const own = (decl: ActionDefinition, snapshot: RegistrySnapshot) => {
+    try {
+      assertAction(decl, { reg: snapshot, systemSeed: false });
+      return 'ok';
+    } catch (e) {
+      const err = e as { code?: string; details?: { reason?: string; cause?: string } };
+      return { code: String(err.code), reason: err.details?.reason, cause: err.details?.cause };
+    }
+  };
+  const mine = (key: string, over: Partial<ActionDefinition> = {}): ActionDefinition => ({
+    ...builtin(0),
+    id: key,
+    key,
+    graphId: owner,
+    module: null,
+    ...over,
+  });
+  const withRow = (row: ActionDefinition): RegistrySnapshot => ({
+    ...reg,
+    actions: new Map([...reg.actions, [row.id, row]]),
+  });
+  const TAKEN = { code: 'VALIDATION', reason: 'ACTION_KEY_TAKEN', cause: 'tool_name' };
+  expect(actionToolName('user/pay-rent')).toBe(actionToolName('user/pay_rent'));
+  expect(own(mine('user/pay_rent'), withRow(mine('user/pay-rent')))).toEqual(TAKEN);
+  // Снятая строка остаётся в реестре (её вернёт откат) — имя тула она держит.
+  expect(
+    own(mine('user/pay_rent'), withRow(mine('user/pay-rent', { status: 'deprecated' }))),
+  ).toEqual(TAKEN);
+  // Другое имя тула — законно.
+  expect(own(mine('user/pay_rent'), withRow(mine('user/pay-rent-2')))).toBe('ok');
+  // Параметр `self` занят конвертом тула (цель одиночного действия): `stripSelf` отрезал бы его.
+  const withSelf = mine('user/with_self', {
+    params: [{ name: 'self', type: { kind: 'date' }, required: true }],
+  });
+  expect(own(withSelf, reg)).toEqual({
+    code: 'VALIDATION',
+    reason: 'ACTION_MALFORMED',
+    cause: undefined,
+  });
+});
+
+test('шаг entity_update со снятием аспекта — ACTION_STEP_INPUT на записи: резолв его не собирает (финал Б-2, B3 m3 (а))', () => {
+  const detaching = (detach: unknown) => ({
+    ...builtin(0),
+    params: [],
+    steps: [
+      { tool: 'entity_update', input: { id: { $expr: { ctx: '$self' } }, aspects: { detach } } },
+    ],
+  });
+  const STEP_INPUT = { code: 'VALIDATION', reason: 'ACTION_STEP_INPUT' };
+  expect(verdict(detaching(['orbis/task']))).toEqual(STEP_INPUT);
+  // Снятие выражением отвергает раньше ступень 5 (подстановка — худший случай: могла бы назвать рутину).
+  expect(verdict(detaching({ $expr: { const: ['orbis/task'] } }))).toEqual({
+    code: 'VALIDATION',
+    reason: 'ACTION_STEP_TOOL',
+  });
+  // Пустой список снятия — не снятие.
+  expect(verdict(detaching([]))).toBe('ok');
+});
