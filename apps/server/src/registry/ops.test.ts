@@ -5343,6 +5343,23 @@ describe('фикс-раунд 1 задачи 16: двери записи пра�
         ),
       ),
     ).toEqual({ code: 'VALIDATION', reason: 'RULE_DELTA_OWN_ROW' });
+    // И у своего СВОЙСТВА (путь дельты свойства идёт мимо `setAspectDelta` — отказ обязан стоять и там).
+    expect(
+      await refusalOf(
+        inTx(g, (tx) =>
+          setRuleDelta(
+            tx,
+            g,
+            { kind: 'property', id: 'user/own-delta-mark' },
+            {
+              id: 'own_prop_rule',
+              template: 'requires_when',
+              params: { property: 'orbis/due_date' },
+            },
+          ),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_DELTA_OWN_ROW' });
     // Иконка своего аспекта настройкой — по-прежнему законна: отказ только полям правил.
     ok(
       await run(
