@@ -5847,6 +5847,43 @@ describe('фикс-раунд 4 задачи 16: откат одного пра�
     ]);
   });
 
+  test('N4-1: откат ЗАМЕНЫ своего правила (v1 → v2) возвращает v1, позднее отключение системного цело', async () => {
+    const g = await freshGraph();
+    ok(
+      await run(
+        'rule_set',
+        { target: { aspect: 'orbis/task' }, rule: AFTER_NOTE },
+        { identity: personal(g) },
+      ),
+    );
+    const v1 = ((await rowOf(g)) as { rules: unknown[] }).rules[0];
+    const replaced = ok(
+      await run(
+        'rule_set',
+        {
+          target: { aspect: 'orbis/task' },
+          rule: {
+            ...AFTER_NOTE,
+            when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    await undo(g, replaced.actionId);
+    // `rule_set` правит заменой (§С3): откат возвращает прежнюю декларацию, а не оставляет лежащую v2.
+    expect(canonicalJson(await rowOf(g))).toBe(
+      canonicalJson({ rules: [v1], rulesDisabled: ['task_completed_at'] }),
+    );
+  });
+
   test('N3-2: откат снятия настройки, чья прежняя строка несла отключение, — иконка вернулась, позднее включение цело', async () => {
     const g = await freshGraph();
     ok(

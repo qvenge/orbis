@@ -158,8 +158,9 @@ export async function createDriftConflictUnits(
       // Детерминированный ключ: пересев считает конфликты заново на каждом прогоне, и без
       // него повторный деплой той же версии клал бы вторую карточку о том же самом.
       dedupeKey: `drift-conflict:${args.deltaRowId}:${args.systemVersion}:${propertyId}:${option.mine}`,
-      // Нагрузка — ПОЛНАЯ дельта времени пересева, и «Принять» после правки владельцем откатило бы
-      // правку молча (гейт 16 m-8): свежесть строки сверяется на approve (`expected_delta`).
+      // Нагрузка несёт настройку времени пересева (без спорного варианта и полей правил), и «Принять» после
+      // правки владельцем откатило бы правку молча (гейт 16 m-8): свежесть строки сверяется на approve по
+      // ПОЛНОЙ слитой дельте (`expected_delta`).
       expectedDelta: { targetKind: 'aspect', targetId: conflict.targetId, delta: args.merged },
     });
     out.push(id);
