@@ -4,6 +4,13 @@
 // граница служебных и маска модулей проверяются на реестре, который реально живёт в проде,
 // а не на выдуманной фикстуре из одной строки. Сборка канала целиком (эффективный реестр
 // владельца, чат и рутина) — `llm/context.test.ts`.
+//
+// ПОРЯДОК ВСТАВКИ НАМЕРЕННО НЕ СОВПАДАЕТ С rank. `BUILTIN_ASPECT_DEFS` уже лежат по rank, и снимок
+// из них «как есть» делал тест порядка тавтологией: сортировку в `aspectIndexLines` можно было
+// снять, и он оставался зелёным (находка гейт-ревью I1). В проде порядок строк снимка — порядок
+// `loadRegistryRows` (ORDER BY graph_id, id), то есть алфавит id, а не rank. Поэтому встроенные
+// аспекты вставляются в ОБРАТНОМ порядке, а два своих аспекта с РАВНЫМ rank — ключом по убыванию:
+// без добора по key они вышли бы в порядке вставки.
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ACTION_DEFS,
@@ -15,11 +22,25 @@ import {
   OWNER_LOCALE,
 } from '@orbis/shared';
 import type { RegistrySnapshot } from '../registry/load';
-import { aspectIndexLines, SERVICE_BOUNDARY_PREFIX } from './aspect-index';
+import { aspectIndexLines, SERVICE_BOUNDARY_PREFIX, SERVICE_BOUNDARY_SUFFIX } from './aspect-index';
+
+/** Свой аспект графа поверх встроенной заметки: rank общий у пары, key различает. */
+function ownAspect(id: string, rank: number) {
+  const note = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/note');
+  if (note === undefined) throw new Error('нет встроенного аспекта orbis/note');
+  return { ...note, id, key: id, rank, label: { ru: `Свой ${id}` }, description: { ru: 'свой' } };
+}
+/** Равный rank, и ключ по УБЫВАНИЮ в порядке вставки — добор по key обязан их переставить. */
+const TIED = [ownAspect('own/zeta', 100), ownAspect('own/alpha', 100)];
 
 const REG: RegistrySnapshot = {
   properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
-  aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+  aspects: new Map(
+    [...BUILTIN_ASPECT_DEFS]
+      .reverse()
+      .concat(TIED)
+      .map((a) => [a.id, a]),
+  ),
   roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
   contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
   // Подписки индексу не нужны: пустой словарь — честнее, чем перекладка их строк в форму снимка.
@@ -44,6 +65,8 @@ describe('aspectIndexLines: индекс аспектов вместо ai_instru
       `- orbis/schedule — ${label('orbis/schedule')}: ${description('orbis/schedule')}`,
     );
     const ids = lines.filter((l) => l.startsWith('- ')).map((l) => l.slice(2, l.indexOf(' — ')));
+    // Страховка от тавтологии: порядок вставки снимка действительно отличается от ожидаемого
+    expect([...REG.aspects.keys()].filter((id) => ids.includes(id))).not.toEqual(ids);
     expect(ids).toEqual(
       [...REG.aspects.values()]
         .filter((a) => !a.service)
@@ -51,10 +74,21 @@ describe('aspectIndexLines: индекс аспектов вместо ai_instru
         .map((a) => a.id),
     );
   });
+  test('равный rank: добор по key, а не по порядку вставки', () => {
+    const ids = aspectIndexLines(REG, []).map((l) => l.slice(2, l.indexOf(' — ')));
+    expect(ids.indexOf('own/alpha')).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf('own/alpha') + 1).toBe(ids.indexOf('own/zeta'));
+  });
   test('служебный аспект — не строкой индекса, а в строке-границе без описания (РП-26)', () => {
     const lines = aspectIndexLines(REG, []);
     expect(lines.some((l) => l.startsWith('- orbis/agent-run '))).toBe(false);
-    expect(lines.at(-1)).toBe(`${SERVICE_BOUNDARY_PREFIX}orbis/agent-run`);
+    // Полная строка, а не префикс: граница держит и запрет записи, и способ чтения
+    expect(lines.at(-1)).toBe(
+      'Служебные — не навешивай и не правь сам: orbis/agent-run (в выдачах их нет — запрашивай явно aspect=<id>)',
+    );
+    expect(lines.at(-1)).toBe(
+      `${SERVICE_BOUNDARY_PREFIX}orbis/agent-run${SERVICE_BOUNDARY_SUFFIX}`,
+    );
   });
   test('маска модулей: аспекты выключенного модуля исчезают, прочие на месте', () => {
     const off = aspectIndexLines(REG, ['finance']);

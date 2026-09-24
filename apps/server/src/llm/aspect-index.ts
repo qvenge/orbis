@@ -25,6 +25,12 @@ import type { RegistrySnapshot } from '../registry/load';
 export const ASPECT_INDEX_HEADING = 'Аспекты (поля и правила — в описании тула attach_<аспект>):';
 /** РП-26: последняя строка индекса — граница служебных аспектов (id через запятую), без описаний. */
 export const SERVICE_BOUNDARY_PREFIX = 'Служебные — не навешивай и не правь сам: ';
+/**
+ * Хвост строки-границы: КАК служебный аспект читать. Компилятор запросов прячет служебные аспекты
+ * из выдачи, пока запрос не назовёт их явно (`query/compile-ast.ts`, §А5-6), — и без этой
+ * подсказки модель, искавшая прогоны тикета без `aspect=`, честно ответила бы «прогонов нет».
+ */
+export const SERVICE_BOUNDARY_SUFFIX = ' (в выдачах их нет — запрашивай явно aspect=<id>)';
 
 /** Чистая часть: строки индекса по снимку и маске. Порядок — rank, затем key. */
 export function aspectIndexLines(reg: RegistrySnapshot, disabled: readonly string[]): string[] {
@@ -38,15 +44,17 @@ export function aspectIndexLines(reg: RegistrySnapshot, disabled: readonly strin
       (a) =>
         `- ${a.id} — ${effectiveLabel(a.label, OWNER_LOCALE)}: ${effectiveLabel(a.description, OWNER_LOCALE)}`,
     );
-  // РП-26: служебный аспект тула не имеет, и его граница («не навешивай сам») раньше доходила до модели
-  // только текстом инструкции в секции. Индекс держит её строкой-границей — без описания и инструкции.
+  // РП-26: служебный аспект тула не имеет, и обе его границы раньше доходили до модели только текстом
+  // инструкции в секции: запрет записи («не навешивай сам») и способ чтения («в основных выдачах не
+  // показывается — запрашивай явно через aspect=…»). Индекс держит обе одной строкой-границей — без
+  // описания и инструкции: уйди хоть одна, модель либо правила бы прогон, либо не находила бы его.
   const service = [...reg.aspects.values()]
     .filter((a) => a.service && isModuleEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank)
     .map((a) => a.id);
   return service.length === 0
     ? lines
-    : [...lines, `${SERVICE_BOUNDARY_PREFIX}${service.join(', ')}`];
+    : [...lines, `${SERVICE_BOUNDARY_PREFIX}${service.join(', ')}${SERVICE_BOUNDARY_SUFFIX}`];
 }
 
 /**
