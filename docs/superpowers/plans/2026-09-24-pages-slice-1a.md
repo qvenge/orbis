@@ -622,7 +622,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" -- apps/we
   `parseQuery`, `effectiveRegistry` вместо `ASPECT_SCHEMAS`, `graph_id` вместо `owner_id`), `variants.ts`
   (`index` — ровно прод-канал `buildContext`; `catalog` — он же плюс секция каталога свойств, собранная из
   эффективного реестра по образцу старого `gen-prompt.ts` `aspectCatalogSection`), `probe-p3.ts` (флаги, коды выхода,
-  отчёт таблицей П3 §3 в `out/` вне git — путь аргументом). Сценарий `routine-propose` идёт каналом рутины. Прогон
+  отчёт таблицей П3 §3 в `out/` вне git — путь аргументом). Сценарий `routine-propose` идёт каналом чата, как в П3
+  (рулинг б' исполнения 24.09: propose-рутине прод запрещает предложения про `orbis/routine`); канал propose-рутины
+  (риск В-6) меряет отдельный диагностический сценарий вне паритета. Прогон
   шага 1 → PASS; `cd $W && bun scripts/probe-p3.ts --dry-run > …/t3dry.log 2>&1; echo EXIT=$?` → 0 (собраны оба
   варианта для 12 сценариев, модель не вызывалась).
 
