@@ -409,12 +409,22 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
     pattern: String.raw`assertEnvelopeUnique|ENVELOPE_IDENTITY`,
     exclude: [COMMENT_ONLY_LINE],
   },
-  // Оракул Overview и его tx-обёртка (задача 11). Помощники (`rawEnvelopesOfMonth`, `spentByEnvelope`)
-  // в паттерн НЕ идут: имена родовые, и после сноса они принадлежат движку подписки; носителем
-  // «второго мнения» был именно вход `computeOverview`.
+  // Оракул Overview, его tx-обёртка и оба помощника (задача 11). Помощники `rawEnvelopesOfMonth` и
+  // `spentByEnvelope` снесены вместе с оракулом, и кода с этими именами в дереве нет — они живут только в
+  // строках-комментариях, объясняющих снятое (их снимает `COMMENT_ONLY_LINE`); имя, вернувшееся в код,
+  // означает воскресшее «второе мнение» о `spent` мимо движка подписки (финал Б-2, B5 M6).
   {
     id: 'oracle-compute-overview',
-    pattern: String.raw`\bcomputeOverview\b|\boverviewOfTx\b`,
+    pattern: String.raw`\bcomputeOverview\b|\boverviewOfTx\b|\bspentByEnvelope\b|\brawEnvelopesOfMonth\b`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
+  // Снос задачи 14 и второй половины задачи 12: субъект прогона, форма правила памяти и нормализация
+  // валюты конверта переехали строками реестра (`run_subject`, `memory_rule_*`, `envelope_currency_default`).
+  // У снесённого кода не было стоящего маркера (финал Б-2, B5 M7) — имя, вернувшееся в код, означает
+  // второе описание инварианта рядом со строкой каталога.
+  {
+    id: 'shim-rules-task-12-14',
+    pattern: String.raw`\bassertRunSubject\b|\bruleViolations\b|\bMemoryRuleViolation\b|\bnormalizeEnvelopeCurrency\b|\bnormalizeEnvelopeProps\b`,
     exclude: [COMMENT_ONLY_LINE],
   },
   // УТВЕРЖДЕНИЕ, А НЕ НОСИТЕЛЬ — и поэтому БЕЗ `COMMENT_ONLY_LINE` (образец и довод —

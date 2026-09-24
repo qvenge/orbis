@@ -491,7 +491,22 @@ const SAMPLES: ReadonlyArray<{
   },
   {
     id: 'oracle-compute-overview',
-    lines: ['const o = await computeOverview(tx, owner, month, today);', 'const t = overviewOfTx;'],
+    lines: [
+      'const o = await computeOverview(tx, owner, month, today);',
+      'const t = overviewOfTx;',
+      'const s = await spentByEnvelope(tx, ids);',
+      'const r = rawEnvelopesOfMonth(tx, owner, month);',
+    ],
+  },
+  {
+    id: 'shim-rules-task-12-14',
+    lines: [
+      'assertRunSubject(state);',
+      'const v = ruleViolations(state);',
+      'type M = MemoryRuleViolation;',
+      'normalizeEnvelopeCurrency(state, cur);',
+      'normalizeEnvelopeProps(state);',
+    ],
   },
   // Два маркера-УТВЕРЖДЕНИЯ — без COMMENT_ONLY_LINE (довод — шаг 2).
   { id: 'oracle-docblock-b2', lines: ["const a = 'Р-К-5: оракул сверки живёт до Б-2';"] },
@@ -577,6 +592,7 @@ test('имена маркеров — договор: на них ссылают
     'shim-financial-invariant',
     'shim-envelope-unique',
     'oracle-compute-overview',
+    'shim-rules-task-12-14',
     'oracle-docblock-b2',
     'engine-code-docblock',
   ]);
@@ -732,12 +748,13 @@ test('носителя шима контрактов в дереве нет: ф�
  *
  * `allowed` перечисляется поимённо: зелёный ноль значим только тогда, когда регулярка вообще
  * что-то находит. Состав — по факту прогона задачи 18, а не по ожиданию плана:
- *  — тест гейта (этот файл) находится у всех шести: образцы `SAMPLES` — предмет проверки;
- *  — САМ ГЕЙТ находится у четырёх из шести: у двух маркеров-утверждений паттерн — литеральная
+ *  — тест гейта (этот файл) находится у всех семи: образцы `SAMPLES` — предмет проверки;
+ *  — САМ ГЕЙТ находится у четырёх из семи: у двух маркеров-утверждений паттерн — литеральная
  *    фраза, а у `shim-financial-invariant` и `shim-envelope-unique` альтернация начинается с
- *    голого имени без `\b`. У `shim-task-completion` и `oracle-compute-overview` перед именем в
- *    тексте паттерна стоит `\b` — буква `b` перед именем, границы слова там нет, и собственную
- *    запись гейт не находит (тот же довод, что у `legacy-grammar`);
+ *    голого имени без `\b`. У `shim-task-completion`, `oracle-compute-overview` и
+ *    `shim-rules-task-12-14` (финал Б-2, B5 M7) перед каждым именем в тексте паттерна стоит `\b` —
+ *    буква `b` перед именем, границы слова там нет, и собственную запись гейт не находит (тот же довод,
+ *    что у `legacy-grammar`); строки-комментарии докблоков снимает `COMMENT_ONLY_LINE`;
  *  — сторож вехи I (`apps/server/test/gate-b2.test.ts`) находится у двух маркеров снесённого
  *    кода вехи I: его список `GATE_B2_GREP_NAMES` — предмет греп-доказательства, и это
  *    единственная запись `ALLOWLIST`, заведённая шагом 5.
@@ -761,6 +778,7 @@ const CLOSED_AFTER_B2: ReadonlyArray<{ readonly id: string; readonly allowed: re
       allowed: ['scripts/check-legacy-form.test.ts', 'scripts/check-legacy-form.ts'],
     },
     { id: 'oracle-compute-overview', allowed: ['scripts/check-legacy-form.test.ts'] },
+    { id: 'shim-rules-task-12-14', allowed: ['scripts/check-legacy-form.test.ts'] },
     {
       id: 'oracle-docblock-b2',
       allowed: ['scripts/check-legacy-form.test.ts', 'scripts/check-legacy-form.ts'],
@@ -771,7 +789,7 @@ const CLOSED_AFTER_B2: ReadonlyArray<{ readonly id: string; readonly allowed: re
     },
   ];
 
-test('носители Б-1→Б-2 сняты: шесть маркеров дают ноль по рабочему дереву', () => {
+test('носители Б-1→Б-2 сняты: семь маркеров дают ноль по рабочему дереву', () => {
   const root = join(import.meta.dir, '..');
   for (const { id, allowed } of CLOSED_AFTER_B2) {
     const marker = LEGACY_MARKERS.find((m) => m.id === id);
