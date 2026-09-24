@@ -4,4 +4,4 @@
 // заметил бы забытой пометки. Каждая закрывающая задача УБИРАЕТ свой файл тем же коммитом, которым
 // зеленит тесты: 0e → + gate-b2 · 5 → − gate-b2 · 15 → − assign-level · 17 → − refusals.
 // Пустой список = «в репозитории не осталось ни одной пометки», то есть утверждение Б-1.
-export const PENDING_MARK_FILES: readonly string[] = ['apps/server/src/registry/refusals.test.ts'];
+export const PENDING_MARK_FILES: readonly string[] = [];

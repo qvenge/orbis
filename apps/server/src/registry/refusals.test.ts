@@ -1,8 +1,9 @@
 // apps/server/src/registry/refusals.test.ts
 // КОРПУС 21 КАНОНИЧЕСКОГО ОТКАЗА (§С1-2, приёмка §С8-24): вердикты объявлены ДАННЫМИ
 // (`test/fixtures/refusals.ts`), здесь только прогон и пины — образец разделения `EXPR_FIXTURES`.
-// ВСЕ походы — в `beforeAll`, тела тестов СИНХРОННЫ: Bun 1.2.7 игнорирует пометку ожидаемого
-// провала, если тест вышел в макрозадачу (ОВ-Б1-1), и ломаются обе половины гарантии.
+// ВСЕ походы — в `beforeAll`, тела тестов СИНХРОННЫ: строки делят один мир, и порядок «позитив →
+// отказ → порчи» задаёт сбор, а не порядок тестов (строка 10 втягивает запись в окно `refuse`-ом).
+// Пометок ожидаемого провала в файле нет: 21/21 зелены (задача 17), файл вне `PENDING_MARK_FILES`.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -81,7 +82,9 @@ describe('корпус §С1-2: состав', () => {
   test('красных строк не осталось: 21/21 закрыты валидаторами среза (§С8-24)', () => {
     // Имена строк, а не число: «ноль» без перечня не сказал бы, КАКАЯ строка осталась красной.
     // Последние шесть закрыли задачи 1 (11/19/20) и 6 (3/15/18) тем же коммитом, что положил валидатор.
-    expect(REFUSAL_ROWS.filter((r) => r.red === true).map((r) => r.row)).toEqual([]);
+    // Поля `red` у типа строки больше нет; проверка — по самим объектам: строка, протащившая пометку
+    // приведением типа, назвалась бы здесь по номеру.
+    expect(REFUSAL_ROWS.filter((r) => 'red' in r).map((r) => r.row)).toEqual([]);
   });
 
   test('мутационная проверка §С8-24: порч ровно SPOILS_CHECKED, у каждой строки — минимум одна', () => {
@@ -126,18 +129,19 @@ describe('жанр «данные» после переезда инвариан
   });
 });
 
+// Пометок в файле не осталось: 21/21 зелены. Выбор пометки по полю строки снят вместе с полем —
+// оставленный «на будущее», он прятал бы вернувшуюся красную строку за зелёным сьютом.
 for (const r of REFUSAL_ROWS) {
-  const mark = r.red === true ? test.failing : test;
   const expected = (got: string) => (r.codes.includes(got as never) ? got : r.codes.join('/'));
   describe(`строка ${r.row} (${r.codes.join('/')}, ${r.genre})`, () => {
-    mark('позитив проходит — валидатор отвергает не всё подряд', () => {
+    test('позитив проходит — валидатор отвергает не всё подряд', () => {
       taken(collected.get(r.row)?.positive);
     });
-    mark('канонический отказ даёт код строки', () => {
+    test('канонический отказ даёт код строки', () => {
       const got = String(taken(collected.get(r.row)?.refuse));
       expect(`${r.row}: ${got}`).toBe(`${r.row}: ${expected(got)}`);
     });
-    mark('каждая порча меняет вердикт на код строки', () => {
+    test('каждая порча меняет вердикт на код строки', () => {
       const cell = collected.get(r.row);
       expect(cell?.spoils.length).toBe(r.spoils.length);
       for (const [i, raw] of (cell?.spoils ?? []).entries()) {
@@ -146,7 +150,7 @@ for (const r of REFUSAL_ROWS) {
         expect(`${name}: ${got}`).toBe(`${name}: ${expected(got)}`);
       }
     });
-    mark('все имена кодов строки достижимы (отказ ∪ порчи)', () => {
+    test('все имена кодов строки достижимы (отказ ∪ порчи)', () => {
       const cell = collected.get(r.row);
       const seen = new Set([
         String(taken(cell?.refuse)),
