@@ -161,8 +161,9 @@ test('COMMENT_ONLY_LINE: строка, лишь НАЧИНАЮЩАЯСЯ как 
    * Замер ревью задачи 5 среза Б-2 (m-1): прежняя маска `^\s*(?://|\*|/\*|--).*$` снимала всякую
    * строку с таким началом — метод-генератор, код после закрытого блочного комментария и префиксный
    * декремент проходили как проза, и сторож «имени снесённого в коде нет» молчал на живом коде.
-   * Пиннятся обе стороны сужения: четыре формы кода ловятся каждая своим маркером, четыре формы
-   * прозы (включая голую звёздочку и SQL-ное `-- `) по-прежнему снимаются.
+   * Пиннятся обе стороны сужения: формы кода ловятся каждая своим маркером (включая хвост докблока
+   * с кодом на той же строке — проба M-h гейт-ревью задачи 18), формы прозы (голая звёздочка,
+   * SQL-ное `-- `, блочный комментарий и хвост докблока, закрытые в конце строки) снимаются.
    *
    * Имя старой грамматики собирается из кусков, а не пишется литералом: проба `legacy-grammar` по
    * РАБОЧЕМУ дереву ниже считает его образцы в этом файле поимённо (ровно четыре), и литерал здесь
@@ -178,6 +179,11 @@ test('COMMENT_ONLY_LINE: строка, лишь НАЧИНАЮЩАЯСЯ как 
       '--entities.meta;',
       '  *applyTaskCompletion() {},',
       `/* y */ const g = ${grammarName}(ast);`,
+      // Хвост докблока с кодом на той же строке (гейт-ревью задачи 18, проба M-h) — тоже код.
+      '/**',
+      ' * doc',
+      ' */ const r2 = relation_type;',
+      ' * текст */ const m2 = entities.meta;',
       '',
     ].join('\n'),
     'apps/server/src/prose.ts': [
@@ -185,14 +191,22 @@ test('COMMENT_ONLY_LINE: строка, лишь НАЧИНАЮЩАЯСЯ как 
       ' *',
       `/* закрыт в конце строки: relation_type и ${grammarName} */`,
       '        -- SQL внутри литерала: entities.meta',
+      '/** закрыт на своей строке: relation_type */',
+      ' * хвост докблока: entities.meta */',
       '',
     ].join('\n'),
   });
   const reports = scan(dir);
   const lines = (id: string) => [id, byId(reports, id).hits.map((h) => `${h.path}:${h.line}`)];
   expect(lines('aspects-legacy')).toEqual(['aspects-legacy', ['apps/server/src/code-like.ts:2']]);
-  expect(lines('relation-type')).toEqual(['relation-type', ['apps/server/src/code-like.ts:4']]);
-  expect(lines('entity-meta')).toEqual(['entity-meta', ['apps/server/src/code-like.ts:5']]);
+  expect(lines('relation-type')).toEqual([
+    'relation-type',
+    ['apps/server/src/code-like.ts:4', 'apps/server/src/code-like.ts:10'],
+  ]);
+  expect(lines('entity-meta')).toEqual([
+    'entity-meta',
+    ['apps/server/src/code-like.ts:5', 'apps/server/src/code-like.ts:11'],
+  ]);
   expect(lines('shim-task-completion')).toEqual([
     'shim-task-completion',
     ['apps/server/src/code-like.ts:6'],
@@ -205,7 +219,8 @@ test('сторож вехи I держит ту же маску коммента
   // Разойдись она с гейтом — два сторожа одной двери мерили бы «комментарий» по-разному, и сужение
   // одного молча не доехало бы до другого (ровно так m-1 задачи 5 жил в обоих местах).
   const src = readFileSync(join(import.meta.dir, '..', 'apps/server/test/gate-b2.test.ts'), 'utf8');
-  const copy = /^const COMMENT_ONLY_LINE = (\/.*\/);$/m.exec(src)?.[1];
+  // `\s*` после `=`: форматтер переносит длинную регулярку на следующую строку.
+  const copy = /^const COMMENT_ONLY_LINE =\s*(\/.*\/);$/m.exec(src)?.[1];
   expect(copy).toBe(COMMENT_ONLY_LINE.toString());
 });
 
