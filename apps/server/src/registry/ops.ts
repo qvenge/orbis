@@ -2188,6 +2188,14 @@ export async function setAspectDelta(
     Array.isArray(prevDelta?.rules) ? prevDelta.rules : [],
   );
 
+  // ПУСТАЯ ДЕЛЬТА = ОТСУТСТВИЕ СТРОКИ (довод `writeRuleDelta`, N3-4 фикс-раунда 4): пустышка висела бы со своим
+  // `base_version`, и пересев сливал бы её вхолостую. Так кончается откат настройки, чьи поля уже сняты
+  // другими жестами, и прямое `aspect_delta_set` с `{}`. Проверки выше прошли на той же пробе: дельта `{}`
+  // применяется как отсутствие строки. Мерка — та же сериализация, что ляжет в строку ниже.
+  if (JSON.stringify(normalized) === '{}') {
+    await removeDeltaRow(tx, graphId, 'aspect', aspectId);
+    return;
+  }
   await tx.execute(sql`
     INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
     VALUES (${newId()}::uuid, ${graphId}::uuid, 'aspect', ${aspectId},
@@ -3239,20 +3247,42 @@ export async function readRuleDelta(
 }
 
 /**
- * ВОЗВРАТ ПОЛЕЙ ПРАВИЛ ДЕЛЬТЫ К ПРЕЖНИМ — внутренняя обратная операция `rule_delta_restore` (N-1 фикс-раунда 2,
- * N2-1 фикс-раунда 3). Возвращаются ТОЛЬКО `rules`/`rulesDisabled`, и поверх ТЕКУЩЕЙ строки: подпись, иконка,
- * состав, варианты и `classMap` остаются как лежат сейчас. Правило и настройка аспекта — два разных жеста
- * (Ф-Б2-27 (г), Ф-Б2-29), и точечный откат одного (`ai.undo` по id, откат прогона рутины) не вправе стереть
- * поздний другой — например, удалить строку с иконкой, поставленной после отключения правила. Строка, где
- * после возврата не осталось ничего, снимается. Пишет тем же `writeRuleDelta`, что и прямые операции: у
- * аспекта — через `setAspectDelta` (проверки дельты и правил), у свойства — `writeDeltaRow` с проверкой
- * правил, пусто — снятие строки с инвариантами снимка. Откат, возвращающий конфликт или цикл (мир сдвинулся
- * после записи), получает громкий отказ, а не нечитаемый реестр.
+ * Записи ОДНОГО правила — к прежним, прочие записи списка — как лежат сейчас (N3-1 фикс-раунда 4). Место
+ * прежней записи сохраняется (индекс в прежнем списке, не дальше конца): возврат, повторяющий прежнюю
+ * строку, повторяет её и порядком — иначе сверка свежести единиц (`expected_delta`, `canonicalJson`) и
+ * выход «список тот же» в `assertDeltaRulesWrite` видели бы правку там, где её нет.
+ */
+function restoreEntriesOf<T>(
+  current: readonly T[],
+  prev: readonly T[],
+  mine: (x: T) => boolean,
+): T[] {
+  const rest = current.filter((x) => !mine(x));
+  const at = prev.findIndex(mine);
+  if (at < 0) return rest;
+  return [...rest.slice(0, at), ...prev.filter(mine), ...rest.slice(at)];
+}
+
+/**
+ * ВОЗВРАТ ОДНОГО ПРАВИЛА ДЕЛЬТЫ К ПРЕЖНЕМУ — внутренняя обратная операция `rule_delta_restore` (N-1 фикс-раунда 2,
+ * N2-1 фикс-раунда 3, N3-1 фикс-раунда 4). Каждая прямая операция правил трогает записи ОДНОГО id
+ * (`setRuleDelta`, `disableSystemRuleDelta`), и откат возвращает ровно их: своё правило с этим id в `rules`
+ * (прежняя декларация — на прежнее место; не было — снимается) и этот id в `rulesDisabled` (было отключено —
+ * снова отключено; не было — снято). Всё остальное — поверх ТЕКУЩЕЙ строки: прочие правила и отключения
+ * носителя, подпись, иконка, состав, варианты и `classMap` остаются как лежат сейчас. Точечный откат одного
+ * жеста (`ai.undo` по id, откат прогона рутины) не вправе стереть поздний другой: ни настройку аспекта
+ * (Ф-Б2-27 (г), Ф-Б2-29 — например, иконку, поставленную после отключения правила), ни правку ДРУГОГО
+ * правила того же носителя. `prev` — прежняя строка как лежала (`readRuleDelta`): из неё берутся только
+ * записи `ruleId` и их место. Строка, где после возврата не осталось ничего, снимается. Пишет тем же
+ * `writeRuleDelta`, что и прямые операции: у аспекта — через `setAspectDelta` (проверки дельты и правил), у
+ * свойства — `writeDeltaRow` с проверкой правил, пусто — снятие строки с инвариантами снимка. Откат,
+ * возвращающий конфликт или цикл (мир сдвинулся после записи), получает громкий отказ, а не нечитаемый реестр.
  */
 export async function restoreRuleDelta(
   tx: Tx,
   graphId: GraphId,
   target: DeltaRuleCarrier,
+  ruleId: string,
   prev: Record<string, unknown> | null,
 ): Promise<void> {
   const rows = await loadRegistryRows(tx, graphId);
@@ -3262,20 +3292,23 @@ export async function restoreRuleDelta(
     throw new ExecError('NOT_FOUND', `строки ${target.id} нет в реестре`, { target });
   }
   refuseOwnRowDelta(row, target);
-  const current = ((await readDeltaRow(tx, graphId, target.kind, target.id)) ?? {}) as Record<
-    string,
-    unknown
-  >;
-  const { rules: _rules, rulesDisabled: _off, ...rest } = current;
-  const back = prev as { rules?: RuleDefinition[]; rulesDisabled?: string[] } | null;
+  const current = ((await readDeltaRow(tx, graphId, target.kind, target.id)) ?? {}) as {
+    rules?: RuleDefinition[];
+    rulesDisabled?: string[];
+  };
+  const back = (prev ?? {}) as { rules?: RuleDefinition[]; rulesDisabled?: string[] };
   await writeRuleDelta(
     tx,
     graphId,
     target,
     compactRuleDelta({
-      ...rest,
-      rules: back?.rules ?? [],
-      rulesDisabled: back?.rulesDisabled ?? [],
+      ...current,
+      rules: restoreEntriesOf(current.rules ?? [], back.rules ?? [], (r) => r.id === ruleId),
+      rulesDisabled: restoreEntriesOf(
+        current.rulesDisabled ?? [],
+        back.rulesDisabled ?? [],
+        (id) => id === ruleId,
+      ),
     }),
     rows,
   );

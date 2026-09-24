@@ -6,10 +6,12 @@
 // 42501 ещё до всякой политики.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
+  BUILTIN_RULES_BY_CARRIER,
   canonicalJson,
   type GraphId,
   hasRegistryDrift,
   newId,
+  type RuleDefinitionInput,
   ruleDefinitionSchema,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
@@ -740,6 +742,40 @@ describe('конфликты пересева становятся единиц�
     expect(reg.aspects.get('orbis/note')?.rules.map((r) => r.id)).toEqual([]);
   });
 
+  test('N3-1: «Принять» единицы на ОДНОМ носителе → откат пачки — строка ровно как до «Принять» (каждый шаг — своим id)', async () => {
+    const graph = await freshGraph();
+    // Декларация — в форме хранения (со значениями по умолчанию), как её пишет `setAspectDelta`.
+    const D0 = { rules: [ruleDefinitionSchema.parse(MY_RULE)], rulesDisabled: ['my_completed_at'] };
+    await putDelta(graph, 'aspect', 'orbis/task', D0);
+    const ids = await withIdentity(db, personal(graph), (tx) =>
+      createDriftConflictUnits(tx, {
+        graphId: graph,
+        systemVersion: 7,
+        deltaRowId: newId(),
+        merged: D0 as never,
+        conflicts: [RULE_CONFLICT],
+      }),
+    );
+    const approved = await approvePending(db, {
+      identity: personal(graph),
+      pendingId: ids[0] as string,
+    });
+    if (!approved.ok) throw new Error(`«Принять» не прошло: ${approved.error.message}`);
+    const undone = await undoAction(db, { identity: personal(graph), actionId: approved.actionId });
+    if (!undone.ok) throw new Error(`откат не прошёл: ${undone.error.message}`);
+    const rows = (await admin.db.execute(
+      sql`SELECT delta FROM registry_deltas WHERE graph_id = ${graph}::uuid
+           AND target_kind = 'aspect' AND target_id = 'orbis/task'`,
+    )) as unknown as Array<{ delta: unknown }>;
+    // Оба шага пачки — на `orbis/task`: откат `rule_set` возвращает записи `my_completed_at`, откат
+    // `rule_remove` — записи `task_completed_at`, и ни один не трогает записей другого.
+    expect(canonicalJson(rows[0]?.delta)).toBe(canonicalJson(D0));
+    const reg = await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
+    const live = reg.aspects.get('orbis/task')?.rules.map((r) => r.id) ?? [];
+    expect(live).toContain('task_completed_at');
+    expect(live).not.toContain('my_completed_at');
+  });
+
   test('m-B: свежесть единицы ВАРИАНТА — правка настройки после пересева гасит её «Устарело»', async () => {
     const graph = await freshGraph();
     const merged = {
@@ -782,5 +818,72 @@ describe('конфликты пересева становятся единиц�
     expect(refused.error.details).toMatchObject({ reason: 'REGISTRY_UNIT_STALE' });
     const reg = await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
     expect(reg.aspects.get('orbis/task')?.viewConfig.icon).toBe('📌');
+  });
+
+  test('N3-5: нагрузка единицы ВАРИАНТА не называет поля правил — откат «Принять» не трогает поздней правки правил', async () => {
+    const graph = await freshGraph();
+    // Строка пересева несёт и варианты, и отключение системного правила — поля правил ей не принадлежат.
+    const merged = {
+      selectOptions: {
+        'orbis/priority': {
+          add: [
+            { key: 'urgent3', label: { ru: 'Срочно' }, rank: 9 },
+            { key: 'other3', label: { ru: 'Другое' }, rank: 10 },
+          ],
+        },
+      },
+      rulesDisabled: ['task_completed_at'],
+    };
+    await putDelta(graph, 'aspect', 'orbis/task', merged);
+    const ids = await withIdentity(db, personal(graph), (tx) =>
+      createDriftConflictUnits(tx, {
+        graphId: graph,
+        systemVersion: 7,
+        deltaRowId: newId(),
+        merged: merged as never,
+        conflicts: [
+          {
+            kind: 'variant-merge',
+            targetKind: 'aspect',
+            targetId: 'orbis/task',
+            propertyId: 'orbis/priority',
+            option: { mine: 'urgent3', theirs: 'high' },
+            detail: '',
+          },
+        ],
+      }),
+    );
+    const { pending } = await unitOf(graph, ids[0] as string);
+    const payload = (pending.input as { delta: Record<string, unknown> }).delta;
+    expect(Object.keys(payload)).not.toContain('rules');
+    expect(Object.keys(payload)).not.toContain('rulesDisabled');
+    const approved = await approvePending(db, {
+      identity: personal(graph),
+      pendingId: ids[0] as string,
+    });
+    if (!approved.ok) throw new Error(`«Принять» не прошло: ${approved.error.message}`);
+    const taskRules = async () =>
+      (await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph))).aspects
+        .get('orbis/task')
+        ?.rules.map((r) => r.id) ?? [];
+    // Перенос `aspectDeltaAfterSet` сохранил отключение из строки.
+    expect(await taskRules()).not.toContain('task_completed_at');
+    // Позже владелец включает системное правило обратно — его же декларацией.
+    const decl = BUILTIN_RULES_BY_CARRIER['orbis/task']?.find((r) => r.id === 'task_completed_at');
+    await withIdentity(db, personal(graph), (tx) =>
+      setRuleDelta(tx, graph, { kind: 'aspect', id: 'orbis/task' }, decl as RuleDefinitionInput),
+    );
+    expect(await taskRules()).toContain('task_completed_at');
+    const undone = await undoAction(db, { identity: personal(graph), actionId: approved.actionId });
+    if (!undone.ok) throw new Error(`откат не прошёл: ${undone.error.message}`);
+    // Прежде нагрузка называла `rulesDisabled`, и откат отключал правило снова.
+    expect(await taskRules()).toContain('task_completed_at');
+    const rows = (await admin.db.execute(
+      sql`SELECT delta FROM registry_deltas WHERE graph_id = ${graph}::uuid
+           AND target_kind = 'aspect' AND target_id = 'orbis/task'`,
+    )) as unknown as Array<{ delta: unknown }>;
+    expect(canonicalJson(rows[0]?.delta)).toBe(
+      canonicalJson({ selectOptions: merged.selectOptions }),
+    );
   });
 });

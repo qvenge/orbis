@@ -83,12 +83,12 @@ export function driftConflictDecidable(conflicts: readonly RegistryConflict[]): 
  * найдёт (`base_version` переехал), и конфликт замолчит навсегда. Тот же довод, по которому
  * рядом пишется системная заметка (`db/seed-registries.ts`).
  *
- * Нагрузка единицы варианта — `aspect_delta_set` с ТОЙ ЖЕ дельтой, минус спорный вариант; единицы
- * конфликта правил — пачка двух тулов правил (`createRuleConflictUnit`). Одобрение идёт обычным
- * конвейером (`approvePending` → `execute`), то есть проходит проверку применимости и поднимает
- * версию реестра, как любая другая правка. Второго пути записи дельты «для конфликтов» здесь нет
- * намеренно. Обе единицы несут ожидаемую строку дельты (`expected_delta`): правка владельца после
- * пересева гасит единицу «Устарело», а не откатывается ею молча (Fable I-3, гейт m-8).
+ * Нагрузка единицы варианта — `aspect_delta_set` с ТОЙ ЖЕ дельтой, минус спорный вариант и поля правил (их
+ * переносит `aspectDeltaAfterSet`); единицы конфликта правил — пачка двух тулов правил
+ * (`createRuleConflictUnit`). Одобрение идёт обычным конвейером (`approvePending` → `execute`), то есть
+ * проходит проверку применимости и поднимает версию реестра, как любая другая правка. Второго пути записи
+ * дельты «для конфликтов» здесь нет намеренно. Обе единицы несут ожидаемую строку дельты (`expected_delta`):
+ * правка владельца после пересева гасит единицу «Устарело», а не откатывается ею молча (Fable I-3, гейт m-8).
  */
 export async function createDriftConflictUnits(
   tx: Tx,
@@ -129,8 +129,13 @@ export async function createDriftConflictUnits(
     const keptClasses = (classMap[propertyId] ?? []).filter((e) => e.variant !== option.mine);
     if (keptClasses.length > 0) classMap[propertyId] = keptClasses;
     else delete classMap[propertyId];
+    // ПОЛЯ ПРАВИЛ НАГРУЗКА НЕ НАЗЫВАЕТ (N3-5 фикс-раунда 4): единица решает вариант, а не правила. На approve их
+    // переносит из строки `aspectDeltaAfterSet` (строка та же, что `merged`, — её сверяет `expected_delta`), а
+    // названные они ушли бы и в обратную операцию (`settingsInverse`): точечный откат «Принять» вернул бы поля
+    // правил ко времени пересева и молча переписал бы позднюю правку правил того же аспекта.
+    const { rules: _rules, rulesDisabled: _rulesDisabled, ...settings } = merged;
     const delta: AspectDelta = {
-      ...merged,
+      ...settings,
       ...(Object.keys(selectOptions).length > 0 ? { selectOptions } : { selectOptions: undefined }),
       ...(Object.keys(classMap).length > 0 ? { classMap } : { classMap: undefined }),
     };

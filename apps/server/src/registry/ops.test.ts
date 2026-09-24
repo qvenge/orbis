@@ -12,6 +12,7 @@ import {
   BUILTIN_RULES_BY_CARRIER,
   BUILTIN_SUBSCRIPTION_DEFS,
   type BudgetSubscription,
+  canonicalJson,
   newId,
   type RuleDefinitionInput,
   rowProjectionOf,
@@ -5522,7 +5523,7 @@ describe('фикс-раунд 1 задачи 16: снятие настройки
                      WHERE graph_id = ${g}::uuid AND target_kind = 'aspect' AND target_id = 'orbis/budget'`),
     )) as unknown as Array<{ delta: unknown }>;
     expect(row[0]?.delta).toEqual({ rulesDisabled: ['envelope_currency_default'] });
-    // Откат снятия возвращает настройку целиком (обратное — прежняя дельта).
+    // Откат снятия возвращает настройку (обратное — прежняя дельта без полей правил, `settingsInverse`).
     expect((await undoAction(db, { identity: personal(g), actionId: removed.actionId })).ok).toBe(
       true,
     );
@@ -5731,5 +5732,182 @@ describe('фикс-раунд 3 задачи 16: откат правила и о
       true,
     );
     expect(await rowOf(g)).toEqual({ icon: '🧭', rulesDisabled: ['task_completed_at'] });
+  });
+});
+
+describe('фикс-раунд 4 задачи 16: откат одного правила не задевает других правил носителя (N3-1…N3-4)', () => {
+  const rowOf = async (g: GraphId) =>
+    (
+      (await withIdentity(db, personal(g), (tx) =>
+        tx.execute(sql`SELECT delta FROM registry_deltas
+                       WHERE graph_id = ${g}::uuid AND target_kind = 'aspect' AND target_id = 'orbis/task'`),
+      )) as unknown as Array<{ delta: unknown }>
+    )[0]?.delta ?? null;
+  const taskRules = async (g: GraphId) =>
+    (await withIdentity(db, personal(g), (tx) => effectiveRegistry(tx, g))).aspects
+      .get('orbis/task')
+      ?.rules.map((r) => r.id) ?? [];
+  const deltaRows = async (g: GraphId) =>
+    (
+      (await withIdentity(db, personal(g), (tx) =>
+        tx.execute(sql`SELECT count(*)::int AS n FROM registry_deltas WHERE graph_id = ${g}::uuid`),
+      )) as unknown as Array<{ n: number }>
+    )[0]?.n;
+  const undo = async (g: GraphId, actionId: string) => {
+    const u = await undoAction(db, { identity: personal(g), actionId });
+    if (!u.ok) throw new Error(`откат не прошёл: ${u.error.code}: ${u.error.message}`);
+  };
+  const AFTER_NOTE = {
+    id: 'after_note',
+    template: 'requires_when' as const,
+    params: { property: 'orbis/due_date' },
+  };
+  const AFTER_PRIORITY = {
+    id: 'after_priority',
+    template: 'requires_when' as const,
+    params: { property: 'orbis/priority' },
+  };
+  const TCA = BUILTIN_RULES_BY_CARRIER['orbis/task']?.find(
+    (r) => r.id === 'task_completed_at',
+  ) as RuleDefinitionInput;
+
+  test('P3: точечный откат rule_remove системного после позднего rule_set СВОЕГО на той же строке — своё цело; затем откат своего — системное включено', async () => {
+    const g = await freshGraph();
+    const off = ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    const mine = ok(
+      await run(
+        'rule_set',
+        { target: { aspect: 'orbis/task' }, rule: AFTER_NOTE },
+        { identity: personal(g) },
+      ),
+    );
+    await undo(g, off.actionId);
+    // Прежде откат возвращал поля правил целиком — строка снималась вместе с `after_note` (проба P3).
+    expect(await rowOf(g)).toEqual({ rules: [expect.objectContaining({ id: 'after_note' })] });
+    expect(await taskRules(g)).toEqual(expect.arrayContaining(['task_completed_at', 'after_note']));
+    await undo(g, mine.actionId);
+    // …а откат своего снова отключал системное, чьё отключение уже отменено.
+    expect(await rowOf(g)).toBeNull();
+    expect(await taskRules(g)).toContain('task_completed_at');
+    expect(await taskRules(g)).not.toContain('after_note');
+  });
+
+  test('обратный порядок: откат старого rule_set своего не включает позднее отключённое системное', async () => {
+    const g = await freshGraph();
+    const mine = ok(
+      await run(
+        'rule_set',
+        { target: { aspect: 'orbis/task' }, rule: AFTER_NOTE },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    await undo(g, mine.actionId);
+    expect(await rowOf(g)).toEqual({ rulesDisabled: ['task_completed_at'] });
+    expect(await taskRules(g)).not.toContain('task_completed_at');
+    expect(await taskRules(g)).not.toContain('after_note');
+  });
+
+  test('откат снятия своего правила возвращает его на прежнее место: строка повторяет прежнюю и порядком', async () => {
+    const g = await freshGraph();
+    for (const rule of [AFTER_NOTE, AFTER_PRIORITY]) {
+      ok(
+        await run(
+          'rule_set',
+          { target: { aspect: 'orbis/task' }, rule },
+          { identity: personal(g) },
+        ),
+      );
+    }
+    const before = await rowOf(g);
+    const removed = ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'after_note' },
+        { identity: personal(g) },
+      ),
+    );
+    await undo(g, removed.actionId);
+    expect(canonicalJson(await rowOf(g))).toBe(canonicalJson(before));
+    expect(((await rowOf(g)) as { rules: Array<{ id: string }> }).rules.map((r) => r.id)).toEqual([
+      'after_note',
+      'after_priority',
+    ]);
+  });
+
+  test('N3-2: откат снятия настройки, чья прежняя строка несла отключение, — иконка вернулась, позднее включение цело', async () => {
+    const g = await freshGraph();
+    ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '🧭' } },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        { identity: personal(g) },
+      ),
+    );
+    const removal = ok(
+      await run('aspect_delta_remove', { aspect: 'orbis/task' }, { identity: personal(g) }),
+    );
+    expect(await rowOf(g)).toEqual({ rulesDisabled: ['task_completed_at'] });
+    // Включить обратно — `rule_set` системного правила его же декларацией; строка пустеет и снимается.
+    ok(
+      await run(
+        'rule_set',
+        { target: { aspect: 'orbis/task' }, rule: TCA },
+        { identity: personal(g) },
+      ),
+    );
+    expect(await rowOf(g)).toBeNull();
+    await undo(g, removal.actionId);
+    // Обратная операция в форме «прежняя дельта целиком» вернула бы и `rulesDisabled`.
+    expect(await rowOf(g)).toEqual({ icon: '🧭' });
+    expect(await taskRules(g)).toContain('task_completed_at');
+  });
+
+  test('N3-4: откат настройки, чьи прочие поля сняты другими жестами, снимает пустую строку, а не оставляет {}', async () => {
+    const g = await freshGraph();
+    ok(
+      await run(
+        'rule_set',
+        { target: { aspect: 'orbis/task' }, rule: AFTER_NOTE },
+        { identity: personal(g) },
+      ),
+    );
+    const settings = ok(
+      await run(
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { icon: '📌' } },
+        { identity: personal(g) },
+      ),
+    );
+    ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'after_note' },
+        { identity: personal(g) },
+      ),
+    );
+    expect(await rowOf(g)).toEqual({ icon: '📌' });
+    await undo(g, settings.actionId);
+    expect(await rowOf(g)).toBeNull();
+    expect(await deltaRows(g)).toBe(0);
   });
 });
