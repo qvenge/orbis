@@ -935,7 +935,8 @@ function numericRef(propertyId: string, ctx: CompileCtx, op: 'sum' | 'latest'): 
  * `currencies` — различные непустые значения валюты у суммированных записей, тем же проходом.
  * Сумма по записям в разных валютах бессмысленна, и плитка обязана это показать, а не сложить
  * рубли с долларами. Прежние вызывающие (`user_query`, цели) параметра не передают — их SQL
- * побайтно прежний (эталон `test/golden/query-sql.json`).
+ * побайтно прежний; держит это точный пин строки в `compile-ast.test.ts` («sum без свойства
+ * валюты…»). Эталон `test/golden/query-sql.json` агрегатов не покрывает и гарантией не служит.
  */
 export function compileSumAst(
   ast: QueryAst,

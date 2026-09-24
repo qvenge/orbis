@@ -582,6 +582,20 @@ describe('агрегаты: тип свойства решает, можно л�
     expect(latest).toContain(`props->>'orbis/amount' IS NOT NULL`);
   });
 
+  test('sum без свойства валюты — SQL прежних вызывающих (user_query, цели) дословно; с валютой — третья колонка', () => {
+    // Пин ТОЧНЫЙ, а не `toContain`: параметр валюты заведён ради плитки страницы (РП-20), и
+    // эталон `test/golden/query-sql.json` агрегатов не покрывает — без этой строки валюта,
+    // подставленная всем вызывающим по умолчанию, прошла бы незамеченной.
+    const legacy = dialect.sqlToQuery(compileSumAst(ast, 'orbis/amount', CTX));
+    expect(legacy.sql).toBe(
+      "SELECT count(*) AS count, sum((props->>'orbis/amount')::numeric)::text AS sum FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND aspects @> ARRAY['orbis/financial']",
+    );
+    const tile = dialect.sqlToQuery(compileSumAst(ast, 'orbis/amount', CTX, 'orbis/currency')).sql;
+    expect(tile).toContain(
+      `coalesce(array_agg(DISTINCT props->>'orbis/currency' ORDER BY props->>'orbis/currency') FILTER (WHERE props->>'orbis/currency' IS NOT NULL), '{}') AS currencies`,
+    );
+  });
+
   test('нечисловое свойство, core-проекция и неизвестный id — отказ с причиной FIELD', () => {
     expect(refusal(() => compileSumAst(ast, 'orbis/counterparty', CTX)).reason).toBe('FIELD');
     expect(refusal(() => compileLatestAst(ast, 'orbis/aliases', CTX)).reason).toBe('FIELD');

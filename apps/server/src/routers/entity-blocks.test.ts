@@ -2,7 +2,14 @@
 // `entity.blocks` (срез 1а, спека §6.3): пачка данных блоков страницы одним вызовом. Против живой
 // БД через createCallerFactory — как в бою: RLS, материализация повторов, SAVEPOINT на блок.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { BLOCKS_BATCH_CAP, type BlockResult, type GraphId, newId } from '@orbis/shared';
+import {
+  addDays,
+  BLOCKS_BATCH_CAP,
+  type BlockResult,
+  type GraphId,
+  newId,
+  recurringInstanceId,
+} from '@orbis/shared';
 import { EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
 import { TRPCError } from '@trpc/server';
 import {
@@ -17,8 +24,10 @@ import {
 import type { Db } from '../db/client';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { DEFAULT_TIMEZONE, todayInTimeZone } from '../query/context';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
+import { EXECUTION_FAILED_MESSAGE } from './entity-blocks';
 
 requireEnv();
 
@@ -285,6 +294,56 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     expect(windowed.transactions()).toBe(single.transactions());
   });
 
+  test('одна материализация по ОБЪЕДИНЕНИЮ окон: экземпляр повтора из дальнего окна есть в строках своего блока', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    // Граф без настроек — таймзона по умолчанию; «сегодня» сервера считается в ней же.
+    const today = todayInTimeZone(DEFAULT_TIMEZONE);
+    const template = await caller.entity.create({
+      input: {
+        title: 'Ежедневная планёрка',
+        tags: [],
+        props: {
+          'orbis/start_at': `${today}T09:00:00+03:00`,
+          'orbis/timezone': DEFAULT_TIMEZONE,
+          'orbis/recurrence': { freq: 'daily', interval: 1 },
+        },
+        aspects: ['orbis/schedule'],
+      },
+      source: 'ui',
+    });
+    // Окна двух блоков НЕ пересекаются: [сегодня] и [сегодня+8 … горизонт]. Материализация по
+    // одному первому окну оставила бы дальний блок без экземпляров.
+    const { results } = await caller.entity.blocks({
+      blocks: [
+        { key: 'today', text: 'aspect=orbis/schedule, orbis/start_at=today' },
+        { key: 'later', text: 'aspect=orbis/schedule, orbis/start_at=after_7d' },
+      ],
+    });
+    const farInstance = recurringInstanceId(template.id, addDays(today, 10));
+    expect(asKind(results.later, 'rows').rows.map((r) => r.id)).toContain(farInstance);
+    const nearInstance = recurringInstanceId(template.id, today);
+    expect(asKind(results.today, 'rows').rows.map((r) => r.id)).toContain(nearInstance);
+  });
+
+  test('sum по нечисловому свойству (sum:orbis/title) — отказ РАЗБОРА своего блока (TYPE с позицией), соседи целы', async () => {
+    // Вход `blocks` — только текст, и разбор проверяет числовой тип агрегата сам (задача 6):
+    // до компилятора (`numericRef`, отказ FIELD) такой текст не доходит, путь «дерево мимо
+    // разбора» у этой ручки недостижим.
+    const user = await freshGraph();
+    await seedWorld(user);
+    const { results } = await callerFor(user).entity.blocks({
+      blocks: [
+        { key: 'titleSum', text: 'aspect=orbis/task, display=tile, aggregate=sum:orbis/title' },
+        { key: 'fine', text: 'aspect=orbis/task, display=tile, aggregate=count' },
+      ],
+    });
+    const err = asError(results.titleSum);
+    expect(err.code).toBe('TYPE');
+    expect(typeof err.position).toBe('number');
+    expect(results.fine).toEqual({ ok: true, kind: 'count', count: 7 });
+  });
+
   test('ошибка разбора — отказ своего блока с кодом и позицией, без SQL; соседи целы', async () => {
     const user = await freshGraph();
     await seedWorld(user);
@@ -328,6 +387,10 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
     });
     const err = asError(results.broken);
     expect(err.code).toBe('EXECUTION');
+    // Текст базы наружу не идёт: сообщение — одна константа, без следов каста и драйвера.
+    expect(err.message).toBe(EXECUTION_FAILED_MESSAGE);
+    expect(err.message).not.toContain('numeric');
+    expect(err.message).not.toContain('invalid input');
     expect(asKind(results.before, 'rows').rows).toHaveLength(1);
     expect(asKind(results.after, 'rows').rows).toHaveLength(3);
   });
@@ -411,6 +474,21 @@ describe('entity.blocks — пачка данных блоков (§6.3)', () =>
       }),
     );
     expect(err.code).toBe('BAD_REQUEST');
+  });
+
+  test('агент по PAT читает блоки законно: мутация по транспорту, чтение по сути (РП-8)', async () => {
+    const user = await freshGraph();
+    await seedWorld(user);
+    const agent = createCaller({
+      identity: personal(user),
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+    });
+    const { results } = await agent.entity.blocks({
+      blocks: [{ key: 'n', text: 'aspect=orbis/task, display=tile, aggregate=count' }],
+    });
+    expect(results.n).toEqual({ ok: true, kind: 'count', count: 7 });
   });
 
   test('права: чужая запись в thisEntityId под RLS не видна — пустые строки, а не чужие данные', async () => {

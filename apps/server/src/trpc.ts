@@ -121,15 +121,20 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   return next({ ctx: { identity: ctx.identity } });
 });
 
-// §9.3 (Task 3, ужесточено Task 10b): ownerOnly гейтит ЛЮБУЮ мутацию состояния через
+// §9.3 (Task 3, ужесточено Task 10b): ownerOnly гейтит ЛЮБУЮ мутацию СОСТОЯНИЯ через
 // tRPC — создание/правку сущностей, связи, запись тредов/сообщений чата, Undo, а также
 // управление аккаунтом (экспорт, настройки, онбординг-сид, approve/reject §7.10).
 // Мутационная поверхность tRPC — поверхность ВЛАДЕЛЬЦА (веб-UI); единственный путь
 // мутаций PAT-агента — /mcp → dispatchTool → политика подтверждений §7.10 → executor.
 // Без этого гейта агент мутировал граф напрямую через tRPC в обход подтверждений,
 // и журнал писал ложную атрибуцию owner/ui — проверено вживую до фикса. Read-пути
-// (getSettings, entity.get/query/count, relation.listFor, chat.listMessages) остаются
-// на protectedProcedure: агент читает легитимно, RLS скоупит владельцем. Прежний
+// (getSettings, entity.get/query/count/blocks, relation.listFor, chat.listMessages) остаются
+// на protectedProcedure: агент читает легитимно, RLS скоупит владельцем.
+// ИСКЛЮЧЕНИЕ «мутация по транспорту, чтение по сути» (РП-8): `entity.blocks` объявлена
+// мутацией только ради POST — тридцать текстов запросов во входе GET в URL не помещаются. Своих
+// записей в граф у неё нет: пишет только материализация повторов, и ровно ту же делает чтение
+// `entity.query`. Права — как у `entity.query` плюс RLS, поэтому она на protectedProcedure и
+// агенту по PAT доступна законно. Прежний
 // комментарий здесь перечислял лишь «операции владельца аккаунта» и тем ложно
 // подразумевал, что политику §7.10 агент другим транспортом не обойдёт.
 export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {

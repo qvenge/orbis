@@ -36,6 +36,15 @@ import { toWireEntityFromSql } from '../wire';
  */
 const CURRENCY_PROPERTY = 'orbis/currency';
 
+/**
+ * Текст отказа исполнения блока — ОДИН на все падения базы. Сообщение Postgres наружу не идёт:
+ * оно про колонки, касты и параметры запроса (`invalid input syntax for type numeric…`), то есть
+ * про устройство хранения, а не про то, что владелец может поправить. Подробности — в журнале
+ * сервера (`console.error` ниже).
+ */
+export const EXECUTION_FAILED_MESSAGE =
+  'запрос блока не выполнился в базе — вероятно, у части записей значение свойства не той формы';
+
 type Window = { from: string; to: string };
 
 /** Скомпилированный блок: SQL готов ДО первого обращения к базе. */
@@ -201,8 +210,7 @@ async function executeAll(tx: Tx, prepared: Prepared[]): Promise<EntityBlocksRes
           ok: false,
           error: {
             code: 'EXECUTION',
-            message:
-              'запрос блока не выполнился в базе — вероятно, у части записей значение свойства не той формы',
+            message: EXECUTION_FAILED_MESSAGE,
           },
         },
       ]);

@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   type GraphId,
+  globalThreadId,
   PAGE_ASPECT,
   TEMPLATE_FOR_PROPERTY,
   TEMPLATE_WINS_OVER_PROPERTY,
@@ -11,11 +12,12 @@ import {
 } from '@orbis/shared';
 import { canonicalizeBody, parseBody } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
-import { eq } from 'drizzle-orm';
-import { appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import { eq, sql } from 'drizzle-orm';
+import { adminDb, appDb, freshGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { entityVersions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
+import type { Card } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
 
 requireEnv();
@@ -88,6 +90,22 @@ async function pinnedBodies(user: GraphId, entityId: string): Promise<string[]> 
       .where(eq(entityVersions.entityId, entityId)),
   );
   return rows.map((r) => r.body);
+}
+
+/** Карточки заданного вида из глобального треда владельца (админ-DSN — как `ai/escalation.test.ts`). */
+async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = await admin.execute(
+      sql`SELECT metadata FROM chat_messages WHERE thread_id = ${globalThreadId(user)}
+          ORDER BY created_at, id`,
+    );
+    return [...rows]
+      .flatMap((r) => (r.metadata as { cards?: Card[] }).cards ?? [])
+      .filter((c) => c.kind === kind);
+  } finally {
+    await adminClient.end();
+  }
 }
 
 describe('entity.updateBatch — пачка правок, один Undo (§4.3, §8.4)', () => {
@@ -190,6 +208,68 @@ describe('entity.updateBatch — пачка правок, один Undo (§4.3, 
     // Первая операция пачки законна сама по себе — и всё равно не легла.
     expect(await winsOver(user, a)).toBeUndefined();
     expect(await winsOver(user, b)).toBeUndefined();
+  });
+
+  test('эскалация категорий: второй одинаковый перенос категории пачкой — карточка предложения правила (§7.8)', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const category = async (title: string) =>
+      (
+        await caller.entity.create({
+          input: { title, tags: [], props: { 'orbis/icon': '🍔' }, aspects: ['orbis/category'] },
+          source: 'ui',
+        })
+      ).id;
+    const food = await category('Еда');
+    const fun = await category('Развлечения');
+    const txn = async (title: string) =>
+      (
+        await caller.entity.create({
+          input: {
+            title,
+            tags: [],
+            props: {
+              'orbis/amount': '340.00',
+              'orbis/direction': 'expense',
+              'orbis/finance_category': food,
+              'orbis/occurred_on': '2026-07-20',
+            },
+            aspects: ['orbis/financial'],
+          },
+          source: 'ui',
+        })
+      ).id;
+    const a = await txn('ПЯТЕРОЧКА 843');
+    const b = await txn('Пятёрочка');
+    const other = await txn('Кофе');
+
+    // Счёт исправлений — по журналу ДЕЙСТВИЙ (скан за 30 дней): первое действие — одно
+    // исправление, предложения ещё нет; второе — порог, карточка. Каждая пачка — две правки:
+    // перенос категории и посторонняя правка заголовка.
+    await caller.entity.updateBatch({
+      operations: [
+        { tool: 'entity_update', input: { id: a, props: { 'orbis/finance_category': fun } } },
+        { tool: 'entity_update', input: { id: other, title: 'Кофе с собой' } },
+      ],
+    });
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+    await caller.entity.updateBatch({
+      operations: [
+        { tool: 'entity_update', input: { id: b, props: { 'orbis/finance_category': fun } } },
+        { tool: 'entity_update', input: { id: other, title: 'Кофе навынос' } },
+      ],
+    });
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards).toEqual([
+      {
+        kind: 'memory_rule_suggestion',
+        ruleText: 'пятерочка → Развлечения',
+        pattern: 'пятерочка',
+        fromCategoryId: food,
+        toCategoryId: fun,
+        categoryTitle: 'Развлечения',
+      },
+    ]);
   });
 
   test(`${UPDATE_BATCH_CAP + 1} операция — отказ схемы (BAD_REQUEST)`, async () => {
