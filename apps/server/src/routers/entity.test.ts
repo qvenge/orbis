@@ -309,6 +309,53 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
     });
   });
 
+  /**
+   * Настройки показа блока данных (спека страниц §5.4, §11.3) — ПРОЕКЦИЯ, а не предикаты:
+   * компилятор их не читает, и запрос с плиткой или колонками исполняется как обычный.
+   * Иначе блок данных страницы и `entity_query` модели разошлись бы в выдаче на одном тексте.
+   */
+  test('ключи проекции §5.4 (tile, aggregate, columns, hide_empty) — запрос исполняется как обычный', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const created = await caller.entity.create({
+      input: {
+        title: 'Задача под плиткой',
+        tags: [],
+        props: { 'orbis/task_status': 'inbox' },
+        aspects: ['orbis/task'],
+      },
+      source: 'ui',
+    });
+    const plain = await caller.entity.query({ query: 'aspect=orbis/task' });
+    expect(plain.map((r) => r.id)).toEqual([created.id]);
+
+    const tile = await caller.entity.query({
+      query: 'aspect=orbis/task, display=tile, aggregate=count, hide_empty',
+    });
+    expect(tile.map((r) => r.id)).toEqual([created.id]);
+    const table = await caller.entity.query({
+      query: 'aspect=orbis/task, display=table, columns=orbis/due_date|orbis/priority',
+    });
+    expect(table.map((r) => r.id)).toEqual([created.id]);
+    // Тот же путь у дерева и у счётчика.
+    const byAst = await caller.entity.query({
+      ast: {
+        filter: { aspect: 'orbis/task' },
+        display: 'tile',
+        aggregate: { fn: 'sum', field: 'orbis/effort_min' },
+      },
+    });
+    expect(byAst.map((r) => r.id)).toEqual([created.id]);
+    expect(
+      await caller.entity.count({ query: 'aspect=orbis/task, display=tile, aggregate=count' }),
+    ).toEqual({ count: 1 });
+    // Согласованность проекции держит и схема входа `ast:` (мимо разбора текста).
+    const bad = await trpcError(
+      caller.entity.query({ ast: { filter: { aspect: 'orbis/task' }, display: 'tile' } }),
+    );
+    expect(bad.code).toBe('BAD_REQUEST');
+  });
+
   test('РОВНО одно из двух: и текст, и дерево — отказ; ни одного — тоже', async () => {
     const caller = callerFor(await freshGraph());
     // Два непустых входа — это два РАЗНЫХ запроса в одном вызове, и молчаливый выбор

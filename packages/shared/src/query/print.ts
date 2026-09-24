@@ -10,7 +10,8 @@
  * одним и тем же текстом. Порядок детей `and`/`or` печать НЕ переставляет — он часть
  * дерева: сортировка сделала бы `parse(print(a)) ≡ a` неверным для любого дерева, собранного
  * формой не в алфавитном порядке. Проекция печатается фиксированным хвостом
- * (`sortBy`, `limit`, `display`, `title`), потому что она — не предикаты и порядка не несёт.
+ * (`sortBy`, `limit`, `display`, `columns`, `aggregate`, `hide_empty`, `title` — порядок РП-4
+ * среза страниц), потому что она — не предикаты и порядка не несёт.
  *
  * Печать ТОТАЛЬНА, а грамматика v1 — плоская (§А5-3д). Дерево, которое плоским текстом не
  * выражается (OR между разными свойствами, вложенные группы), печатается СКОБКАМИ, и такой
@@ -315,6 +316,16 @@ export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrin
   }
   if (ast.limit !== undefined) parts.push(`limit=${ast.limit}`);
   if (ast.display !== undefined) parts.push(`display=${ast.display}`);
+  // Настройки показа блока данных (§5.4) — между `display` и `title`, порядок РП-4: сначала
+  // то, ЧТО показывать (колонки, агрегат), потом как вести себя на пустоте, подпись — хвостом.
+  if (ast.columns !== undefined) {
+    parts.push(`columns=${ast.columns.map((c) => n.prop(c.field)).join('|')}`);
+  }
+  if (ast.aggregate !== undefined) {
+    const agg = ast.aggregate;
+    parts.push(agg.fn === 'count' ? 'aggregate=count' : `aggregate=${agg.fn}:${n.prop(agg.field)}`);
+  }
+  if (ast.hideEmpty === true) parts.push('hide_empty');
   if (ast.title !== undefined) parts.push(`title=${quoteQueryValue(ast.title)}`);
   return parts.join(', ');
 }

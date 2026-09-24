@@ -33,6 +33,10 @@ test('assertStaticQuery: относительное время, поиск, this
   );
   expect(reject({ filter: null, display: 'table' })).toBe(SCOPE_NOT_STATIC);
   expect(reject({ filter: null, title: 'Категории' })).toBe(SCOPE_NOT_STATIC);
+  // Настройки показа блока данных (§5.4) — тоже ключи проекции: множеству они ничего не дают.
+  expect(reject({ filter: null, aggregate: { fn: 'count' } })).toBe(SCOPE_NOT_STATIC);
+  expect(reject({ filter: null, columns: [{ field: 'orbis/priority' }] })).toBe(SCOPE_NOT_STATIC);
+  expect(reject({ filter: null, hideEmpty: true })).toBe(SCOPE_NOT_STATIC);
   // Запрет ныряет внутрь дерева, а не смотрит только на корень.
   expect(reject({ filter: { and: [{ aspect: 'orbis/task' }, { not: { search: 'кофе' } }] } })).toBe(
     SCOPE_NOT_STATIC,

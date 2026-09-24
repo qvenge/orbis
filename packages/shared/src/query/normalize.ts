@@ -93,9 +93,18 @@ function normalizeNode(node: QueryFilterNode, reg: ParseRegistry): QueryFilterNo
 export function normalizeQueryAst(ast: QueryAst, reg: ParseRegistry): QueryAst {
   if (queryTreeExceedsDepth(ast, QUERY_TREE_DEPTH_CAP)) return ast;
   const sortBy = ast.sortBy?.map((s) => ({ ...s, field: normalizeProperty(s.field, reg) }));
+  // Адреса проекции блока данных (§5.4) — те же точки записи имени свойства, что `sortBy`:
+  // дерево блока приезжает и атрибутом тела, мимо разбора, и key там законен так же.
+  const columns = ast.columns?.map((c) => ({ field: normalizeProperty(c.field, reg) }));
+  const aggregate =
+    ast.aggregate === undefined || ast.aggregate.fn === 'count'
+      ? ast.aggregate
+      : { ...ast.aggregate, field: normalizeProperty(ast.aggregate.field, reg) };
   return {
     ...ast,
     filter: ast.filter === null ? null : normalizeNode(ast.filter, reg),
     ...(sortBy === undefined ? {} : { sortBy }),
+    ...(columns === undefined ? {} : { columns }),
+    ...(aggregate === undefined ? {} : { aggregate }),
   };
 }

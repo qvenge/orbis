@@ -53,7 +53,9 @@ import type {
 } from '../registry/property-type';
 import { effectiveLabel, OWNER_LOCALE, type PropertyType } from '../registry/types';
 import type {
+  QueryAggregate,
   QueryAst,
+  QueryColumn,
   QueryDateToken,
   QueryFilterNode,
   QueryRelKind,
@@ -61,7 +63,7 @@ import type {
   QueryScalar,
   QuerySortField,
 } from './ast';
-import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
+import { PROJECTION_RULE_MESSAGES, QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
 
 // ─────────────────────────── Реестр разбора ───────────────────────────
 
@@ -385,6 +387,10 @@ const RESERVED_WORDS: ReadonlySet<string> = new Set([
   'display',
   'title',
   'class',
+  // Проекция блока данных (спека страниц §5.4, формы РП-4).
+  'aggregate',
+  'columns',
+  'hide_empty',
 ]);
 
 interface Ctx {
@@ -681,6 +687,12 @@ interface Acc {
   lastRel: RelSlot | null;
   /** Все реляционные предикаты запроса — форма проверяется после разбора. */
   rels: RelSlot[];
+  /**
+   * Позиции ключей проекции блока данных — для отказа согласованности (§5.4). Сама проверка
+   * идёт ПОСЛЕ разбора всех слов (`assertProjectionShape`): `aggregate=count, display=tile`
+   * законен в любом порядке, и на месте ключа его пару ещё не видно.
+   */
+  projectionAt: { display?: number; aggregate?: number; columns?: number };
 }
 
 /** Роли обязательны/запрещены по `kind` — норматив §А5-1, одно место на весь разбор. */
@@ -751,14 +763,13 @@ function requireOp(t: Token, op: Op): string {
   return t.value;
 }
 
-function assignOnce<K extends 'sortBy' | 'limit' | 'display' | 'title'>(
-  acc: Acc,
-  key: K,
-  t: Token,
-  value: NonNullable<QueryAst[K]>,
-): void {
+function assignOnce<
+  K extends 'sortBy' | 'limit' | 'display' | 'title' | 'aggregate' | 'columns' | 'hideEmpty',
+>(acc: Acc, key: K, t: Token, value: NonNullable<QueryAst[K]>): void {
   if (acc.ast[key] !== undefined) {
-    fail('SYNTAX', `повторный параметр '${key}'`, t.keyOffset);
+    // Имя — как написано в тексте (`hide_empty`), а не поле дерева (`hideEmpty`): отказ
+    // читает человек, который набирал слово грамматики.
+    fail('SYNTAX', `повторный параметр '${t.key}'`, t.keyOffset);
   }
   acc.ast[key] = value;
 }
@@ -786,6 +797,98 @@ function parseSortBy(t: Token, ctx: Ctx): QuerySortField[] {
     }
     return { field: prop.id, dir };
   });
+}
+
+/**
+ * Числовое свойство агрегата плитки — та же проверка, что сервер делает на исполнении
+ * (`numericRef`, `apps/server/src/query/compile-ast.ts`): только `number`/`decimal`, не
+ * список, не core. Повторена здесь, чтобы ошибка была плашкой с позицией при разборе, а не
+ * отказом блока при каждом показе.
+ */
+function assertNumericAggregate(prop: PropertyDefinition, fn: string, offset: number): void {
+  const kind = prop.type.kind;
+  const list = isListPropertyType(prop.type);
+  if (list || prop.storage === 'core' || (kind !== 'number' && kind !== 'decimal')) {
+    fail(
+      'TYPE',
+      `aggregate=${fn}: свойство '${prop.key}' не числовое (${kind}${list ? ', список' : ''}${prop.storage === 'core' ? ', core' : ''}); ${fn} считается только по number или decimal`,
+      offset,
+    );
+  }
+}
+
+/**
+ * `aggregate=count | sum:<свойство> | latest:<свойство>` (§5.4, форма РП-4). Скобочная
+ * форма спеки `sum(x)` сюда не доезжает: скобки вне кавычек отвергает `parseOrThrow` — они
+ * знак печати невыразимого дерева (Ф-1а-8). Двоеточие — в стиле `class=контракт:набор` и
+ * `sortBy=поле:dir`; делится ПЕРВЫМ двоеточием, потому что имя функции его не содержит, а
+ * закавыченная подпись свойства — может.
+ */
+function parseAggregate(t: Token, ctx: Ctx): QueryAggregate {
+  const value = requireOp(t, '=');
+  const forms = 'ожидается count, sum:<свойство> или latest:<свойство>';
+  const colon = value.indexOf(':');
+  const fn = colon === -1 ? unquote(value, t.valueOffset) : value.slice(0, colon);
+  if (fn === 'count') {
+    if (colon !== -1) {
+      fail('SYNTAX', `aggregate=count не берёт свойство: считается число строк`, t.valueOffset);
+    }
+    return { fn: 'count' };
+  }
+  if (fn !== 'sum' && fn !== 'latest') {
+    return fail('SYNTAX', `aggregate: ${forms}; получено '${value}'`, t.valueOffset);
+  }
+  if (colon === -1) {
+    return fail('SYNTAX', `aggregate=${fn} требует свойство: ${fn}:<свойство>`, t.valueOffset);
+  }
+  const name = trimPart({ text: value.slice(colon + 1), offset: t.valueOffset + colon + 1 });
+  if (name.text === '') {
+    return fail('SYNTAX', `aggregate=${fn}: пустое имя свойства после ':'`, name.offset);
+  }
+  const prop = resolveProperty(name.text, name.offset, ctx);
+  assertNumericAggregate(prop, fn, name.offset);
+  return { fn, field: prop.id };
+}
+
+/**
+ * `columns=<a>|<b>` (§5.4, форма РП-4 / Э-2): список через `|`, как у `sortBy` и `tags`.
+ * Форма спеки `[a, b]` разрезается на части ещё до этого места (запятая и пробел —
+ * разделители конструкций), поэтому отказ по `[` называет настоящую причину и готовую
+ * замену, а не жалуется на осколок `b]` дальше по тексту.
+ */
+function parseColumns(t: Token, ctx: Ctx): QueryColumn[] {
+  const value = requireOp(t, '=');
+  if (value.startsWith('[')) {
+    fail(
+      'SYNTAX',
+      `columns: списки через | — например columns=orbis/due_date|orbis/priority; квадратных скобок в грамматике нет`,
+      t.valueOffset,
+    );
+  }
+  return splitPartBy({ text: value, offset: t.valueOffset }, '|').map((raw) => {
+    const el = trimPart(raw);
+    if (el.text === '') fail('SYNTAX', 'пустой элемент columns', el.offset);
+    return { field: resolveProperty(el.text, el.offset, ctx).id };
+  });
+}
+
+/**
+ * Согласованность проекции блока данных (§5.4): `aggregate` ⇔ `display=tile`, `columns` ⇒
+ * `display=table`. Слова — общие со схемой канона (`PROJECTION_RULE_MESSAGES`): разбор
+ * обязан отказывать там же, где отказала бы схема, иначе дерево сохранилось бы и перестало
+ * читаться на первой же перевалидации.
+ */
+function assertProjectionShape(acc: Acc): void {
+  const { ast, projectionAt: at } = acc;
+  if (ast.aggregate !== undefined && ast.display !== 'tile') {
+    fail('SYNTAX', PROJECTION_RULE_MESSAGES.aggregateNeedsTile, at.aggregate ?? 0);
+  }
+  if (ast.display === 'tile' && ast.aggregate === undefined) {
+    fail('SYNTAX', PROJECTION_RULE_MESSAGES.tileNeedsAggregate, at.display ?? 0);
+  }
+  if (ast.columns !== undefined && ast.display !== 'table') {
+    fail('SYNTAX', PROJECTION_RULE_MESSAGES.columnsNeedTable, at.columns ?? 0);
+  }
 }
 
 /** Список тегов через `|`: один тег — узел, несколько — OR (отрицание вешает вызывающий). */
@@ -962,6 +1065,9 @@ const NOT_NEGATABLE: ReadonlySet<string> = new Set([
   'limit',
   'display',
   'title',
+  'aggregate',
+  'columns',
+  'hide_empty',
   'excludeTags',
   'excludeBlocked',
 ]);
@@ -1124,8 +1230,26 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
         );
       }
       assignOnce(acc, 'display', t, v as NonNullable<QueryAst['display']>);
+      acc.projectionAt.display = t.keyOffset;
       return;
     }
+    case 'aggregate':
+      assignOnce(acc, 'aggregate', t, parseAggregate(t, ctx));
+      acc.projectionAt.aggregate = t.keyOffset;
+      return;
+    case 'columns':
+      assignOnce(acc, 'columns', t, parseColumns(t, ctx));
+      acc.projectionAt.columns = t.keyOffset;
+      return;
+    case 'hide_empty':
+      // Голый флаг (РП-4), ветка ДО `default`: иначе слово без оператора получило бы отказ
+      // «ожидается имя=значение». `hide_empty=true` — отказ, а не синоним: две записи
+      // одного смысла печать вернула бы одной, и текст владельца молча поменялся бы.
+      if (t.op !== null) {
+        fail('SYNTAX', `hide_empty — флаг без значения: пишется голым словом`, t.opOffset);
+      }
+      assignOnce(acc, 'hideEmpty', t, true);
+      return;
     case 'title':
       assignOnce(
         acc,
@@ -1194,11 +1318,19 @@ function parseOrThrow(text: string, reg: ParseRegistry): QueryAst {
     }
   }
 
-  const acc: Acc = { nodes: [], ast: { filter: null }, lastRel: null, rels: [] };
+  const acc: Acc = {
+    nodes: [],
+    ast: { filter: null },
+    lastRel: null,
+    rels: [],
+    projectionAt: {},
+  };
   for (const t of tokens) dispatch(t, ctx, acc);
 
   // Пост-пасс, а не проверка на месте: `via=` — отдельное слово и приезжает ПОСЛЕ предиката.
   for (const slot of acc.rels) assertRelShape(slot);
+  // Тот же довод у проекции: пара «display — aggregate/columns» видна только целиком.
+  assertProjectionShape(acc);
 
   acc.ast.filter =
     acc.nodes.length === 0

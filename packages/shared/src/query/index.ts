@@ -16,6 +16,7 @@ export * from './ast';
 export * from './ast-json-schema';
 export type { FieldCatalog, FieldInfo, FieldType } from './catalog';
 export { buildCatalogFromRegistry } from './catalog';
+export * from './dates';
 export * from './field-ref';
 export * from './normalize';
 export * from './parse-ast';

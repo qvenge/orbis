@@ -43,6 +43,30 @@ test('`has` и `sortBy.field` — две точки записи имени СВ
   });
 });
 
+test('`aggregate.field` и `columns[].field` проекции блока данных (§5.4) — тоже имена СВОЙСТВ', () => {
+  const tile: QueryAst = {
+    filter: null,
+    display: 'tile',
+    aggregate: { fn: 'sum', field: 'user/effort_points' },
+  };
+  expect(normalizeQueryAst(tile, REG).aggregate).toEqual({
+    fn: 'sum',
+    field: FIXTURE_USER_PROPERTY_ID,
+  });
+  const table: QueryAst = {
+    filter: null,
+    display: 'table',
+    columns: [{ field: 'user/labels' }, { field: 'orbis/priority' }],
+  };
+  expect(normalizeQueryAst(table, REG).columns).toEqual([
+    { field: FIXTURE_USER_LIST_ID },
+    { field: 'orbis/priority' },
+  ]);
+  // У count адреса нет — узел проходит как есть.
+  const count: QueryAst = { filter: null, display: 'tile', aggregate: { fn: 'count' } };
+  expect(normalizeQueryAst(count, REG)).toEqual(count);
+});
+
 test('`class.contract` и `rel.sourceNotIn.contract` — две точки записи имени КОНТРАКТА', () => {
   // Обе приезжают МИМО разбора текста (вход `ast:` тула, атрибут query-блока), и без резолва
   // компилятор ответил бы UNKNOWN_CONTRACT на key своего контракта — тот самый тихий отказ,

@@ -7,17 +7,24 @@
  * второй снят Задачей 9b, адрес по git-истории).
  */
 import { expect, test } from 'bun:test';
+import { propertyDefinitionSchema } from '../registry/property-type';
 import { queryAstSchema } from './ast';
 import {
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
   FIXTURE_USER_CONTRACT_ID,
+  FIXTURE_USER_PROPERTY_ID,
   INEXPRESSIBLE_QUERY_TEXTS,
   PRODUCTION_QUERY_STATS,
   PRODUCTION_QUERY_TEXTS,
 } from './ast-fixtures';
 import { buildCatalogFromRegistry } from './catalog';
-import { maskQuotedValues, parseQueryAst, QUERY_PARSE_CODES } from './parse-ast';
+import {
+  maskQuotedValues,
+  type ParseRegistry,
+  parseQueryAst,
+  QUERY_PARSE_CODES,
+} from './parse-ast';
 import { printQueryAst } from './print';
 
 const REG = FIXTURE_PARSE_REGISTRY;
@@ -528,4 +535,199 @@ test('maskQuotedValues: длина сохраняется, содержимое 
   // 6. Незакрытая кавычка — не отказ: у НЕразобранного текста она вероятна, и «всё после неё
   //    значение» безопаснее исключения (глушить лишнее — значит не переписать, а не испортить).
   expect(maskQuotedValues('a=1, b="хвост')).toBe(`a=1, b=${M.repeat('"хвост'.length)}`);
+});
+
+// ─────────────── Проекция блока данных (спека страниц §5.4, формы РП-4 / Э-2) ───────────────
+
+test('§5.4: четыре примера спеки в формах РП-4 разбираются в ожидаемые деревья', () => {
+  expect(ok('aspect=orbis/task, display=list')).toEqual({
+    filter: { aspect: 'orbis/task' },
+    display: 'list',
+  });
+  expect(
+    ok('aspect=orbis/task, display=table, columns=orbis/due_date|orbis/priority, hide_empty'),
+  ).toEqual({
+    filter: { aspect: 'orbis/task' },
+    display: 'table',
+    columns: [{ field: 'orbis/due_date' }, { field: 'orbis/priority' }],
+    hideEmpty: true,
+  });
+  expect(
+    ok('aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount, title="Потрачено"'),
+  ).toEqual({
+    filter: { aspect: 'orbis/financial' },
+    display: 'tile',
+    aggregate: { fn: 'sum', field: 'orbis/amount' },
+    title: 'Потрачено',
+  });
+  // `orbis/weight` спеки в реестре НЕТ (§А8: свойство без потребителя не сеется) — пример
+  // взят на живом числовом свойстве той же роли, «последнее измерение».
+  expect(
+    ok('aspect=orbis/goal, display=tile, aggregate=latest:orbis/current_value, title="Вес"'),
+  ).toEqual({
+    filter: { aspect: 'orbis/goal' },
+    display: 'tile',
+    aggregate: { fn: 'latest', field: 'orbis/current_value' },
+    title: 'Вес',
+  });
+  expect(ok('aspect=orbis/task, display=tile, aggregate=count')).toEqual({
+    filter: { aspect: 'orbis/task' },
+    display: 'tile',
+    aggregate: { fn: 'count' },
+  });
+  // Согласованность проверяется ПОСЛЕ всех ключей: порядок слов в тексте не важен.
+  expect(ok('aggregate=count, display=tile')).toEqual({
+    filter: null,
+    display: 'tile',
+    aggregate: { fn: 'count' },
+  });
+  expect(ok('columns=orbis/due_date, display=table')).toEqual({
+    filter: null,
+    display: 'table',
+    columns: [{ field: 'orbis/due_date' }],
+  });
+  // `hide_empty` не привязан к форме показа: прятать пустое можно у любой.
+  expect(ok('hide_empty')).toEqual({ filter: null, hideEmpty: true });
+});
+
+test('§5.4: в дерево проекции пишется id свойства, а не key (§А5-2)', () => {
+  const P = FIXTURE_USER_PROPERTY_ID; // number, key `user/effort_points`
+  expect(ok('display=tile, aggregate=sum:user/effort_points').aggregate).toEqual({
+    fn: 'sum',
+    field: P,
+  });
+  expect(ok('display=table, columns=user/effort_points|orbis/priority').columns).toEqual([
+    { field: P },
+    { field: 'orbis/priority' },
+  ]);
+  // Подпись резолвится тем же путём, что у sortBy (§А5-3б).
+  expect(ok('display=tile, aggregate=latest:"Баллы усилия"').aggregate).toEqual({
+    fn: 'latest',
+    field: P,
+  });
+});
+
+test('§5.4: согласованность проекции — отказ SYNTAX, а не молча принятое дерево', () => {
+  const noTile = err('aspect=orbis/task, aggregate=count');
+  expect(noTile.code).toBe('SYNTAX');
+  expect(noTile.message).toContain('aggregate — только у display=tile');
+  expect(noTile.position).toBe('aspect=orbis/task, '.length);
+  expect(err('aspect=orbis/task, display=list, aggregate=count').message).toContain(
+    'aggregate — только у display=tile',
+  );
+
+  const tileAlone = err('aspect=orbis/task, display=tile');
+  expect(tileAlone.code).toBe('SYNTAX');
+  expect(tileAlone.message).toContain('display=tile требует aggregate');
+  expect(tileAlone.position).toBe('aspect=orbis/task, '.length);
+
+  const cols = err('aspect=orbis/task, columns=orbis/due_date');
+  expect(cols.code).toBe('SYNTAX');
+  expect(cols.message).toContain('columns — только у display=table');
+  expect(err('aspect=orbis/task, display=list, columns=orbis/due_date').code).toBe('SYNTAX');
+});
+
+test('§5.4: aggregate=sum|latest — только число (как numericRef сервера), TYPE с позицией', () => {
+  const text = 'display=tile, aggregate=sum:orbis/title';
+  const e = err(text);
+  expect(e.code).toBe('TYPE');
+  expect(e.position).toBe(text.indexOf('orbis/title'));
+  // Не число — отказ и у latest.
+  expect(err('display=tile, aggregate=latest:orbis/due_date').code).toBe('TYPE');
+  // Список — отказ, и именно ПО ПРИЗНАКУ СПИСКА: у числового списка тип элемента годится,
+  // но одного значения на строку нет (сервер отвечает на такое тем же `FIELD`).
+  expect(err('display=tile, aggregate=sum:user/labels').code).toBe('TYPE');
+  const numericList = propertyDefinitionSchema.parse({
+    id: 'user/scores',
+    key: 'user/scores',
+    label: { ru: 'Оценки', en: 'Scores' },
+    description: { ru: 'Числовой список', en: 'A numeric list' },
+    type: { kind: 'number', cardinality: 'many', maxItems: 5 },
+    rank: 1100,
+    graphId: null,
+    status: 'active',
+    module: null,
+  });
+  const withList: ParseRegistry = {
+    ...REG,
+    properties: new Map([...REG.properties, [numericList.id, numericList]]),
+  };
+  const listed = parseQueryAst('display=tile, aggregate=latest:user/scores', withList);
+  expect(listed.ok ? 'разобралось' : listed.error.code).toBe('TYPE');
+  // Core-проекция — отказ даже числовая: сервер берёт core-колонку мимо `props`, и `sum`
+  // по ней `numericRef` не компилирует. Числовой core во встроенном словаре нет, поэтому
+  // запись синтетическая — иначе ветку нечем было бы проверить.
+  const coreNumber = propertyDefinitionSchema.parse({
+    ...numericList,
+    id: 'user/core_number',
+    key: 'user/core_number',
+    type: { kind: 'number' },
+    storage: 'core',
+  });
+  const withCore: ParseRegistry = {
+    ...REG,
+    properties: new Map([...REG.properties, [coreNumber.id, coreNumber]]),
+  };
+  const core = parseQueryAst('display=tile, aggregate=sum:user/core_number', withCore);
+  expect(core.ok ? 'разобралось' : core.error.code).toBe('TYPE');
+  // decimal и number принимаются оба.
+  expect(ok('display=tile, aggregate=sum:orbis/amount').aggregate).toEqual({
+    fn: 'sum',
+    field: 'orbis/amount',
+  });
+  expect(ok('display=tile, aggregate=sum:orbis/duration_min').aggregate).toEqual({
+    fn: 'sum',
+    field: 'orbis/duration_min',
+  });
+  // Неизвестное имя — тот же отказ, что у любого поля.
+  expect(err('display=tile, aggregate=sum:orbis/nope').code).toBe('UNKNOWN_FIELD');
+});
+
+test('§5.4: формы aggregate — count без свойства, sum/latest со свойством, иначе SYNTAX', () => {
+  expect(err('display=tile, aggregate=sum').code).toBe('SYNTAX');
+  expect(err('display=tile, aggregate=latest:').code).toBe('SYNTAX');
+  expect(err('display=tile, aggregate=count:orbis/amount').code).toBe('SYNTAX');
+  expect(err('display=tile, aggregate=avg:orbis/amount').code).toBe('SYNTAX');
+  expect(err('display=tile, aggregate=avg').code).toBe('SYNTAX');
+  // Скобочная форма спеки — отказ про скобки (Ф-1а-8): скобки — знак печати невыразимого.
+  const paren = err('display=tile, aggregate=sum(orbis/amount)');
+  expect(paren.code).toBe('SYNTAX');
+  expect(paren.message).toContain('скобок');
+});
+
+test('§5.4: повтор и отрицание ключей проекции — SYNTAX', () => {
+  const twice = err('hide_empty, hide_empty');
+  expect(twice.code).toBe('SYNTAX');
+  expect(twice.message).toContain("повторный параметр 'hide_empty'");
+  expect(err('display=tile, aggregate=count, aggregate=count').code).toBe('SYNTAX');
+  expect(err('display=table, columns=orbis/due_date, columns=orbis/priority').code).toBe('SYNTAX');
+  expect(err('!hide_empty').code).toBe('SYNTAX');
+  expect(err('display=tile, !aggregate=count').code).toBe('SYNTAX');
+  expect(err('display=table, !columns=orbis/due_date').code).toBe('SYNTAX');
+  // Флаг — голое слово: второй записи того же смысла грамматика не заводит.
+  expect(err('hide_empty=true').code).toBe('SYNTAX');
+});
+
+test('§5.4 / Э-2: columns=[a, b] — отказ с подсказкой «списки через |»', () => {
+  const e = err('aspect=orbis/task, display=table, columns=[orbis/due_date, orbis/priority]');
+  expect(e.code).toBe('SYNTAX');
+  expect(e.message).toContain('списки через |');
+  expect(err('display=table, columns=orbis/due_date|').code).toBe('SYNTAX');
+  expect(err('display=table, columns=orbis/nope').code).toBe('UNKNOWN_FIELD');
+});
+
+test('§5.4: новые слова грамматики зарезервированы — голое имя поля не резолвится', () => {
+  for (const word of ['aggregate', 'columns', 'hide_empty']) {
+    expect(err(`has=${word}`).code, word).toBe('RESERVED');
+  }
+});
+
+test('§5.4: разобранное дерево проекции проходит собственную схему канона', () => {
+  for (const text of [
+    'aspect=orbis/task, display=table, columns=orbis/due_date|orbis/priority, hide_empty',
+    'aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount, title="Потрачено"',
+    'display=tile, aggregate=count',
+  ]) {
+    expect(queryAstSchema.safeParse(ok(text)).success, text).toBe(true);
+  }
 });

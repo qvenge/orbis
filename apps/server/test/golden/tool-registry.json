@@ -47,15 +47,97 @@
               "minimum": 1
             },
             "display": {
-              "enum": ["compact", "list", "table"]
+              "enum": ["compact", "list", "table", "tile"]
             },
             "title": {
               "type": "string",
               "minLength": 1
+            },
+            "aggregate": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "fn": {
+                      "const": "count"
+                    }
+                  },
+                  "required": ["fn"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "fn": {
+                      "enum": ["sum", "latest"]
+                    },
+                    "field": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["fn", "field"],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "columns": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["field"],
+                "additionalProperties": false
+              }
+            },
+            "hideEmpty": {
+              "const": true
             }
           },
           "required": ["filter"],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "dependencies": {
+            "aggregate": {
+              "properties": {
+                "display": {
+                  "const": "tile"
+                }
+              },
+              "required": ["display"]
+            },
+            "columns": {
+              "properties": {
+                "display": {
+                  "const": "table"
+                }
+              },
+              "required": ["display"]
+            }
+          },
+          "anyOf": [
+            {
+              "not": {
+                "properties": {
+                  "display": {
+                    "const": "tile"
+                  }
+                },
+                "required": ["display"]
+              }
+            },
+            {
+              "properties": {
+                "aggregate": {}
+              },
+              "required": ["aggregate"]
+            }
+          ]
         }
       },
       "$defs": {
@@ -930,15 +1012,97 @@
               "minimum": 1
             },
             "display": {
-              "enum": ["compact", "list", "table"]
+              "enum": ["compact", "list", "table", "tile"]
             },
             "title": {
               "type": "string",
               "minLength": 1
+            },
+            "aggregate": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "fn": {
+                      "const": "count"
+                    }
+                  },
+                  "required": ["fn"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "fn": {
+                      "enum": ["sum", "latest"]
+                    },
+                    "field": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["fn", "field"],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "columns": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["field"],
+                "additionalProperties": false
+              }
+            },
+            "hideEmpty": {
+              "const": true
             }
           },
           "required": ["filter"],
           "additionalProperties": false,
+          "dependencies": {
+            "aggregate": {
+              "properties": {
+                "display": {
+                  "const": "tile"
+                }
+              },
+              "required": ["display"]
+            },
+            "columns": {
+              "properties": {
+                "display": {
+                  "const": "table"
+                }
+              },
+              "required": ["display"]
+            }
+          },
+          "anyOf": [
+            {
+              "not": {
+                "properties": {
+                  "display": {
+                    "const": "tile"
+                  }
+                },
+                "required": ["display"]
+              }
+            },
+            {
+              "properties": {
+                "aggregate": {}
+              },
+              "required": ["aggregate"]
+            }
+          ],
           "$defs": {
             "node": {
               "anyOf": [
@@ -1342,15 +1506,97 @@
               "minimum": 1
             },
             "display": {
-              "enum": ["compact", "list", "table"]
+              "enum": ["compact", "list", "table", "tile"]
             },
             "title": {
               "type": "string",
               "minLength": 1
+            },
+            "aggregate": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "fn": {
+                      "const": "count"
+                    }
+                  },
+                  "required": ["fn"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "fn": {
+                      "enum": ["sum", "latest"]
+                    },
+                    "field": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["fn", "field"],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "columns": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["field"],
+                "additionalProperties": false
+              }
+            },
+            "hideEmpty": {
+              "const": true
             }
           },
           "required": ["filter"],
           "additionalProperties": false,
+          "dependencies": {
+            "aggregate": {
+              "properties": {
+                "display": {
+                  "const": "tile"
+                }
+              },
+              "required": ["display"]
+            },
+            "columns": {
+              "properties": {
+                "display": {
+                  "const": "table"
+                }
+              },
+              "required": ["display"]
+            }
+          },
+          "anyOf": [
+            {
+              "not": {
+                "properties": {
+                  "display": {
+                    "const": "tile"
+                  }
+                },
+                "required": ["display"]
+              }
+            },
+            {
+              "properties": {
+                "aggregate": {}
+              },
+              "required": ["aggregate"]
+            }
+          ],
           "$defs": {
             "node": {
               "anyOf": [
@@ -3966,6 +4212,24 @@
                       "anyOf": [
                         {
                           "type": "object",
+                          "anyOf": [
+                            {
+                              "not": {
+                                "required": ["display"],
+                                "properties": {
+                                  "display": {
+                                    "const": "tile"
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "required": ["aggregate"],
+                              "properties": {
+                                "aggregate": {}
+                              }
+                            }
+                          ],
                           "title": "Orbis Q-AST",
                           "required": ["filter"],
                           "properties": {
@@ -4005,11 +4269,75 @@
                               },
                               "minItems": 1
                             },
+                            "columns": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["field"],
+                                "properties": {
+                                  "field": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "minItems": 1
+                            },
                             "display": {
-                              "enum": ["compact", "list", "table"]
+                              "enum": ["compact", "list", "table", "tile"]
+                            },
+                            "aggregate": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "required": ["fn"],
+                                  "properties": {
+                                    "fn": {
+                                      "const": "count"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["fn", "field"],
+                                  "properties": {
+                                    "fn": {
+                                      "enum": ["sum", "latest"]
+                                    },
+                                    "field": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            },
+                            "hideEmpty": {
+                              "const": true
                             }
                           },
                           "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                          "dependencies": {
+                            "columns": {
+                              "required": ["display"],
+                              "properties": {
+                                "display": {
+                                  "const": "table"
+                                }
+                              }
+                            },
+                            "aggregate": {
+                              "required": ["display"],
+                              "properties": {
+                                "display": {
+                                  "const": "tile"
+                                }
+                              }
+                            }
+                          },
                           "additionalProperties": false
                         },
                         {
@@ -4043,6 +4371,24 @@
                       "anyOf": [
                         {
                           "type": "object",
+                          "anyOf": [
+                            {
+                              "not": {
+                                "required": ["display"],
+                                "properties": {
+                                  "display": {
+                                    "const": "tile"
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "required": ["aggregate"],
+                              "properties": {
+                                "aggregate": {}
+                              }
+                            }
+                          ],
                           "title": "Orbis Q-AST",
                           "required": ["filter"],
                           "properties": {
@@ -4082,11 +4428,75 @@
                               },
                               "minItems": 1
                             },
+                            "columns": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["field"],
+                                "properties": {
+                                  "field": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "minItems": 1
+                            },
                             "display": {
-                              "enum": ["compact", "list", "table"]
+                              "enum": ["compact", "list", "table", "tile"]
+                            },
+                            "aggregate": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "required": ["fn"],
+                                  "properties": {
+                                    "fn": {
+                                      "const": "count"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["fn", "field"],
+                                  "properties": {
+                                    "fn": {
+                                      "enum": ["sum", "latest"]
+                                    },
+                                    "field": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            },
+                            "hideEmpty": {
+                              "const": true
                             }
                           },
                           "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                          "dependencies": {
+                            "columns": {
+                              "required": ["display"],
+                              "properties": {
+                                "display": {
+                                  "const": "table"
+                                }
+                              }
+                            },
+                            "aggregate": {
+                              "required": ["display"],
+                              "properties": {
+                                "display": {
+                                  "const": "tile"
+                                }
+                              }
+                            }
+                          },
                           "additionalProperties": false
                         },
                         {
@@ -4456,6 +4866,24 @@
                           "anyOf": [
                             {
                               "type": "object",
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["display"],
+                                    "properties": {
+                                      "display": {
+                                        "const": "tile"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["aggregate"],
+                                  "properties": {
+                                    "aggregate": {}
+                                  }
+                                }
+                              ],
                               "title": "Orbis Q-AST",
                               "required": ["filter"],
                               "properties": {
@@ -4495,11 +4923,75 @@
                                   },
                                   "minItems": 1
                                 },
+                                "columns": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": ["field"],
+                                    "properties": {
+                                      "field": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  "minItems": 1
+                                },
                                 "display": {
-                                  "enum": ["compact", "list", "table"]
+                                  "enum": ["compact", "list", "table", "tile"]
+                                },
+                                "aggregate": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "required": ["fn"],
+                                      "properties": {
+                                        "fn": {
+                                          "const": "count"
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["fn", "field"],
+                                      "properties": {
+                                        "fn": {
+                                          "enum": ["sum", "latest"]
+                                        },
+                                        "field": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "hideEmpty": {
+                                  "const": true
                                 }
                               },
                               "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                              "dependencies": {
+                                "columns": {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "table"
+                                    }
+                                  }
+                                },
+                                "aggregate": {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "tile"
+                                    }
+                                  }
+                                }
+                              },
                               "additionalProperties": false
                             },
                             {
@@ -4533,6 +5025,24 @@
                           "anyOf": [
                             {
                               "type": "object",
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["display"],
+                                    "properties": {
+                                      "display": {
+                                        "const": "tile"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["aggregate"],
+                                  "properties": {
+                                    "aggregate": {}
+                                  }
+                                }
+                              ],
                               "title": "Orbis Q-AST",
                               "required": ["filter"],
                               "properties": {
@@ -4572,11 +5082,75 @@
                                   },
                                   "minItems": 1
                                 },
+                                "columns": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": ["field"],
+                                    "properties": {
+                                      "field": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  "minItems": 1
+                                },
                                 "display": {
-                                  "enum": ["compact", "list", "table"]
+                                  "enum": ["compact", "list", "table", "tile"]
+                                },
+                                "aggregate": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "required": ["fn"],
+                                      "properties": {
+                                        "fn": {
+                                          "const": "count"
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["fn", "field"],
+                                      "properties": {
+                                        "fn": {
+                                          "enum": ["sum", "latest"]
+                                        },
+                                        "field": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "hideEmpty": {
+                                  "const": true
                                 }
                               },
                               "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                              "dependencies": {
+                                "columns": {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "table"
+                                    }
+                                  }
+                                },
+                                "aggregate": {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "tile"
+                                    }
+                                  }
+                                }
+                              },
                               "additionalProperties": false
                             },
                             {

@@ -4,7 +4,8 @@
  * Что здесь нового против сегодняшнего `grammar.ts`: фильтр стал ДЕРЕВОМ `and/or/not`
  * произвольной вложенности (сегодня — плоский массив, где OR живёт только внутри значения
  * одного поля, а отрицание выражено тремя частными узлами: `noneOf`, `excludeTags`,
- * `excludeBlocked`). Параметры проекции (`sortBy`, `limit`, `display`, `title`) остались
+ * `excludeBlocked`). Параметры проекции (`sortBy`, `limit`, `display`, `title`, а со страниц —
+ * `aggregate`, `columns`, `hideEmpty`) остались
  * отдельными полями корня — §А5-1 требует именно структурного отделения предикатов от
  * проекции, и в старом AST оно уже было.
  *
@@ -56,8 +57,35 @@ export const QUERY_REL_KINDS = [
 ] as const;
 export type QueryRelKind = (typeof QUERY_REL_KINDS)[number];
 
-export const QUERY_DISPLAY_MODES = ['compact', 'list', 'table'] as const;
+/**
+ * Формы показа блока данных (спека страниц §5.4). `tile` — одна цифра агрегата вместо строк;
+ * у него своя обязательная пара `aggregate` (см. `QueryAggregate`).
+ */
+export const QUERY_DISPLAY_MODES = ['compact', 'list', 'table', 'tile'] as const;
 export type QueryDisplayMode = (typeof QUERY_DISPLAY_MODES)[number];
+
+/**
+ * Функции агрегата плитки (§5.4). Имена те же, что у внешнего `aggregate` источника
+ * прогресса цели (`orbis/progress_source`, §11.3), и смысл тот же: `count` — число строк
+ * выборки, `sum` — сумма числового свойства, `latest` — значение у последней по
+ * `updated_at` строки. Своего словаря плитке не заводится — это была бы вторая правда о
+ * том, что значит «последнее».
+ */
+export const QUERY_AGGREGATE_FNS = ['count', 'sum', 'latest'] as const;
+export type QueryAggregateFn = (typeof QUERY_AGGREGATE_FNS)[number];
+
+/**
+ * Агрегат плитки. Адрес свойства лежит под ключом `field` НАМЕРЕННО: по этому имени дерево
+ * уже обходят индекс адресов тела (`queryRefsFromDoc`, `doc/convert.ts`) и переписывание
+ * при слиянии свойств (`rewriteAst`, `apps/server/src/registry/ops.ts`) — новое имя ключа
+ * выпало бы из обоих молча.
+ */
+export type QueryAggregate = { fn: 'count' } | { fn: 'sum' | 'latest'; field: string };
+
+/** Колонка таблицы блока данных — адрес свойства под тем же ключом `field` (см. выше). */
+export interface QueryColumn {
+  field: string;
+}
 
 /**
  * Кап глубины рекурсивного обхода `descendants_of`/`ancestors_of` (Ч9). Это КОНСТАНТА
@@ -219,6 +247,16 @@ export interface QueryAst {
   limit?: number;
   display?: QueryDisplayMode;
   title?: string;
+  /** Только при `display: 'tile'`, и при нём обязателен (§5.4; держат обе схемы и разбор). */
+  aggregate?: QueryAggregate;
+  /** Только при `display: 'table'`; без него колонки берутся из фактов строки (Р-13). */
+  columns?: QueryColumn[];
+  /**
+   * Прятать блок при ЧЕСТНО пустом результате (не при ошибке). Литерал `true`, а не
+   * boolean: «не прятать» — это отсутствие ключа, и второй записи того же смысла
+   * (`hideEmpty: false`) канон не заводит, иначе два дерева печатались бы одним текстом.
+   */
+  hideEmpty?: true;
 }
 
 // ─────────────────────────── zod-схема канона ───────────────────────────
@@ -391,6 +429,32 @@ export const querySortFieldSchema = z
   .object({ field: idSchema, dir: z.enum(['asc', 'desc']) })
   .strict();
 
+/** Дискриминированный союз по `fn`: у `count` поля нет, у `sum`/`latest` оно обязательно. */
+export const queryAggregateSchema = z.discriminatedUnion('fn', [
+  z.object({ fn: z.literal('count') }).strict(),
+  z.object({ fn: z.enum(['sum', 'latest']), field: idSchema }).strict(),
+]);
+
+export const queryColumnSchema = z.object({ field: idSchema }).strict();
+
+/**
+ * Согласованность проекции блока данных (§5.4): `aggregate` ⇔ `display: 'tile'`,
+ * `columns` ⇒ `display: 'table'`.
+ *
+ * Правило живёт в СХЕМЕ, а не только в разборе, по той же причине, что связь `rel` с
+ * `kind` (докблок `QueryRelPredicate`): вход `ast:` тула, значение `orbis/progress_source`
+ * и атрибут query-блока тела идут МИМО парсера, и плитка без агрегата сохранилась бы, а
+ * читатель (рендер блока данных) получил бы форму, которую язык запрещает. Та же тройка
+ * условий записана в JSON Schema (`ast-json-schema.ts`, `PROJECTION_DEPENDENCIES` и `TILE_NEEDS_AGGREGATE`), и совпадение
+ * вердиктов пиннит `ast.test.ts`. Сообщения — те же слова, что у отказов разбора
+ * (`parse-ast.ts`, пост-проверка проекции), чтобы владелец и модель читали одно правило.
+ */
+export const PROJECTION_RULE_MESSAGES = {
+  aggregateNeedsTile: 'aggregate — только у display=tile',
+  tileNeedsAggregate: 'display=tile требует aggregate=count | sum:<свойство> | latest:<свойство>',
+  columnsNeedTable: 'columns — только у display=table',
+} as const;
+
 export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = z
   .object({
     // `filter` ОБЯЗАТЕЛЕН и nullable, а не optional: «фильтра нет» — это решение автора
@@ -400,5 +464,22 @@ export const queryAstSchema: z.ZodType<QueryAst, z.ZodTypeDef, unknown> = z
     limit: z.number().int().min(1).optional(),
     display: z.enum(QUERY_DISPLAY_MODES).optional(),
     title: z.string().min(1).optional(),
+    aggregate: queryAggregateSchema.optional(),
+    columns: z.array(queryColumnSchema).min(1).optional(),
+    hideEmpty: z.literal(true).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((ast, ctx) => {
+    const issue = (path: string, message: string): void => {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+    };
+    if (ast.aggregate !== undefined && ast.display !== 'tile') {
+      issue('aggregate', PROJECTION_RULE_MESSAGES.aggregateNeedsTile);
+    }
+    if (ast.display === 'tile' && ast.aggregate === undefined) {
+      issue('display', PROJECTION_RULE_MESSAGES.tileNeedsAggregate);
+    }
+    if (ast.columns !== undefined && ast.display !== 'table') {
+      issue('columns', PROJECTION_RULE_MESSAGES.columnsNeedTable);
+    }
+  });

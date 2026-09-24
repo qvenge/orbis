@@ -433,6 +433,54 @@ export const AST_FIXTURES: readonly AstFixture[] = [
       'aspect=orbis/task, sortBy=orbis/due_date:asc, limit=5, display=table, title="Мои задачи"',
     static: false,
   },
+  // Проекция блока данных (спека страниц §5.4, формы РП-4 / Э-2) — по фикстуре на форму.
+  // Печать держит порядок хвоста `sortBy, limit, display, columns, aggregate, hide_empty,
+  // title`; входной текст в другом порядке вернётся этим.
+  {
+    name: 'плитка: count',
+    ast: { filter: { aspect: 'orbis/task' }, display: 'tile', aggregate: { fn: 'count' } },
+    keyText: 'aspect=orbis/task, display=tile, aggregate=count',
+    static: false,
+  },
+  {
+    name: 'плитка: sum по decimal-свойству',
+    ast: {
+      filter: { aspect: 'orbis/financial' },
+      display: 'tile',
+      aggregate: { fn: 'sum', field: 'orbis/amount' },
+      title: 'Потрачено',
+    },
+    keyText: 'aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount, title=Потрачено',
+    static: false,
+  },
+  {
+    name: 'плитка: latest по числовому свойству',
+    ast: {
+      filter: { aspect: 'orbis/goal' },
+      display: 'tile',
+      aggregate: { fn: 'latest', field: 'orbis/current_value' },
+    },
+    keyText: 'aspect=orbis/goal, display=tile, aggregate=latest:orbis/current_value',
+    static: false,
+  },
+  {
+    name: 'таблица с колонками',
+    ast: {
+      filter: { aspect: 'orbis/task' },
+      sortBy: [{ field: 'orbis/due_date', dir: 'asc' }],
+      display: 'table',
+      columns: [{ field: 'orbis/due_date' }, { field: 'orbis/priority' }],
+    },
+    keyText:
+      'aspect=orbis/task, sortBy=orbis/due_date:asc, display=table, columns=orbis/due_date|orbis/priority',
+    static: false,
+  },
+  {
+    name: 'прятать пустое',
+    ast: { filter: { aspect: 'orbis/task' }, display: 'list', hideEmpty: true, title: 'Входящие' },
+    keyText: 'aspect=orbis/task, display=list, hide_empty, title=Входящие',
+    static: false,
+  },
   {
     name: 'Agenda: дневное окно',
     ast: {

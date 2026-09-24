@@ -245,3 +245,73 @@ test('кап заведомо выше настоящих запросов: ни
   expect(deepest).toBeLessThanOrEqual(8);
   expect(deepest * 4).toBeLessThan(QUERY_TREE_DEPTH_CAP);
 });
+
+test('§5.4: проекция блока данных — обе схемы принимают формы и держат согласованность', () => {
+  const validate = validator();
+  const both = (ast: unknown): [boolean, boolean] => [
+    queryAstSchema.safeParse(ast).success,
+    validate(ast) as boolean,
+  ];
+  const cases: [unknown, boolean, string][] = [
+    [{ filter: null, display: 'tile', aggregate: { fn: 'count' } }, true, 'плитка count'],
+    [
+      { filter: null, display: 'tile', aggregate: { fn: 'sum', field: 'orbis/amount' } },
+      true,
+      'плитка sum',
+    ],
+    [
+      { filter: null, display: 'tile', aggregate: { fn: 'latest', field: 'orbis/amount' } },
+      true,
+      'плитка latest',
+    ],
+    [
+      { filter: null, display: 'table', columns: [{ field: 'orbis/priority' }] },
+      true,
+      'таблица с колонками',
+    ],
+    [{ filter: null, display: 'table' }, true, 'таблица без колонок — колонки фактов (Р-13)'],
+    [{ filter: null, hideEmpty: true }, true, 'флаг без формы показа'],
+    // Согласованность: вход `ast:` тула и атрибут блока тела идут мимо разбора.
+    [{ filter: null, display: 'tile' }, false, 'плитка без агрегата'],
+    [{ filter: null, aggregate: { fn: 'count' } }, false, 'агрегат без формы показа'],
+    [{ filter: null, display: 'list', aggregate: { fn: 'count' } }, false, 'агрегат у списка'],
+    [{ filter: null, columns: [{ field: 'orbis/priority' }] }, false, 'колонки без таблицы'],
+    [
+      { filter: null, display: 'tile', aggregate: { fn: 'count' }, columns: [{ field: 'p' }] },
+      false,
+      'колонки у плитки',
+    ],
+    // Форма агрегата — союз по fn.
+    [{ filter: null, display: 'tile', aggregate: { fn: 'sum' } }, false, 'sum без свойства'],
+    [
+      { filter: null, display: 'tile', aggregate: { fn: 'count', field: 'orbis/amount' } },
+      false,
+      'count со свойством',
+    ],
+    [
+      { filter: null, display: 'tile', aggregate: { fn: 'avg', field: 'orbis/amount' } },
+      false,
+      'неизвестная функция',
+    ],
+    [{ filter: null, display: 'tile', aggregate: { fn: 'sum', field: '' } }, false, 'пустой адрес'],
+    [
+      { filter: null, display: 'tile', aggregate: { fn: 'sum', field: 'p', extra: 1 } },
+      false,
+      'лишний ключ агрегата',
+    ],
+    [{ filter: null, display: 'table', columns: [] }, false, 'пустой список колонок'],
+    [{ filter: null, display: 'table', columns: ['orbis/priority'] }, false, 'колонка строкой'],
+    [
+      { filter: null, display: 'table', columns: [{ field: 'p', extra: 1 }] },
+      false,
+      'лишний ключ колонки',
+    ],
+    [{ filter: null, hideEmpty: false }, false, 'hideEmpty: false — второй записи нет'],
+    [{ filter: null, display: 'grid' }, false, 'неизвестная форма показа'],
+  ];
+  for (const [ast, expected, why] of cases) {
+    const [zod, ajv] = both(ast);
+    expect(zod, `zod: ${why}`).toBe(expected);
+    expect(ajv, `ajv: ${why}`).toBe(expected);
+  }
+});

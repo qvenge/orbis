@@ -687,6 +687,42 @@ describe('entity.get: прогресс приезжает с целью и то�
     expect(gotPlain.goalProgress).toBeUndefined();
   });
 
+  /**
+   * Имя `aggregate` теперь живёт на ДВУХ уровнях источника: внешний — функция цели (§11.3),
+   * вложенный — настройка показа плитки в проекции запроса (спека страниц §5.4). Считает
+   * прогресс ВНЕШНИЙ; вложенный — часть проекции, которую компилятор не читает. Перепутай
+   * их расчёт — и цель «накопить сумму» показала бы число транзакций.
+   */
+  test('вложенный aggregate проекции в progress_source.query игнорируется: считает внешний', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    await createIncome(user, caller, 'Отложил в мае', '100.00', ['savings']);
+    await createIncome(user, caller, 'Отложил в июне', '50.00', ['savings']);
+    const goal = await createGoal(user, {
+      title: 'Накопить 1000',
+      progress_source: {
+        query: 'aspect=orbis/financial, tags=savings, display=tile, aggregate=count',
+        aggregate: 'sum',
+        field: 'orbis/amount',
+      },
+      target_value: '1000.00',
+    });
+
+    const got = await caller.entity.get({ id: goal.id });
+    // Страж вакуумности: источник записан ДЕРЕВОМ с вложенной плиткой, а не неразобранным
+    // текстом (`toGoalSource` молча заворачивает отказ разбора в `{text}` — тогда расчёт
+    // дал бы invalid_query, и тест проверял бы не то). Запись прошла ajv схемы свойства.
+    const stored = got.entity.props['orbis/progress_source'] as {
+      query: QueryAst;
+      aggregate: string;
+    };
+    expect(stored.aggregate).toBe('sum');
+    expect(stored.query.display).toBe('tile');
+    expect(stored.query.aggregate).toEqual({ fn: 'count' });
+    // 150, а не 2: сумма поля по внешнему `aggregate`, вложенный `count` не считается.
+    expect(got.goalProgress).toEqual({ current: '150.00', target: '1000.00' });
+  });
+
   test('`this` в источнике прогресса — сама цель (children_of=this считает подзадачи)', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);

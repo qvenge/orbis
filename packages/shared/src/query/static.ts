@@ -82,7 +82,17 @@ function walk(node: QueryFilterNode): void {
  * сид (без БД), исполнитель (в транзакции) и конструктор в браузере.
  */
 export function assertStaticQuery(ast: QueryAst): void {
-  for (const key of ['sortBy', 'limit', 'display', 'title'] as const) {
+  // Настройки показа блока данных (§5.4) — тоже проекция: множеству ни плитка, ни колонки,
+  // ни «прятать пустое» ничего не добавляют, а молча принятые они выглядели бы как смысл.
+  for (const key of [
+    'sortBy',
+    'limit',
+    'display',
+    'title',
+    'aggregate',
+    'columns',
+    'hideEmpty',
+  ] as const) {
     if (ast[key] !== undefined) {
       throw new ScopeNotStaticError(`проекция '${key}' у множества бессмысленна`);
     }

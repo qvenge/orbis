@@ -232,6 +232,22 @@ describe('queryRefsFromDoc — индекс адресов, названных �
     expect(queryRefsFromDoc(doc as never)).toEqual([UUID]);
   });
 
+  test('адреса проекции блока данных (§5.4) лежат под `field` и попадают в индекс', () => {
+    // Ключ `field` выбран ради этого: индекс (и переписывание при слиянии свойств) обходит
+    // дерево по именам ключей, и адрес агрегата под другим именем выпал бы молча.
+    const tile = bound(
+      '{{query:aspect=orbis/financial, display=tile, aggregate=sum:orbis/amount}}',
+    );
+    expect(block(tile).ast).not.toBeNull();
+    expect(queryRefsFromDoc(tile as never)).toContain('orbis/amount');
+    const table = bound(
+      '{{query:aspect=orbis/task, display=table, columns=orbis/due_date|orbis/priority}}',
+    );
+    const refs = queryRefsFromDoc(table as never);
+    expect(refs).toContain('orbis/due_date');
+    expect(refs).toContain('orbis/priority');
+  });
+
   test('`this` в индекс не едет: это не адрес, а контекст исполнения', () => {
     const refs = queryRefsFromDoc(bound('{{query: children_of=this}}') as never);
     expect(refs).not.toContain('this');

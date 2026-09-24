@@ -467,3 +467,63 @@ test('OR по не-тегам плоским текстом не выражае�
     printQueryAst({ filter: { not: { or: [{ tag: 'дом' }, { tag: 'дача' }] } } }, REG, 'key'),
   ).toBe('!tags=дом|дача');
 });
+
+test('§5.4: проекция блока данных — печать в порядке РП-4 и круг «разбор → печать → разбор»', () => {
+  // Вход намеренно в ДРУГОМ порядке, чем печать: хвост проекции печатается фиксированно
+  // (`sortBy, limit, display, columns, aggregate, hide_empty, title`), дерево от порядка
+  // слов не зависит.
+  const cases: [string, string][] = [
+    [
+      'title="Потрачено" hide_empty aggregate=sum:orbis/amount display=tile aspect=orbis/financial limit=5',
+      'aspect=orbis/financial, limit=5, display=tile, aggregate=sum:orbis/amount, hide_empty, title=Потрачено',
+    ],
+    [
+      'columns=orbis/priority|orbis/due_date, display=table, sortBy=orbis/due_date:asc, aspect=orbis/task',
+      'aspect=orbis/task, sortBy=orbis/due_date:asc, display=table, columns=orbis/priority|orbis/due_date',
+    ],
+    ['aggregate=count, display=tile', 'display=tile, aggregate=count'],
+    [
+      'aggregate=latest:orbis/current_value, display=tile, aspect=orbis/goal',
+      'aspect=orbis/goal, display=tile, aggregate=latest:orbis/current_value',
+    ],
+    ['hide_empty', 'hide_empty'],
+  ];
+  for (const [input, canonical] of cases) {
+    const first = parseQueryAst(input, REG);
+    expect(first.ok, `${input}: ${first.ok ? '' : first.error.message}`).toBe(true);
+    if (!first.ok) continue;
+    const printed = printQueryAst(first.ast, REG, 'key');
+    expect(printed, input).toBe(canonical);
+    const back = parseQueryAst(printed, REG);
+    expect(back.ok, `обратный разбор ${printed}`).toBe(true);
+    if (back.ok) expect(back.ast, `круг ${input}`).toEqual(first.ast);
+  }
+});
+
+test('§5.4: id-инвариант проекции — в дереве id, в key-печати key, в label-печати подпись', () => {
+  const P = FIXTURE_USER_PROPERTY_ID; // number, key `user/effort_points`, подпись «Баллы усилия»
+  const text = 'display=table, columns=user/effort_points|orbis/priority';
+  const r = parseQueryAst(text, REG);
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.ast.columns).toEqual([{ field: P }, { field: 'orbis/priority' }]);
+  expect(printQueryAst(r.ast, REG, 'key')).toBe(text);
+
+  const tile = parseQueryAst('display=tile, aggregate=sum:user/effort_points', REG);
+  expect(tile.ok).toBe(true);
+  if (!tile.ok) return;
+  expect(tile.ast.aggregate).toEqual({ fn: 'sum', field: P });
+  expect(printQueryAst(tile.ast, REG, 'key')).toBe(
+    'display=tile, aggregate=sum:user/effort_points',
+  );
+  // Label-форма: имя свойства в кавычках, и она тоже разбирается обратно в то же дерево.
+  const label = printQueryAst(tile.ast, REG, 'label');
+  expect(label).toBe('display=tile, aggregate=sum:"Баллы усилия"');
+  const back = parseQueryAst(label, REG);
+  expect(back.ok).toBe(true);
+  if (back.ok) expect(back.ast).toEqual(tile.ast);
+  const labelCols = printQueryAst(r.ast, REG, 'label');
+  const backCols = parseQueryAst(labelCols, REG);
+  expect(backCols.ok, labelCols).toBe(true);
+  if (backCols.ok) expect(backCols.ast).toEqual(r.ast);
+});
