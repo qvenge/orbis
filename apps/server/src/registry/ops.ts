@@ -2932,7 +2932,9 @@ function assertRuleInvariants(before: RegistrySnapshot, after: RegistrySnapshot)
  * деплое ложной заметкой. Сверка — по строкам ДО дельт (сид кладёт системные правила в колонку встроенной
  * строки; `loadRegistryRows` либо `RegistrySnapshot.system`), по всем носителям, ролям тоже. Исключение одно —
  * тот же носитель (`same`): там id системного правила значит «включить обратно», и дословность декларации
- * спрашивает писатель (`RULE_SYSTEM_IMMUTABLE`).
+ * спрашивает писатель (`RULE_SYSTEM_IMMUTABLE`). Двери две: `setOwnRule` (колонка своей строки) и
+ * `assertDeltaRulesWrite` — общая для обоих писателей дельты (`setRuleDelta` через `writeRuleDelta` и
+ * `aspect_delta_set` с полем `rules`).
  */
 function refuseSystemRuleId(rows: RegistryDictionaries, ruleId: string, same?: RuleCarrier): void {
   for (const [kind, dict] of [
@@ -3144,7 +3146,6 @@ export async function setRuleDelta(
   const before = await probeSnapshot(tx, graphId, rows);
   const parsed = parsedRuleOrRefusal(normalizeRuleInput(rule, before), before, target);
   const system = base.find((r) => r.id === parsed.id);
-  refuseSystemRuleId(rows, parsed.id, target);
   if (system !== undefined && canonicalJson(parsed) !== canonicalJson(system)) {
     throw new ExecError(
       'VALIDATION',
