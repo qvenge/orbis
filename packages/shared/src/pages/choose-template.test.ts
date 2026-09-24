@@ -130,6 +130,35 @@ describe('§4.2–4.3: таблица случаев С1а-3', () => {
     expect(chooseTemplate(PT, [b, a], allOk)).toEqual(want);
   });
 
+  test('цикл из трёх: A главнее B, B главнее C, C главнее A — выбор не сделан, показ детерминирован', () => {
+    // Каждый покрывает лишь одного из двух прочих, и каждого кто-то бьёт: победителя нет ни при
+    // каком порядке обхода M.
+    const a = t('A', [P], ['B'], '2026-09-01T00:00:00Z');
+    const b = t('B', [P], ['C'], '2026-09-02T00:00:00Z');
+    const c = t('C', [P], ['A'], '2026-09-03T00:00:00Z');
+    const want: TemplateChoice = {
+      kind: 'template',
+      id: 'A',
+      dispute: ['A', 'B', 'C'],
+      broken: [],
+    };
+    expect(chooseTemplate(PT, [a, b, c], allOk)).toEqual(want);
+    expect(chooseTemplate(PT, [c, b, a], allOk)).toEqual(want);
+  });
+
+  test('побеждённый вне M не в счёт: «Главнее, чем» шаблона с меньшим набором победителя не снимает', () => {
+    // X{project} в M не входит (набор меньше), и его «X главнее B» к спору B и C отношения не имеет.
+    // C создан раньше: учти шаг 5 слово X, победителя не было бы, и показался бы C со спором.
+    const x = t('X', [P], ['B'], '2026-08-01T00:00:00Z');
+    const b = t('B', [P, T], ['C'], '2026-09-02T00:00:00Z');
+    const c = t('C', [P, T], [], '2026-09-01T00:00:00Z');
+    const want: TemplateChoice = { kind: 'template', id: 'B', dispute: null, broken: [] };
+    expect(chooseTemplate(PT, [x, b, c], allOk)).toEqual(want);
+    expect(chooseTemplate(PT, [c, b, x], allOk)).toEqual(want);
+    // Один на вершине — тоже B: чужое «главнее» из-под вершины его не сдвигает.
+    expect(chooseTemplate(PT, [x, b], allOk)).toEqual(want);
+  });
+
   test('самоссылка игнорируется: из строк графа', () => {
     const rows = [
       { id: 'A', props: { [TEMPLATE_FOR_PROPERTY]: [P] }, createdAt: '2026-09-01T00:00:00Z' },
