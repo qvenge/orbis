@@ -406,6 +406,27 @@ const SAMPLES: ReadonlyArray<{
     // Литерал пары в образцах `brand-cast` не пишется — иначе он засчитался бы второму маркеру
     // и пин «каждый маркер ловит ТОЛЬКО свой файл» перестал бы быть различающим.
   },
+  // --- Носители интервала Б-1→Б-2 (§С8-24, рамка Б2.13) -------------------------------------
+  { id: 'shim-task-completion', lines: ['applyTaskCompletion(before, state, now);'] },
+  {
+    id: 'shim-financial-invariant',
+    lines: [
+      'assertFinancialInvariant(state, hasDerivedFrom);',
+      'const a = financialRecurringNeedsDerivedFrom(state);',
+      'const b = hasIncomingDerivedFrom(tx, id);',
+    ],
+  },
+  {
+    id: 'shim-envelope-unique',
+    lines: ['await assertEnvelopeUnique(tx, {});', 'const k = ENVELOPE_IDENTITY;'],
+  },
+  {
+    id: 'oracle-compute-overview',
+    lines: ['const o = await computeOverview(tx, owner, month, today);', 'const t = overviewOfTx;'],
+  },
+  // Два маркера-УТВЕРЖДЕНИЯ — без COMMENT_ONLY_LINE (довод — шаг 2).
+  { id: 'oracle-docblock-b2', lines: ["const a = 'Р-К-5: оракул сверки живёт до Б-2';"] },
+  { id: 'engine-code-docblock', lines: ['// ЗДЕСЬ — КОД ДВИЖКА, а не декларация правила'] },
 ];
 
 test('позитивный контроль: у каждого маркера есть образец', () => {
@@ -483,6 +504,12 @@ test('имена маркеров — договор: на них ссылают
     'owner-key',
     'identity-pair',
     'brand-cast',
+    'shim-task-completion',
+    'shim-financial-invariant',
+    'shim-envelope-unique',
+    'oracle-compute-overview',
+    'oracle-docblock-b2',
+    'engine-code-docblock',
   ]);
 });
 

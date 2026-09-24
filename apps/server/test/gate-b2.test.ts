@@ -438,5 +438,13 @@ export const GATE_B2_GREP_NAMES = [
 export const GATE_B2_GREP_PATTERN = GATE_B2_GREP_NAMES.join('|');
 export const GATE_B2_GREP_PATHSPEC: readonly string[] = GATE_GREP_PATHSPEC;
 /** Тип — `readonly string[]`, как у `SEARCH_PATHSPEC`, а не кортеж литералов: задача 5 спрашивает
- *  `GATE_B2_GREP_ALLOWED.includes(path)` с `path: string`, и у кортежа это TS2345. */
-export const GATE_B2_GREP_ALLOWED: readonly string[] = ['apps/server/test/gate-b2.test.ts'];
+ *  `GATE_B2_GREP_ALLOWED.includes(path)` с `path: string`, и у кортежа это TS2345.
+ *
+ *  Два файла греп-гейта старой формы — с задачи 18: его маркеры `shim-task-completion` и
+ *  `shim-financial-invariant` закрывают ту же дверь стоячим CI-гейтом и называют снесённые имена
+ *  дословно (паттерн и образцы `SAMPLES` — предмет его проверки). Боевого кода в списке нет. */
+export const GATE_B2_GREP_ALLOWED: readonly string[] = [
+  'apps/server/test/gate-b2.test.ts',
+  'scripts/check-legacy-form.ts',
+  'scripts/check-legacy-form.test.ts',
+];

@@ -371,6 +371,50 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
     pattern: String.raw`\bas\s+(?:\w+\s+as\s+)?(?:GraphId|AccountId|Identity)\b|(?<![\w$])<\s*(?:GraphId|AccountId|Identity)\s*>|(?:[Aa]ctor|[Gg]raph(?:Id)?)\s+as\s+(?:never|any)\b|parse(?:Graph|Account)Id\([^\n]*\.(?:actor|graph)\b|\.(?:actor|graph)\b[^\n]*parse(?:Graph|Account)Id\(`,
     exclude: [COMMENT_ONLY_LINE],
   },
+  // --- Носители интервала Б-1→Б-2 (§А7-2, §С8-24; рамка Б2.4, Б2.13) -----------------------
+  // Четыре первых ловят ИМЯ, ВЕРНУВШЕЕСЯ В КОД: инварианты §А7-2 переехали строками реестра
+  // (задачи 4, 12, 14), оракул сверки снесён (задача 11). Снимается строка, которая КОММЕНТАРИЙ
+  // ЦЕЛИКОМ: объяснять снятое надо там, где его больше нет, — тот же довод и та же форма, что у
+  // `aspects-legacy` и `legacy-grammar`.
+  {
+    id: 'shim-task-completion',
+    pattern: String.raw`\bapplyTaskCompletion\b`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
+  // Три имени одной пары: `assertFinancialInvariant` и два помощника (`normalize.ts`, `executor.ts`)
+  // умирают одним коммитом задачи 4. Гейт, зелёный при живом помощнике, врал бы ровно про то, ради
+  // чего написан, — тот же замер, что у трёх текстов Agenda.
+  {
+    id: 'shim-financial-invariant',
+    pattern: String.raw`assertFinancialInvariant|financialRecurringNeedsDerivedFrom|hasIncomingDerivedFrom`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
+  // Обе половины второй копии четвёрки свойств конверта (задача 12 переводит их на `unique_among`
+  // с `params.properties`). Имя константы в паттерне: она и есть «вторая копия перечня», от которой
+  // лечит правило 4 §10.
+  {
+    id: 'shim-envelope-unique',
+    pattern: String.raw`assertEnvelopeUnique|ENVELOPE_IDENTITY`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
+  // Оракул Overview и его tx-обёртка (задача 11). Помощники (`rawEnvelopesOfMonth`, `spentByEnvelope`)
+  // в паттерн НЕ идут: имена родовые, и после сноса они принадлежат движку подписки; носителем
+  // «второго мнения» был именно вход `computeOverview`.
+  {
+    id: 'oracle-compute-overview',
+    pattern: String.raw`\bcomputeOverview\b|\boverviewOfTx\b`,
+    exclude: [COMMENT_ONLY_LINE],
+  },
+  // УТВЕРЖДЕНИЕ, А НЕ НОСИТЕЛЬ — и поэтому БЕЗ `COMMENT_ONLY_LINE` (образец и довод —
+  // `p5-gate-docblock`). Строка `codeRemainder` манифеста Финансов объявляла оракулу дату смерти;
+  // после задачи 11 записи нет, и фраза, вернувшаяся в дерево, означает вернувшийся остаток.
+  // ОБЫЧНАЯ строка, не `String.raw`: транспайлер Bun 1.2.7 печатает не-ASCII внутри сырого литерала
+  // escape-последовательностями, и `git grep -P` падает кодом 128 (эррата 19 плана Б-1).
+  { id: 'oracle-docblock-b2', pattern: 'оракул сверки живёт до Б-2' },
+  // Второе УТВЕРЖДЕНИЕ: шапка движка ближайшего предка говорила «СТРОКА правила в реестре каталога
+  // появляется потом». Задача 13 её положила — докблок стал ложью о собственном устройстве. Тоже
+  // обычная строка и по той же причине; тире длинное (U+2014), как в источнике.
+  { id: 'engine-code-docblock', pattern: 'ЗДЕСЬ — КОД ДВИЖКА' },
 ];
 
 export type AllowEntry = {
@@ -608,6 +652,16 @@ export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
     path: 'packages/shared/src/contracts/tools.test.ts',
     markers: ['relation-type'],
     reason: 'контракт ребра принимает `role` и ОТВЕРГАЕТ `relation_type` — имя в предмете проверки',
+  },
+
+  // --- 3. Носители интервала Б-1→Б-2: второй сторож той же двери -------------------------
+  {
+    path: 'apps/server/test/gate-b2.test.ts',
+    markers: ['shim-task-completion', 'shim-financial-invariant', 'aspects-legacy'],
+    reason:
+      'сторож вехи I среза Б-2: список имён снесённого кода (`GATE_B2_GREP_NAMES`) — предмет его ' +
+      'греп-доказательства, а пути этого гейта в `GATE_B2_GREP_ALLOWED` несут подстроку ' +
+      '`legacy-form` из имени `check-legacy-form`, а не имя снятого модуля проекции',
   },
 ];
 
