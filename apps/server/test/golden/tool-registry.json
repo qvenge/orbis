@@ -2154,7 +2154,7 @@
       "properties": {
         "key": {
           "type": "string",
-          "description": "адрес: свои действия живут в namespace user/ (user/close-month); он же имя тула action_user_close_month"
+          "description": "адрес: свои действия живут в namespace user/ (user/close-month); тул action_user_close_month публикуется, только если в offered_by есть {\"llm\":true}"
         },
         "label": {
           "type": "object",
@@ -2204,7 +2204,7 @@
           "items": {
             "type": "object"
           },
-          "description": "где предлагается: [{\"llm\":true}] — отдельным тулом модели; {\"surface\":\"…\"} — кнопкой поверхности"
+          "description": "где предлагается: [{\"llm\":true}] — отдельным тулом модели; {\"surface\":\"…\"} — хранится для будущей кнопки поверхности, сегодня её нет нигде"
         },
         "batch_cap": {
           "type": "integer",

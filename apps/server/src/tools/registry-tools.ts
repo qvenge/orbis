@@ -702,7 +702,7 @@ const actionSetJsonSchema = {
     key: {
       type: 'string',
       description:
-        'адрес: свои действия живут в namespace user/ (user/close-month); он же имя тула action_user_close_month',
+        'адрес: свои действия живут в namespace user/ (user/close-month); тул action_user_close_month публикуется, только если в offered_by есть {"llm":true}',
     },
     label: localizedJsonSchema,
     description: {
@@ -741,7 +741,7 @@ const actionSetJsonSchema = {
       type: 'array',
       items: { type: 'object' },
       description:
-        'где предлагается: [{"llm":true}] — отдельным тулом модели; {"surface":"…"} — кнопкой поверхности',
+        'где предлагается: [{"llm":true}] — отдельным тулом модели; {"surface":"…"} — хранится для будущей кнопки поверхности, сегодня её нет нигде',
     },
     batch_cap: {
       type: 'integer',
