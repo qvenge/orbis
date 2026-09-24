@@ -445,7 +445,7 @@ export const queryColumnSchema = z.object({ field: idSchema }).strict();
  * `kind` (докблок `QueryRelPredicate`): вход `ast:` тула, значение `orbis/progress_source`
  * и атрибут query-блока тела идут МИМО парсера, и плитка без агрегата сохранилась бы, а
  * читатель (рендер блока данных) получил бы форму, которую язык запрещает. Та же тройка
- * условий записана в JSON Schema (`ast-json-schema.ts`, `PROJECTION_DEPENDENCIES` и `TILE_NEEDS_AGGREGATE`), и совпадение
+ * условий записана в JSON Schema (`ast-json-schema.ts`, `PROJECTION_RULES`), и совпадение
  * вердиктов пиннит `ast.test.ts`. Сообщения — те же слова, что у отказов разбора
  * (`parse-ast.ts`, пост-проверка проекции), чтобы владелец и модель читали одно правило.
  */

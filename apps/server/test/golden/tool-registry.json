@@ -102,40 +102,66 @@
           },
           "required": ["filter"],
           "additionalProperties": false,
-          "dependencies": {
-            "aggregate": {
-              "properties": {
-                "display": {
-                  "const": "tile"
-                }
-              },
-              "required": ["display"]
-            },
-            "columns": {
-              "properties": {
-                "display": {
-                  "const": "table"
-                }
-              },
-              "required": ["display"]
-            }
-          },
-          "anyOf": [
+          "allOf": [
             {
-              "not": {
-                "properties": {
-                  "display": {
-                    "const": "tile"
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "aggregate": {}
+                    },
+                    "required": ["aggregate"]
                   }
                 },
-                "required": ["display"]
-              }
+                {
+                  "properties": {
+                    "display": {
+                      "const": "tile"
+                    }
+                  },
+                  "required": ["display"]
+                }
+              ]
             },
             {
-              "properties": {
-                "aggregate": {}
-              },
-              "required": ["aggregate"]
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "display": {
+                        "const": "tile"
+                      }
+                    },
+                    "required": ["display"]
+                  }
+                },
+                {
+                  "properties": {
+                    "aggregate": {}
+                  },
+                  "required": ["aggregate"]
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "columns": {}
+                    },
+                    "required": ["columns"]
+                  }
+                },
+                {
+                  "properties": {
+                    "display": {
+                      "const": "table"
+                    }
+                  },
+                  "required": ["display"]
+                }
+              ]
             }
           ]
         }
@@ -1067,40 +1093,66 @@
           },
           "required": ["filter"],
           "additionalProperties": false,
-          "dependencies": {
-            "aggregate": {
-              "properties": {
-                "display": {
-                  "const": "tile"
-                }
-              },
-              "required": ["display"]
-            },
-            "columns": {
-              "properties": {
-                "display": {
-                  "const": "table"
-                }
-              },
-              "required": ["display"]
-            }
-          },
-          "anyOf": [
+          "allOf": [
             {
-              "not": {
-                "properties": {
-                  "display": {
-                    "const": "tile"
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "aggregate": {}
+                    },
+                    "required": ["aggregate"]
                   }
                 },
-                "required": ["display"]
-              }
+                {
+                  "properties": {
+                    "display": {
+                      "const": "tile"
+                    }
+                  },
+                  "required": ["display"]
+                }
+              ]
             },
             {
-              "properties": {
-                "aggregate": {}
-              },
-              "required": ["aggregate"]
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "display": {
+                        "const": "tile"
+                      }
+                    },
+                    "required": ["display"]
+                  }
+                },
+                {
+                  "properties": {
+                    "aggregate": {}
+                  },
+                  "required": ["aggregate"]
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "columns": {}
+                    },
+                    "required": ["columns"]
+                  }
+                },
+                {
+                  "properties": {
+                    "display": {
+                      "const": "table"
+                    }
+                  },
+                  "required": ["display"]
+                }
+              ]
             }
           ],
           "$defs": {
@@ -1561,40 +1613,66 @@
           },
           "required": ["filter"],
           "additionalProperties": false,
-          "dependencies": {
-            "aggregate": {
-              "properties": {
-                "display": {
-                  "const": "tile"
-                }
-              },
-              "required": ["display"]
-            },
-            "columns": {
-              "properties": {
-                "display": {
-                  "const": "table"
-                }
-              },
-              "required": ["display"]
-            }
-          },
-          "anyOf": [
+          "allOf": [
             {
-              "not": {
-                "properties": {
-                  "display": {
-                    "const": "tile"
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "aggregate": {}
+                    },
+                    "required": ["aggregate"]
                   }
                 },
-                "required": ["display"]
-              }
+                {
+                  "properties": {
+                    "display": {
+                      "const": "tile"
+                    }
+                  },
+                  "required": ["display"]
+                }
+              ]
             },
             {
-              "properties": {
-                "aggregate": {}
-              },
-              "required": ["aggregate"]
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "display": {
+                        "const": "tile"
+                      }
+                    },
+                    "required": ["display"]
+                  }
+                },
+                {
+                  "properties": {
+                    "aggregate": {}
+                  },
+                  "required": ["aggregate"]
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "columns": {}
+                    },
+                    "required": ["columns"]
+                  }
+                },
+                {
+                  "properties": {
+                    "display": {
+                      "const": "table"
+                    }
+                  },
+                  "required": ["display"]
+                }
+              ]
             }
           ],
           "$defs": {
@@ -4212,22 +4290,66 @@
                       "anyOf": [
                         {
                           "type": "object",
-                          "anyOf": [
+                          "allOf": [
                             {
-                              "not": {
-                                "required": ["display"],
-                                "properties": {
-                                  "display": {
-                                    "const": "tile"
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["aggregate"],
+                                    "properties": {
+                                      "aggregate": {}
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "tile"
+                                    }
                                   }
                                 }
-                              }
+                              ]
                             },
                             {
-                              "required": ["aggregate"],
-                              "properties": {
-                                "aggregate": {}
-                              }
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["display"],
+                                    "properties": {
+                                      "display": {
+                                        "const": "tile"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["aggregate"],
+                                  "properties": {
+                                    "aggregate": {}
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["columns"],
+                                    "properties": {
+                                      "columns": {}
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "table"
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           ],
                           "title": "Orbis Q-AST",
@@ -4320,24 +4442,6 @@
                             }
                           },
                           "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
-                          "dependencies": {
-                            "columns": {
-                              "required": ["display"],
-                              "properties": {
-                                "display": {
-                                  "const": "table"
-                                }
-                              }
-                            },
-                            "aggregate": {
-                              "required": ["display"],
-                              "properties": {
-                                "display": {
-                                  "const": "tile"
-                                }
-                              }
-                            }
-                          },
                           "additionalProperties": false
                         },
                         {
@@ -4371,22 +4475,66 @@
                       "anyOf": [
                         {
                           "type": "object",
-                          "anyOf": [
+                          "allOf": [
                             {
-                              "not": {
-                                "required": ["display"],
-                                "properties": {
-                                  "display": {
-                                    "const": "tile"
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["aggregate"],
+                                    "properties": {
+                                      "aggregate": {}
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "tile"
+                                    }
                                   }
                                 }
-                              }
+                              ]
                             },
                             {
-                              "required": ["aggregate"],
-                              "properties": {
-                                "aggregate": {}
-                              }
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["display"],
+                                    "properties": {
+                                      "display": {
+                                        "const": "tile"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["aggregate"],
+                                  "properties": {
+                                    "aggregate": {}
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "anyOf": [
+                                {
+                                  "not": {
+                                    "required": ["columns"],
+                                    "properties": {
+                                      "columns": {}
+                                    }
+                                  }
+                                },
+                                {
+                                  "required": ["display"],
+                                  "properties": {
+                                    "display": {
+                                      "const": "table"
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           ],
                           "title": "Orbis Q-AST",
@@ -4479,24 +4627,6 @@
                             }
                           },
                           "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
-                          "dependencies": {
-                            "columns": {
-                              "required": ["display"],
-                              "properties": {
-                                "display": {
-                                  "const": "table"
-                                }
-                              }
-                            },
-                            "aggregate": {
-                              "required": ["display"],
-                              "properties": {
-                                "display": {
-                                  "const": "tile"
-                                }
-                              }
-                            }
-                          },
                           "additionalProperties": false
                         },
                         {
@@ -4866,22 +4996,66 @@
                           "anyOf": [
                             {
                               "type": "object",
-                              "anyOf": [
+                              "allOf": [
                                 {
-                                  "not": {
-                                    "required": ["display"],
-                                    "properties": {
-                                      "display": {
-                                        "const": "tile"
+                                  "anyOf": [
+                                    {
+                                      "not": {
+                                        "required": ["aggregate"],
+                                        "properties": {
+                                          "aggregate": {}
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "required": ["display"],
+                                      "properties": {
+                                        "display": {
+                                          "const": "tile"
+                                        }
                                       }
                                     }
-                                  }
+                                  ]
                                 },
                                 {
-                                  "required": ["aggregate"],
-                                  "properties": {
-                                    "aggregate": {}
-                                  }
+                                  "anyOf": [
+                                    {
+                                      "not": {
+                                        "required": ["display"],
+                                        "properties": {
+                                          "display": {
+                                            "const": "tile"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "required": ["aggregate"],
+                                      "properties": {
+                                        "aggregate": {}
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "anyOf": [
+                                    {
+                                      "not": {
+                                        "required": ["columns"],
+                                        "properties": {
+                                          "columns": {}
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "required": ["display"],
+                                      "properties": {
+                                        "display": {
+                                          "const": "table"
+                                        }
+                                      }
+                                    }
+                                  ]
                                 }
                               ],
                               "title": "Orbis Q-AST",
@@ -4974,24 +5148,6 @@
                                 }
                               },
                               "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
-                              "dependencies": {
-                                "columns": {
-                                  "required": ["display"],
-                                  "properties": {
-                                    "display": {
-                                      "const": "table"
-                                    }
-                                  }
-                                },
-                                "aggregate": {
-                                  "required": ["display"],
-                                  "properties": {
-                                    "display": {
-                                      "const": "tile"
-                                    }
-                                  }
-                                }
-                              },
                               "additionalProperties": false
                             },
                             {
@@ -5025,22 +5181,66 @@
                           "anyOf": [
                             {
                               "type": "object",
-                              "anyOf": [
+                              "allOf": [
                                 {
-                                  "not": {
-                                    "required": ["display"],
-                                    "properties": {
-                                      "display": {
-                                        "const": "tile"
+                                  "anyOf": [
+                                    {
+                                      "not": {
+                                        "required": ["aggregate"],
+                                        "properties": {
+                                          "aggregate": {}
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "required": ["display"],
+                                      "properties": {
+                                        "display": {
+                                          "const": "tile"
+                                        }
                                       }
                                     }
-                                  }
+                                  ]
                                 },
                                 {
-                                  "required": ["aggregate"],
-                                  "properties": {
-                                    "aggregate": {}
-                                  }
+                                  "anyOf": [
+                                    {
+                                      "not": {
+                                        "required": ["display"],
+                                        "properties": {
+                                          "display": {
+                                            "const": "tile"
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "required": ["aggregate"],
+                                      "properties": {
+                                        "aggregate": {}
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "anyOf": [
+                                    {
+                                      "not": {
+                                        "required": ["columns"],
+                                        "properties": {
+                                          "columns": {}
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "required": ["display"],
+                                      "properties": {
+                                        "display": {
+                                          "const": "table"
+                                        }
+                                      }
+                                    }
+                                  ]
                                 }
                               ],
                               "title": "Orbis Q-AST",
@@ -5133,24 +5333,6 @@
                                 }
                               },
                               "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
-                              "dependencies": {
-                                "columns": {
-                                  "required": ["display"],
-                                  "properties": {
-                                    "display": {
-                                      "const": "table"
-                                    }
-                                  }
-                                },
-                                "aggregate": {
-                                  "required": ["display"],
-                                  "properties": {
-                                    "display": {
-                                      "const": "tile"
-                                    }
-                                  }
-                                }
-                              },
                               "additionalProperties": false
                             },
                             {

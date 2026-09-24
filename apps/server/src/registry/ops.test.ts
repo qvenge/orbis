@@ -2406,6 +2406,86 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     expect(back.body_refs).toEqual(before.body_refs);
   });
 
+  test('merge переписывает адреса ПРОЕКЦИИ блока данных (§5.4): aggregate=sum:<x> и columns=<x>|…', async () => {
+    // Новые точки записи имени свойства в дереве (задача 6 среза страниц) — под ключом
+    // `field`: индекс `query_refs` их видит, `rewriteAst` переписывает, печать блока
+    // возвращает key цели. Без этого пина плитка «Потрачено» после слияния продолжала бы
+    // считать по поглощённому свойству — то есть по пустоте.
+    const source = ok(
+      await runMerge('property_create', {
+        key: 'user/spent-t6',
+        label: { ru: 'Потрачено т6' },
+        description: { ru: 'Поглощаемое' },
+        type: { kind: 'decimal' },
+        status: 'active',
+      }),
+    );
+    const into = ok(
+      await runMerge('property_create', {
+        key: 'user/outlay-t6',
+        label: { ru: 'Расход т6' },
+        description: { ru: 'Цель слияния' },
+        type: { kind: 'decimal' },
+        status: 'active',
+      }),
+    );
+    const sourceId = (source.results[0] as { property: string }).property;
+    const intoId = (into.results[0] as { property: string }).property;
+    const intoKey = (into.results[0] as { key: string }).key;
+
+    const pageId = newId();
+    ok(
+      await execute(
+        db,
+        {
+          identity: personal(mergeOwner),
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [
+            {
+              tool: 'entity_create',
+              input: {
+                id: pageId,
+                title: 'Страница с плиткой',
+                tags: [],
+                body:
+                  '{{query:aspect=orbis/financial, display=tile, aggregate=sum:user/spent-t6}}\n\n' +
+                  '{{query:aspect=orbis/financial, display=table, columns=user/spent-t6|orbis/amount}}',
+              },
+            },
+          ],
+        },
+        { sink },
+      ),
+    );
+    const before = await ownEntityRefs(pageId);
+    // Предусловие: оба блока ПРИВЯЗАНЫ и адресуют источник через проекцию — иначе ниже
+    // зеленело бы на пустом месте.
+    const [tileBefore, tableBefore] = queryBlocksOf(before.body_doc, 2) as unknown as [
+      { ast: { aggregate?: unknown } },
+      { ast: { columns?: unknown } },
+    ];
+    expect(tileBefore.ast.aggregate).toEqual({ fn: 'sum', field: sourceId });
+    expect(tableBefore.ast.columns).toEqual([{ field: sourceId }, { field: 'orbis/amount' }]);
+    expect(before.query_refs).toContain(sourceId);
+
+    ok(await runMerge('property_merge', { source: sourceId, into: intoId }));
+
+    const after = await ownEntityRefs(pageId);
+    const [tile, table] = queryBlocksOf(after.body_doc, 2) as unknown as [
+      { ast: { aggregate?: unknown }; text: unknown },
+      { ast: { columns?: unknown }; text: unknown },
+    ];
+    expect(tile.ast.aggregate).toEqual({ fn: 'sum', field: intoId });
+    expect(table.ast.columns).toEqual([{ field: intoId }, { field: 'orbis/amount' }]);
+    expect(tile.text).toBe(`aspect=orbis/financial, display=tile, aggregate=sum:${intoKey}`);
+    expect(table.text).toBe(
+      `aspect=orbis/financial, display=table, columns=${intoKey}|orbis/amount`,
+    );
+    expect(after.query_refs).toContain(intoId);
+    expect(after.query_refs).not.toContain(sourceId);
+  });
+
   test('держатели тела берутся из query_refs: имя свойства ВНУТРИ ЗНАЧЕНИЯ — не адрес', async () => {
     // Держатели тела ищутся ПО ИНДЕКСУ `query_refs` (он собран из дерева), а не токенным
     // обходом текста блока. Обход не отличал адрес от строки: любое `a/b` внутри блока —
@@ -4480,6 +4560,24 @@ describe('exclusive_classes у писателей: дельта и привяз�
 });
 
 describe('rewriteAst: адреса свойств при слиянии (§А10-2, Ф-Б2-26)', () => {
+  test('адреса проекции блока данных (§5.4) — `aggregate.field` и `columns[].field` — переписываются', () => {
+    // Ключ `field` выбран для проекции ради этого: переписывание ищет адреса по ИМЕНИ ключа,
+    // и агрегат под другим именем пережил бы слияние со ссылкой на поглощённое свойство.
+    const from = new Set(['user/old_num']);
+    const before = {
+      filter: { has: 'user/old_num' },
+      display: 'table',
+      columns: [{ field: 'user/old_num' }, { field: 'orbis/priority' }],
+      aggregate: { fn: 'sum', field: 'user/old_num' },
+    };
+    expect(rewriteAst(before, from, 'user/new_num')).toEqual({
+      filter: { has: 'user/new_num' },
+      display: 'table',
+      columns: [{ field: 'user/new_num' }, { field: 'orbis/priority' }],
+      aggregate: { fn: 'sum', field: 'user/new_num' },
+    });
+  });
+
   test('член $touched переписывается как адрес; константа по значению — нет', () => {
     const from = new Set(['user/old_date', '019d48ea-4188-7c02-8e96-1f00000000aa']);
     const before = {

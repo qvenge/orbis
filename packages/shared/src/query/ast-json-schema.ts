@@ -37,22 +37,37 @@ function displayIs(mode: string): Record<string, unknown> {
   return { properties: { display: { const: mode } }, required: ['display'] };
 }
 
+/** «Ключ `key` присутствует» — с объявлением рядом, см. докблок `PROJECTION_RULES`. */
+function has(key: string): Record<string, unknown> {
+  return { properties: { [key]: {} }, required: [key] };
+}
+
 /**
  * Согласованность проекции блока данных (§5.4) — та же тройка, что `superRefine` у
- * `queryAstSchema` (там же довод, почему правило в схеме, а не только в разборе).
+ * `queryAstSchema` (там же довод, почему правило в схеме, а не только в разборе). Каждое
+ * правило — импликация «A ⇒ B», записанная `anyOf: [не A, B]`, все три — под одним `allOf`.
  *
- * Форма выбрана под ДВА валидатора сразу. Строгий ajv записи значения (`validate-props.ts`,
- * `strict: true`) требует, чтобы каждое имя в `required` было объявлено в `properties` ТОЙ
- * ЖЕ подсхемы (`strictRequired`): голое `{required: ['aggregate']}` внутри `anyOf`/`not`
- * роняет компиляцию схемы `orbis/progress_source`. Поэтому «aggregate ⇒ tile» и «columns ⇒
- * table» — `dependencies` (ключевое слово draft-07 ровно для «если есть ключ»), а «tile ⇒
- * aggregate» — импликация `anyOf: [не A, B]`, где у `required` рядом стоит пустое
- * объявление свойства. `if/then` не взят: его `then` упирается в тот же `strictRequired`.
+ * Форма выбрана под ТРИ валидатора сразу.
+ *  - Провайдеры LLM: только ключевые слова ядра JSON Schema (`allOf`/`anyOf`/`not`/
+ *    `properties`/`required`/`const`), общие для draft-07 и 2020-12. `dependencies` (draft-07;
+ *    в 2020-12 разнесено на `dependentSchemas`/`dependentRequired`) и `if/then` не взяты: схема
+ *    едет в каждый тул с Q-AST, и чужой валидатор, не принявший одно слово, отказал бы всем
+ *    тулам чата разом (D29 — такие мелочи у провайдера уже ломались).
+ *  - Строгий ajv записи значения (`validate-props.ts`, `strict: true` → `strictRequired`):
+ *    каждое имя в `required` обязано быть объявлено в `properties` ТОЙ ЖЕ подсхемы — голое
+ *    `{required: ['aggregate']}` внутри `anyOf`/`not` роняет компиляцию схемы
+ *    `orbis/progress_source` (`allOf` исполняется раньше `properties` корня, и объявление
+ *    корня туда не доходит). Поэтому «ключ есть» — это `has()`: `required` рядом с пустым
+ *    объявлением свойства.
+ *  - ajv `strict: false` (тест паритета, проба провайдера) — те же вердикты, что у zod.
  */
-const PROJECTION_DEPENDENCIES = { aggregate: displayIs('tile'), columns: displayIs('table') };
-const TILE_NEEDS_AGGREGATE = [
-  { not: displayIs('tile') },
-  { properties: { aggregate: {} }, required: ['aggregate'] },
+const PROJECTION_RULES = [
+  // aggregate ⇒ display=tile
+  { anyOf: [{ not: has('aggregate') }, displayIs('tile')] },
+  // display=tile ⇒ aggregate
+  { anyOf: [{ not: displayIs('tile') }, has('aggregate')] },
+  // columns ⇒ display=table
+  { anyOf: [{ not: has('columns') }, displayIs('table')] },
 ];
 
 export const queryAstJsonSchema: Record<string, unknown> = {
@@ -83,8 +98,7 @@ export const queryAstJsonSchema: Record<string, unknown> = {
   },
   required: ['filter'],
   additionalProperties: false,
-  dependencies: PROJECTION_DEPENDENCIES,
-  anyOf: TILE_NEEDS_AGGREGATE,
+  allOf: PROJECTION_RULES,
   $defs: {
     node: {
       anyOf: [

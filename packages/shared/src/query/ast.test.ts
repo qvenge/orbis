@@ -246,12 +246,48 @@ test('кап заведомо выше настоящих запросов: ни
   expect(deepest * 4).toBeLessThan(QUERY_TREE_DEPTH_CAP);
 });
 
+/**
+ * Строгий ajv — та же настройка, что у валидатора записи значения
+ * (`apps/server/src/registry/validate-props.ts`): схема Q-AST вшита в `orbis/progress_source`,
+ * и форма, которую strict-режим не компилирует (`strictRequired`), роняет запись каждой цели.
+ */
+function strictValidator() {
+  return new Ajv({ strict: true, allowUnionTypes: true, allErrors: true }).compile(
+    queryAstJsonSchema,
+  );
+}
+
+test('§5.4: правила проекции — только ключевые слова ядра JSON Schema (схема едет провайдерам)', () => {
+  // `dependencies` (draft-07; в 2020-12 разнесено) и `if/then/else` — слова, которые чужой
+  // валидатор провайдера может не принять; отказ получили бы ВСЕ тулы с Q-AST разом.
+  const keys = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (typeof v !== 'object' || v === null) return;
+    if (!Array.isArray(v)) for (const k of Object.keys(v)) keys.add(k);
+    for (const child of Array.isArray(v) ? v : Object.values(v)) walk(child);
+  };
+  walk(queryAstJsonSchema);
+  for (const banned of [
+    'dependencies',
+    'dependentSchemas',
+    'dependentRequired',
+    'if',
+    'then',
+    'else',
+  ]) {
+    expect(keys.has(banned), banned).toBe(false);
+  }
+});
+
 test('§5.4: проекция блока данных — обе схемы принимают формы и держат согласованность', () => {
   const validate = validator();
-  const both = (ast: unknown): [boolean, boolean] => [
-    queryAstSchema.safeParse(ast).success,
-    validate(ast) as boolean,
-  ];
+  const strict = strictValidator();
+  const both = (ast: unknown): [boolean, boolean] => {
+    const loose = validate(ast) as boolean;
+    // Третий валидатор — строгий ajv записи: вердикт обязан совпасть с нестрогим.
+    expect(strict(ast) as boolean, `strict ajv: ${JSON.stringify(ast)}`).toBe(loose);
+    return [queryAstSchema.safeParse(ast).success, loose];
+  };
   const cases: [unknown, boolean, string][] = [
     [{ filter: null, display: 'tile', aggregate: { fn: 'count' } }, true, 'плитка count'],
     [
@@ -313,5 +349,9 @@ test('§5.4: проекция блока данных — обе схемы пр
     const [zod, ajv] = both(ast);
     expect(zod, `zod: ${why}`).toBe(expected);
     expect(ajv, `ajv: ${why}`).toBe(expected);
+  }
+  // Корпус канона целиком: все три валидатора принимают каждую фикстуру.
+  for (const fixture of AST_FIXTURES) {
+    expect(both(fixture.ast), fixture.name).toEqual([true, true]);
   }
 });
