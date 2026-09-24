@@ -14,11 +14,12 @@
 // `test` добавлен хвост `&& bun test scripts/`. Без него этот файл не запускал бы никто —
 // ни локально, ни в CI.
 import { afterAll, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   ALLOWLIST,
+  COMMENT_ONLY_LINE,
   LEGACY_MARKERS,
   type MarkerReport,
   scan,
@@ -153,6 +154,59 @@ test('COMMENT_ONLY_LINE: строка-комментарий снимается,
   expect(byId(reports, 'aspects-legacy').hits.map((h) => h.line)).toEqual([1]);
   expect(byId(reports, 'relation-type').hits.map((h) => h.line)).toEqual([2]);
   expect(byId(reports, 'entity-meta').hits.map((h) => h.line)).toEqual([3]);
+});
+
+test('COMMENT_ONLY_LINE: строка, лишь НАЧИНАЮЩАЯСЯ как комментарий, но несущая код, — код', () => {
+  /**
+   * Замер ревью задачи 5 среза Б-2 (m-1): прежняя маска `^\s*(?://|\*|/\*|--).*$` снимала всякую
+   * строку с таким началом — метод-генератор, код после закрытого блочного комментария и префиксный
+   * декремент проходили как проза, и сторож «имени снесённого в коде нет» молчал на живом коде.
+   * Пиннятся обе стороны сужения: четыре формы кода ловятся каждая своим маркером, четыре формы
+   * прозы (включая голую звёздочку и SQL-ное `-- `) по-прежнему снимаются.
+   *
+   * Имя старой грамматики собирается из кусков, а не пишется литералом: проба `legacy-grammar` по
+   * РАБОЧЕМУ дереву ниже считает его образцы в этом файле поимённо (ровно четыре), и литерал здесь
+   * сдвинул бы её пин по причине, к ней не относящейся.
+   */
+  const grammarName = ['serialize', 'Query'].join('');
+  const dir = repo({
+    'apps/server/src/code-like.ts': [
+      'export const probe = {',
+      '  *aspectsLegacy() {},',
+      '};',
+      '/* x */ const r = relation_type;',
+      '--entities.meta;',
+      '  *applyTaskCompletion() {},',
+      `/* y */ const g = ${grammarName}(ast);`,
+      '',
+    ].join('\n'),
+    'apps/server/src/prose.ts': [
+      ' * докблок: aspectsLegacy и applyTaskCompletion',
+      ' *',
+      `/* закрыт в конце строки: relation_type и ${grammarName} */`,
+      '        -- SQL внутри литерала: entities.meta',
+      '',
+    ].join('\n'),
+  });
+  const reports = scan(dir);
+  const lines = (id: string) => [id, byId(reports, id).hits.map((h) => `${h.path}:${h.line}`)];
+  expect(lines('aspects-legacy')).toEqual(['aspects-legacy', ['apps/server/src/code-like.ts:2']]);
+  expect(lines('relation-type')).toEqual(['relation-type', ['apps/server/src/code-like.ts:4']]);
+  expect(lines('entity-meta')).toEqual(['entity-meta', ['apps/server/src/code-like.ts:5']]);
+  expect(lines('shim-task-completion')).toEqual([
+    'shim-task-completion',
+    ['apps/server/src/code-like.ts:6'],
+  ]);
+  expect(lines('legacy-grammar')).toEqual(['legacy-grammar', ['apps/server/src/code-like.ts:7']]);
+});
+
+test('сторож вехи I держит ту же маску комментария, что гейт: копия сверена по исходнику', () => {
+  // Импорт `scripts/` из тестов сервера не дотягивается, поэтому в `gate-b2.test.ts` стоит КОПИЯ.
+  // Разойдись она с гейтом — два сторожа одной двери мерили бы «комментарий» по-разному, и сужение
+  // одного молча не доехало бы до другого (ровно так m-1 задачи 5 жил в обоих местах).
+  const src = readFileSync(join(import.meta.dir, '..', 'apps/server/test/gate-b2.test.ts'), 'utf8');
+  const copy = /^const COMMENT_ONLY_LINE = (\/.*\/);$/m.exec(src)?.[1];
+  expect(copy).toBe(COMMENT_ONLY_LINE.toString());
 });
 
 test('COMMENT_ONLY_LINE не снимает строку у маркеров, которым её не давали', () => {
