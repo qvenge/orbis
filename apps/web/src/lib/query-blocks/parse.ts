@@ -1,3 +1,4 @@
+import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { type ParseAstResult, type ParseRegistry, parseQueryAst } from '@orbis/shared/query';
 
 /**
@@ -12,9 +13,12 @@ import { type ParseAstResult, type ParseRegistry, parseQueryAst } from '@orbis/s
  * двум сторонам стало не с чем расходиться: форма текста одна.
  *
  * Неизвестное имя свойства — отказ с позицией, а не молчаливый ноль результатов (§А5-3ж).
+ *
+ * Обёртку узнаёт препроход тела (`parsePageText`), а не свой регэксп: маркеры `{{…}}` знает одна
+ * копия правил (РП-6), и вторая рано или поздно разошлась бы с ней.
  */
 export function parseBlock(blockText: string, reg: ParseRegistry): ParseAstResult {
-  const m = blockText.match(/\{\{query:([\s\S]*?)\}\}/);
-  const inner = (m ? (m[1] ?? '') : blockText).trim();
+  const wrapped = parsePageText(blockText).find((n) => n.kind === 'query');
+  const inner = (wrapped?.kind === 'query' ? wrapped.text : blockText).trim();
   return parseQueryAst(inner, reg);
 }

@@ -3,9 +3,9 @@ import { type QueryAst, queryAstSchema } from '@orbis/shared/query';
 import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { useState } from 'react';
-import { QueryBlock as QueryBlockWidget } from '../../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { useToast } from '../../../ui/toast-store';
+import { DataBlock } from '../../page/blocks/DataBlock';
 import { QueryBlockEditor } from '../../query-builder/QueryBlockEditor';
 
 /** Дерево из атрибута ноды — или null, если его там нет или оно битое (attrs — сырой JSON). */
@@ -17,10 +17,14 @@ function astOf(raw: unknown): QueryAst | null {
 
 function Widget({ node, updateAttributes }: NodeViewProps) {
   // Атрибуты ноды типизированы как Record<string, any> — сужаем на входе, а не по месту.
-  // `ast` — правда о запросе, `text` — его печатная key-форма (либо исходная строка, если
-  // блок не разобран). Текст берётся ДОСЛОВНО, без trim: у неразобранного блока это
-  // единственное, что от запроса осталось.
-  const ast = astOf(node.attrs.ast);
+  // `text` — печатная key-форма привязанного дерева (либо исходная строка, если блок не
+  // разобран). Текст берётся ДОСЛОВНО, без trim: у неразобранного блока это единственное, что
+  // от запроса осталось, и ровно его увидит редактор блока.
+  //
+  // Данные блок берёт ПО ТЕКСТУ, а не по дереву атрибута (единый механизм, спека страниц 1а
+  // §6.3): тем же текстом его просит первый кадр, и ключ кеша у них общий — подъём редактора
+  // не перезапрашивает блок. Дерево атрибута остаётся заботой документа (привязка, индекс
+  // адресов тела), виджету оно не нужно.
   const text = typeof node.attrs.text === 'string' ? node.attrs.text : '';
   const [editing, setEditing] = useState(false);
   const { show } = useToast();
@@ -82,7 +86,7 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
     // contentEditable={false} — чтобы каретка не заходила внутрь виджета: в документе от него
     // только атрибуты запроса, набирать внутри нечего.
     <NodeViewWrapper data-query-widget="" contentEditable={false}>
-      <QueryBlockWidget query={{ ast, text }} onConfigure={() => setEditing(true)} />
+      <DataBlock text={text} onConfigure={() => setEditing(true)} />
       {editing && (
         // initial — текущий ТЕКСТ ноды (key-печать дерева либо неразобранная строка), а не
         // снимок при открытии. У detail снимок был нужен потому, что body под модалкой мог

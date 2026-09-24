@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { blocksReply, installCrashTrap, renderWithProviders } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { BodyEditor } from './BodyEditor';
 import { EDITOR_EXTENSIONS } from './extensions';
@@ -12,11 +12,11 @@ import { EDITOR_EXTENSIONS } from './extensions';
 // Реестр аспектов — настоящий (как в editor.test.tsx и slash.test.tsx): с пустым каталогом
 // любой смарт-лист падал бы плашкой qb-error, и тесты про NodeSelection на живом блоке
 // проходили бы по ложной причине.
-const handler = (path: string): unknown => {
+const handler = (path: string, input?: unknown): unknown => {
   const reg = registryReply(path);
   if (reg !== undefined) return reg;
-  if (path === 'entity.query') return [];
-  return {};
+  // Данные блоков — пачкой `entity.blocks` (спека страниц 1а §6.3): каждому блоку пусто.
+  return blocksReply({})(path, input) ?? {};
 };
 
 type Held = { editor: Editor | null };

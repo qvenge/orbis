@@ -1,12 +1,18 @@
 import { DOC_EXTENSIONS, parseBody } from '@orbis/shared/doc';
-import { printQueryAst, type QueryAst } from '@orbis/shared/query';
+import { printQueryAst } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { afterEach, expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders, trpcError } from '../../../test/harness';
+import {
+  blocksReply,
+  installCrashTrap,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../../../test/harness';
 import { registryReply } from '../../../test/registry';
 import { Toaster } from '../../../ui/Toast';
 import { BodyEditor } from '../BodyEditor';
@@ -37,20 +43,11 @@ const NEW_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
  * неотличимыми правильный вызов и вызов с полем `prefix`/`query` — контракт переименовали
  * коммитом 6df313f, и тест обязан ловить возврат старого имени.
  *
- * `entity.query` тоже отвечает по спрошенному запросу: виджет со СТАРЫМ атрибутом иначе был
- * бы неотличим от виджета с новым (тот же приём, что в query-widget.test.tsx).
+ * Пачка `entity.blocks` тоже отвечает каждому блоку по ЕГО тексту (`blocksReply`): виджет со
+ * СТАРЫМ атрибутом иначе был бы неотличим от виджета с новым (тот же приём, что в
+ * query-widget.test.tsx). Блок просит данные текстом атрибута (спека страниц 1а §6.3), дерево на
+ * сервер не уходит — приводить его к ключу печатью больше не нужно.
  */
-/**
- * Ключ строгого мока `entity.query`. Виджет шлёт ЛИБО текст (`query`), ЛИБО дерево (`ast`) —
- * привязанный блок уходит деревом (Задача 21a). Мок, ключёванный только по `query`, вернул бы
- * на дерево `[]` и оставил ассерты зелёными на пустом списке: ложная зелень по построению.
- * Дерево приводится к тому же ключу его key-печатью — она и есть канон (§А5-2).
- */
-function queryKeyOf(input: unknown): string {
-  const i = input as { query?: string; ast?: QueryAst };
-  if (i.ast !== undefined) return printQueryAst(i.ast, FIXTURE_PARSE_REGISTRY, 'key');
-  return i.query ?? '';
-}
 
 const api =
   (opts: {
@@ -62,7 +59,12 @@ const api =
   (path: string, input: unknown): unknown => {
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    if (path === 'entity.query') return opts.byQuery?.[queryKeyOf(input)] ?? [];
+    if (path === 'entity.blocks') {
+      const rows = Object.fromEntries(
+        Object.entries(opts.byQuery ?? {}).map(([q, list]) => [q, list.map((e) => wireEntity(e))]),
+      );
+      return blocksReply(rows)(path, input);
+    }
     if (path === 'entity.suggest') {
       const term = (input as { term?: unknown }).term;
       if (typeof term !== 'string') throw trpcError('BAD_REQUEST', 'ожидалось поле term');
@@ -278,7 +280,7 @@ test('«Смарт-лист» вставляет БЛОК в позицию ка
   const types = h.editor?.getJSON().content?.map((n) => n.type) ?? [];
   expect(types[0]).toBe('paragraph');
   expect(types[1]).toBe('queryBlock');
-  // Блок ЖИВОЙ: строка списка рисуется только ответом entity.query, а строгий мок отвечает
+  // Блок ЖИВОЙ: строка списка рисуется только ответом entity.blocks, а строгий мок отвечает
   // лишь на запрос нового блока.
   expect(await screen.findByTestId('qb-item')).toHaveTextContent('Разобрать почту');
   expect(screen.queryByTestId('qb-error')).toBeNull();

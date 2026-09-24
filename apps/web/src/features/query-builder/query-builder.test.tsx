@@ -2,7 +2,12 @@ import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
-import { installCrashTrap, type MockHandler, renderWithProviders } from '../../test/harness';
+import {
+  blocksReply,
+  installCrashTrap,
+  type MockHandler,
+  renderWithProviders,
+} from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { BodyEditor } from '../entity-editor/BodyEditor';
 import { QueryTextEditor } from './QueryTextEditor';
@@ -28,11 +33,11 @@ installCrashTrap();
  * nodes/query-widget.test.tsx. Здесь остался КОНСТРУКТОР ЗАПРОСА: какой редактор открывается,
  * что он показывает, что отдаёт наружу и куда возвращается фокус.
  */
-const handler: MockHandler = (path) => {
+const handler: MockHandler = (path, input) => {
   const reg = registryReply(path);
   if (reg !== undefined) return reg;
-  if (path === 'entity.query') return [];
-  return {};
+  // Данные блоков — пачкой `entity.blocks` (спека страниц 1а §6.3): каждому блоку пусто.
+  return blocksReply({})(path, input) ?? {};
 };
 
 /** Тело в редакторе + спай на изменения документа: правка блока наблюдается по документу. */

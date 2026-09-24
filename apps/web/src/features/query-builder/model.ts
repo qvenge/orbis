@@ -27,7 +27,13 @@
  */
 
 import type { PropertyKind } from '@orbis/shared';
-import type { QueryAst, QueryBound, QueryFilterNode, QueryScalar } from '@orbis/shared/query';
+import type {
+  QueryAst,
+  QueryBound,
+  QueryDisplayMode,
+  QueryFilterNode,
+  QueryScalar,
+} from '@orbis/shared/query';
 import {
   acceptsDateTokenKind,
   isListPropertyType,
@@ -398,4 +404,39 @@ export function parseForForm(initial: string, reg: QueryRegistry): QueryAst | nu
   const r = parseQueryAst(initial.trim(), reg.parse);
   if (!r.ok) return null;
   return printQuery(r.ast, reg).text === null ? null : r.ast;
+}
+
+/**
+ * Смена режима показа — вместе с парными ключами проекции (§5.4): `aggregate` живёт только при
+ * `tile` и при нём обязателен, `columns` — только при `table`. Голая замена `display` оставила бы
+ * несовместимую пару (`display=list, columns=…`), печать дала бы текст, который разбор отвергает,
+ * и сохранение заблокировалось бы отказом, которого человек не делал.
+ *
+ * `columns` при уходе с таблицы сбрасываются, а при возврате на неё не восстанавливаются: форма
+ * их не правит (колонки пишутся текстом блока), и держать невидимую копию значило бы вернуть
+ * человеку то, что он уже снял. Плитка без агрегата получает `count` — единственный, которому не
+ * нужно свойство.
+ */
+export function withDisplay(ast: QueryAst, display: QueryDisplayMode | undefined): QueryAst {
+  const { display: _d, aggregate, columns, ...rest } = ast;
+  const next: QueryAst = display === undefined ? rest : { ...rest, display };
+  if (display === 'tile') next.aggregate = aggregate ?? { fn: 'count' };
+  if (display === 'table' && columns !== undefined) next.columns = columns;
+  return next;
+}
+
+/**
+ * Свойства, по которым плитка считает `sum` и `latest`: одиночные number/decimal вне core — то
+ * же правило, что держит разбор (`assertNumericAggregate`, `query/parse-ast.ts`). Иное свойство
+ * форма предложила бы, а разбор напечатанного отверг бы.
+ */
+export function aggregateFieldIds(reg: QueryRegistry): string[] {
+  return reg.properties
+    .filter(
+      (def) =>
+        def.storage !== 'core' &&
+        !isListPropertyType(def.type) &&
+        (def.type.kind === 'number' || def.type.kind === 'decimal'),
+    )
+    .map((def) => def.id);
 }

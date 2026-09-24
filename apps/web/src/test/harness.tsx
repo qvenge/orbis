@@ -1,10 +1,12 @@
 import type { AppRouter } from '@orbis/server/src/router';
+import type { BlockResult, EntityBlocksInput } from '@orbis/shared';
 import { type DefaultOptions, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
 import { type ReactNode, StrictMode, Suspense } from 'react';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
+import { QueryBatchProvider } from '../lib/query-blocks/batch';
 import { trpc } from '../trpc';
 
 /**
@@ -176,12 +178,59 @@ export function renderWithProviders(
       <QueryClientProvider client={qc}>
         {/* Suspense — страховка для тестов, которые рендерят ленивое поддерево напрямую.
             Для синхронного дерева обёртка не меняет ничего. */}
-        <Suspense fallback={SUSPENDED}>{ui}</Suspense>
+        {/* Собиратель пачки блоков — как в main.tsx: без него блок данных не знает, куда
+            положить просьбу. */}
+        <QueryBatchProvider>
+          <Suspense fallback={SUSPENDED}>{ui}</Suspense>
+        </QueryBatchProvider>
       </QueryClientProvider>
     </trpc.Provider>
   );
   const result = render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
   return Object.assign(result, { calls });
+}
+
+/** Ответ одному блоку пачки: строки (сокращение для `kind:'rows'` без остатка) или сам результат. */
+export type BlockReplyValue = readonly WireEntityFixture[] | BlockResult;
+type BlockItem = EntityBlocksInput['blocks'][number];
+
+/**
+ * Ответ `entity.blocks` по карте «ТЕКСТ блока → строки | BlockResult» — чтобы тесты заметок
+ * сохранили прежний смысл «что ушло по каждому блоку и что показано», а не знали о ключах пачки.
+ *
+ * Карта ключуется текстом БЕЗ краёв: так его ключует и сам блок (`useBlockData`), и сервер
+ * (`prepareBlock` обрезает перед разбором). Значение-функция получает элемент пачки целиком —
+ * для ответов, зависящих от `limit` («ещё N») или от `thisEntityId`.
+ *
+ * Незнакомый текст — пустые строки, а не ошибка: строгий мок, отвечающий только про спрошенное,
+ * — ровно то, что держат тесты смарт-листов (виджет со СТАРЫМ текстом показал бы пустоту, а не
+ * чужой список). `undefined` — путь не `entity.blocks`, отвечает сам сьют (как `registryReply`).
+ */
+export function blocksReply(
+  map: Readonly<Record<string, BlockReplyValue | ((block: BlockItem) => BlockReplyValue)>>,
+): (path: string, input: unknown) => unknown | undefined {
+  const asResult = (v: BlockReplyValue | undefined): BlockResult => {
+    if (v === undefined) return { ok: true, kind: 'rows', rows: [], more: 0 };
+    if (Array.isArray(v)) return { ok: true, kind: 'rows', rows: v as never, more: 0 };
+    return v as BlockResult;
+  };
+  return (path, input) => {
+    if (path !== 'entity.blocks') return undefined;
+    const { blocks } = input as EntityBlocksInput;
+    return {
+      results: Object.fromEntries(
+        blocks.map((b) => {
+          const entry = map[b.text.trim()];
+          return [b.key, asResult(typeof entry === 'function' ? entry(b) : entry)];
+        }),
+      ),
+    };
+  };
+}
+
+/** Тексты блоков одного вызова `entity.blocks` в порядке пачки — для сверок «что ушло». */
+export function blockTexts(call: { input: unknown }): string[] {
+  return (call.input as EntityBlocksInput).blocks.map((b) => b.text);
 }
 
 /**

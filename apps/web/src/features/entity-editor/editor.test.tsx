@@ -7,7 +7,7 @@ import { EditorView } from '@tiptap/pm/view';
 import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { blocksReply, installCrashTrap, renderWithProviders } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { BodyEditor, htmlToPlainParagraphs } from './BodyEditor';
 import { BODY_PLACEHOLDER } from './body-box';
@@ -20,10 +20,11 @@ const KUPIT = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
 // Реестр аспектов — настоящий (как в detail.test.tsx): с пустым каталогом любой блок падал бы
 // плашкой qb-error, и «первый кадр рисует виджет» проходило бы по ложной причине.
-const handler = (path: string) => {
+const handler = (path: string, input?: unknown) => {
   const reg = registryReply(path);
   if (reg !== undefined) return reg;
-  if (path === 'entity.query') return [];
+  // Данные блоков — пачкой `entity.blocks` (спека страниц 1а §6.3): каждому блоку пусто.
+  if (path === 'entity.blocks') return blocksReply({})(path, input);
   // Резолв подписей чипа и поиск `@` — пустыми списками, а не `{}`: форма ответа у обоих
   // массив, и объект уронил бы рисование чипа и строк меню на `.map` (замерено пробой).
   if (path === 'entity.resolveRefs') return [];

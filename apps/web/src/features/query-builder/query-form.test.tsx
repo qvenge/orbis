@@ -1,12 +1,16 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
+import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { parseQueryAst, printQueryAst } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY as REG } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { registryReply } from '../../test/registry';
-import { queryBlocks } from '../browser/query';
 import { QueryBuilderForm } from './QueryBuilderForm';
+
+/** Тексты блоков данных тела — препроходом, которым их читает первый кадр (РП-6). */
+const queryBlocks = (body: string): string[] =>
+  parsePageText(body).flatMap((n) => (n.kind === 'query' ? [n.text.trim()] : []));
 
 // Реестры настоящие: каталог полей формы обязан совпадать с каталогом прода — иначе форма
 // предлагала бы свойства, которых сервер не знает, и прятала бы те, что есть.
@@ -202,6 +206,64 @@ test('снятие аспекта убирает его свойства, уст
   expect(screen.getByLabelText('Сумма')).toBeInTheDocument();
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, aspect=orbis/financial');
+});
+
+// --- режим показа и парные ключи проекции (§5.4, перенос ревью задачи 6) ----------------
+// `display` начал читаться (задача 11): форма обязана знать `columns`/`aggregate`/`hide_empty`
+// и не печатать несовместимую пару — иначе разбор отвергнет её же печать, и «Сохранить» погаснет
+// отказом, которого человек не делал.
+
+test('таблица → список: колонки сбрасываются, блок сохраняется', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, display=table, columns=orbis/due_date');
+  fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'list' } });
+  expect(screen.queryByTestId('qb-form-error')).toBeNull();
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, display=list');
+});
+
+test('таблица с колонками открывается формой и сохраняется без правок байт-в-байт', async () => {
+  const initial = 'aspect=orbis/task, display=table, columns=orbis/due_date|orbis/priority';
+  const { onSave } = await openForm(initial);
+  save();
+  expect(saved(onSave)).toBe(initial);
+});
+
+test('плитка: по умолчанию count, агрегат выбирается из числовых свойств', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial');
+  fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'tile' } });
+  expect(screen.getByLabelText('Число плитки')).toHaveValue('count');
+  fireEvent.change(screen.getByLabelText('Число плитки'), {
+    target: { value: 'sum:orbis/amount' },
+  });
+  expect(screen.queryByTestId('qb-form-error')).toBeNull();
+  save();
+  const text = saved(onSave);
+  const parsed = parseQueryAst(text, REG);
+  expect(parsed.ok && parsed.ast.display).toBe('tile');
+  expect(parsed.ok && parsed.ast.aggregate).toEqual({ fn: 'sum', field: 'orbis/amount' });
+});
+
+test('плитка → компактный: агрегат сбрасывается', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, display=tile, aggregate=count');
+  expect(screen.getByLabelText('Число плитки')).toHaveValue('count');
+  fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'compact' } });
+  expect(screen.queryByLabelText('Число плитки')).toBeNull();
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, display=compact');
+});
+
+test('«Прятать пустой блок» ставит и снимает hide_empty', async () => {
+  const { onSave } = await openForm('aspect=orbis/task');
+  fireEvent.click(screen.getByLabelText('Прятать пустой блок'));
+  save();
+  const parsed = parseQueryAst(saved(onSave), REG);
+  expect(parsed.ok && parsed.ast.hideEmpty).toBe(true);
+});
+
+test('подсказка режима не обещает, что режимы рисуются одинаково', async () => {
+  await openForm('aspect=orbis/task');
+  expect(screen.queryByText(/одинаково/)).toBeNull();
+  expect(screen.getByRole('option', { name: 'плитка' })).toBeInTheDocument();
 });
 
 // БЫЛО НАОБОРОТ до реформы: свойство конверта `limit` в грамматике §6.1 было невыразимо —

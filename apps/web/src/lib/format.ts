@@ -25,6 +25,28 @@ export function formatAmount(amount: string): string {
   return frac ? `${grouped}.${frac}` : grouped;
 }
 
+/**
+ * Символы валют для показа денег. Жил локально в карточке конверта (`EnvelopeCard`); переехал
+ * сюда, когда сумму с валютой стала печатать и плитка блока данных (спека страниц 1а §7.2), —
+ * вторая копия словаря разъехалась бы с первой на первой же новой валюте.
+ */
+export const CURRENCY_SYMBOL: Record<string, string> = { RUB: '₽', USD: '$', EUR: '€' };
+
+/**
+ * Сумма с валютой: `'1200.50', 'RUB'` → `'1 200.50 ₽'`. Незнакомая валюта печатается кодом
+ * (`'KZT'`), без валюты — голое число. Знак минуса сохраняется типографским: у суммы плитки
+ * направления нет (в отличие от `formatMoney`), и отрицательный итог — факт, а не расход.
+ */
+export function formatMoneyWithCurrency(amount: string, currency: string | null): string {
+  const negative = amount.startsWith('-') || amount.startsWith('−');
+  const abs = amount.replace(/^[-−+]/, '');
+  const [intRaw = '0', fracRaw = ''] = abs.split('.');
+  const grouped = intRaw.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const number = `${negative ? '−' : ''}${grouped}${fracRaw ? `.${fracRaw}` : ''}`;
+  if (currency === null) return number;
+  return `${number} ${CURRENCY_SYMBOL[currency] ?? currency}`;
+}
+
 // tz необязателен: зона приезжает из user.getSettings, и до её загрузки звать было бы
 // нечем. undefined Intl понимает как «зона рантайма» — ветки на это заводить не нужно.
 export function formatDate(iso: string, tz?: string): string {

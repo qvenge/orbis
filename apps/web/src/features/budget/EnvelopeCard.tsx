@@ -4,7 +4,7 @@
 // decimal-строки сервера; пороги сравниваются ТОЧНО (BigInt), без IEEE-754.
 // Тап → push экрана категории (§3.2, сам экран — Task B3).
 import type { EnvelopeStatus } from '@orbis/shared';
-import { formatAmount } from '../../lib/format';
+import { CURRENCY_SYMBOL, formatAmount } from '../../lib/format';
 import { useNav } from '../../state/navigation';
 
 // --- точная арифметика порогов (§3.1) без чисел с плавающей точкой ---------------------
@@ -66,8 +66,6 @@ const LEVEL_BAR: Record<Exclude<EnvelopeLevel, 'norm'>, string> = {
 };
 
 const LEVEL_MARK: Partial<Record<EnvelopeLevel, string>> = { alert: '⚠', over: '🔴' };
-
-const CURRENCY_SYMBOL: Record<string, string> = { RUB: '₽', USD: '$', EUR: '€' };
 
 /** «10.08» из ISO-даты — подпись «начнётся DD.MM» (§2.9а) и даты транзакций (§3.2). */
 export function ddmm(iso: string): string {

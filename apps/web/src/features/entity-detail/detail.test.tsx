@@ -1,6 +1,7 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { bodyDraftNoteId } from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
+import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -9,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import {
+  blocksReply,
+  blockTexts,
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
@@ -18,7 +21,6 @@ import {
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
-import { queryBlocks } from '../browser/query';
 import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { setDraftScope } from '../entity-editor/draft-storage';
@@ -1060,6 +1062,11 @@ test('правка свойства Финансов гасит бюджетны
 // что в проде: битая конструкция упала бы плашкой qb-error, а не молча.
 const found = (title: string) => wireEntity({ id: title, title });
 
+/** Тексты блоков данных сида — тем же препроходом, которым их читает первый кадр (РП-6). */
+const BLOCKS_OF_DAILY_PLANNING = parsePageText(DAILY_PLANNING_BODY).flatMap((n) =>
+  n.kind === 'query' ? [n.text.trim()] : [],
+);
+
 // §3.4 нормирует: «Каждый {{query:...}}-блок в body рендерится виджетом». Это же условие —
 // продуктовая половина приёмки 02-core-os §8.4 («задача видна в Daily Planning»): список
 // «Сегодня» — ВТОРОЙ блок сида, и при рендере только первого он недостижим в UI.
@@ -1074,12 +1081,10 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
       };
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    if (path === 'entity.query') {
-      // Задача из приёмки §8.4: срок сегодня, статус in_progress — попадает ровно в «Сегодня».
-      const q = (input as { query: string }).query;
-      return q.includes('due_date=today|overdue') ? [found('Разобрать Inbox')] : [];
-    }
-    return registryReply(path) ?? {};
+    // Задача из приёмки §8.4: срок сегодня, статус in_progress — попадает ровно в «Сегодня».
+    const today = BLOCKS_OF_DAILY_PLANNING.find((q) => q.includes('due_date=today|overdue'));
+    const blocks = blocksReply(today ? { [today]: [found('Разобрать Inbox')] } : {});
+    return blocks(path, input) ?? registryReply(path) ?? {};
   });
 
   // Три виджета — по одному на блок, каждый со своим заголовком из title= (§3.4).
@@ -1089,11 +1094,14 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
     expect(screen.getByText(section)).toBeInTheDocument();
   }
 
-  // В entity.query ушли ВСЕ три блока дословно (inner каждого блока body).
-  const sent = calls
-    .filter((c) => c.path === 'entity.query')
-    .map((c) => (c.input as { query: string }).query);
-  expect([...sent].sort()).toEqual([...queryBlocks(DAILY_PLANNING_BODY)].sort());
+  // Все три блока ушли дословно (inner каждого блока body) — ОДНОЙ пачкой (спека страниц 1а
+  // §6.3): прежде это были три отдельных entity.query.
+  const sent = calls.filter((c) => c.path === 'entity.blocks');
+  expect(sent).toHaveLength(1);
+  expect([...blockTexts(sent[0] as { input: unknown })].sort()).toEqual(
+    [...BLOCKS_OF_DAILY_PLANNING].sort(),
+  );
+  expect(BLOCKS_OF_DAILY_PLANNING).toHaveLength(3); // страж вакуумности
 
   // …и результат «Сегодня» виден на экране — та самая половина §8.4, которой при рендере
   // одного лишь первого блока (Inbox) в продукте не существовало.
@@ -1106,7 +1114,7 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
 // работе», «Ждут меня», «Бэклог» на экране проекта показывали ноль при живых тикетах.
 test('query-блок с `this` на detail получает контекст открытой сущности', async () => {
   const body = '{{query: children_of=this, aspect=orbis/task, display=list, title=Подзадачи}}';
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return {
         entity: { ...entity, body, bodyDoc: parseBody(body), aspects: [] },
@@ -1115,15 +1123,23 @@ test('query-блок с `this` на detail получает контекст о�
       };
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    if (path === 'entity.query') return [found('Тикет')];
-    return registryReply(path) ?? {};
+    return (
+      blocksReply({
+        'children_of=this, aspect=orbis/task, display=list, title=Подзадачи': [found('Тикет')],
+      })(path, input) ?? {}
+    );
   });
   await waitFor(() => expect(screen.getByTestId('qb-count')).toBeInTheDocument());
   expect(screen.queryByTestId('qb-error')).not.toBeInTheDocument();
   // Контекст — id ОТКРЫТОЙ записи: без него сервер бросает QueryCompileError, и секция пуста.
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'children_of=this, aspect=orbis/task, display=list, title=Подзадачи',
-    thisEntityId: 'e1',
+  expect(calls.find((c) => c.path === 'entity.blocks')?.input).toEqual({
+    blocks: [
+      {
+        key: '0',
+        text: 'children_of=this, aspect=orbis/task, display=list, title=Подзадачи',
+        thisEntityId: 'e1',
+      },
+    ],
   });
 
   // Второй кадр — редактор: тот же виджет живёт уже NodeView'ем внутри ProseMirror
@@ -1132,9 +1148,11 @@ test('query-блок с `this` на detail получает контекст о�
   // означал бы «блок работает до первого касания тела».
   await openEditor();
   await waitFor(() => expect(screen.getByTestId('qb-count')).toBeInTheDocument());
-  for (const c of calls.filter((c) => c.path === 'entity.query')) {
-    expect(c.input).toHaveProperty('thisEntityId', 'e1');
-  }
+  const items = calls
+    .filter((c) => c.path === 'entity.blocks')
+    .flatMap((c) => (c.input as { blocks: object[] }).blocks);
+  expect(items.length).toBeGreaterThan(0);
+  for (const b of items) expect(b).toHaveProperty('thisEntityId', 'e1');
 });
 
 // --- меню ⋮ на detail: закрепить / архивировать / скопировать ссылку (§3.5) ------------
@@ -1391,13 +1409,24 @@ const BODY_LINK_ID = '019e4466-1111-7000-8000-0123456789ab';
 /** Обработчик detail с заданным телом; документ собирается из того же markdown. */
 const bodyHandler =
   (body: string): MockHandler =>
-  (path) => {
+  (path, input) => {
     if (path === 'entity.get')
       return { entity: { ...entity, body, bodyDoc: parseBody(body) }, relations: [], thread: null };
     if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    if (path === 'entity.query') return [found('Разобрать Inbox')];
+    // Каждому блоку тела — одна и та же строка: тестам тела важно, что блок ЖИВОЙ, а не какой.
+    if (path === 'entity.blocks') {
+      const { blocks } = input as { blocks: { key: string }[] };
+      return {
+        results: Object.fromEntries(
+          blocks.map((b) => [
+            b.key,
+            { ok: true, kind: 'rows', rows: [found('Разобрать Inbox')], more: 0 },
+          ]),
+        ),
+      };
+    }
     return registryReply(path) ?? {};
   };
 

@@ -1,6 +1,7 @@
 import { ROLE_DEPENDENCY } from '@orbis/shared';
 import { Ban, Plus, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { invalidateQueryBlocks } from '../../lib/query-blocks/batch';
 import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -101,12 +102,15 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
    *    открывался раньше, лежит в кэше уже неверным;
    *  - entity.query — Browser, Повестка и списки с excludeBlocked (§6.1) читают другой
    *    ключ со своим staleTime (60 с у Повестки, K16) и сами не протухнут: без этого
-   *    новая блокировка до минуты не видна нигде, кроме этого экрана.
+   *    новая блокировка до минуты не видна нигде, кроме этого экрана;
+   *  - блоки данных тела (`entity.blocks`) — те же списки с excludeBlocked, только в теле
+   *    записи и страницы, со своим ключом на блок (спека страниц 1а §6.3).
    */
   const refresh = (otherId: string) => {
     void utils.entity.get.invalidate(detailGetInput(entityId));
     void utils.entity.get.invalidate({ id: otherId });
     void utils.entity.query.invalidate();
+    invalidateQueryBlocks();
   };
   // Ацикличность blocks проверяет сервер (§4.2): путь цикла доезжает ТОЛЬКО в message
   // (cause по HTTP не сериализуется) — его и показываем плашкой (02 §6).

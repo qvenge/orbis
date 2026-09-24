@@ -1,12 +1,16 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
-import { printQueryAst, type QueryAst } from '@orbis/shared/query';
-import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders } from '../../../test/harness';
+import {
+  blocksReply,
+  blockTexts,
+  installCrashTrap,
+  renderWithProviders,
+  wireEntity,
+} from '../../../test/harness';
 import { registryReply } from '../../../test/registry';
 import { Toaster } from '../../../ui/Toast';
 import { BodyEditor } from '../BodyEditor';
@@ -50,29 +54,22 @@ vi.mock('../../query-builder/QueryBlockEditor', async (orig) => {
 // причине.
 
 /**
- * Ключ строгого мока. Виджет шлёт ЛИБО текст (`query`), ЛИБО дерево (`ast`) — привязанный блок
- * уходит деревом (Задача 21a). Мок, ключёванный только по `query`, на дерево вернул бы `[]`, и
- * ассерты «на экране появился нужный список» остались бы зелёными на ПУСТОМ списке: ложная
- * зелень по построению. Дерево приводится к тому же ключу его key-печатью — она и есть канон.
- */
-function queryKeyOf(input: unknown): string {
-  const i = input as { query?: string; ast?: QueryAst };
-  if (i.ast !== undefined) return printQueryAst(i.ast, FIXTURE_PARSE_REGISTRY, 'key');
-  return i.query ?? '';
-}
-
-/**
- * СТРОГИЙ мок: `entity.query` отвечает только про ТОТ ЗАПРОС, о котором спросили. Мок,
- * отдающий один и тот же список на что угодно, делал бы виджет со СТАРЫМ атрибутом
- * неотличимым от виджета с новым — правка «сохранилась» бы на экране и без правки атрибута.
+ * СТРОГИЙ мок: пачка `entity.blocks` отвечает каждому блоку только про ЕГО текст (незнакомый —
+ * пустые строки, `blocksReply`). Мок, отдающий один и тот же список на что угодно, делал бы
+ * виджет со СТАРЫМ атрибутом неотличимым от виджета с новым — правка «сохранилась» бы на экране
+ * и без правки атрибута.
+ *
+ * Ключ — текст блока без краёв: виджет просит данные ТЕКСТОМ атрибута (единый механизм, спека
+ * страниц 1а §6.3), дерево атрибута на сервер больше не уходит, и приводить его к ключу печатью
+ * не нужно.
  */
 const lists =
   (byQuery: Record<string, { id: string; title: string }[]>) =>
   (path: string, input: unknown): unknown => {
-    const reg = registryReply(path);
-    if (reg !== undefined) return reg;
-    if (path === 'entity.query') return byQuery[queryKeyOf(input)] ?? [];
-    return {};
+    const rows = Object.fromEntries(
+      Object.entries(byQuery).map(([q, list]) => [q, list.map((e) => wireEntity(e))]),
+    );
+    return registryReply(path) ?? blocksReply(rows)(path, input) ?? {};
   };
 
 /** Обёртка блока — одним местом: ключи мока и текст документа обязаны совпадать дословно. */
@@ -127,7 +124,7 @@ test('документ с {{query:…}} рисует ЖИВОЙ виджет, а
   expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual(['queryBlock', 'paragraph']);
 
   // ЖИВОЙ значит «список приехал с сервера»: строка `qb-item` рисуется только ответом
-  // entity.query, а строгий мок отвечает лишь на этот самый запрос.
+  // entity.blocks, а строгий мок отвечает лишь на этот самый запрос.
   expect(await screen.findByTestId('qb-item')).toHaveTextContent('Разобрать почту');
   expect(screen.queryByTestId('qb-error')).toBeNull();
   // Литерал посреди строки виджетом не стал — виджет в документе ровно один.
@@ -175,12 +172,12 @@ test('сохранение блока — правка АТРИБУТА ноды
   expect(serializeBody(next)).toContain('{{query:tags=home}}');
   expect(serializeBody(next)).not.toContain('tags=work');
   // И виджет живёт НОВЫМ атрибутом, а не своей застывшей копией: спрошен ровно новый запрос
-  // (старый до сети не доходил вовсе — он не разбирается, и `enabled` у него false).
+  // (старый до сети не доходил вовсе — он не разбирается, и хук данных у него не зовётся).
   // Проверка по самим вызовам, а не только по строке на экране: строгий мок отвечает лишь про
   // спрошенное, но при валидном СТАРОМ запросе «на экране появилось „Дома“» было бы правдой и
   // у виджета, который спрашивает старое, — щедрый мок сделал бы эти два случая неотличимыми.
   expect(await screen.findByTestId('qb-item')).toHaveTextContent('Дома');
-  expect(r.calls.filter((c) => c.path === 'entity.query').map((c) => queryKeyOf(c.input))).toEqual([
+  expect(r.calls.filter((c) => c.path === 'entity.blocks').flatMap(blockTexts)).toEqual([
     'tags=home',
   ]);
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());

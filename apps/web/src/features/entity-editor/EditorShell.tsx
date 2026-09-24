@@ -1,9 +1,14 @@
 import type { BodyDoc } from '@orbis/shared/doc'; // ТОЛЬКО type — файл в эагерном чанке
-import { lazy, type MouseEvent, Suspense, useEffect, useState } from 'react';
+// Листовые сабпаты, не баррель: препроход и матрица мест без tiptap и marked (вес первого кадра).
+import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
+import { type BodyKind, bodyIssues } from '@orbis/shared/doc/placement';
+import { OWNER_LOCALE, type ParseRegistry } from '@orbis/shared/query';
+import { lazy, type MouseEvent, type ReactNode, Suspense, useEffect, useState } from 'react';
 import { Markdown } from '../../lib/markdown/Markdown';
+import { useBodyKind } from '../../lib/query-blocks/body-kind';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { openEntity } from '../../state/navigation';
-import { bodySegments } from '../browser/query';
+import { BlockPlaque } from '../page/blocks/BlockPlaque';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
 
 const BodyEditor = lazy(() => import('./BodyEditor').then((m) => ({ default: m.BodyEditor })));
@@ -52,6 +57,61 @@ const NOT_BODY_GESTURE =
 type Mount = { focusAt: { left: number; top: number } | null };
 const BY_IDLE: Mount = { focusAt: null };
 
+/**
+ * Пустой реестр разбора — для мест БЕЗ блоков данных. `bodyIssues` читает реестр только у узлов
+ * `query`, а первый кадр спрашивает её об одном узле обвязки или контейнера за раз и берёт
+ * только проблему самого узла (путь длины 1): проблемы блоков данных внутри показывает их
+ * собственный `DataBlock` по настоящему реестру.
+ */
+const NO_REGISTRY: ParseRegistry = {
+  properties: new Map(),
+  aspects: new Map(),
+  roles: new Map(),
+  contracts: new Map(),
+  locale: OWNER_LOCALE,
+};
+
+/**
+ * Один узел препрохода на первом кадре (спека страниц 1а §5.5, §6.3):
+ *  - текст — разметкой (пустые края сняты: пустой абзац между виджетами — дыра в раскладке, а
+ *    отступ в начале куска сделал бы из него блок кода);
+ *  - блок данных — живым виджетом, тем же, что встанет в редакторе;
+ *  - блок обвязки, карточка, контейнер или сломанная разметка там, где они не работают (в
+ *    заметке — всегда), — плашкой с подсказкой; текст узла остаётся в документе, плашка только
+ *    на экране (§5.5);
+ *  - уместный неданный узел (страница, шаблон) — пока его текстом: раскладку и обвязку рисует
+ *    рендерер страниц, а не первый кадр тела.
+ */
+function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode {
+  if (node.kind === 'text') {
+    const text = node.text.trim();
+    return text === '' ? null : <Markdown key={key} source={text} onEntityLink={openEntity} />;
+  }
+  if (node.kind === 'query') {
+    // Обёртка с data-query-widget — не украшение: по ней страж выше отличает клик по живому
+    // виджету от клика по телу (тот же признак, что у NodeView редактора).
+    return (
+      <div key={key} data-query-widget="">
+        <QueryBlock query={node.text} />
+      </div>
+    );
+  }
+  const issue = bodyIssues([node], kind, NO_REGISTRY).find((i) => i.path.length === 1);
+  if (issue === undefined) {
+    return <Markdown key={key} source={node.raw.trim()} onEntityLink={openEntity} />;
+  }
+  // Без признака data-query-widget, в отличие от живого блока: плашка — не виджет со своим
+  // смыслом, а место в тексте, и касание её зовёт редактор, где этот текст и правится.
+  return (
+    <BlockPlaque
+      key={key}
+      tone="misplaced"
+      message={issue.message}
+      {...(issue.hint !== undefined && { hint: issue.hint })}
+    />
+  );
+}
+
 /** Клик по телу (а значит — зовущий редактор) или по чему-то внутри тела со своим смыслом. */
 export function isBodyGesture(target: HTMLElement | null): boolean {
   // `== null` (а не `=== null`): у отсутствующей цели `?.` даёт undefined, и такой клик —
@@ -60,10 +120,10 @@ export function isBodyGesture(target: HTMLElement | null): boolean {
 }
 
 /**
- * Первый кадр — текст вперемежку с живыми виджетами через bodySegments, ровно так же, как
- * рисовал прежний просмотр тела (его убрала Задача 15). Голый <Markdown> показывал бы
- * `{{query:…}}` строкой, которая через мгновение прыгнула бы на виджет: у сида All Tasks тело
- * и есть один такой блок (ревью И4).
+ * Первый кадр — текст вперемежку с живыми виджетами по препроходу тела (`parsePageText`, одна
+ * копия правил маркеров, РП-6), ровно так же, как рисовал прежний просмотр тела (его убрала
+ * Задача 15). Голый <Markdown> показывал бы `{{query:…}}` строкой, которая через мгновение
+ * прыгнула бы на виджет: у сида All Tasks тело и есть один такой блок (ревью И4).
  *
  * Редактор монтируется по первому касанию тела ИЛИ по простою — не по setTimeout(0): иначе
  * чанк схемы тянулся бы при КАЖДОМ чисто читательском открытии записи (ревью И5/И6). Числа
@@ -132,7 +192,12 @@ export function EditorShell({
     setMount({ focusAt: { left: e.clientX, top: e.clientY } });
   }
 
-  const segments = bodySegments(markdown);
+  const kind = useBodyKind();
+  // Ключ узла — его порядок в тексте тела: узлы первого кадра не переставляются, только
+  // пересобираются из текста целиком.
+  const frame = parsePageText(markdown)
+    .map((node, i) => firstFrameNode(node, kind, i))
+    .filter((n) => n !== null);
   // Оба ослабления a11y — одной строкой ниже: у многострочного `//`-комментария биом читает
   // как подавление только ПОСЛЕДНЮЮ строку, и первое правило осталось бы неподавленным.
   // Довод тот же, что у DetailScreen: клавиатурного двойника у этого жеста нет и не нужно —
@@ -147,20 +212,8 @@ export function EditorShell({
       // иначе подмена первого кадра редактором двигала бы текст под руками.
       className={`${BODY_BOX_CLASS} flex cursor-text flex-col gap-4`}
     >
-      {segments.length === 0 && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
-      {segments.map((seg, i) =>
-        seg.kind === 'query' ? (
-          // Обёртка с data-query-widget — не украшение: по ней страж выше отличает клик по
-          // живому виджету от клика по телу (тот же признак, что в DetailScreen).
-          // biome-ignore lint/suspicious/noArrayIndexKey: порядок сегментов задан текстом body
-          <div key={i} data-query-widget="">
-            <QueryBlock query={seg.query} />
-          </div>
-        ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: порядок сегментов задан текстом body
-          <Markdown key={i} source={seg.text} onEntityLink={openEntity} />
-        ),
-      )}
+      {frame.length === 0 && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
+      {frame}
     </div>
   );
   // `doc === null` перекрывает даже поднятое намерение: жест «хочу редактор» законен, а вот

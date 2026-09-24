@@ -19,7 +19,12 @@
  * редактора делает QueryBlockEditor).
  */
 
-import type { QueryAst, QueryDisplayMode, QueryFilterNode } from '@orbis/shared/query';
+import type {
+  QueryAggregate,
+  QueryAst,
+  QueryDisplayMode,
+  QueryFilterNode,
+} from '@orbis/shared/query';
 import { isExcludeBlockedSugar } from '@orbis/shared/query';
 import { useId, useMemo, useState } from 'react';
 import type { QueryRegistry } from '../../lib/query-blocks/catalog';
@@ -28,6 +33,7 @@ import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { FIELD_CLS, FieldRow, ROW_BUTTON_CLS } from './FieldRows';
 import {
+  aggregateFieldIds,
   aspectsOf,
   excludeBlockedNode,
   fieldNodeView,
@@ -38,10 +44,24 @@ import {
   sortableFieldIds,
   topNodes,
   visibleFieldIds,
+  withDisplay,
   withNodes,
 } from './model';
 
 type Nodes = QueryFilterNode[];
+
+/** Агрегат плитки как значение `<select>`: `count` | `sum:<id>` | `latest:<id>`. */
+function aggregateValue(agg: QueryAggregate | undefined): string {
+  if (agg === undefined || agg.fn === 'count') return 'count';
+  return `${agg.fn}:${agg.field}`;
+}
+
+function aggregateOf(value: string): QueryAggregate {
+  const colon = value.indexOf(':');
+  if (colon === -1) return { fn: 'count' };
+  const fn = value.slice(0, colon) === 'latest' ? 'latest' : 'sum';
+  return { fn, field: value.slice(colon + 1) };
+}
 type PatchNodes = (fn: (nodes: Nodes) => Nodes) => void;
 
 export function QueryBuilderForm({
@@ -392,7 +412,7 @@ function FormBody({
         </LabeledControl>
         <LabeledControl
           label="Режим отображения"
-          hint="Подсказка рендереру: сегодня все три режима рисуются одинаково."
+          hint="Компактный — только заголовки записей, список — строки как в обзоре, таблица — колонки свойств, плитка — одно число."
         >
           {(id, describedBy) => (
             <select
@@ -401,18 +421,65 @@ function FormBody({
               className={FIELD_CLS}
               value={ast.display ?? ''}
               onChange={(e) =>
-                patch({
-                  display: e.target.value === '' ? undefined : (e.target.value as QueryDisplayMode),
-                })
+                setAst((prev) =>
+                  prev === null
+                    ? prev
+                    : withDisplay(
+                        prev,
+                        e.target.value === '' ? undefined : (e.target.value as QueryDisplayMode),
+                      ),
+                )
               }
             >
               <option value="">по умолчанию</option>
               <option value="compact">компактный</option>
               <option value="list">список</option>
               <option value="table">таблица</option>
+              <option value="tile">плитка</option>
             </select>
           )}
         </LabeledControl>
+        {ast.display === 'tile' && (
+          <LabeledControl label="Число плитки">
+            {(id) => (
+              <select
+                id={id}
+                className={FIELD_CLS}
+                value={aggregateValue(ast.aggregate)}
+                onChange={(e) => patch({ aggregate: aggregateOf(e.target.value) })}
+              >
+                <option value="count">количество записей</option>
+                {aggregateFieldIds(registry).flatMap((fid) => {
+                  const ref = fieldRef(fid, registry);
+                  const label = ref?.label ?? fid;
+                  return [
+                    <option key={`sum:${fid}`} value={`sum:${fid}`}>
+                      сумма: {label}
+                    </option>,
+                    <option key={`latest:${fid}`} value={`latest:${fid}`}>
+                      последнее: {label}
+                    </option>,
+                  ];
+                })}
+              </select>
+            )}
+          </LabeledControl>
+        )}
+        <label className="flex items-center gap-2 text-sm text-text">
+          <input
+            type="checkbox"
+            checked={ast.hideEmpty === true}
+            className="size-4 accent-accent"
+            onChange={(e) =>
+              setAst((prev) => {
+                if (prev === null) return prev;
+                const { hideEmpty: _h, ...rest } = prev;
+                return e.target.checked ? { ...rest, hideEmpty: true } : rest;
+              })
+            }
+          />
+          Прятать пустой блок
+        </label>
         <LabeledControl label="Заголовок">
           {(id) => (
             <input

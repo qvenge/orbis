@@ -1,88 +1,95 @@
 import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import {
+  type BlockReplyValue,
+  blocksReply,
+  type MockHandler,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { QueryBlock } from './QueryBlock';
 import { ThisEntityProvider } from './this-entity';
 
 const ent = (id: string) => wireEntity({ id, title: id });
 
-test('валидный блок → список сущностей + счётчик; entity.query получил inner', async () => {
-  const { calls } = renderWithProviders(<QueryBlock query="tags=work" title="Работа" />, (path) => {
-    const reg = registryReply(path);
-    if (reg !== undefined) return reg;
-    if (path === 'entity.query') return [ent('a'), ent('b')];
-    return {};
-  });
+// Данные блока идут единым механизмом (спека страниц 1а §6.3): пачкой `entity.blocks`, блок —
+// ТЕКСТОМ. Смысл тестов прежний — что ушло по блоку и что показано; путь сменился.
+const reply =
+  (map: Record<string, BlockReplyValue>): MockHandler =>
+  (path, input) =>
+    registryReply(path) ?? blocksReply(map)(path, input) ?? {};
+
+/** Единственный элемент пачки, ушедший на сервер. */
+const sentBlock = (calls: { path: string; input: unknown }[]) =>
+  (calls.find((c) => c.path === 'entity.blocks')?.input as { blocks: object[] } | undefined)
+    ?.blocks[0];
+
+test('валидный блок → список сущностей + счётчик; в пачку ушёл inner', async () => {
+  const { calls } = renderWithProviders(
+    <QueryBlock query="tags=work" title="Работа" />,
+    reply({ 'tags=work': [ent('a'), ent('b')] }),
+  );
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('2'));
   expect(screen.getAllByTestId('qb-item')).toHaveLength(2);
   // Аргумент запроса — строго inner (обёртка {{query:...}} снята вызывающим, значение не пустое).
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ query: 'tags=work' });
+  expect(sentBlock(calls)).toEqual({ key: '0', text: 'tags=work' });
 });
 
 test('без title (DetailScreen) → счётчик с подписью «Совпадений: N», а не голое число', async () => {
-  renderWithProviders(<QueryBlock query="tags=work" />, (path) => {
-    const reg = registryReply(path);
-    if (reg !== undefined) return reg;
-    if (path === 'entity.query') return [ent('a'), ent('b')];
-    return {};
-  });
+  renderWithProviders(
+    <QueryBlock query="tags=work" />,
+    reply({ 'tags=work': [ent('a'), ent('b')] }),
+  );
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('Совпадений: 2'));
 });
 
 // §3.4: «заголовок (из title=; нет параметра — без заголовка)». Без этого три секции
 // Daily Planning (§3.3) рендерились бы тремя безымянными карточками.
 test('заголовок берётся из title= самого блока, когда пропа нет', async () => {
-  const { calls } = renderWithProviders(<QueryBlock query="tags=work, title=Сегодня" />, (path) => {
-    const reg = registryReply(path);
-    if (reg !== undefined) return reg;
-    if (path === 'entity.query') return [ent('a')];
-    return {};
-  });
+  const { calls } = renderWithProviders(
+    <QueryBlock query="tags=work, title=Сегодня" />,
+    reply({ 'tags=work, title=Сегодня': [ent('a')] }),
+  );
   // при заголовке счётчик — голое число (подпись «Совпадений:» не нужна)
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
   expect(screen.getByText('Сегодня')).toBeInTheDocument();
-  // title= — параметр представления: в entity.query строка уходит целиком, как есть
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'tags=work, title=Сегодня',
-  });
+  // title= — параметр представления: в пачку строка уходит целиком, как есть
+  expect(sentBlock(calls)).toEqual({ key: '0', text: 'tags=work, title=Сегодня' });
 });
 
-test('невалидный блок → красная плашка с позицией, без списка и без вызова entity.query (§6.4)', async () => {
+test('невалидный блок → красная плашка с позицией, без списка и без вызова entity.blocks (§6.4)', async () => {
   const { calls } = renderWithProviders(<QueryBlock query="foo" title="Битый" />, (path) => {
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    throw new Error(`unexpected ${path}`); // entity.query не должен вызываться
+    throw new Error(`unexpected ${path}`); // entity.blocks не должен вызываться
   });
-  // Ждём плашку ошибки: к этому моменту регрессный вызов entity.query успел бы зарегистрироваться.
+  // Ждём плашку ошибки: к этому моменту регрессный вызов entity.blocks успел бы зарегистрироваться.
   await screen.findByTestId('qb-error');
   expect(screen.getByRole('alert')).toBeInTheDocument();
   expect(screen.getByTestId('qb-error')).toHaveTextContent('позиция 0');
   expect(screen.getByTestId('qb-error')).toHaveTextContent(/ожидается конструкция/i);
   expect(screen.queryByTestId('qb-item')).not.toBeInTheDocument();
-  // §6.4-гейт: при ошибке entity.query не вызывается вовсе (enabled: ok === false).
-  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+  // §6.4-гейт: при ошибке пачка не уходит вовсе (хук данных у битого блока не зовётся).
+  expect(calls.some((c) => c.path === 'entity.blocks')).toBe(false);
 });
 
 // --- контекст сущности: `this` в блоке (§6.1) ------------------------------------------
 // Компилятор разрешает `this` только из thisEntityId (`query/compile-ast.ts` → `relTarget`), а виджет его
 // не передавал — блоки заготовки проекта (children_of=this) отвечали структурной ошибкой
 // «this вне контекста сущности». Проверяем оба края: с провайдером id уходит, без него — нет.
-test('внутри ThisEntityProvider entity.query получает thisEntityId (this разрешим)', async () => {
+test('внутри ThisEntityProvider элемент пачки получает thisEntityId (this разрешим)', async () => {
   const { calls } = renderWithProviders(
     <ThisEntityProvider id="p1">
       <QueryBlock query="children_of=this, aspect=orbis/task" />
     </ThisEntityProvider>,
-    (path) => {
-      const reg = registryReply(path);
-      if (reg !== undefined) return reg;
-      if (path === 'entity.query') return [ent('a')];
-      return {};
-    },
+    reply({ 'children_of=this, aspect=orbis/task': [ent('a')] }),
   );
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'children_of=this, aspect=orbis/task',
+  expect(sentBlock(calls)).toEqual({
+    key: '0',
+    text: 'children_of=this, aspect=orbis/task',
     thisEntityId: 'p1',
   });
 });
@@ -92,38 +99,27 @@ test('внутри ThisEntityProvider entity.query получает thisEntityId
 test('без провайдера поля thisEntityId в запросе нет вовсе', async () => {
   const { calls } = renderWithProviders(
     <QueryBlock query="children_of=this, aspect=orbis/task" />,
-    (path) => {
-      const reg = registryReply(path);
-      if (reg !== undefined) return reg;
-      if (path === 'entity.query') return [];
-      return {};
-    },
+    reply({}),
   );
   await waitFor(() => expect(screen.getByTestId('qb-count')).toBeInTheDocument());
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'children_of=this, aspect=orbis/task',
-  });
+  expect(sentBlock(calls)).toEqual({ key: '0', text: 'children_of=this, aspect=orbis/task' });
 });
 
-// --- блок ДОКУМЕНТА: дерево вместо строки (§А11-1) --------------------------------------
+// --- блок ДОКУМЕНТА: {ast, text} ---------------------------------------------------------
 
-test('привязанный блок уходит на сервер ДЕРЕВОМ, заголовок берётся из дерева', async () => {
-  // Разобранный блок реестра не ждёт вовсе: заголовок в дереве, дерево — на сервер. Печатать
-  // его обратно в текст, чтобы сервер разобрал заново, значило бы гонять запрос через форму,
-  // в которую он не обязан помещаться (§А5-3д).
+test('привязанный блок уходит на сервер ТЕКСТОМ (key-печатью дерева), заголовок — из него', async () => {
+  // Было: дерево уходило на сервер как есть (§А11-1). Единый механизм данных (спека страниц 1а
+  // §6.3) адресует блок текстом: текст привязанного блока — key-печать его же дерева
+  // (`bindQueryBlocks`), сервер разбирает его реестром владельца, а ключ кеша по тексту общий у
+  // первого кадра (дерева там нет) и у редактора.
   const ast = { filter: { tag: 'work' }, title: 'Работа' };
   const { calls } = renderWithProviders(
     <QueryBlock query={{ ast, text: 'tags=work, title=Работа' }} />,
-    (path) => {
-      const reg = registryReply(path);
-      if (reg !== undefined) return reg;
-      if (path === 'entity.query') return [ent('a')];
-      return {};
-    },
+    reply({ 'tags=work, title=Работа': [ent('a')] }),
   );
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
   expect(screen.getByText('Работа')).toBeInTheDocument();
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ ast });
+  expect(sentBlock(calls)).toEqual({ key: '0', text: 'tags=work, title=Работа' });
 });
 
 test('НЕразобранный блок документа: плашка с сообщением из его же text', async () => {
@@ -139,7 +135,7 @@ test('НЕразобранный блок документа: плашка с с
   );
   await screen.findByTestId('qb-error');
   expect(screen.getByTestId('qb-error')).toHaveTextContent(/ожидается конструкция/i);
-  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+  expect(calls.some((c) => c.path === 'entity.blocks')).toBe(false);
 });
 
 test('ПУСТОЙ блок — плашка «блок не настроен», а НЕ все сущности владельца (Р-21-8)', async () => {
@@ -157,7 +153,7 @@ test('ПУСТОЙ блок — плашка «блок не настроен»,
     );
     await screen.findByTestId('qb-error');
     expect(screen.getByTestId('qb-error')).toHaveTextContent(/пустой запрос/i);
-    expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+    expect(calls.some((c) => c.path === 'entity.blocks')).toBe(false);
     unmount();
   }
 });
@@ -168,41 +164,40 @@ test('блок БЕЗ дерева, но с разбираемым тексто�
   // Показывать на нём плашку значило бы краснеть на здоровом запросе владельца.
   const { calls } = renderWithProviders(
     <QueryBlock query={{ ast: null, text: 'tags=work' }} />,
-    (path) => {
-      const reg = registryReply(path);
-      if (reg !== undefined) return reg;
-      if (path === 'entity.query') return [ent('a')];
-      return {};
-    },
+    reply({ 'tags=work': [ent('a')] }),
   );
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
   expect(screen.queryByTestId('qb-error')).toBeNull();
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ query: 'tags=work' });
+  expect(sentBlock(calls)).toEqual({ key: '0', text: 'tags=work' });
 });
 
-test('серверный отказ компиляции — ПЛАШКА, а не «Совпадений: 0» (§А5-3ж/§6.4)', async () => {
-  // Блок с ДЕРЕВОМ клиентской предпроверки не имеет вовсе: привязка сверяет его схемой и
-  // глубиной, а по реестру читает компилятор на сервере. Нерезолвенный id прилетал сюда
-  // ответом-ошибкой, `list.isError` никто не смотрел, `entities = list.data ?? []` давал
-  // пустой список — молчаливый ноль строк, худший из отказов.
+test('отказ блока сервером — ПЛАШКА с причиной, а не «Совпадений: 0» (§А5-3ж/§6.4)', async () => {
+  // Клиентская предпроверка ловит не всё: реестр сервера — правда, и расхождение с ним
+  // (свойство снято между загрузкой реестра и запросом, сбой исполнения) видно только по
+  // ответу. Раньше ответ-ошибку никто не смотрел, `entities = list.data ?? []` давал пустой
+  // список — молчаливый ноль строк, худший из отказов.
   const { calls } = renderWithProviders(
-    <QueryBlock
-      query={{
-        ast: { filter: { prop: 'user/нет-такого', op: 'eq', value: 1 } },
-        text: 'user/нет-такого=1',
-      }}
-    />,
-    (path) => {
-      const reg = registryReply(path);
-      if (reg !== undefined) return reg;
-      if (path === 'entity.query') {
-        throw trpcError('BAD_REQUEST', "неизвестное свойство 'user/нет-такого'");
-      }
-      return {};
-    },
+    <QueryBlock query="tags=work" />,
+    reply({
+      'tags=work': {
+        ok: false,
+        error: { code: 'UNKNOWN_PROPERTY', message: "неизвестное свойство 'user/нет-такого'" },
+      },
+    }),
   );
   await screen.findByTestId('qb-error');
   expect(screen.getByTestId('qb-error')).toHaveTextContent(/нет-такого/);
   expect(screen.queryByTestId('qb-count')).toBeNull();
-  expect(calls.some((c) => c.path === 'entity.query')).toBe(true);
+  expect(calls.some((c) => c.path === 'entity.blocks')).toBe(true);
+});
+
+test('отказ ВСЕЙ пачки (сеть, сервер) — плашка, а не вечная загрузка', async () => {
+  renderWithProviders(<QueryBlock query="tags=work" />, (path) => {
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
+    if (path === 'entity.blocks') throw trpcError('INTERNAL_SERVER_ERROR', 'сервер недоступен');
+    return {};
+  });
+  expect(await screen.findByTestId('qb-error')).toHaveTextContent('сервер недоступен');
+  expect(screen.queryByRole('status')).toBeNull();
 });

@@ -1466,7 +1466,7 @@ test('модули первого кадра не тянут схему реда
   // конверсии в DetailScreen чанк тумблера останется на месте, а схема тихо переедет в чанк
   // detail (ревью раунда 1, Minor 1).
   //
-  // Проверка НЕтранзитивная — ровно девять файлов, за которые эта задача отвечает. Появись у
+  // Проверка НЕтранзитивная — ровно перечисленные файлы, за которые эта задача отвечает. Появись у
   // них новый общий сосед со схемой внутри, страж промолчит; охватить весь граф импортов
   // тут нечем, и обещать это было бы неправдой. Транзитивную половину закрывает третья
   // проверка в scripts/check-lazy-chunks.ts (состав чанка `DetailScreen` по dist) — но она
@@ -1490,6 +1490,20 @@ test('модули первого кадра не тянут схему реда
     '../entity-detail/useEntityDetail.ts',
     '../entity-detail/DetailScreen.tsx',
     '../entity-detail/ProposalOverlay.tsx',
+    // Единый механизм данных блоков (задача 11): блок первого кадра — эагерный, и с ним весь
+    // его путь данных и формы показа. Каждый — кандидат притащить баррель одной строкой.
+    '../../lib/query-blocks/QueryBlock.tsx',
+    '../../lib/query-blocks/batch.tsx',
+    '../../lib/query-blocks/body-kind.tsx',
+    '../../lib/query-blocks/parse.ts',
+    '../page/blocks/DataBlock.tsx',
+    '../page/blocks/CompactForm.tsx',
+    '../page/blocks/ListForm.tsx',
+    '../page/blocks/TableForm.tsx',
+    '../page/blocks/TileForm.tsx',
+    '../page/blocks/MoreRows.tsx',
+    '../page/blocks/BlockPlaque.tsx',
+    '../page/blocks/types.ts',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),
