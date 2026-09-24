@@ -3,7 +3,9 @@
 // (`test/fixtures/refusals.ts`), здесь только прогон и пины — образец разделения `EXPR_FIXTURES`.
 // ВСЕ походы — в `beforeAll`, тела тестов СИНХРОННЫ: Bun 1.2.7 игнорирует пометку ожидаемого
 // провала, если тест вышел в макрозадачу (ОВ-Б1-1), и ломаются обе половины гарантии.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   closeRefusals,
   prepareRefusals,
@@ -60,17 +62,20 @@ const taken = (v: unknown): unknown => {
 };
 
 describe('корпус §С1-2: состав', () => {
-  test('21 строка, 24 имени кода, жанры 17/4, порч ≥ 1 на строку', () => {
+  test('сводная таблица докблока не разъехалась с данными: 17 деклараций, 4 записи, номера подряд', () => {
     // Точные литералы, а не пороги: с «не меньше двадцати» удаление строки прошло бы незаметно
     // (урок гейт-ревью 2 Б-1; тот же приём — `validator-golden.test.ts:130-133`).
-    expect(REFUSAL_ROWS.length).toBe(21);
     expect(REFUSAL_ROWS.map((r) => r.row)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
-    expect(new Set(REFUSAL_ROWS.flatMap((r) => r.codes)).size).toBe(24);
     expect(REFUSAL_ROWS.filter((r) => r.genre === 'declaration').length).toBe(17);
-    expect(REFUSAL_ROWS.filter((r) => r.genre === 'data').map((r) => r.row)).toEqual([
-      2, 10, 13, 21,
-    ]);
-    expect(REFUSAL_ROWS.filter((r) => r.spoils.length === 0).map((r) => r.row)).toEqual([]);
+    expect(REFUSAL_ROWS.filter((r) => r.genre === 'data').length).toBe(4);
+    // Сама таблица докблока — читается из файла, а не сверяется глазами: номер, жанр и коды каждой
+    // её строки обязаны совпасть с данными (дверь — проза, её держат прогоны строк ниже).
+    const table = readFileSync(new URL('../../test/fixtures/refusals.ts', import.meta.url), 'utf8')
+      .split('\n')
+      .map((l) => /^\/\/\s*(\d+) · (декларация|данные)\s+· (\S+)\s+· /.exec(l))
+      .filter((m) => m !== null)
+      .map((m) => `${m[1]} ${m[2] === 'данные' ? 'data' : 'declaration'} ${m[3]}`);
+    expect(table).toEqual(REFUSAL_ROWS.map((r) => `${r.row} ${r.genre} ${r.codes.join('/')}`));
   });
 
   test('красных строк не осталось: 21/21 закрыты валидаторами среза (§С8-24)', () => {

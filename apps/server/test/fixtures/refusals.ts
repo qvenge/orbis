@@ -5,28 +5,31 @@
 // ДВА ЖАНРА ВХОДА: 17 строк — испорченная ДЕКЛАРАЦИЯ, 4 — ЗАПИСЬ ДАННЫХ (их бросают исполнитель и
 // движок, и «испортить декларацию» для них невыразимо).
 //
-//  # · код(ы)                    · дверь                                       · жанр
-//  1 · REGISTRY_CYCLE            · assertAcyclicGraph(dependencyGraph)         · декларация
-//  2 · COMPUTED_WRITE            · execute entity_update                       · данные
-//  3 · ACTION_NESTED/BRANCH      · assertAction (задача 6)                     · декларация
-//  4 · EXPR_RECURSION            · assertSubscription                          · декларация
-//  5 · EXPR_TYPE/EXPR_NOT_TOTAL  · assertSubscription                          · декларация
-//  6 · QUERY_MULTI_ROLE/JOIN     · parseQueryAst                               · декларация
-//  7 · SUBSCRIPTION_RAW_REF      · assertSubscription                          · декларация
-//  8 · VARIANT_UNMAPPED          · execute aspect_delta_set                    · декларация
-//  9 · BIND_TYPE                 · execute aspect_implements_set               · декларация
-// 10 · SLOT_AMBIGUOUS            · движок Agenda → resolveSlotOnEntity         · данные
-// 11 · UNIQUE_ON_MANY            · assertRule                                  · декларация
-// 12 · SCOPE_NOT_STATIC          · execute property_create                     · декларация
-// 13 · ROLE_SYSTEM_ONLY          · execute relation_create                     · данные
-// 14 · PATTERN_NOT_REGULAR       · execute property_create                     · декларация
-// 15 · SENSITIVITY_UNDERDECLARED · assertAction (задача 6)                     · декларация
-// 16 · SECOND_LANGUAGE           · assertSubscription                          · декларация
-// 17 · SURFACE_UNKNOWN           · assertSubscription                          · декларация
-// 18 · BATCH_UNBOUNDED           · assertAction (задача 6)                     · декларация
-// 19 · RULE_CONFLICT             · assertRule                                  · декларация
-// 20 · DEREF_IN_CONSTRAINT       · assertRule → чекер E                        · декларация
-// 21 · MODULE_DISABLED           · execute entity_create                       · данные
+//  # · жанр       · код(ы)                      · дверь (где бросается отказ)
+//  1 · декларация · REGISTRY_CYCLE              · assertAcyclicGraph(dependencyGraph)
+//  2 · данные     · COMPUTED_WRITE              · execute entity_update → assertPropsWritable
+//  3 · декларация · ACTION_NESTED/ACTION_BRANCH · assertAction: ступень 5 (шаги) / 1 (ветвление)
+//  4 · декларация · EXPR_RECURSION              · assertSubscription → assertAggregatesAcyclic
+//  5 · декларация · EXPR_TYPE/EXPR_NOT_TOTAL    · assertSubscription → assertExprTypes → чекер E
+//  6 · декларация · QUERY_MULTI_ROLE/QUERY_JOIN · parseQueryAst → assertRelShape / parseEntityRef
+//  7 · декларация · SUBSCRIPTION_RAW_REF        · assertSubscription → assertNoAspectRefs / assertNoRawValues
+//  8 · декларация · VARIANT_UNMAPPED            · execute aspect_delta_set → setAspectDelta → checkClassMap
+//  9 · декларация · BIND_TYPE                   · execute aspect_implements_set → assertImplements
+// 10 · данные     · SLOT_AMBIGUOUS              · движок Agenda (rowOf) → resolveSlotOnEntity
+// 11 · декларация · UNIQUE_ON_MANY              · assertRule → assertReferences (ступень 6)
+// 12 · декларация · SCOPE_NOT_STATIC            · execute property_create → assertRegistryQuery → assertStaticQuery
+// 13 · данные     · ROLE_SYSTEM_ONLY            · execute relation_create → assertRoleConstraints
+// 14 · декларация · PATTERN_NOT_REGULAR         · execute property_create → assertPatternRegular
+// 15 · декларация · SENSITIVITY_UNDERDECLARED   · assertAction: ступень 10 (факты шагов)
+// 16 · декларация · SECOND_LANGUAGE             · assertSubscription: строка в E-позиции до разбора формы
+// 17 · декларация · SURFACE_UNKNOWN             · assertSubscription: поверхность — первой
+// 18 · декларация · BATCH_UNBOUNDED             · assertAction: ступень 6 (кап пачки)
+// 19 · декларация · RULE_CONFLICT               · assertRule → assertNoConflict (ступень 9)
+// 20 · декларация · DEREF_IN_CONSTRAINT         · assertRule → assertExprTypes → чекер E (derefType)
+// 21 · данные     · MODULE_DISABLED             · execute entity_create → assertModuleEnabled
+//
+// Таблица сверяется с данными тестом (`refusals.test.ts`, «сводная таблица докблока…»): номер, жанр и
+// коды каждой строки обязаны совпасть с `REFUSAL_ROWS`. Дверь — прозой, её держат прогоны строк.
 import {
   AGENDA_DEF,
   addDays,
