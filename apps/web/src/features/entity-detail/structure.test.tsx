@@ -42,11 +42,23 @@ test('проба средства: снимок цели видит вкладк
   expect(structure.tabs[1]?.parts.some((p) => p.startsWith('aspect:orbis/goal['))).toBe(true);
 });
 
+/**
+ * Встроенные аспекты НА МОМЕНТ СЪЁМКИ: эталон снят до аспекта №14; страница — задачи 13–14.
+ *
+ * Срез, а не живой `BUILTIN_ASPECT_IDS`: задача 4 допишет `orbis/page` в конец списка, и сверка с
+ * живым списком покраснела бы на неизменном экране, а эталон перезаписывать нельзя. Срез, а не
+ * копия литералом: новый id, вставленный НЕ в конец, сдвинет первые 13 и покрасит тест. Порядок
+ * внутри тринадцати здесь не сверяется (сравнение — множеством): его держит эталон структуры,
+ * где секции аспектов стоят в порядке реестра.
+ */
+const ASPECTS_AT_CAPTURE: readonly string[] = BUILTIN_ASPECT_IDS.slice(0, 13);
+
 test('фикстуры покрывают все 13 встроенных аспектов и частые сочетания', () => {
   const single = STRUCTURE_FIXTURES.filter((f) => f.entity.aspects.length === 1).map(
     (f) => f.entity.aspects[0],
   );
-  expect(new Set(single)).toEqual(new Set(BUILTIN_ASPECT_IDS));
+  expect(ASPECTS_AT_CAPTURE).toHaveLength(13);
+  expect(new Set(single)).toEqual(new Set(ASPECTS_AT_CAPTURE));
   expect(STRUCTURE_FIXTURES.map((f) => f.name)).toEqual(
     expect.arrayContaining([
       'ticket',
