@@ -57,6 +57,7 @@ import type {
   LLMToolDef,
 } from '../../apps/server/src/llm/types.ts';
 import type { RegistrySnapshot } from '../../apps/server/src/registry/load.ts';
+import { FORBIDDEN_ASPECTS, operationAspects } from '../../apps/server/src/routines/propose.ts';
 import { BUDGET_STATUS, seedWorld, type WorldEntity } from './world.ts';
 
 // ---------------------------------------------------------------------------
@@ -117,8 +118,10 @@ export interface TraceCall {
   aspect?: string;
   /** Отказ заглушки в форме `КОД: сообщение` (VALIDATION, COMPUTED_WRITE, NOT_FOUND). */
   error?: string;
-  /** Шаг пришёл внутри batch_execute — в счёт шагов цикла не идёт. */
+  /** Шаг пришёл внутри batch_execute / orbis_propose — в счёт шагов цикла не идёт. */
   viaBatch?: boolean;
+  /** Прод отверг бы этот вызов, а заглушка приняла (только orbis_propose; см. `StubExecutor.propose`). */
+  prodRefusal?: string;
 }
 
 export interface TraceTurn {
@@ -304,6 +307,17 @@ interface SubCall {
   error?: string;
 }
 
+/** Операции, которые принимает предложение рутины, — те же четыре, что у `runPropose`. */
+const PROPOSE_TOOLS: ReadonlySet<string> = new Set([
+  'entity_create',
+  'entity_update',
+  'relation_create',
+  'relation_delete',
+]);
+
+/** Тулы-обёртки группы операций: их операции идут в трассу отдельными строками (`viaBatch`). */
+const GROUP_TOOLS: ReadonlySet<string> = new Set(['batch_execute', 'orbis_propose']);
+
 /** Механизм записи чата и рутины — тот же, под которым их правку судит гейт прав (§А2-5). */
 const MECHANISM = 'user';
 
@@ -311,8 +325,10 @@ export class StubExecutor {
   readonly parseReg: ParseRegistry;
   /** Имя `attach_*`-тула → id аспекта (та же формула имени, что у реестра тулов). */
   private readonly attachAspect: Map<string, string>;
-  /** Операции последнего batch_execute — трасса судит о шагах, а не об имени обёртки. */
+  /** Операции последнего batch_execute / orbis_propose — трасса судит о шагах, а не об имени обёртки. */
   subCalls: SubCall[] = [];
+  /** Расхождение с продом у последнего orbis_propose (см. `propose`). */
+  prodRefusal: string | undefined;
 
   constructor(
     readonly reg: RegistrySnapshot,
@@ -358,6 +374,7 @@ export class StubExecutor {
 
   private run(name: string, args: Record<string, unknown>): unknown {
     if (name === 'batch_execute') return this.batch(args);
+    if (name === 'orbis_propose') return this.propose(args);
     if (name === 'entity_query') return this.query(args);
     if (name === 'user_query') return this.aggregate(args);
     if (name === 'budget_status') return BUDGET_STATUS;
@@ -513,7 +530,52 @@ export class StubExecutor {
    * рапортовала бы о несделанном (наблюдалось в П3).
    */
   private batch(args: Record<string, unknown>): unknown {
+    return this.group(args.operations);
+  }
+
+  /**
+   * orbis_propose — единственная правка propose-рутины. Предложение раскрывается в мир как
+   * ПРИНЯТОЕ владельцем (рулинг координатора, фикс-раунд 1 задачи 3): стенд меряет, собрала ли
+   * модель правку верно, а не скорость владельца; операции идут в трассу как у batch
+   * (`viaBatch`), атомарно, со стадией 2 на каждой.
+   *
+   * ЧЕГО ЗАГЛУШКА НЕ ПОВТОРЯЕТ — И ГОВОРИТ ОБ ЭТОМ: боевой `runPropose` отвергает предложение,
+   * касающееся аспектов из `FORBIDDEN_ASPECTS` (`routines/propose.ts`, инвариант 6 — в том числе
+   * `orbis/routine`). Сценарий `routine-propose` в канале propose-рутины именно такое
+   * предложение и требует; заглушка его принимает (иначе клетка непроходима в обоих вариантах
+   * и ничего не меряет), а расхождение с продом кладёт в `prodRefusal` вызова — отчёт его видит.
+   */
+  private propose(args: Record<string, unknown>): unknown {
     const ops = (Array.isArray(args.operations) ? args.operations : []) as {
+      tool?: unknown;
+      input?: unknown;
+    }[];
+    if (ops.length === 0) throw new ExecError('VALIDATION', 'orbis_propose: operations пусты');
+    const bad = ops.find((op) => !PROPOSE_TOOLS.has(String(op.tool)));
+    if (bad !== undefined) {
+      throw new ExecError(
+        'VALIDATION',
+        `orbis_propose: операция ${String(bad.tool)} не предлагается`,
+      );
+    }
+    const forbidden = new Set(
+      ops.flatMap((op) =>
+        operationAspects(this.reg, (op.input ?? {}) as Record<string, unknown>).filter((a) =>
+          (FORBIDDEN_ASPECTS as readonly string[]).includes(a),
+        ),
+      ),
+    );
+    this.prodRefusal =
+      forbidden.size === 0
+        ? undefined
+        : `в проде отвергнуто запретом по объекту (routines/propose.ts): ${[...forbidden].join(', ')}`;
+    const operations = this.group(ops);
+    return { run_id: args.run_id, pending_id: crypto.randomUUID(), operations, replayed: false };
+  }
+
+  /** Атомарная группа операций: отказ одной откатывает все (batch_execute, orbis_propose). */
+  private group(raw: unknown): unknown[] {
+    const ops = (Array.isArray(raw) ? raw : []) as {
       tool?: unknown;
       input?: unknown;
     }[];
@@ -564,6 +626,7 @@ function record(
   args: Record<string, unknown>,
 ): ToolPayload {
   exec.subCalls = [];
+  exec.prodRefusal = undefined;
   const payload = exec.call(name, args);
   const aspect = exec.aspectOfTool(name);
   trace.calls.push({
@@ -573,8 +636,9 @@ function record(
     queries: collectQueries(exec.parseReg, name, args),
     ...(aspect !== undefined && { aspect }),
     ...(payload.status === 'error' && { error: `${payload.error.code}: ${payload.error.message}` }),
+    ...(exec.prodRefusal !== undefined && { prodRefusal: exec.prodRefusal }),
   });
-  for (const sub of name === 'batch_execute' ? exec.subCalls : []) {
+  for (const sub of GROUP_TOOLS.has(name) ? exec.subCalls : []) {
     const subAspect = exec.aspectOfTool(sub.name);
     trace.calls.push({
       ...at,
@@ -634,6 +698,11 @@ export interface RunOptions {
   /** Реплики владельца; null — ход без реплики (его открыл канал). */
   turns: (string | null)[];
   maxSteps?: number;
+  /**
+   * Тулы, успех которых закрывает ход сам (`TERMINAL_TOOLS` раннера рутины: `orbis_propose`,
+   * `orbis_checkpoint`) — как в бою, модель после них больше не зовётся. У чата их нет.
+   */
+  terminalTools?: ReadonlySet<string>;
   meta: Pick<Trace, 'scenario' | 'variant' | 'channel' | 'rep'>;
 }
 
@@ -674,9 +743,19 @@ export async function runScenario(opts: RunOptions): Promise<Trace> {
           break;
         }
         if (res.content) messages.push({ role: 'assistant', content: res.content });
+        let closed = false;
         for (const call of res.toolCalls) {
           const payload = record(exec, trace, { turn: t, step }, call.name, call.input);
+          if (payload.status === 'ok' && opts.terminalTools?.has(call.name) === true) {
+            closed = true;
+            break;
+          }
           messages.push(toolResultMessage(call.name, payload));
+        }
+        if (closed) {
+          converged = true;
+          final = res.content;
+          break;
         }
       }
       trace.turns.push({

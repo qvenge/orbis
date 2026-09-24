@@ -39,7 +39,7 @@ import { type LLMProviderEnv, makeLLMProvider } from '../llm/provider';
 import type { LLMMessage, LLMProvider, LLMResponse, LLMToolDef } from '../llm/types';
 import type { RunRegistry } from '../routines/shutdown';
 import { dispatchTool } from '../tools/dispatch';
-import { buildToolRegistry, type Card } from '../tools/registry';
+import { buildToolRegistry, type Card, type OrbisToolDef } from '../tools/registry';
 import { toWireChatMessage } from '../wire';
 import { recordUsage, type UsageTotals, utcDay } from './metering';
 import { extractSuggestions } from './suggestions';
@@ -176,6 +176,29 @@ export const PROCESSING_TTL_MS = 10 * 60_000;
  * pending по batch_id модели — ретрай того же вызова создал бы ВТОРУЮ pending-карточку,
  * поэтому tool-результат прямо запрещает повтор: ожидание — терминальный исход хода.
  */
+/**
+ * Поверхность тулов чата (слой 5): реестр тулов графа → то, что чат отдаёт провайдеру.
+ *
+ * Одна функция на всех, кто спрашивает «что видит модель чата»: сам чат, стенд §С8-30
+ * (`scripts/probe-p3`) и замер бюджета слоя 5 (`scripts/prompt-size.ts`). Копия фильтра в
+ * скриптах мерила бы поверхность, которой в проде нет, как только фильтр здесь поменяется.
+ *
+ * OrbisToolDef → LLMToolDef; internalOnly (user_query) остаётся: внутренний чат — его законный
+ * потребитель, отсечение касается только MCP (Task 10). agentOnly отсекается: у чата нет
+ * гранта — глаголы исполнителя ему не адресованы (прогон ведётся от имени конкретного доступа,
+ * §9.3/С7). routineOnly — по той же причине с другой стороны (V1.10): предложение рутины
+ * (orbis_propose) адресуется её прогону, а у чата прогона нет — предлагать ему нечего и некому.
+ */
+export function chatToolSurface(defs: readonly OrbisToolDef[]): LLMToolDef[] {
+  return defs
+    .filter((d) => d.agentOnly !== true && d.routineOnly !== true)
+    .map((d) => ({
+      name: d.name,
+      description: d.description,
+      inputSchema: d.inputJsonSchema,
+    }));
+}
+
 function pendingNote(pendingId: string): string {
   return (
     `действие не исполнено — ждёт подтверждения владельца (pendingId=${pendingId}). ` +
@@ -320,20 +343,7 @@ async function runAgentLoop(
       // списания обязаны считаться от одного момента, а не от двух разных
       clock,
     });
-    const defs = await buildToolRegistry(tx, input.identity.graph);
-    // OrbisToolDef → LLMToolDef; internalOnly (user_query) остаётся: внутренний чат —
-    // его законный потребитель, отсечение касается только MCP (Task 10)
-    const llmTools: LLMToolDef[] = defs
-      // agentOnly отсекается: у чата нет гранта — глаголы исполнителя ему не адресованы
-      // (прогон ведётся от имени конкретного доступа, §9.3/С7). routineOnly — по той же
-      // причине с другой стороны (V1.10): предложение рутины (orbis_propose) адресуется
-      // её прогону, а у чата прогона нет — предлагать ему нечего и некому
-      .filter((d) => d.agentOnly !== true && d.routineOnly !== true)
-      .map((d) => ({
-        name: d.name,
-        description: d.description,
-        inputSchema: d.inputJsonSchema,
-      }));
+    const llmTools = chatToolSurface(await buildToolRegistry(tx, input.identity.graph));
     return { system: ctx.system, history: ctx.messages, tools: llmTools };
   });
 

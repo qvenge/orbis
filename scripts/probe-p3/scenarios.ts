@@ -30,8 +30,8 @@ export interface Scenario {
   /** Нормативный блок — столбец таблицы П3 §3. */
   block: string;
   /**
-   * Канал: чат — реплика владельца; рутина — та же реплика телом рутины-триггера
-   * (`world.ts`, `triggerBody`), и ход открывает сам канал («Сработала рутина …»).
+   * Канал: чат — реплика владельца; рутина — та же реплика телом рутины-триггера в режиме
+   * `propose` (`world.ts`, `triggerBody`), и ход открывает сам канал («Сработала рутина …»).
    */
   channel: 'chat' | 'routine';
   turns: string[];
@@ -106,6 +106,10 @@ export function commonNotes(t: Trace): string[] {
   if (val.length > 0) out.push(`отказов стадии 2: ${val.length} (${val[0]?.error})`);
   const bad = badQueries(t);
   if (bad.length > 0) out.push(`неразбираемых запросов: ${bad.length} («${bad[0]?.text}»)`);
+  // Предложение, которое прод отверг бы, а заглушка приняла (`StubExecutor.propose`): вердикт
+  // сценария им не меняется, но читатель отчёта обязан видеть, что клетка прошла мимо запрета.
+  const refusal = t.calls.find((c) => c.prodRefusal !== undefined)?.prodRefusal;
+  if (refusal !== undefined) out.push(refusal);
   return out;
 }
 
@@ -383,11 +387,23 @@ export const SCENARIOS: Scenario[] = [
       return verdict(fails);
     },
   },
+  /**
+   * МЕРЯЕТ РИСК В-6 — КАНАЛ PROPOSE-РУТИНЫ ПОЛУЧАЕТ ТОЛЬКО ИНДЕКС. Рутина-триггер в режиме
+   * `propose` (`world.ts`, рулинг координатора, фикс-раунд 1 задачи 3): `attach_*` ей не
+   * показаны, и `ai_instructions` аспекта `orbis/routine` («без прямой просьбы — propose»,
+   * «ЧЧ:ММ») в её канале нет НИГДЕ — ни в промпте (индекс), ни в тулах. Вариант `catalog` несёт
+   * их секцией каталога; разница клеток и есть цена В-6. Правка идёт предложением
+   * (`orbis_propose`), заглушка раскрывает его в мир как принятое.
+   *
+   * Названное расхождение с продом: боевой `runPropose` предложение, касающееся `orbis/routine`,
+   * отвергает (инвариант 6). Предикат судит о СОБРАННОЙ модели записи, а не о судьбе
+   * предложения; прошедшая мимо запрета клетка помечается в заметках (`commonNotes`).
+   */
   {
     id: 'routine-propose',
     title:
       'Рутина без просьбы действовать самой — orbis/routine_mode: propose, orbis/routine_at «07:00»',
-    block: 'Инструкции аспекта orbis/routine (слой реестра); канал рутины',
+    block: 'Инструкции аспекта orbis/routine (слой реестра); канал propose-рутины (В-6)',
     channel: 'routine',
     turns: ['заведи рутину: каждое утро в 7 смотри мои задачи на день и присылай сводку'],
     check: (t) => {

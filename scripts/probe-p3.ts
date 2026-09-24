@@ -35,23 +35,42 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { budgetStatusResultSchema, MAX_AGENT_STEPS } from '@orbis/shared';
+import { routineById } from '../apps/server/src/agent-loop/queries.ts';
+import { chatToolSurface } from '../apps/server/src/ai/send-message.ts';
+import type { Db } from '../apps/server/src/db/client.ts';
 import { makeDb } from '../apps/server/src/db/client.ts';
+import { withIdentity } from '../apps/server/src/db/with-identity.ts';
 import { ASPECT_INDEX_HEADING } from '../apps/server/src/llm/aspect-index.ts';
+import { buildContext } from '../apps/server/src/llm/context.ts';
 import { DEFAULT_OPENAI_MODEL } from '../apps/server/src/llm/openai.ts';
 import type { LLMProviderEnv } from '../apps/server/src/llm/provider.ts';
+import {
+  ROUTINE_MODE_PROPERTY,
+  ROUTINE_TOOLS_PROPERTY,
+} from '../apps/server/src/policy/confirmation.ts';
 import { ROUTINE_MAX_STEPS } from '../apps/server/src/routines/constants.ts';
+import { TERMINAL_TOOLS } from '../apps/server/src/routines/runner.ts';
+import { buildToolRegistry, routineToolDefs } from '../apps/server/src/tools/registry.ts';
 import { replay, runScenario, selectProvider, type Trace } from './probe-p3/runner.ts';
 import { commonNotes, SCENARIOS, type Scenario } from './probe-p3/scenarios.ts';
 import {
   assembleChannels,
   type Channels,
   isLocalDatabaseUrl,
+  type ProbeOwner,
   probeOwner,
   seedTrigger,
   VARIANTS,
   type Variant,
+  withCatalog,
 } from './probe-p3/variants.ts';
-import { BUDGET_STATUS, seedWorld, triggerEntity, type WorldEntity } from './probe-p3/world.ts';
+import {
+  BUDGET_STATUS,
+  probeClock,
+  seedWorld,
+  triggerEntity,
+  type WorldEntity,
+} from './probe-p3/world.ts';
 
 export { selectProvider } from './probe-p3/runner.ts';
 
@@ -152,6 +171,8 @@ const ROUTINE_SCENARIO = SCENARIOS.find((s) => s.channel === 'routine');
 
 interface Stand {
   channels: Channels;
+  /** Эталон прода, собранный НЕЗАВИСИМО от `assembleChannels`, — им dry-run сверяет стенд. */
+  prod: () => Promise<ProdReference>;
   /** Мир сценария: у канала рутины в нём ещё и рутина-триггер (её id модель видит в якоре). */
   worldFor: (s: Scenario) => Map<string, WorldEntity>;
 }
@@ -167,11 +188,61 @@ async function withStand<T>(fn: (stand: Stand) => Promise<T>): Promise<T> {
     const trigger = triggerEntity(triggerId, request);
     return await fn({
       channels,
+      prod: () => prodReference(db, owner, triggerId),
       worldFor: (s) => seedWorld(s.channel === 'routine' ? [trigger] : []),
     });
   } finally {
     await client.end();
   }
+}
+
+interface ProdReference {
+  chatIndex: string;
+  chatTools: string[];
+  routineTools: string[];
+  routineMode: unknown;
+}
+
+/**
+ * То, что прод отдаёт модели, — собранное боевыми функциями напрямую, мимо сборки стенда: чат —
+ * `buildContext` и `chatToolSurface` (`ai/send-message.ts`), рутина — `routineToolDefs` со ссылкой,
+ * собранной ровно как в `routines/runner.ts`. Сверка со стендом ловит подмену канала или тулов
+ * внутри `assembleChannels`, которую ни один тест чистой части не видит (мутации гейт-ревью).
+ */
+async function prodReference(db: Db, owner: ProbeOwner, triggerId: string): Promise<ProdReference> {
+  return withIdentity(db, owner.who, async (tx) => {
+    const defs = await buildToolRegistry(tx, owner.who.graph);
+    const chat = await buildContext(tx, {
+      graphId: owner.who.graph,
+      threadId: owner.threadId,
+      clock: probeClock,
+    });
+    const routine = await routineById(tx, triggerId);
+    if (routine === null) throw new Error('рутина-триггер не найдена — сев не отработал');
+    const routineTools = routineToolDefs(defs, {
+      id: routine.id,
+      runId: crypto.randomUUID(),
+      mode: routine.props[ROUTINE_MODE_PROPERTY],
+      allowedTools: new Set(routine.props[ROUTINE_TOOLS_PROPERTY] ?? []),
+    });
+    return {
+      chatIndex: chat.system,
+      chatTools: chatToolSurface(defs).map((d) => d.name),
+      routineTools: routineTools.map((d) => d.name),
+      routineMode: routine.props[ROUTINE_MODE_PROPERTY],
+    };
+  });
+}
+
+/** Расхождение двух списков имён тулов — словами, а не «не равно». */
+function toolDiff(channel: string, got: readonly string[], want: readonly string[]): string[] {
+  const extra = got.filter((n) => !want.includes(n));
+  const missing = want.filter((n) => !got.includes(n));
+  if (extra.length === 0 && missing.length === 0 && got.length === want.length) return [];
+  return [
+    `тулы канала ${channel} не совпадают с продом: лишние [${extra.join(', ')}], ` +
+      `недостающие [${missing.join(', ')}], стенд ${got.length} против прода ${want.length}`,
+  ];
 }
 
 /** Мир проходит стадию 2 по эффективному реестру: иначе модель спорила бы с миром, а не с каналом. */
@@ -205,27 +276,58 @@ async function dryRun(): Promise<number> {
   return withStand(async (stand) => {
     const defects = worldDefects(stand);
     const bytes = (s: string) => Buffer.byteLength(s, 'utf8');
-    console.log(`probe-p3 --dry-run: секция каталога ${stand.channels.catalogBytes} байт`);
+    const { channels } = stand;
+    const prod = await stand.prod();
+    console.log(`probe-p3 --dry-run: секция каталога ${bytes(channels.catalogSection)} байт`);
     console.log('сценарий                 канал    index, Б  catalog, Б  тулов');
     for (const s of SCENARIOS) {
-      const ch = stand.channels[s.channel];
+      const ch = channels[s.channel];
       for (const v of VARIANTS) {
         if (!ch.system[v].includes(ASPECT_INDEX_HEADING))
           defects.push(`${s.id}/${v}: в канале нет индекса`);
       }
-      if (bytes(ch.system.catalog) <= bytes(ch.system.index))
-        defects.push(`${s.id}: catalog не длиннее index`);
+      // Инвариант сравнения: catalog — это index плюс секция каталога, и больше ничего.
+      if (ch.system.catalog !== withCatalog(ch.system.index, channels.catalogSection)) {
+        defects.push(
+          `${s.id}: catalog ≠ index + секция каталога — варианты отличаются не только каталогом`,
+        );
+      }
       if (ch.tools.length === 0) defects.push(`${s.id}: у канала нет тулов`);
       console.log(
         `${s.id.padEnd(24)} ${s.channel.padEnd(8)} ${String(bytes(ch.system.index)).padStart(8)}  ` +
           `${String(bytes(ch.system.catalog)).padStart(10)}  ${String(ch.tools.length).padStart(5)}`,
       );
     }
-    // Сценарий рутины без тула навешивания мерил бы отсутствие тула, а не канал.
-    if (!stand.channels.routine.tools.some((t) => t.name === 'attach_orbis_routine')) {
+    // Инвариант «index — ровно прод-канал»: у чата канал детерминирован (часы стенда, тот же тред),
+    // и сверяется побайтно. У рутины в канал входит id прогона — её сверяют тулы и режим ниже.
+    if (channels.chat.system.index !== prod.chatIndex) {
+      defects.push('канал чата варианта index не равен прод-каналу buildContext');
+    }
+    defects.push(
+      ...toolDiff(
+        'чата',
+        channels.chat.tools.map((t) => t.name),
+        prod.chatTools,
+      ),
+    );
+    defects.push(
+      ...toolDiff(
+        'рутины',
+        channels.routine.tools.map((t) => t.name),
+        prod.routineTools,
+      ),
+    );
+    // Сценарий routine-propose меряет В-6: канал propose-рутины, где attach_* не видны вовсе.
+    if (prod.routineMode !== 'propose') {
       defects.push(
-        'канал рутины не видит attach_orbis_routine — сценарий routine-propose неисполним',
+        `рутина-триггер в режиме ${String(prod.routineMode)}, а не propose — В-6 не меряется`,
       );
+    }
+    if (channels.routine.tools.some((t) => t.name.startsWith('attach_'))) {
+      defects.push('канал propose-рутины видит attach_* — В-6 не меряется');
+    }
+    if (!channels.routine.tools.some((t) => t.name === 'orbis_propose')) {
+      defects.push('канал рутины не видит orbis_propose — сценарий routine-propose неисполним');
     }
     if (defects.length > 0) {
       console.error('\nСТЕНД НЕ ГОТОВ:');
@@ -439,6 +541,7 @@ async function live(args: Args, env: LLMProviderEnv & { DATABASE_URL?: string })
         opening: ch.opening,
         turns: s.channel === 'routine' ? [null] : s.turns,
         maxSteps: s.channel === 'routine' ? ROUTINE_MAX_STEPS : MAX_AGENT_STEPS,
+        ...(s.channel === 'routine' && { terminalTools: TERMINAL_TOOLS }),
         meta: { scenario: s.id, variant, channel: s.channel, rep: args.rep },
       });
       saved[s.id] = trace;

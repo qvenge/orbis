@@ -24,10 +24,17 @@ import {
 } from '@orbis/shared';
 import { ASPECT_INDEX_HEADING, aspectIndexLines } from '../apps/server/src/llm/aspect-index.ts';
 import type { RegistrySnapshot } from '../apps/server/src/registry/load.ts';
+import { buildToolDefs } from '../apps/server/src/tools/registry.ts';
 import { replay } from './probe-p3/runner.ts';
-import { SCENARIOS } from './probe-p3/scenarios.ts';
-import { catalogSection, isLocalDatabaseUrl, withCatalog } from './probe-p3/variants.ts';
-import { BUDGET_STATUS, seedWorld } from './probe-p3/world.ts';
+import { commonNotes, SCENARIOS } from './probe-p3/scenarios.ts';
+import {
+  catalogSection,
+  isLocalDatabaseUrl,
+  routineRefOf,
+  routineSurface,
+  withCatalog,
+} from './probe-p3/variants.ts';
+import { BUDGET_STATUS, seedWorld, TRIGGER_PROPS, triggerEntity } from './probe-p3/world.ts';
 import { main, PARITY_TOLERANCE, parityVerdict, selectProvider } from './probe-p3.ts';
 
 /**
@@ -219,6 +226,77 @@ describe('(в) goal-sum судит по трассе, а не по тексту 
     const trace = replay(REG, [createGoalEntity, goalData(noField)]);
     expect(trace.calls[1]?.error).toContain('VALIDATION');
     expect(scenario('goal-sum').check(trace).pass).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// routine-propose: канал propose-рутины (риск В-6, фикс-раунд 1 задачи 3)
+// ---------------------------------------------------------------------------
+
+describe('routine-propose меряет В-6: канал propose-рутины получает только индекс', () => {
+  const TRIGGER = '77777777-7777-4777-8777-777777777777';
+  const RUN = '88888888-8888-4888-8888-888888888888';
+
+  test('сценарий идёт каналом рутины, триггер — в режиме propose', () => {
+    expect(scenario('routine-propose').channel).toBe('routine');
+    expect(TRIGGER_PROPS['orbis/routine_mode']).toBe('propose');
+  });
+
+  test('тулы канала — прод-правило propose: attach_* нет, orbis_propose есть', () => {
+    const names = routineSurface(buildToolDefs(REG), routineRefOf(TRIGGER, RUN, TRIGGER_PROPS)).map(
+      (t) => t.name,
+    );
+    expect(names.filter((n) => n.startsWith('attach_'))).toEqual([]);
+    expect(names).toContain('orbis_propose');
+  });
+
+  const request = scenario('routine-propose').turns[0] ?? '';
+  const propose = (mode: string) => ({
+    name: 'orbis_propose',
+    args: {
+      run_id: RUN,
+      explanation: 'Утренняя сводка задач',
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Утренняя сводка задач',
+            body: 'Посмотри задачи на день и пришли сводку',
+            tags: [],
+            aspects: ['orbis/routine'],
+            props: {
+              'orbis/routine_stage': 'active',
+              'orbis/routine_at': '07:00',
+              'orbis/routine_mode': mode,
+            },
+          },
+        },
+      ],
+    },
+  });
+  const world = () => seedWorld([triggerEntity(TRIGGER, request)]);
+
+  test('заглушка раскрывает предложение в мир как принятое: операции — строками viaBatch', () => {
+    const trace = replay(REG, [propose('propose')], { world: world() });
+    expect(trace.calls.map((c) => [c.name, c.viaBatch === true, c.error])).toEqual([
+      ['orbis_propose', false, undefined],
+      ['entity_create', true, undefined],
+    ]);
+    expect(scenario('routine-propose').check(trace).pass).toBe(true);
+  });
+
+  test('расхождение с продом названо: предложение про orbis/routine прод отверг бы — заметка в трассе', () => {
+    const trace = replay(REG, [propose('propose')], { world: world() });
+    expect(trace.calls[0]?.prodRefusal).toContain('orbis/routine');
+    expect(commonNotes(trace).some((n) => n.includes('запретом по объекту'))).toBe(true);
+  });
+
+  test('предикат не изменился: act без прямой просьбы — провал', () => {
+    const verdict = scenario('routine-propose').check(
+      replay(REG, [propose('act')], { world: world() }),
+    );
+    expect(verdict.pass).toBe(false);
+    expect(verdict.fails).toContain('orbis/routine_mode=act, без прямой просьбы ожидался propose');
   });
 });
 

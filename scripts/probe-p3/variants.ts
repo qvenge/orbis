@@ -27,6 +27,7 @@ import {
   writableFromTool,
 } from '@orbis/shared';
 import { routineById } from '../../apps/server/src/agent-loop/queries.ts';
+import { chatToolSurface } from '../../apps/server/src/ai/send-message.ts';
 import { ensureGlobalThread } from '../../apps/server/src/chat/threads.ts';
 import type { Db } from '../../apps/server/src/db/client.ts';
 import { withIdentity } from '../../apps/server/src/db/with-identity.ts';
@@ -35,6 +36,10 @@ import { type Identity, identityOfPerson, parseAccountId } from '../../apps/serv
 import { ASPECT_INDEX_HEADING } from '../../apps/server/src/llm/aspect-index.ts';
 import { buildContext } from '../../apps/server/src/llm/context.ts';
 import type { LLMMessage, LLMToolDef } from '../../apps/server/src/llm/types.ts';
+import {
+  ROUTINE_MODE_PROPERTY,
+  ROUTINE_TOOLS_PROPERTY,
+} from '../../apps/server/src/policy/confirmation.ts';
 import { effectiveRegistry } from '../../apps/server/src/registry/cache.ts';
 import type { RegistrySnapshot } from '../../apps/server/src/registry/load.ts';
 import { disabledModulesOf } from '../../apps/server/src/registry/modules.ts';
@@ -45,6 +50,7 @@ import { seedOwner } from '../../apps/server/src/seed/onboarding.ts';
 import {
   buildToolRegistry,
   type OrbisToolDef,
+  type RoutineRef,
   routineToolDefs,
 } from '../../apps/server/src/tools/registry.ts';
 import { PROBE_NOW, probeClock, TRIGGER_PROPS, TRIGGER_TITLE, triggerBody } from './world.ts';
@@ -235,11 +241,35 @@ export async function seedTrigger(db: Db, who: Identity, request: string): Promi
   return id;
 }
 
-/** Поверхность тулов чата — тот же фильтр, что у `ai/send-message.ts` (агентские и рутинные — прочь). */
-export function chatSurface(defs: readonly OrbisToolDef[]): LLMToolDef[] {
-  return defs
-    .filter((d) => d.agentOnly !== true && d.routineOnly !== true)
-    .map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputJsonSchema }));
+/**
+ * Ссылка рутины для правила доступа к тулам — теми же полями, что собирает раннер
+ * (`routines/runner.ts`): режим и белый список из значений рутины. От `runId` правило не
+ * зависит; он нужен только форме `RoutineRef`.
+ */
+export function routineRefOf(
+  id: string,
+  runId: string,
+  // `object`, а не `Record`: значения рутины из БД типизированы интерфейсом (`RoutineProps`), а
+  // интерфейс к индексной сигнатуре не присваивается (см. `TicketProps`, agent-loop/queries.ts).
+  routineProps: object,
+): RoutineRef {
+  const props = routineProps as Readonly<Record<string, unknown>>;
+  const allowed = props[ROUTINE_TOOLS_PROPERTY];
+  return {
+    id,
+    runId,
+    mode: props[ROUTINE_MODE_PROPERTY] === 'act' ? 'act' : 'propose',
+    allowedTools: new Set(Array.isArray(allowed) ? allowed.map(String) : []),
+  };
+}
+
+/** Тулы рутины в форме провайдера — `routineToolDefs` прода, как в `routines/runner.ts`. */
+export function routineSurface(defs: readonly OrbisToolDef[], ref: RoutineRef): LLMToolDef[] {
+  return routineToolDefs([...defs], ref).map((d) => ({
+    name: d.name,
+    description: d.description,
+    inputSchema: d.inputJsonSchema,
+  }));
 }
 
 export interface Channel {
@@ -252,7 +282,8 @@ export interface Channel {
 
 export interface Channels {
   reg: RegistrySnapshot;
-  catalogBytes: number;
+  /** Секция каталога, которой `catalog` отличается от `index`, — dry-run сверяет по ней. */
+  catalogSection: string;
   chat: Channel;
   routine: Channel;
 }
@@ -286,19 +317,14 @@ export async function assembleChannels(
       history: await routineHistory(tx, graphId, routine.id, runId),
       clock: probeClock,
     });
-    const routineTools = routineToolDefs(defs, {
-      id: routine.id,
-      runId,
-      mode: routine.props['orbis/routine_mode'],
-      allowedTools: new Set(routine.props['orbis/allowed_tools'] ?? []),
-    }).map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputJsonSchema }));
+    const routineTools = routineSurface(defs, routineRefOf(routine.id, runId, routine.props));
 
     return {
       reg,
-      catalogBytes: Buffer.byteLength(section, 'utf8'),
+      catalogSection: section,
       chat: {
         system: { index: chat.system, catalog: withCatalog(chat.system, section) },
-        tools: chatSurface(defs),
+        tools: chatToolSurface(defs),
         opening: chat.messages,
       },
       routine: {

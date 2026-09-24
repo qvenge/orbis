@@ -52,7 +52,7 @@ const defaultSink = makeChatJournalSink();
  * Терминальные инструменты рутины: те, что закрывают прогон САМИ (V1.6, V1.9). После их
  * успеха раннеру нечего закрывать — только дописать расход, который знает только он.
  */
-const TERMINAL_TOOLS: ReadonlySet<string> = new Set(['orbis_propose', 'orbis_checkpoint']);
+export const TERMINAL_TOOLS: ReadonlySet<string> = new Set(['orbis_propose', 'orbis_checkpoint']);
 
 /**
  * Потолки текстовых полей прогона (json-схемы свойств `orbis/run_*` в реестре) — обрезаем

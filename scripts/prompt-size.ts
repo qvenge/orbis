@@ -6,7 +6,7 @@
 // у свежего владельца после боевого сида (`seedOwner`): промпт линейки v7, дата, проза модулей,
 // индекс аспектов, блок продолжений; БЕЗ памяти и якоря (у свежего владельца их нет — это
 // проверяется, а не подразумевается). Слой 5 — определения тулов чата: `buildToolRegistry`,
-// тот же фильтр поверхности, что у `ai/send-message.ts`, в форме, которую чат отдаёт
+// поверхность чата той же функцией, что у `ai/send-message.ts` (`chatToolSurface`), в форме, которую чат отдаёт
 // провайдеру (`LLMToolDef`: имя, описание, JSON Schema входа).
 //
 // БАЙТЫ И ТОКЕНЫ — РАЗНЫЕ ЗАМЕРЫ. Байты — UTF-8 (`Buffer.byteLength`), без провайдера: канал на
@@ -20,6 +20,7 @@
 //     bun scripts/prompt-size.ts --tokens   — байты и токены (живые вызовы провайдера)
 // КОДЫ ВЫХОДА: 0 — замерено; 2 — не замерено (нет провайдера/кредитов при --tokens, нет
 // локальной БД); 1 — сломалось.
+import { chatToolSurface } from '../apps/server/src/ai/send-message.ts';
 import { makeDb } from '../apps/server/src/db/client.ts';
 import { withIdentity } from '../apps/server/src/db/with-identity.ts';
 import { ASPECT_INDEX_HEADING } from '../apps/server/src/llm/aspect-index.ts';
@@ -28,7 +29,7 @@ import type { LLMProviderEnv } from '../apps/server/src/llm/provider.ts';
 import type { LLMProvider, LLMToolDef } from '../apps/server/src/llm/types.ts';
 import { buildToolRegistry } from '../apps/server/src/tools/registry.ts';
 import { selectProvider } from './probe-p3/runner.ts';
-import { chatSurface, isLocalDatabaseUrl, probeOwner } from './probe-p3/variants.ts';
+import { isLocalDatabaseUrl, probeOwner } from './probe-p3/variants.ts';
 import { probeClock } from './probe-p3/world.ts';
 
 export interface ByteMeasure {
@@ -109,7 +110,7 @@ export async function main(
         const defs = await buildToolRegistry(tx, owner.who.graph);
         return {
           system: ctx.system,
-          tools: chatSurface(defs),
+          tools: chatToolSurface(defs),
           registryTools: defs.length,
           memory: (await loadMemory(tx)).length,
         };
