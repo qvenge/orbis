@@ -36,6 +36,7 @@ import { assertExprChecked } from '../expr/check';
 import type { ExprSite } from '../subscriptions/registry';
 import { assertAcyclicGraph, dependencyGraph } from './deps-graph';
 import type { RegistrySnapshot } from './load';
+import { validateEntityProps } from './validate-props';
 
 export type { RuleCarrier } from '@orbis/shared'; // Р-К-53: форма { kind: 'aspect'|'property'|'role'; id } объявлена в rule-type.ts (0c)
 export interface RuleCheckScope {
@@ -127,6 +128,13 @@ export const CONSTRAINT_TEMPLATE_LIST = [
   'forbidden_when',
   'unique_among',
 ] as const;
+
+/** Шаблоны ЗАПИСИ сущности (C и T) — те, чьи параметры и область движок читает по `state.props`. */
+const WRITE_TEMPLATES: ReadonlySet<string> = new Set([
+  ...CONSTRAINT_TEMPLATE_LIST,
+  'on_enter_class',
+  'default',
+]);
 
 /** Умолчание области — строка-носитель (§Б4-1): правило без `scope` живёт там, где написано. */
 export function effectiveRuleScope(rule: RuleDefinition, carrier: RuleCarrier): RuleScope {
@@ -268,6 +276,7 @@ export function assertRule(raw: unknown, scope: RuleCheckScope): RuleDefinition 
   }
   assertReferences(rule, scope); // (6)
   assertExprTypes(rule, scope); // (7)
+  assertValueLiterals(rule, reg); // (7а)
   assertLevelScoped(rule); // (8)
   assertNoConflict(rule, reg); // (9)
   if (!scope.systemSeed) assertRelationReadsGuarded(rule, reg); // (10)
@@ -347,13 +356,34 @@ function propertyOf(reg: RegistrySnapshot, rule: RuleDefinition, id: string) {
   refuseMerged(reg, rule, id, 'параметр');
   return def;
 }
+/**
+ * Свойство-АДРЕС параметра шаблона записи — только из `props` (§А1-3). Движок читает и пишет параметры
+ * шаблонов по `state.props` (`rules/engine.ts`: присутствие C-параметра, набор `unique_among`, событие по
+ * значению, цели `set`/`default`/`on_leave.unset`, область `{property}`), а core-проекция (`storage: 'core'` —
+ * `orbis/title`, `orbis/archived`, `orbis/created_at`, `orbis/updated_at`) живёт колонкой записи, и в `props`
+ * её не бывает (стадия 2 — `CORE_IN_PROPS`). Принятое такое правило молчало бы всегда или отказывало бы всегда.
+ * В `when` и в значении core законна: её кладёт в область `entityEvalScope` (Р-И-3). Причина — та же, что у
+ * отсутствующего свойства, с уточнением `cause` (приём `not_status` ниже): адреса в `props` у правила нет.
+ */
+function propsAddressOf(reg: RegistrySnapshot, rule: RuleDefinition, id: string) {
+  const def = propertyOf(reg, rule, id);
+  if (def.storage !== 'props') {
+    bad(
+      'RULE_UNKNOWN_PROPERTY',
+      rule.id,
+      `правило ${rule.id}: «${id}» — core-проекция (колонка записи), параметр правила адресует только свойства props (читать core можно в when и в значении)`,
+      { property: id, cause: 'core', storage: def.storage },
+    );
+  }
+  return def;
+}
 function assertEnterEvent(
   reg: RegistrySnapshot,
   rule: RuleDefinition,
   enter: RuleEnterEvent,
 ): void {
   if ('property' in enter) {
-    propertyOf(reg, rule, enter.property);
+    propsAddressOf(reg, rule, enter.property);
     return;
   }
   const c = reg.contracts.get(enter.contract);
@@ -386,11 +416,15 @@ function assertEnterEvent(
  * Свойства, которые правило ЧИТАЕТ в выражениях, называет чекер E на ступени (7) — со своим путём.
  */
 function assertReferences(rule: RuleDefinition, { reg, carrier }: RuleCheckScope): void {
+  // Область `{property}` правила ЗАПИСИ — тоже адрес по `props` (`ruleTouchesRecord`: `in state.props` либо
+  // аспект-носитель); у core-проекции нет ни того, ни другого, и правило не касалось бы ни одной записи.
+  const s = effectiveRuleScope(rule, carrier);
+  if (WRITE_TEMPLATES.has(rule.template) && 'property' in s) propsAddressOf(reg, rule, s.property);
   switch (rule.template) {
     case 'requires_when':
     case 'forbidden_when':
     case 'default':
-      propertyOf(reg, rule, rule.params.property);
+      propsAddressOf(reg, rule, rule.params.property);
       return;
     case 'unique_among':
       // СПИСОЧНОЕ свойство (`cardinality: many`) в наборе запрещено кодом §С1-2 `UNIQUE_ON_MANY`: у
@@ -402,7 +436,7 @@ function assertReferences(rule: RuleDefinition, { reg, carrier }: RuleCheckScope
       // ключей не различает, порядок элементов массива — часть документа. `UNIQUE_ON_MANY` — только
       // про `cardinality: many`, где значение — список скаляров, а не документ.
       for (const p of rule.params.properties) {
-        const def = propertyOf(reg, rule, p);
+        const def = propsAddressOf(reg, rule, p);
         if ('cardinality' in def.type && def.type.cardinality === 'many') {
           throw new ExecError(
             'UNIQUE_ON_MANY',
@@ -414,8 +448,8 @@ function assertReferences(rule: RuleDefinition, { reg, carrier }: RuleCheckScope
       return;
     case 'on_enter_class':
       assertEnterEvent(reg, rule, rule.params.enter);
-      if (rule.params.set !== undefined) propertyOf(reg, rule, rule.params.set.property);
-      for (const p of rule.params.on_leave?.unset ?? []) propertyOf(reg, rule, p);
+      if (rule.params.set !== undefined) propsAddressOf(reg, rule, rule.params.set.property);
+      for (const p of rule.params.on_leave?.unset ?? []) propsAddressOf(reg, rule, p);
       return;
     case 'nearest_ancestor':
       propertyOf(reg, rule, rule.params.targets.parent);
@@ -480,10 +514,12 @@ export function ruleExprScope(
   rule: RuleDefinition,
   _reg: RegistrySnapshot,
 ): Omit<ExprScope, 'reg'> {
+  // `listSetsOnly` — у ОБОИХ родов: и `when`/значения записи (`rules/engine.ts`), и `assign_level`
+  // (`policy/assign-level.ts`) исполняет TS-интерпретатор, у которого предикатного набора и `in_set` нет.
   if (rule.template === 'assign_level') {
-    return { allowDeref: true, allowSensitivity: true, params: {} };
+    return { allowDeref: true, allowSensitivity: true, params: {}, listSetsOnly: true };
   }
-  return { derefDenied: true, params: RULE_PARAM_TYPES };
+  return { derefDenied: true, params: RULE_PARAM_TYPES, listSetsOnly: true };
 }
 /**
  * E-ПОЗИЦИИ ПРАВИЛА одним перечнем — аналог `exprSitesOf` подписок и по той же причине: обход нужен трижды
@@ -591,6 +627,50 @@ function assertExprTypes(rule: RuleDefinition, { reg, carrier }: RuleCheckScope)
         actual: type.kind,
       },
     );
+  }
+}
+/**
+ * (7а) ЛИТЕРАЛЫ ЗНАЧЕНИЯ T-ПРАВИЛА — ПО СХЕМЕ СВОЙСТВА-ЦЕЛИ, той же функцией, что стадия 2 исполнителя
+ * (`validateEntityProps`), — паритет с `assertStepLiterals` двери действий. Чекер E сверяет только РОД
+ * (`select`/`ref` → text, дата-литерал приводится к timestamp), а варианты, формат, pattern и границы
+ * decimal — нет: `default(task_status, 'Inbox')` принимался бы, а стадия 2 отказывала бы каждой записи, где
+ * умолчание срабатывает. Литерал — то, что движок может записать БУКВАЛЬНО: корень значения и плечи `if`;
+ * `null` движок не пишет (`assignPresent`). `touched` пуст: запись T-правила не входит в патч, и стадия 2
+ * `DEPRECATED` по ней не спрашивает. Выражение (`{prop}`, `{param}`) судится родом — остаток.
+ */
+function literalLeaves(node: unknown, out: unknown[] = []): unknown[] {
+  if (typeof node !== 'object' || node === null) return out;
+  const rec = node as { const?: unknown; op?: unknown; args?: unknown[] };
+  if ('const' in rec) {
+    if (rec.const !== null) out.push(rec.const);
+  } else if (rec.op === 'if' && Array.isArray(rec.args)) {
+    literalLeaves(rec.args[1], out);
+    literalLeaves(rec.args[2], out);
+  }
+  return out;
+}
+function assertValueLiterals(rule: RuleDefinition, reg: RegistrySnapshot): void {
+  const target =
+    rule.template === 'default'
+      ? rule.params
+      : rule.template === 'on_enter_class'
+        ? rule.params.set
+        : undefined;
+  if (target === undefined) return;
+  for (const literal of literalLeaves(target.value)) {
+    const violations = validateEntityProps(
+      reg,
+      { props: { [target.property]: literal }, aspects: [] },
+      new Set(),
+    );
+    if (violations.length > 0) {
+      bad(
+        'RULE_VALUE_TYPE',
+        rule.id,
+        `значение правила ${rule.id} не проходит тип свойства ${target.property}`,
+        { property: target.property, violations },
+      );
+    }
   }
 }
 /**

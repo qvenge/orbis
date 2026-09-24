@@ -5713,32 +5713,30 @@ describe('фикс-раунд 2 задачи 16: откаты и снятие п
     expect(reg.aspects.get('orbis/task')?.rules.map((r) => r.id)).toContain('task_completed_at');
   });
 
-  test('m-C: включение системного правила, замыкающего круг с правилом владельца, — REGISTRY_CYCLE при снятии пустой дельты', async () => {
-    // Круг виден только графу: системное `task_completed_at` пишет completed_at по updated_at, своё умолчание
-    // на ДРУГОМ носителе пишет updated_at по completed_at. Предпроверка `assertRule` круга не спрашивает, и
-    // строка дельты задачи после включения пуста — держит её только проверка снимка в ветке снятия.
+  test('m-C: круг «системное ↔ своё» встроенными строками невыразим — носитель-core отвергнут на записи (финал Б-2 E-7)', async () => {
+    // Прежний носитель круга — `default` в core `orbis/updated_at` — движок не исполнил бы никогда: область
+    // {property: core} не касается ни одной записи, запись в props — `CORE_IN_PROPS`. Единственное системное
+    // T-ребро графа (`task_completed_at`: completed_at ← updated_at) упирается в core, поэтому ветка
+    // `REGISTRY_CYCLE` при снятии пустой дельты встроенными строками недостижима (строка реестра остатков);
+    // ветку инвариантов снятия держит пин I-2 (вторая дверь → `RULE_CONFLICT`).
     const g = await freshGraph();
     const inTx = <T>(fn: (tx: Tx) => Promise<T>): Promise<T> => withIdentity(db, personal(g), fn);
-    const task = { kind: 'aspect' as const, id: 'orbis/task' };
-    await inTx((tx) => disableSystemRuleDelta(tx, g, task, 'task_completed_at'));
-    await inTx((tx) =>
-      setRuleDelta(
-        tx,
-        g,
-        { kind: 'property', id: 'orbis/updated_at' },
-        {
-          id: 'my_updated_default',
-          template: 'default',
-          params: { property: 'orbis/updated_at', value: { prop: 'orbis/completed_at' } },
-        },
+    expect(
+      await refusalOf(
+        inTx((tx) =>
+          setRuleDelta(
+            tx,
+            g,
+            { kind: 'property', id: 'orbis/updated_at' },
+            {
+              id: 'my_updated_default',
+              template: 'default',
+              params: { property: 'orbis/updated_at', value: { prop: 'orbis/completed_at' } },
+            },
+          ),
+        ),
       ),
-    );
-    const sys = BUILTIN_RULES_BY_CARRIER['orbis/task']?.find(
-      (r) => r.id === 'task_completed_at',
-    ) as RuleDefinitionInput;
-    expect((await refusalOf(inTx((tx) => setRuleDelta(tx, g, task, sys)))).code).toBe(
-      'REGISTRY_CYCLE',
-    );
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_UNKNOWN_PROPERTY' });
   });
 });
 

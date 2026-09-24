@@ -565,3 +565,35 @@ test('шаг, называющий рутину или прогон, — ACTION_
   // И сидовые действия — прежний вердикт.
   for (const decl of BUILTIN_ACTION_DEFS) expect(verdict(decl)).toBe('ok');
 });
+
+test('precondition с предикатным набором или has_relation.in_set — EXPR_TYPE: TS-интерпретатор их не считает (финал Б-2 E-5)', () => {
+  const MM = { class: { contract: 'orbis/money-movement' } };
+  const withPre = (p: unknown) => ({
+    ...builtin(0),
+    precondition: {
+      op: 'and',
+      args: [p, { op: '=', args: [{ prop: 'orbis/planned' }, { const: true }] }],
+    },
+  });
+  expect(verdict(withPre({ op: 'in', args: [MM, { const: 'facts' }] }))).toEqual({
+    code: 'EXPR_TYPE',
+    reason: undefined,
+  });
+  expect(
+    verdict(
+      withPre({
+        op: 'not',
+        args: [
+          {
+            has_relation: {
+              role: 'instance-of',
+              in_set: { contract: 'orbis/recurrence', set: 'templates' },
+            },
+          },
+        ],
+      }),
+    ),
+  ).toEqual({ code: 'EXPR_TYPE', reason: undefined });
+  // Набор СПИСКОМ — законен (им написан и сидовый plan-to-fact).
+  expect(verdict(withPre({ op: 'in', args: [MM, { const: 'outflow' }] }))).toBe('ok');
+});

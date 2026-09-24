@@ -371,6 +371,33 @@ describe('тайп-чекер §С8-28: область, $sensitivity и реку
     (cyclic.args as unknown[]).push(cyclic);
     expect(refusal(() => checkExpr(cyclic, scope())).code).toBe(EXPR_RECURSION);
   });
+
+  test('listSetsOnly: в области TS-интерпретатора предикатный набор и in_set — EXPR_TYPE, набор списком — законен (финал Б-2 E-5)', () => {
+    const MM = { class: { contract: 'orbis/money-movement' } };
+    const facts = { op: 'in', args: [MM, { const: 'facts' }] };
+    const inSet = {
+      has_relation: {
+        role: 'instance-of',
+        in_set: { contract: 'orbis/recurrence', set: 'templates' },
+      },
+    };
+    const TS = scope({ listSetsOnly: true });
+    // SQL-область (подписки, предикаты наборов) — как была: предикатный набор и дальний конец считает SQL.
+    expect(checkExpr(facts, scope())).toEqual({ kind: 'boolean' });
+    expect(checkExpr(inSet, scope())).toEqual({ kind: 'boolean' });
+    expect(refusal(() => checkExpr(facts, TS))).toEqual({ code: EXPR_TYPE, path: 'args.1' });
+    expect(refusal(() => checkExpr({ op: 'not', args: [inSet] }, TS))).toEqual({
+      code: EXPR_TYPE,
+      path: 'args.0',
+    });
+    // Набор СПИСКОМ и перечисление классов интерпретатор считает сам.
+    expect(checkExpr({ op: 'in', args: [MM, { const: 'outflow' }] }, TS)).toEqual({
+      kind: 'boolean',
+    });
+    expect(checkExpr({ op: 'in', args: [MM, { const: ['outflow'] }] }, TS)).toEqual({
+      kind: 'boolean',
+    });
+  });
 });
 
 describe('тайп-чекер: empty (Р-26) и $touched (Р-28)', () => {

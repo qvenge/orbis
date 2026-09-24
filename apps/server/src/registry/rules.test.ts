@@ -242,10 +242,13 @@ describe('область E правила (§Б3-3, приёмка §С8-29)', (
       template: 'default',
       params: { property: 'orbis/amount', value },
     });
-    // КОРНЕВОЙ литерал: `{const:'0.00'}` сам по себе типизируется `text` (соседа у него нет,
+    // КОРНЕВОЙ литерал: `{const:'340.00'}` сам по себе типизируется `text` (соседа у него нет,
     // `check.ts` ветка `const`), и без приведения ПО ПОЗИЦИИ законная строка сида отказывала бы RULE_VALUE_TYPE.
-    expect(check(FIN, def({ const: '0.00' })).template).toBe('default');
+    expect(check(FIN, def({ const: '340.00' })).template).toBe('default');
     expect(reasonOf(err(() => check(FIN, def({ const: 'не-число' }))))).toBe('RULE_VALUE_TYPE');
+    // Род сошёлся, а граница схемы — нет (`exclusiveMin: '0'`): литерал сверяется и стадией 2 (финал Б-2
+    // E-6). Прежде здесь стоял именно `'0.00'` — принятое правило, умолчание которого движок записать не мог.
+    expect(reasonOf(err(() => check(FIN, def({ const: '0.00' }))))).toBe('RULE_VALUE_TYPE');
     // …а приведение — ТОЛЬКО литерала: у нелитерального узла тип свой, и text в позиции decimal — отказ.
     expect(reasonOf(err(() => check(FIN, def({ prop: 'orbis/counterparty' }))))).toBe(
       'RULE_VALUE_TYPE',
@@ -645,5 +648,219 @@ describe('E-3 (б): адрес, поглощённый слиянием, — RUL
     expect(
       assertRule(live, { reg: mergedProbe(TASK, live), carrier: TASK, systemSeed: false }).id,
     ).toBe('e3_ok');
+  });
+});
+
+describe('формы, которых исполнитель правил не умеет, — отказ на записи правила (финал Б-2, Ф-Б2-33)', () => {
+  test('E-5: предикатный набор и has_relation.in_set — EXPR_TYPE с адресом правила; набор списком — законен', () => {
+    const MM = { class: { contract: 'orbis/money-movement' } };
+    const facts = { op: 'in', args: [MM, { const: 'facts' }] };
+    const inSet = {
+      has_relation: {
+        role: 'instance-of',
+        in_set: { contract: 'orbis/recurrence', set: 'templates' },
+      },
+    };
+    // Правило «факт требует категорию»: принятое, оно отказывало бы EXPR_BACKEND_UNSUPPORTED каждой записи финансов.
+    const e = err(() =>
+      check(FIN, {
+        id: 'facts_need_category',
+        template: 'requires_when',
+        when: facts,
+        params: { property: 'orbis/finance_category' },
+      }),
+    );
+    expect([e.code, (e.details as { site?: string }).site]).toEqual([
+      'EXPR_TYPE',
+      'aspect:orbis/financial.rules.facts_need_category.when',
+    ]);
+    expect(err(() => check(FIN, { ...OCCURRED, when: inSet })).code).toBe('EXPR_TYPE');
+    // T-правило и assign_level исполняет тот же интерпретатор (`rules/engine.ts`, `policy/assign-level.ts`).
+    expect(
+      err(() =>
+        check(FIN, {
+          id: 'def_cp',
+          template: 'default',
+          when: facts,
+          params: { property: 'orbis/counterparty', value: { const: 'банк' } },
+        }),
+      ).code,
+    ).toBe('EXPR_TYPE');
+    expect(
+      err(() =>
+        check(FIN, {
+          id: 'lvl',
+          template: 'assign_level',
+          params: {},
+          level: 'discuss',
+          when: facts,
+        }),
+      ).code,
+    ).toBe('EXPR_TYPE');
+    // Набор СПИСКОМ — законен.
+    expect(
+      check(FIN, { ...OCCURRED, when: { op: 'in', args: [MM, { const: 'outflow' }] } }).id,
+    ).toBe('fin_occurred');
+  });
+
+  test('E-6: литерал значения T-правила — по схеме свойства тем же валидатором, что стадия 2 (RULE_VALUE_TYPE)', () => {
+    const status = (value: unknown) => ({
+      id: 'own_status',
+      template: 'default',
+      params: { property: 'orbis/task_status', value },
+    });
+    // Метка варианта вместо ключа: род тот же (select → text), варианта «Inbox» нет — стадия 2 отказала бы каждой задаче без статуса.
+    const e = err(() => check(TASK, status({ const: 'Inbox' })));
+    expect([e.code, reasonOf(e)]).toEqual(['VALIDATION', 'RULE_VALUE_TYPE']);
+    expect(e.details).toMatchObject({
+      property: 'orbis/task_status',
+      violations: [{ code: 'TYPE', propertyId: 'orbis/task_status' }],
+    });
+    expect(check(TASK, status({ const: 'inbox' })).id).toBe('own_status');
+    // Плечо if — тоже литерал, который движок пишет буквально.
+    expect(
+      reasonOf(
+        err(() =>
+          check(
+            TASK,
+            status({
+              op: 'if',
+              args: [{ has: 'orbis/due_date' }, { const: 'planned' }, { const: 'Inbox' }],
+            }),
+          ),
+        ),
+      ),
+    ).toBe('RULE_VALUE_TYPE');
+    // Дата-литерал в timestamp: чекер приводит его к timestamp (для сравнения законно), стадия 2 — нет.
+    expect(
+      reasonOf(
+        err(() =>
+          check(
+            { kind: 'aspect', id: 'orbis/schedule' },
+            {
+              id: 'own_start',
+              template: 'default',
+              params: { property: 'orbis/start_at', value: { const: '2026-01-01' } },
+            },
+          ),
+        ),
+      ),
+    ).toBe('RULE_VALUE_TYPE');
+    // ref без uuid и set перехода — та же сверка.
+    expect(
+      reasonOf(
+        err(() =>
+          check(FIN, {
+            id: 'own_cat',
+            template: 'default',
+            params: { property: 'orbis/finance_category', value: { const: 'Еда' } },
+          }),
+        ),
+      ),
+    ).toBe('RULE_VALUE_TYPE');
+    expect(
+      reasonOf(
+        err(() =>
+          check(TASK, {
+            id: 'own_enter',
+            template: 'on_enter_class',
+            params: {
+              enter: { property: 'orbis/task_status', in: ['waiting'] },
+              set: { property: 'orbis/priority', value: { const: 'Высокий' } },
+            },
+          }),
+        ),
+      ),
+    ).toBe('RULE_VALUE_TYPE');
+  });
+
+  test('E-7: core-проекция в адресе параметра шаблона записи — RULE_UNKNOWN_PROPERTY с cause core; в when и значении — законна', () => {
+    const NOTE: RuleCarrier = { kind: 'aspect', id: 'orbis/note' };
+    const WHEN = { op: '=', args: [{ prop: 'orbis/archived' }, { const: false }] };
+    const refused = (carrier: RuleCarrier, rule: unknown) => {
+      const e = err(() => check(carrier, rule));
+      return [e.code, reasonOf(e), (e.details as { cause?: string }).cause];
+    };
+    const CORE = ['VALIDATION', 'RULE_UNKNOWN_PROPERTY', 'core'];
+    const enterDone = { property: 'orbis/task_status', in: ['done'] };
+    expect(
+      refused(NOTE, { id: 'u', template: 'unique_among', params: { properties: ['orbis/title'] } }),
+    ).toEqual(CORE);
+    expect(
+      refused(NOTE, {
+        id: 'r',
+        template: 'requires_when',
+        when: WHEN,
+        params: { property: 'orbis/title' },
+      }),
+    ).toEqual(CORE);
+    expect(
+      refused(NOTE, {
+        id: 'f',
+        template: 'forbidden_when',
+        params: { property: 'orbis/archived' },
+      }),
+    ).toEqual(CORE);
+    expect(
+      refused(NOTE, {
+        id: 'd',
+        template: 'default',
+        params: { property: 'orbis/title', value: { const: 'Без названия' } },
+      }),
+    ).toEqual(CORE);
+    expect(
+      refused(TASK, {
+        id: 'e',
+        template: 'on_enter_class',
+        params: { enter: enterDone, set: { property: 'orbis/archived', value: { const: true } } },
+      }),
+    ).toEqual(CORE);
+    expect(
+      refused(TASK, {
+        id: 'l',
+        template: 'on_enter_class',
+        params: { enter: enterDone, on_leave: { unset: ['orbis/archived'] } },
+      }),
+    ).toEqual(CORE);
+    expect(
+      refused(TASK, {
+        id: 'v',
+        template: 'on_enter_class',
+        params: {
+          enter: { property: 'orbis/title', in: ['x'] },
+          set: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+        },
+      }),
+    ).toEqual(CORE);
+    // Область {property} правила записи (здесь — умолчанием носителя-свойства) — тот же адрес.
+    expect(
+      refused(
+        { kind: 'property', id: 'orbis/updated_at' },
+        {
+          id: 'p',
+          template: 'default',
+          params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+        },
+      ),
+    ).toEqual(CORE);
+    // Законно (Р-И-3): core в when и в ЗНАЧЕНИИ — `entityEvalScope` кладёт её в область.
+    expect(
+      check(NOTE, {
+        id: 'w',
+        template: 'requires_when',
+        params: { property: 'orbis/task_status' },
+        when: { op: '=', args: [{ prop: 'orbis/title' }, { const: 'x' }] },
+      }).id,
+    ).toBe('w');
+    expect(
+      check(TASK, {
+        id: 's',
+        template: 'on_enter_class',
+        params: {
+          enter: enterDone,
+          set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+        },
+      }).id,
+    ).toBe('s');
   });
 });

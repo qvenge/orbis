@@ -84,6 +84,16 @@ export interface ExprScope {
    * (`ruleExprScope` сервера, Р-К-13): `allowDeref:false` закрыл бы только `deref`, а `agg_via` пропустил.
    */
   derefDenied?: boolean;
+  /**
+   * ОБЛАСТЬ TS-ИНТЕРПРЕТАТОРА (`expr/eval.ts` сервера): правила каталога, `precondition` и `{$expr}` действий
+   * (и `offered_by.when` — область у него та же, `actionExprScope`). Набор справа от `in` здесь — только
+   * СПИСОК классов, `has_relation.in_set` — нет:
+   * предикат набора и дальний конец ребра считает SQL-бэкенд (Р-И-7, Р-К-17), а интерпретатор отвечает
+   * на них `EXPR_BACKEND_UNSUPPORTED`. Принятое на записи отказывало бы на КАЖДОЙ записи носителя правила
+   * и на каждом прогоне действия — отказ обязан прийти автору декларации (Р-И-7 Б-1). Код — `EXPR_TYPE`,
+   * тем же приёмом, что `agg_via` в области правила записи (Р-К-13): словарь кодов §С1-2 закрыт.
+   */
+  listSetsOnly?: boolean;
 }
 
 /** Тип + необязательность + сам литерал: строка-литерал доводится до decimal/date по соседу. */
@@ -362,6 +372,14 @@ function classMembership(
     // «сущность не член», и молчать об опечатке нельзя (§С8-3).
     if (!Object.hasOwn(def.sets, value)) {
       return bad(EXPR_TYPE, path, `набор контракта ${contract}`, value);
+    }
+    if (s.listSetsOnly === true && !Array.isArray(def.sets[value])) {
+      return bad(
+        EXPR_TYPE,
+        path,
+        `набор списком классов (предикатный набор ${contract}.${value} считает SQL-бэкенд)`,
+        value,
+      );
     }
     return BOOL;
   }
@@ -656,6 +674,14 @@ function typeOf(
       }
       if (!Object.hasOwn(def.sets, spec.in_set.set)) {
         return bad(EXPR_TYPE, path, `набор контракта ${spec.in_set.contract}`, spec.in_set.set);
+      }
+      if (s.listSetsOnly === true) {
+        return bad(
+          EXPR_TYPE,
+          path,
+          'has_relation без in_set (дальний конец считает SQL-бэкенд)',
+          'in_set',
+        );
       }
     }
     // Роль НЕ сверяется со словарём: у `ExprScope` его нет, а ребро с неизвестной ролью

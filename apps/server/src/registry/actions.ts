@@ -857,5 +857,7 @@ export function actionExprScope(
   for (const p of decl.params) params[p.name] = paramExprType(decl.key, p);
   // `allowDeref: true` — действие читает ЦЕЛЬ, а не пишет чужое (§Б3-3 запрещает deref в
   // C-правилах записи, а не в подстановках). `contract` не задан: слотов у действия нет области.
-  return { params, allowDeref: true };
+  // `listSetsOnly` — `precondition` и `{$expr}` исполняет TS-интерпретатор (`actions/precondition.ts`,
+  // `resolveAction`): предикатного набора и `has_relation.in_set` у него нет (Р-И-7, Р-К-17).
+  return { params, allowDeref: true, listSetsOnly: true };
 }
