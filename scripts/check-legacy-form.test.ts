@@ -708,3 +708,72 @@ test('носителя шима контрактов в дереве нет: ф�
     existsSync(join(import.meta.dir, '..', 'packages/shared/src/registry/contract-ids.ts')),
   ).toBe(false);
 });
+
+/**
+ * ЧЕТВЁРТАЯ проба ПО РАБОЧЕМУ ДЕРЕВУ, и исключение из правила шапки — по тому же доводу, что у
+ * `CLOSED_AFTER_B1`: цифра здесь не двигается. Доменные инварианты §А7-2 переехали строками
+ * реестра, оракул сверки снесён, и вернуться они могут только новой правкой, а не «незаконченным
+ * переводом». Синтетика подтвердила бы работу регулярок — вопрос про РЕПОЗИТОРИЙ.
+ *
+ * `allowed` перечисляется поимённо: зелёный ноль значим только тогда, когда регулярка вообще
+ * что-то находит. Состав — по факту прогона задачи 18, а не по ожиданию плана:
+ *  — тест гейта (этот файл) находится у всех шести: образцы `SAMPLES` — предмет проверки;
+ *  — САМ ГЕЙТ находится у четырёх из шести: у двух маркеров-утверждений паттерн — литеральная
+ *    фраза, а у `shim-financial-invariant` и `shim-envelope-unique` альтернация начинается с
+ *    голого имени без `\b`. У `shim-task-completion` и `oracle-compute-overview` перед именем в
+ *    тексте паттерна стоит `\b` — буква `b` перед именем, границы слова там нет, и собственную
+ *    запись гейт не находит (тот же довод, что у `legacy-grammar`);
+ *  — сторож вехи I (`apps/server/test/gate-b2.test.ts`) находится у двух маркеров снесённого
+ *    кода вехи I: его список `GATE_B2_GREP_NAMES` — предмет греп-доказательства, и это
+ *    единственная запись `ALLOWLIST`, заведённая шагом 5.
+ */
+const CLOSED_AFTER_B2: ReadonlyArray<{ readonly id: string; readonly allowed: readonly string[] }> =
+  [
+    {
+      id: 'shim-task-completion',
+      allowed: ['apps/server/test/gate-b2.test.ts', 'scripts/check-legacy-form.test.ts'],
+    },
+    {
+      id: 'shim-financial-invariant',
+      allowed: [
+        'apps/server/test/gate-b2.test.ts',
+        'scripts/check-legacy-form.test.ts',
+        'scripts/check-legacy-form.ts',
+      ],
+    },
+    {
+      id: 'shim-envelope-unique',
+      allowed: ['scripts/check-legacy-form.test.ts', 'scripts/check-legacy-form.ts'],
+    },
+    { id: 'oracle-compute-overview', allowed: ['scripts/check-legacy-form.test.ts'] },
+    {
+      id: 'oracle-docblock-b2',
+      allowed: ['scripts/check-legacy-form.test.ts', 'scripts/check-legacy-form.ts'],
+    },
+    {
+      id: 'engine-code-docblock',
+      allowed: ['scripts/check-legacy-form.test.ts', 'scripts/check-legacy-form.ts'],
+    },
+  ];
+
+test('носители Б-1→Б-2 сняты: шесть маркеров дают ноль по рабочему дереву', () => {
+  const root = join(import.meta.dir, '..');
+  for (const { id, allowed } of CLOSED_AFTER_B2) {
+    const marker = LEGACY_MARKERS.find((m) => m.id === id);
+    expect([id, marker !== undefined]).toEqual([id, true]);
+    if (marker === undefined) continue;
+    const report = scanMarker(marker, root);
+    expect([id, report.hits.map((h) => `${h.path}:${h.line}`)]).toEqual([id, []]);
+    expect([id, [...report.allowed.keys()].sort()]).toEqual([id, [...allowed].sort()]);
+  }
+});
+
+test('кода под два инварианта гейта вехи I в дереве нет: функции удалены, а не опустошены', () => {
+  // Имя могло исчезнуть, а тело остаться мёртвым — тот же довод, что у `contract-ids.ts` в Б-1.
+  const normalize = readFileSync(
+    join(import.meta.dir, '..', 'apps/server/src/executor/normalize.ts'),
+    'utf8',
+  );
+  expect(normalize.includes('export function applyTaskCompletion')).toBe(false);
+  expect(normalize.includes('export function assertFinancialInvariant')).toBe(false);
+});
