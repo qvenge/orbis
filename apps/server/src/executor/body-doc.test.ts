@@ -950,6 +950,76 @@ describe('формат тела v3: гейт версии, контейнеры,
     expect(row.body_doc?.doc).toEqual(V3_DOC);
   });
 
+  test('схема шире грамматики (F1): одна колонка — отказ схемы; глубина 3 и чужой блок — rawBlock, текст цел', async () => {
+    const { entity, owner } = await createOne('исходное тело');
+    const update = (doc: unknown, expectedUpdatedAt: string) =>
+      execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, bodyDoc: { v: 3, doc }, expectedUpdatedAt },
+          personal(owner),
+        ),
+      );
+    // Одна колонка — предел схемы (`column{2,4}`): так бывает только у документа клиента.
+    const single = await update(
+      {
+        type: 'doc',
+        content: [{ type: 'columns', content: [{ type: 'column', content: [para('а')] }] }],
+      },
+      entity.updatedAt,
+    );
+    expect(err(single).code).toBe('VALIDATION');
+    expect((await rowOf(entity.id)).body).toBe('исходное тело');
+
+    // Глубина 3 и блок обвязки с чужим именем схеме годны, но печать разбирается в ДРУГОЕ
+    // дерево — страховка кладёт rawBlock с текстом целиком, а не отказывает.
+    const deep = {
+      type: 'doc',
+      content: [
+        para('до'),
+        {
+          type: 'columns',
+          content: [
+            {
+              type: 'column',
+              content: [
+                {
+                  type: 'tabs',
+                  content: [
+                    {
+                      type: 'tab',
+                      attrs: { label: 'А' },
+                      content: [
+                        {
+                          type: 'columns',
+                          content: [
+                            { type: 'column', content: [para('x')] },
+                            { type: 'column', content: [para('y')] },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            { type: 'column', content: [para('б')] },
+          ],
+        },
+        { type: 'recordBlock', attrs: { name: 'нет-такого' } },
+      ],
+    };
+    const saved = okFirst(await update(deep, entity.updatedAt));
+    const row = await rowOf(entity.id);
+    expect(row.body).toBe(saved.body);
+    expect(row.body_doc).toEqual({
+      v: 3,
+      doc: { type: 'doc', content: [{ type: 'rawBlock', attrs: { markdown: row.body } }] },
+    });
+    for (const word of ['до', 'x', 'y', 'б', '{{нет-такого}}']) expect(row.body).toContain(word);
+  });
+
   test('(в) readEntity: хранимый v2-документ приезжает v3, блочные id целы', async () => {
     const { entity, owner } = await createOne('тело');
     const stored = {

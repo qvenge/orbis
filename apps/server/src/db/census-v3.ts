@@ -2,32 +2,55 @@
 //
 // Зачем. С v3 строка-маркер (`{{title}}`, `{{columns}}`, `{{card: …}}`) в уже лежащем теле
 // перестаёт быть текстом и становится блоком, а блок данных с `display=table`/`list` начинает
-// рисоваться таблицей или списком. Оба числа владелец видит ДО прода — чтобы не удивиться,
-// открыв заметку. Это не гейт: текст ни в одном случае не теряется.
+// рисоваться таблицей или списком. Числа владелец видит ДО прода — чтобы не удивиться, открыв
+// заметку. Это не гейт: текст ни в одном случае не теряется.
 //
 // Цикл живёт здесь, а не в `scripts/ops.ts`, по той же причине, что у `audit-bodies`: прод-обёртка
 // тестами не покрыта по построению, а порционность и счёт проверяются здесь без базы.
+import { type BodyDoc, bodyDocError, parseBody, upgradeBodyDoc } from '@orbis/shared/doc';
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
+import type { JSONContent } from '@tiptap/core';
 
-/** Строка корпуса: тело и признак «документа ещё нет». Самого документа перепись не читает. */
-export type CensusV3Row = { id: string; body: string | null; bodyDocNull: boolean };
+/** Строка корпуса: тело и хранимый документ (`body_doc`, `null` — документа ещё нет). */
+export type CensusV3Row = { id: string; body: string | null; bodyDoc: unknown };
 
 export interface CensusV3Io {
   /** Строки с `id > afterId`, по возрастанию id, не больше `limit` штук. */
   selectBatch(limit: number, afterId: string): Promise<CensusV3Row[]>;
 }
 
+/**
+ * Отличие от «Интерфейсов» брифа задачи 8 (фикс-раунд 1, F2): одно число `becomeBlocks` разделено
+ * на два по наличию документа — у этих групп разные последствия; добавлен список id для
+ * `brokenMarkers`; строка корпуса несёт сам `bodyDoc`, а не признак `bodyDocNull` — по нему
+ * считается `display=`.
+ */
 export interface CensusV3Result {
   total: number;
   withoutDoc: number;
-  /** Тела, где v3 даёт record/card/columns/tabs, а v2 — абзац. */
-  becomeBlocks: number;
-  /** Тела с broken-узлом препрохода (текст цел, на экране — плашка). */
+  /**
+   * Тела БЕЗ документа, где строка `{{…}}` станет блоком обвязки, карточкой или контейнером:
+   * их первое чтение или бэкфилл соберёт документ разбором v3 — и строка станет блоком.
+   */
+  becomeBlocksNoDoc: number;
+  /**
+   * Тела С документом, у которых в `body` стоит такой маркер с колонки 0. В редакторе ничего не
+   * меняется (документ v2 поднимается тем же деревом, абзац остаётся абзацем), но `body` читают
+   * MCP, откат по `prior.body` и первый кадр — они увидят блок.
+   */
+  markerInBodyWithDoc: number;
+  /** Тела с ошибкой разбора контейнера в `body` (текст цел, на экране — плашка). */
   brokenMarkers: number;
   displayTable: number;
   displayList: number;
   /** Не больше `CENSUS_IDS_LIMIT` на список. */
-  ids: { becomeBlocks: string[]; displayTable: string[]; displayList: string[] };
+  ids: {
+    becomeBlocksNoDoc: string[];
+    markerInBodyWithDoc: string[];
+    brokenMarkers: string[];
+    displayTable: string[];
+    displayList: string[];
+  };
 }
 
 /** Размер порции — как у `audit-bodies`: запросов на запись нет, порция бережёт память. */
@@ -49,38 +72,19 @@ const displayRe = (mode: 'table' | 'list') =>
 const DISPLAY_TABLE_RE = displayRe('table');
 const DISPLAY_LIST_RE = displayRe('list');
 
-/** Что нашлось в теле: обход дерева препрохода на любой глубине. */
-function scan(nodes: PageNode[]): {
-  block: boolean;
-  broken: boolean;
-  table: boolean;
-  list: boolean;
-} {
-  const found = { block: false, broken: false, table: false, list: false };
+/** Маркеры в тексте тела — тем же листовым препроходом, что прочтут первый кадр и `parseBody`. */
+function scanMarkers(nodes: PageNode[]): { block: boolean; broken: boolean } {
+  const found = { block: false, broken: false };
   const walk = (list: PageNode[]): void => {
     for (const node of list) {
-      switch (node.kind) {
-        case 'record':
-        case 'card':
-          found.block = true;
-          break;
-        case 'columns':
-          found.block = true;
-          for (const part of node.parts) walk(part);
-          break;
-        case 'tabs':
-          found.block = true;
-          for (const part of node.parts) walk(part.children);
-          break;
-        case 'query':
-          if (DISPLAY_TABLE_RE.test(node.text)) found.table = true;
-          if (DISPLAY_LIST_RE.test(node.text)) found.list = true;
-          break;
-        case 'broken':
-          found.broken = true;
-          break;
-        case 'text':
-          break;
+      if (node.kind === 'record' || node.kind === 'card') found.block = true;
+      else if (node.kind === 'broken') found.broken = true;
+      else if (node.kind === 'columns') {
+        found.block = true;
+        for (const part of node.parts) walk(part);
+      } else if (node.kind === 'tabs') {
+        found.block = true;
+        for (const part of node.parts) walk(part.children);
       }
     }
   };
@@ -89,9 +93,45 @@ function scan(nodes: PageNode[]): {
 }
 
 /**
- * Считает корпус. Разборщик — тот же листовой препроход, что пойдёт в прод (`parsePageText`), а
- * не регэксп по строкам: многострочный `{{query:…}}` регэксп по строке пропустил бы, а маркер
- * внутри забора кода — посчитал бы.
+ * Документ, который покажет чтение, — правило `readBodyDoc` без привязки к реестру (привязка
+ * текста `display=` не меняет, а реестра у переписи нет): годный хранимый документ, поднятый до
+ * текущей версии, иначе — разбор `body`. Источник `display=` именно он, а не текст `body`:
+ * рисует блок документ, и блок в пункте списка с отступом (его делает блоком токенайзер
+ * `queryBlock` внутри куска, а препроход не видит) считается наравне с прочими.
+ */
+function documentOf(row: CensusV3Row, body: string): JSONContent {
+  const stored = row.bodyDoc;
+  if (
+    typeof stored === 'object' &&
+    stored !== null &&
+    'v' in stored &&
+    'doc' in stored &&
+    bodyDocError(stored as BodyDoc) === undefined
+  ) {
+    const upgraded = upgradeBodyDoc(stored as BodyDoc);
+    if (upgraded !== null) return upgraded.doc;
+  }
+  return parseBody(body).doc;
+}
+
+/** Формы показа блоков данных документа — на любой глубине (колонки, вкладки, списки, цитаты). */
+function scanDisplay(doc: JSONContent): { table: boolean; list: boolean } {
+  const found = { table: false, list: false };
+  const walk = (node: JSONContent): void => {
+    if (node.type === 'queryBlock' && typeof node.attrs?.text === 'string') {
+      if (DISPLAY_TABLE_RE.test(node.attrs.text)) found.table = true;
+      if (DISPLAY_LIST_RE.test(node.attrs.text)) found.list = true;
+    }
+    for (const child of node.content ?? []) walk(child);
+  };
+  walk(doc);
+  return found;
+}
+
+/**
+ * Считает корпус. Маркеры — листовым препроходом по `body` (`parsePageText`), а не регэкспом по
+ * строкам: многострочный `{{query:…}}` регэксп по строке пропустил бы, а маркер внутри забора
+ * кода — посчитал бы. Формы показа — по документу, который покажет чтение (`documentOf`).
  *
  * Тела НЕ печатаются и НЕ покидают процесс: это личные записи, а вывод команды попадает в
  * транскрипты. Наружу выходят только числа и id (uuid — не персональные данные).
@@ -100,14 +140,22 @@ export async function censusV3(io: CensusV3Io): Promise<CensusV3Result> {
   const result: CensusV3Result = {
     total: 0,
     withoutDoc: 0,
-    becomeBlocks: 0,
+    becomeBlocksNoDoc: 0,
+    markerInBodyWithDoc: 0,
     brokenMarkers: 0,
     displayTable: 0,
     displayList: 0,
-    ids: { becomeBlocks: [], displayTable: [], displayList: [] },
+    ids: {
+      becomeBlocksNoDoc: [],
+      markerInBodyWithDoc: [],
+      brokenMarkers: [],
+      displayTable: [],
+      displayList: [],
+    },
   };
-  const note = (list: string[], id: string) => {
-    if (list.length < CENSUS_IDS_LIMIT) list.push(id);
+  const count = (key: keyof CensusV3Result['ids'], id: string) => {
+    result[key] += 1;
+    if (result.ids[key].length < CENSUS_IDS_LIMIT) result.ids[key].push(id);
   };
   let afterId = ID_START;
   for (;;) {
@@ -116,24 +164,17 @@ export async function censusV3(io: CensusV3Io): Promise<CensusV3Result> {
     for (const row of rows) {
       result.total += 1;
       afterId = row.id; // выборка отсортирована по id — последний id порции наибольший
-      if (row.bodyDocNull) result.withoutDoc += 1;
+      const hasDoc = row.bodyDoc !== null && row.bodyDoc !== undefined;
+      if (!hasDoc) result.withoutDoc += 1;
       // `?? ''` — про прод: его схема та, что развёрнута, и NULL не должен рвать перепись.
       // Переводы строк — как у `parseBody`: он нормализует их до препрохода.
       const body = String(row.body ?? '').replace(/\r\n?/g, '\n');
-      const found = scan(parsePageText(body));
-      if (found.block) {
-        result.becomeBlocks += 1;
-        note(result.ids.becomeBlocks, row.id);
-      }
-      if (found.broken) result.brokenMarkers += 1;
-      if (found.table) {
-        result.displayTable += 1;
-        note(result.ids.displayTable, row.id);
-      }
-      if (found.list) {
-        result.displayList += 1;
-        note(result.ids.displayList, row.id);
-      }
+      const markers = scanMarkers(parsePageText(body));
+      if (markers.block) count(hasDoc ? 'markerInBodyWithDoc' : 'becomeBlocksNoDoc', row.id);
+      if (markers.broken) count('brokenMarkers', row.id);
+      const display = scanDisplay(documentOf(row, body));
+      if (display.table) count('displayTable', row.id);
+      if (display.list) count('displayList', row.id);
     }
     if (rows.length < CENSUS_BATCH) break; // неполная порция — корпус исчерпан
   }
@@ -149,8 +190,9 @@ export function formatCensusV3(r: CensusV3Result): string[] {
   const lines = [
     `тел всего: ${r.total}`,
     `без документа (body_doc IS NULL): ${r.withoutDoc}`,
-    `станут блоками (строка {{…}} → блок обвязки, карточка или контейнер): ${r.becomeBlocks}`,
-    `получат плашку ошибки разбора (текст цел): ${r.brokenMarkers}`,
+    `без документа, строка {{…}} станет блоком при первом чтении или бэкфилле: ${r.becomeBlocksNoDoc}`,
+    `с документом, в body маркер с начала строки (редактор — абзац; MCP, откат и первый кадр — блок): ${r.markerInBodyWithDoc}`,
+    `ошибка разбора контейнера в body (текст цел, на экране — плашка): ${r.brokenMarkers}`,
     `блоки данных display=table (начнут рисоваться таблицей): ${r.displayTable}`,
     `блоки данных display=list (начнут рисоваться списком): ${r.displayList}`,
   ];
@@ -158,7 +200,9 @@ export function formatCensusV3(r: CensusV3Result): string[] {
     if (list.length === 0) return;
     lines.push('', `${title} (не больше ${CENSUS_IDS_LIMIT}):`, ...list.map((id) => `  ${id}`));
   };
-  ids('id тел, где строки станут блоками', r.ids.becomeBlocks);
+  ids('id тел без документа, где строки станут блоками', r.ids.becomeBlocksNoDoc);
+  ids('id тел с документом и маркером в body', r.ids.markerInBodyWithDoc);
+  ids('id тел с ошибкой разбора контейнера', r.ids.brokenMarkers);
   ids('id тел с display=table', r.ids.displayTable);
   ids('id тел с display=list', r.ids.displayList);
   return lines;

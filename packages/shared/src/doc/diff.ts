@@ -150,8 +150,8 @@ const SIMILARITY_WORD_RE = /[\p{L}\p{N}]+/gu;
  * Контейнеры формата v3 (спека страниц 1а §5.9) — `columns`, `column`, `tabs` и `tab` — тоже
  * прозрачны: без этого колонки стали бы ОДНОЙ единицей со всем текстом всех колонок
  * (`unitPieces` спускается по блочным детям), и правка одной строки в колонке приезжала бы
- * заменой всего контейнера. У `tab` сверх прозрачности есть своя единица-заголовок — см.
- * `flattenInto`.
+ * заменой всего контейнера. Сверх прозрачности у каждого из четырёх есть своя
+ * единица-заголовок (спека §5.9: «контейнеры и их части — единицы») — см. `layoutHeading`.
  *
  * Единицы (всё остальное): `paragraph`, `heading`, `codeBlock`, `rawBlock`, `queryBlock`,
  * `recordBlock`, `aspectCard`, `horizontalRule`, `listItem`, `taskItem`, `tableRow`. Список
@@ -354,22 +354,34 @@ export function flattenBlocks(doc: JSONContent): FlatBlock[] {
   return out;
 }
 
+/** Контейнеры формата v3 и их части — прозрачны, но каждый даёт единицу-заголовок. */
+const LAYOUT_KINDS: ReadonlySet<string> = new Set(['columns', 'column', 'tabs', 'tab']);
+
 /**
- * Единица-заголовок вкладки. Вкладка прозрачна, как колонка, но у неё есть свой текст —
- * подпись, — и без отдельной единицы переименование вкладки было бы невидимо в диффе. Текст —
- * печать маркера (`{{tab: …}}`, как у атомов): голая подпись «Запись» неотличима от абзаца
- * с тем же словом.
+ * Единица-заголовок контейнера или его части: её текст — печать открывающего маркера
+ * (`{{columns}}`, `{{column}}`, `{{tabs}}`, `{{tab: …}}`, как у атомов).
+ *
+ * Прозрачности одной мало. Без заголовков раскладка в диффе невидима: обёртка абзацев в колонки
+ * и перенос абзаца из одной колонки в соседнюю давали те же единицы в том же порядке, то есть
+ * «изменений нет», а переименование вкладки не было видно вовсе. С заголовками обёртка приезжает
+ * добавленными `{{columns}}`/`{{column}}`, перенос — сдвигом абзаца через границу `{{column}}`,
+ * переименование — изменённым `{{tab: …}}`. Голая подпись «Запись» была бы неотличима от абзаца
+ * с тем же словом — поэтому печать маркера, а не подпись.
  */
-function tabHeading(node: JSONContent): FlatBlock {
-  const label = typeof node.attrs?.label === 'string' ? node.attrs.label.trim() : '';
-  const text = normalizeText(label === '' ? '{{tab}}' : `{{tab: ${label}}}`);
-  return { kind: 'tab', key: keyOf(node, 'tab', text), text };
+function layoutHeading(node: JSONContent, kind: string): FlatBlock {
+  let marker = `{{${kind}}}`;
+  if (kind === 'tab') {
+    const label = typeof node.attrs?.label === 'string' ? node.attrs.label.trim() : '';
+    if (label !== '') marker = `{{tab: ${label}}}`;
+  }
+  const text = normalizeText(marker);
+  return { kind, key: keyOf(node, kind, text), text };
 }
 
 function flattenInto(node: JSONContent, out: FlatBlock[]): void {
   const kind = node.type;
   if (typeof kind !== 'string') return;
-  if (kind === 'tab') out.push(tabHeading(node));
+  if (LAYOUT_KINDS.has(kind)) out.push(layoutHeading(node, kind));
   if (TRANSPARENT_KINDS.has(kind)) {
     for (const child of node.content ?? []) flattenInto(child, out);
     return;

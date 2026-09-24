@@ -49,6 +49,13 @@ import {
   rejectMessageId,
   rolloverInput,
 } from '@orbis/shared';
+import {
+  type BodyDoc,
+  bodyDocError,
+  DOC_SCHEMA_VERSION,
+  serializeBody,
+  upgradeBodyDoc,
+} from '@orbis/shared/doc';
 import type { ExprScalar } from '@orbis/shared/expr';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -851,8 +858,41 @@ export async function acquirePendingLock(tx: Tx, pendingId: string): Promise<voi
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${pendingId}, 0))`);
 }
 
+/**
+ * Документ тела в сохранённой операции — к ТЕКУЩЕЙ версии схемы, до исполнения.
+ *
+ * Зачем. Payload pending-записи неизменяем и может пережить выкатку новой схемы документа:
+ * правленое предложение рутины (P2, Ш1.11) несёт `bodyDoc` той версии, при которой владелец его
+ * правил. Гейт записи (`executor.ts`) принимает ровно текущую версию, и без подъёма «Принять»
+ * на таком предложении отвечало бы «перезагрузите приложение» — перезагрузка не помогла бы,
+ * payload тот же.
+ *
+ * Порядок — тот же, что у снимка версии (`pinnedDoc`, `routers/version.ts`): конверсия по
+ * дереву (`upgradeBodyDoc`, блочные id целы), иначе — markdown-строкой. Строкой — только если
+ * документ годен текущей схеме: печать документа с незнакомой нодой молча теряет её текст
+ * (довод гейта версии в executor'е), и такой payload честнее отдать гейту на отказ.
+ */
+function liftStoredBodyDoc(op: { tool: string; input: unknown }): { tool: string; input: unknown } {
+  const input = op.input;
+  if (typeof input !== 'object' || input === null || !('bodyDoc' in input)) return op;
+  const { bodyDoc, ...rest } = input as Record<string, unknown>;
+  if (typeof bodyDoc !== 'object' || bodyDoc === null || !('v' in bodyDoc) || !('doc' in bodyDoc)) {
+    return op;
+  }
+  const stored = bodyDoc as BodyDoc;
+  if (stored.v === DOC_SCHEMA_VERSION) return op;
+  const upgraded = upgradeBodyDoc(stored);
+  if (upgraded !== null) return { ...op, input: { ...rest, bodyDoc: upgraded } };
+  if (bodyDocError(stored) !== undefined) return op;
+  return { ...op, input: { ...rest, body: serializeBody(stored) } };
+}
+
 /** Операции ExecuteRequest из сохранённого payload (batch — собственная структура). */
 function toOperations(pending: PendingRecord): Array<{ tool: string; input: unknown }> {
+  return rawOperations(pending).map(liftStoredBodyDoc);
+}
+
+function rawOperations(pending: PendingRecord): Array<{ tool: string; input: unknown }> {
   if (pending.tool === undefined) {
     // Недостижимо у валидной записи: `tool` обязателен всюду, кроме вопроса, а вопрос
     // сюда не доходит — его отсекает `assertNotQuestion`. Проверка стоит потому, что

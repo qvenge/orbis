@@ -589,17 +589,57 @@ describe('формат v3: контейнеры и атомы в диффе (с�
       ),
     );
     const units = unitsOf(diffBodyDocs(before, after));
-    expect(units.map((u) => u.kind)).toEqual(['changed', 'same', 'same', 'same']);
-    expect(at(units, 0).before).toBe('позвонить Ане в десять');
-    expect(at(units, 0).after).toBe('позвонить Ане в двенадцать');
-    expect(at(units, 2).after).toBe('купить хлеб и молоко');
+    // Заголовки контейнера и частей — `same`; изменён ровно один абзац, соседи и соседняя
+    // колонка не задеты.
+    expect(units.map((u) => [u.kind, u.before])).toEqual([
+      ['same', '{{columns}}'],
+      ['same', '{{column}}'],
+      ['changed', 'позвонить Ане в десять'],
+      ['same', 'забрать посылку'],
+      ['same', '{{column}}'],
+      ['same', 'купить хлеб и молоко'],
+      ['same', 'оплатить связь'],
+    ]);
+    expect(at(units, 2).after).toBe('позвонить Ане в двенадцать');
   });
 
-  test('контейнеры прозрачны: колонки не склеиваются в одну единицу', () => {
+  test('контейнеры прозрачны: колонки не склеиваются в одну единицу, у каждой — заголовок', () => {
     const flat = flattenBlocks(doc(columns(column(p('а')), column(p('б')))));
     expect(flat.map((b) => [b.kind, b.text])).toEqual([
+      ['columns', '{{columns}}'],
+      ['column', '{{column}}'],
       ['paragraph', 'а'],
+      ['column', '{{column}}'],
       ['paragraph', 'б'],
+    ]);
+  });
+
+  test('обёртка абзацев в колонки видна: добавлены заголовки контейнера и частей (F6)', () => {
+    const before = doc(p('левый текст'), p('правый текст'));
+    const after = doc(columns(column(p('левый текст')), column(p('правый текст'))));
+    const units = unitsOf(diffBodyDocs(before, after));
+    expect(units.some((u) => u.kind !== 'same')).toBe(true);
+    expect(units.filter((u) => u.kind === 'added').map((u) => u.after)).toEqual([
+      '{{columns}}',
+      '{{column}}',
+      '{{column}}',
+    ]);
+  });
+
+  test('перенос абзаца в соседнюю колонку виден, а не «изменений нет» (F6)', () => {
+    const before = doc(columns(column(p('первый'), p('переезжает')), column(p('третий'))));
+    const after = doc(columns(column(p('первый')), column(p('переезжает'), p('третий'))));
+    // Абзац уходит ДО границы `{{column}}` и приходит ПОСЛЕ неё: сдвиг через границу — правка.
+    expect(
+      unitsOf(diffBodyDocs(before, after)).map((u) => `${u.kind}:${u.before ?? u.after}`),
+    ).toEqual([
+      'same:{{columns}}',
+      'same:{{column}}',
+      'same:первый',
+      'removed:переезжает',
+      'same:{{column}}',
+      'added:переезжает',
+      'same:третий',
     ]);
   });
 
@@ -607,9 +647,10 @@ describe('формат v3: контейнеры и атомы в диффе (с�
     const before = doc(tabs(tab('Запись', p('тело')), tab('Тред', p('сообщения'))));
     const after = doc(tabs(tab('Запись владельца', p('тело')), tab('Тред', p('сообщения'))));
     const units = unitsOf(diffBodyDocs(before, after));
-    expect(units.map((u) => u.kind)).toEqual(['changed', 'same', 'same', 'same']);
-    expect(at(units, 0).before).toBe('{{tab: Запись}}');
-    expect(at(units, 0).after).toBe('{{tab: Запись владельца}}');
+    expect(units.map((u) => u.kind)).toEqual(['same', 'changed', 'same', 'same', 'same']);
+    expect(at(units, 0).before).toBe('{{tabs}}');
+    expect(at(units, 1).before).toBe('{{tab: Запись}}');
+    expect(at(units, 1).after).toBe('{{tab: Запись владельца}}');
   });
 
   test('`{{card: orbis/goal}}` → `{{card: orbis/task}}` — одна единица', () => {

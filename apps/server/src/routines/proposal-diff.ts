@@ -24,6 +24,7 @@ import {
   canonicalizeBody,
   readBodyDoc,
   serializeBody,
+  upgradeBodyDoc,
 } from '@orbis/shared/doc';
 import { type BodyDiffSkipReason, type DiffUnit, diffBodyDocs } from '@orbis/shared/doc/diff';
 import type { ParseRegistry } from '@orbis/shared/query';
@@ -154,7 +155,11 @@ function bodyTarget(index: number, input: Record<string, unknown>): BodyTarget {
 function editedDoc(value: unknown): BodyDoc | null {
   const parsed = bodyDocSchema.safeParse(value);
   if (!parsed.success) return null;
-  const doc = parsed.data as BodyDoc;
+  // Правленое предложение могло пережить выкатку новой схемы документа (P2 с `v: 2` после v3):
+  // показ поднимает версию той же цепочкой, что исполнение (`liftStoredBodyDoc`,
+  // `policy/pending.ts`), — иначе владелец видел бы один документ, а «Принять» писало бы другой.
+  const doc = upgradeBodyDoc(parsed.data as BodyDoc);
+  if (doc === null) return null;
   return bodyDocError(doc) === undefined ? doc : null;
 }
 

@@ -241,6 +241,34 @@ test('правка текста снимает подтверждение — о
   expect(serializeBody(savedDoc(onChange))).toBe(other);
 });
 
+test('новая неразобранная разметка ВНУТРИ колонки требует подтверждения (формат v3, F5)', async () => {
+  // rawBlock с v3 бывает не только в корне: непонятый блок части уходит в raw внутри `column`.
+  const inColumn = [
+    '{{columns}}',
+    '{{column}}',
+    '![подпись](https://example.com/a.png)',
+    '{{/column}}',
+    '{{column}}',
+    'правая',
+    '{{/column}}',
+    '{{/columns}}',
+  ].join('\n');
+  // Премиса: raw действительно внутри колонки, а не в корне.
+  const parsed = parseBody(inColumn);
+  expect(blockTypes(parsed)).toEqual(['columns']);
+  expect(JSON.stringify(parsed.doc)).toContain('rawBlock');
+
+  const { area, apply, onChange } = mount(parseBody('обычный текст'));
+  fireEvent.change(area, { target: { value: inColumn } });
+  await userEvent.click(apply);
+  expect(screen.getByRole('alert')).toBeInTheDocument();
+  expect(onChange).not.toHaveBeenCalled();
+
+  await userEvent.click(apply);
+  expect(onChange).toHaveBeenCalledTimes(1);
+  expect(serializeBody(savedDoc(onChange))).toBe(inColumn);
+});
+
 test('картинка, лежавшая в теле И ДО правки, подтверждения не требует', async () => {
   // Предупреждение — о НОВОЙ неразобранной разметке, а не о её наличии. Тело с картинкой
   // разбирается в raw при КАЖДОМ открытии, и сверка «есть ли raw в результате» требовала бы

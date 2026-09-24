@@ -1,4 +1,5 @@
 import { type JSONContent, Node } from '@tiptap/core';
+import { CONTAINER_LIMITS } from '../page-grammar';
 
 /**
  * Контейнеры раскладки тела v3 (спека страниц 1а §5.2): колонки и вкладки.
@@ -12,9 +13,17 @@ import { type JSONContent, Node } from '@tiptap/core';
  * маркером без пары, и повторный разбор делал бы из него плашку ошибки — документ не пережил бы
  * собственной печати.
  *
- * Пределы (2–4 колонки, 1–8 вкладок, глубина 2) в `content`-выражение НЕ вписаны намеренно: их
- * держит препроход (`CONTAINER_LIMITS`). Нарушение схемы — отказ записи всего тела, а человеку
- * нужна плашка на месте контейнера с его текстом (§5.8).
+ * Число частей (2–4 колонки, 1–8 вкладок) вписано в `content`-выражение — значениями
+ * `CONTAINER_LIMITS` листового `page-grammar.ts`, второй копии чисел нет. Разбор markdown такого
+ * узла не родит никогда: неверное число частей препроход сам превращает в плашку с дословным
+ * текстом (§5.8). Предел схемы — про документы КЛИЕНТА: редактор не даст слить две колонки в
+ * одну (ProseMirror держит `content` в каждой транзакции), а присланный документ с одной
+ * колонкой отвергнет гейт записи — его печать при повторном разборе стала бы плашкой.
+ *
+ * Глубину (≤ 2) и место контейнера (только верх документа или часть другого контейнера) схема
+ * не выражает: `block+` у части и у пункта списка пускает контейнер куда угодно. Это держит
+ * страховка записи — сверка скелета в `projectionKeepsEverything` (`convert.ts`): документ,
+ * чья печать не разбирается обратно в те же контейнеры, уходит в `rawBlock` с текстом целиком.
  *
  * Канон печати закреплён тестом (`convert.test.ts`): маркер — своей строкой; дети части —
  * через пустую строку; между маркером и первым/последним ребёнком пустой строки нет.
@@ -29,7 +38,7 @@ const partBody = (node: JSONContent, h: Children): string =>
 export const Columns = Node.create({
   name: 'columns',
   group: 'block',
-  content: 'column+',
+  content: `column{${CONTAINER_LIMITS.columns.min},${CONTAINER_LIMITS.columns.max}}`,
   parseHTML: () => [{ tag: 'div[data-columns]' }],
   renderHTML: () => ['div', { 'data-columns': '' }, 0],
   renderMarkdown: (node: JSONContent, h: Children) =>
@@ -49,7 +58,7 @@ export const Column = Node.create({
 export const Tabs = Node.create({
   name: 'tabs',
   group: 'block',
-  content: 'tab+',
+  content: `tab{${CONTAINER_LIMITS.tabs.min},${CONTAINER_LIMITS.tabs.max}}`,
   parseHTML: () => [{ tag: 'div[data-tabs]' }],
   renderHTML: () => ['div', { 'data-tabs': '' }, 0],
   renderMarkdown: (node: JSONContent, h: Children) =>

@@ -12,19 +12,25 @@ const RAW_WARNING =
   'Нажмите «Применить» ещё раз, чтобы подтвердить.';
 
 /**
- * Тексты неразобранных блоков документа.
+ * Тексты неразобранных блоков документа — на ЛЮБОЙ глубине.
  *
- * Верхнего уровня ДОСТАТОЧНО, слепого пятна нет: `parseBody` создаёт rawBlock в трёх местах
- * (`convert.ts`: ветка reference-определений, цикл по токенам верхнего уровня, аварийный catch)
- * и все три кладут его в КОРЕНЬ документа, а своего парсера у ноды нет вовсе
- * (`nodes/raw.ts`, `parseHTML: () => []`) — создать её глубже некому.
+ * Корня мало с формата v3: `parseBody` разбирает куски текста внутри колонок и вкладок тем же
+ * потокенным путём, и непонятый блок части (картинка, HTML) уходит в rawBlock ВНУТРИ `column`
+ * или `tab`. Обход только корня такой блок не видел бы, и новая неразобранная разметка в
+ * колонке сохранялась бы без предупреждения. Прочие контейнеры (цитата, пункт списка) rawBlock
+ * не держат — поблочный откат идёт по токенам куска, — но обход полный: дешевле, чем помнить,
+ * где он бывает.
  */
 function rawTexts(doc: BodyDoc['doc']): string[] {
-  return (doc.content ?? []).flatMap((node) =>
-    node.type === 'rawBlock'
-      ? [typeof node.attrs?.markdown === 'string' ? node.attrs.markdown : '']
-      : [],
-  );
+  const out: string[] = [];
+  const walk = (node: BodyDoc['doc']): void => {
+    if (node.type === 'rawBlock') {
+      out.push(typeof node.attrs?.markdown === 'string' ? node.attrs.markdown : '');
+    }
+    for (const child of node.content ?? []) walk(child);
+  };
+  walk(doc);
+  return out;
 }
 
 /**

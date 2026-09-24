@@ -14,6 +14,7 @@ import {
   questionStaleMessageId,
   rejectMessageId,
 } from '@orbis/shared';
+import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { appendMessageIdempotent } from '../chat/messages';
@@ -23,6 +24,7 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import type { ActionRecord, ExecuteResult, WireEntity } from '../executor/types';
+import { proposalBodyRows } from '../routines/proposal-diff';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import {
   acquirePendingLock,
@@ -410,6 +412,124 @@ describe('сериализация approve ∥ reject (fix round: write-skew з�
       }
     }
     expect(bothOk).toBe(0); // write-skew: ни одной итерации с двумя ok
+  });
+});
+
+describe('сохранённый bodyDoc прошлой версии схемы (формат тела v3, F3)', () => {
+  /** Тело записи документом — то, что реально легло в `body_doc`. */
+  async function bodyDocOf(id: string): Promise<{ v: number; doc: { content?: unknown[] } }> {
+    const rows = await withIdentity(db, personal(userA), (tx) =>
+      tx.select({ bodyDoc: entities.bodyDoc }).from(entities).where(eq(entities.id, id)),
+    );
+    return rows[0]?.bodyDoc as { v: number; doc: { content?: unknown[] } };
+  }
+
+  /** Правленое предложение рутины, сохранённое ДО выкатки v3: payload несёт `bodyDoc` v2. */
+  async function pendingWithDoc(target: WireEntity, bodyDoc: unknown): Promise<string> {
+    const { pendingId } = await withIdentity(db, personal(userA), (tx) =>
+      createPending(tx, {
+        actor: { graphId: userA, kind: 'ai', source: 'routine', runId: newId() },
+        tool: 'batch_execute',
+        input: {
+          batch_id: newId(),
+          operations: [
+            {
+              tool: 'entity_update',
+              input: { id: target.id, expectedUpdatedAt: target.updatedAt, bodyDoc },
+            },
+          ],
+        },
+        level: 'explicit-confirmation',
+        clock,
+      }),
+    );
+    return pendingId;
+  }
+
+  test('P2 с bodyDoc v2 → approve ok: документ поднят до v3 тем же деревом, блочные id целы', async () => {
+    const target = await seedEntity(userA, { title: 'Цель правки P2', tags: [] });
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          attrs: { id: 'блок-p2' },
+          content: [{ type: 'text', text: 'правка владельца до выкатки' }],
+        },
+      ],
+    };
+    const pendingId = await pendingWithDoc(target, { v: 2, doc });
+
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
+    expect(r.ok).toBe(true);
+    const stored = await bodyDocOf(target.id);
+    expect(stored).toEqual({ v: 3, doc });
+  });
+
+  test('P2 с bodyDoc v1 (атрибут query) → approve ok через цепочку 1 → 2 → 3', async () => {
+    const target = await seedEntity(userA, { title: 'Цель правки P2 v1', tags: [] });
+    const pendingId = await pendingWithDoc(target, {
+      v: 1,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'queryBlock', attrs: { id: 'блок-q', query: 'aspect=orbis/task' } }],
+      },
+    });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
+    expect(r.ok).toBe(true);
+    const node = (await bodyDocOf(target.id)).doc.content?.[0] as {
+      attrs?: Record<string, unknown>;
+    };
+    expect(node.attrs?.id).toBe('блок-q');
+    expect(node.attrs?.query).toBeUndefined();
+    expect(node.attrs?.ast).not.toBeNull();
+  });
+
+  test('показ правленого P2 с bodyDoc v2: proposedDoc — v3 тем же деревом (как у исполнения)', async () => {
+    const target = await seedEntity(userA, { title: 'Цель показа P2', tags: [] });
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          attrs: { id: 'блок-показ' },
+          content: [{ type: 'text', text: 'станет' }],
+        },
+      ],
+    };
+    const rows = await withIdentity(db, personal(userA), (tx) =>
+      proposalBodyRows(
+        tx,
+        [
+          {
+            tool: 'entity_update',
+            input: { id: target.id, expectedUpdatedAt: target.updatedAt, bodyDoc: { v: 2, doc } },
+          },
+        ],
+        { withDiff: true },
+        FIXTURE_PARSE_REGISTRY,
+      ),
+    );
+    const row = rows.get(0);
+    expect(row?.proposedDoc).toEqual({ v: 3, doc });
+    expect(row?.after).toBe('станет');
+    expect(row?.bodyDiff).toBeDefined();
+  });
+
+  test('P2 с bodyDoc версии из будущего с чужой нодой — не печатается строкой, отказ гейта', async () => {
+    const target = await seedEntity(userA, { title: 'Цель правки P2 v99', tags: [] });
+    const pendingId = await pendingWithDoc(target, {
+      v: 99,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'callout', content: [{ type: 'text', text: 'важное' }] }],
+      },
+    });
+    const r = await approvePending(db, { identity: personal(userA), pendingId, clock });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('VALIDATION');
+    expect(r.error.message).toContain('перезагрузите');
   });
 });
 

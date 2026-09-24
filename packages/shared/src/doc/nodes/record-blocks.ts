@@ -1,4 +1,5 @@
 import { Node } from '@tiptap/core';
+import { RECORD_BLOCK_NAMES } from '../page-grammar';
 
 /**
  * Блоки обвязки записи тела v3 (спека страниц 1а §5.3): `{{title}}`, `{{tags}}`, … и карточка
@@ -13,12 +14,17 @@ import { Node } from '@tiptap/core';
  * сторожит тест (`convert.test.ts`, «печатная форма атомов»).
  */
 
+const KNOWN_NAMES: ReadonlySet<string> = new Set(RECORD_BLOCK_NAMES);
+
 /**
- * `name` — одно из `RECORD_BLOCK_NAMES` (`page-grammar.ts`). Умолчание `null` — не «блок по
- * умолчанию», а честное «имени нет»: такой узел (его мог прислать только клиент) печатается
- * пустой строкой — выдуманное имя поменяло бы смысл тела при повторном разборе. Имя печатается
- * без сверки со списком: чужое имя даёт строку, которую разбор оставит текстом, то есть текст
- * цел, а сверка потребовала бы второй копии списка в листовом диффе.
+ * `name` — одно из `RECORD_BLOCK_NAMES` (`page-grammar.ts`, единственная копия списка). Разбор
+ * markdown узла с чужим именем не родит: препроход узнаёт только имена списка. Чужое имя, `null`
+ * или `''` бывают лишь в документе КЛИЕНТА, и два рубежа их не пропускают:
+ *  - вставка HTML — `getAttrs` ниже отвергает имя вне списка (узел не создаётся);
+ *  - JSON-документ на записи — страховка сверяет скелет документа с разбором его печати
+ *    (`projectionKeepsEverything`): `{{foo}}` при повторном разборе — текст, `null` печатается
+ *    пустой строкой, и такой документ уходит в `rawBlock` с текстом целиком.
+ * Печать поэтому имени не сверяет: чужое имя даёт строку, которую разбор оставит текстом.
  */
 export const RecordBlock = Node.create({
   name: 'recordBlock',
@@ -28,7 +34,10 @@ export const RecordBlock = Node.create({
   parseHTML: () => [
     {
       tag: 'div[data-record-block]',
-      getAttrs: (el: HTMLElement) => ({ name: el.getAttribute('data-record-block') }),
+      getAttrs: (el: HTMLElement) => {
+        const name = el.getAttribute('data-record-block');
+        return name !== null && KNOWN_NAMES.has(name) ? { name } : false;
+      },
     },
   ],
   renderHTML: ({ HTMLAttributes }) => ['div', { 'data-record-block': HTMLAttributes.name ?? '' }],

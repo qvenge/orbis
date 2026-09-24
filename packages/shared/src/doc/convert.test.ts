@@ -10,6 +10,7 @@ import {
   bodyPairFromDoc,
   bodyRefsFromDoc,
   canonicalizeBody,
+  losesWord,
   parseBody,
   projectionKeepsEverything,
   queryRefsFromDoc,
@@ -1408,6 +1409,15 @@ describe('грамматика v3: разбор → печать → разбо�
     expect(roundTrip(md)).toBe(md);
   });
 
+  test('вкладка без подписи: `{{tab}}` → label пустая, печать снова `{{tab}}` (F4)', () => {
+    // `{{tab: }}` препроход считает текстом (§5.7): печатай пустую подпись так — и повторный
+    // разбор развалил бы весь контейнер в плашку.
+    const md = '{{tabs}}\n{{tab}}\nа\n{{/tab}}\n{{tab: Б}}\nб\n{{/tab}}\n{{/tabs}}';
+    const [tabs] = nodesOf(md);
+    expect(tabs?.content?.map((t) => t.attrs?.label)).toEqual(['', 'Б']);
+    expect(roundTrip(md)).toBe(md);
+  });
+
   test('каждый блок обвязки — recordBlock со своим именем', () => {
     for (const name of RECORD_BLOCK_NAMES) {
       const md = `до\n{{${name}}}\nпосле`;
@@ -1616,5 +1626,120 @@ describe('грамматика v3: разбор → печать → разбо�
       expect(serializeBody(doc)).toBe(blockText(atom));
       expect(projectionKeepsEverything(doc, serializeBody(doc))).toBe(true);
     }
+  });
+});
+
+// --- схема шире грамматики: пределы схемы и сверка скелета (фикс-раунд 1 задачи 8, F1) -------
+//
+// Разбор markdown таких документов не родит, но клиент (редактор, P2, MCP) прислать их может.
+// Число частей держит схема; прочее — страховка записи: печать, не разбирающаяся обратно в те
+// же контейнеры и блоки, уводит документ в rawBlock с текстом целиком, а не в VALIDATION.
+
+describe('схема шире грамматики: пределы и сверка скелета (F1)', () => {
+  const p = (text: string): Node => para(text);
+  const column = (...content: Node[]): Node => ({ type: 'column', content });
+  const cols = (...parts: Node[]): Node => ({ type: 'columns', content: parts });
+  const tab = (label: string, ...content: Node[]): Node => ({
+    type: 'tab',
+    attrs: { label },
+    content,
+  });
+  const tabs = (...parts: Node[]): Node => ({ type: 'tabs', content: parts });
+  const two = () => cols(column(p('а')), column(p('б')));
+  const v3 = (...content: Node[]) => ({ v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } });
+
+  test('число частей держит схема: 1 и 5 колонок, 0 и 9 вкладок отвергнуты; 2–4 и 1–8 приняты', () => {
+    const many = (n: number, make: (i: number) => Node) =>
+      Array.from({ length: n }, (_, i) => make(i));
+    const colN = (n: number) => cols(...many(n, (i) => column(p(`к${i}`))));
+    const tabN = (n: number) => tabs(...many(n, (i) => tab(`в${i}`, p(`т${i}`))));
+    expect(bodyDocError(v3(colN(1)))).toBeDefined();
+    expect(bodyDocError(v3(colN(5)))).toBeDefined();
+    expect(bodyDocError(v3({ type: 'tabs', content: [] }))).toBeDefined();
+    expect(bodyDocError(v3(tabN(9)))).toBeDefined();
+    // Пункт чеклиста блоков сверх абзаца и вложенного чеклиста не принимает вовсе — контейнер
+    // в нём отвергает сама схема (TaskItem), до страховки дело не доходит.
+    expect(
+      bodyDocError(
+        v3({
+          type: 'taskList',
+          content: [{ type: 'taskItem', attrs: { checked: false }, content: [p('дело'), two()] }],
+        }),
+      ),
+    ).toBeDefined();
+    for (const ok of [colN(2), colN(4), tabN(1), tabN(8)]) {
+      expect(bodyDocError(v3(ok))).toBeUndefined();
+      expect(bodyPairFromDoc(v3(ok)).doc.doc.content?.[0]?.type).toBe(ok.type as string);
+    }
+  });
+
+  const cases: Array<[string, Node]> = [
+    [
+      'глубина 3',
+      cols(column(tabs(tab('А', cols(column(p('x')), column(p('y')))))), column(p('б'))),
+    ],
+    ['колонки под цитатой', { type: 'blockquote', content: [two()] }],
+    [
+      'колонки в пункте списка',
+      { type: 'bulletList', content: [{ type: 'listItem', content: [p('пункт'), two()] }] },
+    ],
+    [
+      'колонки в ячейке таблицы',
+      {
+        type: 'table',
+        content: [
+          { type: 'tableRow', content: [{ type: 'tableHeader', content: [p('шапка')] }] },
+          { type: 'tableRow', content: [{ type: 'tableCell', content: [two()] }] },
+        ],
+      },
+    ],
+    ['вкладки под цитатой', { type: 'blockquote', content: [tabs(tab('А', p('а')))] }],
+    ['блок обвязки с чужим именем', { type: 'recordBlock', attrs: { name: 'нет-такого' } }],
+    ['блок обвязки без имени (null)', { type: 'recordBlock', attrs: { name: null } }],
+    ['блок обвязки с пустым именем', { type: 'recordBlock', attrs: { name: '' } }],
+    ['карточка с пустым текстом', { type: 'aspectCard', attrs: { aspect: null, text: '' } }],
+    ['карточка с переводом строки', { type: 'aspectCard', attrs: { aspect: null, text: 'a\nb' } }],
+    ['подпись вкладки с переводом строки', tabs(tab('раз\nдва', p('а')))],
+  ];
+
+  test.each(cases)('%s: документ сохраняется rawBlock-ом, проекция согласована', (_name, node) => {
+    const input = v3(p('до'), node, p('после'));
+    // Схема такой документ ПРИНИМАЕТ — иначе проверялся бы гейт, а не страховка.
+    expect(bodyDocError(input)).toBeUndefined();
+    const { doc, body } = bodyPairFromDoc(input);
+    expect(doc).toEqual({
+      v: DOC_SCHEMA_VERSION,
+      doc: { type: 'doc', content: [{ type: 'rawBlock', attrs: { markdown: body } }] },
+    });
+    // Пара согласована: текст — проекция документа, слова целы, и повторное сохранение того
+    // же rawBlock-документа — неподвижная точка (автосохранение не крутит его по кругу).
+    expect(serializeBody(doc)).toBe(body);
+    expect(body).toContain('до');
+    expect(body).toContain('после');
+    expect(losesWord(serializeBody(input), body)).toBe(false);
+    expect(bodyPairFromDoc(doc)).toEqual({ doc, body });
+  });
+
+  test('страж от жадности: законные документы v3 и привязанная карточка страховку проходят', () => {
+    const bound = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'aspectCard', attrs: { aspect: 'orbis/goal', text: 'orbis/goal' } },
+          { type: 'recordBlock', attrs: { name: 'title' } },
+          cols(
+            column(p('а'), { type: 'queryBlock', attrs: { ast: null, text: 'aspect=orbis/task' } }),
+            column(p('б')),
+          ),
+          tabs(tab('План', p('пункт')), tab('', p('без подписи'))),
+          {
+            type: 'blockquote',
+            content: [{ type: 'queryBlock', attrs: { ast: null, text: 'aspect=orbis/goal' } }],
+          },
+        ],
+      },
+    };
+    expect(bodyPairFromDoc(bound).doc).toBe(bound);
   });
 });

@@ -522,8 +522,55 @@ export function projectionKeepsEverything(
   const before = docOf(input);
   const after = parseBody(projection).doc;
   if (!isSubsequence(squash(before), squash(after))) return false;
+  if (skeleton(before) !== skeleton(after)) return false;
   const kept = new Set(bodyRefsFromDoc(after));
   return bodyRefsFromDoc(before).every((ref) => kept.has(ref));
+}
+
+/** Узлы, чья РАСКЛАДКА — смысл тела формата v3: их порядок и вложенность обязаны пережить круг. */
+const SKELETON_KINDS: ReadonlySet<string> = new Set([
+  'columns',
+  'column',
+  'tabs',
+  'tab',
+  'recordBlock',
+  'aspectCard',
+  'queryBlock',
+]);
+
+/**
+ * Скелет документа формата v3: последовательность и вложенность контейнеров, частей, блоков
+ * обвязки, карточек и блоков данных — с атрибутами, которые печатаются в маркер (подпись
+ * вкладки, имя блока, текст карточки).
+ *
+ * Зачем сверка скелета сверх сверки текста. Схема документа ШИРЕ грамматики: она пускает
+ * контейнер под цитату и в пункт списка, глубину 3, блок обвязки с чужим именем, карточку с
+ * пустым текстом, подпись вкладки с переводом строки. Разбор markdown таких узлов не родит, но
+ * клиент прислать их может, и их печать разбирается обратно в ДРУГОЕ дерево (плашку ошибки,
+ * абзац с текстом маркера). Текст при этом цел — сверка подпоследовательности молчала, и в БД
+ * ложилась пара, где `body` значит одно, а `body_doc` — другое (MCP, откат и первый кадр видят
+ * `body`). Разошёлся скелет — тот же исход, что у прочих страховочных случаев: `rawBlock`.
+ *
+ * Карточка сравнивается по ТЕКСТУ, а не по аспекту: документ на записи уже привязан
+ * (`bindQueryBlocks`), а разбор проекции реестра не видит и отдаёт `aspect: null`. Края подписи
+ * и текста срезаются — их срезает и препроход, и различие в пробелах смысла не меняет.
+ */
+function skeleton(doc: JSONContent): string {
+  const out: string[] = [];
+  const trimmed = (value: unknown) => (typeof value === 'string' ? value.trim() : String(value));
+  const walk = (node: JSONContent): void => {
+    const type = typeof node.type === 'string' && SKELETON_KINDS.has(node.type) ? node.type : null;
+    if (type === 'tab') out.push(`tab:${trimmed(node.attrs?.label)}`);
+    else if (type === 'recordBlock') out.push(`record:${String(node.attrs?.name)}`);
+    else if (type === 'aspectCard') out.push(`card:${trimmed(node.attrs?.text)}`);
+    else if (type !== null) out.push(type);
+    const content = node.content ?? [];
+    if (type !== null && content.length > 0) out.push('(');
+    for (const child of content) walk(child);
+    if (type !== null && content.length > 0) out.push(')');
+  };
+  walk(doc);
+  return JSON.stringify(out);
 }
 
 /**
