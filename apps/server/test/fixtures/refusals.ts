@@ -41,6 +41,9 @@ import {
   EXPR_TYPE,
   type GraphId,
   PATTERN_NOT_REGULAR,
+  RULE_FIXTURES,
+  type RuleCarrier,
+  type RuleFixture,
   SECOND_LANGUAGE,
 } from '@orbis/shared';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
@@ -851,11 +854,6 @@ const ROW_10: RefusalRow = {
 
 // ───────── строки 3/15/18 (валидатор действий, задача 6) и строки 11/19/20 (валидатор правил, задача 1) ─────────
 
-const ruleScope = (kind: 'aspect' | 'property' | 'role', id: string) => ({
-  reg: world().reg,
-  carrier: { kind, id },
-  systemSeed: true,
-});
 /**
  * Область валидатора действий: снимок мира корпуса (встроенные словари + посеянные действия) и
  * системный сид — корпус меряет сидовые декларации модулей (`finance/…`, `planner/…`), и namespace
@@ -877,6 +875,24 @@ const ROW_3: RefusalRow = {
   refuse: async () => codeOfSync(() => assertAction(ACTION_NESTED, actionScope())),
   spoils: [
     {
+      // ОДНА правка позитива: у шага сидовой декларации сменён только `tool`, вход шага прежний. Отказ
+      // обязан прийти по ИМЕНИ тула — валидатор, узнающий вложенность по форме входа (`{action}`),
+      // здесь промолчал бы. Ключ меняется вместе с порчей: занятость `key` — другая проверка.
+      name: 'шагу entity_update подменён tool на run_action — вход шага прежний',
+      run: async () =>
+        codeOfSync(() =>
+          assertAction(
+            {
+              ...P2F,
+              key: 'finance/nested-swap',
+              id: 'finance/nested-swap',
+              steps: [{ ...P2F.steps[0], tool: 'run_action' }],
+            },
+            actionScope(),
+          ),
+        ),
+    },
+    {
       name: 'ветвление на уровне шага — второе имя строки',
       run: async () => codeOfSync(() => assertAction(ACTION_BRANCH, actionScope())),
     },
@@ -888,61 +904,94 @@ const ROW_3: RefusalRow = {
   ],
 };
 
-/** Строка 11: правило `unique_among` над свойствами — локальная фабрика (перенос из задачи 12, Ф-Б2-14). */
-const uniqueAmongFixture = (properties: readonly string[]) => ({
-  id: 'r11',
-  template: 'unique_among',
-  params: { properties: [...properties] },
-});
-/** Снимок мира корпуса и аспект-носитель правила — `assertRule` синхронен, снимок уже собран. */
-const aspectScope = (id: string) => ({
-  reg: world().reg,
-  carrier: { kind: 'aspect' as const, id },
-  systemSeed: false,
-});
+// ─── строки 11, 19, 20: валидатор правил. «Законная форма» — из RULE_FIXTURES (§С8-25) ───
+// Позитив и канонический отказ объявлены ОДИН раз и одинаково для валидатора (`rules.test.ts`) и для
+// корпуса: своя копия рядом разъехалась бы с словарём на первой же правке схемы правила.
+
+/** Фикстура правила по имени; её отсутствие — расхождение словаря с корпусом, а не ветка пробы. */
+const ruleFixture = (name: string): RuleFixture => {
+  const f = RULE_FIXTURES.find((x) => x.name === name);
+  if (f === undefined) {
+    throw new Error(`фикстуры правила «${name}» нет — RULE_FIXTURES разъехались с корпусом`);
+  }
+  return f;
+};
+/** Правило фикстуры как запись: у правила-пары (`RULE_CONFLICT`) `rule` — массив, здесь — одно. */
+const ruleOf = (f: RuleFixture): Record<string, unknown> => f.rule as Record<string, unknown>;
+interface PlacedRules {
+  carrier: RuleCarrier;
+  rules: readonly unknown[];
+}
+/**
+ * Снимок-проба: встроенные словари, где у каждого названного носителя лежат РОВНО эти правила — как их
+ * увидит читатель ПОСЛЕ записи (приём `probe` из `rules.test.ts` и `probeSnapshot` записи реестра).
+ * Встроенные правила носителя заменяются: корпус меряет свою декларацию, а не её встречу с сидом.
+ */
+const ruleProbe = (placed: readonly PlacedRules[]): RegistrySnapshot => {
+  const reg = builtinSnapshot();
+  const byCarrier = new Map<string, { carrier: RuleCarrier; rules: unknown[] }>();
+  for (const p of placed) {
+    const key = `${p.carrier.kind}:${p.carrier.id}`;
+    const cell = byCarrier.get(key) ?? { carrier: p.carrier, rules: [] };
+    cell.rules.push(...p.rules);
+    byCarrier.set(key, cell);
+  }
+  for (const { carrier, rules } of byCarrier.values()) {
+    const dict =
+      carrier.kind === 'aspect'
+        ? reg.aspects
+        : carrier.kind === 'property'
+          ? reg.properties
+          : reg.roles;
+    const base = dict.get(carrier.id);
+    if (base === undefined) throw new Error(`носителя ${carrier.id} нет в словаре`);
+    dict.set(carrier.id, { ...base, rules } as never);
+  }
+  return reg;
+};
+/**
+ * Проверить `rule` на `carrier` в пробе, где рядом лежат `others`. Правило кладётся ПОСЛЕДНИМ: отказ
+ * пары обязан приходить второму писателю — в том порядке, в каком его встречает запись реестра.
+ */
+const ruleCheck = (carrier: RuleCarrier, rule: unknown, others: readonly PlacedRules[] = []) =>
+  assertRule(rule, {
+    reg: ruleProbe([...others, { carrier, rules: [rule] }]),
+    carrier,
+    systemSeed: true,
+  });
+const ruleCheckOf = (f: RuleFixture) => ruleCheck(f.carrier, f.rule);
+
+const UNIQUE_OK = 'unique_among: конверт уникален четвёркой «категория, валюта, период»';
+const UNIQUE_ON_MANY_FX =
+  'unique_among: свойство-список — «уникальность» множества значений неопределена';
+/** Позитив строки 11 с ОДНИМ дописанным в набор свойством — порча называет только его. */
+const uniqueWith = (extra: string) => {
+  const f = ruleFixture(UNIQUE_OK);
+  const rule = ruleOf(f) as { params: { properties: readonly string[] } };
+  return ruleCheck(f.carrier, {
+    ...rule,
+    params: { ...rule.params, properties: [...rule.params.properties, extra] },
+  });
+};
 const ROW_11: RefusalRow = {
   row: 11,
   codes: ['UNIQUE_ON_MANY'],
   genre: 'declaration',
-  // Позитив и порча идут через ТОТ ЖЕ `assertRule`, что и боевая запись строки реестра:
+  // Позитив и порчи идут через ТОТ ЖЕ `assertRule`, что и боевая запись строки реестра:
   // корпус проверяет валидатор, а не свою копию его правил.
   positive: async () => {
-    assertRule(uniqueAmongFixture(['orbis/period_start']), aspectScope('orbis/budget'));
+    ruleCheckOf(ruleFixture(UNIQUE_OK));
   },
-  refuse: async () =>
-    codeOfSync(() =>
-      assertRule(uniqueAmongFixture(['orbis/aliases']), aspectScope('orbis/category')),
-    ),
+  refuse: async () => codeOfSync(() => ruleCheckOf(ruleFixture(UNIQUE_ON_MANY_FX))),
   spoils: [
     {
-      name: 'списочное свойство вторым в наборе',
-      run: async () =>
-        codeOfSync(() =>
-          assertRule(
-            uniqueAmongFixture(['orbis/title', 'orbis/aliases']),
-            aspectScope('orbis/category'),
-          ),
-        ),
+      name: 'в набор позитива дописано списочное свойство (orbis/aliases, cardinality: many)',
+      run: async () => codeOfSync(() => uniqueWith('orbis/aliases')),
     },
     {
-      name: 'набор из одного списочного свойства',
-      run: async () =>
-        codeOfSync(() =>
-          assertRule(uniqueAmongFixture(['orbis/aliases']), aspectScope('orbis/category')),
-        ),
-    },
-    {
-      // Порча 0c (Ф-Б2-8): второго `many`-свойства на `orbis/category` в словаре нет, поэтому пара
-      // берётся у `orbis/routine` — отказ про РОД свойства (`select` many тоже список), а не про
-      // одно имя `orbis/aliases`.
-      name: 'второе many-свойство в том же списке — отказ про род, а не про первое имя',
-      run: async () =>
-        codeOfSync(() =>
-          assertRule(
-            uniqueAmongFixture(['orbis/routine_days', 'orbis/allowed_tools']),
-            aspectScope('orbis/routine'),
-          ),
-        ),
+      // Ф-Б2-8: отказ про РОД свойства, а не про одно имя `orbis/aliases` — `select` many тоже список.
+      name: 'дописан список другого рода (orbis/routine_days, select many) — отказ про род, не про имя',
+      run: async () => codeOfSync(() => uniqueWith('orbis/routine_days')),
     },
   ],
 };
@@ -1014,109 +1063,115 @@ const ROW_18: RefusalRow = {
   ],
 };
 
-const enterDone = {
-  id: 'corpus_task_completed_at',
-  template: 'on_enter_class',
-  params: {
-    enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
-    set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
-  },
-};
-const defaultCurrency = (id: string) => ({
-  id,
-  template: 'default',
-  params: { property: 'orbis/currency', value: { param: 'default_currency' } },
-});
-/**
- * Снимок-проба с ЧУЖИМИ правилами на носителе: `RULE_CONFLICT` — свойство ПАРЫ, и одного правила
- * на входе валидатору мало. Поле `rules` приезжает к строкам задачей 2, поэтому проба ставит его
- * структурно (`rulesFieldOf`, Р-К-52) — так же, как его читает валидатор (`rulesOf`).
- */
-const regWithRules = (aspectId: string, rules: readonly unknown[]): RegistrySnapshot => {
-  const reg = builtinSnapshot();
-  const carrier = reg.aspects.get(aspectId);
-  if (carrier === undefined) throw new Error(`носителя ${aspectId} нет в словаре`);
-  reg.aspects.set(aspectId, { ...carrier, rules: [...rules] } as never);
-  return reg;
-};
-const conflictScope = (aspectId: string, rules: readonly unknown[]) => ({
-  reg: regWithRules(aspectId, rules),
-  carrier: { kind: 'aspect' as const, id: aspectId },
-  systemSeed: true,
-});
+// Строка 19 порчей меняет СНИМОК, а не одно правило: `RULE_CONFLICT` — свойство пары писателей, и
+// каждая порча кладёт к законному правилу ВТОРОГО писателя, а `assertRule` зовётся для второго.
+const ENTER_OK = 'on_enter_class: вход в класс done проставляет отметку завершения';
+const ENTER_BY_VALUE_OK = 'on_enter_class по значению: уход из варианта waiting снимает вопрос';
+const CONFLICT_PAIR_FX = 'код RULE_CONFLICT: два включённых on_enter_class одного ключа события';
+const DEFAULT_PARAM_OK = 'default: валюта конверта — из параметра движка';
+const DEFAULT_LITERAL_OK = 'default: литерал того же рода, что свойство';
+/** Второй писатель: то же правило под другим id — тот же ключ события, та же цель. */
+const twinOf = (f: RuleFixture) => ({ ...ruleOf(f), id: `${String(ruleOf(f).id)}_twin` });
 const ROW_19: RefusalRow = {
   row: 19,
   codes: ['RULE_CONFLICT'],
   genre: 'declaration',
+  // Один писатель события на носителе — законно: позитив лежит в пробе, и проверка конфликта его ВИДИТ.
   positive: async () => {
-    assertRule(enterDone, conflictScope('orbis/task', [enterDone]));
+    ruleCheckOf(ruleFixture(ENTER_OK));
   },
   refuse: async () => {
-    const other = { ...enterDone, id: 'corpus_task_completed_at_twin' };
-    return codeOfSync(() => assertRule(other, conflictScope('orbis/task', [enterDone, other])));
+    const f = ruleFixture(CONFLICT_PAIR_FX);
+    const [first, second] = f.rule as readonly unknown[];
+    return codeOfSync(() => ruleCheck(f.carrier, second, [{ carrier: f.carrier, rules: [first] }]));
   },
   spoils: [
     {
-      // Пара `default`+`default` на одном свойстве — тот же ключ события (`create|<свойство>`):
-      // конфликт про ПАРУ писателей, а не про шаблон `on_enter_class`.
-      name: 'второй писатель — default на то же свойство',
+      // Ф-Б2-28: ключ конфликта ГЛОБАЛЕН — второй писатель на свойстве-носителе спорит с правилом
+      // аспекта так же, как сосед по строке. Валидатор, ищущий пару в пределах носителя, промолчал бы.
+      name: 'к снимку добавлен второй on_enter_class того же события и той же цели set — на другом носителе',
       run: async () => {
-        const first = defaultCurrency('corpus_currency_first');
-        const second = defaultCurrency('corpus_currency_second');
-        return codeOfSync(() => assertRule(second, conflictScope('orbis/budget', [first, second])));
+        const f = ruleFixture(ENTER_OK);
+        return codeOfSync(() =>
+          ruleCheck({ kind: 'property', id: 'orbis/completed_at' }, twinOf(f), [
+            { carrier: f.carrier, rules: [f.rule] },
+          ]),
+        );
+      },
+    },
+    {
+      // Другая форма ключа (`create|<свойство>`): два ЗАКОННЫХ по отдельности позитива словаря
+      // (валюта из параметра и литералом) на одном свойстве — конфликт про пару, а не про шаблон.
+      name: 'второй писатель — default на то же свойство (ключ create|…)',
+      run: async () => {
+        const first = ruleFixture(DEFAULT_PARAM_OK);
+        const second = ruleFixture(DEFAULT_LITERAL_OK);
+        return codeOfSync(() =>
+          ruleCheck(second.carrier, second.rule, [{ carrier: first.carrier, rules: [first.rule] }]),
+        );
+      },
+    },
+    {
+      // Третья форма ключа — уход (`leave|…|<свойство>`, `on_leave.unset`): валидатор, считающий
+      // писателями только `set`, пропустил бы двух уборщиков одного свойства.
+      name: 'второй писатель ухода — двойник on_leave.unset по значению',
+      run: async () => {
+        const f = ruleFixture(ENTER_BY_VALUE_OK);
+        return codeOfSync(() =>
+          ruleCheck(f.carrier, twinOf(f), [{ carrier: f.carrier, rules: [f.rule] }]),
+        );
       },
     },
   ],
 };
 
-const DEREF_CATEGORY_TITLE = {
-  op: '=',
-  args: [{ deref: { prop: 'orbis/finance_category', read: 'orbis/title' } }, { const: 'Еда' }],
-};
+const REQUIRES_OK = 'requires_when: дата операции обязательна, пока движение не повторяющееся';
+const DEREF_FX = 'код DEREF_IN_CONSTRAINT: правило записи читает чужую запись';
+/** Чтение чужой записи через ссылку — единственная форма кода `DEREF_IN_CONSTRAINT` (§Б3-3). */
+const DEREF_TITLE = { deref: { prop: 'orbis/finance_category', read: 'orbis/title' } };
 const ROW_20: RefusalRow = {
   row: 20,
   codes: ['DEREF_IN_CONSTRAINT'],
   genre: 'declaration',
+  // Позитив — `when` без deref; канонический отказ словаря — тот же позитив, где в `when` подставлено
+  // чтение категории через ссылку (одна порча, объявленная в RULE_FIXTURES).
   positive: async () => {
-    assertRule(
-      {
-        id: 'corpus_requires_occurred_on',
-        template: 'requires_when',
-        when: {
-          op: 'not',
-          args: [{ op: '=', args: [{ prop: 'orbis/recurring' }, { const: true }] }],
-        },
-        params: { property: 'orbis/occurred_on' },
-      },
-      ruleScope('aspect', 'orbis/financial'),
-    );
+    ruleCheckOf(ruleFixture(REQUIRES_OK));
   },
-  refuse: async () =>
-    codeOfSync(() =>
-      assertRule(
-        {
-          id: 'corpus_deref_when',
-          template: 'requires_when',
-          when: DEREF_CATEGORY_TITLE,
-          params: { property: 'orbis/occurred_on' },
-        },
-        ruleScope('aspect', 'orbis/financial'),
-      ),
-    ),
+  refuse: async () => codeOfSync(() => ruleCheckOf(ruleFixture(DEREF_FX))),
   spoils: [
     {
-      name: 'тот же deref в значении T-правила — область C, а не позиция `when`',
-      run: async () =>
-        codeOfSync(() =>
-          assertRule(
-            {
-              id: 'corpus_deref_value',
-              template: 'default',
-              params: { property: 'orbis/currency', value: DEREF_CATEGORY_TITLE },
-            },
-            ruleScope('aspect', 'orbis/financial'),
-          ),
-        ),
+      // Та же область C, другая позиция: значение T-правила вычисляется на записи так же, как условие.
+      name: 'тот же deref в params.value T-правила default',
+      run: async () => {
+        const f = ruleFixture(DEFAULT_PARAM_OK);
+        const rule = ruleOf(f) as { params: Record<string, unknown> };
+        return codeOfSync(() =>
+          ruleCheck(f.carrier, { ...rule, params: { ...rule.params, value: DEREF_TITLE } }),
+        );
+      },
+    },
+    {
+      // Чекер обходит ДЕРЕВО, а не корень: в `when` позитива на глубине двух узлов чтение своего
+      // `orbis/recurring` подменено чтением его через ссылку на категорию.
+      name: 'в глубине when позитива prop подменён deref через ссылку',
+      run: async () => {
+        const f = ruleFixture(REQUIRES_OK);
+        // Правка — заменой узла в `when` ПОЗИТИВА, а не своим литералом: разъедься словарь, порча
+        // упала бы громко, а не мерила бы молча другое условие.
+        const own = JSON.stringify({ prop: 'orbis/recurring' });
+        const when = JSON.stringify(ruleOf(f).when);
+        if (!when.includes(own)) {
+          throw new Error('позитив строки 20 больше не читает orbis/recurring — порча разъехалась');
+        }
+        const viaRef = { deref: { prop: 'orbis/finance_category', read: 'orbis/recurring' } };
+        return codeOfSync(() =>
+          ruleCheck(f.carrier, {
+            ...ruleOf(f),
+            when: JSON.parse(when.replace(own, JSON.stringify(viaRef))),
+          }),
+        );
+      },
     },
   ],
 };
