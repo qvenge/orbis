@@ -32,6 +32,8 @@ export * from './fast-path';
 export * from './ids';
 export * from './import/normalize';
 export * from './nav/links';
+// Выбор шаблона записи (срез 1а §4.2–4.3): модуль без зависимостей, корню не тяжёл.
+export * from './pages/choose-template';
 // КАНОН Q-AST (§А5-7) — здесь и в сабпате `@orbis/shared/query`. Старая грамматика §6.1
 // (`query/grammar`, `query/parse`, `query/serialize`, `query/legacy-bridge`) удалена
 // Задачей 21b вместе с последним потребителем; имена `QueryAst`, `QueryDateToken`,
