@@ -11,7 +11,8 @@
     "./doc": "./src/doc/index.ts",
     "./doc/diff": "./src/doc/diff.ts",
     "./doc/types": "./src/doc/types.ts",
-    "./doc/page-grammar": "./src/doc/page-grammar.ts"
+    "./doc/page-grammar": "./src/doc/page-grammar.ts",
+    "./doc/placement": "./src/doc/placement.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
