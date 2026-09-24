@@ -774,6 +774,68 @@ describe('формы, которых исполнитель правил не у
     ).toBe('RULE_VALUE_TYPE');
   });
 
+  test('молча несрабатывающие адреса: значение enter.in по схеме свойства, роль has_relation по реестру (финал Б-2, B1 M-6)', () => {
+    // Опечатка варианта в событии по значению — событие не наступило бы никогда.
+    const typo = err(() =>
+      check(TASK, {
+        id: 'own_waiting',
+        template: 'on_enter_class',
+        params: {
+          enter: { property: 'orbis/task_status', in: ['waitng'] },
+          on_leave: { unset: ['orbis/due_date'] },
+        },
+      }),
+    );
+    expect([typo.code, reasonOf(typo)]).toEqual(['VALIDATION', 'RULE_VALUE_TYPE']);
+    expect(typo.details).toMatchObject({ property: 'orbis/task_status', value: 'waitng' });
+    expect(
+      check(TASK, {
+        id: 'own_waiting',
+        template: 'on_enter_class',
+        params: {
+          enter: { property: 'orbis/task_status', in: ['waiting'] },
+          on_leave: { unset: ['orbis/due_date'] },
+        },
+      }).id,
+    ).toBe('own_waiting');
+    // Роль с опечаткой: у T-правила и assign_level чекер её не сверяет, ребро «не нашлось бы» никогда.
+    const role = err(() =>
+      check(TASK, {
+        id: 'own_due',
+        template: 'default',
+        params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+        when: { has_relation: { role: 'participnt' } },
+      }),
+    );
+    expect([role.code, reasonOf(role)]).toEqual(['VALIDATION', 'RULE_SCOPE_UNKNOWN']);
+    expect(role.details).toMatchObject({
+      role: 'participnt',
+      site: 'aspect:orbis/task.rules.own_due.when',
+    });
+    expect(
+      reasonOf(
+        err(() =>
+          check(TASK, {
+            id: 'lvl_role',
+            template: 'assign_level',
+            params: {},
+            level: 'show',
+            when: { has_relation: { role: 'participnt' } },
+          }),
+        ),
+      ),
+    ).toBe('RULE_SCOPE_UNKNOWN');
+    // Роль реестра — законна.
+    expect(
+      check(TASK, {
+        id: 'own_due',
+        template: 'default',
+        params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+        when: { has_relation: { role: 'dependency' } },
+      }).id,
+    ).toBe('own_due');
+  });
+
   test('E-7: core-проекция в адресе параметра шаблона записи — RULE_UNKNOWN_PROPERTY с cause core; в when и значении — законна', () => {
     const NOTE: RuleCarrier = { kind: 'aspect', id: 'orbis/note' };
     const WHEN = { op: '=', args: [{ prop: 'orbis/archived' }, { const: false }] };

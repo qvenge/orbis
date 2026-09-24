@@ -4590,6 +4590,40 @@ describe('правила владельца: своя строка, дельта
     expect(left[0]?.n).toBe(0);
   });
 
+  test('id системного правила занят и отключённым: своё с тем же id — RULE_ID_TAKEN на всех дверях; включить обратно — законно (финал Б-2, B1 M-7, B4 M-2)', async () => {
+    const g = await withOwnAspect();
+    const task = { kind: 'aspect' as const, id: 'orbis/task' };
+    await inTx(g, (tx) => disableSystemRuleDelta(tx, g, task, 'task_completed_at'));
+    const mine = {
+      id: 'task_completed_at',
+      template: 'default' as const,
+      params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+    };
+    // Своя строка — колонкой.
+    expect(
+      await refusalOf(inTx(g, (tx) => setOwnRule(tx, g, { kind: 'aspect', id: OWN }, mine))),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_ID_TAKEN' });
+    // Другая встроенная строка — дельтой.
+    expect(
+      await refusalOf(
+        inTx(g, (tx) => setRuleDelta(tx, g, { kind: 'property', id: 'orbis/due_date' }, mine)),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_ID_TAKEN' });
+    // Дверь `aspect_delta_set` с полем rules — тем же отказом.
+    expect(
+      err(
+        await run(
+          'aspect_delta_set',
+          { aspect: 'orbis/note', delta: { rules: [mine] } },
+          { identity: personal(g) },
+        ),
+      ).details,
+    ).toMatchObject({ reason: 'RULE_ID_TAKEN' });
+    // Выход из отключения открыт: «включить обратно» на том же носителе дословной декларацией.
+    await inTx(g, (tx) => setRuleDelta(tx, g, task, SYS as RuleDefinitionInput));
+    expect(await taskRules(g)).toContain('task_completed_at');
+  });
+
   test('«отключить» системное — дельта, отменяемая ТОЙ ЖЕ декларацией; правка его — отказ (Р-2а, §Б4-4)', async () => {
     const g = await freshGraph();
     const task = { kind: 'aspect' as const, id: 'orbis/task' };
@@ -4812,6 +4846,32 @@ describe('строки-носители движков и граница C-6 н�
           params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
           when: { has_relation: { role: 'dependency' } },
         },
+      ),
+    );
+  });
+
+  test('C-6: флаг alive читает архивность дальнего конца — отказ и при системной роли (финал Б-2, B1 M-2)', async () => {
+    // Архивация дальнего конца C-правила ближнего не перепроверяет — тот же механизм, что снятое ребро.
+    const g = await freshGraph();
+    const aliveRead = {
+      id: 'fin_needs_live_template',
+      template: 'requires_when' as const,
+      params: { property: 'orbis/occurred_on' },
+      when: { has_relation: { role: 'instance-of', alive: true } },
+    };
+    expect(
+      await refusalOf(
+        inTx(g, (tx) => setRuleDelta(tx, g, { kind: 'aspect', id: 'orbis/financial' }, aliveRead)),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'RULE_RELATION_UNCHECKED' });
+    // Та же роль без alive — законна (системная роль, граница не пробивается).
+    const { alive: _alive, ...plain } = aliveRead.when.has_relation;
+    await inTx(g, (tx) =>
+      setRuleDelta(
+        tx,
+        g,
+        { kind: 'aspect', id: 'orbis/financial' },
+        { ...aliveRead, id: 'fin_needs_template', when: { has_relation: plain } },
       ),
     );
   });

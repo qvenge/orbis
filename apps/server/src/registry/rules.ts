@@ -191,9 +191,11 @@ function rawExprSites(raw: unknown): Array<{ path: string; value: unknown }> {
 
 /**
  * ПОЛНАЯ ПРОВЕРКА ДЕКЛАРАЦИИ ПЕРЕД ЗАПИСЬЮ. Порядок — не косметика (Р-И-21): (1) строка в E-позиции —
- * ДО разбора формы; (2) форма; (3) тождество; (4) область резолвится; (5) шаблон против носителя;
- * (6) ссылки параметров — поимённо, без обхода дерева; (7) типы выражений в области правила — здесь же
- * гейт глубины E (`assertExprChecked`); (8) понижающий уровень называет актора; (9) два писателя одного
+ * ДО разбора формы; (2) форма; (3) тождество; (4) область резолвится; (4а) носитель и область не поглощены
+ * слиянием; (5) шаблон против носителя; (6) ссылки параметров — поимённо, без обхода дерева (адреса
+ * шаблонов записи — только `props`); (7) типы выражений в области правила — здесь же гейт глубины E
+ * (`assertExprChecked`), адреса поглощённых и роли `has_relation`; (7а) литералы значения T-правила — по
+ * схеме свойства; (8) понижающий уровень называет актора; (9) два писателя одного
  * события; (10) у правила ВЛАДЕЛЬЦА — граница C-6 (ограничение не читает пользовательские рёбра). Круг «свойство → правило → свойство» — свойство ВСЕГО графа, его спрашивает врезка
  * `assertRulesOfRow` после валидатора.
  */
@@ -298,7 +300,12 @@ export function assertRule(raw: unknown, scope: RuleCheckScope): RuleDefinition 
  * (`created_by: system`), пользовательский путь к ребру закрыт гейтом с обеих сторон, а сид —
  * `systemSeed: true`. Переходы и `assign_level` рёбра читать МОГУТ: они не делают запись нарушенной —
  * переход сработает на следующем событии, уровень спрашивается на вызове. Роль, которой нет в реестре,
- * считается пользовательской (fail-closed); до этой ступени её не пропустил бы чекер E.
+ * считается пользовательской (fail-closed); до этой ступени её не пропускает ступень (7) (`refuseUnknownRoles`).
+ *
+ * Флаг `alive` — тот же механизм с другой стороны, и отказ ему — при ЛЮБОЙ роли (финал Б-2, B1 M-2): он читает
+ * архивность ДАЛЬНЕГО конца (`rules/scope.ts`, `alive: !archived`), а архивация конца C-правила ближнего не
+ * перепроверяет — `entity_update {archived}` дальнего конца оставил бы ближнюю запись нарушенной так же, как
+ * снятое ребро. Системные строки `alive` не несут.
  */
 function assertRelationReadsGuarded(rule: RuleDefinition, reg: RegistrySnapshot): void {
   if (!(CONSTRAINT_TEMPLATE_LIST as readonly string[]).includes(rule.template)) return;
@@ -311,9 +318,17 @@ function assertRelationReadsGuarded(rule: RuleDefinition, reg: RegistrySnapshot)
       continue;
     }
     const rec = node as Record<string, unknown>;
-    const h = rec.has_relation as { role?: unknown } | undefined;
+    const h = rec.has_relation as { role?: unknown; alive?: unknown } | undefined;
     if (h !== undefined && typeof h.role === 'string') {
       const role = h.role;
+      if (h.alive !== undefined) {
+        bad(
+          'RULE_RELATION_UNCHECKED',
+          rule.id,
+          `правило «${rule.id}» читает живость дальнего конца ребра роли «${role}» (has_relation.alive): архивацию конца правила записи ближнего не перепроверяют, и она оставила бы запись нарушенной до её следующей правки — такое условие выражается переходом или уровнем подтверждения, не ограничением`,
+          { template: rule.template, role, alive: h.alive },
+        );
+      }
       if (reg.roles.get(role)?.constraints.created_by !== 'system') {
         bad(
           'RULE_RELATION_UNCHECKED',
@@ -384,6 +399,24 @@ function assertEnterEvent(
 ): void {
   if ('property' in enter) {
     propsAddressOf(reg, rule, enter.property);
+    // Значения `in` формы по значению — по схеме свойства, той же функцией стадии 2, что литералы значения
+    // (ступень (7а)) и шагов действий (`assertStepLiterals`): опечатка варианта (`'waitng'`) дала бы событие,
+    // которое не наступает никогда, а правило — «успех» (финал Б-2, B1 M-6).
+    for (const value of enter.in) {
+      const violations = validateEntityProps(
+        reg,
+        { props: { [enter.property]: value }, aspects: [] },
+        new Set(),
+      );
+      if (violations.length > 0) {
+        bad(
+          'RULE_VALUE_TYPE',
+          rule.id,
+          `событие правила ${rule.id}: значение ${JSON.stringify(value)} не проходит тип свойства ${enter.property}`,
+          { property: enter.property, value, violations },
+        );
+      }
+    }
     return;
   }
   const c = reg.contracts.get(enter.contract);
@@ -593,6 +626,32 @@ function checkedAt(
   }
 }
 /**
+ * РОЛЬ `has_relation` — ПО РЕЕСТРУ (финал Б-2, B1 M-6). Чекер E роль не сверяет (у `ExprScope` словаря ролей
+ * нет — ребро неизвестной роли просто «не найдётся»), и для правила это молчаливое «никогда»: T-правило и
+ * `assign_level` с опечаткой в роли не сработали бы ни разу. Отказ и форма — те же, что у неизвестной
+ * `origin_role` параметра движка (`RULE_SCOPE_UNKNOWN` с `role`, ступень (6)); путь — позиция правила.
+ */
+function refuseUnknownRoles(reg: RegistrySnapshot, rule: RuleDefinition, site: ExprSite): void {
+  const stack: unknown[] = [site.value];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (typeof node !== 'object' || node === null) continue;
+    if (Array.isArray(node)) {
+      for (const child of node) stack.push(child);
+      continue;
+    }
+    const rec = node as Record<string, unknown>;
+    const role = (rec.has_relation as { role?: unknown } | undefined)?.role;
+    if (typeof role === 'string' && !reg.roles.has(role)) {
+      bad('RULE_SCOPE_UNKNOWN', rule.id, `роли ${role} нет (has_relation в ${site.path})`, {
+        role,
+        site: site.path,
+      });
+    }
+    for (const child of Object.values(rec)) stack.push(child);
+  }
+}
+/**
  * (7) ТИПЫ ВЫРАЖЕНИЙ в области правила — через единственный гейт записи E (`assertExprChecked`): там же
  * кап глубины дерева и перевод `ExprCheckError` → `ExecError` тем же кодом (`DEREF_IN_CONSTRAINT`,
  * `EXPR_TYPE`, …). `when` — boolean; значение T-правила — типа свойства-цели.
@@ -602,6 +661,7 @@ function assertExprTypes(rule: RuleDefinition, { reg, carrier }: RuleCheckScope)
     // Адрес поглощённого в выражении (`{prop}`, `{has}`, база `deref`, член `$touched` — Ф-Б2-26) — отказ
     // (финал Б-2 E-3 (б)): читать его — читать вечное «нет».
     for (const name of propertyNamesInExpr(site.value)) refuseMerged(reg, rule, name, site.path);
+    refuseUnknownRoles(reg, rule, site);
     // У ОБЕИХ позиций правила `expect` — ровно один kind, и он же ожидаемый тип позиции: по нему
     // приводится корневой литерал (`{const:'0.00'}` в позиции decimal). Форма `ExprSite` при этом не
     // меняется — она общая с подписками, где `expect` перечисляет альтернативы и приведения не нужно.

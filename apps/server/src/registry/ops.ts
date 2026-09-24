@@ -2924,6 +2924,35 @@ function assertRuleInvariants(before: RegistrySnapshot, after: RegistrySnapshot)
 }
 
 /**
+ * id СИСТЕМНОГО правила занят ВСЕГДА — и отключённым тоже (финал Б-2, B1 M-7 + B4 M-2 (а)). `RULE_ID_TAKEN`
+ * валидатора (`assertRule`, ступень 3) меряет ЭФФЕКТИВНЫЙ снимок, а отключение (`rulesDisabled`,
+ * `effectiveRules`) вынимает системное правило оттуда: своё правило с его id принималось, после чего
+ * (а) «включить обратно» системное упиралось в `RULE_ID_TAKEN` — откат отключения становился невозможным;
+ * (б) пересев, кладущий системные id в `otherIds` без учёта отключения (`mergeRules`), снимал своё правило на
+ * деплое ложной заметкой. Сверка — по строкам ДО дельт (сид кладёт системные правила в колонку встроенной
+ * строки; `loadRegistryRows` либо `RegistrySnapshot.system`), по всем носителям, ролям тоже. Исключение одно —
+ * тот же носитель (`same`): там id системного правила значит «включить обратно», и дословность декларации
+ * спрашивает писатель (`RULE_SYSTEM_IMMUTABLE`).
+ */
+function refuseSystemRuleId(rows: RegistryDictionaries, ruleId: string, same?: RuleCarrier): void {
+  for (const [kind, dict] of [
+    ['aspect', rows.aspects],
+    ['property', rows.properties],
+    ['role', rows.roles],
+  ] as const) {
+    for (const [id, row] of dict) {
+      if (row.graphId !== null || !row.rules.some((r) => r.id === ruleId)) continue;
+      if (same !== undefined && same.kind === kind && same.id === id) return;
+      throw new ExecError(
+        'VALIDATION',
+        `правило с id «${ruleId}» в реестре уже есть — системное на ${kind}:${id} (отключённое тоже держит id)`,
+        { reason: 'RULE_ID_TAKEN', rule: ruleId, system: { kind, id } },
+      );
+    }
+  }
+}
+
+/**
  * ПРАВИЛА В ДЕЛЬТЕ НОСИТЕЛЯ — проверка на записи (Р-И-7: `applyDeltas` правило принимает молча, и
  * неверное запирало бы записи владельца на КАЖДОЙ мутации, а не на этой). Полный вердикт (инварианты
  * снимка) — только когда эффективный список носителя сменился: правка иконки аспекта не обязана
@@ -2968,6 +2997,7 @@ function assertDeltaRulesWrite(
   };
   for (const rule of fresh) {
     refuseSystemId(rule);
+    refuseSystemRuleId(before.system ?? before, rule.id, carrier);
     assertRule(rule, { reg: after, carrier, systemSeed: false });
   }
   const rulesAt = (r: RegistrySnapshot) =>
@@ -3011,9 +3041,11 @@ export async function setOwnRule(
   const own = await readOwnRules(tx, graphId, target);
   if (own === null) throw new ExecError('NOT_FOUND', `своей строки ${target.id} нет`, { target });
   const carrier: RuleCarrier = { kind: target.kind, id: own.id };
-  const before = await probeSnapshot(tx, graphId, await loadRegistryRows(tx, graphId));
+  const rows = await loadRegistryRows(tx, graphId);
+  const before = await probeSnapshot(tx, graphId, rows);
   const candidate = normalizeRuleInput(rule, before);
   const id = (candidate as { id?: unknown }).id;
+  if (typeof id === 'string') refuseSystemRuleId(rows, id);
   const rest = own.rules.filter((r) => r.id !== id);
   const after = withCarrierRules(before, carrier, [...rest, candidate]);
   const parsed = assertRule(candidate, { carrier, systemSeed: false, reg: after });
@@ -3112,6 +3144,7 @@ export async function setRuleDelta(
   const before = await probeSnapshot(tx, graphId, rows);
   const parsed = parsedRuleOrRefusal(normalizeRuleInput(rule, before), before, target);
   const system = base.find((r) => r.id === parsed.id);
+  refuseSystemRuleId(rows, parsed.id, target);
   if (system !== undefined && canonicalJson(parsed) !== canonicalJson(system)) {
     throw new ExecError(
       'VALIDATION',
