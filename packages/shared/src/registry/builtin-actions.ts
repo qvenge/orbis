@@ -12,10 +12,10 @@ import {
 } from './action-type';
 
 /**
- * План → факт (§Б6-5, Финансы). Пречеки сегодняшнего `confirmPurchase`
- * (`budget/plan-to-fact.ts:78-97`) переписаны предикатом E целиком: принадлежность
+ * План → факт (§Б6-5, Финансы). Пять пречеков прежнего `confirmPurchase` переписаны предикатом E
+ * целиком, и с задачи 9 ручка (`budget/plan-to-fact.ts`) — обёртка над этой строкой: принадлежность
  * аспекту выражается КЛАССОМ контракта (В-1 §4-В), проба порождения — `has_relation`
- * (Е-1, `expr/compile.ts:499` — бэкенд есть).
+ * (Е-1, `relationPredicate` в `expr/compile.ts` — бэкенд есть).
  */
 const PLAN_TO_FACT: ActionDefinitionInput = {
   id: 'finance/plan-to-fact',

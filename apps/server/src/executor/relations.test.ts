@@ -147,7 +147,8 @@ async function incomingCount(targetId: string, role: string): Promise<number> {
 
 /**
  * Источники, которых АГРЕГАТЫ БЮДЖЕТА считают конвертами-родителями транзакции. Запрос
- * повторяет условие `spentByEnvelope` (`budget/aggregates.ts`) дословно: связь роли
+ * повторяет условие ведомости `spent` движка подписки (`bound_via` декларации
+ * `orbis/budget-overview`; прежде — оракул `aggregates.ts`, снесённый срезом Б-2): связь роли
  * `envelope-binding`, источник несёт `orbis/budget`.
  *
  * Считать надо ИМЕННО ТЕМ ЖЕ предикатом, что агрегаты: инвариант «один budget-parent»

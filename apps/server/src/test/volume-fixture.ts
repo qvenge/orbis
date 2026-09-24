@@ -149,7 +149,8 @@ export function buildVolumeWorld(): VolumeWorld {
   };
 
   // Категории: 0..5 — родители, 6..23 — дети по трое, 24..31 — плоские. Дерево нужно затем, что
-  // агрегаты Budget обходят ТОЛЬКО `category-parent` (`aggregates.ts:261-270`).
+  // свёртка движка Budget обходит ТОЛЬКО `category-parent` (`rollup.role` декларации
+  // `orbis/budget-overview`).
   const categoryIds = Array.from({ length: VOLUME_CATEGORIES }, (_, i) => volumeCategoryId(i));
   for (let i = 0; i < VOLUME_CATEGORIES; i++) {
     const spendClass = i % 3 === 0 ? 'fixed' : i % 3 === 1 ? 'discretionary' : null;

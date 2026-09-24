@@ -826,9 +826,10 @@ test('facts: «не запланировано» записано как not(pla
   const mm = BUILTIN_CONTRACT_DEFS.find((c) => c.id === 'orbis/money-movement');
   const facts = mm?.sets?.facts as { op: string; args: readonly unknown[] } | undefined;
   // Пин формы, а не вкуса: `{op:'=', args:[{slot:'planned'},{const:false}]}` по §Б3-4 даёт
-  // false на движении БЕЗ `orbis/planned` (умолчание не материализуется —
-  // `executor.test.ts:1433`), и `spent` разошёлся бы с оракулом
-  // `coalesce(planned,false) = false` (`aggregates.ts:205`), а трата аспекта гейта §С8-18
+  // false на движении БЕЗ `orbis/planned` (умолчание не материализуется — тест «absent при
+  // заданном `default` остаётся absent» в `executor.test.ts`), и `spent` разошёлся бы с эталоном,
+  // унаследованным от оракула
+  // `coalesce(planned,false) = false` (снесён срезом Б-2), а трата аспекта гейта §С8-18
   // (слота `planned` у его привязки нет) не попала бы в spent ни в одном бэкенде.
   expect(facts?.args[0]).toEqual({
     op: 'not',

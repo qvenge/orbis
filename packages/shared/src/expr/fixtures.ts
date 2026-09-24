@@ -57,8 +57,8 @@ function selfReferencing(): unknown {
  * Предикат набора `orbis/money-movement.sets.facts` (§Б5-4) — «случившееся движение денег».
  * Первый конъюнкт — `not(planned = true)`, а не `planned = false` (Р-К-29): он тотален в
  * обоих бэкендах одинаково и не требует, чтобы слот `planned` был связан у КАЖДОЙ привязки —
- * отсутствующее значение даёт `false` у сравнения и `true` у отрицания, ровно как оракул
- * `coalesce(planned, false) = false`.
+ * отсутствующее значение даёт `false` у сравнения и `true` у отрицания, ровно как
+ * `coalesce(planned, false) = false` прежнего оракула (снесён срезом Б-2).
  */
 const FACTS_EXPR = {
   op: 'and',

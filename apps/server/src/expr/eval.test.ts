@@ -168,7 +168,7 @@ describe('evalExpr: сравнения и семантика отсутстви�
     // decimal/date, но не до number), а не из множества EQUATABLE; пин здесь обещал бы контракт, которого нет.
   });
 
-  test('даты сравниваются лексикографически — у ISO это и есть хронология (phaseOf, :350-353)', () => {
+  test('даты сравниваются лексикографически — у ISO это и есть хронология (фазы периода Budget)', () => {
     const s = scopeOf({
       props: { 'orbis/period_start': '2026-05-01', 'orbis/period_end': '2026-05-31' },
       binding: ENVELOPE_BINDING,
@@ -336,7 +336,8 @@ describe('evalExpr: умолчание реестра — семантика Ч�
     // SQL пишет `COALESCE((e.props->>'orbis/planned')::boolean, false) = false` (`castedExpr`
     // `query/compile-ast.ts`) и на движении без `orbis/planned` отвечает TRUE. Пока умолчания
     // здесь не было, интерпретатор на том же выражении отвечал FALSE: одна декларация — два ответа,
-    // и `spent` конверта расходился бы с оракулом (`aggregates.ts` коалесит так же).
+    // и `spent` конверта разошёлся бы с SQL-ведомостью (снесённый срезом Б-2 оракул коалесил так
+    // же).
     const s = scopeOf({ props: {}, binding: MOVEMENT_BINDING, defaults: DEFAULTS });
     expect(evalExpr({ op: '=', args: [{ slot: 'planned' }, { const: false }] }, s)).toBe(true);
     expect(
@@ -460,9 +461,9 @@ describe('evalExpr: арифметика дат (§Б3-2: date_add / date_diff /
 /**
  * Формулы берутся ИЗ САМОЙ ДЕКЛАРАЦИИ (`BUDGET_DEF`, норматив §Б5-4), а не переписываются рядом:
  * копия рядом делала бы заголовок «то, что сеет задача 9» обещанием, а не фактом, и расхождение
- * декларации с оракулом (охрана `remaining >= "0"` у `daily_pace` — рулинг Ф-Б1-34) этот сьют бы
- * проспал. Порог тревоги декларация задаёт не выражением, а числом (`alerts.warn_at`), и сравнение
- * из него собирает движок — здесь собрано так же, из того же поля.
+ * декларации с прежним эталоном (охрана `remaining >= "0"` у `daily_pace` — рулинг Ф-Б1-34) этот
+ * сьют бы проспал. Порог тревоги декларация задаёт не выражением, а числом (`alerts.warn_at`), и
+ * сравнение из него собирает движок — здесь собрано так же, из того же поля.
  */
 function seededFormula(name: string): ExprNode {
   const agg = BUDGET_DEF.aggregates[name];
@@ -543,7 +544,7 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
     },
     {
       // Свидетель запрета округлять `decMul`: 0.85 · 100.04 = 85.034, округлённое — 85.03, и
-      // spent = 85.03 из «не тревога» (оракул: 20·85.03 = 1700.60 < 17·100.04 = 1700.68) стал бы
+      // spent = 85.03 из «не тревога» (целыми: 20·85.03 = 1700.60 < 17·100.04 = 1700.68) стал бы
       // «тревога». На 100.01 вердикт не менялся бы — округление там идёт ВВЕРХ.
       name: 'копеечный лимит: 0.85 · 100.04 = 85.034 — округление сменило бы вердикт',
       limit: '100.04',
@@ -571,8 +572,9 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
       if (env.carryover !== undefined) props['orbis/carryover'] = env.carryover;
       const base = scopeOf({ props, binding: ENVELOPE_BINDING, phase: env.phase });
 
-      // Эталон aggregates.ts:342 — дословно, включая подстановку '0' на нестроку (Р-К-13: после
-      // среза А валидатор не пускает нестроку в decimal-свойство, ветка недостижима).
+      // Эталон — формула снесённого срезом Б-2 оракула дословно, включая подстановку '0' на
+      // нестроку (Р-К-13: после среза А валидатор не пускает нестроку в decimal-свойство, ветка
+      // недостижима).
       const oracleLimit = decAdd(
         env.limit,
         typeof env.carryover === 'string' ? env.carryover : '0',
@@ -581,14 +583,14 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
         `${env.name}: ${oracleLimit}`,
       );
 
-      // Эталон aggregates.ts:363
+      // Эталон — `remaining = effective_limit − spent` того же оракула
       const withLimit = { ...base, aggs: { spent: env.spent, effective_limit: oracleLimit } };
       const oracleRemaining = decSub(oracleLimit, env.spent);
       expect(`${env.name}: ${String(evalExpr(REMAINING, withLimit))}`).toBe(
         `${env.name}: ${oracleRemaining}`,
       );
 
-      // Эталон aggregates.ts:365-368. Закрытая фаза — гейт ЛЕНИВОСТИ `if`: days_inclusive(today,
+      // Эталон — `daily_pace` того же оракула. Закрытая фаза — гейт ЛЕНИВОСТИ `if`: days_inclusive(today,
       // period_end) там равен 0, и посчитайся плечо жадно, было бы деление на ноль вместо null.
       const withRemaining = {
         ...withLimit,
@@ -602,7 +604,8 @@ describe('evalExpr: формулы Budget §Б5-4 бит-в-бит с aggregates
         `${env.name}: ${String(oraclePace)}`,
       );
 
-      // Эталон aggregates.ts:390-392 (порог 0.85 ВКЛЮЧИТЕЛЬНО, sign-off владельца 2026-07-23)
+      // Эталон — порог целыми, как его писал снесённый срезом Б-2 оракул (0.85 ВКЛЮЧИТЕЛЬНО, sign-off
+      // владельца 2026-07-23)
       const oracleAlert = decCmp(decMulInt(env.spent, 20), decMulInt(oracleLimit, 17)) >= 0;
       expect(`${env.name}: ${String(evalExpr(ALERT, withRemaining))}`).toBe(
         `${env.name}: ${String(oracleAlert)}`,
@@ -652,8 +655,9 @@ describe('evalExpr: deref — одношаговое разыменование 
     expect(evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, empty)).toBeNull();
   });
 
-  test('компоненты ключа порядка карточек §Б5-4 №6 — те же, что у aggregates.ts:576-582', () => {
-    // Сегодня ключ склеивает КОД: название категории, разделитель NUL, period_start, NUL, id.
+  test('компоненты ключа порядка карточек §Б5-4 №6 — те же, что у прежнего ключа Overview кодом', () => {
+    // Прежний Overview кодом (оракул, снесён срезом Б-2) склеивал ключ: название категории,
+    // разделитель NUL, period_start, NUL, id.
     // Декларация даёт те же три компонента; склейку делает движок (задача 9), значения — этот бэкенд.
     const parts = [
       evalExpr({ deref: { slot: 'category', read: 'orbis/title' } }, scope),

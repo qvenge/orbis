@@ -71,7 +71,8 @@ export function envelopeIdentityOf(reg: RegistrySnapshot): readonly string[] {
  * Перенос остатка (`orbis/carryover`) не переживает смену идентичности конверта.
  *
  * Перенос — это «сколько осталось от ПРОШЛОГО периода ЭТОЙ категории», и он входит в
- * `effectiveLimit = limit + carryover` (03-budget §2.6, `budget/aggregates.ts:264`). Стоит
+ * `effectiveLimit = limit + carryover` (03-budget §2.6; ведомость `effective_limit` декларации
+ * `orbis/budget-overview`). Стоит
  * владельцу перенести конверт на новый период (или на другую категорию/валюту), и прежний
  * остаток перестаёт что-либо значить: он посчитан не про этот период. Оставить его значило
  * бы молча завысить лимит — и не отказом, который видно, а числом, которое врёт и в Overview,

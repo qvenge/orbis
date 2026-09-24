@@ -314,7 +314,7 @@ afterAll(async () => {
 
 /**
  * «Конверт-родитель» — РОВНО роль `envelope-binding`, одна и та же у всех троих читателей:
- * агрегатов (`spentByEnvelope`, unbudgeted), хука привязки (`budgetParentsOfMany`) и
+ * ведомостей `spent`/`unbudgeted` движка подписки, хука привязки (`budgetParentsOfMany`) и
  * карточки импорта. Урок C1 Задачи 7a остаётся в силе — расхождение множества у двух
  * читателей стоило владельцу двойного счёта денег, — но само множество схлопнулось.
  *
@@ -699,7 +699,7 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
     const cat = newId();
     await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
     // Шаблон с occurred_on (валиден §3.3: recurrence на той же сущности); until в прошлом —
-    // инстансы не материализуются, изоляция ровно на SQL-фильтр spentByEnvelope
+    // инстансы не материализуются, изоляция ровно на SQL-фильтр «не шаблон» набора `facts`
     const tpl = await exec(user, 'entity_create', {
       title: 'Шаблон с висящей связью',
       tags: [],
