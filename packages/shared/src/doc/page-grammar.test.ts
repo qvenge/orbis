@@ -476,6 +476,12 @@ describe('текстом остаётся всё незнакомое §5.7', ()
     '{{column: x}}',
     '{{card:}}',
     '{{tab:}}',
+    '{{card: }}',
+    '{{card:   }}',
+    '{{card:\t}}',
+    '{{tab: }}',
+    '{{tab:   }}',
+    '{{tab:\t \t}}',
     '{{Title}}',
     '{{title}} хвост',
   ])('%p — текст', (src) => {
@@ -488,6 +494,13 @@ describe('текстом остаётся всё незнакомое §5.7', ()
     const [node] = parse(src);
     if (node?.kind !== 'tabs') throw new Error('ожидались вкладки');
     expect(node.parts[0]?.children).toEqual([text('{{/tab: x}}\n')]);
+  });
+
+  test('{{tab: a}} b}} — вкладка с подписью «a}} b»: закрытие ищется у конца строки', () => {
+    const src = lines('{{tabs}}', '{{tab: a}} b}}', '{{/tab}}', '{{/tabs}}');
+    const [node] = parse(src);
+    if (node?.kind !== 'tabs') throw new Error('ожидались вкладки');
+    expect(node.parts.map((p) => p.label)).toEqual(['a}} b']);
   });
 
   test('пустое тело — пустой список', () => {
@@ -739,6 +752,43 @@ describe('блок данных {{query:…}}', () => {
   });
 });
 
+describe('разбор линейный на патологических телах', () => {
+  // Порог щедрый: линейный разбор укладывается в единицы миллисекунд, а квадратичный на 50 тыс.
+  // символов — в секунды. Узкий порог дал бы флак на медленной машине CI, широкий всё равно ловит.
+  const timed = (src: string) => {
+    const t = performance.now();
+    const nodes = parsePageText(src);
+    return { nodes, ms: performance.now() - t };
+  };
+
+  test.each([
+    '{{tab:',
+    '{{card:',
+    '{{tab: x',
+    '{{card: x',
+  ])('%p + 50 тыс. пробелов без }} — быстро и текстом', (head) => {
+    const src = head + ' '.repeat(50_000);
+    const { nodes, ms } = timed(src);
+    expect(nodes).toEqual([text(src)]);
+    expect(ms).toBeLessThan(200);
+  });
+
+  test('100 тыс. строк {{query: без }} — быстро и текстом', () => {
+    const src = '{{query:\n'.repeat(100_000);
+    const { nodes, ms } = timed(src);
+    expect(nodes).toEqual([text(src)]);
+    expect(ms).toBeLessThan(200);
+  });
+
+  test('память о ближайшем }} не сбивает блоки: каждый блок кончается на своём }}', () => {
+    expect(parse('{{query:a\n{{query:b}}\n{{query:c}}}\n{{query:d')).toEqual([
+      { kind: 'query', text: 'a\n{{query:b', raw: '{{query:a\n{{query:b}}\n' },
+      { kind: 'query', text: 'c', raw: '{{query:c}}' },
+      text('}\n{{query:d'),
+    ]);
+  });
+});
+
 describe('инвариант «склейка = вход» на случайных телах', () => {
   /** mulberry32 — детерминированный генератор: упавший случай воспроизводится сидом. */
   const rng = (seed: number) => () => {
@@ -859,14 +909,27 @@ describe('инвариант «склейка = вход» на случайны
 
 describe('листовость модуля', () => {
   const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+  const IMPORT_RE = /^\s*import\b/m;
+  const REEXPORT_RE = /^\s*export\b[^;]*\bfrom\s*['"]/m;
+  const DYNAMIC_RE = /\brequire\s*\(|\bimport\s*\(/;
 
   test('исходник page-grammar.ts не импортирует ничего', () => {
     // Строже, чем у diff.ts: здесь нет даже типовых импортов. Модуль читают первый кадр записи и
     // рендерер экрана, и любой импорт — кандидат протащить tiptap или marked в эагерный чанк.
-    expect(read('./page-grammar.ts')).not.toMatch(/^\s*import\b/m);
-    expect(read('./page-grammar.ts')).not.toMatch(/\brequire\(|\bimport\(/);
-    // Положительный контроль: тот же грep на тяжёлом соседе срабатывает.
-    expect(read('./convert.ts')).toMatch(/^\s*import\b/m);
+    const src = read('./page-grammar.ts');
+    expect(src).not.toMatch(IMPORT_RE);
+    // Реэкспорт тянет модуль так же, как импорт: `export { parseBody } from './convert'` протащил
+    // бы схему Tiptap, не написав ни одного `import` (поймано ревью: прежний сторож молчал).
+    expect(src).not.toMatch(REEXPORT_RE);
+    expect(src).not.toMatch(DYNAMIC_RE);
+    // Положительный контроль: те же регэкспы срабатывают на тяжёлом соседе и на образцах —
+    // иначе зелёный сторож мог бы значить лишь сломанный регэксп.
+    expect(read('./convert.ts')).toMatch(IMPORT_RE);
+    expect(read('./index.ts')).toMatch(REEXPORT_RE);
+    expect("export { parseBody } from './convert';").toMatch(REEXPORT_RE);
+    expect("export * from './convert'").toMatch(REEXPORT_RE);
+    expect("const m = await import ('./convert');").toMatch(DYNAMIC_RE);
+    expect("require('./convert')").toMatch(DYNAMIC_RE);
   });
 
   test('сабпат @orbis/shared/doc/page-grammar объявлен в exports', () => {
