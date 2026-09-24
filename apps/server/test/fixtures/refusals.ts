@@ -884,10 +884,14 @@ const ROW_10: RefusalRow = {
  * лежать: вердикт объявлен здесь же, данными, как у строк.
  */
 export async function slotAmbiguityDetails(): Promise<{ got: unknown; want: unknown }> {
-  await run(world().owner, 'entity_update', {
-    id: world().ambiguousId,
-    props: { [GATE_PROPS.plainAt]: world().tomorrowAt, 'orbis/start_at': world().tomorrowAt },
-  });
+  // Правка проверяется: молча не прошедшая, она оставила бы запись «вчера» от порчи строки 10, и отказ
+  // пришёл бы из секции просроченного — пин позеленел бы не на той секции, что обещает докблок.
+  okOfResult(
+    await run(world().owner, 'entity_update', {
+      id: world().ambiguousId,
+      props: { [GATE_PROPS.plainAt]: world().tomorrowAt, 'orbis/start_at': world().tomorrowAt },
+    }),
+  );
   let got: unknown;
   try {
     await agendaOf(world().owner);
@@ -1015,6 +1019,8 @@ const ruleCheck = (carrier: RuleCarrier, rule: unknown, others: readonly PlacedR
   assertRule(rule, {
     reg: ruleProbe([...others, { carrier, rules: [rule] }]),
     carrier,
+    // Флаг гейтит только ступень 10 (граница C-6 — `has_relation` в правиле владельца), а ни один вход
+    // строк 11/19/20 его не читает: владелец идёт тем же `assertRule` с `false` и получает тот же вердикт.
     systemSeed: true,
   });
 const ruleCheckOf = (f: RuleFixture) => ruleCheck(f.carrier, f.rule);
