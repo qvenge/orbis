@@ -609,3 +609,71 @@ test('гейт шагов — ДО резолва: рутина без шага 
   );
   expect(owned).toEqual({ status: 'ok', result: [] });
 });
+
+test('гейт шагов — по КАЖДОМУ шагу, а не по первому: запрещён ВТОРОЙ шаг act-рутины → отказ, названный им (финал Б-2 E-4)', async () => {
+  // Одношаговые пробы выше держат только `steps[0]`: регрессия «проверять первый шаг» проходила бы их
+  // все. Здесь первый шаг рутине открыт, второй — нет; обёртка не провозит внутрь то, чего белый список
+  // не называет (§Б6-2, §С2-2; докблок `run.ts` о `batch_execute`).
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  const decl = synthetic({
+    steps: [
+      {
+        tool: 'entity_create',
+        input: { title: 'Сопутствующая заметка', tags: [], aspects: ['orbis/note'] },
+      },
+      {
+        tool: 'entity_update',
+        input: { id: { $expr: { ctx: '$self' } }, props: { 'orbis/planned': false } },
+      },
+    ],
+  });
+  const out = await runAction(
+    routineCtx({ mode: 'act', allowedTools: ['entity_create', 'run_action'] }),
+    withAction(snap, decl),
+    [],
+    decl.key,
+    { self: plannedKept },
+    NO_DEFER,
+  );
+  expect(out).toMatchObject({
+    status: 'error',
+    error: {
+      code: 'FORBIDDEN_LEVEL',
+      details: { reason: 'action_step_forbidden', tool: 'entity_update', mode: 'act' },
+    },
+  });
+  expect((await propsOf(plannedKept))['orbis/planned']).toBe(true);
+});
+
+test('скоуп worker — тоже по КАЖДОМУ шагу: второй шаг вне WORKER_SCOPE_TOOLS → отказ, названный им (финал Б-2 E-4)', async () => {
+  // Первый шаг — имя из `WORKER_SCOPE_TOOLS`. Законная декларация такого шага не несёт (шаги —
+  // `ACTION_STEP_TOOLS` и `attach_*`, `assertAction`), поэтому регрессия «только первый шаг» в ветке
+  // скоупа наблюдаема лишь синтетикой: тест пинит ЦИКЛ гейта, а не форму декларации.
+  const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+  const decl = synthetic({
+    steps: [
+      { tool: 'thread_post', input: { text: 'ход' } },
+      {
+        tool: 'entity_update',
+        input: { id: { $expr: { ctx: '$self' } }, props: { 'orbis/planned': false } },
+      },
+    ],
+  });
+  const grant = { id: newId(), scope: 'worker' as const, label: 'фон' };
+  const out = await runAction(
+    ctx({ actorKind: 'agent', source: 'mcp', grant }),
+    withAction(snap, decl),
+    [],
+    decl.key,
+    { self: plannedKept },
+    NO_DEFER,
+  );
+  expect(out).toMatchObject({
+    status: 'error',
+    error: {
+      code: 'FORBIDDEN_LEVEL',
+      details: { reason: 'action_step_forbidden', tool: 'entity_update', scope: 'worker' },
+    },
+  });
+  expect((await propsOf(plannedKept))['orbis/planned']).toBe(true);
+});
