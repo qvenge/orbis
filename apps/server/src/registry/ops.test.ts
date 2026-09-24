@@ -5531,3 +5531,37 @@ describe('фикс-раунд 1 задачи 16: снятие настройки
     expect(left[0]?.n).toBe(0);
   });
 });
+
+describe('фикс-раунд 1 задачи 16: слияние свойств меряет прирост конфликтов правил (гейт I-1)', () => {
+  test('конфликт, живший ДО слияния (своя строка против системного), слиянию не приписывается', async () => {
+    const g = await freshGraph();
+    // Своя строка с писателем `orbis/completed_at` на входе в `done` — как оставил бы её релиз, заведший
+    // системного конкурента (граница пересева: строки владельца сид не пишет). Кладётся фикстурой в обход
+    // валидатора — ровно то состояние, которое валидатор записи не пустил бы.
+    await seedCustomAspect(g, {
+      key: 'user/legacy-writer',
+      label: { ru: 'Старый писатель' },
+      properties: [
+        { key: 'lw-a', type: { kind: 'number' } },
+        { key: 'lw-b', type: { kind: 'number' } },
+      ],
+      rules: [
+        {
+          id: 'legacy_completed_at',
+          template: 'on_enter_class',
+          params: {
+            enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+            set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+          },
+        },
+      ],
+    });
+    ok(
+      await run(
+        'property_merge',
+        { source: 'user/lw-a', into: 'user/lw-b' },
+        { identity: personal(g) },
+      ),
+    );
+  });
+});

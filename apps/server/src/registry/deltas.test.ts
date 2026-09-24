@@ -26,6 +26,7 @@ import {
   type RegistryDeltaRow,
   registryConflictLine,
   relaxWhitelistViolations,
+  ruleMergeContextOf,
   type SubscriptionDelta,
   type SystemDefinitions,
   threeWayMerge,
@@ -1110,7 +1111,7 @@ describe('правила в дельте: эффективный список и
     expect(other.conflicts.map((c) => [c.kind, c.rule])).toEqual([['rule-conflict', undefined]]);
   });
 
-  test('отключение правила, которого в системе больше нет, снимается молча', () => {
+  test('отключение правила, которого в системе больше нет, снимается — С ЗАМЕТКОЙ, без единицы (Fable M-1)', () => {
     // «Нет в системе» — пустой список правил носителя в НОВОЙ системе: встроенный снимок теста
     // несёт системные правила задачи (`BUILTIN_ASPECT_DEFS`), и `snapshotWith()` здесь не годится.
     const m = threeWayMerge(
@@ -1118,8 +1119,98 @@ describe('правила в дельте: эффективный список и
       systemOf(withSystemRule([])),
       row('aspect', 'orbis/task', { rulesDisabled: ['task_completed_at'] }),
     );
-    expect(m.conflicts).toEqual([]);
+    // Релиз снял или переименовал правило — его преемник работает снова, и владелец это узнаёт.
+    expect(m.conflicts.map((c) => [c.kind, c.rule])).toEqual([['rule-conflict', undefined]]);
+    expect(m.conflicts[0]?.detail).toContain('отключение «task_completed_at» снято');
     expect((m.merged as AspectDelta).rulesDisabled).toBeUndefined();
+  });
+
+  test('Ф-Б2-28: конкурент на ДРУГОМ носителе — конфликт, своё отключено, носитель конкурента в конфликте', () => {
+    // Своё правило — в дельте ЗАМЕТКИ, системное-конкурент — на ЗАДАЧЕ: ключ (событие, свойство) общий.
+    const noteRow = row('aspect', 'orbis/note', { rules: [{ ...system, id: 'my_completed_at' }] });
+    const next = systemOf(withSystemRule([system]));
+    const withoutContext = threeWayMerge(systemOf(withSystemRule([])), next, noteRow);
+    expect(withoutContext.conflicts).toEqual([]); // прежний дефект: конкурент искался только в строке-цели
+    const m = threeWayMerge(
+      systemOf(withSystemRule([])),
+      next,
+      noteRow,
+      ruleMergeContextOf(next, [noteRow], [], { kind: 'aspect', id: 'orbis/note' }),
+    );
+    expect(m.conflicts.map((c) => [c.kind, c.rule])).toEqual([
+      [
+        'rule-conflict',
+        {
+          mine: 'my_completed_at',
+          theirs: 'task_completed_at',
+          theirsAt: { kind: 'aspect', id: 'orbis/task' },
+        },
+      ],
+    ]);
+    expect((m.merged as AspectDelta).rulesDisabled).toEqual(['my_completed_at']);
+  });
+
+  test('Ф-Б2-28: дельта СВОЙСТВА против системного на аспекте (проба P1 гейта) — конфликт', () => {
+    const writer = ruleDefinitionSchema.parse({
+      id: 'my_due_default',
+      template: 'default',
+      params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+    });
+    const sysDefault = ruleDefinitionSchema.parse({ ...writer, id: 'sys_due_default' });
+    const propRow = row('property', 'orbis/due_date', { rules: [writer] });
+    const next = systemOf(withSystemRule([sysDefault]));
+    const m = threeWayMerge(
+      systemOf(withSystemRule([])),
+      next,
+      propRow,
+      ruleMergeContextOf(next, [propRow], [], { kind: 'property', id: 'orbis/due_date' }),
+    );
+    expect(m.conflicts[0]?.rule).toEqual({
+      mine: 'my_due_default',
+      theirs: 'sys_due_default',
+      theirsAt: { kind: 'aspect', id: 'orbis/task' },
+    });
+    expect((m.merged as PropertyDelta).rulesDisabled).toEqual(['my_due_default']);
+  });
+
+  test('Ф-Б2-28: совпавший id на ДРУГОМ носителе — своё снято с заметкой и декларацией', () => {
+    const noteRow = row('aspect', 'orbis/note', { rules: [{ ...mine, id: 'shared_id' }] });
+    const next = systemOf(withSystemRule([{ ...system, id: 'shared_id' }]));
+    const m = threeWayMerge(
+      next,
+      next,
+      noteRow,
+      ruleMergeContextOf(next, [noteRow], [], { kind: 'aspect', id: 'orbis/note' }),
+    );
+    expect(m.merged).toEqual({});
+    expect(m.conflicts.map((c) => [c.kind, c.rule])).toEqual([['rule-conflict', undefined]]);
+    expect(m.conflicts[0]?.detail).toContain('на другом носителе');
+    expect(m.conflicts[0]?.detail).toContain('"template":"requires_when"');
+  });
+
+  test('m-1: id снятого близнеца уходит из rulesDisabled — новое системное правило с тем же id работает (проба P2)', () => {
+    const next = systemOf(
+      withSystemRule([
+        ruleDefinitionSchema.parse({
+          id: 'my_x',
+          template: 'requires_when',
+          params: { property: 'orbis/priority' },
+        }),
+      ]),
+    );
+    const m = threeWayMerge(
+      systemOf(withSystemRule([])),
+      next,
+      row('aspect', 'orbis/task', { rules: [{ ...mine, id: 'my_x' }], rulesDisabled: ['my_x'] }),
+    );
+    expect(m.merged).toEqual({});
+    expect(
+      idsOf(
+        applyDeltas({ ...snapshotWith(), aspects: new Map(next.aspects) } as RegistrySnapshot, [
+          row('aspect', 'orbis/task', m.merged),
+        ]),
+      ),
+    ).toEqual(['my_x']);
   });
 
   test('дельта свойства сливается тем же правилом: подпись сохраняется, конкурент выключает своё', () => {

@@ -177,6 +177,28 @@ const pendingRecord = z
      */
     undo_of: z.string().uuid().optional(),
     /**
+     * Строка дельты реестра, на которую рассчитана единица пересева (Fable I-3 задачи 16, гейт m-8): её
+     * слитое содержимое на момент постановки. «Принять» сверяет его с ТЕКУЩЕЙ строкой — владелец, правивший
+     * правила или настройку аспекта после заметки, иначе получил бы свою правку молча откатанной
+     * сохранённым payload'ом. Не совпало — единица гаснет «Устарело» (прецедент — действия §Б6-7).
+     * Условная запись: у прочих вызывателей ключа нет.
+     */
+    expected_delta: z
+      .object({
+        target_kind: z.enum([
+          'property',
+          'aspect',
+          'contract',
+          'relation_role',
+          'subscription',
+          'action',
+        ]),
+        target_id: z.string().min(1),
+        delta: z.unknown(),
+      })
+      .strict()
+      .optional(),
+    /**
      * Предложение, из правки которого это рождено (Ш1.5): владелец поправил значения ДО
      * принятия, исходное погашено причиной `edited`, а рядом легло вот это. Тот же приём,
      * что с грантом и прогоном: ключа нет у всех, кто родился не из правки.
@@ -370,6 +392,8 @@ interface CreatePendingCommon {
    * `tools/dispatch.ts`), а не payload — его веб не рисует.
    */
   undoOf?: string;
+  /** Ожидаемая строка дельты (единица пересева) — см. `expected_delta` схемы записи. */
+  expectedDelta?: { targetKind: string; targetId: string; delta: unknown };
 }
 
 /**
@@ -496,6 +520,14 @@ export async function createPending(
         // И для отката (В-8): ключ есть только у карточки `undo_last`, и по нему approve
         // исполняет её откатом, а не пачкой
         ...(args.undoOf !== undefined && { undo_of: args.undoOf }),
+        // И для единицы пересева (Fable I-3): по ключу «Принять» сверяет строку дельты
+        ...(args.expectedDelta !== undefined && {
+          expected_delta: {
+            target_kind: args.expectedDelta.targetKind,
+            target_id: args.expectedDelta.targetId,
+            delta: args.expectedDelta.delta,
+          },
+        }),
         created_at: createdAt.toISOString(),
       },
       cards: [card],
@@ -536,6 +568,7 @@ export async function createSystemPending(
     card?: Card;
     dedupeKey?: string;
     clock?: () => Date;
+    expectedDelta?: { targetKind: string; targetId: string; delta: unknown };
   },
 ): Promise<{ id: string }> {
   const { pendingId } = await createPending(tx, {
@@ -549,6 +582,7 @@ export async function createSystemPending(
     ...(args.card !== undefined && { card: args.card }),
     ...(args.dedupeKey !== undefined && { dedupeKey: args.dedupeKey }),
     ...(args.clock !== undefined && { clock: args.clock }),
+    ...(args.expectedDelta !== undefined && { expectedDelta: args.expectedDelta }),
   });
   return { id: pendingId };
 }
@@ -714,6 +748,29 @@ async function actionStateOf(
   if (decl.status === 'deprecated') return { stale: 'действие снято' };
   if (actionHash(decl) !== pending.action_hash) return { stale: 'декларация изменена' };
   return { decl, reg };
+}
+
+const DELTA_STALE_TEXT =
+  'Единица устарела: настройку изменили после обновления — разберите правила заново';
+
+/**
+ * Свежесть строки дельты у единицы пересева (Fable I-3 задачи 16): `null` — ключа нет или строка та же;
+ * иначе — причина. Сверка КАНОНИЧЕСКОЙ формой: jsonb не хранит порядок ключей.
+ */
+async function expectedDeltaStaleOf(
+  tx: Tx,
+  graphId: GraphId,
+  pending: PendingRecord,
+): Promise<string | null> {
+  const want = pending.expected_delta;
+  if (want === undefined) return null;
+  const rows = (await tx.execute(sql`
+    SELECT delta FROM registry_deltas
+     WHERE graph_id = ${graphId}::uuid AND target_kind = ${want.target_kind}
+       AND target_id = ${want.target_id}`)) as unknown as Array<{ delta: unknown }>;
+  const now = rows[0]?.delta;
+  if (now === undefined) return 'настройки больше нет';
+  return canonicalJson(now) === canonicalJson(want.delta) ? null : 'настройка изменена';
 }
 
 /**
@@ -914,9 +971,19 @@ export async function approvePending(
       assertNotQuestion(msg.pending); // род записи неизменяем — перепроверять под замком нечего
       // «УСТАРЕЛО» (§Б6-7) — только у НЕисполненной единицы: исполненную повторяет replay (см.
       // `isExecuted`), и гасить её нечем — отклонить исполненное нельзя.
-      const act = (await isExecuted(tx, graphId, args.pendingId))
-        ? null
-        : await actionStateOf(tx, graphId, msg.pending);
+      const executed = await isExecuted(tx, graphId, args.pendingId);
+      const act = executed ? null : await actionStateOf(tx, graphId, msg.pending);
+      // Единица пересева — сверка строки дельты (Fable I-3), тем же гашением, что у действия.
+      const deltaStale = executed ? null : await expectedDeltaStaleOf(tx, graphId, msg.pending);
+      if (deltaStale !== null) {
+        await rejectPendingTx(tx, {
+          identity: args.identity,
+          pendingId: args.pendingId,
+          reason: 'stale',
+          text: DELTA_STALE_TEXT,
+        });
+        return { msg, stale: deltaStale, staleOf: 'delta' as const, live: undefined };
+      }
       if (act !== null && 'stale' in act) {
         // ГАШЕНИЕ ПИШЕТСЯ ЭТОЙ ЖЕ ТРАНЗАКЦИЕЙ, А ОТКАЗ БРОСАЕТСЯ ПОСЛЕ ЕЁ КОММИТА. Бросок ВНУТРИ
         // откатил бы и запись гашения (Р-К-65) — владелец получил бы отказ поверх ОТКРЫТОЙ
@@ -929,7 +996,7 @@ export async function approvePending(
           reason: 'stale',
           text: ACTION_STALE_TEXT,
         });
-        return { msg, stale: act.stale, live: undefined };
+        return { msg, stale: act.stale, staleOf: 'action' as const, live: undefined };
       }
       if (await isRejected(tx, args.pendingId)) {
         throw new ExecError(
@@ -938,8 +1005,14 @@ export async function approvePending(
           { pendingId: args.pendingId },
         );
       }
-      return { msg, stale: null, live: act ?? undefined };
+      return { msg, stale: null, staleOf: null, live: act ?? undefined };
     });
+    if (found.stale !== null && found.staleOf === 'delta') {
+      throw new ExecError('VALIDATION', `единица устарела — снята: ${found.stale}`, {
+        reason: 'REGISTRY_UNIT_STALE',
+        pendingId: args.pendingId,
+      });
+    }
     if (found.stale !== null) {
       throw new ExecError(
         'VALIDATION',

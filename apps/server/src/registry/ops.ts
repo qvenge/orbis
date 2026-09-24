@@ -1163,6 +1163,7 @@ async function assertMergeLeftRegistryReadable(
   graphId: GraphId,
   source: string,
   into: string,
+  conflictsBefore: ReadonlyMap<string, unknown>,
 ): Promise<void> {
   try {
     const reg = await currentRegistry(tx, graphId);
@@ -1170,7 +1171,10 @@ async function assertMergeLeftRegistryReadable(
     // по отдельности законные (умолчание на источнике и умолчание на цели), становятся двумя писателями
     // одного свойства — `applyDeltas` этого не видит, а движок исполнял бы их в порядке обхода. Круг
     // «свойство → правило → свойство» тем же способом спрашивает граф (`REGISTRY_CYCLE` уходит в catch).
-    const clash = ruleConflictsOf(rulesOf(reg).map((r) => r.rule))[0];
+    // Мерка — ПРИРОСТ (гейт 16 I-1): конфликт, живший в снимке ДО слияния (правило своей строки против
+    // нового системного — граница пересева, `ruleMergeContextOf`), не вина слияния, и отказ «слияние
+    // свело правила» про него был бы ложью.
+    const clash = [...conflictKeysOf(reg)].find(([key]) => !conflictsBefore.has(key))?.[1];
     if (clash !== undefined) {
       throw new ExecError(
         'REGISTRY_CONFLICT',
@@ -1544,6 +1548,8 @@ export async function mergeProperty(
 ): Promise<MergeResult> {
   const reg = await currentRegistry(tx, graphId);
   const { source, into } = resolveMergePair(reg, input);
+  // Конфликты правил ДО слияния — база мерки прироста у пробы после переписывания.
+  const conflictsBefore = conflictKeysOf(reg);
   const conflicts = await mergeValueConflicts(tx, source.id, into.id);
   if (conflicts.length > 0) {
     throw new ExecError(
@@ -1814,7 +1820,7 @@ export async function mergeProperty(
   // них разные `required` и `rank`, и выбор между ними — решение владельца, а не операции
   // (тот же довод, по которому §А3-3 не сливает молча два похожих варианта). Отказ говорит,
   // что разобрать надо настройку, и оставляет разбор тому, кто её делал.
-  await assertMergeLeftRegistryReadable(tx, graphId, source.id, into.id);
+  await assertMergeLeftRegistryReadable(tx, graphId, source.id, into.id, conflictsBefore);
 
   await bumpOwnerRegistryVersion(tx, graphId);
 

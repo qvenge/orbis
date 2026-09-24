@@ -17,7 +17,7 @@
 // pending, позвав этот файл, замкнул бы кольцо). Дом выбран так, чтобы граница была ОДНА и
 // накрывала все пути исполнения сохранённого payload'а, а не перечисляла их: перечень
 // границ — ровно тот класс дефекта, который в этой ветке уже подводил четырежды.
-import type { GraphId } from '@orbis/shared';
+import { type GraphId, newId, type RuleDefinition } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
 import { createSystemPending } from '../policy/pending';
 import type { AspectDelta, RegistryConflict, RegistryDelta } from './deltas';
@@ -83,10 +83,12 @@ export function driftConflictDecidable(conflicts: readonly RegistryConflict[]): 
  * найдёт (`base_version` переехал), и конфликт замолчит навсегда. Тот же довод, по которому
  * рядом пишется системная заметка (`db/seed-registries.ts`).
  *
- * Нагрузка единицы — `aspect_delta_set` с ТОЙ ЖЕ дельтой, минус спорный вариант: одобрение
- * идёт обычным конвейером (`approvePending` → `execute`), то есть проходит проверку
- * применимости и поднимает версию реестра, как любая другая правка. Второго пути записи
- * дельты «для конфликтов» здесь нет намеренно.
+ * Нагрузка единицы варианта — `aspect_delta_set` с ТОЙ ЖЕ дельтой, минус спорный вариант; единицы
+ * конфликта правил — пачка двух тулов правил (`createRuleConflictUnit`). Одобрение идёт обычным
+ * конвейером (`approvePending` → `execute`), то есть проходит проверку применимости и поднимает
+ * версию реестра, как любая другая правка. Второго пути записи дельты «для конфликтов» здесь нет
+ * намеренно. Обе единицы несут ожидаемую строку дельты (`expected_delta`): правка владельца после
+ * пересева гасит единицу «Устарело», а не откатывается ею молча (Fable I-3, гейт m-8).
  */
 export async function createDriftConflictUnits(
   tx: Tx,
@@ -103,14 +105,14 @@ export async function createDriftConflictUnits(
     // Нагрузка единицы — `aspect_delta_set`; у конфликтов контракта и подписки тула разрешения в
     // Б-1 ещё нет (задача 16), и карточка вела бы к кнопке без исполнителя. Гвард стоит и ради
     // каста ниже: `merged as AspectDelta` на дельте контракта читал бы чужую форму.
-    // У конфликта ПРАВИЛ на встроенном СВОЙСТВЕ тула разрешения в Б-2 тоже нет: нужен обмен двух id
-    // ОДНОЙ дельтой свойства, а `rule_set`/`rule_remove` пишут по одному правилу за вызов (второй вызов
-    // проверяется уже против первого). Владелец получает заметку — это записанный остаток среза.
-    if (conflict.targetKind !== 'aspect') continue;
+    // Конфликт ПРАВИЛ разрешается ДВУМЯ тулами правил одной пачкой (`createRuleConflictUnit`), и род
+    // строки-цели ему не важен: встроенное свойство и конкурент на другом носителе (Ф-Б2-28) — тоже.
     if (conflict.kind === 'rule-conflict') {
+      if (conflict.targetKind !== 'aspect' && conflict.targetKind !== 'property') continue;
       out.push(await createRuleConflictUnit(tx, args, conflict));
       continue;
     }
+    if (conflict.targetKind !== 'aspect') continue;
     const option = conflict.option;
     const propertyId = conflict.propertyId;
     if (option === undefined || propertyId === undefined) continue;
@@ -151,6 +153,9 @@ export async function createDriftConflictUnits(
       // Детерминированный ключ: пересев считает конфликты заново на каждом прогоне, и без
       // него повторный деплой той же версии клал бы вторую карточку о том же самом.
       dedupeKey: `drift-conflict:${args.deltaRowId}:${args.systemVersion}:${propertyId}:${option.mine}`,
+      // Нагрузка — ПОЛНАЯ дельта времени пересева, и «Принять» после правки владельцем откатило бы
+      // правку молча (гейт 16 m-8): свежесть строки сверяется на approve (`expected_delta`).
+      expectedDelta: { targetKind: 'aspect', targetId: conflict.targetId, delta: args.merged },
     });
     out.push(id);
   }
@@ -158,30 +163,54 @@ export async function createDriftConflictUnits(
 }
 
 /**
- * Единица конфликта правил: нагрузка — `aspect_delta_set` с ТОЙ ЖЕ слитой дельтой и ОДНОЙ заменой в
- * `rulesDisabled` (`mine` уходит, `theirs` приходит). Второго пути записи нет по доводу
- * `createDriftConflictUnits`: «Принять» идёт обычным конвейером и проходит проверки записи правил
- * (`setAspectDelta` — валидатор, ацикличность, строки-носители движков).
+ * Единица конфликта правил: ПАЧКА из двух тулов правил — `rule_remove` конкурента ТАМ, где он живёт, и
+ * `rule_set` своего правила (заведение заново снимает его отключение, `setRuleDelta`). Не `aspect_delta_set`
+ * с обменом id в одной дельте: конкурент бывает на ДРУГОМ носителе (Ф-Б2-28 — ключ конфликта глобален), а
+ * своё правило — на встроенном свойстве; одна дельта одного носителя такого обмена не выражает. Порядок в
+ * пачке — сперва отключение, затем включение: вторая операция проверяется уже против первой. «Принять» идёт
+ * обычным конвейером и проходит все проверки записи правил; второго пути записи нет по доводу
+ * `createDriftConflictUnits`.
+ *
+ * Свежесть: ожидаемая строка дельты-цели (`expected_delta`) сверяется на approve (Fable I-3): правка правил
+ * владельцем после заметки гасит единицу «Устарело», а не откатывается сохранённым payload'ом.
  */
 async function createRuleConflictUnit(
   tx: Tx,
   args: { graphId: GraphId; systemVersion: number; deltaRowId: string; merged: RegistryDelta },
   conflict: RegistryConflict,
 ): Promise<string> {
-  const rule = conflict.rule as { mine: string; theirs: string };
-  const merged = args.merged as AspectDelta;
-  const rulesDisabled = [
-    ...new Set([...(merged.rulesDisabled ?? []).filter((id) => id !== rule.mine), rule.theirs]),
-  ];
+  const rule = conflict.rule as NonNullable<RegistryConflict['rule']>;
+  const merged = args.merged as { rules?: RuleDefinition[] };
+  const mine = (merged.rules ?? []).find((r) => r.id === rule.mine);
+  const at = rule.theirsAt ?? { kind: conflict.targetKind, id: conflict.targetId };
+  const addr = (kind: string, id: string) => ({ [kind]: id });
   const { id } = await createSystemPending(tx, {
     graphId: args.graphId,
-    tool: 'aspect_delta_set',
-    input: { aspect: conflict.targetId, delta: { ...merged, rulesDisabled } },
+    tool: 'batch_execute',
+    input: {
+      batch_id: newId(),
+      operations: [
+        { tool: 'rule_remove', input: { target: addr(at.kind, at.id), rule: rule.theirs } },
+        ...(mine === undefined
+          ? []
+          : [
+              {
+                tool: 'rule_set',
+                input: { target: addr(conflict.targetKind, conflict.targetId), rule: mine },
+              },
+            ]),
+      ],
+    },
     summary:
-      `Обновление завело правило «${rule.theirs}», которое спорит с вашим «${rule.mine}» ` +
+      `Обновление завело правило «${rule.theirs}» (${at.id}), которое спорит с вашим «${rule.mine}» ` +
       `(${conflict.targetId}). ${RULE_MERGE_EFFECT}`,
     // Детерминированный ключ — довод единицы варианта: пересев считает конфликты на каждом прогоне.
     dedupeKey: `drift-rule-conflict:${args.deltaRowId}:${args.systemVersion}:${rule.mine}`,
+    expectedDelta: {
+      targetKind: conflict.targetKind,
+      targetId: conflict.targetId,
+      delta: args.merged,
+    },
   });
   return id;
 }

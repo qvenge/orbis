@@ -17,6 +17,7 @@ import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { readSystemDefinitions, seedRegistries } from '../src/db/seed-registries';
 import { withIdentity } from '../src/db/with-identity';
+import { execute } from '../src/executor/executor';
 import { approvePending } from '../src/policy/pending';
 import { effectiveRegistry } from '../src/registry/cache';
 import { adminDb, appDb, freshGraph, personal, requireEnv } from './helpers';
@@ -592,7 +593,8 @@ describe('сид шести реестров', () => {
              WHERE m.thread_id IN (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)
                AND metadata ? 'pending'`,
       )) as unknown as { id: string; metadata: { pending: { tool: string } } }[];
-      expect(pending.map((p) => p.metadata.pending.tool)).toEqual(['aspect_delta_set']);
+      // Пачка двух тулов правил: отключить конкурента там, где он живёт, и завести своё заново.
+      expect(pending.map((p) => p.metadata.pending.tool)).toEqual(['batch_execute']);
       const approved = await approvePending(app.db, {
         identity: personal(owner),
         pendingId: pending[0]?.id as string,
@@ -609,6 +611,122 @@ describe('сид шести реестров', () => {
       await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
       // Системная строка обязана вернуться к коду при любом исходе теста (сид выше её уже починил;
       // упавший ДО сида тест оставил бы дрейф — чинится повтором сида).
+      await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      await raw.end();
+      await app.client.end();
+      await client.end();
+    }
+  }, 60_000);
+
+  /**
+   * КЛЮЧ КОНФЛИКТА ГЛОБАЛЕН (Ф-Б2-28, проба P1 гейта 16) — боевым путём сида: своё правило лежит в дельте
+   * ЗАМЕТКИ, системный конкурент приходит на ЗАДАЧУ. Прежний пересев искал конкурента только в строке-цели и
+   * оставлял движку двух писателей; теперь своё отключено, единица отключает конкурента на его носителе, а
+   * слияние свойств после этого не принимает чужой конфликт за свой.
+   */
+  test('пересев: конкурент на ДРУГОМ носителе — своё отключено, единица, «Принять»; слияние свойств не отказывает ложно', async () => {
+    const { db, client } = adminDb();
+    const app = appDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const owner = await freshGraph();
+    const mine = {
+      id: 'note_completed_at',
+      template: 'on_enter_class',
+      params: {
+        enter: { contract: 'orbis/completable', slot: 'status', in: ['done'] },
+        set: { property: 'orbis/completed_at', value: { prop: 'orbis/updated_at' } },
+      },
+      enabled: true,
+      undo: 'check',
+    };
+    try {
+      await db.execute(sql`TRUNCATE registry_deltas`);
+      await db.execute(sql`
+        UPDATE aspect_definitions
+           SET rules = (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM jsonb_array_elements(rules) e
+                         WHERE e->>'id' <> 'task_completed_at')
+         WHERE id = 'orbis/task' AND graph_id IS NULL`);
+      const baseVersion = await systemVersion(db);
+      await db.execute(sql`
+        INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+        VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/note', ${baseVersion},
+                ${JSON.stringify({ rules: [mine] })}::jsonb)`);
+      const result = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      expect(result.conflicts.map((c) => [c.kind, c.targetId, c.rule])).toEqual([
+        [
+          'rule-conflict',
+          'orbis/note',
+          {
+            mine: 'note_completed_at',
+            theirs: 'task_completed_at',
+            theirsAt: { kind: 'aspect', id: 'orbis/task' },
+          },
+        ],
+      ]);
+      const pending = (await db.execute(
+        sql`SELECT id, metadata FROM chat_messages m
+             WHERE m.thread_id IN (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)
+               AND metadata ? 'pending'`,
+      )) as unknown as {
+        id: string;
+        metadata: { pending: { input: { operations: unknown[] } } };
+      }[];
+      expect(pending[0]?.metadata.pending.input.operations).toEqual([
+        {
+          tool: 'rule_remove',
+          input: { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+        },
+        { tool: 'rule_set', input: { target: { aspect: 'orbis/note' }, rule: mine } },
+      ]);
+      // До «Принять» — у движка ровно один писатель: своё выключено.
+      const regOf = () =>
+        withIdentity(app.db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+      expect((await regOf()).aspects.get('orbis/note')?.rules.map((r) => r.id)).toEqual([]);
+      // Слияние своих свойств не принимает чужого конфликта за свой (мерка — прирост).
+      const prop = async (key: string) => {
+        const r = await execute(app.db, {
+          identity: personal(owner),
+          actorKind: 'owner',
+          source: 'ui',
+          operations: [
+            {
+              tool: 'property_create',
+              input: {
+                key,
+                label: { ru: key },
+                description: { ru: key },
+                type: { kind: 'number' },
+                status: 'active',
+              },
+            },
+          ],
+        });
+        if (!r.ok) throw new Error(r.error.message);
+        return (r.results[0] as { property: string }).property;
+      };
+      const [a, b] = [await prop('user/merge-a'), await prop('user/merge-b')];
+      const merged = await execute(app.db, {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool: 'property_merge', input: { source: a, into: b } }],
+      });
+      expect(merged.ok).toBe(true);
+      const approved = await approvePending(app.db, {
+        identity: personal(owner),
+        pendingId: pending[0]?.id as string,
+      });
+      expect(approved.ok).toBe(true);
+      const reg = await regOf();
+      expect(reg.aspects.get('orbis/note')?.rules.map((r) => r.id)).toEqual(['note_completed_at']);
+      expect(reg.aspects.get('orbis/task')?.rules.map((r) => r.id)).not.toContain(
+        'task_completed_at',
+      );
+    } finally {
+      await db.execute(sql`DELETE FROM registry_deltas WHERE graph_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
+        (SELECT id FROM chat_threads WHERE graph_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE graph_id = ${owner}::uuid`);
       await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
       await raw.end();
       await app.client.end();

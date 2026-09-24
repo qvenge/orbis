@@ -264,6 +264,12 @@ export interface SystemDefinitions {
   aspects: ReadonlyMap<string, AspectDefinition>;
   contracts: ReadonlyMap<string, ContractDefinition>;
   subscriptions: ReadonlyMap<string, SubscriptionRow>;
+  /**
+   * Роли — только ради ИДЕНТИЧНОСТИ правил при пересеве (`ruleMergeContextOf`, Ф-Б2-28): id правила один на
+   * весь снимок, и своё правило с id системной метки роли упёрлось бы в `RULE_ID_TAKEN` на следующей
+   * правке. Писателей на ролях нет — конфликтов они не дают. Необязательно: стороне «до» оно не нужно.
+   */
+  roles?: ReadonlyMap<string, { rules: readonly RuleDefinition[] }>;
 }
 
 /**
@@ -671,7 +677,15 @@ export interface RegistryConflict {
    * совпавшему ID поля нет: обмен отключений по одному id невыразим (отключение режет оба источника), и
    * по отсутствию поля единица не заводится — владелец получает заметку.
    */
-  rule?: { mine: string; theirs: string };
+  rule?: {
+    mine: string;
+    theirs: string;
+    /**
+     * Носитель конкурента, когда он НЕ строка-цель дельты (Ф-Б2-28: ключ конфликта глобален). Единица
+     * отключает конкурента ТАМ, где он живёт; у конкурента на той же строке поля нет.
+     */
+    theirsAt?: RuleCarrierRef;
+  };
 }
 
 /**
@@ -747,9 +761,30 @@ export function previewMergeConflicts(
   nextSystem: SystemDefinitions,
   rows: RegistryDeltaRow[],
   prevVersion: number,
+  ownRulesByGraph: ReadonlyMap<
+    string,
+    readonly { rule: RuleDefinition; carrier: RuleCarrierRef }[]
+  > = new Map(),
 ): RegistryConflict[] {
+  // Контекст правил — тот же, что у сида (`ruleMergeContextOf`, Ф-Б2-28): прочие дельты ЭТОГО владельца и
+  // правила его своих строк, если вызывающий их передал. Дельты сливаются как лежат, а не цепочкой, как у
+  // сида: предпросмотр ничего не пишет, и слитую раньше дельту соседа ему взять неоткуда — расхождение
+  // возможно только на владельце, у которого пересев разом трогает две дельты с общим конфликтом правил.
+  const byGraph = new Map<string, RegistryDeltaRow[]>();
+  for (const r of rows) byGraph.set(r.graphId, [...(byGraph.get(r.graphId) ?? []), r]);
   return rows.flatMap(
-    (row) => threeWayMerge(baseSystemFor(prevSystem, row, prevVersion), nextSystem, row).conflicts,
+    (row) =>
+      threeWayMerge(
+        baseSystemFor(prevSystem, row, prevVersion),
+        nextSystem,
+        row,
+        ruleMergeContextOf(
+          nextSystem,
+          byGraph.get(row.graphId) ?? [],
+          ownRulesByGraph.get(row.graphId) ?? [],
+          { kind: row.targetKind, id: row.targetId },
+        ),
+      ).conflicts,
   );
 }
 
@@ -810,6 +845,7 @@ export function threeWayMerge(
   prevSystem: SystemDefinitions,
   nextSystem: SystemDefinitions,
   row: RegistryDeltaRow,
+  context?: RuleMergeContext,
 ): { merged: RegistryDelta; conflicts: RegistryConflict[] } {
   const conflicts: RegistryConflict[] = [];
   if (row.targetKind === 'contract') {
@@ -918,7 +954,10 @@ export function threeWayMerge(
     const { rules: _rules, rulesDisabled: _off, ...rest } = delta;
     const baseRules = nextSystem.properties.get(row.targetId)?.rules ?? [];
     return {
-      merged: { ...rest, ...mergeRules(baseRules, delta, 'property', row.targetId, conflicts) },
+      merged: {
+        ...rest,
+        ...mergeRules(baseRules, delta, 'property', row.targetId, conflicts, context),
+      },
       conflicts,
     };
   }
@@ -1023,27 +1062,164 @@ export function threeWayMerge(
     ...(Object.keys(selectOptions).length > 0 && { selectOptions }),
     ...(Object.keys(classMap).length > 0 && { classMap }),
     // (4) Правила владельца против правил НОВОЙ системы (§А3-3, Р-И-35).
-    ...mergeRules(nextAspect?.rules ?? [], delta, 'aspect', row.targetId, conflicts),
+    ...mergeRules(nextAspect?.rules ?? [], delta, 'aspect', row.targetId, conflicts, context),
   };
   return { merged, conflicts };
 }
 
 /**
+ * КОНТЕКСТ ПРАВИЛ ВЛАДЕЛЬЦА ДЛЯ ПЕРЕСЕВА ОДНОЙ ДЕЛЬТЫ (Ф-Б2-28, гейт 16 I-1 = Fable I-2). Ключ конфликта
+ * писателей (`ruleConflictsOf`: событие + свойство) носителя не знает, и на записи `assertNoConflict` берёт
+ * ВЕСЬ снимок; значит и пересев обязан искать конкурента по всему снимку, а не в строке-цели дельты —
+ * иначе системное правило, заведённое релизом на ДРУГОМ носителе, отдало бы движку двух писателей одного
+ * свойства без конфликта, без отключения и без единицы.
+ *
+ * `otherLive` — включённые правила всех ПРОЧИХ носителей после пересева: система ⊕ прочие дельты этого
+ * владельца (их `rules` минус `rulesDisabled`) плюс правила его своих строк. `otherIds` — все id прочих
+ * носителей (включая выключенные и системные метки ролей) → декларация: по ним ловится совпавший id.
+ * Строка-цель в контекст не входит — её правила `mergeRules` берёт из новой системы и самой дельты.
+ *
+ * ГРАНИЦА, НАЗВАННАЯ ВСЛУХ: правило СВОЕЙ строки владельца, с которым спорит новое системное правило,
+ * отсюда не отключается — пересев правит дельты, а строки определений владельца пишет только исполнитель
+ * (глобальное ограничение: прямые записи сида — только system-строки). Такой конфликт живёт до жеста
+ * владельца (`rule_remove` своего или отключение системного — оба проходят: мерка писателей — прирост);
+ * слияние свойств его не принимает за своё (`assertMergeLeftRegistryReadable` меряет прирост).
+ */
+export interface RuleMergeContext {
+  otherLive: readonly { rule: RuleDefinition; carrier: RuleCarrierRef }[];
+  otherIds: ReadonlyMap<string, RuleDefinition>;
+}
+
+/** Носитель правила в контексте пересева — род и id строки (роль писателей не несёт, но id её правил — да). */
+export interface RuleCarrierRef {
+  kind: 'aspect' | 'property' | 'role';
+  id: string;
+}
+
+/** Правила и отключения дельты — мягко: сырой jsonb строки, форма правил проверена на записи. */
+function softRuleFields(delta: unknown): { rules: RuleDefinition[]; off: Set<string> } {
+  const d = (typeof delta === 'object' && delta !== null ? delta : {}) as {
+    rules?: unknown;
+    rulesDisabled?: unknown;
+  };
+  const rules: RuleDefinition[] = [];
+  for (const raw of Array.isArray(d.rules) ? d.rules : []) {
+    const parsed = ruleDefinitionSchema.safeParse(raw);
+    if (parsed.success) rules.push(parsed.data);
+  }
+  const off = new Set(
+    (Array.isArray(d.rulesDisabled) ? d.rulesDisabled : []).filter(
+      (x): x is string => typeof x === 'string',
+    ),
+  );
+  return { rules, off };
+}
+
+export function ruleMergeContextOf(
+  nextSystem: SystemDefinitions,
+  ownerDeltas: readonly RegistryDeltaRow[],
+  ownRules: readonly { rule: RuleDefinition; carrier: RuleCarrierRef }[],
+  target: { kind: RegistryDeltaTargetKind; id: string },
+): RuleMergeContext {
+  const byCarrier = new Map<string, RegistryDeltaRow>();
+  for (const r of ownerDeltas) byCarrier.set(`${r.targetKind}:${r.targetId}`, r);
+  const otherLive: { rule: RuleDefinition; carrier: RuleCarrierRef }[] = [];
+  const otherIds = new Map<string, RuleDefinition>();
+  const carriers: Array<
+    ['aspect' | 'property', ReadonlyMap<string, { rules?: readonly RuleDefinition[] }>]
+  > = [
+    ['aspect', nextSystem.aspects],
+    ['property', nextSystem.properties],
+  ];
+  for (const [kind, dict] of carriers) {
+    for (const [id, def] of dict) {
+      if (kind === target.kind && id === target.id) continue;
+      const base = def.rules ?? [];
+      const row = byCarrier.get(`${kind}:${id}`);
+      const { rules, off } = softRuleFields(row?.delta);
+      for (const r of [...base, ...rules]) otherIds.set(r.id, r);
+      for (const r of [...base, ...rules]) {
+        if (!off.has(r.id) && r.enabled) otherLive.push({ rule: r, carrier: { kind, id } });
+      }
+    }
+  }
+  for (const def of nextSystem.roles?.values() ?? []) {
+    for (const r of def.rules) otherIds.set(r.id, r);
+  }
+  for (const own of ownRules) {
+    otherIds.set(own.rule.id, own.rule);
+    if (own.rule.enabled) otherLive.push(own);
+  }
+  return { otherLive, otherIds };
+}
+
+/**
+ * Правила СВОИХ строк владельцев по графам — из сырых строк `{graph_id, rules}` трёх реестров-носителей.
+ * Один разборщик на сид (`mergeRegistryDeltas`) и на предпросмотр (`scripts/ops.ts check`): контекст правил
+ * у них обязан совпасть (довод `previewMergeConflicts`).
+ */
+export const OWN_RULE_ROWS_QUERY = `
+  SELECT graph_id, 'aspect' AS kind, id, rules FROM aspect_definitions
+   WHERE graph_id IS NOT NULL AND rules <> '[]'::jsonb
+  UNION ALL
+  SELECT graph_id, 'property' AS kind, id, rules FROM property_definitions
+   WHERE graph_id IS NOT NULL AND rules <> '[]'::jsonb
+  UNION ALL
+  SELECT graph_id, 'role' AS kind, id, rules FROM relation_role_definitions
+   WHERE graph_id IS NOT NULL AND rules <> '[]'::jsonb`;
+
+/** Сырая строка своих правил: граф, род и id строки-носителя, jsonb правил. */
+export interface OwnRuleRow {
+  graph_id: unknown;
+  kind: unknown;
+  id: unknown;
+  rules: unknown;
+}
+
+export function ownRulesByGraphOf(
+  rows: readonly OwnRuleRow[],
+): Map<string, { rule: RuleDefinition; carrier: RuleCarrierRef }[]> {
+  const out = new Map<string, { rule: RuleDefinition; carrier: RuleCarrierRef }[]>();
+  for (const r of rows) {
+    const g = String(r.graph_id);
+    const carrier = { kind: r.kind as RuleCarrierRef['kind'], id: String(r.id) };
+    const list = out.get(g) ?? [];
+    for (const raw of Array.isArray(r.rules) ? r.rules : []) {
+      const parsed = ruleDefinitionSchema.safeParse(raw);
+      if (parsed.success) list.push({ rule: parsed.data, carrier });
+    }
+    out.set(g, list);
+  }
+  return out;
+}
+
+/** Декларация правила строкой для заметки: снятое правило владелец должен узнать, а не угадать. */
+function ruleNoteText(rule: RuleDefinition): string {
+  const text = canonicalJson(rule);
+  return text.length <= 300 ? text : `${text.slice(0, 299)}…`;
+}
+
+/**
  * ПРАВИЛА ВЛАДЕЛЬЦА ПРИ ПЕРЕСЕВЕ (§А3-3, Р-И-35). Правило живёт, пока новая система не завела
- * КОНФЛЮЭНТНО несовместимое (§Б4: два писателя одного (свойство, событие)). Тогда правило владельца
- * ОТКЛЮЧАЕТСЯ, а не снимается: снятие потеряло бы декларацию, а живой конфликт отдал бы движку двух
- * писателей одного свойства — запись, исход которой зависит от порядка. Fail-closed на ЧТЕНИИ невозможен
- * (Р-И-7), значит конфликт разрешается здесь, на пересеве, один раз.
+ * КОНФЛЮЭНТНО несовместимое (§Б4: два писателя одного (свойство, событие)) — ГДЕ УГОДНО в снимке, а не только
+ * на строке-цели (Ф-Б2-28: конкурента ищут по `context.otherLive`). Тогда правило владельца ОТКЛЮЧАЕТСЯ, а не
+ * снимается: снятие потеряло бы декларацию, а живой конфликт отдал бы движку двух писателей одного свойства —
+ * запись, исход которой зависит от порядка. Fail-closed на ЧТЕНИИ невозможен (Р-И-7), значит конфликт
+ * разрешается здесь, на пересеве, один раз.
  *
- * ВИСЯЧЕЕ `rulesDisabled` — id, которого нет НИ в новой системе, НИ среди своих правил дельты: отключать
- * нечего, и оно снимается молча. Своё правило, отключённое прошлым пересевом, висячим НЕ является: снять
- * его отключение значило бы молча вернуть в работу второго писателя — ровно то, от чего отключение и
- * защищало (и следующий пересев завёл бы тот же конфликт второй единицей пачки).
+ * ВИСЯЧЕЕ `rulesDisabled` — id, которого нет НИ в новой системе строки, НИ среди своих правил дельты: отключать
+ * нечего, и оно снимается — но НЕ молча (Fable M-1): релиз снял или переименовал отключённое системное правило,
+ * и его преемник работает снова; владелец получает заметку (конфликт без единицы — выбора в нём нет). Своё
+ * правило, отключённое прошлым пересевом, висячим НЕ является: снять его отключение значило бы молча вернуть в
+ * работу второго писателя — ровно то, от чего отключение и защищало (и следующий пересев завёл бы тот же
+ * конфликт второй единицей пачки).
  *
- * СОВПАВШИЙ ID. Система завела правило с id правила владельца. Одинаковое целиком — система догнала
- * владельца, своё снимается молча (довод блока (1) `threeWayMerge` про `properties.add`). Разное —
- * своё снимается с заметкой: id — адрес правила в журнале, в отказе и в «отключить», и двум правилам
- * с одним адресом не ужиться (отключение по id выключило бы оба).
+ * СОВПАВШИЙ ID — где угодно в снимке (Ф-Б2-28: id один на весь снимок, `RULE_ID_TAKEN`). Система завела
+ * правило с id правила владельца на ТОЙ ЖЕ строке и одинаковое целиком — система догнала владельца, своё
+ * снимается молча (довод блока (1) `threeWayMerge` про `properties.add`). Иначе своё снимается с заметкой, и
+ * декларация печатается в ней — иначе она терялась бы без следа. Id снятого своего правила уходит и из
+ * `rulesDisabled` (гейт 16 m-1): отключение было ЕГО, и оставшись, оно молча гасило бы новое системное
+ * правило с тем же id.
  */
 function mergeRules(
   baseRules: readonly RuleDefinition[],
@@ -1051,40 +1227,65 @@ function mergeRules(
   targetKind: RegistryDeltaTargetKind,
   targetId: string,
   conflicts: RegistryConflict[],
+  context?: RuleMergeContext,
 ): { rules?: RuleDefinition[]; rulesDisabled?: string[] } {
   const system = new Map(baseRules.map((r) => [r.id, r]));
   const kept: RuleDefinition[] = [];
+  const dropped = new Set<string>();
   for (const own of delta.rules ?? []) {
     const twin = system.get(own.id);
-    if (twin === undefined) {
+    const far = context?.otherIds.get(own.id);
+    if (twin === undefined && far === undefined) {
       kept.push(own);
       continue;
     }
-    if (canonicalJson(twin) === canonicalJson(own)) continue;
+    dropped.add(own.id);
+    if (twin !== undefined && canonicalJson(twin) === canonicalJson(own)) continue;
     conflicts.push({
       kind: 'rule-conflict',
       targetKind,
       targetId,
       detail:
-        `обновление завело системное правило с тем же именем «${own.id}» — ваше снято ` +
-        `(два правила с одним именем не различить ни в журнале, ни в «отключить»)`,
+        `обновление завело правило с тем же именем «${own.id}»` +
+        `${twin === undefined ? ' на другом носителе' : ''} — ваше снято (два правила с одним именем не ` +
+        `различить ни в журнале, ни в «отключить»); ваша декларация: ${ruleNoteText(own)}`,
     });
   }
   const known = new Set([...system.keys(), ...kept.map((r) => r.id)]);
-  const disabled = (delta.rulesDisabled ?? []).filter((id) => known.has(id));
-  const live = baseRules.filter((r) => !disabled.includes(r.id));
+  const disabled: string[] = [];
+  for (const id of delta.rulesDisabled ?? []) {
+    if (dropped.has(id)) continue;
+    if (known.has(id)) {
+      disabled.push(id);
+      continue;
+    }
+    conflicts.push({
+      kind: 'rule-conflict',
+      targetKind,
+      targetId,
+      detail:
+        `отключение «${id}» снято: такого правила у ${targetId} больше нет — обновление его сняло или ` +
+        `переименовало; если преемник вам мешает, отключите его заново`,
+    });
+  }
+  const live = [
+    ...baseRules.filter((r) => !disabled.includes(r.id)),
+    ...(context?.otherLive ?? []).map((o) => o.rule),
+  ];
+  const farCarrier = new Map((context?.otherLive ?? []).map((o) => [o.rule.id, o.carrier]));
   for (const own of kept) {
     // Уже отключённое своё не спорит ни с кем: оно не исполняется.
     if (disabled.includes(own.id)) continue;
     const clash = ruleConflictsOf([...live, own]).find((c) => c.a === own.id || c.b === own.id);
     if (clash === undefined) continue;
     const theirs = clash.a === own.id ? clash.b : clash.a;
+    const theirsAt = system.has(theirs) ? undefined : farCarrier.get(theirs);
     disabled.push(own.id);
     conflicts.push({
       kind: 'rule-conflict',
       targetKind,
       targetId,
-      rule: { mine: own.id, theirs },
+      rule: { mine: own.id, theirs, ...(theirsAt !== undefined && { theirsAt }) },
       detail:
         `обновление завело правило «${theirs}», которое пишет то же (${clash.event} → ` +
         `${clash.property}), что ваше «${own.id}» — ваше отключено`,

@@ -47,10 +47,13 @@ import { ensureGlobalThread } from '../chat/threads';
 import { parseGraphId } from '../identity';
 import {
   baseSystemFor,
+  type OwnRuleRow,
+  ownRulesByGraphOf,
   type RegistryConflict,
   type RegistryDeltaRow,
   type RegistryDeltaTargetKind,
   registryConflictLine,
+  ruleMergeContextOf,
   type SystemDefinitions,
   threeWayMerge,
 } from '../registry/deltas';
@@ -374,6 +377,8 @@ export function codeSystemDefinitions(): SystemDefinitions {
     properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
     aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
     contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+    // Роли — ради тождества id правил при пересеве (Ф-Б2-28, `ruleMergeContextOf`).
+    roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
     // `graphId: null` проставляется здесь, а не берётся из `BuiltinSubscriptionDef`: у встроенной
     // декларации владельца нет по определению, и второе поле в списке кода означало бы, что
     // system-строку можно объявить чужой.
@@ -434,6 +439,43 @@ export async function mergeRegistryDeltas(
   if (rows.length === 0) return { merged: 0, conflicts: [] };
 
   const nextSystem = codeSystemDefinitions();
+  // КОНТЕКСТ ПРАВИЛ ВЛАДЕЛЬЦА (Ф-Б2-28): конкурента правила ищут по ВСЕМУ снимку владельца — его прочим дельтам
+  // (в том числе тем, что уже на текущей версии и сливаться не будут) и правилам его своих строк. Слитая в этом
+  // прогоне дельта подменяет прежнюю в карте (`deltasByGraph`), и следующая дельта того же владельца видит
+  // исход — например, уже отключённое правило.
+  const graphs = [...new Set(rows.map((r) => r.graph_id as string))];
+  const deltasByGraph = new Map<string, RegistryDeltaRow[]>();
+  for (const r of await sql<Record<string, unknown>[]>`
+    SELECT id, graph_id, target_kind, target_id, base_version, delta
+    FROM registry_deltas WHERE graph_id IN ${sql(graphs)}`) {
+    const g = r.graph_id as string;
+    deltasByGraph.set(g, [
+      ...(deltasByGraph.get(g) ?? []),
+      {
+        id: r.id as string,
+        graphId: g,
+        targetKind: r.target_kind as RegistryDeltaTargetKind,
+        targetId: r.target_id as string,
+        baseVersion: r.base_version as number,
+        delta: r.delta,
+      },
+    ]);
+  }
+  // Свои строки — только графов этого прогона (прод не сканируется целиком); разборщик один с предпросмотром
+  // (`ownRulesByGraphOf`), а форма запроса — та же, что у `OWN_RULE_ROWS_QUERY`, суженная до графов.
+  const ownRuleRows: OwnRuleRow[] = [];
+  for (const [kind, table] of [
+    ['aspect', 'aspect_definitions'],
+    ['property', 'property_definitions'],
+    ['role', 'relation_role_definitions'],
+  ] as const) {
+    ownRuleRows.push(
+      ...(await sql<OwnRuleRow[]>`
+        SELECT graph_id, ${kind} AS kind, id, rules FROM ${sql(table)}
+        WHERE graph_id IN ${sql(graphs)} AND rules <> '[]'::jsonb`),
+    );
+  }
+  const ownRulesByGraph = ownRulesByGraphOf(ownRuleRows);
   // ВТОРОЕ ПОДКЛЮЧЕНИЕ ТОЙ ЖЕ АДМИНСКОЙ РОЛЬЮ, а не drizzle поверх `sql`, — и это не
   // аккуратность, а обход доказанного дефекта. `drizzle(client)` меняет сериализацию
   // параметров у САМОГО клиента postgres.js: первый же drizzle-запрос по нему ломает
@@ -460,7 +502,20 @@ export async function mergeRegistryDeltas(
       // означает, что состояния, против которого писали дельту, больше нет нигде;
       // `baseSystemFor` подставляет пустую базу, и правила §А3-3 срабатывают широко.
       const base = baseSystemFor(prevSystem, row, systemVersion - 1);
-      const { merged, conflicts } = threeWayMerge(base, nextSystem, row);
+      const ownerDeltas = deltasByGraph.get(row.graphId) ?? [];
+      const { merged, conflicts } = threeWayMerge(
+        base,
+        nextSystem,
+        row,
+        ruleMergeContextOf(nextSystem, ownerDeltas, ownRulesByGraph.get(row.graphId) ?? [], {
+          kind: row.targetKind,
+          id: row.targetId,
+        }),
+      );
+      deltasByGraph.set(
+        row.graphId,
+        ownerDeltas.map((d) => (d.id === row.id ? { ...d, delta: merged } : d)),
+      );
       await db.transaction(async (tx) => {
         await tx.execute(
           drizzleSql`UPDATE registry_deltas

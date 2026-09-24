@@ -62,6 +62,9 @@ import { identityOfPerson, parseAccountId } from '../apps/server/src/identity';
 import { issuePatGrant, NotGraphOwnerError } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 import {
+  OWN_RULE_ROWS_QUERY,
+  type OwnRuleRow,
+  ownRulesByGraphOf,
   previewMergeConflicts,
   type RegistryDeltaRow,
   registryConflictLine,
@@ -146,6 +149,9 @@ async function check(): Promise<number> {
         string,
         unknown
       >[];
+      // Правила своих строк владельцев — тем же снапшотом: контекст конфликта правил у предпросмотра тот
+      // же, что у сида (Ф-Б2-28, `ruleMergeContextOf`).
+      const ownRuleRows = (await tx.unsafe(OWN_RULE_ROWS_QUERY)) as unknown as OwnRuleRow[];
       const prevSystem = await readSystemDefinitions(tx);
       // Версия, которую ОПИСЫВАЕТ снимок выше: только дельте с этим `base_version` он
       // годится стороной «до» (`baseSystemFor`). Читается тем же снапшотом — иначе номер
@@ -155,7 +161,7 @@ async function check(): Promise<number> {
       if (version === undefined) {
         throw new Error('check: в registry_system нет строки id=1 — база без миграции 0014');
       }
-      return { rows: out, deltaRows, prevSystem, prevVersion: version.version };
+      return { rows: out, deltaRows, ownRuleRows, prevSystem, prevVersion: version.version };
     });
     const rows = read.rows;
     const drift = diffBuiltinRegistries(rows);
@@ -173,6 +179,7 @@ async function check(): Promise<number> {
         }),
       ),
       read.prevVersion,
+      ownRulesByGraphOf(read.ownRuleRows),
     );
     for (const kind of REGISTRY_KINDS) {
       const d = drift[kind];

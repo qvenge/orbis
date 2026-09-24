@@ -5,7 +5,7 @@
 // приложения NOINHERIT, гранты висят на authenticated), а забытый GRANT новой таблице даёт
 // 42501 ещё до всякой политики.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { hasRegistryDrift, newId } from '@orbis/shared';
+import { type GraphId, hasRegistryDrift, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -31,6 +31,7 @@ import {
   DRIFT_MERGE_EFFECT,
   RULE_MERGE_EFFECT,
 } from '../registry/merge-conflict';
+import { setRuleDelta } from '../registry/ops';
 import {
   checkRegistryDrift,
   REGISTRY_DELTAS_QUERY,
@@ -432,6 +433,9 @@ describe('конфликты пересева становятся единиц�
       },
     };
     const { merged, conflicts } = threeWayMerge(UNKNOWN_PREV_SYSTEM, codeSystemDefinitions(), row);
+    // Пересев пишет слитую дельту ТОЙ ЖЕ транзакцией, что и единицу, — единица рассчитана на эту строку
+    // (`expected_delta`, гейт 16 m-8).
+    await putDelta(owner, 'aspect', 'orbis/note', merged);
     expect(conflicts.map((c) => c.kind)).toEqual(['variant-merge']);
     // Ключи пары — СТРУКТУРНО: единица собирается по ним, а не разбором человеческого текста.
     expect(conflicts[0]?.option).toEqual({ mine: 'md', theirs: 'markdown' });
@@ -531,41 +535,62 @@ describe('конфликты пересева становятся единиц�
     },
   };
 
+  /** Строка дельты владельца «как её оставил пересев» — единица рассчитана на неё (`expected_delta`). */
+  async function putDelta(graph: GraphId, targetKind: string, targetId: string, delta: unknown) {
+    await admin.db.execute(sql`
+      INSERT INTO registry_deltas (id, graph_id, target_kind, target_id, base_version, delta)
+      VALUES (gen_random_uuid(), ${graph}::uuid, ${targetKind}, ${targetId}, 0, ${JSON.stringify(delta)}::jsonb)`);
+  }
+  const unitOf = async (graph: GraphId, id: string) => {
+    const rows = (await withIdentity(db, personal(graph), (tx) =>
+      tx.execute(sql`SELECT content, metadata FROM chat_messages WHERE id = ${id}::uuid`),
+    )) as unknown as Array<{ content: string; metadata: Record<string, unknown> }>;
+    return {
+      content: String(rows[0]?.content),
+      pending: (rows[0]?.metadata as { pending: Record<string, unknown> }).pending,
+    };
+  };
+  const RULE_CONFLICT: RegistryConflict = {
+    kind: 'rule-conflict',
+    targetKind: 'aspect',
+    targetId: 'orbis/task',
+    rule: { mine: 'my_completed_at', theirs: 'task_completed_at' },
+    detail: 'обновление завело правило',
+  };
+  const MERGED = { rules: [MY_RULE], rulesDisabled: ['my_completed_at'] };
+
   test('rule-conflict → единица пачки: «Принять» отключает СИСТЕМНОЕ правило и возвращает своё', async () => {
     const graph = await freshGraph();
-    const conflicts: RegistryConflict[] = [
-      {
-        kind: 'rule-conflict',
-        targetKind: 'aspect',
-        targetId: 'orbis/task',
-        rule: { mine: 'my_completed_at', theirs: 'task_completed_at' },
-        detail: 'обновление завело правило',
-      },
-    ];
-    const merged = { rules: [MY_RULE], rulesDisabled: ['my_completed_at'] };
+    await putDelta(graph, 'aspect', 'orbis/task', MERGED);
     const ids = await withIdentity(db, personal(graph), (tx) =>
       createDriftConflictUnits(tx, {
         graphId: graph,
         systemVersion: 7,
         deltaRowId: newId(),
-        merged: merged as never,
-        conflicts,
+        merged: MERGED as never,
+        conflicts: [RULE_CONFLICT],
       }),
     );
     expect(ids).toHaveLength(1);
-    const rows = (await withIdentity(db, personal(graph), (tx) =>
-      tx.execute(sql`SELECT content, metadata FROM chat_messages WHERE id = ${ids[0]}::uuid`),
-    )) as unknown as Array<{ content: string; metadata: Record<string, unknown> }>;
-    const pending = (rows[0]?.metadata as { pending: Record<string, unknown> }).pending;
-    expect(pending.tool).toBe('aspect_delta_set');
-    const input = pending.input as { aspect: string; delta: { rulesDisabled: string[] } };
-    expect(input.aspect).toBe('orbis/task');
-    // Обмен ровно один: моё правило включается, системное-конкурент отключается.
-    expect(input.delta.rulesDisabled).toEqual(['task_completed_at']);
-    expect(String(rows[0]?.content)).toContain(RULE_MERGE_EFFECT);
+    const { content, pending } = await unitOf(graph, ids[0] as string);
+    // Пачка двух тулов правил (конкурент бывает на другом носителе — Ф-Б2-28): сперва отключение, затем
+    // включение своего.
+    expect(pending.tool).toBe('batch_execute');
+    expect((pending.input as { operations: unknown[] }).operations).toEqual([
+      {
+        tool: 'rule_remove',
+        input: { target: { aspect: 'orbis/task' }, rule: 'task_completed_at' },
+      },
+      { tool: 'rule_set', input: { target: { aspect: 'orbis/task' }, rule: MY_RULE } },
+    ]);
+    expect(pending.expected_delta).toEqual({
+      target_kind: 'aspect',
+      target_id: 'orbis/task',
+      delta: MERGED,
+    });
+    expect(content).toContain(RULE_MERGE_EFFECT);
 
-    // «Принять» — обычный конвейер (`approvePending` → `execute` → `setAspectDelta`): своего пути
-    // записи у конфликта нет, и эффективный список меняется ровно обменом.
+    // «Принять» — обычный конвейер (`approvePending` → `execute`): своего пути записи у конфликта нет.
     const approved = await approvePending(db, {
       identity: personal(graph),
       pendingId: ids[0] as string,
@@ -577,25 +602,79 @@ describe('конфликты пересева становятся единиц�
     expect(live).not.toContain('task_completed_at');
   });
 
-  test('rule-conflict на ВСТРОЕННОМ СВОЙСТВЕ единицы не заводит — только заметка (записанный остаток)', async () => {
+  test('Fable I-3: владелец правил правила после заметки → «Принять» гасит единицу «Устарело», правка цела', async () => {
     const graph = await freshGraph();
+    await putDelta(graph, 'aspect', 'orbis/task', MERGED);
     const ids = await withIdentity(db, personal(graph), (tx) =>
       createDriftConflictUnits(tx, {
         graphId: graph,
         systemVersion: 7,
         deltaRowId: newId(),
-        merged: { rules: [], rulesDisabled: ['x'] } as never,
+        merged: MERGED as never,
+        conflicts: [RULE_CONFLICT],
+      }),
+    );
+    // Заметка зовёт владельца править правила — он заводит ещё одно правило на той же строке.
+    await withIdentity(db, personal(graph), (tx) =>
+      setRuleDelta(
+        tx,
+        graph,
+        { kind: 'aspect', id: 'orbis/task' },
+        {
+          id: 'after_note',
+          template: 'requires_when',
+          params: { property: 'orbis/due_date' },
+        },
+      ),
+    );
+    const refused = await approvePending(db, {
+      identity: personal(graph),
+      pendingId: ids[0] as string,
+    });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('ожидалось «Устарело»');
+    expect(refused.error.details).toMatchObject({ reason: 'REGISTRY_UNIT_STALE' });
+    const reg = await withIdentity(db, personal(graph), (tx) => effectiveRegistry(tx, graph));
+    const live = reg.aspects.get('orbis/task')?.rules.map((r) => r.id) ?? [];
+    expect(live).toContain('after_note');
+    expect(live).toContain('task_completed_at'); // обмена не случилось
+    const again = await approvePending(db, {
+      identity: personal(graph),
+      pendingId: ids[0] as string,
+    });
+    // Единица погашена — повтор упирается в отказ, а не в исполнение.
+    expect(again.ok).toBe(false);
+  });
+
+  test('rule-conflict на ВСТРОЕННОМ СВОЙСТВЕ — тоже единица: пачка тулов правил не зависит от рода строки', async () => {
+    const graph = await freshGraph();
+    const mine = {
+      id: 'x',
+      template: 'default' as const,
+      params: { property: 'orbis/due_date', value: { const: '2026-12-31' } },
+    };
+    const ids = await withIdentity(db, personal(graph), (tx) =>
+      createDriftConflictUnits(tx, {
+        graphId: graph,
+        systemVersion: 7,
+        deltaRowId: newId(),
+        merged: { rules: [mine], rulesDisabled: ['x'] } as never,
         conflicts: [
           {
             kind: 'rule-conflict',
             targetKind: 'property',
             targetId: 'orbis/due_date',
-            rule: { mine: 'x', theirs: 'y' },
+            rule: { mine: 'x', theirs: 'y', theirsAt: { kind: 'aspect', id: 'orbis/task' } },
             detail: '',
           },
         ],
       }),
     );
-    expect(ids).toEqual([]);
+    expect(ids).toHaveLength(1);
+    const { pending } = await unitOf(graph, ids[0] as string);
+    expect((pending.input as { operations: unknown[] }).operations).toEqual([
+      { tool: 'rule_remove', input: { target: { aspect: 'orbis/task' }, rule: 'y' } },
+      { tool: 'rule_set', input: { target: { property: 'orbis/due_date' }, rule: mine } },
+    ]);
   });
 });
