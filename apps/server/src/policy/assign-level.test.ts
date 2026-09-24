@@ -335,6 +335,26 @@ describe('§С8-26: одиннадцать правил дают ожидаем�
       );
     }
   });
+  test('6-neg «банк записал и разметил»: при непустом $sensitivity правило молчит — уровень таблицы (финал Б-2, N-1)', () => {
+    // Негативная половина сценария 6: конъюнкт `empty($sensitivity)` — ровно то, ради чего язык вырос на
+    // `empty` (рулинг 14.09). Мутант «empty всегда истина» и выпавший конъюнкт фикстуры краснеют здесь.
+    const six = SCENARIOS[5] as Scenario;
+    const own = ASSIGN_LEVEL_RULES[5]?.rule.id;
+    // `touches_money` — факт, на который не отвечает ни одно другое правило синтетического сида: кандидатов
+    // нет вовсе, и уровень — таблицы (пачка 40 — ряд масштаба, не «молча»).
+    const money = verdictOf({ ...six, facts: { ...six.facts, sensitivity: ['touches_money'] } });
+    expect(money.verdict.candidates).toEqual([]);
+    expect(money.verdict.level).toBe(money.table);
+    expect(money.verdict.level).not.toBe('execute');
+    // `external` (пример ревью): рядом срабатывает правило 9 (external ∧ остаток), но не правило 6.
+    const external = verdictOf({
+      ...six,
+      aggVia: REMAINING,
+      facts: { ...six.facts, sensitivity: ['external'] },
+    });
+    expect(external.verdict.candidates.map((c) => c.rule)).not.toContain(own);
+    expect(external.verdict.level).not.toBe('execute');
+  });
   test('два правила на одной записи — побеждает СТРОГОЕ (В-2д)', () => {
     const { verdict } = verdictOf(SCENARIOS[9] as Scenario); // 9: вместе с правилом 4
     expect(verdict.candidates.map((c) => c.level).sort()).toEqual(['execute', 'preview']);
