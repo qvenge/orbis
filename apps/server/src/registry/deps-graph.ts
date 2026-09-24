@@ -220,10 +220,21 @@ export function dependantsOf(graph: DependencyGraph, propertyId: string): string
  *
  * Путь в `details` — не украшение: сообщение «где-то цикл» по графу в сотню рёбер
  * неотличимо от «разбирайтесь сами».
+ *
+ * РЁБРА `ref.target` В КРУГ НЕ СЧИТАЮТСЯ (срез 1а, «Главнее, чем»). Утверждение выше про срез А
+ * оказалось неверным: аспект, объявляющий ссылку на записи СВОЕГО же аспекта, замыкает
+ * `аспект → свойство → аспект` (`orbis/page → orbis/template_wins_over → orbis/page`), и сторож
+ * отказывал бы на КАЖДОЙ записи правил и каждом слиянии свойств у всех владельцев. Такой круг
+ * безвреден: `ref.target` — множество допустимых ЗНАЧЕНИЙ ссылки, а не порядок вычисления или
+ * объявления, и ссылка «на запись того же рода» (родитель задачи, выбор среди шаблонов) — обычный
+ * тип данных. Вредные круги — те, что сторож и ловит: цепочка `merged_into` и «свойство → правило →
+ * свойство»; ни один из них через `ref.target` не проходит. `dependantsOf` ребро по-прежнему видит:
+ * на вопрос «кто на нём стоит» ссылка отвечает честно.
  */
 export function assertAcyclicGraph(graph: DependencyGraph): void {
   const out = new Map<string, string[]>();
   for (const edge of graph.edges) {
+    if (edge.kind === 'ref.target') continue;
     const list = out.get(edge.from);
     if (list === undefined) out.set(edge.from, [edge.to]);
     else list.push(edge.to);

@@ -513,6 +513,33 @@ test('ref/registry_ref: run_routine принимает только рутину
   expect(err(badScope).message).toContain('не найдена');
 });
 
+test('registry_ref списком: каждый элемент проверяется на существование, как одиночное значение (Ф-1а-4)', async () => {
+  const user = await freshGraph();
+  const page = (templateFor: string[]) =>
+    execute(
+      db,
+      req(user, [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Шаблон',
+            tags: [],
+            aspects: ['orbis/page'],
+            props: { 'orbis/template_for': templateFor },
+          },
+        },
+      ]),
+    );
+  // Все элементы живые — запись проходит.
+  expect((await page(['orbis/project', 'orbis/task'])).ok).toBe(true);
+  // Один мёртвый среди живых — отказ той же причиной, что у одиночного `rule_scope` выше.
+  const bad = await page(['orbis/project', 'orbis/nope']);
+  expect(err(bad).code).toBe('VALIDATION');
+  expect(reasonOf(bad)).toBe('REF_TARGET');
+  expect(err(bad).message).toContain('не найдена');
+  expect(err(bad).message).toContain('orbis/nope');
+});
+
 test('ref: batch «заведи категорию и положи в неё трату» проходит — цель ищется по ИТОГОВОМУ состоянию tx', async () => {
   const user = await freshGraph();
   const categoryId = newId();

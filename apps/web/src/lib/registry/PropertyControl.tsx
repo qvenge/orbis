@@ -25,6 +25,7 @@ import {
   writeModeOf,
 } from './controls';
 import { displayText, EMPTY_TEXT } from './format';
+import { useRegistry } from './useRegistry';
 
 /**
  * Контрол свойства.
@@ -60,6 +61,14 @@ export function PropertyControl({
       >
         {kind === 'ref' && typeof value === 'string' && value !== '' ? (
           <EntityRef id={value} />
+        ) : def.type.kind === 'ref' && Array.isArray(value) && value.length > 0 ? (
+          // Список ссылок (срез 1а, «Главнее, чем») — по чипу на ссылку: сырые uuid через
+          // запятую владельцу не прочитать.
+          value
+            .filter((id): id is string => typeof id === 'string' && id !== '')
+            .map((id) => <EntityRef key={id} id={id} />)
+        ) : kind === 'aspects-many' ? (
+          <AspectsText def={def} value={value} />
         ) : (
           displayText(def, value)
         )}
@@ -89,6 +98,8 @@ export function PropertyControl({
     return <SelectControl def={def} label={label} value={value} onChange={onChange} />;
   if (kind === 'select-many')
     return <SelectManyControl def={def} label={label} value={value} onChange={onChange} />;
+  if (kind === 'aspects-many')
+    return <AspectsManyControl def={def} label={label} value={value} onChange={onChange} />;
   return <TextControl def={def} label={label} kind={kind} value={value} onChange={onChange} />;
 }
 
@@ -233,6 +244,90 @@ function SelectManyControl({
             </label>
           );
         })}
+    </fieldset>
+  );
+}
+
+/** Показ списка аспектов подписями (строка только для чтения): реестр — у хука, а не у пропа. */
+function AspectsText({ def, value }: { def: PropertyDefinition; value: unknown }) {
+  const registry = useRegistry();
+  return <>{displayText(def, value, registry)}</>;
+}
+
+/** Подсказка у последнего аспекта при `minItems` (РП-27): снять все — путь меню «⋯», не чип. */
+const ASPECTS_MIN_HINT = 'сделать черновиком: ⋯ → «Сделать шаблоном для…» → снять все';
+
+/**
+ * Список аспектов чипами (срез 1а §3.2, «Шаблон для») — по образцу `SelectManyControl`: словарь
+ * закрыт (аспекты реестра), порядок — `rank`, подпись — из реестра в локали владельца.
+ *
+ * `minItems` соблюдается ГЕНЕРИЧЕСКИ, а не знанием о «Шаблон для» (РП-27): при `minItems: n` у
+ * выбранных `n` чипов снятие закрыто — иначе контрол отправил бы список, который сервер отвергнет
+ * (`VALIDATION` по `minItems`), и поле выглядело бы «не сохранилось». Без `minItems` снятие
+ * последнего уезжает СНЯТИЕМ (`undefined`), а не `[]`: пустой список — «присутствует» (Ф-1а-3).
+ */
+function AspectsManyControl({
+  def,
+  label,
+  value,
+  onChange,
+}: {
+  def: PropertyDefinition;
+  label: string;
+  value: unknown;
+  onChange: (v: unknown | undefined) => void;
+}) {
+  const registry = useRegistry();
+  const aspects = [...(registry.data?.aspects ?? [])].sort(
+    (a, b) => a.rank - b.rank || a.key.localeCompare(b.key),
+  );
+  const minItems = def.type.kind === 'registry_ref' ? (def.type.minItems ?? 0) : 0;
+  const chosen = Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === 'string')
+    : [];
+  // Пустое значение — не «на пороге»: свойства нет вовсе, и первый чип его заводит.
+  const atFloor = minItems > 0 && chosen.length > 0 && chosen.length <= minItems;
+  const toggle = (id: string) => {
+    const on = chosen.includes(id);
+    if (on && atFloor) return;
+    const next = on ? chosen.filter((k) => k !== id) : [...chosen, id];
+    // Порядок — реестровый, а не порядок нажатий: набор аспектов сравнивается вхождением, и
+    // одно и то же множество не должно давать два разных значения в журнале.
+    const known = aspects.filter((a) => next.includes(a.id)).map((a) => a.id);
+    // Id, которых в снимке нет (аспект снят, реестр ещё едет), остаются в значении: выбросить
+    // их молча значило бы стереть факт владельца правкой соседнего чипа.
+    const ordered = [...known, ...next.filter((id) => !known.includes(id))];
+    onChange(ordered.length === 0 ? undefined : ordered);
+  };
+  return (
+    <fieldset
+      aria-label={label}
+      data-testid={`prop-${def.id}`}
+      data-kind="aspects-many"
+      className="flex flex-wrap items-center gap-1 px-2 py-1"
+    >
+      {aspects.map((a) => {
+        const on = chosen.includes(a.id);
+        const locked = on && atFloor;
+        return (
+          <label
+            key={a.id}
+            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${
+              on ? 'border-accent text-accent' : 'border-line text-text-muted'
+            } ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+          >
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={on}
+              disabled={locked}
+              onChange={() => toggle(a.id)}
+            />
+            {effectiveLabel(a.label, OWNER_LOCALE)}
+          </label>
+        );
+      })}
+      {atFloor && <span className="text-2xs text-text-muted">{ASPECTS_MIN_HINT}</span>}
     </fieldset>
   );
 }

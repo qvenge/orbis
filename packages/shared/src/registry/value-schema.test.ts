@@ -128,6 +128,16 @@ describe('propertyValueJsonSchema: словарь типов §А2-2 → JSON Sc
       items: { type: 'string', format: 'uuid' },
       maxItems: 3,
     });
+    // registry_ref списком (срез 1а §3.2): массив строк id реестра; `minItems: 1` едет в схему —
+    // пустой «Шаблон для» отвергает ещё валидатор значений, а не правило каталога.
+    expect(schemaOf('orbis/template_for')).toMatchObject({
+      type: 'array',
+      items: { type: 'string' },
+      minItems: 1,
+    });
+    expect(
+      (schemaOf('orbis/template_for') as { items: { format?: string } }).items.format,
+    ).toBeUndefined();
   });
 
   test('cardinality many у скаляров: массив с minItems/maxItems, items — схема элемента', () => {

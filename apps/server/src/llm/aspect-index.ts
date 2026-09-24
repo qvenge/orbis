@@ -17,7 +17,12 @@
 // Один сборщик на оба канала: собранный дважды, индекс разъехался бы форматом — и рутина в
 // фоне видела бы аспекты иначе, чем чат.
 import type { GraphId } from '@orbis/shared';
-import { effectiveLabel, isModuleEnabled, OWNER_LOCALE } from '@orbis/shared';
+import {
+  AUTHORING_DEFERRED_ASPECTS,
+  effectiveLabel,
+  isModuleEnabled,
+  OWNER_LOCALE,
+} from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
@@ -37,6 +42,9 @@ export function aspectIndexLines(reg: RegistrySnapshot, disabled: readonly strin
   const lines = [...reg.aspects.values()]
     // Служебный аспект модели не предлагается — ни тулом (`buildToolDefs`), ни строкой индекса.
     .filter((a) => !a.service)
+    // РП-1 (срез 1а): аспекты с отложенным авторством агентом — ни строкой индекса, ни в строке-
+    // границе (они НЕ служебные: их записи в выдачах есть). Тот же список, что у `buildToolDefs`.
+    .filter((a) => !AUTHORING_DEFERRED_ASPECTS.includes(a.id))
     // §Б8-3: аспект выключенного модуля уходит вместе с модулем — та же маска, что у тулов.
     .filter((a) => isModuleEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key))

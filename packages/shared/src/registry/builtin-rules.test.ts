@@ -17,6 +17,8 @@ import {
   RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
   RULE_MEMORY_RULE_PATTERN,
   RULE_MEMORY_RULE_TARGET,
+  RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE,
+  RULE_PAGE_WINS_OVER_NOT_SELF,
   RULE_RUN_SUBJECT_FORBIDDEN,
   RULE_RUN_SUBJECT_REQUIRED,
   RULE_TASK_COMPLETED_AT,
@@ -56,6 +58,9 @@ describe('системные строки каталога правил (§Б4-1
       'memory_rule_target',
       'nearest_ancestor',
       'materialize',
+      // Срез 1а §3.2: «Главнее, чем» только у шаблона; ссылка на себя — отказ.
+      'page_wins_over_needs_template_for',
+      'page_wins_over_not_self',
       'mirror_ref',
       // …и метки ролевых ограничений: значение живёт в `role.constraints`, строка его не дублирует.
       'dependency_acyclic',
@@ -102,6 +107,8 @@ describe('системные строки каталога правил (§Б4-1
       RULE_MEMORY_RULE_PATTERN.undo,
       RULE_MEMORY_RULE_TARGET.undo,
       RULE_ENVELOPE_CURRENCY_DEFAULT.undo,
+      RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE.undo,
+      RULE_PAGE_WINS_OVER_NOT_SELF.undo,
     ]).toEqual([
       'check',
       'check',
@@ -116,6 +123,8 @@ describe('системные строки каталога правил (§Б4-1
       'check',
       'check',
       undefined,
+      'check',
+      'check',
     ]);
   });
 

@@ -20,6 +20,7 @@
 // индекса и тулов. Вычисляемые сервером свойства не печатаются — их нет и в схеме `attach_*`.
 import {
   type AspectDefinition,
+  AUTHORING_DEFERRED_ASPECTS,
   effectiveLabel,
   isModuleEnabled,
   OWNER_LOCALE,
@@ -132,10 +133,14 @@ export function typeLabel(type: PropertyType): string {
   return many ? `список<${base}>` : base;
 }
 
-/** Аспекты, которые видит модель: неслужебные, включённого модуля, по rank — как у индекса. */
+/**
+ * Аспекты, которые видит модель: неслужебные, не отложенные для модели (`AUTHORING_DEFERRED_ASPECTS`,
+ * РП-1 — страница), включённого модуля, по rank — как у индекса (`aspectIndexLines`).
+ */
 function visibleAspects(reg: RegistrySnapshot, disabled: readonly string[]): AspectDefinition[] {
   return [...reg.aspects.values()]
     .filter((a) => !a.service)
+    .filter((a) => !AUTHORING_DEFERRED_ASPECTS.includes(a.id))
     .filter((a) => isModuleEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
 }

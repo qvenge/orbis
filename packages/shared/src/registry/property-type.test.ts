@@ -78,6 +78,24 @@ test('словарь закрыт: неизвестный kind отвергае�
   expect(propertyTypeSchema.safeParse({ kind: 'registry_ref', target: 'entity' }).success).toBe(
     false,
   );
+  // Срез 1а §3.2: `cardinality` у `registry_ref` — сквозной конфиг списка (как у text/select), а не
+  // новый kind; `.strict()` ветки при этом жив — чужой ключ по-прежнему отказ.
+  expect(
+    propertyTypeSchema.safeParse({
+      kind: 'registry_ref',
+      target: 'aspect',
+      cardinality: 'many',
+      minItems: 1,
+    }).success,
+  ).toBe(true);
+  expect(
+    propertyTypeSchema.safeParse({
+      kind: 'registry_ref',
+      target: 'aspect',
+      cardinality: 'many',
+      foo: 1,
+    }).success,
+  ).toBe(false);
 });
 
 test('decimal: exclusiveMin вместо lookahead; assertPatternRegular отвергает (?= и \\1', () => {

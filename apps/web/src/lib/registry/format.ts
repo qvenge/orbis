@@ -16,6 +16,7 @@
 // владельца, ни label в jsonb нет. Ровно по той же границе в коде остался `AGGREGATE_LABELS`
 // (`lib/field-labels.ts`): ключевое слово грамматики — не запись реестра.
 import { effectiveLabel, OWNER_LOCALE, type PropertyDefinition } from '@orbis/shared';
+import type { RegistryLookup } from './labels';
 
 /** Прочерк вместо пустого места: «поле есть, значения нет» читается, пустая ячейка — нет. */
 export const EMPTY_TEXT = '—';
@@ -77,10 +78,23 @@ export function optionLabel(def: PropertyDefinition, key: unknown): string {
  *
  * `def === undefined` — свойства нет в снимке (снято, реестр ещё едет): тогда показ идёт
  * по значению (`valueText`), потому что о типе здесь не известно ничего.
+ *
+ * `reg` — читатель подписей реестра: `registry_ref` на АСПЕКТ (срез 1а, «Шаблон для») хранит id
+ * аспекта, и без подписи владелец читал бы «orbis/project» вместо «Проект». Необязателен: модулю
+ * без реестра под рукой честнее показать id, чем выдумать слово; промах подписи — тоже id
+ * (правило `label`).
  */
-export function displayText(def: PropertyDefinition | undefined, value: unknown): string {
+export function displayText(
+  def: PropertyDefinition | undefined,
+  value: unknown,
+  reg?: Pick<RegistryLookup, 'label'>,
+): string {
   if (value === undefined || value === null) return EMPTY_TEXT;
   if (def === undefined) return valueText(value);
+  if (def.type.kind === 'registry_ref' && def.type.target === 'aspect' && reg !== undefined) {
+    const ids = (Array.isArray(value) ? value : [value]).map(String);
+    return ids.length === 0 ? EMPTY_TEXT : ids.map((id) => reg.label(id)).join(', ');
+  }
   if (def.type.kind === 'boolean') return value === true ? 'да' : 'нет';
   if (def.type.kind === 'select') {
     if (Array.isArray(value))

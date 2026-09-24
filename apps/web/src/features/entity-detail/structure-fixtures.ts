@@ -228,7 +228,9 @@ const WORLD: ReadonlyMap<string, WireEntity> = new Map(
 const MAIN_ID = id(120);
 
 export const STRUCTURE_FIXTURES: readonly StructureFixture[] = [
-  // 13 записей — по одному встроенному аспекту (BUILTIN_ASPECT_IDS, в том же порядке)
+  // 13 записей — по одному встроенному аспекту из первых тринадцати BUILTIN_ASPECT_IDS, в том же
+  // порядке. Эталон снят ДО аспекта №14 `orbis/page` (срез 1а, задача 4): записи страницы здесь нет
+  // намеренно — сверку ведёт `ASPECTS_AT_CAPTURE` (`structure.test.tsx`), эталоны не переснимаются.
   {
     name: 'schedule',
     entity: detailEntity(101, 'Встреча с бухгалтером', ['orbis/schedule'], SCHEDULE),

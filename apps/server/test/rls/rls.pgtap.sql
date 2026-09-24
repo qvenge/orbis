@@ -94,7 +94,7 @@ INSERT INTO entity_versions (id, graph_id, entity_id, label, body, actor_user_id
 -- читается всеми), строка A и строка B. Без строки B проверки «видит только своё» были бы
 -- ложно-зелёными даже при полностью снятой RLS, а без встроенной — не различались бы
 -- политики read_builtin_or_own и update_own.
--- Префикс id `pgtap/` отделяет пробы от 77 засеянных свойств, 11 ролей и 13 аспектов,
+-- Префикс id `pgtap/` отделяет пробы от 79 засеянных свойств, 11 ролей и 14 аспектов,
 -- которые в базе уже лежат: счётчики ниже считают ровно пробы.
 INSERT INTO property_definitions (id, graph_id, key, label, description, type, rank)
   VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"П"}'::jsonb,

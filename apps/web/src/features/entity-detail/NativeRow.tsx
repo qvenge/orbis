@@ -274,8 +274,9 @@ export function NativeRow({
           {fields.map((id) => (
             <div key={id} className="flex gap-1">
               <dt>{fieldLabel(registry, id)}:</dt>
-              {/* Показ — по ТИПУ свойства: у `select` печатается подпись варианта, у булева — «да»/«нет». */}
-              <dd>{displayText(registry.property(id), props[id])}</dd>
+              {/* Показ — по ТИПУ свойства: у `select` печатается подпись варианта, у булева — «да»/«нет»,
+                  у списка аспектов («Шаблон для» страницы) — подписи аспектов, а не их id. */}
+              <dd>{displayText(registry.property(id), props[id], registry)}</dd>
             </div>
           ))}
         </dl>

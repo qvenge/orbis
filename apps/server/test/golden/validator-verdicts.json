@@ -2025,5 +2025,23 @@
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "CALENDAR_DAY_EXISTS"
+  },
+  {
+    "name": "orbis/page: шаблон для проектов",
+    "props": {
+      "orbis/template_for": ["orbis/project"]
+    },
+    "aspects": ["orbis/page"],
+    "legacyVerdict": "ok",
+    "newVerdict": "ok"
+  },
+  {
+    "name": "orbis/page: «Шаблон для» пустым списком — нарушение minItems",
+    "props": {
+      "orbis/template_for": []
+    },
+    "aspects": ["orbis/page"],
+    "legacyVerdict": "reject",
+    "newVerdict": "reject"
   }
 ]

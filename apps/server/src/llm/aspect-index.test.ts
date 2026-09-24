@@ -13,6 +13,7 @@
 // без добора по key они вышли бы в порядке вставки.
 import { describe, expect, test } from 'bun:test';
 import {
+  AUTHORING_DEFERRED_ASPECTS,
   BUILTIN_ACTION_DEFS,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
@@ -69,7 +70,7 @@ describe('aspectIndexLines: индекс аспектов вместо ai_instru
     expect([...REG.aspects.keys()].filter((id) => ids.includes(id))).not.toEqual(ids);
     expect(ids).toEqual(
       [...REG.aspects.values()]
-        .filter((a) => !a.service)
+        .filter((a) => !a.service && !AUTHORING_DEFERRED_ASPECTS.includes(a.id))
         .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key))
         .map((a) => a.id),
     );
@@ -89,6 +90,14 @@ describe('aspectIndexLines: индекс аспектов вместо ai_instru
     expect(lines.at(-1)).toBe(
       `${SERVICE_BOUNDARY_PREFIX}orbis/agent-run${SERVICE_BOUNDARY_SUFFIX}`,
     );
+  });
+  test('страница (срез 1а, РП-1): ни строкой индекса, ни в строке-границе — её убирает AUTHORING_DEFERRED_ASPECTS', () => {
+    const lines = aspectIndexLines(REG, []);
+    // Аспект НЕ служебный (служебность спрятала бы записи-страницы из выдач, Ф-1а-1) — и всё же
+    // модели не предлагается: авторство страниц агентом отложено до среза 2.
+    expect(aspectOf('orbis/page').service).toBe(false);
+    expect(lines.some((l) => l.startsWith('- orbis/page '))).toBe(false);
+    expect(lines.join('\n')).not.toContain('orbis/page');
   });
   test('маска модулей: аспекты выключенного модуля исчезают, прочие на месте', () => {
     const off = aspectIndexLines(REG, ['finance']);

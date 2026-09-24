@@ -5,6 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GraphId } from '@orbis/shared';
 import {
+  AUTHORING_DEFERRED_ASPECTS,
   askInput,
   attachAspectInput,
   attachToolName,
@@ -53,6 +54,7 @@ import { reconfiguresOf } from '../policy/confirmation';
 import { sensitivityFactsOf } from '../policy/sensitivity';
 import { stepFactsOf } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import { propertyCatalogInput } from './property-catalog';
 import {
   AGENT_VERB_NAMES,
@@ -166,9 +168,10 @@ const CORE_NAMES = [
  * колонки `service` реестра: сервер отбирает по ней же, и список в тесте был бы вторым
  * мнением о том, что служебно.
  */
-const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((a) =>
-  attachToolName(a.key),
-);
+// Тул получают несервисные аспекты, КРОМЕ отложенных для модели (`AUTHORING_DEFERRED_ASPECTS`, РП-1).
+const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter(
+  (a) => !a.service && !AUTHORING_DEFERRED_ASPECTS.includes(a.id),
+).map((a) => attachToolName(a.key));
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
   test('builtin-реестр (userB без кастомных): 14 core + 1 run_action + 16 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* + 1 action_* = 51', async () => {
@@ -550,9 +553,33 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     const service = BUILTIN_ASPECT_DEFS.filter((a) => a.service);
     expect(service.map((a) => a.id)).toEqual(['orbis/agent-run']);
     for (const a of service) expect(names).not.toContain(attachToolName(a.key));
-    for (const a of BUILTIN_ASPECT_DEFS.filter((x) => !x.service)) {
+    for (const a of BUILTIN_ASPECT_DEFS.filter(
+      (x) => !x.service && !AUTHORING_DEFERRED_ASPECTS.includes(x.id),
+    )) {
       expect(names).toContain(attachToolName(a.key));
     }
+  });
+
+  test('страница (срез 1а, РП-1): НЕ служебная, но attach_orbis_page нет — её убирает AUTHORING_DEFERRED_ASPECTS', async () => {
+    // Чистая сборка по встроенному снимку, без БД: фильтр — свойство `buildToolDefs`, а не сида.
+    const reg: RegistrySnapshot = {
+      properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+      aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+      roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+      contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+      subscriptions: new Map(),
+      actions: new Map(),
+      ownerVersion: 0,
+      systemVersion: 0,
+    };
+    expect(reg.aspects.get('orbis/page')?.service).toBe(false);
+    expect(buildToolDefs(reg).map((d) => d.name)).not.toContain('attach_orbis_page');
+    // И на живом реестре графа — тоже; состав совпадает с эталоном тулов (`registry-golden`), и в
+    // эталоне страницы нет: счётчик производный от эталона, второе число руками здесь не пишется.
+    const names = (await registryFor(userB)).map((d) => d.name);
+    expect(names).not.toContain('attach_orbis_page');
+    expect(names.length).toBe(TOOL_REGISTRY_GOLDEN.length);
+    expect(JSON.stringify(TOOL_REGISTRY_GOLDEN)).not.toContain('attach_orbis_page');
   });
 
   test('кастомный аспект userA: attach_user_sleep_log («/» и «-» → «_»), схема из БД; userB его не видит (RLS)', async () => {

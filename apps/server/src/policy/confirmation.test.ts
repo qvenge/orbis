@@ -978,7 +978,7 @@ describe('§С2-1: перенастраивает поверхность или 
         'system-object',
       ]);
     }
-    // Ни один из тринадцати встроенных аспектов не считается своим — перечень закрыт.
+    // Ни один из четырнадцати встроенных аспектов не считается своим — перечень закрыт.
     for (const aspect of BUILTIN_ASPECT_DEFS) {
       expect([aspect.id, reconfiguresOf('aspect_delta_remove', { aspect: aspect.id })]).toEqual([
         aspect.id,

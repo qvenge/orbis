@@ -17,6 +17,7 @@
 import {
   type ActionParam,
   type AspectDefinition,
+  AUTHORING_DEFERRED_ASPECTS,
   actionToolName,
   aspectToolJsonSchema,
   attachToolName,
@@ -1402,6 +1403,9 @@ export function buildToolDefs(
 ): OrbisToolDef[] {
   const attachable = [...reg.aspects.values()]
     .filter((a) => !a.service)
+    // РП-1 (срез 1а): аспекты с отложенным авторством агентом — временный список в коде, а не
+    // колонка (отступление от довода выше названо в докблоке `AUTHORING_DEFERRED_ASPECTS`).
+    .filter((a) => !AUTHORING_DEFERRED_ASPECTS.includes(a.id))
     // §Б8-3: аспект выключенного модуля тула не даёт — его поверхность у модели исчезает
     // вместе с модулем. Умолчание `disabled = []` оставляет прежний вызов побайтно тем же.
     .filter((a) => isModuleEnabled(a.module, disabled))

@@ -41,7 +41,7 @@ async function systemVersion(db: ReturnType<typeof adminDb>['db']): Promise<numb
 }
 
 describe('сид шести реестров', () => {
-  test('состав system-строк = ровно BUILTIN_* (77 свойств, 11 ролей, 13 аспектов, 7 контрактов)', async () => {
+  test('состав system-строк = ровно BUILTIN_* (79 свойств, 11 ролей, 14 аспектов, 7 контрактов)', async () => {
     const { db, client } = adminDb();
     try {
       expect(await ids(db, 'property_definitions')).toEqual(
@@ -58,9 +58,9 @@ describe('сид шести реестров', () => {
       );
       // Счётчики названы числом отдельно от состава: подмена набора равной мощности
       // (переименовали свойство и забыли пересеять) прошла бы первую проверку молча.
-      expect(BUILTIN_PROPERTY_META.length).toBe(77);
+      expect(BUILTIN_PROPERTY_META.length).toBe(79);
       expect(BUILTIN_RELATION_ROLE_META.length).toBe(11);
-      expect(BUILTIN_ASPECT_DEFS.length).toBe(13);
+      expect(BUILTIN_ASPECT_DEFS.length).toBe(14);
       expect(BUILTIN_CONTRACT_DEFS.length).toBe(7);
     } finally {
       await client.end();
@@ -134,7 +134,7 @@ describe('сид шести реестров', () => {
     const { db, client } = adminDb();
     try {
       // Счёт отдельно от состава: без него проверки «битых ссылок нет» проходят ВАКУУМНО на
-      // непересеянной базе, где `implements` пуст у всех (довод счётчиков 77/11/13 на :51-53).
+      // непересеянной базе, где `implements` пуст у всех (довод счётчиков 79/11/14 на :51-53).
       const [count] = (await db.execute(
         sql`SELECT count(*)::int AS n FROM aspect_definitions a, jsonb_array_elements(a.implements) b
             WHERE a.graph_id IS NULL`,
@@ -962,9 +962,9 @@ describe('сид шести реестров', () => {
 
       const first = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
       expect(first).toEqual({
-        properties: 77,
+        properties: 79,
         roles: 11,
-        aspects: 13,
+        aspects: 14,
         contracts: 7,
         subscriptions: 2,
         actions: 2,

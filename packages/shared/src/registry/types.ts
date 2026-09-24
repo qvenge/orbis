@@ -192,6 +192,16 @@ export const propertyTypeSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
   z.object({ kind: z.literal('grant') }).strict(),
-  z.object({ kind: z.literal('registry_ref'), target: z.enum(REGISTRY_REF_TARGETS) }).strict(),
+  // `...listConfig` — сквозной конфиг, а не новый kind (правило словаря выше: «cardinality+maxItems —
+  // не kind, а сквозные конфиги»). Потребителей у списка ссылок на реестр два: «Шаблон для» среза 1а
+  // (набор аспектов, спека §3.2) и манифест приложения среза 1б. Существование КАЖДОГО элемента
+  // списка проверяет сервер (`assertRegistryRefValue`), как и у одиночного значения.
+  z
+    .object({
+      kind: z.literal('registry_ref'),
+      target: z.enum(REGISTRY_REF_TARGETS),
+      ...listConfig,
+    })
+    .strict(),
 ]);
 export type PropertyType = z.infer<typeof propertyTypeSchema>;

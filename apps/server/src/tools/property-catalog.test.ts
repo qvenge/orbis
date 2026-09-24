@@ -154,7 +154,7 @@ describe('property_catalog: фильтры (§А9-3)', () => {
 
   test('status=proposed отдаёт ТОЛЬКО предложенные; по умолчанию видны все статусы', async () => {
     expect(keysOf(await run({ status: 'proposed' }))).toEqual(['user/mood', 'user/tempo']);
-    // Приёмка брифа: `status=proposed` на встроенном каталоге пусто — все 77 строк active.
+    // Приёмка брифа: `status=proposed` на встроенном каталоге пусто — все 79 строк active.
     expect(await run({ status: 'proposed', module: 'finance' })).toEqual([]);
     const all = await run({});
     expect(keysOf(all)).toContain('user/mood');

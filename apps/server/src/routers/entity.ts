@@ -307,7 +307,7 @@ export const entityRouter = router({
              * строки с той, под которой он сложен (`['registry', version]`, §А9-2).
              *
              * Отдельный запрос `readRegistryVersions`, а не полный `effectiveRegistry`: ради
-             * одного числа тянуть 77 свойств, 13 аспектов и 11 ролей на каждое открытие
+             * одного числа тянуть 79 свойств, 14 аспектов и 11 ролей на каждое открытие
              * записи дороже самой записи. Цена — один точечный SELECT в той же tx.
              */
             const registryVersion = registryVersionOf(

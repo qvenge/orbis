@@ -148,6 +148,25 @@ describe('dependencyGraph / dependantsOf (§А3-5)', () => {
     ).not.toThrow();
   });
 
+  test('ссылка на записи своего же аспекта — круг через ref.target, но не REGISTRY_CYCLE (срез 1а)', () => {
+    // «Главнее, чем» страницы ссылается на страницы: аспект → свойство → аспект. Ребро графу
+    // известно (на вопрос «кто стоит на аспекте» ссылка отвечает), а сторож круга его не считает:
+    // иначе каждая запись правил и каждое слияние отказывали бы у всех владельцев.
+    const graph = dependencyGraph(snapshot(), { queryRefs: new Map() });
+    expect(graph.edges).toContainEqual({
+      from: 'orbis/page',
+      to: 'orbis/template_wins_over',
+      kind: 'aspect',
+    });
+    expect(graph.edges).toContainEqual({
+      from: 'orbis/template_wins_over',
+      to: 'orbis/page',
+      kind: 'ref.target',
+    });
+    expect(dependantsOf(graph, 'orbis/page')).toContain('orbis/template_wins_over');
+    expect(() => assertAcyclicGraph(graph)).not.toThrow();
+  });
+
   test('шестой род ребра: писатель зависит от читаемого (Р-И-22, §Б4)', () => {
     const fin = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/financial');
     const writer = {

@@ -75,16 +75,17 @@ function codeSnapshot(): RegistrySnapshot {
   };
 }
 /**
- * Системных строк каталога правил — двадцать: задача 4 — два инварианта §А7-2 (financial — парой)
+ * Системных строк каталога правил — двадцать две: задача 4 — два инварианта §А7-2 (financial — парой)
  * и переход `task_completed_at`, задача 12 — уникальность конверта (`duplicate_envelope`), задача 13 —
  * четыре носителя параметров движков (`nearest_ancestor`, `materialize`, `mirror_ref`,
  * `budget_rollover`) и три метки ролевых ограничений (`acyclic` ×2, `target_max_incoming`), задача 14 —
  * «чего ждём» парой (`waiting_for`, `waiting_for_only_when_waiting`), субъект прогона парой
  * (`run_subject`, `run_subject_forbidden`), условие гранта назначения парой
  * (`assignment_grant_required`, `assignment_grant_forbidden`), форма правила памяти
- * (`memory_rule_pattern`, `memory_rule_target`) и умолчание валюты конверта (`envelope_currency_default`).
+ * (`memory_rule_pattern`, `memory_rule_target`) и умолчание валюты конверта (`envelope_currency_default`);
+ * срез 1а — пара страницы (`page_wins_over_needs_template_for`, `page_wins_over_not_self`).
  */
-const BUILTIN_RULE_COUNT = 20;
+const BUILTIN_RULE_COUNT = 22;
 const FIN: RuleCarrier = { kind: 'aspect', id: 'orbis/financial' };
 const TASK: RuleCarrier = { kind: 'aspect', id: 'orbis/task' };
 /** Код И `details.reason`: словарный VALIDATION без причины не адресует ничего. */

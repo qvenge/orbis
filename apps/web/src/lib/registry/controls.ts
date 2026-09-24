@@ -27,8 +27,10 @@ export const FIELD_CLASS =
 
 /**
  * Род контрола. Это НЕ копия словаря типов (§А2-2): типов двенадцать, а контролов меньше —
- * `json`, `grant` и `registry_ref` набирать нечем, и все трое сходятся в `readonly`, а
- * `select` расходится надвое по `cardinality`.
+ * `json`, `grant` и одиночный `registry_ref` набирать нечем, и все трое сходятся в `readonly`, а
+ * `select` расходится надвое по `cardinality`. `aspects-many` — список аспектов (`registry_ref`
+ * с `target: 'aspect'` и `cardinality: 'many'`, «Шаблон для» среза 1а §3.2): у него, как у
+ * `select`, словарь закрыт — аспекты реестра, — и чипы набирают его без двусмысленности.
  */
 export type ControlKind =
   | 'text'
@@ -40,6 +42,7 @@ export type ControlKind =
   | 'time'
   | 'select'
   | 'select-many'
+  | 'aspects-many'
   | 'ref'
   | 'readonly';
 
@@ -70,8 +73,14 @@ export function controlKindOf(def: PropertyDefinition): ControlKind {
     case 'date':
     case 'timestamp':
     case 'time':
-    case 'ref':
       return type.kind;
+    case 'ref':
+      // Список ссылок (срез 1а, «Главнее, чем») — только показ: пикер `RefField` одиночный, и
+      // первый же выбор в нём затёр бы список одним id (Ф-1а-19). Правится список плашкой спора
+      // шаблонов, а не строкой свойства.
+      return type.cardinality === 'many' ? 'readonly' : 'ref';
+    case 'registry_ref':
+      return type.target === 'aspect' && type.cardinality === 'many' ? 'aspects-many' : 'readonly';
     default:
       return 'readonly';
   }

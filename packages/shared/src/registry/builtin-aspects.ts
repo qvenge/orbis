@@ -487,9 +487,32 @@ const ENTRIES: readonly AspectEntry[] = [
     module: null, // ядро-исполнитель: рутины — субстрат D35 (§Б8-2)
     service: false,
   },
+  {
+    // Срез 1а «Страницы» §3 — В КОНЕЦ, как и в `BUILTIN_ASPECT_IDS` (`rank` = позиция).
+    id: 'orbis/page',
+    label: { ru: 'Страница', en: 'Page' },
+    description: {
+      ru: 'Запись, которая показывается своим телом: текст и блоки. С непустым «Шаблон для» — шаблон для записей с этими аспектами',
+      en: 'A record shown through its body: text and blocks. With a non-empty "Template for" — a template for records carrying those aspects',
+    },
+    properties: [
+      ['orbis/template_for', false],
+      ['orbis/template_wins_over', false],
+    ],
+    aiInstructions:
+      'orbis/page — страница и шаблон владельца. Страницы пишет владелец в интерфейсе: аспект ' +
+      'orbis/page сам не навешивай и orbis/template_for / orbis/template_wins_over не меняй ' +
+      '(авторство страниц агентом — позже).',
+    tagMappings: [],
+    viewConfig: { keyFields: ['orbis/template_for'], icon: '📄' },
+    module: null,
+    // НЕ служебный: служебность прячет записи из всех выдач (Ф-1а-1); от модели аспект убирает
+    // `AUTHORING_DEFERRED_ASPECTS` (`constants.ts`).
+    service: false,
+  },
 ];
 
-/** Тринадцать встроенных аспектов новой формы в порядке `BUILTIN_ASPECT_IDS`. */
+/** Четырнадцать встроенных аспектов новой формы в порядке `BUILTIN_ASPECT_IDS`. */
 export const BUILTIN_ASPECT_DEFS: readonly AspectDefinition[] = ENTRIES.map((entry, index) =>
   aspectDefinitionSchema.parse({
     ...entry,

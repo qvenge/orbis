@@ -41,12 +41,12 @@ afterAll(async () => {
 });
 
 describe('registry.effective (§А9-2)', () => {
-  test('владельцу без единой своей строки едут ВСЕ встроенные: 77 свойств, 13 аспектов, 11 ролей, 7 контрактов', async () => {
+  test('владельцу без единой своей строки едут ВСЕ встроенные: 79 свойств, 14 аспектов, 11 ролей, 7 контрактов', async () => {
     const reg = await a.registry.effective();
     // Счёт литералами, а не длиной встроенных массивов: снимок §А8 нормативен, и «сколько
     // сид положил» здесь должно совпасть со «сколько спека назвала», а не с самим собой.
-    expect(reg.properties.length).toBe(77);
-    expect(reg.aspects.length).toBe(13);
+    expect(reg.properties.length).toBe(79);
+    expect(reg.aspects.length).toBe(14);
     expect(reg.roles.length).toBe(11);
     expect(reg.contracts.length).toBe(7);
     // Порядок наблюдаем: по `rank` контракта клиент рисует список классов в конструкторе.
@@ -133,7 +133,7 @@ describe('registry.effective (§А9-2)', () => {
     }
 
     const reg = await callerFor(other).registry.effective();
-    expect(reg.aspects.length).toBe(13);
+    expect(reg.aspects.length).toBe(14);
     expect(reg.aspects.find((x) => x.id === 'orbis/task')?.label.ru).toBe('Дело');
     // А у соседа — по-прежнему встроенная: RLS скоупит выдачу владельцем.
     expect(
@@ -157,8 +157,8 @@ describe('registry.effective (§А9-2)', () => {
       properties: [{ propertyId: (prop as { property: string }).property, required: false }],
     });
     const reg = await caller.registry.effective();
-    // Встроенных 13 (пин выше); своя строка добавляется рядом, а не перекрывает.
-    expect(reg.aspects.length).toBe(14);
+    // Встроенных 14 (пин выше); своя строка добавляется рядом, а не перекрывает.
+    expect(reg.aspects.length).toBe(15);
     expect(reg.aspects.find((a) => a.id === 'user/diary')?.label.ru).toBe('Дневник');
   });
 });

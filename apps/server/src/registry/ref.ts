@@ -197,11 +197,15 @@ export async function assertRegistryRefValue(
   type: RegistryRefType,
   value: unknown,
 ): Promise<void> {
-  if (typeof value !== 'string') return; // форму проверил ajv
-  const rows = (await tx.execute(sql`
-    SELECT 1 AS hit FROM ${sql.raw(REGISTRY_TABLE[type.target])}
-     WHERE id = ${value} LIMIT 1`)) as unknown as Array<{ hit: number }>;
-  if (rows.length === 0) refFail(propertyId, value, 'запись реестра не найдена');
+  // Скаляр и список (`cardinality: 'many'`, срез 1а §3.2) — одной формой через `refIds`: прежде
+  // массив проходил ранним `return` молча (Ф-1а-4), и «Шаблон для» с мёртвым id аспекта ложился
+  // в данные без отказа. Не-строки отбрасывает `refIds` — их форму проверил ajv.
+  for (const id of refIds(value)) {
+    const rows = (await tx.execute(sql`
+      SELECT 1 AS hit FROM ${sql.raw(REGISTRY_TABLE[type.target])}
+       WHERE id = ${id} LIMIT 1`)) as unknown as Array<{ hit: number }>;
+    if (rows.length === 0) refFail(propertyId, id, 'запись реестра не найдена');
+  }
 }
 
 /**

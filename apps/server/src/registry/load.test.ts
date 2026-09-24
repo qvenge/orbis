@@ -71,7 +71,7 @@ afterAll(async () => {
   await client.end();
 });
 
-test('снимок несёт систему целиком: 77 свойств, 13 аспектов, 11 ролей', async () => {
+test('снимок несёт систему целиком: 79 свойств, 14 аспектов, 11 ролей', async () => {
   const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   for (const p of BUILTIN_PROPERTY_META) expect(snap.properties.has(p.id)).toBe(true);
   for (const id of BUILTIN_ASPECT_IDS) expect(snap.aspects.has(id)).toBe(true);

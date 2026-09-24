@@ -9,6 +9,9 @@
  * `rule_target`; `rule_scope` — переименование `memory.scope`, не новое свойство).
  * Плюс **4 core-проекции** §А1-3 (`storage: 'core'`) — они в счёт словаря не входят: их
  * хранение осталось колонкой, реестр даёт им только единый адрес для Q-AST, CAS и подписи.
+ * Срез 1а «Страницы» (спека §3.2) добавил два доменных свойства страницы — «Шаблон для» и
+ * «Главнее, чем»: итого **75 доменных + 4 core**. Они стоят В КОНЦЕ массива, после core-проекций:
+ * `rank` = позиция, и вставка перед core сдвинула бы `rank` четырёх core-строк — дрейф реестра.
  *
  * Чего здесь НЕТ и почему: `orbis/project_id` §А8 удаляет; `orbis/date` и `orbis/weight` §А8
  * называет общими понятиями будущих модулей и прямо оговаривает — в v1 не сеются, потому что
@@ -29,7 +32,7 @@ import { queryAstJsonSchema } from '../query/ast-json-schema';
 import { type PropertyDefinition, propertyDefinitionSchema } from './property-type';
 import type { SelectOption } from './types';
 
-/** Встроенные поля одинаковы у всех 77 записей и проставляются ниже, а не руками. */
+/** Встроенные поля одинаковы у всех 79 записей и проставляются ниже, а не руками. */
 type PropertyEntry = Omit<
   z.input<typeof propertyDefinitionSchema>,
   'id' | 'graphId' | 'key' | 'rank' | 'status'
@@ -1124,10 +1127,38 @@ const ENTRIES: readonly PropertyEntry[] = [
     type: { kind: 'timestamp' },
     storage: 'core',
   },
+  // Срез 1а §3.2 — свойства страницы. После core-проекций намеренно (шапка файла: `rank`).
+  {
+    id: 'orbis/template_for',
+    label: { ru: 'Шаблон для', en: 'Template for' },
+    description: {
+      ru: 'Набор аспектов: записям, несущим их все, эта страница подходит как шаблон; пусто — просто страница',
+      en: 'Aspect set: records carrying all of them may be shown through this page as a template',
+    },
+    // minItems: 1 — несущее: `present([])` истинно (Ф-1а-3), без него правило «Главнее, чем → Шаблон для»
+    // пропустило бы пустой список; очистка «Шаблон для» — только `unset`.
+    type: { kind: 'registry_ref', target: 'aspect', cardinality: 'many', minItems: 1 },
+    module: null,
+  },
+  {
+    id: 'orbis/template_wins_over',
+    label: { ru: 'Главнее, чем', en: 'Wins over' },
+    description: {
+      ru: 'Запомненные выборы владельца в спорах шаблонов: этот шаблон побеждает перечисленные',
+      en: 'Remembered owner choices in template disputes: this template wins over the listed ones',
+    },
+    type: {
+      kind: 'ref',
+      target: { filter: { aspect: 'orbis/page' } },
+      cardinality: 'many',
+      max: 50,
+    },
+    module: null,
+  },
 ];
 
 /**
- * Встроенный словарь свойств: 73 доменных (`storage: 'props'`) + 4 core-проекции.
+ * Встроенный словарь свойств: 75 доменных (`storage: 'props'`) + 4 core-проекции.
  * `key` встроенного изначально равен `id` (§А2-1), `graph_id` — NULL, статус — `active`.
  */
 export const BUILTIN_PROPERTY_META: readonly PropertyDefinition[] = ENTRIES.map((entry, index) =>

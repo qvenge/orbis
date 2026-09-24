@@ -7,6 +7,7 @@ import { BUILTIN_PROPERTY_META, type PropertyDefinition } from '@orbis/shared';
 import { fireEvent, screen } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { controlKindOf, parseControlValue, writeModeOf } from './controls';
 import { displayText } from './format';
 import { PropertyControl } from './PropertyControl';
@@ -186,4 +187,102 @@ test('показ значения идёт по ТИПУ: подпись вар�
   expect(displayText(def('orbis/aliases'), [])).toBe('—');
   // Свойства нет в снимке — показ по значению: о типе здесь не известно ничего.
   expect(displayText(undefined, ['a', 'b'])).toBe('a, b');
+});
+
+// ---------------------------------------------------------------------------
+// Срез 1а §3.2: списки ссылок — «Шаблон для» (аспекты) и «Главнее, чем» (записи)
+// ---------------------------------------------------------------------------
+
+/** Реестр — встроенный (`registryReply`); чипы ссылок `entity.get` не роутятся — им хватает id. */
+const withRegistry = (path: string) => registryReply(path) ?? {};
+
+test('контрол списков ссылок: registry_ref аспектов many — чипы аспектов, ref many — только чтение', () => {
+  expect(controlKindOf(def('orbis/template_for'))).toBe('aspects-many');
+  // «Главнее, чем» правится только плашкой спора шаблонов (задача 14): одиночный пикер `RefField`
+  // затёр бы список первым же выбором.
+  expect(controlKindOf(def('orbis/template_wins_over'))).toBe('readonly');
+  // Одиночный `ref` — по-прежнему пикер, одиночный `registry_ref` — по-прежнему показ.
+  expect(controlKindOf(def('orbis/finance_category'))).toBe('ref');
+  expect(controlKindOf(def('orbis/rule_scope'))).toBe('readonly');
+});
+
+test('«Шаблон для»: выбор второго аспекта шлёт МАССИВ id в порядке реестра', async () => {
+  const onChange = vi.fn();
+  renderWithProviders(
+    <PropertyControl def={def('orbis/template_for')} value={['orbis/task']} onChange={onChange} />,
+    withRegistry,
+  );
+  const group = await screen.findByLabelText('Шаблон для');
+  expect(group).toHaveAttribute('data-kind', 'aspects-many');
+  // Подпись аспекта, а не его id: владелец видит «Задача», а не «orbis/task».
+  expect(await screen.findByRole('checkbox', { name: 'Задача' })).toBeChecked();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Расписание' }));
+  // `orbis/schedule` — rank 1, `orbis/task` — rank 2: порядок реестра, а не нажатий.
+  expect(onChange).toHaveBeenLastCalledWith(['orbis/schedule', 'orbis/task']);
+});
+
+test('«Шаблон для» при minItems: 1 — последний аспект снять нельзя, есть подсказка (РП-27)', async () => {
+  const onChange = vi.fn();
+  renderWithProviders(
+    <PropertyControl def={def('orbis/template_for')} value={['orbis/task']} onChange={onChange} />,
+    withRegistry,
+  );
+  const last = await screen.findByRole('checkbox', { name: 'Задача' });
+  expect(last).toBeDisabled();
+  fireEvent.click(last);
+  expect(onChange).not.toHaveBeenCalled();
+  expect(screen.getByTestId('prop-orbis/template_for')).toHaveTextContent(
+    'сделать черновиком: ⋯ → «Сделать шаблоном для…» → снять все',
+  );
+});
+
+test('«Шаблон для» без значения — подсказки о пороге нет: свойства нет, первый чип его заводит', async () => {
+  const onChange = vi.fn();
+  renderWithProviders(
+    <PropertyControl def={def('orbis/template_for')} value={undefined} onChange={onChange} />,
+    withRegistry,
+  );
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Проект' }));
+  expect(onChange).toHaveBeenLastCalledWith(['orbis/project']);
+  expect(screen.getByTestId('prop-orbis/template_for')).not.toHaveTextContent('черновиком');
+});
+
+test('список аспектов без minItems: снятие последнего СНИМАЕТ свойство (undefined), а не пишет []', async () => {
+  const base = def('orbis/template_for');
+  if (base.type.kind !== 'registry_ref') throw new Error('ожидался registry_ref');
+  const { minItems: _drop, ...type } = base.type;
+  const loose: PropertyDefinition = { ...base, type };
+  const onChange = vi.fn();
+  renderWithProviders(
+    <PropertyControl def={loose} value={['orbis/task']} onChange={onChange} />,
+    withRegistry,
+  );
+  const last = await screen.findByRole('checkbox', { name: 'Задача' });
+  expect(last).not.toBeDisabled();
+  fireEvent.click(last);
+  expect(onChange).toHaveBeenLastCalledWith(undefined);
+});
+
+test('«Главнее, чем» рисуется только чтением: без пикера, по чипу на ссылку', () => {
+  const a = '019d48ea-4188-765d-8e96-93a0ad9c262a';
+  const b = '019d48ea-4188-765d-8e96-93a0ad9c262b';
+  renderWithProviders(
+    <PropertyControl def={def('orbis/template_wins_over')} value={[a, b]} onChange={vi.fn()} />,
+    withRegistry,
+  );
+  const row = screen.getByTestId('prop-orbis/template_wins_over');
+  expect(row).toHaveAttribute('data-kind', 'readonly');
+  expect(screen.queryByRole('combobox')).toBeNull();
+  // Ни одной строки JSON: каждая ссылка — свой чип `EntityRef` (пока грузится — скелет).
+  expect(row).not.toHaveTextContent('[');
+  expect(row.children.length).toBeGreaterThanOrEqual(2);
+});
+
+test('показ registry_ref аспектов — подписями, если читатель реестра дан; без него — id', () => {
+  const labels: Record<string, string> = { 'orbis/project': 'Проект', 'orbis/task': 'Задача' };
+  const lookup = { label: (id: string) => labels[id] ?? id };
+  expect(displayText(def('orbis/template_for'), ['orbis/project', 'orbis/task'], lookup)).toBe(
+    'Проект, Задача',
+  );
+  expect(displayText(def('orbis/template_for'), ['orbis/project'])).toBe('orbis/project');
 });

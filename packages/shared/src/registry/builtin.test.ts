@@ -10,6 +10,7 @@
 import { expect, test } from 'bun:test';
 import {
   type AspectId,
+  AUTHORING_DEFERRED_ASPECTS,
   BUILTIN_ASPECT_IDS,
   HIERARCHICAL_ROLE_IDS,
   RELATION_ROLE_IDS,
@@ -132,6 +133,11 @@ const A8: Record<AspectId, readonly Row[]> = {
     ['mode', 'orbis/routine_mode', true],
     ['allowed_tools', 'orbis/allowed_tools', false],
   ],
+  // Срез 1а §3: страница — аспект ядра; оба свойства заведены срезом (поля «сегодня» нет).
+  'orbis/page': [
+    [null, 'orbis/template_for', false],
+    [null, 'orbis/template_wins_over', false],
+  ],
 };
 
 /**
@@ -235,13 +241,14 @@ const FREE_DOMAIN_IDS = ['orbis/parent_project', 'orbis/root_project'] as const;
 const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
 const defsById = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
 
-test('73 доменных свойства + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
+test('75 доменных свойств + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
   const domain = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'props');
   const core = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'core');
   // Счёт §А8: 73 поля − 3 слияния − 1 удаление + 4 новых = 73; core в счёт словаря не входят.
-  expect(domain.length).toBe(73);
+  // Срез 1а §3 добавил два свойства страницы («Шаблон для», «Главнее, чем») — 75.
+  expect(domain.length).toBe(75);
   expect(core.map((p) => p.id)).toEqual([...CORE_PROPERTY_IDS]);
-  expect(BUILTIN_PROPERTY_META.length).toBe(77);
+  expect(BUILTIN_PROPERTY_META.length).toBe(79);
 
   // Состав доменного словаря = все id таблицы §А8 плюс два вычисляемых свойства реформы.
   const fromA8 = new Set<string>();
@@ -302,8 +309,8 @@ test('73 доменных свойства + 4 core; id/key уникальны; 
 test('каждый property_id BUILTIN_ASPECT_DEFS существует; required и порядок rank — по §А8', () => {
   // Страж полноты (замена aspect-registry.test.ts:30-34): забытый аспект — молчаливая пропажа.
   expect([...BUILTIN_ASPECT_DEFS.map((a) => a.id)].sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
-  expect(BUILTIN_ASPECT_DEFS.length).toBe(13);
-  expect(new Set(BUILTIN_ASPECT_DEFS.map((a) => a.rank)).size).toBe(13);
+  expect(BUILTIN_ASPECT_DEFS.length).toBe(14);
+  expect(new Set(BUILTIN_ASPECT_DEFS.map((a) => a.rank)).size).toBe(14);
 
   for (const aspectId of BUILTIN_ASPECT_IDS) {
     const rows = A8[aspectId];
@@ -326,7 +333,7 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
     expect(def.properties.map((p) => p.required)).toEqual(rows.map(([, , req]) => req));
     expect(def.properties.map((p) => p.rank)).toEqual(rows.map((_, i) => i + 1));
     for (const ref of def.properties) expect(byId.has(ref.propertyId)).toBe(true);
-    // §Б2-1: привязки — снимок B2; у девяти аспектов их нет (контракта-потребителя в Б-1 нет).
+    // §Б2-1: привязки — снимок B2; у десяти аспектов их нет (контракта-потребителя в Б-1 нет).
     // Приведение — только для типов: обе стороны сравниваются глубоким равенством, а снимок
     // намеренно объявлен `unknown[]` (он нормативный текст, а не производная схемы).
     expect([aspectId, def.implements as readonly unknown[]]).toEqual([
@@ -335,7 +342,8 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
     ]);
   }
 
-  // Служебность §А3-1/Р-П-5: колонка реестра, а не список в коде.
+  // Служебность §А3-1/Р-П-5: колонка реестра, а не список в коде. Страница (срез 1а) в списке
+  // НЕТ намеренно: служебность прячет записи из всех выдач (Ф-1а-1), а страница — обычная запись.
   expect(BUILTIN_ASPECT_DEFS.filter((a) => a.service).map((a) => a.id)).toEqual([
     'orbis/agent-run',
   ]);
@@ -354,6 +362,7 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
     'orbis/assignment': null,
     'orbis/agent-run': null,
     'orbis/routine': null,
+    'orbis/page': null,
   });
 });
 
@@ -525,7 +534,7 @@ test('роли: 11 id, иерархия, target_max_incoming конверта, a
   expect(roleById.get('envelope-binding')?.targetLabel.ru).toBe('Транзакция');
 });
 
-test('все 13 аспектов: keyFields, иконка, теги и подписи — точный снимок реестра', () => {
+test('все 14 аспектов: keyFields, иконка, теги и подписи — точный снимок реестра', () => {
   /**
    * СНИМОК, А НЕ ПЕРЕНОС. До «Пересева мира» этот тест сверял реестр со ВТОРЫМ реестром
    * старой формы (`BUILTIN_ASPECT_META`): та запись адресовала поля ИМЕНАМИ, эта — id
@@ -602,11 +611,17 @@ test('все 13 аспектов: keyFields, иконка, теги и подп�
       icon: '⏰',
       tags: ['routine', 'рутина'],
     },
+    // Срез 1а §3: тегов нет — аспект навешивает только владелец в интерфейсе (РП-1).
+    'orbis/page': {
+      keyFields: ['orbis/template_for'],
+      icon: '📄',
+      tags: [],
+    },
   };
 
   expect(Object.keys(ASPECTS).sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
-  // Р-16: списков keyFields ровно 13 — `orbis/note` в их числе.
-  expect(Object.values(ASPECTS).filter((a) => a.keyFields.length > 0).length).toBe(13);
+  // Р-16: списков keyFields ровно 14 — `orbis/note` в их числе.
+  expect(Object.values(ASPECTS).filter((a) => a.keyFields.length > 0).length).toBe(14);
 
   for (const aspectId of BUILTIN_ASPECT_IDS) {
     const def = defsById.get(aspectId);
@@ -631,6 +646,20 @@ test('все 13 аспектов: keyFields, иконка, теги и подп�
     expect((def.label.en ?? '').length).toBeGreaterThan(0);
     expect((def.description.ru ?? '').length).toBeGreaterThan(0);
     expect((def.description.en ?? '').length).toBeGreaterThan(0);
+  }
+});
+
+/**
+ * Временный список «авторство отложено» (срез 1а, РП-1) — только встроенные аспекты и ни одного
+ * служебного. Служебный в нём лишний: служебность уже убирает `attach_*` и строку индекса, и
+ * попадание туда значило бы, что кто-то спутал два механизма — а их различие и есть довод РП-1
+ * (служебность прячет записи из выдач, список — только от модели).
+ */
+test('AUTHORING_DEFERRED_ASPECTS ⊆ BUILTIN_ASPECT_IDS, и ни один его аспект не служебный', () => {
+  expect(AUTHORING_DEFERRED_ASPECTS).toEqual(['orbis/page']);
+  for (const id of AUTHORING_DEFERRED_ASPECTS) {
+    expect((BUILTIN_ASPECT_IDS as readonly string[]).includes(id)).toBe(true);
+    expect(`${id}: service=${defsById.get(id)?.service}`).toBe(`${id}: service=false`);
   }
 });
 
@@ -667,8 +696,8 @@ test('aiInstructions не поминают снятые формы (Р-1-1): cat
       expect(`${def.id}: ${text.includes(bad) ? bad : '—'}`).toBe(`${def.id}: —`);
     }
   }
-  // Не вырожденно: у всех тринадцати инструкция есть, и в ней есть namespaced key.
-  expect(BUILTIN_ASPECT_DEFS.filter((d) => (d.aiInstructions ?? '').length > 0).length).toBe(13);
+  // Не вырожденно: у всех четырнадцати инструкция есть, и в ней есть namespaced key.
+  expect(BUILTIN_ASPECT_DEFS.filter((d) => (d.aiInstructions ?? '').length > 0).length).toBe(14);
   // Ровно одна инструкция обходится без namespaced key — у заметки нечего адресовать
   // (её содержимое живёт в body). Список, а не число: падение назовёт виновника.
   expect(
@@ -941,6 +970,10 @@ const A8_TYPES: Record<string, string> = {
   'orbis/title': 'text|core',
   'orbis/created_at': 'timestamp|core',
   'orbis/updated_at': 'timestamp|core',
+  // Срез 1а §3.2: страница. `minItems: 1` несущий — `present([])` истинно (Ф-1а-3).
+  'orbis/template_for': 'registry_ref{cardinality:many,minItems:1,target:aspect}|core',
+  'orbis/template_wins_over':
+    'ref{cardinality:many,max:50,target:{"filter":{"aspect":"orbis/page"}}}|core',
 };
 
 test('тип и модуль каждого свойства — по колонкам §А8 (включая шесть minLength РП-8)', () => {
@@ -960,7 +993,7 @@ test('тип и модуль каждого свойства — по колон
     return `${type}|${property.module ?? 'core'}`;
   };
 
-  expect(Object.keys(A8_TYPES).length).toBe(77);
+  expect(Object.keys(A8_TYPES).length).toBe(79);
   for (const property of BUILTIN_PROPERTY_META) {
     expect(`${property.id}: ${signature(property)}`).toBe(
       `${property.id}: ${A8_TYPES[property.id] ?? '<нет в снимке §А8>'}`,
@@ -1034,6 +1067,7 @@ test('подписи ролей и аспектов — по §А4-3 и пере
     'orbis/assignment': 'Исполнитель',
     'orbis/agent-run': 'Прогон агента',
     'orbis/routine': 'Рутина',
+    'orbis/page': 'Страница',
   });
 });
 

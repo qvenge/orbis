@@ -1,4 +1,9 @@
-import { ROLE_INSTANCE_OF, RULE_NEAREST_ANCESTOR } from '../constants';
+import {
+  ROLE_INSTANCE_OF,
+  RULE_NEAREST_ANCESTOR,
+  TEMPLATE_FOR_PROPERTY,
+  TEMPLATE_WINS_OVER_PROPERTY,
+} from '../constants';
 import type { RuleDefinitionInput } from './rule-type';
 
 /**
@@ -365,6 +370,47 @@ export const RULE_ENVELOPE_BINDING_MAX_INCOMING: RuleDefinitionInput = {
 };
 
 /**
+ * «Главнее, чем» бывает только у шаблона (срез 1а §3.2): запомненный выбор в споре шаблонов без
+ * «Шаблон для» не с чем сравнивать — спорят шаблоны одного набора аспектов. Выражено формой Б-2 без
+ * расширения языка E (Ф-1а-3): `requires_when` с `not(empty(…))`. `present([])` истинно, поэтому
+ * правило держится на `minItems: 1` у `orbis/template_for`: без него пустой список прошёл бы как
+ * «присутствует». `undo: 'check'` — инвариант формы записи, под откатом его нарушение так же ложно.
+ */
+export const RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE: RuleDefinitionInput = {
+  id: 'page_wins_over_needs_template_for',
+  template: 'requires_when',
+  undo: 'check',
+  when: { op: 'not', args: [{ op: 'empty', args: [{ prop: TEMPLATE_WINS_OVER_PROPERTY }] }] },
+  params: { property: TEMPLATE_FOR_PROPERTY },
+};
+
+/**
+ * Шаблон не бывает «главнее самого себя» (срез 1а §3.2). Правило нужно, а не просто допустимо:
+ * самоссылка в `ref`-свойстве доходит до зеркала `syncRefMirror`, где `ON CONFLICT DO NOTHING` не
+ * ловит CHECK `rel_no_self`, — владелец получил бы СЫРУЮ ошибку БД. C-правила исполняются до эффектов
+ * ссылок (`applyRefEffects`), и строка превращает её в именованный отказ
+ * `INVARIANT page_wins_over_not_self`. Формы Б-2: `forbidden_when` + `in($self, …)`.
+ *
+ * Страж `not(empty(…))` перед `in` — не украшение: интерпретатор отказывает `EXPR_VALUE` («правый
+ * операнд 'in' — не список строк»), когда списка НЕТ, а `when` вычисляется на КАЖДОЙ записи
+ * страницы — и без стража не прошла бы ни одна страница без «Главнее, чем». `and` замыкается
+ * коротко (`expr/eval.ts`: условие тотальности), так что до `in` отсутствующий список не доезжает.
+ */
+export const RULE_PAGE_WINS_OVER_NOT_SELF: RuleDefinitionInput = {
+  id: 'page_wins_over_not_self',
+  template: 'forbidden_when',
+  undo: 'check',
+  when: {
+    op: 'and',
+    args: [
+      { op: 'not', args: [{ op: 'empty', args: [{ prop: TEMPLATE_WINS_OVER_PROPERTY }] }] },
+      { op: 'in', args: [{ ctx: '$self' }, { prop: TEMPLATE_WINS_OVER_PROPERTY }] },
+    ],
+  },
+  params: { property: TEMPLATE_WINS_OVER_PROPERTY },
+};
+
+/**
  * ЗАВИСИМОСТИ ВКЛЮЧЁННОСТИ СИСТЕМНЫХ ПРАВИЛ (§Б4-4 «отключить», Fable M-2 задачи 14): правило-ключ
  * держится на правилах-значениях и включённым без них быть не может. Пара «чего ждём»: запрет
  * `waiting_for_only_when_waiting` законен только при уборке `waiting_for` — выключи уборку при
@@ -394,6 +440,7 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   'orbis/memory': [RULE_MEMORY_RULE_PATTERN, RULE_MEMORY_RULE_TARGET],
   'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
   'orbis/schedule': [RULE_MATERIALIZE],
+  'orbis/page': [RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE, RULE_PAGE_WINS_OVER_NOT_SELF],
   ref: [RULE_MIRROR_REF],
   dependency: [RULE_DEPENDENCY_ACYCLIC],
   'category-parent': [RULE_CATEGORY_PARENT_ACYCLIC],
