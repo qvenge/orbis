@@ -2416,7 +2416,34 @@ function ruleCardText(rule: RuleDefinition, reg: ParseRegistry): string {
     property?: unknown;
     properties?: unknown;
     set?: { property?: unknown };
+    enter?: { contract?: unknown; slot?: unknown; property?: unknown; in?: unknown };
+    on_leave?: { unset?: unknown };
   };
+  // Событие перехода и уборка при уходе (гейт 16 m-7): без них «on_enter_class; свойство X» не говорит,
+  // КОГДА правило срабатывает. Вход — классом слота контракта либо значением свойства (Р-И-37).
+  const enterIn = Array.isArray(p.enter?.in)
+    ? (p.enter.in as unknown[]).map(String).join(', ')
+    : '';
+  const enter =
+    p.enter === undefined
+      ? undefined
+      : typeof p.enter.property === 'string'
+        ? `при входе ${key(p.enter.property)} ∈ ${enterIn}`
+        : `при входе ${String(p.enter.contract)}.${String(p.enter.slot)} ∈ ${enterIn}`;
+  const unset = Array.isArray(p.on_leave?.unset) ? (p.on_leave.unset as string[]).map(key) : [];
+  // Область — дословно (гейт 16 m-7): `{contract}` отказывает КАЖДОЙ записи членов (C-5), и владелец
+  // обязан видеть её до «Принять», а не узнать по отказам.
+  const s = rule.scope;
+  const scope =
+    s === undefined
+      ? undefined
+      : 'aspect' in s
+        ? `aspect:${s.aspect}`
+        : 'property' in s
+          ? `property:${key(s.property)}`
+          : 'role' in s
+            ? `role:${s.role}`
+            : `contract:${s.contract} (исполняется в V2 — пока отказывает каждой записи членов)`;
   const target =
     typeof p.property === 'string'
       ? p.property
@@ -2433,9 +2460,14 @@ function ruleCardText(rule: RuleDefinition, reg: ParseRegistry): string {
   return rowValue(
     [
       `${rule.id}: ${rule.template}`,
+      // Область — сразу за шаблоном: потолок строки карточки (`CARD_VALUE_CAP`) режет хвост, а область
+      // `{contract}` — самое опасное, что в правиле бывает.
+      ...(scope === undefined ? [] : [`область ${scope}`]),
       ...(target === undefined ? [] : [`свойство ${key(target)}`]),
       ...(set.length === 0 ? [] : [`набор ${set.join(', ')}`]),
+      ...(enter === undefined ? [] : [enter]),
       ...(value === undefined ? [] : [`значение ${printExpr(value, reg)}`]),
+      ...(unset.length === 0 ? [] : [`при уходе снять ${unset.join(', ')}`]),
       ...(rule.when === undefined ? [] : [`когда ${printExpr(rule.when, reg)}`]),
       ...(rule.enabled === false ? ['выключено'] : []),
     ].join('; '),

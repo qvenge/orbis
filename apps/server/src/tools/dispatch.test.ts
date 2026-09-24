@@ -5884,6 +5884,32 @@ describe('§С2-1: мутации реестра — уровень подтве
     ]);
   });
 
+  test('m-7: строка правила называет событие входа, уборку при уходе и ОБЛАСТЬ (опасная {contract} видна)', async () => {
+    const owner = await freshGraph();
+    const off = await withIdentity(db, personal(owner), (tx) =>
+      snapshotRegistryUnit(tx, owner, 'rule_remove', {
+        target: { aspect: 'orbis/task' },
+        rule: 'task_completed_at',
+      }),
+    );
+    expect(off.rows[0]?.before).toBe(
+      'task_completed_at: on_enter_class; свойство orbis/completed_at; при входе orbis/completable.status ∈ done; ' +
+        'значение orbis/updated_at; при уходе снять orbis/completed_at',
+    );
+    const set = await withIdentity(db, personal(owner), (tx) =>
+      snapshotRegistryUnit(tx, owner, 'rule_set', {
+        target: { aspect: 'orbis/task' },
+        rule: {
+          id: 'c5_rule',
+          template: 'requires_when',
+          params: { property: 'orbis/due_date' },
+          scope: { contract: 'orbis/completable' },
+        },
+      }),
+    );
+    expect(set.rows[0]?.after).toContain('область contract:orbis/completable (исполняется в V2');
+  });
+
   test('action_set: предусловие в строке «было → станет» — ТЕКСТОМ E, а не деревом (остаток 79)', async () => {
     const owner = await freshGraph();
     const unit = await withIdentity(db, personal(owner), (tx) =>
