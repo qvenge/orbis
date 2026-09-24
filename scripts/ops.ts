@@ -698,7 +698,7 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
     help:
       'РАЗРУШАЮЩАЯ: снести МИР графов и журнал (сами графы и членство сохраняются), ' +
       'пользовательские строки реестров и дельты; ' +
-      'пересеять пять реестров. Требует --confirm <PROD_REF> и --i-understand RESET',
+      'пересеять шесть реестров. Требует --confirm <PROD_REF> и --i-understand RESET',
   },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   dump: {
