@@ -121,7 +121,7 @@ export function lookupOf(
   const aspects = indexOf(data?.aspects ?? []);
   const roles = indexOf(data?.roles ?? []);
   const contracts = indexOf(data?.contracts ?? []);
-  // Носитель считается ОДИН раз на снимок: у 77 свойств и 13 аспектов обход дешёв, но он
+  // Носитель считается ОДИН раз на снимок: на встроенном реестре обход дешёв, но он
   // ушёл бы в каждую строку каждой карточки, а строк на экране прогона сотни.
   const carriers = new Map<string, AspectDefinition>();
   for (const aspect of data?.aspects ?? []) {
