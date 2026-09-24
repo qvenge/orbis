@@ -12,6 +12,7 @@ import {
   type BodyKind,
   blockAllowedIn,
   bodyIssues,
+  EMPTY_QUERY_MESSAGE,
   MISPLACED_HINT,
   type PlacedBlock,
   templateBrokenReason,
@@ -193,9 +194,21 @@ describe('bodyIssues — блок данных', () => {
   });
 });
 
+test('пустой и пробельный блок данных — QUERY_INVALID «не настроен» в любом виде тела (Р-21-8)', () => {
+  // Разбор принял бы пустой текст деревом `{filter: null}` — «все записи владельца».
+  for (const kind of ['note', 'page', 'template'] as const) {
+    for (const text of ['{{query:}}\n', '{{query:   }}\n', '{{query: \n }}\n']) {
+      expect(issues(text, kind)).toEqual([
+        { code: 'QUERY_INVALID', message: EMPTY_QUERY_MESSAGE, path: [0] },
+      ]);
+    }
+  }
+  expect(EMPTY_QUERY_MESSAGE).toBe('пустой запрос: блок ничего не выбирает — настройте его');
+});
+
 describe('bodyIssues — ошибки препрохода и пути', () => {
-  test('broken-узел — его код и сообщение, в любом виде тела', () => {
-    for (const kind of ['note', 'page', 'template'] as const) {
+  test('broken-узел на странице и в шаблоне — его код и сообщение', () => {
+    for (const kind of ['page', 'template'] as const) {
       const found = issues('текст\n{{/column}}\n', kind);
       expect(found).toEqual([
         {
@@ -208,6 +221,27 @@ describe('bodyIssues — ошибки препрохода и пути', () => {
     expect(issues('{{columns}}\n{{column}}\nа\n{{/column}}\n', 'page')).toMatchObject([
       { code: 'CONTAINER_UNCLOSED', message: GRAMMAR_ERROR_MESSAGES.CONTAINER_UNCLOSED, path: [0] },
     ]);
+  });
+
+  test('broken-узел в заметке — BLOCK_MISPLACED с подсказкой, а не совет чинить контейнер', () => {
+    // Контейнер в заметке не работает и починенным (§5.5): грамматический совет вёл бы в тупик.
+    for (const text of [
+      'текст\n{{/column}}\n',
+      '{{columns}}\n{{column}}\nа\n{{/column}}\n{{/columns}}\n', // PART_COUNT
+      '{{columns}}\n{{column}}\nа\n{{/column}}\n', // CONTAINER_UNCLOSED
+    ]) {
+      const nodes = parsePageText(text);
+      const at = nodes.findIndex((n) => n.kind === 'broken');
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(bodyIssues(nodes, 'note', REG)).toEqual([
+        {
+          code: 'BLOCK_MISPLACED',
+          message: 'Разметка контейнера не показывается в заметке.',
+          hint: MISPLACED_HINT,
+          path: [at],
+        },
+      ]);
+    }
   });
 
   test('проблемы внутри частей контейнеров находятся — путь спускается в часть', () => {
@@ -263,6 +297,9 @@ describe('templateBrokenReason — §4.2 шаг 7', () => {
     expect(templateBrokenReason('{{body}}\n{{body}}\n', REG)).toContain('{{body}}');
     expect(templateBrokenReason(ABS_QUERY, REG)).toContain('2026-01-01');
     expect(templateBrokenReason('{{query: неизвестное=1}}\n', REG)).toContain('неизвестное');
+    expect(templateBrokenReason('{{title}}\n{{query:  }}\n{{body}}\n', REG)).toBe(
+      EMPTY_QUERY_MESSAGE,
+    );
   });
 });
 

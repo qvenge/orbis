@@ -58,6 +58,14 @@ export interface PlacementIssue {
 /** Плашка §5.5 на месте блока обвязки или контейнера, попавшего в заметку. */
 export const MISPLACED_HINT = 'работает на страницах и в шаблонах — сделать запись страницей?';
 
+/**
+ * Пустой блок данных — «блок не настроен», а не «все записи владельца» (Р-21-8): грамматика
+ * принимает пустой текст законным `{filter: null}`, а сервер пустой фильтр не отсекает. Текст —
+ * дословно `EMPTY_MESSAGE` плашки блока в web (`lib/query-blocks/QueryBlock.tsx`): одна
+ * формулировка на плашку тела и плашку блока; web сошлётся сюда в задаче 11.
+ */
+export const EMPTY_QUERY_MESSAGE = 'пустой запрос: блок ничего не выбирает — настройте его';
+
 const DATE_HINT = `замените на относительный токен: ${RELATIVE_DATE_TOKENS.join(', ')}`;
 
 const KIND_WORD: Record<BodyKind, string> = {
@@ -128,7 +136,12 @@ function queryIssue(
 ): PlacementIssue | null {
   // Без краевых пробелов — как разбирает блок данных (`lib/query-blocks/parse.ts` в web):
   // иначе позиция в плашке тела и в плашке самого блока разошлись бы на пробел после `query:`.
-  const parsed = parseQueryAst(text.trim(), reg);
+  const inner = text.trim();
+  // Пустой текст НЕ разбирается (Р-21-8, как `bindAttrs` и `QueryBlock`): разбор принял бы его
+  // деревом «весь корпус», шаблон с таким блоком считался бы разобранным, а блок данных
+  // вернул бы все записи владельца.
+  if (inner === '') return { code: 'QUERY_INVALID', message: EMPTY_QUERY_MESSAGE, path };
+  const parsed = parseQueryAst(inner, reg);
   if (!parsed.ok) {
     const { message, position } = parsed.error;
     return {
@@ -168,7 +181,10 @@ function queryIssue(
  *
  * Неуместный контейнер (в заметке) — одна плашка на весь контейнер, внутрь обход не идёт: он
  * не рисуется вовсе, и плашки его содержимого не показались бы нигде. `broken` лежит только на
- * верхнем уровне (препроход ломает весь внешний контейнер) и сообщается в любом виде тела.
+ * верхнем уровне (препроход ломает весь внешний контейнер). На странице и в шаблоне он
+ * сообщается своим грамматическим кодом; в заметке — `BLOCK_MISPLACED`: `broken` всегда разметка
+ * контейнера, а контейнер в заметке не работает вовсе (§5.5), и совет вроде «колонок бывает от
+ * 2 до 4» звал бы чинить то, что и после починки не заработает.
  */
 export function bodyIssues(
   nodes: readonly PageNode[],
@@ -182,7 +198,16 @@ export function bodyIssues(
     list.forEach((node, i) => {
       const path = [...prefix, i];
       if (node.kind === 'broken') {
-        out.push({ code: node.code, message: node.message, path });
+        out.push(
+          kind === 'note'
+            ? {
+                code: 'BLOCK_MISPLACED',
+                message: 'Разметка контейнера не показывается в заметке.',
+                hint: MISPLACED_HINT,
+                path,
+              }
+            : { code: node.code, message: node.message, path },
+        );
         return;
       }
       const block = placedBlockOf(node);
