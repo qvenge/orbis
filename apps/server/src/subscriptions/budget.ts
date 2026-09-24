@@ -930,8 +930,8 @@ function isAlert(def: BudgetSubscription, spent: string, limit: string): boolean
  * `bound_via` и `rollup.applies_to` без числителя либо длиннее двух — отказ валидатора. Отказ
  * ниже остаётся сторожем самого движка на случай декларации, приехавшей мимо валидатора.
  *
- * Явное поле `alerts.of/against` — ОВ-Б1-4 (вопрос владельцу: ассет спеки несёт `alerts.when`,
- * схема §1.6 — нет); задача 16 либо Б-2. Тела правил это не тронет.
+ * Явного поля `alerts.of/against` схема не несёт — эррата ОВ-Б1-4 (ревизия 4 спеки, строка `alerts`
+ * таблицы полей подписки: форма порога `{warn_at, on_raw}`); операнды выводятся из структуры, как выше.
  */
 function alertOperands(def: BudgetSubscription): { spent: string; limit: string } {
   const spent = Object.entries(def.aggregates).find(
@@ -1057,7 +1057,8 @@ const WIRE_FIELDS = {
  * `direction` строки Coming up. Провод старше реформы и говорит вариантами `orbis/direction`
  * (enum `income|expense`), поэтому перевод КЛАССА в слово провода — здесь, в движке: так трата
  * аспекта владельца (`direction: 'out'` → класс `outflow`) попадает в провод правильным словом, а
- * не своим сырым вариантом. Перевод самого провода на классы — Б-2.
+ * не своим сырым вариантом. Перевод самого провода на классы — остаток (реестр остатков Б-2, строка 117:
+ * страницы-1 / владелец).
  */
 const BALANCE_FIELDS: Record<string, 'income' | 'expense'> = {
   inflow: 'income',

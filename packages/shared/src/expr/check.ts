@@ -652,8 +652,9 @@ function typeOf(
       return bad(EXPR_TYPE, path, 'область правила записи без чтения соседа', 'agg_via');
     }
     // Опубликованные величины Б-1 — `spent`/`remaining` конверта, обе decimal; сверка роли и
-    // имени по реестру `published` — Б-2 (§Б5-5, Р-И-30): у `ExprScope` нет ни ролей, ни
-    // этого реестра. Ребра может не быть — значение НЕОБЯЗАТЕЛЬНО.
+    // имени по реестру `published` — V2, вместе с живым читателем `agg_via` (реестр остатков Б-2,
+    // строка 6; §Б5-5, Р-И-30): у `ExprScope` нет ни ролей, ни этого реестра. Ребра может не быть —
+    // значение НЕОБЯЗАТЕЛЬНО.
     return { type: { kind: 'decimal' }, optional: true };
   }
   if ('deref' in node) return derefType(node.deref, s, path);

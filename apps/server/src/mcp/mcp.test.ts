@@ -433,7 +433,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 11 публичных core + 16 реестровых + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 11 публичных core + 16 реестровых + 5 глаголов + 12 attach_* + run_action и тул действия = 46, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -489,6 +489,9 @@ describe('/mcp tools/list (§9.2)', () => {
         'orbis_run_step',
         'orbis_checkpoint',
         'orbis_finish',
+        // Действия (§Б6-6, задача 7 Б-2): каталог `run_action` и тул сидового действия с offered_by llm.
+        'run_action',
+        'action_planner_postpone_overdue',
       ]) {
         expect(names).toContain(name);
       }

@@ -5378,6 +5378,41 @@ describe('шестой род держателя: property_merge перепис�
     ok(await run('property_merge', { source, into }, { identity: personal(g) }));
   });
 
+  test('E-3 (б): откат снятия правила, записанного до слияния, отказывает громко — адрес поглощён (остаток 16-5)', async () => {
+    const { g, source, into } = await world('user/merge-undo');
+    ok(
+      await run(
+        'rule_set',
+        {
+          target: { aspect: 'orbis/task' },
+          rule: {
+            id: 'task_needs_src_undo',
+            template: 'requires_when',
+            params: { property: 'orbis/due_date' },
+            when: { has: source },
+          },
+        },
+        { identity: personal(g) },
+      ),
+    );
+    const removed = ok(
+      await run(
+        'rule_remove',
+        { target: { aspect: 'orbis/task' }, rule: 'task_needs_src_undo' },
+        { identity: personal(g) },
+      ),
+    );
+    ok(await run('property_merge', { source, into }, { identity: personal(g) }));
+    // Прежде откат молча возвращал правило с адресом поглощённого (условие вечно ложно); теперь валидатор
+    // записи отказывает, и выход — `rule_set` с адресом цели.
+    const undo = await undoAction(db, { identity: personal(g), actionId: removed.actionId });
+    expect(undo.ok).toBe(false);
+    expect(undo.ok ? null : undo.error).toMatchObject({
+      code: 'VALIDATION',
+      details: { reason: 'RULE_UNKNOWN_PROPERTY', cause: 'merged' },
+    });
+  });
+
   test('E-3 (б): после слияния правило по адресу поглощённого — отказ RULE_UNKNOWN_PROPERTY/merged (носитель и параметр)', async () => {
     const OWN = 'user/merge-dead-addr';
     const { g, source, into } = await world(OWN);

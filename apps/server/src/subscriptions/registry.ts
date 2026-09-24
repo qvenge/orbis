@@ -299,8 +299,8 @@ function assertRole(reg: RegistrySnapshot, sub: string, role: string): void {
 
 /**
  * Фазы, которые умеет назвать провод карточки конверта (`envelopeStatusSchema.phase`,
- * `@orbis/shared/contracts/budget`). Ф-Б1-40в: пока провод не переведён на классы (Б-2), это и есть
- * закрытый словарь фаз Budget.
+ * `@orbis/shared/contracts/budget`). Ф-Б1-40в: пока провод не переведён на классы (остаток — реестр
+ * остатков Б-2, строка 117), это и есть закрытый словарь фаз Budget.
  */
 const WIRE_PHASES: ReadonlySet<string> = new Set(['upcoming', 'active', 'closed']);
 
@@ -317,7 +317,8 @@ const WIRE_PHASES: ReadonlySet<string> = new Set(['upcoming', 'active', 'closed'
  * `daily_pace` в перечне НЕТ: провод объявляет его `nullable`, и клиент обрабатывает пустоту явно.
  *
  * Словари живут здесь, а не импортируются из движка: `budget.ts` уже импортирует этот файл, и
- * обратный импорт замкнул бы цикл. Единый источник имён рядом с `envelopeStatusSchema` — Б-2.
+ * обратный импорт замкнул бы цикл. Единый источник имён рядом с `envelopeStatusSchema` — остаток (реестр
+ * остатков Б-2, строка 118).
  */
 const WIRE_LEDGERS: readonly string[] = ['spent', 'effective_limit', 'remaining'];
 const WIRE_LISTS: readonly string[] = ['coming_up', 'planned'];
@@ -332,8 +333,8 @@ const WIRE_DEREF_READ = 'orbis/title';
  * увидел бы он это бейджем, который врёт. Поэтому неоднозначность — отказ ЗДЕСЬ, на записи, а не
  * догадка движка на чтении.
  *
- * Явное поле `alerts.of/against` (ассет спеки несёт `alerts.when`, схема §1.6 — нет) — вопрос
- * владельцу ОВ-Б1-4, задача 16 либо Б-2.
+ * Явного поля `alerts.of/against` схема не несёт — эррата ОВ-Б1-4 (ревизия 4 спеки: форма порога
+ * `{warn_at, on_raw}`); однозначность структуры держит этот валидатор.
  */
 function assertAlertOperands(id: string, def: BudgetSubscription): void {
   const numerators = Object.entries(def.aggregates)
@@ -497,7 +498,8 @@ function assertReferences(id: string, def: SubscriptionDefinition, reg: Registry
   }
   // Ф-Б1-40в: словарь фаз в Б-1 ограничен ПРОВОДОМ (`envelopeStatusSchema.phase`). Движок отдаёт
   // фазу клиенту как есть, и своё слово владельца доехало бы до трёх клиентов и golden как чужой
-  // enum — то есть сломало бы разбор ответа, а не показало новую фазу. Фазы владельца — Б-2.
+  // enum — то есть сломало бы разбор ответа, а не показало новую фазу. Фазы владельца — остаток (реестр
+  // остатков Б-2, строка 62).
   for (const p of phaseKeys) {
     if (!WIRE_PHASES.has(p)) {
       bad(
