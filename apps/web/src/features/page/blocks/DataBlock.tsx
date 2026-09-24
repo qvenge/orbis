@@ -121,16 +121,59 @@ function LoadedBlock({
       </BlockFrame>
     );
   }
-  if (!result.ok) return null; // не бывает: отказ блока приходит ошибкой запроса (batch.tsx)
-  if (ast.hideEmpty && isEmptyResult(result)) return null;
-  if (result.kind !== 'rows') {
-    return <TileForm result={result} aggregate={ast.aggregate} heading={heading} {...configure} />;
+  // Отказ блока приходит ошибкой запроса (batch.tsx); `ok:false` в данных — ответ мимо собирателя,
+  // и пустоты вместо него быть не должно (§6.5).
+  if (!result.ok) {
+    return <BlockPlaque message={`Ошибка запроса: ${result.error.message}`} {...configure} />;
   }
+  if (ast.hideEmpty && isEmptyResult(result)) return null;
+  switch (result.kind) {
+    case 'count':
+    case 'sum':
+    case 'latest':
+      return (
+        <TileForm result={result} aggregate={ast.aggregate} heading={heading} {...configure} />
+      );
+    case 'rows':
+      // Карточка — та же `BlockFrame`, что у загрузки, прямо здесь, а не во вложенном
+      // компоненте: иной тип элемента на этом месте дерева пересоздал бы карточку, и
+      // «Настроить» потеряла бы фокус на приезде данных.
+      return (
+        <BlockFrame heading={heading} count={result.rows.length + result.more} {...configure}>
+          <RowsBody result={result} ast={ast} pending={data.isPlaceholderData} onMore={setLimit} />
+        </BlockFrame>
+      );
+    default:
+      // Вид ответа, которого этот клиент не знает (сервер новее) — плашка, а не пустая карточка:
+      // §6.5, пустоты вместо ошибки не бывает.
+      return <BlockPlaque message={UNKNOWN_KIND_MESSAGE} {...configure} />;
+  }
+}
 
+/** Ответ сервера вида, которого клиент не знает, — лечится обновлением приложения. */
+const UNKNOWN_KIND_MESSAGE = 'неизвестный вид ответа блока — обновите приложение';
+
+/**
+ * Строки в форме `display` и «ещё N». «ещё N» раскрывает остаток до потолка сервера; у потолка
+ * (`BLOCK_ROWS_CAP` строк уже показано) раскрывать нечем — кнопка была бы мёртвой, вместо неё
+ * подпись, что показаны первые N.
+ */
+function RowsBody({
+  result,
+  ast,
+  pending,
+  onMore,
+}: {
+  result: Extract<BlockResult, { kind: 'rows' }>;
+  ast: QueryAst;
+  pending: boolean;
+  onMore: (limit: number) => void;
+}) {
   const total = result.rows.length + result.more;
   const display = ast.display ?? 'compact';
+  const atCap = result.rows.length >= BLOCK_ROWS_CAP;
   return (
-    <BlockFrame heading={heading} count={total} {...configure}>
+    <>
       {display === 'list' ? (
         <ListForm rows={result.rows} />
       ) : display === 'table' ? (
@@ -138,14 +181,19 @@ function LoadedBlock({
       ) : (
         <CompactForm rows={result.rows} />
       )}
-      {result.more > 0 && (
-        <MoreRows
-          more={result.more}
-          pending={data.isPlaceholderData}
-          onMore={() => setLimit(Math.min(total, BLOCK_ROWS_CAP))}
-        />
-      )}
-    </BlockFrame>
+      {result.more > 0 &&
+        (atCap ? (
+          <p data-testid="qb-cap" className="text-text-muted text-xs">
+            показаны первые {BLOCK_ROWS_CAP}
+          </p>
+        ) : (
+          <MoreRows
+            more={result.more}
+            pending={pending}
+            onMore={() => onMore(Math.min(total, BLOCK_ROWS_CAP))}
+          />
+        ))}
+    </>
   );
 }
 

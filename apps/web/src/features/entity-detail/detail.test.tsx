@@ -1062,6 +1062,13 @@ test('правка свойства Финансов гасит бюджетны
 // что в проде: битая конструкция упала бы плашкой qb-error, а не молча.
 const found = (title: string) => wireEntity({ id: title, title });
 
+/**
+ * Запись, в чьём теле живут блоки данных. Id — uuid, а не `'e1'` файла: `this` блока уходит в
+ * элемент пачки `entity.blocks`, схема элемента требует uuid, и клиент отвергает иной `this`
+ * плашкой этого блока до сети (изоляция соседей, §6.3). В проде id записей — всегда uuid.
+ */
+const BLOCK_HOST = '0198a0c2-0000-7000-8000-00000000b10c';
+
 /** Тексты блоков данных сида — тем же препроходом, которым их читает первый кадр (РП-6). */
 const BLOCKS_OF_DAILY_PLANNING = parsePageText(DAILY_PLANNING_BODY).flatMap((n) =>
   n.kind === 'query' ? [n.text.trim()] : [],
@@ -1072,10 +1079,16 @@ const BLOCKS_OF_DAILY_PLANNING = parsePageText(DAILY_PLANNING_BODY).flatMap((n) 
 // «Сегодня» — ВТОРОЙ блок сида, и при рендере только первого он недостижим в UI.
 // Body берётся из самого сида (@orbis/server/src/seed/smart-lists) — дрейф невозможен.
 test('detail рендерит КАЖДЫЙ query-блок body: у Daily Planning — три секции, включая «Сегодня»', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  const { calls } = renderWithProviders(<DetailScreen entityId={BLOCK_HOST} />, (path, input) => {
     if (path === 'entity.get')
       return {
-        entity: { ...entity, title: 'Daily Planning', body: DAILY_PLANNING_BODY, aspects: [] },
+        entity: {
+          ...entity,
+          id: BLOCK_HOST,
+          title: 'Daily Planning',
+          body: DAILY_PLANNING_BODY,
+          aspects: [],
+        },
         relations: [],
         thread: null,
       };
@@ -1114,10 +1127,10 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
 // работе», «Ждут меня», «Бэклог» на экране проекта показывали ноль при живых тикетах.
 test('query-блок с `this` на detail получает контекст открытой сущности', async () => {
   const body = '{{query: children_of=this, aspect=orbis/task, display=list, title=Подзадачи}}';
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+  const { calls } = renderWithProviders(<DetailScreen entityId={BLOCK_HOST} />, (path, input) => {
     if (path === 'entity.get')
       return {
-        entity: { ...entity, body, bodyDoc: parseBody(body), aspects: [] },
+        entity: { ...entity, id: BLOCK_HOST, body, bodyDoc: parseBody(body), aspects: [] },
         relations: [],
         thread: null,
       };
@@ -1137,7 +1150,7 @@ test('query-блок с `this` на detail получает контекст о�
       {
         key: '0',
         text: 'children_of=this, aspect=orbis/task, display=list, title=Подзадачи',
-        thisEntityId: 'e1',
+        thisEntityId: BLOCK_HOST,
       },
     ],
   });
@@ -1152,7 +1165,7 @@ test('query-блок с `this` на detail получает контекст о�
     .filter((c) => c.path === 'entity.blocks')
     .flatMap((c) => (c.input as { blocks: object[] }).blocks);
   expect(items.length).toBeGreaterThan(0);
-  for (const b of items) expect(b).toHaveProperty('thisEntityId', 'e1');
+  for (const b of items) expect(b).toHaveProperty('thisEntityId', BLOCK_HOST);
 });
 
 // --- меню ⋮ на detail: закрепить / архивировать / скопировать ссылку (§3.5) ------------
@@ -1408,10 +1421,14 @@ const BODY_LINK_ID = '019e4466-1111-7000-8000-0123456789ab';
 
 /** Обработчик detail с заданным телом; документ собирается из того же markdown. */
 const bodyHandler =
-  (body: string): MockHandler =>
+  (body: string, id = entity.id): MockHandler =>
   (path, input) => {
     if (path === 'entity.get')
-      return { entity: { ...entity, body, bodyDoc: parseBody(body) }, relations: [], thread: null };
+      return {
+        entity: { ...entity, id, body, bodyDoc: parseBody(body) },
+        relations: [],
+        thread: null,
+      };
     if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
@@ -1499,8 +1516,8 @@ test('тело из одного {{query:…}} — «Заметки…» над 
   // тело при этом не является, и приглашение к вводу над списком задач — просто мусор,
   // который видно каждый день.
   renderWithProviders(
-    <DetailScreen entityId="e1" />,
-    bodyHandler('{{query:aspect=orbis/task, orbis/task_status=inbox, title=Inbox}}'),
+    <DetailScreen entityId={BLOCK_HOST} />,
+    bodyHandler('{{query:aspect=orbis/task, orbis/task_status=inbox, title=Inbox}}', BLOCK_HOST),
   );
   await screen.findByTestId('qb-count');
   expect(screen.getByTestId('editor-preview')).not.toHaveTextContent('Заметки…');
@@ -1552,7 +1569,10 @@ function follows(a: Element, b: Element): boolean {
 // уходила, — и юнит-тест сегментации этого не поймал бы: порядок сегментов он видит, а порядок
 // узлов НА ЭКРАНЕ — нет.
 test('порядок сегментов сохраняется: текст → виджет → текст', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_TEXT_BLOCK_TEXT));
+  renderWithProviders(
+    <DetailScreen entityId={BLOCK_HOST} />,
+    bodyHandler(BODY_TEXT_BLOCK_TEXT, BLOCK_HOST),
+  );
   await screen.findByTestId('qb-count');
   const intro = screen.getByText('Утренний обзор');
   const widget = screen.getByText('Inbox'); // заголовок виджета из title=
@@ -1563,7 +1583,10 @@ test('порядок сегментов сохраняется: текст → �
 });
 
 test('{{query:…}} в первый кадр текстом не течёт: текст — разметкой, блок — виджетом', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_WITH_BLOCK));
+  renderWithProviders(
+    <DetailScreen entityId={BLOCK_HOST} />,
+    bodyHandler(BODY_WITH_BLOCK, BLOCK_HOST),
+  );
   await screen.findByTestId('qb-count');
   expect(screen.getByText('Утренний обзор')).toBeInTheDocument();
   expect(screen.getByText('Inbox')).toBeInTheDocument();
@@ -1572,7 +1595,10 @@ test('{{query:…}} в первый кадр текстом не течёт: т�
 });
 
 test('клик по виджету query-блока редактор не поднимает', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_WITH_BLOCK));
+  renderWithProviders(
+    <DetailScreen entityId={BLOCK_HOST} />,
+    bodyHandler(BODY_WITH_BLOCK, BLOCK_HOST),
+  );
   fireEvent.click(await screen.findByTestId('qb-item'));
   // Виджет — живой список, а не текст записи: подменять его редактором по клику значит
   // ронять экран смарт-листа (у All Tasks весь body — один блок).

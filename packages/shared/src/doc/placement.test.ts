@@ -310,7 +310,19 @@ describe('листовость модуля', () => {
     /^\s*import\b[^'"]*?(?:\bfrom\s*)?['"]([^'"]+)['"]|^\s*export\b[^;'"]*\bfrom\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]?([^'")]*)|\brequire\s*\(\s*['"]?([^'")]*)/gm;
   const specifiers = (src: string) =>
     [...src.matchAll(SPECIFIER_RE)].map((m) => m[1] ?? m[2] ?? m[3] ?? m[4] ?? '');
-  const ALLOWED = ['./page-grammar', '../query/parse-ast', '../query/dates'];
+  // `../contracts/block-messages` — строки отказов без единого импорта (фикс-раунд 1 задачи 11:
+  // `EMPTY_QUERY_MESSAGE` переехал туда ради веса начальной загрузки web); его листовость —
+  // отдельным тестом ниже, иначе разрешение было бы дырой в стороже.
+  const ALLOWED = [
+    './page-grammar',
+    '../query/parse-ast',
+    '../query/dates',
+    '../contracts/block-messages',
+  ];
+
+  test('contracts/block-messages.ts не импортирует НИЧЕГО', () => {
+    expect(specifiers(read('../contracts/block-messages.ts'))).toEqual([]);
+  });
 
   test('placement.ts импортирует только page-grammar и разбор запроса с датами', () => {
     // Потребители — первый кадр, рендерер экрана записи, редактор и выбор шаблона: из экрана

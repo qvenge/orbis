@@ -264,3 +264,26 @@ test('первый кадр заметки: блок обвязки и конт�
   expect(screen.queryByText('слева')).toBeNull();
   expect(screen.getByText('Вступление')).toBeInTheDocument();
 });
+
+test('F2: у потолка строк «ещё N» не рисуется — подпись «показаны первые 500»', async () => {
+  const text = 'aspect=orbis/task';
+  const rows = Array.from({ length: 500 }, (_, i) => wireEntity({ id: `r${i}`, title: `r${i}` }));
+  renderWithProviders(
+    <DataBlock text={text} />,
+    handler({ [text]: { ok: true, kind: 'rows', rows: rows as never, more: 3 } }),
+  );
+  expect(await screen.findByTestId('qb-cap')).toHaveTextContent('показаны первые 500');
+  expect(screen.queryByRole('button', { name: /ещё/ })).toBeNull();
+  // Счётчик по-прежнему честен: совпадений больше, чем показано.
+  expect(screen.getByTestId('qb-count')).toHaveTextContent('503');
+});
+
+test('F4: незнакомый вид ответа — плашка «обновите приложение», а не пустая карточка', async () => {
+  const text = 'aspect=orbis/task';
+  renderWithProviders(
+    <DataBlock text={text} />,
+    handler({ [text]: { ok: true, kind: 'histogram', buckets: [] } as never }),
+  );
+  expect(await screen.findByTestId('qb-error')).toHaveTextContent('обновите приложение');
+  expect(screen.queryByTestId('qb-tile')).toBeNull();
+});

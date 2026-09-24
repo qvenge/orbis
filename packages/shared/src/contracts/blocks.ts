@@ -7,7 +7,10 @@
 //    («одна пачка, один Undo» — §4.3 выбор шаблона, §8.4 смена вида записи).
 import { z } from 'zod';
 import type { Entity } from '../schemas/entity';
+import { BLOCK_ITEM_MESSAGES, BLOCK_TEXT_MAX } from './block-messages';
 import { entityUpdateUiInput } from './tools';
+
+export * from './block-messages';
 
 /** Потолок пачки блоков за вызов (спека §6.3): больше на одной странице не рисуется. */
 export const BLOCKS_BATCH_CAP = 30;
@@ -41,9 +44,14 @@ export const entityBlocksInput = z
         z
           .object({
             key: z.string().min(1).max(200),
-            text: z.string().min(1).max(4000),
-            thisEntityId: z.string().uuid().optional(),
-            limit: z.number().int().min(1).max(BLOCK_ROWS_CAP).optional(),
+            text: z.string().min(1).max(BLOCK_TEXT_MAX, BLOCK_ITEM_MESSAGES.textTooLong),
+            thisEntityId: z.string().uuid(BLOCK_ITEM_MESSAGES.thisNotId).optional(),
+            limit: z
+              .number()
+              .int(BLOCK_ITEM_MESSAGES.limitRange)
+              .min(1, BLOCK_ITEM_MESSAGES.limitRange)
+              .max(BLOCK_ROWS_CAP, BLOCK_ITEM_MESSAGES.limitRange)
+              .optional(),
           })
           .strict(),
       )

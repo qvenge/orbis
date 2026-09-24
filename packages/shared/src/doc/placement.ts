@@ -7,13 +7,14 @@
  * шаблона); четыре своих копии матрицы разъехались бы, и одна и та же строка была бы плашкой
  * на экране и нормой в редакторе.
  *
- * Модуль листовой: импортирует только `page-grammar` и разбор запроса с датами
- * (`query/parse-ast`, `query/dates`). Его тянет экран записи, а оттуда нельзя дотянуться до
+ * Модуль листовой: импортирует только `page-grammar`, разбор запроса с датами
+ * (`query/parse-ast`, `query/dates`) и строки отказов (`contracts/block-messages`, без импортов). Его тянет экран записи, а оттуда нельзя дотянуться до
  * барреля `@orbis/shared/doc` (tiptap, marked; сторожа `scripts/check-lazy-chunks.ts` и
  * `save.test.tsx`). Разбор запроса несёт zod (`query/ast.ts`), но экран записи уже держит его
  * через корневой `@orbis/shared`, так что нового веса в чанк это не добавляет.
  */
 
+import { EMPTY_QUERY_MESSAGE } from '../contracts/block-messages';
 import { absoluteDateIn, RELATIVE_DATE_TOKENS } from '../query/dates';
 import { effectiveLabel, type ParseRegistry, parseQueryAst } from '../query/parse-ast';
 import { type GrammarErrorCode, type PageNode, parsePageText } from './page-grammar';
@@ -59,12 +60,12 @@ export interface PlacementIssue {
 export const MISPLACED_HINT = 'работает на страницах и в шаблонах — сделать запись страницей?';
 
 /**
- * Пустой блок данных — «блок не настроен», а не «все записи владельца» (Р-21-8): грамматика
- * принимает пустой текст законным `{filter: null}`, а сервер пустой фильтр не отсекает. Одна
- * формулировка на плашку тела, плашку блока в web (`features/page/blocks/DataBlock.tsx`,
- * `lib/query-blocks/batch.tsx`) и отказ блока сервером (`entity.blocks`, код `EMPTY`).
+ * Пустой блок данных — «блок не настроен» (Р-21-8). Текст живёт в листовом
+ * `contracts/block-messages.ts`: одна формулировка на плашку тела, плашку блока в web и отказ
+ * блока сервером (`entity.blocks`, код `EMPTY`). Реэкспорт здесь — чтобы потребители плашек тела
+ * брали его оттуда же, откуда `bodyIssues`.
  */
-export const EMPTY_QUERY_MESSAGE = 'пустой запрос: блок ничего не выбирает — настройте его';
+export { EMPTY_QUERY_MESSAGE };
 
 const DATE_HINT = `замените на относительный токен: ${RELATIVE_DATE_TOKENS.join(', ')}`;
 

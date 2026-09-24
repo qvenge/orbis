@@ -225,3 +225,113 @@ test('(з) thisEntityId берётся из ThisEntityProvider и попадае
   // Вне тела записи поля нет вовсе, а не null: чужой контекст не подставляется (this-entity.tsx).
   expect(outside).not.toHaveProperty('thisEntityId');
 });
+
+// --- фикс-раунд 1 ------------------------------------------------------------------------
+
+const REC_A = '0198a0c2-0000-7000-8000-00000000000a';
+const REC_B = '0198a0c2-0000-7000-8000-00000000000b';
+const THIS_TEXT = 'children_of=this, aspect=orbis/task';
+const byThis: Parameters<typeof blocksReply>[0] = {
+  [THIS_TEXT]: (b) => [ent(b.thisEntityId === REC_A ? 'строка-A' : 'строка-B')],
+};
+
+test('F1: один текст с this у двух записей — два элемента пачки, каждый блок со своими строками', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <ThisEntityProvider id={REC_A}>
+        <DataBlock text={THIS_TEXT} />
+      </ThisEntityProvider>
+      <ThisEntityProvider id={REC_B}>
+        <DataBlock text={THIS_TEXT} />
+      </ThisEntityProvider>
+    </>,
+    handler(byThis),
+  );
+  await waitFor(() => expect(screen.getAllByTestId('qb-item')).toHaveLength(2));
+  expect(screen.getAllByTestId('qb-item').map((li) => li.textContent)).toEqual([
+    'строка-A',
+    'строка-B',
+  ]);
+  const items = (batches(calls)[0]?.input as { blocks: { thisEntityId?: string }[] }).blocks;
+  expect(items.map((b) => b.thisEntityId).sort()).toEqual([REC_A, REC_B]);
+});
+
+function SwitchThis({ ids }: { ids: [string, string] }) {
+  const [id, setId] = useState(ids[0]);
+  return (
+    <>
+      <ThisEntityProvider id={id}>
+        <DataBlock text={THIS_TEXT} />
+      </ThisEntityProvider>
+      <button type="button" onClick={() => setId(ids[1])}>
+        другая запись
+      </button>
+    </>
+  );
+}
+
+test('F1: смена this у блока — строки прежней записи не мелькают на новой', async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  renderWithProviders(<SwitchThis ids={[REC_A, REC_B]} />, async (path, input) => {
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
+    const blocks = (input as { blocks?: { thisEntityId?: string }[] }).blocks ?? [];
+    if (path === 'entity.blocks' && blocks.some((b) => b.thisEntityId === REC_B)) await gate;
+    return blocksReply(byThis)(path, input) ?? {};
+  });
+  expect(await screen.findByTestId('qb-item')).toHaveTextContent('строка-A');
+  fireEvent.click(screen.getByRole('button', { name: 'другая запись' }));
+  // Ответ для B ещё не пришёл: на экране загрузка, а не строки A.
+  await screen.findByRole('status');
+  expect(screen.queryByText('строка-A')).toBeNull();
+  release();
+  expect(await screen.findByText('строка-B')).toBeInTheDocument();
+});
+
+test('F5: сетевой отказ пачки — русская плашка, исходная ошибка не на экране', async () => {
+  renderWithProviders(<DataBlock text="tags=a" />, (path) => {
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
+    if (path === 'entity.blocks') throw new TypeError('Failed to fetch');
+    return {};
+  });
+  const plaque = await screen.findByTestId('qb-error');
+  expect(plaque).toHaveTextContent('сервер недоступен — данные блока не получены');
+  expect(plaque).not.toHaveTextContent('Failed');
+});
+
+test('F5: текст длиннее предела — русская плашка этого блока, в сеть не уходит', async () => {
+  const long = `tags=${'a'.repeat(4000)}`;
+  const { calls } = renderWithProviders(
+    <>
+      <DataBlock text={long} />
+      <DataBlock text="tags=b" />
+    </>,
+    handler({ 'tags=b': [ent('B')] }),
+  );
+  expect(await screen.findByTestId('qb-error')).toHaveTextContent(
+    'текст запроса длиннее 4000 знаков',
+  );
+  expect(await screen.findByText('B')).toBeInTheDocument();
+  expect(batches(calls).flatMap(blockTexts)).toEqual(['tags=b']);
+});
+
+test('F6: негодный this у блока — плашка ТОЛЬКО у него, сосед по пачке получает данные', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <ThisEntityProvider id="e1">
+        <DataBlock text={THIS_TEXT} />
+      </ThisEntityProvider>
+      <DataBlock text="tags=a" />
+    </>,
+    // Обвязка сверяет вход схемой сервера: пустивший бы негодный элемент клиент уронил бы
+    // пачку целиком, и сосед тоже показал бы плашку.
+    handler({ 'tags=a': [ent('A')] }),
+  );
+  expect(await screen.findByTestId('qb-error')).toHaveTextContent('не id записи');
+  expect(await screen.findByText('A')).toBeInTheDocument();
+  expect(batches(calls).flatMap(blockTexts)).toEqual(['tags=a']);
+});

@@ -1,5 +1,5 @@
 import type { AppRouter } from '@orbis/server/src/router';
-import type { BlockResult, EntityBlocksInput } from '@orbis/shared';
+import { type BlockResult, type EntityBlocksInput, entityBlocksInput } from '@orbis/shared';
 import { type DefaultOptions, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
@@ -216,7 +216,14 @@ export function blocksReply(
   };
   return (path, input) => {
     if (path !== 'entity.blocks') return undefined;
-    const { blocks } = input as EntityBlocksInput;
+    // Вход сверяется СХЕМОЙ СЕРВЕРА, как это сделал бы tRPC: элемент, который она отвергает,
+    // роняет всю пачку (BAD_REQUEST), и изоляцию соседей клиент обязан держать сам — мок, который
+    // принимает что угодно, сделал бы её непроверяемой.
+    const checked = entityBlocksInput.safeParse(input);
+    if (!checked.success) {
+      throw trpcError('BAD_REQUEST', checked.error.issues[0]?.message ?? 'вход пачки не принят');
+    }
+    const { blocks } = checked.data;
     return {
       results: Object.fromEntries(
         blocks.map((b) => {

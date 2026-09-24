@@ -5,7 +5,6 @@ import {
   blocksReply,
   type MockHandler,
   renderWithProviders,
-  trpcError,
   wireEntity,
 } from '../../test/harness';
 import { registryReply } from '../../test/registry';
@@ -13,6 +12,9 @@ import { QueryBlock } from './QueryBlock';
 import { ThisEntityProvider } from './this-entity';
 
 const ent = (id: string) => wireEntity({ id, title: id });
+
+/** Запись-контекст `this`: uuid — схема элемента пачки иного не принимает. */
+const P1 = '0198a0c2-0000-7000-8000-0000000000a1';
 
 // Данные блока идут единым механизмом (спека страниц 1а §6.3): пачкой `entity.blocks`, блок —
 // ТЕКСТОМ. Смысл тестов прежний — что ушло по блоку и что показано; путь сменился.
@@ -81,7 +83,7 @@ test('невалидный блок → красная плашка с пози�
 // «this вне контекста сущности». Проверяем оба края: с провайдером id уходит, без него — нет.
 test('внутри ThisEntityProvider элемент пачки получает thisEntityId (this разрешим)', async () => {
   const { calls } = renderWithProviders(
-    <ThisEntityProvider id="p1">
+    <ThisEntityProvider id={P1}>
       <QueryBlock query="children_of=this, aspect=orbis/task" />
     </ThisEntityProvider>,
     reply({ 'children_of=this, aspect=orbis/task': [ent('a')] }),
@@ -90,7 +92,7 @@ test('внутри ThisEntityProvider элемент пачки получает
   expect(sentBlock(calls)).toEqual({
     key: '0',
     text: 'children_of=this, aspect=orbis/task',
-    thisEntityId: 'p1',
+    thisEntityId: P1,
   });
 });
 
@@ -191,13 +193,16 @@ test('отказ блока сервером — ПЛАШКА с причино�
   expect(calls.some((c) => c.path === 'entity.blocks')).toBe(true);
 });
 
-test('отказ ВСЕЙ пачки (сеть, сервер) — плашка, а не вечная загрузка', async () => {
+test('отказ ВСЕЙ пачки (сеть, сервер) — русская плашка, а не вечная загрузка и не «Failed to fetch»', async () => {
   renderWithProviders(<QueryBlock query="tags=work" />, (path) => {
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
-    if (path === 'entity.blocks') throw trpcError('INTERNAL_SERVER_ERROR', 'сервер недоступен');
+    // Так браузер отвечает на обрыв сети: сообщение транспорта английское и владельцу ни о чём.
+    if (path === 'entity.blocks') throw new TypeError('Failed to fetch');
     return {};
   });
-  expect(await screen.findByTestId('qb-error')).toHaveTextContent('сервер недоступен');
+  const plaque = await screen.findByTestId('qb-error');
+  expect(plaque).toHaveTextContent('сервер недоступен — данные блока не получены');
+  expect(plaque).not.toHaveTextContent('Failed to fetch');
   expect(screen.queryByRole('status')).toBeNull();
 });

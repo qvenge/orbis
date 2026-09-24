@@ -16,14 +16,16 @@
  * GET-строку `httpBatchLink` он не помещается. Кешем служит react-query этого модуля, а не кеш
  * процедуры: у мутации его нет, и это ровно то, что нужно, — ключ живёт на блоке.
  */
+// Всё — из корня `@orbis/shared`: файл в начальной загрузке (`main.tsx`), и листовой сабпат
+// `/doc/placement` ради одной строки тянул бы туда препроход тела и разбор дат.
 import {
   BLOCKS_BATCH_CAP,
   type BlockError,
   type BlockResult,
+  EMPTY_QUERY_MESSAGE,
   type EntityBlocksInput,
   entityBlocksInput,
 } from '@orbis/shared';
-import { EMPTY_QUERY_MESSAGE } from '@orbis/shared/doc/placement';
 import {
   type QueryClient,
   type UseQueryResult,
@@ -48,8 +50,8 @@ type Pending = { ask: BlockAsk; resolve: (r: BlockResult) => void; reject: (e: u
 export class BlockDataError extends Error {
   readonly code: string;
   readonly position?: number;
-  constructor(error: BlockError) {
-    super(error.message);
+  constructor(error: BlockError, options?: { cause?: unknown }) {
+    super(error.message, options);
     this.name = 'BlockDataError';
     this.code = error.code;
     if (error.position !== undefined) this.position = error.position;
@@ -57,10 +59,16 @@ export class BlockDataError extends Error {
 }
 
 /**
- * Схема ТЕКСТА элемента пачки — из самого контракта, а не копией его пределов: текст сверх
- * предела отвергла бы схема ВСЕЙ пачки, и один длинный блок погасил бы все блоки страницы.
+ * Схема ЭЛЕМЕНТА пачки без ключа — из самого контракта, а не копией его пределов. Элемент,
+ * который она отвергает (текст сверх предела, `this` не uuid, кривой `limit`), отвергла бы схема
+ * ВСЕЙ пачки на сервере, и один такой блок погасил бы всех соседей (§6.3 — изоляция блоков).
+ * Сверка до очереди делает отказ отказом только этого блока. Сообщения схемы — русские
+ * (`BLOCK_ITEM_MESSAGES`): их видит плашка.
  */
-const blockTextSchema = entityBlocksInput.innerType().shape.blocks.element.shape.text;
+const blockAskSchema = entityBlocksInput.innerType().shape.blocks.element.omit({ key: true });
+
+/** Отказ всей пачки (сеть, авторизация, сбой сервера) — одним текстом, без английского транспорта. */
+const TRANSPORT_MESSAGE = 'сервер недоступен — данные блока не получены';
 
 type Batcher = { ask: (ask: BlockAsk) => Promise<BlockResult> };
 const BatchContext = createContext<Batcher | null>(null);
@@ -72,8 +80,9 @@ const BatchContext = createContext<Batcher | null>(null);
 const LIVE_CLIENTS = new Map<QueryClient, number>();
 
 /**
- * Протушить данные ВСЕХ блоков (префикс `[QUERY_BLOCK_KEY]`). Зовёт `invalidateGraph`: блоки —
- * четвёртый взгляд на граф рядом с `entity.query/get/count` и протухают вместе с ними.
+ * Протушить данные ВСЕХ блоков (префикс `[QUERY_BLOCK_KEY]`). Зовёт `invalidateGraph`: данные
+ * блоков — ещё один взгляд на граф рядом с `entity.query/get/count` и `agenda.list`, и протухают
+ * они вместе с ними.
  *
  * Клиент кеша берётся у смонтированных провайдеров, а не синглтон `trpc.ts`: `invalidateGraph`
  * получает только `utils` tRPC, у которых клиента react-query наружу нет, а тестовая обвязка
@@ -113,7 +122,12 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
         chunk.forEach((p, i) => {
           const r = results[String(i)];
           if (r === undefined) {
-            p.reject(new Error('сервер не вернул ответа этому блоку'));
+            p.reject(
+              new BlockDataError({
+                code: 'NO_RESULT',
+                message: 'сервер не вернул ответа этому блоку',
+              }),
+            );
           } else if (r.ok) {
             p.resolve(r);
           } else {
@@ -122,8 +136,13 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
         });
       } catch (e) {
         // Отказ всей пачки (сеть, авторизация) — отказ каждого её блока: промолчать значило бы
-        // оставить блоки в вечной загрузке.
-        for (const p of chunk) p.reject(e);
+        // оставить блоки в вечной загрузке. Текст транспорта («Failed to fetch») на плашку не
+        // идёт: он английский и ничего не говорит владельцу; исходная ошибка — в `cause`.
+        for (const p of chunk) {
+          p.reject(
+            new BlockDataError({ code: 'TRANSPORT', message: TRANSPORT_MESSAGE }, { cause: e }),
+          );
+        }
       }
     };
 
@@ -159,8 +178,12 @@ export function QueryBatchProvider({ children }: { children: ReactNode }) {
  * вне тела записи поля в просьбе нет вовсе, а не `null` (см. `this-entity.tsx`).
  *
  * Отказ блока (`ok:false`) — ошибка запроса (`BlockDataError`), а не данные: у `useQuery`
- * `retry: false` по умолчанию, и соседи по пачке о ней не узнают. Пустой и сверхдлинный текст
- * отвергаются здесь же, не доходя до сети: схема пачки отвергла бы их вместе со всеми соседями.
+ * `retry: false` по умолчанию, и соседи по пачке о ней не узнают. Пустой текст и элемент, который
+ * не проходит схему элемента пачки, отвергаются здесь же, не доходя до сети: схема пачки
+ * отвергла бы их вместе со всеми соседями.
+ *
+ * `this` — часть ключа: один и тот же текст с `children_of=this` у двух записей — два разных
+ * запроса, и без него второй блок получил бы строки первого из кеша.
  *
  * Прежние данные держатся ТОЛЬКО при смене `limit` («ещё N»: без них раскрываемый список мигал
  * бы загрузкой на месте уже показанных строк). Сменился текст или `this` — это другой запрос, и
@@ -183,20 +206,21 @@ export function useBlockData(
       if (trimmed === '') {
         return Promise.reject(new BlockDataError({ code: 'EMPTY', message: EMPTY_QUERY_MESSAGE }));
       }
-      const checked = blockTextSchema.safeParse(trimmed);
-      if (!checked.success) {
-        return Promise.reject(
-          new BlockDataError({
-            code: 'TOO_LONG',
-            message: checked.error.issues[0]?.message ?? 'текст запроса не принят',
-          }),
-        );
-      }
-      return batcher.ask({
+      const ask: BlockAsk = {
         text: trimmed,
         ...(thisEntityId !== null && { thisEntityId }),
         ...(limit !== undefined && { limit }),
-      });
+      };
+      const checked = blockAskSchema.safeParse(ask);
+      if (!checked.success) {
+        return Promise.reject(
+          new BlockDataError({
+            code: 'INVALID_ITEM',
+            message: checked.error.issues[0]?.message ?? 'просьба блока не принята',
+          }),
+        );
+      }
+      return batcher.ask(ask);
     },
     placeholderData: (prev, prevQuery) =>
       prevQuery?.queryKey[1] === trimmed && prevQuery.queryKey[2] === (thisEntityId ?? null)
