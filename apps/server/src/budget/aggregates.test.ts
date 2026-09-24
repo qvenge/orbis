@@ -16,6 +16,7 @@ import {
   mintGraph,
   personal,
   requireEnv,
+  seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
@@ -892,6 +893,57 @@ describe('clock-шов: границы дат (Task A1)', () => {
     expect(after.rows).toHaveLength(1);
     expect(after.rows[0]?.prevSpent).toBe('7000.00');
     expect(after.rows[0]?.carryover).toBe('3000.00'); // 10000 − 7000 (§2.6)
+  });
+});
+
+describe('превью переноса: источник — конверт orbis/budget (финал Б-2, B5 M1)', () => {
+  test('свой аспект, реализующий orbis/envelope со своим лимитом, превью не роняет и в строки не попадает', async () => {
+    // Ведомости движок берёт КОНТРАКТОМ (`monthLedgersOf`), а лимит, периоды и преемников превью читает
+    // литералами `orbis/budget`: свой конверт без `orbis/limit` давал `decAdd('undefined','0')` → 500.
+    const user = await freshGraph();
+    const OWN_ENV = 'user/own-envelope';
+    await seedCustomAspect(user, {
+      key: OWN_ENV,
+      label: { ru: 'Свой конверт' },
+      rank: 900,
+      properties: [{ key: 'own_limit', type: { kind: 'decimal' } }],
+      carries: [
+        'orbis/finance_category',
+        'orbis/currency',
+        'orbis/period_start',
+        'orbis/period_end',
+      ],
+      implements: [
+        {
+          contract: 'orbis/envelope',
+          bind: {
+            category: 'orbis/finance_category',
+            limit: 'user/own_limit',
+            currency: 'orbis/currency',
+            period_start: 'orbis/period_start',
+            period_end: 'orbis/period_end',
+          },
+        },
+      ],
+    });
+    const prevStart = `${prevMonth}-01`;
+    const prevEnd = lastDayOf(prevMonth);
+    const ownCat = newId();
+    await exec(user, 'entity_create', {
+      title: 'Свой конверт прошлого месяца',
+      tags: [],
+      props: {
+        'orbis/finance_category': ownCat,
+        'user/own_limit': '700.00',
+        'orbis/period_start': prevStart,
+        'orbis/period_end': prevEnd,
+      },
+      aspects: [OWN_ENV],
+    });
+    const budgetCat = newId();
+    await exec(user, 'entity_create', envelope(budgetCat, prevStart, prevEnd, '1000.00'));
+    const preview = await rolloverPreview(db, personal(user), curMonth);
+    expect(preview.rows.map((r) => r.categoryId)).toEqual([budgetCat]);
   });
 });
 

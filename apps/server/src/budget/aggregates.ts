@@ -394,10 +394,14 @@ export async function rolloverPreview(
     const ledgers = await monthLedgersOf(tx, graphId, { month: prev, today }, def, reg);
     // Источник — только МЕСЯЧНЫЙ конверт прошлого месяца: движок отдаёт все, пересекающие месяц
     // (включая произвольные §2.9), а §3.5 их не переносит. Отбор — по точным границам месяца и по
-    // валюте по умолчанию (§5), как было у сырого запроса.
+    // валюте по умолчанию (§5), как было у сырого запроса. И — по АСПЕКТУ `orbis/budget` (финал Б-2,
+    // B5 M1): движок берёт конверты КОНТРАКТОМ, а лимит, периоды и преемников ниже превью читает
+    // литералами этого аспекта — свой конверт без `orbis/limit` ронял превью `RangeError`. Обобщение
+    // источника по контракту — строка 109 реестра остатков.
     const prevEnvs = ledgers.envelopes.filter((st) => {
       const p = st.envelope.props as Record<string, unknown>;
       return (
+        st.envelope.aspects.includes('orbis/budget') &&
         String(p['orbis/period_start']) === prevRange.start &&
         String(p['orbis/period_end']) === prevRange.end &&
         String(p['orbis/currency'] ?? defCur) === defCur
