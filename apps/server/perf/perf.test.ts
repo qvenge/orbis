@@ -127,9 +127,13 @@ const BUDGETS_MS: Record<string, number> = {
   'entity.backlinks': 120, // ≤ 26 → 32.5 (×3.7)
   'fastpath:create': 150, // ≤ 34 → 44.6 (×3.4)
   'goal.progress': 120, // ≤ 26 → 39.6 (×3.0)
+  // Калибровка 2026-09-25 (MacBook, локальный Postgres, изолированный прогон после volume →
+  // explain → graph ×3): медиана 90.4 мс на десяти блоках, из них два с окном материализации
+  // (три транзакции) и один переполненный (второй запрос счётчика). Порог — ×3 по правилу выше.
+  'entity.blocks:10': 280, // ≤ 90.4 → 90.4 (×3.1)
 };
 
-// Входы семи операций — ОДИН экземпляр на сторожа и на гейт. Дублировать литералы нельзя:
+// Входы операций гейта — ОДИН экземпляр на сторожа и на гейт. Дублировать литералы нельзя:
 // гарантия сторожа держится ровно на том, что он проверяет непустоту ТОГО ЖЕ запроса,
 // который меряет гейт, а текстовое совпадение двух копий ничем не подпирается — правка в
 // одном месте без правки в другом возвращает дефект, ради которого сторож и написан.
@@ -147,6 +151,39 @@ const BADGE_QUERY = 'aspect=orbis/task, orbis/task_status=inbox';
 // на подписку — отдельная работа с новой базой (I7, вариант А).
 const AGENDA_WINDOW_TEXT_PRE_B1 =
   'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200';
+
+// Пачка блоков страницы (срез 1а, `entity.blocks`, §6.3): десять блоков РАЗНЫХ видов — строки
+// с переполнением («ещё N» — второй запрос счётчика), плитки count/sum/latest, два блока с окном
+// материализации (одна материализация по объединению окон, затем фаза исполнения). Состав —
+// то, что стоит на живой странице-дашборде, а не десять копий одного дешёвого запроса: иначе
+// порог мерил бы накладную SAVEPOINT и не заметил бы регрессии в разборе, окнах или счётчике.
+const BLOCKS10 = [
+  { key: 'list50', text: LIST50_QUERY },
+  {
+    key: 'inbox',
+    text: 'aspect=orbis/task, orbis/task_status=inbox, display=tile, aggregate=count',
+  },
+  {
+    key: 'spent',
+    text: 'aspect=orbis/financial, orbis/direction=expense, display=tile, aggregate=sum:orbis/amount',
+  },
+  {
+    key: 'lastIncome',
+    text: 'aspect=orbis/financial, orbis/direction=income, display=tile, aggregate=latest:orbis/amount',
+  },
+  {
+    key: 'week',
+    text: 'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=20',
+  },
+  { key: 'overdue', text: 'aspect=orbis/task, orbis/due_date=overdue, limit=20' },
+  { key: 'notes', text: 'aspect=orbis/note, sortBy=orbis/updated_at:desc, limit=20' },
+  { key: 'budgets', text: 'aspect=orbis/budget, limit=20' },
+  { key: 'income', text: 'aspect=orbis/financial, orbis/direction=income, limit=20' },
+  {
+    key: 'urgent',
+    text: 'aspect=orbis/task, orbis/priority=high, display=tile, aggregate=count',
+  },
+];
 
 // Состав detail-чтения — ровно тот, что уходит с экрана сущности
 // (apps/web/src/features/entity-detail/useEntityDetail.ts, DETAIL_INCLUDE).
@@ -273,6 +310,26 @@ test('фикстура наполнена: гейт меряет данные, �
   // Пустая выборка источника даёт РОВНО '0' (goals/progress.ts): агрегат в этом случае
   // отработал бы, но по пустому месту, и замер снова был бы не тем, ради которого порог.
   expect(progress?.current).not.toBe('0');
+
+  // Пачка блоков: каждый блок — ok и НЕ пуст. Отказ блока (сломанный текст, окно, валюта)
+  // — самый дешёвый путь пачки, и гейт на нём зеленел бы, меряя разбор без исполнения.
+  const { results: blocks } = await caller.entity.blocks({ blocks: BLOCKS10 });
+  expect(Object.keys(blocks).sort()).toEqual(BLOCKS10.map((b) => b.key).sort());
+  for (const [key, r] of Object.entries(blocks)) {
+    if (!r.ok) throw new Error(`блок ${key} отказал: ${JSON.stringify(r.error)}`);
+    const nonEmpty =
+      r.kind === 'rows'
+        ? r.rows.length > 0
+        : r.kind === 'count'
+          ? r.count > 0
+          : r.kind === 'sum'
+            ? r.count > 0
+            : r.value !== null;
+    expect(`${key}:${nonEmpty}`).toBe(`${key}:true`);
+  }
+  // Переполнение — отдельно: без него второй запрос счётчика («ещё N») гейтом не мерится.
+  const list50 = blocks.list50;
+  expect(list50?.ok && list50.kind === 'rows' && list50.more > 0).toBe(true);
 }, 60_000);
 
 test('перф-бюджеты серверных операций', async () => {
@@ -314,6 +371,10 @@ test('перф-бюджеты серверных операций', async () => 
       await measureMedian('goal.progress', 7, () =>
         caller.entity.get({ id: perfGoalId(user), include: [...DETAIL_INCLUDE] }),
       ),
+    ],
+    [
+      'entity.blocks:10',
+      await measureMedian('entity.blocks:10', 7, () => caller.entity.blocks({ blocks: BLOCKS10 })),
     ],
   ];
 

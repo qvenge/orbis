@@ -930,10 +930,25 @@ function numericRef(propertyId: string, ctx: CompileCtx, op: 'sum' | 'latest'): 
  * Агрегация `user_query` (§9.2) и `aggregate: "sum"` целей (§11.3): count + sum одним
  * SELECT по той же выборке, что `compileQueryAst`, но БЕЗ limit. Сумма считается
  * `numeric` и отдаётся текстом — точность decimal-строк не теряется во float (§3.3).
+ *
+ * `currencyPropertyId` — только у плитки суммы блока страницы (срез 1а, РП-20): третья колонка
+ * `currencies` — различные непустые значения валюты у суммированных записей, тем же проходом.
+ * Сумма по записям в разных валютах бессмысленна, и плитка обязана это показать, а не сложить
+ * рубли с долларами. Прежние вызывающие (`user_query`, цели) параметра не передают — их SQL
+ * побайтно прежний (эталон `test/golden/query-sql.json`).
  */
-export function compileSumAst(ast: QueryAst, propertyId: string, ctx: CompileCtx): SQL {
+export function compileSumAst(
+  ast: QueryAst,
+  propertyId: string,
+  ctx: CompileCtx,
+  currencyPropertyId?: string,
+): SQL {
   const ref = numericRef(propertyId, ctx, 'sum');
-  return sql`SELECT count(*) AS count, sum(${comparable(ref)})::text AS sum FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+  if (currencyPropertyId === undefined) {
+    return sql`SELECT count(*) AS count, sum(${comparable(ref)})::text AS sum FROM entities e WHERE ${compileWhere(ast, ctx)}`;
+  }
+  const currency = propRef(currencyPropertyId, ctx).text;
+  return sql`SELECT count(*) AS count, sum(${comparable(ref)})::text AS sum, coalesce(array_agg(DISTINCT ${currency} ORDER BY ${currency}) FILTER (WHERE ${currency} IS NOT NULL), '{}') AS currencies FROM entities e WHERE ${compileWhere(ast, ctx)}`;
 }
 
 /**

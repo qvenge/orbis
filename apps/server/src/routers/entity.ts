@@ -3,11 +3,15 @@
 // коды executor'а → TRPCError. Бизнес-логики здесь нет: мутации идут единственным путём
 // через execute (§9.2), чтения — под withIdentity (RLS, §4.10).
 import {
+  type EntityBlocksResult,
+  entityBlocksInput,
   entityCreateUiInput,
   entityGetUiInput,
   entityResolveRefsInput,
   entitySuggestInput,
+  entityUpdateBatchInput,
   entityUpdateUiInput,
+  newId,
   type RowRegistry,
   rowProjectionOf,
 } from '@orbis/shared';
@@ -39,6 +43,7 @@ import { effectiveRegistry } from '../registry/cache';
 import { readRegistryVersions } from '../registry/version';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf, toWireEntityFromSql } from '../wire';
+import { runBlocks } from './entity-blocks';
 
 // Боевой синк — один инстанс на модуль: makeChatJournalSink состояния не хранит,
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
@@ -277,6 +282,40 @@ export const entityRouter = router({
       return r.results[0] as WireEntity;
     }),
 
+  /**
+   * Пачка правок одним Undo (срез 1а, спека §4.3 и §8.4): `entity_update` и
+   * `entity_version_pin` одним `execute` с `batchId` — исполнитель пишет ОДИН action с
+   * id = batchId и общим inverse, и `ai.undo({actionId})` откатывает пачку целиком. Одиночный
+   * `update` выше `actionId` не отдаёт, а N его вызовов дали бы N действий и N Undo.
+   *
+   * Операции уходят в исполнитель без перекладки: вход — форма тулов (`entity_id` у
+   * закрепления). Порядок значим — закрепление первым снимает тело ДО замены (§8.4).
+   */
+  updateBatch: ownerOnlyProcedure
+    .input(entityUpdateBatchInput)
+    .mutation(async ({ ctx, input }): Promise<{ actionId: string; results: unknown[] }> => {
+      const r = await execute(
+        ctx.db,
+        {
+          identity: ctx.identity,
+          actorKind: 'owner',
+          source: 'ui',
+          batchId: newId(),
+          operations: input.operations,
+        },
+        { sink },
+      );
+      if (!r.ok) throw execErrorToTRPC(r.error);
+      // Эскалация категорий — как у `update`: после коммита, своей транзакцией, по тем же
+      // операциям (закрепление версии категорий не трогает — хук его просто не заметит).
+      await escalateAfterMutation(ctx.db, {
+        identity: ctx.identity,
+        actionId: r.actionId,
+        operations: input.operations,
+      });
+      return { actionId: r.actionId, results: r.results };
+    }),
+
   // §9.2 entity_get: include-логика вынесена в общий хелпер entity-read.ts —
   // его же переиспользует диспатч тулов LLM/MCP (tools/dispatch.ts, 1b Task 4).
   get: protectedProcedure
@@ -331,6 +370,23 @@ export const entityRouter = router({
       return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
     }),
   ),
+
+  /**
+   * Данные блоков страницы пачкой (срез 1а, спека §6.3): до 30 блоков по тексту запроса, одна
+   * транзакция исполнения, по каждому блоку — строки, число или ошибка ЭТОГО блока. Механика —
+   * `entity-blocks.ts` (`runBlocks`): SAVEPOINT на блок держит изоляцию ошибок, материализация
+   * повторов — между транзакциями, как у `entity.query` (Э-4).
+   *
+   * МУТАЦИЯ, хотя ничего не пишет (РП-8): query-процедуры web шлёт GET со входом в URL
+   * (`httpBatchLink` без `maxURLLength`), и тридцать текстов запросов по 4000 знаков в URL не
+   * помещаются. POST снимает потолок длины, не трогая ссылку клиента.
+   */
+  blocks: protectedProcedure
+    .input(entityBlocksInput)
+    .mutation(
+      ({ ctx, input }): Promise<EntityBlocksResult> =>
+        runBlocks(ctx.db, ctx.identity, input.blocks),
+    ),
 
   /**
    * Поиск сущности по заголовку для `/`-меню, @-упоминаний и пикеров. Грамматику `search=`
