@@ -603,19 +603,21 @@ test('имена маркеров — договор: на них ссылают
  * ограничение плана Б-1 и чек-лист деплоя: «`v5.ts` и `routine-v3.ts` заморожены»), а
  * исполняет его allowlist гейта: без пина второе место молча расходилось бы с первым.
  */
-test('заморожены обе линейки до v6 включительно, и routine-v3 в их числе', () => {
+test('заморожены обе линейки до живой v7, и v6 с routine-v3 в их числе', () => {
   const frozen = new Set(
     ALLOWLIST.map((e) => e.path).filter((p) => p.startsWith('apps/server/src/llm/prompts/')),
   );
-  for (const name of ['v5', 'routine-v3']) {
+  // v6 заморожен срезом 1а вместе с заведением v7 (индекс аспектов вместо инструкций).
+  for (const name of ['v5', 'v6', 'routine-v3']) {
     expect([name, frozen.has(`apps/server/src/llm/prompts/${name}.ts`)]).toEqual([name, true]);
     expect([name, frozen.has(`apps/server/src/llm/prompts/${name}.fixture.txt`)]).toEqual([
       name,
       true,
     ]);
   }
-  // …а живая линейка НЕ заморожена: v6 правится вместе с фикстурой (построчно).
-  expect(frozen.has('apps/server/src/llm/prompts/v6.ts')).toBe(false);
+  // …а живая линейка НЕ заморожена: v7 правится вместе с фикстурой (построчно).
+  expect(frozen.has('apps/server/src/llm/prompts/v7.ts')).toBe(false);
+  expect(frozen.has('apps/server/src/llm/prompts/v7.fixture.txt')).toBe(false);
 });
 
 test('у каждой записи allowlist есть непустая причина', () => {

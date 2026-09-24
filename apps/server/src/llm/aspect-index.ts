@@ -1,0 +1,66 @@
+// apps/server/src/llm/aspect-index.ts
+//
+// Индекс аспектов системного канала — чата (`llm/context.ts`) и прогона рутины
+// (`routines/context.ts`), срез 1а, спека §10 п. 1–2.
+//
+// Почему индекс, а не инструкции. Инструкция аспекта (`ai_instructions`) живёт ровно в одном
+// месте — описании тула `attach_<аспект>` (§Б7-2 спеки реформы): модель читает её там, где
+// навешивает аспект. Прежняя секция «Инструкции активных аспектов» несла тот же текст второй
+// копией в каждом вызове (≈ 1 170 токенов, §С8-35 п. 3). Каналу нужна КАРТА — какие аспекты
+// есть и что каждый значит, — чтобы модель знала, какой тул звать; поля и правила остаются в
+// описании тула.
+//
+// Источник — ЭФФЕКТИВНЫЙ реестр (`effectiveRegistry`): подпись и описание аспекта владелец
+// меняет дельтой, и индекс обязан показать модели его слова, а не строку сида. Сырые строки
+// (`loadRegistryRows`) дали бы модели имя, которого владелец на экране уже не видит.
+//
+// Один сборщик на оба канала: собранный дважды, индекс разъехался бы форматом — и рутина в
+// фоне видела бы аспекты иначе, чем чат.
+import type { GraphId } from '@orbis/shared';
+import { effectiveLabel, isModuleEnabled, OWNER_LOCALE } from '@orbis/shared';
+import type { Tx } from '../db/with-identity';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
+
+export const ASPECT_INDEX_HEADING = 'Аспекты (поля и правила — в описании тула attach_<аспект>):';
+/** РП-26: последняя строка индекса — граница служебных аспектов (id через запятую), без описаний. */
+export const SERVICE_BOUNDARY_PREFIX = 'Служебные — не навешивай и не правь сам: ';
+
+/** Чистая часть: строки индекса по снимку и маске. Порядок — rank, затем key. */
+export function aspectIndexLines(reg: RegistrySnapshot, disabled: readonly string[]): string[] {
+  const lines = [...reg.aspects.values()]
+    // Служебный аспект модели не предлагается — ни тулом (`buildToolDefs`), ни строкой индекса.
+    .filter((a) => !a.service)
+    // §Б8-3: аспект выключенного модуля уходит вместе с модулем — та же маска, что у тулов.
+    .filter((a) => isModuleEnabled(a.module, disabled))
+    .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key))
+    .map(
+      (a) =>
+        `- ${a.id} — ${effectiveLabel(a.label, OWNER_LOCALE)}: ${effectiveLabel(a.description, OWNER_LOCALE)}`,
+    );
+  // РП-26: служебный аспект тула не имеет, и его граница («не навешивай сам») раньше доходила до модели
+  // только текстом инструкции в секции. Индекс держит её строкой-границей — без описания и инструкции.
+  const service = [...reg.aspects.values()]
+    .filter((a) => a.service && isModuleEnabled(a.module, disabled))
+    .sort((a, b) => a.rank - b.rank)
+    .map((a) => a.id);
+  return service.length === 0
+    ? lines
+    : [...lines, `${SERVICE_BOUNDARY_PREFIX}${service.join(', ')}`];
+}
+
+/**
+ * Секция канала; null — индекс пуст. Зовут llm/context.ts и routines/context.ts.
+ *
+ * Маска `disabled` приходит от вызывающего, а не читается здесь: чат читает её один раз на
+ * сборку для двух секций (проза модулей и индекс). Умолчания `[]` у параметра нет намеренно —
+ * оно оставило бы канал без маски молча.
+ */
+export async function aspectIndexSection(
+  tx: Tx,
+  graphId: GraphId,
+  disabled: readonly string[],
+): Promise<string | null> {
+  const lines = aspectIndexLines(await effectiveRegistry(tx, graphId), disabled);
+  return lines.length === 0 ? null : `${ASPECT_INDEX_HEADING}\n${lines.join('\n')}`;
+}

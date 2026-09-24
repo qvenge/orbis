@@ -666,7 +666,7 @@ describe('§С8-22: подписки и сохранённые AST при вык
     }
   });
 
-  test('канал модели: проза Финансов и инструкции orbis/financial уходят вместе с модулем и возвращаются с ним (§Б8-3)', async () => {
+  test('канал модели: проза Финансов и строка индекса orbis/financial уходят вместе с модулем и возвращаются с ним (§Б8-3)', async () => {
     // Канал собирается ТЕМ ЖЕ `buildContext`, что и чат (`llm/context.ts`), — юнит на
     // `modulePromptFragments` (шаг 2) не отвечает, доносит ли их до модели сама сборка.
     const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
@@ -681,16 +681,16 @@ describe('§С8-22: подписки и сохранённые AST при вык
       });
     const on = (await channel()).system;
     expect(on).toContain('Бюджет (тул budget_status):'); // проза манифеста (шаг 14)
-    expect(on).toContain('- orbis/financial:'); // инструкция аспекта модуля (§Б8-3)
+    expect(on).toContain('- orbis/financial — '); // строка индекса аспекта модуля (§Б8-3, срез 1а §10)
     await setFinance(false);
     const off = (await channel()).system;
     expect(off).not.toContain('Бюджет (тул budget_status):');
-    expect(off).not.toContain('- orbis/financial:');
-    expect(off).toContain('- orbis/task:'); // чужие инструкции на месте — маска, а не пустота
+    expect(off).not.toContain('- orbis/financial — ');
+    expect(off).toContain('- orbis/task — '); // чужие строки индекса на месте — маска, а не пустота
     await setFinance(true);
     expect((await channel()).system).toBe(on); // включение возвращает канал байт-в-байт
-    // Канал рутины (`routines/context.ts`) зовёт ту же `aspectInstructionsSection(tx, disabled)`
-    // с той же маской — второго пути у инструкций нет, отдельного прогона не заводится.
+    // Канал рутины (`routines/context.ts`) зовёт ту же `aspectIndexSection(tx, graphId, disabled)`
+    // с той же маской — второго пути у индекса нет, отдельного прогона не заводится.
   });
 });
 

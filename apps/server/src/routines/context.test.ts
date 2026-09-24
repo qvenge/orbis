@@ -6,8 +6,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { RunSummary } from '@orbis/shared';
 import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
+import { ASPECT_INDEX_HEADING } from '../llm/aspect-index';
 import { ROUTINE_SYSTEM_PROMPT_V3 } from '../llm/prompts/routine-v3';
-import { SYSTEM_PROMPT_V6 } from '../llm/prompts/v6';
+import { SYSTEM_PROMPT_V7 } from '../llm/prompts/v7';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { buildRoutineContext, type RoutineHistoryItem, type RoutineHistoryUnit } from './context';
 
@@ -73,7 +74,7 @@ async function contextOf(
 }
 
 describe('buildRoutineContext: системный слой (V1.5)', () => {
-  test('system = промпт раннера + дата + секция режима + инструкции аспектов + память + якорь-рутина; чат-промпта в нём нет', async () => {
+  test('system = промпт раннера + дата + секция режима + индекс аспектов + память + якорь-рутина; чат-промпта в нём нет', async () => {
     const routineId = await seedRoutine(owner, { title: 'Утренний обзор', body: INSTRUCTION });
     await seedEntity(owner, {
       title: 'Не назначать встречи до 10 утра',
@@ -94,11 +95,11 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
     expect(system.startsWith(ROUTINE_SYSTEM_PROMPT_V3)).toBe(true);
     // Промпт чат-ассистента в фоновом прогоне не участвует (V1.5): он завершал бы цикл
     // «ответом пользователю», которого никто не прочтёт
-    expect(system).not.toContain(SYSTEM_PROMPT_V6);
+    expect(system).not.toContain(SYSTEM_PROMPT_V7);
     expect(system).toContain('режим: propose');
     expect(system).toContain(`run_id этого прогона: ${RUN_ID}`);
     expect(system).toContain('2026-08-17T07:00');
-    expect(system).toContain('Инструкции активных аспектов:');
+    expect(system).toContain(ASPECT_INDEX_HEADING);
     expect(system).toContain('Память о пользователе');
     expect(system).toContain('Не назначать встречи до 10 утра');
     expect(system).toContain(`id: ${routineId}`);

@@ -34,9 +34,7 @@ import {
   type RelationRoleDefinition,
 } from '@orbis/shared';
 import { OWNER_LOCALE, queryAstJsonSchema } from '@orbis/shared/query';
-import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { aspectDefinitions } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { paramLiteralType } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
@@ -1272,61 +1270,6 @@ const CORE_TOOLS: OrbisToolDef[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * Строка реестра аспектов в объёме, нужном СЛОЮ ИНСТРУКЦИЙ ПРОМПТА (`llm/context.ts`).
- *
- * Реестру тулов и карточкам она больше не нужна: с Задачи 12 они собираются из снимка
- * `effectiveRegistry` — того же, по которому валидируется запись. Здесь остался ровно один
- * читатель — секция «Инструкции активных аспектов»: ей нужны `id` и `aiInstructions`, но не
- * нужен `graphId`, а `effectiveRegistry` без него не зовётся (снимок скоупится и под админским
- * подключением, где политик RLS нет вовсе).
- */
-export interface AspectToolRow {
-  id: string;
-  description: string | null;
-  aiInstructions: string | null;
-  viewConfig: Record<string, unknown> | null;
-  /**
-   * Модуль строки (§Б8-1) — пятая колонка запроса. Нужна ровно одному читателю: секция
-   * инструкций аспектов маскирует выключенный модуль (§Б8-3), а `module` дельта не меняет
-   * (докблок `registry/load.ts`), поэтому признак берётся из того же сырого запроса.
-   */
-  module: string | null;
-}
-
-/**
- * Аспекты, видимые актору: builtin + собственные кастомные (RLS того же tx).
- * ORDER BY graph_id NULLS FIRST: при коллизии id собственное определение
- * перекрывает builtin — как в снимке реестра исполнителя (`registry/load.ts`).
- */
-export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
-  const rows = await tx
-    .select({
-      id: aspectDefinitions.id,
-      description: aspectDefinitions.description,
-      aiInstructions: aspectDefinitions.aiInstructions,
-      viewConfig: aspectDefinitions.viewConfig,
-      module: aspectDefinitions.module,
-    })
-    .from(aspectDefinitions)
-    .orderBy(sql`${aspectDefinitions.graphId} NULLS FIRST`);
-  const byId = new Map<string, AspectToolRow>();
-  for (const row of rows) {
-    byId.set(row.id, {
-      id: row.id,
-      // `description` стала per-locale (§А2-1): здесь берётся русская локаль — тем же
-      // текстом, что лежал в колонке до реформы. Полный fallback «локаль пользователя →
-      // en → любая» ставит Задача 12 вместе с генерацией `attach_*` из реестра свойств:
-      // у тула сегодня нет ни локали актора, ни места, где её спросить.
-      description: (row.description as Record<string, string> | null)?.ru ?? null,
-      aiInstructions: row.aiInstructions,
-      viewConfig: row.viewConfig as Record<string, unknown> | null,
-      module: row.module,
-    });
-  }
-  return [...byId.values()];
-}
-
-/**
  * Определение `attach_<аспект>` — целиком из РЕЕСТРА СВОЙСТВ (§А9-1).
  *
  * Что изменилось против прежней сборки и почему это важно: `data` больше не колонка
@@ -1445,7 +1388,9 @@ function paramJsonSchema(p: ActionParam): Record<string, unknown> {
  * реформы в трёх копиях (inv §3). Служебный аспект attach_*-тула НЕ получает: прогон правит
  * только сервер (С5/С7) глаголами orbis_claim_task / orbis_run_step / orbis_checkpoint /
  * orbis_finish. Прямого способа править прогон у модели без тула нет; core-тулы аспект
- * принимают по-прежнему — их удерживает `aiInstructions` аспекта («Известные границы» спеки).
+ * принимают по-прежнему — границу держит строка-граница индекса аспектов в канале («Служебные —
+ * не навешивай и не правь сам», `llm/aspect-index.ts`, РП-26): инструкция служебного аспекта
+ * раньше доходила до модели только секцией инструкций, которую индекс заменил (срез 1а §10).
  *
  * Порядок attach_*-тулов — `rank` аспекта: реестр тулов сравнивается с эталоном
  * (`registry-golden.test.ts`) как СПИСОК, и порядок, зависящий от порядка строк из БД, делал

@@ -1,6 +1,6 @@
 // apps/server/src/llm/context.ts
 // Сборка контекста LLM-вызова — пятислойная модель §7.1:
-//   слой 1 (промпт v5 + дата владельца §Б7-6-1 + ai_instructions активных аспектов реестра),
+//   слой 1 (промпт v7 + дата владельца §Б7-6-1 + индекс аспектов реестра — срез 1а §10),
 //   слой 2 (память §7.4: активные orbis/memory, кап MEMORY_CAP, приоритет rule/scope),
 //   слой 3 (якорная сущность треда — 02 §2.2, только если тред сущности),
 //   слой 4 (rolling-история треда) — слои 1–3 склеиваются в ПОЛЕ system,
@@ -18,14 +18,14 @@
 // превью 200/500, окно 30) — их механическое воплощение для MVP.
 //
 // V1.5: слои 1(динамика)–3 переиспользует контекст прогона рутины (routines/context.ts) —
-// у него свой промпт и своя история вместо треда, но инструкции аспектов, память, дата и
-// якорь обязаны выглядеть для модели ТЕМ ЖЕ, чем в чате. Поэтому aspectInstructionsSection,
-// todaySection/todaySectionFor, loadMemory/memoryLine/MEMORY_SECTION_HEADER и anchorBlock
+// у него свой промпт и своя история вместо треда, но индекс аспектов, память, дата и
+// якорь обязаны выглядеть для модели ТЕМ ЖЕ, чем в чате. Поэтому aspectIndexSection (свой
+// модуль `llm/aspect-index.ts`), todaySection/todaySectionFor, loadMemory/memoryLine/MEMORY_SECTION_HEADER и anchorBlock
 // экспортируются, а не копируются.
 //
-// §Б7-6: промпт v6 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
+// §Б7-6: промпт v7 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
 // блок продолжений обязан быть последним для модели, а не последним в тексте константы.
-import { type GraphId, isModuleEnabled, modulePromptFragments } from '@orbis/shared';
+import { type GraphId, modulePromptFragments } from '@orbis/shared';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
@@ -43,9 +43,9 @@ import { memoryEntitiesWhere } from '../memory/select';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
 import { disabledModulesOf } from '../registry/modules';
-import { loadAspectToolRows } from '../tools/registry';
 import { toLlmEntity } from '../wire';
-import { SYSTEM_PROMPT_V6, TOOL_RESULT_MARKER } from './prompts/v6';
+import { aspectIndexSection } from './aspect-index';
+import { SYSTEM_PROMPT_V7, TOOL_RESULT_MARKER } from './prompts/v7';
 import type { LLMMessage } from './types';
 
 /** Разделитель секций системного канала — пустая строка между абзацами. */
@@ -67,32 +67,32 @@ export const ANCHOR_BODY_PREVIEW = 500;
 export const ANCHOR_INSTRUCTION_CAP = 8000;
 
 /**
- * Заголовок блока продолжений — точная подстрока SYSTEM_PROMPT_V6.
+ * Заголовок блока продолжений — точная подстрока SYSTEM_PROMPT_V7.
  *
  * По нему промпт делится на тело и хвост, потому что блок продолжений обязан замыкать
  * СОБРАННЫЙ канал (§Б7-6-2): его инструкция «в КОНЦЕ ответа отдельной последней строкой»
- * теряет силу примера, когда после неё модель видит ещё четыре секции — дату, инструкции
+ * теряет силу примера, когда после неё модель видит ещё четыре секции — дату, индекс
  * аспектов, память и якорь.
  */
 export const CONTINUATIONS_HEADING = 'Продолжения разговора:';
 
-const CONTINUATIONS_START = SYSTEM_PROMPT_V6.indexOf(CONTINUATIONS_HEADING);
+const CONTINUATIONS_START = SYSTEM_PROMPT_V7.indexOf(CONTINUATIONS_HEADING);
 // Проверка на загрузке модуля, а не «когда-нибудь в тесте»: при -1 slice(0, -1) молча
 // отрезал бы последний символ промпта, и канал ушёл бы к модели покалеченным.
 if (CONTINUATIONS_START < 0) {
-  throw new Error(`SYSTEM_PROMPT_V6 не содержит заголовка «${CONTINUATIONS_HEADING}»`);
+  throw new Error(`SYSTEM_PROMPT_V7 не содержит заголовка «${CONTINUATIONS_HEADING}»`);
 }
 
 /**
  * Тело промпта — всё до блока продолжений, ВКЛЮЧАЯ разделитель абзаца перед ним.
  *
- * Обе части ВЫЧИСЛЯЮТСЯ из SYSTEM_PROMPT_V6, а не выписаны текстом: правка промпта — это
- * новая линейка (v6, правило v5.ts:2-5), и копия здесь тихо разошлась бы с оригиналом.
+ * Обе части ВЫЧИСЛЯЮТСЯ из SYSTEM_PROMPT_V7, а не выписаны текстом: правка промпта — это
+ * новая линейка (v7, правило v5.ts:2-5), и копия здесь тихо разошлась бы с оригиналом.
  * Пин конкатенации — llm/context.test.ts.
  */
-export const PROMPT_BODY = SYSTEM_PROMPT_V6.slice(0, CONTINUATIONS_START);
+export const PROMPT_BODY = SYSTEM_PROMPT_V7.slice(0, CONTINUATIONS_START);
 /** Блок продолжений — хвост промпта; в канале идёт ПОСЛЕДНЕЙ секцией (§Б7-6-2). */
-export const CONTINUATIONS_BLOCK = SYSTEM_PROMPT_V6.slice(CONTINUATIONS_START);
+export const CONTINUATIONS_BLOCK = SYSTEM_PROMPT_V7.slice(CONTINUATIONS_START);
 
 /** Дни недели по индексу Date#getUTCDay (0 — воскресенье). */
 const WEEKDAYS_RU = [
@@ -504,33 +504,6 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
  * якорь и историю владельцем). anchorEntityId передаётся только для треда
  * сущности (02 §2.2) — глобальный тред слоя 3 не имеет.
  */
-/**
- * Слой 1 (динамическая часть): ai_instructions активных аспектов реестра
- * (builtin + свои кастомные; собственное определение перекрывает builtin — §7.6).
- * null — активных инструкций нет, секцию не заводим.
- *
- * Экспортируется целиком, а не в виде «загрузи строки и собери сам»: тот же слой нужен
- * контексту прогона рутины (routines/context.ts, V1.5), а собранный дважды он разъехался
- * бы форматом — и «инструкции аспектов» в фоне выглядели бы для модели иначе, чем в чате.
- */
-export async function aspectInstructionsSection(
-  tx: Tx,
-  disabled: readonly string[],
-): Promise<string | null> {
-  const aspectRows = await loadAspectToolRows(tx);
-  const instructions = aspectRows
-    .filter((r) => r.aiInstructions)
-    // §Б8-3: инструкция аспекта выключенного модуля — такой же промпт-фрагмент модуля, как
-    // проза манифеста, и уходит вместе с ним. Признак берётся из того же сырого запроса:
-    // ни `ai_instructions`, ни `module` дельта не меняет (докблок `registry/load.ts`).
-    // Умолчания `[]` у параметра НЕТ намеренно: оно оставило бы канал рутины без маски молча.
-    .filter((r) => isModuleEnabled(r.module, disabled))
-    .map((r) => `- ${r.id}: ${r.aiInstructions}`);
-  return instructions.length === 0
-    ? null
-    : `Инструкции активных аспектов:\n${instructions.join('\n')}`;
-}
-
 export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
   // Всё, что дописывается между телом промпта и блоком продолжений (§Б7-6-2)
   const dynamic: string[] = [
@@ -545,8 +518,10 @@ export async function buildContext(tx: Tx, input: BuildContextInput): Promise<Bu
   const fragments = modulePromptFragments(disabled);
   if (fragments !== null) dynamic.push(fragments);
 
-  const instructions = await aspectInstructionsSection(tx, disabled);
-  if (instructions !== null) dynamic.push(instructions);
+  // Слой 1: индекс аспектов (срез 1а §10) — карта «id, подпись, описание»; инструкции живут в
+  // описаниях attach_* и второй копией в канал не едут.
+  const index = await aspectIndexSection(tx, input.graphId, disabled);
+  if (index !== null) dynamic.push(index);
 
   // Слой 2: память §7.4
   const memory = await loadMemory(tx);
@@ -565,7 +540,7 @@ export async function buildContext(tx: Tx, input: BuildContextInput): Promise<Bu
   // PROMPT_BODY уже кончается разделителем абзаца (он отрезан по месту заголовка блока
   // продолжений) — первая динамическая секция приклеивается к нему напрямую, иначе между
   // ними встали бы лишние пустые строки. Свойство склейки: при пустом dynamic канал
-  // побайтно равен SYSTEM_PROMPT_V6 — переставлена СБОРКА, а не текст промпта (РП-18).
+  // побайтно равен SYSTEM_PROMPT_V7 — переставлена СБОРКА, а не текст промпта (РП-18).
   const system = PROMPT_BODY + [...dynamic, CONTINUATIONS_BLOCK].join(SECTION_SEPARATOR);
 
   return { system, messages };

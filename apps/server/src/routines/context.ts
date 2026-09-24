@@ -10,7 +10,7 @@
 //      решил, о чём спрашивала и что он ответил. Это единственный механизм обратной
 //      связи в V1 (обучения правил нет — «Известные границы» спеки).
 //
-// Остальные слои — те же и теми же функциями (дата владельца, инструкции аспектов,
+// Остальные слои — те же и теми же функциями (дата владельца, индекс аспектов,
 // память, якорь): разъехавшись, они дали бы «в фоне модель видит другой Orbis».
 //
 // Роль 'system' в messages ЗАПРЕЩЕНА (контракт провайдера — ai-sdk.ts бросает): и
@@ -19,9 +19,9 @@
 import type { GraphId, ProposalStatus, RunOutcome, RunSummary } from '@orbis/shared';
 import type { RoutineProps } from '../agent-loop/queries';
 import type { Tx } from '../db/with-identity';
+import { aspectIndexSection } from '../llm/aspect-index';
 import {
   anchorBlock,
-  aspectInstructionsSection,
   loadMemory,
   MEMORY_SECTION_HEADER,
   memoryLine,
@@ -296,13 +296,14 @@ export async function buildRoutineContext(
     }),
   ];
 
-  // Маска §Б8-3 и в канале рутины: у инструкций аспектов один путь на оба канала, и
+  // Маска §Б8-3 и в канале рутины: у индекса аспектов один путь на оба канала, и
   // умолчания у параметра нет намеренно — оно оставило бы фон без маски молча.
-  const instructions = await aspectInstructionsSection(
+  const index = await aspectIndexSection(
     tx,
+    input.graphId,
     await disabledModulesOf(tx, input.graphId),
   );
-  if (instructions !== null) sections.push(instructions);
+  if (index !== null) sections.push(index);
 
   const memory = await loadMemory(tx);
   if (memory.length > 0) {

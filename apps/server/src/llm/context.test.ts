@@ -1,13 +1,13 @@
 // apps/server/src/llm/context.test.ts
 // Интеграционные тесты buildContext (§7.1) против живой БД: слой 1 (тело промпта, дата
-// владельца §Б7-6-1 и ai_instructions аспектов), слой 2 (память с капом и приоритетом
+// владельца §Б7-6-1 и индекс аспектов — срез 1а §10), слой 2 (память с капом и приоритетом
 // §7.4), слой 3 (якорная сущность — только для треда сущности, 02 §2.2), слой 4
 // (rolling-история CONTEXT_HISTORY_LIMIT, сжатие audit-сообщений без сырого JSON), а
 // также порядок СОБРАННОГО канала: блок продолжений идёт последним (§Б7-6-2 — гард
 // переехал сюда с текста промпта, v5.test.ts). Слой 5 — Task 9.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { newId } from '@orbis/shared';
+import { MODULE_MANIFESTS, newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   appDb,
@@ -23,6 +23,10 @@ import { appendMessage } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { aspectDefinitions, chatMessages, entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
+import { effectiveRegistry } from '../registry/cache';
+import { buildRoutineContext } from '../routines/context';
+import { agentLoopHelpers } from '../test/agent-loop-helpers';
+import { ASPECT_INDEX_HEADING } from './aspect-index';
 import {
   ANCHOR_BODY_PREVIEW,
   buildContext,
@@ -35,11 +39,12 @@ import {
   todaySection,
   toolResultMessage,
 } from './context';
-import { SYSTEM_PROMPT_V6 } from './prompts/v6';
+import { SYSTEM_PROMPT_V7 } from './prompts/v7';
 
 requireEnv();
 
 const { db, client } = appDb();
+const { seedRoutine } = agentLoopHelpers(db);
 
 beforeAll(async () => {
   await truncateAll();
@@ -89,21 +94,24 @@ function memoryLines(system: string): string[] {
   return system.split('\n').filter((l) => l.startsWith('— ['));
 }
 
-describe('buildContext — слой 1: тело промпта + ai_instructions аспектов', () => {
+describe('buildContext — слой 1: тело промпта + индекс аспектов', () => {
   const user = mintGraph();
 
-  // Пин был `startsWith(SYSTEM_PROMPT_V6)`. После §Б7-6-2 блок продолжений уехал в ХВОСТ
+  // Пин был `startsWith(SYSTEM_PROMPT_V6)` (теперь — v7). После §Б7-6-2 блок продолжений уехал в ХВОСТ
   // собранного канала, поэтому промпт лежит в канале двумя кусками и целиком в его начале
   // больше не стоит ПО ПОСТРОЕНИЮ. Начало канала пиннится телом промпта, целостность
   // текста — тем, что канал несёт оба куска и заканчивается вторым (тесты §Б7-6 ниже).
-  test('канал начинается с PROMPT_BODY и содержит ai_instructions активных аспектов из БД', async () => {
+  // Срез 1а §10 п. 1: инструкция аспекта живёт ровно в описании тула attach_*, канал несёт
+  // КАРТУ аспектов. Пин перевёрнут: прежде тест требовал инструкцию в канале.
+  test('канал начинается с PROMPT_BODY и несёт ИНДЕКС аспектов, а не их инструкции', async () => {
     const ctx = await withIdentity(db, personal(user), async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, { graphId: user, threadId });
     });
     expect(ctx.system.startsWith(PROMPT_BODY)).toBe(true);
     expect(ctx.system).toContain(CONTINUATIONS_BLOCK);
-    // Инструкция builtin-аспекта — из реестра БД (сид), а не из констант кода
+    // Инструкция builtin-аспекта — из реестра БД (сид), а не из констант кода: канал обязан
+    // не нести именно то, что лежит в базе, а не константу, которая могла с ней разойтись
     const rows = await withIdentity(db, personal(user), (tx) =>
       tx
         .select({ ai: aspectDefinitions.aiInstructions })
@@ -112,19 +120,20 @@ describe('buildContext — слой 1: тело промпта + ai_instructions
     );
     const taskInstructions = rows[0]?.ai;
     if (!taskInstructions) throw new Error('builtin orbis/task не сидирован (bun run db:prepare)');
-    expect(ctx.system).toContain('orbis/task');
-    expect(ctx.system).toContain(taskInstructions);
+    expect(ctx.system).toContain(ASPECT_INDEX_HEADING);
+    expect(ctx.system).toContain('- orbis/task — ');
+    expect(ctx.system).not.toContain(taskInstructions);
   });
 });
 
 describe('buildContext — §Б7-6: дата владельца и блок продолжений последним', () => {
-  test('CONTINUATIONS_HEADING встречается в SYSTEM_PROMPT_V6 ровно один раз; PROMPT_BODY + CONTINUATIONS_BLOCK === SYSTEM_PROMPT_V6', () => {
+  test('CONTINUATIONS_HEADING встречается в SYSTEM_PROMPT_V7 ровно один раз; PROMPT_BODY + CONTINUATIONS_BLOCK === SYSTEM_PROMPT_V7', () => {
     // Ровно один: split даёт две части только при единственном вхождении — иначе
     // PROMPT_BODY отрезался бы по ПЕРВОМУ, и часть текста уехала бы в хвост канала
-    expect(SYSTEM_PROMPT_V6.split(CONTINUATIONS_HEADING)).toHaveLength(2);
+    expect(SYSTEM_PROMPT_V7.split(CONTINUATIONS_HEADING)).toHaveLength(2);
     // Части ВЫЧИСЛЯЮТСЯ из константы, а не копируются текстом (РП-18: v5.ts правится только
     // новой версией) — конкатенация обязана давать исходный промпт побайтно
-    expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V6);
+    expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V7);
     expect(CONTINUATIONS_BLOCK.startsWith(CONTINUATIONS_HEADING)).toBe(true);
     expect(PROMPT_BODY).not.toContain(CONTINUATIONS_HEADING);
   });
@@ -135,7 +144,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
     );
   });
 
-  test('канал несёт дату владельца в его таймзоне — после промпта, до инструкций аспектов', async () => {
+  test('канал несёт дату владельца в его таймзоне — после промпта, до индекса аспектов', async () => {
     const user = await freshGraph();
     await withIdentity(db, personal(user), (tx) =>
       tx.insert(userSettings).values({ graphId: user, timezone: 'Asia/Bangkok' }),
@@ -152,11 +161,9 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
     });
     const dateLine = 'Сегодня: 2026-08-27 (четверг), таймзона владельца: Asia/Bangkok.';
     expect(ctx.system).toContain(dateLine);
-    // Позиция: сразу за телом промпта и выше инструкций аспектов
+    // Позиция: сразу за телом промпта и выше индекса аспектов
     expect(ctx.system.indexOf(dateLine)).toBe(PROMPT_BODY.length);
-    expect(ctx.system.indexOf(dateLine)).toBeLessThan(
-      ctx.system.indexOf('Инструкции активных аспектов:'),
-    );
+    expect(ctx.system.indexOf(dateLine)).toBeLessThan(ctx.system.indexOf(ASPECT_INDEX_HEADING));
   });
 
   test('дата берётся в дефолтной зоне, когда строки user_settings ещё нет (онбординг не пройден)', async () => {
@@ -195,7 +202,7 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
 
     // Случай не вырожденный: все четыре динамические секции в канале ЕСТЬ
     expect(ctx.system).toContain('Сегодня: ');
-    expect(ctx.system).toContain('Инструкции активных аспектов:');
+    expect(ctx.system).toContain(ASPECT_INDEX_HEADING);
     expect(ctx.system).toContain('ПАМЯТЬ-ХВОСТ');
     expect(ctx.system).toContain(`id: ${anchorId}`);
 
@@ -203,10 +210,89 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
     // последней строкой ответа» теряет силу примера, если после неё идёт ещё что-то
     const tail = ctx.system.indexOf(CONTINUATIONS_HEADING);
     expect(tail).toBeGreaterThan(ctx.system.indexOf('Сегодня: '));
-    expect(tail).toBeGreaterThan(ctx.system.indexOf('Инструкции активных аспектов:'));
+    expect(tail).toBeGreaterThan(ctx.system.indexOf(ASPECT_INDEX_HEADING));
     expect(tail).toBeGreaterThan(ctx.system.indexOf('ПАМЯТЬ-ХВОСТ'));
     expect(tail).toBeGreaterThan(ctx.system.indexOf(`id: ${anchorId}`));
     expect(ctx.system.trimEnd().endsWith(CONTINUATIONS_BLOCK.trimEnd())).toBe(true);
+  });
+});
+
+/**
+ * Две семантические проверки СОБРАННОГО канала (срез 1а, спека §10 п. 2).
+ *
+ * Граница проверки — собранный канал чата (`buildContext`) и рутины (`buildRoutineContext`):
+ * то, что модель реально читает в поле system. Вне её и названо вслух: замороженный промпт
+ * рутины `routine-v3` (`routine-v3.fixture.txt:44` называет `orbis/category` — снимок не
+ * правится, РП-18) и описание тула `entity_query` (`tools/registry.ts`, слой 5, не канал) —
+ * оба записаны в остатки среза (`remainders-1a.md`, задача 17). Поэтому вторая проверка стоит
+ * только на канале чата: канал рутины с выключенными Финансами краснел бы на замороженном тексте.
+ */
+describe('собранный канал: две проверки §10 п. 2 спеки 1а', () => {
+  async function chatChannel(owner: GraphId) {
+    const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
+    return withIdentity(db, personal(owner), (tx) =>
+      buildContext(tx, { graphId: owner, threadId }),
+    );
+  }
+  // Канал рутины — тем же сборщиком, что у раннера; образец входа — routines/context.test.ts
+  async function routineChannel(owner: GraphId) {
+    const routineId = await seedRoutine(owner);
+    return withIdentity(db, personal(owner), (tx) =>
+      buildRoutineContext(tx, {
+        graphId: owner,
+        routine: {
+          id: routineId,
+          title: 'Утренний обзор',
+          body: 'Пройди по задачам дня и предложи, что сделать.',
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'propose',
+          },
+        },
+        run: { id: newId(), bucket: '2026-08-17T07:00' },
+        history: [],
+      }),
+    );
+  }
+  // Маска — тем же путём, что у владельца (операция `module_set` исполнителя), а не записью в
+  // колонку: так проверяется канал, который получит прод после переключения на экране.
+  const setFinance = (owner: GraphId, enabled: boolean) =>
+    execute(db, {
+      identity: personal(owner),
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'module_set', input: { module: 'finance', enabled } }],
+    });
+
+  test('инструкций аспектов в канале чата и рутины — ноль', async () => {
+    const owner = await freshGraph();
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    const chat = (await chatChannel(owner)).system;
+    const routine = (await routineChannel(owner)).system; // buildRoutineContext; образец — routines/context.test.ts
+    // Страховка от вырожденного прохода: сравнивать есть с чем, и индекс в обоих каналах стоит
+    expect([...reg.aspects.values()].filter((a) => a.aiInstructions).length).toBeGreaterThan(0);
+    expect(chat).toContain(ASPECT_INDEX_HEADING);
+    expect(routine).toContain(ASPECT_INDEX_HEADING);
+    for (const a of reg.aspects.values()) {
+      if (!a.aiInstructions) continue;
+      expect(chat.includes(a.aiInstructions) ? a.id : null).toBeNull();
+      expect(routine.includes(a.aiInstructions) ? a.id : null).toBeNull();
+    }
+  });
+
+  test('ни слова о выключенных приложениях: id аспектов и свойств модуля finance и его фрагменты', async () => {
+    const owner = await freshGraph();
+    await setFinance(owner, false);
+    const off = (await chatChannel(owner)).system;
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    const financeIds = [...reg.aspects.values(), ...reg.properties.values()]
+      .filter((x) => x.module === 'finance')
+      .map((x) => x.id);
+    expect(financeIds.length).toBeGreaterThan(0);
+    expect(financeIds.filter((id) => off.includes(id))).toEqual([]);
+    for (const f of MODULE_MANIFESTS.finance.promptFragments) expect(off).not.toContain(f.text);
+    await setFinance(owner, true);
   });
 });
 
