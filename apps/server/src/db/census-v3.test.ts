@@ -219,3 +219,18 @@ test('display= через пробел — форма; ключ внутри к�
   expect(r.ids.displayTable).toEqual(['id-00000', 'id-00001', 'id-00005']);
   expect(r.ids.displayList).toEqual(['id-00002']);
 });
+
+test('значение формы в кавычках законно: display="table" и display="list" считаются (фикс-раунд 1, I-2)', async () => {
+  const corpus = fakeCorpus([
+    { body: '{{query:aspect=orbis/task, display="table"}}', bodyDoc: null },
+    { body: '{{query:display="list" limit=5}}', bodyDoc: null },
+    // Ключ внутри значения в кавычках — по-прежнему не форма.
+    { body: '{{query:title="x, display=table"}}', bodyDoc: null },
+    { body: '{{query:title="display=\\"list\\""}}', bodyDoc: null },
+    // Похожее значение — не форма.
+    { body: '{{query:display="tablet"}}', bodyDoc: null },
+  ]);
+  const r = await censusV3(corpus.io);
+  expect(r.ids.displayTable).toEqual(['id-00000']);
+  expect(r.ids.displayList).toEqual(['id-00001']);
+});

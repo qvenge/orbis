@@ -67,19 +67,32 @@ const ID_START = '00000000-0000-0000-0000-000000000000';
  * разобрано без реестра, или блок отвергнут при записи). Разбора запроса здесь нет:
  * `parseQueryAst` требует реестра, а перепись идёт сырым пулом по всем графам разом.
  *
- * Грамматика режет запрос по запятой ИЛИ пробелу вне кавычек (`parse-ast.ts`, `SEPARATOR_RE`), а
- * пробелов вокруг `=` не допускает вовсе (`display = "table"` — отказ `SYNTAX`). Поэтому часть
- * `display=table` ищется с разделителем `[\s,]` (или краем) с обеих сторон и без пробелов у `=`, а
- * по МАСКЕ кавычек (`maskQuotedValues`): `title="x, display=table"` — значение, а не форма. Флага
- * `g` нет намеренно: у глобального регэкспа `test` тащит `lastIndex` между вызовами.
+ * Грамматика режет запрос по запятой ИЛИ пробелу вне кавычек (`parse-ast.ts`, `SEPARATOR_RE`),
+ * пробелов вокруг `=` не допускает вовсе (`display = "table"` — отказ `SYNTAX`), а значение
+ * принимает и в кавычках (`display="table"` — снимает их `unquote`). Поэтому КЛЮЧ ищется по МАСКЕ
+ * кавычек (`maskQuotedValues`) — `title="x, display=table"` значение, а не форма, — с разделителем
+ * `[\s,]` (или краем) перед ним и без пробелов у `=`; а ЗНАЧЕНИЕ берётся из исходного текста: от
+ * `=` до первого разделителя вне кавычек (в маске он виден, внутри кавычек — заглушён), кавычки
+ * снимаются. Маска длину сохраняет, так что индексы маски и исходника совпадают.
  */
-const displayRe = (mode: 'table' | 'list') => new RegExp(`(?:^|[\\s,])display=${mode}(?=[\\s,]|$)`);
-const DISPLAY_TABLE_RE = displayRe('table');
-const DISPLAY_LIST_RE = displayRe('list');
+const DISPLAY_KEY_RE = /(?:^|[\s,])display=/g;
+const VALUE_END_RE = /[\s,]/;
+
+function displayInText(text: string): 'table' | 'list' | null {
+  const masked = maskQuotedValues(text);
+  for (const m of masked.matchAll(DISPLAY_KEY_RE)) {
+    const from = (m.index ?? 0) + m[0].length;
+    const rest = masked.slice(from).search(VALUE_END_RE);
+    const raw = text.slice(from, rest === -1 ? text.length : from + rest);
+    const value = /^"(.*)"$/.exec(raw)?.[1] ?? raw;
+    if (value === 'table' || value === 'list') return value;
+  }
+  return null;
+}
 
 /**
  * Форма показа блока данных документа. У привязанного блока правда — его дерево (`attrs.ast`,
- * `display` разбора), текст не нужен вовсе; у блока без дерева — ключ в тексте по маске кавычек.
+ * `display` разбора), текст не нужен вовсе; у блока без дерева — ключ в тексте (`displayInText`).
  */
 function displayOf(attrs: Record<string, unknown> | undefined): 'table' | 'list' | null {
   const ast = attrs?.ast;
@@ -88,11 +101,7 @@ function displayOf(attrs: Record<string, unknown> | undefined): 'table' | 'list'
     return display === 'table' || display === 'list' ? display : null;
   }
   const text = attrs?.text;
-  if (typeof text !== 'string') return null;
-  const masked = maskQuotedValues(text.trim());
-  if (DISPLAY_TABLE_RE.test(masked)) return 'table';
-  if (DISPLAY_LIST_RE.test(masked)) return 'list';
-  return null;
+  return typeof text === 'string' ? displayInText(text.trim()) : null;
 }
 
 /** Маркеры в тексте тела — тем же листовым препроходом, что прочтут первый кадр и `parseBody`. */
