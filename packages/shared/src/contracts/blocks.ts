@@ -106,9 +106,14 @@ export type EntityBlocksResult = { results: Record<string, BlockResult> };
  * `entity_version_pin` — ФОРМА ТУЛА исполнителя (`entity_id`, а не `entityId` роутера
  * `version`): операции уходят в `execute` без перекладки. Порядок значим — закрепление первым
  * снимает тело ДО замены (§8.4: «Текст до изменения вида»).
+ *
+ * `label` — подпись жеста интерфейса («Сделать страницей», «Изменить вид только этой записи»):
+ * заголовок записи журнала в ленте и то, что назовёт «отмени последнее» (`undo_last`). Без неё
+ * пачка из UI звалась бы «batch: операций — N» (финальное ревью, B-M2).
  */
 export const entityUpdateBatchInput = z
   .object({
+    label: z.string().trim().min(1).max(200).optional(),
     operations: z
       .array(
         z.discriminatedUnion('tool', [

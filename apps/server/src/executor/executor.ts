@@ -757,7 +757,7 @@ async function executeBatch(
           title:
             req.action !== undefined && req.actionLabel !== undefined
               ? `Действие «${req.actionLabel}»`
-              : `batch: операций — ${ops.length}`,
+              : (req.batchLabel ?? `batch: операций — ${ops.length}`),
         },
         results,
       });

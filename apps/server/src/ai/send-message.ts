@@ -172,11 +172,6 @@ export type SendMessageResult = SendMessageAnswer | SendMessageProcessing;
 export const PROCESSING_TTL_MS = 10 * 60_000;
 
 /**
- * Протокол pending для модели (митигация Minor-4 Task 6): dispatch не дедуплицирует
- * pending по batch_id модели — ретрай того же вызова создал бы ВТОРУЮ pending-карточку,
- * поэтому tool-результат прямо запрещает повтор: ожидание — терминальный исход хода.
- */
-/**
  * Поверхность тулов чата (слой 5): реестр тулов графа → то, что чат отдаёт провайдеру.
  *
  * Одна функция на всех, кто спрашивает «что видит модель чата»: сам чат, стенд §С8-30
@@ -199,6 +194,11 @@ export function chatToolSurface(defs: readonly OrbisToolDef[]): LLMToolDef[] {
     }));
 }
 
+/**
+ * Протокол pending для модели (митигация Minor-4 Task 6): dispatch не дедуплицирует
+ * pending по batch_id модели — ретрай того же вызова создал бы ВТОРУЮ pending-карточку,
+ * поэтому tool-результат прямо запрещает повтор: ожидание — терминальный исход хода.
+ */
 function pendingNote(pendingId: string): string {
   return (
     `действие не исполнено — ждёт подтверждения владельца (pendingId=${pendingId}). ` +

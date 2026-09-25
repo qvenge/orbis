@@ -108,7 +108,79 @@ async function cardsOf(user: GraphId, kind: string): Promise<Card[]> {
   }
 }
 
+/** Заголовок записи журнала этой пачки — текст audit-сообщения в глобальном треде владельца. */
+async function auditTitle(user: GraphId, actionId: string): Promise<string | undefined> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = await admin.execute(
+      sql`SELECT content FROM chat_messages WHERE thread_id = ${globalThreadId(user)}
+          AND metadata->'actions'->0->>'id' = ${actionId}`,
+    );
+    return [...rows].map((r) => r.content as string)[0];
+  } finally {
+    await adminClient.end();
+  }
+}
+
 describe('entity.updateBatch — пачка правок, один Undo (§4.3, §8.4)', () => {
+  test('подпись жеста — заголовок записи журнала; без подписи — прежний «batch: операций — N» (B-M2)', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const x = await caller.entity.create({ input: { title: 'Запись', tags: [] }, source: 'ui' });
+
+    const labeled = await caller.entity.updateBatch({
+      label: 'Сделать страницей',
+      operations: [
+        { tool: 'entity_update', input: { id: x.id, aspects: { attach: [PAGE_ASPECT] } } },
+      ],
+    });
+    expect(await auditTitle(user, labeled.actionId)).toBe('Сделать страницей');
+
+    const plain = await caller.entity.updateBatch({
+      operations: [
+        { tool: 'entity_update', input: { id: x.id, aspects: { detach: [PAGE_ASPECT] } } },
+      ],
+    });
+    expect(await auditTitle(user, plain.actionId)).toBe('batch: операций — 1');
+  });
+
+  test('устаревший expectedUpdatedAt во ВТОРОЙ операции — CONFLICT, закрепление версии первой не легло (B-M3)', async () => {
+    const user = await freshGraph();
+    const caller = callerFor(user);
+    const x = await caller.entity.create({
+      input: { title: 'Запись', tags: [], body: 'Тело до правки' },
+      source: 'ui',
+    });
+    const seen = await caller.entity.get({ id: x.id, include: ['body'] });
+    // Правка мимо экрана после чтения: версия, из которой строился план, устарела.
+    await caller.entity.update({ id: x.id, title: 'Правлено с телефона' });
+
+    const err = await trpcError(
+      caller.entity.updateBatch({
+        operations: [
+          {
+            tool: 'entity_version_pin',
+            input: { entity_id: x.id, label: 'Текст до изменения вида' },
+          },
+          {
+            tool: 'entity_update',
+            input: {
+              id: x.id,
+              expectedUpdatedAt: seen.entity.updatedAt,
+              bodyDoc: pageDoc('Новое тело'),
+              aspects: { attach: [PAGE_ASPECT] },
+            },
+          },
+        ],
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    expect(await caller.version.list({ entityId: x.id })).toEqual([]);
+    const after = await caller.entity.get({ id: x.id, include: ['body'] });
+    expect(after.entity.body).toBe(seen.entity.body);
+    expect(after.entity.aspects).not.toContain(PAGE_ASPECT);
+  });
+
   test('две правки двух записей — один actionId; ai.undo откатывает обе', async () => {
     const user = await freshGraph();
     const caller = callerFor(user);

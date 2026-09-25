@@ -87,6 +87,12 @@ export interface ExecuteRequest {
   action?: { id: string; module: string | null };
   /** Подпись действия в локали владельца — заголовок карточки; хранить её в журнале нечего. */
   actionLabel?: string;
+  /**
+   * Подпись пачки БЕЗ действия — жест интерфейса (`entity.updateBatch`, срез страниц 1а): заголовок
+   * карточки журнала и того, что назовёт `undo_last`, вместо «batch: операций — N». Типа записи
+   * журнала не меняет: это пачка, а не действие реестра.
+   */
+  batchLabel?: string;
 }
 
 export interface ExecuteOk {

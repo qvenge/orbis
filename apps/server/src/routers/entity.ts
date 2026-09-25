@@ -289,7 +289,8 @@ export const entityRouter = router({
    * `update` выше `actionId` не отдаёт, а N его вызовов дали бы N действий и N Undo.
    *
    * Операции уходят в исполнитель без перекладки: вход — форма тулов (`entity_id` у
-   * закрепления). Порядок значим — закрепление первым снимает тело ДО замены (§8.4).
+   * закрепления). Порядок значим — закрепление первым снимает тело ДО замены (§8.4). `label` —
+   * подпись жеста: заголовок записи журнала и ответа `undo_last` (`batchLabel` исполнителя).
    */
   updateBatch: ownerOnlyProcedure
     .input(entityUpdateBatchInput)
@@ -302,6 +303,7 @@ export const entityRouter = router({
           source: 'ui',
           batchId: newId(),
           operations: input.operations,
+          ...(input.label !== undefined && { batchLabel: input.label }),
         },
         { sink },
       );
