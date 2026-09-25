@@ -19,6 +19,7 @@ import { openEntity } from '../../state/navigation';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
 import { NO_REGISTRY } from '../entity-editor/EditorShell';
+import { recordStubLabel } from '../entity-editor/layout-parts';
 import { BlockPlaque } from './blocks/BlockPlaque';
 import { DataBlock } from './blocks/DataBlock';
 import { Columns } from './Columns';
@@ -251,7 +252,7 @@ function RecordNode({ name }: { name: keyof typeof RECORD_BLOCK_COMPONENTS }) {
         data-testid="body-stub"
         className="rounded-control border border-line border-dashed px-3 py-2 text-sm text-text-muted"
       >
-        [Тело записи]
+        {recordStubLabel('body')}
       </div>
     );
   }

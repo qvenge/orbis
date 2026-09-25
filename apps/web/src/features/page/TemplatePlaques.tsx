@@ -8,7 +8,6 @@ import { useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
-import { openEntity } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -129,25 +128,37 @@ export function DisputePlaque({
 
 /**
  * Шаблон не разобран или не отрисовался (§4.2 шаг 7): выбор его исключил и показал следующий, а
- * человек узнаёт, какой шаблон и почему, — и открывает его одним нажатием. Молча показать другой
- * шаблон значило бы спрятать поломку навсегда (§6.5).
+ * человек узнаёт, какой шаблон и почему, — и одним нажатием открывает его НАСТРОЙКУ (§9.1): чинить
+ * шаблон — правкой его тела, а не чтением страницы шаблона. Молча показать другой шаблон значило
+ * бы спрятать поломку навсегда (§6.5).
  */
-export function BrokenTemplatePlaque({ broken, title }: { broken: BrokenTemplate; title: string }) {
+export function BrokenTemplatePlaque({
+  broken,
+  title,
+  onConfigure,
+}: {
+  broken: BrokenTemplate;
+  title: string;
+  /** Не задан — показывать некуда (нет экрана, который умеет настройку): только текст. */
+  onConfigure?: () => void;
+}) {
   return (
     <Card role="alert" data-testid="broken-template" className="flex flex-col gap-2 border-danger">
       <p className="text-danger text-sm">
         Шаблон „{title}“ не разобран: {broken.reason}
       </p>
-      <div>
-        <Button
-          variant="outline"
-          size="sm"
-          aria-label={`Открыть шаблон „${title}“`}
-          onClick={() => openEntity(broken.id)}
-        >
-          Открыть шаблон
-        </Button>
-      </div>
+      {onConfigure !== undefined && (
+        <div>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label={`Настроить шаблон „${title}“`}
+            onClick={onConfigure}
+          >
+            Настроить шаблон
+          </Button>
+        </div>
+      )}
     </Card>
   );
 }

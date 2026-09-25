@@ -1534,6 +1534,14 @@ test('модули первого кадра не тянут схему реда
     // (`DetailMenu.tsx`) ленивое и сторожится наличием своего чанка (check-lazy-chunks).
     '../entity-detail/DetailMenuSlot.tsx',
     '../entity-detail/MenuTrigger.tsx',
+    // Настройка и предпросмотр (задача 16): подписи и коробки рамок и заглушек рисует и первый
+    // кадр тела (эагерный), и NodeView; настройка — тот же `EntityBody`, предпросмотр шаблона —
+    // обычный показ открытого шаблона. Все эагерны; NodeView (`nodes/LayoutFrame`,
+    // `nodes/RecordBlockStub`) — в чанке редактора, через `extensions.ts`.
+    './layout-parts.tsx',
+    '../page/ConfigureView.tsx',
+    '../page/TemplateBanner.tsx',
+    '../page/TemplatePreview.tsx',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

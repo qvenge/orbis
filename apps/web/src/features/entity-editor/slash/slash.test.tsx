@@ -1,11 +1,13 @@
-import { DOC_EXTENSIONS, parseBody } from '@orbis/shared/doc';
+import { bodyPairFromDoc, DOC_EXTENSIONS, parseBody } from '@orbis/shared/doc';
+import type { BodyKind } from '@orbis/shared/doc/placement';
 import { printQueryAst } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { afterEach, expect, test, vi } from 'vitest';
+import { BodyKindProvider } from '../../../lib/query-blocks/body-kind';
 import {
   blocksReply,
   installCrashTrap,
@@ -19,11 +21,12 @@ import { BodyEditor } from '../BodyEditor';
 import { BODY_PLACEHOLDER } from '../body-box';
 import { EditorShell } from '../EditorShell';
 import { EDITOR_EXTENSIONS } from '../extensions';
-import { NEW_QUERY_AST, NEW_QUERY_BLOCK, SLASH_ITEMS } from './items';
+import { RECORD_BLOCK_TITLES } from '../layout-parts';
+import { NEW_QUERY_AST, NEW_QUERY_BLOCK, SLASH_ITEMS, type SlashContext } from './items';
 import { suggestionExtensions } from './suggestion';
 
 // Реестр аспектов — настоящий (как в editor.test.tsx и query-widget.test.tsx): с пустым
-// каталогом ЛЮБОЙ блок падал бы плашкой qb-error, и «смарт-лист встал живым» проходило бы
+// каталогом ЛЮБОЙ блок падал бы плашкой qb-error, и «блок данных встал живым» проходило бы
 // по ложной причине.
 
 type Suggestion = { id: string; title: string; emoji: string | null; status: string | null };
@@ -99,11 +102,16 @@ type Held = { editor: Editor | null };
  * не годится вовсе — она проверяла бы вставку в начало. `keyboard()` печатает в то, что
  * сфокусировано, и оставляет позицию за `commands.focus`.
  */
-async function mountEditor(md: string, handler: (p: string, i: unknown) => unknown) {
+async function mountEditor(
+  md: string,
+  handler: (p: string, i: unknown) => unknown,
+  // Род тела (§5.5) — как его ставит экран записи (EntityBody); по умолчанию — заметка.
+  kind: BodyKind = 'note',
+) {
   const onChange = vi.fn();
   const h: Held = { editor: null };
   const r = renderWithProviders(
-    <>
+    <BodyKindProvider kind={kind}>
       <BodyEditor
         doc={parseBody(md)}
         onChange={onChange}
@@ -112,7 +120,7 @@ async function mountEditor(md: string, handler: (p: string, i: unknown) => unkno
         }}
       />
       <Toaster />
-    </>,
+    </BodyKindProvider>,
     handler,
   );
   await waitFor(() => expect(h.editor).not.toBeNull());
@@ -206,8 +214,9 @@ test('«/» открывает меню, «/заг» фильтрует его �
   const { h } = await mountEditor('привет', api({}));
   await userEvent.keyboard(' /');
   await screen.findByTestId('slash-menu');
-  // Страж вакуумности: без фильтра в меню весь список, и «фильтрует» есть с чего проверять.
-  expect(rows()).toHaveLength(SLASH_ITEMS.length);
+  // Страж вакуумности: без фильтра в меню весь список ЗАМЕТКИ (контейнеров и обвязки у неё нет,
+  // §5.5), и «фильтрует» есть с чего проверять.
+  expect(rows()).toHaveLength(SLASH_ITEMS.filter((i) => i.kinds.includes('note')).length);
   expect(rows().length).toBeGreaterThan(3);
 
   await userEvent.keyboard('заг');
@@ -259,16 +268,17 @@ test('«Заголовок 1» превращает абзац в heading, а «
   expect(h.editor?.getText()).toBe('привет ');
 });
 
-test('«Смарт-лист» вставляет БЛОК в позицию каретки, и он оживает виджетом', async () => {
+test('«Список по запросу» вставляет БЛОК в позицию каретки, и он оживает виджетом', async () => {
   // Сегодня вставить `{{query:…}}` из интерфейса нельзя ВОВСЕ: редактор блока открывается
   // только на уже существующем блоке. Это новая возможность, а не перенос.
   const { h } = await mountEditor(
     'привет',
     api({ byQuery: { [NEW_QUERY_BLOCK]: [{ id: 'a', title: 'Разобрать почту' }] } }),
   );
-  await userEvent.keyboard(' /смарт');
+  await userEvent.keyboard(' /запрос');
   await screen.findByTestId('slash-menu');
-  expect(rows()).toEqual(['Смарт-листживой список по запросу']);
+  // Слово «смарт-лист» ушло из словаря (спека страниц 1а §7.4): пункт называется блоком данных.
+  expect(rows()).toEqual(['Список по запросублок данных']);
 
   await userEvent.keyboard('{Enter}');
   // Ассерт по ФОРМЕ документа: абзац с буквальным `{{query:…}}` сериализуется в ровно ту же
@@ -286,14 +296,14 @@ test('«Смарт-лист» вставляет БЛОК в позицию ка
   expect(screen.queryByTestId('qb-error')).toBeNull();
 });
 
-test('«Смарт-лист» встаёт ПОСЛЕ абзаца с кареткой, а не в конце документа', async () => {
+test('«Список по запросу» встаёт ПОСЛЕ абзаца с кареткой, а не в конце документа', async () => {
   // Раунд правок 1 (М-1). На теле из ОДНОГО абзаца ассерт `['paragraph','queryBlock']` не
   // различает вставку в позицию каретки и дописывание в конец документа — оба дают одно и
   // то же. Различает только тело, у которого после каретки ЕЩЁ ЧТО-ТО есть.
   const { h } = await mountEditor('первый\n\nвторой', api({ byQuery: { [NEW_QUERY_BLOCK]: [] } }));
   // Каретка — в конец ПЕРВОГО абзаца: он занимает позиции 1..7 («первый» — шесть символов).
   h.editor?.commands.focus(7);
-  await userEvent.keyboard(' /смарт');
+  await userEvent.keyboard(' /запрос');
   await screen.findByTestId('slash-menu');
   await userEvent.keyboard('{Enter}');
 
@@ -304,7 +314,7 @@ test('«Смарт-лист» встаёт ПОСЛЕ абзаца с карет
       'paragraph',
     ]),
   );
-  // Стражи вакуумности: блок — ТОТ САМЫЙ (а не пустая нода), первый абзац лишился `/смарт`,
+  // Стражи вакуумности: блок — ТОТ САМЫЙ (а не пустая нода), первый абзац лишился `/запрос`,
   // а второй цел и стоит ПОСЛЕ блока. Иначе равенство типов выше можно было бы получить и
   // разрушив документ. Сверка по дереву, а не по `getText()`: queryBlock — атом, и в
   // текстовой проекции он оборачивается разделителями блоков.
@@ -348,17 +358,140 @@ test('каждый пункт меню действительно меняет �
   const { h } = await mountEditor('привет', api({}));
   const editor = h.editor as Editor;
   const before = parseBody('привет').doc;
+  // Выбор аспекта отвечает сразу — пункт карточки проверяется до самой вставки.
+  const ctx: SlashContext = { chooseAspect: (insert) => insert('orbis/goal') };
   for (const item of SLASH_ITEMS) {
     editor.commands.setContent(before, { emitUpdate: false });
     editor.commands.focus('end');
     const start = JSON.stringify(editor.getJSON());
-    item.run(editor);
+    item.run(editor, ctx);
     expect(JSON.stringify(editor.getJSON()), `пункт «${item.label}» ничего не сделал`).not.toBe(
       start,
     );
   }
   // Страж вакуумности: список не пуст и не схлопнулся до пары строк.
   expect(SLASH_ITEMS.length).toBeGreaterThan(8);
+});
+
+// --- `/`: состав по роду тела (спека страниц 1а §5.5, §9.1) ---------------------------------
+
+/** Подписи блоков обвязки, кроме `{{body}}`, — у страницы и шаблона они есть, у заметки нет. */
+const RECORD_LABELS = Object.entries(RECORD_BLOCK_TITLES)
+  .filter(([name]) => name !== 'body')
+  .map(([, label]) => label);
+/** Подписи строк меню: строка — подпись и подсказка подряд, сверяется целиком. */
+const labelsOf = () =>
+  rows().map((r) => SLASH_ITEMS.find((i) => `${i.label}${i.hint ?? ''}` === r)?.label);
+
+test('у заметки в «/» нет «Колонок», «Вкладок» и обвязки; «Список по запросу» есть', async () => {
+  await mountEditor('привет', api({}), 'note');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const labels = labelsOf();
+  for (const hidden of [
+    'Колонки',
+    'Вкладки',
+    'Карточка аспекта',
+    'Тело записи',
+    ...RECORD_LABELS,
+  ]) {
+    expect(labels, hidden).not.toContain(hidden);
+  }
+  expect(labels).toContain('Список по запросу');
+  expect(labels).toContain('Заголовок 1');
+});
+
+test('у страницы — контейнеры и обвязка, но без «Тела записи»', async () => {
+  await mountEditor('привет', api({}), 'page');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const labels = labelsOf();
+  for (const shown of [
+    'Колонки',
+    'Вкладки',
+    'Карточка аспекта',
+    'Список по запросу',
+    ...RECORD_LABELS,
+  ]) {
+    expect(labels, shown).toContain(shown);
+  }
+  expect(labels).not.toContain('Тело записи');
+});
+
+test('у шаблона — и «Тело записи», пока его в документе нет', async () => {
+  const { h } = await mountEditor('привет', api({}), 'template');
+  await userEvent.keyboard(' /тело');
+  await screen.findByTestId('slash-menu');
+  expect(rows()).toEqual(['Тело записиблок записи']);
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() =>
+    expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual(['paragraph', 'recordBlock']),
+  );
+  expect(h.editor?.getJSON().content?.[1]?.attrs?.name).toBe('body');
+
+  // Тело в документе есть — второго меню не предлагает: у шаблона оно одно (§5.3).
+  h.editor?.commands.focus(1);
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  expect(labelsOf()).not.toContain('Тело записи');
+  expect(labelsOf()).toContain('Заголовок записи');
+});
+
+test('Enter по скрытому пункту его не вставляет: фильтр и выбор — один список', async () => {
+  // Заметка: «Колонок» в меню нет — Enter после `/колон` не находит пункта, контейнер не встаёт.
+  const note = await mountEditor('привет', api({}), 'note');
+  await userEvent.keyboard(' /колон');
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('slash-menu')).toBeNull();
+  await userEvent.keyboard('{Enter}');
+  await new Promise((r) => setTimeout(r, 50));
+  expect(note.h.editor?.getJSON().content?.map((n) => n.type)).not.toContain('columns');
+  note.r.unmount();
+
+  // Положительный контроль: у страницы тот же набор вставляет колонки, и документ переживает
+  // собственную печать (две колонки из пустых абзацев — те же колонки после разбора).
+  const page = await mountEditor('привет', api({}), 'page');
+  await userEvent.keyboard(' /колон');
+  await screen.findByTestId('slash-menu');
+  expect(rows()).toEqual(['Колонкираскладка страницы']);
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() =>
+    expect(page.h.editor?.getJSON().content?.map((n) => n.type)).toContain('columns'),
+  );
+  const doc = { v: 3, doc: page.h.editor?.getJSON() ?? {} } as Parameters<
+    typeof bodyPairFromDoc
+  >[0];
+  expect(bodyPairFromDoc(doc).doc.doc.content?.map((n) => n.type)).toContain('columns');
+});
+
+test('«Вкладки» — одна вкладка «Вкладка 1»; «Карточка аспекта» спрашивает аспект и вставляет его ключ', async () => {
+  const { h } = await mountEditor('привет', api({}), 'template');
+  await userEvent.keyboard(' /вкладки');
+  await screen.findByTestId('slash-menu');
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect(h.editor?.getJSON().content?.map((n) => n.type)).toContain('tabs'));
+  const tabs = h.editor?.getJSON().content?.find((n) => n.type === 'tabs');
+  expect(tabs?.content?.map((t) => (t as { attrs?: { label?: string } }).attrs?.label)).toEqual([
+    'Вкладка 1',
+  ]);
+
+  h.editor?.commands.focus(7);
+  await userEvent.keyboard(' /аспекта');
+  await screen.findByTestId('slash-menu');
+  expect(rows()).toEqual(['Карточка аспектаблок записи']);
+  await userEvent.keyboard('{Enter}');
+  const chooser = await screen.findByTestId('aspect-chooser');
+  fireEvent.click(within(chooser).getByRole('button', { name: 'Цель' }));
+  await waitFor(() =>
+    expect(h.editor?.getJSON().content?.map((n) => n.type)).toContain('aspectCard'),
+  );
+  const card = h.editor?.getJSON().content?.find((n) => n.type === 'aspectCard');
+  expect(card?.attrs).toMatchObject({ aspect: null, text: 'orbis/goal' });
+  // Шаблон переживает печать целиком: карточка с ключом — не пустой `{{card: }}`, уводящий тело
+  // в raw.
+  const doc = { v: 3, doc: h.editor?.getJSON() ?? {} } as Parameters<typeof bodyPairFromDoc>[0];
+  expect(bodyPairFromDoc(doc).body).toContain('{{card: orbis/goal}}');
+  expect(bodyPairFromDoc(doc).doc.doc.content?.map((n) => n.type)).not.toContain('rawBlock');
 });
 
 // --- блок кода: оба входа молчат (итоговое ревью, находка 3) ---------------------------------

@@ -41,6 +41,7 @@ import {
   type StructureFixture,
   structureHandler,
 } from '../entity-detail/structure-fixtures';
+import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { RecordView } from './RecordView';
 import { DisputePlaque } from './TemplatePlaques';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
@@ -237,9 +238,9 @@ describe('выбор шаблона (§4.2)', () => {
     expect(await screen.findByTestId('editor-preview')).toBeInTheDocument();
   });
 
-  test('сломанный шаблон B{project,task} → рисуется A и плашка «не разобран» со ссылкой на B', async () => {
+  test('сломанный шаблон B{project,task} → рисуется A и плашка «не разобран» ведёт в настройку B', async () => {
     const broken = '{{columns}}\n{{column}}\nлевая\n{{/column}}\n';
-    openRecord(fixture('project-task'), {
+    const { calls } = openRecord(fixture('project-task'), {
       templates: [
         template(TPL_A, 'Шаблон проекта', ['orbis/project'], 'Вид проекта A\n'),
         template(TPL_B, 'Большой шаблон', ['orbis/project', 'orbis/task'], broken),
@@ -250,10 +251,17 @@ describe('выбор шаблона (§4.2)', () => {
     expect(plaque).toHaveTextContent(
       `Шаблон „Большой шаблон“ не разобран: ${GRAMMAR_ERROR_MESSAGES.CONTAINER_UNCLOSED}`,
     );
+    // Плашка ведёт в НАСТРОЙКУ шаблона (спека §9.1, задача 16): чинить шаблон — правкой его тела.
     fireEvent.click(
-      within(plaque).getByRole('button', { name: 'Открыть шаблон „Большой шаблон“' }),
+      within(plaque).getByRole('button', { name: 'Настроить шаблон „Большой шаблон“' }),
     );
-    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: TPL_B });
+    expect(await screen.findByTestId('configure-view')).toBeInTheDocument();
+    expect(calls).toContainEqual({ path: 'entity.get', input: detailGetInput(TPL_B) });
+    // Экран не уходил со своей записи: настройка — режим экрана, а не переход.
+    expect(useNav.getState().stacks.browser.at(-1)).toEqual({
+      kind: 'entity',
+      id: fixture('project-task').entity.id,
+    });
   });
 
   test('шаблон владельца бросает при рендере → «ошибка отрисовки», выбор повторяется', async () => {

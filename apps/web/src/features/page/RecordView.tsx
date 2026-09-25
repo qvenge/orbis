@@ -12,6 +12,7 @@ import { Skeleton } from '../../ui/Skeleton';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { RecordHostProvider, recordHostValue, type WireEntity } from '../entity-detail/record-host';
 import { BaseRecordView } from './BaseRecordView';
+import { BlockPlaque } from './blocks/BlockPlaque';
 import { HOST_TEMPLATE_NODES } from './host-template';
 import { Renderer } from './Renderer';
 import { TabMemoryScope } from './TabsContainer';
@@ -28,8 +29,18 @@ type EntityGetReply = RouterOutputs['entity']['get'];
 /** Причина исключения шаблона, упавшего при рендере (§4.2 шаг 7: «не разобран: <причина>»). */
 export const RENDER_CRASH_REASON = 'ошибка отрисовки';
 
-/** Чем показать запись: шаблон хоста, шаблон владельца или — пока выбор не решён — заглушкой. */
-type Shown = { kind: 'host' } | { kind: 'own'; row: WireEntity } | { kind: 'wait' };
+/** Текст шаблона на показ: id (пространство памяти вкладок, граница ошибок) и тело. */
+type TemplateText = Pick<WireEntity, 'id' | 'body'>;
+
+/**
+ * Чем показать запись: шаблон хоста, шаблон владельца, заданный шаблон предпросмотра (§9.3) или —
+ * пока выбор не решён — заглушкой.
+ */
+type Shown =
+  | { kind: 'host' }
+  | { kind: 'own'; row: WireEntity }
+  | { kind: 'preview'; template: TemplateText }
+  | { kind: 'wait' };
 
 interface Decision {
   shown: Shown;
@@ -167,6 +178,8 @@ export function RecordView({
   readOnlyBody = false,
   onShown,
   disputeRequest,
+  onConfigureTemplate,
+  preview,
 }: {
   reply: EntityGetReply;
   /** «Открыть через X» / «через шаблон хоста» (§8.4) — разовый выбор экрана, не запоминается. */
@@ -177,6 +190,14 @@ export function RecordView({
   onShown?: (shown: RecordShown) => void;
   /** Плашка спора по требованию меню — и тогда, когда выбор запомнен (§4.3). */
   disputeRequest?: DisputeRequest;
+  /** Настройка шаблона по плашке «не разобран» (§4.2 шаг 7, §9.1); не задан — плашка без кнопки. */
+  onConfigureTemplate?: (templateId: string) => void;
+  /**
+   * Предпросмотр (§9.3): запись показана ЭТИМ шаблоном, мимо выбора — черновик шаблона выбору
+   * вообще не виден (у него нет «Шаблон для»), а у готового шаблона выбор мог бы предпочесть
+   * другой. Плашек выбора при этом нет: выбора не было.
+   */
+  preview?: TemplateText;
 }) {
   const { entity } = reply;
   const list = usePageTemplates();
@@ -216,8 +237,11 @@ export function RecordView({
   );
 
   const decision = useMemo(
-    () => decide(entity.aspects, list, reg, registryFailed, crashed, override),
-    [entity.aspects, list, reg, registryFailed, crashed, override],
+    () =>
+      preview !== undefined
+        ? { ...HOST, shown: { kind: 'preview' as const, template: preview } }
+        : decide(entity.aspects, list, reg, registryFailed, crashed, override),
+    [entity.aspects, list, reg, registryFailed, crashed, override, preview],
   );
   const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnlyBody });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
@@ -227,7 +251,9 @@ export function RecordView({
       ? decision.shown.row.id
       : decision.shown.kind === 'host'
         ? 'host'
-        : null;
+        : decision.shown.kind === 'preview'
+          ? decision.shown.template.id
+          : null;
   // Строками — чтобы новые массивы с теми же id не будили экран лишним кадром.
   const brokenKey = decision.broken.map((b) => b.id).join(',');
   const openableKey = useMemo(
@@ -261,7 +287,14 @@ export function RecordView({
           {decision.listFailed && <TemplatesErrorPlaque />}
           {decision.registryFailed && <RegistryErrorPlaque />}
           {decision.broken.map((b) => (
-            <BrokenTemplatePlaque key={b.id} broken={b} title={titleOf(b.id)} />
+            <BrokenTemplatePlaque
+              key={b.id}
+              broken={b}
+              title={titleOf(b.id)}
+              {...(onConfigureTemplate !== undefined && {
+                onConfigure: () => onConfigureTemplate(b.id),
+              })}
+            />
           ))}
           {dispute !== null && (
             <DisputePlaque
@@ -301,6 +334,21 @@ function ShownTemplate({
       </RenderBoundary>
     );
   }
+  if (shown.kind === 'preview') {
+    const { template } = shown;
+    // Выбирать следующий некого — предпросмотр показывает ровно этот шаблон; упал — так и сказано.
+    return (
+      <RenderBoundary
+        key={template.id}
+        resetKey={`${entityId}:${template.id}:${template.body}`}
+        fallback={
+          <BlockPlaque message={`Шаблон не отрисовался на этой записи: ${RENDER_CRASH_REASON}.`} />
+        }
+      >
+        <OwnTemplateTree row={template} />
+      </RenderBoundary>
+    );
+  }
   const { row } = shown;
   return (
     // Упавший шаблон владельца ничего не рисует сам: о падении узнаёт выбор (`onCatch`), и на
@@ -316,7 +364,7 @@ function ShownTemplate({
   );
 }
 
-function OwnTemplateTree({ row }: { row: WireEntity }) {
+function OwnTemplateTree({ row }: { row: TemplateText }) {
   const nodes = useMemo(() => parsePageText(row.body), [row.body]);
   return <TemplateTree scope={`template:${row.id}`} nodes={nodes} />;
 }

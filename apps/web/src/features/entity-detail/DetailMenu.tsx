@@ -3,6 +3,7 @@ import {
   Archive,
   ArchiveRestore,
   Code,
+  Eye,
   FilePlus2,
   FileText,
   History,
@@ -11,6 +12,7 @@ import {
   PanelsTopLeft,
   Pin,
   Scale,
+  SlidersHorizontal,
   Undo2,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -40,8 +42,18 @@ export type DetailMenuView =
       templates: PageTemplates;
       onOpenVia: (templateId: string | 'host') => void;
       onChangeDispute: (contenders: readonly string[]) => void;
+      /** «Настроить шаблон „X“» (§8.4, §9.2) — настройка шаблона, которым запись показана. */
+      onConfigureTemplate: (templateId: string) => void;
     }
-  | { kind: 'page'; asRecord: boolean; onOpenAsRecord: () => void };
+  | {
+      kind: 'page';
+      asRecord: boolean;
+      onOpenAsRecord: () => void;
+      /** «Настроить» (§9.1) — тело страницы в редакторе. */
+      onConfigure: () => void;
+      /** «Предпросмотр на записи…» (§9.3) — только у черновика шаблона; у шаблона это его показ. */
+      onPreview?: () => void;
+    };
 
 /**
  * Меню ⋮ шапки detail (§3.5). Раньше «меню» было двумя icon-кнопками в ряд: пункт
@@ -188,6 +200,12 @@ export function DetailMenu({
               icon: <PanelsTopLeft size={16} aria-hidden />,
               onSelect: () => v.onOpenVia('host'),
             },
+            // Шаблон хоста в 1а не правится (§8.1) — пункт только у шаблона владельца.
+            {
+              label: `Настроить шаблон „${titleOf(shownId)}“`,
+              icon: <SlidersHorizontal size={16} aria-hidden />,
+              onSelect: () => v.onConfigureTemplate(shownId),
+            },
           ]),
       ...others.map((id) => ({
         // Ключ — id шаблона: у двух шаблонов может быть одно название.
@@ -244,6 +262,11 @@ export function DetailMenu({
 
   function pageItems(v: Extract<DetailMenuView, { kind: 'page' }>): DropdownMenuItem[] {
     return [
+      {
+        label: 'Настроить',
+        icon: <SlidersHorizontal size={16} aria-hidden />,
+        onSelect: v.onConfigure,
+      },
       ...(v.asRecord
         ? []
         : [
@@ -263,6 +286,15 @@ export function DetailMenu({
             value: entity.props[TEMPLATE_FOR_PROPERTY],
           }),
       },
+      ...(v.onPreview === undefined
+        ? []
+        : [
+            {
+              label: 'Предпросмотр на записи…',
+              icon: <Eye size={16} aria-hidden />,
+              onSelect: v.onPreview,
+            },
+          ]),
       // Снимается ТОЛЬКО аспект (РП-22): «Шаблон для» и «Главнее, чем» переживают снятие, и
       // возврат аспекта (Undo, «Сделать страницей») возвращает шаблон каким он был.
       {

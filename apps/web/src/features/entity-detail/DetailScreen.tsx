@@ -8,12 +8,14 @@ import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
+import { ConfigureView } from '../page/ConfigureView';
 import { PageView } from '../page/PageView';
 import { type DisputeRequest, type RecordShown, RecordView } from '../page/RecordView';
 import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsContainer';
+import { TemplatePreview } from '../page/TemplatePreview';
 import { usePageTemplates } from '../page/usePageTemplates';
 import { DetailMenuSlot } from './DetailMenuSlot';
-import { BodyScreenProvider } from './EntityBody';
+import { BodyScreenProvider, bodyKindOf } from './EntityBody';
 import { ProposalOverlay } from './ProposalOverlay';
 import { ROUTINE_ASPECT } from './RoutineStatusBlock';
 import { useEntityDetail } from './useEntityDetail';
@@ -87,6 +89,14 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const [openVia, setOpenVia] = useState<{ templateId: string | 'host' } | undefined>(undefined);
   /** «Сменить выбор шаблона для таких записей» (§4.3) — плашка спора по просьбе меню. */
   const [disputeRequest, setDisputeRequest] = useState<DisputeRequest | undefined>(undefined);
+  /**
+   * Режим экрана (спека страниц 1а §9): «Настроить» — тело страницы или шаблона в редакторе
+   * (`targetId` — чьё: сама страница или шаблон, которым показана запись); «Предпросмотр на
+   * записи…» — черновик шаблона на выбранной записи. Состоянием экрана, а не адресом (W7), как
+   * «Открыть через X»; сбрасывается сменой записи и её «страничности» (ниже): настройка, пережившая
+   * переход, правила бы тело чужой записи без единого жеста человека.
+   */
+  const [mode, setMode] = useState<ScreenMode>(null);
   /** Чем запись показана (извещает `RecordView`) — пункты меню ⋮ строятся по нему. */
   const [recordShown, setRecordShown] = useState<RecordShown | null>(null);
   /**
@@ -122,6 +132,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     // соседнюю запись чужим шаблоном без единого жеста человека.
     setOpenVia(undefined);
     setDisputeRequest(undefined);
+    setMode(null);
     // Слой переезжает на соседнюю запись вместе с экраном (монтируется без key), и его
     // собственное состояние обнуляет `key` ниже. Но признак живёт ЗДЕСЬ, и один кадр между
     // сменой пропа и его извещением тело соседней записи стояло бы спрятанным ни за что.
@@ -150,6 +161,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     if (prevIsPageRef.current !== undefined) {
       setOpenVia(undefined);
       setDisputeRequest(undefined);
+      setMode(null);
     }
     prevIsPageRef.current = loadedIsPage;
   }
@@ -238,6 +250,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // ссылками, а тело — настоящим редактором под провайдером ЭТОГО экрана (плашки тела — над
   // вкладками). Инертный провайдер `PageView` здесь не участвует вовсе: `PageView` не рисуется.
   const asRecord = isPage && openVia?.templateId === 'host';
+  // Шаблон (страница с «Шаблон для») показывается предпросмотром на записи (§9.3); черновик —
+  // только по пункту «Предпросмотр на записи…».
+  const isTemplate = isPage && bodyKindOf(entity) === 'template';
+  const configure = (targetId: string) => setMode({ kind: 'configure', targetId });
 
   return (
     <TabMemoryProvider value={tabs}>
@@ -283,6 +299,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                       kind: 'page',
                       asRecord,
                       onOpenAsRecord: () => setOpenVia(HOST_VIEW),
+                      onConfigure: () => configure(entity.id),
+                      ...(!isTemplate && { onPreview: () => setMode({ kind: 'preview' }) }),
                     }
                   : {
                       kind: 'record',
@@ -292,6 +310,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                         setOpenVia(templateId === 'host' ? HOST_VIEW : { templateId }),
                       onChangeDispute: (contenders) =>
                         setDisputeRequest((prev) => ({ contenders, n: (prev?.n ?? 0) + 1 })),
+                      onConfigureTemplate: configure,
                     }
               }
             />
@@ -359,17 +378,29 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             шаблон по функции выбора (§4.2): свой шаблон владельца или шаблон хоста (§8.1). Оба —
             над тем же ответом `entity.get` этого экрана, второго запроса записи нет (РП-13).
             Шапка, меню, слой предложения и плашки над ними — прежние. Вкладки, их keepMounted
-            (тело и «Детали» живы, «Тред» — только открытым) — дело шаблона и рендерера. */}
-          {isPage && !asRecord ? (
+            (тело и «Детали» живы, «Тред» — только открытым) — дело шаблона и рендерера.
+            Режим «Настроить» (§9.1) заменяет показ телом в редакторе, шаблон страницы — его
+            предпросмотром на записи (§9.3). */}
+          {mode?.kind === 'configure' ? (
+            <ConfigureView targetId={mode.targetId} onDone={() => setMode(null)} />
+          ) : isPage && !asRecord ? (
             // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
             // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
             <TabMemoryScope scope={`page:${entity.id}`}>
-              <PageView reply={get.data} />
+              {isTemplate || mode?.kind === 'preview' ? (
+                <TemplatePreview
+                  page={get.data}
+                  {...(mode?.kind === 'preview' && { onClose: () => setMode(null) })}
+                />
+              ) : (
+                <PageView reply={get.data} />
+              )}
             </TabMemoryScope>
           ) : (
             <RecordView
               reply={get.data}
               onShown={setRecordShown}
+              onConfigureTemplate={configure}
               {...(openVia !== undefined && { override: openVia })}
               {...(disputeRequest !== undefined && !isPage && { disputeRequest })}
             />
@@ -379,6 +410,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     </TabMemoryProvider>
   );
 }
+
+/** Режим экрана (§9): настройка тела страницы или шаблона, предпросмотр черновика шаблона. */
+type ScreenMode = { kind: 'configure'; targetId: string } | { kind: 'preview' } | null;
 
 /** Разовый показ шаблоном хоста — одним объектом: выбор шаблона мемоизирован по нему. */
 const HOST_VIEW = { templateId: 'host' } as const;

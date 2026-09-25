@@ -1,3 +1,4 @@
+import type { BodyKind } from '@orbis/shared/doc/placement';
 import type { AnyExtension } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import {
@@ -9,9 +10,11 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { trpc } from '../../../trpc';
 import { useToast } from '../../../ui/toast-store';
-import { filterSlashItems, SLASH_ITEMS } from './items';
+import { AspectChooser } from '../nodes/AspectChooser';
+import { filterSlashItems } from './items';
 import { type MenuRow, SlashMenu, type SlashMenuHandle } from './SlashMenu';
 import { closeSuggest, type SuggestSnapshot, suggestionExtensions } from './suggestion';
 
@@ -35,6 +38,8 @@ export type EditorSuggest = {
   live: RefObject<SuggestSnapshot | null>;
   handleRef: RefObject<SlashMenuHandle | null>;
   close: () => void;
+  /** Род тела, в котором стоит редактор (§5.5): от него зависит состав меню «/». */
+  kind: BodyKind;
 };
 
 /**
@@ -43,6 +48,8 @@ export type EditorSuggest = {
  * кэша, без отмены устаревшего запроса и без единого следа в тестовом харнессе.
  */
 export function useEditorSuggest(): EditorSuggest {
+  // Род — контекстом, как у виджетов тела: редактор стоит под `BodyKindProvider` экрана (EntityBody).
+  const kind = useBodyKind();
   const [active, setActive] = useState<SuggestSnapshot | null>(null);
   // Зеркало состояния для колбэков: они собраны ОДИН раз (иначе пересборка расширений
   // пересобирала бы схему редактора), и замыкание на `active` в них навсегда осталось бы
@@ -81,7 +88,7 @@ export function useEditorSuggest(): EditorSuggest {
     if (cur !== null && !cur.view.isDestroyed) closeSuggest(cur.view, cur.kind);
   }, []);
 
-  return { extensions, active, live: activeRef, handleRef, close };
+  return { extensions, active, live: activeRef, handleRef, close, kind };
 }
 
 /**
@@ -95,8 +102,13 @@ export function SuggestMenu({
   editor: Editor | null;
   suggest: EditorSuggest;
 }) {
-  const { active, live, handleRef, close } = suggest;
+  const { active, live, handleRef, close, kind } = suggest;
   const { show } = useToast();
+  /**
+   * Открытый выбор аспекта для «Карточки аспекта»: вставка, ждущая ответа. Живёт здесь, а не в
+   * меню: к ответу меню уже закрыто (диапазон `/карт` снят), а вставлять есть куда — в каретку.
+   */
+  const [aspectPick, setAspectPick] = useState<{ insert: (key: string) => void } | null>(null);
   const open = active !== null;
   // Счётчик перерисовки, а не хранимые координаты: единственный источник правды о позиции —
   // живая `active.rect()`, и держать рядом её копию значило бы завести второй источник,
@@ -181,11 +193,17 @@ export function SuggestMenu({
     ];
   }
 
+  // ОДИН список на показ и на выбор (см. `filterSlashItems`): Enter по пункту, которого нет на
+  // экране, не вставляет ничего.
+  const slashItems =
+    active?.kind === 'slash' && editor !== null
+      ? filterSlashItems(active.query, kind, editor.state.doc)
+      : [];
   const rows: MenuRow[] =
     active === null
       ? []
       : active.kind === 'slash'
-        ? filterSlashItems(active.query).map((i) => ({ id: i.id, label: i.label, hint: i.hint }))
+        ? slashItems.map((i) => ({ id: i.id, label: i.label, hint: i.hint }))
         : mentionRows();
 
   function insertRef(entityId: string, label: string): void {
@@ -211,7 +229,7 @@ export function SuggestMenu({
   async function pick(id: string): Promise<void> {
     if (editor === null || active === null) return;
     if (active.kind === 'slash') {
-      const item = SLASH_ITEMS.find((i) => i.id === id);
+      const item = slashItems.find((i) => i.id === id);
       if (item === undefined) return;
       // Диапазон запроса снимает вызывающая сторона — пункт работает по чистому месту. Берётся
       // он ЖИВЫМ, ровно по тому же доводу, что и в `insertRef` ниже: снимок кадра рендера
@@ -223,7 +241,7 @@ export function SuggestMenu({
         .focus()
         .deleteRange(live.current?.range ?? active.range)
         .run();
-      item.run(editor);
+      item.run(editor, { chooseAspect: (insert) => setAspectPick({ insert }) });
       return;
     }
     if (id === CREATE_ROW) {
@@ -249,18 +267,30 @@ export function SuggestMenu({
     if (row !== undefined) insertRef(row.id, row.title);
   }
 
-  if (active === null) return null;
+  const chooser = aspectPick !== null && (
+    <AspectChooser
+      onPick={(key) => {
+        setAspectPick(null);
+        aspectPick.insert(key);
+      }}
+      onCancel={() => setAspectPick(null)}
+    />
+  );
+  if (active === null) return chooser || null;
   // Координаты берутся ЗАНОВО на каждый рендер — в том числе на тот, что вызвала прокрутка.
   const rect = active.rect();
   return (
-    <SlashMenu
-      ref={handleRef}
-      rows={rows}
-      onPick={(id) => void pick(id)}
-      onClose={close}
-      coords={{ left: rect?.left ?? 0, top: rect?.bottom ?? 0 }}
-      // Коробка редактора — там остаётся фокус, значит там и объявляется открытый список.
-      owner={editor?.view.dom ?? null}
-    />
+    <>
+      <SlashMenu
+        ref={handleRef}
+        rows={rows}
+        onPick={(id) => void pick(id)}
+        onClose={close}
+        coords={{ left: rect?.left ?? 0, top: rect?.bottom ?? 0 }}
+        // Коробка редактора — там остаётся фокус, значит там и объявляется открытый список.
+        owner={editor?.view.dom ?? null}
+      />
+      {chooser}
+    </>
   );
 }

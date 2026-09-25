@@ -5,7 +5,9 @@ import { Placeholder } from '@tiptap/extensions';
 import { BODY_PLACEHOLDER } from './body-box';
 import { MoveBlock } from './move-block';
 import { EntityRefWithView } from './nodes/EntityChip';
+import { ColumnsWithView, ColumnWithView, TabsWithView, TabWithView } from './nodes/LayoutFrame';
 import { QueryBlockWithView } from './nodes/QueryWidget';
+import { AspectCardWithView, RecordBlockWithView } from './nodes/RecordBlockStub';
 import { UNIQUE_ID_TYPES } from './strip-ids';
 
 /**
@@ -24,20 +26,43 @@ import { UNIQUE_ID_TYPES } from './strip-ids';
  * оно список отсюда, схема Tiptap уехала бы в первый кадр (см. докблок strip-ids.ts).
  * Сам СОСТАВ расширений больше не меняется.
  *
+ * Страницы 1а (задача 16) тем же фильтром+concat заменили шесть узлов тела v3 — контейнеры,
+ * части, блок обвязки и карточку — их версиями с NodeView (рамки и заглушки настройки, §9.1).
+ * Имена и схема прежние, состав нод редактора по-прежнему равен составу документа.
+ *
  * Расширений `/`-меню и `@` здесь НЕТ намеренно: они держат колбэки конкретного редактора
  * (состояние меню живёт в React), а модульная константа раздала бы пяти BodyEditor'ам на
  * одном экране одно состояние на всех. Их собирает сам BodyEditor через useEditorSuggest;
  * что схему они не трогают — стережёт тест в slash/slash.test.tsx.
  */
+/** Узлы схемы, которые редактор ставит своими версиями с NodeView — те же имена, та же схема. */
+const WITH_VIEW: ReadonlySet<string> = new Set([
+  'entityRef',
+  'queryBlock',
+  'columns',
+  'column',
+  'tabs',
+  'tab',
+  'recordBlock',
+  'aspectCard',
+]);
+
 export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // Задачи 8 и 9: entityRef и queryBlock ЗАМЕНЯЮТСЯ своими же версиями с NodeView — фильтр и
   // concat, а не вторые ноды рядом. В отличие от Link (он живёт ВНУТРИ StarterKit, и фильтр
   // по имени не нашёл бы никого) обе — самостоятельные элементы DOC_EXTENSIONS, так что
   // фильтр тут работает; что он не промахнулся, стерегут тесты «… в составе редактора ровно
   // один» (по одному на имя: общий фильтр промахнулся бы мимо любого из двух молча).
-  ...DOC_EXTENSIONS.filter((e) => e.name !== 'entityRef' && e.name !== 'queryBlock'),
+  ...DOC_EXTENSIONS.filter((e) => !WITH_VIEW.has(e.name)),
   EntityRefWithView,
   QueryBlockWithView,
+  // Страницы 1а §9.1: контейнеры — подписанными рамками, обвязка — подписанными заглушками.
+  ColumnsWithView,
+  ColumnWithView,
+  TabsWithView,
+  TabWithView,
+  RecordBlockWithView,
+  AspectCardWithView,
   // Блочные id сегодня не читает никто. Ставятся с первого дня потому, что на них ляжет будущий
   // блочный контракт агента (`body_replace_block(id, md)`): добавить их позже — мигрировать все
   // документы, добавить сейчас — один параметр расширения. В markdown-проекцию id не печатаются.

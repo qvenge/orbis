@@ -3,7 +3,7 @@ import type { ComponentType } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { Backlinks } from './Backlinks';
 import { Blockers } from './Blockers';
-import { EntityBody, useBodyScreen } from './EntityBody';
+import { EntityBody, ReadOnlyEntityBody, useBodyScreen } from './EntityBody';
 import { EntityThreadTab } from './EntityThreadTab';
 import { NativeRow } from './NativeRow';
 import { RestCards } from './own-cards';
@@ -65,13 +65,21 @@ export function TitleBlock() {
  *
  * Провайдер `this` — вокруг ТЕЛА, потому что `this` в блоках данных (§6.1) означает запись, чьё
  * тело этот блок содержит.
+ *
+ * `readOnlyBody` хоста (предпросмотр шаблона на чужой записи, §9.3) — тело только для чтения:
+ * первый кадр без редактора, без сохранения и черновиков. Запись взята для примера, и касание её
+ * тела не повод его править.
  */
 export function BodyBlock() {
-  const { entity } = useRecordHost();
+  const { entity, readOnlyBody } = useRecordHost();
   const screen = useBodyScreen();
   return (
     <ThisEntityProvider id={entity.id}>
-      <EntityBody key={entity.id} entity={entity} {...screen} />
+      {readOnlyBody ? (
+        <ReadOnlyEntityBody entity={entity} />
+      ) : (
+        <EntityBody key={entity.id} entity={entity} {...screen} />
+      )}
     </ThisEntityProvider>
   );
 }

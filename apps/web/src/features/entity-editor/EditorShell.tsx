@@ -1,15 +1,26 @@
 import type { BodyDoc } from '@orbis/shared/doc'; // ТОЛЬКО type — файл в эагерном чанке
 // Листовые сабпаты, не баррель: препроход и матрица мест без tiptap и marked (вес первого кадра).
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
-import { type BodyKind, bodyIssues } from '@orbis/shared/doc/placement';
+import { type BodyKind, bodyIssues, type PlacementIssue } from '@orbis/shared/doc/placement';
 import { OWNER_LOCALE, type ParseRegistry } from '@orbis/shared/query';
 import { lazy, type MouseEvent, type ReactNode, Suspense, useEffect, useState } from 'react';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { useBodyKind } from '../../lib/query-blocks/body-kind';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
+import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
 import { BlockPlaque } from '../page/blocks/BlockPlaque';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
+import {
+  cardAspectTitle,
+  cardStubLabel,
+  columnFrameLabel,
+  LayoutFrameBox,
+  LayoutStack,
+  recordStubLabel,
+  StubBox,
+  tabFrameLabel,
+} from './layout-parts';
 
 const BodyEditor = lazy(() => import('./BodyEditor').then((m) => ({ default: m.BodyEditor })));
 
@@ -42,6 +53,11 @@ type IdleApi = {
  * открытая из тела, обязана оставаться модалкой.
  *
  * Экспортируется, чтобы тест виджета проверял ИМЕННО ЭТОТ список, а не свою копию строки.
+ *
+ * Заглушки обвязки и карточки (страницы 1а §9.1) несут тот же признак `[data-query-widget]` — и в
+ * первом кадре, и в NodeView: заглушка — блок со своим смыслом (у карточки — кнопка «Сменить»), а
+ * не текст тела. Рамки частей контейнера признака НЕ несут: внутри них текст, и касание его зовёт
+ * редактор, как касание любого текста.
  */
 const NOT_BODY_GESTURE =
   'a, button, input, select, textarea, [role="button"], [data-query-widget], [role="dialog"]';
@@ -73,15 +89,44 @@ export const NO_REGISTRY: ParseRegistry = {
 };
 
 /**
- * Один узел препрохода на первом кадре (спека страниц 1а §5.5, §6.3):
+ * Проблема места ОДНОГО узла (§5.5, §5.8) — или `undefined`, если на этом месте он работает.
+ *
+ * Одна функция на первый кадр и NodeView редактора: плашка, стоявшая до подъёма редактора, после
+ * него обязана остаться той же плашкой с тем же текстом. Берётся только проблема самого узла
+ * (путь длины 1): проблемы вложенных узлов спрашиваются, когда до них дойдёт очередь, а блоков
+ * данных — их собственным `DataBlock` по настоящему реестру (довод `NO_REGISTRY`).
+ */
+export function placementIssue(node: PageNode, kind: BodyKind): PlacementIssue | undefined {
+  return bodyIssues([node], kind, NO_REGISTRY).find((i) => i.path.length === 1);
+}
+
+/** Карточка аспекта в первом кадре — подписью по реестру, без данных (§9.1). */
+function FirstFrameCard({ text }: { text: string }) {
+  const { registry } = useFieldCatalog();
+  return (
+    <div data-query-widget="">
+      <StubBox label={cardStubLabel(cardAspectTitle(text, null, registry?.parse ?? null))} />
+    </div>
+  );
+}
+
+/** Узлы части контейнера — тем же правилом, что узлы верхнего уровня; пустые (null) отброшены. */
+function firstFrameNodes(nodes: readonly PageNode[], kind: BodyKind): ReactNode[] {
+  return nodes.map((node, i) => firstFrameNode(node, kind, i)).filter((n) => n !== null);
+}
+
+/**
+ * Один узел препрохода на первом кадре (спека страниц 1а §5.5, §6.3, §9.1):
  *  - текст — разметкой (пустые края сняты: пустой абзац между виджетами — дыра в раскладке, а
  *    отступ в начале куска сделал бы из него блок кода);
  *  - блок данных — живым виджетом, тем же, что встанет в редакторе;
  *  - блок обвязки, карточка, контейнер или сломанная разметка там, где они не работают (в
  *    заметке — всегда), — плашкой с подсказкой; текст узла остаётся в документе, плашка только
  *    на экране (§5.5);
- *  - уместный неданный узел (страница, шаблон) — пока его текстом: раскладку и обвязку рисует
- *    рендерер страниц, а не первый кадр тела.
+ *  - уместный контейнер (страница, шаблон) — подписанными рамками частей одна под другой, блок
+ *    обвязки — подписанной заглушкой: ровно тот вид, что встанет в редакторе (NodeView
+ *    `LayoutFrame`, `RecordBlockStub`), — иначе подъём редактора менял бы тело под руками.
+ *    Раскладкой и данными обвязки рисует показ (рендерер страниц), а не тело в правке.
  */
 function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode {
   if (node.kind === 'text') {
@@ -97,20 +142,56 @@ function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode 
       </div>
     );
   }
-  const issue = bodyIssues([node], kind, NO_REGISTRY).find((i) => i.path.length === 1);
-  if (issue === undefined) {
-    return <Markdown key={key} source={node.raw.trim()} onEntityLink={openEntity} />;
+  const issue = placementIssue(node, kind);
+  if (issue !== undefined) {
+    // Без признака data-query-widget, в отличие от живого блока: плашка — не виджет со своим
+    // смыслом, а место в тексте, и касание её зовёт редактор, где этот текст и правится.
+    return (
+      <BlockPlaque
+        key={key}
+        tone="misplaced"
+        message={issue.message}
+        {...(issue.hint !== undefined && { hint: issue.hint })}
+      />
+    );
   }
-  // Без признака data-query-widget, в отличие от живого блока: плашка — не виджет со своим
-  // смыслом, а место в тексте, и касание её зовёт редактор, где этот текст и правится.
-  return (
-    <BlockPlaque
-      key={key}
-      tone="misplaced"
-      message={issue.message}
-      {...(issue.hint !== undefined && { hint: issue.hint })}
-    />
-  );
+  switch (node.kind) {
+    case 'columns':
+      return (
+        <LayoutStack key={key}>
+          {node.parts.map((part, p) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: части не переставляются — порядок и есть их имя
+            <LayoutFrameBox key={p} label={columnFrameLabel(p)}>
+              {firstFrameNodes(part, kind)}
+            </LayoutFrameBox>
+          ))}
+        </LayoutStack>
+      );
+    case 'tabs':
+      return (
+        <LayoutStack key={key}>
+          {node.parts.map((tab, p) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: части не переставляются — порядок и есть их имя
+            <LayoutFrameBox key={p} label={tabFrameLabel(tab.label)}>
+              {firstFrameNodes(tab.children, kind)}
+            </LayoutFrameBox>
+          ))}
+        </LayoutStack>
+      );
+    case 'record':
+      // Признак виджета, как у NodeView заглушки: касание заглушки — не касание текста тела.
+      return (
+        <div key={key} data-query-widget="">
+          <StubBox label={recordStubLabel(node.name)} />
+        </div>
+      );
+    case 'card':
+      return <FirstFrameCard key={key} text={node.aspect} />;
+    case 'broken':
+      // `broken` всегда несёт проблему (`bodyIssues`) и сюда не доходит; ветка — ради полноты
+      // разбора: пустоты вместо узла не бывает.
+      return <Markdown key={key} source={node.raw.trim()} onEntityLink={openEntity} />;
+  }
 }
 
 /** Клик по телу (а значит — зовущий редактор) или по чему-то внутри тела со своим смыслом. */
@@ -137,12 +218,16 @@ export function isBodyGesture(target: HTMLElement | null): boolean {
  * (`bodyDoc` в wire-схеме и опционален, и nullable), но и не штатный: detail просит `bodyDoc` в
  * include всегда, а сервер собирает документ даже для записей без колонки (readBodyDoc). Тело
  * при этом не пропадает — первый кадр рисуется из `markdown`, то есть остаётся читаемым.
+ *
+ * `readOnly` — только первый кадр, редактор не встаёт вовсе: ни по касанию, ни по простою
+ * (предпросмотр шаблона на чужой записи, спека страниц 1а §9.3). Чанк схемы при этом не тянется.
  */
 export function EditorShell({
   doc,
   markdown,
   onChange,
   onAccept,
+  readOnly = false,
 }: {
   doc: BodyDoc | null;
   markdown: string;
@@ -153,9 +238,11 @@ export function EditorShell({
    * рядом второго потребителя показанного документа, режим разметки.
    */
   onAccept?: (doc: BodyDoc) => void;
+  readOnly?: boolean;
 }) {
   const [mount, setMount] = useState<Mount | null>(null);
   useEffect(() => {
+    if (readOnly) return;
     // `m ?? BY_IDLE`, а не голое присваивание: простой наступает и ПОСЛЕ того, как редактор
     // подняли касанием, и перезапись стёрла бы намерение «человек сюда ткнул» вместе с
     // координатами каретки — фокус пропал бы ровно у того, кто его и звал.
@@ -171,7 +258,7 @@ export function EditorShell({
     }
     const id = window.setTimeout(wantByIdle, IDLE_FALLBACK_MS);
     return () => clearTimeout(id);
-  }, []);
+  }, [readOnly]);
 
   // Касание тела зовёт редактор — но ровно ТЕЛА. Стражи те же и в том же порядке, что стояли у
   // прежнего просмотра тела, и по тем же причинам: ссылка внутри разметки обязана вести по
@@ -196,9 +283,7 @@ export function EditorShell({
   const kind = useBodyKind();
   // Ключ узла — его порядок в тексте тела: узлы первого кадра не переставляются, только
   // пересобираются из текста целиком.
-  const frame = parsePageText(markdown)
-    .map((node, i) => firstFrameNode(node, kind, i))
-    .filter((n) => n !== null);
+  const frame = firstFrameNodes(parsePageText(markdown), kind);
   // Оба ослабления a11y — одной строкой ниже: у многострочного `//`-комментария биом читает
   // как подавление только ПОСЛЕДНЮЮ строку, и первое правило осталось бы неподавленным.
   // Довод тот же, что у DetailScreen: клавиатурного двойника у этого жеста нет и не нужно —
@@ -208,18 +293,19 @@ export function EditorShell({
     // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: жест мыши поверх текста, см. выше
     <div
       data-testid="editor-preview"
-      onClick={wantEditor}
+      onClick={readOnly ? undefined : wantEditor}
       // Коробка и зазор между сегментами — общие с редактором (BODY_BOX_CLASS, body-box.ts):
       // иначе подмена первого кадра редактором двигала бы текст под руками.
-      className={`${BODY_BOX_CLASS} flex cursor-text flex-col gap-4`}
+      className={`${BODY_BOX_CLASS} flex flex-col gap-4${readOnly ? '' : ' cursor-text'}`}
     >
-      {frame.length === 0 && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
+      {/* Приглашение к вводу там, где вводить нельзя, звало бы в никуда. */}
+      {frame.length === 0 && !readOnly && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
       {frame}
     </div>
   );
   // `doc === null` перекрывает даже поднятое намерение: жест «хочу редактор» законен, а вот
   // подставить вместо документа пустышку — нет (см. заголовок файла).
-  if (mount === null || doc === null) return preview;
+  if (readOnly || mount === null || doc === null) return preview;
   return (
     <Suspense fallback={preview}>
       <BodyEditor doc={doc} onChange={onChange} onAccept={onAccept} focusAt={mount.focusAt} />

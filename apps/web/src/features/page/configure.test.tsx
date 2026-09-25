@@ -1,0 +1,365 @@
+/**
+ * Настройка страниц и шаблонов и предпросмотр шаблона (спека страниц 1а §9; задача 16).
+ *
+ * Экран записи открывается так, как его откроет человек (`DetailScreen`), поверх обработчика экрана
+ * (`structureHandler`) — мир: шаблоны владельца, страницы и подходящие записи. Подходящие записи
+ * предпросмотра отдаёт `entity.query {ast}` по аспектам набора — мок сверяет аспекты, как сервер.
+ * `this` у блоков данных — только uuid.
+ */
+import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
+import { parseBody } from '@orbis/shared/doc';
+import type { QueryAst } from '@orbis/shared/query';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
+import { useNav } from '../../state/navigation';
+import {
+  installCrashTrap,
+  type MockHandler,
+  renderWithProviders,
+  type WireEntityFixture,
+  wireEntity,
+} from '../../test/harness';
+import { BUILTIN_REGISTRY } from '../../test/registry';
+import { queryClient } from '../../trpc';
+import { Toaster } from '../../ui/Toast';
+import { useToastStore } from '../../ui/toast-store';
+import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
+import { DetailScreen } from '../entity-detail/DetailScreen';
+import {
+  STRUCTURE_FIXTURES,
+  type StructureFixture,
+  structureHandler,
+} from '../entity-detail/structure-fixtures';
+import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { previewCandidatesAst } from './TemplatePreview';
+import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
+
+installCrashTrap();
+
+beforeEach(() => {
+  localStorage.clear();
+  resetDetailMenuModuleForTests();
+  useToastStore.setState({ toasts: [] });
+  resetRegistryVersionForTests();
+  noteRegistryVersion(BUILTIN_REGISTRY.version);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+/** Простой — сразу: редактор, которому позволено встать, встаёт; тело только для чтения — нет. */
+const idleNow = () =>
+  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+    cb();
+    return 1;
+  });
+/** Простоя нет вовсе: проверяется первый кадр. */
+const idleNever = () => vi.stubGlobal('requestIdleCallback', () => 1);
+
+const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const TPL = uuid(1601);
+const PAGE = uuid(1602);
+const PROJECT_B = uuid(1603);
+
+const fixture = (name: string): StructureFixture => {
+  const f = STRUCTURE_FIXTURES.find((x) => x.name === name);
+  if (f === undefined) throw new Error(`нет фикстуры ${name}`);
+  return f;
+};
+
+/** Проект — запись экрана; последняя изменённая из подходящих. */
+const PROJECT_A: StructureFixture = (() => {
+  const f = fixture('project');
+  return {
+    ...f,
+    entity: {
+      ...f.entity,
+      body: 'Смета кухни',
+      bodyDoc: parseBody('Смета кухни'),
+      updatedAt: '2026-09-24T10:00:00.000Z',
+    },
+  };
+})();
+
+const TEMPLATE_BODY = 'Вид проекта\n\n{{title}}\n\n{{body}}';
+
+/** Шаблон владельца «Проекты» — страница с «Шаблон для: Проект». */
+const projectsTemplate = (): WireEntityFixture =>
+  wireEntity({
+    id: TPL,
+    title: 'Проекты',
+    body: TEMPLATE_BODY,
+    bodyDoc: parseBody(TEMPLATE_BODY),
+    aspects: [PAGE_ASPECT],
+    createdAt: '2026-09-01T00:00:00.000Z',
+    props: { [TEMPLATE_FOR_PROPERTY]: ['orbis/project'] },
+  });
+
+const secondProject = (): WireEntityFixture =>
+  wireEntity({
+    id: PROJECT_B,
+    title: 'Дача',
+    body: 'Тело дачи',
+    bodyDoc: parseBody('Тело дачи'),
+    aspects: ['orbis/project'],
+    updatedAt: '2026-09-10T10:00:00.000Z',
+  });
+
+const PAGE_BODY =
+  '{{columns}}\n{{column}}\nлевая часть\n{{/column}}\n{{column}}\nправая часть\n{{/column}}\n{{/columns}}';
+
+/** Страница-дашборд без «Шаблон для» — черновик шаблона. */
+const dashboard = (): WireEntityFixture =>
+  wireEntity({
+    id: PAGE,
+    title: 'Дашборд',
+    body: PAGE_BODY,
+    bodyDoc: parseBody(PAGE_BODY),
+    aspects: [PAGE_ASPECT],
+  });
+
+const aspectsOfFilter = (ast: QueryAst): string[] => {
+  const f = ast.filter as { and?: { aspect: string }[] } | null;
+  return f?.and?.map((n) => n.aspect) ?? [];
+};
+
+/**
+ * Мир экрана: основная запись — обработчиком экрана со своими связями, прочие записи — голыми;
+ * список шаблонов — страницы с непустым «Шаблон для»; подходящие записи — по аспектам дерева,
+ * последние изменённые первыми, как отсортировал бы сервер.
+ */
+function open(main: StructureFixture, rows: WireEntityFixture[]) {
+  useNav.setState({
+    activeTab: 'browser',
+    stacks: { chat: [], browser: [{ kind: 'entity', id: main.entity.id }], agenda: [], budget: [] },
+  });
+  const all = [main.entity, ...rows];
+  const base = structureHandler(main);
+  const handler: MockHandler = (path, input) => {
+    if (path === 'entity.query') {
+      const q = input as { query?: string; ast?: QueryAst };
+      if (q.query === PAGE_TEMPLATES_QUERY) {
+        return all.filter((r) => {
+          const tf = r.props[TEMPLATE_FOR_PROPERTY];
+          return r.aspects.includes(PAGE_ASPECT) && Array.isArray(tf) && tf.length > 0;
+        });
+      }
+      if (q.ast !== undefined) {
+        const need = aspectsOfFilter(q.ast);
+        return all
+          .filter((r) => need.every((a) => r.aspects.includes(a)))
+          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+      }
+    }
+    if (path === 'entity.get') {
+      const id = (input as { id: string }).id;
+      const row = rows.find((r) => r.id === id);
+      if (row !== undefined) return structureHandler({ name: 'row', entity: row })(path, input);
+    }
+    return base(path, input);
+  };
+  const r = renderWithProviders(
+    <>
+      <DetailScreen entityId={main.entity.id} />
+      <Toaster />
+    </>,
+    handler,
+    { queries: queryClient.getDefaultOptions().queries },
+  );
+  const astCalls = () =>
+    r.calls
+      .filter((c) => c.path === 'entity.query' && (c.input as { ast?: unknown }).ast !== undefined)
+      .map((c) => (c.input as { ast: QueryAst }).ast);
+  return { ...r, astCalls };
+}
+
+const asScreen = (entity: WireEntityFixture): StructureFixture => ({ name: 'screen', entity });
+
+async function choose(label: string): Promise<void> {
+  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  await screen.findByRole('menu');
+  fireEvent.click(screen.getByRole('menuitem', { name: label }));
+}
+
+const menuLabels = async () => {
+  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  await screen.findByRole('menu');
+  const labels = screen.getAllByRole('menuitem').map((i) => i.textContent ?? '');
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  return labels;
+};
+
+const frameLabels = () =>
+  screen.getAllByTestId('layout-frame-label').map((n) => n.textContent ?? '');
+
+// --- «Настроить» -------------------------------------------------------------------------------
+
+test('«Настроить» у страницы → тело страницы в редакторе (род «страница»), «Готово» → показ', async () => {
+  idleNever();
+  open(asScreen(dashboard()), []);
+  // Показ — раскладкой колонок.
+  await screen.findByTestId('page-columns');
+  await choose('Настроить');
+
+  const view = await screen.findByTestId('configure-view');
+  // Контейнеры — подписанными рамками одна под другой (§9.1), а не раскладкой показа.
+  await waitFor(() => expect(frameLabels()).toEqual(['Колонка 1', 'Колонка 2']));
+  expect(screen.queryByTestId('page-columns')).toBeNull();
+  expect(within(view).queryByTestId('template-banner')).toBeNull();
+
+  // Касание текста поднимает ТОТ ЖЕ редактор, что у тела записи, и он — под родом страницы:
+  // меню «/» предлагает контейнеры (у заметки их нет).
+  await userEvent.click(within(view).getByText('левая часть'));
+  // Коробка редактора встаёт раньше его contenteditable (ProseMirror монтируется эффектом) — ждём
+  // именно область правки.
+  await waitFor(() =>
+    expect(
+      within(view).getByTestId('body-editor').querySelector('[contenteditable]'),
+    ).not.toBeNull(),
+  );
+  await userEvent.keyboard(' /колон');
+  const menu = await screen.findByTestId('slash-menu');
+  expect(
+    within(menu)
+      .getAllByRole('option')
+      .map((o) => o.textContent),
+  ).toEqual(['Колонкираскладка страницы']);
+  await userEvent.keyboard('{Escape}');
+
+  fireEvent.click(within(view).getByRole('button', { name: 'Готово' }));
+  await screen.findByTestId('page-columns');
+  expect(screen.queryByTestId('configure-view')).toBeNull();
+});
+
+test('«Настроить шаблон „Проекты“» с записи, открытой шаблоном владельца → редактор шаблона с баннером', async () => {
+  idleNever();
+  const { calls } = open(PROJECT_A, [projectsTemplate()]);
+  await waitFor(() =>
+    expect(screen.queryAllByTestId('page-text').map((n) => n.textContent)).toContain('Вид проекта'),
+  );
+  await choose('Настроить шаблон „Проекты“');
+
+  const view = await screen.findByTestId('configure-view');
+  expect(await within(view).findByTestId('template-banner')).toHaveTextContent(
+    'Вы правите шаблон — изменится вид всех записей с аспектом „Проект“',
+  );
+  // Тело ШАБЛОНА (не записи): заглушки обвязки, `{{body}}` законен — род «шаблон».
+  await waitFor(() =>
+    expect(
+      within(view)
+        .getAllByTestId('record-stub')
+        .map((n) => n.textContent),
+    ).toEqual(['[Заголовок записи]', '[Тело записи]']),
+  );
+  expect(within(view).queryByText('Смета кухни')).toBeNull();
+  expect(calls).toContainEqual({ path: 'entity.get', input: detailGetInput(TPL) });
+  // Экран остался на своей записи: настройка — режим экрана, не переход.
+  expect(useNav.getState().stacks.browser.at(-1)).toEqual({
+    kind: 'entity',
+    id: PROJECT_A.entity.id,
+  });
+});
+
+test('плашка «шаблон не разобран» открывает настройку этого шаблона', async () => {
+  idleNever();
+  const broken = wireEntity({
+    ...projectsTemplate(),
+    body: '{{columns}}\n{{column}}\nлевая\n{{/column}}\n',
+    bodyDoc: parseBody('левая'),
+  });
+  const { calls } = open(PROJECT_A, [broken]);
+  const plaque = await screen.findByTestId('broken-template');
+  fireEvent.click(within(plaque).getByRole('button', { name: 'Настроить шаблон „Проекты“' }));
+  expect(await screen.findByTestId('template-banner')).toHaveTextContent('„Проект“');
+  expect(calls).toContainEqual({ path: 'entity.get', input: detailGetInput(TPL) });
+});
+
+// --- Предпросмотр -------------------------------------------------------------------------------
+
+test('открытый шаблон — плашкой «Шаблон для: Проект · предпросмотр на: [запись ▾]», по умолчанию последняя изменённая', async () => {
+  idleNow();
+  const tpl = projectsTemplate();
+  const { calls, astCalls } = open(asScreen(tpl), [secondProject(), PROJECT_A.entity]);
+  const plaque = await screen.findByTestId('template-preview-plaque');
+  // Подпись аспекта — по реестру (едет своим запросом).
+  await waitFor(() => expect(plaque).toHaveTextContent('Шаблон для: Проект · предпросмотр на:'));
+  // Подходящие — деревом: все аспекты набора, последние изменённые, двадцать.
+  expect(astCalls()).toEqual([previewCandidatesAst(['orbis/project'])]);
+  expect(previewCandidatesAst(['orbis/project'])).toEqual({
+    filter: { and: [{ aspect: 'orbis/project' }] },
+    sortBy: [{ field: 'orbis/updated_at', dir: 'desc' }],
+    limit: 20,
+  });
+  const select = within(plaque).getByRole('combobox', { name: 'предпросмотр на:' });
+  await waitFor(() => expect(select).toHaveValue(PROJECT_A.entity.id));
+
+  // Шаблон — на записи: её заголовок и её тело на месте `{{body}}`, данные — своим entity.get.
+  await waitFor(() => expect(screen.getByText('Смета кухни')).toBeInTheDocument());
+  expect(screen.getAllByText('Вид проекта').length).toBeGreaterThan(0);
+  expect(calls).toContainEqual({ path: 'entity.get', input: detailGetInput(PROJECT_A.entity.id) });
+
+  // Тело записи — только чтение: редактор не встаёт ни по простою, ни по касанию.
+  fireEvent.click(screen.getByText('Смета кухни'));
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('body-editor')).toBeNull();
+  expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+
+  // Другая запись — выбором.
+  fireEvent.change(select, { target: { value: PROJECT_B } });
+  await waitFor(() => expect(screen.getByText('Тело дачи')).toBeInTheDocument());
+  expect(screen.queryByText('Смета кухни')).toBeNull();
+});
+
+test('подходящих записей нет — шаблон показан сам на себе (this — страница)', async () => {
+  idleNever();
+  open(asScreen(projectsTemplate()), []);
+  const plaque = await screen.findByTestId('template-preview-plaque');
+  const view = await screen.findByTestId('page-view');
+  expect(within(plaque).getByRole('combobox')).toHaveValue(TPL);
+  // Сам на себе `{{body}}` — заглушка (тела записи у шаблона нет, §6.4).
+  expect(await within(view).findByTestId('body-stub')).toHaveTextContent('[Тело записи]');
+});
+
+test('«Предпросмотр на записи…» у страницы без «Шаблон для» → выбор записи и тот же показ', async () => {
+  idleNow();
+  const draftBody = 'Черновик вида\n\n{{body}}';
+  const draft = wireEntity({ ...dashboard(), body: draftBody, bodyDoc: parseBody(draftBody) });
+  const { astCalls } = open(asScreen(draft), [secondProject()]);
+  await screen.findByTestId('page-view');
+  expect(screen.queryByTestId('template-preview-plaque')).toBeNull();
+  await choose('Предпросмотр на записи…');
+
+  const plaque = await screen.findByTestId('template-preview-plaque');
+  expect(plaque).toHaveTextContent('Шаблон для: — · предпросмотр на:');
+  // Черновику подходит любая запись.
+  expect(astCalls()).toEqual([previewCandidatesAst([])]);
+  const select = within(plaque).getByRole('combobox');
+  await waitFor(() => expect(select).toHaveValue(PROJECT_B));
+  await waitFor(() => expect(screen.getByText('Тело дачи')).toBeInTheDocument());
+  expect(screen.getAllByText('Черновик вида').length).toBeGreaterThan(0);
+  expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+
+  fireEvent.click(within(plaque).getByRole('button', { name: 'Закрыть предпросмотр' }));
+  await waitFor(() => expect(screen.queryByTestId('template-preview-plaque')).toBeNull());
+  expect(screen.getByTestId('page-view')).toBeInTheDocument();
+});
+
+test('пункты меню: у шаблона нет «Предпросмотра на записи…», у записи через хост — нет «Настроить шаблон»', async () => {
+  idleNever();
+  const first = open(asScreen(projectsTemplate()), []);
+  await screen.findByTestId('template-preview-plaque');
+  const tplLabels = await menuLabels();
+  expect(tplLabels).toContain('Настроить');
+  expect(tplLabels).not.toContain('Предпросмотр на записи…');
+  first.unmount();
+
+  open(PROJECT_A, []);
+  await screen.findByTestId('page-tabs');
+  const hostLabels = await menuLabels();
+  expect(hostLabels.some((l) => l.startsWith('Настроить'))).toBe(false);
+});
