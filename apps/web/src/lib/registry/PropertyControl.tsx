@@ -11,7 +11,12 @@
 // Zod/ajv здесь НЕТ и не будет (гейт задачи): границы типа проверяет валидатор записи на
 // сервере, а схема на клиенте — это и вторая правда о допустимом, и вес схемы в первом
 // кадре записи.
-import { effectiveLabel, OWNER_LOCALE, type PropertyDefinition } from '@orbis/shared';
+import {
+  type AspectDefinition,
+  effectiveLabel,
+  OWNER_LOCALE,
+  type PropertyDefinition,
+} from '@orbis/shared';
 import { useState } from 'react';
 import { EntityRef } from '../entity-ref/EntityRef';
 import { RefField } from '../entity-ref/RefField';
@@ -266,21 +271,29 @@ const ASPECTS_MIN_HINT = 'сделать черновиком: ⋯ → «Сде�
  * (`VALIDATION` по `minItems`), и поле выглядело бы «не сохранилось». Без `minItems` снятие
  * последнего уезжает СНЯТИЕМ (`undefined`), а не `[]`: пустой список — «присутствует» (Ф-1а-3).
  */
-function AspectsManyControl({
+export function AspectsManyControl({
   def,
   label,
   value,
   onChange,
+  offered,
 }: {
   def: PropertyDefinition;
   label: string;
   value: unknown;
   onChange: (v: unknown | undefined) => void;
+  /**
+   * Какие аспекты предлагать чипами; без него — все аспекты снимка. Диалог «Сделать шаблоном
+   * для…» (меню ⋮) прячет служебные и сам `orbis/page`: шаблон для страниц или для прогонов
+   * агента — не то, что владелец собирает руками. Уже выбранный, но не предложенный id остаётся в
+   * значении по тому же правилу, что id вне снимка ниже.
+   */
+  offered?: (aspect: AspectDefinition) => boolean;
 }) {
   const registry = useRegistry();
-  const aspects = [...(registry.data?.aspects ?? [])].sort(
-    (a, b) => a.rank - b.rank || a.key.localeCompare(b.key),
-  );
+  const aspects = [...(registry.data?.aspects ?? [])]
+    .filter((a) => offered === undefined || offered(a))
+    .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
   const minItems = def.type.kind === 'registry_ref' ? (def.type.minItems ?? 0) : 0;
   const chosen = Array.isArray(value)
     ? value.filter((v): v is string => typeof v === 'string')

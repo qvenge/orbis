@@ -9,7 +9,7 @@ import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
 import { PageView } from '../page/PageView';
-import { RecordView } from '../page/RecordView';
+import { type DisputeRequest, type RecordShown, RecordView } from '../page/RecordView';
 import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsContainer';
 import { usePageTemplates } from '../page/usePageTemplates';
 import { DetailMenuSlot } from './DetailMenuSlot';
@@ -33,9 +33,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   /**
    * Список шаблонов владельца — ЗДЕСЬ, до ответа записи, а не в `RecordView` после него (§6.5,
    * РП-11 (2), РП-14): запрос уходит вместе с `entity.get` (в проде — одним HTTP, `httpBatchLink`) и
-   * не ждёт его. Результат читает `RecordView` тем же ключом — второго запроса нет.
+   * не ждёт его. Результат читают `RecordView` и меню ⋮ тем же ключом — второго запроса нет.
    */
-  usePageTemplates();
+  const templates = usePageTemplates();
   // §3.5 «Скопировать ссылку». Буфер обмена — не данность: его нет в http-контексте,
   // а разрешение пользователь может и не дать. На отказе показываем саму ссылку
   // (manualLink), чтобы копирование осталось возможным руками, а не превратилось в
@@ -79,10 +79,16 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     [tabMemory],
   );
   /**
-   * «Открыть через шаблон хоста» / «Открыть через „X“» (спека §8.4) — разово, не запоминается:
-   * состояние экрана, а не данные записи. Пункты меню, которые его ставят, — задача 15.
+   * «Открыть через шаблон хоста» / «Открыть через „X“» у записи и «Открыть как запись» у страницы
+   * (спека §8.4) — разово, не запоминается: состояние экрана, а не данные записи и не адрес
+   * (`ScreenRef`): навигация и история от него не меняются (W7). Сбрасывается сменой записи и сменой
+   * её «страничности» (ниже).
    */
   const [openVia, setOpenVia] = useState<{ templateId: string | 'host' } | undefined>(undefined);
+  /** «Сменить выбор шаблона для таких записей» (§4.3) — плашка спора по просьбе меню. */
+  const [disputeRequest, setDisputeRequest] = useState<DisputeRequest | undefined>(undefined);
+  /** Чем запись показана (извещает `RecordView`) — пункты меню ⋮ строятся по нему. */
+  const [recordShown, setRecordShown] = useState<RecordShown | null>(null);
   /**
    * Куда тело рисует свои плашки — узел НАД вкладками (см. `noticeHost` в разметке ниже).
    *
@@ -115,6 +121,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     // «Открыть через X» — про ту запись, из чьего меню его выбрали: переехав, он показал бы
     // соседнюю запись чужим шаблоном без единого жеста человека.
     setOpenVia(undefined);
+    setDisputeRequest(undefined);
     // Слой переезжает на соседнюю запись вместе с экраном (монтируется без key), и его
     // собственное состояние обнуляет `key` ниже. Но признак живёт ЗДЕСЬ, и один кадр между
     // сменой пропа и его извещением тело соседней записи стояло бы спрятанным ни за что.
@@ -131,6 +138,21 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * выражено признаком цели ниже — подметание уйдёт, когда станет известно, что подметать.
    */
   const loaded = get.data?.entity;
+  /**
+   * Запись стала страницей или перестала ею быть (меню ⋮, Undo, агент) — разовый вид прежнего
+   * рода больше не про неё. «Открыть через шаблон хоста», переживший «Изменить вид только этой
+   * записи», показал бы новую страницу записью; «Открыть как запись» страницы, пережив «Перестать
+   * быть страницей», — держал бы запись на шаблоне хоста мимо её своего шаблона.
+   */
+  const loadedIsPage = loaded === undefined ? undefined : loaded.aspects.includes(PAGE_ASPECT);
+  const prevIsPageRef = useRef(loadedIsPage);
+  if (loadedIsPage !== undefined && prevIsPageRef.current !== loadedIsPage) {
+    if (prevIsPageRef.current !== undefined) {
+      setOpenVia(undefined);
+      setDisputeRequest(undefined);
+    }
+    prevIsPageRef.current = loadedIsPage;
+  }
   // Гейты блоков — по СПИСКУ аспектов записи (§А1-1), а не по наличию ключа в карте полей:
   // аспект перестал быть владельцем полей (Р9), и его наличие теперь отдельный факт —
   // навешенный аспект без единого заполненного свойства прежде был неотличим от снятого.
@@ -212,6 +234,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   }
   const { entity } = get.data;
   const isPage = entity.aspects.includes(PAGE_ASPECT);
+  // «Открыть как запись» (§8.4): страница — через шаблон хоста, с версиями, тредом и обратными
+  // ссылками, а тело — настоящим редактором под провайдером ЭТОГО экрана (плашки тела — над
+  // вкладками). Инертный провайдер `PageView` здесь не участвует вовсе: `PageView` не рисуется.
+  const asRecord = isPage && openVia?.templateId === 'host';
 
   return (
     <TabMemoryProvider value={tabs}>
@@ -250,6 +276,24 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                 entity.bodyDoc == null || isPage ? undefined : () => setAsMarkdown((v) => !v)
               }
               archived={entity.archived}
+              entity={entity}
+              view={
+                isPage
+                  ? {
+                      kind: 'page',
+                      asRecord,
+                      onOpenAsRecord: () => setOpenVia(HOST_VIEW),
+                    }
+                  : {
+                      kind: 'record',
+                      shown: recordShown?.entityId === entity.id ? recordShown : null,
+                      templates,
+                      onOpenVia: (templateId) =>
+                        setOpenVia(templateId === 'host' ? HOST_VIEW : { templateId }),
+                      onChangeDispute: (contenders) =>
+                        setDisputeRequest((prev) => ({ contenders, n: (prev?.n ?? 0) + 1 })),
+                    }
+              }
             />
           }
         />
@@ -316,20 +360,28 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             над тем же ответом `entity.get` этого экрана, второго запроса записи нет (РП-13).
             Шапка, меню, слой предложения и плашки над ними — прежние. Вкладки, их keepMounted
             (тело и «Детали» живы, «Тред» — только открытым) — дело шаблона и рендерера. */}
-          {isPage ? (
+          {isPage && !asRecord ? (
             // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
             // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
             <TabMemoryScope scope={`page:${entity.id}`}>
               <PageView reply={get.data} />
             </TabMemoryScope>
           ) : (
-            <RecordView reply={get.data} {...(openVia !== undefined && { override: openVia })} />
+            <RecordView
+              reply={get.data}
+              onShown={setRecordShown}
+              {...(openVia !== undefined && { override: openVia })}
+              {...(disputeRequest !== undefined && !isPage && { disputeRequest })}
+            />
           )}
         </div>
       </BodyScreenProvider>
     </TabMemoryProvider>
   );
 }
+
+/** Разовый показ шаблоном хоста — одним объектом: выбор шаблона мемоизирован по нему. */
+const HOST_VIEW = { templateId: 'host' } as const;
 
 /**
  * Запасной путь копирования: буфер отказал — показываем сам адрес, чтобы его можно было

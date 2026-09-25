@@ -4,7 +4,7 @@ import { type BrokenTemplate, chooseTemplate, type TemplateCandidate } from '@or
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { templateBrokenReason } from '@orbis/shared/doc/placement';
 import type { ParseRegistry } from '@orbis/shared/query';
-import { Component, type ReactNode, useCallback, useMemo, useState } from 'react';
+import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import type { RouterOutputs } from '../../trpc';
@@ -83,8 +83,7 @@ function decide(
       ? { ...HOST, registryFailed: true }
       : { ...HOST, shown: { kind: 'wait' } };
   }
-  const bodyOf = (id: string) => rows.find((r) => r.id === id)?.body ?? '';
-  const isBroken = (id: string) => crashed.get(id) ?? templateBrokenReason(bodyOf(id), reg);
+  const isBroken = brokenCheck(rows, reg, crashed);
   // «Открыть через X» (§8.4) — разово и только исправным подходящим шаблоном; иначе — обычный выбор.
   const forcedId = templates.find((t) => t.id === override?.templateId && fits(t, aspects))?.id;
   const forced = rows.find((r) => r.id === forcedId);
@@ -101,7 +100,53 @@ function decide(
   return { ...HOST, shown: { kind: 'own', row }, dispute: choice.dispute, broken: choice.broken };
 }
 
+/** §4.2 шаг 7: причина «не разобран» (или «ошибка отрисовки» на этой записи) — `null`, если исправен. */
+const brokenCheck =
+  (rows: readonly WireEntity[], reg: ParseRegistry, crashed: ReadonlyMap<string, string>) =>
+  (id: string): string | null =>
+    crashed.get(id) ?? templateBrokenReason(rows.find((r) => r.id === id)?.body ?? '', reg);
+
+/**
+ * Подходящие исправные шаблоны записи — те, которыми её можно «Открыть через „X“» (§8.4). Выбор
+ * (`chooseTemplate`) проверяет исправность только тех, до кого дошёл, и сломанный шаблон, которому
+ * очередь не пришла, в его `broken` не попадает; пункт, после которого на экране то же самое (выбор
+ * отверг бы сломанный), был бы обманом. Реестра нет — проверить нечем: пусто.
+ */
+function openableOf(
+  aspects: readonly string[],
+  list: ReturnType<typeof usePageTemplates>,
+  reg: ParseRegistry | null,
+  crashed: ReadonlyMap<string, string>,
+): readonly string[] {
+  if (reg === null || list.status !== 'ok') return [];
+  const isBroken = brokenCheck(list.rows, reg, crashed);
+  return list.templates.filter((t) => fits(t, aspects) && isBroken(t.id) === null).map((t) => t.id);
+}
+
 const NO_CRASHES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Чем запись показана сейчас — для меню ⋮ (спека §8.4): «Открыть через шаблон хоста» только при
+ * своём шаблоне, «Открыть через „X“» — прочими исправными, «Изменить вид только этой» — текстом
+ * показанного, «Сменить выбор» — спорящими БЕЗ сломанных (те же `brokenIds`, что у выбора, —
+ * иначе меню и плашка разошлись бы).
+ *
+ * Отсюда, а не второй копией выбора в экране: исключения за падение при рендере знает только
+ * этот компонент. `templateId: null` — выбор ещё ждёт реестр.
+ */
+export interface RecordShown {
+  entityId: string;
+  templateId: string | 'host' | null;
+  brokenIds: readonly string[];
+  /** Подходящие исправные шаблоны, в том числе показанный (`openableOf`). */
+  openable: readonly string[];
+}
+
+/** «Сменить выбор шаблона для таких записей» (§4.3): плашка спора по требованию, `n` — номер просьбы. */
+export interface DisputeRequest {
+  contenders: readonly string[];
+  n: number;
+}
 
 /**
  * Запись (не страница) — через шаблон (спека страниц 1а §4.2): свой шаблон владельца по функции
@@ -120,12 +165,18 @@ export function RecordView({
   reply,
   override,
   readOnlyBody = false,
+  onShown,
+  disputeRequest,
 }: {
   reply: EntityGetReply;
   /** «Открыть через X» / «через шаблон хоста» (§8.4) — разовый выбор экрана, не запоминается. */
   override?: { templateId: string | 'host' };
   /** Предпросмотр шаблона на чужой записи (§9.3): тело только для чтения. */
   readOnlyBody?: boolean;
+  /** Извещение экрана о показанном (меню ⋮); зовётся на смене, а не на каждом кадре. */
+  onShown?: (shown: RecordShown) => void;
+  /** Плашка спора по требованию меню — и тогда, когда выбор запомнен (§4.3). */
+  disputeRequest?: DisputeRequest;
 }) {
   const { entity } = reply;
   const list = usePageTemplates();
@@ -171,6 +222,38 @@ export function RecordView({
   const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnlyBody });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
 
+  const shownId =
+    decision.shown.kind === 'own'
+      ? decision.shown.row.id
+      : decision.shown.kind === 'host'
+        ? 'host'
+        : null;
+  // Строками — чтобы новые массивы с теми же id не будили экран лишним кадром.
+  const brokenKey = decision.broken.map((b) => b.id).join(',');
+  const openableKey = useMemo(
+    () => openableOf(entity.aspects, list, reg, crashed).join(','),
+    [entity.aspects, list, reg, crashed],
+  );
+  useEffect(() => {
+    const ids = (key: string) => (key === '' ? [] : key.split(','));
+    onShown?.({
+      entityId: entity.id,
+      templateId: shownId,
+      brokenIds: ids(brokenKey),
+      openable: ids(openableKey),
+    });
+  }, [onShown, entity.id, shownId, brokenKey, openableKey]);
+
+  // Спор, найденный выбором, — сам по себе; просьба меню показывает плашку и при запомненном
+  // выборе. Своё «закрыто» у плашки — про ЭТОТ спор на ЭТОЙ записи, а у просьбы — ещё и про её
+  // номер: повторная просьба после выбора обязана показать плашку снова.
+  const dispute =
+    decision.dispute !== null
+      ? { contenders: decision.dispute, key: 'auto' }
+      : disputeRequest !== undefined
+        ? { contenders: disputeRequest.contenders, key: `asked-${disputeRequest.n}` }
+        : null;
+
   return (
     <RecordHostProvider value={host}>
       <ThisEntityProvider id={entity.id}>
@@ -180,11 +263,10 @@ export function RecordView({
           {decision.broken.map((b) => (
             <BrokenTemplatePlaque key={b.id} broken={b} title={titleOf(b.id)} />
           ))}
-          {decision.dispute !== null && (
+          {dispute !== null && (
             <DisputePlaque
-              // Своё «закрыто» у плашки — про ЭТОТ спор на ЭТОЙ записи.
-              key={`${entity.id}:${decision.dispute.join(',')}`}
-              contenders={decision.dispute}
+              key={`${entity.id}:${dispute.contenders.join(',')}:${dispute.key}`}
+              contenders={dispute.contenders}
               rows={list.rows}
             />
           )}
