@@ -51,14 +51,15 @@ describe('случай 1: текста у записи нет — только �
   test('{{body}} между двумя кусками текста → на его месте пустая строка: абзацы не слипаются', () => {
     // Через шаблон «Вступление» и «Итог» — два отдельных куска текста; склеенные переносом, они
     // стали бы одним абзацем, то есть другим видом.
+    // `{{cards}}` в конце — гарантия хоста §8.3 (C1-I1, отдельный блок тестов ниже).
     expect(changeViewPlan('Вступление\n{{body}}\nИтог\n', '')).toEqual({
       case: 1,
-      body: 'Вступление\n\nИтог\n',
+      body: 'Вступление\n\nИтог\n{{cards}}\n',
     });
     // Пустая строка уже есть с одной стороны — добавлять нечего.
     expect(changeViewPlan('Вступление\n\n{{body}}\nИтог\n', '')).toEqual({
       case: 1,
-      body: 'Вступление\n\nИтог\n',
+      body: 'Вступление\n\nИтог\n{{cards}}\n',
     });
   });
 });
@@ -99,7 +100,7 @@ describe('случай 2: текст есть, в шаблоне есть {{body
     ].join('\n');
     expect(changeViewPlan(tpl, 'Мой текст\nвторая строка\n')).toEqual({
       case: 2,
-      body: tpl.replace('{{body}}\n', 'Мой текст\nвторая строка\n'),
+      body: `${tpl.replace('{{body}}\n', 'Мой текст\nвторая строка\n')}{{cards}}\n`,
     });
   });
 
@@ -113,14 +114,14 @@ describe('случай 2: текст есть, в шаблоне есть {{body
   test('{{body}} последней строкой без переноса — текст встаёт как есть', () => {
     expect(changeViewPlan('{{title}}\n{{body}}', 'Заметка')).toEqual({
       case: 2,
-      body: '{{title}}\nЗаметка',
+      body: '{{title}}\nЗаметка\n{{cards}}\n',
     });
   });
 
   test('{{body}} между кусками текста — текст отделён пустыми строками, абзацы не слипаются', () => {
     expect(changeViewPlan('Вступление\n{{body}}\nИтог\n', 'Заметка')).toEqual({
       case: 2,
-      body: 'Вступление\n\nЗаметка\n\nИтог\n',
+      body: 'Вступление\n\nЗаметка\n\nИтог\n{{cards}}\n',
     });
   });
 
@@ -131,7 +132,7 @@ describe('случай 2: текст есть, в шаблоне есть {{body
       '{{tabs}}\n\n{{tab: А}}\n{{body}}x\n{{/tab}}\n\n\n{{tab: Б}}\n{{title}}\n{{body}}\n{{/tab}}\n\n{{/tabs}}\n{{thread}}\n';
     expect(changeViewPlan(tpl, 'Заметка')).toEqual({
       case: 2,
-      body: tpl.replace('{{body}}\n', 'Заметка\n'),
+      body: `${tpl.replace('{{body}}\n', 'Заметка\n')}{{cards}}\n`,
     });
   });
 });
@@ -151,8 +152,8 @@ describe('случай 3: текст есть, а шаблон тело не п�
     expect(changeViewPlan('{{title}}', 'Заметка')).toEqual({
       case: 3,
       reason: 'no-body',
-      hideAsVersion: '{{title}}',
-      showBelow: '{{title}}\n\nЗаметка',
+      hideAsVersion: '{{title}}\n{{cards}}\n',
+      showBelow: '{{title}}\n{{cards}}\n\nЗаметка',
     });
   });
 
@@ -206,5 +207,60 @@ describe('текст записи входит в результат байт-в
     if (plan.case !== 3) throw new Error('ожидался случай 3');
     expect(plan.showBelow).toContain(text);
     expect(plan.showBelow.endsWith(text)).toBe(true);
+  });
+});
+
+/**
+ * Карточки аспектов (финальное ревью, C1-I1; С1а-8 «до/после совпадают»): через шаблон запись
+ * показывала карточки своих аспектов, не размещённые шаблоном, — гарантия хоста §8.3. У страницы
+ * своим телом этой гарантии нет, поэтому копия шаблона без рисуемого `{{cards}}` получает его в
+ * конце во всех трёх исходах; с рисуемым — остаётся байт-в-байт.
+ */
+describe('копия шаблона без {{cards}} — карточки не теряются (C1-I1)', () => {
+  const OWN = '{{title}}\n{{body}}\n';
+
+  test('случай 1 — копия + {{cards}}', () => {
+    expect(changeViewPlan(OWN, '')).toEqual({ case: 1, body: '{{title}}\n{{cards}}\n' });
+  });
+
+  test('случай 2 — текст на месте {{body}}, {{cards}} в конце', () => {
+    expect(changeViewPlan(OWN, 'Заметка')).toEqual({
+      case: 2,
+      body: '{{title}}\nЗаметка\n{{cards}}\n',
+    });
+  });
+
+  test('случай 3 — в обеих ветках; в «Показать внизу» {{cards}} стоит ДО текста записи', () => {
+    expect(changeViewPlan('{{title}}\n', 'Заметка')).toEqual({
+      case: 3,
+      reason: 'no-body',
+      hideAsVersion: '{{title}}\n{{cards}}\n',
+      showBelow: '{{title}}\n{{cards}}\n\nЗаметка',
+    });
+  });
+
+  test('шаблон с рисуемым {{cards}} (и шаблон хоста) — копия байт-в-байт', () => {
+    expect(changeViewPlan('{{title}}\n{{cards}}\n{{body}}\n', 'Заметка')).toEqual({
+      case: 2,
+      body: '{{title}}\n{{cards}}\nЗаметка\n',
+    });
+    expect(changeViewPlan(HOST_TEMPLATE_TEXT, '')).toEqual({
+      case: 1,
+      body: HOST_TEMPLATE_TEXT.replace('{{body}}\n', ''),
+    });
+  });
+
+  test('{{cards}} в заборе кода или в сломанном контейнере не рисуется — дописывается', () => {
+    const fenced = '{{title}}\n```\n{{cards}}\n```\n';
+    expect(changeViewPlan(fenced, '')).toEqual({ case: 1, body: `${fenced}{{cards}}\n` });
+    const broken = '{{columns}}\n{{column}}\n{{cards}}\n{{/column}}\n';
+    expect(changeViewPlan(broken, '')).toEqual({ case: 1, body: `${broken}{{cards}}\n` });
+  });
+
+  test('{{cards}}, пришедший с текстом записи, — второй не дописывается', () => {
+    expect(changeViewPlan(OWN, 'Заметка\n{{cards}}\n')).toEqual({
+      case: 2,
+      body: '{{title}}\nЗаметка\n{{cards}}\n',
+    });
   });
 });

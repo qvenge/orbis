@@ -3,13 +3,7 @@
 // `save.test.tsx`).
 import { PAGE_ASPECT } from '@orbis/shared';
 import type { PageNode } from '@orbis/shared/doc/page-grammar';
-import {
-  aspectOfCardText,
-  type BodyKind,
-  bodyIssues,
-  nodeAt,
-  type PlacementIssue,
-} from '@orbis/shared/doc/placement';
+import { aspectOfCardText, type BodyKind, type PlacementIssue } from '@orbis/shared/doc/placement';
 import type { ParseRegistry } from '@orbis/shared/query';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { Markdown } from '../../lib/markdown/Markdown';
@@ -18,11 +12,11 @@ import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
-import { NO_REGISTRY } from '../entity-editor/EditorShell';
 import { recordStubLabel } from '../entity-editor/layout-parts';
 import { BlockPlaque } from './blocks/BlockPlaque';
 import { DataBlock } from './blocks/DataBlock';
 import { Columns } from './Columns';
+import { forEachRendered, isCardsBlock, partsOf, pathKey, renderIssues } from './render-plan';
 import { TabsContainer } from './TabsContainer';
 
 /**
@@ -73,29 +67,14 @@ function useRenderPlan(): RenderPlan {
   return plan;
 }
 
-const pathKey = (path: readonly number[]): string => path.join('.');
-
-/** Части контейнера как списки узлов — у колонок это сам массив, у вкладок — `children`. */
-function partsOf(node: PageNode): readonly (readonly PageNode[])[] {
-  if (node.kind === 'columns') return node.parts;
-  if (node.kind === 'tabs') return node.parts.map((t) => t.children);
-  return [];
-}
-
 function planRender(
   nodes: readonly PageNode[],
   kind: BodyKind,
   reg: ParseRegistry | null,
   ownBody: boolean,
 ): RenderPlan {
-  // Проблемы узлов-запросов отброшены: о себе говорит сам `DataBlock` (разбор, абсолютная дата,
-  // отказ сервера) — той же формулировкой, с кнопкой «Настроить». Вторая плашка на том же месте
-  // повторила бы первую. Поэтому и реестр здесь пустой: он нужен `bodyIssues` только запросам.
-  const issues = new Map<string, PlacementIssue>();
-  for (const issue of bodyIssues(nodes, kind, NO_REGISTRY)) {
-    if (nodeAt(nodes, issue.path).kind === 'query') continue;
-    issues.set(pathKey(issue.path), issue);
-  }
+  // Плашки и обход рисуемых узлов — одна копия с «Изменить вид» (`render-plan.ts`).
+  const issues = renderIssues(nodes, kind);
 
   const placed = new Set<string>();
   // РП-25: страница, показанная своим телом, не рисует карточку «Страница» ни в `{{cards}}`, ни
@@ -104,22 +83,16 @@ function planRender(
   // видна, как все.
   if (ownBody) placed.add(PAGE_ASPECT);
   let hasCards = false;
-  // Только РИСУЕМЫЕ узлы: карточка в неуместном или сломанном месте не показана, и считать её
-  // размещённой значило бы потерять её совсем — ни на месте, ни в конце.
-  const visit = (list: readonly PageNode[], prefix: readonly number[]) => {
-    list.forEach((node, i) => {
-      const path = [...prefix, i];
-      if (issues.has(pathKey(path))) return;
-      if (node.kind === 'card' && reg !== null) {
-        const aspect = aspectOfCardText(node.aspect, reg);
-        if (aspect !== undefined) placed.add(aspect.id);
-      } else if (node.kind === 'record' && node.name === 'cards') {
-        hasCards = true;
-      }
-      for (const [p, part] of partsOf(node).entries()) visit(part, [...path, p]);
-    });
-  };
-  visit(nodes, []);
+  // Только РИСУЕМЫЕ узлы (`forEachRendered`): карточка в неуместном или сломанном месте не
+  // показана, и считать её размещённой значило бы потерять её совсем — ни на месте, ни в конце.
+  forEachRendered(nodes, issues, (node) => {
+    if (node.kind === 'card' && reg !== null) {
+      const aspect = aspectOfCardText(node.aspect, reg);
+      if (aspect !== undefined) placed.add(aspect.id);
+    } else if (isCardsBlock(node)) {
+      hasCards = true;
+    }
+  });
   return { issues, placed, hasCards, reg, ownBody };
 }
 

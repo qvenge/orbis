@@ -64,7 +64,7 @@ const SHARED_CHUNKS = ['NativeRow', 'txQuery'];
  * задачи подряд. Ломается это ровно так же молча, как и у экранов: `tsc`, `biome` и все тесты
  * остаются зелёными, а файл чанка просто исчезает из dist.
  *
- * Точки лени: `EditorShell.tsx` (BodyEditor) и `DetailScreen.tsx` (MarkdownToggle).
+ * Точки лени: `EditorShell.tsx` (BodyEditor) и `EntityBody.tsx` (MarkdownToggle).
  */
 const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
 

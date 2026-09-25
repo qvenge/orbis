@@ -385,7 +385,42 @@ describe('«Изменить вид только этой записи» (С1а-
     const after = await settle(container, calls);
     expect(after).toEqual(bodyBecameText(before, 1));
     // Плашки «{{body}} работает только в шаблонах» на странице нет — строки нет вовсе (РП-29).
-    expect(screen.queryByTestId('block-plaque')).toBeNull();
+    expect(screen.queryByTestId('block-misplaced')).toBeNull();
+  });
+
+  describe('шаблон владельца без {{cards}} — карточки аспектов на месте (C1-I1)', () => {
+    // Через шаблон карточку задачи дописывала гарантия хоста §8.3; страница своим телом её не
+    // дописывает, и копия шаблона обязана нести `{{cards}}` сама.
+    const OWN = '{{title}}\n{{body}}\n';
+
+    async function changeView(body: string) {
+      const f = withBody(fixture('task'), body);
+      const r = open(f, [template(TPL_A, 'Задачи', ['orbis/task'], OWN)]);
+      await screen.findByTestId('record-view');
+      await waitFor(() => expect(screen.getByTestId('aspect-orbis/task')).toBeInTheDocument());
+      await choose('Изменить вид только этой записи');
+      await screen.findByTestId('page-view');
+      return { ...r, f };
+    }
+
+    test('случай 2: карточка задачи до и после, карточки «Страница» нет (РП-25)', async () => {
+      const { f, batches } = await changeView('Заметка к задаче');
+      expect(batches()).toEqual([
+        [becomePageOp(f.entity.id, f.entity.updatedAt, '{{title}}\nЗаметка к задаче\n{{cards}}\n')],
+      ]);
+      await waitFor(() => expect(renderedTexts().join('')).toContain('Заметка к задаче'));
+      await waitFor(() => expect(screen.getByTestId('aspect-orbis/task')).toBeInTheDocument());
+      expect(screen.queryByTestId(`aspect-${PAGE_ASPECT}`)).toBeNull();
+    });
+
+    test('случай 1: пустое тело — карточка задачи до и после', async () => {
+      const { f, batches } = await changeView('');
+      expect(batches()).toEqual([
+        [becomePageOp(f.entity.id, f.entity.updatedAt, '{{title}}\n{{cards}}\n')],
+      ]);
+      await waitFor(() => expect(screen.getByTestId('aspect-orbis/task')).toBeInTheDocument());
+      expect(screen.queryByTestId(`aspect-${PAGE_ASPECT}`)).toBeNull();
+    });
   });
 
   describe('случай 3: шаблон тела не показывает — вопрос владельцу', () => {

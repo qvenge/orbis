@@ -2,7 +2,6 @@ import type { BodyDoc } from '@orbis/shared/doc'; // ТОЛЬКО type — фа�
 // Листовые сабпаты, не баррель: препроход и матрица мест без tiptap и marked (вес первого кадра).
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
 import { type BodyKind, bodyIssues, type PlacementIssue } from '@orbis/shared/doc/placement';
-import { OWNER_LOCALE, type ParseRegistry } from '@orbis/shared/query';
 import { lazy, type MouseEvent, type ReactNode, Suspense, useEffect, useState } from 'react';
 import { Markdown } from '../../lib/markdown/Markdown';
 import { useBodyKind } from '../../lib/query-blocks/body-kind';
@@ -10,6 +9,7 @@ import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
 import { BlockPlaque } from '../page/blocks/BlockPlaque';
+import { NO_REGISTRY } from '../page/render-plan';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
 import {
   cardAspectTitle,
@@ -72,21 +72,6 @@ const NOT_BODY_GESTURE =
  */
 type Mount = { focusAt: { left: number; top: number } | null };
 const BY_IDLE: Mount = { focusAt: null };
-
-/**
- * Пустой реестр разбора — для мест БЕЗ блоков данных. `bodyIssues` читает реестр только у узлов
- * `query`, а первый кадр спрашивает её об одном узле обвязки или контейнера за раз и берёт
- * только проблему самого узла (путь длины 1): проблемы блоков данных внутри показывает их
- * собственный `DataBlock` по настоящему реестру. Тем же приёмом пользуется рендерер страниц
- * (`features/page/Renderer.tsx`): проблемы узлов-запросов он отбрасывает, ими говорит блок.
- */
-export const NO_REGISTRY: ParseRegistry = {
-  properties: new Map(),
-  aspects: new Map(),
-  roles: new Map(),
-  contracts: new Map(),
-  locale: OWNER_LOCALE,
-};
 
 /**
  * Проблема места ОДНОГО узла (§5.5, §5.8) — или `undefined`, если на этом месте он работает.

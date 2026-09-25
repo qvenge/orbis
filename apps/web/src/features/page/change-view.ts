@@ -1,6 +1,7 @@
 // Листовой сабпат, не баррель `@orbis/shared/doc`: модуль живёт в ленивом чанке меню ⋮, но
 // листовой разбор и дешевле, и ровно тот, которым рендерер рисует результат.
-import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
+import { type PageNode, parsePageText, type RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import { hasRenderedCards } from './render-plan';
 
 /**
  * «Изменить вид только этой записи» — чистая часть (спека страниц 1а §8.4, Р-19).
@@ -17,6 +18,11 @@ import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
  *     (`{{/tab}}`, `{{tab: X}}` — вставкой или агентом) и на месте `{{body}}` сломал бы контейнер
  *     шаблона: вкладки ушли бы под плашку вместе с карточками, версиями и тредом. Молча применять
  *     такой случай 2 нельзя (С1а-8); `reason` говорит диалогу, какой из двух вопросов задать.
+ *
+ * Во всех трёх исходах копия несёт рисуемый `{{cards}}`: через шаблон запись показывала карточки
+ * своих аспектов, не размещённые шаблоном, — гарантия хоста §8.3 дописывала их в конец любого
+ * шаблона. Страница своим телом такой гарантии не имеет (дописывание — только шаблонам), и копия
+ * шаблона владельца без `{{cards}}` потеряла бы их с экрана (финальное ревью, C1-I1).
  */
 export type ChangeViewPlan =
   | { case: 1; body: string } // текста нет → копия шаблона
@@ -146,17 +152,33 @@ const needsGapAfter = (slot: BodySlot) =>
 const brokenCount = (text: string): number =>
   parsePageText(text).filter((n) => n.kind === 'broken').length;
 
+const CARDS: RecordBlockName = 'cards';
+/** Строка блока «все карточки» — печатью маркера по имени, а не литералом (одна копия правил). */
+const CARDS_LINE = `{{${CARDS}}}\n`;
+
+/**
+ * Копия шаблона `base` с рисуемым `{{cards}}` — дописанным в её конец, до хвоста `rest`, который
+ * встанет за копией (текст записи в «Показать внизу страницы»). Рисуемый ли — то же правило, что у
+ * рендерера (`hasRenderedCards`): блок в заборе кода, в неуместном или сломанном месте не в счёт.
+ * Смотрится весь результат, а не одна копия: `{{cards}}`, пришедший с текстом записи, на странице
+ * тоже рисуется, и второй дал бы карточки дважды.
+ */
+function withCards(base: string, rest = ''): string {
+  if (hasRenderedCards(parsePageText(base + rest), 'page')) return base;
+  const gap = base === '' || base.endsWith('\n') ? '' : '\n';
+  return `${base}${gap}${CARDS_LINE}`;
+}
+
 /** Вопрос владельцу над копией шаблона `base` (без строки `{{body}}`, если она была). */
-const question = (
-  reason: ChangeViewQuestion,
-  base: string,
-  recordBody: string,
-): ChangeViewPlan => ({
-  case: 3,
-  reason,
-  hideAsVersion: base,
-  showBelow: `${base.replace(/(?:\r?\n)+$/, '')}\n\n${recordBody}`,
-});
+function question(reason: ChangeViewQuestion, base: string, recordBody: string): ChangeViewPlan {
+  const below = `\n\n${recordBody}`;
+  return {
+    case: 3,
+    reason,
+    hideAsVersion: withCards(base),
+    showBelow: `${withCards(base, below).replace(/(?:\r?\n)+$/, '')}${below}`,
+  };
+}
 
 export function changeViewPlan(templateText: string, recordBody: string): ChangeViewPlan {
   const slot = bodySlot(templateText);
@@ -168,7 +190,7 @@ export function changeViewPlan(templateText: string, recordBody: string): Change
       ? templateText
       : head + (needsGapBefore(slot) && needsGapAfter(slot) ? '\n' : '') + tail;
 
-  if (recordBody.trim() === '') return { case: 1, body: copy };
+  if (recordBody.trim() === '') return { case: 1, body: withCards(copy) };
 
   if (slot !== null) {
     // Строка `{{body}}` забирала свой перенос; без него текст слипся бы со строкой ниже — а она
@@ -183,7 +205,7 @@ export function changeViewPlan(templateText: string, recordBody: string): Change
     if (brokenCount(body) > brokenCount(templateText)) {
       return question('breaks-template', copy, recordBody);
     }
-    return { case: 2, body };
+    return { case: 2, body: withCards(body) };
   }
 
   return question('no-body', templateText, recordBody);
