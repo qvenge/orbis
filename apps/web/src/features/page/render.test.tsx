@@ -8,6 +8,7 @@
 import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
 import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
@@ -20,11 +21,12 @@ import {
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
-import { BUILTIN_REGISTRY } from '../../test/registry';
+import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import { type EntityGetReply, structureHandler } from '../entity-detail/structure-fixtures';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { PageView } from './PageView';
 
 installCrashTrap();
 
@@ -314,4 +316,70 @@ test('вкладки и сеть: версии на скрытой вкладк�
 
   fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
   expect(await screen.findByTestId('message-list')).toBeInTheDocument();
+});
+
+test('вкладок стало меньше, чем номер открытой, — открыта первая, а не пустота (§6.5)', async () => {
+  const three = page(
+    '{{tabs}}\n{{tab: T1}}\nПервая\n{{/tab}}\n{{tab: T2}}\nВторая\n{{/tab}}\n{{tab: T3}}\nТретья\n{{/tab}}\n{{/tabs}}\n',
+  );
+  const two = page(
+    '{{tabs}}\n{{tab: T1}}\nПервая\n{{/tab}}\n{{tab: T2}}\nВторая\n{{/tab}}\n{{/tabs}}\n',
+  );
+  const reply = (entity: WireEntityFixture) =>
+    ({
+      entity,
+      relations: [],
+      backlinks: [],
+      thread: null,
+      registryVersion: BUILTIN_REGISTRY.version,
+    }) as unknown as EntityGetReply;
+  // Текст страницы меняется без размонтирования (правка агентом, переход по кешу): тот же
+  // `PageView`, новый ответ `entity.get`.
+  function Switch() {
+    const [current, setCurrent] = useState(reply(three));
+    return (
+      <>
+        <button type="button" onClick={() => setCurrent(reply(two))}>
+          сменить текст
+        </button>
+        <PageView reply={current} />
+      </>
+    );
+  }
+  renderWithProviders(<Switch />, (path) => registryReply(path) ?? {});
+  fireEvent.click(await screen.findByRole('tab', { name: 'T3' }));
+  await waitFor(() =>
+    expect(tabPanelOf(screen.getByText('Третья'))).toHaveAttribute('data-state', 'active'),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'сменить текст' }));
+  await waitFor(() => expect(screen.queryByText('Третья')).toBeNull());
+  expect(tabPanelOf(screen.getByText('Первая'))).toHaveAttribute('data-state', 'active');
+  expect(screen.getByRole('tab', { name: 'T1' })).toHaveAttribute('data-state', 'active');
+});
+
+test('{{card: X}} с неузнанным аспектом — честная спокойная плашка, не «неуместный блок»', async () => {
+  // Второй аспект с подписью «Цель» — подпись становится неоднозначной.
+  const goal = BUILTIN_REGISTRY.aspects.find((a) => a.id === 'orbis/goal');
+  if (goal === undefined) throw new Error('нет встроенного аспекта orbis/goal');
+  const twin = { ...goal, id: 'user/goal-twin', key: 'user/goal-twin', graphId: 'u' };
+  openPage(
+    page('{{card: orbis/nope}}\n\n{{card: "Цель"}}\n', { aspects: [PAGE_ASPECT, 'orbis/goal'] }),
+    {
+      over: (path) =>
+        path === 'registry.effective'
+          ? { ...BUILTIN_REGISTRY, aspects: [...BUILTIN_REGISTRY.aspects, twin] }
+          : undefined,
+    },
+  );
+  const view = await screen.findByTestId('page-view');
+  const plaques = await within(view).findAllByTestId('block-unresolved');
+  expect(plaques).toHaveLength(2);
+  expect(plaques[0]).toHaveTextContent('Блок {{card: orbis/nope}}: аспект не узнан.');
+  expect(plaques[1]).toHaveTextContent('Блок {{card: "Цель"}}: аспект не узнан.');
+  // Выход для неоднозначной подписи назван.
+  expect(plaques[1]).toHaveTextContent('укажите ключ аспекта');
+  expect(plaques[0]).toHaveAttribute('role', 'note');
+  expect(within(view).queryByTestId('block-misplaced')).toBeNull();
+  // Неоднозначная подпись не угадана: карточки цели нет.
+  expect(within(view).queryByTestId('aspect-orbis/goal')).toBeNull();
 });

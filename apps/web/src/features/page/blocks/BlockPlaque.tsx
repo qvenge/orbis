@@ -28,10 +28,20 @@ export function ConfigureButton({ onClick }: { onClick: () => void }) {
  * неуместный блок тоже не исчезает молча — текст его остаётся в документе, плашка только на
  * экране.
  *
- * Два рода: `error` — блок данных не исполнился (разбор, дата, отказ сервера; красная рамка,
+ * Три рода: `error` — блок данных не исполнился (разбор, дата, отказ сервера; красная рамка,
  * `role="alert"`); `misplaced` — блок стоит там, где не работает (§5.5; спокойная рамка:
- * это не поломка, а подсказка, и ассертивная озвучка на каждом открытии заметки была бы шумом).
+ * это не поломка, а подсказка, и ассертивная озвучка на каждом открытии заметки была бы шумом);
+ * `unresolved` — блок стоит на своём месте, но его имя не узнано (`{{card: X}}` с аспектом,
+ * которого реестр не знает или знает не один). Рамка та же спокойная — чинится правкой текста,
+ * а не срочно, — но ориентир свой: «неуместным» такой блок не является.
  */
+/** Ориентир плашки по роду — у каждого свой: тест «неуместного» не должен находить «неузнанный». */
+const PLAQUE_TESTID = {
+  error: 'qb-error',
+  misplaced: 'block-misplaced',
+  unresolved: 'block-unresolved',
+} as const;
+
 export function BlockPlaque({
   message,
   hint,
@@ -43,14 +53,14 @@ export function BlockPlaque({
   hint?: string;
   /** Позиция ошибки разбора в тексте запроса — у отказа канона она необязательна. */
   position?: number;
-  tone?: 'error' | 'misplaced';
+  tone?: 'error' | 'misplaced' | 'unresolved';
   onConfigure?: () => void;
 }) {
   const error = tone === 'error';
   return (
     <Card
       role={error ? 'alert' : 'note'}
-      data-testid={error ? 'qb-error' : 'block-misplaced'}
+      data-testid={PLAQUE_TESTID[tone]}
       className={error ? 'border-danger' : 'border-dashed'}
     >
       <p className={error ? 'text-danger text-sm' : 'text-sm text-text-secondary'}>{message}</p>

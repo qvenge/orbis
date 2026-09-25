@@ -18,11 +18,15 @@ export function TabsContainer({
   tabs: readonly { label: string; content: ReactNode; keepMounted: boolean }[];
 }) {
   const [open, setOpen] = useState('0');
+  // Открытая вкладка — в пределах нынешнего числа вкладок. Текст страницы меняется и без
+  // размонтирования (правка агентом, настройка, переход по кешу): было три вкладки и открыта
+  // третья, стало две — без приведения не активна ни одна, и под ярлыками пусто (§6.5).
+  const active = Number(open) < tabs.length ? open : '0';
   const outerVisible = useRecordHost().activeTab !== null;
   return (
     <div data-testid="page-tabs">
       <Tabs
-        value={open}
+        value={active}
         onValueChange={setOpen}
         tabs={tabs.map((tab, i) => {
           const value = String(i);
@@ -31,7 +35,7 @@ export function TabsContainer({
             label: tab.label,
             keepMounted: tab.keepMounted,
             content: (
-              <TabPartHost value={value} open={outerVisible && open === value}>
+              <TabPartHost value={value} open={outerVisible && active === value}>
                 {tab.content}
               </TabPartHost>
             ),
