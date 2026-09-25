@@ -363,6 +363,19 @@ describe('templatesFromRows — строки entity.query → кандидаты
     ]);
   });
 
+  test('повторы в «Шаблон для» — набор: [task×3] не больше [task, project] (A-M1, §4.2 шаг 4)', () => {
+    const rows = [
+      { id: 'A', props: { [TEMPLATE_FOR_PROPERTY]: [T, T, T] }, createdAt: '2026-09-01T00:00:00Z' },
+      { id: 'B', props: { [TEMPLATE_FOR_PROPERTY]: [T, P] }, createdAt: '2026-09-02T00:00:00Z' },
+    ];
+    const templates = templatesFromRows(rows);
+    expect(templates.map((x) => x.forAspects)).toEqual([[T], [T, P]]);
+    expect(chooseTemplate({ aspects: [T, P] }, templates, allOk)).toMatchObject({
+      kind: 'template',
+      id: 'B',
+    });
+  });
+
   test('без «Главнее, чем» — пустой список; значения не-строки отбрасываются', () => {
     const rows = [
       { id: 'A', props: { [TEMPLATE_FOR_PROPERTY]: [P, 7] }, createdAt: '2026-09-01T00:00:00Z' },

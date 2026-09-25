@@ -4,7 +4,7 @@
  * реестр (`date` | `timestamp`), поэтому проверка идёт по нему, а не по виду строки.
  */
 import { expect, test } from 'bun:test';
-import type { QueryAst } from './ast';
+import { type QueryAst, queryAstSchema } from './ast';
 import { FIXTURE_PARSE_REGISTRY as REG } from './ast-fixtures';
 import { absoluteDateIn, RELATIVE_DATE_TOKENS } from './dates';
 import { parseQueryAst } from './parse-ast';
@@ -62,7 +62,7 @@ test('диапазон: первая абсолютная граница, ток
   expect(absoluteDateIn(parsed('orbis/due_date=today..next_7d'), REG)).toBeNull();
 });
 
-test('список: смесь токена и даты — находится дата (и в |-форме, и в `in` тула)', () => {
+test('список: смесь токена и даты в |-форме — находится дата; `in` тула — список одних дат', () => {
   expect(absoluteDateIn(parsed('orbis/due_date=today|2026-01-01'), REG)).toEqual({
     prop: 'orbis/due_date',
     value: '2026-01-01',
@@ -71,6 +71,13 @@ test('список: смесь токена и даты — находится �
     filter: { prop: 'orbis/due_date', op: 'in', value: ['2026-01-01', '2026-01-02'] },
   };
   expect(absoluteDateIn(viaTool, REG)).toEqual({ prop: 'orbis/due_date', value: '2026-01-01' });
+  // Смеси токена и даты в `in` не бывает: схема дерева пускает в `in` только скаляры, а текстовая
+  // `|`-форма даёт `or` (строка выше). Поэтому «первый элемент списка» и «первый не-токен» здесь
+  // одно и то же — мутант «смотреть только первый элемент» эквивалентен (финальное ревью, MUT-M6).
+  const mixed = {
+    filter: { prop: 'orbis/due_date', op: 'in', value: [{ token: 'today' }, '2026-01-01'] },
+  };
+  expect(queryAstSchema.safeParse(mixed).success).toBe(false);
 });
 
 test('or/not/and обходятся на любой глубине', () => {

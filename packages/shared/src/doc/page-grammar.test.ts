@@ -106,6 +106,45 @@ describe('контейнеры §5.2', () => {
     ]);
   });
 
+  test('между частями — несколько пустых строк или строка из пробелов: тоже пустота, не TEXT_OUTSIDE_PART (MUT-M1)', () => {
+    const many = lines(
+      '{{columns}}',
+      '{{column}}',
+      'a',
+      '{{/column}}',
+      '',
+      '',
+      '{{column}}',
+      'b',
+      '{{/column}}',
+      '{{/columns}}',
+    );
+    expect(parse(many)).toEqual([
+      { kind: 'columns', parts: [[text('a\n')], [text('b\n')]], raw: many },
+    ]);
+    const spaces = lines(
+      '{{tabs}}',
+      '{{tab: A}}',
+      'x',
+      '{{/tab}}',
+      '   \t',
+      '{{tab: B}}',
+      'y',
+      '{{/tab}}',
+      '{{/tabs}}',
+    );
+    expect(parse(spaces)).toEqual([
+      {
+        kind: 'tabs',
+        parts: [
+          { label: 'A', children: [text('x\n')] },
+          { label: 'B', children: [text('y\n')] },
+        ],
+        raw: spaces,
+      },
+    ]);
+  });
+
   test('{{tab}} без подписи — вкладка с пустой подписью; подпись без краевых пробелов', () => {
     const src = lines(
       '{{tabs}}',

@@ -40,7 +40,10 @@ export function templatesFromRows(
 ): TemplateCandidate[] {
   const out: TemplateCandidate[] = [];
   for (const row of rows) {
-    const forAspects = strings(row.props[TEMPLATE_FOR_PROPERTY]);
+    // Набор, а не список (§4.2 шаг 4: |S(t)| — мощность набора): повторы значение принимает
+    // (`uniqueItems` в схеме нет, core-тул их пропустит), и `[task, task, task]` иначе «переигрывал»
+    // бы `[task, project]` по длине (финальное ревью, A-M1).
+    const forAspects = [...new Set(strings(row.props[TEMPLATE_FOR_PROPERTY]))];
     // Пустой «Шаблон для» — просто страница (§3.2): шаблоном она не участвует.
     if (forAspects.length === 0) continue;
     // Самоссылку правило §3.2 запрещает, но данные, внесённые до правила, могли её сохранить.

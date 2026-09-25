@@ -388,8 +388,14 @@ export function aspectOfCardText(text: string, reg: ParseRegistry): CardAspect |
  * §4.2 шаг 7: причина «шаблон не разобран» или `null`. Шаблон с любой проблемой тела (§5.8)
  * исключается из выбора целиком, поэтому причина — первая проблема в порядке документа: её
  * человек и увидит первой, открыв шаблон.
+ *
+ * С подсказкой, если она у проблемы есть (С1а-9 «с подсказкой»): плашка сломанного шаблона —
+ * единственное место, где владелец узнаёт причину, не открывая настройку, и абсолютная дата без
+ * списка относительных токенов звала бы чинить наугад (финальное ревью, F-M1).
  */
 export function templateBrokenReason(text: string, reg: ParseRegistry): string | null {
   const [first] = bodyIssues(parsePageText(text), 'template', reg);
-  return first ? first.message : null;
+  if (!first) return null;
+  if (first.hint === undefined) return first.message;
+  return `${first.message} ${first.hint.charAt(0).toUpperCase()}${first.hint.slice(1)}.`;
 }

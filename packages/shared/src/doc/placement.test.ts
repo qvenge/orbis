@@ -287,6 +287,10 @@ describe('templateBrokenReason — §4.2 шаг 7', () => {
   test('второй {{body}}, абсолютная дата, неразобранный запрос — тоже «не разобран»', () => {
     expect(templateBrokenReason('{{body}}\n{{body}}\n', REG)).toContain('{{body}}');
     expect(templateBrokenReason(ABS_QUERY, REG)).toContain('2026-01-01');
+    // С подсказкой токенов (С1а-9; финальное ревью, F-M1) — плашка сломанного шаблона её покажет.
+    expect(templateBrokenReason(ABS_QUERY, REG)).toContain(
+      'Замените на относительный токен: today',
+    );
     expect(templateBrokenReason('{{query: неизвестное=1}}\n', REG)).toContain('неизвестное');
     expect(templateBrokenReason('{{title}}\n{{query:  }}\n{{body}}\n', REG)).toBe(
       EMPTY_QUERY_MESSAGE,
