@@ -21,12 +21,14 @@ export interface DetailStructure {
 }
 
 /**
- * Узел вкладок экрана записи: граница «над вкладками» / «внутри вкладок». Два имени — два экрана:
- * `page-tabs` — контейнер `{{tabs}}` шаблона хоста (экран с задачи 14), `entity-tabs` — вкладки
- * экрана до среза, с которого снят эталон (им пользуется съёмка, `structure.capture.test.tsx`).
- * Первым ищется новый: на новом экране старого узла нет вовсе, так что выбор однозначен.
+ * Узел вкладок экрана записи: граница «над вкладками» / «внутри вкладок» — контейнер `{{tabs}}`
+ * шаблона хоста (`page-tabs`, экран с задачи 14).
+ *
+ * Эталон задача 2 снимала со старого экрана, где тот же узел звался `entity-tabs`. Запасного имени
+ * здесь нет: старого экрана в коде больше нет, и имя, которое не встретится ни на одном экране,
+ * только делало бы вид, что съёмка старого экрана ещё возможна.
  */
-const TABS_TESTIDS = ['page-tabs', 'entity-tabs'] as const;
+const TABS_TESTID = 'page-tabs';
 
 /**
  * Имена ориентиров. Все, кроме трёх помеченных, — `data-testid` экрана один в один.
@@ -44,7 +46,8 @@ export const LANDMARKS: readonly string[] = [
   'detail-menu',
   'proposal-overlay',
   'body-notices',
-  // «Сущность»
+  // первая вкладка старого экрана («Сущность», в эталоне); на новом часть из них — над вкладками
+  // и в своих карточках «Записи» (§8.2)
   'emoji', // признак, не testid — см. `isEmoji`
   'native-row',
   'native-memory', // строка памяти AI стоит ВМЕСТО native-row (NativeRow → MemoryRow)
@@ -57,7 +60,7 @@ export const LANDMARKS: readonly string[] = [
   'routine-status',
   'run-feed',
   'body', // признак, не testid — первый кадр (`editor-preview`) или сам редактор (`body-editor`)
-  // «Детали»
+  // «Детали» старого экрана (в эталоне)
   'assignment-card',
   'versions-card',
   'subtask',
@@ -88,8 +91,8 @@ const SECTION_ANCHORS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Эмодзи записи — крупный `aria-hidden` span прямо перед строкой заголовка (DetailScreen,
- * шапка «Сущности»). Признак — положение и немота, а не класс: класс — дело вёрстки.
+ * Эмодзи записи — крупный `aria-hidden` span прямо перед строкой заголовка (`TitleBlock`,
+ * record-blocks.tsx). Признак — положение и немота, а не класс: класс — дело вёрстки.
  */
 function isEmoji(el: Element): boolean {
   if (el.tagName !== 'SPAN' || el.getAttribute('aria-hidden') !== 'true') return false;
@@ -146,10 +149,7 @@ function collect(root: Element, skip?: Element): string[] {
 }
 
 export function snapshotDetailStructure(container: HTMLElement): DetailStructure {
-  const tabsRoot =
-    TABS_TESTIDS.map((id) => container.querySelector(`[data-testid="${id}"]`)).find(
-      (el) => el !== null,
-    ) ?? undefined;
+  const tabsRoot = container.querySelector(`[data-testid="${TABS_TESTID}"]`) ?? undefined;
   const aboveTabs = collect(container, tabsRoot);
   if (tabsRoot === undefined) return { aboveTabs, tabs: [] };
   const doc = container.ownerDocument;

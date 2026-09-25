@@ -15,7 +15,7 @@
 // инвалидации не происходит вовсе. Здесь ключ наш, а запрос идёт тем же клиентом и через
 // те же линки (`utils.client`), так что мок-линк тестов и заголовки прода работают как у
 // любой другой процедуры.
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { trpc } from '../../trpc';
 import { type EffectiveRegistry, lookupOf, type RegistryLookup } from './labels';
@@ -80,6 +80,11 @@ export interface RegistryView extends RegistryLookup {
   data: EffectiveRegistry | undefined;
   /** Версия ПРИЕХАВШЕГО снимка; пустая строка — снимка ещё нет. */
   version: string;
+  /**
+   * Снимка нет и не будет: запрос реестра отказал. Без признака «ещё едет» и «не приедет»
+   * неразличимы, и читатель, который ждёт реестр (выбор шаблона экрана записи), ждал бы вечно.
+   */
+  failed: boolean;
 }
 
 export function useRegistry(): RegistryView {
@@ -103,11 +108,20 @@ export function useRegistry(): RegistryView {
     // Снимок протухает не по часам, а по версии — она и есть ключ. `staleTime` конечный
     // означал бы перезапрос по таймеру, то есть плату за событие, которого нет.
     staleTime: Number.POSITIVE_INFINITY,
+    // Смена версии меняет КЛЮЧ, и без этого на время перечитывания снимка не было бы вовсе: у
+    // экрана записи со своим шаблоном — кадр ожидания и размонтирование тела посреди правки.
+    // Прежний снимок до прихода нового честнее пустоты: версии различаются добавленным, а не
+    // переписанным.
+    placeholderData: keepPreviousData,
   });
   const data = query.data;
+  const failed = query.isError && data === undefined;
   useNoteRegistryVersion(data?.version);
   // Локаль здесь НЕ параметр хука, хотя `label()` её принимает: снимок один на всё
   // приложение, а локаль владельца — одна и общая с сервером (`OWNER_LOCALE`). Параметр
   // хука означал бы два разных перевода одного реестра на одном экране.
-  return useMemo(() => ({ ...lookupOf(data), data, version: data?.version ?? '' }), [data]);
+  return useMemo(
+    () => ({ ...lookupOf(data), data, version: data?.version ?? '', failed }),
+    [data, failed],
+  );
 }

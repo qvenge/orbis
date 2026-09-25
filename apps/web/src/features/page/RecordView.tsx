@@ -15,7 +15,12 @@ import { BaseRecordView } from './BaseRecordView';
 import { HOST_TEMPLATE_NODES } from './host-template';
 import { Renderer } from './Renderer';
 import { TabMemoryScope } from './TabsContainer';
-import { BrokenTemplatePlaque, DisputePlaque, TemplatesErrorPlaque } from './TemplatePlaques';
+import {
+  BrokenTemplatePlaque,
+  DisputePlaque,
+  RegistryErrorPlaque,
+  TemplatesErrorPlaque,
+} from './TemplatePlaques';
 import { usePageTemplates } from './usePageTemplates';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
@@ -31,9 +36,17 @@ interface Decision {
   dispute: readonly string[] | null;
   broken: readonly BrokenTemplate[];
   listFailed: boolean;
+  /** Реестр не приехал, а без него свой шаблон не проверить — показан хост (§6.5, §4.2 шаг 8). */
+  registryFailed: boolean;
 }
 
-const HOST: Decision = { shown: { kind: 'host' }, dispute: null, broken: [], listFailed: false };
+const HOST: Decision = {
+  shown: { kind: 'host' },
+  dispute: null,
+  broken: [],
+  listFailed: false,
+  registryFailed: false,
+};
 
 const fits = (t: TemplateCandidate, aspects: readonly string[]) =>
   t.forAspects.every((a) => aspects.includes(a));
@@ -49,11 +62,14 @@ const fits = (t: TemplateCandidate, aspects: readonly string[]) =>
  * - Подходящие шаблоны есть, а реестра ещё нет — ждать: без реестра не проверить, разобран ли
  *   шаблон (§4.2 шаг 7 смотрит и блоки запросов), а показать шаблон хоста и тут же сменить его
  *   своим — перемонтировать тело на глазах. Ожидание платит только владелец со своими шаблонами.
+ * - Реестр отказал — ждать нечего: шаблон хоста и плашка. Вечный скелет без слова о причине был бы
+ *   той самой пустотой вместо ошибки (§6.5).
  */
 function decide(
   aspects: readonly string[],
   list: ReturnType<typeof usePageTemplates>,
   reg: ParseRegistry | null,
+  registryFailed: boolean,
   crashed: ReadonlyMap<string, string>,
   override: { templateId: string | 'host' } | undefined,
 ): Decision {
@@ -62,14 +78,18 @@ function decide(
   if (override?.templateId === 'host') return HOST;
   const { templates, rows } = list;
   if (!templates.some((t) => fits(t, aspects))) return HOST;
-  if (reg === null) return { ...HOST, shown: { kind: 'wait' } };
+  if (reg === null) {
+    return registryFailed
+      ? { ...HOST, registryFailed: true }
+      : { ...HOST, shown: { kind: 'wait' } };
+  }
   const bodyOf = (id: string) => rows.find((r) => r.id === id)?.body ?? '';
   const isBroken = (id: string) => crashed.get(id) ?? templateBrokenReason(bodyOf(id), reg);
   // «Открыть через X» (§8.4) — разово и только исправным подходящим шаблоном; иначе — обычный выбор.
   const forcedId = templates.find((t) => t.id === override?.templateId && fits(t, aspects))?.id;
   const forced = rows.find((r) => r.id === forcedId);
   if (forced !== undefined && isBroken(forced.id) === null) {
-    return { shown: { kind: 'own', row: forced }, dispute: null, broken: [], listFailed: false };
+    return { ...HOST, shown: { kind: 'own', row: forced } };
   }
   const choice = chooseTemplate({ aspects }, templates, isBroken);
   if (choice.kind !== 'template') {
@@ -78,12 +98,7 @@ function decide(
   }
   const row = rows.find((r) => r.id === choice.id);
   if (row === undefined) return { ...HOST, broken: choice.broken };
-  return {
-    shown: { kind: 'own', row },
-    dispute: choice.dispute,
-    broken: choice.broken,
-    listFailed: false,
-  };
+  return { ...HOST, shown: { kind: 'own', row }, dispute: choice.dispute, broken: choice.broken };
 }
 
 const NO_CRASHES: ReadonlyMap<string, string> = new Map();
@@ -114,7 +129,15 @@ export function RecordView({
 }) {
   const { entity } = reply;
   const list = usePageTemplates();
-  const { registry } = useFieldCatalog();
+  const { registry, failed } = useFieldCatalog();
+  /**
+   * Отказ реестра — ЛИПКИЙ, пока реестра нет. Шаблон хоста, показанный после отказа, монтирует
+   * новых читателей реестра, а React Query на монтировании перезапрашивает упавший запрос и на это
+   * время сбрасывает его в «ещё едет» (`retryOnMount`). Без памяти экран качался бы: отказ → хост →
+   * «едет» → ожидание (хост размонтирован) → отказ → … Приехал реестр — признак не читается вовсе.
+   */
+  const [registryFailed, setRegistryFailed] = useState(false);
+  if (failed && !registryFailed) setRegistryFailed(true);
   const reg = registry?.parse ?? null;
   // «План → факт» — состояние хоста (Ф-1а-18): поднимает его чекбокс `{{title}}`, показывает
   // карточка `orbis/financial`, где бы шаблон их ни поставил.
@@ -142,8 +165,8 @@ export function RecordView({
   );
 
   const decision = useMemo(
-    () => decide(entity.aspects, list, reg, crashed, override),
-    [entity.aspects, list, reg, crashed, override],
+    () => decide(entity.aspects, list, reg, registryFailed, crashed, override),
+    [entity.aspects, list, reg, registryFailed, crashed, override],
   );
   const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnlyBody });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
@@ -153,6 +176,7 @@ export function RecordView({
       <ThisEntityProvider id={entity.id}>
         <div data-testid="record-view" className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
           {decision.listFailed && <TemplatesErrorPlaque />}
+          {decision.registryFailed && <RegistryErrorPlaque />}
           {decision.broken.map((b) => (
             <BrokenTemplatePlaque key={b.id} broken={b} title={titleOf(b.id)} />
           ))}
@@ -191,7 +215,7 @@ function ShownTemplate({
   if (shown.kind === 'host') {
     return (
       <RenderBoundary resetKey={`${entityId}:host`} fallback={<BaseRecordView />}>
-        <TemplateTree scope="host" nodes={HOST_TEMPLATE_NODES} />
+        <TemplateTree scope="template:host" nodes={HOST_TEMPLATE_NODES} />
       </RenderBoundary>
     );
   }
@@ -212,12 +236,14 @@ function ShownTemplate({
 
 function OwnTemplateTree({ row }: { row: WireEntity }) {
   const nodes = useMemo(() => parsePageText(row.body), [row.body]);
-  return <TemplateTree scope={row.id} nodes={nodes} />;
+  return <TemplateTree scope={`template:${row.id}`} nodes={nodes} />;
 }
 
 /**
  * Дерево шаблона на показ. key по шаблону: другой шаблон — другое дерево, и вкладки, открытые в
- * одном, не должны переехать в другой. Память вкладок экрана — в пространстве шаблона.
+ * одном, не должны переехать в другой. Память вкладок экрана — в пространстве шаблона
+ * (`template:<id>`): одна на все записи этого шаблона — листая записи с «Деталей», человек на
+ * «Деталях» и остаётся. У страницы своим телом пространство своё, по странице (`DetailScreen`).
  */
 function TemplateTree({ scope, nodes }: { scope: string; nodes: readonly PageNode[] }) {
   return (

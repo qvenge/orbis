@@ -10,7 +10,7 @@ import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
 import { PageView } from '../page/PageView';
 import { RecordView } from '../page/RecordView';
-import { type TabMemory, TabMemoryProvider } from '../page/TabsContainer';
+import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsContainer';
 import { usePageTemplates } from '../page/usePageTemplates';
 import { DetailMenuSlot } from './DetailMenuSlot';
 import { BodyScreenProvider } from './EntityBody';
@@ -65,8 +65,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * скелетон: рендерер со вкладками размонтируется и встаёт заново. Своё состояние контейнера
    * сбросилось бы на «Запись», а человек, листавший подзадачи с «Деталей», хочет видеть «Детали»
    * соседней записи — единообразное «остаёмся там, где смотрели» (ревью Задачи 16 до среза).
-   * Поэтому при смене записи память НЕ сбрасывается — намеренно. Ключи — путь контейнера в
-   * пространстве шаблона (`TabMemoryScope`): вкладка одного шаблона не открывает вкладку другого.
+   * Поэтому при смене записи память НЕ сбрасывается — намеренно. Ключи — путь контейнера в своём
+   * пространстве (`TabMemoryScope`): у записи — шаблона (`template:<id>`, общее для всех записей
+   * шаблона), у страницы — самой страницы (`page:<id>`). Вкладка одного текста не открывает
+   * вкладку другого.
    */
   const [tabMemory, setTabMemory] = useState<Readonly<Record<string, string>>>({});
   const tabs = useMemo<TabMemory>(
@@ -315,7 +317,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             Шапка, меню, слой предложения и плашки над ними — прежние. Вкладки, их keepMounted
             (тело и «Детали» живы, «Тред» — только открытым) — дело шаблона и рендерера. */}
           {isPage ? (
-            <PageView reply={get.data} />
+            // Вкладки страницы — её собственные: пространство памяти по id страницы. Иначе третья
+            // вкладка страницы A открывала бы третью вкладку страницы B — это разные тексты.
+            <TabMemoryScope scope={`page:${entity.id}`}>
+              <PageView reply={get.data} />
+            </TabMemoryScope>
           ) : (
             <RecordView reply={get.data} {...(openVia !== undefined && { override: openVia })} />
           )}

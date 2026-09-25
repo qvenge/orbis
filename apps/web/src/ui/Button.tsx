@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes } from 'react';
+import type { ComponentProps } from 'react';
 
 type Variant = 'primary' | 'ghost' | 'outline';
 type Size = 'sm' | 'md' | 'icon';
@@ -21,13 +21,18 @@ const sizes: Record<Size, string> = {
   icon: 'h-8 w-8 p-0',
 };
 
+/**
+ * Тип пропсов — `ComponentProps<'button'>`, а не голые HTML-атрибуты: в React 19 `ref` — обычный
+ * проп функционального компонента и доходит до `<button>` вместе с прочими. Им пользуются Radix
+ * (`asChild`) и меню ⋮ экрана записи, возвращающее фокус своему триггеру.
+ */
 export function Button({
   variant = 'primary',
   size = 'md',
   type = 'button',
   className = '',
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: Size }) {
+}: ComponentProps<'button'> & { variant?: Variant; size?: Size }) {
   return (
     <button
       type={type}

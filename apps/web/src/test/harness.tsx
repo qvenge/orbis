@@ -119,11 +119,7 @@ const SUSPENDED = <div data-testid="harness-suspended">дерево подвис
  * подписка уходит даже там, где сьют проверяет навигацию или Бюджет. Без этой строки девяти
  * чужим сьютам пришлось бы знать форму чужого контракта — а хук был бы вынужден терпеть ответ,
  * которого контракт не допускает, и терпимость прятала бы настоящий разъезд клиента с сервером.
- *
- * `entity.query` — по той же причине: экран записи на КАЖДОМ открытии спрашивает список шаблонов
- * владельца (срез страниц 1а, `usePageTemplates`), и сьютам экрана записи незачем знать этот
- * запрос. Ответ — пустой список: другой формы `entity.query` не отдаёт, а «нет шаблонов» —
- * ровно тот мир, в котором писались эти сьюты (экран шаблоном хоста).
+
  */
 const UNROUTED_DEFAULTS: Readonly<Record<string, unknown>> = {
   'agenda.list': {
@@ -132,8 +128,19 @@ const UNROUTED_DEFAULTS: Readonly<Record<string, unknown>> = {
     rows: [],
     truncated: { window: false, overdue: false },
   },
-  'entity.query': [],
 };
+
+/**
+ * Умолчание за сьют по пути И входу. Список шаблонов владельца (срез страниц 1а, `usePageTemplates`)
+ * экран записи спрашивает на КАЖДОМ открытии — сьютам экрана записи незачем знать этот запрос, и
+ * ответ за них — пустой список: «нет шаблонов» — ровно тот мир, в котором они писались (экран
+ * шаблоном хоста). Только этот текст запроса: прочие `entity.query` сьют роутит сам, и пустой список
+ * за него спрятал бы запрос, которого он не ждал.
+ */
+function unroutedDefault(path: string, input: unknown): unknown {
+  if (isTemplatesListCall({ path, input })) return [];
+  return UNROUTED_DEFAULTS[path];
+}
 
 /** «Сьют этот путь не роутил»: пустой объект — то самое соглашение корпуса. */
 const unrouted = (value: unknown): boolean =>
@@ -175,7 +182,7 @@ export function renderWithProviders(
       mockLink(async (path, input) => {
         calls.push({ path, input });
         const answer = await handler(path, input);
-        const fallback = UNROUTED_DEFAULTS[path];
+        const fallback = unroutedDefault(path, input);
         return fallback !== undefined && unrouted(answer) ? fallback : answer;
       }),
     ],

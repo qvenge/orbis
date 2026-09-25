@@ -16,7 +16,7 @@ import { Markdown } from '../../lib/markdown/Markdown';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
-import { AspectCardFor, RestCards } from '../entity-detail/own-cards';
+import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
 import { NO_REGISTRY } from '../entity-editor/EditorShell';
 import { BlockPlaque } from './blocks/BlockPlaque';
@@ -267,7 +267,15 @@ function RecordNode({ name }: { name: keyof typeof RECORD_BLOCK_COMPONENTS }) {
 
 function CardNode({ text, raw }: { text: string; raw: string }) {
   const { reg } = useRenderPlan();
-  if (reg === null) return null;
+  if (reg === null) {
+    // Реестр ещё едет. Своя карточка встроенного аспекта, названного КЛЮЧОМ (у встроенных ключ =
+    // id), узнаётся и без него — и рисуется сразу, с ответом `entity.get`, как до шаблона хоста:
+    // прогресс цели, ожидание тикета, состояние рутины, лента прогона, «план → факт» не должны
+    // ждать лишний круг сети за реестром (С1а-6). Кому карточка положена, решает её `showWhen`.
+    // Подпись в кавычках и чужие аспекты без реестра не узнать — они ждут его.
+    const key = text.trim();
+    return Object.hasOwn(OWN_ASPECT_CARDS, key) ? <AspectCardFor aspectId={key} /> : null;
+  }
   const aspect = aspectOfCardText(text, reg);
   if (aspect === undefined) {
     // Аспект не узнан: опечатка, аспекта нет в реестре владельца или подпись в кавычках есть у

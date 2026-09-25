@@ -16,7 +16,7 @@ import {
 } from '@orbis/shared';
 import { parseBody } from '@orbis/shared/doc';
 import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
@@ -544,3 +544,158 @@ describe('разовый выбор и ожидание реестра', () => {
     expect(screen.queryByTestId('page-tabs')).toBeNull();
   });
 });
+
+describe('фикс-раунд 1: реестр, пачка спора', () => {
+  /** Ворота: пока закрыты, ответ ждёт. */
+  const gateOf = () => {
+    let open: () => void = () => {};
+    const promise = new Promise<void>((r) => {
+      open = r;
+    });
+    return { promise, open };
+  };
+
+  test('F1: реестр ещё едет — своя карточка цели уже на экране (С1а-6)', async () => {
+    const gate = gateOf();
+    openRecord(
+      fixture('goal'),
+      { templates: [] },
+      {
+        over: async (path) => {
+          if (path === 'registry.effective') await gate.promise;
+          return undefined;
+        },
+      },
+    );
+    // Карточка `{{card: orbis/goal}}` узнаётся по ключу без реестра: прогресс — с ответом записи.
+    expect(await screen.findByTestId('goal-progress')).toBeInTheDocument();
+    gate.open();
+    // Реестр доехал — карточка та же, дополнилась секцией полей цели.
+    expect(await screen.findByTestId('aspect-orbis/goal')).toBeInTheDocument();
+    expect(screen.getAllByTestId('goal-progress')).toHaveLength(1);
+  });
+
+  test('F2: реестр отказал на записи со своим шаблоном — шаблон хоста и плашка, а не вечный скелет', async () => {
+    openRecord(
+      fixture('project'),
+      {
+        templates: [template(TPL_A, 'Шаблон проекта', ['orbis/project'], 'Вид проекта A\n')],
+      },
+      {
+        over: (path) => {
+          if (path === 'registry.effective') throw trpcError('INTERNAL_SERVER_ERROR');
+          return undefined;
+        },
+      },
+    );
+    expect(await screen.findByTestId('registry-error')).toHaveTextContent(
+      'Реестр не загрузился — запись показана шаблоном хоста.',
+    );
+    expect(screen.getByTestId('page-tabs')).toBeInTheDocument();
+    expect(screen.queryByTestId('record-view-wait')).toBeNull();
+    expect(renderedTexts()).not.toContain('Вид проекта A');
+  });
+
+  test('F2: смена версии реестра — прежний снимок держится, кадра ожидания нет', async () => {
+    let hold: Promise<void> | null = null;
+    const gate = gateOf();
+    openRecord(
+      fixture('project'),
+      {
+        templates: [
+          template(TPL_A, 'Шаблон проекта', ['orbis/project'], 'Вид проекта A\n\n{{body}}\n'),
+        ],
+      },
+      {
+        over: async (path) => {
+          if (path === 'registry.effective' && hold !== null) await hold;
+          return undefined;
+        },
+      },
+    );
+    await waitFor(() => expect(renderedTexts()).toContain('Вид проекта A'));
+    const body = screen.getByTestId('editor-preview');
+    hold = gate.promise;
+    act(() => noteRegistryVersion('2.0-следующая'));
+    // Ключ реестра сменился, новый снимок держится воротами — а экран прежний, тело то же.
+    expect(screen.queryByTestId('record-view-wait')).toBeNull();
+    expect(renderedTexts()).toContain('Вид проекта A');
+    expect(screen.getByTestId('editor-preview')).toBe(body);
+    gate.open();
+  });
+
+  const contradictionWorld = (): World => ({
+    templates: [
+      template(TPL_A, 'Шаблон проекта', ['orbis/project'], 'Вид проекта A\n', {
+        createdAt: '2026-09-01T00:00:00.000Z',
+        winsOver: [TPL_B],
+      }),
+      template(TPL_B, 'Шаблон задачи', ['orbis/task'], 'Вид задачи B\n', {
+        createdAt: '2026-09-02T00:00:00.000Z',
+        winsOver: [TPL_A],
+      }),
+    ],
+  });
+
+  test('F8: противоречие A>B и B>A, выбор B — у A «Главнее, чем» снимается (unset), а не пишется пустым', async () => {
+    const { calls } = openRecord(fixture('project-task'), contradictionWorld());
+    const plaque = await screen.findByTestId('dispute-plaque');
+    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
+    await waitFor(() => expect(calls.some((c) => c.path === 'entity.updateBatch')).toBe(true));
+    expect(calls.find((c) => c.path === 'entity.updateBatch')?.input).toEqual({
+      operations: [
+        { tool: 'entity_update', input: { id: TPL_A, unset: [TEMPLATE_WINS_OVER_PROPERTY] } },
+      ],
+    });
+  });
+
+  test('F5: после записанного выбора плашка закрыта ещё до перечитывания списка — второй пачки нет', async () => {
+    const world = disputeWorldFor();
+    const listGate = gateOf();
+    let written = false;
+    const { calls } = openRecord(fixture('project-task'), world, {
+      over: async (path, input) => {
+        if (path === 'entity.updateBatch') written = true;
+        // Перечитывание списка после записи держится: окно, в котором кнопки были бы живы.
+        if (written && isTemplatesList(path, input)) await listGate.promise;
+        return undefined;
+      },
+    });
+    const plaque = await screen.findByTestId('dispute-plaque');
+    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
+    await waitFor(() => expect(screen.queryByTestId('dispute-plaque')).toBeNull());
+    expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(1);
+    listGate.open();
+    await waitFor(() => expect(renderedTexts()).toContain('Вид задачи B'));
+  });
+
+  test('F6: отказ пачки перечитывает список шаблонов', async () => {
+    const { calls } = openRecord(fixture('project-task'), disputeWorldFor(), {
+      over: (path) => {
+        if (path === 'entity.updateBatch') throw trpcError('BAD_REQUEST', 'цель архивна');
+        return undefined;
+      },
+    });
+    const plaque = await screen.findByTestId('dispute-plaque');
+    const lists = () => calls.filter((c) => isTemplatesList(c.path, c.input)).length;
+    const before = lists();
+    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
+    await waitFor(() => expect(lists()).toBeGreaterThan(before));
+    // Плашка осталась: выбор не записан, спросить снова честно.
+    expect(screen.getByTestId('dispute-plaque')).toBeInTheDocument();
+  });
+});
+
+/** Спор A{project} / B{task} без запомненного выбора — для тестов фикс-раунда. */
+function disputeWorldFor(): World {
+  return {
+    templates: [
+      template(TPL_A, 'Шаблон проекта', ['orbis/project'], 'Вид проекта A\n', {
+        createdAt: '2026-09-01T00:00:00.000Z',
+      }),
+      template(TPL_B, 'Шаблон задачи', ['orbis/task'], 'Вид задачи B\n', {
+        createdAt: '2026-09-02T00:00:00.000Z',
+      }),
+    ],
+  };
+}

@@ -1,23 +1,11 @@
 import { useState } from 'react';
 import { FIELD_CLASS } from '../../lib/registry/controls';
 import { fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
-import type { RouterOutputs } from '../../trpc';
-import { AspectSections } from './AspectSection';
-import { SECTION_REPLACED } from './own-cards';
 
-type Entity = RouterOutputs['entity']['get']['entity'];
-
-/**
- * Свойства записи — секции всех аспектов, кроме тех, чью общую секцию заменяет своя карточка
- * (`SECTION_REPLACED`), и секция «Свойства». Сами секции и их правка — в `AspectSection.tsx`.
- *
- * Экран записи этим больше не рисует (с задачи 14 страниц 1а раскладку ставит шаблон:
- * `{{card: X}}` — `AspectCardFor`, `{{cards}}` — `RestCards`); сборка осталась потребителям,
- * которым нужны все секции записи разом без шаблона, — сьютам секций свойств (`detail.test.tsx`).
- */
-export function AspectCards({ entity }: { entity: Entity }) {
-  return <AspectSections entity={entity} exclude={SECTION_REPLACED} />;
-}
+// Секции свойств записи — в `AspectSection.tsx`, выбор «какие» — у шаблона (`{{card: X}}` —
+// `AspectCardFor`, `{{cards}}` — `RestCards`, own-cards.tsx). Прежняя сборка «все секции записи»
+// (`AspectCards`) снята задачей 14 страниц 1а: экран записи ею больше не рисует. Здесь остались
+// помощники строки слоя предложения.
 
 // Восстановление типа поля из исходного значения (правка идёт как строка из Input).
 // Нескалярное сюда не доходит вовсе — такие строки не редактируются (см. `isScalar`).

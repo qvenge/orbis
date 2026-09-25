@@ -384,3 +384,46 @@ test('{{card: X}} с неузнанным аспектом — честная с
   // Неоднозначная подпись не угадана: карточки цели нет.
   expect(within(view).queryByTestId('aspect-orbis/goal')).toBeNull();
 });
+
+test('вкладки страницы — её собственные: третья вкладка страницы A не открывает третью у B', async () => {
+  const withTabs = (p: string) =>
+    `{{tabs}}\n{{tab: Один}}\n${p} один\n{{/tab}}\n{{tab: Два}}\n${p} два\n{{/tab}}\n{{tab: Три}}\n${p} три\n{{/tab}}\n{{/tabs}}\n`;
+  const a = page(withTabs('Утро'));
+  const b = page(withTabs('Вечер'), { id: MENTIONER_ID, title: 'Вечер' });
+  useNav.setState({
+    activeTab: 'browser',
+    stacks: { chat: [], browser: [{ kind: 'entity', id: a.id }], agenda: [], budget: [] },
+  });
+  // Переход страница → страница внутри того же экрана (роутер монтирует его без key).
+  function Switcher() {
+    const [id, setId] = useState(a.id);
+    return (
+      <>
+        <button type="button" data-testid="go-b" onClick={() => setId(b.id)}>
+          на B
+        </button>
+        <DetailScreen entityId={id} />
+      </>
+    );
+  }
+  renderWithProviders(<Switcher />, (path, input) => {
+    if (path === 'entity.get') {
+      const entity = (input as { id: string }).id === a.id ? a : b;
+      return {
+        entity,
+        relations: [],
+        backlinks: [],
+        thread: null,
+        registryVersion: BUILTIN_REGISTRY.version,
+      };
+    }
+    return registryReply(path) ?? {};
+  });
+  fireEvent.click(await screen.findByRole('tab', { name: 'Три' }));
+  expect(screen.getByRole('tab', { name: 'Три' })).toHaveAttribute('data-state', 'active');
+
+  fireEvent.click(screen.getByTestId('go-b'));
+  await screen.findByRole('heading', { name: 'Вечер' });
+  expect(await screen.findByRole('tab', { name: 'Один' })).toHaveAttribute('data-state', 'active');
+  expect(screen.getByRole('tab', { name: 'Три' })).toHaveAttribute('data-state', 'inactive');
+});

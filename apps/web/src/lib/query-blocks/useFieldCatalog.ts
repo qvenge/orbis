@@ -3,8 +3,10 @@ import { useRegistry } from '../registry/useRegistry';
 import { type QueryRegistry, registryOf } from './catalog';
 
 export interface FieldCatalogState {
-  /** null — реестр ещё едет; потребитель обязан показать загрузку, а не пустой каталог. */
+  /** null — реестр ещё едет (или не приедет, см. `failed`); потребитель обязан показать загрузку, а не пустой каталог. */
   registry: QueryRegistry | null;
+  /** Запрос реестра отказал, снимка нет: ждать бесполезно (`RegistryView.failed`). */
+  failed: boolean;
 }
 
 /**
@@ -27,5 +29,6 @@ export interface FieldCatalogState {
 export function useFieldCatalog(): FieldCatalogState {
   const registry = useRegistry();
   const data = registry.data;
-  return useMemo(() => ({ registry: registryOf(data) }), [data]);
+  const failed = registry.failed;
+  return useMemo(() => ({ registry: registryOf(data), failed }), [data, failed]);
 }

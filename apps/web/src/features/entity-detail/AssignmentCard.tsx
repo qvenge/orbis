@@ -64,7 +64,7 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
   const grantSelectId = useId();
   // Список доступов спрашиваем ТОЛЬКО когда он нужен: карточка висит на каждой задаче, а
   // владельцу, назначающему человека, список агентов не нужен вовсе (тот же приём, что у
-  // пикера категорий — AspectCards.tsx:150-154).
+  // пикера ссылки — `RefField`, список монтируется только там, где свойство есть).
   const grants = trpc.oauth.listGrants.useQuery(undefined, { enabled: draft.executor === 'agent' });
   // Отозванный доступ выбирать нельзя: сервер откажет NOT_FOUND (`assertGrantAlive`,
   // `executor/invariants.ts`).

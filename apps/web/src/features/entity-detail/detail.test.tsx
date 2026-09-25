@@ -25,7 +25,7 @@ import { Toaster } from '../../ui/Toast';
 import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { setDraftScope } from '../entity-editor/draft-storage';
-import { AspectCards } from './AspectCards';
+import { AspectSections } from './AspectSection';
 import { DetailScreen } from './DetailScreen';
 import { RoutineStatusBlock } from './RoutineStatusBlock';
 import { detailGetInput } from './useEntityDetail';
@@ -849,9 +849,16 @@ test('financial: рефетч списка упал, но список уже е
  * Прямой `setOnline(false)` перед рендером больше не годится: форма свойств строится по
  * РЕЕСТРУ, а его запрос офлайн тоже встаёт на паузу — карточка вышла бы пустой, и проба
  * проверяла бы отсутствие формы, а не подпись пикера. Флаг состояния, а не один эффект:
- * гонку «AspectCards уже смонтировался и успел сходить за категориями онлайн» иначе не
+ * гонку «секции уже смонтировались и успел сходить за категориями онлайн» иначе не
  * закрыть — запрос уходит в том же коммите, в котором эффект только собирается сработать.
  */
+/**
+ * Секции свойств всех аспектов записи — то, что прежде собирал `AspectCards` (снят задачей 14
+ * страниц 1а: экран ставит секции через шаблон). У финансовых записей этих тестов своих карточек
+ * без секции (назначение, прогон) нет, так что исключать нечего.
+ */
+const NO_EXCLUDED: ReadonlySet<string> = new Set();
+
 function CardsOfflineAfterRegistry({ entity }: { entity: typeof finEntity }) {
   const registry = useRegistry();
   const [offline, setOffline] = useState(false);
@@ -861,7 +868,7 @@ function CardsOfflineAfterRegistry({ entity }: { entity: typeof finEntity }) {
       setOffline(true);
     }
   }, [registry.data, offline]);
-  return offline ? <AspectCards entity={entity} /> : null;
+  return offline ? <AspectSections entity={entity} exclude={NO_EXCLUDED} /> : null;
 }
 
 test('financial: офлайн-пауза списка категорий — «Загрузка…», а не «Категория не найдена»', async () => {
@@ -934,7 +941,7 @@ function CardsUntilHidden({ entity: target }: { entity: typeof taskedFin }) {
       <button type="button" data-testid="leave-screen" onClick={() => setHidden(true)}>
         уйти с экрана
       </button>
-      {!hidden && <AspectCards entity={target} />}
+      {!hidden && <AspectSections entity={target} exclude={NO_EXCLUDED} />}
     </>
   );
 }
@@ -1024,7 +1031,7 @@ test('правка свойства Финансов гасит бюджетны
   const { calls } = renderWithProviders(
     <>
       <BudgetProbe />
-      <AspectCards entity={taskedFin} />
+      <AspectSections entity={taskedFin} exclude={NO_EXCLUDED} />
     </>,
     (path) => {
       if (path === 'budget.alertCount') return 0;
@@ -1236,6 +1243,45 @@ test('меню ⋮ грузится в простое закрытым и отк
   expect(screen.queryByRole('menu')).toBeNull();
   await openDetailMenu();
   expect(screen.getByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
+});
+
+test('меню ⋮ с клавиатуры до загрузки: Tab до кнопки, Enter — меню открыто, фокус в пунктах', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  const button = await screen.findByTestId('detail-menu');
+  // Табом, как человек без мыши: заглушка — обычная кнопка в порядке обхода.
+  for (let i = 0; i < 30 && document.activeElement !== button; i++) await userEvent.tab();
+  expect(button).toHaveFocus();
+  // Наведение и фокус только прогревают модуль: узел кнопки не сменился, фокус не потерян.
+  expect(screen.getByTestId('detail-menu')).toBe(button);
+  await userEvent.keyboard('{Enter}');
+  const menu = await screen.findByRole('menu');
+  await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
+});
+
+test('меню ⋮: заглушка сменилась в простое, пока на ней фокус, — фокус у настоящего триггера', async () => {
+  // Простой просят и меню, и редактор тела (EditorShell) — наступает он для всех разом.
+  const idle: (() => void)[] = [];
+  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+    idle.push(cb);
+    return idle.length;
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  const button = await screen.findByTestId('detail-menu');
+  act(() => button.focus());
+  await act(async () => {
+    for (const cb of idle.splice(0)) cb();
+  });
+  await waitFor(() =>
+    expect(screen.getByTestId('detail-menu')).toHaveAttribute('aria-haspopup', 'menu'),
+  );
+  expect(screen.getByTestId('detail-menu')).toHaveFocus();
+  expect(screen.queryByRole('menu')).toBeNull();
+});
+
+test('меню ⋮: нажатие до загрузки чанка не теряется — меню открывается, когда чанк приехал', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  fireEvent.click(await screen.findByTestId('detail-menu'));
+  expect(await screen.findByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
 });
 
 test('меню ⋮: «Скопировать ссылку» кладёт абсолютный адрес сущности в буфер', async () => {
@@ -1774,7 +1820,7 @@ const richHandler: MockHandler = (path, input) => {
  * Разница видна ровно на пустом поле: у задачи без срока строки «Срок» на экране НЕ БЫЛО
  * вовсе — цикл шёл по `aspects[аспект][поле]`, — и поставить срок из формы было нечем.
  */
-test('AspectCards: у задачи без срока поле «Срок» показано пустым и редактируемо', async () => {
+test('секции свойств: у задачи без срока поле «Срок» показано пустым и редактируемо', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, richHandler);
   const section = await screen.findByTestId('aspect-orbis/task');
   const due = await within(section).findByLabelText('Срок');
@@ -1792,7 +1838,7 @@ test('AspectCards: у задачи без срока поле «Срок» по�
   );
 });
 
-test('AspectCards: состав и ПОРЯДОК строк — из реестра, а не из заполненных значений', async () => {
+test('секции свойств: состав и ПОРЯДОК строк — из реестра, а не из заполненных значений', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, richHandler);
   const section = await screen.findByTestId('aspect-orbis/task');
   const labels = [...section.querySelectorAll('dt')].map((dt) => dt.textContent);
@@ -1808,7 +1854,7 @@ test('AspectCards: состав и ПОРЯДОК строк — из реест
   ]);
 });
 
-test('AspectCards: boolean — чекбокс, а вычисляемое свойство — только чтение с пометкой', async () => {
+test('секции свойств: boolean — чекбокс, а вычисляемое свойство — только чтение с пометкой', async () => {
   // Цель несёт `orbis/current_value` (`model_writable: false` — кэш расчёта) и аспект
   // расписания с булевым «Весь день»: два разных ответа на вопрос «чем это правят».
   const entityWithBoth = wireEntity({
@@ -1879,7 +1925,7 @@ test('блоки видны у аспекта БЕЗ единого заполн
   expect(within(card).getByRole('button', { name: 'Снять назначение' })).toBeEnabled();
 });
 
-test('AspectCards: значение без носителя показано секцией «Свойства», а не потеряно', async () => {
+test('секции свойств: значение без носителя показано секцией «Свойства», а не потеряно', async () => {
   // Снятие аспекта значений НЕ трогает (Р9), и своё свойство владельца носителя не имеет
   // вовсе. Спрятать такую строку значило бы: значение участвует в запросах и агрегатах, а
   // владелец не может ни увидеть его, ни снять.
@@ -3605,7 +3651,7 @@ describe('ADE: тикет', () => {
 //
 // Прогон — НЕ тикет: аспекта `orbis/task` у него нет, поэтому ни блока ожидания, ни истории
 // прогонов, ни подметания на нём быть не должно. Всё, ради чего его открывают, рисует ОДНА
-// лента: общая карточка свойств аспект прогона прячет (AspectCards), а править его поля
+// лента: общей секции свойств у аспекта прогона нет (его карточка — лента), а править его поля
 // владельцу нечем — их пишет исполнитель.
 
 /**
@@ -5427,7 +5473,7 @@ describe('слой предложения', () => {
     await userEvent.clear(input);
     await userEvent.type(input, 'in_progress');
     fireEvent.blur(input);
-    // Р-16: тот же `onSave` на самой записи (AspectCards) шлёт entity.update НЕМЕДЛЕННО.
+    // Р-16: тот же `onSave` на самой записи (секции свойств) шлёт entity.update НЕМЕДЛЕННО.
     // В слое правка обязана лечь в буфер: граф двигает «Принять», а не набор в поле.
     expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
 

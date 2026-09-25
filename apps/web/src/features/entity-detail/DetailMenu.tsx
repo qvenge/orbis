@@ -1,4 +1,5 @@
 import { Archive, ArchiveRestore, Code, History, Link2, Pin } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { DropdownMenu } from '../../ui/DropdownMenu';
 import { MenuTrigger } from './MenuTrigger';
 
@@ -30,15 +31,28 @@ export function DetailMenu({
   onToggleMarkdown,
   archived,
   defaultOpen,
+  focusTrigger,
 }: DetailMenuProps & {
   /** Жест пришёл, пока меню грузилось (`DetailMenuSlot`): встать уже открытым. */
   defaultOpen: boolean;
+  /**
+   * Фокус стоял на заглушке, которую это меню сменило: вернуть его триггеру. Иначе человек,
+   * дошедший до кнопки табом, после подгрузки в простое оказывался бы в никуда (фокус на `body`).
+   * Открытому меню не нужно: фокус в его пункты ставит сам Radix.
+   */
+  focusTrigger: boolean;
 }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Только на монтировании: заглушка сменяется меню один раз за жизнь экрана.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: намеренно один раз, см. выше
+  useEffect(() => {
+    if (focusTrigger && !defaultOpen) triggerRef.current?.focus();
+  }, []);
   const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
   return (
     <DropdownMenu
       defaultOpen={defaultOpen}
-      trigger={<MenuTrigger />}
+      trigger={<MenuTrigger ref={triggerRef} />}
       items={[
         { label: 'Закрепить', icon: <Pin size={16} aria-hidden />, onSelect: onPin },
         {
