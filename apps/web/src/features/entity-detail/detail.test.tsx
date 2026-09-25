@@ -26,6 +26,7 @@ import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { setDraftScope } from '../entity-editor/draft-storage';
 import { AspectSections } from './AspectSection';
+import { resetDetailMenuModuleForTests } from './DetailMenuSlot';
 import { DetailScreen } from './DetailScreen';
 import { RoutineStatusBlock } from './RoutineStatusBlock';
 import { detailGetInput } from './useEntityDetail';
@@ -98,6 +99,9 @@ beforeEach(() => {
   // первый же тест, открывший «Тред» записи e1, оставлял бы следующему нулевое число вызовов
   // ensureThread — и проверка «завели ровно один раз» краснела бы от соседа, а не от кода.
   resetEnsuredThreads();
+  // Модуль меню ⋮ тоже помнит МОДУЛЬ (DetailMenuSlot): без сброса все тесты файла после первого,
+  // открывшего меню, шли бы с уже загруженным чанком, и «жест до загрузки» не проверялся бы.
+  resetDetailMenuModuleForTests();
   // requestIdleCallback, которого никто не дёрнет: редактор обязан вставать по ЖЕСТУ теста, а
   // не сам собой по запасному таймеру простоя (1500 мс) посреди чужого ожидания. jsdom своей
   // реализации не имеет, поэтому подмена именно ДОБАВЛЯЕТ ветку простоя — и она молчит

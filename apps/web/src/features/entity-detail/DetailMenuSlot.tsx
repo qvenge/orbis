@@ -6,12 +6,31 @@ import { MenuTrigger } from './MenuTrigger';
  * Меню ⋮ живёт в своём чанке (рычаг веса РП-11 задачи 14 страниц 1а: чанк экрана записи вырос
  * шаблоном хоста за порог +15 %, а Radix-меню — самый крупный кусок, которому в первом кадре
  * делать нечего). Промис загрузки один на приложение: прогрев и загрузка ведут к тому же модулю.
+ *
+ * Отказ загрузки промис НЕ запоминает: отвергнутый промис в кеше делал бы кнопку мёртвой до
+ * перезагрузки страницы, и следующий жест даже не попытался бы снова.
  */
 let menuModule: Promise<typeof import('./DetailMenu')> | null = null;
 const loadMenu = () => {
-  menuModule ??= import('./DetailMenu');
+  menuModule ??= import('./DetailMenu').catch((error: unknown) => {
+    menuModule = null;
+    throw error;
+  });
   return menuModule;
 };
+
+/** Прогрев (наведение, фокус, простой) молчит об отказе: о нём скажет жест, если он будет. */
+const warmMenu = () => {
+  loadMenu().catch(() => {});
+};
+
+/**
+ * Забыть загруженный модуль — ТОЛЬКО для тестов: без этого все тесты файла, кроме первого, шли бы
+ * с уже загруженным меню, и «жест до загрузки чанка» не проверялся бы вовсе.
+ */
+export function resetDetailMenuModuleForTests(): void {
+  menuModule = null;
+}
 
 /** Жесты, которыми Radix открывает меню с клавиатуры (`DropdownMenu.Trigger`). */
 const OPEN_KEYS = new Set(['Enter', ' ', 'ArrowDown']);
@@ -40,6 +59,12 @@ export function DetailMenuSlot(props: DetailMenuProps) {
   // Жест, пришедший до загрузки: меню, загрузившееся после него, обязано встать открытым — даже
   // если загрузку начал простой, а не сам жест.
   const wantOpenRef = useRef(false);
+  /**
+   * Отказ загрузки на ЖЕСТ — бросается из рендера к границе ошибок экрана (`ChunkErrorBoundary`):
+   * там кадр «Не удалось открыть экран» с перезагрузкой, тот же, что давал `React.lazy` до
+   * задачи 14. Кнопка, молча не делающая ничего, была бы хуже: человек не узнал бы, что меню нет.
+   */
+  const [loadError, setLoadError] = useState<{ error: unknown } | null>(null);
   const aliveRef = useRef(true);
   useEffect(() => {
     aliveRef.current = true;
@@ -48,40 +73,48 @@ export function DetailMenuSlot(props: DetailMenuProps) {
     };
   }, []);
 
-  const mount = useCallback(() => {
-    void loadMenu().then((m) => {
-      if (!aliveRef.current) return;
-      setMounted(
-        (prev) =>
-          prev ?? {
-            Menu: m.DetailMenu,
-            open: wantOpenRef.current,
-            focusTrigger: document.activeElement === buttonRef.current,
-          },
-      );
-    });
+  const mount = useCallback((byGesture: boolean) => {
+    loadMenu().then(
+      (m) => {
+        if (!aliveRef.current) return;
+        setMounted(
+          (prev) =>
+            prev ?? {
+              Menu: m.DetailMenu,
+              open: wantOpenRef.current,
+              focusTrigger: document.activeElement === buttonRef.current,
+            },
+        );
+      },
+      (error: unknown) => {
+        // Отказ в простое — молча: человек ничего не нажимал, а кнопка жива, и жест повторит
+        // загрузку. Отказ на жест — видимый (см. `loadError`).
+        if (byGesture && aliveRef.current) setLoadError({ error });
+      },
+    );
   }, []);
 
   useEffect(() => {
     // Простоя в окружении может не быть (Safari, jsdom) — тогда меню ждёт жеста.
     if (typeof window.requestIdleCallback !== 'function') return;
-    const id = window.requestIdleCallback(mount);
+    const id = window.requestIdleCallback(() => mount(false));
     return () => window.cancelIdleCallback?.(id);
   }, [mount]);
 
+  if (loadError !== null) throw loadError.error;
   if (mounted !== null) {
     const { Menu } = mounted;
     return <Menu {...props} defaultOpen={mounted.open} focusTrigger={mounted.focusTrigger} />;
   }
   const open = () => {
     wantOpenRef.current = true;
-    mount();
+    mount(true);
   };
   return (
     <MenuTrigger
       ref={buttonRef}
-      onPointerEnter={() => void loadMenu()}
-      onFocus={() => void loadMenu()}
+      onPointerEnter={warmMenu}
+      onFocus={warmMenu}
       onClick={open}
       onKeyDown={(e) => {
         if (!OPEN_KEYS.has(e.key)) return;
