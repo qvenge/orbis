@@ -172,12 +172,26 @@ test('RestCards({placed: {orbis/goal}}) на цели с расписанием 
 test('AspectCardFor(orbis/assignment) на простой задаче — карточка назначения (исполнителя ставят с неё)', async () => {
   const f = fixture('task');
   expect(f.entity.aspects).toEqual(['orbis/task']);
-  renderUnder(f, <AspectCardFor aspectId="orbis/assignment" />);
+  const plain = renderUnder(f, <AspectCardFor aspectId="orbis/assignment" />);
   expect(await screen.findByTestId('assignment-card')).toBeInTheDocument();
-  // Простая задача — не тикет: ни ожидания, ни истории прогонов.
-  expect(screen.queryByTestId('ticket-waiting')).toBeNull();
-  expect(screen.queryByTestId('runs-list')).toBeNull();
+  // Простая задача — не тикет, и прогонов у неё не бывает: запрос истории (`useTicketRuns`) у
+  // неё НЕ уходит. Сверка по сети, а не по отсутствию блоков: ожидание вне `waiting` и история
+  // без прогонов и так рисуют ничего, и проверка по DOM была бы пустой (ре-ревью задачи 12).
+  await new Promise((r) => setTimeout(r, 50));
+  expect(runsQueries(plain.calls)).toBe(0);
+  plain.unmount();
+
+  // Положительный контроль того же пути: у тикета запрос истории уходит.
+  const ticket = renderUnder(fixture('ticket'), <AspectCardFor aspectId="orbis/assignment" />);
+  await screen.findByTestId('assignment-card');
+  await waitFor(() => expect(runsQueries(ticket.calls)).toBeGreaterThan(0));
 });
+
+/** Сколько раз ушёл запрос истории прогонов (`useTicketRuns`: дети записи с аспектом прогона). */
+const runsQueries = (calls: { path: string; input: unknown }[]): number =>
+  calls.filter(
+    (c) => c.path === 'entity.query' && JSON.stringify(c.input).includes('orbis/agent-run'),
+  ).length;
 
 describe('RestCards({placed: ∅}) — неразмещённые свои карточки целиком (§5.3, §8.3)', () => {
   const NONE = new Set<string>();
@@ -195,6 +209,14 @@ describe('RestCards({placed: ∅}) — неразмещённые свои ка�
     expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
     await screen.findByTestId('aspect-orbis/task');
     expect(aspectSections(container)).toEqual(['aspect-orbis/task']);
+  });
+
+  test('рутина: своя карточка — секция полей, состояние и история; секция рутины одна', async () => {
+    const { container } = renderUnder(fixture('routine'), <RestCards placed={NONE} />);
+    expect(await screen.findByTestId('routine-status')).toBeInTheDocument();
+    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('aspect-orbis/routine');
+    expect(aspectSections(container)).toEqual(['aspect-orbis/routine']);
   });
 
   test('прогон: лента целиком', async () => {
