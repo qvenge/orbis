@@ -1,6 +1,7 @@
 import { screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { renderWithProviders, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { DetailScreen } from './DetailScreen';
 import { RUN_POLL_MS, runPollInterval } from './run-poll';
 
@@ -60,7 +61,9 @@ describe('экран прогона', () => {
         return { entity: { id: (input as { id: string }).id, title: 'Утренний обзор' } };
       }
       if (path === 'routine.proposal') return null;
-      return {};
+      // Реестр — шаблону хоста: ленту прогона он ставит карточкой `{{card: orbis/agent-run}}`, а
+      // карточку по имени аспекта узнаёт только реестр (задача 14 страниц 1а).
+      return registryReply(path) ?? {};
     });
     await screen.findByTestId('run-feed');
     const gets = () =>

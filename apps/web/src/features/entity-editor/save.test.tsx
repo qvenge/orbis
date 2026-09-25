@@ -1522,6 +1522,18 @@ test('модули первого кадра не тянут схему реда
     '../page/Columns.tsx',
     '../page/TabsContainer.tsx',
     '../page/PageView.tsx',
+    // Экран записи через шаблон (задача 14): КАЖДАЯ запись открывается выбором шаблона, текстом
+    // шаблона хоста и его плашками — они эагерны так же, как рендерер. Шаблон хоста разбирается
+    // при загрузке модуля: баррель здесь стоил бы схемы в первом кадре каждого открытия.
+    '../page/host-template.ts',
+    '../page/usePageTemplates.ts',
+    '../page/RecordView.tsx',
+    '../page/TemplatePlaques.tsx',
+    '../page/BaseRecordView.tsx',
+    // Кнопка меню ⋮ — эагерная заглушка ленивого меню (рычаг веса задачи 14); само меню
+    // (`DetailMenu.tsx`) ленивое и сторожится наличием своего чанка (check-lazy-chunks).
+    '../entity-detail/DetailMenuSlot.tsx',
+    '../entity-detail/MenuTrigger.tsx',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

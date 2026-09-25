@@ -69,6 +69,16 @@ const SHARED_CHUNKS = ['NativeRow', 'txQuery'];
 const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
 
 /**
+ * Ленивые модули экрана записи — ради ВЕСА его первого кадра, а не ради схемы документа.
+ *
+ * `DetailMenu` — меню ⋮ с деревом Radix-меню (menu, popper, floating-ui; ≈7,7 кБ gzip). Шаблон хоста
+ * (срез страниц 1а, задача 14) довёл чанк `DetailScreen` до +17 % от базы среза, за порог сторожа
+ * РП-11 (+15 %); меню нужно только после жеста и стало ленивым (точка лени — `DetailMenuSlot.tsx`).
+ * Статический импорт `DetailMenu.tsx` схлопнул бы чанк обратно — молча, как у редактора выше.
+ */
+const LAZY_DETAIL_MODULES = ['DetailMenu'];
+
+/**
  * ТРЕТЬЯ проверка — СОСТАВ чанка, а не его наличие (Ш1, задача 11).
  *
  * Две проверки выше слепы к самой дорогой регрессии, и это ЗАМЕРЕНО, а не выведено. Разведка
@@ -123,7 +133,7 @@ try {
   process.exit(1);
 }
 
-const guarded = [...LAZY_SCREENS, ...SHARED_CHUNKS, ...LAZY_EDITOR_MODULES];
+const guarded = [...LAZY_SCREENS, ...SHARED_CHUNKS, ...LAZY_EDITOR_MODULES, ...LAZY_DETAIL_MODULES];
 const missing = guarded.filter(
   (name) => !files.some((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f)),
 );
@@ -244,7 +254,8 @@ for (const edge of FORBIDDEN_EDGES) {
 console.log(
   `check-lazy-chunks: ok — отдельные чанки на месте у всех ${guarded.length} ` +
     `(${LAZY_SCREENS.length} экранов + ${SHARED_CHUNKS.length} общих + ` +
-    `${LAZY_EDITOR_MODULES.length} ленивых модулей редактора), список экранов сверен с роутером, ` +
+    `${LAZY_EDITOR_MODULES.length} ленивых модулей редактора + ` +
+    `${LAZY_DETAIL_MODULES.length} ленивого модуля экрана записи), список экранов сверен с роутером, ` +
     `состав чанков сверен по ${FORBIDDEN_EDGES.length} запрещённому ребру ` +
     `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}).`,
 );

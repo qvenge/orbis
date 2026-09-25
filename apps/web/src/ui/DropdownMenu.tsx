@@ -24,12 +24,18 @@ export type DropdownMenuItem = {
 export function DropdownMenu({
   trigger,
   items,
+  defaultOpen,
 }: {
   trigger: ReactNode;
   items: DropdownMenuItem[];
+  /**
+   * Открыто ли меню при монтировании. Нужно меню, которое грузится лениво (меню ⋮ экрана записи):
+   * жест, пришедший до загрузки, не должен пропасть — меню встаёт уже открытым.
+   */
+  defaultOpen?: boolean;
 }) {
   return (
-    <RDM.Root>
+    <RDM.Root {...(defaultOpen !== undefined && { defaultOpen })}>
       <RDM.Trigger asChild>{trigger}</RDM.Trigger>
       <RDM.Portal>
         <RDM.Content

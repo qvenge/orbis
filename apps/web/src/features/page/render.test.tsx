@@ -277,9 +277,10 @@ test('{{cards}} на странице своим телом не рисует к
   expect(within(view).queryByTestId(`aspect-${PAGE_ASPECT}`)).toBeNull();
 });
 
-test('обычная запись без аспекта «страница» — прежний экран с вкладками', async () => {
+test('обычная запись без аспекта «страница» — шаблоном хоста с вкладками, а не своим телом', async () => {
   openPage(wireEntity({ id: PAGE_ID, title: 'Заметка', body: '{{title}}\n' }));
-  expect(await screen.findByTestId('entity-tabs')).toBeInTheDocument();
+  expect(await screen.findByTestId('record-view')).toBeInTheDocument();
+  expect(screen.getByTestId('page-tabs')).toBeInTheDocument();
   expect(screen.queryByTestId('page-view')).toBeNull();
 });
 

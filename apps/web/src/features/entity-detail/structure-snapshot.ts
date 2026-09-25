@@ -20,8 +20,13 @@ export interface DetailStructure {
   tabs: { label: string; parts: string[] }[]; // подпись вкладки + ориентиры её панели
 }
 
-/** Узел вкладок экрана записи (DetailScreen): граница «над вкладками» / «внутри вкладок». */
-const TABS_TESTID = 'entity-tabs';
+/**
+ * Узел вкладок экрана записи: граница «над вкладками» / «внутри вкладок». Два имени — два экрана:
+ * `page-tabs` — контейнер `{{tabs}}` шаблона хоста (экран с задачи 14), `entity-tabs` — вкладки
+ * экрана до среза, с которого снят эталон (им пользуется съёмка, `structure.capture.test.tsx`).
+ * Первым ищется новый: на новом экране старого узла нет вовсе, так что выбор однозначен.
+ */
+const TABS_TESTIDS = ['page-tabs', 'entity-tabs'] as const;
 
 /**
  * Имена ориентиров. Все, кроме трёх помеченных, — `data-testid` экрана один в один.
@@ -141,7 +146,10 @@ function collect(root: Element, skip?: Element): string[] {
 }
 
 export function snapshotDetailStructure(container: HTMLElement): DetailStructure {
-  const tabsRoot = container.querySelector(`[data-testid="${TABS_TESTID}"]`) ?? undefined;
+  const tabsRoot =
+    TABS_TESTIDS.map((id) => container.querySelector(`[data-testid="${id}"]`)).find(
+      (el) => el !== null,
+    ) ?? undefined;
   const aboveTabs = collect(container, tabsRoot);
   if (tabsRoot === undefined) return { aboveTabs, tabs: [] };
   const doc = container.ownerDocument;

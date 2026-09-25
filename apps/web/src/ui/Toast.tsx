@@ -54,6 +54,18 @@ export function Toaster() {
           className={toneClass(t.tone)}
         >
           <RTo.Title>{t.title}</RTo.Title>
+          {t.action !== undefined && (
+            <RTo.Action
+              altText={t.action.label}
+              className="mt-2 text-sm font-medium underline underline-offset-2"
+              onClick={() => {
+                t.action?.onSelect();
+                dismiss(t.id);
+              }}
+            >
+              {t.action.label}
+            </RTo.Action>
+          )}
         </RTo.Root>
       ))}
       <RTo.Viewport

@@ -6,6 +6,7 @@ import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
 import { type ReactNode, StrictMode, Suspense } from 'react';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
+import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
 import { trpc } from '../trpc';
 
@@ -118,6 +119,11 @@ const SUSPENDED = <div data-testid="harness-suspended">дерево подвис
  * подписка уходит даже там, где сьют проверяет навигацию или Бюджет. Без этой строки девяти
  * чужим сьютам пришлось бы знать форму чужого контракта — а хук был бы вынужден терпеть ответ,
  * которого контракт не допускает, и терпимость прятала бы настоящий разъезд клиента с сервером.
+ *
+ * `entity.query` — по той же причине: экран записи на КАЖДОМ открытии спрашивает список шаблонов
+ * владельца (срез страниц 1а, `usePageTemplates`), и сьютам экрана записи незачем знать этот
+ * запрос. Ответ — пустой список: другой формы `entity.query` не отдаёт, а «нет шаблонов» —
+ * ровно тот мир, в котором писались эти сьюты (экран шаблоном хоста).
  */
 const UNROUTED_DEFAULTS: Readonly<Record<string, unknown>> = {
   'agenda.list': {
@@ -126,6 +132,7 @@ const UNROUTED_DEFAULTS: Readonly<Record<string, unknown>> = {
     rows: [],
     truncated: { window: false, overdue: false },
   },
+  'entity.query': [],
 };
 
 /** «Сьют этот путь не роутил»: пустой объект — то самое соглашение корпуса. */
@@ -188,6 +195,18 @@ export function renderWithProviders(
   );
   const result = render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
   return Object.assign(result, { calls });
+}
+
+/**
+ * Вызов — список шаблонов владельца (срез страниц 1а, `usePageTemplates`)? Экран записи шлёт его на
+ * каждом открытии; сьюты, которые считают СВОИ `entity.query` (список категорий, пикер,
+ * истории прогонов), отделяют его этим предикатом, а не номером вызова.
+ */
+export function isTemplatesListCall(c: { path: string; input: unknown }): boolean {
+  return (
+    c.path === 'entity.query' &&
+    (c.input as { query?: unknown } | undefined)?.query === PAGE_TEMPLATES_QUERY
+  );
 }
 
 /** Ответ одному блоку пачки: строки (сокращение для `kind:'rows'` без остатка) или сам результат. */

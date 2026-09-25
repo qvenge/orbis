@@ -1,40 +1,22 @@
 import { buildAppPath, PAGE_ASPECT } from '@orbis/shared';
-import { Archive, ArchiveRestore, Code, EllipsisVertical, History, Link2, Pin } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { invalidateGraph } from '../../lib/invalidate';
-import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
-import { DropdownMenu } from '../../ui/DropdownMenu';
 import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
-import { Tabs } from '../../ui/Tabs';
 import { useToast } from '../../ui/toast-store';
-import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { PageView } from '../page/PageView';
-import { AspectCards } from './AspectCards';
-import { AssignmentCard } from './AssignmentCard';
+import { RecordView } from '../page/RecordView';
+import { type TabMemory, TabMemoryProvider } from '../page/TabsContainer';
+import { usePageTemplates } from '../page/usePageTemplates';
+import { DetailMenuSlot } from './DetailMenuSlot';
 import { BodyScreenProvider } from './EntityBody';
-import { GoalProgressSlot, PlanToFactSlot } from './own-cards';
 import { ProposalOverlay } from './ProposalOverlay';
-import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
-import { RunFeed } from './RunFeed';
-import { RunsList } from './RunsList';
-import {
-  BacklinksBlock,
-  BlockersBlock,
-  BodyBlock,
-  SubtasksBlock,
-  ThreadBlock,
-  TitleBlock,
-  VersionsBlock,
-} from './record-blocks';
-import { RecordHostProvider, recordHostValue, TabPartHost } from './record-host';
-import { TicketWaitingBlock } from './TicketWaitingBlock';
+import { ROUTINE_ASPECT } from './RoutineStatusBlock';
 import { useEntityDetail } from './useEntityDetail';
-import { RUN_ASPECT, useTicketRuns } from './useTicketRuns';
 import { PinVersionDialog } from './VersionsCard';
 
 const TASK = 'orbis/task';
@@ -48,11 +30,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const updateSettings = trpc.user.updateSettings.useMutation({
     onSuccess: () => void utils.user.getSettings.invalidate(),
   });
-  // §2.7: перевод задачи-покупки в done → карточка «Покупка совершена?» (Task B6).
-  // Состояние живёт ЗДЕСЬ, у хоста, а не в заголовке: поднимает его чекбокс `TitleBlock`
-  // (record-blocks.tsx — единственный мутационный путь чекбокса), а показывает карточка
-  // «план → факт», которую шаблон вправе поставить в другое место дерева (Ф-1а-18).
-  const planToFact = usePlanToFactPrompt();
+  /**
+   * Список шаблонов владельца — ЗДЕСЬ, до ответа записи, а не в `RecordView` после него (§6.5,
+   * РП-11 (2), РП-14): запрос уходит вместе с `entity.get` (в проде — одним HTTP, `httpBatchLink`) и
+   * не ждёт его. Результат читает `RecordView` тем же ключом — второго запроса нет.
+   */
+  usePageTemplates();
   // §3.5 «Скопировать ссылку». Буфер обмена — не данность: его нет в http-контексте,
   // а разрешение пользователь может и не дать. На отказе показываем саму ссылку
   // (manualLink), чтобы копирование осталось возможным руками, а не превратилось в
@@ -75,22 +58,29 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // вкладок, поэтому и флаг живёт здесь. Монтируется диалог только открытым (см. VersionsCard).
   const [pinVersion, setPinVersion] = useState(false);
   /**
-   * Какая вкладка открыта — ЕДИНСТВЕННЫМ местом: `Tabs` ниже управляемый (`value`), своего
-   * состояния у него нет.
+   * Какие вкладки шаблона открыты — ЕДИНСТВЕННЫМ местом, у экрана (`TabMemoryProvider`), а не у
+   * контейнера вкладок.
    *
-   * Нужно это списку версий: «Детали» живут смонтированными всегда (keepMounted ниже), и без
-   * признака активности их запрос уходил бы на каждом открытии любой записи, включая те, где по
-   * вкладкам никто не ходил. Второй копией правды признак быть не может: экран монтируется БЕЗ
-   * key (router.tsx), и переход на НЕкэшированную запись показывает скелетон — `Tabs`
-   * размонтировался бы и встал заново на «Сущности», а копия здесь осталась бы на «Деталях».
-   * Экран показывал бы одно, секция версий думала бы другое и шла бы в сеть (ревью Задачи 16).
-   *
-   * При смене записи вкладка НЕ сбрасывается — намеренно. Прежний сброс случался только на
-   * холодном пути (ремоунт по скелетону) и был побочным следствием, а не замыслом: тот же
-   * переход по кэшу вкладку сохранял. Единообразное «остаёмся там, где смотрели» и полезнее —
-   * листая подзадачи с «Деталей», человек хочет видеть «Детали» соседней записи.
+   * Экран монтируется БЕЗ key (router.tsx), и переход на НЕкэшированную запись показывает
+   * скелетон: рендерер со вкладками размонтируется и встаёт заново. Своё состояние контейнера
+   * сбросилось бы на «Запись», а человек, листавший подзадачи с «Деталей», хочет видеть «Детали»
+   * соседней записи — единообразное «остаёмся там, где смотрели» (ревью Задачи 16 до среза).
+   * Поэтому при смене записи память НЕ сбрасывается — намеренно. Ключи — путь контейнера в
+   * пространстве шаблона (`TabMemoryScope`): вкладка одного шаблона не открывает вкладку другого.
    */
-  const [openTab, setOpenTab] = useState('entity');
+  const [tabMemory, setTabMemory] = useState<Readonly<Record<string, string>>>({});
+  const tabs = useMemo<TabMemory>(
+    () => ({
+      get: (key) => tabMemory[key],
+      set: (key, value) => setTabMemory((m) => ({ ...m, [key]: value })),
+    }),
+    [tabMemory],
+  );
+  /**
+   * «Открыть через шаблон хоста» / «Открыть через „X“» (спека §8.4) — разово, не запоминается:
+   * состояние экрана, а не данные записи. Пункты меню, которые его ставят, — задача 15.
+   */
+  const [openVia, setOpenVia] = useState<{ templateId: string | 'host' } | undefined>(undefined);
   /**
    * Куда тело рисует свои плашки — узел НАД вкладками (см. `noticeHost` в разметке ниже).
    *
@@ -120,22 +110,23 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     // Диалог закрепления — про ТУ запись, из чьего меню его открыли: пережив переход, он
     // закрепил бы соседнюю (экран монтируется без key, router.tsx).
     setPinVersion(false);
+    // «Открыть через X» — про ту запись, из чьего меню его выбрали: переехав, он показал бы
+    // соседнюю запись чужим шаблоном без единого жеста человека.
+    setOpenVia(undefined);
     // Слой переезжает на соседнюю запись вместе с экраном (монтируется без key), и его
     // собственное состояние обнуляет `key` ниже. Но признак живёт ЗДЕСЬ, и один кадр между
     // сменой пропа и его извещением тело соседней записи стояло бы спрятанным ни за что.
     setProposalOpen(false);
   }
   const { show } = useToast();
-  const push = useNav((s) => s.push);
-  const activeTab = useNav((s) => s.activeTab);
 
   /**
-   * ADE-срез 1 (С10). Тикет — задача С НАЗНАЧЕНИЕМ, а не всякая задача: чекпойнт-блок и история
-   * прогонов есть только у неё. Карточка назначения — у ЛЮБОЙ задачи (см. `detailsTab`): её и
-   * ставит владелец, а до этого тикета ещё нет.
+   * ADE-срез 1 (С10). Тикет — задача С НАЗНАЧЕНИЕМ, а не всякая задача: у простой задачи прогонов
+   * нет, и подметать нечего. Тикет, рутина и проект — цели подметания ниже; сами карточки тикета
+   * и рутины (ожидание, история прогонов) — свои карточки аспектов шаблона (`own-cards.tsx`).
    *
    * Читаем `get.data` ДО ветки скелетона: хуки обязаны идти безусловно, а «данных ещё нет»
-   * выражено флагом `enabled` — запрос уйдёт, когда станет известно, о чём спрашивать.
+   * выражено признаком цели ниже — подметание уйдёт, когда станет известно, что подметать.
    */
   const loaded = get.data?.entity;
   // Гейты блоков — по СПИСКУ аспектов записи (§А1-1), а не по наличию ключа в карте полей:
@@ -143,16 +134,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // навешенный аспект без единого заполненного свойства прежде был неотличим от снятого.
   const isTicket = (loaded?.aspects.includes(TASK) && loaded.aspects.includes(ASSIGNMENT)) === true;
   /**
-   * V1.14. Рутина открывается ТЕМ ЖЕ экраном: тело — инструкция исполнителю, «Детали» — карточка
-   * аспекта и история прогонов, «Тред» — обсуждение и карточки предложений. Своего экрана у неё
+   * V1.14. Рутина открывается ТЕМ ЖЕ экраном: тело — инструкция исполнителю, карточка рутины —
+   * состояние и история прогонов, «Тред» — обсуждение и карточки предложений. Своего экрана у неё
    * нет намеренно — она обычная запись графа, а не отдельная сущность приложения.
-   *
-   * Прогоны читаются тем же `useTicketRuns` и тем же запросом (`children_of=<рутина>`): прогон
-   * рутины — такая же дочерняя запись с аспектом `orbis/agent-run`, и второй выборки для неё
-   * заводить незачем.
    */
   const isRoutine = loaded?.aspects.includes(ROUTINE_ASPECT) === true;
-  const { runs, lastRun } = useTicketRuns(entityId, isTicket || isRoutine);
 
   /**
    * Подметание брошенных прогонов (С6) — на открытии тикета или проекта, ОДИН раз.
@@ -224,104 +210,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   }
   const { entity } = get.data;
   const isPage = entity.aspects.includes(PAGE_ASPECT);
-  /**
-   * Хост записи (спека страниц 1а §7.3): части экрана — примитивы обвязки, и данные они берут
-   * отсюда, из ответа `entity.get` этого экрана, а не пропами. Раскладка ниже — прежняя; её
-   * стережёт структурный снимок задачи 2 (`structure.test.tsx`).
-   */
-  const host = recordHostValue(get.data, { planToFact, activeTab: openTab, readOnlyBody: false });
-
-  // Вкладка «Сущность» — чистый документ: emoji, заголовок, полоса прогресса и тело. Всё
-  // остальное, что известно о записи, уехало в «Детали».
-  //
-  // Полоса прогресса — единственное исключение, и осознанное: у цели прогресс это то, ради чего
-  // её открывают, и «50%, 150 000 из 300 000» во второй вкладке ухудшило бы главный экран целей
-  // ради чистоты раскладки.
-  const entityTab = (
-    <TabPartHost value="entity" open={openTab === 'entity'}>
-      <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
-        <TitleBlock />
-        {/* Карточка plan→fact (§2.7) — инлайн под строкой задачи, как в мокапе */}
-        <PlanToFactSlot />
-        <GoalProgressSlot />
-        {/* Тикет остановился и ждёт человека (С10, приёмка 7–8): вопрос исполнителя, итог работы
-            или разбор оборванного прогона — с полем ответа прямо здесь. Место — на «Сущности», а не
-            в «Деталях»: это не свойство записи, а то, ради чего её открыли.
-            key по id — по той же причине, что у тела: экран монтируется БЕЗ key (router.tsx), и
-            набранный, но не отправленный ответ переехал бы на соседний тикет. */}
-        {isTicket && (
-          <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
-        )}
-        {/* Состояние рутины (V1.14): расписание, режим, следующее срабатывание, итог прошлого
-            прогона и два жеста владельца. Место — здесь же, рядом с телом-инструкцией: рутину
-            открывают ради того, что она делает и делает ли вообще.
-            key по id — по той же причине, что у блока ожидания: экран монтируется БЕЗ key
-            (router.tsx), а у блока своё состояние (отказ «прогон уже идёт»), и переезжать на
-            соседнюю рутину оно не должно. */}
-        {isRoutine && (
-          <RoutineStatusBlock key={`routine-${entity.id}`} entity={entity} lastRun={lastRun} />
-        )}
-        {/* Экран самого прогона (С5, С12): лента шагов, исход и откат. Место — рядом с блоком
-            ожидания и по той же причине: у прогона нет «свойств», ради которых его открывают, —
-            есть работа, которую он проделал. Условие — по аспекту, а не по `isTicket`: прогон
-            это НЕ тикет (аспекта `orbis/task` у него нет), и подметание с историей прогонов ему
-            не положены.
-            key — по той же причине, что у блока ожидания: лента держит своё состояние (открытое
-            подтверждение отката, результат прошлого), и переезжать на соседний прогон оно не
-            должно. */}
-        {entity.aspects.includes(RUN_ASPECT) && (
-          <RunFeed key={`run-${entity.id}`} entity={entity} />
-        )}
-        {/* Тело (key по id и `this` вокруг него — см. BodyBlock). `this` не передаётся наружу
-            тела НАМЕРЕННО: в Browser, закреплённых списках и конструкторе запросов `this`
-            вынесенного блока означал бы «та запись, из чьего тела блок скопировали», а не
-            «текущий экран», — и блок обязан ответить ошибкой, а не взять чужой id. */}
-        <BodyBlock />
-      </div>
-    </TabPartHost>
-  );
-
-  const detailsTab = (
-    <TabPartHost value="details" open={openTab === 'details'}>
-      <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
-        {/* Назначение — у ЛЮБОЙ задачи, а не только у тикета: исполнителя ставит владелец, и
-            именно этим жестом задача становится тикетом. И у любой записи, где назначение уже
-            ЕСТЬ: сервер orbis/task для него не требует, а общая карточка свойств аспект прячет —
-            без этой ветки назначение на заметке было бы невидимо и неснимаемо. */}
-        {(entity.aspects.includes(TASK) || entity.aspects.includes(ASSIGNMENT)) && (
-          <AssignmentCard entity={entity} />
-        )}
-        {/* Общие секции аспектов (поля цели, рутины, финансов — здесь; их прогресс и состояние —
-            на «Сущности»). Не `RestCards`: тот рисует свои карточки целиком, а сегодняшняя
-            раскладка их разносит. */}
-        <AspectCards entity={entity} />
-        {/* Версии тела (С11, приёмка 12) — рядом со свойствами записи, до секций графа: снимок
-            хранит ТОЛЬКО тело, и к подзадачам, блокировкам и бэклинкам он отношения не имеет.
-            В сеть — только на открытой вкладке (TabPartHost). */}
-        <VersionsBlock />
-        {/* Секции 6–8 §3.5: связи уже приехали этим же entity.get — своих запросов графа
-            секции не заводят. */}
-        <SubtasksBlock />
-        {/* История прогонов — своей секцией, а не строками общих связей: у прогона есть исход,
-            длина и исполнитель, и читают их таблицей, а не списком заголовков. Открытие — тем же
-            push поверх стека активной вкладки, что и у подзадач. */}
-        {(isTicket || isRoutine) && (
-          <RunsList
-            parentId={entity.id}
-            runs={runs}
-            // У рутины исполнитель внутренний и всегда один — колонка гранта ей не положена (Р-8).
-            showGrant={!isRoutine}
-            onOpen={(id) => push(activeTab, { kind: 'entity', id })}
-          />
-        )}
-        <BlockersBlock />
-        <BacklinksBlock />
-      </div>
-    </TabPartHost>
-  );
 
   return (
-    <RecordHostProvider value={host}>
+    <TabMemoryProvider value={tabs}>
       <BodyScreenProvider
         value={{
           asMarkdown,
@@ -337,7 +228,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
         <ScreenHeader
           title={entity.title}
           actions={
-            <DetailMenu
+            <DetailMenuSlot
               onPin={() => {
                 const pinned = settings.data?.pinnedEntities ?? [];
                 updateSettings.mutate({
@@ -367,12 +258,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />
         )}
         {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
-          табы, и прятать ответ на вкладке «Сущность» значило бы иногда не отвечать вовсе. */}
+          табы, и прятать ответ на вкладке «Запись» значило бы иногда не отвечать вовсе. */}
         {manualLink !== null && manualLink.id === entityId && (
           <ManualLinkNotice url={manualLink.url} onHide={() => setManualLink(null)} />
         )}
         {/* Плашки тела (расхождение версий, неотправленный черновик, состояние сохранения) —
-          тоже ВНЕ табов, и по той же причине, что запасная ссылка выше. «Сущность» держится
+          тоже ВНЕ табов, и по той же причине, что запасная ссылка выше. «Запись» держится
           живой через display:none (keepMounted), то есть с «Деталей» и «Треда» всё, что лежит
           внутри неё, не видно вовсе, — а это единственный канал, которым экран сообщает, что
           правка НЕ сохранена. Человек, ушедший на «Детали» посмотреть подзадачи, узнавал бы об
@@ -396,19 +287,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           entity={entity}
           onOverlayExpanded={setProposalOpen}
         />
-        {/* Три таба — под шапкой; контент центрирован, шапка — на всю ширину.
-          keepMounted у «Сущности» — ради редактора: Radix по умолчанию размонтирует неактивную
-          вкладку, и уход на «Детали» уничтожил бы вместе с ней несохранённый текст и всю
-          историю Ctrl+Z, а заодно гонял бы двухфазное монтирование заново.
-          У «Деталей» — ради сохранения нынешнего поведения: сегодня все её секции живут на
-          единственной вкладке и рисуются при каждом открытии записи, так что живыми они
-          обходятся ровно в те же запросы, что и до разделения.
-          У «Треда» — НЕТ: ChatThread на монтировании заводит chat.listMessages, и держать его
-          живым значило бы платить лишним запросом за вкладку, которую не открывали. */}
-        {/* Развёрнутый слой предложения прячет ВСЕ ТРИ ВКЛАДКИ, а не одно тело записи, и это
-          правка по итогам живого смоука Ш1 (наблюдение Н-2, замерено).
+        {/* Развёрнутый слой предложения прячет ВЕСЬ показ записи — заголовок, теги и все вкладки
+          шаблона, — а не одно тело записи, и это правка по итогам живого смоука Ш1 (наблюдение
+          Н-2, замерено).
           Пока прятали только тело, вкладка «Детали» оставалась полностью кликабельной — а её
-          `AspectCards` мутируют граф НЕМЕДЛЕННО и выглядят ТОЧНО ТАК ЖЕ, как строки правки в
+          секции аспектов мутируют граф НЕМЕДЛЕННО и выглядят ТОЧНО ТАК ЖЕ, как строки правки в
           слое (общий FIELD_CLASS — сделано нарочно, чтобы владелец узнавал поле). Две
           одинаковые с виду строки «статус» в одном скролле: одна применится по «Принять»,
           вторая пишет в граф за секунду и без подтверждения. Замер: правка не в той строке
@@ -422,44 +305,30 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           ТЕМ ЖЕ механизмом, что прежде прятал тело: класс, а не снятие с монтирования, — см.
           докблок `proposalOpen`. Ради него это и один узел, а не два: спрячь мы вкладки, оставив
           прежний класс на теле, у одного вопроса «видно ли это сейчас» стало бы два ответа. */}
-        {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1): рендерер вместо вкладок, над
-          тем же ответом `entity.get` этого экрана — второго запроса записи нет (РП-13). Шапка,
-          меню, слой предложения и плашки над ней — прежние. Прячется развёрнутым слоем тем же
-          классом и по той же причине, что вкладки (см. комментарий о слое предложения выше). */}
-        {isPage ? (
-          <div className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}>
+        <div
+          data-testid="record-area"
+          className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
+        >
+          {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1); любая другая запись — через
+            шаблон по функции выбора (§4.2): свой шаблон владельца или шаблон хоста (§8.1). Оба —
+            над тем же ответом `entity.get` этого экрана, второго запроса записи нет (РП-13).
+            Шапка, меню, слой предложения и плашки над ними — прежние. Вкладки, их keepMounted
+            (тело и «Детали» живы, «Тред» — только открытым) — дело шаблона и рендерера. */}
+          {isPage ? (
             <PageView reply={get.data} />
-          </div>
-        ) : (
-          <div
-            data-testid="entity-tabs"
-            className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
-          >
-            <Tabs
-              value={openTab}
-              onValueChange={setOpenTab}
-              tabs={[
-                { value: 'entity', label: 'Сущность', content: entityTab, keepMounted: true },
-                { value: 'details', label: 'Детали', content: detailsTab, keepMounted: true },
-                {
-                  value: 'thread',
-                  label: 'Тред',
-                  // Тред с key по id и «Нет треда» без него — см. ThreadBlock.
-                  content: <ThreadBlock />,
-                },
-              ]}
-            />
-          </div>
-        )}
+          ) : (
+            <RecordView reply={get.data} {...(openVia !== undefined && { override: openVia })} />
+          )}
+        </div>
       </BodyScreenProvider>
-    </RecordHostProvider>
+    </TabMemoryProvider>
   );
 }
 
 /**
  * Запасной путь копирования: буфер отказал — показываем сам адрес, чтобы его можно было
  * взять руками. Живёт ВНЕ табов (ссылку просят из меню, а меню одно на все табы, и
- * прятать ответ на вкладке «Сущность» значило бы иногда не отвечать вовсе).
+ * прятать ответ на вкладке «Запись» значило бы иногда не отвечать вовсе).
  */
 function ManualLinkNotice({ url, onHide }: { url: string; onHide: () => void }) {
   return (
@@ -485,81 +354,5 @@ function ManualLinkNotice({ url, onHide }: { url: string; onHide: () => void }) 
         </Button>
       </div>
     </div>
-  );
-}
-
-/**
- * Меню ⋮ шапки detail (§3.5). Раньше «меню» было двумя icon-кнопками в ряд: пункт
- * «Скопировать ссылку» третьей кнопкой сделал бы шапку панелью инструментов, а на узком
- * экране — очередью иконок поверх заголовка. Теперь это настоящее меню, действия внутри.
- */
-function DetailMenu({
-  onPin,
-  onArchive,
-  onCopyLink,
-  onPinVersion,
-  onToggleMarkdown,
-  archived,
-}: {
-  onPin: () => void;
-  onArchive: () => void;
-  onCopyLink: () => void;
-  /** Закрепить ВЕРСИЮ ТЕЛА (С11) — не путать с `onPin`, который держит запись в сайдбаре. */
-  onPinVersion: () => void;
-  /** Не задан — править как markdown нечего (у записи нет документа), и пункта нет вовсе. */
-  onToggleMarkdown?: () => void;
-  archived: boolean;
-}) {
-  const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
-  return (
-    <DropdownMenu
-      trigger={
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Меню"
-          title="Меню"
-          data-testid="detail-menu"
-        >
-          <EllipsisVertical size={16} aria-hidden />
-        </Button>
-      }
-      items={[
-        { label: 'Закрепить', icon: <Pin size={16} aria-hidden />, onSelect: onPin },
-        {
-          label: archiveLabel,
-          icon: archived ? (
-            <ArchiveRestore size={16} aria-hidden />
-          ) : (
-            <Archive size={16} aria-hidden />
-          ),
-          onSelect: onArchive,
-        },
-        {
-          label: 'Скопировать ссылку',
-          icon: <Link2 size={16} aria-hidden />,
-          onSelect: onCopyLink,
-        },
-        // Про ТЕЛО, а не про сайдбар — и стоит рядом с «Править как markdown», второй правкой
-        // тела, а не рядом с «Закрепить». Иконка тоже другая (History против Pin): два пункта
-        // с одной иконкой и почти одной подписью читались бы как один с опечаткой.
-        {
-          label: 'Закрепить версию',
-          icon: <History size={16} aria-hidden />,
-          onSelect: onPinVersion,
-        },
-        // Пункт появляется, только когда есть что править (см. проп): предлагать действие,
-        // которое молча ничего не делает, хуже, чем не предлагать его вовсе.
-        ...(onToggleMarkdown === undefined
-          ? []
-          : [
-              {
-                label: 'Править как markdown',
-                icon: <Code size={16} aria-hidden />,
-                onSelect: onToggleMarkdown,
-              },
-            ]),
-      ]}
-    />
   );
 }

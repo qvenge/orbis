@@ -49,3 +49,16 @@ test('Toaster: тост появляется по show и не перехват�
   expect(document.querySelector('[aria-live="polite"]')).toBeInTheDocument();
   expect(document.activeElement).toBe(document.body);
 });
+
+test('Toaster: действие тоста — кнопка; нажатие зовёт его и закрывает тост (РП-9)', () => {
+  const onSelect = vi.fn();
+  render(<Toaster />);
+  act(() => {
+    useToastStore.getState().show('Выбор запомнен', 'default', { label: 'Отменить', onSelect });
+  });
+  act(() => {
+    screen.getByRole('button', { name: 'Отменить' }).click();
+  });
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  expect(useToastStore.getState().toasts).toHaveLength(0);
+});

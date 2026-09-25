@@ -8,9 +8,12 @@ import { SECTION_REPLACED } from './own-cards';
 type Entity = RouterOutputs['entity']['get']['entity'];
 
 /**
- * Свойства записи на «Деталях» — секции всех аспектов, кроме тех, чью общую секцию заменяет
- * своя карточка (`SECTION_REPLACED`), и секция «Свойства». Сами секции и их правка — в
- * `AspectSection.tsx`; здесь только выбор «какие» для экрана, где шаблон ничего не размещал.
+ * Свойства записи — секции всех аспектов, кроме тех, чью общую секцию заменяет своя карточка
+ * (`SECTION_REPLACED`), и секция «Свойства». Сами секции и их правка — в `AspectSection.tsx`.
+ *
+ * Экран записи этим больше не рисует (с задачи 14 страниц 1а раскладку ставит шаблон:
+ * `{{card: X}}` — `AspectCardFor`, `{{cards}}` — `RestCards`); сборка осталась потребителям,
+ * которым нужны все секции записи разом без шаблона, — сьютам секций свойств (`detail.test.tsx`).
  */
 export function AspectCards({ entity }: { entity: Entity }) {
   return <AspectSections entity={entity} exclude={SECTION_REPLACED} />;

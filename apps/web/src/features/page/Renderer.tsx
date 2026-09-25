@@ -226,6 +226,7 @@ function PageNodeView({ node, path }: { node: PageNode; path: readonly number[] 
     case 'tabs':
       return (
         <TabsContainer
+          memoryKey={pathKey(path)}
           tabs={node.parts.map((tab, p) => ({
             label: tab.label,
             content: <NodeList nodes={tab.children} prefix={[...path, p]} />,

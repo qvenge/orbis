@@ -41,9 +41,10 @@ const TransactionsScreen = lazy(() =>
 const ImportFlow = lazy(() =>
   import('../features/import/ImportFlow').then((m) => ({ default: m.ImportFlow })),
 );
-// Экран сущности уносит с собой дерево ui/DropdownMenu (radix-menu + popper + arrow +
-// floating-ui) — у него ровно один потребитель, меню ⋮ этого экрана.
-// А вот сам РЕДАКТОР тела внутри него ленив ещё раз, и это не украшение: `BodyEditor` и
+// Дерево ui/DropdownMenu (radix-menu + popper + arrow + floating-ui) — у него ровно один
+// потребитель, меню ⋮ экрана сущности, и оно ленится ещё раз, своим чанком внутри экрана
+// (`DetailMenuSlot.tsx`; срез страниц 1а, задача 14 — вес чанка записи против сторожа РП-11).
+// Сам РЕДАКТОР тела внутри экрана тоже ленив ещё раз, и это не украшение: `BodyEditor` и
 // `MarkdownToggle` тянут схему документа (`doc-*.js`, ~154 кБ gzip), то есть больше, чем весь
 // остальной экран вместе взятый. Границы стоят в EditorShell.tsx и DetailScreen.tsx, а их
 // целость сторожит scripts/check-lazy-chunks.ts — статический импорт рядом с ленивым

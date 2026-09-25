@@ -2,7 +2,13 @@ import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import {
+  isTemplatesListCall,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { DetailScreen } from './DetailScreen';
 
@@ -106,7 +112,9 @@ function handler(fx: Fixture) {
     }
     if (path === 'relation.delete')
       return fx.onRelationDelete ? fx.onRelationDelete() : { ok: true };
-    return {};
+    // Реестр — шаблону хоста: экран записи рисуется через него, а ответ `{}` на реестр контракт
+    // не допускает (задача 14 страниц 1а).
+    return registryReply(path) ?? {};
   };
 }
 
@@ -214,7 +222,7 @@ test('добавление блокировки: поиск через entity.su
   );
   // Грамматика `search=` из пикера ушла совсем: остаточный запрос по ней означал бы, что
   // поиск по целому слову жив вторым путём.
-  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+  expect(calls.some((c) => c.path === 'entity.query' && !isTemplatesListCall(c))).toBe(false);
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
   await waitFor(() =>
     expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({

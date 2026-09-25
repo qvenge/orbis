@@ -1,10 +1,11 @@
 /**
  * Структура экрана записи против эталона (приёмка С1а-5, база сторожа С1а-6; РП-10, РП-11).
  *
- * Эталон снят задачей 2 на экране до среза 1а; не перезаписывается; задача 14 сравнивает через
- * `INTENDED_1A`. Три намеренных отличия нового экрана (спека §8.2) снимаются функцией поверх
- * `golden/*.json`, а не правкой файлов: пересъёмка эталона с нового экрана превратила бы
- * приёмку «расхождения — только намеренные» в «экран похож сам на себя».
+ * Эталон снят задачей 2 на экране до среза 1а и не перезаписывается никогда. Новый экран (шаблон
+ * хоста, задача 14) сравнивается с `INTENDED_1A(эталон)`: три намеренных отличия (спека §8.2)
+ * снимаются поимёнными функциями поверх `golden/*.json`, а не правкой файлов — пересъёмка эталона
+ * с нового экрана превратила бы приёмку «расхождения — только намеренные» в «экран похож сам на
+ * себя». Любое иное расхождение — дефект экрана, а не повод для четвёртой функции.
  *
  * Съёмка — `structure.capture.test.tsx` (по `CAPTURE=1`); этот файл только сверяет.
  */
@@ -13,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { installCrashTrap } from '../../test/harness';
 import goldenRequests from './golden/detail-requests.json';
 import goldenStructure from './golden/detail-structure.json';
+import { INTENDED_1A } from './intended-1a';
 import { captureDetail, STRUCTURE_FIXTURES, type StructureFixture } from './structure-fixtures';
 import type { DetailStructure } from './structure-snapshot';
 
@@ -35,11 +37,14 @@ const fixture = (name: string): StructureFixture => {
   return f;
 };
 
-test('проба средства: снимок цели видит вкладки, прогресс и карточку аспекта', async () => {
+test('проба средства: снимок цели видит шапку над вкладками, вкладки и карточку цели одним куском', async () => {
   const { structure } = await captureDetail(fixture('goal'));
-  expect(structure.tabs.map((t) => t.label)).toEqual(['Сущность', 'Детали', 'Тред']);
+  expect(structure.aboveTabs).toEqual(
+    expect.arrayContaining(['detail-menu', 'native-row', 'tags-block']),
+  );
+  expect(structure.tabs.map((t) => t.label)).toEqual(['Запись', 'Детали', 'Тред']);
   expect(structure.tabs[0]?.parts).toContain('goal-progress');
-  expect(structure.tabs[1]?.parts.some((p) => p.startsWith('aspect:orbis/goal['))).toBe(true);
+  expect(structure.tabs[0]?.parts.some((p) => p.startsWith('aspect:orbis/goal['))).toBe(true);
 });
 
 /**
@@ -106,7 +111,16 @@ describe('каждая фикстура показывает шапку и св�
   }
 });
 
-describe('эталон = экран', () => {
+/**
+ * Запросы нового экрана = эталон + ровно один запрос списка шаблонов владельца (РП-11 (2), РП-14).
+ * Шаблон хоста лежит в поставке — за его текстом экран не ходит (§6.5).
+ */
+const withTemplatesList = (golden: Record<string, number>): Record<string, number> => {
+  const out = { ...golden, 'entity.query': (golden['entity.query'] ?? 0) + 1 };
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+};
+
+describe('INTENDED_1A(эталон) = экран (С1а-5, С1а-6)', () => {
   const structures = goldenStructure as Record<string, DetailStructure>;
   const requests = goldenRequests as Record<string, Record<string, number>>;
 
@@ -119,8 +133,8 @@ describe('эталон = экран', () => {
   for (const f of STRUCTURE_FIXTURES) {
     test(f.name, async () => {
       const got = await captureDetail(f);
-      expect(got.structure).toEqual(structures[f.name]);
-      expect(got.requests).toEqual(requests[f.name]);
+      expect(got.structure).toEqual(INTENDED_1A(structures[f.name] as DetailStructure));
+      expect(got.requests).toEqual(withTemplatesList(requests[f.name] ?? {}));
     });
   }
 });

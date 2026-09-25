@@ -13,6 +13,7 @@ import {
   blocksReply,
   blockTexts,
   installCrashTrap,
+  isTemplatesListCall,
   type MockHandler,
   renderWithProviders,
   trpcError,
@@ -725,7 +726,7 @@ test('financial: category_ref — выбор из категорий с назв
   expect(select).toHaveDisplayValue('Еда');
   // Множество берётся ЦЕЛЬЮ свойства из реестра (§А6-1) — тем же запросом и тем же кешем,
   // что у бейджа шапки и у форм Финансов: второго источника категорий в приложении нет.
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+  expect(calls.find((c) => c.path === 'entity.query' && !isTemplatesListCall(c))?.input).toEqual({
     ast: {
       filter: { aspect: 'orbis/category' },
       sortBy: [{ field: 'orbis/title', dir: 'asc' }],
@@ -813,9 +814,11 @@ test('financial: рефетч списка упал, но список уже е
     ...finEntity,
     props: { ...finEntity.props, 'orbis/finance_category': 'gone' },
   };
-  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
+    // Список шаблонов экрана записи — не список категорий: счёт ниже — только категорий.
+    if (isTemplatesListCall({ path, input })) return [];
     if (path === 'entity.query') {
       queries += 1;
       if (queries === 1) return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
@@ -886,7 +889,7 @@ test('нефинансовая сущность: контрол по типу с
   expect(screen.getByLabelText('Ждём').tagName).toBe('INPUT');
   // Пикер ссылки монтируется только там, где свойство есть в составе аспекта: у задачи
   // категории нет, и сети за списком не уходит.
-  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+  expect(calls.some((c) => c.path === 'entity.query' && !isTemplatesListCall(c))).toBe(false);
 });
 
 /**
@@ -1214,6 +1217,26 @@ const menuHandler: MockHandler = (path) => {
   if (path === 'entity.update') return entity;
   return registryReply(path) ?? {};
 };
+
+/**
+ * Меню ⋮ — ленивым чанком (рычаг веса задачи 14 страниц 1а, РП-11): кнопка эагерная, меню
+ * подгружается в простое. Жест ДО загрузки покрывают все тесты меню ниже (простой в этом файле не
+ * наступает, `beforeEach`), здесь — вторая дверь: простой наступил, меню встало закрытым.
+ */
+test('меню ⋮ грузится в простое закрытым и открывается жестом', async () => {
+  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+    cb();
+    return 1;
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  // Настоящий триггер Radix несёт `aria-haspopup="menu"`, заглушка до загрузки — нет.
+  await waitFor(() =>
+    expect(screen.getByTestId('detail-menu')).toHaveAttribute('aria-haspopup', 'menu'),
+  );
+  expect(screen.queryByRole('menu')).toBeNull();
+  await openDetailMenu();
+  expect(screen.getByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
+});
 
 test('меню ⋮: «Скопировать ссылку» кладёт абсолютный адрес сущности в буфер', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
@@ -1690,7 +1713,7 @@ test('409 правки тела не гаснет от переименован�
   expect(screen.getByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
 });
 
-// --- три таба: Сущность · Детали · Тред (Задача 15) ----------------------------------------
+// --- три таба: Запись · Детали · Тред (Задача 15; шаблон хоста — страницы 1а, задача 14) -----
 
 const GOAL_ENTITY = wireEntity({
   ...entity,
@@ -1967,18 +1990,21 @@ test('карточка аспекта подписана СЛОВОМ из ре�
   expect(within(section).queryByText('orbis/task')).toBeNull();
 });
 
-test('на «Сущности» — emoji, заголовок и тело; карточек аспектов там НЕТ', async () => {
+test('заголовок с emoji — над вкладками; на «Записи» — тело, а карточка аспекта без своей — в «Деталях» (§8.2)', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: { ...entity, emoji: '🎯' }, relations: [], thread: null };
     return registryReply(path) ?? {};
   });
-  const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
-  expect(within(panel).getByText('🎯')).toBeInTheDocument();
-  expect(within(panel).getByLabelText('Заголовок')).toHaveValue('Задача');
+  const panel = await screen.findByRole('tabpanel', { name: 'Запись' });
+  // Заголовок и эмодзи — над вкладками, виден с любой из них (спека страниц 1а §8.2 (1)).
+  const tabs = screen.getByTestId('page-tabs');
+  expect(tabs).not.toContainElement(screen.getByText('🎯'));
+  expect(tabs).not.toContainElement(screen.getByLabelText('Заголовок'));
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('Задача');
   expect(within(panel).getByTestId('editor-preview')).toHaveTextContent('тело');
 
-  // Свойства уехали в «Детали» — на «Сущности» их нет…
+  // Свойства задачи — в «Деталях» (своей карточки у задачи нет), на «Записи» их нет…
   expect(within(panel).queryByTestId('aspect-orbis/task')).toBeNull();
   // …и это НЕ «карточки пропали совсем»: на соседней вкладке они есть. Без этой строки
   // проверка выше была бы зелена и у экрана, потерявшего аспекты вовсе.
@@ -1995,16 +2021,16 @@ test('«Детали» показывает аспекты, подзадачи, 
   // Подпись строки — та, что прислал сервер, а не выведенная клиентом из `via`
   expect(within(details).getByTestId('backlink')).toHaveTextContent('упоминание');
 
-  // И ничего из этого не осталось на «Сущности»: вкладка — чистый документ.
-  const panel = tabPanel('Сущность');
+  // И ничего из этого не стоит на «Записи»: там свои карточки аспектов и тело.
+  const panel = tabPanel('Запись');
   expect(within(panel).queryByLabelText('Новая подзадача')).toBeNull();
   expect(within(panel).queryByRole('button', { name: 'Добавить блокировку' })).toBeNull();
   expect(within(panel).queryByText(/Связанное/)).toBeNull();
 });
 
-test('полоса прогресса цели осталась на «Сущности», с единицей из аспекта', async () => {
-  // У цели прогресс — то, ради чего её открывают: спрятать «50%, 150 000 из 300 000» во вторую
-  // вкладку значило бы ухудшить главный экран целей ради чистоты раскладки.
+test('карточка цели — одним куском на «Записи»: полоса прогресса с единицей и поля цели (§8.2 (3))', async () => {
+  // У цели прогресс — то, ради чего её открывают, и с шаблоном хоста рядом с ним стоят и поля
+  // цели: аспект со своей карточкой показывается одним куском (спека страниц 1а §8.2 (3)).
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return {
@@ -2015,16 +2041,16 @@ test('полоса прогресса цели осталась на «Сущн�
       };
     return registryReply(path) ?? {};
   });
-  const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
-  const bar = within(panel).getByTestId('goal-progress');
+  const panel = await screen.findByRole('tabpanel', { name: 'Запись' });
+  const bar = await within(panel).findByTestId('goal-progress');
   expect(within(bar).getByText('150 000 / 300 000')).toBeInTheDocument();
-  // Единица достаётся из `entity.props` заново, по своему id: в карточках свойств она
-  // бралась из тела цикла по аспектам, а цикла на «Сущности» нет — потеряться ей проще
-  // простого.
+  // Единица достаётся из `entity.props` заново, по своему id: потеряться ей проще простого.
   expect(within(bar).getByText('₽')).toBeInTheDocument();
-  // Второй полосы в «Деталях» нет: два ответа на вопрос «как оно идёт» — это уже вопрос,
-  // которому верить.
+  expect(within(panel).getByTestId('aspect-orbis/goal')).toBeInTheDocument();
+  // Второй полосы и второй секции цели в «Деталях» нет: два ответа на вопрос «как оно идёт» —
+  // это уже вопрос, которому верить.
   expect(within(tabPanel('Детали')).queryByTestId('goal-progress')).toBeNull();
+  expect(within(tabPanel('Детали')).queryByTestId('aspect-orbis/goal')).toBeNull();
 });
 
 test('переключение табов не роняет несохранённый черновик тела', async () => {
@@ -2041,7 +2067,7 @@ test('переключение табов не роняет несохранён
   const before = screen.getByTestId('body-editor');
 
   fireEvent.click(screen.getByRole('tab', { name: 'Детали' }));
-  fireEvent.click(screen.getByRole('tab', { name: 'Сущность' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Запись' }));
 
   // Тот же САМЫЙ узел, а не просто такой же текст: пережившее переключение дерево — это и есть
   // пережившая его история отмены. Пересоздайся редактор — узел был бы другим.
@@ -2164,7 +2190,7 @@ test('повторное открытие «Треда» той же запис�
   // именно из-за `hidden`, то есть говорит о недоступности, а не о размонтировании. Стоит он
   // ради того, что вкладку и правда переключили. Доказательство памяти — дальше: синхронные
   // ассерты после повторного открытия и единственный вызов ensure.
-  fireEvent.click(screen.getByRole('tab', { name: 'Сущность' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Запись' }));
   expect(screen.queryByRole('tabpanel', { name: 'Тред' })).toBeNull();
 
   fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
@@ -2639,7 +2665,7 @@ test('правка из тумблера садится в редактор, а 
 });
 
 test('плашки и индикатор тела живут ВНЕ вкладок — иначе с «Деталей» их не видно', async () => {
-  // «Сущность» держится живой через `display:none` (keepMounted, Tabs.tsx), и всё, что лежит
+  // «Запись» держится живой через `display:none` (keepMounted, Tabs.tsx), и всё, что лежит
   // внутри неё, с соседней вкладки не видно вовсе. А единственный канал обратной связи о
   // сохранении — эти три плашки: человек печатает, уходит на «Детали» посмотреть подзадачи,
   // автосохранение падает 409 или сетью — и на экране ни слова. Он уходит с записи в
@@ -2676,7 +2702,7 @@ test('плашки и индикатор тела живут ВНЕ вкладо
   expect(screen.getByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
   expect(screen.getByTestId('save-indicator')).toHaveTextContent('Не сохранено');
   // …а тело при этом осталось на своей вкладке: вынесены ПЛАШКИ, а не редактор.
-  expect(within(tabPanel('Сущность')).getByTestId('editor-preview')).toBeInTheDocument();
+  expect(within(tabPanel('Запись')).getByTestId('editor-preview')).toBeInTheDocument();
 });
 
 test('когда сказать нечего, полоса плашек ПУСТА — а не занимает место молча', async () => {
@@ -3117,9 +3143,9 @@ function TwoTickets() {
 }
 
 describe('ADE: тикет', () => {
-  test('таб «Сущность»: виден вопрос чекпойнта и кнопка; ввод ответа → agentRun.answerCheckpoint с ticketId/runId/answer (приёмка 7–8)', async () => {
+  test('таб «Запись»: виден вопрос чекпойнта и кнопка; ввод ответа → agentRun.answerCheckpoint с ticketId/runId/answer (приёмка 7–8)', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
-    const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+    const panel = await screen.findByRole('tabpanel', { name: 'Запись' });
     expect(await within(panel).findByText('Какую БД брать?')).toBeInTheDocument();
     // Заголовок — по исходу последнего прогона: у checkpoint это вопрос, а не итог.
     expect(within(panel).getByText('Вопрос исполнителя')).toBeInTheDocument();
@@ -3144,10 +3170,11 @@ describe('ADE: тикет', () => {
     );
   });
 
-  test('таб «Детали»: карточка назначения показывает грант «worker-1» и may_close; смена may_close → entity.update с props по id свойств', async () => {
+  test('таб «Запись»: карточка назначения показывает грант «worker-1» и may_close; смена may_close → entity.update с props по id свойств', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
-    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
-    const card = within(details).getByTestId('assignment-card');
+    // Своя карточка назначения — одним куском на «Записи» (спека страниц 1а §8.2 (3)).
+    const record = await screen.findByRole('tabpanel', { name: 'Запись' });
+    const card = await within(record).findByTestId('assignment-card');
     // Грант показан ПОДПИСЬЮ, а не идентификатором: отзывать и переназначать владелец
     // будет по ней (та же конвенция, что в «Агентах» настроек).
     expect(await within(card).findByText('worker-1')).toBeInTheDocument();
@@ -3170,9 +3197,9 @@ describe('ADE: тикет', () => {
       });
     });
 
-    // Второй карточки того же аспекта в общем списке свойств НЕТ: у назначения свой контрол,
-    // и сырой инпут рядом правил бы то же поле мимо инварианта исполнителя.
-    expect(within(details).queryByTestId('aspect-orbis/assignment')).toBeNull();
+    // Второй карточки того же аспекта в общем списке свойств НЕТ — ни на одной вкладке: у
+    // назначения свой контрол, и сырой инпут рядом правил бы то же поле мимо инварианта исполнителя.
+    expect(screen.queryByTestId('aspect-orbis/assignment')).toBeNull();
   });
 
   test('назначение С НУЛЯ навешивает аспект: «Сохранить» шлёт aspects.attach вместе со свойствами', async () => {
@@ -3223,7 +3250,7 @@ describe('ADE: тикет', () => {
 
   test('переключение агент → человек снимает грант через unset; «Снять назначение» снимает аспект целиком', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
-    const card = within(await screen.findByRole('tabpanel', { name: 'Детали' })).getByTestId(
+    const card = await within(await screen.findByRole('tabpanel', { name: 'Запись' })).findByTestId(
       'assignment-card',
     );
     // Выбранный доступ подставлен из свойства: сохранение без касания списка обязано оставить
@@ -3270,7 +3297,7 @@ describe('ADE: тикет', () => {
       <DetailScreen entityId="t1" />,
       adeHandler({ runs: [finished] }),
     );
-    const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+    const panel = await screen.findByRole('tabpanel', { name: 'Запись' });
     expect(await within(panel).findByText('Готово, проверьте')).toBeInTheDocument();
     // Ответить можно и на итог (агент прочтёт его следующим захватом) — но у сделанной работы
     // есть второй исход, которого нет у вопроса: закрыть тикет.
@@ -3293,10 +3320,11 @@ describe('ADE: тикет', () => {
     });
   });
 
-  test('таб «Детали»: список прогонов с исходом и числом шагов; клик открывает прогон', async () => {
+  test('таб «Запись»: список прогонов с исходом и числом шагов; клик открывает прогон', async () => {
     renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
-    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
-    const row = await within(details).findByTestId('run-r1');
+    // История прогонов — часть карточки назначения тикета, на «Записи» (§8.2 (3)).
+    const record = await screen.findByRole('tabpanel', { name: 'Запись' });
+    const row = await within(record).findByTestId('run-r1');
     expect(row).toHaveTextContent('вопрос');
     expect(row).toHaveTextContent('3 шага');
     expect(row).toHaveTextContent('worker-1');
@@ -3322,10 +3350,10 @@ describe('ADE: тикет', () => {
       <DetailScreen entityId="t1" />,
       adeHandler({ entity: working }),
     );
-    await screen.findByRole('tabpanel', { name: 'Сущность' });
+    await screen.findByRole('tabpanel', { name: 'Запись' });
     expect(screen.queryByTestId('ticket-waiting')).toBeNull();
     // И это НЕ «экран потерял всё»: назначение и прогоны идущего тикета на месте.
-    expect(screen.getByTestId('assignment-card')).toBeInTheDocument();
+    expect(await screen.findByTestId('assignment-card')).toBeInTheDocument();
     expect(await screen.findByTestId('run-r1')).toBeInTheDocument();
     first.unmount();
 
@@ -3338,8 +3366,9 @@ describe('ADE: тикет', () => {
     expect(screen.queryByTestId('ticket-waiting')).toBeNull();
     expect(screen.queryByTestId('assignment-card')).toBeNull();
     expect(screen.queryByTestId('runs-list')).toBeNull();
-    // Прогоны заметки не спрашиваются вовсе — ни запроса списка, ни подметания.
-    expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+    // Прогоны заметки не спрашиваются вовсе — ни запроса списка, ни подметания. Список шаблонов
+    // владельца экран шлёт на любой записи — это не прогоны.
+    expect(calls.some((c) => c.path === 'entity.query' && !isTemplatesListCall(c))).toBe(false);
     expect(calls.some((c) => c.path === 'agentRun.sweep')).toBe(false);
   });
 
@@ -3347,7 +3376,7 @@ describe('ADE: тикет', () => {
     // strict: <StrictMode> прогоняет эффекты монтирования ДВАЖДЫ — ровно как приложение в
     // разработке (main.tsx). Без гварда подметание уходило бы двумя запросами на открытие.
     const { calls } = renderWithProviders(<TicketOnWarmCache />, adeHandler(), { strict: true });
-    await screen.findAllByRole('tabpanel', { name: 'Сущность' });
+    await screen.findAllByRole('tabpanel', { name: 'Запись' });
     await waitFor(() =>
       expect(calls.filter((c) => c.path === 'agentRun.sweep').length).toBeGreaterThan(0),
     );
@@ -3359,7 +3388,7 @@ describe('ADE: тикет', () => {
     // каждом открытии стоила бы второго entity.get с телом и bodyDoc (самый тяжёлый запрос
     // экрана) ради ответа «ничего не подмели».
     const idle = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
-    await screen.findByRole('tabpanel', { name: 'Сущность' });
+    await screen.findByRole('tabpanel', { name: 'Запись' });
     await waitFor(() =>
       expect(idle.calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1),
     );
@@ -3375,7 +3404,7 @@ describe('ADE: тикет', () => {
       if (path === 'agentRun.sweep') return { swept: 1 };
       return adeHandler()(path, input);
     });
-    await screen.findByRole('tabpanel', { name: 'Сущность' });
+    await screen.findByRole('tabpanel', { name: 'Запись' });
     await waitFor(() =>
       expect(swept.calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(1),
     );
@@ -3525,8 +3554,9 @@ describe('ADE: тикет', () => {
     await waitFor(() => expect(within(details).getAllByTestId('subtask')).toHaveLength(1));
     expect(within(details).getByTestId('subtask')).toHaveTextContent('Написать тест');
     expect(within(details).getByText('Подзадачи (1)')).toBeInTheDocument();
-    // …и при этом он на месте в своей секции — отсев не «потерял прогон».
-    expect(within(details).getByTestId('run-r1')).toBeInTheDocument();
+    // …и при этом он на месте в своей секции — истории прогонов карточки назначения на «Записи»
+    // (§8.2 (3)): отсев не «потерял прогон».
+    expect(await within(tabPanel('Запись')).findByTestId('run-r1')).toBeInTheDocument();
   });
 
   test('тикет проекта (роль ticket) стоит в «Подзадачах» наравне с subitem', async () => {
@@ -4246,7 +4276,7 @@ function RoutineOnWarmCache() {
 describe('V1: рутина', () => {
   test('блок состояния: режим, время, дни и следующее срабатывание; прогоны без колонки исполнителя; блоков тикета нет (V1.14, приёмка 2)', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="rt1" />, routineHandler());
-    const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+    const panel = await screen.findByRole('tabpanel', { name: 'Запись' });
     const status = await within(panel).findByTestId('routine-status');
 
     // Режим — словом, а не сырым enum: владелец решает по нему, спросят ли его перед правкой.
@@ -4266,8 +4296,9 @@ describe('V1: рутина', () => {
         (c) => c.path === 'entity.query' && (c.input as { query: string }).query.includes('rt1'),
       ),
     ).toBe(true);
-    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
-    const list = within(details).getByTestId('runs-list');
+    // История прогонов — часть карточки рутины, на «Записи» (спека страниц 1а §8.2 (3)).
+    const record = await screen.findByRole('tabpanel', { name: 'Запись' });
+    const list = await within(record).findByTestId('runs-list');
     expect(within(list).getByTestId('run-rr1')).toHaveTextContent('сбой');
     expect(within(list).getByTestId('run-rr2')).toHaveTextContent('готово');
     // Исполнителя у рутинного прогона нет вовсе: колонки нет, и список доступов не спрашивается.
@@ -4421,7 +4452,7 @@ describe('V1: рутина', () => {
     const { calls } = renderWithProviders(<RoutineOnWarmCache />, routineHandler(), {
       strict: true,
     });
-    await screen.findAllByRole('tabpanel', { name: 'Сущность' });
+    await screen.findAllByRole('tabpanel', { name: 'Запись' });
     await waitFor(() =>
       expect(calls.filter((c) => c.path === 'agentRun.sweep').length).toBeGreaterThan(0),
     );
@@ -4729,8 +4760,9 @@ describe('V1: прогон рутины', () => {
         ],
       }),
     );
-    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
-    const list = within(details).getByTestId('runs-list');
+    // История прогонов — часть карточки рутины, на «Записи» (спека страниц 1а §8.2 (3)).
+    const record = await screen.findByRole('tabpanel', { name: 'Запись' });
+    const list = await within(record).findByTestId('runs-list');
     // «готово» у прогона с нерешённым предложением означает лишь «модель отработала» —
     // без второго слова владелец не увидел бы, что от него чего-то ждут.
     expect(within(list).getByTestId('run-rp1')).toHaveTextContent('ждёт решения');
@@ -5062,8 +5094,9 @@ describe('D42: пачка решений на экране прогона', () =
         ],
       }),
     );
-    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
-    const list = within(details).getByTestId('runs-list');
+    // История прогонов — часть карточки рутины, на «Записи» (спека страниц 1а §8.2 (3)).
+    const record = await screen.findByRole('tabpanel', { name: 'Запись' });
+    const list = await within(record).findByTestId('runs-list');
     // Третий вид ожидания — своим словом: «ждёт ответа» занято терминальным вопросом,
     // «ждёт решения» — предложением, и общее слово слило бы в списке три разных жеста.
     expect(within(list).getByTestId('run-rb1')).toHaveTextContent('пачка решений');
@@ -5256,7 +5289,7 @@ describe('слой предложения', () => {
       entityId: 'e1',
     });
     // Свёрнутая плашка ничего не прячет и ничего не решает.
-    expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden');
+    expect(screen.getByTestId('record-area')).not.toHaveClass('hidden');
     expect(within(plate).queryByRole('button', { name: 'Принять' })).toBeNull();
     expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
   });
@@ -5286,13 +5319,13 @@ describe('слой предложения', () => {
     expect(within(plate).getByRole('button', { name: 'Отклонить' })).toBeInTheDocument();
 
     // Р-18: вкладки спрятаны КЛАССОМ и остались смонтированными вместе с телом.
-    expect(screen.getByTestId('entity-tabs')).toHaveClass('hidden');
+    expect(screen.getByTestId('record-area')).toHaveClass('hidden');
     expect(screen.getByTestId('body-editor')).toBeInTheDocument();
 
     // Сворачивание возвращает вкладки — и тело ровно то же самое: набранное на месте, значит
     // редактор не поднимался заново.
     togglePlate(plate);
-    expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden');
+    expect(screen.getByTestId('record-area')).not.toHaveClass('hidden');
     await expectEditorHas('и хвост');
     expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
   });
@@ -5347,7 +5380,7 @@ describe('слой предложения', () => {
      */
     const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, overlayHandler());
     const plate = await screen.findByTestId('proposal-plate');
-    const tabs = screen.getByTestId('entity-tabs');
+    const tabs = screen.getByTestId('record-area');
 
     // Премиса ловушки, без которой тест ничего не утверждает: близнец РЕАЛЬНО существует и
     // зовётся ТОЧНО ТАК ЖЕ, что строка правки в слое, — и живёт он именно под узлом вкладок.
@@ -5389,7 +5422,7 @@ describe('слой предложения', () => {
     );
     const plate = await screen.findByTestId('proposal-plate');
     togglePlate(plate);
-    expect(screen.getByTestId('entity-tabs')).toHaveClass('hidden');
+    expect(screen.getByTestId('record-area')).toHaveClass('hidden');
     const input = await within(plate).findByLabelText('orbis/task_status');
     await userEvent.clear(input);
     await userEvent.type(input, 'in_progress');
@@ -5420,7 +5453,7 @@ describe('слой предложения', () => {
     // префиксу ключа.
     await waitFor(() => expect(reads()).toBeGreaterThan(1));
     // Принятое сворачивает слой: решать больше нечего, а вкладки записи обязаны вернуться.
-    await waitFor(() => expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden'));
+    await waitFor(() => expect(screen.getByTestId('record-area')).not.toHaveClass('hidden'));
   });
 
   test('два предложения двух рутин → две плашки, решение по каждому своё (приёмка 18)', async () => {
@@ -5544,7 +5577,7 @@ describe('слой предложения', () => {
     expect(screen.queryByTestId('proposal-plate')).toBeNull();
     expect(screen.queryByTestId('proposal-overlay')).toBeNull();
     // Вкладки на месте и тело поднимается ровно как прежде: слоя нет — и прятать нечего.
-    expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden');
+    expect(screen.getByTestId('record-area')).not.toHaveClass('hidden');
     expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(1);
   });
 
