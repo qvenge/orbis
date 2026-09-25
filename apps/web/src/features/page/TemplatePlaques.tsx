@@ -5,14 +5,12 @@ import {
   templatesFromRows,
 } from '@orbis/shared';
 import { useState } from 'react';
-import { invalidateGraph } from '../../lib/invalidate';
 import { aspectLabel } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
-import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
-import { useToast } from '../../ui/toast-store';
 import type { WireEntity } from '../entity-detail/record-host';
+import { useUpdateBatch } from './useUpdateBatch';
 
 /**
  * Плашки выбора шаблона над показом записи (спека страниц 1а §4.2 шаг 7, §4.3; РП-14): спор,
@@ -49,37 +47,16 @@ export function DisputePlaque({
   rows: WireEntity[];
 }) {
   const reg = useRegistry();
-  const utils = trpc.useUtils();
-  const { show } = useToast();
+  const runBatch = useUpdateBatch();
   // Закрыта — выбор сделан. Два пути: повторный выбор текущего победителя (меню «Сменить выбор»,
   // задача 15) — писать нечего, а плашка, оставшаяся висеть после нажатия, выглядела бы отказом;
   // и записанный выбор — до перечитывания списка кнопки снова нажимаемы, а второе нажатие дало бы
   // вторую пачку и второй Undo. Закрытость не переживает решённый спор: плашка размонтируется, и
   // вернувшийся спор (Undo, новый участник) встретит свежую.
   const [closed, setClosed] = useState(false);
-  const write = trpc.entity.updateBatch.useMutation({
-    onSuccess: ({ actionId }) => {
-      setClosed(true);
-      invalidateGraph(utils);
-      show('Выбор шаблона запомнен', 'default', {
-        label: 'Отменить',
-        // Клиентом, а не хуком мутации: к нажатию плашки уже нет (спор решён), а колбэки мутации
-        // размонтированного компонента React Query не зовёт.
-        onSelect: () => {
-          void utils.client.ai.undo
-            .mutate({ actionId })
-            .then(() => invalidateGraph(utils))
-            .catch(() => show('Не удалось отменить выбор', 'danger'));
-        },
-      });
-    },
-    onError: () => {
-      show('Не удалось запомнить выбор шаблона', 'danger');
-      // Отказ чаще всего значит, что список устарел (шаблон архивирован или правлен мимо экрана):
-      // без перечитывания каждый повтор собирал бы ту же пачку и падал одинаково.
-      invalidateGraph(utils);
-    },
-  });
+  // Пачка в полёте — кнопки заперты: второе нажатие до ответа дало бы вторую пачку. Отказ снимает
+  // замок, плашка остаётся (перечитанный список соберёт выбор заново).
+  const [pending, setPending] = useState(false);
   if (closed) return null;
 
   const mine = rows.filter((r) => contenders.includes(r.id)).sort(byCreation);
@@ -92,14 +69,26 @@ export function DisputePlaque({
       setClosed(true);
       return;
     }
-    write.mutate({
-      operations: [...changes].map(([id, next]) => ({
+    setPending(true);
+    // Одна копия механизма «пачка → тост „Отменить“ → Undo → перечитывание» с меню ⋮ (C1-I4);
+    // тексты отказа — свои: плашка знает, что именно не записано.
+    void runBatch(
+      [...changes].map(([id, next]) => ({
         tool: 'entity_update' as const,
         input:
           next.length === 0
             ? { id, unset: [TEMPLATE_WINS_OVER_PROPERTY] }
             : { id, props: { [TEMPLATE_WINS_OVER_PROPERTY]: next } },
       })),
+      'Выбор шаблона запомнен',
+      {
+        action: 'Выбор шаблона',
+        failed: 'Не удалось запомнить выбор шаблона',
+        undoFailed: 'Не удалось отменить выбор',
+      },
+    ).then((written) => {
+      setPending(false);
+      if (written) setClosed(true);
     });
   }
 
@@ -114,7 +103,7 @@ export function DisputePlaque({
             key={t.id}
             variant="outline"
             size="sm"
-            disabled={write.isPending}
+            disabled={pending}
             onClick={() => choose(t.id)}
           >
             {t.title}

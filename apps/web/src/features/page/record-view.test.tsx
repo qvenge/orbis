@@ -389,7 +389,8 @@ describe('спор и память (§4.3)', () => {
         input: { id: TPL_B, props: { [TEMPLATE_WINS_OVER_PROPERTY]: [TPL_A] } },
       },
     ]);
-    expect(batches[0]?.input).toEqual({ operations: expected });
+    // Подпись жеста — заголовок записи журнала и «отмени последнее» (B-M2).
+    expect(batches[0]?.input).toEqual({ label: 'Выбор шаблона', operations: expected });
 
     // Тост «Отменить» — Undo всей пачки одним actionId.
     fireEvent.click(await screen.findByRole('button', { name: 'Отменить' }));
@@ -413,6 +414,7 @@ describe('спор и память (§4.3)', () => {
     fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
     await waitFor(() => expect(calls.some((c) => c.path === 'entity.updateBatch')).toBe(true));
     expect(calls.find((c) => c.path === 'entity.updateBatch')?.input).toEqual({
+      label: 'Выбор шаблона',
       operations: [
         {
           tool: 'entity_update',
@@ -652,6 +654,7 @@ describe('фикс-раунд 1: реестр, пачка спора', () => {
     fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
     await waitFor(() => expect(calls.some((c) => c.path === 'entity.updateBatch')).toBe(true));
     expect(calls.find((c) => c.path === 'entity.updateBatch')?.input).toEqual({
+      label: 'Выбор шаблона',
       operations: [
         { tool: 'entity_update', input: { id: TPL_A, unset: [TEMPLATE_WINS_OVER_PROPERTY] } },
       ],
@@ -692,6 +695,65 @@ describe('фикс-раунд 1: реестр, пачка спора', () => {
     await waitFor(() => expect(lists()).toBeGreaterThan(before));
     // Плашка осталась: выбор не записан, спросить снова честно.
     expect(screen.getByTestId('dispute-plaque')).toBeInTheDocument();
+  });
+
+  test('C1-I4: двойное нажатие, пока пачка в полёте, — одна пачка', async () => {
+    const batchGate = gateOf();
+    const { calls } = openRecord(fixture('project-task'), disputeWorldFor(), {
+      over: async (path) => {
+        if (path === 'entity.updateBatch') await batchGate.promise;
+        return undefined;
+      },
+    });
+    const plaque = await screen.findByTestId('dispute-plaque');
+    const choice = within(plaque).getByRole('button', { name: 'Шаблон задачи' });
+    fireEvent.click(choice);
+    await waitFor(() => expect(choice).toBeDisabled());
+    fireEvent.click(choice);
+    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон проекта' }));
+    batchGate.open();
+    await waitFor(() => expect(screen.queryByTestId('dispute-plaque')).toBeNull());
+    expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(1);
+  });
+
+  test('C1-I4: отказ пачки — тост плашки, плашка остаётся, кнопки снова нажимаемы', async () => {
+    openRecord(fixture('project-task'), disputeWorldFor(), {
+      over: (path) => {
+        if (path === 'entity.updateBatch') throw trpcError('BAD_REQUEST', 'цель архивна');
+        return undefined;
+      },
+    });
+    const plaque = await screen.findByTestId('dispute-plaque');
+    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
+    expect(await screen.findByText('Не удалось запомнить выбор шаблона')).toBeInTheDocument();
+    const again = await screen.findByTestId('dispute-plaque');
+    await waitFor(() =>
+      expect(within(again).getByRole('button', { name: 'Шаблон задачи' })).toBeEnabled(),
+    );
+  });
+
+  test('MUT-M5: две правки выбора (у проигравшего вычищается архивный) — одной пачкой, один Undo', async () => {
+    // У A в «Главнее, чем» — архивный шаблон: он A не делает главнее B, спор стоит; выбор B
+    // пишет B → [A] и снимает у A вычищенный список — две правки.
+    const world: World = {
+      templates: [
+        template(TPL_A, 'Шаблон проекта', ['orbis/project'], 'Вид проекта A\n', {
+          createdAt: '2026-09-01T00:00:00.000Z',
+          winsOver: [ARCHIVED_TPL],
+        }),
+        template(TPL_B, 'Шаблон задачи', ['orbis/task'], 'Вид задачи B\n', {
+          createdAt: '2026-09-02T00:00:00.000Z',
+        }),
+      ],
+    };
+    const { calls } = openRecord(fixture('project-task'), world);
+    const plaque = await screen.findByTestId('dispute-plaque');
+    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
+    await waitFor(() => expect(renderedTexts()).toContain('Вид задачи B'));
+    const batches = calls.filter((c) => c.path === 'entity.updateBatch');
+    expect(batches).toHaveLength(1);
+    const ops = (batches[0]?.input as { operations: unknown[] }).operations;
+    expect(ops).toHaveLength(2);
   });
 });
 

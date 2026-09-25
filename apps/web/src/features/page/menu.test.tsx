@@ -330,6 +330,10 @@ describe('«Сделать страницей»', () => {
     expect(batches()).toEqual([
       [{ tool: 'entity_update', input: { id: f.entity.id, aspects: { attach: [PAGE_ASPECT] } } }],
     ]);
+    // Подпись жеста — заголовок записи журнала и ответа «отмени последнее», не «batch: операций — 1».
+    expect(calls.find((c) => c.path === 'entity.updateBatch')?.input).toMatchObject({
+      label: 'Сделать страницей',
+    });
     expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
 
     await openMenu();

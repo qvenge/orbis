@@ -83,6 +83,15 @@ export interface DetailMenuProps {
   bodyGate: BodyGateRef;
 }
 
+/**
+ * Подписи жестов, пишущих пачку: одна строка — и пункт меню, и заголовок записи журнала, и то, что
+ * назовёт «отмени последнее» (`UpdateBatchOptions.action`).
+ */
+const MAKE_PAGE = 'Сделать страницей';
+const CHANGE_VIEW = 'Изменить вид только этой записи';
+const STOP_PAGE = 'Перестать быть страницей';
+const TEMPLATE_FOR = 'Сделать шаблоном для…';
+
 /** Тост жеста, отложенного ради неотправленной правки тела (`bodySettled`). */
 export const BODY_SAVING = 'Сохраняем текст…';
 
@@ -244,7 +253,7 @@ export function DetailMenu({
         ? []
         : [
             {
-              label: 'Изменить вид только этой записи',
+              label: CHANGE_VIEW,
               icon: <FileText size={16} aria-hidden />,
               onSelect: () => changeView(templateText),
             },
@@ -266,13 +275,14 @@ export function DetailMenu({
   // записи). Вид прежним не остаётся; «как раньше» — это «Изменить вид только этой записи».
   function makePageItem(): DropdownMenuItem {
     return {
-      label: 'Сделать страницей',
+      label: MAKE_PAGE,
       icon: <FilePlus2 size={16} aria-hidden />,
       onSelect: () => {
         if (!bodySettled()) return;
         void runBatch(
           [{ tool: 'entity_update', input: { id: entity.id, aspects: { attach: [PAGE_ASPECT] } } }],
           'Запись стала страницей',
+          { action: MAKE_PAGE },
         );
       },
     };
@@ -285,7 +295,13 @@ export function DetailMenu({
     if (plan.case === 3) {
       setDialog({ kind: 'change-view', entityId: entity.id, updatedAt: entity.updatedAt, plan });
     } else {
-      void runBatch([becomePage(entity.id, entity.updatedAt, plan.body)], 'Вид записи теперь свой');
+      void runBatch(
+        [becomePage(entity.id, entity.updatedAt, plan.body)],
+        'Вид записи теперь свой',
+        {
+          action: CHANGE_VIEW,
+        },
+      );
     }
   }
 
@@ -306,7 +322,7 @@ export function DetailMenu({
             },
           ]),
       {
-        label: 'Сделать шаблоном для…',
+        label: TEMPLATE_FOR,
         icon: <LayoutTemplate size={16} aria-hidden />,
         onSelect: () =>
           setDialog({
@@ -327,7 +343,7 @@ export function DetailMenu({
       // Снимается ТОЛЬКО аспект (РП-22): «Шаблон для» и «Главнее, чем» переживают снятие, и
       // возврат аспекта (Undo, «Сделать страницей») возвращает шаблон каким он был.
       {
-        label: 'Перестать быть страницей',
+        label: STOP_PAGE,
         icon: <Undo2 size={16} aria-hidden />,
         onSelect: () => {
           if (!bodySettled()) return;
@@ -339,6 +355,7 @@ export function DetailMenu({
               },
             ],
             'Запись больше не страница',
+            { action: STOP_PAGE },
           );
         },
       },
@@ -365,6 +382,7 @@ export function DetailMenu({
                 becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.hideAsVersion),
               ],
               'Вид записи теперь свой, текст — в версии',
+              { action: CHANGE_VIEW },
             );
           }}
           onShowBelow={() => {
@@ -373,6 +391,7 @@ export function DetailMenu({
             void runBatch(
               [becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.showBelow)],
               'Вид записи теперь свой',
+              { action: CHANGE_VIEW },
             );
           }}
           onCancel={() => setDialog(null)}
@@ -385,7 +404,9 @@ export function DetailMenu({
           onSave={(op) => {
             setDialog(null);
             const clearing = op.tool === 'entity_update' && op.input.unset !== undefined;
-            void runBatch([op], clearing ? 'Страница больше не шаблон' : 'Шаблон сохранён');
+            void runBatch([op], clearing ? 'Страница больше не шаблон' : 'Шаблон сохранён', {
+              action: TEMPLATE_FOR,
+            });
           }}
           onCancel={() => setDialog(null)}
         />

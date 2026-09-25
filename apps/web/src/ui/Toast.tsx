@@ -35,12 +35,16 @@ export function Toast({
 }
 
 /**
- * Стек тостов из toast-store (авто-dismiss 4s живёт в сторе, поэтому Radix-таймер выключен
+ * Стек тостов из toast-store (авто-dismiss живёт в сторе, поэтому Radix-таймер выключен
  * через duration=Infinity). type="background" → aria-live=polite, фокус не перехватывается.
+ * Наведение и фокус внутри тоста ставят отсчёт стора на паузу: пока человек тянется к «Отменить»,
+ * тост не уезжает из-под руки.
  */
 export function Toaster() {
   const toasts = useToastStore((s) => s.toasts);
   const dismiss = useToastStore((s) => s.dismiss);
+  const pause = useToastStore((s) => s.pause);
+  const resume = useToastStore((s) => s.resume);
   return (
     <RTo.Provider swipeDirection="right" duration={Number.POSITIVE_INFINITY}>
       {toasts.map((t) => (
@@ -51,6 +55,10 @@ export function Toaster() {
           onOpenChange={(o) => {
             if (!o) dismiss(t.id);
           }}
+          onMouseEnter={() => pause(t.id)}
+          onMouseLeave={() => resume(t.id)}
+          onFocus={() => pause(t.id)}
+          onBlur={() => resume(t.id)}
           className={toneClass(t.tone)}
         >
           <RTo.Title>{t.title}</RTo.Title>

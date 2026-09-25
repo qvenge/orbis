@@ -1531,6 +1531,8 @@ test('модули первого кадра не тянут схему реда
     '../page/usePageTemplates.ts',
     '../page/RecordView.tsx',
     '../page/TemplatePlaques.tsx',
+    // Пачка правок с тостом «Отменить» — плашка спора зовёт её эагерно (финальное ревью, C1-I4).
+    '../page/useUpdateBatch.ts',
     '../page/BaseRecordView.tsx',
     // Кнопка меню ⋮ — эагерная заглушка ленивого меню (рычаг веса задачи 14); само меню
     // (`DetailMenu.tsx`) ленивое и сторожится наличием своего чанка (check-lazy-chunks).

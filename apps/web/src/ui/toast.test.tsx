@@ -1,7 +1,7 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { Toaster } from './Toast';
-import { useToastStore } from './toast-store';
+import { ACTION_DISMISS_MS, useToastStore } from './toast-store';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -60,5 +60,36 @@ test('Toaster: действие тоста — кнопка; нажатие зо
     screen.getByRole('button', { name: 'Отменить' }).click();
   });
   expect(onSelect).toHaveBeenCalledTimes(1);
+  expect(useToastStore.getState().toasts).toHaveLength(0);
+});
+
+test('тост с действием живёт дольше и стоит, пока на нём курсор или фокус (C1-M3)', () => {
+  render(<Toaster />);
+  act(() => {
+    useToastStore.getState().show('Вид записи теперь свой', 'default', {
+      label: 'Отменить',
+      onSelect: () => {},
+    });
+  });
+  // Четырёх секунд тосту с «Отменить» мало — он ещё на месте.
+  act(() => vi.advanceTimersByTime(4000));
+  expect(screen.getByText('Вид записи теперь свой')).toBeInTheDocument();
+
+  const toast = screen.getByText('Вид записи теперь свой').closest('li') as HTMLElement;
+  fireEvent.mouseEnter(toast);
+  act(() => vi.advanceTimersByTime(ACTION_DISMISS_MS * 3));
+  expect(useToastStore.getState().toasts).toHaveLength(1);
+  fireEvent.mouseLeave(toast);
+
+  // Фокус внутри тоста — та же пауза (клавиатура тянется к «Отменить»).
+  fireEvent.focus(screen.getByRole('button', { name: 'Отменить' }));
+  act(() => vi.advanceTimersByTime(ACTION_DISMISS_MS * 3));
+  expect(useToastStore.getState().toasts).toHaveLength(1);
+  fireEvent.blur(screen.getByRole('button', { name: 'Отменить' }));
+
+  // Отсчёт продолжился с остатка: 10 − 4 = 6 секунд.
+  act(() => vi.advanceTimersByTime(ACTION_DISMISS_MS - 4000 - 1));
+  expect(useToastStore.getState().toasts).toHaveLength(1);
+  act(() => vi.advanceTimersByTime(1));
   expect(useToastStore.getState().toasts).toHaveLength(0);
 });
