@@ -5,7 +5,7 @@
  * видимый кадр ошибки экрана (`ChunkErrorBoundary`, с перезагрузкой), а не мёртвую кнопку; и
  * отказ не запоминается: следующий жест после возврата сети грузит меню заново.
  */
-import { fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ChunkErrorBoundary } from '../../app/ChunkErrorBoundary';
@@ -35,7 +35,7 @@ beforeEach(() => {
     if (network.down) throw new Error('Failed to fetch dynamically imported module');
     return importOriginal();
   });
-  // Простой не наступает: загрузку начинает только жест теста.
+  // Простой не наступает (тест «ничего до нажатия» ставит свой).
   vi.stubGlobal('requestIdleCallback', () => 1);
   useNav.setState({
     activeTab: 'browser',
@@ -89,7 +89,27 @@ test('чанк меню не приехал: нажатие — кадр оши�
   expect(await screen.findByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
 });
 
-test('отказ прогрева (наведение) молчит, кнопка жива: жест повторяет загрузку', async () => {
+test('до нажатия чанк меню не запрашивается: рендер, наведение, фокус, простой — ни одного import', async () => {
+  // Простой наступает сразу — у всех, кто его просит (редактор тела тоже).
+  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+    cb();
+    return 1;
+  });
+  renderWithProviders(<Screen />, handler);
+  const button = await screen.findByTestId('detail-menu');
+  fireEvent.pointerEnter(button);
+  fireEvent.mouseEnter(button);
+  act(() => button.focus());
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+  // Фоновый import() запрещён правилом app/chunk-reload.ts: его провал перезагрузил бы страницу.
+  expect(network.attempts).toBe(0);
+  expect(screen.getByTestId('detail-menu')).toBe(button);
+  expect(button).not.toHaveAttribute('aria-haspopup');
+});
+
+test('отказ форы на pointerdown молчит, click следом повторяет загрузку и открывает меню', async () => {
   // Необработанный отказ vitest ловит только ПОСЛЕ теста, под чужим именем, — ловим его здесь.
   const unhandled: unknown[] = [];
   const onUnhandled = (reason: unknown) => unhandled.push(reason);
@@ -97,12 +117,11 @@ test('отказ прогрева (наведение) молчит, кнопк�
   network.down = true;
   renderWithProviders(<Screen />, handler);
   const button = await screen.findByTestId('detail-menu');
-  fireEvent.pointerEnter(button);
-  fireEvent.focus(button);
-  // Дать отказу прогрева осесть: он не должен ни уронить экран, ни стать необработанным.
-  await new Promise((r) => setTimeout(r, 50));
+  fireEvent.pointerDown(button);
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
   process.off('unhandledRejection', onUnhandled);
-  // Прогрев действительно ходил за модулем (и получил отказ), а не взял запомненный.
   expect(network.attempts).toBe(1);
   expect(unhandled).toEqual([]);
   expect(screen.queryByText('Не удалось открыть экран')).toBeNull();
@@ -110,6 +129,6 @@ test('отказ прогрева (наведение) молчит, кнопк�
   network.down = false;
   fireEvent.click(screen.getByTestId('detail-menu'));
   expect(await screen.findByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
-  // Жест повторил загрузку: отказ прогрева не запомнен.
+  // Click повторил загрузку: отказ форы не запомнен.
   expect(network.attempts).toBe(2);
 });

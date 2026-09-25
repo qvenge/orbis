@@ -1230,56 +1230,21 @@ const menuHandler: MockHandler = (path) => {
 };
 
 /**
- * Меню ⋮ — ленивым чанком (рычаг веса задачи 14 страниц 1а, РП-11): кнопка эагерная, меню
- * подгружается в простое. Жест ДО загрузки покрывают все тесты меню ниже (простой в этом файле не
- * наступает, `beforeEach`), здесь — вторая дверь: простой наступил, меню встало закрытым.
+ * Меню ⋮ — ленивым чанком (рычаг веса задачи 14 страниц 1а, РП-11), грузится НАЖАТИЕМ: прогрева
+ * нет (правило `app/chunk-reload.ts`). Модуль сбрасывается в `beforeEach` — тесты идут «до
+ * загрузки». Отказ чанка и «ничего до нажатия» — `detail-menu.test.tsx`.
  */
-test('меню ⋮ грузится в простое закрытым и открывается жестом', async () => {
-  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
-    cb();
-    return 1;
-  });
-  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
-  // Настоящий триггер Radix несёт `aria-haspopup="menu"`, заглушка до загрузки — нет.
-  await waitFor(() =>
-    expect(screen.getByTestId('detail-menu')).toHaveAttribute('aria-haspopup', 'menu'),
-  );
-  expect(screen.queryByRole('menu')).toBeNull();
-  await openDetailMenu();
-  expect(screen.getByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
-});
-
 test('меню ⋮ с клавиатуры до загрузки: Tab до кнопки, Enter — меню открыто, фокус в пунктах', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
   const button = await screen.findByTestId('detail-menu');
   // Табом, как человек без мыши: заглушка — обычная кнопка в порядке обхода.
   for (let i = 0; i < 30 && document.activeElement !== button; i++) await userEvent.tab();
   expect(button).toHaveFocus();
-  // Наведение и фокус только прогревают модуль: узел кнопки не сменился, фокус не потерян.
+  // Фокус модуль не грузит и узел кнопки не меняет: фокус не потерян.
   expect(screen.getByTestId('detail-menu')).toBe(button);
   await userEvent.keyboard('{Enter}');
   const menu = await screen.findByRole('menu');
   await waitFor(() => expect(menu).toContainElement(document.activeElement as HTMLElement));
-});
-
-test('меню ⋮: заглушка сменилась в простое, пока на ней фокус, — фокус у настоящего триггера', async () => {
-  // Простой просят и меню, и редактор тела (EditorShell) — наступает он для всех разом.
-  const idle: (() => void)[] = [];
-  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
-    idle.push(cb);
-    return idle.length;
-  });
-  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
-  const button = await screen.findByTestId('detail-menu');
-  act(() => button.focus());
-  await act(async () => {
-    for (const cb of idle.splice(0)) cb();
-  });
-  await waitFor(() =>
-    expect(screen.getByTestId('detail-menu')).toHaveAttribute('aria-haspopup', 'menu'),
-  );
-  expect(screen.getByTestId('detail-menu')).toHaveFocus();
-  expect(screen.queryByRole('menu')).toBeNull();
 });
 
 test('меню ⋮: нажатие до загрузки чанка не теряется — меню открывается, когда чанк приехал', async () => {

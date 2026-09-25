@@ -5,10 +5,10 @@ import { MenuTrigger } from './MenuTrigger';
 /**
  * Меню ⋮ живёт в своём чанке (рычаг веса РП-11 задачи 14 страниц 1а: чанк экрана записи вырос
  * шаблоном хоста за порог +15 %, а Radix-меню — самый крупный кусок, которому в первом кадре
- * делать нечего). Промис загрузки один на приложение: прогрев и загрузка ведут к тому же модулю.
+ * делать нечего). Промис загрузки один на приложение.
  *
  * Отказ загрузки промис НЕ запоминает: отвергнутый промис в кеше делал бы кнопку мёртвой до
- * перезагрузки страницы, и следующий жест даже не попытался бы снова.
+ * перезагрузки страницы, и следующее нажатие даже не попыталось бы снова.
  */
 let menuModule: Promise<typeof import('./DetailMenu')> | null = null;
 const loadMenu = () => {
@@ -19,51 +19,39 @@ const loadMenu = () => {
   return menuModule;
 };
 
-/** Прогрев (наведение, фокус, простой) молчит об отказе: о нём скажет жест, если он будет. */
-const warmMenu = () => {
-  loadMenu().catch(() => {});
-};
-
 /**
  * Забыть загруженный модуль — ТОЛЬКО для тестов: без этого все тесты файла, кроме первого, шли бы
- * с уже загруженным меню, и «жест до загрузки чанка» не проверялся бы вовсе.
+ * с уже загруженным меню, и «нажатие до загрузки чанка» не проверялось бы вовсе.
  */
 export function resetDetailMenuModuleForTests(): void {
   menuModule = null;
 }
 
-/** Жесты, которыми Radix открывает меню с клавиатуры (`DropdownMenu.Trigger`). */
+/** Клавиши, которыми Radix открывает меню (`DropdownMenu.Trigger`); Enter и пробел — ещё и click. */
 const OPEN_KEYS = new Set(['Enter', ' ', 'ArrowDown']);
 
-interface Mounted {
-  Menu: typeof DetailMenu;
-  open: boolean;
-  focusTrigger: boolean;
-}
-
 /**
- * Кнопка меню ⋮, эагерная: видна и нажимаема с первого кадра, а само меню подгружается.
+ * Кнопка меню ⋮, эагерная: видна и нажимаема с первого кадра, а само меню грузится НАЖАТИЕМ.
  *
- * Узел кнопки меняется на настоящий триггер Radix ровно в двух случаях — в простое браузера и по
- * жесту (click, клавиши открытия). На наведение и фокус — только прогрев модуля, БЕЗ смены узла:
- * заглушка, сменённая под пальцем (iOS шлёт pointerenter прямо перед касанием) или под фокусом,
- * теряла бы касание и фокус клавиатуры. Если узел всё же сменился в простое, пока фокус на
- * заглушке, — фокус возвращается новому триггеру (`focusTrigger`).
+ * Прогрева нет — ни в простое, ни по наведению, ни по фокусу, и это не упущение: фоновый
+ * `import()` запрещён правилом `app/chunk-reload.ts` (докблок «ОСТОРОЖНО с фоновой догрузкой»).
+ * Vite шлёт `vite:preloadError` на ЛЮБОЙ провал `import()`, и `chunk-reload` перезагружает страницу
+ * — человеку, который ничего не нажимал, вместе с недописанным текстом. Цена — один запрос
+ * (≈9 кБ gzip) при первом открытии меню за сессию.
  *
- * Жест до загрузки чанка не теряется: меню встаёт уже открытым (`defaultOpen`). Своего `Suspense`
- * нет: меню монтируется загруженным модулем, так что заглушка не мигает запасным кадром.
+ * Загрузка начинается с `pointerdown` (фора до click) или с клавиши открытия; меню монтируется
+ * открытым по click или клавише, когда модуль готов, — нажатие не теряется. До этого узел кнопки
+ * не меняется: заглушка, сменённая между pointerdown и click, забрала бы click с собой, а сменённая
+ * под фокусом — фокус. Открытое меню Radix уводит фокус в свои пункты и при закрытии возвращает
+ * его своему триггеру.
+ *
+ * Отказ загрузки на нажатие — из рендера к границе ошибок экрана (`ChunkErrorBoundary`: кадр
+ * «Не удалось открыть экран» с перезагрузкой, как давал `React.lazy`); следующее нажатие (после
+ * возврата на экран) грузит заново.
  */
 export function DetailMenuSlot(props: DetailMenuProps) {
-  const [mounted, setMounted] = useState<Mounted | null>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  // Жест, пришедший до загрузки: меню, загрузившееся после него, обязано встать открытым — даже
-  // если загрузку начал простой, а не сам жест.
-  const wantOpenRef = useRef(false);
-  /**
-   * Отказ загрузки на ЖЕСТ — бросается из рендера к границе ошибок экрана (`ChunkErrorBoundary`):
-   * там кадр «Не удалось открыть экран» с перезагрузкой, тот же, что давал `React.lazy` до
-   * задачи 14. Кнопка, молча не делающая ничего, была бы хуже: человек не узнал бы, что меню нет.
-   */
+  // В обёртке: сам компонент — функция, и голую функцию `useState` принял бы за обновитель.
+  const [loaded, setLoaded] = useState<{ Menu: typeof DetailMenu } | null>(null);
   const [loadError, setLoadError] = useState<{ error: unknown } | null>(null);
   const aliveRef = useRef(true);
   useEffect(() => {
@@ -73,48 +61,27 @@ export function DetailMenuSlot(props: DetailMenuProps) {
     };
   }, []);
 
-  const mount = useCallback((byGesture: boolean) => {
+  /** Жест открытия: смонтировать меню открытым, когда модуль готов. */
+  const open = useCallback(() => {
     loadMenu().then(
       (m) => {
-        if (!aliveRef.current) return;
-        setMounted(
-          (prev) =>
-            prev ?? {
-              Menu: m.DetailMenu,
-              open: wantOpenRef.current,
-              focusTrigger: document.activeElement === buttonRef.current,
-            },
-        );
+        if (aliveRef.current) setLoaded((prev) => prev ?? { Menu: m.DetailMenu });
       },
       (error: unknown) => {
-        // Отказ в простое — молча: человек ничего не нажимал, а кнопка жива, и жест повторит
-        // загрузку. Отказ на жест — видимый (см. `loadError`).
-        if (byGesture && aliveRef.current) setLoadError({ error });
+        if (aliveRef.current) setLoadError({ error });
       },
     );
   }, []);
 
-  useEffect(() => {
-    // Простоя в окружении может не быть (Safari, jsdom) — тогда меню ждёт жеста.
-    if (typeof window.requestIdleCallback !== 'function') return;
-    const id = window.requestIdleCallback(() => mount(false));
-    return () => window.cancelIdleCallback?.(id);
-  }, [mount]);
-
   if (loadError !== null) throw loadError.error;
-  if (mounted !== null) {
-    const { Menu } = mounted;
-    return <Menu {...props} defaultOpen={mounted.open} focusTrigger={mounted.focusTrigger} />;
-  }
-  const open = () => {
-    wantOpenRef.current = true;
-    mount(true);
-  };
+  if (loaded !== null) return <loaded.Menu {...props} defaultOpen />;
   return (
     <MenuTrigger
-      ref={buttonRef}
-      onPointerEnter={warmMenu}
-      onFocus={warmMenu}
+      // Фора загрузке — с первого касания, до click. Её отказ молчит: click следом повторит
+      // загрузку и, откажи она снова, скажет об этом сам.
+      onPointerDown={() => {
+        loadMenu().catch(() => {});
+      }}
       onClick={open}
       onKeyDown={(e) => {
         if (!OPEN_KEYS.has(e.key)) return;

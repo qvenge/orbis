@@ -24,7 +24,7 @@ const sizes: Record<Size, string> = {
 /**
  * Тип пропсов — `ComponentProps<'button'>`, а не голые HTML-атрибуты: в React 19 `ref` — обычный
  * проп функционального компонента и доходит до `<button>` вместе с прочими. Им пользуются Radix
- * (`asChild`) и меню ⋮ экрана записи, возвращающее фокус своему триггеру.
+ * (`asChild` триггеров меню и диалогов).
  */
 export function Button({
   variant = 'primary',

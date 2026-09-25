@@ -1,5 +1,4 @@
 import { Archive, ArchiveRestore, Code, History, Link2, Pin } from 'lucide-react';
-import { useEffect, useRef } from 'react';
 import { DropdownMenu } from '../../ui/DropdownMenu';
 import { MenuTrigger } from './MenuTrigger';
 
@@ -8,8 +7,8 @@ import { MenuTrigger } from './MenuTrigger';
  * «Скопировать ссылку» третьей кнопкой сделал бы шапку панелью инструментов, а на узком
  * экране — очередью иконок поверх заголовка. Теперь это настоящее меню, действия внутри.
  *
- * Модуль ЛЕНИВЫЙ (`DetailMenuSlot`): дерево Radix-меню (menu, popper, floating-ui) — ≈7,7 кБ gzip
- * чанка экрана записи, а нужно оно только после жеста. Статический импорт этого файла вернул бы
+ * Модуль ЛЕНИВЫЙ (`DetailMenuSlot`, грузится нажатием): дерево Radix-меню (menu, popper,
+ * floating-ui) — ≈7,7 кБ gzip чанка экрана записи, а нужно оно только после жеста. Статический импорт этого файла вернул бы
  * вес в первый кадр каждого открытия записи (сторож — `scripts/check-lazy-chunks.ts`).
  */
 export interface DetailMenuProps {
@@ -31,28 +30,15 @@ export function DetailMenu({
   onToggleMarkdown,
   archived,
   defaultOpen,
-  focusTrigger,
 }: DetailMenuProps & {
-  /** Жест пришёл, пока меню грузилось (`DetailMenuSlot`): встать уже открытым. */
+  /** Меню монтируется жестом открытия (`DetailMenuSlot`) — и встаёт уже открытым. */
   defaultOpen: boolean;
-  /**
-   * Фокус стоял на заглушке, которую это меню сменило: вернуть его триггеру. Иначе человек,
-   * дошедший до кнопки табом, после подгрузки в простое оказывался бы в никуда (фокус на `body`).
-   * Открытому меню не нужно: фокус в его пункты ставит сам Radix.
-   */
-  focusTrigger: boolean;
 }) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  // Только на монтировании: заглушка сменяется меню один раз за жизнь экрана.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: намеренно один раз, см. выше
-  useEffect(() => {
-    if (focusTrigger && !defaultOpen) triggerRef.current?.focus();
-  }, []);
   const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
   return (
     <DropdownMenu
       defaultOpen={defaultOpen}
-      trigger={<MenuTrigger ref={triggerRef} />}
+      trigger={<MenuTrigger />}
       items={[
         { label: 'Закрепить', icon: <Pin size={16} aria-hidden />, onSelect: onPin },
         {
