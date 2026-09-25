@@ -8,7 +8,7 @@ import { useBodyKind } from '../../lib/query-blocks/body-kind';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
-import { BlockPlaque } from '../page/blocks/BlockPlaque';
+import { BlockPlaque, issueTone } from '../page/blocks/BlockPlaque';
 import { NO_REGISTRY } from '../page/render-plan';
 import { BODY_BOX_CLASS, BODY_PLACEHOLDER } from './body-box';
 import {
@@ -130,11 +130,12 @@ function firstFrameNode(node: PageNode, kind: BodyKind, key: number): ReactNode 
   const issue = placementIssue(node, kind);
   if (issue !== undefined) {
     // Без признака data-query-widget, в отличие от живого блока: плашка — не виджет со своим
-    // смыслом, а место в тексте, и касание её зовёт редактор, где этот текст и правится.
+    // смыслом, а место в тексте, и касание её зовёт редактор, где этот текст и правится. Тон — тем
+    // же правилом, что на показе страницы (`issueTone`): сломанный контейнер — ошибка и здесь.
     return (
       <BlockPlaque
         key={key}
-        tone="misplaced"
+        tone={issueTone(issue)}
         message={issue.message}
         {...(issue.hint !== undefined && { hint: issue.hint })}
       />

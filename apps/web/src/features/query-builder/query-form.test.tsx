@@ -215,7 +215,7 @@ test('снятие аспекта убирает его свойства, уст
 
 test('таблица → список: колонки сбрасываются, блок сохраняется', async () => {
   const { onSave } = await openForm('aspect=orbis/task, display=table, columns=orbis/due_date');
-  fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'list' } });
+  fireEvent.change(screen.getByLabelText('Форма показа'), { target: { value: 'list' } });
   expect(screen.queryByTestId('qb-form-error')).toBeNull();
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, display=list');
@@ -230,7 +230,7 @@ test('таблица с колонками открывается формой �
 
 test('плитка: по умолчанию count, агрегат выбирается из числовых свойств', async () => {
   const { onSave } = await openForm('aspect=orbis/financial');
-  fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'tile' } });
+  fireEvent.change(screen.getByLabelText('Форма показа'), { target: { value: 'tile' } });
   expect(screen.getByLabelText('Число плитки')).toHaveValue('count');
   fireEvent.change(screen.getByLabelText('Число плитки'), {
     target: { value: 'sum:orbis/amount' },
@@ -246,7 +246,7 @@ test('плитка: по умолчанию count, агрегат выбирае
 test('плитка → компактный: агрегат сбрасывается', async () => {
   const { onSave } = await openForm('aspect=orbis/task, display=tile, aggregate=count');
   expect(screen.getByLabelText('Число плитки')).toHaveValue('count');
-  fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'compact' } });
+  fireEvent.change(screen.getByLabelText('Форма показа'), { target: { value: 'compact' } });
   expect(screen.queryByLabelText('Число плитки')).toBeNull();
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, display=compact');
@@ -587,7 +587,7 @@ test('заголовок с пробелом печатается в кавыч�
 
 test('режим отображения и поиск сохраняются', async () => {
   const { onSave } = await openForm('aspect=orbis/task');
-  fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'compact' } });
+  fireEvent.change(screen.getByLabelText('Форма показа'), { target: { value: 'compact' } });
   fireEvent.change(screen.getByLabelText('Поиск по тексту'), { target: { value: 'отчёт' } });
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, search=отчёт, display=compact');
@@ -677,7 +677,7 @@ test('у контролов формы есть связанные подпис�
     'Лимит выдачи',
     'Заголовок',
     'Поиск по тексту',
-    'Режим отображения',
+    'Форма показа',
     'Архивные',
     'Скрыть заблокированные',
     'Дети сущности',

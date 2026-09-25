@@ -42,6 +42,16 @@ export function ConfigureButton({ onClick }: { onClick: () => void }) {
  */
 export const REGISTRY_FAILED_MESSAGE = 'Реестр не загрузился — блок не разобран.';
 
+/**
+ * Тон плашки проблемы тела — одно правило на показ страницы (рендерер) и первый кадр тела: одна и
+ * та же строка не должна быть тревогой на показе и спокойной рамкой до подъёма редактора
+ * (финальное ревью, Task 13 m-2). Неуместный блок и лишний `{{body}}` — не поломка, а подсказка;
+ * сломанная разметка контейнера (коды препрохода) — ошибка, её чинят.
+ */
+export function issueTone(issue: { code: string }): 'misplaced' | 'error' {
+  return issue.code === 'BLOCK_MISPLACED' || issue.code === 'SECOND_BODY' ? 'misplaced' : 'error';
+}
+
 /** Ориентир плашки по роду — у каждого свой: тест «неуместного» не должен находить «неузнанный». */
 const PLAQUE_TESTID = {
   error: 'qb-error',

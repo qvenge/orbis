@@ -6,7 +6,6 @@ import { Blockers } from './Blockers';
 import { EntityBody, ReadOnlyEntityBody, useBodyScreen } from './EntityBody';
 import { EntityThreadTab } from './EntityThreadTab';
 import { NativeRow } from './NativeRow';
-import { RestCards } from './own-cards';
 import { useRecordHost } from './record-host';
 import { Subtasks } from './Subtasks';
 import { TagsBlock } from './TagsBlock';
@@ -84,16 +83,6 @@ export function BodyBlock() {
   );
 }
 
-const NOTHING_PLACED: ReadonlySet<string> = new Set();
-
-/**
- * `{{cards}}` без размещённых карточек. Шаблон, где есть `{{card: X}}`, рисует `RestCards` сам —
- * с множеством размещённых: какие `card:` стоят в дереве, знает рендерер, а не примитив.
- */
-function CardsBlock() {
-  return <RestCards placed={NOTHING_PLACED} />;
-}
-
 export function SubtasksBlock() {
   const { entity, relations } = useRecordHost();
   return <Subtasks parentId={entity.id} relations={relations} />;
@@ -129,11 +118,18 @@ export function ThreadBlock() {
   return <EntityThreadTab key={`thread-${entity.id}`} entityId={entity.id} />;
 }
 
-export const RECORD_BLOCK_COMPONENTS: Readonly<Record<RecordBlockName, ComponentType>> = {
+/**
+ * Примитивы блоков обвязки. `{{cards}}` здесь НЕТ: его рисует рендерер (`RestCards` с множеством
+ * карточек, размещённых `{{card: X}}` этого дерева, и без карточки «Страница» у страницы своим
+ * телом, РП-25). Примитив без этих знаний был бы второй дорогой к `{{cards}}`, по которой
+ * карточки показались бы дважды (финальное ревью, C2-M1).
+ */
+export const RECORD_BLOCK_COMPONENTS: Readonly<
+  Record<Exclude<RecordBlockName, 'cards'>, ComponentType>
+> = {
   title: TitleBlock,
   tags: TagsBlock,
   body: BodyBlock,
-  cards: CardsBlock,
   subtasks: SubtasksBlock,
   blockers: BlockersBlock,
   backlinks: BacklinksBlock,

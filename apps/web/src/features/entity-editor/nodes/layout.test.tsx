@@ -13,6 +13,7 @@ import {
   parseBody,
   serializeBody,
 } from '@orbis/shared/doc';
+import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
 import type { BodyKind } from '@orbis/shared/doc/placement';
 import { MISPLACED_HINT } from '@orbis/shared/doc/placement';
 import { FIXTURE_PARSE_REGISTRY } from '@orbis/shared/query/fixtures';
@@ -174,6 +175,22 @@ test('первый кадр страницы — те же рамки и заг�
   expect(screen.queryByTestId('body-editor')).toBeNull();
   // Текст в рамке — текст тела: касание его зовёт редактор.
   expect(isBodyGesture(screen.getByText('левая'))).toBe(true);
+});
+
+test('первый кадр страницы: сломанный контейнер — тем же тоном, что на показе (ошибка), неуместный — спокойно', async () => {
+  vi.stubGlobal('requestIdleCallback', () => 1);
+  const md = 'до\n\n{{columns}}\n{{column}}\nтекст';
+  renderWithProviders(
+    <BodyKindProvider kind="page">
+      <EditorShell doc={parseBody(md)} markdown={md} onChange={vi.fn()} />
+    </BodyKindProvider>,
+    api(),
+  );
+  // Показ страницы рисует эту строку плашкой ошибки (`Renderer`, `issueTone`) — первый кадр тоже.
+  expect(await screen.findByTestId('qb-error')).toHaveTextContent(
+    GRAMMAR_ERROR_MESSAGES.CONTAINER_UNCLOSED,
+  );
+  expect(screen.queryByTestId('block-misplaced')).toBeNull();
 });
 
 test('заметка: {{title}} вставкой — плашка «сделать страницей?», после сохранения текст узла цел', async () => {

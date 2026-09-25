@@ -2,7 +2,7 @@
 // баррель тянет схему документа (tiptap, marked) в первый кадр (сторожа `check-lazy-chunks.ts` и
 // `save.test.tsx`).
 import { PAGE_ASPECT } from '@orbis/shared';
-import type { PageNode } from '@orbis/shared/doc/page-grammar';
+import type { PageNode, RecordBlockName } from '@orbis/shared/doc/page-grammar';
 import { aspectOfCardText, type BodyKind, type PlacementIssue } from '@orbis/shared/doc/placement';
 import type { ParseRegistry } from '@orbis/shared/query';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
@@ -12,8 +12,8 @@ import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
-import { recordStubLabel } from '../entity-editor/layout-parts';
-import { BlockPlaque, REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
+import { recordStubLabel, tabShowLabel } from '../entity-editor/layout-parts';
+import { BlockPlaque, issueTone, REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
 import { DataBlock } from './blocks/DataBlock';
 import { Columns } from './Columns';
 import { forEachRendered, isCardsBlock, partsOf, pathKey, renderIssues } from './render-plan';
@@ -30,6 +30,9 @@ import { TabsContainer } from './TabsContainer';
  *
  * Проблемы тела (`bodyIssues`, §5.5, §5.8) — плашками на месте своего узла: неуместный блок,
  * второй `{{body}}`, сломанный контейнер. Остальное тело рисуется: одна ошибка не гасит страницу.
+ *
+ * Известное расхождение с настройкой (как у первого кадра, `page-grammar.ts`): блок с отступом в
+ * пункте списка препроход не видит, и на показе он — текстом, а в редакторе настройки — виджетом.
  */
 
 /**
@@ -171,12 +174,10 @@ function PageNodeView({ node, path }: { node: PageNode; path: readonly number[] 
   const plan = useRenderPlan();
   const issue = plan.issues.get(pathKey(path));
   if (issue !== undefined) {
-    // Неуместный блок и лишний `{{body}}` — не поломка, а подсказка: спокойная рамка, как в первом
-    // кадре тела. Сломанная разметка контейнера — ошибка, её чинят.
-    const calm = issue.code === 'BLOCK_MISPLACED' || issue.code === 'SECOND_BODY';
+    // Тон — одним правилом с первым кадром тела (`issueTone`).
     return (
       <BlockPlaque
-        tone={calm ? 'misplaced' : 'error'}
+        tone={issueTone(issue)}
         message={issue.message}
         {...(issue.hint !== undefined && { hint: issue.hint })}
       />
@@ -213,7 +214,7 @@ function PageNodeView({ node, path }: { node: PageNode; path: readonly number[] 
         <TabsContainer
           memoryKey={pathKey(path)}
           tabs={node.parts.map((tab, p) => ({
-            label: tab.label,
+            label: tabShowLabel(tab.label, p),
             content: <NodeList nodes={tab.children} prefix={[...path, p]} />,
             keepMounted: !holdsThread(tab.children),
           }))}
@@ -226,7 +227,7 @@ function PageNodeView({ node, path }: { node: PageNode; path: readonly number[] 
   }
 }
 
-function RecordNode({ name }: { name: keyof typeof RECORD_BLOCK_COMPONENTS }) {
+function RecordNode({ name }: { name: RecordBlockName }) {
   const plan = useRenderPlan();
   if (name === 'body' && plan.ownBody) {
     // Шаблон, показанный сам на себе (§6.4: `this` — сама страница): его тело — разметка
@@ -241,8 +242,8 @@ function RecordNode({ name }: { name: keyof typeof RECORD_BLOCK_COMPONENTS }) {
     );
   }
   if (name === 'cards') {
-    // Не `RECORD_BLOCK_COMPONENTS.cards` (там размещённых нет): карточки, стоящие в этом дереве
-    // через `{{card: X}}`, показались бы дважды — на месте и в общей куче.
+    // Только здесь — у примитивов записи `{{cards}}` нет: карточки, стоящие в этом дереве через
+    // `{{card: X}}`, показались бы дважды — на месте и в общей куче.
     if (plan.reg === null) {
       return plan.regFailed ? <BlockPlaque message={REGISTRY_FAILED_MESSAGE} /> : null;
     }

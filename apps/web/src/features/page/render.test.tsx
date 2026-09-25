@@ -440,3 +440,17 @@ test('реестр не загрузился — {{cards}} страницы пл
   await screen.findByTestId('page-view');
   expect(await screen.findByTestId('qb-error')).toHaveTextContent(REGISTRY_FAILED_MESSAGE);
 });
+
+test('вкладка без подписи ({{tab}}) на показе — «Вкладка N», а не пустой ярлык (F-M2)', async () => {
+  openPage(
+    page(
+      '{{tabs}}\n{{tab}}\nТекст А\n{{/tab}}\n{{tab: Б}}\nТекст Б\n{{/tab}}\n{{tab}}\nТекст В\n{{/tab}}\n{{/tabs}}\n',
+    ),
+  );
+  await screen.findByText('Текст А');
+  expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+    'Вкладка 1',
+    'Б',
+    'Вкладка 3',
+  ]);
+});

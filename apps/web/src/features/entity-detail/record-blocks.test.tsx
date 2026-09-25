@@ -7,6 +7,7 @@
  */
 import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
 import { parseBody } from '@orbis/shared/doc';
+import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -17,7 +18,8 @@ import { installCrashTrap, type MockHandler, renderWithProviders } from '../../t
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
-import { BodyScreenProvider, type BodyScreenValue } from './EntityBody';
+import { Renderer } from '../page/Renderer';
+import { BodyScreenProvider, type BodyScreenValue, bodyKindOf } from './EntityBody';
 import { AspectCardFor, RestCards } from './own-cards';
 import { RECORD_BLOCK_COMPONENTS, TitleBlock, VersionsBlock } from './record-blocks';
 import { RecordHostProvider, recordHostValue, TabPartHost } from './record-host';
@@ -98,7 +100,6 @@ describe('каждый примитив показывает свой ориен
     ['title', REL, 'native-row'],
     ['tags', REL, 'tags-block'],
     ['body', REL, 'editor-preview'],
-    ['cards', REL, 'aspect-orbis/task'],
     ['subtasks', REL, 'subtask'],
     ['blockers', REL, 'block-row'],
     ['backlinks', REL, 'backlink'],
@@ -112,6 +113,16 @@ describe('каждый примитив показывает свой ориен
       expect(await screen.findByTestId(landmark, {}, { timeout: 5000 })).toBeInTheDocument();
     });
   }
+
+  test('cards → aspect-orbis/task — путём продукта, через рендерер (C2-M1)', async () => {
+    renderUnder(
+      fixture(REL),
+      <Renderer nodes={parsePageText('{{cards}}\n')} kind="template" appendUnplacedCards={false} />,
+    );
+    expect(
+      await screen.findByTestId('aspect-orbis/task', {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+  });
 
   test('blockers — секция с полем добавления (ориентир снимка `block-add`)', async () => {
     const Block = RECORD_BLOCK_COMPONENTS.blockers;
@@ -350,4 +361,17 @@ describe('тело — род по САМОЙ записи, а не по мес�
     renderUnder(withBody('{{body}}', [PAGE_ASPECT]), <Body />);
     expect(await screen.findByTestId('block-misplaced')).toBeInTheDocument();
   });
+});
+
+test('bodyKindOf: заметка / страница / шаблон; пустой «Шаблон для» — страница, а не шаблон', () => {
+  expect(bodyKindOf({ aspects: [], props: {} })).toBe('note');
+  expect(bodyKindOf({ aspects: [PAGE_ASPECT], props: {} })).toBe('page');
+  expect(
+    bodyKindOf({ aspects: [PAGE_ASPECT], props: { [TEMPLATE_FOR_PROPERTY]: ['orbis/task'] } }),
+  ).toBe('template');
+  // Схема значения пустой список не пускает (minItems: 1), но функция читает и данные мимо схемы
+  // (черновик предложения): пустой набор — не шаблон ни для кого (мутант 2g финального ревью).
+  expect(bodyKindOf({ aspects: [PAGE_ASPECT], props: { [TEMPLATE_FOR_PROPERTY]: [] } })).toBe(
+    'page',
+  );
 });
