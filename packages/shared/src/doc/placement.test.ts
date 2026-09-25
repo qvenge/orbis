@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { getSchema } from '@tiptap/core';
 import { FIXTURE_PARSE_REGISTRY as REG } from '../query/ast-fixtures';
 import { type ParseRegistry, toParseRegistry } from '../query/parse-ast';
 import { propertyDefinitionSchema } from '../registry/property-type';
@@ -13,11 +14,15 @@ import {
   blockAllowedIn,
   bodyIssues,
   EMPTY_QUERY_MESSAGE,
+  kindsAllowing,
+  layoutMisplaced,
+  layoutPlaceAllows,
   MISPLACED_HINT,
   nodeAt,
   type PlacedBlock,
   templateBrokenReason,
 } from './placement';
+import { DOC_EXTENSIONS } from './schema';
 
 const issues = (text: string, kind: BodyKind, reg: ParseRegistry = REG) =>
   bodyIssues(parsePageText(text), kind, reg);
@@ -286,6 +291,80 @@ describe('templateBrokenReason — §4.2 шаг 7', () => {
     expect(templateBrokenReason('{{title}}\n{{query:  }}\n{{body}}\n', REG)).toBe(
       EMPTY_QUERY_MESSAGE,
     );
+  });
+});
+
+describe('место узлов страницы в документе (§5.2) — layoutMisplaced', () => {
+  // Настоящая схема документа: правило обязано работать на живом узле ProseMirror, который
+  // редактор отдаёт стражу транзакций, а не на своей подделке.
+  const schema = getSchema(DOC_EXTENSIONS as never);
+  type J = Record<string, unknown>;
+  const p = (text = 'x'): J => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+  const title: J = { type: 'recordBlock', attrs: { name: 'title' } };
+  const card: J = { type: 'aspectCard', attrs: { aspect: null, text: 'orbis/goal' } };
+  const cols = (...parts: J[][]): J => ({
+    type: 'columns',
+    content: parts.map((content) => ({ type: 'column', content })),
+  });
+  const tabs = (...parts: J[][]): J => ({
+    type: 'tabs',
+    content: parts.map((content, i) => ({ type: 'tab', attrs: { label: `В${i}` }, content })),
+  });
+  const doc = (...content: J[]) => {
+    const node = schema.nodeFromJSON({ type: 'doc', content });
+    node.check(); // схема такой документ ПРИНИМАЕТ — ловит только правило места
+    return node;
+  };
+  const bullet = (...content: J[]): J => ({
+    type: 'bulletList',
+    content: [{ type: 'listItem', content }],
+  });
+  const quote = (...content: J[]): J => ({ type: 'blockquote', content });
+  const cell = (...content: J[]): J => ({
+    type: 'table',
+    content: [{ type: 'tableRow', content: [{ type: 'tableCell', content }] }],
+  });
+
+  test('на своём месте — верх, часть колонок, часть вкладок, контейнер в части (глубина 2)', () => {
+    expect(layoutMisplaced(doc(p(), title, card, cols([p()], [p()])))).toBe(false);
+    expect(layoutMisplaced(doc(cols([title, card], [p()])))).toBe(false);
+    expect(layoutMisplaced(doc(tabs([card, p()])))).toBe(false);
+    expect(layoutMisplaced(doc(cols([tabs([title])], [p()])))).toBe(false);
+    expect(layoutMisplaced(doc(tabs([cols([p()], [card])])))).toBe(false);
+    // Обычные блоки в чужих узлах — не его забота.
+    expect(layoutMisplaced(doc(bullet(p()), quote(p()), cell(p())))).toBe(false);
+  });
+
+  test('не на своём месте — пункт списка, цитата, ячейка таблицы', () => {
+    expect(layoutMisplaced(doc(bullet(p(), cols([p()], [p()]))))).toBe(true);
+    expect(layoutMisplaced(doc(quote(p(), title, p())))).toBe(true);
+    expect(layoutMisplaced(doc(bullet(p(), card)))).toBe(true);
+    expect(layoutMisplaced(doc(cell(tabs([p()]))))).toBe(true);
+    // Глубже: цитата внутри части — место части не спасает.
+    expect(layoutMisplaced(doc(cols([quote(title)], [p()])))).toBe(true);
+  });
+
+  test('глубина 3 — контейнер в части контейнера в части контейнера', () => {
+    expect(layoutMisplaced(doc(cols([tabs([cols([p()], [p()])])], [p()])))).toBe(true);
+    // Блок обвязки на той же глубине законен: предел — только для контейнеров.
+    expect(layoutMisplaced(doc(cols([tabs([title])], [p()])))).toBe(false);
+  });
+
+  test('layoutPlaceAllows — цепочка предков', () => {
+    expect(layoutPlaceAllows(['doc'], true)).toBe(true);
+    expect(layoutPlaceAllows(['doc', 'columns', 'column'], true)).toBe(true);
+    expect(layoutPlaceAllows(['doc', 'columns', 'column', 'tabs', 'tab'], true)).toBe(false);
+    expect(layoutPlaceAllows(['doc', 'columns', 'column', 'tabs', 'tab'], false)).toBe(true);
+    expect(layoutPlaceAllows(['doc', 'bulletList', 'listItem'], false)).toBe(false);
+    expect(layoutPlaceAllows(['doc', 'blockquote'], true)).toBe(false);
+  });
+
+  test('kindsAllowing — строка матрицы §5.5', () => {
+    expect(kindsAllowing('container')).toEqual(['page', 'template']);
+    expect(kindsAllowing('record')).toEqual(['page', 'template']);
+    expect(kindsAllowing('card')).toEqual(['page', 'template']);
+    expect(kindsAllowing('body')).toEqual(['template']);
+    expect(kindsAllowing('query')).toEqual(['note', 'page', 'template']);
   });
 });
 

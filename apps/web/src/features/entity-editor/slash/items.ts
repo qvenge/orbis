@@ -1,9 +1,5 @@
-import {
-  CONTAINER_LIMITS,
-  RECORD_BLOCK_NAMES,
-  type RecordBlockName,
-} from '@orbis/shared/doc/page-grammar';
-import type { BodyKind } from '@orbis/shared/doc/placement';
+import { RECORD_BLOCK_NAMES, type RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import { type BodyKind, kindsAllowing, layoutPlaceAllows } from '@orbis/shared/doc/placement';
 import type { QueryAst } from '@orbis/shared/query';
 import type { Editor } from '@tiptap/react';
 import { RECORD_BLOCK_TITLES } from '../layout-parts';
@@ -74,29 +70,19 @@ export type SlashCaret = {
   node: (depth: number) => { type: { name: string } };
 };
 
-/** Узлы, в которых блок тела v3 законен (§5.2): верх тела, контейнер и его часть. */
-const LAYOUT_HOSTS: ReadonlySet<string> = new Set(['doc', 'columns', 'column', 'tabs', 'tab']);
-const CONTAINERS: ReadonlySet<string> = new Set(['columns', 'tabs']);
-
 /**
  * Можно ли вставить сюда блок тела v3. Пункт вставляется ПОСЛЕ текстового блока с кареткой, в его
- * родителя, — поэтому проверяются все предки этого блока (глубины `0 … depth - 1`): любой чужой
- * (пункт списка, цитата, ячейка таблицы) — нельзя. Контейнеру ещё и глубина: предков-контейнеров
- * меньше предела, иначе новый встанет третьим уровнем.
+ * родителя, — поэтому правилу места (`layoutPlaceAllows`, одна копия с правилом стража
+ * транзакций) отдаются все предки этого блока (глубины `0 … depth - 1`).
  */
 function placeAllows(place: NonNullable<SlashItem['place']>, caret: SlashCaret): boolean {
-  let containers = 0;
-  for (let d = 0; d < caret.depth; d++) {
-    const name = caret.node(d).type.name;
-    if (!LAYOUT_HOSTS.has(name)) return false;
-    if (CONTAINERS.has(name)) containers += 1;
-  }
-  return place === 'layout-block' || containers < CONTAINER_LIMITS.depth;
+  const ancestors: string[] = [];
+  for (let d = 0; d < caret.depth; d++) ancestors.push(caret.node(d).type.name);
+  return layoutPlaceAllows(ancestors, place === 'container');
 }
 
+/** Обычные блоки документа — во всех телах; блоки тела v3 — по матрице §5.5, а не своим списком. */
 const ALL_KINDS: readonly BodyKind[] = ['note', 'page', 'template'];
-/** Контейнеры и обвязка (§5.5): заметке — нет. */
-const LAYOUT_KINDS: readonly BodyKind[] = ['page', 'template'];
 
 /** Есть ли в документе `{{body}}` — второй шаблону не нужен (§5.3). */
 function hasBodyBlock(doc: SlashDoc): boolean {
@@ -125,7 +111,7 @@ function recordBlockItem(name: RecordBlockName): SlashItem {
     id: `record:${name}`,
     label: RECORD_BLOCK_TITLES[name],
     hint: 'блок записи',
-    kinds: name === 'body' ? ['template'] : LAYOUT_KINDS,
+    kinds: kindsAllowing(name === 'body' ? 'body' : 'record'),
     place: 'layout-block',
     ...(name === 'body' && { available: (doc: SlashDoc) => !hasBodyBlock(doc) }),
     run: (e) => e.chain().focus().insertContent({ type: 'recordBlock', attrs: { name } }).run(),
@@ -246,7 +232,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     id: 'query',
     label: 'Список по запросу',
     hint: 'блок данных',
-    kinds: ALL_KINDS,
+    kinds: kindsAllowing('query'),
     run: (e) =>
       e
         .chain()
@@ -268,7 +254,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     id: 'columns',
     label: 'Колонки',
     hint: 'раскладка страницы',
-    kinds: LAYOUT_KINDS,
+    kinds: kindsAllowing('container'),
     place: 'container',
     run: (e) =>
       e
@@ -281,7 +267,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     id: 'tabs',
     label: 'Вкладки',
     hint: 'раскладка страницы',
-    kinds: LAYOUT_KINDS,
+    kinds: kindsAllowing('container'),
     place: 'container',
     run: (e) =>
       e
@@ -295,7 +281,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     id: 'card',
     label: 'Карточка аспекта',
     hint: 'блок записи',
-    kinds: LAYOUT_KINDS,
+    kinds: kindsAllowing('card'),
     place: 'layout-block',
     // Вставка — по ответу, в каретку, которую редактор помнит и без фокуса: пока открыт выбор,
     // фокус у него, а `focus()` возвращает редактору его же выделение.

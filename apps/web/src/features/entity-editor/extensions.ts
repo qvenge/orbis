@@ -3,6 +3,7 @@ import type { AnyExtension } from '@tiptap/core';
 import UniqueID from '@tiptap/extension-unique-id';
 import { Placeholder } from '@tiptap/extensions';
 import { BODY_PLACEHOLDER } from './body-box';
+import { LayoutGuard } from './layout-guard';
 import { MoveBlock } from './move-block';
 import { EntityRefWithView } from './nodes/EntityChip';
 import { ColumnsWithView, ColumnWithView, TabsWithView, TabWithView } from './nodes/LayoutFrame';
@@ -24,11 +25,13 @@ import { UNIQUE_ID_TYPES } from './strip-ids';
  * унесла список типов блочных id в `strip-ids.ts` и импортирует его оттуда — не ради порядка, а
  * потому что тот же список читает сравнение документов, которое зовут ИЗ ЧАНКА DETAIL: тяни
  * оно список отсюда, схема Tiptap уехала бы в первый кадр (см. докблок strip-ids.ts).
- * Сам СОСТАВ расширений больше не меняется.
+ * Сам СОСТАВ расширений задача 13 не меняла.
  *
  * Страницы 1а (задача 16) тем же фильтром+concat заменили шесть узлов тела v3 — контейнеры,
  * части, блок обвязки и карточку — их версиями с NodeView (рамки и заглушки настройки, §9.1).
- * Имена и схема прежние, состав нод редактора по-прежнему равен составу документа.
+ * Имена и схема прежние, состав нод редактора по-прежнему равен составу документа. Финальная
+ * фикс-волна среза добавила в конец плагинный `LayoutGuard` (место узлов страницы, §5.2): нод и
+ * марок он не заводит.
  *
  * Расширений `/`-меню и `@` здесь НЕТ намеренно: они держат колбэки конкретного редактора
  * (состояние меню живёт в React), а модульная константа раздала бы пяти BodyEditor'ам на
@@ -98,4 +101,7 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // экземпляре, а не рассуждение). Замена перетаскиванию мышью — почему именно так, см.
   // move-block.ts.
   MoveBlock,
+  // Страницы 1а §5.2: страж места контейнеров и блоков записи на любом входе — вставке, обёртке,
+  // перетаскивании (см. layout-guard.ts). Плагинный, схему не трогает.
+  LayoutGuard,
 ];

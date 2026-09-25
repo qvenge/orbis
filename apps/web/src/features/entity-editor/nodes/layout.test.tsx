@@ -259,3 +259,102 @@ test('выделенная заглушка обвязки видна выдел
   editor.commands.setNodeSelection(editor.state.doc.child(0).nodeSize);
   await waitFor(() => expect(screen.getByTestId('record-stub').dataset.selected).toBe('true'));
 });
+
+/**
+ * Страж места узлов страницы (§5.2, `layout-guard.ts`): меню «/» — лишь один вход, а вставка
+ * своего буфера, обёртки StarterKit и перетаскивание кладут контейнер и блок записи в пункт
+ * списка, цитату или третьим уровнем. Сохранение такого документа увело бы ВСЁ тело в `rawBlock`.
+ */
+const COLUMNS_CLIPBOARD =
+  '<div data-columns="" data-pm-slice="0 0 []"><div data-column=""><p>а</p></div>' +
+  '<div data-column=""><p>б</p></div></div>';
+
+/** Путь вставки ProseMirror (`doPaste`); в jsdom нет `ClipboardEvent` — событие простое. */
+const pasteColumns = (editor: Editor) =>
+  editor.view.pasteHTML(COLUMNS_CLIPBOARD, new Event('paste') as ClipboardEvent);
+
+/** Типы верхнего уровня того, что ушло бы в `body_doc` при сохранении. */
+const savedTop = (editor: Editor) =>
+  bodyPairFromDoc({ v: DOC_SCHEMA_VERSION, doc: editor.getJSON() } as BodyDoc).doc.doc.content?.map(
+    (n) => n.type,
+  );
+
+/** Есть ли узел `child` под предком `ancestor`. */
+function nested(editor: Editor, ancestor: string, child: string): boolean {
+  let found = false;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== ancestor) return true;
+    node.descendants((inner) => {
+      if (inner.type.name === child) found = true;
+    });
+    return false;
+  });
+  return found;
+}
+
+/** Глубина вложенности контейнеров (колонки/вкладки) в документе. */
+function containerDepth(editor: Editor): number {
+  let max = 0;
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== 'columns' && node.type.name !== 'tabs') return true;
+    const $pos = editor.state.doc.resolve(pos);
+    let depth = 1;
+    for (let d = 0; d <= $pos.depth; d++) {
+      const name = $pos.node(d).type.name;
+      if (name === 'columns' || name === 'tabs') depth += 1;
+    }
+    max = Math.max(max, depth);
+    return true;
+  });
+  return max;
+}
+
+test('страж места: свой буфер с колонками на верх тела вставляется (контроль пути вставки)', async () => {
+  const { h } = mountEditor('page', 'Шапка');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor as Editor;
+  editor.commands.setTextSelection(endOf(editor, 'Шапка'));
+  pasteColumns(editor);
+  expect(savedTop(editor)).toContain('columns');
+});
+
+test('страж места: свой буфер с колонками в пункт списка — не в пункте, тело не rawBlock', async () => {
+  const { h } = mountEditor('page', 'Шапка\n\n- пункт');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor as Editor;
+  editor.commands.setTextSelection(endOf(editor, 'пункт'));
+  pasteColumns(editor);
+  expect(nested(editor, 'listItem', 'columns')).toBe(false);
+  expect(savedTop(editor)).not.toContain('rawBlock');
+});
+
+test('страж места: toggleBlockquote и toggleBulletList через блок записи — блок не уходит в цитату и пункт', async () => {
+  const { h } = mountEditor('page', 'до\n\n{{title}}\n\nпосле');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor as Editor;
+  const select = () => editor.commands.setTextSelection({ from: 1, to: endOf(editor, 'после') });
+
+  select();
+  editor.commands.toggleBlockquote();
+  expect(nested(editor, 'blockquote', 'recordBlock')).toBe(false);
+  expect(savedTop(editor)).not.toContain('rawBlock');
+
+  select();
+  editor.commands.toggleBulletList();
+  expect(nested(editor, 'listItem', 'recordBlock')).toBe(false);
+  expect(savedTop(editor)).not.toContain('rawBlock');
+});
+
+test('страж места: колонки во вкладку внутри колонки — глубина не растёт, тело не rawBlock', async () => {
+  const md =
+    '{{columns}}\n{{column}}\n{{tabs}}\n{{tab: T}}\nвнутри\n{{/tab}}\n{{/tabs}}\n{{/column}}\n' +
+    '{{column}}\nсоседняя\n{{/column}}\n{{/columns}}';
+  const { h } = mountEditor('page', md);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor as Editor;
+  expect(containerDepth(editor)).toBe(2);
+  editor.commands.setTextSelection(endOf(editor, 'внутри'));
+  pasteColumns(editor);
+  expect(containerDepth(editor)).toBe(2);
+  expect(savedTop(editor)).not.toContain('rawBlock');
+});

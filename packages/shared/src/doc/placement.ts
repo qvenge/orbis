@@ -17,7 +17,12 @@
 import { EMPTY_QUERY_MESSAGE } from '../contracts/block-messages';
 import { absoluteDateIn, RELATIVE_DATE_TOKENS } from '../query/dates';
 import { effectiveLabel, type ParseRegistry, parseQueryAst } from '../query/parse-ast';
-import { type GrammarErrorCode, type PageNode, parsePageText } from './page-grammar';
+import {
+  CONTAINER_LIMITS,
+  type GrammarErrorCode,
+  type PageNode,
+  parsePageText,
+} from './page-grammar';
 
 export type BodyKind = 'note' | 'page' | 'template';
 export type PlacedBlock = 'container' | 'record' | 'body' | 'card' | 'query';
@@ -40,6 +45,88 @@ const MATRIX: Record<PlacedBlock, Record<BodyKind, boolean>> = {
 /** Матрица §5.5. */
 export function blockAllowedIn(block: PlacedBlock, kind: BodyKind): boolean {
   return MATRIX[block][kind];
+}
+
+const BODY_KINDS: readonly BodyKind[] = ['note', 'page', 'template'];
+
+/** Роды тела, где блок работает, — та же матрица §5.5, прочитанная по строке (меню «/»). */
+export function kindsAllowing(block: PlacedBlock): BodyKind[] {
+  return BODY_KINDS.filter((kind) => blockAllowedIn(block, kind));
+}
+
+/**
+ * Место узлов страницы в ДОКУМЕНТЕ (§5.2): грамматика пускает контейнеры, блоки обвязки и
+ * карточки только на верх тела или в часть контейнера, а контейнеры — не глубже
+ * `CONTAINER_LIMITS.depth`. Схема документа шире (`block+` у пункта списка, цитаты, ячейки), и
+ * узел вне своего места не пережил бы повторного разбора: сверка скелета при записи увела бы ВСЁ
+ * тело в один `rawBlock`, а у страницы нет ни правки разметкой, ни правки `rawBlock`.
+ *
+ * Одно правило на два входа редактора: меню «/» спрашивает его про место каретки (удобство —
+ * не предлагать то, что нельзя), страж транзакций — про документ после шага (защита — вставка
+ * буфера, обёртка цитатой или списком, перетаскивание). Своя копия у каждого разошлась бы, и
+ * меню спрятало бы то, что вставка молча пропустила.
+ */
+export const LAYOUT_HOSTS: ReadonlySet<string> = new Set([
+  'doc',
+  'columns',
+  'column',
+  'tabs',
+  'tab',
+]);
+/** Узлы-контейнеры: их вложенность и считает предел глубины. */
+export const CONTAINER_NODES: ReadonlySet<string> = new Set(['columns', 'tabs']);
+/** Узлы страницы, которым место задаёт грамматика: контейнеры, блок обвязки, карточка. */
+const LAYOUT_NODES: ReadonlySet<string> = new Set([
+  ...CONTAINER_NODES,
+  'recordBlock',
+  'aspectCard',
+]);
+
+/**
+ * Законно ли узлу страницы стоять под этой цепочкой предков (от `doc` до родителя включительно):
+ * все предки — верх, контейнер или его часть; контейнеру ещё и предков-контейнеров меньше предела,
+ * иначе он встанет уровнем глубже `CONTAINER_LIMITS.depth`.
+ */
+export function layoutPlaceAllows(ancestors: readonly string[], container: boolean): boolean {
+  let containers = 0;
+  for (const name of ancestors) {
+    if (!LAYOUT_HOSTS.has(name)) return false;
+    if (CONTAINER_NODES.has(name)) containers += 1;
+  }
+  return !container || containers < CONTAINER_LIMITS.depth;
+}
+
+/**
+ * Узел документа — ровно то, что правилу о нём нужно. Структурный тип, а не `Node` ProseMirror:
+ * модуль листовой (tiptap сюда не тянется), а живой узел подходит под него как есть.
+ */
+export type LayoutDocNode = {
+  type: { name: string };
+  isTextblock: boolean;
+  forEach: (f: (child: LayoutDocNode) => void) => void;
+};
+
+/**
+ * Есть ли в документе узел страницы не на своём месте (`layoutPlaceAllows`). Обход по блокам, в
+ * текстовые блоки не спускается — O(блоков), по силам стражу каждой транзакции.
+ */
+export function layoutMisplaced(doc: LayoutDocNode): boolean {
+  const ancestors: string[] = [];
+  const visit = (node: LayoutDocNode): boolean => {
+    const name = node.type.name;
+    if (LAYOUT_NODES.has(name) && !layoutPlaceAllows(ancestors, CONTAINER_NODES.has(name))) {
+      return true;
+    }
+    if (node.isTextblock) return false;
+    ancestors.push(name);
+    let found = false;
+    node.forEach((child) => {
+      if (!found && visit(child)) found = true;
+    });
+    ancestors.pop();
+    return found;
+  };
+  return visit(doc);
 }
 
 export type PlacementIssueCode =
