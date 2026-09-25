@@ -7,6 +7,11 @@ import type { ReactNode } from 'react';
  * рядом с ним всегда `aria-hidden` и имени не портит.
  */
 export type DropdownMenuItem = {
+  /**
+   * Ключ React, когда подпись не уникальна: пункты, собранные из данных (по пункту на шаблон
+   * владельца), могут совпасть подписью. Без него ключ — подпись.
+   */
+  key?: string;
   label: string;
   icon?: ReactNode;
   onSelect: () => void;
@@ -45,7 +50,7 @@ export function DropdownMenu({
         >
           {items.map((item) => (
             <RDM.Item
-              key={item.label}
+              key={item.key ?? item.label}
               onSelect={item.onSelect}
               // data-highlighted Radix ставит и на наведение мышью, и на переход
               // стрелками — подсветка одна на оба способа.

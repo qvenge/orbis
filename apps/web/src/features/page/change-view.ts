@@ -13,11 +13,23 @@ import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
  *  2. текст есть и шаблон показывает тело — текст встаёт на место `{{body}}`, остальное дословно;
  *  3. текст есть, а шаблон тело не показывает (намеренно) — «как раньше» и сохранность текста разом
  *     невозможны, решает владелец: убрать в закреплённую версию или показать внизу страницы.
+ *     Тот же вопрос — когда тело показывается, но текст записи несёт строки разметки страницы
+ *     (`{{/tab}}`, `{{tab: X}}` — вставкой или агентом) и на месте `{{body}}` сломал бы контейнер
+ *     шаблона: вкладки ушли бы под плашку вместе с карточками, версиями и тредом. Молча применять
+ *     такой случай 2 нельзя (С1а-8); `reason` говорит диалогу, какой из двух вопросов задать.
  */
 export type ChangeViewPlan =
   | { case: 1; body: string } // текста нет → копия шаблона
   | { case: 2; body: string } // текст на место {{body}}
-  | { case: 3; hideAsVersion: string; showBelow: string }; // текст есть, {{body}} нет → выбор владельца
+  | {
+      case: 3;
+      reason: ChangeViewQuestion;
+      hideAsVersion: string;
+      showBelow: string;
+    }; // текст есть, {{body}} нет (или текст сломал бы шаблон) → выбор владельца
+
+/** Почему вопрос: шаблон тело не показывает — или текст записи на месте `{{body}}` сломал бы шаблон. */
+export type ChangeViewQuestion = 'no-body' | 'breaks-template';
 
 /** Подпись закреплённой версии, в которую уходит текст в случае 3 (§8.4, дословно). */
 export const TEXT_BEFORE_VIEW_CHANGE = 'Текст до изменения вида';
@@ -121,16 +133,33 @@ const needsGapBefore = (slot: BodySlot) =>
 const needsGapAfter = (slot: BodySlot) =>
   isText(slot.after) && !startsWithBlankLine(slot.after.text);
 
+/** Сломанные контейнеры верхнего уровня (`broken` бывает только там — `parsePageText`). */
+const brokenCount = (text: string): number =>
+  parsePageText(text).filter((n) => n.kind === 'broken').length;
+
+/** Вопрос владельцу над копией шаблона `base` (без строки `{{body}}`, если она была). */
+const question = (
+  reason: ChangeViewQuestion,
+  base: string,
+  recordBody: string,
+): ChangeViewPlan => ({
+  case: 3,
+  reason,
+  hideAsVersion: base,
+  showBelow: `${base.replace(/(?:\r?\n)+$/, '')}\n\n${recordBody}`,
+});
+
 export function changeViewPlan(templateText: string, recordBody: string): ChangeViewPlan {
   const slot = bodySlot(templateText);
   const head = slot === null ? templateText : templateText.slice(0, slot.start);
   const tail = slot === null ? '' : templateText.slice(slot.end);
+  // Копия шаблона без строки `{{body}}` — на странице этот блок был бы плашкой (РП-29).
+  const copy =
+    slot === null
+      ? templateText
+      : head + (needsGapBefore(slot) && needsGapAfter(slot) ? '\n' : '') + tail;
 
-  if (recordBody.trim() === '') {
-    if (slot === null) return { case: 1, body: templateText };
-    const gap = needsGapBefore(slot) && needsGapAfter(slot) ? '\n' : '';
-    return { case: 1, body: head + gap + tail };
-  }
+  if (recordBody.trim() === '') return { case: 1, body: copy };
 
   if (slot !== null) {
     // Строка `{{body}}` забирала свой перенос; без него текст слипся бы со строкой ниже — а она
@@ -139,12 +168,14 @@ export function changeViewPlan(templateText: string, recordBody: string): Change
     const text = ownLine && !recordBody.endsWith('\n') ? `${recordBody}\n` : recordBody;
     const before = needsGapBefore(slot) ? '\n' : '';
     const after = needsGapAfter(slot) ? '\n' : '';
-    return { case: 2, body: head + before + text + after + tail };
+    const body = head + before + text + after + tail;
+    // Текст записи со строками разметки страницы сломал бы контейнер шаблона вокруг `{{body}}` —
+    // это уже не «как раньше», и решает владелец (докблок `ChangeViewPlan`).
+    if (brokenCount(body) > brokenCount(templateText)) {
+      return question('breaks-template', copy, recordBody);
+    }
+    return { case: 2, body };
   }
 
-  return {
-    case: 3,
-    hideAsVersion: templateText,
-    showBelow: `${templateText.replace(/(?:\r?\n)+$/, '')}\n\n${recordBody}`,
-  };
+  return question('no-body', templateText, recordBody);
 }

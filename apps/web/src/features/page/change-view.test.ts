@@ -141,6 +141,7 @@ describe('случай 3: текст есть, а шаблон тело не п�
     const tpl = '{{title}}\n{{cards}}\n';
     expect(changeViewPlan(tpl, 'Заметка')).toEqual({
       case: 3,
+      reason: 'no-body',
       hideAsVersion: tpl,
       showBelow: '{{title}}\n{{cards}}\n\nЗаметка',
     });
@@ -149,6 +150,7 @@ describe('случай 3: текст есть, а шаблон тело не п�
   test('шаблон без переноса в конце — пустая строка всё равно одна', () => {
     expect(changeViewPlan('{{title}}', 'Заметка')).toEqual({
       case: 3,
+      reason: 'no-body',
       hideAsVersion: '{{title}}',
       showBelow: '{{title}}\n\nЗаметка',
     });
@@ -162,5 +164,47 @@ describe('случай 3: текст есть, а шаблон тело не п�
   test('{{body}} внутри сломанного контейнера не рисуется — тело шаблон не показывает', () => {
     const tpl = '{{columns}}\n{{column}}\n{{body}}\n{{/column}}\n';
     expect(changeViewPlan(tpl, 'Заметка').case).toBe(3);
+  });
+});
+
+describe('текст записи со строками разметки страницы — не молча (I-3, С1а-8)', () => {
+  test('{{/tab}} в тексте сломал бы вкладки шаблона хоста → вопрос, а не случай 2', () => {
+    const text = 'Заметка\n{{/tab}}\nхвост';
+    const plan = changeViewPlan(HOST_TEMPLATE_TEXT, text);
+    const copy = HOST_TEMPLATE_TEXT.replace('{{body}}\n', '');
+    expect(plan).toEqual({
+      case: 3,
+      reason: 'breaks-template',
+      // Основа — копия шаблона без строки {{body}}: на странице она была бы плашкой (РП-29).
+      hideAsVersion: copy,
+      showBelow: `${copy}\n\n${text}`,
+    });
+  });
+
+  test('{{tab: X}} в тексте внутри вкладки — тоже вопрос', () => {
+    expect(changeViewPlan(HOST_TEMPLATE_TEXT, 'Заметка\n{{tab: Лишняя}}\n').case).toBe(3);
+  });
+
+  test('блок данных и обычный markdown в тексте контейнер не ломают — случай 2', () => {
+    const text = '# Заголовок\n\n- пункт\n\n{{query: aspect=orbis/task}}\n';
+    expect(changeViewPlan(HOST_TEMPLATE_TEXT, text).case).toBe(2);
+  });
+});
+
+describe('текст записи входит в результат байт-в-байт (I-4)', () => {
+  // Пустые строки в начале и пробелы в конце — ровно то, что стёр бы `trim()`.
+  const text = '\n\n  Заметка с отступом\nвторая строка   \n\n  ';
+
+  test('случай 2', () => {
+    const plan = changeViewPlan(HOST_TEMPLATE_TEXT, text);
+    if (plan.case !== 2) throw new Error('ожидался случай 2');
+    expect(plan.body).toContain(text);
+  });
+
+  test('случай 3, «Показать внизу страницы»', () => {
+    const plan = changeViewPlan('{{title}}\n{{cards}}\n', text);
+    if (plan.case !== 3) throw new Error('ожидался случай 3');
+    expect(plan.showBelow).toContain(text);
+    expect(plan.showBelow.endsWith(text)).toBe(true);
   });
 });

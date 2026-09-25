@@ -9,6 +9,7 @@
  */
 import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY } from '@orbis/shared';
 import { parseBody } from '@orbis/shared/doc';
+import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -18,6 +19,7 @@ import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
+  trpcError,
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
@@ -33,10 +35,11 @@ import {
   structureHandler,
 } from '../entity-detail/structure-fixtures';
 import { type DetailStructure, snapshotDetailStructure } from '../entity-detail/structure-snapshot';
-import { HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
+import { CHANGE_VIEW_QUESTION, HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
 import { changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from './change-view';
 import { HOST_TEMPLATE_TEXT } from './host-template';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
+import { BATCH_FAILED } from './useUpdateBatch';
 
 installCrashTrap();
 
@@ -140,8 +143,16 @@ function makeWorld(rows: WireEntityFixture[]): World {
   return { rows: new Map(rows.map((r) => [r.id, copy(r)])), pins: [], beforeBatch: null };
 }
 
-/** Пачка как её исполнил бы сервер: тело, аспекты, значения, снятия — и новая версия строки. */
+/**
+ * Пачка как её исполнил бы сервер: тело, аспекты, значения, снятия — и новая версия строки. Сверка
+ * `expectedUpdatedAt` (§5.2) — до любой записи: разошлась хоть у одной правки — отвергнута вся пачка.
+ */
 function applyBatch(world: World, operations: Op[]) {
+  for (const op of operations) {
+    if (op.tool !== 'entity_update' || op.input.expectedUpdatedAt === undefined) continue;
+    if (world.rows.get(op.input.id)?.updatedAt !== op.input.expectedUpdatedAt)
+      throw trpcError('CONFLICT', 'STALE_VERSION');
+  }
   world.beforeBatch = new Map([...world.rows].map(([id, r]) => [id, copy(r)]));
   for (const op of operations) {
     if (op.tool === 'entity_version_pin') {
@@ -221,7 +232,11 @@ function Screen({ first }: { first: string }) {
   );
 }
 
-function open(f: StructureFixture, extra: WireEntityFixture[] = []) {
+function open(
+  f: StructureFixture,
+  extra: WireEntityFixture[] = [],
+  opts: { over?: MockHandler; queries?: object } = {},
+) {
   const world = makeWorld([
     f.entity,
     wireEntity({ id: OTHER, title: 'Соседняя запись', body: 'Сосед' }),
@@ -231,8 +246,13 @@ function open(f: StructureFixture, extra: WireEntityFixture[] = []) {
     activeTab: 'browser',
     stacks: { chat: [], browser: [{ kind: 'entity', id: f.entity.id }], agenda: [], budget: [] },
   });
-  const r = renderWithProviders(<Screen first={f.entity.id} />, worldHandler(f, world), {
-    queries: queryClient.getDefaultOptions().queries,
+  const base = worldHandler(f, world);
+  const handler: MockHandler = async (path, input) => {
+    const own = opts.over ? await opts.over(path, input) : undefined;
+    return own !== undefined ? own : base(path, input);
+  };
+  const r = renderWithProviders(<Screen first={f.entity.id} />, handler, {
+    queries: opts.queries ?? queryClient.getDefaultOptions().queries,
   });
   const batches = () =>
     r.calls
@@ -670,5 +690,168 @@ describe('меню страницы (§8.4)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Отменить' }));
     expect(await screen.findByTestId('page-view')).toBeInTheDocument();
     expect(calls.filter((c) => c.path === 'ai.undo')).toHaveLength(1);
+  });
+});
+
+// --- Фикс-раунд 1 ---------------------------------------------------------------------------------
+
+describe('диалоги меню держат снимок записи, на которой их открыли (I-1, I-2)', () => {
+  const NO_BODY = '{{title}}\n{{cards}}\n';
+  const f = fixture('project');
+  const tpl = () => template(TPL_A, 'Шаблон проекта', ['orbis/project'], NO_BODY);
+
+  /**
+   * Соседняя запись уже в кеше: переход на неё не показывает скелет, шапка с меню не
+   * размонтируется — ровно так меню и переживает переход в приложении (запись, открытая недавно).
+   */
+  async function visitOtherAndBack() {
+    fireEvent.click(screen.getByTestId('go-other'));
+    await screen.findByText('Соседняя запись');
+    fireEvent.click(screen.getByTestId('go-back'));
+    await waitFor(() => expect(screen.queryByText('Соседняя запись')).toBeNull());
+  }
+
+  async function askCase3(opts: Parameters<typeof open>[2] = {}) {
+    const r = open(f, [tpl()], opts);
+    await screen.findByTestId('page-render');
+    await visitOtherAndBack();
+    await screen.findByTestId('page-render');
+    await waitFor(() => expect(screen.queryByTestId('page-tabs')).toBeNull());
+    await choose('Изменить вид только этой записи');
+    await screen.findByRole('dialog');
+    return r;
+  }
+
+  test('переход на соседнюю запись с открытым вопросом случая 3 — диалог закрыт, вызовов нет', async () => {
+    const { batches, world } = await askCase3();
+    fireEvent.click(screen.getByTestId('go-other'));
+    await screen.findByText('Соседняя запись');
+    // Меню пережило переход (шапка не размонтировалась) — а диалог закрыт.
+    expect(screen.getByTestId('detail-menu')).toHaveAttribute('aria-haspopup');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // И вернувшись — вопрос не всплывает сам: он был про ту запись и тот момент.
+    fireEvent.click(screen.getByTestId('go-back'));
+    await screen.findByTestId('page-render');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(batches()).toEqual([]);
+    expect(world.rows.get(OTHER)?.body).toBe('Сосед');
+    expect(world.rows.get(OTHER)?.aspects).not.toContain(PAGE_ASPECT);
+  });
+
+  test('переход с открытым «Сделать шаблоном для…» — диалог закрыт, вызовов нет', async () => {
+    const page = asPage(fixture('note-plain'), 'Страница\n');
+    const { batches } = open(page);
+    await screen.findByTestId('page-view');
+    await visitOtherAndBack();
+    await screen.findByTestId('page-view');
+    await choose('Сделать шаблоном для…');
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByTestId('go-other'));
+    await screen.findByText('Соседняя запись');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByTestId('go-back'));
+    await screen.findByTestId('page-view');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(batches()).toEqual([]);
+  });
+
+  test('правка тела мимо экрана при открытом вопросе: пачка идёт с версией плана, сервер отказывает, правка цела', async () => {
+    if (plan3().case !== 3) throw new Error('ожидался случай 3');
+    // Запросы протухают сразу и перечитываются на фокусе окна — так рефетч наступает при открытом
+    // диалоге, как у человека, вернувшегося во вкладку.
+    const { batches, world } = await askCase3({
+      queries: { retry: false, staleTime: 0, refetchOnWindowFocus: true },
+    });
+    const row = world.rows.get(f.entity.id);
+    if (row === undefined) throw new Error('нет записи');
+    row.title = 'Проект, правленный мимо экрана';
+    row.body = 'Текст, дописанный с телефона';
+    row.bodyDoc = parseBody(row.body);
+    row.updatedAt = '2026-09-25T11:00:00.000Z';
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await screen.findAllByText('Проект, правленный мимо экрана');
+    focusManager.setFocused(undefined);
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Показать внизу страницы' }));
+    await waitFor(() => expect(batches()).toHaveLength(1));
+    // Версия — та, из тела которой построен план, а не приехавшая позже.
+    expect(batches()[0]?.[0]).toMatchObject({
+      input: { expectedUpdatedAt: f.entity.updatedAt },
+    });
+    expect(await screen.findByText(BATCH_FAILED)).toBeInTheDocument();
+    expect(world.rows.get(f.entity.id)?.body).toBe('Текст, дописанный с телефона');
+    expect(world.rows.get(f.entity.id)?.aspects).not.toContain(PAGE_ASPECT);
+  });
+
+  const plan3 = () => changeViewPlan(NO_BODY, f.entity.body);
+});
+
+describe('текст записи сломал бы шаблон — вопрос, а не молчаливый случай 2 (I-3)', () => {
+  test('{{/tab}} в заметке под шаблоном хоста → диалог с причиной; «Показать внизу» — копия без {{body}} + текст', async () => {
+    const text = 'Заметка\n{{/tab}}\nхвост\n';
+    const f = withBody(fixture('note-plain'), text);
+    const { batches } = open(f);
+    await screen.findByTestId('page-tabs');
+    await choose('Изменить вид только этой записи');
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent(CHANGE_VIEW_QUESTION['breaks-template']);
+    expect(batches()).toEqual([]);
+
+    const plan = changeViewPlan(HOST_TEMPLATE_TEXT, text);
+    if (plan.case !== 3) throw new Error('ожидался случай 3');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Показать внизу страницы' }));
+    await waitFor(() => expect(batches()).toHaveLength(1));
+    expect(batches()).toEqual([[becomePageOp(f.entity.id, f.entity.updatedAt, plan.showBelow)]]);
+  });
+});
+
+describe('подписи и ключи пунктов «Открыть через „X“» (I-5)', () => {
+  test('два шаблона с одним названием — два пункта без коллизии ключей; пустое название — id', async () => {
+    const error = vi.spyOn(console, 'error');
+    open(fixture('project-task'), [
+      template(TPL_B, 'Шаблон B', ['orbis/project', 'orbis/task'], 'Вид B\n'),
+      template(TPL_A, 'Одинаковый', ['orbis/project'], 'Вид A\n'),
+      template(TPL_C, 'Одинаковый', ['orbis/task'], 'Вид C\n'),
+      template(TPL_TOP, '', ['orbis/project'], 'Вид без названия\n'),
+    ]);
+    await waitFor(() => expect(renderedTexts()).toContain('Вид B'));
+    await openMenu();
+    const via = menuLabels().filter((l) => l.startsWith('Открыть через „'));
+    expect(via.filter((l) => l === 'Открыть через „Одинаковый“')).toHaveLength(2);
+    expect(via).toContain(`Открыть через „${TPL_TOP}“`);
+    expect(via).not.toContain('Открыть через „“');
+    const keyWarnings = error.mock.calls.filter((c) => String(c[0]).includes('same key'));
+    expect(keyWarnings).toEqual([]);
+  });
+});
+
+describe('«Изменить вид» не закрепляет вынужденный шаблон хоста (I-6)', () => {
+  test('список шаблонов не приехал — пункта нет', async () => {
+    open(fixture('project'), [template(TPL_A, 'Шаблон A', ['orbis/project'], 'Вид A\n')], {
+      over: (path, input) =>
+        path === 'entity.query' && (input as { query?: string }).query === PAGE_TEMPLATES_QUERY
+          ? Promise.reject(trpcError('INTERNAL_SERVER_ERROR', 'база недоступна'))
+          : undefined,
+    });
+    await screen.findByTestId('templates-error');
+    await openMenu();
+    expect(menuLabels()).not.toContain('Изменить вид только этой записи');
+    expect(menuLabels()).toContain('Сделать страницей');
+  });
+
+  test('список шаблонов ещё едет — пункта нет', async () => {
+    open(fixture('project'), [template(TPL_A, 'Шаблон A', ['orbis/project'], 'Вид A\n')], {
+      over: (path, input) =>
+        path === 'entity.query' && (input as { query?: string }).query === PAGE_TEMPLATES_QUERY
+          ? new Promise(() => {})
+          : undefined,
+    });
+    await screen.findByTestId('page-tabs');
+    await openMenu();
+    expect(menuLabels()).not.toContain('Изменить вид только этой записи');
   });
 });

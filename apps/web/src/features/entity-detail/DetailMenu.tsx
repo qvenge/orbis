@@ -32,7 +32,10 @@ import type { WireEntity } from './record-host';
 export type DetailMenuView =
   | {
       kind: 'record';
-      /** `null` — выбор ещё не решён (ждёт реестр): пунктов вида нет, чтобы не звать не тот шаблон. */
+      /**
+       * `null` (или `templateId: null`) — выбор ещё не решён: `RecordView` не извещал или ждёт реестр.
+       * Пунктов вида тогда нет, чтобы не звать не тот шаблон.
+       */
       shown: RecordShown | null;
       templates: PageTemplates;
       onOpenVia: (templateId: string | 'host') => void;
@@ -64,10 +67,24 @@ export interface DetailMenuProps {
   view: DetailMenuView;
 }
 
-/** Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…». */
+/**
+ * Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…».
+ *
+ * Диалог ПОМНИТ, про какую запись и какую её версию его открыли: `entityId`, `updatedAt` и план,
+ * построенный из тела этой версии, — снимок на момент жеста, а не живой проп. Меню монтируется без
+ * key (`DetailMenuSlot`) и переживает переход на соседнюю запись: читай диалог проп `entity` при
+ * нажатии кнопки, он записал бы план одной записи в другую. И сверка `expectedUpdatedAt` обязана
+ * идти по той версии, из тела которой построен план: версия, прочитанная позже (рефетч при
+ * открытом диалоге), пропустила бы правку мимо экрана, и шаблон затёр бы её молча.
+ */
 type MenuDialog =
-  | { kind: 'change-view'; plan: Extract<ChangeViewPlan, { case: 3 }> }
-  | { kind: 'template-for' }
+  | {
+      kind: 'change-view';
+      entityId: string;
+      updatedAt: string;
+      plan: Extract<ChangeViewPlan, { case: 3 }>;
+    }
+  | { kind: 'template-for'; entityId: string; value: unknown }
   | null;
 
 export function DetailMenu({
@@ -86,22 +103,23 @@ export function DetailMenu({
 }) {
   const runBatch = useUpdateBatch();
   const [dialog, setDialog] = useState<MenuDialog>(null);
+  // Переход на соседнюю запись закрывает диалог прежней: его снимок — про неё (докблок `MenuDialog`).
+  if (dialog !== null && dialog.entityId !== entity.id) setDialog(null);
   const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
 
   /**
    * Правка «вида только этой записи» (§8.4): новое тело и аспект «страница» — одной операцией, а
-   * при «Сохранить версией» ей предшествует закрепление ТЕКУЩЕГО тела. Порядок значим: версия
-   * снимает текст до замены. `expectedUpdatedAt` — сверка тела (§5.2): текст, правленный мимо
-   * экрана после его чтения, не затирается шаблоном молча — пачка отвергается целиком.
+   * при «Сохранить версией» ей предшествует закрепление тела. Порядок значим: версия снимает текст
+   * до замены.
+   *
+   * `expectedUpdatedAt` — версия записи, ИЗ ТЕЛА КОТОРОЙ построен `body` (§5.2): в случаях 1–2 это
+   * версия на момент нажатия пункта, в случае 3 — снимок в состоянии диалога, а не проп на момент
+   * кнопки. Правка тела мимо экрана после этого чтения даёт серверу другую версию, и пачка
+   * отвергается целиком (`STALE_VERSION`) — шаблон не затирает её молча.
    */
-  const becomePage = (body: string): UpdateBatchOperation => ({
+  const becomePage = (id: string, updatedAt: string, body: string): UpdateBatchOperation => ({
     tool: 'entity_update',
-    input: {
-      id: entity.id,
-      expectedUpdatedAt: entity.updatedAt,
-      body,
-      aspects: { attach: [PAGE_ASPECT] },
-    },
+    input: { id, expectedUpdatedAt: updatedAt, body, aspects: { attach: [PAGE_ASPECT] } },
   });
 
   const items: DropdownMenuItem[] = [
@@ -143,7 +161,8 @@ export function DetailMenu({
     // Выбор не решён — пункты вида ждут его: «Изменить вид» скопировал бы не тот шаблон.
     if (shown === null || shown.templateId === null) return [makePageItem()];
     const shownId = shown.templateId;
-    const titleOf = (id: string) => templates.rows.find((r) => r.id === id)?.title ?? id;
+    // Пустой заголовок — не подпись: пункт «Открыть через „“» не назвал бы шаблон вовсе.
+    const titleOf = (id: string) => templates.rows.find((r) => r.id === id)?.title || id;
     // «Открыть через „X“» — прочие ИСПРАВНЫЕ подходящие (`openable` — докблок `openableOf`).
     const others = shown.openable.filter((id) => id !== shownId);
     const contenders = contendersOf(
@@ -151,10 +170,15 @@ export function DetailMenu({
       templates.templates,
       new Set(shown.brokenIds),
     );
+    // Список шаблонов едет или не приехал — выбор показал шаблон хоста ВЫНУЖДЕННО (§6.5, РП-14), и
+    // «Изменить вид» навсегда закрепил бы у записи вид хоста, хотя её настоящий шаблон — владельца.
+    // Пункта нет, пока список не приехал.
     const templateText =
-      shownId === 'host'
-        ? HOST_TEMPLATE_TEXT
-        : (templates.rows.find((r) => r.id === shownId)?.body ?? null);
+      templates.status !== 'ok'
+        ? null
+        : shownId === 'host'
+          ? HOST_TEMPLATE_TEXT
+          : (templates.rows.find((r) => r.id === shownId)?.body ?? null);
     return [
       ...(shownId === 'host'
         ? []
@@ -166,6 +190,8 @@ export function DetailMenu({
             },
           ]),
       ...others.map((id) => ({
+        // Ключ — id шаблона: у двух шаблонов может быть одно название.
+        key: `open-via:${id}`,
         label: `Открыть через „${titleOf(id)}“`,
         icon: <LayoutTemplate size={16} aria-hidden />,
         onSelect: () => v.onOpenVia(id),
@@ -209,8 +235,11 @@ export function DetailMenu({
   function changeView(templateText: string) {
     const plan = changeViewPlan(templateText, entity.body);
     // Случай 3 — вопрос владельцу: молча ни убрать текст, ни дописать его нельзя (С1а-8).
-    if (plan.case === 3) setDialog({ kind: 'change-view', plan });
-    else void runBatch([becomePage(plan.body)], 'Вид записи теперь свой');
+    if (plan.case === 3) {
+      setDialog({ kind: 'change-view', entityId: entity.id, updatedAt: entity.updatedAt, plan });
+    } else {
+      void runBatch([becomePage(entity.id, entity.updatedAt, plan.body)], 'Вид записи теперь свой');
+    }
   }
 
   function pageItems(v: Extract<DetailMenuView, { kind: 'page' }>): DropdownMenuItem[] {
@@ -227,7 +256,12 @@ export function DetailMenu({
       {
         label: 'Сделать шаблоном для…',
         icon: <LayoutTemplate size={16} aria-hidden />,
-        onSelect: () => setDialog({ kind: 'template-for' }),
+        onSelect: () =>
+          setDialog({
+            kind: 'template-for',
+            entityId: entity.id,
+            value: entity.props[TEMPLATE_FOR_PROPERTY],
+          }),
       },
       // Снимается ТОЛЬКО аспект (РП-22): «Шаблон для» и «Главнее, чем» переживают снятие, и
       // возврат аспекта (Undo, «Сделать страницей») возвращает шаблон каким он был.
@@ -251,32 +285,36 @@ export function DetailMenu({
   return (
     <>
       <DropdownMenu defaultOpen={defaultOpen} trigger={<MenuTrigger />} items={items} />
-      {dialog?.kind === 'change-view' && (
+      {dialog?.kind === 'change-view' && dialog.entityId === entity.id && (
         <ChangeViewDialog
+          reason={dialog.plan.reason}
           onHideAsVersion={() => {
             setDialog(null);
             void runBatch(
               [
                 {
                   tool: 'entity_version_pin',
-                  input: { entity_id: entity.id, label: TEXT_BEFORE_VIEW_CHANGE },
+                  input: { entity_id: dialog.entityId, label: TEXT_BEFORE_VIEW_CHANGE },
                 },
-                becomePage(dialog.plan.hideAsVersion),
+                becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.hideAsVersion),
               ],
               'Вид записи теперь свой, текст — в версии',
             );
           }}
           onShowBelow={() => {
             setDialog(null);
-            void runBatch([becomePage(dialog.plan.showBelow)], 'Вид записи теперь свой');
+            void runBatch(
+              [becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.showBelow)],
+              'Вид записи теперь свой',
+            );
           }}
           onCancel={() => setDialog(null)}
         />
       )}
-      {dialog?.kind === 'template-for' && (
+      {dialog?.kind === 'template-for' && dialog.entityId === entity.id && (
         <TemplateForDialog
-          entityId={entity.id}
-          value={entity.props[TEMPLATE_FOR_PROPERTY]}
+          entityId={dialog.entityId}
+          value={dialog.value}
           onSave={(op) => {
             setDialog(null);
             const clearing = op.tool === 'entity_update' && op.input.unset !== undefined;

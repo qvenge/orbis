@@ -1,9 +1,22 @@
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
+import type { ChangeViewQuestion } from './change-view';
 
 /** Подсказка кнопки «Сохранить версией и убрать» (спека страниц 1а §8.4, Р-19). */
 export const HIDE_AS_VERSION_HINT =
   'Пока текст лежит в версии, его не видят поиск и агент. Вернуть — «Открыть как запись» → «Детали» → «Версии».';
+
+/**
+ * Первая фраза вопроса. `no-body` — текст Р-19 дословно (§8.4). `breaks-template` — тело шаблон
+ * показывает, но текст записи несёт строки разметки страницы и на месте `{{body}}` сломал бы
+ * шаблон: вопрос и кнопки те же, а причина названа своя — иначе фраза «текст не показывается» была
+ * бы неправдой.
+ */
+export const CHANGE_VIEW_QUESTION: Readonly<Record<ChangeViewQuestion, string>> = {
+  'no-body': 'В этом шаблоне текст записи не показывается, а у записи он есть.',
+  'breaks-template':
+    'В тексте записи есть строки разметки страницы — на месте тела они сломали бы раскладку шаблона.',
+};
 
 /**
  * Вопрос случая 3 «Изменить вид только этой записи» (§8.4, Р-19): шаблон тело не показывает, а у
@@ -15,10 +28,12 @@ export const HIDE_AS_VERSION_HINT =
  * видят, и узнать об этом потом, не найдя свою заметку, было бы хуже, чем выбрать «Показать внизу».
  */
 export function ChangeViewDialog({
+  reason,
   onHideAsVersion,
   onShowBelow,
   onCancel,
 }: {
+  reason: ChangeViewQuestion;
   onHideAsVersion: () => void;
   onShowBelow: () => void;
   onCancel: () => void;
@@ -33,7 +48,7 @@ export function ChangeViewDialog({
     >
       <div className="flex flex-col gap-3 pt-2">
         <p className="text-sm text-text-secondary">
-          В этом шаблоне текст записи не показывается, а у записи он есть. Что с ним сделать?
+          {CHANGE_VIEW_QUESTION[reason]} Что с ним сделать?
         </p>
         <div className="flex flex-col gap-1">
           <Button onClick={onHideAsVersion} aria-describedby="change-view-version-hint">
