@@ -464,6 +464,70 @@ test('Enter по скрытому пункту его не вставляет: �
   expect(bodyPairFromDoc(doc).doc.doc.content?.map((n) => n.type)).toContain('columns');
 });
 
+/** Каретка — в конец текста `needle`: так «/» открывается ровно в этом текстовом блоке. */
+function caretAfter(editor: Editor | null, needle: string): void {
+  let at = -1;
+  editor?.state.doc.descendants((node, pos) => {
+    if (at === -1 && node.isText && node.text === needle) at = pos + needle.length;
+  });
+  if (at === -1) throw new Error(`нет текста «${needle}»`);
+  editor?.commands.focus(at);
+}
+
+/** Пункты меню «/», открытого в конце текста `needle`; меню закрывается следом. */
+async function menuAt(editor: Editor | null, needle: string): Promise<(string | undefined)[]> {
+  caretAfter(editor, needle);
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const labels = labelsOf();
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByTestId('slash-menu')).toBeNull());
+  return labels;
+}
+
+const LAYOUT_ITEMS = ['Колонки', 'Вкладки', 'Карточка аспекта', ...RECORD_LABELS];
+
+test('в пункте списка и в цитате «/» не предлагает контейнеров, обвязки и карточки (§5.2)', async () => {
+  // Вставленный туда блок при записи не пережил бы повторного разбора: сверка скелета увела бы
+  // ВСЁ тело страницы в один rawBlock, а у страницы нет ни правки разметкой, ни правки rawBlock.
+  const { h } = await mountEditor('- пункт\n\n> цитата\n\nверх', api({}), 'page');
+  for (const needle of ['пункт', 'цитата']) {
+    const labels = await menuAt(h.editor, needle);
+    for (const hidden of LAYOUT_ITEMS) expect(labels, `${needle}: ${hidden}`).not.toContain(hidden);
+    // Меню живое: обычные пункты на месте.
+    expect(labels).toContain('Заголовок 1');
+  }
+  // Положительный контроль: на верху тела той же страницы — всё.
+  const top = await menuAt(h.editor, 'верх');
+  for (const shown of LAYOUT_ITEMS) expect(top, shown).toContain(shown);
+});
+
+test('во вкладке внутри колонки — обвязка есть, контейнеров нет (глубина ≤ 2); в колонке — есть', async () => {
+  const md =
+    '{{columns}}\n{{column}}\n{{tabs}}\n{{tab: А}}\nвнутри\n{{/tab}}\n{{/tabs}}\n{{/column}}\n' +
+    '{{column}}\nправая\n{{/column}}\n{{/columns}}';
+  const { h } = await mountEditor(md, api({}), 'page');
+  const deep = await menuAt(h.editor, 'внутри');
+  expect(deep).not.toContain('Колонки');
+  expect(deep).not.toContain('Вкладки');
+  expect(deep).toContain('Теги');
+  expect(deep).toContain('Карточка аспекта');
+  const shallow = await menuAt(h.editor, 'правая');
+  expect(shallow).toContain('Колонки');
+  expect(shallow).toContain('Вкладки');
+});
+
+test('Enter не вставляет скрытое местом: «/колон» в пункте списка контейнера не даёт', async () => {
+  const { h } = await mountEditor('- пункт', api({}), 'page');
+  caretAfter(h.editor, 'пункт');
+  await userEvent.keyboard(' /колон');
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('slash-menu')).toBeNull();
+  await userEvent.keyboard('{Enter}');
+  await new Promise((r) => setTimeout(r, 50));
+  expect(JSON.stringify(h.editor?.getJSON())).not.toContain('"columns"');
+});
+
 test('«Вкладки» — одна вкладка «Вкладка 1»; «Карточка аспекта» спрашивает аспект и вставляет его ключ', async () => {
   const { h } = await mountEditor('привет', api({}), 'template');
   await userEvent.keyboard(' /вкладки');

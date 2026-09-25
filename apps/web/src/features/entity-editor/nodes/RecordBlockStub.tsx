@@ -35,7 +35,7 @@ function Plaque({ message, hint }: { message: string; hint: string | undefined }
   return <BlockPlaque tone="misplaced" message={message} {...(hint !== undefined && { hint })} />;
 }
 
-function RecordStub({ node }: NodeViewProps) {
+function RecordStub({ node, selected }: NodeViewProps) {
   const kind = useBodyKind();
   const raw = typeof node.attrs.name === 'string' ? node.attrs.name : '';
   const name = KNOWN.has(raw) ? (raw as RecordBlockName) : null;
@@ -46,7 +46,7 @@ function RecordStub({ node }: NodeViewProps) {
       {issue !== undefined ? (
         <Plaque message={issue.message} hint={issue.hint} />
       ) : (
-        <StubBox label={name === null ? `{{${raw}}}` : recordStubLabel(name)} />
+        <StubBox label={name === null ? `{{${raw}}}` : recordStubLabel(name)} selected={selected} />
       )}
     </NodeViewWrapper>
   );
@@ -60,7 +60,7 @@ function RecordStub({ node }: NodeViewProps) {
  * сервер вернул бы карточке прежний ключ, и смена молча не состоялась бы. По новому тексту id
  * проставит та же привязка при записи.
  */
-function CardStub({ node, updateAttributes }: NodeViewProps) {
+function CardStub({ node, updateAttributes, selected }: NodeViewProps) {
   const kind = useBodyKind();
   const { registry } = useFieldCatalog();
   const [choosing, setChoosing] = useState(false);
@@ -76,7 +76,10 @@ function CardStub({ node, updateAttributes }: NodeViewProps) {
   }
   return (
     <NodeViewWrapper data-query-widget="" contentEditable={false}>
-      <StubBox label={cardStubLabel(cardAspectTitle(text, aspectId, registry?.parse ?? null))}>
+      <StubBox
+        label={cardStubLabel(cardAspectTitle(text, aspectId, registry?.parse ?? null))}
+        selected={selected}
+      >
         <Button variant="ghost" size="sm" onClick={() => setChoosing(true)}>
           Сменить
         </Button>

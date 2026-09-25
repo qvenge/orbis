@@ -1,5 +1,5 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { bodyDraftNoteId } from '@orbis/shared';
+import { bodyDraftNoteId, PAGE_ASPECT } from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { onlineManager } from '@tanstack/react-query';
@@ -5723,6 +5723,47 @@ function decideInput(calls: { path: string; input: unknown }[]): Record<string, 
 }
 
 describe('режим правки тела в слое', () => {
+  test('правка предложения к телу СТРАНИЦЫ — род страницы: рамки частей, а не плашки заметки (задача 16)', async () => {
+    // Слой рисует свой редактор вне `EntityBody`; без рода записи он получал умолчание `note`, и
+    // колонки страницы вставали плашками «сделать страницей?», части не правились.
+    const cols = (l: string, r: string) =>
+      `{{columns}}\n{{column}}\n${l}\n{{/column}}\n{{column}}\n${r}\n{{/column}}\n{{/columns}}`;
+    const current = cols('левая', 'правая');
+    const proposed = cols('левая', 'правая, позвонить');
+    const page = {
+      ...entity,
+      aspects: [...entity.aspects, PAGE_ASPECT],
+      body: current,
+      bodyDoc: parseBody(current),
+    };
+    renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      overlayHandler({
+        proposals: [
+          proposalFor({
+            operations: [
+              overlayBodyRow({
+                after: proposed,
+                bodyDiff: { units: OVERLAY_DIFF_UNITS },
+                proposedDoc: parseBody(proposed),
+              }),
+            ],
+          }),
+        ],
+        entity: page,
+      }),
+    );
+    const { plate } = await openBodyEditor();
+    await waitFor(() =>
+      expect(
+        within(plate)
+          .getAllByTestId('layout-frame-label')
+          .map((n) => n.textContent),
+      ).toEqual(['Колонка 1', 'Колонка 2']),
+    );
+    expect(within(plate).queryByTestId('block-misplaced')).toBeNull();
+  });
+
   test('открыть редактор слоя и уйти без «Принять» → ни одной мутации, updated_at не сдвинут, нового предложения нет (приёмка 8)', async () => {
     const { calls, unmount } = renderWithProviders(<DetailScreen entityId="e1" />, editHandler());
     const { plate, field } = await openBodyEditor();

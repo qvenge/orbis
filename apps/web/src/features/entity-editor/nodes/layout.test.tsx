@@ -230,3 +230,32 @@ test('«Сменить» у карточки пишет новый ключ и �
   expect(rebound?.aspect).toBe(FIXTURE_PARSE_REGISTRY.aspects.get('orbis/project')?.id);
   expect(rebound?.text).toBe('orbis/project');
 });
+
+test('Backspace в начале колонки 2 выделяет колонку 1 ВИДИМО и ничего не стирает', async () => {
+  // Первое нажатие ставит выделение узлом на соседнюю часть; без видимого выделения следующее
+  // нажатие молча стирало бы её текст (фикс-раунд 1 задачи 16).
+  const { h } = mountEditor('page', LAYOUT);
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await waitFor(() => expect(frameLabels()).toHaveLength(3));
+  const editor = h.editor as Editor;
+  const frames = () => screen.getAllByTestId('layout-frame');
+  expect(frames().some((f) => f.dataset.selected === 'true')).toBe(false);
+
+  await userEvent.click(
+    screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement,
+  );
+  editor.commands.focus(endOf(editor, 'правая') - 'правая'.length);
+  await userEvent.keyboard('{Backspace}');
+  await waitFor(() => expect(frames()[0]?.dataset.selected).toBe('true'));
+  expect(frames()[1]?.dataset.selected).toBeUndefined();
+  expect('node' in editor.state.selection).toBe(true);
+  expect(serializeBody({ v: DOC_SCHEMA_VERSION, doc: editor.getJSON() })).toBe(LAYOUT);
+});
+
+test('выделенная заглушка обвязки видна выделенной', async () => {
+  const { h } = mountEditor('page', 'текст\n\n{{title}}');
+  await waitFor(() => expect(stubLabels()).toEqual(['[Заголовок записи]']));
+  const editor = h.editor as Editor;
+  editor.commands.setNodeSelection(editor.state.doc.child(0).nodeSize);
+  await waitFor(() => expect(screen.getByTestId('record-stub').dataset.selected).toBe('true'));
+});

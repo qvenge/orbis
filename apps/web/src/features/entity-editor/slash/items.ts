@@ -1,4 +1,8 @@
-import { RECORD_BLOCK_NAMES, type RecordBlockName } from '@orbis/shared/doc/page-grammar';
+import {
+  CONTAINER_LIMITS,
+  RECORD_BLOCK_NAMES,
+  type RecordBlockName,
+} from '@orbis/shared/doc/page-grammar';
 import type { BodyKind } from '@orbis/shared/doc/placement';
 import type { QueryAst } from '@orbis/shared/query';
 import type { Editor } from '@tiptap/react';
@@ -32,6 +36,17 @@ export type SlashItem = {
    */
   available?: (doc: SlashDoc) => boolean;
   /**
+   * Куда пункт вправе вставлять по месту каретки (спека страниц 1а §5.2): `container` —
+   * контейнер, `layout-block` — блок обвязки или карточка; без поля — куда угодно.
+   *
+   * Грамматика пускает контейнеры и обвязку только на верх тела или в часть контейнера, а
+   * контейнеры — не глубже `CONTAINER_LIMITS.depth`. Схема документа шире (`block+` у пункта
+   * списка и цитаты), и вставленный туда блок при записи не пережил бы повторного разбора: сверка
+   * скелета (`projectionKeepsEverything`) увела бы ВСЁ тело страницы в один `rawBlock`, а у
+   * страницы нет ни правки разметкой, ни правки `rawBlock` — чинить было бы нечем.
+   */
+  place?: 'container' | 'layout-block';
+  /**
    * Диапазон запроса (`/заг`) удаляет вызывающая сторона — пункт работает по чистому месту.
    * Разделение не косметическое: удаление и вставка обязаны считаться от ОДНОЙ позиции, а
    * пункт про диапазон не знает вовсе и знать не должен.
@@ -49,6 +64,35 @@ export type SlashDoc = {
     f: (node: { type: { name: string }; attrs: Record<string, unknown> }) => boolean | undefined,
   ) => void;
 };
+
+/**
+ * Место каретки — ровно то, что меню о нём спрашивает: цепочка предков текстового блока.
+ * Структурный тип, как у `SlashDoc`: живой `selection.$from` ProseMirror подходит под него как есть.
+ */
+export type SlashCaret = {
+  depth: number;
+  node: (depth: number) => { type: { name: string } };
+};
+
+/** Узлы, в которых блок тела v3 законен (§5.2): верх тела, контейнер и его часть. */
+const LAYOUT_HOSTS: ReadonlySet<string> = new Set(['doc', 'columns', 'column', 'tabs', 'tab']);
+const CONTAINERS: ReadonlySet<string> = new Set(['columns', 'tabs']);
+
+/**
+ * Можно ли вставить сюда блок тела v3. Пункт вставляется ПОСЛЕ текстового блока с кареткой, в его
+ * родителя, — поэтому проверяются все предки этого блока (глубины `0 … depth - 1`): любой чужой
+ * (пункт списка, цитата, ячейка таблицы) — нельзя. Контейнеру ещё и глубина: предков-контейнеров
+ * меньше предела, иначе новый встанет третьим уровнем.
+ */
+function placeAllows(place: NonNullable<SlashItem['place']>, caret: SlashCaret): boolean {
+  let containers = 0;
+  for (let d = 0; d < caret.depth; d++) {
+    const name = caret.node(d).type.name;
+    if (!LAYOUT_HOSTS.has(name)) return false;
+    if (CONTAINERS.has(name)) containers += 1;
+  }
+  return place === 'layout-block' || containers < CONTAINER_LIMITS.depth;
+}
 
 const ALL_KINDS: readonly BodyKind[] = ['note', 'page', 'template'];
 /** Контейнеры и обвязка (§5.5): заметке — нет. */
@@ -82,6 +126,7 @@ function recordBlockItem(name: RecordBlockName): SlashItem {
     label: RECORD_BLOCK_TITLES[name],
     hint: 'блок записи',
     kinds: name === 'body' ? ['template'] : LAYOUT_KINDS,
+    place: 'layout-block',
     ...(name === 'body' && { available: (doc: SlashDoc) => !hasBodyBlock(doc) }),
     run: (e) => e.chain().focus().insertContent({ type: 'recordBlock', attrs: { name } }).run(),
   };
@@ -224,6 +269,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     label: 'Колонки',
     hint: 'раскладка страницы',
     kinds: LAYOUT_KINDS,
+    place: 'container',
     run: (e) =>
       e
         .chain()
@@ -236,6 +282,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     label: 'Вкладки',
     hint: 'раскладка страницы',
     kinds: LAYOUT_KINDS,
+    place: 'container',
     run: (e) =>
       e
         .chain()
@@ -249,6 +296,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
     label: 'Карточка аспекта',
     hint: 'блок записи',
     kinds: LAYOUT_KINDS,
+    place: 'layout-block',
     // Вставка — по ответу, в каретку, которую редактор помнит и без фокуса: пока открыт выбор,
     // фокус у него, а `focus()` возвращает редактору его же выделение.
     run: (e, ctx) =>
@@ -263,20 +311,26 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
 ];
 
 /**
- * Пункты меню для тела этого рода и этого документа, отфильтрованные по набранному. Ищем и в
- * подписи, и в подсказке: «чеклист» — то слово, которым «Задачу» назовут раньше, чем вспомнят её
- * имя в этом меню.
+ * Пункты меню для тела этого рода, этого документа и этого места каретки, отфильтрованные по
+ * набранному. Ищем и в подписи, и в подсказке: «чеклист» — то слово, которым «Задачу» назовут
+ * раньше, чем вспомнят её имя в этом меню.
  *
  * Один список на показ И на выбор (`EditorSuggest`): найди выбор пункт по полному списку, Enter
  * по id, которого на экране нет, вставил бы скрытый пункт — контейнер в заметку, второе тело в
- * шаблон.
+ * шаблон, колонки в пункт списка.
  */
-export function filterSlashItems(query: string, kind: BodyKind, doc: SlashDoc): SlashItem[] {
+export function filterSlashItems(
+  query: string,
+  kind: BodyKind,
+  doc: SlashDoc,
+  caret: SlashCaret,
+): SlashItem[] {
   const needle = query.trim().toLowerCase();
   return SLASH_ITEMS.filter(
     (i) =>
       i.kinds.includes(kind) &&
       (i.available === undefined || i.available(doc)) &&
+      (i.place === undefined || placeAllows(i.place, caret)) &&
       (needle === '' || `${i.label} ${i.hint ?? ''}`.toLowerCase().includes(needle)),
   );
 }

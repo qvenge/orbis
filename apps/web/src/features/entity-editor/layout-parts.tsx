@@ -61,14 +61,35 @@ export function cardAspectTitle(
 }
 
 /**
+ * Выделен ли узел целиком (NodeSelection ProseMirror, проп `selected` NodeView): рамка — цветом
+ * акцента и фоном. Без этого первое Backspace в начале колонки выделяло соседнюю часть НЕВИДИМО
+ * (стиля `.ProseMirror-selectednode` в web нет), и следующее нажатие молча стирало её текст.
+ * `data-selected` — тот же признак для тестов и для глаз в инспекторе.
+ */
+const selectedProps = (selected: boolean) => ({
+  'data-selected': selected ? 'true' : undefined,
+});
+const FRAME_IDLE = 'border-line border-dashed';
+const FRAME_SELECTED = 'border-accent bg-accent/10';
+
+/**
  * Рамка части контейнера: подпись сверху, содержимое — под ней. Подпись вне правки
  * (`contentEditable={false}`): внутри редактора каретке в ней делать нечего, это не текст тела.
  */
-export function LayoutFrameBox({ label, children }: { label: string; children: ReactNode }) {
+export function LayoutFrameBox({
+  label,
+  selected = false,
+  children,
+}: {
+  label: string;
+  selected?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div
       data-testid="layout-frame"
-      className="flex flex-col gap-2 rounded-control border border-line border-dashed px-3 py-2"
+      {...selectedProps(selected)}
+      className={`flex flex-col gap-2 rounded-control border px-3 py-2 ${selected ? FRAME_SELECTED : FRAME_IDLE}`}
     >
       <div
         contentEditable={false}
@@ -83,16 +104,39 @@ export function LayoutFrameBox({ label, children }: { label: string; children: R
 }
 
 /** Контейнер при настройке — его части одна под другой (раскладкой их рисует только показ, §9.1). */
-export function LayoutStack({ children }: { children: ReactNode }) {
-  return <div className="flex flex-col gap-2">{children}</div>;
+export function LayoutStack({
+  selected = false,
+  children,
+}: {
+  selected?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      data-testid="layout-stack"
+      {...selectedProps(selected)}
+      className={`flex flex-col gap-2 rounded-control${selected ? ' ring-2 ring-accent' : ''}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 /** Заглушка блока обвязки: подпись без данных (§9.1), по желанию — действие справа. */
-export function StubBox({ label, children }: { label: string; children?: ReactNode }) {
+export function StubBox({
+  label,
+  selected = false,
+  children,
+}: {
+  label: string;
+  selected?: boolean;
+  children?: ReactNode;
+}) {
   return (
     <div
       data-testid="record-stub"
-      className="flex items-center justify-between gap-2 rounded-control border border-line border-dashed px-3 py-2 text-sm text-text-muted"
+      {...selectedProps(selected)}
+      className={`flex items-center justify-between gap-2 rounded-control border px-3 py-2 text-sm text-text-muted ${selected ? FRAME_SELECTED : FRAME_IDLE}`}
     >
       <span>{label}</span>
       {children}

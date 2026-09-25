@@ -197,7 +197,7 @@ export function SuggestMenu({
   // экране, не вставляет ничего.
   const slashItems =
     active?.kind === 'slash' && editor !== null
-      ? filterSlashItems(active.query, kind, editor.state.doc)
+      ? filterSlashItems(active.query, kind, editor.state.doc, editor.state.selection.$from)
       : [];
   const rows: MenuRow[] =
     active === null

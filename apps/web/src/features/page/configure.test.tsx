@@ -11,6 +11,7 @@ import { parseBody } from '@orbis/shared/doc';
 import type { QueryAst } from '@orbis/shared/query';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
@@ -163,10 +164,7 @@ function open(main: StructureFixture, rows: WireEntityFixture[]) {
     return base(path, input);
   };
   const r = renderWithProviders(
-    <>
-      <DetailScreen entityId={main.entity.id} />
-      <Toaster />
-    </>,
+    <Screen first={main.entity.id} others={rows.map((row) => row.id)} />,
     handler,
     { queries: queryClient.getDefaultOptions().queries },
   );
@@ -175,6 +173,25 @@ function open(main: StructureFixture, rows: WireEntityFixture[]) {
       .filter((c) => c.path === 'entity.query' && (c.input as { ast?: unknown }).ast !== undefined)
       .map((c) => (c.input as { ast: QueryAst }).ast);
   return { ...r, astCalls };
+}
+
+/**
+ * Экран записи с переходами на соседние записи: роутер монтирует экран без key, переход меняет
+ * только проп — ровно так, как в приложении.
+ */
+function Screen({ first, others }: { first: string; others: string[] }) {
+  const [id, setId] = useState(first);
+  return (
+    <>
+      {[first, ...others].map((to) => (
+        <button key={to} type="button" data-testid={`go-${to}`} onClick={() => setId(to)}>
+          перейти
+        </button>
+      ))}
+      <DetailScreen entityId={id} />
+      <Toaster />
+    </>
+  );
 }
 
 const asScreen = (entity: WireEntityFixture): StructureFixture => ({ name: 'screen', entity });
@@ -362,4 +379,75 @@ test('пункты меню: у шаблона нет «Предпросмотр
   await screen.findByTestId('page-tabs');
   const hostLabels = await menuLabels();
   expect(hostLabels.some((l) => l.startsWith('Настроить'))).toBe(false);
+});
+
+// --- Переходы и снимки ------------------------------------------------------------------------
+
+const PAGE_B = uuid(1604);
+const TPL_2 = uuid(1605);
+
+test('переход на другую запись закрывает настройку и предпросмотр', async () => {
+  idleNever();
+  const other = wireEntity({
+    ...dashboard(),
+    id: PAGE_B,
+    title: 'Второй дашборд',
+    body: 'Текст второго',
+    bodyDoc: parseBody('Текст второго'),
+  });
+  open(asScreen(dashboard()), [other, secondProject()]);
+  await screen.findByTestId('page-columns');
+  await choose('Настроить');
+  await screen.findByTestId('configure-view');
+
+  // Настройка — про ТУ страницу, из чьего меню её открыли: переехав, она правила бы чужое тело.
+  fireEvent.click(screen.getByTestId(`go-${PAGE_B}`));
+  await waitFor(() => expect(screen.getByText('Текст второго')).toBeInTheDocument());
+  expect(screen.queryByTestId('configure-view')).toBeNull();
+
+  await choose('Предпросмотр на записи…');
+  await screen.findByTestId('template-preview-plaque');
+  fireEvent.click(screen.getByTestId(`go-${PAGE}`));
+  await screen.findByTestId('page-columns');
+  expect(screen.queryByTestId('template-preview-plaque')).toBeNull();
+});
+
+test('выбор записи предпросмотра не переезжает на другой шаблон', async () => {
+  idleNever();
+  const tpl2 = wireEntity({ ...projectsTemplate(), id: TPL_2, title: 'Проекты 2' });
+  open(asScreen(tpl2), [projectsTemplate(), secondProject(), PROJECT_A.entity]);
+  const select = () => within(screen.getByTestId('template-preview-plaque')).getByRole('combobox');
+  await waitFor(() => expect(select()).toHaveValue(PROJECT_A.entity.id));
+
+  // На первом шаблоне выбрана не последняя изменённая запись…
+  fireEvent.click(screen.getByTestId(`go-${TPL}`));
+  await waitFor(() => expect(select()).toHaveValue(PROJECT_A.entity.id));
+  fireEvent.change(select(), { target: { value: PROJECT_B } });
+  await waitFor(() => expect(screen.getByText('Тело дачи')).toBeInTheDocument());
+
+  // …а вернувшись на второй (он в кеше — экран не размонтируется), видим его умолчание.
+  fireEvent.click(screen.getByTestId(`go-${TPL_2}`));
+  await waitFor(() => expect(select()).toHaveValue(PROJECT_A.entity.id));
+  await waitFor(() => expect(screen.getByText('Смета кухни')).toBeInTheDocument());
+});
+
+test('страницы и сама страница не предлагаются записью предпросмотра', async () => {
+  idleNever();
+  const otherPage = wireEntity({
+    id: PAGE_B,
+    title: 'Чужая страница',
+    body: 'x',
+    aspects: [PAGE_ASPECT, 'orbis/project'],
+  });
+  // Черновику подходит любая запись — в выдаче и сама страница, и чужая страница.
+  open(asScreen(dashboard()), [otherPage, secondProject()]);
+  await screen.findByTestId('page-columns');
+  await choose('Предпросмотр на записи…');
+  const plaque = await screen.findByTestId('template-preview-plaque');
+  await waitFor(() => expect(within(plaque).getByRole('combobox')).toHaveValue(PROJECT_B));
+  expect(
+    within(plaque)
+      .getAllByRole('option')
+      .map((o) => o.textContent),
+  ).toEqual(['Дача', 'сама страница']);
 });

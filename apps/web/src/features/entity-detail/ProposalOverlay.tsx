@@ -42,6 +42,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { invalidateGraph } from '../../lib/invalidate';
+import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { isScalar, valueText as rawValueText } from '../../lib/registry/format';
 import type { RegistryLookup } from '../../lib/registry/labels';
@@ -66,6 +67,7 @@ import { EditorShell } from '../entity-editor/EditorShell';
 import { sameDoc } from '../entity-editor/strip-ids';
 import type { BodyDoc } from '../entity-editor/useBodySave';
 import { AspectField, coerce } from './AspectCards';
+import { bodyKindOf } from './EntityBody';
 
 type DetailEntity = RouterOutputs['entity']['get']['entity'];
 type ProposalView = RouterOutputs['routine']['proposalsForEntity'][number];
@@ -237,25 +239,30 @@ export function ProposalOverlay({
           {`${REPLACED_NOTES[replacedReason]}${proposals.length > 0 ? ' — ниже живое предложение' : ''}`}
         </p>
       )}
-      {proposals.map((view) => (
-        <ProposalPlate
-          key={view.pendingId}
-          view={view}
-          entityId={entity.id}
-          currentDoc={currentBodyDoc(entity)}
-          open={expanded.includes(view.pendingId)}
-          // Пока список перечитывается, решать нельзя ни по одной плашке: между ответом
-          // сервера и приездом нового списка кнопка «Принять» ещё жива, и второй клик ушёл бы
-          // в уже решённое предложение (тот же довод, что в ProposalCard).
-          busy={list.isFetching}
-          onToggle={(next) =>
-            setExpanded((ids) =>
-              next ? [...ids, view.pendingId] : ids.filter((id) => id !== view.pendingId),
-            )
-          }
-          onAnswer={setReplacedReason}
-        />
-      ))}
+      {/* Род тела — по САМОЙ записи, как у её тела на экране (`EntityBody`): правка предложения к
+          телу страницы или шаблона — тот же редактор с рамками частей и меню «/» страницы, а не
+          заметки, где колонки встали бы плашками «сделать страницей?». */}
+      <BodyKindProvider kind={bodyKindOf(entity)}>
+        {proposals.map((view) => (
+          <ProposalPlate
+            key={view.pendingId}
+            view={view}
+            entityId={entity.id}
+            currentDoc={currentBodyDoc(entity)}
+            open={expanded.includes(view.pendingId)}
+            // Пока список перечитывается, решать нельзя ни по одной плашке: между ответом
+            // сервера и приездом нового списка кнопка «Принять» ещё жива, и второй клик ушёл бы
+            // в уже решённое предложение (тот же довод, что в ProposalCard).
+            busy={list.isFetching}
+            onToggle={(next) =>
+              setExpanded((ids) =>
+                next ? [...ids, view.pendingId] : ids.filter((id) => id !== view.pendingId),
+              )
+            }
+            onAnswer={setReplacedReason}
+          />
+        ))}
+      </BodyKindProvider>
     </div>
   );
 }

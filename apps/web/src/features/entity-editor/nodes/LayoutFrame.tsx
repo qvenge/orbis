@@ -19,7 +19,7 @@ import { columnFrameLabel, LayoutFrameBox, LayoutStack, tabFrameLabel } from '..
  * спрятанным — узел не рисуется, но и не теряется, и после сохранения текст его цел.
  */
 
-function ContainerView({ node }: NodeViewProps) {
+function ContainerView({ node, selected }: NodeViewProps) {
   const kind = useBodyKind();
   // Узел препрохода той же формы: матрица мест (§5.5) спрашивается ОДНОЙ функцией с первым кадром
   // и рендерером, и плашка в редакторе дословно та же, что до его подъёма. Части не нужны —
@@ -45,7 +45,7 @@ function ContainerView({ node }: NodeViewProps) {
   }
   return (
     <NodeViewWrapper data-layout={node.type.name}>
-      <LayoutStack>
+      <LayoutStack selected={selected}>
         <NodeViewContent className="flex flex-col gap-2" />
       </LayoutStack>
     </NodeViewWrapper>
@@ -70,7 +70,7 @@ function PartView(props: NodeViewProps) {
       : columnFrameLabel(partIndex(props));
   return (
     <NodeViewWrapper data-layout-part={node.type.name}>
-      <LayoutFrameBox label={label}>
+      <LayoutFrameBox label={label} selected={props.selected}>
         <NodeViewContent className="flex flex-col gap-2" />
       </LayoutFrameBox>
     </NodeViewWrapper>

@@ -58,9 +58,9 @@ export function TemplatePreview({
   const reg = useRegistry();
   const selectId = useId();
   const candidates = trpc.entity.query.useQuery({ ast: previewCandidatesAst(forAspects) });
-  const rows = (candidates.data ?? []).filter(
-    (r) => r.id !== entity.id && !r.aspects.includes(PAGE_ASPECT),
-  );
+  // Страницы — не записи предпросмотра: их показывает своё тело, а не шаблон (§4.2 шаг 1). Сама
+  // страница — тоже страница и отсеивается тем же правилом; для неё в выборе своя строка.
+  const rows = (candidates.data ?? []).filter((r) => !r.aspects.includes(PAGE_ASPECT));
   const [picked, setPicked] = useState<{ pageId: string; recordId: string } | null>(null);
   const chosen = picked?.pageId === entity.id ? picked.recordId : (rows[0]?.id ?? entity.id);
   // Пока подходящие едут, выбирать не из чего: страница сама на себе мелькнула бы и сменилась
