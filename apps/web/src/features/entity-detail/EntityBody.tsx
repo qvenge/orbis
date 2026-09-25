@@ -7,7 +7,17 @@ import { bodyDraftNoteId, PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shar
 // отдельным чанком на 153 кБ gzip.
 import { flattenBlocks } from '@orbis/shared/doc/diff';
 import type { BodyKind } from '@orbis/shared/doc/placement';
-import { createContext, lazy, type ReactNode, Suspense, useContext, useRef, useState } from 'react';
+import {
+  createContext,
+  lazy,
+  type MutableRefObject,
+  type ReactNode,
+  Suspense,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { invalidateGraph } from '../../lib/invalidate';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
@@ -56,6 +66,15 @@ export function bodyKindOf(entity: Pick<Entity, 'aspects' | 'props'>): BodyKind 
 }
 
 /**
+ * Канал от тела к жестам экрана, которые переписывают запись пачкой (меню ⋮: «Изменить вид только
+ * этой записи», «Сделать страницей», «Перестать быть страницей»): есть ли у тела неотправленное и
+ * как его дослать. Смонтированное тело кладёт себя сюда и снимает при размонтировании; `null` —
+ * тела на экране нет, и спешить некуда.
+ */
+export type BodyGate = Pick<BodySave, 'hasUnsent' | 'flush'>;
+export type BodyGateRef = MutableRefObject<BodyGate | null>;
+
+/**
  * То, что тело получает от ЭКРАНА, а не от записи: режим разметки (его включает меню ⋮ в
  * шапке), конфликт правок шапки, узел плашек над вкладками и «Обновить».
  *
@@ -78,6 +97,8 @@ export interface BodyScreenValue {
   /** Узел НАД вкладками, куда уезжают плашки. Null — узла ещё нет (см. EntityBody). */
   noticeHost: HTMLElement | null;
   onRefresh: () => void;
+  /** Куда тело регистрирует свой `BodyGate` (докблок типа). */
+  bodyGate: BodyGateRef;
 }
 
 const BodyScreenContext = createContext<BodyScreenValue | null>(null);
@@ -113,6 +134,7 @@ export function EntityBody({
   screenConflict,
   noticeHost,
   onRefresh,
+  bodyGate,
 }: {
   entity: Entity;
   asMarkdown: boolean;
@@ -122,8 +144,19 @@ export function EntityBody({
   /** Узел НАД вкладками, куда уезжают плашки. Null — узла ещё нет (см. ниже). */
   noticeHost: HTMLElement | null;
   onRefresh: () => void;
+  bodyGate: BodyGateRef;
 }) {
   const save = useBodySave(entity.id, entity);
+  const { hasUnsent, flush } = save;
+  // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
+  // тело стёрло бы уже вставшее на его место (смена записи — новый экземпляр по key).
+  useEffect(() => {
+    const gate: BodyGate = { hasUnsent, flush };
+    bodyGate.current = gate;
+    return () => {
+      if (bodyGate.current === gate) bodyGate.current = null;
+    };
+  }, [bodyGate, hasUnsent, flush]);
   const utils = trpc.useUtils();
   /**
    * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.

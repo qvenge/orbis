@@ -1,9 +1,9 @@
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
-import { BodyScreenProvider, bodyKindOf } from '../entity-detail/EntityBody';
+import { type BodyGate, BodyScreenProvider, bodyKindOf } from '../entity-detail/EntityBody';
 import { RecordHostProvider, recordHostValue } from '../entity-detail/record-host';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { OwnBodyProvider, Renderer } from './Renderer';
@@ -22,6 +22,8 @@ type EntityGetReply = RouterOutputs['entity']['get'];
 export function PageView({ reply }: { reply: EntityGetReply }) {
   const { entity } = reply;
   const utils = trpc.useUtils();
+  // Тела своим редактором страница не ставит — регистрироваться сюда некому; реф нужен форме.
+  const bodyGate = useRef<BodyGate | null>(null);
   // «План → факт» — состояние хоста, как на экране записи (Ф-1а-18): поднимает его чекбокс
   // `{{title}}`, показывает карточка `orbis/financial`, где бы та ни стояла.
   const planToFact = usePlanToFactPrompt();
@@ -41,6 +43,7 @@ export function PageView({ reply }: { reply: EntityGetReply }) {
           screenConflict: false,
           noticeHost: null,
           onRefresh: () => void utils.entity.get.invalidate(detailGetInput(entity.id)),
+          bodyGate,
         }}
       >
         <ThisEntityProvider id={entity.id}>

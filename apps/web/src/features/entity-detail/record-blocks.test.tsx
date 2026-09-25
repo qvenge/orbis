@@ -52,6 +52,7 @@ const SCREEN: BodyScreenValue = {
   screenConflict: false,
   noticeHost: null,
   onRefresh: () => {},
+  bodyGate: { current: null },
 };
 
 /**

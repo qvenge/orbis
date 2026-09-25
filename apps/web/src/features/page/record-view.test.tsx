@@ -489,6 +489,7 @@ describe('разовый выбор и ожидание реестра', () => {
           screenConflict: false,
           noticeHost: null,
           onRefresh: () => {},
+          bodyGate: { current: null },
         }}
       >
         <RecordView reply={reply} override={override} />

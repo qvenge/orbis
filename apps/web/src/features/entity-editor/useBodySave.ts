@@ -102,6 +102,19 @@ export type BodySaveEntity = {
 export interface BodySave {
   onDocChange: (doc: BodyDoc) => void;
   flush: () => void;
+  /**
+   * Есть ли набранное, чего сервер ещё не подтвердил: отложенный документ, ОТЛИЧНЫЙ по смыслу от
+   * тела записи, или сохранение в полёте. Нужен жестам меню, которые переписывают запись пачкой
+   * (спека страниц 1а §8.4, С1а-8 «текст не теряется»): план такого жеста строится из тела в
+   * кэше, а в кэше набранного за последнюю паузу ещё нет. Пачка поверх — и досыл набранного
+   * уходит со старой меткой в 409, а хука, который показал бы конфликт, уже нет (финальное
+   * ревью, F-I1).
+   *
+   * Отложенный документ, равный телу записи по смыслу (правка, отменённая до исходного текста;
+   * тело базы с проставленными блочными id), — не «неотправленное»: сверка та же, что у `save`,
+   * который такой документ и не отправит; иначе жест ждал бы паузы ради пустого досыла.
+   */
+  hasUnsent: () => boolean;
   state: BodySaveState;
   conflict: boolean;
   /**
@@ -743,6 +756,14 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
 
   const flush = save;
 
+  const hasUnsent = useCallback((): boolean => {
+    if (inFlightRef.current) return true;
+    const doc = pendingRef.current;
+    if (doc === null) return false;
+    const base = entityRef.current.bodyDoc;
+    return !(base != null && base.v === doc.v && sameDoc(doc.doc, base.doc as JSONContent));
+  }, []);
+
   /**
    * Возврат к записи, у которой на диске остался неотправленный черновик.
    *
@@ -957,6 +978,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   return {
     onDocChange,
     flush,
+    hasUnsent,
     state:
       failure === 'terminal' ? 'rejected' : failure !== null ? 'error' : saving ? 'saving' : 'idle',
     conflict,

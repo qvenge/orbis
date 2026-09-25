@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
+import { useToast } from '../../ui/toast-store';
 import { ChangeViewDialog } from '../page/ChangeViewDialog';
 import { type ChangeViewPlan, changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from '../page/change-view';
 import { HOST_TEMPLATE_TEXT } from '../page/host-template';
@@ -24,6 +25,7 @@ import type { RecordShown } from '../page/RecordView';
 import { TemplateForDialog } from '../page/TemplateForDialog';
 import type { PageTemplates } from '../page/usePageTemplates';
 import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatch';
+import type { BodyGateRef } from './EntityBody';
 import { MenuTrigger } from './MenuTrigger';
 import type { WireEntity } from './record-host';
 
@@ -77,7 +79,12 @@ export interface DetailMenuProps {
   /** Показываемая запись (ответ `entity.get` экрана) — на неё пишут пункты страниц. */
   entity: WireEntity;
   view: DetailMenuView;
+  /** Тело на экране: есть ли неотправленная правка (жесты, переписывающие запись, ждут её). */
+  bodyGate: BodyGateRef;
 }
+
+/** Тост жеста, отложенного ради неотправленной правки тела (`bodySettled`). */
+export const BODY_SAVING = 'Сохраняем текст…';
 
 /**
  * Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…».
@@ -108,12 +115,14 @@ export function DetailMenu({
   archived,
   entity,
   view,
+  bodyGate,
   defaultOpen,
 }: DetailMenuProps & {
   /** Меню монтируется жестом открытия (`DetailMenuSlot`) — и встаёт уже открытым. */
   defaultOpen: boolean;
 }) {
   const runBatch = useUpdateBatch();
+  const { show } = useToast();
   const [dialog, setDialog] = useState<MenuDialog>(null);
   // Переход на соседнюю запись закрывает диалог прежней: его снимок — про неё (докблок `MenuDialog`).
   if (dialog !== null && dialog.entityId !== entity.id) setDialog(null);
@@ -129,6 +138,23 @@ export function DetailMenu({
    * кнопки. Правка тела мимо экрана после этого чтения даёт серверу другую версию, и пачка
    * отвергается целиком (`STALE_VERSION`) — шаблон не затирает её молча.
    */
+  /**
+   * Можно ли переписать запись пачкой прямо сейчас (С1а-8 «текст не теряется»; финальное ревью,
+   * F-I1). Пока у тела есть неотправленное (пауза набора или сохранение в полёте), план жеста
+   * построен из тела В КЭШЕ — без последних слов, — а пачка сдвинула бы версию записи, и досыл
+   * набранного ушёл бы со старой меткой в 409, когда хука, чтобы показать конфликт, уже нет.
+   * Поэтому жест не исполняется: тело досылается сейчас же, человек видит тост и повторяет жест,
+   * когда текст сохранён. Ждать досыла и перестраивать план здесь не станем — повтор дешевле и
+   * честнее.
+   */
+  const bodySettled = (): boolean => {
+    const gate = bodyGate.current;
+    if (gate === null || !gate.hasUnsent()) return true;
+    gate.flush();
+    show(BODY_SAVING, 'default');
+    return false;
+  };
+
   const becomePage = (id: string, updatedAt: string, body: string): UpdateBatchOperation => ({
     tool: 'entity_update',
     input: { id, expectedUpdatedAt: updatedAt, body, aspects: { attach: [PAGE_ASPECT] } },
@@ -242,15 +268,18 @@ export function DetailMenu({
     return {
       label: 'Сделать страницей',
       icon: <FilePlus2 size={16} aria-hidden />,
-      onSelect: () =>
+      onSelect: () => {
+        if (!bodySettled()) return;
         void runBatch(
           [{ tool: 'entity_update', input: { id: entity.id, aspects: { attach: [PAGE_ASPECT] } } }],
           'Запись стала страницей',
-        ),
+        );
+      },
     };
   }
 
   function changeView(templateText: string) {
+    if (!bodySettled()) return;
     const plan = changeViewPlan(templateText, entity.body);
     // Случай 3 — вопрос владельцу: молча ни убрать текст, ни дописать его нельзя (С1а-8).
     if (plan.case === 3) {
@@ -300,7 +329,8 @@ export function DetailMenu({
       {
         label: 'Перестать быть страницей',
         icon: <Undo2 size={16} aria-hidden />,
-        onSelect: () =>
+        onSelect: () => {
+          if (!bodySettled()) return;
           void runBatch(
             [
               {
@@ -309,7 +339,8 @@ export function DetailMenu({
               },
             ],
             'Запись больше не страница',
-          ),
+          );
+        },
       },
     ];
   }
@@ -320,8 +351,11 @@ export function DetailMenu({
       {dialog?.kind === 'change-view' && dialog.entityId === entity.id && (
         <ChangeViewDialog
           reason={dialog.plan.reason}
+          // Диалог закрывается и при отложенном жесте: его план — из тела ДО досыла, повтор из
+          // меню построит новый.
           onHideAsVersion={() => {
             setDialog(null);
+            if (!bodySettled()) return;
             void runBatch(
               [
                 {
@@ -335,6 +369,7 @@ export function DetailMenu({
           }}
           onShowBelow={() => {
             setDialog(null);
+            if (!bodySettled()) return;
             void runBatch(
               [becomePage(dialog.entityId, dialog.updatedAt, dialog.plan.showBelow)],
               'Вид записи теперь свой',

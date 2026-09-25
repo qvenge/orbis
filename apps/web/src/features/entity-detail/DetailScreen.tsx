@@ -15,7 +15,7 @@ import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsC
 import { TemplatePreview } from '../page/TemplatePreview';
 import { usePageTemplates } from '../page/usePageTemplates';
 import { DetailMenuSlot } from './DetailMenuSlot';
-import { BodyScreenProvider, bodyKindOf } from './EntityBody';
+import { type BodyGate, BodyScreenProvider, bodyKindOf } from './EntityBody';
 import { ProposalOverlay } from './ProposalOverlay';
 import { ROUTINE_ASPECT } from './RoutineStatusBlock';
 import { useEntityDetail } from './useEntityDetail';
@@ -106,6 +106,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * будит. Один лишний проход на монтировании, до первой отрисовки, — вся цена.
    */
   const [noticeHost, setNoticeHost] = useState<HTMLElement | null>(null);
+  /**
+   * Смонтированное тело записи (или настройки) — есть ли у него неотправленное и как его дослать.
+   * Реф, а не состояние: жест меню читает его в момент нажатия, перерисовки он не заводит.
+   */
+  const bodyGate = useRef<BodyGate | null>(null);
   /**
    * Развёрнут ли слой предложения (Ш1.3) — и, значит, спрятана ли область вкладок.
    *
@@ -267,6 +272,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             void get.refetch();
             dismissConflict();
           },
+          bodyGate,
         }}
       >
         <ScreenHeader
@@ -293,6 +299,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
               }
               archived={entity.archived}
               entity={entity}
+              bodyGate={bodyGate}
               view={
                 isPage
                   ? {

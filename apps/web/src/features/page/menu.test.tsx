@@ -8,9 +8,10 @@
  * где что-то пишется, счёт вызовов сверяется. `this` у блоков данных — только uuid.
  */
 import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY } from '@orbis/shared';
-import { parseBody } from '@orbis/shared/doc';
+import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
@@ -27,6 +28,7 @@ import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
+import { BODY_SAVING } from '../entity-detail/DetailMenu';
 import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import {
@@ -35,6 +37,7 @@ import {
   structureHandler,
 } from '../entity-detail/structure-fixtures';
 import { type DetailStructure, snapshotDetailStructure } from '../entity-detail/structure-snapshot';
+import { readDraft } from '../entity-editor/draft-storage';
 import { CHANGE_VIEW_QUESTION, HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
 import { changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from './change-view';
 import { HOST_TEMPLATE_TEXT } from './host-template';
@@ -853,5 +856,158 @@ describe('«Изменить вид» не закрепляет вынужден
     await screen.findByTestId('page-tabs');
     await openMenu();
     expect(menuLabels()).not.toContain('Изменить вид только этой записи');
+  });
+});
+
+/**
+ * Финальное ревью, F-I1 (С1а-8 «текст не теряется»): жест меню, переписывающий запись пачкой,
+ * при неотправленной правке тела. План такого жеста строится из тела в кэше, где набранного за
+ * последнюю паузу ещё нет; пачка сдвинула бы версию, и досыл набранного ушёл бы со старой меткой
+ * в 409 без живого хука — текст осел бы черновиком без единого слова. Жест не исполняется: тело
+ * досылается сразу, тост «Сохраняем текст…», пачки нет.
+ */
+describe('жест меню при неотправленной правке тела (F-I1)', () => {
+  /** Сохранение тела как на сервере: гейт версии §5.2, новая версия строки; журнал исходов. */
+  function bodyServer(world: World, log: string[]): MockHandler {
+    return (path, input) => {
+      if (path !== 'entity.update') return undefined;
+      const inp = input as {
+        id: string;
+        bodyDoc?: { v: number; doc: object };
+        expectedUpdatedAt?: string;
+      };
+      const row = world.rows.get(inp.id);
+      if (row === undefined) throw new Error('нет записи');
+      if (inp.bodyDoc !== undefined && inp.expectedUpdatedAt !== row.updatedAt) {
+        log.push('update:STALE');
+        throw trpcError('CONFLICT', 'STALE_VERSION');
+      }
+      if (inp.bodyDoc !== undefined) {
+        row.bodyDoc = inp.bodyDoc as never;
+        row.body = serializeBody(inp.bodyDoc as never);
+      }
+      row.updatedAt = '2026-09-25T13:00:00.000Z';
+      log.push('update:OK');
+      return copy(row);
+    };
+  }
+
+  function openWithBody(f: StructureFixture) {
+    const log: string[] = [];
+    let world: World | null = null;
+    const r = open(f, [], { over: (path, input) => bodyServer(world as World, log)(path, input) });
+    world = r.world;
+    return { ...r, log };
+  }
+
+  /**
+   * Правка тела в редакторе, НЕ дождавшаяся паузы: командой живого редактора (Tiptap кладёт себя
+   * в `dom.editor`), так правка идёт тем же `onUpdate → onDocChange`, что и набор.
+   */
+  async function editUnsent(tail: string) {
+    const preview = screen.queryByTestId('editor-preview');
+    if (preview !== null) fireEvent.click(preview);
+    const field = await waitFor(
+      () => {
+        const node = screen.getByTestId('body-editor').querySelector('[contenteditable]');
+        if (node === null) throw new Error('редактор не встал');
+        return node as HTMLElement & { editor: Editor };
+      },
+      { timeout: 10_000 },
+    );
+    // В начало первого абзаца: у всех тел этих тестов тело начинается текстом.
+    act(() => {
+      field.editor.commands.insertContentAt(1, tail);
+    });
+    return field.editor;
+  }
+
+  /** Досыл осел: правка на «сервере», черновика на диске нет, ни одного 409. */
+  async function bodySettledOnServer(r: ReturnType<typeof openWithBody>, id: string, tail: string) {
+    await waitFor(() => expect(r.world.rows.get(id)?.body).toContain(tail), { timeout: 5000 });
+    await waitFor(() => expect(readDraft(id)).toBeNull());
+    expect(r.log).not.toContain('update:STALE');
+  }
+
+  test('«Изменить вид только этой записи»: пачки нет, тост, текст досылается; повтор несёт набранное', async () => {
+    const f = fixture('note-plain');
+    const r = openWithBody(f);
+    await screen.findByTestId('page-tabs');
+    await editUnsent('ХВОСТ ');
+    await choose('Изменить вид только этой записи');
+
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    expect(r.batches()).toEqual([]);
+    await bodySettledOnServer(r, f.entity.id, 'ХВОСТ');
+    expect(r.batches()).toEqual([]);
+    expect(screen.queryByTestId('page-view')).toBeNull();
+
+    // Текст сохранён и перечитан — тот же жест проходит, и план несёт набранное.
+    await waitFor(async () => {
+      await choose('Изменить вид только этой записи');
+      expect(r.batches()).toHaveLength(1);
+    });
+    await screen.findByTestId('page-view');
+    expect(JSON.stringify(r.batches()[0])).toContain('ХВОСТ');
+    expect(r.log).not.toContain('update:STALE');
+  });
+
+  test('правка, отменённая до исходного текста, — не неотправленная: жест проходит сразу', async () => {
+    const f = fixture('note-plain');
+    const r = openWithBody(f);
+    await screen.findByTestId('page-tabs');
+    const editor = await editUnsent('ХВОСТ ');
+    // Отложенный документ снова равен телу записи по смыслу (блочные id не в счёт) — отправлять
+    // нечего, и `save` его так и снимет; ждать паузы ради пустого досыла жест не должен.
+    act(() => {
+      editor.commands.undo();
+    });
+    await choose('Сделать страницей');
+    await waitFor(() => expect(r.batches()).toHaveLength(1));
+    expect(screen.queryByText(BODY_SAVING)).toBeNull();
+  });
+
+  test('«Сделать страницей»: пачки нет, тост, текст досылается без 409', async () => {
+    const f = fixture('note-plain');
+    const r = openWithBody(f);
+    await screen.findByTestId('page-tabs');
+    await editUnsent('ХВОСТ ');
+    await choose('Сделать страницей');
+
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    await bodySettledOnServer(r, f.entity.id, 'ХВОСТ');
+    expect(r.batches()).toEqual([]);
+  });
+
+  test('«Перестать быть страницей» из «Настроить»: пачки нет, тост, текст досылается без 409', async () => {
+    const page = asPage(fixture('note-plain'), 'Страница\n');
+    const r = openWithBody(page);
+    await screen.findByTestId('page-view');
+    await choose('Настроить');
+    await screen.findByTestId('configure-view');
+    await editUnsent('ХВОСТ ');
+    await choose('Перестать быть страницей');
+
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    await bodySettledOnServer(r, page.entity.id, 'ХВОСТ');
+    expect(r.batches()).toEqual([]);
+    expect(r.world.rows.get(page.entity.id)?.aspects).toContain(PAGE_ASPECT);
+  });
+
+  test('кнопка вопроса случая 3 при неотправленной правке: пачки нет, диалог закрыт, текст досылается', async () => {
+    const f = withBody(fixture('note-plain'), 'Заметка\n{{/tab}}\nхвост\n');
+    const r = openWithBody(f);
+    await screen.findByTestId('page-tabs');
+    fireEvent.click(await screen.findByTestId('editor-preview'));
+    await choose('Изменить вид только этой записи');
+    const dialog = await screen.findByRole('dialog');
+    // Правка при открытом вопросе — та же неотправленная, что и набор перед жестом.
+    await editUnsent('ХВОСТ ');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Показать внизу страницы' }));
+
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await bodySettledOnServer(r, f.entity.id, 'ХВОСТ');
+    expect(r.batches()).toEqual([]);
   });
 });

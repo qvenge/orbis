@@ -2,7 +2,7 @@ import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
-import { bodyKindOf, EntityBody } from '../entity-detail/EntityBody';
+import { bodyKindOf, EntityBody, useBodyScreen } from '../entity-detail/EntityBody';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { TemplateBanner, templateForOf } from './TemplateBanner';
 
@@ -22,6 +22,9 @@ import { TemplateBanner, templateForOf } from './TemplateBanner';
  */
 export function ConfigureView({ targetId, onDone }: { targetId: string; onDone: () => void }) {
   const get = trpc.entity.get.useQuery(detailGetInput(targetId));
+  // Тело настройки регистрируется у экрана так же, как тело записи: жесты меню ⋮, переписывающие
+  // запись, обязаны знать о неотправленной правке и здесь (финальное ревью, F-I1).
+  const { bodyGate } = useBodyScreen();
   const entity = get.data?.entity;
   const done = (
     <Button size="sm" onClick={onDone}>
@@ -62,6 +65,7 @@ export function ConfigureView({ targetId, onDone }: { targetId: string; onDone: 
           screenConflict={false}
           noticeHost={null}
           onRefresh={() => void get.refetch()}
+          bodyGate={bodyGate}
         />
       </ThisEntityProvider>
     </div>
