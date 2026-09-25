@@ -61,9 +61,10 @@ const BY_IDLE: Mount = { focusAt: null };
  * Пустой реестр разбора — для мест БЕЗ блоков данных. `bodyIssues` читает реестр только у узлов
  * `query`, а первый кадр спрашивает её об одном узле обвязки или контейнера за раз и берёт
  * только проблему самого узла (путь длины 1): проблемы блоков данных внутри показывает их
- * собственный `DataBlock` по настоящему реестру.
+ * собственный `DataBlock` по настоящему реестру. Тем же приёмом пользуется рендерер страниц
+ * (`features/page/Renderer.tsx`): проблемы узлов-запросов он отбрасывает, ими говорит блок.
  */
-const NO_REGISTRY: ParseRegistry = {
+export const NO_REGISTRY: ParseRegistry = {
   properties: new Map(),
   aspects: new Map(),
   roles: new Map(),

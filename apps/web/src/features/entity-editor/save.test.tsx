@@ -1515,6 +1515,13 @@ test('модули первого кадра не тянут схему реда
     '../page/blocks/MoreRows.tsx',
     '../page/blocks/BlockPlaque.tsx',
     '../page/blocks/types.ts',
+    // Рендерер показа и страница своим телом (задача 13): экран записи показывает ими каждую
+    // запись-страницу, то есть они эагерны так же, как вкладки. Рендерер тянет препроход и
+    // матрицу мест — только листовыми сабпатами; одна строка с баррелем здесь — схема в кадре.
+    '../page/Renderer.tsx',
+    '../page/Columns.tsx',
+    '../page/TabsContainer.tsx',
+    '../page/PageView.tsx',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

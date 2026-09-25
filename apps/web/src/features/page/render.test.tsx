@@ -1,0 +1,317 @@
+/**
+ * Рендерер показа и страница своим телом (спека страниц 1а §6.1, §4.2 шаг 1, §6.4, §5.5, задача 13).
+ *
+ * Страница открывается экраном записи (`DetailScreen`) — так, как её откроет человек: данные
+ * обвязки приходят ОДНИМ `entity.get` экрана (РП-13, Э-14), и тест считает это по сети.
+ * `this` у блоков данных — только uuid: боевые пути другой формы не принимают.
+ */
+import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
+import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
+import { useNav } from '../../state/navigation';
+import {
+  blocksReply,
+  blockTexts,
+  installCrashTrap,
+  type MockHandler,
+  renderWithProviders,
+  type WireEntityFixture,
+  wireEntity,
+} from '../../test/harness';
+import { BUILTIN_REGISTRY } from '../../test/registry';
+import { queryClient } from '../../trpc';
+import { DetailScreen } from '../entity-detail/DetailScreen';
+import { type EntityGetReply, structureHandler } from '../entity-detail/structure-fixtures';
+import { detailGetInput } from '../entity-detail/useEntityDetail';
+
+installCrashTrap();
+
+beforeEach(() => {
+  localStorage.clear();
+  // Редактор, вставший сам по таймеру простоя, менял бы дерево посреди проверки.
+  vi.stubGlobal('requestIdleCallback', () => 1);
+  resetRegistryVersionForTests();
+  noteRegistryVersion(BUILTIN_REGISTRY.version);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+const PAGE_ID = '00000000-0000-4000-8000-000000000501';
+const MENTIONER_ID = '00000000-0000-4000-8000-000000000502';
+
+const page = (body: string, over: Partial<WireEntityFixture> = {}): WireEntityFixture =>
+  wireEntity({
+    id: PAGE_ID,
+    title: 'Утро',
+    body,
+    aspects: [PAGE_ASPECT],
+    ...over,
+  });
+
+const row = (id: string, title: string) => wireEntity({ id, title, aspects: ['orbis/task'] });
+
+/**
+ * Экран записи над страницей: обработчик экрана записи (`structureHandler`), блоки данных — по
+ * карте «текст → строки», прочее переопределяется `extra`/`over`.
+ */
+function openPage(
+  entity: WireEntityFixture,
+  opts: {
+    blocks?: Parameters<typeof blocksReply>[0];
+    extra?: Partial<EntityGetReply>;
+    over?: MockHandler;
+  } = {},
+) {
+  useNav.setState({
+    activeTab: 'browser',
+    stacks: { chat: [], browser: [{ kind: 'entity', id: entity.id }], agenda: [], budget: [] },
+  });
+  const screenHandler = structureHandler({ name: 'page', entity, extra: opts.extra ?? {} });
+  const map = opts.blocks ?? {};
+  const blocks = blocksReply(map);
+  const handler: MockHandler = async (path, input) => {
+    const own = opts.over ? await opts.over(path, input) : undefined;
+    if (own !== undefined) return own;
+    // Тот же текст запроса отвечает и мимо пачки — прямым `entity.query`. Иначе блок, ушедший в
+    // обход собирателя, упал бы на пустом ответе, а не на сверке «одна пачка»: тест мерил бы
+    // обвязку, а не путь данных (мутация (б) задачи 13).
+    const text = path === 'entity.query' ? (input as { query?: string }).query?.trim() : undefined;
+    const direct = text === undefined ? undefined : map[text];
+    if (Array.isArray(direct)) return direct;
+    return blocks(path, input) ?? screenHandler(path, input);
+  };
+  return renderWithProviders(<DetailScreen entityId={entity.id} />, handler, {
+    queries: queryClient.getDefaultOptions().queries,
+  });
+}
+
+const tabPanelOf = (el: HTMLElement): HTMLElement => {
+  const panel = el.closest<HTMLElement>('[role="tabpanel"]');
+  if (panel === null) throw new Error('узел не во вкладке');
+  return panel;
+};
+
+const MORNING = `Доброе утро, план на день.
+
+{{columns}}
+{{column}}
+{{query: aspect=orbis/task}}
+{{/column}}
+{{column}}
+{{query: aspect=orbis/goal}}
+{{query: aspect=orbis/note}}
+{{/column}}
+{{/columns}}
+`;
+
+test('страница «Утро»: текст, две колонки, три блока данных — одной пачкой (С1а-4)', async () => {
+  const { calls } = openPage(page(MORNING), {
+    blocks: {
+      'aspect=orbis/task': [row('00000000-0000-4000-8000-000000000511', 'Задача дня')],
+      'aspect=orbis/goal': [row('00000000-0000-4000-8000-000000000512', 'Цель года')],
+      'aspect=orbis/note': [row('00000000-0000-4000-8000-000000000513', 'Заметка утра')],
+    },
+  });
+  expect(await screen.findByText('Доброе утро, план на день.')).toBeInTheDocument();
+  expect(screen.getByTestId('page-text')).toHaveTextContent('Доброе утро');
+
+  const columns = screen.getByTestId('page-columns');
+  // Столбиком на узком экране, сеткой в две колонки на `md`.
+  expect(columns).toHaveClass('flex', 'flex-col', 'md:grid', 'md:grid-cols-2');
+  const parts = within(columns).getAllByTestId('page-column');
+  expect(parts).toHaveLength(2);
+
+  expect(await within(parts[0] as HTMLElement).findByText('Задача дня')).toBeInTheDocument();
+  expect(await within(parts[1] as HTMLElement).findByText('Цель года')).toBeInTheDocument();
+  expect(within(parts[1] as HTMLElement).getByText('Заметка утра')).toBeInTheDocument();
+
+  const batches = calls.filter((c) => c.path === 'entity.blocks');
+  expect(batches).toHaveLength(1);
+  expect(blockTexts(batches[0] as { input: unknown }).map((t) => t.trim())).toEqual([
+    'aspect=orbis/task',
+    'aspect=orbis/goal',
+    'aspect=orbis/note',
+  ]);
+  // `this` — сама страница (§6.4).
+  const items = (batches[0] as { input: { blocks: { thisEntityId?: string }[] } }).input.blocks;
+  expect(items.map((b) => b.thisEntityId)).toEqual([PAGE_ID, PAGE_ID, PAGE_ID]);
+});
+
+test('вкладки: видна «А», переключение показывает «Б»; колонки внутри вкладки рисуются', async () => {
+  openPage(
+    page(`{{tabs}}
+{{tab: А}}
+Текст А
+{{columns}}
+{{column}}
+Левая
+{{/column}}
+{{column}}
+Правая
+{{/column}}
+{{/columns}}
+{{/tab}}
+{{tab: Б}}
+Текст Б
+{{/tab}}
+{{/tabs}}
+`),
+  );
+  const a = await screen.findByText('Текст А');
+  expect(tabPanelOf(a)).toHaveAttribute('data-state', 'active');
+  const nested = within(tabPanelOf(a)).getByTestId('page-columns');
+  expect(within(nested).getAllByTestId('page-column')).toHaveLength(2);
+  expect(within(nested).getByText('Левая')).toBeInTheDocument();
+  expect(within(nested).getByText('Правая')).toBeInTheDocument();
+  expect(tabPanelOf(screen.getByText('Текст Б'))).toHaveAttribute('data-state', 'inactive');
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Б' }));
+  await waitFor(() =>
+    expect(tabPanelOf(screen.getByText('Текст Б'))).toHaveAttribute('data-state', 'active'),
+  );
+  expect(tabPanelOf(screen.getByText('Текст А'))).toHaveAttribute('data-state', 'inactive');
+});
+
+test('{{title}} — заголовок САМОЙ страницы, {{backlinks}} — её обратные ссылки (§6.4)', async () => {
+  const mentioner = wireEntity({ id: MENTIONER_ID, title: 'Дневник' });
+  openPage(page('{{title}}\n\n{{backlinks}}\n'), {
+    extra: { backlinks: [{ entity: mentioner, via: 'mention', viaLabel: 'Упоминание' }] as never },
+  });
+  const view = await screen.findByTestId('page-view');
+  expect(await within(view).findByTestId('title-edit')).toHaveValue('Утро');
+  const link = await within(view).findByTestId('backlink');
+  expect(link).toHaveTextContent('Дневник');
+});
+
+test('{{body}} на странице — плашка BLOCK_MISPLACED; незакрытый контейнер — плашка на месте, остальное рисуется', async () => {
+  const body = 'Вступление\n\n{{body}}\n\n{{columns}}\n{{column}}\nВнутри\n{{/column}}\n';
+  const { calls } = openPage(page(body));
+  const view = await screen.findByTestId('page-view');
+  expect(await within(view).findByText('Вступление')).toBeInTheDocument();
+
+  const misplaced = within(view).getByTestId('block-misplaced');
+  expect(misplaced).toHaveTextContent(
+    'Блок {{body}} работает только в шаблоне, на странице он не показывается.',
+  );
+  // Редактора тела на странице нет.
+  expect(within(view).queryByTestId('editor-preview')).toBeNull();
+
+  const broken = within(view).getByTestId('qb-error');
+  expect(broken).toHaveTextContent(GRAMMAR_ERROR_MESSAGES.CONTAINER_UNCLOSED);
+  expect(within(view).queryByText('Внутри')).toBeNull();
+  // Текст узла в теле цел: показ ничего не пишет.
+  expect(calls.some((c) => c.path.startsWith('entity.update'))).toBe(false);
+});
+
+test('один запрос записи: открытие страницы — РОВНО один entity.get с DETAIL_INCLUDE (РП-13, Э-14)', async () => {
+  const text = 'aspect=orbis/task';
+  const { calls } = openPage(
+    page(`{{title}}\n\n{{query: ${text}}}\n\n{{subtasks}}\n\n{{backlinks}}\n\n{{blockers}}\n`),
+    { blocks: { [text]: [row('00000000-0000-4000-8000-000000000521', 'Строка блока')] } },
+  );
+  expect(await screen.findByText('Строка блока')).toBeInTheDocument();
+  await screen.findByTestId('title-edit');
+  const gets = calls.filter((c) => c.path === 'entity.get');
+  expect(gets).toEqual([{ path: 'entity.get', input: detailGetInput(PAGE_ID) }]);
+});
+
+test('шаблон сам на себе: {{body}} — заглушка без редактора, второй {{body}} — плашка (SECOND_BODY)', async () => {
+  openPage(
+    page('{{title}}\n\n{{body}}\n\n{{body}}\n', {
+      title: 'Вид задачи',
+      props: { [TEMPLATE_FOR_PROPERTY]: ['orbis/task'] },
+    }),
+  );
+  const view = await screen.findByTestId('page-view');
+  expect(await within(view).findByTestId('body-stub')).toHaveTextContent('[Тело записи]');
+  expect(within(view).getAllByTestId('body-stub')).toHaveLength(1);
+  expect(within(view).queryByTestId('editor-preview')).toBeNull();
+  expect(within(view).getByTestId('block-misplaced')).toHaveTextContent('Второй блок {{body}}');
+});
+
+test('показ не редактирует: в PageView нет contenteditable', async () => {
+  openPage(
+    page(
+      '# Заголовок раздела\n\nАбзац.\n\n{{title}}\n\n{{tabs}}\n{{tab: А}}\nТекст\n{{/tab}}\n{{/tabs}}\n',
+    ),
+  );
+  const view = await screen.findByTestId('page-view');
+  await within(view).findByText('Абзац.');
+  // Простой наступает — редактор первого кадра встал бы, будь он здесь.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  expect(view.querySelector('[contenteditable]')).toBeNull();
+  expect(within(view).queryByTestId('editor-preview')).toBeNull();
+});
+
+test('правка заголовка через {{title}} страницы — оптимистично, прежним useEntityUpdate', async () => {
+  const { calls } = openPage(page('{{title}}\n'), {
+    // Ответ не приходит: видимое — только оптимистичный патч под ключом detailGetInput(id).
+    over: (path) => (path === 'entity.update' ? new Promise(() => {}) : undefined),
+  });
+  const input = await screen.findByTestId('title-edit');
+  fireEvent.change(input, { target: { value: 'Вечер' } });
+  fireEvent.blur(input);
+  expect(await screen.findByRole('heading', { name: 'Вечер' })).toBeInTheDocument();
+  const update = calls.find((c) => c.path === 'entity.update');
+  expect(update?.input).toMatchObject({ id: PAGE_ID, title: 'Вечер' });
+});
+
+test('{{cards}} на странице своим телом не рисует карточку «Страница» (РП-25); card: не повторяется в cards', async () => {
+  openPage(
+    page('{{card: "Цель"}}\n\n{{cards}}\n', {
+      aspects: [PAGE_ASPECT, 'orbis/goal', 'orbis/note'],
+    }),
+  );
+  const view = await screen.findByTestId('page-view');
+  await within(view).findByTestId('aspect-orbis/note');
+  // Цель размещена `card:` (по подписи) — в `{{cards}}` её нет, на месте она одна.
+  expect(within(view).getAllByTestId('aspect-orbis/goal')).toHaveLength(1);
+  expect(within(view).queryByTestId(`aspect-${PAGE_ASPECT}`)).toBeNull();
+});
+
+test('обычная запись без аспекта «страница» — прежний экран с вкладками', async () => {
+  openPage(wireEntity({ id: PAGE_ID, title: 'Заметка', body: '{{title}}\n' }));
+  expect(await screen.findByTestId('entity-tabs')).toBeInTheDocument();
+  expect(screen.queryByTestId('page-view')).toBeNull();
+});
+
+test('вкладки и сеть: версии на скрытой вкладке (и во вложенной под скрытой) не грузятся, тред монтируется только открытым', async () => {
+  const { calls } = openPage(
+    page(`{{tabs}}
+{{tab: Главная}}
+Первая вкладка
+{{/tab}}
+{{tab: Версии}}
+{{versions}}
+{{/tab}}
+{{tab: Вложенные}}
+{{tabs}}
+{{tab: Внутри}}
+{{versions}}
+{{/tab}}
+{{/tabs}}
+{{/tab}}
+{{tab: Тред}}
+{{thread}}
+{{/tab}}
+{{/tabs}}
+`),
+  );
+  await screen.findByText('Первая вкладка');
+  expect(await screen.findAllByTestId('versions-card')).toHaveLength(2);
+  const touched = (p: string) => calls.some((c) => c.path === p);
+  expect(touched('version.list')).toBe(false);
+  expect(touched('chat.ensureThread') || touched('chat.listMessages')).toBe(false);
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Вложенные' }));
+  await waitFor(() => expect(touched('version.list')).toBe(true));
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+  expect(await screen.findByTestId('message-list')).toBeInTheDocument();
+});

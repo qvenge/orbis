@@ -1,4 +1,4 @@
-import { buildAppPath } from '@orbis/shared';
+import { buildAppPath, PAGE_ASPECT } from '@orbis/shared';
 import { Archive, ArchiveRestore, Code, EllipsisVertical, History, Link2, Pin } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
@@ -13,6 +13,7 @@ import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { useToast } from '../../ui/toast-store';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
+import { PageView } from '../page/PageView';
 import { AspectCards } from './AspectCards';
 import { AssignmentCard } from './AssignmentCard';
 import { BodyScreenProvider } from './EntityBody';
@@ -222,6 +223,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     );
   }
   const { entity } = get.data;
+  const isPage = entity.aspects.includes(PAGE_ASPECT);
   /**
    * Хост записи (спека страниц 1а §7.3): части экрана — примитивы обвязки, и данные они берут
    * отсюда, из ответа `entity.get` этого экрана, а не пропами. Раскладка ниже — прежняя; её
@@ -349,7 +351,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
               // которое молча ничего не делает, а флаг после нажатия остался бы поднятым: приедь
               // документ следующим рефетчем — и тумблер открылся бы сам, без жеста человека.
               // Ветку «документа нет» разбирает EditorShell; здесь у неё видимое следствие.
-              onToggleMarkdown={entity.bodyDoc == null ? undefined : () => setAsMarkdown((v) => !v)}
+              // У страницы — тоже нет: её тело показывает рендерер, а не редактор записи, и
+              // режиму разметки включить нечего (правка страницы — настройкой, задачи 15–16).
+              onToggleMarkdown={
+                entity.bodyDoc == null || isPage ? undefined : () => setAsMarkdown((v) => !v)
+              }
               archived={entity.archived}
             />
           }
@@ -416,25 +422,35 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           ТЕМ ЖЕ механизмом, что прежде прятал тело: класс, а не снятие с монтирования, — см.
           докблок `proposalOpen`. Ради него это и один узел, а не два: спрячь мы вкладки, оставив
           прежний класс на теле, у одного вопроса «видно ли это сейчас» стало бы два ответа. */}
-        <div
-          data-testid="entity-tabs"
-          className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
-        >
-          <Tabs
-            value={openTab}
-            onValueChange={setOpenTab}
-            tabs={[
-              { value: 'entity', label: 'Сущность', content: entityTab, keepMounted: true },
-              { value: 'details', label: 'Детали', content: detailsTab, keepMounted: true },
-              {
-                value: 'thread',
-                label: 'Тред',
-                // Тред с key по id и «Нет треда» без него — см. ThreadBlock.
-                content: <ThreadBlock />,
-              },
-            ]}
-          />
-        </div>
+        {/* Страница — своим телом (спека страниц 1а §4.2 шаг 1): рендерер вместо вкладок, над
+          тем же ответом `entity.get` этого экрана — второго запроса записи нет (РП-13). Шапка,
+          меню, слой предложения и плашки над ней — прежние. Прячется развёрнутым слоем тем же
+          классом и по той же причине, что вкладки (см. ниже). */}
+        {isPage ? (
+          <div className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}>
+            <PageView reply={get.data} />
+          </div>
+        ) : (
+          <div
+            data-testid="entity-tabs"
+            className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
+          >
+            <Tabs
+              value={openTab}
+              onValueChange={setOpenTab}
+              tabs={[
+                { value: 'entity', label: 'Сущность', content: entityTab, keepMounted: true },
+                { value: 'details', label: 'Детали', content: detailsTab, keepMounted: true },
+                {
+                  value: 'thread',
+                  label: 'Тред',
+                  // Тред с key по id и «Нет треда» без него — см. ThreadBlock.
+                  content: <ThreadBlock />,
+                },
+              ]}
+            />
+          </div>
+        )}
       </BodyScreenProvider>
     </RecordHostProvider>
   );

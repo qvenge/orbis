@@ -249,6 +249,55 @@ export function bodyIssues(
 }
 
 /**
+ * Узел дерева `parsePageText` по пути проблемы (формат пути — докблок `bodyIssues`).
+ *
+ * Одна копия разыменования: пути выдаёт `bodyIssues`, а читают их рендерер (плашка на месте
+ * узла) и тесты. Своя копия у каждого разъехалась бы с форматом при первой же его правке —
+ * и плашка встала бы на чужой узел молча.
+ */
+export function nodeAt(nodes: readonly PageNode[], path: readonly number[]): PageNode {
+  let list: readonly PageNode[] = nodes;
+  let node = list[path[0] as number] as PageNode;
+  for (let i = 1; i < path.length; i += 2) {
+    const part = path[i] as number;
+    if (node.kind === 'columns') list = node.parts[part] as PageNode[];
+    else if (node.kind === 'tabs') list = (node.parts[part] as { children: PageNode[] }).children;
+    else throw new Error(`путь спускается в узел ${node.kind}, у которого нет частей`);
+    node = list[path[i + 1] as number] as PageNode;
+  }
+  if (!node) throw new Error(`по пути ${path.join('.')} узла нет`);
+  return node;
+}
+
+/**
+ * Определение аспекта — выводом из реестра разбора, а не импортом `registry/property-type`:
+ * список импортов модуля держит сторож листовости (`placement.test.ts`), и тип того не стоит.
+ */
+type CardAspect = ParseRegistry['aspects'] extends ReadonlyMap<string, infer A> ? A : never;
+
+/**
+ * Аспект по тексту карточки: ключ (`orbis/goal`) или подпись в кавычках (`"Цель"`) — те же две
+ * формы имени, что у `aspect=` в запросе (§А5-3а/б), и то же правило подписи: локаль реестра,
+ * регистр и края не важны. Неоднозначная подпись не угадывается — карточка остаётся непривязанной.
+ *
+ * Живёт здесь, в листовом модуле, а не в `bind-query.ts`: её зовут и привязка документа на
+ * сервере, и рендерер страниц в чанке экрана записи, которому баррель `@orbis/shared/doc`
+ * запрещён. Две копии правила «какой аспект назван» дали бы карточку, привязанную в документе,
+ * но пустую на показе.
+ */
+export function aspectOfCardText(text: string, reg: ParseRegistry): CardAspect | undefined {
+  const name = text.trim();
+  const aspects = [...reg.aspects.values()];
+  if (!name.startsWith('"')) return aspects.find((a) => a.key === name);
+  if (name.length < 2 || !name.endsWith('"')) return undefined;
+  const label = name.slice(1, -1).trim().toLowerCase();
+  const found = aspects.filter(
+    (a) => effectiveLabel(a.label, reg.locale).trim().toLowerCase() === label,
+  );
+  return found.length === 1 ? found[0] : undefined;
+}
+
+/**
  * §4.2 шаг 7: причина «шаблон не разобран» или `null`. Шаблон с любой проблемой тела (§5.8)
  * исключается из выбора целиком, поэтому причина — первая проблема в порядке документа: её
  * человек и увидит первой, открыв шаблон.

@@ -7,34 +7,20 @@ import { readFileSync } from 'node:fs';
 import { FIXTURE_PARSE_REGISTRY as REG } from '../query/ast-fixtures';
 import { type ParseRegistry, toParseRegistry } from '../query/parse-ast';
 import { propertyDefinitionSchema } from '../registry/property-type';
-import { GRAMMAR_ERROR_MESSAGES, type PageNode, parsePageText } from './page-grammar';
+import { GRAMMAR_ERROR_MESSAGES, parsePageText } from './page-grammar';
 import {
   type BodyKind,
   blockAllowedIn,
   bodyIssues,
   EMPTY_QUERY_MESSAGE,
   MISPLACED_HINT,
+  nodeAt,
   type PlacedBlock,
   templateBrokenReason,
 } from './placement';
 
 const issues = (text: string, kind: BodyKind, reg: ParseRegistry = REG) =>
   bodyIssues(parsePageText(text), kind, reg);
-
-/** Узел по пути проблемы — так его найдёт рендерер (задача 13); формат пути — докблок модуля. */
-function nodeAt(nodes: readonly PageNode[], path: readonly number[]): PageNode {
-  let list: readonly PageNode[] = nodes;
-  let node = list[path[0] as number] as PageNode;
-  for (let i = 1; i < path.length; i += 2) {
-    const part = path[i] as number;
-    if (node.kind === 'columns') list = node.parts[part] as PageNode[];
-    else if (node.kind === 'tabs') list = (node.parts[part] as { children: PageNode[] }).children;
-    else throw new Error(`путь спускается в узел ${node.kind}, у которого нет частей`);
-    node = list[path[i + 1] as number] as PageNode;
-  }
-  if (!node) throw new Error(`по пути ${path.join('.')} узла нет`);
-  return node;
-}
 
 const HOST_TEMPLATE = `{{title}}
 {{tags}}

@@ -21,7 +21,6 @@
  */
 import type { JSONContent } from '@tiptap/core';
 import {
-  effectiveLabel,
   type ParseRegistry,
   parseQueryAst,
   printQueryAst,
@@ -30,8 +29,8 @@ import {
   queryAstSchema,
   queryTreeExceedsDepth,
 } from '../query';
-import type { AspectDefinition } from '../registry/property-type';
 import { QUERY_BLOCK_CLOSE } from './nodes/query-block';
+import { aspectOfCardText } from './placement';
 import type { BodyDoc } from './types';
 
 interface QueryBlockAttrs {
@@ -93,23 +92,6 @@ export function bindAttrs(attrs: Record<string, unknown>, reg: ParseRegistry): Q
   // нечем, поэтому дерево не сохраняется: порванное тело хуже неразобранного блока.
   if (printed.includes(QUERY_BLOCK_CLOSE)) return { ast: null, text };
   return { ast, text: printed };
-}
-
-/**
- * Аспект по тексту карточки: ключ (`orbis/goal`) или подпись в кавычках (`"Цель"`) — те же две
- * формы имени, что у `aspect=` в запросе (§А5-3а/б), и то же правило подписи: локаль реестра,
- * регистр и края не важны. Неоднозначная подпись не угадывается — карточка остаётся непривязанной.
- */
-function aspectOfCardText(text: string, reg: ParseRegistry): AspectDefinition | undefined {
-  const name = text.trim();
-  const aspects = [...reg.aspects.values()];
-  if (!name.startsWith('"')) return aspects.find((a) => a.key === name);
-  if (name.length < 2 || !name.endsWith('"')) return undefined;
-  const label = name.slice(1, -1).trim().toLowerCase();
-  const found = aspects.filter(
-    (a) => effectiveLabel(a.label, reg.locale).trim().toLowerCase() === label,
-  );
-  return found.length === 1 ? found[0] : undefined;
 }
 
 /**
