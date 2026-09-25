@@ -24,7 +24,7 @@ const SUBTASK_ROLES: readonly string[] = [ROLE_SUBITEM, ROLE_TICKET];
 //
 // Связи приходят готовыми в entity.get(include:['relations']) экрана (prop relations) —
 // свой relation.listFor секция не заводит: это была ТА ЖЕ выборка вторым сетевым чтением
-// на каждое открытие detail (прецедент — Blocks). Поэтому и инвалидация после создания
+// на каждое открытие detail (прецедент — Blockers). Поэтому и инвалидация после создания
 // идёт по ключу entity.get: своего ключа у секции больше нет.
 
 export function Subtasks({ parentId, relations }: { parentId: string; relations: Relation[] }) {

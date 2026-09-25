@@ -1,79 +1,49 @@
-import { bodyDraftNoteId, buildAppPath } from '@orbis/shared';
-// Сабпат `/diff` ЛИСТОВОЙ, и страж чанка detail пропускает его намеренно — якорь `$` в предикате
-// веса (save.test.tsx). Новым весом в чанк записи он не приезжает: этот же модуль уже тянет туда
-// слой предложения (`ProposalOverlay.tsx:39`), который эагерно достижим отсюда. Замерено на двух
-// сборках, до и после: чанк листовых модулей пакета вырос с 2.05 до 2.21 кБ gzip (рост дал
-// сложенный в него `doc/types` — его зовёт useBodySave), а схема документа осталась своим
-// отдельным чанком на 153 кБ gzip.
-import { flattenBlocks } from '@orbis/shared/doc/diff';
+import { buildAppPath } from '@orbis/shared';
 import { Archive, ArchiveRestore, Code, EllipsisVertical, History, Link2, Pin } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useRef, useState } from 'react';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { invalidateGraph } from '../../lib/invalidate';
-import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { useNav } from '../../state/navigation';
-import { type RouterOutputs, trpc } from '../../trpc';
+import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { DropdownMenu } from '../../ui/DropdownMenu';
 import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { useToast } from '../../ui/toast-store';
-import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
-import { ChatThread } from '../chat/ChatThread';
-import { ThreadSkeleton } from '../chat/MessageList';
-import { EnsureFailedNotice, useEnsuredThread } from '../chat/useEnsuredThread';
-import { EditorShell } from '../entity-editor/EditorShell';
-import { SaveIndicator } from '../entity-editor/SaveIndicator';
-import { sameDoc } from '../entity-editor/strip-ids';
-import { type BodyDoc, type BodySave, useBodySave } from '../entity-editor/useBodySave';
-import { AspectCards } from './AspectCards';
 import { AssignmentCard } from './AssignmentCard';
-import { Backlinks } from './Backlinks';
-import { Blocks } from './Blocks';
-import { GoalProgress } from './GoalProgress';
-import { NativeRow } from './NativeRow';
+import { BodyScreenProvider } from './EntityBody';
+import { GoalProgressSlot, PlanToFactSlot, RestCards } from './own-cards';
 import { ProposalOverlay } from './ProposalOverlay';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
 import { RunFeed } from './RunFeed';
 import { RunsList } from './RunsList';
-import { Subtasks } from './Subtasks';
+import {
+  BacklinksBlock,
+  BlockersBlock,
+  BodyBlock,
+  SubtasksBlock,
+  ThreadBlock,
+  TitleBlock,
+  VersionsBlock,
+} from './record-blocks';
+import { RecordHostProvider, recordHostValue, TabPartHost } from './record-host';
 import { TicketWaitingBlock } from './TicketWaitingBlock';
 import { useEntityDetail } from './useEntityDetail';
 import { RUN_ASPECT, useTicketRuns } from './useTicketRuns';
-import { PinVersionDialog, VersionsCard } from './VersionsCard';
+import { PinVersionDialog } from './VersionsCard';
 
-type Entity = RouterOutputs['entity']['get']['entity'];
-
-/** Единица прогресса цели — СВОЙСТВО (§А1-1), а не поле аспекта `orbis/goal`. */
-const GOAL_UNIT = 'orbis/unit';
 const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
 const PROJECT = 'orbis/project';
 
-/**
- * Тумблер markdown — ТОЛЬКО ленивым импортом.
- *
- * Он единственный на экране, кто зовёт `@orbis/shared/doc` значениями (`parseBody`,
- * `serializeBody`), а это вся схема документа. Статический импорт утащил бы её в чанк
- * `DetailScreen`, то есть в ПЕРВЫЙ КАДР каждого открытия записи, мимо двухфазного монтирования,
- * ради которого написаны три задачи подряд. Граф чанков строится по МОДУЛЯМ, а не по тому, в
- * каком файле написан импорт: спрятать вес за условием `asMarkdown` нельзя (ревью Б7).
- *
- * ЗАМЕРЕНО пробой, а не выведено: со статическим импортом `DetailScreen-*.js` начинает
- * статически импортировать `doc-*.js` (164.0 кБ gzip), а чанк `MarkdownToggle-*.js` исчезает из
- * dist целиком — и это ровно то, на чём краснеет scripts/check-lazy-chunks.ts.
- */
-const MarkdownToggle = lazy(() =>
-  import('../entity-editor/MarkdownToggle').then((m) => ({ default: m.MarkdownToggle })),
-);
+/** Шаблон ничего не размещал: «Детали» показывают общие секции всех аспектов. */
+const NOTHING_PLACED: ReadonlySet<string> = new Set();
 
 export function DetailScreen({ entityId }: { entityId: string }) {
-  const { get, toggleTask, saveTitle, setArchived, conflict, dismissConflict } =
-    useEntityDetail(entityId);
+  const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const settings = trpc.user.getSettings.useQuery();
   const updateSettings = trpc.user.updateSettings.useMutation({
@@ -251,176 +221,148 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       </>
     );
   }
-  // goalProgress есть ТОЛЬКО у сущностей с аспектом orbis/goal (E2): у остальных поля нет
-  // вовсе, и расчёт им не стоит ни одного запроса.
-  const { entity, thread, relations, backlinks, backlinksTruncated, goalProgress } = get.data;
+  const { entity } = get.data;
+  /**
+   * Хост записи (спека страниц 1а §7.3): части экрана — примитивы обвязки, и данные они берут
+   * отсюда, из ответа `entity.get` этого экрана, а не пропами. Раскладка ниже — прежняя; её
+   * стережёт структурный снимок задачи 2 (`structure.test.tsx`).
+   */
+  const host = recordHostValue(get.data, { planToFact, activeTab: openTab, readOnlyBody: false });
 
   // Вкладка «Сущность» — чистый документ: emoji, заголовок, полоса прогресса и тело. Всё
   // остальное, что известно о записи, уехало в «Детали».
   //
   // Полоса прогресса — единственное исключение, и осознанное: у цели прогресс это то, ради чего
   // её открывают, и «50%, 150 000 из 300 000» во второй вкладке ухудшило бы главный экран целей
-  // ради чистоты раскладки. Единица — свойство записи (§А1-1), и достаётся она по своему id,
-  // а не «из аспекта цели»: аспекта у значения больше нет.
-  const goalUnit = entity.props[GOAL_UNIT];
+  // ради чистоты раскладки.
   const entityTab = (
-    <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
-      {/* Notion-style шапка страницы: крупная emoji-иконка над заголовком. Нет emoji —
-          ничего не рендерим (без плейсхолдера); в самой шапке экрана — только title. */}
-      <div className="flex flex-col gap-3">
-        {entity.emoji && (
-          <span aria-hidden className="text-4xl leading-none">
-            {entity.emoji}
-          </span>
+    <TabPartHost value="entity" open={openTab === 'entity'}>
+      <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
+        <TitleBlock />
+        {/* Карточка plan→fact (§2.7) — инлайн под строкой задачи, как в мокапе */}
+        <PlanToFactSlot />
+        <GoalProgressSlot />
+        {/* Тикет остановился и ждёт человека (С10, приёмка 7–8): вопрос исполнителя, итог работы
+            или разбор оборванного прогона — с полем ответа прямо здесь. Место — на «Сущности», а не
+            в «Деталях»: это не свойство записи, а то, ради чего её открыли.
+            key по id — по той же причине, что у тела: экран монтируется БЕЗ key (router.tsx), и
+            набранный, но не отправленный ответ переехал бы на соседний тикет. */}
+        {isTicket && (
+          <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
         )}
-        <NativeRow
-          entity={entity}
-          onToggleTask={(done) => {
-            toggleTask(done);
-            // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
-            if (done) planToFact.onTaskDone(entity);
-          }}
-          onSaveTitle={saveTitle}
-        />
+        {/* Состояние рутины (V1.14): расписание, режим, следующее срабатывание, итог прошлого
+            прогона и два жеста владельца. Место — здесь же, рядом с телом-инструкцией: рутину
+            открывают ради того, что она делает и делает ли вообще.
+            key по id — по той же причине, что у блока ожидания: экран монтируется БЕЗ key
+            (router.tsx), а у блока своё состояние (отказ «прогон уже идёт»), и переезжать на
+            соседнюю рутину оно не должно. */}
+        {isRoutine && (
+          <RoutineStatusBlock key={`routine-${entity.id}`} entity={entity} lastRun={lastRun} />
+        )}
+        {/* Экран самого прогона (С5, С12): лента шагов, исход и откат. Место — рядом с блоком
+            ожидания и по той же причине: у прогона нет «свойств», ради которых его открывают, —
+            есть работа, которую он проделал. Условие — по аспекту, а не по `isTicket`: прогон
+            это НЕ тикет (аспекта `orbis/task` у него нет), и подметание с историей прогонов ему
+            не положены.
+            key — по той же причине, что у блока ожидания: лента держит своё состояние (открытое
+            подтверждение отката, результат прошлого), и переезжать на соседний прогон оно не
+            должно. */}
+        {entity.aspects.includes(RUN_ASPECT) && (
+          <RunFeed key={`run-${entity.id}`} entity={entity} />
+        )}
+        {/* Тело (key по id и `this` вокруг него — см. BodyBlock). `this` не передаётся наружу
+            тела НАМЕРЕННО: в Browser, закреплённых списках и конструкторе запросов `this`
+            вынесенного блока означал бы «та запись, из чьего тела блок скопировали», а не
+            «текущий экран», — и блок обязан ответить ошибкой, а не взять чужой id. */}
+        <BodyBlock />
       </div>
-      {/* Карточка plan→fact (§2.7) — инлайн под строкой задачи, как в мокапе */}
-      {planToFact.prompt !== null && (
-        <PlannedToFactCard prompt={planToFact.prompt} onClose={planToFact.dismiss} />
-      )}
-      {goalProgress !== undefined && (
-        <GoalProgress
-          progress={goalProgress}
-          unit={typeof goalUnit === 'string' ? goalUnit : undefined}
-        />
-      )}
-      {/* Тикет остановился и ждёт человека (С10, приёмка 7–8): вопрос исполнителя, итог работы
-          или разбор оборванного прогона — с полем ответа прямо здесь. Место — на «Сущности», а не
-          в «Деталях»: это не свойство записи, а то, ради чего её открыли.
-          key по id — по той же причине, что у тела: экран монтируется БЕЗ key (router.tsx), и
-          набранный, но не отправленный ответ переехал бы на соседний тикет. Префикс в ключе
-          обязателен: голый id уже занят телом ниже, а два ребёнка с одним ключом — ошибка React. */}
-      {isTicket && (
-        <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
-      )}
-      {/* Состояние рутины (V1.14): расписание, режим, следующее срабатывание, итог прошлого
-          прогона и два жеста владельца. Место — здесь же, рядом с телом-инструкцией: рутину
-          открывают ради того, что она делает и делает ли вообще.
-          key по id — по той же причине, что у блока ожидания: экран монтируется БЕЗ key
-          (router.tsx), а у блока своё состояние (отказ «прогон уже идёт»), и переезжать на
-          соседнюю рутину оно не должно. */}
-      {isRoutine && (
-        <RoutineStatusBlock key={`routine-${entity.id}`} entity={entity} lastRun={lastRun} />
-      )}
-      {/* Экран самого прогона (С5, С12): лента шагов, исход и откат. Место — рядом с блоком
-          ожидания и по той же причине: у прогона нет «свойств», ради которых его открывают, —
-          есть работа, которую он проделал. Условие — по аспекту, а не по `isTicket`: прогон
-          это НЕ тикет (аспекта `orbis/task` у него нет), и подметание с историей прогонов ему
-          не положены. */}
-      {/* key — по той же причине, что у блока ожидания: экран монтируется БЕЗ key, и переход
-          прогон→прогон внутри вкладки меняет лишь проп, — а лента держит своё состояние
-          (открытое подтверждение отката, результат прошлого). Без key оно переехало бы на
-          соседний прогон. */}
-      {entity.aspects.includes(RUN_ASPECT) && <RunFeed key={`run-${entity.id}`} entity={entity} />}
-      {/* Тело — РАЗМОНТИРУЕМОЕ по key. То же правило, что несла прежняя секция тела, и по той
-          же причине, только цена ошибки выросла: роутер монтирует DetailScreen БЕЗ key
-          (router.tsx), переход entity→entity меняет лишь проп, — а `useBodySave` при смене
-          `entityId` под тем же хуком теряет отложенное МОЛЧА. Без размонтирования таймер паузы
-          со старым id дописал бы старый документ в новую запись, а `flush()` на размонтировании
-          (там же, в хуке) не случился бы вовсе. key по id, НЕ по updatedAt: рефетч после каждого
-          сохранения ремоунтил бы редактор, стирая набранное за время запроса. */}
-      {/* Провайдер — вокруг ТЕЛА, потому что `this` в query-блоках (§6.1) означает запись, чьё
-          тело этот блок содержит. Query-блоки живут только здесь: первый кадр рисует их через
-          EditorShell, редактор — NodeView'ями внутри того же поддерева, — и обоим контекст
-          доходит. Снаружи тела (Browser, закреплённые списки, конструктор
-          запросов) контекст записи не передаётся НАМЕРЕННО: `this` в вынесенном блоке означал
-          бы «та запись, из чьего тела блок скопировали», а не «текущий экран», — и блок обязан
-          ответить ошибкой, а не взять чужой id. */}
-      <ThisEntityProvider id={entity.id}>
-        <EntityBody
-          key={entity.id}
-          entity={entity}
-          asMarkdown={asMarkdown}
-          onCloseMarkdown={() => setAsMarkdown(false)}
-          screenConflict={conflict}
-          noticeHost={noticeHost}
-          onRefresh={() => {
-            void get.refetch();
-            dismissConflict();
-          }}
-        />
-      </ThisEntityProvider>
-    </div>
+    </TabPartHost>
   );
 
   const detailsTab = (
-    <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
-      {/* Назначение — у ЛЮБОЙ задачи, а не только у тикета: исполнителя ставит владелец, и
-          именно этим жестом задача становится тикетом. И у любой записи, где назначение уже
-          ЕСТЬ: сервер orbis/task для него не требует, а общая карточка свойств аспект прячет —
-          без этой ветки назначение на заметке было бы невидимо и неснимаемо. */}
-      {(entity.aspects.includes(TASK) || entity.aspects.includes(ASSIGNMENT)) && (
-        <AssignmentCard entity={entity} />
-      )}
-      <AspectCards entity={entity} />
-      {/* Версии тела (С11, приёмка 12) — рядом со свойствами записи, до секций графа: снимок
-          хранит ТОЛЬКО тело, и к подзадачам, блокировкам и бэклинкам он отношения не имеет.
-          key — как у ленты прогона: у карточки своё состояние (выбранная версия, отказ
-          восстановления), и переезжать на соседнюю запись оно не должно. */}
-      <VersionsCard key={`versions-${entity.id}`} entity={entity} active={openTab === 'details'} />
-      {/* Секции 6–8 §3.5: связи уже приехали этим же entity.get — своих запросов графа
-          секции не заводят. */}
-      <Subtasks parentId={entity.id} relations={relations ?? []} />
-      {/* История прогонов — своей секцией, а не строками общих связей: у прогона есть исход,
-          длина и исполнитель, и читают их таблицей, а не списком заголовков. Открытие — тем же
-          push поверх стека активной вкладки, что и у подзадач. */}
-      {(isTicket || isRoutine) && (
-        <RunsList
-          parentId={entity.id}
-          runs={runs}
-          // У рутины исполнитель внутренний и всегда один — колонка гранта ей не положена (Р-8).
-          showGrant={!isRoutine}
-          onOpen={(id) => push(activeTab, { kind: 'entity', id })}
-        />
-      )}
-      <Blocks entityId={entity.id} relations={relations ?? []} />
-      <Backlinks items={backlinks ?? []} truncated={backlinksTruncated === true} />
-    </div>
+    <TabPartHost value="details" open={openTab === 'details'}>
+      <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
+        {/* Назначение — у ЛЮБОЙ задачи, а не только у тикета: исполнителя ставит владелец, и
+            именно этим жестом задача становится тикетом. И у любой записи, где назначение уже
+            ЕСТЬ: сервер orbis/task для него не требует, а общая карточка свойств аспект прячет —
+            без этой ветки назначение на заметке было бы невидимо и неснимаемо. */}
+        {(entity.aspects.includes(TASK) || entity.aspects.includes(ASSIGNMENT)) && (
+          <AssignmentCard entity={entity} />
+        )}
+        <RestCards placed={NOTHING_PLACED} />
+        {/* Версии тела (С11, приёмка 12) — рядом со свойствами записи, до секций графа: снимок
+            хранит ТОЛЬКО тело, и к подзадачам, блокировкам и бэклинкам он отношения не имеет.
+            В сеть — только на открытой вкладке (TabPartHost). */}
+        <VersionsBlock />
+        {/* Секции 6–8 §3.5: связи уже приехали этим же entity.get — своих запросов графа
+            секции не заводят. */}
+        <SubtasksBlock />
+        {/* История прогонов — своей секцией, а не строками общих связей: у прогона есть исход,
+            длина и исполнитель, и читают их таблицей, а не списком заголовков. Открытие — тем же
+            push поверх стека активной вкладки, что и у подзадач. */}
+        {(isTicket || isRoutine) && (
+          <RunsList
+            parentId={entity.id}
+            runs={runs}
+            // У рутины исполнитель внутренний и всегда один — колонка гранта ей не положена (Р-8).
+            showGrant={!isRoutine}
+            onOpen={(id) => push(activeTab, { kind: 'entity', id })}
+          />
+        )}
+        <BlockersBlock />
+        <BacklinksBlock />
+      </div>
+    </TabPartHost>
   );
 
   return (
-    <>
-      <ScreenHeader
-        title={entity.title}
-        actions={
-          <DetailMenu
-            onPin={() => {
-              const pinned = settings.data?.pinnedEntities ?? [];
-              updateSettings.mutate({
-                pinnedEntities: [...pinned, { id: entity.id, order: pinned.length }],
-              });
-            }}
-            onArchive={() => setArchived(!entity.archived)}
-            onCopyLink={() => void copyLink()}
-            onPinVersion={() => setPinVersion(true)}
-            // Без документа пункта НЕТ вовсе. Показать его — значит предложить действие,
-            // которое молча ничего не делает, а флаг после нажатия остался бы поднятым: приедь
-            // документ следующим рефетчем — и тумблер открылся бы сам, без жеста человека.
-            // Ветку «документа нет» разбирает EditorShell; здесь у неё видимое следствие.
-            onToggleMarkdown={entity.bodyDoc == null ? undefined : () => setAsMarkdown((v) => !v)}
-            archived={entity.archived}
-          />
-        }
-      />
-      {/* Диалог закрепления версии — ВНЕ табов и по той же причине, что запасная ссылка ниже:
+    <RecordHostProvider value={host}>
+      <BodyScreenProvider
+        value={{
+          asMarkdown,
+          onCloseMarkdown: () => setAsMarkdown(false),
+          screenConflict: conflict,
+          noticeHost,
+          onRefresh: () => {
+            void get.refetch();
+            dismissConflict();
+          },
+        }}
+      >
+        <ScreenHeader
+          title={entity.title}
+          actions={
+            <DetailMenu
+              onPin={() => {
+                const pinned = settings.data?.pinnedEntities ?? [];
+                updateSettings.mutate({
+                  pinnedEntities: [...pinned, { id: entity.id, order: pinned.length }],
+                });
+              }}
+              onArchive={() => setArchived(!entity.archived)}
+              onCopyLink={() => void copyLink()}
+              onPinVersion={() => setPinVersion(true)}
+              // Без документа пункта НЕТ вовсе. Показать его — значит предложить действие,
+              // которое молча ничего не делает, а флаг после нажатия остался бы поднятым: приедь
+              // документ следующим рефетчем — и тумблер открылся бы сам, без жеста человека.
+              // Ветку «документа нет» разбирает EditorShell; здесь у неё видимое следствие.
+              onToggleMarkdown={entity.bodyDoc == null ? undefined : () => setAsMarkdown((v) => !v)}
+              archived={entity.archived}
+            />
+          }
+        />
+        {/* Диалог закрепления версии — ВНЕ табов и по той же причине, что запасная ссылка ниже:
           открывают его из меню, а меню одно на все вкладки. Монтируется только открытым —
           набранная и брошенная подпись не переживает закрытие. */}
-      {pinVersion && <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />}
-      {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
+        {pinVersion && (
+          <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />
+        )}
+        {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
           табы, и прятать ответ на вкладке «Сущность» значило бы иногда не отвечать вовсе. */}
-      {manualLink !== null && manualLink.id === entityId && (
-        <ManualLinkNotice url={manualLink.url} onHide={() => setManualLink(null)} />
-      )}
-      {/* Плашки тела (расхождение версий, неотправленный черновик, состояние сохранения) —
+        {manualLink !== null && manualLink.id === entityId && (
+          <ManualLinkNotice url={manualLink.url} onHide={() => setManualLink(null)} />
+        )}
+        {/* Плашки тела (расхождение версий, неотправленный черновик, состояние сохранения) —
           тоже ВНЕ табов, и по той же причине, что запасная ссылка выше. «Сущность» держится
           живой через display:none (keepMounted), то есть с «Деталей» и «Треда» всё, что лежит
           внутри неё, не видно вовсе, — а это единственный канал, которым экран сообщает, что
@@ -431,8 +373,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           сюда лишним слоем состояния значило бы завести второй ответ на вопрос «что с
           сохранением». Портал переносит DOM, оставляя дерево React на месте, — поэтому
           `key={entity.id}` у тела и вся его память о правке работают ровно как прежде. */}
-      <div ref={setNoticeHost} className="mx-auto w-full max-w-3xl px-4 md:px-6" />
-      {/* Слой предложения рутины (Ш1.3) — СОСЕДНИМ узлом, а не внутри `noticeHost` выше:
+        <div ref={setNoticeHost} className="mx-auto w-full max-w-3xl px-4 md:px-6" />
+        {/* Слой предложения рутины (Ш1.3) — СОСЕДНИМ узлом, а не внутри `noticeHost` выше:
           тот узел уже цель портала (плашки тела), и порядок двух порталов в один узел не
           определён. Место то же по смыслу — снаружи вкладок: предложение видно и с «Деталей»,
           и с «Треда», как и всё, что экран говорит о судьбе записи.
@@ -440,12 +382,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           key по id — по той же причине, что у ленты прогона и блока ожидания: экран
           монтируется БЕЗ key (router.tsx), а у слоя своя память (какие плашки развёрнуты,
           буфер правок), и переехать на соседнюю запись она не должна. */}
-      <ProposalOverlay
-        key={`proposal-${entity.id}`}
-        entity={entity}
-        onOverlayExpanded={setProposalOpen}
-      />
-      {/* Три таба — под шапкой; контент центрирован, шапка — на всю ширину.
+        <ProposalOverlay
+          key={`proposal-${entity.id}`}
+          entity={entity}
+          onOverlayExpanded={setProposalOpen}
+        />
+        {/* Три таба — под шапкой; контент центрирован, шапка — на всю ширину.
           keepMounted у «Сущности» — ради редактора: Radix по умолчанию размонтирует неактивную
           вкладку, и уход на «Детали» уничтожил бы вместе с ней несохранённый текст и всю
           историю Ctrl+Z, а заодно гонял бы двухфазное монтирование заново.
@@ -454,7 +396,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           обходятся ровно в те же запросы, что и до разделения.
           У «Треда» — НЕТ: ChatThread на монтировании заводит chat.listMessages, и держать его
           живым значило бы платить лишним запросом за вкладку, которую не открывали. */}
-      {/* Развёрнутый слой предложения прячет ВСЕ ТРИ ВКЛАДКИ, а не одно тело записи, и это
+        {/* Развёрнутый слой предложения прячет ВСЕ ТРИ ВКЛАДКИ, а не одно тело записи, и это
           правка по итогам живого смоука Ш1 (наблюдение Н-2, замерено).
           Пока прятали только тело, вкладка «Детали» оставалась полностью кликабельной — а её
           `AspectCards` мутируют граф НЕМЕДЛЕННО и выглядят ТОЧНО ТАК ЖЕ, как строки правки в
@@ -471,512 +413,28 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           ТЕМ ЖЕ механизмом, что прежде прятал тело: класс, а не снятие с монтирования, — см.
           докблок `proposalOpen`. Ради него это и один узел, а не два: спрячь мы вкладки, оставив
           прежний класс на теле, у одного вопроса «видно ли это сейчас» стало бы два ответа. */}
-      <div
-        data-testid="entity-tabs"
-        className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
-      >
-        <Tabs
-          value={openTab}
-          onValueChange={setOpenTab}
-          tabs={[
-            { value: 'entity', label: 'Сущность', content: entityTab, keepMounted: true },
-            { value: 'details', label: 'Детали', content: detailsTab, keepMounted: true },
-            {
-              value: 'thread',
-              label: 'Тред',
-              // key по id — по той же причине, что у ленты прогона и блока ожидания: экран
-              // монтируется БЕЗ key (router.tsx), и переход entity→entity меняет лишь проп. У
-              // вкладки же есть память о ЗАВЕДЁННОМ треде (см. EntityThreadTab), и переехав на
-              // соседнюю запись, она отдала бы её сообщения в чужой тред.
-              content: thread ? (
-                <EntityThreadTab key={`thread-${entity.id}`} entityId={entity.id} />
-              ) : (
-                <p className="p-3 text-sm text-text-muted">Нет треда</p>
-              ),
-            },
-          ]}
-        />
-      </div>
-    </>
-  );
-}
-
-/**
- * Вкладка «Тред» записи: СНАЧАЛА заводит тред, и только потом отдаёт его чату.
- *
- * Тред сущности ленив (§4.5): его id — формула (`uuidv5(owner:entity-thread:entity)`), и
- * `entity.get` считает его, НЕ создавая строки. То есть у записи, тред которой ни разу не
- * открывали, id есть, а треда нет, — и первое же сообщение отбивалось предпроверкой
- * `ai.sendMessage` («тред не найден», NOT_FOUND), причём после того, как человек его набрал и
- * отправил. Дефект предсуществующий, найден живым смоуком ADE-среза 1.
- *
- * Лечится там же, где лечит себя глобальный чат (ChatScreen): общий хук `useEnsuredThread`
- * зовёт `chat.ensureThread` на монтировании. Разница только в аргументе (`{entityId}` против
- * `{}`) и в моменте: вкладка «Тред» живой НЕ держится (keepMounted у неё нет), поэтому её
- * монтирование и есть жест «человек открыл тред» — записи, куда не заходили, лишней мутации не
- * платят. Обратная сторона размонтирования — повторное открытие: тред помнит модульный кеш
- * хука, и второй раз вкладка встаёт сразу лентой, без мутации и без мигания скелетоном.
- *
- * Чат поднимается ПОСЛЕ ответа, а не рядом с ним: до создания строки тред пуст в любом случае
- * (`chat.listMessages` вернёт []), а вот отправка в него — та самая ошибка, ради которой всё это
- * и написано. И threadId берётся из ОТВЕТА ensure, а не из `entity.get`: значения совпадают
- * (формула одна), но правда о треде — у того, кто его завёл.
- */
-function EntityThreadTab({ entityId }: { entityId: string }) {
-  const { state, retry } = useEnsuredThread(entityId);
-  if (state.status === 'pending') return <ThreadSkeleton />;
-  if (state.status === 'failed')
-    return (
-      <EnsureFailedNotice
-        what="Не удалось открыть тред записи."
-        message={state.message}
-        onRetry={retry}
-      />
-    );
-  return <ChatThread threadId={state.threadId} />;
-}
-
-/** Форма документа в кэше уже, чем `BodyDoc` (Record против JSONContent) — сводим приведением. */
-const asBodyDoc = (stored: Entity['bodyDoc']): BodyDoc | null =>
-  stored == null ? null : { v: stored.v, doc: stored.doc as BodyDoc['doc'] };
-
-/**
- * Тело записи: первый кадр + редактор (EditorShell), автосохранение по паузе (useBodySave),
- * баннер неотправленного черновика и — по пункту меню ⋮ — правка тем же телом как markdown.
- *
- * Отдельный компонент, а не кусок разметки экрана, ради ОДНОГО свойства: экран монтирует его с
- * `key={entity.id}`, и вся память о правке (отложенный документ, таймер паузы, предложенный
- * черновик, показанный текст) исчезает вместе с записью, а не переезжает на соседнюю.
- */
-function EntityBody({
-  entity,
-  asMarkdown,
-  onCloseMarkdown,
-  screenConflict,
-  noticeHost,
-  onRefresh,
-}: {
-  entity: Entity;
-  asMarkdown: boolean;
-  onCloseMarkdown: () => void;
-  /** Конфликт правки ЗАГОЛОВКА/чекбокса/архивации — у них своя обвязка (useEntityDetail). */
-  screenConflict: boolean;
-  /** Узел НАД вкладками, куда уезжают плашки. Null — узла ещё нет (см. ниже). */
-  noticeHost: HTMLElement | null;
-  onRefresh: () => void;
-}) {
-  const save = useBodySave(entity.id, entity);
-  const utils = trpc.useUtils();
-  /**
-   * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.
-   *
-   * Тост живёт четыре секунды и уезжает, а решение о судьбе текста в этот момент ещё не принято:
-   * человек смотрит на баннер и вправе увидеть там, что попытка не удалась и черновик цел.
-   */
-  const [noteError, setNoteError] = useState<string | null>(null);
-  const createNote = trpc.entity.create.useMutation({
-    onSuccess: () => {
-      // Заметка обязана появиться в списках без ручного обновления (тот же приём, что у
-      // QuickCapture), а черновик — сойти с диска. Оба действия НА УРОВНЕ МУТАЦИИ, а не в
-      // поштучных колбэках: уйди человек с записи, пока запрос в полёте, поштучные не позвались
-      // бы вовсе — заметка бы создалась, а черновик остался, и следующее открытие предложило бы
-      // сохранить его вторым разом.
-      invalidateGraph(utils);
-      // Черновик снимается ТОЛЬКО ПО УСПЕХУ: сними его раньше ответа — отказ мутации оставил бы
-      // человека без текста вообще, то есть нарушил бы единственное жёсткое требование §А11-2.
-      // Стирается при этом ровно ПОКАЗАННЫЙ черновик (сверка по savedAt/baseUpdatedAt внутри).
-      save.discardPendingDraft();
-    },
-    onError: (e) => setNoteError(e.message),
-  });
-  /**
-   * Документ, который редактор обязан показать ПРЯМО СЕЙЧАС, хотя в кэше его ещё нет.
-   *
-   * Кладут его сюда ТРИ жеста: «оставить моё» у баннера черновика, «Применить» тумблера и уход
-   * из режима разметки (там редактор встаёт заново и взял бы `doc` из кэша). Ни один не может
-   * положиться на оптимистичный патч мутации (useEntityDetail применяет `bodyDoc` к кэшу в
-   * onMutate): у тумблера отправка ждёт паузы набора в две секунды, а у «оставить моё» мутации
-   * может не быть вовсе — `useBodySave` откладывает её, если прежнее сохранение ещё в полёте. В
-   * эти щели экран показывал бы прежний текст над документом, который уже уехал (или вот-вот
-   * уедет) в базу, — и первое же нажатие клавиши вернуло бы показанное поверх.
-   *
-   * ЦЕНА, которую эта копия берёт, пока живёт: она ЗАСЛОНЯЕТ серверный документ и снимается
-   * только совпадением по смыслу (ветка ниже). Значит в окне между жестом и приездом правки в
-   * кэш чужая правка до редактора не доезжает, а кнопка «Обновить» на плашке конфликта
-   * перечитывает запись, но тело на экране не меняет — обещание кнопки в этом окне не
-   * выполняется. Окно открывается ТОЛЬКО тремя явными жестами («оставить моё», «Применить»,
-   * уход из тумблера) и закрывается первым же успешным сохранением; набор его не открывает
-   * (он идёт мимо состояния, см. `shownDocRef`). Для сохранности текста это безопасная сторона
-   * размена, но это именно размен, и он записан здесь, а не подразумевается.
-   */
-  const [localDoc, setLocalDoc] = useState<BodyDoc | null>(null);
-  const serverDoc = asBodyDoc(entity.bodyDoc);
-  // Кэш догнал — местная копия больше не нужна, и держать её нельзя: она заслоняла бы правку,
-  // приехавшую с другого устройства. Сравнение по СМЫСЛУ: свой же сохранённый документ вернётся
-  // с сервера без блочных id (strip-ids.ts).
-  if (localDoc !== null && serverDoc !== null && sameDoc(localDoc.doc, serverDoc.doc)) {
-    setLocalDoc(null);
-  }
-  const doc = localDoc ?? serverDoc;
-
-  /**
-   * ЧТО ТЕЛО ПОКАЗЫВАЕТ СЕЙЧАС — в рефе, а не в состоянии.
-   *
-   * Нужно это второму потребителю документа, тумблеру markdown: он берёт текст ОДИН раз, при
-   * открытии, а `serverDoc` свежеет только с отправкой мутации, то есть не раньше паузы набора
-   * (2 с, на плохой связи дольше). Всё это время `doc` — документ БЕЗ последних набранных
-   * символов, и тумблер, открытый внутри окна, показывал бы текст без последних слов; дальше
-   * довольно правки в поле, чтобы они исчезли и с экрана, и из базы (ревью раунда 3, находка 2).
-   *
-   * Заполняется ВЕЗДЕ, где меняется показанное, и источников этому ТРИ: набор в редакторе,
-   * подмена содержимого приехавшим документом и посадка документа, когда редактора нет вовсе
-   * («Применить» тумблера и «Оставить моё» у баннера — в режиме разметки редактор размонтирован,
-   * а плашки живут над вкладками и нажимаются оттуда). Второй источник — `onAccept` редактора, и
-   * без него экрану приходилось бы УГАДЫВАТЬ по кэшу, показан ли приехавший документ. Угадывание
-   * было негодно по устройству: решение «сажать или отклонить» принимает редактор (он отклоняет
-   * подмену, пока человек печатает), а спрашивался кэш, — и режим разметки открывался то текстом,
-   * которого на экране нет, то без последних набранных слов, а «Отмена» меняла экран, обещая не
-   * менять ничего (ре-ревью раунда 3, блокер).
-   *
-   * «Запомненное равно экрану» — правда ПО ПОСТРОЕНИЮ, но правдой она стала только с извещением
-   * ВНЕ ветки подмены (`BodyEditor`): пока оно уходило лишь из самой подмены, редактор, поднятый
-   * заново после ОТКАЗАННОЙ посадки, молчал — и запомненное протухало ровно там, где выглядело
-   * свежим (ре-ревью раунда 5, Б-1).
-   *
-   * РЕФ, а не состояние, и это замерено, а не выбрано на вкус. Редакция через `setLocalDoc(next)`
-   * закрывала находку, но переносила работу на путь НАЖАТИЯ КЛАВИШИ: новый объект `doc` на каждый
-   * штрих — это перерисовка тела, сравнение по смыслу (две стабильные сериализации всего
-   * документа), пересбор сегментов первого кадра, пересчёт ссылок и эффект приезда с ещё двумя
-   * сверками. Замер на бытовом теле из сорока блоков, тридцать нажатий, по пять прогонов:
-   * 7.6–8.1 мс на штрих против 4.75–4.88 мс — то есть около +3 мс (см. body-typing.perf.test.tsx
-   * и оговорки в нём). Реф даёт то же самое даром: тумблер читает его в момент открытия, а экран
-   * между нажатиями не перерисовывается вовсе.
-   */
-  const shownDocRef = useRef<BodyDoc | null>(null);
-
-  function onEditorChange(next: BodyDoc) {
-    shownDocRef.current = next;
-    // Местная копия НЕ трогается: редактор и так показывает то, что прислал, а лишний рендер
-    // на каждый штрих стоит замеренных выше трёх миллисекунд.
-    save.onDocChange(next);
-  }
-
-  /** Правка из тумблера — наоборот, ДОЛЖНА сесть в редактор: он её ещё не видел. */
-  function onMarkdownChange(next: BodyDoc) {
-    // Здесь запоминаем САМИ, а не ждём `onAccept`: редактор сейчас размонтирован (экран рисует
-    // одно из двух) и встанет уже С ЭТИМ документом в `content` — подмены, а значит и извещения,
-    // не случится вовсе.
-    shownDocRef.current = next;
-    setLocalDoc(next);
-    save.onDocChange(next);
-  }
-
-  /**
-   * ВХОД В РАЗМЕТКУ И ВЫХОД ИЗ НЕЁ — здесь, в рендере, а не в колбэке кнопки. Дверей наружу
-   * ЧЕТЫРЕ: «Отмена», Escape, «Применить» и тот же пункт меню ⋮, переключающий флаг. Три первые
-   * идут через `onClose` тумблера, четвёртая — мимо него, и заплата, повешенная на `onClose`,
-   * прикрывала бы три двери из четырёх (ре-ревью раунда 4). Флаг же меняется ровно один раз на
-   * дверь, каким бы путём его ни повернули, — поэтому смотрим на флаг.
-   *
-   * ЗАЧЕМ сажать показанное на выходе: редактор встаёт ЗАНОВО и берёт `doc`, а тот — из кэша, и
-   * отстаёт от набранного ровно на паузу сохранения. Без посадки открыть и закрыть разметку,
-   * ничего не тронув, значило бы вернуть на экран текст СТАРШЕ набранного.
-   *
-   * ПОЧЕМУ НЕ БЕЗУСЛОВНО: пока разметка открыта, редактора нет, и `onAccept` — единственный
-   * канал, которым экран узнаёт о приезде чужого документа, — молчит. Значит показанное могло
-   * протухнуть ровно за это время: «Обновить» на плашке конфликта приносит чужое тело, а посадка
-   * заслонила бы его набранным, и следующая буква уехала бы поверх (ре-ревью раунда 4, Д2).
-   * Сторож — СНИМОК НА МОМЕНТ ОТКРЫТИЯ, одно значение, без гадания по кэшу: сдвинулось серверное
-   * тело за время разметки — показанное не сажаем.
-   *
-   * Сверка по ССЫЛКЕ и точна, и достаточна: react-query держит структурное разделение данных,
-   * поэтому равное по содержимому тело приезжает ТЕМ ЖЕ объектом, а изменившееся — новым. Даже
-   * промахнись она в сторону «сдвинулось» (оптимистичный патч), цена нулевая: редактор возьмёт
-   * `doc`, который в этом случае и есть показанное.
-   *
-   * Снимок берётся именно НА ВХОДЕ, а не замирает на монтировании, и это отличие видимое:
-   * после завершившегося круга сохранения (правка ушла И запись перечитана) тело в кэше уже не
-   * то, что было при монтировании, — заморозь снимок там, и выход из разметки отказался бы
-   * сажать показанное, вернув на экран текст СТАРШЕ набранного. Стережёт тест «выход из разметки
-   * сажает набранное ПОСЛЕ завершившегося круга сохранения»; часов он не ждёт — ждёт причинного
-   * факта, что круг завершился.
-   */
-  const prevMarkdownRef = useRef(asMarkdown);
-  const openedWithRef = useRef<Entity['bodyDoc']>(entity.bodyDoc);
-  if (prevMarkdownRef.current !== asMarkdown) {
-    prevMarkdownRef.current = asMarkdown;
-    const shown = shownDocRef.current;
-    if (asMarkdown) {
-      openedWithRef.current = entity.bodyDoc;
-    } else if (
-      openedWithRef.current === entity.bodyDoc &&
-      shown !== null &&
-      (serverDoc === null || !sameDoc(shown.doc, serverDoc.doc))
-    ) {
-      setLocalDoc(shown);
-    }
-  }
-
-  // Локальная копия ради сужения типа: внутри колбэка кнопки TS `save.pendingDraft` уже не
-  // сужает — поле объекта могло бы смениться между рендером и нажатием.
-  const draft = save.pendingDraft;
-
-  /**
-   * Всё, что экран ГОВОРИТ о судьбе тела: расхождение версий, неотправленный черновик, состояние
-   * сохранения. Рисуется НЕ здесь, а в узле над вкладками (см. `noticeHost` в DetailScreen) —
-   * внутри вкладки «Сущность» эти три плашки с «Деталей» и «Треда» не видны вовсе.
-   */
-  const notices = (
-    <div data-testid="body-notices" className="flex flex-col gap-2 pt-3 empty:hidden">
-      {/* Расхождение версий — ОДИН баннер на оба источника. Правка тела и правка заголовка идут
-          через РАЗНЫЕ экземпляры useEntityUpdate (у тела — свой, внутри useBodySave), и после
-          переезда тела на автосохранение прежний баннер не зажигался бы от 409 тела вовсе —
-          а сервер сверяет версию как раз только у правок тела (executor.ts). Поэтому и кнопка
-          гасит оба флага: перечитать запись, оставив на экране прежнюю тревогу, — обман. */}
-      {(screenConflict || save.conflict) && (
         <div
-          role="alert"
-          className="flex items-center justify-between gap-3 rounded-control border border-danger/40 bg-danger/10 px-3 py-2"
+          data-testid="entity-tabs"
+          className={`mx-auto w-full max-w-3xl${proposalOpen ? ' hidden' : ''}`}
         >
-          <p className="text-sm text-danger">Изменено в другом месте — обновите.</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              onRefresh();
-              save.dismissConflict();
-            }}
-          >
-            Обновить
-          </Button>
-        </div>
-      )}
-      {/* Развилка баннера — по `foreignSchema`, а не по вкусу: черновик чужой версии схемы
-          предлагает ДРУГОЕ (§А11-2), потому что пути на сервер у него нет вовсе. */}
-      {draft?.foreignSchema === true && (
-        <ForeignDraftBanner
-          busy={createNote.isPending}
-          error={noteError}
-          onKeepAsNote={() => {
-            setNoteError(null);
-            createNote.mutate({
-              // Плоским ТЕКСТОМ, а не документом: `bodyDoc` чужой версии отвергает тот же
-              // серверный гейт, из-за которого черновик сюда и попал (executor, §5.2), — то есть
-              // заметка не сохранилась бы вовсе. `body` и `bodyDoc` в контракте взаимно
-              // исключены, так что выбор здесь ровно один.
-              input: {
-                // id ДЕТЕРМИНИРОВАН черновиком, а не `newId()` на клик: потерянный ответ на
-                // успешный запрос приезжает отказом, человек жмёт кнопку второй раз — и со
-                // случайным id в графе появилась бы вторая заметка с тем же текстом. С этим
-                // повтор попадает в идемпотентный replay сервера (см. `bodyDraftNoteId`).
-                id: bodyDraftNoteId(entity.id, draft.savedAt),
-                title: `Черновик тела: ${entity.title}`,
-                body: draftAsText(draft.doc),
-                tags: [],
+          <Tabs
+            value={openTab}
+            onValueChange={setOpenTab}
+            tabs={[
+              { value: 'entity', label: 'Сущность', content: entityTab, keepMounted: true },
+              { value: 'details', label: 'Детали', content: detailsTab, keepMounted: true },
+              {
+                value: 'thread',
+                label: 'Тред',
+                // Тред с key по id и «Нет треда» без него — см. ThreadBlock.
+                content: <ThreadBlock />,
               },
-              source: 'ui',
-            });
-          }}
-          onOpenServer={save.dismissPendingDraft}
-        />
-      )}
-      {draft !== null && !draft.foreignSchema && (
-        <DraftBanner
-          draft={draft}
-          onKeep={() => {
-            // Два действия на одну кнопку: показать предложенный документ и отправить его.
-            // Порядок между ними безразличен (`draft` — значение ЭТОГО рендера, и
-            // `applyPendingDraft` его не меняет), а вот пропусти любое — и экран разойдётся с
-            // базой: без первого человек увидит прежний текст над уже отправленной правкой,
-            // без второго правка осталась бы только на диске.
-            // Запоминаем ЗДЕСЬ, а не ждём `onAccept`: баннер живёт над вкладками и нажимается
-            // в том числе из режима разметки, где редактора нет вовсе и извещать некому
-            // (ре-ревью раунда 4, Д1). Повтор безвреден: живой редактор подтвердит то же
-            // самое своим извещением.
-            //
-            // ГРАНИЦА, о которой надо знать: нажатая ИЗ РЕЖИМА РАЗМЕТКИ, эта кнопка не обновляет
-            // поле — тумблер берёт текст один раз, при открытии, и в поле остаётся текст ДО
-            // черновика. «Применить» следом вернёт его в тело, отменив только что применённый
-            // черновик. Свойство ПРЕ-СУЩЕСТВУЮЩЕЕ (проверено со снятой строкой выше — исход тот
-            // же), но два соседних действия обещают противоположное, и лечится это не здесь, а
-            // подпиской тумблера на приходящий документ (сегодня он от неё отказывается
-            // намеренно: живое обновление стирало бы набранное в поле).
-            shownDocRef.current = draft.doc;
-            setLocalDoc(draft.doc);
-            save.applyPendingDraft();
-          }}
-          onDiscard={save.discardPendingDraft}
-        />
-      )}
-      {/* Состояние сохранения — в углу и молча: показать есть что ровно в трёх случаях
-          (запрос идёт дольше секунды, правка не сохранена, правку отвергли).
-
-          БЕЗ обёртки, и это не вкусовщина: обёртка была ребёнком контейнера всегда, поэтому
-          `empty:hidden` на нём не срабатывал НИКОГДА — над вкладками висела постоянная полоса в
-          двенадцать пикселей, даже когда сказать нечего (ре-ревью раунда 3, пункт 5). Прижимает
-          индикатор вправо он теперь сам (`self-end`). */}
-      <SaveIndicator state={save.state} />
-    </div>
-  );
-
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Пока узла нет (первый проход рендера — реф ещё не привязан), плашки рисуются НА МЕСТЕ.
-          Это запасной путь, а не режим: он отрабатывает один проход до первой отрисовки. Но
-          выбран он именно такой — исчезни узел когда-нибудь вовсе, экран скажет о несохранённой
-          правке хотя бы на своей вкладке, а не промолчит. */}
-      {noticeHost === null ? notices : createPortal(notices, noticeHost)}
-      {/* `doc !== null` — страж, а не развилка: без документа пункта меню нет вовсе (см.
-          DetailMenu), поднять флаг неоткуда. Стоит он потому, что `doc` здесь МЕСТНЫЙ
-          (`localDoc ?? serverDoc`), а тумблер без документа не собрать. */}
-      {asMarkdown && doc !== null ? (
-        // fallback={null}: чанк тумблера приезжает по явному жесту из меню, и мигать скелетоном
-        // на месте тела ради этого не за что — тело уже на экране.
-        <Suspense fallback={null}>
-          {/* Тумблеру — то, что тело ПОКАЗЫВАЕТ (см. shownDocRef). Реф пуст ровно до первой
-              смены показанного (ни набора, ни подмены не было) — и тогда на экране `doc`, он же
-              и уходит в тумблер. То есть обе ветки дают одно и то же: показанное. */}
-          <MarkdownToggle
-            doc={shownDocRef.current ?? doc}
-            onChange={onMarkdownChange}
-            onClose={onCloseMarkdown}
+            ]}
           />
-        </Suspense>
-      ) : (
-        <EditorShell
-          doc={doc}
-          markdown={entity.body}
-          onChange={onEditorChange}
-          onAccept={(accepted) => {
-            shownDocRef.current = accepted;
-          }}
-        />
-      )}
-    </div>
+        </div>
+      </BodyScreenProvider>
+    </RecordHostProvider>
   );
-}
-
-/**
- * Неотправленный черновик прошлой сессии. Баннер обязан сказать, ЧТО СЛУЧИТСЯ по каждой кнопке:
- * «оставить моё» не «восстанавливает», а ЗАМЕНЯЕТ текущий текст записи набранным ранее, и
- * человек, не знающий этого, нажимает её как безобидную.
- */
-function DraftBanner({
-  draft,
-  onKeep,
-  onDiscard,
-}: {
-  draft: NonNullable<BodySave['pendingDraft']>;
-  onKeep: () => void;
-  onDiscard: () => void;
-}) {
-  return (
-    <div
-      role="alert"
-      data-testid="draft-banner"
-      className="flex flex-col gap-2 rounded-control border border-alert/40 bg-alert/10 px-3 py-2"
-    >
-      <p className="text-sm text-text">
-        {draft.rejected
-          ? 'Прошлую правку тела сервер не принял, и она осталась только здесь.'
-          : 'Есть неотправленная правка тела: с тех пор запись изменилась в другом месте.'}
-      </p>
-      <p className="text-sm text-text-secondary">
-        «Оставить моё» заменит текущий текст записи этой правкой. «Отбросить» удалит её, и на экране
-        останется то, что сейчас в базе.
-      </p>
-      <div className="flex gap-2">
-        <Button size="sm" onClick={onKeep}>
-          Оставить моё
-        </Button>
-        <Button variant="outline" size="sm" onClick={onDiscard}>
-          Отбросить
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Черновик, набранный ЧУЖОЙ версией схемы документа (§А11-2).
- *
- * Отдельный компонент, а не третья ветка внутри `DraftBanner`, потому что предлагает он ДРУГОЕ:
- * у обычного черновика есть путь на сервер («оставить моё»), а у этого его нет вовсе —
- * серверный гейт версии отвергает такой документ терминально. Обе кнопки соседа здесь врали бы.
- *
- * `data-testid` тот же, что у соседа, и это не небрежность: для человека это одна и та же
- * плашка неотправленного черновика в одном и том же месте полосы, и рисуются они взаимно
- * исключающими ветками — двух сразу на экране не бывает.
- */
-function ForeignDraftBanner({
-  busy,
-  error,
-  onKeepAsNote,
-  onOpenServer,
-}: {
-  busy: boolean;
-  error: string | null;
-  onKeepAsNote: () => void;
-  onOpenServer: () => void;
-}) {
-  return (
-    <div
-      role="alert"
-      data-testid="draft-banner"
-      className="flex flex-col gap-2 rounded-control border border-alert/40 bg-alert/10 px-3 py-2"
-    >
-      <p className="text-sm text-text">
-        Есть неотправленная правка тела, набранная другой версией приложения — отправить её как есть
-        нельзя.
-      </p>
-      <p className="text-sm text-text-secondary">
-        «Сохранить в заметку» создаст отдельную запись с этим текстом (без оформления) и уберёт
-        черновик. «Открыть серверное тело» ничего не отправит и черновик не удалит — его предложат
-        снова при следующем открытии записи, пока не истечёт срок хранения черновиков.
-      </p>
-      {error !== null && (
-        <p className="text-sm text-danger">Не удалось сохранить заметку: {error}</p>
-      )}
-      <div className="flex gap-2">
-        <Button size="sm" disabled={busy} onClick={onKeepAsNote}>
-          Сохранить в заметку
-        </Button>
-        <Button variant="outline" size="sm" disabled={busy} onClick={onOpenServer}>
-          Открыть серверное тело
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Плоская выжимка черновика: по абзацу на блок документа.
- *
- * Развёртка берётся из `@orbis/shared/doc/diff`, а не пишется здесь заново: она уже разбирает
- * дерево на блоки и разводит соседние — без разделителя «Привет» и «Мир» склеились бы в
- * «ПриветМир» (склейка впритык там правило, см. `blockText`).
- *
- * ГРАНИЦА, и она проверяемая (`detail.test.tsx`, «содержимое неизвестного АТРИБУТА — нет»).
- * Доезжает ПИСАНЫЙ текст: `node.text` на любой глубине — в том числе внутри ноды, которой в
- * схеме нет, — плюс два ПОИМЁННЫХ спецслучая пакета: дословная разметка `rawBlock.attrs.markdown`
- * и запрос смарт-листа `queryBlock.attrs.text` (с версии 2 схемы блок хранит печатную key-форму
- * в `text`, а дерево — в `ast`; блок, ещё несущий СТАРЫЙ атрибут `query`, попадает сюда пустой —
- * такой черновик конвертирует `toCurrentSchema`, и до ветки спасения он доходить не должен).
- * НЕ доезжает текст в любом другом атрибуте: у
- * незнакомой ноды, несущей смысл в атрибуте, единица выйдет пустой и будет отброшена. Это
- * ветка спасения, и по её успеху черновик снимается с диска, — значит такое содержимое здесь
- * теряется. Атрибутный текст в этой схеме домашний стиль (оба спецслучая выше — ровно про
- * него), так что граница не теоретическая; расширять список поимённо — работа той задачи,
- * которая заведёт такую ноду.
- *
- * Сериализатора схемы (`serializeBody`) здесь нет и быть не может: он запрещён стражем чанка и
- * потерял бы незнакомые ноды ЦЕЛИКОМ — вместе с их писаным текстом.
- */
-function draftAsText(doc: BodyDoc): string {
-  return flattenBlocks(doc.doc)
-    .map((block) => block.text)
-    .filter((text) => text !== '')
-    .join('\n\n');
 }
 
 /**

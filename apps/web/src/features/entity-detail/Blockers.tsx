@@ -48,7 +48,7 @@ function useDebounced(value: string, ms: number): string {
  * путь создания blocks-связи из UI, и прятать его вместе с пустотой значило бы сделать
  * фичу недостижимой (та же логика, что у «тихой строки добавления» подзадач).
  */
-export function Blocks({ entityId, relations }: { entityId: string; relations: Relation[] }) {
+export function Blockers({ entityId, relations }: { entityId: string; relations: Relation[] }) {
   const push = useNav((s) => s.push);
   const activeTab = useNav((s) => s.activeTab);
   const utils = trpc.useUtils();

@@ -1490,6 +1490,17 @@ test('модули первого кадра не тянут схему реда
     '../entity-detail/useEntityDetail.ts',
     '../entity-detail/DetailScreen.tsx',
     '../entity-detail/ProposalOverlay.tsx',
+    // Обвязка записи, нарезанная на примитивы (задача 12): тело, тред, секции аспектов, свои
+    // карточки, теги и хост — все эагерны из DetailScreen. `EntityBody.tsx` держит ленивый
+    // тумблер markdown и `/doc/diff`: одна правка импорта там — и схема едет в первый кадр.
+    '../entity-detail/EntityBody.tsx',
+    '../entity-detail/EntityThreadTab.tsx',
+    '../entity-detail/AspectSection.tsx',
+    '../entity-detail/AspectCards.tsx',
+    '../entity-detail/own-cards.tsx',
+    '../entity-detail/TagsBlock.tsx',
+    '../entity-detail/record-host.tsx',
+    '../entity-detail/record-blocks.tsx',
     // Единый механизм данных блоков (задача 11): блок первого кадра — эагерный, и с ним весь
     // его путь данных и формы показа. Каждый — кандидат притащить баррель одной строкой.
     '../../lib/query-blocks/QueryBlock.tsx',

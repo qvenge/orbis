@@ -1,8 +1,9 @@
 // Назначение исполнителя (С2, С8): кому поручена задача — человеку или агенту, каким доступом
 // он ходит и волен ли закрыть тикет сам. Собственный контрол, а не строки в общей форме
-// свойств: у трёх свойств есть ОБЩИЙ ИНВАРИАНТ (executor=agent ⇔ живой грант,
-// invariants.ts:295-326), а форма правит их по одному — переключение исполнителя без гранта
-// отдавало бы VALIDATION на каждом втором нажатии.
+// свойств: у трёх свойств есть ОБЩИЙ ИНВАРИАНТ (executor=agent ⇔ есть грант — строки каталога
+// `assignment_grant_required`/`_forbidden`, `builtin-rules.ts`; грант жив — `assertGrantAlive`,
+// `executor/invariants.ts`), а форма правит их по одному — переключение исполнителя без гранта
+// отдавало бы отказ `INVARIANT` на каждом втором нажатии.
 import { useId, useRef, useState } from 'react';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -65,7 +66,8 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
   // владельцу, назначающему человека, список агентов не нужен вовсе (тот же приём, что у
   // пикера категорий — AspectCards.tsx:150-154).
   const grants = trpc.oauth.listGrants.useQuery(undefined, { enabled: draft.executor === 'agent' });
-  // Отозванный доступ выбирать нельзя: сервер откажет NOT_FOUND (invariants.ts:304-318).
+  // Отозванный доступ выбирать нельзя: сервер откажет NOT_FOUND (`assertGrantAlive`,
+  // `executor/invariants.ts`).
   const live = (grants.data ?? []).filter((g) => g.revokedAt === null);
 
   // «Назначение есть» — факт СПИСКА аспектов (§А1-1), а не «в карте есть ключ»: назначение
@@ -94,8 +96,8 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
     /**
      * СНЯТИЕ гранта при переключении на человека ОБЯЗАТЕЛЬНО, и это не уборка мусора.
      * Пара (executor=human, grant) — рассогласование, а не лишнее поле: сервер отвечает на
-     * неё VALIDATION (invariants.ts:319-325), потому что тикет читался бы как назначенный
-     * агенту одним кодом и человеку другим. Патч мержится по ключам, и без явного снятия
+     * неё отказом `INVARIANT` (строка каталога `assignment_grant_forbidden`, `builtin-rules.ts`),
+     * потому что тикет читался бы как назначенный агенту одним кодом и человеку другим. Патч мержится по ключам, и без явного снятия
      * прежний грант пережил бы переключение.
      * `orbis/may_close` там же и по той же причине: «может закрывать сам» — про глагол
      * исполнителя (С8), у назначенного человека смысла оно не имеет.
@@ -218,7 +220,8 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
-          // Агент без гранта — гарантированный VALIDATION сервера, с отозванным — NOT_FOUND:
+          // Агент без гранта — гарантированный `INVARIANT` сервера (`assignment_grant_required`),
+          // с отозванным — NOT_FOUND:
           // не отправляем вовсе ни то, ни другое.
           disabled={
             mutation.isPending ||

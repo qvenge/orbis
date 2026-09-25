@@ -74,7 +74,7 @@ test('фикстуры покрывают все 13 встроенных асп�
 
 /**
  * Карточка, которой аспект виден на экране. У двух аспектов общей секции нет
- * (`HIDDEN_ASPECT_CARDS` в AspectCards) — их показывает своя карточка.
+ * (`SECTION_REPLACED` в own-cards.tsx) — их показывает своя карточка.
  */
 const OWN_CARD: Readonly<Record<string, string>> = {
   'orbis/assignment': 'assignment-card',

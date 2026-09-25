@@ -139,10 +139,10 @@ export function TicketWaitingBlock({
                 // `null` — законное значение json-свойства, и совмещать их одним ключом
                 // больше нечем. Конвенция среза прежняя: уходя из waiting, вопрос снимают,
                 // иначе он остался бы висеть на закрытом тикете и читался бы как открытый.
-                // Сервер делает ровно это на всех СВОИХ выходах из waiting
-                // (routers/agent-run.ts:129-131, agent-loop/sweep.ts:111); правка из UI не
-                // должна быть исключением. `orbis/completed_at` не шлём: его проставляет сам
-                // переход в done (executor/normalize.ts:57-68).
+                // На сервере его снимает правило каталога `waiting_for` при уходе из класса
+                // `waiting`, а держит там `waiting_for_only_when_waiting` (`builtin-rules.ts`);
+                // явное снятие здесь им не противоречит. `orbis/completed_at`
+                // не шлём: его проставляет сам переход в done (правило `task_completed_at`).
                 unset: ['orbis/waiting_for'],
               })
             }

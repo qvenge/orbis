@@ -81,6 +81,10 @@ function applyPatch(entity: Entity, input: UpdateInput): Entity {
     // До ответа сервера просмотр показывает прежний текст — это заметно только при отказе сети.
   }
   if (input.archived !== undefined) next.archived = input.archived;
+  // Теги — полной заменой списка, как их пишет контракт (`entityUpdateInput.tags`). Строчными их
+  // делает сервер (`normalizeTags`); `{{tags}}` шлёт уже строчные, так что патч совпадает с
+  // перечитанным и не мигает регистром.
+  if (input.tags !== undefined) next.tags = input.tags;
   if (input.props !== undefined || input.unset !== undefined) {
     const props: Record<string, unknown> = { ...entity.props };
     for (const [propertyId, value] of Object.entries(input.props ?? {})) props[propertyId] = value;
@@ -321,7 +325,6 @@ export function useEntityDetail(entityId: string) {
     // иначе застывал бы на «идёт · 0 шагов» до перезагрузки. Для остальных записей — false.
     refetchInterval: (query) => runPollInterval(query.state.data?.entity.props),
   });
-  const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   /**
    * Версия реестра из ответа (§А10-1): по ней инвалидируется клиентский снимок подписей и
    * каталога полей (`useRegistry`). Экран записи — главный её носитель: `entity.get`
@@ -330,6 +333,19 @@ export function useEntityDetail(entityId: string) {
    */
   useNoteRegistryVersion(get.data?.registryVersion);
   const entity = get.data?.entity;
+  return { get, entity, ...useRecordEdits(entityId, entity) };
+}
+
+/**
+ * Правки шапки записи — чекбокс, заголовок, архив — на одной обвязке `useEntityUpdate`.
+ *
+ * Отдельно от запроса записи, потому что примитив `{{title}}` (§7.3) правит запись сам: данные
+ * он берёт из хоста записи, а не пропами от экрана, и второй `entity.get` ради правки ему не
+ * нужен. Оптимистичный патч ложится под тот же ключ `detailGetInput(id)` — экран и хост видят его
+ * одинаково.
+ */
+export function useRecordEdits(entityId: string, entity: Entity | undefined) {
+  const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
 
   /**
    * Чекбокс task (§3.6): `orbis/task_status` + `orbis/completed_at` (optimistic + откат при
@@ -386,8 +402,6 @@ export function useEntityDetail(entityId: string) {
   }
 
   return {
-    get,
-    entity,
     update: mutation,
     toggleTask,
     saveTitle,

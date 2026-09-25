@@ -71,7 +71,7 @@ export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
  * фильтрует по ней `excludeBlocked` (`query/compile-ast.ts`) — а состояние дальнего конца
  * выражено НАБОРОМ КОНТРАКТА `orbis/completable`, а не литералами статусов; парсер грамматики
  * разворачивает в неё тот же сахар (`query/parse-ast.ts`), web рисует ею секцию «Блокировки» и шлёт её в
- * `relation.create`/`relation.delete` (`entity-detail/Blocks.tsx`). `subitem`/`ticket`: их
+ * `relation.create`/`relation.delete` (`entity-detail/Blockers.tsx`). `subitem`/`ticket`: их
  * называет секция подзадач (`entity-detail/Subtasks.tsx`) и быстрый захват
  * (`browser/QuickCapture.tsx`).
  *
