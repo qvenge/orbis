@@ -32,11 +32,11 @@ apps/web        — PWA (React): экраны (Browser, Budget, Agenda, чат),
                   шаблон (RecordView, выбор — chooseTemplate из shared),
                   страница своим телом (PageView), шаблон хоста текстом
                   (host-template), формы блока данных (page/blocks:
-                  DataBlock + compact/list/table/tile), меню «⋯» ленивым
-                  чанком по нажатию (DetailMenu), настройка, баннер и
-                  предпросмотр шаблона; примитивы обвязки записи —
+                  DataBlock + compact/list/table/tile), настройка, баннер
+                  и предпросмотр шаблона; примитивы обвязки записи —
                   features/entity-detail (record-blocks, own-cards,
-                  record-host); собиратель пачки данных блоков —
+                  record-host), там же меню «⋯» (DetailMenu) — ленивый
+                  чанк по нажатию, точка лени DetailMenuSlot; собиратель пачки данных блоков —
                   lib/query-blocks/batch (PRD 02 §3.4, §3.10)
 
 apps/server     — Hono + @hono/trpc-server: tRPC-роутеры entity/relation/

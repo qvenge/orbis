@@ -106,11 +106,20 @@ function slotInContainer(
   return null;
 }
 
-/** Показываемый `{{body}}` шаблона; сверка с `raw` — страховка от адреса, съехавшего с узла. */
+/**
+ * Показываемый `{{body}}` шаблона; сверка вырезанного куска — страховка от адреса, съехавшего с
+ * узла. Сверяет её тот же препроход, а не сравнение со строкой `{{body}}`: литерал маркера здесь был
+ * бы второй копией правил (сторож `scripts/grammar-copies.test.ts`) и разошёлся бы с ней на первой
+ * же допустимой вариации строки — хвостовых пробелах или `\r\n`.
+ */
 function bodySlot(template: string): BodySlot | null {
   const slot = slotIn(template, parsePageText(template), 0);
   if (slot === null) return null;
-  if (template.slice(slot.start, slot.end).trim() !== '{{body}}') {
+  const cut = parsePageText(template.slice(slot.start, slot.end)).filter(
+    (n) => !(n.kind === 'text' && n.text.trim() === ''),
+  );
+  const [only] = cut;
+  if (cut.length !== 1 || only?.kind !== 'record' || only.name !== 'body') {
     throw new Error('адрес {{body}} в шаблоне съехал с узла — замена испортила бы шаблон');
   }
   return slot;
