@@ -1,10 +1,12 @@
 import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
+import { REGISTRY_FAILED_MESSAGE } from '../../features/page/blocks/BlockPlaque';
 import {
   type BlockReplyValue,
   blocksReply,
   type MockHandler,
   renderWithProviders,
+  trpcError,
   wireEntity,
 } from '../../test/harness';
 import { registryReply } from '../../test/registry';
@@ -205,4 +207,23 @@ test('отказ ВСЕЙ пачки (сеть, сервер) — русская
   expect(plaque).toHaveTextContent('сервер недоступен — данные блока не получены');
   expect(plaque).not.toHaveTextContent('Failed to fetch');
   expect(screen.queryByRole('status')).toBeNull();
+});
+
+test('блок заметки с привязанным деревом при отказе реестра — плашка, а не вечная загрузка (C1-I3, §6.3)', async () => {
+  // Путь NodeView редактора: дерево атрибута `ast` блок больше не читает, разбор — по тексту и
+  // реестру. Без реестра данных не будет; честно — сказать почему (§6.5).
+  renderWithProviders(
+    <QueryBlock
+      query={{
+        ast: { filter: { tag: 'work' }, title: 'Работа' } as never,
+        text: 'tags=work, title=Работа',
+      }}
+    />,
+    (path) => {
+      if (path === 'registry.effective') throw trpcError('INTERNAL_SERVER_ERROR');
+      return {};
+    },
+  );
+  expect(await screen.findByTestId('qb-error')).toHaveTextContent(REGISTRY_FAILED_MESSAGE);
+  expect(screen.queryByText('Загрузка…')).toBeNull();
 });

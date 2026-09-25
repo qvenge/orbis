@@ -5,9 +5,10 @@ import { type ReactNode, useMemo, useState } from 'react';
 import { BlockDataError, useBlockData } from '../../../lib/query-blocks/batch';
 import { useBodyKind } from '../../../lib/query-blocks/body-kind';
 import { parseBlock } from '../../../lib/query-blocks/parse';
+import { useThisEntityId } from '../../../lib/query-blocks/this-entity';
 import { useFieldCatalog } from '../../../lib/query-blocks/useFieldCatalog';
 import { Card } from '../../../ui/Card';
-import { BlockPlaque, ConfigureButton } from './BlockPlaque';
+import { BlockPlaque, ConfigureButton, REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { CompactForm } from './CompactForm';
 import { ListForm } from './ListForm';
 import { MoreRows } from './MoreRows';
@@ -205,7 +206,8 @@ function RowsBody({
  * Разбор в браузере — ради формы показа (`display`, `columns`, `aggregate`, `hide_empty`) и ради
  * отказа без сети: битый блок в пачку не уходит (§6.4). Порядок гардов:
  *  1. пустой текст — «блок не настроен», а не «все записи владельца» (Р-21-8); реестр не нужен;
- *  2. реестр ещё едет — загрузка (по пустому каталогу разбор соврал бы «неизвестным свойством»);
+ *  2. реестр не приехал и не приедет (`failed`) — плашка с причиной, а не вечная загрузка (§6.5);
+ *     реестр ещё едет — загрузка (по пустому каталогу разбор соврал бы «неизвестным свойством»);
  *  3. отказ разбора — плашка с позицией;
  *  4. вне заметки — абсолютная дата в запросе — плашка с подсказкой токенов (§5.6, С1а-9):
  *     формулировка из `bodyIssues`, одна на плашку тела и плашку блока;
@@ -223,8 +225,9 @@ export function DataBlock({
   title?: string;
   onConfigure?: () => void;
 }) {
-  const { registry } = useFieldCatalog();
+  const { registry, failed } = useFieldCatalog();
   const kind = useBodyKind();
+  const thisId = useThisEntityId();
   const empty = text.trim() === '';
   const parsed = useMemo(
     () => (empty || registry === null ? null : parseBlock(text, registry.parse)),
@@ -243,6 +246,9 @@ export function DataBlock({
 
   if (empty)
     return <BlockPlaque message={`Ошибка запроса: ${EMPTY_QUERY_MESSAGE}`} {...configure} />;
+  if (registry === null && failed) {
+    return <BlockPlaque message={REGISTRY_FAILED_MESSAGE} {...configure} />;
+  }
   if (parsed === null) return <Loading />;
   if (!parsed.ok) {
     return (
@@ -263,9 +269,10 @@ export function DataBlock({
     );
   }
   return (
-    // key по тексту: другой запрос — другой блок, и раскрытое «ещё N» старого к нему не относится.
+    // key по тексту И записи `this`: другой запрос — другой блок, и раскрытое «ещё N» старого к нему
+    // не относится; тот же шаблон на соседней записи (экран монтируется без key) — тоже другой блок.
     <LoadedBlock
-      key={text.trim()}
+      key={`${text.trim()}:${thisId ?? ''}`}
       text={text}
       ast={parsed.ast}
       heading={title ?? parsed.ast.title}

@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS } from './builtin-contracts';
 import type { AspectDefinition } from './property-type';
-import { M14_ROW_ELEMENTS, rowProjectionOf, rowStatusPropertyOf } from './row';
+import { M14_ROW_ELEMENTS, rowMoneyCurrencyOf, rowProjectionOf, rowStatusPropertyOf } from './row';
 
 const REG = {
   aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
@@ -180,5 +180,27 @@ describe('§С8-18: пользовательский аспект попадае
     expect(p.checkbox).toEqual({ closed: true, cls: 'cancelled' });
     expect(p.date).toEqual({ value: '2026-09-10T09:00:00+03:00', slot: 'moment' });
     expect(p.badges).toEqual([{ kind: 'class', contract: 'orbis/completable', cls: 'cancelled' }]);
+  });
+});
+
+describe('rowMoneyCurrencyOf: деньги колонки — по валюте привязки суммы (спека страниц 1а §7.2)', () => {
+  const money = (props: Record<string, unknown>) => ({ aspects: ['orbis/financial'], props });
+  test('слот amount привязки на записи — валюта её слота currency', () => {
+    expect(
+      rowMoneyCurrencyOf(
+        money({ 'orbis/amount': '10', 'orbis/currency': 'USD' }),
+        REG,
+        'orbis/amount',
+      ),
+    ).toBe('USD');
+    expect(rowMoneyCurrencyOf(money({ 'orbis/amount': '10' }), REG, 'orbis/amount')).toBeNull();
+  });
+  test('не слот amount или аспект снят — свойство не денежное', () => {
+    expect(
+      rowMoneyCurrencyOf(money({ 'orbis/currency': 'USD' }), REG, 'orbis/due_date'),
+    ).toBeUndefined();
+    expect(
+      rowMoneyCurrencyOf({ aspects: [], props: { 'orbis/amount': '10' } }, REG, 'orbis/amount'),
+    ).toBeUndefined();
   });
 });

@@ -18,6 +18,7 @@ import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
+  trpcError,
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
@@ -26,6 +27,7 @@ import { queryClient } from '../../trpc';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import { type EntityGetReply, structureHandler } from '../entity-detail/structure-fixtures';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
 import { PageView } from './PageView';
 
 installCrashTrap();
@@ -426,4 +428,15 @@ test('вкладки страницы — её собственные: трет�
   await screen.findByRole('heading', { name: 'Вечер' });
   expect(await screen.findByRole('tab', { name: 'Один' })).toHaveAttribute('data-state', 'active');
   expect(screen.getByRole('tab', { name: 'Три' })).toHaveAttribute('data-state', 'inactive');
+});
+
+test('реестр не загрузился — {{cards}} страницы плашкой с причиной, а не пустым местом (C1-I3)', async () => {
+  openPage(page('Текст страницы\n\n{{cards}}\n'), {
+    over: (path) => {
+      if (path === 'registry.effective') throw trpcError('INTERNAL_SERVER_ERROR');
+      return undefined;
+    },
+  });
+  await screen.findByTestId('page-view');
+  expect(await screen.findByTestId('qb-error')).toHaveTextContent(REGISTRY_FAILED_MESSAGE);
 });

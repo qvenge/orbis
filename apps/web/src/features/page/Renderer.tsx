@@ -13,7 +13,7 @@ import { openEntity } from '../../state/navigation';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
 import { recordStubLabel } from '../entity-editor/layout-parts';
-import { BlockPlaque } from './blocks/BlockPlaque';
+import { BlockPlaque, REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
 import { DataBlock } from './blocks/DataBlock';
 import { Columns } from './Columns';
 import { forEachRendered, isCardsBlock, partsOf, pathKey, renderIssues } from './render-plan';
@@ -54,8 +54,10 @@ interface RenderPlan {
   placed: ReadonlySet<string>;
   /** Есть ли в дереве рисуемый `{{cards}}` — тогда дописывать карточки в конец нечего. */
   hasCards: boolean;
-  /** Реестр разбора; `null` — ещё едет. */
+  /** Реестр разбора; `null` — ещё едет (или не приедет — `regFailed`). */
   reg: ParseRegistry | null;
+  /** Запрос реестра отказал, снимка нет: ждать бесполезно — плашка вместо пустого места (§6.5). */
+  regFailed: boolean;
   ownBody: boolean;
 }
 
@@ -71,6 +73,7 @@ function planRender(
   nodes: readonly PageNode[],
   kind: BodyKind,
   reg: ParseRegistry | null,
+  regFailed: boolean,
   ownBody: boolean,
 ): RenderPlan {
   // Плашки и обход рисуемых узлов — одна копия с «Изменить вид» (`render-plan.ts`).
@@ -93,7 +96,7 @@ function planRender(
       hasCards = true;
     }
   });
-  return { issues, placed, hasCards, reg, ownBody };
+  return { issues, placed, hasCards, reg, regFailed, ownBody };
 }
 
 export function Renderer({
@@ -106,10 +109,14 @@ export function Renderer({
   /** Гарантия хоста §8.3: карточки аспектов записи, не размещённые ни card:, ни cards, — в конец. Только шаблонам. */
   appendUnplacedCards: boolean;
 }) {
-  const { registry } = useFieldCatalog();
+  const { registry, failed } = useFieldCatalog();
   const reg = registry?.parse ?? null;
+  const regFailed = reg === null && failed;
   const ownBody = useContext(OwnBodyContext);
-  const plan = useMemo(() => planRender(nodes, kind, reg, ownBody), [nodes, kind, reg, ownBody]);
+  const plan = useMemo(
+    () => planRender(nodes, kind, reg, regFailed, ownBody),
+    [nodes, kind, reg, regFailed, ownBody],
+  );
   return (
     // Род тела — у всех блоков данных дерева: абсолютная дата законна в заметке и ошибка на
     // странице и в шаблоне (§5.6). Ставит его рендерер, а не вызывающий: род дерева и есть `kind`.
@@ -119,9 +126,13 @@ export function Renderer({
           <NodeList nodes={nodes} prefix={[]} />
           {/* Пока реестр едет, размещённые карточки неизвестны: дописанная сейчас карточка
               через мгновение переехала бы на своё место `{{card: X}}`. */}
-          {appendUnplacedCards && !plan.hasCards && reg !== null && (
-            <RestCards placed={plan.placed} />
-          )}
+          {appendUnplacedCards &&
+            !plan.hasCards &&
+            (reg !== null ? (
+              <RestCards placed={plan.placed} />
+            ) : (
+              regFailed && <BlockPlaque message={REGISTRY_FAILED_MESSAGE} />
+            ))}
         </div>
       </RenderPlanContext.Provider>
     </BodyKindProvider>
@@ -232,7 +243,9 @@ function RecordNode({ name }: { name: keyof typeof RECORD_BLOCK_COMPONENTS }) {
   if (name === 'cards') {
     // Не `RECORD_BLOCK_COMPONENTS.cards` (там размещённых нет): карточки, стоящие в этом дереве
     // через `{{card: X}}`, показались бы дважды — на месте и в общей куче.
-    if (plan.reg === null) return null;
+    if (plan.reg === null) {
+      return plan.regFailed ? <BlockPlaque message={REGISTRY_FAILED_MESSAGE} /> : null;
+    }
     return <RestCards placed={plan.placed} />;
   }
   const Block = RECORD_BLOCK_COMPONENTS[name];

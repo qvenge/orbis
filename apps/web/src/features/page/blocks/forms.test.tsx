@@ -1,9 +1,9 @@
-import { BUILTIN_PROPERTY_META } from '@orbis/shared';
 import { MISPLACED_HINT } from '@orbis/shared/doc/placement';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
 import { BodyKindProvider } from '../../../lib/query-blocks/body-kind';
-import { displayText } from '../../../lib/registry/format';
+import { ThisEntityProvider } from '../../../lib/query-blocks/this-entity';
 import { useNav } from '../../../state/navigation';
 import {
   blocksReply,
@@ -11,11 +11,13 @@ import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
+  trpcError,
   wireEntity,
 } from '../../../test/harness';
 import { registryReply } from '../../../test/registry';
 import { PinnedList } from '../../browser/PinnedList';
 import { EditorShell } from '../../entity-editor/EditorShell';
+import { REGISTRY_FAILED_MESSAGE } from './BlockPlaque';
 import { DataBlock } from './DataBlock';
 
 // Формы показа блока данных (спека страниц 1а §5.4, §7.2): `display` читается везде, где
@@ -45,12 +47,6 @@ const task = (id: string, props: Record<string, unknown> = {}) =>
     aspects: ['orbis/task'],
     props: { 'orbis/task_status': 'inbox', ...props },
   });
-
-const prop = (id: string) => {
-  const def = BUILTIN_PROPERTY_META.find((p) => p.id === id);
-  if (def === undefined) throw new Error(`нет встроенного свойства ${id}`);
-  return def;
-};
 
 test('compact: строка — кнопка, открывающая запись', async () => {
   const text = 'aspect=orbis/task, display=compact';
@@ -99,7 +95,7 @@ test('table без columns: заголовок и элементы строки 
   expect(within(table).getByText('Отчёт')).toBeInTheDocument();
 });
 
-test('table с columns: колонки свойств со значениями displayText', async () => {
+test('table с columns: колонки свойств со значениями по типу', async () => {
   const text = 'aspect=orbis/task, display=table, columns=orbis/due_date|orbis/priority';
   renderWithProviders(
     <DataBlock text={text} />,
@@ -118,13 +114,48 @@ test('table с columns: колонки свойств со значениями 
   const cells = within(table)
     .getAllByRole('cell')
     .map((c) => c.textContent);
-  expect(cells).toEqual([
-    'Отчёт',
-    displayText(prop('orbis/due_date'), '2026-07-18'),
-    displayText(prop('orbis/priority'), 'high'),
-  ]);
+  // Литералы, а не `displayText`: оракулом он закреплял бы сырой ISO даты (финальное ревью, C1-I2).
   // Подпись варианта, а не машинный ключ: значение — по ТИПУ свойства.
-  expect(cells[2]).toBe('Высокий');
+  expect(cells).toEqual(['Отчёт', '18 июл.', 'Высокий']);
+});
+
+test('table с columns: core-свойство из полей строки, дата днём, ссылка названием (C1-I2)', async () => {
+  const CATEGORY = '00000000-0000-4000-8000-000000000777';
+  const text =
+    'aspect=orbis/task, display=table, columns=orbis/updated_at|orbis/due_date|orbis/finance_category';
+  const row = wireEntity({
+    ...task('Отчёт', { 'orbis/due_date': '2026-07-18', 'orbis/finance_category': CATEGORY }),
+    updatedAt: '2026-09-20T10:00:00.000Z',
+  });
+  const base = handler({ [text]: [row] });
+  renderWithProviders(<DataBlock text={text} />, (path, input) => {
+    if (path === 'user.getSettings') return { timezone: 'Europe/Moscow' };
+    if (path === 'entity.get' && (input as { id: string }).id === CATEGORY) {
+      return { entity: wireEntity({ id: CATEGORY, title: 'Еда' }), registryVersion: 'v' };
+    }
+    return base(path, input);
+  });
+  const table = await screen.findByRole('table');
+  await waitFor(() => expect(within(table).getByText('Еда')).toBeInTheDocument());
+  const cells = within(table)
+    .getAllByRole('cell')
+    .map((c) => c.textContent);
+  // «Изменена» — поле строки `updatedAt` (в `props` core-значений нет никогда), в поясе владельца.
+  expect(cells).toEqual(['Отчёт', '20 сент. 2026 г., 13:00', '18 июл.', 'Еда']);
+  expect(cells.join(' ')).not.toContain(CATEGORY);
+});
+
+test('table с columns: деньги — с валютой привязки суммы (C1-I2)', async () => {
+  const text = 'aspect=orbis/financial, display=table, columns=orbis/amount';
+  const row = wireEntity({
+    id: 'Обед',
+    title: 'Обед',
+    aspects: ['orbis/financial'],
+    props: { 'orbis/amount': '1500.00', 'orbis/currency': 'USD', 'orbis/direction': 'expense' },
+  });
+  renderWithProviders(<DataBlock text={text} />, handler({ [text]: [row] }));
+  const table = await screen.findByRole('table');
+  await waitFor(() => expect(within(table).getByText('1 500.00 $')).toBeInTheDocument());
 });
 
 test('tile count — число и подпись title', async () => {
@@ -193,6 +224,43 @@ test('«ещё 2» раскрывается на месте — второй в�
   const second = batches(calls)[1]?.input as { blocks: { text: string; limit?: number }[] };
   expect(second.blocks).toHaveLength(1);
   expect(second.blocks[0]).toMatchObject({ text, limit: 5 });
+});
+
+test('раскрытое «ещё N» не переживает смену записи `this` (C1-M2): соседняя запись — свёрнутой', async () => {
+  const text = 'aspect=orbis/task, limit=3';
+  const rows = ['р1', 'р2', 'р3', 'р4', 'р5'].map((id) => task(id));
+  const A = '00000000-0000-4000-8000-00000000a001';
+  const B = '00000000-0000-4000-8000-00000000b002';
+  // Экран записи монтируется без key: переход на соседнюю запись с тем же шаблоном меняет только
+  // `this` у того же блока.
+  function Screen() {
+    const [id, setId] = useState(A);
+    return (
+      <>
+        <button type="button" onClick={() => setId(B)}>
+          соседняя
+        </button>
+        <ThisEntityProvider id={id}>
+          <DataBlock text={text} />
+        </ThisEntityProvider>
+      </>
+    );
+  }
+  renderWithProviders(
+    <Screen />,
+    handler({
+      [text]: (b) =>
+        b.limit === undefined
+          ? { ok: true, kind: 'rows', rows: rows.slice(0, 3) as never, more: 2 }
+          : { ok: true, kind: 'rows', rows: rows.slice(0, b.limit) as never, more: 0 },
+    }),
+  );
+  await waitFor(() => expect(screen.getAllByTestId('qb-item')).toHaveLength(3));
+  fireEvent.click(screen.getByRole('button', { name: 'ещё 2' }));
+  await waitFor(() => expect(screen.getAllByTestId('qb-item')).toHaveLength(5));
+  fireEvent.click(screen.getByRole('button', { name: 'соседняя' }));
+  expect(await screen.findByRole('button', { name: 'ещё 2' })).toBeInTheDocument();
+  expect(screen.getAllByTestId('qb-item')).toHaveLength(3);
 });
 
 test('абсолютная дата: на странице — плашка с подсказкой токенов, в заметке — данные (С1а-9)', async () => {
@@ -286,4 +354,20 @@ test('F4: незнакомый вид ответа — плашка «обнов
   );
   expect(await screen.findByTestId('qb-error')).toHaveTextContent('обновите приложение');
   expect(screen.queryByTestId('qb-tile')).toBeNull();
+});
+
+test('реестр не загрузился — плашка с причиной, а не вечная «Загрузка…» (C1-I3, §6.5)', async () => {
+  const { calls } = renderWithProviders(
+    <DataBlock text="aspect=orbis/task" onConfigure={() => {}} />,
+    (path) => {
+      if (path === 'registry.effective') throw trpcError('INTERNAL_SERVER_ERROR');
+      return {};
+    },
+  );
+  const plaque = await screen.findByTestId('qb-error');
+  expect(plaque).toHaveTextContent(REGISTRY_FAILED_MESSAGE);
+  // Кнопка «Настроить» у плашки остаётся — блок можно поправить и без данных.
+  expect(within(plaque).getByTestId('qb-configure')).toBeInTheDocument();
+  expect(screen.queryByText('Загрузка…')).toBeNull();
+  expect(calls.filter((c) => c.path === 'entity.blocks')).toEqual([]);
 });

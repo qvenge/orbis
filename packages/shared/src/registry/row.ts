@@ -175,6 +175,27 @@ export function rowCategoryRefOf(entity: RowEntity, reg: RowRegistry): string | 
   return null;
 }
 
+/**
+ * Валюта ДЕНЕЖНОГО свойства записи: `propertyId` привязан слотом `amount` контракта
+ * `orbis/money-movement` на аспекте, стоящем на записи, — значение слота `currency` той же привязки
+ * (`null` — валюта не задана). `undefined` — у этой записи свойство не денежное. Колонка таблицы
+ * блока данных печатает деньги «по валюте свойства» (спека страниц 1а §7.2) тем же правилом, что
+ * элемент суммы строки, а не догадкой по id свойства.
+ */
+export function rowMoneyCurrencyOf(
+  entity: RowEntity,
+  reg: RowRegistry,
+  propertyId: string,
+): string | null | undefined {
+  const rule = ruleOf('amount');
+  for (const b of bindingsOn(indexOf(reg), entity, reg, rule.contract ?? '')) {
+    if (b.bind.amount !== propertyId) continue;
+    const currency = slotValue(b, entity, 'currency');
+    return typeof currency === 'string' && currency !== '' ? currency : null;
+  }
+  return undefined;
+}
+
 /** Несёт ли свойство хоть один аспект, СТОЯЩИЙ на записи (Р9). */
 function carried(entity: RowEntity, reg: RowRegistry, propertyId: string): boolean {
   return entity.aspects.some((id) =>
