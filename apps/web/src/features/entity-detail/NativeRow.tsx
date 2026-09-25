@@ -23,7 +23,7 @@ const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
 const TITLE_CLASS = 'text-xl font-semibold tracking-tight';
 
 /**
- * Свойство, в которое умеет писать переключатель шапки (`useEntityDetail.toggleTask` кладёт
+ * Свойство, в которое умеет писать переключатель шапки (`useRecordEdits.toggleTask` кладёт
  * литерал `done ? 'done' : 'inbox'`). ГАРД, а не общее правило: показать состояние строка обязана
  * у ВСЯКОГО реализатора `orbis/completable` (§С8-18), а записать — только туда, куда писатель
  * умеет. Без гарда клик по чекбоксу записи с пользовательским аспектом клал бы на неё ЧУЖОЕ

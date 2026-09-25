@@ -1,6 +1,6 @@
 // Task B6: карточка перевода покупки plan→fact (03-budget §2.7) + usePlanToFactPrompt.
 // Точка показа — DetailScreen: чекбокс задачи (единственный мутационный путь toggle,
-// useEntityDetail.toggleTask). Карточка «Покупка совершена? <сумма> → <категория>»
+// `useRecordEdits.toggleTask` в `TitleBlock`). Карточка «Покупка совершена? <сумма> → <категория>»
 // с date-инпутом (default сегодня локально); [Перевести в факт] → budget.confirmPurchase
 // {entityId, occurredOn, batchId} (batchId UUIDv7 один на показ карточки, уроки B4:
 // повтор после ошибки — тот же id, CONFLICT — честная ошибка + новый id);

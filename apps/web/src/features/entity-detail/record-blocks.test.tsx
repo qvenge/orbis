@@ -165,6 +165,42 @@ test('RestCards({placed: {orbis/goal}}) на цели с расписанием 
   );
   await screen.findByTestId('aspect-orbis/schedule');
   expect(aspectSections(container)).toEqual(['aspect-orbis/schedule']);
+  // Размещённая шаблоном карточка не повторяется ни секцией, ни своими частями.
+  expect(screen.queryByTestId('goal-progress')).toBeNull();
+});
+
+test('AspectCardFor(orbis/assignment) на простой задаче — карточка назначения (исполнителя ставят с неё)', async () => {
+  const f = fixture('task');
+  expect(f.entity.aspects).toEqual(['orbis/task']);
+  renderUnder(f, <AspectCardFor aspectId="orbis/assignment" />);
+  expect(await screen.findByTestId('assignment-card')).toBeInTheDocument();
+  // Простая задача — не тикет: ни ожидания, ни истории прогонов.
+  expect(screen.queryByTestId('ticket-waiting')).toBeNull();
+  expect(screen.queryByTestId('runs-list')).toBeNull();
+});
+
+describe('RestCards({placed: ∅}) — неразмещённые свои карточки целиком (§5.3, §8.3)', () => {
+  const NONE = new Set<string>();
+
+  test('цель: секция полей И полоса прогресса', async () => {
+    renderUnder(fixture('goal'), <RestCards placed={NONE} />);
+    expect(await screen.findByTestId('goal-progress')).toBeInTheDocument();
+    expect(await screen.findByTestId('aspect-orbis/goal')).toBeInTheDocument();
+  });
+
+  test('тикет: карточка назначения, ожидание, история прогонов и секция задачи; секции назначения нет', async () => {
+    const { container } = renderUnder(fixture('ticket'), <RestCards placed={NONE} />);
+    expect(await screen.findByTestId('assignment-card')).toBeInTheDocument();
+    expect(await screen.findByTestId('ticket-waiting')).toBeInTheDocument();
+    expect(await screen.findByTestId('runs-list')).toBeInTheDocument();
+    await screen.findByTestId('aspect-orbis/task');
+    expect(aspectSections(container)).toEqual(['aspect-orbis/task']);
+  });
+
+  test('прогон: лента целиком', async () => {
+    renderUnder(fixture('agent-run'), <RestCards placed={NONE} />);
+    expect(await screen.findByTestId('run-feed')).toBeInTheDocument();
+  });
 });
 
 describe('TagsBlock', () => {

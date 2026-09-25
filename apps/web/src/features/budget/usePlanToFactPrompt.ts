@@ -2,8 +2,10 @@
 // проверяет ПО КЛИЕНТСКИМ ДАННЫМ СУЩНОСТИ, что это планируемая покупка
 // (`orbis/planned` === true), и поднимает prompt для PlannedToFactCard.
 // Общий для всех точек, где чекбокс задачи переключает статус; сейчас единственный
-// мутационный путь toggle — useEntityDetail.toggleTask (DetailScreen §3.6): чекбокс
-// NativeRow на CategoryScreen — no-op, EntityRow Browser — индикатор, не контрол.
+// мутационный путь toggle — `toggleTask` из `useRecordEdits` в примитиве заголовка
+// (`entity-detail/record-blocks.tsx`, `TitleBlock`); состояние хука держит хост записи
+// (DetailScreen), чтобы карточку показала часть в другом месте дерева. Чекбокс NativeRow на
+// CategoryScreen — no-op, EntityRow Browser — индикатор, не контрол.
 import { useState } from 'react';
 
 export type PlanToFactPrompt = {

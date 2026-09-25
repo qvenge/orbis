@@ -27,6 +27,10 @@ import { VersionsCard } from './VersionsCard';
  */
 export function TitleBlock() {
   const { entity, planToFact } = useRecordHost();
+  // Флаг `conflict` этого экземпляра никуда не выведен — и не может зажечься: заголовок и
+  // чекбокс сервер проводит по LWW, версию он сверяет только у правок тела (`executor.ts`, гейт
+  // §5.2 под `body || bodyDoc`), так что 409 у них не бывает. Откат при прочих отказах — в
+  // самой обвязке (`useEntityUpdate`).
   const { toggleTask, saveTitle } = useRecordEdits(entity.id, entity);
   return (
     // Notion-style шапка страницы: крупная emoji-иконка над заголовком. Нет emoji — ничего не

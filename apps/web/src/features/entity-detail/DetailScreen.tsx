@@ -13,9 +13,10 @@ import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { useToast } from '../../ui/toast-store';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
+import { AspectCards } from './AspectCards';
 import { AssignmentCard } from './AssignmentCard';
 import { BodyScreenProvider } from './EntityBody';
-import { GoalProgressSlot, PlanToFactSlot, RestCards } from './own-cards';
+import { GoalProgressSlot, PlanToFactSlot } from './own-cards';
 import { ProposalOverlay } from './ProposalOverlay';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
 import { RunFeed } from './RunFeed';
@@ -39,9 +40,6 @@ const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
 const PROJECT = 'orbis/project';
 
-/** Шаблон ничего не размещал: «Детали» показывают общие секции всех аспектов. */
-const NOTHING_PLACED: ReadonlySet<string> = new Set();
-
 export function DetailScreen({ entityId }: { entityId: string }) {
   const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
   const utils = trpc.useUtils();
@@ -50,7 +48,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     onSuccess: () => void utils.user.getSettings.invalidate(),
   });
   // §2.7: перевод задачи-покупки в done → карточка «Покупка совершена?» (Task B6).
-  // Единственный мутационный путь чекбокса — toggleTask здесь (см. usePlanToFactPrompt).
+  // Состояние живёт ЗДЕСЬ, у хоста, а не в заголовке: поднимает его чекбокс `TitleBlock`
+  // (record-blocks.tsx — единственный мутационный путь чекбокса), а показывает карточка
+  // «план → факт», которую шаблон вправе поставить в другое место дерева (Ф-1а-18).
   const planToFact = usePlanToFactPrompt();
   // §3.5 «Скопировать ссылку». Буфер обмена — не данность: его нет в http-контексте,
   // а разрешение пользователь может и не дать. На отказе показываем саму ссылку
@@ -289,7 +289,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
         {(entity.aspects.includes(TASK) || entity.aspects.includes(ASSIGNMENT)) && (
           <AssignmentCard entity={entity} />
         )}
-        <RestCards placed={NOTHING_PLACED} />
+        {/* Общие секции аспектов (поля цели, рутины, финансов — здесь; их прогресс и состояние —
+            на «Сущности»). Не `RestCards`: тот рисует свои карточки целиком, а сегодняшняя
+            раскладка их разносит. */}
+        <AspectCards entity={entity} />
         {/* Версии тела (С11, приёмка 12) — рядом со свойствами записи, до секций графа: снимок
             хранит ТОЛЬКО тело, и к подзадачам, блокировкам и бэклинкам он отношения не имеет.
             В сеть — только на открытой вкладке (TabPartHost). */}

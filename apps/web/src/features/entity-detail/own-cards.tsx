@@ -7,7 +7,7 @@ import { GoalProgress } from './GoalProgress';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
 import { RunFeed } from './RunFeed';
 import { RunsList } from './RunsList';
-import { useRecordHost } from './record-host';
+import { useRecordHost, type WireEntity } from './record-host';
 import { TicketWaitingBlock } from './TicketWaitingBlock';
 import { RUN_ASPECT, useTicketRuns } from './useTicketRuns';
 
@@ -77,15 +77,16 @@ function GoalCard() {
 }
 
 /**
- * Назначение: карточка исполнителя, а у тикета (задача с назначением) — ещё ожидание человека и
- * история прогонов. Условие тикета то же, что у экрана записи: у назначения без задачи
- * прогонов не бывает, и платить за них запросом не за что.
+ * Назначение: карточка исполнителя, а у тикета (задача С назначением) — ещё ожидание человека и
+ * история прогонов. Карточка стоит и у простой задачи без назначения (см. `showWhen` в
+ * объявлении), поэтому тикет — это задача И назначение, как у экрана записи: у назначения без
+ * задачи и у задачи без назначения прогонов не бывает, и платить за них запросом не за что.
  */
 function AssignmentOwnCard() {
   const { entity } = useRecordHost();
   const push = useNav((s) => s.push);
   const navTab = useNav((s) => s.activeTab);
-  const isTicket = entity.aspects.includes(TASK);
+  const isTicket = entity.aspects.includes(TASK) && entity.aspects.includes(ASSIGNMENT);
   const { runs, lastRun } = useTicketRuns(entity.id, isTicket);
   return (
     <div className={CARD_CLASS}>
@@ -145,37 +146,73 @@ function FinancialCard() {
   );
 }
 
+/** Своя карточка аспекта: что рисовать и у какой записи. */
+export interface OwnAspectCard {
+  Card: ComponentType;
+  /**
+   * Показывать ли карточку у этой записи. Обычно — «аспект навешен», но не всегда: карточка
+   * назначения стоит у ЛЮБОЙ задачи, потому что исполнителя ставит владелец, и именно этим жестом
+   * задача становится тикетом. Спроси мы наличие аспекта — у простой задачи единственный путь
+   * назначить исполнителя пропал бы (ревью задачи 12, I-2).
+   */
+  showWhen: (entity: Pick<WireEntity, 'aspects'>) => boolean;
+}
+
+const hasAspect =
+  (aspectId: string) =>
+  (entity: Pick<WireEntity, 'aspects'>): boolean =>
+    entity.aspects.includes(aspectId);
+
 /** Объявление «аспект → своя карточка» (§7.3). Аспект вне списка показывает общая секция. */
-export const OWN_ASPECT_CARDS: Readonly<Record<string, ComponentType>> = {
-  [GOAL]: GoalCard,
-  [ASSIGNMENT]: AssignmentOwnCard,
-  [ROUTINE_ASPECT]: RoutineCard,
-  [RUN_ASPECT]: AgentRunCard,
-  [FINANCIAL]: FinancialCard,
+export const OWN_ASPECT_CARDS: Readonly<Record<string, OwnAspectCard>> = {
+  [GOAL]: { Card: GoalCard, showWhen: hasAspect(GOAL) },
+  [ASSIGNMENT]: {
+    Card: AssignmentOwnCard,
+    showWhen: (entity) => entity.aspects.includes(TASK) || entity.aspects.includes(ASSIGNMENT),
+  },
+  [ROUTINE_ASPECT]: { Card: RoutineCard, showWhen: hasAspect(ROUTINE_ASPECT) },
+  [RUN_ASPECT]: { Card: AgentRunCard, showWhen: hasAspect(RUN_ASPECT) },
+  [FINANCIAL]: { Card: FinancialCard, showWhen: hasAspect(FINANCIAL) },
 };
 
 /**
- * Карточка аспекта `{{card: X}}`: своя из объявления или общая секция. Ничего — если аспекта на
- * записи нет (§5.3): шаблон пишется на набор аспектов, а запись вправе нести не все.
+ * Карточка аспекта `{{card: X}}`: своя из объявления (по её `showWhen`) или общая секция.
+ * Ничего — если записи карточка не положена (§5.3): шаблон пишется на набор аспектов, а запись
+ * вправе нести не все.
  */
 export function AspectCardFor({ aspectId }: { aspectId: string }) {
   const { entity } = useRecordHost();
+  const own = OWN_ASPECT_CARDS[aspectId];
+  if (own !== undefined) return own.showWhen(entity) ? <own.Card /> : null;
   if (!entity.aspects.includes(aspectId)) return null;
-  const Own = OWN_ASPECT_CARDS[aspectId];
-  if (Own !== undefined) return <Own />;
   return <AspectSection entity={entity} aspectId={aspectId} />;
 }
 
 /**
- * `{{cards}}` — общие секции аспектов записи, не размещённых шаблоном (`placed`), и секция
- * «Свойства».
+ * `{{cards}}` и дописывание хоста (§5.3, §8.3) — карточки всех аспектов записи, не размещённых
+ * шаблоном (`placed`): СВОИ карточки тех, кому они положены (`showWhen`), затем общие секции
+ * остальных и секция «Свойства».
  *
- * Аспекты со своей карточкой без общей секции (`SECTION_REPLACED`) сюда не входят никогда: их
- * вид — только своя карточка, и она ставится через `card:` или дописыванием хоста (§8.3). У
- * цели, рутины и финансов здесь — их секция полей, как на «Деталях» сегодня.
+ * Своя карточка стоит целиком, а не одной секцией полей: у шаблона владельца без `card:` иначе
+ * пропало бы всё, чего в общей секции нет, — назначение и лента прогона целиком, прогресс цели,
+ * состояние рутины (ревью задачи 12, I-3). Секция полей аспекта со своей карточкой здесь не
+ * повторяется — она часть карточки (или заменена ею, `SECTION_REPLACED`).
+ *
+ * Сегодняшние «Детали» экрана записи этим НЕ рисуются: там поля стоят в «Деталях», а прогресс и
+ * прочие части — на «Сущности»; раскладку держит прежний `AspectCards` (снимок задачи 2).
  */
 export function RestCards({ placed }: { placed: ReadonlySet<string> }) {
   const { entity } = useRecordHost();
-  const exclude = new Set([...SECTION_REPLACED, ...placed]);
-  return <AspectSections entity={entity} exclude={exclude} />;
+  const own = Object.entries(OWN_ASPECT_CARDS).filter(
+    ([aspectId, card]) => !placed.has(aspectId) && card.showWhen(entity),
+  );
+  const exclude = new Set([...Object.keys(OWN_ASPECT_CARDS), ...placed]);
+  return (
+    <div className="flex flex-col gap-6">
+      {own.map(([aspectId, { Card }]) => (
+        <Card key={aspectId} />
+      ))}
+      <AspectSections entity={entity} exclude={exclude} />
+    </div>
+  );
 }
