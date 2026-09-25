@@ -94,6 +94,9 @@ const TEMPLATE_FOR = 'Сделать шаблоном для…';
 
 /** Тост жеста, отложенного ради неотправленной правки тела (`bodySettled`). */
 export const BODY_SAVING = 'Сохраняем текст…';
+/** Тост жеста при правке тела, которую сервер отверг или вернул конфликтом: досылать бесполезно. */
+export const BODY_BLOCKED =
+  'Правка текста не сохранена — сначала разберитесь с плашкой над записью';
 
 /**
  * Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…».
@@ -159,6 +162,11 @@ export function DetailMenu({
   const bodySettled = (): boolean => {
     const gate = bodyGate.current;
     if (gate === null || !gate.hasUnsent()) return true;
+    // Отказ или конфликт этой правки: повторный досыл упал бы так же — не шлём и говорим правду.
+    if (gate.blocked()) {
+      show(BODY_BLOCKED, 'danger');
+      return false;
+    }
     gate.flush();
     show(BODY_SAVING, 'default');
     return false;

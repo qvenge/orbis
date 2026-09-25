@@ -115,6 +115,14 @@ export interface BodySave {
    * который такой документ и не отправит; иначе жест ждал бы паузы ради пустого досыла.
    */
   hasUnsent: () => boolean;
+  /**
+   * Досылать неотправленное бесполезно, пока человек не решил его судьбу: сервер отверг этот
+   * документ терминально (`rejected`) или ответил на него 409 (правка мимо экрана), плашка конфликта
+   * ещё на экране, и после отказа документ не менялся. Повторный досыл ушёл бы с той же меткой и упал бы так же, поэтому жест
+   * меню в этом состоянии не досылает, а отсылает человека к плашке над записью (фикс-раунд 1 гейта
+   * фикс-волны, M-1). Новая правка поверх снимает признак — у неё уже своя метка.
+   */
+  blocked: () => boolean;
   state: BodySaveState;
   conflict: boolean;
   /**
@@ -425,6 +433,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * автодосыла ни за что.
    */
   const rejectedDocRef = useRef<BodyDoc | null>(null);
+  /** Документ, на который сервер ответил 409, — пока он же лежит в очереди, досыл обречён (`blocked`). */
+  const staleDocRef = useRef<BodyDoc | null>(null);
 
   // useCallback без зависимостей, а не голая функция: иначе она пересоздаётся каждым рендером
   // и попадает в списки зависимостей ниже — вместе со всем, что от них зависит.
@@ -706,6 +716,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           // Реф — состояние живого хука, поэтому и стоит до отсечки, но смысла после
           // размонтирования не имеет: там за пометку отвечает уровень мутации.
           if (terminal) rejectedDocRef.current = doc;
+          if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') {
+            staleDocRef.current = doc;
+          }
           if (stale()) return;
           setFailure(terminal ? 'terminal' : 'network');
           // Документ не выбрасывается: `pendingRef` остаётся, потому что при 409 человек
@@ -763,6 +776,19 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     const base = entityRef.current.bodyDoc;
     return !(base != null && base.v === doc.v && sameDoc(doc.doc, base.doc as JSONContent));
   }, []);
+
+  // Плашка конфликта на экране — то, к чему жест отсылает человека. «Обновить» её снимает, и
+  // следующий жест снова пробует досыл: если он опять упадёт 409, плашка вернётся вместе с запретом.
+  const conflictRef = useRef(conflict);
+  conflictRef.current = conflict;
+  const blocked = useCallback(
+    (): boolean =>
+      stoppedRef.current ||
+      (conflictRef.current &&
+        pendingRef.current !== null &&
+        pendingRef.current === staleDocRef.current),
+    [],
+  );
 
   /**
    * Возврат к записи, у которой на диске остался неотправленный черновик.
@@ -979,6 +1005,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     onDocChange,
     flush,
     hasUnsent,
+    blocked,
     state:
       failure === 'terminal' ? 'rejected' : failure !== null ? 'error' : saving ? 'saving' : 'idle',
     conflict,

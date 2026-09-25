@@ -28,7 +28,7 @@ import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
-import { BODY_SAVING } from '../entity-detail/DetailMenu';
+import { BODY_BLOCKED, BODY_SAVING } from '../entity-detail/DetailMenu';
 import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import {
@@ -931,10 +931,19 @@ describe('жест меню при неотправленной правке т�
     };
   }
 
-  function openWithBody(f: StructureFixture) {
+  /** `hold` — держать ответ сохранения тела: запрос ушёл (`update:SENT`), ответа ещё нет. */
+  function openWithBody(f: StructureFixture, hold?: Promise<void>) {
     const log: string[] = [];
     let world: World | null = null;
-    const r = open(f, [], { over: (path, input) => bodyServer(world as World, log)(path, input) });
+    const r = open(f, [], {
+      over: async (path, input) => {
+        if (path === 'entity.update' && hold !== undefined) {
+          log.push('update:SENT');
+          await hold;
+        }
+        return bodyServer(world as World, log)(path, input);
+      },
+    });
     world = r.world;
     return { ...r, log };
   }
@@ -1004,6 +1013,64 @@ describe('жест меню при неотправленной правке т�
     await choose('Сделать страницей');
     await waitFor(() => expect(r.batches()).toHaveLength(1));
     expect(screen.queryByText(BODY_SAVING)).toBeNull();
+  });
+
+  test('сохранение в полёте (ответа ещё нет): жест ждёт — пачки нет, тост (фикс-раунд 1, I-1)', async () => {
+    // Оптимистичный патч кладёт отправленный документ в кэш, и по смыслу отложенное уже «равно»
+    // телу записи: держит жест только ветка «в полёте». Пачка поверх — и ответ тела получил бы 409.
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const f = fixture('note-plain');
+    const r = openWithBody(f, hold);
+    await screen.findByTestId('page-tabs');
+    await editUnsent('ХВОСТ ');
+    await waitFor(() => expect(r.log).toContain('update:SENT'), { timeout: 5000 });
+    await choose('Сделать страницей');
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    expect(r.batches()).toEqual([]);
+    release();
+    await bodySettledOnServer(r, f.entity.id, 'ХВОСТ');
+    expect(r.batches()).toEqual([]);
+  });
+
+  test('правка тела получила 409: жест не досылает её снова и отсылает к плашке (фикс-раунд 1, M-1)', async () => {
+    const f = fixture('note-plain');
+    const r = openWithBody(f);
+    await screen.findByTestId('page-tabs');
+    // Правка мимо экрана: на «сервере» другая версия и другое тело.
+    const row = r.world.rows.get(f.entity.id);
+    if (row === undefined) throw new Error('нет записи');
+    row.updatedAt = '2026-09-24T00:00:00.000Z';
+    row.body = 'ЧУЖОЕ';
+    row.bodyDoc = parseBody('ЧУЖОЕ');
+    await editUnsent('МОЁ ');
+    await waitFor(() => expect(r.log).toContain('update:STALE'), { timeout: 5000 });
+    const sent = () => r.calls.filter((c) => c.path === 'entity.update').length;
+    const before = sent();
+    for (let i = 0; i < 2; i++) {
+      useToastStore.setState({ toasts: [] });
+      await choose('Сделать страницей');
+      expect(await screen.findByText(BODY_BLOCKED)).toBeInTheDocument();
+      expect(screen.queryByText(BODY_SAVING)).toBeNull();
+    }
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(sent()).toBe(before);
+    expect(r.batches()).toEqual([]);
+
+    // «Обновить» снимает плашку — к ней больше не отослать: жест снова пробует досыл (честное
+    // «Сохраняем текст…»), а упади он опять 409 — плашка вернётся вместе с запретом.
+    fireEvent.click(await screen.findByRole('button', { name: 'Обновить' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Обновить' })).toBeNull());
+    useToastStore.setState({ toasts: [] });
+    await choose('Сделать страницей');
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    await waitFor(() => expect(sent()).toBe(before + 1));
+    expect(await screen.findByRole('button', { name: 'Обновить' })).toBeInTheDocument();
+    expect(r.batches()).toEqual([]);
   });
 
   test('«Сделать страницей»: пачки нет, тост, текст досылается без 409', async () => {

@@ -71,7 +71,7 @@ export function bodyKindOf(entity: Pick<Entity, 'aspects' | 'props'>): BodyKind 
  * как его дослать. Смонтированное тело кладёт себя сюда и снимает при размонтировании; `null` —
  * тела на экране нет, и спешить некуда.
  */
-export type BodyGate = Pick<BodySave, 'hasUnsent' | 'flush'>;
+export type BodyGate = Pick<BodySave, 'hasUnsent' | 'flush' | 'blocked'>;
 export type BodyGateRef = MutableRefObject<BodyGate | null>;
 
 /**
@@ -147,16 +147,16 @@ export function EntityBody({
   bodyGate: BodyGateRef;
 }) {
   const save = useBodySave(entity.id, entity);
-  const { hasUnsent, flush } = save;
+  const { hasUnsent, flush, blocked } = save;
   // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
   // тело стёрло бы уже вставшее на его место (смена записи — новый экземпляр по key).
   useEffect(() => {
-    const gate: BodyGate = { hasUnsent, flush };
+    const gate: BodyGate = { hasUnsent, flush, blocked };
     bodyGate.current = gate;
     return () => {
       if (bodyGate.current === gate) bodyGate.current = null;
     };
-  }, [bodyGate, hasUnsent, flush]);
+  }, [bodyGate, hasUnsent, flush, blocked]);
   const utils = trpc.useUtils();
   /**
    * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.
