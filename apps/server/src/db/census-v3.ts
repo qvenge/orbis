@@ -9,6 +9,7 @@
 // тестами не покрыта по построению, а порционность и счёт проверяются здесь без базы.
 import { type BodyDoc, bodyDocError, parseBody, upgradeBodyDoc } from '@orbis/shared/doc';
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
+import { maskQuotedValues } from '@orbis/shared/query';
 import type { JSONContent } from '@tiptap/core';
 
 /** Строка корпуса: тело и хранимый документ (`body_doc`, `null` — документа ещё нет). */
@@ -62,15 +63,37 @@ export const CENSUS_IDS_LIMIT = 50;
 const ID_START = '00000000-0000-0000-0000-000000000000';
 
 /**
- * Ключ `display` в тексте блока данных — БЕЗ разбора запроса (`parseQueryAst` требует реестра, а
- * перепись идёт сырым пулом по всем графам разом). Ключ стоит в начале части запроса: с начала
- * текста или после запятой; значение — голое или в кавычках. Флага `g` нет намеренно: у
- * глобального регэкспа `test` тащит `lastIndex` между вызовами.
+ * Ключ `display` в тексте блока данных — для блока БЕЗ дерева (`ast: null`: тело без документа
+ * разобрано без реестра, или блок отвергнут при записи). Разбора запроса здесь нет:
+ * `parseQueryAst` требует реестра, а перепись идёт сырым пулом по всем графам разом.
+ *
+ * Грамматика режет запрос по запятой ИЛИ пробелу вне кавычек (`parse-ast.ts`, `SEPARATOR_RE`), а
+ * пробелов вокруг `=` не допускает вовсе (`display = "table"` — отказ `SYNTAX`). Поэтому часть
+ * `display=table` ищется с разделителем `[\s,]` (или краем) с обеих сторон и без пробелов у `=`, а
+ * по МАСКЕ кавычек (`maskQuotedValues`): `title="x, display=table"` — значение, а не форма. Флага
+ * `g` нет намеренно: у глобального регэкспа `test` тащит `lastIndex` между вызовами.
  */
-const displayRe = (mode: 'table' | 'list') =>
-  new RegExp(`(?:^|,)\\s*display\\s*=\\s*"?${mode}"?\\s*(?:,|$)`);
+const displayRe = (mode: 'table' | 'list') => new RegExp(`(?:^|[\\s,])display=${mode}(?=[\\s,]|$)`);
 const DISPLAY_TABLE_RE = displayRe('table');
 const DISPLAY_LIST_RE = displayRe('list');
+
+/**
+ * Форма показа блока данных документа. У привязанного блока правда — его дерево (`attrs.ast`,
+ * `display` разбора), текст не нужен вовсе; у блока без дерева — ключ в тексте по маске кавычек.
+ */
+function displayOf(attrs: Record<string, unknown> | undefined): 'table' | 'list' | null {
+  const ast = attrs?.ast;
+  if (typeof ast === 'object' && ast !== null) {
+    const display = (ast as { display?: unknown }).display;
+    return display === 'table' || display === 'list' ? display : null;
+  }
+  const text = attrs?.text;
+  if (typeof text !== 'string') return null;
+  const masked = maskQuotedValues(text.trim());
+  if (DISPLAY_TABLE_RE.test(masked)) return 'table';
+  if (DISPLAY_LIST_RE.test(masked)) return 'list';
+  return null;
+}
 
 /** Маркеры в тексте тела — тем же листовым препроходом, что прочтут первый кадр и `parseBody`. */
 function scanMarkers(nodes: PageNode[]): { block: boolean; broken: boolean } {
@@ -118,9 +141,10 @@ function documentOf(row: CensusV3Row, body: string): JSONContent {
 function scanDisplay(doc: JSONContent): { table: boolean; list: boolean } {
   const found = { table: false, list: false };
   const walk = (node: JSONContent): void => {
-    if (node.type === 'queryBlock' && typeof node.attrs?.text === 'string') {
-      if (DISPLAY_TABLE_RE.test(node.attrs.text)) found.table = true;
-      if (DISPLAY_LIST_RE.test(node.attrs.text)) found.list = true;
+    if (node.type === 'queryBlock') {
+      const display = displayOf(node.attrs);
+      if (display === 'table') found.table = true;
+      if (display === 'list') found.list = true;
     }
     for (const child of node.content ?? []) walk(child);
   };

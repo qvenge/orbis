@@ -119,19 +119,21 @@ test('display=table внутри колонки и в пункте списка 
 
 test('маркеры на любой глубине и после \\r\\n; NULL-тело не рвёт перепись; ложные display — нет', async () => {
   const nested =
-    '{{tabs}}\r\n{{tab: А}}\r\n{{query:aspect=orbis/task, display = "table"}}\r\n{{/tab}}\r\n{{/tabs}}';
+    '{{tabs}}\r\n{{tab: А}}\r\n{{query:aspect=orbis/task, display=table}}\r\n{{/tab}}\r\n{{/tabs}}';
   const corpus = fakeCorpus([
     { body: nested, bodyDoc: null },
     { body: null, bodyDoc: null },
     // `display=tablet` и ключ посреди значения — не форма показа.
     { body: '{{query:aspect=orbis/task, display=tablet}}', bodyDoc: null },
     { body: '{{query:title="display=table"}}', bodyDoc: null },
+    // Пробелы у `=` грамматика отвергает (SYNTAX) — на экране плашка, а не таблица (B-I1).
+    { body: '{{query:aspect=orbis/task, display = "table"}}', bodyDoc: null },
   ]);
   const r = await censusV3(corpus.io);
   expect(r.becomeBlocksNoDoc).toBe(1);
   expect(r.displayTable).toBe(1);
   expect(r.ids.displayTable).toEqual(['id-00000']);
-  expect(r.total).toBe(4);
+  expect(r.total).toBe(5);
 });
 
 test('корпус читается ПОРЦИЯМИ с курсором, ни одна строка не теряется', async () => {
@@ -182,4 +184,38 @@ test('печать: числа и id поимённо под понятными 
   expect(out).not.toContain('после');
   expect(out).not.toContain('orbis/goal');
   expect(out).not.toContain('текст\n');
+});
+
+test('display= через пробел — форма; ключ внутри кавычек — нет; у привязанного блока — по дереву (B-I1)', async () => {
+  const corpus = fakeCorpus([
+    // Грамматика режет по запятой ИЛИ пробелу вне кавычек: это таблица и список.
+    { body: '{{query:aspect=orbis/task display=table}}', bodyDoc: null },
+    { body: '{{query:aspect=orbis/task, display=table limit=5}}', bodyDoc: null },
+    { body: '{{query:display=list sortBy=orbis/updated_at:desc}}', bodyDoc: null },
+    // Ключ внутри значения в кавычках — не форма показа.
+    { body: '{{query:title="x, display=table"}}', bodyDoc: null },
+    { body: '{{query:title="a display=list b"}}', bodyDoc: null },
+    // Привязанный блок: форма только в дереве, в тексте её нет — правда блока в `ast`.
+    {
+      body: '',
+      bodyDoc: v2Doc({
+        type: 'queryBlock',
+        attrs: { ast: { filter: null, display: 'table' }, text: 'aspect=orbis/task' },
+      }),
+    },
+    // Привязанный блок с ложным ключом в заголовке: дерево говорит «формы нет».
+    {
+      body: '',
+      bodyDoc: v2Doc({
+        type: 'queryBlock',
+        attrs: {
+          ast: { filter: null, title: 'x, display=table' },
+          text: 'title="x, display=table"',
+        },
+      }),
+    },
+  ]);
+  const r = await censusV3(corpus.io);
+  expect(r.ids.displayTable).toEqual(['id-00000', 'id-00001', 'id-00005']);
+  expect(r.ids.displayList).toEqual(['id-00002']);
 });
