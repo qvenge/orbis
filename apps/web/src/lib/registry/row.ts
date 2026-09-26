@@ -14,8 +14,8 @@ import { useRegistry } from './useRegistry';
 const EMPTY: RowRegistry = { aspects: new Map(), contracts: new Map() };
 /**
  * Словари снимка. Кэш по ССЫЛКЕ: у списка Browser 50 строк, и без него каждая строила бы обе карты
- * заново. Снимок живёт одной ссылкой, пока не сменилась версия (`useRegistry`: ключ `['registry',
- * version]`, `staleTime: Infinity`).
+ * заново. Снимок живёт одной ссылкой, пока новая версия его не перечитала (`useRegistry`: один ключ
+ * `REGISTRY_QUERY_KEY`, `staleTime: Infinity`).
  */
 const BY_SNAPSHOT = new WeakMap<object, RowRegistry>();
 /**

@@ -267,6 +267,19 @@ export const RULE_ENVELOPE_CURRENCY_DEFAULT: RuleDefinitionInput = {
 };
 
 /**
+ * Возврат из закрытия и задача без статуса — `inbox` строкой каталога, а не литералом экрана (Б-2 №98;
+ * Р-К-18 ждал `default` свойства — строка каталога делает то же данными). `task_status` обязателен у
+ * `orbis/task`, поэтому умолчание срабатывает только на явном снятии и на создании без статуса: снятие
+ * галочки на экране записи шлёт `unset`, а значение возврата решает каталог (решение РП-32 плана 1б,
+ * вопрос владельцу В-8 — что задача без статуса на создании тоже получает `inbox`, принятое умолчание).
+ */
+export const RULE_TASK_STATUS_DEFAULT: RuleDefinitionInput = {
+  id: 'task_status_default',
+  template: 'default',
+  params: { property: 'orbis/task_status', value: { const: 'inbox' } },
+};
+
+/**
  * Параметры движка предков (`executor/ancestors.ts`). Id совпадает с `RULE_NEAREST_ANCESTOR`
  * (`constants.ts:146`): это же имя стоит во `flags.computed.rule` обоих вычисляемых свойств и в
  * системной строке журнала «пересчитано N по правилу X» — с этой строкой оба адреса впервые
@@ -433,7 +446,12 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
     RULE_FINANCIAL_REQUIRES_OCCURRED_ON,
     RULE_FINANCIAL_RECURRING_REQUIRES_RECURRENCE,
   ],
-  'orbis/task': [RULE_TASK_COMPLETED_AT, RULE_TASK_WAITING_FOR, RULE_TASK_WAITING_ONLY],
+  'orbis/task': [
+    RULE_TASK_COMPLETED_AT,
+    RULE_TASK_WAITING_FOR,
+    RULE_TASK_WAITING_ONLY,
+    RULE_TASK_STATUS_DEFAULT,
+  ],
   'orbis/budget': [RULE_ENVELOPE_UNIQUE, RULE_ROLLOVER, RULE_ENVELOPE_CURRENCY_DEFAULT],
   'orbis/assignment': [RULE_ASSIGNMENT_GRANT_REQUIRED, RULE_ASSIGNMENT_GRANT_FORBIDDEN],
   'orbis/agent-run': [RULE_RUN_SUBJECT_REQUIRED, RULE_RUN_SUBJECT_FORBIDDEN],

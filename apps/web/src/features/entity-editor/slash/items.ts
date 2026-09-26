@@ -245,7 +245,7 @@ export const SLASH_ITEMS: readonly SlashItem[] = [
   },
   {
     id: 'ref',
-    label: 'Ссылка на сущность',
+    label: 'Ссылка на запись',
     hint: `или ${MENTION_CHAR}`,
     kinds: ALL_KINDS,
     run: (e) => e.chain().focus().insertContent(MENTION_CHAR).run(),

@@ -139,16 +139,8 @@ export function TicketWaitingBlock({
                   update.mutate({
                     id: entity.id,
                     expectedUpdatedAt: entity.updatedAt,
+                    // Вопрос снимает правило каталога `waiting_for` при уходе из ожидания (Б-2 №70).
                     props: { 'orbis/task_status': 'done' },
-                    // Снятие вопроса уезжает СПИСКОМ `unset`, а не `null` в значении (§А1-1):
-                    // `null` — законное значение json-свойства, и совмещать их одним ключом
-                    // больше нечем. Конвенция среза прежняя: уходя из waiting, вопрос снимают,
-                    // иначе он остался бы висеть на закрытом тикете и читался бы как открытый.
-                    // На сервере его снимает правило каталога `waiting_for` при уходе из класса
-                    // `waiting`, а держит там `waiting_for_only_when_waiting` (`builtin-rules.ts`);
-                    // явное снятие здесь им не противоречит. `orbis/completed_at`
-                    // не шлём: его проставляет сам переход в done (правило `task_completed_at`).
-                    unset: ['orbis/waiting_for'],
                   })
                 }
               >

@@ -212,7 +212,7 @@ async function editorField(): Promise<HTMLElement> {
 /** Панель вкладки по её названию (Radix связывает панель с триггером через aria-labelledby). */
 const tabPanel = (name: string): HTMLElement => screen.getByRole('tabpanel', { name });
 
-test('чекбокс task → entity.update status=done + completed_at', async () => {
+test('чекбокс шлёт только смену статуса: штамп и снятие вопроса — правила сервера', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
@@ -228,20 +228,34 @@ test('чекбокс task → entity.update status=done + completed_at', async (
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.update');
-    // Адрес значения — id СВОЙСТВА (§А1-1), а не пара «аспект + поле»: ровно этот адрес
-    // сервер и принимает; пока мост старой формы был жив (снят Задачей 21b), старая пара
-    // уехала бы в него вместо прямого пути.
-    const input = c?.input as {
-      id: string;
-      props: Record<string, unknown>;
-      unset?: string[];
-    };
-    expect(input.id).toBe('e1');
-    expect(input.props['orbis/task_status']).toBe('done');
-    expect(input.props['orbis/completed_at']).toBeTruthy();
-    // Вопрос исполнителя снимается СПИСКОМ, а не `null` в значении: `null` — законное
-    // значение json-свойства, и совмещать их одним ключом больше нечем.
-    expect(input.unset).toContain('orbis/waiting_for');
+    // Ровно смена статуса (Б-2 №70, №71): штамп `completed_at` ставит правило каталога
+    // `task_completed_at`, вопрос исполнителя снимает правило `waiting_for`. Копия правила на
+    // экране расходилась бы с сервером (часы клиента, лишнее снятие) — её здесь быть не должно.
+    // Адрес значения — id СВОЙСТВА (§А1-1), а не пара «аспект + поле».
+    expect(c?.input).toEqual({ id: 'e1', props: { 'orbis/task_status': 'done' } });
+  });
+});
+
+test('снятие галочки у закрытой задачи — снятие статуса, значение возврата даёт строка default каталога', async () => {
+  const closed = {
+    ...entity,
+    props: { 'orbis/task_status': 'done', 'orbis/completed_at': '2026-09-01T10:00:00.000Z' },
+  };
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: closed, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') return { ...entity };
+    return registryReply(path) ?? {};
+  });
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
+  const box = screen.getByRole('checkbox', { name: /готово/i });
+  expect(box).toBeChecked();
+  fireEvent.click(box);
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'entity.update');
+    // Б-2 №98: литерал `inbox` на экране — копия умолчания; его держит строка каталога
+    // `task_status_default`, а экран только снимает статус.
+    expect(c?.input).toEqual({ id: 'e1', unset: ['orbis/task_status'] });
   });
 });
 
@@ -1284,7 +1298,7 @@ test('меню ⋮: отказ буфера показывает ссылку т
   fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
 
   // Ссылка доступна целиком и её можно выделить — иначе отказ равносилен молчанию.
-  const field = await screen.findByLabelText('Ссылка на сущность');
+  const field = await screen.findByLabelText('Ссылка на запись');
   expect(field).toHaveValue(LINK_E1);
 });
 
@@ -1295,7 +1309,7 @@ test('меню ⋮: Clipboard API нет вовсе (небезопасный к
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
 
-  expect(await screen.findByLabelText('Ссылка на сущность')).toHaveValue(LINK_E1);
+  expect(await screen.findByLabelText('Ссылка на запись')).toHaveValue(LINK_E1);
 });
 
 /**
@@ -1333,7 +1347,7 @@ test('меню ⋮: плашка с ручной ссылкой не перее�
   renderWithProviders(<DetailHost />, twoEntitiesHandler);
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
-  expect(await screen.findByLabelText('Ссылка на сущность')).toHaveValue(LINK_E1);
+  expect(await screen.findByLabelText('Ссылка на запись')).toHaveValue(LINK_E1);
 
   // Переход по бэклинку/подзадаче внутри таба: перемонтирования нет, меняется проп.
   fireEvent.click(screen.getByTestId('go-e2'));
@@ -1341,7 +1355,7 @@ test('меню ⋮: плашка с ручной ссылкой не перее�
 
   // Ссылка на СОСЕДНЮЮ сущность под заголовком этой — молча неверные данные ровно там,
   // где заведён честный запасной путь. Плашки быть не должно вовсе.
-  expect(screen.queryByLabelText('Ссылка на сущность')).toBeNull();
+  expect(screen.queryByLabelText('Ссылка на запись')).toBeNull();
 });
 
 test('меню ⋮: плашка с ручной ссылкой уходит по «Скрыть»', async () => {
@@ -1349,10 +1363,10 @@ test('меню ⋮: плашка с ручной ссылкой уходит п�
   renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
-  await screen.findByLabelText('Ссылка на сущность');
+  await screen.findByLabelText('Ссылка на запись');
 
   fireEvent.click(screen.getByRole('button', { name: 'Скрыть' }));
-  expect(screen.queryByLabelText('Ссылка на сущность')).toBeNull();
+  expect(screen.queryByLabelText('Ссылка на запись')).toBeNull();
 });
 
 test('меню ⋮: удавшееся копирование убирает плашку прошлого отказа', async () => {
@@ -1372,13 +1386,13 @@ test('меню ⋮: удавшееся копирование убирает п�
   );
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
-  await screen.findByLabelText('Ссылка на сущность');
+  await screen.findByLabelText('Ссылка на запись');
 
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
 
   expect(await screen.findByText('Ссылка скопирована')).toBeInTheDocument();
-  await waitFor(() => expect(screen.queryByLabelText('Ссылка на сущность')).toBeNull());
+  await waitFor(() => expect(screen.queryByLabelText('Ссылка на запись')).toBeNull());
 });
 
 test('меню ⋮: «Закрепить» шлёт user.updateSettings с этой сущностью', async () => {
@@ -3324,14 +3338,13 @@ describe('ADE: тикет', () => {
       const input = calls.find((c) => c.path === 'entity.update')?.input as {
         id: string;
         props: Record<string, unknown>;
-        unset: string[];
+        unset?: string[];
       };
       expect(input.id).toBe('t1');
-      // Вопрос снимается вместе с уходом из waiting — конвенция среза: вопрос рядом с
-      // закрытым тикетом читался бы как открытый (так же поступает сервер на своих выходах).
-      // Снятие — СПИСКОМ `unset`, а не `null` в значении (§А1-1).
+      // Только смена статуса (Б-2 №70): вопрос снимает правило каталога `waiting_for` при уходе
+      // из ожидания — экран копию правила не держит.
       expect(input.props).toEqual({ 'orbis/task_status': 'done' });
-      expect(input.unset).toEqual(['orbis/waiting_for']);
+      expect(input.unset).toBeUndefined();
     });
   });
 
@@ -4995,6 +5008,33 @@ describe('D42: пачка решений на экране прогона', () =
     const questionsOnly = await screen.findByTestId('run-decisions');
     await within(questionsOnly).findByTestId('question-card');
     expect(within(questionsOnly).queryByRole('button', { name: 'Принять все' })).toBeNull();
+  });
+
+  test('«Принять все»: единица, погашенная как устаревшая, считается «Устарело», а не «Уже решено» (Б-2 №74)', async () => {
+    // Декларацию действия сняли после чтения пачки: сервер гасит единицу внутри решения и
+    // отвечает `already` с причиной `stale`. Для владельца это то же «устарело», что и
+    // расхождение предусловий, — «уже решено» читалось бы как чужое решение, которого не было.
+    renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        props: RUN_WITH_BATCH,
+        units: [batchAction(), batchAction2()],
+        decideAll: [
+          { pendingId: 'd1', status: 'applied', actionId: 'a1' },
+          { pendingId: 'd2', status: 'already', fate: 'rejected', reason: 'stale' },
+        ],
+      }),
+    );
+    const block = await screen.findByTestId('run-decisions');
+    await within(block).findAllByTestId('deferred-action-card');
+    await userEvent.click(within(block).getByRole('button', { name: 'Принять все' }));
+    const summary = await within(block).findByTestId('decide-all-summary');
+    expect(summary).toHaveTextContent('Применено: 1 · Устарело: 1');
+    expect(summary).not.toHaveTextContent('Уже решено');
+    // Строка названа своим текстом; расхождений у такого исхода нет — причина словами.
+    expect(summary).toHaveTextContent(
+      'Срок: «Купить билеты» — устарело: действие больше не применимо',
+    );
   });
 
   test('повтор «Принять все» даёт ПУСТУЮ сводку — и она названа словами, а не молчанием (Р11-2)', async () => {

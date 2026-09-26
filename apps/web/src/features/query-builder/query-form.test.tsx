@@ -555,7 +555,7 @@ test('excludeBlocked и archived правятся своими контрола�
 
 test('relation-фильтр выражается как this', async () => {
   const { onSave } = await openForm('aspect=orbis/task');
-  fireEvent.change(screen.getByLabelText('Дети сущности'), { target: { value: 'this' } });
+  fireEvent.change(screen.getByLabelText('Дети записи'), { target: { value: 'this' } });
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, children_of=this');
 });
@@ -563,8 +563,8 @@ test('relation-фильтр выражается как this', async () => {
 test('relation-фильтр выражается конкретным id', async () => {
   const id = '11111111-2222-4333-8444-555555555555';
   const { onSave } = await openForm('aspect=orbis/task');
-  fireEvent.change(screen.getByLabelText('Родители сущности'), { target: { value: 'id' } });
-  fireEvent.change(screen.getByLabelText('Id сущности (родители)'), { target: { value: id } });
+  fireEvent.change(screen.getByLabelText('Родители записи'), { target: { value: 'id' } });
+  fireEvent.change(screen.getByLabelText('Id записи (родители)'), { target: { value: id } });
   save();
   expect(saved(onSave)).toBe(`aspect=orbis/task, parents_of=${id}`);
 });
@@ -680,7 +680,7 @@ test('у контролов формы есть связанные подпис�
     'Форма показа',
     'Архивные',
     'Скрыть заблокированные',
-    'Дети сущности',
+    'Дети записи',
     'Состояние задачи',
     'Состояние задачи: Входящие',
     'Срок: значение 1',

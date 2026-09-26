@@ -331,15 +331,15 @@ function FormBody({
       <Section title="Связи">
         <RelationRows
           kind="children_of"
-          label="Дети сущности"
-          idLabel="Id сущности (дети)"
+          label="Дети записи"
+          idLabel="Id записи (дети)"
           nodes={nodes}
           onNodes={patchNodes}
         />
         <RelationRows
           kind="parents_of"
-          label="Родители сущности"
-          idLabel="Id сущности (родители)"
+          label="Родители записи"
+          idLabel="Id записи (родители)"
           nodes={nodes}
           onNodes={patchNodes}
         />
@@ -758,7 +758,7 @@ function RelationRows({
                   }}
                 >
                   <option value="">нет</option>
-                  <option value="this">эта сущность (this)</option>
+                  <option value="this">эта запись (this)</option>
                   <option value="id">по id</option>
                 </select>
               )}
@@ -775,7 +775,7 @@ function RelationRows({
             {row.of === 'this' && (
               <p role="status" className="text-text-muted text-xs">
                 `this` — запись, в теле которой лежит блок. Вне записи (Browser, бейдж закреплённого
-                списка) такой блок ответит ошибкой «this вне контекста сущности».
+                списка) такой блок ответит ошибкой «this вне контекста записи».
               </p>
             )}
           </div>

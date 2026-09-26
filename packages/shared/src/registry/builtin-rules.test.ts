@@ -22,6 +22,7 @@ import {
   RULE_RUN_SUBJECT_FORBIDDEN,
   RULE_RUN_SUBJECT_REQUIRED,
   RULE_TASK_COMPLETED_AT,
+  RULE_TASK_STATUS_DEFAULT,
   RULE_TASK_WAITING_FOR,
   RULE_TASK_WAITING_ONLY,
 } from './builtin-rules';
@@ -41,6 +42,8 @@ describe('системные строки каталога правил (§Б4-1
       // Задача 14: «чего ждём» — пара строк по классу `waiting` контракта делегирования (В-П-8 (в)).
       'waiting_for',
       'waiting_for_only_when_waiting',
+      // Срез 1б задача 3: возврат из закрытия — `inbox` строкой `default` каталога (Б-2 №98).
+      'task_status_default',
       'duplicate_envelope',
       // Задача 13: носители параметров движков. `nearest_ancestor` — то же имя, что во
       // `flags.computed.rule` вычисляемых свойств и в журнале пересчёта (`RULE_NEAREST_ANCESTOR`).
@@ -109,6 +112,7 @@ describe('системные строки каталога правил (§Б4-1
       RULE_ENVELOPE_CURRENCY_DEFAULT.undo,
       RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE.undo,
       RULE_PAGE_WINS_OVER_NOT_SELF.undo,
+      RULE_TASK_STATUS_DEFAULT.undo,
     ]).toEqual([
       'check',
       'check',
@@ -125,6 +129,7 @@ describe('системные строки каталога правил (§Б4-1
       undefined,
       'check',
       'check',
+      undefined,
     ]);
   });
 

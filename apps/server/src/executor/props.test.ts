@@ -1068,13 +1068,15 @@ describe('валидация по реестру (§А7-1)', () => {
   });
 
   test('REQUIRED по аспекту и TYPE — тот же VALIDATION с details.violations', async () => {
+    // Пример — обязательное свойство БЕЗ строки `default` каталога: у `orbis/task_status` она есть
+    // (`task_status_default`, срез 1б), и задача без статуса законно получает `inbox`.
     const required = await run('entity_create', {
-      title: 'Задача без статуса',
+      title: 'Проект без стадии',
       tags: [],
-      aspects: ['orbis/task'],
+      aspects: ['orbis/project'],
     });
     expect(violationsOf(required)).toEqual([
-      { code: 'REQUIRED', aspectId: 'orbis/task', propertyId: 'orbis/task_status' },
+      { code: 'REQUIRED', aspectId: 'orbis/project', propertyId: 'orbis/project_stage' },
     ]);
 
     const typed = await run('entity_create', {

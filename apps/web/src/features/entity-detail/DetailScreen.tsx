@@ -463,7 +463,7 @@ function ManualLinkNotice({ url, onHide }: { url: string; onHide: () => void }) 
       </p>
       <div className="flex items-center gap-2">
         <Input
-          aria-label="Ссылка на сущность"
+          aria-label="Ссылка на запись"
           readOnly
           value={url}
           // Клик по полю выделяет адрес целиком: копировать руками половину UUID —

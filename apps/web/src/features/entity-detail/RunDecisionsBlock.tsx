@@ -49,10 +49,23 @@ const SUMMARY_LABELS: Record<DecideAllItem['status'], string> = {
 /** Порядок счётчиков в сводке — от «сработало» к «не потребовалось», а не порядок ответа. */
 const SUMMARY_ORDER: DecideAllItem['status'][] = ['applied', 'stale', 'rejected', 'already'];
 
+/**
+ * Ведро строки сводки. `already` с причиной `stale` — это действие, которое сервер погасил как
+ * устаревшее внутри самого решения (`ACTION_STALE`: декларацию сняли или изменили), и для владельца
+ * оно то же «Устарело», что и расхождение предусловий: «Уже решено» читалось бы как чужое решение,
+ * которого не было (Б-2 №74).
+ */
+function bucketOf(item: DecideAllItem): DecideAllItem['status'] {
+  if (item.status === 'already' && item.fate === 'rejected' && item.reason === 'stale') {
+    return 'stale';
+  }
+  return item.status;
+}
+
 function countsLine(items: DecideAllItem[]): string {
   return SUMMARY_ORDER.map((status) => ({
     status,
-    n: items.filter((i) => i.status === status).length,
+    n: items.filter((i) => bucketOf(i) === status).length,
   }))
     .filter(({ n }) => n > 0)
     .map(({ status, n }) => `${SUMMARY_LABELS[status]}: ${n}`)
@@ -227,17 +240,23 @@ function RunBatch({
   const hasOpenAction = list.some((u) => u.kind === 'action' && u.fate === 'open');
   /** Протухшие строки сводки — с текстом своей единицы: сводку читают именно по ним. */
   const stale = (summary ?? [])
-    .filter((i) => i.status === 'stale')
+    .filter((i) => bucketOf(i) === 'stale')
     .map((i) => {
       const unit = list.find((u) => u.pendingId === i.pendingId);
-      // Единицы не нашлось — печатаем адрес: пропустить строку значило бы скрыть от владельца
-      // то, что часть пачки не применилась.
       return {
-        ...i,
+        pendingId: i.pendingId,
+        // Единицы не нашлось — печатаем адрес: пропустить строку значило бы скрыть от владельца
+        // то, что часть пачки не применилась.
         text: unit === undefined ? i.pendingId : unitText(unit),
+        // Расхождения есть только у `stale`: погашенное как устаревшее (`already`) предусловий не
+        // сверяло — его сняла декларация, и причина говорится словами, без списка.
+        reason:
+          i.status === 'stale'
+            ? 'устарело: состояние изменилось.'
+            : 'устарело: действие больше не применимо',
         // Тело приезжает флагом (РП-10) — разворачиваем той же функцией, что и все прочие
         // места показа: иначе «устарело по телу» стояло бы здесь с пустым списком причин.
-        rows: divergenceRows(registry, i),
+        rows: i.status === 'stale' ? divergenceRows(registry, i) : [],
       };
     });
   const failure = decideAll.isError
@@ -305,13 +324,15 @@ function RunBatch({
                   {/* Устаревшая названа СВОИМ текстом: в сводке из нескольких строк
                       «устарело» без имени единицы не отвечает на вопрос «что именно». */}
                   <p className="text-text-secondary">
-                    {item.text} — устарело: состояние изменилось.
+                    {item.text} — {item.reason}
                   </p>
-                  <ul className="flex flex-col gap-1 text-text-secondary text-xs">
-                    {item.rows.map((row) => (
-                      <li key={row.key}>{row.text}</li>
-                    ))}
-                  </ul>
+                  {item.rows.length > 0 && (
+                    <ul className="flex flex-col gap-1 text-text-secondary text-xs">
+                      {item.rows.map((row) => (
+                        <li key={row.key}>{row.text}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               ))}
             </>

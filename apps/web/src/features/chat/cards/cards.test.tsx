@@ -15,6 +15,7 @@ import { ProposalCard } from './ProposalCard';
 import { QuestionCard } from './QuestionCard';
 import { contentDuplicatesCard, renderCards } from './renderCards';
 import type { QuestionCardData } from './types';
+import { ALREADY_STALE_NOTE } from './unit-text';
 
 const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
   ({
@@ -1651,7 +1652,7 @@ test('deferred_action_card: исход already — подпись есть, но
   const { calls } = renderWithProviders(
     <div>{renderCards(msg([DEFERRED_CARD]))}</div>,
     unitsHandler([actionUnit()], {
-      'routine.decideDeferred': { status: 'already', fate: 'rejected' },
+      'routine.decideDeferred': { status: 'already', fate: 'rejected', reason: 'owner' },
     }),
   );
   const card = await screen.findByTestId('deferred-action-card');
@@ -1664,7 +1665,7 @@ test('deferred_action_card: исход already — подпись есть, но
   );
   // Молча не проигрывает никто: владелец обязан узнать, что его нажатие ничего не решило
   expect(await within(card).findByTestId('deferred-outcome')).toHaveTextContent(
-    'единица уже решена — отклонено',
+    'Решать было нечего: единица уже решена — отклонено',
   );
   // …и при этом карточка НЕ свернулась: сервер всё ещё говорит «открыта», значит открыта.
   // Шапки-кнопки (то есть строки-итога с судьбой) у открытой единицы не бывает.
@@ -1673,6 +1674,22 @@ test('deferred_action_card: исход already — подпись есть, но
   expect(within(card).getByTestId('deferred-rows')).toBeInTheDocument();
   expect(within(card).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
   expect(within(card).getByRole('button', { name: 'Отклонить' })).toBeInTheDocument();
+});
+
+test('deferred_action_card: already с причиной stale — «Устарело», а не «уже решено — отклонено» (Б-2 №74)', async () => {
+  // Действие погашено как устаревшее (`ACTION_STALE`: декларацию сняли или изменили) — владелец
+  // его не отклонял, и слово «отклонено» было бы неправдой. Подпись — по паре `fate + reason`.
+  renderWithProviders(
+    <div>{renderCards(msg([DEFERRED_CARD]))}</div>,
+    unitsHandler([actionUnit()], {
+      'routine.decideDeferred': { status: 'already', fate: 'rejected', reason: 'stale' },
+    }),
+  );
+  const card = await screen.findByTestId('deferred-action-card');
+  fireEvent.click(await within(card).findByRole('button', { name: 'Принять' }));
+  const outcome = await within(card).findByTestId('deferred-outcome');
+  expect(outcome).toHaveTextContent(ALREADY_STALE_NOTE);
+  expect(outcome).not.toHaveTextContent('отклонено');
 });
 
 test('ответ already → показан ПРИМЕНИВШИЙСЯ ответ (С5); onSuccess перечитывает пачку и инвалидирует ленту треда (Р0-11)', async () => {

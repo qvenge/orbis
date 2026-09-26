@@ -10,8 +10,9 @@
  * Съёмка — `structure.capture.test.tsx` (по `CAPTURE=1`); этот файл только сверяет.
  */
 import { BUILTIN_ASPECT_IDS } from '@orbis/shared';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { installCrashTrap, renderWithProviders } from '../../test/harness';
 import { queryClient } from '../../trpc';
 import { DetailScreen } from './DetailScreen';
@@ -163,4 +164,40 @@ test('«тикет + рутина»: история прогонов одна �
   expect(
     status.compareDocumentPosition(lists[0] as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+});
+
+test('экран записи с холодного старта — один registry.effective (новое-8)', async () => {
+  // В отличие от `captureDetail`, версию реестра заранее НЕ ставим: так открывается приложение по
+  // закладке на запись. Снимок реестра задержан до ответа `entity.get` — версия из него приезжает,
+  // пока дети экрана (строки, карточки) уже подписаны на реестр и первый запрос ещё в полёте.
+  resetRegistryVersionForTests();
+  const f = fixture('task');
+  const base = structureHandler(f);
+  let entityServed: () => void = () => {};
+  const served = new Promise<void>((r) => {
+    entityServed = r;
+  });
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId={f.entity.id} />,
+    async (path, input, type) => {
+      const answer = await base(path, input, type);
+      if (path === 'entity.get') entityServed();
+      if (path === 'registry.effective') {
+        await served;
+        // Кадр после ответа записи: версия успевает дойти до читателей реестра.
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return answer;
+    },
+    { queries: queryClient.getDefaultOptions().queries },
+  );
+  await screen.findByTestId('native-row');
+  // Тишина: перечитывание, если бы оно было, успело бы уйти.
+  let last = -1;
+  for (let quiet = 0; quiet < 3; ) {
+    await act(() => new Promise((r) => setTimeout(r, 30)));
+    quiet = calls.length === last ? quiet + 1 : 0;
+    last = calls.length;
+  }
+  expect(calls.filter((c) => c.path === 'registry.effective')).toHaveLength(1);
 });

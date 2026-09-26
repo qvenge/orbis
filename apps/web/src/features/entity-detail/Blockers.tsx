@@ -249,9 +249,9 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
             <option value="in">заблокирована выбранной</option>
           </select>
           <input
-            aria-label="Поиск сущности"
+            aria-label="Поиск записи"
             value={draft}
-            placeholder="Найти сущность…"
+            placeholder="Найти запись…"
             onChange={(e) => setDraft(e.target.value)}
             className={PICKER_FIELD}
           />

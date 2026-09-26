@@ -2359,7 +2359,8 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     expect((messages[0]?.metadata as { reason?: string }).reason).toBe('owner');
 
     const again = await callerLater().routine.decideDeferred({ pendingId, decision: 'reject' });
-    expect(again).toEqual({ status: 'already', fate: 'rejected' });
+    // Причина едет с судьбой (Б-2 №74): экран отличает «отклонено» от «устарело» по паре.
+    expect(again).toEqual({ status: 'already', fate: 'rejected', reason: 'owner' });
     // Повтор ничего не дописал: журнал append-only, вторая строка отказа была бы второй судьбой
     expect((await unitMessages(pendingId)).length).toBe(1);
   });
@@ -2440,7 +2441,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     ]);
   });
 
-  test('approve отклонённой → already {fate:rejected}; reject применённой → already {fate:approved}', async () => {
+  test('approve отклонённой → already {fate:rejected, reason:owner}; reject применённой → already {fate:approved} без причины', async () => {
     const { routineId, runId } = await batchRun('Чужой ход');
     const rejected = await deferUnit(routineId, runId, 'Смета на ремонт');
     await callerLater().routine.decideDeferred({
@@ -2452,7 +2453,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
         pendingId: rejected.pendingId,
         decision: 'approve',
       }),
-    ).toEqual({ status: 'already', fate: 'rejected' });
+    ).toEqual({ status: 'already', fate: 'rejected', reason: 'owner' });
     expect(await isArchived(rejected.targetId)).toBe(false);
 
     const applied = await deferUnit(routineId, runId, 'Скан паспорта');
@@ -2460,6 +2461,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
       pendingId: applied.pendingId,
       decision: 'approve',
     });
+    // У принятой причины нет: `reason` бывает только у `fate:'rejected'`.
     expect(
       await callerLater().routine.decideDeferred({
         pendingId: applied.pendingId,

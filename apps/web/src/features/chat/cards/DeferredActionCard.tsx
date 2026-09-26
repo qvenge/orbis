@@ -21,7 +21,13 @@ import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
 import { beforeText, divergenceRows, fmt, type StaleRow } from './proposal-text';
 import type { DeferredActionCardData } from './types';
-import { actionFateNote, UNIT_FATE_NOTES, type UnitFate, unitRowLabel } from './unit-text';
+import {
+  actionFateNote,
+  alreadyNote,
+  type UnitFate,
+  type UnitRejectReason,
+  unitRowLabel,
+} from './unit-text';
 import { useRunUnit } from './useRunUnit';
 
 export function DeferredActionCard({
@@ -57,13 +63,20 @@ export function DeferredActionCard({
    * Ответ `already` последнего нажатия: решать было нечего — судьба у единицы уже есть, своя
    * (повтор кнопки) или чужая (второй экран, гашение). Держим по той же причине, что и
    * расхождения: перечитанная единица покажет судьбу, но не то, что случилось с ЭТИМ нажатием.
+   * С причиной (Б-2 №74): погашенное как устаревшее — «Устарело», а не «уже решена — отклонено».
    */
-  const [alreadyFate, setAlreadyFate] = useState<UnitFate | null>(null);
+  const [already, setAlready] = useState<{ fate: UnitFate; reason?: UnitRejectReason } | null>(
+    null,
+  );
 
   const decide = trpc.routine.decideDeferred.useMutation({
     onSuccess: (result) => {
       setStaleRows(result.status === 'stale' ? divergenceRows(registry, result) : null);
-      setAlreadyFate(result.status === 'already' ? result.fate : null);
+      setAlready(
+        result.status === 'already'
+          ? { fate: result.fate, ...(result.reason !== undefined && { reason: result.reason }) }
+          : null,
+      );
       // Бюджет перечитывается только у ПРИМЕНЁННОГО: отложенная правка могла тронуть сумму,
       // категорию или статус траты (см. `settled`).
       settled({ applied: result.status === 'applied' });
@@ -126,9 +139,9 @@ export function DeferredActionCard({
           </ul>
         </div>
       )}
-      {alreadyFate !== null && (
+      {already !== null && (
         <p role="status" data-testid="deferred-outcome" className="text-text-muted text-xs">
-          {`Решать было нечего: единица уже решена — ${UNIT_FATE_NOTES[alreadyFate]}`}
+          {alreadyNote(already)}
         </p>
       )}
 

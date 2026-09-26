@@ -330,14 +330,14 @@ test('«Список по запросу» встаёт ПОСЛЕ абзаца 
   expect(blockText(h.editor, 2)).toBe('второй');
 });
 
-test('«Ссылка на сущность» передаёт набор в `@`-поиск, а не заводит свой пикер', async () => {
+test('«Ссылка на запись» передаёт набор в `@`-поиск, а не заводит свой пикер', async () => {
   const { h } = await mountEditor(
     'см',
     api({ byTerm: { куп: [suggestion(KUPIT, 'Купить кроссовки')] } }),
   );
   await userEvent.keyboard(' /ссыл');
   await screen.findByTestId('slash-menu');
-  expect(rows()).toEqual(['Ссылка на сущностьили @']);
+  expect(rows()).toEqual(['Ссылка на записьили @']);
 
   await userEvent.keyboard('{Enter}');
   // `/ссыл` съеден, на его месте `@` — и это НЕ картинка: следующие буквы уже ищут сущность.
@@ -887,8 +887,8 @@ test('выбранная строка прокручивается в видим
     // Положительный контроль: край списка тоже доезжает — стрелка вверх с первой строки
     // уводит выбор на ПОСЛЕДНИЙ пункт, тот самый, что и не влезает в панель.
     await userEvent.keyboard('{ArrowUp}{ArrowUp}');
-    await waitFor(() => expect(activeRow()).toBe('Ссылка на сущностьили @'));
-    expect(scrolled.at(-1)).toBe('Ссылка на сущностьили @');
+    await waitFor(() => expect(activeRow()).toBe('Ссылка на записьили @'));
+    expect(scrolled.at(-1)).toBe('Ссылка на записьили @');
   } finally {
     if (!had) proto.scrollIntoView = undefined;
   }

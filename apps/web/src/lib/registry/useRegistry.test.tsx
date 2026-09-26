@@ -1,11 +1,12 @@
-// Кеш реестра по версии снимка (§А9-2/§А10-1): чем он инвалидируется и чем НЕ инвалидируется.
+// Кеш реестра (§А9-2/§А10-1) — один ключ, инвалидируемый новой версией снимка: чем он
+// инвалидируется и чем НЕ инвалидируется.
 //
 // Проверяется именно ПУТЬ инвалидации, а не две независимые выдачи: версия приезжает в ответе
 // `entity.get`, как в бою, и подпись обязана перерисоваться БЕЗ перезагрузки и без
 // размонтирования — то есть в том же самом узле DOM.
 
 import { BUILTIN_PROPERTY_META } from '@orbis/shared';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
@@ -66,8 +67,8 @@ test('смена версии реестра перерисовывает под
 
   const node = await screen.findByTestId('label');
   await waitFor(() => expect(node).toHaveTextContent('Состояние задачи'));
-  // Один запрос, а не два: снимок кладётся и под свою версию, поэтому переезд ключа с
-  // «версии ещё нет» на настоящую не идёт в сеть.
+  // Один запрос, а не два: ключ снимка один, а версия, совпавшая с версией приехавшего снимка,
+  // его не инвалидирует.
   const first = calls.filter((c) => c.path === 'registry.effective').length;
   expect(first).toBe(1);
 
@@ -100,4 +101,66 @@ test('правка графа сама по себе реестр НЕ пере�
   fireEvent.click(screen.getByRole('button', { name: 'Перечитать' }));
   await waitFor(() => expect(calls.filter((c) => c.path === 'entity.get').length).toBe(2));
   expect(calls.filter((c) => c.path === 'registry.effective').length).toBe(before);
+});
+
+test('холодный старт: версия из entity.get приехала раньше снимка — запрос реестра один (новое-8)', async () => {
+  // Порядок ответов холодного старта экрана записи: `entity.get` быстрее четырёх словарей, и его
+  // версия приезжает, пока первый запрос реестра ещё в полёте. Ключ с версией переезжал бы в этот
+  // момент с «версии ещё нет» на настоящую — и уходил второй запрос за тем же снимком.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { calls } = renderWithProviders(<Probe />, async (path) => {
+    if (path === 'entity.get')
+      return { entity: { id: 'e1', title: 'Запись' }, registryVersion: '1.0' };
+    if (path === 'registry.effective') {
+      await gate;
+      return renamed('1.0', 'Состояние задачи');
+    }
+    return {};
+  });
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.get')).toBe(true));
+  // Кадр на то, чтобы версия дошла до читателей (эффект `useNoteRegistryVersion` чипа).
+  await act(() => new Promise((r) => setTimeout(r, 20)));
+  release();
+  await waitFor(() => expect(screen.getByTestId('label')).toHaveTextContent('Состояние задачи'));
+  await act(() => new Promise((r) => setTimeout(r, 20)));
+  expect(calls.filter((c) => c.path === 'registry.effective')).toHaveLength(1);
+});
+
+test('вторая версия, названная, пока снимок перечитывается под первую, не оставляет старый снимок', async () => {
+  // Перечитывание одно на версию (`refetchedFor`), поэтому версия 1.2, приехавшая, пока летит
+  // запрос под 1.1, обязана заменить его новым: слитая с летящим запросом, она осталась бы
+  // «уже перечитанной», а снимок — 1.1 до следующей смены версии.
+  let version = '1.0';
+  let hold: Promise<void> | null = null;
+  let release: () => void = () => {};
+  const { calls } = renderWithProviders(<Probe />, async (path) => {
+    if (path === 'entity.get')
+      return { entity: { id: 'e1', title: 'Запись' }, registryVersion: version };
+    if (path === 'registry.effective') {
+      // Сервер отвечает версией на момент ПРИЁМА запроса — задержка только в доставке.
+      const at = version;
+      if (hold !== null) await hold;
+      return renamed(at, at === '1.2' ? 'Стадия работы' : 'Состояние задачи');
+    }
+    return {};
+  });
+  const node = await screen.findByTestId('label');
+  await waitFor(() => expect(node).toHaveTextContent('Состояние задачи'));
+
+  hold = new Promise<void>((r) => {
+    release = r;
+  });
+  version = '1.1';
+  fireEvent.click(screen.getByRole('button', { name: 'Перечитать' }));
+  await waitFor(() => expect(calls.filter((c) => c.path === 'registry.effective').length).toBe(2));
+  version = '1.2';
+  fireEvent.click(screen.getByRole('button', { name: 'Перечитать' }));
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.get').length).toBe(3));
+  await act(() => new Promise((r) => setTimeout(r, 20)));
+  hold = null;
+  release();
+  await waitFor(() => expect(node).toHaveTextContent('Стадия работы'));
 });

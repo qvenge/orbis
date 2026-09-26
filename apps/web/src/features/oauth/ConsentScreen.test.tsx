@@ -96,7 +96,7 @@ test('экран называет агента заголовком и объя�
   expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
     'Claude Code просит доступ к Orbis',
   );
-  expect(screen.getByText(/читать и изменять ваши сущности/)).toBeInTheDocument();
+  expect(screen.getByText(/читать и изменять ваши записи/)).toBeInTheDocument();
   expect(screen.getByText(/потребуют подтверждения в чате/)).toBeInTheDocument();
   expect(screen.getByText(/отзывается/)).toBeInTheDocument();
 });

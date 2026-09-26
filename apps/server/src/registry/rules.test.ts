@@ -83,9 +83,10 @@ function codeSnapshot(): RegistrySnapshot {
  * (`run_subject`, `run_subject_forbidden`), условие гранта назначения парой
  * (`assignment_grant_required`, `assignment_grant_forbidden`), форма правила памяти
  * (`memory_rule_pattern`, `memory_rule_target`) и умолчание валюты конверта (`envelope_currency_default`);
- * срез 1а — пара страницы (`page_wins_over_needs_template_for`, `page_wins_over_not_self`).
+ * срез 1а — пара страницы (`page_wins_over_needs_template_for`, `page_wins_over_not_self`); срез 1б —
+ * умолчание статуса задачи (`task_status_default`, Б-2 №98).
  */
-const BUILTIN_RULE_COUNT = 22;
+const BUILTIN_RULE_COUNT = 23;
 const FIN: RuleCarrier = { kind: 'aspect', id: 'orbis/financial' };
 const TASK: RuleCarrier = { kind: 'aspect', id: 'orbis/task' };
 /** Код И `details.reason`: словарный VALIDATION без причины не адресует ничего. */

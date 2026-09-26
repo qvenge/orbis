@@ -614,7 +614,7 @@ function relTarget(of: string, ctx: CompileCtx): string {
     if (id === null) {
       return fail(
         'THIS_OUT_OF_CONTEXT',
-        'this вне контекста сущности: запрос вынесен из тела записи, подставлять нечего',
+        'this вне контекста записи: запрос вынесен из тела записи, подставлять нечего',
       );
     }
     return id;

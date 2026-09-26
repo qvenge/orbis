@@ -351,39 +351,22 @@ export function useRecordEdits(entityId: string, entity: Entity | undefined) {
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
 
   /**
-   * Чекбокс task (§3.6): `orbis/task_status` + `orbis/completed_at` (optimistic + откат при
-   * ошибке).
+   * Чекбокс task (§3.6): шлёт ТОЛЬКО смену статуса (optimistic + откат при ошибке).
    *
-   * СНЯТИЕ вопроса исполнителя (`orbis/waiting_for`) уезжает списком `unset`, а не `null` в
-   * значении: `null` — законное значение json-свойства (докблок `entityPropsPatch`), и
-   * прежняя карта аспектов совмещала их одним ключом. Обе стороны чекбокса требуют снятия
-   * одинаково: и `done`, и возврат в `inbox` уводят задачу ИЗ waiting, а патч свойств
-   * мержится по ключам — без явного снятия вопрос исполнителя пережил бы галочку и висел бы
-   * на закрытой задаче, читаясь как открытый. Сервер делает ровно это на ВСЕХ своих выходах
-   * из waiting (routers/agent-run.ts:129-131, agent-loop/sweep.ts:111); правка из UI не
-   * должна быть исключением. Для задачи, которая в waiting не была, снимать нечего — лишний
-   * `unset` ничего не меняет.
-   *
-   * Возврат в `inbox` снимает и `orbis/completed_at`: момент закрытия у открытой задачи —
-   * факт, которого не было.
-   *
-   * Возврат в `inbox` — ЛИТЕРАЛ, а не значение по умолчанию свойства: поля `default` у
-   * `propertyDefinitionSchema` нет вовсе (`registry/property-type.ts`), а класс `active`
-   * контракта `orbis/completable` отвечает на «открыта ли», а не «каким вариантом открыть» —
-   * вариантов у класса четыре (`inbox`, `planned`, `in_progress`, `waiting`), и выбрать из
-   * них контракт не может по построению. Р4 читается так (Р-К-18): `default` свойства
-   * приходит в Б-3, и тогда строка станет чтением реестра; до тех пор литерал назван вслух,
-   * а не спрятан.
+   * Всё остальное — правила каталога на сервере, а не копии на экране (Б-2 №70, №71, №98):
+   * штамп `orbis/completed_at` при входе в `done` и его снятие при уходе — правило
+   * `task_completed_at` (момент записи, а не часы клиента); снятие вопроса `orbis/waiting_for`
+   * при уходе из ожидания — правило `waiting_for`; значение возврата из закрытия — строка
+   * `default` каталога `task_status_default`. Поэтому снятие галочки — `unset` статуса, а не
+   * литерал `inbox`: какой вариант получит открытая задача, решают данные реестра, и владелец,
+   * сменивший умолчание, не упрётся в экран. Копия правила здесь расходилась бы с сервером.
    */
   function toggleTask(done: boolean) {
-    mutation.mutate({
-      id: entityId,
-      props: {
-        'orbis/task_status': done ? 'done' : 'inbox',
-        ...(done ? { 'orbis/completed_at': new Date().toISOString() } : {}),
-      },
-      unset: done ? ['orbis/waiting_for'] : ['orbis/completed_at', 'orbis/waiting_for'],
-    });
+    mutation.mutate(
+      done
+        ? { id: entityId, props: { 'orbis/task_status': 'done' } }
+        : { id: entityId, unset: ['orbis/task_status'] },
+    );
   }
 
   // Правки ТЕЛА здесь нет и быть не должно: тело уехало на автосохранение по паузе

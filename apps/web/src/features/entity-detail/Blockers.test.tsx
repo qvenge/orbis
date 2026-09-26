@@ -212,7 +212,7 @@ test('добавление блокировки: поиск через entity.su
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
 
   await waitFor(() =>
     expect(calls.find((c) => c.path === 'entity.suggest')?.input).toEqual({
@@ -241,7 +241,7 @@ test('добавление блокировки: направление «заб
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
 
   // Стороны переставлены: блокирует НАЙДЕННАЯ сущность, а текущая заблокирована ею.
@@ -284,7 +284,7 @@ test('пикер: быстрый ввод трёх символов даёт о�
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  const input = screen.getByLabelText('Поиск сущности');
+  const input = screen.getByLabelText('Поиск записи');
   fireEvent.change(input, { target: { value: 'На' } });
   fireEvent.change(input, { target: { value: 'Най' } });
   fireEvent.change(input, { target: { value: 'Найд' } });
@@ -311,7 +311,7 @@ test('пикер: подсказка до ввода, спиннер в полё
   // результате: оно врало бы про поиск, который берёт и неполные слова.
   expect(screen.queryByText(/целому слову|слово целиком/i)).toBeNull();
 
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Куп' } });
   expect(await screen.findByRole('status', { name: 'Поиск' })).toBeInTheDocument();
 
   release([]);
@@ -331,7 +331,7 @@ test('пикер: отказ поиска показан плашкой, а не
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Куп' } });
 
   expect(await screen.findByRole('alert')).toHaveTextContent(/не удалось выполнить поиск/i);
 });
@@ -351,7 +351,7 @@ test('цикл blocks: серверный отказ показан плашко
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
 
   // Путь цикла доезжает до клиента только в message (K17: cause по HTTP не сериализуется)
@@ -368,7 +368,7 @@ test('форма: после создания связи направление 
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
 
   await waitFor(() => expect(screen.queryByLabelText('Направление блокировки')).toBeNull());
@@ -419,7 +419,7 @@ test('плашка: ошибка снятия сменяет ошибку соз
   expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(/замкнула бы цикл/);
 
@@ -442,7 +442,7 @@ test('пикер: закрытая задача не предлагается б
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'блокер' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'блокер' } });
   expect(await screen.findByRole('button', { name: 'Закрытый блокер' })).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -495,7 +495,7 @@ test('создание блокировки инвалидирует entity.quer
   await waitFor(() => expect(probes()).toHaveLength(1));
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.change(screen.getByLabelText('Поиск записи'), { target: { value: 'Найд' } });
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
 
   await waitFor(() => expect(probes().length).toBeGreaterThan(1));

@@ -45,7 +45,7 @@ import type { RegistrySnapshot } from '../registry/load';
 import { disableSystemRuleDelta } from '../registry/ops';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
-import { decideDeferredUnit } from '../routines/lifecycle';
+import { decideAllDeferred, decideDeferredUnit } from '../routines/lifecycle';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { createCallerFactory } from '../trpc';
 import {
@@ -4611,7 +4611,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01');
   });
 
-  test('decideDeferredUnit поверх снятой декларации → already/rejected, исключения нет', async () => {
+  test('decideDeferredUnit поверх снятой декларации → already/rejected с причиной stale, исключения нет', async () => {
     const owner = await freshGraph();
     const { ctx } = await actionCtx(owner);
     const ids = await seedOverdue(owner, 11);
@@ -4624,13 +4624,37 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     );
     // Путь с экрана пачки идёт через `approvePending` (`lifecycle.ts`, `approveUnit`), значит своей
     // ветки «Устарело» ему не нужно: отказ — не расхождение предусловий (`divergenceOf` → null), а
-    // судьба у единицы уже есть, и `unitFate` отвечает `already`.
+    // судьба у единицы уже есть, и `unitState` отвечает `already`. Причина `stale` едет с судьбой
+    // (Б-2 №74): без неё экран писал «уже решена — отклонено» там, где владелец ничего не отклонял.
     expect(
       await decideDeferredUnit(
         { db, clock: () => T0 },
         { identity: personal(owner), pendingId: unit.pendingId, decision: 'approve' },
       ),
-    ).toEqual({ status: 'already', fate: 'rejected' });
+    ).toEqual({ status: 'already', fate: 'rejected', reason: 'stale' });
+    expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01');
+  });
+
+  test('«Принять все» по пачке, где единицу гасит устаревшая декларация уже после чтения пачки → already с причиной stale', async () => {
+    // Место — здесь, а не в `routine.test.ts`: снять декларацию действия умеет только обвязка этого
+    // блока (`patchAction` с возвратом строки в afterEach). Пачка читается `listRunUnits` ДО решения —
+    // единица в ней открыта; гасит её `approvePending` внутри решения, и сводка обязана назвать
+    // причину, а не голое «уже решено» (Б-2 №74).
+    const owner = await freshGraph();
+    const { ctx, runId } = await actionCtx(owner);
+    const ids = await seedOverdue(owner, 11);
+    const unit = await postpone(ctx);
+    if (unit.status !== 'pending_confirmation') throw new Error('единица не поставлена');
+    await patchAction(
+      owner,
+      sql`UPDATE action_definitions SET status = 'deprecated'
+      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+    );
+    expect(
+      await decideAllDeferred({ db, clock: () => T0 }, { identity: personal(owner), runId }),
+    ).toEqual([
+      { pendingId: unit.pendingId, status: 'already', fate: 'rejected', reason: 'stale' },
+    ]);
     expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01');
   });
 

@@ -39,8 +39,10 @@ export const UNIT_REJECT_NOTES: Record<UnitRejectReason, string> = {
 export const QUESTION_STALE_NOTE = 'снят следующим прогоном';
 
 /**
- * Судьба единицы одним словом — для подписи «решать было нечего» (исход `already`, где сервер
- * отдаёт только `fate`, без причины). Record по союзу судеб: новая судьба упадёт сборкой.
+ * Судьба единицы одним словом — общее слово по одному `fate`. Там, где причина известна
+ * (отклонённое действие), точнее `actionFateNote`: ответ `already` несёт `fate + reason` с Б-2
+ * №74, и подпись «решать было нечего» строит `alreadyNote` по паре. Record по союзу судеб:
+ * новая судьба упадёт сборкой.
  */
 export const UNIT_FATE_NOTES: Record<UnitFate, string> = {
   open: 'ждёт решения',
@@ -64,6 +66,22 @@ export function actionFateNote(unit: Pick<RunUnitView, 'fate' | 'reason'>): stri
   // `rejected` с причиной `stale`). Печатаем общее слово, а не молчим: молчание на
   // невозможном состоянии — это единица без подписи, то есть исчезнувшая для владельца.
   return UNIT_FATE_NOTES[unit.fate];
+}
+
+/**
+ * Исход `already` для действия, погашенного как устаревшее (`ACTION_STALE`: декларацию сняли или
+ * изменили). Своя строка, а не «уже решена — устарело»: владелец ничего не решал, и слово «решена»
+ * было бы про чужое решение, которого не было (Б-2 №74).
+ */
+export const ALREADY_STALE_NOTE = 'Устарело — решать было нечего: действие больше не применимо';
+
+/**
+ * Подпись ответа `already` («решать было нечего») — по ПАРЕ `fate + reason`, как и строка-итог:
+ * без причины действие, погашенное как устаревшее, читалось бы «отклонено».
+ */
+export function alreadyNote(unit: { fate: UnitFate; reason?: UnitRejectReason }): string {
+  if (unit.fate === 'rejected' && unit.reason === 'stale') return ALREADY_STALE_NOTE;
+  return `Решать было нечего: единица уже решена — ${actionFateNote(unit) ?? UNIT_FATE_NOTES[unit.fate]}`;
 }
 
 /**

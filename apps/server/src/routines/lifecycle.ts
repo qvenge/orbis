@@ -2177,8 +2177,14 @@ export type DecideDeferredResult =
   /** Предусловия единицы (ОЧ.13) разошлись с графом; карточка при этом уже погашена. */
   | { status: 'stale'; mismatches: PreconditionMismatch[]; bodyChanged: boolean }
   | { status: 'rejected' }
-  /** Судьба у единицы уже есть — своя (повтор кнопки) или чужая (гашение, второй экран). */
-  | { status: 'already'; fate: RunUnit['fate'] };
+  /**
+   * Судьба у единицы уже есть — своя (повтор кнопки) или чужая (гашение, второй экран).
+   * `reason` — только у `fate:'rejected'`: `'owner' | 'stale' | 'superseded' | 'edited'`. Подпись
+   * экрана — по паре `fate + reason` (как у `RunUnit`), Б-2 №74: без причины действие, погашенное
+   * как устаревшее (`ACTION_STALE`), читалось бы «уже решено — отклонено», хотя владелец его не
+   * отклонял.
+   */
+  | { status: 'already'; fate: RunUnit['fate']; reason?: RejectReason };
 
 /**
  * Тексты судеб, которые пишет РУКА ВЛАДЕЛЬЦА (С6 ревью спеки). Свои, а не `REJECT_CONTENT`
@@ -2323,8 +2329,14 @@ async function approveUnit(
     // Не «устарело». Часть таких отказов означает не сбой, а ЧУЖОЙ ХОД: единицу успели
     // отклонить (гашение новым прогоном, второй экран) между чтением и approve. Отличаем
     // по факту, а не по тексту: если у единицы с тех пор есть судьба, это `already`.
-    const fate = await unitFate(deps, args);
-    if (fate !== undefined && fate !== 'open') return { status: 'already', fate };
+    const s = await unitState(deps, args);
+    if (s !== undefined && s.fate !== 'open') {
+      return {
+        status: 'already',
+        fate: s.fate,
+        ...(s.reason !== undefined && { reason: s.reason }),
+      };
+    }
     throw toExecError(applied.error);
   }
 
@@ -2344,7 +2356,7 @@ async function approveUnit(
     console.error(`[routines] устаревшая единица ${pendingId} не погашена:`, rejected.error.code);
   } else if (rejected.alreadyRejected && rejected.reason !== 'stale') {
     // Пока мы ревалидировали, единицу снял кто-то другой — его решение старше нашего
-    return { status: 'already', fate: 'rejected' };
+    return { status: 'already', fate: 'rejected', reason: rejected.reason };
   }
   return { status: 'stale', ...divergence };
 }
@@ -2364,14 +2376,20 @@ async function rejectUnit(
   if (!rejected.ok) {
     // «Уже исполнено» приезжает сюда отказом (VALIDATION) — для владельца, нажавшего
     // «Отклонить» на применённой единице, это не сбой, а «поздно»
-    const fate = await unitFate(deps, args);
-    if (fate !== undefined && fate !== 'open') return { status: 'already', fate };
+    const s = await unitState(deps, args);
+    if (s !== undefined && s.fate !== 'open') {
+      return {
+        status: 'already',
+        fate: s.fate,
+        ...(s.reason !== undefined && { reason: s.reason }),
+      };
+    }
     throw toExecError(rejected.error);
   }
   // Повтор своей же кнопки и чужая причина отвечают одинаково: судьба уже записана, и
   // переписывать её нечем (журнал append-only). ЧЬЯ она — читается пачкой (`reason`).
   return rejected.alreadyRejected
-    ? { status: 'already', fate: 'rejected' }
+    ? { status: 'already', fate: 'rejected', reason: rejected.reason }
     : { status: 'rejected' };
 }
 
@@ -2485,18 +2503,24 @@ async function settleUndecided(
   }
 }
 
-/** Судьба ОДНОЙ единицы — перечитывается после проигранной гонки (образец `currentStatus`). */
-async function unitFate(
+/**
+ * Судьба ОДНОЙ единицы и её причина — перечитываются после проигранной гонки (образец
+ * `currentStatus`). Причина едет вместе с судьбой (Б-2 №74): `RunUnit.reason` её уже несёт, и
+ * экран без неё не отличил бы «отклонено владельцем» от «погашено как устаревшее».
+ */
+async function unitState(
   deps: RoutineWriteDeps,
   args: { identity: Identity; pendingId: string; runId: string; isAction: boolean },
-): Promise<RunUnit['fate'] | undefined> {
+): Promise<Pick<RunUnit, 'fate' | 'reason'> | undefined> {
   // Вопросу перечитка не положена: его отказ — это гейт рода (С7), а не проигранная
   // гонка, и «уже отвечен» на approve означало бы «решено», хотя решать так нельзя вовсе
   if (!args.isAction) return undefined;
   const units = await withIdentity(deps.db, args.identity, (tx) =>
     listRunUnits(tx, args.identity.graph, args.runId),
   );
-  return units.find((u) => u.pendingId === args.pendingId)?.fate;
+  const unit = units.find((u) => u.pendingId === args.pendingId);
+  if (unit === undefined) return undefined;
+  return { fate: unit.fate, ...(unit.reason !== undefined && { reason: unit.reason }) };
 }
 
 /** Единица пачки в объёме, который нужен решениям: род, прогон и варианты ответа. */
