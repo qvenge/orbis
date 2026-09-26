@@ -49,7 +49,7 @@
 import {
   type ActionDefinition,
   type AspectDefinition,
-  actionDefinitionSchema,
+  actionDefinitionReadSchema,
   aspectDefinitionSchema,
   type ContractDefinition,
   contractDefinitionSchema,
@@ -300,7 +300,9 @@ export async function loadRegistryRows(tx: Tx, graphId: GraphId): Promise<Regist
   for (const r of actionRows) {
     actions.set(
       r.id as string,
-      actionDefinitionSchema.parse({
+      // Схема ЧТЕНИЯ: поверхность `offered_by` — свободный текст (R-7; довод — докблок
+      // `actionDefinitionReadSchema`): снятая 1б голова поверхности не роняет снимок графа.
+      actionDefinitionReadSchema.parse({
         id: r.id,
         graphId: r.graph_id,
         key: r.key,

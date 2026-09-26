@@ -83,4 +83,18 @@ export const actionDefinitionSchema = z
   })
   .strict();
 export type ActionDefinition = z.infer<typeof actionDefinitionSchema>;
+
+/**
+ * Схема ЧТЕНИЯ строки действия (`registry/load.ts`) — та же форма, но `offered_by.surface` —
+ * свободный текст (R-7, фикс гейта задачи 5). Словарь поверхностей стережёт ЗАПИСЬ (`action_set`,
+ * сид — `actionDefinitionSchema` выше), а не чтение: 1б сняла головы `planner/`, `ade/`, `memory/`,
+ * и строка владельца, законно заведённая до 1б, на чтении регэкспом записи уронила бы снимок графа
+ * целиком — ни одного тула у владельца. Тот же приём, что у подписок (`SubscriptionRow.surface`,
+ * `load.ts`): неизвестная поверхность просто никем не обслуживается, и действие на ней не предлагается.
+ */
+export const actionDefinitionReadSchema = actionDefinitionSchema.extend({
+  offered_by: z
+    .array(actionOfferSchema.extend({ surface: z.string().min(1).optional() }))
+    .default([]),
+});
 export type ActionDefinitionInput = z.input<typeof actionDefinitionSchema>;

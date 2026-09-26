@@ -12,6 +12,7 @@ import {
   CONTRACT_IDS,
   RELATION_ROLE_IDS,
   type RuleDefinition,
+  SURFACES,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
@@ -242,6 +243,36 @@ test('своё действие с NULL в params/sensitivity/offered_by дое�
       effectiveRegistry(tx, stranger),
     );
     expect(other.actions.has('user/bare')).toBe(false);
+  } finally {
+    await admin.execute(sql`DELETE FROM action_definitions WHERE graph_id = ${owner}::uuid`);
+    await bumpOwnerRegistryVersion(admin, owner);
+    await client.end();
+  }
+});
+
+// R-7 (фикс гейта задачи 5, I-1): словарь поверхностей стережёт ЗАПИСЬ действия, а не чтение. До 1б
+// `action_set` пускал `offered_by.surface: 'planner/agenda'`; 1б сняла голову `planner/`, и строка,
+// разобранная на чтении регэкспом записи, уронила бы снимок графа целиком — ни одного тула у владельца.
+test('своё действие с поверхностью снятой головы (planner/agenda) читается: снимок жив, на поверхностях его нет', async () => {
+  const { db: admin, client } = adminDb();
+  try {
+    await admin.execute(sql`
+      INSERT INTO action_definitions (id, graph_id, key, label, description, steps, offered_by, rank)
+      VALUES ('user/old-offer', ${owner}::uuid, 'user/old-offer', '{"ru":"Старое"}'::jsonb,
+              '{"ru":"Старое"}'::jsonb, '[{"tool":"entity_update","input":{}}]'::jsonb,
+              '[{"surface":"planner/agenda"}]'::jsonb, 901)`);
+    await bumpOwnerRegistryVersion(admin, owner);
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    // Снимок построен целиком: встроенные действия и подписки на месте.
+    for (const a of BUILTIN_ACTION_DEFS) expect(reg.actions.has(a.id)).toBe(true);
+    expect([...reg.subscriptions.keys()]).toEqual(['orbis/agenda', 'orbis/budget-overview']);
+    const old = reg.actions.get('user/old-offer');
+    expect(old?.offered_by).toEqual([{ surface: 'planner/agenda' }]);
+    // Ни на одной поверхности словаря действие не предложено: его поверхность словарю неизвестна.
+    const offered = (old?.offered_by ?? []).flatMap((o) =>
+      o.surface === undefined ? [] : [o.surface],
+    );
+    expect(offered.filter((s) => (SURFACES as readonly string[]).includes(s))).toEqual([]);
   } finally {
     await admin.execute(sql`DELETE FROM action_definitions WHERE graph_id = ${owner}::uuid`);
     await bumpOwnerRegistryVersion(admin, owner);

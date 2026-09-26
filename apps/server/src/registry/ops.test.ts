@@ -1486,6 +1486,27 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
     ).toEqual(['VALIDATION', 'EXPR_TOO_DEEP']);
   });
 
+  // R-7 (фикс гейта задачи 5): словарь поверхностей стережёт ЗАПИСЬ — снятая в 1б голова `planner/`
+  // своим действием больше не заводится, хотя строка с ней, уже лежащая в базе, снимок не роняет
+  // (`registry/load.test.ts`).
+  test('action_set с offered_by на снятой голове поверхности (planner/agenda) — отказ записи; core/agenda — законна', async () => {
+    const owner = await freshGraph();
+    const runAs = (tool: string, input: unknown) =>
+      execute(db, {
+        identity: personal(owner),
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      });
+    const refused = err(
+      await runAs('action_set', { ...DECL, offered_by: [{ surface: 'planner/agenda' }] }),
+    );
+    expect(refused.code).toBe('VALIDATION');
+    const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
+    expect(reg.actions.has('user/close-month')).toBe(false); // запись не случилась
+    ok(await runAs('action_set', { ...DECL, offered_by: [{ surface: 'core/agenda' }] }));
+  });
+
   test('заголовок журнала снятия — ПОДПИСЬ действия, а не ключ (фикс-раунд 1, m-3)', async () => {
     const owner = await freshGraph();
     const runAs = (tool: string, input: unknown) =>
