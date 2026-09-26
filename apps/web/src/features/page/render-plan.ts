@@ -60,18 +60,19 @@ export function renderIssues(
 /**
  * Обход РИСУЕМЫХ узлов: узел с плашкой не показан, и в его части обход не спускается. Карточка в
  * неуместном или сломанном месте не рисуется — считать её размещённой значило бы потерять её
- * совсем, ни на месте, ни в конце.
+ * совсем, ни на месте, ни в конце. Путь узла — тому, кто ставит плашку сам (план рендера:
+ * вторая карточка аспекта, узнанная только с реестром).
  */
 export function forEachRendered(
   nodes: readonly PageNode[],
   issues: ReadonlyMap<string, PlacementIssue>,
-  fn: (node: PageNode) => void,
+  fn: (node: PageNode, path: readonly number[]) => void,
 ): void {
   const visit = (list: readonly PageNode[], prefix: readonly number[]) => {
     list.forEach((node, i) => {
       const path = [...prefix, i];
       if (issues.has(pathKey(path))) return;
-      fn(node);
+      fn(node, path);
       for (const [p, part] of partsOf(node).entries()) visit(part, [...path, p]);
     });
   };

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { invalidateGraph } from '../../lib/invalidate';
+import { openEntity } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -214,11 +215,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     sweep.mutate({});
   }, [entityId, sweepTarget, sweep.mutate]);
 
-  async function copyLink() {
+  // `id` — не всегда запись экрана: в настройке чужого шаблона ссылка — на шаблон (№87).
+  async function copyLink(id: string = entityId) {
     // Форму пути знает ТОЛЬКО buildAppPath (B1): собранная здесь руками строка разъехалась
     // бы с роутером при первой же правке таблицы маршрутов, и ссылки из чужих писем вели
     // бы в никуда. origin делает её абсолютной — ссылку отправляют наружу, а не внутрь SPA.
-    const url = `${window.location.origin}${buildAppPath({ kind: 'entity', id: entityId })}`;
+    const url = `${window.location.origin}${buildAppPath({ kind: 'entity', id })}`;
     try {
       // Обращение к navigator.clipboard намеренно внутри try: когда API нет вовсе,
       // это TypeError — та же беда для пользователя, что и отклонённое разрешение.
@@ -226,6 +228,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       setManualLink(null);
       show('Ссылка скопирована');
     } catch {
+      // Запасная ссылка живёт при ЭКРАНЕ (`manualLink.id === entityId` ниже), а не при цели.
       setManualLink({ id: entityId, url });
     }
   }
@@ -259,6 +262,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // только по пункту «Предпросмотр на записи…».
   const isTemplate = isPage && bodyKindOf(entity) === 'template';
   const configure = (targetId: string) => setMode({ kind: 'configure', targetId });
+  // Настройка ЧУЖОГО шаблона («Настроить шаблон „X“» с записи): запись под ним не видна, и меню —
+  // про шаблон (№87). Своя страница в настройке — та же запись экрана, её пункты законны.
+  const configuringId =
+    mode?.kind === 'configure' && mode.targetId !== entity.id ? mode.targetId : null;
 
   return (
     <TabMemoryProvider value={tabs}>
@@ -286,7 +293,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                 });
               }}
               onArchive={() => setArchived(!entity.archived)}
-              onCopyLink={() => void copyLink()}
+              onCopyLink={() => void copyLink(configuringId ?? entityId)}
               onPinVersion={() => setPinVersion(true)}
               // Без документа пункта НЕТ вовсе. Показать его — значит предложить действие,
               // которое молча ничего не делает, а флаг после нажатия остался бы поднятым: приедь
@@ -301,24 +308,31 @@ export function DetailScreen({ entityId }: { entityId: string }) {
               entity={entity}
               bodyGate={bodyGate}
               view={
-                isPage
+                configuringId !== null
                   ? {
-                      kind: 'page',
-                      asRecord,
-                      onOpenAsRecord: () => setOpenVia(HOST_VIEW),
-                      onConfigure: () => configure(entity.id),
-                      ...(!isTemplate && { onPreview: () => setMode({ kind: 'preview' }) }),
+                      kind: 'configuring',
+                      templateTitle:
+                        templates.rows.find((r) => r.id === configuringId)?.title ?? '…',
+                      onOpenTemplate: () => openEntity(configuringId),
                     }
-                  : {
-                      kind: 'record',
-                      shown: recordShown?.entityId === entity.id ? recordShown : null,
-                      templates,
-                      onOpenVia: (templateId) =>
-                        setOpenVia(templateId === 'host' ? HOST_VIEW : { templateId }),
-                      onChangeDispute: (contenders) =>
-                        setDisputeRequest((prev) => ({ contenders, n: (prev?.n ?? 0) + 1 })),
-                      onConfigureTemplate: configure,
-                    }
+                  : isPage
+                    ? {
+                        kind: 'page',
+                        asRecord,
+                        onOpenAsRecord: () => setOpenVia(HOST_VIEW),
+                        onConfigure: () => configure(entity.id),
+                        ...(!isTemplate && { onPreview: () => setMode({ kind: 'preview' }) }),
+                      }
+                    : {
+                        kind: 'record',
+                        shown: recordShown?.entityId === entity.id ? recordShown : null,
+                        templates,
+                        onOpenVia: (templateId) =>
+                          setOpenVia(templateId === 'host' ? HOST_VIEW : { templateId }),
+                        onChangeDispute: (contenders) =>
+                          setDisputeRequest((prev) => ({ contenders, n: (prev?.n ?? 0) + 1 })),
+                        onConfigureTemplate: configure,
+                      }
               }
             />
           }

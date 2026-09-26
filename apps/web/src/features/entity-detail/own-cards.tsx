@@ -66,12 +66,18 @@ function GoalCard() {
  * история прогонов. Карточка стоит и у простой задачи без назначения (см. `showWhen` в
  * объявлении), поэтому тикет — это задача И назначение, как у экрана записи: у назначения без
  * задачи и у задачи без назначения прогонов не бывает, и платить за них запросом не за что.
+ *
+ * История прогонов — одна на запись (остаток 1а №29): у тикета, который сам рутина, она — часть
+ * карточки рутины, как моделирует `ownCardParts(isRoutine)` (`intended-1a.ts`). Шаблон, не
+ * поставивший карточку рутины, получит её дописыванием хоста или `{{cards}}` (§8.3 1а). Запрос
+ * прогонов остаётся: последний прогон нужен ожиданию тикета.
  */
 function AssignmentOwnCard() {
   const { entity } = useRecordHost();
   const push = useNav((s) => s.push);
   const navTab = useNav((s) => s.activeTab);
   const isTicket = entity.aspects.includes(TASK) && entity.aspects.includes(ASSIGNMENT);
+  const isRoutine = entity.aspects.includes(ROUTINE_ASPECT);
   const { runs, lastRun } = useTicketRuns(entity.id, isTicket);
   return (
     <div className={CARD_CLASS}>
@@ -81,7 +87,7 @@ function AssignmentOwnCard() {
       {isTicket && (
         <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
       )}
-      {isTicket && (
+      {isTicket && !isRoutine && (
         <RunsList
           parentId={entity.id}
           runs={runs}

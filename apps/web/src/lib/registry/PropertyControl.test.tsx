@@ -5,12 +5,12 @@
 // доказывалось бы вариантом, которого в проде нет.
 import { BUILTIN_PROPERTY_META, type PropertyDefinition } from '@orbis/shared';
 import { fireEvent, screen } from '@testing-library/react';
-import { expect, test, vi } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { controlKindOf, parseControlValue, writeModeOf } from './controls';
 import { displayText } from './format';
-import { PropertyControl } from './PropertyControl';
+import { AspectsManyControl, PropertyControl } from './PropertyControl';
 
 function def(id: string): PropertyDefinition {
   const found = BUILTIN_PROPERTY_META.find((p) => p.id === id);
@@ -304,4 +304,54 @@ test('показ registry_ref аспектов — подписями, если 
     'Проект, Задача',
   );
   expect(displayText(def('orbis/template_for'), ['orbis/project'])).toBe('orbis/project');
+});
+
+describe('скрытый выбранный аспект виден и снимается (остаток 1а №31)', () => {
+  const offered = (a: { service?: boolean }) => !a.service;
+  const chipOf = (text: string) => {
+    const label = screen.getByText(text).closest('label');
+    if (label === null) throw new Error(`чип «${text}» — не метка`);
+    return label;
+  };
+
+  test('служебный аспект в значении — чипом с пометкой «скрытый»; клик снимает его', async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <AspectsManyControl
+        def={def('orbis/template_for')}
+        label="Шаблон для"
+        value={['orbis/task', 'orbis/agent-run']}
+        onChange={onChange}
+        offered={offered}
+      />,
+      withRegistry,
+    );
+    await screen.findByRole('checkbox', { name: 'Задача' });
+    const hidden = chipOf('Прогон агента');
+    expect(hidden).toHaveAttribute('data-hidden', 'true');
+    expect(hidden).toHaveAttribute('data-state', 'on');
+    expect(hidden).toHaveTextContent('скрытый');
+    expect(chipOf('Задача')).toHaveAttribute('data-state', 'on');
+    expect(chipOf('Задача')).not.toHaveAttribute('data-hidden');
+    fireEvent.click(screen.getByRole('checkbox', { name: /Прогон агента/ }));
+    expect(onChange).toHaveBeenLastCalledWith(['orbis/task']);
+  });
+
+  test('id вне снимка — чипом с сырым id, снимается так же', async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <AspectsManyControl
+        def={def('orbis/template_for')}
+        label="Шаблон для"
+        value={['orbis/task', 'user/нет']}
+        onChange={onChange}
+        offered={offered}
+      />,
+      withRegistry,
+    );
+    await screen.findByRole('checkbox', { name: 'Задача' });
+    expect(chipOf('user/нет')).toHaveAttribute('data-hidden', 'true');
+    fireEvent.click(screen.getByRole('checkbox', { name: /user\/нет/ }));
+    expect(onChange).toHaveBeenLastCalledWith(['orbis/task']);
+  });
 });

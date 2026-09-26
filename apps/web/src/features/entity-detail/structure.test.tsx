@@ -10,12 +10,21 @@
  * Съёмка — `structure.capture.test.tsx` (по `CAPTURE=1`); этот файл только сверяет.
  */
 import { BUILTIN_ASPECT_IDS } from '@orbis/shared';
+import { screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { installCrashTrap } from '../../test/harness';
+import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { queryClient } from '../../trpc';
+import { DetailScreen } from './DetailScreen';
 import goldenRequests from './golden/detail-requests.json';
 import goldenStructure from './golden/detail-structure.json';
 import { INTENDED_1A } from './intended-1a';
-import { captureDetail, STRUCTURE_FIXTURES, type StructureFixture } from './structure-fixtures';
+import {
+  captureDetail,
+  STRUCTURE_FIXTURES,
+  type StructureFixture,
+  structureHandler,
+  TICKET_ROUTINE_FIXTURE,
+} from './structure-fixtures';
 import type { DetailStructure } from './structure-snapshot';
 
 installCrashTrap();
@@ -137,4 +146,21 @@ describe('INTENDED_1A(эталон) = экран (С1а-5, С1а-6)', () => {
       expect(got.requests).toEqual(withTemplatesList(requests[f.name] ?? {}));
     });
   }
+});
+
+test('«тикет + рутина»: история прогонов одна — в карточке рутины (остаток 1а №29)', async () => {
+  // Не через эталон: фикстуры в нём нет и не будет (РП-24) — дубль ловится прямо.
+  const f = TICKET_ROUTINE_FIXTURE;
+  renderWithProviders(<DetailScreen entityId={f.entity.id} />, structureHandler(f), {
+    queries: queryClient.getDefaultOptions().queries,
+  });
+  const status = await screen.findByTestId('routine-status');
+  await screen.findByTestId('ticket-waiting');
+  await waitFor(() => expect(screen.getAllByTestId('runs-list').length).toBeGreaterThan(0));
+  const lists = screen.getAllByTestId('runs-list');
+  expect(lists).toHaveLength(1);
+  // Та, что в карточке рутины, — после её состояния, а не в карточке назначения над ним.
+  expect(
+    status.compareDocumentPosition(lists[0] as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
 });

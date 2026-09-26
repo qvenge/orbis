@@ -21,6 +21,7 @@ import { ProposalCard } from '../chat/cards/ProposalCard';
 import { num, obj, str } from './aspect-read';
 import { RoutineQuestionBlock } from './RoutineQuestionBlock';
 import { RunDecisionsBlock } from './RunDecisionsBlock';
+import { useHostReadOnly } from './record-host';
 import { RUN_OUTCOME_LABELS } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -154,6 +155,9 @@ function TextBlock({
 }
 
 export function RunFeed({ entity }: { entity: Entity }) {
+  // Предпросмотр шаблона (хост `readOnly`): лента прогона видна целиком, отката и карточки
+  // предложения с «Принять»/«Отклонить» нет — вместо карточки её проза (отчёт).
+  const readOnly = useHostReadOnly();
   const utils = trpc.useUtils();
   const [confirm, setConfirm] = useState(false);
   const cancelId = useId();
@@ -372,13 +376,13 @@ export function RunFeed({ entity }: { entity: Entity }) {
           читают одно поле, — но пока аспект в кэше отстаёт от перечитанного предложения,
           карточка честно скажет «заменено» вместо чужих кнопок. `threadId` не передаётся:
           у экрана прогона ленты нет, инвалидировать нечего (рулинг П-5). */}
-      {proposal !== undefined && (
+      {proposal !== undefined && !readOnly && (
         <ProposalCard runId={entity.id} pendingId={str(proposal.pending_id)} />
       )}
       {/* Отчёт прогона-предложения — ТА ЖЕ проза, что и в карточке: `orbis_propose` кладёт
           `explanation` обоими путями (routines/propose.ts), и второй раз она читалась бы как
           второе объяснение. У прогонов без предложения отчёт — единственный носитель итога. */}
-      {report !== undefined && proposal === undefined && (
+      {report !== undefined && (proposal === undefined || readOnly) && (
         <TextBlock title="Отчёт" text={report} tz={tz} />
       )}
       {abandonNote !== undefined && (
@@ -391,84 +395,86 @@ export function RunFeed({ entity }: { entity: Entity }) {
         <TextBlock title="Почему прогон сорвался" text={failNote} tz={tz} />
       )}
 
-      <div className="flex flex-col gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="self-start"
-          disabled={alive || inArchive || rollback.isPending}
-          onClick={() => setConfirm(true)}
-        >
-          Откатить прогон в Orbis
-        </Button>
-        {inArchive ? (
-          // Нейтрально и намеренно: архив бывает и следом отката, и жестом владельца из меню ⋮
-          // (см. inArchive). «Прогон откачен» на втором пути было бы неправдой.
-          <p className="text-text-muted text-xs">Прогон в архиве — откат недоступен.</p>
-        ) : (
-          alive && (
-            <p className="text-text-muted text-xs">
-              Прогон ещё идёт: откатывать его нечего — исполнитель допишет поверх отката.
-            </p>
-          )
-        )}
-        {rollback.isError && (
-          <p role="alert" className="text-danger text-sm">
-            {rollback.error.message}
-          </p>
-        )}
-        {result !== undefined && (
-          <div
-            // Результат приезжает ПОСЛЕ жеста, и фокус в этот момент стоит на кнопке отката:
-            // без живой области скринридер не сказал бы о нём ни слова. `status`, а не `alert`:
-            // у успеха и у конфликта одна и та же цена внимания, а перебивать чтение нечем.
-            role="status"
-            data-testid="rollback-result"
-            className="flex flex-col gap-2 rounded-control border border-line bg-surface-2/40 p-3 text-sm"
+      {!readOnly && (
+        <div className="flex flex-col gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="self-start"
+            disabled={alive || inArchive || rollback.isPending}
+            onClick={() => setConfirm(true)}
           >
-            {result.ok ? (
-              <>
-                {/* Текст про репозиторий приходит С СЕРВЕРА (agent-loop/rollback.ts): граница
+            Откатить прогон в Orbis
+          </Button>
+          {inArchive ? (
+            // Нейтрально и намеренно: архив бывает и следом отката, и жестом владельца из меню ⋮
+            // (см. inArchive). «Прогон откачен» на втором пути было бы неправдой.
+            <p className="text-text-muted text-xs">Прогон в архиве — откат недоступен.</p>
+          ) : (
+            alive && (
+              <p className="text-text-muted text-xs">
+                Прогон ещё идёт: откатывать его нечего — исполнитель допишет поверх отката.
+              </p>
+            )
+          )}
+          {rollback.isError && (
+            <p role="alert" className="text-danger text-sm">
+              {rollback.error.message}
+            </p>
+          )}
+          {result !== undefined && (
+            <div
+              // Результат приезжает ПОСЛЕ жеста, и фокус в этот момент стоит на кнопке отката:
+              // без живой области скринридер не сказал бы о нём ни слова. `status`, а не `alert`:
+              // у успеха и у конфликта одна и та же цена внимания, а перебивать чтение нечем.
+              role="status"
+              data-testid="rollback-result"
+              className="flex flex-col gap-2 rounded-control border border-line bg-surface-2/40 p-3 text-sm"
+            >
+              {result.ok ? (
+                <>
+                  {/* Текст про репозиторий приходит С СЕРВЕРА (agent-loop/rollback.ts): граница
                     «Orbis откачен, git не тронут» — свойство механизма, и второй её копии в
                     UI быть не должно, иначе они разъедутся первой же правкой. */}
-                <p>{result.note}</p>
-                <p className="text-text-secondary">Откачено действий: {result.undone.length}</p>
-              </>
-            ) : result.reason === 'conflict' ? (
-              <>
-                <p>
-                  Ничего не откачено: после прогона эти записи трогали помимо него — откат стёр бы
-                  чужую работу.
-                </p>
-                <ul className="flex flex-col gap-1">
-                  {result.conflicts.map((c) => (
-                    <li
-                      key={`${c.actionId}-${c.entityId}`}
-                      className="flex flex-wrap items-baseline gap-2 text-text-secondary"
-                    >
-                      {/* Заголовком, а не uuid: по нему человек решает, чем он готов
+                  <p>{result.note}</p>
+                  <p className="text-text-secondary">Откачено действий: {result.undone.length}</p>
+                </>
+              ) : result.reason === 'conflict' ? (
+                <>
+                  <p>
+                    Ничего не откачено: после прогона эти записи трогали помимо него — откат стёр бы
+                    чужую работу.
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {result.conflicts.map((c) => (
+                      <li
+                        key={`${c.actionId}-${c.entityId}`}
+                        className="flex flex-wrap items-baseline gap-2 text-text-secondary"
+                      >
+                        {/* Заголовком, а не uuid: по нему человек решает, чем он готов
                           пожертвовать (или что откатить руками, прежде чем повторить). */}
-                      <EntityRef id={c.entityId} />
-                      <time dateTime={c.at}>{formatDate(c.at, tz)}</time>
-                      <Badge>{SOURCE_LABELS[c.source] ?? c.source}</Badge>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : (
-              <>
-                {/* Частичный откат — САМОЕ важное сообщение из трёх: граф уже смешанный, и
+                        <EntityRef id={c.entityId} />
+                        <time dateTime={c.at}>{formatDate(c.at, tz)}</time>
+                        <Badge>{SOURCE_LABELS[c.source] ?? c.source}</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <>
+                  {/* Частичный откат — САМОЕ важное сообщение из трёх: граф уже смешанный, и
                     молчание о нём читалось бы как «ничего не произошло». */}
-                <p>
-                  Откачено действий: {result.undone.length}, дальше отказ на действии{' '}
-                  <span className="font-mono text-xs">{result.failed.actionId}</span>.
-                </p>
-                <p className="text-danger">{result.failed.error.message}</p>
-              </>
-            )}
-          </div>
-        )}
-      </div>
+                  <p>
+                    Откачено действий: {result.undone.length}, дальше отказ на действии{' '}
+                    <span className="font-mono text-xs">{result.failed.actionId}</span>.
+                  </p>
+                  <p className="text-danger">{result.failed.error.message}</p>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <Dialog
         open={confirm}

@@ -3,7 +3,12 @@
 // `save.test.tsx`).
 import { PAGE_ASPECT } from '@orbis/shared';
 import type { PageNode, RecordBlockName } from '@orbis/shared/doc/page-grammar';
-import { aspectOfCardText, type BodyKind, type PlacementIssue } from '@orbis/shared/doc/placement';
+import {
+  aspectOfCardText,
+  type BodyKind,
+  type PlacementIssue,
+  secondCardMessage,
+} from '@orbis/shared/doc/placement';
 import type { ParseRegistry } from '@orbis/shared/query';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import { Markdown } from '../../lib/markdown/Markdown';
@@ -29,7 +34,7 @@ import { TabsContainer } from './TabsContainer';
  * Текст рисует тот же `Markdown`, что первый кадр тела, — показ и первый кадр не расходятся видом.
  *
  * Проблемы тела (`bodyIssues`, §5.5, §5.8) — плашками на месте своего узла: неуместный блок,
- * второй `{{body}}`, сломанный контейнер. Остальное тело рисуется: одна ошибка не гасит страницу.
+ * второй `{{body}}`, второй блок карточек, сломанный контейнер. Остальное тело рисуется: одна ошибка не гасит страницу.
  *
  * Известное расхождение с настройкой (как у первого кадра, `page-grammar.ts`): блок с отступом в
  * пункте списка препроход не видит, и на показе он — текстом, а в редакторе настройки — виджетом.
@@ -80,7 +85,31 @@ function planRender(
   ownBody: boolean,
 ): RenderPlan {
   // Плашки и обход рисуемых узлов — одна копия с «Изменить вид» (`render-plan.ts`).
-  const issues = renderIssues(nodes, kind);
+  const renderIssuesMap = renderIssues(nodes, kind);
+  // Вторая карточка одного аспекта РАЗНЫМИ написаниями (ключ и подпись): `bodyIssues` идёт без
+  // реестра и видит только одинаковый текст. Иначе у записи две копии карточки со своим
+  // состоянием — два поля ответа исполнителю, две «Прогнать сейчас» (1а новое-11). Счёт — своим
+  // множеством, а не `placed`: тот у страницы своим телом заранее несёт `orbis/page`, и её
+  // единственная `{{card: orbis/page}}` читалась бы второй.
+  const extra = new Map<string, PlacementIssue>();
+  if (reg !== null) {
+    const seen = new Set<string>();
+    forEachRendered(nodes, renderIssuesMap, (node, path) => {
+      if (node.kind !== 'card') return;
+      const aspect = aspectOfCardText(node.aspect, reg);
+      if (aspect === undefined) return;
+      if (seen.has(aspect.id)) {
+        extra.set(pathKey(path), {
+          code: 'SECOND_BLOCK',
+          message: secondCardMessage(node.raw),
+          path: [...path],
+        });
+      } else {
+        seen.add(aspect.id);
+      }
+    });
+  }
+  const issues: ReadonlyMap<string, PlacementIssue> = new Map([...renderIssuesMap, ...extra]);
 
   const placed = new Set<string>();
   // РП-25: страница, показанная своим телом, не рисует карточку «Страница» ни в `{{cards}}`, ни

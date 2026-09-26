@@ -26,6 +26,7 @@ import {
   UNIT_FATE_NOTES,
 } from '../chat/cards/unit-text';
 import { obj, str } from './aspect-read';
+import { useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 /** Строка сводки «Принять все»: судьба единицы плюс её адрес (lifecycle.ts DecideAllItem). */
@@ -144,6 +145,9 @@ function RunBatch({
   terminalUnanswered: boolean;
 }) {
   const utils = trpc.useUtils();
+  // Предпросмотр шаблона (хост `readOnly`): пачка видна строками-итогами (`UnitStub`), без карточек
+  // с «Принять»/«Отклонить» и без «Принять все» и «Продолжить сейчас».
+  const readOnly = useHostReadOnly();
   // Разбор расхождений в сводке пачки подписан теми же словами реестра, что и карточки под
   // ней (§А9-2): владелец читает сводку и карточки подряд.
   const registry = useRegistry();
@@ -267,7 +271,9 @@ function RunBatch({
           {list.map((unit) =>
             // `threadId` НЕ передаётся: у экрана прогона ленты нет, инвалидировать нечего
             // (рулинг П-5, тот же довод, что у карточки предложения).
-            unit.card?.kind === 'question_card' ? (
+            readOnly ? (
+              <UnitStub key={unit.pendingId} unit={unit} />
+            ) : unit.card?.kind === 'question_card' ? (
               <QuestionCard key={unit.pendingId} card={unit.card} />
             ) : unit.card?.kind === 'deferred_action_card' ? (
               <DeferredActionCard key={unit.pendingId} card={unit.card} />
@@ -319,33 +325,35 @@ function RunBatch({
         </p>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        {hasOpenAction && (
-          <Button
-            size="sm"
-            // Заблокирована и на время ПЕРЕЧИТЫВАНИЯ пачки: между ответом сервера и приездом
-            // новых судеб кнопка ещё жива, и второй клик ушёл бы в уже разобранную пачку.
-            disabled={decideAll.isPending || units.isFetching}
-            onClick={() => decideAll.mutate({ runId })}
-          >
-            Принять все
-          </Button>
-        )}
-        {/* Кнопка НЕ «Прогнать сейчас» с экрана рутины и не её копия: там жест значит
+      {!readOnly && (
+        <div className="flex flex-wrap items-center gap-2">
+          {hasOpenAction && (
+            <Button
+              size="sm"
+              // Заблокирована и на время ПЕРЕЧИТЫВАНИЯ пачки: между ответом сервера и приездом
+              // новых судеб кнопка ещё жива, и второй клик ушёл бы в уже разобранную пачку.
+              disabled={decideAll.isPending || units.isFetching}
+              onClick={() => decideAll.mutate({ runId })}
+            >
+              Принять все
+            </Button>
+          )}
+          {/* Кнопка НЕ «Прогнать сейчас» с экрана рутины и не её копия: там жест значит
             «проверить, работает ли рутина», здесь — «прочитай то, что я тебе ответил»
             (ОЧ.7). Одно имя на два смысла обмануло бы владельца ровно в тот момент, когда
             он разбирает пачку. */}
-        {!paused && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={runNow.isPending}
-            onClick={() => (terminalUnanswered ? setConfirm(true) : runNow.mutate({ routineId }))}
-          >
-            Продолжить сейчас
-          </Button>
-        )}
-      </div>
+          {!paused && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={runNow.isPending}
+              onClick={() => (terminalUnanswered ? setConfirm(true) : runNow.mutate({ routineId }))}
+            >
+              Продолжить сейчас
+            </Button>
+          )}
+        </div>
+      )}
 
       {paused && (
         <p data-testid="batch-paused" className="text-text-muted text-xs">

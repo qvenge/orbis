@@ -81,15 +81,16 @@ const FRAME_IDLE = 'border-line border-dashed';
 const FRAME_SELECTED = 'border-accent bg-accent/10';
 
 /**
- * Рамка части контейнера: подпись сверху, содержимое — под ней. Подпись вне правки
+ * Рамка части контейнера: подпись сверху, содержимое — под ней. Подпись вне правки тела
  * (`contentEditable={false}`): внутри редактора каретке в ней делать нечего, это не текст тела.
+ * Подпись — узел, а не строка: у вкладки в настройке это поле правки её подписи (1а новое-4).
  */
 export function LayoutFrameBox({
   label,
   selected = false,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   selected?: boolean;
   children: ReactNode;
 }) {

@@ -7,7 +7,12 @@
  * снимку до пачки. Все записи меню — ОДНИМ вызовом `entity.updateBatch` (РП-9): в каждом тесте,
  * где что-то пишется, счёт вызовов сверяется. `this` у блоков данных — только uuid.
  */
-import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY } from '@orbis/shared';
+import {
+  buildAppPath,
+  PAGE_ASPECT,
+  TEMPLATE_FOR_PROPERTY,
+  TEMPLATE_WINS_OVER_PROPERTY,
+} from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -28,7 +33,7 @@ import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
-import { BODY_BLOCKED, BODY_SAVING } from '../entity-detail/DetailMenu';
+import { BODY_BLOCKED, BODY_SAVING } from '../entity-detail/body-gate';
 import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import {
@@ -717,6 +722,30 @@ describe('меню страницы (§8.4)', () => {
     ]);
   });
 
+  test('скрытый аспект в «Шаблон для» виден в диалоге и снимается (остаток 1а №31)', async () => {
+    const f = asPage(fixture('note-plain'), PAGE_BODY, {
+      [TEMPLATE_FOR_PROPERTY]: ['orbis/agent-run'],
+    });
+    const { batches } = open(f);
+    await screen.findByTestId('template-preview-plaque');
+    await choose('Сделать шаблоном для…');
+    const dialog = await screen.findByRole('dialog');
+    const hidden = within(dialog).getByRole('checkbox', { name: /Прогон агента/ });
+    expect(hidden).toBeChecked();
+    expect(hidden.closest('label')).toHaveAttribute('data-hidden', 'true');
+    fireEvent.click(hidden);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(batches()).toHaveLength(1));
+    expect(batches()).toEqual([
+      [
+        {
+          tool: 'entity_update',
+          input: { id: f.entity.id, unset: [TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY] },
+        },
+      ],
+    ]);
+  });
+
   test('«Перестать быть страницей» — снимается только аспект (РП-22); одна пачка, Undo', async () => {
     const f = asPage(fixture('note-plain'), PAGE_BODY, {
       [TEMPLATE_FOR_PROPERTY]: ['orbis/project'],
@@ -1118,5 +1147,38 @@ describe('жест меню при неотправленной правке т�
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await bodySettledOnServer(r, f.entity.id, 'ХВОСТ');
     expect(r.batches()).toEqual([]);
+  });
+});
+
+describe('меню при настройке чужого шаблона — про шаблон (остаток 1а №87)', () => {
+  test('«Настроить шаблон» → пункты только «Открыть шаблон» и «Скопировать ссылку» — ссылка на шаблон', async () => {
+    const f = fixture('project');
+    open(f, [template(TPL_A, 'Шаблон проекта', ['orbis/project'], 'Вид A\n\n{{body}}\n')]);
+    await waitFor(() => expect(renderedTexts()).toContain('Вид A'));
+    await choose('Настроить шаблон „Шаблон проекта“');
+    await screen.findByTestId('configure-view');
+
+    const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    await openMenu();
+    expect(menuLabels()).toEqual(['Открыть шаблон „Шаблон проекта“', 'Скопировать ссылку']);
+    for (const absent of [
+      'Архивировать',
+      'Закрепить',
+      'Сделать страницей',
+      'Изменить вид только этой записи',
+      'Открыть через шаблон хоста',
+    ]) {
+      expect(menuLabels()).not.toContain(absent);
+    }
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText).toHaveBeenCalledWith(
+      `${window.location.origin}${buildAppPath({ kind: 'entity', id: TPL_A })}`,
+    );
+
+    await choose('Открыть шаблон „Шаблон проекта“');
+    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: TPL_A });
   });
 });

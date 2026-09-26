@@ -15,6 +15,7 @@ import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { str, strArray } from './aspect-read';
+import { useHostReadOnly } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 import { RUN_OUTCOME_LABELS, type TicketRun } from './useTicketRuns';
 
@@ -85,6 +86,9 @@ export function RoutineStatusBlock({
 }) {
   const utils = trpc.useUtils();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
+  // Предпросмотр шаблона (хост `readOnly`): состояние рутины видно, «Прогнать сейчас» и паузы нет —
+  // ручной прогон и пауза двигали бы рутину, взятую для примера.
+  const readOnly = useHostReadOnly();
 
   // Значения рутины — плоско в `props` по id свойства (§А1-1).
   const routine = entity.props;
@@ -214,35 +218,37 @@ export function RoutineStatusBlock({
           {failure}
         </p>
       )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          // Пока прогон идёт, второго сервер всё равно не заведёт (V1.3) — кнопка, которая
-          // гарантированно отказывает, хуже её отсутствия. Но исчезать ей нельзя: подпись
-          // рядом отвечает на вопрос «почему нельзя».
-          disabled={running || runNow.isPending}
-          onClick={() => runNow.mutate({ routineId: entity.id })}
-        >
-          Прогнать сейчас
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={update.isPending}
-          onClick={() =>
-            update.mutate({
-              id: entity.id,
-              // Патч мержится по КЛЮЧАМ свойств (§А1-1): расписание, режим и права пауза
-              // не трогает — возобновлённая рутина обязана вернуться ровно к прежнему
-              // расписанию.
-              props: { 'orbis/routine_stage': paused ? 'active' : 'paused' },
-            })
-          }
-        >
-          {paused ? 'Возобновить' : 'Пауза'}
-        </Button>
-        {running && <span className="text-sm text-text-muted">идёт прогон</span>}
-      </div>
+      {!readOnly && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            // Пока прогон идёт, второго сервер всё равно не заведёт (V1.3) — кнопка, которая
+            // гарантированно отказывает, хуже её отсутствия. Но исчезать ей нельзя: подпись
+            // рядом отвечает на вопрос «почему нельзя».
+            disabled={running || runNow.isPending}
+            onClick={() => runNow.mutate({ routineId: entity.id })}
+          >
+            Прогнать сейчас
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={update.isPending}
+            onClick={() =>
+              update.mutate({
+                id: entity.id,
+                // Патч мержится по КЛЮЧАМ свойств (§А1-1): расписание, режим и права пауза
+                // не трогает — возобновлённая рутина обязана вернуться ровно к прежнему
+                // расписанию.
+                props: { 'orbis/routine_stage': paused ? 'active' : 'paused' },
+              })
+            }
+          >
+            {paused ? 'Возобновить' : 'Пауза'}
+          </Button>
+          {running && <span className="text-sm text-text-muted">идёт прогон</span>}
+        </div>
+      )}
     </section>
   );
 }

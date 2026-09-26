@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { mayLeave } from './leave-guard';
 
 export type Tab = 'chat' | 'browser' | 'agenda' | 'budget';
 // 'settings' — сквозной экран (не таб): push поверх активного таба, back — обычный pop/switchTab (§9.4).
@@ -44,8 +45,12 @@ export const useNav = create<NavState>()(
     (set) => ({
       activeTab: 'chat',
       stacks: emptyStacks(),
-      push: (tab, screen) =>
-        set((s) => ({ stacks: { ...s.stacks, [tab]: [...s.stacks[tab], screen] } })),
+      // Переходы спрашивают стража ухода (`leave-guard.ts`): экран с неотправленной правкой
+      // настройки держит человека на месте и сам говорит почему (остаток 1а №86).
+      push: (tab, screen) => {
+        if (!mayLeave()) return;
+        set((s) => ({ stacks: { ...s.stacks, [tab]: [...s.stacks[tab], screen] } }));
+      },
       // ВНИМАНИЕ: из UI звать НЕЛЬЗЯ — «назад» идёт только через `goBack` (app/history.ts).
       // При живой синхронизации с историей (D18) прямой pop меняет видимую позицию, и
       // подписка запишет НОВУЮ запись истории вместо отката: кнопка «Назад» поедет вперёд.
@@ -53,11 +58,16 @@ export const useNav = create<NavState>()(
       // у него с B2 нет ни одного.
       pop: (tab) => set((s) => ({ stacks: { ...s.stacks, [tab]: s.stacks[tab].slice(0, -1) } })),
       // §1.1: повторный тап по активному табу — свернуть до корня; иначе просто переключить.
-      switchTab: (tab) =>
+      switchTab: (tab) => {
+        if (!mayLeave()) return;
         set((s) =>
           s.activeTab === tab ? { stacks: { ...s.stacks, [tab]: [] } } : { activeTab: tab },
-        ),
-      resetTabToRoot: (tab) => set((s) => ({ stacks: { ...s.stacks, [tab]: [] } })),
+        );
+      },
+      resetTabToRoot: (tab) => {
+        if (!mayLeave()) return;
+        set((s) => ({ stacks: { ...s.stacks, [tab]: [] } }));
+      },
     }),
     { name: 'orbis:nav:v1', partialize: (s) => ({ activeTab: s.activeTab, stacks: s.stacks }) },
   ),
@@ -83,6 +93,7 @@ export function openSettings() {
 // Порядок ключей значим: при activeTab === 'budget' поздний `budget: []` перекрывает
 // вычисляемый ключ, то есть вкладка честно сворачивается до Overview.
 export function closeToBudgetOverview() {
+  if (!mayLeave()) return;
   useNav.setState((s) => ({
     activeTab: 'budget',
     stacks: { ...s.stacks, [s.activeTab]: s.stacks[s.activeTab].slice(0, -1), budget: [] },

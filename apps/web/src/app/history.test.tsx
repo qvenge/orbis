@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { App } from '../App';
+import { registerLeaveGuard } from '../state/leave-guard';
 import { closeToBudgetOverview, useNav } from '../state/navigation';
 import { renderWithProviders, wireEntity } from '../test/harness';
 import { installHistorySync } from './history';
@@ -263,4 +264,28 @@ test('кнопка «Назад» и системный жест дают оди
 
   expect(afterGesture).toEqual(afterButton);
   uninstall();
+});
+
+test('страж ухода сказал «нет» — системный «назад» не уходит: стор прежний, запись экрана возвращена', async () => {
+  const uninstall = installHistorySync();
+  useNav.getState().switchTab('browser');
+  useNav.getState().push('browser', { kind: 'entity', id: E1 });
+  const before = window.history.state;
+  const stacks = useNav.getState().stacks;
+  const unregister = registerLeaveGuard(() => false);
+  try {
+    const popped = new Promise<void>((resolve) =>
+      window.addEventListener('popstate', () => resolve(), { once: true }),
+    );
+    window.history.back();
+    await popped;
+    expect(useNav.getState().activeTab).toBe('browser');
+    expect(useNav.getState().stacks).toEqual(stacks);
+    // В истории снова запись экрана, с которого не ушли: следующий «назад» уйдёт с него же.
+    expect(window.history.state).toEqual(before);
+    expect(window.location.pathname).toBe(`/entity/${E1}`);
+  } finally {
+    unregister();
+    uninstall();
+  }
 });

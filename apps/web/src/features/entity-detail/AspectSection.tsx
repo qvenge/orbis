@@ -15,13 +15,14 @@
 // Правки уезжают НОВОЙ формой (§А1-1): значение — `props` по id свойства, снятие — `unset`,
 // снятие аспекта — `aspects.detach`. Старой карты «аспект → поля» этот экран больше не шлёт.
 import type { AspectDefinition } from '@orbis/shared';
-import { valueText } from '../../lib/registry/format';
+import { displayText, valueText } from '../../lib/registry/format';
 import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
 import { PropertyControl } from '../../lib/registry/PropertyControl';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { invalidateBudget } from '../budget/useBudget';
+import { useHostReadOnly } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -82,6 +83,9 @@ function touchesAggregatedModule(
 function useAspectEdits(entity: Entity) {
   const utils = trpc.useUtils();
   const registry = useRegistry();
+  // Предпросмотр шаблона (хост `readOnly`): значения — текстом по типу свойства (`displayText`),
+  // без контролов и без «Снять аспект» — запись взята для примера (1а новое-5).
+  const readOnly = useHostReadOnly();
   const { mutation, conflict } = useEntityUpdate(entity.id, {
     /**
      * Агрегаты модуля считает сервер, и `invalidateGraph` о них не знает по построению (он
@@ -121,7 +125,7 @@ function useAspectEdits(entity: Entity) {
     mutation.mutate({ id: entity.id, aspects: { detach: [aspectId] } });
   }
 
-  return { registry, conflict, writeProp, detach };
+  return { registry, conflict, readOnly, writeProp, detach };
 }
 
 type AspectEdits = ReturnType<typeof useAspectEdits>;
@@ -135,6 +139,7 @@ function rowFor(entity: Entity, edits: AspectEdits, propertyId: string) {
       registry={edits.registry}
       propertyId={propertyId}
       value={props[propertyId]}
+      readOnly={edits.readOnly}
       onChange={(v) => edits.writeProp(propertyId, v)}
     />
   );
@@ -165,17 +170,19 @@ function SectionView({
     <section data-testid={`aspect-${aspect.id}`} className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
         <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">{label}</p>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-xs text-text-muted"
-          // Имя кнопки — ПОДПИСЬЮ аспекта из реестра, а не его id: скринридер читал
-          // «Снять orbis/task» ровно там, где заголовок секции рядом подписан словом.
-          aria-label={`Снять аспект «${label}»`}
-          onClick={() => edits.detach(aspect.id)}
-        >
-          Снять аспект
-        </Button>
+        {!edits.readOnly && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-text-muted"
+            // Имя кнопки — ПОДПИСЬЮ аспекта из реестра, а не его id: скринридер читал
+            // «Снять orbis/task» ровно там, где заголовок секции рядом подписан словом.
+            aria-label={`Снять аспект «${label}»`}
+            onClick={() => edits.detach(aspect.id)}
+          >
+            Снять аспект
+          </Button>
+        )}
       </div>
       <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
         {orderedProperties(aspect).map((ref) => rowFor(entity, edits, ref.propertyId))}
@@ -287,11 +294,13 @@ function PropertyRow({
   registry,
   propertyId,
   value,
+  readOnly,
   onChange,
 }: {
   registry: RegistryLookup;
   propertyId: string;
   value: unknown;
+  readOnly: boolean;
   onChange: (v: unknown | undefined) => void;
 }) {
   const def = registry.property(propertyId);
@@ -307,6 +316,13 @@ function PropertyRow({
             className="break-words px-2 py-1 text-sm text-text-secondary"
           >
             {valueText(value)}
+          </span>
+        ) : readOnly ? (
+          <span
+            data-testid={`prop-${propertyId}`}
+            className="break-words px-2 py-1 text-sm text-text-secondary"
+          >
+            {displayText(def, value, registry)}
           </span>
         ) : (
           // Контрол ОДИН на все типы, включая `ref`: пикер категории (K6) переехал в общий

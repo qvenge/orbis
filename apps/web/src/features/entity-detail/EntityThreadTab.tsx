@@ -1,6 +1,7 @@
-import { ChatThread } from '../chat/ChatThread';
+import { ChatFeed, ChatThread } from '../chat/ChatThread';
 import { ThreadSkeleton } from '../chat/MessageList';
 import { EnsureFailedNotice, useEnsuredThread } from '../chat/useEnsuredThread';
+import { useHostReadOnly, useRecordHost } from './record-host';
 
 /**
  * Вкладка «Тред» записи: СНАЧАЛА заводит тред, и только потом отдаёт его чату.
@@ -24,6 +25,19 @@ import { EnsureFailedNotice, useEnsuredThread } from '../chat/useEnsuredThread';
  * (формула одна), но правда о треде — у того, кто его завёл.
  */
 export function EntityThreadTab({ entityId }: { entityId: string }) {
+  // Предпросмотр шаблона (хост `readOnly`): лента без поля сообщения и без заведения треда — открыть
+  // вкладку записи, выбранной для примера, не повод создавать ей тред.
+  return useHostReadOnly() ? <HostThreadFeed /> : <EnsuredThreadTab entityId={entityId} />;
+}
+
+/** Лента треда записи хоста, только чтение: id треда — формула, которую `entity.get` уже посчитал. */
+function HostThreadFeed() {
+  const { thread } = useRecordHost();
+  if (thread === null) return <p className="p-3 text-sm text-text-muted">Нет треда</p>;
+  return <ChatFeed threadId={thread.threadId} />;
+}
+
+function EnsuredThreadTab({ entityId }: { entityId: string }) {
   const { state, retry } = useEnsuredThread(entityId);
   if (state.status === 'pending') return <ThreadSkeleton />;
   if (state.status === 'failed')

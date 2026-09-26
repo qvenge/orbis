@@ -6,6 +6,7 @@ import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
+import { useHostReadOnly } from './record-host';
 import { detailGetInput } from './useEntityDetail';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
@@ -49,6 +50,9 @@ function useDebounced(value: string, ms: number): string {
  * фичу недостижимой (та же логика, что у «тихой строки добавления» подзадач).
  */
 export function Blockers({ entityId, relations }: { entityId: string; relations: Relation[] }) {
+  // Предпросмотр шаблона (хост `readOnly`): блокировки видны и открываются, но не ставятся и не
+  // снимаются.
+  const readOnly = useHostReadOnly();
   const push = useNav((s) => s.push);
   const activeTab = useNav((s) => s.activeTab);
   const utils = trpc.useUtils();
@@ -163,7 +167,7 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
             {/* Подтверждение-минимум: соседние разрушающие действия web («Снять аспект»,
                 «Архивировать») модалок не заводят, а Undo по actionId здесь недоступен —
                 поэтому спрашиваем вторым кликом прямо в строке. */}
-            {confirming === r.id ? (
+            {readOnly ? null : confirming === r.id ? (
               <>
                 <Button
                   variant="ghost"
@@ -216,19 +220,21 @@ export function Blockers({ entityId, relations }: { entityId: string; relations:
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
         <p className={SECTION_LABEL}>Блокировки</p>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Добавить блокировку"
-          title="Добавить блокировку"
-          onClick={() => setAdding((v) => !v)}
-        >
-          <Plus size={14} aria-hidden />
-        </Button>
+        {!readOnly && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Добавить блокировку"
+            title="Добавить блокировку"
+            onClick={() => setAdding((v) => !v)}
+          >
+            <Plus size={14} aria-hidden />
+          </Button>
+        )}
       </div>
       {outgoing.length > 0 && list('Блокирует', outgoing)}
       {blockedBy.length > 0 && list('Заблокирована', blockedBy)}
-      {adding && (
+      {adding && !readOnly && (
         <div className="flex flex-col gap-1 px-2 py-1.5">
           {/* Обе стороны создаются с ОДНОГО экрана: «заблокирована» просто меняет
               source/target местами. Без выбора направления список «Заблокирована»

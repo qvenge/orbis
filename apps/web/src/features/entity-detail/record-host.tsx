@@ -50,10 +50,13 @@ export interface RecordHostValue {
    */
   activeTab: string | null;
   /**
-   * Тело только для чтения — предпросмотр шаблона на чужой записи (§6.2, §9.3): показ шаблона
-   * не повод править тело записи, выбранной для примера. Экран записи ставит `false`.
+   * Запись только для чтения ЦЕЛИКОМ — предпросмотр шаблона на чужой записи (§9.3; 1а новое-5,
+   * принцип §0.2 п. 2): не правится ничего — ни тело, ни заголовок с чекбоксом, ни теги,
+   * подзадачи, блокировки, тред, свойства, карточки назначения, рутины и прогона, ни версии.
+   * Запись взята для примера, и касание её не повод её менять. Экран записи ставит `false`.
+   * Листья читают флаг сами (`useHostReadOnly`): каждый знает, что в нём правится.
    */
-  readOnlyBody: boolean;
+  readOnly: boolean;
 }
 
 const RecordHostContext = createContext<RecordHostValue | null>(null);
@@ -76,6 +79,14 @@ export function useRecordHost(): RecordHostValue {
   const value = useContext(RecordHostContext);
   if (value === null) throw new Error('Примитив обвязки записи вне RecordHostProvider');
   return value;
+}
+
+/**
+ * Только чтение хоста; вне хоста — `false`: лист (строка записи, карточка назначения) живёт и вне
+ * шаблона — в списках и на экранах модулей, — и там его поведение не меняется.
+ */
+export function useHostReadOnly(): boolean {
+  return useContext(RecordHostContext)?.readOnly ?? false;
 }
 
 /**
@@ -105,7 +116,7 @@ export function TabPartHost({
  */
 export function recordHostValue(
   reply: EntityGetReply,
-  screen: Pick<RecordHostValue, 'planToFact' | 'activeTab' | 'readOnlyBody'>,
+  screen: Pick<RecordHostValue, 'planToFact' | 'activeTab' | 'readOnly'>,
 ): RecordHostValue {
   return {
     entity: reply.entity,

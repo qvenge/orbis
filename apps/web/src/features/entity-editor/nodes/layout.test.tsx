@@ -21,7 +21,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import type { ReactNode } from 'react';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { BodyKindProvider } from '../../../lib/query-blocks/body-kind';
 import {
   blocksReply,
@@ -81,8 +81,14 @@ const LAYOUT =
   '{{columns}}\n{{column}}\nлевая\n{{/column}}\n{{column}}\nправая\n{{/column}}\n{{/columns}}\n\n' +
   '{{tabs}}\n{{tab: Тред}}\nвнутри вкладки\n{{/tab}}\n{{/tabs}}';
 
+/**
+ * Подпись рамки, как её читает человек: у вкладки в редакторе подпись — поле правки (1а новое-4),
+ * и её значение — часть подписи («Вкладка: » + «Тред»); у первого кадра и колонок — текст.
+ */
 const frameLabels = () =>
-  screen.getAllByTestId('layout-frame-label').map((n) => n.textContent ?? '');
+  screen
+    .getAllByTestId('layout-frame-label')
+    .map((n) => (n.textContent ?? '') + (n.querySelector('input')?.value ?? ''));
 const stubLabels = () => screen.getAllByTestId('record-stub').map((n) => n.textContent ?? '');
 
 /** Позиция конца текста `needle` в документе — чтобы поставить туда каретку. */
@@ -374,4 +380,78 @@ test('страж места: колонки во вкладку внутри к�
   pasteColumns(editor);
   expect(containerDepth(editor)).toBe(2);
   expect(savedTop(editor)).not.toContain('rawBlock');
+});
+
+describe('подпись вкладки правится в рамке настройки (1а новое-4)', () => {
+  const TABS = '{{tabs}}\n{{tab: План}}\nа\n{{/tab}}\n{{tab}}\nб\n{{/tab}}\n{{/tabs}}';
+  const tabLabels = (editor: Editor): unknown[] => {
+    const out: unknown[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'tab') out.push(node.attrs.label);
+    });
+    return out;
+  };
+
+  async function mountTabs() {
+    const m = mountEditor('page', TABS);
+    await waitFor(() => expect(m.h.editor).not.toBeNull());
+    const fields = await screen.findAllByRole('textbox', { name: 'Подпись вкладки' });
+    return { ...m, editor: m.h.editor as Editor, fields };
+  }
+
+  test('поле подписи у каждой вкладки: значение — подпись, у пустой — плейсхолдер «Вкладка N»', async () => {
+    const { fields } = await mountTabs();
+    expect(fields).toHaveLength(2);
+    expect(fields[0]).toHaveValue('План');
+    expect(fields[1]).toHaveValue('');
+    expect(fields[1]).toHaveAttribute('placeholder', 'Вкладка 2');
+  });
+
+  test('ввод и уход фокуса — подпись в документе одной правкой, печать {{tab: Итоги}}', async () => {
+    const { editor, fields, onChange } = await mountTabs();
+    const field = fields[0] as HTMLInputElement;
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: 'Ито' } });
+    fireEvent.change(field, { target: { value: 'Итоги' } });
+    // Буквы не пишутся в документ по одной: транзакция — на фиксацию.
+    expect(tabLabels(editor)).toEqual(['План', '']);
+    fireEvent.blur(field);
+    await waitFor(() => expect(tabLabels(editor)).toEqual(['Итоги', '']));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const last = onChange.mock.lastCall?.[0] as BodyDoc;
+    expect(serializeBody(last)).toContain('{{tab: Итоги}}');
+  });
+
+  test('очистка и Enter — голый {{tab}}; Enter не рождает абзаца в документе', async () => {
+    const { editor, fields, onChange } = await mountTabs();
+    const before = editor.getJSON();
+    const field = fields[0] as HTMLInputElement;
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(tabLabels(editor)).toEqual(['', '']));
+    const after = editor.getJSON();
+    // Кроме подписи — ни одного нового узла: Enter из поля в ProseMirror не ушёл.
+    expect(JSON.stringify(after).replace('"label":""', '"label":"План"')).toBe(
+      JSON.stringify(before),
+    );
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const last = onChange.mock.lastCall?.[0] as BodyDoc;
+    expect(serializeBody(last)).toContain('{{tab}}\nа');
+    expect(serializeBody(last)).not.toContain('{{tab: План}}');
+  });
+
+  test('Escape во время ввода возвращает прежнюю подпись, документ не меняется', async () => {
+    const { editor, fields, onChange } = await mountTabs();
+    const before = editor.getJSON();
+    const field = fields[0] as HTMLInputElement;
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: 'Черновик' } });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(field).toHaveValue('План');
+    fireEvent.blur(field);
+    expect(editor.getJSON()).toEqual(before);
+    expect(tabLabels(editor)).toEqual(['План', '']);
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

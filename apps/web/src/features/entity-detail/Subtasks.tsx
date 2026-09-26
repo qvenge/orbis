@@ -8,6 +8,7 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { useHostReadOnly } from './record-host';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 
@@ -47,6 +48,8 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
     .filter((r) => SUBTASK_ROLES.includes(r.role) && r.sourceId === parentId)
     .map((r) => r.targetId);
   const [draft, setDraft] = useState('');
+  // Предпросмотр шаблона (хост `readOnly`): список и переходы остаются, строки добавления нет.
+  const readOnly = useHostReadOnly();
   const { show } = useToast();
   const push = useNav((s) => s.push);
   const activeTab = useNav((s) => s.activeTab);
@@ -124,29 +127,31 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
         </ul>
       )}
       {/* Тихая строка добавления (Notion): плюс + borderless-инпут, Enter добавляет. */}
-      <div className="flex items-center gap-2.5 px-2 py-1.5">
-        {isPending ? (
-          <Spinner size={14} aria-label="Сохранение" />
-        ) : (
-          <Plus size={14} aria-hidden className="shrink-0 text-text-muted/70" />
-        )}
-        <input
-          aria-label="Новая подзадача"
-          value={draft}
-          placeholder="Добавить подзадачу…"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // isComposing: Enter-подтверждение IME-композиции не должно создавать подзадачу.
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) void add();
-          }}
-          className="min-w-0 flex-1 rounded-md bg-transparent px-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
-        />
-        {draft.trim() && (
-          <Button variant="ghost" size="sm" onClick={add} disabled={isPending}>
-            Добавить
-          </Button>
-        )}
-      </div>
+      {!readOnly && (
+        <div className="flex items-center gap-2.5 px-2 py-1.5">
+          {isPending ? (
+            <Spinner size={14} aria-label="Сохранение" />
+          ) : (
+            <Plus size={14} aria-hidden className="shrink-0 text-text-muted/70" />
+          )}
+          <input
+            aria-label="Новая подзадача"
+            value={draft}
+            placeholder="Добавить подзадачу…"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // isComposing: Enter-подтверждение IME-композиции не должно создавать подзадачу.
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) void add();
+            }}
+            className="min-w-0 flex-1 rounded-md bg-transparent px-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
+          />
+          {draft.trim() && (
+            <Button variant="ghost" size="sm" onClick={add} disabled={isPending}>
+              Добавить
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -31,6 +31,7 @@ import {
   writeModeOf,
 } from './controls';
 import { displayText, EMPTY_TEXT } from './format';
+import { aspectLabel } from './labels';
 import { useRegistry } from './useRegistry';
 
 /**
@@ -287,7 +288,10 @@ export function AspectsManyControl({
    * Какие аспекты предлагать чипами; без него — все аспекты снимка. Диалог «Сделать шаблоном
    * для…» (меню ⋮) прячет служебные и сам `orbis/page`: шаблон для страниц или для прогонов
    * агента — не то, что владелец собирает руками. Уже выбранный, но не предложенный id остаётся в
-   * значении по тому же правилу, что id вне снимка ниже.
+   * значении по тому же правилу, что id вне снимка ниже, — и виден чипом с пометкой «скрытый»,
+   * который снимается как любой другой (остаток 1а №31): иначе «снять все» его не снимало бы, а
+   * страница оставалась шаблоном для аспекта, которого владелец не видит. Добавить такой аспект
+   * заново нельзя — среди предложенных его нет.
    */
   offered?: (aspect: AspectDefinition) => boolean;
 }) {
@@ -308,10 +312,42 @@ export function AspectsManyControl({
     // Порядок — реестровый, а не порядок нажатий: набор аспектов сравнивается вхождением, и
     // одно и то же множество не должно давать два разных значения в журнале.
     const known = aspects.filter((a) => next.includes(a.id)).map((a) => a.id);
-    // Id, которых в снимке нет (аспект снят, реестр ещё едет), остаются в значении: выбросить
-    // их молча значило бы стереть факт владельца правкой соседнего чипа.
+    // Id, которых в снимке нет (аспект снят, реестр ещё едет) или которые не предложены, остаются
+    // в значении: выбросить их молча значило бы стереть факт владельца правкой соседнего чипа.
+    // Скрытый выбранный при этом виден чипом ниже и снимается сам (№31).
     const ordered = [...known, ...next.filter((id) => !known.includes(id))];
     onChange(ordered.length === 0 ? undefined : ordered);
+  };
+  const offeredIds = new Set(aspects.map((a) => a.id));
+  // Пока снимок едет, предложенных нет вовсе — и «скрытым» оказался бы каждый выбранный.
+  const hiddenChosen =
+    registry.data === undefined ? [] : chosen.filter((id) => !offeredIds.has(id));
+  const chip = (id: string, text: string, on: boolean, hidden: boolean) => {
+    const locked = on && atFloor;
+    return (
+      // Выбранный чип виден не одной обводкой (Л-4 живой приёмки 1а: тонкую рамку глаз не
+      // различал) — заливкой и галочкой; `data-state` — тот же признак для тестов и стилей.
+      // Чекбокс спрятан (`sr-only`), поэтому видимый фокус несёт метка.
+      <label
+        key={id}
+        data-state={on ? 'on' : 'off'}
+        {...(hidden && { 'data-hidden': 'true' })}
+        className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/50 ${
+          on ? 'border-accent bg-accent/10 text-accent' : 'border-line text-text-muted'
+        } ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      >
+        <input
+          type="checkbox"
+          className="sr-only"
+          checked={on}
+          disabled={locked}
+          onChange={() => toggle(id)}
+        />
+        {on && <Check size={12} aria-hidden data-testid="chip-check" />}
+        {text}
+        {hidden && <span className="text-2xs text-text-muted">скрытый</span>}
+      </label>
+    );
   };
   return (
     <fieldset
@@ -320,32 +356,11 @@ export function AspectsManyControl({
       data-kind="aspects-many"
       className="flex flex-wrap items-center gap-1 px-2 py-1"
     >
-      {aspects.map((a) => {
-        const on = chosen.includes(a.id);
-        const locked = on && atFloor;
-        return (
-          // Выбранный чип виден не одной обводкой (Л-4 живой приёмки 1а: тонкую рамку глаз не
-          // различал) — заливкой и галочкой; `data-state` — тот же признак для тестов и стилей.
-          // Чекбокс спрятан (`sr-only`), поэтому видимый фокус несёт метка.
-          <label
-            key={a.id}
-            data-state={on ? 'on' : 'off'}
-            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/50 ${
-              on ? 'border-accent bg-accent/10 text-accent' : 'border-line text-text-muted'
-            } ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-          >
-            <input
-              type="checkbox"
-              className="sr-only"
-              checked={on}
-              disabled={locked}
-              onChange={() => toggle(a.id)}
-            />
-            {on && <Check size={12} aria-hidden data-testid="chip-check" />}
-            {effectiveLabel(a.label, OWNER_LOCALE)}
-          </label>
-        );
-      })}
+      {aspects.map((a) =>
+        chip(a.id, effectiveLabel(a.label, OWNER_LOCALE), chosen.includes(a.id), false),
+      )}
+      {/* Выбранные, но не предложенные (служебный аспект, id вне снимка) — в порядке значения. */}
+      {hiddenChosen.map((id) => chip(id, aspectLabel(registry, id), true, true))}
       {atFloor && <span className="text-2xs text-text-muted">{ASPECTS_MIN_HINT}</span>}
     </fieldset>
   );

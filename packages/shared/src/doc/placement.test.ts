@@ -20,6 +20,8 @@ import {
   MISPLACED_HINT,
   nodeAt,
   type PlacedBlock,
+  SECOND_CARDS_MESSAGE,
+  secondCardMessage,
   templateBrokenReason,
 } from './placement';
 import { DOC_EXTENSIONS } from './schema';
@@ -124,6 +126,53 @@ describe('bodyIssues — неуместные блоки', () => {
     expect(issues('до\n{{tabs}}\n{{tab: А}}\nа\n{{/tab}}\n{{/tabs}}\n', 'note')).toMatchObject([
       { code: 'BLOCK_MISPLACED', hint: MISPLACED_HINT, path: [1] },
     ]);
+  });
+});
+
+describe('bodyIssues — второй блок карточек (SECOND_BLOCK, 1а новое-11)', () => {
+  test('второй {{cards}} на странице — одна SECOND_BLOCK на втором узле', () => {
+    const found = issues('{{cards}}\n{{cards}}\n', 'page');
+    expect(found).toEqual([{ code: 'SECOND_BLOCK', message: SECOND_CARDS_MESSAGE, path: [1] }]);
+  });
+
+  test('{{card: X}} дважды одним текстом в шаблоне — SECOND_BLOCK у второго', () => {
+    const found = issues('{{card: orbis/goal}}\nтекст\n{{card: orbis/goal}}\n', 'template');
+    expect(found).toEqual([
+      {
+        code: 'SECOND_BLOCK',
+        message: secondCardMessage('{{card: orbis/goal}}'),
+        path: [2],
+      },
+    ]);
+  });
+
+  test('ключ и подпись одного аспекта — не здесь: разные написания узнаёт план рендера с реестром', () => {
+    expect(issues('{{card: orbis/goal}}\n{{card: "Цель"}}\n', 'template')).toEqual([]);
+  });
+
+  test('счёт идёт в порядке документа сквозь контейнеры', () => {
+    const text =
+      '{{cards}}\n{{columns}}\n{{column}}\nа\n{{/column}}\n{{column}}\n{{cards}}\n{{/column}}\n{{/columns}}\n';
+    const nodes = parsePageText(text);
+    const found = bodyIssues(nodes, 'page', REG);
+    expect(found).toMatchObject([{ code: 'SECOND_BLOCK', path: [1, 1, 0] }]);
+    expect(nodeAt(nodes, found[0]?.path ?? [])).toMatchObject({ kind: 'record', name: 'cards' });
+  });
+
+  test('в заметке два {{cards}} — две BLOCK_MISPLACED, неуместные не считаются', () => {
+    expect(issues('{{cards}}\n{{cards}}\n', 'note').map((i) => i.code)).toEqual([
+      'BLOCK_MISPLACED',
+      'BLOCK_MISPLACED',
+    ]);
+  });
+
+  test('{{cards}} внутри сломанного контейнера не считается', () => {
+    const text = '{{columns}}\n{{column}}\n{{cards}}\n{{/column}}\n{{/columns}}\n{{cards}}\n';
+    expect(issues(text, 'page').map((i) => i.code)).toEqual(['PART_COUNT']);
+  });
+
+  test('второй {{body}} — по-прежнему SECOND_BODY', () => {
+    expect(issues('{{body}}\n{{body}}\n', 'template').map((i) => i.code)).toEqual(['SECOND_BODY']);
   });
 });
 

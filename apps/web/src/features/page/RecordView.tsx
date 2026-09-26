@@ -175,7 +175,7 @@ export interface DisputeRequest {
 export function RecordView({
   reply,
   override,
-  readOnlyBody = false,
+  readOnly = false,
   onShown,
   disputeRequest,
   onConfigureTemplate,
@@ -184,8 +184,8 @@ export function RecordView({
   reply: EntityGetReply;
   /** «Открыть через X» / «через шаблон хоста» (§8.4) — разовый выбор экрана, не запоминается. */
   override?: { templateId: string | 'host' };
-  /** Предпросмотр шаблона на чужой записи (§9.3): тело только для чтения. */
-  readOnlyBody?: boolean;
+  /** Предпросмотр шаблона на чужой записи (§9.3): запись только для чтения целиком (`RecordHostValue.readOnly`). */
+  readOnly?: boolean;
   /** Извещение экрана о показанном (меню ⋮); зовётся на смене, а не на каждом кадре. */
   onShown?: (shown: RecordShown) => void;
   /** Плашка спора по требованию меню — и тогда, когда выбор запомнен (§4.3). */
@@ -243,7 +243,7 @@ export function RecordView({
         : decide(entity.aspects, list, reg, registryFailed, crashed, override),
     [entity.aspects, list, reg, registryFailed, crashed, override, preview],
   );
-  const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnlyBody });
+  const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnly });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
 
   const shownId =

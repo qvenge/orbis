@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Chip } from '../../ui/Chip';
-import { useRecordHost } from './record-host';
+import { useHostReadOnly, useRecordHost } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 
 /**
@@ -16,6 +16,8 @@ import { useEntityUpdate } from './useEntityDetail';
  */
 export function TagsBlock() {
   const { entity } = useRecordHost();
+  // Предпросмотр шаблона (хост `readOnly`): теги видны, но не снимаются и не добавляются.
+  const readOnly = useHostReadOnly();
   const { mutation } = useEntityUpdate(entity.id);
   const [draft, setDraft] = useState('');
   const tags = entity.tags;
@@ -27,27 +29,29 @@ export function TagsBlock() {
   return (
     <div data-testid="tags-block" className="flex flex-wrap items-center gap-2">
       {tags.map((t) => (
-        <Chip key={t} onRemove={() => write(tags.filter((x) => x !== t))}>
+        <Chip key={t} {...(!readOnly && { onRemove: () => write(tags.filter((x) => x !== t)) })}>
           {t}
         </Chip>
       ))}
-      <input
-        aria-label="Добавить тег"
-        value={draft}
-        placeholder="Добавить тег…"
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-          // Строчными — как их хранит сервер (`normalizeTags`): иначе оптимистичный патч
-          // показал бы «Работа», а перечитывание — «работа», и «дубликат» сверялся бы не с тем,
-          // что на самом деле лежит в записи.
-          const tag = draft.trim().toLowerCase();
-          if (tag === '') return;
-          if (!tags.includes(tag)) write([...tags, tag]);
-          setDraft('');
-        }}
-        className="min-w-32 flex-1 rounded-md bg-transparent px-1 py-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
-      />
+      {!readOnly && (
+        <input
+          aria-label="Добавить тег"
+          value={draft}
+          placeholder="Добавить тег…"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+            // Строчными — как их хранит сервер (`normalizeTags`): иначе оптимистичный патч
+            // показал бы «Работа», а перечитывание — «работа», и «дубликат» сверялся бы не с тем,
+            // что на самом деле лежит в записи.
+            const tag = draft.trim().toLowerCase();
+            if (tag === '') return;
+            if (!tags.includes(tag)) write([...tags, tag]);
+            setDraft('');
+          }}
+          className="min-w-32 flex-1 rounded-md bg-transparent px-1 py-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
+        />
+      )}
     </div>
   );
 }

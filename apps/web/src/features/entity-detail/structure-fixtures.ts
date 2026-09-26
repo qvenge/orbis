@@ -186,6 +186,8 @@ const ASSIGNMENT_AGENT = {
 
 const TICKET_ID = id(111);
 const ROUTINE_ID = id(113);
+/** «Тикет + рутина» — запись с задачей, назначением и рутиной разом (`TICKET_ROUTINE_FIXTURE`). */
+const TICKET_ROUTINE_ID = id(126);
 
 /**
  * Прогоны по родителю — то, что экран читает запросом `children_of=<запись>, aspect=orbis/agent-run`
@@ -212,6 +214,17 @@ const RUNS_BY_PARENT: Readonly<Record<string, WireEntity[]>> = {
       'orbis/run_outcome': 'finished',
       'orbis/run_finished_at': '2026-09-20T08:30:00.000Z',
       'orbis/run_report': 'Разобрал входящие.',
+    }),
+  ],
+  // Тикет, он же рутина: прогон рутины завершился и ждёт проверки — тикет стоит в `waiting`
+  // (TicketWaitingBlock с «Закрыть тикет»), рутина показывает его последним (RoutineStatusBlock).
+  [TICKET_ROUTINE_ID]: [
+    run(803, {
+      'orbis/run_routine': TICKET_ROUTINE_ID,
+      'orbis/run_bucket': '2026-09-20T07:00',
+      'orbis/run_outcome': 'finished',
+      'orbis/run_finished_at': '2026-09-20T08:30:00.000Z',
+      'orbis/run_report': 'Входящие разобраны, проверьте.',
     }),
   ],
 };
@@ -411,6 +424,31 @@ export const STRUCTURE_FIXTURES: readonly StructureFixture[] = [
     },
   },
 ];
+
+/**
+ * «Тикет + рутина» (остаток 1а №29): задача с назначением, которая сама рутина. НЕ входит в
+ * `STRUCTURE_FIXTURES`: эталон `golden/detail-structure.json` снят ровно с тех записей и не
+ * переснимается (РП-24), а сверка «эталон снят с этих фикстур» требует совпадения имён.
+ */
+export const TICKET_ROUTINE_FIXTURE: StructureFixture = {
+  name: 'ticket-routine',
+  entity: detailEntity(
+    126,
+    'Разбирать входящие по утрам',
+    ['orbis/task', 'orbis/assignment', 'orbis/routine'],
+    {
+      'orbis/task_status': 'waiting',
+      'orbis/priority': 'medium',
+      'orbis/waiting_for': 'Входящие разобраны, проверьте.',
+      ...ASSIGNMENT_AGENT,
+      'orbis/routine_stage': 'active',
+      'orbis/routine_at': '07:00',
+      'orbis/routine_days': ['mo', 'we', 'fr'],
+      'orbis/routine_mode': 'propose',
+      'orbis/allowed_tools': ['entity_query', 'entity_update'],
+    },
+  ),
+};
 
 // --- Обработчик ---------------------------------------------------------------------------------
 

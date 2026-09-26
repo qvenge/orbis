@@ -6,6 +6,7 @@ import { Markdown } from '../../lib/markdown/Markdown';
 import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { useHostReadOnly } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 import type { TicketRun } from './useTicketRuns';
 
@@ -30,6 +31,8 @@ export function TicketWaitingBlock({
   lastRun: TicketRun | undefined;
 }) {
   const utils = trpc.useUtils();
+  // Предпросмотр шаблона (хост `readOnly`): вопрос виден, ответа и «Закрыть тикет» нет.
+  const readOnly = useHostReadOnly();
   const answerId = useId();
   const [answer, setAnswer] = useState('');
   const answerCheckpoint = trpc.agentRun.answerCheckpoint.useMutation({
@@ -88,69 +91,73 @@ export function TicketWaitingBlock({
       {waitingFor !== '' && (
         <Markdown source={waitingFor} className="text-sm" onEntityLink={openEntity} />
       )}
-      <div className="flex flex-col gap-1">
-        <label htmlFor={answerId} className="text-sm text-text-secondary">
-          Ответ
-        </label>
-        <textarea
-          id={answerId}
-          rows={3}
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          className="w-full rounded-control border border-line bg-surface px-3 py-2 text-sm text-text outline-none transition focus-visible:ring-2 focus-visible:ring-accent/40"
-        />
-      </div>
-      {/* Отказ ЛЮБОЙ из двух кнопок: закрытие тикета отказывает так же, как ответ (тикет успели
+      {!readOnly && (
+        <>
+          <div className="flex flex-col gap-1">
+            <label htmlFor={answerId} className="text-sm text-text-secondary">
+              Ответ
+            </label>
+            <textarea
+              id={answerId}
+              rows={3}
+              value={answer}
+              onChange={(e) => setAnswer(e.target.value)}
+              className="w-full rounded-control border border-line bg-surface px-3 py-2 text-sm text-text outline-none transition focus-visible:ring-2 focus-visible:ring-accent/40"
+            />
+          </div>
+          {/* Отказ ЛЮБОЙ из двух кнопок: закрытие тикета отказывает так же, как ответ (тикет успели
           закрыть из списка, сеть отвалилась), и молчание о нём читалось бы как «сохранено».
           Одна строка на обе: нажимают их по очереди, обе разом в полёте не бывают. */}
-      {failure !== null && (
-        <p role="alert" className="text-danger text-sm">
-          {failure}
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          // Пустой ответ сервер отклонит (min(1)) — не отправляем его вовсе.
-          disabled={answer.trim() === '' || pending}
-          onClick={() =>
-            answerCheckpoint.mutate({
-              ticketId: entity.id,
-              runId: lastRun.id,
-              answer: answer.trim(),
-            })
-          }
-        >
-          Ответить и вернуть в работу
-        </Button>
-        {/* Только у `finished`: работа сделана, и владельцу нужен второй исход — закрыть тикет,
+          {failure !== null && (
+            <p role="alert" className="text-danger text-sm">
+              {failure}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              // Пустой ответ сервер отклонит (min(1)) — не отправляем его вовсе.
+              disabled={answer.trim() === '' || pending}
+              onClick={() =>
+                answerCheckpoint.mutate({
+                  ticketId: entity.id,
+                  runId: lastRun.id,
+                  answer: answer.trim(),
+                })
+              }
+            >
+              Ответить и вернуть в работу
+            </Button>
+            {/* Только у `finished`: работа сделана, и владельцу нужен второй исход — закрыть тикет,
             а не возвращать его в круг. У вопроса и у обрыва закрывать нечего. */}
-        {outcome === 'finished' && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={pending}
-            onClick={() =>
-              update.mutate({
-                id: entity.id,
-                expectedUpdatedAt: entity.updatedAt,
-                props: { 'orbis/task_status': 'done' },
-                // Снятие вопроса уезжает СПИСКОМ `unset`, а не `null` в значении (§А1-1):
-                // `null` — законное значение json-свойства, и совмещать их одним ключом
-                // больше нечем. Конвенция среза прежняя: уходя из waiting, вопрос снимают,
-                // иначе он остался бы висеть на закрытом тикете и читался бы как открытый.
-                // На сервере его снимает правило каталога `waiting_for` при уходе из класса
-                // `waiting`, а держит там `waiting_for_only_when_waiting` (`builtin-rules.ts`);
-                // явное снятие здесь им не противоречит. `orbis/completed_at`
-                // не шлём: его проставляет сам переход в done (правило `task_completed_at`).
-                unset: ['orbis/waiting_for'],
-              })
-            }
-          >
-            Закрыть тикет
-          </Button>
-        )}
-      </div>
+            {outcome === 'finished' && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={pending}
+                onClick={() =>
+                  update.mutate({
+                    id: entity.id,
+                    expectedUpdatedAt: entity.updatedAt,
+                    props: { 'orbis/task_status': 'done' },
+                    // Снятие вопроса уезжает СПИСКОМ `unset`, а не `null` в значении (§А1-1):
+                    // `null` — законное значение json-свойства, и совмещать их одним ключом
+                    // больше нечем. Конвенция среза прежняя: уходя из waiting, вопрос снимают,
+                    // иначе он остался бы висеть на закрытом тикете и читался бы как открытый.
+                    // На сервере его снимает правило каталога `waiting_for` при уходе из класса
+                    // `waiting`, а держит там `waiting_for_only_when_waiting` (`builtin-rules.ts`);
+                    // явное снятие здесь им не противоречит. `orbis/completed_at`
+                    // не шлём: его проставляет сам переход в done (правило `task_completed_at`).
+                    unset: ['orbis/waiting_for'],
+                  })
+                }
+              >
+                Закрыть тикет
+              </Button>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }

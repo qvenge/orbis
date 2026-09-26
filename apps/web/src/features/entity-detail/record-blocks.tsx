@@ -65,16 +65,16 @@ export function TitleBlock() {
  * Провайдер `this` — вокруг ТЕЛА, потому что `this` в блоках данных (§6.1) означает запись, чьё
  * тело этот блок содержит.
  *
- * `readOnlyBody` хоста (предпросмотр шаблона на чужой записи, §9.3) — тело только для чтения:
+ * `readOnly` хоста (предпросмотр шаблона на чужой записи, §9.3) — тело только для чтения:
  * первый кадр без редактора, без сохранения и черновиков. Запись взята для примера, и касание её
  * тела не повод его править.
  */
 export function BodyBlock() {
-  const { entity, readOnlyBody } = useRecordHost();
+  const { entity, readOnly } = useRecordHost();
   const screen = useBodyScreen();
   return (
     <ThisEntityProvider id={entity.id}>
-      {readOnlyBody ? (
+      {readOnly ? (
         <ReadOnlyEntityBody entity={entity} />
       ) : (
         <EntityBody key={entity.id} entity={entity} {...screen} />

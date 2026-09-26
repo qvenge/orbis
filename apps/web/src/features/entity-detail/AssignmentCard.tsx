@@ -8,6 +8,7 @@ import { useId, useRef, useState } from 'react';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
+import { useHostReadOnly } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -51,6 +52,9 @@ function draftOf(entity: Entity): Draft {
 }
 
 export function AssignmentCard({ entity }: { entity: Entity }) {
+  // Предпросмотр шаблона (хост `readOnly`): кто назначен — видно, выбора исполнителя, доступа и
+  // кнопок назначения нет.
+  const readOnly = useHostReadOnly();
   const { mutation } = useEntityUpdate(entity.id);
   const [draft, setDraft] = useState(() => draftOf(entity));
   // Экран монтируется БЕЗ key (router.tsx), и переход запись→запись меняет только проп: без
@@ -166,91 +170,95 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
         </p>
       )}
 
-      <fieldset className="flex flex-wrap items-center gap-4 text-sm">
-        <legend className="sr-only">Исполнитель</legend>
-        {(['human', 'agent'] as const).map((value) => (
-          <label key={value} className="flex cursor-pointer items-center gap-2">
-            <input
-              type="radio"
-              name={executorName}
-              className="size-4 accent-accent"
-              checked={draft.executor === value}
-              onChange={() => setDraft((d) => ({ ...d, executor: value }))}
-            />
-            {value === 'human' ? 'Человек' : 'Агент'}
-          </label>
-        ))}
-      </fieldset>
-
-      {draft.executor === 'agent' && (
-        <div className="flex flex-col gap-2">
-          <label htmlFor={grantSelectId} className="text-sm text-text-secondary">
-            Доступ агента
-          </label>
-          <select
-            id={grantSelectId}
-            value={draft.grantId}
-            onChange={(e) => setDraft((d) => ({ ...d, grantId: e.target.value }))}
-            className="rounded-control border border-line bg-surface px-3 py-2 text-sm"
-          >
-            <option value="">— выберите доступ —</option>
-            {live.map((g) => (
-              <option key={g.id} value={g.id}>
-                {`${g.label} · ${scopeLabel(g.scope)}${g.connected ? '' : ' · не подключён'}`}
-              </option>
+      {!readOnly && (
+        <>
+          <fieldset className="flex flex-wrap items-center gap-4 text-sm">
+            <legend className="sr-only">Исполнитель</legend>
+            {(['human', 'agent'] as const).map((value) => (
+              <label key={value} className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="radio"
+                  name={executorName}
+                  className="size-4 accent-accent"
+                  checked={draft.executor === value}
+                  onChange={() => setDraft((d) => ({ ...d, executor: value }))}
+                />
+                {value === 'human' ? 'Человек' : 'Агент'}
+              </label>
             ))}
-          </select>
-          {draftGrantRevoked && (
-            <p className="text-danger text-sm">
-              Этот доступ отозван — выберите живой из списка, иначе сервер откажет.
-            </p>
-          )}
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4 accent-accent"
-              checked={draft.mayClose}
-              onChange={(e) => setDraft((d) => ({ ...d, mayClose: e.target.checked }))}
-            />
-            Может закрывать сам
-          </label>
-        </div>
-      )}
+          </fieldset>
 
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          // Агент без гранта — гарантированный `INVARIANT` сервера (`assignment_grant_required`),
-          // с отозванным — NOT_FOUND:
-          // не отправляем вовсе ни то, ни другое.
-          disabled={
-            mutation.isPending ||
-            (draft.executor === 'agent' && (draft.grantId === '' || draftGrantRevoked))
-          }
-          onClick={save}
-        >
-          Сохранить
-        </Button>
-        {assigned && (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={mutation.isPending}
-            onClick={() =>
-              mutation.mutate({
-                id: entity.id,
-                expectedUpdatedAt: entity.updatedAt,
-                // `detach` снимает АСПЕКТ (§А1-1) — задача остаётся задачей, но ничьей.
-                // Значений снятие не трогает (Р9): исполнитель, которого сняли, остаётся
-                // фактом владельца и виден в секции «Свойства».
-                aspects: { detach: [ASSIGNMENT] },
-              })
-            }
-          >
-            Снять назначение
-          </Button>
-        )}
-      </div>
+          {draft.executor === 'agent' && (
+            <div className="flex flex-col gap-2">
+              <label htmlFor={grantSelectId} className="text-sm text-text-secondary">
+                Доступ агента
+              </label>
+              <select
+                id={grantSelectId}
+                value={draft.grantId}
+                onChange={(e) => setDraft((d) => ({ ...d, grantId: e.target.value }))}
+                className="rounded-control border border-line bg-surface px-3 py-2 text-sm"
+              >
+                <option value="">— выберите доступ —</option>
+                {live.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {`${g.label} · ${scopeLabel(g.scope)}${g.connected ? '' : ' · не подключён'}`}
+                  </option>
+                ))}
+              </select>
+              {draftGrantRevoked && (
+                <p className="text-danger text-sm">
+                  Этот доступ отозван — выберите живой из списка, иначе сервер откажет.
+                </p>
+              )}
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-accent"
+                  checked={draft.mayClose}
+                  onChange={(e) => setDraft((d) => ({ ...d, mayClose: e.target.checked }))}
+                />
+                Может закрывать сам
+              </label>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              // Агент без гранта — гарантированный `INVARIANT` сервера (`assignment_grant_required`),
+              // с отозванным — NOT_FOUND:
+              // не отправляем вовсе ни то, ни другое.
+              disabled={
+                mutation.isPending ||
+                (draft.executor === 'agent' && (draft.grantId === '' || draftGrantRevoked))
+              }
+              onClick={save}
+            >
+              Сохранить
+            </Button>
+            {assigned && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={mutation.isPending}
+                onClick={() =>
+                  mutation.mutate({
+                    id: entity.id,
+                    expectedUpdatedAt: entity.updatedAt,
+                    // `detach` снимает АСПЕКТ (§А1-1) — задача остаётся задачей, но ничьей.
+                    // Значений снятие не трогает (Р9): исполнитель, которого сняли, остаётся
+                    // фактом владельца и виден в секции «Свойства».
+                    aspects: { detach: [ASSIGNMENT] },
+                  })
+                }
+              >
+                Снять назначение
+              </Button>
+            )}
+          </div>
+        </>
+      )}
       {/* Отказ сервера показываем текстом: он здесь содержательный — отозванный между открытием
           экрана и нажатием грант отвечает «не найден или отозван», и без этой строки владелец
           видел бы нажатую кнопку и прежнее назначение, не понимая, сохранилось ли что-нибудь. */}

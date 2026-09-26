@@ -10,6 +10,7 @@ import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
 import { formatDay } from '../browser/EntityRow';
 import { useCategoryTitle } from '../budget/categories';
+import { useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['query'][number];
 
@@ -190,6 +191,10 @@ export function NativeRow({
 }) {
   const props = entity.props;
   const aspects = new Set(entity.aspects);
+  // Предпросмотр шаблона на чужой записи (хост `readOnly`): чекбокс не переключается, заголовок —
+  // текстом. Вне хоста (списки) — `false`, строка ведёт себя как прежде.
+  const readOnly = useHostReadOnly();
+  const saveTitle = readOnly ? undefined : onSaveTitle;
   // Подписи, keyFields и правило строки — из реестра (§А9-2, §Б5-6). Хуки зовутся ДО ветки
   // памяти: ветвление идёт ниже по данным, и вызов хука внутри ветки нарушил бы правило
   // порядка хуков на первой же смене аспекта у открытой записи.
@@ -204,7 +209,7 @@ export function NativeRow({
   // Память — своя строка (В7): её смысл (образец сопоставления и цель) живёт в свойствах, а не в
   // контрактах; в таблицу M14 запись памяти не входит.
   if (aspects.has('orbis/memory'))
-    return <MemoryRow title={entity.title} props={props} onSaveTitle={onSaveTitle} />;
+    return <MemoryRow title={entity.title} props={props} onSaveTitle={saveTitle} />;
 
   const closed = row.checkbox?.closed === true;
   const money =
@@ -233,13 +238,13 @@ export function NativeRow({
           aria-label="Готово"
           checked={closed}
           onCheckedChange={onToggleTask}
-          disabled={statusProperty !== TOGGLABLE_STATUS_PROPERTY}
+          disabled={readOnly || statusProperty !== TOGGLABLE_STATUS_PROPERTY}
           title={statusProperty === TOGGLABLE_STATUS_PROPERTY ? undefined : TOGGLE_BLOCKED_TITLE}
         />
       )}
       <Title
         value={entity.title}
-        onSave={onSaveTitle}
+        onSave={saveTitle}
         className={closed ? 'text-text-muted line-through' : ''}
       />
       {row.date !== null && (

@@ -133,6 +133,7 @@ export type PlacementIssueCode =
   | GrammarErrorCode
   | 'BLOCK_MISPLACED'
   | 'SECOND_BODY'
+  | 'SECOND_BLOCK'
   | 'ABSOLUTE_DATE'
   | 'QUERY_INVALID';
 
@@ -145,6 +146,20 @@ export interface PlacementIssue {
 
 /** Плашка §5.5 на месте блока обвязки или контейнера, попавшего в заметку. */
 export const MISPLACED_HINT = 'работает на страницах и в шаблонах — сделать запись страницей?';
+
+/**
+ * Плашка «второй» (РП-4): карточки записи рисуются один раз, лишний блок — подсказка на своём
+ * месте, а не повтор. Тексты живут здесь одной формулировкой для `bodyIssues` и плана рендера
+ * web, который ловит повтор разными написаниями; задача 8 распространит их на второй
+ * `{{cards: own}}`.
+ */
+export const SECOND_CARDS_MESSAGE =
+  'Второй блок {{cards}}: карточки записи показываются один раз, лишний блок не рисуется.';
+
+/** Текст плашки второй карточки одного аспекта; `raw` — блок, как он написан. */
+export function secondCardMessage(raw: string): string {
+  return `Второй ${raw.trim()}: карточка этого аспекта уже стоит выше, лишняя не рисуется.`;
+}
 
 /**
  * Пустой блок данных — «блок не настроен» (Р-21-8). Текст живёт в листовом
@@ -273,6 +288,10 @@ function queryIssue(
  * сообщается своим грамматическим кодом; в заметке — `BLOCK_MISPLACED`: `broken` всегда разметка
  * контейнера, а контейнер в заметке не работает вовсе (§5.5), и совет вроде «колонок бывает от
  * 2 до 4» звал бы чинить то, что и после починки не заработает.
+ *
+ * Второй `{{cards}}` и повтор `{{card: X}}` ОДИНАКОВЫМ текстом — `SECOND_BLOCK` здесь; разные
+ * написания одного аспекта (ключ и подпись) без реестра не узнать — их ловит план рендера web,
+ * где реестр есть. Неуместные и лежащие в `broken` блоки не считаются: они и так не рисуются.
  */
 export function bodyIssues(
   nodes: readonly PageNode[],
@@ -281,6 +300,8 @@ export function bodyIssues(
 ): PlacementIssue[] {
   const out: PlacementIssue[] = [];
   let bodies = 0;
+  let cards = 0;
+  const cardTexts = new Set<string>();
 
   const visit = (list: readonly PageNode[], prefix: number[]) => {
     list.forEach((node, i) => {
@@ -302,6 +323,22 @@ export function bodyIssues(
       if (block === null) return;
       if (!blockAllowedIn(block, kind)) {
         out.push(misplaced(node, block, kind, path));
+        return;
+      }
+      if (node.kind === 'record' && node.name === 'cards') {
+        cards += 1;
+        if (cards > 1) {
+          out.push({ code: 'SECOND_BLOCK', message: SECOND_CARDS_MESSAGE, path });
+        }
+        return;
+      }
+      if (node.kind === 'card') {
+        // `aspect` препроход уже отдал без краевых пробелов — «{{card:  x }}» и «{{card: x}}» равны.
+        if (cardTexts.has(node.aspect)) {
+          out.push({ code: 'SECOND_BLOCK', message: secondCardMessage(node.raw), path });
+        } else {
+          cardTexts.add(node.aspect);
+        }
         return;
       }
       if (block === 'body') {

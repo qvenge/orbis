@@ -17,6 +17,7 @@ import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
 import { useToast } from '../../ui/toast-store';
+import { useHostReadOnly } from './record-host';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type Version = RouterOutputs['version']['list'][number];
@@ -115,6 +116,9 @@ export function PinVersionDialog({ entityId, onClose }: { entityId: string; onCl
 }
 
 export function VersionsCard({ entity, active }: { entity: Entity; active: boolean }) {
+  // Предпросмотр шаблона (хост `readOnly`): список версий виден, «Восстановить» нет — жест
+  // переписал бы тело записи, взятой для примера.
+  const readOnly = useHostReadOnly();
   const utils = trpc.useUtils();
   const { show } = useToast();
   // Часовой пояс — по УЖЕ живому ключу кэша (его читает сам экран): своей сети секция не
@@ -212,14 +216,16 @@ export function VersionsCard({ entity, active }: { entity: Entity; active: boole
                   body_doc IS NULL). Второе восстановится текстом — блочная разметка соберётся
                   заново, и знать это надо ДО нажатия, а не после. */}
               <Badge>{v.hasDoc ? 'есть документ' : 'только текст'}</Badge>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={restore.isPending}
-                onClick={() => setTarget(v)}
-              >
-                Восстановить
-              </Button>
+              {!readOnly && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={restore.isPending}
+                  onClick={() => setTarget(v)}
+                >
+                  Восстановить
+                </Button>
+              )}
             </li>
           ))}
         </ul>

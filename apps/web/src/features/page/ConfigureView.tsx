@@ -1,7 +1,11 @@
+import { useEffect } from 'react';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
+import { registerLeaveGuard } from '../../state/leave-guard';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
+import { useToast } from '../../ui/toast-store';
+import { settleBody } from '../entity-detail/body-gate';
 import { bodyKindOf, EntityBody, useBodyScreen } from '../entity-detail/EntityBody';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { TemplateBanner, templateForOf } from './TemplateBanner';
@@ -11,7 +15,12 @@ import { TemplateBanner, templateForOf } from './TemplateBanner';
  * записи (`EntityBody`: первый кадр, автосохранение, черновики, Undo правки тела), под родом
  * страницы или шаблона — его `EntityBody` ставит сам по записи (`bodyKindOf`). Контейнеры в нём —
  * подписанными рамками, обвязка — заглушками, блоки данных — живыми; «/» предлагает контейнеры и
- * обвязку. «Готово» возвращает к показу; отложенную правку тело досылает при уходе само.
+ * обвязку. «Готово» возвращает к показу.
+ *
+ * Неотправленная правка (пауза набора, сохранение в полёте, отказ сервера) держит и «Готово», и
+ * уход с экрана — «назад», смену записи, вкладку (страж ухода `registerLeaveGuard`): тело досылается
+ * сейчас же, человек видит тост и повторяет жест. Досыл на размонтировании (`useBodySave`) об отказе
+ * молчал бы — плашки тела к тому времени уже ушли вместе с видом (остаток 1а №86).
  *
  * Запись настройки — своим `entity.get` под ключом экрана записи (`detailGetInput`): у страницы,
  * настраиваемой со своего экрана, это ТОТ ЖЕ запрос из кеша, второго нет; у шаблона, открытого
@@ -25,9 +34,16 @@ export function ConfigureView({ targetId, onDone }: { targetId: string; onDone: 
   // Тело настройки регистрируется у экрана так же, как тело записи: жесты меню ⋮, переписывающие
   // запись, обязаны знать о неотправленной правке и здесь (финальное ревью, F-I1).
   const { bodyGate } = useBodyScreen();
+  const { show } = useToast();
+  useEffect(() => registerLeaveGuard(() => settleBody(bodyGate.current, show)), [bodyGate, show]);
   const entity = get.data?.entity;
   const done = (
-    <Button size="sm" onClick={onDone}>
+    <Button
+      size="sm"
+      onClick={() => {
+        if (settleBody(bodyGate.current, show)) onDone();
+      }}
+    >
       Готово
     </Button>
   );

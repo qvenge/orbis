@@ -67,7 +67,7 @@ function Host({ id, children }: { id: string; children: ReactNode }) {
   if (get.data === undefined) return null;
   return (
     <RecordHostProvider
-      value={recordHostValue(get.data, { planToFact, activeTab: 'record', readOnlyBody: false })}
+      value={recordHostValue(get.data, { planToFact, activeTab: 'record', readOnly: false })}
     >
       <BodyScreenProvider value={SCREEN}>{children}</BodyScreenProvider>
     </RecordHostProvider>

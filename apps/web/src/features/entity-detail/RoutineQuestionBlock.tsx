@@ -13,6 +13,7 @@ import { Markdown } from '../../lib/markdown/Markdown';
 import { openEntity } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { useHostReadOnly } from './record-host';
 
 /**
  * Прогон в объёме вопроса — ровно то, что блоку нужно, и ни поля больше: сущность целиком он
@@ -41,6 +42,8 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
   // в зоне машины, а вопрос, заданный ночью, читается только вместе с «когда».
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
   const [answer, setAnswer] = useState('');
+  // Предпросмотр шаблона (хост `readOnly`): вопрос и ответ видны, поля ответа нет.
+  const readOnly = useHostReadOnly();
   const answerCheckpoint = trpc.routine.answerCheckpoint.useMutation({
     onSuccess: () => {
       setAnswer('');
@@ -55,7 +58,7 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
   // прогон он не находит вовсе. Кнопка, которая гарантированно отказывает, хуже её
   // отсутствия — тот же вывод, что у блока ожидания тикета.
   const archived = run.archived === true;
-  const waiting = run.outcome === 'checkpoint' && !archived;
+  const waiting = run.outcome === 'checkpoint' && !archived && !readOnly;
 
   return (
     <section

@@ -26,12 +26,13 @@ import type { RecordShown } from '../page/RecordView';
 import { TemplateForDialog } from '../page/TemplateForDialog';
 import type { PageTemplates } from '../page/usePageTemplates';
 import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatch';
+import { settleBody } from './body-gate';
 import type { BodyGateRef } from './EntityBody';
 import type { WireEntity } from './record-host';
 
 /**
  * Вид экрана для пунктов страниц 1а (спека §8.4): у записи — чем она показана и какие шаблоны ей
- * подходят; у страницы — открыта ли она сейчас записью.
+ * подходят; у страницы — открыта ли она сейчас записью; в настройке чужого шаблона — сам шаблон.
  */
 export type DetailMenuView =
   | {
@@ -55,6 +56,17 @@ export type DetailMenuView =
       onConfigure: () => void;
       /** «Предпросмотр на записи…» (§9.3) — только у черновика шаблона; у шаблона это его показ. */
       onPreview?: () => void;
+    }
+  /**
+   * В настройке чужого шаблона пункты — про шаблон: запись под ним не видна, и «Архивировать»,
+   * «Закрепить», «Сделать страницей», «Изменить вид», «Открыть через…» действовали бы на невидимую
+   * запись, а не на то, что человек правит (остаток 1а №87). Остаются «Открыть шаблон» и ссылка на
+   * него. Задача 19 среза 1б переносит этот вид в «⋯» рамки приложения.
+   */
+  | {
+      kind: 'configuring';
+      templateTitle: string;
+      onOpenTemplate: () => void;
     };
 
 /**
@@ -93,12 +105,6 @@ const MAKE_PAGE = 'Сделать страницей';
 const CHANGE_VIEW = 'Изменить вид только этой записи';
 const STOP_PAGE = 'Перестать быть страницей';
 const TEMPLATE_FOR = 'Сделать шаблоном для…';
-
-/** Тост жеста, отложенного ради неотправленной правки тела (`bodySettled`). */
-export const BODY_SAVING = 'Сохраняем текст…';
-/** Тост жеста при правке тела, которую сервер отверг или вернул конфликтом: досылать бесполезно. */
-export const BODY_BLOCKED =
-  'Правка текста не сохранена — сначала разберитесь с плашкой над записью';
 
 /**
  * Открытый диалог меню: вопрос случая 3 «Изменить вид» или «Сделать шаблоном для…».
@@ -160,59 +166,69 @@ export function DetailMenu({
    * набранного ушёл бы со старой меткой в 409, когда хука, чтобы показать конфликт, уже нет.
    * Поэтому жест не исполняется: тело досылается сейчас же, человек видит тост и повторяет жест,
    * когда текст сохранён. Ждать досыла и перестраивать план здесь не станем — повтор дешевле и
-   * честнее.
+   * честнее. Правило одно с настройкой («Готово», страж ухода) — `settleBody`.
    */
-  const bodySettled = (): boolean => {
-    const gate = bodyGate.current;
-    if (gate === null || !gate.hasUnsent()) return true;
-    // Отказ или конфликт этой правки: повторный досыл упал бы так же — не шлём и говорим правду.
-    if (gate.blocked()) {
-      show(BODY_BLOCKED, 'danger');
-      return false;
-    }
-    gate.flush();
-    show(BODY_SAVING, 'default');
-    return false;
-  };
+  const bodySettled = (): boolean => settleBody(bodyGate.current, show);
 
   const becomePage = (id: string, updatedAt: string, body: string): UpdateBatchOperation => ({
     tool: 'entity_update',
     input: { id, expectedUpdatedAt: updatedAt, body, aspects: { attach: [PAGE_ASPECT] } },
   });
 
-  const items: DropdownMenuItem[] = [
-    { label: 'Закрепить', icon: <Pin size={16} aria-hidden />, onSelect: onPin },
-    {
-      label: archiveLabel,
-      icon: archived ? <ArchiveRestore size={16} aria-hidden /> : <Archive size={16} aria-hidden />,
-      onSelect: onArchive,
-    },
-    {
-      label: 'Скопировать ссылку',
-      icon: <Link2 size={16} aria-hidden />,
-      onSelect: onCopyLink,
-    },
-    // Про ТЕЛО, а не про сайдбар — и стоит рядом с «Править как markdown», второй правкой
-    // тела, а не рядом с «Закрепить». Иконка тоже другая (History против Pin): два пункта
-    // с одной иконкой и почти одной подписью читались бы как один с опечаткой.
-    {
-      label: 'Закрепить версию',
-      icon: <History size={16} aria-hidden />,
-      onSelect: onPinVersion,
-    },
-    // Пункт появляется, только когда есть что править (см. проп): предлагать действие,
-    // которое молча ничего не делает, хуже, чем не предлагать его вовсе.
-    ...(onToggleMarkdown === undefined
-      ? []
-      : [
+  const copyLinkItem: DropdownMenuItem = {
+    label: 'Скопировать ссылку',
+    icon: <Link2 size={16} aria-hidden />,
+    onSelect: onCopyLink,
+  };
+
+  // Настройка чужого шаблона: общие пункты не собираются вовсе — они про невидимую запись.
+  const items: DropdownMenuItem[] =
+    view.kind === 'configuring'
+      ? [
           {
-            label: 'Править как markdown',
-            icon: <Code size={16} aria-hidden />,
-            onSelect: onToggleMarkdown,
+            label: `Открыть шаблон „${view.templateTitle}“`,
+            icon: <LayoutTemplate size={16} aria-hidden />,
+            onSelect: view.onOpenTemplate,
           },
-        ]),
-    ...(view.kind === 'record' ? recordItems(view) : pageItems(view)),
-  ];
+          copyLinkItem,
+        ]
+      : commonItems(view);
+
+  function commonItems(v: Exclude<DetailMenuView, { kind: 'configuring' }>): DropdownMenuItem[] {
+    return [
+      { label: 'Закрепить', icon: <Pin size={16} aria-hidden />, onSelect: onPin },
+      {
+        label: archiveLabel,
+        icon: archived ? (
+          <ArchiveRestore size={16} aria-hidden />
+        ) : (
+          <Archive size={16} aria-hidden />
+        ),
+        onSelect: onArchive,
+      },
+      copyLinkItem,
+      // Про ТЕЛО, а не про сайдбар — и стоит рядом с «Править как markdown», второй правкой
+      // тела, а не рядом с «Закрепить». Иконка тоже другая (History против Pin): два пункта
+      // с одной иконкой и почти одной подписью читались бы как один с опечаткой.
+      {
+        label: 'Закрепить версию',
+        icon: <History size={16} aria-hidden />,
+        onSelect: onPinVersion,
+      },
+      // Пункт появляется, только когда есть что править (см. проп): предлагать действие,
+      // которое молча ничего не делает, хуже, чем не предлагать его вовсе.
+      ...(onToggleMarkdown === undefined
+        ? []
+        : [
+            {
+              label: 'Править как markdown',
+              icon: <Code size={16} aria-hidden />,
+              onSelect: onToggleMarkdown,
+            },
+          ]),
+      ...(v.kind === 'record' ? recordItems(v) : pageItems(v)),
+    ];
+  }
 
   function recordItems(v: Extract<DetailMenuView, { kind: 'record' }>): DropdownMenuItem[] {
     const { shown, templates } = v;

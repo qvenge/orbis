@@ -1549,6 +1549,10 @@ test('модули первого кадра не тянут схему реда
     '../page/ConfigureView.tsx',
     '../page/TemplateBanner.tsx',
     '../page/TemplatePreview.tsx',
+    // Хвосты 1а (срез 1б, задача 2): правило неотправленной правки тела — общее у настройки
+    // (эагерной) и меню; страж ухода зовёт стор навигации первого кадра.
+    '../entity-detail/body-gate.ts',
+    '../../state/leave-guard.ts',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

@@ -7,18 +7,21 @@
  * `this` у блоков данных — только uuid.
  */
 import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
-import { parseBody } from '@orbis/shared/doc';
+import { parseBody, serializeBody } from '@orbis/shared/doc';
 import type { QueryAst } from '@orbis/shared/query';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { goBack } from '../../app/history';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { useNav } from '../../state/navigation';
+import { openEntity, useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
+  trpcError,
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
@@ -26,6 +29,7 @@ import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
+import { BODY_BLOCKED, BODY_SAVING } from '../entity-detail/body-gate';
 import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import {
@@ -133,14 +137,16 @@ const aspectsOfFilter = (ast: QueryAst): string[] => {
  * список шаблонов — страницы с непустым «Шаблон для»; подходящие записи — по аспектам дерева,
  * последние изменённые первыми, как отсортировал бы сервер.
  */
-function open(main: StructureFixture, rows: WireEntityFixture[]) {
+function open(main: StructureFixture, rows: WireEntityFixture[], over?: MockHandler) {
   useNav.setState({
     activeTab: 'browser',
     stacks: { chat: [], browser: [{ kind: 'entity', id: main.entity.id }], agenda: [], budget: [] },
   });
   const all = [main.entity, ...rows];
   const base = structureHandler(main);
-  const handler: MockHandler = (path, input) => {
+  const handler: MockHandler = async (path, input, type) => {
+    const own = over ? await over(path, input, type) : undefined;
+    if (own !== undefined) return own;
     if (path === 'entity.query') {
       const q = input as { query?: string; ast?: QueryAst };
       if (q.query === PAGE_TEMPLATES_QUERY) {
@@ -214,11 +220,29 @@ const menuLabels = async () => {
 const frameLabels = () =>
   screen.getAllByTestId('layout-frame-label').map((n) => n.textContent ?? '');
 
+/** Сервер правки тела: `hold` держит ответ, `reject` — отказывает правке по существу. */
+function bodyServer(opts: { hold?: Promise<void>; reject?: boolean }): MockHandler {
+  return async (path, input) => {
+    if (path !== 'entity.update') return undefined;
+    if (opts.hold !== undefined) await opts.hold;
+    if (opts.reject === true) throw trpcError('BAD_REQUEST', 'тело не принято');
+    const inp = input as { bodyDoc?: { v: number; doc: object } };
+    const base = dashboard();
+    return {
+      ...base,
+      updatedAt: '2026-09-25T13:00:00.000Z',
+      ...(inp.bodyDoc === undefined
+        ? {}
+        : { bodyDoc: inp.bodyDoc, body: serializeBody(inp.bodyDoc as never) }),
+    };
+  };
+}
+
 // --- «Настроить» -------------------------------------------------------------------------------
 
 test('«Настроить» у страницы → тело страницы в редакторе (род «страница»), «Готово» → показ', async () => {
   idleNever();
-  open(asScreen(dashboard()), []);
+  open(asScreen(dashboard()), [], bodyServer({}));
   // Показ — раскладкой колонок.
   await screen.findByTestId('page-columns');
   await choose('Настроить');
@@ -248,9 +272,13 @@ test('«Настроить» у страницы → тело страницы �
   ).toEqual(['Колонкираскладка страницы']);
   await userEvent.keyboard('{Escape}');
 
-  fireEvent.click(within(view).getByRole('button', { name: 'Готово' }));
+  // Набранное « /колон» ещё не сохранено: «Готово» досылает его и ждёт (остаток 1а №86), а после
+  // ответа сервера закрывает настройку.
+  await waitFor(() => {
+    fireEvent.click(within(view).getByRole('button', { name: 'Готово' }));
+    expect(screen.queryByTestId('configure-view')).toBeNull();
+  });
   await screen.findByTestId('page-columns');
-  expect(screen.queryByTestId('configure-view')).toBeNull();
 });
 
 test('«Настроить шаблон „Проекты“» с записи, открытой шаблоном владельца → редактор шаблона с баннером', async () => {
@@ -450,4 +478,115 @@ test('страницы и сама страница не предлагаютс�
       .getAllByRole('option')
       .map((o) => o.textContent),
   ).toEqual(['Дача', 'сама страница']);
+});
+
+// --- Несохранённая правка настройки (остаток 1а №86) -------------------------------------------
+
+describe('несохранённая правка настройки не молчит', () => {
+  /**
+   * Правка тела в редакторе настройки, НЕ дождавшаяся паузы автосохранения: командой живого
+   * редактора (Tiptap кладёт себя в `dom.editor`) — тем же путём `onUpdate`, что и набор.
+   */
+  async function editUnsent(view: HTMLElement, tail: string): Promise<void> {
+    await userEvent.click(within(view).getByText('левая часть'));
+    const field = await waitFor(() => {
+      const node = within(view).getByTestId('body-editor').querySelector('[contenteditable]');
+      if (node === null) throw new Error('редактор не встал');
+      return node as HTMLElement & { editor: Editor };
+    });
+    let at = -1;
+    field.editor.state.doc.descendants((node, pos) => {
+      if (at === -1 && node.isText && node.text === 'левая часть') at = pos + node.text.length;
+    });
+    act(() => {
+      field.editor.commands.insertContentAt(at, tail);
+    });
+  }
+
+  const done = (view: HTMLElement) => within(view).getByRole('button', { name: 'Готово' });
+  const updates = (calls: { path: string }[]) => calls.filter((c) => c.path === 'entity.update');
+
+  async function configure(over: MockHandler) {
+    idleNever();
+    const r = open(asScreen(dashboard()), [secondProject()], over);
+    await screen.findByTestId('page-columns');
+    await choose('Настроить');
+    const view = await screen.findByTestId('configure-view');
+    await waitFor(() => expect(within(view).getByText('левая часть')).toBeInTheDocument());
+    return { ...r, view };
+  }
+
+  test('«Готово» до паузы автосохранения — правка уходит, тост, настройка на месте; после ответа «Готово» закрывает', async () => {
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { calls, view } = await configure(bodyServer({ hold }));
+    await editUnsent(view, ' ХВОСТ');
+    expect(updates(calls)).toEqual([]);
+
+    fireEvent.click(done(view));
+    expect(await screen.findByText(BODY_SAVING)).toBeInTheDocument();
+    expect(screen.getByTestId('configure-view')).toBe(view);
+    await waitFor(() => expect(updates(calls)).toHaveLength(1));
+    expect(JSON.stringify(updates(calls)[0])).toContain('ХВОСТ');
+
+    release();
+    await waitFor(() => {
+      fireEvent.click(done(view));
+      expect(screen.queryByTestId('configure-view')).toBeNull();
+    });
+    await screen.findByTestId('page-columns');
+  });
+
+  test('сервер отверг правку — «Готово» говорит «не сохранена», настройка и плашка тела на месте', async () => {
+    const { calls, view } = await configure(bodyServer({ reject: true }));
+    await editUnsent(view, ' ХВОСТ');
+    fireEvent.click(done(view));
+    await waitFor(() => expect(updates(calls)).toHaveLength(1));
+    // Отказ по существу: тело говорит о нём своей плашкой.
+    expect(await within(view).findByTestId('save-indicator')).toHaveTextContent('Правка отклонена');
+    useToastStore.setState({ toasts: [] });
+    fireEvent.click(done(view));
+    expect(await screen.findByText(BODY_BLOCKED)).toBeInTheDocument();
+    expect(screen.queryByText(BODY_SAVING)).toBeNull();
+    expect(screen.getByTestId('configure-view')).toBe(view);
+    expect(within(view).getByTestId('save-indicator')).toBeInTheDocument();
+    // Досылать обречённое не станем.
+    expect(updates(calls)).toHaveLength(1);
+  });
+
+  test('«назад» и переход на другую запись при неотправленной правке — настройка на месте, стек прежний, тост', async () => {
+    const { view } = await configure(bodyServer({ hold: new Promise(() => {}) }));
+    await editUnsent(view, ' ХВОСТ');
+    const back = vi.spyOn(window.history, 'back');
+    const stacks = useNav.getState().stacks;
+
+    const toasts = () => useToastStore.getState().toasts.map((t) => t.title);
+
+    goBack();
+    expect(toasts()).toContain(BODY_SAVING);
+    expect(back).not.toHaveBeenCalled();
+
+    useToastStore.setState({ toasts: [] });
+    openEntity(PROJECT_B);
+    expect(toasts()).toContain(BODY_SAVING);
+    expect(useNav.getState().stacks).toEqual(stacks);
+    expect(screen.getByTestId('configure-view')).toBe(view);
+  });
+
+  test('без неотправленного «Готово», «назад» и переход работают сразу', async () => {
+    const { view } = await configure(bodyServer({}));
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+
+    goBack();
+    expect(back).toHaveBeenCalledTimes(1);
+    openEntity(PROJECT_B);
+    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: PROJECT_B });
+
+    fireEvent.click(done(view));
+    await screen.findByTestId('page-columns');
+    expect(screen.queryByTestId('configure-view')).toBeNull();
+    expect(screen.queryByText(BODY_SAVING)).toBeNull();
+  });
 });

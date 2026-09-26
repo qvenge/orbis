@@ -30,7 +30,7 @@ export function PageView({ reply }: { reply: EntityGetReply }) {
   const nodes = useMemo(() => parsePageText(entity.body), [entity.body]);
   const kind = bodyKindOf(entity);
   // Корень хоста — вне вкладок: блок, стоящий не во вкладке, виден всегда (`activeTab`).
-  const host = recordHostValue(reply, { planToFact, activeTab: 'page', readOnlyBody: false });
+  const host = recordHostValue(reply, { planToFact, activeTab: 'page', readOnly: false });
   return (
     <RecordHostProvider value={host}>
       {/* Экран тела. Своим телом страница редактор записи не ставит (`{{body}}` на странице —

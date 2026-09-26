@@ -32,3 +32,26 @@ export function ChatThread({ threadId }: { threadId: string }) {
     </div>
   );
 }
+
+/**
+ * Лента треда только для чтения — предпросмотр шаблона на чужой записи (1а новое-5): сообщения и
+ * подгрузка старых есть, поля ввода, повтора отправки и чипов-продолжений нет. Тред не заводится
+ * (`chat.ensureThread` — мутация): у треда, который не открывали, строки нет, и лента честно пуста.
+ */
+export function ChatFeed({ threadId }: { threadId: string }) {
+  const { messages, fetchOlder, hasMore, isLoading } = useChatThread(threadId);
+  return (
+    <div className="flex h-full flex-col">
+      {hasMore && (
+        <Button variant="ghost" onClick={() => fetchOlder()} className="m-2 self-center">
+          Загрузить ещё
+        </Button>
+      )}
+      {isLoading ? (
+        <ThreadSkeleton />
+      ) : (
+        <MessageList messages={messages} isTyping={false} emptyHint="Обсуждение этой записи" />
+      )}
+    </div>
+  );
+}

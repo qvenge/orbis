@@ -16,6 +16,7 @@
 // Класть его туда законно: `history.state` структурно клонируется, а все восемь вариантов
 // `ScreenRef` — простые JSON-совместимые объекты без функций.
 import { type AppScreen, buildAppPath, parseAppPath, tabOfScreen } from '@orbis/shared';
+import { mayLeave } from '../state/leave-guard';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 
 /** Что лежит в `history.state`: вкладка, глубина её стека и верхний экран (корень — null). */
@@ -184,6 +185,14 @@ export function installHistorySync(): () => void {
   });
 
   const onPop = (event: PopStateEvent) => {
+    // Страж ухода сказал «нет» (неотправленная правка настройки, остаток 1а №86): браузер уже
+    // сдвинулся по истории, и отменить жест нельзя — поэтому состояние НЕ применяется, а запись
+    // экрана, с которого не ушли, возвращается наверх. Иначе адрес и история описывали бы экран,
+    // которого нет, и следующий «назад» ушёл бы на шаг дальше.
+    if (!mayLeave()) {
+      window.history.pushState(last.state, '', last.path);
+      return;
+    }
     applyingHistory = true;
     try {
       applyState(isNavHistoryState(event.state) ? event.state : null, window.location.pathname);
@@ -309,5 +318,8 @@ export function seedHistory(): void {
  * Асинхронно по природе: браузер доставит `popstate` следующим тиком.
  */
 export function goBack(): void {
+  // Страж ухода — до жеста: «назад» кнопкой шапки не должен даже сдвигать историю, если экран
+  // держит неотправленную правку (остаток 1а №86).
+  if (!mayLeave()) return;
   window.history.back();
 }

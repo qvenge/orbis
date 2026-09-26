@@ -7,9 +7,10 @@
  */
 import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
 import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
+import { SECOND_CARDS_MESSAGE, secondCardMessage } from '@orbis/shared/doc/placement';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import {
@@ -25,10 +26,15 @@ import {
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { DetailScreen } from '../entity-detail/DetailScreen';
-import { type EntityGetReply, structureHandler } from '../entity-detail/structure-fixtures';
+import {
+  type EntityGetReply,
+  STRUCTURE_FIXTURES,
+  structureHandler,
+} from '../entity-detail/structure-fixtures';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
 import { PageView } from './PageView';
+import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
 
 installCrashTrap();
 
@@ -453,4 +459,82 @@ test('вкладка без подписи ({{tab}}) на показе — «В�
     'Б',
     'Вкладка 3',
   ]);
+});
+
+describe('плашка «второй» (SECOND_BLOCK, 1а новое-11)', () => {
+  const TPL_ID = '00000000-0000-4000-8000-000000000591';
+
+  /** Запись фикстуры экрана, показанная шаблоном владельца с данным телом. */
+  function openWithTemplate(name: string, forAspects: string[], body: string) {
+    const f = STRUCTURE_FIXTURES.find((x) => x.name === name);
+    if (f === undefined) throw new Error(`нет фикстуры ${name}`);
+    const tpl = wireEntity({
+      id: TPL_ID,
+      title: 'Вид с повтором',
+      body,
+      aspects: [PAGE_ASPECT],
+      props: { [TEMPLATE_FOR_PROPERTY]: forAspects },
+    });
+    return openPage(f.entity, {
+      extra: f.extra ?? {},
+      over: (path, input) =>
+        path === 'entity.query' && (input as { query?: string }).query === PAGE_TEMPLATES_QUERY
+          ? [tpl]
+          : undefined,
+    });
+  }
+
+  test('ключ и подпись одного аспекта в шаблоне — карточка одна, на месте второй плашка', async () => {
+    openWithTemplate(
+      'goal',
+      ['orbis/goal'],
+      'Вид цели\n\n{{card: orbis/goal}}\n\n{{card: "Цель"}}\n',
+    );
+    await screen.findByText('Вид цели');
+    const plaque = await screen.findByTestId('block-misplaced');
+    expect(plaque).toHaveTextContent(secondCardMessage('{{card: "Цель"}}'));
+    expect(screen.getAllByTestId('aspect-orbis/goal')).toHaveLength(1);
+  });
+
+  test('два {{cards}} на странице — карточки по одному разу, одна плашка', async () => {
+    openPage(
+      page('{{cards}}\n\n{{cards}}\n', { aspects: [PAGE_ASPECT, 'orbis/goal', 'orbis/note'] }),
+    );
+    const view = await screen.findByTestId('page-view');
+    await within(view).findByTestId('aspect-orbis/note');
+    expect(within(view).getAllByTestId('aspect-orbis/note')).toHaveLength(1);
+    expect(within(view).getAllByTestId('aspect-orbis/goal')).toHaveLength(1);
+    const plaques = within(view).getAllByTestId('block-misplaced');
+    expect(plaques).toHaveLength(1);
+    expect(plaques[0]).toHaveTextContent(SECOND_CARDS_MESSAGE);
+  });
+
+  test('карточка исполнителя дважды разными написаниями у тикета — ожидание и поле ответа одни', async () => {
+    openWithTemplate(
+      'ticket',
+      ['orbis/assignment'],
+      'Вид тикета\n\n{{card: orbis/assignment}}\n\n{{card: "Исполнитель"}}\n',
+    );
+    await screen.findByText('Вид тикета');
+    await screen.findByTestId('ticket-waiting');
+    // Лишняя копия жила бы своим состоянием: второе поле ответа, вторая «Ответить».
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(screen.getAllByTestId('ticket-waiting')).toHaveLength(1);
+    expect(screen.getAllByLabelText('Ответ')).toHaveLength(1);
+    expect(screen.getByTestId('block-misplaced')).toHaveTextContent(
+      secondCardMessage('{{card: "Исполнитель"}}'),
+    );
+  });
+
+  test('одна {{card: orbis/page}} на странице своим телом — не «вторая» (placed заранее несёт orbis/page)', async () => {
+    openPage(page('Текст\n\n{{card: orbis/page}}\n', { aspects: [PAGE_ASPECT, 'orbis/goal'] }));
+    const view = await screen.findByTestId('page-view');
+    await within(view).findByText('Текст');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(within(view).queryByTestId('block-misplaced')).toBeNull();
+  });
 });

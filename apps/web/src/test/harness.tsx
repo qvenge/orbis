@@ -75,7 +75,16 @@ export function installCrashTrap(): void {
   });
 }
 
-export type MockHandler = (path: string, input: unknown) => unknown | Promise<unknown>;
+/**
+ * Обработчик сети теста. Третий аргумент — род операции tRPC: тесту «ничего не пишется»
+ * (предпросмотр шаблона — только чтение) нужно отличать мутацию от чтения по сути, а не по списку
+ * имён процедур, который устарел бы с первой новой кнопкой. Прежние обработчики его не читают.
+ */
+export type MockHandler = (
+  path: string,
+  input: unknown,
+  type?: 'query' | 'mutation' | 'subscription',
+) => unknown | Promise<unknown>;
 
 // TRPCClientError с data.code — клиент ключуется на КОД (не cause). Второй аргумент —
 // текст сообщения: cause по HTTP не сериализуется, поэтому детали инвариантов (путь цикла
@@ -91,7 +100,7 @@ export function mockLink(handler: MockHandler): TRPCLink<AppRouter> {
   return () =>
     ({ op }) =>
       observable((observer) => {
-        Promise.resolve(handler(op.path, op.input))
+        Promise.resolve(handler(op.path, op.input, op.type))
           .then((data) => {
             observer.next({ result: { type: 'data', data } });
             observer.complete();
@@ -178,9 +187,9 @@ export function renderWithProviders(
   });
   const client = trpc.createClient({
     links: [
-      mockLink(async (path, input) => {
+      mockLink(async (path, input, type) => {
         calls.push({ path, input });
-        const answer = await handler(path, input);
+        const answer = await handler(path, input, type);
         const fallback = unroutedDefault(path, input);
         return fallback !== undefined && unrouted(answer) ? fallback : answer;
       }),
