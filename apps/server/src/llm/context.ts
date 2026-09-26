@@ -1,6 +1,6 @@
 // apps/server/src/llm/context.ts
 // Сборка контекста LLM-вызова — пятислойная модель §7.1:
-//   слой 1 (промпт v7 + дата владельца §Б7-6-1 + индекс аспектов реестра — срез 1а §10),
+//   слой 1 (промпт v8 + дата владельца §Б7-6-1 + индекс аспектов реестра — срез 1а §10),
 //   слой 2 (память §7.4: активные orbis/memory, кап MEMORY_CAP, приоритет rule/scope),
 //   слой 3 (якорная сущность треда — 02 §2.2, только если тред сущности),
 //   слой 4 (rolling-история треда) — слои 1–3 склеиваются в ПОЛЕ system,
@@ -23,7 +23,7 @@
 // модуль `llm/aspect-index.ts`), todaySection/todaySectionFor, loadMemory/memoryLine/MEMORY_SECTION_HEADER и anchorBlock
 // экспортируются, а не копируются.
 //
-// §Б7-6: промпт v7 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
+// §Б7-6: промпт v8 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
 // блок продолжений обязан быть последним для модели, а не последним в тексте константы.
 import { extensionPromptFragments, type GraphId } from '@orbis/shared';
 import { and, desc, eq, inArray } from 'drizzle-orm';
@@ -45,7 +45,7 @@ import { effectiveRegistry } from '../registry/cache';
 import { disabledExtensionsOf } from '../registry/extensions';
 import { toLlmEntity } from '../wire';
 import { aspectIndexSection } from './aspect-index';
-import { SYSTEM_PROMPT_V7, TOOL_RESULT_MARKER } from './prompts/v7';
+import { SYSTEM_PROMPT_V8, TOOL_RESULT_MARKER } from './prompts/v8';
 import type { LLMMessage } from './types';
 
 /** Разделитель секций системного канала — пустая строка между абзацами. */
@@ -67,7 +67,7 @@ export const ANCHOR_BODY_PREVIEW = 500;
 export const ANCHOR_INSTRUCTION_CAP = 8000;
 
 /**
- * Заголовок блока продолжений — точная подстрока SYSTEM_PROMPT_V7.
+ * Заголовок блока продолжений — точная подстрока SYSTEM_PROMPT_V8.
  *
  * По нему промпт делится на тело и хвост, потому что блок продолжений обязан замыкать
  * СОБРАННЫЙ канал (§Б7-6-2): его инструкция «в КОНЦЕ ответа отдельной последней строкой»
@@ -76,23 +76,23 @@ export const ANCHOR_INSTRUCTION_CAP = 8000;
  */
 export const CONTINUATIONS_HEADING = 'Продолжения разговора:';
 
-const CONTINUATIONS_START = SYSTEM_PROMPT_V7.indexOf(CONTINUATIONS_HEADING);
+const CONTINUATIONS_START = SYSTEM_PROMPT_V8.indexOf(CONTINUATIONS_HEADING);
 // Проверка на загрузке модуля, а не «когда-нибудь в тесте»: при -1 slice(0, -1) молча
 // отрезал бы последний символ промпта, и канал ушёл бы к модели покалеченным.
 if (CONTINUATIONS_START < 0) {
-  throw new Error(`SYSTEM_PROMPT_V7 не содержит заголовка «${CONTINUATIONS_HEADING}»`);
+  throw new Error(`SYSTEM_PROMPT_V8 не содержит заголовка «${CONTINUATIONS_HEADING}»`);
 }
 
 /**
  * Тело промпта — всё до блока продолжений, ВКЛЮЧАЯ разделитель абзаца перед ним.
  *
- * Обе части ВЫЧИСЛЯЮТСЯ из SYSTEM_PROMPT_V7, а не выписаны текстом: правка промпта — это
- * новая линейка (v7, правило v5.ts:2-5), и копия здесь тихо разошлась бы с оригиналом.
+ * Обе части ВЫЧИСЛЯЮТСЯ из SYSTEM_PROMPT_V8, а не выписаны текстом: правка промпта — это
+ * новая линейка (v8, правило v5.ts:2-5), и копия здесь тихо разошлась бы с оригиналом.
  * Пин конкатенации — llm/context.test.ts.
  */
-export const PROMPT_BODY = SYSTEM_PROMPT_V7.slice(0, CONTINUATIONS_START);
+export const PROMPT_BODY = SYSTEM_PROMPT_V8.slice(0, CONTINUATIONS_START);
 /** Блок продолжений — хвост промпта; в канале идёт ПОСЛЕДНЕЙ секцией (§Б7-6-2). */
-export const CONTINUATIONS_BLOCK = SYSTEM_PROMPT_V7.slice(CONTINUATIONS_START);
+export const CONTINUATIONS_BLOCK = SYSTEM_PROMPT_V8.slice(CONTINUATIONS_START);
 
 /** Дни недели по индексу Date#getUTCDay (0 — воскресенье). */
 const WEEKDAYS_RU = [
@@ -540,7 +540,7 @@ export async function buildContext(tx: Tx, input: BuildContextInput): Promise<Bu
   // PROMPT_BODY уже кончается разделителем абзаца (он отрезан по месту заголовка блока
   // продолжений) — первая динамическая секция приклеивается к нему напрямую, иначе между
   // ними встали бы лишние пустые строки. Свойство склейки: при пустом dynamic канал
-  // побайтно равен SYSTEM_PROMPT_V7 — переставлена СБОРКА, а не текст промпта (РП-18).
+  // побайтно равен SYSTEM_PROMPT_V8 — переставлена СБОРКА, а не текст промпта (РП-18).
   const system = PROMPT_BODY + [...dynamic, CONTINUATIONS_BLOCK].join(SECTION_SEPARATOR);
 
   return { system, messages };

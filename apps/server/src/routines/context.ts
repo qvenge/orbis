@@ -2,7 +2,7 @@
 // Контекст LLM-вызова прогона рутины (V1.5). От чатового (llm/context.ts) отличается
 // ровно двумя вещами — и обе принципиальные:
 //
-//   1. СИСТЕМНЫЙ СЛОЙ СВОЙ (ROUTINE_SYSTEM_PROMPT_V3 + секция режима): у фонового прогона
+//   1. СИСТЕМНЫЙ СЛОЙ СВОЙ (ROUTINE_SYSTEM_PROMPT_V4 + секция режима): у фонового прогона
 //      нет собеседника, зато есть режим, белый список и терминальные глаголы. С промптом
 //      чат-ассистента модель завершала бы цикл «ответом пользователю», которого никто не
 //      прочтёт.
@@ -10,13 +10,19 @@
 //      решил, о чём спрашивала и что он ответил. Это единственный механизм обратной
 //      связи в V1 (обучения правил нет — «Известные границы» спеки).
 //
-// Остальные слои — те же и теми же функциями (дата владельца, индекс аспектов,
-// память, якорь): разъехавшись, они дали бы «в фоне модель видит другой Orbis».
+// Остальные слои — те же и теми же функциями (дата владельца, фрагменты расширений, индекс
+// аспектов, память, якорь): разъехавшись, они дали бы «в фоне модель видит другой Orbis».
 //
 // Роль 'system' в messages ЗАПРЕЩЕНА (контракт провайдера — ai-sdk.ts бросает): и
 // история, и «сработала рутина» едут как 'user'. Инвариант «messages начинается с user»
 // здесь держится по построению — оба сообщения user.
-import type { GraphId, ProposalStatus, RunOutcome, RunSummary } from '@orbis/shared';
+import {
+  extensionPromptFragments,
+  type GraphId,
+  type ProposalStatus,
+  type RunOutcome,
+  type RunSummary,
+} from '@orbis/shared';
 import type { RoutineProps } from '../agent-loop/queries';
 import type { Tx } from '../db/with-identity';
 import { aspectIndexSection } from '../llm/aspect-index';
@@ -27,7 +33,7 @@ import {
   memoryLine,
   todaySectionFor,
 } from '../llm/context';
-import { ROUTINE_SYSTEM_PROMPT_V3, routineModeSection } from '../llm/prompts/routine-v3';
+import { ROUTINE_SYSTEM_PROMPT_V4, routineModeSection } from '../llm/prompts/routine-v4';
 import type { LLMMessage } from '../llm/types';
 import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
 import type { RejectReason } from '../policy/pending';
@@ -282,27 +288,35 @@ export async function buildRoutineContext(
   input: BuildRoutineContextInput,
 ): Promise<BuiltRoutineContext> {
   const { routine } = input;
+  // Маска §Б8-3 — ОДНО чтение на сборку канала: её спрашивают и слой фрагментов, и индекс
+  // аспектов (тот же приём, что у `buildContext`, `llm/context.ts`).
+  const disabled = await disabledExtensionsOf(tx, input.graphId);
   const sections: string[] = [
-    ROUTINE_SYSTEM_PROMPT_V3,
+    ROUTINE_SYSTEM_PROMPT_V4,
     // Дата — сразу за промптом, как и в чате (§Б7-6-1): рутина работает со «сроком
     // сегодня» и «просрочено», и без даты считала бы их от даты обучения модели.
     // Переставлять из-за неё нечего: блока продолжений у раннера нет.
     await todaySectionFor(tx, input.graphId, (input.clock ?? (() => new Date()))()),
+  ];
+
+  // Д-9 (спека 1б §8.2): проза ВКЛЮЧЁННЫХ расширений — сразу за датой, тем же порядком, что в
+  // чате. Без этого слоя routine-v4 (денежные строки routine-v3 сняты в фрагмент Финансов) оставил
+  // бы фон без денежных правил при включённых Финансах, а рукописный текст учил бы их при выключенных.
+  const fragments = extensionPromptFragments(disabled);
+  if (fragments !== null) sections.push(fragments);
+
+  sections.push(
     routineModeSection({
       mode: routine.props[ROUTINE_MODE_PROPERTY],
       allowedTools: routine.props[ROUTINE_TOOLS_PROPERTY] ?? [],
       runId: input.run.id,
       bucket: input.run.bucket,
     }),
-  ];
+  );
 
   // Маска §Б8-3 и в канале рутины: у индекса аспектов один путь на оба канала, и
   // умолчания у параметра нет намеренно — оно оставило бы фон без маски молча.
-  const index = await aspectIndexSection(
-    tx,
-    input.graphId,
-    await disabledExtensionsOf(tx, input.graphId),
-  );
+  const index = await aspectIndexSection(tx, input.graphId, disabled);
   if (index !== null) sections.push(index);
 
   const memory = await loadMemory(tx);

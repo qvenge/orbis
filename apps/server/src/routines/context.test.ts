@@ -3,12 +3,22 @@
 // вместо ленты треда — история прошлых прогонов. Проверяется и то, чего в контексте
 // быть НЕ должно: чат-промпта, роли 'system' в messages, обрезанной инструкции.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { RunSummary } from '@orbis/shared';
-import { appDb, mintGraph, personal, requireEnv, truncateAll } from '../../test/helpers';
+import type { GraphId, RunSummary } from '@orbis/shared';
+import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, EXTENSION_MANIFESTS } from '@orbis/shared';
+import { extensionIdsIn } from '../../test/extension-ids';
+import {
+  appDb,
+  freshGraph,
+  mintGraph,
+  personal,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { ASPECT_INDEX_HEADING } from '../llm/aspect-index';
-import { ROUTINE_SYSTEM_PROMPT_V3 } from '../llm/prompts/routine-v3';
-import { SYSTEM_PROMPT_V7 } from '../llm/prompts/v7';
+import { ROUTINE_SYSTEM_PROMPT_V4 } from '../llm/prompts/routine-v4';
+import { SYSTEM_PROMPT_V8 } from '../llm/prompts/v8';
+import { setExtensionDisabled } from '../registry/extensions';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { buildRoutineContext, type RoutineHistoryItem, type RoutineHistoryUnit } from './context';
 
@@ -92,10 +102,10 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
 
     const { system } = await contextOf(routineId);
 
-    expect(system.startsWith(ROUTINE_SYSTEM_PROMPT_V3)).toBe(true);
+    expect(system.startsWith(ROUTINE_SYSTEM_PROMPT_V4)).toBe(true);
     // Промпт чат-ассистента в фоновом прогоне не участвует (V1.5): он завершал бы цикл
     // «ответом пользователю», которого никто не прочтёт
-    expect(system).not.toContain(SYSTEM_PROMPT_V7);
+    expect(system).not.toContain(SYSTEM_PROMPT_V8);
     expect(system).toContain('режим: propose');
     expect(system).toContain(`run_id этого прогона: ${RUN_ID}`);
     expect(system).toContain('2026-08-17T07:00');
@@ -107,8 +117,8 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
 
   // §Б7-6-1: фоновый прогон обязан знать дату не хуже чата — иначе «сегодняшние» задачи
   // рутина считает от даты обучения модели. Блока продолжений у раннера нет (гард
-  // routine-v3.test.ts) — переставлять в его канале нечего, дата просто идёт за промптом.
-  test('routine-канал: дата владельца стоит сразу после ROUTINE_SYSTEM_PROMPT_V3; блока продолжений нет', async () => {
+  // routine-v4.test.ts) — переставлять в его канале нечего, дата просто идёт за промптом.
+  test('routine-канал: дата владельца стоит сразу после ROUTINE_SYSTEM_PROMPT_V4; блока продолжений нет', async () => {
     const routineId = await seedRoutine(owner, { body: INSTRUCTION });
     const { system } = await contextOf(
       routineId,
@@ -120,7 +130,7 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
     );
     const dateLine = 'Сегодня: 2026-08-27 (четверг), таймзона владельца: Europe/Moscow.';
     expect(system).toContain(dateLine);
-    expect(system.indexOf(dateLine)).toBe(`${ROUTINE_SYSTEM_PROMPT_V3}\n\n`.length);
+    expect(system.indexOf(dateLine)).toBe(`${ROUTINE_SYSTEM_PROMPT_V4}\n\n`.length);
     expect(system.indexOf(dateLine)).toBeLessThan(system.indexOf('режим: propose'));
     expect(system).not.toContain('Продолжения разговора:');
   });
@@ -141,6 +151,61 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
     const { system } = await contextOf(routineId, [], 'act', ['entity_update']);
     expect(system).toContain('режим: act');
     expect(system).toContain('entity_update');
+  });
+});
+
+// Д-9 (спека 1б §8.2): у канала рутины есть слой фрагментов расширений — тем же
+// `extensionPromptFragments`, что в чате, и той же маской. Без слоя выключенные Финансы учили бы
+// фоновый прогон рукописной прозой, а включённые — не учили бы вовсе (их строки ушли из routine-v4).
+describe('buildRoutineContext: слой фрагментов расширений (Д-9)', () => {
+  async function channelOf(graph: GraphId): Promise<string> {
+    const routineId = await seedRoutine(graph, { body: INSTRUCTION });
+    const { system } = await withIdentity(db, personal(graph), (tx) =>
+      buildRoutineContext(tx, {
+        graphId: graph,
+        routine: {
+          id: routineId,
+          title: 'Утренний обзор',
+          body: INSTRUCTION,
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'propose',
+          },
+        },
+        run: { id: RUN_ID, bucket: '2026-08-17T07:00' },
+        history: [],
+      }),
+    );
+    return system;
+  }
+  const financeIds = [...BUILTIN_ASPECT_DEFS, ...BUILTIN_PROPERTY_META]
+    .filter((x) => x.module === 'finance')
+    .map((x) => x.id);
+
+  test('при пустой маске канал рутины несёт фрагменты Финансов — после даты, до секции режима', async () => {
+    const graph = await freshGraph();
+    const system = await channelOf(graph);
+    const amounts = EXTENSION_MANIFESTS.finance.promptFragments.find(
+      (f) => f.id === 'finance/amounts',
+    );
+    if (!amounts) throw new Error('в манифесте Финансов нет фрагмента finance/amounts');
+    expect(system).toContain(amounts.text);
+    // Порядок чата (`llm/context.ts`): тело → дата → фрагменты; дата остаётся сразу за телом
+    expect(system.indexOf(amounts.text)).toBeGreaterThan(system.indexOf('Сегодня: '));
+    expect(system.indexOf(amounts.text)).toBeLessThan(system.indexOf('режим: propose'));
+  });
+
+  test('при маске [finance] в канале рутины ни одного id Финансов и ни одного их фрагмента', async () => {
+    const graph = await freshGraph();
+    await withIdentity(db, personal(graph), (tx) =>
+      setExtensionDisabled(tx, graph, 'finance', true),
+    );
+    const system = await channelOf(graph);
+    expect(financeIds.length).toBeGreaterThan(0);
+    expect(extensionIdsIn(system).filter((id) => financeIds.includes(id))).toEqual([]);
+    for (const f of EXTENSION_MANIFESTS.finance.promptFragments)
+      expect(system).not.toContain(f.text);
   });
 });
 

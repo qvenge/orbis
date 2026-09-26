@@ -490,6 +490,10 @@ const FROZEN_PROMPTS = [
   // v6 замораживается срезом 1а вместе с v7: снимок промпта до индекса аспектов.
   'v6',
   'v6.fixture',
+  // v7 замораживается срезом 1б вместе с v8 (спека §8.2): снимок промпта до выноса строк о
+  // целях во фрагмент манифеста Целей.
+  'v7',
+  'v7.fixture',
   'routine-v1',
   'routine-v1.fixture',
   'routine-v2',
@@ -500,6 +504,7 @@ const FROZEN_PROMPTS = [
   // следующий читатель правит промпт, которого правка не касается.
   'routine-v3',
   'routine-v3.fixture',
+  // routine-v3 сменён routine-v4 срезом 1б (спека §8.2): денежные строки ушли во фрагмент Финансов.
 ] as const;
 
 export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
@@ -559,6 +564,20 @@ export const ALLOWLIST: ReadonlyArray<AllowEntry> = [
     path: 'apps/server/src/llm/prompts/routine-v3.test.ts',
     markers: ['bare-field'],
     reason: 'то же, что у v5.test.ts, для линейки рутин: цитата routine-v2 плюс отказ разбора',
+  },
+  {
+    path: 'apps/server/src/llm/prompts/v8.test.ts',
+    markers: ['bare-field'],
+    reason:
+      'гард смены линейки v8: перенесённый с v7 гард утверждает ОТКАЗ разбора голых имён ' +
+      'поля — форма отказа пишется в нём дословно, иначе тест проверяет не то, что называет',
+  },
+  {
+    path: 'apps/server/src/llm/prompts/routine-v4.test.ts',
+    markers: ['bare-field'],
+    reason:
+      'гард смены линейки routine-v4: перенесённый с routine-v3 гард утверждает ОТКАЗ разбора ' +
+      'голых имён поля — форма отказа пишется в нём дословно',
   },
   {
     path: 'apps/server/src/seed/onboarding.test.ts',

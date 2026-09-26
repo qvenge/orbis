@@ -100,6 +100,20 @@ const FINANCE_FRAGMENTS = [
   { id: 'finance/budget', text: FIN_BUDGET_TEXT },
 ] as const;
 
+/**
+ * Проза Целей (спека 1б §8.2): блок «Цели и горизонты» промпта v7 разделён — две строки о целях
+ * ДОСЛОВНО из `llm/prompts/v7.ts:66-67` (их гарды — валидатор записи `orbis/goal`, описание тула
+ * `attach_orbis_goal` — стоят в `v8.test.ts` на этом фрагменте), третья — целевая часть строки
+ * «Спланируй неделю…» (`v7.ts:69`). Горизонты по страницам хоста остались в теле v8 (Н-7): они не
+ * принадлежат расширению и не гаснут вместе с ним.
+ */
+const GOALS_FRAGMENTS = [
+  {
+    id: 'goals/goals',
+    text: 'Цели (расширение «Цели»):\n- Измеримая цель пользователя («накопить 300 000», «прочитать 24 книги», «вес 80 кг») — ОДНА сущность с аспектом orbis/goal: orbis/target_value — целевое число decimal-строкой, orbis/progress_source — откуда берётся факт (query — ДЕРЕВО запроса по графу, такое же, как во входе ast тула entity_query, плюс aggregate: sum, count или latest). Какие ключи требует каждый вариант aggregate — в описании тула attach_orbis_goal; не угадывай их состав.\n- orbis/current_value НЕ заполняй никогда: прогресс цели считает сервер, обходя граф запросом из orbis/progress_source при каждом чтении.\n- «Как идут цели» — сначала посмотри entity_query, какие цели уже заведены (aspect=orbis/goal), и только потом предлагай. Не заводи дубли уже существующих целей: найденное правь, а не создавай заново.',
+  },
+] as const;
+
 export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest>> = {
   finance: {
     id: 'finance',
@@ -123,17 +137,13 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
         why: 'tRPC-ручки Финансов гейтит web, а гейты расширений в web — срез Б-3 (§С9 п.5); серверная половина Б-1 — маска на тулах, фрагментах, подписках и записи (§Б8-3)',
       },
       {
-        where: 'apps/server/src/llm/prompts/routine-v3.ts:63-64',
-        why: 'канал рутины — своя линейка промпта; её финансовые строки уходят во фрагмент Финансов вместе с routine-v4 (задача 6 среза 1б)',
-      },
-      {
         where: 'packages/shared/src/fast-path/index.ts',
         why: 'клиентский fast-path денег — код-остаток клиента, гейтится web (Б-3)',
       },
     ],
   },
-  // Цели, Проекты, Разработка: реестровый состав размечен колонкой `module`; тулов и фрагментов
-  // у них нет — прозу «Цели и горизонты» во фрагмент Целей переносит задача 6 (v8 промпта).
+  // Цели, Проекты, Разработка: реестровый состав размечен колонкой `module`; тулов у них нет,
+  // фрагмент есть только у Целей — строки о целях из тела промпта (v8, спека 1б §8.2).
   goals: {
     id: 'goals',
     name: { ru: 'Цели', en: 'Goals' },
@@ -143,17 +153,12 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
       en: 'Measurable goals whose progress is computed from the records of the graph',
     },
     tools: [],
-    promptFragments: [],
+    promptFragments: GOALS_FRAGMENTS,
     surfaces: [],
     reads: [],
     // Ранг 10 — первой, как в снимке 1а (РП-23).
     cards: [{ aspect: 'orbis/goal', rank: 10 }],
-    codeRemainder: [
-      {
-        where: 'apps/server/src/llm/prompts/v7.ts — блок «Цели и горизонты»',
-        why: 'строки о целях уходят во фрагмент Целей вместе с v8 промпта (задача 6 среза 1б)',
-      },
-    ],
+    codeRemainder: [],
   },
   projects: {
     id: 'projects',
@@ -275,8 +280,8 @@ export function extensionPromptFragments(disabled: readonly string[]): string | 
 
 /**
  * Расширения, которые владелец вправе переключать СЕГОДНЯ (Ф-Б1-57б) — пока только `finance`.
- * Все четыре станут переключаемыми в задаче 7, когда проза промпта уйдёт во фрагменты (задача 6)
- * и поля выключенного расширения станут только чтением (Ф-Б1-57б: иначе владелец получил бы
+ * Все четыре станут переключаемыми в задаче 7: проза промпта уже во фрагментах (задача 6), а
+ * поля выключенного расширения станут только чтением там же (Ф-Б1-57б: иначе владелец получил бы
  * половину выключения — реестр снялся бы, а проза промпта продолжила бы учить модель).
  */
 export const SWITCHABLE_EXTENSION_IDS = ['finance'] as const satisfies readonly ExtensionId[];

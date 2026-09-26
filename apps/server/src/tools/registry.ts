@@ -486,7 +486,7 @@ const propsJsonSchema = {
   type: 'object',
   additionalProperties: true,
   description:
-    'значения свойств по их key (orbis/amount, orbis/task_status) — id тоже принимается; ' +
+    'значения свойств по их key (orbis/task_status, orbis/due_date) — id тоже принимается; ' +
     'какие свойства бывают у аспекта, показывает его attach_*-тул, остальные — property_catalog',
 };
 
@@ -506,7 +506,7 @@ const entityCreateJsonSchema = {
     aspects: {
       type: 'array',
       items: { type: 'string' },
-      description: 'аспекты, с которыми сущность рождается, списком id (orbis/financial)',
+      description: 'аспекты, с которыми сущность рождается, списком id (orbis/task)',
     },
   },
   required: ['title', 'tags'],
@@ -563,8 +563,13 @@ const propertyCatalogJsonSchema = {
       minLength: 1,
       description: 'слово: ищется в key, подписи и описании свойства, регистр не важен',
     },
-    aspect: { type: 'string', description: 'только свойства этого аспекта (orbis/financial)' },
-    module: { type: 'string', description: 'только свойства модуля (finance, planner, ade…)' },
+    aspect: { type: 'string', description: 'только свойства этого аспекта (orbis/task)' },
+    // Имя параметра `module` остаётся (РП-10: провод и колонка `module` шести таблиц реестров),
+    // а модельно видимый текст говорит словом спеки §1 и называет, откуда брать id.
+    module: {
+      type: 'string',
+      description: 'только свойства расширения (id из словаря расширений)',
+    },
     status: {
       type: 'string',
       enum: ['active', 'proposed', 'deprecated'],
@@ -683,7 +688,10 @@ const batchExecuteJsonSchema = {
 const runActionJsonSchema = {
   type: 'object',
   properties: {
-    action: { type: 'string', description: 'ключ действия (`<модуль>/<имя>` либо `user/<имя>`)' },
+    action: {
+      type: 'string',
+      description: 'ключ действия (`<расширение|core>/<имя>` либо `user/<имя>`)',
+    },
     self: { type: 'string', format: 'uuid', description: 'сущность-цель одиночного действия' },
     params: { type: 'object', description: 'объявленные параметры действия' },
     batch_id: { type: 'string', format: 'uuid', description: 'идемпотентность повтора' },
@@ -700,7 +708,7 @@ const userQueryJsonSchema = {
     field: {
       type: 'string',
       description:
-        'обязателен при aggregate=sum: key числового свойства (orbis/amount); id тоже принимается',
+        'обязателен при aggregate=sum: key числового свойства (orbis/effort_min); id тоже принимается',
     },
   },
   required: ['query', 'aggregate'],
@@ -1103,20 +1111,16 @@ const CORE_TOOLS: OrbisToolDef[] = [
     // Форма имён в примерах — NAMESPACED KEY (§А5-3а): голое `status=` серверный разбор
     // не читает вовсе — мост старой грамматики снят Задачей 21b, — и учить
     // модель по нему значило бы учить умирающему языку.
-    // Третий пример — про aliases: синтаксис фильтра по полю-массиву ничем не
-    // отличается от обычного равенства, и без образца модель не догадается, что
-    // «такси» ищется среди синонимов категории, а не в её названии. Описание
-    // тула живёт ЗДЕСЬ, в коде, а не в `aspect_definitions.ai_instructions`,
+    // Примеры — только ЯДРА (спека 1б §8.2, С1б-4): описание core-тула модель видит при любой
+    // маске, и пример с аспектом Финансов учил бы их именам при выключенных Финансах. Прежний
+    // третий пример — резолв категории по синонимам (`orbis/aliases`) — живёт там, где он
+    // нужен и гаснет вместе с расширением: в инструкции аспекта `orbis/financial` (описание
+    // тула `attach_orbis_financial`). Третий пример теперь — отбор по тегу: ключ `tags` во
+    // МНОЖЕСТВЕННОМ числе, и без образца модель пишет `tag=`, которого грамматика не знает.
+    // Описание тула живёт ЗДЕСЬ, в коде, а не в `aspect_definitions.ai_instructions`,
     // поэтому правка примера не требует пересева реестра на проде.
-    // Про регистр сказано отдельно и не зря: containment — это jsonb `@>`, он
-    // побайтовый (проверено на живой базе: `["такси"]` НЕ содержит `"Такси"`),
-    // а сидированные синонимы все строчные. Модель, «причесавшая» ввод
-    // пользователя до «Такси», получила бы пустую выдачу без единой подсказки
-    // почему — ровно та тихая ложь, ради которой затевалась эта ветка.
-    // Нормализация регистра в самом предикате требует функционального
-    // GIN-индекса, то есть новой миграции, и вынесена в бэклог.
     description:
-      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20» (class=<контракт>:<набор> — членство по контракту: работает для любого аспекта, объявившего его реализацию); «aspect=orbis/category, orbis/aliases=такси» (резолв категории по синониму: aliases — список, фильтр ищет точное вхождение — регистр важен, синонимы строчные).',
+      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/task, search=отчёт»; «aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20» (class=<контракт>:<набор> — членство по контракту: работает для любого аспекта, объявившего его реализацию); «aspect=orbis/note, tags=идеи» (отбор по тегу: ключ tags — во множественном числе).',
     inputJsonSchema: entityQueryJsonSchema,
     kind: 'read',
   },
@@ -1129,7 +1133,7 @@ const CORE_TOOLS: OrbisToolDef[] = [
   {
     name: 'entity_create',
     description:
-      'Создание сущности. Значения — props по key свойства (orbis/amount), интерпретации — ' +
+      'Создание сущности. Значения — props по key свойства (orbis/due_date), интерпретации — ' +
       'aspects списком. Отдельного «мешка» для структуры больше нет: то, чего нет в реестре ' +
       'свойств, пишется словами в body.',
     inputJsonSchema: entityCreateJsonSchema,
@@ -1164,7 +1168,7 @@ const CORE_TOOLS: OrbisToolDef[] = [
   {
     name: 'user_query',
     description:
-      'Вопрос-агрегация по выборке («сколько потрачено на еду за месяц»): sum/count поверх запроса грамматики §6.',
+      'Вопрос-агрегация по выборке («сколько задач закрыто за месяц»): sum/count поверх запроса грамматики §6.',
     inputJsonSchema: userQueryJsonSchema,
     kind: 'read',
     internalOnly: true, // §9.2: в публичный реестр не входит, MCP не отдаётся
@@ -1208,8 +1212,8 @@ const CORE_TOOLS: OrbisToolDef[] = [
       'ни в одном attach_*-туле — свободные свойства и предложенные (proposed) видны только ' +
       'отсюда. Возвращает key (им и пиши значение в props), подпись, смысл, тип с вариантами, ' +
       'аспекты-носители и сколько записей это свойство уже заполнили. Фильтры: q (слово), ' +
-      'aspect, module, status, orphans (свойства без носителя и без значений), olderThanDays ' +
-      '(заведённые раньше чем N дней назад).',
+      'aspect, module (расширение), status, orphans (свойства без носителя и без значений), ' +
+      'olderThanDays (заведённые раньше чем N дней назад).',
     inputJsonSchema: propertyCatalogJsonSchema,
     kind: 'read',
     // Карта поверхности владельца целиком — фоновому исполнителю она не адресована (§А9-4)

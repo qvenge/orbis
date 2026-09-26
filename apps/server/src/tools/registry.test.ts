@@ -23,6 +23,7 @@ import {
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
+  extensionOfTool,
   finishInput,
   isActionToolName,
   myQueueInput,
@@ -35,6 +36,7 @@ import {
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { extensionIdsIn } from '../../test/extension-ids';
 // Эталон реестра тулов — ИСТОЧНИК счётчиков этого файла (РП-13): см. `registry-golden.test.ts`.
 import TOOL_REGISTRY_GOLDEN from '../../test/golden/tool-registry.json';
 import {
@@ -428,16 +430,18 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Модель не видит спецификацию §А5-3 — без примеров в description холодный резолв
     // category_ref (инструкция промпта v1) гарантированно бился бы о парсер
     const def = defOf(await registryFor(userB), 'entity_query');
-    expect(def.description).toContain('aspect=orbis/category, search=Еда');
+    // Примеры — ядра (спека 1б §8.2): аспект Финансов в описании core-тула называл бы их id при
+    // выключенных Финансах (сторож слоя 5 — в конце файла)
+    expect(def.description).toContain('aspect=orbis/task, search=отчёт');
     // Второй пример — на НАБОР КОНТРАКТА, а не на перечисление статусов: он работает для
     // любого аспекта, объявившего реализацию `orbis/completable`, и его же теперь несут
     // тела сидов (§Б1-2).
     expect(def.description).toContain(
       'aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20',
     );
-    // Синтаксис фильтра по списочному свойству неотличим от равенства: без образца модель
-    // не догадается искать «такси» среди синонимов категории, а не в её названии.
-    expect(def.description).toContain('aspect=orbis/category, orbis/aliases=такси');
+    // Ключ тега — во МНОЖЕСТВЕННОМ числе: без образца модель пишет `tag=`, которого грамматика не
+    // знает. Резолв категории по синонимам уехал в инструкцию аспекта orbis/financial.
+    expect(def.description).toContain('aspect=orbis/note, tags=идеи');
   });
 
   test('entity_query: второй вход — дерево канона, и его схема уехала В тул целиком', async () => {
@@ -1073,5 +1077,33 @@ describe('§С8-23: инвариант против fail-open — писател
     expect(REGISTRY_TOOLS.every((d) => d.fullScopeOnly === true)).toBe(true);
     // ВТОРАЯ ось — общее правило скоупа: мутация вне `WORKER_SCOPE_TOOLS` отказывает сама.
     expect(seen.filter((d) => WORKER_SCOPE_TOOLS.has(d.name)).map((d) => d.name)).toEqual([]);
+  });
+});
+
+/**
+ * СЛОЙ 5 без имён расширений (спека 1б §8.2, С1б-4): описания и схемы core-тулов — тех, что не
+ * `attach_*` и не принадлежат расширению, — модель видит при ЛЮБОЙ маске. Назови такой тул id
+ * аспекта или свойства расширения, и выключенное расширение продолжало бы учить модель своими
+ * именами. Слово «модуль» из модельно видимого текста ушло (словарь спеки §1: «расширение»).
+ *
+ * Проверка — по ВСЕЙ маске сразу (все четыре выключены): тогда в реестре остаётся ровно ядро,
+ * и каталог действий в описании `run_action` тоже собран без действий расширений.
+ */
+describe('слой 5: core-тулы не называют id расширений (спека 1б §8.2, С1б-4)', () => {
+  test('описания и схемы core-тулов: ноль id аспектов и свойств расширений, нет слова «модуль»', async () => {
+    const reg = await withIdentity(db, personal(userB), (tx) => effectiveRegistry(tx, userB));
+    const defs = await registryWithDisabled(userB, ['finance', 'goals', 'projects', 'dev']);
+    const core = defs.filter(
+      (d) => !d.name.startsWith('attach_') && extensionOfTool(d.name, reg) === null,
+    );
+    // Не вырожденно: ядро — это десятки тулов, а не пустой список после фильтра
+    expect(core.length).toBeGreaterThan(30);
+    const offenders = core
+      .map((d) => {
+        const text = JSON.stringify({ description: d.description, schema: d.inputJsonSchema });
+        return { name: d.name, ids: extensionIdsIn(text), modul: /модул/i.test(text) };
+      })
+      .filter((o) => o.ids.length > 0 || o.modul);
+    expect(offenders).toEqual([]);
   });
 });

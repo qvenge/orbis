@@ -83,14 +83,18 @@ describe('манифест расширения (§4.1): состав вне р�
     expect(fin.cards).toEqual([{ aspect: 'orbis/financial', rank: 50 }]);
   });
 
-  test('Цели, Проекты, Разработка: тулов и фрагментов нет (прозу Целей переносит задача 6)', () => {
-    for (const id of ['goals', 'projects', 'dev'] as const) {
+  test('Цели, Проекты, Разработка: тулов нет; фрагмент — только у Целей (строки о целях v8)', () => {
+    for (const id of ['projects', 'dev'] as const) {
       expect([EXTENSION_MANIFESTS[id].tools, EXTENSION_MANIFESTS[id].promptFragments]).toEqual([
         [],
         [],
       ]);
     }
-    expect(EXTENSION_MANIFESTS.goals.cards).toEqual([{ aspect: 'orbis/goal', rank: 10 }]);
+    const goals = EXTENSION_MANIFESTS.goals;
+    expect(goals.tools).toEqual([]);
+    expect(goals.promptFragments.map((f) => f.id)).toEqual(['goals/goals']);
+    expect(goals.promptFragments[0]?.text.startsWith('Цели (расширение «Цели»):')).toBe(true);
+    expect(goals.cards).toEqual([{ aspect: 'orbis/goal', rank: 10 }]);
   });
 
   test('ownCardOrder: карточки ядра и расширений по рангу — порядок снимка 1а (РП-23)', () => {
@@ -159,7 +163,13 @@ describe('манифест расширения (§4.1): состав вне р�
 
   test('extensionPromptFragments и setExtensionEnabledInput', () => {
     expect(extensionPromptFragments([])).toContain('budget_status');
-    expect(extensionPromptFragments(['finance'])).toBe(null); // непустые фрагменты — только у Финансов
+    expect(extensionPromptFragments([])).toContain('orbis/target_value');
+    // Маска гасит ровно своё расширение: без Финансов остаются Цели, без Целей — Финансы
+    expect(extensionPromptFragments(['finance'])).not.toContain('budget_status');
+    expect(extensionPromptFragments(['finance'])).toContain('orbis/target_value');
+    expect(extensionPromptFragments(['goals'])).not.toContain('orbis/target_value');
+    // Непустые фрагменты — только у Финансов и Целей: без обоих секции нет вовсе
+    expect(extensionPromptFragments(['finance', 'goals'])).toBe(null);
     expect(setExtensionEnabledInput.safeParse({ module: 'finance', enabled: false }).success).toBe(
       true,
     );

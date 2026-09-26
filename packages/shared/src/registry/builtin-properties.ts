@@ -406,8 +406,8 @@ const ENTRIES: readonly PropertyEntry[] = [
     // Слито с `budget.category_ref` (В1); label и description — дословно из §А8.
     label: { ru: 'Категория', en: 'Category' },
     description: {
-      ru: 'Категория доходов и расходов (модуль Финансы)',
-      en: 'The income and expense category (Finance module)',
+      ru: 'Категория доходов и расходов (расширение Финансы)',
+      en: 'The income and expense category (Finance extension)',
     },
     type: { kind: 'ref', target: { filter: { aspect: 'orbis/category' } } },
     module: 'finance',
