@@ -311,19 +311,17 @@ test('узлы страницы не на месте — по сырому хр�
     },
     // (5) Документа нет: разбор текста узлы не на место не ставит.
     { body: `> цитата\n\n${CONTAINER}`, bodyDoc: null },
-    // (6) Документ v2 с цитатой и списком — узлов страницы в нём нет.
-    {
-      body: 'v2',
-      bodyDoc: v2Doc(
-        { type: 'blockquote', content: [para('ц')] },
-        { type: 'bulletList', content: [{ type: 'listItem', content: [para('п')] }] },
-      ),
-    },
+    // (6) Документ v2 с колонками под цитатой — СЧИТАЕТСЯ, версия не спасает: чтение сверяет
+    // схемой ТЕКУЩЕЙ версии любой хранимый документ (`bodyDocError`), а v2 → v3 — один штамп
+    // (`upgradeBodyDoc`, дерево то же). После сужения такой документ схему не пройдёт, и чтение
+    // пересоберёт тело из `body` — ровно то, о чём число предупреждает. Узлов страницы в v2 не
+    // было, так что на проде случай пуст по построению; здесь закреплено поведение переписи.
+    { body: 'v2', bodyDoc: v2Doc({ type: 'blockquote', content: [TWO_COLUMNS] }) },
     // (7) Мусорная форма хранимого документа не роняет перепись.
     { body: 'мусор', bodyDoc: { v: 3 } },
   ]);
   const r = await censusV3(corpus.io);
   expect(r.total).toBe(7);
-  expect(r.pageNodesMisplaced).toBe(2);
-  expect(r.ids.pageNodesMisplaced).toEqual(['id-00000', 'id-00001']);
+  expect(r.pageNodesMisplaced).toBe(3);
+  expect(r.ids.pageNodesMisplaced).toEqual(['id-00000', 'id-00001', 'id-00005']);
 });

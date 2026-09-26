@@ -334,7 +334,7 @@ function containerDepth(editor: Editor): number {
   return max;
 }
 
-test('страж места: свой буфер с колонками на верх тела вставляется (контроль пути вставки)', async () => {
+test('схема места: свой буфер с колонками на верх тела вставляется (контроль пути вставки)', async () => {
   const { h } = mountEditor('page', 'Шапка');
   await waitFor(() => expect(h.editor).not.toBeNull());
   const editor = h.editor as Editor;
@@ -343,7 +343,7 @@ test('страж места: свой буфер с колонками на ве
   expect(savedTop(editor)).toContain('columns');
 });
 
-test('страж места: свой буфер с колонками в пункт списка — не в пункте, тело не rawBlock', async () => {
+test('схема места (pageBlock): свой буфер с колонками в пункт списка — не в пункте, тело не rawBlock', async () => {
   const { h } = mountEditor('page', 'Шапка\n\n- пункт');
   await waitFor(() => expect(h.editor).not.toBeNull());
   const editor = h.editor as Editor;
@@ -353,7 +353,7 @@ test('страж места: свой буфер с колонками в пун
   expect(savedTop(editor)).not.toContain('rawBlock');
 });
 
-test('страж места: toggleBlockquote и toggleBulletList через блок записи — блок не уходит в цитату и пункт', async () => {
+test('схема места (pageBlock): toggleBlockquote и toggleBulletList через блок записи — блок не уходит в цитату и пункт', async () => {
   const { h } = mountEditor('page', 'до\n\n{{title}}\n\nпосле');
   await waitFor(() => expect(h.editor).not.toBeNull());
   const editor = h.editor as Editor;
@@ -370,7 +370,7 @@ test('страж места: toggleBlockquote и toggleBulletList через б�
   expect(savedTop(editor)).not.toContain('rawBlock');
 });
 
-test('страж места: колонки во вкладку внутри колонки — глубина не растёт, тело не rawBlock', async () => {
+test('страж глубины: колонки во вкладку внутри колонки — глубина не растёт, тело не rawBlock', async () => {
   const md =
     '{{columns}}\n{{column}}\n{{tabs}}\n{{tab: T}}\nвнутри\n{{/tab}}\n{{/tabs}}\n{{/column}}\n' +
     '{{column}}\nсоседняя\n{{/column}}\n{{/columns}}';

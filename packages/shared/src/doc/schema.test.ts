@@ -193,8 +193,26 @@ describe('группа pageBlock — узлы страницы только в d
       .filter((type) => (type.spec.group ?? '').split(' ').includes(PAGE_BLOCK_GROUP))
       .map((type) => type.name);
     expect(members.sort()).toEqual([...LAYOUT_NODES].sort());
+    // Родитель — тот, у кого узел группы пускается В ЛЮБОЙ позиции `content`, а не только первым:
+    // обход всех состояний автомата `contentMatch` (гейт M-3). Иначе родитель вида
+    // `paragraph (block | pageBlock)*` прошёл бы мимо сверки, а перепись сочла бы его место чужим.
+    const allowsPageBlock = (start: (typeof schema.nodes)[string]['contentMatch']): boolean => {
+      const seen = new Set<typeof start>();
+      const queue = [start];
+      while (queue.length > 0) {
+        const match = queue.pop() as typeof start;
+        if (seen.has(match)) continue;
+        seen.add(match);
+        for (let i = 0; i < match.edgeCount; i += 1) {
+          const edge = match.edge(i);
+          if ((edge.type.spec.group ?? '').split(' ').includes(PAGE_BLOCK_GROUP)) return true;
+          queue.push(edge.next);
+        }
+      }
+      return false;
+    };
     const parents = Object.values(schema.nodes)
-      .filter((type) => type.contentMatch.matchType(schema.nodes.columns as never) !== null)
+      .filter((type) => allowsPageBlock(type.contentMatch))
       .map((type) => type.name);
     expect(parents.sort()).toEqual([...PAGE_BLOCK_PARENTS].sort());
   });
