@@ -625,7 +625,10 @@ describe('несохранённая правка настройки не мол
 
 describe('уход с настройки без связи (рулинг R-5)', () => {
   async function editUnsentOffline(view: HTMLElement, tail: string): Promise<void> {
-    await userEvent.click(within(view).getByText('левая часть'));
+    // Редактор ещё не встал — касание текста его поднимает; встал — правка сразу.
+    if (within(view).queryByTestId('body-editor')?.querySelector('[contenteditable]') == null) {
+      await userEvent.click(within(view).getByText('левая часть'));
+    }
     const field = await waitFor(() => {
       const node = within(view).getByTestId('body-editor').querySelector('[contenteditable]');
       if (node === null) throw new Error('редактор не встал');
@@ -633,12 +636,114 @@ describe('уход с настройки без связи (рулинг R-5)', 
     });
     let at = -1;
     field.editor.state.doc.descendants((node, pos) => {
-      if (at === -1 && node.isText && node.text === 'левая часть') at = pos + node.text.length;
+      if (at === -1 && node.isText && node.text?.startsWith('левая часть') === true) {
+        at = pos + node.text.length;
+      }
     });
     act(() => {
       field.editor.commands.insertContentAt(at, tail);
     });
   }
+
+  /** Сервер правки тела по номеру вызова: ответ i-го `entity.update` решает `answer(i)`. */
+  function scriptedServer(answer: (i: number) => 'ok' | 'hold' | Error): MockHandler {
+    let n = 0;
+    return async (path, input) => {
+      if (path !== 'entity.update') return undefined;
+      const a = answer(n++);
+      if (a === 'hold') await new Promise(() => {});
+      if (a instanceof Error) throw a;
+      const inp = input as { bodyDoc?: { v: number; doc: object } };
+      return {
+        ...dashboard(),
+        updatedAt: '2026-09-25T13:00:00.000Z',
+        ...(inp.bodyDoc === undefined
+          ? {}
+          : { bodyDoc: inp.bodyDoc, body: serializeBody(inp.bodyDoc as never) }),
+      };
+    };
+  }
+
+  async function configureWith(server: MockHandler) {
+    idleNever();
+    const r = open(asScreen(dashboard()), [secondProject()], server);
+    await screen.findByTestId('page-columns');
+    await choose('Настроить');
+    const view = await screen.findByTestId('configure-view');
+    await waitFor(() => expect(within(view).getByText('левая часть')).toBeInTheDocument());
+    const updates = () => r.calls.filter((c) => c.path === 'entity.update');
+    const done = () => fireEvent.click(within(view).getByRole('button', { name: 'Готово' }));
+    return { view, updates, done };
+  }
+  const toasts = () => useToastStore.getState().toasts.map((t) => t.title);
+
+  test('409, затем правка поверх — «Готово» НЕ уходит «без связи»: отказ сервера, а не связь (N-1)', async () => {
+    const { view, updates, done } = await configureWith(
+      scriptedServer((i) => (i === 0 ? trpcError('CONFLICT', 'STALE_VERSION') : 'hold')),
+    );
+    await editUnsentOffline(view, ' ХВОСТ');
+    done();
+    await waitFor(() => expect(updates()).toHaveLength(1));
+    // Плашка конфликта на экране.
+    expect(await screen.findByRole('button', { name: 'Обновить' })).toBeInTheDocument();
+    // Правка поверх снимает «blocked» (документ уже не тот, что получил 409).
+    await editUnsentOffline(view, ' ЕЩЁ');
+    useToastStore.setState({ toasts: [] });
+    done();
+    expect(toasts()).not.toContain(BODY_OFFLINE);
+    expect(toasts()).toEqual([BODY_SAVING]);
+    expect(screen.getByTestId('configure-view')).toBe(view);
+  });
+
+  test('500 — «Готово» НЕ уходит «без связи»: сервер ответил (N-1)', async () => {
+    const { view, updates, done } = await configureWith(
+      scriptedServer(() => trpcError('INTERNAL_SERVER_ERROR', 'упал')),
+    );
+    await editUnsentOffline(view, ' ХВОСТ');
+    done();
+    await waitFor(() => expect(updates()).toHaveLength(1));
+    expect(await within(view).findByTestId('save-indicator')).toHaveTextContent('Не сохранено');
+    useToastStore.setState({ toasts: [] });
+    done();
+    expect(toasts()).toEqual([BODY_SAVING]);
+    expect(screen.getByTestId('configure-view')).toBe(view);
+  });
+
+  test('транспортный отказ, затем досыл в полёте — уход ждёт ответа (N-1)', async () => {
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let n = 0;
+    const server: MockHandler = async (path, input) => {
+      if (path !== 'entity.update') return undefined;
+      if (n++ === 0) throw new Error('Failed to fetch');
+      await hold;
+      return scriptedServer(() => 'ok')(path, input);
+    };
+    const { view, updates, done } = await configureWith(server);
+    await editUnsentOffline(view, ' ХВОСТ');
+    done();
+    await waitFor(() => expect(updates()).toHaveLength(1));
+    expect(await within(view).findByTestId('save-indicator')).toHaveTextContent('Не сохранено');
+    // Связь вернулась: новая правка уходит своим таймером паузы и повисает в полёте.
+    await editUnsentOffline(view, ' ЕЩЁ');
+    await waitFor(() => expect(updates()).toHaveLength(2), { timeout: 5000 });
+    // Пока досыл летит, набрано ещё: неотправленное — поверх полёта, и черновик на диске — оно же
+    // (оптимистичный патч полёта уже в кэше, так что без новой правки неотправленного не было бы
+    // вовсе и полёт держал бы уход сам по себе).
+    await editUnsentOffline(view, ' ТРЕТЬЕ');
+    useToastStore.setState({ toasts: [] });
+    done();
+    expect(toasts()).toEqual([BODY_SAVING]);
+    expect(screen.getByTestId('configure-view')).toBe(view);
+    // Ответ пришёл — уход проходит.
+    release();
+    await waitFor(() => {
+      done();
+      expect(screen.queryByTestId('configure-view')).toBeNull();
+    });
+  });
 
   test('досыл упал сетью, текст черновиком на устройстве — «Готово» уходит с тостом; черновик переживает уход и возврат', async () => {
     idleNever();

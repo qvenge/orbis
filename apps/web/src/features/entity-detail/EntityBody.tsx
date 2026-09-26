@@ -71,7 +71,10 @@ export function bodyKindOf(entity: Pick<Entity, 'aspects' | 'props'>): BodyKind 
  * как его дослать. Смонтированное тело кладёт себя сюда и снимает при размонтировании; `null` —
  * тела на экране нет, и спешить некуда.
  */
-export type BodyGate = Pick<BodySave, 'hasUnsent' | 'flush' | 'blocked' | 'keptOffline'>;
+export type BodyGate = Pick<
+  BodySave,
+  'hasUnsent' | 'flush' | 'blocked' | 'offline' | 'keptOffline'
+>;
 export type BodyGateRef = MutableRefObject<BodyGate | null>;
 
 /**
@@ -147,16 +150,16 @@ export function EntityBody({
   bodyGate: BodyGateRef;
 }) {
   const save = useBodySave(entity.id, entity);
-  const { hasUnsent, flush, blocked, keptOffline } = save;
+  const { hasUnsent, flush, blocked, offline, keptOffline } = save;
   // Регистрация — эффектом: снимается при размонтировании ТОЛЬКО своя запись, иначе уходящее
   // тело стёрло бы уже вставшее на его место (смена записи — новый экземпляр по key).
   useEffect(() => {
-    const gate: BodyGate = { hasUnsent, flush, blocked, keptOffline };
+    const gate: BodyGate = { hasUnsent, flush, blocked, offline, keptOffline };
     bodyGate.current = gate;
     return () => {
       if (bodyGate.current === gate) bodyGate.current = null;
     };
-  }, [bodyGate, hasUnsent, flush, blocked, keptOffline]);
+  }, [bodyGate, hasUnsent, flush, blocked, offline, keptOffline]);
   const utils = trpc.useUtils();
   /**
    * Отказ «сохранить в заметку» — В САМОМ БАННЕРЕ, а не тостом.

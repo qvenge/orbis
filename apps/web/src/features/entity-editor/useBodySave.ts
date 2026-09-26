@@ -124,11 +124,19 @@ export interface BodySave {
    */
   blocked: () => boolean;
   /**
-   * Неотправленное пережидает отсутствие связи на этом устройстве: досыл уже пробовали, и он упал
-   * СЕТЬЮ (не 409 и не отказ сервера по существу), а отложенный документ лежит черновиком на диске
-   * (тот самый, что восстановит следующее открытие записи). Нужен уходу с настройки (рулинг R-5):
-   * без связи страж ухода запирал бы экран — каждый «назад» снова досылал бы и снова падал, —
-   * хотя текст не под угрозой. Звать ПОСЛЕ `flush()`: досыл кладёт последний набор на диск.
+   * Связи нет — и это единственная причина, по которой набранное не на сервере: последний досыл
+   * упал ТРАНСПОРТНО (ответа сервера не было вовсе — запрос не ушёл или не вернулся), плашки
+   * конфликта нет, и нового досыла в полёте нет. 409, 5xx, NOT_FOUND и прочие ответы сервера сюда
+   * не относятся: `failure` у них тоже `'network'`, но сервер ответил, и уход поверх такого отказа
+   * терял бы его молча (ре-ревью фикс-раунда 1, N-1). Звать ДО `flush()`: досыл сам заводит полёт.
+   * Нужен уходу с настройки (рулинг R-5) вместе с `keptOffline`.
+   */
+  offline: () => boolean;
+  /**
+   * Отложенный документ лежит черновиком на этом устройстве — тот самый, что восстановит следующее
+   * открытие записи. Звать ПОСЛЕ `flush()`: досыл кладёт последний набор на диск раньше всех
+   * причин не отправлять. Без связи страж ухода иначе запирал бы экран — каждый «назад» снова
+   * досылал бы и снова падал, — хотя текст не под угрозой (рулинг R-5).
    */
   keptOffline: () => boolean;
   state: BodySaveState;
@@ -443,6 +451,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const rejectedDocRef = useRef<BodyDoc | null>(null);
   /** Документ, на который сервер ответил 409, — пока он же лежит в очереди, досыл обречён (`blocked`). */
   const staleDocRef = useRef<BodyDoc | null>(null);
+  /**
+   * Последний отказ — ТРАНСПОРТНЫЙ: сервер не ответил вовсе (у ошибки нет кода tRPC — запрос не
+   * ушёл или ответ не вернулся; либо истекла выдержка). Отдельно от `failure`, у которого
+   * `'network'` означает «не терминальный» и покрывает и 409, и 5xx: индикатору разница не нужна,
+   * а уходу без связи — нужна (`offline`, N-1).
+   */
+  const transportFailedRef = useRef(false);
 
   // useCallback без зависимостей, а не голая функция: иначе она пересоздаётся каждым рендером
   // и попадает в списки зависимостей ниже — вместе со всем, что от них зависит.
@@ -527,6 +542,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // «В полёте» — про ПРЕЖНЮЮ запись, и её ответ сюда уже не придёт (см. поколение). Не сними
     // мы флаг, новая запись ждала бы освобождения вечно и не сохранилась бы ни разу.
     inFlightRef.current = false;
+    transportFailedRef.current = false;
     setFailure(null);
     setSaving(false);
   }
@@ -670,6 +686,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       // Отказ здесь именно СЕТЕВОЙ: следующая правка попытается снова, и правильно сделает —
       // брошенный запрос мог не доехать вовсе.
       setSaving(false);
+      // Ответа не было вовсе — отказ транспортный (`transportFailedRef`).
+      transportFailedRef.current = true;
       setFailure('network');
       // Досыл — только если его просили, пока шёл запрос. Сам по себе повтор не заводится:
       // круг «выдержка → повтор → выдержка → повтор» тратил бы сеть без единой новой правки.
@@ -708,6 +726,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           // отправит её СОБСТВЕННЫЙ таймер паузы, а если тот успел сработать, пока шёл
           // запрос, — досыл из onSettled. Второй путь заметнее, первый — чаще.
           if (pendingRef.current === doc) pendingRef.current = null;
+          transportFailedRef.current = false;
           setFailure(null);
         },
         onError: (err) => {
@@ -728,6 +747,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
             staleDocRef.current = doc;
           }
           if (stale()) return;
+          // Транспортный — без ответа сервера: не ошибка tRPC вовсе или ошибка без кода и статуса.
+          transportFailedRef.current =
+            !(err instanceof TRPCClientError) ||
+            (err.data?.code === undefined && err.data?.httpStatus === undefined);
           setFailure(terminal ? 'terminal' : 'network');
           // Документ не выбрасывается: `pendingRef` остаётся, потому что при 409 человек
           // продолжает набирать ровно этот текст, и подмена его серверным вырвала бы правку
@@ -791,6 +814,14 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   conflictRef.current = conflict;
   const failureRef = useRef(failure);
   failureRef.current = failure;
+  const offline = useCallback(
+    (): boolean =>
+      failureRef.current === 'network' &&
+      transportFailedRef.current &&
+      !conflictRef.current &&
+      !inFlightRef.current,
+    [],
+  );
   const keptOffline = useCallback((): boolean => {
     if (failureRef.current !== 'network') return false;
     // Пока висит предложение прошлого черновика (или черновик чужой версии), слот на диске
@@ -1028,6 +1059,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     flush,
     hasUnsent,
     blocked,
+    offline,
     keptOffline,
     state:
       failure === 'terminal' ? 'rejected' : failure !== null ? 'error' : saving ? 'saving' : 'idle',
