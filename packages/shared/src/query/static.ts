@@ -72,7 +72,7 @@ function walk(node: QueryFilterNode): void {
     throw new ScopeNotStaticError(`'archived' подменяет множество целиком, а не сужает его`);
   }
   if ('rel' in node && node.rel.of === 'this') {
-    throw new ScopeNotStaticError(`'this' зависит от сущности, в которой лежит запрос`);
+    throw new ScopeNotStaticError(`'this' зависит от записи, в которой лежит запрос`);
   }
 }
 

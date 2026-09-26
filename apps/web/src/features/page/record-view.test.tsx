@@ -716,7 +716,7 @@ describe('фикс-раунд 1: реестр, пачка спора', () => {
     const body = screen.getByTestId('editor-preview');
     hold = gate.promise;
     act(() => noteRegistryVersion('2.0-следующая'));
-    // Ключ реестра сменился, новый снимок держится воротами — а экран прежний, тело то же.
+    // Новая версия инвалидировала снимок, перечитанный держится воротами — а экран прежний, тело то же.
     expect(screen.queryByTestId('record-view-wait')).toBeNull();
     expect(renderedTexts()).toContain('Вид проекта A');
     expect(screen.getByTestId('editor-preview')).toBe(body);

@@ -5,6 +5,7 @@ import {
   OWNER_LOCALE,
 } from '@orbis/shared';
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { expect, test } from 'vitest';
 import type { MockHandler } from '../../test/harness';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
@@ -492,7 +493,7 @@ test('M14: отменённая — бейдж класса ПОДПИСЬЮ, с
 /**
  * Пользовательский аспект, заведённый ТОЛЬКО декларацией: свой статус в СВОЁМ свойстве. Строка
  * обязана дать ему чекбокс (§С8-18), а переключение — нет: писатель шапки
- * (`useRecordEdits.toggleTask`) кладёт литерал `orbis/task_status`, и клик записал бы на такую
+ * (`useRecordEdits.toggleTask`) шлёт смену `orbis/task_status`, и клик записал бы на такую
  * запись чужое свойство, не тронув её собственное.
  */
 const probeAspect = (): AspectDefinition => {
@@ -534,6 +535,71 @@ test('переключение — только у задач: чужая при
   // Состояние показываем — прятать чекбокс у члена контракта значило бы соврать о нём.
   expect(box).toBeDisabled();
   expect(box).toHaveAttribute('title', 'переключение доступно только задачам');
+});
+
+/**
+ * Пользовательский аспект, несущий ВСТРОЕННОЕ `orbis/task_status` и реализующий `orbis/completable`
+ * через него, — без `orbis/task`. Привязка смотрит в то самое свойство, которое пишет чекбокс, но
+ * правила, заменившие копии на экране (штамп `completed_at`, возврат `inbox` строкой `default`),
+ * стоят на `orbis/task`: «готово» дало бы `done` без штампа, снятие — запись без статуса.
+ */
+const choreAspect = (): AspectDefinition => {
+  const task = BUILTIN_REGISTRY.aspects.find((a) => a.id === 'orbis/task');
+  if (task === undefined) throw new Error('встроенного аспекта задачи нет');
+  return {
+    ...task,
+    id: 'user/chore',
+    key: 'user/chore',
+    rank: 99,
+    properties: [{ propertyId: 'orbis/task_status', required: false, rank: 0 }],
+    implements: task.implements.filter((i) => i.contract === 'orbis/completable'),
+  };
+};
+const withChoreAspect: MockHandler = (path) =>
+  path === 'registry.effective'
+    ? { ...BUILTIN_REGISTRY, aspects: [...BUILTIN_REGISTRY.aspects, choreAspect()] }
+    : {};
+
+test('свой аспект с orbis/task_status без orbis/task — чекбокс неактивен, клик ничего не шлёт', async () => {
+  let toggled = 0;
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/task_status': 'inbox' }, ['user/chore'])}
+      onToggleTask={() => {
+        toggled += 1;
+      }}
+    />,
+    withChoreAspect,
+  );
+  const box = await screen.findByRole('checkbox');
+  expect(box).toBeDisabled();
+  expect(box).toHaveAttribute('title', 'переключение доступно только задачам');
+  await userEvent.click(box);
+  expect(toggled).toBe(0);
+});
+
+test('задача, у которой победила чужая привязка статуса, — чекбокс неактивен: клик писал бы не то свойство', async () => {
+  // Вторая половина гарда: `orbis/task` на записи есть, но галочку показывает привязка
+  // пользовательского аспекта (его ранг выше), а писатель шлёт `orbis/task_status`.
+  const handler: MockHandler = (path) =>
+    path === 'registry.effective'
+      ? {
+          ...BUILTIN_REGISTRY,
+          aspects: [{ ...probeAspect(), rank: -1 }, ...BUILTIN_REGISTRY.aspects],
+        }
+      : {};
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/task_status': 'inbox', 'user/probe_state': 'open' }, [
+        'orbis/task',
+        'user/probe-done',
+      ])}
+      onToggleTask={() => {}}
+    />,
+    handler,
+  );
+  const box = await screen.findByRole('checkbox');
+  expect(box).toBeDisabled();
 });
 
 test('переключение у orbis/task активно — контроль к гарду выше', async () => {

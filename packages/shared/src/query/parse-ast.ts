@@ -712,10 +712,10 @@ function assertRelShape(slot: RelSlot): void {
     );
   }
   if (needsOf && of === undefined) {
-    fail('SYNTAX', `'${kind}' требует значение: UUID сущности или this`, slot.offset);
+    fail('SYNTAX', `'${kind}' требует значение: UUID записи или this`, slot.offset);
   }
   if (!needsOf && of !== undefined) {
-    fail('SYNTAX', `'${kind}' не принимает вторую сущность`, slot.offset);
+    fail('SYNTAX', `'${kind}' не принимает вторую запись`, slot.offset);
   }
 }
 
@@ -734,7 +734,7 @@ function parseEntityRef(t: Token): string {
   if (findOutsideQuotes(t.value, '=><') !== -1) {
     fail(
       'QUERY_JOIN',
-      `'${t.key}' принимает UUID или this: соединение двух свободных сущностей за границей языка запросов (§А5-1)`,
+      `'${t.key}' принимает UUID или this: соединение двух свободных записей за границей языка запросов (§А5-1)`,
       t.valueOffset,
     );
   }

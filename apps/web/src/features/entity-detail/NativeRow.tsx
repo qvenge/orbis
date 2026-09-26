@@ -24,16 +24,19 @@ const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
 const TITLE_CLASS = 'text-xl font-semibold tracking-tight';
 
 /**
- * Свойство, в которое умеет писать переключатель шапки (`useRecordEdits.toggleTask` кладёт
- * литерал `done ? 'done' : 'inbox'`). ГАРД, а не общее правило: показать состояние строка обязана
- * у ВСЯКОГО реализатора `orbis/completable` (§С8-18), а записать — только туда, куда писатель
- * умеет. Без гарда клик по чекбоксу записи с пользовательским аспектом клал бы на неё ЧУЖОЕ
- * `orbis/task_status`, своё свойство статуса не менял, и галочка не появлялась бы вовсе.
- *
- * ПОЧЕМУ КОДОМ, а не декларацией: запись через привязку — «положи первый вариант класса из
- * `variantsOfClass`» — это Б-2 (у писателя нет ни выбора варианта внутри класса, ни поля `default`
- * у свойства); до неё гард назван вслух и стоит здесь. Остаток — в реестр остатков задачи 19.
+ * Кому переключатель шапки доступен. Писатель (`useRecordEdits.toggleTask`) шлёт ТОЛЬКО смену
+ * `orbis/task_status`: «готово» — `done`, снятие — `unset`. Штамп `orbis/completed_at`, снятие вопроса
+ * и значение возврата (`inbox`, строка `default` каталога `task_status_default`) делают правила
+ * каталога, а они стоят на носителе `orbis/task` (область правила без `scope` — аспект-носитель).
+ * Поэтому гард — ДВА условия, и оба нужны:
+ *  • запись несёт `orbis/task` — иначе правил нет: пользовательский аспект, несущий то же
+ *    `orbis/task_status`, получил бы `done` без штампа, а снятие оставило бы его вовсе без статуса;
+ *  • победившая привязка `orbis/completable` смотрит в `orbis/task_status` — иначе галочка
+ *    показывает чужое свойство, а клик пишет это, и галочка не сдвинулась бы.
+ * Показать состояние строка обязана у ВСЯКОГО реализатора `orbis/completable` (§С8-18); неактивный
+ * чекбокс с подсказкой — не прятать члена контракта.
  */
+const TOGGLE_CARRIER_ASPECT = 'orbis/task';
 const TOGGLABLE_STATUS_PROPERTY = 'orbis/task_status';
 const TOGGLE_BLOCKED_TITLE = 'переключение доступно только задачам';
 
@@ -212,6 +215,8 @@ export function NativeRow({
     return <MemoryRow title={entity.title} props={props} onSaveTitle={saveTitle} />;
 
   const closed = row.checkbox?.closed === true;
+  const togglable =
+    aspects.has(TOGGLE_CARRIER_ASPECT) && statusProperty === TOGGLABLE_STATUS_PROPERTY;
   const money =
     row.amount === null
       ? null
@@ -229,8 +234,8 @@ export function NativeRow({
   // ИЗМЕНЕНИЕ ВИДИМОГО ПОВЕДЕНИЯ: ОТМЕНЁННАЯ задача выглядит закрытой — чекбокс отмечен, заголовок
   // зачёркнут (прежде чекбокс был пуст, а рядом стоял сырой бейдж `cancelled`). Так и задумано:
   // чекбокс показывает МЕМБЕРСТВО в наборе `closed`, а не класс `done`, и различает классы бейдж
-  // («Отменено»). Цена названа: снятие галочки у отменённой возвращает её в `inbox` — тем же
-  // литералом, что и у сделанной (Р-К-18), то есть «отменено» отменяется в «входящие».
+  // («Отменено»). Цена названа: снятие галочки у отменённой возвращает её в `inbox` — той же
+  // строкой `default` каталога, что и у сделанной, то есть «отменено» отменяется в «входящие».
   return (
     <div className="flex items-center gap-2" data-testid="native-row">
       {row.checkbox !== null && (
@@ -238,8 +243,8 @@ export function NativeRow({
           aria-label="Готово"
           checked={closed}
           onCheckedChange={onToggleTask}
-          disabled={readOnly || statusProperty !== TOGGLABLE_STATUS_PROPERTY}
-          title={statusProperty === TOGGLABLE_STATUS_PROPERTY ? undefined : TOGGLE_BLOCKED_TITLE}
+          disabled={readOnly || !togglable}
+          title={togglable ? undefined : TOGGLE_BLOCKED_TITLE}
         />
       )}
       <Title
