@@ -15,9 +15,9 @@ import {
   type BindingIndex,
   bindingIndexOf,
   type GraphId,
-  isModuleEnabled,
+  isExtensionEnabled,
   type SurfaceName,
-  surfaceModuleOf,
+  surfaceExtensionOf,
 } from '@orbis/shared';
 import type { ExprNode } from '@orbis/shared/expr';
 import { type SQL, sql } from 'drizzle-orm';
@@ -33,13 +33,14 @@ import {
 } from '../query/compile-ast';
 import { queryContext } from '../query/context';
 import { wallClockIn } from '../recurring/materialize';
+import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
-import { disabledModulesOf } from '../registry/modules';
 import { toWireEntityFromSql } from '../wire';
 import { builtinSubscription, resolveSlotOnEntity } from './registry';
 
 export const AGENDA_SUBSCRIPTION_ID = 'orbis/agenda';
-const AGENDA_SURFACE: SurfaceName = 'planner/agenda';
+// Повестка — ядро с 1б (спека §8.1, РП-2): поверхность в пространстве `core/`.
+const AGENDA_SURFACE: SurfaceName = 'core/agenda';
 /** Строка entities в подзапросе — алиас `e`, тот же, что у `compileQueryAst`. */
 const ROW: SQL = sql.raw('e');
 
@@ -123,13 +124,16 @@ export async function agendaListOf(
   def: AgendaSubscription,
   args: { today: string; timeZone: string; days: number },
 ): Promise<AgendaListResult> {
-  // §Б8-3: поверхность выключенного модуля не считается вовсе — ни строки данных, но и ни
+  // §Б8-3: поверхность выключенного расширения не считается вовсе — ни строки данных, но и ни
   // одного отказа: подписка УШЛА, а не сломалась (снимок `module-off`, §С8-20, задача 18).
   // Условие спрашивает САМ движок: протащить маску через вызывающих значило бы столько же
-  // мест, где её забудут. Своим `SurfaceName`, без общей таблицы «подписка → модуль»:
-  // движков два и поверхностей две, и таблица из двух строк стала бы третьим местом с тем
-  // же знанием.
-  if (!isModuleEnabled(surfaceModuleOf(AGENDA_SURFACE), await disabledModulesOf(tx, graphId))) {
+  // мест, где её забудут. С 1б Повестка — ядро (`surfaceExtensionOf('core/agenda') === null`),
+  // и врезка всегда пропускает; она оставлена, потому что ответ «чья поверхность» читается из
+  // ИМЕНИ, и перенос Повестки в расширение (страница хоста — срез 1в) не должен требовать
+  // вспомнить про движок.
+  if (
+    !isExtensionEnabled(surfaceExtensionOf(AGENDA_SURFACE), await disabledExtensionsOf(tx, graphId))
+  ) {
     return {
       today: args.today,
       timezone: args.timeZone,

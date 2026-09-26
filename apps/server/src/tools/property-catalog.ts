@@ -209,6 +209,9 @@ export async function runPropertyCatalog(
   for (const def of reg.properties.values()) {
     if (needle !== undefined && !matchesQuery(def, needle)) continue;
     if (input.status !== undefined && def.status !== input.status) continue;
+    // Фильтр — по колонке `module`, то есть по id словаря расширений (`EXTENSION_IDS`): ядро и язык
+    // несут NULL и ни под каким именем расширения не находятся, а прежние `planner`/`memory`/`ade`
+    // с 1б дают пусто — «неизвестное расширение», а не всё (пин `property-catalog.test.ts`).
     if (input.module !== undefined && def.module !== input.module) continue;
     if (input.aspect !== undefined) {
       // Аспект адресуется и key, и id (у встроенных они совпадают) — тем же правилом, что

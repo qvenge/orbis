@@ -15,6 +15,7 @@ import {
   BUILTIN_SUBSCRIPTION_DEFS,
   type BudgetSubscription,
   bindingIndexOf,
+  SURFACE_ENGINE,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { GATE_PLAIN_ASPECT } from '../../test/fixtures/gate-aspects';
@@ -72,7 +73,7 @@ function row(definition: unknown, over: Partial<SubscriptionRow> = {}): Subscrip
   return {
     id: 'orbis/agenda',
     graphId: null,
-    surface: 'planner/agenda',
+    surface: 'core/agenda',
     definition,
     module: null,
     rank: 1,
@@ -166,6 +167,17 @@ describe('валидатор подписки: SURFACE_UNKNOWN / SUBSCRIPTION_RA
       code: 'VALIDATION',
       reason: 'SUBSCRIPTION_MALFORMED',
     });
+  });
+  test('Повестка — поверхность ядра core/agenda (РП-2): известна, её движок — повестка; прежнее имя — SURFACE_UNKNOWN', () => {
+    expect(SURFACE_ENGINE['core/agenda']).toBe('agenda');
+    expect(assertSubscription(row(AGENDA_DEF, { surface: 'core/agenda' }), seed).engine).toBe(
+      'agenda',
+    );
+    // Имя до 1б словарём больше не знается: вторая «Повестка» под старой головой была бы вторым
+    // адресом одной поверхности.
+    expect(
+      refusal(() => assertSubscription(row(AGENDA_DEF, { surface: 'planner/agenda' }), seed)).code,
+    ).toBe('SURFACE_UNKNOWN');
   });
   test('законная системная декларация проходит и возвращает разобранную форму', () => {
     expect(assertSubscription(row(AGENDA_DEF), seed).engine).toBe('agenda');
@@ -620,7 +632,7 @@ describe('SLOT_AMBIGUOUS на сущности: без prefer — отказ, с
   test('кривая строка subscription_definitions роняет чтение реестра, а не проезжает молча', async () => {
     const { db: admin, client: ac } = adminDb();
     await admin.execute(sql`INSERT INTO subscription_definitions (id, graph_id, surface, definition, module, rank)
-      VALUES ('user/broken', ${owner}::uuid, 'planner/agenda', '{"engine":"agenda"}'::jsonb, NULL, 1)`);
+      VALUES ('user/broken', ${owner}::uuid, 'core/agenda', '{"engine":"agenda"}'::jsonb, NULL, 1)`);
     await ac.end();
     await expect(
       withIdentity(db, personal(owner), (tx) => loadRegistryRows(tx, owner)),

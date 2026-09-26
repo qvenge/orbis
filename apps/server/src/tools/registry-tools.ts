@@ -533,7 +533,7 @@ const subscriptionSetJsonSchema = {
       type: 'string',
       enum: [...SURFACES],
       description:
-        'поверхность-потребитель: planner/agenda — Повестка, finance/budget-overview — Бюджет',
+        'поверхность-потребитель: core/agenda — Повестка, finance/budget-overview — Бюджет',
     },
     definition: subscriptionDefinitionJsonSchema,
   },

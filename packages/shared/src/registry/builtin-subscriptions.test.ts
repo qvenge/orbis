@@ -15,8 +15,9 @@ describe('встроенные подписки §Б5-4', () => {
       'orbis/agenda',
       'orbis/budget-overview',
     ]);
-    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.surface).toBe('planner/agenda');
-    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.module).toBe('planner');
+    // Повестка — ядро с 1б (спека §8.1, РП-2): выключению не подлежит.
+    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.surface).toBe('core/agenda');
+    expect(BUILTIN_SUBSCRIPTION_DEFS[0]?.module).toBe(null);
     for (const s of BUILTIN_SUBSCRIPTION_DEFS) {
       expect(() => subscriptionDefinitionSchema.parse(s.definition)).not.toThrow();
     }

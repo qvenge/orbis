@@ -14,11 +14,12 @@
 //
 // Правки уезжают НОВОЙ формой (§А1-1): значение — `props` по id свойства, снятие — `unset`,
 // снятие аспекта — `aspects.detach`. Старой карты «аспект → поля» этот экран больше не шлёт.
-import type { AspectDefinition, PropertyDefinition } from '@orbis/shared';
+import type { AspectDefinition, PropertyDefinition, RowRegistry } from '@orbis/shared';
 import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { displayText, valueText } from '../../lib/registry/format';
 import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
 import { PropertyControl } from '../../lib/registry/PropertyControl';
+import { rowRegistryOf, touchesMoneyContract } from '../../lib/registry/row';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -27,16 +28,6 @@ import { useHostReadOnly } from './record-host';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
-
-/**
- * Модуль, чьи агрегаты считает сервер и которые протухают от правки любого его свойства.
- *
- * Признак — `module` СВОЙСТВА из реестра, а не список id: остаток конверта двигают и сумма, и
- * категория, и признак плана, и дата операции, а перечисление их руками разъезжалось бы с
- * реестром при каждом новом поле Финансов. Прежде инвалидация висела на одной категории, и
- * правка суммы оставляла бейдж вкладки и остаток конверта вчерашними.
- */
-const AGGREGATED_MODULE = 'finance';
 
 /**
  * Тронула ли ОТПРАВЛЕННАЯ правка то, от чего зависят серверные агрегаты.
@@ -54,15 +45,18 @@ const AGGREGATED_MODULE = 'finance';
  * смонтирован в оболочке приложения и сам не протухает.
  *
  * Правка аспекта гасит агрегаты ВСЕГДА, каким бы аспект ни был, и это не перестраховка:
- * зависимость живёт на СЕРВЕРЕ, а не в реестре. `orbis/schedule` не объявляет ни одного
- * свойства модуля Финансов — и всё же его `orbis/recurrence` превращает операцию в шаблон,
- * который `spent` не считает. Правило «по модулю свойств аспекта» пропустило бы ровно этот
- * случай, а список аспектов-исключений в коде разъехался бы с сервером при первом же новом
- * агрегате. Цена ошибки в другую сторону — один лишний `budget.invalidate()` на редкий
- * осознанный жест.
+ * зависимость живёт на СЕРВЕРЕ, а не в реестре. `orbis/schedule` не связывает ни одного слота
+ * денежных контрактов — и всё же его `orbis/recurrence` превращает операцию в шаблон, который
+ * `spent` не считает. Правило «по привязкам аспекта» пропустило бы ровно этот случай, а список
+ * аспектов-исключений в коде разъехался бы с сервером при первом же новом агрегате. Цена ошибки
+ * в другую сторону — один лишний `budget.invalidate()` на редкий осознанный жест.
+ *
+ * Правка значений — по признаку контракта (`touchesMoneyContract`, спека 1б §8.4, Н-5): свойство
+ * связано слотом «движения денег» или «конверта». Прежний признак `module === 'finance'` после
+ * переноса суммы и даты операции в язык (`module: null`) перестал бы видеть правку суммы.
  */
-function touchesAggregatedModule(
-  reg: RegistryLookup,
+function touchesMoneyAggregates(
+  reg: RowRegistry,
   vars: {
     props?: Record<string, unknown>;
     unset?: string[];
@@ -71,8 +65,7 @@ function touchesAggregatedModule(
 ): boolean {
   const aspects = vars.aspects;
   if ((aspects?.attach?.length ?? 0) > 0 || (aspects?.detach?.length ?? 0) > 0) return true;
-  const touched = [...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])];
-  return touched.some((propertyId) => reg.property(propertyId)?.module === AGGREGATED_MODULE);
+  return touchesMoneyContract([...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])], reg);
 }
 
 /**
@@ -89,7 +82,7 @@ function useAspectEdits(entity: Entity) {
   const readOnly = useHostReadOnly();
   const { mutation, conflict } = useEntityUpdate(entity.id, {
     /**
-     * Агрегаты модуля считает сервер, и `invalidateGraph` о них не знает по построению (он
+     * Денежные агрегаты считает сервер, и `invalidateGraph` о них не знает по построению (он
      * про `entity.query/get/count`) — после правки они протухли.
      *
      * УРОВЕНЬ МУТАЦИИ, а не поштучный колбэк `mutate`: правка «Суммы» и немедленный переход
@@ -98,7 +91,7 @@ function useAspectEdits(entity: Entity) {
      * остались бы вчерашними ровно в том сюжете, ради которого механизм и написан.
      */
     onSettled: (vars) => {
-      if (touchesAggregatedModule(registry, vars)) void invalidateBudget(utils);
+      if (touchesMoneyAggregates(rowRegistryOf(registry.data), vars)) void invalidateBudget(utils);
     },
   });
 

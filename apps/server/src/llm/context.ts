@@ -25,7 +25,7 @@
 //
 // §Б7-6: промпт v7 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
 // блок продолжений обязан быть последним для модели, а не последним в тексте константы.
-import { type GraphId, modulePromptFragments } from '@orbis/shared';
+import { extensionPromptFragments, type GraphId } from '@orbis/shared';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
@@ -42,7 +42,7 @@ import {
 import { memoryEntitiesWhere } from '../memory/select';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
-import { disabledModulesOf } from '../registry/modules';
+import { disabledExtensionsOf } from '../registry/extensions';
 import { toLlmEntity } from '../wire';
 import { aspectIndexSection } from './aspect-index';
 import { SYSTEM_PROMPT_V7, TOOL_RESULT_MARKER } from './prompts/v7';
@@ -510,12 +510,12 @@ export async function buildContext(tx: Tx, input: BuildContextInput): Promise<Bu
     await todaySectionFor(tx, input.graphId, (input.clock ?? (() => new Date()))()),
   ];
 
-  // Маска модулей — ОДНО чтение на сборку канала: её спрашивают обе секции ниже, и второй
+  // Маска расширений — ОДНО чтение на сборку канала: её спрашивают обе секции ниже, и второй
   // SELECT по PK ради того же ответа был бы лишним.
-  const disabled = await disabledModulesOf(tx, input.graphId);
-  // Проза включённых модулей — ВТОРОЙ секцией, сразу за датой: пин «дата стоит ровно на
+  const disabled = await disabledExtensionsOf(tx, input.graphId);
+  // Проза включённых расширений — ВТОРОЙ секцией, сразу за датой: пин «дата стоит ровно на
   // PROMPT_BODY.length» (`context.test.ts`) обязан остаться зелёным.
-  const fragments = modulePromptFragments(disabled);
+  const fragments = extensionPromptFragments(disabled);
   if (fragments !== null) dynamic.push(fragments);
 
   // Слой 1: индекс аспектов (срез 1а §10) — карта «id, подпись, описание»; инструкции живут в

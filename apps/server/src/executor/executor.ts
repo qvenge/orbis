@@ -18,14 +18,15 @@ import {
   effectiveLabel,
   entityCreateExecInput,
   entityUpdateExecInput,
+  extensionName,
   type GraphId,
   newId,
   type PreconditionMismatch,
   RULE_NEAREST_ANCESTOR,
   relationCreateInput,
   relationDeleteInput,
-  setModuleEnabledInput,
-  surfaceModuleOf,
+  setExtensionEnabledInput,
+  surfaceExtensionOf,
 } from '@orbis/shared';
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
 // на сервер и клиент; своей копии у executor'а нет и быть не должно.
@@ -64,8 +65,8 @@ import type { CompileCtx } from '../query/compile-ast';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
+import { disabledExtensionsOf, setExtensionDisabled } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
-import { disabledModulesOf, setModuleDisabled } from '../registry/modules';
 import {
   type ActionRow,
   type AspectRow,
@@ -158,8 +159,8 @@ import { assertEntityProps } from './aspects-validate';
 import { bodyFieldsFromMarkdown } from './body-fields';
 import { ExecError } from './errors';
 import {
+  assertExtensionEnabled,
   assertGrantAlive,
-  assertModuleEnabled,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
   resolveEntityTitles,
@@ -526,7 +527,7 @@ export async function execute(
         registry,
         // Одно точечное чтение по PK на мутацию: ленивость стоила бы асинхронного гейта в
         // трёх точках записи, где всё остальное синхронно.
-        disabledModules: await disabledModulesOf(tx, req.identity.graph),
+        disabledModules: await disabledExtensionsOf(tx, req.identity.graph),
         mechanism: req.mechanism ?? 'user',
         req,
         actionId,
@@ -661,7 +662,7 @@ async function executeBatch(
         tx,
         registry,
         // То же одно чтение по PK, что и на одиночном пути (см. его комментарий).
-        disabledModules: await disabledModulesOf(tx, req.identity.graph),
+        disabledModules: await disabledExtensionsOf(tx, req.identity.graph),
         mechanism: req.mechanism ?? 'user',
         req,
         actionId: batchId,
@@ -1937,7 +1938,7 @@ async function prepareEntityCreate(
   });
   // Гейт §Б8-3 — ДО гейта флагов и по тому же доводу: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы». У create ДОБАВЛЯЕМЫЕ аспекты — это всё состояние.
-  assertModuleEnabled(ctx.registry, ctx.disabledModules, ctx.mechanism, state.aspects);
+  assertExtensionEnabled(ctx.registry, ctx.disabledModules, ctx.mechanism, state.aspects);
   // Гейт флагов (§А2-5/Б6) — ДО валидации значений: «вам сюда нельзя» честнее, чем
   // «ваше значение не той формы», когда запись запрещена независимо от значения.
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
@@ -2274,7 +2275,7 @@ async function prepareEntityUpdate(
       // Гейт §Б8-3: только ПОЯВИВШИЕСЯ аспекты — правка суммы существующей транзакции
       // выключенного модуля разрешена (§Б8-3: скрытое ≠ удалённое), а появление нового
       // аспекта модуля через `entity_update` — тот же обход, что через attach.
-      assertModuleEnabled(
+      assertExtensionEnabled(
         ctx.registry,
         ctx.disabledModules,
         ctx.mechanism,
@@ -2610,7 +2611,7 @@ async function prepareAttach(
   // подтверждает, что внутренний undo сюда не заходит — у него свой путь в entity_update).
   // Гейт в двух точках из трёх был бы дырой: `attach_*` заводит аспект на готовой сущности
   // мимо create.
-  assertModuleEnabled(
+  assertExtensionEnabled(
     ctx.registry,
     ctx.disabledModules,
     ctx.mechanism,
@@ -3422,14 +3423,6 @@ const propertyRowRestoreInput = z
   .object({ id: z.string().min(1), row: z.record(z.unknown()).nullable() })
   .strict();
 
-/**
- * Вход `module_set` — ТА ЖЕ схема, что читает ручка `user.setModuleEnabled` (объявлена в
- * `packages/shared/src/registry/modules.ts`). Второй, «похожей» схемы здесь нет намеренно:
- * два описания одной операции разъехались бы — тот же довод, что в докблоке
- * `registryMutation` (`routers/registry.ts`).
- */
-const moduleSetInput = setModuleEnabledInput;
-
 /** ВНУТРЕННЯЯ обратная операция слияния — ОДНА на всё, что слияние сделало (§А10-2). */
 const propertyMergeUndoInput = z
   .object({
@@ -3622,7 +3615,7 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
 }
 
 /**
- * Переключение модуля (§Б8-1 №28). ВНУТРЕННЯЯ операция, как `property_row_restore`: в
+ * Переключение расширения (§Б8-1 №28). ВНУТРЕННЯЯ операция, как `property_row_restore`: в
  * `CORE_TOOLS`/`REGISTRY_TOOLS` её нет, реестр тулов такого имени не резолвит — значит ни
  * модель, ни рутина её не позовут (`dispatchTool` ответит «неизвестный тул», а внутри
  * `batch_execute` — `MODULE_DISABLED`/«неизвестный тул операции»). Единственный вход —
@@ -3630,31 +3623,40 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
  *
  * ГЕЙТ ПО АКТОРУ (Ф-Б1-57г) — защита в глубину, а не дубль: снаружи операцию держит резолв
  * диспатча, но `execute()` доступен ЛЮБОМУ серверному пути, и обещание «единственный вход —
- * владелец» иначе держал бы чужой код. Переключение модуля меняет всё, что видит владелец,
+ * владелец» иначе держал бы чужой код. Переключение расширения меняет всё, что видит владелец,
  * — цена ошибки тут несимметрична: лишний отказ агенту дешевле молчаливой перенастройки.
  * Код `FORBIDDEN_LEVEL` (§7.10 «forbidden»), как у прочих запретов по актору/источнику.
  */
 async function prepareModuleSet(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
   if (ctx.req.actorKind !== 'owner') {
-    throw new ExecError('FORBIDDEN_LEVEL', 'переключение модуля — операция владельца (§Б8-1 №28)', {
-      tool: 'module_set',
-      actorKind: ctx.req.actorKind,
-    });
+    throw new ExecError(
+      'FORBIDDEN_LEVEL',
+      'переключение расширения — операция владельца (§Б8-1 №28)',
+      {
+        tool: 'module_set',
+        actorKind: ctx.req.actorKind,
+      },
+    );
   }
-  const input = parseEnvelope(moduleSetInput, rawInput, 'module_set');
+  // Вход — ТА ЖЕ схема, что читает ручка `user.setModuleEnabled` (`setExtensionEnabledInput`,
+  // `packages/shared/src/registry/extensions.ts`): второй, «похожей» схемы нет намеренно — два
+  // описания одной операции разъехались бы (довод докблока `registryMutation`, `routers/registry.ts`).
+  // Имя операции `module_set` и поле `module` — провод и журнал (РП-10), заголовок — «расширение».
+  const input = parseEnvelope(setExtensionEnabledInput, rawInput, 'module_set');
+  const name = extensionName(input.module);
   const journal = registryPlan(
     'module_set',
     'module_set',
-    input.enabled ? `Модуль «${input.module}» включён` : `Модуль «${input.module}» выключен`,
+    input.enabled ? `Расширение «${name}» включено` : `Расширение «${name}» выключено`,
   );
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       // Прежнее состояние читается ЗДЕСЬ, под уже взятым замком реестра: inverse обязан
       // вернуть то, что было, а не «обратное входу» — повтор выключения иначе включил бы.
-      const before = await disabledModulesOf(applyCtx.tx, applyCtx.req.identity.graph);
+      const before = await disabledExtensionsOf(applyCtx.tx, applyCtx.req.identity.graph);
       const wasEnabled = !before.includes(input.module);
-      await setModuleDisabled(
+      await setExtensionDisabled(
         applyCtx.tx,
         applyCtx.req.identity.graph,
         input.module,
@@ -3872,7 +3874,7 @@ async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise
           graphId,
           surface: input.surface,
           definition: input.definition,
-          module: surfaceModuleOf(input.surface),
+          module: surfaceExtensionOf(input.surface),
           rank: current?.rank ?? OWN_SUBSCRIPTION_RANK,
         });
         journal.operations.push({ op: 'subscription_set', payload: { ...input } });

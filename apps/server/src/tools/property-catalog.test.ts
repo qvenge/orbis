@@ -270,7 +270,8 @@ describe('property_catalog: форма строки (§А9-3)', () => {
         ],
       },
       status: 'active',
-      module: 'finance',
+      // Стандартное свойство ядра с 1б (Р-7): расширения у направления нет.
+      module: null,
       usage: { aspects: ['orbis/financial'], entities: 0 },
     });
   });

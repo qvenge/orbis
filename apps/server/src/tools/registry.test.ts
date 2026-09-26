@@ -18,13 +18,13 @@ import {
   budgetStatusInput,
   checkpointInput,
   claimTaskInput,
+  EXTENSION_MANIFESTS,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
   finishInput,
   isActionToolName,
-  MODULE_MANIFESTS,
   myQueueInput,
   proposeInput,
   relationCreateInput,
@@ -120,8 +120,8 @@ function registryFor(userId: GraphId): Promise<OrbisToolDef[]> {
 }
 
 /**
- * Реестр при ЗАДАННОЙ маске модулей — синхронной сборкой из снимка, мимо `user_settings`:
- * вопрос теста — что сборка делает с маской, а не как маска хранится (`registry/modules.test.ts`).
+ * Реестр при ЗАДАННОЙ маске расширений — синхронной сборкой из снимка, мимо `user_settings`:
+ * вопрос теста — что сборка делает с маской, а не как маска хранится (`registry/extensions.test.ts`).
  */
 function registryWithDisabled(userId: GraphId, disabled: readonly string[]) {
   return withIdentity(db, personal(userId), async (tx) =>
@@ -226,8 +226,8 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     expect(defOf(defs, 'action_set').description).not.toContain('дельт');
     const roll = defOf(defs, 'budget_rollover');
     expect([roll.kind, roll.fullScopeOnly]).toEqual(['mutate', true]);
-    // Инструмент МОДУЛЯ, а не ядра: с выключенными Финансами его в реестре нет (§Б8-3).
-    expect(MODULE_MANIFESTS.finance.tools).toContain('budget_rollover');
+    // Инструмент РАСШИРЕНИЯ, а не ядра: с выключенными Финансами его в реестре нет (§Б8-3).
+    expect(EXTENSION_MANIFESTS.finance.tools).toContain('budget_rollover');
     expect((await registryWithDisabled(userB, ['finance'])).map((d) => d.name)).not.toContain(
       'budget_rollover',
     );
@@ -244,12 +244,14 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
 
   test('действие с offered_by.llm публикуется своим тулом; без него — только через run_action (§Б6-6)', async () => {
     const names = (await registryFor(userB)).map((d) => d.name);
-    expect(names).toContain('action_planner_postpone_overdue');
+    expect(names).toContain('action_core_postpone_overdue');
+    // Прежнее имя (до 1б) не публикуется: ключ действия ядра — `core/…` (РП-2).
+    expect(names).not.toContain('action_planner_postpone_overdue');
     expect(names).not.toContain('action_finance_plan_to_fact');
     expect(names).toContain('run_action');
     // Вход тула действия — плоский: параметры декларации, у одиночного ещё `self`; у пакетного
     // `self` нет вовсе — цели даёт его запрос.
-    const postpone = defOf(await registryFor(userB), 'action_planner_postpone_overdue');
+    const postpone = defOf(await registryFor(userB), 'action_core_postpone_overdue');
     expect(postpone.kind).toBe('mutate');
     expect(Object.keys(postpone.inputJsonSchema.properties as Record<string, unknown>)).toEqual([
       'to',
@@ -258,20 +260,36 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     expect(postpone.inputJsonSchema.additionalProperties).toBe(false);
   });
 
-  test('тул действия выключенного модуля из реестра уходит (Р-20, 12-я точка маски)', async () => {
-    const names = (await registryWithDisabled(userB, ['planner'])).map((d) => d.name);
-    expect(names).not.toContain('action_planner_postpone_overdue');
-    expect(names).toContain('run_action'); // сам каталог — ядро, не модуль
+  test('тул действия выключенного расширения из реестра уходит, тул действия ядра — нет (Р-20, 12-я точка маски)', async () => {
+    // Сидовое «план → факт» тулом не публикуется (`offered_by: []`) — без подмены в снимке
+    // «маска гасит тул Финансов» было бы истинно при любой маске, то есть ничего не проверяло бы.
+    const defsWith = (disabled: readonly string[]) =>
+      withIdentity(db, personal(userB), async (tx) => {
+        const reg = await effectiveRegistry(tx, userB);
+        const p2f = reg.actions.get('finance/plan-to-fact');
+        if (p2f === undefined) throw new Error('сидового действия нет в снимке');
+        const actions = new Map([
+          ...reg.actions,
+          [p2f.id, { ...p2f, offered_by: [{ llm: true }] }],
+        ]);
+        return buildToolDefs({ ...reg, actions }, disabled).map((d) => d.name);
+      });
+    expect(await defsWith([])).toContain('action_finance_plan_to_fact'); // подмена не вырождена
+    const masked = await defsWith(['finance']);
+    expect(masked).not.toContain('action_finance_plan_to_fact');
+    // Действие ядра (РП-2): маска его не гасит — Планировщик стал ядром, выключать нечего.
+    expect(masked).toContain('action_core_postpone_overdue');
+    expect(masked).toContain('run_action'); // сам каталог — ядро, не расширение
   });
 
   test('описание run_action перечисляет оба сидовых действия; при выключенном finance строка plan-to-fact из каталога исчезает (Р-К-86)', async () => {
     const all = defOf(await registryFor(userB), 'run_action').description;
     expect(all).toContain('finance/plan-to-fact — ');
-    expect(all).toContain('planner/postpone_overdue — ');
+    expect(all).toContain('core/postpone_overdue — ');
     expect(all).toContain('(пакетное: цели даёт запрос действия)');
     const masked = defOf(await registryWithDisabled(userB, ['finance']), 'run_action').description;
     expect(masked).not.toContain('finance/plan-to-fact');
-    expect(masked).toContain('planner/postpone_overdue — ');
+    expect(masked).toContain('core/postpone_overdue — ');
   });
 
   test('снятое (deprecated) действие не публикуется тулом и не попадает в каталог run_action (М-3)', async () => {
@@ -285,9 +303,9 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
       ]);
       return buildToolDefs({ ...reg, actions });
     });
-    expect(defs.map((d) => d.name)).not.toContain('action_planner_postpone_overdue');
+    expect(defs.map((d) => d.name)).not.toContain('action_core_postpone_overdue');
     const catalog = defOf(defs, 'run_action').description;
-    expect(catalog).not.toContain('planner/postpone_overdue');
+    expect(catalog).not.toContain('core/postpone_overdue');
     expect(catalog).toContain('finance/plan-to-fact — '); // соседнее активное — на месте
   });
 
@@ -991,7 +1009,7 @@ describe('§С8-23: инвариант против fail-open — писател
       .filter((d) => d.name === 'run_action' || isActionToolName(d.name))
       .map((d) => d.name);
     expect(actionTools.length).toBeGreaterThan(0);
-    expect(actionTools).toEqual(['run_action', 'action_planner_postpone_overdue']);
+    expect(actionTools).toEqual(['run_action', 'action_core_postpone_overdue']);
     // Хвост `reconfiguresOf` отвечает им `'none'` — и это ЗАКОННО ровно потому, что ответ по
     // имени у них и не спрашивается: ни одно из имён не значится среди писателей реестра, а
     // уровень считает ветка действия по резолвленным шагам (`actionCallFacts`, `actions/run.ts`;

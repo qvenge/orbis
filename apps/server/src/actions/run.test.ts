@@ -22,7 +22,7 @@ import type { ActionRecord, WireEntity } from '../executor/types';
 import { classifyToolCall } from '../policy/confirmation';
 import { approvePending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
-import { setModuleDisabled } from '../registry/modules';
+import { setExtensionDisabled } from '../registry/extensions';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { resolveAction } from './resolve';
 import { actionCallFacts, runAction } from './run';
@@ -197,7 +197,7 @@ test('map с 11 целями → isBatch:true и explicit-confirmation по ря
       tx,
       reg,
       owner,
-      { action: 'planner/postpone_overdue', params: { to: '2026-09-30' } },
+      { action: 'core/postpone_overdue', params: { to: '2026-09-30' } },
       ARGS,
     ),
   );
@@ -210,7 +210,7 @@ test('map с 11 целями → isBatch:true и explicit-confirmation по ря
   expect([facts.isBatch, facts.batchSize]).toEqual([true, 11]);
   expect([...facts.sensitivity]).toEqual([]);
   expect(classifyToolCall(facts)).toBe('explicit-confirmation');
-  const out = await dispatchTool(aiCtx(), 'action_planner_postpone_overdue', { to: '2026-09-30' });
+  const out = await dispatchTool(aiCtx(), 'action_core_postpone_overdue', { to: '2026-09-30' });
   expect(out.status).toBe('pending_confirmation');
   if (out.status !== 'pending_confirmation') return;
   // Карточка называет ДЕЙСТВИЕ, его масштаб и ПОВОД подтверждения, а не «batch_execute»:
@@ -237,6 +237,7 @@ test('map с 11 целями → isBatch:true и explicit-confirmation по ря
       ),
     )
   )[0]?.p as Record<string, unknown>;
+  // `action_id` — id действия, прежний при новом ключе `core/…` (РП-2, Д-10).
   expect([rec.tool, rec.action_id, typeof rec.action_hash]).toEqual([
     'batch_execute',
     'planner/postpone_overdue',
@@ -292,7 +293,7 @@ test('§С2-2: шаг вне allowed_tools act-рутины → FORBIDDEN_LEVEL,
 });
 
 test('act-рутина с открытыми шагами исполняет одиночное действие; пакет на explicit — в hooks.defer с разобранным конвертом (Р-К-67)', async () => {
-  const allowed = ['entity_update', 'run_action', 'action_planner_postpone_overdue'];
+  const allowed = ['entity_update', 'run_action', 'action_core_postpone_overdue'];
   const ok = await dispatchTool(
     routineCtx({ mode: 'act', allowedTools: allowed }),
     'run_action',
@@ -310,7 +311,7 @@ test('act-рутина с открытыми шагами исполняет о�
     routineCtx({ mode: 'act', allowedTools: allowed }),
     reg,
     [],
-    'planner/postpone_overdue',
+    'core/postpone_overdue',
     { params: { to: '2026-09-30' } },
     {
       defer: async (tool, payload) => {
@@ -323,7 +324,7 @@ test('act-рутина с открытыми шагами исполняет о�
   expect(calls).toEqual([
     {
       tool: 'run_action',
-      payload: { action: 'planner/postpone_overdue', params: { to: '2026-09-30' } },
+      payload: { action: 'core/postpone_overdue', params: { to: '2026-09-30' } },
     },
   ]);
 });
@@ -356,11 +357,13 @@ test('скоуп worker: шаг вне WORKER_SCOPE_TOOLS → FORBIDDEN_LEVEL и
   });
 });
 
-test('run_action действия выключенного модуля → MODULE_DISABLED (Р-20)', async () => {
-  const mask = (modules: string[], disabled: boolean) =>
+test('run_action действия выключенного расширения → MODULE_DISABLED; действие ядра маска не гасит (Р-20, РП-2)', async () => {
+  const mask = (extensions: string[], disabled: boolean) =>
     withIdentity(db, personal(owner), async (tx) => {
-      for (const m of modules) await setModuleDisabled(tx, owner, m, disabled);
+      for (const m of extensions) await setExtensionDisabled(tx, owner, m, disabled);
     });
+  // `planner` в маске — устаревший элемент (колонка text[] без CHECK): ядро на него не смотрит,
+  // потому что у действия ядра `module: null`, а не потому, что `planner` в маске не бывает.
   await mask(['finance', 'planner'], true);
   try {
     const out = await dispatchTool(ownerCtx(), 'run_action', PLAN_TO_FACT(plannedKept));
@@ -371,15 +374,12 @@ test('run_action действия выключенного модуля → MODU
         details: { action: 'finance/plan-to-fact', module: 'finance' },
       },
     });
-    // Тул действия выключенного модуля скрыт маской, и вызов по имени — тот же MODULE_DISABLED,
-    // а не «неизвестный тул» (вторая линия §Б8-3 диспатча).
-    const tool = await dispatchTool(ownerCtx(), 'action_planner_postpone_overdue', {
-      to: '2026-09-30',
-    });
-    expect(tool).toMatchObject({
-      status: 'error',
-      error: { code: 'MODULE_DISABLED', details: { module: 'planner' } },
-    });
+    // Тул действия ядра виден и под маской: пустой вход доходит до разбора параметров и падает
+    // ТАМ (параметр `to` обязателен), а не отказом маски. Пустой вход — чтобы проба ничего не
+    // записала в общий граф файла.
+    const tool = await dispatchTool(ownerCtx(), 'action_core_postpone_overdue', {});
+    expect(tool.status).toBe('error');
+    if (tool.status === 'error') expect(tool.error.code).not.toBe('MODULE_DISABLED');
   } finally {
     await mask(['finance', 'planner'], false);
   }
@@ -560,7 +560,7 @@ test('фон: единица длиннее капа — BATCH_TOO_LONG ДО п�
 
 test('карточка действия исполнима approvePending уже сегодня: 11 целей — одной пачкой', async () => {
   // Последний в файле: принятие переносит сроки, и просроченных после него не остаётся.
-  const out = await dispatchTool(aiCtx(), 'action_planner_postpone_overdue', { to: '2026-09-30' });
+  const out = await dispatchTool(aiCtx(), 'action_core_postpone_overdue', { to: '2026-09-30' });
   if (out.status !== 'pending_confirmation') throw new Error(`ожидалась карточка: ${out.status}`);
   const applied = await approvePending(db, { identity: personal(owner), pendingId: out.pendingId });
   expect(applied.ok).toBe(true);

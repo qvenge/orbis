@@ -189,7 +189,7 @@ test('нет self у одиночного действия — ACTION_SELF_REQUI
   ).rejects.toMatchObject({ details: { reason: 'ACTION_PARAMS', param: 'occurred_on' } });
   // Пакетному действию `self` не адресуется: цели даёт его запрос.
   await expect(
-    resolveWith({ action: 'planner/postpone_overdue', self: overdueA, params: { to: TODAY } }),
+    resolveWith({ action: 'core/postpone_overdue', self: overdueA, params: { to: TODAY } }),
   ).rejects.toMatchObject({ details: { reason: 'ACTION_PARAMS', param: 'self' } });
   await expect(resolveWith({ action: 'finance/нет-такого' })).rejects.toMatchObject({
     code: 'NOT_FOUND',
@@ -197,7 +197,7 @@ test('нет self у одиночного действия — ACTION_SELF_REQUI
 });
 
 test('postpone_overdue: цели — результат Q по сегодня владельца, порядок по id, операция на цель', async () => {
-  const r = await resolveWith({ action: 'planner/postpone_overdue', params: { to: '2026-09-30' } });
+  const r = await resolveWith({ action: 'core/postpone_overdue', params: { to: '2026-09-30' } });
   expect(r.targets).toEqual([overdueA, overdueB].sort()); // просроченные; сегодняшняя и будущая — нет
   expect(r.operations.map((o) => o.input.id)).toEqual([...r.targets]);
   expect(r.operations.map((o) => o.input.props)).toEqual([
@@ -214,7 +214,7 @@ test('целей больше batch_cap — BATCH_CAP_EXCEEDED, а не усеч
     return { ...reg, actions: new Map([...reg.actions, [decl.id, { ...decl, batch_cap: 1 }]]) };
   };
   await expect(
-    resolveWith({ action: 'planner/postpone_overdue', params: { to: '2026-09-30' } }, capped),
+    resolveWith({ action: 'core/postpone_overdue', params: { to: '2026-09-30' } }, capped),
   ).rejects.toMatchObject({
     code: 'VALIDATION',
     details: { reason: 'BATCH_CAP_EXCEEDED', cap: 1, found: 2 },

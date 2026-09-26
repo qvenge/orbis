@@ -1,7 +1,7 @@
 {
   "states": {
     "baseline": {
-      "planner/agenda": [
+      "core/agenda": [
         {
           "section": "window",
           "id": "@event-today",
@@ -337,7 +337,7 @@
       ]
     },
     "custom-aspect": {
-      "planner/agenda": [
+      "core/agenda": [
         {
           "section": "window",
           "id": "@event-today",
@@ -717,7 +717,7 @@
       ]
     },
     "module-off": {
-      "planner/agenda": [
+      "core/agenda": [
         {
           "section": "window",
           "id": "@event-today",
@@ -948,7 +948,7 @@
       ]
     },
     "relabeled": {
-      "planner/agenda": [
+      "core/agenda": [
         {
           "section": "window",
           "id": "@event-today",

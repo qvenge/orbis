@@ -197,7 +197,7 @@ export function propertyIdOf(reg: RegistryLookup, field: string): string | undef
 /**
  * Подпись ПОЛЯ на экране. Промах обеих форм адреса — сырое имя поля: честная деградация
  * для свойства, которого в снимке нет (снято, ещё не приехало, кастомный аспект чужого
- * модуля), и ровно то, что показывал прежний словарь на неизвестном ключе.
+ * расширения), и ровно то, что показывал прежний словарь на неизвестном ключе.
  */
 export function fieldLabel(reg: RegistryLookup, field: string): string {
   const id = propertyIdOf(reg, field);

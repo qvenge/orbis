@@ -3,13 +3,19 @@ import { actionDefinitionSchema, BATCH_CAP_DEFAULT } from './action-type';
 import { BUILTIN_ACTION_DEFS } from './builtin-actions';
 
 describe('встроенные действия §Б6-5', () => {
-  test('ровно два: finance/plan-to-fact и planner/postpone_overdue; rank — позиция', () => {
+  test('ровно два: finance/plan-to-fact и core/postpone_overdue; rank — позиция', () => {
     expect(BUILTIN_ACTION_DEFS.map((a) => a.key)).toEqual([
+      'finance/plan-to-fact',
+      'core/postpone_overdue',
+    ]);
+    expect(BUILTIN_ACTION_DEFS.map((a) => a.rank)).toEqual([0, 1]);
+    // `id` действия ядра — ПРЕЖНИЙ ключ (РП-2, Д-10): сид действий — upsert по id без удаления,
+    // и новый id оставил бы в базе вторую, осиротевшую строку `planner/postpone_overdue`.
+    expect(BUILTIN_ACTION_DEFS.map((a) => a.id)).toEqual([
       'finance/plan-to-fact',
       'planner/postpone_overdue',
     ]);
-    expect(BUILTIN_ACTION_DEFS.map((a) => a.rank)).toEqual([0, 1]);
-    expect(BUILTIN_ACTION_DEFS.map((a) => a.id)).toEqual(BUILTIN_ACTION_DEFS.map((a) => a.key));
+    expect(BUILTIN_ACTION_DEFS.map((a) => a.module)).toEqual(['finance', null]);
     for (const a of BUILTIN_ACTION_DEFS) {
       expect(a.graphId).toBeNull();
       expect(() => actionDefinitionSchema.parse(a)).not.toThrow();

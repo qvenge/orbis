@@ -38,6 +38,33 @@ export function rowRegistryOf(data: EffectiveRegistry | undefined): RowRegistry 
   return built;
 }
 /**
+ * Контракты, чьи агрегаты считает сервер (движок бюджета): «движение денег» — `spent`, списки
+ * планов и фактов; «конверт» — лимиты и периоды. Оба — язык (`module: null`, Р-7 спеки 1б).
+ */
+const MONEY_CONTRACTS: readonly string[] = ['orbis/money-movement', 'orbis/envelope'];
+
+/**
+ * Трогает ли правка этих свойств деньги (спека 1б §8.4, Н-5): свойство связано слотом контракта
+ * «движение денег» или «конверт» у какого-либо аспекта снимка. Признак — по привязкам, а не по
+ * `module` свойства: сумма, валюта, направление и дата операции с 1б — язык (`module: null`), и
+ * признак «свойство Финансов» перестал бы видеть правку суммы. Ни одно расширение здесь не названо:
+ * код ядра не знает, кто реализует контракт (спека §8.4, С1б-10).
+ *
+ * Пустой снимок (реестр ещё едет) отвечает «нет»: привязок, по которым судить, ещё нет.
+ */
+export function touchesMoneyContract(propertyIds: readonly string[], reg: RowRegistry): boolean {
+  if (propertyIds.length === 0) return false;
+  const bound = new Set<string>();
+  for (const aspect of reg.aspects.values()) {
+    for (const impl of aspect.implements) {
+      if (!MONEY_CONTRACTS.includes(impl.contract)) continue;
+      for (const property of Object.values(impl.bind)) bound.add(property);
+    }
+  }
+  return propertyIds.some((id) => bound.has(id));
+}
+
+/**
  * Пустой снимок (реестр ещё едет) даёт пустую проекцию: строка печатает заголовок и дорисовывает
  * элементы первым же ответом. Прятать строку до реестра нельзя — то же правило, что у `lookupOf`.
  */

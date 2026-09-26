@@ -20,7 +20,7 @@ import type { GraphId } from '@orbis/shared';
 import {
   AUTHORING_DEFERRED_ASPECTS,
   effectiveLabel,
-  isModuleEnabled,
+  isExtensionEnabled,
   OWNER_LOCALE,
 } from '@orbis/shared';
 import type { Tx } from '../db/with-identity';
@@ -45,8 +45,8 @@ export function aspectIndexLines(reg: RegistrySnapshot, disabled: readonly strin
     // РП-1 (срез 1а): аспекты с отложенным авторством агентом — ни строкой индекса, ни в строке-
     // границе (они НЕ служебные: их записи в выдачах есть). Тот же список, что у `buildToolDefs`.
     .filter((a) => !AUTHORING_DEFERRED_ASPECTS.includes(a.id))
-    // §Б8-3: аспект выключенного модуля уходит вместе с модулем — та же маска, что у тулов.
-    .filter((a) => isModuleEnabled(a.module, disabled))
+    // §Б8-3: аспект выключенного расширения уходит вместе с ним — та же маска, что у тулов.
+    .filter((a) => isExtensionEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key))
     .map(
       (a) =>
@@ -57,7 +57,7 @@ export function aspectIndexLines(reg: RegistrySnapshot, disabled: readonly strin
   // показывается — запрашивай явно через aspect=…»). Индекс держит обе одной строкой-границей — без
   // описания и инструкции: уйди хоть одна, модель либо правила бы прогон, либо не находила бы его.
   const service = [...reg.aspects.values()]
-    .filter((a) => a.service && isModuleEnabled(a.module, disabled))
+    .filter((a) => a.service && isExtensionEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank)
     .map((a) => a.id);
   return service.length === 0

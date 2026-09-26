@@ -83,7 +83,7 @@ const ENTRIES: readonly AspectEntry[] = [
       keyFields: ['orbis/start_at', 'orbis/end_at', 'orbis/all_day'],
       icon: '📅',
     },
-    module: 'planner',
+    module: null, // ядро с 1б: Планировщик стал ядром (спека §8.1)
     service: false,
   },
   {
@@ -140,7 +140,7 @@ const ENTRIES: readonly AspectEntry[] = [
       keyFields: ['orbis/task_status', 'orbis/due_date', 'orbis/priority'],
       icon: '✅',
     },
-    module: 'planner',
+    module: null, // ядро с 1б: Планировщик стал ядром (спека §8.1)
     service: false,
   },
   {
@@ -320,7 +320,7 @@ const ENTRIES: readonly AspectEntry[] = [
       keyFields: ['orbis/memory_kind', 'orbis/rule_pattern', 'orbis/rule_target'],
       icon: '🧠',
     },
-    module: 'memory',
+    module: null, // ядро с 1б: Память стала ядром (спека §8.1)
     service: false,
   },
   {
@@ -362,7 +362,7 @@ const ENTRIES: readonly AspectEntry[] = [
       'не пиши его вручную. Кодовое (репозиторий, ветка) — в orbis/repo на той же сущности, не здесь.',
     tagMappings: ['project', 'проект'],
     viewConfig: { keyFields: ['orbis/project_stage'], icon: '📁' },
-    module: 'ade',
+    module: 'projects',
     service: false,
   },
   {
@@ -381,7 +381,7 @@ const ENTRIES: readonly AspectEntry[] = [
       'сущность, что orbis/project, только если проект — про код.',
     tagMappings: ['repo', 'репозиторий'],
     viewConfig: { keyFields: ['orbis/repo_url', 'orbis/default_branch'], icon: '🗂️' },
-    module: 'ade',
+    module: 'dev',
     service: false,
   },
   {

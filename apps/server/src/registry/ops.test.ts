@@ -1223,9 +1223,9 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
   const row = (over: Partial<SubscriptionRow> = {}): SubscriptionRow => ({
     id: 'user/my-agenda',
     graphId: subOwner,
-    surface: 'planner/agenda',
+    surface: 'core/agenda',
     definition: AGENDA?.definition as SubscriptionDefinition,
-    module: 'planner',
+    module: null,
     rank: 1000,
     ...over,
   });
@@ -1238,7 +1238,7 @@ describe('своя строка подписки: setOwnSubscription / removeOwn
     const after = await inTx((tx) => readRegistryVersions(tx, subOwner));
     expect(after.ownerVersion).toBe(before.ownerVersion + 1);
     const reg = await inTx((tx) => effectiveRegistry(tx, subOwner));
-    expect(reg.subscriptions.get('user/my-agenda')?.surface).toBe('planner/agenda');
+    expect(reg.subscriptions.get('user/my-agenda')?.surface).toBe('core/agenda');
     // Читатель адресует ту же строку и находит СВОЮ, а не системную.
     expect((await inTx((tx) => readSubscriptionRow(tx, subOwner, 'user/my-agenda')))?.graphId).toBe(
       subOwner,
@@ -1386,7 +1386,7 @@ describe('реестр действий владельца (§Б6-1, §С3)', ()
     // m-1), — выход назван тот, что есть: своя копия с ключом user/….
     expect(set.message).not.toContain('дельт');
     expect(set.message).toContain('user/');
-    const remove = err(await runAs('action_remove', { action: 'planner/postpone_overdue' }));
+    const remove = err(await runAs('action_remove', { action: 'core/postpone_overdue' }));
     expect([remove.code, (remove.details as { reason?: string }).reason]).toEqual([
       'VALIDATION',
       'ACTION_TARGET_SYSTEM',
@@ -1575,7 +1575,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     ok(
       await runAs('subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: tweaked,
       }),
     );
@@ -1594,7 +1594,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     const e = err(
       await runAs('subscription_set', {
         id: 'user/my-agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: AGENDA_SUB,
       }),
     );
@@ -1605,7 +1605,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     const second = ok(
       await runAs('subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: {
           ...(AGENDA_SUB as AgendaSubscription),
           show: { ...(AGENDA_SUB as AgendaSubscription).show, limit: 7 },
@@ -1655,7 +1655,7 @@ describe('subscription_set / subscription_remove / contract_sets_delta_* чер�
     ok(
       await runAs('subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: {
           ...base,
           overdue: {
@@ -1814,7 +1814,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     ok(
       await runAs('subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: readsMyOpen(),
       }),
     );
@@ -1865,7 +1865,7 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
     ok(
       await runAs('subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: readsMyOpen(),
       }),
     );
@@ -1875,9 +1875,9 @@ describe('наборы под живой подпиской: SET_IN_USE и од�
       setOwnSubscription(tx, useOwner, {
         id: 'user/my-agenda',
         graphId: useOwner,
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: readsMyOpen(),
-        module: 'planner',
+        module: null,
         rank: 1000,
       }),
     );
@@ -1955,7 +1955,7 @@ describe('зависимость от набора считается ПО ПР�
     ok(
       await runAs('subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: readsMyOpen(),
       }),
     );

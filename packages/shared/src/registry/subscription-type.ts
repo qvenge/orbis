@@ -6,7 +6,7 @@ import { z } from 'zod';
 // Из `../expr/ast`, а не из корневого барреля: язык E в корень не едет (Р-И-8), а баррель `../expr`
 // тянет чекер, который типы реестра импортирует обратно.
 import { exprNodeSchema } from '../expr/ast';
-import type { ModuleId, SurfaceName } from './modules';
+import type { ExtensionId, SurfaceName } from './extensions';
 // Дом формы имени слота — `property-type.ts` (Р-К-51): стрелка от контрактов к свойствам
 // односторонняя, и обратная замкнула бы цикл модулей.
 import { SLOT_KEY_RE } from './property-type';
@@ -188,6 +188,6 @@ export interface BuiltinSubscriptionDef {
   id: string;
   surface: SurfaceName;
   definition: SubscriptionDefinition;
-  module: ModuleId | null;
+  module: ExtensionId | null;
   rank: number;
 }

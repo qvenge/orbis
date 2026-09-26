@@ -6,7 +6,7 @@
 // Ролевой слой графа (идентичность ребра, `acyclic`, `target_max_incoming`, `created_by`,
 // уникальность) переехал в `relations.ts` вместе с реформой §А4-3: там он один механизм с
 // параметром из реестра, здесь был бы набором доменных правил с зашитыми значениями.
-import { type GraphId, isModuleEnabled } from '@orbis/shared';
+import { extensionName, type GraphId, isExtensionEnabled } from '@orbis/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { agentGrants } from '../db/schema';
 import type { Tx } from '../db/with-identity';
@@ -161,7 +161,7 @@ export function assertRoutineUntouchable(
  *
  * `mechanism` — вторая ось того же вопроса «чья это запись»: см. ветку `materialize` ниже.
  */
-export function assertModuleEnabled(
+export function assertExtensionEnabled(
   reg: RegistrySnapshot,
   disabled: readonly string[],
   mechanism: MutationMechanism,
@@ -181,10 +181,11 @@ export function assertModuleEnabled(
   if (mechanism === 'materialize') return;
   for (const id of aspects) {
     const module = reg.aspects.get(id)?.module ?? null;
-    if (isModuleEnabled(module, disabled)) continue;
+    if (isExtensionEnabled(module, disabled)) continue;
+    // Имя кода отказа и поле `module` деталей — провод (РП-10); текст говорит «расширение».
     throw new ExecError(
       'MODULE_DISABLED',
-      `модуль «${module}» выключен: аспект «${id}» не навешивается (§Б8-3)`,
+      `расширение «${extensionName(module ?? '')}» выключено: аспект «${id}» не навешивается (§Б8-3)`,
       { module, aspect: id },
     );
   }

@@ -229,27 +229,27 @@ const RUN_USAGE_SCHEMA = {
 };
 
 const ENTRIES: readonly PropertyEntry[] = [
-  // ─── orbis/schedule (модуль Планировщик) ───────────────────────────────────
+  // ─── orbis/schedule (ядро с 1б; бывший модуль Планировщик) ────────────────
   {
     id: 'orbis/start_at',
     label: { ru: 'Начало', en: 'Starts at' },
     description: { ru: 'Когда событие начинается', en: 'When the event begins' },
     type: { kind: 'timestamp' },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/end_at',
     label: { ru: 'Окончание', en: 'Ends at' },
     description: { ru: 'Когда событие заканчивается', en: 'When the event ends' },
     type: { kind: 'timestamp' },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/duration_min',
     label: { ru: 'Длительность, мин', en: 'Duration, min' },
     description: { ru: 'Сколько времени событие занимает', en: 'How long the event takes' },
     type: { kind: 'number', integer: true, min: 1 },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/all_day',
@@ -259,7 +259,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The event takes the whole day, with no hours',
     },
     type: { kind: 'boolean' },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/recurrence',
@@ -269,14 +269,14 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The rule by which the event repeats',
     },
     type: { kind: 'json', schema: RECURRENCE_SCHEMA },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/location',
     label: { ru: 'Место', en: 'Location' },
     description: { ru: 'Где событие происходит', en: 'Where the event takes place' },
     type: { kind: 'text' },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/timezone',
@@ -287,10 +287,10 @@ const ENTRIES: readonly PropertyEntry[] = [
     },
     // Ужесточение §А8: сегодня это голая строка (`aspects.ts:49`), реестр требует имя IANA.
     type: { kind: 'text', format: 'iana-tz' },
-    module: 'planner',
+    module: null,
   },
 
-  // ─── orbis/task (модуль Планировщик) ───────────────────────────────────────
+  // ─── orbis/task (ядро с 1б) ────────────────────────────────────────────────────
   {
     id: 'orbis/task_status',
     label: { ru: 'Состояние задачи', en: 'Task status' },
@@ -306,7 +306,7 @@ const ENTRIES: readonly PropertyEntry[] = [
         ['cancelled', 'Отменена', 'Cancelled'],
       ),
     },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/priority',
@@ -323,7 +323,7 @@ const ENTRIES: readonly PropertyEntry[] = [
         ['high', 'Высокий', 'High'],
       ),
     },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/due_date',
@@ -334,7 +334,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The day by which the task must be done',
     },
     type: { kind: 'date' },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/completed_at',
@@ -344,7 +344,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The moment the task entered a closed state',
     },
     type: { kind: 'timestamp' },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/effort_min',
@@ -354,7 +354,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'How much time the task is estimated to take',
     },
     type: { kind: 'number', integer: true, min: 1 },
-    module: 'planner',
+    module: null,
   },
   {
     id: 'orbis/waiting_for',
@@ -364,10 +364,10 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'What or whom the task is waiting for to move on',
     },
     type: { kind: 'text' },
-    module: 'planner',
+    module: null,
   },
 
-  // ─── orbis/financial (модуль Финансы) ──────────────────────────────────────
+  // ─── orbis/financial (расширение Финансы; четыре стандартных свойства — ядро) ─
   {
     id: 'orbis/amount',
     label: { ru: 'Сумма', en: 'Amount' },
@@ -377,7 +377,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     },
     // В8: `exclusiveMin` вместо lookahead — схема экспортируема в RE2/Go (§А2-2).
     type: { kind: 'decimal', exclusiveMin: '0' },
-    module: 'finance',
+    module: null, // стандартное свойство ядра, Р-7
   },
   {
     id: 'orbis/currency',
@@ -389,7 +389,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The currency the money on the record is expressed in',
     },
     type: { kind: 'text', format: 'currency', minLength: 3, maxLength: 3 },
-    module: 'finance',
+    module: null, // стандартное свойство ядра, Р-7
   },
   {
     id: 'orbis/direction',
@@ -399,7 +399,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       kind: 'select',
       options: options(['income', 'Доход', 'Income'], ['expense', 'Расход', 'Expense']),
     },
-    module: 'finance',
+    module: null, // стандартное свойство ядра, Р-7
   },
   {
     id: 'orbis/finance_category',
@@ -417,7 +417,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     label: { ru: 'Дата операции', en: 'Occurred on' },
     description: { ru: 'День, когда операция случилась', en: 'The day the operation happened' },
     type: { kind: 'date' },
-    module: 'finance',
+    module: null, // стандартное свойство ядра, Р-7
   },
   {
     id: 'orbis/planned',
@@ -494,7 +494,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     type: { kind: 'boolean' },
   },
 
-  // ─── orbis/budget (модуль Финансы) ─────────────────────────────────────────
+  // ─── orbis/budget (расширение Финансы) ─────────────────────────────────────────
   {
     id: 'orbis/limit',
     // Reserved-слово грамматики снято В11: `orbis/limit>1000` однозначен по слэшу.
@@ -536,7 +536,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     flags: { system_writable: true }, // пишет правило rollover (§А2-5, источник `rule`)
   },
 
-  // ─── orbis/category (модуль Финансы) ───────────────────────────────────────
+  // ─── orbis/category (расширение Финансы) ───────────────────────────────────────
   {
     id: 'orbis/icon',
     label: { ru: 'Иконка', en: 'Icon' },
@@ -583,7 +583,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     module: 'finance',
   },
 
-  // ─── orbis/memory (модуль Память; В7 — перевод правила в свойства) ─────────
+  // ─── orbis/memory (ядро с 1б; В7 — перевод правила в свойства) ────────────
   {
     id: 'orbis/memory_kind',
     label: { ru: 'Род записи', en: 'Record kind' },
@@ -595,7 +595,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       kind: 'select',
       options: options(['fact', 'Факт', 'Fact'], ['rule', 'Правило', 'Rule']),
     },
-    module: 'memory',
+    module: null,
   },
   {
     id: 'orbis/rule_scope',
@@ -608,7 +608,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     },
     // В3 инвентаря: было «id аспекта» строкой → стало ссылкой на контракт реестра.
     type: { kind: 'registry_ref', target: 'contract' },
-    module: 'memory',
+    module: null,
   },
   {
     id: 'orbis/rule_pattern',
@@ -622,7 +622,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     // ровно тот случай, ради которого гейт заведён. `requires_when` отвечает на «есть ли значение»,
     // а «значение не из одних пробелов» — условие типа, и его дом здесь. `\S` — класс RE2.
     type: { kind: 'text', minLength: 1, pattern: '\\S' },
-    module: 'memory',
+    module: null,
   },
   {
     id: 'orbis/rule_target',
@@ -632,10 +632,10 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The category the rule substitutes when the pattern matches',
     },
     type: { kind: 'ref', target: { filter: { aspect: 'orbis/category' } } },
-    module: 'memory',
+    module: null,
   },
 
-  // ─── orbis/goal (модуль Цели) ──────────────────────────────────────────────
+  // ─── orbis/goal (расширение Цели) ──────────────────────────────────────────────
   {
     id: 'orbis/progress_source',
     label: { ru: 'Источник прогресса', en: 'Progress source' },
@@ -679,7 +679,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     module: 'goals',
   },
 
-  // ─── orbis/project (модуль ADE) ────────────────────────────────────────────
+  // ─── orbis/project (расширение Проекты) ────────────────────────────────────
   {
     id: 'orbis/project_stage',
     // Разные enum — разные факты (Р11): стадия проекта ≠ состояние задачи ≠ стадия рутины.
@@ -696,10 +696,10 @@ const ENTRIES: readonly PropertyEntry[] = [
         ['done', 'Завершён', 'Done'],
       ),
     },
-    module: 'ade',
+    module: 'projects',
   },
 
-  // ─── orbis/repo (модуль ADE) ───────────────────────────────────────────────
+  // ─── orbis/repo (расширение Разработка) ────────────────────────────────────
   {
     id: 'orbis/repo_url',
     label: { ru: 'Адрес репозитория', en: 'Repository URL' },
@@ -707,7 +707,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     // `format: url` — новое ужесточение §А8 (в коде сегодня только длина, `aspects.ts:160`);
     // minLength — РП-8/Р-17: там же `min(1)`.
     type: { kind: 'text', format: 'url', minLength: 1, maxLength: 512 },
-    module: 'ade',
+    module: 'dev',
   },
   {
     id: 'orbis/default_branch',
@@ -717,10 +717,10 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'Which branch the executor starts the work from',
     },
     type: { kind: 'text', minLength: 1, maxLength: 128 },
-    module: 'ade',
+    module: 'dev',
   },
 
-  // ─── orbis/assignment (модуль ADE; механика) ───────────────────────────────
+  // ─── orbis/assignment (ядро-исполнитель; механика) ───────────────────────────────
   {
     id: 'orbis/executor',
     label: { ru: 'Исполнитель', en: 'Executor' },
@@ -1073,7 +1073,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The project closest to the record up the hierarchy',
     },
     type: { kind: 'ref', target: { filter: { aspect: 'orbis/project' } } },
-    module: 'ade',
+    module: 'projects',
     flags: { model_writable: false, computed: { rule: RULE_NEAREST_ANCESTOR } },
   },
   {
@@ -1084,7 +1084,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       en: 'The topmost project above the record',
     },
     type: { kind: 'ref', target: { filter: { aspect: 'orbis/project' } } },
-    module: 'ade',
+    module: 'projects',
     flags: { model_writable: false, computed: { rule: RULE_NEAREST_ANCESTOR } },
   },
 

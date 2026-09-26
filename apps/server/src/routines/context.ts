@@ -31,7 +31,7 @@ import { ROUTINE_SYSTEM_PROMPT_V3, routineModeSection } from '../llm/prompts/rou
 import type { LLMMessage } from '../llm/types';
 import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
 import type { RejectReason } from '../policy/pending';
-import { disabledModulesOf } from '../registry/modules';
+import { disabledExtensionsOf } from '../registry/extensions';
 import { decisionsNoun } from './constants';
 
 /**
@@ -301,7 +301,7 @@ export async function buildRoutineContext(
   const index = await aspectIndexSection(
     tx,
     input.graphId,
-    await disabledModulesOf(tx, input.graphId),
+    await disabledExtensionsOf(tx, input.graphId),
   );
   if (index !== null) sections.push(index);
 

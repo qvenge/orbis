@@ -23,8 +23,9 @@ export const BUDGET_OVERVIEW_SUBSCRIPTION: BuiltinSubscriptionDef = {
 export const BUILTIN_SUBSCRIPTION_DEFS: readonly BuiltinSubscriptionDef[] = [
   {
     id: 'orbis/agenda',
-    surface: 'planner/agenda',
-    module: 'planner',
+    // Повестка — ядро с 1б (спека §8.1, РП-2): поверхность в пространстве `core/`, выключать нечего.
+    surface: 'core/agenda',
+    module: null,
     rank: 10,
     definition: AGENDA_DEF,
   },

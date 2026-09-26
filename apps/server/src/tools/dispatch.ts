@@ -19,15 +19,16 @@ import {
   batchExecuteInput,
   budgetStatusInput,
   type EntityUpdatePreconditionItem,
+  type ExtensionId,
   effectiveLabel,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
+  extensionName,
+  extensionOfTool,
   type GraphId,
   isActionToolName,
-  type ModuleId,
-  moduleOfTool,
   newId,
   pendingMessageId,
   proposeInput,
@@ -114,8 +115,8 @@ import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
 import { type AspectDelta, aspectDeltaAfterRemove, aspectDeltaAfterSet } from '../registry/deltas';
+import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
-import { disabledModulesOf } from '../registry/modules';
 
 import {
   readActionRow,
@@ -182,18 +183,18 @@ export async function dispatchTool(
       // Второй снимок, взятый отдельно, мог бы разойтись с первым на правке реестра между
       // двумя чтениями (тот же довод, что у `loadTargets` предложения).
       const reg = await effectiveRegistry(tx, ctx.identity.graph);
-      const disabled = await disabledModulesOf(tx, ctx.identity.graph);
+      const disabled = await disabledExtensionsOf(tx, ctx.identity.graph);
       const defs = buildToolDefs(reg, disabled);
       const def = defs.find((d) => d.name === name);
       if (!def) {
         // Вторая линия отказа §Б8-3 — та же функция, что у операции внутри пачки.
-        const module = hiddenToolModule(name, reg, disabled);
+        const module = hiddenToolExtension(name, reg, disabled);
         if (module !== undefined) {
           return {
             kind: 'done',
             out: errorResult(
               'MODULE_DISABLED',
-              `тул «${name}» принадлежит выключенному модулю «${module}» (§Б8-3)`,
+              `тул «${name}» принадлежит выключенному расширению «${extensionName(module)}» (§Б8-3)`,
               { tool: name, module },
             ),
           };
@@ -608,7 +609,7 @@ type Resolution =
       keyFieldsByAspect: Map<string, string[]>;
       /** Имена тулов реестра — гейт вложенных операций batch (перевода имён больше нет). */
       knownTools: ReadonlySet<string>;
-      /** Маска модулей вызова (§Б8-3) — вторая линия отказа для операций внутри пачки. */
+      /** Маска расширений вызова (§Б8-3) — вторая линия отказа для операций внутри пачки. */
       disabled: readonly string[];
     };
 
@@ -1502,7 +1503,7 @@ async function runMutation(
  * письменного списка поверхностей здесь нет.
  */
 const SURFACE_LABEL: Record<string, string> = {
-  'planner/agenda': 'Повестка',
+  'core/agenda': 'Повестка',
   'finance/budget-overview': 'Бюджет',
 } satisfies Record<SurfaceName, string>;
 
@@ -3368,24 +3369,24 @@ function knownToolNames(defs: OrbisToolDef[]): ReadonlySet<string> {
 
 /**
  * ВТОРАЯ ЛИНИЯ ОТКАЗА §Б8-3, общая для одиночного вызова и для операции ВНУТРИ пачки: имя
- * есть в НЕМАСКИРОВАННОМ реестре — значит тул существует, а выключен его модуль.
+ * есть в НЕМАСКИРОВАННОМ реестре — значит тул существует, а выключено его расширение.
  * «Неизвестный тул» здесь был бы ложью: модель решила бы, что такого тула в системе нет
- * вовсе, и стала бы искать обход вместо того, чтобы сказать владельцу про модуль.
+ * вовсе, и стала бы искать обход вместо того, чтобы сказать владельцу про расширение.
  *
  * Немаскированный реестр собирается ТОЛЬКО на пути отказа и только при непустой маске:
- * общий путь второй сборки не платит. `undefined` — «это не про модуль»: маски нет, тула нет и
- * без маски, либо у найденного тула модуля нет вовсе. Последнее недостижимо (маска скрывает
- * ровно тулы модулей), но и достижимое оно означало бы «неизвестный тул», а не `MODULE_DISABLED`
- * с пустым именем модуля в тексте отказа, — поэтому род ответа один, а не три.
+ * общий путь второй сборки не платит. `undefined` — «это не про расширение»: маски нет, тула нет и
+ * без маски, либо у найденного тула расширения нет вовсе. Последнее недостижимо (маска скрывает
+ * ровно тулы расширений), но и достижимое оно означало бы «неизвестный тул», а не `MODULE_DISABLED`
+ * с пустым именем расширения в тексте отказа, — поэтому род ответа один, а не три.
  */
-function hiddenToolModule(
+function hiddenToolExtension(
   name: string,
   reg: RegistrySnapshot,
   disabled: readonly string[],
-): ModuleId | undefined {
+): ExtensionId | undefined {
   if (disabled.length === 0) return undefined;
   const hidden = buildToolDefs(reg).find((d) => d.name === name);
-  return hidden === undefined ? undefined : (moduleOfTool(hidden.name, reg) ?? undefined);
+  return hidden === undefined ? undefined : (extensionOfTool(hidden.name, reg) ?? undefined);
 }
 
 function assertBatchToolsKnown(
@@ -3421,11 +3422,11 @@ function assertBatchToolsKnown(
     if (known.has(op.tool)) continue;
     // Та же вторая линия, что у одиночного вызова (Ф-Б1-57в): пачка не вправе отвечать про
     // скрытый маской тул иначе, чем одиночный вызов того же тула.
-    const module = hiddenToolModule(op.tool, reg, disabled);
+    const module = hiddenToolExtension(op.tool, reg, disabled);
     if (module !== undefined) {
       throw new ExecError(
         'MODULE_DISABLED',
-        `batch_execute: тул «${op.tool}» принадлежит выключенному модулю «${module}» (§Б8-3)`,
+        `batch_execute: тул «${op.tool}» принадлежит выключенному расширению «${extensionName(module)}» (§Б8-3)`,
         { index, tool: op.tool, module },
       );
     }

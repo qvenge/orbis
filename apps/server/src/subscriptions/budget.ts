@@ -51,10 +51,10 @@ import {
   type CategoryTrendPoint,
   type EnvelopeStatus,
   type GraphId,
-  isModuleEnabled,
+  isExtensionEnabled,
   type ResolvedBinding,
   type SurfaceName,
-  surfaceModuleOf,
+  surfaceExtensionOf,
 } from '@orbis/shared';
 // `SQL` — ЗНАЧЕНИЕМ, а не только типом: `runSum` сужает им ветку плана (`instanceof SQL`).
 import type { ExprNode, ExprScalar } from '@orbis/shared/expr';
@@ -71,8 +71,8 @@ import { compileClassMembership, compileContractPredicate } from '../expr/compil
 import { type ExprEvalScope, evalExpr } from '../expr/eval';
 import { CORE_COLUMN, type CompileCtx, castedExpr } from '../query/compile-ast';
 import { ownerTimeZone } from '../query/context';
+import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
-import { disabledModulesOf } from '../registry/modules';
 import { toWireEntity } from '../wire';
 import { builtinSubscription } from './registry';
 
@@ -1392,13 +1392,16 @@ async function runList(
  * таблицы «подписка → модуль»: движков два и поверхностей две, и таблица из двух строк стала
  * бы третьим местом с тем же знанием.
  *
- * Кэш `spent` при переключении модуля НЕ инвалидируется и не должен: маска вне снимка
- * (§Б8-3), в ключ кеша не входит, а выключенный модуль просто не идёт читать.
+ * Кэш `spent` при переключении расширения НЕ инвалидируется и не должен: маска вне снимка
+ * (§Б8-3), в ключ кеша не входит, а выключенное расширение просто не идёт читать.
  */
 const BUDGET_SURFACE: SurfaceName = 'finance/budget-overview';
 
 async function budgetSurfaceOff(tx: Tx, graphId: GraphId): Promise<boolean> {
-  return !isModuleEnabled(surfaceModuleOf(BUDGET_SURFACE), await disabledModulesOf(tx, graphId));
+  return !isExtensionEnabled(
+    surfaceExtensionOf(BUDGET_SURFACE),
+    await disabledExtensionsOf(tx, graphId),
+  );
 }
 
 /** Пустая ведомость той же формы, что у живой (`packages/shared/src/contracts/budget.ts`). */

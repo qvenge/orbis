@@ -194,7 +194,8 @@ test('словарь подписок несёт обе засеянные: ст
   const row = reg.subscriptions.get('orbis/agenda');
   // `definition` доезжает РАЗОБРАННОЙ (а не «как лежит в jsonb»): движок читает поля, а не JSON.
   expect(row?.definition.engine).toBe('agenda');
-  expect([row?.surface, row?.module, row?.graphId]).toEqual(['planner/agenda', 'planner', null]);
+  // Повестка — ядро с 1б (спека §8.1, РП-2): поверхность `core/`, расширения нет.
+  expect([row?.surface, row?.module, row?.graphId]).toEqual(['core/agenda', null, null]);
   const budget = reg.subscriptions.get('orbis/budget-overview');
   expect(budget?.definition.engine).toBe('budget');
   expect([budget?.surface, budget?.module, budget?.graphId]).toEqual([
@@ -210,6 +211,8 @@ test('словарь подписок несёт обе засеянные: ст
 test('снимок несёт шестой словарь: действия по id, форма разобрана схемой', async () => {
   const reg = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   expect([...reg.actions.keys()].sort()).toEqual(BUILTIN_ACTION_DEFS.map((a) => a.id).sort());
+  // Словарь действий — по id, а id действия ядра прежний (РП-2, Д-10); ключ — `core/…`.
+  expect(reg.actions.get('planner/postpone_overdue')?.key).toBe('core/postpone_overdue');
   expect(reg.actions.get('planner/postpone_overdue')?.batch_cap).toBe(100);
   expect(reg.actions.get('planner/postpone_overdue')?.over).not.toBeNull();
 });

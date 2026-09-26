@@ -287,7 +287,7 @@ const EXPECTED_DIFFS: Record<string, string> = {
 };
 /**
  * Значения четырёх расхождений — пин литералом. `applyDiff` отвечает только «разошлось ли», а
- * расхождение «не в ту сторону» (`module: 'planner'`, чужая подпись) тоже разошлось бы.
+ * расхождение «не в ту сторону» (`module: 'goals'`, чужая подпись) тоже разошлось бы.
  */
 const DIFF_VALUES = {
   'action.type': 'action',
@@ -540,7 +540,7 @@ beforeAll(async () => {
   // Мир `tasks`: map-действие по Q из чата. Уровень считается той же чистой функцией, что у
   // диспатча (`actionCallFacts`), по резолву на те же «сегодня» — до исполнения.
   BEFORE.tasks = await snapshotWorld(OWNER.tasks, TASKS_WORLD);
-  const call = { action: 'planner/postpone_overdue', params: { to: POSTPONE_TO } };
+  const call = { action: 'core/postpone_overdue', params: { to: POSTPONE_TO } };
   tasksLevel = await withIdentity(db, personal(OWNER.tasks), async (tx) => {
     const reg = await effectiveRegistry(tx, OWNER.tasks);
     const r = await resolveAction(tx, reg, OWNER.tasks, call, {
@@ -656,10 +656,12 @@ describe('§С8-27 postpone_overdue: map-действие по Q', () => {
     expect(canonicalJson(stabilize(journal('tasks'), names))).toBe(canonicalJson(g.journal));
     // Читаемо, а не только побайтно: ОДНА строка `action` на пачку, три операции и три обратные.
     const { action } = journal('tasks');
-    expect([action.type, action.action_id, action.module]).toEqual([
+    // `action_id` — id действия, а он прежний (РП-2, Д-10); `module` у действия ядра нет вовсе —
+    // ключа нет, а не null (планировщик — ядро с 1б, спека §8.1).
+    expect([action.type, action.action_id, 'module' in action]).toEqual([
       'action',
       'planner/postpone_overdue',
-      'planner',
+      false,
     ]);
     expect([action.operations.length, action.inverse.length]).toEqual([3, 3]);
   });

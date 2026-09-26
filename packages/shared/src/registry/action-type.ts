@@ -7,14 +7,14 @@
 // кто его читает. Маркер стоит ровно там, где автор сказал «подставь».
 //
 // ФАЙЛ — ЛИСТ ПАКЕТА по тем же правилам, что `query/ast.ts`: импортирует только каноны
-// (`expr/ast`, `query/ast`), словари (`types`, `modules`, `builtin-contracts`) и регулярку
+// (`expr/ast`, `query/ast`), словари (`types`, `extensions`, `builtin-contracts`) и регулярку
 // имени (`property-type`). Обратного ребра ни у одного из них нет — цикла инициализации
 // zod-схем здесь возникнуть не может (проба: ни один из пяти не импортирует `action-type`).
 import { z } from 'zod';
 import { exprNodeSchema } from '../expr/ast';
 import { queryAstSchema } from '../query/ast';
 import { SENSITIVITY_FACTS } from './builtin-contracts';
-import { SURFACE_RE } from './modules';
+import { SURFACE_RE } from './extensions';
 import { NAMESPACED_KEY_RE } from './property-type';
 import { localizedTextSchema, PROPERTY_KINDS } from './types';
 
@@ -56,7 +56,7 @@ export type ActionStep = z.infer<typeof actionStepSchema>;
 
 export const actionOfferSchema = z
   .object({
-    surface: z.string().regex(SURFACE_RE, 'имя поверхности <модуль>/<имя>').optional(),
+    surface: z.string().regex(SURFACE_RE, 'имя поверхности <расширение>/<имя>').optional(),
     when: exprNodeSchema.optional(),
     llm: z.boolean().optional(),
   })

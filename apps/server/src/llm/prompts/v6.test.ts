@@ -31,7 +31,7 @@ import {
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
-  MODULE_MANIFESTS,
+  EXTENSION_MANIFESTS,
 } from '@orbis/shared';
 import { parseQueryAst, queryAstSchema, toParseRegistry } from '@orbis/shared/query';
 import { extractSuggestions, SUGGESTION_MAX_LEN, SUGGESTIONS_MAX } from '../../ai/suggestions';
@@ -365,7 +365,7 @@ describe('SYSTEM_PROMPT_V6 (§7.1 слой 1, реформа свойств РП
   });
 
   test('перенесённые гарды Budget стоят на ФРАГМЕНТЕ (03-budget §4.3)', () => {
-    const text = MODULE_MANIFESTS.finance.promptFragments.map((f) => f.text).join('\n');
+    const text = EXTENSION_MANIFESTS.finance.promptFragments.map((f) => f.text).join('\n');
     for (const n of [
       'budget_status',
       'НЕ суммируй recurring отдельно',

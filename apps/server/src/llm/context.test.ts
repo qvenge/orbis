@@ -7,7 +7,7 @@
 // переехал сюда с текста промпта, v5.test.ts). Слой 5 — Task 9.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { MODULE_MANIFESTS, newId } from '@orbis/shared';
+import { EXTENSION_MANIFESTS, newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   appDb,
@@ -291,7 +291,7 @@ describe('собранный канал: две проверки §10 п. 2 сп
       .map((x) => x.id);
     expect(financeIds.length).toBeGreaterThan(0);
     expect(financeIds.filter((id) => off.includes(id))).toEqual([]);
-    for (const f of MODULE_MANIFESTS.finance.promptFragments) expect(off).not.toContain(f.text);
+    for (const f of EXTENSION_MANIFESTS.finance.promptFragments) expect(off).not.toContain(f.text);
     await setFinance(owner, true);
   });
 });

@@ -17,7 +17,7 @@ function builtin(key: string): ActionDefinition {
   return d;
 }
 export const P2F = builtin('finance/plan-to-fact');
-export const POSTPONE = builtin('planner/postpone_overdue');
+export const POSTPONE = builtin('core/postpone_overdue');
 
 export const ACTION_NESTED = {
   ...P2F,
@@ -40,8 +40,8 @@ export const ACTION_BRANCH = {
 };
 export const BATCH_UNBOUNDED = {
   ...POSTPONE,
-  key: 'planner/unbounded',
-  id: 'planner/unbounded',
+  key: 'core/unbounded',
+  id: 'core/unbounded',
   batch_cap: null,
 };
 export const ACTION_CAP_WITHOUT_QUERY = {
@@ -81,8 +81,8 @@ export const SENSITIVITY_UNDERDECLARED_ATTACH = {
  */
 export const GRANTS_AUTONOMY_UNDERDECLARED = {
   ...POSTPONE,
-  key: 'planner/arm-routine',
-  id: 'planner/arm-routine',
+  key: 'core/arm-routine',
+  id: 'core/arm-routine',
   params: [],
   over: null,
   batch_cap: null,
@@ -102,8 +102,8 @@ export const GRANTS_AUTONOMY_UNDERDECLARED = {
  */
 export const UNSET_BY_EXPR_UNDERDECLARED = {
   ...GRANTS_AUTONOMY_UNDERDECLARED,
-  key: 'planner/unset-by-expr',
-  id: 'planner/unset-by-expr',
+  key: 'core/unset-by-expr',
+  id: 'core/unset-by-expr',
   steps: [
     {
       tool: 'entity_update',
@@ -146,8 +146,8 @@ export const ACTION_VALUE_UNKNOWN_PROPERTY = {
 };
 export const ACTION_PARAM_UNUSED = {
   ...POSTPONE,
-  key: 'planner/unused',
-  id: 'planner/unused',
+  key: 'core/unused',
+  id: 'core/unused',
   params: [...POSTPONE.params, { name: 'reason', type: { kind: 'text' }, required: true }],
 };
 export const ACTION_STEP_TOOL = {
@@ -237,8 +237,8 @@ export const ACTION_FIXTURES: readonly {
     name: 'шаг взводит рутину, grants_autonomy объявлен (позитив)',
     decl: {
       ...GRANTS_AUTONOMY_UNDERDECLARED,
-      key: 'planner/arm-declared',
-      id: 'planner/arm-declared',
+      key: 'core/arm-declared',
+      id: 'core/arm-declared',
       sensitivity: ['grants_autonomy'],
     },
     verdict: { ok: true },
@@ -252,8 +252,8 @@ export const ACTION_FIXTURES: readonly {
     name: 'весь unset выражением, оба факта объявлены (позитив)',
     decl: {
       ...UNSET_BY_EXPR_UNDERDECLARED,
-      key: 'planner/unset-declared',
-      id: 'planner/unset-declared',
+      key: 'core/unset-declared',
+      id: 'core/unset-declared',
       sensitivity: ['touches_money', 'grants_autonomy'],
     },
     verdict: { ok: true },
@@ -272,8 +272,8 @@ export const ACTION_FIXTURES: readonly {
     name: 'json-параметр',
     decl: {
       ...POSTPONE,
-      key: 'planner/json-param',
-      id: 'planner/json-param',
+      key: 'core/json-param',
+      id: 'core/json-param',
       params: [...POSTPONE.params, { name: 'blob', type: { kind: 'json' }, required: true }],
     },
     verdict: { ok: false, code: 'VALIDATION', reason: 'ACTION_MALFORMED' },

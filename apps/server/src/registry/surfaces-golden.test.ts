@@ -199,7 +199,7 @@ describe('снимки поверхностей: консервативност�
   });
   test('снимок Agenda — движок подписки §Б5-6: окно и просроченное на прибитом today', async () => {
     const snap = await snapshotSurfaces(db, SURFACE_OWNER_ID, 'baseline', SURFACE_TODAY);
-    expect(snap.surfaces['planner/agenda']).toEqual([
+    expect(snap.surfaces['core/agenda']).toEqual([
       // `@tpl-weekly` (08:00) выборкой возвращён и снят фильтром шаблона.
       { section: 'window', id: '@event-today', title: 'Событие сегодня', at: '2026-07-03' },
       // Слияние двух выборок: min(due_date '2026-07-02', локальный день start_at '2026-07-01').
@@ -323,8 +323,8 @@ describe('снимки поверхностей: консервативност�
       canonicalJson((cust['core/exclude-blocked'] as string[]).filter((s) => !isGate(s))),
     ).toBe(canonicalJson(base['core/exclude-blocked']));
     expect(
-      canonicalJson((cust['planner/agenda'] as { id: string }[]).filter((r) => !isGate(r.id))),
-    ).toBe(canonicalJson(base['planner/agenda']));
+      canonicalJson((cust['core/agenda'] as { id: string }[]).filter((r) => !isGate(r.id))),
+    ).toBe(canonicalJson(base['core/agenda']));
     // Budget вычитанием не разделить: аспект гейта обязан ДВИГАТЬ числа конверта — в этом и есть
     // §С8-18. Поэтому утверждается СПИСОК мест, которые сдвинулись, и он закрытый. Порядковый
     // индекс `envelopes.0` — карточка `@env-food`: порядок карточек задан ключом
@@ -393,14 +393,14 @@ describe('четыре состояния: отличие ровно в назн
     expect(off.alertCount).toBe(0);
   });
 
-  test('module-off: planner/agenda, core/row, core/exclude-blocked — байт-в-байт как baseline', () => {
+  test('module-off: core/agenda, core/row, core/exclude-blocked — байт-в-байт как baseline', () => {
     const base = snap('baseline');
     const off = snap('module-off');
     // §Б8-3: маска включённости стоит на ПОВЕРХНОСТЯХ-потребителях (реестр тулов, промпт-фрагменты,
     // подписки, `entity_create`/`attach`), а не внутри эффективного реестра — определения остаются
     // резолвимыми на чтение. Поэтому строка списка продолжает показывать сумму уже записанной
     // транзакции: выключение модуля — не потеря данных на экране.
-    for (const surface of ['planner/agenda', 'core/row', 'core/exclude-blocked'] as const) {
+    for (const surface of ['core/agenda', 'core/row', 'core/exclude-blocked'] as const) {
       expect(canonicalJson(off.surfaces[surface])).toBe(canonicalJson(base.surfaces[surface]));
     }
     // И то же утверждение целиком: расходится РОВНО одна поверхность, а не «ещё какая-то тоже».

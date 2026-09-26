@@ -1,12 +1,12 @@
-// apps/server/src/registry/modules.test.ts
-// Приёмка §С8-22: серверная половина модуля «Финансы» — маска включённости, операция
+// apps/server/src/registry/extensions.test.ts
+// Приёмка §С8-22: серверная половина расширения «Финансы» — маска включённости, операция
 // `module_set` с журналом и undo, фильтр реестра тулов, гейт записи, подписки и канал модели.
 //
 // Тесты интеграционные: одна живая БД под `withIdentity`, потому что предмет проверки —
 // СТРОКА `user_settings.disabled_modules` и то, что по ней видят четыре поверхности сразу.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import type { GraphId } from '@orbis/shared';
-import { addDays, MODULE_IDS, recurringInstanceId } from '@orbis/shared';
+import { addDays, EXTENSION_IDS, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import {
   appDb,
@@ -34,7 +34,7 @@ import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
 import { effectiveRegistry } from './cache';
-import { disabledModulesOf, setModuleDisabled } from './modules';
+import { disabledExtensionsOf, setExtensionDisabled } from './extensions';
 
 requireEnv();
 
@@ -154,7 +154,7 @@ afterAll(async () => {
  */
 async function setModules(disabled: readonly string[]): Promise<void> {
   await withIdentity(db, personal(owner), async (tx) => {
-    for (const m of MODULE_IDS) await setModuleDisabled(tx, owner, m, disabled.includes(m));
+    for (const m of EXTENSION_IDS) await setExtensionDisabled(tx, owner, m, disabled.includes(m));
   });
 }
 
@@ -177,32 +177,34 @@ function blockEntry(disabled: readonly string[]): () => Promise<void> {
 describe('маска модулей: чтение и запись (§Б8-1)', () => {
   test('строки настроек нет — маска пуста, а не отказ', async () => {
     expect(
-      await withIdentity(db, personal(maskOwner), (tx) => disabledModulesOf(tx, maskOwner)),
+      await withIdentity(db, personal(maskOwner), (tx) => disabledExtensionsOf(tx, maskOwner)),
     ).toEqual([]);
   });
 
   test('выключение идемпотентно, включение снимает ровно один модуль', async () => {
     await withIdentity(db, personal(maskOwner), async (tx) => {
       await tx.insert(userSettings).values({ graphId: maskOwner });
-      await setModuleDisabled(tx, maskOwner, 'finance', true);
-      await setModuleDisabled(tx, maskOwner, 'finance', true); // повтор не дублирует
-      await setModuleDisabled(tx, maskOwner, 'goals', true);
+      await setExtensionDisabled(tx, maskOwner, 'finance', true);
+      await setExtensionDisabled(tx, maskOwner, 'finance', true); // повтор не дублирует
+      await setExtensionDisabled(tx, maskOwner, 'goals', true);
     });
     expect(
       [
-        ...(await withIdentity(db, personal(maskOwner), (tx) => disabledModulesOf(tx, maskOwner))),
+        ...(await withIdentity(db, personal(maskOwner), (tx) =>
+          disabledExtensionsOf(tx, maskOwner),
+        )),
       ].sort(),
     ).toEqual(['finance', 'goals']);
     await withIdentity(db, personal(maskOwner), (tx) =>
-      setModuleDisabled(tx, maskOwner, 'finance', false),
+      setExtensionDisabled(tx, maskOwner, 'finance', false),
     );
     expect(
-      await withIdentity(db, personal(maskOwner), (tx) => disabledModulesOf(tx, maskOwner)),
+      await withIdentity(db, personal(maskOwner), (tx) => disabledExtensionsOf(tx, maskOwner)),
     ).toEqual(['goals']);
   });
 
   test('строку настроек заводит сама маска, и её дефолты = дефолты КОДА (Ф-Б1-10)', async () => {
-    // Владельца без онбординга строкой `user_settings` снабжает теперь `setModuleDisabled`
+    // Владельца без онбординга строкой `user_settings` снабжает теперь `setExtensionDisabled`
     // своим `INSERT … ON CONFLICT` (эррата 08.09 к задаче 0b: сев 0b её больше не пишет).
     // Разойдись дефолты КОЛОНОК с дефолтами КОДА — один и тот же владелец считал бы «сегодня»
     // и валюту по-разному до и после первого выключения модуля.
@@ -217,7 +219,9 @@ describe('маска модулей: чтение и запись (§Б8-1)', ()
         await defaultCurrencyOf(tx, u),
       ]);
     const before = await read(fresh);
-    await withIdentity(db, personal(fresh), (tx) => setModuleDisabled(tx, fresh, 'finance', true));
+    await withIdentity(db, personal(fresh), (tx) =>
+      setExtensionDisabled(tx, fresh, 'finance', true),
+    );
     expect(await read(fresh)).toEqual(before);
     expect(before[0]).toBe(DEFAULT_TIMEZONE);
   });
@@ -274,9 +278,9 @@ describe('module_set: переключение — действие исполн
    */
   test('ручка выключает модуль; настройки отдают маску наружу', async () => {
     await caller.user.setModuleEnabled({ module: 'finance', enabled: false });
-    expect(await withIdentity(db, personal(owner), (tx) => disabledModulesOf(tx, owner))).toEqual([
-      'finance',
-    ]);
+    expect(
+      await withIdentity(db, personal(owner), (tx) => disabledExtensionsOf(tx, owner)),
+    ).toEqual(['finance']);
     expect((await caller.user.getSettings()).disabledModules).toEqual(['finance']);
   });
 
@@ -299,9 +303,9 @@ describe('module_set: переключение — действие исполн
     // Второй аргумент — ОБЪЕКТ (`undoLast`, `executor/undo.ts`); последнее неотменённое действие
     // журнала — выключение `finance` предыдущим тестом.
     expect((await undoLast(db, { identity: personal(owner) })).ok).toBe(true);
-    expect(await withIdentity(db, personal(owner), (tx) => disabledModulesOf(tx, owner))).toEqual(
-      [],
-    );
+    expect(
+      await withIdentity(db, personal(owner), (tx) => disabledExtensionsOf(tx, owner)),
+    ).toEqual([]);
   });
 
   test('повтор выключения: inverse — «уже был выключен», а не обратный знак входа', async () => {
@@ -323,7 +327,7 @@ describe('module_set: переключение — действие исполн
     // Снаружи операция недостижима (её нет ни в одном реестре тулов), но обещание докблока
     // «единственный вход — ручка владельца» держал бы чужой код. Гейт по актору — защита в
     // глубину: `execute()` доступен всякому серверному пути.
-    const mask = () => withIdentity(db, personal(owner), (tx) => disabledModulesOf(tx, owner));
+    const mask = () => withIdentity(db, personal(owner), (tx) => disabledExtensionsOf(tx, owner));
     const before = await mask();
     for (const actorKind of ['agent', 'ai'] as const) {
       const denied = await execute(db, {
@@ -641,34 +645,33 @@ describe('§С8-22: подписки и сохранённые AST при вык
     ).toContain('budget_status');
   });
 
-  test('Планировщик выключен — Повестка пуста, ведомость Финансов не шелохнулась', async () => {
-    // Обратное направление той же врезки: без него врезка Agenda не покрыта ни одним тестом
-    // (мутация гейт-ревью «снять её целиком» была зелёной). Маска пишется НАПРЯМУЮ:
-    // `module_set` в Б-1 принимает только `finance` (Ф-Б1-57б), а движок спрашивает саму
-    // колонку — то есть путь проверяется тот же, что у прода после Б-3.
-    const budgetBefore = await budgetOverview(db, personal(owner), curMonth);
-    expect(budgetBefore.envelopes.length).toBeGreaterThan(0);
-    expect((await agenda()).rows.length).toBeGreaterThan(0);
-    // `finally` — не вежливость: провались утверждение внутри, и `planner` остался бы
-    // выключенным, а соседний тест канала покраснел бы каскадом на чужой причине.
-    await setModules(['planner']);
+  test('Повестка — ядро: все расширения выключены, Повестка байт-в-байт та же (спека 1б §8.1)', async () => {
+    // Обратное направление врезки Agenda до 1б («Планировщик выключен — Повестка пуста») снято
+    // вместе с Планировщиком: поверхность `core/agenda` — ядро, и `surfaceExtensionOf` отвечает
+    // `null`. Пин держит обратное: ни одно расширение и ни устаревший `planner` в маске (колонка
+    // text[] без CHECK) Повестку не гасят. Маска пишется НАПРЯМУЮ — `module_set` пускает только
+    // `finance` (Ф-Б1-57б), а движок спрашивает саму колонку.
+    const agendaBefore = await agenda();
+    expect(agendaBefore.rows.length).toBeGreaterThan(0); // сравнение не вырождено в «пусто = пусто»
+    // `finally` — не вежливость: провались утверждение внутри, и маска осталась бы выключенной,
+    // а соседний тест канала покраснел бы каскадом на чужой причине.
+    await setModules([...EXTENSION_IDS]);
+    await withIdentity(db, personal(owner), (tx) =>
+      setExtensionDisabled(tx, owner, 'planner', true),
+    );
     try {
-      expect(await agenda()).toEqual({
-        today,
-        timezone: TZ,
-        rows: [],
-        truncated: { window: false, overdue: false },
-      });
-      // Консервативность §С1-3 п.9 в другую сторону: чужая подписка не шелохнулась
-      expect(await budgetOverview(db, personal(owner), curMonth)).toEqual(budgetBefore);
+      expect(await agenda()).toEqual(agendaBefore);
     } finally {
+      await withIdentity(db, personal(owner), (tx) =>
+        setExtensionDisabled(tx, owner, 'planner', false),
+      );
       await setModules([]);
     }
   });
 
   test('канал модели: проза Финансов и строка индекса orbis/financial уходят вместе с модулем и возвращаются с ним (§Б8-3)', async () => {
     // Канал собирается ТЕМ ЖЕ `buildContext`, что и чат (`llm/context.ts`), — юнит на
-    // `modulePromptFragments` (шаг 2) не отвечает, доносит ли их до модели сама сборка.
+    // `extensionPromptFragments` (шаг 2) не отвечает, доносит ли их до модели сама сборка.
     const threadId = await withIdentity(db, personal(owner), (tx) => ensureGlobalThread(tx, owner));
     const channel = () =>
       withIdentity(db, personal(owner), (tx) => buildContext(tx, { graphId: owner, threadId }));

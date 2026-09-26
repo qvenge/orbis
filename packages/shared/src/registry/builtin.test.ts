@@ -347,18 +347,19 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
   expect(BUILTIN_ASPECT_DEFS.filter((a) => a.service).map((a) => a.id)).toEqual([
     'orbis/agent-run',
   ]);
-  // Модули §Б8-2: ядро и ядро-исполнитель — module NULL.
+  // Расширения спеки 1б §8.1: ядро и ядро-исполнитель — module NULL; Планировщик и Память — ядро,
+  // прежний `ade` разделён на «Проекты» и «Разработку» (РП-1).
   expect(Object.fromEntries(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a.module]))).toEqual({
-    'orbis/schedule': 'planner',
-    'orbis/task': 'planner',
+    'orbis/schedule': null,
+    'orbis/task': null,
     'orbis/financial': 'finance',
     'orbis/note': null,
     'orbis/budget': 'finance',
     'orbis/category': 'finance',
-    'orbis/memory': 'memory',
+    'orbis/memory': null,
     'orbis/goal': 'goals',
-    'orbis/project': 'ade',
-    'orbis/repo': 'ade',
+    'orbis/project': 'projects',
+    'orbis/repo': 'dev',
     'orbis/assignment': null,
     'orbis/agent-run': null,
     'orbis/routine': null,
@@ -738,14 +739,15 @@ test('BUILTIN_CONTRACT_DEFS — семь контрактов §Б1-2 в нор�
   expect(BUILTIN_CONTRACT_DEFS.map((c) => c.id)).toEqual([...CONTRACT_IDS]);
   expect(BUILTIN_CONTRACT_DEFS.map((c) => c.rank)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   expect(BUILTIN_CONTRACT_DEFS.every((c) => c.graphId === null && c.key === c.id)).toBe(true);
-  // module NULL = ядро (§Б8-2): выключение Финансов не вправе унести грамматику.
+  // module NULL = язык (§Б8-2, Р-7 спеки 1б): контракты — грамматика, и выключение Финансов не
+  // вправе её унести; «движение денег» и «конверт» Финансы только читают (манифест, `reads`).
   expect(Object.fromEntries(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c.module]))).toEqual({
     'orbis/completable': null,
     'orbis/when': null,
     'orbis/recurrence': null,
     'orbis/sensitivity': null,
-    'orbis/money-movement': 'finance',
-    'orbis/envelope': 'finance',
+    'orbis/money-movement': null,
+    'orbis/envelope': null,
     'orbis/delegable': null,
   });
 });
@@ -892,24 +894,24 @@ const RUN_BUCKET_PATTERN = '^(\\d{4}-\\d{2}-\\d{2}T([01]\\d|2[0-3]):[0-5]\\d|man
  * молча, а план (РП-8/Р-17) сохраняет.
  */
 const A8_TYPES: Record<string, string> = {
-  'orbis/start_at': 'timestamp|planner',
-  'orbis/end_at': 'timestamp|planner',
-  'orbis/duration_min': 'number{integer:true,min:1}|planner',
-  'orbis/all_day': 'boolean|planner',
-  'orbis/recurrence': 'json{schema:json-schema}|planner',
-  'orbis/location': 'text|planner',
-  'orbis/timezone': 'text{format:iana-tz}|planner',
-  'orbis/task_status': 'select{options:6}|planner',
-  'orbis/priority': 'select{options:3}|planner',
-  'orbis/due_date': 'date|planner',
-  'orbis/completed_at': 'timestamp|planner',
-  'orbis/effort_min': 'number{integer:true,min:1}|planner',
-  'orbis/waiting_for': 'text|planner',
-  'orbis/amount': 'decimal{exclusiveMin:0}|finance',
-  'orbis/currency': 'text{format:currency,maxLength:3,minLength:3}|finance',
-  'orbis/direction': 'select{options:2}|finance',
+  'orbis/start_at': 'timestamp|core',
+  'orbis/end_at': 'timestamp|core',
+  'orbis/duration_min': 'number{integer:true,min:1}|core',
+  'orbis/all_day': 'boolean|core',
+  'orbis/recurrence': 'json{schema:json-schema}|core',
+  'orbis/location': 'text|core',
+  'orbis/timezone': 'text{format:iana-tz}|core',
+  'orbis/task_status': 'select{options:6}|core',
+  'orbis/priority': 'select{options:3}|core',
+  'orbis/due_date': 'date|core',
+  'orbis/completed_at': 'timestamp|core',
+  'orbis/effort_min': 'number{integer:true,min:1}|core',
+  'orbis/waiting_for': 'text|core',
+  'orbis/amount': 'decimal{exclusiveMin:0}|core',
+  'orbis/currency': 'text{format:currency,maxLength:3,minLength:3}|core',
+  'orbis/direction': 'select{options:2}|core',
   'orbis/finance_category': 'ref{target:{"filter":{"aspect":"orbis/category"}}}|finance',
-  'orbis/occurred_on': 'date|finance',
+  'orbis/occurred_on': 'date|core',
   'orbis/planned': 'boolean{default:false}|finance',
   'orbis/recurring': 'boolean|finance',
   'orbis/payment_method': 'text|finance',
@@ -925,18 +927,18 @@ const A8_TYPES: Record<string, string> = {
   'orbis/color': 'text{format:color}|finance',
   'orbis/aliases': 'text{cardinality:many,maxItems:50}|finance',
   'orbis/spend_class': 'select{options:2}|finance',
-  'orbis/memory_kind': 'select{options:2}|memory',
-  'orbis/rule_scope': 'registry_ref{target:contract}|memory',
+  'orbis/memory_kind': 'select{options:2}|core',
+  'orbis/rule_scope': 'registry_ref{target:contract}|core',
   // Граница формы образца правила памяти (РЧ-14-2, задача 14): пустой и пробельный образец — `TYPE`.
-  'orbis/rule_pattern': 'text{minLength:1,pattern:\\S}|memory',
-  'orbis/rule_target': 'ref{target:{"filter":{"aspect":"orbis/category"}}}|memory',
+  'orbis/rule_pattern': 'text{minLength:1,pattern:\\S}|core',
+  'orbis/rule_target': 'ref{target:{"filter":{"aspect":"orbis/category"}}}|core',
   'orbis/progress_source': 'json{schema:json-schema}|goals',
   'orbis/target_value': 'decimal{exclusiveMin:0}|goals',
   'orbis/current_value': 'decimal{min:0}|goals',
   'orbis/unit': 'text{minLength:1}|goals',
-  'orbis/project_stage': 'select{options:3}|ade',
-  'orbis/repo_url': 'text{format:url,maxLength:512,minLength:1}|ade',
-  'orbis/default_branch': 'text{maxLength:128,minLength:1}|ade',
+  'orbis/project_stage': 'select{options:3}|projects',
+  'orbis/repo_url': 'text{format:url,maxLength:512,minLength:1}|dev',
+  'orbis/default_branch': 'text{maxLength:128,minLength:1}|dev',
   'orbis/executor': 'select{options:2}|core',
   'orbis/grant': 'grant|core',
   'orbis/assignee': 'text{maxLength:200,minLength:1}|core',
@@ -964,8 +966,8 @@ const A8_TYPES: Record<string, string> = {
   'orbis/routine_days': 'select{cardinality:many,minItems:1,options:7}|core',
   'orbis/routine_mode': 'select{options:2}|core',
   'orbis/allowed_tools': 'text{cardinality:many,maxItems:50,minLength:1}|core',
-  'orbis/parent_project': 'ref{target:{"filter":{"aspect":"orbis/project"}}}|ade',
-  'orbis/root_project': 'ref{target:{"filter":{"aspect":"orbis/project"}}}|ade',
+  'orbis/parent_project': 'ref{target:{"filter":{"aspect":"orbis/project"}}}|projects',
+  'orbis/root_project': 'ref{target:{"filter":{"aspect":"orbis/project"}}}|projects',
   'orbis/archived': 'boolean|core',
   'orbis/title': 'text|core',
   'orbis/created_at': 'timestamp|core',
@@ -1018,16 +1020,39 @@ test('тип и модуль каждого свойства — по колон
   );
 });
 
+test('стандартные свойства ядра: сумма, валюта, направление, дата операции — язык (Р-7 спеки 1б)', () => {
+  // Слоты «движения денег» заполняет любое расширение (и чужое), поэтому четыре свойства живут
+  // в языке: выключение Финансов не вправе снять их с записи, которую завело другое расширение.
+  const moduleOf = (id: string) => byId.get(id)?.module;
+  for (const id of ['orbis/amount', 'orbis/currency', 'orbis/direction', 'orbis/occurred_on']) {
+    expect(`${id}: ${String(moduleOf(id))}`).toBe(`${id}: null`);
+  }
+  // Прочие финансовые свойства остаются у расширения — иначе вместе с четырьмя в ядро уехало бы
+  // всё, и выключение Финансов перестало бы что-либо выключать.
+  for (const id of [
+    'orbis/finance_category',
+    'orbis/planned',
+    'orbis/recurring',
+    'orbis/payment_method',
+    'orbis/counterparty',
+    'orbis/bank_txn_id',
+    'orbis/limit',
+    'orbis/spend_class',
+  ]) {
+    expect(`${id}: ${String(moduleOf(id))}`).toBe(`${id}: finance`);
+  }
+});
+
 test('подписи ролей и аспектов — по §А4-3 и переносу из aspect-registry.ts', () => {
   // Роль: иерархия | ограничения | модуль | подпись источника | подпись цели.
   const ROLES: Record<string, string> = {
     subitem: 'h:true|{"created_by":"any"}|core|Родитель|Подпункт',
-    ticket: 'h:true|{"created_by":"any","target_contract":"orbis/completable"}|ade|Проект|Тикет',
+    ticket: 'h:true|{"created_by":"any","target_contract":"orbis/completable"}|core|Проект|Тикет',
     run: 'h:true|{"created_by":"system"}|core|Субъект прогона|Прогон',
     'envelope-binding':
-      'h:false|{"created_by":"system","target_max_incoming":1}|finance|Конверт|Транзакция',
+      'h:false|{"created_by":"system","target_max_incoming":1}|core|Конверт|Транзакция',
     'category-parent':
-      'h:true|{"acyclic":true,"created_by":"any"}|finance|Родительская категория|Подкатегория',
+      'h:true|{"acyclic":true,"created_by":"any"}|core|Родительская категория|Подкатегория',
     dependency:
       'h:false|{"acyclic":true,"created_by":"any"}|core|Блокирующая работа|Заблокированная работа',
     mention: 'h:false|{"created_by":"any"}|core|Упоминает|Упомянуто',

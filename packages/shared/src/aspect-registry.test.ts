@@ -329,7 +329,8 @@ test('registryDriftIds: плоский список для /health называ�
     // «нет», а не расхождение колонок: вердикт обязан отличать «строку не засеяли» от
     // «засеяли не тем», иначе владелец пересеет не то.
     'subscriptions:orbis/budget-overview нет',
-    'subscriptions:orbis/agenda definition+module+rank+surface',
+    // `module` в списке нет: у Повестки с 1б он NULL (ядро), и у обрубка без колонки — тоже.
+    'subscriptions:orbis/agenda definition+rank+surface',
     'actions:orbis/close лишний',
   ]);
 });

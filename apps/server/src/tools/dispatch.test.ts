@@ -4353,7 +4353,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
   }
   const postpone = (ctx: ToolCallCtx) =>
     dispatchTool(ctx, 'run_action', {
-      action: 'planner/postpone_overdue',
+      action: 'core/postpone_overdue',
       params: { to: '2026-09-01' },
     });
   const unitsIn = async (owner: GraphId, threadId: string) =>
@@ -4378,7 +4378,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     const { db: admin, client: ac } = adminDb();
     try {
       const rows = await admin.execute(sql`SELECT steps, sensitivity, status, precondition
-        FROM action_definitions WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`);
+        FROM action_definitions WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`);
       original = rows[0] as ActionColumns | undefined;
     } finally {
       await ac.end();
@@ -4394,7 +4394,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
         sensitivity = ${JSON.stringify(original.sensitivity)}::jsonb,
         status = ${original.status},
         precondition = ${original.precondition === null ? null : JSON.stringify(original.precondition)}::jsonb
-        WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`);
+        WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`);
     } finally {
       await ac.end();
     }
@@ -4428,7 +4428,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect(input.operations).toHaveLength(11);
     expect([...new Set(input.operations.map((op) => op.tool))]).toEqual(['entity_update']);
     // Декларация — ДВА ключа: «какое действие» и «та ли это декларация» (§Б6-7)
-    expect(rec.action_id).toBe('planner/postpone_overdue');
+    expect(rec.action_id).toBe('planner/postpone_overdue'); // id прежний при ключе core/ (Д-10)
     expect(typeof rec.action_hash).toBe('string');
     expect((await propsOfRowA(ids[0] as string, owner))['orbis/due_date']).toBe('2026-06-01'); // §7.8: следа нет
   });
@@ -4481,6 +4481,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     if (r.status === 'error') {
       expect(r.error.details).toMatchObject({
         reason: 'routine_untouchable',
+        // В деталях отказа — id действия, а он прежний при ключе `core/…` (РП-2, Д-10).
         action: 'planner/postpone_overdue',
       });
       expect(r.error.message).toContain('рутина не может менять рутины, прогоны и назначения');
@@ -4497,7 +4498,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     // Тот же вызов с ПЕРЕСТАВЛЕННЫМИ ключами: личность — от каноникализованного, не от текста JSON
     const again = await dispatchTool(ctx, 'run_action', {
       params: { to: '2026-09-01' },
-      action: 'planner/postpone_overdue',
+      action: 'core/postpone_overdue',
     });
     if (first.status !== 'pending_confirmation' || again.status !== 'pending_confirmation')
       throw new Error('нет единиц');
@@ -4514,7 +4515,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
       owner,
       sql`UPDATE action_definitions
       SET steps = jsonb_set(steps, '{0,input,props,orbis/priority}', '"low"'::jsonb)
-      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
     );
     const second = await postpone(ctx);
     if (first.status !== 'pending_confirmation' || second.status !== 'pending_confirmation')
@@ -4565,7 +4566,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     await patchAction(
       owner,
       sql`UPDATE action_definitions SET status = 'deprecated'
-      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
     );
 
     const r = await approvePending(db, { identity: personal(owner), pendingId: unit.pendingId });
@@ -4594,7 +4595,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     await patchAction(
       owner,
       sql`UPDATE action_definitions SET sensitivity = '["touches_money"]'::jsonb
-      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
     );
 
     const r = await approvePending(db, { identity: personal(owner), pendingId: unit.pendingId });
@@ -4620,7 +4621,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     await patchAction(
       owner,
       sql`UPDATE action_definitions SET status = 'deprecated'
-      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
     );
     // Путь с экрана пачки идёт через `approvePending` (`lifecycle.ts`, `approveUnit`), значит своей
     // ветки «Устарело» ему не нужно: отказ — не расхождение предусловий (`divergenceOf` → null), а
@@ -4648,7 +4649,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     await patchAction(
       owner,
       sql`UPDATE action_definitions SET status = 'deprecated'
-      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
     );
     expect(
       await decideAllDeferred({ db, clock: () => T0 }, { identity: personal(owner), runId }),
@@ -4668,7 +4669,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
       owner,
       sql`UPDATE action_definitions SET precondition =
       '{"op":"not","args":[{"op":"=","args":[{"prop":"orbis/archived"},{"const":true}]}]}'::jsonb
-      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
     );
     const ids = await seedOverdue(owner, 11);
     const unit = await postpone(ctx);
@@ -4688,6 +4689,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect(r.error.code).toBe('CONFLICT');
     expect(r.error.details).toMatchObject({
       reason: 'precondition_failed',
+      // В деталях отказа — id действия, а он прежний при ключе `core/…` (РП-2, Д-10).
       action: 'planner/postpone_overdue',
       id: ids[4],
     });
@@ -4713,7 +4715,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     await patchAction(
       owner,
       sql`UPDATE action_definitions SET status = 'deprecated'
-      WHERE key = 'planner/postpone_overdue' AND graph_id IS NULL`,
+      WHERE key = 'core/postpone_overdue' AND graph_id IS NULL`,
     );
     const again = await approvePending(db, {
       identity: personal(owner),
@@ -4722,7 +4724,7 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     expect(again).toMatchObject({ ok: true, idempotentReplay: true });
   });
 
-  test('одобренная единица ложится в журнал строкой type:action с action_id и module, один inverse на одиннадцать целей (§Б6-4)', async () => {
+  test('одобренная единица ложится в журнал строкой type:action с action_id (у ядра без module), один inverse на одиннадцать целей (§Б6-4)', async () => {
     const owner = await freshGraph();
     const { ctx, threadId } = await actionCtx(owner);
     const ids = await seedOverdue(owner, 11);
@@ -4731,14 +4733,15 @@ describe('отложенная единица ДЕЙСТВИЯ и «Устаре
     const r = await approvePending(db, { identity: personal(owner), pendingId: unit.pendingId });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    // Автор-приложение — как у исполненного сразу: `type:'action'`, `action_id`, `module`
+    // Автор-приложение — как у исполненного сразу: `type:'action'`, `action_id`; `module` — только у расширения
     const action = (await messagesIn(owner, threadId))
       .flatMap((m) => (m.metadata as { actions?: ActionRecord[] }).actions ?? [])
       .find((a) => a.id === r.actionId);
-    expect([action?.type, action?.action_id, action?.module]).toEqual([
+    // `action_id` — прежний id (РП-2, Д-10); у действия ядра ключа `module` нет вовсе.
+    expect([action?.type, action?.action_id, action !== undefined && 'module' in action]).toEqual([
       'action',
       'planner/postpone_overdue',
-      'planner',
+      false,
     ]);
     expect(action?.inverse).toHaveLength(11);
     for (const id of ids) {
@@ -5584,7 +5587,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(
       await forbidden('subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: {},
       }),
     ).toBeNull();
@@ -5651,7 +5654,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     const def = BUILTIN_SUBSCRIPTION_DEFS.find((s) => s.id === 'orbis/agenda')?.definition;
     const r = await dispatchTool(ctx, 'subscription_set', {
       id: 'orbis/agenda',
-      surface: 'planner/agenda',
+      surface: 'core/agenda',
       definition: def,
     });
     expect(r.status).toBe('pending_confirmation');
@@ -5695,7 +5698,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     };
     const r = await dispatchTool(ctx, 'subscription_set', {
       id: 'orbis/agenda',
-      surface: 'planner/agenda',
+      surface: 'core/agenda',
       definition: raw,
     });
     if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
@@ -6162,7 +6165,7 @@ describe('сводка мутации реестра: правила, а не с
       aspect_create: { key: 'user/sleep', label: { ru: 'Сон' }, properties: [] },
       aspect_implements_set: { aspect: 'user/sleep', implements: [{ contract: 'orbis/when' }] },
       aspect_implements_remove: { aspect: 'user/sleep', contract: 'orbis/when' },
-      subscription_set: { id: 'orbis/agenda', surface: 'planner/agenda', definition: {} },
+      subscription_set: { id: 'orbis/agenda', surface: 'core/agenda', definition: {} },
       subscription_remove: { id: 'orbis/agenda' },
       contract_sets_delta_set: {
         contract: 'orbis/completable',
@@ -6249,7 +6252,7 @@ describe('сводка мутации реестра: правила, а не с
       }),
       subscription_set: registryOperationSummary(REG, 'subscription_set', {
         id: 'orbis/agenda',
-        surface: 'planner/agenda',
+        surface: 'core/agenda',
         definition: {},
       }),
       subscription_remove: registryOperationSummary(REG, 'subscription_remove', {
@@ -6434,10 +6437,7 @@ describe('batch_execute: действие внутри и предел длин�
     // Тул действия — тот же отказ: имя лишь адресует декларацию (§Б6-6).
     const tool = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
-      operations: [
-        noopOp(),
-        { tool: 'action_planner_postpone_overdue', input: { to: '2026-09-30' } },
-      ],
+      operations: [noopOp(), { tool: 'action_core_postpone_overdue', input: { to: '2026-09-30' } }],
     });
     expect(tool).toMatchObject({
       status: 'error',

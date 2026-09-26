@@ -11,7 +11,13 @@
 //
 // ИМПОРТЫ — ИЗ ОБЩЕГО ДНА, а не из `tools/dispatch.ts`: `dispatchTool` зовёт `runAction`, и
 // обратный импорт по значению замкнул бы цикл (Р-К-67, Р-К-87).
-import { type ActionDefinition, effectiveLabel, isModuleEnabled, newId } from '@orbis/shared';
+import {
+  type ActionDefinition,
+  effectiveLabel,
+  extensionName,
+  isExtensionEnabled,
+  newId,
+} from '@orbis/shared';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 // Цикла нет: эскалация читает журнал и чат, в диспатч и сюда не заходит (зовёт её и `dispatch.ts`).
 import { escalateAfterMutation } from '../ai/escalation';
@@ -66,15 +72,15 @@ export async function runAction(
       : {};
   const parsed = parseEnvelope(runActionInput, { action: actionRef, ...raw }, 'run_action');
 
-  // §Б8-3 ревизия 4: действие выключенного модуля не исполняется. Вторая линия к маске реестра
-  // тулов — она скрывает только `action_*`, а `run_action` берёт действие по ключу. Спрашивается
-  // ДО резолва: действие выключенного модуля не читает цели вовсе, и отказ не зависит от того,
-  // выполнено ли у цели предусловие.
+  // §Б8-3 ревизия 4: действие выключенного расширения не исполняется. Вторая линия к маске
+  // реестра тулов — она скрывает только `action_*`, а `run_action` берёт действие по ключу.
+  // Спрашивается ДО резолва: действие выключенного расширения не читает цели вовсе, и отказ не
+  // зависит от того, выполнено ли у цели предусловие. Действие ядра (`module: null`) — мимо.
   const declared = lookupAction(reg, parsed.action);
-  if (!isModuleEnabled(declared.module, disabled)) {
+  if (!isExtensionEnabled(declared.module, disabled)) {
     return errorResult(
       'MODULE_DISABLED',
-      `действие «${declared.key}» принадлежит выключенному модулю «${declared.module}» (§Б8-3)`,
+      `действие «${declared.key}» принадлежит выключенному расширению «${extensionName(declared.module ?? '')}» (§Б8-3)`,
       { action: declared.id, module: declared.module },
     );
   }

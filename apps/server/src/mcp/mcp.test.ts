@@ -491,7 +491,7 @@ describe('/mcp tools/list (§9.2)', () => {
         'orbis_finish',
         // Действия (§Б6-6, задача 7 Б-2): каталог `run_action` и тул сидового действия с offered_by llm.
         'run_action',
-        'action_planner_postpone_overdue',
+        'action_core_postpone_overdue',
       ]) {
         expect(names).toContain(name);
       }
@@ -526,7 +526,7 @@ describe('/mcp tools/list (§9.2)', () => {
       const defs = await withIdentity(db, personal(owner), (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
       // builtin-набор: 51 − 3 internalOnly − 2 routineOnly = 46 (задача 7 Б-2: +run_action и
-      // +action_planner_postpone_overdue — оба публичны, скоуп им решают шаги, а не флаг; задача 10
+      // +action_core_postpone_overdue — оба публичны, скоуп им решают шаги, а не флаг; задача 10
       // Б-2: +action_set, +action_remove, +budget_rollover — публичны полному гранту; задача 16 Б-2:
       // +rule_set, +rule_remove — тем же правилом)
       expect(tools).toHaveLength(publicDefs.length);

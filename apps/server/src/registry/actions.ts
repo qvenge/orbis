@@ -20,11 +20,11 @@ import {
   attachToolName,
   bindingIndexOf,
   canonicalJson,
+  EXTENSION_IDS,
   entityCreateInput,
   entityUpdateInput,
   exprMarkerSchema,
   isActionToolName,
-  MODULE_IDS,
   type PropertyDefinition,
   type PropertyKind,
   type PropertyType,
@@ -139,23 +139,20 @@ export function assertAction(raw: unknown, scope: ActionCheckScope): ActionDefin
     }
   }
 
-  // (4) Namespace ключа — по тому, кто пишет. Системная строка адресуется модулем, своя —
-  // `user/`: иначе владелец занял бы имя модуля, и следующий пересев столкнулся бы с ним.
+  // (4) Namespace ключа — по тому, кто пишет. Системная строка — пространство расширения
+  // (module === namespace) или ядра `core` (module === null): planner и memory — ядро с 1б (спека
+  // §8.1), и их действия живут в `core/`. Своя строка — `user/`: иначе владелец занял бы имя
+  // расширения, и следующий пересев столкнулся бы с ним.
   const namespace = decl.key.split('/')[0] ?? '';
   if (scope.systemSeed) {
-    if (!(MODULE_IDS as readonly string[]).includes(namespace)) {
+    const inExtension =
+      (EXTENSION_IDS as readonly string[]).includes(namespace) && decl.module === namespace;
+    const inCore = namespace === 'core' && decl.module === null;
+    if (!inExtension && !inCore) {
       bad(
         'ACTION_NAMESPACE',
         decl.key,
-        `системное действие «${decl.key}» обязано жить в namespace модуля`,
-        { namespace },
-      );
-    }
-    if (decl.module !== namespace) {
-      bad(
-        'ACTION_NAMESPACE',
-        decl.key,
-        `модуль «${decl.module}» не совпадает с namespace ключа «${namespace}»`,
+        `системное действие «${decl.key}» обязано жить в пространстве своего расширения или ядра core/`,
         { namespace, module: decl.module },
       );
     }

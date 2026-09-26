@@ -26,7 +26,7 @@
 // 18 · декларация · BATCH_UNBOUNDED             · assertAction: ступень 6 (кап пачки)
 // 19 · декларация · RULE_CONFLICT               · assertRule → assertNoConflict (ступень 9)
 // 20 · декларация · DEREF_IN_CONSTRAINT         · assertRule → assertExprTypes → чекер E (derefType)
-// 21 · данные     · MODULE_DISABLED             · execute entity_create → assertModuleEnabled
+// 21 · данные     · MODULE_DISABLED             · execute entity_create → assertExtensionEnabled
 //
 // Таблица сверяется с данными тестом (`refusals.test.ts`, «сводная таблица докблока…»): номер, жанр и
 // коды каждой строки обязаны совпасть с `REFUSAL_ROWS`. Дверь — прозой, её держат прогоны строк.
@@ -134,7 +134,7 @@ const subRow = (definition: unknown, over: Partial<SubscriptionRow> = {}): Subsc
   ({
     id: 'orbis/agenda',
     graphId: null,
-    surface: 'planner/agenda',
+    surface: 'core/agenda',
     definition,
     module: null,
     rank: 1,
@@ -918,7 +918,7 @@ export async function slotAmbiguityDetails(): Promise<{ got: unknown; want: unkn
 
 /**
  * Область валидатора действий: снимок мира корпуса (встроенные словари + посеянные действия) и
- * системный сид — корпус меряет сидовые декларации модулей (`finance/…`, `planner/…`), и namespace
+ * системный сид — корпус меряет сидовые декларации расширений и ядра (`finance/…`, `core/…`), и namespace
  * `user/` своего действия здесь был бы другой проверкой (ступень 4), а не проверкой строки.
  */
 const actionScope = () => ({ reg: world().reg, systemSeed: true });

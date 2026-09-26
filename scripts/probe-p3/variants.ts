@@ -22,7 +22,7 @@ import {
   type AspectDefinition,
   AUTHORING_DEFERRED_ASPECTS,
   effectiveLabel,
-  isModuleEnabled,
+  isExtensionEnabled,
   OWNER_LOCALE,
   type PropertyType,
   writableFromTool,
@@ -42,8 +42,8 @@ import {
   ROUTINE_TOOLS_PROPERTY,
 } from '../../apps/server/src/policy/confirmation.ts';
 import { effectiveRegistry } from '../../apps/server/src/registry/cache.ts';
+import { disabledExtensionsOf } from '../../apps/server/src/registry/extensions.ts';
 import type { RegistrySnapshot } from '../../apps/server/src/registry/load.ts';
-import { disabledModulesOf } from '../../apps/server/src/registry/modules.ts';
 import { buildRoutineContext } from '../../apps/server/src/routines/context.ts';
 import { routineHistory } from '../../apps/server/src/routines/lifecycle.ts';
 import { seedRoutineId } from '../../apps/server/src/seed/gardener.ts';
@@ -141,7 +141,7 @@ function visibleAspects(reg: RegistrySnapshot, disabled: readonly string[]): Asp
   return [...reg.aspects.values()]
     .filter((a) => !a.service)
     .filter((a) => !AUTHORING_DEFERRED_ASPECTS.includes(a.id))
-    .filter((a) => isModuleEnabled(a.module, disabled))
+    .filter((a) => isExtensionEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
 }
 
@@ -306,7 +306,7 @@ export async function assembleChannels(
   const graphId = owner.who.graph;
   return withIdentity(db, owner.who, async (tx) => {
     const reg = await effectiveRegistry(tx, graphId);
-    const section = catalogSection(reg, await disabledModulesOf(tx, graphId));
+    const section = catalogSection(reg, await disabledExtensionsOf(tx, graphId));
     const defs = await buildToolRegistry(tx, graphId);
 
     const chat = await buildContext(tx, { graphId, threadId: owner.threadId, clock: probeClock });

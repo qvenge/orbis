@@ -48,7 +48,7 @@ export const SURFACE_STATES = ['baseline', 'module-off', 'custom-aspect', 'relab
 export type SurfaceState = (typeof SURFACE_STATES)[number];
 
 /**
- * Имена снимков (Р-К-10). Первые два ПРИЕЗЖАЮТ ИЗ `SURFACES` (`registry/modules.ts`), а не повторены
+ * Имена снимков (Р-К-10). Первые два ПРИЕЗЖАЮТ ИЗ `SURFACES` (`registry/extensions.ts`), а не повторены
  * литералом: по `SURFACES` отказывает `SURFACE_UNKNOWN`, и разъезд двух списков означал бы снимок
  * поверхности, которую валидатор уже не признаёт, — молча и до первого пересева. `core/*` подписками
  * не описаны (правило строки — константа `M14_ROW_ELEMENTS`, Р-К-1), поэтому дописаны здесь.
@@ -269,7 +269,7 @@ export interface AgendaSurfaceRow {
   at: string;
 }
 export interface SurfacePayloads {
-  'planner/agenda': AgendaSurfaceRow[];
+  'core/agenda': AgendaSurfaceRow[];
   'finance/budget-overview': BudgetOverview;
   /** §1.9: `Record<entity id, RowProjection>` — тип общий (`@orbis/shared`), двойника больше нет. */
   'core/row': Record<string, RowProjection>;
@@ -410,7 +410,7 @@ export async function snapshotSurfaces(
       'excludeBlocked=true, sortBy=orbis/title:asc, limit=200',
     );
     return {
-      'planner/agenda': await agendaSurface(tx, cctx),
+      'core/agenda': await agendaSurface(tx, cctx),
       // Считает ДВИЖОК ПОДПИСКИ (задача 9): эталон при переводе не пересдавался — на
       // детерминированном мире декларация даёт байт-в-байт то же, что давала прежняя реализация
       // кодом, и это и есть «ноль расхождений» §С8-15 на снимке; снимок читает то, что читает прод.

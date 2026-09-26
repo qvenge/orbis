@@ -42,12 +42,12 @@ describe('attachToolName (§А9-1)', () => {
     for (const a of BUILTIN_ASPECT_DEFS) expect(attachToolName(a.key)).toMatch(/^[a-z0-9_]+$/);
   });
   test('actionToolName: «/» и «-» → «_», как у attachToolName (§Б6-6)', () => {
-    expect(actionToolName('planner/postpone_overdue')).toBe('action_planner_postpone_overdue');
+    expect(actionToolName('core/postpone_overdue')).toBe('action_core_postpone_overdue');
     expect(actionToolName('user/close-week')).toBe('action_user_close_week');
     expect(actionToolName('finance/plan-to-fact')).toMatch(/^[a-z0-9_]+$/);
   });
   test('isActionToolName: образ actionToolName, а не префикс — action_set/action_remove не тулы действий (М-4)', () => {
-    for (const key of ['planner/postpone_overdue', 'finance/plan-to-fact', 'user/close-week']) {
+    for (const key of ['core/postpone_overdue', 'finance/plan-to-fact', 'user/close-week']) {
       expect([key, isActionToolName(actionToolName(key))]).toEqual([key, true]);
     }
     // Реестровые тулы задачи 10 и каталог — не тулы действий: у первых нет второго сегмента,

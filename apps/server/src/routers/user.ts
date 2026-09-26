@@ -8,7 +8,7 @@
 // `disabled_modules`: включённость модуля меняет всё, что видит владелец (тулы, промпт,
 // подписки, запись), и §Б8-1 №28 требует журнал и undo — она идёт через executor операцией
 // `module_set`, как реестровые.
-import { setModuleEnabledInput } from '@orbis/shared';
+import { setExtensionEnabledInput } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { userSettings } from '../db/schema';
@@ -93,12 +93,12 @@ export const userRouter = router({
   /**
    * §Б8-1 №28: трансляция в операцию тем же приёмом, что `registryMutation`
    * (`registryMutation`, `routers/registry.ts`) — `actorKind: 'owner'`, `source: 'ui'`, одна
-   * операция.
-   * `updateSettingsInput` модулями НЕ расширяется: у одной настройки было бы два пути
+   * операция. Имя ручки прежнее (РП-10) — его зовёт web; переключается расширение.
+   * `updateSettingsInput` маской НЕ расширяется: у одной настройки было бы два пути
    * записи — один с журналом и undo, другой без.
    */
   setModuleEnabled: ownerOnlyProcedure
-    .input(setModuleEnabledInput)
+    .input(setExtensionEnabledInput)
     .mutation(async ({ ctx, input }): Promise<WireUserSettings> => {
       const r = await execute(
         ctx.db,

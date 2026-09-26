@@ -24,9 +24,9 @@ import {
   BATCH_CAP_DEFAULT,
   BUILTIN_RELATION_ROLE_META,
   effectiveLabel,
+  extensionOfTool,
   type GraphId,
-  isModuleEnabled,
-  moduleOfTool,
+  isExtensionEnabled,
   PROPOSAL_ALLOWED_TOOLS,
   propertyLiteralJsonSchema,
   QUESTION_MAX,
@@ -39,8 +39,8 @@ import { z } from 'zod';
 import type { Tx } from '../db/with-identity';
 import { paramLiteralType } from '../registry/actions';
 import { effectiveRegistry } from '../registry/cache';
+import { disabledExtensionsOf } from '../registry/extensions';
 import type { RegistrySnapshot } from '../registry/load';
-import { disabledModulesOf } from '../registry/modules';
 import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
 import { REGISTRY_TOOLS } from './registry-tools';
 
@@ -1343,9 +1343,9 @@ export function actionToolDefs(
 }
 
 /**
- * Каталог §Б6-6: описание `run_action` + строка на каждое активное действие включённого модуля
- * (Р-К-86). Модель видит, какие действия существуют, не получая по тулу на каждое; действия
- * выключенных модулей в каталог не попадают (§Б8-3).
+ * Каталог §Б6-6: описание `run_action` + строка на каждое активное действие ядра и включённого
+ * расширения (Р-К-86). Модель видит, какие действия существуют, не получая по тулу на каждое;
+ * действия выключенных расширений в каталог не попадают (§Б8-3).
  */
 export function withActionCatalog(
   def: OrbisToolDef,
@@ -1361,10 +1361,10 @@ export function withActionCatalog(
   return { ...def, description: `${def.description}\n${catalog}` };
 }
 
-/** Активные действия включённых модулей в порядке показа — один отбор на тулы и каталог. */
+/** Активные действия ядра и включённых расширений в порядке показа — один отбор на тулы и каталог. */
 function activeActions(reg: RegistrySnapshot, disabled: readonly string[]) {
   return [...reg.actions.values()]
-    .filter((a) => a.status === 'active' && isModuleEnabled(a.module, disabled))
+    .filter((a) => a.status === 'active' && isExtensionEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
 }
 
@@ -1406,9 +1406,9 @@ export function buildToolDefs(
     // РП-1 (срез 1а): аспекты с отложенным авторством агентом — временный список в коде, а не
     // колонка (отступление от довода выше названо в докблоке `AUTHORING_DEFERRED_ASPECTS`).
     .filter((a) => !AUTHORING_DEFERRED_ASPECTS.includes(a.id))
-    // §Б8-3: аспект выключенного модуля тула не даёт — его поверхность у модели исчезает
-    // вместе с модулем. Умолчание `disabled = []` оставляет прежний вызов побайтно тем же.
-    .filter((a) => isModuleEnabled(a.module, disabled))
+    // §Б8-3: аспект выключенного расширения тула не даёт — его поверхность у модели исчезает
+    // вместе с расширением. Умолчание `disabled = []` оставляет прежний вызов побайтно тем же.
+    .filter((a) => isExtensionEnabled(a.module, disabled))
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
   return (
     [
@@ -1421,7 +1421,7 @@ export function buildToolDefs(
       PROPOSE_TOOL,
       ASK_TOOL,
     ]
-      .filter((d) => isModuleEnabled(moduleOfTool(d.name, reg), disabled))
+      .filter((d) => isExtensionEnabled(extensionOfTool(d.name, reg), disabled))
       .concat(attachable.map((a) => attachToolDef(a, reg)))
       // Действия — ПОСЛЕ attach_*: эталон реестра сравнивается списком, и место новой группы в
       // нём фиксируется здесь один раз (§Б6-6).
@@ -1441,5 +1441,8 @@ export function buildToolDefs(
  * уже свой.
  */
 export async function buildToolRegistry(tx: Tx, graphId: GraphId): Promise<OrbisToolDef[]> {
-  return buildToolDefs(await effectiveRegistry(tx, graphId), await disabledModulesOf(tx, graphId));
+  return buildToolDefs(
+    await effectiveRegistry(tx, graphId),
+    await disabledExtensionsOf(tx, graphId),
+  );
 }

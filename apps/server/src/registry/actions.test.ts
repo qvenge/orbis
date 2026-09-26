@@ -129,7 +129,7 @@ test('{param} неизвестного имени — EXPR_TYPE чекера (Р
 test('тул действия в шаге — ACTION_NESTED; реестровый тул action_set/action_remove — ACTION_STEP_TOOL', () => {
   const P2F = BUILTIN_ACTION_DEFS[0];
   const withTool = (tool: string) => ({ ...P2F, steps: [{ tool, input: {} }] });
-  for (const key of ['planner/postpone_overdue', 'user/close-week', 'my-mod/x-y']) {
+  for (const key of ['core/postpone_overdue', 'user/close-week', 'my-mod/x-y']) {
     expect([key, verdict(withTool(actionToolName(key)))]).toEqual([
       key,
       { code: 'ACTION_NESTED', reason: undefined },
@@ -260,8 +260,9 @@ test('строка в E-позиции — SECOND_LANGUAGE, а не отказ �
   expect(verdict(textMarker)).toEqual({ code: 'SECOND_LANGUAGE', reason: undefined });
 });
 
-// Ступень 4: системная строка живёт в namespace СВОЕГО модуля, своя — только в `user/`; ключ
-// встроенного действия владельцу не достаётся (иначе следующий пересев столкнулся бы с его строкой).
+// Ступень 4: системная строка живёт в пространстве СВОЕГО расширения или ядра `core/`, своя —
+// только в `user/`; ключ встроенного действия владельцу не достаётся (иначе следующий пересев
+// столкнулся бы с его строкой).
 test('namespace ключа по писателю и занятый ключ — ACTION_NAMESPACE / ACTION_KEY_TAKEN (ступень 4)', () => {
   const own = (decl: unknown) => {
     try {
@@ -273,10 +274,10 @@ test('namespace ключа по писателю и занятый ключ — 
     }
   };
   const ns = { code: 'VALIDATION', reason: 'ACTION_NAMESPACE' };
-  expect(own({ ...builtin(1), key: 'planner/mine', id: 'planner/mine' })).toEqual(ns);
+  expect(own({ ...builtin(1), key: 'core/mine', id: 'core/mine' })).toEqual(ns);
   expect(verdict({ ...builtin(1), key: 'user/mine', id: 'user/mine', module: null })).toEqual(ns);
   expect(
-    verdict({ ...builtin(1), key: 'planner/mine', id: 'planner/mine', module: 'finance' }),
+    verdict({ ...builtin(1), key: 'goals/mine', id: 'goals/mine', module: 'finance' }),
   ).toEqual(ns);
   // Своя строка несёт ГРАФ владельца (m-3 гейта задачи 6, перенос в задачу 10): без графа она
   // читалась бы системной для всех владельцев сразу — отказ; с графом — законна.
@@ -287,13 +288,26 @@ test('namespace ключа по писателю и занятый ключ — 
     own({ ...builtin(1), key: 'user/mine', id: 'user/mine', graphId: owner, module: null }),
   ).toBe('ok');
   // …и обратная сторона той же связки: системный сид с графом — не системный.
-  expect(
-    verdict({ ...builtin(1), key: 'planner/mine', id: 'planner/mine', graphId: owner }),
-  ).toEqual(ns);
+  expect(verdict({ ...builtin(1), key: 'core/mine', id: 'core/mine', graphId: owner })).toEqual(ns);
   expect(verdict({ ...builtin(1), id: 'planner/twin' })).toEqual({
     code: 'VALIDATION',
     reason: 'ACTION_KEY_TAKEN',
   });
+});
+
+// РП-2: planner и memory — ядро с 1б (спека §8.1), и их действия живут в `core/` при `module: null`.
+// Пространство расширения — только своё (module === namespace); голова вне словаря — отказ, даже
+// если это имя прежнего модуля: иначе `planner/…` снова стал бы законным адресом ядра.
+test('системное действие: пространство ядра core/ при module null или своё расширение — ACTION_NAMESPACE иначе (РП-2)', () => {
+  const ns = { code: 'VALIDATION', reason: 'ACTION_NAMESPACE' };
+  expect(verdict({ ...builtin(1), key: 'core/x', id: 'core/x', module: null })).toBe('ok');
+  expect(verdict({ ...builtin(1), key: 'core/x', id: 'core/x', module: 'finance' })).toEqual(ns);
+  expect(verdict({ ...builtin(1), key: 'planner/x', id: 'planner/x', module: 'planner' })).toEqual(
+    ns,
+  );
+  expect(verdict({ ...builtin(1), key: 'planner/x', id: 'planner/x', module: null })).toEqual(ns);
+  expect(verdict({ ...builtin(1), key: 'goals/x', id: 'goals/x', module: 'goals' })).toBe('ok');
+  expect(verdict({ ...builtin(1), key: 'goals/x', id: 'goals/x', module: null })).toEqual(ns);
 });
 
 // Ступень 8: предикат — boolean. Тотальное, но не булево выражение в `precondition` или в

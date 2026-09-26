@@ -35,8 +35,8 @@ export function attachToolName(aspectKey: string): string {
 }
 
 /**
- * Имя тула действия по его КЛЮЧУ (§Б6-6): `planner/postpone_overdue` →
- * `action_planner_postpone_overdue`. Правило нормализации — то же, что у `attachToolName`,
+ * Имя тула действия по его КЛЮЧУ (§Б6-6): `core/postpone_overdue` →
+ * `action_core_postpone_overdue`. Правило нормализации — то же, что у `attachToolName`,
  * и по той же причине: имя уезжает провайдеру LLM, где законны только `[a-z0-9_]`
  * (пин `registry.test.ts` «имена тулов без /»). Обратного преобразования нет —
  * нормализация необратима, и действие по имени тула ищут перебором реестра.
@@ -62,8 +62,8 @@ export function actionToolName(key: string): string {
 export const ACTION_TOOL_NAME_RE = /^action_[a-z][a-z0-9_]*_[a-z][a-z0-9_]*$/;
 
 /**
- * Тул ли это действия — ОДИН предикат на всех читателей имени: ветку и пачку диспатча, маску модулей
- * (`moduleOfTool`), валидатор деклараций (`assertAction`) и инвариант реестра тулов (М-4 гейта
+ * Тул ли это действия — ОДИН предикат на всех читателей имени: ветку и пачку диспатча, маску расширений
+ * (`extensionOfTool`), валидатор деклараций (`assertAction`) и инвариант реестра тулов (М-4 гейта
  * задачи 7). Каталог `run_action` сюда не входит — он ядро, и его имя спрашивается отдельно.
  */
 export function isActionToolName(name: string): boolean {

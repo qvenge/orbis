@@ -55,7 +55,7 @@ const ENTRIES: readonly RoleEntry[] = [
     // не выражается (§Б1-2 — восемь контрактов, проекта среди них нет), а придумывать
     // девятый ради одной роли значит заводить понятие без потребителя.
     constraints: { target_contract: 'orbis/completable', created_by: 'any' },
-    module: 'ade',
+    module: null, // язык (Р-7 спеки 1б): роль связи не выключается с расширением
   },
   {
     id: 'run',
@@ -67,7 +67,7 @@ const ENTRIES: readonly RoleEntry[] = [
     sourceLabel: { ru: 'Субъект прогона', en: 'Run subject' },
     targetLabel: { ru: 'Прогон', en: 'Run' },
     constraints: { created_by: 'system' },
-    module: null, // ядро-исполнитель, не модуль ADE (§Б8-2)
+    module: null, // ядро-исполнитель (§Б8-2)
   },
   {
     id: 'envelope-binding',
@@ -80,7 +80,7 @@ const ENTRIES: readonly RoleEntry[] = [
     targetLabel: { ru: 'Транзакция', en: 'Transaction' },
     // Замена доменного инварианта «один budget-parent» (01 §4.2/§13-7) декларацией.
     constraints: { target_max_incoming: 1, created_by: 'system' },
-    module: 'finance',
+    module: null, // язык (Р-7 спеки 1б): роль связи не выключается с расширением
   },
   {
     id: 'category-parent',
@@ -92,7 +92,7 @@ const ENTRIES: readonly RoleEntry[] = [
     sourceLabel: { ru: 'Родительская категория', en: 'Parent category' },
     targetLabel: { ru: 'Подкатегория', en: 'Subcategory' },
     constraints: { acyclic: true, created_by: 'any' },
-    module: 'finance',
+    module: null, // язык (Р-7 спеки 1б): роль связи не выключается с расширением
   },
   {
     id: 'dependency',

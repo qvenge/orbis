@@ -678,7 +678,7 @@ describe('threeWayMerge: система поехала под живой дел�
     const sub = (limit: number): SubscriptionRow => ({
       id: 'orbis/agenda',
       graphId: null,
-      surface: 'planner/agenda',
+      surface: 'core/agenda',
       definition: { ...AGENDA_DEF, show: { ...AGENDA_DEF.show, limit } },
       module: null,
       rank: 1,
@@ -963,7 +963,7 @@ describe('дельта контракта setsDelta и подписки definiti
     base.subscriptions.set('orbis/agenda', {
       id: 'orbis/agenda',
       graphId: null,
-      surface: 'planner/agenda',
+      surface: 'core/agenda',
       definition: AGENDA_DEF,
       module: null,
       rank: 1,
