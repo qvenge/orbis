@@ -1,5 +1,6 @@
 import { Node } from '@tiptap/core';
 import { RECORD_BLOCK_NAMES } from '../page-grammar';
+import { PAGE_BLOCK_GROUP } from '../placement';
 
 /**
  * Блоки обвязки записи тела v3 (спека страниц 1а §5.3): `{{title}}`, `{{tags}}`, … и карточка
@@ -7,6 +8,9 @@ import { RECORD_BLOCK_NAMES } from '../page-grammar';
  *
  * Разбора markdown у нод нет: маркеры распознаёт только листовой препроход `page-grammar.ts`
  * (одна копия правил, РП-6), узлы собирает `parseBody`.
+ *
+ * Группа схемы — `pageBlock`, а не `block` (спека 1б §10): место блока (верх тела или часть
+ * контейнера) держит схема, цитата, пункт списка и ячейка его не пускают.
  *
  * Печать атома обязана совпадать с его строкой в `collectText` диффа (`doc/diff.ts`): тот же
  * текст читает страховка записи `projectionKeepsEverything`, и расхождение увело бы тело в raw.
@@ -28,7 +32,7 @@ const KNOWN_NAMES: ReadonlySet<string> = new Set(RECORD_BLOCK_NAMES);
  */
 export const RecordBlock = Node.create({
   name: 'recordBlock',
-  group: 'block',
+  group: PAGE_BLOCK_GROUP,
   atom: true,
   addAttributes: () => ({ name: { default: null } }),
   parseHTML: () => [
@@ -60,7 +64,7 @@ export const RecordBlock = Node.create({
  */
 export const AspectCard = Node.create({
   name: 'aspectCard',
-  group: 'block',
+  group: PAGE_BLOCK_GROUP,
   atom: true,
   addAttributes: () => ({ aspect: { default: null }, text: { default: '' } }),
   parseHTML: () => [

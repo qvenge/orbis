@@ -1632,8 +1632,9 @@ describe('грамматика v3: разбор → печать → разбо�
 // --- схема шире грамматики: пределы схемы и сверка скелета (фикс-раунд 1 задачи 8, F1) -------
 //
 // Разбор markdown таких документов не родит, но клиент (редактор, P2, MCP) прислать их может.
-// Число частей держит схема; прочее — страховка записи: печать, не разбирающаяся обратно в те
-// же контейнеры и блоки, уводит документ в rawBlock с текстом целиком, а не в VALIDATION.
+// Число частей и место узла страницы (группа `pageBlock`, 1б) держит схема; прочее (глубина,
+// имена блоков, подписи) — страховка записи: печать, не разбирающаяся обратно в те же
+// контейнеры и блоки, уводит документ в rawBlock с текстом целиком, а не в VALIDATION.
 
 describe('схема шире грамматики: пределы и сверка скелета (F1)', () => {
   const p = (text: string): Node => para(text);
@@ -1678,6 +1679,17 @@ describe('схема шире грамматики: пределы и сверк
       'глубина 3',
       cols(column(tabs(tab('А', cols(column(p('x')), column(p('y')))))), column(p('б'))),
     ],
+    ['блок обвязки с чужим именем', { type: 'recordBlock', attrs: { name: 'нет-такого' } }],
+    ['блок обвязки без имени (null)', { type: 'recordBlock', attrs: { name: null } }],
+    ['блок обвязки с пустым именем', { type: 'recordBlock', attrs: { name: '' } }],
+    ['карточка с пустым текстом', { type: 'aspectCard', attrs: { aspect: null, text: '' } }],
+    ['карточка с переводом строки', { type: 'aspectCard', attrs: { aspect: null, text: 'a\nb' } }],
+    ['подпись вкладки с переводом строки', tabs(tab('раз\nдва', p('а')))],
+  ];
+
+  // Место узла страницы — предел схемы с 1б (группа `pageBlock`, спека 1б §10, 1а новое-9):
+  // эти случаи раньше уходили страховкой в rawBlock (рулинг F1 1а), теперь их отвергает гейт.
+  const rejected: Array<[string, Node]> = [
     ['колонки под цитатой', { type: 'blockquote', content: [two()] }],
     [
       'колонки в пункте списка',
@@ -1694,13 +1706,30 @@ describe('схема шире грамматики: пределы и сверк
       },
     ],
     ['вкладки под цитатой', { type: 'blockquote', content: [tabs(tab('А', p('а')))] }],
-    ['блок обвязки с чужим именем', { type: 'recordBlock', attrs: { name: 'нет-такого' } }],
-    ['блок обвязки без имени (null)', { type: 'recordBlock', attrs: { name: null } }],
-    ['блок обвязки с пустым именем', { type: 'recordBlock', attrs: { name: '' } }],
-    ['карточка с пустым текстом', { type: 'aspectCard', attrs: { aspect: null, text: '' } }],
-    ['карточка с переводом строки', { type: 'aspectCard', attrs: { aspect: null, text: 'a\nb' } }],
-    ['подпись вкладки с переводом строки', tabs(tab('раз\nдва', p('а')))],
+    [
+      'блок обвязки в пункте списка',
+      {
+        type: 'bulletList',
+        content: [
+          {
+            type: 'listItem',
+            content: [p('пункт'), { type: 'recordBlock', attrs: { name: 'title' } }],
+          },
+        ],
+      },
+    ],
+    [
+      'карточка под цитатой',
+      {
+        type: 'blockquote',
+        content: [{ type: 'aspectCard', attrs: { aspect: null, text: 'orbis/goal' } }],
+      },
+    ],
   ];
+
+  test.each(rejected)('%s: схема отвергает — bodyDocError определён', (_name, node) => {
+    expect(bodyDocError(v3(p('до'), node, p('после')))).toBeDefined();
+  });
 
   test.each(cases)('%s: документ сохраняется rawBlock-ом, проекция согласована', (_name, node) => {
     const input = v3(p('до'), node, p('после'));

@@ -950,7 +950,7 @@ describe('формат тела v3: гейт версии, контейнеры,
     expect(row.body_doc?.doc).toEqual(V3_DOC);
   });
 
-  test('схема шире грамматики (F1): одна колонка — отказ схемы; глубина 3 и чужой блок — rawBlock, текст цел', async () => {
+  test('схема шире грамматики (F1): одна колонка и узел не на месте — отказ схемы; глубина 3 и чужое имя блока — rawBlock, текст цел', async () => {
     const { entity, owner } = await createOne('исходное тело');
     const update = (doc: unknown, expectedUpdatedAt: string) =>
       execute(
@@ -972,8 +972,10 @@ describe('формат тела v3: гейт версии, контейнеры,
     expect(err(single).code).toBe('VALIDATION');
     expect((await rowOf(entity.id)).body).toBe('исходное тело');
 
-    // Глубина 3 и блок обвязки с чужим именем схеме годны, но печать разбирается в ДРУГОЕ
-    // дерево — страховка кладёт rawBlock с текстом целиком, а не отказывает.
+    // Узел страницы не на месте (колонки под цитатой, блок в пункте списка) с 1б — тоже отказ
+    // схемы (группа `pageBlock`; рулинг F1 1а сужен) — отдельный тест ниже. Глубина 3 и блок
+    // обвязки с чужим именем схеме годны, но печать разбирается в ДРУГОЕ дерево — страховка
+    // кладёт rawBlock с текстом целиком, а не отказывает.
     const deep = {
       type: 'doc',
       content: [
@@ -1018,6 +1020,52 @@ describe('формат тела v3: гейт версии, контейнеры,
       doc: { type: 'doc', content: [{ type: 'rawBlock', attrs: { markdown: row.body } }] },
     });
     for (const word of ['до', 'x', 'y', 'б', '{{нет-такого}}']) expect(row.body).toContain(word);
+  });
+
+  test('узел страницы не на месте — отказ схемы (новое-9; рулинг F1 1а сужен)', async () => {
+    const { entity, owner } = await createOne('исходное тело');
+    const update = (doc: unknown) =>
+      execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, bodyDoc: { v: 3, doc }, expectedUpdatedAt: entity.updatedAt },
+          personal(owner),
+        ),
+      );
+    const two = {
+      type: 'columns',
+      content: [
+        { type: 'column', content: [para('а')] },
+        { type: 'column', content: [para('б')] },
+      ],
+    };
+    // До 1б такой документ уходил страховкой в rawBlock: у страницы нет ни правки разметкой, ни
+    // правки rawBlock, и всё тело становилось неправимым. Теперь место — предел схемы
+    // (группа `pageBlock` разрешена только в doc/column/tab), и гейт отвечает до записи.
+    const quoted = await update({
+      type: 'doc',
+      content: [para('до'), { type: 'blockquote', content: [two] }, para('после')],
+    });
+    expect(err(quoted).code).toBe('VALIDATION');
+    expect((await rowOf(entity.id)).body).toBe('исходное тело');
+
+    const inItem = await update({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [para('пункт'), { type: 'recordBlock', attrs: { name: 'title' } }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(err(inItem).code).toBe('VALIDATION');
+    expect((await rowOf(entity.id)).body).toBe('исходное тело');
   });
 
   test('(в) readEntity: хранимый v2-документ приезжает v3, блочные id целы', async () => {

@@ -375,7 +375,7 @@ describe('место узлов страницы в документе (§5.2) �
   });
   const doc = (...content: J[]) => {
     const node = schema.nodeFromJSON({ type: 'doc', content });
-    node.check(); // схема такой документ ПРИНИМАЕТ — ловит только правило места
+    node.check(); // схема такой документ ПРИНИМАЕТ — ловит только правило глубины
     return node;
   };
   const bullet = (...content: J[]): J => ({
@@ -398,13 +398,15 @@ describe('место узлов страницы в документе (§5.2) �
     expect(layoutMisplaced(doc(bullet(p()), quote(p()), cell(p())))).toBe(false);
   });
 
-  test('не на своём месте — пункт списка, цитата, ячейка таблицы', () => {
-    expect(layoutMisplaced(doc(bullet(p(), cols([p()], [p()]))))).toBe(true);
-    expect(layoutMisplaced(doc(quote(p(), title, p())))).toBe(true);
-    expect(layoutMisplaced(doc(bullet(p(), card)))).toBe(true);
-    expect(layoutMisplaced(doc(cell(tabs([p()]))))).toBe(true);
+  test('не на своём месте — пункт списка, цитата, ячейка таблицы: схема отвергает (группа pageBlock)', () => {
+    // Место с 1б — предел схемы (спека 1б §10, 1а новое-9): такой документ не собрать вовсе, и
+    // до правила место не доходит. За правилом остаются глубина и меню «/» (`layoutPlaceAllows`).
+    expect(() => doc(bullet(p(), cols([p()], [p()])))).toThrow();
+    expect(() => doc(quote(p(), title, p()))).toThrow();
+    expect(() => doc(bullet(p(), card))).toThrow();
+    expect(() => doc(cell(tabs([p()])))).toThrow();
     // Глубже: цитата внутри части — место части не спасает.
-    expect(layoutMisplaced(doc(cols([quote(title)], [p()])))).toBe(true);
+    expect(() => doc(cols([quote(title)], [p()]))).toThrow();
   });
 
   test('глубина 3 — контейнер в части контейнера в части контейнера', () => {

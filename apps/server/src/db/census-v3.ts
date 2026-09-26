@@ -5,10 +5,16 @@
 // рисоваться таблицей или списком. Числа владелец видит ДО прода — чтобы не удивиться, открыв
 // заметку. Это не гейт: текст ни в одном случае не теряется.
 //
+// Вторая цель — число для сужения схемы 1б (задача 4 плана 1б, спека 1б §10): хранимые
+// документы, где узел страницы (контейнер, блок обвязки, карточка) стоит не в doc/column/tab.
+// После сужения схема их не примет, и чтение пересоберёт тело из `body`. Показывается владельцу
+// до пересева: ноль — сужение безопасно, не ноль — СТОП.
+//
 // Цикл живёт здесь, а не в `scripts/ops.ts`, по той же причине, что у `audit-bodies`: прод-обёртка
 // тестами не покрыта по построению, а порционность и счёт проверяются здесь без базы.
 import { type BodyDoc, bodyDocError, parseBody, upgradeBodyDoc } from '@orbis/shared/doc';
 import { type PageNode, parsePageText } from '@orbis/shared/doc/page-grammar';
+import { LAYOUT_NODES, PAGE_BLOCK_PARENTS } from '@orbis/shared/doc/placement';
 import { maskQuotedValues } from '@orbis/shared/query';
 import type { JSONContent } from '@tiptap/core';
 
@@ -44,6 +50,8 @@ export interface CensusV3Result {
   brokenMarkers: number;
   displayTable: number;
   displayList: number;
+  /** Хранимые документы, где узел страницы стоит не в doc/column/tab: после сужения схема их не примет. */
+  pageNodesMisplaced: number;
   /** Не больше `CENSUS_IDS_LIMIT` на список. */
   ids: {
     becomeBlocksNoDoc: string[];
@@ -51,6 +59,7 @@ export interface CensusV3Result {
     brokenMarkers: string[];
     displayTable: string[];
     displayList: string[];
+    pageNodesMisplaced: string[];
   };
 }
 
@@ -162,6 +171,27 @@ function scanDisplay(doc: JSONContent): { table: boolean; list: boolean } {
 }
 
 /**
+ * Стоит ли в хранимом документе узел страницы не в `doc`/`column`/`tab` (`PAGE_BLOCK_PARENTS`).
+ *
+ * Счёт — по СЫРОМУ хранимому JSON, а не через схему: после сужения `bodyDocError` отвергнет ровно
+ * такие документы, и `documentOf` ушёл бы в разбор `body`, спрятав их. Форма не доверяется —
+ * мусор (`{v: 3}` без `doc`, строка вместо узла) даёт «нет», а не падение переписи. Глубину здесь
+ * не считаем: её схема не держит и после сужения, такой документ она примет.
+ */
+function hasMisplacedPageNode(stored: unknown): boolean {
+  const doc =
+    typeof stored === 'object' && stored !== null ? (stored as { doc?: unknown }).doc : undefined;
+  const walk = (node: unknown, parent: string): boolean => {
+    if (typeof node !== 'object' || node === null) return false;
+    const { type, content } = node as { type?: unknown; content?: unknown };
+    if (typeof type !== 'string') return false;
+    if (LAYOUT_NODES.has(type) && !PAGE_BLOCK_PARENTS.has(parent)) return true;
+    return Array.isArray(content) && content.some((child) => walk(child, type));
+  };
+  return walk(doc, ''); // корень — сам `doc`: он не узел страницы
+}
+
+/**
  * Считает корпус. Маркеры — листовым препроходом по `body` (`parsePageText`), а не регэкспом по
  * строкам: многострочный `{{query:…}}` регэксп по строке пропустил бы, а маркер внутри забора
  * кода — посчитал бы. Формы показа — по документу, который покажет чтение (`documentOf`).
@@ -178,12 +208,14 @@ export async function censusV3(io: CensusV3Io): Promise<CensusV3Result> {
     brokenMarkers: 0,
     displayTable: 0,
     displayList: 0,
+    pageNodesMisplaced: 0,
     ids: {
       becomeBlocksNoDoc: [],
       markerInBodyWithDoc: [],
       brokenMarkers: [],
       displayTable: [],
       displayList: [],
+      pageNodesMisplaced: [],
     },
   };
   const count = (key: keyof CensusV3Result['ids'], id: string) => {
@@ -208,6 +240,7 @@ export async function censusV3(io: CensusV3Io): Promise<CensusV3Result> {
       const display = scanDisplay(documentOf(row, body));
       if (display.table) count('displayTable', row.id);
       if (display.list) count('displayList', row.id);
+      if (hasDoc && hasMisplacedPageNode(row.bodyDoc)) count('pageNodesMisplaced', row.id);
     }
     if (rows.length < CENSUS_BATCH) break; // неполная порция — корпус исчерпан
   }
@@ -228,6 +261,7 @@ export function formatCensusV3(r: CensusV3Result): string[] {
     `ошибка разбора контейнера в body (текст цел, на экране — плашка): ${r.brokenMarkers}`,
     `блоки данных display=table (начнут рисоваться таблицей): ${r.displayTable}`,
     `блоки данных display=list (начнут рисоваться списком): ${r.displayList}`,
+    `узлы страницы не на месте (после сужения схемы документ не пройдёт проверку; ноль — сужение безопасно, не ноль — СТОП): ${r.pageNodesMisplaced}`,
   ];
   const ids = (title: string, list: string[]) => {
     if (list.length === 0) return;
@@ -238,5 +272,6 @@ export function formatCensusV3(r: CensusV3Result): string[] {
   ids('id тел с ошибкой разбора контейнера', r.ids.brokenMarkers);
   ids('id тел с display=table', r.ids.displayTable);
   ids('id тел с display=list', r.ids.displayList);
+  ids('id тел с узлом страницы не на месте', r.ids.pageNodesMisplaced);
   return lines;
 }

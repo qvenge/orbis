@@ -1,5 +1,6 @@
 import { type JSONContent, Node } from '@tiptap/core';
 import { CONTAINER_LIMITS } from '../page-grammar';
+import { PAGE_BLOCK_GROUP } from '../placement';
 
 /**
  * Контейнеры раскладки тела v3 (спека страниц 1а §5.2): колонки и вкладки.
@@ -20,10 +21,13 @@ import { CONTAINER_LIMITS } from '../page-grammar';
  * одну (ProseMirror держит `content` в каждой транзакции), а присланный документ с одной
  * колонкой отвергнет гейт записи — его печать при повторном разборе стала бы плашкой.
  *
- * Глубину (≤ 2) и место контейнера (только верх документа или часть другого контейнера) схема
- * не выражает: `block+` у части и у пункта списка пускает контейнер куда угодно. Это держит
- * страховка записи — сверка скелета в `projectionKeepsEverything` (`convert.ts`): документ,
- * чья печать не разбирается обратно в те же контейнеры, уходит в `rawBlock` с текстом целиком.
+ * Место (верх или часть контейнера) — схема: контейнеры, блок обвязки и карточка — группа
+ * `pageBlock`, а её разрешают только `doc`, `column`, `tab` (`PAGE_BLOCK_PARENTS`, спека 1б §10);
+ * цитата, пункт списка и ячейка (`block+`) их не пускают, и присланный такой документ гейт записи
+ * отвергает `VALIDATION`. Глубину (≤ 2) схема без группы на каждый уровень не выражает — её держит
+ * `layoutMisplaced` (`placement.ts`) и страховка скелета: сверка в `projectionKeepsEverything`
+ * (`convert.ts`) уводит документ, чья печать не разбирается обратно в те же контейнеры, в
+ * `rawBlock` с текстом целиком.
  *
  * Канон печати закреплён тестом (`convert.test.ts`): маркер — своей строкой; дети части —
  * через пустую строку; между маркером и первым/последним ребёнком пустой строки нет.
@@ -37,7 +41,7 @@ const partBody = (node: JSONContent, h: Children): string =>
 
 export const Columns = Node.create({
   name: 'columns',
-  group: 'block',
+  group: PAGE_BLOCK_GROUP,
   content: `column{${CONTAINER_LIMITS.columns.min},${CONTAINER_LIMITS.columns.max}}`,
   parseHTML: () => [{ tag: 'div[data-columns]' }],
   renderHTML: () => ['div', { 'data-columns': '' }, 0],
@@ -48,7 +52,7 @@ export const Columns = Node.create({
 export const Column = Node.create({
   name: 'column',
   group: 'column',
-  content: 'block+',
+  content: `(block | ${PAGE_BLOCK_GROUP})+`,
   parseHTML: () => [{ tag: 'div[data-column]' }],
   renderHTML: () => ['div', { 'data-column': '' }, 0],
   renderMarkdown: (node: JSONContent, h: Children) =>
@@ -57,7 +61,7 @@ export const Column = Node.create({
 
 export const Tabs = Node.create({
   name: 'tabs',
-  group: 'block',
+  group: PAGE_BLOCK_GROUP,
   content: `tab{${CONTAINER_LIMITS.tabs.min},${CONTAINER_LIMITS.tabs.max}}`,
   parseHTML: () => [{ tag: 'div[data-tabs]' }],
   renderHTML: () => ['div', { 'data-tabs': '' }, 0],
@@ -78,7 +82,7 @@ function tabMarker(label: unknown): string {
 export const Tab = Node.create({
   name: 'tab',
   group: 'tab',
-  content: 'block+',
+  content: `(block | ${PAGE_BLOCK_GROUP})+`,
   addAttributes: () => ({ label: { default: '' } }),
   parseHTML: () => [
     {

@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { getSchema, type JSONContent } from '@tiptap/core';
 import { bodyDocError } from './convert';
+import { LAYOUT_NODES, PAGE_BLOCK_GROUP, PAGE_BLOCK_PARENTS } from './placement';
 import { DOC_EXTENSIONS } from './schema';
 import { collectNodeTypes, KNOWN_NODE_TYPES } from './types';
 
@@ -134,5 +135,67 @@ describe('части контейнеров — свои группы схемы
     expect(
       bodyDocError(doc({ type: 'columns', content: [{ type: 'column', content: [] }] })),
     ).toBeDefined();
+  });
+});
+
+describe('группа pageBlock — узлы страницы только в doc, column, tab (спека 1б §10, 1а новое-9)', () => {
+  // Место узла страницы — предел СХЕМЫ, как число колонок: документ клиента с колонками под
+  // цитатой гейт записи отвергает VALIDATION, а не прячет страховкой в rawBlock (рулинг F1 1а
+  // сужен). Глубину схема не выражает — её держит `layoutMisplaced`, поэтому глубина 3 здесь
+  // схеме годна.
+  type J = Record<string, unknown>;
+  const p = (text = 'x'): J => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+  const title: J = { type: 'recordBlock', attrs: { name: 'title' } };
+  const card: J = { type: 'aspectCard', attrs: { aspect: null, text: 'orbis/goal' } };
+  const cols = (...parts: J[][]): J => ({
+    type: 'columns',
+    content: parts.map((content) => ({ type: 'column', content })),
+  });
+  const tabs = (...parts: J[][]): J => ({
+    type: 'tabs',
+    content: parts.map((content, i) => ({ type: 'tab', attrs: { label: `В${i}` }, content })),
+  });
+  const quote = (...content: J[]): J => ({ type: 'blockquote', content });
+  const bullet = (...content: J[]): J => ({
+    type: 'bulletList',
+    content: [{ type: 'listItem', content }],
+  });
+  const cell = (...content: J[]): J => ({
+    type: 'table',
+    content: [{ type: 'tableRow', content: [{ type: 'tableCell', content }] }],
+  });
+  const check =
+    (...content: J[]) =>
+    () =>
+      schema.nodeFromJSON({ type: 'doc', content }).check();
+
+  test('схема отвергает: колонки под цитатой, вкладки в ячейке, блок в пункте, карточка под цитатой', () => {
+    expect(check(quote(cols([p()], [p()])))).toThrow();
+    expect(check(cell(tabs([p()])))).toThrow();
+    expect(check(bullet(p(), title))).toThrow();
+    expect(check(quote(card))).toThrow();
+  });
+
+  test('схема принимает: верх, часть колонок, часть вкладок, вкладки в колонке; глубина 3 — тоже', () => {
+    expect(check(p(), cols([p()], [p()]), tabs([p()]), title, card)).not.toThrow();
+    expect(check(cols([title, card], [p()]))).not.toThrow();
+    expect(check(tabs([title, card, p()]))).not.toThrow();
+    expect(check(cols([tabs([p()])], [p()]))).not.toThrow();
+    // Глубина 3 схеме годна — её держит `layoutMisplaced` (и страховка скелета при записи).
+    expect(check(cols([tabs([cols([p()], [p()])])], [p()]))).not.toThrow();
+  });
+
+  test('узлы группы — ровно LAYOUT_NODES, её родители — ровно PAGE_BLOCK_PARENTS', () => {
+    // Константы — единственный источник для правила места, переписи и узлов задачи 8
+    // (`ownCards`, `hostBlock`): узел, объявленный в группе без записи в LAYOUT_NODES, прошёл бы
+    // мимо `layoutMisplaced` и переписи, а родитель вне PAGE_BLOCK_PARENTS — мимо переписи.
+    const members = Object.values(schema.nodes)
+      .filter((type) => (type.spec.group ?? '').split(' ').includes(PAGE_BLOCK_GROUP))
+      .map((type) => type.name);
+    expect(members.sort()).toEqual([...LAYOUT_NODES].sort());
+    const parents = Object.values(schema.nodes)
+      .filter((type) => type.contentMatch.matchType(schema.nodes.columns as never) !== null)
+      .map((type) => type.name);
+    expect(parents.sort()).toEqual([...PAGE_BLOCK_PARENTS].sort());
   });
 });

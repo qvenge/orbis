@@ -4,6 +4,7 @@ import { TableKit } from '@tiptap/extension-table';
 import StarterKit from '@tiptap/starter-kit';
 import { OrbisCode } from './nodes/code';
 import { OrbisCodeBlock } from './nodes/code-block';
+import { OrbisDocument } from './nodes/document';
 import { EntityRef } from './nodes/entity-ref';
 import { Column, Columns, Tab, Tabs } from './nodes/layout';
 import { OrbisListItem } from './nodes/list-item';
@@ -33,10 +34,14 @@ const SAFE_URI = (url: string) => /^(https?|mailto):/i.test(url) || url.startsWi
  *   разделителя кодовой вставки и подкладка краёв; nodes/list-item.ts — маркер пустого пункта
  *   без хвостового пробела). Отключить штатные обязательно: менеджер разметки держит
  *   обработчики списком на имя и берёт ПЕРВЫЙ (@tiptap/markdown, getHandlerForToken),
- *   поэтому вторая регистрация поверх StarterKit была бы мертворождённой.
+ *   поэтому вторая регистрация поверх StarterKit была бы мертворождённой;
+ * - document: false — верх документа свой (`nodes/document.ts`): его `content` пускает группу
+ *   `pageBlock` узлов страницы, которой нет в `block+` штатного `Document` (спека 1б §10).
  */
 export const DOC_EXTENSIONS: AnyExtension[] = [
+  OrbisDocument,
   StarterKit.configure({
+    document: false,
     trailingNode: false,
     link: { isAllowedUri: SAFE_URI },
     codeBlock: false,

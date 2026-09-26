@@ -44,6 +44,15 @@ const DISPLAY =
 /** Документ v2, как он лежит у тела, сохранённого до выкатки: абзац с текстом маркера. */
 const v2Doc = (...content: unknown[]) => ({ v: 2, doc: { type: 'doc', content } });
 const para = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+/** Документ текущей версии — как его кладёт гейт записи с 1а. */
+const v3Doc = (...content: unknown[]) => ({ v: 3, doc: { type: 'doc', content } });
+const TWO_COLUMNS = {
+  type: 'columns',
+  content: [
+    { type: 'column', content: [para('а')] },
+    { type: 'column', content: [para('б')] },
+  ],
+};
 
 test('корпус без документов: счётчики и id по группам', async () => {
   const corpus = fakeCorpus([
@@ -61,12 +70,14 @@ test('корпус без документов: счётчики и id по гр
     brokenMarkers: 1,
     displayTable: 1,
     displayList: 1,
+    pageNodesMisplaced: 0,
     ids: {
       becomeBlocksNoDoc: ['id-00001', 'id-00002'],
       markerInBodyWithDoc: [],
       brokenMarkers: ['id-00003'],
       displayTable: ['id-00004'],
       displayList: ['id-00004'],
+      pageNodesMisplaced: [],
     },
   });
 });
@@ -167,21 +178,30 @@ test('печать: числа и id поимённо под понятными 
     { body: DISPLAY, bodyDoc: null },
     { body: UNCLOSED, bodyDoc: v2Doc(para('текст')) },
     { body: TITLE_LINE, bodyDoc: v2Doc(para('{{title}}')) },
+    { body: 'цитата', bodyDoc: v3Doc({ type: 'blockquote', content: [TWO_COLUMNS] }) },
   ]);
   const lines = formatCensusV3(await censusV3(corpus.io));
   const out = lines.join('\n');
-  expect(out).toContain('тел всего: 4');
+  expect(out).toContain('тел всего: 5');
   expect(out).toContain(
     'без документа, строка {{…}} станет блоком при первом чтении или бэкфилле: 1',
   );
   expect(out).toContain('с документом, в body маркер с начала строки');
   expect(out).toContain('id тел с ошибкой разбора контейнера');
-  for (const id of ['  id-00000', '  id-00001', '  id-00002', '  id-00003']) {
+  expect(out).toContain(
+    'узлы страницы не на месте (после сужения схемы документ не пройдёт проверку; ноль — сужение безопасно, не ноль — СТОП): 1',
+  );
+  expect(out).toContain('id тел с узлом страницы не на месте (не больше 50):\n  id-00004');
+  for (const id of ['  id-00000', '  id-00001', '  id-00002', '  id-00003', '  id-00004']) {
     expect(lines).toContain(id);
   }
   expect(out).not.toContain('[object Object]');
-  // Ни строки тела: вывод команды попадает в транскрипты.
-  expect(out).not.toContain('после');
+  // Ни строки тела: вывод команды попадает в транскрипты. Слово «после» тела TITLE_LINE есть в
+  // подписи счётчика узлов страницы («после сужения схемы…»), поэтому тело ловится маркером и
+  // строкой целиком, а не этим словом.
+  expect(out).not.toContain('{{title}}');
+  expect(lines).not.toContain('после');
+  expect(out).not.toContain('цитата');
   expect(out).not.toContain('orbis/goal');
   expect(out).not.toContain('текст\n');
 });
@@ -233,4 +253,77 @@ test('значение формы в кавычках законно: display="t
   const r = await censusV3(corpus.io);
   expect(r.ids.displayTable).toEqual(['id-00000']);
   expect(r.ids.displayList).toEqual(['id-00001']);
+});
+
+test('узлы страницы не на месте — по сырому хранимому документу (сужение схемы 1б, задача 4)', async () => {
+  const tabsIn = (...content: unknown[]) => ({
+    type: 'tabs',
+    content: [{ type: 'tab', attrs: { label: 'А' }, content }],
+  });
+  const corpus = fakeCorpus([
+    // (1) Колонки под цитатой: после сужения схема такой документ не примет.
+    { body: 'цитата', bodyDoc: v3Doc(para('до'), { type: 'blockquote', content: [TWO_COLUMNS] }) },
+    // (2) Блок обвязки в пункте списка внутри колонки: родитель — listItem, колонка выше не спасает.
+    {
+      body: 'пункт',
+      bodyDoc: v3Doc({
+        type: 'columns',
+        content: [
+          {
+            type: 'column',
+            content: [
+              {
+                type: 'bulletList',
+                content: [
+                  {
+                    type: 'listItem',
+                    content: [para('пункт'), { type: 'recordBlock', attrs: { name: 'title' } }],
+                  },
+                ],
+              },
+            ],
+          },
+          { type: 'column', content: [para('б')] },
+        ],
+      }),
+    },
+    // (3) Колонки → колонка → вкладки: глубина 2, место верное.
+    {
+      body: 'верно',
+      bodyDoc: v3Doc({
+        type: 'columns',
+        content: [
+          { type: 'column', content: [tabsIn(para('в'))] },
+          { type: 'column', content: [para('б')] },
+        ],
+      }),
+    },
+    // (4) Глубина 3: место каждого узла верное, схема примет — это забота `layoutMisplaced`.
+    {
+      body: 'глубоко',
+      bodyDoc: v3Doc({
+        type: 'columns',
+        content: [
+          { type: 'column', content: [tabsIn(TWO_COLUMNS)] },
+          { type: 'column', content: [para('б')] },
+        ],
+      }),
+    },
+    // (5) Документа нет: разбор текста узлы не на место не ставит.
+    { body: `> цитата\n\n${CONTAINER}`, bodyDoc: null },
+    // (6) Документ v2 с цитатой и списком — узлов страницы в нём нет.
+    {
+      body: 'v2',
+      bodyDoc: v2Doc(
+        { type: 'blockquote', content: [para('ц')] },
+        { type: 'bulletList', content: [{ type: 'listItem', content: [para('п')] }] },
+      ),
+    },
+    // (7) Мусорная форма хранимого документа не роняет перепись.
+    { body: 'мусор', bodyDoc: { v: 3 } },
+  ]);
+  const r = await censusV3(corpus.io);
+  expect(r.total).toBe(7);
+  expect(r.pageNodesMisplaced).toBe(2);
+  expect(r.ids.pageNodesMisplaced).toEqual(['id-00000', 'id-00001']);
 });
