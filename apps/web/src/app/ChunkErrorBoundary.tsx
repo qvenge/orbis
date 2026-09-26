@@ -1,5 +1,5 @@
 import { Component, type ReactNode } from 'react';
-import { reloadWithFreshWorker } from '../pwa/fresh-reload';
+import { RELOADING_LABEL, useFreshReload } from '../pwa/useFreshReload';
 import { Button } from '../ui/Button';
 import { ScreenHeader } from './ScreenHeader';
 
@@ -18,6 +18,25 @@ type Props = {
   resetKey: string;
 };
 type State = { failed: boolean; shownFor: string | undefined };
+
+/**
+ * «Обновить» кадра ошибки — функцией, а не в `render` класса: состояние ожидания нового
+ * сервис-воркера — хук (`useFreshReload`). Не голый reload: под старым воркером он отдаёт старый
+ * прекеш (Л-5).
+ */
+function ReloadButton() {
+  const reload = useFreshReload();
+  return (
+    <Button
+      variant="outline"
+      data-testid="chunk-reload"
+      disabled={reload.pending}
+      onClick={reload.start}
+    >
+      {reload.pending ? RELOADING_LABEL : 'Обновить'}
+    </Button>
+  );
+}
 
 /**
  * Граница ошибок ВСЕГО экрана — до неё их не было вовсе, и любая ошибка рендера уносила весь
@@ -74,14 +93,7 @@ export class ChunkErrorBoundary extends Component<Props, State> {
         <ScreenHeader title="…" />
         <div role="alert" className="flex flex-col items-center gap-3 p-6 text-sm text-danger">
           <span>Не удалось открыть экран</span>
-          {/* Не голый reload: под старым сервис-воркером он отдаёт старый прекеш (Л-5). */}
-          <Button
-            variant="outline"
-            data-testid="chunk-reload"
-            onClick={() => void reloadWithFreshWorker()}
-          >
-            Обновить
-          </Button>
+          <ReloadButton />
         </div>
       </>
     );

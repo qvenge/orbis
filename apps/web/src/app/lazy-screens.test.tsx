@@ -39,15 +39,20 @@ test('граница ошибок ловит провал рендера и да
   err.mockRestore();
 });
 
-test('«Обновить» кадра ошибки — перезагрузка через свежий сервис-воркер (Л-5)', () => {
+test('«Обновить» кадра ошибки — перезагрузка через свежий сервис-воркер, одна на два нажатия (Л-5)', () => {
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   render(
     <ChunkErrorBoundary resetKey="budget/root">
       <Boom />
     </ChunkErrorBoundary>,
   );
-  fireEvent.click(screen.getByTestId('chunk-reload'));
+  const button = screen.getByTestId('chunk-reload');
+  // Два нажатия подряд, пока ждём новый воркер: цепочка одна, кнопка заперта и говорит, что занята.
+  fireEvent.click(button);
+  fireEvent.click(button);
   expect(reloadWithFreshWorker).toHaveBeenCalledTimes(1);
+  expect(button).toBeDisabled();
+  expect(button).toHaveTextContent('Обновляется…');
   err.mockRestore();
 });
 

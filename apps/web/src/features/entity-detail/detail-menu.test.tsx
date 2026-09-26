@@ -191,7 +191,8 @@ test('кнопка меню — один узел от первого кадра
   renderWithProviders(<Screen />, handler);
   const button = await screen.findByTestId('detail-menu');
   fireEvent.click(button);
-  await screen.findByRole('menu');
+  // Имя меню — от кнопки слота («Меню»), а не от невидимого якоря Radix.
+  await screen.findByRole('menu', { name: 'Меню' });
   expect(screen.getByTestId('detail-menu')).toBe(button);
   await user.keyboard('{Escape}');
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());

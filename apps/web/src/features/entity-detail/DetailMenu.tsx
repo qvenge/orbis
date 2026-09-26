@@ -133,6 +133,8 @@ export function DetailMenu({
   open,
   onOpenChange,
   anchorRef,
+  triggerId,
+  contentId,
 }: DetailMenuProps & LazyMenuControl) {
   const runBatch = useUpdateBatch();
   const { show } = useToast();
@@ -373,7 +375,14 @@ export function DetailMenu({
 
   return (
     <>
-      <DropdownMenu open={open} onOpenChange={onOpenChange} anchorRef={anchorRef} items={items} />
+      <DropdownMenu
+        open={open}
+        onOpenChange={onOpenChange}
+        anchorRef={anchorRef}
+        triggerId={triggerId}
+        contentId={contentId}
+        items={items}
+      />
       {dialog?.kind === 'change-view' && dialog.entityId === entity.id && (
         <ChangeViewDialog
           reason={dialog.plan.reason}

@@ -4,6 +4,7 @@ import {
   type ReactElement,
   type RefObject,
   useEffect,
+  useId,
   useRef,
   useState,
 } from 'react';
@@ -17,12 +18,22 @@ export interface LazyMenuControl {
   onOpenChange: (open: boolean) => void;
   /** Стабильная кнопка слота: якорь всплывающего списка и адресат возврата фокуса. */
   anchorRef: RefObject<HTMLButtonElement | null>;
+  /**
+   * id кнопки слота — имя списка (`aria-labelledby`) — и id самого списка (`aria-controls` кнопки).
+   * Radix связал бы список со СВОИМ триггером, а он здесь — невидимый двойник без имени: меню
+   * читалось бы без названия. Связь держит слот, хозяин кнопки.
+   */
+  triggerId: string;
+  contentId: string;
 }
 
 /** Пропсы кнопки слота: всё, что делает её триггером меню с первого кадра. */
 export interface LazyMenuTriggerProps {
   ref: RefObject<HTMLButtonElement | null>;
+  id: string;
   'aria-haspopup': 'menu';
+  /** Только пока список на экране: ссылка на отсутствующий узел читалке ни к чему. */
+  'aria-controls': string | undefined;
   'aria-expanded': boolean;
   'data-state': 'open' | 'closed';
   onPointerDown: () => void;
@@ -77,6 +88,8 @@ export function LazyMenuSlot<P extends object>({
   const [loadError, setLoadError] = useState<{ error: unknown } | null>(null);
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const triggerId = useId();
+  const contentId = useId();
   // Загрузка в полёте (или удавшаяся): фора с pointerdown и click следом делят один запрос.
   // Отказ сбрасывает её — отвергнутый промис здесь делал бы кнопку мёртвой до ухода с экрана.
   const pendingRef = useRef<Promise<ComponentType<P & LazyMenuControl>> | null>(null);
@@ -117,7 +130,9 @@ export function LazyMenuSlot<P extends object>({
     <span className="relative inline-flex">
       {renderTrigger({
         ref: anchorRef,
+        id: triggerId,
         'aria-haspopup': 'menu',
+        'aria-controls': open && loaded !== null ? contentId : undefined,
         'aria-expanded': open,
         'data-state': open ? 'open' : 'closed',
         // Фора загрузке — с первого касания. Её отказ молчит: click следом повторит загрузку и,
@@ -137,7 +152,14 @@ export function LazyMenuSlot<P extends object>({
         },
       })}
       {loaded !== null && (
-        <loaded.Menu {...menuProps} open={open} onOpenChange={setOpen} anchorRef={anchorRef} />
+        <loaded.Menu
+          {...menuProps}
+          open={open}
+          onOpenChange={setOpen}
+          anchorRef={anchorRef}
+          triggerId={triggerId}
+          contentId={contentId}
+        />
       )}
     </span>
   );

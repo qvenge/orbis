@@ -33,6 +33,8 @@ export function DropdownMenu({
   open,
   onOpenChange,
   anchorRef,
+  triggerId,
+  contentId,
 }: { items: DropdownMenuItem[] } & LazyMenuControl) {
   return (
     <RDM.Root open={open} onOpenChange={onOpenChange}>
@@ -49,6 +51,10 @@ export function DropdownMenu({
       </RDM.Trigger>
       <RDM.Portal>
         <RDM.Content
+          // Пропсы Content идут у Radix ПОСЛЕ его собственных `id`/`aria-labelledby` и перекрывают
+          // их: список назван кнопкой слота, а не безымянным двойником (`LazyMenuControl`).
+          id={contentId}
+          aria-labelledby={triggerId}
           align="end"
           sideOffset={6}
           // Фокус при закрытии — стабильной кнопке слота, а не двойнику: двойник невидим и

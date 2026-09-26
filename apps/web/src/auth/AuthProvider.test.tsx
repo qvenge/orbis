@@ -80,7 +80,7 @@ test('emitClientOutdated → экран «обновите приложение�
   expect(screen.queryByTestId('child')).not.toBeInTheDocument();
 });
 
-test('«Обновить» на экране «обновите приложение» — перезагрузка через свежий сервис-воркер (Л-5)', () => {
+test('«Обновить» на экране «обновите приложение» — перезагрузка через свежий сервис-воркер, одна на два нажатия (Л-5)', () => {
   mockSession({ token: 'jwt', userId: 'u1', status: 'authed' });
   render(
     <AuthProvider>
@@ -88,6 +88,11 @@ test('«Обновить» на экране «обновите приложен
     </AuthProvider>,
   );
   act(() => emitClientOutdated());
-  fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+  const button = screen.getByRole('button', { name: 'Обновить' });
+  // Два нажатия подряд, пока ждём новый воркер: цепочка одна, кнопка заперта и говорит, что занята.
+  fireEvent.click(button);
+  fireEvent.click(button);
   expect(reloadWithFreshWorker).toHaveBeenCalledTimes(1);
+  expect(button).toBeDisabled();
+  expect(button).toHaveTextContent('Обновляется…');
 });

@@ -1538,7 +1538,8 @@ test('модули первого кадра не тянут схему реда
     // (`DetailMenu.tsx`) ленивое и сторожится наличием своего чанка (check-lazy-chunks).
     '../entity-detail/DetailMenuSlot.tsx',
     '../entity-detail/MenuTrigger.tsx',
-    // Механика ленивого меню (Л-1, РП-13) — эагерна; Radix — только в ленивом чанке.
+    // Механика ленивого меню (Л-1, РП-13) — эагерна; Radix — только в ленивом чанке (страж —
+    // `MENU_WEIGHT` ниже).
     '../../ui/LazyMenuSlot.tsx',
     // Настройка и предпросмотр (задача 16): подписи и коробки рамок и заглушек рисует и первый
     // кадр тела (эагерный), и NodeView; настройка — тот же `EntityBody`, предпросмотр шаблона —
@@ -1589,6 +1590,48 @@ test('хук сохранения берёт версию схемы из ЛИС
   const imports = runtimeImports('./useBodySave.ts');
   expect(imports).toContain('@orbis/shared/doc/types');
   expect(imports).not.toContain('@orbis/shared/doc');
+});
+
+/**
+ * Что уводит Radix-меню (menu, popper, floating-ui — ≈16 кБ gzip) в первый кадр экрана записи, если
+ * эагерный файл механики меню притащит это рантайм-импортом: сам `radix-ui`, примитив
+ * `ui/DropdownMenu` или ленивое меню записи `entity-detail/DetailMenu` значением.
+ *
+ * Отдельный предикат, а не строка в `EDITOR_WEIGHT`, и отдельный короткий список файлов: `radix-ui`
+ * эагерен уже на базе и законно (`ui/Tabs` через `TabsContainer`, `ui/Toast`), так что «ни один
+ * эагерный файл не тянет `radix-ui`» ложно. Стережётся именно меню. Ни `check-lazy-chunks`, ни вес
+ * файла `DetailScreen-*.js` эту утечку не видят: Rollup кладёт Radix в общие чанки, которые экран
+ * импортирует статически (замер мутации (г) задачи 1 среза 1б: файл +33 Б, замыкание +16 кБ).
+ *
+ * `(^|\/)DetailMenu$` не задевает `./DetailMenuSlot`: якорь `$`.
+ */
+const MENU_WEIGHT = /^radix-ui$|(^|\/)DropdownMenu$|(^|\/)DetailMenu$/;
+
+test('эагерные файлы механики меню не тянут Radix-меню в первый кадр (Л-1, РП-13)', () => {
+  for (const file of [
+    '../../ui/LazyMenuSlot.tsx',
+    '../entity-detail/DetailMenuSlot.tsx',
+    '../entity-detail/MenuTrigger.tsx',
+  ]) {
+    expect(
+      runtimeImports(file).filter((s) => MENU_WEIGHT.test(s)),
+      file,
+    ).toEqual([]);
+  }
+  // Положительные контроли: на самих ленивых файлах предикат обязан сработать — иначе пустые списки
+  // выше значили бы лишь сломанный разбор или предикат.
+  expect(runtimeImports('../../ui/DropdownMenu.tsx')).toContain('radix-ui');
+  expect(runtimeImports('../../ui/DropdownMenu.tsx').filter((s) => MENU_WEIGHT.test(s))).toEqual([
+    'radix-ui',
+  ]);
+  expect(
+    runtimeImports('../entity-detail/DetailMenu.tsx').filter((s) => MENU_WEIGHT.test(s)),
+  ).toEqual(['../../ui/DropdownMenu']);
+  // Спеллинги: из экрана (`./DetailMenu`) и из механики (`./DropdownMenu`); сосед-слот — не тяжёлый.
+  expect(MENU_WEIGHT.test('./DetailMenu')).toBe(true);
+  expect(MENU_WEIGHT.test('./DropdownMenu')).toBe(true);
+  expect(MENU_WEIGHT.test('./DetailMenuSlot')).toBe(false);
+  expect(MENU_WEIGHT.test('../../ui/LazyMenuSlot')).toBe(false);
 });
 
 test('страж видит тяжёлый импорт, даже когда на строке есть хвостовой комментарий', () => {

@@ -21,10 +21,8 @@ afterEach(() => {
 type ProbeProps = { items: DropdownMenuItem[] };
 
 /** Содержимое «ленивого чанка»: настоящее Radix-меню в управляемой форме. */
-function ProbeMenu({ items, open, onOpenChange, anchorRef }: ProbeProps & LazyMenuControl) {
-  return (
-    <DropdownMenu items={items} open={open} onOpenChange={onOpenChange} anchorRef={anchorRef} />
-  );
+function ProbeMenu(props: ProbeProps & LazyMenuControl) {
+  return <DropdownMenu {...props} />;
 }
 
 /** Двойник загрузчика: `release` отдаёт модуль, `down` — чанк не приезжает. */
@@ -46,7 +44,7 @@ const items = (...labels: string[]): DropdownMenuItem[] =>
   labels.map((label) => ({ label, onSelect: vi.fn() }));
 
 const probeTrigger = (t: LazyMenuTriggerProps) => (
-  <button type="button" data-testid="probe-trigger" {...t}>
+  <button type="button" data-testid="probe-trigger" aria-label="Действия" {...t}>
     ⋯
   </button>
 );
@@ -143,6 +141,23 @@ test('(6) выбор пункта зовёт его onSelect и закрывае
   expect(menuItems[1]?.onSelect).not.toHaveBeenCalled();
   await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
   expect(button).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('(8) список назван кнопкой слота, кнопка ссылается на открытый список (aria-controls)', async () => {
+  const { load, release } = loaderDouble();
+  const user = userEvent.setup();
+  release();
+  render(<Probe load={load} menuItems={items('Первый')} />);
+  const button = screen.getByTestId('probe-trigger');
+  expect(button).not.toHaveAttribute('aria-controls');
+  await user.click(button);
+  // Имя — от кнопки слота, а не от невидимого двойника-якоря Radix.
+  const menu = await screen.findByRole('menu', { name: 'Действия' });
+  expect(menu.id).not.toBe('');
+  expect(button).toHaveAttribute('aria-controls', menu.id);
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  expect(button).not.toHaveAttribute('aria-controls');
 });
 
 test('(7) отказ загрузки на нажатие — к границе ошибок; после смены resetKey жест грузит снова', async () => {

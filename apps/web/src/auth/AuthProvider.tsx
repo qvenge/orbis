@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
 import { setDraftScope } from '../features/entity-editor/draft-storage';
-import { reloadWithFreshWorker } from '../pwa/fresh-reload';
+import { RELOADING_LABEL, useFreshReload } from '../pwa/useFreshReload';
 import { setRetryScope } from '../state/retry';
 import { onClientOutdated, onUnauthorized } from './events';
 import { LoginScreen } from './LoginScreen';
@@ -56,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export function UpdateRequiredScreen() {
+  const reload = useFreshReload();
   return (
     <div
       role="alert"
@@ -68,11 +69,12 @@ export function UpdateRequiredScreen() {
       </p>
       <button
         type="button"
-        className="rounded-control bg-accent px-4 py-2 text-accent-foreground"
+        className="rounded-control bg-accent px-4 py-2 text-accent-foreground disabled:opacity-60"
         // Не голый reload: под старым сервис-воркером он отдаёт старый прекеш (Л-5, pwa/fresh-reload).
-        onClick={() => void reloadWithFreshWorker()}
+        disabled={reload.pending}
+        onClick={reload.start}
       >
-        Обновить
+        {reload.pending ? RELOADING_LABEL : 'Обновить'}
       </button>
     </div>
   );

@@ -766,10 +766,13 @@ describe('диалоги меню держат снимок записи, на �
 
   test('переход на соседнюю запись с открытым вопросом случая 3 — диалог закрыт, вызовов нет', async () => {
     const { batches, world } = await askCase3();
+    const button = screen.getByTestId('detail-menu');
     fireEvent.click(screen.getByTestId('go-other'));
     await screen.findByText('Соседняя запись');
-    // Меню пережило переход (шапка не размонтировалась) — а диалог закрыт.
-    expect(screen.getByTestId('detail-menu')).toHaveAttribute('aria-haspopup');
+    // Меню пережило переход (шапка не размонтировалась: кнопка — тот же узел) — а диалог закрыт.
+    // Тождество узла, а не `aria-haspopup`: по форме РП-13 атрибут у кнопки с первого кадра, и
+    // перемонтированная шапка несла бы его так же.
+    expect(screen.getByTestId('detail-menu')).toBe(button);
     expect(screen.queryByRole('dialog')).toBeNull();
     // И вернувшись — вопрос не всплывает сам: он был про ту запись и тот момент.
     fireEvent.click(screen.getByTestId('go-back'));

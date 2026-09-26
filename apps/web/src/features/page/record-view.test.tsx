@@ -409,10 +409,21 @@ describe('спор и память (§4.3)', () => {
 
   test('выбор в споре: экран сразу на выбранном шаблоне, не дожидаясь перечитывания списка (Л-2)', async () => {
     const world = disputeWorld();
+    let releaseBatch: () => void = () => {};
+    const batchHeld = new Promise<void>((r) => {
+      releaseBatch = r;
+    });
     let listCalls = 0;
-    openRecord(fixture('project-task'), world, {
-      // Перечитывание списка после записи висит: экран обязан переключиться без него.
-      over: (path, input) => {
+    let batchAnswered = false;
+    const { calls } = openRecord(fixture('project-task'), world, {
+      over: async (path, input) => {
+        // Ответ пачки держится воротами: экран обязан переключиться ДО него (патч до записи).
+        if (path === 'entity.updateBatch') {
+          await batchHeld;
+          batchAnswered = true;
+          return undefined;
+        }
+        // Перечитывание списка после записи висит: экран обязан переключиться и без него.
         if (!isTemplatesList(path, input)) return undefined;
         listCalls += 1;
         return listCalls >= 2 ? new Promise(() => {}) : undefined;
@@ -422,7 +433,12 @@ describe('спор и память (§4.3)', () => {
     const plaque = screen.getByTestId('dispute-plaque');
     fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
     await waitFor(() => expect(renderedTexts()).toContain('Вид задачи B'));
+    expect(calls.filter((c) => c.path === 'entity.updateBatch')).toHaveLength(1);
+    expect(batchAnswered).toBe(false);
+    releaseBatch();
+    await waitFor(() => expect(batchAnswered).toBe(true));
     expect(screen.queryByTestId('dispute-plaque')).toBeNull();
+    expect(renderedTexts()).toContain('Вид задачи B');
   });
 
   test('отказ пачки выбора: патч откатывается — экран на A, плашка снова с кнопками (Л-2)', async () => {
