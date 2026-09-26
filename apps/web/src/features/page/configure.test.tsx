@@ -266,11 +266,21 @@ test('«Настроить» у страницы → тело страницы �
   // меню «/» предлагает контейнеры (у заметки их нет).
   await userEvent.click(within(view).getByText('левая часть'));
   // Коробка редактора встаёт раньше его contenteditable (ProseMirror монтируется эффектом) — ждём
-  // именно область правки.
-  await waitFor(() =>
-    expect(
-      within(view).getByTestId('body-editor').querySelector('[contenteditable]'),
-    ).not.toBeNull(),
+  // именно область правки. Таймаут поднят с доказанной причиной: редактор — ленивый чанк, и под
+  // нагрузкой полного прогона он приезжает дольше секунды (замер фикс-раунда 3: 1 из 20 прогонов
+  // базы под нагрузкой — «Unable to find [data-testid="body-editor"]»).
+  // И ждём не только появления области правки, но и ФОКУСА в ней: каретку редактор ставит
+  // эффектом (`BodyEditor`, по координатам касания) ПОСЛЕ того, как его DOM уже в документе.
+  // Набор, начатый в этот промежуток, уходит мимо редактора: « /» терялось, «колон» ложилось в
+  // начало абзаца, меню «/» не открывалось (флак CI 576f57c7; воспроизводится всегда, если
+  // отложить фокус на 40 мс, — и на базе задачи 2, и на ветке).
+  await waitFor(
+    () => {
+      const area = within(view).getByTestId('body-editor').querySelector('[contenteditable]');
+      expect(area).not.toBeNull();
+      expect(document.activeElement).toBe(area);
+    },
+    { timeout: 5000 },
   );
   await userEvent.keyboard(' /колон');
   const menu = await screen.findByTestId('slash-menu');
