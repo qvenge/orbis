@@ -14,7 +14,8 @@
 //
 // Правки уезжают НОВОЙ формой (§А1-1): значение — `props` по id свойства, снятие — `unset`,
 // снятие аспекта — `aspects.detach`. Старой карты «аспект → поля» этот экран больше не шлёт.
-import type { AspectDefinition } from '@orbis/shared';
+import type { AspectDefinition, PropertyDefinition } from '@orbis/shared';
+import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { displayText, valueText } from '../../lib/registry/format';
 import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
 import { PropertyControl } from '../../lib/registry/PropertyControl';
@@ -322,7 +323,11 @@ function PropertyRow({
             data-testid={`prop-${propertyId}`}
             className="break-words px-2 py-1 text-sm text-text-secondary"
           >
-            {displayText(def, value, registry)}
+            {def.type.kind === 'ref' && typeof value === 'string' && value !== '' ? (
+              <RefTitle def={def} refId={value} />
+            ) : (
+              displayText(def, value, registry)
+            )}
           </span>
         ) : (
           // Контрол ОДИН на все типы, включая `ref`: пикер категории (K6) переехал в общий
@@ -333,4 +338,14 @@ function PropertyRow({
       </dd>
     </>
   );
+}
+
+/**
+ * Название ссылки в режиме только чтения — той же выдачей, что подпись выбранного у пикера
+ * (`useRefTitle`, общий ключ с `RefField`): нового запроса нет, а сырой uuid вместо названия
+ * категории владельцу не прочитать. Пока выдача едет — многоточие, не мелькающий uuid.
+ */
+function RefTitle({ def, refId }: { def: PropertyDefinition; refId: string }) {
+  const { title, isPending } = useRefTitle(def, refId);
+  return <>{isPending ? '…' : title}</>;
 }

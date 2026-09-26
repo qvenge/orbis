@@ -16,10 +16,13 @@ import type { EntityCardData } from './types';
 export function EntityCard({
   card,
   confirmed = true,
+  readOnly = false,
 }: {
   card: EntityCardData;
   /** false — fast-path «⏳ ждёт отправки»: запись ещё не на сервере (02 §2.5). */
   confirmed?: boolean;
+  /** Лента только для чтения (предпросмотр шаблона): без «Отменить» — переход к записи остаётся. */
+  readOnly?: boolean;
 }) {
   const [undone, setUndone] = useState(false);
   const push = useNav((s) => s.push);
@@ -123,7 +126,7 @@ export function EntityCard({
           → {env.category.title} · осталось {formatAmount(env.remaining)} {envelopeView(env).sym}
         </p>
       )}
-      {undoActionId && !undone && (
+      {undoActionId && !undone && !readOnly && (
         <Button
           variant="ghost"
           size="sm"

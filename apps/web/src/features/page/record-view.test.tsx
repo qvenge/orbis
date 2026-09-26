@@ -16,6 +16,7 @@ import {
 } from '@orbis/shared';
 import { parseBody } from '@orbis/shared/doc';
 import { GRAMMAR_ERROR_MESSAGES } from '@orbis/shared/doc/page-grammar';
+import { SECOND_CARDS_MESSAGE, secondCardMessage } from '@orbis/shared/doc/placement';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -262,6 +263,35 @@ describe('выбор шаблона (§4.2)', () => {
       kind: 'entity',
       id: fixture('project-task').entity.id,
     });
+  });
+
+  test('повтор одинаковым текстом в единственном шаблоне → шаблон хоста и «не разобран» с причиной «второй» (R-4)', async () => {
+    const first = openRecord(fixture('goal'), {
+      templates: [
+        template(
+          TPL_A,
+          'Вид цели',
+          ['orbis/goal'],
+          'Свой вид цели\n\n{{card: orbis/goal}}\n\n{{card: orbis/goal}}\n',
+        ),
+      ],
+    });
+    expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
+    expect(renderedTexts()).not.toContain('Свой вид цели');
+    expect(await screen.findByTestId('broken-template')).toHaveTextContent(
+      `Шаблон „Вид цели“ не разобран: ${secondCardMessage('{{card: orbis/goal}}')}`,
+    );
+    first.unmount();
+
+    openRecord(fixture('goal'), {
+      templates: [
+        template(TPL_A, 'Вид цели', ['orbis/goal'], 'Свой вид цели\n\n{{cards}}\n\n{{cards}}\n'),
+      ],
+    });
+    expect(await screen.findByTestId('page-tabs')).toBeInTheDocument();
+    expect(await screen.findByTestId('broken-template')).toHaveTextContent(
+      `Шаблон „Вид цели“ не разобран: ${SECOND_CARDS_MESSAGE}`,
+    );
   });
 
   test('шаблон владельца бросает при рендере → «ошибка отрисовки», выбор повторяется', async () => {

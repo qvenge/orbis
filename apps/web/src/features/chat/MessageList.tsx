@@ -31,6 +31,7 @@ export function MessageList({
   isTyping,
   onRetry,
   onReparse,
+  readOnly,
   onPick,
   emptyHint,
 }: {
@@ -109,7 +110,7 @@ export function MessageList({
                   className="leading-relaxed"
                 />
               )}
-              {renderCardBodies(m, { onRetry, onReparse })}
+              {renderCardBodies(m, { onRetry, onReparse, readOnly })}
             </SystemMessage>
           </article>
         ) : m.role === 'user' ? (
@@ -119,7 +120,7 @@ export function MessageList({
             className="max-w-[75%] self-end rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-sm text-text"
           >
             {m.content && <Markdown source={m.content} onEntityLink={openEntity} />}
-            {renderCards(m, { onRetry, onReparse })}
+            {renderCards(m, { onRetry, onReparse, readOnly })}
           </article>
         ) : (
           <article
@@ -135,10 +136,10 @@ export function MessageList({
                 что человек написал сам, и прятать его нельзя ни при каком совпадении. */}
             {/* Правило выше сравнивает СЫРОЙ m.content с заголовком карточки — markdown
                 ничего в нём не меняет, отрисовка идёт уже после решения. */}
-            {m.content && !contentDuplicatesCard(m, { onRetry, onReparse }) && (
+            {m.content && !contentDuplicatesCard(m, { onRetry, onReparse, readOnly }) && (
               <Markdown source={m.content} onEntityLink={openEntity} className="leading-relaxed" />
             )}
-            {renderCards(m, { onRetry, onReparse })}
+            {renderCards(m, { onRetry, onReparse, readOnly })}
           </article>
         ),
       )}

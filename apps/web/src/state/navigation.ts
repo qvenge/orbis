@@ -113,7 +113,12 @@ export function openEntity(id: string) {
 // наверху browser-стека — entity. ВАЖНО: switchTab по УЖЕ активному табу сворачивает
 // стек (§1.1), поэтому переключаем только когда активен другой таб, и лишь затем push.
 export function openPinnedEntity(id: string) {
-  const { activeTab, switchTab, push } = useNav.getState();
-  if (activeTab !== 'browser') switchTab('browser');
-  push('browser', { kind: 'entity', id });
+  // Страж — ОДИН раз на нажатие: `switchTab` и `push` спросили бы его каждый, и неотправленная
+  // правка получила бы два досыла и два одинаковых тоста. Дальше — те же два шага стора, что
+  // у `switchTab` и `push` (две записи истории, как прежде), но мимо повторного вопроса.
+  if (!mayLeave()) return;
+  if (useNav.getState().activeTab !== 'browser') useNav.setState({ activeTab: 'browser' });
+  useNav.setState((s) => ({
+    stacks: { ...s.stacks, browser: [...s.stacks.browser, { kind: 'entity', id }] },
+  }));
 }

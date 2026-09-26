@@ -36,6 +36,7 @@ import {
   TICKET_ROUTINE_FIXTURE,
 } from '../entity-detail/structure-fixtures';
 import { HOST_TEMPLATE_TEXT } from './host-template';
+import { previewCandidatesAst } from './TemplatePreview';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
 
 installCrashTrap();
@@ -161,6 +162,75 @@ const RUN_UNITS = [
 ];
 
 /**
+ * Тред записи с карточками всех самоходных видов: у каждой — своя мутация (`ai.undo`,
+ * `ai.approve`/`ai.reject`, `entity.create`/`ai.declineMemoryRule`, решения рутины). Обычное дело:
+ * каждое действие AI над записью несёт `entity_card` с «Отменить».
+ */
+const THREAD_MESSAGES = [
+  {
+    kind: 'entity_card',
+    entityId: uuid(1740),
+    title: 'Правка AI',
+    aspects: ['orbis/task'],
+    keyFields: {},
+    undoActionId: uuid(1741),
+  },
+  {
+    kind: 'confirmation_card',
+    mode: 'explicit',
+    pendingId: 'c1',
+    summary: 'Удалить три задачи',
+  },
+  {
+    kind: 'memory_rule_suggestion',
+    ruleText: 'Кофе → Кафе',
+    pattern: 'кофе',
+    fromCategoryId: uuid(1742),
+    toCategoryId: uuid(1743),
+    categoryTitle: 'Кафе',
+  },
+  {
+    kind: 'question_card',
+    pendingId: 'q2',
+    runId: uuid(1720),
+    routineId: uuid(1721),
+    question: 'Архивировать старое?',
+    options: ['Да', 'Нет'],
+  },
+  {
+    kind: 'deferred_action_card',
+    pendingId: 'd2',
+    runId: uuid(1720),
+    routineId: uuid(1721),
+    summary: 'Архивация: «Старое»',
+    rows: [{ field: 'archived', before: 'false', after: 'true' }],
+  },
+  {
+    kind: 'proposal_card',
+    pendingId: 'p1',
+    runId: uuid(1720),
+    routineId: uuid(1721),
+    summary: 'Перенести сроки',
+    explanation: 'Три задачи просрочены.',
+  },
+].map((card, i) => ({
+  id: uuid(1750 + i),
+  threadId: 'thread-preview',
+  role: 'assistant',
+  content: '',
+  metadata: { cards: [card] },
+  createdAt: `2026-09-20T0${i}:00:00.000Z`,
+}));
+
+/**
+ * Процедуры, которые объявлены мутацией, но только ЧИТАЮТ. Род операции tRPC — не суть
+ * процедуры: пачка блоков данных уходит мутацией ради тела запроса (`lib/query-blocks/batch.tsx`),
+ * а граф не трогает. Без явного списка первый же `{{query}}` в шаблоне или в мире теста сломал бы
+ * сторож ложным провалом. Сюда — только доказанно читающие процедуры.
+ */
+const READING_MUTATIONS: ReadonlySet<string> = new Set(['entity.blocks']);
+
+/**
  * Мир предпросмотра: экран — шаблон, подходящая запись — `record` (связи, версия, прогоны, пачка).
  * Каждая мутация складывается в `mutations`: после обхода их быть не должно.
  */
@@ -188,14 +258,18 @@ function openPreview(record: StructureFixture, forAspects: string[]) {
   const tplScreen = structureHandler({ name: 'tpl', entity: tpl });
   const mutations: { path: string; input: unknown }[] = [];
   const handler: MockHandler = (path, input, type) => {
-    if (type === 'mutation') {
+    if (type === 'mutation' && !READING_MUTATIONS.has(path)) {
       mutations.push({ path, input });
       return {};
     }
     if (path === 'entity.query') {
       const q = input as { query?: string; ast?: QueryAst };
       if (q.query === PAGE_TEMPLATES_QUERY) return [tpl];
-      if (q.ast !== undefined) return [record.entity];
+      // Подходящие записи предпросмотра — ровно их деревом; прочие деревья (выдача ссылки
+      // карточки категории) отвечает обработчик экрана записи.
+      if (JSON.stringify(q.ast) === JSON.stringify(previewCandidatesAst(forAspects))) {
+        return [record.entity];
+      }
     }
     if (path === 'entity.get') {
       const id = (input as { id: string }).id;
@@ -214,6 +288,7 @@ function openPreview(record: StructureFixture, forAspects: string[]) {
       ];
     }
     if (path === 'routine.runUnits') return RUN_UNITS;
+    if (path === 'chat.listMessages') return THREAD_MESSAGES;
     return recordScreen(path, input);
   };
   const r = renderWithProviders(
@@ -333,11 +408,23 @@ test('тикет + рутина: контролов правки нет, обх�
   // Навигация остаётся: подзадача открывается — записи это не правит.
   expect(within(root).getByTestId('subtask')).toBeInTheDocument();
 
-  // Вкладка «Тред»: лента без поля сообщения; тред не заводится.
+  // Вкладка «Тред»: лента без поля сообщения; тред не заводится; карточки — без действий.
   fireEvent.mouseDown(within(root).getByRole('tab', { name: 'Тред' }));
   fireEvent.click(within(root).getByRole('tab', { name: 'Тред' }));
-  await settle();
+  await within(root).findByTestId('entity-card');
   expect(within(root).queryAllByRole('textbox')).toEqual([]);
+  expect(within(root).getByTestId('confirmation-card')).toHaveTextContent('Удалить три задачи');
+  expect(
+    within(root)
+      .getAllByTestId('card-readonly')
+      .map((c) => c.getAttribute('data-card')),
+  ).toEqual(
+    // Лента печатает старые сверху — в порядке, обратном ответу.
+    ['proposal_card', 'deferred_action_card', 'question_card', 'memory_rule_suggestion'],
+  );
+  for (const name of ['Отменить', 'Подтвердить', 'Запомнить', 'Не надо', 'Принять', 'Отклонить']) {
+    expect(within(root).queryByRole('button', { name })).toBeNull();
+  }
 
   await pokeEverything(root);
   expect(mutations).toEqual([]);
@@ -372,6 +459,18 @@ test('прогон рутины: вопрос, пачка и откат — бе
   ]) {
     expect(within(root).queryByRole('button', { name })).toBeNull();
   }
+  await pokeEverything(root);
+  expect(mutations).toEqual([]);
+});
+
+test('финансы: ссылка в секции аспекта — названием, а не uuid; обход не пишет ничего (M-6)', async () => {
+  const financial = STRUCTURE_FIXTURES.find((f) => f.name === 'financial');
+  if (financial === undefined) throw new Error('нет фикстуры financial');
+  const { mutations } = openPreview(financial, ['orbis/financial']);
+  const root = await previewRoot(financial.entity.title);
+  const category = await within(root).findByTestId('prop-orbis/finance_category');
+  await waitFor(() => expect(category).toHaveTextContent('Кофе'));
+  expect(category).not.toHaveTextContent(uuid(900));
   await pokeEverything(root);
   expect(mutations).toEqual([]);
 });

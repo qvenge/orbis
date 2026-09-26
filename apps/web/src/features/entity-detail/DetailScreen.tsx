@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { invalidateGraph } from '../../lib/invalidate';
+import { mayLeave } from '../../state/leave-guard';
 import { openEntity } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -312,7 +313,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                   ? {
                       kind: 'configuring',
                       templateTitle:
-                        templates.rows.find((r) => r.id === configuringId)?.title ?? '…',
+                        // Пустой заголовок — id, как у пунктов «Открыть через „X“» (`titleOf`).
+                        templates.rows.find((r) => r.id === configuringId)?.title || configuringId,
                       onOpenTemplate: () => openEntity(configuringId),
                     }
                   : isPage
@@ -321,7 +323,14 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                         asRecord,
                         onOpenAsRecord: () => setOpenVia(HOST_VIEW),
                         onConfigure: () => configure(entity.id),
-                        ...(!isTemplate && { onPreview: () => setMode({ kind: 'preview' }) }),
+                        // Из настройки своей страницы предпросмотр снимает `ConfigureView` —
+                        // это уход с тела, и спрашивается тот же страж, что у «Готово» и «назад»
+                        // (№86): иначе отказ досыла на размонтировании молчал бы.
+                        ...(!isTemplate && {
+                          onPreview: () => {
+                            if (mayLeave()) setMode({ kind: 'preview' });
+                          },
+                        }),
                       }
                     : {
                         kind: 'record',

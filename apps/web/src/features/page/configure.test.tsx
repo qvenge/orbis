@@ -16,7 +16,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { goBack } from '../../app/history';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
-import { openEntity, useNav } from '../../state/navigation';
+import { openEntity, openPinnedEntity, useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
@@ -29,7 +29,7 @@ import { BUILTIN_REGISTRY } from '../../test/registry';
 import { queryClient } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
-import { BODY_BLOCKED, BODY_SAVING } from '../entity-detail/body-gate';
+import { BODY_BLOCKED, BODY_OFFLINE, BODY_SAVING } from '../entity-detail/body-gate';
 import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import {
@@ -38,6 +38,7 @@ import {
   structureHandler,
 } from '../entity-detail/structure-fixtures';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
+import { readDraft } from '../entity-editor/draft-storage';
 import { previewCandidatesAst } from './TemplatePreview';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
 
@@ -220,12 +221,20 @@ const menuLabels = async () => {
 const frameLabels = () =>
   screen.getAllByTestId('layout-frame-label').map((n) => n.textContent ?? '');
 
-/** Сервер правки тела: `hold` держит ответ, `reject` — отказывает правке по существу. */
-function bodyServer(opts: { hold?: Promise<void>; reject?: boolean }): MockHandler {
+/**
+ * Сервер правки тела: `hold` держит ответ, `reject` — отказывает правке по существу, `offline()` —
+ * пока истинно, запрос падает сетью (ошибка без кода tRPC).
+ */
+function bodyServer(opts: {
+  hold?: Promise<void>;
+  reject?: boolean;
+  offline?: () => boolean;
+}): MockHandler {
   return async (path, input) => {
     if (path !== 'entity.update') return undefined;
     if (opts.hold !== undefined) await opts.hold;
     if (opts.reject === true) throw trpcError('BAD_REQUEST', 'тело не принято');
+    if (opts.offline?.() === true) throw new Error('Failed to fetch');
     const inp = input as { bodyDoc?: { v: number; doc: object } };
     const base = dashboard();
     return {
@@ -575,6 +584,29 @@ describe('несохранённая правка настройки не мол
     expect(screen.getByTestId('configure-view')).toBe(view);
   });
 
+  test('«Предпросмотр на записи…» из настройки своей страницы при неотправленной правке — тот же страж (M-1)', async () => {
+    const { view } = await configure(bodyServer({ hold: new Promise(() => {}) }));
+    await editUnsent(view, ' ХВОСТ');
+    await choose('Предпросмотр на записи…');
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toContain(BODY_SAVING);
+    expect(screen.getByTestId('configure-view')).toBe(view);
+    expect(screen.queryByTestId('template-preview-plaque')).toBeNull();
+  });
+
+  test('закреплённая запись с другой вкладки при неотправленной правке — один досыл, один тост (M-2)', async () => {
+    const { view, calls } = await configure(bodyServer({ hold: new Promise(() => {}) }));
+    await editUnsent(view, ' ХВОСТ');
+    // Вкладка другая: переход — два шага стора (вкладка, затем экран), а страж — один.
+    useNav.setState({ activeTab: 'chat' });
+    const stacks = useNav.getState().stacks;
+    useToastStore.setState({ toasts: [] });
+    openPinnedEntity(PROJECT_B);
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([BODY_SAVING]);
+    expect(useNav.getState().activeTab).toBe('chat');
+    expect(useNav.getState().stacks).toEqual(stacks);
+    await waitFor(() => expect(updates(calls)).toHaveLength(1));
+  });
+
   test('без неотправленного «Готово», «назад» и переход работают сразу', async () => {
     const { view } = await configure(bodyServer({}));
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
@@ -588,5 +620,65 @@ describe('несохранённая правка настройки не мол
     await screen.findByTestId('page-columns');
     expect(screen.queryByTestId('configure-view')).toBeNull();
     expect(screen.queryByText(BODY_SAVING)).toBeNull();
+  });
+});
+
+describe('уход с настройки без связи (рулинг R-5)', () => {
+  async function editUnsentOffline(view: HTMLElement, tail: string): Promise<void> {
+    await userEvent.click(within(view).getByText('левая часть'));
+    const field = await waitFor(() => {
+      const node = within(view).getByTestId('body-editor').querySelector('[contenteditable]');
+      if (node === null) throw new Error('редактор не встал');
+      return node as HTMLElement & { editor: Editor };
+    });
+    let at = -1;
+    field.editor.state.doc.descendants((node, pos) => {
+      if (at === -1 && node.isText && node.text === 'левая часть') at = pos + node.text.length;
+    });
+    act(() => {
+      field.editor.commands.insertContentAt(at, tail);
+    });
+  }
+
+  test('досыл упал сетью, текст черновиком на устройстве — «Готово» уходит с тостом; черновик переживает уход и возврат', async () => {
+    idleNever();
+    let offline = true;
+    const { calls } = open(
+      asScreen(dashboard()),
+      [secondProject()],
+      bodyServer({ offline: () => offline }),
+    );
+    await screen.findByTestId('page-columns');
+    await choose('Настроить');
+    const view = await screen.findByTestId('configure-view');
+    await waitFor(() => expect(within(view).getByText('левая часть')).toBeInTheDocument());
+    await editUnsentOffline(view, ' ХВОСТ');
+    const updates = () => calls.filter((c) => c.path === 'entity.update');
+    const done = () => within(view).getByRole('button', { name: 'Готово' });
+    const toasts = () => useToastStore.getState().toasts.map((t) => t.title);
+
+    // Первая попытка: досыла ещё не пробовали — держим, как `settleBody`.
+    fireEvent.click(done());
+    expect(toasts()).toContain(BODY_SAVING);
+    expect(screen.getByTestId('configure-view')).toBe(view);
+    await waitFor(() => expect(updates()).toHaveLength(1));
+    expect(await within(view).findByTestId('save-indicator')).toHaveTextContent('Не сохранено');
+
+    // Досыл упал сетью, текст на диске — уход разрешён, человеку сказано, где текст.
+    useToastStore.setState({ toasts: [] });
+    fireEvent.click(done());
+    expect(toasts()).toEqual([BODY_OFFLINE]);
+    await screen.findByTestId('page-columns');
+    expect(screen.queryByTestId('configure-view')).toBeNull();
+    expect(JSON.stringify(readDraft(PAGE)?.doc)).toContain('ХВОСТ');
+
+    // Возврат в настройку: черновик на месте и досылается сам, как только связь есть.
+    await waitFor(() => expect(updates().length).toBeGreaterThanOrEqual(2));
+    offline = false;
+    const before = updates().length;
+    await choose('Настроить');
+    await screen.findByTestId('configure-view');
+    await waitFor(() => expect(updates().length).toBeGreaterThan(before));
+    expect(JSON.stringify(updates().at(-1)?.input)).toContain('ХВОСТ');
   });
 });

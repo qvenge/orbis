@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Button } from '../../../ui/Button';
+import { Card as CardBox } from '../../../ui/Card';
 import type { ChatMessage } from '../useChatThread';
 import { ConfirmationCard } from './ConfirmationCard';
 import { DeferredActionCard } from './DeferredActionCard';
@@ -22,7 +23,23 @@ type FastPathMeta = { entityId?: string; text: string; status: 'confirmed' | 'pe
 export type CardHandlers = {
   onRetry?: (args: { errorMessageId: string; id: string; content: string }) => void;
   onReparse?: (entityId: string, text: string) => void;
+  /**
+   * Лента только для чтения — тред записи в предпросмотре шаблона (1а новое-5): карточки без
+   * действий. «Отменить», «Подтвердить», «Запомнить», ответ на вопрос, решение предложения и
+   * отложенного действия правили бы запись, взятую для примера; текст карточки остаётся.
+   */
+  readOnly?: boolean;
 };
+
+/** Карточка ленты только для чтения: что было предложено или спрошено — без жестов решения. */
+function ReadOnlyCard({ kind, title, text }: { kind: string; title: string; text?: string }) {
+  return (
+    <CardBox data-testid="card-readonly" data-card={kind} className="flex flex-col gap-1">
+      <p className="font-medium text-sm">{title}</p>
+      {text !== undefined && text !== '' && <p className="text-text-secondary text-xs">{text}</p>}
+    </CardBox>
+  );
+}
 
 type CardsMeta = {
   cards?: Card[];
@@ -119,14 +136,20 @@ type CardCtx = {
  */
 function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
   const { msg, meta, handlers, confirmed } = ctx;
+  const readOnly = handlers.readOnly === true;
   switch (card.kind) {
     case 'entity_card':
-      return <EntityCard key={i} card={card} confirmed={confirmed} />;
+      return <EntityCard key={i} card={card} confirmed={confirmed} readOnly={readOnly} />;
     case 'query_result':
       return <QueryResultCard key={i} card={card} />;
     case 'confirmation_card':
-      return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} />;
+      return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} readOnly={readOnly} />;
     case 'proposal_card':
+      if (readOnly) {
+        return (
+          <ReadOnlyCard key={i} kind={card.kind} title={card.summary} text={card.explanation} />
+        );
+      }
       // V1.6: содержимое карточка читает с сервера (routine.proposal) — поля сообщения были
       // бы снимком момента отправки, а решают предложение и позже, и с другого экрана.
       // Из сообщения едет только АДРЕС: `pendingId` — какое предложение эта карточка
@@ -143,6 +166,15 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
       );
     case 'deferred_action_card':
     case 'question_card':
+      if (readOnly) {
+        return (
+          <ReadOnlyCard
+            key={i}
+            kind={card.kind}
+            title={card.kind === 'question_card' ? card.question : card.summary}
+          />
+        );
+      }
       // D42 §7: единицы «Пачки решений». ТЕКСТ карточка берёт из сообщения (он неизменяем —
       // предусловия и вопрос снимаются один раз), а СУДЬБУ читает с сервера сама
       // (`routine.runUnits`, Р-10): пачку решают и позже, и с экрана прогона, и её гасит
@@ -160,6 +192,7 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
       // его текст несёт content сообщения (см. types.ts).
       // msg.id — ключ детерминированного id создаваемого правила (идемпотентность
       // «Запомнить» между монтированиями), msg.createdAt — 24ч visual-expiry.
+      if (readOnly) return <ReadOnlyCard key={i} kind={card.kind} title={card.ruleText} />;
       return <MemoryRuleCard key={i} card={card} messageId={msg.id} createdAt={msg.createdAt} />;
     case 'error_card':
       // §3: retryId+retryText есть → «Повторить» снимет этот error_card и перешлёт тем же id.

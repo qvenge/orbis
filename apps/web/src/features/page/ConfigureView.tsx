@@ -5,7 +5,7 @@ import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
-import { settleBody } from '../entity-detail/body-gate';
+import { leaveBody } from '../entity-detail/body-gate';
 import { bodyKindOf, EntityBody, useBodyScreen } from '../entity-detail/EntityBody';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { TemplateBanner, templateForOf } from './TemplateBanner';
@@ -20,7 +20,8 @@ import { TemplateBanner, templateForOf } from './TemplateBanner';
  * Неотправленная правка (пауза набора, сохранение в полёте, отказ сервера) держит и «Готово», и
  * уход с экрана — «назад», смену записи, вкладку (страж ухода `registerLeaveGuard`): тело досылается
  * сейчас же, человек видит тост и повторяет жест. Досыл на размонтировании (`useBodySave`) об отказе
- * молчал бы — плашки тела к тому времени уже ушли вместе с видом (остаток 1а №86).
+ * молчал бы — плашки тела к тому времени уже ушли вместе с видом (остаток 1а №86). Без связи уход
+ * разрешён, когда текст лежит черновиком на устройстве (`leaveBody`, рулинг R-5).
  *
  * Запись настройки — своим `entity.get` под ключом экрана записи (`detailGetInput`): у страницы,
  * настраиваемой со своего экрана, это ТОТ ЖЕ запрос из кеша, второго нет; у шаблона, открытого
@@ -35,13 +36,13 @@ export function ConfigureView({ targetId, onDone }: { targetId: string; onDone: 
   // запись, обязаны знать о неотправленной правке и здесь (финальное ревью, F-I1).
   const { bodyGate } = useBodyScreen();
   const { show } = useToast();
-  useEffect(() => registerLeaveGuard(() => settleBody(bodyGate.current, show)), [bodyGate, show]);
+  useEffect(() => registerLeaveGuard(() => leaveBody(bodyGate.current, show)), [bodyGate, show]);
   const entity = get.data?.entity;
   const done = (
     <Button
       size="sm"
       onClick={() => {
-        if (settleBody(bodyGate.current, show)) onDone();
+        if (leaveBody(bodyGate.current, show)) onDone();
       }}
     >
       Готово

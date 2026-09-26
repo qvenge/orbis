@@ -35,7 +35,8 @@ export function ChatThread({ threadId }: { threadId: string }) {
 
 /**
  * Лента треда только для чтения — предпросмотр шаблона на чужой записи (1а новое-5): сообщения и
- * подгрузка старых есть, поля ввода, повтора отправки и чипов-продолжений нет. Тред не заводится
+ * подгрузка старых есть, поля ввода, повтора отправки, чипов-продолжений и действий карточек
+ * («Отменить», «Подтвердить», ответы и решения — `CardHandlers.readOnly`) нет. Тред не заводится
  * (`chat.ensureThread` — мутация): у треда, который не открывали, строки нет, и лента честно пуста.
  */
 export function ChatFeed({ threadId }: { threadId: string }) {
@@ -50,7 +51,12 @@ export function ChatFeed({ threadId }: { threadId: string }) {
       {isLoading ? (
         <ThreadSkeleton />
       ) : (
-        <MessageList messages={messages} isTyping={false} emptyHint="Обсуждение этой записи" />
+        <MessageList
+          messages={messages}
+          isTyping={false}
+          emptyHint="Обсуждение этой записи"
+          readOnly
+        />
       )}
     </div>
   );

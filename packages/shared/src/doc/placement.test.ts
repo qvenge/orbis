@@ -171,6 +171,16 @@ describe('bodyIssues — второй блок карточек (SECOND_BLOCK, 1
     expect(issues(text, 'page').map((i) => i.code)).toEqual(['PART_COUNT']);
   });
 
+  test('в ШАБЛОНЕ повтор одинаковым текстом — шаблон «не разобран» с причиной «второй» (R-4, §5.8 1а)', () => {
+    // Правило 1а: любая проблема тела шаблона исключает шаблон целиком, причина — в плашке.
+    expect(templateBrokenReason('{{card: orbis/goal}}\n{{card: orbis/goal}}\n', REG)).toBe(
+      secondCardMessage('{{card: orbis/goal}}'),
+    );
+    expect(templateBrokenReason('{{cards}}\n{{cards}}\n', REG)).toBe(SECOND_CARDS_MESSAGE);
+    // Разные написания одного аспекта здесь не видны: их ловит рендерер, шаблон рисуется.
+    expect(templateBrokenReason('{{card: orbis/goal}}\n{{card: "Цель"}}\n', REG)).toBeNull();
+  });
+
   test('второй {{body}} — по-прежнему SECOND_BODY', () => {
     expect(issues('{{body}}\n{{body}}\n', 'template').map((i) => i.code)).toEqual(['SECOND_BODY']);
   });

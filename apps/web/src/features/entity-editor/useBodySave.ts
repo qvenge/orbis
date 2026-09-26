@@ -123,6 +123,14 @@ export interface BodySave {
    * фикс-волны, M-1). Новая правка поверх снимает признак — у неё уже своя метка.
    */
   blocked: () => boolean;
+  /**
+   * Неотправленное пережидает отсутствие связи на этом устройстве: досыл уже пробовали, и он упал
+   * СЕТЬЮ (не 409 и не отказ сервера по существу), а отложенный документ лежит черновиком на диске
+   * (тот самый, что восстановит следующее открытие записи). Нужен уходу с настройки (рулинг R-5):
+   * без связи страж ухода запирал бы экран — каждый «назад» снова досылал бы и снова падал, —
+   * хотя текст не под угрозой. Звать ПОСЛЕ `flush()`: досыл кладёт последний набор на диск.
+   */
+  keptOffline: () => boolean;
   state: BodySaveState;
   conflict: boolean;
   /**
@@ -781,6 +789,20 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   // следующий жест снова пробует досыл: если он опять упадёт 409, плашка вернётся вместе с запретом.
   const conflictRef = useRef(conflict);
   conflictRef.current = conflict;
+  const failureRef = useRef(failure);
+  failureRef.current = failure;
+  const keptOffline = useCallback((): boolean => {
+    if (failureRef.current !== 'network') return false;
+    // Пока висит предложение прошлого черновика (или черновик чужой версии), слот на диске
+    // занят НЕ этим набором — `save` его туда не пишет (см. там же).
+    if (pendingDraftRef.current !== null || foreignDraftRef.current !== null) return false;
+    const doc = pendingRef.current;
+    const stored = readDraft(entityId);
+    // На диске — ровно отложенный документ: хранилище могло и отказать (квота, приватный режим).
+    return (
+      doc !== null && stored !== null && stored.doc.v === doc.v && sameDoc(stored.doc.doc, doc.doc)
+    );
+  }, [entityId]);
   const blocked = useCallback(
     (): boolean =>
       stoppedRef.current ||
@@ -1006,6 +1028,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     flush,
     hasUnsent,
     blocked,
+    keptOffline,
     state:
       failure === 'terminal' ? 'rejected' : failure !== null ? 'error' : saving ? 'saving' : 'idle',
     conflict,

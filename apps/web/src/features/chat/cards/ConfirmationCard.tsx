@@ -14,9 +14,12 @@ export function ConfirmationCard({
   card,
   createdAt,
   now = Date.now(),
+  readOnly = false,
 }: {
   card: ConfirmationData;
   createdAt: string;
+  /** Лента только для чтения (предпросмотр шаблона): что спрошено — видно, решать нельзя. */
+  readOnly?: boolean;
   now?: number; // инъектируемое время (детерминизм тестов); по умолчанию — настенные часы
 }) {
   const [resolved, setResolved] = useState<null | 'approved' | 'rejected'>(null);
@@ -47,7 +50,7 @@ export function ConfirmationCard({
   const reject = trpc.ai.reject.useMutation({ onSuccess: () => setResolved('rejected') });
 
   const pendingId = card.pendingId;
-  const explicit = card.mode === 'explicit' && pendingId && !resolved;
+  const explicit = card.mode === 'explicit' && pendingId && !resolved && !readOnly;
   const disabled = expired || approve.isPending || reject.isPending;
 
   return (
