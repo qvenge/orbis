@@ -1,13 +1,17 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { lazy, Suspense } from 'react';
 import { expect, test, vi } from 'vitest';
 import { App } from '../App';
+import { reloadWithFreshWorker } from '../pwa/fresh-reload';
 import { useNav } from '../state/navigation';
 import { type MockHandler, renderWithProviders, wireEntity } from '../test/harness';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { installChunkReload } from './chunk-reload';
 import { ActiveScreen } from './router';
 import { ScreenFallback } from './ScreenFallback';
+
+// «Обновить» кадра ошибки — через свежий сервис-воркер (Л-5); механика — `pwa/fresh-reload.test.ts`.
+vi.mock('../pwa/fresh-reload', () => ({ reloadWithFreshWorker: vi.fn(() => Promise.resolve()) }));
 
 test('заглушка экрана показывает скелетон, а не текст «Загрузка…»', () => {
   render(<ScreenFallback />);
@@ -32,6 +36,18 @@ test('граница ошибок ловит провал рендера и да
   // Шапка на кадре ошибки — по той же причине, что и у заглушки: в standalone-PWA
   // системной кнопки «назад» нет, и без неё пользователь заперт на этом кадре.
   expect(screen.getByRole('heading', { name: '…' })).toBeInTheDocument();
+  err.mockRestore();
+});
+
+test('«Обновить» кадра ошибки — перезагрузка через свежий сервис-воркер (Л-5)', () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  render(
+    <ChunkErrorBoundary resetKey="budget/root">
+      <Boom />
+    </ChunkErrorBoundary>,
+  );
+  fireEvent.click(screen.getByTestId('chunk-reload'));
+  expect(reloadWithFreshWorker).toHaveBeenCalledTimes(1);
   err.mockRestore();
 });
 

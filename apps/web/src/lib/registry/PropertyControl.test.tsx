@@ -221,6 +221,25 @@ test('«Шаблон для»: выбор второго аспекта шлёт
   expect(onChange).toHaveBeenLastCalledWith(['orbis/schedule', 'orbis/task']);
 });
 
+test('выбранный аспект виден не только обводкой (Л-4): data-state и галочка у выбранного чипа', async () => {
+  const onChange = vi.fn();
+  renderWithProviders(
+    <PropertyControl def={def('orbis/template_for')} value={['orbis/task']} onChange={onChange} />,
+    withRegistry,
+  );
+  await screen.findByRole('checkbox', { name: 'Задача' });
+  const on = screen.getByText('Задача').closest('label');
+  const off = screen.getByText('Проект').closest('label');
+  if (on === null || off === null) throw new Error('чип аспекта — не метка');
+  expect(on).toHaveAttribute('data-state', 'on');
+  expect(on.querySelector('[data-testid="chip-check"]')).not.toBeNull();
+  expect(off).toHaveAttribute('data-state', 'off');
+  expect(off.querySelector('[data-testid="chip-check"]')).toBeNull();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Проект' }));
+  // `orbis/task` — rank 2, `orbis/project` — rank 9: порядок реестра.
+  expect(onChange).toHaveBeenLastCalledWith(['orbis/task', 'orbis/project']);
+});
+
 test('«Шаблон для» при minItems: 1 — последний аспект снять нельзя, есть подсказка (РП-27)', async () => {
   const onChange = vi.fn();
   renderWithProviders(

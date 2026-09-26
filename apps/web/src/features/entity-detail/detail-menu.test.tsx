@@ -5,21 +5,33 @@
  * видимый кадр ошибки экрана (`ChunkErrorBoundary`, с перезагрузкой), а не мёртвую кнопку; и
  * отказ не запоминается: следующий жест после возврата сети грузит меню заново.
  */
-import { act, fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ChunkErrorBoundary } from '../../app/ChunkErrorBoundary';
+import { invalidateGraph } from '../../lib/invalidate';
+import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import { installCrashTrap, renderWithProviders, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
+import { trpc } from '../../trpc';
 import { resetDetailMenuModuleForTests } from './DetailMenuSlot';
 import { DetailScreen } from './DetailScreen';
 
 /**
  * «Сеть»: пока `down`, загрузка модуля меню отказывает, как отказал бы `import()` чанка.
  * `attempts` — сколько раз модуль реально запрашивали: запомненный промис не запрашивает.
+ * `gate` — медленный чанк: загрузка модуля ждёт его, прежде чем отдать модуль (Л-1: нажатие,
+ * пришедшее до приезда чанка). По умолчанию разрешён — чанк приезжает сразу.
+ * `registryVersion` — версия реестра в ответе `entity.get` (смена версии посреди загрузки).
  */
-const network = vi.hoisted(() => ({ down: false, attempts: 0 }));
+const network = vi.hoisted(() => ({
+  down: false,
+  attempts: 0,
+  gate: Promise.resolve() as Promise<void>,
+  registryVersion: undefined as string | undefined,
+}));
 
 installCrashTrap();
 
@@ -28,11 +40,13 @@ const ENTITY_ID = '00000000-0000-4000-8000-000000000a01';
 beforeEach(() => {
   localStorage.clear();
   resetDetailMenuModuleForTests();
+  resetRegistryVersionForTests();
   // Мок — заново на каждый тест: реестр модулей vitest помнит УДАВШУЮСЯ загрузку, и без
   // перерегистрации второй тест получил бы меню из кеша прошлого — «сети нет» не проверялось бы.
   vi.doMock('./DetailMenu', async (importOriginal) => {
     network.attempts += 1;
     if (network.down) throw new Error('Failed to fetch dynamically imported module');
+    await network.gate;
     return importOriginal();
   });
   // Простой не наступает (тест «ничего до нажатия» ставит свой).
@@ -49,15 +63,25 @@ afterEach(() => {
   vi.restoreAllMocks();
   network.down = false;
   network.attempts = 0;
+  network.gate = Promise.resolve();
+  network.registryVersion = undefined;
 });
 
-/** Граница ошибок экрана, как в роутере; смена `resetKey` — уход с экрана и возврат. */
+/**
+ * Граница ошибок экрана, как в роутере; смена `resetKey` — уход с экрана и возврат.
+ * `refetch` — проба «граф поменялся» (мутация где-то ещё): перечитывание всех взглядов на граф,
+ * в том числе `entity.get` экрана, как после любой записи.
+ */
 function Screen() {
   const [visit, setVisit] = useState(0);
+  const utils = trpc.useUtils();
   return (
     <>
       <button type="button" data-testid="revisit" onClick={() => setVisit((v) => v + 1)}>
         снова
+      </button>
+      <button type="button" data-testid="refetch" onClick={() => invalidateGraph(utils)}>
+        перечитать
       </button>
       <ChunkErrorBoundary resetKey={`entity-${visit}`}>
         <DetailScreen entityId={ENTITY_ID} />
@@ -72,9 +96,22 @@ const handler = (path: string) => {
       entity: wireEntity({ id: ENTITY_ID, title: 'Задача', aspects: ['orbis/task'] }),
       relations: [],
       thread: null,
+      ...(network.registryVersion !== undefined && { registryVersion: network.registryVersion }),
     };
   return registryReply(path) ?? {};
 };
+
+/** Висящий медленный чанк меню: модуль приедет по `release()`. */
+function slowChunk(): () => void {
+  let release!: () => void;
+  network.gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return release;
+}
+
+const entityGets = (calls: { path: string }[]) =>
+  calls.filter((c) => c.path === 'entity.get').length;
 
 test('чанк меню не приехал: нажатие — кадр ошибки экрана; после возврата сети жест грузит меню заново', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -106,7 +143,7 @@ test('до нажатия чанк меню не запрашивается: р�
   // Фоновый import() запрещён правилом app/chunk-reload.ts: его провал перезагрузил бы страницу.
   expect(network.attempts).toBe(0);
   expect(screen.getByTestId('detail-menu')).toBe(button);
-  expect(button).not.toHaveAttribute('aria-haspopup');
+  expect(button).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('отказ форы на pointerdown молчит, click следом повторяет загрузку и открывает меню', async () => {
@@ -131,4 +168,33 @@ test('отказ форы на pointerdown молчит, click следом по
   expect(await screen.findByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
   // Click повторил загрузку: отказ форы не запомнен.
   expect(network.attempts).toBe(2);
+});
+
+test('нажатие до приезда чанка: рефетч entity.get и смена версии реестра посреди загрузки не теряют нажатие (Л-1)', async () => {
+  const release = slowChunk();
+  const user = userEvent.setup();
+  const { calls } = renderWithProviders(<Screen />, handler);
+  // Полная последовательность жеста: pointerdown → mousedown → pointerup → mouseup → click.
+  await user.click(await screen.findByTestId('detail-menu'));
+  const before = entityGets(calls);
+  // fireEvent, а не user: проба не должна уводить фокус с кнопки меню.
+  fireEvent.click(screen.getByTestId('refetch'));
+  network.registryVersion = 'v2';
+  act(() => noteRegistryVersion('v2'));
+  await waitFor(() => expect(entityGets(calls)).toBeGreaterThan(before));
+  release();
+  expect(await screen.findByRole('menu')).toBeInTheDocument();
+});
+
+test('кнопка меню — один узел от первого кадра: открытие и Escape её не подменяют, фокус возвращается ей (Л-1)', async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<Screen />, handler);
+  const button = await screen.findByTestId('detail-menu');
+  fireEvent.click(button);
+  await screen.findByRole('menu');
+  expect(screen.getByTestId('detail-menu')).toBe(button);
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  expect(screen.getByTestId('detail-menu')).toBe(button);
+  expect(document.activeElement).toBe(button);
 });

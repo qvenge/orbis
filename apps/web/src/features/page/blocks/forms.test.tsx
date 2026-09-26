@@ -119,6 +119,37 @@ test('table с columns: колонки свойств со значениями 
   expect(cells).toEqual(['Отчёт', '18 июл.', 'Высокий']);
 });
 
+test('table с columns=orbis/title|orbis/due_date: колонка заголовка одна (Л-3)', async () => {
+  for (const [columns, headers, titleAt] of [
+    ['orbis/title|orbis/due_date', ['Заголовок', 'Срок'], 0],
+    ['orbis/due_date|orbis/title', ['Срок', 'Заголовок'], 1],
+  ] as const) {
+    useNav.setState({
+      activeTab: 'browser',
+      stacks: { chat: [], browser: [], agenda: [], budget: [] },
+    });
+    const text = `aspect=orbis/task, display=table, columns=${columns}`;
+    const { unmount } = renderWithProviders(
+      <DataBlock text={text} />,
+      handler({ [text]: [task('Отчёт', { 'orbis/due_date': '2026-07-18' })] }),
+    );
+    const table = await screen.findByRole('table');
+    await waitFor(() =>
+      expect(
+        within(table)
+          .getAllByRole('columnheader')
+          .map((h) => h.textContent),
+      ).toEqual(headers),
+    );
+    const cell = within(table).getAllByRole('cell')[titleAt];
+    if (cell === undefined) throw new Error('нет ячейки заголовка');
+    // Колонка заголовка из `columns` — тот же вход в запись, что и постоянная «Название».
+    fireEvent.click(within(cell).getByRole('button', { name: 'Отчёт' }));
+    expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'Отчёт' });
+    unmount();
+  }
+});
+
 test('table с columns: core-свойство из полей строки, дата днём, ссылка названием (C1-I2)', async () => {
   const CATEGORY = '00000000-0000-4000-8000-000000000777';
   const text =

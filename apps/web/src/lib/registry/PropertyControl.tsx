@@ -17,6 +17,7 @@ import {
   OWNER_LOCALE,
   type PropertyDefinition,
 } from '@orbis/shared';
+import { Check } from 'lucide-react';
 import { useState } from 'react';
 import { EntityRef } from '../entity-ref/EntityRef';
 import { RefField } from '../entity-ref/RefField';
@@ -323,10 +324,14 @@ export function AspectsManyControl({
         const on = chosen.includes(a.id);
         const locked = on && atFloor;
         return (
+          // Выбранный чип виден не одной обводкой (Л-4 живой приёмки 1а: тонкую рамку глаз не
+          // различал) — заливкой и галочкой; `data-state` — тот же признак для тестов и стилей.
+          // Чекбокс спрятан (`sr-only`), поэтому видимый фокус несёт метка.
           <label
             key={a.id}
-            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition ${
-              on ? 'border-accent text-accent' : 'border-line text-text-muted'
+            data-state={on ? 'on' : 'off'}
+            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/50 ${
+              on ? 'border-accent bg-accent/10 text-accent' : 'border-line text-text-muted'
             } ${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <input
@@ -336,6 +341,7 @@ export function AspectsManyControl({
               disabled={locked}
               onChange={() => toggle(a.id)}
             />
+            {on && <Check size={12} aria-hidden data-testid="chip-check" />}
             {effectiveLabel(a.label, OWNER_LOCALE)}
           </label>
         );

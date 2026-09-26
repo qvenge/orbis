@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { DropdownMenu, type DropdownMenuItem } from '../../ui/DropdownMenu';
+import type { LazyMenuControl } from '../../ui/LazyMenuSlot';
 import { useToast } from '../../ui/toast-store';
 import { ChangeViewDialog } from '../page/ChangeViewDialog';
 import { type ChangeViewPlan, changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from '../page/change-view';
@@ -26,7 +27,6 @@ import { TemplateForDialog } from '../page/TemplateForDialog';
 import type { PageTemplates } from '../page/usePageTemplates';
 import { type UpdateBatchOperation, useUpdateBatch } from '../page/useUpdateBatch';
 import type { BodyGateRef } from './EntityBody';
-import { MenuTrigger } from './MenuTrigger';
 import type { WireEntity } from './record-host';
 
 /**
@@ -62,7 +62,9 @@ export type DetailMenuView =
  * «Скопировать ссылку» третьей кнопкой сделал бы шапку панелью инструментов, а на узком
  * экране — очередью иконок поверх заголовка. Теперь это настоящее меню, действия внутри.
  *
- * Модуль ЛЕНИВЫЙ (`DetailMenuSlot`, грузится нажатием): дерево Radix-меню (menu, popper,
+ * Модуль ЛЕНИВЫЙ (`DetailMenuSlot` → `ui/LazyMenuSlot`, грузится нажатием): кнопку «⋯» рисует
+ * эагерный слот, здесь — только всплывающий список, его пункты и диалоги; «открыто» держит слот
+ * (`LazyMenuControl`). Дерево Radix-меню (menu, popper,
  * floating-ui) — ≈7,7 кБ gzip чанка экрана записи, а нужно оно только после жеста. Статический импорт этого файла вернул бы
  * вес в первый кадр каждого открытия записи (сторож — `scripts/check-lazy-chunks.ts`). По той же
  * причине здесь, а не в экране, живут пункты страниц (§8.4), их диалоги и разбор шаблона.
@@ -128,11 +130,10 @@ export function DetailMenu({
   entity,
   view,
   bodyGate,
-  defaultOpen,
-}: DetailMenuProps & {
-  /** Меню монтируется жестом открытия (`DetailMenuSlot`) — и встаёт уже открытым. */
-  defaultOpen: boolean;
-}) {
+  open,
+  onOpenChange,
+  anchorRef,
+}: DetailMenuProps & LazyMenuControl) {
   const runBatch = useUpdateBatch();
   const { show } = useToast();
   const [dialog, setDialog] = useState<MenuDialog>(null);
@@ -372,7 +373,7 @@ export function DetailMenu({
 
   return (
     <>
-      <DropdownMenu defaultOpen={defaultOpen} trigger={<MenuTrigger />} items={items} />
+      <DropdownMenu open={open} onOpenChange={onOpenChange} anchorRef={anchorRef} items={items} />
       {dialog?.kind === 'change-view' && dialog.entityId === entity.id && (
         <ChangeViewDialog
           reason={dialog.plan.reason}

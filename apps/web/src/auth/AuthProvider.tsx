@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
 import { setDraftScope } from '../features/entity-editor/draft-storage';
+import { reloadWithFreshWorker } from '../pwa/fresh-reload';
 import { setRetryScope } from '../state/retry';
 import { onClientOutdated, onUnauthorized } from './events';
 import { LoginScreen } from './LoginScreen';
@@ -68,7 +69,8 @@ export function UpdateRequiredScreen() {
       <button
         type="button"
         className="rounded-control bg-accent px-4 py-2 text-accent-foreground"
-        onClick={() => location.reload()}
+        // Не голый reload: под старым сервис-воркером он отдаёт старый прекеш (Л-5, pwa/fresh-reload).
+        onClick={() => void reloadWithFreshWorker()}
       >
         Обновить
       </button>

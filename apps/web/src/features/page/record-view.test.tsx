@@ -407,6 +407,48 @@ describe('спор и память (§4.3)', () => {
     expect(screen.queryByTestId('dispute-plaque')).toBeNull();
   });
 
+  test('выбор в споре: экран сразу на выбранном шаблоне, не дожидаясь перечитывания списка (Л-2)', async () => {
+    const world = disputeWorld();
+    let listCalls = 0;
+    openRecord(fixture('project-task'), world, {
+      // Перечитывание списка после записи висит: экран обязан переключиться без него.
+      over: (path, input) => {
+        if (!isTemplatesList(path, input)) return undefined;
+        listCalls += 1;
+        return listCalls >= 2 ? new Promise(() => {}) : undefined;
+      },
+    });
+    await waitFor(() => expect(renderedTexts()).toContain('Вид проекта A'));
+    const plaque = screen.getByTestId('dispute-plaque');
+    fireEvent.click(within(plaque).getByRole('button', { name: 'Шаблон задачи' }));
+    await waitFor(() => expect(renderedTexts()).toContain('Вид задачи B'));
+    expect(screen.queryByTestId('dispute-plaque')).toBeNull();
+  });
+
+  test('отказ пачки выбора: патч откатывается — экран на A, плашка снова с кнопками (Л-2)', async () => {
+    const world = disputeWorld();
+    let listCalls = 0;
+    openRecord(fixture('project-task'), world, {
+      over: (path, input) => {
+        if (path === 'entity.updateBatch') throw trpcError('INTERNAL_SERVER_ERROR');
+        // Перечитывание после отказа висит: экран возвращает ОТКАТ, а не приехавший список.
+        if (!isTemplatesList(path, input)) return undefined;
+        listCalls += 1;
+        return listCalls >= 2 ? new Promise(() => {}) : undefined;
+      },
+    });
+    await waitFor(() => expect(renderedTexts()).toContain('Вид проекта A'));
+    fireEvent.click(
+      within(screen.getByTestId('dispute-plaque')).getByRole('button', { name: 'Шаблон задачи' }),
+    );
+    expect(await screen.findByText('Не удалось запомнить выбор шаблона')).toBeInTheDocument();
+    await waitFor(() => expect(renderedTexts()).toContain('Вид проекта A'));
+    const plaque = screen.getByTestId('dispute-plaque');
+    const buttons = within(plaque).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Шаблон проекта', 'Шаблон задачи']);
+    for (const b of buttons) expect(b).not.toBeDisabled();
+  });
+
   test('в «Главнее, чем» B — архивный шаблон: запись выбора его вычищает (РП-21)', async () => {
     const world = disputeWorld([ARCHIVED_TPL]);
     const { calls } = openRecord(fixture('project-task'), world);

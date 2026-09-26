@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DetailMenu, DetailMenuProps } from './DetailMenu';
+import { LazyMenuSlot } from '../../ui/LazyMenuSlot';
+import type { DetailMenuProps } from './DetailMenu';
 import { MenuTrigger } from './MenuTrigger';
 
 /**
@@ -27,67 +27,21 @@ export function resetDetailMenuModuleForTests(): void {
   menuModule = null;
 }
 
-/** Клавиши, которыми Radix открывает меню (`DropdownMenu.Trigger`); Enter и пробел — ещё и click. */
-const OPEN_KEYS = new Set(['Enter', ' ', 'ArrowDown']);
+/** Загрузчик содержимого слота — модульная константа: одна ссылка на функцию на всё приложение. */
+const loadDetailMenu = () => loadMenu().then((m) => m.DetailMenu);
 
 /**
- * Кнопка меню ⋮, эагерная: видна и нажимаема с первого кадра, а само меню грузится НАЖАТИЕМ.
- *
- * Прогрева нет — ни в простое, ни по наведению, ни по фокусу, и это не упущение: фоновый
- * `import()` запрещён правилом `app/chunk-reload.ts` (докблок «ОСТОРОЖНО с фоновой догрузкой»).
- * Vite шлёт `vite:preloadError` на ЛЮБОЙ провал `import()`, и `chunk-reload` перезагружает страницу
- * — человеку, который ничего не нажимал, вместе с недописанным текстом. Цена — один запрос
- * (≈9 кБ gzip) при первом открытии меню за сессию.
- *
- * Загрузка начинается с `pointerdown` (фора до click) или с клавиши открытия; меню монтируется
- * открытым по click или клавише, когда модуль готов, — нажатие не теряется. До этого узел кнопки
- * не меняется: заглушка, сменённая между pointerdown и click, забрала бы click с собой, а сменённая
- * под фокусом — фокус. Открытое меню Radix уводит фокус в свои пункты и при закрытии возвращает
- * его своему триггеру.
- *
- * Отказ загрузки на нажатие — из рендера к границе ошибок экрана (`ChunkErrorBoundary`: кадр
- * «Не удалось открыть экран» с перезагрузкой, как давал `React.lazy`); следующее нажатие (после
- * возврата на экран) грузит заново.
+ * Кнопка меню ⋮ экрана записи: тонкая обёртка над общей механикой ленивого меню
+ * (`ui/LazyMenuSlot`, форма РП-13). Кнопка — один узел от первого кадра, «открыто» держит слот,
+ * ленивый чанк несёт только всплывающий список с пунктами и диалогами (`DetailMenu`). Прогрев,
+ * клавиши открытия и отказ загрузки — там же, в механике.
  */
 export function DetailMenuSlot(props: DetailMenuProps) {
-  // В обёртке: сам компонент — функция, и голую функцию `useState` принял бы за обновитель.
-  const [loaded, setLoaded] = useState<{ Menu: typeof DetailMenu } | null>(null);
-  const [loadError, setLoadError] = useState<{ error: unknown } | null>(null);
-  const aliveRef = useRef(true);
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => {
-      aliveRef.current = false;
-    };
-  }, []);
-
-  /** Жест открытия: смонтировать меню открытым, когда модуль готов. */
-  const open = useCallback(() => {
-    loadMenu().then(
-      (m) => {
-        if (aliveRef.current) setLoaded((prev) => prev ?? { Menu: m.DetailMenu });
-      },
-      (error: unknown) => {
-        if (aliveRef.current) setLoadError({ error });
-      },
-    );
-  }, []);
-
-  if (loadError !== null) throw loadError.error;
-  if (loaded !== null) return <loaded.Menu {...props} defaultOpen />;
   return (
-    <MenuTrigger
-      // Фора загрузке — с первого касания, до click. Её отказ молчит: click следом повторит
-      // загрузку и, откажи она снова, скажет об этом сам.
-      onPointerDown={() => {
-        loadMenu().catch(() => {});
-      }}
-      onClick={open}
-      onKeyDown={(e) => {
-        if (!OPEN_KEYS.has(e.key)) return;
-        e.preventDefault();
-        open();
-      }}
+    <LazyMenuSlot
+      load={loadDetailMenu}
+      menuProps={props}
+      renderTrigger={(t) => <MenuTrigger {...t} />}
     />
   );
 }

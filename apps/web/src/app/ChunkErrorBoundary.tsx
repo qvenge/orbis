@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react';
+import { reloadWithFreshWorker } from '../pwa/fresh-reload';
 import { Button } from '../ui/Button';
 import { ScreenHeader } from './ScreenHeader';
 
@@ -73,7 +74,12 @@ export class ChunkErrorBoundary extends Component<Props, State> {
         <ScreenHeader title="…" />
         <div role="alert" className="flex flex-col items-center gap-3 p-6 text-sm text-danger">
           <span>Не удалось открыть экран</span>
-          <Button variant="outline" data-testid="chunk-reload" onClick={() => location.reload()}>
+          {/* Не голый reload: под старым сервис-воркером он отдаёт старый прекеш (Л-5). */}
+          <Button
+            variant="outline"
+            data-testid="chunk-reload"
+            onClick={() => void reloadWithFreshWorker()}
+          >
             Обновить
           </Button>
         </div>

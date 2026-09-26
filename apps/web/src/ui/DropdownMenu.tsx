@@ -1,5 +1,6 @@
 import { DropdownMenu as RDM } from 'radix-ui';
 import type { ReactNode } from 'react';
+import type { LazyMenuControl } from './LazyMenuSlot';
 
 /**
  * Пункт меню. `label` — не только подпись, но и доступное имя пункта: меню читают
@@ -18,34 +19,44 @@ export type DropdownMenuItem = {
 };
 
 /**
- * Выпадающее меню (Radix). Триггер приходит целиком снаружи через `asChild` — так
- * примитив не решает за экран, как выглядит кнопка и какие у неё `aria-label`/testid,
- * и остаётся ровно тем, чем он есть: структурой «кнопка → всплывающий список действий».
+ * Выпадающее меню (Radix) в управляемой форме: «открыто» держит хозяин (`LazyMenuSlot`), кнопку
+ * рисует тоже он. Меню живёт только в ленивых чанках (Radix — самый крупный кусок меню), а кнопка
+ * эагерная и стоит на экране с первого кадра — поэтому триггер Radix ей отдать нельзя, и список
+ * позиционируется от невидимого двойника кнопки (см. ниже).
  *
  * Меню намеренно бедное: только плоский список пунктов. Подменю, чекбоксы и радиогруппы
  * Radix умеет, но заводить их «на будущее» здесь нечем оправдать — появится нужда,
  * появится и код.
  */
 export function DropdownMenu({
-  trigger,
   items,
-  defaultOpen,
-}: {
-  trigger: ReactNode;
-  items: DropdownMenuItem[];
-  /**
-   * Открыто ли меню при монтировании. Нужно меню, которое грузится лениво (меню ⋮ экрана записи):
-   * жест, пришедший до загрузки, не должен пропасть — меню встаёт уже открытым.
-   */
-  defaultOpen?: boolean;
-}) {
+  open,
+  onOpenChange,
+  anchorRef,
+}: { items: DropdownMenuItem[] } & LazyMenuControl) {
   return (
-    <RDM.Root {...(defaultOpen !== undefined && { defaultOpen })}>
-      <RDM.Trigger asChild>{trigger}</RDM.Trigger>
+    <RDM.Root open={open} onOpenChange={onOpenChange}>
+      <RDM.Trigger asChild>
+        {/* Radix позиционирует список от своего Trigger. Кнопку слота отдать ему нельзя: она
+            эагерная, а Radix — в ленивом чанке. Двойник накрывает обёртку слота (absolute
+            inset-0) — прямоугольник тот же, жесты идут в кнопку. */}
+        <span
+          aria-hidden
+          tabIndex={-1}
+          data-testid="menu-anchor"
+          className="pointer-events-none absolute inset-0"
+        />
+      </RDM.Trigger>
       <RDM.Portal>
         <RDM.Content
           align="end"
           sideOffset={6}
+          // Фокус при закрытии — стабильной кнопке слота, а не двойнику: двойник невидим и
+          // вне порядка табуляции, фокус на нём потерялся бы для клавиатуры.
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            anchorRef.current?.focus();
+          }}
           className="z-50 min-w-48 rounded-card border border-line bg-surface p-1 shadow-pop"
         >
           {items.map((item) => (

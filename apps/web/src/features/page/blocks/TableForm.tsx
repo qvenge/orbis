@@ -85,13 +85,16 @@ function FactsTable({ rows, registry }: { rows: readonly BlockRow[]; registry: R
   );
 }
 
+/** Свойство заголовка записи — ключ `CORE_FIELD` (константы ядра под него в `@orbis/shared` нет). */
+const TITLE_FIELD = 'orbis/title';
+
 /**
  * Core-свойства лежат в полях строки, а не в `props` (инвариант `CORE_IN_PROPS`: в `props` их не
  * бывает никогда) — зеркало `CORE_COLUMN` компилятора запросов. Без него колонка «Изменена»
  * показывала бы прочерк у каждой строки, то есть ложное «значения нет» (финальное ревью, C1-I2).
  */
 const CORE_FIELD: Readonly<Record<string, (row: BlockRow) => unknown>> = {
-  'orbis/title': (row) => row.title,
+  [TITLE_FIELD]: (row) => row.title,
   'orbis/created_at': (row) => row.createdAt,
   'orbis/updated_at': (row) => row.updatedAt,
   'orbis/archived': (row) => row.archived,
@@ -145,8 +148,10 @@ function ColumnCell({
 /**
  * `table` (спека страниц 1а §5.4, §7.2): с `columns` — колонки названных свойств, подпись — из
  * реестра, значение — по ТИПУ свойства (`ColumnCell`);
- * без `columns` — строка фактов (`FactsTable`). Первая колонка — название записи всегда: таблица
- * строк без имени строки не читается.
+ * без `columns` — строка фактов (`FactsTable`). Первая колонка — название записи, если `columns` не
+ * называет заголовок сам: таблица строк без имени строки не читается. Назвал — заголовок стоит на
+ * своём месте из `columns`, той же кнопкой-входом в запись, а постоянной колонки нет (Л-3: иначе
+ * «Название» и «Заголовок» шли двумя колонками одного и того же).
  */
 export function TableForm({
   rows,
@@ -158,11 +163,12 @@ export function TableForm({
   const registry = useRegistry();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
   if (columns === undefined) return <FactsTable rows={rows} registry={registry} />;
+  const titled = columns.some((c) => c.field === TITLE_FIELD);
   return (
     <table className="w-full text-sm">
       <thead className="text-text-muted text-xs">
         <tr>
-          <th className={CELL}>Название</th>
+          {!titled && <th className={CELL}>Название</th>}
           {columns.map((c) => (
             <th key={c.field} className={CELL}>
               {registry.label(c.field)}
@@ -173,10 +179,14 @@ export function TableForm({
       <tbody className="divide-y divide-line">
         {rows.map((e) => (
           <tr key={e.id} data-testid="qb-item">
-            <TitleCell row={e} />
-            {columns.map((c) => (
-              <ColumnCell key={c.field} field={c.field} row={e} registry={registry} tz={tz} />
-            ))}
+            {!titled && <TitleCell row={e} />}
+            {columns.map((c) =>
+              c.field === TITLE_FIELD ? (
+                <TitleCell key={c.field} row={e} />
+              ) : (
+                <ColumnCell key={c.field} field={c.field} row={e} registry={registry} tz={tz} />
+              ),
+            )}
           </tr>
         ))}
       </tbody>

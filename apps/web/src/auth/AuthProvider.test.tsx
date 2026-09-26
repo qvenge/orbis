@@ -1,13 +1,16 @@
 import { parseBody } from '@orbis/shared/doc';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 
 vi.mock('./supabase', () => ({
   auth: { signOut: vi.fn(), signInWithPassword: vi.fn() },
   useSession: vi.fn(),
 }));
+// «Обновить» — через свежий сервис-воркер (Л-5); сама механика — `pwa/fresh-reload.test.ts`.
+vi.mock('../pwa/fresh-reload', () => ({ reloadWithFreshWorker: vi.fn(() => Promise.resolve()) }));
 
 import { saveDraft } from '../features/entity-editor/draft-storage';
+import { reloadWithFreshWorker } from '../pwa/fresh-reload';
 import { AuthProvider, useAuth } from './AuthProvider';
 import { emitClientOutdated } from './events';
 import { useSession } from './supabase';
@@ -75,4 +78,16 @@ test('emitClientOutdated → экран «обновите приложение�
   act(() => emitClientOutdated());
   expect(screen.getByTestId('update-required')).toBeInTheDocument();
   expect(screen.queryByTestId('child')).not.toBeInTheDocument();
+});
+
+test('«Обновить» на экране «обновите приложение» — перезагрузка через свежий сервис-воркер (Л-5)', () => {
+  mockSession({ token: 'jwt', userId: 'u1', status: 'authed' });
+  render(
+    <AuthProvider>
+      <Child />
+    </AuthProvider>,
+  );
+  act(() => emitClientOutdated());
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+  expect(reloadWithFreshWorker).toHaveBeenCalledTimes(1);
 });
