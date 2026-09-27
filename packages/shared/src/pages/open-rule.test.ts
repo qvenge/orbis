@@ -133,6 +133,18 @@ describe('Р-20: запись-приложение открывает своё �
   });
 });
 
+describe('Р-20 и шаг 0 вместе', () => {
+  test('R — выключенное приложение, A — другое выключенное: две app-off, сначала A, потом R', () => {
+    const record = { id: ARCH, aspects: ['orbis/app'], home: null };
+    expect(chooseOpening(input({ record, app: at(OFF) }))).toEqual(
+      inHost(HOST_VIEW, [
+        { kind: 'app-off', appId: OFF, archived: false },
+        { kind: 'app-off', appId: ARCH, archived: true },
+      ]),
+    );
+  });
+});
+
 describe('Приложение в адресе: оболочка хоста, резерв, неизвестное (Фокус ревью п. 3)', () => {
   test('/a/<hostShellId> и /a/host-shell → хост без плашки, адрес нормализуется', () => {
     for (const ref of [SHELL, 'host-shell']) {
@@ -175,6 +187,23 @@ describe('Приложение в адресе: оболочка хоста, р�
     );
   });
 
+  test('среди записей с одним ключом поставки берётся живая, а не первая по списку', () => {
+    const apps = [
+      app('id-old', { supplyKey: 'my-home', archived: true }),
+      app(HOME, { supplyKey: 'my-home' }),
+    ];
+    const templates = [tpl('t-home', [T], HOME)];
+    expect(chooseOpening(input({ app: at('my-home'), apps, templates }))).toEqual(
+      inApp(HOME, view('t-home')),
+    );
+  });
+
+  test('alias оболочки + страница с домом → рамка дома, адрес заменён', () => {
+    expect(chooseOpening(input({ app: at(SHELL), record: page(HOME) }))).toEqual(
+      inApp(HOME, OWN, [], true),
+    );
+  });
+
   test('пустой вход тотален: ни приложений, ни шаблонов, ни оболочки — хост', () => {
     expect(
       chooseOpening({
@@ -211,7 +240,9 @@ describe('Шаг 0: A выключено или в архиве — хост + �
     );
   });
 
-  test('дальше как хост: одно приложение с шаблоном — туда, плашка A остаётся', () => {
+  // Пинит РЕШЕНИЕ, а не экран (R-25): плашка A есть в решении, вызвавшем замену адреса; после замены
+  // пересчёт для `/a/HOME/…` её уже не даёт — показать её до следующего перехода обязан web (задача 20).
+  test('дальше как хост: одно приложение с шаблоном — туда (redirect), плашка A — в этом решении', () => {
     const templates = [tpl('t-home', [T], HOME)];
     expect(chooseOpening(input({ app: at(OFF), templates }))).toEqual(
       inApp(HOME, view('t-home'), [{ kind: 'app-off', appId: OFF, archived: false }], true),
@@ -257,6 +288,12 @@ describe('Шаг 1: страница — своим телом в рамке с�
       inHost(OWN, [{ kind: 'app-unknown', ref: 'r-not-an-app' }]),
     );
     expect(chooseOpening(input({ record: page(SHELL) }))).toEqual(inHost(OWN));
+  });
+
+  test('неизвестный id и в адресе, и в «Доме» страницы — одна плашка app-unknown', () => {
+    expect(chooseOpening(input({ app: at('id-ghost'), record: page('id-ghost') }))).toEqual(
+      inHost(OWN, [{ kind: 'app-unknown', ref: 'id-ghost' }]),
+    );
   });
 
   test('страница при выключенном A: плашка A есть (шаг 0 раньше шага 1)', () => {
@@ -346,15 +383,20 @@ describe('Шаг 3: в A нет вида — шаблон хоста в рамк
     );
   });
 
-  test('единственный подходящий шаблон A сломан: шаблон хоста в рамке A, сломанный перечислен', () => {
-    const templates = [tpl('t-home', [T], HOME)];
+  test('единственный подходящий шаблон A сломан: шаблон хоста в рамке A, сломанный перечислен, no-view нет', () => {
+    // Подходящий в A есть (набор ⊆ аспекты) — это шаг 2 с правилом 1а «сломанный — следующий + плашка»,
+    // а не шаг 3 «в A подходящего нет» (R-26): плашку даёт `view.broken`.
+    const templates = [tpl('t-home', [T], HOME), tpl('t-proj', [T], PROJ)];
     expect(
       chooseOpening(input({ app: at(HOME), templates, isBroken: brokenIds('t-home') })),
-    ).toEqual(
-      inApp(HOME, { kind: 'host', broken: [{ id: 't-home', reason: 'сломан' }] }, [
-        { kind: 'no-view', appId: HOME, alternatives: [] },
-      ]),
-    );
+    ).toEqual(inApp(HOME, { kind: 'host', broken: [{ id: 't-home', reason: 'сломан' }] }));
+  });
+
+  test('альтернативы шага 3 включают приложение со сломанными подходящими шаблонами (R-26)', () => {
+    const templates = [tpl('t-home-note', [N], HOME), tpl('t-proj', [T], PROJ)];
+    expect(
+      chooseOpening(input({ app: at(HOME), templates, isBroken: brokenIds('t-proj') })),
+    ).toEqual(inApp(HOME, HOST_VIEW, [{ kind: 'no-view', appId: HOME, alternatives: [PROJ] }]));
   });
 });
 
@@ -383,11 +425,39 @@ describe('Шаг 4: из хоста — спор мест между прило�
     expect(chooseOpening(input({ templates: templates.slice(0, 2) }))).toEqual(inHost(HOST_VIEW));
   });
 
-  test('приложение, чьи подходящие шаблоны все сломаны, — вне P', () => {
+  test('приложение, чьи подходящие шаблоны все сломаны, — в P (R-26): спор мест не молчит о поломке', () => {
     const templates = [tpl('t-home', [T], HOME), tpl('t-proj', [T], PROJ)];
     expect(chooseOpening(input({ templates, isBroken: brokenIds('t-proj') }))).toEqual(
+      inHost(HOST_VIEW, [{ kind: 'place-dispute', contenders: [PROJ, HOME].sort() }]),
+    );
+    // Единственное приложение, и его шаблон сломан: туда — шаблон хоста в его рамке + плашка поломки.
+    expect(
+      chooseOpening(
+        input({ templates: [templates[0] as TemplateCandidate], isBroken: brokenIds('t-home') }),
+      ),
+    ).toEqual(
+      inApp(HOME, { kind: 'host', broken: [{ id: 't-home', reason: 'сломан' }] }, [], true),
+    );
+  });
+
+  test('запомнено «HOME вместо PROJ», шаблон HOME сломан → HOME с плашкой поломки, не молча в PROJ (R-26)', () => {
+    const apps = [app(HOME, { opensOver: [PROJ] }), app(PROJ)];
+    const templates = [tpl('t-home', [T], HOME), tpl('t-proj', [T], PROJ)];
+    expect(chooseOpening(input({ apps, templates, isBroken: brokenIds('t-home') }))).toEqual(
+      inApp(HOME, { kind: 'host', broken: [{ id: 't-home', reason: 'сломан' }] }, [], true),
+    );
+  });
+
+  test('оболочка хоста, попавшая в apps вопреки контракту, в P не входит (Р-28 п. 1)', () => {
+    const apps = [...APPS, app(SHELL, { supplyKey: 'host-shell' })];
+    const templates = [tpl('t-shell', [T], SHELL), tpl('t-home', [T], HOME)];
+    // Шаблон с «Дом» = оболочка — шаблон хоста; единственное место — HOME.
+    expect(chooseOpening(input({ apps, templates }))).toEqual(
       inApp(HOME, view('t-home'), [], true),
     );
+    expect(
+      placeContendersOf({ record: TASK, apps, hostShellId: SHELL, templates, isBroken: ok }),
+    ).toBeNull();
   });
 
   const TWO = [tpl('t-home', [T], HOME), tpl('t-proj', [T], PROJ)];
@@ -447,6 +517,17 @@ describe('placeContendersOf — P для «Сменить, где открыва
     expect(placeContendersOf({ ...base, templates: [T_HOME] })).toBeNull();
     expect(placeContendersOf({ ...base, templates: [] })).toBeNull();
     expect(placeContendersOf({ ...base, templates: [T_HOME, tpl('t-off', [T], OFF)] })).toBeNull();
+  });
+
+  test('сломанные шаблоны спорящих не выводят приложение из P (R-26)', () => {
+    const asked: string[] = [];
+    const isBroken = (id: string) => {
+      asked.push(id);
+      return 'сломан';
+    };
+    expect(placeContendersOf({ ...base, templates: TWO, isBroken })).toEqual([PROJ, HOME].sort());
+    // Для P разбор тел не нужен: подходящий — набор ⊆ аспекты.
+    expect(asked).toEqual([]);
   });
 
   test('страница и запись-приложение спора мест не имеют', () => {

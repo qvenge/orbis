@@ -81,15 +81,21 @@ const subset = (s: readonly string[], of: readonly string[]) => s.every((a) => o
 const earliest = (a: TemplateCandidate, b: TemplateCandidate) =>
   a.createdAt < b.createdAt || (a.createdAt === b.createdAt && a.id < b.id) ? a : b;
 
-/** Шаги 2 и 4: подходящие (S(t) ⊆ A(R), не сломанные) с наибольшим |S(t)| — это M. */
+/**
+ * Шаг 2: подходящий — непустой набор S(t) ⊆ A(R). Сломанность — отдельный шаг (7): подходящий
+ * сломанный шаблон остаётся подходящим. Общий с правилом открытия 1б — там «приложение с
+ * подходящим шаблоном» (спор мест, R-26) считается тем же словом.
+ */
+export const fitsSubject = (subject: ChoiceSubject, t: TemplateCandidate): boolean =>
+  t.forAspects.length > 0 && subset(t.forAspects, subject.aspects);
+
+/** Шаги 2 и 4: подходящие, ещё не исключённые как сломанные, с наибольшим |S(t)| — это M. */
 function largest(
   subject: ChoiceSubject,
   templates: readonly TemplateCandidate[],
   broken: ReadonlySet<string>,
 ) {
-  const fit = templates.filter(
-    (t) => t.forAspects.length > 0 && !broken.has(t.id) && subset(t.forAspects, subject.aspects),
-  );
+  const fit = templates.filter((t) => !broken.has(t.id) && fitsSubject(subject, t));
   const max = Math.max(0, ...fit.map((t) => t.forAspects.length));
   return fit.filter((t) => t.forAspects.length === max);
 }

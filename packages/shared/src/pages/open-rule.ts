@@ -18,12 +18,19 @@
  * | 0    | A выключено или в архиве                   | как хост               |                              | `app-off`               |
  * | Р-20 | R — выключенное или архивное приложение    | хост                   | шаблон владельца / хоста     | `app-off` R             |
  * | 1    | R — страница                               | дом (пуст — хост)      | своё тело                    | дом выкл. — `app-off`   |
- * | 2    | A — приложение, есть подходящий шаблон A   | A                      | шаблон A (правило 1а)        | спор/сломан — во `view` |
+ * | 2    | A — приложение, есть подходящий шаблон A   | A                      | шаблон A (правило 1а); все   | спор/сломан — во `view` |
+ * |      |                                            |                        | сломаны — шаблон хоста       |                         |
  * | 3    | A — приложение, подходящего нет            | A                      | шаблон хоста                 | `no-view` (P без A)     |
  * | 4    | A — хост: P пусто                          | хост                   | шаблон владельца / хоста     | —                       |
  * | 4    | P = одно, или запомненный победитель       | это приложение         | его шаблон                   | —                       |
  * | 4    | P ≥ 2 без выбора                           | хост                   | шаблон владельца / хоста     | `place-dispute` (РП-20) |
  * Шаг 5 (не отрисовался даже шаблон хоста → базовый вид) — забота рендерера.
+ *
+ * «Подходящий шаблон» — слово 1а: набор ⊆ аспекты записи (`fitsSubject`). Сломанность P не меняет
+ * (R-26): приложение, чьи подходящие шаблоны все сломаны, остаётся местом, а поломку показывает
+ * правило 1а уже внутри выбранного приложения (шаблон хоста в его рамке + плашка сломанного). Иначе
+ * запомненный выбор молча уходил бы к сопернику, и владелец не узнал бы ни о поломке, ни о том, что
+ * его выбор перестал действовать.
  *
  * Почему хост вне спора мест (Р-28 п. 1): хост — не место «для таких записей», а то, что остаётся,
  * когда ни одно приложение не подходит. Шаблоны владельца с пустым домом — запасной вид хоста, а не
@@ -35,6 +42,11 @@
  * добавляя шаг. Замены нет, когда рамка — хост из-за плашки шага 0 (выключено, резерв, неизвестно):
  * адрес держит плашку — «включить» обязано вернуть владельца в то самое приложение. Оболочка хоста в
  * адресе — синоним хоста, её адрес заменяется каноническим всегда.
+ *
+ * Плашки шага 0 при `redirect:true` (A выключено, а шаг 1 или 4 увёл в другое приложение — буква
+ * §5.2: «дальше — как A = хост», «одно → сразу туда»; R-25) живут в решении, вызвавшем замену:
+ * пересчёт для заменённого адреса их уже не даст. Показать их до следующего перехода — забота web
+ * (задача 20); функция остаётся функцией адреса.
  */
 import { PAGE_ASPECT } from '../constants';
 import type { Address, AppRef } from '../nav/address';
@@ -42,6 +54,7 @@ import { RESERVED_APP_KEYS } from '../supply/etalons';
 import {
   type ChoiceSubject,
   chooseTemplate,
+  fitsSubject,
   type TemplateCandidate,
   type TemplateChoice,
   winnerAmong,
@@ -67,7 +80,7 @@ export interface OpenInput {
 export type OpenPlaque =
   | { kind: 'app-off'; appId: string; archived: boolean } // выключено — [включить], в архиве — [восстановить] (Э-20)
   | { kind: 'reserved'; key: 'budget' } // /a/budget — «придёт со следующим срезом», без «включить»
-  | { kind: 'app-unknown'; ref: string } // адрес на не-приложение или не найдено
+  | { kind: 'app-unknown'; ref: string } // приложение не найдено или не приложение: из адреса ИЛИ из «Дома» страницы
   | { kind: 'no-view'; appId: string; alternatives: readonly string[] } // шаг 3
   | { kind: 'place-dispute'; contenders: readonly string[] }; // шаг 4, ≥2 без выбора (РП-20)
 export interface OpenDecision {
@@ -148,24 +161,14 @@ function redirectOf(frame: Frame, place: AddressPlace): boolean {
   }
 }
 
-/** Плашка «приложение X выключено» одна, даже если X — и A адреса, и дом страницы. */
-function pushPlaque(plaques: OpenPlaque[], p: OpenPlaque): void {
-  if (p.kind === 'app-off' && plaques.some((q) => q.kind === 'app-off' && q.appId === p.appId)) {
-    return;
-  }
-  plaques.push(p);
+/** Одно приложение — одна плашка, даже если X — и A адреса, и дом страницы (выключено или не найдено). */
+function samePlaque(a: OpenPlaque, b: OpenPlaque): boolean {
+  if (a.kind === 'app-off' && b.kind === 'app-off') return a.appId === b.appId;
+  if (a.kind === 'app-unknown' && b.kind === 'app-unknown') return a.ref === b.ref;
+  return false;
 }
-
-/** Разбор шаблона — работа рендерера (разбор тела); за одно решение каждый шаблон спрашивается раз. */
-function memo(isBroken: (id: string) => string | null): (id: string) => string | null {
-  const seen = new Map<string, string | null>();
-  return (id) => {
-    const hit = seen.get(id);
-    if (hit !== undefined || seen.has(id)) return hit ?? null;
-    const reason = isBroken(id);
-    seen.set(id, reason);
-    return reason;
-  };
+function pushPlaque(plaques: OpenPlaque[], p: OpenPlaque): void {
+  if (!plaques.some((q) => samePlaque(q, p))) plaques.push(p);
 }
 
 /** Шаблоны хоста — шаблоны владельца с пустым домом; «Дом» = оболочка хоста правило каталога запрещает, но читается как хост. */
@@ -175,21 +178,18 @@ const templatesOf = (input: Omit<OpenInput, 'app'>, appId: string) =>
   input.templates.filter((t) => t.home === appId);
 
 /**
- * P — включённые неархивные приложения с подходящим шаблоном (§5.2 шаг 4). «Подходящий» — как в 1а:
- * набор ⊆ аспектов и не сломан; приложение, чьи подходящие шаблоны все сломаны, показало бы
- * запись шаблоном хоста — отправлять туда незачем. Хоста в P нет (Р-28 п. 1). Порядок — по id:
- * плашка и меню детерминированы.
+ * P — включённые неархивные приложения с подходящим шаблоном (§5.2 шаг 4). Подходящий — набор ⊆
+ * аспектов, без разбора тел (R-26, см. докблок модуля). Хоста в P нет (Р-28 п. 1) — и оболочки хоста
+ * тоже, даже если вызывающий вопреки контракту передал её в `apps`: шаблоны с «Дом» = оболочка
+ * читаются как шаблоны хоста. Порядок — по id: плашка и меню детерминированы.
  */
-function placesOf(
-  input: Omit<OpenInput, 'app'>,
-  subject: ChoiceSubject,
-  isBroken: (id: string) => string | null,
-): AppInfo[] {
+function placesOf(input: Omit<OpenInput, 'app'>, subject: ChoiceSubject): AppInfo[] {
   return input.apps
     .filter(
       (a) =>
         isLive(a) &&
-        chooseTemplate(subject, templatesOf(input, a.id), isBroken).kind === 'template',
+        a.id !== input.hostShellId &&
+        templatesOf(input, a.id).some((t) => fitsSubject(subject, t)),
     )
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
@@ -204,7 +204,7 @@ function appRecordTarget(
 }
 
 export function chooseOpening(input: OpenInput): OpenDecision {
-  const isBroken = memo(input.isBroken);
+  const isBroken = input.isBroken;
   const subject: ChoiceSubject = { aspects: input.record.aspects };
 
   // Перед шагами §5.2 — «R — запись-приложение» (Р-20): ссылка на приложение открывает приложение,
@@ -252,7 +252,7 @@ export function chooseOpening(input: OpenInput): OpenDecision {
     if (home === null || home === input.hostShellId) return done(HOST_FRAME, { kind: 'own-body' });
     const h = input.apps.find((a) => a.id === home);
     if (h === undefined) {
-      plaques.push({ kind: 'app-unknown', ref: home });
+      pushPlaque(plaques, { kind: 'app-unknown', ref: home });
       return done(HOST_FRAME, { kind: 'own-body' });
     }
     if (!isLive(h)) {
@@ -266,10 +266,15 @@ export function chooseOpening(input: OpenInput): OpenDecision {
     // Шаг 2: внутри A — правило 1а по шаблонам A (чужие шаблоны и шаблоны владельца не участвуют).
     const a = place.app;
     const frame: Frame = { kind: 'app', id: a.id };
-    const choice = chooseTemplate(subject, templatesOf(input, a.id), isBroken);
-    if (choice.kind === 'template') return done(frame, choice);
+    const own = templatesOf(input, a.id);
+    // Подходящий есть (пусть и сломанный) — это шаг 2: сломанность решает правило 1а внутри A
+    // (следующий + плашка; нет целого — шаблон хоста в рамке A с `view.broken`), не шаг 3 (R-26).
+    if (own.some((t) => fitsSubject(subject, t))) {
+      return done(frame, chooseTemplate(subject, own, isBroken));
+    }
     // Шаг 3: вида нет — шаблон хоста в рамке A и подсказка, где вид есть.
-    const alternatives = placesOf(input, subject, isBroken)
+    const choice: TemplateChoice = { kind: 'host', broken: [] };
+    const alternatives = placesOf(input, subject)
       .map((x) => x.id)
       .filter((id) => id !== a.id);
     plaques.push({ kind: 'no-view', appId: a.id, alternatives });
@@ -277,7 +282,7 @@ export function chooseOpening(input: OpenInput): OpenDecision {
   }
 
   // Шаг 4: A — хост (или стал им на шаге 0) — спор мест между приложениями.
-  const p = placesOf(input, subject, isBroken);
+  const p = placesOf(input, subject);
   if (p.length === 0) return done(HOST_FRAME, inHostView());
   const w = p.length === 1 ? (p[0] ?? null) : winnerAmong(p, (x) => x.opensOver);
   if (w !== null) {
@@ -298,7 +303,7 @@ export function chooseOpening(input: OpenInput): OpenDecision {
 export function placeContendersOf(input: Omit<OpenInput, 'app'>): readonly string[] | null {
   if (input.record.aspects.includes(PAGE_ASPECT)) return null;
   if (appRecordTarget(input) !== null) return null;
-  const p = placesOf(input, { aspects: input.record.aspects }, memo(input.isBroken));
+  const p = placesOf(input, { aspects: input.record.aspects });
   return p.length > 1 ? p.map((x) => x.id) : null;
 }
 
