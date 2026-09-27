@@ -15,13 +15,21 @@ import { Markdown } from '../../lib/markdown/Markdown';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
+import { OwnCards } from '../entity-detail/OwnCards';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
 import { recordStubLabel, tabShowLabel } from '../entity-editor/layout-parts';
 import { BlockPlaque, issueTone, REGISTRY_FAILED_MESSAGE } from './blocks/BlockPlaque';
 import { DataBlock } from './blocks/DataBlock';
 import { Columns } from './Columns';
-import { forEachRendered, isCardsBlock, partsOf, pathKey, renderIssues } from './render-plan';
+import {
+  forEachRendered,
+  isCardsBlock,
+  isOwnCardsBlock,
+  partsOf,
+  pathKey,
+  renderIssues,
+} from './render-plan';
 import { TabsContainer } from './TabsContainer';
 
 /**
@@ -59,8 +67,18 @@ export function OwnBodyProvider({ children }: { children: ReactNode }) {
 interface RenderPlan {
   /** Проблема узла по пути `path.join('.')` — формат пути в докблоке `bodyIssues`. */
   issues: ReadonlyMap<string, PlacementIssue>;
-  /** Аспекты, размещённые `{{card: X}}` в этом дереве (и `orbis/page` при показе своим телом). */
+  /**
+   * Аспекты, размещённые в этом дереве: `{{card: X}}`, все свои карточки при рисуемом
+   * `{{cards: own}}` (спека 1б §8.5 — «остальные» их не повторяют) и `orbis/page` при показе своим
+   * телом. Читают его «остальные» и дописывание хоста — только с реестром.
+   */
   placed: ReadonlySet<string>;
+  /**
+   * Аспекты `{{card: X}}` этого дерева — их `{{cards: own}}` не повторяет. `null` — ещё не известны:
+   * реестр едет, а карточка названа подписью (`"Цель"`), которую без реестра не узнать; показанная
+   * сейчас своя карточка через мгновение переехала бы на место явной.
+   */
+  ownPlaced: ReadonlySet<string> | null;
   /** Есть ли в дереве рисуемый `{{cards}}` — тогда дописывать карточки в конец нечего. */
   hasCards: boolean;
   /** Реестр разбора; `null` — ещё едет (или не приедет — `regFailed`). */
@@ -118,18 +136,40 @@ function planRender(
   // запись-страница несла бы лишнюю карточку. Через шаблон хоста («Открыть как запись») она
   // видна, как все.
   if (ownBody) placed.add(PAGE_ASPECT);
+  const explicit = new Set<string>();
+  let explicitKnown = true;
   let hasCards = false;
+  let hasOwnCards = false;
   // Только РИСУЕМЫЕ узлы (`forEachRendered`): карточка в неуместном или сломанном месте не
   // показана, и считать её размещённой значило бы потерять её совсем — ни на месте, ни в конце.
   forEachRendered(nodes, issues, (node) => {
-    if (node.kind === 'card' && reg !== null) {
-      const aspect = aspectOfCardText(node.aspect, reg);
-      if (aspect !== undefined) placed.add(aspect.id);
+    if (node.kind === 'card') {
+      if (reg !== null) {
+        const aspect = aspectOfCardText(node.aspect, reg);
+        if (aspect !== undefined) {
+          placed.add(aspect.id);
+          explicit.add(aspect.id);
+        }
+        return;
+      }
+      // Без реестра своя карточка узнаётся по КЛЮЧУ — ровно как её рисует `CardNode`; подпись в
+      // кавычках — нет, и тогда состав явных неизвестен до реестра.
+      const key = node.aspect.trim();
+      if (key.startsWith('"')) explicitKnown = false;
+      else if (Object.hasOwn(OWN_ASPECT_CARDS, key)) explicit.add(key);
     } else if (isCardsBlock(node)) {
       hasCards = true;
+    } else if (isOwnCardsBlock(node)) {
+      hasOwnCards = true;
     }
   });
-  return { issues, placed, hasCards, reg, regFailed, ownBody };
+  // Показанные `{{cards: own}}` — размещены: «остальные» и дописывание их не повторяют (§8.5).
+  // Все свои, а не только показанные этой записи: не показанную (не положенную записи) не покажут и
+  // «остальные» — у них тот же `showWhen`, а общей секции у аспекта со своей карточкой нет.
+  if (hasOwnCards) for (const aspect of Object.keys(OWN_ASPECT_CARDS)) placed.add(aspect);
+  // Отказ реестра ждать не велит: подпись так и не узнается, показываем то, что узнано по ключам.
+  const ownPlaced = reg !== null || regFailed || explicitKnown ? explicit : null;
+  return { issues, placed, ownPlaced, hasCards, reg, regFailed, ownBody };
 }
 
 export function Renderer({
@@ -231,6 +271,7 @@ function PageNodeView({ node, path }: { node: PageNode; path: readonly number[] 
     case 'card':
       return <CardNode text={node.aspect} raw={node.raw} />;
     case 'ownCards':
+      return <OwnCardsNode />;
     case 'host':
       return <UnshownBlock raw={node.raw} />;
     case 'columns':
@@ -286,6 +327,12 @@ function RecordNode({ name }: { name: RecordBlockName }) {
   return <Block />;
 }
 
+/** `{{cards: own}}` — свои карточки без явно размещённых; пока явные неизвестны — ничего (`ownPlaced`). */
+function OwnCardsNode() {
+  const { ownPlaced } = useRenderPlan();
+  return ownPlaced === null ? null : <OwnCards placed={ownPlaced} />;
+}
+
 function CardNode({ text, raw }: { text: string; raw: string }) {
   const { reg } = useRenderPlan();
   if (reg === null) {
@@ -315,17 +362,16 @@ function CardNode({ text, raw }: { text: string; raw: string }) {
 }
 
 /**
- * Временная плашка блоков 1б, которых этот рендерер ещё не рисует: `{{cards: own}}` (свои
- * карточки), `{{records}}` («Записи») и `{{apps}}` («Приложения»). Грамматика узнаёт их раньше, чем
+ * Временная плашка блоков хоста 1б, которых этот рендерер ещё не рисует: `{{records}}` («Записи») и
+ * `{{apps}}` («Приложения»). Грамматика узнаёт их раньше, чем
  * web умеет их показать (задача 8 плана 1б): тела поставки с новыми маркерами печатаются
  * окончательно уже сейчас, а пустое место вместо блока спрятало бы его (§6.5 1а — пустоты вместо
  * ошибки не бывает). Тон спокойный (`unresolved`): блок на своём месте, чинить нечего.
  *
  * Почему временная и кто снимает (план 1б — внутрисрезовая плашка, в реестр §15 спеки не входит):
- * ветку `ownCards` — задача 17 (свои карточки в порядке рангов), `host` с именем `records` —
- * задача 18 (блок «Записи» со своей точкой лени), `host` с именем `apps` — задача 20
- * (переключатель приложений). Каждая заменяет свою ветку настоящим блоком; когда снята последняя,
- * уходит и эта функция.
+ * `host` с именем `records` — задача 18 (блок «Записи» со своей точкой лени), `host` с именем
+ * `apps` — задача 20 (переключатель приложений). Каждая заменяет свою ветку настоящим блоком; когда
+ * снята последняя, уходит и эта функция. Ветку `ownCards` сняла задача 17 (`OwnCardsNode`).
  */
 function UnshownBlock({ raw }: { raw: string }) {
   return (

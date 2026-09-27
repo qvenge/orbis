@@ -19,8 +19,10 @@ import { DetailScreen } from './DetailScreen';
 import goldenRequests from './golden/detail-requests.json';
 import goldenStructure from './golden/detail-structure.json';
 import { INTENDED_1A } from './intended-1a';
+import { INTENDED_1B_REQUESTS } from './intended-1b';
 import {
   captureDetail,
+  type HostTemplateVariant,
   STRUCTURE_FIXTURES,
   type StructureFixture,
   structureHandler,
@@ -122,15 +124,13 @@ describe('каждая фикстура показывает шапку и св�
 });
 
 /**
- * Запросы нового экрана = эталон + ровно один запрос списка шаблонов владельца (РП-11 (2), РП-14).
- * Шаблон хоста лежит в поставке — за его текстом экран не ходит (§6.5).
+ * Запросы экрана 1б = эталон 1а + ровно один запрос списка шаблонов владельца (РП-11 (2), РП-14) +
+ * ровно один запрос записей поставки (шаблон хоста, 1б §9.2, С1б-16) — `INTENDED_1B_REQUESTS`.
+ *
+ * Шаблон хоста — ЗАПИСЬ поставки (`structureHandler` по умолчанию отдаёт её с эталонным телом в
+ * той форме, в какой её пишет сервер): вид экрана через запись обязан совпасть со снимком 1а (С1б-9).
  */
-const withTemplatesList = (golden: Record<string, number>): Record<string, number> => {
-  const out = { ...golden, 'entity.query': (golden['entity.query'] ?? 0) + 1 };
-  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
-};
-
-describe('INTENDED_1A(эталон) = экран (С1а-5, С1а-6)', () => {
+describe('INTENDED_1A(эталон) = экран через запись шаблона хоста (С1а-5, С1а-6, С1б-9, С1б-16)', () => {
   const structures = goldenStructure as Record<string, DetailStructure>;
   const requests = goldenRequests as Record<string, Record<string, number>>;
 
@@ -144,10 +144,53 @@ describe('INTENDED_1A(эталон) = экран (С1а-5, С1а-6)', () => {
     test(f.name, async () => {
       const got = await captureDetail(f);
       expect(got.structure).toEqual(INTENDED_1A(structures[f.name] as DetailStructure));
-      expect(got.requests).toEqual(withTemplatesList(requests[f.name] ?? {}));
+      expect(got.requests).toEqual(INTENDED_1B_REQUESTS(requests[f.name] ?? {}));
     });
   }
 });
+
+/** Части строки заголовка — первое, что шаблон хоста ставит над вкладками (`{{title}}`). */
+const TITLE_PARTS: ReadonlySet<string> = new Set(['emoji', 'native-row', 'native-memory']);
+
+/**
+ * Единственное отличие экрана со сломанной записью шаблона хоста от снимка 1а (§9.2 гарантии):
+ * эталон кода рисует тот же вид, а над ним — плашка «Шаблон хоста повреждён — показан эталон
+ * поставки». Плашка — над рендером шаблона, то есть перед строкой заголовка.
+ */
+function withHostTemplatePlaque(s: DetailStructure): DetailStructure {
+  const at = s.aboveTabs.findIndex((p) => TITLE_PARTS.has(p));
+  const aboveTabs = [...s.aboveTabs];
+  aboveTabs.splice(at === -1 ? aboveTabs.length : at, 0, 'host-template-broken');
+  return { ...s, aboveTabs };
+}
+
+/**
+ * Гарантии шаблона хоста (§9.2): записи нет или она в архиве — эталон из кода, вид 1а без плашек;
+ * запись сломана — эталон из кода и плашка. Запросы те же: записи поставки читаются одним запросом
+ * при любом ответе.
+ */
+const VARIANTS: readonly {
+  variant: HostTemplateVariant;
+  expected: (golden: DetailStructure) => DetailStructure;
+}[] = [
+  { variant: 'none', expected: INTENDED_1A },
+  { variant: 'archived', expected: INTENDED_1A },
+  { variant: 'broken', expected: (g) => withHostTemplatePlaque(INTENDED_1A(g)) },
+];
+
+for (const { variant, expected } of VARIANTS) {
+  describe(`шаблон хоста: ${variant} → эталон кода (§9.2)`, () => {
+    const structures = goldenStructure as Record<string, DetailStructure>;
+    const requests = goldenRequests as Record<string, Record<string, number>>;
+    for (const f of STRUCTURE_FIXTURES) {
+      test(f.name, async () => {
+        const got = await captureDetail(f, undefined, { hostTemplate: variant });
+        expect(got.structure).toEqual(expected(structures[f.name] as DetailStructure));
+        expect(got.requests).toEqual(INTENDED_1B_REQUESTS(requests[f.name] ?? {}));
+      });
+    }
+  });
+}
 
 test('«тикет + рутина»: история прогонов одна — в карточке рутины (остаток 1а №29)', async () => {
   // Не через эталон: фикстуры в нём нет и не будет (РП-24) — дубль ловится прямо.

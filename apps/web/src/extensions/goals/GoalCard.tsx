@@ -1,3 +1,7 @@
+// Своя карточка цели (расширение «Цели», спека 1б §4.1): секция полей аспекта и полоса прогресса
+// одним куском. Каталог расширения импортирует ТОЛЬКО реестр карточек (`app/extension-registry.tsx`,
+// РП-23) — ядро знает карточку по объявлению, а не по имени файла.
+//
 // Прогресс цели на detail-экране (01-architecture §11.3, Task E3).
 //
 // Число здесь НЕ считается: `goalProgress` приезжает соседом сущности в ответе entity.get,
@@ -21,10 +25,16 @@
 //    доли: floor(ratio*100) на числе с плавающей точкой врёт (0.29*100 в IEEE-754 =
 //    28.999999999999996 → «28%»), поэтому доля и не попала в контракт — числом, которым
 //    нельзя пользоваться, легко воспользоваться. Считаем процент точно, из тех же строк,
-//    тем же BigInt-примитивом, что пороги Budget (envelopePercent).
+//    тем же BigInt-примитивом, что пороги Budget (`decimalPercent`, общий помощник `lib/percent.ts`).
+import { AspectSection } from '../../features/entity-detail/AspectSection';
+import { useRecordHost } from '../../features/entity-detail/record-host';
 import { formatAmount } from '../../lib/format';
+import { decimalPercent } from '../../lib/percent';
 import type { RouterOutputs } from '../../trpc';
-import { envelopePercent } from '../budget/EnvelopeCard';
+
+const GOAL = 'orbis/goal';
+/** Единица прогресса цели — СВОЙСТВО (§А1-1), а не поле аспекта `orbis/goal`. */
+const GOAL_UNIT = 'orbis/unit';
 
 type GoalProgressData = NonNullable<RouterOutputs['entity']['get']['goalProgress']>;
 type Unsupported = NonNullable<GoalProgressData['unsupported']>;
@@ -93,7 +103,7 @@ export function GoalProgress({ progress, unit }: { progress: GoalProgressData; u
     );
   }
 
-  const percent = envelopePercent(current, target);
+  const percent = decimalPercent(current, target);
   const width = Math.min(100, percent);
   const reached = percent >= 100;
   const amounts = `${amountKeepingMinus(current)} / ${amountKeepingMinus(target)}`;
@@ -134,6 +144,31 @@ export function GoalProgress({ progress, unit }: { progress: GoalProgressData; u
         {unit !== undefined && unit !== '' && <span> {unit}</span>}
         {reached && <span className="text-success"> · цель достигнута</span>}
       </p>
+    </div>
+  );
+}
+
+/** Полоса прогресса цели — если сервер её посчитал (`goalProgress` есть только у цели, E2). */
+function GoalProgressSlot() {
+  const { entity, goalProgress } = useRecordHost();
+  if (goalProgress === undefined) return null;
+  const unit = entity.props[GOAL_UNIT];
+  return (
+    <GoalProgress progress={goalProgress} unit={typeof unit === 'string' ? unit : undefined} />
+  );
+}
+
+/**
+ * Карточка цели: поля аспекта, затем прогресс (или отказ его расчёта). До 1а части были разнесены
+ * по вкладкам (прогресс наверху, поля в «Деталях»); шаблон ставит карточку одним куском (спека 1а
+ * §8.2 (3)). Данные — из хоста записи, своих пропов у карточки нет.
+ */
+export function GoalCard() {
+  const { entity } = useRecordHost();
+  return (
+    <div className="flex flex-col gap-6">
+      <AspectSection entity={entity} aspectId={GOAL} />
+      <GoalProgressSlot />
     </div>
   );
 }

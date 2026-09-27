@@ -37,6 +37,7 @@ import { BODY_BLOCKED, BODY_SAVING } from '../entity-detail/body-gate';
 import { resetDetailMenuModuleForTests } from '../entity-detail/DetailMenuSlot';
 import { DetailScreen } from '../entity-detail/DetailScreen';
 import {
+  HOST_TEMPLATE_RECORD_BODY,
   STRUCTURE_FIXTURES,
   type StructureFixture,
   structureHandler,
@@ -45,7 +46,6 @@ import { type DetailStructure, snapshotDetailStructure } from '../entity-detail/
 import { readDraft } from '../entity-editor/draft-storage';
 import { CHANGE_VIEW_QUESTION, HIDE_AS_VERSION_HINT } from './ChangeViewDialog';
 import { changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from './change-view';
-import { HOST_TEMPLATE_TEXT } from './host-template';
 import { PAGE_TEMPLATES_QUERY } from './usePageTemplates';
 import { BATCH_FAILED } from './useUpdateBatch';
 
@@ -73,6 +73,13 @@ const TPL_C = uuid(1503);
 const TPL_TOP = uuid(1504);
 const OTHER = uuid(1510);
 const ACTION_ID = uuid(1599);
+
+/**
+ * Шаблон хоста, которым мир показывает запись, — тело записи поставки «Шаблон хоста» (срез 1б §9.2;
+ * `structureHandler` отдаёт её с эталонным телом в форме сервера). «Изменить вид только этой
+ * записи» копирует ПОКАЗАННОЕ — это тело, а не эталон кода.
+ */
+const HOST_TEMPLATE_TEXT = HOST_TEMPLATE_RECORD_BODY;
 
 const fixture = (name: string): StructureFixture => {
   const f = STRUCTURE_FIXTURES.find((x) => x.name === name);

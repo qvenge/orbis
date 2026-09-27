@@ -21,7 +21,6 @@ import type { LazyMenuControl } from '../../ui/LazyMenuSlot';
 import { useToast } from '../../ui/toast-store';
 import { ChangeViewDialog } from '../page/ChangeViewDialog';
 import { type ChangeViewPlan, changeViewPlan, TEXT_BEFORE_VIEW_CHANGE } from '../page/change-view';
-import { HOST_TEMPLATE_TEXT } from '../page/host-template';
 import type { RecordShown } from '../page/RecordView';
 import { TemplateForDialog } from '../page/TemplateForDialog';
 import type { PageTemplates } from '../page/usePageTemplates';
@@ -45,7 +44,10 @@ export type DetailMenuView =
       templates: PageTemplates;
       onOpenVia: (templateId: string | 'host') => void;
       onChangeDispute: (contenders: readonly string[]) => void;
-      /** «Настроить шаблон „X“» (§8.4, §9.2) — настройка шаблона, которым запись показана. */
+      /**
+       * «Настроить шаблон „X“» (§8.4, §9.2) — настройка шаблона, которым запись показана; и
+       * «Настроить шаблон хоста» (срез 1б §9.2) — настройка записи поставки «Шаблон хоста».
+       */
       onConfigureTemplate: (templateId: string) => void;
     }
   | {
@@ -246,23 +248,35 @@ export function DetailMenu({
     );
     // Список шаблонов едет или не приехал — выбор показал шаблон хоста ВЫНУЖДЕННО (§6.5, РП-14), и
     // «Изменить вид» навсегда закрепил бы у записи вид хоста, хотя её настоящий шаблон — владельца.
-    // Пункта нет, пока список не приехал.
+    // Пункта нет, пока список не приехал. Шаблон хоста — текстом, КОТОРЫМ он показан (тело записи
+    // поставки или эталон, срез 1б §9.2); записи поставки ещё едут — пункта тоже нет (`hostText`).
     const templateText =
       templates.status !== 'ok'
         ? null
         : shownId === 'host'
-          ? HOST_TEMPLATE_TEXT
+          ? shown.hostText
           : (templates.rows.find((r) => r.id === shownId)?.body ?? null);
+    const hostRecordId = shown.hostRecordId;
     return [
       ...(shownId === 'host'
-        ? []
+        ? // «Настроить шаблон хоста» (срез 1б §9.2) — запись поставки в том же редакторе настройки;
+          // записи нет (в архиве, выведена) — настраивать нечего, пункта нет.
+          hostRecordId === null
+          ? []
+          : [
+              {
+                label: 'Настроить шаблон хоста',
+                icon: <SlidersHorizontal size={16} aria-hidden />,
+                onSelect: () => v.onConfigureTemplate(hostRecordId),
+              },
+            ]
         : [
             {
               label: 'Открыть через шаблон хоста',
               icon: <PanelsTopLeft size={16} aria-hidden />,
               onSelect: () => v.onOpenVia('host'),
             },
-            // Шаблон хоста в 1а не правится (§8.1) — пункт только у шаблона владельца.
+            // Шаблон владельца; шаблон хоста — своим пунктом выше.
             {
               label: `Настроить шаблон „${titleOf(shownId)}“`,
               icon: <SlidersHorizontal size={16} aria-hidden />,

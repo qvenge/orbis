@@ -131,12 +131,6 @@ const ALLOWLIST: Record<string, { readonly count: number; readonly reason: strin
       'печать, а не разбор: пустая подпись вкладки печатается голым `{{tab}}` (`tabMarker`), ' +
       'непустая — интерполяцией; читает эту строку обратно препроход',
   },
-  'apps/web/src/features/page/host-template.ts': {
-    count: 22,
-    reason:
-      'ДАННЫЕ, а не разбор: текст шаблона хоста (§8.1) строками массива, по строке на маркер; ' +
-      'разбирает его препроход (`parsePageText`), дословность держит `host-template.test.ts`',
-  },
   'packages/shared/src/supply/etalons.ts': {
     count: 20,
     reason:

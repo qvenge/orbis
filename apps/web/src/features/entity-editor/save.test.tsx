@@ -1553,6 +1553,15 @@ test('модули первого кадра не тянут схему реда
     // (эагерной) и меню; страж ухода зовёт стор навигации первого кадра.
     '../entity-detail/body-gate.ts',
     '../../state/leave-guard.ts',
+    // Шаблон хоста — запись поставки и свои карточки (срез 1б, задача 17): записи поставки читает
+    // каждое открытие записи, `{{cards: own}}` стоит в шаблоне хоста, карточки расширений приходят
+    // через реестр — все эагерны. Карточки тянут общий помощник процента (прежде — из Бюджета).
+    '../entity-detail/OwnCards.tsx',
+    '../page/useSupplyRecords.ts',
+    '../../app/extension-registry.tsx',
+    '../../extensions/goals/GoalCard.tsx',
+    '../../extensions/finance/FinancialCard.tsx',
+    '../../lib/percent.ts',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

@@ -13,7 +13,9 @@
  * Тела — текст БЕЗ блоков данных: путь тела меняет задача 11, а структура экрана от содержимого
  * тела не зависит (тело в снимке — один ориентир `body`).
  */
-import { parseBody } from '@orbis/shared/doc';
+import { PAGE_ASPECT, SUPPLY_ASPECT, SUPPLY_KEY, SUPPLY_TEXT } from '@orbis/shared';
+import { parseBody, serializeBody } from '@orbis/shared/doc';
+import { HOST_TEMPLATE_ETALON_TEXT, printPageRecord } from '@orbis/shared/supply';
 import { act, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
@@ -27,6 +29,7 @@ import {
 } from '../../test/harness';
 import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { queryClient, type RouterOutputs } from '../../trpc';
+import { SUPPLY_RECORDS_QUERY } from '../page/useSupplyRecords';
 import { DetailScreen } from './DetailScreen';
 import { type DetailStructure, snapshotDetailStructure } from './structure-snapshot';
 
@@ -235,6 +238,73 @@ const WORLD: ReadonlyMap<string, WireEntity> = new Map(
     e,
   ]),
 );
+
+// --- Запись шаблона хоста (срез 1б §9.2) --------------------------------------------------------
+
+export const HOST_TEMPLATE_RECORD_ID = id(960);
+
+/**
+ * Тело записи шаблона хоста — в той форме, в какой его пишет СЕРВЕР: механизм поставки создаёт запись
+ * с `body: эталон`, исполнитель кладёт в `body` каноническую печать документа (`canonicalPageText` →
+ * `bodyFieldsFromMarkdown`: разбор, привязка блоков данных, печать). Привязки здесь нет: блоков
+ * данных в эталоне нет, и печать документа после разбора — вся разница. Канон ≠ эталону байт в байт
+ * (пустые строки между блоками), поэтому экран сверяется с эталоном разметкой, а не строкой.
+ */
+export const HOST_TEMPLATE_RECORD_BODY = serializeBody(parseBody(HOST_TEMPLATE_ETALON_TEXT));
+
+/** Запись поставки «Шаблон хоста», как её заводит сев графа (`supplyCreateOps`); тело — любое. */
+export function hostTemplateRecord(
+  body: string = HOST_TEMPLATE_RECORD_BODY,
+  over: Partial<WireEntity> = {},
+): WireEntity {
+  return wireEntity({
+    id: HOST_TEMPLATE_RECORD_ID,
+    title: 'Шаблон хоста',
+    emoji: '📄',
+    body,
+    bodyDoc: parseBody(body),
+    createdAt: CREATED,
+    updatedAt: UPDATED,
+    aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+    props: {
+      [SUPPLY_KEY]: 'host-template',
+      [SUPPLY_TEXT]: printPageRecord({
+        title: 'Шаблон хоста',
+        emoji: '📄',
+        body: HOST_TEMPLATE_RECORD_BODY,
+      }),
+    },
+    ...over,
+  });
+}
+
+/**
+ * Что граф держит на месте шаблона хоста (§9.2): запись с эталонным телом (как после сева), записи
+ * нет, запись в архиве, запись сломана (незакрытый контейнер — шаблон «не разобран»).
+ *
+ * Архивную запись сервер по `aspect=orbis/supply` не отдаёт вовсе; здесь она отдаётся НАРОЧНО — так
+ * проверяется, что экран сам не берёт архивную запись шаблоном хоста.
+ */
+export type HostTemplateVariant = 'record' | 'none' | 'archived' | 'broken';
+
+/**
+ * Тело сломанной записи шаблона хоста: вкладки не закрыты. Шаблонной строкой, как тела сида: это
+ * данные, а не разбор (сторож одной копии правил `scripts/grammar-copies.test.ts`).
+ */
+export const BROKEN_HOST_TEMPLATE_BODY = `{{title}}\n\n{{tabs}}\n\n{{tab: Запись}}\n\n{{body}}\n`;
+
+function hostTemplateRows(variant: HostTemplateVariant): WireEntity[] {
+  switch (variant) {
+    case 'record':
+      return [hostTemplateRecord()];
+    case 'none':
+      return [];
+    case 'archived':
+      return [hostTemplateRecord(HOST_TEMPLATE_RECORD_BODY, { archived: true })];
+    case 'broken':
+      return [hostTemplateRecord(BROKEN_HOST_TEMPLATE_BODY)];
+  }
+}
 
 // --- Фикстуры ----------------------------------------------------------------------------------
 
@@ -472,8 +542,12 @@ function suggestion(e: WireEntity) {
  * которого здесь нет, получает `{}` — соглашение корпуса (harness.tsx) для мутаций и прочего,
  * что экран при открытии не читает.
  */
-export function structureHandler(f: StructureFixture): MockHandler {
+export function structureHandler(
+  f: StructureFixture,
+  opts: { hostTemplate?: HostTemplateVariant } = {},
+): MockHandler {
   const main = f.entity;
+  const supplyRows = hostTemplateRows(opts.hostTemplate ?? 'record');
   return (path, input) => {
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
@@ -489,11 +563,16 @@ export function structureHandler(f: StructureFixture): MockHandler {
           registryVersion: BUILTIN_REGISTRY.version,
         };
         if (wanted === main.id) return { ...base, entity: main, ...f.extra };
+        // Запись шаблона хоста — её настройка («⋯ → Настроить шаблон хоста») читает её саму.
+        const supply = supplyRows.find((r) => r.id === wanted);
+        if (supply !== undefined) return { ...base, entity: supply };
         const other = WORLD.get(wanted);
         if (other === undefined) throw trpcError('NOT_FOUND');
         return { ...base, entity: other };
       }
       case 'entity.query': {
+        // Записи поставки (`useSupplyRecords`): шаблон хоста по варианту фикстуры.
+        if ((input as { query?: unknown }).query === SUPPLY_RECORDS_QUERY) return supplyRows;
         const text = JSON.stringify(input);
         // История прогонов (useTicketRuns): дети записи с аспектом прогона.
         if (text.includes('orbis/agent-run')) return RUNS_BY_PARENT[main.id] ?? [];
@@ -571,6 +650,7 @@ const SETTLE_MAX_TICKS = 200;
 export async function captureDetail(
   f: StructureFixture,
   ui: ReactNode = createElement(DetailScreen, { entityId: f.entity.id }),
+  handlerOpts: Parameters<typeof structureHandler>[1] = {},
 ): Promise<DetailCapture> {
   // Версия реестра живёт в МОДУЛЕ, а не в QueryClient, и переживает тест. Ставим её явно, как у
   // работающего приложения, где реестр уже прочитан до открытия записи: без этого счёт
@@ -586,7 +666,7 @@ export async function captureDetail(
   // Умолчания запросов — ПРОДУКТОВЫЕ (trpc.ts): счёт запросов меряет экран, а не обвязку. С
   // нулевым `staleTime` обвязки поздний подписчик уже приехавшего ключа перезапрашивал бы его, и
   // эталон нёс бы повторы, которых продукт не делает, в числе, зависящем от порядка монтирования.
-  const { container, calls, unmount } = renderWithProviders(ui, structureHandler(f), {
+  const { container, calls, unmount } = renderWithProviders(ui, structureHandler(f, handlerOpts), {
     queries: queryClient.getDefaultOptions().queries,
   });
   await waitFor(() => {

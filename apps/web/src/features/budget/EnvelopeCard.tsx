@@ -5,28 +5,12 @@
 // Тап → push экрана категории (§3.2, сам экран — Task B3).
 import type { EnvelopeStatus } from '@orbis/shared';
 import { CURRENCY_SYMBOL, formatAmount } from '../../lib/format';
+import { decimalPercent, scaledPair } from '../../lib/percent';
 import { useNav } from '../../state/navigation';
 
 // --- точная арифметика порогов (§3.1) без чисел с плавающей точкой ---------------------
 
 export type EnvelopeLevel = 'norm' | 'warn' | 'alert' | 'over';
-
-/** Decimal-строка → BigInt в масштабе scale знаков после точки (без потерь). */
-function scaledBigInt(dec: string, scale: number): bigint {
-  // Знак — ASCII '-' И типографский U+2212 (formatMoney/бейджи печатают U+2212, §3.3):
-  // strip-regex и neg обязаны распознавать один и тот же набор, иначе '−800' → +800.
-  const neg = dec.startsWith('-') || dec.startsWith('−');
-  const [int = '0', frac = ''] = dec.replace(/^[-−+]/, '').split('.');
-  const digits = `${int}${frac.padEnd(scale, '0').slice(0, scale)}`;
-  const v = BigInt(digits === '' ? '0' : digits);
-  return neg ? -v : v;
-}
-
-/** Пара spent/effectiveLimit в общем целочисленном масштабе — для точных сравнений. */
-function scaledPair(spent: string, limit: string): [bigint, bigint] {
-  const scale = Math.max((spent.split('.')[1] ?? '').length, (limit.split('.')[1] ?? '').length);
-  return [scaledBigInt(spent, scale), scaledBigInt(limit, scale)];
-}
 
 /** Максимум двух decimal-строк (шкала мини-тренда §3.2) — то же точное сравнение. */
 export function decMax(a: string, b: string): string {
@@ -49,13 +33,11 @@ export function envelopeLevel(spent: string, effectiveLimit: string): EnvelopeLe
   return 'norm';
 }
 
-/** Целый процент spent/effectiveLimit (floor) — подпись бара; вырожденный лимит → 0/100. */
-export function envelopePercent(spent: string, effectiveLimit: string): number {
-  const [num, den] = scaledPair(spent, effectiveLimit);
-  if (den <= 0n) return num > 0n || den < 0n ? 100 : 0;
-  if (num <= 0n) return 0;
-  return Number((num * 100n) / den);
-}
+/**
+ * Целый процент spent/effectiveLimit (floor) — подпись бара; вырожденный лимит → 0/100. Сам счёт —
+ * общий помощник `lib/percent.ts` (им же считает полоса цели): имя здесь — словарь Бюджета.
+ */
+export const envelopePercent = decimalPercent;
 
 // --- отображение ------------------------------------------------------------------------
 

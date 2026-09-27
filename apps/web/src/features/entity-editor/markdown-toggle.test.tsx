@@ -196,7 +196,7 @@ test('неразбираемое не сохраняется молча: пре�
   const alert = screen.getByRole('alert');
   expect(alert).toHaveTextContent('не разобрана');
   // Р-13: предупреждение красится text-alert. text-warning на белом листе даёт 3.18:1 и в
-  // этом репозитории для ТЕКСТА уже отвергнут (GoalProgress.tsx:55-57, NativeRow.tsx:92).
+  // этом репозитории для ТЕКСТА уже отвергнут (extensions/goals/GoalCard.tsx:65-66, NativeRow.tsx:92).
   expect(alert.className).toContain('text-alert');
   // ГЛАВНОЕ (И12): тумблер ОСТАЁТСЯ открытым и НИЧЕГО не записал. Закройся он в том же тике,
   // предупреждение в проде не увидел бы никто, а тест БЕЗ двух строк ниже остался бы зелёным:

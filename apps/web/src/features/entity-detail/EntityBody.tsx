@@ -1,4 +1,4 @@
-import { bodyDraftNoteId, PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
+import { bodyDraftNoteId, PAGE_ASPECT, SUPPLY_KEY, TEMPLATE_FOR_PROPERTY } from '@orbis/shared';
 // Сабпат `/diff` ЛИСТОВОЙ, и страж чанка detail пропускает его намеренно — якорь `$` в предикате
 // веса (save.test.tsx). Новым весом в чанк записи он не приезжает: этот же модуль уже тянет туда
 // слой предложения (`ProposalOverlay.tsx:39`), который эагерно достижим отсюда. Замерено на двух
@@ -7,6 +7,7 @@ import { bodyDraftNoteId, PAGE_ASPECT, TEMPLATE_FOR_PROPERTY } from '@orbis/shar
 // отдельным чанком на 153 кБ gzip.
 import { flattenBlocks } from '@orbis/shared/doc/diff';
 import type { BodyKind } from '@orbis/shared/doc/placement';
+import type { SupplyKey } from '@orbis/shared/supply';
 import {
   createContext,
   lazy,
@@ -48,12 +49,17 @@ const MarkdownToggle = lazy(() =>
 );
 
 /** Форма документа в кэше уже, чем `BodyDoc` (Record против JSONContent) — сводим приведением. */
+/** Ключ эталона записи «Шаблон хоста». */
+const HOST_TEMPLATE_KEY: SupplyKey = 'host-template';
+
 const asBodyDoc = (stored: Entity['bodyDoc']): BodyDoc | null =>
   stored == null ? null : { v: stored.v, doc: stored.doc as BodyDoc['doc'] };
 
 /**
  * Род тела САМОЙ записи (§5.5): заметка — без аспекта `orbis/page`; страница — с ним; шаблон —
- * страница с непустым «Шаблон для».
+ * страница с непустым «Шаблон для» или запись поставки «Шаблон хоста» (срез 1б §9.2): её «Шаблона
+ * для» нет — она запасной шаблон, а не кандидат, — и род узнаётся по ключу эталона. Иначе её
+ * `{{body}}` считался бы ошибкой места страницы.
  *
  * По самой записи, а не по месту показа: тело заметки, поставленное шаблоном через `{{body}}`,
  * остаётся телом заметки, и род шаблона ему не наследуется — абсолютная дата, законная в
@@ -61,6 +67,7 @@ const asBodyDoc = (stored: Entity['bodyDoc']): BodyDoc | null =>
  */
 export function bodyKindOf(entity: Pick<Entity, 'aspects' | 'props'>): BodyKind {
   if (!entity.aspects.includes(PAGE_ASPECT)) return 'note';
+  if (entity.props[SUPPLY_KEY] === HOST_TEMPLATE_KEY) return 'template';
   const templateFor = entity.props[TEMPLATE_FOR_PROPERTY];
   return Array.isArray(templateFor) && templateFor.length > 0 ? 'template' : 'page';
 }

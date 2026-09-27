@@ -13,7 +13,7 @@ import {
   blocksReply,
   blockTexts,
   installCrashTrap,
-  isTemplatesListCall,
+  isRecordScreenListCall,
   type MockHandler,
   renderWithProviders,
   trpcError,
@@ -744,13 +744,15 @@ test('financial: category_ref — выбор из категорий с назв
   expect(select).toHaveDisplayValue('Еда');
   // Множество берётся ЦЕЛЬЮ свойства из реестра (§А6-1) — тем же запросом и тем же кешем,
   // что у бейджа шапки и у форм Финансов: второго источника категорий в приложении нет.
-  expect(calls.find((c) => c.path === 'entity.query' && !isTemplatesListCall(c))?.input).toEqual({
-    ast: {
-      filter: { aspect: 'orbis/category' },
-      sortBy: [{ field: 'orbis/title', dir: 'asc' }],
-      limit: 200,
+  expect(calls.find((c) => c.path === 'entity.query' && !isRecordScreenListCall(c))?.input).toEqual(
+    {
+      ast: {
+        filter: { aspect: 'orbis/category' },
+        sortBy: [{ field: 'orbis/title', dir: 'asc' }],
+        limit: 200,
+      },
     },
-  });
+  );
 });
 
 test('financial: выбор категории шлёт entity.update с новым category_ref', async () => {
@@ -835,8 +837,8 @@ test('financial: рефетч списка упал, но список уже е
   renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
-    // Список шаблонов экрана записи — не список категорий: счёт ниже — только категорий.
-    if (isTemplatesListCall({ path, input })) return [];
+    // Списки экрана записи (шаблоны, записи поставки) — не список категорий: счёт ниже — только категорий.
+    if (isRecordScreenListCall({ path, input })) return [];
     if (path === 'entity.query') {
       queries += 1;
       if (queries === 1) return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
@@ -914,7 +916,7 @@ test('нефинансовая сущность: контрол по типу с
   expect(screen.getByLabelText('Ждём').tagName).toBe('INPUT');
   // Пикер ссылки монтируется только там, где свойство есть в составе аспекта: у задачи
   // категории нет, и сети за списком не уходит.
-  expect(calls.some((c) => c.path === 'entity.query' && !isTemplatesListCall(c))).toBe(false);
+  expect(calls.some((c) => c.path === 'entity.query' && !isRecordScreenListCall(c))).toBe(false);
 });
 
 /**
@@ -3398,7 +3400,7 @@ describe('ADE: тикет', () => {
     expect(screen.queryByTestId('runs-list')).toBeNull();
     // Прогоны заметки не спрашиваются вовсе — ни запроса списка, ни подметания. Список шаблонов
     // владельца экран шлёт на любой записи — это не прогоны.
-    expect(calls.some((c) => c.path === 'entity.query' && !isTemplatesListCall(c))).toBe(false);
+    expect(calls.some((c) => c.path === 'entity.query' && !isRecordScreenListCall(c))).toBe(false);
     expect(calls.some((c) => c.path === 'agentRun.sweep')).toBe(false);
   });
 

@@ -12,6 +12,7 @@ import { observable } from '@trpc/server/observable';
 import { type ReactNode, StrictMode, Suspense } from 'react';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
+import { SUPPLY_RECORDS_QUERY } from '../features/page/useSupplyRecords';
 import { QueryBatchProvider } from '../lib/query-blocks/batch';
 import { trpc } from '../trpc';
 
@@ -147,11 +148,12 @@ const UNROUTED_DEFAULTS: Readonly<Record<string, unknown>> = {
  * Умолчание за сьют по пути И входу. Список шаблонов владельца (срез страниц 1а, `usePageTemplates`)
  * экран записи спрашивает на КАЖДОМ открытии — сьютам экрана записи незачем знать этот запрос, и
  * ответ за них — пустой список: «нет шаблонов» — ровно тот мир, в котором они писались (экран
- * шаблоном хоста). Только этот текст запроса: прочие `entity.query` сьют роутит сам, и пустой список
- * за него спрятал бы запрос, которого он не ждал.
+ * шаблоном хоста). Так же — записи поставки (срез 1б, `useSupplyRecords`): пустой ответ — «записи
+ * шаблона хоста нет», экран рисует эталон кода, тот же вид. Только эти тексты запроса: прочие
+ * `entity.query` сьют роутит сам, и пустой список за него спрятал бы запрос, которого он не ждал.
  */
 function unroutedDefault(path: string, input: unknown): unknown {
-  if (isTemplatesListCall({ path, input })) return [];
+  if (isRecordScreenListCall({ path, input })) return [];
   return UNROUTED_DEFAULTS[path];
 }
 
@@ -227,6 +229,22 @@ export function isTemplatesListCall(c: { path: string; input: unknown }): boolea
     c.path === 'entity.query' &&
     (c.input as { query?: unknown } | undefined)?.query === PAGE_TEMPLATES_QUERY
   );
+}
+
+/** Вызов — записи поставки (срез 1б, `useSupplyRecords`: шаблон хоста)? Экран шлёт его на каждом открытии. */
+export function isSupplyRecordsCall(c: { path: string; input: unknown }): boolean {
+  return (
+    c.path === 'entity.query' &&
+    (c.input as { query?: unknown } | undefined)?.query === SUPPLY_RECORDS_QUERY
+  );
+}
+
+/**
+ * Один из двух списков, которые экран записи читает на КАЖДОМ открытии (шаблоны владельца и записи
+ * поставки), — сьюты, считающие свои `entity.query`, отделяют их этим предикатом.
+ */
+export function isRecordScreenListCall(c: { path: string; input: unknown }): boolean {
+  return isTemplatesListCall(c) || isSupplyRecordsCall(c);
 }
 
 /** Ответ одному блоку пачки: строки (сокращение для `kind:'rows'` без остатка) или сам результат. */

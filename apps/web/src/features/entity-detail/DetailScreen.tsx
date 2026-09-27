@@ -16,6 +16,7 @@ import { type DisputeRequest, type RecordShown, RecordView } from '../page/Recor
 import { type TabMemory, TabMemoryProvider, TabMemoryScope } from '../page/TabsContainer';
 import { TemplatePreview } from '../page/TemplatePreview';
 import { usePageTemplates } from '../page/usePageTemplates';
+import { useSupplyRecords } from '../page/useSupplyRecords';
 import { DetailMenuSlot } from './DetailMenuSlot';
 import { type BodyGate, BodyScreenProvider, bodyKindOf } from './EntityBody';
 import { ProposalOverlay } from './ProposalOverlay';
@@ -40,6 +41,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * не ждёт его. Результат читают `RecordView` и меню ⋮ тем же ключом — второго запроса нет.
    */
   const templates = usePageTemplates();
+  /**
+   * Записи поставки — по той же причине и тем же ключом, что список шаблонов: шаблон хоста —
+   * запись «Шаблон хоста» (срез 1б §9.2), и запрос за ней уходит вместе с `entity.get`, а не
+   * после него из `RecordView`. Один запрос на экран (С1б-16).
+   */
+  const supply = useSupplyRecords();
   // §3.5 «Скопировать ссылку». Буфер обмена — не данность: его нет в http-контексте,
   // а разрешение пользователь может и не дать. На отказе показываем саму ссылку
   // (manualLink), чтобы копирование осталось возможным руками, а не превратилось в
@@ -314,7 +321,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
                       kind: 'configuring',
                       templateTitle:
                         // Пустой заголовок — id, как у пунктов «Открыть через „X“» (`titleOf`).
-                        templates.rows.find((r) => r.id === configuringId)?.title || configuringId,
+                        // Шаблона хоста в списке шаблонов нет (он не кандидат) — его заголовок
+                        // из записей поставки.
+                        (
+                          templates.rows.find((r) => r.id === configuringId) ??
+                          [...supply.byKey.values()].find((r) => r.id === configuringId)
+                        )?.title || configuringId,
                       onOpenTemplate: () => openEntity(configuringId),
                     }
                   : isPage

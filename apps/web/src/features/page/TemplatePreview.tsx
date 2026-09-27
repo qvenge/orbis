@@ -10,7 +10,7 @@ import { Skeleton } from '../../ui/Skeleton';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { PageView } from './PageView';
 import { RecordView } from './RecordView';
-import { templateForOf } from './TemplateBanner';
+import { isHostTemplate, templateForOf } from './TemplateBanner';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
 
@@ -68,6 +68,11 @@ export function TemplatePreview({
   // записью. Отказ списка — не ожидание: показ идёт на самой странице.
   const waiting = candidates.data === undefined && !candidates.isError;
   const labels = forAspects.map((id) => aspectLabel(reg, id));
+  // Шаблон хоста (срез 1б §9.2) набора не имеет — он вид всех записей без своего шаблона, и
+  // «Шаблон для: —» назвало бы его черновиком. Подходящая ему запись — любая (набор пуст).
+  const subject = isHostTemplate(entity.props)
+    ? 'Шаблон хоста'
+    : `Шаблон для: ${labels.length === 0 ? '—' : labels.join(', ')}`;
 
   return (
     <div className="flex flex-col gap-2">
@@ -78,9 +83,7 @@ export function TemplatePreview({
       >
         {/* Пробелы между кусками — явные: перевод строки в JSX пробела не даёт, и строка
             читалась бы «проект ·предпросмотр на:». */}
-        <span className="text-sm text-text-secondary">
-          Шаблон для: {labels.length === 0 ? '—' : labels.join(', ')} ·
-        </span>{' '}
+        <span className="text-sm text-text-secondary">{subject} ·</span>{' '}
         <label htmlFor={selectId} className="text-sm text-text-secondary">
           предпросмотр на:
         </label>{' '}

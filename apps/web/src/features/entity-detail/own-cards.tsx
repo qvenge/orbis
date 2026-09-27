@@ -1,9 +1,8 @@
-import type { ComponentType } from 'react';
+import { ownCardOrder } from '@orbis/shared';
+import { EXTENSION_CARDS, type OwnCard } from '../../app/extension-registry';
 import { useNav } from '../../state/navigation';
-import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { AspectSection, AspectSections } from './AspectSection';
 import { AssignmentCard } from './AssignmentCard';
-import { GoalProgress } from './GoalProgress';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
 import { RunFeed } from './RunFeed';
 import { RunsList } from './RunsList';
@@ -13,53 +12,21 @@ import { RUN_ASPECT, useTicketRuns } from './useTicketRuns';
 
 /**
  * Свои карточки аспектов — объявлением «аспект → карточка» (спека страниц 1а §7.3), а не
- * ветками `if` экрана записи.
+ * ветками `if` экрана записи. С 1б (§4.1, §8.5) карточки — двух родов: карточки ЯДРА (исполнитель,
+ * рутина, прогон) живут здесь, карточки РАСШИРЕНИЙ (цель, финансы) — в каталогах расширений, и ядро
+ * берёт их только через реестр карточек (`app/extension-registry.tsx`, РП-23). Порядок и ранги
+ * объявляет shared (`ownCardOrder()`: хост и манифесты).
  *
- * Карточка собирается из частей, которые экран записи до среза разносил по вкладкам: прогресс
+ * Карточка собирается из частей, которые экран записи до среза 1а разносил по вкладкам: прогресс
  * цели наверху «Сущности», её поля — в «Деталях»; ожидание тикета наверху, назначение — в
- * «Деталях». Шаблон ставит карточку одним куском туда, где написан `{{card: X}}` (спека §8.2 (3)
- * — одно из трёх намеренных отличий экрана записи через шаблон хоста). Данные у всех
- * частей — из хоста записи (`record-host.tsx`), своих пропов у карточки нет.
+ * «Деталях». Шаблон ставит карточку одним куском (спека 1а §8.2 (3)). Данные у всех частей — из
+ * хоста записи (`record-host.tsx`), своих пропов у карточки нет.
  */
 
-const GOAL = 'orbis/goal';
 const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
-const FINANCIAL = 'orbis/financial';
-/** Единица прогресса цели — СВОЙСТВО (§А1-1), а не поле аспекта `orbis/goal`. */
-const GOAL_UNIT = 'orbis/unit';
-
-/** Полоса прогресса цели — если сервер её посчитал (`goalProgress` есть только у цели, E2). */
-export function GoalProgressSlot() {
-  const { entity, goalProgress } = useRecordHost();
-  if (goalProgress === undefined) return null;
-  const unit = entity.props[GOAL_UNIT];
-  return (
-    <GoalProgress progress={goalProgress} unit={typeof unit === 'string' ? unit : undefined} />
-  );
-}
-
-/**
- * Карточка «план → факт» (§2.7) — по состоянию ХОСТА: поднимает его чекбокс `{{title}}`, где бы
- * тот ни стоял (Ф-1а-18).
- */
-export function PlanToFactSlot() {
-  const { planToFact } = useRecordHost();
-  if (planToFact.prompt === null) return null;
-  return <PlannedToFactCard prompt={planToFact.prompt} onClose={planToFact.dismiss} />;
-}
 
 const CARD_CLASS = 'flex flex-col gap-6';
-
-function GoalCard() {
-  const { entity } = useRecordHost();
-  return (
-    <div className={CARD_CLASS}>
-      <AspectSection entity={entity} aspectId={GOAL} />
-      <GoalProgressSlot />
-    </div>
-  );
-}
 
 /**
  * Назначение: карточка исполнителя, а у тикета (задача С назначением) — ещё ожидание человека и
@@ -127,55 +94,61 @@ function AgentRunCard() {
   return <RunFeed key={`run-${entity.id}`} entity={entity} />;
 }
 
-function FinancialCard() {
-  const { entity } = useRecordHost();
-  return (
-    <div className={CARD_CLASS}>
-      <AspectSection entity={entity} aspectId={FINANCIAL} />
-      <PlanToFactSlot />
-    </div>
-  );
-}
-
-/** Своя карточка аспекта: что рисовать и у какой записи. */
-export interface OwnAspectCard {
-  Card: ComponentType;
-  /**
-   * Показывать ли карточку у этой записи. Обычно — «аспект навешен», но не всегда: карточка
-   * назначения стоит у ЛЮБОЙ задачи, потому что исполнителя ставит владелец, и именно этим жестом
-   * задача становится тикетом. Спроси мы наличие аспекта — у простой задачи единственный путь
-   * назначить исполнителя пропал бы (ревью задачи 12, I-2).
-   */
-  showWhen: (entity: Pick<WireEntity, 'aspects'>) => boolean;
-}
-
 const hasAspect =
   (aspectId: string) =>
   (entity: Pick<WireEntity, 'aspects'>): boolean =>
     entity.aspects.includes(aspectId);
 
-/** Объявление «аспект → своя карточка» (§7.3). Аспект вне списка показывает общая секция. */
-export const OWN_ASPECT_CARDS: Readonly<Record<string, OwnAspectCard>> = {
-  [GOAL]: { Card: GoalCard, showWhen: hasAspect(GOAL) },
-  /**
-   * Назначение и прогон — карточки БЕЗ общей секции свойств: её заменяет своя карточка (прежде —
-   * `HIDDEN_ASPECT_CARDS`, затем `SECTION_REPLACED`). Дело не в дублировании вида, а в правке.
-   * Общая секция предлагает контрол на каждое правимое свойство, и правка `orbis/executor` в обход
-   * согласованности исполнителя (executor=agent ⇔ есть грант, строки каталога
-   * `assignment_grant_required`/`_forbidden`, `builtin-rules.ts`) отдавала бы отказ `INVARIANT` на
-   * каждом втором нажатии: пару меняет только карточка назначения, одним патчем. Свойства прогона
-   * от этого не зависят — они `system_writable` и без того только для чтения, — но лента шагов
-   * рассказывает о прогоне несравнимо больше, чем девятнадцать строк. У остальных своих карточек
-   * (цель, рутина, финансы) общая секция есть — она их часть.
-   */
+/**
+ * Свои карточки ЯДРА (спека 1б §4.1) — у хоста; ранги у них в `HOST_OWN_CARDS` (shared).
+ *
+ * Назначение и прогон — карточки БЕЗ общей секции свойств: её заменяет своя карточка (прежде —
+ * `HIDDEN_ASPECT_CARDS`, затем `SECTION_REPLACED`). Дело не в дублировании вида, а в правке.
+ * Общая секция предлагает контрол на каждое правимое свойство, и правка `orbis/executor` в обход
+ * согласованности исполнителя (executor=agent ⇔ есть грант, строки каталога
+ * `assignment_grant_required`/`_forbidden`, `builtin-rules.ts`) отдавала бы отказ `INVARIANT` на
+ * каждом втором нажатии: пару меняет только карточка назначения, одним патчем. Свойства прогона
+ * от этого не зависят — они `system_writable` и без того только для чтения, — но лента шагов
+ * рассказывает о прогоне несравнимо больше, чем девятнадцать строк. У остальных своих карточек
+ * (цель, рутина, финансы) общая секция есть — она их часть.
+ */
+const CORE_CARDS: Readonly<Record<string, OwnCard>> = {
+  // Карточка стоит у ЛЮБОЙ задачи: исполнителя ставит владелец, и этим жестом задача становится
+  // тикетом. Спроси мы наличие аспекта — у простой задачи путь назначить исполнителя пропал бы.
   [ASSIGNMENT]: {
     Card: AssignmentOwnCard,
     showWhen: (entity) => entity.aspects.includes(TASK) || entity.aspects.includes(ASSIGNMENT),
+    extension: null,
   },
-  [ROUTINE_ASPECT]: { Card: RoutineCard, showWhen: hasAspect(ROUTINE_ASPECT) },
-  [RUN_ASPECT]: { Card: AgentRunCard, showWhen: hasAspect(RUN_ASPECT) },
-  [FINANCIAL]: { Card: FinancialCard, showWhen: hasAspect(FINANCIAL) },
+  [ROUTINE_ASPECT]: { Card: RoutineCard, showWhen: hasAspect(ROUTINE_ASPECT), extension: null },
+  [RUN_ASPECT]: { Card: AgentRunCard, showWhen: hasAspect(RUN_ASPECT), extension: null },
 };
+
+/** Своя карточка с местом в `{{cards: own}}`: аспект и ранг — из объявления shared. */
+export type RankedOwnCard = OwnCard & { aspect: string; rank: number };
+
+/**
+ * Карточки ядра и расширений В ПОРЯДКЕ РАНГОВ (`ownCardOrder()`, §8.5): ранг принадлежит
+ * карточке, а не аспекту, — карточка исполнителя стоит своим рангом, по какому бы аспекту она ни
+ * показывалась. Считается один раз: объявления — код поставки, во время работы они не меняются.
+ *
+ * Объявление без компонента — не «ничего»: карточка молча пропала бы с экрана. Такого в поставке
+ * нет (сверка — `extension-registry.test.tsx`), и сборка, где оно случилось, падает здесь.
+ */
+const RANKED: readonly RankedOwnCard[] = ownCardOrder().map((decl) => {
+  const card = CORE_CARDS[decl.aspect] ?? EXTENSION_CARDS[decl.aspect];
+  if (card === undefined) throw new Error(`у своей карточки ${decl.aspect} нет компонента`);
+  return { ...card, aspect: decl.aspect, rank: decl.rank };
+});
+
+export function ownCardComponents(): readonly RankedOwnCard[] {
+  return RANKED;
+}
+
+/** Объявление «аспект → своя карточка» (§7.3) в порядке рангов. Аспект вне него — общая секция. */
+export const OWN_ASPECT_CARDS: Readonly<Record<string, OwnCard>> = Object.fromEntries(
+  RANKED.map((c) => [c.aspect, c]),
+);
 
 /**
  * Карточка аспекта `{{card: X}}`: своя из объявления (по её `showWhen`) или общая секция.
@@ -200,8 +173,9 @@ export function AspectCardFor({ aspectId }: { aspectId: string }) {
  * состояние рутины (ревью задачи 12, I-3). Секция полей аспекта со своей карточкой здесь не
  * повторяется — она часть карточки (или заменена ею — у назначения и прогона, см. объявление).
  *
- * Вкладка «Детали» шаблона хоста (§8.1) — это `{{cards}}` при пяти размещённых своих карточках:
- * там остаются общие секции прочих аспектов и секция «Свойства».
+ * Вкладка «Детали» шаблона хоста — это `{{cards}}` в дереве с `{{cards: own}}`: все свои карточки
+ * размещены им (рендерер кладёт их в `placed`, спека 1б §8.5), и остаются общие секции прочих
+ * аспектов и секция «Свойства».
  */
 export function RestCards({ placed }: { placed: ReadonlySet<string> }) {
   const { entity } = useRecordHost();

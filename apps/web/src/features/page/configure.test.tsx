@@ -413,7 +413,7 @@ test('«Предпросмотр на записи…» у страницы бе
   expect(screen.getByTestId('page-view')).toBeInTheDocument();
 });
 
-test('пункты меню: у шаблона нет «Предпросмотра на записи…», у записи через хост — нет «Настроить шаблон»', async () => {
+test('пункты меню: у шаблона нет «Предпросмотра на записи…», у записи через хост — «Настроить шаблон хоста», а не «Настроить шаблон „…“»', async () => {
   idleNever();
   const first = open(asScreen(projectsTemplate()), []);
   await screen.findByTestId('template-preview-plaque');
@@ -422,10 +422,12 @@ test('пункты меню: у шаблона нет «Предпросмотр
   expect(tplLabels).not.toContain('Предпросмотр на записи…');
   first.unmount();
 
+  // Шаблон хоста с 1б — запись поставки (§9.2), и её настройка — свой пункт; шаблона владельца,
+  // которым можно было бы «Настроить шаблон „…“», у записи через хост нет.
   open(PROJECT_A, []);
   await screen.findByTestId('page-tabs');
   const hostLabels = await menuLabels();
-  expect(hostLabels.some((l) => l.startsWith('Настроить'))).toBe(false);
+  expect(hostLabels.filter((l) => l.startsWith('Настроить'))).toEqual(['Настроить шаблон хоста']);
 });
 
 // --- Переходы и снимки ------------------------------------------------------------------------

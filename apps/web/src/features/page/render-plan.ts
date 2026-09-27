@@ -83,6 +83,12 @@ export function forEachRendered(
 export const isCardsBlock = (node: PageNode): boolean =>
   node.kind === 'record' && node.name === 'cards';
 
+/**
+ * Рисуемый ли блок своих карточек `{{cards: own}}` (спека 1б §8.5): показанные им карточки
+ * «остальные» (`{{cards}}`) и дописывание хоста не повторяют.
+ */
+export const isOwnCardsBlock = (node: PageNode): boolean => node.kind === 'ownCards';
+
 /** Есть ли в дереве рисуемый `{{cards}}` — в заборе кода, неуместном или сломанном месте не в счёт. */
 export function hasRenderedCards(nodes: readonly PageNode[], kind: BodyKind): boolean {
   let found = false;

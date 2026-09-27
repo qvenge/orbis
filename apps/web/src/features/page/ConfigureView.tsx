@@ -8,7 +8,7 @@ import { useToast } from '../../ui/toast-store';
 import { leaveBody } from '../entity-detail/body-gate';
 import { bodyKindOf, EntityBody, useBodyScreen } from '../entity-detail/EntityBody';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
-import { TemplateBanner, templateForOf } from './TemplateBanner';
+import { isHostTemplate, TemplateBanner, templateForOf } from './TemplateBanner';
 
 /**
  * Настройка страницы или шаблона (спека страниц 1а §9.1): тело — в ТОМ ЖЕ редакторе, что тело
@@ -63,15 +63,21 @@ export function ConfigureView({ targetId, onDone }: { targetId: string; onDone: 
     );
   }
   const isTemplate = bodyKindOf(entity) === 'template';
+  const host = isHostTemplate(entity.props);
   return (
     <div data-testid="configure-view" className="flex flex-col gap-4 px-4 pb-10 pt-5 md:px-6">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm text-text-secondary">
-          {isTemplate ? 'Настройка шаблона' : 'Настройка страницы'} „{entity.title}“
+          {host
+            ? 'Настройка шаблона хоста'
+            : isTemplate
+              ? 'Настройка шаблона'
+              : 'Настройка страницы'}{' '}
+          „{entity.title}“
         </p>
         {done}
       </div>
-      {isTemplate && <TemplateBanner forAspects={templateForOf(entity.props)} />}
+      {isTemplate && <TemplateBanner forAspects={templateForOf(entity.props)} host={host} />}
       <ThisEntityProvider id={entity.id}>
         {/* key — по записи: память правки (таймер паузы, черновик) не переезжает на соседнюю. */}
         <EntityBody

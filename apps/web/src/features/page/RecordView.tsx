@@ -13,16 +13,19 @@ import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { RecordHostProvider, recordHostValue, type WireEntity } from '../entity-detail/record-host';
 import { BaseRecordView } from './BaseRecordView';
 import { BlockPlaque } from './blocks/BlockPlaque';
-import { HOST_TEMPLATE_NODES } from './host-template';
+import { HOST_TEMPLATE_NODES, HOST_TEMPLATE_TEXT } from './host-template';
 import { Renderer } from './Renderer';
+import { renderIssues } from './render-plan';
 import { TabMemoryScope } from './TabsContainer';
 import {
   BrokenTemplatePlaque,
   DisputePlaque,
+  HostTemplateBrokenPlaque,
   RegistryErrorPlaque,
   TemplatesErrorPlaque,
 } from './TemplatePlaques';
 import { usePageTemplates } from './usePageTemplates';
+import { useSupplyRecords } from './useSupplyRecords';
 
 type EntityGetReply = RouterOutputs['entity']['get'];
 
@@ -137,6 +140,48 @@ function openableOf(
 const NO_CRASHES: ReadonlyMap<string, string> = new Map();
 
 /**
+ * Чем рисуется шаблон хоста (срез 1б §9.2): телом записи поставки «Шаблон хоста», если она есть, не
+ * в архиве и не сломана, — иначе эталоном из кода. Правка этой записи владельцем (настройкой,
+ * агентом) и есть правка вида всех записей без своего шаблона.
+ */
+interface HostSource {
+  /** Дерево, которым рисуется шаблон хоста. */
+  nodes: readonly PageNode[];
+  /** Его текст — «Изменить вид только этой записи» копирует показанное, а не эталон. */
+  text: string;
+  /** Живая запись «Шаблон хоста» (её настраивает «⋯»); `null` — записи нет или она в архиве. */
+  recordId: string | null;
+  /** Почему запись не взята — показан эталон кода с плашкой; `null` — взята или её нет. */
+  broken: string | null;
+}
+
+const ETALON_SOURCE: HostSource = {
+  nodes: HOST_TEMPLATE_NODES,
+  text: HOST_TEMPLATE_TEXT,
+  recordId: null,
+  broken: null,
+};
+
+/**
+ * Сломана ли запись шаблона хоста — тем же правилом, что шаблон владельца (1а §4.2 шаг 7: любая
+ * проблема тела исключает шаблон целиком). Без реестра проверимо всё, кроме блоков данных (их
+ * разбору нужен реестр): запись рисуется, а блок данных, если он сломан, скажет о себе сам — до
+ * приезда реестра, который решит окончательно.
+ */
+function hostBrokenReason(body: string, reg: ParseRegistry | null): string | null {
+  if (reg !== null) return templateBrokenReason(body, reg);
+  const [first] = renderIssues(parsePageText(body), 'template').values();
+  return first?.message ?? null;
+}
+
+function hostSourceOf(record: WireEntity | undefined, reg: ParseRegistry | null): HostSource {
+  if (record === undefined) return ETALON_SOURCE;
+  const broken = hostBrokenReason(record.body, reg);
+  if (broken !== null) return { ...ETALON_SOURCE, recordId: record.id, broken };
+  return { nodes: parsePageText(record.body), text: record.body, recordId: record.id, broken };
+}
+
+/**
  * Чем запись показана сейчас — для меню ⋮ (спека §8.4): «Открыть через шаблон хоста» только при
  * своём шаблоне, «Открыть через „X“» — прочими исправными, «Изменить вид только этой» — текстом
  * показанного, «Сменить выбор» — спорящими БЕЗ сломанных (те же `brokenIds`, что у выбора, —
@@ -151,6 +196,13 @@ export interface RecordShown {
   brokenIds: readonly string[];
   /** Подходящие исправные шаблоны, в том числе показанный (`openableOf`). */
   openable: readonly string[];
+  /** Запись «Шаблон хоста» (срез 1б §9.2) — «⋯ → Настроить шаблон хоста»; `null` — её нет. */
+  hostRecordId: string | null;
+  /**
+   * Текст шаблона хоста, которым запись показана бы через хост (тело записи поставки или эталон);
+   * `null` — записи поставки ещё едут, и какой текст настоящий, не известно.
+   */
+  hostText: string | null;
 }
 
 /** «Сменить выбор шаблона для таких записей» (§4.3): плашка спора по требованию, `n` — номер просьбы. */
@@ -161,15 +213,16 @@ export interface DisputeRequest {
 
 /**
  * Запись (не страница) — через шаблон (спека страниц 1а §4.2): свой шаблон владельца по функции
- * выбора или шаблон хоста (§8.1). Плашки спора, сломанных шаблонов и не приехавшего списка — над
- * рендером.
+ * выбора или шаблон хоста — тело записи поставки «Шаблон хоста» (срез 1б §9.2; `HostSource`). Плашки
+ * спора, сломанных шаблонов, сломанного шаблона хоста и не приехавшего списка — над рендером.
  *
  * Данные обвязки — `reply`, ответ `entity.get` экрана (`DETAIL_INCLUDE`, ключ `detailGetInput`):
  * второго запроса записи нет (РП-13), оптимистичные правки `{{title}}` видны сразу. `this` —
  * показываемая запись (§6.4).
  *
  * Гарантии (§8.3, §4.2 шаги 7–8): шаблон владельца, упавший при рендере, считается сломанным с
- * причиной «ошибка отрисовки», и выбор повторяется без него; упал шаблон хоста — базовый вид.
+ * причиной «ошибка отрисовки», и выбор повторяется без него; запись шаблона хоста сломана, в архиве
+ * или упала — эталон кода (1б §9.2); упал и он — базовый вид.
  * Карточки аспектов, не размещённые шаблоном, дописываются в конец (`appendUnplacedCards`).
  */
 export function RecordView({
@@ -201,6 +254,7 @@ export function RecordView({
 }) {
   const { entity } = reply;
   const list = usePageTemplates();
+  const supply = useSupplyRecords();
   const { registry, failed } = useFieldCatalog();
   /**
    * Отказ реестра — ЛИПКИЙ, пока реестра нет. Шаблон хоста, показанный после отказа, монтирует
@@ -243,6 +297,8 @@ export function RecordView({
         : decide(entity.aspects, list, reg, registryFailed, crashed, override),
     [entity.aspects, list, reg, registryFailed, crashed, override, preview],
   );
+  const hostRecord = supply.byKey.get('host-template');
+  const hostSource = useMemo(() => hostSourceOf(hostRecord, reg), [hostRecord, reg]);
   const host = recordHostValue(reply, { planToFact, activeTab: 'record', readOnly });
   const titleOf = (id: string) => list.rows.find((r) => r.id === id)?.title ?? id;
 
@@ -260,6 +316,7 @@ export function RecordView({
     () => openableOf(entity.aspects, list, reg, crashed).join(','),
     [entity.aspects, list, reg, crashed],
   );
+  const hostText = supply.status === 'loading' ? null : hostSource.text;
   useEffect(() => {
     const ids = (key: string) => (key === '' ? [] : key.split(','));
     onShown?.({
@@ -267,8 +324,14 @@ export function RecordView({
       templateId: shownId,
       brokenIds: ids(brokenKey),
       openable: ids(openableKey),
+      hostRecordId: hostSource.recordId,
+      hostText,
     });
-  }, [onShown, entity.id, shownId, brokenKey, openableKey]);
+  }, [onShown, entity.id, shownId, brokenKey, openableKey, hostSource.recordId, hostText]);
+  const configureHost =
+    onConfigureTemplate !== undefined && hostSource.recordId !== null
+      ? () => onConfigureTemplate(hostSource.recordId as string)
+      : undefined;
 
   // Спор, найденный выбором, — сам по себе; просьба меню показывает плашку и при запомненном
   // выборе. Своё «закрыто» у плашки — про ЭТОТ спор на ЭТОЙ записи, а у просьбы — ещё и про её
@@ -296,6 +359,14 @@ export function RecordView({
               })}
             />
           ))}
+          {/* О шаблоне хоста — только когда запись им и показана: у записи со своим шаблоном
+              поломка запасного шаблона ничего на экране не меняет. */}
+          {decision.shown.kind === 'host' && hostSource.broken !== null && (
+            <HostTemplateBrokenPlaque
+              reason={hostSource.broken}
+              {...(configureHost !== undefined && { onConfigure: configureHost })}
+            />
+          )}
           {dispute !== null && (
             <DisputePlaque
               key={`${entity.id}:${dispute.contenders.join(',')}:${dispute.key}`}
@@ -303,7 +374,13 @@ export function RecordView({
               rows={list.rows}
             />
           )}
-          <ShownTemplate shown={decision.shown} entityId={entity.id} onOwnCrash={markCrashed} />
+          <ShownTemplate
+            shown={decision.shown}
+            host={hostSource}
+            entityId={entity.id}
+            onOwnCrash={markCrashed}
+            {...(configureHost !== undefined && { onConfigureHost: configureHost })}
+          />
         </div>
       </ThisEntityProvider>
     </RecordHostProvider>
@@ -312,12 +389,16 @@ export function RecordView({
 
 function ShownTemplate({
   shown,
+  host,
   entityId,
   onOwnCrash,
+  onConfigureHost,
 }: {
   shown: Shown;
+  host: HostSource;
   entityId: string;
   onOwnCrash: (templateId: string) => void;
+  onConfigureHost?: () => void;
 }) {
   if (shown.kind === 'wait') {
     return (
@@ -328,9 +409,29 @@ function ShownTemplate({
     );
   }
   if (shown.kind === 'host') {
-    return (
+    // Эталон кода — последняя ступень перед базовым видом: упал и он — базовый вид (1а §4.2 шаг 8).
+    const etalon = (
       <RenderBoundary resetKey={`${entityId}:host`} fallback={<BaseRecordView />}>
         <TemplateTree scope="template:host" nodes={HOST_TEMPLATE_NODES} />
+      </RenderBoundary>
+    );
+    if (host.nodes === HOST_TEMPLATE_NODES) return etalon;
+    // Тело записи шаблона хоста, упавшее при рендере, — та же поломка, что неразобранное (§9.2
+    // гарантии): эталон кода и плашка с причиной «ошибка отрисовки».
+    return (
+      <RenderBoundary
+        resetKey={`${entityId}:host-record:${host.text}`}
+        fallback={
+          <>
+            <HostTemplateBrokenPlaque
+              reason={RENDER_CRASH_REASON}
+              {...(onConfigureHost !== undefined && { onConfigure: onConfigureHost })}
+            />
+            {etalon}
+          </>
+        }
+      >
+        <TemplateTree scope="template:host" nodes={host.nodes} />
       </RenderBoundary>
     );
   }

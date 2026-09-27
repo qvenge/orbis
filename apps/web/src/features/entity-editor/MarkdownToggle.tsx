@@ -146,7 +146,7 @@ export function MarkdownToggle({
       />
       {awaitingRawConfirm && (
         // text-alert, а НЕ text-warning: --color-warning объявлен цветом заливки бара и на
-        // белом листе даёт 3.18:1 (документировано в NativeRow.tsx:92, GoalProgress.tsx:55-57).
+        // белом листе даёт 3.18:1 (документировано в NativeRow.tsx:92, extensions/goals/GoalCard.tsx:65-66).
         <p role="alert" className="text-sm text-alert">
           {RAW_WARNING}
         </p>

@@ -169,6 +169,38 @@ export function BrokenTemplatePlaque({
   );
 }
 
+/**
+ * Запись «Шаблон хоста» сломана (срез 1б §9.2 гарантии): её тело не разобрано или упало при
+ * рендере, и запись показана ЭТАЛОНОМ ПОСТАВКИ из кода. Молча показать эталон значило бы спрятать
+ * от владельца, что его правка шаблона хоста не действует (1а §6.5); выход — настройка записи.
+ */
+export function HostTemplateBrokenPlaque({
+  reason,
+  onConfigure,
+}: {
+  reason: string;
+  /** Не задан — настраивать некуда (нет экрана настройки или записи): только текст. */
+  onConfigure?: () => void;
+}) {
+  return (
+    <Card
+      role="alert"
+      data-testid="host-template-broken"
+      className="flex flex-col gap-2 border-danger"
+    >
+      <p className="text-danger text-sm">Шаблон хоста повреждён — показан эталон поставки.</p>
+      <p className="text-sm text-text-secondary">{reason}</p>
+      {onConfigure !== undefined && (
+        <div>
+          <Button variant="outline" size="sm" onClick={onConfigure}>
+            Настроить шаблон хоста
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /** Список шаблонов не приехал (РП-14): запись показана шаблоном хоста, экран работает. */
 export function TemplatesErrorPlaque() {
   return (

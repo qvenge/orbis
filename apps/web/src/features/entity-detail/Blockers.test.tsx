@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import {
-  isTemplatesListCall,
+  isRecordScreenListCall,
   renderWithProviders,
   trpcError,
   wireEntity,
@@ -222,7 +222,7 @@ test('добавление блокировки: поиск через entity.su
   );
   // Грамматика `search=` из пикера ушла совсем: остаточный запрос по ней означал бы, что
   // поиск по целому слову жив вторым путём.
-  expect(calls.some((c) => c.path === 'entity.query' && !isTemplatesListCall(c))).toBe(false);
+  expect(calls.some((c) => c.path === 'entity.query' && !isRecordScreenListCall(c))).toBe(false);
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
   await waitFor(() =>
     expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
