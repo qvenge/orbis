@@ -1,5 +1,5 @@
-import { APP_HOME, APP_NAV, SUPPLY_TEXT } from '@orbis/shared';
-import { parseAppPrint } from '@orbis/shared/supply/print';
+import { APP_HOME, APP_NAV, APP_OPENS_OVER, SUPPLY_TEXT } from '@orbis/shared';
+import { parseAppPrint, printAppProps } from '@orbis/shared/supply/print';
 
 const idsOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
@@ -25,6 +25,8 @@ export interface ShellRevertPlan {
   home: string | null;
   etalonHome: string | null;
   etalonNav: string[];
+  /** Печать эталона в записи — к ней ведёт возврат. */
+  etalon: ReturnType<typeof parseAppPrint>;
 }
 
 export function shellRevertPlan(props: Readonly<Record<string, unknown>>): ShellRevertPlan | null {
@@ -43,5 +45,41 @@ export function shellRevertPlan(props: Readonly<Record<string, unknown>>): Shell
     home: idOf(props[APP_HOME]),
     etalonHome: idOf(etalon.props[APP_HOME]),
     etalonNav,
+    etalon,
   };
+}
+
+/** Ссылочные свойства места, из которых возврат вычищает архивные цели (R-16). */
+const REF_PROPS = [APP_HOME, APP_NAV, APP_OPENS_OVER] as const;
+
+/** id всех целей эталона: их живость решает, что возврат действительно вернёт. */
+export function etalonRefIds(plan: ShellRevertPlan): string[] {
+  return REF_PROPS.flatMap((p) => {
+    const v = plan.etalon.props[p];
+    return typeof v === 'string' ? [v] : idsOf(v);
+  });
+}
+
+/**
+ * Возвращать нечего (M-4 гейта 22): эталон без архивных и исчезнувших целей (`alive` — живые id)
+ * совпадает с нынешним местом — сервер ответил бы отказом «отличие от поставки — только записи в
+ * архиве». То же правило, что `withoutArchivedTargets` + сравнение печатей в `revertToEtalon`:
+ * одиночная ссылка на неживую цель снимается, список — фильтруется, пустой список — снимается.
+ */
+export function revertIsNoop(
+  row: { title: string; emoji: string | null; props: Record<string, unknown> },
+  plan: ShellRevertPlan,
+  alive: ReadonlySet<string>,
+): boolean {
+  const props: Record<string, unknown> = { ...plan.etalon.props };
+  for (const p of REF_PROPS) {
+    const v = props[p];
+    if (typeof v === 'string' && !alive.has(v)) delete props[p];
+    if (Array.isArray(v)) {
+      const kept = v.filter((x) => typeof x === 'string' && alive.has(x));
+      if (kept.length > 0) props[p] = kept;
+      else delete props[p];
+    }
+  }
+  return printAppProps(row) === printAppProps({ ...plan.etalon, props });
 }

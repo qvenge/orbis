@@ -354,6 +354,19 @@ describe('module_set: переключение — действие исполн
     }
     expect(await mask()).toEqual(before);
   });
+
+  test('ai.undo по actionId из ответа ручки возвращает маску (тост «Отменить», задача 22)', async () => {
+    const mask = () => withIdentity(db, personal(owner), (tx) => disabledExtensionsOf(tx, owner));
+    const before = await mask();
+    // Переключаем «Цели» в сторону, противоположную нынешней: откат обязан вернуть именно `before`.
+    const reply = await caller.user.setModuleEnabled({
+      module: 'goals',
+      enabled: before.includes('goals'),
+    });
+    expect(await mask()).not.toEqual(before);
+    await caller.ai.undo({ actionId: reply.actionId });
+    expect(await mask()).toEqual(before);
+  });
 });
 
 describe('§С8-22: маска на реестре тулов — один фильтр на четыре поверхности', () => {

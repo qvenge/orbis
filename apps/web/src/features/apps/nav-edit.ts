@@ -12,7 +12,15 @@
  * отверг бы любую следующую правку навигации — перестановку, добавление, удаление. Плашка «в архиве»
  * (§6.6) — достаточный сигнал до этой правки; после неё раздела нет, а сама запись раздела цела.
  */
-import { APP_ASPECT, APP_HOME, APP_NAV, APP_NAV_FORM, type NavForm } from '@orbis/shared';
+import {
+  APP_ASPECT,
+  APP_EXTENSIONS,
+  APP_HOME,
+  APP_NAV,
+  APP_NAV_FORM,
+  type ExtensionId,
+  type NavForm,
+} from '@orbis/shared';
 import type { UpdateBatchOperation } from '../page/useUpdateBatch';
 
 /** Навигация записи-приложения; не список id — пусто (испорченное значение правкой заменяется). */
@@ -58,6 +66,11 @@ export interface NewApp {
   homeId?: string;
   navIds: readonly string[];
   form: NavForm;
+  /**
+   * «Состав» (§8.6, §9.5) — по выбору владельца; пустой — свойство не пишется. Маску он не меняет:
+   * ни одного `module_set` в пачке.
+   */
+  extensions?: readonly ExtensionId[];
   /** id новой записи; по умолчанию — свежий. Задаёт клиент: на него ссылаются правки следом (§9.3). */
   id?: string;
 }
@@ -89,6 +102,8 @@ export function newAppOps(app: NewApp): UpdateBatchOperation[] {
           ...(app.homeId !== undefined && { [APP_HOME]: app.homeId }),
           [APP_NAV]: [...app.navIds],
           [APP_NAV_FORM]: app.form,
+          ...(app.extensions !== undefined &&
+            app.extensions.length > 0 && { [APP_EXTENSIONS]: [...app.extensions] }),
         },
       },
     },

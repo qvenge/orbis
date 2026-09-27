@@ -5,7 +5,7 @@ import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import type { WireEntity } from '../entity-detail/record-host';
-import { shellRevertPlan } from './revert-shell';
+import { etalonRefIds, revertIsNoop, shellRevertPlan } from './revert-shell';
 import { REVERT, useSupplyAction } from './useSupply';
 
 /**
@@ -26,7 +26,7 @@ export function RevertShellDialog({ row, onClose }: { row: WireEntity; onClose: 
       plan === null
         ? []
         : refIdsKey(
-            [...plan.vanishing, ...plan.etalonNav, plan.home, plan.etalonHome].filter(
+            [...plan.vanishing, ...etalonRefIds(plan), plan.home].filter(
               (x): x is string => x !== null,
             ),
           ),
@@ -34,7 +34,9 @@ export function RevertShellDialog({ row, onClose }: { row: WireEntity; onClose: 
   );
   const refs = trpc.entity.resolveRefs.useQuery({ ids }, { enabled: ids.length > 0 });
   const byId = useMemo(() => new Map((refs.data ?? []).map((r) => [r.id, r])), [refs.data]);
-  const known = ids.length === 0 || refs.data !== undefined || refs.isError;
+  // Кнопка ждёт ответа: предупреждения о домашней и архивных разделах строятся по нему, и отказ
+  // запроса не должен их молча потерять (M-4 гейта 22) — без ответа подтвердить нельзя.
+  const known = ids.length === 0 || refs.data !== undefined;
   const name = (id: string) => `«${byId.get(id)?.title || id}»`;
   const alive = (id: string | null) =>
     id !== null && byId.get(id) !== undefined && byId.get(id)?.archived !== true;
@@ -45,6 +47,10 @@ export function RevertShellDialog({ row, onClose }: { row: WireEntity; onClose: 
   const loaded = refs.data !== undefined;
   const lostNav = loaded ? plan.etalonNav.filter((id) => !alive(id)) : [];
   const homeLost = plan.etalonHome === null || (loaded && !alive(plan.etalonHome));
+  // Отличие только в архивных целях: возврат ничего не вернёт, сервер откажет (`revertIsNoop`).
+  const noop =
+    known &&
+    revertIsNoop(row, plan, new Set((refs.data ?? []).filter((r) => !r.archived).map((r) => r.id)));
 
   return (
     <Dialog
@@ -85,13 +91,24 @@ export function RevertShellDialog({ row, onClose }: { row: WireEntity; onClose: 
             Разделы поставки в архиве не вернутся: {lostNav.map(name).join(', ')}.
           </p>
         )}
+        {refs.isError && refs.data === undefined && (
+          <p role="alert" data-testid="revert-refs-failed" className="text-danger">
+            Не удалось проверить, какие записи в архиве, — вернуть можно будет, когда связь
+            восстановится.
+          </p>
+        )}
+        {noop && (
+          <p data-testid="revert-noop">
+            Возвращать нечего: от поставки навигация отличается только записями в архиве.
+          </p>
+        )}
         <p className="text-xs text-text-muted">«Отменить» в уведомлении вернёт всё как сейчас.</p>
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
             Отмена
           </Button>
           <Button
-            disabled={!known || busy}
+            disabled={!known || noop || busy}
             onClick={() => {
               setBusy(true);
               void run({ kind: 'revert', key: HOST_SHELL_KEY }).then((ok) => {

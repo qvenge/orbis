@@ -115,13 +115,27 @@ const TWO_UPDATES: SupplyUpdate[] = [
   update({ key: 'home', recordId: id(52) }),
 ];
 
+type BatchOp = { tool: string; input: Record<string, unknown> & { id: string } };
+
 function render(updates: () => SupplyUpdate[] = () => []) {
+  // «Сервер в памяти» для записей-приложений: пачка правит их, перечитывание видит записанное.
+  const apps = new Map(APPS.map((a) => [a.id, { ...a, props: { ...a.props } }]));
   const handler: MockHandler = (path, input) => {
     switch (path) {
       case 'user.getSettings':
         return SETTINGS;
       case 'entity.query':
-        return (input as { query: string }).query === APPS_QUERY ? APPS : [];
+        return (input as { query: string }).query === APPS_QUERY ? [...apps.values()] : [];
+      case 'entity.updateBatch': {
+        for (const { tool, input: op } of (input as { operations: BatchOp[] }).operations) {
+          const cur = apps.get(op.id);
+          if (tool !== 'entity_update' || cur === undefined) continue;
+          const props = { ...cur.props, ...(op.props as Record<string, unknown> | undefined) };
+          for (const k of (op.unset as string[] | undefined) ?? []) delete props[k];
+          apps.set(op.id, { ...cur, props });
+        }
+        return { actionId: ACT };
+      }
       case 'supply.updates':
         return updates();
       case 'supply.acceptAll':
@@ -407,4 +421,88 @@ test('(г) «Сравнить» у оболочки хоста — постро�
     expect(lines.querySelector('[data-kind="removed"]')).toHaveTextContent('«Моя страница»'),
   );
   expect(lines.querySelector('[data-kind="added"]')).toBeNull();
+});
+
+// ─── Раунд 1 гейта 22 ─────────────────────────────────────────────────────────────────────────────
+
+test('I-1: «Новое приложение» с «Составом» — одна entity_create с расширениями, маска не трогается', async () => {
+  const { callsOf } = render();
+  await openTab();
+  fireEvent.click(screen.getByRole('button', { name: 'Новое приложение' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Новое приложение' });
+  fireEvent.change(within(dialog).getByRole('textbox', { name: 'Имя' }), {
+    target: { value: 'Сад' },
+  });
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Цели' }));
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Проекты' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Создать' }));
+  await waitFor(() => expect(callsOf('entity.updateBatch')).toHaveLength(1));
+  const [batch] = callsOf('entity.updateBatch') as { operations: BatchOp[] }[];
+  expect(batch?.operations).toHaveLength(1);
+  expect(batch?.operations[0]?.tool).toBe('entity_create');
+  expect((batch?.operations[0]?.input.props as Record<string, unknown>)[APP_EXTENSIONS]).toEqual([
+    'goals',
+    'projects',
+  ]);
+  expect(callsOf('user.setModuleEnabled')).toEqual([]);
+});
+
+test('I-1: правка «Состава» — одна entity_update без module_set; «Выключить приложение» видит новый «Состав»', async () => {
+  const { callsOf } = render();
+  await openTab();
+  // «Учёба» держала «Проекты»; владелец убирает их из её «Состава».
+  const study = await screen.findByTestId(`app-${STUDY}`);
+  fireEvent.click(within(study).getByRole('button', { name: 'Изменить состав' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Состав «Учёба»' });
+  const projects = within(dialog).getByRole('checkbox', { name: 'Проекты' });
+  expect(projects).toBeChecked();
+  fireEvent.click(projects);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+  await waitFor(() =>
+    expect(callsOf('entity.updateBatch')).toEqual([
+      {
+        operations: [{ tool: 'entity_update', input: { id: STUDY, unset: [APP_EXTENSIONS] } }],
+        label: 'Изменить состав',
+      },
+    ]),
+  );
+  expect(callsOf('user.setModuleEnabled')).toEqual([]);
+  await waitFor(() =>
+    expect(screen.getByTestId(`app-${STUDY}`)).toHaveTextContent('Расширений в составе нет'),
+  );
+  // «Проекты» больше никто из включённых не держит — у «Работы» они теперь сироты.
+  const work = screen.getByTestId(`app-${WORK}`);
+  fireEvent.click(within(work).getByRole('button', { name: 'Выключить приложение' }));
+  const off = await screen.findByRole('dialog', { name: 'Выключить приложение «Работа»' });
+  expect(within(off).getByRole('checkbox', { name: 'Цели' })).toBeChecked();
+  expect(within(off).getByRole('checkbox', { name: 'Проекты' })).toBeChecked();
+});
+
+test('M-2: правка графа гасит «Обновления» — признак «Изменено вами» не устаревает; повторный показ без запроса', async () => {
+  let edited = false;
+  const { callsOf } = render(() => [{ ...(TWO_UPDATES[1] as SupplyUpdate), edited }]);
+  await openTab();
+  const row = await screen.findByTestId('supply-update-home');
+  expect(row).not.toHaveTextContent('Изменено вами');
+  const before = callsOf('supply.updates').length;
+  // Владелец правит «Домой» где-то ещё — любая правка графа идёт через `invalidateGraph` (здесь —
+  // «Изменить состав», пачка того же механизма).
+  edited = true;
+  fireEvent.click(
+    within(await screen.findByTestId(`app-${STUDY}`)).getByRole('button', {
+      name: 'Изменить состав',
+    }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: 'Состав «Учёба»' });
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Цели' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+  await waitFor(() =>
+    expect(screen.getByTestId('supply-update-home')).toHaveTextContent('Изменено вами'),
+  );
+  expect(callsOf('supply.updates').length).toBe(before + 1);
+  // Уход с вкладки и возврат: список из кеша, без нового запроса (бесконечный `staleTime`).
+  fireEvent.click(screen.getByRole('tab', { name: 'Общие' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Приложения и расширения' }));
+  expect(await screen.findByTestId('supply-update-home')).toHaveTextContent('Изменено вами');
+  expect(callsOf('supply.updates').length).toBe(before + 1);
 });

@@ -5,7 +5,14 @@
  *
  * Рисуется `<App/>` целиком на мире рамки (`frame-fixtures`); сеть поставки — мок по путям.
  */
-import { APP_HOME, APP_NAV, PAGE_ASPECT, SUPPLY_ASPECT, SUPPLY_TEXT } from '@orbis/shared';
+import {
+  APP_HOME,
+  APP_NAV,
+  PAGE_ASPECT,
+  SUPPLY_ASPECT,
+  SUPPLY_KEY,
+  SUPPLY_TEXT,
+} from '@orbis/shared';
 import { printAppProps, printPageRecord } from '@orbis/shared/supply/print';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -27,6 +34,7 @@ import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/reg
 import {
   installCrashTrap,
   renderWithProviders,
+  trpcError,
   type WireEntityFixture,
   wireEntity,
 } from '../../test/harness';
@@ -81,7 +89,12 @@ const ROUTINES_UPDATE: SupplyUpdate = {
   recordText: printOf(ROUTINES_ROW),
 };
 
-function renderApp(opts: { rows?: WireEntityFixture[]; updates?: SupplyUpdate[] }) {
+function renderApp(opts: {
+  rows?: WireEntityFixture[];
+  updates?: SupplyUpdate[];
+  /** Отказ `entity.resolveRefs` для наборов с этим id (заголовки целей эталона оболочки). */
+  refsFailWith?: string;
+}) {
   const all = opts.rows ?? [SHELL_ROW, ...PAGES, ...RECORDS_WORLD];
   const world = frameWorld({
     all,
@@ -98,6 +111,14 @@ function renderApp(opts: { rows?: WireEntityFixture[]; updates?: SupplyUpdate[] 
         return { actionId: ACT };
       case 'ai.undo':
         return { ok: true, actionId: ACT };
+      case 'entity.resolveRefs':
+        if (
+          opts.refsFailWith !== undefined &&
+          (input as { ids: string[] }).ids.includes(opts.refsFailWith)
+        ) {
+          throw trpcError('INTERNAL_SERVER_ERROR');
+        }
+        return base(path, input, type);
       default:
         return base(path, input, type);
     }
@@ -233,7 +254,7 @@ test('(е′) «/» → «⋯» → «Приложение «Orbis»»: «Изм
   expect(
     within(section).getByRole('menuitem', { name: 'Настроить навигацию' }),
   ).toBeInTheDocument();
-  fireEvent.click(within(section).getByRole('menuitem', { name: 'Вернуть как было' }));
+  fireEvent.click(await within(section).findByRole('menuitem', { name: 'Вернуть как было' }));
   const dialog = await screen.findByTestId('revert-shell-dialog', {}, { timeout: 5000 });
   expect(within(dialog).getByTestId('revert-vanishing')).toHaveTextContent(
     'Исчезнут разделы, которые вы добавили: «Моя страница».',
@@ -269,7 +290,7 @@ test('перенос 11 (R-16): «Домой» в архиве и своя до�
   });
   await heading('Кухня');
   const section = await openShellSection();
-  fireEvent.click(within(section).getByRole('menuitem', { name: 'Вернуть как было' }));
+  fireEvent.click(await within(section).findByRole('menuitem', { name: 'Вернуть как было' }));
   const dialog = await screen.findByTestId('revert-shell-dialog', {}, { timeout: 5000 });
   expect(await within(dialog).findByTestId('revert-home')).toHaveTextContent(
     'Домашней после возврата не будет: страница поставки «Домой» в архиве, а ваша домашняя «Кухня» будет снята.',
@@ -278,4 +299,126 @@ test('перенос 11 (R-16): «Домой» в архиве и своя до�
     'Разделы поставки в архиве не вернутся: «Год».',
   );
   expect(dialog).toHaveTextContent('«Отменить» в уведомлении вернёт всё как сейчас.');
+});
+
+// ─── Раунд 1 гейта 22 ─────────────────────────────────────────────────────────────────────────────
+
+test('M-4 (а): оболочка отличается от поставки только архивным разделом — «Вернуть как было» не предлагается', async () => {
+  resetFrame('/');
+  const etalonNav = SHELL_ROW.props[APP_NAV] as string[];
+  // Владелец заархивировал «Год» и сохранил навигацию (редактор вычищает архивные) — «Изменено вами».
+  const { callsOf } = renderApp({
+    rows: [
+      shellWith({ [APP_NAV]: etalonNav.filter((x) => x !== YEAR) }),
+      ...PAGES.map((r) => (r.id === YEAR ? { ...r, archived: true } : r)),
+      ...RECORDS_WORLD,
+    ],
+  });
+  await heading('Домой');
+  const section = await openShellSection();
+  expect(within(section).getByTestId('menu-note')).toHaveTextContent('Изменено вами');
+  // Живость целей эталона спрошена, и ответ сказал: возврат ничего не вернёт (сервер отказал бы).
+  await waitFor(() =>
+    expect(
+      callsOf('entity.resolveRefs').some((i) => (i as { ids: string[] }).ids.includes(YEAR)),
+    ).toBe(true),
+  );
+  expect(within(section).queryByRole('menuitem', { name: 'Вернуть как было' })).toBeNull();
+});
+
+test('M-4 (б): заголовки целей не пришли — предупреждение не теряется: подтвердить нельзя', async () => {
+  resetFrame('/');
+  const nav = [...(SHELL_ROW.props[APP_NAV] as string[]), MY_PAGE];
+  const { callsOf } = renderApp({
+    rows: [shellWith({ [APP_NAV]: nav }), ...PAGES, MY_PAGE_ROW, ...RECORDS_WORLD],
+    refsFailWith: HOME,
+  });
+  await heading('Домой');
+  const section = await openShellSection();
+  fireEvent.click(await within(section).findByRole('menuitem', { name: 'Вернуть как было' }));
+  const dialog = await screen.findByTestId('revert-shell-dialog', {}, { timeout: 5000 });
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Не удалось проверить');
+  expect(within(dialog).getByRole('button', { name: 'Вернуть как было' })).toBeDisabled();
+  expect(callsOf('supply.revert')).toEqual([]);
+});
+
+test('M-5: у архивной записи поставки «Вернуть как было» нет', async () => {
+  resetFrame(`/r/${ROUTINES}`);
+  renderApp({
+    rows: [
+      SHELL_ROW,
+      ...PAGES.filter((p) => p.id !== ROUTINES),
+      routinesWith(true, { archived: true }),
+      ...RECORDS_WORLD,
+    ],
+  });
+  await heading('Рутины');
+  await openMenu();
+  const own = screen.getByRole('group', { name: 'Этот экран' });
+  expect(within(own).getByRole('menuitem', { name: 'Разархивировать' })).toBeInTheDocument();
+  expect(within(own).queryByRole('menuitem', { name: 'Вернуть как было' })).toBeNull();
+});
+
+test('M-6: «Вернуть как было» у шаблона хоста → supply.revert({key:"host-template"})', async () => {
+  const TPL = id(10);
+  const tpl = wireEntity({
+    id: TPL,
+    title: 'Шаблон хоста',
+    emoji: '📄',
+    aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+    body: '{{title}}',
+    props: {
+      [SUPPLY_KEY]: 'host-template',
+      [SUPPLY_TEXT]: printPageRecord({
+        title: 'Шаблон хоста',
+        emoji: '📄',
+        body: '{{title}}\n\n{{body}}',
+      }),
+    },
+  });
+  resetFrame(`/r/${TPL}`);
+  const { callsOf } = renderApp({ rows: [SHELL_ROW, ...PAGES, tpl, ...RECORDS_WORLD] });
+  await heading('Шаблон хоста');
+  await openMenu();
+  const own = screen.getByRole('group', { name: 'Этот экран' });
+  expect(within(own).getByTestId('menu-note')).toHaveTextContent('Изменено вами');
+  fireEvent.click(within(own).getByRole('menuitem', { name: 'Вернуть как было' }));
+  await waitFor(() => expect(callsOf('supply.revert')).toEqual([{ key: 'host-template' }]));
+});
+
+test('M-6: экран без своих пунктов (настройки) — раздел «Приложение «Orbis»» с признаком и диалогом возврата', async () => {
+  resetFrame('/settings');
+  const nav = [...(SHELL_ROW.props[APP_NAV] as string[]), MY_PAGE];
+  renderApp({ rows: [shellWith({ [APP_NAV]: nav }), ...PAGES, MY_PAGE_ROW, ...RECORDS_WORLD] });
+  await heading('Настройки');
+  const section = await openShellSection();
+  expect(screen.queryByRole('group', { name: 'Этот экран' })).toBeNull();
+  expect(within(section).getByTestId('menu-note')).toHaveTextContent('Изменено вами');
+  fireEvent.click(await within(section).findByRole('menuitem', { name: 'Вернуть как было' }));
+  const dialog = await screen.findByTestId('revert-shell-dialog', {}, { timeout: 5000 });
+  expect(within(dialog).getByTestId('revert-vanishing')).toHaveTextContent('«Моя страница»');
+});
+
+test('M-1: «⋯ → Приложения и расширения» открывает настройки сразу на своей вкладке; «Настройки» — на «Общих»', async () => {
+  resetFrame('/');
+  renderApp({});
+  await heading('Домой');
+  await openMenu();
+  const host = screen.getByRole('group', { name: 'Хост' });
+  fireEvent.click(within(host).getByRole('menuitem', { name: 'Приложения и расширения' }));
+  await heading('Настройки');
+  expect(await screen.findByRole('tab', { name: 'Приложения и расширения' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  expect(await screen.findByRole('region', { name: 'Расширения' })).toBeInTheDocument();
+  await openMenu();
+  fireEvent.click(
+    within(screen.getByRole('group', { name: 'Хост' })).getByRole('menuitem', {
+      name: 'Настройки',
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('tab', { name: 'Общие' })).toHaveAttribute('aria-selected', 'true'),
+  );
 });

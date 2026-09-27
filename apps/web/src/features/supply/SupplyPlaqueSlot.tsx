@@ -1,5 +1,8 @@
 import { SUPPLY_ASPECT } from '@orbis/shared';
 import { lazy, Suspense } from 'react';
+import { useToast } from '../../ui/toast-store';
+import { settleBody } from '../entity-detail/body-gate';
+import { useBodyGate } from '../entity-detail/EntityBody';
 
 const SupplyPlaque = lazy(() =>
   import('./SupplyPlaque').then((m) => ({ default: m.SupplyPlaque })),
@@ -18,10 +21,16 @@ export function SupplyPlaqueSlot({
 }: {
   entity: { id: string; aspects: readonly string[] };
 }) {
+  // Правило досыла собирает эагерная точка (экран записи и `body-gate` уже в её чанке), а не ленивые
+  // кнопки: их (`UpdateActions`) берёт и вкладка настроек, и ребро на `EntityBody`/`body-gate`
+  // утянуло бы экран записи туда или разрезало бы общий чанк (+285 Б замыкания — замер раунда 1).
+  const gate = useBodyGate();
+  const { show } = useToast();
+  const settle = () => settleBody(gate?.current ?? null, show);
   if (!entity.aspects.includes(SUPPLY_ASPECT)) return null;
   return (
     <Suspense fallback={null}>
-      <SupplyPlaque entityId={entity.id} />
+      <SupplyPlaque entityId={entity.id} settle={settle} />
     </Suspense>
   );
 }

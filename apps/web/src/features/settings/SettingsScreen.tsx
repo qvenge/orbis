@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
@@ -9,6 +9,7 @@ import { AspectsList } from './AspectsList';
 import { ConnectedAgents } from './ConnectedAgents';
 import { ExportButton } from './ExportButton';
 import { GeneralForm } from './GeneralForm';
+import { useSettingsTabRequest } from './settings-tab';
 
 /**
  * «Приложения и расширения» (срез 1б §8.6) — ЛЕНИВО: экран настроек во входном чанке, а тот входит в
@@ -21,13 +22,23 @@ const AppsAndExtensions = lazy(() =>
 
 export function SettingsScreen() {
   const settings = trpc.user.getSettings.useQuery();
+  // Вкладка по просьбе пункта меню (`openSettings`): первое значение — из просьбы (без кадра «Общих»),
+  // эффект переключает уже открытый экран и гасит просьбу — повторный вход без неё идёт на «Общие».
+  const requested = useSettingsTabRequest((s) => s.tab);
+  const [tab, setTab] = useState(() => useSettingsTabRequest.getState().tab ?? 'general');
+  useEffect(() => {
+    if (requested === null) return;
+    setTab(requested);
+    useSettingsTabRequest.setState({ tab: null });
+  }, [requested]);
   return (
     <>
       <ScreenHeader title="Настройки" />
       {settings.data ? (
         <div className="mx-auto w-full max-w-3xl">
           <Tabs
-            defaultValue="general"
+            value={tab}
+            onValueChange={setTab}
             tabs={[
               {
                 value: 'general',

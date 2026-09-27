@@ -2,7 +2,7 @@ import type { ExtensionId } from '@orbis/shared';
 import { useState } from 'react';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
-import { OrphanChecks } from './DisableAppDialog';
+import { ExtensionChecks } from './ExtensionChecks';
 import { ARCHIVE_APP, useAppAction } from './useAppAction';
 
 /**
@@ -36,9 +36,10 @@ export function ArchiveAppDialog({
           Приложение «{app.title}» уйдёт в архив. Его страницы и записи останутся; расширения не
           удаляются — их можно только выключить.
         </p>
-        <OrphanChecks
+        <ExtensionChecks
+          testId="orphan-extensions"
           lead="Выключить расширения, которые больше не нужны ни одному включённому приложению:"
-          orphans={orphans}
+          options={orphans}
           chosen={chosen}
           onChange={setChosen}
         />

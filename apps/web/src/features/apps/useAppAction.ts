@@ -9,6 +9,8 @@ import { UNDO_FAILED } from '../page/useUpdateBatch';
 export const DISABLE_APP = 'Выключить приложение';
 export const ENABLE_APP = 'Включить приложение';
 export const ARCHIVE_APP = 'Удалить приложение';
+/** «Состав» своего приложения — правка записи, не действие `app.*` (`CompositionDialog`). */
+export const EDIT_COMPOSITION = 'Изменить состав';
 export const APP_ACTION_FAILED = 'Не удалось изменить приложение';
 
 /** Действие владельца над записью-приложением (срез 1б §8.6, РП-12) — ручки `app.*`. */

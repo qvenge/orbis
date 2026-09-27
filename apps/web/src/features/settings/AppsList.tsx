@@ -2,7 +2,13 @@ import type { ExtensionId } from '@orbis/shared';
 import { lazy, Suspense, useState } from 'react';
 import { Button } from '../../ui/Button';
 import { type AppComposition, compositionOf, orphanExtensions } from '../apps/orphans';
-import { ARCHIVE_APP, DISABLE_APP, ENABLE_APP, useAppAction } from '../apps/useAppAction';
+import {
+  ARCHIVE_APP,
+  DISABLE_APP,
+  EDIT_COMPOSITION,
+  ENABLE_APP,
+  useAppAction,
+} from '../apps/useAppAction';
 import { type AppRecord, useApps } from '../apps/useApps';
 import { extensionName, useDisabledExtensions } from './useDisabledExtensions';
 
@@ -13,6 +19,9 @@ const DisableAppDialog = lazy(() =>
 const ArchiveAppDialog = lazy(() =>
   import('../apps/ArchiveAppDialog').then((m) => ({ default: m.ArchiveAppDialog })),
 );
+const CompositionDialog = lazy(() =>
+  import('../apps/CompositionDialog').then((m) => ({ default: m.CompositionDialog })),
+);
 const NewAppDialog = lazy(() =>
   import('../apps/NewAppDialog').then((m) => ({ default: m.NewAppDialog })),
 );
@@ -21,6 +30,7 @@ export const NEW_APP_BUTTON = 'Новое приложение';
 
 type Open =
   | { kind: 'disable' | 'archive'; app: AppRecord; orphans: ExtensionId[] }
+  | { kind: 'composition'; app: AppRecord; current: ExtensionId[] }
   | { kind: 'new' }
   | null;
 
@@ -29,6 +39,9 @@ type Open =
  * свои — с тем, что каждое приносит («Состав»), и действиями владельца «Выключить приложение» /
  * «Включить приложение» и «Удалить приложение». Архивные не показываются: удалённое приложение
  * возвращают «Отменить» или из архива записей. «Новое приложение» — одна пачка (`NewAppDialog`).
+ *
+ * «Состав» — по выбору владельца (§9.5): «Изменить состав» правит его одной `entity_update` и маску
+ * не трогает (`CompositionDialog`).
  *
  * «Включить приложение» расширения «Состава» не включает (R-33): включение расширений — отдельный
  * жест владельца в списке расширений выше.
@@ -123,6 +136,13 @@ export function AppsList() {
                 <Button
                   size="sm"
                   variant="ghost"
+                  onClick={() => setOpen({ kind: 'composition', app: a, current: own })}
+                >
+                  {EDIT_COMPOSITION}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
                   onClick={() => setOpen({ kind: 'archive', app: a, orphans: orphansOf(a) })}
                 >
                   {ARCHIVE_APP}
@@ -143,6 +163,9 @@ export function AppsList() {
         )}
         {open?.kind === 'archive' && (
           <ArchiveAppDialog app={open.app} orphans={open.orphans} onClose={() => setOpen(null)} />
+        )}
+        {open?.kind === 'composition' && (
+          <CompositionDialog app={open.app} current={open.current} onClose={() => setOpen(null)} />
         )}
         {open?.kind === 'new' && <NewAppDialog onClose={() => setOpen(null)} />}
       </Suspense>

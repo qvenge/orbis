@@ -1,8 +1,10 @@
+import { type ExtensionId, SWITCHABLE_EXTENSION_IDS } from '@orbis/shared';
 import { useState } from 'react';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { Input } from '../../ui/Input';
 import { useUpdateBatch } from '../page/useUpdateBatch';
+import { ExtensionChecks } from './ExtensionChecks';
 import { newAppOps } from './nav-edit';
 
 export const NEW_APP = 'Новое приложение';
@@ -11,6 +13,10 @@ export const NEW_APP = 'Новое приложение';
  * «Новое приложение» (срез 1б §9.5): имя и иконка — и одна пачка `entity_create` (`newAppOps`), один
  * Undo. Зовут «⋯ → Добавить в навигацию → Новое приложение…» (домашняя и раздел — эта запись) и
  * «Приложения и расширения → Новое приложение» (задача 22: без домашней, навигация пуста).
+ *
+ * «Состав» — по выбору владельца (§9.5, §8.6): галочки расширений, по умолчанию пусто; пишется в ту
+ * же `entity_create`. Маску «Состав» не меняет — расширения включает и выключает только владелец в
+ * «Приложениях и расширениях» (и каскад «Выключить приложение»).
  *
  * «Дом» странице здесь не пишется — его ставит сервер той же пачкой, если страница бездомная (§4.3,
  * докблок `newAppOps`). Форма навигации — «список из заголовка» (по умолчанию, §9.5).
@@ -29,6 +35,7 @@ export function NewAppDialog({
   const runBatch = useUpdateBatch();
   const [title, setTitle] = useState('');
   const [emoji, setEmoji] = useState('');
+  const [extensions, setExtensions] = useState<ExtensionId[]>([]);
   const name = title.trim();
 
   function save() {
@@ -41,6 +48,7 @@ export function NewAppDialog({
         ...(homeId !== undefined && { homeId }),
         navIds,
         form: 'header-list',
+        extensions,
       }),
       `Приложение «${name}» создано`,
       { action: NEW_APP },
@@ -77,6 +85,13 @@ export function NewAppDialog({
             <Input aria-label="Имя" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
         </div>
+        <ExtensionChecks
+          testId="new-app-extensions"
+          lead="Состав — расширения, которые приложение предлагает выключать вместе с собой:"
+          options={SWITCHABLE_EXTENSION_IDS}
+          chosen={extensions}
+          onChange={setExtensions}
+        />
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
             Отмена

@@ -45,15 +45,17 @@ export function supplyTitleOf(key: SupplyKey): string {
 const NO_UPDATES: readonly SupplyUpdate[] = [];
 
 /**
- * Что предлагает поставка (`supply.updates`, ничего не пишет). Ключ — свой, не общий ключ графа:
- * его гасят действия поставки ниже (и их отмена), а перечитывать список на каждой правке графа
- * незачем — «Принять все» решает сервер по свежему состоянию, а не по этому списку.
+ * Что предлагает поставка (`supply.updates`, ничего не пишет). Свежесть держит гашение, а не таймер:
+ * ключ гасит `invalidateGraph` (любая правка графа — в том числе правка записи поставки меняет
+ * «правлена ли она») и действия поставки ниже. Новый эталон приходит только с релизом, а с ним —
+ * новым клиентом, поэтому `staleTime` бесконечен: переход между записями поставки («Домой» →
+ * «Рутины») второго запроса не шлёт (С1б-16).
  */
 export function useSupplyUpdates(): {
   updates: readonly SupplyUpdate[];
   status: 'loading' | 'ok' | 'error';
 } {
-  const q = trpc.supply.updates.useQuery();
+  const q = trpc.supply.updates.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
   return {
     updates: q.data ?? NO_UPDATES,
     status: q.data !== undefined ? 'ok' : q.isError ? 'error' : 'loading',
@@ -103,10 +105,8 @@ export function useSupplyAction(): (act: SupplyAct) => Promise<boolean> {
   const { show } = useToast();
   return useCallback(
     async (act) => {
-      const refresh = () => {
-        invalidateGraph(utils);
-        void utils.supply.updates.invalidate();
-      };
+      // `invalidateGraph` гасит и «Обновления» (`lib/invalidate.ts`).
+      const refresh = () => invalidateGraph(utils);
       let actionId: string | null;
       let accepted = 0;
       try {

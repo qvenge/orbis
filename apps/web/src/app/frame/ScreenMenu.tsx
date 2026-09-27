@@ -10,7 +10,7 @@ import {
   useMemo,
   useState,
 } from 'react';
-import { useNav } from '../../state/navigation';
+import { openSettings } from '../../features/settings/settings-tab';
 import type { DropdownMenuItem } from '../../ui/DropdownMenu';
 import { type LazyMenuControl, LazyMenuSlot } from '../../ui/LazyMenuSlot';
 
@@ -96,12 +96,12 @@ export function ScreenMenu(): ReactElement {
       {
         label: 'Приложения и расширения',
         icon: <Puzzle size={16} aria-hidden />,
-        onSelect: () => useNav.getState().openHostScreen('settings'),
+        onSelect: () => openSettings('apps'),
       },
       {
         label: 'Настройки',
         icon: <Settings size={16} aria-hidden />,
-        onSelect: () => useNav.getState().openHostScreen('settings'),
+        onSelect: () => openSettings('general'),
       },
     ],
     [],

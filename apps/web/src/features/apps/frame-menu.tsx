@@ -9,6 +9,7 @@ import type { DropdownMenuSection } from '../../ui/DropdownMenu';
 import { useToast } from '../../ui/toast-store';
 import type { WireEntity } from '../entity-detail/record-host';
 import { BATCH_FAILED, useUpdateBatch } from '../page/useUpdateBatch';
+import { etalonRefIds, revertIsNoop, shellRevertPlan } from '../supply/revert-shell';
 import { REVERT, STATUS_EDITED, STATUS_ETALON } from '../supply/useSupply';
 import { cleanNav, goneOf, navOf, refIdsKey } from './nav-edit';
 import { type Apps, useApps } from './useApps';
@@ -111,7 +112,27 @@ export function supplyNoteOf(row: WireEntity): string | undefined {
  * возвращать не к чему — сервер ответил бы отказом, а пункт обещал бы действие, которого нет.
  */
 export function canRevert(row: WireEntity): boolean {
-  return supplyStatusOf(row) === 'edited' && typeof row.props[SUPPLY_TEXT] === 'string';
+  // Архивная запись — не запись поставки ключа: сервер ищет живую (`liveOrRefuse`) и отказал бы.
+  return (
+    !row.archived && supplyStatusOf(row) === 'edited' && typeof row.props[SUPPLY_TEXT] === 'string'
+  );
+}
+
+/**
+ * Предлагать ли «Вернуть как было» у оболочки хоста: сверх `canRevert` — вернёт ли возврат хоть что-то.
+ * Эталон пишется без архивных целей (R-16), и оболочка, которая отличается от поставки только
+ * архивными разделами, после возврата осталась бы той же — сервер отказывает «возвращать нечего»
+ * (`revertToEtalon`). Живость целей — по `entity.resolveRefs`; пока ответа нет, пункта нет; ответ с
+ * ошибкой — пункт есть, а диалог не даст подтвердить вслепую (`RevertShellDialog`).
+ */
+function useShellRevertOffered(row: WireEntity | null): boolean {
+  const plan = row !== null && canRevert(row) ? shellRevertPlan(row.props) : null;
+  const ids = plan === null ? [] : refIdsKey(etalonRefIds(plan));
+  const refs = trpc.entity.resolveRefs.useQuery({ ids }, { enabled: ids.length > 0 });
+  if (row === null || plan === null) return false;
+  if (ids.length === 0) return !revertIsNoop(row, plan, new Set());
+  if (refs.data === undefined) return refs.isError;
+  return !revertIsNoop(row, plan, new Set(refs.data.filter((r) => !r.archived).map((r) => r.id)));
 }
 
 /** Подписи жестов навигации: пункт меню, заголовок записи журнала и то, что назовёт «отмени последнее». */
@@ -141,6 +162,7 @@ export function useFrameMenu(): {
   const [editing, setEditing] = useState<WireEntity | null>(null);
   const [reverting, setReverting] = useState<WireEntity | null>(null);
   const note = frame === null ? undefined : supplyNoteOf(frame.row);
+  const revertOffered = useShellRevertOffered(frame?.row ?? null);
   const sections: DropdownMenuSection[] =
     frame === null
       ? []
@@ -154,7 +176,7 @@ export function useFrameMenu(): {
                 icon: <ListTree size={16} aria-hidden />,
                 onSelect: () => setEditing(frame.row),
               },
-              ...(canRevert(frame.row)
+              ...(revertOffered
                 ? [
                     {
                       label: REVERT,

@@ -120,6 +120,14 @@ export function BodyScreenProvider({
   return <BodyScreenContext.Provider value={value}>{children}</BodyScreenContext.Provider>;
 }
 
+/**
+ * Затвор тела экрана, если экран есть (`null` — вне экрана записи, например в настройках): жесты,
+ * переписывающие запись не из меню (плашка обновления поставки), ждут досыла тем же `settleBody`.
+ */
+export function useBodyGate(): BodyGateRef | null {
+  return useContext(BodyScreenContext)?.bodyGate ?? null;
+}
+
 export function useBodyScreen(): BodyScreenValue {
   const value = useContext(BodyScreenContext);
   if (value === null) throw new Error('Тело записи вне BodyScreenProvider');

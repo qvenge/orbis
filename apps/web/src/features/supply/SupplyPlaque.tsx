@@ -11,7 +11,14 @@ import { supplyTitleOf, useSupplyUpdates } from './useSupply';
  * Модуль ЛЕНИВЫЙ (точка лени — `SupplyPlaqueSlot.tsx`): плашка нужна редкой записи, а экран записи
  * открывается на каждом жесте (РП-25, вес первого кадра).
  */
-export function SupplyPlaque({ entityId }: { entityId: string }) {
+export function SupplyPlaque({
+  entityId,
+  settle,
+}: {
+  entityId: string;
+  /** «Принять» и «Оставить своё» ждут досыла набранного (`settleBody` затвора тела экрана). */
+  settle: () => boolean;
+}) {
   const { updates } = useSupplyUpdates();
   const update = updates.find((u) => u.kind === 'update' && u.recordId === entityId);
   if (update === undefined) return null;
@@ -31,7 +38,7 @@ export function SupplyPlaque({ entityId }: { entityId: string }) {
           Прежнюю версию поставки вы уже оставляли без изменений — эта новее.
         </p>
       )}
-      <UpdateActions update={update} />
+      <UpdateActions update={update} settle={settle} />
     </Card>
   );
 }
