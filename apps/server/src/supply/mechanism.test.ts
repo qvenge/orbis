@@ -609,6 +609,27 @@ describe('R-18: Undo «добавить» — как будто не добав�
     expect(await updatesOf(ctxOf(graph))).toEqual([]);
   });
 
+  test('два круга: добавить → Undo → добавить (из архива) → Undo → снова new, третий «добавить» — та же запись', async () => {
+    const graph = await freshGraph();
+    await seedSupply(
+      graph,
+      SUPPLY_KEYS.filter((k) => k !== 'records'),
+    );
+    const id = supplyRecordId(graph, 'records');
+    for (let round = 0; round < 2; round += 1) {
+      const { actionId } = await addSupplyRecord(ctxOf(graph), 'records');
+      expect((await rowOf(graph, id)).archived).toBe(false);
+      await undo(graph, actionId);
+      expect((await rowOf(graph, id)).archived).toBe(true);
+      expect(await updatesOf(ctxOf(graph))).toEqual([
+        { key: 'records', kind: 'new', recordId: null, edited: false, declined: false },
+      ]);
+    }
+    await addSupplyRecord(ctxOf(graph), 'records');
+    expect((await rowOf(graph, id)).archived).toBe(false);
+    expect(await updatesOf(ctxOf(graph))).toEqual([]);
+  });
+
   test('архив владельцем после «добавить» — ничего не предлагается, «добавить» — отказ', async () => {
     const graph = await freshGraph();
     await seedSupply(

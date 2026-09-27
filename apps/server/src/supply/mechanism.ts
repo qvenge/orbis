@@ -104,39 +104,41 @@ interface Snapshot {
 }
 
 /**
- * Архив записи — откат её создания, а не решение владельца (R-18)? Признак по журналу: последнее
- * действие, создавшее запись (`entity_create` с её id), отменено, и ПОСЛЕ сообщения об отмене ни одно
- * действие журнала её не трогало (ни одна операция с её id). Отмена создания — единственное, что делает
- * inverse `entity_create` (`archived: true`); если владелец потом её восстанавливал и архивировал снова —
- * это уже его решение, и предложения нет.
+ * Архив записи — откат её «добавления», а не решение владельца (R-18)? Признак по журналу: ПОСЛЕДНЕЕ
+ * действие, тронувшее запись (любая операция с её id), — «добавление», и оно отменено. «Добавление» — это
+ * создание записи (`entity_create` с её id: сев, «добавить») или возврат её из архива механизмом `supply`
+ * («добавить» по записи, чей архив — откат прежнего добавления). Круг «добавить → Undo → добавить → Undo»
+ * поэтому держится на любой глубине: смотрится последнее действие, а не первое создание. Возврат из архива
+ * владельцем (механизм `user`) — его правка; если потом запись в архиве — это его решение, предложения нет.
  *
- * Порядок — по `created_at` сообщений: это время начала транзакции записи журнала (`defaultNow`), а
- * действия владельца над одной записью идут последовательно.
+ * Сама отмена нового действия журнала не порождает (сообщение `{type:'undo'}` без `actions`), поэтому
+ * «последнее действие» после отмены — это и есть отменённое. Порядок — по `created_at` сообщений: время
+ * начала транзакции записи журнала (`defaultNow`); действия владельца над одной записью идут
+ * последовательно.
  */
 async function archivedByUndoneCreation(tx: Tx, ids: readonly string[]): Promise<Set<string>> {
   const out = new Set<string>();
   for (const id of ids) {
-    const created = JSON.stringify({
-      actions: [{ operations: [{ op: 'entity_create', payload: { id } }] }],
-    });
-    const creations = await tx.execute(
-      sql`SELECT metadata -> 'actions' -> 0 ->> 'id' AS action_id FROM chat_messages
-          WHERE metadata @> ${created}::jsonb ORDER BY created_at DESC LIMIT 1`,
-    );
-    const actionId = creations[0]?.action_id as string | undefined;
-    if (actionId === undefined) continue;
-    const undoProbe = JSON.stringify({ type: 'undo', undoes: actionId });
-    const undos = await tx.execute(
-      sql`SELECT created_at FROM chat_messages WHERE metadata @> ${undoProbe}::jsonb LIMIT 1`,
-    );
-    const undoneAt = undos[0]?.created_at;
-    if (undoneAt === undefined) continue;
     const touched = JSON.stringify({ actions: [{ operations: [{ payload: { id } }] }] });
-    const later = await tx.execute(
-      sql`SELECT 1 FROM chat_messages
-          WHERE created_at > ${undoneAt} AND metadata @> ${touched}::jsonb LIMIT 1`,
+    const created = JSON.stringify({ operations: [{ op: 'entity_create', payload: { id } }] });
+    const restored = JSON.stringify({
+      mechanism: 'supply',
+      operations: [{ op: 'entity_update', payload: { id, archived: false } }],
+    });
+    const last = await tx.execute(
+      sql`SELECT metadata -> 'actions' -> 0 ->> 'id' AS action_id,
+                 (metadata -> 'actions' -> 0 @> ${created}::jsonb
+                  OR metadata -> 'actions' -> 0 @> ${restored}::jsonb) AS added
+          FROM chat_messages WHERE metadata @> ${touched}::jsonb
+          ORDER BY created_at DESC LIMIT 1`,
     );
-    if (later.length === 0) out.add(id);
+    const row = last[0] as { action_id?: string; added?: boolean } | undefined;
+    if (row?.action_id === undefined || row.added !== true) continue;
+    const undoProbe = JSON.stringify({ type: 'undo', undoes: row.action_id });
+    const undos = await tx.execute(
+      sql`SELECT 1 FROM chat_messages WHERE metadata @> ${undoProbe}::jsonb LIMIT 1`,
+    );
+    if (undos.length > 0) out.add(id);
   }
   return out;
 }
