@@ -13,7 +13,8 @@
     "./doc/types": "./src/doc/types.ts",
     "./doc/page-grammar": "./src/doc/page-grammar.ts",
     "./doc/placement": "./src/doc/placement.ts",
-    "./supply": "./src/supply/index.ts"
+    "./supply": "./src/supply/index.ts",
+    "./nav": "./src/nav/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

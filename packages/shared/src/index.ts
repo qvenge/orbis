@@ -33,6 +33,7 @@ export * from './expr/codes';
 export * from './fast-path';
 export * from './ids';
 export * from './import/normalize';
+export * from './nav/address';
 export * from './nav/links';
 // Выбор шаблона записи (срез 1а §4.2–4.3): модуль без зависимостей, корню не тяжёл.
 export * from './pages/choose-template';
