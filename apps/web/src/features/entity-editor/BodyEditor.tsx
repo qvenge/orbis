@@ -196,7 +196,10 @@ export function BodyEditor({
           window.location.origin,
         );
         const type = view.state.schema.nodes.entityRef;
-        if (id === null || type === undefined) return false;
+        // В блоке кода адрес — просто текст: строчного узла там не бывает, и ProseMirror, подгоняя
+        // вставку, разрезал бы блок надвое абзацем с чипом (гейт 24, M-4).
+        if (id === null || type === undefined || view.state.selection.$from.parent.type.spec.code)
+          return false;
         view.dispatch(
           view.state.tr
             .replaceSelectionWith(type.create({ entityId: id, label: null }), false)

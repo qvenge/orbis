@@ -434,3 +434,58 @@ test('9. телефон: ⌘K открывает экран поиска — т�
   expect(shownPath()).toBe('/search');
   expect(screen.queryByRole('dialog', { name: 'Поиск' })).toBeNull();
 });
+
+// ─── фикс гейта 24 ──────────────────────────────────────────────────────────────────────────────
+
+test('M-1: поле очищено — Enter не открывает прежний, уже невидимый результат', async () => {
+  await startOnUpcoming();
+  const field = await openSearchScreen();
+  fireEvent.change(field, { target: { value: 'переезд' } });
+  await within(screen.getByTestId('search-results')).findByText('Переезд — коробки');
+  fireEvent.change(field, { target: { value: '' } });
+  await waitFor(() =>
+    expect(
+      within(screen.getByTestId('search-results')).queryByText('Переезд — коробки'),
+    ).toBeNull(),
+  );
+  await pause(300);
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await pause(50);
+  expect(currentEntry(navModel()).address).toMatchObject({ kind: 'host-screen', screen: 'search' });
+  expect(screen.queryByRole('heading', { level: 1, name: 'Переезд — коробки' })).toBeNull();
+});
+
+test('M-2: 🔍 на экране поиска (телефон, сайт) — место, адрес, строка и история те же', async () => {
+  resetFrame('/search?q=%D0%B5%D0%B4%D0%B0');
+  renderApp();
+  await heading('Поиск');
+  await within(screen.getByTestId('search-results')).findByText('Купить хлеб');
+  const model = navModel();
+  const length = window.history.length;
+  const push = vi.spyOn(window.history, 'pushState');
+  fireEvent.click(searchButton());
+  expect(navModel()).toEqual(model);
+  expect(push).not.toHaveBeenCalled();
+  expect(window.history.length).toBe(length);
+  expect(shownPath()).toBe('/search?q=%D0%B5%D0%B4%D0%B0');
+  expect(screen.getByLabelText('Строка поиска')).toHaveValue('еда');
+});
+
+test('M-3: Ctrl+K в русской раскладке (key «л», code KeyK) — тот же поиск: окно на десктопе, экран на телефоне', async () => {
+  stubViewport(true);
+  await startOnUpcoming();
+  fireEvent.keyDown(window, { key: 'л', code: 'KeyK', ctrlKey: true });
+  expect(useSearchDialog.getState().open).toBe(true);
+  const dialog = await screen.findByRole('dialog', { name: 'Поиск' }, { timeout: 5000 });
+  fireEvent.keyDown(within(dialog).getByLabelText('Строка поиска'), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Поиск' })).toBeNull());
+
+  stubViewport(false);
+  fireEvent.keyDown(window, { key: 'л', code: 'KeyK', metaKey: true });
+  await heading('Поиск');
+  expect(shownPath()).toBe('/search');
+  // Без модификатора «л» — просто буква.
+  const model = navModel();
+  fireEvent.keyDown(window, { key: 'л', code: 'KeyK' });
+  expect(navModel()).toEqual(model);
+});

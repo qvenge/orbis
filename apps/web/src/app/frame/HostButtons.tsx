@@ -1,7 +1,7 @@
 import { MessageSquare, Plus, Search } from 'lucide-react';
 import { useState } from 'react';
 import { QuickCapture } from '../../features/browser/QuickCapture';
-import { useSearchDialog } from '../../features/search/search-dialog-store';
+import { openSearch } from '../../features/search/open-search';
 import { useNav } from '../../state/navigation';
 import { useRetryBuffer } from '../../state/retry';
 import { NavBadge } from '../../ui/NavBadge';
@@ -43,9 +43,7 @@ export function HostButtons() {
           type="button"
           aria-label="Поиск"
           data-testid="host-search"
-          onClick={() =>
-            desktop ? useSearchDialog.getState().show() : useNav.getState().openHostScreen('search')
-          }
+          onClick={() => openSearch(desktop)}
           className={BUTTON}
         >
           <Search size={18} aria-hidden />

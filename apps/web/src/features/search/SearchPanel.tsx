@@ -56,6 +56,9 @@ export function SearchPanel({
   // и новый наблюдатель протухшего ключа перезапросил бы список на каждое слово.
   const apps = useApps();
   const hits = useRef<readonly Hit[]>([]);
+  // Пустое поле — результатов на экране нет, и Enter не должен открыть прежний, уже невидимый список
+  // (его держит ref: `SearchResults` при пустой строке не монтируется и не перезапишет его; гейт 24, M-1).
+  if (texts === null) hits.current = [];
   const [active, setActive] = useState(0);
   const textKey = texts === null ? '' : texts.records;
   // biome-ignore lint/correctness/useExhaustiveDependencies: выбор сбрасывается на НОВОМ запросе — ключ и есть причина

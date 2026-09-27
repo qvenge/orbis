@@ -69,12 +69,12 @@ function pasteEvent(text: string): Event {
   return e;
 }
 
-async function mountEditor() {
+async function mountEditor(body = 'до ') {
   vi.stubGlobal('ClipboardEvent', class extends Event {});
   const held: { editor: Editor | null } = { editor: null };
   const onChange = vi.fn();
   renderWithProviders(
-    <BodyEditor doc={parseBody('до ')} onChange={onChange} onReady={(e) => (held.editor = e)} />,
+    <BodyEditor doc={parseBody(body)} onChange={onChange} onReady={(e) => (held.editor = e)} />,
     handler,
   );
   await waitFor(() => expect(held.editor).not.toBeNull());
@@ -119,4 +119,19 @@ test('текст с адресом внутри — как есть', async () =
 
   expect(refsOf(editor)).toEqual([]);
   expect(editor.getText()).toContain(text);
+});
+
+test('адрес, вставленный в блок кода, — просто текст; блок не разрезан (гейт 24, M-4)', async () => {
+  const { editor } = await mountEditor('```\nкод\n```');
+  expect(editor.state.doc.lastChild?.type.name).toBe('codeBlock');
+  const url = `${window.location.origin}/r/${ID}`;
+  editor.view.pasteText(url, pasteEvent(url) as ClipboardEvent);
+
+  expect(refsOf(editor)).toEqual([]);
+  const blocks: string[] = [];
+  editor.state.doc.forEach((n) => {
+    blocks.push(n.type.name);
+  });
+  expect(blocks).toEqual(['codeBlock']);
+  expect(editor.state.doc.lastChild?.textContent).toContain(url);
 });

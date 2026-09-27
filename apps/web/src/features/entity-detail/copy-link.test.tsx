@@ -78,6 +78,20 @@ test('запись на /a/<app>/r/<id> — ссылка с приложение
   expect(await copyLink()).toBe(`${window.location.origin}/a/${MY_APP}/r/${MY_SECTION}`);
 });
 
+test.each([
+  [
+    'домашняя приложения /a/<app> — адрес места, а не /r/<домашняя>',
+    () => `/a/${MY_APP}`,
+    'Дом приложения',
+  ],
+  ['домашняя хоста / — адрес места, а не /r/<Домой>', () => '/', 'Домой'],
+])('%s (§7.1, гейт 24 I-1)', async (_what, path, title) => {
+  resetFrame(path());
+  renderWithProviders(<App />, frameHandler(frameWorld()));
+  await heading(title);
+  expect(await copyLink()).toBe(`${window.location.origin}${path()}`);
+});
+
 test('запись на /r/<id> — ссылка в хосте', async () => {
   resetFrame(`/r/${BREAD}`);
   renderWithProviders(<App />, frameHandler(frameWorld()));

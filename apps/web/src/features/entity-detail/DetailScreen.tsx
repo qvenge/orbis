@@ -38,8 +38,19 @@ const PROJECT = 'orbis/project';
 /**
  * `lead` — то, что домашняя приложения ставит над своим содержимым под заголовком экрана: плитки
  * разделов формы «домашняя как центр» (срез 1б §6.2 п. 2; их рисует роутер, экран лишь даёт место).
+ *
+ * `home` — экран нарисован домашней приложения на месте `home` (`/`, `/a/<приложение>`; ставит только
+ * `HomeScreen` роутера): «Скопировать ссылку» даёт адрес этого места, а не записи-домашней (§7.1).
  */
-export function DetailScreen({ entityId, lead }: { entityId: string; lead?: ReactNode }) {
+export function DetailScreen({
+  entityId,
+  lead,
+  home = false,
+}: {
+  entityId: string;
+  lead?: ReactNode;
+  home?: boolean;
+}) {
   const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const openRecord = useOpenRecord();
@@ -278,14 +289,16 @@ export function DetailScreen({ entityId, lead }: { entityId: string; lead?: Reac
   async function copyLink(id: string = entityId) {
     // Форму адреса знает ТОЛЬКО buildAddress (срез 1б §7.1): собранная здесь руками строка
     // разъехалась бы с разбором при первой же правке таблицы адресов. Ссылка — АДРЕС ТЕКУЩЕГО МЕСТА
-    // (запись в приложении своей рамки — `/a/<приложение>/r/<id>`), если на нём эта запись; иначе
-    // (чужой шаблон из настройки, домашняя приложения) — запись в хосте, дальше правило открытия.
+    // (§7.1, С1б-2): запись в приложении своей рамки — `/a/<приложение>/r/<id>`, если на месте эта
+    // запись; домашняя приложения — `/a/<приложение>`, домашняя хоста — `/` (экран нарисован на месте
+    // `home`, `home`-проп); иначе (чужой шаблон из настройки) — запись в хосте, дальше правило открытия.
     // Состояние места (вкладка шаблона, «открыть через X») в адрес не входит: «поделиться» даёт
     // адрес без состояния (§7.1). origin делает ссылку абсолютной — её отправляют наружу, а не
     // внутрь SPA (§7.4: «Скопировать ссылку» — полный адрес).
     const here = currentEntry(useNav.getState().model).address;
     const address: Address =
-      here.kind === 'record' && here.id === id
+      (here.kind === 'record' && here.id === id) ||
+      (here.kind === 'home' && home && id === entityId)
         ? here
         : { kind: 'record', app: { kind: 'host' }, id };
     const url = `${window.location.origin}${buildAddress(address)}`;

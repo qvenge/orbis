@@ -159,6 +159,7 @@ function HomeScreen({ app }: { app: string }) {
     return (
       <DetailScreen
         entityId={shell.home}
+        home
         {...(shell.navForm === 'home-hub' && {
           lead: <NavTilesSlot app={target} />,
         })}
