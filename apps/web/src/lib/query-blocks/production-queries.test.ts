@@ -32,6 +32,7 @@ import { MEMORY_RULES_QUERY } from '../../features/chat/memoryRules';
 import { CATEGORY_QUERY } from '../../features/chat/useFastPath';
 import { ticketRunsQuery } from '../../features/entity-detail/useTicketRuns';
 import { NEW_QUERY_BLOCK } from '../../features/entity-editor/slash/items';
+import { searchBlockTexts } from '../../features/search/search-query';
 import { MEMORY_FILTER } from '../../features/settings/MemoryScreen';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { buildQueryRegistry } from './catalog';
@@ -138,6 +139,11 @@ const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
     'features/settings/MemoryScreen.tsx (MEMORY_FILTER)',
     browserQuery({ limit: 50, filters: MEMORY_FILTER, showPagesAndApps: true }),
   ],
+  // Поиск хоста (срез 1б, задача 24): строка владельца с пробелом, кавычкой и запятой — худший вход.
+  ...(['records', 'pages', 'apps'] as const).map((g): readonly [string, string] => [
+    `features/search/search-query.ts (searchBlockTexts, группа ${g})`,
+    searchBlockTexts('Мой "дом", кухня')?.[g] ?? '',
+  ]),
 ];
 
 test.each(PRODUCTION_TEXTS)('%s разбирается каноном §А5-3', (_where, text) => {
@@ -200,12 +206,13 @@ test('контрол ссылки — ровно одна реализация �
  * неё нет.
  *
  * Минус один — транзакции конверта: экран категории ушёл в `legacy-1v` (срез 1б §8.6, РП-31), и
- * в продукте этого текста нет.
+ * в продукте этого текста нет. Плюс три — группы поиска хоста (срез 1б, задача 24): записи,
+ * страницы, приложения.
  *
  * Число пиннится, потому что молча УКОРОТИТЬ этот список — самый дешёвый способ сделать тест
  * зелёным, не переведя текст.
  */
-test('в списке боевых текстов ровно одиннадцать адресов', () => {
-  expect(PRODUCTION_TEXTS.length).toBe(11);
-  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(11);
+test('в списке боевых текстов ровно четырнадцать адресов', () => {
+  expect(PRODUCTION_TEXTS.length).toBe(14);
+  expect(new Set(PRODUCTION_TEXTS.map(([where]) => where)).size).toBe(14);
 });

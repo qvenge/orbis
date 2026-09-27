@@ -58,4 +58,5 @@ jobs:
       # замер — в докблоке скрипта. Пороги экрана записи (РП-25, R-3 среза страниц 1б):
       # файл DetailScreen — 34889 Б gzip; эагерное замыкание — 321399 Б gzip -9 (замер
       # задачи 18: 315399 Б + 6000 Б). Превышение — разбор, а не подъём порога.
-      - run: bun scripts/check-lazy-chunks.ts --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=321399
+      # R-36: пересчёт порога R-3 после задач 19–23 (законный рост входного чанка), 321 238 + 4 000.
+      - run: bun scripts/check-lazy-chunks.ts --max-gzip DetailScreen=34889 --max-closure-gzip DetailScreen=325238

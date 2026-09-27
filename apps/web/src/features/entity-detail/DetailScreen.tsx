@@ -1,14 +1,13 @@
 import { PAGE_ASPECT } from '@orbis/shared';
-import { buildAddress, currentEntry, HOST_APP } from '@orbis/shared/nav';
-import { type ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { FrameAppContext } from '../../app/frame/FrameApp';
+import { type Address, buildAddress, currentEntry } from '@orbis/shared/nav';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { ScreenMenuProvider } from '../../app/frame/ScreenMenu';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOpenRecord } from '../../app/useOpenRecord';
 import { invalidateGraph } from '../../lib/invalidate';
 import { mayLeave } from '../../state/leave-guard';
-import { appRefOf, placeKeyOf, useNav } from '../../state/navigation';
+import { placeKeyOf, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -44,7 +43,6 @@ export function DetailScreen({ entityId, lead }: { entityId: string; lead?: Reac
   const { get, setArchived, conflict, dismissConflict } = useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const openRecord = useOpenRecord();
-  const frame = useContext(FrameAppContext);
   /**
    * Состояние экрана в верхе стопки навигации (срез 1б §7.1): вкладка шаблона и «открыть через X»
    * живут в истории, а не в адресе, — «‹» на эту запись возвращает их, в том числе после экрана
@@ -279,11 +277,18 @@ export function DetailScreen({ entityId, lead }: { entityId: string; lead?: Reac
   // `id` — не всегда запись экрана: в настройке чужого шаблона ссылка — на шаблон (№87).
   async function copyLink(id: string = entityId) {
     // Форму адреса знает ТОЛЬКО buildAddress (срез 1б §7.1): собранная здесь руками строка
-    // разъехалась бы с разбором при первой же правке таблицы адресов. Запись экрана — в
-    // приложении своей рамки; чужой шаблон из настройки — в хосте. origin делает ссылку
-    // абсолютной — её отправляют наружу, а не внутрь SPA (§7.4: «Скопировать ссылку» — полный адрес).
-    const app = id === entityId ? appRefOf(frame?.app ?? HOST_APP) : appRefOf(HOST_APP);
-    const url = `${window.location.origin}${buildAddress({ kind: 'record', app, id })}`;
+    // разъехалась бы с разбором при первой же правке таблицы адресов. Ссылка — АДРЕС ТЕКУЩЕГО МЕСТА
+    // (запись в приложении своей рамки — `/a/<приложение>/r/<id>`), если на нём эта запись; иначе
+    // (чужой шаблон из настройки, домашняя приложения) — запись в хосте, дальше правило открытия.
+    // Состояние места (вкладка шаблона, «открыть через X») в адрес не входит: «поделиться» даёт
+    // адрес без состояния (§7.1). origin делает ссылку абсолютной — её отправляют наружу, а не
+    // внутрь SPA (§7.4: «Скопировать ссылку» — полный адрес).
+    const here = currentEntry(useNav.getState().model).address;
+    const address: Address =
+      here.kind === 'record' && here.id === id
+        ? here
+        : { kind: 'record', app: { kind: 'host' }, id };
+    const url = `${window.location.origin}${buildAddress(address)}`;
     try {
       // Обращение к navigator.clipboard намеренно внутри try: когда API нет вовсе,
       // это TypeError — та же беда для пользователя, что и отклонённое разрешение.

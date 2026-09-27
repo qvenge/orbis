@@ -1,6 +1,6 @@
 import { homePlaceOf } from '@orbis/shared';
 import { type Address, buildAddress, currentEntry, HOST_APP } from '@orbis/shared/nav';
-import { ArchiveRestore, Search } from 'lucide-react';
+import { ArchiveRestore } from 'lucide-react';
 import { lazy, Suspense, useEffect, useMemo } from 'react';
 import { OpenPlaques } from '../features/apps/OpenPlaques';
 import { NavTilesSlot } from '../features/apps/slots';
@@ -35,6 +35,13 @@ const lazyDetailScreen = () =>
     import('../features/entity-detail/DetailScreen').then((m) => ({ default: m.DetailScreen })),
   );
 let DetailScreen = lazyDetailScreen();
+
+// Экран поиска хоста — ленивым чанком (R-35): входной чанк входит в эагерное замыкание экрана записи
+// (порог РП-25), а поиск нужен только после жеста (🔍, ⌘K) или по ссылке `/search?q=…`. Второй
+// ленивый вход поиска — окно ⌘K (`AppShell`); панель с группами у них общая, своим чанком.
+const SearchScreen = lazy(() =>
+  import('../features/search/SearchScreen').then((m) => ({ default: m.SearchScreen })),
+);
 
 /**
  * Забыть загрузку экрана записи — ТОЛЬКО для тестов: `lazy` помнит и удачу, и отказ навсегда, а
@@ -97,7 +104,7 @@ function PlaceScreen({ address }: { address: Address }) {
         case 'memory':
           return <MemoryScreen />;
         case 'search':
-          return <SearchReserved />;
+          return <SearchScreen />;
       }
   }
 }
@@ -189,22 +196,6 @@ function HomeArchived({ id }: { id: string }) {
           }
         />
       </div>
-    </>
-  );
-}
-
-/**
- * Адрес поиска (`/search?q=…`) разбирается уже сейчас (задача 14), а экрана поиска ещё нет. Временная
- * плашка на его месте: снимает задача 24 (поиск 🔍), которая ставит сюда экран поиска хоста.
- */
-function SearchReserved() {
-  return (
-    <>
-      <ScreenHeader title="Поиск" />
-      <EmptyState
-        icon={<Search size={32} aria-hidden />}
-        title="Поиск появится в этой версии позже"
-      />
     </>
   );
 }

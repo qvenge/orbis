@@ -6,6 +6,7 @@ import { BubbleToolbar } from './BubbleToolbar';
 import { BODY_BOX_CLASS } from './body-box';
 import { EDITOR_EXTENSIONS } from './extensions';
 import { RefTitlesProvider } from './nodes/RefTitlesContext';
+import { pastedRecordId } from './paste-address';
 import { SuggestMenu, useEditorSuggest } from './slash/EditorSuggest';
 import { sameDoc } from './strip-ids';
 
@@ -188,6 +189,21 @@ export function BodyEditor({
         class: `${BODY_BOX_CLASS} outline-none`,
       },
       transformPastedHTML,
+      handlePaste: (view, event) => {
+        // §7.4: в данных — ссылка на запись по id, не адрес; адрес вычисляется при нажатии.
+        const id = pastedRecordId(
+          event.clipboardData?.getData('text/plain') ?? '',
+          window.location.origin,
+        );
+        const type = view.state.schema.nodes.entityRef;
+        if (id === null || type === undefined) return false;
+        view.dispatch(
+          view.state.tr
+            .replaceSelectionWith(type.create({ entityId: id, label: null }), false)
+            .scrollIntoView(),
+        );
+        return true;
+      },
     },
   });
 

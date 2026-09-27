@@ -26,6 +26,7 @@ export function Dialog({
   onOpenChange,
   title,
   onOpenAutoFocus,
+  placement = 'center',
   children,
 }: {
   open: boolean;
@@ -37,6 +38,12 @@ export function Dialog({
    * гасит событие (preventDefault) и фокусирует своё; сигнатура — как у RD.Content.
    */
   onOpenAutoFocus?: (e: Event) => void;
+  /**
+   * `center` — модалка формы (по умолчанию). `top` — окно-палитра вверху по центру (поиск ⌘K,
+   * спека 1б §6.3): шире, заголовок только для чтения с экрана (он же имя окна), без крестика — Esc и
+   * касание подложки закрывают, а скроллятся результаты внутри содержимого, не само окно.
+   */
+  placement?: 'center' | 'top';
   children: ReactNode;
 }) {
   /**
@@ -78,20 +85,39 @@ export function Dialog({
           // нет — ссылка вела бы в никуда, и скринридер объявлял бы описание, которого не
           // существует. Явный undefined снимает и ссылку, и предупреждение Radix.
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-card border border-line bg-surface p-4 shadow-pop"
+          className={
+            placement === 'top'
+              ? 'fixed top-[12vh] left-1/2 z-50 flex max-h-[76dvh] w-[min(640px,calc(100vw-32px))] -translate-x-1/2 flex-col rounded-card border border-line bg-surface p-1 shadow-pop'
+              : 'fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-card border border-line bg-surface p-4 shadow-pop'
+          }
         >
-          <RD.Title className="pr-8 text-lg font-semibold">{title}</RD.Title>
-          <RD.Close
-            aria-label="Закрыть"
-            className="absolute right-3 top-3 cursor-pointer rounded p-1 text-text-muted outline-hidden transition hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-accent/60"
-          >
-            <X size={16} />
-          </RD.Close>
+          {placement === 'top' ? (
+            <RD.Title className="sr-only">{title}</RD.Title>
+          ) : (
+            <>
+              <RD.Title className="pr-8 text-lg font-semibold">{title}</RD.Title>
+              <RD.Close
+                aria-label="Закрыть"
+                className="absolute right-3 top-3 cursor-pointer rounded p-1 text-text-muted outline-hidden transition hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-accent/60"
+              >
+                <X size={16} />
+              </RD.Close>
+            </>
+          )}
           {/* Скроллится СОДЕРЖИМОЕ, а не вся модалка: форма-редактор блока длиннее экрана,
               и уедь заголовок с крестиком вместе с ней — закрывать её было бы нечем, кроме
               Esc. min-h-0 обязателен: без него flex-ребёнок не сжимается ниже контента и
-              overflow-y никогда не срабатывает. */}
-          <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+              overflow-y никогда не срабатывает. У палитры скроллятся результаты сами: поле
+              над ними остаётся на месте. */}
+          <div
+            className={
+              placement === 'top'
+                ? 'flex min-h-0 flex-1 flex-col'
+                : 'min-h-0 flex-1 overflow-y-auto'
+            }
+          >
+            {children}
+          </div>
         </RD.Content>
       </RD.Portal>
     </RD.Root>
