@@ -355,7 +355,7 @@ describe.each(MODES)('общее для обоих режимов: %s', (mode) =
       expect(r.model.apps[Y]?.stacks[HOME_SECTION]).toBeUndefined();
     });
 
-    test('единственная запись хоста (вход по ссылке) — хосту места не остаётся, источника нет', () => {
+    test('единственная запись хоста (вход по ссылке) — хосту места не остаётся; «назад» с дна X — домашняя хоста', () => {
       const r = navReduce(
         initialModel(rec(1)),
         { type: 'replace', address: rec(1, XR), app: X },
@@ -364,7 +364,41 @@ describe.each(MODES)('общее для обоих режимов: %s', (mode) =
       expect(r.model.activeApp).toBe(X);
       expect(r.model.apps[X]?.stacks[HOME_SECTION]).toEqual([{ address: rec(1, XR) }]);
       expect(r.model.apps[HOST_APP]?.stacks[HOME_SECTION]).toBeUndefined();
-      expect(canGoBack(r.model)).toBe(false);
+      // Orbis закрывается только на дне корневого приложения (§7.3): дно X ведёт в хост.
+      expect(canGoBack(r.model)).toBe(true);
+      const opened = navReduce(r.model, open(rec(2, XR), X), mode).model;
+      const b1 = navReduce(opened, BACK, 'app');
+      expect(currentEntry(b1.model).address).toEqual(rec(1, XR));
+      const b2 = navReduce(b1.model, BACK, 'app');
+      expect(b2.effect).toEqual({ history: 'none' });
+      expect(b2.model.activeApp).toBe(HOST_APP);
+      expect(b2.model.apps[HOST_APP]?.activeSection).toBe(HOME_SECTION);
+      expect(currentEntry(b2.model)).toEqual({ address: HOST_HOME });
+      expect(navReduce(b2.model, BACK, 'app').effect).toEqual({ history: 'exit' });
+    });
+
+    test('раздел хоста, чья запись переехала в X, пуст — «назад» с дна X ведёт в другую стопку хоста', () => {
+      const r = run(hostWithSections(), [{ type: 'replace', address: rec(900, XR), app: X }], mode);
+      expect(r.model.apps[HOST_APP]?.stacks[RECORDS]).toBeUndefined();
+      expect(canGoBack(r.model)).toBe(true);
+      const b = navReduce(r.model, BACK, 'app');
+      expect(b.effect).toEqual({ history: 'none' });
+      expect(b.model.activeApp).toBe(HOST_APP);
+      // Стопки хоста: домашняя и «Сегодня» — предпочтение домашней.
+      expect(b.model.apps[HOST_APP]?.activeSection).toBe(HOME_SECTION);
+      expect(currentEntry(b.model)).toEqual({ address: HOST_HOME });
+      // Домашней нет — первая имеющаяся стопка хоста.
+      const noHome: NavModel = {
+        ...r.model,
+        apps: {
+          ...r.model.apps,
+          [HOST_APP]: { activeSection: RECORDS, stacks: { [TODAY]: [{ address: TODAY_ROOT }] } },
+        },
+      };
+      const b3 = navReduce(noHome, BACK, 'app').model;
+      expect(b3.activeApp).toBe(HOST_APP);
+      expect(b3.apps[HOST_APP]?.activeSection).toBe(TODAY);
+      expect(canGoBack(b.model)).toBe(false);
     });
   });
 
@@ -769,7 +803,7 @@ describe('(11) сохранение orbis:nav:v2', () => {
     for (const raw of bad) expect(restoreFrom(raw)).toBeNull();
   });
 
-  test('restoreFrom: без стопки хоста (вход по ссылке сразу в приложение) — модель; назад с дна — выход', () => {
+  test('restoreFrom: без стопки хоста (вход по ссылке сразу в приложение) — модель; назад с дна — домашняя хоста', () => {
     const m = restoreFrom({
       v: 2,
       activeApp: X,
@@ -779,7 +813,12 @@ describe('(11) сохранение orbis:nav:v2', () => {
       },
     }) as NavModel;
     expect(currentEntry(m)).toEqual({ address: rec(1, XR) });
-    expect(navReduce(m, BACK, 'app').effect).toEqual({ history: 'exit' });
+    expect(canGoBack(m)).toBe(true);
+    const b = navReduce(m, BACK, 'app');
+    expect(b.effect).toEqual({ history: 'none' });
+    expect(b.model.activeApp).toBe(HOST_APP);
+    expect(currentEntry(b.model)).toEqual({ address: HOST_HOME });
+    expect(navReduce(m, BACK, 'site').effect).toEqual({ history: 'back' });
   });
 
   test('restoreFrom: ключи-имена свойств Object.prototype — обычные ключи, не прототип', () => {

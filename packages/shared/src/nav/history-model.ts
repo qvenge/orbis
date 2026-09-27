@@ -42,8 +42,9 @@
 //
 // Инварианты, которые модель держит сама: стопок-пустышек нет (опустевшая стопка удаляется), у
 // активного приложения активная стопка есть. У хоста её может не быть: вход по ссылке сразу в
-// приложение (`replace` с `app` на единственной записи) хосту места не оставляет — «назад» с дна
-// тогда выход, а ⌂ хоста заводит его домашнюю. Ключи приложений и разделов — данные
+// приложение (`replace` с `app` на единственной записи) хосту места не оставляет. «Назад» с дна
+// приложения всё равно ведёт в хост (§7.3: Orbis закрывается только на дне корневого приложения) —
+// в любую его стопку, а нет ни одной — в заведённую домашнюю хоста; ⌂ хоста тоже заводит домашнюю. Ключи приложений и разделов — данные
 // владельца (id записей), поэтому словари читаются только по СВОИМ ключам (`Object.hasOwn`), а
 // пишутся через `Object.fromEntries`: раздел по имени `constructor` или `__proto__` — обычный ключ.
 
@@ -337,11 +338,29 @@ function backInApp(model: NavModel): { model: NavModel; effect: NavEffect } {
       model: putStack(model, app, section, stack.slice(0, -1)),
       effect: { history: 'none' },
     };
-  // Дно стопки без источника: журнал межприложенческих переходов исчерпан.
-  if (app !== HOST_APP && stackAt(model, HOST_APP, activeSectionOf(model, HOST_APP))) {
-    return { model: { ...model, activeApp: HOST_APP }, effect: { history: 'none' } };
-  }
+  // Дно стопки без источника: журнал межприложенческих переходов исчерпан — в хост ВСЕГДА. Выход
+  // только с дна хоста: закрыть Orbis с дна приложения, куда пришли по ссылке, значило бы потерять
+  // корневое приложение, которого владелец ещё не видел.
+  if (app !== HOST_APP) return { model: toHost(model), effect: { history: 'none' } };
   return { model, effect: { history: 'exit' } };
+}
+
+/**
+ * Хост активным: его активная стопка; нет её — домашняя, если стопка есть, иначе любая имеющаяся
+ * (раздел становится активным); нет ни одной — домашняя хоста заводится (`/` известен без данных).
+ */
+function toHost(model: NavModel): NavModel {
+  if (stackAt(model, HOST_APP, activeSectionOf(model, HOST_APP)))
+    return { ...model, activeApp: HOST_APP };
+  const nav = own(model.apps, HOST_APP);
+  const any = nav
+    ? [HOME_SECTION, ...Object.keys(nav.stacks)].find((s) => stackAt(model, HOST_APP, s))
+    : undefined;
+  if (any !== undefined) return { ...withActiveSection(model, HOST_APP, any), activeApp: HOST_APP };
+  return {
+    ...putStack(model, HOST_APP, HOME_SECTION, [{ address: HOST_HOME }], HOME_SECTION),
+    activeApp: HOST_APP,
+  };
 }
 
 /** Место на экране: приложение, раздел и адрес верха (M-1 гейта: адреса мало — разные разделы). */
