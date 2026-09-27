@@ -163,6 +163,7 @@ import {
   assertExtensionEnabled,
   assertExtensionPropsWritable,
   assertGrantAlive,
+  assertRegistryTargetsEnabled,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
   resolveEntityTitles,
@@ -3540,6 +3541,39 @@ function registryPlan(type: ActionRecord['type'], tool: string, title: string): 
   return { type, entityId: null, tool, title, operations: [], inverse: [] };
 }
 
+/**
+ * Гейт R-8 для операции реестра — ТОЛЬКО вне внутреннего режима Undo: откат возвращает своё же
+ * законно записанное (Ф-1б-18). Классификация операций и доводы — докблок
+ * `assertRegistryTargetsEnabled` (`executor/invariants.ts`).
+ */
+function registryGate(
+  applyCtx: ExecCtx,
+  operation: string,
+  targets: { aspects?: readonly string[]; properties?: readonly string[] },
+): void {
+  if (applyCtx.internalUndo !== undefined) return;
+  assertRegistryTargetsEnabled(applyCtx.registry, applyCtx.disabledModules, operation, targets);
+}
+
+/**
+ * Свойства, которые правило НАЗЫВАЕТ в параметрах (что обязательно, что ставит, что уникально, куда
+ * пишет движок) — строки параметров, обходом: у шаблонов разная форма (`property`, `set.property`,
+ * `properties`, `targets.parent`), и перечень по шаблонам был бы вторым словарём рядом с
+ * каталогом. Строка, не являющаяся свойством, гейт не трогает (не найдена в снимке — не
+ * расширение). Условие `when` не обходится: чтение поля его не пишет.
+ */
+function rulePropertyRefs(params: unknown): string[] {
+  const out: string[] = [];
+  const walk = (node: unknown): void => {
+    if (typeof node === 'string') out.push(node);
+    else if (Array.isArray(node)) for (const x of node) walk(x);
+    else if (node !== null && typeof node === 'object')
+      for (const x of Object.values(node)) walk(x);
+  };
+  walk(params);
+  return out;
+}
+
 async function preparePropertyCreate(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
   const input = parseEnvelope(propertyCreateInput, rawInput, 'property_create');
   const journal = registryPlan(
@@ -3579,6 +3613,7 @@ async function preparePropertyUpdate(_ctx: ExecCtx, rawInput: unknown): Promise<
       // не снимок реестра. Снимок снят ДО стадий, и свойство, заведённое предыдущей
       // операцией той же пачки, в нём отсутствует — резолв по нему отвечал бы `NOT_FOUND`
       // на ключ, который владелец только что и завёл.
+      registryGate(applyCtx, 'property_update', { properties: [input.id] });
       const before = await readOwnProperty(applyCtx.tx, applyCtx.req.identity.graph, input.id);
       const id = before?.id ?? input.id;
       journal.title = `Правка свойства «${id}»`;
@@ -3611,6 +3646,10 @@ async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<P
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       // Адрес резолвит сама операция, в своей транзакции (см. `preparePropertyUpdate`):
       // `resolveMergePair` принимает и id, и key, а снимок исполнителя пачку не видит.
+      // Гейт R-8 (I-1 гейта задачи 7): слияние ПИШЕТ значения цели прямо в строках записей —
+      // `into` свойства выключенного расширения было бы записью его поля мимо трёх точек
+      // исполнителя. Источник — «для порядка»: встроенным он не бывает (`MERGE_BUILTIN`).
+      registryGate(applyCtx, 'property_merge', { properties: [input.source, input.into] });
       const merged = await mergeProperty(applyCtx.tx, applyCtx.req.identity.graph, input);
       // §Б5-5: слияние переписало props носителей — состав spent мог измениться у любого
       // конверта. Половина владельца в `registry_version` тоже сдвинулась (`registry/ops.ts`)
@@ -3713,6 +3752,15 @@ async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      // Гейт R-8: настройка аспекта выключенного расширения — отказ; правила дельты (на ЛЮБОМ
+      // аспекте), называющие свойство выключенного расширения, — тоже: они писали бы его поле
+      // льготой правил. Отключённые правила поля не пишут и гейт не трогают.
+      registryGate(applyCtx, 'aspect_delta_set', {
+        aspects: [input.aspect],
+        properties: (input.delta.rules ?? [])
+          .filter((r) => r.enabled !== false)
+          .flatMap((r) => rulePropertyRefs(r.params)),
+      });
       const before = await readAspectDelta(applyCtx.tx, applyCtx.req.identity.graph, input.aspect);
       // ПОЛЯ ПРАВИЛ ЭТОТ ТУЛ НЕ СТИРАЕТ МОЛЧА (Ф-Б2-27 (г), `aspectDeltaAfterSet`): не названные во входе
       // `rules`/`rulesDisabled` переносятся из прежней дельты, названное поле — замена (так пишет единица
@@ -3822,6 +3870,8 @@ async function prepareAspectImplementsSet(_ctx: ExecCtx, rawInput: unknown): Pro
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const owner = applyCtx.req.identity.graph;
+      // Гейт R-8: привязки аспекта выключенного расширения к контрактам не настраиваются.
+      registryGate(applyCtx, 'aspect_implements_set', { aspects: [input.aspect] });
       // Прежняя строка читается ЗДЕСЬ, а не по снимку исполнителя: снимок снят до стадий, и
       // аспект, заведённый предыдущей операцией той же пачки, в нём отсутствует.
       const before = await readOwnAspect(applyCtx.tx, owner, input.aspect);
@@ -3906,7 +3956,9 @@ async function prepareSubscriptionSet(_ctx: ExecCtx, rawInput: unknown): Promise
             module: surfaceExt,
             extension: surfaceExt,
             surface: input.surface,
-            reason: input.id.startsWith('user/') ? 'create' : 'read_only',
+            // Операция реестра — причина `registry` (R-8), как у прочих настроек определений.
+            operation: 'subscription_set',
+            reason: 'registry',
           },
         );
       }
@@ -4234,6 +4286,19 @@ async function prepareRuleSet(_ctx: ExecCtx, rawInput: unknown): Promise<Prepare
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const graphId = applyCtx.req.identity.graph;
+      // Гейт R-8 (Minor-3 Fable): включённое правило на носителе выключенного расширения или
+      // называющее его свойство писало бы поле льготой правил на ближайшей правке ядра — запись
+      // «в два хода» мимо гейта полей. Отключение правила (`enabled: false`) поле не пишет —
+      // разрешено, как и `rule_remove`.
+      if (input.rule.enabled !== false) {
+        registryGate(applyCtx, 'rule_set', {
+          aspects: 'aspect' in input.target ? [input.target.aspect] : [],
+          properties: [
+            ...('property' in input.target ? [input.target.property] : []),
+            ...rulePropertyRefs(input.rule.params),
+          ],
+        });
+      }
       const target = await resolveRuleTarget(applyCtx.tx, graphId, input.target);
       const before = target.rules.find((r) => r.id === input.rule.id) ?? null;
       const prevDelta = await ruleDeltaBefore(applyCtx.tx, graphId, target);

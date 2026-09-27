@@ -81,7 +81,13 @@ export async function runAction(
     return errorResult(
       'MODULE_DISABLED',
       `действие «${declared.key}» принадлежит выключенному расширению «${extensionName(declared.module ?? '')}» (§Б8-3)`,
-      { action: declared.id, module: declared.module },
+      // Провод 1б (задачи 22–23): `extension` и `reason` — у каждого `MODULE_DISABLED`.
+      {
+        action: declared.id,
+        module: declared.module,
+        extension: declared.module,
+        reason: 'action',
+      },
     );
   }
   if (ctx.source === 'routine' && ctx.routine === undefined) {

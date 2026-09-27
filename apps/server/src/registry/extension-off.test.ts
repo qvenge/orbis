@@ -276,6 +276,23 @@ function leaksOf(defs: readonly OrbisToolDef[], ext: ExtensionId): string[] {
   return out.sort();
 }
 
+/**
+ * Своё правило на носителе расширения (R-8): безобидное — условие «приоритет high» на записях
+ * матрицы ложно, — но включённое правило на аспекте выключенного расширения — настройка его
+ * определения, и её гейт отказывает.
+ */
+function carrierRule(aspect: string, id: string) {
+  return {
+    target: { aspect },
+    rule: {
+      id,
+      template: 'requires_when',
+      params: { property: 'orbis/due_date' },
+      when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Фикстуры расширений
 // ---------------------------------------------------------------------------
@@ -399,6 +416,10 @@ describe.each([...CASES])('выключенное расширение $ext (С1
       { journal: true },
     );
     if (!edit.ok) throw new Error(`правка для отката: ${edit.error.code} — ${edit.error.message}`);
+    // Правило, заведённое при включённом расширении, — его снятие после выключения (R-8: снятие
+    // поле не пишет и разрешено).
+    const pre = await run(g, 'rule_set', carrierRule(c.aspect, `user_${c.ext}_pre`));
+    if (!pre.ok) throw new Error(`правило до выключения: ${pre.error.code} — ${pre.error.message}`);
     await setEnabled(g, c.ext, false);
     world = { g, cat, cat2, rec, undoRec, undoActionId: edit.actionId, undoBefore };
     return world;
@@ -563,7 +584,10 @@ describe.each([...CASES])('выключенное расширение $ext (С1
     const refusal = refusalOf(r);
     expect(refusal.code).toBe('INVARIANT');
     expect(refusal.details.invariant).toBe('financial_requires_occurred_on');
-    expect(refusal.message.startsWith('правило Финансы: ')).toBe(true);
+    // Спека 1б §8.3, R-9: родительный падеж, слово «правило» один раз.
+    expect(refusal.message).toStartWith(
+      'правило Финансов: «financial_requires_occurred_on»: свойство orbis/occurred_on обязательно',
+    );
   });
 
   test('7. записи видны: entity.query, entity.get, entity.blocks', async () => {
@@ -642,6 +666,77 @@ describe.each([...CASES])('выключенное расширение $ext (С1
     }
   });
 
+  test('M-2. отказ скрытого тула и операции пачки несёт провод {extension, reason: tool}', async () => {
+    const { g, rec } = await setup();
+    const tool = attachToolName(c.aspect);
+    const wire = { code: 'MODULE_DISABLED', details: { extension: c.ext, reason: 'tool' } };
+    expect(
+      refusalOf(await dispatchTool(ownerChat(g), tool, { entity_id: rec, data: {} })),
+    ).toMatchObject(wire);
+    expect(
+      refusalOf(
+        await dispatchTool(ownerChat(g), 'batch_execute', {
+          batch_id: newId(),
+          operations: [{ tool, input: { entity_id: rec, data: {} } }],
+        }),
+      ),
+    ).toMatchObject(wire);
+    if (c.ext === 'finance') {
+      // Действие выключенного расширения через `run_action` — `reason: 'action'`.
+      expect(
+        refusalOf(
+          await dispatchTool(ownerChat(g), 'run_action', {
+            action: 'finance/plan-to-fact',
+            self: rec,
+            params: { occurred_on: today },
+          }),
+        ),
+      ).toMatchObject({
+        code: 'MODULE_DISABLED',
+        details: { extension: 'finance', reason: 'action' },
+      });
+    }
+  });
+
+  test('R-8. настройка его определений — MODULE_DISABLED (registry); снятие правила — проходит', async () => {
+    const { g } = await setup();
+    const registry = { code: 'MODULE_DISABLED', details: { extension: c.ext, reason: 'registry' } };
+    // Включённое правило на его носителе.
+    expect(
+      refusalOf(await run(g, 'rule_set', carrierRule(c.aspect, `user_${c.ext}_post`))),
+    ).toMatchObject({ ...registry, details: { ...registry.details, aspect: c.aspect } });
+    // Дельта его аспекта (подпись) — настройка определения.
+    expect(
+      refusalOf(
+        await run(g, 'aspect_delta_set', {
+          aspect: c.aspect,
+          delta: { label: { ru: 'Переименовано' } },
+        }),
+      ),
+    ).toMatchObject(registry);
+    // Правило на свойстве ЯДРА, называющее его свойство, — тоже: писало бы поле льготой правил.
+    const own = [...BUILTIN_PROPERTY_META].find((p) => p.module === c.ext)?.id ?? '';
+    expect(
+      refusalOf(
+        await run(g, 'rule_set', {
+          target: { aspect: 'orbis/task' },
+          rule: {
+            id: `user_task_${c.ext}_default`,
+            template: 'requires_when',
+            params: { property: own },
+            when: { op: '=', args: [{ prop: 'orbis/priority' }, { const: 'high' }] },
+          },
+        }),
+      ),
+    ).toMatchObject({ ...registry, details: { ...registry.details, property: own } });
+    // Снятие своего правила — разрешено.
+    const removed = await run(g, 'rule_remove', {
+      target: { aspect: c.aspect },
+      rule: `user_${c.ext}_pre`,
+    });
+    expect(removed.ok).toBe(true);
+  });
+
   test('9. включение возвращает тулы, канал, каталог и правку', async () => {
     const { g, rec, cat2 } = await setup();
     await setEnabled(g, c.ext, true);
@@ -658,6 +753,8 @@ describe.each([...CASES])('выключенное расширение $ext (С1
     expect(props.some((p) => p.module === c.ext)).toBe(true);
     const edit = await run(g, 'entity_update', { id: rec, props: c.extEdit(cat2) });
     expect(edit.ok).toBe(true);
+    // Настройка определений — снова открыта (R-8).
+    expect((await run(g, 'rule_set', carrierRule(c.aspect, `user_${c.ext}_post`))).ok).toBe(true);
   });
 });
 
@@ -909,6 +1006,77 @@ describe('выключенные Финансы: обходы маски (С1б-
         details: { extension: 'finance', surface },
       });
     }
+  });
+
+  test('R-8. слияние в поле Финансов и T-правило на их свойство — отказ (registry); после включения — проходят', async () => {
+    const g = await newGraph();
+    const cat = await category(g);
+    // Своё свойство и запись с его значением — при включённых Финансах.
+    const prop = await run(g, 'property_create', {
+      key: 'user/moy-kontragent',
+      label: { ru: 'Мой контрагент' },
+      description: { ru: 'Кому платил' },
+      type: { kind: 'text' },
+      status: 'active',
+    });
+    expect(prop.ok).toBe(true);
+    const note = await created(g, {
+      title: 'Заметка с контрагентом',
+      props: { 'user/moy-kontragent': 'Кофе Хауз' },
+      aspects: ['orbis/note'],
+    });
+    await setEnabled(g, 'finance', false);
+    const registry = {
+      code: 'MODULE_DISABLED',
+      details: { extension: 'finance', reason: 'registry' },
+    };
+    // Пробой I-1: слияние переносит значения в строки записей — это запись поля Финансов.
+    expect(
+      refusalOf(
+        await run(g, 'property_merge', {
+          source: 'user/moy-kontragent',
+          into: 'orbis/counterparty',
+        }),
+      ),
+    ).toMatchObject({
+      ...registry,
+      details: { ...registry.details, property: 'orbis/counterparty' },
+    });
+    expect((await propsOf(g, note))['orbis/counterparty']).toBeUndefined();
+    // T-правило `default` на свойство Финансов, носитель — ядро: писало бы поле на правке ядра.
+    const defaultRule = {
+      target: { aspect: 'orbis/task' },
+      rule: {
+        id: 'user_task_category_default',
+        template: 'default',
+        params: { property: 'orbis/finance_category', value: { const: cat } },
+      },
+    };
+    expect(refusalOf(await run(g, 'rule_set', defaultRule))).toMatchObject({
+      ...registry,
+      details: { ...registry.details, property: 'orbis/finance_category' },
+    });
+    // Отключённое правило поле не пишет — разрешено.
+    expect(
+      (
+        await run(g, 'rule_set', {
+          ...defaultRule,
+          rule: { ...defaultRule.rule, id: 'user_task_category_off', enabled: false },
+        })
+      ).ok,
+    ).toBe(true);
+
+    await setEnabled(g, 'finance', true);
+    expect((await run(g, 'rule_set', defaultRule)).ok).toBe(true);
+    expect(
+      (
+        await run(g, 'property_merge', {
+          source: 'user/moy-kontragent',
+          into: 'orbis/counterparty',
+        })
+      ).ok,
+    ).toBe(true);
+    expect((await propsOf(g, note))['orbis/counterparty']).toBe('Кофе Хауз');
   });
 
   test('14. правило памяти с областью orbis/money-movement создаётся и доходит до модели (язык жив)', async () => {

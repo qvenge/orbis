@@ -27,7 +27,7 @@ import {
   canonicalJson,
   effectiveLabel,
   entityClassOf,
-  extensionName,
+  extensionNameGenitive,
   type GraphId,
   isExtensionEnabled,
   type RuleCarrier,
@@ -307,31 +307,41 @@ function whenHolds(rule: RuleDefinition, scope: ExprEvalScope): boolean {
 
 function refusalText(
   rule: Extract<RuleDefinition, { template: 'requires_when' | 'forbidden_when' }>,
-  prefix: string,
+  owner: string | null,
 ): string {
+  const head = ruleHead(rule.id, owner);
   return rule.template === 'requires_when'
-    ? `${prefix}правило «${rule.id}»: свойство ${rule.params.property} обязательно, когда выполнено условие правила (§Б4-3)`
-    : `${prefix}правило «${rule.id}»: свойство ${rule.params.property} запрещено, когда выполнено условие правила (§Б4-3)`;
+    ? `${head}: свойство ${rule.params.property} обязательно, когда выполнено условие правила (§Б4-3)`
+    : `${head}: свойство ${rule.params.property} запрещено, когда выполнено условие правила (§Б4-3)`;
 }
 
 /**
- * Префикс отказа правила, чей носитель принадлежит ВЫКЛЮЧЕННОМУ расширению (§Б8-3 ревизия 7,
- * Р-23 п. 4.3 ⚑): «правило <Расширение>: ». Правила его аспектов работают на правке прочих полей
- * записи (целостность не выключается), но владелец не видит расширения на экране — без его имени
- * отказ выглядел бы запретом ниоткуда. Модуль — из строки носителя (аспект или свойство; у ролей
- * расширений нет с задачи 5), маска — из транзакции; включённое расширение и ядро — без префикса,
- * текст прежний побайтно.
+ * Голова отказа правила: «правило «id»» — или, у носителя выключенного расширения, «правило
+ * Финансов: «id»» (спека 1б §8.3, рулинг R-9: родительный падеж, слово «правило» ОДИН раз — прежнее
+ * сложение префикса с головой давало «правило Финансы: правило «id»»).
  */
-function extensionPrefix(ctx: RuleWriteInput['ctx'], carrier: RuleCarrier): string {
+function ruleHead(ruleId: string, owner: string | null): string {
+  return owner === null ? `правило «${ruleId}»` : `правило ${owner}: «${ruleId}»`;
+}
+
+/**
+ * Чьё правило, если носитель принадлежит ВЫКЛЮЧЕННОМУ расширению (§Б8-3 ревизия 7, Р-23 п. 4.3 ⚑):
+ * имя расширения в родительном падеже для «правило Финансов: …» (спека 1б §8.3, R-9). Правила его
+ * аспектов работают на правке прочих полей записи (целостность не выключается), но владелец не
+ * видит расширения на экране — без его имени отказ выглядел бы запретом ниоткуда. Модуль — из
+ * строки носителя (аспект или свойство; у ролей расширений нет с задачи 5), маска — из транзакции;
+ * включённое расширение и ядро — `null`, текст прежний побайтно.
+ */
+function extensionOwner(ctx: RuleWriteInput['ctx'], carrier: RuleCarrier): string | null {
   const disabled = ctx.disabledModules ?? [];
-  if (disabled.length === 0) return '';
+  if (disabled.length === 0) return null;
   const module =
     carrier.kind === 'aspect'
       ? ctx.registry.aspects.get(carrier.id)?.module
       : carrier.kind === 'property'
         ? ctx.registry.properties.get(carrier.id)?.module
         : null;
-  return isExtensionEnabled(module, disabled) ? '' : `правило ${extensionName(module ?? '')}: `;
+  return isExtensionEnabled(module, disabled) ? null : extensionNameGenitive(module ?? '');
 }
 
 /**
@@ -382,7 +392,7 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
             { reason: 'RULE_SCOPE_UNSUPPORTED', rule: rule.id, scope: ruleScope },
           );
         }
-        await assertUniqueAmong(input, rule, ruleScope.aspect, extensionPrefix(input.ctx, carrier));
+        await assertUniqueAmong(input, rule, ruleScope.aspect, extensionOwner(input.ctx, carrier));
         continue;
       }
       case 'requires_when':
@@ -390,7 +400,7 @@ export async function assertConstraintRules(input: RuleWriteInput): Promise<void
         if (!whenHolds(rule, scope)) continue;
         const has = present(input.state.props[rule.params.property]);
         if (rule.template === 'requires_when' ? has : !has) continue;
-        throw new ExecError('INVARIANT', refusalText(rule, extensionPrefix(input.ctx, carrier)), {
+        throw new ExecError('INVARIANT', refusalText(rule, extensionOwner(input.ctx, carrier)), {
           invariant: rule.id,
           rule_template: rule.template,
           property: rule.params.property,
@@ -458,8 +468,8 @@ async function assertUniqueAmong(
   input: RuleWriteInput,
   rule: Extract<RuleDefinition, { template: 'unique_among' }>,
   aspectId: string,
-  /** Префикс выключенного расширения носителя (`extensionPrefix`) — носитель сюда не передаётся. */
-  prefix: string,
+  /** Расширение носителя, если оно выключено (`extensionOwner`) — носитель сюда не передаётся. */
+  owner: string | null,
 ): Promise<void> {
   const { ctx, entityId, state, batch } = input;
   if (input.touchedCore !== undefined && input.core.archived) return;
@@ -525,7 +535,9 @@ async function assertUniqueAmong(
     existing.title === '' ? 'неархивная запись' : `неархивная запись «${existing.title}»`;
   throw new ExecError(
     'INVARIANT',
-    `${prefix}уже есть ${holder} с тем же набором (${labels.join(', ')}) — правило «${rule.id}» (§Б4-3); правьте существующую или архивируйте её`,
+    owner === null
+      ? `уже есть ${holder} с тем же набором (${labels.join(', ')}) — правило «${rule.id}» (§Б4-3); правьте существующую или архивируйте её`
+      : `${ruleHead(rule.id, owner)}: уже есть ${holder} с тем же набором (${labels.join(', ')}) (§Б4-3); правьте существующую или архивируйте её`,
     { invariant: rule.id, rule_template: 'unique_among', existingId: existing.id, values },
   );
 }

@@ -5,6 +5,7 @@ import {
   EXTENSION_IDS,
   EXTENSION_MANIFESTS,
   extensionName,
+  extensionNameGenitive,
   extensionOfTool,
   extensionPromptFragments,
   HOST_OWN_CARDS,
@@ -59,6 +60,14 @@ describe('манифест расширения (§4.1): состав вне р�
       for (const s of m.surfaces) expect(surfaceExtensionOf(s)).toBe(id);
       for (const r of m.codeRemainder) expect(r.why.trim().length).toBeGreaterThan(0);
     }
+    // Родительный падеж — голова отказа правила выключенного расширения (спека 1б §8.3, R-9).
+    expect(EXTENSION_IDS.map((id) => extensionNameGenitive(id))).toEqual([
+      'Финансов',
+      'Целей',
+      'Проектов',
+      'Разработки',
+    ]);
+    expect(extensionNameGenitive('planner')).toBe('planner'); // вне словаря — как есть
     expect(EXTENSION_IDS.map((id) => EXTENSION_MANIFESTS[id].name.ru)).toEqual([
       'Финансы',
       'Цели',

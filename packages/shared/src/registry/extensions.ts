@@ -62,6 +62,13 @@ export interface ExtensionManifest {
   id: ExtensionId;
   /** Подпись расширения — экран «Приложения и расширения» (задача 22) и тексты отказов. */
   name: LocalizedText;
+  /**
+   * Подпись в РОДИТЕЛЬНОМ падеже — «правило Финансов: …» (спека 1б §8.3, рулинг R-9). Отдельным
+   * полем, а не склонением в коде: имя расширения — данные манифеста, и правило склонения для
+   * «Разработки» и «Финансов» у кода было бы вторым словарём, который разошёлся бы с первым.
+   * Язык без падежей (en) повторяет именительный.
+   */
+  nameGenitive: LocalizedText;
   /** Эмодзи плитки расширения. */
   icon: string;
   /** Что расширение приносит — строка карточки на экране «Приложения и расширения». */
@@ -118,6 +125,7 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
   finance: {
     id: 'finance',
     name: { ru: 'Финансы', en: 'Finance' },
+    nameGenitive: { ru: 'Финансов', en: 'Finance' },
     icon: '💰',
     description: {
       ru: 'Расходы и доходы, категории, конверты бюджета и импорт выписок',
@@ -147,6 +155,7 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
   goals: {
     id: 'goals',
     name: { ru: 'Цели', en: 'Goals' },
+    nameGenitive: { ru: 'Целей', en: 'Goals' },
     icon: '🎯',
     description: {
       ru: 'Измеримые цели с прогрессом, который считается по записям графа',
@@ -163,6 +172,7 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
   projects: {
     id: 'projects',
     name: { ru: 'Проекты', en: 'Projects' },
+    nameGenitive: { ru: 'Проектов', en: 'Projects' },
     icon: '📁',
     description: {
       ru: 'Проекты со стадиями и иерархия работы под ними',
@@ -178,6 +188,7 @@ export const EXTENSION_MANIFESTS: Readonly<Record<ExtensionId, ExtensionManifest
   dev: {
     id: 'dev',
     name: { ru: 'Разработка', en: 'Development' },
+    nameGenitive: { ru: 'Разработки', en: 'Development' },
     icon: '🛠️',
     description: {
       ru: 'Репозитории кода, над которыми работает исполнитель',
@@ -222,6 +233,13 @@ export function ownCardOrder(): readonly OwnCardDecl[] {
 export function extensionName(id: string, locale = 'ru'): string {
   return (EXTENSION_IDS as readonly string[]).includes(id)
     ? effectiveLabel(EXTENSION_MANIFESTS[id as ExtensionId].name, locale)
+    : id;
+}
+
+/** Подпись расширения в родительном падеже (`nameGenitive`); id вне словаря — как есть (довод выше). */
+export function extensionNameGenitive(id: string, locale = 'ru'): string {
+  return (EXTENSION_IDS as readonly string[]).includes(id)
+    ? effectiveLabel(EXTENSION_MANIFESTS[id as ExtensionId].nameGenitive, locale)
     : id;
 }
 

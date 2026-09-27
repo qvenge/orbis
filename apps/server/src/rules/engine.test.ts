@@ -1733,7 +1733,10 @@ describe('префикс отказа правила выключенного р
   test('requires_when: маска с расширением носителя — префикс; без маски и с чужим расширением — нет', async () => {
     const plain =
       'правило «financial_requires_occurred_on»: свойство orbis/occurred_on обязательно';
-    expect(await requiresOccurredOn(['finance'])).toStartWith(`правило Финансы: ${plain}`);
+    // R-9: «правило Финансов: «id»: …» — родительный падеж, без второго «правило».
+    expect(await requiresOccurredOn(['finance'])).toStartWith(
+      'правило Финансов: «financial_requires_occurred_on»: свойство orbis/occurred_on обязательно',
+    );
     expect(await requiresOccurredOn()).toStartWith(plain);
     expect(await requiresOccurredOn([])).toStartWith(plain);
     expect(await requiresOccurredOn(['goals'])).toStartWith(plain);
@@ -1763,6 +1766,9 @@ describe('префикс отказа правила выключенного р
     // Разархивация — правка ядра: гейт «только чтение» её пропускает, правило уникальности — нет.
     const r = await w.run('entity_update', { id: first.id, archived: false });
     expect(refusalOf(r)).toBe('INVARIANT/duplicate_envelope');
-    expect(r.ok ? '' : r.error.message).toStartWith('правило Финансы: уже есть неархивная запись');
+    expect(r.ok ? '' : r.error.message).toStartWith(
+      'правило Финансов: «duplicate_envelope»: уже есть неархивная запись',
+    );
+    expect(r.ok ? '' : r.error.message).not.toContain('— правило «'); // слово «правило» — один раз
   });
 });

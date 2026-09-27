@@ -212,14 +212,28 @@ export function assertExtensionEnabled(
  *    чтения материализации, и льгота работает только на гонке маски (докблок
  *    `assertExtensionEnabled`). Post-due пишет тем же механизмом и закрыт своим гейтом (Д-2).
  *
- * Правило, а не забывчивость: прочие механизмы (`hook`, `rule`, `seed`, `verb`, `import`) гейтятся
- * — перенос остатков (`rule`) и импорт (`import`) принадлежат выключенным Финансам и писать их
- * поля не вправе.
+ * СТРУКТУРНЫЕ СЛЕДСТВИЯ РАЗРЕШЁННОЙ ПРАВКИ ЯДРА (рулинг R-10) — того же рода, что T-правила, и
+ * гейт их не глушит намеренно:
+ *  • `dropStaleCarryover` (`executor/normalize.ts`) — снимает перенос остатка конверта
+ *    (`orbis/carryover`, Финансы) в `state.props`, когда правка ядра (валюта — `module: null`)
+ *    сменила идентичность конверта;
+ *  • бюджет-хук A4 (`applyBudgetFollowUps`, механизм `hook`) — пишет рёбра `envelope-binding`
+ *    (роль языка) и кэш `spent` при правке суммы, даты или архивности финансовой записи.
+ * Почему не глушить: оба держат согласованность ведомости с данными, которые владелец вправе
+ * править и при выключенных Финансах; заглушённые, они оставили бы перенос остатка чужой
+ * идентичности и привязки к конвертам по старым датам — и включение не «вернуло бы всё», а
+ * показало бы битую ведомость. Пишут они внутри действия владельца и в его журнале (Р-28 п. 4).
+ * Движки-ИНИЦИАТОРЫ (материализация, post-due, рутины, импорт, перенос остатков) — наоборот, не
+ * работают: у каждого свой гейт.
  *
- * Снятые аспекты (`removed`) — отдельный вопрос того же гейта: снять аспект
- * выключенного расширения нельзя (`reason: 'detach'`), и отвечает он РАНЬШЕ полей — снятие
- * аспекта снимает и его свойства, и владелец получил бы «поле только для чтения» там, где
- * сделал другое.
+ * Правило, а не забывчивость: прочие механизмы (`hook`, `rule`, `seed`, `verb`, `import`) гейтятся
+ * по ПАТЧУ — перенос остатков (`rule`) и импорт (`import`) принадлежат выключенным Финансам и
+ * писать их поля патчем не вправе; хук патчем полей не пишет (выше — только рёбра и кэш).
+ *
+ * Снятые аспекты (`removed`) — отдельная причина того же гейта: снять аспект выключенного
+ * расширения нельзя (`reason: 'detach'`). Она проверяется РАНЬШЕ полей ради точности ответа:
+ * патч, несущий и снятие аспекта, и `unset` его поля, называет владельцу то, что он сделал
+ * первым делом, — снятие. Значения свойств `detach` сам НЕ снимает (Р9, `applyPropsPatch`).
  */
 export function assertExtensionPropsWritable(
   reg: RegistrySnapshot,
@@ -246,6 +260,59 @@ export function assertExtensionPropsWritable(
       'MODULE_DISABLED',
       `поля расширения «${extensionName(module ?? '')}» только для чтения, пока оно выключено (§Б8-3)`,
       { module, extension: module, property: id, reason: 'read_only' },
+    );
+  }
+}
+
+/**
+ * НАСТРОЙКА ОПРЕДЕЛЕНИЙ ВЫКЛЮЧЕННОГО РАСШИРЕНИЯ — ОТКАЗ (рулинг R-8; §Б8-3: «определения остаются
+ * резолвимыми на чтение … создание нового — запрещено»; спека 1б §8.3 «только чтение для всех
+ * акторов»). Операция реестра, ЦЕЛЬ которой — свойство или аспект выключенного расширения, пишет
+ * его поле мимо трёх точек записи: слияние `property_merge` переносит значения в свойство
+ * расширения прямо в строках записей, а правило, заведённое на его носитель или свойство, пишет
+ * поле льготой правил на ближайшей правке ядра. Причина провода — `registry`.
+ *
+ * Классификация операций реестра (`registry/ops.ts`, дисп. исполнителя) — у вызывающих:
+ *  • ГЕЙТ: `property_merge` (source и into), `property_update` (id), `aspect_delta_set` и
+ *    `aspect_implements_set` (аспект), `rule_set` включённого правила (носитель и свойства в
+ *    параметрах), `subscription_set` (поверхность — свой отказ в `prepareSubscriptionSet`);
+ *  • РАЗРЕШЕНО — снятие и отключение не пишут поля: `rule_remove`, `rule_set` с `enabled: false`,
+ *    `aspect_delta_remove`, `aspect_implements_remove`, `subscription_remove`, `action_remove`,
+ *    `contract_sets_delta_remove`;
+ *  • НЕ ЦЕЛЬ расширения: `property_create`, `aspect_create` (свои строки владельца, `module: null`;
+ *    свойство расширения в составе своего аспекта пишется только тулом записи — там его ловит
+ *    гейт полей), `action_set` (своё действие; его шаги исполняются через исполнитель под гейтом
+ *    полей), `contract_sets_delta_set` (контракты — язык, `module: null`);
+ *  • ОТКАТЫ (`*_undo`, `*_restore`) — структурно мимо: вызывающие ставят гейт только вне
+ *    внутреннего режима Undo, откат возвращает своё же законно записанное.
+ *
+ * Свойство адресуется и id, и ключом (тем же правилом, что граница тулов); не найденное в снимке —
+ * своё, заведённое пачкой раньше, и расширению не принадлежит.
+ */
+export function assertRegistryTargetsEnabled(
+  reg: RegistrySnapshot,
+  disabled: readonly string[],
+  operation: string,
+  targets: { aspects?: readonly string[]; properties?: readonly string[] },
+): void {
+  if (disabled.length === 0) return;
+  for (const id of targets.aspects ?? []) {
+    const module = reg.aspects.get(id)?.module ?? null;
+    if (isExtensionEnabled(module, disabled)) continue;
+    throw new ExecError(
+      'MODULE_DISABLED',
+      `расширение «${extensionName(module ?? '')}» выключено: его аспект «${id}» не настраивается операцией «${operation}» (§Б8-3)`,
+      { module, extension: module, aspect: id, operation, reason: 'registry' },
+    );
+  }
+  for (const ref of targets.properties ?? []) {
+    const def = reg.properties.get(ref) ?? [...reg.properties.values()].find((p) => p.key === ref);
+    const module = def?.module ?? null;
+    if (isExtensionEnabled(module, disabled)) continue;
+    throw new ExecError(
+      'MODULE_DISABLED',
+      `расширение «${extensionName(module ?? '')}» выключено: его свойство «${def?.id ?? ref}» не настраивается операцией «${operation}» (§Б8-3)`,
+      { module, extension: module, property: def?.id ?? ref, operation, reason: 'registry' },
     );
   }
 }

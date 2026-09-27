@@ -195,7 +195,9 @@ export async function dispatchTool(
             out: errorResult(
               'MODULE_DISABLED',
               `тул «${name}» принадлежит выключенному расширению «${extensionName(module)}» (§Б8-3)`,
-              { tool: name, module },
+              // Провод 1б (задачи 22–23): `extension` и `reason` — у каждого `MODULE_DISABLED`;
+              // `tool` — отказ по имени тула, до разбора его входа.
+              { tool: name, module, extension: module, reason: 'tool' },
             ),
           };
         }
@@ -3432,7 +3434,7 @@ function assertBatchToolsKnown(
       throw new ExecError(
         'MODULE_DISABLED',
         `batch_execute: тул «${op.tool}» принадлежит выключенному расширению «${extensionName(module)}» (§Б8-3)`,
-        { index, tool: op.tool, module },
+        { index, tool: op.tool, module, extension: module, reason: 'tool' },
       );
     }
     throw new ExecError('VALIDATION', `batch_execute: неизвестный тул операции «${op.tool}»`, {
