@@ -11,10 +11,14 @@
 //      (`@/…`, `~/…`) считается пакетом: алиасов в `vite.config`/`tsconfig` web сегодня нет, появись они — ребро
 //      через алиас страж не увидит. Литеральные `import.meta.glob('…')` и `new URL('…', import.meta.url)` — видит.
 //  (2) английскую подпись «view» без кириллицы, кроме голого «Views»; текст, собранный из частей не литералами
-//      (`'Сущ' + 'ность'`); у сервера — только `new ExecError(код, текст)`, `new TRPCError({ message })`, `err(…)` и
-//      `errorResult(…)` (текст, пришедший параметром или собранный другим помощником — `bad(…)`,
-//      `forbiddenTarget(…)`, поле `detail` конфликтов реестра, — не видит); у shared — только каталог
-//      `registry/` (эталоны поставки `supply/` — тела страниц, не подписи).
+//      (`'Сущ' + 'ность'`); у сервера — только `new ExecError(код, текст)`, `new TRPCError({ message })` (и
+//      `{ code, message }` с константой файла) и помощники с текстом вторым аргументом — `err`,
+//      `errorResult`, `fail`, `deltaError`. Не видит: текст, пришедший параметром или собранный другим
+//      помощником (`bad(…)`, `forbiddenTarget(…)`, поле `detail` конфликтов реестра), запасной текст
+//      `msg ?? '…'`, константу из другого файла, `.join()` и прочие вызовы внутри текста. У shared — только
+//      каталог `registry/`: `label`/`description`/`name`/`nameGenitive` и аргументы `options(…)`; подпись,
+//      заданная ссылкой на константу, и подпись, собранная другим помощником, не видны (эталоны поставки
+//      `supply/` — тела страниц, не подписи).
 //  (3) исключения `MODULE_NAMES` не привязаны к файлу (имя из списка разрешено везде); строки с дефисом
 //      (`data-testid="module-off"`, класс `module-card`) именами не считаются.
 //  Вне охвата всех трёх: тесты, `legacy-1v/` (вне сборки, РП-31), `scripts/` (инструменты: `LAZY_*_MODULES` там —
@@ -104,8 +108,8 @@ const WORD_ALLOWLIST: Record<string, Allowed> = {
   'packages/shared/src/registry/builtin-properties.ts': {
     count: 1,
     reason:
-      'подпись «Закреплена» свойства `orbis/pinned` — место записи наверху списков, не навигация (§1 снимает «Закрепить» как глагол навигации); вопрос переименования — владельцу, 03-pending (R-37)',
-    removedBy: 'решение владельца (03-pending)',
+      'подпись «Закреплена» свойства `orbis/pinned` — место записи наверху списков, не навигация (§1 снимает «Закрепить» как глагол навигации); вопрос переименования — владельцу, 03-pending (задача 26, R-37)',
+    removedBy: 'решение владельца — вопрос в 03-pending (задача 26)',
   },
   'apps/web/src/features/entity-detail/intended-1a.ts': {
     count: 1,
@@ -377,11 +381,12 @@ export function serverMessages(rel: string, src: string): UiText[] {
     }
   };
   walk(sf, (n) => {
-    // Помощники отказа тулов и предложений: `err(код, текст)`, `errorResult(код, текст)`.
+    // Помощники отказа с текстом вторым аргументом: тулы и предложения (`err`, `errorResult`),
+    // компилятор запросов и язык E (`fail(причина, текст)`), дельты реестра (`deltaError`).
     if (
       ts.isCallExpression(n) &&
       ts.isIdentifier(n.expression) &&
-      ['err', 'errorResult'].includes(n.expression.text)
+      REFUSAL_HELPERS.includes(n.expression.text)
     ) {
       take(n.arguments[1]);
       return;
@@ -391,26 +396,43 @@ export function serverMessages(rel: string, src: string): UiText[] {
     else if (n.expression.text === 'TRPCError') {
       const arg = n.arguments?.[0];
       if (arg === undefined || !ts.isObjectLiteralExpression(arg)) return;
-      for (const p of arg.properties)
+      for (const p of arg.properties) {
         if (ts.isPropertyAssignment(p) && p.name.getText(sf) === 'message') take(p.initializer);
+        // `{ code, message }` — сокращённое свойство: текст — одноимённая константа файла.
+        if (ts.isShorthandPropertyAssignment(p) && p.name.text === 'message') take(p.name);
+      }
     }
   });
   return out;
 }
 
+/** Помощники отказа сервера, у которых текст — второй аргумент (охват (2), R-37). */
+const REFUSAL_HELPERS = ['err', 'errorResult', 'fail', 'deltaError'];
+
 /**
  * Подписи реестров shared (R-37): `label` и `description` строк реестра — их показывают секции записи,
- * конструктор запросов и экран расширений. Берутся все строки значения (обычно `{ ru, en }`).
+ * конструктор запросов и экран расширений; `name`/`nameGenitive` манифестов расширений — плашки,
+ * тосты и отказы. Берутся все строки значения (обычно `{ ru, en }`) и аргументы `options(…)`.
  */
+const REGISTRY_TEXT_KEYS = ['label', 'description', 'name', 'nameGenitive'];
+
 export function registryLabels(rel: string, src: string): UiText[] {
   const sf = parse(rel, src);
   const out: UiText[] = [];
   walk(sf, (n) => {
     if (
       ts.isPropertyAssignment(n) &&
-      ['label', 'description'].includes(n.name.getText(sf).replace(/['"]/g, ''))
+      REGISTRY_TEXT_KEYS.includes(n.name.getText(sf).replace(/['"]/g, ''))
     )
       stringsIn(n.initializer, sf, out);
+    // Варианты select пишутся кортежами `options(['ключ', 'подпись ru', 'label en'], …)` —
+    // `label: { ru, en }` внутри помощника собран из параметров, подписи живут в аргументах вызова.
+    else if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      n.expression.text === 'options'
+    )
+      for (const arg of n.arguments) stringsIn(arg, sf, out);
   });
   return out;
 }
@@ -591,6 +613,9 @@ describe('сторожа границ кода и словаря (срез 1б �
       "throw new TRPCError({ code: 'FORBIDDEN', message: `сущность ${id} чужая` });",
       "return err('NOT_FOUND', 'сущность не найдена');",
       "return errorResult('NOT_FOUND', 'сущность не найдена', { id });",
+      "fail('this_outside', 'this вне контекста сущности');",
+      "throw deltaError('merge', 'сущность уже слита', {});",
+      "const message = 'сущность не найдена'; throw new TRPCError({ code: 'NOT_FOUND', message });",
       // biome-ignore lint/suspicious/noTemplateCurlyInString: образец кода — текст, а не шаблон
       "const v = ok ? undefined : 'ожидается uuid сущности'; throw new ExecError('V', `шаг: ${v}`);",
     ]) {
@@ -609,6 +634,14 @@ describe('сторожа границ кода и словаря (срез 1б �
     expect(labelled("const p = { label: { ru: 'Закреплена', en: 'Pinned' } };")).toBe(true);
     expect(labelled("const a = { description: 'Привязка сущности ко времени' };")).toBe(true);
     expect(labelled("const a = { key: 'сущность', hint: 'сущность' };")).toBe(false);
+    expect(
+      labelled("const p = { type: { options: options(['pin', 'Закреплена', 'Pinned']) } };"),
+    ).toBe(true);
+    expect(
+      labelled(
+        "const m = { name: { ru: 'Модуль', en: 'Module' }, nameGenitive: { ru: 'Модуля' } };",
+      ),
+    ).toBe(true);
 
     expect(
       moduleNames('x.ts', "const disabledModules = 1; const s = 'module_set'; x.module = 2;"),
