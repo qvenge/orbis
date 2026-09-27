@@ -44,18 +44,23 @@ export function supplyTitleOf(key: SupplyKey): string {
 
 const NO_UPDATES: readonly SupplyUpdate[] = [];
 
+/** Срок свежести «Обновлений» (докблок `useSupplyUpdates`). */
+export const SUPPLY_UPDATES_STALE_MS = 30_000;
+
 /**
- * Что предлагает поставка (`supply.updates`, ничего не пишет). Свежесть держит гашение, а не таймер:
- * ключ гасит `invalidateGraph` (любая правка графа — в том числе правка записи поставки меняет
- * «правлена ли она») и действия поставки ниже. Новый эталон приходит только с релизом, а с ним —
- * новым клиентом, поэтому `staleTime` бесконечен: переход между записями поставки («Домой» →
- * «Рутины») второго запроса не шлёт (С1б-16).
+ * Что предлагает поставка (`supply.updates`, ничего не пишет). Свежесть — двумя путями:
+ *  - гашение: ключ гасит `invalidateGraph` (любая правка графа из этого клиента — в том числе правка
+ *    записи поставки меняет «правлена ли она») и действия поставки ниже;
+ *  - таймер 30 с (умолчание клиента, `trpc.ts`, — здесь явно, чтобы не зависеть от него): правку в
+ *    обход этого клиента — агентом или со второй вкладки — гашение не видит, и без конечного срока
+ *    плашка молчала бы «Вы правили…» до перезагрузки (раунд 2 гейта 22, N-1). Переход между записями
+ *    поставки в пределах срока второго запроса не шлёт (С1б-16).
  */
 export function useSupplyUpdates(): {
   updates: readonly SupplyUpdate[];
   status: 'loading' | 'ok' | 'error';
 } {
-  const q = trpc.supply.updates.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
+  const q = trpc.supply.updates.useQuery(undefined, { staleTime: SUPPLY_UPDATES_STALE_MS });
   return {
     updates: q.data ?? NO_UPDATES,
     status: q.data !== undefined ? 'ok' : q.isError ? 'error' : 'loading',

@@ -15,7 +15,7 @@ import {
 import { etalonOf } from '@orbis/shared/supply';
 import { printAppProps, printPageRecord } from '@orbis/shared/supply/print';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, expect, test } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 import {
   installCrashTrap,
   type MockHandler,
@@ -24,7 +24,7 @@ import {
 } from '../../test/harness';
 import { useToastStore } from '../../ui/toast-store';
 import { APPS_QUERY } from '../apps/useApps';
-import type { SupplyUpdate } from '../supply/useSupply';
+import { SUPPLY_UPDATES_STALE_MS, type SupplyUpdate } from '../supply/useSupply';
 import { SettingsScreen } from './SettingsScreen';
 
 installCrashTrap();
@@ -500,9 +500,31 @@ test('M-2: правка графа гасит «Обновления» — пр�
     expect(screen.getByTestId('supply-update-home')).toHaveTextContent('Изменено вами'),
   );
   expect(callsOf('supply.updates').length).toBe(before + 1);
-  // Уход с вкладки и возврат: список из кеша, без нового запроса (бесконечный `staleTime`).
+  // Уход с вкладки и возврат в пределах срока свежести: список из кеша, без нового запроса.
   fireEvent.click(screen.getByRole('tab', { name: 'Общие' }));
   fireEvent.click(screen.getByRole('tab', { name: 'Приложения и расширения' }));
   expect(await screen.findByTestId('supply-update-home')).toHaveTextContent('Изменено вами');
   expect(callsOf('supply.updates').length).toBe(before + 1);
+});
+
+test('N-1: правка в обход клиента (агент, вторая вкладка) проявляется по истечении срока свежести', async () => {
+  let edited = false;
+  const { callsOf } = render(() => [{ ...(TWO_UPDATES[1] as SupplyUpdate), edited }]);
+  await openTab();
+  expect(await screen.findByTestId('supply-update-home')).not.toHaveTextContent('Изменено вами');
+  const before = callsOf('supply.updates').length;
+  // Запись правят мимо этого клиента — `invalidateGraph` здесь не звался.
+  edited = true;
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now + SUPPLY_UPDATES_STALE_MS + 1_000);
+  try {
+    fireEvent.click(screen.getByRole('tab', { name: 'Общие' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Приложения и расширения' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('supply-update-home')).toHaveTextContent('Изменено вами'),
+    );
+    expect(callsOf('supply.updates').length).toBe(before + 1);
+  } finally {
+    clock.mockRestore();
+  }
 });
