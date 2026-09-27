@@ -37,6 +37,9 @@ export * from './nav/address';
 export * from './nav/links';
 // Выбор шаблона записи (срез 1а §4.2–4.3): модуль без зависимостей, корню не тяжёл.
 export * from './pages/choose-template';
+// Правило открытия записи с приложением в адресе (срез 1б §5): чистые функции над уже прочитанными
+// записями; зависимости — `choose-template` и константы поставки, которые корень уже несёт (`nav/address`).
+export * from './pages/open-rule';
 // КАНОН Q-AST (§А5-7) — здесь и в сабпате `@orbis/shared/query`. Старая грамматика §6.1
 // (`query/grammar`, `query/parse`, `query/serialize`, `query/legacy-bridge`) удалена
 // Задачей 21b вместе с последним потребителем; имена `QueryAst`, `QueryDateToken`,

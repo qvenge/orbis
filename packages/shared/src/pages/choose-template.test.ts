@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY } from '../constants';
+import {
+  HOME_PROPERTY,
+  PAGE_ASPECT,
+  SUPPLY_KEY,
+  TEMPLATE_FOR_PROPERTY,
+  TEMPLATE_WINS_OVER_PROPERTY,
+} from '../constants';
 import {
   type BrokenTemplate,
   chooseTemplate,
@@ -8,6 +14,7 @@ import {
   type TemplateCandidate,
   type TemplateChoice,
   templatesFromRows,
+  winnerAmong,
 } from './choose-template';
 
 const P = 'orbis/project';
@@ -19,7 +26,7 @@ const t = (
   forAspects: readonly string[],
   winsOver: readonly string[] = [],
   createdAt = '2026-09-01T00:00:00Z',
-): TemplateCandidate => ({ id, forAspects, winsOver, createdAt });
+): TemplateCandidate => ({ id, forAspects, winsOver, createdAt, home: null });
 
 const allOk = () => null;
 
@@ -359,7 +366,13 @@ describe('templatesFromRows — строки entity.query → кандидаты
       },
     ];
     expect(templatesFromRows(rows)).toEqual([
-      { id: 'C', forAspects: [P, T], winsOver: ['A'], createdAt: '2026-09-03T00:00:00Z' },
+      {
+        id: 'C',
+        forAspects: [P, T],
+        winsOver: ['A'],
+        createdAt: '2026-09-03T00:00:00Z',
+        home: null,
+      },
     ]);
   });
 
@@ -386,7 +399,56 @@ describe('templatesFromRows — строки entity.query → кандидаты
       },
     ];
     expect(templatesFromRows(rows)).toEqual([
-      { id: 'A', forAspects: [P], winsOver: [], createdAt: '2026-09-01T00:00:00Z' },
+      { id: 'A', forAspects: [P], winsOver: [], createdAt: '2026-09-01T00:00:00Z', home: null },
     ]);
+  });
+
+  test('«Дом» читается: id приложения — дом шаблона; пусто и мусор — хост (срез 1б §4.3)', () => {
+    const at = '2026-09-01T00:00:00Z';
+    const rows = [
+      { id: 'A', props: { [TEMPLATE_FOR_PROPERTY]: [P], [HOME_PROPERTY]: 'app-1' }, createdAt: at },
+      { id: 'B', props: { [TEMPLATE_FOR_PROPERTY]: [P] }, createdAt: at },
+      { id: 'C', props: { [TEMPLATE_FOR_PROPERTY]: [P], [HOME_PROPERTY]: '' }, createdAt: at },
+      {
+        id: 'D',
+        props: { [TEMPLATE_FOR_PROPERTY]: [P], [HOME_PROPERTY]: ['app-1'] },
+        createdAt: at,
+      },
+    ];
+    expect(templatesFromRows(rows).map((x) => [x.id, x.home])).toEqual([
+      ['A', 'app-1'],
+      ['B', null],
+      ['C', null],
+      ['D', null],
+    ]);
+  });
+
+  test('шаблон хоста — не кандидат даже с «Шаблон для» (срез 1б §9.2): его берёт рендерер сам', () => {
+    const at = '2026-09-01T00:00:00Z';
+    const rows = [
+      {
+        id: 'H',
+        props: { [TEMPLATE_FOR_PROPERTY]: [P, T], [SUPPLY_KEY]: 'host-template' },
+        createdAt: '2026-08-01T00:00:00Z',
+      },
+      { id: 'A', props: { [TEMPLATE_FOR_PROPERTY]: [P] }, createdAt: at },
+      // Другой ключ поставки кандидатом быть не мешает: исключается только шаблон хоста.
+      { id: 'S', props: { [TEMPLATE_FOR_PROPERTY]: [T], [SUPPLY_KEY]: 'records' }, createdAt: at },
+    ];
+    const templates = templatesFromRows(rows);
+    expect(templates.map((x) => x.id)).toEqual(['A', 'S']);
+    // Будь H кандидатом, его больший набор выиграл бы у A.
+    expect(chooseTemplate({ aspects: [P] }, templates, allOk)).toMatchObject({ id: 'A' });
+  });
+});
+
+describe('winnerAmong — общая логика памяти выбора (шаблоны 1а и места 1б)', () => {
+  const x = (id: string, over: readonly string[]) => ({ id, over });
+  const by = (v: { over: readonly string[] }) => v.over;
+  test('покрывает всех и не побеждён — победитель; иначе нет', () => {
+    expect(winnerAmong([x('A', []), x('B', ['A'])], by)?.id).toBe('B');
+    expect(winnerAmong([x('A', ['B']), x('B', ['A'])], by)).toBeNull();
+    expect(winnerAmong([x('A', []), x('B', ['A']), x('C', [])], by)).toBeNull();
+    expect(winnerAmong([x('A', ['A'])], by)?.id).toBe('A');
   });
 });

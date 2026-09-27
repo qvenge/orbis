@@ -1,0 +1,351 @@
+/**
+ * Правило открытия записи с приложением в адресе (спека 1б §5.1–§5.3, §4.3, §7.4, §9.2) и память
+ * выбора места. Продолжение `chooseTemplate` 1а: одна чистая функция на всех клиентов — ответ «в
+ * какой рамке и чем показать запись» у экрана записи, меню «⋯» и будущего нативного клиента обязан
+ * совпадать. Ни БД, ни React: вход — уже прочитанные записи-приложения и шаблоны.
+ *
+ * Функция тотальна по входу (Фокус ревью п. 3): адрес на выключенное, архивное, неизвестное или
+ * «не-приложение» даёт хост и плашку, никогда пустоту или исключение.
+ *
+ * Шаги (A — приложение адреса, R — запись, P — места спора):
+ * | шаг  | условие                                    | рамка                  | вид                          | плашка                  |
+ * |------|--------------------------------------------|------------------------|------------------------------|-------------------------|
+ * | Р-20 | R — включённое неархивное приложение       | —                      | —                            | `openApp` = его домашняя |
+ * | Р-20 | R — оболочка хоста                         | —                      | —                            | `openApp` = домашняя хоста |
+ * | 0    | A — оболочка хоста (id или ключ)           | как хост               |                              | нет; адрес нормализуется |
+ * | 0    | A — `budget`                               | как хост               |                              | `reserved`              |
+ * | 0    | A не найдено / не приложение               | как хост               |                              | `app-unknown`           |
+ * | 0    | A выключено или в архиве                   | как хост               |                              | `app-off`               |
+ * | Р-20 | R — выключенное или архивное приложение    | хост                   | шаблон владельца / хоста     | `app-off` R             |
+ * | 1    | R — страница                               | дом (пуст — хост)      | своё тело                    | дом выкл. — `app-off`   |
+ * | 2    | A — приложение, есть подходящий шаблон A   | A                      | шаблон A (правило 1а)        | спор/сломан — во `view` |
+ * | 3    | A — приложение, подходящего нет            | A                      | шаблон хоста                 | `no-view` (P без A)     |
+ * | 4    | A — хост: P пусто                          | хост                   | шаблон владельца / хоста     | —                       |
+ * | 4    | P = одно, или запомненный победитель       | это приложение         | его шаблон                   | —                       |
+ * | 4    | P ≥ 2 без выбора                           | хост                   | шаблон владельца / хоста     | `place-dispute` (РП-20) |
+ * Шаг 5 (не отрисовался даже шаблон хоста → базовый вид) — забота рендерера.
+ *
+ * Почему хост вне спора мест (Р-28 п. 1): хост — не место «для таких записей», а то, что остаётся,
+ * когда ни одно приложение не подходит. Шаблоны владельца с пустым домом — запасной вид хоста, а не
+ * соперник приложений: иначе единственное приложение с видом для задач никогда не открывалось бы
+ * «сразу», пока у владельца есть свой шаблон задач, а вопрос «где открывать» спрашивал бы о выборе
+ * между приложением и «ничем». Поэтому и выбор «в пользу хоста» хранить не нужно (§5.3).
+ *
+ * `redirect` — место уточнено правилом (РП-21): экран заменяет адрес `/a/<рамка>/r/<id>`, не
+ * добавляя шаг. Замены нет, когда рамка — хост из-за плашки шага 0 (выключено, резерв, неизвестно):
+ * адрес держит плашку — «включить» обязано вернуть владельца в то самое приложение. Оболочка хоста в
+ * адресе — синоним хоста, её адрес заменяется каноническим всегда.
+ */
+import { PAGE_ASPECT } from '../constants';
+import type { Address, AppRef } from '../nav/address';
+import { RESERVED_APP_KEYS } from '../supply/etalons';
+import {
+  type ChoiceSubject,
+  chooseTemplate,
+  type TemplateCandidate,
+  type TemplateChoice,
+  winnerAmong,
+} from './choose-template';
+
+export interface AppInfo {
+  id: string;
+  supplyKey: string | null;
+  title: string;
+  disabled: boolean;
+  archived: boolean;
+  opensOver: readonly string[];
+  createdAt: string;
+}
+export interface OpenInput {
+  app: AppRef; // из адреса
+  record: { id: string; aspects: readonly string[]; home: string | null };
+  apps: readonly AppInfo[]; // все записи-приложения, кроме оболочки хоста; архивные и выключенные — тоже (для плашек)
+  hostShellId: string | null; // id записи-оболочки хоста: `/a/<он>` и ссылка на него — хост
+  templates: readonly TemplateCandidate[]; // templatesFromRows (с home, без шаблона хоста)
+  isBroken: (templateId: string) => string | null;
+}
+export type OpenPlaque =
+  | { kind: 'app-off'; appId: string; archived: boolean } // выключено — [включить], в архиве — [восстановить] (Э-20)
+  | { kind: 'reserved'; key: 'budget' } // /a/budget — «придёт со следующим срезом», без «включить»
+  | { kind: 'app-unknown'; ref: string } // адрес на не-приложение или не найдено
+  | { kind: 'no-view'; appId: string; alternatives: readonly string[] } // шаг 3
+  | { kind: 'place-dispute'; contenders: readonly string[] }; // шаг 4, ≥2 без выбора (РП-20)
+export interface OpenDecision {
+  frame: { kind: 'host' } | { kind: 'app'; id: string };
+  view: TemplateChoice; // own-body | template | host (шаблон хоста)
+  plaques: readonly OpenPlaque[];
+  redirect: boolean; // место уточнено правилом (РП-21): экран заменяет адрес
+  openApp?: Address; // R — запись-приложение: открыть его домашнюю (§7.4, Р-20); экран заменяет адрес
+}
+
+type Frame = OpenDecision['frame'];
+const HOST_FRAME: Frame = { kind: 'host' };
+
+/** Ключ эталона оболочки хоста: `/a/host-shell` одинаков в любом графе и значит сам хост. */
+const HOST_SHELL_KEY = 'host-shell';
+
+/** Место в споре — только включённое неархивное приложение (§5.2 шаг 4, §5.3). */
+const isLive = (a: AppInfo) => !a.disabled && !a.archived;
+
+/** В архиве важнее, чем выключено: включение архивного приложения ничего не открыло бы (Э-20). */
+const offPlaque = (a: AppInfo): OpenPlaque => ({
+  kind: 'app-off',
+  appId: a.id,
+  archived: a.archived,
+});
+
+/**
+ * Приложение по ссылке: id записи или ключ эталона поставки (адрес §7.1 допускает оба). Среди
+ * нескольких с одним ключом — живое: архивная копия ключа не должна перехватывать адрес.
+ */
+function findApp(apps: readonly AppInfo[], ref: string): AppInfo | undefined {
+  const byId = apps.find((a) => a.id === ref);
+  if (byId !== undefined) return byId;
+  const byKey = apps.filter((a) => a.supplyKey === ref);
+  return byKey.find(isLive) ?? byKey[0];
+}
+
+/** Что адрес говорит о месте после шага 0: хост, его синоним, хост из-за плашки или приложение. */
+type AddressPlace =
+  | { kind: 'host' }
+  | { kind: 'alias' } // оболочка хоста: хост, адрес нормализуется
+  | { kind: 'fallback' } // шаг 0 с плашкой: хост, адрес держит плашку
+  | { kind: 'app'; app: AppInfo };
+
+function addressPlace(input: OpenInput, plaques: OpenPlaque[]): AddressPlace {
+  if (input.app.kind === 'host') return { kind: 'host' };
+  const ref = input.app.ref;
+  if (ref === HOST_SHELL_KEY || (input.hostShellId !== null && ref === input.hostShellId)) {
+    return { kind: 'alias' };
+  }
+  const reserved = RESERVED_APP_KEYS.find((k) => k === ref);
+  if (reserved !== undefined) {
+    plaques.push({ kind: 'reserved', key: reserved });
+    return { kind: 'fallback' };
+  }
+  const a = findApp(input.apps, ref);
+  if (a === undefined) {
+    // Id обычной записи в списке приложений не встречается — «не-приложение» и «не найдено» одно.
+    plaques.push({ kind: 'app-unknown', ref });
+    return { kind: 'fallback' };
+  }
+  if (!isLive(a)) {
+    plaques.push(offPlaque(a));
+    return { kind: 'fallback' };
+  }
+  return { kind: 'app', app: a };
+}
+
+function redirectOf(frame: Frame, place: AddressPlace): boolean {
+  switch (place.kind) {
+    case 'alias':
+      return true;
+    case 'host':
+    case 'fallback':
+      return frame.kind === 'app';
+    case 'app':
+      return frame.kind !== 'app' || frame.id !== place.app.id;
+  }
+}
+
+/** Плашка «приложение X выключено» одна, даже если X — и A адреса, и дом страницы. */
+function pushPlaque(plaques: OpenPlaque[], p: OpenPlaque): void {
+  if (p.kind === 'app-off' && plaques.some((q) => q.kind === 'app-off' && q.appId === p.appId)) {
+    return;
+  }
+  plaques.push(p);
+}
+
+/** Разбор шаблона — работа рендерера (разбор тела); за одно решение каждый шаблон спрашивается раз. */
+function memo(isBroken: (id: string) => string | null): (id: string) => string | null {
+  const seen = new Map<string, string | null>();
+  return (id) => {
+    const hit = seen.get(id);
+    if (hit !== undefined || seen.has(id)) return hit ?? null;
+    const reason = isBroken(id);
+    seen.set(id, reason);
+    return reason;
+  };
+}
+
+/** Шаблоны хоста — шаблоны владельца с пустым домом; «Дом» = оболочка хоста правило каталога запрещает, но читается как хост. */
+const hostTemplates = (input: Omit<OpenInput, 'app'>) =>
+  input.templates.filter((t) => t.home === null || t.home === input.hostShellId);
+const templatesOf = (input: Omit<OpenInput, 'app'>, appId: string) =>
+  input.templates.filter((t) => t.home === appId);
+
+/**
+ * P — включённые неархивные приложения с подходящим шаблоном (§5.2 шаг 4). «Подходящий» — как в 1а:
+ * набор ⊆ аспектов и не сломан; приложение, чьи подходящие шаблоны все сломаны, показало бы
+ * запись шаблоном хоста — отправлять туда незачем. Хоста в P нет (Р-28 п. 1). Порядок — по id:
+ * плашка и меню детерминированы.
+ */
+function placesOf(
+  input: Omit<OpenInput, 'app'>,
+  subject: ChoiceSubject,
+  isBroken: (id: string) => string | null,
+): AppInfo[] {
+  return input.apps
+    .filter(
+      (a) =>
+        isLive(a) &&
+        chooseTemplate(subject, templatesOf(input, a.id), isBroken).kind === 'template',
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** Р-20: запись-приложение живая — открыть его домашнюю; оболочка хоста — домашнюю хоста. */
+function appRecordTarget(
+  input: Omit<OpenInput, 'app'>,
+): { kind: 'shell' } | { kind: 'app'; app: AppInfo } | null {
+  if (input.hostShellId !== null && input.record.id === input.hostShellId) return { kind: 'shell' };
+  const self = input.apps.find((a) => a.id === input.record.id);
+  return self === undefined ? null : { kind: 'app', app: self };
+}
+
+export function chooseOpening(input: OpenInput): OpenDecision {
+  const isBroken = memo(input.isBroken);
+  const subject: ChoiceSubject = { aspects: input.record.aspects };
+
+  // Перед шагами §5.2 — «R — запись-приложение» (Р-20): ссылка на приложение открывает приложение,
+  // откуда бы ни пришли, — даже из выключенного A: адрес чужого места ссылку на живое не портит.
+  const self = appRecordTarget(input);
+  if (self?.kind === 'shell') {
+    return {
+      frame: HOST_FRAME,
+      view: { kind: 'host', broken: [] },
+      plaques: [],
+      redirect: false,
+      openApp: { kind: 'home', app: { kind: 'host' } },
+    };
+  }
+  if (self?.kind === 'app' && isLive(self.app)) {
+    return {
+      frame: { kind: 'app', id: self.app.id },
+      view: { kind: 'host', broken: [] },
+      plaques: [],
+      redirect: false,
+      openApp: { kind: 'home', app: { kind: 'app', ref: self.app.id } },
+    };
+  }
+
+  const plaques: OpenPlaque[] = [];
+  // Шаг 0 — раньше шага 1: страница при выключенном A тоже несёт плашку A.
+  const place = addressPlace(input, plaques);
+  const done = (frame: Frame, view: TemplateChoice): OpenDecision => ({
+    frame,
+    view,
+    plaques,
+    redirect: redirectOf(frame, place),
+  });
+  const inHostView = () => chooseTemplate(subject, hostTemplates(input), isBroken);
+
+  // Выключенное или архивное приложение — запись в хосте: владелец видит её и может включить.
+  if (self?.kind === 'app') {
+    pushPlaque(plaques, offPlaque(self.app));
+    return done(HOST_FRAME, inHostView());
+  }
+
+  // Шаг 1: страница — своим телом в рамке своего дома, откуда бы ни пришли.
+  if (input.record.aspects.includes(PAGE_ASPECT)) {
+    const home = input.record.home;
+    if (home === null || home === input.hostShellId) return done(HOST_FRAME, { kind: 'own-body' });
+    const h = input.apps.find((a) => a.id === home);
+    if (h === undefined) {
+      plaques.push({ kind: 'app-unknown', ref: home });
+      return done(HOST_FRAME, { kind: 'own-body' });
+    }
+    if (!isLive(h)) {
+      pushPlaque(plaques, offPlaque(h));
+      return done(HOST_FRAME, { kind: 'own-body' });
+    }
+    return done({ kind: 'app', id: h.id }, { kind: 'own-body' });
+  }
+
+  if (place.kind === 'app') {
+    // Шаг 2: внутри A — правило 1а по шаблонам A (чужие шаблоны и шаблоны владельца не участвуют).
+    const a = place.app;
+    const frame: Frame = { kind: 'app', id: a.id };
+    const choice = chooseTemplate(subject, templatesOf(input, a.id), isBroken);
+    if (choice.kind === 'template') return done(frame, choice);
+    // Шаг 3: вида нет — шаблон хоста в рамке A и подсказка, где вид есть.
+    const alternatives = placesOf(input, subject, isBroken)
+      .map((x) => x.id)
+      .filter((id) => id !== a.id);
+    plaques.push({ kind: 'no-view', appId: a.id, alternatives });
+    return done(frame, choice);
+  }
+
+  // Шаг 4: A — хост (или стал им на шаге 0) — спор мест между приложениями.
+  const p = placesOf(input, subject, isBroken);
+  if (p.length === 0) return done(HOST_FRAME, inHostView());
+  const w = p.length === 1 ? (p[0] ?? null) : winnerAmong(p, (x) => x.opensOver);
+  if (w !== null) {
+    return done(
+      { kind: 'app', id: w.id },
+      chooseTemplate(subject, templatesOf(input, w.id), isBroken),
+    );
+  }
+  plaques.push({ kind: 'place-dispute', contenders: p.map((x) => x.id) });
+  return done(HOST_FRAME, inHostView());
+}
+
+/**
+ * P (≥ 2) — для «Сменить, где открывать такие записи»; иначе null. Запомненный выбор спорящих не
+ * отменяет (как `contendersOf` 1а): пункт меню есть и при сделанном выборе. У страницы и у
+ * записи-приложения спора мест нет — их место решают шаг 1 и Р-20.
+ */
+export function placeContendersOf(input: Omit<OpenInput, 'app'>): readonly string[] | null {
+  if (input.record.aspects.includes(PAGE_ASPECT)) return null;
+  if (appRecordTarget(input) !== null) return null;
+  const p = placesOf(input, { aspects: input.record.aspects }, memo(input.isBroken));
+  return p.length > 1 ? p.map((x) => x.id) : null;
+}
+
+const sameList = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * Новые значения `orbis/app_opens_over` победителя и проигравших (§5.3) — зеркало
+ * `recordDisputeChoice` 1а: победитель получает спорящих без себя, из списков проигравших
+ * победитель вычищен; одна пачка — один Undo.
+ *
+ * Архивные и выключенные приложения вычищаются из всех списков: архивная цель `ref` отвергла бы всю
+ * пачку («цель архивна»), а выключенное в спор не входит — его место в списке только сбило бы
+ * будущий выбор. Сами они не правятся. В карту попадают только изменившиеся — повтор того же выбора
+ * даёт пустую карту.
+ *
+ * Победитель не среди живых приложений (снят, выключен, заархивирован между показом вопроса и
+ * ответом) — пустая карта, а не исключение: писать нечего, и вопрос при следующем открытии честно
+ * повторится; экран записи не падает.
+ */
+export function recordPlaceChoice(
+  winner: string,
+  contenders: readonly string[],
+  apps: readonly AppInfo[],
+): ReadonlyMap<string, string[]> {
+  const live = new Map(apps.filter(isLive).map((a) => [a.id, a]));
+  const out = new Map<string, string[]>();
+  const w = live.get(winner);
+  if (w === undefined) return out;
+  const keep = (self: string, ids: readonly string[]) => {
+    const seen = new Set<string>();
+    return ids.filter((id) => {
+      if (id === self || !live.has(id) || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  };
+  const next = keep(winner, [...w.opensOver, ...contenders]);
+  if (!sameList(next, w.opensOver)) out.set(winner, next);
+  for (const id of contenders) {
+    const c = live.get(id);
+    if (c === undefined || id === winner) continue;
+    const cleaned = keep(
+      id,
+      c.opensOver.filter((x) => x !== winner),
+    );
+    if (!sameList(cleaned, c.opensOver)) out.set(id, cleaned);
+  }
+  return out;
+}

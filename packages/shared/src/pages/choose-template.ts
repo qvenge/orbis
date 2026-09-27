@@ -6,13 +6,23 @@
  * противоречия, новый участник, сломанный шаблон) — поэтому она здесь, а не в экране, и закрыта
  * таблицей случаев С1а-3 (`choose-template.test.ts`).
  */
-import { PAGE_ASPECT, TEMPLATE_FOR_PROPERTY, TEMPLATE_WINS_OVER_PROPERTY } from '../constants';
+import {
+  HOME_PROPERTY,
+  PAGE_ASPECT,
+  SUPPLY_KEY,
+  TEMPLATE_FOR_PROPERTY,
+  TEMPLATE_WINS_OVER_PROPERTY,
+} from '../constants';
+// Только тип: значение ключа — литерал ниже, чтобы модуль остался без зависимостей (корню не тяжёл).
+import type { SupplyKey } from '../supply/etalons';
 
 export interface TemplateCandidate {
   id: string;
   forAspects: readonly string[]; // S(t) — значение «Шаблон для»
   winsOver: readonly string[]; // значение «Главнее, чем»
   createdAt: string; // ISO
+  /** «Дом» (срез 1б §4.3): приложение, которому шаблон принадлежит; `null` — хост (шаблоны владельца 1а). */
+  home: string | null;
 }
 export interface ChoiceSubject {
   aspects: readonly string[];
@@ -34,12 +44,23 @@ export type TemplateChoice =
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
-/** Строки entity.query (aspect=orbis/page, has=orbis/template_for) → кандидаты; пустой набор — не шаблон. */
+/**
+ * Шаблон хоста (срез 1б §9.2) опознаётся ключом эталона, а не свойством: он запасной, а не
+ * кандидат — рендерер берёт его сам, когда выбор ответил `host`. Окажись он среди кандидатов со
+ * своим «Шаблон для», он спорил бы с шаблонами владельца и приложений как равный.
+ */
+const HOST_TEMPLATE_KEY: SupplyKey = 'host-template';
+
+/**
+ * Строки entity.query (aspect=orbis/page, has=orbis/template_for) → кандидаты; пустой набор — не
+ * шаблон; строка шаблона хоста — не кандидат (§9.2).
+ */
 export function templatesFromRows(
   rows: readonly { id: string; props: Record<string, unknown>; createdAt: string }[],
 ): TemplateCandidate[] {
   const out: TemplateCandidate[] = [];
   for (const row of rows) {
+    if (row.props[SUPPLY_KEY] === HOST_TEMPLATE_KEY) continue;
     // Набор, а не список (§4.2 шаг 4: |S(t)| — мощность набора): повторы значение принимает
     // (`uniqueItems` в схеме нет, core-тул их пропустит), и `[task, task, task]` иначе «переигрывал»
     // бы `[task, project]` по длине (финальное ревью, A-M1).
@@ -48,7 +69,10 @@ export function templatesFromRows(
     if (forAspects.length === 0) continue;
     // Самоссылку правило §3.2 запрещает, но данные, внесённые до правила, могли её сохранить.
     const winsOver = strings(row.props[TEMPLATE_WINS_OVER_PROPERTY]).filter((id) => id !== row.id);
-    out.push({ id: row.id, forAspects, winsOver, createdAt: row.createdAt });
+    // «Дом» — одна ссылка (id строкой); что угодно другое (пусто, мусор) читается как хост.
+    const rawHome = row.props[HOME_PROPERTY];
+    const home = typeof rawHome === 'string' && rawHome !== '' ? rawHome : null;
+    out.push({ id: row.id, forAspects, winsOver, createdAt: row.createdAt, home });
   }
   return out;
 }
@@ -71,19 +95,28 @@ function largest(
 }
 
 /**
- * Шаг 5: w покрывает всех прочих из M своим «Главнее, чем», и никто из M не объявлен главнее w.
- * Самоссылка ничего не решает: «прочие» — без w, так что `w ∈ w.winsOver` не покрывает никого и
+ * Шаг 5: w покрывает всех прочих из M своим списком побеждённых, и никто из M не объявлен главнее w.
+ * Самоссылка ничего не решает: «прочие» — без w, так что `w ∈ winsOver(w)` не покрывает никого и
  * не делает w побеждённым, — функция устойчива и в обход `templatesFromRows`.
+ *
+ * Общая для спора шаблонов («Главнее, чем», §4.2 1а) и спора мест («Открывать вместо», срез 1б
+ * §5.3): память выбора там устроена зеркально, и две копии логики разошлись бы на первой правке
+ * (противоречие, новый участник).
  */
-function winnerOf(m: readonly TemplateCandidate[]): TemplateCandidate | null {
+export function winnerAmong<T extends { id: string }>(
+  m: readonly T[],
+  winsOver: (x: T) => readonly string[],
+): T | null {
   for (const w of m) {
     const others = m.filter((x) => x.id !== w.id);
-    const covers = others.every((x) => w.winsOver.includes(x.id));
-    const beaten = others.some((x) => x.winsOver.includes(w.id));
+    const covers = others.every((x) => winsOver(w).includes(x.id));
+    const beaten = others.some((x) => winsOver(x).includes(w.id));
     if (covers && !beaten) return w;
   }
   return null;
 }
+
+const winnerOf = (m: readonly TemplateCandidate[]) => winnerAmong(m, (t) => t.winsOver);
 
 /** §4.2 шаги 1–7; шаг 8 (базовый вид) — забота рендерера, когда не отрисовался шаблон хоста. */
 export function chooseTemplate(
