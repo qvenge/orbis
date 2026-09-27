@@ -440,7 +440,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
       'aspect=orbis/task, class=orbis/completable:open, sortBy=orbis/updated_at:desc, limit=20',
     );
     // Ключ тега — во МНОЖЕСТВЕННОМ числе: без образца модель пишет `tag=`, которого грамматика не
-    // знает. Резолв категории по синонимам уехал в инструкцию аспекта orbis/financial.
+    // знает. Резолв категории по синонимам перенесён во фрагмент finance/amounts манифеста Финансов.
     expect(def.description).toContain('aspect=orbis/note, tags=идеи');
   });
 

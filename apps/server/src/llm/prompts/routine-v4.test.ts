@@ -104,6 +104,20 @@ describe('ROUTINE_SYSTEM_PROMPT_V4 (срез 1б, системный слой р
     );
   });
 
+  // Пример резолва категории по синонимам стоял в описании `entity_query` (read-тул, виден в
+  // любом канале) и ушёл оттуда вместе с id Финансов. propose-рутине `attach_*` не видны
+  // (`routineToolAllowed`), поэтому «как искать категорию» обязан нести фрагмент Финансов — с
+  // оговоркой о регистре: `@>` побайтовый, «Такси» не найдёт «такси».
+  test('фрагмент finance/amounts: резолв категории по синонимам с оговоркой о регистре', () => {
+    const f = EXTENSION_MANIFESTS.finance.promptFragments.find((x) => x.id === 'finance/amounts');
+    const line = (f?.text ?? '').split('\n').filter((l) => l.includes('orbis/aliases='));
+    expect(line).toHaveLength(1);
+    expect(line[0]).toContain('«aspect=orbis/category, orbis/aliases=такси»');
+    expect(line[0]).toMatch(/регистр важен, синонимы строчные/);
+    const r = parseQueryAst('aspect=orbis/category, orbis/aliases=такси', PARSE_REG);
+    expect(r.ok ? null : r.error.code).toBeNull();
+  });
+
   // --- Перенос гардов routine-v3 -------------------------------------------
 
   test('нет блока продолжений разговора: маркера [[suggest: в тексте нет', () => {

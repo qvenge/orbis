@@ -191,6 +191,8 @@ describe('buildRoutineContext: слой фрагментов расширени�
     );
     if (!amounts) throw new Error('в манифесте Финансов нет фрагмента finance/amounts');
     expect(system).toContain(amounts.text);
+    // Резолв категории по синонимам — единственное место, где propose-рутина его видит (I-1 гейта)
+    expect(system).toContain('orbis/aliases=такси');
     // Порядок чата (`llm/context.ts`): тело → дата → фрагменты; дата остаётся сразу за телом
     expect(system.indexOf(amounts.text)).toBeGreaterThan(system.indexOf('Сегодня: '));
     expect(system.indexOf(amounts.text)).toBeLessThan(system.indexOf('режим: propose'));
@@ -206,6 +208,7 @@ describe('buildRoutineContext: слой фрагментов расширени�
     expect(extensionIdsIn(system).filter((id) => financeIds.includes(id))).toEqual([]);
     for (const f of EXTENSION_MANIFESTS.finance.promptFragments)
       expect(system).not.toContain(f.text);
+    expect(system).not.toContain('orbis/aliases');
   });
 });
 
