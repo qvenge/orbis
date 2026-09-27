@@ -2,7 +2,7 @@ import { HOME_PROPERTY } from '@orbis/shared';
 import { type AppKey, HOST_APP } from '@orbis/shared/nav';
 import { useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { NAV_PAGES_QUERY, useApps } from '../../features/apps/useApps';
+import { HOMED_PAGES_QUERY, useApps } from '../../features/apps/useApps';
 import { useBadgeData } from '../../lib/query-blocks/useBadgeData';
 import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
@@ -26,8 +26,8 @@ import { type ShellSection, useAppShell } from './useAppShell';
  *
  * Раздел, чей «Дом» — другое приложение (или хост), — ярлык «↗ <Дом>» (§4.3, §7.2): страница
  * открывается в рамке своего дома, откуда бы ни пришла ссылка, и нажатие ведёт туда сразу, а не
- * через стопку этого приложения. «Дом» разделов — одним запросом страниц (`NAV_PAGES_QUERY`), только
- * пока лист открыт (С1б-16).
+ * через стопку этого приложения. «Дом» разделов — узким запросом страниц с «Домом»
+ * (`HOMED_PAGES_QUERY`) и оболочкой хоста, только пока лист открыт (С1б-16).
  */
 export function NavSheet({
   app,
@@ -40,21 +40,30 @@ export function NavSheet({
 }) {
   const shell = useAppShell(app, { withStoppedAt: true });
   const apps = useApps();
-  const pages = trpc.entity.query.useQuery({ query: NAV_PAGES_QUERY });
+  const host = useAppShell(HOST_APP);
+  const homed = trpc.entity.query.useQuery({ query: HOMED_PAGES_QUERY });
   /**
-   * Раздел-страница → приложение её дома, если это не `app`; пустой «Дом» и оболочка хоста — хост.
-   * Раздел не-страница (навигация — ссылки на любые записи, §4.2) ярлыком не бывает: «Дома» у записи
-   * нет, она — обычный раздел этого приложения (гейт 20, m-2).
+   * Раздел → приложение его дома, если это не `app` (гейт 20, m-2, m-5):
+   *  - страница с «Домом» (узкий запрос) — её дом; «Дом» = оболочка хоста читается как хост;
+   *  - раздел навигации или домашняя хоста без «Дома» — хост: такие страницы не бездомные (§4.3), в
+   *    чужом приложении они ярлык «↗ Orbis»;
+   *  - прочее (не-страница, бездомная страница) — обычный раздел этого приложения: у записи «Дома» нет.
    */
   const foreign = useMemo(() => {
     const out = new Map<string, AppKey>();
-    for (const r of pages.data ?? []) {
+    if (app !== HOST_APP) {
+      for (const id of [...host.sections.map((s) => s.id), host.home ?? host.homeArchived?.id]) {
+        if (id !== undefined && id !== null) out.set(id, HOST_APP);
+      }
+    }
+    for (const r of homed.data ?? []) {
       const h = r.props[HOME_PROPERTY];
       const key = typeof h === 'string' && h !== '' && h !== apps.hostShell?.id ? h : HOST_APP;
       if (key !== app) out.set(r.id, key);
+      else out.delete(r.id);
     }
     return out;
-  }, [pages.data, apps.hostShell, app]);
+  }, [homed.data, apps.hostShell, app, host.sections, host.home, host.homeArchived]);
   const titleOf = (key: AppKey) =>
     key === HOST_APP ? (apps.hostShell?.title ?? 'Orbis') : (apps.byId.get(key)?.title ?? '…');
   const openSection = (id: string) => {

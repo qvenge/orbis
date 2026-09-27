@@ -8,9 +8,11 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../../App';
 import {
+  HOME as HOST_HOME_PAGE,
   resetFrame,
   shownPath,
   stubLaunchMode,
+  UPCOMING,
   unstubLaunchMode,
 } from '../../app/frame/frame-fixtures';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../../lib/registry/useRegistry';
@@ -36,6 +38,7 @@ import {
   page,
   UTRO,
 } from './apps-world';
+import { HOMED_PAGES_QUERY } from './useApps';
 
 installCrashTrap();
 
@@ -141,21 +144,33 @@ test('«список из заголовка» — раздел чужого д�
   resetFrame(`/a/${MY}`);
   const withShortcut = appRow(MY, 'Мой дом', '🏡', {
     'orbis/app_home': MY_HOME,
-    [APP_NAV]: [MY_SECTION, HOST_PAGE, PROJ_HOME],
+    [APP_NAV]: [MY_SECTION, UPCOMING, HOST_HOME_PAGE, HOST_PAGE, PROJ_HOME],
   });
-  renderApp(appsWorld({ apps: [withShortcut, PROJ_ROW] }));
+  const { calls } = renderApp(appsWorld({ apps: [withShortcut, PROJ_ROW] }));
   await heading('Дом приложения');
   expect(screen.queryByTestId('nav-tiles')).toBeNull();
   fireEvent.click(frameIcon());
   const own = await screen.findByTestId(`nav-section-${MY_SECTION}`);
-  const foreign = await screen.findByTestId(`nav-section-${HOST_PAGE}`);
-  await waitFor(() => expect(foreign).toHaveTextContent('↗ Orbis'));
+  // Раздел навигации и домашняя хоста без «Дома» — не бездомные (§4.3): ярлык хоста.
+  const upcoming = await screen.findByTestId(`nav-section-${UPCOMING}`);
+  await waitFor(() => expect(upcoming).toHaveTextContent('↗ Orbis'));
+  expect(screen.getByTestId(`nav-section-${HOST_HOME_PAGE}`)).toHaveTextContent('↗ Orbis');
   // Страница с «Домом» = другое приложение — ярлык его дома.
-  expect(await screen.findByTestId(`nav-section-${PROJ_HOME}`)).toHaveTextContent('↗ Проекты');
+  await waitFor(() =>
+    expect(screen.getByTestId(`nav-section-${PROJ_HOME}`)).toHaveTextContent('↗ Проекты'),
+  );
+  // Бездомная страница (пустой «Дом», вне хоста) — обычный раздел: первое место задаст ей дом.
+  expect(screen.getByTestId(`nav-section-${HOST_PAGE}`)).not.toHaveTextContent('↗');
   expect(own).not.toHaveTextContent('↗');
-  fireEvent.click(foreign);
-  await heading('Общая страница');
-  await waitFor(() => expect(shownPath()).toBe(`/r/${HOST_PAGE}`));
+  // Узкий запрос страниц с «Домом»; всех страниц графа лист не тянет (гейт 20, m-5).
+  const queries = calls
+    .filter((c) => c.path === 'entity.query')
+    .map((c) => (c.input as { query?: string }).query);
+  expect(queries).toContain(HOMED_PAGES_QUERY);
+  expect(queries).not.toContain('aspect=orbis/page');
+  fireEvent.click(upcoming);
+  await heading('Upcoming');
+  await waitFor(() => expect(shownPath()).toBe(`/r/${UPCOMING}`));
   await waitFor(() => expect(frameIcon()).toHaveTextContent('🪐'));
 });
 
