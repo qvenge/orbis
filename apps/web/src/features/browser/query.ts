@@ -1,3 +1,4 @@
+import { APP_ASPECT, PAGE_ASPECT } from '@orbis/shared';
 import { parsePageText } from '@orbis/shared/doc/page-grammar';
 import { quoteQueryValue } from '@orbis/shared/query';
 
@@ -31,8 +32,29 @@ export function buildFilterQuery(f: FilterState): string {
   return clauses.join(', ');
 }
 
-export function browserQuery({ limit, filters }: { limit: number; filters: string }): string {
-  const base = filters ? `${filters}, ` : '';
+/**
+ * Отрицания общего списка «Записей» (спека 1б §9.6): страницы и приложения там по умолчанию не
+ * показываются — это обёртки над записями, а не сами записи, и в общем списке они тонули бы среди
+ * заметок и задач. Поиск (задача 24) исключает их из группы «Записи» тем же текстом, чтобы
+ * показать отдельными группами.
+ */
+export const RECORDS_HIDE_PAGES_AND_APPS = `!aspect=${PAGE_ASPECT}, !aspect=${APP_ASPECT}`;
+
+/**
+ * Текст запроса списка «Записей». `showPagesAndApps` — обязательный, без умолчания: забытый
+ * аргумент молча показал бы или спрятал страницы, и ни один вызыватель этого бы не заметил.
+ */
+export function browserQuery({
+  limit,
+  filters,
+  showPagesAndApps,
+}: {
+  limit: number;
+  filters: string;
+  showPagesAndApps: boolean;
+}): string {
+  const clauses = [filters, showPagesAndApps ? '' : RECORDS_HIDE_PAGES_AND_APPS].filter(Boolean);
+  const base = clauses.length > 0 ? `${clauses.join(', ')}, ` : '';
   return `${base}sortBy=orbis/updated_at:desc, limit=${limit}`;
 }
 

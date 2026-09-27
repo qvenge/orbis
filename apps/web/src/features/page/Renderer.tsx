@@ -15,6 +15,7 @@ import { Markdown } from '../../lib/markdown/Markdown';
 import { BodyKindProvider } from '../../lib/query-blocks/body-kind';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { openEntity } from '../../state/navigation';
+import { RecordsBlockSlot } from '../browser/RecordsBlockSlot';
 import { OwnCards } from '../entity-detail/OwnCards';
 import { AspectCardFor, OWN_ASPECT_CARDS, RestCards } from '../entity-detail/own-cards';
 import { RECORD_BLOCK_COMPONENTS } from '../entity-detail/record-blocks';
@@ -43,7 +44,7 @@ import { TabsContainer } from './TabsContainer';
  *
  * Проблемы тела (`bodyIssues`, §5.5, §5.8) — плашками на месте своего узла: неуместный блок,
  * второй `{{body}}`, второй блок карточек, сломанный контейнер. Остальное тело рисуется: одна ошибка не гасит страницу.
- * Блоки 1б, которых показ ещё не умеет, — временной плашкой (`UnshownBlock`).
+ * Блок 1б, которого показ ещё не умеет (`{{apps}}`), — временной плашкой (`UnshownBlock`).
  *
  * Известное расхождение с настройкой (как у первого кадра, `page-grammar.ts`): блок с отступом в
  * пункте списка препроход не видит, и на показе он — текстом, а в редакторе настройки — виджетом.
@@ -319,7 +320,13 @@ function PageNodeView({
     case 'ownCards':
       return <OwnCardsNode />;
     case 'host':
-      return <UnshownBlock raw={node.raw} />;
+      // «Записи» — своей точкой лени (спека 1б §12, Н-9): рендерер эагерен в экране записи, а блок
+      // нужен одной странице. Запись открывается в текущем разделе — поверх этой страницы.
+      return node.name === 'records' ? (
+        <RecordsBlockSlot onOpen={openEntity} />
+      ) : (
+        <UnshownBlock raw={node.raw} />
+      );
     case 'columns':
       return (
         <Columns>
@@ -410,16 +417,16 @@ function CardNode({ text, raw }: { text: string; raw: string }) {
 }
 
 /**
- * Временная плашка блоков хоста 1б, которых этот рендерер ещё не рисует: `{{records}}` («Записи») и
- * `{{apps}}` («Приложения»). Грамматика узнаёт их раньше, чем
- * web умеет их показать (задача 8 плана 1б): тела поставки с новыми маркерами печатаются
- * окончательно уже сейчас, а пустое место вместо блока спрятало бы его (§6.5 1а — пустоты вместо
- * ошибки не бывает). Тон спокойный (`unresolved`): блок на своём месте, чинить нечего.
+ * Временная плашка блока хоста 1б, которого этот рендерер ещё не рисует: `{{apps}}` («Приложения»).
+ * Грамматика узнаёт его раньше, чем web умеет его показать (задача 8 плана 1б): тела поставки с
+ * новыми маркерами печатаются окончательно уже сейчас, а пустое место вместо блока спрятало бы его
+ * (§6.5 1а — пустоты вместо ошибки не бывает). Тон спокойный (`unresolved`): блок на своём месте,
+ * чинить нечего.
  *
  * Почему временная и кто снимает (план 1б — внутрисрезовая плашка, в реестр §15 спеки не входит):
- * `host` с именем `records` — задача 18 (блок «Записи» со своей точкой лени), `host` с именем
- * `apps` — задача 20 (переключатель приложений). Каждая заменяет свою ветку настоящим блоком; когда
- * снята последняя, уходит и эта функция. Ветку `ownCards` сняла задача 17 (`OwnCardsNode`).
+ * `host` с именем `apps` — задача 20 (переключатель приложений) заменяет эту ветку настоящим блоком,
+ * и функция уходит. Ветку `ownCards` сняла задача 17 (`OwnCardsNode`), `records` — задача 18
+ * (`RecordsBlockSlot`).
  */
 function UnshownBlock({ raw }: { raw: string }) {
   return (

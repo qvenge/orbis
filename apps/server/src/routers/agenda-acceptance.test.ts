@@ -47,8 +47,12 @@ const tomorrow = addDays(today, 1);
 /** Момент 'YYYY-MM-DDTHH:MM:00+03:00' — фиксированное смещение Europe/Moscow. */
 const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
 
-/** Browser без фильтров (apps/web/src/features/browser/query.ts browserQuery). */
-const BROWSER_QUERY = 'sortBy=orbis/updated_at:desc, limit=50';
+/**
+ * Browser без фильтров (apps/web/src/features/browser/query.ts browserQuery): блок «Записи» по
+ * умолчанию скрывает страницы и приложения отрицаниями (спека 1б §9.6) — событие они не прячут.
+ */
+const BROWSER_QUERY =
+  '!aspect=orbis/page, !aspect=orbis/app, sortBy=orbis/updated_at:desc, limit=50';
 
 /** N-й {{query:}}-блок body smart-list'а — тот же разбор, что в onboarding.test.ts. */
 function queryBlock(body: string, index: number): string {

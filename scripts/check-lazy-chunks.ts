@@ -20,9 +20,20 @@
  * Имя общего чанка сознательно не проверяется: rolldown называет его по первому модулю
  * (наблюдались и `Input-*`, и `EnvelopeCard-*`), это деталь реализации, а не договор.
  *
- * Запуск: `bun scripts/check-lazy-chunks.ts` — после сборки web. В CI стоит следом за ней.
+ * ПОРОГИ ВЕСА — отдельные флаги, и они не противоречат абзацу выше: наличие чанка ловит, что модуль
+ * СХЛОПНУЛСЯ, а порог — что чанк честно, но незаметно ТОЛСТЕЕТ (РП-25 среза страниц 1б):
+ *  - `--max-gzip <Чанк>=<байт>` — gzip файла чанка (уровень по умолчанию, как в отчёте сборки vite);
+ *  - `--max-closure-gzip <Чанк>=<байт>` — gzip ЗАМЫКАНИЯ: файл чанка и все чанки, достижимые из
+ *    него статическими импортами, транзитивно (уровень 9 — как у замера базы, см. `closureOf`).
+ * Второй флаг — не дубль первого, и это замерено (рулинг R-3 среза 1б): статический импорт Radix в
+ * эагерный код экрана записи растил файл `DetailScreen-*.js` на +33 Б — rollup вынес Radix в общие
+ * чанки, — а первый кадр записи рос на ~16 кБ gzip, мимо порога на файл.
+ *
+ * Запуск: `bun scripts/check-lazy-chunks.ts [--max-gzip Ч=Б] [--max-closure-gzip Ч=Б]` — после
+ * сборки web. В CI стоит следом за ней, с порогами экрана записи.
  */
 import { readdirSync, readFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 
 const ASSETS_DIR = 'apps/web/dist/assets';
 const ROUTER = 'apps/web/src/app/router.tsx';
@@ -75,8 +86,13 @@ const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
  * (срез страниц 1а, задача 14) довёл чанк `DetailScreen` до +17 % от базы среза, за порог сторожа
  * РП-11 (+15 %); меню нужно только после жеста и стало ленивым (точка лени — `DetailMenuSlot.tsx`).
  * Статический импорт `DetailMenu.tsx` схлопнул бы чанк обратно — молча, как у редактора выше.
+ *
+ * `RecordsBlock` — блок «Записи» (`{{records}}`, срез страниц 1б, задача 18): список, фильтр и быстрый
+ * ввод нужны одной странице, а рендерер страниц эагерен в каждом открытии записи (спека 1б §12, Н-9).
+ * Точка лени — `features/browser/RecordsBlockSlot.tsx`, общая с экраном «Обзор»: статический импорт
+ * блока из любого эагерного места (рендерер — в чанке записи, «Обзор» — во входном) схлопнул бы чанк.
  */
-const LAZY_DETAIL_MODULES = ['DetailMenu'];
+const LAZY_DETAIL_MODULES = ['DetailMenu', 'RecordsBlock'];
 
 /**
  * ТРЕТЬЯ проверка — СОСТАВ чанка, а не его наличие (Ш1, задача 11).
@@ -94,68 +110,41 @@ const LAZY_DETAIL_MODULES = ['DetailMenu'];
  *     соседей. Транзитивность здесь и есть весь смысл: `save.test.tsx` прямо признаётся, что
  *     «новый общий сосед со схемой внутри» его обойдёт, а по dist граф виден целиком.
  *
- * Единственное ребро сегодня — «чанк записи не знает схему документа»: `DetailScreen`
- * открывается при каждом заходе в запись, а `@orbis/shared/doc` нужен только редактору и
- * тумблеру разметки, и оба ленивые. Динамический `import()` ребром НЕ считается — на нём всё
- * и держится.
+ * Первое ребро — «чанк записи не знает схему документа»: `DetailScreen` открывается при каждом
+ * заходе в запись, а `@orbis/shared/doc` нужен только редактору и тумблеру разметки, и оба
+ * ленивые. Динамический `import()` ребром НЕ считается — на нём всё и держится.
+ *
+ * Второе — «чанк записи не знает блок „Записи“» (срез страниц 1б, задача 18), и проверки наличия
+ * ему МАЛО — это замерено мутацией: статический импорт `RecordsBlock` в рендерер НЕ убирает файл
+ * `RecordsBlock-*.js` из dist. У модуля второй, ленивый, импортёр (экран «Обзор» во входном чанке),
+ * и rollup оставляет чанк общим, а `DetailScreen` просто начинает импортировать его статически —
+ * блок едет в первом кадре каждой записи (+2 023 Б gzip замыкания, в пределах запаса порога
+ * замыкания), а проверка наличия печатает `ok`.
  */
-const FORBIDDEN_EDGES = [{ from: 'DetailScreen', to: 'doc' }];
+const FORBIDDEN_EDGES: readonly { from: string; to: string; hint: string }[] = [
+  {
+    from: 'DetailScreen',
+    to: 'doc',
+    hint:
+      "Ищите импортёра: `grep -rn \"@orbis/shared/doc'\" apps/web/src --include='*.ts*'` —\n" +
+      'разрешён только каталог features/entity-editor и только листовые сабпаты `/diff`\n' +
+      'и `/types` вне его.',
+  },
+  {
+    from: 'DetailScreen',
+    to: 'RecordsBlock',
+    hint:
+      "Ищите импортёра: `grep -rn \"RecordsBlock'\" apps/web/src --include='*.ts*'` — блок\n" +
+      'грузится только через `features/browser/RecordsBlockSlot.tsx` (своя точка лени, спека 1б §12).',
+  },
+];
 
-// --- Сверка списка с роутером -------------------------------------------------------------
-// Седьмая точка lazy(), добавленная без правки LAZY_SCREENS, осталась бы без охраны — молча,
-// то есть ровно тем способом, против которого этот страж и написан. Сверяем не число, а
-// ИМЕНА: чанк называется по базовому имени модуля из import(), поэтому список обязан совпасть
-// с набором ленивых импортов роутера точь-в-точь.
-const routerSrc = readFileSync(ROUTER, 'utf8');
-const inRouter = [...routerSrc.matchAll(/lazy\([\s\S]{0,200}?import\('([^']+)'\)/g)].map(
-  (m) => m[1].split('/').pop() as string,
-);
-const onlyInRouter = inRouter.filter((n) => !LAZY_SCREENS.includes(n));
-const onlyInList = LAZY_SCREENS.filter((n) => !inRouter.includes(n));
-if (onlyInRouter.length > 0 || onlyInList.length > 0) {
-  console.error(
-    `check-lazy-chunks: список LAZY_SCREENS разошёлся с ${ROUTER}.\n` +
-      (onlyInRouter.length > 0 ? `  ленивые в роутере, но не в списке: ${onlyInRouter}\n` : '') +
-      (onlyInList.length > 0 ? `  в списке, но уже не ленивые в роутере: ${onlyInList}\n` : '') +
-      'Приведите список в соответствие — охрана должна покрывать все точки lazy().',
-  );
-  process.exit(1);
+// --- Разбор dist: каталог чанков — параметром (ради фикстурного теста) ---------------------
+
+/** Файлы чанка по имени модуля: имя модуля, дефис, хэш сборки (то же правило, что у проверки наличия). */
+export function chunkFilesIn(files: readonly string[], name: string): string[] {
+  return files.filter((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f));
 }
-
-let files: string[];
-try {
-  files = readdirSync(ASSETS_DIR);
-} catch {
-  console.error(
-    `check-lazy-chunks: каталога ${ASSETS_DIR} нет — сначала соберите web:\n` +
-      '  bun run --filter @orbis/web build',
-  );
-  process.exit(1);
-}
-
-const guarded = [...LAZY_SCREENS, ...SHARED_CHUNKS, ...LAZY_EDITOR_MODULES, ...LAZY_DETAIL_MODULES];
-const missing = guarded.filter(
-  (name) => !files.some((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f)),
-);
-
-if (missing.length > 0) {
-  console.error(
-    'check-lazy-chunks: отдельного чанка нет у модулей: ' +
-      `${missing.join(', ')}.\n` +
-      'Это значит, что где-то появился СТАТИЧЕСКИЙ импорт такого модуля — рядом с ленивым он\n' +
-      'схлопывает чанк во входной, и байты снова едут в первом кадре. Найдите импортёра\n' +
-      "(`grep -rn \"<Модуль>'\" apps/web/src --include='*.ts*'`, тесты не считаются — они не\n" +
-      'входят в сборку) и уберите его. Если импортёру нужен общий помощник из ленивого\n' +
-      'модуля, вынесите помощник в отдельный листовой файл.',
-  );
-  process.exit(1);
-}
-
-// --- Состав чанков: запрещённые рёбра статических импортов ---------------------------------
-
-/** Файлы чанка по имени модуля: то же правило имён, что у проверки наличия выше. */
-const chunkFiles = (name: string): string[] =>
-  files.filter((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f));
 
 /**
  * Статические импорты чанка — `import … from"./x.js"`, голый `import"./x.js"` и
@@ -167,8 +156,8 @@ const chunkFiles = (name: string): string[] =>
  * предзагружаемые ленивые чанки строками вида `"assets/doc-*.js"` — без `./` и без оператора
  * импорта. Оба свойства проверены на настоящем dist, а не выведены из чтения регэкспа.
  */
-function staticImports(file: string): string[] {
-  const src = readFileSync(`${ASSETS_DIR}/${file}`, 'utf8');
+export function staticImports(dir: string, file: string): string[] {
+  const src = readFileSync(`${dir}/${file}`, 'utf8');
   return [
     ...src.matchAll(
       /(?:^|[;\s}])(?:import|export)\s*(?:[^'"()]*?\bfrom\s*)?["']\.\/([\w.-]+\.js)["']/g,
@@ -177,12 +166,12 @@ function staticImports(file: string): string[] {
 }
 
 /** Достижим ли `target` из `start` по статическим импортам (обход в ширину по чанкам dist). */
-function reaches(start: string, target: string): boolean {
+function reaches(dir: string, files: readonly string[], start: string, target: string): boolean {
   const seen = new Set([start]);
   const queue = [start];
   while (queue.length > 0) {
     const file = queue.shift() as string;
-    for (const next of staticImports(file)) {
+    for (const next of staticImports(dir, file)) {
       if (next === target) return true;
       if (seen.has(next) || !files.includes(next)) continue;
       seen.add(next);
@@ -192,70 +181,297 @@ function reaches(start: string, target: string): boolean {
   return false;
 }
 
-for (const edge of FORBIDDEN_EDGES) {
-  const targets = chunkFiles(edge.to);
-  if (targets.length === 0) {
+/**
+ * Эагерное замыкание чанка: сам файл и все чанки, достижимые из него СТАТИЧЕСКИМИ импортами,
+ * транзитивно. Динамический `import()` в замыкание не идёт — по нему грузится ленивое, ради него
+ * всё и затевалось (разбор — `staticImports`). Это и есть байты, которые браузер тянет, чтобы
+ * показать первый кадр экрана: файл чанка без соседей недосчитывает общее, вынесенное rollup'ом.
+ */
+export function closureOf(dir: string, file: string): string[] {
+  const files = readdirSync(dir);
+  const seen = new Set([file]);
+  const queue = [file];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const next of staticImports(dir, current)) {
+      if (seen.has(next) || !files.includes(next)) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  return [...seen];
+}
+
+// --- Пороги веса (РП-25, рулинг R-3 среза страниц 1б) ---------------------------------------
+
+/** Порог: имя модуля чанка и предел в байтах gzip. */
+export interface Budget {
+  chunk: string;
+  max: number;
+}
+
+export interface Budgets {
+  /** `--max-gzip` — gzip файла чанка. */
+  file: Budget[];
+  /** `--max-closure-gzip` — gzip эагерного замыкания чанка (`closureOf`). */
+  closure: Budget[];
+}
+
+const BUDGET_FLAGS: Readonly<Record<string, keyof Budgets>> = {
+  '--max-gzip': 'file',
+  '--max-closure-gzip': 'closure',
+};
+
+/**
+ * Разбор флагов порогов. Всё непонятное — ошибка, а не пропуск: опечатка в имени флага в CI
+ * молча снимала бы порог, и сторож зеленел бы без проверки — ровно тот класс, против которого он.
+ */
+export function parseBudgetArgs(argv: readonly string[]): Budgets {
+  const out: Budgets = { file: [], closure: [] };
+  for (let i = 0; i < argv.length; i += 2) {
+    const flag = argv[i] as string;
+    const kind = Object.hasOwn(BUDGET_FLAGS, flag) ? BUDGET_FLAGS[flag] : undefined;
+    if (kind === undefined) {
+      throw new Error(
+        `check-lazy-chunks: неизвестный аргумент ${flag}. ` +
+          'Флаги: --max-gzip <Чанк>=<байт>, --max-closure-gzip <Чанк>=<байт>.',
+      );
+    }
+    const value = argv[i + 1];
+    if (value === undefined) {
+      throw new Error(`check-lazy-chunks: у ${flag} нет значения — ждём <Чанк>=<байт>.`);
+    }
+    const m = /^(\w+)=(\d+)$/.exec(value);
+    if (m === null) {
+      throw new Error(
+        `check-lazy-chunks: значение ${flag} «${value}» — не <Чанк>=<байт> (целое число байт).`,
+      );
+    }
+    out[kind].push({ chunk: m[1] as string, max: Number(m[2]) });
+  }
+  return out;
+}
+
+/**
+ * Уровень сжатия замыкания — 9: им снята база задачи 1 среза 1б (304 855 Б, скрипт имплементера
+ * `closure.py`, `gzip.compress` Python — уровень 9 по умолчанию), и порог CI отсчитан от замера тем
+ * же уровнем. Файл чанка — уровнем zlib по умолчанию: им мерят отчёт сборки vite и все базы файла
+ * (27 562 Б на начале среза, порог 34 889 Б). Разные уровни у двух флагов — ради сравнимости с их
+ * базами, а не случайность.
+ */
+const CLOSURE_GZIP_LEVEL = 9;
+
+const gzipBytes = (dir: string, file: string, level?: number): number =>
+  gzipSync(readFileSync(`${dir}/${file}`), level === undefined ? {} : { level }).length;
+
+/**
+ * Проверка порогов на каталоге чанков. Код 1 — превышение (с числами и составом) или чанка с таким
+ * именем нет ровно одного: порог на отсутствующий файл — это ноль байт и вечный «ok».
+ */
+export function checkBudgets(dir: string, budgets: Budgets): { code: 0 | 1; lines: string[] } {
+  const files = readdirSync(dir);
+  const lines: string[] = [];
+  let failed = false;
+  const fileOf = (b: Budget, flag: string): string | null => {
+    const found = chunkFilesIn(files, b.chunk);
+    if (found.length === 1) return found[0] as string;
+    failed = true;
+    lines.push(
+      `check-lazy-chunks: ${flag} ${b.chunk}: ` +
+        (found.length === 0
+          ? `чанка ${b.chunk}-*.js в dist нет — порог мерить не на чем (модуль схлопнулся или переименован).`
+          : `чанков ${b.chunk}-*.js несколько (${found.join(', ')}) — порог неоднозначен.`),
+    );
+    return null;
+  };
+
+  for (const b of budgets.file) {
+    const file = fileOf(b, '--max-gzip');
+    if (file === null) continue;
+    const size = gzipBytes(dir, file);
+    if (size > b.max) {
+      failed = true;
+      lines.push(
+        `check-lazy-chunks: чанк ${file} — ${size} Б gzip, порог ${b.max} Б (превышение ${size - b.max} Б).\n` +
+          'Порог не поднимать: сначала разобрать, что приехало в первый кадр (РП-25) — лишний\n' +
+          'статический импорт тяжёлого модуля обычно лечится точкой лени.',
+      );
+    } else {
+      lines.push(`вес: ${file} — ${size} Б gzip при пороге ${b.max} Б (запас ${b.max - size} Б)`);
+    }
+  }
+
+  for (const b of budgets.closure) {
+    const file = fileOf(b, '--max-closure-gzip');
+    if (file === null) continue;
+    const members = closureOf(dir, file).map((f) => ({
+      f,
+      size: gzipBytes(dir, f, CLOSURE_GZIP_LEVEL),
+    }));
+    const size = members.reduce((sum, m) => sum + m.size, 0);
+    if (size > b.max) {
+      failed = true;
+      const heaviest = [...members]
+        .sort((x, y) => y.size - x.size)
+        .map((m) => `  ${m.f} — ${m.size} Б`)
+        .join('\n');
+      lines.push(
+        `check-lazy-chunks: эагерное замыкание ${file} — ${size} Б gzip -9, порог ${b.max} Б ` +
+          `(превышение ${size - b.max} Б).\n` +
+          'Растёт первый кадр экрана, даже если сам файл чанка почти не изменился: rollup выносит\n' +
+          'общее в соседние чанки, и они едут вместе с ним. Состав замыкания (по весу):\n' +
+          `${heaviest}\n` +
+          'Порог не поднимать: найдите статический импорт, притащивший вес, и сделайте его ленивым.',
+      );
+    } else {
+      lines.push(
+        `вес: замыкание ${file} (${members.length} файлов) — ${size} Б gzip -9 при пороге ${b.max} Б ` +
+          `(запас ${b.max - size} Б)`,
+      );
+    }
+  }
+  return { code: failed ? 1 : 0, lines };
+}
+
+// --- Проверка сборки ------------------------------------------------------------------------
+
+function main(argv: readonly string[]): void {
+  let budgets: Budgets;
+  try {
+    budgets = parseBudgetArgs(argv);
+  } catch (error) {
+    console.error((error as Error).message);
+    process.exit(1);
+  }
+
+  // --- Сверка списка с роутером -------------------------------------------------------------
+  // Седьмая точка lazy(), добавленная без правки LAZY_SCREENS, осталась бы без охраны — молча,
+  // то есть ровно тем способом, против которого этот страж и написан. Сверяем не число, а
+  // ИМЕНА: чанк называется по базовому имени модуля из import(), поэтому список обязан совпасть
+  // с набором ленивых импортов роутера точь-в-точь.
+  const routerSrc = readFileSync(ROUTER, 'utf8');
+  const inRouter = [...routerSrc.matchAll(/lazy\([\s\S]{0,200}?import\('([^']+)'\)/g)].map(
+    (m) => m[1].split('/').pop() as string,
+  );
+  const onlyInRouter = inRouter.filter((n) => !LAZY_SCREENS.includes(n));
+  const onlyInList = LAZY_SCREENS.filter((n) => !inRouter.includes(n));
+  if (onlyInRouter.length > 0 || onlyInList.length > 0) {
     console.error(
-      `check-lazy-chunks: чанка ${edge.to}-*.js в dist нет вовсе.\n` +
-        'Это НЕ «модуль стал не нужен»: rolldown не оставляет фасада, а вклеивает содержимое\n' +
-        `в того, кто его импортирует статически, — то есть вес уехал в чужой чанк (скорее всего\n` +
-        `в ${edge.from}). Найдите статический импорт и уберите его.`,
+      `check-lazy-chunks: список LAZY_SCREENS разошёлся с ${ROUTER}.\n` +
+        (onlyInRouter.length > 0 ? `  ленивые в роутере, но не в списке: ${onlyInRouter}\n` : '') +
+        (onlyInList.length > 0 ? `  в списке, но уже не ленивые в роутере: ${onlyInList}\n` : '') +
+        'Приведите список в соответствие — охрана должна покрывать все точки lazy().',
     );
     process.exit(1);
   }
-  for (const from of chunkFiles(edge.from)) {
-    /**
-     * ПОЗИТИВНЫЙ КОНТРОЛЬ РАЗБОРА — раньше самой проверки, и он тут по той же причине, по
-     * которой написана вся третья проверка: молчащий страж хуже отсутствующего.
-     *
-     * `staticImports` знает ровно один формат спецификатора — `./имя.js`. Смени vite базовый
-     * путь или разложи чанки по подкаталогам — разбор перестанет видеть рёбра вообще, и
-     * проверка ниже напечатала бы `ok` на любой сборке. Пустой список у чанка экрана
-     * невозможен по существу, поэтому пустота означает не «зависимостей нет», а «разбор
-     * сломался».
-     *
-     * Сегодня у `DetailScreen` их семь: Button, Dialog, dist, index, NativeRow, types,
-     * useRegistry. Чанка `diff` в списке БОЛЬШЕ НЕТ, и это не потеря: Задача 20 завела второй
-     * листовой сабпат `@orbis/shared/doc/types` (версия схемы, имена нод, обход состава), и
-     * rolldown сложил оба листовых модуля в ОДИН чанк `types-*.js` — 2.21 кБ gzip против 2.05 кБ
-     * у прежнего `diff-*.js` (замерено на двух сборках, до и после). Схема документа в него не
-     * попала: `types-*.js` статических импортов не имеет вовсе, а `doc-*.js` по-прежнему
-     * отдельный чанк на 153 кБ gzip — его и сторожит ребро ниже.
-     *
-     * Число это НЕ договор и в проверку не входит: редакция до Ш1.1 называла шесть и устарела в
-     * том же срезе, где была написана, а читают её при СРАБОТАВШЕМ страже — то есть когда
-     * человеку и так уже нехорошо. Проверяется единственное: список непуст.
-     */
-    if (staticImports(from).length === 0) {
+
+  let files: string[];
+  try {
+    files = readdirSync(ASSETS_DIR);
+  } catch {
+    console.error(
+      `check-lazy-chunks: каталога ${ASSETS_DIR} нет — сначала соберите web:\n` +
+        '  bun run --filter @orbis/web build',
+    );
+    process.exit(1);
+  }
+
+  const guarded = [
+    ...LAZY_SCREENS,
+    ...SHARED_CHUNKS,
+    ...LAZY_EDITOR_MODULES,
+    ...LAZY_DETAIL_MODULES,
+  ];
+  const missing = guarded.filter(
+    (name) => !files.some((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f)),
+  );
+
+  if (missing.length > 0) {
+    console.error(
+      'check-lazy-chunks: отдельного чанка нет у модулей: ' +
+        `${missing.join(', ')}.\n` +
+        'Это значит, что где-то появился СТАТИЧЕСКИЙ импорт такого модуля — рядом с ленивым он\n' +
+        'схлопывает чанк во входной, и байты снова едут в первом кадре. Найдите импортёра\n' +
+        "(`grep -rn \"<Модуль>'\" apps/web/src --include='*.ts*'`, тесты не считаются — они не\n" +
+        'входят в сборку) и уберите его. Если импортёру нужен общий помощник из ленивого\n' +
+        'модуля, вынесите помощник в отдельный листовой файл.',
+    );
+    process.exit(1);
+  }
+
+  for (const edge of FORBIDDEN_EDGES) {
+    const targets = chunkFilesIn(files, edge.to);
+    if (targets.length === 0) {
       console.error(
-        `check-lazy-chunks: у чанка ${from} не разобрано НИ ОДНОГО статического импорта.\n` +
-          'Так не бывает: чанк экрана всегда тянет общие модули. Значит сломался разбор —\n' +
-          'скорее всего сборка сменила формат спецификаторов (другой base, чанки в подкаталоге),\n' +
-          'и проверка состава ниже стала бы печатать ok на любой сборке. Почините staticImports.',
+        `check-lazy-chunks: чанка ${edge.to}-*.js в dist нет вовсе.\n` +
+          'Это НЕ «модуль стал не нужен»: rolldown не оставляет фасада, а вклеивает содержимое\n' +
+          `в того, кто его импортирует статически, — то есть вес уехал в чужой чанк (скорее всего\n` +
+          `в ${edge.from}). Найдите статический импорт и уберите его.`,
       );
       process.exit(1);
     }
-    const hit = targets.find((t) => reaches(from, t));
-    if (hit !== undefined) {
-      console.error(
-        `check-lazy-chunks: чанк ${from} СТАТИЧЕСКИ импортирует ${hit} (прямо или через соседей).\n` +
-          `Инвариант: чанк «${edge.from}» не знает «${edge.to}» — иначе его вес едет в первом\n` +
-          'кадре каждого открытия записи, мимо ленивой загрузки. Проверяющие тесты и стражи\n' +
-          'наличия чанков этого не видят: файлы остаются на месте, переезжает только состав.\n' +
-          "Ищите импортёра: `grep -rn \"@orbis/shared/doc'\" apps/web/src --include='*.ts*'` —\n" +
-          'разрешён только каталог features/entity-editor и только листовые сабпаты `/diff`\n' +
-          'и `/types` вне его.',
-      );
-      process.exit(1);
+    for (const from of chunkFilesIn(files, edge.from)) {
+      /**
+       * ПОЗИТИВНЫЙ КОНТРОЛЬ РАЗБОРА — раньше самой проверки, и он тут по той же причине, по
+       * которой написана вся третья проверка: молчащий страж хуже отсутствующего.
+       *
+       * `staticImports` знает ровно один формат спецификатора — `./имя.js`. Смени vite базовый
+       * путь или разложи чанки по подкаталогам — разбор перестанет видеть рёбра вообще, и
+       * проверка ниже напечатала бы `ok` на любой сборке. Пустой список у чанка экрана
+       * невозможен по существу, поэтому пустота означает не «зависимостей нет», а «разбор
+       * сломался».
+       *
+       * Сегодня у `DetailScreen` их семь: Button, Dialog, dist, index, NativeRow, types,
+       * useRegistry. Чанка `diff` в списке БОЛЬШЕ НЕТ, и это не потеря: Задача 20 завела второй
+       * листовой сабпат `@orbis/shared/doc/types` (версия схемы, имена нод, обход состава), и
+       * rolldown сложил оба листовых модуля в ОДИН чанк `types-*.js` — 2.21 кБ gzip против 2.05 кБ
+       * у прежнего `diff-*.js` (замерено на двух сборках, до и после). Схема документа в него не
+       * попала: `types-*.js` статических импортов не имеет вовсе, а `doc-*.js` по-прежнему
+       * отдельный чанк на 153 кБ gzip — его и сторожит ребро ниже.
+       *
+       * Число это НЕ договор и в проверку не входит: редакция до Ш1.1 называла шесть и устарела в
+       * том же срезе, где была написана, а читают её при СРАБОТАВШЕМ страже — то есть когда
+       * человеку и так уже нехорошо. Проверяется единственное: список непуст.
+       */
+      if (staticImports(ASSETS_DIR, from).length === 0) {
+        console.error(
+          `check-lazy-chunks: у чанка ${from} не разобрано НИ ОДНОГО статического импорта.\n` +
+            'Так не бывает: чанк экрана всегда тянет общие модули. Значит сломался разбор —\n' +
+            'скорее всего сборка сменила формат спецификаторов (другой base, чанки в подкаталоге),\n' +
+            'и проверка состава ниже стала бы печатать ok на любой сборке. Почините staticImports.',
+        );
+        process.exit(1);
+      }
+      const hit = targets.find((t) => reaches(ASSETS_DIR, files, from, t));
+      if (hit !== undefined) {
+        console.error(
+          `check-lazy-chunks: чанк ${from} СТАТИЧЕСКИ импортирует ${hit} (прямо или через соседей).\n` +
+            `Инвариант: чанк «${edge.from}» не знает «${edge.to}» — иначе его вес едет в первом\n` +
+            'кадре каждого открытия записи, мимо ленивой загрузки. Проверяющие тесты и стражи\n' +
+            'наличия чанков этого не видят: файлы остаются на месте, переезжает только состав.\n' +
+            edge.hint,
+        );
+        process.exit(1);
+      }
     }
   }
+
+  // --- Пороги веса: после наличия и состава — чанк, которого нет, мерить бессмысленно ---------
+  const weight = checkBudgets(ASSETS_DIR, budgets);
+  if (weight.code !== 0) {
+    console.error(weight.lines.join('\n'));
+    process.exit(1);
+  }
+
+  console.log(
+    `check-lazy-chunks: ok — отдельные чанки на месте у всех ${guarded.length} ` +
+      `(${LAZY_SCREENS.length} экранов + ${SHARED_CHUNKS.length} общих + ` +
+      `${LAZY_EDITOR_MODULES.length} ленивых модулей редактора + ` +
+      `${LAZY_DETAIL_MODULES.length} ленивых модулей экрана записи), список экранов сверен с роутером, ` +
+      `состав чанков сверен по запрещённым рёбрам (${FORBIDDEN_EDGES.length}) ` +
+      `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}).`,
+  );
+  for (const line of weight.lines) console.log(line);
 }
 
-console.log(
-  `check-lazy-chunks: ok — отдельные чанки на месте у всех ${guarded.length} ` +
-    `(${LAZY_SCREENS.length} экранов + ${SHARED_CHUNKS.length} общих + ` +
-    `${LAZY_EDITOR_MODULES.length} ленивых модулей редактора + ` +
-    `${LAZY_DETAIL_MODULES.length} ленивого модуля экрана записи), список экранов сверен с роутером, ` +
-    `состав чанков сверен по ${FORBIDDEN_EDGES.length} запрещённому ребру ` +
-    `(${FORBIDDEN_EDGES.map((e) => `${e.from} ↛ ${e.to}`).join(', ')}).`,
-);
+if (import.meta.main) main(process.argv.slice(2));

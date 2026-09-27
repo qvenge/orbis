@@ -1562,6 +1562,9 @@ test('модули первого кадра не тянут схему реда
     '../../extensions/goals/GoalCard.tsx',
     '../../extensions/finance/FinancialCard.tsx',
     '../../lib/percent.ts',
+    // Точка лени блока «Записи» (срез 1б, задача 18): рендерер зовёт её эагерно; сам блок
+    // (`RecordsBlock.tsx`) — ленивый, сторожится своим чанком и порогами gzip (check-lazy-chunks).
+    '../browser/RecordsBlockSlot.tsx',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),

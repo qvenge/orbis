@@ -217,28 +217,25 @@ test('{{body}} на странице — плашка BLOCK_MISPLACED; неза�
   expect(calls.some((c) => c.path.startsWith('entity.update'))).toBe(false);
 });
 
-test('{{records}}, {{apps}} на странице — плашка на месте, соседние блоки живы; {{cards: own}} — свои карточки (1б до задач 18, 20)', async () => {
+test('{{records}} на странице — блок «Записи» на месте, {{apps}} — плашка, соседние блоки живы; {{cards: own}} — свои карточки (1б до задачи 20)', async () => {
   const body = 'Вступление\n\n{{records}}\n\n{{title}}\n\n{{apps}}\n\n{{cards: own}}\n\nХвост\n';
   const { calls } = openPage(page(body, { aspects: [PAGE_ASPECT, 'orbis/task'] }));
   const view = await screen.findByTestId('page-view');
   expect(await within(view).findByText('Вступление')).toBeInTheDocument();
   expect(within(view).getByText('Хвост')).toBeInTheDocument();
   expect(await within(view).findByTestId('title-edit')).toHaveValue('Утро');
+  // «Записи» — настоящим блоком (задача 18, `records-block.test.tsx`), «Приложения» — плашкой до задачи 20.
+  const records = await within(view).findByTestId('records-block');
   const plaques = within(view).getAllByTestId('block-unresolved');
-  expect(plaques).toHaveLength(2);
-  expect(plaques[0]).toHaveTextContent('Блок {{records}} этой версией не показывается');
-  expect(plaques[1]).toHaveTextContent('Блок {{apps}} этой версией не показывается');
+  expect(plaques).toHaveLength(1);
+  expect(plaques[0]).toHaveTextContent('Блок {{apps}} этой версией не показывается');
   // Свои карточки на странице — её собственных аспектов (задача 17): у страницы-задачи — исполнитель.
   expect(await within(view).findByTestId('assignment-card')).toBeInTheDocument();
-  // Плашка — на месте блока: между «Вступлением» и заголовком страницы.
+  // Блок — на своём месте: между «Вступлением» и заголовком страницы.
   const intro = within(view).getByText('Вступление');
   const title = within(view).getByTestId('title-edit');
-  expect(
-    intro.compareDocumentPosition(plaques[0] as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  expect(
-    title.compareDocumentPosition(plaques[0] as Node) & Node.DOCUMENT_POSITION_PRECEDING,
-  ).toBeTruthy();
+  expect(intro.compareDocumentPosition(records) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(title.compareDocumentPosition(records) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
   expect(within(view).queryByTestId('block-misplaced')).toBeNull();
   expect(calls.some((c) => c.path.startsWith('entity.update'))).toBe(false);
 });

@@ -4,9 +4,9 @@ import { browserQuery } from './query';
 
 const PAGE = 50;
 
-export function useEntities(filters: string) {
+export function useEntities(filters: string, showPagesAndApps: boolean) {
   const [limit, setLimit] = useState(PAGE);
-  const query = browserQuery({ limit, filters });
+  const query = browserQuery({ limit, filters, showPagesAndApps });
   const q = trpc.entity.query.useQuery({ query });
   const entities = q.data ?? [];
   const hasMore = entities.length >= limit;

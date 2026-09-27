@@ -1,10 +1,7 @@
-import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useNav } from '../../state/navigation';
-import { EntityList } from './EntityList';
-import { Filters } from './Filters';
 import { PinnedChips } from './PinnedList';
-import { QuickCapture } from './QuickCapture';
+import { RecordsBlockSlot } from './RecordsBlockSlot';
 
 // Одна колонка: pinned на десктопе живут в глобальном SidebarNav,
 // на мобиле — компактная лента чипов над списком (PinnedChips, md:hidden).
@@ -19,19 +16,22 @@ import { QuickCapture } from './QuickCapture';
 // что делать с фильтром без результатов), и принимать его мимо владельца в задаче про
 // грамматику запроса нельзя. Обещание §3.8 остаётся в PRD, а не в мёртвом файле; вернуть
 // его — работа с формой, а не с этим экраном.
+//
+// Список, фильтр, переключатель и быстрый ввод — блок «Записи» (`RecordsBlock`, срез 1б, задача 18):
+// один код списка у экрана и у страницы с `{{records}}`. Экран — шапка над блоком и живёт до рамки
+// (задача 19), где раздел «Записи» станет страницей с этим блоком. Блок растёт в потоке, поэтому
+// прокручивает экран целиком — с быстрым вводом под списком, как на странице.
 export function BrowserScreen() {
-  const [filters, setFilters] = useState('');
   const push = useNav((s) => s.push);
+  const open = (id: string) => push('browser', { kind: 'entity', id });
   return (
     <div className="flex h-full flex-col">
       <ScreenHeader title="Обзор" />
-      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col md:px-6">
-        <PinnedChips onOpen={(id) => push('browser', { kind: 'entity', id })} />
-        <Filters onApply={setFilters} />
-        <div className="flex-1 overflow-y-auto">
-          <EntityList filters={filters} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-5xl flex-col md:px-6">
+          <PinnedChips onOpen={open} />
+          <RecordsBlockSlot onOpen={open} />
         </div>
-        <QuickCapture context={{ kind: 'root' }} />
       </div>
     </div>
   );

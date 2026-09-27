@@ -1,14 +1,25 @@
 import { Inbox } from 'lucide-react';
-import { useNav } from '../../state/navigation';
 import { Button } from '../../ui/Button';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
 import { EntityRow } from './EntityRow';
 import { useEntities } from './useEntities';
 
-export function EntityList({ filters = '' }: { filters?: string }) {
-  const { entities, hasMore, loadMore, isLoading } = useEntities(filters);
-  const push = useNav((s) => s.push);
+/**
+ * Список «Записей». Куда открыть запись, решает место показа (`onOpen`), а не список: блок на
+ * странице открывает её в текущем разделе, экран «Обзор» — в своей стопке. Прежний жёсткий
+ * `push('browser', …)` уводил бы запись со страницы любого раздела в чужую стопку.
+ */
+export function EntityList({
+  filters = '',
+  showPagesAndApps,
+  onOpen,
+}: {
+  filters?: string;
+  showPagesAndApps: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const { entities, hasMore, loadMore, isLoading } = useEntities(filters, showPagesAndApps);
   if (isLoading)
     return (
       <div className="flex flex-col gap-2 p-3">
@@ -35,7 +46,7 @@ export function EntityList({ filters = '' }: { filters?: string }) {
             <button
               type="button"
               data-testid="entity-row"
-              onClick={() => push('browser', { kind: 'entity', id: e.id })}
+              onClick={() => onOpen(e.id)}
               className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             >
               <EntityRow entity={e} />

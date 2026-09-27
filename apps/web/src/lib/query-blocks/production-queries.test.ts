@@ -88,6 +88,7 @@ const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
     'features/browser/query.ts (buildFilterQuery+browserQuery)',
     browserQuery({
       limit: 50,
+      showPagesAndApps: false,
       filters: buildFilterQuery({
         tags: ['дом', 'дача'],
         aspects: ['orbis/task'],
@@ -100,6 +101,7 @@ const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
     'features/browser/query.ts (тег владельца с пробелом)',
     browserQuery({
       limit: 50,
+      showPagesAndApps: false,
       filters: buildFilterQuery({
         tags: ['личные дела'],
         aspects: [],
@@ -134,7 +136,7 @@ const PRODUCTION_TEXTS: ReadonlyArray<readonly [string, string]> = [
   ['features/entity-editor/slash/items.ts (NEW_QUERY_BLOCK)', NEW_QUERY_BLOCK],
   [
     'features/settings/MemoryScreen.tsx (MEMORY_FILTER)',
-    browserQuery({ limit: 50, filters: MEMORY_FILTER }),
+    browserQuery({ limit: 50, filters: MEMORY_FILTER, showPagesAndApps: true }),
   ],
 ];
 

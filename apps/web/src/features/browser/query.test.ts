@@ -5,16 +5,28 @@ import { expect, test } from 'vitest';
 import { browserQuery, buildFilterQuery, firstQueryBlock } from './query';
 
 test('browserQuery включает limit и сортировку по orbis/updated_at desc', () => {
-  const q = browserQuery({ limit: 50, filters: '' });
+  const q = browserQuery({ limit: 50, filters: '', showPagesAndApps: true });
   expect(q).toContain('limit=50');
   // Namespaced key core-свойства (§А5-3а): голое `updated_at` новая грамматика не резолвит.
   expect(q).toContain('sortBy=orbis/updated_at:desc');
 });
 
 test('browserQuery дописывает фильтры перед limit', () => {
-  const q = browserQuery({ limit: 100, filters: 'aspect=orbis/task' });
+  const q = browserQuery({ limit: 100, filters: 'aspect=orbis/task', showPagesAndApps: true });
   expect(q).toContain('aspect=orbis/task');
   expect(q).toContain('limit=100');
+});
+
+test('browserQuery: страницы и приложения скрыты отрицаниями, пока переключатель выключен (спека 1б §9.6)', () => {
+  expect(browserQuery({ limit: 50, filters: '', showPagesAndApps: false })).toBe(
+    '!aspect=orbis/page, !aspect=orbis/app, sortBy=orbis/updated_at:desc, limit=50',
+  );
+  expect(browserQuery({ limit: 50, filters: 'tags=дом', showPagesAndApps: false })).toBe(
+    'tags=дом, !aspect=orbis/page, !aspect=orbis/app, sortBy=orbis/updated_at:desc, limit=50',
+  );
+  expect(browserQuery({ limit: 50, filters: '', showPagesAndApps: true })).toBe(
+    'sortBy=orbis/updated_at:desc, limit=50',
+  );
 });
 
 test('buildFilterQuery собирает строку из выбранных фильтров', () => {

@@ -24,13 +24,16 @@ beforeEach(() => {
 
 test('EntityList: первая страница 50 через entity.query; «ещё» шлёт limit=100', async () => {
   const page = Array.from({ length: 50 }, (_, i) => ent(`e${i}`, `T${i}`));
-  const { calls } = renderWithProviders(<EntityList />, (path, input) => {
-    if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
-      return q.includes('limit=100') ? [...page, ent('e50', 'T50')] : page;
-    }
-    throw new Error(`unexpected ${path}`);
-  });
+  const { calls } = renderWithProviders(
+    <EntityList showPagesAndApps={false} onOpen={() => {}} />,
+    (path, input) => {
+      if (path === 'entity.query') {
+        const q = (input as { query: string }).query;
+        return q.includes('limit=100') ? [...page, ent('e50', 'T50')] : page;
+      }
+      throw new Error(`unexpected ${path}`);
+    },
+  );
   await waitFor(() => expect(screen.getAllByTestId('entity-row')).toHaveLength(50));
   fireEvent.click(screen.getByRole('button', { name: /ещё/i }));
   // Отбор по ПУТИ обязателен: в журнале вызовов лежат не только `entity.query` (строка
@@ -127,13 +130,16 @@ test('QuickCapture внутри записи: подпункт рождаетс�
 });
 
 test('EntityList: загрузка → skeleton-ряды (role=status), не текст «Загрузка…»', () => {
-  renderWithProviders(<EntityList />, () => new Promise(() => {})); // запрос висит
+  renderWithProviders(
+    <EntityList showPagesAndApps={false} onOpen={() => {}} />,
+    () => new Promise(() => {}),
+  ); // запрос висит
   expect(screen.getAllByRole('status', { name: 'Загрузка' }).length).toBeGreaterThanOrEqual(6);
   expect(screen.queryByText(/Загрузка…/)).not.toBeInTheDocument();
 });
 
 test('EntityList: пусто → EmptyState «Здесь появятся ваши записи»', async () => {
-  renderWithProviders(<EntityList />, (path) => {
+  renderWithProviders(<EntityList showPagesAndApps={false} onOpen={() => {}} />, (path) => {
     if (path === 'entity.query') return [];
     throw new Error(`unexpected ${path}`);
   });

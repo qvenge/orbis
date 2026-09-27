@@ -41,7 +41,9 @@ function openEntity(id: string) {
 }
 
 export function MemoryScreen() {
-  const { entities, hasMore, loadMore, isLoading, isError } = useEntities(MEMORY_FILTER);
+  // Отрицаний «Записей» (§9.6) здесь нет: фильтр уже сужает до правил памяти, и текст запроса
+  // остаётся прежним — `showPagesAndApps` лишь не дописывает `!aspect=…` к своему аспекту.
+  const { entities, hasMore, loadMore, isLoading, isError } = useEntities(MEMORY_FILTER, true);
 
   return (
     <div className="flex h-full flex-col">
