@@ -216,3 +216,31 @@ test('I-1: карточка выключенного приложения с а�
     [APP_NAV]: [DAILY, UPCOMING],
   });
 });
+
+test('n-1: поиск в карточке «Навигации» не предлагает саму запись-приложение', async () => {
+  const APP = id(9);
+  const app = wireEntity({
+    id: APP,
+    title: 'Работа',
+    aspects: [APP_ASPECT],
+    props: { [APP_NAV]: [DAILY] },
+  });
+  renderWithProviders(
+    <AspectSection entity={app as never} aspectId={APP_ASPECT} />,
+    async (path, input) => {
+      // Сервер находит и саму запись-приложение: `entity.suggest` отсекает только архивные.
+      if (path === 'entity.suggest')
+        return [
+          ...REFS.filter((r) => !r.archived),
+          { id: APP, title: 'Работа', emoji: null, completable: null, archived: false },
+        ];
+      return handler(path, input);
+    },
+  );
+  fireEvent.change(await screen.findByRole('searchbox', { name: 'Добавить: Навигация' }), {
+    target: { value: 'р' },
+  });
+  const found = await screen.findByRole('list', { name: 'Найдено: Добавить: Навигация' });
+  await within(found).findByRole('button', { name: 'Ремонт' });
+  expect(within(found).queryByRole('button', { name: 'Работа' })).toBeNull();
+});

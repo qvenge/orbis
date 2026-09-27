@@ -132,6 +132,7 @@ function rowFor(entity: Entity, edits: AspectEdits, propertyId: string) {
       key={propertyId}
       registry={edits.registry}
       propertyId={propertyId}
+      selfId={entity.id}
       value={props[propertyId]}
       readOnly={edits.readOnly}
       onChange={(v) => edits.writeProp(propertyId, v)}
@@ -287,12 +288,14 @@ function orderedProperties(aspect: AspectDefinition): AspectDefinition['properti
 function PropertyRow({
   registry,
   propertyId,
+  selfId,
   value,
   readOnly,
   onChange,
 }: {
   registry: RegistryLookup;
   propertyId: string;
+  selfId: string;
   value: unknown;
   readOnly: boolean;
   onChange: (v: unknown | undefined) => void;
@@ -326,7 +329,7 @@ function PropertyRow({
           // Контрол ОДИН на все типы, включая `ref`: пикер категории (K6) переехал в общий
           // `RefField` по цели свойства из реестра (§А6-1) вместе с четырьмя своими копиями
           // на экранах Финансов и импорта.
-          <PropertyControl def={def} value={value} onChange={onChange} />
+          <PropertyControl def={def} value={value} onChange={onChange} selfId={selfId} />
         )}
       </dd>
     </>

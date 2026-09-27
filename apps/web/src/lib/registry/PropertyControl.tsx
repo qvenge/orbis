@@ -57,11 +57,17 @@ export function PropertyControl({
   value,
   onChange,
   readOnly = false,
+  selfId,
 }: {
   def: PropertyDefinition;
   value: unknown;
   onChange: (v: unknown | undefined) => void;
   readOnly?: boolean;
+  /**
+   * Запись, чьё это свойство. Список ссылок не предлагает её поиском: «Навигация» приложения на себя
+   * отвергается правилом `app_nav_not_self` (гейт 21, n-1).
+   */
+  selfId?: string;
 }) {
   const label = effectiveLabel(def.label, OWNER_LOCALE);
   const mode = writeModeOf(def);
@@ -111,7 +117,13 @@ export function PropertyControl({
   if (kind === 'ref-list')
     return (
       <Suspense fallback={null}>
-        <RefListField def={def} label={label} value={value} onChange={onChange} />
+        <RefListField
+          def={def}
+          label={label}
+          value={value}
+          onChange={onChange}
+          exclude={selfId === undefined ? [] : [selfId]}
+        />
       </Suspense>
     );
   if (kind === 'boolean')

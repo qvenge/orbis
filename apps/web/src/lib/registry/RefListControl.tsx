@@ -282,11 +282,14 @@ export function RefListField({
   label,
   value,
   onChange,
+  exclude = [],
 }: {
   def: PropertyDefinition;
   label?: string;
   value: unknown;
   onChange: (next: string[]) => void;
+  /** Что поиск не предлагает сверх стоящих — сама запись-приложение (гейт 21, n-1). */
+  exclude?: readonly string[];
 }) {
   const ids = idsOf(value);
   const [base, setBase] = useState(() => keyOf(ids));
@@ -300,7 +303,7 @@ export function RefListField({
   const dirty = keyOf(draft) !== keyOf(ids);
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <RefListControl def={def} label={label} value={draft} onChange={setDraft} />
+      <RefListControl def={def} label={label} value={draft} onChange={setDraft} exclude={exclude} />
       {dirty && (
         <div className="flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={() => setDraft(ids)}>
