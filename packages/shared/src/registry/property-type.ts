@@ -82,6 +82,16 @@ export const RELATION_ROLE_KEY_RE = /^([a-z][a-z0-9-]*\/)?[a-z][a-z0-9_-]*$/;
  */
 export const SLOT_KEY_RE = /^[a-z][a-z0-9_]*$/;
 
+/**
+ * Механизмы, которые флаг `writer` вправе назвать «единственным писателем» свойства (РП-3, Д-3).
+ * Список закрыт: опечатка в сиде отвергается разбором, а не рождает свойство, которое не пишет никто.
+ * Значения — имена `MutationMechanism` сервера (`apps/server/src/executor/types.ts`): `supply` —
+ * механизм поставки (сев при заведении графа, «принять обновление», «вернуть как было»),
+ * `app-toggle` — действие владельца «Выключить приложение».
+ */
+export const PROPERTY_WRITERS = ['supply', 'app-toggle'] as const;
+export type PropertyWriter = (typeof PROPERTY_WRITERS)[number];
+
 export const propertyDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -107,6 +117,9 @@ export const propertyDefinitionSchema = z
         model_writable: z.boolean().optional(),
         system_writable: z.boolean().optional(),
         computed: z.object({ rule: z.string() }).strict().optional(),
+        // «Пишет только механизм X» (РП-3): уже, чем `system_writable`, который пускает семь
+        // механизмов (Ф-1б-15) — и тогда ключ эталона подделал бы любой глагол или импорт.
+        writer: z.enum(PROPERTY_WRITERS).optional(),
       })
       .strict()
       .default({}),
@@ -127,10 +140,11 @@ export type PropertyDefinition = z.infer<typeof propertyDefinitionSchema>;
 /**
  * Вправе ли ТУЛ (он же UI, он же MCP) записать это свойство — §А2-5/Б6.
  *
- * Два флага, один ответ: `system_writable: true` пишет только сервер по перечню источников
+ * Три флага, один ответ: `system_writable: true` пишет только сервер по перечню источников
  * §А4-4 (`import`, `rule`, `verb`, …), `model_writable: false` — кэш вычисления, его пишет
- * правило каталога либо материализация. У обоих механизм тула (`user`) в перечень не входит,
- * и отказ гарантирован ещё до записи (`COMPUTED_WRITE`).
+ * правило каталога либо материализация, `writer` — ровно один названный механизм (`supply`,
+ * `app-toggle`, РП-3). Ни в одном механизм тула (`user`) не входит, и отказ гарантирован ещё
+ * до записи (`COMPUTED_WRITE`).
  *
  * Функция ОТВЕЧАЕТ НА ВОПРОС ПОВЕРХНОСТИ, а не прав: гейт прав определён против ИСТОЧНИКА
  * мутации и живёт в исполнителе (`executor/props.ts`, `writeDenial`) — здесь механизм
@@ -140,7 +154,11 @@ export type PropertyDefinition = z.infer<typeof propertyDefinitionSchema>;
  * снова начал бы обещать модели запрещённое.
  */
 export function writableFromTool(def: PropertyDefinition): boolean {
-  return def.flags.system_writable !== true && def.flags.model_writable !== false;
+  return (
+    def.flags.system_writable !== true &&
+    def.flags.model_writable !== false &&
+    def.flags.writer === undefined
+  );
 }
 
 /**

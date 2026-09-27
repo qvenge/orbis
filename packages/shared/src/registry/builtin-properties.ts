@@ -12,6 +12,8 @@
  * Срез 1а «Страницы» (спека §3.2) добавил два доменных свойства страницы — «Шаблон для» и
  * «Главнее, чем»: итого **75 доменных + 4 core**. Они стоят В КОНЦЕ массива, после core-проекций:
  * `rank` = позиция, и вставка перед core сдвинула бы `rank` четырёх core-строк — дрейф реестра.
+ * Срез 1б (РП-3, спека §4.2, §4.3, §9.1) добавил одиннадцать — шесть свойств «приложения», «Дом»
+ * страницы и четыре свойства «поставки»: итого **86 доменных + 4 core**, тоже В КОНЦЕ массива.
  *
  * Чего здесь НЕТ и почему: `orbis/project_id` §А8 удаляет; `orbis/date` и `orbis/weight` §А8
  * называет общими понятиями будущих модулей и прямо оговаривает — в v1 не сеются, потому что
@@ -27,8 +29,24 @@
  * который сам не проходит собственную схему, до сида доехать не должен.
  */
 import type { z } from 'zod';
-import { RULE_NEAREST_ANCESTOR } from '../constants';
+import {
+  APP_ASPECT,
+  APP_DISABLED,
+  APP_EXTENSIONS,
+  APP_HOME,
+  APP_NAV,
+  APP_NAV_FORM,
+  APP_OPENS_OVER,
+  HOME_PROPERTY,
+  RULE_NEAREST_ANCESTOR,
+  SUPPLY_DECLINED,
+  SUPPLY_HASH,
+  SUPPLY_KEY,
+  SUPPLY_TEXT,
+} from '../constants';
+import type { QueryAst } from '../query/ast';
 import { queryAstJsonSchema } from '../query/ast-json-schema';
+import { extensionSelectOptions } from './extensions';
 import { type PropertyDefinition, propertyDefinitionSchema } from './property-type';
 import type { SelectOption } from './types';
 
@@ -226,6 +244,19 @@ const RUN_USAGE_SCHEMA = {
     cost_usd: { type: 'number', minimum: 0 },
   },
   additionalProperties: false,
+};
+
+/**
+ * Цель «Дома» страницы и «Открывать вместо» приложения (РП-3): запись-приложение, но НЕ оболочка
+ * хоста. «Хост — это пустой „Дом“» (спека §4.3): держит это проверка членства цели на сервере
+ * (`registry/ref.ts`, Д-20), а не правило E. Отрицание в компиляторе тотально
+ * (`NOT COALESCE(x, false)`), поэтому приложение без ключа поставки (своё приложение владельца)
+ * в множество входит.
+ */
+const APP_NOT_HOST_SHELL: QueryAst = {
+  filter: {
+    and: [{ aspect: APP_ASPECT }, { not: { prop: SUPPLY_KEY, op: 'eq', value: 'host-shell' } }],
+  },
 };
 
 const ENTRIES: readonly PropertyEntry[] = [
@@ -1155,10 +1186,153 @@ const ENTRIES: readonly PropertyEntry[] = [
     },
     module: null,
   },
+  // ─── Срез 1б (РП-3): приложение — после свойств страницы (шапка файла: `rank`) ──────────────
+  {
+    id: APP_HOME,
+    label: { ru: 'Домашняя', en: 'Home page' },
+    description: {
+      ru: 'Что открывает ⌂ приложения',
+      en: 'What the app home button opens',
+    },
+    // Цели нет: домашней бывает любая запись (Ф-1б-1).
+    type: { kind: 'ref' },
+    module: null,
+  },
+  {
+    id: APP_NAV,
+    label: { ru: 'Навигация', en: 'Navigation' },
+    description: {
+      ru: 'Разделы приложения — ссылки на записи; порядок значения — порядок разделов',
+      en: 'App sections — links to records; the value order is the section order',
+    },
+    type: { kind: 'ref', cardinality: 'many', max: 30 },
+    module: null,
+  },
+  {
+    id: APP_NAV_FORM,
+    label: { ru: 'Форма навигации', en: 'Navigation form' },
+    description: {
+      ru: 'Как приложение показывает разделы: список из заголовка (без значения — он же) или домашняя как центр',
+      en: 'How the app shows its sections: a header list (the default) or the home page as a hub',
+    },
+    type: {
+      kind: 'select',
+      options: options(
+        ['header-list', 'Список из заголовка', 'Header list'],
+        ['home-hub', 'Домашняя как центр', 'Home as a hub'],
+      ),
+    },
+    module: null,
+  },
+  {
+    id: APP_EXTENSIONS,
+    label: { ru: 'Состав', en: 'Extensions' },
+    description: {
+      ru: 'Какие расширения приложение предлагает включать и выключать вместе с собой; маску само не меняет',
+      en: 'Which extensions the app offers to turn on and off together with it; does not change the mask itself',
+    },
+    // Варианты — id расширений поставки, подписи — имена манифестов (`extensionSelectOptions`).
+    type: { kind: 'select', options: extensionSelectOptions(), cardinality: 'many', maxItems: 16 },
+    module: null,
+  },
+  {
+    id: APP_OPENS_OVER,
+    label: { ru: 'Открывать вместо', en: 'Opens over' },
+    description: {
+      ru: 'Запомненный выбор места: записи открываются в этом приложении, а не в перечисленных',
+      en: 'A remembered choice of place: records open in this app rather than in the listed ones',
+    },
+    type: { kind: 'ref', target: APP_NOT_HOST_SHELL, cardinality: 'many', max: 50 },
+    module: null,
+  },
+  {
+    id: APP_DISABLED,
+    label: { ru: 'Выключено', en: 'Disabled' },
+    description: {
+      ru: 'Выключенное приложение: его место недоступно, записи открываются в хосте; ставит только действие владельца «Выключить приложение»',
+      en: 'A disabled app: its place is unavailable and records open in the host; set only by the owner action "Disable app"',
+    },
+    type: { kind: 'boolean' },
+    module: null,
+    // Н-8: приложение не выключается правкой записи — ни агентом, ни формой свойства.
+    flags: { writer: 'app-toggle' },
+  },
+  // ─── Срез 1б §4.3: «Дом» страницы ────────────────────────────────────────────────────────────
+  {
+    id: HOME_PROPERTY,
+    label: { ru: 'Дом', en: 'Home' },
+    description: {
+      ru: 'Приложение, которому принадлежит страница или шаблон; пусто — хост',
+      en: 'The app this page or template belongs to; empty means the host',
+    },
+    type: { kind: 'ref', target: APP_NOT_HOST_SHELL },
+    module: null,
+  },
+  // ─── Срез 1б §9.1 п. 1: поставка. Все четыре пишет только механизм `supply` — агент ключ не
+  // подделает, и «изменено вами» не собьётся правкой эталона вместо записи.
+  {
+    id: SUPPLY_KEY,
+    label: { ru: 'Ключ эталона', en: 'Etalon key' },
+    description: {
+      ru: 'Какой эталон поставки хоста принесла эта запись; по нему ищутся записи поставки и собираются обновления',
+      en: 'Which host supply etalon this record came from; supply records and updates are found by it',
+    },
+    // Десять ключей РП-6; `budget` зарезервирован (спека §3.4) и до 1в в варианты не входит.
+    type: {
+      kind: 'select',
+      options: options(
+        ['host-template', 'Шаблон хоста', 'Host template'],
+        ['host-shell', 'Оболочка хоста', 'Host shell'],
+        ['home', 'Домой', 'Home'],
+        ['records', 'Записи', 'Records'],
+        ['daily-planning', 'План на день', 'Daily planning'],
+        ['upcoming', 'Предстоящее', 'Upcoming'],
+        ['all-tasks', 'Все задачи', 'All tasks'],
+        ['horizon-year', 'Год', 'Year'],
+        ['horizon-life', 'Жизнь', 'Life'],
+        ['routines', 'Рутины', 'Routines'],
+      ),
+    },
+    module: null,
+    flags: { writer: 'supply' },
+  },
+  {
+    id: SUPPLY_HASH,
+    label: { ru: 'Отпечаток эталона', en: 'Etalon hash' },
+    description: {
+      ru: 'Отпечаток эталона, с которым запись пришла или была обновлена; иной отпечаток в поставке — обновление',
+      en: 'Hash of the etalon the record came or was updated with; a different hash in the supply is an update',
+    },
+    type: { kind: 'text' },
+    module: null,
+    flags: { writer: 'supply' },
+  },
+  {
+    id: SUPPLY_TEXT,
+    label: { ru: 'Текст эталона', en: 'Etalon text' },
+    description: {
+      ru: 'Эталон, каким он пришёл в граф; с ним сравнивается запись, и к нему возвращает «Вернуть как было»',
+      en: 'The etalon as it came into the graph; the record is compared with it, and "Revert" restores it',
+    },
+    type: { kind: 'text' },
+    module: null,
+    flags: { writer: 'supply' },
+  },
+  {
+    id: SUPPLY_DECLINED,
+    label: { ru: 'Отклонённый эталон', en: 'Declined etalon' },
+    description: {
+      ru: 'Отпечаток обновления, от которого владелец отказался; отказ помнится до следующего эталона',
+      en: 'Hash of the update the owner declined; the refusal holds until the next etalon',
+    },
+    type: { kind: 'text' },
+    module: null,
+    flags: { writer: 'supply' },
+  },
 ];
 
 /**
- * Встроенный словарь свойств: 75 доменных (`storage: 'props'`) + 4 core-проекции.
+ * Встроенный словарь свойств: 86 доменных (`storage: 'props'`) + 4 core-проекции.
  * `key` встроенного изначально равен `id` (§А2-1), `graph_id` — NULL, статус — `active`.
  */
 export const BUILTIN_PROPERTY_META: readonly PropertyDefinition[] = ENTRIES.map((entry, index) =>

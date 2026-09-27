@@ -1096,9 +1096,11 @@ describe('движок правил: unique_among (§Б4-3, §С8-25)', () => {
     expect(keysOf('entity_update', { id, unset: ['user/level'] })).toEqual([key]);
     // `archived` — замки ВСЕХ правил уникальности, включая системное конверта: какие у записи аспекты,
     // по входу не видно (тот же довод, что у контура).
+    // С 1б их три: к конверту добавилась уникальность ключа поставки (`supply_key_unique`, РП-3).
     expect(keysOf('entity_update', { id, archived: false })).toEqual([
       `${w.graph}:rule:duplicate_envelope`,
       key,
+      `${w.graph}:rule:supply_key_unique`,
     ]);
     expect(keysOf('entity_update', { id, aspects: { detach: [UNIQUE_ASPECT] } })).toEqual([key]);
     expect(keysOf(attachToolName(UNIQUE_ASPECT), { entity_id: id, data: {} })).toEqual([key]);

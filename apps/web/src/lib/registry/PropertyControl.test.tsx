@@ -43,6 +43,18 @@ test('два флага — два разных режима, и в один о�
   expect(writeModeOf(def('orbis/due_date'))).toBe('editable');
 });
 
+test('флаг writer (срез 1б, РП-3) — только чтение: ключ эталона и «Выключено» формой не правятся', () => {
+  // Пишет их только свой механизм (поставка, действие «Выключить приложение»); форма, обещающая
+  // правку, получила бы от сервера COMPUTED_WRITE.
+  expect(writeModeOf(def('orbis/supply_key'))).toBe('system');
+  expect(writeModeOf(def('orbis/supply_text'))).toBe('system');
+  expect(writeModeOf(def('orbis/app_disabled'))).toBe('system');
+  // Прочие свойства приложения правятся как обычно; `ref` списком — только показ, как в 1а.
+  expect(writeModeOf(def('orbis/app_nav_form'))).toBe('editable');
+  expect(controlKindOf(def('orbis/app_nav'))).toBe('readonly');
+  expect(controlKindOf(def('orbis/app_extensions'))).toBe('select-many');
+});
+
 test('boolean — чекбокс, а не слово «true» в инпуте', () => {
   const onChange = vi.fn();
   renderWithProviders(

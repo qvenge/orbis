@@ -38,6 +38,12 @@ export type MutationSource =
  *
  * `user` — умолчание: прямое действие владельца (тул, UI, MCP, чат). Именно оно НЕ вправе
  * писать `system_writable` и `model_writable: false`.
+ *
+ * `supply` и `app-toggle` (срез 1б, РП-3) — единственные писатели свойств с флагом `writer`:
+ * механизм поставки (сев при заведении графа, «принять обновление», «вернуть как было») и действие
+ * владельца «Выключить приложение». В перечень `system_writable` они НЕ входят — флаг `writer`
+ * сужает право до одного механизма, и ни один из семи прежних его не получает. Льготы маски
+ * расширений у них нет: их аспекты — ядро (`invariants.ts`).
  */
 export type MutationMechanism =
   | 'user'
@@ -47,7 +53,9 @@ export type MutationMechanism =
   | 'seed'
   | 'action-seed'
   | 'verb'
-  | 'import';
+  | 'import'
+  | 'supply'
+  | 'app-toggle';
 
 export interface ExecuteRequest {
   /**

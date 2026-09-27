@@ -11,8 +11,10 @@ import {
   aspectDefinitionSchema,
   assertPatternRegular,
   PATTERN_NOT_REGULAR,
+  PROPERTY_WRITERS,
   propertyDefinitionSchema,
   relationRoleDefinitionSchema,
+  writableFromTool,
 } from './property-type';
 import { ruleDefinitionSchema } from './rule-type';
 import { PROPERTY_KINDS, type PropertyKind, propertyTypeSchema } from './types';
@@ -353,4 +355,35 @@ test('BUILTIN_* собираются схемой: rules — ровно сист
     );
     expect([d.id, d.rules]).toEqual([d.id, declared]);
   }
+});
+
+/**
+ * Флаг `writer` (РП-3, Д-3): «пишет только механизм X». Закрытый список механизмов — опечатка в
+ * сиде (`'suply'`) отвергается разбором, а не превращается в свойство, которое не пишет никто.
+ */
+test('flags.writer: supply и app-toggle принимаются, прочее отвергается; writableFromTool — ложь', () => {
+  const base = {
+    id: 'orbis/x',
+    graphId: null,
+    key: 'orbis/x',
+    label,
+    description,
+    type: { kind: 'text' },
+    status: 'active',
+    rank: 1,
+  };
+  expect([...PROPERTY_WRITERS]).toEqual(['supply', 'app-toggle']);
+  for (const writer of PROPERTY_WRITERS) {
+    const parsed = propertyDefinitionSchema.parse({ ...base, flags: { writer } });
+    expect(parsed.flags.writer).toBe(writer);
+    expect(`${writer}: ${writableFromTool(parsed)}`).toBe(`${writer}: false`);
+  }
+  expect(propertyDefinitionSchema.safeParse({ ...base, flags: { writer: 'x' } }).success).toBe(
+    false,
+  );
+  expect(propertyDefinitionSchema.safeParse({ ...base, flags: { writer: 'user' } }).success).toBe(
+    false,
+  );
+  // Без флага — пишется, как прежде: флаг сужает, а не меняет умолчание.
+  expect(writableFromTool(propertyDefinitionSchema.parse(base))).toBe(true);
 });

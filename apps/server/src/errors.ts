@@ -47,7 +47,7 @@ export type ExecErrorCode =
   | 'LLM_UNAVAILABLE' // §7.9: сбой LLM-провайдера — явная ошибка, не очередь (Task 9)
   // --- Реформа свойств (D43) ---
   /** §А2-5/Б6: запись в свойство, которое пишет не этот источник (`model_writable: false`,
-   *  `system_writable: true`, `computed`). Отказ по ОБЪЕКТУ, не по актору. */
+   *  `system_writable: true`, `computed`, с 1б — `writer`, РП-3). Отказ по ОБЪЕКТУ, не по актору. */
   | 'COMPUTED_WRITE'
   /** §С8-7: создание ребра роли с `created_by: system` из пользовательского тула. */
   | 'ROLE_SYSTEM_ONLY'

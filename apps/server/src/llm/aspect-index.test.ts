@@ -99,6 +99,14 @@ describe('aspectIndexLines: индекс аспектов вместо ai_instru
     expect(lines.some((l) => l.startsWith('- orbis/page '))).toBe(false);
     expect(lines.join('\n')).not.toContain('orbis/page');
   });
+  test('приложение и поставка (срез 1б, РП-3): ни строкой индекса, ни в строке-границе', () => {
+    const lines = aspectIndexLines(REG, []);
+    for (const id of ['orbis/app', 'orbis/supply']) {
+      expect(aspectOf(id).service).toBe(false);
+      expect(lines.some((l) => l.startsWith(`- ${id} `))).toBe(false);
+      expect(lines.join('\n')).not.toContain(id);
+    }
+  });
   test('маска модулей: аспекты выключенного модуля исчезают, прочие на месте', () => {
     const off = aspectIndexLines(REG, ['finance']);
     expect(off.some((l) => l.startsWith('- orbis/financial '))).toBe(false);

@@ -72,7 +72,7 @@ afterAll(async () => {
   await client.end();
 });
 
-test('снимок несёт систему целиком: 79 свойств, 14 аспектов, 11 ролей', async () => {
+test('снимок несёт систему целиком: 90 свойств, 16 аспектов, 11 ролей', async () => {
   const snap = await withIdentity(db, personal(owner), (tx) => effectiveRegistry(tx, owner));
   for (const p of BUILTIN_PROPERTY_META) expect(snap.properties.has(p.id)).toBe(true);
   for (const id of BUILTIN_ASPECT_IDS) expect(snap.aspects.has(id)).toBe(true);
@@ -82,6 +82,10 @@ test('снимок несёт систему целиком: 79 свойств, 
   expect(snap.properties.get('orbis/amount')?.type).toEqual({ kind: 'decimal', exclusiveMin: '0' });
   expect(snap.roles.get('subitem')?.hierarchical).toBe(true);
   expect(snap.aspects.get('orbis/agent-run')?.service).toBe(true);
+  // Флаг `writer` (РП-3) доезжает из колонки `flags` строгим разбором: потерянный на пересеве, он
+  // молча открыл бы ключ эталона и «Выключено» любому механизму.
+  expect(snap.properties.get('orbis/supply_key')?.flags).toEqual({ writer: 'supply' });
+  expect(snap.properties.get('orbis/app_disabled')?.flags).toEqual({ writer: 'app-toggle' });
 });
 
 test('система ⊕ СВОИ: свой аспект и его свойства видны, чужие — нет (RLS)', async () => {

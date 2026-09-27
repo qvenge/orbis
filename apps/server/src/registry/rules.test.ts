@@ -84,9 +84,10 @@ function codeSnapshot(): RegistrySnapshot {
  * (`assignment_grant_required`, `assignment_grant_forbidden`), форма правила памяти
  * (`memory_rule_pattern`, `memory_rule_target`) и умолчание валюты конверта (`envelope_currency_default`);
  * срез 1а — пара страницы (`page_wins_over_needs_template_for`, `page_wins_over_not_self`); срез 1б —
- * умолчание статуса задачи (`task_status_default`, Б-2 №98).
+ * умолчание статуса задачи (`task_status_default`, Б-2 №98), уникальность ключа поставки
+ * (`supply_key_unique`) и «Открывать вместо» без себя (`app_opens_over_not_self`, РП-3).
  */
-const BUILTIN_RULE_COUNT = 23;
+const BUILTIN_RULE_COUNT = 25;
 const FIN: RuleCarrier = { kind: 'aspect', id: 'orbis/financial' };
 const TASK: RuleCarrier = { kind: 'aspect', id: 'orbis/task' };
 /** Код И `details.reason`: словарный VALIDATION без причины не адресует ничего. */

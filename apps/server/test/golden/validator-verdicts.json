@@ -2043,5 +2043,43 @@
     "aspects": ["orbis/page"],
     "legacyVerdict": "reject",
     "newVerdict": "reject"
+  },
+  {
+    "name": "orbis/app: домашняя как центр, в составе Финансы",
+    "props": {
+      "orbis/app_nav_form": "home-hub",
+      "orbis/app_extensions": ["finance"]
+    },
+    "aspects": ["orbis/app"],
+    "legacyVerdict": "ok",
+    "newVerdict": "ok"
+  },
+  {
+    "name": "orbis/app: форма навигации вне вариантов — отказ select",
+    "props": {
+      "orbis/app_nav_form": "sidebar"
+    },
+    "aspects": ["orbis/app"],
+    "legacyVerdict": "reject",
+    "newVerdict": "reject"
+  },
+  {
+    "name": "orbis/supply: запись поставки «Домой» с отпечатком",
+    "props": {
+      "orbis/supply_key": "home",
+      "orbis/supply_hash": "sha256:0f1e"
+    },
+    "aspects": ["orbis/supply"],
+    "legacyVerdict": "ok",
+    "newVerdict": "ok"
+  },
+  {
+    "name": "orbis/supply: без ключа эталона — нарушение обязательного свойства",
+    "props": {
+      "orbis/supply_hash": "sha256:0f1e"
+    },
+    "aspects": ["orbis/supply"],
+    "legacyVerdict": "reject",
+    "newVerdict": "reject"
   }
 ]

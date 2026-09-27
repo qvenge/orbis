@@ -1,6 +1,8 @@
 import {
+  APP_OPENS_OVER,
   ROLE_INSTANCE_OF,
   RULE_NEAREST_ANCESTOR,
+  SUPPLY_KEY,
   TEMPLATE_FOR_PROPERTY,
   TEMPLATE_WINS_OVER_PROPERTY,
 } from '../constants';
@@ -424,6 +426,48 @@ export const RULE_PAGE_WINS_OVER_NOT_SELF: RuleDefinitionInput = {
 };
 
 /**
+ * Живая запись поставки на ключ эталона — одна (срез 1б §9.1 п. 1, Н-2). Иначе «Обновления» и
+ * «Вернуть как было» не знали бы, какую из двух записей обновлять, а сев графа, повторённый гонкой,
+ * завёл бы вторую оболочку хоста.
+ *
+ * Правило стоит на СВОЁМ аспекте-области «поставка» (область по умолчанию — носитель), а не на
+ * «странице» или «приложении»: `unique_among` считает «нет значения» совпадением и не знает `when`
+ * (Д-7) — там оно объявило бы дублями любые две записи владельца без ключа. На «поставке» ключ
+ * обязателен, и совпадение «пусто = пусто» недостижимо. Архивная запись не мешает новой: правило
+ * смотрит только неархивные (Д-7) — «вернуть удалённую запись поставки» заводит её заново.
+ * `undo: 'check'` — как у конверта: откат архивации при уже заведённой замене дал бы две живые
+ * записи на ключ, и отказ `INVARIANT supply_key_unique` честнее тихого дубля.
+ */
+export const RULE_SUPPLY_KEY_UNIQUE: RuleDefinitionInput = {
+  id: 'supply_key_unique',
+  template: 'unique_among',
+  undo: 'check',
+  params: { properties: [SUPPLY_KEY] },
+};
+
+/**
+ * Приложение не «открывается вместо самого себя» (срез 1б §4.2, §5.3) — близнец
+ * `page_wins_over_not_self` и по той же причине: самоссылка в `ref`-свойстве доехала бы до зеркала
+ * `syncRefMirror` и CHECK `rel_no_self` — владелец получил бы сырую ошибку БД, а строка превращает её
+ * в именованный отказ `INVARIANT app_opens_over_not_self` до эффектов ссылок. Страж `not(empty(…))`
+ * перед `in` несущий: без него `when` отказал бы `EXPR_VALUE` на каждом приложении без «Открывать
+ * вместо» (докблок `RULE_PAGE_WINS_OVER_NOT_SELF`). Язык E не расширяется — существующие формы Б-2.
+ */
+export const RULE_APP_OPENS_OVER_NOT_SELF: RuleDefinitionInput = {
+  id: 'app_opens_over_not_self',
+  template: 'forbidden_when',
+  undo: 'check',
+  when: {
+    op: 'and',
+    args: [
+      { op: 'not', args: [{ op: 'empty', args: [{ prop: APP_OPENS_OVER }] }] },
+      { op: 'in', args: [{ ctx: '$self' }, { prop: APP_OPENS_OVER }] },
+    ],
+  },
+  params: { property: APP_OPENS_OVER },
+};
+
+/**
  * ЗАВИСИМОСТИ ВКЛЮЧЁННОСТИ СИСТЕМНЫХ ПРАВИЛ (§Б4-4 «отключить», Fable M-2 задачи 14): правило-ключ
  * держится на правилах-значениях и включённым без них быть не может. Пара «чего ждём»: запрет
  * `waiting_for_only_when_waiting` законен только при уборке `waiting_for` — выключи уборку при
@@ -459,6 +503,8 @@ export const BUILTIN_RULES_BY_CARRIER: Readonly<Record<string, readonly RuleDefi
   'orbis/project': [RULE_NEAREST_ANCESTOR_ROW],
   'orbis/schedule': [RULE_MATERIALIZE],
   'orbis/page': [RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE, RULE_PAGE_WINS_OVER_NOT_SELF],
+  'orbis/app': [RULE_APP_OPENS_OVER_NOT_SELF],
+  'orbis/supply': [RULE_SUPPLY_KEY_UNIQUE],
   ref: [RULE_MIRROR_REF],
   dependency: [RULE_DEPENDENCY_ACYCLIC],
   'category-parent': [RULE_CATEGORY_PARENT_ACYCLIC],

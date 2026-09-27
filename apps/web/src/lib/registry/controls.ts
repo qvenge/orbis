@@ -98,11 +98,15 @@ export function controlKindOf(def: PropertyDefinition): ControlKind {
  *
  * Порядок веток значим: свойство с обоими флагами — системное (правило считает его, а пишет
  * всё равно сервер); ни одного боевого такого сегодня нет, но ответ обязан быть один.
+ *
+ * Флаг `writer` (срез 1б, РП-3) — тоже «системное»: свойства эталона пишет механизм поставки, а
+ * «Выключено» приложения — отдельное действие владельца, и контрол формы, обещающий правку, получил
+ * бы от сервера `COMPUTED_WRITE`.
  */
 export type WriteMode = 'editable' | 'system' | 'computed';
 
 export function writeModeOf(def: PropertyDefinition): WriteMode {
-  if (def.flags.system_writable === true) return 'system';
+  if (def.flags.system_writable === true || def.flags.writer !== undefined) return 'system';
   if (def.flags.model_writable === false) return 'computed';
   return 'editable';
 }

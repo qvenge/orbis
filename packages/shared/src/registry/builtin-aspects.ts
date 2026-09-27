@@ -501,6 +501,8 @@ const ENTRIES: readonly AspectEntry[] = [
     properties: [
       ['orbis/template_for', false],
       ['orbis/template_wins_over', false],
+      // Срез 1б §4.3: «Дом» — В КОНЕЦ (`rank` ссылки = позиция); пусто — хост.
+      ['orbis/home', false],
     ],
     aiInstructions:
       'orbis/page — страница и шаблон владельца. Страницы пишет владелец в интерфейсе: аспект ' +
@@ -513,9 +515,61 @@ const ENTRIES: readonly AspectEntry[] = [
     // `AUTHORING_DEFERRED_ASPECTS` (`constants.ts`).
     service: false,
   },
+  {
+    // Срез 1б §4.2 (РП-3) — В КОНЕЦ, как и в `BUILTIN_ASPECT_IDS`.
+    id: 'orbis/app',
+    label: { ru: 'Приложение', en: 'App' },
+    description: {
+      ru: 'Место: домашняя, навигация, форма навигации, состав расширений',
+      en: 'A place: home, navigation, navigation form, extensions',
+    },
+    properties: [
+      ['orbis/app_home', false],
+      ['orbis/app_nav', false],
+      ['orbis/app_nav_form', false],
+      ['orbis/app_extensions', false],
+      ['orbis/app_opens_over', false],
+      ['orbis/app_disabled', false],
+    ],
+    aiInstructions:
+      'orbis/app — приложение владельца. Аспект сам не навешивай; записи-приложения правь только по ' +
+      'просьбе владельца обычной правкой записи (навигация, домашняя, форма); «Выключено» пишет только ' +
+      'действие владельца.',
+    tagMappings: [],
+    viewConfig: { keyFields: ['orbis/app_home', 'orbis/app_nav_form'], icon: '🧩' },
+    module: null,
+    // НЕ служебный (Ф-1а-1): приложение — запись владельца в его списках; от модели аспект убирает
+    // `AUTHORING_DEFERRED_ASPECTS`.
+    service: false,
+  },
+  {
+    // Срез 1б §9.1 п. 1 (РП-3): эталон записи поставки хоста — на своём аспекте, а не на «странице»
+    // или «приложении»: там уникальность ключа (`unique_among`) объявила бы дублями любые две записи
+    // владельца без ключа.
+    id: 'orbis/supply',
+    label: { ru: 'Поставка', en: 'Supply' },
+    description: {
+      ru: 'Запись, которую принесла поставка хоста: ключ, отпечаток и текст эталона',
+      en: 'A record brought by the host supply: the etalon key, hash and text',
+    },
+    properties: [
+      ['orbis/supply_key', true],
+      ['orbis/supply_hash', false],
+      ['orbis/supply_text', false],
+      ['orbis/supply_declined', false],
+    ],
+    aiInstructions:
+      'orbis/supply — служебная метка записи поставки. Не навешивай, не снимай и не правь её свойства.',
+    tagMappings: [],
+    viewConfig: { keyFields: ['orbis/supply_key'], icon: '📦' },
+    module: null,
+    // НЕ служебный: служебность прячет записи из всех выдач (Ф-1а-1), а записи поставки — обычные
+    // страницы и приложения. «Служебная метка» спеки — слово о механизме, не флаг реестра (Э-19).
+    service: false,
+  },
 ];
 
-/** Четырнадцать встроенных аспектов новой формы в порядке `BUILTIN_ASPECT_IDS`. */
+/** Шестнадцать встроенных аспектов новой формы в порядке `BUILTIN_ASPECT_IDS`. */
 export const BUILTIN_ASPECT_DEFS: readonly AspectDefinition[] = ENTRIES.map((entry, index) =>
   aspectDefinitionSchema.parse({
     ...entry,

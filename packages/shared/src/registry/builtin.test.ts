@@ -9,11 +9,18 @@
 // порядок и обязательность реализации совпадают с его строками.
 import { expect, test } from 'bun:test';
 import {
+  APP_DISABLED,
   type AspectId,
   AUTHORING_DEFERRED_ASPECTS,
   BUILTIN_ASPECT_IDS,
   HIERARCHICAL_ROLE_IDS,
+  HOME_PROPERTY,
+  NAV_FORMS,
   RELATION_ROLE_IDS,
+  SUPPLY_DECLINED,
+  SUPPLY_HASH,
+  SUPPLY_KEY,
+  SUPPLY_TEXT,
 } from '../constants';
 import {
   ROUTINE_MODES,
@@ -22,13 +29,15 @@ import {
   TASK_STATUSES,
 } from '../contracts/agent-loop';
 import { exprNodeSchema } from '../expr/ast';
+import { assertStaticQuery } from '../query/static';
 import { checkImplements } from './bindings';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_CONTRACT_DEFS, CONTRACT_IDS, SENSITIVITY_FACTS } from './builtin-contracts';
 import { BUILTIN_PROPERTY_META, CORE_PROPERTY_IDS } from './builtin-properties';
 import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import { contractSetKind, isPredicateSet } from './contract-type';
-import { aspectDefinitionSchema } from './property-type';
+import { EXTENSION_IDS, EXTENSION_MANIFESTS } from './extensions';
+import { aspectDefinitionSchema, writableFromTool } from './property-type';
 
 /** Строка таблицы §А8: [поле аспекта сегодня (null — свойство заведено реформой), id свойства, Req]. */
 type Row = readonly [string | null, string, boolean];
@@ -137,6 +146,24 @@ const A8: Record<AspectId, readonly Row[]> = {
   'orbis/page': [
     [null, 'orbis/template_for', false],
     [null, 'orbis/template_wins_over', false],
+    // Срез 1б §4.3: «Дом» — третье свойство страницы, необязательное (пусто — хост).
+    [null, 'orbis/home', false],
+  ],
+  // Срез 1б §4.2, §9.1 (РП-3): аспекты ядра «приложение» и «поставка»; все свойства заведены срезом.
+  'orbis/app': [
+    [null, 'orbis/app_home', false],
+    [null, 'orbis/app_nav', false],
+    [null, 'orbis/app_nav_form', false],
+    [null, 'orbis/app_extensions', false],
+    [null, 'orbis/app_opens_over', false],
+    [null, 'orbis/app_disabled', false],
+  ],
+  // Ключ эталона обязателен: по нему ищутся записи поставки и держится уникальность (§9.1 п. 1).
+  'orbis/supply': [
+    [null, 'orbis/supply_key', true],
+    [null, 'orbis/supply_hash', false],
+    [null, 'orbis/supply_text', false],
+    [null, 'orbis/supply_declined', false],
   ],
 };
 
@@ -241,14 +268,15 @@ const FREE_DOMAIN_IDS = ['orbis/parent_project', 'orbis/root_project'] as const;
 const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
 const defsById = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
 
-test('75 доменных свойств + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
+test('86 доменных свойств + 4 core; id/key уникальны; у всех label.ru/en и description.ru/en', () => {
   const domain = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'props');
   const core = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'core');
   // Счёт §А8: 73 поля − 3 слияния − 1 удаление + 4 новых = 73; core в счёт словаря не входят.
   // Срез 1а §3 добавил два свойства страницы («Шаблон для», «Главнее, чем») — 75.
-  expect(domain.length).toBe(75);
+  // Срез 1б (РП-3) — одиннадцать: шесть «приложения», «Дом» страницы, четыре «поставки» — 86.
+  expect(domain.length).toBe(86);
   expect(core.map((p) => p.id)).toEqual([...CORE_PROPERTY_IDS]);
-  expect(BUILTIN_PROPERTY_META.length).toBe(79);
+  expect(BUILTIN_PROPERTY_META.length).toBe(90);
 
   // Состав доменного словаря = все id таблицы §А8 плюс два вычисляемых свойства реформы.
   const fromA8 = new Set<string>();
@@ -309,8 +337,11 @@ test('75 доменных свойств + 4 core; id/key уникальны; у
 test('каждый property_id BUILTIN_ASPECT_DEFS существует; required и порядок rank — по §А8', () => {
   // Страж полноты (замена aspect-registry.test.ts:30-34): забытый аспект — молчаливая пропажа.
   expect([...BUILTIN_ASPECT_DEFS.map((a) => a.id)].sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
-  expect(BUILTIN_ASPECT_DEFS.length).toBe(14);
-  expect(new Set(BUILTIN_ASPECT_DEFS.map((a) => a.rank)).size).toBe(14);
+  expect(BUILTIN_ASPECT_DEFS.length).toBe(16);
+  expect(new Set(BUILTIN_ASPECT_DEFS.map((a) => a.rank)).size).toBe(16);
+  // `rank` аспекта = позиция в `BUILTIN_ASPECT_IDS`: новые встали В КОНЕЦ, соседи не сдвинулись.
+  expect(BUILTIN_ASPECT_DEFS.map((a) => a.rank)).toEqual(BUILTIN_ASPECT_IDS.map((_, i) => i + 1));
+  expect(BUILTIN_ASPECT_IDS.slice(-3)).toEqual(['orbis/page', 'orbis/app', 'orbis/supply']);
 
   for (const aspectId of BUILTIN_ASPECT_IDS) {
     const rows = A8[aspectId];
@@ -344,6 +375,8 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
 
   // Служебность §А3-1/Р-П-5: колонка реестра, а не список в коде. Страница (срез 1а) в списке
   // НЕТ намеренно: служебность прячет записи из всех выдач (Ф-1а-1), а страница — обычная запись.
+  // Приложение и поставка (срез 1б) — тоже нет (Э-19): записи поставки — обычные страницы и
+  // приложения владельца, «служебная метка» спеки — слово о механизме, а не флаг реестра.
   expect(BUILTIN_ASPECT_DEFS.filter((a) => a.service).map((a) => a.id)).toEqual([
     'orbis/agent-run',
   ]);
@@ -364,6 +397,8 @@ test('каждый property_id BUILTIN_ASPECT_DEFS существует; require
     'orbis/agent-run': null,
     'orbis/routine': null,
     'orbis/page': null,
+    'orbis/app': null,
+    'orbis/supply': null,
   });
 });
 
@@ -443,6 +478,22 @@ test('select-варианты: ASCII key, порядок rank — снимок, 
     'orbis/routine_stage': ['active', 'paused'],
     'orbis/routine_days': ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'],
     'orbis/routine_mode': ['propose', 'act'],
+    // Срез 1б (РП-3, РП-6): форма навигации, состав расширений и десять ключей эталона поставки
+    // (`budget` зарезервирован до 1в и в варианты не входит, спека §3.4).
+    'orbis/app_nav_form': ['header-list', 'home-hub'],
+    'orbis/app_extensions': ['finance', 'goals', 'projects', 'dev'],
+    'orbis/supply_key': [
+      'host-template',
+      'host-shell',
+      'home',
+      'records',
+      'daily-planning',
+      'upcoming',
+      'all-tasks',
+      'horizon-year',
+      'horizon-life',
+      'routines',
+    ],
   };
 
   // Все select-свойства реестра названы здесь — новый select без сверки не проедет.
@@ -474,6 +525,17 @@ test('select-варианты: ASCII key, порядок rank — снимок, 
     (SELECT_OPTIONS['orbis/routine_stage'] ?? []).join(','),
   );
   expect([...ROUTINE_MODES].join(',')).toBe((SELECT_OPTIONS['orbis/routine_mode'] ?? []).join(','));
+  // Форма навигации и «Состав» цитируют словари кода: `NAV_FORMS` читает рамка web, `EXTENSION_IDS` —
+  // маска расширений; разъехавшийся вариант реестра уехал бы в данные молча.
+  expect([...NAV_FORMS].join(',')).toBe((SELECT_OPTIONS['orbis/app_nav_form'] ?? []).join(','));
+  expect([...EXTENSION_IDS].join(',')).toBe(
+    (SELECT_OPTIONS['orbis/app_extensions'] ?? []).join(','),
+  );
+  // Подписи вариантов «Состава» — имена расширений из манифестов, а не вторая копия текста.
+  const extensionsType = byId.get('orbis/app_extensions')?.type;
+  expect(
+    extensionsType?.kind === 'select' ? extensionsType.options.map((o) => o.label) : [],
+  ).toEqual(EXTENSION_IDS.map((id) => EXTENSION_MANIFESTS[id].name));
 
   // Разные enum — разные факты (Р11): три жизненных цикла не сливаются в один select.
   expect(byId.get('orbis/task_status')?.id).not.toBe(byId.get('orbis/project_stage')?.id);
@@ -535,7 +597,7 @@ test('роли: 11 id, иерархия, target_max_incoming конверта, a
   expect(roleById.get('envelope-binding')?.targetLabel.ru).toBe('Транзакция');
 });
 
-test('все 14 аспектов: keyFields, иконка, теги и подписи — точный снимок реестра', () => {
+test('все 16 аспектов: keyFields, иконка, теги и подписи — точный снимок реестра', () => {
   /**
    * СНИМОК, А НЕ ПЕРЕНОС. До «Пересева мира» этот тест сверял реестр со ВТОРЫМ реестром
    * старой формы (`BUILTIN_ASPECT_META`): та запись адресовала поля ИМЕНАМИ, эта — id
@@ -618,11 +680,22 @@ test('все 14 аспектов: keyFields, иконка, теги и подп�
       icon: '📄',
       tags: [],
     },
+    // Срез 1б (РП-3): тегов нет — аспекты навешивает не модель, а владелец и механизм поставки.
+    'orbis/app': {
+      keyFields: ['orbis/app_home', 'orbis/app_nav_form'],
+      icon: '🧩',
+      tags: [],
+    },
+    'orbis/supply': {
+      keyFields: ['orbis/supply_key'],
+      icon: '📦',
+      tags: [],
+    },
   };
 
   expect(Object.keys(ASPECTS).sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
-  // Р-16: списков keyFields ровно 14 — `orbis/note` в их числе.
-  expect(Object.values(ASPECTS).filter((a) => a.keyFields.length > 0).length).toBe(14);
+  // Р-16: списков keyFields ровно 16 — `orbis/note` в их числе.
+  expect(Object.values(ASPECTS).filter((a) => a.keyFields.length > 0).length).toBe(16);
 
   for (const aspectId of BUILTIN_ASPECT_IDS) {
     const def = defsById.get(aspectId);
@@ -657,7 +730,8 @@ test('все 14 аспектов: keyFields, иконка, теги и подп�
  * (служебность прячет записи из выдач, список — только от модели).
  */
 test('AUTHORING_DEFERRED_ASPECTS ⊆ BUILTIN_ASPECT_IDS, и ни один его аспект не служебный', () => {
-  expect(AUTHORING_DEFERRED_ASPECTS).toEqual(['orbis/page']);
+  // Срез 1б (РП-3): приложение и поставка — тоже; модель их не навешивает (спека §4.2, §9.1 п. 1).
+  expect(AUTHORING_DEFERRED_ASPECTS).toEqual(['orbis/page', 'orbis/app', 'orbis/supply']);
   for (const id of AUTHORING_DEFERRED_ASPECTS) {
     expect((BUILTIN_ASPECT_IDS as readonly string[]).includes(id)).toBe(true);
     expect(`${id}: service=${defsById.get(id)?.service}`).toBe(`${id}: service=false`);
@@ -697,8 +771,8 @@ test('aiInstructions не поминают снятые формы (Р-1-1): cat
       expect(`${def.id}: ${text.includes(bad) ? bad : '—'}`).toBe(`${def.id}: —`);
     }
   }
-  // Не вырожденно: у всех четырнадцати инструкция есть, и в ней есть namespaced key.
-  expect(BUILTIN_ASPECT_DEFS.filter((d) => (d.aiInstructions ?? '').length > 0).length).toBe(14);
+  // Не вырожденно: у всех шестнадцати инструкция есть, и в ней есть namespaced key.
+  expect(BUILTIN_ASPECT_DEFS.filter((d) => (d.aiInstructions ?? '').length > 0).length).toBe(16);
   // Ровно одна инструкция обходится без namespaced key — у заметки нечего адресовать
   // (её содержимое живёт в body). Список, а не число: падение назовёт виновника.
   expect(
@@ -893,6 +967,16 @@ const RUN_BUCKET_PATTERN = '^(\\d{4}-\\d{2}-\\d{2}T([01]\\d|2[0-3]):[0-5]\\d|man
  * Именно здесь ловится потеря границы — в том числе шести `minLength`, которые §А8 теряет
  * молча, а план (РП-8/Р-17) сохраняет.
  */
+/** Цель «приложение, но не оболочка хоста» (РП-3) — у «Дома» и «Открывать вместо» одна. */
+const APP_NOT_HOST_SHELL = JSON.stringify({
+  filter: {
+    and: [
+      { aspect: 'orbis/app' },
+      { not: { prop: 'orbis/supply_key', op: 'eq', value: 'host-shell' } },
+    ],
+  },
+});
+
 const A8_TYPES: Record<string, string> = {
   'orbis/start_at': 'timestamp|core',
   'orbis/end_at': 'timestamp|core',
@@ -976,6 +1060,19 @@ const A8_TYPES: Record<string, string> = {
   'orbis/template_for': 'registry_ref{cardinality:many,minItems:1,target:aspect}|core',
   'orbis/template_wins_over':
     'ref{cardinality:many,max:50,target:{"filter":{"aspect":"orbis/page"}}}|core',
+  // Срез 1б (РП-3): приложение. Домашняя и навигация — любые записи (цели нет, Ф-1б-1).
+  'orbis/app_home': 'ref|core',
+  'orbis/app_nav': 'ref{cardinality:many,max:30}|core',
+  'orbis/app_nav_form': 'select{options:2}|core',
+  'orbis/app_extensions': 'select{cardinality:many,maxItems:16,options:4}|core',
+  'orbis/app_opens_over': `ref{cardinality:many,max:50,target:${APP_NOT_HOST_SHELL}}|core`,
+  'orbis/app_disabled': 'boolean|core',
+  // «Дом» не указывает на оболочку хоста — фильтром цели (Д-20), а не правилом E.
+  'orbis/home': `ref{target:${APP_NOT_HOST_SHELL}}|core`,
+  'orbis/supply_key': 'select{options:10}|core',
+  'orbis/supply_hash': 'text|core',
+  'orbis/supply_text': 'text|core',
+  'orbis/supply_declined': 'text|core',
 };
 
 test('тип и модуль каждого свойства — по колонкам §А8 (включая шесть minLength РП-8)', () => {
@@ -995,7 +1092,7 @@ test('тип и модуль каждого свойства — по колон
     return `${type}|${property.module ?? 'core'}`;
   };
 
-  expect(Object.keys(A8_TYPES).length).toBe(79);
+  expect(Object.keys(A8_TYPES).length).toBe(90);
   for (const property of BUILTIN_PROPERTY_META) {
     expect(`${property.id}: ${signature(property)}`).toBe(
       `${property.id}: ${A8_TYPES[property.id] ?? '<нет в снимке §А8>'}`,
@@ -1093,6 +1190,8 @@ test('подписи ролей и аспектов — по §А4-3 и пере
     'orbis/agent-run': 'Прогон агента',
     'orbis/routine': 'Рутина',
     'orbis/page': 'Страница',
+    'orbis/app': 'Приложение',
+    'orbis/supply': 'Поставка',
   });
 });
 
@@ -1114,4 +1213,42 @@ test('клапан aggregations: orbis/budget объявляет опублик�
       aggregations: { spent: { published: true, extra: 1 } },
     }).success,
   ).toBe(false);
+});
+
+/**
+ * «Пишет только механизм X» (РП-3, Д-3): свойства эталона поставки пишет только механизм `supply`
+ * (сев при заведении графа, «принять обновление», «вернуть как было»), «Выключено» — только
+ * действие владельца `app-toggle`. Агент ключ не подделает, приложение правкой записи не выключит
+ * (Н-8). Флаг закрывает и поверхность: `writableFromTool` — ложь, `attach_*` поле не обещает.
+ */
+test('флаг writer: четыре свойства поставки — supply, «Выключено» — app-toggle; тулу все пять не пишутся', () => {
+  const writers = BUILTIN_PROPERTY_META.filter((p) => p.flags.writer !== undefined).map(
+    (p) => `${p.id}=${p.flags.writer}`,
+  );
+  expect(writers).toEqual([
+    `${APP_DISABLED}=app-toggle`,
+    `${SUPPLY_KEY}=supply`,
+    `${SUPPLY_HASH}=supply`,
+    `${SUPPLY_TEXT}=supply`,
+    `${SUPPLY_DECLINED}=supply`,
+  ]);
+  for (const id of [APP_DISABLED, SUPPLY_KEY, SUPPLY_HASH, SUPPLY_TEXT, SUPPLY_DECLINED]) {
+    const def = byId.get(id);
+    expect(`${id}: ${def === undefined ? 'нет' : writableFromTool(def)}`).toBe(`${id}: false`);
+    // Флаг writer не подменяется `system_writable`: тот пускает семь механизмов (Ф-1б-15).
+    expect(`${id}: ${def?.flags.system_writable}`).toBe(`${id}: undefined`);
+  }
+});
+
+test('цель «Дома» и «Открывать вместо» — статический Q-AST: приложение, но не оболочка хоста (Д-20)', () => {
+  for (const id of [HOME_PROPERTY, 'orbis/app_opens_over']) {
+    const type = byId.get(id)?.type;
+    expect(type?.kind).toBe('ref');
+    if (type?.kind !== 'ref' || type.target === undefined || Array.isArray(type.target)) {
+      throw new Error(`${id}: цель ref не объявлена одним Q-AST`);
+    }
+    const target = type.target;
+    expect(() => assertStaticQuery(target)).not.toThrow();
+    expect(JSON.stringify(type.target)).toBe(APP_NOT_HOST_SHELL);
+  }
 });

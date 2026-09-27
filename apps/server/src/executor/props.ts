@@ -503,11 +503,20 @@ const COMPUTED_WRITE_MECHANISMS: ReadonlySet<MutationMechanism> = new Set<Mutati
   'materialize',
 ]);
 
-/** Причина отказа, если механизму нельзя трогать это свойство; `undefined` — можно. */
+/**
+ * Причина отказа, если механизму нельзя трогать это свойство; `undefined` — можно.
+ *
+ * `writer` (РП-3) проверяется ПЕРВЫМ и отвечает сам: свойство с названным писателем пишет только он,
+ * и никакой перечень (`SYSTEM_WRITABLE_MECHANISMS`) этого не расширяет — иначе ключ эталона
+ * подделал бы любой глагол агента или импорт (Ф-1б-15), а «Выключено» ставилось бы правкой записи
+ * (Н-8). Механизмы `supply` и `app-toggle` намеренно не входят ни в один перечень ниже: вне своих
+ * свойств они — такая же правка, как у владельца.
+ */
 function writeDenial(
   def: PropertyDefinition,
   mechanism: MutationMechanism,
-): 'model_writable' | 'system_writable' | undefined {
+): 'writer' | 'model_writable' | 'system_writable' | undefined {
+  if (def.flags.writer !== undefined && def.flags.writer !== mechanism) return 'writer';
   if (def.flags.model_writable === false && !COMPUTED_WRITE_MECHANISMS.has(mechanism)) {
     return 'model_writable';
   }
@@ -548,6 +557,13 @@ export function assertPropsWritable(
     const def = reg.properties.get(propertyId);
     if (def === undefined) continue;
     const denial = writeDenial(def, mechanism);
+    if (denial === 'writer') {
+      throw new ExecError(
+        'COMPUTED_WRITE',
+        `свойство «${propertyId}» пишет только механизм «${def.flags.writer}» — механизму «${mechanism}» распоряжаться им запрещено (РП-3)`,
+        { property: propertyId, mechanism, reason: 'writer', writer: def.flags.writer },
+      );
+    }
     if (denial === 'model_writable') {
       throw new ExecError(
         'COMPUTED_WRITE',

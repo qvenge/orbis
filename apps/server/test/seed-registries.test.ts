@@ -41,7 +41,7 @@ async function systemVersion(db: ReturnType<typeof adminDb>['db']): Promise<numb
 }
 
 describe('сид шести реестров', () => {
-  test('состав system-строк = ровно BUILTIN_* (79 свойств, 11 ролей, 14 аспектов, 7 контрактов)', async () => {
+  test('состав system-строк = ровно BUILTIN_* (90 свойств, 11 ролей, 16 аспектов, 7 контрактов)', async () => {
     const { db, client } = adminDb();
     try {
       expect(await ids(db, 'property_definitions')).toEqual(
@@ -58,9 +58,9 @@ describe('сид шести реестров', () => {
       );
       // Счётчики названы числом отдельно от состава: подмена набора равной мощности
       // (переименовали свойство и забыли пересеять) прошла бы первую проверку молча.
-      expect(BUILTIN_PROPERTY_META.length).toBe(79);
+      expect(BUILTIN_PROPERTY_META.length).toBe(90);
       expect(BUILTIN_RELATION_ROLE_META.length).toBe(11);
-      expect(BUILTIN_ASPECT_DEFS.length).toBe(14);
+      expect(BUILTIN_ASPECT_DEFS.length).toBe(16);
       expect(BUILTIN_CONTRACT_DEFS.length).toBe(7);
     } finally {
       await client.end();
@@ -962,9 +962,9 @@ describe('сид шести реестров', () => {
 
       const first = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
       expect(first).toEqual({
-        properties: 79,
+        properties: 90,
         roles: 11,
-        aspects: 14,
+        aspects: 16,
         contracts: 7,
         subscriptions: 2,
         actions: 2,

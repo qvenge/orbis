@@ -15,13 +15,19 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  APP_ASPECT,
+  APP_DISABLED,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_CONTRACT_DEFS,
   BUILTIN_PROPERTY_META,
   canonicalJson,
   entityUpdateExecInput,
   newId,
+  PAGE_ASPECT,
   type PropertyType,
+  SUPPLY_ASPECT,
+  SUPPLY_HASH,
+  SUPPLY_KEY,
   writableFromTool,
 } from '@orbis/shared';
 import { parseQueryAst, QUERY_TREE_DEPTH_CAP, toParseRegistry } from '@orbis/shared/query';
@@ -310,9 +316,10 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
    * `aspects[]` сверяется как МНОЖЕСТВО: это список интерпретаций, и порядок в нём —
    * не факт о сущности (снятый и заново навешенный аспект встаёт в конец списка).
    *
-   * 37 с среза 1а: корпус получил позитив аспекта `orbis/page` (`validator-golden.test.ts`, РП-12).
+   * 37 с среза 1а: корпус получил позитив аспекта `orbis/page` (`validator-golden.test.ts`, РП-12);
+   * 39 со среза 1б — позитивы `orbis/app` и `orbis/supply`.
    */
-  const POSITIVES = 37;
+  const POSITIVES = 39;
   const PROBE_ID = '019e4466-dddd-7e07-b5d4-64be9721da54';
 
   test(`${POSITIVES} позитивных записей корпуса: inverse возвращает props/aspects дословно`, () => {
@@ -910,6 +917,108 @@ describe('гейты флагов свойств', () => {
     const row = await rowOf(created.id);
     expect(row.props['orbis/run_outcome']).toBe('running');
     expect(Object.hasOwn(row.props, 'orbis/run_report')).toBe(false);
+  });
+});
+
+/**
+ * «Пишет только механизм X» (РП-3, Д-3, Н-8): свойства эталона поставки — только `supply`, «Выключено»
+ * приложения — только `app-toggle`. Уже `system_writable`, который пускает семь механизмов
+ * (Ф-1б-15): ключ эталона не подделает ни тул владельца, ни глагол агента, ни импорт, ни сид мира.
+ */
+describe('флаг writer: свойство пишет только названный механизм', () => {
+  const supplyPage = (key: string, over: Record<string, unknown> = {}) => ({
+    title: `Поставка ${key}`,
+    tags: [],
+    aspects: [PAGE_ASPECT, SUPPLY_ASPECT],
+    props: { [SUPPLY_KEY]: key, ...over },
+  });
+
+  test('ключ эталона: user (tRPC владельца, тул агента), verb, seed, import → COMPUTED_WRITE writer; supply — проходит', async () => {
+    for (const mechanism of ['user', 'verb', 'seed', 'import'] as const) {
+      const denied = await run('entity_create', supplyPage('upcoming'), { mechanism });
+      expect(denied.ok).toBe(false);
+      if (denied.ok) continue;
+      expect(`${mechanism}: ${denied.error.code}`).toBe(`${mechanism}: COMPUTED_WRITE`);
+      expect(denied.error.details).toMatchObject({
+        property: SUPPLY_KEY,
+        mechanism,
+        reason: 'writer',
+      });
+    }
+    const created = entityOf(
+      await run('entity_create', supplyPage('upcoming'), { mechanism: 'supply' }),
+    );
+    expect((await rowOf(created.id)).props[SUPPLY_KEY]).toBe('upcoming');
+
+    // Правка готовой записи поставки — то же распоряжение: и запись, и снятие отпечатка владельцу закрыты.
+    const patch = await run('entity_update', {
+      id: created.id,
+      props: { [SUPPLY_HASH]: 'подделка' },
+    });
+    expect(
+      patch.ok
+        ? 'ok'
+        : `${patch.error.code}/${(patch.error.details as { reason?: string }).reason}`,
+    ).toBe('COMPUTED_WRITE/writer');
+    ok(
+      await run(
+        'entity_update',
+        { id: created.id, props: { [SUPPLY_HASH]: 'sha256:1' } },
+        { mechanism: 'supply' },
+      ),
+    );
+    const unset = await run('entity_update', { id: created.id, unset: [SUPPLY_HASH] });
+    expect(unset.ok ? 'ok' : unset.error.code).toBe('COMPUTED_WRITE');
+    // Прочие поля записи поставки владелец правит как обычно: флаг — у свойства, не у записи.
+    ok(await run('entity_update', { id: created.id, title: 'Моё предстоящее' }));
+  });
+
+  test('«Выключено» приложения: user → COMPUTED_WRITE writer, supply — тоже нет; app-toggle — проходит', async () => {
+    const appInput = {
+      title: 'Чтение',
+      tags: [],
+      aspects: [APP_ASPECT],
+      props: { [APP_DISABLED]: true },
+    };
+    for (const mechanism of ['user', 'supply'] as const) {
+      const denied = await run('entity_create', appInput, { mechanism });
+      expect(
+        denied.ok
+          ? 'ok'
+          : `${mechanism}: ${denied.error.code}/${(denied.error.details as { reason?: string }).reason}`,
+      ).toBe(`${mechanism}: COMPUTED_WRITE/writer`);
+    }
+    const app = entityOf(await run('entity_create', appInput, { mechanism: 'app-toggle' }));
+    expect((await rowOf(app.id)).props[APP_DISABLED]).toBe(true);
+    // Включить обратно правкой записи тоже нельзя — только тем же действием владельца.
+    const back = await run('entity_update', { id: app.id, props: { [APP_DISABLED]: false } });
+    expect(back.ok ? 'ok' : back.error.code).toBe('COMPUTED_WRITE');
+    ok(
+      await run(
+        'entity_update',
+        { id: app.id, props: { [APP_DISABLED]: false } },
+        { mechanism: 'app-toggle' },
+      ),
+    );
+  });
+
+  test('Undo записи механизмом supply проходит: гейт стоит внутри internalUndo === undefined (Ф-1б-18)', async () => {
+    const created = entityOf(
+      await run('entity_create', supplyPage('horizon-life', { [SUPPLY_HASH]: 'sha256:a' }), {
+        mechanism: 'supply',
+      }),
+    );
+    const patched = ok(
+      await run(
+        'entity_update',
+        { id: created.id, props: { [SUPPLY_HASH]: 'sha256:b' } },
+        { mechanism: 'supply' },
+      ),
+    );
+    // Откат идёт БЕЗ механизма (умолчание `user`): без структурной льготы он упал бы COMPUTED_WRITE.
+    const undone = await undoAction(db, { identity: personal(owner), actionId: patched.actionId });
+    expect(undone.ok).toBe(true);
+    expect((await rowOf(created.id)).props[SUPPLY_HASH]).toBe('sha256:a');
   });
 });
 

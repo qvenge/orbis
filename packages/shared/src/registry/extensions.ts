@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AspectDefinition } from './property-type';
 import { actionToolName, attachToolName, isActionToolName } from './tool-schema';
-import { effectiveLabel, type LocalizedText } from './types';
+import { effectiveLabel, type LocalizedText, type SelectOption } from './types';
 
 // СЛОВАРЬ РАСШИРЕНИЙ И ПОВЕРХНОСТЕЙ (§Б5-1, §Б8-1; спека 1б §3.3, §8.1).
 // Имя поверхности — `<расширение>/<поверхность>` или `core/<поверхность>`, и расширение подписки
@@ -223,6 +223,20 @@ export function ownCardOrder(): readonly OwnCardDecl[] {
   return [...HOST_OWN_CARDS, ...EXTENSION_IDS.flatMap((id) => EXTENSION_MANIFESTS[id].cards)].sort(
     (a, b) => a.rank - b.rank,
   );
+}
+
+/**
+ * Варианты select «Состав» приложения (`orbis/app_extensions`, срез 1б §4.2): ключ — id расширения,
+ * подпись — имя из манифеста, `rank` — порядок `EXTENSION_IDS`. Выводятся, а не пишутся рядом
+ * литералами: новое расширение без варианта «Состава» приложение не смогло бы объявить, а вторая
+ * копия подписи разошлась бы с именем в плашках и отказах.
+ */
+export function extensionSelectOptions(): SelectOption[] {
+  return EXTENSION_IDS.map((id, index) => ({
+    key: id,
+    label: EXTENSION_MANIFESTS[id].name,
+    rank: index + 1,
+  }));
 }
 
 /**

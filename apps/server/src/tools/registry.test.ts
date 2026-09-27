@@ -604,6 +604,31 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(JSON.stringify(TOOL_REGISTRY_GOLDEN)).not.toContain('attach_orbis_page');
   });
 
+  test('приложение и поставка (срез 1б, РП-3): НЕ служебные, но attach_orbis_app / attach_orbis_supply нет', async () => {
+    const reg: RegistrySnapshot = {
+      properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+      aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+      roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+      contracts: new Map(BUILTIN_CONTRACT_DEFS.map((c) => [c.id, c])),
+      subscriptions: new Map(),
+      actions: new Map(),
+      ownerVersion: 0,
+      systemVersion: 0,
+    };
+    // Служебность спрятала бы записи-приложения и записи поставки из выдач (Ф-1а-1, Э-19) — аспекты
+    // от модели убирает только список «авторство отложено».
+    expect(reg.aspects.get('orbis/app')?.service).toBe(false);
+    expect(reg.aspects.get('orbis/supply')?.service).toBe(false);
+    const pure = buildToolDefs(reg).map((d) => d.name);
+    // На живом реестре графа (пересеянном) — тоже: фильтр стоит в сборке, а не в сиде.
+    const live = (await registryFor(userB)).map((d) => d.name);
+    for (const name of ['attach_orbis_app', 'attach_orbis_supply']) {
+      expect(pure).not.toContain(name);
+      expect(live).not.toContain(name);
+      expect(JSON.stringify(TOOL_REGISTRY_GOLDEN)).not.toContain(name);
+    }
+  });
+
   test('кастомный аспект userA: attach_user_sleep_log («/» и «-» → «_»), схема из БД; userB его не видит (RLS)', async () => {
     const defsA = await registryFor(userA);
     const def = defOf(defsA, 'attach_user_sleep_log');

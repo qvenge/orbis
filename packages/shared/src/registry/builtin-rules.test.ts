@@ -9,6 +9,7 @@ import { BUILTIN_RELATION_ROLE_META } from './builtin-roles';
 import {
   BUILTIN_RULE_REQUIRES,
   BUILTIN_RULES_BY_CARRIER,
+  RULE_APP_OPENS_OVER_NOT_SELF,
   RULE_ASSIGNMENT_GRANT_FORBIDDEN,
   RULE_ASSIGNMENT_GRANT_REQUIRED,
   RULE_ENVELOPE_CURRENCY_DEFAULT,
@@ -21,6 +22,7 @@ import {
   RULE_PAGE_WINS_OVER_NOT_SELF,
   RULE_RUN_SUBJECT_FORBIDDEN,
   RULE_RUN_SUBJECT_REQUIRED,
+  RULE_SUPPLY_KEY_UNIQUE,
   RULE_TASK_COMPLETED_AT,
   RULE_TASK_STATUS_DEFAULT,
   RULE_TASK_WAITING_FOR,
@@ -64,6 +66,9 @@ describe('системные строки каталога правил (§Б4-1
       // Срез 1а §3.2: «Главнее, чем» только у шаблона; ссылка на себя — отказ.
       'page_wins_over_needs_template_for',
       'page_wins_over_not_self',
+      // Срез 1б (РП-3): уникальность живой записи поставки на ключ; «Открывать вместо» без себя.
+      'app_opens_over_not_self',
+      'supply_key_unique',
       'mirror_ref',
       // …и метки ролевых ограничений: значение живёт в `role.constraints`, строка его не дублирует.
       'dependency_acyclic',
@@ -113,6 +118,8 @@ describe('системные строки каталога правил (§Б4-1
       RULE_PAGE_WINS_OVER_NEEDS_TEMPLATE.undo,
       RULE_PAGE_WINS_OVER_NOT_SELF.undo,
       RULE_TASK_STATUS_DEFAULT.undo,
+      RULE_SUPPLY_KEY_UNIQUE.undo,
+      RULE_APP_OPENS_OVER_NOT_SELF.undo,
     ]).toEqual([
       'check',
       'check',
@@ -130,6 +137,8 @@ describe('системные строки каталога правил (§Б4-1
       'check',
       'check',
       undefined,
+      'check',
+      'check',
     ]);
   });
 
@@ -146,5 +155,33 @@ describe('системные строки каталога правил (§Б4-1
       }
     }
     expect(BUILTIN_RULE_REQUIRES[RULE_TASK_WAITING_ONLY.id]).toEqual([RULE_TASK_WAITING_FOR.id]);
+  });
+
+  test('срез 1б: две строки носителей «поставка» и «приложение» — формами без расширения языка E (РП-3)', () => {
+    // Уникальность — на СВОЁМ аспекте-области: `unique_among` считает «нет значения» совпадением и
+    // не знает `when`, и на «странице» или «приложении» объявил бы дублями любые две записи без
+    // ключа (спека §9.1 п. 1, Д-7).
+    expect(BUILTIN_RULES_BY_CARRIER['orbis/supply']).toEqual([RULE_SUPPLY_KEY_UNIQUE]);
+    expect(RULE_SUPPLY_KEY_UNIQUE).toMatchObject({
+      id: 'supply_key_unique',
+      template: 'unique_among',
+      params: { properties: ['orbis/supply_key'] },
+    });
+    expect(RULE_SUPPLY_KEY_UNIQUE.scope).toBeUndefined();
+    expect(BUILTIN_RULES_BY_CARRIER['orbis/app']).toEqual([RULE_APP_OPENS_OVER_NOT_SELF]);
+    // Страж `not(empty)` перед `in` — как у `page_wins_over_not_self`: без него `when` отказал бы
+    // EXPR_VALUE на каждом приложении без «Открывать вместо».
+    expect(RULE_APP_OPENS_OVER_NOT_SELF).toMatchObject({
+      id: 'app_opens_over_not_self',
+      template: 'forbidden_when',
+      when: {
+        op: 'and',
+        args: [
+          { op: 'not', args: [{ op: 'empty', args: [{ prop: 'orbis/app_opens_over' }] }] },
+          { op: 'in', args: [{ ctx: '$self' }, { prop: 'orbis/app_opens_over' }] },
+        ],
+      },
+      params: { property: 'orbis/app_opens_over' },
+    });
   });
 });

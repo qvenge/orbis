@@ -168,6 +168,9 @@ export const BUILTIN_ASPECT_IDS = [
   // Срез 1а §3: страница — В КОНЕЦ. `rank` аспекта = позиция + 1, и вставка в середину сдвинула
   // бы `rank` соседей — дрейф строк реестра на проде.
   'orbis/page',
+  // Срез 1б (РП-3): приложение и поставка — тоже В КОНЕЦ, по той же причине.
+  'orbis/app',
+  'orbis/supply',
 ] as const;
 export type AspectId = (typeof BUILTIN_ASPECT_IDS)[number];
 
@@ -178,6 +181,40 @@ export const PAGE_ASPECT = 'orbis/page';
 export const TEMPLATE_FOR_PROPERTY = 'orbis/template_for';
 /** «Главнее, чем» — запомненные выборы владельца в спорах шаблонов (`ref` списком), §3.2. */
 export const TEMPLATE_WINS_OVER_PROPERTY = 'orbis/template_wins_over';
+
+/** Аспект «приложение» (срез 1б §4.2): место — домашняя, навигация, форма, состав. Ядро, НЕ служебный. */
+export const APP_ASPECT = 'orbis/app';
+/**
+ * Аспект «поставка» (срез 1б §9.1 п. 1): эталон записи, которую принесла поставка хоста. Ядро и НЕ
+ * служебный (Э-19): «служебная метка» спеки — слово о механизме, а флаг `service` спрятал бы записи
+ * поставки (обычные страницы и приложения владельца) из всех выдач (Ф-1а-1).
+ */
+export const SUPPLY_ASPECT = 'orbis/supply';
+/** «Дом» — свойство страницы (срез 1б §4.3): запись-приложение, которой страница принадлежит; пусто — хост. */
+export const HOME_PROPERTY = 'orbis/home';
+/** «Домашняя» приложения — что открывает ⌂ (любая запись). */
+export const APP_HOME = 'orbis/app_home';
+/** «Навигация» приложения — разделы, порядок значения = порядок разделов (любые записи). */
+export const APP_NAV = 'orbis/app_nav';
+/** «Форма навигации»: `header-list` (нет значения — он же) или `home-hub`. */
+export const APP_NAV_FORM = 'orbis/app_nav_form';
+/** «Состав» — объявление расширений, которые приложение включает и выключает вместе с собой (§8.6). */
+export const APP_EXTENSIONS = 'orbis/app_extensions';
+/** «Открывать вместо» — запомненный выбор места в споре приложений (§5.3). */
+export const APP_OPENS_OVER = 'orbis/app_opens_over';
+/** «Выключено» — пишет только действие владельца «Выключить приложение» (механизм `app-toggle`, Н-8). */
+export const APP_DISABLED = 'orbis/app_disabled';
+/** Ключ эталона поставки — обязателен на «поставке», пишет только механизм `supply`. */
+export const SUPPLY_KEY = 'orbis/supply_key';
+/** Отпечаток эталона (sha256 кодовой формы, РП-6). */
+export const SUPPLY_HASH = 'orbis/supply_hash';
+/** Текст эталона — каноническая печать эталона в этом графе (РП-6). */
+export const SUPPLY_TEXT = 'orbis/supply_text';
+/** Отпечаток эталона, от которого владелец отказался «оставить своё» (до следующего эталона, §9.1 п. 2). */
+export const SUPPLY_DECLINED = 'orbis/supply_declined';
+/** Варианты «Формы навигации» в порядке `rank` реестра (сверено тестом `builtin.test.ts`). */
+export const NAV_FORMS = ['header-list', 'home-hub'] as const;
+export type NavForm = (typeof NAV_FORMS)[number];
 
 /**
  * Аспекты, чьё авторство агентом отложено (РП-1): нет `attach_*`-тула, нет строки индекса аспектов
@@ -195,8 +232,18 @@ export const TEMPLATE_WINS_OVER_PROPERTY = 'orbis/template_wins_over';
  * она увидеть может — в выдаче записей (`entity_query`/`entity_get` отдают `aspects`) и в каталоге
  * свойств (`property_catalog` называет носителей свойств без фильтра), а core-тулы
  * (`entity_create`/`entity_update`) запись аспекта технически примут. Снимает отступление срез 2.
+ *
+ * Срез 1б (РП-3, спека §4.2, §9.1 п. 1, §15) добавил «приложение» и «поставку». Записи-приложения
+ * модель по просьбе владельца правит обычным `entity_update` (они записи) — список отнимает только
+ * предложение аспекта. «Поставку» core-тулом не навесить и технически: её обязательный ключ
+ * (`orbis/supply_key`) пишет только механизм `supply` (флаг `writer`), и запись без него отвергнет
+ * валидатор.
  */
-export const AUTHORING_DEFERRED_ASPECTS: readonly string[] = [PAGE_ASPECT];
+export const AUTHORING_DEFERRED_ASPECTS: readonly string[] = [
+  PAGE_ASPECT,
+  APP_ASPECT,
+  SUPPLY_ASPECT,
+];
 
 /** Область гранта агента (С2): full — весь граф владельца (сегодняшнее поведение и DEFAULT
  *  колонки `agent_grants.scope`), worker — сужение до выданного тикета. Гейт по скоупу ставит
