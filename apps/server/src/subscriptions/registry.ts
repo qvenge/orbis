@@ -802,7 +802,7 @@ export function resolveSlotOnEntity(
   // `subscription` в details дописывает движок (задача 6, `rowOf`) — см. докблок выше.
   throw new ExecError(
     'SLOT_AMBIGUOUS',
-    `слот ${contract}.${slot} реализуют ${live.length} аспекта сущности — подписке нужен prefer`,
+    `слот ${contract}.${slot} реализуют ${live.length} аспекта записи — подписке нужен prefer`,
     {
       contract,
       slot,

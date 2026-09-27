@@ -8,7 +8,8 @@
  *
  * Семь точек §8.4 — каждая своим сюжетом: карточка и её поля (а), бейдж категории (б), остаток
  * конверта (в), быстрый ввод (г), «план → факт» (д), правила памяти (е), агрегаты бюджета (ж); и
- * «включение возвращает всё» (з), блок-плашка вместо пустоты (и), устаревшая маска в кеше (к).
+ * «включение возвращает всё» (з), блок-плашка вместо пустоты (и), устаревшая маска в кеше (к),
+ * предпросмотр шаблона — плашка без «Включить» (л), маска в секции «Свойства» (м).
  */
 import {
   type EntityCreateInput,
@@ -29,9 +30,11 @@ import type { EntityCardData, MemoryRuleSuggestionData } from '../features/chat/
 import type { ChatMessage } from '../features/chat/useChatThread';
 import { chatThreadKey } from '../features/chat/useChatThread';
 import { CATEGORY_QUERY, createUnderMask, useFastPath } from '../features/chat/useFastPath';
+import { AspectSection } from '../features/entity-detail/AspectSection';
 import { resetDetailMenuModuleForTests } from '../features/entity-detail/DetailMenuSlot';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
 import { NativeRow } from '../features/entity-detail/NativeRow';
+import { RecordHostProvider, recordHostValue } from '../features/entity-detail/record-host';
 import { PAGE_TEMPLATES_QUERY } from '../features/page/usePageTemplates';
 import { invalidateBudget } from '../lib/invalidate';
 import { noteRegistryVersion, resetRegistryVersionForTests } from '../lib/registry/useRegistry';
@@ -48,6 +51,7 @@ import {
 import { navAt } from '../test/nav';
 import { BUILTIN_REGISTRY, registryReply } from '../test/registry';
 import { queryClient, trpc } from '../trpc';
+import { useExtensionRecordHooks } from './extension-registry';
 
 // Агрегаты бюджета гасятся помощником `lib/invalidate` (§8.4 п. 7 — «безвредно, остаётся»): шпион
 // поверх настоящего, прочие экспорты (`invalidateGraph`) — как есть.
@@ -366,7 +370,8 @@ describe('(в) остаток конверта', () => {
 describe('(г) быстрый ввод', () => {
   const RULES_QUERY = 'aspect=orbis/memory, orbis/memory_kind=rule';
 
-  function fastPath(mask: string[]) {
+  function fastPath(mask: string[], onCreate?: (state: { mask: string[] }) => unknown) {
+    const state = { mask };
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -375,13 +380,15 @@ describe('(г) быстрый ввод', () => {
       links: [
         mockLink((path, input) => {
           calls.push({ path, input });
-          if (path === 'user.getSettings') return { defaultCurrency: 'RUB', disabledModules: mask };
+          if (path === 'user.getSettings')
+            return { defaultCurrency: 'RUB', disabledModules: state.mask };
           if (path === 'entity.query') {
             const q = (input as { query?: string } | undefined)?.query;
             return q === RULES_QUERY ? [] : [taxi];
           }
           if (path === 'chat.listMessages') return [];
-          if (path === 'entity.create') return { id: 'created', title: 'такси 500' };
+          if (path === 'entity.create')
+            return onCreate?.(state) ?? { id: 'created', title: 'такси 500' };
           return {};
         }),
       ],
@@ -446,6 +453,28 @@ describe('(г) быстрый ввод', () => {
     });
     expect(createUnderMask(create, 'такси 500', [])).toBe(create);
     expect(createUnderMask(create, 'такси 500', ['goals'])).toBe(create);
+  });
+
+  test('устаревшая маска: отказ `FORBIDDEN` перечитывает настройки, следующий ввод — под новой маской', async () => {
+    let first = true;
+    const { result, calls } = fastPath([], (state) => {
+      if (!first) return undefined;
+      first = false;
+      // Финансы выключили в другом месте: сервер уже отказывает, в кэше чата — прежняя маска.
+      state.mask = ['finance'];
+      throw trpcError('FORBIDDEN', 'расширение «Финансы» выключено');
+    });
+    const settingsCalls = () => calls.filter((c) => c.path === 'user.getSettings').length;
+    await act(async () => {
+      await result.current.submit('такси 500');
+    });
+    await waitFor(() => expect(settingsCalls()).toBe(2));
+    await act(async () => {
+      await result.current.submit('такси 500');
+    });
+    await waitFor(() => expect(creates(calls)).toHaveLength(2));
+    expect(creates(calls)[0]?.input.aspects).toContain('orbis/financial');
+    expect(creates(calls)[1]?.input.aspects ?? []).not.toContain('orbis/financial');
   });
 
   test('CATEGORY_QUERY — тот же текст, что ищет категории (охрана фикстуры)', () => {
@@ -625,4 +654,58 @@ test('(к) отказ сервера «расширение выключено»
     ),
   );
   expect(await screen.findByText(plaqueText('goals'))).toBeInTheDocument();
+});
+
+// --- (л) предпросмотр шаблона: плашка объясняет, но не включает ---------------------------------
+
+test('(л) хост только для чтения (предпросмотр шаблона): текст плашки есть, «Включить» — нет', async () => {
+  const c = CASES.goals;
+  function PreviewHost() {
+    const extensionHooks = useExtensionRecordHooks();
+    const reply = { entity: c.entity, relations: [], backlinks: [], thread: null } as never;
+    return (
+      <RecordHostProvider
+        value={recordHostValue(reply, { extensionHooks, openTab: 'record', readOnly: true })}
+      >
+        <AspectSection entity={c.entity as never} aspectId={c.aspect} />
+      </RecordHostProvider>
+    );
+  }
+  const { calls } = renderWithProviders(
+    <PreviewHost />,
+    screenHandler({ mask: ['goals'], entity: c.entity }),
+  );
+  const section = await screen.findByTestId('aspect-orbis/goal');
+  expect(await within(section).findByText(plaqueText('goals'))).toBeInTheDocument();
+  expect(within(section).queryByRole('button')).toBeNull();
+  expect(calls.some((x) => x.path === 'user.setModuleEnabled')).toBe(false);
+});
+
+// --- (м) секция «Свойства»: значение, пережившее снятие аспекта ---------------------------------
+
+describe('(м) маска в секции «Свойства» — то же правило по `module` свойства', () => {
+  // Аспект «Цель» снят, значение `orbis/target_value` осталось (Р9) и живёт в «Свойствах».
+  const orphan = wireEntity({
+    id: 'rec-orphan',
+    title: 'Бывшая цель',
+    bodyDoc: parseBody(''),
+    aspects: [],
+    props: { 'orbis/target_value': '80' },
+  });
+
+  test('Цели выключены: значение Целей в «Свойствах» — текстом', async () => {
+    openRecord({ mask: ['goals'], entity: orphan });
+    const free = await screen.findByTestId('aspect-free');
+    await waitFor(() =>
+      expect(within(free).getByTestId('prop-orbis/target_value').tagName).toBe('SPAN'),
+    );
+  });
+
+  test('контроль — маска пуста: значение правится', async () => {
+    openRecord({ mask: [], entity: orphan });
+    const free = await screen.findByTestId('aspect-free');
+    await waitFor(() =>
+      expect(within(free).getByTestId('prop-orbis/target_value').tagName).toBe('INPUT'),
+    );
+  });
 });

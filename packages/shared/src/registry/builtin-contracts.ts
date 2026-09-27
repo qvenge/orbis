@@ -76,7 +76,7 @@ const ENTRIES: readonly (SlotsEntry | FactsEntry)[] = [
     kind: 'slots',
     label: { ru: 'Завершаемость', en: 'Completable' },
     description: {
-      ru: 'Сущность можно завершить или отменить: слот-статус и три класса значений.',
+      ru: 'Запись можно завершить или отменить: слот-статус и три класса значений.',
       en: 'An entity can be completed or cancelled: a status slot and three value classes.',
     },
     slots: [s('status', k('select'), true, 'Статус', 'Status', true)],

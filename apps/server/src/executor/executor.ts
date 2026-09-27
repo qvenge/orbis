@@ -2192,7 +2192,7 @@ async function prepareEntityUpdate(
   // FOR UPDATE конкурентные патчи разных полей одного аспекта теряли бы правки
   const current = await loadEntityForUpdate(ctx, input.id, batch);
   if (!current) {
-    throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
+    throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
   }
   // Правда строки — `props`/`aspects[]` (§А1-1). Прежние значения для журнала берутся
   // отсюда же: единица отката — свойство (§А7-4), и старая карта в этом больше не участвует.
@@ -2226,7 +2226,7 @@ async function prepareEntityUpdate(
     if (currentIso !== input.expectedUpdatedAt) {
       throw new ExecError(
         'STALE_VERSION',
-        'body изменён конкурентно: перечитайте сущность и повторите правку (§5.2)',
+        'body изменён конкурентно: перечитайте запись и повторите правку (§5.2)',
         { id: input.id, expected: input.expectedUpdatedAt, current: currentIso },
       );
     }
@@ -2600,7 +2600,7 @@ async function prepareEntityUpdate(
         .where(eq(entities.id, input.id))
         .returning();
       const row = updated[0];
-      if (!row) throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
+      if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
       return { result: toWire(row) };
     },
   };
@@ -2622,7 +2622,7 @@ async function prepareAttach(
   // Стадия 3: под замком — attach конкурирует с merge-обновлениями того же jsonb
   const current = await loadEntityForUpdate(ctx, input.entity_id, batch);
   if (!current) {
-    throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.entity_id });
+    throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.entity_id });
   }
 
   const now = ctx.clock();
@@ -2783,7 +2783,7 @@ async function prepareAttach(
         .where(eq(entities.id, input.entity_id))
         .returning();
       const row = updated[0];
-      if (!row) throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.entity_id });
+      if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.entity_id });
       return { result: toWire(row) };
     },
   };
@@ -2829,13 +2829,13 @@ async function loadBothEndsForUpdate(
   const loaded = new Map<string, EntityRow>();
   for (const id of [key.sourceId, key.targetId].sort()) {
     const row = await loadEntityForUpdate(ctx, id, batch);
-    if (!row) throw new ExecError('NOT_FOUND', 'сущность не найдена', { id });
+    if (!row) throw new ExecError('NOT_FOUND', 'запись не найдена', { id });
     loaded.set(id, row);
   }
   const source = loaded.get(key.sourceId);
   const target = loaded.get(key.targetId);
   if (!source || !target) {
-    throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: key.sourceId }); // недостижимо
+    throw new ExecError('NOT_FOUND', 'запись не найдена', { id: key.sourceId }); // недостижимо
   }
   return { source, target };
 }
@@ -2875,7 +2875,7 @@ async function prepareRelationCreate(
 
   // Самосвязь — превентивно (честный текст вместо CHECK rel_no_self со стадии 5)
   if (key.sourceId === key.targetId) {
-    throw new ExecError('INVARIANT', 'связь сущности с самой собой запрещена (rel_no_self, §4.2)', {
+    throw new ExecError('INVARIANT', 'связь записи с самой собой запрещена (rel_no_self, §4.2)', {
       invariant: 'self_relation',
       id: key.sourceId,
     });
@@ -3225,7 +3225,7 @@ async function prepareOriginCreate(ctx: ExecCtx, rawInput: unknown): Promise<Pre
         // сущность — единый NOT_FOUND, как у relation-тулов: «чужая» и «несуществующая»
         // неразличимы намеренно
         if (pg.code === '42501' || pg.code === '23503') {
-          throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.entity_id });
+          throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.entity_id });
         }
         throw e;
       }
@@ -3338,7 +3338,7 @@ async function prepareVersionPin(
   // ПРЕДЫДУЩЕЙ операцией того же batch, на стадии prepare в БД ещё не найти (§7.8).
   const current = await loadEntityForUpdate(ctx, input.entity_id, batch);
   if (!current) {
-    throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.entity_id });
+    throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.entity_id });
   }
 
   const journal: JournalPlan = {

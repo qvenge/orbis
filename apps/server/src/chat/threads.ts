@@ -58,7 +58,7 @@ export async function ensureEntityThread(
     .from(entities)
     .where(eq(entities.id, entityId));
   if (visible.length === 0) {
-    throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: entityId });
+    throw new ExecError('NOT_FOUND', 'запись не найдена', { id: entityId });
   }
   return ensureThread(tx, { id: entityThreadId(graph, entityId), graphId: graph, entityId });
 }

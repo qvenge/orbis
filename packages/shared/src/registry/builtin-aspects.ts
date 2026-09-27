@@ -49,7 +49,7 @@ const ENTRIES: readonly AspectEntry[] = [
     id: 'orbis/schedule',
     label: { ru: 'Расписание', en: 'Schedule' },
     description: {
-      ru: 'Привязка сущности ко времени: событие, встреча, дедлайн по времени.',
+      ru: 'Привязка записи ко времени: событие, встреча, дедлайн по времени.',
       en: 'Binds an entity to time: an event, a meeting, a time-based deadline.',
     },
     properties: [
@@ -204,7 +204,7 @@ const ENTRIES: readonly AspectEntry[] = [
     id: 'orbis/note',
     label: { ru: 'Заметка', en: 'Note' },
     description: {
-      ru: 'Маркер «главное назначение — текст»; содержимое живёт в body сущности.',
+      ru: 'Маркер «главное назначение — текст»; содержимое живёт в body записи.',
       en: 'A marker that the point of the entity is its text; the content lives in the entity body.',
     },
     properties: [
@@ -420,7 +420,7 @@ const ENTRIES: readonly AspectEntry[] = [
     id: 'orbis/agent-run',
     label: { ru: 'Прогон агента', en: 'Agent run' },
     description: {
-      ru: 'Служебная сущность прогона агента: шаги, исход, расход',
+      ru: 'Служебная запись прогона агента: шаги, исход, расход',
       en: 'Service entity of an agent run: steps, outcome, usage.',
     },
     properties: [

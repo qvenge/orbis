@@ -5,9 +5,10 @@ import { trpc } from '../../trpc';
 import { useToast } from '../../ui/toast-store';
 import { UNDO_FAILED } from '../page/useUpdateBatch';
 
-// Чтение маски живёт в листовом модуле (вес первого кадра записи, см. его докблок); здесь — тот же
-// интерфейс задачи 22 для настроек и плашки «Включить».
-export { useDisabledExtensions, useExtensionEnabled } from './extension-mask';
+// Чтение маски живёт в листовом модуле `extension-mask.ts` (вес первого кадра записи, см. его докблок);
+// `useExtensionEnabled` — ТОЛЬКО оттуда: импорт через этот модуль потянул бы в первый кадр переключатель
+// с тостом и отменой. `useDisabledExtensions` реэкспортирован для экранов настроек задачи 22.
+export { useDisabledExtensions } from './extension-mask';
 
 /** Имя расширения владельцу — подпись манифеста в его локали. */
 export function extensionName(ext: ExtensionId): string {

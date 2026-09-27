@@ -90,7 +90,7 @@ describe('ensureEntityThread (§4.5, §13.3)', () => {
     const entityId = await createEntityRow(userA);
     await expect(
       withIdentity(db, personal(userB), (tx) => ensureEntityThread(tx, userB, entityId)),
-    ).rejects.toThrow('сущность не найдена');
+    ).rejects.toThrow('запись не найдена');
   });
 });
 

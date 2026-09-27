@@ -212,7 +212,7 @@ export async function runPropose(
       const current = targets.rows.get(op.input.id as string);
       if (current === undefined) {
         // Недостижимо: loadTargets уже вернул бы NOT_FOUND
-        return { error: err('NOT_FOUND', 'сущность не найдена', { id: op.input.id }) };
+        return { error: err('NOT_FOUND', 'запись не найдена', { id: op.input.id }) };
       }
       const clash = collides(seen, index, op.input);
       if (clash !== null) return { error: clash };
@@ -493,7 +493,7 @@ function collides(
   if (prev !== undefined && (prev.body || hasBody)) {
     return err(
       'VALIDATION',
-      `операции ${prev.index + 1} и ${index + 1} правят одну сущность ${id}, и одна из них — её тело: правка тела в предложении должна быть единственной операцией по сущности`,
+      `операции ${prev.index + 1} и ${index + 1} правят одну запись ${id}, и одна из них — её тело: правка тела в предложении должна быть единственной операцией по записи`,
       { reason: 'proposal_conflicting_operations', index, first: prev.index, id, field: 'тело' },
     );
   }
@@ -513,7 +513,7 @@ function collides(
     if (first !== undefined) {
       return err(
         'VALIDATION',
-        `операции ${first + 1} и ${index + 1} правят одно и то же (${what} сущности ${id}) — в предложении так нельзя`,
+        `операции ${first + 1} и ${index + 1} правят одно и то же (${what} записи ${id}) — в предложении так нельзя`,
         { reason: 'proposal_conflicting_operations', index, first, id, field: what },
       );
     }
@@ -584,7 +584,7 @@ export async function loadTargets(
     const row = rows.get(w.id);
     if (row === undefined) {
       // Чужая строка и несуществующая под RLS неразличимы — единый NOT_FOUND (как в executor)
-      return { error: err('NOT_FOUND', 'сущность не найдена', { id: w.id, index: w.index }) };
+      return { error: err('NOT_FOUND', 'запись не найдена', { id: w.id, index: w.index }) };
     }
     // Запрет по объекту, половина «по БД»: аспекта рутины (прогона) в патче может не быть
     // вовсе — рутиной или прогоном сущность делает её собственное состояние, а не форма
@@ -595,7 +595,7 @@ export async function loadTargets(
           error: forbiddenTarget(
             w.index,
             w.tool,
-            `сущность ${w.id} — ${aspectId === 'orbis/routine' ? 'рутина' : 'прогон'}`,
+            `запись ${w.id} — ${aspectId === 'orbis/routine' ? 'рутина' : 'прогон'}`,
           ),
         };
       }

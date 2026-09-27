@@ -586,7 +586,7 @@ function attachAspectOf(reg: RegistrySnapshot, tool: string) {
  * (`query/static.ts`) ему не судья: тот отвергает date-токены («множество менялось бы
  * каждый день»), а «просроченные на сегодня» — ровно то, ради чего Р-30 и заводит пакетное
  * действие (Р-К-25). Запрещено здесь другое: ПРОЕКЦИЯ (порядок и усечение задаёт кап и
- * `ORDER BY id` резолва — задача 7) и `this` (у действия нет сущности-хозяина, в которой лежал
+ * `ORDER BY id` резолва — задача 7) и `this` (у действия нет записи-хозяина, в которой лежал
  * бы запрос).
  */
 function assertActionQuery(key: string, over: QueryAst): void {
@@ -612,7 +612,7 @@ function assertActionQuery(key: string, over: QueryAst): void {
       bad(
         'ACTION_OVER_PROJECTION',
         key,
-        `действие «${key}»: «this» в множестве целей — у действия нет сущности-хозяина`,
+        `действие «${key}»: «this» в множестве целей — у действия нет записи-хозяина`,
         {},
       );
     }

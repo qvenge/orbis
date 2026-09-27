@@ -72,9 +72,6 @@ export function createUnderMask(
   return { id: create.id, title: text, tags: [] };
 }
 
-/** Контекст парсера и маска выключенных расширений — из одних и тех же настроек (`user.getSettings`). */
-type Loaded = { ctx: FastPathCtx; disabled: readonly string[] };
-
 export function useFastPath(threadId: string) {
   const queryClient = useQueryClient();
   const utils = trpc.useUtils();
@@ -143,14 +140,11 @@ export function useFastPath(threadId: string) {
   }
 
   // Онлайн: свежий ctx (getData() тёплый кэш → иначе fetch, staleTime 30s).
-  async function loadCtx(): Promise<Loaded> {
+  async function loadCtx(): Promise<FastPathCtx> {
     const cats =
       utils.entity.query.getData(CATEGORY_QUERY) ??
       (await utils.entity.query.fetch(CATEGORY_QUERY));
     const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
-    // Маска — из тех же настроек, второго чтения нет (срез 1б §8.4, fast-path — отступление §15).
-    // Поля нет (ответ сервера до 1б в кэше) — «включено», как у `useExtensionEnabled`.
-    const disabled = settings.disabledModules ?? [];
     // Правила — getData-first, ровно как категории. Блокирующий fetch здесь означал бы
     // СЕТЬ ПЕРЕД КАЖДЫМ вводом: успешный create инвалидирует весь префикс entity.query, а
     // fetchQuery на инвалидированной query перечитывает независимо от staleTime. Карточка
@@ -161,7 +155,7 @@ export function useFastPath(threadId: string) {
     const cached = utils.entity.query.getData(MEMORY_RULES_QUERY);
     if (cached !== undefined) {
       refreshRules();
-      return { ctx: mapCtx(cats, settings, cached), disabled };
+      return mapCtx(cats, settings, cached);
     }
     // Холодный кэш (правила в этой сессии не читались): один раз ждём — иначе первый ввод
     // молча уехал бы на одни алиасы. Цена та же, что уже платят категории. Отказ запроса
@@ -180,21 +174,25 @@ export function useFastPath(threadId: string) {
       console.warn('[fast-path] правила памяти не загрузились, разбираем по алиасам:', e);
       rules = undefined;
     }
-    return { ctx: mapCtx(cats, settings, rules), disabled };
+    return mapCtx(cats, settings, rules);
   }
 
   // Офлайн: ТОЛЬКО тёплый кэш (без fetch) — иначе onlineManager заморозит запрос и submit зависнет (§2.6).
-  // Маски в кэше нет — «включено», как у `useExtensionEnabled`: сервер при сливе буфера последняя линия.
-  function cachedCtx(): Loaded {
-    const settings = utils.user.getSettings.getData();
-    return {
-      ctx: mapCtx(
-        utils.entity.query.getData(CATEGORY_QUERY),
-        settings,
-        utils.entity.query.getData(MEMORY_RULES_QUERY),
-      ),
-      disabled: settings?.disabledModules ?? [],
-    };
+  function cachedCtx(): FastPathCtx {
+    return mapCtx(
+      utils.entity.query.getData(CATEGORY_QUERY),
+      utils.user.getSettings.getData(),
+      utils.entity.query.getData(MEMORY_RULES_QUERY),
+    );
+  }
+
+  /**
+   * Маска выключенных расширений — из тех же настроек, что контекст парсера (срез 1б §8.4, fast-path —
+   * отступление §15): онлайн `loadCtx` уже положил их в кэш, офлайн — только кэш. Настроек или поля
+   * нет (ответ до 1б) — «включено», как у `useExtensionEnabled`: сервер последняя линия.
+   */
+  function cachedMask(): readonly string[] {
+    return utils.user.getSettings.getData()?.disabledModules ?? [];
   }
 
   // Возвращает id синтетического сообщения; повторный вызов с тем же messageId ПЕРЕПИСЫВАЕТ
@@ -248,10 +246,10 @@ export function useFastPath(threadId: string) {
   async function submit(text: string): Promise<void> {
     // Гейт !online — ДО любого сетевого ctx: офлайн строим ctx только из кэша, сеть не трогаем (§2.6).
     if (!online) {
-      const { ctx, disabled } = cachedCtx();
+      const ctx = cachedCtx();
       const parsed = parseFastPath(text, ctx);
       if (parsed.ok) {
-        const toCreate = createUnderMask(parsed.create, text, disabled);
+        const toCreate = createUnderMask(parsed.create, text, cachedMask());
         // Уверенный (категории прогреты) → retry-буфер + «⏳ ждёт отправки».
         try {
           enqueueCreate(toCreate, 'fast_path');
@@ -276,7 +274,7 @@ export function useFastPath(threadId: string) {
       return;
     }
 
-    const { ctx, disabled } = await loadCtx();
+    const ctx = await loadCtx();
     const parsed = parseFastPath(text, ctx);
     if (!parsed.ok) {
       // Неуверенно → LLM-путь (ошибку и потерю текста закрывает useSendMessage.onError, §3).
@@ -287,7 +285,7 @@ export function useFastPath(threadId: string) {
     // Онлайн + уверенно → мгновенная карточка «⚡ без AI» + entity.create (оптимизм §2.5). Одна
     // переменная на все места отправки: буфер, create, повтор CONFLICT — иначе одно из них ушло бы
     // финансовой записью мимо маски.
-    const toCreate = createUnderMask(parsed.create, text, disabled);
+    const toCreate = createUnderMask(parsed.create, text, cachedMask());
     const cardId = insertCard(toCreate, '⚡ без AI', {
       entityId: toCreate.id,
       text,
@@ -341,6 +339,12 @@ export function useFastPath(threadId: string) {
       }
       const outcome = mapSendError(err);
       if (outcome === 'business_rejection') {
+        // Отказ «по объекту» (`FORBIDDEN`: прежде всего `MODULE_DISABLED` — Финансы выключили в другом
+        // месте, а маска в кэше прежняя) — маска перечитывается СЕЙЧАС, а не помечается: наблюдателя у
+        // неё здесь нет, а `loadCtx` берёт её из кэша. Следующий ввод идёт уже под новой маской; тот же
+        // приём, что у правки записи (`useEntityUpdate`).
+        if (err instanceof TRPCClientError && err.data?.code === 'FORBIDDEN')
+          void utils.user.getSettings.fetch(undefined, { staleTime: 0 }).catch(() => {});
         // §5.3: бизнес-отказ НЕ буферизуется, а показывается — иначе ввод исчезал молча
         // (карточка успеха на экране, сущности нет, запись вычищена из очереди при flush).
         const code =

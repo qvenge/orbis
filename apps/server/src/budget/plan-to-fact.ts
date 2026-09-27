@@ -139,7 +139,7 @@ export async function confirmPurchase(
  * `src/actions/golden.test.ts`, `PRECONDITION_CONJUNCTS`), а не потеря по недосмотру.
  */
 const NOT_PLANNED_PURCHASE =
-  'сущность не является ручной запланированной покупкой: нет orbis/financial, архивна, ' +
+  'запись не является ручной запланированной покупкой: нет orbis/financial, архивна, ' +
   'шаблон или инстанс повторения, либо уже переведена в факт (§2.7)';
 
 /**

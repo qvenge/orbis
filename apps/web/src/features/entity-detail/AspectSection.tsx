@@ -218,7 +218,7 @@ function SectionView({
       </div>
       {off && (
         <Suspense fallback={null}>
-          <ExtensionOffPlaque extension={aspect.module as ExtensionId} />
+          <ExtensionOffPlaque extension={aspect.module as ExtensionId} readOnly={edits.readOnly} />
         </Suspense>
       )}
       <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">

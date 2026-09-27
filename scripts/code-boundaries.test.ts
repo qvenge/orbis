@@ -1,10 +1,24 @@
 // scripts/code-boundaries.test.ts
 // СТОРОЖА ГРАНИЦ КОДА И СЛОВАРЯ (срез 1б: спека §8.4, §1, §15, С1б-10; РП-10, РП-23).
 // (1) код ядра web не импортирует каталоги расширений — кроме реестра карточек (§4.1) и трёх отступлений §15;
-// (2) в строках интерфейса web нет слов вне словаря (§1); «смарт-лист» держит grammar-copies.test.ts — не дублируется;
+// (2) в строках интерфейса нет слов вне словаря (§1) — три охвата: строки web, тексты отказов сервера, которые web
+//     печатает как есть (R-37), и подписи `label`/`description` реестров shared; «смарт-лист» держит
+//     grammar-copies.test.ts — не дублируется;
 // (3) «module» в именах кода — только имена провода и отказа (РП-10) и «модуль JS» (ленивый чанк).
-// Чего стражи НЕ видят (граница названа): путь импорта, собранный не литералом; английскую подпись «view» без кириллицы,
-// кроме голого «Views»; `legacy-1v/` (вне сборки, РП-31) и тесты — вне охвата.
+//
+// Чего стражи НЕ видят (граница названа, R-37 (4)):
+//  (1) путь импорта, собранный не литералом (конкатенация, шаблон с подстановкой); спецификатор без точки — алиас
+//      (`@/…`, `~/…`) считается пакетом: алиасов в `vite.config`/`tsconfig` web сегодня нет, появись они — ребро
+//      через алиас страж не увидит. Литеральные `import.meta.glob('…')` и `new URL('…', import.meta.url)` — видит.
+//  (2) английскую подпись «view» без кириллицы, кроме голого «Views»; текст, собранный из частей не литералами
+//      (`'Сущ' + 'ность'`); у сервера — только `new ExecError(код, текст)`, `new TRPCError({ message })`, `err(…)` и
+//      `errorResult(…)` (текст, пришедший параметром или собранный другим помощником — `bad(…)`,
+//      `forbiddenTarget(…)`, поле `detail` конфликтов реестра, — не видит); у shared — только каталог
+//      `registry/` (эталоны поставки `supply/` — тела страниц, не подписи).
+//  (3) исключения `MODULE_NAMES` не привязаны к файлу (имя из списка разрешено везде); строки с дефисом
+//      (`data-testid="module-off"`, класс `module-card`) именами не считаются.
+//  Вне охвата всех трёх: тесты, `legacy-1v/` (вне сборки, РП-31), `scripts/` (инструменты: `LAZY_*_MODULES` там —
+//  «модуль JS»), `apps/server/test/` (обвязка тестов сервера), SQL-миграции и журнал drizzle.
 //
 // РОЛЬ ТОКЕНА ОПРЕДЕЛЯЕТ AST TypeScript, а не построчная примета (отличие от `grammar-copies.test.ts`):
 // комментарий, хвостовой комментарий после кода и строка интерфейса на одной строке построчно
@@ -80,6 +94,18 @@ const WORD_ALLOWLIST: Record<string, Allowed> = {
     count: 1,
     reason: 'пункт «Закрепить версию» — то же закрепление версии тела',
     removedBy: 'решение владельца (эррата §1)',
+  },
+  'apps/server/src/executor/executor.ts': {
+    count: 1,
+    reason:
+      'отказ «id непригоден для закрепления» — то же закрепление ВЕРСИИ тела (`entity_version_pin`), что у «Закрепить версию»',
+    removedBy: 'решение владельца (эррата §1)',
+  },
+  'packages/shared/src/registry/builtin-properties.ts': {
+    count: 1,
+    reason:
+      'подпись «Закреплена» свойства `orbis/pinned` — место записи наверху списков, не навигация (§1 снимает «Закрепить» как глагол навигации); вопрос переименования — владельцу, 03-pending (R-37)',
+    removedBy: 'решение владельца (03-pending)',
   },
   'apps/web/src/features/entity-detail/intended-1a.ts': {
     count: 1,
@@ -206,9 +232,37 @@ export function importTargets(rel: string, src: string): ImportTarget[] {
       : spec;
     out.push({ spec, target, line: lineOf(sf, at) });
   };
+  const isImportMeta = (e: ts.Node) =>
+    ts.isMetaProperty(e) &&
+    e.keywordToken === ts.SyntaxKind.ImportKeyword &&
+    e.name.text === 'meta';
   walk(sf, (n) => {
     if (ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) add(n.moduleSpecifier, n);
     else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword)
+      add(n.arguments[0], n);
+    // `import.meta.glob('…')` / `import.meta.glob(['…', '!…'])` — Vite разрешает и кладёт в сборку.
+    else if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.expression.name.text === 'glob' &&
+      isImportMeta(n.expression.expression)
+    ) {
+      const arg = n.arguments[0];
+      const lits = arg !== undefined && ts.isArrayLiteralExpression(arg) ? arg.elements : [arg];
+      for (const lit of lits) {
+        if (lit !== undefined && ts.isStringLiteralLike(lit))
+          add(ts.factory.createStringLiteral(lit.text.replace(/^!/, '')), n);
+      }
+    }
+    // `new URL('…', import.meta.url)` — ассет по пути, тоже ребро сборки.
+    else if (
+      ts.isNewExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      n.expression.text === 'URL' &&
+      n.arguments?.[1] !== undefined &&
+      ts.isPropertyAccessExpression(n.arguments[1]) &&
+      isImportMeta(n.arguments[1].expression)
+    )
       add(n.arguments[0], n);
     else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference))
       add(n.moduleReference.expression, n);
@@ -274,9 +328,114 @@ export function uiTexts(rel: string, src: string): UiText[] {
   return out;
 }
 
+/** Тексты строковых узлов поддерева: литералы и шаблоны (части шаблона — через «…»). */
+function stringsIn(node: ts.Node, sf: ts.SourceFile, out: UiText[]): void {
+  walk(node, (n) => {
+    let text: string | null = null;
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) text = n.text;
+    else if (ts.isTemplateExpression(n))
+      text = [n.head.text, ...n.templateSpans.map((s) => s.literal.text)].join('…');
+    if (text !== null && (CYRILLIC.test(text) || /^Views?$/.test(text.trim())))
+      out.push({ text, line: lineOf(sf, n) });
+  });
+}
+
+/**
+ * Тексты отказов сервера (R-37): web печатает `message` отказа как есть (плашки блокировок, рутины,
+ * тела, назначения), поэтому это строки интерфейса. Берётся второй аргумент `new ExecError(код, текст,
+ * …)` и поле `message` у `new TRPCError({…})`; имя константы в тексте разворачивается по её объявлению в
+ * том же файле (текст, собранный заранее, — частый приём). Текст, пришедший параметром функции или из
+ * другого файла, страж не видит — граница названа в заголовке.
+ */
+export function serverMessages(rel: string, src: string): UiText[] {
+  const sf = parse(rel, src);
+  const decls = new Map<string, ts.Expression>();
+  walk(sf, (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined)
+      decls.set(n.name.text, n.initializer);
+  });
+  const out: UiText[] = [];
+  // Разворачивается только то, из чего СОБИРАЕТСЯ строка: литерал, шаблон, `+`, тернарный, скобки и
+  // имя константы. Имя в произвольном выражении (`r.error.message`) — не текст этого файла.
+  const take = (expr: ts.Expression | undefined, depth = 0): void => {
+    if (expr === undefined || depth > 3) return;
+    if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+      stringsIn(expr, sf, out);
+    } else if (ts.isTemplateExpression(expr)) {
+      stringsIn(expr, sf, out);
+      for (const span of expr.templateSpans) take(span.expression, depth + 1);
+    } else if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      take(expr.left, depth);
+      take(expr.right, depth);
+    } else if (ts.isConditionalExpression(expr)) {
+      take(expr.whenTrue, depth);
+      take(expr.whenFalse, depth);
+    } else if (ts.isParenthesizedExpression(expr)) {
+      take(expr.expression, depth);
+    } else if (ts.isIdentifier(expr)) {
+      take(decls.get(expr.text), depth + 1);
+    }
+  };
+  walk(sf, (n) => {
+    // Помощники отказа тулов и предложений: `err(код, текст)`, `errorResult(код, текст)`.
+    if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      ['err', 'errorResult'].includes(n.expression.text)
+    ) {
+      take(n.arguments[1]);
+      return;
+    }
+    if (!ts.isNewExpression(n) || !ts.isIdentifier(n.expression)) return;
+    if (n.expression.text === 'ExecError') take(n.arguments?.[1]);
+    else if (n.expression.text === 'TRPCError') {
+      const arg = n.arguments?.[0];
+      if (arg === undefined || !ts.isObjectLiteralExpression(arg)) return;
+      for (const p of arg.properties)
+        if (ts.isPropertyAssignment(p) && p.name.getText(sf) === 'message') take(p.initializer);
+    }
+  });
+  return out;
+}
+
+/**
+ * Подписи реестров shared (R-37): `label` и `description` строк реестра — их показывают секции записи,
+ * конструктор запросов и экран расширений. Берутся все строки значения (обычно `{ ru, en }`).
+ */
+export function registryLabels(rel: string, src: string): UiText[] {
+  const sf = parse(rel, src);
+  const out: UiText[] = [];
+  walk(sf, (n) => {
+    if (
+      ts.isPropertyAssignment(n) &&
+      ['label', 'description'].includes(n.name.getText(sf).replace(/['"]/g, ''))
+    )
+      stringsIn(n.initializer, sf, out);
+  });
+  return out;
+}
+
 const bannedIn = (text: string) => BANNED.filter((b) => b.re.test(text)).map((b) => b.word);
 
-/** `путь → строки интерфейса со словами вне словаря` по коду web. */
+/** Тексты отказов сервера — боевой код сервера без тестов и миграций. */
+const SERVER_PATHSPEC = [
+  ':(glob)apps/server/src/**/*.ts',
+  ':(exclude,glob)apps/server/src/**/*.test.*',
+  ':(exclude)apps/server/src/db/migrations/',
+];
+/** Подписи реестров shared. */
+const REGISTRY_PATHSPEC = [
+  ':(glob)packages/shared/src/registry/**/*.ts',
+  ':(exclude,glob)packages/shared/src/registry/**/*.test.*',
+];
+/** Три охвата (2): строки интерфейса web, тексты отказов сервера, подписи реестров shared. */
+const WORD_SCOPES = [
+  { pathspec: WEB_PATHSPEC, extract: uiTexts },
+  { pathspec: SERVER_PATHSPEC, extract: serverMessages },
+  { pathspec: REGISTRY_PATHSPEC, extract: registryLabels },
+] as const;
+
+/** `путь → строки интерфейса со словами вне словаря` по трём охватам (2). */
 function bannedWordHits(): Map<string, string[]> {
   // Кандидаты — регистр перечислен явно вдобавок к `-i`: регистронезависимость кириллицы у
   // `git grep` держится на локали, перечень от неё не зависит (довод `grammar-copies.test.ts`).
@@ -286,11 +445,18 @@ function bannedWordHits(): Map<string, string[]> {
     'view',
   ];
   const found = new Map<string, string[]>();
-  for (const rel of candidates(signs, WEB_PATHSPEC, true)) {
-    const hits = uiTexts(rel, readFileSync(join(ROOT, rel), 'utf8'))
-      .filter((t) => bannedIn(t.text).length > 0)
-      .map((t) => `${t.line}: ${bannedIn(t.text).join(', ')} — ${t.text.slice(0, 80)}`);
-    if (hits.length > 0) found.set(rel, hits);
+  for (const { pathspec, extract } of WORD_SCOPES) {
+    for (const rel of candidates(signs, pathspec, true)) {
+      // Ключ — строка текста: константа, развёрнутая в двух отказах, — одно место, а не два.
+      const hits = [
+        ...new Set(
+          extract(rel, readFileSync(join(ROOT, rel), 'utf8'))
+            .filter((t) => bannedIn(t.text).length > 0)
+            .map((t) => `${t.line}: ${bannedIn(t.text).join(', ')} — ${t.text.slice(0, 80)}`),
+        ),
+      ];
+      if (hits.length > 0) found.set(rel, hits);
+    }
   }
   return found;
 }
@@ -344,6 +510,13 @@ describe('сторожа границ кода и словаря (срез 1б �
     expect(files).toContain('apps/web/src/features/entity-detail/NativeRow.tsx');
     expect(files.some((f) => /\.test\./.test(f))).toBe(false);
     expect(files.some((f) => OUT_OF_SCOPE.some((d) => f.startsWith(d)))).toBe(false);
+    // Охваты (2) сервера и shared не выродились.
+    const server = git(['ls-files', '--', ...SERVER_PATHSPEC], [0]);
+    expect(server).toContain('apps/server/src/executor/executor.ts');
+    expect(server.some((f) => /\.test\.|\/migrations\//.test(f))).toBe(false);
+    const registry = git(['ls-files', '--', ...REGISTRY_PATHSPEC], [0]);
+    expect(registry).toContain('packages/shared/src/registry/builtin-properties.ts');
+    expect(registry.some((f) => /\.test\./.test(f))).toBe(false);
     const all = git(['ls-files', '--', ...ALL_PATHSPEC], [0]);
     expect(all).toContain('apps/server/src/errors.ts');
     expect(all).toContain('packages/shared/src/registry/extensions.ts');
@@ -396,6 +569,47 @@ describe('сторожа границ кода и словаря (срез 1б �
       expect([src, caught(src)]).toEqual([src, false]);
     }
 
+    // Vite кладёт в сборку и глоб, и ассет по `new URL(…, import.meta.url)` — это тоже рёбра.
+    expect(targets("const m = import.meta.glob('../../budget/*.tsx');")).toEqual([
+      'apps/web/src/features/budget/*.tsx',
+    ]);
+    expect(
+      targets("const m = import.meta.glob(['../../import/*.ts', '!../../import/x.ts']);"),
+    ).toEqual(['apps/web/src/features/import/*.ts', 'apps/web/src/features/import/x.ts']);
+    expect(targets("const u = new URL('../../budget/icon.svg', import.meta.url);")).toEqual([
+      'apps/web/src/features/budget/icon.svg',
+    ]);
+    expect(targets("const u = new URL('https://example.com/budget/x');")).toEqual([]);
+
+    // Тексты отказов сервера (R-37): аргумент текста, константа того же файла, помощники `err`/`errorResult`.
+    const refused = (src: string) =>
+      serverMessages('x.ts', src).some((t) => bannedIn(t.text).length > 0);
+    for (const src of [
+      "throw new ExecError('NOT_FOUND', 'сущность не найдена', { id });",
+      "const M = 'сущность не является покупкой: ' + 'нет аспекта'; throw new ExecError('X', M);",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: образец кода — текст, а не шаблон
+      "throw new TRPCError({ code: 'FORBIDDEN', message: `сущность ${id} чужая` });",
+      "return err('NOT_FOUND', 'сущность не найдена');",
+      "return errorResult('NOT_FOUND', 'сущность не найдена', { id });",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: образец кода — текст, а не шаблон
+      "const v = ok ? undefined : 'ожидается uuid сущности'; throw new ExecError('V', `шаг: ${v}`);",
+    ]) {
+      expect([src, refused(src)]).toEqual([src, true]);
+    }
+    for (const src of [
+      "// сущность не найдена\nthrow new ExecError('NOT_FOUND', 'запись не найдена');",
+      "const r = run({ label: 'сущность' }); throw new ExecError(r.code, r.error.message);",
+      "log('сущность не найдена');",
+    ]) {
+      expect([src, refused(src)]).toEqual([src, false]);
+    }
+    // Подписи реестров shared (R-37): `label` и `description`, любые строки значения.
+    const labelled = (src: string) =>
+      registryLabels('x.ts', src).some((t) => bannedIn(t.text).length > 0);
+    expect(labelled("const p = { label: { ru: 'Закреплена', en: 'Pinned' } };")).toBe(true);
+    expect(labelled("const a = { description: 'Привязка сущности ко времени' };")).toBe(true);
+    expect(labelled("const a = { key: 'сущность', hint: 'сущность' };")).toBe(false);
+
     expect(
       moduleNames('x.ts', "const disabledModules = 1; const s = 'module_set'; x.module = 2;"),
     ).toEqual(['disabledModules', 'module_set', 'module']);
@@ -414,7 +628,7 @@ describe('сторожа границ кода и словаря (срез 1б �
     expect(actual).toEqual(expected);
   });
 
-  test('(д) (2) в строках интерфейса web нет слов вне словаря, кроме списка', () => {
+  test('(д) (2) в строках интерфейса (web, отказы сервера, подписи shared) нет слов вне словаря, кроме списка', () => {
     const offenders = [...bannedWordHits().entries()]
       .filter(([rel]) => WORD_ALLOWLIST[rel] === undefined)
       .flatMap(([rel, hits]) => hits.map((h) => `${rel}:${h}`));

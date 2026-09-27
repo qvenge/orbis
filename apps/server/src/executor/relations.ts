@@ -437,7 +437,7 @@ export function duplicateRelationError(
 ): ExecError {
   return new ExecError(
     'INVARIANT',
-    `связь роли «${roleName(def, key.role)}» между этими сущностями уже существует (rel_uniq, §4.2)`,
+    `связь роли «${roleName(def, key.role)}» между этими записями уже существует (rel_uniq, §4.2)`,
     { invariant: 'duplicate_relation', ...key },
   );
 }

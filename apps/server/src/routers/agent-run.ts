@@ -49,7 +49,7 @@ const answerCheckpointInput = z
 function wireEntityAt(results: readonly unknown[], index: number, id: string): WireEntity {
   const value = results[index];
   if (typeof value !== 'object' || value === null || (value as WireEntity).id !== id) {
-    throw new ExecError('CONFLICT', 'ответ на чекпойнт вернул не ту сущность', { id });
+    throw new ExecError('CONFLICT', 'ответ на чекпойнт вернул не ту запись', { id });
   }
   return value as WireEntity;
 }

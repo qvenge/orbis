@@ -137,7 +137,7 @@ export async function readEntity(
   const row = rows[0];
   // RLS: чужая и несуществующая неразличимы — единый NOT_FOUND
   if (!row) {
-    throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
+    throw new ExecError('NOT_FOUND', 'запись не найдена', { id: input.id });
   }
 
   // Снимок реестра — ОДНИМ обещанием на весь вызов. Читателей у него здесь двое (привязка

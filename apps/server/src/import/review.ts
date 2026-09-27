@@ -637,12 +637,12 @@ async function assertAdoptTargets(db: Db, who: Identity, input: ImportConfirmInp
       const row = byId.get(id);
       if (row === undefined) {
         // Чужая и несуществующая намеренно неразличимы — как у origin-операций executor'а
-        throw new ExecError('NOT_FOUND', 'сущность не найдена', { adoptEntityId: id, rowIndex });
+        throw new ExecError('NOT_FOUND', 'запись не найдена', { adoptEntityId: id, rowIndex });
       }
       if (row.archived || !row.financial) {
         throw new ExecError(
           'VALIDATION',
-          'усыновить источник можно только на неархивную финансовую сущность',
+          'усыновить источник можно только на неархивную финансовую запись',
           { adoptEntityId: id, rowIndex, reason: row.archived ? 'archived' : 'not_financial' },
         );
       }

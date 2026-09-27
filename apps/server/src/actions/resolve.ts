@@ -445,7 +445,7 @@ function checkedParams(
         ? literalFormViolation(paramLiteralType(p.type.kind), value)
         : z.string().uuid().safeParse(value).success
           ? undefined
-          : 'ожидается uuid сущности';
+          : 'ожидается uuid записи';
     if (violation !== undefined) {
       throw new ExecError(
         'VALIDATION',

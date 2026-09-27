@@ -1972,7 +1972,7 @@ async function snapshotDeferredUnit(
   const current = targets.rows.get(id);
   if (current === undefined) {
     // Недостижимо: отсутствующую цель `loadTargets` уже вернул бы как NOT_FOUND
-    return { error: errorResult('NOT_FOUND', 'сущность не найдена', { id }) };
+    return { error: errorResult('NOT_FOUND', 'запись не найдена', { id }) };
   }
   const built = buildUpdate(targets.reg, 0, payload, current);
   if ('error' in built) return { error: built.error };

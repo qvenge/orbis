@@ -19,7 +19,19 @@ import { useSetExtensionEnabled } from '../settings/useDisabledExtensions';
  * записи с выключенным расширением, а секция аспекта стоит в первом кадре каждой записи. Статический
  * импорт вывел замыкание экрана записи за порог веса (задача 23: +1 100 Б при запасе 609 Б, РП-25).
  */
-export function ExtensionOffPlaque({ extension }: { extension: ExtensionId }) {
+export function ExtensionOffPlaque({
+  extension,
+  readOnly,
+}: {
+  extension: ExtensionId;
+  /**
+   * Хост только для чтения — предпросмотр шаблона на чужой записи (1а новое-5): плашка объясняет,
+   * почему поля не правятся, но «Включить» не рисуется — включение меняет маску графа, а из режима
+   * «только смотрим» не меняется ничего. Пропом от секции, а не `useHostReadOnly` здесь: импорт
+   * `record-host` из ленивого чанка вынес бы хост в отдельный общий чанк (+300 Б замыкания — замер).
+   */
+  readOnly: boolean;
+}) {
   const setEnabled = useSetExtensionEnabled();
   const name = extensionName(extension, OWNER_LOCALE);
   // Защёлка двойного нажатия: второй `module_set` лёг бы в журнал вторым действием «Отменить».
@@ -31,18 +43,20 @@ export function ExtensionOffPlaque({ extension }: { extension: ExtensionId }) {
       className="flex flex-wrap items-center justify-between gap-2 border-dashed"
     >
       <p className="text-sm text-text-secondary">{`Расширение «${name}» выключено`}</p>
-      <Button
-        variant="outline"
-        size="sm"
-        aria-label={`Включить расширение «${name}»`}
-        disabled={pending}
-        onClick={() => {
-          setPending(true);
-          void setEnabled(extension, true).finally(() => setPending(false));
-        }}
-      >
-        Включить
-      </Button>
+      {!readOnly && (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`Включить расширение «${name}»`}
+          disabled={pending}
+          onClick={() => {
+            setPending(true);
+            void setEnabled(extension, true).finally(() => setPending(false));
+          }}
+        >
+          Включить
+        </Button>
+      )}
     </Card>
   );
 }
