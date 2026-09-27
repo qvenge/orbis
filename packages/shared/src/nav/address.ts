@@ -177,7 +177,28 @@ function appPrefix(app: AppRef): string {
   return app.kind === 'host' ? '' : `/a/${app.ref}`;
 }
 
-/** Адрес → ссылка (путь, у поиска — с `?q=`). Канон: поиск без запроса — `/search`. */
+/**
+ * Одиночные суррогаты UTF-16 → U+FFFD. `encodeURIComponent` на них бросает `URIError`, а такой
+ * запрос поиска получается, если текст обрезан по длине посреди эмодзи или вставлен битым: навигация
+ * и `sameAddress` не должны ронять обработчик. Не `String.prototype.toWellFormed`: его нет в `lib`
+ * ES2022 проекта (shared и web), а поведение то же — пара остаётся, одиночный становится U+FFFD.
+ */
+function wellFormed(s: string): string {
+  return s.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) =>
+    m.length === 2 ? m : '\uFFFD',
+  );
+}
+
+/**
+ * Адрес → ссылка (путь, у поиска — с `?q=`). Канон: поиск без запроса — `/search`.
+ *
+ * Предусловия, на которых держится круг `parseAddress(buildAddress(a)) = a` (тип их не выражает,
+ * проверки в коде нет — адреса строятся из id БД и ключей поставки, где они выполнены):
+ * `app.ref` — uuid в нижнем регистре или ключ поставки (`/^[a-z][a-z0-9-]*$/`), но не резерв
+ * `budget` (он разбирается как `reserved`); `id` записи — uuid в нижнем регистре; `q` — только у
+ * `search` (у прочих экранов молча не попадает в ссылку). Иначе ссылка собирается, но разбор даёт
+ * другое место или `null`.
+ */
 export function buildAddress(a: Address): string {
   switch (a.kind) {
     case 'home':
@@ -193,7 +214,7 @@ export function buildAddress(a: Address): string {
         case 'memory':
           return '/settings/memory';
         case 'search':
-          return a.q ? `/search?q=${encodeURIComponent(a.q)}` : '/search';
+          return a.q ? `/search?q=${encodeURIComponent(wellFormed(a.q))}` : '/search';
       }
   }
 }
@@ -219,7 +240,9 @@ export function sameAddress(a: Address, b: Address): boolean {
  */
 export function recordIdOfUrl(url: string, origin: string): string | null {
   const base = origin.replace(/\/+$/, '').toLowerCase();
-  if (base === '' || url.slice(0, base.length).toLowerCase() !== base) return null;
+  // Origin без схемы — непрозрачный (`'null'` у `file://`, песочницы, WebView) или не origin вовсе:
+  // префиксом с ним совпал бы обычный текст вида `null/r/<id>`, а это не «полный адрес Orbis».
+  if (!base.includes('://') || url.slice(0, base.length).toLowerCase() !== base) return null;
   // После origin — только путь. `https://orbis.app.evil.com/…` и чужой порт совпадают префиксом, но их
   // хвост (`.evil.com/…`, `:8443/…`) начинается не со слэша — такой путь `parseAddress` не принимает.
   const parsed = parseAddress(url.slice(base.length));

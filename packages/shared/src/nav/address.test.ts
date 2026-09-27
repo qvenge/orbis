@@ -6,6 +6,7 @@
 // `/entity/…`, `/thread/…`, `/browser`, `/budget/category/…`, `/agenda` не должна ронять старт) и
 // извлечение id записи из вставленного полного адреса (§7.4, Р-20).
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   type Address,
   type AppRef,
@@ -144,6 +145,19 @@ describe('buildAddress: сборка и круг', () => {
     });
   }
 
+  test('одиночный суррогат в запросе не роняет сборку и сравнение: становится U+FFFD', () => {
+    const broken = { kind: 'host-screen', screen: 'search', q: 'a\uD800' } as const;
+    expect(buildAddress(broken)).toBe('/search?q=a%EF%BF%BD');
+    expect(buildAddress({ kind: 'host-screen', screen: 'search', q: '\uDC00' })).toBe(
+      '/search?q=%EF%BF%BD',
+    );
+    expect(sameAddress(broken, { kind: 'host-screen', screen: 'search', q: 'a\uFFFD' })).toBe(true);
+    // Пара суррогатов (эмодзи) остаётся целой.
+    expect(buildAddress({ kind: 'host-screen', screen: 'search', q: '😀' })).toBe(
+      '/search?q=%F0%9F%98%80',
+    );
+  });
+
   test('поиск без q собирается как пустой запрос', () => {
     expect(buildAddress({ kind: 'host-screen', screen: 'search' })).toBe('/search');
   });
@@ -241,8 +255,57 @@ describe('recordIdOfUrl: вставленный адрес → id записи (
     expect(recordIdOfUrl(`${ORIGIN}/r/${ID}`, `${ORIGIN}/`)).toBe(ID);
   });
 
+  test('origin без схемы (непрозрачный `null`, голое слово) — не наш адрес', () => {
+    expect(recordIdOfUrl(`null/r/${ID}`, 'null')).toBe(null);
+    expect(recordIdOfUrl(`x/r/${ID}`, 'x')).toBe(null);
+    expect(recordIdOfUrl(`/r/${ID}`, '')).toBe(null);
+  });
+
   test('локальный origin с портом', () => {
     expect(recordIdOfUrl(`http://localhost:5173/r/${ID}`, 'http://localhost:5173')).toBe(ID);
     expect(recordIdOfUrl(`http://localhost:5174/r/${ID}`, 'http://localhost:5173')).toBe(null);
+  });
+});
+
+describe('листовость сабпата @orbis/shared/nav (первый кадр web)', () => {
+  // Web тянет адрес в эагерный кадр (разбор ссылки при старте): удобный импорт из барреля в
+  // address.ts утяжелил бы первый кадр при зелёных тестах — `check-lazy-chunks` вес входного чанка
+  // не смотрит. Образец — `supply/etalons.test.ts`, `doc/placement.test.ts`. Листовость самого
+  // `supply/etalons` держит его собственный сторож.
+  const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+  // Все формы, которыми модуль тянет другой: импорт, реэкспорт, динамический импорт, require.
+  const SPECIFIER_RE =
+    /^\s*import\b[^'"]*?(?:\bfrom\s*)?['"]([^'"]+)['"]|^\s*export\b[^;'"]*\bfrom\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]?([^'")]*)|\brequire\s*\(\s*['"]?([^'")]*)/gm;
+  const specifiers = (src: string) =>
+    [...src.matchAll(SPECIFIER_RE)].map((m) => m[1] ?? m[2] ?? m[3] ?? m[4] ?? '');
+
+  test('address.ts импортирует только ../supply/etalons', () => {
+    const found = specifiers(read('./address.ts'));
+    expect(found).toContain('../supply/etalons');
+    for (const s of found) expect(['../supply/etalons']).toContain(s);
+  });
+
+  test('index.ts отдаёт только ./address', () => {
+    const found = specifiers(read('./index.ts'));
+    expect(found).toContain('./address');
+    for (const s of found) expect(['./address']).toContain(s);
+  });
+
+  test('положительный контроль: регэксп видит все формы', () => {
+    // Иначе зелёный сторож мог бы значить лишь сломанный регэксп.
+    expect(specifiers("import { x } from '../doc';")).toEqual(['../doc']);
+    expect(specifiers("import type { X } from '../index';")).toEqual(['../index']);
+    expect(specifiers("import '../doc';")).toEqual(['../doc']);
+    expect(specifiers("export { x } from '../doc';")).toEqual(['../doc']);
+    expect(specifiers("export * from '../index'")).toEqual(['../index']);
+    expect(specifiers("const m = await import ('../doc');")).toEqual(['../doc']);
+    expect(specifiers("require('../doc')")).toEqual(['../doc']);
+    // Корневой баррель — не листовой: сторож на нём покраснел бы.
+    expect(specifiers(read('../index.ts')).some((s) => s !== './address')).toBe(true);
+  });
+
+  test('сабпат @orbis/shared/nav объявлен в exports', () => {
+    const pkg = JSON.parse(read('../../package.json')) as { exports: Record<string, string> };
+    expect(pkg.exports['./nav']).toBe('./src/nav/index.ts');
   });
 });
